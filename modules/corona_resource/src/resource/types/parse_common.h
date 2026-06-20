@@ -680,8 +680,10 @@ inline SimplifyPhase1Result simplify_phase1(
     return result;
 }
 
-/// Phase 2: 将网格均匀拆分为多个子网格
-/// 每个子网格的顶点数都在 uint16 限制以下
+/// Phase 2: 将网格按空间位置拆分为多个子网格
+/// 先计算所有三角形的重心沿最长轴的位置，排序后再均分，
+/// 保证切口沿空间平面 → 最小化拆分边界处的缺口。
+/// 每个子网格的顶点数都在 uint16 限制以下。
 /// @param vertices 原始顶点数组
 /// @param indices 原始索引数组（三角形列表）
 /// @param unique_vertex_count 实际唯一顶点数（用于计算拆分数量）
@@ -709,6 +711,58 @@ inline std::vector<SingleMeshResult> split_mesh_uniformly(
     size_t num_splits = (unique_vertex_count + kSafeVertexLimit - 1) / kSafeVertexLimit;
     num_splits = std::max(num_splits, static_cast<size_t>(2));  // 至少拆分成 2 份
 
+    // ============================================================
+    // 按空间位置排序三角形，再均分
+    // 之前直接按三角形列表顺序切分，切口处三角形失去了相邻面 → 大面积缺口
+    // 现在先计算每个三角形的重心在最长沙轴上的投影，排序后切分，
+    // 切口沿空间平面 → 边界最小化
+    // ============================================================
+
+    // 1. 计算 AABB，找最长轴
+    std::array<float, 3> aabb_min = {FLT_MAX, FLT_MAX, FLT_MAX};
+    std::array<float, 3> aabb_max = {-FLT_MAX, -FLT_MAX, -FLT_MAX};
+    for (size_t t = 0; t < triangle_count; ++t) {
+        for (int j = 0; j < 3; ++j) {
+            uint32_t vi = indices[t * 3 + j];
+            if (vi < vertices.size()) {
+                for (int k = 0; k < 3; ++k) {
+                    float p = vertices[vi].position[k];
+                    if (p < aabb_min[k]) aabb_min[k] = p;
+                    if (p > aabb_max[k]) aabb_max[k] = p;
+                }
+            }
+        }
+    }
+    float axis_x = aabb_max[0] - aabb_min[0];
+    float axis_y = aabb_max[1] - aabb_min[1];
+    float axis_z = aabb_max[2] - aabb_min[2];
+    int longest_axis = 0;
+    if (axis_y > axis_x) longest_axis = 1;
+    if (axis_z > axis_x && axis_z > axis_y) longest_axis = 2;
+
+    // 2. 计算每个三角形重心在最长沙轴上的投影，存入 (projection, original_index) 对
+    struct TriProjection {
+        float proj;
+        size_t tri_idx;
+    };
+    std::vector<TriProjection> tri_projections(triangle_count);
+    for (size_t t = 0; t < triangle_count; ++t) {
+        uint32_t i0 = indices[t * 3 + 0];
+        uint32_t i1 = indices[t * 3 + 1];
+        uint32_t i2 = indices[t * 3 + 2];
+        float centroid = 0.0f;
+        if (i0 < vertices.size()) centroid += vertices[i0].position[longest_axis];
+        if (i1 < vertices.size()) centroid += vertices[i1].position[longest_axis];
+        if (i2 < vertices.size()) centroid += vertices[i2].position[longest_axis];
+        centroid /= 3.0f;
+        tri_projections[t] = {centroid, t};
+    }
+
+    // 3. 沿最长轴排序
+    std::sort(tri_projections.begin(), tri_projections.end(),
+              [](const TriProjection& a, const TriProjection& b) { return a.proj < b.proj; });
+
+    // 4. 按排序后的顺序均分三角形
     size_t triangles_per_split = (triangle_count + num_splits - 1) / num_splits;
 
     // 执行拆分
@@ -718,11 +772,12 @@ inline std::vector<SingleMeshResult> split_mesh_uniformly(
 
         if (start_tri >= triangle_count) break;
 
-        // 收集这个分片的索引
+        // 收集这个分片的索引（按空间排序后的顺序）
         std::vector<std::uint32_t> split_indices;
         split_indices.reserve((end_tri - start_tri) * 3);
 
-        for (size_t tri = start_tri; tri < end_tri; ++tri) {
+        for (size_t s = start_tri; s < end_tri; ++s) {
+            size_t tri = tri_projections[s].tri_idx;
             split_indices.push_back(indices[tri * 3 + 0]);
             split_indices.push_back(indices[tri * 3 + 1]);
             split_indices.push_back(indices[tri * 3 + 2]);
@@ -743,7 +798,7 @@ inline std::vector<SingleMeshResult> split_mesh_uniformly(
             CFW_LOG_WARNING("[MeshOpt] Mesh '{}' split {}: {} unique vertices still exceeds limit, further splitting",
                             mesh_name, split_idx, unique_count);
 
-            // 递归拆分这个分片
+            // 收集这个分片的索引
             auto sub_splits = split_mesh_uniformly(vertices, split_indices, unique_count,
                                                    mesh_name + "_sub" + std::to_string(split_idx));
             results.insert(results.end(), sub_splits.begin(), sub_splits.end());
@@ -764,8 +819,9 @@ inline std::vector<SingleMeshResult> split_mesh_uniformly(
             sizeof(Vertex),
             remap.data());
 
-        CFW_LOG_TRACE("[MeshOpt] Mesh '{}' split {}: {} vertices, {} indices",
-                      mesh_name, split_idx, split_result.vertices.size(), split_result.indices.size());
+        CFW_LOG_TRACE("[MeshOpt] Mesh '{}' split {}: {} vertices, {} indices (spatial axis={})",
+                      mesh_name, split_idx, split_result.vertices.size(), split_result.indices.size(),
+                      longest_axis);
 
         results.push_back(std::move(split_result));
     }
@@ -1023,26 +1079,13 @@ inline std::vector<LODLevel> generate_lod_levels(
             &result_error);
 
         // 如果 meshopt_simplify 未能达到目标（实际 > 目标的 2 倍），
-        // 使用 meshopt_simplifySloppy 强制达到目标面数
-        // （不保拓扑，但能保证面数，适合物理碰撞等用途）
+        // 之前使用 meshopt_simplifySloppy 强制达到目标面数，
+        // 但 sloppy 不保拓扑，会产生裂缝/破洞/翻转三角形，导致渲染缺口。
+        // 现在改为：保持 simplify 的结果，宁可面数多一点也不牺牲拓扑正确性。
         if (simplified_count > target_index_count * 2) {
-
-            float sloppy_error = 0.0f;
-            size_t sloppy_count = meshopt_simplifySloppy(
-                simplified_indices.data(),
-                indices_u32.data(),
-                indices_u32.size(),
-                &vertices[0].position[0],
-                vertices.size(),
-                sizeof(Vertex),
-                target_index_count,
-                level_max_error,
-                &sloppy_error);
-
-            if (sloppy_count > 0 && sloppy_count < simplified_count) {
-                simplified_count = sloppy_count;
-                result_error = sloppy_error;
-            }
+            CFW_LOG_WARNING("[LOD] Mesh '{}' LOD {}: simplify could not reach target (got {} indices, target was {}). "
+                            "Sloppy fallback disabled to preserve topology. Keeping simplify result.",
+                            mesh_name, i + 1, simplified_count, target_index_count);
         }
 
         if (simplified_count == 0) {
@@ -1075,8 +1118,23 @@ inline std::vector<LODLevel> generate_lod_levels(
             sizeof(Vertex),
             remap.data());
 
+        // 移除退化三角形（meshopt_simplifySloppy 可能产生零面积/退化三角形，导致渲染缺口）
+        remove_degenerate_triangles(compact_vertices, remapped_indices,
+                                    1e-12f, mesh_name + "_lod" + std::to_string(i + 1));
+
+        // 重新计算法线：仅当几何真的被简化了才需要。
+        // 对于 split 子网格（有大面积切口边界），SimplifyLockBorder 可能导致
+        // 简化完全无法进行 → simplified_count == original_count → 几何未变。
+        // 此时若重算法线，边界处缺少相邻 split 的三角形贡献 → 法线偏斜 → 黑色缺口。
+        // 几何未变时保留 LOD0 原法线即可。
+        if (simplified_count < indices_u32.size()) {
+            generate_smooth_normals(compact_vertices, remapped_indices,
+                                    mesh_name + "_lod" + std::to_string(i + 1));
+        }
+
         // GPU 优化
-        optimize_mesh_for_gpu(compact_vertices, remapped_indices, mesh_name + "_lod" + std::to_string(i + 1));
+        optimize_mesh_for_gpu(compact_vertices, remapped_indices,
+                              mesh_name + "_lod" + std::to_string(i + 1));
 
         // 转换索引为 uint16
         std::vector<std::uint16_t> final_indices;

@@ -1433,15 +1433,12 @@ void GeometrySystem::upload_lod_from_scene_data() {
                 if (lod_data.vertices.empty() || lod_data.indices.empty()) continue;
 
                 LODMeshBuffers lod_buf;
-                // 转换为 uint32 索引（meshopt 输出 uint16，GPU 需要 uint32）
-                std::vector<uint32_t> indices32;
-                indices32.reserve(lod_data.indices.size());
-                for (auto idx : lod_data.indices) indices32.push_back(static_cast<uint32_t>(idx));
-
+                // LOD 索引保持 uint16（与 LOD0 一致），不转换为 uint32。
+                // 之前转为 uint32 导致 GPU 索引缓冲格式与 pipeline 预期不匹配→渲染缺口。
                 lod_buf.vertex_buffer    = HardwareBuffer(lod_data.vertices, BufferUsage::VertexBuffer);
-                lod_buf.index_buffer     = HardwareBuffer(indices32,        BufferUsage::IndexBuffer);
+                lod_buf.index_buffer     = HardwareBuffer(lod_data.indices,  BufferUsage::IndexBuffer);
                 lod_buf.vertex_storage   = HardwareBuffer(lod_data.vertices, BufferUsage::StorageBuffer);
-                lod_buf.index_storage    = HardwareBuffer(indices32,        BufferUsage::StorageBuffer);
+                lod_buf.index_storage    = HardwareBuffer(lod_data.indices,  BufferUsage::StorageBuffer);
                 lod_buf.error            = lod_data.error;
                 lod_buf.screen_threshold = lod_data.screen_threshold;
                 lod_buf.ready            = true;
