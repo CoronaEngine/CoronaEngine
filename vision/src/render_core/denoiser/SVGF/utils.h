@@ -203,9 +203,9 @@ struct PixelStateUtils {
         Pipeline *pipeline,
         const TriangleHitVar &hit,
         const Float3 &camera_pos) noexcept {
-        
+
         Float3 albedo = make_float3(0.5f);
-        
+
         Bool is_valid = !hit->is_miss() && hit.inst_id != InvalidUI32;
         $if(is_valid) {
             Scene &scene = pipeline->scene();
@@ -221,7 +221,66 @@ struct PixelStateUtils {
                 });
             };
         };
-        
+
+        return albedo;
+    }
+
+    // Diffuse-only albedo, the demodulation guide for the diffuse denoiser channel.
+    // Mirrors query_albedo but buckets lobes by type via MaterialEvaluator::albedo_split.
+    [[nodiscard]] static Float3 query_diffuse_albedo(
+        Pipeline *pipeline,
+        const TriangleHitVar &hit,
+        const Float3 &camera_pos) noexcept {
+
+        Float3 albedo = make_float3(0.5f);
+
+        Bool is_valid = !hit->is_miss() && hit.inst_id != InvalidUI32;
+        $if(is_valid) {
+            Scene &scene = pipeline->scene();
+            Geometry &geometry = pipeline->geometry();
+            TSpectrum &sp = pipeline->renderer().spectrum();
+            Interaction it = geometry.compute_surface_interaction(hit, camera_pos);
+            $if(it.has_material()) {
+                SampledWavelengths swl{sp->dimension()};
+                scene.materials().dispatch(it.material_id(), [&](const Material *material) {
+                    MaterialEvaluator bsdf = material->create_evaluator(it, swl);
+                    SampledSpectrum diffuse_spec{swl.dimension()};
+                    SampledSpectrum specular_spec{swl.dimension()};
+                    bsdf.albedo_split(it.wo, diffuse_spec, specular_spec);
+                    albedo = sp->linear_srgb(diffuse_spec, swl);
+                });
+            };
+        };
+
+        return albedo;
+    }
+
+    // Specular-only reflectance, the optional demodulation guide for the specular channel.
+    [[nodiscard]] static Float3 query_specular_albedo(
+        Pipeline *pipeline,
+        const TriangleHitVar &hit,
+        const Float3 &camera_pos) noexcept {
+
+        Float3 albedo = make_float3(0.04f);
+
+        Bool is_valid = !hit->is_miss() && hit.inst_id != InvalidUI32;
+        $if(is_valid) {
+            Scene &scene = pipeline->scene();
+            Geometry &geometry = pipeline->geometry();
+            TSpectrum &sp = pipeline->renderer().spectrum();
+            Interaction it = geometry.compute_surface_interaction(hit, camera_pos);
+            $if(it.has_material()) {
+                SampledWavelengths swl{sp->dimension()};
+                scene.materials().dispatch(it.material_id(), [&](const Material *material) {
+                    MaterialEvaluator bsdf = material->create_evaluator(it, swl);
+                    SampledSpectrum diffuse_spec{swl.dimension()};
+                    SampledSpectrum specular_spec{swl.dimension()};
+                    bsdf.albedo_split(it.wo, diffuse_spec, specular_spec);
+                    albedo = sp->linear_srgb(specular_spec, swl);
+                });
+            };
+        };
+
         return albedo;
     }
 };

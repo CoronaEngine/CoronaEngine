@@ -86,8 +86,7 @@ def test_search_tool_precheck_skips_provider_key_by_default():
     print("[OK] search tool precheck skips provider key by default")
 
 
-def test_search_tool_precheck_allows_provider_key_when_enabled():
-    sentinel = object()
+def test_search_tool_precheck_skips_provider_key_even_when_enabled():
     config = types.SimpleNamespace(
         object_recognition={
             "enable": True,
@@ -99,9 +98,12 @@ def test_search_tool_precheck_allows_provider_key_when_enabled():
     )
     helpers = _load_helpers(config)
 
-    helpers.get_tool = lambda name: sentinel if name == "search_similar_object" else None
-    assert helpers.get_search_tool() is sentinel
-    print("[OK] search tool precheck allows configured provider key when enabled")
+    def fail_if_called(_name):
+        raise AssertionError("search_similar_object must stay disabled for formal validation")
+
+    helpers.get_tool = fail_if_called
+    assert helpers.get_search_tool() is None
+    print("[OK] search tool precheck skips provider key even when enabled")
 
 
 def test_search_tool_precheck_skips_env_key_by_default():
@@ -127,8 +129,7 @@ def test_search_tool_precheck_skips_env_key_by_default():
     print("[OK] search tool precheck skips environment key by default")
 
 
-def test_search_tool_precheck_allows_env_key_when_enabled():
-    sentinel = object()
+def test_search_tool_precheck_skips_env_key_even_when_enabled():
     config = types.SimpleNamespace(
         object_recognition={"enable": True, "provider": "dashscope", "dashscope_api_key": ""},
         providers={"dashscope": types.SimpleNamespace(api_key="")},
@@ -139,8 +140,11 @@ def test_search_tool_precheck_allows_env_key_when_enabled():
     os.environ["DASHSCOPE_API_KEY"] = "env-key"
     os.environ["CORONA_ENABLE_OBJECT_EMBEDDING"] = "1"
     try:
-        helpers.get_tool = lambda name: sentinel if name == "search_similar_object" else None
-        assert helpers.get_search_tool() is sentinel
+        def fail_if_called(_name):
+            raise AssertionError("search_similar_object must stay disabled for formal validation")
+
+        helpers.get_tool = fail_if_called
+        assert helpers.get_search_tool() is None
     finally:
         if old_key is None:
             os.environ.pop("DASHSCOPE_API_KEY", None)
@@ -150,7 +154,42 @@ def test_search_tool_precheck_allows_env_key_when_enabled():
             os.environ.pop("CORONA_ENABLE_OBJECT_EMBEDDING", None)
         else:
             os.environ["CORONA_ENABLE_OBJECT_EMBEDDING"] = old_enable
-    print("[OK] search tool precheck allows environment key when enabled")
+    print("[OK] search tool precheck skips environment key even when enabled")
+
+
+def test_rodin_fallback_is_disabled_when_hunyuan_unavailable():
+    config = types.SimpleNamespace(
+        hunyuan3d=types.SimpleNamespace(enable=False),
+    )
+    helpers = _load_helpers(config)
+
+    def fail_on_rodin(name):
+        if name == "rodin_generate_3d":
+            raise AssertionError("Rodin fallback must stay disabled for formal validation")
+        return None
+
+    helpers.get_tool = fail_on_rodin
+    assert helpers.get_3d_generate_tool() is None
+    print("[OK] Rodin fallback stays disabled when Hunyuan is unavailable")
+
+
+def test_hunyuan_tool_is_still_allowed():
+    sentinel = object()
+    config = types.SimpleNamespace(
+        hunyuan3d=types.SimpleNamespace(enable=True),
+    )
+    helpers = _load_helpers(config)
+
+    def get_tool(name):
+        if name == "hunyuan_generate_3d":
+            return sentinel
+        if name == "rodin_generate_3d":
+            raise AssertionError("Rodin fallback must not be queried when Hunyuan is available")
+        return None
+
+    helpers.get_tool = get_tool
+    assert helpers.get_3d_generate_tool() is sentinel
+    print("[OK] Hunyuan 3D tool remains enabled")
 
 
 def test_store_tool_skips_by_default():
@@ -180,8 +219,10 @@ def test_store_tool_skips_by_default():
 if __name__ == "__main__":
     test_search_tool_precheck_skips_missing_dashscope_key()
     test_search_tool_precheck_skips_provider_key_by_default()
-    test_search_tool_precheck_allows_provider_key_when_enabled()
+    test_search_tool_precheck_skips_provider_key_even_when_enabled()
     test_search_tool_precheck_skips_env_key_by_default()
-    test_search_tool_precheck_allows_env_key_when_enabled()
+    test_search_tool_precheck_skips_env_key_even_when_enabled()
     test_store_tool_skips_by_default()
+    test_rodin_fallback_is_disabled_when_hunyuan_unavailable()
+    test_hunyuan_tool_is_still_allowed()
     print("\n=== search tool precheck ALL PASS ===")

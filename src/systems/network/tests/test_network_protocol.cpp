@@ -473,6 +473,26 @@ void test_lanchat_state_deduplicates_messages_and_tracks_agents() {
     expect_true(state.agents().empty(), "lanchat state agent roster is empty");
 }
 
+void test_lanchat_state_assigns_unique_duplicate_member_names() {
+    Corona::Network::LanChatState state;
+    expect_true(state.open_room("room-a", "host-peer", "Alice"),
+                "lanchat state opens room with host nickname");
+    expect_true(state.join_member("peer-b", "Alice").ok,
+                "lanchat state accepts first duplicate nickname");
+    expect_true(state.join_member("peer-c", "Alice").ok,
+                "lanchat state accepts second duplicate nickname");
+    expect_true(state.join_member("peer-d", "Alice_1").ok,
+                "lanchat state accepts duplicate suffixed nickname");
+
+    const auto& members = state.members();
+    expect_true(members.size() == 4, "lanchat state keeps all duplicate-name members");
+    expect_true(members[0].nickname == "Alice", "host keeps original duplicate base name");
+    expect_true(members[1].nickname == "Alice_1", "first duplicate gets _1 suffix");
+    expect_true(members[2].nickname == "Alice_2", "second duplicate gets _2 suffix");
+    expect_true(members[3].nickname == "Alice_1_1",
+                "duplicate explicit suffixed nickname gets its own suffix");
+}
+
 void test_lanchat_state_updates_authoritative_message_and_history_snapshot() {
     Corona::Network::LanChatState state;
     state.open_room("room-a", "guest-peer", "Alice");
@@ -556,6 +576,40 @@ void test_lanchat_state_filters_internal_messages_from_coordinator_sync() {
                 "coordinator sync filters agent and system messages");
 }
 
+void test_lanchat_state_can_filter_generation_start_for_client_sync() {
+    Corona::Network::LanChatState host_state;
+    host_state.open_room("room-a", "host-peer", "Host");
+    auto host_generate = host_state.apply_remote_message({
+        "msg-host-generate", "host-peer", "Host", "room-a", "开始生成", 1, 1000,
+        "host", "chat", "", "", "", "{\"draft_action\":\"generate\"}"
+    });
+    expect_true(host_generate.accepted, "remote generation chat accepted for host policy check");
+    auto host_sync = host_state.pop_coordinator_sync_message();
+    expect_true(host_sync.has_value(), "host coordinator sync still yields generation start");
+    expect_true(host_sync->message_id == "msg-host-generate",
+                "host coordinator sync keeps generation start message");
+
+    Corona::Network::LanChatState state;
+    state.open_room("room-a", "client-peer", "Guest");
+
+    auto generate = state.apply_remote_message({
+        "msg-generate", "host-peer", "Host", "room-a", "开始生成", 1, 1000,
+        "host", "chat", "", "", "", "{\"draft_action\":\"generate\"}"
+    });
+    auto regular = state.apply_remote_message({
+        "msg-chat", "host-peer", "Host", "room-a", "补充一个床头灯", 2, 1001,
+        "host", "chat", "", "", "", "{\"draft_action\":\"supplement\"}"
+    });
+    expect_true(generate.accepted, "remote generation chat accepted into history");
+    expect_true(regular.accepted, "remote supplement chat accepted into history");
+
+    auto sync = state.pop_coordinator_sync_message(/*allow_generation_start=*/false);
+    expect_true(sync.has_value(), "client coordinator sync skips generation start and keeps later chat");
+    expect_true(sync->message_id == "msg-chat", "client coordinator sync yields next non-generation chat");
+    expect_true(!state.pop_coordinator_sync_message(/*allow_generation_start=*/false).has_value(),
+                "client coordinator sync drains filtered generation start");
+}
+
 void test_lanchat_state_host_message_can_trigger_local_agent() {
     Corona::Network::LanChatState state;
     state.open_room("room-a", "host-peer", "Host");
@@ -619,6 +673,30 @@ void test_lanchat_state_enqueues_local_agent_trigger_from_mention() {
                 "lanchat state does not trigger remote owned agent");
 }
 
+void test_lanchat_state_structured_target_overrides_text_mentions() {
+    Corona::Network::LanChatState state;
+    state.open_room("room-a", "local-peer", "Host");
+    expect_true(state.register_agent("agent-1", "SceneBot", "scene helper", "local-peer").ok,
+                "lanchat state registers first local agent");
+    expect_true(state.register_agent("agent-2", "HelperBot", "helper", "local-peer").ok,
+                "lanchat state registers second local agent");
+
+    auto message = state.record_message_ex(
+        "msg-targeted", "user-peer", "Alice", "@SceneBot @HelperBot 只问第二个", 1000,
+        "user", "chat", "agent-2", "user-peer", "corr-1", "{}");
+    expect_true(message.accepted, "lanchat state accepts targeted agent message");
+
+    state.enqueue_agent_triggers_for_message(message.message, "local-peer");
+    auto trigger = state.pop_agent_trigger();
+    expect_true(trigger.has_value(), "structured target enqueues selected local agent");
+    expect_true(trigger->agent_id == "agent-2",
+                "structured target overrides extra text mentions");
+    expect_true(trigger->correlation_id == "corr-1",
+                "structured target trigger preserves correlation id");
+    expect_true(!state.pop_agent_trigger().has_value(),
+                "structured target does not enqueue mentioned non-target agents");
+}
+
 void test_lanchat_state_implicit_trigger_only_for_single_local_agent() {
     Corona::Network::LanChatState state;
     state.open_room("room-a", "local-peer", "Host");
@@ -638,6 +716,93 @@ void test_lanchat_state_implicit_trigger_only_for_single_local_agent() {
     state.enqueue_agent_triggers_for_message(ambiguous.message, "local-peer");
     expect_true(!state.pop_agent_trigger().has_value(),
                 "multiple local agents require explicit mention");
+}
+
+void test_lanchat_state_can_filter_generation_start_agent_trigger_for_client() {
+    Corona::Network::LanChatState host_state;
+    host_state.open_room("room-a", "host-peer", "Host");
+    expect_true(host_state.register_agent("agent-1", "SceneBot", "scene helper", "host-peer").ok,
+                "host registers local agent for generation trigger policy check");
+
+    auto host_generate = host_state.record_message_ex(
+        "msg-host-generate", "host-peer", "Host", "开始生成", 1000,
+        "host", "chat", "", "", "", "{\"draft_action\":\"generate\"}");
+    expect_true(host_generate.accepted, "host accepts generation start chat");
+
+    host_state.enqueue_agent_triggers_for_message(host_generate.message, "host-peer");
+    auto host_trigger = host_state.pop_agent_trigger();
+    expect_true(host_trigger.has_value(), "host policy keeps generation start agent trigger");
+    expect_true(host_trigger->message_id == "msg-host-generate",
+                "host generation trigger preserves source message");
+
+    Corona::Network::LanChatState client_state;
+    client_state.open_room("room-a", "client-peer", "Guest");
+    expect_true(client_state.register_agent("agent-1", "SceneBot", "scene helper", "client-peer").ok,
+                "client registers single local agent");
+
+    auto client_generate = client_state.apply_remote_message({
+        "msg-client-generate", "host-peer", "Host", "room-a", "开始生成", 1, 1000,
+        "host", "chat", "", "", "", "{\"draft_action\":\"generate\"}"
+    });
+    expect_true(client_generate.accepted, "client accepts remote generation start into history");
+
+    client_state.enqueue_agent_triggers_for_message(
+        client_generate.message,
+        "client-peer",
+        /*is_agent_reply=*/false,
+        /*allow_agent_execution=*/true,
+        /*allow_generation_start=*/false);
+    expect_true(!client_state.pop_agent_trigger().has_value(),
+                "client policy filters generation start agent trigger");
+
+    auto supplement = client_state.apply_remote_message({
+        "msg-client-supplement", "host-peer", "Host", "room-a", "补充一个床头灯", 2, 1001,
+        "host", "chat", "", "", "", "{\"draft_action\":\"supplement\"}"
+    });
+    client_state.enqueue_agent_triggers_for_message(
+        supplement.message,
+        "client-peer",
+        /*is_agent_reply=*/false,
+        /*allow_agent_execution=*/true,
+        /*allow_generation_start=*/false);
+    auto supplement_trigger = client_state.pop_agent_trigger();
+    expect_true(supplement_trigger.has_value(), "client policy keeps non-generation agent trigger");
+    expect_true(supplement_trigger->message_id == "msg-client-supplement",
+                "client non-generation trigger preserves source message");
+}
+
+void test_lanchat_state_can_disable_agent_execution_for_client_policy() {
+    Corona::Network::LanChatState host_state;
+    host_state.open_room("room-a", "host-peer", "Host");
+    expect_true(host_state.register_agent("agent-1", "SceneBot", "scene helper", "host-peer").ok,
+                "host registers local agent for execution policy check");
+
+    auto host_chat = host_state.record_message_ex(
+        "msg-host-chat", "user-peer", "Alice", "你是谁", 1000,
+        "user", "chat", "", "", "", "{\"draft_action\":\"chat\"}");
+    expect_true(host_chat.accepted, "host accepts ordinary chat for execution policy check");
+    host_state.enqueue_agent_triggers_for_message(host_chat.message, "host-peer");
+    expect_true(host_state.pop_agent_trigger().has_value(),
+                "host policy keeps ordinary agent trigger");
+
+    Corona::Network::LanChatState client_state;
+    client_state.open_room("room-a", "client-peer", "Guest");
+    expect_true(client_state.register_agent("agent-1", "SceneBot", "scene helper", "client-peer").ok,
+                "client registers local agent for execution policy check");
+
+    auto client_chat = client_state.apply_remote_message({
+        "msg-client-chat", "host-peer", "Host", "room-a", "你是谁", 1, 1000,
+        "host", "chat", "", "", "", "{\"draft_action\":\"chat\"}"
+    });
+    expect_true(client_chat.accepted, "client accepts remote ordinary chat into history");
+    client_state.enqueue_agent_triggers_for_message(
+        client_chat.message,
+        "client-peer",
+        /*is_agent_reply=*/false,
+        /*allow_agent_execution=*/false,
+        /*allow_generation_start=*/false);
+    expect_true(!client_state.pop_agent_trigger().has_value(),
+                "client policy disables ordinary agent trigger execution");
 }
 
 void test_lanchat_state_deduplicates_agent_triggers() {
@@ -896,6 +1061,55 @@ void test_lanchat_history_persists_for_local_room() {
     std::filesystem::remove_all(root);
 }
 
+void test_lanchat_history_uses_one_file_per_room_session() {
+    const auto root = std::filesystem::temp_directory_path() /
+        "corona_lanchat_history_session_file_test";
+    std::filesystem::remove_all(root);
+    std::filesystem::create_directories(root);
+
+    {
+        Corona::Systems::NetworkSystem sys;
+        sys.set_project_root(root.string());
+        expect_true(sys.lanchat_start_local_room("single-default", "Host"),
+                    "first local lanchat session starts");
+        auto sent = sys.lanchat_send_message("第一轮会话");
+        expect_true(sent.accepted, "first session message accepted");
+        sys.lanchat_stop_local_room();
+    }
+
+    {
+        Corona::Systems::NetworkSystem sys;
+        sys.set_project_root(root.string());
+        expect_true(sys.lanchat_start_local_room("single-default", "Host"),
+                    "second local lanchat session starts");
+        auto sent = sys.lanchat_send_message("第二轮会话");
+        expect_true(sent.accepted, "second session message accepted");
+        sys.lanchat_stop_local_room();
+    }
+
+    {
+        Corona::Systems::NetworkSystem sys;
+        sys.set_project_root(root.string());
+        const auto rooms = sys.lanchat_history_rooms();
+        expect_true(rooms.size() == 2,
+                    "same lanchat room id creates one persisted file per session");
+        if (rooms.size() >= 2) {
+            expect_true(rooms[0].room_id == "single-default",
+                        "history summary preserves display room id");
+            expect_true(!rooms[0].session_id.empty(),
+                        "history summary exposes session id");
+            expect_true(rooms[0].session_id != rooms[1].session_id,
+                        "history sessions have distinct file ids");
+            const auto latest = sys.lanchat_load_history_room(rooms[0].session_id);
+            const auto older = sys.lanchat_load_history_room(rooms[1].session_id);
+            expect_true(latest.size() == 1 && older.size() == 1,
+                        "each persisted session file contains only its own messages");
+        }
+    }
+
+    std::filesystem::remove_all(root);
+}
+
 void test_lanchat_history_store_lists_rooms_with_summaries() {
     const auto root = std::filesystem::temp_directory_path() /
         "corona_lanchat_history_list_test";
@@ -938,6 +1152,8 @@ void test_lanchat_history_store_lists_rooms_with_summaries() {
     const auto rooms = store.list_rooms();
     expect_true(rooms.size() == 2, "history store lists persisted rooms");
     if (rooms.size() >= 2) {
+        expect_true(!rooms[0].session_id.empty(),
+                    "history store summary records session file id");
         expect_true(rooms[0].room_id == "single-default",
                     "history store sorts rooms by newest message");
         expect_true(rooms[0].message_count == 2,
@@ -1589,14 +1805,19 @@ int main() {
     test_lanchat_v2_history_snapshot_preserves_message_kind();
     test_lanchat_join_reject_carries_error_code();
     test_lanchat_state_deduplicates_messages_and_tracks_agents();
+    test_lanchat_state_assigns_unique_duplicate_member_names();
     test_lanchat_state_updates_authoritative_message_and_history_snapshot();
     test_lanchat_state_queues_plain_chat_for_coordinator_sync();
     test_lanchat_state_queues_host_chat_for_coordinator_sync();
     test_lanchat_state_filters_internal_messages_from_coordinator_sync();
+    test_lanchat_state_can_filter_generation_start_for_client_sync();
     test_lanchat_state_host_message_can_trigger_local_agent();
     test_lanchat_state_applies_authoritative_member_snapshot();
     test_lanchat_state_enqueues_local_agent_trigger_from_mention();
+    test_lanchat_state_structured_target_overrides_text_mentions();
     test_lanchat_state_implicit_trigger_only_for_single_local_agent();
+    test_lanchat_state_can_filter_generation_start_agent_trigger_for_client();
+    test_lanchat_state_can_disable_agent_execution_for_client_policy();
     test_lanchat_state_deduplicates_agent_triggers();
     test_lanchat_state_does_not_trigger_agent_reply_or_duplicate_names();
     test_lanchat_state_does_not_trigger_structured_progress_messages();
@@ -1608,6 +1829,7 @@ int main() {
     test_network_system_repeated_start_preserves_active_role();
     test_lanchat_start_room_reuses_active_network_session_role();
     test_lanchat_history_persists_for_local_room();
+    test_lanchat_history_uses_one_file_per_room_session();
     test_lanchat_history_store_lists_rooms_with_summaries();
     test_lanchat_history_store_persists_agent_roster();
     test_actor_device_follow_camera_defaults_false_and_round_trips();

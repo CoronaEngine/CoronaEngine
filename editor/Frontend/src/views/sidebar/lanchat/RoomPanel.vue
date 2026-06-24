@@ -1,10 +1,139 @@
 <template>
   <div class="lanchat-panel relative flex flex-col h-full text-base text-gray-100">
     <!-- 未进房：大厅（开房 / 加入） -->
-    <div v-if="!s.inRoom" class="flex-1 overflow-y-auto p-4 space-y-4">
-      <div class="space-y-2">
+    <div v-if="!s.inRoom" class="flex-1 min-h-0 overflow-y-auto p-4 flex flex-col gap-4">
+      <div class="space-y-4">
+        <div class="grid grid-cols-2 gap-2">
+          <button
+            v-for="mode in workspaceModes"
+            :key="mode.key"
+            class="rounded border px-2 py-2 text-left transition-colors"
+            :class="selectedWorkspaceMode === mode.key ? 'border-[#84A65B] bg-[#2f3b2b]' : 'border-gray-700 bg-[#2a2a2a] hover:border-gray-500'"
+            @click="selectWorkspaceMode(mode.key)"
+          >
+            <div class="text-sm font-medium text-gray-100">{{ mode.label }}</div>
+            <div class="mt-1 text-[11px] leading-snug text-gray-400">{{ mode.hint }}</div>
+          </button>
+        </div>
+
+        <!-- tab 切换 -->
+        <div v-if="selectedWorkspaceMode === 'multiplayer_multi_agent'" class="flex gap-2">
+            <button
+              class="flex-1 py-2 rounded text-sm"
+            :class="lobbyTab === 'create' ? 'bg-[#84A65B] text-white' : 'bg-[#3a3a3a]/60'"
+            @click="lobbyTab = 'create'"
+          >
+            创建房间
+          </button>
+          <button
+            class="flex-1 py-2 rounded text-sm"
+            :class="lobbyTab === 'join' ? 'bg-[#84A65B] text-white' : 'bg-[#3a3a3a]/60'"
+            @click="lobbyTab = 'join'"
+          >
+            加入房间
+          </button>
+        </div>
+
+        <!-- 创建房间 -->
+        <div v-if="lobbyTab === 'create'" class="space-y-3">
+          <template v-if="roomMode === 'multi'">
+            <input v-model="form.room" placeholder="房间号" :class="inputCls" />
+            <input v-model="form.password" placeholder="密码（可选）" :class="inputCls" />
+          </template>
+          <button
+            class="w-full py-2 rounded bg-[#84A65B] text-white text-sm disabled:opacity-50"
+            @click="onCreate"
+          >
+            {{ createButtonText }}
+          </button>
+        </div>
+
+        <!-- 加入房间 -->
+        <div v-else class="space-y-3">
+          <input v-model="form.ip" placeholder="房主 IP（如 192.168.1.5）" :class="inputCls" :disabled="isJoining" />
+          <input v-model.number="form.port" placeholder="房主端口" :class="inputCls" :disabled="isJoining" />
+          <input v-model="form.room" placeholder="房间号" :class="inputCls" :disabled="isJoining" />
+          <input v-model="form.password" placeholder="密码（可选）" :class="inputCls" :disabled="isJoining" />
+          <input v-model="form.nickname" placeholder="你的昵称" :class="inputCls" :disabled="isJoining" />
+          <button
+            class="w-full py-2 rounded bg-[#84A65B] text-white text-sm disabled:opacity-50"
+            :disabled="isJoining"
+            @click="onJoin"
+          >
+            {{ isJoining ? joinStatusText : '加入' }}
+          </button>
+          <div v-if="isJoining" class="text-[#B8D58D] text-xs">{{ joinStatusText }}</div>
+        </div>
+
+        <div v-if="s.error" class="text-red-400 text-xs">{{ errorText }}</div>
+      </div>
+
+      <div class="mt-auto space-y-2 border-t border-gray-700 pt-4">
         <div class="flex items-center justify-between">
           <div class="text-sm font-medium text-gray-200">历史记录</div>
+          <div class="flex items-center gap-1.5">
+            <button
+              class="px-2 py-1 rounded bg-[#3a3a3a] text-xs text-gray-200 disabled:opacity-50"
+              :disabled="s.historyLoading"
+              @click="refreshHistoryRooms"
+            >
+              刷新
+            </button>
+            <button
+              v-if="hasMoreHistoryRooms"
+              class="px-2 py-1 rounded bg-[#3a3a3a] text-xs text-[#B8D58D] hover:bg-[#46553d]"
+              @click="showAllHistory = true"
+            >
+              更多
+            </button>
+          </div>
+        </div>
+        <div v-if="s.historyError" class="text-red-400 text-xs">{{ s.historyError }}</div>
+        <div v-if="s.historyLoading && !s.historyRooms.length" class="text-gray-400 text-sm">
+          正在加载历史记录…
+        </div>
+        <div v-else-if="!s.historyRooms.length" class="text-gray-500 text-sm">
+          暂无历史记录
+        </div>
+        <div v-else class="space-y-1">
+          <button
+            v-for="room in visibleHistoryRooms"
+            :key="room.room_id"
+            class="w-full text-left px-3 py-2 rounded bg-[#2a2a2a] border border-gray-700 hover:border-[#84A65B] transition-colors"
+            :class="s.selectedHistoryRoom?.room_id === room.room_id ? 'border-[#84A65B]' : ''"
+            @click="loadHistoryRoom(room)"
+            @dblclick="continueHistoryFromList(room)"
+          >
+            <div class="flex items-center justify-between gap-2">
+              <span class="font-medium text-gray-100 truncate">{{ historyRoomTitle(room) }}</span>
+              <span class="text-xs text-gray-500 shrink-0">{{ formatHistoryTime(room.last_ts) }}</span>
+            </div>
+            <div class="mt-1 text-xs text-gray-400 truncate">
+              {{ room.message_count || 0 }} 条 · {{ room.last_sender_name || '未知' }}：{{ room.last_text || '' }}
+            </div>
+          </button>
+        </div>
+        <button
+          v-if="s.selectedHistoryRoom"
+          class="w-full py-1.5 rounded bg-[#3a3a3a] text-xs text-[#B8D58D] hover:bg-[#46553d]"
+          @click="continueHistoryAsSingle(s.selectedHistoryRoom)"
+        >
+          作为单人聊天室继续
+        </button>
+      </div>
+
+      <div
+        v-if="showAllHistory"
+        class="absolute inset-0 z-20 overflow-y-auto bg-[#282828] p-4 space-y-3"
+      >
+        <div class="flex items-center justify-between gap-2">
+          <button
+            class="px-2 py-1 rounded bg-[#3a3a3a] text-xs text-gray-200 hover:bg-[#4a4a4a]"
+            @click="showAllHistory = false"
+          >
+            返回
+          </button>
+          <div class="text-sm font-medium text-gray-200">全部历史记录</div>
           <button
             class="px-2 py-1 rounded bg-[#3a3a3a] text-xs text-gray-200 disabled:opacity-50"
             :disabled="s.historyLoading"
@@ -27,6 +156,7 @@
             class="w-full text-left px-3 py-2 rounded bg-[#2a2a2a] border border-gray-700 hover:border-[#84A65B] transition-colors"
             :class="s.selectedHistoryRoom?.room_id === room.room_id ? 'border-[#84A65B]' : ''"
             @click="loadHistoryRoom(room)"
+            @dblclick="continueHistoryFromList(room)"
           >
             <div class="flex items-center justify-between gap-2">
               <span class="font-medium text-gray-100 truncate">{{ historyRoomTitle(room) }}</span>
@@ -37,159 +167,7 @@
             </div>
           </button>
         </div>
-        <div
-          v-if="s.selectedHistoryRoom"
-          class="mt-3 border-t border-gray-700 pt-3 space-y-2"
-        >
-          <div class="flex items-center justify-between">
-            <div class="text-sm text-[#B8D58D] truncate">
-              {{ historyRoomTitle(s.selectedHistoryRoom) }}
-            </div>
-            <div class="text-xs text-gray-500">{{ s.messages.length }} 条</div>
-          </div>
-          <button
-            class="w-full py-2 rounded bg-[#84A65B] text-white text-sm disabled:opacity-50"
-            :disabled="s.historyLoading"
-            @click="continueHistoryAsSingle"
-          >
-            作为单人聊天室继续
-          </button>
-          <div class="max-h-56 overflow-y-auto space-y-2 pr-1">
-            <div
-              v-for="m in s.messages"
-              :key="m.message_id || `${m.from}-${m.ts}-${m.text}`"
-              class="text-sm"
-            >
-              <div class="text-xs text-gray-500">{{ m.from }} · {{ formatHistoryTime(m.ts) }}</div>
-              <div class="mt-0.5 rounded bg-[#E8E8E8]/90 text-gray-800 px-3 py-2 leading-relaxed break-words">
-                {{ m.text }}
-              </div>
-            </div>
-          </div>
-        </div>
       </div>
-
-      <div class="grid grid-cols-3 gap-2">
-        <button
-          v-for="mode in workspaceModes"
-          :key="mode.key"
-          class="rounded border px-2 py-2 text-left transition-colors"
-          :class="selectedWorkspaceMode === mode.key ? 'border-[#84A65B] bg-[#2f3b2b]' : 'border-gray-700 bg-[#2a2a2a] hover:border-gray-500'"
-          @click="selectWorkspaceMode(mode.key)"
-        >
-          <div class="text-sm font-medium text-gray-100">{{ mode.label }}</div>
-          <div class="mt-1 text-[11px] leading-snug text-gray-400">{{ mode.hint }}</div>
-        </button>
-      </div>
-
-      <div
-        v-if="selectedWorkspaceMode === 'solo_multi_agent'"
-        class="rounded border border-gray-700 bg-[#242424] p-3 space-y-3"
-      >
-        <div class="flex items-center justify-between gap-2">
-          <div>
-            <div class="text-sm font-medium text-gray-100">配置 AI 专家组</div>
-            <div class="mt-0.5 text-[12px] text-gray-500">选择要加入本地聊天室的 Agent，也可以添加自定义角色</div>
-          </div>
-          <div class="text-[12px] text-[#B8D58D]">{{ selectedExpertPayloads.length }} 个</div>
-        </div>
-        <div class="grid grid-cols-2 gap-2">
-          <label
-            v-for="role in roleTemplates"
-            :key="role.key"
-            class="flex items-start gap-2 rounded bg-[#2a2a2a] border border-gray-700 px-2.5 py-2 cursor-pointer hover:border-[#84A65B]"
-          >
-            <input
-              type="checkbox"
-              class="mt-1 accent-[#84A65B]"
-              :checked="expertGroupConfig.selectedRoleKeys.has(role.key)"
-              @change="setExpertRoleSelected(role.key, $event.target.checked)"
-            />
-            <span class="min-w-0">
-              <span class="block text-sm text-gray-100">{{ role.name }}</span>
-              <span class="block truncate text-[11px] text-gray-500">{{ role.hint }}</span>
-            </span>
-          </label>
-        </div>
-        <div v-if="expertGroupConfig.customExperts.length" class="space-y-1.5">
-          <div
-            v-for="(expert, index) in expertGroupConfig.customExperts"
-            :key="`${expert.name}-${index}`"
-            class="flex items-center justify-between gap-2 rounded bg-[#2a2a2a] px-2.5 py-1.5 text-sm"
-          >
-            <span class="truncate text-gray-200">{{ expert.name }}</span>
-            <button
-              class="text-red-400 text-xs hover:text-red-300"
-              @click="removeCustomExpertAt(index)"
-            >
-              移除
-            </button>
-          </div>
-        </div>
-        <div class="grid grid-cols-[1fr_1.5fr_auto] gap-2">
-          <input v-model="customExpertForm.name" placeholder="自定义名字" :class="inputCls" />
-          <input v-model="customExpertForm.persona" placeholder="角色职责 / 人设" :class="inputCls" />
-          <button
-            class="px-3 rounded bg-[#3a3a3a] text-sm text-gray-100 hover:bg-[#84A65B]/80 disabled:opacity-50"
-            :disabled="!customExpertForm.name.trim()"
-            @click="addCustomExpertFromForm"
-          >
-            添加
-          </button>
-        </div>
-      </div>
-
-      <!-- tab 切换 -->
-      <div v-if="selectedWorkspaceMode === 'multiplayer_multi_agent'" class="flex gap-2">
-          <button
-            class="flex-1 py-2 rounded text-sm"
-          :class="lobbyTab === 'create' ? 'bg-[#84A65B] text-white' : 'bg-[#3a3a3a]/60'"
-          @click="lobbyTab = 'create'"
-        >
-          创建房间
-        </button>
-        <button
-          class="flex-1 py-2 rounded text-sm"
-          :class="lobbyTab === 'join' ? 'bg-[#84A65B] text-white' : 'bg-[#3a3a3a]/60'"
-          @click="lobbyTab = 'join'"
-        >
-          加入房间
-        </button>
-      </div>
-
-      <!-- 创建房间 -->
-      <div v-if="lobbyTab === 'create'" class="space-y-3">
-        <template v-if="roomMode === 'multi'">
-          <input v-model="form.room" placeholder="房间号" :class="inputCls" />
-          <input v-model="form.password" placeholder="密码（可选）" :class="inputCls" />
-        </template>
-        <button
-          class="w-full py-2 rounded bg-[#84A65B] text-white text-sm disabled:opacity-50"
-          :disabled="selectedWorkspaceMode === 'solo_multi_agent' && !selectedExpertPayloads.length"
-          @click="onCreate"
-        >
-          {{ createButtonText }}
-        </button>
-      </div>
-
-      <!-- 加入房间 -->
-      <div v-else class="space-y-3">
-        <input v-model="form.ip" placeholder="房主 IP（如 192.168.1.5）" :class="inputCls" :disabled="isJoining" />
-        <input v-model.number="form.port" placeholder="房主端口" :class="inputCls" :disabled="isJoining" />
-        <input v-model="form.room" placeholder="房间号" :class="inputCls" :disabled="isJoining" />
-        <input v-model="form.password" placeholder="密码（可选）" :class="inputCls" :disabled="isJoining" />
-        <input v-model="form.nickname" placeholder="你的昵称" :class="inputCls" :disabled="isJoining" />
-        <button
-          class="w-full py-2 rounded bg-[#84A65B] text-white text-sm disabled:opacity-50"
-          :disabled="isJoining"
-          @click="onJoin"
-        >
-          {{ isJoining ? joinStatusText : '加入' }}
-        </button>
-        <div v-if="isJoining" class="text-[#B8D58D] text-xs">{{ joinStatusText }}</div>
-      </div>
-
-      <div v-if="s.error" class="text-red-400 text-xs">{{ errorText }}</div>
     </div>
 
     <!-- 已进房：聊天界面 -->
@@ -205,20 +183,14 @@
         </div>
         <div class="flex shrink-0 items-center gap-2">
           <span
+            v-if="s.mode === 'multi'"
             class="rounded-full px-2 py-1 text-[12px]"
             :class="s.connection === 'connected' ? 'bg-[#84A65B]/20 text-[#B8D58D]' : 'bg-yellow-500/20 text-yellow-300'"
           >
             {{ roomStatusLabel }}
           </span>
-          <button
-            class="px-2.5 py-1.5 rounded bg-[#84A65B]/85 text-white text-sm"
-            title="添加 AI 助手"
-            @click="showAddAgent = true"
-          >
-            ＋助手
-          </button>
           <button class="px-2.5 py-1.5 rounded bg-red-500/80 text-white text-sm" @click="onLeave">
-            {{ s.role === 'host' ? '关闭' : '离开' }}
+            {{ s.mode === 'multi' && s.role === 'host' ? '关闭房间' : '退出聊天' }}
           </button>
         </div>
       </div>
@@ -313,72 +285,55 @@
         </div>
       </div>
 
-      <div
-        v-if="s.role === 'host'"
-        class="px-3 py-2 border-b border-gray-700 bg-[#202020] text-sm flex items-center justify-between gap-2"
-      >
-        <label class="flex items-center gap-2 text-gray-300 cursor-pointer select-none">
-          <input
-            type="checkbox"
-            class="accent-[#84A65B]"
-            :checked="s.generationOptions.vlmEnabled"
-            @change="onVlmToggle"
-          />
-          <span>VLM 外观检查</span>
-        </label>
-        <span class="text-gray-500">{{ s.generationOptions.vlmEnabled ? '审查 1 个关键目标' : '关闭' }}</span>
-      </div>
-
       <div class="flex flex-1 min-h-0">
         <!-- 消息区 -->
         <div class="flex-1 flex flex-col min-h-0">
-          <div ref="msgRef" class="flex-1 overflow-y-auto p-4 space-y-3.5">
+          <div ref="msgRef" class="flex-1 min-w-0 overflow-y-auto overflow-x-hidden p-4 space-y-3.5">
             <div
-              v-for="(m, idx) in s.messages"
-              :key="idx"
-              class="flex flex-col"
+              v-for="m in displayMessages"
+              :key="m.renderKey"
+              class="flex min-w-0 max-w-full flex-col"
               :class="m.self ? 'items-end' : 'items-start'"
             >
-              <span class="text-[12px] text-gray-400 mb-1">{{ m.from }}</span>
-              <div
-                class="px-3.5 py-2.5 rounded-lg text-base leading-relaxed max-w-[88%] whitespace-pre-wrap break-words"
-                :class="m.self ? 'bg-[#84A65B] text-white' : 'bg-[#E8E8E8]/90 text-gray-800'"
-              >
-                {{ m.text }}
-              </div>
-              <div
-                v-if="isGmProposalActionable(m) && s.role === 'host'"
-                class="mt-1 flex gap-1"
-              >
-                <button
-                  class="px-2 py-0.5 rounded bg-[#84A65B] text-white text-[11px]"
-                  @click="sendGmDecision(gmProposalId(m), 'confirm')"
-                >
-                  确认
-                </button>
-                <button
-                  class="px-2 py-0.5 rounded bg-[#3a3a3a] text-gray-100 text-[11px]"
-                  @click="sendGmDecision(gmProposalId(m), 'reject')"
-                >
-                  拒绝
-                </button>
-              </div>
-            </div>
-            <div
-              v-if="showAiReplySpinner"
-              class="flex flex-col items-start"
-            >
-              <span class="text-[12px] text-gray-400 mb-1">{{ pendingReplyTarget }}</span>
-              <div class="max-w-[88%] rounded-lg bg-[#E8E8E8]/90 px-3.5 py-2.5 text-gray-800 shadow-sm">
-                <div class="flex items-center gap-2 text-[15px] leading-relaxed">
-                  <span class="inline-block h-4 w-4 rounded-full border-2 border-gray-400 border-t-[#84A65B] animate-spin"></span>
-                  <span>{{ pendingReplyText }}</span>
-                  <span class="typing-dots text-gray-500"><span>.</span><span>.</span><span>.</span></span>
+              <template v-if="m.kind === 'pending_reply'">
+                <span class="max-w-[88%] truncate text-base leading-relaxed text-gray-400 mb-1">{{ m.targetLabel }}</span>
+                <div class="lanchat-message-bubble rounded-lg bg-[#E8E8E8]/90 px-3.5 py-2.5 text-gray-800 shadow-sm">
+                  <div class="flex items-center gap-2 text-[15px] leading-relaxed">
+                    <span class="inline-block h-4 w-4 rounded-full border-2 border-gray-400 border-t-[#84A65B] animate-spin"></span>
+                    <span>{{ pendingReplyText }}</span>
+                    <span class="typing-dots text-gray-500"><span>.</span><span>.</span><span>.</span></span>
+                  </div>
+                  <div v-if="pendingReplyHint" class="mt-1 text-[12px] text-gray-500">
+                    {{ pendingReplyHint }}
+                  </div>
                 </div>
-                <div v-if="pendingReplyHint" class="mt-1 text-[12px] text-gray-500">
-                  {{ pendingReplyHint }}
+              </template>
+              <template v-else>
+                <span class="max-w-[88%] truncate text-base leading-relaxed text-gray-400 mb-1">{{ m.displayFrom || m.from }}</span>
+                <div
+                  class="lanchat-message-bubble px-3.5 py-2.5 rounded-lg text-base leading-relaxed"
+                  :class="m.self ? 'bg-[#84A65B] text-white' : 'bg-[#E8E8E8]/90 text-gray-800'"
+                >
+                  {{ m.displayText || m.text }}
                 </div>
-              </div>
+                <div
+                  v-if="isGmProposalActionable(m) && s.role === 'host'"
+                  class="mt-1 flex gap-1"
+                >
+                  <button
+                    class="px-2 py-0.5 rounded bg-[#84A65B] text-white text-[11px]"
+                    @click="sendGmDecision(gmProposalId(m), 'confirm')"
+                  >
+                    确认
+                  </button>
+                  <button
+                    class="px-2 py-0.5 rounded bg-[#3a3a3a] text-gray-100 text-[11px]"
+                    @click="sendGmDecision(gmProposalId(m), 'reject')"
+                  >
+                    拒绝
+                  </button>
+                </div>
+              </template>
             </div>
           </div>
 
@@ -391,75 +346,62 @@
           </div>
           <div class="p-3 border-t border-gray-600 flex gap-2">
             <div class="relative flex-1 space-y-2">
-              <div class="flex flex-wrap items-center gap-1.5">
+              <div ref="mentionRoot" class="relative">
+                <textarea
+                  ref="draftInput"
+                  v-model="draft"
+                  rows="2"
+                  :class="draftInputCls"
+                  :disabled="s.connection === 'reconnecting'"
+                  :placeholder="draftPlaceholder"
+                  @input="onDraftInput"
+                  @keydown="onDraftKeydown"
+                ></textarea>
                 <button
-                  v-for="action in draftActions"
-                  :key="action.key"
-                  class="px-2.5 py-1 rounded text-xs"
-                  :class="selectedDraftAction === action.key ? 'bg-[#84A65B] text-white' : 'bg-[#3a3a3a] text-gray-300 hover:bg-[#4a4a4a]'"
-                  :title="action.hint"
-                  @click="selectDraftAction(action.key)"
+                  type="button"
+                  class="absolute bottom-2 left-2 inline-flex h-6 w-6 items-center justify-center rounded bg-[#3a3a3a] text-base leading-none text-[#B8D58D] hover:bg-[#46553d] hover:text-white"
+                  title="指定 AI 助手"
+                  @click="toggleMentionPicker"
                 >
-                  {{ action.label }}
+                  +
                 </button>
-                <select
-                  v-model="selectedTargetKey"
-                  class="ml-auto min-w-[112px] rounded bg-[#2a2a2a] border border-gray-600 px-2 py-1 text-xs text-gray-100 outline-none focus:border-[#84A65B]"
-                  @change="applyInputRouteState"
+                <div
+                  v-if="mentionCandidates.length"
+                  class="lanchat-scrollbar absolute bottom-full left-0 z-10 mb-2 max-h-64 w-full overflow-y-auto rounded border border-gray-600 bg-[#2a2a2a] shadow-xl"
                 >
-                  <option
-                    v-for="target in targetOptions"
-                    :key="target.key"
-                    :value="target.key"
+                  <div
+                    v-for="(c, i) in mentionCandidates"
+                    :key="`${c.name}-${i}`"
+                    class="px-2 py-1.5 text-sm text-gray-200 cursor-pointer"
+                    :class="i === mentionActiveIndex ? 'bg-[#84A65B]/60 text-white' : 'hover:bg-[#84A65B]/40'"
+                    @mousedown.prevent
+                    @click="pickMention(c)"
                   >
-                    {{ target.label }}
-                  </option>
-                </select>
+                    {{ mentionIcon(c) }}{{ c.name }}<span v-if="c.hint" class="text-[10px] text-gray-400 ml-1">{{ c.hint }}</span>
+                  </div>
+                </div>
               </div>
-              <div class="flex flex-wrap gap-1.5">
-                <button
-                  v-for="target in targetQuickOptions"
-                  :key="target.key"
-                  class="px-2 py-1 rounded text-[11px]"
-                  :class="selectedTargetKey === target.key ? 'bg-[#84A65B] text-white' : 'bg-[#3a3a3a] text-gray-300 hover:bg-[#4a4a4a]'"
-                  @click="selectTarget(target.key)"
-                >
-                  {{ target.label }}
-                </button>
-              </div>
-              <input
-                ref="draftInput"
-                v-model="draft"
-                :class="inputCls"
-                :disabled="s.connection === 'reconnecting'"
-                :placeholder="draftPlaceholder"
-                @input="onDraftInput"
-                @keydown="onDraftKeydown"
-              />
               <div
-                class="text-[11px]"
+                class="flex items-center justify-between gap-2 text-[11px]"
                 :class="routeGuardText ? 'text-yellow-300' : 'text-gray-500'"
               >
-                {{ routeGuardText || inputRouteHint }}
-              </div>
-              <div
-                v-if="mentionCandidates.length"
-                class="absolute bottom-full left-0 mb-1 w-full bg-[#2a2a2a] border border-gray-600 rounded max-h-32 overflow-y-auto z-10"
-              >
-                <div
-                  v-for="(c, i) in mentionCandidates"
-                  :key="i"
-                  class="px-2 py-1 text-sm text-gray-200 cursor-pointer"
-                  :class="i === mentionActiveIndex ? 'bg-[#84A65B]/60 text-white' : 'hover:bg-[#84A65B]/40'"
-                  @mousedown.prevent
-                  @click="pickMention(c)"
+                <span>{{ routeGuardText || inputRouteHint }}</span>
+                <label
+                  v-if="s.role === 'host'"
+                  class="flex shrink-0 items-center gap-1.5 text-gray-400 cursor-pointer select-none"
                 >
-                  {{ c.isGM ? '🎲 ' : (c.isAgent ? '🤖 ' : '') }}{{ c.name }}<span v-if="c.hint" class="text-[10px] text-gray-400 ml-1">{{ c.hint }}</span>
-                </div>
+                  <input
+                    type="checkbox"
+                    class="accent-[#84A65B]"
+                    :checked="s.generationOptions.vlmEnabled"
+                    @change="onVlmToggle"
+                  />
+                  <span>VLM 外观检查</span>
+                </label>
               </div>
             </div>
             <button
-              class="px-4 rounded bg-[#84A65B] text-white text-base disabled:opacity-50"
+              class="self-stretch px-4 rounded bg-[#84A65B] text-white text-base disabled:opacity-50"
               :disabled="sendDisabled"
               @click="onSend"
             >
@@ -472,9 +414,12 @@
         <div class="w-36 border-l border-gray-600 py-2 overflow-y-auto">
         <MemberList
           :members="s.members"
-          :agents="s.agents"
+          :member-details="s.memberDetails"
           :peer-id="s.peerId"
+          :show-self-marker="s.mode === 'multi'"
+          :agents="s.agents"
           @remove-agent="onRemoveAgent"
+          @add-agent="showAddAgent = true"
         />
         </div>
       </div>
@@ -485,42 +430,29 @@
       <div
         v-if="showAddAgent"
         class="absolute inset-0 bg-black/50 flex items-center justify-center z-10"
-        @click.self="showAddAgent = false"
+        @pointerdown="onAddAgentBackdropPointerDown"
+        @pointerup="onAddAgentBackdropPointerUp"
       >
-	        <div class="bg-[#2a2a2a] p-4 rounded w-72 space-y-3">
-	          <div class="text-sm text-gray-200">添加 AI 助手</div>
-	          <div class="space-y-2">
-	            <div class="text-[11px] text-gray-400">快速模板</div>
-		            <div class="grid grid-cols-3 gap-1.5">
-		              <button
-		                v-for="role in roleTemplates"
-		                :key="role.key"
-	                class="px-2 py-1 rounded bg-[#3a3a3a] text-xs text-gray-200 hover:bg-[#84A65B]/70"
-	                :title="role.hint"
-	                @click="selectRoleTemplate(role)"
-	              >
-		                {{ role.name }}
-		              </button>
-		            </div>
-		            <div class="flex gap-1.5 pt-1">
-		              <button
-		                v-for="bundle in roleTemplateBundles"
-		                :key="bundle.key"
-		                class="flex-1 px-2 py-1 rounded bg-[#42543b] text-xs text-gray-100 hover:bg-[#84A65B]/80"
-		                :title="bundle.hint"
-		                @click="addRoleTemplateBundle(bundle)"
-		              >
-		                {{ bundle.name }}
-		              </button>
-		            </div>
-		          </div>
-	          <input v-model="agentForm.name" placeholder="助手名字（如 小策）" :class="inputCls" />
-	          <textarea
-	            v-model="agentForm.persona"
-	            placeholder="人设提示词（可选，也可直接写自定义角色）"
-	            rows="3"
-	            :class="inputCls"
-	          ></textarea>
+        <div class="bg-[#2a2a2a] p-4 rounded w-[26rem] max-w-[calc(100%-2rem)] space-y-3">
+          <div class="text-sm text-gray-200">添加 AI 助手</div>
+          <div class="flex gap-1.5">
+            <button
+              v-for="bundle in roleTemplateBundles"
+              :key="bundle.key"
+              class="flex-1 px-2 py-1 rounded bg-[#42543b] text-xs text-gray-100 hover:bg-[#84A65B]/80"
+              :title="bundle.hint"
+              @click="addRoleTemplateBundle(bundle)"
+            >
+              {{ bundle.name }}
+            </button>
+          </div>
+          <input v-model="agentForm.name" placeholder="助手名字（如 小策）" :class="inputCls" />
+          <textarea
+            v-model="agentForm.persona"
+            placeholder="人设提示词（可选，也可直接写自定义角色）"
+            rows="3"
+            :class="inputCls"
+          ></textarea>
           <div class="flex gap-2">
             <button class="flex-1 py-1.5 rounded bg-[#3a3a3a] text-gray-200 text-sm" @click="showAddAgent = false">取消</button>
             <button class="flex-1 py-1.5 rounded bg-[#84A65B] text-white text-sm" @click="onAddAgent">添加</button>
@@ -534,6 +466,9 @@
 <script setup>
 import { reactive, ref, computed, nextTick, watch, onMounted, onBeforeUnmount } from 'vue';
 import lanchat from '../../../stores/lanchat.js';
+import { Bridge, networkService } from '../../../utils/bridge.js';
+import { coronaEventBus } from '../../../utils/eventBus.js';
+import { getActorContext } from '../../../blockly/composables/useActorContext.js';
 import {
   buildGmDecisionMessage,
   buildGmDisclosureActionMessage,
@@ -542,36 +477,50 @@ import {
 } from '../../../stores/lanchatDisclosure.js';
 import MemberList from './MemberList.vue';
 import {
+  aiReplyDisplayText,
+  displaySenderName,
+  effectiveDraftAction,
+  pendingReplyMatchesMessage,
   resolveSelectedTargetKey,
   routeGuardMessage,
+  targetKeyFromMentionText,
   targetPayloadForKey,
 } from './routeSelection.js';
 import {
-  addCustomExpert,
   createExpertGroupConfig,
-  removeCustomExpert,
   selectedExpertPayloads as buildSelectedExpertPayloads,
-  setRoleSelected,
 } from './expertGroupConfig.js';
 
 const s = lanchat.state;
-const lobbyTab = ref('create');
-const roomMode = ref('multi');
 const draft = ref('');
-const selectedWorkspaceMode = ref(s.workspaceMode || 'multiplayer_multi_agent');
-const selectedDraftAction = ref(s.draftAction || 'chat');
+const normalizeVisibleWorkspaceMode = (mode) => (
+  mode === 'multiplayer_multi_agent' ? 'multiplayer_multi_agent' : 'solo_single_agent'
+);
+const initialWorkspaceMode = normalizeVisibleWorkspaceMode(s.workspaceMode);
+const lobbyTab = ref('create');
+const roomMode = ref(initialWorkspaceMode === 'multiplayer_multi_agent' ? 'multi' : 'single');
+const selectedWorkspaceMode = ref(initialWorkspaceMode);
+const showAllHistory = ref(false);
 const selectedTargetKey = ref('scene');
 const showAddAgent = ref(false);
 const agentForm = reactive({ name: '', persona: '' });
-const customExpertForm = reactive({ name: '', persona: '' });
+const addAgentBackdropPointerStarted = ref(false);
+const mentionRoot = ref(null);
 const mentionCandidates = ref([]);
 const mentionActiveIndex = ref(0);
+const manualMentionOpen = ref(false);
 const msgRef = ref(null);
 const draftInput = ref(null);
 const nowMs = ref(Date.now());
-const pendingReplyTarget = ref('AI 助手');
-const pendingReplySinceMs = ref(0);
+const pendingReply = ref(null);
 let waitClock = null;
+let modelTransferPollTimer = null;
+const DRAFT_MIN_ROWS = 2;
+const DRAFT_MAX_ROWS = 4;
+const PENDING_MODEL_TRANSFER_POLL_LIMIT = 16;
+const modelTransferSnapshotRequests = new Set();
+const remoteRegisteredActorIdentities = new Set();
+const snapshotActorCreateKeys = new Set();
 
 const roleTemplates = [
   {
@@ -614,6 +563,7 @@ const roleTemplateBundles = [
     roles: ['elder', 'merchant', 'little_girl', 'bandit'],
   },
 ];
+
 const defaultExpertRoleKeys = roleTemplateBundles[0]?.roles || [];
 const expertGroupConfig = reactive(createExpertGroupConfig(roleTemplates, defaultExpertRoleKeys));
 
@@ -621,26 +571,13 @@ const workspaceModes = [
   {
     key: 'solo_single_agent',
     label: '自己设计',
-    hint: '本地单人，默认设计助手',
-  },
-  {
-    key: 'solo_multi_agent',
-    label: 'AI 专家组',
-    hint: '本地单人，多助手讨论',
+    hint: '本地单人，内置专家默认启用',
   },
   {
     key: 'multiplayer_multi_agent',
     label: '多人共创',
-    hint: '房主开房，成员加入',
+    hint: '房主开房，内置专家默认启用',
   },
-];
-
-const draftActions = [
-  { key: 'chat', label: '问一下', hint: '只让目标回复，不生成场景' },
-  { key: 'plan', label: '生成方案', hint: '先整理可确认方案' },
-  { key: 'supplement', label: '补充要求', hint: '更新当前目标方案' },
-  { key: 'generate', label: '确认生成', hint: '按当前方案进入生成' },
-  { key: 'edit', label: '调整场景', hint: '对已有场景提出修改' },
 ];
 
 const form = reactive({
@@ -653,6 +590,8 @@ const form = reactive({
 
 const inputCls =
   'w-full px-3 py-2 rounded bg-[#2a2a2a] border border-gray-600 text-[15px] text-gray-100 outline-none focus:border-[#84A65B]';
+const draftInputCls =
+  'lanchat-scrollbar w-full resize-none rounded border border-gray-600 bg-[#2a2a2a] px-3 py-2 text-[15px] leading-relaxed text-gray-100 outline-none focus:border-[#84A65B] disabled:opacity-60';
 
 const ERROR_TEXT = {
   WRONG_PASSWORD: '密码错误',
@@ -674,9 +613,11 @@ const joinStatusText = computed(() => (s.connection === 'syncing' ? '正在同�
 const createButtonText = computed(() => {
   if (roomMode.value === 'multi') return '创建多人房间';
   if (s.selectedHistoryRoom) return '继续所选历史';
-  return selectedWorkspaceMode.value === 'solo_multi_agent' ? '进入 AI 专家组' : '进入自己设计';
+  return '进入自己设计';
 });
 const selectedExpertPayloads = computed(() => buildSelectedExpertPayloads(expertGroupConfig, roleTemplates));
+const visibleHistoryRooms = computed(() => (s.historyRooms || []).slice(0, 2));
+const hasMoreHistoryRooms = computed(() => (s.historyRooms || []).length > 2);
 const roomStatusLabel = computed(() => {
   if (s.connection === 'connected') return s.role === 'host' ? '房主在线' : '已连接';
   if (s.connection === 'reconnecting') return '重连中';
@@ -762,29 +703,55 @@ const inputAssistText = computed(() => {
 const draftPlaceholder = computed(() => {
   if (s.connection === 'reconnecting') return '连接已断开';
   if (isWaitingDisclosure.value) return '生成中也可输入：新增一个… / 调整… / 问题…';
-  if (selectedDraftAction.value === 'plan') return '描述你想设计什么';
-  if (selectedDraftAction.value === 'supplement') return '写清要改的风格、物件、布局或限制';
-  if (selectedDraftAction.value === 'generate') return '确认按当前方案生成，也可补一句生成范围';
-  if (selectedDraftAction.value === 'edit') return '描述要调整的已有物体或位置';
-  return '输入要问的问题';
+  return '输入@来指定AI助手~';
 });
-const showAiReplySpinner = computed(() => {
-  if (!pendingReplySinceMs.value) return false;
-  if (isWaitingDisclosure.value) return false;
-  if (s.connection === 'reconnecting') return false;
-  return nowMs.value - pendingReplySinceMs.value < 90000;
-});
+const currentPendingReply = computed(() => (
+  pendingReplyBelongsToCurrentRoom(pendingReply.value) ? pendingReply.value : null
+));
 const pendingReplyText = computed(() => {
-  const elapsed = Math.max(0, Math.floor((nowMs.value - pendingReplySinceMs.value) / 1000));
-  if (elapsed >= 20) return `${pendingReplyTarget.value} 仍在处理`;
-  if (elapsed >= 8) return `${pendingReplyTarget.value} 正在整理`;
-  return `${pendingReplyTarget.value} 正在思考`;
+  const pending = currentPendingReply.value;
+  const target = pending?.targetLabel || 'AI 助手';
+  const elapsed = Math.max(0, Math.floor((nowMs.value - Number(pending?.createdAtMs || 0)) / 1000));
+  if (elapsed >= 20) return `${target} 仍在处理`;
+  if (elapsed >= 8) return `${target} 正在整理`;
+  return `${target} 正在思考`;
 });
 const pendingReplyHint = computed(() => {
-  if (!pendingReplySinceMs.value) return '';
-  const elapsed = Math.max(0, Math.floor((nowMs.value - pendingReplySinceMs.value) / 1000));
+  const pending = currentPendingReply.value;
+  if (!pending) return '';
+  const elapsed = Math.max(0, Math.floor((nowMs.value - Number(pending.createdAtMs || 0)) / 1000));
   if (elapsed < 12) return '';
   return '复杂方案或工具调用可能需要更久，你可以继续补充要求。';
+});
+const displayMessages = computed(() => {
+  const messages = (s.messages || []).map((message, index) => ({
+    ...message,
+    displayFrom: displaySenderName(message),
+    displayText: aiReplyDisplayText(message, s.messages || [], s.memberDetails || []),
+    renderKey: message.message_id || `message-${index}`,
+    kind: 'message',
+  }));
+  const pending = currentPendingReply.value;
+  if (!pending) return messages;
+  const pendingMessage = {
+    ...pending,
+    renderKey: `pending-${pending.correlationId}`,
+    kind: 'pending_reply',
+    self: false,
+  };
+  const anchorIndex = messages.findIndex((message) => (
+    message.self &&
+    pending.correlationId &&
+    message.correlation_id === pending.correlationId
+  ));
+  if (anchorIndex >= 0) {
+    return [
+      ...messages.slice(0, anchorIndex + 1),
+      pendingMessage,
+      ...messages.slice(anchorIndex + 1),
+    ];
+  }
+  return [...messages, pendingMessage];
 });
 const resourceDiagnosisText = computed(() => {
   if (!currentDisclosure.value || currentDisclosure.value.stage !== '资源调度') return '';
@@ -793,6 +760,8 @@ const resourceDiagnosisText = computed(() => {
 const targetOptions = computed(() => {
   const options = [];
   const agents = Array.isArray(s.agents) ? s.agents : [];
+  options.push({ key: 'gm', label: '主持人', scope: 'gm', agentId: 'gm', agentName: 'GM' });
+  options.push({ key: 'group', label: '全部AI助手', scope: 'group' });
   if (agents.length) {
     for (const agent of agents) {
       options.push({
@@ -812,25 +781,21 @@ const targetOptions = computed(() => {
       agentName: '设计助手',
     });
   }
-  options.push({ key: 'group', label: '专家组', scope: 'group' });
-  options.push({ key: 'gm', label: '主持人', scope: 'gm', agentId: 'gm', agentName: 'GM' });
   options.push({ key: 'scene', label: '当前场景', scope: 'scene' });
   return options;
 });
 const selectedTarget = computed(() => (
-  targetOptions.value.find((item) => item.key === selectedTargetKey.value) ||
-  targetOptions.value[0]
+  targetOptions.value.find((item) => item.key === selectedTargetKey.value) || null
 ));
-const targetQuickOptions = computed(() => targetOptions.value.filter((item) => (
-  item.scope === 'agent' || item.scope === 'group' || item.scope === 'scene'
-)));
 const inputRouteHint = computed(() => {
+  if (!selectedTarget.value) {
+    return '直接发送；输入 @ 指定AI助手';
+  }
   const target = selectedTarget.value?.label || '当前目标';
-  const action = draftActions.find((item) => item.key === selectedDraftAction.value)?.label || '发送';
-  return `${action} · 发给 ${target}`;
+  return `发送给 ${target}`;
 });
 const routeGuardText = computed(() => routeGuardMessage(
-  selectedDraftAction.value,
+  'chat',
   selectedTarget.value,
   draft.value
 ));
@@ -841,12 +806,16 @@ function refreshHistoryRooms() {
 }
 
 function loadHistoryRoom(room) {
+  clearPendingReply();
   return lanchat.loadHistoryRoom(room);
 }
 
 function historyRoomTitle(room) {
   if (!room) return '';
-  return room.room_id === 'single-default' ? '单人聊天室' : room.room_id;
+  const displayRoomId = room.display_room_id || room.room_id;
+  const roomId = String(displayRoomId || '');
+  if (!roomId) return '';
+  return isLocalSingleRoomId(roomId) ? '单人聊天室' : `多人聊天室-${roomId}`;
 }
 
 function formatHistoryTime(ts) {
@@ -860,31 +829,53 @@ function formatHistoryTime(ts) {
 onMounted(refreshHistoryRooms);
 
 onMounted(() => {
+  resizeDraftInput();
   waitClock = window.setInterval(() => {
     nowMs.value = Date.now();
   }, 1000);
+  ensureModelTransferPolling();
+  coronaEventBus.on('actor-sync-broadcast', handleActorSyncBroadcast);
+  document.addEventListener('pointerdown', onDocumentPointerDown);
 });
 
 onBeforeUnmount(() => {
   if (waitClock) window.clearInterval(waitClock);
   waitClock = null;
+  stopModelTransferPolling();
+  coronaEventBus.off('actor-sync-broadcast', handleActorSyncBroadcast);
+  document.removeEventListener('pointerdown', onDocumentPointerDown);
 });
 
+watch(
+  () => [s.inRoom, s.connection, s.role, s.mode, s.room, s.ip],
+  () => {
+    ensureModelTransferPolling();
+    requestModelTransferSnapshotForJoin();
+  },
+  { flush: 'post' },
+);
+
+watch(
+  () => [s.inRoom, s.mode, s.room],
+  () => {
+    if (pendingReply.value && !pendingReplyBelongsToCurrentRoom()) {
+      clearPendingReply();
+    }
+  }
+);
+
 function selectWorkspaceMode(mode) {
-  selectedWorkspaceMode.value = mode;
-  lanchat.setWorkspaceMode(mode);
-  if (mode === 'multiplayer_multi_agent') {
+  const visibleMode = normalizeVisibleWorkspaceMode(mode);
+  selectedWorkspaceMode.value = visibleMode;
+  lanchat.setWorkspaceMode(visibleMode);
+  selectedTargetKey.value = 'scene';
+  applyInputRouteState();
+  if (visibleMode === 'multiplayer_multi_agent') {
     roomMode.value = 'multi';
   } else {
     roomMode.value = 'single';
     lobbyTab.value = 'create';
   }
-}
-
-function selectDraftAction(action) {
-  selectedDraftAction.value = action;
-  lanchat.setDraftAction(action);
-  applyInputRouteState();
 }
 
 function selectTarget(key) {
@@ -893,29 +884,15 @@ function selectTarget(key) {
 }
 
 function applyInputRouteState() {
-  lanchat.setDraftAction(selectedDraftAction.value);
+  lanchat.setDraftAction('chat');
   lanchat.setActiveTarget(targetPayloadForKey(selectedTargetKey.value, targetOptions.value));
-}
-
-function setExpertRoleSelected(key, selected) {
-  setRoleSelected(expertGroupConfig, key, selected);
-}
-
-function addCustomExpertFromForm() {
-  addCustomExpert(expertGroupConfig, customExpertForm);
-  customExpertForm.name = '';
-  customExpertForm.persona = '';
-}
-
-function removeCustomExpertAt(index) {
-  removeCustomExpert(expertGroupConfig, index);
 }
 
 async function onCreate() {
   selectWorkspaceMode(selectedWorkspaceMode.value);
   if (roomMode.value === 'single') {
     if (s.selectedHistoryRoom) {
-      await continueHistoryAsSingle();
+      await continueHistoryAsSingle(s.selectedHistoryRoom);
       return;
     }
     const res = await lanchat.openRoom({
@@ -925,35 +902,302 @@ async function onCreate() {
       mode: 'single',
     });
     if (!(res && res.ok)) return;
-    if (selectedWorkspaceMode.value === 'solo_multi_agent') {
-      await addDefaultExpertGroup();
-    }
+    await addDefaultExpertGroup();
     return;
   }
   if (!form.room.trim()) return;
-  await lanchat.openRoom({
+  const res = await lanchat.openRoom({
     room: form.room.trim(),
     password: form.password,
     port: form.port || 27960,
     mode: roomMode.value,
   });
+  if (res && res.ok) {
+    await addDefaultExpertGroup();
+  }
 }
 
-async function continueHistoryAsSingle() {
-  if (!s.selectedHistoryRoom?.room_id) return;
+async function continueHistoryFromList(room) {
+  const roomId = typeof room === 'string' ? room : room?.room_id;
+  if (!roomId) return;
+  await loadHistoryRoom(room);
+  if (isLocalSingleRoomId(roomId)) {
+    await continueHistoryAsSingle(roomId);
+  } else {
+    await continueHistoryAsMulti(roomId);
+  }
+}
+
+async function continueHistoryAsSingle(room = s.selectedHistoryRoom) {
+  const roomId = typeof room === 'string' ? room : room?.room_id;
+  if (!roomId) return;
   roomMode.value = 'single';
   lobbyTab.value = 'create';
-  lanchat.setWorkspaceMode(selectedWorkspaceMode.value === 'solo_multi_agent' ? 'solo_multi_agent' : 'solo_single_agent');
+  lanchat.setWorkspaceMode('solo_single_agent');
   const res = await lanchat.continueHistoryAsLocalRoom({
-    room: s.selectedHistoryRoom.room_id,
+    room: roomId,
   });
-  if (res && res.ok && selectedWorkspaceMode.value === 'solo_multi_agent') {
+  if (res && res.ok) {
+    await addDefaultExpertGroup();
+  }
+}
+
+async function continueHistoryAsMulti(room = s.selectedHistoryRoom) {
+  const roomId = typeof room === 'string' ? room : room?.room_id;
+  if (!roomId) return;
+  roomMode.value = 'multi';
+  lobbyTab.value = 'create';
+  lanchat.setWorkspaceMode('multiplayer_multi_agent');
+  const res = await lanchat.continueHistoryAsMultiRoom({
+    room: roomId,
+    port: form.port || 27960,
+  });
+  if (res && res.ok) {
     await addDefaultExpertGroup();
   }
 }
 
 function makeLocalRoomId() {
   return 'single-default';
+}
+
+function isLocalSingleRoomId(roomId) {
+  const value = String(roomId || '');
+  return value === 'single-default' || /^single-\d{8}-\d{6}-[a-z0-9]+$/.test(value);
+}
+
+function currentModelTransferSceneName() {
+  const context = getActorContext();
+  return String(context?.scene || '').trim() || 'Scene/default.scene';
+}
+
+function unwrapCefResult(res) {
+  return res && res.data !== undefined ? res.data : res;
+}
+
+function hashString(str) {
+  let hash = 0;
+  for (let i = 0; i < str.length; i += 1) {
+    const ch = str.charCodeAt(i);
+    hash = (hash << 5) - hash + ch;
+    hash |= 0;
+  }
+  return hash >>> 0;
+}
+
+function lastPathPart(value) {
+  return (
+    String(value || '')
+      .replace(/\\/g, '/')
+      .split('/')
+      .filter(Boolean)
+      .pop() || ''
+  );
+}
+
+function isInternalSyncName(value) {
+  const text = String(value || '').trim();
+  return text.startsWith('__') || lastPathPart(text).startsWith('__');
+}
+
+function isActorSyncable(actorData) {
+  if (!actorData) return false;
+  if (actorData._suppress_network_broadcast) return false;
+  if (actorData.actor_type === 'actor') return false;
+  if (!actorData.geometry || typeof actorData.geometry !== 'object') return false;
+  if (isInternalSyncName(actorData.name)) return false;
+  if (isInternalSyncName(actorData.scene)) return false;
+  return Boolean(actorData.path || actorData.model);
+}
+
+function actorCreateBroadcastKey(sceneName, actorGuid, modelPath) {
+  return `${sceneName}:${actorGuid}:${modelPath}`;
+}
+
+function rememberActorCreateBroadcast(sceneName, actorGuid, modelPath) {
+  if (!sceneName || !actorGuid || !modelPath) return;
+  snapshotActorCreateKeys.add(actorCreateBroadcastKey(sceneName, actorGuid, modelPath));
+}
+
+function modelTransferActive() {
+  return s.inRoom && s.connection === 'connected' && s.mode === 'multi';
+}
+
+function ensureModelTransferPolling() {
+  if (!modelTransferActive()) {
+    stopModelTransferPolling();
+    return;
+  }
+  if (modelTransferPollTimer) return;
+  modelTransferPollTimer = window.setInterval(pollModelTransfer, 2000);
+  pollModelTransfer();
+}
+
+function stopModelTransferPolling() {
+  if (modelTransferPollTimer) {
+    window.clearInterval(modelTransferPollTimer);
+    modelTransferPollTimer = null;
+  }
+  modelTransferSnapshotRequests.clear();
+  remoteRegisteredActorIdentities.clear();
+  snapshotActorCreateKeys.clear();
+}
+
+async function getActorSnapshot(sceneName) {
+  const raw = await Bridge.callCEF('SceneTools', 'get_actor_sync_snapshot', [sceneName]);
+  return unwrapCefResult(raw);
+}
+
+async function registerActorIdentityFromData(actorData, locallyOwned = true) {
+  if (!modelTransferActive() || !actorData) return false;
+  const actorGuid = actorData.actor_guid || '';
+  const actorHandle = actorData.handle || '';
+  if (!actorGuid || !actorHandle) return false;
+  const identityKey = `${actorGuid}:${actorHandle}:${locallyOwned ? 'local' : 'remote'}`;
+  if (!locallyOwned && remoteRegisteredActorIdentities.has(identityKey)) return true;
+  const registered = await networkService.registerActorIdentity(actorGuid, actorHandle, locallyOwned);
+  if (registered?.ok !== true) return false;
+  if (!locallyOwned) {
+    remoteRegisteredActorIdentities.add(identityKey);
+  }
+  return true;
+}
+
+async function broadcastCurrentSceneSnapshot(sceneName, includeActorCreates = true) {
+  if (!modelTransferActive()) return;
+  const targetScene = String(sceneName || '').trim() || currentModelTransferSceneName();
+  const snapshot = await getActorSnapshot(targetScene);
+  if (!snapshot || snapshot.status === 'error') return;
+  const actors = Array.isArray(snapshot.actors) ? snapshot.actors : [];
+  if (includeActorCreates) {
+    for (const actor of actors) {
+      if (!isActorSyncable(actor)) continue;
+      const actorGuid = actor.actor_guid || '';
+      const modelPath = actor.path || actor.model || '';
+      if (!actorGuid || !modelPath) continue;
+      const key = actorCreateBroadcastKey(targetScene, actorGuid, modelPath);
+      if (snapshotActorCreateKeys.has(key)) continue;
+      const sent = await networkService
+        .broadcastActorCreate(actorGuid, targetScene, modelPath, { ...actor, scene: targetScene })
+        .then(() => true)
+        .catch(() => false);
+      if (sent) rememberActorCreateBroadcast(targetScene, actorGuid, modelPath);
+    }
+  }
+  await networkService.broadcastSceneSnapshot(targetScene, snapshot).catch(() => {});
+}
+
+async function applyRemoteSceneSnapshot(sceneName, snapshotPayload) {
+  const targetScene = String(sceneName || '').trim() || currentModelTransferSceneName();
+  let snapshot = snapshotPayload || {};
+  if (typeof snapshotPayload === 'string') {
+    try {
+      snapshot = JSON.parse(snapshotPayload);
+    } catch (_) {
+      snapshot = {};
+    }
+  }
+  if (!snapshot || !Array.isArray(snapshot.actors)) return;
+  snapshot.actors = snapshot.actors.map((actor) => ({
+    ...(actor || {}),
+    _suppress_network_broadcast: true,
+  }));
+  await networkService.setSyncPaused(true);
+  try {
+    const applied = await Bridge.callCEF('SceneTools', 'apply_actor_sync_snapshot_internal', [
+      targetScene,
+      snapshot,
+    ]);
+    const appliedData = unwrapCefResult(applied);
+    const changedActors = [...(appliedData?.created || []), ...(appliedData?.updated || [])];
+    for (const actorData of changedActors) {
+      await registerActorIdentityFromData(actorData, false);
+    }
+  } finally {
+    await networkService.setSyncPaused(false);
+  }
+}
+
+async function pollPendingActorCreates() {
+  for (let i = 0; i < PENDING_MODEL_TRANSFER_POLL_LIMIT; i += 1) {
+    const pending = await networkService.pollPendingActorCreate();
+    if (!pending || !pending.has_pending) break;
+    await networkService.setSyncPaused(true);
+    try {
+      pending.actor_data = pending.actor_data || {};
+      pending.actor_data.actor_guid = pending.actor_guid || '';
+      pending.actor_data._suppress_network_broadcast = true;
+      const created = await Bridge.callCEF('SceneTools', 'create_actor_internal', [
+        pending.scene_name,
+        pending.model_path,
+        'model',
+        pending.actor_data,
+      ]);
+      const createdData = unwrapCefResult(created);
+      await registerActorIdentityFromData(createdData?.actor || createdData, false);
+    } finally {
+      await networkService.setSyncPaused(false);
+    }
+  }
+}
+
+async function pollModelTransfer() {
+  if (!modelTransferActive()) return;
+  try {
+    await pollPendingActorCreates();
+    if (s.role === 'host') {
+      for (let i = 0; i < PENDING_MODEL_TRANSFER_POLL_LIMIT; i += 1) {
+        const pendingRequest = await networkService.pollPendingSceneSnapshotRequest();
+        if (!pendingRequest || !pendingRequest.has_pending) break;
+        await broadcastCurrentSceneSnapshot(pendingRequest.scene_name || currentModelTransferSceneName(), true);
+      }
+    } else if (s.role === 'guest') {
+      for (let i = 0; i < PENDING_MODEL_TRANSFER_POLL_LIMIT; i += 1) {
+        const pendingSnapshot = await networkService.pollPendingSceneSnapshot();
+        if (!pendingSnapshot || !pendingSnapshot.has_pending) break;
+        await applyRemoteSceneSnapshot(
+          pendingSnapshot.scene_name || currentModelTransferSceneName(),
+          pendingSnapshot.snapshot_json,
+        );
+      }
+    }
+  } catch (error) {
+    console.warn('[LANChat] model transfer polling failed', error);
+  }
+}
+
+function handleActorSyncBroadcast(actorData) {
+  if (!modelTransferActive()) return;
+  if (!isActorSyncable(actorData)) return;
+  const modelPath = actorData.path || actorData.model || '';
+  if (!modelPath) return;
+  const sceneName = String(actorData.scene || '').trim() || currentModelTransferSceneName();
+  const actorGuid =
+    actorData.actor_guid ||
+    `actor-${hashString(`${sceneName}|${modelPath}|${actorData.name || ''}`)}`;
+  actorData.actor_guid = actorGuid;
+  registerActorIdentityFromData(actorData).catch(() => {});
+  networkService
+    .broadcastActorCreate(actorGuid, sceneName, modelPath, actorData)
+    .then(() => {
+      rememberActorCreateBroadcast(sceneName, actorGuid, modelPath);
+    })
+    .catch(() => {});
+}
+
+async function requestModelTransferSnapshotForJoin() {
+  if (!s.inRoom || s.connection !== 'connected') return;
+  if (s.role !== 'guest' || s.mode !== 'multi') return;
+  const sceneName = currentModelTransferSceneName();
+  const requestKey = `${s.room || ''}|${s.ip || ''}|${sceneName}`;
+  if (modelTransferSnapshotRequests.has(requestKey)) return;
+  modelTransferSnapshotRequests.add(requestKey);
+  try {
+    await networkService.requestSceneSnapshot(sceneName);
+  } catch (error) {
+    modelTransferSnapshotRequests.delete(requestKey);
+    console.warn('[LANChat] request model transfer snapshot failed', error);
+  }
 }
 
 async function onJoin() {
@@ -968,6 +1212,7 @@ async function onJoin() {
 }
 
 async function onLeave() {
+  clearPendingReply();
   if (s.role === 'host') {
     await lanchat.closeRoom();
   } else {
@@ -977,40 +1222,63 @@ async function onLeave() {
 
 function onSend() {
   const text = draft.value;
+  syncSelectedTargetFromDraft(text);
   if (!text.trim() || sendDisabled.value) return;
-  applyInputRouteState();
-  startPendingReply(text);
-  lanchat.sendMessage(text, messageOptionsForText(text)).then((res) => {
+  const pending = pendingReplyForText(text);
+  if (pending) startPendingReply(pending);
+  lanchat.sendMessage(text, messageOptionsForText(text, pending)).then((res) => {
     if (res && res.ok === false) {
-      clearPendingReply();
+      if (pending) clearPendingReply(pending.correlationId);
       return;
     }
     draft.value = '';
-    mentionCandidates.value = [];
-    mentionActiveIndex.value = 0;
+    syncSelectedTargetFromDraft('');
+    closeMentionPicker();
+    resizeDraftInput();
   }).catch((error) => {
-    clearPendingReply();
+    if (pending) clearPendingReply(pending.correlationId);
     console.warn('[LANChat] send message failed', error);
   });
 }
 
-function startPendingReply(text) {
-  const target = pendingTargetForText(text);
-  pendingReplyTarget.value = target || 'AI 助手';
-  pendingReplySinceMs.value = Date.now();
+function startPendingReply(pending) {
+  if (!pending) return;
+  pendingReply.value = pending;
 }
 
-function clearPendingReply() {
-  pendingReplySinceMs.value = 0;
+function clearPendingReply(correlationId = '') {
+  if (correlationId && pendingReply.value?.correlationId !== correlationId) return;
+  pendingReply.value = null;
 }
 
-function pendingTargetForText(text) {
-  const trimmed = String(text || '').trim();
-  const mention = trimmed.match(/^@([^\s，,：:]+)/);
-  if (mention?.[1]) return mention[1];
-  if (selectedTarget.value?.label) return selectedTarget.value.label;
-  if (s.mode === 'single' && s.agents.length === 1) return s.agents[0].name || 'AI 助手';
-  return 'AI 助手';
+function pendingReplyBelongsToCurrentRoom(pending = pendingReply.value) {
+  if (!pending || !s.inRoom) return false;
+  return (
+    String(pending.roomId || '') === String(s.room || '') &&
+    String(pending.roomMode || '') === String(s.mode || '')
+  );
+}
+
+function makePendingCorrelationId() {
+  const randomPart = Math.random().toString(36).slice(2, 8);
+  return `ui-${Date.now().toString(36)}-${randomPart}`;
+}
+
+function pendingReplyForText() {
+  const target = selectedTarget.value;
+  if (!target || !['agent', 'gm'].includes(target.scope)) return null;
+  const plainTargetLabel = target.label || target.agentName || 'AI 助手';
+  const targetLabel = target.scope === 'agent' && !plainTargetLabel.startsWith('🤖')
+    ? `🤖${plainTargetLabel}`
+    : plainTargetLabel;
+  return {
+    correlationId: makePendingCorrelationId(),
+    roomId: s.room || '',
+    roomMode: s.mode || '',
+    targetAgentId: target.agentId || '',
+    targetLabel,
+    createdAtMs: Date.now(),
+  };
 }
 
 function isAiReplyMessage(message) {
@@ -1019,6 +1287,11 @@ function isAiReplyMessage(message) {
   if (!from || from === '系统') return false;
   if (from === s.nickname) return false;
   return true;
+}
+
+function isPendingReplyMessage(message, pending = currentPendingReply.value) {
+  if (!pending || !isAiReplyMessage(message)) return false;
+  return pendingReplyMatchesMessage(message, pending);
 }
 
 function gmProposalId(message) {
@@ -1072,11 +1345,21 @@ async function onAddAgent() {
   agentForm.name = '';
   agentForm.persona = '';
   showAddAgent.value = false;
+  addAgentBackdropPointerStarted.value = false;
 }
 
-function selectRoleTemplate(role) {
-  agentForm.name = role.name;
-  agentForm.persona = role.persona;
+function onAddAgentBackdropPointerDown(event) {
+  addAgentBackdropPointerStarted.value = event.target === event.currentTarget;
+}
+
+function onAddAgentBackdropPointerUp(event) {
+  const shouldClose =
+    addAgentBackdropPointerStarted.value &&
+    event.target === event.currentTarget;
+  addAgentBackdropPointerStarted.value = false;
+  if (shouldClose) {
+    showAddAgent.value = false;
+  }
 }
 
 async function addRoleTemplateBundle(bundle) {
@@ -1111,32 +1394,20 @@ async function onRemoveAgent(agentId) {
 
 function onDraftInput() {
   const text = draft.value;
+  syncSelectedTargetFromDraft(text);
+  resizeDraftInput();
   const at = text.lastIndexOf('@');
   if (at === -1) {
-    mentionCandidates.value = [];
-    mentionActiveIndex.value = 0;
+    closeMentionPicker();
     return;
   }
   const prefix = text.slice(at + 1);
   if (prefix.includes(' ')) {
-    mentionCandidates.value = [];
-    mentionActiveIndex.value = 0;
+    closeMentionPicker();
     return;
   }
-  const members = (s.memberDetails.length
-    ? s.memberDetails
-        .filter((member) => member.member_id !== s.peerId)
-        .map((member) => ({ name: member.nickname, isAgent: false }))
-    : s.members
-        .filter((name) => name !== s.nickname)
-        .map((name) => ({ name, isAgent: false })));
-  const gm = [{ name: 'GM', isAgent: true, isGM: true, hint: '主持 / 仲裁' }];
-  const agents = s.agents
-    .filter((a) => String(a.name || '').toLowerCase() !== 'gm')
-    .map((a) => ({ name: a.name, isAgent: true }));
-  mentionCandidates.value = [...gm, ...members, ...agents].filter((c) =>
-    c.name.toLowerCase().startsWith(prefix.toLowerCase())
-  );
+  manualMentionOpen.value = false;
+  mentionCandidates.value = buildMentionCandidates(prefix);
   if (mentionCandidates.value.length) {
     mentionActiveIndex.value = Math.min(mentionActiveIndex.value, mentionCandidates.value.length - 1);
   } else {
@@ -1144,30 +1415,143 @@ function onDraftInput() {
   }
 }
 
-function pickMention(c) {
-  const text = draft.value;
-  const at = text.lastIndexOf('@');
-  draft.value = text.slice(0, at) + '@' + c.name + ' ';
+function resizeDraftInput() {
+  nextTick(() => {
+    const el = draftInput.value;
+    if (!el) return;
+    const styles = window.getComputedStyle(el);
+    const lineHeight = Number.parseFloat(styles.lineHeight) || 22;
+    const paddingY =
+      (Number.parseFloat(styles.paddingTop) || 0) +
+      (Number.parseFloat(styles.paddingBottom) || 0);
+    const borderY =
+      (Number.parseFloat(styles.borderTopWidth) || 0) +
+      (Number.parseFloat(styles.borderBottomWidth) || 0);
+    const minHeight = Math.ceil(lineHeight * DRAFT_MIN_ROWS + paddingY + borderY);
+    const maxHeight = Math.ceil(lineHeight * DRAFT_MAX_ROWS + paddingY + borderY);
+    el.style.height = `${minHeight}px`;
+    const nextHeight = Math.min(maxHeight, Math.max(minHeight, el.scrollHeight));
+    el.style.height = `${nextHeight}px`;
+    el.style.overflowY = el.scrollHeight > maxHeight ? 'auto' : 'hidden';
+  });
+}
+
+function syncSelectedTargetFromDraft(text = draft.value) {
+  const key = targetKeyFromMentionText(text, targetOptions.value);
+  selectedTargetKey.value = key ? resolveSelectedTargetKey(key, targetOptions.value) : '';
+  applyInputRouteState();
+}
+
+function buildMentionCandidates(prefix = '') {
+  const query = String(prefix || '').toLowerCase();
+  const members = (s.memberDetails.length
+    ? s.memberDetails
+        .filter((member) => member.member_id !== s.peerId)
+        .map((member) => ({ name: member.nickname, isAgent: false }))
+    : s.members
+        .filter((name) => name !== s.nickname)
+        .map((name) => ({ name, isAgent: false })));
+  const gm = [{ name: 'GM', isAgent: true, isGM: true, hint: '主持 / 仲裁', targetKey: 'gm' }];
+  const group = s.agents.length
+    ? [{ name: '全部AI助手', isAgent: true, isGroup: true, hint: '所有AI助手', targetKey: 'group' }]
+    : [];
+  const agents = s.agents
+    .filter((a) => String(a.name || '').toLowerCase() !== 'gm')
+    .map((a) => ({ name: a.name, isAgent: true, targetKey: `agent:${a.agent_id || a.name}` }));
+  return [...gm, ...group, ...agents, ...members].filter((c) => (
+    !query || String(c.name || '').toLowerCase().startsWith(query)
+  ));
+}
+
+function openMentionPicker() {
+  manualMentionOpen.value = true;
+  mentionCandidates.value = buildMentionCandidates('');
+  mentionActiveIndex.value = 0;
+  nextTick(() => {
+    draftInput.value?.focus?.();
+  });
+}
+
+function closeMentionPicker() {
+  manualMentionOpen.value = false;
   mentionCandidates.value = [];
   mentionActiveIndex.value = 0;
 }
 
-function messageOptionsForText(text) {
+function toggleMentionPicker() {
+  if (mentionCandidates.value.length && manualMentionOpen.value) {
+    closeMentionPicker();
+    return;
+  }
+  openMentionPicker();
+}
+
+function onDocumentPointerDown(event) {
+  if (!mentionCandidates.value.length) return;
+  const target = event?.target;
+  const root = mentionRoot.value;
+  if (root && target && root.contains(target)) return;
+  closeMentionPicker();
+}
+
+function mentionIcon(candidate) {
+  if (candidate?.isGM) return '🎲 ';
+  if (candidate?.isGroup) return '◎ ';
+  if (candidate?.isAgent) return '🤖 ';
+  return '';
+}
+
+function pickMention(c) {
+  const text = draft.value;
+  const at = text.lastIndexOf('@');
+  const insert = `@${c.name} `;
+  if (at >= 0) {
+    const prefix = text.slice(at + 1);
+    if (!prefix.includes(' ')) {
+      draft.value = text.slice(0, at) + insert + text.slice(at + 1 + prefix.length);
+    } else {
+      draft.value = `${text}${text && !/\s$/.test(text) ? ' ' : ''}${insert}`;
+    }
+  } else {
+    draft.value = `${text}${text && !/\s$/.test(text) ? ' ' : ''}${insert}`;
+  }
+  syncSelectedTargetFromDraft();
+  closeMentionPicker();
+  nextTick(() => {
+    draftInput.value?.focus?.();
+  });
+}
+
+function messageOptionsForText(text, pending = null) {
   const trimmed = String(text || '').trim();
   const generationMetadata = s.role === 'host' ? lanchat.generationOptionsMetadata() : {};
-  applyInputRouteState();
+  syncSelectedTargetFromDraft(text);
+  const routedDraftAction = effectiveDraftAction('chat', trimmed);
+  const targetPayload = targetPayloadForKey(selectedTargetKey.value, targetOptions.value);
   if (/^@GM(?:\s|$)/i.test(trimmed)) {
-    if (!Object.keys(generationMetadata).length) return buildManualGmMessageOptions(s.role);
+    if (!pending?.correlationId && !Object.keys(generationMetadata).length) {
+      return buildManualGmMessageOptions(s.role);
+    }
     const options = buildManualGmMessageOptions(s.role);
+    if (pending?.correlationId) options.correlation_id = pending.correlationId;
     options.metadata = {
       ...(options.metadata || {}),
       ...generationMetadata,
     };
     return options;
   }
-  return Object.keys(generationMetadata).length
-    ? { metadata: generationMetadata }
-    : {};
+  const metadata = {
+    ...generationMetadata,
+    draft_action: routedDraftAction,
+    target_scope: targetPayload.scope || 'scene',
+  };
+  if (targetPayload.agentId) metadata.target_agent_id = targetPayload.agentId;
+  if (targetPayload.agentName) metadata.target_agent_name = targetPayload.agentName;
+  if (targetPayload.planId) metadata.target_plan_id = targetPayload.planId;
+  const options = { metadata };
+  if (pending?.correlationId) options.correlation_id = pending.correlationId;
+  if (pending?.targetAgentId) options.target_agent_id = pending.targetAgentId;
+  return options;
 }
 
 function onVlmToggle(event) {
@@ -1247,8 +1631,7 @@ function onDraftKeydown(e) {
     }
     if (e.key === 'Escape') {
       e.preventDefault();
-      mentionCandidates.value = [];
-      mentionActiveIndex.value = 0;
+      closeMentionPicker();
       return;
     }
   }
@@ -1263,7 +1646,7 @@ watch(
   () => s.messages.length,
   async () => {
     const latest = s.messages[s.messages.length - 1];
-    if (isAiReplyMessage(latest)) clearPendingReply();
+    if (isPendingReplyMessage(latest)) clearPendingReply(latest?.correlation_id);
     await nextTick();
     if (msgRef.value) msgRef.value.scrollTop = msgRef.value.scrollHeight;
   }
@@ -1272,14 +1655,13 @@ watch(
 watch(
   () => currentDisclosure.value?.event_id,
   async () => {
-    if (currentDisclosure.value) clearPendingReply();
     await nextTick();
     if (msgRef.value) msgRef.value.scrollTop = msgRef.value.scrollHeight;
   }
 );
 
 watch(
-  showAiReplySpinner,
+  pendingReply,
   async () => {
     await nextTick();
     if (msgRef.value) msgRef.value.scrollTop = msgRef.value.scrollHeight;
@@ -1288,12 +1670,18 @@ watch(
 
 watch(
   targetOptions,
-  (options) => {
-    if (!options.length) return;
-    selectedTargetKey.value = resolveSelectedTargetKey(selectedTargetKey.value, options);
-    applyInputRouteState();
+  () => {
+    syncSelectedTargetFromDraft();
   },
   { immediate: true }
+);
+
+watch(
+  draft,
+  () => {
+    resizeDraftInput();
+  },
+  { flush: 'post' }
 );
 
 watch(
@@ -1304,13 +1692,37 @@ watch(
     }
   }
 );
-
-watch(
-  () => s.draftAction,
-  (action) => {
-    if (action && action !== selectedDraftAction.value) {
-      selectedDraftAction.value = action;
-    }
-  }
-);
 </script>
+
+<style scoped>
+.lanchat-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: #444 transparent;
+}
+
+.lanchat-scrollbar::-webkit-scrollbar {
+  width: 4px;
+}
+
+.lanchat-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.lanchat-scrollbar::-webkit-scrollbar-thumb {
+  background: #444;
+  border-radius: 10px;
+}
+
+.lanchat-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: #84a65b;
+}
+
+.lanchat-message-bubble {
+  max-width: 88%;
+  min-width: 0;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+</style>

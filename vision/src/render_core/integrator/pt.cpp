@@ -252,6 +252,8 @@ public:
             lf_input.direct = frame_buffer().direct_lighting();
             lf_input.camera_pos = {cam_pos.x, cam_pos.y, cam_pos.z};
             lf_input.prev_camera_pos = {prev_cam_pos.x, prev_cam_pos.y, prev_cam_pos.z};
+            // PT path splits the signal into diffuse (direct buffer) / specular (indirect buffer).
+            lf_input.channel_kind = RealTimeDenoiseInput::ChannelKind::DiffuseSpecular;
             
             // Get light field parameters from the actual LightFieldFrameBuffer
             lf_input.lenticular = lf_fb->lenticular_params();
@@ -324,6 +326,8 @@ public:
             dn_input.direct = frame_buffer().direct_lighting();
             dn_input.camera_pos = {cam_pos.x, cam_pos.y, cam_pos.z};
             dn_input.prev_camera_pos = {prev_cam_pos.x, prev_cam_pos.y, prev_cam_pos.z};
+            // PT path splits the signal into diffuse (direct buffer) / specular (indirect buffer).
+            dn_input.channel_kind = RealTimeDenoiseInput::ChannelKind::DiffuseSpecular;
             param.enable_sparse_sampling = 0u;
 
             if (denoiser_enabled && !bypass_incompatible_lightfield_denoiser) {

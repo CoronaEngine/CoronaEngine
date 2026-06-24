@@ -29,7 +29,10 @@ FRESHNESS_SENTINELS = (
     REPO_ROOT / "editor" / "plugins" / "AITool" / "cai_extensions" / "flows" / "model_retrieval_workflow" / "generate.py",
     REPO_ROOT / "editor" / "plugins" / "AITool" / "cai_extensions" / "flows" / "model_retrieval_workflow" / "retrieve.py",
     REPO_ROOT / "editor" / "plugins" / "AITool" / "cai_extensions" / "agent" / "scene_composer.py",
+    REPO_ROOT / "editor" / "plugins" / "AITool" / "cai_extensions" / "agent" / "model_reviewer.py",
+    REPO_ROOT / "editor" / "plugins" / "AITool" / "cai_extensions" / "agent" / "vlm_review_loop.py",
     REPO_ROOT / "editor" / "plugins" / "AITool" / "services" / "generation_composer_adapter.py",
+    REPO_ROOT / "docs" / "probes" / "v3_f5_log_check.py",
     REPO_ROOT / "editor" / "Frontend" / "src" / "views" / "sidebar" / "lanchat" / "RoomPanel.vue",
     REPO_ROOT / "editor" / "Frontend" / "src" / "views" / "sidebar" / "Network.vue",
 )
@@ -43,6 +46,8 @@ REMEDIATION_HINTS = {
     "cef-crash": "若 FAIL，归类为 CEF/Chromium 实机稳定性问题；该轮 UI 面板已崩，不建议作为通过样本。",
     "completion-integrity": "若 FAIL，说明完成摘要和实际导入证据不一致；优先查 SceneComposer final report 和 incremental import。",
     "intervention-visibility": "若 FAIL，说明生成中介入缺少吸收/延后/失败说明；优先查 Coordinator pending intervention 和 FinalReview 报告。",
+    "vlm-capture-write": "若 WARN，先判断本轮是否开启 VLM；若已开启，检查独立 VLM camera、截图目录、file ready 日志和截图超时降级。",
+    "scene-substrate": "若 FAIL，说明 room_box / terrain / shell 基底与场景类型不一致；优先查 SceneComposer zone snapshot 和混合场景 guardrail。",
 }
 
 
@@ -129,6 +134,13 @@ def _write_report(log_path: Path, verify_exit: int | None) -> Path:
     return report_path
 
 
+def _check_level(checks, name: str) -> str:
+    for check in checks:
+        if check.name == name:
+            return str(check.level)
+    return "MISSING"
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -150,6 +162,16 @@ def main(argv: list[str] | None = None) -> int:
         "--require-fresh",
         action="store_true",
         help="Fail the gate when the selected log is older than key V3 changes. Use for formal F5 sign-off.",
+    )
+    parser.add_argument(
+        "--require-vlm-capture",
+        action="store_true",
+        help="Fail unless the log probe proves VLM screenshot files exist and are non-empty.",
+    )
+    parser.add_argument(
+        "--require-substrate-evidence",
+        action="store_true",
+        help="Fail unless the log probe proves scene substrate evidence such as room_box/terrain/shell.",
     )
     args = parser.parse_args(argv)
 
@@ -173,6 +195,17 @@ def main(argv: list[str] | None = None) -> int:
     try:
         probe = _load_log_probe()
         resolved_log = args.log if args.log else probe._latest_log()
+        checks = probe.run(resolved_log)
+        required_checks = []
+        if args.require_vlm_capture:
+            required_checks.append(("vlm-capture-write", "VLM 截图写入"))
+        if args.require_substrate_evidence:
+            required_checks.append(("scene-substrate", "场景基底"))
+        for check_name, label in required_checks:
+            level = _check_level(checks, check_name)
+            if level != "PASS":
+                print(f"[WARN] required-check: {label} `{check_name}` is {level}, expected PASS", flush=True)
+                failed += 1
         freshness_level, freshness_detail = _freshness_status(resolved_log)
         if freshness_level != "FRESH":
             print(f"[WARN] stale-log-check: {freshness_level} - {freshness_detail}", flush=True)

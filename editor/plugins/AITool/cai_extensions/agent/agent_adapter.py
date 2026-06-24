@@ -1487,7 +1487,7 @@ class MasterAgent:
         if force_compose or is_compose_request(user_text) or is_compose_request(compose_text):
             if get_current_progress_sink() is not None:
                 logger.info("[MasterAgent] LANChat compose request blocked from direct RoleAgent compose")
-                return "已收到生成类请求，请由房主确认方案后通过生成队列执行。"
+                return "这是生成类请求，但尚未开始生成。请先由房主确认当前方案，确认后系统会通过生成队列执行。"
             logger.info("[MasterAgent] scene → compose (整体场景组合)")
             return self._handle_scene_compose(user_text, messages, specialist, persona)
 
@@ -1561,6 +1561,19 @@ class MasterAgent:
             lines.append(f"  • ⚠️ 单次生成上限 {self._scene_max_items} 个，本次先做前 {self._scene_max_items} 个（剩 {truncated} 个可稍后继续）")
         lines.append(f"  • 获取模型：{model_count} 个")
         lines.append(f"  • 导入引擎：{len(imported)} 个")
+        classification_summary = str(result.get("element_classification_summary") or "").strip()
+        if classification_summary:
+            lines.append(f"  • 资源分类：{classification_summary}")
+        room_budget = result.get("room_budget") or {}
+        room_size = room_budget.get("room_size") if isinstance(room_budget, dict) else None
+        if isinstance(room_size, list) and len(room_size) >= 3:
+            lines.append(f"  • 室内盒子尺寸：{float(room_size[0]):.1f} x {float(room_size[1]):.1f} x {float(room_size[2]):.1f}")
+        bounds_check = result.get("indoor_bounds_check") or {}
+        if isinstance(bounds_check, dict) and bounds_check.get("checked"):
+            clamped = len(bounds_check.get("clamped") or [])
+            scaled = len(bounds_check.get("scaled") or [])
+            unresolved = len(bounds_check.get("unresolved") or [])
+            lines.append(f"  • 布局边界检查：已检查 {len(bounds_check.get('checked') or [])} 个，修正 {clamped} 个，缩放 {scaled} 个，待处理 {unresolved} 个")
         if result.get("progressive"):
             phases = result.get("phases_run") or []
             lines.append(f"  • 渐进阶段：{(' / '.join(phases)) if phases else '已启用'}")

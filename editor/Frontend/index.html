@@ -55,24 +55,32 @@
     function init() {
         if (!document.body) { setTimeout(init, 30); return; }
 
+        function isEnglish() {
+            return (localStorage.getItem('corona.ui.locale') || document.documentElement.lang) === 'en-US';
+        }
+
+        function tr(zh, en) {
+            return isEnglish() ? en : zh;
+        }
+
         var dot = document.createElement('div');
         dot.id = '__cam_toggle_dot';
-        dot.title = '相机跟随 - 按住拖拽，点击展开';
+        dot.title = tr('相机跟随 - 按住拖拽，点击展开', 'Camera Follow - hold to drag, click to expand');
         dot.textContent = '●';
         document.body.appendChild(dot);
 
         var panel = document.createElement('div');
         panel.id = '__camlock_ctrl';
         panel.innerHTML =
-            '<div style="font-weight:bold;margin-bottom:8px;color:#ec4899;">相机跟随</div>' +
+            '<div style="font-weight:bold;margin-bottom:8px;color:#ec4899;">' + tr('相机跟随', 'Camera Follow') + '</div>' +
             '<label style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">' +
-            '<span>启用</span><input id="__camlock_checkbox" type="checkbox" style="accent-color:#ec4899;"></label>' +
-            '<div style="margin-top:4px;font-size:10px;color:#909090;">偏移 ' +
+            '<span>' + tr('启用', 'Enable') + '</span><input id="__camlock_checkbox" type="checkbox" style="accent-color:#ec4899;"></label>' +
+            '<div style="margin-top:4px;font-size:10px;color:#909090;">' + tr('偏移', 'Offset') + ' ' +
             'X<input id="__camlock_ox" type="number" value="0" step="0.1" style="width:50px;background:#1a1a1a;color:#e0e0e0;border:1px solid #3c3c3c;border-radius:3px;margin:0 2px;padding:1px 3px;">' +
             'Y<input id="__camlock_oy" type="number" value="0" step="0.1" style="width:50px;background:#1a1a1a;color:#e0e0e0;border:1px solid #3c3c3c;border-radius:3px;margin:0 2px;padding:1px 3px;">' +
             'Z<input id="__camlock_oz" type="number" value="2" step="0.1" style="width:50px;background:#1a1a1a;color:#e0e0e0;border:1px solid #3c3c3c;border-radius:3px;margin:0 2px;padding:1px 3px;">' +
             '</div>' +
-            '<button id="__camlock_apply" style="margin-top:8px;width:100%;padding:4px;background:#ec4899;color:white;border:none;border-radius:4px;cursor:pointer;font-size:11px;">应用</button>' +
+            '<button id="__camlock_apply" style="margin-top:8px;width:100%;padding:4px;background:#ec4899;color:white;border:none;border-radius:4px;cursor:pointer;font-size:11px;">' + tr('应用', 'Apply') + '</button>' +
             '<div id="__camlock_status" style="margin-top:6px;font-size:10px;color:#f0a020;min-height:14px;"></div>';
         document.body.appendChild(panel);
 
@@ -142,11 +150,11 @@
             if (active) {
                 dot.style.background = '#4caf50';
                 statusEl.style.color = '#4caf50';
-                statusEl.textContent = '跟随中';
+                statusEl.textContent = tr('跟随中', 'Following');
             } else {
                 dot.style.background = '#ec4899';
                 statusEl.style.color = '';
-                statusEl.textContent = '已关闭';
+                statusEl.textContent = tr('已关闭', 'Closed');
             }
         }
 
@@ -155,7 +163,7 @@
             var off = readOffsets();
             var statusEl = document.getElementById('__camlock_status');
             statusEl.style.color = '#f0a020';
-            statusEl.textContent = enabled ? '正在设置...' : '';
+            statusEl.textContent = enabled ? tr('正在设置...', 'Setting...') : '';
             window.cefQuery({
                 request: JSON.stringify({ module: 'CoronaEditor', function: 'camera_lock_set', args: [enabled, off[0], off[1], off[2], 0, 0, 0] }),
                 persistent: false,
@@ -177,7 +185,7 @@
                                 following = false;
                                 setFollowingUI(false);
                                 statusEl.style.color = '#f44336';
-                                statusEl.textContent = (data && data.error) || '失败';
+                                statusEl.textContent = (data && data.error) || tr('失败', 'Failed');
                             }
                         }
                     } catch(e) {
@@ -189,7 +197,7 @@
                     following = false;
                     setFollowingUI(false);
                     statusEl.style.color = '#f44336';
-                    statusEl.textContent = '通信失败';
+                    statusEl.textContent = tr('通信失败', 'Communication failed');
                 }
             });
         }
@@ -199,17 +207,17 @@
             var off = readOffsets();
             var statusEl = document.getElementById('__camlock_status');
             statusEl.style.color = '#f0a020';
-            statusEl.textContent = '更新偏移...';
+            statusEl.textContent = tr('更新偏移...', 'Updating offset...');
             window.cefQuery({
                 request: JSON.stringify({ module: 'CoronaEditor', function: 'camera_lock_set', args: [true, off[0], off[1], off[2], 0, 0, 0] }),
                 persistent: false,
                 onSuccess: function(r) {
                     statusEl.style.color = '#4caf50';
-                    statusEl.textContent = '跟随中';
+                    statusEl.textContent = tr('跟随中', 'Following');
                 },
                 onFailure: function(e) {
                     statusEl.style.color = '#f44336';
-                    statusEl.textContent = '更新失败';
+                    statusEl.textContent = tr('更新失败', 'Update failed');
                 }
             });
         }

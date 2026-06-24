@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from plugins.SceneTools import main as scene_tools_module
 from plugins.MainView import main as main_view_module
+from CoronaCore.core.entities.actor import Actor as CoreActor
 from CoronaCore.core.entities.scene import Scene
 
 
@@ -310,7 +311,15 @@ class ExternalLiveImportTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             model_path = root / "chair.obj"
-            model_path.write_text("mesh", encoding="utf-8")
+            model_path.write_text(
+                "\n".join([
+                    "v -1 0 -2",
+                    "v 3 4 6",
+                    "f 1 2 1",
+                    "",
+                ]),
+                encoding="utf-8",
+            )
             vision_scene = root / "scene.json"
             vision_scene.write_text(json.dumps({
                 "scene": {
@@ -471,6 +480,10 @@ class ExternalLiveImportTests(unittest.TestCase):
                              scene.get_actors()[0].actor_guid)
             self.assertEqual(scene.vision_bindings[0]["shape_guid"], "shape-chair")
             self.assertEqual(scene.vision_bindings[0]["json_path"], "/scene/shapes/0")
+            self.assertEqual(scene.vision_bindings[0]["native_local_correction_offset"],
+                             [1.0, 2.0, -2.0])
+            self.assertEqual(scene.vision_bindings[0]["native_local_correction_scale"],
+                             8.0)
             self.assertEqual(scene.vision_bindings[1]["shape_type"], "quad")
             self.assertEqual(scene.vision_bindings[2]["shape_type"], "sphere")
             self.assertEqual(scene.get_actors()[0].engine_obj.actor_guid,
@@ -520,6 +533,24 @@ class ExternalLiveImportTests(unittest.TestCase):
                             call_order.index("set_render_backend:vision"))
             self.assertTrue(scene.saved)
             self.assertTrue(scene.tree_notified)
+
+    def test_legacy_external_live_actor_can_compute_native_correction_from_obj(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            model_path = Path(tmp) / "legacy.obj"
+            model_path.write_text(
+                "\n".join([
+                    "v -2 1 -3",
+                    "v 4 5 9",
+                    "f 1 2 1",
+                    "",
+                ]),
+                encoding="utf-8",
+            )
+
+            correction = CoreActor._obj_native_local_correction(str(model_path))
+
+            self.assertEqual(correction[0], [1.0, 3.0, -3.0])
+            self.assertEqual(correction[1], 12.0)
 
     def test_import_real_cbox_lf_scene_infers_ssat_and_preserves_params(self):
         cbox_lf_scene = _find_external_cbox_lf_scene()

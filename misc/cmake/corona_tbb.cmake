@@ -8,48 +8,57 @@ get_filename_component(
     ABSOLUTE
 )
 
-set(_corona_candidate_tbb_dirs "${_corona_default_tbb_dir}")
-
-if(WIN32)
-    if(FETCHCONTENT_BASE_DIR)
-        list(APPEND _corona_candidate_tbb_dirs
-            "${FETCHCONTENT_BASE_DIR}/horizon-src/modules/corona/third_party/win/oneapi-tbb-2022.3.0/lib/cmake/tbb")
+if(TARGET TBB::tbb)
+    set(TBB_FOUND TRUE)
+    set(TBB_IMPORTED_TARGETS TBB::tbb)
+    if(NOT DEFINED TBB_VERSION)
+        set(TBB_VERSION "provided-by-target")
     endif()
-
-    list(APPEND _corona_candidate_tbb_dirs
-        "${CMAKE_BINARY_DIR}/_deps/horizon-src/modules/corona/third_party/win/oneapi-tbb-2022.3.0/lib/cmake/tbb"
-        "${CMAKE_SOURCE_DIR}/cmake-build-relwithdebinfo/_deps/horizon-src/modules/corona/third_party/win/oneapi-tbb-2022.3.0/lib/cmake/tbb")
-endif()
-
-if(DEFINED TBB_DIR AND NOT TBB_DIR STREQUAL "")
-    corona_tbb_package_has_runtime("${TBB_DIR}" _corona_tbb_dir_ok)
 else()
-    set(_corona_tbb_dir_ok FALSE)
-endif()
+    set(_corona_candidate_tbb_dirs "${_corona_default_tbb_dir}")
 
-if(NOT DEFINED TBB_DIR
-   OR TBB_DIR STREQUAL ""
-   OR NOT EXISTS "${TBB_DIR}/TBBConfig.cmake"
-   OR NOT _corona_tbb_dir_ok
-   OR TBB_DIR MATCHES [=[[/\\]build[/\\]_deps[/\\]horizon-src[/\\]modules[/\\]corona[/\\]]=]
-   OR TBB_DIR MATCHES [=[[/\\]build[/\\]_deps[/\\]coronaframework-src[/\\]]=])
-    corona_select_valid_tbb_dir(_corona_selected_tbb_dir ${_corona_candidate_tbb_dirs})
+    if(WIN32)
+        if(FETCHCONTENT_BASE_DIR)
+            list(APPEND _corona_candidate_tbb_dirs
+                "${FETCHCONTENT_BASE_DIR}/horizon-src/modules/corona/third_party/win/oneapi-tbb-2022.3.0/lib/cmake/tbb")
+        endif()
 
-    if(_corona_selected_tbb_dir)
-        set(TBB_DIR "${_corona_selected_tbb_dir}" CACHE PATH
-            "Path to TBB cmake configuration directory" FORCE)
-    else()
-        set(TBB_DIR "${_corona_default_tbb_dir}" CACHE PATH
-            "Path to TBB cmake configuration directory" FORCE)
+        list(APPEND _corona_candidate_tbb_dirs
+            "${CMAKE_BINARY_DIR}/_deps/horizon-src/modules/corona/third_party/win/oneapi-tbb-2022.3.0/lib/cmake/tbb"
+            "${CMAKE_SOURCE_DIR}/cmake-build-relwithdebinfo/_deps/horizon-src/modules/corona/third_party/win/oneapi-tbb-2022.3.0/lib/cmake/tbb")
     endif()
+
+    if(DEFINED TBB_DIR AND NOT TBB_DIR STREQUAL "")
+        corona_tbb_package_has_runtime("${TBB_DIR}" _corona_tbb_dir_ok)
+    else()
+        set(_corona_tbb_dir_ok FALSE)
+    endif()
+
+    if(NOT DEFINED TBB_DIR
+       OR TBB_DIR STREQUAL ""
+       OR NOT EXISTS "${TBB_DIR}/TBBConfig.cmake"
+       OR NOT _corona_tbb_dir_ok
+       OR TBB_DIR MATCHES [=[[/\\]build[/\\]_deps[/\\]horizon-src[/\\]modules[/\\]corona[/\\]]=]
+       OR TBB_DIR MATCHES [=[[/\\]build[/\\]_deps[/\\]coronaframework-src[/\\]]=])
+        corona_select_valid_tbb_dir(_corona_selected_tbb_dir ${_corona_candidate_tbb_dirs})
+
+        if(_corona_selected_tbb_dir)
+            set(TBB_DIR "${_corona_selected_tbb_dir}" CACHE PATH
+                "Path to TBB cmake configuration directory" FORCE)
+        else()
+            set(TBB_DIR "${_corona_default_tbb_dir}" CACHE PATH
+                "Path to TBB cmake configuration directory" FORCE)
+        endif()
+    endif()
+
+    unset(_corona_selected_tbb_dir)
+    unset(_corona_tbb_dir_ok)
+    unset(_corona_candidate_tbb_dirs)
+
+    find_package(TBB REQUIRED)
 endif()
 
-unset(_corona_selected_tbb_dir)
-unset(_corona_tbb_dir_ok)
-unset(_corona_candidate_tbb_dirs)
 unset(_corona_default_tbb_dir)
-
-find_package(TBB REQUIRED)
 
 function(_corona_collect_files_with_ext _out_var _extension)
     set(_result "")

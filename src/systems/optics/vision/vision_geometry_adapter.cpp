@@ -7,7 +7,9 @@
 #include <corona/resource/types/scene.h>
 #include <corona/shared_data_hub.h>
 
+#include <cstddef>
 #include <cstring>
+#include <span>
 #include <vector>
 
 #include "base/mgr/geometry.h"
@@ -56,44 +58,44 @@ struct CpuMeshData {
 
 [[nodiscard]] auto load_cpu_mesh_from_buffers(const MeshDevice& mesh_dev,
                                               CpuMeshData& out_mesh) -> bool {
-    HardwareBuffer const* vertex_buffer = &mesh_dev.vertexBuffer;
-    if (!(*vertex_buffer) || vertex_buffer->getElementCount() == 0) {
+    Corona::Horizon::HardwareBuffer const* vertex_buffer = &mesh_dev.vertexBuffer;
+    if (!(*vertex_buffer) || vertex_buffer->get_element_count() == 0) {
         vertex_buffer = &mesh_dev.vertexStorageBuffer;
     }
-    if (!(*vertex_buffer) || vertex_buffer->getElementCount() == 0) {
+    if (!(*vertex_buffer) || vertex_buffer->get_element_count() == 0) {
         return false;
     }
 
-    const uint64_t vertex_bytes = vertex_buffer->getElementCount() * vertex_buffer->getElementSize();
+    const uint64_t vertex_bytes = vertex_buffer->get_element_count() * vertex_buffer->get_element_size();
     constexpr uint64_t vertex_stride = sizeof(Corona::Resource::Vertex);
     if (vertex_bytes == 0 || vertex_bytes % vertex_stride != 0) {
         return false;
     }
 
     out_mesh.vertices.resize(static_cast<std::size_t>(vertex_bytes / vertex_stride));
-    if (!vertex_buffer->copyToData(out_mesh.vertices.data(), vertex_bytes)) {
+    if (!vertex_buffer->read_bytes(std::as_writable_bytes(std::span(out_mesh.vertices)))) {
         out_mesh.vertices.clear();
         return false;
     }
 
-    HardwareBuffer const* index_buffer = &mesh_dev.indexBuffer;
-    if (!(*index_buffer) || index_buffer->getElementCount() == 0) {
+    Corona::Horizon::HardwareBuffer const* index_buffer = &mesh_dev.indexBuffer;
+    if (!(*index_buffer) || index_buffer->get_element_count() == 0) {
         index_buffer = &mesh_dev.indexStorageBuffer;
     }
-    if (!(*index_buffer) || index_buffer->getElementCount() == 0) {
+    if (!(*index_buffer) || index_buffer->get_element_count() == 0) {
         out_mesh.vertices.clear();
         return false;
     }
 
-    const uint64_t index_bytes = index_buffer->getElementCount() * index_buffer->getElementSize();
-    const uint64_t element_size = index_buffer->getElementSize();
+    const uint64_t index_bytes = index_buffer->get_element_count() * index_buffer->get_element_size();
+    const uint64_t element_size = index_buffer->get_element_size();
     if (index_bytes == 0 || (element_size != 2 && element_size != 4)) {
         out_mesh.vertices.clear();
         return false;
     }
 
     std::vector<uint8_t> index_data(index_bytes);
-    if (!index_buffer->copyToData(index_data.data(), index_bytes)) {
+    if (!index_buffer->read_bytes(std::as_writable_bytes(std::span(index_data)))) {
         out_mesh.vertices.clear();
         return false;
     }

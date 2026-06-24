@@ -15,12 +15,13 @@ struct ModulatorParam {
     BufferDesc<TriangleHit> visibility_buffer;
     BufferDesc<float2> motion_vectors;
     array_float3 camera_pos{};
+    uint channel_kind{};///< RealTimeDenoiseInput::ChannelKind (0=diffuse/specular, 1=direct/indirect)
 };
 
 }// namespace vision::svgf
 
 OC_PARAM_STRUCT(vision::svgf, ModulatorParam, radiance_direct, radiance_indirect,
-                visibility_buffer, motion_vectors, camera_pos){};
+                visibility_buffer, motion_vectors, camera_pos, channel_kind){};
 
 namespace vision::svgf {
 

@@ -1,845 +1,1118 @@
 <template>
-  <div class="fui-root">
-    <!-- 背景层 -->
-    <div class="fui-bg-grid"></div>
-    <div class="fui-bg-scan"></div>
-    <div class="fui-bg-tags">
-      <span class="fui-tag" style="top:8%;left:5%">SYS::CORONA-SETTINGS</span>
-      <span class="fui-tag" style="top:15%;right:8%">ASSET-ID-019</span>
-      <span class="fui-tag" style="bottom:12%;left:10%">CAM-SPD-001</span>
-      <span class="fui-tag" style="bottom:20%;right:5%">MOD::EDITOR-CORE</span>
-    </div>
-
-    <!-- 标题栏（非 docked 模式） -->
+  <main class="esc-panel">
     <DockTitleBar
       v-if="!isDocked"
-      title="编辑器设置"
-      extraClass="fui-titlebar"
+      :title="t('editorSettings.title')"
+      extraClass="bg-[#242724]"
       routePath="/SetUp"
-      @close="closeFloat"
+      @close="handleContinue"
     />
 
-    <!-- 主内容 -->
-    <div class="fui-content">
+    <section class="esc-body" aria-labelledby="esc-menu-title">
+      <header class="esc-header">
+        <div>
+          <p class="esc-kicker">ESC</p>
+          <h2 id="esc-menu-title">{{ t('editorSettings.title') }}</h2>
+        </div>
+        <span class="esc-state" :class="{ offline: !runtimeState.available }">
+          {{ runtimeState.available ? runtimeState.sceneId || t('editorSettings.editorMode') : t('editorSettings.panelMode') }}
+        </span>
+      </header>
 
-      <!-- 工具栏：返回主页 + 保存状态 -->
-      <div class="fui-toolbar">
-        <button class="fui-btn-home" @click="goHome">
-          <span class="fui-btn-home-icon">◄</span>
-          <span>返回主页</span>
+      <p v-if="statusMessage" class="status-line" :class="statusKind">
+        {{ statusMessage }}
+      </p>
+
+      <section class="settings-section">
+        <div class="section-heading">
+          <h3>{{ t('editorSettings.common') }}</h3>
+        </div>
+        <label class="locale-field">
+          <span>{{ t('locale.language') }}</span>
+          <div class="locale-switch" role="group" :aria-label="t('locale.switchTo')">
+            <button
+              type="button"
+              class="locale-option"
+              :class="{ active: locale === 'zh-CN' }"
+              :aria-pressed="locale === 'zh-CN'"
+              @click="handleLocaleChange('zh-CN')"
+            >
+              {{ t('locale.zhCN') }}
+            </button>
+            <button
+              type="button"
+              class="locale-option"
+              :class="{ active: locale === 'en-US' }"
+              :aria-pressed="locale === 'en-US'"
+              @click="handleLocaleChange('en-US')"
+            >
+              English
+            </button>
+          </div>
+        </label>
+        <div class="button-grid four">
+          <button class="action-button primary" type="button" @click="handleContinue">
+            {{ t('editorSettings.continueEditing') }}
+          </button>
+          <button
+            class="action-button"
+            type="button"
+            @click="openPanelOrRoute('ProjectSettings', '/ProjectSettings')"
+          >
+            {{ t('layout.projectSettings') }}
+          </button>
+          <button
+            class="action-button"
+            type="button"
+            @click="openFloatingPanelOrRoute('AITalkBar', '/AITalkBar')"
+          >
+            {{ t('common.aiChat') }}
+          </button>
+          <button
+            class="action-button"
+            type="button"
+            @click="openPanelOrRoute('LogTool', '/LogView')"
+          >
+            {{ t('editorSettings.log') }}
+          </button>
+        </div>
+      </section>
+
+      <section class="settings-section">
+        <div class="section-heading">
+          <h3>{{ t('editorSettings.toolPanels') }}</h3>
+        </div>
+        <div class="button-grid tools">
+          <button
+            class="action-button"
+            type="button"
+            @click="openFloatingPanelOrRoute('SceneTools', '/SceneBar')"
+          >
+            {{ t('plugins.SceneTools') }}
+          </button>
+          <button
+            class="action-button"
+            type="button"
+            @click="openFloatingPanelOrRoute('SceneDatas', '/Object')"
+          >
+            {{ t('plugins.SceneDatas') }}
+          </button>
+          <button
+            class="action-button"
+            type="button"
+            @click="openPanelOrRoute('FileManager', '/FileManager')"
+          >
+            {{ t('editorSettings.fileManager') }}
+          </button>
+          <button
+            class="action-button"
+            type="button"
+            @click="openPanelOrRoute('Network', '/Network')"
+          >
+            {{ t('editorSettings.network') }}
+          </button>
+          <button
+            class="action-button"
+            type="button"
+            @click="openPanelOrRoute('LightFieldCalibration', '/LightFieldCalibration')"
+          >
+            {{ t('plugins.LightFieldCalibration') }}
+          </button>
+        </div>
+      </section>
+
+      <section class="settings-section">
+        <div class="section-heading split">
+          <h3>{{ t('editorSettings.run') }}</h3>
+          <span>{{ runtimeState.previewStatusText || t('editorSettings.ready') }}</span>
+        </div>
+        <div class="button-grid four">
+          <button
+            class="action-button"
+            type="button"
+            :disabled="startPreviewDisabled"
+            @click="startPreview"
+          >
+            {{ t('layout.previewStart') }}
+          </button>
+          <button
+            class="action-button"
+            type="button"
+            :disabled="stopPreviewDisabled"
+            @click="stopPreview"
+          >
+            {{ t('layout.previewStop') }}
+          </button>
+          <button
+            class="action-button"
+            type="button"
+            :disabled="runtimeActionDisabled"
+            @click="runProject"
+          >
+            {{ t('layout.runProject') }}
+          </button>
+          <button
+            class="action-button"
+            type="button"
+            :disabled="runtimeActionDisabled"
+            @click="runCurrentScene"
+          >
+            {{ t('layout.runCurrentScene') }}
+          </button>
+        </div>
+      </section>
+
+      <section class="settings-section">
+        <div class="section-heading split">
+          <h3>{{ t('editorSettings.render') }}</h3>
+          <span>{{ runtimeState.renderLabel }}</span>
+        </div>
+        <div class="button-grid render">
+          <button
+            v-for="mode in runtimeState.renderModes"
+            :key="mode.value"
+            class="action-button"
+            :class="{ selected: mode.active }"
+            type="button"
+            :disabled="renderModeDisabled(mode)"
+            @click="selectRenderMode(mode)"
+          >
+            {{ mode.label }}
+          </button>
+        </div>
+      </section>
+
+      <section class="settings-section">
+        <div class="section-heading split">
+          <h3>{{ t('editorSettings.physics') }}</h3>
+          <button
+            class="text-button"
+            type="button"
+            :disabled="runtimeActionDisabled"
+            @click="refreshPhysics"
+          >
+            {{ t('common.refresh') }}
+          </button>
+        </div>
+        <div class="physics-grid">
+          <label class="field">
+            <span>{{ t('editorSettings.gravityX') }}</span>
+            <input
+              v-model.number="physicsForm.gravityX"
+              type="number"
+              step="0.1"
+              :disabled="runtimeActionDisabled"
+              @input="markPhysicsDirty"
+            />
+          </label>
+          <label class="field">
+            <span>{{ t('editorSettings.gravityY') }}</span>
+            <input
+              v-model.number="physicsForm.gravityY"
+              type="number"
+              step="0.1"
+              :disabled="runtimeActionDisabled"
+              @input="markPhysicsDirty"
+            />
+          </label>
+          <label class="field">
+            <span>{{ t('editorSettings.gravityZ') }}</span>
+            <input
+              v-model.number="physicsForm.gravityZ"
+              type="number"
+              step="0.1"
+              :disabled="runtimeActionDisabled"
+              @input="markPhysicsDirty"
+            />
+          </label>
+          <label class="field">
+            <span>{{ t('editorSettings.floorY') }}</span>
+            <input
+              v-model.number="physicsForm.floorY"
+              type="number"
+              step="0.1"
+              :disabled="runtimeActionDisabled"
+              @input="markPhysicsDirty"
+            />
+          </label>
+          <label class="field">
+            <span>{{ t('editorSettings.floorRestitution') }}</span>
+            <input
+              v-model.number="physicsForm.floorRestitution"
+              type="number"
+              min="0"
+              max="1"
+              step="0.05"
+              :disabled="runtimeActionDisabled"
+              @input="markPhysicsDirty"
+            />
+          </label>
+          <label class="field">
+            <span>{{ t('editorSettings.fixedDt') }}</span>
+            <input
+              v-model.number="physicsForm.fixedDt"
+              type="number"
+              min="0.001"
+              step="0.001"
+              :disabled="runtimeActionDisabled"
+              @input="markPhysicsDirty"
+            />
+          </label>
+        </div>
+        <button
+          class="action-button apply-button"
+          type="button"
+          :disabled="runtimeActionDisabled"
+          @click="applyPhysics"
+        >
+          {{ t('editorSettings.applyPhysics') }}
         </button>
-        <div class="fui-status">
-          <span class="fui-status-dot" :class="{ active: saveVisible }"></span>
-          <span>{{ saveVisible ? '已保存' : '就绪' }}</span>
+      </section>
+
+      <section class="settings-section leave-section">
+        <div class="section-heading">
+          <h3>{{ t('editorSettings.leave') }}</h3>
         </div>
-      </div>
-
-      <!-- 四象限矩阵布局 -->
-      <div class="fui-quad-grid">
-
-        <!-- 中心全息核心 -->
-        <div class="fui-holo-core">
-          <div class="fui-tesseract">
-            <div class="fui-tesseract-face fui-tf-front"></div>
-            <div class="fui-tesseract-face fui-tf-back"></div>
-            <div class="fui-tesseract-face fui-tf-left"></div>
-            <div class="fui-tesseract-face fui-tf-right"></div>
-            <div class="fui-tesseract-face fui-tf-top"></div>
-            <div class="fui-tesseract-face fui-tf-bottom"></div>
-            <div class="fui-tesseract-inner"></div>
-          </div>
-          <div class="fui-crosshair-h"></div>
-          <div class="fui-crosshair-v"></div>
+        <div class="home-panel" :class="{ confirming: confirmHome }">
+          <template v-if="confirmHome">
+            <p>{{ t('editorSettings.confirmHome') }}</p>
+            <div class="confirm-actions">
+              <button class="small-button" type="button" @click="cancelHome">{{ t('common.cancel') }}</button>
+              <button class="small-button danger" type="button" @click="goHome">
+                {{ t('editorSettings.confirmHomeButton') }}
+              </button>
+            </div>
+          </template>
+          <button v-else class="home-button" type="button" @click="confirmHome = true">
+            {{ t('editorSettings.home') }}
+          </button>
         </div>
-
-        <!-- Q1: 工作流与提示 (左上) -->
-        <div class="fui-quad fui-quad-tl" :class="{ collapsed: !sections.workflow }">
-          <div class="fui-quad-header" @click="sections.workflow = !sections.workflow">
-            <span class="fui-quad-icon">◇</span>
-            <span class="fui-quad-label">工作流与提示</span>
-            <span class="fui-quad-arrow">▼</span>
-          </div>
-          <div v-show="sections.workflow" class="fui-quad-body">
-            <!-- 包菜提示时间 -->
-            <div class="fui-field">
-              <div class="fui-field-head">
-                <span class="fui-field-label">包菜提示时间</span>
-                <span class="fui-field-val">{{ form.cabbage_hint_time.toFixed(1) }}<small>秒</small></span>
-              </div>
-              <div class="fui-slider-track">
-                <div class="fui-slider-fill" :style="{ width: ((form.cabbage_hint_time - 0.5) / 9.5 * 100) + '%' }"></div>
-                <input type="range" min="0.5" max="10" step="0.1" v-model.number="form.cabbage_hint_time" class="fui-slider" />
-              </div>
-            </div>
-            <!-- 自动存档间隔 -->
-            <div class="fui-field">
-              <div class="fui-field-head">
-                <span class="fui-field-label">自动存档间隔</span>
-                <span class="fui-field-val">{{ form.autosave_interval }}<small>分钟</small></span>
-              </div>
-              <div class="fui-slider-track">
-                <div class="fui-slider-fill" :style="{ width: ((form.autosave_interval - 1) / 59 * 100) + '%' }"></div>
-                <input type="range" min="1" max="60" step="1" v-model.number="form.autosave_interval" class="fui-slider" />
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <!-- Q2: 引擎与图形 (右上) -->
-        <div class="fui-quad fui-quad-tr" :class="{ collapsed: !sections.engine }">
-          <div class="fui-quad-header" @click="sections.engine = !sections.engine">
-            <span class="fui-quad-icon">◈</span>
-            <span class="fui-quad-label">引擎与图形</span>
-            <span class="fui-quad-arrow">▼</span>
-          </div>
-          <div v-show="sections.engine" class="fui-quad-body">
-            <!-- 垂直同步 -->
-            <div class="fui-field fui-field-row">
-              <span class="fui-field-label">垂直同步</span>
-              <label class="fui-toggle" :class="{ on: form.vsync }" @click="form.vsync = !form.vsync">
-                <span class="fui-toggle-track">
-                  <span class="fui-toggle-circuit"></span>
-                </span>
-                <span class="fui-toggle-thumb"></span>
-              </label>
-            </div>
-            <!-- 相机速度 -->
-            <div class="fui-field">
-              <div class="fui-field-head">
-                <span class="fui-field-label">相机速度</span>
-                <span class="fui-field-val">{{ form.camera_speed.toFixed(1) }}</span>
-              </div>
-              <div class="fui-slider-track">
-                <div class="fui-slider-fill" :style="{ width: ((form.camera_speed - 0.1) / 9.9 * 100) + '%' }"></div>
-                <input type="range" min="0.1" max="10" step="0.1" v-model.number="form.camera_speed" class="fui-slider" />
-              </div>
-            </div>
-            <!-- 网格对齐 -->
-            <div class="fui-field">
-              <div class="fui-field-head">
-                <span class="fui-field-label">网格对齐</span>
-                <span class="fui-field-val">{{ form.grid_snap_size.toFixed(0) }}</span>
-              </div>
-              <div class="fui-slider-track">
-                <div class="fui-slider-fill" :style="{ width: ((form.grid_snap_size - 1) / 199 * 100) + '%' }"></div>
-                <input type="range" min="1" max="200" step="1" v-model.number="form.grid_snap_size" class="fui-slider" />
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <!-- Q3: 音频 (左下) -->
-        <div class="fui-quad fui-quad-bl" :class="{ collapsed: !sections.audio }">
-          <div class="fui-quad-header" @click="sections.audio = !sections.audio">
-            <span class="fui-quad-icon">∿</span>
-            <span class="fui-quad-label">音频</span>
-            <span class="fui-quad-arrow">▼</span>
-          </div>
-          <div v-show="sections.audio" class="fui-quad-body">
-            <!-- 主音量 -->
-            <div class="fui-field">
-              <div class="fui-field-head">
-                <span class="fui-field-label">主音量</span>
-                <span class="fui-field-val">{{ form.master_volume }}<small>%</small></span>
-              </div>
-              <div class="fui-slider-track fui-slider-audio">
-                <div class="fui-waveform" :style="{ width: form.master_volume + '%' }">
-                  <svg class="fui-wave-svg" viewBox="0 0 200 24" preserveAspectRatio="none">
-                    <path :d="wavePath(form.master_volume)" fill="none" stroke="currentColor" stroke-width="1.5" vector-effect="non-scaling-stroke" />
-                  </svg>
-                </div>
-                <input type="range" min="0" max="100" step="1" v-model.number="form.master_volume" class="fui-slider fui-slider-wave" />
-              </div>
-            </div>
-            <!-- 背景音乐 -->
-            <div class="fui-field">
-              <div class="fui-field-head">
-                <span class="fui-field-label">背景音乐</span>
-                <span class="fui-field-val">{{ form.bgm_volume }}<small>%</small></span>
-              </div>
-              <div class="fui-slider-track fui-slider-audio">
-                <div class="fui-waveform" :style="{ width: form.bgm_volume + '%' }">
-                  <svg class="fui-wave-svg" viewBox="0 0 200 24" preserveAspectRatio="none">
-                    <path :d="wavePath(form.bgm_volume)" fill="none" stroke="currentColor" stroke-width="1.5" vector-effect="non-scaling-stroke" />
-                  </svg>
-                </div>
-                <input type="range" min="0" max="100" step="1" v-model.number="form.bgm_volume" class="fui-slider fui-slider-wave" />
-              </div>
-            </div>
-            <!-- 效果音 -->
-            <div class="fui-field">
-              <div class="fui-field-head">
-                <span class="fui-field-label">效果音</span>
-                <span class="fui-field-val">{{ form.sfx_volume }}<small>%</small></span>
-              </div>
-              <div class="fui-slider-track fui-slider-audio">
-                <div class="fui-waveform" :style="{ width: form.sfx_volume + '%' }">
-                  <svg class="fui-wave-svg" viewBox="0 0 200 24" preserveAspectRatio="none">
-                    <path :d="wavePath(form.sfx_volume)" fill="none" stroke="currentColor" stroke-width="1.5" vector-effect="non-scaling-stroke" />
-                  </svg>
-                </div>
-                <input type="range" min="0" max="100" step="1" v-model.number="form.sfx_volume" class="fui-slider fui-slider-wave" />
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <!-- Q4: 外观 (右下) -->
-        <div class="fui-quad fui-quad-br" :class="{ collapsed: !sections.appearance }">
-          <div class="fui-quad-header" @click="sections.appearance = !sections.appearance">
-            <span class="fui-quad-icon">◉</span>
-            <span class="fui-quad-label">外观</span>
-            <span class="fui-quad-arrow">▼</span>
-          </div>
-          <div v-show="sections.appearance" class="fui-quad-body">
-            <!-- 界面主题 - 分段选择器 -->
-            <div class="fui-field">
-              <span class="fui-field-label">界面主题</span>
-              <div class="fui-segment-group">
-                <button
-                  v-for="(t, i) in themes"
-                  :key="i"
-                  class="fui-segment"
-                  :class="{ active: form.theme_index === i }"
-                  @click="form.theme_index = i"
-                >{{ t }}</button>
-              </div>
-            </div>
-            <!-- 界面语言 - 分段选择器 -->
-            <div class="fui-field">
-              <span class="fui-field-label">界面语言</span>
-              <div class="fui-segment-group">
-                <button
-                  v-for="(l, i) in languages"
-                  :key="i"
-                  class="fui-segment"
-                  :class="{ active: form.language_index === i }"
-                  @click="form.language_index = i"
-                >{{ l }}</button>
-              </div>
-            </div>
-            <!-- UI 缩放 -->
-            <div class="fui-field">
-              <div class="fui-field-head">
-                <span class="fui-field-label">UI 缩放</span>
-                <span class="fui-field-val">{{ form.ui_scale.toFixed(1) }}<small>x</small></span>
-              </div>
-              <div class="fui-slider-track">
-                <div class="fui-slider-fill" :style="{ width: ((form.ui_scale - 0.5) / 1.5 * 100) + '%' }"></div>
-                <input type="range" min="0.5" max="2.0" step="0.1" v-model.number="form.ui_scale" class="fui-slider" />
-              </div>
-            </div>
-          </div>
-        </div>
-
-      </div>
-    </div>
-  </div>
+      </section>
+    </section>
+  </main>
 </template>
 
 <script setup>
-import { ref, reactive, watch, onMounted, computed } from 'vue';
+import { computed, onMounted, onUnmounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
+import { useI18n } from 'vue-i18n';
 import { useDockStore } from '@/stores/dockStore.js';
 import { useDockPanel } from '@/composables/useDockPanel.js';
+import { isFloatingPanel, openFloatingPanel } from '@/utils/panelWindows.js';
+import { setLocale } from '@/i18n/index.js';
 import DockTitleBar from '@/components/ui/DockTitleBar.vue';
 
+const EDITOR_CONTROLS_KEY = '__coronaEditorControls';
+
+const defaultPhysics = {
+  gravityX: 0,
+  gravityY: -9.8,
+  gravityZ: 0,
+  floorY: 0,
+  floorRestitution: 0.6,
+  fixedDt: 1 / 60,
+};
+
+const defaultRenderModes = [
+  { value: 'native', backend: 'native', label: 'Native', active: true, disabled: false },
+  {
+    value: 'path_tracing',
+    backend: 'vision',
+    label: 'Vision Path Tracing',
+    active: false,
+    disabled: true,
+  },
+  { value: 'svgf', backend: 'vision', label: 'Vision SVGF', active: false, disabled: true },
+  { value: 'ssat', backend: 'vision', label: 'Vision SSAT', active: false, disabled: true },
+];
+
 const router = useRouter();
+const { t, locale } = useI18n();
 const dockStore = useDockStore();
-const { closePanel: closeDockPanel, isDocked } = useDockPanel();
+const { closePanel, isDocked } = useDockPanel();
+
+const confirmHome = ref(false);
+const statusMessage = ref('');
+const statusKind = ref('info');
+const busyAction = ref('');
+const physicsDirty = ref(false);
+const physicsForm = ref({ ...defaultPhysics });
+const runtimeState = ref({
+  available: false,
+  sceneId: '',
+  previewRunning: false,
+  previewBusy: false,
+  previewStatusText: '',
+  visionAvailable: false,
+  renderMode: 'native',
+  renderLabel: 'Native',
+  renderModes: defaultRenderModes,
+  physics: { ...defaultPhysics },
+});
+
+let pollTimer = null;
+let statusTimer = null;
+
+const runtimeActionDisabled = computed(
+  () => !runtimeState.value.available || Boolean(busyAction.value)
+);
+const startPreviewDisabled = computed(
+  () =>
+    runtimeActionDisabled.value ||
+    runtimeState.value.previewBusy ||
+    runtimeState.value.previewRunning
+);
+const stopPreviewDisabled = computed(
+  () =>
+    runtimeActionDisabled.value ||
+    runtimeState.value.previewBusy ||
+    !runtimeState.value.previewRunning
+);
+
+function getRuntimeControls() {
+  if (typeof window === 'undefined') return null;
+  return window[EDITOR_CONTROLS_KEY] || null;
+}
+
+function toNumber(value, fallback) {
+  const next = Number(value);
+  return Number.isFinite(next) ? next : fallback;
+}
+
+function normalizePhysics(physics = {}) {
+  return {
+    gravityX: toNumber(physics.gravityX, defaultPhysics.gravityX),
+    gravityY: toNumber(physics.gravityY, defaultPhysics.gravityY),
+    gravityZ: toNumber(physics.gravityZ, defaultPhysics.gravityZ),
+    floorY: toNumber(physics.floorY, defaultPhysics.floorY),
+    floorRestitution: toNumber(physics.floorRestitution, defaultPhysics.floorRestitution),
+    fixedDt: Math.max(0.001, toNumber(physics.fixedDt, defaultPhysics.fixedDt)),
+  };
+}
+
+function normalizeRenderModes(state = {}) {
+  const reportedModes = Array.isArray(state.renderModes) ? state.renderModes : [];
+  const activeMode = state.renderMode || 'native';
+  return defaultRenderModes.map((fallback) => {
+    const reported = reportedModes.find((mode) => mode.value === fallback.value) || {};
+    const isVisionDisabled = fallback.backend === 'vision' && !state.visionAvailable;
+    return {
+      ...fallback,
+      ...reported,
+      active: reported.active ?? activeMode === fallback.value,
+      disabled: Boolean(reported.disabled) || isVisionDisabled,
+    };
+  });
+}
+
+function normalizeState(state = {}) {
+  const physics = normalizePhysics(state.physics);
+  return {
+    available: true,
+    sceneId: state.sceneId || '',
+    previewRunning: Boolean(state.previewRunning),
+    previewBusy: Boolean(state.previewBusy),
+    previewStatusText: state.previewStatusText || '',
+    visionAvailable: Boolean(state.visionAvailable),
+    renderMode: state.renderMode || 'native',
+    renderLabel: state.renderLabel || 'Native',
+    renderModes: normalizeRenderModes(state),
+    physics,
+  };
+}
+
+function syncPhysicsForm(physics) {
+  physicsForm.value = { ...normalizePhysics(physics) };
+  physicsDirty.value = false;
+}
+
+function setStatus(message, kind = 'info') {
+  statusMessage.value = message;
+  statusKind.value = kind;
+  if (statusTimer) {
+    clearTimeout(statusTimer);
+  }
+  statusTimer = window.setTimeout(() => {
+    statusMessage.value = '';
+    statusTimer = null;
+  }, 3200);
+}
+
+function handleLocaleChange(nextLocale) {
+  setLocale(nextLocale);
+}
+
+function refreshRuntime({ syncPhysics = false } = {}) {
+  const controls = getRuntimeControls();
+  if (!controls || typeof controls.getState !== 'function') {
+    runtimeState.value = {
+      ...runtimeState.value,
+      available: false,
+      previewRunning: false,
+      previewBusy: false,
+      previewStatusText: '',
+      renderModes: defaultRenderModes,
+    };
+    return;
+  }
+
+  try {
+    const nextState = normalizeState(controls.getState());
+    runtimeState.value = nextState;
+    if (syncPhysics || !physicsDirty.value) {
+      syncPhysicsForm(nextState.physics);
+    }
+  } catch (error) {
+    console.error('刷新 ESC 运行状态失败', error);
+    runtimeState.value = {
+      ...runtimeState.value,
+      available: false,
+      previewRunning: false,
+      previewBusy: false,
+      previewStatusText: '',
+      renderModes: defaultRenderModes,
+    };
+  }
+}
+
+async function runRuntimeAction(actionName, successMessage, ...args) {
+  const controls = getRuntimeControls();
+  if (!controls || typeof controls[actionName] !== 'function') {
+    refreshRuntime();
+    setStatus(t('editorSettings.status.currentContextMissing'), 'warn');
+    return false;
+  }
+
+  busyAction.value = actionName;
+  try {
+    const result = await controls[actionName](...args);
+    const succeeded = result !== false;
+    refreshRuntime({ syncPhysics: actionName === 'applyPhysics' && succeeded });
+    if (!succeeded) {
+      setStatus(t('editorSettings.status.actionFailed'), 'error');
+      return false;
+    }
+    setStatus(successMessage, 'success');
+    return true;
+  } catch (error) {
+    console.error(`ESC 执行 ${actionName} 失败`, error);
+    refreshRuntime();
+    setStatus(t('editorSettings.status.actionFailed'), 'error');
+    return false;
+  } finally {
+    busyAction.value = '';
+  }
+}
+
+function markPhysicsDirty() {
+  physicsDirty.value = true;
+}
+
+function renderModeDisabled(mode) {
+  return runtimeActionDisabled.value || Boolean(mode.disabled);
+}
+
+function startPreview() {
+  if (startPreviewDisabled.value) return;
+  runRuntimeAction('startPreview', t('editorSettings.status.startPreview'));
+}
+
+function stopPreview() {
+  if (stopPreviewDisabled.value) return;
+  runRuntimeAction('stopPreview', t('editorSettings.status.stopPreview'));
+}
+
+function runProject() {
+  if (runtimeActionDisabled.value) return;
+  runRuntimeAction('runProject', t('editorSettings.status.runProject'));
+}
+
+function runCurrentScene() {
+  if (runtimeActionDisabled.value) return;
+  runRuntimeAction('runCurrentScene', t('editorSettings.status.runCurrentScene'));
+}
+
+function selectRenderMode(mode) {
+  if (renderModeDisabled(mode)) return;
+  runRuntimeAction('selectRenderMode', t('editorSettings.status.selectRenderMode', { mode: mode.label }), mode.value);
+}
+
+async function refreshPhysics() {
+  const controls = getRuntimeControls();
+  if (!controls || typeof controls.refreshPhysics !== 'function') {
+    refreshRuntime();
+    setStatus(t('editorSettings.status.currentContextMissing'), 'warn');
+    return;
+  }
+
+  busyAction.value = 'refreshPhysics';
+  try {
+    const nextState = await controls.refreshPhysics();
+    if (nextState === false) {
+      refreshRuntime();
+      setStatus(t('editorSettings.status.physicsRefreshFailed'), 'error');
+      return;
+    }
+    runtimeState.value = normalizeState(nextState);
+    syncPhysicsForm(runtimeState.value.physics);
+    setStatus(t('editorSettings.status.physicsRefreshed'), 'success');
+  } catch (error) {
+    console.error('刷新物理参数失败', error);
+    setStatus(t('editorSettings.status.physicsRefreshFailed'), 'error');
+  } finally {
+    busyAction.value = '';
+  }
+}
+
+async function applyPhysics() {
+  if (runtimeActionDisabled.value) return;
+  const applied = await runRuntimeAction('applyPhysics', t('editorSettings.status.applyPhysics'), { ...physicsForm.value });
+  if (applied) {
+    physicsDirty.value = false;
+  }
+}
+
+function handleContinue() {
+  confirmHome.value = false;
+  closePanel();
+
+  if (!isDocked && !hasNativeDockCommand()) {
+    router.push('/');
+  }
+}
+
+function hasNativeDockCommand() {
+  return Boolean(
+    typeof window !== 'undefined' &&
+      window.coronaBridge &&
+      typeof window.coronaBridge.dockCommand === 'function'
+  );
+}
+
+function openPanelOrRoute(panelId, routePath) {
+  confirmHome.value = false;
+
+  if (isDocked) {
+    dockStore.openPanel(panelId);
+    closePanel();
+    return;
+  }
+
+  router.push(routePath);
+}
+
+async function openFloatingPanelOrRoute(panelId, routePath) {
+  confirmHome.value = false;
+
+  if (isDocked && isFloatingPanel(panelId)) {
+    const opened = await openFloatingPanel(dockStore, panelId);
+    if (opened) {
+      closePanel();
+    } else {
+      setStatus(t('editorSettings.status.floatingOpenFailed'), 'error');
+    }
+    return;
+  }
+
+  openPanelOrRoute(panelId, routePath);
+}
+
+function cancelHome() {
+  confirmHome.value = false;
+}
 
 function goHome() {
+  confirmHome.value = false;
   dockStore.closePanel('EditorSettings');
   router.push('/StartScreen');
 }
 
-const themes = ['暗色', '亮色', '古典'];
-const languages = ['中文', 'English'];
-
-const STORAGE_KEY = 'corona_editor_settings';
-
-const defaultSettings = {
-  cabbage_hint_time: 3.0,
-  autosave_interval: 15,
-  vsync: true,
-  camera_speed: 2.5,
-  grid_snap_size: 50,
-  master_volume: 80,
-  bgm_volume: 70,
-  sfx_volume: 100,
-  theme_index: 0,
-  language_index: 0,
-  ui_scale: 1.0,
-};
-
-function loadSettings() {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) return { ...defaultSettings, ...JSON.parse(raw) };
-  } catch (e) { /* ignore */ }
-  return { ...defaultSettings };
-}
-
-const form = reactive(loadSettings());
-
-const sections = reactive({
-  workflow: true,
-  engine: true,
-  audio: true,
-  appearance: true,
+onMounted(() => {
+  refreshRuntime({ syncPhysics: true });
+  pollTimer = window.setInterval(() => refreshRuntime(), 700);
 });
 
-const saveVisible = ref(false);
-let saveTimer = null;
-
-function persist() {
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(form));
-  } catch (e) { /* ignore */ }
-}
-
-function notifyEngine() {
-  if (typeof window.cefQuery === 'function') {
-    window.cefQuery({
-      request: JSON.stringify({
-        function: 'update_settings',
-        module: 'EditorSettings',
-        args: [JSON.parse(JSON.stringify(form))],
-      }),
-      onSuccess: function () {},
-      onFailure: function () {},
-    });
+onUnmounted(() => {
+  if (pollTimer) {
+    clearInterval(pollTimer);
+    pollTimer = null;
   }
-}
-
-function showSaved() {
-  saveVisible.value = true;
-  clearTimeout(saveTimer);
-  saveTimer = setTimeout(() => { saveVisible.value = false; }, 1500);
-}
-
-watch(form, () => {
-  persist();
-  notifyEngine();
-  showSaved();
-}, { deep: true });
-
-const closeFloat = () => {
-  window.__settingsOpen = false;
-  if (closeDockPanel) { closeDockPanel(); return; }
-};
-
-/** 音频波形路径生成 */
-function wavePath(amplitude) {
-  const pts = [];
-  const scale = amplitude / 100;
-  for (let i = 0; i <= 20; i++) {
-    const x = (i / 20) * 200;
-    const y = 12 + Math.sin(i * 1.8 + Date.now() * 0.002) * 8 * scale + Math.sin(i * 3.3) * 4 * scale;
-    pts.push(`${i === 0 ? 'M' : 'L'}${x.toFixed(1)},${y.toFixed(1)}`);
+  if (statusTimer) {
+    clearTimeout(statusTimer);
+    statusTimer = null;
   }
-  return pts.join(' ');
-}
-
-onMounted(() => {
-  notifyEngine();
 });
 </script>
 
 <style scoped>
-/* ═══════════════════════════════════════════
-   FUI — Futuristic UI Design System
-   ═══════════════════════════════════════════ */
+.esc-panel {
+  --panel-bg: #151715;
+  --panel-surface: #1c1f1c;
+  --panel-surface-hover: #242924;
+  --panel-border: #313731;
+  --panel-border-strong: #4e5a4b;
+  --text-main: #eef1eb;
+  --text-muted: #9da79a;
+  --accent: #8ca96f;
+  --accent-strong: #a8c783;
+  --danger: #c7826f;
+  --danger-surface: #30201d;
+  --warn: #d3aa68;
 
-/* ── 根容器 ── */
-.fui-root {
   flex: 1;
   min-height: 0;
   width: 100%;
-  position: relative;
+  height: 100%;
   overflow: hidden;
-  background: #020818;
-  color: #c8d6e5;
-  font-family: 'Segoe UI', system-ui, sans-serif;
   display: flex;
   flex-direction: column;
-  border-radius: 8px;
+  background: linear-gradient(180deg, #1b1d1b 0%, var(--panel-bg) 100%);
+  color: var(--text-main);
+  font-family:
+    "Segoe UI",
+    "Microsoft YaHei UI",
+    "Microsoft YaHei",
+    "Noto Sans SC",
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
 }
 
-/* ── 背景网格 ── */
-.fui-bg-grid {
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  z-index: 0;
-  background-image:
-    linear-gradient(rgba(0, 240, 255, 0.03) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(0, 240, 255, 0.03) 1px, transparent 1px);
-  background-size: 32px 32px;
-}
-
-/* ── 扫描线 ── */
-.fui-bg-scan {
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  z-index: 0;
-  background: repeating-linear-gradient(
-    0deg,
-    transparent,
-    transparent 2px,
-    rgba(0, 200, 255, 0.008) 2px,
-    rgba(0, 200, 255, 0.008) 4px
-  );
-  animation: scanMove 8s linear infinite;
-}
-@keyframes scanMove {
-  0% { transform: translateY(0); }
-  100% { transform: translateY(4px); }
-}
-
-/* ── 背景标签 ── */
-.fui-bg-tags {
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  z-index: 0;
-}
-.fui-tag {
-  position: absolute;
-  font-size: 8px;
-  font-family: 'Consolas', 'Courier New', monospace;
-  color: rgba(0, 200, 255, 0.12);
-  letter-spacing: 1px;
-  text-transform: uppercase;
-}
-
-/* ── 标题栏 ── */
-:deep(.fui-titlebar) {
-  background: linear-gradient(90deg, #0a1628, #0d2137, #0a1628) !important;
-  border-bottom: 1px solid rgba(0, 220, 255, 0.2) !important;
-  color: #00e5ff !important;
-}
-
-/* ── 内容区 ── */
-.fui-content {
+.esc-body {
   flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 18px;
   overflow-y: auto;
-  overflow-x: hidden;
-  padding: 12px;
-  position: relative;
-  z-index: 1;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(140, 169, 111, 0.42) transparent;
 }
-.fui-content::-webkit-scrollbar { width: 4px; }
-.fui-content::-webkit-scrollbar-track { background: #020818; }
-.fui-content::-webkit-scrollbar-thumb { background: #0a3050; border-radius: 2px; }
-.fui-content::-webkit-scrollbar-thumb:hover { background: #0d5080; }
 
-/* ── 工具栏 ── */
-.fui-toolbar {
+.esc-header,
+.section-heading,
+.section-heading.split,
+.confirm-actions {
   display: flex;
   align-items: center;
+}
+
+.esc-header {
   justify-content: space-between;
-  padding-bottom: 6px;
-  border-bottom: 1px solid rgba(0, 200, 255, 0.08);
-}
-.fui-btn-home {
-  display: flex;
-  align-items: center;
-  gap: 3px;
-  padding: 2px 8px;
-  background: rgba(0, 200, 255, 0.06);
-  border: 1px solid rgba(0, 200, 255, 0.15);
-  border-radius: 2px;
-  color: #00c8ff;
-  font-size: 10px;
-  cursor: pointer;
-  transition: all 0.2s;
-  font-family: inherit;
-}
-.fui-btn-home:hover {
-  background: rgba(0, 200, 255, 0.14);
-  border-color: rgba(0, 200, 255, 0.35);
-  box-shadow: 0 0 12px rgba(0, 200, 255, 0.15);
-}
-.fui-btn-home-icon { font-size: 9px; }
-.fui-status {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 9px;
-  color: #506070;
-}
-.fui-status-dot {
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: #304050;
-  transition: all 0.3s;
-}
-.fui-status-dot.active {
-  background: #00ff88;
-  box-shadow: 0 0 6px #00ff88;
+  gap: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--panel-border);
 }
 
-/* ── 四象限网格 ── */
-.fui-quad-grid {
-  flex: 1;
-  display: grid;
-  grid-template-columns: 1fr 40px 1fr;
-  grid-template-rows: 1fr 40px 1fr;
-  gap: 0;
-  min-height: 440px;
-  position: relative;
-}
-
-/* ── 中心核心区 ── */
-.fui-holo-core {
-  grid-column: 2;
-  grid-row: 2;
-  position: relative;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 5;
-}
-.fui-crosshair-h, .fui-crosshair-v {
-  position: absolute;
-  background: rgba(0, 200, 255, 0.1);
-}
-.fui-crosshair-h {
-  width: 200%;
-  height: 1px;
-  left: -50%;
-}
-.fui-crosshair-v {
-  width: 1px;
-  height: 200%;
-  top: -50%;
-}
-
-/* ── 全息核心（tesseract） ── */
-.fui-tesseract {
-  width: 32px;
-  height: 32px;
-  position: relative;
-  transform-style: preserve-3d;
-  animation: tesseractRotate 8s linear infinite;
-}
-@keyframes tesseractRotate {
-  0% { transform: rotateX(0deg) rotateY(0deg) rotateZ(0deg); }
-  100% { transform: rotateX(360deg) rotateY(360deg) rotateZ(360deg); }
-}
-.fui-tesseract-face {
-  position: absolute;
-  width: 32px;
-  height: 32px;
-  border: 1px solid rgba(0, 220, 255, 0.5);
-  background: rgba(0, 180, 255, 0.06);
-  box-shadow: inset 0 0 8px rgba(0, 200, 255, 0.1), 0 0 10px rgba(0, 200, 255, 0.15);
-}
-.fui-tf-front  { transform: translateZ(8px); }
-.fui-tf-back   { transform: translateZ(-8px); }
-.fui-tf-left   { transform: rotateY(90deg) translateZ(8px); }
-.fui-tf-right  { transform: rotateY(-90deg) translateZ(8px); }
-.fui-tf-top    { transform: rotateX(90deg) translateZ(8px); }
-.fui-tf-bottom { transform: rotateX(-90deg) translateZ(8px); }
-.fui-tesseract-inner {
-  position: absolute;
-  width: 12px;
-  height: 12px;
-  top: 10px;
-  left: 10px;
-  border: 1px solid rgba(0, 255, 200, 0.4);
-  background: rgba(0, 255, 200, 0.04);
-  box-shadow: 0 0 14px rgba(0, 255, 200, 0.2);
-  transform: translateZ(0px);
-}
-
-/* ── 象限面板 ── */
-.fui-quad {
-  background: rgba(4, 16, 36, 0.7);
-  border: 1px solid rgba(0, 180, 255, 0.13);
-  border-radius: 4px;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  transition: border-color 0.3s;
-}
-.fui-quad:hover {
-  border-color: rgba(0, 200, 255, 0.25);
-}
-.fui-quad.collapsed .fui-quad-body {
-  display: none;
-}
-.fui-quad.collapsed .fui-quad-arrow {
-  transform: rotate(-90deg);
-}
-
-.fui-quad-tl { grid-column: 1; grid-row: 1; }
-.fui-quad-tr { grid-column: 3; grid-row: 1; }
-.fui-quad-bl { grid-column: 1; grid-row: 3; }
-.fui-quad-br { grid-column: 3; grid-row: 3; }
-
-/* ── 象限标题 ── */
-.fui-quad-header {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 8px 10px;
-  background: rgba(0, 160, 255, 0.06);
-  border-bottom: 1px solid rgba(0, 180, 255, 0.1);
-  cursor: pointer;
-  user-select: none;
-  flex-shrink: 0;
-}
-.fui-quad-header:hover {
-  background: rgba(0, 180, 255, 0.1);
-}
-.fui-quad-icon {
-  font-size: 14px;
-  color: #00d4ff;
-  text-shadow: 0 0 6px rgba(0, 212, 255, 0.4);
-  width: 18px;
-  text-align: center;
-}
-.fui-quad-label {
-  flex: 1;
+.esc-kicker {
+  margin: 0 0 4px;
+  color: var(--accent);
   font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 1.5px;
+  font-weight: 700;
+  letter-spacing: 0;
   text-transform: uppercase;
-  color: #80c8e0;
-}
-.fui-quad-arrow {
-  font-size: 8px;
-  color: #4080a0;
-  transition: transform 0.25s;
 }
 
-/* ── 象限内容 ── */
-.fui-quad-body {
-  padding: 10px;
-  display: flex;
-  flex-direction: column;
+.esc-header h2 {
+  margin: 0;
+  color: var(--text-main);
+  font-size: 24px;
+  font-weight: 700;
+  line-height: 1.15;
+}
+
+.esc-state {
+  max-width: 48%;
+  padding: 5px 9px;
+  border: 1px solid rgba(140, 169, 111, 0.42);
+  border-radius: 6px;
+  overflow: hidden;
+  color: var(--accent-strong);
+  background: rgba(140, 169, 111, 0.08);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.esc-state.offline {
+  color: var(--warn);
+  border-color: rgba(211, 170, 104, 0.42);
+  background: rgba(211, 170, 104, 0.08);
+}
+
+.status-line {
+  margin: 0;
+  min-height: 28px;
+  padding: 6px 9px;
+  border: 1px solid var(--panel-border);
+  border-radius: 6px;
+  color: var(--text-main);
+  background: rgba(28, 31, 28, 0.86);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.status-line.success {
+  color: var(--accent-strong);
+  border-color: rgba(140, 169, 111, 0.45);
+}
+
+.status-line.warn {
+  color: var(--warn);
+  border-color: rgba(211, 170, 104, 0.45);
+}
+
+.status-line.error {
+  color: #e2afa3;
+  border-color: rgba(199, 130, 111, 0.5);
+}
+
+.settings-section {
+  display: grid;
+  gap: 9px;
+  padding: 12px;
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  background: rgba(28, 31, 28, 0.66);
+}
+
+.section-heading {
+  justify-content: space-between;
+  min-height: 20px;
   gap: 10px;
-  overflow-y: auto;
-  flex: 1;
 }
-.fui-quad-body::-webkit-scrollbar { width: 3px; }
-.fui-quad-body::-webkit-scrollbar-thumb { background: #0a3050; border-radius: 2px; }
 
-/* ── 字段 ── */
-.fui-field {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
+.section-heading h3 {
+  margin: 0;
+  color: var(--text-main);
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.2;
 }
-.fui-field-row {
-  flex-direction: row;
+
+.section-heading span {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.locale-field {
+  display: flex;
   align-items: center;
   justify-content: space-between;
+  min-width: 0;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--panel-border);
+  border-radius: 7px;
+  background: rgba(24, 27, 24, 0.58);
 }
-.fui-field-head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-}
-.fui-field-label {
-  font-size: 10px;
-  color: #6a90b0;
-  letter-spacing: 0.6px;
-  text-transform: uppercase;
-}
-.fui-field-val {
+
+.locale-field span {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-muted);
   font-size: 12px;
   font-weight: 600;
-  color: #00e5ff;
-  font-family: 'Consolas', 'Courier New', monospace;
-  text-shadow: 0 0 6px rgba(0, 229, 255, 0.3);
-}
-.fui-field-val small {
-  font-size: 9px;
-  font-weight: 400;
-  color: #5090a0;
-  margin-left: 2px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-/* ── 自定义滑块 ── */
-.fui-slider-track {
-  position: relative;
-  height: 18px;
-  display: flex;
-  align-items: center;
-  background: rgba(0, 20, 40, 0.8);
-  border: 1px solid rgba(0, 160, 255, 0.15);
-  border-radius: 2px;
-  overflow: hidden;
+.locale-switch {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  min-width: 148px;
+  max-width: 58%;
+  padding: 2px;
+  border: 1px solid var(--panel-border);
+  border-radius: 6px;
+  background: rgba(17, 19, 17, 0.96);
+  gap: 2px;
 }
-.fui-slider-fill {
-  position: absolute;
-  left: 0;
-  top: 0;
-  bottom: 0;
-  background: linear-gradient(90deg, rgba(0, 200, 255, 0.12), rgba(0, 240, 200, 0.18));
-  border-right: 1px solid rgba(0, 220, 255, 0.3);
-  pointer-events: none;
-  transition: width 0.1s ease;
-}
-.fui-slider {
-  -webkit-appearance: none;
-  appearance: none;
-  width: 100%;
-  height: 100%;
+
+.locale-option {
+  min-width: 0;
+  height: 26px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 4px;
+  color: var(--text-muted);
   background: transparent;
-  outline: none;
   cursor: pointer;
-  position: relative;
-  z-index: 1;
-  margin: 0;
-}
-.fui-slider::-webkit-slider-thumb {
-  -webkit-appearance: none;
-  width: 10px;
-  height: 22px;
-  background: linear-gradient(180deg, #00e5ff, #0080aa);
-  border: 1px solid #00e5ff;
-  border-radius: 2px;
-  cursor: pointer;
-  box-shadow: 0 0 10px rgba(0, 229, 255, 0.5), 0 0 20px rgba(0, 229, 255, 0.2);
-  position: relative;
-}
-.fui-slider::-webkit-slider-thumb::after {
-  content: '';
-  position: absolute;
-  inset: 2px;
-  background: repeating-linear-gradient(
-    0deg,
-    transparent,
-    transparent 1px,
-    rgba(0, 255, 200, 0.3) 1px,
-    rgba(0, 255, 200, 0.3) 2px
-  );
-}
-
-/* ── 音频滑块波形 ── */
-.fui-slider-audio {
-  position: relative;
-}
-.fui-waveform {
-  position: absolute;
-  left: 0;
-  top: 0;
-  bottom: 0;
-  pointer-events: none;
-  z-index: 0;
-  overflow: hidden;
-  transition: width 0.1s ease;
-}
-.fui-wave-svg {
-  width: 100%;
-  height: 100%;
-  color: rgba(0, 255, 180, 0.5);
-}
-.fui-slider-wave::-webkit-slider-thumb {
-  background: linear-gradient(180deg, #00ffaa, #008855);
-  border-color: #00ffaa;
-  box-shadow: 0 0 10px rgba(0, 255, 170, 0.5);
-}
-
-/* ── 霓虹开关 ── */
-.fui-toggle {
-  position: relative;
-  width: 44px;
-  height: 24px;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-}
-.fui-toggle-track {
-  position: relative;
-  width: 100%;
-  height: 100%;
-  border-radius: 12px;
-  background: #0a1a2e;
-  border: 1px solid rgba(0, 160, 255, 0.25);
-  transition: all 0.3s;
-  overflow: hidden;
-}
-.fui-toggle.on .fui-toggle-track {
-  background: rgba(0, 200, 255, 0.1);
-  border-color: #00c8ff;
-  box-shadow: 0 0 12px rgba(0, 200, 255, 0.25), inset 0 0 8px rgba(0, 200, 255, 0.08);
-}
-.fui-toggle-circuit {
-  position: absolute;
-  left: 0;
-  top: 50%;
-  width: 28px;
-  height: 1px;
-  background: rgba(0, 200, 255, 0.3);
-  transform: translateY(-50%);
-  transition: all 0.3s;
-}
-.fui-toggle.on .fui-toggle-circuit {
-  background: #00e5ff;
-  width: 34px;
-  box-shadow: 0 0 6px #00e5ff;
-}
-.fui-toggle-thumb {
-  position: absolute;
-  top: 2px;
-  left: 2px;
-  width: 18px;
-  height: 18px;
-  border-radius: 50%;
-  background: linear-gradient(135deg, #1a3a50, #0a1a2e);
-  border: 1px solid rgba(0, 180, 255, 0.4);
-  transition: all 0.3s;
-  box-shadow: 0 0 4px rgba(0, 180, 255, 0.2);
-}
-.fui-toggle.on .fui-toggle-thumb {
-  left: 22px;
-  background: linear-gradient(135deg, #00e5ff, #006080);
-  border-color: #00e5ff;
-  box-shadow: 0 0 12px rgba(0, 229, 255, 0.5);
-}
-
-/* ── 分段选择器 ── */
-.fui-segment-group {
-  display: flex;
-  border: 1px solid rgba(0, 180, 255, 0.2);
-  border-radius: 3px;
-  overflow: hidden;
-  background: rgba(0, 20, 40, 0.6);
-}
-.fui-segment {
-  flex: 1;
-  padding: 5px 4px;
-  font-size: 10px;
-  font-family: inherit;
-  color: #5080a0;
-  background: transparent;
-  border: none;
-  border-right: 1px solid rgba(0, 180, 255, 0.1);
-  cursor: pointer;
-  transition: all 0.2s;
-  letter-spacing: 0.5px;
-  text-align: center;
-}
-.fui-segment:last-child { border-right: none; }
-.fui-segment:hover {
-  background: rgba(0, 200, 255, 0.08);
-  color: #80d0f0;
-}
-.fui-segment.active {
-  background: rgba(0, 210, 255, 0.15);
-  color: #00e5ff;
+  font: inherit;
+  font-size: 12px;
   font-weight: 600;
-  box-shadow: inset 0 1px 0 rgba(0, 229, 255, 0.3);
-  text-shadow: 0 0 6px rgba(0, 229, 255, 0.3);
+  line-height: 26px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.locale-option:hover {
+  color: var(--text-main);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.locale-option.active {
+  color: #f4f7ef;
+  background: rgba(132, 166, 91, 0.32);
+  box-shadow: inset 0 0 0 1px rgba(132, 166, 91, 0.35);
+}
+
+.button-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.button-grid.four,
+.button-grid.tools {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.button-grid.render {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.action-button,
+.home-button,
+.small-button,
+.text-button {
+  border: 1px solid var(--panel-border);
+  border-radius: 7px;
+  font: inherit;
+  cursor: pointer;
+  transition:
+    background-color 160ms ease,
+    border-color 160ms ease,
+    color 160ms ease,
+    transform 160ms ease,
+    box-shadow 160ms ease;
+}
+
+.action-button {
+  min-width: 0;
+  min-height: 40px;
+  padding: 8px 10px;
+  overflow: hidden;
+  color: var(--text-main);
+  background: rgba(24, 27, 24, 0.94);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.2;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.action-button.primary,
+.apply-button {
+  color: #eff7e8;
+  border-color: rgba(140, 169, 111, 0.58);
+  background: rgba(140, 169, 111, 0.18);
+}
+
+.action-button.selected {
+  color: #eff7e8;
+  border-color: var(--accent-strong);
+  background: rgba(140, 169, 111, 0.2);
+  box-shadow: inset 0 0 0 1px rgba(168, 199, 131, 0.12);
+}
+
+.action-button:hover:not(:disabled),
+.home-button:hover:not(:disabled),
+.small-button:hover:not(:disabled),
+.text-button:hover:not(:disabled) {
+  color: #f6f8f3;
+  background: var(--panel-surface-hover);
+  border-color: var(--panel-border-strong);
+  transform: translateY(-1px);
+}
+
+.action-button.primary:hover:not(:disabled),
+.apply-button:hover:not(:disabled) {
+  background: rgba(140, 169, 111, 0.24);
+  border-color: var(--accent-strong);
+}
+
+.action-button:active:not(:disabled),
+.home-button:active:not(:disabled),
+.small-button:active:not(:disabled),
+.text-button:active:not(:disabled) {
+  transform: translateY(1px) scale(0.99);
+}
+
+.action-button:focus-visible,
+.home-button:focus-visible,
+.small-button:focus-visible,
+.text-button:focus-visible,
+.field input:focus-visible {
+  outline: 2px solid var(--accent-strong);
+  outline-offset: 2px;
+}
+
+.action-button:disabled,
+.home-button:disabled,
+.small-button:disabled,
+.text-button:disabled,
+.field input:disabled {
+  cursor: not-allowed;
+  opacity: 0.44;
+}
+
+.text-button {
+  min-height: 28px;
+  padding: 4px 8px;
+  color: var(--accent-strong);
+  background: transparent;
+  font-size: 12px;
+}
+
+.physics-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.field {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.field span {
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.2;
+}
+
+.field input {
+  width: 100%;
+  min-width: 0;
+  height: 34px;
+  padding: 6px 8px;
+  border: 1px solid var(--panel-border);
+  border-radius: 6px;
+  color: var(--text-main);
+  background: rgba(17, 19, 17, 0.96);
+  font: inherit;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.field input:hover:not(:disabled) {
+  border-color: var(--panel-border-strong);
+}
+
+.apply-button {
+  width: 100%;
+}
+
+.leave-section {
+  margin-bottom: 2px;
+}
+
+.home-panel {
+  min-height: 42px;
+}
+
+.home-panel.confirming {
+  display: grid;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid rgba(199, 130, 111, 0.38);
+  border-radius: 8px;
+  background: rgba(48, 32, 29, 0.66);
+}
+
+.home-panel p {
+  margin: 0;
+  color: #e8beb4;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.home-button {
+  width: 100%;
+  min-height: 40px;
+  color: #e8beb4;
+  background: rgba(48, 32, 29, 0.42);
+  border-color: rgba(199, 130, 111, 0.38);
+}
+
+.home-button:hover:not(:disabled) {
+  background: var(--danger-surface);
+  border-color: rgba(199, 130, 111, 0.7);
+}
+
+.confirm-actions {
+  gap: 8px;
+}
+
+.small-button {
+  flex: 1;
+  min-height: 36px;
+  padding: 7px 10px;
+  color: var(--text-main);
+  background: rgba(24, 27, 24, 0.94);
+  font-size: 13px;
+}
+
+.small-button.danger {
+  color: #f0d2cb;
+  background: rgba(199, 130, 111, 0.12);
+  border-color: rgba(199, 130, 111, 0.55);
+}
+
+.small-button.danger:hover:not(:disabled) {
+  background: rgba(199, 130, 111, 0.2);
+  border-color: rgba(199, 130, 111, 0.82);
+}
+
+@media (max-width: 620px) {
+  .esc-body {
+    padding: 16px;
+  }
+
+  .button-grid.four,
+  .button-grid.tools {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .physics-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 430px) {
+  .esc-header {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .esc-state {
+    max-width: 100%;
+  }
+
+  .locale-field {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .locale-switch {
+    max-width: 100%;
+    width: 100%;
+  }
+
+  .button-grid,
+  .button-grid.four,
+  .button-grid.tools,
+  .button-grid.render,
+  .physics-grid {
+    grid-template-columns: 1fr;
+  }
 }
 </style>

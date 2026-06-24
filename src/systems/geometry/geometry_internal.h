@@ -113,7 +113,7 @@ struct GeometrySystem::Impl {
 
     // 共享占位纹理：所有无纹理 mesh 共用，生命周期与 Impl 一致
     // 使用 unique_ptr 避免 static 局部变量在 GPU device 析构后才析构
-    std::unique_ptr<HardwareImage>      shared_placeholder_texture;
+    std::unique_ptr<Horizon::HardwareImage> shared_placeholder_texture;
 
     [[nodiscard]] static uint64_t make_lod_key(std::uintptr_t geometry_handle,
                                                uint32_t       mesh_index) {

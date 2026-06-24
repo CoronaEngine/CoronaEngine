@@ -10,6 +10,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..",
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from plugins.AITool.services.lanchat_agent_orchestrator import LanChatAgentOrchestrator  # noqa: E402
+from plugins.AITool.services.lanchat_summary_service import LANChatSummaryService  # noqa: E402
 from plugins.AITool.services.lanchat_host_action_executor import LanChatHostActionExecutor  # noqa: E402
 from plugins.AITool.services.lanchat_agent_worker import (  # noqa: E402
     LANChatAgentWorker,
@@ -21,6 +22,7 @@ from plugins.AITool.services.generation_scheduler import GenerationScheduler  # 
 from plugins.AITool.services.interaction_coordinator import (  # noqa: E402
     ChatMessage,
     InteractionCoordinator,
+    ReviewResult,
 )
 from plugins.AITool.services.seed_plan import SeedPlanStatus  # noqa: E402
 from plugins.AITool.services.disclosure_policy import DisclosureEvent  # noqa: E402
@@ -59,10 +61,11 @@ def _trigger(text="@小B 添加一个篝火", agent_name="小B"):
 
 
 class FakeEngine:
-    def __init__(self, triggers, coordinator_messages=None, room_events=None):
+    def __init__(self, triggers, coordinator_messages=None, room_events=None, session_role="none"):
         self.triggers = list(triggers)
         self.coordinator_messages = list(coordinator_messages or [])
         self.room_events = list(room_events or [])
+        self.session_role = session_role
         self.replies = []
         self.intents = []
         self.system_messages = []
@@ -75,6 +78,9 @@ class FakeEngine:
 
     def network_pop_lanchat_agent_trigger(self):
         return self.triggers.pop(0) if self.triggers else None
+
+    def network_session_role_name(self):
+        return self.session_role
 
     def network_send_agent_reply(self, agent_id, agent_name, text):
         self.replies.append((agent_id, agent_name, text))
@@ -139,11 +145,12 @@ class FakeGate:
 
 
 class FakeSceneActor:
-    def __init__(self, name, position=None, rotation=None, scale=None):
+    def __init__(self, name, position=None, rotation=None, scale=None, aabb=None):
         self.name = name
         self._position = list(position or [0.0, 0.0, 0.0])
         self._rotation = list(rotation or [0.0, 0.0, 0.0])
         self._scale = list(scale or [1.0, 1.0, 1.0])
+        self._aabb = list(aabb) if aabb is not None else None
         self.color = None
 
     def get_position(self):
@@ -166,6 +173,11 @@ class FakeSceneActor:
 
     def set_color(self, value):
         self.color = list(value)
+
+    def get_aabb(self):
+        if self._aabb is None:
+            raise AttributeError("aabb unavailable")
+        return list(self._aabb)
 
 
 class TargetedHostFakeEngine(FakeEngine):
@@ -355,6 +367,58 @@ def test_gm_summary_does_not_create_proposal():
     assert "GM 总结" in result.text
     assert "GM 提案" not in result.text
     print("[OK] @GM summary stays on GM control path without proposal")
+
+
+def test_gm_summary_reads_agent_design_context_without_affecting_normal_summary():
+    history = [
+        {
+            "message_id": "m0",
+            "from": "房主",
+            "sender_type": "user",
+            "message_kind": "chat",
+            "text": "围绕强盗藏宝室主题讨论一下",
+        },
+        {
+            "message_id": "m1",
+            "from": "长者",
+            "sender_type": "agent",
+            "message_kind": "agent_reply",
+            "text": "方案建议：地下藏宝室，中央放金币堆和藏宝箱，两侧布置火把、武器架和酒桶。",
+        },
+        {
+            "message_id": "m2",
+            "from": "商人",
+            "sender_type": "agent",
+            "message_kind": "agent_reply",
+            "text": "评价：这个方案适合包装成强盗首领的秘密金库，建议增加核心宝物和入口引导。",
+        },
+        {
+            "message_id": "m3",
+            "from": "GM",
+            "sender_type": "user",
+            "message_kind": "chat",
+            "text": "@GM 总结一下当前方案",
+        },
+    ]
+
+    normal_state = LANChatSummaryService().monitor(history)
+    assert "长者" not in normal_state.summary
+    assert "商人" not in normal_state.summary
+
+    orch = LanChatAgentOrchestrator(agent_factory=_agent_factory)
+    trigger = _trigger("@GM 总结一下当前方案", "GM")
+    trigger["agent_id"] = "gm"
+    trigger["history"] = history
+    result = orch.handle_trigger(trigger)
+
+    assert result.sender_id == "gm-system"
+    assert result.proposal is False
+    assert "GM 总结" in result.text
+    assert "长者" in result.text
+    assert "商人" in result.text
+    assert "藏宝箱" in result.text
+    assert "GM 提案" not in result.text
+    print("[OK] @GM summary reads selected Agent design context without proposal")
 
 
 def test_role_agent_not_hijacked_by_prior_agent_or_gm_messages():
@@ -551,6 +615,84 @@ def test_agent_plan_reference_does_not_cross_agents():
     assert "没有找到长者刚才的可执行方案" in result.text
     assert result.action_payload is None
     print("[OK] plan reference only resolves against the currently mentioned agent")
+
+
+def test_role_agent_opinion_about_named_agent_plan_receives_that_plan_context():
+    captured = {}
+
+    def agent_factory():
+        def _agent(persona, messages):
+            captured["persona"] = persona
+            captured["messages"] = list(messages)
+            joined = "\n".join(messages)
+            assert "【被评价方案上下文】" in joined
+            assert "小女孩" in joined
+            assert "现代风客厅" in joined
+            assert "沙发/座椅组" in joined
+            assert "电视/媒体墙" in joined
+            assert "她还没给出具体设计方案" not in joined
+            return "我看到了小女孩的现代风客厅方案，会围绕沙发、茶几和电视墙评价。"
+        return _agent
+
+    orch = LanChatAgentOrchestrator(agent_factory=agent_factory)
+    trigger = _trigger("@山贼 你对于小女孩的方案怎么看", "山贼")
+    trigger["agent_id"] = "bandit"
+    trigger["history"] = [
+        {
+            "message_id": "m0",
+            "from": "房主",
+            "sender_id": "host-a",
+            "sender_type": "user",
+            "message_kind": "chat",
+            "text": "@小女孩 你是谁",
+        },
+        {
+            "message_id": "m1",
+            "from": "小女孩",
+            "sender_id": "girl",
+            "sender_type": "agent",
+            "message_kind": "agent_reply",
+            "text": "我是小女孩，你的场景设计助手。可以帮你做房间/展厅/商业空间等场景方案。",
+        },
+        {
+            "message_id": "m2",
+            "from": "房主",
+            "sender_id": "host-a",
+            "sender_type": "user",
+            "message_kind": "chat",
+            "text": "@小女孩 帮我设计一个现代风客厅",
+        },
+        {
+            "message_id": "m3",
+            "from": "小女孩",
+            "sender_id": "girl",
+            "sender_type": "agent",
+            "message_kind": "agent_reply",
+            "text": (
+                "小女孩先帮你整理一个温柔、好落地的版本。\n"
+                "我理解你的目标是：现代风客厅。\n\n"
+                "方案内容：\n"
+                "1. 风格定位：现代简约：中性色/低饱和配色，线条干净，材质对比清晰\n"
+                "2. 空间布局：以交流区为中心，视觉焦点和收纳区分列两侧，主通道保持连续\n"
+                "3. 核心物件：沙发/座椅组、茶几、电视/媒体墙、边柜/收纳柜、地毯\n"
+                "4. 氛围装饰：装饰画、绿植、几何灯具、低饱和色彩点缀、重点照明"
+            ),
+        },
+        {
+            "message_id": "m4",
+            "from": "房主",
+            "sender_id": "host-a",
+            "sender_type": "user",
+            "message_kind": "chat",
+            "text": trigger["text"],
+        },
+    ]
+    result = orch.handle_trigger(trigger)
+    assert result.proposal is False
+    assert result.sender_name == "山贼"
+    assert "现代风客厅方案" in result.text
+    assert captured["messages"]
+    print("[OK] role agent opinion about named agent plan receives referenced plan context")
 
 
 def test_resolved_plan_generic_inventory_guard():
@@ -779,6 +921,19 @@ def test_worker_uses_orchestrator_and_sends_reply():
     print("[OK] worker polls C++ trigger and replies through C++")
 
 
+def test_worker_client_role_does_not_execute_direct_agent_trigger():
+    engine = FakeEngine([_trigger()], session_role="client")
+    worker = LANChatAgentWorker(
+        corona_engine=engine,
+        agent_factory=_agent_factory,
+        async_agent_execution=False,
+    )
+
+    assert worker.process_once() is False
+    assert engine.replies == []
+    print("[OK] client role does not execute direct native agent trigger")
+
+
 def test_worker_streams_sanitized_progress_reply_before_final():
     def progress_agent_factory():
         def _agent(persona, messages):
@@ -854,6 +1009,9 @@ def test_worker_async_sends_fast_ack_before_agent_lock_finishes():
     assert engine.replies
     assert engine.replies[0][3] == "progress"
     assert "已收到" in engine.replies[0][2]
+    assert "正在生成" not in engine.replies[0][2]
+    assert "下一阶段" not in engine.replies[0][2]
+    assert "吸收" not in engine.replies[0][2]
     deadline = time.time() + 1.0
     while time.time() < deadline and "slow compose done" not in engine.replies[-1][2]:
         time.sleep(0.01)
@@ -998,6 +1156,239 @@ def test_worker_routes_plain_chat_supplement_to_pending_planning_gate():
     print("[OK] worker routes no-mention supplement to pending planning gate")
 
 
+def test_worker_client_sync_does_not_reply_from_plain_pending_planning_gate():
+    runtime = get_lanchat_scene_runtime()
+    runtime.end_compose()
+    runtime.consume_notes()
+    action, reply = runtime.handle_planning_gate("小女孩", "@小女孩 帮我设计一个可爱的卧室")
+    assert action == "reply"
+    assert "方案内容" in str(reply)
+
+    coordinator = InteractionCoordinator()
+    engine = FakeEngine([], coordinator_messages=[{
+        "message_id": "client-plain-plan-supplement-1",
+        "room_id": "r-client-plan-supplement",
+        "sender_id": "host-a",
+        "sender_name": "房主",
+        "sender_type": "host",
+        "message_kind": "chat",
+        "text": "补充要求，减少方案中的细碎物体",
+    }], session_role="client")
+    worker = LANChatAgentWorker(
+        corona_engine=engine,
+        agent_factory=_agent_factory,
+        interaction_coordinator=coordinator,
+        async_agent_execution=False,
+    )
+
+    try:
+        assert worker.process_once() is True
+    finally:
+        runtime.clear_pending_planning("小女孩")
+        runtime.end_compose("小女孩")
+
+    assert engine.replies == []
+    print("[OK] client sync does not reply from plain pending planning gate")
+
+
+def test_plain_chat_generation_start_confirms_and_executes_active_seed_plan():
+    coordinator = InteractionCoordinator()
+    room_id = "r-plain-generation-start"
+    coordinator.create_or_update_seed_plan(ChatMessage(
+        room_id=room_id,
+        sender_id="host-a",
+        sender_name="房主",
+        text="帮我设计一个现代简约客厅",
+        is_host=True,
+    ))
+    engine = FakeEngine([], coordinator_messages=[
+        {
+            "message_id": "plain-generation-start-1",
+            "room_id": room_id,
+            "sender_id": "host-a",
+            "sender_name": "房主",
+            "sender_type": "host",
+            "message_kind": "chat",
+            "text": "开始生成",
+        },
+    ])
+    worker = LANChatAgentWorker(
+        corona_engine=engine,
+        agent_factory=_agent_factory,
+        interaction_coordinator=coordinator,
+        async_agent_execution=False,
+    )
+
+    plan = coordinator.active_plan_for_room(room_id)
+    assert plan is not None
+    assert plan.status in {SeedPlanStatus.DRAFT, SeedPlanStatus.PROPOSED}
+
+    assert worker.process_once() is True
+    plan = coordinator.active_plan_for_room(room_id)
+    assert plan is not None
+    assert plan.status == SeedPlanStatus.EXECUTING
+    visible_text = "\n".join(str(item[2]) for item in [*engine.replies, *engine.system_messages])
+    assert "已进入生成队列" in visible_text
+    assert "等待房主确认：开始生成" not in visible_text
+    assert "开始生成；开始生成" not in str(plan.intent_summary)
+    print("[OK] plain chat generation start confirms and executes active SeedPlan")
+
+
+def test_worker_agent_trigger_generation_start_consumes_pending_runtime_plan():
+    runtime = get_lanchat_scene_runtime()
+    runtime.end_compose()
+    runtime.consume_notes()
+    runtime.clear_pending_planning()
+    action, reply = runtime.handle_planning_gate("长者", "帮我设计一个现代简约客厅")
+    assert action == "reply"
+    assert "现代简约客厅" in str(reply)
+
+    scheduler = FakeScheduler()
+    coordinator = InteractionCoordinator(scheduler=scheduler)
+    engine = FakeEngine([{
+        **_trigger("开始生成", "长者"),
+        "room_id": "r-runtime-confirm",
+        "sender_id": "host-a",
+        "sender_name": "房主",
+        "is_host": True,
+        "sender_type": "host",
+    }])
+
+    def failing_agent_factory():
+        def _agent(persona, messages):
+            raise AssertionError("role agent should not run when pending runtime plan is confirmed")
+        return _agent
+
+    worker = LANChatAgentWorker(
+        corona_engine=engine,
+        agent_factory=failing_agent_factory,
+        interaction_coordinator=coordinator,
+        async_agent_execution=False,
+    )
+
+    try:
+        assert worker.process_once() is True
+    finally:
+        runtime.clear_pending_planning("长者")
+        runtime.end_compose("长者")
+
+    plan = coordinator.active_plan_for_room("r-runtime-confirm")
+    assert plan is not None
+    assert plan.status == SeedPlanStatus.EXECUTING
+    assert scheduler.submitted
+    assert "现代简约客厅" in scheduler.submitted[-1]["prompt"]
+    visible_text = "\n".join(str(item[2]) for item in [*engine.replies, *engine.system_messages])
+    assert "已进入生成队列" in visible_text
+    assert "尚未开始生成" not in visible_text
+    assert "请先由房主确认" not in visible_text
+    assert not runtime.pending_planning_snapshot()
+    print("[OK] agent trigger generation start consumes pending runtime plan")
+
+
+def test_worker_metadata_generate_consumes_pending_runtime_plan():
+    runtime = get_lanchat_scene_runtime()
+    runtime.end_compose()
+    runtime.consume_notes()
+    runtime.clear_pending_planning()
+    action, reply = runtime.handle_planning_gate("长者", "帮我设计一个现代简约客厅")
+    assert action == "reply"
+    assert "现代简约客厅" in str(reply)
+
+    scheduler = FakeScheduler()
+    coordinator = InteractionCoordinator(scheduler=scheduler)
+    engine = FakeEngine([], coordinator_messages=[{
+        "message_id": "metadata-generate-runtime-plan-1",
+        "room_id": "r-metadata-runtime-confirm",
+        "sender_id": "host-a",
+        "sender_name": "房主",
+        "sender_type": "host",
+        "message_kind": "chat",
+        "text": "开始生成",
+        "metadata": {
+            "draft_action": "generate",
+            "target_scope": "plan",
+            "target_agent_name": "长者",
+            "target_agent_id": "elder",
+        },
+    }])
+    worker = LANChatAgentWorker(
+        corona_engine=engine,
+        agent_factory=_agent_factory,
+        interaction_coordinator=coordinator,
+        async_agent_execution=False,
+    )
+
+    try:
+        assert worker.process_once() is True
+    finally:
+        runtime.clear_pending_planning("长者")
+        runtime.end_compose("长者")
+
+    plan = coordinator.active_plan_for_room("r-metadata-runtime-confirm")
+    assert plan is not None
+    assert plan.status == SeedPlanStatus.EXECUTING
+    assert scheduler.submitted
+    assert "现代简约客厅" in scheduler.submitted[-1]["prompt"]
+    visible_text = "\n".join(str(item[2]) for item in [*engine.replies, *engine.system_messages])
+    assert "已进入生成队列" in visible_text
+    assert "尚未开始生成" not in visible_text
+    assert "请先由房主确认" not in visible_text
+    print("[OK] metadata generate consumes pending runtime plan")
+
+
+def test_worker_agent_trigger_plan_elaboration_uses_pending_runtime_plan_without_generation():
+    runtime = get_lanchat_scene_runtime()
+    runtime.end_compose()
+    runtime.consume_notes()
+    runtime.clear_pending_planning()
+    action, reply = runtime.handle_planning_gate("小女孩", "帮我设计一个现代风客厅")
+    assert action == "reply"
+    assert "现代风客厅" in str(reply)
+
+    scheduler = FakeScheduler()
+    coordinator = InteractionCoordinator(scheduler=scheduler)
+    engine = FakeEngine([{
+        **_trigger("继续输出风格方案、布局、物品清单", "小女孩"),
+        "room_id": "r-runtime-plan-elaboration",
+        "sender_id": "host-a",
+        "sender_name": "房主",
+        "is_host": True,
+        "sender_type": "host",
+    }])
+
+    def failing_agent_factory():
+        def _agent(persona, messages):
+            raise AssertionError("role agent should not run for pending plan elaboration")
+        return _agent
+
+    worker = LANChatAgentWorker(
+        corona_engine=engine,
+        agent_factory=failing_agent_factory,
+        interaction_coordinator=coordinator,
+        async_agent_execution=False,
+    )
+
+    try:
+        assert worker.process_once() is True
+        assert not scheduler.submitted
+        active_plan = coordinator.active_plan_for_room("r-runtime-plan-elaboration")
+        assert active_plan is None or active_plan.status != SeedPlanStatus.EXECUTING
+        assert engine.replies
+        reply_text = str(engine.replies[-1][2])
+        assert "方案展开" in reply_text
+        assert "风格方案" in reply_text
+        assert "布局" in reply_text
+        assert "物品清单" in reply_text
+        assert "现代风客厅" in reply_text
+        assert "尚未开始生成" not in reply_text
+        assert "请先由房主确认" not in reply_text
+        assert runtime.pending_planning_snapshot()
+        print("[OK] agent trigger plan elaboration uses pending runtime plan without generation")
+    finally:
+        runtime.clear_pending_planning("小女孩")
+        runtime.end_compose("小女孩")
+
+
 def test_worker_disambiguates_plain_chat_supplement_when_multiple_plans_pending():
     runtime = get_lanchat_scene_runtime()
     runtime.end_compose()
@@ -1127,6 +1518,37 @@ def test_worker_metadata_chat_targets_agent_without_at_or_coordinator_sync():
     print("[OK] worker metadata chat targets agent without @ and skips Coordinator")
 
 
+def test_worker_client_sync_does_not_execute_targeted_agent_chat():
+    coordinator = InteractionCoordinator()
+    engine = FakeEngine([], coordinator_messages=[{
+        "message_id": "client-sync-agent-chat-1",
+        "room_id": "r-client-sync-agent-chat",
+        "sender_id": "host-a",
+        "sender_name": "房主",
+        "sender_type": "host",
+        "message_kind": "chat",
+        "text": "你是谁",
+        "metadata": {
+            "workspace_mode": "solo_single_agent",
+            "draft_action": "chat",
+            "target_scope": "agent",
+            "target_agent_id": "agent-girl",
+            "target_agent_name": "小女孩",
+        },
+    }], session_role="client")
+    worker = LANChatAgentWorker(
+        corona_engine=engine,
+        agent_factory=_agent_factory,
+        interaction_coordinator=coordinator,
+        async_agent_execution=False,
+    )
+
+    assert worker.process_once() is True
+    assert engine.replies == []
+    assert coordinator.active_plan_for_room("r-client-sync-agent-chat") is None
+    print("[OK] client coordinator sync does not execute targeted agent chat locally")
+
+
 def test_worker_metadata_group_chat_triggers_each_agent_without_at():
     coordinator = InteractionCoordinator()
     engine = FakeEngine([], coordinator_messages=[{
@@ -1156,6 +1578,77 @@ def test_worker_metadata_group_chat_triggers_each_agent_without_at():
     assert [item[1] for item in engine.replies[-2:]] == ["小女孩", "商人"]
     assert coordinator.active_plan_for_room("r-metadata-group-chat") is None
     print("[OK] worker metadata group chat triggers each target agent without @")
+
+
+def test_worker_metadata_scene_discussion_feeds_seed_plan_before_confirmation():
+    scheduler = FakeScheduler()
+    coordinator = InteractionCoordinator(scheduler=scheduler)
+    metadata = {
+        "workspace_mode": "solo_single_agent",
+        "draft_action": "chat",
+        "target_scope": "agent",
+        "target_agent_id": "agent-elder",
+        "target_agent_name": "长者",
+    }
+    engine = FakeEngine([], coordinator_messages=[
+        {
+            "message_id": "dark-market-discussion-1",
+            "room_id": "r-dark-market-authority",
+            "sender_id": "host-a",
+            "sender_name": "房主",
+            "sender_type": "host",
+            "message_kind": "chat",
+            "text": "围绕暗黑集市主题讨论一下",
+            "metadata": metadata,
+        },
+        {
+            "message_id": "dark-market-discussion-2",
+            "room_id": "r-dark-market-authority",
+            "sender_id": "host-a",
+            "sender_name": "房主",
+            "sender_type": "host",
+            "message_kind": "chat",
+            "text": "给一个简化方案，我没那么多钱",
+            "metadata": metadata,
+        },
+        {
+            "message_id": "dark-market-discussion-3",
+            "room_id": "r-dark-market-authority",
+            "sender_id": "host-a",
+            "sender_name": "房主",
+            "sender_type": "host",
+            "message_kind": "chat",
+            "text": "还是采用暗黑集市方案吧",
+            "metadata": metadata,
+        },
+        {
+            "message_id": "dark-market-confirm-1",
+            "room_id": "r-dark-market-authority",
+            "sender_id": "host-a",
+            "sender_name": "房主",
+            "sender_type": "host",
+            "message_kind": "chat",
+            "text": "确认生成",
+        },
+    ])
+    worker = LANChatAgentWorker(
+        corona_engine=engine,
+        agent_factory=_agent_factory,
+        interaction_coordinator=coordinator,
+        generation_scheduler=scheduler,
+        async_agent_execution=False,
+    )
+
+    assert worker.process_once() is True
+
+    plan = coordinator.active_plan_for_room("r-dark-market-authority")
+    assert plan is not None
+    assert plan.status == SeedPlanStatus.EXECUTING
+    assert "暗黑集市" in plan.design_brief
+    assert scheduler.submitted
+    assert "暗黑集市" in scheduler.submitted[-1]["prompt"]
+    assert "确认生成" != plan.design_brief
+    print("[OK] metadata scene discussion feeds authoritative SeedPlan before confirmation")
 
 
 def test_worker_metadata_plan_targets_agent_and_returns_plan_reply_without_at():
@@ -1203,6 +1696,44 @@ def test_worker_metadata_plan_targets_agent_and_returns_plan_reply_without_at():
     assert "确认开始" in reply_text
     assert coordinator.active_plan_for_room("r-metadata-plan") is None
     print("[OK] worker metadata plan targets agent and returns plan reply without @")
+
+
+def test_worker_explicit_at_agent_overrides_stale_metadata_owner():
+    coordinator = InteractionCoordinator()
+    engine = FakeEngine([])
+    engine.network_lanchat_agents_snapshot = lambda: [
+        {"agent_id": "agent-bandit", "name": "山贼"},
+        {"agent_id": "agent-merchant", "name": "商人"},
+    ]
+    worker = LANChatAgentWorker(
+        corona_engine=engine,
+        agent_factory=_agent_factory,
+        interaction_coordinator=coordinator,
+        async_agent_execution=False,
+    )
+    handled = worker.sync_chat_message_to_coordinator({
+        "message_id": "explicit-merchant-over-stale-bandit",
+        "room_id": "r-agent-owner",
+        "sender_id": "host-a",
+        "sender_name": "房主",
+        "sender_type": "host",
+        "message_kind": "chat",
+        "text": "@商人 在山贼方案基础上，给出一个藏宝室设计",
+        "metadata": {
+            "draft_action": "generate",
+            "target_scope": "agent",
+            "target_agent_id": "agent-bandit",
+            "target_agent_name": "山贼",
+        },
+    })
+
+    plan = coordinator.active_plan_for_room("r-agent-owner")
+    assert handled is True
+    assert plan is not None
+    assert plan.review_policy["owner_agent_id"] == "agent-merchant"
+    assert plan.review_policy["owner_agent_name"] == "商人"
+    assert "山贼" in plan.review_policy["source_context_agents"]
+    print("[OK] explicit @ agent overrides stale metadata owner before Coordinator ingest")
 
 
 def test_worker_metadata_supplement_selects_plan_when_multiple_pending():
@@ -1578,10 +2109,158 @@ def test_worker_routes_completed_layout_adjustment_to_coordinator_without_model_
     pending = coordinator.pending_interventions(plan.plan_id)
     assert not executor.payloads
     assert engine.replies
-    assert "最终调整" in engine.replies[-1][2]
+    assert "布局调整建议" in engine.replies[-1][2]
     assert pending[-1].apply_policy == "final_adjustment"
-    assert any(item.event_type == "final_adjustment_routed" for item in coordinator.events[before_events:])
-    print("[OK] worker routes completed layout adjustment to Coordinator without model agent")
+    assert any(item.event_type == "layout_reflow_proposal_created" for item in coordinator.events[before_events:])
+    print("[OK] worker routes completed layout adjustment to layout proposal without model agent")
+
+
+def test_worker_confirms_completed_layout_reflow_and_moves_ordinary_actors():
+    executor = FakeHostActionExecutor()
+    coordinator = InteractionCoordinator()
+    coordinator.ingest_message(ChatMessage(
+        room_id="room-layout-confirm",
+        sender_id="host-a",
+        sender_name="房主",
+        text="做一个藏宝室",
+        is_host=True,
+    ))
+    plan = coordinator.propose_seed_plan("room-layout-confirm")
+    coordinator.confirm_seed_plan(plan.plan_id, "host-a")
+    plan.status = SeedPlanStatus.COMPLETED
+    room_box = FakeSceneActor("__room_box", position=[0.0, 1.5, 0.0], scale=[6.5, 3.0, 6.5])
+    chest = FakeSceneActor("藏宝箱", position=[0.0, 0.0, 0.0])
+    table = FakeSceneActor("木桌", position=[0.1, 0.0, 0.0])
+    statue = FakeSceneActor("天使雕像", position=[0.2, 0.0, 0.0])
+
+    def forbidden_agent_factory():
+        def _agent(persona, messages):
+            raise AssertionError("layout reflow confirmation should not call role model agent")
+        return _agent
+
+    engine = FakeEngine([
+        {
+            **_trigger("@商人 调整一下布局，我看模型位置冲突", "商人"),
+            "room_id": "room-layout-confirm",
+            "sender_id": "host-a",
+            "sender_name": "房主",
+            "sender_type": "host",
+            "is_host": True,
+            "agent_id": "merchant",
+            "agent_name": "商人",
+        },
+        {
+            **_trigger("确认调整", "商人"),
+            "room_id": "room-layout-confirm",
+            "sender_id": "host-a",
+            "sender_name": "房主",
+            "sender_type": "host",
+            "is_host": True,
+            "agent_id": "merchant",
+            "agent_name": "商人",
+        },
+    ])
+    engine.get_scene_actors = lambda: [room_box, chest, table, statue]
+    worker = LANChatAgentWorker(
+        corona_engine=engine,
+        agent_factory=forbidden_agent_factory,
+        host_action_executor=executor,
+        interaction_coordinator=coordinator,
+        async_agent_execution=False,
+    )
+    assert worker.process_once() is True
+    assert worker.process_once() is True
+
+    assert not executor.payloads
+    assert room_box.get_position() == [0.0, 1.5, 0.0]
+    assert chest.get_position() != [0.0, 0.0, 0.0]
+    assert table.get_position() != [0.1, 0.0, 0.0]
+    assert statue.get_position() != [0.2, 0.0, 0.0]
+    assert "布局调整完成" in engine.replies[-1][2]
+    print("[OK] worker confirms completed layout reflow and moves ordinary actors")
+
+
+def test_worker_layout_reflow_grounds_floating_actor_and_allows_repeat_adjustment():
+    coordinator = InteractionCoordinator()
+    coordinator.ingest_message(ChatMessage(
+        room_id="room-layout-ground",
+        sender_id="host-a",
+        sender_name="房主",
+        text="做一个藏宝室",
+        is_host=True,
+    ))
+    plan = coordinator.propose_seed_plan("room-layout-ground")
+    coordinator.confirm_seed_plan(plan.plan_id, "host-a")
+    plan.status = SeedPlanStatus.COMPLETED
+    room_box = FakeSceneActor("__room_box", position=[0.0, 1.5, 0.0], scale=[6.5, 3.0, 6.5])
+    floating = FakeSceneActor(
+        "藏宝箱",
+        position=[0.0, 2.0, 0.0],
+        aabb=[-0.4, 1.5, -0.4, 0.4, 2.5, 0.4],
+    )
+    table = FakeSceneActor("木桌", position=[0.2, 0.0, 0.0])
+    wall_torch = FakeSceneActor(
+        "火把",
+        position=[0.0, 1.8, 0.0],
+        aabb=[-0.1, 1.2, -0.1, 0.1, 2.0, 0.1],
+    )
+
+    def forbidden_agent_factory():
+        def _agent(persona, messages):
+            raise AssertionError("layout grounding should not call role model agent")
+        return _agent
+
+    engine = FakeEngine([
+        {
+            **_trigger("@商人 浮空了，调整一下布局", "商人"),
+            "room_id": "room-layout-ground",
+            "sender_id": "host-a",
+            "sender_name": "房主",
+            "sender_type": "host",
+            "is_host": True,
+            "agent_id": "merchant",
+            "agent_name": "商人",
+        },
+        {
+            **_trigger("确认调整", "商人"),
+            "room_id": "room-layout-ground",
+            "sender_id": "host-a",
+            "sender_name": "房主",
+            "sender_type": "host",
+            "is_host": True,
+            "agent_id": "merchant",
+            "agent_name": "商人",
+        },
+        {
+            **_trigger("@商人 还是没贴地，再调整一下布局", "商人"),
+            "room_id": "room-layout-ground",
+            "sender_id": "host-a",
+            "sender_name": "房主",
+            "sender_type": "host",
+            "is_host": True,
+            "agent_id": "merchant",
+            "agent_name": "商人",
+        },
+    ])
+    engine.get_scene_actors = lambda: [room_box, floating, table, wall_torch]
+    worker = LANChatAgentWorker(
+        corona_engine=engine,
+        agent_factory=forbidden_agent_factory,
+        host_action_executor=FakeHostActionExecutor(),
+        interaction_coordinator=coordinator,
+        async_agent_execution=False,
+    )
+
+    assert worker.process_once() is True
+    assert worker.process_once() is True
+    assert floating.get_position()[1] == 0.5
+    assert wall_torch.get_position()[1] == 1.8
+    assert room_box.get_position() == [0.0, 1.5, 0.0]
+    assert "布局调整完成" in engine.replies[-1][2]
+    assert "已贴地修正地面物体" in engine.replies[-1][2]
+    assert worker.process_once() is True
+    assert "布局调整建议" in engine.replies[-1][2]
+    print("[OK] worker layout reflow grounds floating actor and allows repeat adjustment")
 
 
 def test_worker_executes_completed_boundary_adjustment_without_model_agent():
@@ -1634,6 +2313,83 @@ def test_worker_executes_completed_boundary_adjustment_without_model_agent():
     assert pending[-1].target_hint == "__terrain_boundary"
     assert pending[-1].apply_policy == "final_adjustment"
     print("[OK] completed terrain boundary adjustment executes deterministic low-risk path")
+
+
+def test_worker_applies_completed_vlm_review_advice_from_metadata_chat():
+    executor = FakeHostActionExecutor()
+    coordinator = InteractionCoordinator()
+    coordinator.ingest_message(ChatMessage(
+        room_id="room-vlm-apply",
+        sender_id="host-a",
+        sender_name="房主",
+        text="做一个奶油风卧室",
+        is_host=True,
+    ))
+    plan = coordinator.propose_seed_plan("room-vlm-apply")
+    coordinator.confirm_seed_plan(plan.plan_id, "host-a")
+    plan.status = SeedPlanStatus.COMPLETED
+    coordinator._active_generation_session_by_plan[plan.plan_id] = "session-vlm-apply"
+    coordinator.ingest_review_result(ReviewResult(
+        room_id="room-vlm-apply",
+        plan_id=plan.plan_id,
+        session_id="session-vlm-apply",
+        batch_id="batch-final",
+        review_type="vlm",
+        passed=False,
+        findings=["地毯偏大，建议缩小一点"],
+        finding_details=[{
+            "actor_id": "地毯",
+            "fix_suggestion": "地毯偏大，缩小一点",
+            "confidence": 0.42,
+        }],
+        severity="warn",
+    ))
+    rug = FakeSceneActor("地毯", scale=[1.0, 1.0, 1.0])
+
+    def forbidden_agent_factory():
+        def _agent(persona, messages):
+            raise AssertionError("applying completed VLM advice should not call role model agent")
+        return _agent
+
+    metadata = {
+        "draft_action": "chat",
+        "target_scope": "agent",
+        "target_agent_id": "girl",
+        "target_agent_name": "小女孩",
+    }
+    engine = FakeEngine(
+        [],
+        coordinator_messages=[{
+            "message_id": "m-vlm-apply",
+            "room_id": "room-vlm-apply",
+            "sender_id": "host-a",
+            "sender_name": "房主",
+            "sender_type": "host",
+            "is_host": True,
+            "agent_id": "girl",
+            "agent_name": "小女孩",
+            "target_agent_id": "girl",
+            "target_agent_name": "小女孩",
+            "text": "帮我按审查结果摆放物体",
+            "metadata_json": json.dumps(metadata, ensure_ascii=False),
+        }],
+    )
+    engine.get_scene_actors = lambda: [rug]
+    worker = LANChatAgentWorker(
+        corona_engine=engine,
+        agent_factory=forbidden_agent_factory,
+        host_action_executor=executor,
+        interaction_coordinator=coordinator,
+        async_agent_execution=False,
+    )
+    assert worker.process_once() is True
+
+    assert not executor.payloads
+    assert rug.get_scale()[0] < 1.0
+    assert engine.replies
+    assert "已执行低风险最终调整" in engine.replies[-1][2]
+    assert "地毯" in engine.replies[-1][2]
+    print("[OK] completed metadata chat can apply recent VLM review advice")
 
 
 def test_worker_acknowledges_conflict_resolution_rejection_without_host_execution():
@@ -2836,6 +3592,53 @@ def test_worker_plain_chat_dedupe_cache_is_bounded():
     print("[OK] worker plain chat Coordinator dedupe cache is bounded")
 
 
+def test_worker_targeted_agent_message_replies_once_across_sync_and_trigger():
+    metadata = {
+        "draft_action": "chat",
+        "target_scope": "agent",
+        "target_agent_id": "agent-b",
+        "target_agent_name": "小B",
+    }
+    message = {
+        "message_id": "targeted-agent-1",
+        "room_id": "r-targeted",
+        "sender_id": "user-a",
+        "sender_name": "用户A",
+        "sender_type": "user",
+        "message_kind": "chat",
+        "target_agent_id": "agent-b",
+        "correlation_id": "corr-targeted-1",
+        "text": "@小B 你好",
+        "metadata_json": json.dumps(metadata, ensure_ascii=False),
+    }
+    trigger = {
+        **message,
+        "trigger_id": "targeted-agent-1:agent-b",
+        "agent_id": "agent-b",
+        "agent_name": "小B",
+        "persona": "山贼",
+        "history": [message],
+    }
+    engine = FakeEngine(
+        [dict(trigger), dict(trigger)],
+        coordinator_messages=[dict(message)],
+    )
+    worker = LANChatAgentWorker(
+        corona_engine=engine,
+        agent_factory=_agent_factory,
+        interaction_coordinator=InteractionCoordinator(scheduler=FakeScheduler()),
+        generation_scheduler=FakeScheduler(),
+        async_agent_execution=False,
+    )
+
+    assert worker.process_once() is True
+    assert len(engine.replies) == 1
+    assert engine.replies[0][0] == "agent-b"
+    assert worker.process_once() is False
+    assert len(engine.replies) == 1
+    print("[OK] targeted agent chat replies once across Coordinator sync and native trigger")
+
+
 def test_worker_syncs_plain_chat_metadata_actor_target_to_coordinator():
     scheduler = FakeScheduler()
     coordinator = InteractionCoordinator(scheduler=scheduler)
@@ -3609,6 +4412,7 @@ if __name__ == "__main__":
     test_gm_proposal_for_conflict()
     test_gm_generation_proposal_explains_plan_and_confirmation_effect()
     test_gm_summary_does_not_create_proposal()
+    test_gm_summary_reads_agent_design_context_without_affecting_normal_summary()
     test_role_agent_not_hijacked_by_prior_agent_or_gm_messages()
     test_role_agent_theme_discussion_not_hijacked_by_gm()
     test_role_agent_advice_request_not_hijacked_by_gm()
@@ -3616,6 +4420,7 @@ if __name__ == "__main__":
     test_agent_plan_reference_resolves_real_runtime_phrase()
     test_agent_plan_reference_resolves_legacy_history_without_v2_fields()
     test_agent_plan_reference_does_not_cross_agents()
+    test_role_agent_opinion_about_named_agent_plan_receives_that_plan_context()
     test_resolved_plan_generic_inventory_guard()
     test_agent_plan_reference_after_stale_marker_is_rejected()
     test_gm_pause_and_discussion_controls_do_not_reject_pending_proposal()
@@ -3637,12 +4442,18 @@ if __name__ == "__main__":
     test_planning_confirmation_gate_roundtrip()
     test_planning_confirmation_gate_returns_concrete_design_brief()
     test_worker_routes_plain_chat_supplement_to_pending_planning_gate()
+    test_plain_chat_generation_start_confirms_and_executes_active_seed_plan()
+    test_worker_agent_trigger_generation_start_consumes_pending_runtime_plan()
+    test_worker_metadata_generate_consumes_pending_runtime_plan()
+    test_worker_agent_trigger_plan_elaboration_uses_pending_runtime_plan_without_generation()
     test_worker_disambiguates_plain_chat_supplement_when_multiple_plans_pending()
     test_runtime_routes_metadata_targeted_pending_plan_without_mention()
     test_runtime_metadata_generate_confirms_pending_plan_without_magic_text()
     test_worker_metadata_chat_targets_agent_without_at_or_coordinator_sync()
     test_worker_metadata_group_chat_triggers_each_agent_without_at()
+    test_worker_metadata_scene_discussion_feeds_seed_plan_before_confirmation()
     test_worker_metadata_plan_targets_agent_and_returns_plan_reply_without_at()
+    test_worker_explicit_at_agent_overrides_stale_metadata_owner()
     test_worker_metadata_supplement_selects_plan_when_multiple_pending()
     test_planning_gate_records_pre_generation_style_supplement()
     test_worker_async_agent_calls_are_serialized_per_worker()
@@ -3652,7 +4463,10 @@ if __name__ == "__main__":
     test_worker_does_not_crash_when_coordinator_blocks_start_generation()
     test_worker_applies_host_vlm_generation_option_from_metadata()
     test_worker_routes_completed_layout_adjustment_to_coordinator_without_model_agent()
+    test_worker_confirms_completed_layout_reflow_and_moves_ordinary_actors()
+    test_worker_layout_reflow_grounds_floating_actor_and_allows_repeat_adjustment()
     test_worker_executes_completed_boundary_adjustment_without_model_agent()
+    test_worker_applies_completed_vlm_review_advice_from_metadata_chat()
     test_worker_acknowledges_conflict_resolution_rejection_without_host_execution()
     test_worker_rejects_coordinator_confirmation_without_sender_identity()
     test_worker_rejects_coordinator_confirmation_from_non_host_role()
@@ -3679,6 +4493,7 @@ if __name__ == "__main__":
     test_worker_syncs_direct_plain_chat_as_runtime_intervention()
     test_worker_syncs_plain_chat_without_message_id_once()
     test_worker_plain_chat_dedupe_cache_is_bounded()
+    test_worker_targeted_agent_message_replies_once_across_sync_and_trigger()
     test_worker_syncs_plain_chat_metadata_actor_target_to_coordinator()
     test_worker_polls_native_plain_chat_queue_into_coordinator()
     test_worker_polls_native_host_chat_as_host_message()

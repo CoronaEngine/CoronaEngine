@@ -1,18 +1,19 @@
 ﻿#pragma once
 
-#include <Horizon.h>
+#include "horizon.h"
 #include <corona/events/display_system_events.h>
 #include <corona/kernel/event/i_event_bus.h>
 #include <corona/kernel/event/i_event_stream.h>
 #include <corona/kernel/system/system_base.h>
 #include <corona/shader_include.h>
 // clang-format off
-#include GLSL(../../../../assets/shaders/composite.comp.glsl)
+#include GLSL(../../../assets/shaders/composite.comp.glsl)
 // clang-format on
 
 #include <cstdint>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -55,6 +56,10 @@ class DisplaySystem : public Kernel::SystemBase {
         uint64_t frame_index = 0;
         uint32_t width = 0;
         uint32_t height = 0;
+        uint32_t viewport_x = 0;
+        uint32_t viewport_y = 0;
+        uint32_t viewport_width = 0;
+        uint32_t viewport_height = 0;
     };
 
     struct SurfaceState {
@@ -63,19 +68,20 @@ class DisplaySystem : public Kernel::SystemBase {
     };
 
     struct CompositeResources {
-        HardwareExecutor executor;
-        HardwareImage output;
+        Horizon::HardwareExecutor executor;
+        Horizon::HardwareImage output;
         uint32_t width = 0;
         uint32_t height = 0;
     };
 
-    bool compose_and_present(HardwareDisplayer& displayer,
+    bool compose_and_present(Horizon::HardwareDisplayer& displayer,
+                             void* surface,
                              SurfaceState& state,
                              CompositeResources& resources,
-                             HardwareImage& optics_image,
-                             HardwareExecutor* optics_executor,
-                             HardwareImage& ui_image,
-                             HardwareExecutor* ui_executor);
+                             Horizon::HardwareImage& optics_image,
+                             const Horizon::SubmitReceipt* optics_receipt,
+                             Horizon::HardwareImage& ui_image,
+                             const Horizon::SubmitReceipt* ui_receipt);
     bool ensure_composite_resources(CompositeResources& resources,
                                     uint32_t width,
                                     uint32_t height);
@@ -89,7 +95,8 @@ class DisplaySystem : public Kernel::SystemBase {
     // from EventBus handlers (Optics thread, main thread) and update() (Display thread)
     std::mutex frame_mutex_;
 
-    std::unordered_map<uint64_t, HardwareDisplayer> displayers_;
+    std::unordered_map<uint64_t, Horizon::HardwareDisplayer> displayers_;
+    std::unordered_map<uint64_t, void*> surfaces_;
     std::unordered_map<uint64_t, SurfaceState> surface_states_;
     std::unordered_map<uint64_t, CompositeResources> composite_resources_;
     std::unordered_set<uint64_t> removed_surfaces_;
@@ -107,10 +114,8 @@ class DisplaySystem : public Kernel::SystemBase {
     std::vector<PendingRemoval> pending_removals_;
 
     // Compositing resources
-    ComputePipeline<composite_comp_glsl> composite_pipeline_;
-    HardwareExecutor transparent_executor_;
-    HardwareImage transparent_storage_;  ///< 1x1 transparent StorageImage fallback (missing Optics bg)
-    HardwareImage transparent_sampled_;  ///< 1x1 transparent SampledImage fallback (missing UI fg)
+    std::optional<Horizon::ComputePipeline<composite_comp_glsl_t>> composite_pipeline_;
+    Horizon::HardwareImage transparent_storage_;  ///< 1x1 transparent StorageImage fallback for missing layers
     bool composite_pipeline_ready_ = false;
 };
 }  // namespace Corona::Systems

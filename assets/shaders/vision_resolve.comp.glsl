@@ -11,18 +11,20 @@
 // The source is Vision's accumulation_buffer_/rt_buffer_ (the input to
 // FrameBuffer::tone_mapping_), NOT view_texture_: that final-color texture is a
 // cuArray whose memory cannot be exported. So we tone map here instead, and this
-// MUST match Vision exactly or Vision<->Native switching shifts color. Vision
-// (FrameBuffer::compile_tone_mapping + apply_exposure) does:
-//     exposed = 1 - exp(-color * exposure)   // NOT the engine's linear c*E
+// MUST match the Native tonemap (tonemap.comp) exactly or Vision<->Native
+// switching shifts color. Both do:
+//     exposed = Vision exposure curve (1 - exp(-color * E))  // NOT engine c*E
 //     ldr     = ACES(exposed)
-// and for headless (no window) does NOT apply sRGB gamma, so we stop at ACES.
+//     out     = linearToSrgb(ldr)   // sRGB encode for the UNORM swapchain
+// The swapchain is R8G8B8A8_UNORM (SRGB_NONLINEAR colorspace) and the present
+// blit does NOT auto-encode, so the sRGB OETF must be applied here in-shader.
 
 layout (local_size_x = 8, local_size_y = 8) in;
 
 // Bindless SSBO pool (matches lighting.comp.glsl set=1 layout).
 layout (set = 1, binding = 0) readonly buffer SSBOPool { uint data[]; } ssbos[];
 // Bindless storage-image pool (matches tonemap.comp.glsl set=2 rgba16 layout).
-layout (set = 2, binding = 0, rgba16) uniform image2D imagesRGBA16[];
+layout (set = 2, binding = 0, rgba16f) uniform image2D imagesRGBA16[];
 
 layout(push_constant) uniform PushConsts
 {
@@ -42,6 +44,15 @@ vec3 acesFilmicToneMapCurve(vec3 x)
     return clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);
 }
 
+// 标准 sRGB OETF，必须与 Native tonemap.comp 的 linearToSrgb 完全一致。
+vec3 linearToSrgb(vec3 c)
+{
+    c = clamp(c, 0.0, 1.0);
+    return mix(c * 12.92,
+               1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055,
+               step(0.0031308, c));
+}
+
 void main()
 {
     if (gl_GlobalInvocationID.x >= pushConsts.gbufferSize.x ||
@@ -59,9 +70,9 @@ void main()
         uintBitsToFloat(ssbos[srcIdx].data[base + 1u]),
         uintBitsToFloat(ssbos[srcIdx].data[base + 2u]));
 
-    // Vision exposure curve, then ACES (no sRGB for headless path).
+    // Vision exposure curve, then ACES, then sRGB encode (matches Native tonemap).
     vec3 exposed = vec3(1.0) - exp(-hdr * pushConsts.exposure);
-    vec3 ldr = acesFilmicToneMapCurve(exposed);
+    vec3 ldr = linearToSrgb(acesFilmicToneMapCurve(exposed));
 
     imageStore(imagesRGBA16[nonuniformEXT(pushConsts.outputImage)], pixel, vec4(ldr, 1.0));
 }

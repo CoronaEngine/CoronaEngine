@@ -47,4 +47,18 @@ export const defineAppearanceGenerators = () => {
   pythonGenerator.forBlock['appearance_size'] = function () {
     return ['CoronaEngine.size()', pythonGenerator.ORDER_ATOMIC];
   };
+
+  // ── 外观扩展生成器 ──
+
+  pythonGenerator.forBlock['appearance_set_color'] = function (block) {
+    const r = block.getFieldValue('R');
+    const g = block.getFieldValue('G');
+    const b = block.getFieldValue('B');
+    return `CoronaEngine.set_color(${r}, ${g}, ${b})\n`;
+  };
+
+  pythonGenerator.forBlock['appearance_set_alpha'] = function (block) {
+    const alpha = block.getFieldValue('ALPHA');
+    return `CoronaEngine.set_alpha(${alpha})\n`;
+  };
 };

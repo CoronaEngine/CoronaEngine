@@ -19,6 +19,7 @@ from .test_cases import get_test_case
 logger = logging.getLogger(__name__)
 
 _IMAGE_RETRY_HEARTBEAT_SECONDS = 60.0
+_TEXT_TO_3D_HINTS = {"text_to_3d_preferred", "programmatic_boundary_preferred"}
 
 
 def _lookup_cached_model(item_name: str) -> str:
@@ -49,6 +50,22 @@ def _image_retry_max_workers(count: int) -> int:
     except ValueError:
         configured = 3
     return max(1, min(max(1, count), configured))
+
+
+def _generation_mode_hint(elem: Dict[str, Any]) -> str:
+    return str(elem.get("generation_mode_hint") or elem.get("resource_mode_hint") or "").strip()
+
+
+def _text_to_3d_task(elem: Dict[str, Any], object_id: str) -> Dict[str, Any]:
+    name = str(elem.get("item_name") or elem.get("name") or "").strip()
+    prompt_text = str(elem.get("image_prompt") or name).strip()
+    return {
+        "item_name": name,
+        "object_id": object_id,
+        "image_url": f"__text_to_3d__:{prompt_text}",
+        "image_prompt": prompt_text,
+        "generation_mode_hint": _generation_mode_hint(elem),
+    }
 
 
 def _is_image_retry_fatal_error(exc: Exception) -> bool:
@@ -219,6 +236,7 @@ def dispatch_node(state: ModelRetrievalWorkflowState) -> Dict[str, Any]:
     for idx, elem in enumerate(approved, start=1):
         name = elem.get("item_name", "")
         object_id = normalize_object_id(name, idx)
+        mode_hint = _generation_mode_hint(elem)
 
         cached_model = _lookup_cached_model(name)
         if cached_model:
@@ -229,6 +247,7 @@ def dispatch_node(state: ModelRetrievalWorkflowState) -> Dict[str, Any]:
                     "object_id": object_id,
                     "image_url": cached_image or f"__local_model__:{name}",
                     "image_prompt": elem.get("image_prompt", ""),
+                    "generation_mode_hint": mode_hint,
                     "local_model_cached": True,
                     "model_path": cached_model,
                 }
@@ -237,6 +256,15 @@ def dispatch_node(state: ModelRetrievalWorkflowState) -> Dict[str, Any]:
                 "[Workflow][dispatch] %s 命中本地模型库，跳过图片补偿: %s",
                 name,
                 cached_model,
+            )
+            continue
+
+        if mode_hint in _TEXT_TO_3D_HINTS:
+            tasks.append(_text_to_3d_task(elem, object_id))
+            logger.info(
+                "[Workflow][dispatch] %s 命中资源路由 guardrail=%s，跳过图生3D图片补偿，改用文字直生/程序化候选",
+                name,
+                mode_hint,
             )
             continue
 
@@ -250,6 +278,7 @@ def dispatch_node(state: ModelRetrievalWorkflowState) -> Dict[str, Any]:
                 "object_id": object_id,
                 "image_url": image_url,
                 "image_prompt": elem.get("image_prompt", ""),
+                "generation_mode_hint": mode_hint,
             }
         )
 
@@ -299,6 +328,7 @@ def dispatch_node(state: ModelRetrievalWorkflowState) -> Dict[str, Any]:
                         "object_id": object_id,
                         "image_url": image_url,
                         "image_prompt": elem.get("image_prompt", ""),
+                        "generation_mode_hint": _generation_mode_hint(elem),
                     }
                 )
             else:
@@ -306,15 +336,7 @@ def dispatch_node(state: ModelRetrievalWorkflowState) -> Dict[str, Any]:
                 # 文字/图片二选一）。图片只是可选输入适配层，失败不该让整条链断。
                 # image_url 用 __text_to_3d__: 前缀，generate_single_item 据此切文本模式；
                 # retrieve_single_item 见此前缀会跳过图搜、直接转生成。
-                prompt_text = (elem.get("image_prompt", "") or name).strip()
-                tasks.append(
-                    {
-                        "item_name": name,
-                        "object_id": object_id,
-                        "image_url": f"__text_to_3d__:{prompt_text}",
-                        "image_prompt": prompt_text,
-                    }
-                )
+                tasks.append(_text_to_3d_task(elem, object_id))
                 logger.info(
                     "[Workflow][dispatch] %s 文生图失败，降级为文字直生 3D（text_to_3d）",
                     name,

@@ -84,7 +84,8 @@ public:
             Triangle tri{vert_end, vert_end - idx2, vert_end - idx1};
             mesh.triangles().push_back(tri);
         }
-        add_instance(ShapeInstance(std::move(mesh)));
+        ShapeInstance instance{std::move(mesh)};
+        add_instance(std::move(instance));
     }
 };
 

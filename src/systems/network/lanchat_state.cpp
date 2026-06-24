@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <initializer_list>
 
 namespace Corona::Network {
 namespace {
@@ -52,10 +53,74 @@ bool mentions_agent(const std::string& text, const std::string& agent_name) {
     return false;
 }
 
+bool nickname_is_used_by_other_member(const std::vector<LanChatMember>& members,
+                                      const std::string& member_id,
+                                      const std::string& nickname) {
+    return std::any_of(members.begin(), members.end(), [&](const auto& member) {
+        return member.member_id != member_id && member.nickname == nickname;
+    });
+}
+
+std::string unique_member_nickname(const std::vector<LanChatMember>& members,
+                                   const std::string& member_id,
+                                   const std::string& requested_nickname) {
+    const std::string base = requested_nickname.empty() ? "Guest" : requested_nickname;
+    if (!nickname_is_used_by_other_member(members, member_id, base)) {
+        return base;
+    }
+
+    for (uint32_t suffix = 1; suffix < 10000; ++suffix) {
+        const std::string candidate = base + "_" + std::to_string(suffix);
+        if (!nickname_is_used_by_other_member(members, member_id, candidate)) {
+            return candidate;
+        }
+    }
+    return base + "_" + std::to_string(members.size());
+}
+
 bool is_gm_target(const LanChatMessage& message) {
     return message.target_agent_id == "gm" ||
            message.target_agent_id == "GM" ||
            mentions_agent(message.text, "GM");
+}
+
+bool contains_any(const std::string& text, std::initializer_list<const char*> needles) {
+    for (const char* needle : needles) {
+        if (needle != nullptr && text.find(needle) != std::string::npos) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool is_generation_start_for_coordinator(const LanChatMessage& message) {
+    const std::string message_kind = message.message_kind.empty() ? "chat" : message.message_kind;
+    const std::string sender_type = message.sender_type.empty() ? "user" : message.sender_type;
+    if (message_kind != "chat" || (sender_type != "user" && sender_type != "host")) {
+        return false;
+    }
+    if (contains_any(message.metadata_json, {
+            "\"draft_action\":\"generate\"",
+            "\"draft_action\": \"generate\"",
+            "\"action_type\":\"start_generation\"",
+            "\"action_type\": \"start_generation\"",
+        })) {
+        return true;
+    }
+    return contains_any(message.text, {
+        "确认开始",
+        "直接生成",
+        "开始生成",
+        "开始执行",
+        "执行生成",
+        "按照方案执行生成",
+        "按方案执行生成",
+        "就按方案生成",
+        "按这个方案生成",
+        "按照方案生成",
+        "开始搭建",
+        "开始布置",
+    });
 }
 
 void enqueue_virtual_gm_trigger(LanChatState& state,
@@ -132,11 +197,12 @@ LanChatResult LanChatState::join_member(const std::string& member_id,
         return {false, "member_id is required"};
     }
 
+    const std::string final_nickname = unique_member_nickname(members_, member_id, nickname);
     auto it = find_member(member_id);
     if (it == members_.end()) {
-        members_.push_back({member_id, nickname, "online", now_ms});
+        members_.push_back({member_id, final_nickname, "online", now_ms});
     } else {
-        it->nickname = nickname;
+        it->nickname = final_nickname;
         it->status = "online";
         it->last_seen_ms = now_ms;
     }
@@ -276,7 +342,9 @@ LanChatResult LanChatState::register_agent(const std::string& agent_id,
 
 void LanChatState::enqueue_agent_triggers_for_message(const LanChatMessage& message,
                                                       const std::string& local_peer_id,
-                                                      bool is_agent_reply) {
+                                                      bool is_agent_reply,
+                                                      bool allow_agent_execution,
+                                                      bool allow_generation_start) {
     if (is_agent_reply || message.message_id.empty() || local_peer_id.empty()) {
         return;
     }
@@ -287,6 +355,12 @@ void LanChatState::enqueue_agent_triggers_for_message(const LanChatMessage& mess
     if (!message.sender_type.empty() &&
         message.sender_type != "user" &&
         message.sender_type != "host") {
+        return;
+    }
+    if (!allow_agent_execution) {
+        return;
+    }
+    if (!allow_generation_start && is_generation_start_for_coordinator(message)) {
         return;
     }
 
@@ -305,23 +379,7 @@ void LanChatState::enqueue_agent_triggers_for_message(const LanChatMessage& mess
         local_agents.push_back(&agent);
     }
 
-    bool mentioned_any_local_agent = false;
-    for (const auto* agent : local_agents) {
-        if (mentions_agent(message.text, agent->name)) {
-            mentioned_any_local_agent = true;
-            break;
-        }
-    }
-
-    for (const auto* agent_ptr : local_agents) {
-        const auto& agent = *agent_ptr;
-        const bool mentioned = mentions_agent(message.text, agent.name);
-        const bool implicit_single_agent =
-            !mentioned_any_local_agent && local_agents.size() == 1;
-        if (!mentioned && !implicit_single_agent) {
-            continue;
-        }
-
+    auto enqueue_local_agent = [&](const LanChatAgent& agent) {
         LanChatAgentTrigger trigger;
         trigger.trigger_id = message.message_id + ":" + agent.agent_id;
         trigger.message_id = message.message_id;
@@ -347,9 +405,40 @@ void LanChatState::enqueue_agent_triggers_for_message(const LanChatMessage& mess
 
         std::lock_guard<std::mutex> lock(agent_trigger_mutex_);
         if (!triggered_agent_keys_.insert(trigger.trigger_id).second) {
-            continue;
+            return;
         }
         pending_agent_triggers_.push_back(std::move(trigger));
+    };
+
+    if (!message.target_agent_id.empty()) {
+        for (const auto* agent : local_agents) {
+            if (agent->agent_id == message.target_agent_id ||
+                agent->name == message.target_agent_id) {
+                enqueue_local_agent(*agent);
+                return;
+            }
+        }
+        return;
+    }
+
+    bool mentioned_any_local_agent = false;
+    for (const auto* agent : local_agents) {
+        if (mentions_agent(message.text, agent->name)) {
+            mentioned_any_local_agent = true;
+            break;
+        }
+    }
+
+    for (const auto* agent_ptr : local_agents) {
+        const auto& agent = *agent_ptr;
+        const bool mentioned = mentions_agent(message.text, agent.name);
+        const bool implicit_single_agent =
+            !mentioned_any_local_agent && local_agents.size() == 1;
+        if (!mentioned && !implicit_single_agent) {
+            continue;
+        }
+
+        enqueue_local_agent(agent);
     }
 }
 
@@ -363,14 +452,18 @@ std::optional<LanChatAgentTrigger> LanChatState::pop_agent_trigger() {
     return trigger;
 }
 
-std::optional<LanChatMessage> LanChatState::pop_coordinator_sync_message() {
+std::optional<LanChatMessage> LanChatState::pop_coordinator_sync_message(
+    bool allow_generation_start) {
     std::lock_guard<std::mutex> lock(coordinator_sync_mutex_);
-    if (pending_coordinator_sync_messages_.empty()) {
-        return std::nullopt;
+    while (!pending_coordinator_sync_messages_.empty()) {
+        auto message = std::move(pending_coordinator_sync_messages_.front());
+        pending_coordinator_sync_messages_.pop_front();
+        if (!allow_generation_start && is_generation_start_for_coordinator(message)) {
+            continue;
+        }
+        return message;
     }
-    auto message = std::move(pending_coordinator_sync_messages_.front());
-    pending_coordinator_sync_messages_.pop_front();
-    return message;
+    return std::nullopt;
 }
 
 void LanChatState::enqueue_coordinator_sync_message(const LanChatMessage& message) {

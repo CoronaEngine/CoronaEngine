@@ -12,6 +12,7 @@ logger = logging.getLogger(__name__)
 MODEL = "model"
 SUBSTRATE = "scene_substrate"
 LAYOUT = "layout_structure"
+TEXT_TO_3D_PREFERRED = "text_to_3d_preferred"
 
 
 _SUBSTRATE_TERMS = (
@@ -30,6 +31,14 @@ _CONCRETE_SUFFIXES = (
 _COMPOUND_ASSET_MARKERS = (
     "灯笼", "路灯", "台灯", "吊灯", "小夜灯", "地毯", "地垫", "墙灯", "壁灯", "招牌",
 )
+_THIN_OR_NET_TERMS = (
+    "铁丝网", "铁丝网障碍", "网状", "网格", "栅栏", "围栏", "栏杆", "护栏",
+    "fence", "wire fence", "barbed wire", "railing", "mesh", "net",
+)
+_DECAL_TEXTURE_TERMS = (
+    "壁画", "海报", "背景墙", "窗景", "纹理", "图案", "贴图", "贴花", "标语",
+    "poster", "texture", "decal", "wall art", "mural", "billboard",
+)
 
 
 @dataclass
@@ -40,6 +49,7 @@ class RoutedSceneElement:
     confidence: float
     reason: str = ""
     item: dict[str, Any] | None = None
+    generation_mode_hint: str = ""
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -48,6 +58,7 @@ class RoutedSceneElement:
             "target_pipeline": self.target_pipeline,
             "confidence": self.confidence,
             "reason": self.reason,
+            "generation_mode_hint": self.generation_mode_hint,
         }
 
 
@@ -69,6 +80,23 @@ def _rule_route(name: str) -> RoutedSceneElement:
         return RoutedSceneElement(clean, "empty", SUBSTRATE, 1.0, "empty name")
     if _is_compound_asset(clean):
         return RoutedSceneElement(clean, "asset", MODEL, 0.92, "compound concrete asset")
+    if any(term == clean or term in clean for term in _DECAL_TEXTURE_TERMS):
+        return RoutedSceneElement(
+            clean,
+            "surface_decal",
+            SUBSTRATE,
+            0.96,
+            "surface/decal/texture should not be generated as a 3D model",
+        )
+    if any(term == clean or term in clean for term in _THIN_OR_NET_TERMS):
+        return RoutedSceneElement(
+            clean,
+            "thin_net_asset",
+            MODEL,
+            0.9,
+            "thin/net object is high risk for image-to-3D; prefer text-to-3D or procedural asset",
+            generation_mode_hint=TEXT_TO_3D_PREFERRED,
+        )
     if any(term == clean or term in clean for term in _SUBSTRATE_TERMS):
         return RoutedSceneElement(clean, "environment", SUBSTRATE, 0.98, "scene substrate/environment")
     if any(term == clean or term in clean for term in _LAYOUT_TERMS):
@@ -105,7 +133,9 @@ def _classify_via_llm(prompt_text: str, items: list[dict[str, Any]]) -> list[Rou
         "layout/layout_structure=入口、动线、区域、边界等布局结构。"
         "注意：草原、天空、森林、地面、墙面、天花板不能作为普通物体模型生成；"
         "但台灯、灯笼、地毯、雕像、床、桌椅、摊位等具体物体应归为 asset。"
-        "只输出 JSON 数组，每项包含 name, category, target_pipeline, confidence, reason。"
+        "铁丝网、栅栏、围栏、栏杆等薄片/网状物仍可作为 asset，但必须加 generation_mode_hint=text_to_3d_preferred。"
+        "海报、贴图、壁画、窗景、背景墙等作为 scene_substrate/surface，不作为 3D 模型。"
+        "只输出 JSON 数组，每项包含 name, category, target_pipeline, confidence, reason, generation_mode_hint。"
     )
     payload = {"scene_text": str(prompt_text or "")[:1600], "items": names}
     try:
@@ -137,6 +167,7 @@ def _classify_via_llm(prompt_text: str, items: list[dict[str, Any]]) -> list[Rou
             target_pipeline=pipeline,
             confidence=max(0.0, min(1.0, confidence)),
             reason=str(row.get("reason") or "llm"),
+            generation_mode_hint=str(row.get("generation_mode_hint") or ""),
         ))
     return out
 
@@ -155,6 +186,8 @@ def _merge_llm_with_guardrail(
         route = by_name.get(name) or _rule_route(name)
         guard = _rule_route(name)
         if guard.target_pipeline != MODEL:
+            route = guard
+        elif guard.generation_mode_hint:
             route = guard
         elif route.target_pipeline != MODEL and guard.target_pipeline == MODEL:
             route = guard
@@ -177,6 +210,9 @@ def route_model_items(prompt_text: str, items: list[dict[str, Any]]) -> tuple[li
             continue
         seen.add(name)
         item.setdefault("name", name)
+        if route.generation_mode_hint:
+            item["generation_mode_hint"] = route.generation_mode_hint
+            item["resource_route_reason"] = route.reason
         model_items.append(item)
     return model_items, routed
 
@@ -185,9 +221,12 @@ def summarize_classification(routes: Iterable[RoutedSceneElement]) -> str:
     model_names: list[str] = []
     substrate_names: list[str] = []
     layout_names: list[str] = []
+    guarded_names: list[str] = []
     for route in routes:
         if route.target_pipeline == MODEL:
             model_names.append(route.name)
+            if route.generation_mode_hint == TEXT_TO_3D_PREFERRED:
+                guarded_names.append(route.name)
         elif route.target_pipeline == LAYOUT:
             layout_names.append(route.name)
         else:
@@ -195,6 +234,8 @@ def summarize_classification(routes: Iterable[RoutedSceneElement]) -> str:
     parts: list[str] = []
     if model_names:
         parts.append("准备生成模型：" + "、".join(model_names))
+    if guarded_names:
+        parts.append("高风险薄片/网状对象：" + "、".join(guarded_names) + " 将避免图生3D，优先文字直生或程序化资源")
     if substrate_names:
         parts.append("环境/地形：" + "、".join(substrate_names) + " 将作为场景基底处理，不单独生成模型")
     if layout_names:

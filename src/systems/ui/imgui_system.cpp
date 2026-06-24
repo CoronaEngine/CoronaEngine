@@ -36,6 +36,8 @@ bool ImguiSystem::initialize(Kernel::ISystemContext* ctx) {
     running_ = true;
     active_tab_id_ = -1;
 
+    SDL_ShowWindow(window_);
+
     CFW_LOG_NOTICE("ImguiSystem: Initialized successfully (main thread mode)");
     state_ = Kernel::SystemState::running;
 

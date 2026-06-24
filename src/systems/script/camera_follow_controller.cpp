@@ -44,9 +44,6 @@ void CameraFollowController::set_input_enabled(bool enabled) {
     if (!enabled) {
         rmb_down_ = false;
     }
-    if (previous != enabled) {
-        CFW_LOG_INFO("CameraFollowController: input {}", enabled ? "enabled" : "disabled");
-    }
 }
 
 bool CameraFollowController::is_input_enabled() const {

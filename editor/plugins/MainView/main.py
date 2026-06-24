@@ -69,8 +69,14 @@ class MainView(PluginBase):
             source_path = getattr(scene, "vision_source_path", "") or ""
             import_mode = getattr(scene, "vision_import_mode", "") or ""
             if source_path and import_mode == "external_live":
-                CoronaEditor.CoronaEngine.load_vision_scene(
-                    SceneTools.prepare_external_live_vision_scene(scene) or source_path)
+                # 首次打开（如"打开 Vision 场景为项目"新建的场景）尚无 bindings：
+                # 跑一次完整外部导入，建立代理 actor / 相机 / 绑定并切到 vision 后端。
+                # 之后的启动 bindings 已持久化，走轻量加载即可。
+                if not getattr(scene, "vision_bindings", []):
+                    SceneTools.import_vision_scene_into_current_scene(scene.route, source_path)
+                else:
+                    CoronaEditor.CoronaEngine.load_vision_scene(
+                        SceneTools.prepare_external_live_vision_scene(scene) or source_path)
             elif source_path and import_mode == "external":
                 CoronaEditor.CoronaEngine.load_vision_scene(source_path)
             else:

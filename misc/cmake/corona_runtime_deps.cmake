@@ -22,6 +22,43 @@
 include_guard(GLOBAL)
 
 # ------------------------------------------------------------------------------
+# Function: copy one dependency target's runtime file next to an executable
+# ------------------------------------------------------------------------------
+function(corona_copy_runtime_files source_target target_name)
+    if(NOT WIN32)
+        return()
+    endif()
+
+    if(NOT TARGET ${target_name})
+        message(FATAL_ERROR "corona_copy_runtime_files: target '${target_name}' does not exist")
+    endif()
+
+    if(NOT TARGET ${source_target})
+        message(WARNING "corona_copy_runtime_files: dependency target '${source_target}' does not exist; skipping")
+        return()
+    endif()
+
+    get_target_property(_corona_runtime_target_type ${source_target} TYPE)
+
+    if(_corona_runtime_target_type STREQUAL "STATIC_LIBRARY"
+       OR _corona_runtime_target_type STREQUAL "INTERFACE_LIBRARY"
+       OR _corona_runtime_target_type STREQUAL "OBJECT_LIBRARY"
+       OR _corona_runtime_target_type STREQUAL "UTILITY")
+        return()
+    endif()
+
+    add_custom_command(
+        TARGET ${target_name}
+        POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "$<TARGET_FILE:${source_target}>"
+            "$<TARGET_FILE_DIR:${target_name}>"
+        COMMENT "[Corona:RuntimeDeps] Copy runtime target ${source_target} -> ${target_name}"
+        VERBATIM
+    )
+endfunction()
+
+# ------------------------------------------------------------------------------
 # Function: install runtime dependencies to a target directory
 # ------------------------------------------------------------------------------
 function(corona_install_runtime_deps target_name)
@@ -71,33 +108,17 @@ function(corona_install_runtime_deps target_name)
         )
     endif()
 
-    set(CEF_DEBUG_DIR "${PROJECT_SOURCE_DIR}/third_party/cef/src/Debug")
+    set(CEF_BIN_DIR "${PROJECT_SOURCE_DIR}/third_party/cef/src/$<IF:$<CONFIG:Debug>,Debug,Release>")
     set(CEF_RES_DIR "${PROJECT_SOURCE_DIR}/third_party/cef/src/Resources")
 
-     # Copy Windows runtime files next to the exe (per config)
+    # Copy CEF runtime files next to the exe. Debug uses CEF Debug binaries;
+    # Release, RelWithDebInfo, and MinSizeRel use the Release runtime.
     add_custom_command(TARGET ${target_name} POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${CEF_DEBUG_DIR}/libcef.dll"
-            "${_CORONA_DESTINATION_DIR}/libcef.dll"
+            COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${CEF_BIN_DIR}"
+            "${_CORONA_DESTINATION_DIR}"
 
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${CEF_DEBUG_DIR}/chrome_elf.dll"
-            "${_CORONA_DESTINATION_DIR}/chrome_elf.dll"
-
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${CEF_DEBUG_DIR}/libEGL.dll"
-            "${_CORONA_DESTINATION_DIR}/libEGL.dll"
-
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${CEF_DEBUG_DIR}/libGLESv2.dll"
-            "${_CORONA_DESTINATION_DIR}/libGLESv2.dll"
-
-            # Common CEF runtime file (present in most builds)
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${CEF_DEBUG_DIR}/v8_context_snapshot.bin"
-            "${_CORONA_DESTINATION_DIR}/v8_context_snapshot.bin"
-
-                        # 复制所有资源文件 (locales/, .pak, .dat 等) 到可执行文件目录
+            # 复制所有资源文件 (locales/, .pak, .dat 等) 到可执行文件目录
             # 注意：CEF 默认期望这些文件就在 exe 旁边，而不是在 Resources 子目录中
             COMMAND ${CMAKE_COMMAND} -E copy_directory
             "${CEF_RES_DIR}"

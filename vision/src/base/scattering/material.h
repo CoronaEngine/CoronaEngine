@@ -83,6 +83,12 @@ public:
     void mollify() noexcept;
     void update_frame(ShadingFrame shading_frame) noexcept;
     [[nodiscard]] SampledSpectrum albedo(const Float3 &world_wo) const noexcept;
+    // Diffuse/specular signal split helpers (for denoiser channel separation).
+    // specular_fraction: luminance fraction of the BRDF response (at wi) carried by
+    // glossy/specular lobes, in [0,1]; used to proportionally route direct lighting.
+    // albedo_split: diffuse vs specular hemispherical reflectance, used as demod guides.
+    [[nodiscard]] Float specular_fraction(const Float3 &world_wo, const Float3 &world_wi) const noexcept;
+    void albedo_split(const Float3 &world_wo, SampledSpectrum &diffuse, SampledSpectrum &specular) const noexcept;
     [[nodiscard]] Bool splittable() const noexcept;
     [[nodiscard]] optional<Bool> is_dispersive() const noexcept;
     [[nodiscard]] ScatterEval evaluate(const Float3 &world_wo, const Float3 &world_wi,

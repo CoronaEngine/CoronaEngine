@@ -11,7 +11,7 @@ export const defineVariableBlocks = () => {
       this.setInputsInline(true);
       this.setPreviousStatement(true, null);
       this.setNextStatement(true, null);
-      this.setColour('#FE9900');
+      this.setStyle('variable_blocks');
       this.setHelpUrl('');
     },
   };
@@ -26,7 +26,7 @@ export const defineVariableBlocks = () => {
       this.setInputsInline(true);
       this.setPreviousStatement(true, null);
       this.setNextStatement(true, null);
-      this.setColour('#FE9900');
+      this.setStyle('variable_blocks');
       this.setHelpUrl('');
     },
   };
@@ -39,7 +39,7 @@ export const defineVariableBlocks = () => {
       this.setInputsInline(true);
       this.setPreviousStatement(true, null);
       this.setNextStatement(true, null);
-      this.setColour('#FF5722');
+      this.setStyle('variable_blocks');
       this.setHelpUrl('');
     },
   };
@@ -52,7 +52,7 @@ export const defineVariableBlocks = () => {
       this.setInputsInline(true);
       this.setPreviousStatement(true, null);
       this.setNextStatement(true, null);
-      this.setColour('#FF5722');
+      this.setStyle('variable_blocks');
       this.setHelpUrl('');
     },
   };

@@ -400,6 +400,54 @@ class Actor:
             return value.strip().lower() in ("1", "true", "yes", "on", "ui")
         return bool(value)
 
+    @staticmethod
+    def _coerce_float3(value):
+        if isinstance(value, str):
+            value = [part.strip() for part in value.split(',')]
+        if not isinstance(value, (list, tuple)) or len(value) < 3:
+            return None
+        try:
+            return [float(value[0]), float(value[1]), float(value[2])]
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _obj_native_local_correction(model_path: str):
+        if not model_path:
+            return None
+        path = Path(model_path)
+        if not path.is_absolute():
+            project_root = _active_project_path()
+            if project_root:
+                path = Path(project_root) / path
+        if path.suffix.lower() != ".obj" or not path.is_file():
+            return None
+
+        vertices = []
+        try:
+            with path.open("r", encoding="utf-8", errors="ignore") as file:
+                for line in file:
+                    stripped = line.strip()
+                    if not stripped.startswith("v "):
+                        continue
+                    parts = stripped.split()
+                    if len(parts) < 4:
+                        continue
+                    vertices.append([float(parts[1]), float(parts[2]), float(parts[3])])
+        except (OSError, ValueError) as exc:
+            logging.warning("Failed to parse native Vision correction for %s: %s", path, exc)
+            return None
+
+        if not vertices:
+            return None
+        mins = [min(vertex[i] for vertex in vertices) for i in range(3)]
+        maxs = [max(vertex[i] for vertex in vertices) for i in range(3)]
+        center = [(mins[i] + maxs[i]) * 0.5 for i in range(3)]
+        max_axis = max(maxs[i] - mins[i] for i in range(3))
+        if max_axis <= 1e-8:
+            max_axis = 1.0
+        return [center[0], center[1], -center[2]], max_axis
+
     def _sync_follow_camera_to_engine(self):
         if hasattr(self.engine_obj, 'set_follow_camera'):
             try:
@@ -418,6 +466,7 @@ class Actor:
 
     def set_external_vision_binding(self, binding: Dict[str, Any]):
         self._external_vision_binding = dict(binding or {})
+        self._apply_external_vision_native_correction()
         setter = getattr(self.engine_obj, 'set_external_vision_binding', None)
         if not callable(setter):
             return
@@ -440,8 +489,44 @@ class Actor:
             logging.warning("Failed to sync external Vision binding for actor %s: %s",
                             self.name or self.route, exc)
 
+    def _apply_external_vision_native_correction(self):
+        if not hasattr(self, '_geometry') or self._geometry is None:
+            return
+        setter = getattr(self._geometry, 'set_native_local_correction', None)
+        if not callable(setter):
+            return
+
+        binding = getattr(self, '_external_vision_binding', {}) or {}
+        offset = self._coerce_float3(binding.get("native_local_correction_offset"))
+        scale = binding.get("native_local_correction_scale", None)
+        if offset is None and str(binding.get("shape_type", "")).lower() == "model":
+            computed = self._obj_native_local_correction(
+                binding.get("model_path", "") or getattr(self, "final_model_path", ""))
+            if computed:
+                offset, scale = computed
+        if offset is None:
+            offset = [0.0, 0.0, 0.0]
+        try:
+            scale = float(1.0 if scale is None else scale)
+        except (TypeError, ValueError):
+            scale = 1.0
+
+        try:
+            setter(offset, scale)
+        except Exception as exc:
+            logging.warning("Failed to apply native Vision correction for actor %s: %s",
+                            self.name or self.route, exc)
+
     def clear_external_vision_binding(self):
         self._external_vision_binding = {}
+        if hasattr(self, '_geometry') and self._geometry is not None:
+            setter = getattr(self._geometry, 'set_native_local_correction', None)
+            if callable(setter):
+                try:
+                    setter([0.0, 0.0, 0.0], 1.0)
+                except Exception as exc:
+                    logging.warning("Failed to clear native Vision correction for actor %s: %s",
+                                    self.name or self.route, exc)
         clearer = getattr(self.engine_obj, 'clear_external_vision_binding', None)
         if not callable(clearer):
             return

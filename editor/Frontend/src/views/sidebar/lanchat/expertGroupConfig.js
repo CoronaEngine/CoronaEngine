@@ -41,7 +41,11 @@ export function selectedExpertPayloads(config, roles = []) {
     const name = String(role.name || '').trim();
     if (!name || seenNames.has(name)) continue;
     seenNames.add(name);
-    payloads.push({ name, persona: String(role.persona || name).trim() || name });
+    payloads.push({
+      name,
+      persona: String(role.persona || name).trim() || name,
+      roleKey: role.key || '',
+    });
   }
   for (const expert of config?.customExperts || []) {
     const name = String(expert.name || '').trim();

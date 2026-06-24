@@ -12,7 +12,7 @@ try:
         return {
             "provider": "dmxapi",
             "model": "gpt-5.5",
-            "layout_model": "o3-mini",
+            "layout_model": "gpt-5.5",
             "system_prompt": """你是一个 AI 助手，可以帮助用户完成各种任务。""",
         }
 
@@ -23,19 +23,25 @@ try:
                 "name": "deepseek",
                 "type": "openai-compatible",
                 "base_url": "https://api.deepseek.com/v1",
-                "api_key": "sk-dac4cbc187de44c492f0344726920a7f",
+                "api_key": "sk-94033d0c8aee425c802a07689cad69d6",
             },
             {
-                "name": "grsai_image",
-                "type": "grsai",
-                "base_url": "https://grsai.dakka.com.cn/v1/api/generate",
-                "api_key": "sk-80273654ab784f109b88011c006a774d",
+                "name": "dmx_image",
+                "type": "dmx",
+                "base_url": "https://www.dmxapi.cn/v1/images/generations",
+                "api_key": "sk-qWQZAs7rbZewSJ78Ac50qjtPU4Dwln8XYMnmOCJzg0hGR4FA",
             },
+            # {
+            #     "name": "grsai_image",
+            #     "type": "grsai",
+            #     "base_url": "https://grsai.dakka.com.cn/v1/api/generate",
+            #     "api_key": "sk-13e382852c4948f6b5c717535a5a1a0c",
+            # },
             {
                 "name": "dmxapi",
                 "type": "openai-compatible",
                 "base_url": "https://www.dmxapi.cn/v1",
-                "api_key": "sk-eHsdOCb3raIkIs8IQNySuzeJXt9XsWpvbpPPvNFe2QgJqUj9",
+                "api_key": "sk-qWQZAs7rbZewSJ78Ac50qjtPU4Dwln8XYMnmOCJzg0hGR4FA",
             },
         ]
 
@@ -43,9 +49,9 @@ try:
     def IMAGE_SETTINGS() -> Dict[str, Any]:
         return {
             "enable": True,
-            "provider": "grsai_image",
+            "provider": "dmx_image",
             "model": "gpt-image-2",
-            "base_url": "https://grsai.dakka.com.cn/v1/api/generate",
+            "base_url": "https://www.dmxapi.cn/v1/images/generations",
         }
 
     @ai_entrance.collector.register_setting("omni")
@@ -54,7 +60,7 @@ try:
             "enable": True,
             "provider": "dmxapi",
             "model": "gpt-5.5",
-            "request_timeout": 60.0,
+            "request_timeout": 180.0,
             "image_detail": "auto",
         }
 
@@ -62,7 +68,11 @@ try:
     def HUNYUAN_3D_SETTINGS() -> Dict[str, Any]:
         return {
             "enable": True,
-            "api_key": "sk-XO2PvXfsKNBL72sphgi5VEc2Gycw3mTXj9Pis3emFzZROAAz",
+            "api_key": "sk-y41uwqZkTgipsViywZNh3NtjOBQHWizKivmNJI72R8qGj8MJ",
+            "api_keys": [
+                "sk-JW5sgRCe3XSlgTXh5Xt25WVOsDG3os6eg19jutpvjYG0kBrM",
+                "sk-KfygRCIuidGhv1aMD9txpzbukwUIn2fGCw1cxQAp7yv3OTcD"
+            ],
             "region": "ap-guangzhou",
             "endpoint": "api.ai3d.cloud.tencent.com",
             "version": "pro",

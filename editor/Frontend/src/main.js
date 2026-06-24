@@ -2,12 +2,17 @@ import { createApp } from 'vue';
 import { createPinia } from 'pinia';
 import App from './App.vue';
 import Router from './router/index.js';
+import { i18n, setupLocaleSync } from './i18n/index.js';
+import { setupDomTranslation } from './i18n/domTranslator.js';
 import './style.css';
-import './blockly/generators/index.js';
+import 'blockly/blocks';
 
 const app = createApp(App);
 app.use(createPinia());
 app.use(Router);
+app.use(i18n);
+setupLocaleSync();
+setupDomTranslation();
 
 // 全局自定义指令:点击元素外部时触发回调
 // 用于下拉菜单/弹出层在点击外部时自动关闭

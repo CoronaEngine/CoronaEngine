@@ -136,6 +136,57 @@ SampledSpectrum MaterialEvaluator::albedo(const Float3 &world_wo) const noexcept
     return ret;
 }
 
+Float MaterialEvaluator::specular_fraction(const Float3 &world_wo, const Float3 &world_wi) const noexcept {
+    Float diff_l = 0.f;
+    Float spec_l = 0.f;
+    auto accum = [&](const Lobe *lobe, const Float &w) {
+        ScatterEval se = lobe->evaluate(world_wo, world_wi, MaterialEvalMode::All,
+                                        BxDFFlag::All, TransportMode::Radiance);
+        Float l = se.f.max() * w;
+        Float is_spec = ocarina::select(BxDFFlag::is_glossy(lobe->flag()) |
+                                            BxDFFlag::is_specular(lobe->flag()),
+                                        1.f, 0.f);
+        spec_l += l * is_spec;
+        diff_l += l * (1.f - is_spec);
+    };
+    dispatch([&](const Lobe *root) {
+        if (root->is_multi()) {
+            static_cast<const LobeSet *>(root)->for_each([&](const WeightedLobe &wl) {
+                accum(wl.get(), wl.weight());
+            });
+        } else {
+            accum(root, 1.f);
+        }
+    });
+    return spec_l / max(spec_l + diff_l, 1e-6f);
+}
+
+void MaterialEvaluator::albedo_split(const Float3 &world_wo, SampledSpectrum &diffuse,
+                                     SampledSpectrum &specular) const noexcept {
+    Float cos_theta = dot(shading_frame_.normal(), world_wo);
+    SampledSpectrum d = SampledSpectrum::zero(swl_->dimension());
+    SampledSpectrum s = SampledSpectrum::zero(swl_->dimension());
+    auto accum = [&](const Lobe *lobe, const Float &w) {
+        SampledSpectrum a = lobe->albedo(cos_theta) * w;
+        Float is_spec = ocarina::select(BxDFFlag::is_glossy(lobe->flag()) |
+                                            BxDFFlag::is_specular(lobe->flag()),
+                                        1.f, 0.f);
+        s += a * is_spec;
+        d += a * (1.f - is_spec);
+    };
+    dispatch([&](const Lobe *root) {
+        if (root->is_multi()) {
+            static_cast<const LobeSet *>(root)->for_each([&](const WeightedLobe &wl) {
+                accum(wl.get(), wl.weight());
+            });
+        } else {
+            accum(root, 1.f);
+        }
+    });
+    diffuse = d;
+    specular = s;
+}
+
 Bool MaterialEvaluator::splittable() const noexcept {
     Bool ret = false;
     dispatch([&](const Lobe *lobe_set) {

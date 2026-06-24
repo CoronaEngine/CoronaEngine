@@ -130,6 +130,8 @@ public:
         float3 prev_cam_pos = camera->prev_host_position();
         ret.camera_pos = {cam_pos.x, cam_pos.y, cam_pos.z};
         ret.prev_camera_pos = {prev_cam_pos.x, prev_cam_pos.y, prev_cam_pos.z};
+        // ReSTIR path: direct_ = direct lighting, indirect_ = indirect lighting (NOT diffuse/specular).
+        ret.channel_kind = RealTimeDenoiseInput::ChannelKind::DirectIndirect;
         return ret;
     }
 

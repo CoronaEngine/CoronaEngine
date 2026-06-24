@@ -90,8 +90,6 @@ target_link_libraries(CoronaResourceManager
     PUBLIC
     corona::kernel
     TBB::tbb
-    INTERFACE
-    ktm
 )
 
 # Optional FFmpeg-backed video/audio import/export

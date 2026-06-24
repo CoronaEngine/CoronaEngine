@@ -528,6 +528,125 @@ def Z():
     return _current_context().z
 
 
+# ── Camera / FPS controls ──
+
+def lock_mouse():
+    """锁定鼠标到窗口中心，隐藏光标，启用 FPS 相对模式"""
+    try:
+        import corona_engine as _ce
+        if hasattr(_ce, 'set_mouse_locked'):
+            _ce.set_mouse_locked(True)
+            return
+    except Exception:
+        pass
+    _logger.debug("[ScratchWrapper] lock_mouse: engine API not available")
+
+
+def unlock_mouse():
+    """解锁鼠标，显示光标"""
+    try:
+        import corona_engine as _ce
+        if hasattr(_ce, 'set_mouse_locked'):
+            _ce.set_mouse_locked(False)
+            return
+    except Exception:
+        pass
+    _logger.debug("[ScratchWrapper] unlock_mouse: engine API not available")
+
+
+def mouse_dx():
+    """获取本帧鼠标 X 位移量"""
+    try:
+        import corona_engine as _ce
+        if hasattr(_ce, 'get_mouse_delta'):
+            dx, _dy = _ce.get_mouse_delta()
+            return float(dx)
+    except Exception:
+        pass
+    return 0.0
+
+
+def mouse_dy():
+    """获取本帧鼠标 Y 位移量"""
+    try:
+        import corona_engine as _ce
+        if hasattr(_ce, 'get_mouse_delta'):
+            _dx, dy = _ce.get_mouse_delta()
+            return float(dy)
+    except Exception:
+        pass
+    return 0.0
+
+
+def set_fov(fov_degrees):
+    """设置摄像机视场角（用于瞄准镜缩放效果）"""
+    try:
+        import corona_engine as _ce
+        if hasattr(_ce, 'Camera'):
+            cam = _ce.Camera()
+            if hasattr(cam, 'set_fov'):
+                cam.set_fov(float(fov_degrees))
+                return
+    except Exception:
+        pass
+    _logger.debug("[ScratchWrapper] set_fov: engine API not available")
+
+
+# ── Physics extension (velocity / impulse) ──
+
+_velocity_cache = {}  # context_id → [vx, vy, vz]
+
+
+def set_velocity(vx, vy, vz):
+    """设置当前 Actor 的线速度"""
+    if _actor_only("set_velocity"):
+        return
+    _init_engine()
+    ctx = _current_context()
+    vel = [float(vx), float(vy), float(vz)]
+    _velocity_cache[ctx.context_id] = list(vel)
+    for target in (ctx.mechanics, ctx.actor):
+        if target is not None and hasattr(target, 'set_velocity'):
+            try:
+                target.set_velocity(vel)
+                return
+            except Exception:
+                pass
+    # fallback: 每帧偏移位置模拟速度（假设 ~60fps）
+    ctx.x += float(vx) * 0.016
+    ctx.y += float(vy) * 0.016
+    ctx.z += float(vz) * 0.016
+    _sync_position()
+
+
+def apply_impulse(ix, iy, iz):
+    """施加瞬时冲量（子弹命中反馈）"""
+    if _actor_only("apply_impulse"):
+        return
+    _init_engine()
+    ctx = _current_context()
+    imp = [float(ix), float(iy), float(iz)]
+    for target in (ctx.mechanics, ctx.actor):
+        if target is not None and hasattr(target, 'apply_impulse'):
+            try:
+                target.apply_impulse(imp)
+                return
+            except Exception:
+                pass
+    # fallback: 直接偏移位置
+    ctx.x += float(ix) * 0.1
+    ctx.y += float(iy) * 0.1
+    ctx.z += float(iz) * 0.1
+    _sync_position()
+
+
+def get_velocity(axis='X'):
+    """获取当前速度分量"""
+    cache = _velocity_cache.get(_current_context().context_id, [0.0, 0.0, 0.0])
+    mapping = {'X': 0, 'Y': 1, 'Z': 2}
+    return cache.get(mapping.get(axis, 0), 0.0)
+
+
 # Appearance
 def cartoonSet(index):
     if _actor_only("cartoonSet"):
@@ -648,6 +767,40 @@ def size():
     return _current_context().size_val
 
 
+def set_color(r, g, b):
+    """设置物体漫反射颜色（Disney Principled BRDF diffuse）"""
+    if _actor_only("set_color"):
+        return
+    _init_engine()
+    ctx = _current_context()
+    color = [float(r), float(g), float(b)]
+    for target in (ctx.optics, ctx.actor):
+        if target is not None and hasattr(target, 'set_diffuse'):
+            try:
+                target.set_diffuse(color)
+                return
+            except Exception:
+                pass
+    _logger.debug("[ScratchWrapper] set_color: no optics target available")
+
+
+def set_alpha(alpha):
+    """设置物体透明度（1.0=不透明，0.0=全透明）"""
+    if _actor_only("set_alpha"):
+        return
+    _init_engine()
+    ctx = _current_context()
+    a = float(alpha)
+    for target in (ctx.optics, ctx.actor):
+        if target is not None and hasattr(target, 'set_opacity'):
+            try:
+                target.set_opacity(a)
+                return
+            except Exception:
+                pass
+    _logger.debug("[ScratchWrapper] set_alpha: engine API not available")
+
+
 # Detect
 def update_key_state(key, pressed):
     _current_context().key_state[key] = bool(pressed)
@@ -708,6 +861,130 @@ def attribute(name):
         "ID": ctx.context_id,
     }
     return values.get(name, 0.0)
+
+
+# ── Raycast (射击命中检测) ──
+
+_raycast_cache = {}  # context_id → {hit, distance, object, point}
+
+
+def _get_raycast_cache():
+    """获取当前上下文的射线检测结果缓存"""
+    ctx_id = _current_context().context_id
+    if ctx_id not in _raycast_cache:
+        _raycast_cache[ctx_id] = {
+            'hit': False, 'distance': 0.0, 'object': '', 'point': (0.0, 0.0, 0.0)
+        }
+    return _raycast_cache[ctx_id]
+
+
+def raycast_hit(origin, direction, max_dist=100.0):
+    """执行射线检测，返回是否命中。结果缓存供 raycast_distance 等查询。"""
+    cache = _get_raycast_cache()
+    try:
+        import corona_engine as _ce
+        if hasattr(_ce, 'ray_cast'):
+            result = _ce.ray_cast(origin, direction, float(max_dist))
+            cache['hit'] = bool(result.hit)
+            if result.hit:
+                cache['distance'] = float(result.distance)
+                cache['object'] = str(getattr(result, 'handle', ''))
+                cache['point'] = (
+                    float(result.point[0]) if result.point else 0.0,
+                    float(result.point[1]) if result.point else 0.0,
+                    float(result.point[2]) if result.point else 0.0,
+                )
+            else:
+                cache['distance'] = float(max_dist)
+                cache['object'] = ''
+                cache['point'] = (0.0, 0.0, 0.0)
+            return cache['hit']
+    except Exception as exc:
+        _logger.debug("[ScratchWrapper] raycast engine fallback: %s", exc)
+
+    # Fallback: 手动 AABB 遍历当前场景所有 Actor
+    cache['hit'] = False
+    cache['distance'] = float(max_dist)
+    cache['object'] = ''
+    cache['point'] = (0.0, 0.0, 0.0)
+    ctx = _current_context()
+    if ctx.scene is not None and hasattr(ctx.scene, 'get_all_actors'):
+        try:
+            actors = ctx.scene.get_all_actors()
+            origin_vec = [float(origin[0]), float(origin[1]), float(origin[2])]
+            dir_vec = [float(direction[0]), float(direction[1]), float(direction[2])]
+            # 归一化方向
+            import math as _math
+            mag = _math.sqrt(dir_vec[0]**2 + dir_vec[1]**2 + dir_vec[2]**2)
+            if mag > 0:
+                dir_vec = [d / mag for d in dir_vec]
+            closest = float(max_dist)
+            for actor in actors:
+                if not hasattr(actor, 'get_aabb'):
+                    continue
+                try:
+                    aabb = actor.get_aabb()
+                except Exception:
+                    continue
+                t = _ray_aabb_intersect(origin_vec, dir_vec, aabb)
+                if t is not None and 0 < t < closest:
+                    closest = t
+                    cache['hit'] = True
+                    cache['distance'] = closest
+                    cache['object'] = str(getattr(actor, 'name', ''))
+                    cache['point'] = (
+                        origin_vec[0] + dir_vec[0] * closest,
+                        origin_vec[1] + dir_vec[1] * closest,
+                        origin_vec[2] + dir_vec[2] * closest,
+                    )
+        except Exception as exc:
+            _logger.debug("[ScratchWrapper] raycast fallback failed: %s", exc)
+    return cache['hit']
+
+
+def _ray_aabb_intersect(origin, direction, aabb):
+    """射线-AABB 相交检测（slab 方法），返回 t 或 None"""
+    t_min = float('-inf')
+    t_max = float('inf')
+    for i in range(3):
+        if abs(direction[i]) < 1e-10:
+            if origin[i] < aabb[i] or origin[i] > aabb[i + 3]:
+                return None
+        else:
+            t1 = (aabb[i] - origin[i]) / direction[i]
+            t2 = (aabb[i + 3] - origin[i]) / direction[i]
+            if t1 > t2:
+                t1, t2 = t2, t1
+            t_min = max(t_min, t1)
+            t_max = min(t_max, t2)
+    if t_min > t_max or t_max < 0:
+        return None
+    return t_min if t_min >= 0 else t_max
+
+
+def raycast_distance():
+    """获取最近一次射线检测的命中距离"""
+    return _get_raycast_cache()['distance']
+
+
+def raycast_hit_object():
+    """获取最近一次射线检测命中的物体标识"""
+    return _get_raycast_cache()['object']
+
+
+def raycast_hit_point_x():
+    """获取命中点 X 坐标"""
+    return float(_get_raycast_cache()['point'][0])
+
+
+def raycast_hit_point_y():
+    """获取命中点 Y 坐标"""
+    return float(_get_raycast_cache()['point'][1])
+
+
+def raycast_hit_point_z():
+    """获取命中点 Z 坐标"""
+    return float(_get_raycast_cache()['point'][2])
 
 
 # Control
@@ -797,6 +1074,90 @@ def list_show(name):
 
 def list_hide(name):
     _logger.debug("[ScratchWrapper] list_hide: %s", name)
+
+
+# ── Audio ──
+
+_audio_cache = {}  # name → resource_id (str)
+
+
+def _ensure_audio(name):
+    """确保音效已加载到引擎，返回 resource_id；失败返回 None"""
+    if name in _audio_cache:
+        return _audio_cache[name]
+    import os as _os
+    # 从 CoronaCore/utils 向上两级到项目根，再进入 assets/audio
+    audio_dir = _os.path.join(
+        _os.path.dirname(_os.path.abspath(__file__)), '..', '..', 'assets', 'audio'
+    )
+    for ext in ('.wav', '.mp3', '.ogg'):
+        path = _os.path.join(audio_dir, name + ext)
+        if _os.path.exists(path):
+            try:
+                import corona_engine as _ce
+                media = _ce.import_media(path)
+                _audio_cache[name] = media.resource_id
+                _logger.debug("[ScratchWrapper] loaded audio: %s → %s", name, media.resource_id)
+                return media.resource_id
+            except Exception as exc:
+                _logger.warning("[ScratchWrapper] audio load failed: %s %s", name, exc)
+                return None
+    # 如果文件不存在，尝试直接用名称作为 resource_id（引擎可能已预加载）
+    try:
+        import corona_engine as _ce
+        _audio_cache[name] = name
+        return name
+    except Exception:
+        pass
+    _logger.debug("[ScratchWrapper] audio not found: %s", name)
+    return None
+
+
+def play_sound(name):
+    """播放音效（单次）"""
+    rid = _ensure_audio(name)
+    if rid is not None:
+        try:
+            import corona_engine as _ce
+            _ce.play_audio(rid, loop=False)
+            _logger.debug("[ScratchWrapper] play_sound: %s", name)
+        except Exception as exc:
+            _logger.warning("[ScratchWrapper] play_sound failed: %s", exc)
+
+
+def loop_sound(name):
+    """循环播放音效（BGM 用）"""
+    rid = _ensure_audio(name)
+    if rid is not None:
+        try:
+            import corona_engine as _ce
+            _ce.play_audio(rid, loop=True)
+            _logger.debug("[ScratchWrapper] loop_sound: %s", name)
+        except Exception as exc:
+            _logger.warning("[ScratchWrapper] loop_sound failed: %s", exc)
+
+
+def stop_sound(name):
+    """停止指定音效"""
+    rid = _audio_cache.get(name)
+    if rid is not None:
+        try:
+            import corona_engine as _ce
+            _ce.stop_audio(rid)
+        except Exception:
+            pass
+
+
+def stop_all_sounds():
+    """停止所有已加载音效"""
+    import corona_engine as _ce
+    for name, rid in list(_audio_cache.items()):
+        if rid is not None:
+            try:
+                _ce.stop_audio(rid)
+            except Exception:
+                pass
+    _audio_cache.clear()
 
 
 # Stop/reset compatibility

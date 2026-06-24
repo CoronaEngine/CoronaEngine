@@ -3,10 +3,10 @@
 
 layout(push_constant) uniform PushConsts
 {
-    layout(offset = 0) vec2 scale;
-    layout(offset = 8) vec2 translate;
-    layout(offset = 16) vec4 clip_rect;
-    layout(offset = 32) uint texture_index;
+    vec2 scale;
+    vec2 translate;
+    vec4 clip_rect;
+    uint texture_index;
 } pushConsts;
 
 layout(set = 0, binding = 0) uniform sampler2D textures[];

@@ -132,6 +132,9 @@ class SeedPlan:
     placement_constraints: list[str] = field(default_factory=list)
     batch_goals: list[BatchGoal] = field(default_factory=list)
     review_policy: dict[str, Any] = field(default_factory=dict)
+    design_brief: str = ""
+    design_items: list[str] = field(default_factory=list)
+    design_source: str = ""
     confirmed_by: str = ""
     version: int = 1
     created_at: float = field(default_factory=time.time)
@@ -142,6 +145,30 @@ class SeedPlan:
         self.participants.append(intent)
         if intent.text:
             self.intent_summary = self._summarize_intents()
+        self.updated_at = time.time()
+
+    def set_design_brief(
+        self,
+        text: str,
+        items: list[str] | None = None,
+        source: str = "",
+    ) -> None:
+        self._assert_mutable()
+        brief = str(text or "").strip()
+        self.design_brief = brief
+        if items is not None:
+            seen: set[str] = set()
+            cleaned: list[str] = []
+            for item in items:
+                value = str(item or "").strip()
+                if not value or value in seen:
+                    continue
+                seen.add(value)
+                cleaned.append(value)
+            self.design_items = cleaned
+        self.design_source = str(source or "").strip()
+        if brief:
+            self.intent_summary = brief
         self.updated_at = time.time()
 
     def propose(self) -> None:
@@ -203,6 +230,9 @@ class SeedPlan:
             "placement_constraints": list(self.placement_constraints),
             "batch_goals": [item.as_dict() for item in self.batch_goals],
             "review_policy": _sanitize_seed_plan_payload(self.review_policy),
+            "design_brief": self.design_brief,
+            "design_items": list(self.design_items),
+            "design_source": self.design_source,
             "confirmed_by": self.confirmed_by,
             "version": self.version,
             "created_at": self.created_at,
@@ -245,6 +275,9 @@ class SeedPlan:
                 if isinstance(item, dict)
             ],
             review_policy=dict(data.get("review_policy") or {}),
+            design_brief=str(data.get("design_brief") or ""),
+            design_items=[str(item or "").strip() for item in data.get("design_items") or [] if str(item or "").strip()],
+            design_source=str(data.get("design_source") or ""),
             confirmed_by=str(data.get("confirmed_by") or ""),
             version=int(data.get("version") or 1),
             created_at=float(data.get("created_at") or time.time()),

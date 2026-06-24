@@ -305,6 +305,11 @@ public:
     mutable TriangleHitVar *hit{};
     mutable Interaction *it{};
     mutable RadType3Var *Ld{};
+    // Specular-channel accumulator for diffuse/specular denoiser split (PT path).
+    // When non-null, Li() routes glossy/specular radiance here; the diffuse channel is
+    // derived as total - specular. Other callers leave it null -> split() == false ->
+    // the split code is host-gated out (zero behavior change).
+    mutable RadType3Var *Ld_specular{};
 
 public:
     HitContext() = default;
@@ -313,10 +318,12 @@ public:
     HitContext(TriangleHitVar &hit)
         : hit(&hit) {}
     HitContext(RadType3Var &Ld) : Ld(&Ld) {}
+    HitContext(RadType3Var &Ld, RadType3Var &Ld_specular) : Ld(&Ld), Ld_specular(&Ld_specular) {}
     HitContext(TriangleHitVar &hit, Interaction &it) {
         this->hit = &hit;
         this->it = &it;
     }
+    [[nodiscard]] bool split() const noexcept { return Ld_specular != nullptr; }
 };
 
 template<typename T>

@@ -60,7 +60,14 @@ std::atomic<int> MockResource::load_count{0};
 class MockParser : public IParser {
    public:
     MockParser() {
-        // register_extension(".mock");
+        register_extension(".mock", [](const std::filesystem::path& path,
+                                        ResourceCache&) -> std::shared_ptr<IResource> {
+            if (should_fail_next_load) {
+                should_fail_next_load = false;
+                return std::shared_ptr<IResource>{};
+            }
+            return std::make_shared<MockResource>(path);
+        });
 
         // Register export handler using the new method
         register_exporter(".mock", [](const IResource& resource, const std::filesystem::path& path) {
@@ -322,6 +329,7 @@ bool test_concurrent_read_write() {
         std::atomic<int> read_count{0};
         std::atomic<int> write_count{0};
         std::atomic<int> intermediate_reads{0};
+        std::atomic<int> writers_waiting{0};
 
         // Multiple writer threads
         std::vector<std::thread> writers;
@@ -329,7 +337,9 @@ bool test_concurrent_read_write() {
             writers.emplace_back([&, w]() {
                 std::this_thread::sleep_for(std::chrono::milliseconds(20));  // Let readers start
                 for (int i = 0; i < 3; ++i) {
+                    writers_waiting++;
                     auto handle = manager.acquire_write<MockResource>(id);
+                    writers_waiting--;
                     if (!handle) continue;
 
                     std::string intermediate = "Intermediate_W" + std::to_string(w) + "_" + std::to_string(i);
@@ -348,6 +358,10 @@ bool test_concurrent_read_write() {
         for (int i = 0; i < 8; ++i) {
             readers.emplace_back([&]() {
                 while (running && !test_failed) {
+                    if (writers_waiting > 0) {
+                        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                        continue;
+                    }
                     auto handle = manager.acquire_read<MockResource>(id);
                     if (handle && handle.valid()) {
                         std::string val = handle->data;

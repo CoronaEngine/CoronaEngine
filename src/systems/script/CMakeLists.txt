@@ -23,7 +23,6 @@ corona_add_system(script
         python/python_error_handler.cpp
         camera_follow_controller.cpp
     DEPENDENCIES
-        ktm
         Python::Python
         nanobind-static
         corona::resource::manager

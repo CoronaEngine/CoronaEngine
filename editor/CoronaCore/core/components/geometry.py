@@ -97,6 +97,16 @@ class Geometry:
         except Exception as e:
             raise RuntimeError(f"Geometry.set_scale 失败: {e}") from e
 
+    def set_native_local_correction(self, offset: List[float], scale: float):
+        """设置仅 native 渲染使用的本地几何校正。"""
+        setter = getattr(self.engine_obj, 'set_native_local_correction', None)
+        if not callable(setter):
+            return
+        try:
+            setter(offset, float(scale))
+        except Exception as e:
+            raise RuntimeError(f"Geometry.set_native_local_correction 失败: {e}") from e
+
     def get_scale(self) -> List[float]:
         """获取局部缩放 [x, y, z]"""
         try:

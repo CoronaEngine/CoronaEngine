@@ -1,6 +1,6 @@
 import * as Blockly from 'blockly/core';
 
-export const defineListBlocks = (actorname) => {
+export const defineListBlocks = () => {
   Blockly.Blocks['list_show'] = {
     init: function () {
       this.appendDummyInput()
@@ -9,7 +9,7 @@ export const defineListBlocks = (actorname) => {
       this.setInputsInline(true);
       this.setPreviousStatement(true, null);
       this.setNextStatement(true, null);
-      this.setColour('#E4080A');
+      this.setStyle('list_blocks');
       this.setHelpUrl('');
     },
   };
@@ -22,7 +22,7 @@ export const defineListBlocks = (actorname) => {
       this.setInputsInline(true);
       this.setPreviousStatement(true, null);
       this.setNextStatement(true, null);
-      this.setColour('#E4080A');
+      this.setStyle('list_blocks');
       this.setHelpUrl('');
     },
   };

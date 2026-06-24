@@ -1,4 +1,4 @@
-import { TOOLBOX_CONFIG } from './toolboxConfig';
+import { createToolboxConfig, TOOLBOX_CONFIG } from './toolboxConfig';
 import { CoronaTheme } from './theme';
 
 export const WORKSPACE_CONFIG = {
@@ -32,3 +32,10 @@ export const WORKSPACE_CONFIG = {
   trashcan: false,
   renderer: 'zelos',
 };
+
+export function createWorkspaceConfig(t) {
+  return {
+    ...WORKSPACE_CONFIG,
+    toolbox: createToolboxConfig(t),
+  };
+}

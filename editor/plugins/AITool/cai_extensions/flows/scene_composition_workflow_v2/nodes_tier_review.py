@@ -11,9 +11,7 @@ from __future__ import annotations
 
 import json as _json
 import logging
-import math
 import os
-import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -25,8 +23,6 @@ from ..scene_composition_workflow.helpers import get_tool, parse_review_result
 logger = logging.getLogger(__name__)
 
 MAX_TIER_RETRIES = 2
-_DEFAULT_VIEW_ANGLES = [0, 90, 180, 270]  # 4 角度, 减少引擎截屏竞态触发概率
-_DEFAULT_ELEVATION = 35.0
 
 # VLM issue → solver action 映射 (Week 2: 执行逻辑待接入 solver)
 RULE_ACTION_MAP = {
@@ -65,84 +61,28 @@ _EXTRACT_ACTORS_SYSTEM_PROMPT = """你是场景分析助手。VLM 审查了 3D �
 [{"actor": "完整物体名", "issue": "too_far", "reason": "VLM原文描述"}]"""
 
 
-# ===========================================================================
-# 截图 (每层独立调用)
-# ===========================================================================
-
-def _calc_camera_pose(
-    center: List[float], distance: float,
-    azimuth_deg: float, elevation_deg: float,
-) -> Dict[str, List[float]]:
-    az = math.radians(azimuth_deg)
-    el = math.radians(elevation_deg)
-    cos_el = math.cos(el)
-    pos = [
-        center[0] + distance * cos_el * math.sin(az),
-        center[1] + distance * math.sin(el),
-        center[2] + distance * cos_el * math.cos(az),
-    ]
-    fwd = [center[0] - pos[0], center[1] - pos[1], center[2] - pos[2]]
-    length = math.sqrt(sum(f * f for f in fwd))
-    fwd = [f / length for f in fwd] if length > 1e-6 else [0.0, 0.0, -1.0]
-    return {"position": pos, "forward": fwd, "up": [0.0, 1.0, 0.0]}
-
-
 def _capture_for_review(state: Dict[str, Any], tier: int) -> Optional[str]:
-    """拍摄当前场景的 8 角度截图 (每次都重拍, 因为场景状态已变化)。"""
+    """Capture current scene through the unified 4-view base_color VLM path."""
     intermediate = state.get("intermediate", {})
     scene_json_path = intermediate.get("scene_json_path", "")
     if not scene_json_path:
         return None
 
-    metadata = state.get("metadata", {})
-    room_size = metadata.get("room_size", [5, 3, 3])
-    x_half, z_half = room_size[0] / 2, (room_size[1] / 2) if len(room_size) > 1 else 2.5
-    distance = max(x_half, z_half) * 2.0 * 1.15
-    center = [0.0, room_size[2] / 4.0 if len(room_size) > 2 else 0.5, 0.0]
-
     output_dir = str(Path(scene_json_path).parent / f"review_tier{tier}")
     os.makedirs(output_dir, exist_ok=True)
 
-    move_tool = get_tool("camera_move")
-    shot_tool = get_tool("camera_screenshot")
-    if move_tool is None or shot_tool is None:
-        logger.warning("tier%d_review: 拍摄工具缺失", tier)
+    try:
+        from ...agent.vlm_capture import capture_vlm_views
+    except ImportError:
+        from cai_extensions.agent.vlm_capture import capture_vlm_views
+
+    result = capture_vlm_views("", output_dir, scope="scene", timeout_sec=5.0)
+    if result.status != "success":
+        logger.warning("tier%d_review: unified VLM capture skipped: %s", tier, result.skipped_reason)
         return None
-
-    from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
-
-    saved = []
-    for az in _DEFAULT_VIEW_ANGLES:
-        pose = _calc_camera_pose(center, distance, az, _DEFAULT_ELEVATION)
-        try:
-            move_tool.invoke({
-                "position": pose["position"],
-                "forward": pose["forward"],
-                "up": pose["up"],
-            })
-            time.sleep(0.3)
-            filepath = os.path.join(output_dir, f"t{tier}_az{az:03d}.png")
-
-            # 截图在独立线程执行, 超时 5s 则跳过 (引擎截屏偶发死锁)
-            executor = ThreadPoolExecutor(max_workers=1)
-            future = executor.submit(
-                shot_tool.invoke,
-                {"output_path": filepath, "output_mode": "base_color"},
-            )
-            try:
-                future.result(timeout=5.0)
-                saved.append(filepath)
-            except FuturesTimeoutError:
-                logger.warning("tier%d_review: az=%d 截图超时 5s, 跳过 (引擎截屏管线死锁)", tier, az)
-                executor.shutdown(wait=False, cancel_futures=True)
-            else:
-                executor.shutdown(wait=False)
-            time.sleep(0.3)
-        except Exception as e:
-            logger.warning("tier%d_review: az=%d 截图异常: %s", tier, az, e)
-
-    logger.info("tier%d_review: 截图 %d/%d → %s", tier, len(saved), len(_DEFAULT_VIEW_ANGLES), output_dir)
-    return output_dir if saved else None
+    logger.info("tier%d_review: unified VLM capture %d/%d → %s",
+                tier, len(result.files), result.view_count, result.output_dir)
+    return result.output_dir
 
 
 def _fuzzy_match_actor_name(short_name: str, valid_names: set) -> Optional[str]:

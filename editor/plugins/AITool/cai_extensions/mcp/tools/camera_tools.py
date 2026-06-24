@@ -33,6 +33,14 @@ def _import_model_reviewer_helpers():
     return get_or_create_vlm_review_camera, _save_camera_screenshot_with_timeout
 
 
+def _import_vlm_capture():
+    try:
+        from plugins.AITool.cai_extensions.agent.vlm_capture import capture_vlm_views
+    except ModuleNotFoundError:
+        from cai_extensions.agent.vlm_capture import capture_vlm_views
+    return capture_vlm_views
+
+
 def _get_default_capture_camera(scene):
     get_or_create_vlm_review_camera, _ = _import_model_reviewer_helpers()
     camera_factory = None
@@ -97,31 +105,14 @@ class CameraScreenshotInput(BaseModel):
         default=None,
         description="截图保存路径。为空则自动生成路径保存到项目目录下的 screenshots/ 文件夹",
     )
-    output_mode: str = Field(
-        default="final_color",
-        description="输出通道模式，可选: final_color, base_color, normal, position, object_id",
-    )
 
 
 class CameraMultiviewInput(BaseModel):
     scene_name: str = Field(default=DEFAULT_SCENE_NAME, description="目标场景名称")
     actor_name: str = Field(description="要环绕拍摄的对象名称")
-    camera_name: str | None = Field(default=None, description="摄像头名称；为空则使用隐藏离屏审查摄像头，避免移动主摄像头")
-    view_count: int = Field(
-        default=8,
-        description="环绕拍摄的视角数量，默认 8 个视角（均匀分布在物体周围）",
-    )
-    elevation_deg: float = Field(
-        default=30.0,
-        description="摄像头仰角（度），默认 30 度俯视",
-    )
     output_dir: str | None = Field(
         default=None,
         description="截图输出目录。为空则自动生成目录",
-    )
-    output_modes: List[str] = Field(
-        default=["final_color"],
-        description="每个视角要截取的输出通道列表，可选: final_color, base_color, normal, position, object_id",
     )
 
 
@@ -402,7 +393,6 @@ def _build_camera_screenshot_tool(scene_manager) -> StructuredTool:
         scene_name: str = DEFAULT_SCENE_NAME,
         camera_name: str | None = None,
         output_path: str | None = None,
-        output_mode: str = "final_color",
     ) -> str:
         try:
             scene = _resolve_scene(scene_manager, scene_name)
@@ -417,40 +407,34 @@ def _build_camera_screenshot_tool(scene_manager) -> StructuredTool:
                     error_message=f"No camera available in scene '{scene_name}'"
                 ).to_envelope(interface_type="scene")
 
-            # 设置输出模式
-            prev_mode = camera.get_output_mode()
-            try:
-                if output_mode != prev_mode:
-                    camera.set_output_mode(output_mode)
-                    time.sleep(0.15)  # 等待 GPU 渲染新模式
+            if camera.get_output_mode() != "base_color":
+                camera.set_output_mode("base_color")
+                time.sleep(0.15)  # 等待 GPU 渲染新模式
 
-                # 确定输出路径
-                if not output_path:
-                    ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+            # 确定输出路径
+            if not output_path:
+                ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+                output_path = os.path.join(
+                    _get_screenshot_dir(), f"shot_base_color_{ts}.png"
+                )
+            else:
+                # 相对路径统一放到项目截图目录下
+                if not os.path.isabs(output_path):
                     output_path = os.path.join(
-                        _get_screenshot_dir(), f"shot_{output_mode}_{ts}.png"
+                        _get_screenshot_dir(), output_path
                     )
-                else:
-                    # 相对路径统一放到项目截图目录下
-                    if not os.path.isabs(output_path):
-                        output_path = os.path.join(
-                            _get_screenshot_dir(), output_path
-                        )
-                os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+            os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
 
-                _, _save_camera_screenshot_with_timeout = _import_model_reviewer_helpers()
-                if not _save_camera_screenshot_with_timeout(camera, output_path, timeout=3.0):
-                    return build_error_result(
-                        error_message=f"Screenshot timed out or failed: {output_path}"
-                    ).to_envelope(interface_type="scene")
-            finally:
-                if camera.get_output_mode() != prev_mode:
-                    camera.set_output_mode(prev_mode)
+            _, _save_camera_screenshot_with_timeout = _import_model_reviewer_helpers()
+            if not _save_camera_screenshot_with_timeout(camera, output_path, timeout=3.0):
+                return build_error_result(
+                    error_message=f"Screenshot timed out or failed: {output_path}"
+                ).to_envelope(interface_type="scene")
 
             result_data = {
                 "status": "success",
                 "path": output_path,
-                "output_mode": output_mode,
+                "output_mode": "base_color",
             }
             part = build_part(
                 content_type="text",
@@ -466,7 +450,7 @@ def _build_camera_screenshot_tool(scene_manager) -> StructuredTool:
 
     return StructuredTool(
         name="camera_screenshot",
-        description="使用摄像头拍摄截图并保存到文件。可指定输出通道（如 final_color、normal 等）。",
+        description="使用摄像头按 base_color 拍摄截图并保存到文件。",
         args_schema=CameraScreenshotInput,
         func=_camera_screenshot,
     )
@@ -479,16 +463,9 @@ def _build_camera_multiview_tool(scene_manager) -> StructuredTool:
         *,
         scene_name: str = DEFAULT_SCENE_NAME,
         actor_name: str,
-        camera_name: str | None = None,
-        view_count: int = 8,
-        elevation_deg: float = 30.0,
         output_dir: str | None = None,
-        output_modes: List[str] | None = None,
     ) -> str:
         try:
-            if output_modes is None:
-                output_modes = ["final_color"]
-
             scene = _resolve_scene(scene_manager, scene_name)
             if scene is None:
                 return build_error_result(
@@ -501,42 +478,6 @@ def _build_camera_multiview_tool(scene_manager) -> StructuredTool:
                     error_message=f"Actor '{actor_name}' not found"
                 ).to_envelope(interface_type="scene")
 
-            if camera_name:
-                camera = scene.find_camera(camera_name)
-            else:
-                camera = _get_default_capture_camera(scene)
-            if camera is None:
-                return build_error_result(
-                    error_message=f"No camera available"
-                ).to_envelope(interface_type="scene")
-
-            if not hasattr(actor, '_geometry') or actor._geometry is None:
-                return build_error_result(
-                    error_message=f"Actor '{actor_name}' has no geometry"
-                ).to_envelope(interface_type="scene")
-
-            # 计算目标物体中心和观察距离（模型空间 → 世界空间）
-            aabb = actor._geometry.get_aabb()  # 模型空间
-            actor_pos = actor.get_position()
-            actor_scale = actor.get_scale()
-
-            model_center = [
-                (aabb[0] + aabb[3]) / 2.0,
-                (aabb[1] + aabb[4]) / 2.0,
-                (aabb[2] + aabb[5]) / 2.0,
-            ]
-            center = [
-                actor_pos[0] + model_center[0] * actor_scale[0],
-                actor_pos[1] + model_center[1] * actor_scale[1],
-                actor_pos[2] + model_center[2] * actor_scale[2],
-            ]
-            dx = (aabb[3] - aabb[0]) * actor_scale[0]
-            dy = (aabb[4] - aabb[1]) * actor_scale[1]
-            dz = (aabb[5] - aabb[2]) * actor_scale[2]
-            diagonal = math.sqrt(dx * dx + dy * dy + dz * dz)
-            distance = max(diagonal * 2.0, 1.0)
-
-            # 准备输出目录
             ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
             if not output_dir:
                 output_dir = os.path.join(
@@ -545,73 +486,29 @@ def _build_camera_multiview_tool(scene_manager) -> StructuredTool:
                 )
             elif not os.path.isabs(output_dir):
                 output_dir = os.path.join(_get_screenshot_dir(), output_dir)
-            os.makedirs(output_dir, exist_ok=True)
-
-            up = camera.get_world_up()
-            fov = camera.get_fov()
-            prev_mode = camera.get_output_mode()
-
-            elevation_rad = math.radians(elevation_deg)
-            cos_elev = math.cos(elevation_rad)
-            sin_elev = math.sin(elevation_rad)
-
-            saved_files = []
-
-            for i in range(view_count):
-                # 计算环绕角度
-                azimuth = 2.0 * math.pi * i / view_count
-                cos_az = math.cos(azimuth)
-                sin_az = math.sin(azimuth)
-
-                # 球面坐标 → 笛卡尔偏移
-                offset_x = distance * cos_elev * sin_az
-                offset_y = distance * sin_elev
-                offset_z = distance * cos_elev * cos_az
-
-                position = [
-                    center[0] + offset_x,
-                    center[1] + offset_y,
-                    center[2] + offset_z,
-                ]
-
-                # 朝向 = 归一化(center - position)
-                fwd = [center[0] - position[0], center[1] - position[1], center[2] - position[2]]
-                fwd_len = math.sqrt(sum(f * f for f in fwd))
-                if fwd_len > 1e-6:
-                    fwd = [f / fwd_len for f in fwd]
-                else:
-                    fwd = [0.0, 0.0, -1.0]
-
-                camera.set(position, fwd, up, fov)
-                time.sleep(0.15)  # 等待渲染
-
-                azimuth_deg = int(math.degrees(azimuth))
-                for mode in output_modes:
-                    if mode != camera.get_output_mode():
-                        camera.set_output_mode(mode)
-                        time.sleep(0.1)
-
-                    filename = f"view_{i:02d}_az{azimuth_deg:03d}_{mode}.png"
-                    filepath = os.path.join(output_dir, filename)
-                    _, _save_camera_screenshot_with_timeout = _import_model_reviewer_helpers()
-                    if not _save_camera_screenshot_with_timeout(camera, filepath, timeout=3.0):
-                        return build_error_result(
-                            error_message=f"Screenshot timed out or failed: {filepath}"
-                        ).to_envelope(interface_type="scene")
-                    saved_files.append(filepath)
-
-            # 恢复原始输出模式
-            if camera.get_output_mode() != prev_mode:
-                camera.set_output_mode(prev_mode)
+            capture_vlm_views = _import_vlm_capture()
+            capture = capture_vlm_views(
+                scene_name,
+                output_dir,
+                actor_name=actor_name,
+                scope="actor",
+                timeout_sec=3.0,
+                scene=scene,
+            )
+            if capture.status != "success":
+                return build_error_result(
+                    error_message=f"VLM capture skipped: {capture.skipped_reason}"
+                ).to_envelope(interface_type="scene")
 
             result_data = {
                 "status": "success",
                 "actor": actor_name,
-                "view_count": view_count,
-                "output_modes": output_modes,
-                "output_dir": output_dir,
-                "files": saved_files,
-                "total_images": len(saved_files),
+                "view_count": capture.view_count,
+                "output_mode": capture.output_mode,
+                "output_dir": capture.output_dir,
+                "files": capture.files,
+                "total_images": len(capture.files),
+                "target_bounds": capture.to_dict().get("target_bounds"),
             }
             part = build_part(
                 content_type="text",
@@ -628,9 +525,8 @@ def _build_camera_multiview_tool(scene_manager) -> StructuredTool:
     return StructuredTool(
         name="camera_multiview_capture",
         description=(
-            "环绕物体进行多视图拍摄。摄像头会围绕目标对象均匀旋转 360 度，"
-            "在每个角度拍摄截图。可指定视角数量、仰角和输出通道。"
-            "适用于 3D 重建、多视角展示等场景。"
+            "使用隐藏 VLM 审查摄像头对目标对象进行 4 视角 base_color 拍摄。"
+            "不会移动主摄像头，也不支持多输出通道。"
         ),
         args_schema=CameraMultiviewInput,
         func=_camera_multiview,

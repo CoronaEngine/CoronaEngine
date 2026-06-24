@@ -19,12 +19,7 @@ class SceneComposerJobRunner:
     def compose(self, job: GenerationJob) -> dict[str, Any]:
         composer = self._composer_factory()
         seed_plan = job.payload.get("seed_plan") if isinstance(job.payload.get("seed_plan"), dict) else {}
-        prompt = str(
-            job.payload.get("prompt")
-            or job.payload.get("intent_text")
-            or seed_plan.get("intent_summary")
-            or ""
-        )
+        prompt = self._compose_prompt_from_payload(job.payload, seed_plan)
         if not prompt:
             raise ValueError("generation job has no prompt or SeedPlan intent_summary")
         if self._is_append_job(job.payload):
@@ -51,6 +46,37 @@ class SceneComposerJobRunner:
                 "paused_before_phase": phase,
             }
         return {"compose_result": result}
+
+    @staticmethod
+    def _compose_prompt_from_payload(payload: dict[str, Any], seed_plan: dict[str, Any]) -> str:
+        if not isinstance(payload, dict):
+            payload = {}
+        if not isinstance(seed_plan, dict):
+            seed_plan = {}
+        if SceneComposerJobRunner._is_append_job(payload):
+            return str(
+                payload.get("prompt")
+                or payload.get("intent_text")
+                or seed_plan.get("design_brief")
+                or seed_plan.get("intent_summary")
+                or ""
+            )
+        brief = str(seed_plan.get("design_brief") or "").strip()
+        if brief:
+            items = [
+                str(item or "").strip()
+                for item in (seed_plan.get("design_items") or [])
+                if str(item or "").strip()
+            ]
+            if items:
+                return f"{brief}\n建议物体清单：{'、'.join(items[:12])}"
+            return brief
+        return str(
+            payload.get("prompt")
+            or payload.get("intent_text")
+            or seed_plan.get("intent_summary")
+            or ""
+        )
 
     def stage_handlers(self) -> dict[str, Callable[[GenerationJob], Any]]:
         return {"compose": self.compose}

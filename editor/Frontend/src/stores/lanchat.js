@@ -19,6 +19,7 @@ import {
 
 // 连接状态机：idle（未进房）-> hosting/joined（在房）
 const ROLE = { NONE: 'none', HOST: 'host', GUEST: 'guest' };
+const LOCAL_SINGLE_PLAYER_PEER_ID = 'local-single-player';
 
 // 房主在房间内的显示昵称。必须与 C++ LANChat 快速通道保持一致；
 // 房主消息由 NetworkSystem 用该名盖章，前端据此判定 self（消息气泡右对齐）。
@@ -46,7 +47,7 @@ const state = reactive({
   workspaceMode: 'multiplayer_multi_agent',
   draftAction: 'chat',
   activeTarget: {
-    scope: 'scene',
+    scope: '',
     agentId: '',
     agentName: '',
     planId: '',
@@ -54,7 +55,7 @@ const state = reactive({
   error: '', // 最近一次错误码/信息
   agents: [], // [{agent_id, name, owner}] 来自房主 agent_roster，不含 persona
   myAgents: [], // 我添加的 agent 本地草稿 [{agent_id, name, persona}]，用于显示"我的"
-  historyRooms: [], // persisted summaries [{ room_id, message_count, last_ts, last_text }]
+  historyRooms: [], // persisted summaries [{ room_id: session id, display_room_id, message_count, last_ts, last_text }]
   selectedHistoryRoom: null,
   historyLoading: false,
   historyError: '',
@@ -79,7 +80,7 @@ function _resetRoom() {
   state.workspaceMode = 'multiplayer_multi_agent';
   state.draftAction = 'chat';
   state.activeTarget = {
-    scope: 'scene',
+    scope: '',
     agentId: '',
     agentName: '',
     planId: '',
@@ -118,6 +119,12 @@ function sortMessages() {
 }
 
 function messageSelf(msg, fallback = false) {
+  if (
+    state.mode === 'single' &&
+    String(msg.sender_id || '') === LOCAL_SINGLE_PLAYER_PEER_ID
+  ) {
+    return true;
+  }
   if (msg.sender_id && state.peerId) {
     return msg.sender_id === state.peerId;
   }
@@ -296,6 +303,12 @@ function applyMemberSnapshot(payload = {}) {
   const normalized = normalizeMembers(payload);
   state.members = normalized.members;
   state.memberDetails = normalized.memberDetails;
+  const selfMember = state.peerId
+    ? state.memberDetails.find((member) => member.member_id === state.peerId)
+    : null;
+  if (selfMember?.nickname) {
+    state.nickname = selfMember.nickname;
+  }
 }
 
 function upsertAgent(agent = {}) {
@@ -444,6 +457,43 @@ async function continueHistoryAsLocalRoom({ room, nickname } = {}) {
     state.agents = restoredAgents;
     state.myAgents = restoredAgents
       .filter((agent) => !agent.owner || agent.owner === state.peerId || agent.owner === 'local-single-player')
+      .map((agent) => ({ ...agent }));
+    applyHistorySnapshot(restoredHistory, true);
+  } else {
+    state.error = (res && res.error) || 'START_FAILED';
+  }
+  return res;
+}
+
+async function continueHistoryAsMultiRoom({ room, port, nickname } = {}) {
+  const roomId = String(room || state.selectedHistoryRoom?.room_id || '').trim();
+  if (!roomId) return { ok: false, error: 'ROOM_REQUIRED' };
+
+  state.error = '';
+  state.workspaceMode = 'multiplayer_multi_agent';
+  const hostNickname = (nickname || HOST_NICKNAME).trim() || HOST_NICKNAME;
+  const previewMessages = [...state.messages];
+  const previewAgents = [...state.agents];
+  const res = await lanChatService.startRoom({
+    room: roomId,
+    password: '',
+    port,
+    nickname: hostNickname,
+    mode: 'multi',
+    restore_history: true,
+    history_room: roomId,
+  });
+  if (res && res.ok) {
+    applyHostRoomState({ room: roomId, mode: 'multi', res, hostNickname });
+    const restoredHistory = Array.isArray(res.history) && res.history.length
+      ? res.history
+      : previewMessages;
+    const restoredAgents = Array.isArray(res.agents) && res.agents.length
+      ? res.agents
+      : previewAgents;
+    state.agents = restoredAgents;
+    state.myAgents = restoredAgents
+      .filter((agent) => !agent.owner || agent.owner === state.peerId)
       .map((agent) => ({ ...agent }));
     applyHistorySnapshot(restoredHistory, true);
   } else {
@@ -763,6 +813,7 @@ export const lanchat = {
   openRoom,
   openLocalRoom,
   continueHistoryAsLocalRoom,
+  continueHistoryAsMultiRoom,
   closeRoom,
   joinRoom,
   leaveRoom,

@@ -96,6 +96,15 @@ _PLAN_REVISION_PATTERNS = (
     r"^(补充|说明|调整|修改)[:：]?",
     r"(我希望|希望|不要|别|不能|更|风格|统一|一致|温暖|灯光|灯笼|休息区|暗黑风|恐怖)",
 )
+_PLAN_SUPPLEMENT_PATTERNS = (
+    r"^(补充|补充要求|补充方案|说明)[:：，,\s]?",
+    r"^(我希望|希望|不要|别|不能|整体|风格|布局|限制|要求)",
+    r"(更|统一|一致|温暖|灯光|灯笼|休息区|暗黑风|恐怖)",
+)
+_PLAN_ELABORATION_PATTERNS = (
+    r"(继续|展开|详细|具体|细化|列出|输出|给出).*(方案|风格|布局|清单|物品|动线|材质|灯光)",
+    r"(风格方案|布局方案|物品清单|设计细节|详细方案|具体方案)",
+)
 _ADD_PATTERNS = (
     r"(再加|增加|新增|添加|加入|生成添加|添加生成)",
 )
@@ -115,9 +124,54 @@ _DISCUSSION_PATTERNS = (
     r"^(你好|你是谁|谢谢|哈喽|hello|hi|在吗|介绍一下)",
     r"(怎么看|觉得|建议|可以吗|为什么)",
 )
+_OPINION_DISCUSSION_PATTERNS = (
+    r"(怎么看|怎么评价|如何评价|看法|观点|觉得|认为).*(方案|设计|布局|计划)",
+    r"(方案|设计|布局|计划).*(怎么看|怎么评价|如何评价|看法|观点|觉得|认为|是否合理|合不合理)",
+)
 _HIGH_RISK_PATTERNS = (
     r"(删除|删掉|移除|清空|重置|覆盖|全部|所有)",
 )
+
+
+_STATUS_QUERY_PATTERNS += (
+    r"(现在|当前)?(生成|执行|进度|计划|方案).*(哪里|哪步|情况|状态|是什么)",
+    r"(到哪|到哪里|哪一步|卡住|为什么不执行|开始了吗)",
+)
+_GENERATION_START_PATTERNS += (
+    r"(确认开始|确认生成|确认执行|直接生成|开始生成|执行生成|按.*方案.*生成|按照.*方案.*生成|就按.*生成)",
+)
+_PLAN_DRAFT_PATTERNS += (
+    r"(帮我)?(写|整理|给出|生成|设计).*(方案|计划)",
+    r"(我想做|我希望做|帮我设计|设计一个|规划一个|搭建一个|建立一个|做一个|围绕.*进行讨论)",
+)
+_PLAN_REVISION_PATTERNS += (
+    r"^(补充|说明|调整|修改)[:：]?",
+    r"(在.*方案基础上|基于.*方案|我希望|希望|不要|别|不能|更|风格|统一|一致|温暖|灯光|休息区|暗黑风|恐怖)",
+)
+_PLAN_SUPPLEMENT_PATTERNS += (
+    r"^(补充|补充要求|补充方案|说明)[:：，,\s]?",
+    r"^(我希望|希望|不要|别|不能|整体|风格|布局|限制|要求)",
+    r"(在.*方案基础上|基于.*方案|更|统一|一致|温暖|灯光|休息区|暗黑风|恐怖)",
+)
+_PLAN_ELABORATION_PATTERNS += (
+    r"(整理|汇总|总结|梳理|继续|展开|详细|具体|细化|列出|输出|给出).*(方案|风格|布局|清单|物品|动线|材质|灯光|讨论)",
+    r"(风格方案|布局方案|物品清单|设计细节|详细方案|具体方案)",
+)
+_ADD_PATTERNS += (r"(再加|增加|新增|添加|加入|生成添加|添加生成)",)
+_MODIFY_PATTERNS += (r"(调整|换成|改成|变大|变小|放大|缩小|移动|移到|挪到|旋转|贴地|穿模)",)
+_DELETE_PATTERNS += (r"(删除|删掉|去掉|移除|不要这个)",)
+_FINAL_LAYOUT_PATTERNS += (r"(布局|动线|摆放|组装).*(不合理|不好|奇怪|调整|优化)",)
+_FINAL_LAYOUT_PATTERNS += (r"(浮空|飘起来|飘起|没贴地|不贴地|悬空|离地|接地|贴地)",)
+_LAYOUT_CONSTRAINT_PATTERNS += (r"(不要挡|别挡|留空|开阔|中央活动区|活动区|入口|门口|通道|主街|动线|轴线)",)
+_DISCUSSION_PATTERNS += (
+    r"^(你好|你是谁|谢谢|哈喽|hello|hi|在吗|介绍一下)",
+    r"(怎么看|觉得|建议|可以吗|为什么)",
+)
+_OPINION_DISCUSSION_PATTERNS += (
+    r"(怎么看|怎么评价|如何评价|看法|观点|觉得|认为).*(方案|设计|布局|计划)",
+    r"(方案|设计|布局|计划).*(怎么看|怎么评价|如何评价|看法|观点|觉得|认为|是否合理|合不合理)",
+)
+_HIGH_RISK_PATTERNS += (r"(删除|删掉|移除|清空|重置|覆盖|全部|所有)",)
 
 
 def _contains(patterns: tuple[str, ...], text: str) -> bool:
@@ -206,23 +260,27 @@ class IntentUnderstandingService:
             return "edit_existing"
         return "chat"
 
-    def is_plan_like(self, text: str) -> bool:
-        decision = self.classify(text, allow_llm=False)
-        return decision.intent in ("plan_drafting", "plan_revision")
-
     def is_generation_start(self, text: str) -> bool:
         decision = self.classify(text, allow_llm=False)
         return decision.intent == "generation_start"
 
     def is_plan_supplement(self, text: str) -> bool:
-        decision = self.classify(text, allow_llm=False)
-        return decision.intent in (
-            "plan_revision",
-            "intervention_add",
-            "intervention_modify",
-            "intervention_delete",
-            "final_adjustment_request",
-        )
+        value = str(text or "").strip()
+        if not value:
+            return False
+        decision = self.classify(value, allow_llm=False)
+        return decision.intent == "plan_revision" and _contains(_PLAN_SUPPLEMENT_PATTERNS, value)
+
+    def is_plan_elaboration_request(self, text: str) -> bool:
+        value = str(text or "").strip()
+        if not value:
+            return False
+        if self.is_generation_start(value) or self.is_plan_supplement(value):
+            return False
+        if _contains(_ADD_PATTERNS + _MODIFY_PATTERNS + _DELETE_PATTERNS, value):
+            return False
+        decision = self.classify(value, allow_llm=False)
+        return decision.intent in {"discussion", "plan_revision"} and _contains(_PLAN_ELABORATION_PATTERNS, value)
 
     def _protocol_guardrail(
         self,
@@ -234,6 +292,8 @@ class IntentUnderstandingService:
         normalized = re.sub(r"@\S+\s*", "", value).strip()
         if _contains(_STATUS_QUERY_PATTERNS, normalized):
             return IntentDecision("status_query", 0.98, target_agent, reason="protocol/status query")
+        if _contains(_OPINION_DISCUSSION_PATTERNS, normalized):
+            return IntentDecision("discussion", 0.96, target_agent, reason="protocol/design opinion discussion")
         if _contains(_GENERATION_START_PATTERNS, normalized):
             return IntentDecision(
                 "generation_start",
@@ -319,10 +379,14 @@ class IntentUnderstandingService:
         generation_active: bool,
     ) -> IntentDecision:
         normalized = re.sub(r"@\S+\s*", "", value).strip()
+        if _contains(_OPINION_DISCUSSION_PATTERNS, normalized):
+            return IntentDecision("discussion", 0.9, target_agent, reason="fallback design opinion discussion")
         if _contains(_DISCUSSION_PATTERNS, normalized) and not _contains(_PLAN_DRAFT_PATTERNS, normalized):
             return IntentDecision("discussion", 0.88, target_agent, reason="fallback discussion")
         if _contains(_FINAL_LAYOUT_PATTERNS, normalized):
             return IntentDecision("final_adjustment_request", 0.9, target_agent, reason="fallback layout")
+        if _contains(_PLAN_DRAFT_PATTERNS, normalized):
+            return IntentDecision("plan_drafting", 0.82, target_agent, reason="fallback plan")
         if _contains(_PLAN_REVISION_PATTERNS, normalized):
             return IntentDecision("plan_revision", 0.88, target_agent, reason="fallback plan revision")
         if _contains(_DELETE_PATTERNS, normalized):
@@ -343,8 +407,6 @@ class IntentUnderstandingService:
             )
         if _contains(_MODIFY_PATTERNS, normalized):
             return IntentDecision("intervention_modify", 0.84, target_agent, reason="fallback modify")
-        if _contains(_PLAN_DRAFT_PATTERNS, normalized):
-            return IntentDecision("plan_drafting", 0.82, target_agent, reason="fallback plan")
         return IntentDecision("discussion", 0.7, target_agent, reason="fallback default")
 
     def _apply_safety_guardrail(self, decision: IntentDecision, value: str) -> IntentDecision:

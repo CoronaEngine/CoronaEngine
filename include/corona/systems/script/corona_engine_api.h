@@ -41,6 +41,7 @@ class Geometry {
     void set_position(const std::array<float, 3>& pos);
     void set_rotation(const std::array<float, 3>& euler);
     void set_scale(const std::array<float, 3>& size);
+    void set_native_local_correction(const std::array<float, 3>& offset, float scale);
 
     [[nodiscard]] std::array<float, 3> get_position() const;
     [[nodiscard]] std::array<float, 3> get_rotation() const;

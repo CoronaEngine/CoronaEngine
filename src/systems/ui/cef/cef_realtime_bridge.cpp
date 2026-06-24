@@ -4,7 +4,9 @@
 #include <corona/resource/resource_manager.h>
 #include <corona/resource/types/scene.h>
 #include <corona/shared_data_hub.h>
+#include <corona/systems/script/corona_engine_api.h>
 #include <corona/systems/ui/camera_viewport_manager.h>
+#include <corona/systems/ui/viewport_gizmo_manager.h>
 #include <include/cef_values.h>
 #include <nlohmann/json.hpp>
 #include <SDL3/SDL.h>
@@ -260,6 +262,65 @@ bool handle_camera_move_fast(const CefRefPtr<CefProcessMessage>& message) {
     move.fov = fov;
     Corona::SharedDataHub::instance().enqueue_camera_move(move);
 
+    return true;
+}
+
+bool handle_camera_viewport_fast(const CefRefPtr<CefProcessMessage>& message) {
+    auto args = message->GetArgumentList();
+    if (!args || args->GetSize() < 7) {
+        return true;
+    }
+
+    auto read_number = [args](int index, double& value) -> bool {
+        const auto type = args->GetType(index);
+        if (type == VTYPE_INT) {
+            value = static_cast<double>(args->GetInt(index));
+            return true;
+        }
+        if (type == VTYPE_DOUBLE) {
+            value = args->GetDouble(index);
+            return true;
+        }
+        return false;
+    };
+
+    double handle_value = 0.0;
+    if (!read_number(0, handle_value)) {
+        return true;
+    }
+
+    const auto camera_handle = static_cast<std::uintptr_t>(handle_value);
+    if (camera_handle == 0) {
+        return true;
+    }
+
+    std::array<double, 6> values{};
+    for (int i = 0; i < 6; ++i) {
+        if (!read_number(i + 1, values[static_cast<size_t>(i)])) {
+            return true;
+        }
+    }
+
+    void* surface = nullptr;
+    if (auto camera = Corona::SharedDataHub::instance().camera_storage().try_acquire_read(
+            camera_handle)) {
+        surface = camera->surface;
+    }
+    if (surface == nullptr) {
+        surface = Corona::API::get_default_surface();
+    }
+
+    Corona::SharedDataHub::instance().enqueue_camera_viewport_update({
+        .camera_handle = camera_handle,
+        .surface = surface,
+        .view_open = false,
+        .x = std::max(static_cast<int>(std::lround(values[0])), 0),
+        .y = std::max(static_cast<int>(std::lround(values[1])), 0),
+        .width = std::max(static_cast<int>(std::lround(values[2])), 1),
+        .height = std::max(static_cast<int>(std::lround(values[3])), 1),
+        .render_width = std::max(static_cast<int>(std::lround(values[4])), 1),
+        .render_height = std::max(static_cast<int>(std::lround(values[5])), 1),
+    });
     return true;
 }
 
@@ -1221,6 +1282,59 @@ bool handle_viewport_ui_mode(const CefRefPtr<CefProcessMessage>& message) {
     CFW_LOG_INFO("ViewportUiMode set: camera={} mode={}",
                  camera_handle,
                  mode == Corona::ViewportUiMode::Stereo3D ? "stereo3d" : "flat2d");
+    return true;
+}
+
+bool handle_viewport_gizmo_mode(const CefRefPtr<CefProcessMessage>& message) {
+    auto args = message->GetArgumentList();
+    if (!args || args->GetSize() < 1 || args->GetType(0) != VTYPE_STRING) {
+        CFW_LOG_WARNING("ViewportGizmoMode dropped: expected (mode)");
+        return true;
+    }
+
+    const std::string mode = args->GetString(0).ToString();
+    ViewportGizmoManager::instance().set_mode(mode);
+    CFW_LOG_DEBUG("ViewportGizmoMode set: mode={}", mode);
+    return true;
+}
+
+bool handle_viewport_gizmo_selection(const CefRefPtr<CefProcessMessage>& message) {
+    auto args = message->GetArgumentList();
+    double camera_value = 0.0;
+    double actor_value = 0.0;
+    if (!args || args->GetSize() < 3 ||
+        args->GetType(0) != VTYPE_STRING ||
+        !get_numeric_arg(args, 1, camera_value) ||
+        !get_numeric_arg(args, 2, actor_value)) {
+        CFW_LOG_WARNING("ViewportGizmoSelection dropped: expected (sceneId, cameraHandle, actorHandle)");
+        return true;
+    }
+
+    const std::string scene_id = args->GetString(0).ToString();
+    const auto camera_handle = static_cast<std::uintptr_t>(camera_value);
+    const auto actor_handle = static_cast<std::uintptr_t>(actor_value);
+    if (camera_handle == 0) {
+        CFW_LOG_WARNING("ViewportGizmoSelection dropped: camera handle is 0");
+        return true;
+    }
+
+    ViewportGizmoManager::instance().set_selection(scene_id, camera_handle, actor_handle);
+    CFW_LOG_DEBUG("ViewportGizmoSelection set: scene='{}' camera={} actor={}",
+                  scene_id,
+                  camera_handle,
+                  actor_handle);
+    return true;
+}
+
+bool handle_viewport_gizmo_clear_selection(const CefRefPtr<CefProcessMessage>& message) {
+    auto args = message->GetArgumentList();
+    double camera_value = 0.0;
+    if (args && args->GetSize() >= 1 && get_numeric_arg(args, 0, camera_value) &&
+        static_cast<std::uintptr_t>(camera_value) != 0) {
+        ViewportGizmoManager::instance().clear_camera(static_cast<std::uintptr_t>(camera_value));
+    } else {
+        ViewportGizmoManager::instance().clear_selection();
+    }
     return true;
 }
 
@@ -2321,6 +2435,13 @@ bool handle_dock_command(CefRefPtr<CefBrowser> browser,
             std::string route = command.value("routePath", "");
             int width = command.value("width", 400);
             int height = command.value("height", 600);
+            std::string docking_pos = command.value("dockingPos", "right_top");
+            if (docking_pos != "right_top" &&
+                docking_pos != "right_bottom" &&
+                docking_pos != "left_bottom" &&
+                docking_pos != "center") {
+                docking_pos = "right_top";
+            }
 
             if (!route.empty() && route[0] == '#') {
                 route = route.substr(1);
@@ -2329,7 +2450,7 @@ bool handle_dock_command(CefRefPtr<CefBrowser> browser,
             standalone_route += (standalone_route.find('?') == std::string::npos) ? "?standalone=1" : "&standalone=1";
 
             int tab_id = bm.create_tab(source_base_url(browser), standalone_route,
-                                       "right_top", width, height, false);
+                                       docking_pos, width, height, false);
             nlohmann::json result;
             result["tab_id"] = tab_id;
             result["panel_id"] = panel_id;
@@ -2432,6 +2553,10 @@ bool handle_realtime_process_message(CefRefPtr<CefBrowser> browser,
         return handle_camera_move_fast(message);
     }
 
+    if (message->GetName() == "CameraViewportFast") {
+        return handle_camera_viewport_fast(message);
+    }
+
     if (message->GetName() == "ComputeActorFocusPoseFast") {
         return handle_compute_actor_focus_pose_fast(frame, message);
     }
@@ -2454,6 +2579,18 @@ bool handle_realtime_process_message(CefRefPtr<CefBrowser> browser,
 
     if (message->GetName() == "ActorGizmoDrag") {
         return handle_actor_gizmo_drag(frame, message);
+    }
+
+    if (message->GetName() == "ViewportGizmoMode") {
+        return handle_viewport_gizmo_mode(message);
+    }
+
+    if (message->GetName() == "ViewportGizmoSelection") {
+        return handle_viewport_gizmo_selection(message);
+    }
+
+    if (message->GetName() == "ViewportGizmoClearSelection") {
+        return handle_viewport_gizmo_clear_selection(message);
     }
 
     if (message->GetName() == "ViewportUiMode") {

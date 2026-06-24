@@ -13,7 +13,14 @@
 namespace vision::svgf {
 class SVGF : public Denoiser, public GBufferCallback, public enable_shared_from_this<SVGF> {
 public:
+    // Temporal history is double-buffered to remove the read/write hazard in the
+    // variance estimator: it reprojects (scatter-reads) the PREVIOUS frame's history
+    // while writing the CURRENT frame's history. With a single buffer those races under
+    // motion (a tap may read a neighbour slot already overwritten this frame). cur/prev
+    // are selected by frame parity; each is a full buffer (offset 0), so no descriptor
+    // offset semantics are relied upon.
     RegistrableBuffer<SVGFDataDual> svgf_data;
+    RegistrableBuffer<SVGFDataDual> svgf_data2;
 
 private:
     HotfixSlot<SP<AtrousFilter>> atrous_{};
@@ -45,12 +52,13 @@ public:
     explicit SVGF(const DenoiserDesc &desc)
         : Denoiser(desc),
           svgf_data(pipeline()->bindless_array()),
+          svgf_data2(pipeline()->bindless_array()),
           params_(desc) {}
 
     void initialize_(const vision::NodeDesc &node_desc) noexcept override;
     void compute_GBuffer(const vision::RayState &rs, const vision::Interaction &it) noexcept override;
 
-    VS_HOTFIX_MAKE_RESTORE(Denoiser, svgf_data,
+    VS_HOTFIX_MAKE_RESTORE(Denoiser, svgf_data, svgf_data2,
                            atrous_, modulator_, variance_estimator_, prefilter_, params_)
     VS_MAKE_PLUGIN_NAME_FUNC
 
@@ -70,7 +78,10 @@ public:
 
     void prepare_buffers();
     void render_sub_UI(Widgets *widgets) noexcept override;
-    [[nodiscard]] BufferView<SVGFDataDual> svgf_buffer() const noexcept;
+    /// Current-frame history half (written this frame). Selected by frame parity.
+    [[nodiscard]] BufferView<SVGFDataDual> svgf_buffer_cur(uint frame_index) const noexcept;
+    /// Previous-frame history half (read-only this frame).
+    [[nodiscard]] BufferView<SVGFDataDual> svgf_buffer_prev(uint frame_index) const noexcept;
     void prepare() noexcept override;
     void compile() noexcept override;
     void update_resolution(uint2 resolution) noexcept override;

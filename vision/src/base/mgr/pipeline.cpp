@@ -163,7 +163,7 @@ void Pipeline::sync_output_denoise() noexcept {
     /// merges of the mode mapping. `VISION_DISABLE_DENOISER` still hard-disables at the
     /// integrator gate. NOTE: output_desc_.denoise (and the create_view_context log)
     /// keep reporting the mode's nominal value, so logs may say denoise=false while it runs.
-    renderer().integrator()->set_denoise_enabled(true);
+    renderer().integrator()->set_denoise_enabled(output_desc_.denoise);
 }
 
 void Pipeline::prepare() noexcept {

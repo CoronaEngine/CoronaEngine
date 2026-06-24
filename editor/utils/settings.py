@@ -118,18 +118,29 @@ class CoronaSettings:
                     proj_cfg = configparser.ConfigParser()
                     proj_cfg.read(ini_path, encoding='utf-8')
                     project_name = proj_cfg.get('Project', 'name', fallback=project_name)
+                    last_edited = proj_cfg.get('Project', 'last_opened', fallback='')
                 except Exception as e:
                     logger.warning(f"Failed to read project info at {ini_path}: {e}")
+                    last_edited = ''
+                if not last_edited:
+                    try:
+                        last_edited = datetime.datetime.fromtimestamp(
+                            os.path.getmtime(ini_path)
+                        ).strftime('%Y-%m-%d %H:%M:%S')
+                    except Exception:
+                        last_edited = '-'
                 refined_projects.append({
                     "name": project_name,
                     "path": raw_path,
-                    "if_exists": True
+                    "if_exists": True,
+                    "last_edited": last_edited
                 })
             else:
                 refined_projects.append({
                     "name": project_name,
                     "path": raw_path,
-                    "if_exists": False
+                    "if_exists": False,
+                    "last_edited": '-'
                 })
         return refined_projects
 

@@ -5,18 +5,20 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "build": "vite build --configLoader runner",
     "preview": "vite preview",
     "format": "prettier --write \"src/**/*.{js,vue,css,html}\"",
     "format:check": "prettier --check \"src/**/*.{js,vue,css,html}\"",
     "lint": "eslint \"src/**/*.{js,vue}\"",
     "lint:fix": "eslint --fix \"src/**/*.{js,vue}\"",
+    "test:i18n": "node scripts/test-i18n.mjs",
     "test:rich-text": "node scripts/test-rich-text-markdown.mjs"
   },
   "dependencies": {
-    "blockly": "^11.2.2",
+    "blockly": "^13.0.0",
     "pinia": "^3.0.4",
     "vue": "^3.5.13",
+    "vue-i18n": "^11.4.6",
     "vue-router": "^4.5.0"
   },
   "devDependencies": {

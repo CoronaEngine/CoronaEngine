@@ -31,6 +31,8 @@ lanchat.handleEvent({
   ],
 });
 lanchat.setWorkspaceMode('solo_single_agent');
+assert.equal(lanchat.state.activeTarget.scope, 'agent');
+assert.equal(lanchat.state.activeTarget.agentName, '设计助手');
 lanchat.setDraftAction('plan');
 lanchat.setActiveTarget({
   scope: 'agent',

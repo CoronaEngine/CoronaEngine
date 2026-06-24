@@ -920,6 +920,42 @@ def test_scene_composer_job_runner_passes_seed_plan_context_to_compose():
     print("[OK] SceneComposerJobRunner passes SeedPlan context into compose")
 
 
+def test_scene_composer_job_runner_prefers_seed_plan_design_brief_over_short_trigger():
+    calls = []
+
+    class FakeComposer:
+        def compose(self, text, **kwargs):
+            calls.append((text, kwargs))
+            return {"imported": ["asset-guild-hall"], "progressive": True}
+
+    runner = SceneComposerJobRunner(lambda: FakeComposer())
+    scheduler = GenerationScheduler(
+        stage_handlers=runner.stage_handlers(),
+        stage_order=("compose",),
+    )
+    try:
+        submitted = scheduler.submit({
+            "plan_id": "seed-compose-brief",
+            "session_id": "sess-brief",
+            "room_id": "room-a",
+            "intent_text": "按照这个方案生成",
+            "seed_plan": {
+                "intent_summary": "按照这个方案生成",
+                "design_brief": "商会主交易厅，室内大厅，以中心议价区为核心，后方设权威徽记背景。",
+                "design_items": ["议价桌", "长椅", "徽记墙", "展示台"],
+            },
+        })
+        final = scheduler.wait(submitted["job_id"], timeout=2.0)
+    finally:
+        scheduler.shutdown()
+
+    assert final["status"] == "done"
+    assert "商会主交易厅" in calls[0][0]
+    assert "议价桌、长椅、徽记墙、展示台" in calls[0][0]
+    assert "按照这个方案生成" not in calls[0][0]
+    print("[OK] SceneComposerJobRunner prefers SeedPlan design brief over short trigger")
+
+
 def test_scene_composer_job_runner_passes_target_actor_from_intervention():
     calls = []
 
@@ -1224,6 +1260,7 @@ if __name__ == "__main__":
     test_scheduler_keeps_runtime_context_out_of_public_payload()
     test_scheduler_prunes_terminal_job_history_without_payload_leak()
     test_scene_composer_job_runner_passes_seed_plan_context_to_compose()
+    test_scene_composer_job_runner_prefers_seed_plan_design_brief_over_short_trigger()
     test_scene_composer_job_runner_passes_target_actor_from_intervention()
     test_scene_composer_job_runner_limits_append_job_and_keeps_style_contract()
     test_scene_composer_job_runner_pauses_progressive_compose_without_failure()

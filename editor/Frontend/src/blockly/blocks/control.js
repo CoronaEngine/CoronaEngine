@@ -1,6 +1,6 @@
 import * as Blockly from 'blockly/core';
 
-export const defineControlBlocks = (actorname) => {
+export const defineControlBlocks = () => {
   Blockly.Blocks['control_wait'] = {
     init: function () {
       this.appendDummyInput()
@@ -10,7 +10,7 @@ export const defineControlBlocks = (actorname) => {
       this.setInputsInline(true);
       this.setPreviousStatement(true, null);
       this.setNextStatement(true, null);
-      this.setColour('#FE9900');
+      this.setStyle('control_blocks');
       this.setTooltip('暂停执行指定秒数');
       this.setHelpUrl('');
     },
@@ -22,7 +22,7 @@ export const defineControlBlocks = (actorname) => {
       this.setInputsInline(true);
       this.setPreviousStatement(true, null);
       this.setNextStatement(true, null);
-      this.setColour('#FE9900');
+      this.setStyle('control_blocks');
       this.setTooltip('无限循环执行内部代码块');
       this.setHelpUrl('');
     },
@@ -39,7 +39,7 @@ export const defineControlBlocks = (actorname) => {
       this.setInputsInline(true);
       this.setPreviousStatement(true, null);
       this.setNextStatement(true, null);
-      this.setColour('#FE9900'); // 控制类积木常用颜色
+      this.setStyle('control_blocks'); // 控制类积木常用颜色
       this.setTooltip('重复执行指定次数的代码块');
       this.setHelpUrl('');
     },
@@ -52,7 +52,7 @@ export const defineControlBlocks = (actorname) => {
       this.setInputsInline(true);
       this.setPreviousStatement(true, null);
       this.setNextStatement(true, null);
-      this.setColour('#FE9900');
+      this.setStyle('control_blocks');
       this.setTooltip('如果条件满足，则执行对应的代码块');
       this.setHelpUrl('');
     },
@@ -67,7 +67,7 @@ export const defineControlBlocks = (actorname) => {
       this.setInputsInline(true);
       this.setPreviousStatement(true, null);
       this.setNextStatement(true, null);
-      this.setColour('#FE9900'); // 控制类积木常用颜色
+      this.setStyle('control_blocks'); // 控制类积木常用颜色
       this.setTooltip('如果条件满足，执行对应的代码块；否则，执行另一个代码块');
       this.setHelpUrl('');
     },
@@ -81,7 +81,7 @@ export const defineControlBlocks = (actorname) => {
       this.setInputsInline(true);
       this.setPreviousStatement(true, null);
       this.setNextStatement(true, null);
-      this.setColour('#FE9900');
+      this.setStyle('control_blocks');
       this.setTooltip('等待直到条件满足后继续执行');
       this.setHelpUrl('');
     },
@@ -97,7 +97,7 @@ export const defineControlBlocks = (actorname) => {
       this.setInputsInline(true);
       this.setPreviousStatement(true, null);
       this.setNextStatement(true, null);
-      this.setColour('#FE9900');
+      this.setStyle('control_blocks');
       this.setTooltip('重复执行代码块，直到条件满足');
       this.setHelpUrl('');
     },
@@ -116,7 +116,7 @@ export const defineControlBlocks = (actorname) => {
       this.setInputsInline(true);
       this.setPreviousStatement(true, null);
       this.setNextStatement(true, null);
-      this.setColour('#FE9900');
+      this.setStyle('control_blocks');
       this.setTooltip('停止指定的脚本执行');
     },
   };
@@ -127,7 +127,7 @@ export const defineControlBlocks = (actorname) => {
       this.setInputsInline(true);
       this.setPreviousStatement(false, null);
       this.setNextStatement(true, null);
-      this.setColour('#FE9900');
+      this.setStyle('control_blocks');
       this.setHelpUrl('');
     },
   };
@@ -140,7 +140,7 @@ export const defineControlBlocks = (actorname) => {
       this.setInputsInline(true);
       this.setPreviousStatement(true, null);
       this.setNextStatement(true, null);
-      this.setColour('#FE9900');
+      this.setStyle('control_blocks');
       this.setTooltip('克隆指定角色');
       this.setHelpUrl('');
     },
@@ -153,7 +153,7 @@ export const defineControlBlocks = (actorname) => {
       // 终止块：有上接点，无下接点
       this.setPreviousStatement(true, null);
       this.setNextStatement(false, null);
-      this.setColour('#FE9900');
+      this.setStyle('control_blocks');
       this.setHelpUrl('');
     },
   };
@@ -167,7 +167,7 @@ export const defineControlBlocks = (actorname) => {
       this.setInputsInline(true);
       this.setPreviousStatement(true, null);
       this.setNextStatement(true, null);
-      this.setColour('#FE9900');
+      this.setStyle('control_blocks');
       this.setTooltip('切换到指定场景');
       this.setHelpUrl('');
     },
@@ -179,7 +179,7 @@ export const defineControlBlocks = (actorname) => {
       this.setInputsInline(true);
       this.setPreviousStatement(true, null);
       this.setNextStatement(true, null);
-      this.setColour('#FE9900');
+      this.setStyle('control_blocks');
       this.setHelpUrl('');
     },
   };

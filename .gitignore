@@ -1,8 +1,10 @@
 # Build outputs
 /build/
+/build-*/
 /install/
 /out/
 /dist/
+/imgui.ini
 /cmake-build-*/
 
 # CMake intermediate files

@@ -53,17 +53,6 @@ function detectLandmark(el) {
     return { label: '菜单选项', area: 'menu-item' };
   }
 
-  /* ── Tab / scene bar ── */
-  if (cls.includes('from-teal-700') && cls.includes('to-green-600')) {
-    return { label: '场景标签栏', area: 'tab-bar' };
-  }
-  if (cls.includes('cursor-pointer') && cls.includes('rounded-t-lg') && cls.includes('transition-all')) {
-    if (text) return { label: `场景标签「${text}」`, area: 'scene-tab' };
-    return { label: '场景标签', area: 'scene-tab' };
-  }
-  if (aria === '关闭标签') return { label: '关闭标签按钮', area: 'tab-close-btn' };
-  if (aria === '新建场景' || title === '新建场景') return { label: '新建场景按钮', area: 'new-scene-btn' };
-
   /* ── Camera speed slider ── */
   if (title === '摄像头移动速度（Shift+滚轮调节）' || (type === 'range' && cls.includes('accent-white'))) {
     return { label: '摄像头速度滑块', area: 'camera-speed' };

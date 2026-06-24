@@ -87,4 +87,25 @@ export const defineEngineGenerators = () => {
   pythonGenerator.forBlock['engine_Z'] = function () {
     return ['CoronaEngine.Z()', pythonGenerator.ORDER_ATOMIC];
   };
+
+  // ── 物理扩展生成器 ──
+
+  pythonGenerator.forBlock['engine_set_velocity'] = function (block) {
+    const vx = block.getFieldValue('VX');
+    const vy = block.getFieldValue('VY');
+    const vz = block.getFieldValue('VZ');
+    return `CoronaEngine.set_velocity(${vx}, ${vy}, ${vz})\n`;
+  };
+
+  pythonGenerator.forBlock['engine_apply_impulse'] = function (block) {
+    const ix = block.getFieldValue('IX');
+    const iy = block.getFieldValue('IY');
+    const iz = block.getFieldValue('IZ');
+    return `CoronaEngine.apply_impulse(${ix}, ${iy}, ${iz})\n`;
+  };
+
+  pythonGenerator.forBlock['engine_get_velocity'] = function (block) {
+    const axis = block.getFieldValue('AXIS');
+    return [`CoronaEngine.get_velocity('${axis}')`, pythonGenerator.ORDER_ATOMIC];
+  };
 };

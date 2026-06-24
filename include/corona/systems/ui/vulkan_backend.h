@@ -1,16 +1,17 @@
 ﻿#pragma once
 
-#include <Horizon.h>
+#include "horizon.h"
 #include <corona/shader_include.h>
 // clang-format off
-#include GLSL(../../../../assets/shaders/imgui.vert.glsl)
-#include GLSL(../../../../assets/shaders/imgui.frag.glsl)
+#include GLSL(../../../assets/shaders/imgui.vert.glsl)
+#include GLSL(../../../assets/shaders/imgui.frag.glsl)
 // clang-format on
 #include <SDL3/SDL.h>
 #include <imgui.h>
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <vector>
 
 namespace Corona::Systems {
@@ -20,10 +21,10 @@ namespace Corona::Systems {
 // Used by both the main viewport and secondary (dragged-out) viewports.
 // ============================================================================
 struct ViewportRenderResources {
-    HardwareImage render_target;
-    HardwareExecutor executor;
-    HardwareBuffer vertex_buffer;
-    HardwareBuffer index_buffer;
+    Horizon::HardwareImage render_target;
+    Horizon::HardwareExecutor executor;
+    Horizon::HardwareBuffer vertex_buffer;
+    Horizon::HardwareBuffer index_buffer;
     size_t vertex_buffer_capacity = 0;
     size_t index_buffer_capacity = 0;
     uint32_t width = 0;
@@ -57,20 +58,22 @@ class VulkanBackend {
     static bool render_draw_data(
         ImDrawData* draw_data,
         ViewportRenderResources& resources,
-        RasterizerPipeline<imgui_vert_glsl, imgui_frag_glsl>& pipeline,
-        const HardwareImage& font_atlas,
-        ImageUsage render_target_usage = ImageUsage::SampledImage);
+        Horizon::RasterizerPipeline<imgui_vert_glsl_t, imgui_frag_glsl_t>& pipeline,
+        const Horizon::HardwareImage& font_atlas,
+        uint32_t target_width,
+        uint32_t target_height,
+        Horizon::ImageUsageFlags render_target_usage = Horizon::ImageUsageFlags::Sampled);
 
     // Accessors for shared resources (used by viewport callbacks)
-    [[nodiscard]] RasterizerPipeline<imgui_vert_glsl, imgui_frag_glsl>& pipeline() { return imgui_pipeline_; }
-    [[nodiscard]] const HardwareImage& font_atlas() const { return font_atlas_image_; }
+    [[nodiscard]] Horizon::RasterizerPipeline<imgui_vert_glsl_t, imgui_frag_glsl_t>& pipeline() { return *imgui_pipeline_; }
+    [[nodiscard]] const Horizon::HardwareImage& font_atlas() const { return font_atlas_image_; }
 
    private:
     bool ensure_imgui_pipeline();
     bool ensure_font_texture();
 
     static bool ensure_render_target(ViewportRenderResources& resources, uint32_t width, uint32_t height,
-                                     ImageUsage usage = ImageUsage::SampledImage);
+                                     Horizon::ImageUsageFlags usage = Horizon::ImageUsageFlags::Sampled);
 
     // --- Multi-Viewport renderer callbacks (static, access shared state via s_instance_) ---
     static void renderer_create_window(ImGuiViewport* vp);
@@ -94,8 +97,10 @@ class VulkanBackend {
     ViewportRenderResources main_resources_;
 
     // Shared across all viewports
-    HardwareImage font_atlas_image_;
-    RasterizerPipeline<imgui_vert_glsl, imgui_frag_glsl> imgui_pipeline_;
+    Horizon::HardwareImage font_atlas_image_;
+    Horizon::HardwareExecutor font_upload_executor_;
+    Horizon::SubmitReceipt font_upload_receipt_;
+    std::optional<Horizon::RasterizerPipeline<imgui_vert_glsl_t, imgui_frag_glsl_t>> imgui_pipeline_;
 
     // Main viewport presentation (SharedDataHub path)
     uint64_t frame_index_ = 0;

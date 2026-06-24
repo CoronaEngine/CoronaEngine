@@ -24,7 +24,7 @@ VisionZeroCopyBridge::~VisionZeroCopyBridge() {
 void VisionZeroCopyBridge::release() {
     // Vulkan-before-CUDA: drop the imported consumer first so it never outlives
     // the backing CUDA allocation.
-    imported_ = HardwareBuffer{};
+    imported_ = Corona::Horizon::HardwareBuffer{};
     delete shared_;
     shared_ = nullptr;
     valid_ = false;
@@ -60,14 +60,17 @@ bool VisionZeroCopyBridge::ensure(::vision::Pipeline& pipeline, uint32_t width, 
             return false;
         }
 
-        ExternalHandle handle{};
-        handle.handle = reinterpret_cast<HANDLE>(shareable_handle);
+        auto handle = Corona::Horizon::ExternalMemoryHandle::win32(
+            reinterpret_cast<HANDLE>(shareable_handle),
+            alloc_size);
 
-        imported_ = HardwareBuffer(handle,
-                                   static_cast<uint32_t>(pixel_count),
-                                   static_cast<uint32_t>(sizeof(float) * 4),
-                                   static_cast<uint32_t>(alloc_size),
-                                   BufferUsage::StorageBuffer);
+        auto desc = Corona::Horizon::HardwareBufferDesc::typed<float>(
+            pixel_count * 4u,
+            Corona::Horizon::BufferUsageFlags::Storage,
+            "VisionZeroCopyBridge::imported");
+        desc.dedicated = true;
+
+        imported_ = Corona::Horizon::HardwareBuffer::import_external(handle, desc);
 
         width_ = width;
         height_ = height;

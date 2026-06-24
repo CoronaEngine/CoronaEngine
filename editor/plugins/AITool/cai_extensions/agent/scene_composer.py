@@ -1331,6 +1331,33 @@ class SceneComposer:
 
     # 单次场景生成的物体数量上限（防止一次生成过多 3D 模型，耗时/占用过大）
     DEFAULT_MAX_ITEMS = 8
+    _INDOOR_ROOM_MIN_SIZE = [5.0, 5.0, 3.0]
+    _INDOOR_ROOM_MAX_SIZE = [8.5, 8.5, 3.4]
+    _LARGE_ROOM_ITEM_TERMS = (
+        "床", "沙发", "衣柜", "柜", "书桌", "桌", "长桌", "餐桌", "大件", "大型",
+        "bed", "sofa", "cabinet", "wardrobe", "table", "desk", "large",
+    )
+    _INDOOR_ITEM_FOOTPRINTS = (
+        (("床", "bed"), (2.2, 1.8, 1.1)),
+        (("沙发", "sofa"), (2.0, 1.0, 1.0)),
+        (("衣柜", "wardrobe"), (1.6, 0.7, 2.2)),
+        (("书柜", "书架", "bookshelf"), (1.2, 0.45, 2.0)),
+        (("柜", "cabinet"), (1.2, 0.55, 1.6)),
+        (("长桌", "餐桌", "table"), (1.7, 0.9, 0.8)),
+        (("书桌", "desk"), (1.4, 0.75, 0.8)),
+        (("椅", "chair"), (0.65, 0.65, 0.9)),
+        (("箱", "宝箱", "木箱", "chest", "box"), (0.9, 0.65, 0.7)),
+        (("酒桶", "桶", "barrel"), (0.7, 0.7, 1.0)),
+        (("武器架", "架", "rack"), (1.1, 0.45, 1.8)),
+        (("雕像", "statue"), (0.9, 0.9, 1.8)),
+        (("地毯", "rug", "carpet"), (1.6, 1.2, 0.05)),
+        (("灯", "台灯", "火把", "烛台", "lamp", "torch"), (0.35, 0.35, 1.2)),
+    )
+    _IMAGE_TO_3D_PROMPT_GUARDRAIL = (
+        "single standalone physical 3D object, centered full object, plain white background, "
+        "no text, no labels, no watermark, not a flat poster, not a texture sheet, "
+        "not a card, not a billboard, visible thickness and depth"
+    )
 
     def __init__(self, room_size: List[float] = None, scene_name: str = "lanchat_scene",
                  max_items: int = DEFAULT_MAX_ITEMS, zone_tree=None) -> None:
@@ -1346,10 +1373,13 @@ class SceneComposer:
         self._last_zone_decompose_text = ""
         self._fallback_room_aspects = []
         self._fallback_room_style_context = {}
+        self._fallback_room_zone_spec = {}
         self._last_element_classification = []
         self._last_element_classification_summary = ""
         self._generated_asset_abs_dir = None
         self._generated_asset_rel_dir = None
+        self._last_room_budget_summary = {}
+        self._last_indoor_bounds_report = {}
 
     def _generated_asset_dir(self) -> Tuple[Path, str]:
         if self._generated_asset_abs_dir is not None and self._generated_asset_rel_dir:
@@ -1386,17 +1416,159 @@ class SceneComposer:
         # 退化：构造默认单 Zone（center/size 与旧 _generate_room_box 完全一致）
         from ..data_model.zone_tree import Zone, Volume
         w, d, h = self.room_size[0], self.room_size[1], self.room_size[2]
+        fallback_spec = dict(getattr(self, "_fallback_room_zone_spec", {}) or {})
         zone = Zone(
-            zone_id="zone_root",
-            name=self.scene_name,
+            zone_id=str(fallback_spec.get("zone_id") or "zone_root"),
+            name=str(fallback_spec.get("name") or self.scene_name),
             role="indoor",
             volume=Volume(center=[0.0, h / 2.0, 0.0], size=[w, d, h]),
             enclosure="box",
         )
+        zone.metadata.update(dict(fallback_spec.get("metadata") or {}))
         zone.metadata["raw_aspects"] = list(getattr(self, "_fallback_room_aspects", []) or [])
         zone.style_context = dict(getattr(self, "_fallback_room_style_context", {}) or {})
         normalize_zone_aspects(zone)
         return zone
+
+    @classmethod
+    def _build_model_image_prompt(cls, name: str, keywords: str = "") -> str:
+        base = (keywords or "").strip()
+        if not base or len(base) <= 6:
+            base = (
+                f"high quality 3D model of {name}, standalone, white background, "
+                f"photorealistic, product photography, {name}"
+            )
+        guardrail = cls._IMAGE_TO_3D_PROMPT_GUARDRAIL
+        lower = base.lower()
+        if "not a flat poster" not in lower:
+            base = f"{base}, {guardrail}"
+        return base
+
+    @classmethod
+    def _estimate_indoor_room_size(
+        cls,
+        items: List[Dict[str, Any]],
+        base_size: Optional[List[float]] = None,
+    ) -> List[float]:
+        current = list(base_size or [5.0, 3.0, 3.0])
+        while len(current) < 3:
+            current.append(cls._INDOOR_ROOM_MIN_SIZE[len(current)])
+        width = max(float(current[0]), cls._INDOOR_ROOM_MIN_SIZE[0])
+        depth = max(float(current[1]), cls._INDOOR_ROOM_MIN_SIZE[1])
+        height = max(float(current[2]), cls._INDOOR_ROOM_MIN_SIZE[2])
+
+        footprints = [cls._indoor_item_footprint(item) for item in (items or [])]
+        count = len(footprints)
+        total_area = sum(max(0.15, fp[0] * fp[1]) for fp in footprints)
+        max_item_w = max([fp[0] for fp in footprints] + [1.0])
+        max_item_d = max([fp[1] for fp in footprints] + [1.0])
+        max_item_h = max([fp[2] for fp in footprints] + [1.0])
+        count_pressure = 5.5 + max(0, count - 4) * 0.35
+        area_span = (max(1.0, total_area) * 1.35) ** 0.5 + 1.2
+        target_width = max(cls._INDOOR_ROOM_MIN_SIZE[0], count_pressure, area_span, max_item_w + 2.2)
+        target_depth = max(cls._INDOOR_ROOM_MIN_SIZE[1], count_pressure, area_span, max_item_d + 2.2)
+        width = max(width, target_width)
+        depth = max(depth, target_depth)
+
+        names = " ".join(str((it or {}).get("name") or "") for it in (items or [])).lower()
+        has_large_item = any(term.lower() in names for term in cls._LARGE_ROOM_ITEM_TERMS)
+        if has_large_item:
+            width = max(width, max_item_w + 2.8)
+            depth = max(depth, max_item_d + 2.8)
+            height = max(height, 3.2)
+        height = max(height, min(cls._INDOOR_ROOM_MAX_SIZE[2], max_item_h + 0.8))
+
+        max_width = max(cls._INDOOR_ROOM_MAX_SIZE[0], float(current[0]))
+        max_depth = max(cls._INDOOR_ROOM_MAX_SIZE[1], float(current[1]))
+        max_height = max(cls._INDOOR_ROOM_MAX_SIZE[2], float(current[2]))
+
+        return [
+            round(min(width, max_width), 2),
+            round(min(depth, max_depth), 2),
+            round(min(height, max_height), 2),
+        ]
+
+    @classmethod
+    def _indoor_item_footprint(cls, item: Dict[str, Any]) -> tuple[float, float, float]:
+        data = item or {}
+        for key in ("size", "dimensions", "aabb_size"):
+            size = data.get(key)
+            if isinstance(size, (list, tuple)) and len(size) >= 3:
+                try:
+                    return (
+                        max(0.1, abs(float(size[0]))),
+                        max(0.1, abs(float(size[2]))),
+                        max(0.1, abs(float(size[1]))),
+                    )
+                except Exception:
+                    pass
+        half = data.get("half_extents") or data.get("half_extent")
+        if isinstance(half, (list, tuple)) and len(half) >= 3:
+            try:
+                return (
+                    max(0.1, abs(float(half[0])) * 2.0),
+                    max(0.1, abs(float(half[2])) * 2.0),
+                    max(0.1, abs(float(half[1])) * 2.0),
+                )
+            except Exception:
+                pass
+        name = str(data.get("name") or data.get("label") or "").lower()
+        for keywords, footprint in cls._INDOOR_ITEM_FOOTPRINTS:
+            if any(word.lower() in name for word in keywords):
+                return footprint
+        return (0.65, 0.65, 0.8)
+
+    def _apply_indoor_room_budget(
+        self,
+        items: List[Dict[str, Any]],
+        prompt: str = "",
+        progress_sink: Optional[Any] = None,
+    ) -> None:
+        if not self._detect_scene_indoor(prompt):
+            self._last_room_budget_summary = {}
+            return
+
+        target_zone = None
+        if self.zone_tree is not None and self.zone_tree.root is not None:
+            for zone in self.zone_tree.list_all_zones():
+                if (getattr(zone, "enclosure", "") or "") == "box":
+                    target_zone = zone
+                    break
+            if target_zone is None:
+                self._last_room_budget_summary = {}
+                return
+
+        base_size = (
+            list(getattr(target_zone.volume, "size", []) or [])
+            if target_zone is not None else list(self.room_size)
+        )
+        target_size = self._estimate_indoor_room_size(items, base_size)
+        old_size = list(base_size)
+        changed = any(abs(float(target_size[i]) - float(old_size[i])) > 1e-6 for i in range(3))
+        if target_zone is not None:
+            target_zone.volume.size = list(target_size)
+            target_zone.volume.center = [0.0, target_size[2] / 2.0, 0.0]
+        self.room_size = list(target_size)
+        self._last_room_budget_summary = {
+            "room_size": list(target_size),
+            "previous_size": old_size,
+            "item_count": len(items or []),
+            "changed": changed,
+        }
+        if changed:
+            logger.info(
+                "[SceneComposer] 室内空间预算: %s -> %s items=%s",
+                old_size,
+                target_size,
+                len(items or []),
+            )
+            if progress_sink:
+                try:
+                    progress_sink(
+                        f"室内空间预算：房间尺寸 {target_size[0]:.1f} x {target_size[1]:.1f} x {target_size[2]:.1f}，后续会做边界检查。"
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
 
     def decompose_zone_tree(self, text: str):
         """M2 步骤 14b-ii：把场景描述分解成 ZoneTree。开放性在这一步（LLM 读结构）。
@@ -1409,6 +1581,10 @@ class SceneComposer:
         失败/格式错误 → 返回 None（保守退化到单盒，不影响主链路）。
         """
         zones_spec = self._llm_decompose(text)
+        if not zones_spec and self._looks_like_outdoor_with_indoor_structure(text):
+            zones_spec = self._fallback_mixed_zone_specs(text)
+        elif zones_spec and self._looks_like_outdoor_with_indoor_structure(text):
+            zones_spec = self._ensure_mixed_zone_specs(zones_spec, text)
         if not zones_spec:
             return None
         self._last_zone_decompose_text = str(text or "")
@@ -1425,6 +1601,17 @@ class SceneComposer:
         if len(zones) == 1 and zones[0].enclosure == "box" and not zones[0].connectors:
             self._fallback_room_aspects = list(getattr(zones[0], "metadata", {}).get("raw_aspects") or [])
             self._fallback_room_style_context = dict(getattr(zones[0], "style_context", {}) or {})
+            size = list(getattr(getattr(zones[0], "volume", None), "size", []) or [])
+            if len(size) >= 3:
+                self.room_size = [float(size[0]), float(size[1]), float(size[2])]
+            self._fallback_room_zone_spec = {
+                "zone_id": getattr(zones[0], "zone_id", "") or "zone_root",
+                "name": getattr(zones[0], "name", "") or self.scene_name,
+                "role": getattr(zones[0], "role", "") or "indoor",
+                "enclosure": "box",
+                "metadata": dict(getattr(zones[0], "metadata", {}) or {}),
+                "size": list(self.room_size),
+            }
             self._save_zone_decompose_snapshot(text, zones_spec, tree)
             return None
         logger.info("[SceneComposer] 场景分解为 %d 个 Zone: %s",
@@ -1590,6 +1777,109 @@ class SceneComposer:
             )
         return ZoneTree(root=root)
 
+    @staticmethod
+    def _looks_like_outdoor_with_indoor_structure(text: str) -> bool:
+        value = str(text or "").lower()
+        outdoor_terms = (
+            "室外", "户外", "草原", "森林", "营地", "山坡", "野外",
+            "outdoor", "grassland", "forest", "camp",
+        )
+        structure_terms = (
+            "蒙古包", "帐篷", "木屋", "小屋", "房子", "建筑", "商铺", "屋子",
+            "yurt", "tent", "cabin", "hut", "building",
+        )
+        inside_terms = ("里面", "内部", "里有", "内有", "可进入", "inside", "interior")
+        return (
+            any(term in value for term in outdoor_terms)
+            and any(term in value for term in structure_terms)
+            and any(term in value for term in inside_terms)
+        )
+
+    @staticmethod
+    def _fallback_mixed_zone_specs(text: str) -> List[Dict[str, Any]]:
+        value = str(text or "")
+        shell_asset = "可进入建筑"
+        for term in ("蒙古包", "帐篷", "木屋", "小屋", "商铺", "建筑", "房子"):
+            if term in value:
+                shell_asset = term
+                break
+        return [
+            {
+                "id": "outdoor_ground",
+                "name": "室外地形",
+                "role": "outdoor",
+                "enclosure": "terrain",
+                "size": [20.0, 20.0, 0.0],
+                "aspects": [{"capability": "ground_profile", "params": {"type": "flat", "material": "grass"}}],
+            },
+            {
+                "id": "indoor_structure",
+                "name": shell_asset,
+                "role": "indoor",
+                "enclosure": "box",
+                "parent": "outdoor_ground",
+                "has_door": True,
+                "size": [5.0, 5.0, 3.0],
+                "aspects": [{"capability": "interior_surface", "params": {"floor_material": "woven_rug"}}],
+                "style_context": {"shell_asset": shell_asset},
+            },
+        ]
+
+    @classmethod
+    def _ensure_mixed_zone_specs(cls, zones_spec: List[Dict[str, Any]], text: str) -> List[Dict[str, Any]]:
+        specs = [dict(spec) for spec in (zones_spec or []) if isinstance(spec, dict)]
+        if not specs:
+            return cls._fallback_mixed_zone_specs(text)
+        first_two = specs[:2]
+        has_terrain = any(
+            str(spec.get("enclosure") or "").lower() == "terrain"
+            or str(spec.get("role") or "").lower() == "outdoor"
+            for spec in first_two
+        )
+        has_indoor_structure = any(
+            str(spec.get("enclosure") or "").lower() in {"box", "shell"}
+            and str(spec.get("role") or "").lower() in {"", "indoor"}
+            for spec in first_two
+        )
+        if has_terrain and has_indoor_structure:
+            return specs
+
+        fallback = cls._fallback_mixed_zone_specs(text)
+        terrain = next(
+            (
+                spec for spec in first_two
+                if str(spec.get("enclosure") or "").lower() == "terrain"
+                or str(spec.get("role") or "").lower() == "outdoor"
+            ),
+            None,
+        )
+        indoor = next(
+            (
+                spec for spec in first_two
+                if str(spec.get("enclosure") or "").lower() in {"box", "shell"}
+                and str(spec.get("role") or "").lower() in {"", "indoor"}
+            ),
+            None,
+        )
+        if terrain is None:
+            terrain = fallback[0]
+        if indoor is None:
+            indoor = fallback[1]
+
+        terrain = dict(terrain)
+        indoor = dict(indoor)
+        terrain_id = str(terrain.get("id") or "outdoor_ground")
+        terrain["id"] = terrain_id
+        terrain.setdefault("role", "outdoor")
+        terrain.setdefault("enclosure", "terrain")
+        indoor.setdefault("id", "indoor_structure")
+        indoor.setdefault("role", "indoor")
+        indoor.setdefault("enclosure", "box")
+        indoor["parent"] = terrain_id
+        if str(indoor.get("enclosure") or "").lower() == "box":
+            indoor["has_door"] = True
+        return [terrain, indoor]
+
     def _collect_shell_assets(self) -> set:
         """15a：从 zone_tree 收集所有 shell zone 的主外壳 asset 名（用于从家具清单剔除）。"""
         names = set()
@@ -1648,6 +1938,7 @@ class SceneComposer:
         logger.info("[SceneComposer] 提取物体清单, 文本长度=%d", len(text))
         items = self._llm_extract(text)
         if not items:
+            logger.info("[SceneComposerTrace] phase=extract_fallback_regex reason=llm_empty text_len=%d", len(text))
             items = self._regex_extract(text)
 
         # 黑名单过滤 + 去重（剔除床品/背景墙/建筑设施等不该单独建模的琐碎项）
@@ -1678,6 +1969,11 @@ class SceneComposer:
             except Exception:
                 from scene_element_classifier import route_model_items, summarize_classification  # type: ignore
 
+            logger.info(
+                "[SceneComposerTrace] phase=element_classification_start candidates=%d names=%s",
+                len(classification_candidates),
+                [it.get("name") for it in classification_candidates],
+            )
             filtered, classified = route_model_items(text, classification_candidates)
             self._last_element_classification = [item.as_dict() for item in classified]
             self._last_element_classification_summary = summarize_classification(classified)
@@ -1689,6 +1985,11 @@ class SceneComposer:
                     routed.target_pipeline,
                     routed.confidence,
                 )
+            logger.info(
+                "[SceneComposerTrace] phase=element_classification_done model_items=%d classified=%d",
+                len(filtered),
+                len(classified),
+            )
         except Exception as exc:  # noqa: BLE001
             logger.debug("[SceneComposer] SceneElementClassifier skipped: %s", exc)
             filtered = expanded_candidates
@@ -1775,16 +2076,32 @@ class SceneComposer:
                 HumanMessage(content=json.dumps(prompt, ensure_ascii=False)),
             ])
 
+        logger.info(
+            "[SceneComposerTrace] phase=llm_expand_inventory_start existing=%d target_min=%d max_items=%d text_len=%d",
+            len(existing),
+            target_min,
+            self.max_items,
+            len(text),
+        )
         ex = ThreadPoolExecutor(max_workers=1)
         fut = ex.submit(_call)
         try:
             resp = fut.result(timeout=40.0)
         except FTimeout:
             ex.shutdown(wait=False, cancel_futures=True)
+            logger.warning(
+                "[SceneComposerTrace] phase=llm_expand_inventory_timeout existing=%d target_min=%d",
+                len(existing),
+                target_min,
+            )
             return []
         finally:
             ex.shutdown(wait=False)
         raw = (resp.content if hasattr(resp, "content") else str(resp)).strip()
+        logger.info(
+            "[SceneComposerTrace] phase=llm_expand_inventory_response raw_len=%d",
+            len(raw),
+        )
         if "```" in raw:
             s = raw.find("["); e = raw.rfind("]")
             if s != -1 and e != -1:
@@ -1802,6 +2119,11 @@ class SceneComposer:
                 "keywords": str(item.get("keywords") or item.get("name") or "").strip(),
                 "layout_role": str(item.get("layout_role") or "").strip(),
             })
+        logger.info(
+            "[SceneComposerTrace] phase=llm_expand_inventory_items count=%d names=%s",
+            len(out),
+            [item.get("name") for item in out],
+        )
         return out
 
     @staticmethod
@@ -1842,6 +2164,13 @@ class SceneComposer:
         max_attempts = 2
         for attempt in range(1, max_attempts + 1):
             try:
+                logger.info(
+                    "[SceneComposerTrace] phase=llm_extract_attempt attempt=%d/%d text_len=%d prompt_len=%d",
+                    attempt,
+                    max_attempts,
+                    len(text),
+                    len(text[:2000]),
+                )
                 ex = ThreadPoolExecutor(max_workers=1)
                 fut = ex.submit(_call)
                 try:
@@ -1856,12 +2185,24 @@ class SceneComposer:
                     ex.shutdown(wait=False)
 
                 raw = (resp.content if hasattr(resp, "content") else str(resp)).strip()
+                logger.info(
+                    "[SceneComposerTrace] phase=llm_extract_response attempt=%d/%d raw_len=%d",
+                    attempt,
+                    max_attempts,
+                    len(raw),
+                )
                 if "```" in raw:
                     s = raw.find("["); e = raw.rfind("]")
                     if s != -1 and e != -1:
                         raw = raw[s:e + 1]
                 data = json.loads(raw)
                 if not isinstance(data, list):
+                    logger.info(
+                        "[SceneComposerTrace] phase=llm_extract_non_list attempt=%d/%d type=%s",
+                        attempt,
+                        max_attempts,
+                        type(data).__name__,
+                    )
                     return []
                 items = []
                 for d in data[:20]:
@@ -1873,6 +2214,13 @@ class SceneComposer:
                         })
                 if attempt > 1:
                     logger.info("[SceneComposer] LLM 提取第 %d 次重试成功", attempt)
+                logger.info(
+                    "[SceneComposerTrace] phase=llm_extract_items attempt=%d/%d count=%d names=%s",
+                    attempt,
+                    max_attempts,
+                    len(items),
+                    [item.get("name") for item in items],
+                )
                 return items
             except Exception as e:
                 logger.warning("[SceneComposer] LLM 提取失败 (第 %d/%d 次): %s%s",
@@ -1955,14 +2303,17 @@ class SceneComposer:
         for it in items:
             name = it["name"]
             kw = (it.get("keywords") or "").strip()
-            # 用英文前缀 + 物品名构建区分度更高的 prompt
-            prompt = (kw if kw and len(kw) > 6
-                      else f"high quality 3D model of {name}, standalone, white background, "
-                           f"photorealistic, product photography, {name}")
-            approved.append({
+            # 用英文前缀 + 物品名构建区分度更高的 prompt，并加入反贴图板约束。
+            prompt = self._build_model_image_prompt(name, kw)
+            elem = {
                 "item_name": name,
                 "image_prompt": prompt,
-            })
+            }
+            mode_hint = str(it.get("generation_mode_hint") or "").strip()
+            if mode_hint:
+                elem["generation_mode_hint"] = mode_hint
+                elem["resource_route_reason"] = str(it.get("resource_route_reason") or "")
+            approved.append(elem)
             image_url = str(it.get("image_url") or it.get("generated_image_url") or "").strip()
             if image_url:
                 generated_images[name] = image_url
@@ -2181,6 +2532,8 @@ class SceneComposer:
             logger.info("[SceneComposer] 物体数 %d 超过上限 %d，截断为 %d（保 shell %d，丢 %d）",
                         extracted_total, self.max_items, len(items), len(shells_kept), truncated)
 
+        self._apply_indoor_room_budget(items, generation_text, progress_sink=progress_sink)
+
         # ── Phase 1: generate_all (并行, 纯 API) ──
         emit_stage(32, "准备所需模型", "正在获取主体和物件资源，界面可能需要等待一会儿。")
         self._model_retrieval_progress_sink = progress_sink
@@ -2259,6 +2612,8 @@ class SceneComposer:
         result["zone_decompose_snapshot"] = getattr(self, "_last_zone_decompose_snapshot", None)
         result["element_classification"] = getattr(self, "_last_element_classification", [])
         result["element_classification_summary"] = classification_summary
+        result["room_budget"] = getattr(self, "_last_room_budget_summary", {})
+        result["indoor_bounds_check"] = getattr(self, "_last_indoor_bounds_report", {})
         result["memory_context_used"] = bool(memory_context)
         result["memory_context_entry_count"] = int(memory_context.get("entry_count") or 0) if memory_context else 0
         emit_stage(96, "完成自动检查", "已汇总摆放结果、用户介入信息和可选外观审查。")
@@ -2351,6 +2706,65 @@ class SceneComposer:
         return reviews
 
     @staticmethod
+    def _get_asset_size(actor_name: str, asset_meta: Dict[str, Any],
+                        geo_map: Dict[str, Any]) -> List[float]:
+        meta = (asset_meta.get(actor_name)
+                or asset_meta.get(geo_map.get(actor_name, {}).get("name", ""))
+                or {})
+        size = meta.get("size") if meta else None
+        if size and len(size) >= 3:
+            try:
+                return [float(size[0]), float(size[1]), float(size[2])]
+            except Exception:
+                return [0.0, 0.0, 0.0]
+        return [0.0, 0.0, 0.0]
+
+    @staticmethod
+    def _clamp_position_to_room_bounds(
+        position: List[float],
+        half_extents: List[float],
+        room_size: List[float],
+        margin: float = 0.15,
+    ) -> tuple[List[float], bool, str, float]:
+        x, y, z = [float(v) for v in position[:3]]
+        hx, hy, hz = [max(0.0, float(v)) for v in half_extents[:3]]
+        w, d, h = [float(v) for v in room_size[:3]]
+        fit_scale = 1.0
+
+        max_hx = max(0.05, w / 2.0 - margin)
+        max_hz = max(0.05, d / 2.0 - margin)
+        max_hy = max(0.05, h - margin)
+        if hx > max_hx or hz > max_hz or hy > max_hy:
+            ratios = []
+            if hx > 1e-6:
+                ratios.append(max_hx / hx)
+            if hz > 1e-6:
+                ratios.append(max_hz / hz)
+            if hy > 1e-6:
+                ratios.append(max_hy / hy)
+            fit_scale = min([1.0] + ratios)
+            if fit_scale < 0.65:
+                return [x, y, z], False, "object_too_large_for_room_bounds", fit_scale
+            hx *= fit_scale
+            hy *= fit_scale
+            hz *= fit_scale
+
+        min_x = -w / 2.0 + margin + hx
+        max_x = w / 2.0 - margin - hx
+        min_z = -d / 2.0 + margin + hz
+        max_z = d / 2.0 - margin - hz
+        min_y = margin + hy
+        max_y = h - margin - hy
+        if min_x > max_x or min_z > max_z or min_y > max_y:
+            return [x, y, z], False, "room_bounds_have_no_safe_space", fit_scale
+
+        nx = min(max(x, min_x), max_x)
+        ny = min(max(y, min_y), max_y)
+        nz = min(max(z, min_z), max_z)
+        changed = abs(nx - x) > 1e-6 or abs(ny - y) > 1e-6 or abs(nz - z) > 1e-6 or fit_scale < 0.999
+        return [nx, ny, nz], changed, "", fit_scale
+
+    @staticmethod
     def _get_object_height(actor_name: str, asset_meta: Dict[str, Any],
                            geo_map: Dict[str, Any]) -> float:
         """从 AABB 或 geometry 中获取物体的高度（米）。
@@ -2410,11 +2824,13 @@ class SceneComposer:
                        "outdoor", "forest", "park", "street", "garden",
                        "terrain", "mountain", "landscape"]
         indoor_kw = ["卧室", "客厅", "厨房", "室内", "房间", "书房", "浴室",
+                      "藏宝室", "宝库", "密室", "库房", "地下室", "洞穴房间",
+                      "treasure room", "vault", "chamber",
                       "bedroom", "living", "kitchen", "indoor", "room", "bath"]
-        if any(k in text for k in outdoor_kw):
-            return False
         if any(k in text for k in indoor_kw):
             return True
+        if any(k in text for k in outdoor_kw):
+            return False
         return True  # 默认室内
 
     def _generate_room_box(self) -> None:
@@ -2490,7 +2906,7 @@ class SceneComposer:
             return
 
         existing = {a.name for a in scene.get_actors()}
-        if any(n.startswith("__room_") for n in existing):
+        if "__room_box" in existing:
             return
 
         # 3. 单个盒子 Actor
@@ -2961,8 +3377,22 @@ class SceneComposer:
                 self._generate_room_box()
             return
         # 退化：纯室内单房间走旧路径
-        if self._detect_scene_indoor(prompt):
+        if getattr(self, "_fallback_room_zone_spec", None) or self._detect_scene_indoor(prompt):
             self._generate_room_box()
+        else:
+            from ..data_model.zone_tree import Zone, Volume
+
+            width = max(float(self.room_size[0]) * 4.0, 18.0)
+            depth = max(float(self.room_size[1]) * 4.0, 18.0)
+            zone = Zone(
+                zone_id="zone_outdoor_fallback",
+                name=self.scene_name or "outdoor",
+                role="outdoor",
+                enclosure="terrain",
+                volume=Volume(center=[0.0, 0.0, 0.0], size=[width, depth, 0.0]),
+            )
+            apply_scene_semantic_terrain_profile(zone, prompt, "outdoor")
+            self._generate_terrain(zone)
 
     def _place_shells(self, shell_models: List[Dict[str, Any]]) -> Dict[str, List[str]]:
         """15a：把 shell 建筑模型确定性放置成围合体（不经布局 LLM）。
@@ -3269,6 +3699,13 @@ class SceneComposer:
 
                         # 第一步：回设 LLM 位置 + 钳制 + 整平（物理全程关）
                         mecha, fixed, clamped, leveled = [], 0, 0, 0
+                        bounds_report = {
+                            "checked": [],
+                            "clamped": [],
+                            "scaled": [],
+                            "unresolved": [],
+                            "room_size": [w, d, h],
+                        }
                         wall_hung_n = 0   # 15d：壁挂物计数（沿后墙横向错开）
                         for actor_name in imported:
                             actor = scene.find_actor(actor_name) if scene else None
@@ -3324,16 +3761,30 @@ class SceneComposer:
                                     x, y, z = px, py, pz
                                     fixed += 1
 
-                            # 钳制到房间盒子内
                             changed = False
-                            if x < -hw + margin: x = -hw + margin; changed = True
-                            elif x > hw - margin: x = hw - margin; changed = True
-                            if y < margin: y = margin; changed = True
-                            elif y > h - margin: y = h - margin; changed = True
-                            if z < -hd + margin: z = -hd + margin; changed = True
-                            elif z > hd - margin: z = hd - margin; changed = True
-                            if changed:
-                                clamped += 1
+                            size = self._get_asset_size(actor_name, asset_meta, geo_map)
+                            half_extents = [
+                                size[0] / 2.0 if size[0] > 0 else 0.25,
+                                size[1] / 2.0 if size[1] > 0 else 0.25,
+                                size[2] / 2.0 if size[2] > 0 else 0.25,
+                            ]
+                            bounds_report["checked"].append(actor_name)
+                            clamped_pos, bounds_changed, bounds_issue, fit_scale = self._clamp_position_to_room_bounds(
+                                [x, y, z],
+                                half_extents,
+                                self.room_size,
+                                margin=margin,
+                            )
+                            if bounds_issue:
+                                bounds_report["unresolved"].append(f"{actor_name}: {bounds_issue}")
+                            else:
+                                if bounds_changed:
+                                    x, y, z = clamped_pos
+                                    changed = True
+                                    clamped += 1
+                                    bounds_report["clamped"].append(actor_name)
+                                if fit_scale < 0.999:
+                                    bounds_report["scaled"].append(f"{actor_name}: {fit_scale:.2f}")
 
                             # 地面整平：底部贴 Y=0，去倾斜
                             aabb_h = self._get_object_height(actor_name, asset_meta, geo_map)
@@ -3349,10 +3800,25 @@ class SceneComposer:
                             actor.set_position([x, y, z])
                             actor.set_rotation([rx, ry, rz])
                             if geo.get("scale"):
-                                actor.set_scale(geo["scale"])
+                                scale = list(geo["scale"])
+                                if fit_scale < 0.999 and len(scale) >= 3:
+                                    scale = [float(scale[0]) * fit_scale, float(scale[1]) * fit_scale, float(scale[2]) * fit_scale]
+                                actor.set_scale(scale)
+                            elif fit_scale < 0.999:
+                                try:
+                                    current_scale = list(actor.get_scale())
+                                except Exception:
+                                    current_scale = [1.0, 1.0, 1.0]
+                                if len(current_scale) >= 3:
+                                    actor.set_scale([
+                                        float(current_scale[0]) * fit_scale,
+                                        float(current_scale[1]) * fit_scale,
+                                        float(current_scale[2]) * fit_scale,
+                                    ])
 
                         logger.info("[SceneComposer] 修正: 回设%d 钳制%d 整平%d",
                                     fixed, clamped, leveled)
+                        self._last_indoor_bounds_report = bounds_report
 
                         # 第二步：仅一次极短暂物理消穿模（0.25s，阻尼 0.98 基本不位移）
                         if mecha:

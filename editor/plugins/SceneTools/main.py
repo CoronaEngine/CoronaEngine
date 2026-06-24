@@ -13,10 +13,6 @@ from CoronaCore.core.entities import Actor
 from CoronaCore.core.entities.camera import Camera
 from CoronaCore.core.managers import scene_manager
 from CoronaCore.utils.file_handler import FileHandler
-try:
-    from .vision_import import extract_vision_actor_imports
-except ImportError:
-    from vision_import import extract_vision_actor_imports
 
 import logging
 
@@ -269,6 +265,37 @@ def _resolve_vision_model_path(scene_path: str, shape: dict) -> str:
     if os.path.isabs(model_path):
         return os.path.abspath(model_path)
     return os.path.abspath(os.path.join(os.path.dirname(scene_path), model_path))
+
+
+def _vision_model_native_local_correction(model_path: str):
+    if not model_path or os.path.splitext(model_path)[1].lower() != ".obj":
+        return None
+    vertices = []
+    try:
+        with open(model_path, "r", encoding="utf-8", errors="ignore") as file:
+            for line in file:
+                stripped = line.strip()
+                if not stripped.startswith("v "):
+                    continue
+                parts = stripped.split()
+                if len(parts) < 4:
+                    continue
+                vertices.append([float(parts[1]), float(parts[2]), float(parts[3])])
+    except (OSError, ValueError) as exc:
+        logger.warning("Failed to parse Vision model bounds for %s: %s", model_path, exc)
+        return None
+
+    if not vertices:
+        return None
+    center, max_axis = _aabb_center_and_max_axis(vertices)
+    return {
+        "native_local_correction_offset": [
+            _clean_near_zero(center[0]),
+            _clean_near_zero(center[1]),
+            _clean_near_zero(-center[2]),
+        ],
+        "native_local_correction_scale": _clean_near_zero(max_axis),
+    }
 
 
 def _flatten_matrix4x4(value):
@@ -1461,7 +1488,6 @@ class SceneTools(PluginBase):
                 if camera is None:
                     raise ValueError(f"Camera '{camera_name}' not found")
                 camera.set_render_backend(mode)
-                scene.save_data()
                 actual = camera.get_render_backend()
             else:
                 CoronaEditor.CoronaEngine.set_render_backend(mode)
@@ -1502,7 +1528,6 @@ class SceneTools(PluginBase):
             if camera is None:
                 raise ValueError(f"Camera '{camera_name}' not found")
             camera.set_vision_render_mode(mode)
-            scene.save_data()
             actual = camera.get_vision_render_mode()
             logger.info("Vision render mode set to '%s' for scene %s camera %s",
                         actual, scene_name, getattr(camera, 'name', camera_name))
@@ -1718,7 +1743,6 @@ class SceneTools(PluginBase):
                 return {"status": "error", "message": f"Scene '{scene_name}' not found"}
 
             camera_pose = _extract_vision_camera_pose(document)
-            vision_actor_imports = extract_vision_actor_imports(document, abs_path)
             scene.ensure_default_camera()
             active_camera = scene.get_active_camera()
             camera_imported = False
@@ -1739,71 +1763,168 @@ class SceneTools(PluginBase):
             if active_camera is not None and hasattr(active_camera, "set_vision_render_mode"):
                 active_camera.set_vision_render_mode(imported_vision_render_mode)
 
-            imported_actors = []
-            imported_guids = {
-                actor_data["actor_guid"]
-                for actor_data in vision_actor_imports["actors"]
-            }
-            existing_by_guid = {
-                getattr(actor, "actor_guid", ""): actor
-                for actor in scene.get_actors()
-                if getattr(actor, "actor_guid", "")
-            }
-            source_guid_prefix = f"vision:{abs_path}#"
-            for actor in scene.get_actors():
-                actor_guid = getattr(actor, "actor_guid", "")
-                if actor_guid.startswith(source_guid_prefix) and actor_guid not in imported_guids:
-                    scene.remove_actor(actor)
-
-            for actor_data in vision_actor_imports["actors"]:
-                actor = existing_by_guid.get(actor_data["actor_guid"])
-                if actor is None:
-                    actor = Actor(actor_data["name"],
-                                  actor_data["route"],
-                                  actor_type=actor_data["actor_type"],
-                                  parent_scene=scene,
-                                  actor_data=actor_data)
-                    scene.add_actor(actor)
-                else:
-                    actor.actor_type = actor_data["actor_type"]
-                    actor.actor_guid = actor_data["actor_guid"]
-                    if getattr(actor, "route", None) != actor_data["route"]:
-                        actor.route = actor_data["route"]
-                        actor.set_model(actor_data["route"])
-                    geometry_state = actor_data.get("geometry") or {}
-                    if "position" in geometry_state:
-                        actor.set_position(geometry_state["position"])
-                    if "rotation" in geometry_state:
-                        actor.set_rotation(geometry_state["rotation"])
-                    if "scale" in geometry_state:
-                        actor.set_scale(geometry_state["scale"])
-                optics_state = actor_data.get("optics") or {}
-                optics = getattr(actor, "_optics", None)
-                for key, value in optics_state.items():
-                    setter = getattr(optics, f"set_{key}", None)
-                    if setter is not None:
-                        setter(value)
-                imported_actors.append(actor.to_dict())
-
             if "vision" not in scene.file_data:
                 scene.file_data["vision"] = {}
             scene.vision_source_path = abs_path
-            scene.vision_import_mode = "engine_built"
+            scene.vision_import_mode = "external_live"
             scene.file_data["vision"]["source_path"] = abs_path
-            scene.file_data["vision"]["import_mode"] = "engine_built"
+            scene.file_data["vision"]["import_mode"] = "external_live"
+
+            previous_bindings = list(getattr(scene, "vision_bindings", []))
+            new_bindings = []
+            unsupported_shapes = []
+            created_proxy_count = 0
+            reused_proxy_count = 0
+            used_binding_indices = set()
+
+            for shape_index, json_path, shape in _iter_vision_shapes(document):
+                shape_type = _vision_shape_type(shape)
+                model_path = ""
+                actor_route = ""
+                if shape_type == "model":
+                    model_path = _resolve_vision_model_path(abs_path, shape)
+                    actor_route = model_path
+                    if not model_path or not os.path.isfile(model_path):
+                        unsupported_shapes.append({
+                            "shape_index": shape_index,
+                            "json_path": json_path,
+                            "type": shape_type,
+                            "reason": "model_file_not_found",
+                            "model_path": model_path,
+                        })
+                        continue
+                elif shape_type in _SUPPORTED_VISION_PRIMITIVES:
+                    actor_route, model_path = _ensure_vision_primitive_proxy(
+                        scene, shape, shape_type, json_path)
+                    if not actor_route:
+                        unsupported_shapes.append({
+                            "shape_index": shape_index,
+                            "json_path": json_path,
+                            "type": shape_type,
+                            "reason": "primitive_proxy_generation_failed",
+                        })
+                        continue
+                else:
+                    unsupported_shapes.append({
+                        "shape_index": shape_index,
+                        "json_path": json_path,
+                        "type": shape_type or "unknown",
+                        "reason": "unsupported_shape_type",
+                    })
+                    continue
+
+                previous_binding = _find_previous_binding(
+                    previous_bindings,
+                    used_binding_indices,
+                    shape,
+                    shape_type,
+                    json_path,
+                    abs_path,
+                    model_path,
+                )
+                actor = _find_actor_by_guid(
+                    scene, previous_binding.get("actor_guid", "") if previous_binding else "")
+                transform = (
+                    _extract_vision_primitive_proxy_transform(shape)
+                    if shape_type in _SUPPORTED_VISION_PRIMITIVES
+                    else _extract_vision_shape_transform(shape)
+                )
+                if actor is None:
+                    actor_guid = (
+                        previous_binding.get("actor_guid", "") if previous_binding else ""
+                    ) or f"actor-{uuid.uuid4().hex}"
+                    actor_data = {
+                        "actor_guid": actor_guid,
+                        "_suppress_network_broadcast": True,
+                        "geometry": transform,
+                    }
+                    actor = Actor(
+                        name=(_vision_proxy_name(shape, shape_type, shape_index)
+                              if shape_type in _SUPPORTED_VISION_PRIMITIVES
+                              else _vision_shape_name(shape, model_path, shape_index)),
+                        route=actor_route,
+                        actor_type="model",
+                        parent_scene=scene,
+                        actor_data=actor_data,
+                    )
+                    scene.add_actor(actor)
+                    if hasattr(actor, "set_physics_enabled"):
+                        try:
+                            actor.set_physics_enabled(False)
+                        except Exception as exc:
+                            logger.warning("Failed to disable physics for Vision proxy %s: %s",
+                                           getattr(actor, "name", actor_guid), exc)
+                    created_proxy_count += 1
+                else:
+                    if hasattr(actor, "set_position"):
+                        actor.set_position(transform["position"], True)
+                    if hasattr(actor, "set_rotation"):
+                        actor.set_rotation(transform["rotation"], True)
+                    if hasattr(actor, "set_scale"):
+                        actor.set_scale(transform["scale"], True)
+                    if hasattr(actor, "set_physics_enabled"):
+                        try:
+                            actor.set_physics_enabled(False)
+                        except Exception as exc:
+                            logger.warning("Failed to disable physics for Vision proxy %s: %s",
+                                           getattr(actor, "name", ""), exc)
+                    reused_proxy_count += 1
+
+                binding = {
+                    "actor_guid": getattr(actor, "actor_guid", ""),
+                    "actor_name": getattr(actor, "name", ""),
+                    "shape_guid": _vision_shape_guid(shape, json_path),
+                    "shape_index": shape_index,
+                    "json_path": json_path,
+                    "shape_type": shape_type,
+                    "shape_identity_key": _vision_shape_identity_key(abs_path, shape, json_path),
+                    "model_path": model_path,
+                    "source_path": abs_path,
+                }
+                if shape_type == "model":
+                    native_correction = _vision_model_native_local_correction(model_path)
+                    if native_correction:
+                        binding.update(native_correction)
+                if hasattr(actor, "set_external_vision_binding"):
+                    actor.set_external_vision_binding(binding)
+                new_bindings.append(binding)
+
+            active_actor_guids = {binding.get("actor_guid", "") for binding in new_bindings}
+            removed_proxy_count = _remove_stale_vision_proxy_actors(
+                scene, previous_bindings, active_actor_guids)
+            scene.vision_bindings = new_bindings
+            scene.vision_unsupported_shapes = unsupported_shapes
             scene.save_data()
+
+            runtime_path = prepare_external_live_vision_scene(scene)
+            CoronaEditor.CoronaEngine.load_vision_scene(runtime_path or abs_path)
+            if active_camera is not None:
+                active_camera.set_render_backend("vision")
+                if hasattr(scene.engine_scene, "set_active_camera"):
+                    scene.engine_scene.set_active_camera(getattr(active_camera, "engine_obj", active_camera))
+                scene.save_data()
             scene._notify_scene_tree_changed()
-            logger.info("Vision scene imported into current scene %s: %s", scene_name, abs_path)
+            logger.info(
+                "Vision scene imported into current scene %s: %s (created proxies=%d, reused=%d, removed=%d, unsupported=%d)",
+                scene_name, abs_path, created_proxy_count, reused_proxy_count,
+                removed_proxy_count, len(unsupported_shapes))
+            vision_summary = _vision_import_summary(
+                "external_live", abs_path, new_bindings, unsupported_shapes)
             return {
                 "status": "success",
                 "scene": scene_name,
                 "path": abs_path,
-                "import_mode": "engine_built",
-                "imported_actor_count": len(imported_actors),
-                "imported_actors": imported_actors,
-                "unsupported_shapes": vision_actor_imports["unsupported_shapes"],
+                "runtime_path": runtime_path or abs_path,
+                "import_mode": "external_live",
+                "vision_render_mode": imported_vision_render_mode,
                 "camera_imported": camera_imported,
                 "camera": active_camera.to_dict() if active_camera is not None else None,
+                "proxy_actors_created": created_proxy_count,
+                "proxy_actors_reused": reused_proxy_count,
+                "proxy_actors_removed": removed_proxy_count,
+                "bindings": new_bindings,
+                "unsupported_shapes": unsupported_shapes,
+                "vision": vision_summary,
             }
         except json.JSONDecodeError as exc:
             return {"status": "error", "message": f"Invalid Vision JSON: {exc}"}

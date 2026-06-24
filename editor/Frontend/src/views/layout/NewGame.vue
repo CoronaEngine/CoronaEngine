@@ -1,270 +1,185 @@
 <template>
   <div
-    class="relative min-h-screen border-2 border-[#84a65b] bg-[#282828]/95 text-white overflow-hidden flex flex-col font-sans"
+    class="relative min-h-screen bg-[#0d0d0d] text-white overflow-hidden flex flex-col font-sans"
   >
-    <DockTitleBar
-      title="剧情模式"
-      extraClass="bg-[#84A65B]"
-      routePath="/NewGame"
-      @close="closeFloat"
-    />
+    <!-- 背景装饰：径向辉光，延续 StartScreen 视觉 -->
+    <div class="absolute inset-0 bg-gradient-to-b from-[#1a2a1a]/30 via-transparent to-transparent pointer-events-none"></div>
+    <div class="absolute top-0 left-1/2 -translate-x-1/2 w-[700px] h-[700px] bg-[#84a65b]/[0.04] rounded-full blur-3xl pointer-events-none"></div>
+    <div class="absolute bottom-0 left-1/4 w-[400px] h-[400px] bg-[#84a65b]/[0.025] rounded-full blur-3xl pointer-events-none"></div>
 
-    <!-- Tab content -->
-    <div class="flex-1 p-12 bg-[#252525] flex flex-col overflow-y-auto">
-      <div class="max-w-3xl space-y-8">
-        <h2 class="text-2xl font-light">创建新游戏</h2>
+    <!-- 主体三段式 -->
+    <div class="relative z-10 flex-1 flex flex-col px-8 py-6 overflow-hidden">
 
-        <!-- 推荐提示词 -->
-        <div class="space-y-3">
-          <h3 class="text-base text-gray-400">推荐提示词</h3>
-          <div class="bg-[#2a2a2a] rounded-lg p-5 space-y-5 border border-[#3a3a3a]">
-            <div class="space-y-2">
-              <label class="text-base text-gray-300">基础环境</label>
-              <div class="flex flex-wrap gap-2">
-                <button v-for="env in presetEnvironments" :key="env"
-                  class="px-4 py-2 text-sm rounded border transition-all"
-                  :class="storySettings.environment === env ? 'border-[#84a65b] bg-[#84a65b]/20 text-[#84a65b]' : 'border-[#3a3a3a] bg-[#1a1a1a] text-gray-400 hover:border-[#555]'"
-                  @click="storySettings.environment = storySettings.environment === env ? '' : env"
-                >{{ env }}</button>
-              </div>
-            </div>
-            <div class="space-y-2">
-              <label class="text-base text-gray-300">视觉风格</label>
-              <div class="flex flex-wrap gap-2">
-                <button v-for="vs in presetVisualStyles" :key="vs"
-                  class="px-4 py-2 text-sm rounded border transition-all"
-                  :class="storySettings.visualStyle === vs ? 'border-[#84a65b] bg-[#84a65b]/20 text-[#84a65b]' : 'border-[#3a3a3a] bg-[#1a1a1a] text-gray-400 hover:border-[#555]'"
-                  @click="storySettings.visualStyle = storySettings.visualStyle === vs ? '' : vs"
-                >{{ vs }}</button>
-              </div>
-            </div>
-            <div class="space-y-2">
-              <label class="text-base text-gray-300">氛围与时间</label>
-              <div class="flex flex-wrap gap-2">
-                <button v-for="am in presetAtmospheres" :key="am"
-                  class="px-4 py-2 text-sm rounded border transition-all"
-                  :class="storySettings.atmosphere === am ? 'border-[#84a65b] bg-[#84a65b]/20 text-[#84a65b]' : 'border-[#3a3a3a] bg-[#1a1a1a] text-gray-400 hover:border-[#555]'"
-                  @click="storySettings.atmosphere = storySettings.atmosphere === am ? '' : am"
-                >{{ am }}</button>
-              </div>
-            </div>
-          </div>
-        </div>
+      <!-- ① 上方：悬浮提示词层（漂浮 / 发光 / 可点击注入） -->
+      <div class="relative h-44 shrink-0">
+        <button
+          v-for="(hint, i) in floatingHints"
+          :key="hint.text"
+          class="hint-chip absolute px-4 py-2 rounded-full text-sm whitespace-nowrap
+                 bg-[#84a65b]/[0.06] border border-[#84a65b]/25 text-[#b9d39a]
+                 backdrop-blur-sm hover:bg-[#84a65b]/20 hover:border-[#84a65b]/60 hover:text-white
+                 transition-colors duration-300 cursor-pointer"
+          :style="{
+            top: hint.top,
+            left: hint.left,
+            '--dur': hint.dur,
+            '--delay': hint.delay,
+          }"
+          @click="applyHint(hint.text)"
+        >
+          {{ hint.text }}
+        </button>
+      </div>
 
-        <!-- 项目名称 -->
-        <div class="space-y-2">
-          <label class="text-base text-gray-300">项目名称</label>
-          <input v-model="projectName" type="text"
-            class="w-full bg-[#1a1a1a] border border-[#444] rounded p-3 text-base focus:border-[#84a65b] outline-none transition-all"
-            placeholder="请输入项目名称..." />
-        </div>
+      <!-- ② 中间：标题 + 世界描述输入框（页面焦点） -->
+      <div class="flex-1 flex flex-col items-center justify-center min-h-0">
+        <h1 class="text-3xl font-light tracking-wide mb-2 text-center">
+          你想创造一个怎样的
+          <span class="text-[#84a65b] font-medium">世界</span>？
+        </h1>
+        <p class="text-sm text-gray-500 mb-7 text-center">用一句话描述它，AI 会替你把它构建出来</p>
 
-        <!-- 输入你想创造的世界 -->
-        <div class="space-y-2">
-          <label class="text-base text-gray-300">输入你想创造的世界</label>
-          <textarea v-model="worldPrompt" rows="4"
-            class="w-full bg-[#1a1a1a] border border-[#444] rounded p-3 text-base focus:border-[#84a65b] outline-none transition-all resize-none"
-            placeholder="描述你脑海中的世界..."></textarea>
-        </div>
-
-        <!-- 存储位置 -->
-        <div class="space-y-2">
-          <label class="text-base text-gray-300">存储位置</label>
-          <div class="flex gap-2">
-            <input v-model="projectPath" type="text" readonly
-              class="flex-1 bg-[#1a1a1a] border border-[#444] rounded p-3 text-base text-gray-400" />
-            <button class="px-6 bg-[#3d3d3d] hover:bg-[#4d4d4d] rounded transition-colors text-base" @click="browseFolder">浏览</button>
-          </div>
-        </div>
-
-        <!-- 模式选择按钮 -->
-        <div class="flex flex-col gap-3">
-          <button
-            class="w-full py-4 bg-[#84a65b] hover:bg-[#95b86c] disabled:bg-gray-600 disabled:cursor-not-allowed rounded font-bold transition-all shadow-lg text-base"
-            :disabled="!projectName || !projectPath"
-            @click="handleCreateProject">
-            剧情模式(新手教程)
-          </button>
-          <button
-            class="w-full py-4 bg-[#4a4a4a] hover:bg-[#5a5a5a] disabled:bg-gray-600 disabled:cursor-not-allowed rounded font-bold transition-all shadow-lg text-base border border-[#666]"
-            :disabled="!projectName || !projectPath"
-            @click="handleCreativeMode">
-            创造模式(完全自己创造)
-          </button>
+        <div class="w-full max-w-3xl">
+          <textarea
+            ref="promptRef"
+            v-model="worldPrompt"
+            rows="5"
+            class="w-full bg-[#161616] border border-[#333] rounded-xl p-5 text-lg leading-relaxed
+                   focus:border-[#84a65b] focus:shadow-[0_0_40px_rgba(132,166,91,0.12)]
+                   outline-none transition-all resize-none placeholder:text-gray-600"
+            placeholder="例如：一座漂浮在云海之上的赛博朋克城市，永远是雨夜，霓虹倒映在湿漉漉的街道……"
+            @keydown.ctrl.enter="handleCreate"
+          ></textarea>
         </div>
       </div>
-    </div>
 
-    <!-- 底部按钮 -->
-    <div class="shrink-0 px-12 py-6 bg-[#1e1e1e] border-t border-[#333] flex justify-between items-center">
-      <button class="px-5 py-3 text-base text-gray-400 hover:text-white hover:bg-[#333] rounded transition-colors inline-flex items-center gap-1 w-fit" @click="goBack">
-        <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>
-        返回
-      </button>
-      <div class="flex gap-4 items-center">
-        <button class="px-10 py-3 text-base text-gray-400 hover:text-white transition-colors" @click="closeFloat">取消</button>
-        <button
-          :disabled="!projectName || !projectPath"
-          class="px-14 py-3 bg-[#84a65b] hover:bg-[#95b86c] disabled:bg-gray-600 disabled:cursor-not-allowed rounded font-bold transition-all shadow-lg text-base"
-          @click="handleCreateProject">
-          创建项目
-        </button>
+      <!-- ③ 底部：模式二选一 + 操作按钮 -->
+      <div class="shrink-0 flex flex-col items-center gap-6 pb-2">
+        <!-- 模式二选一 -->
+        <div class="inline-flex p-1 rounded-xl bg-[#1a1a1a] border border-[#333]">
+          <button
+            v-for="m in modes"
+            :key="m.id"
+            class="px-8 py-2.5 rounded-lg text-base font-medium transition-all duration-300"
+            :class="mode === m.id
+              ? 'bg-[#84a65b] text-white shadow-lg'
+              : 'text-gray-400 hover:text-white'"
+            @click="mode = m.id"
+          >
+            {{ m.label }}
+          </button>
+        </div>
+
+        <!-- 操作按钮 -->
+        <div class="w-full max-w-3xl flex items-center justify-between">
+          <button
+            class="px-5 py-3 text-base text-gray-400 hover:text-white hover:bg-[#222] rounded-lg transition-colors inline-flex items-center gap-1"
+            @click="goHome"
+          >
+            <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>
+            返回主页
+          </button>
+
+          <button
+            :disabled="creating"
+            class="px-14 py-3 bg-[#84a65b] hover:bg-[#95b86c] disabled:bg-gray-700 disabled:cursor-not-allowed
+                   rounded-lg font-bold text-base transition-all shadow-lg
+                   inline-flex items-center gap-2"
+            @click="handleCreate"
+          >
+            <svg v-if="!creating" class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v18M3 12h18"/><path d="M5.6 5.6l1.4 1.4M17 17l1.4 1.4M18.4 5.6L17 7M7 17l-1.4 1.4"/></svg>
+            <svg v-else class="w-5 h-5 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>
+            {{ creating ? '创造中…' : '创造世界' }}
+          </button>
+        </div>
       </div>
     </div>
   </div>
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue';
+import { ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { projectLauncherService, appService } from '@/utils/bridge';
-import DockTitleBar from '@/components/ui/DockTitleBar.vue';
 
 const router = useRouter();
 
-const projectName = ref('New_Corona_Project');
-const projectPath = ref('');
 const worldPrompt = ref('');
-const activeTab = ref('basic');
+const mode = ref('story'); // 'story' 剧情模式 | 'creative' 创造模式
+const creating = ref(false);
+const promptRef = ref(null);
 
-const tabs = [
-  { id: 'basic', label: '基础信息' },
-  { id: 'narrative', label: '叙事设定' },
-  { id: 'cinematics', label: '演出配置' },
-  { id: 'audio', label: '音频设计' },
+const modes = [
+  { id: 'story', label: '剧情模式' },
+  { id: 'creative', label: '创造模式' },
 ];
 
-const activeTabLabel = computed(() => {
-  const t = tabs.find(t => t.id === activeTab.value);
-  return t ? `步骤 ${tabs.indexOf(t) + 1}/${tabs.length}` : '';
-});
-
-const narrativeTypes = [
-  { id: 'linear', label: '线性叙事', desc: '单线剧情，无分支' },
-  { id: 'branching', label: '分支叙事', desc: '多分支路线与结局' },
-  { id: 'open', label: '开放叙事', desc: '碎片化叙事，自由探索' },
+// 静态预设的悬浮提示词（点击注入输入框）；top/left 散布，dur/delay 错峰漂浮
+const floatingHints = [
+  { text: '赛博朋克雨夜都市',   top: '8%',  left: '6%',  dur: '7s',  delay: '0s' },
+  { text: '漂浮的群岛与天空之城', top: '52%', left: '14%', dur: '8.5s', delay: '0.6s' },
+  { text: '废土上的最后绿洲',   top: '24%', left: '34%', dur: '6.5s', delay: '1.2s' },
+  { text: '水墨风的仙侠秘境',   top: '64%', left: '46%', dur: '9s',  delay: '0.3s' },
+  { text: '深海下的远古遗迹',   top: '10%', left: '60%', dur: '7.5s', delay: '1.6s' },
+  { text: '霓虹蒸汽朋克工坊',   top: '46%', left: '72%', dur: '8s',  delay: '0.9s' },
+  { text: '永夜极光下的雪原',   top: '18%', left: '84%', dur: '6.8s', delay: '0.2s' },
 ];
 
-const dialogueStyles = [
-  { id: 'vn', label: '视觉小说', desc: '立绘+文本框经典AVG' },
-  { id: 'free', label: '自由对话', desc: '非固定位置对话气泡' },
-  { id: 'timeline', label: '时间轴', desc: '时间线驱动对话事件' },
-];
+const applyHint = (text) => {
+  worldPrompt.value = worldPrompt.value.trim()
+    ? `${worldPrompt.value.trim()}，${text}`
+    : text;
+  promptRef.value?.focus();
+};
 
-const consequenceScopes = [
-  { id: 'chapter', label: '章节内影响', desc: '选择仅影响当前章节' },
-  { id: 'global', label: '全局影响', desc: '选择贯穿整个故事' },
-  { id: 'none', label: '无影响', desc: '纯观赏性选择' },
-];
-
-const cameraStyles = [
-  { id: 'static', label: '静态镜头', desc: '固定视角切换' },
-  { id: 'cinematic', label: '电影化运镜', desc: '推拉摇移动态镜头' },
-  { id: 'first_person', label: '第一人称', desc: '主角视角叙事' },
-];
-
-const uiThemes = [
-  { id: 'dark', label: '暗色主题', desc: '深色背景适配剧情' },
-  { id: 'light', label: '亮色主题', desc: '浅色清新风格' },
-  { id: 'custom', label: '自定义', desc: '后续自行配置' },
-];
-
-const voiceOptions = [
-  { id: 'none', label: '仅文本', desc: '无语音，纯文字演出' },
-  { id: 'partial', label: '部分语音', desc: '关键场景配音' },
-  { id: 'full', label: '全程语音', desc: '全文本配音覆盖' },
-];
-
-const storySettings = ref({
-  environment: '',
-  visualStyle: '',
-  atmosphere: '',
-  narrativeType: 'linear',
-  dialogueStyle: 'vn',
-  consequenceScope: 'chapter',
-  cameraStyle: 'static',
-  textSpeed: 3,
-  autoPlay: false,
-  skipEnabled: true,
-  uiTheme: 'dark',
-  bgmVolume: 80,
-  sfxVolume: 100,
-  voiceOption: 'partial',
-  ambientPreset: 'none',
-});
-
-const presetEnvironments = ['森林', '沙漠', '平原', '山地', '城市', '乡村', '废墟', '室内', '洞窟', '水域'];
-const presetVisualStyles = ['写实', '赛博朋克', '奇幻', '废土', '像素', '低多边形', '水墨', '卡通'];
-const presetAtmospheres = ['白天·晴天', '夜晚·灯火', '黄昏', '雾天', '阴雨', '暴风雪', '宁静', '诡异'];
-
-onMounted(async () => {
-  try {
-    const path = await projectLauncherService.getDefaultProjectPath();
-    if (path) projectPath.value = path.data;
-  } catch (error) {
-    console.error('NewGame 初始化失败:', error);
-  }
-});
-
-const goBack = () => {
+const goHome = () => {
   router.push('/StartScreen');
 };
 
-const handleCreativeMode = () => {
-  router.push('/CreateGame');
-};
+const handleCreate = async () => {
+  if (creating.value) return;
+  const prompt = worldPrompt.value.trim(); // 允许为空：无提示词也可创建
 
-const browseFolder = async () => {
-  const path = await projectLauncherService.browseFolder(projectPath.value);
-  if (path.data) projectPath.value = path.data;
-};
-
-const handleCreateProject = async () => {
-  if (!projectName.value || !projectPath.value) return;
-
+  creating.value = true;
   try {
-    const projectData = {
-      name: projectName.value,
-      path: projectPath.value,
-      mode: 'story',
-      settings: {
-        ...storySettings.value,
-        defaultScene: 'story_basic',
-        realTimeRender: false,
-      },
-    };
+    // 后端自动命名 + 存到引擎 data 目录，返回 { name, path }
+    const result = await projectLauncherService.createWorldProject({
+      mode: mode.value,
+      prompt,
+    });
+    const info = result?.data;
 
-    const result = await projectLauncherService.createProject(projectData);
-
-    if (result.success === true) {
-      await handleOpenProject(result.data);
-    } else {
-      alert('创建失败: ' + result.message);
+    if (info && info.path) {
+      await projectLauncherService.setProjectMode(mode.value, { prompt });
+      const opened = await projectLauncherService.openProject(info.path);
+      if (opened?.data) {
+        await appService.start_engine();
+        router.push('/');
+        return;
+      }
     }
+    alert('创建失败');
   } catch (error) {
-    console.error('创建项目异常:', error);
+    console.error('创造世界失败:', error);
+    alert('创建失败: ' + (error?.message || error));
+  } finally {
+    creating.value = false;
   }
-};
-
-const handleOpenProject = async (path) => {
-  try {
-    await projectLauncherService.setProjectMode('story', storySettings.value);
-    const success = await projectLauncherService.openProject(path);
-    if (success.data) {
-      await appService.start_engine();
-      router.push('/');
-    }
-  } catch (error) {
-    console.error('打开项目失败:', error);
-  }
-};
-
-const closeFloat = async () => {
-  window.close();
 };
 </script>
 
 <style scoped>
+/* 悬浮提示词缓慢漂浮 + 发光呼吸 */
+@keyframes floatDrift {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-12px); }
+}
+.hint-chip {
+  animation: floatDrift var(--dur, 8s) ease-in-out infinite;
+  animation-delay: var(--delay, 0s);
+  box-shadow: 0 0 18px rgba(132, 166, 91, 0.08);
+}
+
 ::-webkit-scrollbar {
   width: 4px;
 }

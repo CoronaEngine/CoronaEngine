@@ -1,5 +1,7 @@
 #include "imgui_ui.h"
 
+#include <algorithm>
+
 #include <corona/kernel/core/i_logger.h>
 #include <corona/resource/resource_manager.h>
 #include <corona/resource/types/image.h>
@@ -120,11 +122,12 @@ bool initialize_sdl_imgui(SDL_Window*& window, ImGuiIO*& io, std::unique_ptr<Vul
 
     SDL_SetHint(SDL_HINT_VIDEO_X11_NET_WM_BYPASS_COMPOSITOR, "0");
 
-    // 获取当前桌面分辨率，并为 SDL 窗口标题栏预留高度（估计值）
+    // SDL desktop modes are physical pixels on high-DPI Windows; SDL window
+    // sizes are desktop/window coordinates.
     int initial_width = 1920;
     int initial_height = 1080;
-    // SDL3: SDL_GetDesktopDisplayMode 接受一个 SDL_DisplayID
-    const int kTitlebarEstimate = 80;  // 估计的标题栏高度（像素）
+    int initial_x = SDL_WINDOWPOS_CENTERED;
+    int initial_y = SDL_WINDOWPOS_CENTERED;
     SDL_DisplayID primary_display = SDL_GetPrimaryDisplay();
     const SDL_DisplayMode* desktop_mode = nullptr;
     if (primary_display != 0) {
@@ -132,8 +135,25 @@ bool initialize_sdl_imgui(SDL_Window*& window, ImGuiIO*& io, std::unique_ptr<Vul
     }
 
     if (desktop_mode) {
-        initial_width = desktop_mode->w * 0.8;
-        initial_height = desktop_mode->h * 0.8;
+        float display_scale = SDL_GetDisplayContentScale(primary_display);
+        if (display_scale <= 0.0f) {
+            display_scale = 1.0f;
+        }
+
+        float desktop_width = static_cast<float>(desktop_mode->w) / display_scale;
+        float desktop_height = static_cast<float>(desktop_mode->h) / display_scale;
+
+        SDL_Rect usable_bounds{};
+        if (SDL_GetDisplayUsableBounds(primary_display, &usable_bounds) &&
+            usable_bounds.w > 0 && usable_bounds.h > 0) {
+            desktop_width = std::min(desktop_width, static_cast<float>(usable_bounds.w));
+            desktop_height = std::min(desktop_height, static_cast<float>(usable_bounds.h));
+        }
+
+        initial_width = static_cast<int>(desktop_width * 0.8f);
+        initial_height = static_cast<int>(desktop_height * 0.8f);
+        initial_x = static_cast<int>((desktop_width - static_cast<float>(initial_width)) * 0.5f);
+        initial_y = static_cast<int>((desktop_height - static_cast<float>(initial_height)) * 0.5f);
     }
 
     window = SDL_CreateWindow("Corona Engine (Horizon)", initial_width, initial_height, SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIDDEN);
@@ -143,7 +163,7 @@ bool initialize_sdl_imgui(SDL_Window*& window, ImGuiIO*& io, std::unique_ptr<Vul
         return false;
     }
 
-    SDL_SetWindowPosition(window, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
+    SDL_SetWindowPosition(window, initial_x, initial_y);
     // SDL_ShowWindow(window);
     SDL_StartTextInput(window);
     // SDL_MaximizeWindow(window);
@@ -246,8 +266,8 @@ ImGuiID UiLayoutManager::setup_dockspace() {
                                     ImGuiWindowFlags_NoResize |
                                     ImGuiWindowFlags_NoMove |
                                     ImGuiWindowFlags_NoBringToFrontOnFocus |
-                                    ImGuiWindowFlags_NoNavFocus |
-                                    ImGuiWindowFlags_NoBackground;
+                                    ImGuiWindowFlags_NoNavFocus;
+    window_flags |= ImGuiWindowFlags_NoBackground;
 
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
@@ -369,12 +389,12 @@ void UiFrameRunner::run_frame(UiFrameContext& context) {
         return;
     }
 
-    auto route_camera_window = [&](SDL_WindowID window_id) {
+    auto route_browser_platform_window = [&](SDL_WindowID window_id) {
         if (window_id == 0) {
             return;
         }
         for (const auto& [tab_id, tab] : BrowserManager::instance().get_tabs()) {
-            if (tab && tab->camera_view &&
+            if (tab && tab->docking_pos != "main" &&
                 tab->platform_window_id == window_id) {
                 *context.active_tab_id = tab_id;
                 url_input_active_tab_ = -1;
@@ -383,36 +403,33 @@ void UiFrameRunner::run_frame(UiFrameContext& context) {
         }
     };
 
-    auto route_main_window = [&]() {
-        for (const auto& [tab_id, tab] : BrowserManager::instance().get_tabs()) {
-            if (tab && !tab->camera_view && tab->docking_pos == "main") {
-                *context.active_tab_id = tab_id;
-                url_input_active_tab_ = -1;
-                return;
-            }
+    auto route_event_window = [&](SDL_WindowID window_id) {
+        if (context.window && window_id == SDL_GetWindowID(context.window)) {
+            // Embedded browser docks share the main SDL window with the main
+            // editor tab. Preserve the tab selected by ImGui mouse hit-testing.
+            return;
         }
+        route_browser_platform_window(window_id);
     };
 
     auto result = event_handler_.process_events(
         context.window, url_input_active_tab_,
         [&](const SDL_Event& event) {
-            route_camera_window(event.key.windowID);
+            route_event_window(event.key.windowID);
             input_handler_.process_sdl_key_event(event);
         },
         [&](const SDL_Event& event) {
-            route_camera_window(event.text.windowID);
+            route_event_window(event.text.windowID);
             input_handler_.process_sdl_text_event(event);
         },
         [&](const SDL_Event& event) {
-            route_camera_window(event.edit.windowID);
+            route_event_window(event.edit.windowID);
             input_handler_.process_sdl_ime_event(event);
         });
 
     if (SDL_Window* focused_window = SDL_GetKeyboardFocus()) {
-        if (focused_window == context.window) {
-            route_main_window();
-        } else {
-            route_camera_window(SDL_GetWindowID(focused_window));
+        if (focused_window != context.window) {
+            route_browser_platform_window(SDL_GetWindowID(focused_window));
         }
     }
 #ifdef _WIN32
@@ -423,15 +440,14 @@ void UiFrameRunner::run_frame(UiFrameContext& context) {
                   SDL_PROP_WINDOW_WIN32_HWND_POINTER,
                   nullptr))
             : nullptr;
-        if (main_hwnd && foreground == main_hwnd) {
-            route_main_window();
-        }
-        for (const auto& [tab_id, tab] : BrowserManager::instance().get_tabs()) {
-            if (tab && tab->camera_view &&
-                tab->platform_handle_raw == foreground) {
-                *context.active_tab_id = tab_id;
-                url_input_active_tab_ = -1;
-                break;
+        if (!main_hwnd || foreground != main_hwnd) {
+            for (const auto& [tab_id, tab] : BrowserManager::instance().get_tabs()) {
+                if (tab && tab->docking_pos != "main" &&
+                    tab->platform_handle_raw == foreground) {
+                    *context.active_tab_id = tab_id;
+                    url_input_active_tab_ = -1;
+                    break;
+                }
             }
         }
     }

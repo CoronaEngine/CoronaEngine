@@ -63,6 +63,7 @@
 import * as Blockly from 'blockly/core';
 import { onMounted, onUnmounted, ref } from 'vue';
 import { useStore } from '../store/store';
+import { CoronaTheme } from '../configs/theme';
 
 const store = useStore();
 const visible = ref(false);
@@ -111,7 +112,7 @@ function setTheme(value) {
   if (ws) {
     try {
       const blocklyTheme = theme === 'dark'
-        ? Blockly.Themes.Dark
+        ? CoronaTheme
         : Blockly.Themes.Classic;
       ws.setTheme(blocklyTheme);
     } catch {}

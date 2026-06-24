@@ -109,14 +109,31 @@ class CoronaEditor:
     _camera_follow_offset = [0.0, 0.0, 2.0]
     _held_keys = set()
     _editor_camera_input_enabled = True
+    _editor_camera_input_locks = set()
 
     @classmethod
-    def set_editor_camera_input_enabled(cls, enabled):
-        cls._editor_camera_input_enabled = bool(enabled)
-        if not enabled:
+    def set_editor_camera_input_enabled(cls, enabled, reason="global"):
+        reason_key = str(reason or "global")
+        if enabled:
+            cls._editor_camera_input_locks.discard(reason_key)
+        else:
+            cls._editor_camera_input_locks.add(reason_key)
+        input_enabled = not cls._editor_camera_input_locks
+        previous = cls._editor_camera_input_enabled
+        cls._editor_camera_input_enabled = input_enabled
+        if not input_enabled:
             cls._held_keys.clear()
             cls._follow_rmb_down = False
             cls._follow_prev_mouse = None
+        if previous == input_enabled:
+            return
+        try:
+            import CoronaEngine
+            setter = getattr(CoronaEngine, "camera_follow_set_input_enabled", None)
+            if setter is not None:
+                setter(input_enabled)
+        except Exception:
+            logger.debug("CameraFollowController input gate unavailable", exc_info=True)
 
     @classmethod
     def camera_lock_set(cls, enabled, ox=0.0, oy=0.0, oz=2.0, rx=0.0, ry=0.0, rz=0.0):

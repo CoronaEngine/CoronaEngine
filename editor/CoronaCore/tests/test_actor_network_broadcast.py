@@ -1196,6 +1196,7 @@ class ActorNetworkBroadcastTests(unittest.TestCase):
             self.assertTrue(actor_data["follow_camera"])
             self.assertFalse(actor_data["mechanics"]["physics_enabled"])
             self.assertEqual(actor_data["actor_guid"], "actor-hud")
+            self.assertTrue(actor_data["_suppress_network_broadcast"])
             self.assertEqual(
                 actor_data["geometry"]["position"],
                 [0.12345678912345678, -0.9876543219876543, 2.000000000000001],

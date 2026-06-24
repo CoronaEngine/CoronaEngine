@@ -1,6 +1,6 @@
 ﻿#pragma once
 
-#include <Horizon.h>
+#include "horizon.h"
 #include <SDL3/SDL.h>
 #include <imgui.h>
 #include <include/internal/cef_types.h>
@@ -98,8 +98,9 @@ class BrowserManager {
     BrowserTab* get_tab(int tab_id);
     void remove_tab(int tab_id);
     void update_texture(int tab_id);
-    void wait_for_texture_uploads(HardwareExecutor& consumer);
     void resize_tab(int tab_id, int width, int height);
+    [[nodiscard]] const Horizon::HardwareImage* get_texture_image(ImTextureID texture_id) const;
+    void wait_for_texture_upload(ImTextureID texture_id);
 
     // 隐藏标签页（最小化）
     bool hide_tab(int tab_id, bool if_close = false);
@@ -128,7 +129,8 @@ class BrowserManager {
     void retire_deferred_tab_textures(bool force = false);
 
     struct OwnedImage {
-        HardwareImage image;
+        Horizon::HardwareImage image;
+        Horizon::SubmitReceipt upload_receipt;
         uint32_t width = 0;
         uint32_t height = 0;
     };
@@ -143,11 +145,11 @@ class BrowserManager {
     std::mutex pending_tasks_mutex_;
     std::vector<std::function<void()>> pending_tasks_;
     std::unordered_map<ImTextureID, OwnedImage> owned_images_;
+    Horizon::HardwareExecutor browser_upload_executor_;
     std::vector<DeferredTextureDestroy> deferred_texture_destroys_;
     uint64_t frame_index_ = 0;
     int tab_counter_ = 0;
 
-    HardwareExecutor texture_executor_;
 };
 
 }  // namespace Corona::Systems::UI

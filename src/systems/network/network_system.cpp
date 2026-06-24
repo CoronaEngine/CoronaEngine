@@ -10,6 +10,8 @@
 
 #include <chrono>
 #include <algorithm>
+#include <atomic>
+#include <cctype>
 #include <deque>
 #include <filesystem>
 #include <fstream>
@@ -34,6 +36,7 @@ struct NetworkSystem::Impl {
     std::function<void(const std::string&)> lanchat_event_callback;
     std::deque<NetworkSystem::LanChatRoomEvent> pending_lanchat_room_events;
     std::string lanchat_nickname;
+    std::string lanchat_history_session_id;
     uint64_t next_lanchat_message_id = 1;
     std::unordered_map<std::string, std::string> lanchat_member_by_peer;
     bool lanchat_join_pending = false;
@@ -156,10 +159,34 @@ namespace {
 constexpr auto kTransferTimeout = std::chrono::seconds(30);
 constexpr auto kOutgoingCacheTtl = std::chrono::minutes(2);
 constexpr auto kLanChatJoinTimeout = std::chrono::seconds(5);
+std::atomic<uint64_t> g_lanchat_history_session_counter{1};
 
 uint64_t now_ms() {
     return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::system_clock::now().time_since_epoch()).count());
+}
+
+std::string sanitize_history_session_part(const std::string& value) {
+    std::string out;
+    out.reserve(value.size());
+    for (unsigned char ch : value) {
+        if (std::isalnum(ch) || ch == '-' || ch == '_' || ch == '.') {
+            out.push_back(static_cast<char>(ch));
+        } else {
+            out.push_back('_');
+        }
+    }
+    return out.empty() ? "room" : out;
+}
+
+std::string make_lanchat_history_session_id(const std::string& room_id) {
+    std::ostringstream out;
+    out << sanitize_history_session_part(room_id)
+        << "__session__"
+        << now_ms()
+        << "__"
+        << g_lanchat_history_session_counter.fetch_add(1, std::memory_order_relaxed);
+    return out.str();
 }
 
 std::string json_escape(const std::string& input) {
@@ -779,6 +806,7 @@ void NetworkSystem::clear_lanchat_room_state() {
     impl_->lanchat.close_room();
     impl_->lanchat_member_by_peer.clear();
     impl_->lanchat_nickname.clear();
+    impl_->lanchat_history_session_id.clear();
     impl_->lanchat_join_pending = false;
     impl_->lanchat_join_member_snapshot_received = false;
     impl_->lanchat_join_history_snapshot_received = false;
@@ -813,7 +841,12 @@ bool NetworkSystem::lanchat_start_local_room(const std::string& room_id,
     impl_->lanchat_join_pending = false;
     impl_->lanchat_join_member_snapshot_received = false;
     impl_->lanchat_join_history_snapshot_received = false;
-    return impl_->lanchat.open_room(room_id, "local-single-player", display_name);
+    const bool opened = impl_->lanchat.open_room(room_id, "local-single-player", display_name);
+    if (opened) {
+        impl_->lanchat_history_session_id = make_lanchat_history_session_id(
+            impl_->lanchat.room_id());
+    }
+    return opened;
 }
 
 bool NetworkSystem::lanchat_start_room(const std::string& room_id,
@@ -831,7 +864,12 @@ bool NetworkSystem::lanchat_start_room(const std::string& room_id,
     impl_->lanchat_join_member_snapshot_received = false;
     impl_->lanchat_join_history_snapshot_received = false;
     const std::string peer_id = local_peer_id();
-    return impl_->lanchat.open_room(room_id, peer_id, display_name);
+    const bool opened = impl_->lanchat.open_room(room_id, peer_id, display_name);
+    if (opened) {
+        impl_->lanchat_history_session_id = make_lanchat_history_session_id(
+            impl_->lanchat.room_id());
+    }
+    return opened;
 }
 
 void NetworkSystem::lanchat_stop_local_room() {
@@ -858,6 +896,8 @@ bool NetworkSystem::lanchat_join_room(const std::string& ip,
     impl_->lanchat_nickname = display_name;
     impl_->lanchat_member_by_peer.clear();
     impl_->lanchat.open_room(room_id, local_peer_id(), display_name);
+    impl_->lanchat_history_session_id = make_lanchat_history_session_id(
+        impl_->lanchat.room_id());
     impl_->lanchat_join_pending = true;
     impl_->lanchat_join_member_snapshot_received = false;
     impl_->lanchat_join_history_snapshot_received = false;
@@ -868,6 +908,7 @@ bool NetworkSystem::lanchat_join_room(const std::string& ip,
             impl_->peer_manager, ip, effective_port, join_packet) &&
         !connect_to_peer(ip, effective_port, display_name)) {
         impl_->lanchat.close_room();
+        impl_->lanchat_history_session_id.clear();
         impl_->lanchat_join_pending = false;
         return false;
     }
@@ -1189,11 +1230,15 @@ const std::vector<Network::LanChatAgent>& NetworkSystem::lanchat_agents() const 
 }
 
 std::optional<Network::LanChatAgentTrigger> NetworkSystem::lanchat_pop_agent_trigger() {
+    if (impl_->session_role == SessionRole::Client) {
+        return std::nullopt;
+    }
     return impl_->lanchat.pop_agent_trigger();
 }
 
 std::optional<Network::LanChatMessage> NetworkSystem::lanchat_pop_coordinator_sync_message() {
-    return impl_->lanchat.pop_coordinator_sync_message();
+    const bool allow_generation_start = impl_->session_role != SessionRole::Client;
+    return impl_->lanchat.pop_coordinator_sync_message(allow_generation_start);
 }
 
 std::optional<NetworkSystem::LanChatRoomEvent> NetworkSystem::lanchat_pop_room_event() {
@@ -1465,14 +1510,20 @@ void NetworkSystem::persist_lanchat_message(const Network::LanChatMessage& messa
     if (message.room_id.empty() || message.message_id.empty()) return;
     const auto root = lanchat_history_root_from_project(impl_->project_root);
     Network::LanChatHistoryStore store(root);
-    store.append_message(message.room_id, message);
+    const std::string history_id = impl_->lanchat_history_session_id.empty()
+        ? message.room_id
+        : impl_->lanchat_history_session_id;
+    store.append_message(history_id, message);
 }
 
 void NetworkSystem::persist_lanchat_agents(const std::string& room_id) {
     if (room_id.empty()) return;
     const auto root = lanchat_history_root_from_project(impl_->project_root);
     Network::LanChatHistoryStore store(root);
-    store.save_agents(room_id, impl_->lanchat.agents());
+    const std::string history_id = impl_->lanchat_history_session_id.empty()
+        ? room_id
+        : impl_->lanchat_history_session_id;
+    store.save_agents(history_id, impl_->lanchat.agents());
 }
 
 // ============================================================================
@@ -1988,6 +2039,12 @@ void NetworkSystem::on_custom_message(const std::string& sender_peer_id,
         }
         if (impl_->lanchat.room_id() != room_id) return;
         impl_->lanchat.apply_member_snapshot(members);
+        for (const auto& member : members) {
+            if (member.member_id == local_peer_id() && !member.nickname.empty()) {
+                impl_->lanchat_nickname = member.nickname;
+                break;
+            }
+        }
         if (impl_->session_role == SessionRole::Client && impl_->lanchat_join_pending) {
             impl_->lanchat_join_member_snapshot_received = true;
             complete_lanchat_join_if_ready(
@@ -2062,7 +2119,14 @@ void NetworkSystem::on_custom_message(const std::string& sender_peer_id,
         }
         if (result.accepted &&
             (mt == MessageType::CHAT_MESSAGE || mt == MessageType::CHAT_MESSAGE_V2)) {
-            impl_->lanchat.enqueue_agent_triggers_for_message(result.message, local_peer_id());
+            const bool allow_agent_execution = impl_->session_role != SessionRole::Client;
+            const bool allow_generation_start = allow_agent_execution;
+            impl_->lanchat.enqueue_agent_triggers_for_message(
+                result.message,
+                local_peer_id(),
+                /*is_agent_reply=*/false,
+                allow_agent_execution,
+                allow_generation_start);
         }
         if (result.accepted && impl_->session_role == SessionRole::Host) {
             auto packet = build_chat_packet_for_type(result.message, mt);

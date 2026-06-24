@@ -22,8 +22,8 @@ addCustomExpert(config, { name: '灯光师', persona: '负责灯光氛围' });
 addCustomExpert(config, { name: ' ', persona: 'ignored' });
 
 assert.deepEqual(selectedExpertPayloads(config, roles), [
-  { name: '商人', persona: '商人' },
-  { name: '小女孩', persona: '小女孩' },
+  { name: '商人', persona: '商人', roleKey: 'merchant' },
+  { name: '小女孩', persona: '小女孩', roleKey: 'girl' },
   { name: '灯光师', persona: '负责灯光氛围' },
 ]);
 

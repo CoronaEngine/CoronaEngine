@@ -12,6 +12,7 @@ chat/system messages. It does not compile or start the engine.
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import sys
 from collections import Counter
@@ -100,6 +101,40 @@ INTERVENTION_RESULT_KEYWORDS = (
     "待补",
     "failed resource requests",
     "deferred",
+)
+VLM_MARKERS = (
+    "VlmReviewLoop",
+    "ModelReviewer][VLMCapture",
+    "VLM 外审",
+    "VLM 审查",
+    "独立摄像头截图",
+)
+VLM_SUCCESS_MARKERS = (
+    "file ready=True",
+    "VLM 审查未发现明显语义问题",
+    "VLM 审查发现",
+)
+VLM_SKIP_MARKERS = (
+    "VLM 外审未执行",
+    "VLM 外审未完成",
+    "截图失败",
+    "截图超时",
+    "无截图",
+    "跳过审查",
+)
+VLM_READY_PATH_RE = re.compile(r"file ready=True .*?path=(.+?\.png)(?:\s|$)")
+ZONE_SNAPSHOT_RE = re.compile(r"Zone decompose snapshot saved:\s*(.+?\.json)")
+ROOM_MARKERS = (
+    "__room_box",
+    "room_box",
+    "房间尺寸",
+    "室内空间预算",
+)
+TERRAIN_MARKERS = (
+    "__room_terrain",
+    "__terrain_boundary",
+    "terrain created",
+    "Resource/terrain.obj",
 )
 
 
@@ -294,6 +329,101 @@ def _check_intervention_visibility(lines: list[str]) -> Check:
     )
 
 
+def _check_vlm_capture_write(lines: list[str]) -> Check:
+    vlm_lines = [line.strip() for line in lines if _line_has_any(line, VLM_MARKERS)]
+    if not vlm_lines:
+        return Check("WARN", "vlm-capture-write", "no VLM review/capture markers found; acceptable only if VLM was disabled")
+    ready_paths = [
+        Path(match.group(1).strip())
+        for line in vlm_lines
+        for match in [VLM_READY_PATH_RE.search(line)]
+        if match
+    ]
+    if ready_paths:
+        existing = [path for path in ready_paths if path.exists() and path.stat().st_size > 0]
+        if existing:
+            return Check(
+                "PASS",
+                "vlm-capture-write",
+                f"VLM screenshot file(s) confirmed on disk: {len(existing)}/{len(ready_paths)}; first={existing[0]}",
+            )
+        return Check(
+            "WARN",
+            "vlm-capture-write",
+            f"VLM log reports file ready but screenshot file is missing/empty now; ready line(s)={len(ready_paths)}",
+        )
+    if any(_line_has_any(line, VLM_SUCCESS_MARKERS) for line in vlm_lines):
+        return Check("PASS", "vlm-capture-write", "VLM review success marker found without screenshot file path")
+    if any(_line_has_any(line, VLM_SKIP_MARKERS) for line in vlm_lines):
+        sample = next((line for line in vlm_lines if _line_has_any(line, VLM_SKIP_MARKERS)), vlm_lines[0])
+        return Check("WARN", "vlm-capture-write", f"VLM ran or was configured but did not produce confirmed screenshots; first={sample[:220]}")
+    return Check("WARN", "vlm-capture-write", f"{len(vlm_lines)} VLM marker(s) found but no confirmed screenshot-ready evidence")
+
+
+def _looks_mixed_scene_prompt(prompt: str) -> bool:
+    text = str(prompt or "").lower()
+    outdoor = any(token in text for token in ("室外", "户外", "草原", "森林", "营地", "山坡", "野外", "outdoor", "grassland", "forest", "camp"))
+    structure = any(token in text for token in ("蒙古包", "帐篷", "木屋", "小屋", "房子", "建筑", "商铺", "屋子", "yurt", "tent", "cabin", "hut", "building"))
+    inside = any(token in text for token in ("里面", "内部", "里有", "内有", "可进入", "inside", "interior"))
+    return outdoor and structure and inside
+
+
+def _looks_indoor_prompt(prompt: str) -> bool:
+    text = str(prompt or "").lower()
+    return any(token in text for token in ("卧室", "客厅", "室内", "藏宝室", "宝库", "密室", "库房", "地下室", "room", "vault", "chamber", "indoor"))
+
+
+def _looks_outdoor_prompt(prompt: str) -> bool:
+    text = str(prompt or "").lower()
+    return any(token in text for token in ("室外", "户外", "草原", "森林", "营地", "夜市", "集市", "outdoor", "grassland", "forest", "camp", "market"))
+
+
+def _zone_enclosures(payload: dict) -> set[str]:
+    zones = payload.get("normalized_zones")
+    if not isinstance(zones, list):
+        return set()
+    return {str(zone.get("enclosure") or "").strip().lower() for zone in zones if isinstance(zone, dict)}
+
+
+def _latest_zone_snapshot(lines: list[str]) -> Path | None:
+    paths: list[Path] = []
+    for line in lines:
+        match = ZONE_SNAPSHOT_RE.search(line)
+        if match:
+            paths.append(Path(match.group(1).strip()))
+    return paths[-1] if paths else None
+
+
+def _check_scene_substrate_evidence(lines: list[str]) -> Check:
+    snapshot = _latest_zone_snapshot(lines)
+    if snapshot:
+        if not snapshot.exists():
+            return Check("WARN", "scene-substrate", f"zone snapshot referenced but missing: {snapshot}")
+        try:
+            payload = json.loads(snapshot.read_text(encoding="utf-8"))
+        except Exception as exc:  # noqa: BLE001
+            return Check("WARN", "scene-substrate", f"zone snapshot could not be read: {exc}")
+        prompt = str(payload.get("prompt") or "")
+        enclosures = _zone_enclosures(payload)
+        has_room = bool(enclosures & {"box", "shell"})
+        has_terrain = "terrain" in enclosures
+        if _looks_mixed_scene_prompt(prompt):
+            if has_room and has_terrain:
+                return Check("PASS", "scene-substrate", f"mixed scene snapshot has terrain + room/shell: {snapshot}")
+            return Check("FAIL", "scene-substrate", f"mixed scene snapshot missing terrain or room/shell; enclosures={sorted(enclosures)} path={snapshot}")
+        if _looks_indoor_prompt(prompt) and not has_room:
+            return Check("FAIL", "scene-substrate", f"indoor-like snapshot missing room/shell; enclosures={sorted(enclosures)} path={snapshot}")
+        if _looks_outdoor_prompt(prompt) and not has_terrain and not has_room:
+            return Check("FAIL", "scene-substrate", f"outdoor-like snapshot missing terrain evidence; enclosures={sorted(enclosures)} path={snapshot}")
+        return Check("PASS", "scene-substrate", f"zone snapshot present; enclosures={sorted(enclosures)}")
+
+    has_room_marker = any(_line_has_any(line, ROOM_MARKERS) for line in lines)
+    has_terrain_marker = any(_line_has_any(line, TERRAIN_MARKERS) for line in lines)
+    if has_room_marker or has_terrain_marker:
+        return Check("PASS", "scene-substrate", f"log substrate markers: room={has_room_marker}, terrain={has_terrain_marker}")
+    return Check("WARN", "scene-substrate", "no zone snapshot or room/terrain markers found")
+
+
 def run(path: Path) -> list[Check]:
     lines = _read_lines(path)
     return [
@@ -306,6 +436,8 @@ def run(path: Path) -> list[Check]:
         _check_cef_crash(lines),
         _check_completion_integrity(lines),
         _check_intervention_visibility(lines),
+        _check_vlm_capture_write(lines),
+        _check_scene_substrate_evidence(lines),
     ]
 
 

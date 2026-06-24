@@ -204,7 +204,8 @@ std::vector<LanChatHistoryRoomSummary> LanChatHistoryStore::list_rooms() const {
         if (!file) continue;
 
         LanChatHistoryRoomSummary summary;
-        summary.room_id = entry.path().stem().string();
+        summary.session_id = entry.path().stem().string();
+        summary.room_id = summary.session_id;
 
         std::string line;
         while (std::getline(file, line)) {
@@ -234,7 +235,7 @@ std::vector<LanChatHistoryRoomSummary> LanChatHistoryStore::list_rooms() const {
 std::vector<LanChatMessage> LanChatHistoryStore::load_room(
     const std::string& room_id,
     size_t max_messages) const {
-    std::ifstream file(room_file(room_id), std::ios::binary);
+    std::ifstream file(resolve_room_file(room_id), std::ios::binary);
     if (!file) return {};
 
     std::deque<LanChatMessage> retained;
@@ -281,7 +282,7 @@ void LanChatHistoryStore::save_agents(
 
 std::vector<LanChatAgent> LanChatHistoryStore::load_agents(
     const std::string& room_id) const {
-    std::ifstream file(agents_file(room_id), std::ios::binary);
+    std::ifstream file(resolve_agents_file(room_id), std::ios::binary);
     if (!file) return {};
 
     std::vector<LanChatAgent> agents;
@@ -300,6 +301,38 @@ std::filesystem::path LanChatHistoryStore::room_file(const std::string& room_id)
 
 std::filesystem::path LanChatHistoryStore::agents_file(const std::string& room_id) const {
     return root_ / (sanitize_room_id(room_id) + ".agents.jsonl");
+}
+
+std::filesystem::path LanChatHistoryStore::resolve_room_file(
+    const std::string& room_or_session_id) const {
+    const auto exact = room_file(room_or_session_id);
+    std::error_code ec;
+    if (std::filesystem::exists(exact, ec) && !ec) {
+        return exact;
+    }
+
+    for (const auto& room : list_rooms()) {
+        if (room.room_id == room_or_session_id) {
+            return room_file(room.session_id);
+        }
+    }
+    return exact;
+}
+
+std::filesystem::path LanChatHistoryStore::resolve_agents_file(
+    const std::string& room_or_session_id) const {
+    const auto exact = agents_file(room_or_session_id);
+    std::error_code ec;
+    if (std::filesystem::exists(exact, ec) && !ec) {
+        return exact;
+    }
+
+    for (const auto& room : list_rooms()) {
+        if (room.room_id == room_or_session_id) {
+            return agents_file(room.session_id);
+        }
+    }
+    return exact;
 }
 
 }  // namespace Corona::Network

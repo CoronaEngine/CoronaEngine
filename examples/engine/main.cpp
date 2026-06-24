@@ -63,6 +63,9 @@ void signal_handler(int signal) {
  * 4. 优雅关闭引擎
  */
 int main(int argc, char* argv[]) {
+    Corona::Kernel::CoronaLogger::initialize();
+    Corona::Kernel::CoronaLogger::set_log_level(Corona::Kernel::LogLevel::debug);
+
     CFW_LOG_NOTICE(
         "\n"
         "    +==================================================================+\n"
@@ -75,8 +78,6 @@ int main(int argc, char* argv[]) {
 
     // 创建引擎实例
     Corona::Engine engine;
-
-    Corona::Kernel::CoronaLogger::set_log_level(Corona::Kernel::LogLevel::debug);
 
     g_engine = &engine;
 
@@ -98,6 +99,7 @@ int main(int argc, char* argv[]) {
 
     if (!engine.initialize()) {
         CFW_LOG_ERROR("[Main] Failed to initialize engine!");
+        CFW_LOG_FLUSH();
         return -1;
     }
 

@@ -56,6 +56,21 @@ class LANChatSummaryService:
             return self.state
         self._last_message_id = latest_id
 
+        self.state = self._build_state(messages)
+        return self.state
+
+    def monitor_for_gm_summary(self, history: list[dict[str, Any]] | None) -> DiscussionState:
+        """Build a read-only GM summary state with selected Agent design replies.
+
+        Normal agent routing intentionally keeps using ``monitor()``, which only
+        tracks user chat. This path is only for explicit @GM summary requests, so
+        GM can summarize multi-Agent design discussion without changing the
+        ordinary RoleAgent prompt context or execution path.
+        """
+        messages = self._normalize_history_for_gm(history or [])[-self.max_history:]
+        return self._build_state(messages) if messages else self.state
+
+    def _build_state(self, messages: list[dict[str, Any]]) -> DiscussionState:
         snippets = []
         pending: list[str] = []
         conflicts: list[str] = []
@@ -77,7 +92,7 @@ class LANChatSummaryService:
             if any(word in text for word in self._REJECT_WORDS):
                 confirmations.append(self._compact_intent(speaker, text))
 
-        self.state = DiscussionState(
+        return DiscussionState(
             summary=" | ".join(snippets[-6:]),
             accepted_intents=self._dedupe(accepted[-4:]),
             pending_intents=self._dedupe(pending[-6:]),
@@ -85,7 +100,6 @@ class LANChatSummaryService:
             required_confirmations=self._dedupe(confirmations[-4:]),
             next_batch_suggestions=self._dedupe(pending[-3:]),
         )
-        return self.state
 
     @staticmethod
     def _normalize_history(history: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -99,6 +113,47 @@ class LANChatSummaryService:
                 continue
             normalized.append(item)
         return normalized
+
+    @classmethod
+    def _normalize_history_for_gm(cls, history: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        normalized: list[dict[str, Any]] = []
+        for item in history:
+            if not isinstance(item, dict):
+                continue
+            kind = str(item.get("message_kind") or "chat").strip().lower()
+            sender_type = str(item.get("sender_type") or "user").strip().lower()
+            text = str(item.get("text") or "").strip()
+            if not text:
+                continue
+            if kind == "chat" and sender_type == "user":
+                normalized.append(item)
+                continue
+            if (
+                kind in {"agent_reply", "chat"}
+                and sender_type in {"agent", "ai", "assistant"}
+                and cls._looks_like_agent_design_context(text)
+            ):
+                normalized.append(item)
+        return normalized
+
+    @staticmethod
+    def _looks_like_agent_design_context(text: str) -> bool:
+        value = str(text or "").strip()
+        if not value:
+            return False
+        noise_words = (
+            "已收到", "正在", "排队中", "生成进度", "进度", "SeedPlan",
+            "工具服务暂时不可用", "场景里没有可编辑的物体", "模型服务",
+            "导入", "资源准备", "图片生成", "模型生成",
+        )
+        if any(word in value for word in noise_words):
+            return False
+        design_words = (
+            "方案", "建议", "布局", "清单", "风格", "氛围", "总结", "评价",
+            "改进", "最终", "物品", "元素", "空间", "灯光", "材质", "主题",
+            "场景", "核心", "区域", "动线", "入口", "颜色", "地形", "边界",
+        )
+        return any(word in value for word in design_words)
 
     @staticmethod
     def _compact_intent(speaker: str, text: str, limit: int = 48) -> str:

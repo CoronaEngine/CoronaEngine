@@ -39,6 +39,13 @@ _SENSITIVE_WORKER_PAYLOAD_KEYS = {
 _SENSITIVE_WORKER_TEXT_MARKERS = tuple(sorted(_SENSITIVE_WORKER_PAYLOAD_KEYS))
 
 
+def _trace_preview(value: Any, limit: int = 80) -> str:
+    text = str(value or "").replace("\r", "\\r").replace("\n", "\\n")
+    if len(text) > limit:
+        return f"{text[:limit]}..."
+    return text
+
+
 class LANChatAgentWorker:
     """Poll C++ LANChat agent triggers and return replies through C++."""
 
@@ -183,14 +190,61 @@ class LANChatAgentWorker:
         sender_type = str(message.get("sender_type") or "user").lower()
         dedupe_key = self._coordinator_sync_dedupe_key(message, source=source)
         if not dedupe_key:
+            self._logger.info(
+                "[LANChatSyncTrace] phase=skip_no_dedupe source=%s message_id=%s room=%s sender=%s/%s text=%s",
+                source,
+                message.get("message_id") or "",
+                message.get("room_id") or "",
+                message.get("sender_type") or "",
+                message.get("sender_id") or message.get("from") or "",
+                _trace_preview(message.get("text")),
+            )
             return False
         if dedupe_key in self._coordinator_seen_message_ids:
+            self._logger.info(
+                "[LANChatSyncTrace] phase=dedupe_skip source=%s dedupe=%s message_id=%s room=%s sender=%s/%s text=%s",
+                source,
+                dedupe_key,
+                message.get("message_id") or "",
+                message.get("room_id") or "",
+                message.get("sender_type") or "",
+                message.get("sender_id") or message.get("from") or "",
+                _trace_preview(message.get("text")),
+            )
             return False
+        self._logger.info(
+            "[LANChatSyncTrace] phase=received source=%s dedupe=%s message_id=%s correlation=%s room=%s kind=%s sender=%s/%s/%s target=%s/%s text=%s",
+            source,
+            dedupe_key,
+            message.get("message_id") or "",
+            message.get("correlation_id") or "",
+            message.get("room_id") or "",
+            message_kind,
+            sender_type,
+            message.get("sender_id") or message.get("from") or "",
+            message.get("sender_name") or "",
+            message.get("target_agent_id") or message.get("agent_id") or "",
+            message.get("target_agent_name") or message.get("agent_name") or "",
+            _trace_preview(message.get("text")),
+        )
         if message_kind != "chat" or sender_type not in {"user", "host"}:
+            self._logger.info(
+                "[LANChatSyncTrace] phase=skip_non_chat source=%s dedupe=%s kind=%s sender_type=%s",
+                source,
+                dedupe_key,
+                message_kind,
+                sender_type,
+            )
             self._remember_coordinator_seen_message_id(dedupe_key)
             return False
         text = str(message.get("text") or "").strip()
         if not text:
+            self._logger.info(
+                "[LANChatSyncTrace] phase=skip_empty_text source=%s dedupe=%s message_id=%s",
+                source,
+                dedupe_key,
+                message.get("message_id") or "",
+            )
             self._remember_coordinator_seen_message_id(dedupe_key)
             return False
         try:
@@ -199,9 +253,56 @@ class LANChatAgentWorker:
             room_id = str(message.get("room_id") or "default")
             self._remember_room_id(room_id)
             metadata = self._coordinator_sync_metadata(message, source=source)
+            metadata = self._normalize_coordinator_target_metadata(message, text, metadata)
             active = coordinator.active_plan_for_room(room_id)
+            self._logger.info(
+                "[LANChatSyncTrace] phase=route_start source=%s dedupe=%s room=%s active=%s plan=%s draft_action=%s target_scope=%s target_agent=%s/%s metadata_keys=%s",
+                source,
+                dedupe_key,
+                room_id,
+                str(active.status.value if active is not None else "none"),
+                str(getattr(active, "plan_id", "") or ""),
+                metadata.get("draft_action") or "",
+                metadata.get("target_scope") or "",
+                metadata.get("target_agent_id") or "",
+                metadata.get("target_agent_name") or "",
+                ",".join(sorted(str(key) for key in metadata.keys())),
+            )
+            authoritative_synced = False
+            if self._should_sync_metadata_scene_message_to_seed_plan(coordinator, room_id, text, metadata):
+                self._logger.info(
+                    "[LANChatSyncTrace] phase=authoritative_ingest source=%s dedupe=%s room=%s sender=%s host=%s text=%s",
+                    source,
+                    dedupe_key,
+                    room_id,
+                    message.get("sender_id") or message.get("from") or "",
+                    bool(message.get("is_host") or sender_type == "host"),
+                    _trace_preview(text),
+                )
+                coordinator.ingest_message(ChatMessage(
+                    room_id=room_id,
+                    sender_id=str(message.get("sender_id") or message.get("from") or ""),
+                    sender_name=str(message.get("sender_name") or message.get("from") or ""),
+                    text=text,
+                    is_host=bool(message.get("is_host") or sender_type == "host"),
+                    agent_id=str(metadata.get("target_agent_id") or ""),
+                    agent_name=str(metadata.get("target_agent_name") or ""),
+                    metadata=metadata,
+                ))
+                authoritative_synced = True
+                active = coordinator.active_plan_for_room(room_id)
             structured_handled = self._handle_structured_chat_route(message, text, metadata)
             if structured_handled:
+                self._logger.info(
+                    "[LANChatSyncTrace] phase=structured_handled source=%s dedupe=%s room=%s action=%s authoritative=%s active=%s plan=%s",
+                    source,
+                    dedupe_key,
+                    room_id,
+                    structured_handled,
+                    authoritative_synced,
+                    str(active.status.value if active is not None else "none"),
+                    str(getattr(active, "plan_id", "") or ""),
+                )
                 self._log_scene_route(
                     room_id=room_id,
                     sender=str(message.get("sender_name") or message.get("sender_id") or ""),
@@ -227,8 +328,18 @@ class LANChatAgentWorker:
                 and not coordinator._is_post_generation_adjustment(text)
             ):
                 return False
-            planning_gate_handled = self._handle_plain_chat_planning_gate(message, text)
+            planning_gate_handled = ""
+            if source != "lanchat_history_snapshot":
+                planning_gate_handled = self._handle_plain_chat_planning_gate(message, text)
             if planning_gate_handled in {"reply", "compose"}:
+                self._logger.info(
+                    "[LANChatSyncTrace] phase=planning_gate_handled source=%s dedupe=%s room=%s action=%s authoritative=%s",
+                    source,
+                    dedupe_key,
+                    room_id,
+                    planning_gate_handled,
+                    authoritative_synced,
+                )
                 self._log_scene_route(
                     room_id=room_id,
                     sender=str(message.get("sender_name") or message.get("sender_id") or ""),
@@ -239,7 +350,44 @@ class LANChatAgentWorker:
                     reason="pending planning message",
                 )
                 return True
+            if self._is_generation_start_text(text):
+                generation_reply = self._start_active_coordinator_generation(
+                    coordinator,
+                    room_id=room_id,
+                    host_id=str(message.get("sender_id") or message.get("from") or ""),
+                )
+                if generation_reply is not None:
+                    self._send_coordinator_sync_system_reply(message, generation_reply)
+                    self._log_scene_route(
+                        room_id=room_id,
+                        sender=str(message.get("sender_name") or message.get("sender_id") or ""),
+                        target_agent=str(message.get("target_agent_name") or message.get("agent_name") or ""),
+                        room_state=str(coordinator.active_plan_for_room(room_id).status.value if coordinator.active_plan_for_room(room_id) is not None else "none"),
+                        intent="generation_start",
+                        action="confirm_and_execute",
+                        reason=f"source={source}",
+                    )
+                    return True
+            if authoritative_synced:
+                self._logger.info(
+                    "[LANChatSyncTrace] phase=authoritative_only_done source=%s dedupe=%s room=%s plan=%s",
+                    source,
+                    dedupe_key,
+                    room_id,
+                    str(getattr(active, "plan_id", "") or ""),
+                )
+                if emit_disclosure:
+                    self._emit_new_disclosure_events(coordinator, disclosure_start)
+                return True
             if not planning_gate_handled and not self._should_sync_chat_to_coordinator(coordinator, room_id, text, source=source):
+                self._logger.info(
+                    "[LANChatSyncTrace] phase=skip_not_scene_write source=%s dedupe=%s room=%s active=%s text=%s",
+                    source,
+                    dedupe_key,
+                    room_id,
+                    str(active.status.value if active is not None else "none"),
+                    _trace_preview(text),
+                )
                 self._log_scene_route(
                     room_id=room_id,
                     sender=str(message.get("sender_name") or message.get("sender_id") or ""),
@@ -250,14 +398,36 @@ class LANChatAgentWorker:
                     reason="not scene-write intent",
                 )
                 return False
-            coordinator.ingest_message(ChatMessage(
+            event = coordinator.ingest_message(ChatMessage(
                 room_id=room_id,
                 sender_id=str(message.get("sender_id") or message.get("from") or ""),
                 sender_name=str(message.get("sender_name") or message.get("from") or ""),
                 text=text,
                 is_host=bool(message.get("is_host") or sender_type == "host"),
+                agent_id=str(metadata.get("target_agent_id") or ""),
+                agent_name=str(metadata.get("target_agent_name") or ""),
                 metadata=metadata,
             ))
+            event_type = str(getattr(event, "event_type", "") or "")
+            if event_type in {"layout_reflow_proposal_created", "layout_reflow_confirmed", "layout_reflow_rejected", "layout_reflow_confirmation_failed"}:
+                reply = str(getattr(event, "message", "") or "")
+                if event_type == "layout_reflow_confirmed":
+                    executed = self._execute_layout_reflow_confirmation(getattr(event, "payload", {}) or {})
+                    if executed:
+                        reply = f"{reply}\n{executed}" if reply else executed
+                if reply:
+                    self._send_coordinator_sync_system_reply(message, reply)
+            updated = coordinator.active_plan_for_room(room_id)
+            self._logger.info(
+                "[LANChatSyncTrace] phase=coordinator_ingested source=%s dedupe=%s room=%s before=%s after=%s plan=%s design_len=%s",
+                source,
+                dedupe_key,
+                room_id,
+                str(active.status.value if active is not None else "none"),
+                str(updated.status.value if updated is not None else "none"),
+                str(getattr(updated, "plan_id", "") or ""),
+                len(str(getattr(updated, "design_brief", "") or "")) if updated is not None else 0,
+            )
             self._log_scene_route(
                 room_id=room_id,
                 sender=str(message.get("sender_name") or message.get("sender_id") or ""),
@@ -276,12 +446,53 @@ class LANChatAgentWorker:
         finally:
             self._remember_coordinator_seen_message_id(dedupe_key)
 
+    def _should_sync_metadata_scene_message_to_seed_plan(
+        self,
+        coordinator: InteractionCoordinator,
+        room_id: str,
+        text: str,
+        metadata: dict[str, Any],
+    ) -> bool:
+        if not metadata:
+            return False
+        draft_action = str(metadata.get("draft_action") or "").strip().lower()
+        target_scope = str(metadata.get("target_scope") or "").strip().lower()
+        if draft_action in {"supplement", "generate"} or target_scope == "plan":
+            return True
+        if draft_action != "chat":
+            return False
+        active = coordinator.active_plan_for_room(room_id)
+        if active is not None and active.status in {SeedPlanStatus.CONFIRMED, SeedPlanStatus.EXECUTING, SeedPlanStatus.PAUSED}:
+            return False
+        return self._looks_like_seedplan_design_message(text)
+
+    @staticmethod
+    def _looks_like_seedplan_design_message(text: str) -> bool:
+        raw = str(text or "").strip()
+        if not raw:
+            return False
+        opinion_patterns = ("怎么看", "你觉得", "大家觉得", "对于", "评价", "看法")
+        strong_update_words = ("采用", "按", "确认", "补充", "新增", "调整", "修改", "生成", "开始")
+        if any(word in raw for word in opinion_patterns) and not any(word in raw for word in strong_update_words):
+            return False
+        scene_words = (
+            "方案", "场景", "主题", "设计", "布局", "风格", "物品", "清单",
+            "集市", "鬼市", "卧室", "客厅", "房间", "展厅", "商业空间",
+            "草原", "电竞房", "庭院", "街区", "摊位",
+        )
+        action_words = (
+            "围绕", "讨论", "设计", "优化", "简化", "采用", "生成", "做",
+            "帮我", "补充", "调整", "新增", "改成", "还是", "整理",
+        )
+        return any(word in raw for word in scene_words) and any(word in raw for word in action_words)
+
     def _handle_structured_chat_route(
         self,
         message: dict[str, Any],
         text: str,
         metadata: dict[str, Any],
     ) -> str:
+        metadata = self._normalize_coordinator_target_metadata(message, text, metadata)
         draft_action = str(metadata.get("draft_action") or "").strip().lower()
         target_scope = str(metadata.get("target_scope") or "").strip().lower()
         target_agent_id = str(metadata.get("target_agent_id") or "").strip()
@@ -289,6 +500,19 @@ class LANChatAgentWorker:
         target_plan_id = str(metadata.get("target_plan_id") or "").strip()
         if not any((draft_action, target_scope, target_agent_id, target_agent_name, target_plan_id)):
             return ""
+        if not self._can_execute_agent_locally():
+            self._logger.info(
+                "[LANChatAgentTrace] phase=blocked_non_host_agent route=structured_chat role=%s message_id=%s room=%s action=%s target_scope=%s target_agent=%s/%s text=%s",
+                self._network_session_role_name(),
+                message.get("message_id") or "",
+                message.get("room_id") or "",
+                draft_action,
+                target_scope,
+                target_agent_id,
+                target_agent_name,
+                _trace_preview(text),
+            )
+            return "blocked_non_host_agent"
         if draft_action == "chat" and target_scope == "group":
             group_agents = self._structured_group_agents(metadata)
             if not group_agents:
@@ -349,6 +573,7 @@ class LANChatAgentWorker:
                     target,
                     text,
                     draft_action=draft_action,
+                    source_context_agent=str(metadata.get("source_context_agent") or ""),
                 )
             else:
                 agent_name = str(metadata.get("target_agent_name") or metadata.get("target_agent_id") or "").strip()
@@ -369,6 +594,8 @@ class LANChatAgentWorker:
         if action == "reply":
             self._send_final_reply(str(trigger.get("agent_id") or agent_name), str(agent_name), str(payload or ""), trigger)
             return "planning_reply"
+        if self._execute_runtime_planning_compose(trigger, str(payload or text), str(agent_name)):
+            return "planning_compose"
         trigger["text"] = str(payload or text)
         self._process_trigger(trigger)
         return "planning_compose"
@@ -406,6 +633,15 @@ class LANChatAgentWorker:
         return out
 
     def _handle_plain_chat_planning_gate(self, message: dict[str, Any], text: str) -> str:
+        if not self._can_execute_agent_locally():
+            self._logger.info(
+                "[LANChatAgentTrace] phase=blocked_non_host_agent route=plain_planning_gate role=%s message_id=%s room=%s text=%s",
+                self._network_session_role_name(),
+                message.get("message_id") or "",
+                message.get("room_id") or "",
+                _trace_preview(text),
+            )
+            return ""
         try:
             from .lanchat_scene_runtime import get_lanchat_scene_runtime
         except Exception as exc:  # noqa: BLE001
@@ -426,9 +662,113 @@ class LANChatAgentWorker:
         if action == "reply":
             self._send_final_reply(str(agent_name), str(agent_name), str(payload or ""), trigger)
             return "reply"
+        if self._execute_runtime_planning_compose(trigger, str(payload or text), str(agent_name)):
+            return "compose"
         trigger["text"] = str(payload or text)
         self._process_trigger(trigger)
         return "compose"
+
+    def _handle_agent_trigger_planning_gate(self, trigger: dict[str, Any]) -> bool:
+        text = str(trigger.get("text") or "").strip()
+        if not text:
+            return False
+        message_kind = str(trigger.get("message_kind") or "chat").strip().lower()
+        if message_kind not in {"", "chat"}:
+            return False
+        is_gm_target = (
+            str(trigger.get("agent_id") or trigger.get("target_agent_id") or "").strip().lower() == "gm"
+            or str(trigger.get("agent_name") or "").strip().lower() in {"gm", "主持人", "裁判", "game master"}
+        )
+        if is_gm_target:
+            return False
+        try:
+            from .lanchat_scene_runtime import get_lanchat_scene_runtime
+        except Exception as exc:  # noqa: BLE001
+            self._logger.debug("Failed to import LANChat scene runtime for agent planning gate: %s", exc)
+            return False
+
+        metadata = self._metadata_from_trigger(trigger)
+        draft_action = str(metadata.get("draft_action") or "").strip().lower()
+        targets = [
+            str(metadata.get("target_plan_id") or "").strip(),
+            str(metadata.get("target_agent_name") or "").strip(),
+            str(metadata.get("target_agent_id") or "").strip(),
+            str(trigger.get("target_agent_name") or "").strip(),
+            str(trigger.get("agent_name") or "").strip(),
+            str(trigger.get("target_agent_id") or "").strip(),
+            str(trigger.get("agent_id") or "").strip(),
+        ]
+        try:
+            runtime = get_lanchat_scene_runtime()
+            for target in targets:
+                if not target:
+                    continue
+                action, payload, agent_name = runtime.handle_targeted_planning_message(
+                    target,
+                    text,
+                    draft_action=draft_action,
+                    source_context_agent=str(metadata.get("source_context_agent") or ""),
+                )
+                if action in {"reply", "compose"} and agent_name:
+                    return self._send_runtime_planning_action(trigger, action, payload, agent_name)
+            action, payload, agent_name = runtime.handle_pending_planning_message(text)
+        except Exception as exc:  # noqa: BLE001
+            self._logger.debug("Failed to handle agent planning gate: %s", exc)
+            return False
+        if action in {"reply", "compose"} and agent_name:
+            return self._send_runtime_planning_action(trigger, action, payload, agent_name)
+        return False
+
+    def _send_runtime_planning_action(
+        self,
+        trigger: dict[str, Any],
+        action: str,
+        payload: str | None,
+        agent_name: str,
+    ) -> bool:
+        agent_id = str(trigger.get("agent_id") or trigger.get("target_agent_id") or agent_name)
+        visible_name = str(agent_name or trigger.get("agent_name") or "设计助手")
+        if action == "reply":
+            return bool(self._send_final_reply(agent_id, visible_name, str(payload or ""), trigger))
+        if action == "compose":
+            return self._execute_runtime_planning_compose(trigger, str(payload or ""), visible_name)
+        return False
+
+    def _execute_runtime_planning_compose(
+        self,
+        trigger: dict[str, Any],
+        compose_text: str,
+        agent_name: str,
+    ) -> bool:
+        text = str(compose_text or "").strip()
+        if not text:
+            return False
+        try:
+            coordinator = self._get_interaction_coordinator()
+            room_id = str(trigger.get("room_id") or "default")
+            host_id = str(trigger.get("sender_id") or trigger.get("from") or "host")
+            self._remember_room_id(room_id)
+            coordinator.create_or_update_seed_plan(ChatMessage(
+                room_id=room_id,
+                sender_id=host_id,
+                sender_name=str(trigger.get("sender_name") or trigger.get("from") or "房主"),
+                text=text,
+                is_host=True,
+                agent_id=str(trigger.get("agent_id") or trigger.get("target_agent_id") or agent_name or ""),
+                agent_name=str(agent_name or trigger.get("agent_name") or ""),
+                metadata=self._coordinator_sync_metadata(trigger, source="lanchat_runtime_planning_gate"),
+            ))
+            reply = self._start_active_coordinator_generation(
+                coordinator,
+                room_id=room_id,
+                host_id=host_id,
+            )
+        except Exception as exc:  # noqa: BLE001
+            self._logger.debug("Failed to execute runtime planning compose: %s", exc)
+            return False
+        if reply is None:
+            return False
+        return bool(self._send_final_reply("gm-system", "系统", reply, trigger))
 
     def _log_scene_route(
         self,
@@ -509,6 +849,18 @@ class LANChatAgentWorker:
         if not trigger:
             return processed_room_event or processed_coordinator_sync
 
+        self._logger.info(
+            "[LANChatAgentTrace] phase=trigger_pop message_id=%s correlation=%s room=%s sender=%s/%s target=%s/%s kind=%s text=%s",
+            trigger.get("message_id") or "",
+            trigger.get("correlation_id") or "",
+            trigger.get("room_id") or "",
+            trigger.get("sender_type") or "",
+            trigger.get("sender_id") or trigger.get("from") or "",
+            trigger.get("target_agent_id") or trigger.get("agent_id") or "",
+            trigger.get("target_agent_name") or trigger.get("agent_name") or "",
+            trigger.get("message_kind") or "",
+            _trace_preview(trigger.get("text")),
+        )
         self._sync_trigger_history_to_coordinator(trigger)
 
         if self._async_agent_execution:
@@ -556,6 +908,17 @@ class LANChatAgentWorker:
             if not message:
                 break
             processed = True
+            self._logger.info(
+                "[LANChatSyncTrace] phase=native_queue_pop message_id=%s correlation=%s room=%s sender=%s/%s target=%s/%s text=%s",
+                message.get("message_id") or "",
+                message.get("correlation_id") or "",
+                message.get("room_id") or "",
+                message.get("sender_type") or "",
+                message.get("sender_id") or message.get("from") or "",
+                message.get("target_agent_id") or message.get("agent_id") or "",
+                message.get("target_agent_name") or message.get("agent_name") or "",
+                _trace_preview(message.get("text")),
+            )
             self.sync_chat_message_to_coordinator(
                 dict(message),
                 source="lanchat_native_queue",
@@ -568,6 +931,33 @@ class LANChatAgentWorker:
         agent_id = str(trigger.get("agent_id") or "agent")
         agent_name = str(trigger.get("agent_name") or "Agent")
         action_payload = None
+        if not self._can_execute_agent_locally():
+            self._logger.info(
+                "[LANChatAgentTrace] phase=blocked_non_host_agent route=process_trigger role=%s message_id=%s correlation=%s room=%s agent=%s/%s sender=%s/%s kind=%s text=%s",
+                self._network_session_role_name(),
+                trigger.get("message_id") or "",
+                self._correlation_id(trigger),
+                trigger.get("room_id") or "",
+                agent_id,
+                agent_name,
+                trigger.get("sender_type") or "",
+                trigger.get("sender_id") or trigger.get("from") or "",
+                trigger.get("message_kind") or "",
+                _trace_preview(trigger.get("text")),
+            )
+            return False
+        self._logger.info(
+            "[LANChatAgentTrace] phase=process_start message_id=%s correlation=%s room=%s agent=%s/%s sender=%s/%s kind=%s text=%s",
+            trigger.get("message_id") or "",
+            self._correlation_id(trigger),
+            trigger.get("room_id") or "",
+            agent_id,
+            agent_name,
+            trigger.get("sender_type") or "",
+            trigger.get("sender_id") or trigger.get("from") or "",
+            trigger.get("message_kind") or "",
+            _trace_preview(trigger.get("text")),
+        )
 
         def _send_progress(message: str) -> None:
             text = str(message or "").strip()
@@ -608,6 +998,8 @@ class LANChatAgentWorker:
         completed_intervention_reply = self._handle_coordinator_completed_intervention(trigger)
         if completed_intervention_reply is not None:
             return bool(self._send_final_reply(agent_id, agent_name, completed_intervention_reply, trigger))
+        if self._handle_agent_trigger_planning_gate(trigger):
+            return True
 
         try:
             from .agent_progress_context import agent_progress_sink
@@ -627,7 +1019,7 @@ class LANChatAgentWorker:
                     return bool(self._send_final_reply(agent_id, agent_name, quick_reply, trigger))
 
             if self._async_agent_execution and self._should_send_fast_ack(trigger):
-                _send_progress("已收到你的要求；如果当前正在生成，我会在下一阶段吸收这条调整。")
+                _send_progress("已收到，我正在整理你的请求。生成尚未开始；需要确认后才会进入生成队列。")
 
             with agent_progress_sink(_send_progress):
                 with self._agent_call_lock:
@@ -644,6 +1036,17 @@ class LANChatAgentWorker:
 
         try:
             self._broadcast_confirmed_action(action_payload)
+            self._logger.info(
+                "[LANChatAgentTrace] phase=process_reply message_id=%s correlation=%s room=%s agent=%s/%s reply_len=%s action=%s status=%s",
+                trigger.get("message_id") or "",
+                self._correlation_id(trigger),
+                trigger.get("room_id") or "",
+                agent_id,
+                agent_name,
+                len(str(reply or "")),
+                str((action_payload or {}).get("action_type") or ""),
+                str((action_payload or {}).get("status") or ""),
+            )
             return bool(
                 self._send_final_reply(agent_id, agent_name, str(reply or ""), trigger, action_payload)
             )
@@ -673,6 +1076,18 @@ class LANChatAgentWorker:
             metadata = self._sanitize_control_payload(action_payload)
             metadata.setdefault("requires_host_confirm", True)
             if hasattr(self._corona_engine, "network_send_system_message_ex"):
+                self._logger.info(
+                    "[LANChatReplyTrace] phase=send_system_message_ex message_id=%s correlation=%s proposal=%s agent=%s/%s text_len=%s action=%s status=%s text=%s",
+                    trigger.get("message_id") or "",
+                    self._correlation_id(trigger),
+                    proposal_id,
+                    agent_id,
+                    agent_name,
+                    len(str(text or "")),
+                    str((action_payload or {}).get("action_type") or ""),
+                    str((action_payload or {}).get("status") or ""),
+                    _trace_preview(text),
+                )
                 return bool(self._corona_engine.network_send_system_message_ex(
                     agent_id,
                     agent_name,
@@ -682,6 +1097,16 @@ class LANChatAgentWorker:
                     json.dumps(metadata, ensure_ascii=False),
                 ))
         if hasattr(self._corona_engine, "network_send_agent_reply_ex"):
+            self._logger.info(
+                "[LANChatReplyTrace] phase=send_agent_reply_ex message_id=%s correlation=%s reply_to=%s agent=%s/%s text_len=%s text=%s",
+                trigger.get("message_id") or "",
+                self._correlation_id(trigger),
+                trigger.get("message_id") or "",
+                agent_id,
+                agent_name,
+                len(str(text or "")),
+                _trace_preview(text),
+            )
             return bool(self._corona_engine.network_send_agent_reply_ex(
                 agent_id,
                 agent_name,
@@ -691,6 +1116,15 @@ class LANChatAgentWorker:
                 self._correlation_id(trigger),
                 json.dumps({"reply_to": str(trigger.get("message_id") or "")}, ensure_ascii=False),
             ))
+        self._logger.info(
+            "[LANChatReplyTrace] phase=send_agent_reply message_id=%s correlation=%s agent=%s/%s text_len=%s text=%s",
+            trigger.get("message_id") or "",
+            self._correlation_id(trigger),
+            agent_id,
+            agent_name,
+            len(str(text or "")),
+            _trace_preview(text),
+        )
         return bool(self._corona_engine.network_send_agent_reply(agent_id, agent_name, text))
 
     def _remember_room_id(self, room_id: str) -> None:
@@ -734,6 +1168,24 @@ class LANChatAgentWorker:
             and hasattr(self._corona_engine, "network_pop_lanchat_agent_trigger")
             and hasattr(self._corona_engine, "network_send_agent_reply")
         )
+
+    def _network_session_role_name(self) -> str:
+        if self._corona_engine is None:
+            return "none"
+        session_role_name = getattr(self._corona_engine, "network_session_role_name", None)
+        if not callable(session_role_name):
+            return "none"
+        try:
+            return str(session_role_name() or "none").strip().lower()
+        except Exception as exc:  # noqa: BLE001
+            self._logger.debug("LANChat network role check skipped: %s", exc)
+            return "none"
+
+    def _can_execute_agent_locally(self) -> bool:
+        return self._network_session_role_name() != "client"
+
+    def _can_execute_generation_locally(self) -> bool:
+        return self._can_execute_agent_locally()
 
     def _get_orchestrator(self) -> LanChatAgentOrchestrator:
         if self._orchestrator is None:
@@ -836,11 +1288,33 @@ class LANChatAgentWorker:
             coordinator = self._get_interaction_coordinator()
             room_id = str(trigger.get("room_id") or "default")
             plan = coordinator.active_plan_for_room(room_id)
+            self._logger.info(
+                "[LANChatGenerationTrace] phase=trigger_generation_start room=%s sender=%s/%s plan=%s status=%s text=%s",
+                room_id,
+                trigger.get("sender_id") or trigger.get("from") or "",
+                trigger.get("sender_name") or trigger.get("from") or "",
+                str(getattr(plan, "plan_id", "") or ""),
+                str(getattr(getattr(plan, "status", ""), "value", getattr(plan, "status", "")) or ""),
+                _trace_preview(text),
+            )
             if plan is None:
                 return None
             if plan.status == SeedPlanStatus.CONFIRMED:
                 disclosure_start = len(coordinator.disclosure_events)
+                self._logger.info(
+                    "[LANChatGenerationTrace] phase=execute_confirmed room=%s plan=%s design_len=%s",
+                    room_id,
+                    plan.plan_id,
+                    len(str(getattr(plan, "design_brief", "") or "")),
+                )
                 ref = coordinator.execute_confirmed_plan(plan.plan_id)
+                self._logger.info(
+                    "[LANChatGenerationTrace] phase=execute_result room=%s plan=%s job=%s status=%s",
+                    room_id,
+                    plan.plan_id,
+                    getattr(ref, "job_id", ""),
+                    getattr(ref, "status", ""),
+                )
                 emitted = self._emit_new_disclosure_events(coordinator, disclosure_start)
                 self._start_coordinator_disclosure_watch(coordinator, disclosure_start + emitted)
                 self._emit_generation_scheduler_disclosure()
@@ -853,13 +1327,113 @@ class LANChatAgentWorker:
             self._logger.debug("Coordinator generation start skipped: %s", exc)
             return None
 
+    def _start_active_coordinator_generation(
+        self,
+        coordinator: InteractionCoordinator,
+        *,
+        room_id: str,
+        host_id: str,
+    ) -> str | None:
+        if not self._can_execute_generation_locally():
+            self._logger.info(
+                "[LANChatGenerationTrace] phase=blocked_non_host room=%s host=%s",
+                room_id,
+                host_id,
+            )
+            return None
+        plan = coordinator.active_plan_for_room(room_id)
+        if plan is None:
+            self._logger.info(
+                "[LANChatGenerationTrace] phase=start_request_no_plan room=%s host=%s",
+                room_id,
+                host_id,
+            )
+            return None
+        self._logger.info(
+            "[LANChatGenerationTrace] phase=start_request room=%s host=%s plan=%s status=%s design_len=%s summary=%s",
+            room_id,
+            host_id,
+            plan.plan_id,
+            str(getattr(plan.status, "value", plan.status)),
+            len(str(getattr(plan, "design_brief", "") or "")),
+            _trace_preview(getattr(plan, "intent_summary", "") or "", 100),
+        )
+        if plan.status == SeedPlanStatus.EXECUTING:
+            latest_status = coordinator._latest_generation_job_status(plan.plan_id)
+            return coordinator._status_query_message(plan, "", latest_status)
+        if plan.status != SeedPlanStatus.CONFIRMED:
+            if plan.status not in {SeedPlanStatus.DRAFT, SeedPlanStatus.CLARIFYING, SeedPlanStatus.PROPOSED}:
+                return None
+            disclosure_start = len(coordinator.disclosure_events)
+            confirmed = coordinator.confirm_seed_plan(plan.plan_id, str(host_id or ""))
+            self._logger.info(
+                "[LANChatGenerationTrace] phase=confirm_result room=%s host=%s plan=%s ok=%s message=%s payload_plan=%s design_len=%s",
+                room_id,
+                host_id,
+                plan.plan_id,
+                bool(getattr(confirmed, "ok", False)),
+                _trace_preview(getattr(confirmed, "message", "") or ""),
+                str((getattr(confirmed, "payload", {}) or {}).get("plan_id") or ""),
+                len(str(getattr(plan, "design_brief", "") or "")),
+            )
+            emitted = self._emit_new_disclosure_events(coordinator, disclosure_start)
+            self._start_coordinator_disclosure_watch(coordinator, disclosure_start + emitted)
+            if not getattr(confirmed, "ok", False):
+                return str(getattr(confirmed, "message", "") or "当前方案还不能确认生成，请先补充必要信息。")
+            plan = coordinator.active_plan_for_room(room_id) or plan
+        if plan.status == SeedPlanStatus.CONFIRMED:
+            disclosure_start = len(coordinator.disclosure_events)
+            self._logger.info(
+                "[LANChatGenerationTrace] phase=execute_confirmed room=%s plan=%s design_len=%s",
+                room_id,
+                plan.plan_id,
+                len(str(getattr(plan, "design_brief", "") or "")),
+            )
+            ref = coordinator.execute_confirmed_plan(plan.plan_id)
+            self._logger.info(
+                "[LANChatGenerationTrace] phase=execute_result room=%s plan=%s job=%s status=%s",
+                room_id,
+                plan.plan_id,
+                getattr(ref, "job_id", ""),
+                getattr(ref, "status", ""),
+            )
+            emitted = self._emit_new_disclosure_events(coordinator, disclosure_start)
+            self._start_coordinator_disclosure_watch(coordinator, disclosure_start + emitted)
+            self._emit_generation_scheduler_disclosure()
+            return f"【执行结果】SeedPlan {plan.plan_id} 已进入生成队列：{ref.job_id} ({ref.status})"
+        return None
+
+    def _send_coordinator_sync_system_reply(self, message: dict[str, Any], text: str) -> bool:
+        if self._corona_engine is None:
+            return False
+        safe_text = self._safe_control_text(text)
+        metadata = {
+            "reply_to": str(message.get("message_id") or ""),
+            "phase": "generation_start",
+        }
+        try:
+            if hasattr(self._corona_engine, "network_send_system_message_ex"):
+                return bool(self._corona_engine.network_send_system_message_ex(
+                    "system",
+                    "系统",
+                    safe_text,
+                    "action_status",
+                    str(message.get("message_id") or ""),
+                    json.dumps(metadata, ensure_ascii=False),
+                ))
+            if hasattr(self._corona_engine, "network_send_system_message"):
+                return bool(self._corona_engine.network_send_system_message("system", "系统", safe_text))
+        except Exception as exc:  # noqa: BLE001
+            self._logger.debug("Failed to send Coordinator sync system reply: %s", exc)
+        return False
+
     @staticmethod
     def _is_generation_start_text(text: str) -> bool:
         raw = str(text or "")
         return any(word in raw for word in (
-            "确认开始", "直接生成", "开始生成", "开始执行", "执行生成",
+            "确认开始", "确认生成", "确认执行", "直接生成", "开始生成", "开始执行", "执行生成",
             "按照方案执行生成", "按方案执行生成", "就按方案生成", "按这个方案生成",
-            "按照方案生成", "开始搭建", "开始布置",
+            "按照方案生成", "就按照这个方案生成", "就按照方案生成", "开始搭建", "开始布置",
         ))
 
     def _handle_coordinator_completed_intervention(self, trigger: dict[str, Any]) -> str | None:
@@ -875,6 +1449,8 @@ class LANChatAgentWorker:
             plan = coordinator.active_plan_for_room(room_id)
             if plan is None or plan.status != SeedPlanStatus.COMPLETED:
                 return None
+            if self._is_generation_start_text(text):
+                return "当前方案已生成完成；如需继续，请说“添加生成...”或“调整一下布局”。"
             is_status_query = getattr(coordinator, "_is_status_query", None)
             if callable(is_status_query) and is_status_query(text):
                 return None
@@ -894,7 +1470,24 @@ class LANChatAgentWorker:
                 metadata=self._coordinator_sync_metadata(trigger, source="lanchat_agent_completed_intervention"),
             ))
             self._emit_new_disclosure_events(coordinator, disclosure_start)
-            if getattr(event, "event_type", "") in {"post_generation_add_routed", "final_adjustment_routed"}:
+            if getattr(event, "event_type", "") in {
+                "post_generation_add_routed",
+                "final_adjustment_routed",
+                "layout_reflow_proposal_created",
+                "layout_reflow_confirmed",
+                "layout_reflow_rejected",
+                "layout_reflow_confirmation_failed",
+            }:
+                if getattr(event, "event_type", "") == "layout_reflow_proposal_created":
+                    return str(getattr(event, "message", "") or "已生成布局调整建议。")
+                if getattr(event, "event_type", "") == "layout_reflow_confirmed":
+                    executed = self._execute_layout_reflow_confirmation(getattr(event, "payload", {}) or {})
+                    base = str(getattr(event, "message", "") or "布局调整建议已确认。").strip()
+                    return f"{base}\n{executed}" if executed else base
+                if getattr(event, "event_type", "") == "layout_reflow_rejected":
+                    return str(getattr(event, "message", "") or "布局调整建议已取消。")
+                if getattr(event, "event_type", "") == "layout_reflow_confirmation_failed":
+                    return str(getattr(event, "message", "") or "找不到对应布局调整建议。")
                 executed = self._try_execute_completed_final_adjustment(event, trigger)
                 if executed:
                     base = str(getattr(event, "message", "") or "已记录该调整。").strip()
@@ -920,13 +1513,17 @@ class LANChatAgentWorker:
             or ""
         ).strip()
         actor = self._pick_completed_adjustment_actor(text, target_hint)
-        if actor is None:
-            return ""
-        changes = self._apply_completed_adjustment_to_actor(actor, text)
-        if not changes:
-            return ""
-        name = str(getattr(actor, "name", "") or target_hint or "目标物体")
-        return f"已执行低风险最终调整：{name}，{'；'.join(changes)}。"
+        if actor is not None:
+            changes = self._apply_completed_adjustment_to_actor(actor, text)
+            if changes:
+                name = str(getattr(actor, "name", "") or target_hint or "目标物体")
+                return f"已执行低风险最终调整：{name}，{'；'.join(changes)}。"
+        review_changes = self._apply_completed_review_adjustments(event, trigger, text)
+        if review_changes:
+            return f"已执行低风险最终调整：{'；'.join(review_changes)}。"
+        if self._looks_like_review_result_application(text):
+            return "已检查最近的审查建议，但没有找到可自动执行的低风险缩放/贴地调整；已保留为人工最终调整记录。"
+        return ""
 
     def _pick_completed_adjustment_actor(self, text: str, target_hint: str = "") -> Any | None:
         actors = self._current_scene_actors()
@@ -978,6 +1575,328 @@ class LANChatAgentWorker:
             self._logger.debug("Failed to read scene actors for completed adjustment: %s", exc)
             return []
 
+    def _execute_layout_reflow_confirmation(self, payload: dict[str, Any]) -> str:
+        if not isinstance(payload, dict) or str(payload.get("status") or "") != "confirmed":
+            return ""
+        actors = [actor for actor in self._current_scene_actors() if self._is_layout_reflow_actor(actor)]
+        if not actors:
+            return "已确认布局调整建议，但当前没有可执行的普通场景物体坐标；请刷新场景物体列表后再试。"
+        applied: list[str] = []
+        grounded: list[str] = []
+        skipped_ground: list[str] = []
+        max_targets = min(len(actors), 8)
+        for index, actor in enumerate(actors[:max_targets]):
+            name = str(getattr(actor, "name", "") or f"物体{index + 1}")
+            try:
+                current = [float(value) for value in actor.get_position()]
+                while len(current) < 3:
+                    current.append(0.0)
+                side = -1.0 if index % 2 == 0 else 1.0
+                row = index // 2
+                if index == max_targets - 1 and max_targets >= 4:
+                    target = [0.0, current[1], round(2.2 + 0.35 * row, 3)]
+                    label = "后方焦点区"
+                else:
+                    target = [
+                        round(side * (1.8 + 0.25 * row), 3),
+                        current[1],
+                        round(-1.2 + 0.7 * row, 3),
+                    ]
+                    label = "侧边分区"
+                target = self._clamp_layout_reflow_to_room(target, actor)
+                if [round(v, 3) for v in current[:3]] != target:
+                    actor.set_position(target)
+                snapped, reason = self._selective_ground_actor_if_floor_supported(actor)
+                if snapped:
+                    grounded.append(name)
+                elif reason:
+                    skipped_ground.append(f"{name}: {reason}")
+                final_pos = [round(float(value), 3) for value in actor.get_position()[:3]]
+                if [round(v, 3) for v in current[:3]] != final_pos:
+                    applied.append(f"{name} -> {label} {final_pos}")
+            except Exception as exc:  # noqa: BLE001
+                self._logger.debug("Layout reflow actor move skipped for %s: %s", name, exc)
+        if not applied:
+            return "已确认布局调整建议，但当前没有可安全移动的物体；已保留为最终调整记录。"
+        suffix = ""
+        if grounded:
+            suffix = f" 并已贴地修正地面物体：{'、'.join(grounded[:8])}。"
+        elif skipped_ground:
+            suffix = " 未发现需要自动贴地的地面物体。"
+        return "布局调整完成：" + "；".join(applied[:8]) + "。" + suffix
+
+    def _ground_layout_reflow_position(self, actor: Any, target: list[float]) -> list[float]:
+        grounded = [float(value) for value in target[:3]]
+        while len(grounded) < 3:
+            grounded.append(0.0)
+        aabb = self._safe_actor_aabb(actor)
+        if aabb and len(aabb) >= 6:
+            try:
+                current = [float(value) for value in actor.get_position()]
+            except Exception:
+                current = [grounded[0], grounded[1], grounded[2]]
+            while len(current) < 3:
+                current.append(0.0)
+            min_y = float(aabb[1])
+            max_y = float(aabb[4])
+            is_world_aabb = min_y - 1e-4 <= current[1] <= max_y + 1e-4
+            grounded[1] = current[1] - min_y if is_world_aabb else -min_y
+        else:
+            grounded[1] = max(0.0, grounded[1])
+        grounded[1] = max(0.0, grounded[1])
+        return [round(value, 3) for value in grounded[:3]]
+
+    def _clamp_layout_reflow_to_room(self, target: list[float], actor: Any) -> list[float]:
+        room_size = self._current_room_box_size()
+        if len(room_size) < 3:
+            return [round(float(value), 3) for value in target[:3]]
+        aabb = self._safe_actor_aabb(actor)
+        if aabb and len(aabb) >= 6:
+            half_x = max(0.0, (float(aabb[3]) - float(aabb[0])) / 2.0)
+            half_z = max(0.0, (float(aabb[5]) - float(aabb[2])) / 2.0)
+        else:
+            half_x = half_z = 0.25
+        margin = 0.18
+        width, depth = float(room_size[0]), float(room_size[1])
+        min_x = -width / 2.0 + margin + half_x
+        max_x = width / 2.0 - margin - half_x
+        min_z = -depth / 2.0 + margin + half_z
+        max_z = depth / 2.0 - margin - half_z
+        out = [float(value) for value in target[:3]]
+        if min_x <= max_x:
+            out[0] = min(max(out[0], min_x), max_x)
+        if min_z <= max_z:
+            out[2] = min(max(out[2], min_z), max_z)
+        return [round(value, 3) for value in out[:3]]
+
+    def _selective_ground_actor_if_floor_supported(self, actor: Any) -> tuple[bool, str]:
+        support_type = self._layout_support_type(actor)
+        if support_type == "floor_supported":
+            return self._snap_actor_bottom_to_ground(actor)
+        if support_type in {"system", "wall_mounted", "ceiling_hung"}:
+            return False, f"跳过{support_type}"
+        return False, "未知支撑类型，未自动贴地"
+
+    def _snap_actor_bottom_to_ground(
+        self,
+        actor: Any,
+        *,
+        ground_y: float = 0.0,
+        epsilon: float = 0.03,
+    ) -> tuple[bool, str]:
+        aabb = self._safe_actor_aabb(actor)
+        if not aabb or len(aabb) < 6:
+            return False, "AABB不可读"
+        try:
+            current = [float(value) for value in actor.get_position()]
+        except Exception:
+            return False, "位置不可读"
+        while len(current) < 3:
+            current.append(0.0)
+        bottom_y = float(aabb[1])
+        delta = bottom_y - float(ground_y)
+        if abs(delta) <= float(epsilon):
+            return False, "已贴地"
+        current[1] = current[1] - delta
+        actor.set_position([round(value, 3) for value in current[:3]])
+        return True, "已贴地"
+
+    @staticmethod
+    def _layout_support_type(actor: Any) -> str:
+        name = str(getattr(actor, "name", "") or "").strip()
+        lowered = name.lower()
+        if not name:
+            return "unknown"
+        if (
+            lowered.startswith("__room")
+            or lowered.startswith("__terrain")
+            or lowered.startswith("_terrain")
+            or lowered in {"terrain", "ground", "sky", "room_box", "__room_box", "__room_terrain"}
+            or any(term in name for term in ("地形", "天空", "边界"))
+        ):
+            return "system"
+
+        ceiling_terms = (
+            "吊灯", "吊旗", "吊笼", "悬挂", "铁链", "天花", "ceiling", "chandelier", "hanging",
+        )
+        if any(term in lowered or term in name for term in ceiling_terms):
+            return "ceiling_hung"
+
+        wall_terms = (
+            "火把", "壁灯", "墙灯", "墙饰", "地图", "旗帜", "窗", "门", "招牌", "武器架",
+            "torch", "sconce", "wall", "map", "flag", "window", "door", "sign", "weapon rack",
+        )
+        if any(term in lowered or term in name for term in wall_terms):
+            return "wall_mounted"
+
+        floor_terms = (
+            "桌", "椅", "箱", "宝箱", "金币", "木桶", "酒桶", "麻袋", "床", "柜", "地毯",
+            "雕像", "动物", "长椅", "沙发", "桶", "袋",
+            "table", "chair", "box", "chest", "coin", "barrel", "sack", "bed", "cabinet",
+            "rug", "carpet", "statue", "animal", "bench", "sofa",
+        )
+        if any(term in lowered or term in name for term in floor_terms):
+            return "floor_supported"
+        return "unknown"
+
+    def _current_room_box_size(self) -> list[float]:
+        for actor in self._current_scene_actors():
+            name = str(getattr(actor, "name", "") or "").lower()
+            if name not in {"__room_box", "room_box"}:
+                continue
+            try:
+                scale = [float(value) for value in actor.get_scale()]
+                if len(scale) >= 3:
+                    return [abs(scale[0]), abs(scale[2]), abs(scale[1])]
+            except Exception:
+                pass
+        return []
+
+    @staticmethod
+    def _safe_actor_aabb(actor: Any) -> list[float]:
+        getter = getattr(actor, "get_aabb", None)
+        if not callable(getter):
+            getter = getattr(actor, "get_bounding_box", None)
+        if not callable(getter):
+            return []
+        try:
+            raw = getter()
+        except Exception:
+            return []
+        if isinstance(raw, dict):
+            values = raw.get("aabb") or raw.get("bounds") or raw.get("box")
+        else:
+            values = raw
+        if not isinstance(values, (list, tuple)) or len(values) < 6:
+            return []
+        try:
+            return [float(value) for value in values[:6]]
+        except Exception:
+            return []
+
+    @staticmethod
+    def _is_layout_reflow_actor(actor: Any) -> bool:
+        name = str(getattr(actor, "name", "") or "")
+        if not name:
+            return False
+        lowered = name.lower()
+        if lowered.startswith("__room") or lowered.startswith("__terrain") or lowered.startswith("_terrain"):
+            return False
+        if lowered in {"terrain", "ground", "sky", "room_box"}:
+            return False
+        return callable(getattr(actor, "get_position", None)) and callable(getattr(actor, "set_position", None))
+
+    def _apply_completed_review_adjustments(
+        self,
+        event: Any,
+        trigger: dict[str, Any],
+        text: str,
+    ) -> list[str]:
+        if not self._looks_like_review_result_application(text):
+            return []
+        payload = getattr(event, "payload", None)
+        payload = payload if isinstance(payload, dict) else {}
+        plan_id = str(payload.get("plan_id") or "").strip()
+        try:
+            coordinator = self._get_interaction_coordinator()
+            if not plan_id:
+                room_id = str(trigger.get("room_id") or payload.get("room_id") or "default")
+                plan = coordinator.active_plan_for_room(room_id)
+                plan_id = str(getattr(plan, "plan_id", "") or "").strip()
+            if not plan_id:
+                return []
+            pending = list(coordinator.pending_interventions(plan_id))
+        except Exception as exc:  # noqa: BLE001
+            self._logger.debug("Completed review adjustment lookup failed: %s", exc)
+            return []
+        changes: list[str] = []
+        for intervention in reversed(pending):
+            details = getattr(intervention, "finding_details", None)
+            if not isinstance(details, list) or not details:
+                continue
+            route = str(getattr(intervention, "apply_policy", "") or "")
+            intent = str(getattr(intervention, "intent_type", "") or "")
+            if route != "final_adjustment" and "review" not in intent:
+                continue
+            for detail in details[:8]:
+                if not isinstance(detail, dict):
+                    continue
+                actor_hint = self._review_detail_actor_hint(detail)
+                advice_text = self._review_detail_adjustment_text(detail)
+                if not actor_hint and not advice_text:
+                    continue
+                actor = self._pick_completed_adjustment_actor(advice_text or text, actor_hint)
+                if actor is None:
+                    continue
+                actor_changes = self._apply_completed_review_detail_to_actor(actor, detail, advice_text)
+                if actor_changes:
+                    name = str(getattr(actor, "name", "") or actor_hint or "目标物体")
+                    changes.append(f"{name}，{'、'.join(actor_changes)}")
+            if changes:
+                break
+        return changes
+
+    @staticmethod
+    def _looks_like_review_result_application(text: str) -> bool:
+        raw = str(text or "")
+        review_words = ("审查", "检查", "外观", "VLM", "vlm", "建议", "结果", "参考", "参照", "参茶")
+        action_words = ("按", "根据", "应用", "执行", "处理", "调整", "摆放", "修正", "优化")
+        if any(word in raw for word in review_words) and any(word in raw for word in action_words):
+            return True
+        return (
+            any(word in raw for word in ("摆放", "布局", "大小", "尺寸", "比例"))
+            and any(word in raw for word in ("问题", "不对", "不合理", "有问题"))
+        )
+
+    @staticmethod
+    def _review_detail_actor_hint(detail: dict[str, Any]) -> str:
+        for key in ("actor_id", "target_actor_id", "object_id", "target_object_id", "target", "target_hint"):
+            value = detail.get(key)
+            if value:
+                return str(value).strip()
+        return ""
+
+    @staticmethod
+    def _review_detail_adjustment_text(detail: dict[str, Any]) -> str:
+        parts: list[str] = []
+        for key in ("fix_suggestion", "suggestion", "message", "overall"):
+            value = str(detail.get(key) or "").strip()
+            if value:
+                parts.append(value)
+        issues = detail.get("issues")
+        if isinstance(issues, list):
+            parts.extend(str(item or "").strip() for item in issues if str(item or "").strip())
+        return "；".join(parts)
+
+    def _apply_completed_review_detail_to_actor(
+        self,
+        actor: Any,
+        detail: dict[str, Any],
+        advice_text: str,
+    ) -> list[str]:
+        changes: list[str] = []
+        scale_vector = detail.get("scale_correction")
+        if isinstance(scale_vector, list) and len(scale_vector) >= 3:
+            try:
+                factors = [float(value) for value in scale_vector[:3]]
+                if any(abs(value - 1.0) > 1e-3 for value in factors):
+                    current = [float(v) for v in actor.get_scale()]
+                    while len(current) < 3:
+                        current.append(1.0)
+                    new_scale = [
+                        round(max(0.02, min(20.0, current[index] * factors[index])), 4)
+                        for index in range(3)
+                    ]
+                    actor.set_scale(new_scale)
+                    changes.append(f"缩放调整为 {new_scale}")
+            except Exception as exc:  # noqa: BLE001
+                self._logger.debug("Completed VLM review scale vector adjustment failed: %s", exc)
+        text_changes = self._apply_completed_adjustment_to_actor(actor, advice_text)
+        for item in text_changes:
+            if item not in changes:
+                changes.append(item)
+        return changes
+
     @staticmethod
     def _completed_adjustment_display_name(name: str) -> str:
         display = str(name or "")
@@ -1021,14 +1940,14 @@ class LANChatAgentWorker:
                 changes.append(f"缩放调整为 {new_scale}")
             except Exception as exc:  # noqa: BLE001
                 self._logger.debug("Completed final adjustment scale failed: %s", exc)
-        if any(word in raw for word in ("贴地", "落地", "悬空", "穿模", "接地")):
+        if any(word in raw for word in ("贴地", "落地", "悬空", "浮空", "飘起", "飘起来", "离地", "没贴地", "穿模", "接地")):
             try:
                 current = [float(v) for v in actor.get_position()]
                 while len(current) < 3:
                     current.append(0.0)
-                if current[1] < 0.0 or any(word in raw for word in ("贴地", "落地", "接地")):
-                    current[1] = max(0.0, current[1])
-                    actor.set_position([round(v, 4) for v in current[:3]])
+                grounded = self._ground_layout_reflow_position(actor, current)
+                if [round(v, 3) for v in current[:3]] != grounded:
+                    actor.set_position(grounded)
                     changes.append("已校正贴地高度")
             except Exception as exc:  # noqa: BLE001
                 self._logger.debug("Completed final adjustment grounding failed: %s", exc)
@@ -1065,6 +1984,10 @@ class LANChatAgentWorker:
             return max(0.05, 1.0 / max(0.05, float(numeric.group(1))))
         if "一半" in text and any(word in text for word in ("缩小", "变小")):
             return 0.5
+        if any(word in text for word in ("太大", "过大", "偏大", "尺寸大", "比例大")):
+            return 0.8
+        if any(word in text for word in ("太小", "过小", "偏小", "尺寸小", "比例小")):
+            return 1.2
         if any(word in text for word in ("大一点", "变大", "放大")):
             return 1.35
         if any(word in text for word in ("小一点", "变小", "缩小")):
@@ -1192,6 +2115,62 @@ class LANChatAgentWorker:
             if value:
                 metadata[key] = str(value)
         return metadata
+
+    def _normalize_coordinator_target_metadata(
+        self,
+        message: dict[str, Any],
+        text: str,
+        metadata: dict[str, Any],
+    ) -> dict[str, Any]:
+        normalized = dict(metadata or {})
+        mention = self._explicit_agent_mention(text)
+        if mention:
+            agent_id, agent_name = self._resolve_lanchat_agent_mention(mention)
+            normalized["target_scope"] = "agent"
+            normalized["target_agent_name"] = agent_name or mention
+            normalized["target_agent_id"] = agent_id or str(message.get("target_agent_id") or message.get("agent_id") or agent_name or mention)
+        elif str(message.get("target_agent_id") or "").strip() or str(message.get("target_agent_name") or "").strip():
+            normalized.setdefault("target_scope", "agent")
+            normalized["target_agent_id"] = str(message.get("target_agent_id") or "").strip()
+            normalized["target_agent_name"] = str(message.get("target_agent_name") or "").strip()
+        source_context = self._source_context_agent_from_text(text)
+        if source_context and source_context != str(normalized.get("target_agent_name") or ""):
+            normalized["source_context_agent"] = source_context
+        return normalized
+
+    @staticmethod
+    def _explicit_agent_mention(text: str) -> str:
+        match = re.search(r"@([^\s，,。；;：:]+)", str(text or ""))
+        return match.group(1).strip() if match else ""
+
+    @staticmethod
+    def _source_context_agent_from_text(text: str) -> str:
+        raw = str(text or "")
+        match = re.search(r"在\s*([^，,。；;\s@]+)\s*方案基础上", raw)
+        if match:
+            return match.group(1).strip()
+        match = re.search(r"基于\s*([^，,。；;\s@]+)\s*方案", raw)
+        return match.group(1).strip() if match else ""
+
+    def _resolve_lanchat_agent_mention(self, mention: str) -> tuple[str, str]:
+        wanted = str(mention or "").strip()
+        if not wanted:
+            return "", ""
+        roster = []
+        getter = getattr(self._corona_engine, "network_lanchat_agents_snapshot", None)
+        if callable(getter):
+            try:
+                roster = list(getter() or [])
+            except Exception as exc:  # noqa: BLE001
+                self._logger.debug("Failed to read LANChat agent roster: %s", exc)
+        for item in roster:
+            if not isinstance(item, dict):
+                continue
+            agent_id = str(item.get("agent_id") or item.get("id") or "").strip()
+            agent_name = str(item.get("name") or item.get("agent_name") or "").strip()
+            if wanted in {agent_id, agent_name}:
+                return agent_id, agent_name
+        return "", wanted
 
     def _apply_generation_options_from_message(self, message: dict[str, Any]) -> None:
         metadata = self._metadata_from_trigger(message)

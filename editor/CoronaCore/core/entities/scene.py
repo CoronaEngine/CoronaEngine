@@ -92,6 +92,49 @@ class Scene:
         return True
 
     def read_data(self):
+        previous_enabled = self._begin_bulk_scene_load()
+        try:
+            self._read_data_unchecked()
+        finally:
+            self._end_bulk_scene_load(previous_enabled)
+
+    def _begin_bulk_scene_load(self) -> Optional[bool]:
+        engine_scene = getattr(self, 'engine_scene', None)
+        if engine_scene is None or not hasattr(engine_scene, 'set_enabled'):
+            return None
+
+        was_enabled = True
+        if hasattr(engine_scene, 'is_enabled'):
+            try:
+                was_enabled = bool(engine_scene.is_enabled())
+            except Exception as exc:
+                logger.warning("Scene '%s': failed to query enabled state before load: %s",
+                               getattr(self, 'name', ''), exc)
+
+        if not was_enabled:
+            return None
+
+        try:
+            engine_scene.set_enabled(False)
+        except Exception as exc:
+            logger.warning("Scene '%s': failed to disable during bulk load: %s",
+                           getattr(self, 'name', ''), exc)
+            return None
+        return was_enabled
+
+    def _end_bulk_scene_load(self, previous_enabled: Optional[bool]) -> None:
+        if previous_enabled is None:
+            return
+        engine_scene = getattr(self, 'engine_scene', None)
+        if engine_scene is None or not hasattr(engine_scene, 'set_enabled'):
+            return
+        try:
+            engine_scene.set_enabled(previous_enabled)
+        except Exception as exc:
+            logger.warning("Scene '%s': failed to restore enabled state after load: %s",
+                           getattr(self, 'name', ''), exc)
+
+    def _read_data_unchecked(self):
         # 读取文件数据
         if os.path.isabs(self.route):
             data_path = self.route
@@ -768,7 +811,8 @@ class Scene:
             "actor_type": actors_section.get(f'{actor_name}.actor_type', 'actor'),
             "route": actors_section.get(f'{actor_name}.route', ''),
             "actor_guid": actors_section.get(f'{actor_name}.actor_guid', ''),
-            "geometry": {}
+            "geometry": {},
+            "_suppress_network_broadcast": True
         }
         follow_camera_key = f'{actor_name}.follow_camera'
         if follow_camera_key in actors_section:

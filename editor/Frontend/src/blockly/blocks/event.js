@@ -1,7 +1,7 @@
 import * as Blockly from 'blockly/core';
 
 // 定义事件相关的积木块，适配 Vue 鼠标键盘事件
-export const defineEventBlocks = (actorname, broadcastList, createNewBroadcast) => {
+export const defineEventBlocks = (broadcastList, createNewBroadcast) => {
   // 中文注释：安全获取广播下拉选项，避免 broadcastList 为 null/undefined 时出错
   const getBroadcastOptions = () => {
     const list = Array.isArray(broadcastList?.value) ? broadcastList.value : [];
@@ -16,7 +16,7 @@ export const defineEventBlocks = (actorname, broadcastList, createNewBroadcast) 
       this.setInputsInline(true);
       this.setPreviousStatement(false, null);
       this.setNextStatement(true, null);
-      this.setColour('#FFDE59');
+      this.setStyle('event_blocks');
       this.setHelpUrl('');
     },
   };
@@ -55,7 +55,7 @@ export const defineEventBlocks = (actorname, broadcastList, createNewBroadcast) 
       this.setInputsInline(true);
       this.setPreviousStatement(false, null);
       this.setNextStatement(true, null);
-      this.setColour('#FFDE59');
+      this.setStyle('event_blocks');
       this.setHelpUrl('');
     },
   };
@@ -89,7 +89,7 @@ export const defineEventBlocks = (actorname, broadcastList, createNewBroadcast) 
       this.setInputsInline(true);
       this.setPreviousStatement(false, null);
       this.setNextStatement(true, null);
-      this.setColour('#FFDE59');
+      this.setStyle('event_blocks');
       this.setHelpUrl('');
     },
   };
@@ -119,7 +119,7 @@ export const defineEventBlocks = (actorname, broadcastList, createNewBroadcast) 
       this.setInputsInline(true);
       this.setPreviousStatement(true, null);
       this.setNextStatement(true, null);
-      this.setColour('#FFDE59');
+      this.setStyle('event_blocks');
       this.setHelpUrl('');
     },
   };
@@ -127,7 +127,7 @@ export const defineEventBlocks = (actorname, broadcastList, createNewBroadcast) 
   Blockly.Blocks['event_broadcastWait'] = {
     init: function () {
       this.appendDummyInput()
-        .appendField('当接收到广播')
+        .appendField('发送广播')
         .appendField(
           new Blockly.FieldDropdown(
             () => getBroadcastOptions(),
@@ -148,9 +148,9 @@ export const defineEventBlocks = (actorname, broadcastList, createNewBroadcast) 
         )
         .appendField('并等待');
       this.setInputsInline(true);
-      this.setPreviousStatement(false, null);
+      this.setPreviousStatement(true, null);
       this.setNextStatement(true, null);
-      this.setColour('#FFDE59');
+      this.setStyle('event_blocks');
       this.setHelpUrl('');
     },
   };
@@ -166,7 +166,7 @@ export const defineEventBlocks = (actorname, broadcastList, createNewBroadcast) 
       this.setInputsInline(true);
       this.setPreviousStatement(false, null);
       this.setNextStatement(true, null);
-      this.setColour('#FFDE59');
+      this.setStyle('event_blocks');
       this.setHelpUrl('');
     },
   };
@@ -189,7 +189,7 @@ export const defineEventBlocks = (actorname, broadcastList, createNewBroadcast) 
       this.setInputsInline(true);
       this.setPreviousStatement(false, null);
       this.setNextStatement(true, null);
-      this.setColour('#FFDE59');
+      this.setStyle('event_blocks');
       this.setHelpUrl('');
     },
   };
@@ -202,7 +202,7 @@ export const defineEventBlocks = (actorname, broadcastList, createNewBroadcast) 
       this.setInputsInline(true);
       this.setPreviousStatement(false, null);
       this.setNextStatement(true, null);
-      this.setColour('#FFDE59');
+      this.setStyle('event_blocks');
       this.setHelpUrl('');
     },
   };
@@ -215,7 +215,7 @@ export const defineEventBlocks = (actorname, broadcastList, createNewBroadcast) 
       this.setInputsInline(true);
       this.setPreviousStatement(false, null);
       this.setNextStatement(true, null);
-      this.setColour('#FFDE59');
+      this.setStyle('event_blocks');
       this.setHelpUrl('');
     },
   };
@@ -228,7 +228,7 @@ export const defineEventBlocks = (actorname, broadcastList, createNewBroadcast) 
       this.setInputsInline(true);
       this.setPreviousStatement(false, null);
       this.setNextStatement(true, null);
-      this.setColour('#FFDE59');
+      this.setStyle('event_blocks');
       this.setHelpUrl('');
     },
   };

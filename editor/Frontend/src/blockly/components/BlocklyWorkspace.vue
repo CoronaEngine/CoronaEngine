@@ -5,7 +5,7 @@
   >
     <DockTitleBar
       v-if="!embedded && !isDocked"
-      :title="editingTarget ? `积木编辑器 - ${editingTarget}` : '积木编辑器'"
+      :title="editingTarget ? `${t('blockly.title')} - ${editingTarget}` : t('blockly.title')"
       extraClass="bg-[#84A65B]"
       routePath="/ScratchTool"
       @close="handleClose"
@@ -18,35 +18,44 @@
       class="flex items-center gap-1 px-2 py-1 select-none shrink-0"
       style="background: #252525; border-bottom: 1px solid rgba(255,255,255,0.06);"
     >
-      <button class="toolbar-btn group" title="导入积木 (Ctrl+O)" @click="triggerFileImport">
+      <button class="toolbar-btn group" :title="t('blockly.toolbarImport')" @click="triggerFileImport">
         <svg class="toolbar-icon" viewBox="0 0 16 16" fill="none"><path d="M2 10v3h12v-3M8 3v8M5 6l3-3 3 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
-        <span class="toolbar-label">导入</span>
+        <span class="toolbar-label">{{ t('blockly.importBlocks') }}</span>
       </button>
-      <button class="toolbar-btn group" title="导出积木 (Ctrl+S)" @click="handleToolbarExport">
+      <button class="toolbar-btn group" :title="t('blockly.toolbarExport')" @click="handleToolbarExport">
         <svg class="toolbar-icon" viewBox="0 0 16 16" fill="none"><path d="M2 10v3h12v-3M8 3v8M5 10l3 3 3-3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
-        <span class="toolbar-label">导出</span>
+        <span class="toolbar-label">{{ t('blockly.exportBlocks') }}</span>
       </button>
-      <div class="w-px h-4 mx-1" style="background: rgba(255,255,255,0.1);"></div>
-      <button class="toolbar-btn group" title="整理积木布局" @click="handleOrganize">
-        <svg class="toolbar-icon" viewBox="0 0 16 16" fill="none"><rect x="1.5" y="1.5" width="5" height="5" rx="0.5" stroke="currentColor" stroke-width="1.3"/><rect x="9.5" y="1.5" width="5" height="5" rx="0.5" stroke="currentColor" stroke-width="1.3"/><rect x="1.5" y="9.5" width="5" height="5" rx="0.5" stroke="currentColor" stroke-width="1.3"/><rect x="9.5" y="9.5" width="5" height="5" rx="0.5" stroke="currentColor" stroke-width="1.3"/></svg>
-        <span class="toolbar-label">整理</span>
+      <button class="toolbar-btn group" :title="t('blockly.toolbarClear')" @click="handleClear">
+        <svg class="toolbar-icon" viewBox="0 0 16 16" fill="none"><path d="M2 4h12M5.33 4V2.67a1 1 0 011-1h3.34a1 1 0 011 1V4m1.33 0v9.33a1 1 0 01-1 1H4.33a1 1 0 01-1-1V4h9.34z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span class="toolbar-label">{{ t('blockly.clear') }}</span>
       </button>
       <div class="flex-1"></div>
+      <div class="flex items-center gap-0.5">
+        <button class="toolbar-btn group" :title="t('blockly.toolbarZoomOut')" @click="handleZoomOut">
+          <svg class="toolbar-icon" viewBox="0 0 16 16" fill="none"><path d="M4 8h8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+        </button>
+        <button class="toolbar-btn group" :title="t('blockly.toolbarZoomReset')" @click="handleZoomReset">
+          <span class="toolbar-label" style="min-width:36px;text-align:center;">{{ scaleText }}</span>
+        </button>
+        <button class="toolbar-btn group" :title="t('blockly.toolbarZoomIn')" @click="handleZoomIn">
+          <svg class="toolbar-icon" viewBox="0 0 16 16" fill="none"><path d="M4 8h8M8 4v8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+        </button>
+      </div>
       <button
         class="toolbar-btn group"
         :class="{ 'toolbar-btn-active': store.hasLayoutSider.value }"
-        title="显示/隐藏代码区"
+        :title="t('blockly.codeArea')"
         @click="store.hasLayoutSider.value = !store.hasLayoutSider.value"
       >
         <svg class="toolbar-icon" viewBox="0 0 16 16" fill="none"><path d="M5 2H3a1 1 0 00-1 1v10a1 1 0 001 1h2M11 2h2a1 1 0 011 1v10a1 1 0 01-1 1h-2M6.5 6l2 2-2 2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
-        <span class="toolbar-label">代码区</span>
+        <span class="toolbar-label">{{ t('blockly.codeArea') }}</span>
       </button>
     </div>
 
     <div class="flex-1 flex overflow-hidden">
       <div ref="blockdiv" class="flex-1 relative" style="overflow: hidden;">
         <Search />
-        <Zoom />
         <Trashcan />
         <!-- 拖拽导入高亮遮罩 -->
         <div
@@ -56,7 +65,7 @@
         >
           <div class="text-center text-[#84a65b]">
             <div class="text-4xl mb-2">📂</div>
-            <div class="text-lg font-bold">释放文件以导入积木</div>
+            <div class="text-lg font-bold">{{ t('blockly.dragImport') }}</div>
           </div>
         </div>
         <!-- 隐藏的文件导入输入框 -->
@@ -75,8 +84,8 @@
         ></div>
         <div id="status-overlay" class="absolute inset-0 flex items-center justify-center z-10" style="background: #1e1e1e;">
           <div class="text-center">
-            <div class="text-xl font-bold text-green-400 mb-2">积木编辑器</div>
-            <div class="text-sm text-gray-400">Blockly 工作区加载中...</div>
+            <div class="text-xl font-bold text-green-400 mb-2">{{ t('blockly.title') }}</div>
+            <div class="text-sm text-gray-400">{{ t('blockly.loadingWorkspace') }}</div>
           </div>
         </div>
         <!-- 状态栏 -->
@@ -89,7 +98,7 @@
           <span
             v-if="orphanCount > 0"
             class="text-yellow-500/80"
-          >{{ orphanCount }} 个积木未连接事件，不会执行</span>
+          >{{ t('blockly.orphanBlocks', { count: orphanCount }) }}</span>
         </div>
       </div>
 
@@ -98,7 +107,7 @@
         class="w-80 flex flex-col border-l border-gray-700 bg-[#1e1e1e]"
       >
         <div class="flex items-center justify-between px-3 py-2 border-b border-gray-700">
-          <span class="text-sm text-gray-300 font-medium">Python 代码</span>
+          <span class="text-sm text-gray-300 font-medium">{{ t('blockly.pythonCode') }}</span>
           <div class="flex items-center gap-1">
             <button
               class="text-xs px-2 py-1 rounded transition-colors font-medium select-none"
@@ -106,7 +115,7 @@
                 ? 'text-red-300 bg-red-700/40 hover:bg-red-600/50 hover:text-red-200'
                 : 'text-green-400 bg-green-700/30 hover:bg-green-600/40 hover:text-green-200'"
               @click="handleToggleRun"
-            >{{ codeRunning ? '⏹ 停止' : '▶ 运行' }}</button>
+            >{{ codeRunning ? `⏹ ${t('blockly.stop')}` : `▶ ${t('blockly.run')}` }}</button>
             <button
               class="text-gray-400 hover:text-white transition-colors text-lg leading-none px-1"
               @click="store.hasLayoutSider.value = false"
@@ -164,14 +173,16 @@ function unregisterBlocklyWorkspace(api) {
 
 <script setup>
 import { ref, watch, onMounted, onUnmounted } from 'vue';
+import { useI18n } from 'vue-i18n';
 import { useErrorHandler } from '@/composables/useErrorHandler.js';
 import { useDockPanel } from '@/composables/useDockPanel.js';
 import { scriptingService } from '@/utils/bridge.js';
 
 const { closePanel: closeDockPanel, isDocked } = useDockPanel();
+const { t, locale } = useI18n();
 import DockTitleBar from '@/components/ui/DockTitleBar.vue';
 import Search from './Search.vue';
-import Zoom from './Zoom.vue';
+
 import Trashcan from './Trashcan.vue';
 import { useStore } from '../store/store.js';
 import {
@@ -213,6 +224,7 @@ let workspace = null;
 
 let BlocklyLib = null;
 let blocklyCN = null;
+let blocklyEN = null;
 let blocksRegistered = false;
 
 // 保存 store 引用，供 onUnmounted 清理共享状态
@@ -340,9 +352,9 @@ async function updateGeneratedCode() {
   }
   try {
     const code = pythonGenerator.workspaceToCode(workspace);
-    generatedCode.value = code || '# 暂无代码';
+    generatedCode.value = code || t('blockly.codeEmpty');
   } catch {
-    generatedCode.value = '# 代码生成失败';
+    generatedCode.value = t('blockly.codeGenerationFailed');
   }
 }
 
@@ -363,7 +375,7 @@ function getTargetKey(target) {
 }
 
 function getTargetDisplayName(target) {
-  if (target?.targetType === 'project') return '项目全局积木';
+  if (target?.targetType === 'project') return t('blockly.projectGlobalBlocks');
   return target?.actor ? `${target.actor} [${target.scene || ''}]` : '';
 }
 
@@ -382,8 +394,8 @@ async function handleToggleRun() {
 
   // 当前未执行 → 运行
   const code = generatedCode.value;
-  if (!code || code === '# 暂无代码' || code === '# 代码生成失败') {
-    alert('没有可执行的代码。请先添加积木。');
+  if (!code || code === t('blockly.codeEmpty') || code === t('blockly.codeGenerationFailed')) {
+    alert(t('blockly.noExecutableCode'));
     return;
   }
 
@@ -391,7 +403,7 @@ async function handleToggleRun() {
 
   const target = getCurrentTarget();
   if (target.targetType === 'actor' && (!target.scene || !target.actor)) {
-    alert('请先在场景中选中一个物体，再点击运行。');
+    alert(t('blockly.noSelectedActor'));
     return;
   }
 
@@ -406,14 +418,14 @@ async function handleToggleRun() {
     );
     const execResult = result?.data ?? result;
     if (execResult?.status === 'error') {
-      alert('代码执行出错：' + (execResult.message || '未知错误'));
+      alert(t('blockly.codeRunningFailed', { message: execResult.message || t('blockly.codeRunUnknownError') }));
       codeRunning.value = false;
     } else {
       // 脚本已在后台线程启动，开始轮询状态
       startPollTimer();
     }
   } catch (e) {
-    alert('代码执行失败：' + (e.message || '通信错误'));
+    alert(t('blockly.codeRunFailed', { message: e.message || t('blockly.codeRunUnknownError') }));
     codeRunning.value = false;
   }
 }
@@ -462,6 +474,7 @@ const loadBlocklyModules = async () => {
   try {
     BlocklyLib = await import('blockly/core');
     blocklyCN = await import('blockly/msg/zh-hans');
+    blocklyEN = await import('blockly/msg/en');
     return true;
   } catch (e) {
     logError('Blockly 模块加载失败', e);
@@ -471,7 +484,7 @@ const loadBlocklyModules = async () => {
 
 const broadcastList = ref([]);
 const createNewBroadcast = () => {
-  const name = prompt('请输入新广播的名称：');
+  const name = prompt(t('blockly.selectBroadcastName'));
   if (name && name.trim() !== '') broadcastList.value.push(name.trim());
 };
 
@@ -498,12 +511,12 @@ function saveCurrentWorkspace() {
       return false;
     });
     const now = new Date();
-    const ts = now.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-    autoSaveLabel.value = `已自动保存 ${ts}`;
+    const ts = now.toLocaleTimeString(locale.value, { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    autoSaveLabel.value = `${t('common.save')} ${ts}`;
     return latestBlocklySavePromise;
   } catch (e) {
     logError('保存工作区状态失败', e);
-    autoSaveLabel.value = '保存失败';
+    autoSaveLabel.value = t('blockly.saveFailed');
     latestBlocklySavePromise = Promise.resolve(false);
     return latestBlocklySavePromise;
   }
@@ -572,7 +585,7 @@ function onWorkspaceChange() {
   updateGeneratedCode();
   scheduleAutoSave();
   markOrphanBlocks();
-  if (loadedActorKey) autoSaveLabel.value = '未保存的更改...';
+  if (loadedActorKey) autoSaveLabel.value = t('blockly.unsavedChanges');
 }
 
 async function loadWorkspaceStateFromProject(target) {
@@ -583,7 +596,7 @@ async function loadWorkspaceStateFromProject(target) {
   });
   const payload = result?.data ?? result;
   if (payload?.status === 'error') {
-    throw new Error(payload.message || '加载积木失败');
+    throw new Error(payload.message || t('blockly.loadFailed'));
   }
   return payload?.workspace && typeof payload.workspace === 'object'
     ? payload.workspace
@@ -615,7 +628,7 @@ async function loadTargetWorkspace(target, { saveCurrent = true, force = false }
       nextState = await loadWorkspaceStateFromProject(normalized);
     } catch (e) {
       logError('加载目标积木失败', e);
-      autoSaveLabel.value = '加载失败';
+      autoSaveLabel.value = t('blockly.loadFailed');
     }
   }
   if (seq !== targetSwitchSeq) return;
@@ -638,7 +651,7 @@ async function loadTargetWorkspace(target, { saveCurrent = true, force = false }
     : { targetType: 'actor', scene: normalized.scene || '', actor: normalized.actor || '' };
   currentActorNameVar = loadedTargetInfo.actor || '';
   editingTarget.value = getTargetDisplayName(loadedTargetInfo);
-  autoSaveLabel.value = newKey ? '已加载' : '';
+  autoSaveLabel.value = newKey ? t('blockly.loaded') : '';
   updateGeneratedCode();
   markOrphanBlocks();
 }
@@ -687,6 +700,8 @@ const initBlocklyAndGenerators = async () => {
 
   if (!blocksRegistered) {
     const [
+      { defineAudioBlocks },
+      { defineCameraBlocks },
       { defineEngineBlocks },
       { defineAppearanceBlocks },
       { defineEventBlocks },
@@ -696,6 +711,8 @@ const initBlocklyAndGenerators = async () => {
       { defineVariableBlocks },
       { defineListBlocks },
     ] = await Promise.all([
+      import('@/blockly/blocks/audio.js'),
+      import('@/blockly/blocks/camera.js'),
       import('@/blockly/blocks/engine.js'),
       import('@/blockly/blocks/appearance.js'),
       import('@/blockly/blocks/event.js'),
@@ -707,46 +724,19 @@ const initBlocklyAndGenerators = async () => {
     ]);
 
     try {
-      defineEngineBlocks({ get value() { return currentActorNameVar; } });
-      defineAppearanceBlocks({ get value() { return currentActorNameVar; } });
-      defineEventBlocks({ get value() { return currentActorNameVar; } }, broadcastList, createNewBroadcast);
-      defineControlBlocks({ get value() { return currentActorNameVar; } });
-      defineDetectBlocks({ get value() { return currentActorNameVar; } });
+      defineAudioBlocks();
+      defineCameraBlocks();
+      defineEngineBlocks();
+      defineAppearanceBlocks();
+      defineEventBlocks(broadcastList, createNewBroadcast);
+      defineControlBlocks();
+      defineDetectBlocks();
       defineMathBlocks();
       defineVariableBlocks();
-      defineListBlocks({ get value() { return currentActorNameVar; } });
-
-      const [
-        { defineEngineGenerators },
-        { defineAppearanceGenerators },
-        { defineEventGenerators },
-        { defineControlGenerators },
-        { defineDetectGenerators },
-        { defineMathGenerators },
-        { defineVariableGenerators },
-        { defineListGenerators },
-      ] = await Promise.all([
-        import('@/blockly/generators/engine.js'),
-        import('@/blockly/generators/appearance.js'),
-        import('@/blockly/generators/event.js'),
-        import('@/blockly/generators/control.js'),
-        import('@/blockly/generators/detect.js'),
-        import('@/blockly/generators/math.js'),
-        import('@/blockly/generators/variable.js'),
-        import('@/blockly/generators/list.js'),
-      ]);
-
-      defineEngineGenerators();
-      defineAppearanceGenerators();
-      defineEventGenerators();
-      defineControlGenerators();
-      defineDetectGenerators();
-      defineMathGenerators();
-      defineVariableGenerators();
-      defineListGenerators();
+      defineListBlocks();
 
       // 加载自定义 workspaceToCode（hat过滤、handler路由、prelude等）
-      // 必须在所有 forBlock 生成器注册之后加载
+      // 该模块内部已包含所有分类生成器的注册，无需在此重复调用 define*Generators()
       await import('@/blockly/generators/index.js');
 
       blocksRegistered = true;
@@ -756,6 +746,40 @@ const initBlocklyAndGenerators = async () => {
     }
   }
 };
+
+function blocklyMessageBundle() {
+  const module = locale.value === 'en-US' ? blocklyEN : blocklyCN;
+  return module?.default || module || {};
+}
+
+function applyBlocklyLocale() {
+  if (!BlocklyLib) return;
+  try {
+    BlocklyLib.setLocale(blocklyMessageBundle());
+  } catch (e) {
+    logError('setLocale failed', e);
+  }
+}
+
+async function refreshBlocklyLanguage() {
+  if (!workspace || !BlocklyLib) return;
+  applyBlocklyLocale();
+  try {
+    const { createToolboxConfig } = await import('@/blockly/configs/toolboxConfig.js');
+    workspace.updateToolbox(createToolboxConfig(t));
+    const state = BlocklyLib.serialization.workspaces.save(workspace);
+    isLoadingWorkspace = true;
+    workspace.clear();
+    BlocklyLib.serialization.workspaces.load(state, workspace);
+  } catch (e) {
+    logError('刷新 Blockly 语言失败', e);
+  } finally {
+    isLoadingWorkspace = false;
+    updateGeneratedCode();
+    markOrphanBlocks();
+    resizeBlockly();
+  }
+}
 
 const initBlockly = async () => {
   const container = blockdiv.value;
@@ -768,22 +792,16 @@ const initBlockly = async () => {
   if (!modulesOk) return false;
 
   const Blockly = BlocklyLib;
-  const CN = blocklyCN;
-
-  try {
-    Blockly.setLocale(CN);
-  } catch (e) {
-    logError('setLocale 失败', e);
-  }
+  applyBlocklyLocale();
 
   await initBlocklyAndGenerators();
 
-  const { WORKSPACE_CONFIG } = await import('@/blockly/configs/workspaceConfig.js');
+  const { createWorkspaceConfig } = await import('@/blockly/configs/workspaceConfig.js');
   const store = useStore();
   sharedStore = store;
 
   try {
-    workspace = Blockly.inject(container, WORKSPACE_CONFIG);
+    workspace = Blockly.inject(container, createWorkspaceConfig(t));
   } catch (e) {
     logError('Blockly.inject 失败', e);
     return false;
@@ -791,6 +809,9 @@ const initBlockly = async () => {
 
   store.workspace.value = workspace;
   store.workspaceSvg.value = workspace.workspaceSvg || workspace;
+
+  // 缩放比例监听
+  setupScaleListener(workspace);
 
   // 积木键盘事件转发到 Python（必须在 setupCefFieldInputFix 之前注册）
   setupScriptKeyForwarding();
@@ -803,7 +824,7 @@ const initBlockly = async () => {
   try { Blockly.ContextMenuRegistry.registry.unregister('pasteWorkspace'); } catch {}
 
   Blockly.ContextMenuRegistry.registry.register({
-    displayText: '保存工作区',
+    displayText: () => t('blockly.saveWorkspace'),
     preconditionFn: () => workspace && workspace.getAllBlocks(false).length > 0 ? 'enabled' : 'disabled',
     callback: async () => {
       const data = Blockly.serialization.workspaces.save(workspace);
@@ -812,14 +833,14 @@ const initBlockly = async () => {
       const suggestedName = getExportFilename();
       try {
         const opts = {
-          types: [{ description: 'Blockly 项目文件', accept: { 'application/json': ['.blockly'] } }],
+          types: [{ description: t('blockly.blocklyProjectFile'), accept: { 'application/json': ['.blockly'] } }],
           suggestedName,
         };
         const handle = await window.showSaveFilePicker(opts);
         const writable = await handle.createWritable();
         await writable.write(blob);
         await writable.close();
-        showToast('✅ 积木导出成功', 'success');
+        showToast(`✅ ${t('blockly.exportSuccess')}`, 'success');
       } catch {
         // 用户取消或 API 不可用 → 回退到下载链接
         fallbackDownload(jsonStr, suggestedName);
@@ -831,7 +852,7 @@ const initBlockly = async () => {
   });
 
   Blockly.ContextMenuRegistry.registry.register({
-    displayText: '导入积木',
+    displayText: () => t('blockly.importBlocks'),
     preconditionFn: () => workspace ? 'enabled' : 'disabled',
     callback: () => {
       triggerFileImport();
@@ -842,17 +863,17 @@ const initBlockly = async () => {
   });
 
   Blockly.ContextMenuRegistry.registry.register({
-    displayText: '复制积木',
+    displayText: () => t('blockly.copyBlocks'),
     preconditionFn: () => workspace && workspace.getAllBlocks(false).length > 0 ? 'enabled' : 'disabled',
     callback: async () => {
       try {
         const data = Blockly.serialization.workspaces.save(workspace);
         const jsonStr = JSON.stringify(data);
         await navigator.clipboard.writeText(jsonStr);
-        showToast('📋 积木已复制到剪贴板', 'success');
+        showToast(`📋 ${t('blockly.copiedToClipboard')}`, 'success');
       } catch (e) {
         logError('复制积木失败', e);
-        showToast('❌ 复制失败', 'error');
+        showToast(`❌ ${t('blockly.copyFailed')}`, 'error');
       }
     },
     scopeType: Blockly.ContextMenuRegistry.ScopeType.WORKSPACE,
@@ -861,35 +882,35 @@ const initBlockly = async () => {
   });
 
   Blockly.ContextMenuRegistry.registry.register({
-    displayText: '粘贴积木',
+    displayText: () => t('blockly.pasteBlocks'),
     preconditionFn: () => 'enabled',
     callback: async () => {
       try {
         const text = await navigator.clipboard.readText();
         if (!text || !text.trim()) {
-          showToast('⚠️ 剪贴板为空', 'warn');
+          showToast(`⚠️ ${t('blockly.clipboardEmpty')}`, 'warn');
           return;
         }
         let json;
         try {
           json = JSON.parse(text);
         } catch {
-          showToast('❌ 剪贴板内容不是有效的积木数据', 'error');
+          showToast(`❌ ${t('blockly.invalidClipboard')}`, 'error');
           return;
         }
         if (!json || typeof json !== 'object') {
-          showToast('❌ 剪贴板数据格式不正确', 'error');
+          showToast(`❌ ${t('blockly.invalidWorkspaceData')}`, 'error');
           return;
         }
         const hasBlocks = workspace.getAllBlocks(false).length > 0;
-        if (hasBlocks && !confirm('当前工作区已有积木，粘贴将替换现有积木。是否继续？')) {
+        if (hasBlocks && !confirm(t('blockly.pasteConfirm'))) {
           return;
         }
         Blockly.serialization.workspaces.load(json, workspace);
-        showToast('✅ 积木粘贴成功', 'success');
+        showToast(`✅ ${t('blockly.pasteSuccess')}`, 'success');
       } catch (e) {
         logError('粘贴积木失败', e);
-        showToast('❌ 粘贴失败，请检查剪贴板权限', 'error');
+        showToast(`❌ ${t('blockly.pasteFailed')}`, 'error');
       }
     },
     scopeType: Blockly.ContextMenuRegistry.ScopeType.WORKSPACE,
@@ -956,14 +977,14 @@ function fallbackDownload(jsonStr, filename) {
   a.click();
   document.body.removeChild(a);
   setTimeout(() => URL.revokeObjectURL(url), 150);
-  showToast('✅ 积木导出成功', 'success');
+  showToast(`✅ ${t('blockly.exportSuccess')}`, 'success');
 }
 
 /** 工具栏导出按钮处理 */
 async function handleToolbarExport() {
   if (!workspace || !BlocklyLib) return;
   if (workspace.getAllBlocks(false).length === 0) {
-    showToast('⚠️ 工作区为空，无积木可导出', 'warn');
+    showToast(`⚠️ ${t('blockly.emptyWorkspaceExport')}`, 'warn');
     return;
   }
   const data = BlocklyLib.serialization.workspaces.save(workspace);
@@ -973,30 +994,19 @@ async function handleToolbarExport() {
   if (window.showSaveFilePicker) {
     try {
       const opts = {
-        types: [{ description: 'Blockly 项目文件', accept: { 'application/json': ['.blockly'] } }],
+        types: [{ description: t('blockly.blocklyProjectFile'), accept: { 'application/json': ['.blockly'] } }],
         suggestedName,
       };
       const handle = await window.showSaveFilePicker(opts);
       const writable = await handle.createWritable();
       await writable.write(blob);
       await writable.close();
-      showToast('✅ 积木导出成功', 'success');
+      showToast(`✅ ${t('blockly.exportSuccess')}`, 'success');
     } catch {
       fallbackDownload(jsonStr, suggestedName);
     }
   } else {
     fallbackDownload(jsonStr, suggestedName);
-  }
-}
-
-/** 整理积木布局 */
-function handleOrganize() {
-  if (!workspace) return;
-  try {
-    workspace.cleanUp();
-    showToast('✅ 积木已整理', 'success');
-  } catch (e) {
-    showToast('❌ 整理失败', 'error');
   }
 }
 
@@ -1025,12 +1035,12 @@ function handleFileImportChange(event) {
 /** 从 File 对象导入积木 */
 function importWorkspaceFromFileObject(file) {
   if (!workspace) {
-    showToast('❌ 工作区尚未初始化', 'error');
+    showToast(`❌ ${t('blockly.workspaceNotReady')}`, 'error');
     return;
   }
   const ext = (file.name || '').split('.').pop()?.toLowerCase();
   if (ext !== 'blockly' && ext !== 'json') {
-    showToast('⚠️ 仅支持 .blockly 或 .json 格式', 'warn');
+    showToast(`⚠️ ${t('blockly.unsupportedFile')}`, 'warn');
     return;
   }
   const reader = new FileReader();
@@ -1043,30 +1053,30 @@ function importWorkspaceFromFileObject(file) {
     try {
       json = JSON.parse(text);
     } catch (e) {
-      showToast('❌ JSON 解析失败：' + (e.message || '格式错误'), 'error');
+      showToast(`❌ ${t('blockly.invalidJson', { message: e.message || t('blockly.codeRunUnknownError') })}`, 'error');
       return;
     }
 
     if (!json || typeof json !== 'object') {
-      showToast('❌ 文件格式不正确：根节点必须是对象', 'error');
+      showToast(`❌ ${t('blockly.invalidFileFormat')}`, 'error');
       return;
     }
 
     // 确认覆盖
     const hasBlocks = workspace.getAllBlocks(false).length > 0;
-    if (hasBlocks && !confirm('当前工作区已有积木，导入将替换现有积木。是否继续？')) {
+    if (hasBlocks && !confirm(t('blockly.replaceConfirm'))) {
       return;
     }
 
     try {
       BlocklyLib.serialization.workspaces.load(json, workspace);
-      showToast(`✅ 成功导入 ${file.name}`, 'success');
+      showToast(`✅ ${t('blockly.importSuccess', { name: file.name })}`, 'success');
     } catch (e) {
-      showToast('❌ 工作区加载失败：' + (e.message || '未知错误'), 'error');
+      showToast(`❌ ${t('blockly.workspaceLoadFailed', { message: e.message || t('blockly.codeRunUnknownError') })}`, 'error');
     }
   });
   reader.addEventListener('error', () => {
-    showToast('❌ 文件读取失败，请确认文件未损坏', 'error');
+    showToast(`❌ ${t('blockly.fileReadFailed')}`, 'error');
   });
   reader.readAsText(file, 'UTF-8');
 }
@@ -1096,7 +1106,7 @@ function setupKeyboardShortcuts() {
       e.stopPropagation();
       // 导出当前工作区
       if (!workspace || workspace.getAllBlocks(false).length === 0) {
-        showToast('⚠️ 工作区为空，无积木可导出', 'warn');
+        showToast(`⚠️ ${t('blockly.emptyWorkspaceExport')}`, 'warn');
         return;
       }
       const data = BlocklyLib.serialization.workspaces.save(workspace);
@@ -1105,14 +1115,14 @@ function setupKeyboardShortcuts() {
       if (window.showSaveFilePicker) {
         const blob = new Blob([jsonStr], { type: 'application/json' });
         const opts = {
-          types: [{ description: 'Blockly 项目文件', accept: { 'application/json': ['.blockly'] } }],
+          types: [{ description: t('blockly.blocklyProjectFile'), accept: { 'application/json': ['.blockly'] } }],
           suggestedName,
         };
         window.showSaveFilePicker(opts).then(async (handle) => {
           const writable = await handle.createWritable();
           await writable.write(blob);
           await writable.close();
-          showToast('✅ 积木导出成功', 'success');
+          showToast(`✅ ${t('blockly.exportSuccess')}`, 'success');
         }).catch(() => {
           fallbackDownload(jsonStr, suggestedName);
         });
@@ -1213,118 +1223,76 @@ const handleClose = async () => {
   if (closeDockPanel) { closeDockPanel(); return; }
 };
 
-/**
- * 新建画布：保存当前状态 → 清空工作区 → 清除持久化状态
- * 确保后续切换 Actor 时不会加载旧积木
- */
-function handleNewCanvas() {
+/** 清空工作区 */
+function handleClear() {
   if (!workspace || !BlocklyLib) return;
+  if (workspace.getAllBlocks(false).length === 0) {
+    showToast(`⚠️ ${t('blockly.workspaceEmpty')}`, 'warn');
+    return;
+  }
+  if (!confirm(t('blockly.clearConfirm'))) return;
 
-  // 1. 先保存当前状态（用户可能做了修改但还没切换）
   flushAutoSave();
-
-  // 2. 清除当前 Actor 的持久化状态
-  // 3. 清空工作区
   isLoadingWorkspace = true;
   try {
     workspace.clear();
+    showToast(`✅ ${t('blockly.workspaceCleared')}`, 'success');
   } catch (e) {
     logError('清空工作区失败', e);
+    showToast(`❌ ${t('blockly.clear')} ${t('common.error')}`, 'error');
   } finally {
     isLoadingWorkspace = false;
   }
-
-  // 4. 立即保存空的 workspace 状态（覆盖旧状态）
   updateGeneratedCode();
   saveCurrentWorkspace();
 }
 
-/**
- * 保存工作区：将当前积木序列化为 .blockly 文件并下载
- */
-async function handleSaveWorkspace() {
-  if (!workspace || !BlocklyLib) return;
-  const data = BlocklyLib.serialization.workspaces.save(workspace);
-  const jsonStr = JSON.stringify(data, null, 2);
-  const blob = new Blob([jsonStr], { type: 'application/json' });
+// ============================================================
+// 缩放功能
+// ============================================================
+const scaleText = ref('100%');
 
-  const actorLabel = props.embedded
-    ? (props.actorName || 'unknown')
-    : (currentActorName.value || 'unknown');
-  const suggestedName = `blockly_${actorLabel}_${Date.now()}.blockly`;
-
-  if (window.showSaveFilePicker) {
-    try {
-      const opts = {
-        types: [{ description: 'Blockly 项目文件', accept: { 'application/json': ['.blockly'] } }],
-        suggestedName,
-      };
-      const handle = await window.showSaveFilePicker(opts);
-      const writable = await handle.createWritable();
-      await writable.write(blob);
-      await writable.close();
-    } catch (e) {
-      // 用户取消或其他错误，静默
-    }
-  } else {
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement('a');
-    anchor.href = url;
-    anchor.download = suggestedName;
-    document.body.appendChild(anchor);
-    anchor.click();
-    document.body.removeChild(anchor);
-    setTimeout(() => URL.revokeObjectURL(url), 150);
+function updateScale() {
+  const ws = store.workspace.value;
+  if (ws) {
+    scaleText.value = Math.floor((ws.scale || 1.0) * 100) + '%';
   }
 }
 
-/**
- * 打开工作区：从 .blockly 文件加载积木到当前工作区
- */
-function handleOpenWorkspace() {
-  if (!workspace || !BlocklyLib) return;
-  const input = document.createElement('input');
-  input.setAttribute('type', 'file');
-  input.setAttribute('accept', '.blockly');
-  input.addEventListener('change', function () {
-    const file = this.files[0];
-    if (!file) return;
-    if (!file.name.toLowerCase().endsWith('.blockly')) {
-      alert('仅支持 .blockly 格式的文件');
-      return;
+function handleZoomIn() {
+  const ws = store.workspace.value;
+  if (ws) { ws.zoom(0, 0, 0.15); updateScale(); }
+}
+
+function handleZoomOut() {
+  const ws = store.workspace.value;
+  if (ws) { ws.zoom(0, 0, -0.15); updateScale(); }
+}
+
+function handleZoomReset() {
+  const ws = store.workspace.value;
+  if (ws) { ws.zoomTo(0, 0, 1.0); updateScale(); }
+}
+
+// 缩放变化监听器引用
+let scaleChangeListener = null;
+
+function setupScaleListener(ws) {
+  teardownScaleListener();
+  if (!ws) return;
+  updateScale();
+  scaleChangeListener = () => updateScale();
+  ws.addChangeListener(scaleChangeListener);
+}
+
+function teardownScaleListener() {
+  if (scaleChangeListener) {
+    const ws = store.workspace.value;
+    if (ws) {
+      try { ws.removeChangeListener(scaleChangeListener); } catch {}
     }
-    const reader = new FileReader();
-    reader.addEventListener('load', function () {
-      let text = this.result;
-      if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
-
-      let json;
-      try {
-        json = JSON.parse(text);
-      } catch (e) {
-        console.error('[Blockly] JSON 解析失败：', e, '文件内容前100字符：', text.slice(0, 100));
-        alert('文件格式不正确，无法解析 JSON：' + (e.message || ''));
-        return;
-      }
-
-      if (!json || typeof json !== 'object') {
-        alert('文件格式不正确：JSON 根节点必须是对象');
-        return;
-      }
-
-      try {
-        BlocklyLib.serialization.workspaces.load(json, workspace);
-      } catch (e) {
-        console.error('[Blockly] 工作区加载失败：', e);
-        alert('工作区加载失败：' + (e.message || '未知错误'));
-      }
-    });
-    reader.addEventListener('error', function () {
-      alert('文件读取失败，请确认文件未损坏');
-    });
-    reader.readAsText(file, 'UTF-8');
-  });
-  input.click();
+    scaleChangeListener = null;
+  }
 }
 
 const handleWindowResize = () => resizeBlockly();
@@ -1336,6 +1304,10 @@ const blocklyWorkspaceApi = {
   reloadFromProject: () => reloadCurrentTargetFromProject(),
   clearCache: () => clearWorkspaceCache(),
 };
+
+watch(locale, () => {
+  refreshBlocklyLanguage();
+});
 
 onMounted(async () => {
   window.addEventListener('resize', handleWindowResize);
@@ -1359,16 +1331,23 @@ onMounted(async () => {
     logError('初始化失败', err);
     const overlay = document.getElementById('status-overlay');
     if (overlay) {
-      overlay.innerHTML = '<div class="text-center"><div class="text-xl font-bold text-red-400 mb-2">初始化失败</div><div class="text-sm text-gray-400">请检查 Blockly 相关模块是否正确安装</div></div>';
+      overlay.innerHTML = `<div class="text-center"><div class="text-xl font-bold text-red-400 mb-2">${t('common.error')}</div><div class="text-sm text-gray-400">${t('blockly.loadFailed')}</div></div>`;
     }
   }
 });
 
-onUnmounted(() => {
+onUnmounted(async () => {
+  // 1) 标记组件已卸载（阻止后续 resize/keyboard 回调操作已销毁对象）
+  let disposed = false;
+  const isAlive = () => !disposed && workspace !== null;
+  const safeResize = () => { if (isAlive() && BlocklyLib) { try { BlocklyLib.svgResize(workspace); } catch {} } };
+
   window.removeEventListener('resize', handleWindowResize);
   if (resizeObserver) { resizeObserver.disconnect(); resizeObserver = null; }
   // 清理拖拽导入
   teardownDragDrop();
+  // 清理缩放监听
+  teardownScaleListener();
   // 清理键盘快捷键
   teardownKeyboardShortcuts();
   // 清理 CEF 键盘转发
@@ -1382,9 +1361,18 @@ onUnmounted(() => {
   if (autoSaveTimer) { clearTimeout(autoSaveTimer); autoSaveTimer = null; }
   // 清理提示定时器
   if (toastTimer) { clearTimeout(toastTimer); toastTimer = null; }
-  // 销毁前立即保存当前工作区状态
-  flushAutoSave();
+
+  // ★ 关键修复：销毁前等待最后的保存完成，防止数据丢失
   if (workspace) {
+    try { await flushAutoSave(); } catch {}
+    try { await latestBlocklySavePromise; } catch {}
+  }
+
+  disposed = true;
+
+  if (workspace) {
+    // 移除 change listener 防止 dispose 过程中的回调
+    try { workspace.removeChangeListener(onWorkspaceChange); } catch {}
     try { workspace.dispose(); } catch {}
     workspace = null;
   }
@@ -1393,17 +1381,17 @@ onUnmounted(() => {
     sharedStore.workspace.value = null;
     sharedStore.workspaceSvg.value = null;
   }
-  // 重置积木注册标记，确保下次挂载时重新注册积木类型和生成器
-  blocksRegistered = false;
-  pythonGenerator = null;
+  // 所有工作区实例都已卸载时，重置共享的模块级状态
+  // 使用 mountedBlocklyWorkspaces 的大小作为引用计数（此时当前实例已通过 unregister 移除）
+  if (mountedBlocklyWorkspaces.size === 0) {
+    blocksRegistered = false;
+    pythonGenerator = null;
+  }
   generatedCode.value = '';
 });
 
 defineExpose({
   resize: resizeBlockly,
-  handleNewCanvas,
-  handleSaveWorkspace,
-  handleOpenWorkspace,
 });
 </script>
 

@@ -5,7 +5,7 @@ layout (local_size_x = 8, local_size_y = 8) in;
 
 layout (set = 0, binding = 0) uniform sampler2D textures[];
 layout (set = 1, binding = 0) readonly buffer SSBOPool { uint data[]; } ssbos[];
-layout (set = 2, binding = 0, rgba16) uniform image2D imagesRGBA16[];
+layout (set = 2, binding = 0, rgba16f) uniform image2D imagesRGBA16[];
 layout (set = 2, binding = 0, rgba32ui) uniform uimage2D imagesRGBA32UI[];
 
 layout(push_constant) uniform PushConsts

@@ -2,6 +2,46 @@
 @tailwind components;
 @tailwind utilities;
 
+html,
+body,
+#app {
+  width: 100%;
+  height: 100%;
+  min-height: 100%;
+  margin: 0;
+  background: transparent;
+}
+
+body {
+  overflow: hidden;
+  font-family:
+    "Segoe UI",
+    "Microsoft YaHei UI",
+    "Microsoft YaHei",
+    "Noto Sans SC",
+    sans-serif;
+  line-height: 1.4;
+}
+
+#app {
+  display: flex;
+  flex-direction: column;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+.i18n-nowrap-safe {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* Blockly 与 TailwindCSS 兼容修复：Tailwind preflight 对 SVG 设置 display: block
    会覆盖 Blockly 通过 display="none" 属性隐藏滚动条的机制
    参考：https://github.com/RaspberryPiFoundation/blockly/issues/5840 */

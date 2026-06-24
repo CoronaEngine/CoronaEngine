@@ -4,6 +4,9 @@
 #endif
 #include <winsock2.h>
 #include <ws2tcpip.h>
+#include <windows.h>
+#include <iphlpapi.h>
+#pragma comment(lib, "iphlpapi.lib")
 #endif
 
 #include "browser_manager.h"
@@ -14,11 +17,15 @@
 #include <corona/systems/network/network_system.h>
 
 #include <cstdint>
+#include <algorithm>
+#include <cctype>
+#include <cstring>
 #include <functional>
 #include <iostream>
 #include <memory>
 #include <stdexcept>
 #include <sstream>
+#include <string>
 #include <vector>
 
 #include <nlohmann/json.hpp>
@@ -76,7 +83,7 @@ Corona::Systems::NetworkSystem::SessionRole parse_network_session_role(
     return Corona::Systems::NetworkSystem::SessionRole::Host;
 }
 
-std::string detect_local_ipv4();
+std::string detect_wlan_ipv4();
 
 nlohmann::json build_network_session_info(
     const std::shared_ptr<Corona::Systems::NetworkSystem>& sys) {
@@ -89,7 +96,7 @@ nlohmann::json build_network_session_info(
     payload["host_address"] = sys->host_address();
     payload["host_port"] = sys->host_port();
     payload["listen_port"] = sys->session_port();
-    payload["local_ip"] = detect_local_ipv4();
+    payload["local_ip"] = detect_wlan_ipv4();
     return payload;
 }
 
@@ -156,8 +163,11 @@ nlohmann::json build_lanchat_history_rooms(
     const std::vector<Corona::Network::LanChatHistoryRoomSummary>& rooms) {
     nlohmann::json result = nlohmann::json::array();
     for (const auto& room : rooms) {
+        const std::string load_id = room.session_id.empty() ? room.room_id : room.session_id;
         result.push_back({
-            {"room_id", room.room_id},
+            {"room_id", load_id},
+            {"session_id", load_id},
+            {"display_room_id", room.room_id},
             {"message_count", room.message_count},
             {"last_timestamp_ms", room.last_timestamp_ms},
             {"last_ts", room.last_timestamp_ms / 1000},
@@ -189,16 +199,29 @@ std::string make_agent_id(const std::string& owner, const std::string& name) {
     return out.str();
 }
 
-std::string detect_local_ipv4() {
-#ifdef _WIN32
-    WSADATA wsa{};
-    const bool started = WSAStartup(MAKEWORD(2, 2), &wsa) == 0;
-#endif
+std::string to_lower_ascii(std::string value) {
+    std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) {
+        return static_cast<char>(std::tolower(c));
+    });
+    return value;
+}
+
+bool looks_like_wlan_adapter(const std::string& adapter_name) {
+    const std::string name = to_lower_ascii(adapter_name);
+    return name.find("wlan") != std::string::npos ||
+           name.find("wi-fi") != std::string::npos ||
+           name.find("wifi") != std::string::npos ||
+           name.find("wireless") != std::string::npos ||
+           name.find("无线") != std::string::npos;
+}
+
+bool is_usable_ipv4(const std::string& ip) {
+    return !ip.empty() && ip.rfind("127.", 0) != 0 && ip != "0.0.0.0";
+}
+
+std::string detect_hostname_ipv4() {
     char host_name[256] = {};
     if (gethostname(host_name, sizeof(host_name)) != 0) {
-#ifdef _WIN32
-        if (started) WSACleanup();
-#endif
         return "127.0.0.1";
     }
 
@@ -207,9 +230,6 @@ std::string detect_local_ipv4() {
     hints.ai_socktype = SOCK_DGRAM;
     addrinfo* result = nullptr;
     if (getaddrinfo(host_name, nullptr, &hints, &result) != 0) {
-#ifdef _WIN32
-        if (started) WSACleanup();
-#endif
         return "127.0.0.1";
     }
 
@@ -221,16 +241,128 @@ std::string detect_local_ipv4() {
             continue;
         }
         std::string candidate(ip);
-        if (candidate.rfind("127.", 0) != 0 && candidate != "0.0.0.0") {
+        if (is_usable_ipv4(candidate)) {
             fallback = candidate;
             break;
         }
     }
     freeaddrinfo(result);
+    return fallback;
+}
+
 #ifdef _WIN32
+std::string wide_to_utf8(const wchar_t* value) {
+    if (!value || !*value) {
+        return {};
+    }
+    const int size = WideCharToMultiByte(CP_UTF8, 0, value, -1, nullptr, 0, nullptr, nullptr);
+    if (size <= 1) {
+        return {};
+    }
+    std::string result(static_cast<size_t>(size - 1), '\0');
+    WideCharToMultiByte(CP_UTF8, 0, value, -1, result.data(), size, nullptr, nullptr);
+    return result;
+}
+
+std::string ipv4_from_sockaddr(const sockaddr* address) {
+    if (!address || address->sa_family != AF_INET) {
+        return {};
+    }
+    const auto* addr = reinterpret_cast<const sockaddr_in*>(address);
+    char ip[INET_ADDRSTRLEN] = {};
+    if (!inet_ntop(AF_INET, &addr->sin_addr, ip, sizeof(ip))) {
+        return {};
+    }
+    return std::string(ip);
+}
+
+bool adapter_has_ipv4_gateway(const IP_ADAPTER_ADDRESSES* adapter) {
+    for (auto* gateway = adapter ? adapter->FirstGatewayAddress : nullptr; gateway; gateway = gateway->Next) {
+        if (gateway->Address.lpSockaddr &&
+            gateway->Address.lpSockaddr->sa_family == AF_INET) {
+            return true;
+        }
+    }
+    return false;
+}
+#endif
+
+std::string detect_wlan_ipv4() {
+#ifdef _WIN32
+    WSADATA wsa{};
+    const bool started = WSAStartup(MAKEWORD(2, 2), &wsa) == 0;
+    std::string wlan_with_gateway;
+    std::string wlan_fallback;
+    std::string gateway_fallback;
+    std::string any_fallback;
+
+    ULONG buffer_size = 15000;
+    std::vector<unsigned char> buffer(buffer_size);
+    ULONG flags = GAA_FLAG_SKIP_ANYCAST |
+                  GAA_FLAG_SKIP_MULTICAST |
+                  GAA_FLAG_SKIP_DNS_SERVER |
+                  GAA_FLAG_INCLUDE_GATEWAYS;
+    ULONG result = GetAdaptersAddresses(
+        AF_INET, flags, nullptr,
+        reinterpret_cast<IP_ADAPTER_ADDRESSES*>(buffer.data()),
+        &buffer_size);
+    if (result == ERROR_BUFFER_OVERFLOW) {
+        buffer.resize(buffer_size);
+        result = GetAdaptersAddresses(
+            AF_INET, flags, nullptr,
+            reinterpret_cast<IP_ADAPTER_ADDRESSES*>(buffer.data()),
+            &buffer_size);
+    }
+
+    if (result == NO_ERROR) {
+        auto* adapters = reinterpret_cast<IP_ADAPTER_ADDRESSES*>(buffer.data());
+        for (auto* adapter = adapters; adapter; adapter = adapter->Next) {
+            if (adapter->OperStatus != IfOperStatusUp ||
+                adapter->IfType == IF_TYPE_SOFTWARE_LOOPBACK) {
+                continue;
+            }
+
+            std::string adapter_name = wide_to_utf8(adapter->FriendlyName);
+            if (adapter->AdapterName) {
+                adapter_name += " ";
+                adapter_name += adapter->AdapterName;
+            }
+            const bool is_wlan = looks_like_wlan_adapter(adapter_name);
+            const bool has_gateway = adapter_has_ipv4_gateway(adapter);
+
+            for (auto* unicast = adapter->FirstUnicastAddress; unicast; unicast = unicast->Next) {
+                const std::string ip = ipv4_from_sockaddr(unicast->Address.lpSockaddr);
+                if (!is_usable_ipv4(ip)) {
+                    continue;
+                }
+                if (is_wlan && has_gateway && wlan_with_gateway.empty()) {
+                    wlan_with_gateway = ip;
+                }
+                if (is_wlan && wlan_fallback.empty()) {
+                    wlan_fallback = ip;
+                }
+                if (has_gateway && gateway_fallback.empty()) {
+                    gateway_fallback = ip;
+                }
+                if (any_fallback.empty()) {
+                    any_fallback = ip;
+                }
+            }
+        }
+    }
+
+    std::string selected = !wlan_with_gateway.empty() ? wlan_with_gateway :
+                           !wlan_fallback.empty() ? wlan_fallback :
+                           !gateway_fallback.empty() ? gateway_fallback :
+                           !any_fallback.empty() ? any_fallback :
+                           detect_hostname_ipv4();
     if (started) WSACleanup();
 #endif
-    return fallback;
+#ifdef _WIN32
+    return selected;
+#else
+    return detect_hostname_ipv4();
+#endif
 }
 }  // namespace
 
@@ -801,13 +933,19 @@ bool BrowserSideJSHandler::OnQuery(CefRefPtr<CefBrowser> browser,
                     const std::string room = payload_arg.value("room", "");
                     const uint16_t port = payload_arg.value("port", 27960);
                     const std::string nickname = payload_arg.value("nickname", "房主");
+                    const bool restore_history = payload_arg.value("restore_history", false);
+                    const std::string history_room = payload_arg.value("history_room", room);
                     const std::string host_nickname = nickname.empty() ? "房主" : nickname;
                     bool ok = sys->lanchat_start_room(room, host_nickname, port);
+                    bool restored_history = false;
+                    if (ok && restore_history) {
+                        restored_history = sys->lanchat_restore_history_room(history_room);
+                    }
                     const uint16_t actual_port = sys->session_port() != 0 ? sys->session_port() : port;
                     nlohmann::json data;
                     data["ok"] = ok;
                     data["you"] = host_nickname;
-                    data["ip"] = detect_local_ipv4();
+                    data["ip"] = detect_wlan_ipv4();
                     data["port"] = actual_port;
                     data["room"] = room;
                     data["peer_id"] = sys->local_peer_id();
@@ -815,6 +953,7 @@ bool BrowserSideJSHandler::OnQuery(CefRefPtr<CefBrowser> browser,
                     data["member_details"] = build_lanchat_member_details(sys->lanchat_members());
                     data["history"] = build_lanchat_history(sys->lanchat_history());
                     data["agents"] = build_lanchat_agents(sys->lanchat_agents());
+                    data["restored_history"] = restored_history;
                     callback->Success(create_success_json(func, data));
                     return true;
                 }
@@ -989,7 +1128,7 @@ bool BrowserSideJSHandler::OnQuery(CefRefPtr<CefBrowser> browser,
                 if (func == "get_local_ip") {
                     nlohmann::json data;
                     data["ok"] = true;
-                    data["ip"] = detect_local_ipv4();
+                    data["ip"] = detect_wlan_ipv4();
                     data["port"] = sys->session_port() != 0 ? sys->session_port() : 27960;
                     callback->Success(create_success_json(func, data));
                     return true;

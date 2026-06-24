@@ -90,6 +90,9 @@ void BindAll(nanobind::module_& m) {
              "Set local rotation (Euler angles ZYX order) [pitch, yaw, roll]")
         .def("set_scale", &Geometry::set_scale, nb::arg("scale"),
              "Set local scale [x, y, z]")
+        .def("set_native_local_correction", &Geometry::set_native_local_correction,
+             nb::arg("offset"), nb::arg("scale"),
+             "Set native-only local correction applied before rendering")
         .def("get_position", &Geometry::get_position,
              "Get local position [x, y, z]")
         .def("get_rotation", &Geometry::get_rotation,
@@ -450,6 +453,14 @@ void BindAll(nanobind::module_& m) {
     m.def("drain_logs", []() -> std::vector<Corona::Kernel::LogEntry> { return Corona::Kernel::CoronaLogger::drain_logs(); }, "Drain all pending log entries from the engine log queue");
 
     m.def("send_log", [](const std::string& level, const std::string& message) {
+              const auto is_optional_tool_config_error = [&message]() {
+                  return message.find("Failed to load tools from") != std::string::npos &&
+                         (message.find("api_key") != std::string::npos ||
+                          message.find("base_url") != std::string::npos ||
+                          message.find("placeholder") != std::string::npos ||
+                          message.find("not configured") != std::string::npos ||
+                          message.find("missing") != std::string::npos);
+              };
               if (level == "TRACE") {
                   PY_LOG_TRACE("{}", message.c_str());
               } else if (level == "DEBUG") {
@@ -459,7 +470,11 @@ void BindAll(nanobind::module_& m) {
               } else if (level == "WARNING") {
                   PY_LOG_WARNING("{}", message.c_str());
               } else if (level == "ERROR") {
-                  PY_LOG_ERROR("{}", message.c_str());
+                  if (is_optional_tool_config_error()) {
+                      PY_LOG_WARNING("{}", message.c_str());
+                  } else {
+                      PY_LOG_ERROR("{}", message.c_str());
+                  }
               } else if (level == "CRITICAL") {
                   PY_LOG_CRITICAL("{}", message.c_str());
               } else {
@@ -607,6 +622,14 @@ void BindAll(nanobind::module_& m) {
             }
             return nb::object(lanchat_message_to_dict(*message));
         }, "Pop one ordinary LANChat message that should be synced into InteractionCoordinator.");
+
+        m.def("network_session_role_name", []() -> std::string {
+            auto sys = get_network_system();
+            if (!sys) {
+                return "none";
+            }
+            return std::string(sys->session_role_name());
+        }, "Return current networking session role: none, host, or client.");
 
         m.def("network_pop_lanchat_room_event", []() -> nb::object {
             auto sys = get_network_system();

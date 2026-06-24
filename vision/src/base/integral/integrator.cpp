@@ -105,11 +105,15 @@ void IlluminationIntegrator::compile_path_tracing() noexcept {
         RayState rs = ray_data->to_ray_state();
         Float scatter_pdf = 1e16f;
         RadType3Var Ld;
-        Float3 L = Integrator::Li(rs, scatter_pdf, {Ld}, render_env);
-        Float3 L_indirect = L - Ld;
+        RadType3Var Ld_specular;
+        Float3 L = Integrator::Li(rs, scatter_pdf, {Ld, Ld_specular}, render_env);
+        // Repurposed channels for the SVGF denoiser: param.direct = DIFFUSE, param.indirect = SPECULAR.
+        // diffuse = total - specular keeps diffuse + specular == L exactly (energy conserved);
+        // `colors` stays the untouched total (ground truth).
+        Float3 L_diffuse = L - Ld_specular;
         param.colors.write(dispatch_id(), make_float4(L, 1.f));
-        param.indirect.write(dispatch_id(), make_RadType4(make_float4(L_indirect,RadType(1.f))));
-        param.direct.write(dispatch_id(), make_RadType4(Ld, RadType(1.f)));
+        param.indirect.write(dispatch_id(), make_RadType4(Ld_specular, RadType(1.f)));
+        param.direct.write(dispatch_id(), make_RadType4(make_float4(L_diffuse, RadType(1.f))));
     };
     path_tracing_ = device().compile(kernel, "path_tracing");
 }
@@ -186,6 +190,19 @@ Float3 IlluminationIntegrator::Li(RayState rs, Float scatter_pdf, const Uint &ma
 
     Float3 ret = make_float3(0.f);
 
+    // --- diffuse/specular split (active only when hc.split(), i.e. the PT denoiser path) ---
+    // We accumulate ONLY the specular channel; the diffuse channel is derived downstream as
+    // (total - specular), which keeps diffuse + specular == ret exactly (energy conserving).
+    Float3 ret_specular = make_float3(0.f);
+    Float spec_route = 0.f;   // 1 once the primary BSDF sample picked a glossy/specular lobe
+    Float spec_frac_b0 = 0.f; // specular fraction of the primary-hit direct lighting
+    auto route_spec = [&](const Float3 &lin, const Uint &b, const Float &frac_b0) {
+        if (!hc.split()) { return; }
+        // bounce 0: proportional (emission/miss pass frac_b0=0 -> diffuse; direct passes the
+        // BRDF specular fraction). bounce >=1: whole contribution follows the primary lobe.
+        ret_specular += lin * ocarina::select(b == 0u, frac_b0, spec_route);
+    };
+
     Float3 primary_dir = rs.direction();
     auto mis_bsdf = [&](auto &bounces, bool inner) {
         hit = geometry.trace_closest(rs.ray);
@@ -199,7 +216,9 @@ Float3 IlluminationIntegrator::Li(RayState rs, Float scatter_pdf, const Uint &ma
 
         $if(hit->is_miss()) {
             SampledSpectrum d = evaluate_miss(rs, prev_surface_ng, scatter_pdf, bounces, swl) * throughput;
-            ret += spectrum()->linear_srgb(d, swl);
+            Float3 lin = spectrum()->linear_srgb(d, swl);
+            ret += lin;
+            route_spec(lin, bounces, 0.f);
             $super_break;
         };
 
@@ -241,7 +260,9 @@ Float3 IlluminationIntegrator::Li(RayState rs, Float scatter_pdf, const Uint &ma
             Float weight = MIS_weight<D>(scatter_pdf, eval.pdf);
             weight = correct_bsdf_weight(weight, bounces);
             SampledSpectrum d = eval.L * throughput * weight * tr;
-            ret += spectrum()->linear_srgb(d, swl);
+            Float3 lin = spectrum()->linear_srgb(d, swl);
+            ret += lin;
+            route_spec(lin, bounces, 0.f);
         };
         prev_surface_ng = it.ng;
     };
@@ -271,6 +292,11 @@ Float3 IlluminationIntegrator::Li(RayState rs, Float scatter_pdf, const Uint &ma
                 });
                 Ld = direct_light_mis(it, evaluator, light_sample, occluded,
                                       sampler, swl, bsdf_sample);
+                if (hc.split()) {
+                    $if(bounces == 0u) {
+                        spec_frac_b0 = evaluator.specular_fraction(it.wo, normalize(light_sample.p_light - it.pos));
+                    };
+                }
                 return;
             }
             scene().materials().dispatch(it.material_id(), [&](const Material *material) {
@@ -279,6 +305,11 @@ Float3 IlluminationIntegrator::Li(RayState rs, Float scatter_pdf, const Uint &ma
                 Ld = direct_light_mis(it, evaluator, light_sample, occluded,
                                       sampler, swl, bsdf_sample);
                 albedo = spectrum()->linear_srgb(evaluator.albedo(it.wo), swl);
+                if (hc.split()) {
+                    $if(bounces == 0u) {
+                        spec_frac_b0 = evaluator.specular_fraction(it.wo, normalize(light_sample.p_light - it.pos));
+                    };
+                }
             });
         };
 
@@ -296,10 +327,18 @@ Float3 IlluminationIntegrator::Li(RayState rs, Float scatter_pdf, const Uint &ma
             sample_surface();
         }
         SampledSpectrum d = throughput * Ld * tr;
-        ret += spectrum()->linear_srgb(d, swl);
+        Float3 lin = spectrum()->linear_srgb(d, swl);
+        ret += lin;
+        route_spec(lin, bounces, spec_frac_b0);
         if (hc.Ld) {
             $if (bounces == 0u) {
                 *hc.Ld = make_RadType3(ret);
+            };
+        }
+        if (hc.split()) {
+            $if(bounces == 0u) {
+                Uint sflags = bsdf_sample.eval.flags;
+                spec_route = ocarina::select(BxDFFlag::is_glossy(sflags) | BxDFFlag::is_specular(sflags), 1.f, 0.f);
             };
         }
         eta_scale *= sqr(bsdf_sample.eta);
@@ -325,6 +364,9 @@ Float3 IlluminationIntegrator::Li(RayState rs, Float scatter_pdf, const Uint &ma
         $for(&bounce, 1u) {
             mis_bsdf(bounce, false);
         };
+    }
+    if (hc.Ld_specular) {
+        *hc.Ld_specular = make_RadType3(ret_specular);
     }
     return ret;
 }

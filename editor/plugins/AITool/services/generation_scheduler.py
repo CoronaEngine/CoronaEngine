@@ -60,6 +60,7 @@ class GenerationJob:
     plan_id: str = ""
     batch_id: str = ""
     priority: int = 0
+    sequence: int = 0
     status: GenerationJobStatus = GenerationJobStatus.QUEUED
     current_stage: str = ""
     error: str = ""
@@ -78,6 +79,7 @@ class GenerationJob:
             "plan_id": self.plan_id,
             "batch_id": self.batch_id,
             "priority": self.priority,
+            "sequence": self.sequence,
             "status": self.status.value,
             "current_stage": self.current_stage,
             "error": self.error,
@@ -141,6 +143,7 @@ class GenerationScheduler:
         self._lock = threading.RLock()
         self._jobs: dict[str, GenerationJob] = {}
         self._pending_job_ids: set[str] = set()
+        self._next_job_sequence = 0
         self._paused_sessions: set[str] = set()
         self._recent_events: list[dict[str, Any]] = []
         self._recent_event_limit = 100
@@ -200,6 +203,8 @@ class GenerationScheduler:
                     "status": GenerationJobStatus.WAITING_USER.value,
                     "error": "generation queue is full",
                 }
+            sequence = self._next_job_sequence
+            self._next_job_sequence += 1
             job = GenerationJob(
                 payload=payload,
                 runtime_context=runtime_context,
@@ -209,6 +214,7 @@ class GenerationScheduler:
                 plan_id=str(payload.get("plan_id") or ""),
                 batch_id=str(payload.get("batch_id") or ""),
                 priority=int(payload.get("priority") or 0),
+                sequence=sequence,
             )
             self._jobs[job.job_id] = job
             self._record_event_locked("submit", **self._job_ref(job))
@@ -238,7 +244,7 @@ class GenerationScheduler:
                     for job in jobs
                     if job.status == GenerationJobStatus.QUEUED
                 ),
-                key=lambda item: (-int(item["priority"]), float(item["created_at"]), str(item["job_id"])),
+                key=lambda item: (-int(item["priority"]), int(item.get("sequence") or 0), str(item["job_id"])),
             )
             active_jobs = [
                 self._job_ref(job)
@@ -296,7 +302,7 @@ class GenerationScheduler:
                     for job in jobs
                     if job.status == GenerationJobStatus.QUEUED
                 ),
-                key=lambda item: (-int(item["priority"]), float(item["created_at"]), str(item["job_id"])),
+                key=lambda item: (-int(item["priority"]), int(item.get("sequence") or 0), str(item["job_id"])),
             )
             active_jobs = [
                 self._job_ref(job)
@@ -458,8 +464,14 @@ class GenerationScheduler:
             job = self._jobs.get(job_id)
         if job is None:
             return {"job_id": job_id, "status": "not_found"}
-        job._done_event.wait(timeout=timeout)
-        return self.status(job_id)
+        completed = job._done_event.wait(timeout=timeout)
+        with self._lock:
+            current = self._jobs.get(job_id)
+            if current is not None:
+                return current.as_dict()
+        if completed and job.status in TERMINAL_STATUSES:
+            return job.as_dict()
+        return {"job_id": job_id, "status": "not_found"}
 
     def shutdown(self, timeout: float = 2.0) -> None:
         with self._lock:
@@ -525,7 +537,7 @@ class GenerationScheduler:
             ]
             if not candidates:
                 return None
-            selected = min(candidates, key=lambda job: (-job.priority, job.created_at, job.job_id))
+            selected = min(candidates, key=lambda job: (-job.priority, job.sequence, job.job_id))
             self._pending_job_ids.discard(selected.job_id)
             return selected.job_id
 
@@ -808,7 +820,7 @@ class GenerationScheduler:
                 for job in self._jobs.values()
                 if job.status in TERMINAL_STATUSES
             ),
-            key=lambda item: (float(item.updated_at), str(item.job_id)),
+            key=lambda item: (item.sequence, str(item.job_id)),
         )
         overflow = len(terminal_jobs) - limit
         if overflow <= 0:
@@ -900,6 +912,7 @@ class GenerationScheduler:
             "plan_id": job.plan_id,
             "batch_id": job.batch_id,
             "priority": job.priority,
+            "sequence": job.sequence,
             "status": job.status.value,
             "current_stage": job.current_stage,
             "created_at": job.created_at,

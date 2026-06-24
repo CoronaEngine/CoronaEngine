@@ -87,8 +87,8 @@
     <div
       ref="inputLayerRef"
       class="input-layer"
-      :class="{ 'viewport-cursor-hidden': viewportUiMode === 'stereo3d' }"
-      :style="viewportUiMode === 'stereo3d' ? { cursor: 'none' } : null"
+      :class="{ 'viewport-cursor-hidden': nativeViewportCursorEnabled && viewportUiMode === 'stereo3d' }"
+      :style="nativeViewportCursorEnabled && viewportUiMode === 'stereo3d' ? { cursor: 'none' } : null"
       @pointermove="handleViewportPointer"
       @pointerdown="handleViewportPointerDown"
       @pointerup="handleViewportPointer"
@@ -111,6 +111,7 @@ import {
   createViewportUiCalibrationStore,
   createViewportUiModeStore,
   createViewportUiPointerController,
+  isNativeViewportCursorEnabled,
 } from '@/utils/viewportUiMode.js';
 
 const route = useRoute();
@@ -153,6 +154,7 @@ const visionRenderModes = [
 const viewportUiModeStore = createViewportUiModeStore();
 const viewportUiCalibrationStore = createViewportUiCalibrationStore();
 const viewportUiCalibrationDescriptor = {};
+const nativeViewportCursorEnabled = isNativeViewportCursorEnabled();
 const viewportUiModeItems = [
   { mode: 'flat2d', label: '2D UI', title: '普通屏幕 UI' },
   { mode: 'stereo3d', label: '3D UI', title: '光场屏立体 UI' },
@@ -239,12 +241,20 @@ const selectBackend = async (mode) => {
 
 const selectVisionRenderMode = async (mode) => {
   visionModeMenuOpen.value = false;
-  if (visionRenderMode.value === mode) return;
+  if (visionRenderMode.value === mode && backend.value === 'vision') return;
   try {
     const result = unwrap(await sceneService.setVisionRenderMode(sceneId, cameraId, mode));
     visionRenderMode.value = result.mode || mode;
     if (camera.value) {
       camera.value.vision_render_mode = visionRenderMode.value;
+    }
+    if (backend.value !== 'vision') {
+      const backendResult = unwrap(await sceneService.setRenderBackend('vision', sceneId, cameraId));
+      backend.value = backendResult.mode || 'vision';
+      if (backend.value === 'vision') {
+        outputMode.value = 'final_color';
+        await sceneService.setOutputMode(sceneId, cameraId, 'final_color');
+      }
     }
   } catch (error) {
     errorText.value = error.message;
@@ -293,6 +303,7 @@ const viewportUiPointerController = createViewportUiPointerController({
   getBridge: () => window.coronaBridge,
   getCameraHandle: () => camera.value?.handle,
   getEnabled: () => viewportUiMode.value === 'stereo3d',
+  getNativeCursorEnabled: () => nativeViewportCursorEnabled,
   getHitRect: getCameraViewHitRect,
   getRenderRect: getCameraRenderRect,
 });

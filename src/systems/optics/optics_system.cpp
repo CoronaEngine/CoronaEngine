@@ -15,17 +15,19 @@
 #include <cctype>
 #include <cmath>
 #include <cstdint>
+#include <cstddef>
 #include <cstring>
 #include <exception>
 #include <filesystem>
 #include <functional>
 #include <optional>
-#include <utility>
+#include <span>
 #include <system_error>
 #include <string>
 #include <string_view>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 #include "hardware.h"
@@ -66,6 +68,101 @@ struct RenderInstanceBatch {
     }
 };
 
+struct UVec2Upload {
+    uint32_t x;
+    uint32_t y;
+};
+
+struct FVec3Upload {
+    float x;
+    float y;
+    float z;
+};
+
+struct FVec4Upload {
+    float x;
+    float y;
+    float z;
+    float w;
+};
+
+struct Mat4Upload {
+    float values[16];
+};
+
+struct ImagePixelExtent {
+    uint32_t width = 0;
+    uint32_t height = 0;
+};
+
+struct OpticsEventViewport {
+    uint32_t x = 0;
+    uint32_t y = 0;
+    uint32_t width = 0;
+    uint32_t height = 0;
+};
+
+[[nodiscard]] OpticsEventViewport optics_event_viewport(
+    const Corona::CameraDevice& camera,
+    const ImagePixelExtent& presented_extent) {
+    if (!camera.viewport_rect_active || camera.view_open ||
+        camera.view_width <= 0 || camera.view_height <= 0) {
+        return {0, 0, presented_extent.width, presented_extent.height};
+    }
+
+    return {
+        static_cast<uint32_t>(std::max(camera.view_x, 0)),
+        static_cast<uint32_t>(std::max(camera.view_y, 0)),
+        static_cast<uint32_t>(std::max(camera.view_width, 1)),
+        static_cast<uint32_t>(std::max(camera.view_height, 1)),
+    };
+}
+
+[[nodiscard]] UVec2Upload upload_value(const ktm::uvec2& value) {
+    return {value.x, value.y};
+}
+
+[[nodiscard]] FVec3Upload upload_value(const ktm::fvec3& value) {
+    return {value.x, value.y, value.z};
+}
+
+[[nodiscard]] FVec4Upload upload_value(const ktm::fvec4& value) {
+    return {value.x, value.y, value.z, value.w};
+}
+
+[[nodiscard]] Mat4Upload upload_value(const ktm::fmat4x4& value) {
+    Mat4Upload upload{};
+    static_assert(sizeof(upload) == sizeof(value));
+    std::memcpy(&upload, &value, sizeof(upload));
+    return upload;
+}
+
+[[nodiscard]] ImagePixelExtent hardware_image_extent(const Corona::Horizon::HardwareImage& image) {
+    if (!image) {
+        return {};
+    }
+    const auto extent = image.extent();
+    return {extent.width, extent.height};
+}
+
+[[nodiscard]] Corona::Horizon::RasterizerPipelineDesc make_visibility_pipeline_desc() {
+    Corona::Horizon::RasterizerPipelineDesc desc;
+    auto vertex_shader = Corona::Horizon::PipelineShaderDesc::from_slang_module(
+        Corona::Horizon::PipelineShaderStage::Vertex,
+        visibility_vert_glsl_t::slangModule);
+    auto fragment_shader = Corona::Horizon::PipelineShaderDesc::from_slang_module(
+        Corona::Horizon::PipelineShaderStage::Fragment,
+        visibility_frag_glsl_t::slangModule);
+    desc.set_shaders(std::move(vertex_shader), std::move(fragment_shader));
+    desc.depth_stencil.depth_test_enabled = true;
+    desc.depth_stencil.depth_write_enabled = true;
+    desc.depth_stencil.depth_compare_op = Corona::Horizon::CompareOp::LessOrEqual;
+    desc.rasterizer.cull_mode = Corona::Horizon::CullMode::None;
+    desc.blend.attachments = {Corona::Horizon::BlendStateDesc::opaque_attachment()};
+    desc.depth_attachment =
+        Corona::Horizon::DepthAttachmentDesc::with_format(Corona::Horizon::Format::D32);
+    return desc;
+}
 constexpr char kMouseIconRelativePath[] = "assets/icon/mouse_icon.png";
 
 struct CursorIconPixels {
@@ -338,6 +435,7 @@ void apply_pending_camera_viewport_updates() {
             camera->surface = update.surface;
             camera->follows_default_surface = false;
             camera->view_open = update.view_open;
+            camera->viewport_rect_active = true;
             camera->view_x = update.x;
             camera->view_y = update.y;
             camera->view_width = update.width;
@@ -465,9 +563,95 @@ void apply_pending_camera_releases() {
     return out;
 }
 
+[[nodiscard]] Corona::Horizon::ImageUsageFlags optics_storage_image_usage() {
+    return Corona::Horizon::ImageUsageFlags::Storage |
+           Corona::Horizon::ImageUsageFlags::ColorAttachment |
+           Corona::Horizon::ImageUsageFlags::Sampled |
+           Corona::Horizon::ImageUsageFlags::TransferSrc |
+           Corona::Horizon::ImageUsageFlags::TransferDst;
+}
+
+[[nodiscard]] Corona::Horizon::HardwareImage make_storage_image(
+    uint32_t width,
+    uint32_t height,
+    Corona::Horizon::Format format,
+    std::string_view name) {
+    return Corona::Horizon::HardwareImage(Corona::Horizon::HardwareImageDesc::texture_2d(
+        width,
+        height,
+        format,
+        optics_storage_image_usage(),
+        std::string(name)));
+}
+
+[[nodiscard]] Corona::Horizon::HardwareImage make_depth_image(
+    uint32_t width,
+    uint32_t height,
+    std::string_view name) {
+    auto image = Corona::Horizon::HardwareImage(
+        Corona::Horizon::HardwareImageDesc::depth_attachment(
+            width,
+            height,
+            Corona::Horizon::Format::D32,
+            std::string(name)));
+    image.set_clear_depth(1.0f, 0);
+    return image;
+}
+
+template <typename T>
+[[nodiscard]] Corona::Horizon::HardwareBuffer make_storage_buffer(uint64_t count,
+                                                                  std::string_view name) {
+    Corona::Horizon::HardwareBufferDesc desc;
+    desc.element_count = count;
+    desc.element_size = static_cast<uint32_t>(sizeof(T));
+    desc.usage = Corona::Horizon::BufferUsageFlags::TransferSrc |
+                 Corona::Horizon::BufferUsageFlags::TransferDst |
+                 Corona::Horizon::BufferUsageFlags::Storage;
+    desc.debug_name = std::string(name);
+    (void)desc.byte_size();
+    return Corona::Horizon::HardwareBuffer(desc);
+}
+
+template <typename T>
+bool write_object_bytes(const Corona::Horizon::HardwareBuffer& buffer, const T& value) {
+    return buffer.write_bytes(std::as_bytes(std::span<const T>(&value, 1)));
+}
+
+template <typename T>
+bool write_array_bytes(const Corona::Horizon::HardwareBuffer& buffer,
+                       const T* data,
+                       std::size_t count) {
+    return buffer.write_bytes(std::as_bytes(std::span<const T>(data, count)));
+}
+
+[[nodiscard]] bool has_native_local_correction(const Corona::GeometryDevice& geom) {
+    const auto& offset = geom.native_local_correction_offset;
+    return std::abs(geom.native_local_correction_scale - 1.0f) > 1e-6f ||
+           std::abs(offset.x) > 1e-6f ||
+           std::abs(offset.y) > 1e-6f ||
+           std::abs(offset.z) > 1e-6f;
+}
+
+[[nodiscard]] ktm::fmat4x4 apply_native_local_correction(
+    const ktm::fmat4x4& model_matrix,
+    const Corona::GeometryDevice& geom) {
+    if (!has_native_local_correction(geom)) {
+        return model_matrix;
+    }
+
+    ktm::fmat4x4 correction = ktm::fmat4x4::from_eye();
+    correction[0][0] = geom.native_local_correction_scale;
+    correction[1][1] = geom.native_local_correction_scale;
+    correction[2][2] = geom.native_local_correction_scale;
+    correction[3][0] = geom.native_local_correction_offset.x;
+    correction[3][1] = geom.native_local_correction_offset.y;
+    correction[3][2] = geom.native_local_correction_offset.z;
+    return multiply_ktm_mat4(model_matrix, correction);
+}
+
 bool collect_actor_instances_for_visibility(
     const Corona::SceneDevice& scene,
-    RasterizerPipeline<visibility_vert_glsl, visibility_frag_glsl>& target_visibility,
+    Corona::Horizon::RasterizerPipeline<visibility_vert_glsl_t, visibility_frag_glsl_t>& target_visibility,
     uint32_t target_vp_descriptor,
     bool follow_camera_pass,
     const ktm::fmat4x4* camera_basis,
@@ -513,6 +697,7 @@ bool collect_actor_instances_for_visibility(
                 ktm::fmat4x4 model_matrix{ktm::fmat4x4::from_eye()};
                 if (auto transform = transform_storage.try_acquire_read(geom->transform_handle)) {
                     model_matrix = transform->compute_matrix();
+                    model_matrix = apply_native_local_correction(model_matrix, *geom);
                     if (camera_basis != nullptr) {
                         model_matrix = multiply_ktm_mat4(*camera_basis, model_matrix);
                     }
@@ -524,7 +709,7 @@ bool collect_actor_instances_for_visibility(
                         Hardware::MaterialInfo mat_info{};
 
                         const float lighting_enabled = optics.bEnableLighting ? 1.0f : 0.0f;
-                        mat_info.textureDescriptor = m.textureBuffer ? m.textureBuffer.storeDescriptor() : 0;
+                        mat_info.textureDescriptor = m.textureBuffer ? m.textureBuffer.storeSampledDescriptor() : 0;
 
                         if (optics.bEnableLighting) {
                             mat_info.metallic = optics.metallic;
@@ -572,11 +757,14 @@ bool collect_actor_instances_for_visibility(
                         has_instances = true;
                     }
 
-                    target_visibility.pushConsts.modelMatrix = model_matrix;
-                    target_visibility.pushConsts.uniformBufferIndex = target_vp_descriptor;
-                    target_visibility.pushConsts.instanceID = instance_id + 1;
-                    target_visibility[visibility_frag_glsl::pushConsts::textureIndex] =
-                        m.textureBuffer ? m.textureBuffer.storeDescriptor() : static_cast<uint32_t>(0);
+                    target_visibility[visibility_vert_glsl_t::pushConsts::modelMatrix] =
+                        upload_value(model_matrix);
+                    target_visibility[visibility_vert_glsl_t::pushConsts::uniformBufferIndex] =
+                        target_vp_descriptor;
+                    target_visibility[visibility_vert_glsl_t::pushConsts::instanceID] =
+                        instance_id + 1;
+                    target_visibility[visibility_frag_glsl_t::pushConsts::textureIndex] =
+                        m.textureBuffer ? m.textureBuffer.storeSampledDescriptor() : static_cast<uint32_t>(0);
                     target_visibility.record(m.indexBuffer, m.vertexBuffer);
                 }
             }
@@ -587,17 +775,13 @@ bool collect_actor_instances_for_visibility(
 }
 
 void upload_instance_tables(const RenderInstanceBatch& batch,
-                            HardwareBuffer& instance_buffer,
-                            HardwareBuffer& material_buffer) {
+                            Corona::Horizon::HardwareBuffer& instance_buffer,
+                            Corona::Horizon::HardwareBuffer& material_buffer) {
     if (!batch.instances.empty()) {
-        instance_buffer.copyFromData(
-            batch.instances.data(),
-            batch.instances.size() * sizeof(Hardware::InstanceInfo));
+        (void)write_array_bytes(instance_buffer, batch.instances.data(), batch.instances.size());
     }
     if (!batch.materials.empty()) {
-        material_buffer.copyFromData(
-            batch.materials.data(),
-            batch.materials.size() * sizeof(Hardware::MaterialInfo));
+        (void)write_array_bytes(material_buffer, batch.materials.data(), batch.materials.size());
     }
 }
 
@@ -643,9 +827,12 @@ void bind_pipeline_scene_resource_early(
 }
 
 [[nodiscard]] auto create_vision_pipeline(
+    Corona::CameraVisionRenderMode mode,
     const std::shared_ptr<Corona::Systems::Vision::VisionSceneResource>& scene_resource = {})
     -> ocarina::SP<vision::Pipeline> {
     auto project_desc = make_default_vision_project_desc();
+    project_desc.output_desc.denoise =
+        Corona::Systems::Vision::vision_render_mode_uses_denoise(mode);
     auto pipeline = vision::Node::create_shared<vision::Pipeline>(project_desc.pipeline_desc);
     if (!pipeline) {
         return {};
@@ -654,8 +841,23 @@ void bind_pipeline_scene_resource_early(
     pipeline->init_project(project_desc);
     pipeline->init_postprocessor(project_desc.renderer_desc.denoiser_desc);
     pipeline->init();
-    pipeline->set_output_denoise(true);
+    pipeline->set_output_denoise(project_desc.output_desc.denoise);
     return pipeline;
+}
+
+void prepare_enabled_denoiser_for_runtime_switch(vision::Pipeline& pipeline) {
+    auto* integrator = pipeline.renderer().integrator().get();
+    auto* illum = dynamic_cast<vision::IlluminationIntegrator*>(integrator);
+    if (illum == nullptr) {
+        return;
+    }
+    auto* denoiser = illum->denoiser();
+    if (denoiser == nullptr || !denoiser->enabled()) {
+        return;
+    }
+    denoiser->prepare();
+    denoiser->compile();
+    pipeline.upload_bindless_array();
 }
 
 [[nodiscard]] auto select_scene_camera_handle(const Corona::SceneDevice& scene) -> std::uintptr_t {
@@ -962,13 +1164,11 @@ void bind_pipeline_scene_gpu_resource(
     }
     pipeline->init_postprocessor(project_desc.renderer_desc.denoiser_desc);
     pipeline->init();
-    pipeline->set_output_denoise(true);
+    pipeline->set_output_denoise(project_desc.output_desc.denoise);
     pipeline->prepare();
     // prepare() does not create FrameBuffer::view_texture_; the render path tone
     // maps into it and we later read it back, so create it explicitly here.
     pipeline->frame_buffer()->prepare_view_texture();
-    pipeline->set_output_denoise(
-        Corona::Systems::Vision::vision_render_mode_uses_denoise(mode));
     return pipeline;
 }
 
@@ -986,9 +1186,9 @@ constexpr const char* kVisionDemoScenePath =
 namespace Corona::Systems {
 
 struct OpticsSystem::NativeViewResources {
-    HardwareImage visibility;
-    HardwareImage depth;
-    std::optional<RasterizerPipeline<visibility_vert_glsl, visibility_frag_glsl>>
+    Horizon::HardwareImage visibility;
+    Horizon::HardwareImage depth;
+    std::optional<Horizon::RasterizerPipeline<visibility_vert_glsl_t, visibility_frag_glsl_t>>
         visibility_pipeline;
     uint32_t width = 0;
     uint32_t height = 0;
@@ -997,8 +1197,8 @@ struct OpticsSystem::NativeViewResources {
 
 // per-camera UI overlay 中间产物（Native 与 Vision 共用，单一分配来源）。
 struct OpticsSystem::UiViewResources {
-    HardwareImage ui_visibility;  ///< RGBA32_UINT StorageImage
-    HardwareImage ui_depth;       ///< D32_FLOAT DepthImage
+    Horizon::HardwareImage ui_visibility;  ///< RGBA32_UINT StorageImage
+    Horizon::HardwareImage ui_depth;       ///< D32_FLOAT DepthImage
     uint32_t width = 0;
     uint32_t height = 0;
     uint64_t last_used_frame = 0;
@@ -1017,6 +1217,9 @@ struct OpticsSystem::VisionPipelineRuntime {
     // Zero-copy path: shares Vision's pre-tonemap linear color buffer with Vulkan
     // and resolves it via the vision_resolve compute pass.
     std::unordered_map<std::uintptr_t, std::unique_ptr<Vision::VisionZeroCopyBridge>> bridges;
+    std::unordered_set<std::uintptr_t> zero_copy_disabled;
+    std::unordered_map<std::uintptr_t, Horizon::HardwareBuffer> readback_buffers;
+    std::unordered_map<std::uintptr_t, std::vector<ocarina::float4>> readback_pixels;
     std::unordered_set<std::uintptr_t> retained_contexts;
 
     void commit_and_clear_contexts() noexcept {
@@ -1031,6 +1234,9 @@ struct OpticsSystem::VisionPipelineRuntime {
 
     void clear_camera_runtime_state() noexcept {
         bridges.clear();
+        zero_copy_disabled.clear();
+        readback_buffers.clear();
+        readback_pixels.clear();
         retained_contexts.clear();
     }
 
@@ -1315,30 +1521,43 @@ bool OpticsSystem::initialize_hardware_resources() {
         hardware_->gbufferSize.x = 1920;
         hardware_->gbufferSize.y = 1080;
 
+        const auto w = hardware_->gbufferSize.x;
+        const auto h = hardware_->gbufferSize.y;
+
+        // --- Visibility Buffer (逐相机共享的中间产物) ---
+        hardware_->visibilityImage =
+            make_storage_image(w, h, Horizon::Format::RGBA32_UINT, "optics.visibility");
+        hardware_->depthImage = make_depth_image(w, h, "optics.depth");
+        hardware_->uiVisibilityImage =
+            make_storage_image(w, h, Horizon::Format::RGBA32_UINT, "optics.ui_visibility");
+        hardware_->uiDepthImage = make_depth_image(w, h, "optics.ui_depth");
+
         // --- Uniform buffers ---
         hardware_->uniformBuffer =
-            HardwareBuffer(sizeof(Hardware::UniformBufferObject), BufferUsage::StorageBuffer);
-        hardware_->vpUniformBuffer = HardwareBuffer(sizeof(Hardware::VPUniformBufferObject),
-                                                    BufferUsage::StorageBuffer);
-        hardware_->uiVpUniformBuffer = HardwareBuffer(sizeof(Hardware::VPUniformBufferObject),
-                                                      BufferUsage::StorageBuffer);
+            make_storage_buffer<Hardware::UniformBufferObject>(1, "optics.uniform");
+        hardware_->vpUniformBuffer =
+            make_storage_buffer<Hardware::VPUniformBufferObject>(1, "optics.vp_uniform");
+        hardware_->uiVpUniformBuffer =
+            make_storage_buffer<Hardware::VPUniformBufferObject>(1, "optics.ui_vp_uniform");
 
         // --- Instance & Material table buffers (pre-allocate reasonable capacity) ---
         constexpr uint32_t kMaxInstances = 4096;
         constexpr uint32_t kMaxMaterials = 1024;
-        hardware_->instanceInfoBuffer = HardwareBuffer(
-            kMaxInstances * static_cast<uint32_t>(sizeof(Hardware::InstanceInfo)),
-            BufferUsage::StorageBuffer);
-        hardware_->uiInstanceInfoBuffer = HardwareBuffer(
-            kMaxInstances * static_cast<uint32_t>(sizeof(Hardware::InstanceInfo)),
-            BufferUsage::StorageBuffer);
-        hardware_->materialTableBuffer = HardwareBuffer(
-            kMaxMaterials * static_cast<uint32_t>(sizeof(Hardware::MaterialInfo)),
-            BufferUsage::StorageBuffer);
-        hardware_->uiMaterialTableBuffer = HardwareBuffer(
-            kMaxMaterials * static_cast<uint32_t>(sizeof(Hardware::MaterialInfo)),
-            BufferUsage::StorageBuffer);
-        hardware_->actorPickBuffer = HardwareBuffer(sizeof(std::uint32_t), BufferUsage::StorageBuffer);
+        hardware_->instanceInfoBuffer =
+            make_storage_buffer<Hardware::InstanceInfo>(kMaxInstances, "optics.instances");
+        hardware_->uiInstanceInfoBuffer =
+            make_storage_buffer<Hardware::InstanceInfo>(kMaxInstances, "optics.ui_instances");
+        hardware_->materialTableBuffer =
+            make_storage_buffer<Hardware::MaterialInfo>(kMaxMaterials, "optics.materials");
+        hardware_->uiMaterialTableBuffer =
+            make_storage_buffer<Hardware::MaterialInfo>(kMaxMaterials, "optics.ui_materials");
+        hardware_->actorPickBuffer =
+            make_storage_buffer<std::uint32_t>(1, "optics.actor_pick");
+
+        // Sky-driven ambient: 9 SH coefficients × vec3 = 27 floats. Written by
+        // sky_sh_project.comp each environment change, read by lighting.comp.
+        hardware_->skyIrradianceSHBuffer =
+            make_storage_buffer<float>(27, "optics.sky_irradiance_sh");
 
         // finalOutputImage 不再在此创建：每个 surface 的最终输出由
         // acquire_surface_target() 按需创建（改造1: per-surface 输出）。
@@ -1352,19 +1571,21 @@ bool OpticsSystem::initialize_hardware_resources() {
 
 bool OpticsSystem::initialize_render_pipelines() {
     try {
-        hardware_->visibilityPipeline.emplace();
-        hardware_->uiVisibilityPipeline.emplace();
-        hardware_->lightingPipeline.emplace();
-        hardware_->skyPipeline.emplace();
-        hardware_->tonemapPipeline.emplace();
-        hardware_->debugResolvePipeline.emplace();
-        hardware_->actorPickPipeline.emplace();
-        hardware_->opticsOverlayPipeline.emplace();
-        hardware_->opticsCursorPipeline.emplace();
-        hardware_->opticsUiWarpPipeline.emplace();
-        hardware_->opticsCompositePipeline.emplace();
+        hardware_->visibilityPipeline.emplace(make_visibility_pipeline_desc());
+        hardware_->uiVisibilityPipeline.emplace(make_visibility_pipeline_desc());
+        hardware_->lightingPipeline.emplace(lighting_comp_glsl, ktm::uvec3(8, 8, 1));
+        hardware_->skyPipeline.emplace(sky_comp_glsl, ktm::uvec3(8, 8, 1));
+        hardware_->skySHProjectPipeline.emplace(sky_sh_project_comp_glsl, ktm::uvec3(64, 1, 1));
+        hardware_->tonemapPipeline.emplace(tonemap_comp_glsl, ktm::uvec3(8, 8, 1));
+        hardware_->debugResolvePipeline.emplace(debug_resolve_comp_glsl, ktm::uvec3(8, 8, 1));
+        hardware_->visibilityDebugResolvePipeline.emplace(visibility_debug_resolve_comp_glsl, ktm::uvec3(8, 8, 1));
+        hardware_->actorPickPipeline.emplace(actor_pick_comp_glsl, ktm::uvec3(1, 1, 1));
+        hardware_->opticsOverlayPipeline.emplace(optics_overlay_comp_glsl, ktm::uvec3(8, 8, 1));
+        hardware_->opticsCursorPipeline.emplace(optics_cursor_comp_glsl, ktm::uvec3(8, 8, 1));
+        hardware_->opticsUiWarpPipeline.emplace(optics_ui_warp_comp_glsl, ktm::uvec3(8, 8, 1));
+        hardware_->opticsCompositePipeline.emplace(optics_composite_comp_glsl, ktm::uvec3(8, 8, 1));
 #ifdef CORONA_ENABLE_VISION
-        hardware_->visionResolvePipeline.emplace();
+        hardware_->visionResolvePipeline.emplace(vision_resolve_comp_glsl, ktm::uvec3(8, 8, 1));
 #endif
         hardware_->shaderHasInit = true;
     } catch (const std::exception& e) {
@@ -1392,23 +1613,26 @@ bool OpticsSystem::ensure_cursor_icon_texture() {
         return false;
     }
 
-    HardwareImageCreateInfo create_info{};
-    create_info.width = static_cast<uint32_t>(pixels->width);
-    create_info.height = static_cast<uint32_t>(pixels->height);
-    create_info.arrayLayers = 1;
-    create_info.mipLevels = 1;
-    create_info.format = ImageFormat::RGBA8_UNORM;
-    create_info.usage = ImageUsage::SampledImage;
-
-    HardwareImage icon(create_info);
+    Horizon::HardwareImage icon(Horizon::HardwareImageDesc::texture_2d(
+        static_cast<uint32_t>(pixels->width),
+        static_cast<uint32_t>(pixels->height),
+        Horizon::Format::SRGBA8_UNORM,
+        Horizon::ImageUsageFlags::Sampled | Horizon::ImageUsageFlags::TransferDst,
+        "optics.cursor_icon"));
     if (!icon) {
         CFW_LOG_WARNING("Optics cursor icon GPU image creation failed");
         return false;
     }
 
-    HardwareExecutor executor;
-    executor << icon.copyFrom(pixels->rgba.data()) << executor.commit();
-    executor.waitForDeferredResources();
+    Horizon::HardwareExecutor executor;
+    const auto upload_pixels = std::span<const std::byte>(
+        reinterpret_cast<const std::byte*>(pixels->rgba.data()),
+        pixels->rgba.size());
+    const Horizon::SubmitReceipt upload_receipt =
+        executor.stream()
+            << icon.upload(upload_pixels)
+            << Horizon::commit();
+    executor.wait_idle(upload_receipt);
     hardware_->cursorIconImage = std::move(icon);
     CFW_LOG_INFO("Optics cursor icon uploaded ({}x{})", pixels->width, pixels->height);
     return true;
@@ -1428,14 +1652,13 @@ void OpticsSystem::bind_native_view_resources(std::uintptr_t camera_handle,
     auto& resources = *resources_ptr;
     if (resources.width != width || resources.height != height ||
         !resources.visibility || !resources.depth || !resources.visibility_pipeline) {
-        hardware_->executor.waitForDeferredResources();
-        resources.visibility = HardwareImage(width, height, ImageFormat::RGBA32_UINT,
-                                             ImageUsage::StorageImage);
-        resources.depth = HardwareImage(width, height, ImageFormat::D32_FLOAT,
-                                        ImageUsage::DepthImage);
-        resources.visibility_pipeline.emplace();
+        hardware_->executor.wait_idle(hardware_->executor.last_receipt());
+        resources.visibility =
+            make_storage_image(width, height, Horizon::Format::RGBA32_UINT, "optics.native_visibility");
+        resources.depth = make_depth_image(width, height, "optics.native_depth");
+        resources.visibility_pipeline.emplace(make_visibility_pipeline_desc());
         resources.visibility_pipeline->visibilityData = resources.visibility;
-        resources.visibility_pipeline->setDepthImage(resources.depth);
+        resources.visibility_pipeline->bind_depth_target(resources.depth);
         resources.width = width;
         resources.height = height;
     }
@@ -1464,11 +1687,10 @@ void OpticsSystem::ensure_ui_view_resources(std::uintptr_t camera_handle,
     auto& resources = *resources_ptr;
     if (resources.width != width || resources.height != height ||
         !resources.ui_visibility || !resources.ui_depth) {
-        hardware_->executor.waitForDeferredResources();
-        resources.ui_visibility = HardwareImage(width, height, ImageFormat::RGBA32_UINT,
-                                                ImageUsage::StorageImage);
-        resources.ui_depth = HardwareImage(width, height, ImageFormat::D32_FLOAT,
-                                           ImageUsage::DepthImage);
+        hardware_->executor.wait_idle(hardware_->executor.last_receipt());
+        resources.ui_visibility =
+            make_storage_image(width, height, Horizon::Format::RGBA32_UINT, "optics.ui_visibility");
+        resources.ui_depth = make_depth_image(width, height, "optics.ui_depth");
         resources.width = width;
         resources.height = height;
     }
@@ -1533,18 +1755,18 @@ OpticsSystem::SurfaceRenderTarget& OpticsSystem::acquire_surface_target(void* su
         if (target.image_handle != 0) {
             if (auto image_device =
                     SharedDataHub::instance().image_storage().acquire_write(target.image_handle)) {
-                hardware_->executor.wait(image_device->consumed_executor);
+                hardware_->executor.wait_idle(image_device->consumed_receipt);
             }
         }
-        hardware_->executor.waitForDeferredResources();
+        hardware_->executor.wait_idle(hardware_->executor.last_receipt());
         target.final_output =
-            HardwareImage(width, height, ImageFormat::RGBA16_FLOAT, ImageUsage::StorageImage);
+            make_storage_image(width, height, Horizon::Format::RGBA16_FLOAT, "optics.surface_final");
         target.ui_overlay =
-            HardwareImage(width, height, ImageFormat::RGBA16_FLOAT, ImageUsage::StorageImage);
+            make_storage_image(width, height, Horizon::Format::RGBA16_FLOAT, "optics.surface_overlay");
         target.ui_warped_overlay =
-            HardwareImage(width, height, ImageFormat::RGBA16_FLOAT, ImageUsage::StorageImage);
+            make_storage_image(width, height, Horizon::Format::RGBA16_FLOAT, "optics.surface_warped_overlay");
         target.composite_output =
-            HardwareImage(width, height, ImageFormat::RGBA16_FLOAT, ImageUsage::StorageImage);
+            make_storage_image(width, height, Horizon::Format::RGBA16_FLOAT, "optics.surface_composite");
         target.width = width;
         target.height = height;
     }
@@ -1564,13 +1786,13 @@ OpticsSystem::SurfaceRenderTarget& OpticsSystem::acquire_offscreen_screenshot_ta
     auto& target = offscreen_screenshot_targets_[camera_handle];
     if (!target.final_output || !target.ui_overlay || !target.composite_output ||
         target.width != width || target.height != height) {
-        hardware_->executor.waitForDeferredResources();
+        hardware_->executor.wait_idle(hardware_->executor.last_receipt());
         target.final_output =
-            HardwareImage(width, height, ImageFormat::RGBA16_FLOAT, ImageUsage::StorageImage);
+            make_storage_image(width, height, Horizon::Format::RGBA16_FLOAT, "optics.offscreen_final");
         target.ui_overlay =
-            HardwareImage(width, height, ImageFormat::RGBA16_FLOAT, ImageUsage::StorageImage);
+            make_storage_image(width, height, Horizon::Format::RGBA16_FLOAT, "optics.offscreen_overlay");
         target.composite_output =
-            HardwareImage(width, height, ImageFormat::RGBA16_FLOAT, ImageUsage::StorageImage);
+            make_storage_image(width, height, Horizon::Format::RGBA16_FLOAT, "optics.offscreen_composite");
         target.width = width;
         target.height = height;
     }
@@ -1645,17 +1867,18 @@ bool OpticsSystem::initialize(Kernel::ISystemContext* ctx) {
                 if (event.camera_handle == 0) {
                     return;
                 }
-                if (auto camera = SharedDataHub::instance().camera_storage().acquire_write(
-                        event.camera_handle)) {
+                CameraStateUpdateCommand command{};
+                command.camera_handle = event.camera_handle;
+                command.fields = CameraStateUpdateField::RenderBackend;
 #ifdef CORONA_ENABLE_VISION
-                    camera->render_backend =
-                        event.backend == static_cast<int>(RenderBackend::Vision)
-                            ? CameraRenderBackend::Vision
-                            : CameraRenderBackend::Native;
+                command.render_backend =
+                    event.backend == static_cast<int>(RenderBackend::Vision)
+                        ? CameraRenderBackend::Vision
+                        : CameraRenderBackend::Native;
 #else
-                    camera->render_backend = CameraRenderBackend::Native;
+                command.render_backend = CameraRenderBackend::Native;
 #endif
-                }
+                SharedDataHub::instance().enqueue_camera_state_update(command);
             });
 
 #ifdef CORONA_ENABLE_VISION
@@ -1726,6 +1949,7 @@ void OpticsSystem::update() {
 
     if (!hardware_->shaderHasInit || !hardware_->lightingPipeline ||
         !hardware_->skyPipeline || !hardware_->tonemapPipeline ||
+        !hardware_->skySHProjectPipeline ||
         !hardware_->debugResolvePipeline || !hardware_->opticsOverlayPipeline ||
         !hardware_->opticsCursorPipeline || !hardware_->opticsUiWarpPipeline ||
         !hardware_->opticsCompositePipeline) {
@@ -1790,10 +2014,9 @@ void OpticsSystem::optics_pipeline(float frame_count, uint64_t frame_index) {
                 auto& target = *target_ptr;
 
                 if (!offscreen_screenshot) {
-                    // 显示相机：在覆写其 surface 专属输出前，等待上一帧合成器消费完成。
                     if (auto consumed_device =
                             SharedDataHub::instance().image_storage().acquire_write(target.image_handle)) {
-                        hardware_->executor.wait(consumed_device->consumed_executor);
+                        hardware_->executor.wait(consumed_device->consumed_receipt);
                     }
                 }
                 bind_native_view_resources(cam_handle, camera->width, camera->height,
@@ -1809,10 +2032,13 @@ void OpticsSystem::optics_pipeline(float frame_count, uint64_t frame_index) {
                 hardware_->uniformBufferObjects.eyeViewMatrix = camera->compute_view_matrix();
                 hardware_->uniformBufferObjects.eyeProjMatrix = camera->compute_projection_matrix();
                 hardware_->vpUniformBufferObjects.viewProjMatrix = camera->compute_view_proj_matrix();
-                hardware_->vpUniformBuffer.copyFromData(&hardware_->vpUniformBufferObjects,
-                                                        sizeof(hardware_->vpUniformBufferObjects));
+                (void)write_object_bytes(hardware_->vpUniformBuffer,
+                                         hardware_->vpUniformBufferObjects);
 
                 // Configure visibility pipeline render targets
+                visibility.visibilityData = hardware_->visibilityImage;
+                visibility.bind_depth_target(hardware_->depthImage);
+
                 auto& actor_storage = SharedDataHub::instance().actor_storage();
                 auto& profile_storage = SharedDataHub::instance().profile_storage();
                 auto& optics_storage = SharedDataHub::instance().optics_storage();
@@ -1823,13 +2049,14 @@ void OpticsSystem::optics_pipeline(float frame_count, uint64_t frame_index) {
 
                 auto collect_actor_instances_for_pass =
                     [&](auto& target_visibility,
-                        uint32_t target_vp_descriptor,
+                        const ktm::fmat4x4& view_proj_matrix,
                         bool follow_camera_pass,
                         const ktm::fmat4x4* camera_basis,
                         RenderInstanceBatch& batch) -> bool {
                     batch.clear();
 
                     bool has_instances = false;
+                    uint32_t recorded_draws = 0;
                     uint32_t object_id = 1;
                     for (auto actor_handle : scene.actor_handles) {
                         auto actor = actor_storage.try_acquire_read(actor_handle);
@@ -1866,6 +2093,7 @@ void OpticsSystem::optics_pipeline(float frame_count, uint64_t frame_index) {
                                     model_matrix = transform->compute_matrix();
                                     // 必须在 camera_basis 变换前提取世界位置（否则 model_matrix[3] 不再是世界坐标）
                                     world_center = transform->position;
+                                    model_matrix = apply_native_local_correction(model_matrix, *geom);
                                     if (camera_basis != nullptr) {
                                         model_matrix = multiply_ktm_mat4(*camera_basis, model_matrix);
                                     }
@@ -1890,10 +2118,10 @@ void OpticsSystem::optics_pipeline(float frame_count, uint64_t frame_index) {
                                     auto& m = geom->mesh_handles[mesh_index];
 
                                     // ---- LOD 缓冲替换 ----
-                                    HardwareBuffer render_vb = m.vertexBuffer;
-                                    HardwareBuffer render_ib = m.indexBuffer;
-                                    HardwareBuffer render_vs = m.vertexStorageBuffer;
-                                    HardwareBuffer render_is = m.indexStorageBuffer;
+                                    Horizon::HardwareBuffer render_vb = m.vertexBuffer;
+                                    Horizon::HardwareBuffer render_ib = m.indexBuffer;
+                                    Horizon::HardwareBuffer render_vs = m.vertexStorageBuffer;
+                                    Horizon::HardwareBuffer render_is = m.indexStorageBuffer;
 
                                     if (use_lod && geometry_system_) {
                                         float screen_ratio = GeometrySystem::compute_screen_ratio(
@@ -1920,7 +2148,7 @@ void OpticsSystem::optics_pipeline(float frame_count, uint64_t frame_index) {
                                         float lighting_enabled = optics.bEnableLighting ? 1.0f : 0.0f;
 
                                         mat_info.textureDescriptor = m.textureBuffer
-                                                                         ? m.textureBuffer.storeDescriptor()
+                                                                         ? m.textureBuffer.storeSampledDescriptor()
                                                                          : 0;
 
                                         // 当光照关闭时，将 BRDF 参数设为中性值，使物体不受方向光影响
@@ -1975,20 +2203,25 @@ void OpticsSystem::optics_pipeline(float frame_count, uint64_t frame_index) {
                                     }
 
                                     // --- Record visibility draw call ---
-                                    target_visibility.pushConsts.modelMatrix = model_matrix;
-                                    target_visibility.pushConsts.uniformBufferIndex =
-                                        target_vp_descriptor;
+                                    const ktm::fmat4x4 clip_matrix =
+                                        multiply_ktm_mat4(view_proj_matrix, model_matrix);
+                                    target_visibility[visibility_vert_glsl_t::pushConsts::modelMatrix] =
+                                        upload_value(clip_matrix);
+                                    target_visibility[visibility_vert_glsl_t::pushConsts::uniformBufferIndex] =
+                                        0u;
                                     // VBuffer uses 1-based instanceID (0 = background sentinel after clear)
-                                    target_visibility.pushConsts.instanceID = instanceID + 1;
-                                    // Alpha-cutout: pass texture descriptor for discard test
+                                    target_visibility[visibility_vert_glsl_t::pushConsts::instanceID] =
+                                        instanceID + 1;
+                                    // Keep texture descriptor in the push constants for shader ABI compatibility.
                                     if (m.textureBuffer) {
-                                        target_visibility[visibility_frag_glsl::pushConsts::textureIndex] =
-                                            m.textureBuffer.storeDescriptor();
+                                        target_visibility[visibility_frag_glsl_t::pushConsts::textureIndex] =
+                                            m.textureBuffer.storeSampledDescriptor();
                                     } else {
-                                        target_visibility[visibility_frag_glsl::pushConsts::textureIndex] =
+                                        target_visibility[visibility_frag_glsl_t::pushConsts::textureIndex] =
                                             static_cast<uint32_t>(0);
                                     }
                                     target_visibility.record(render_ib, render_vb);
+                                    ++recorded_draws;
                                 }
                             }
                             ++object_id;
@@ -1998,23 +2231,24 @@ void OpticsSystem::optics_pipeline(float frame_count, uint64_t frame_index) {
                 };
 
                 auto upload_instance_tables = [&](const RenderInstanceBatch& batch,
-                                                  HardwareBuffer& instance_buffer,
-                                                  HardwareBuffer& material_buffer) {
+                                                  Horizon::HardwareBuffer& instance_buffer,
+                                                  Horizon::HardwareBuffer& material_buffer) {
                     if (!batch.instances.empty()) {
-                        instance_buffer.copyFromData(
-                            batch.instances.data(),
-                            batch.instances.size() * sizeof(Hardware::InstanceInfo));
+                        (void)write_array_bytes(instance_buffer,
+                                                batch.instances.data(),
+                                                batch.instances.size());
                     }
                     if (!batch.materials.empty()) {
-                        material_buffer.copyFromData(
-                            batch.materials.data(),
-                            batch.materials.size() * sizeof(Hardware::MaterialInfo));
+                        (void)write_array_bytes(material_buffer,
+                                                batch.materials.data(),
+                                                batch.materials.size());
                     }
                 };
 
                 const uint32_t sceneVpDescriptor = hardware_->vpUniformBuffer.storeDescriptor();
+                visibility.clear_records();
                 collect_actor_instances_for_pass(visibility,
-                                                 sceneVpDescriptor,
+                                                 hardware_->vpUniformBufferObjects.viewProjMatrix,
                                                  false,
                                                  nullptr,
                                                  sceneBatch);
@@ -2047,22 +2281,26 @@ void OpticsSystem::optics_pipeline(float frame_count, uint64_t frame_index) {
                 }
                 sun_dir = ktm::normalize(sun_dir);
 
-                hardware_->uniformBuffer.copyFromData(&hardware_->uniformBufferObjects,
-                                                      sizeof(hardware_->uniformBufferObjects));
+                (void)write_object_bytes(hardware_->uniformBuffer,
+                                         hardware_->uniformBufferObjects);
                 const uint32_t uboDescriptor = hardware_->uniformBuffer.storeDescriptor();
-                const uint32_t depthDescriptor = visibility.getDepthImage().storeDescriptor();
+                const uint32_t depthSampledDescriptor =
+                    hardware_->depthImage.storeSampledDescriptor();
 
-                HardwareImage& render_target = target.final_output;
-                HardwareImage* presented_target = &render_target;
-                const uint32_t finalOutputDescriptor = render_target.storeDescriptor();
+                // Offscreen cameras (no surface) render to a dedicated image so
+                // they never collide with the display pipeline's per-surface output.
+                // Display cameras render into their own surface target (改造1).
+                Horizon::HardwareImage& render_target = target.final_output;
+                Horizon::HardwareImage* presented_target = &render_target;
+                const uint32_t finalOutputDescriptor = render_target.storeStorageDescriptor();
 
                 // ================================================================
                 // 5. Lighting pass: VBuffer decode + PBR direct illumination
                 // ================================================================
-                lighting.pushConsts.gbufferSize = hardware_->gbufferSize;
+                lighting.pushConsts.gbufferSize = upload_value(hardware_->gbufferSize);
                 lighting.pushConsts.visibilityImageIndex =
-                    hardware_->visibilityImage.storeDescriptor();
-                lighting.pushConsts.depthImageIndex = depthDescriptor;
+                    hardware_->visibilityImage.storeStorageDescriptor();
+                lighting.pushConsts.depthImageIndex = depthSampledDescriptor;
                 lighting.pushConsts.instanceInfoBufferIndex =
                     hardware_->instanceInfoBuffer.storeDescriptor();
                 lighting.pushConsts.materialTableBufferIndex =
@@ -2071,135 +2309,189 @@ void OpticsSystem::optics_pipeline(float frame_count, uint64_t frame_index) {
                     hardware_->vpUniformBuffer.storeDescriptor();
                 lighting.pushConsts.finalOutputImage = finalOutputDescriptor;
                 lighting.pushConsts.uniformBufferIndex = uboDescriptor;
-                lighting.pushConsts.sun_dir = sun_dir;
+                lighting.bind_storage_image(0, hardware_->visibilityImage);
+                lighting.bind_storage_image(1, render_target);
+                lighting.pushConsts.skyIrradianceSHBufferIndex =
+                    hardware_->skyIrradianceSHBuffer.storeDescriptor();
+                lighting.pushConsts.ambientIntensity = 0.0f;
+                lighting.pushConsts.sun_dir = upload_value(sun_dir);
                 {
                     ktm::fvec3 lightColor;
                     lightColor.x = sun_color.x * sun_intensity;
                     lightColor.y = sun_color.y * sun_intensity;
                     lightColor.z = sun_color.z * sun_intensity;
-                    lighting.pushConsts.lightColor = lightColor;
+                    lighting.pushConsts.lightColor = upload_value(lightColor);
                 }
-                lighting.pushConsts.ambientIntensity = sun_intensity * 0.02f;
+
+                // ================================================================
+                // 5b. Sky → SH9 projection (sky-driven ambient).
+                // Recompute the 9 SH coefficients only when the environment
+                // lighting signature (sun_dir + sky_intensity) changes; otherwise
+                // reuse the persistent skyIrradianceSHBuffer. Static lighting
+                // amortizes to ~zero. The dispatch (when needed) is recorded
+                // before lighting so program order guarantees the SH write lands
+                // before lighting reads it on the same executor.
+                // ================================================================
+                std::size_t sky_sig = 0;
+                mix_hash_float(sky_sig, sun_dir.x);
+                mix_hash_float(sky_sig, sun_dir.y);
+                mix_hash_float(sky_sig, sun_dir.z);
+                mix_hash_float(sky_sig, sky_intensity);
+                const bool sky_sh_needs_update =
+                    !sky_sh_initialized_ || sky_sig != sky_sh_signature_;
+                if (sky_sh_needs_update) {
+                    auto& skySH = *hardware_->skySHProjectPipeline;
+                    skySH.pushConsts.outputBufferIndex =
+                        hardware_->skyIrradianceSHBuffer.storeDescriptor();
+                    skySH.pushConsts.sampleCount = 64u;
+                    skySH.pushConsts.sun_dir = upload_value(sun_dir);
+                    skySH.pushConsts.sky_intensity = sky_intensity;
+                }
 
                 // ================================================================
                 // 6. Sky pass: atmospheric scattering + floor grid
                 // ================================================================
-                sky.pushConsts.gbufferSize = hardware_->gbufferSize;
-                sky.pushConsts.gbufferDepthImage = depthDescriptor;
+                sky.pushConsts.gbufferSize = upload_value(hardware_->gbufferSize);
+                sky.pushConsts.gbufferDepthImage = depthSampledDescriptor;
                 sky.pushConsts.finalOutputImage = finalOutputDescriptor;
                 sky.pushConsts.uniformBufferIndex = uboDescriptor;
-                sky.pushConsts.sun_dir = sun_dir;
+                sky.pushConsts.sun_dir = upload_value(sun_dir);
                 sky.pushConsts.floor_grid_enabled = floor_grid_enabled;
                 sky.pushConsts.cameraFov = camera->fov;
                 sky.pushConsts.sky_intensity = sky_intensity;
+                sky.bind_storage_image(0, render_target);
 
                 // ================================================================
                 // 7. Tonemap pass: ACES filmic HDR → LDR
                 // ================================================================
-                tonemap.pushConsts.gbufferSize = hardware_->gbufferSize;
+                tonemap.pushConsts.gbufferSize = upload_value(hardware_->gbufferSize);
                 tonemap.pushConsts.inputImage = finalOutputDescriptor;
                 tonemap.pushConsts.outputImage = finalOutputDescriptor;
                 tonemap.pushConsts.exposure = exposure;
+                tonemap.bind_storage_image(0, render_target);
 
                 // ================================================================
                 // 8. GPU sync & dispatch
                 // ================================================================
-                const uint32_t dispatchX = (hardware_->gbufferSize.x + 7u) / 8u;
-                const uint32_t dispatchY = (hardware_->gbufferSize.y + 7u) / 8u;
-
                 const bool is_debug_mode = camera->output_mode != CameraOutputMode::FinalColor;
+                const uint32_t dispatchX = hardware_->gbufferSize.x;
+                const uint32_t dispatchY = hardware_->gbufferSize.y;
                 const auto actor_pick_request = take_pending_actor_pick(cam_handle);
 
                 if (actor_pick_request) {
                     auto& actorPick = *hardware_->actorPickPipeline;
-                    actorPick.pushConsts.pixel = ktm::uvec2{actor_pick_request->x, actor_pick_request->y};
+                    actorPick.pushConsts.pixel =
+                        upload_value(ktm::uvec2{actor_pick_request->x, actor_pick_request->y});
                     actorPick.pushConsts.visibilityImageIndex =
-                        hardware_->visibilityImage.storeDescriptor();
+                        hardware_->visibilityImage.storeStorageDescriptor();
                     actorPick.pushConsts.outputBufferIndex =
                         hardware_->actorPickBuffer.storeDescriptor();
+                    actorPick.bind_storage_image(0, hardware_->visibilityImage);
                 }
 
-                if (is_debug_mode) {
-                    // ============================================================
-                    // Debug path: visibility + debug_resolve only (skip lighting/sky/tonemap)
-                    // ============================================================
-                    auto& debugResolve = *hardware_->debugResolvePipeline;
+                Horizon::SubmitReceipt latest_submit_receipt;
+                {
+                    auto stream = hardware_->executor.stream();
+                    if (is_debug_mode) {
+                        // ============================================================
+                        // Debug path: visibility + debug_resolve only (skip lighting/sky/tonemap)
+                        // ============================================================
+                        // Map CameraOutputMode to debugMode uint
+                        uint32_t debugMode = 0;
+                        switch (camera->output_mode) {
+                            case CameraOutputMode::BaseColor:
+                                debugMode = 0;
+                                break;
+                            case CameraOutputMode::Normal:
+                                debugMode = 1;
+                                break;
+                            case CameraOutputMode::WorldPosition:
+                                debugMode = 2;
+                                break;
+                            case CameraOutputMode::ObjectID:
+                                debugMode = 3;
+                                break;
+                            case CameraOutputMode::VisibilityBuffer:
+                                debugMode = 4;
+                                break;
+                            default:
+                                debugMode = 0;
+                                break;
+                        }
 
-                    debugResolve.pushConsts.gbufferSize = hardware_->gbufferSize;
-                    debugResolve.pushConsts.visibilityImageIndex =
-                        hardware_->visibilityImage.storeDescriptor();
-                    debugResolve.pushConsts.depthImageIndex = depthDescriptor;
-                    debugResolve.pushConsts.instanceInfoBufferIndex =
-                        hardware_->instanceInfoBuffer.storeDescriptor();
-                    debugResolve.pushConsts.materialTableBufferIndex =
-                        hardware_->materialTableBuffer.storeDescriptor();
-                    debugResolve.pushConsts.vpBufferIndex =
-                        hardware_->vpUniformBuffer.storeDescriptor();
-                    debugResolve.pushConsts.outputImageIndex = finalOutputDescriptor;
+                        stream << visibility(hardware_->gbufferSize.x, hardware_->gbufferSize.y);
+                        if (debugMode == 4u) {
+                            auto& visibilityDebugResolve = *hardware_->visibilityDebugResolvePipeline;
+                            visibilityDebugResolve.pushConsts.gbufferSize =
+                                upload_value(hardware_->gbufferSize);
+                            visibilityDebugResolve.pushConsts.visibilityImageIndex =
+                                hardware_->visibilityImage.storeSampledDescriptor();
+                            visibilityDebugResolve.pushConsts.outputImageIndex =
+                                render_target.storeStorageDescriptor();
+                            visibilityDebugResolve.bind_storage_image(0, render_target);
+                            stream << visibilityDebugResolve(dispatchX, dispatchY, 1);
+                        } else {
+                            auto& debugResolve = *hardware_->debugResolvePipeline;
 
-                    // Map CameraOutputMode to debugMode uint
-                    uint32_t debugMode = 0;
-                    switch (camera->output_mode) {
-                        case CameraOutputMode::BaseColor:
-                            debugMode = 0;
-                            break;
-                        case CameraOutputMode::Normal:
-                            debugMode = 1;
-                            break;
-                        case CameraOutputMode::WorldPosition:
-                            debugMode = 2;
-                            break;
-                        case CameraOutputMode::ObjectID:
-                            debugMode = 3;
-                            break;
-                        case CameraOutputMode::VisibilityBuffer:
-                            debugMode = 4;
-                            break;
-                        default:
-                            debugMode = 0;
-                            break;
+                            debugResolve.pushConsts.gbufferSize = upload_value(hardware_->gbufferSize);
+                            debugResolve.pushConsts.visibilityImageIndex =
+                                hardware_->visibilityImage.storeSampledDescriptor();
+                            debugResolve.pushConsts.depthImageIndex = depthSampledDescriptor;
+                            debugResolve.pushConsts.instanceInfoBufferIndex =
+                                hardware_->instanceInfoBuffer.storeDescriptor();
+                            debugResolve.pushConsts.materialTableBufferIndex =
+                                hardware_->materialTableBuffer.storeDescriptor();
+                            debugResolve.pushConsts.vpBufferIndex =
+                                hardware_->vpUniformBuffer.storeDescriptor();
+                            debugResolve.pushConsts.outputImageIndex = finalOutputDescriptor;
+                            debugResolve.pushConsts.debugMode = debugMode;
+                            debugResolve.bind_storage_image(0, render_target);
+
+                            stream << debugResolve(dispatchX, dispatchY, 1);
+                        }
+                    } else {
+                        // ============================================================
+                        // Normal rendering path: full pipeline
+                        // ============================================================
+                        stream << visibility(hardware_->gbufferSize.x, hardware_->gbufferSize.y);
+                        if (sky_sh_needs_update) {
+                            stream << (*hardware_->skySHProjectPipeline)(1, 1, 1);
+                        }
+                        stream << lighting(dispatchX, dispatchY, 1)
+                               << sky(dispatchX, dispatchY, 1)
+                               << tonemap(dispatchX, dispatchY, 1);
                     }
-                    debugResolve.pushConsts.debugMode = debugMode;
 
-                    hardware_->executor << visibility(hardware_->gbufferSize.x, hardware_->gbufferSize.y)
-                                        << debugResolve(dispatchX, dispatchY, 1);
-                } else {
-                    // ============================================================
-                    // Normal rendering path: full pipeline
-                    // ============================================================
-                    hardware_->executor << visibility(hardware_->gbufferSize.x, hardware_->gbufferSize.y)
-                                        << lighting(dispatchX, dispatchY, 1)
-                                        << sky(dispatchX, dispatchY, 1)
-                                        << tonemap(dispatchX, dispatchY, 1);
+                    if (actor_pick_request) {
+                        stream << (*hardware_->actorPickPipeline)(1, 1, 1);
+                    }
+
+                    if (!is_debug_mode) {
+                        const auto ui_state =
+                            SharedDataHub::instance().viewport_ui_state(cam_handle);
+                        presented_target = compose_surface_ui_overlay(
+                            stream,
+                            cam_handle, *camera, scene, target, render_target,
+                            ui_state.mode, ui_state.calibration, frame_index);
+                    }
+
+                    latest_submit_receipt = stream << Horizon::commit();
                 }
 
-                if (actor_pick_request) {
-                    hardware_->executor << (*hardware_->actorPickPipeline)(1, 1, 1);
+                if (!is_debug_mode && sky_sh_needs_update) {
+                    sky_sh_signature_ = sky_sig;
+                    sky_sh_initialized_ = true;
                 }
-
-                hardware_->executor << hardware_->executor.commit();
-                // Camera UBO/VP/instance/material buffers are shared by the Native
-                // pipelines. Finish this camera before the CPU overwrites those
-                // buffers for the next visible camera, otherwise surfaces can
-                // alternate between camera poses.
-                hardware_->executor.waitForDeferredResources();
 
                 if (actor_pick_request) {
                     complete_actor_pick(*actor_pick_request, sceneBatch.actorHandles);
                 }
 
-                if (!is_debug_mode) {
-                    const auto ui_state =
-                        SharedDataHub::instance().viewport_ui_state(cam_handle);
-                    presented_target = compose_surface_ui_overlay(
-                        cam_handle, *camera, scene, target, render_target,
-                        ui_state.mode, ui_state.calibration, frame_index);
+
                     // 仅在真正发生合成时 commit，保持无 follow-actor 时的原有行为
                     // （此时 render_target 已在上方 scene pass 提交）。
-                    if (presented_target == &target.composite_output) {
-                        hardware_->executor << hardware_->executor.commit();
-                    }
-                }
+
+
 
                 if (offscreen_screenshot) {
                     process_pending_screenshots(cam_handle, *presented_target);
@@ -2212,15 +2504,22 @@ void OpticsSystem::optics_pipeline(float frame_count, uint64_t frame_index) {
                 if (auto image_device =
                         SharedDataHub::instance().image_storage().acquire_write(target.image_handle)) {
                     image_device->image = *presented_target;
-                    image_device->executor = hardware_->executor;
+                    image_device->submit_receipt = latest_submit_receipt;
                 }
 
                 if (auto* event_bus = context()->event_bus()) {
+                    const auto presented_extent = hardware_image_extent(*presented_target);
+                    const auto viewport =
+                        optics_event_viewport(*camera, presented_extent);
                     event_bus->publish<Events::OpticsFrameReadyEvent>({surface,
                                                                        target.image_handle,
                                                                        frame_index,
-                                                                       hardware_->gbufferSize.x,
-                                                                       hardware_->gbufferSize.y});
+                                                                       presented_extent.width,
+                                                                       presented_extent.height,
+                                                                       viewport.x,
+                                                                       viewport.y,
+                                                                       viewport.width,
+                                                                       viewport.height});
                 }
 
 #ifdef CORONA_ENABLE_VISION
@@ -2274,12 +2573,13 @@ void OpticsSystem::drain_viewport_ui_pointer_commands() {
     }
 }
 
-HardwareImage* OpticsSystem::compose_surface_ui_overlay(
+Horizon::HardwareImage* OpticsSystem::compose_surface_ui_overlay(
+    Horizon::HardwareStream& stream,
     std::uintptr_t camera_handle,
     const CameraDevice& camera,
     const SceneDevice& scene,
     SurfaceRenderTarget& target,
-    HardwareImage& background,
+    Horizon::HardwareImage& background,
     ViewportUiMode mode,
     const ViewportUiCalibration& calibration,
     uint64_t frame_index) {
@@ -2308,12 +2608,12 @@ HardwareImage* OpticsSystem::compose_surface_ui_overlay(
 
     hardware_->vpUniformBufferObjects.viewProjMatrix =
         multiply_ktm_mat4(ortho_proj, camera.compute_view_matrix());
-    hardware_->uiVpUniformBuffer.copyFromData(&hardware_->vpUniformBufferObjects,
-                                              sizeof(hardware_->vpUniformBufferObjects));
+    (void)write_object_bytes(hardware_->uiVpUniformBuffer,
+                             hardware_->vpUniformBufferObjects);
     const uint32_t uiVpDescriptor = hardware_->uiVpUniformBuffer.storeDescriptor();
 
     uiVisibility.visibilityData = hardware_->uiVisibilityImage;
-    uiVisibility.setDepthImage(hardware_->uiDepthImage);
+    uiVisibility.bind_depth_target(hardware_->uiDepthImage);
 
     RenderInstanceBatch uiBatch;
     const bool has_follow_camera_instances =
@@ -2363,21 +2663,23 @@ HardwareImage* OpticsSystem::compose_surface_ui_overlay(
         return &background;
     }
 
-    const uint32_t overlayDescriptor = target.ui_overlay.storeDescriptor();
+    const uint32_t overlayDescriptor = target.ui_overlay.storeStorageDescriptor();
     if (has_follow_camera_instances) {
         upload_instance_tables(uiBatch,
                                hardware_->uiInstanceInfoBuffer,
                                hardware_->uiMaterialTableBuffer);
 
-        opticsOverlay.pushConsts.gbufferSize = hardware_->gbufferSize;
+        opticsOverlay.pushConsts.gbufferSize = upload_value(hardware_->gbufferSize);
         opticsOverlay.pushConsts.visibilityImageIndex =
-            hardware_->uiVisibilityImage.storeDescriptor();
+            hardware_->uiVisibilityImage.storeStorageDescriptor();
         opticsOverlay.pushConsts.instanceInfoBufferIndex =
             hardware_->uiInstanceInfoBuffer.storeDescriptor();
         opticsOverlay.pushConsts.materialTableBufferIndex =
             hardware_->uiMaterialTableBuffer.storeDescriptor();
         opticsOverlay.pushConsts.vpBufferIndex = uiVpDescriptor;
         opticsOverlay.pushConsts.outputImage = overlayDescriptor;
+        opticsOverlay.bind_storage_image(0, hardware_->uiVisibilityImage);
+        opticsOverlay.bind_storage_image(1, target.ui_overlay);
     }
 
     if (cursor_visible && cursor_state != nullptr) {
@@ -2412,6 +2714,7 @@ HardwareImage* OpticsSystem::compose_surface_ui_overlay(
         opticsCursor.pushConsts.cursorImage = hardware_->cursorIconImage.storeDescriptor();
         opticsCursor.pushConsts.cursorSize = 48.0f;
         opticsCursor.pushConsts.preserveExisting = preserve_existing_overlay ? 1u : 0u;
+        opticsCursor.bind_storage_image(0, target.ui_overlay);
         cursorDispatchX = (cursor_width + 7u) / 8u;
         cursorDispatchY = (cursor_height + 7u) / 8u;
     }
@@ -2420,38 +2723,43 @@ HardwareImage* OpticsSystem::compose_surface_ui_overlay(
     if (stereo_ui) {
         opticsUiWarp.pushConsts.inputImage = overlayDescriptor;
         opticsUiWarp.pushConsts.outputImage =
-            target.ui_warped_overlay.storeDescriptor();
+            target.ui_warped_overlay.storeStorageDescriptor();
         opticsUiWarp.pushConsts.outputWidth = hardware_->gbufferSize.x;
         opticsUiWarp.pushConsts.outputHeight = hardware_->gbufferSize.y;
         opticsUiWarp.pushConsts.lenticularPitch = calibration.lenticular_pitch;
         opticsUiWarp.pushConsts.slant = std::tan(calibration.slant_angle_radians);
         opticsUiWarp.pushConsts.phaseOffset = calibration.phase_offset;
         opticsUiWarp.pushConsts.parallaxScale = calibration.parallax_scale;
-        opticsUiWarp.pushConsts.rgbSubpixelOffsets = ktm::fvec4(
+        opticsUiWarp.pushConsts.rgbSubpixelOffsets = upload_value(ktm::fvec4(
             calibration.rgb_subpixel_offsets[0],
             calibration.rgb_subpixel_offsets[1],
             calibration.rgb_subpixel_offsets[2],
-            0.0f);
-        compositeOverlayDescriptor = target.ui_warped_overlay.storeDescriptor();
+            0.0f));
+        compositeOverlayDescriptor = target.ui_warped_overlay.storeStorageDescriptor();
+        opticsUiWarp.bind_storage_image(0, target.ui_overlay);
+        opticsUiWarp.bind_storage_image(1, target.ui_warped_overlay);
     }
 
-    opticsComposite.pushConsts.bgImage = background.storeDescriptor();
+    opticsComposite.pushConsts.bgImage = background.storeStorageDescriptor();
     opticsComposite.pushConsts.fgImage = compositeOverlayDescriptor;
-    opticsComposite.pushConsts.outputImage = target.composite_output.storeDescriptor();
+    opticsComposite.pushConsts.outputImage = target.composite_output.storeStorageDescriptor();
     opticsComposite.pushConsts.outputWidth = hardware_->gbufferSize.x;
     opticsComposite.pushConsts.outputHeight = hardware_->gbufferSize.y;
+    opticsComposite.bind_storage_image(0, background);
+    opticsComposite.bind_storage_image(1, stereo_ui ? target.ui_warped_overlay : target.ui_overlay);
+    opticsComposite.bind_storage_image(2, target.composite_output);
 
     if (has_follow_camera_instances) {
-        hardware_->executor << uiVisibility(hardware_->gbufferSize.x, hardware_->gbufferSize.y)
-                            << opticsOverlay(dispatchX, dispatchY, 1);
+        stream << uiVisibility(hardware_->gbufferSize.x, hardware_->gbufferSize.y)
+               << opticsOverlay(dispatchX, dispatchY, 1);
     }
     if (cursor_visible) {
-        hardware_->executor << opticsCursor(cursorDispatchX, cursorDispatchY, 1);
+        stream << opticsCursor(cursorDispatchX, cursorDispatchY, 1);
     }
     if (stereo_ui) {
-        hardware_->executor << opticsUiWarp(dispatchX, dispatchY, 1);
+        stream << opticsUiWarp(dispatchX, dispatchY, 1);
     }
-    hardware_->executor << opticsComposite(dispatchX, dispatchY, 1);
+    stream << opticsComposite(dispatchX, dispatchY, 1);
     // 注意：此处不 commit，由调用方在合适时机统一提交。
 
     return &target.composite_output;
@@ -2519,7 +2827,7 @@ std::optional<OpticsSystem::ActorPickRequest> OpticsSystem::take_pending_actor_p
 void OpticsSystem::complete_actor_pick(const ActorPickRequest& request,
                                        const std::vector<std::uintptr_t>& scene_actor_handles) {
     std::uint32_t instance_id = 0;
-    if (!hardware_->actorPickBuffer.copyToData(&instance_id, sizeof(instance_id))) {
+    if (!hardware_->actorPickBuffer.read(std::span<std::uint32_t>(&instance_id, 1))) {
         CFW_LOG_ERROR("OpticsSystem: Failed to read actor pick result from GPU");
     }
 
@@ -2557,8 +2865,8 @@ void OpticsSystem::process_vision_actor_pick(std::uintptr_t camera_handle,
     auto& visibility = *native_view_resources_.at(camera_handle)->visibility_pipeline;
 
     hardware_->vpUniformBufferObjects.viewProjMatrix = camera.compute_view_proj_matrix();
-    hardware_->vpUniformBuffer.copyFromData(&hardware_->vpUniformBufferObjects,
-                                            sizeof(hardware_->vpUniformBufferObjects));
+    (void)write_object_bytes(hardware_->vpUniformBuffer,
+                             hardware_->vpUniformBufferObjects);
     const uint32_t scene_vp_descriptor = hardware_->vpUniformBuffer.storeDescriptor();
 
     RenderInstanceBatch scene_batch;
@@ -2573,14 +2881,19 @@ void OpticsSystem::process_vision_actor_pick(std::uintptr_t camera_handle,
                            hardware_->materialTableBuffer);
 
     auto& actor_pick = *hardware_->actorPickPipeline;
-    actor_pick.pushConsts.pixel = ktm::uvec2{actor_pick_request->x, actor_pick_request->y};
-    actor_pick.pushConsts.visibilityImageIndex = hardware_->visibilityImage.storeDescriptor();
+    actor_pick.pushConsts.pixel =
+        upload_value(ktm::uvec2{actor_pick_request->x, actor_pick_request->y});
+    actor_pick.pushConsts.visibilityImageIndex =
+        hardware_->visibilityImage.storeStorageDescriptor();
     actor_pick.pushConsts.outputBufferIndex = hardware_->actorPickBuffer.storeDescriptor();
+    actor_pick.bind_storage_image(0, hardware_->visibilityImage);
 
-    hardware_->executor << visibility(hardware_->gbufferSize.x, hardware_->gbufferSize.y)
-                        << actor_pick(1, 1, 1)
-                        << hardware_->executor.commit();
-    hardware_->executor.waitForDeferredResources();
+    const Horizon::SubmitReceipt actor_pick_receipt =
+        hardware_->executor.stream()
+            << visibility(hardware_->gbufferSize.x, hardware_->gbufferSize.y)
+            << actor_pick(1, 1, 1)
+            << Horizon::commit();
+    hardware_->executor.wait_idle(actor_pick_receipt);
 
     complete_actor_pick(*actor_pick_request, scene_batch.actorHandles);
 }
@@ -2651,14 +2964,23 @@ void OpticsSystem::fail_unrenderable_pending_screenshots() {
     }
 }
 
-void OpticsSystem::process_pending_screenshots(std::uintptr_t camera_handle, HardwareImage& render_target) {
+void OpticsSystem::process_pending_screenshots(std::uintptr_t camera_handle,
+                                               Horizon::HardwareImage& render_target) {
     std::vector<PendingScreenshot> matched;
     {
         std::lock_guard<std::mutex> lock(screenshot_mutex_);
-        auto it = std::remove_if(pending_screenshots_.begin(), pending_screenshots_.end(),
-                                 [camera_handle](const PendingScreenshot& req) { return req.camera_handle == camera_handle; });
-        matched.assign(std::make_move_iterator(it), std::make_move_iterator(pending_screenshots_.end()));
-        pending_screenshots_.erase(it, pending_screenshots_.end());
+        auto write_it = pending_screenshots_.begin();
+        for (auto read_it = pending_screenshots_.begin(); read_it != pending_screenshots_.end(); ++read_it) {
+            if (read_it->camera_handle == camera_handle) {
+                matched.push_back(std::move(*read_it));
+            } else {
+                if (write_it != read_it) {
+                    *write_it = std::move(*read_it);
+                }
+                ++write_it;
+            }
+        }
+        pending_screenshots_.erase(write_it, pending_screenshots_.end());
     }
 
     if (matched.empty()) {
@@ -2675,9 +2997,15 @@ void OpticsSystem::process_pending_screenshots(std::uintptr_t camera_handle, Har
         return;
     }
 
+    bool visibility_screenshot = false;
+    if (auto camera = SharedDataHub::instance().camera_storage().try_acquire_read(camera_handle)) {
+        visibility_screenshot = camera->output_mode == CameraOutputMode::VisibilityBuffer;
+    }
+
     const uint64_t pixel_count = static_cast<uint64_t>(w) * h;
     const uint64_t buffer_size = pixel_count * 8;  // RGBA16F = 4 channels * 2 bytes
-    HardwareBuffer staging_buffer(static_cast<uint32_t>(buffer_size), BufferUsage::StorageBuffer);
+    Horizon::HardwareBuffer staging_buffer =
+        make_storage_buffer<std::uint16_t>(pixel_count * 4, "optics.screenshot_staging");
     if (!staging_buffer) {
         CFW_LOG_ERROR("OpticsSystem: Failed to create staging buffer for screenshot");
         for (auto& req : matched) {
@@ -2686,16 +3014,40 @@ void OpticsSystem::process_pending_screenshots(std::uintptr_t camera_handle, Har
         return;
     }
 
-    hardware_->executor << render_target.copyTo(staging_buffer)
-                        << hardware_->executor.commit();
+    const Horizon::SubmitReceipt screenshot_copy_receipt =
+        hardware_->executor.stream()
+            << render_target.copy_to(staging_buffer)
+            << Horizon::commit();
+    hardware_->executor.wait_idle(screenshot_copy_receipt);
 
     std::vector<uint16_t> half_data(pixel_count * 4);
-    if (!staging_buffer.copyToData(half_data.data(), buffer_size)) {
+    (void)buffer_size;
+    if (!staging_buffer.read(std::span<std::uint16_t>(half_data.data(), half_data.size()))) {
         CFW_LOG_ERROR("OpticsSystem: Failed to read screenshot data from GPU");
         for (auto& req : matched) {
             if (req.completion_promise) req.completion_promise->set_value(false);
         }
         return;
+    }
+
+    std::vector<std::uint32_t> visibility_data(pixel_count * 4);
+    std::size_t non_zero_visibility = 0;
+    {
+        Horizon::HardwareBuffer visibility_staging =
+            make_storage_buffer<std::uint32_t>(pixel_count * 4, "optics.screenshot_visibility_staging");
+        const Horizon::SubmitReceipt visibility_copy_receipt =
+            hardware_->executor.stream()
+                << hardware_->visibilityImage.copy_to(visibility_staging)
+                << Horizon::commit();
+        hardware_->executor.wait_idle(visibility_copy_receipt);
+        if (visibility_staging.read(std::span<std::uint32_t>(visibility_data.data(), visibility_data.size()))) {
+            for (uint64_t i = 0; i < pixel_count; ++i) {
+                const std::uint32_t instance = visibility_data[i * 4];
+                if (instance != 0) {
+                    ++non_zero_visibility;
+                }
+            }
+        }
     }
 
     // Convert RGBA16F to RGBA8
@@ -2704,6 +3056,26 @@ void OpticsSystem::process_pending_screenshots(std::uintptr_t camera_handle, Har
         float v = half_to_float(half_data[i]);
         v = std::fmax(0.0f, std::fmin(1.0f, v));
         rgba8[i] = static_cast<uint8_t>(v * 255.0f + 0.5f);
+    }
+    if (visibility_screenshot && non_zero_visibility != 0) {
+        for (uint64_t i = 0; i < pixel_count; ++i) {
+            const std::uint32_t instance = visibility_data[i * 4 + 0];
+            const std::uint32_t primitive = visibility_data[i * 4 + 1];
+            uint8_t* pixel = rgba8.data() + i * 4;
+            if (instance == 0) {
+                pixel[0] = 0;
+                pixel[1] = 0;
+                pixel[2] = 0;
+                pixel[3] = 255;
+                continue;
+            }
+
+            const std::uint32_t hash = (instance * 2654435761u) ^ (primitive * 2246822519u);
+            pixel[0] = static_cast<uint8_t>(64u + (hash & 0x7Fu));
+            pixel[1] = static_cast<uint8_t>(64u + ((hash >> 8u) & 0x7Fu));
+            pixel[2] = static_cast<uint8_t>(64u + ((hash >> 16u) & 0x7Fu));
+            pixel[3] = 255;
+        }
     }
 
     for (const auto& req : matched) {
@@ -2752,6 +3124,7 @@ void OpticsSystem::shutdown() {
     surface_targets_.clear();
     offscreen_screenshot_targets_.clear();
     native_view_resources_.clear();
+    ui_view_resources_.clear();
 #ifdef CORONA_ENABLE_VISION
     clear_vision_runtimes();
 #endif
@@ -2833,7 +3206,7 @@ std::size_t OpticsSystem::compute_vision_scene_signature() const {
                     const auto& vbuf = mesh_dev.vertexBuffer
                                            ? mesh_dev.vertexBuffer
                                            : mesh_dev.vertexStorageBuffer;
-                    mix(static_cast<std::size_t>(vbuf.getElementCount()));
+                    mix(static_cast<std::size_t>(vbuf.get_element_count()));
                 }
 
                 // Object-to-world transform (position / rotation / scale).
@@ -3179,7 +3552,7 @@ bool OpticsSystem::init_vision_lazy() {
         auto scene_resource = get_or_create_vision_scene_resource(
             make_vision_scene_resource_key("", VisionPipelineSource::EngineBuilt),
             "");
-        auto pipeline = create_vision_pipeline(scene_resource);
+        auto pipeline = create_vision_pipeline(current_vision_render_mode_, scene_resource);
         if (!pipeline) {
             CFW_LOG_ERROR("OpticsSystem: Failed to create Vision pipeline without external scene import");
             return false;
@@ -3289,6 +3662,7 @@ void OpticsSystem::run_vision_frame(float frame_count, uint64_t frame_index) {
                     retain_bridge = camera->surface != nullptr;
                 }
 
+                // 选定该相机的最终输出：显示相机用其 surface 专属目标，离屏用共享离屏图。
                 // A visible camera may switch back to this runtime at any time. Keep
                 // its imported bridge alive while the surface exists; closing or
                 // suspending the view clears the surface and releases the bridge.
@@ -3304,6 +3678,42 @@ void OpticsSystem::run_vision_frame(float frame_count, uint64_t frame_index) {
 
                 pipeline->commit_command();
                 it = runtime.bridges.erase(it);
+                if (camera_exists) {
+                    pipeline->invalidate_view_context(camera_handle);
+                    runtime.retained_contexts.insert(camera_handle);
+                } else {
+                    pipeline->remove_view_context(camera_handle);
+                }
+            }
+            for (auto it = runtime.readback_buffers.begin();
+                 it != runtime.readback_buffers.end();) {
+                if (active_contexts.contains(it->first)) {
+                    ++it;
+                    continue;
+                }
+                const auto camera_handle = it->first;
+                bool camera_exists = false;
+                bool retain_context = false;
+                if (auto camera = SharedDataHub::instance().camera_storage().try_acquire_read(
+                        camera_handle)) {
+                    camera_exists = true;
+                    retain_context = camera->surface != nullptr;
+                }
+
+                if (retain_context) {
+                    if (!runtime.retained_contexts.contains(camera_handle)) {
+                        pipeline->commit_command();
+                        pipeline->invalidate_view_context(camera_handle);
+                        runtime.retained_contexts.insert(camera_handle);
+                    }
+                    ++it;
+                    continue;
+                }
+
+                pipeline->commit_command();
+                runtime.readback_pixels.erase(camera_handle);
+                runtime.zero_copy_disabled.erase(camera_handle);
+                it = runtime.readback_buffers.erase(it);
                 if (camera_exists) {
                     pipeline->invalidate_view_context(camera_handle);
                     runtime.retained_contexts.insert(camera_handle);
@@ -3341,6 +3751,27 @@ void OpticsSystem::run_vision_frame(float frame_count, uint64_t frame_index) {
                 const auto resolution =
                     ocarina::make_uint2(std::max(camera.width, 1u),
                                        std::max(camera.height, 1u));
+                if (pipeline->has_view_context(cam_handle)) {
+                    if (!pipeline->activate_view_context(cam_handle)) {
+                        return;
+                    }
+                    const auto* existing_fb = pipeline->frame_buffer();
+                    bool recreate_context = existing_fb == nullptr;
+                    if (existing_fb != nullptr) {
+                        const auto existing_res = existing_fb->resolution();
+                        recreate_context = existing_res.x != resolution.x ||
+                                           existing_res.y != resolution.y;
+                    }
+                    if (recreate_context) {
+                        pipeline->commit_command();
+                        runtime.bridges.erase(cam_handle);
+                        runtime.zero_copy_disabled.erase(cam_handle);
+                        runtime.readback_buffers.erase(cam_handle);
+                        runtime.readback_pixels.erase(cam_handle);
+                        runtime.retained_contexts.erase(cam_handle);
+                        pipeline->remove_view_context(cam_handle);
+                    }
+                }
                 if (!pipeline->has_view_context(cam_handle) &&
                     !pipeline->create_view_context(cam_handle, resolution)) {
                     CFW_LOG_ERROR(
@@ -3361,18 +3792,47 @@ void OpticsSystem::run_vision_frame(float frame_count, uint64_t frame_index) {
                 const uint32_t w = res.x;
                 const uint32_t h = res.y;
 
-                auto& bridge = runtime.bridges[cam_handle];
-                if (!bridge) {
-                    bridge = std::make_unique<Vision::VisionZeroCopyBridge>();
+                const uint64_t pixel_count = static_cast<uint64_t>(w) * static_cast<uint64_t>(h);
+                std::optional<uint32_t> vision_src_descriptor;
+                if (!runtime.zero_copy_disabled.contains(cam_handle)) {
+                    auto& bridge = runtime.bridges[cam_handle];
+                    if (!bridge) {
+                        bridge = std::make_unique<Vision::VisionZeroCopyBridge>();
+                    }
+                    if (bridge->ensure(*pipeline, w, h) &&
+                        bridge->copy_from_framebuffer(*pipeline)) {
+                        vision_src_descriptor = bridge->imported().storeDescriptor();
+                    } else {
+                        runtime.bridges.erase(cam_handle);
+                        runtime.zero_copy_disabled.insert(cam_handle);
+                    }
                 }
-                if (!bridge->ensure(*pipeline, w, h) ||
-                    !bridge->copy_from_framebuffer(*pipeline)) {
-                    CFW_LOG_WARNING(
-                        "OpticsSystem: Vision bridge unavailable for camera {} ({}x{})",
-                        cam_handle,
-                        w,
-                        h);
-                    return;
+
+                if (!vision_src_descriptor) {
+                    auto& pixels = runtime.readback_pixels[cam_handle];
+                    pixels.resize(pixel_count);
+
+                    const auto src = fb->display_source_buffer();
+                    pipeline->stream() << src.download(pixels.data())
+                                       << ocarina::synchronize()
+                                       << ocarina::commit();
+
+                    auto& fallback_buffer = runtime.readback_buffers[cam_handle];
+                    const uint64_t float_count = pixel_count * 4u;
+                    if (!fallback_buffer ||
+                        fallback_buffer.get_element_count() != float_count) {
+                        fallback_buffer = make_storage_buffer<float>(
+                            float_count, "optics.vision_readback");
+                    }
+                    if (!fallback_buffer.write_bytes(
+                            std::as_bytes(std::span<const ocarina::float4>(
+                                pixels.data(), pixels.size())))) {
+                        CFW_LOG_ERROR(
+                            "OpticsSystem: unable to upload Vision fallback buffer for camera {}",
+                            cam_handle);
+                        return;
+                    }
+                    vision_src_descriptor = fallback_buffer.storeDescriptor();
                 }
 
                 void* surface = camera.surface;
@@ -3381,34 +3841,37 @@ void OpticsSystem::run_vision_frame(float frame_count, uint64_t frame_index) {
                 if (auto consumed_device =
                         SharedDataHub::instance().image_storage().acquire_write(
                             target.image_handle)) {
-                    hardware_->executor.wait(consumed_device->consumed_executor);
+                    hardware_->executor.wait(consumed_device->consumed_receipt);
                 }
 
+                auto stream = hardware_->executor.stream();
                 {
                     auto& visionResolve = *hardware_->visionResolvePipeline;
-                    visionResolve.pushConsts.gbufferSize = hardware_->gbufferSize;
-                    visionResolve.pushConsts.srcBufferIndex =
-                        bridge->imported().storeDescriptor();
+                    visionResolve.pushConsts.gbufferSize = upload_value(hardware_->gbufferSize);
+                    visionResolve.pushConsts.srcBufferIndex = *vision_src_descriptor;
                     visionResolve.pushConsts.outputImage =
-                        target.final_output.storeDescriptor();
+                        target.final_output.storeStorageDescriptor();
                     visionResolve.pushConsts.exposure = 1.0f;
+                    visionResolve.bind_storage_image(0, target.final_output);
 
                     const uint32_t dispatchX = (w + 7u) / 8u;
                     const uint32_t dispatchY = (h + 7u) / 8u;
                     // 不在此 commit：UI overlay pass 紧随其后读 final_output 作为背景，
                     // 整帧在同一 executor 上按程序序记录、末尾统一提交一次。
-                    hardware_->executor << visionResolve(dispatchX, dispatchY, 1);
+                    stream << visionResolve(dispatchX, dispatchY, 1);
                 }
 
                 // 与 Native 共用的 UI overlay 层：gbufferSize 已在上方设为 {w,h}。
                 ensure_ui_view_resources(cam_handle, w, h, frame_index);
                 const auto ui_state =
                     SharedDataHub::instance().viewport_ui_state(cam_handle);
-                HardwareImage* presented = compose_surface_ui_overlay(
+                Horizon::HardwareImage* presented = compose_surface_ui_overlay(
+                    stream,
                     cam_handle, camera, scene, target, target.final_output,
                     ui_state.mode, ui_state.calibration, frame_index);
 
-                hardware_->executor << hardware_->executor.commit();
+                const Horizon::SubmitReceipt vision_submit_receipt =
+                    stream << Horizon::commit();
 
                 process_pending_screenshots(cam_handle, *presented);
 
@@ -3416,12 +3879,22 @@ void OpticsSystem::run_vision_frame(float frame_count, uint64_t frame_index) {
                         SharedDataHub::instance().image_storage().acquire_write(
                             target.image_handle)) {
                     image_device->image = *presented;
-                    image_device->executor = hardware_->executor;
+                    image_device->submit_receipt = vision_submit_receipt;
                 }
 
                 if (auto* event_bus = context()->event_bus()) {
+                    const auto presented_extent = hardware_image_extent(*presented);
+                    const auto viewport = optics_event_viewport(camera, presented_extent);
                     event_bus->publish<Events::OpticsFrameReadyEvent>(
-                        {surface, target.image_handle, frame_index, w, h});
+                        {surface,
+                         target.image_handle,
+                         frame_index,
+                         presented_extent.width,
+                         presented_extent.height,
+                         viewport.x,
+                         viewport.y,
+                         viewport.width,
+                         viewport.height});
                 }
             } catch (const std::exception& error) {
                 CFW_LOG_ERROR("OpticsSystem: Vision camera {} failed: {}",
@@ -3673,7 +4146,7 @@ void OpticsSystem::apply_pending_vision_scene_load() {
         auto scene_resource = get_or_create_vision_scene_resource(
             make_vision_scene_resource_key("", VisionPipelineSource::EngineBuilt),
             "");
-        auto pipeline = create_vision_pipeline(scene_resource);
+        auto pipeline = create_vision_pipeline(requested_mode, scene_resource);
         if (!pipeline) {
             CFW_LOG_ERROR("OpticsSystem: failed to recreate engine-built Vision pipeline");
             return;
@@ -3788,7 +4261,13 @@ void OpticsSystem::apply_vision_render_mode(CameraVisionRenderMode mode) {
     }
 
     if (runtime.scene_path.empty()) {
+        const bool was_denoise_enabled =
+            Vision::vision_render_mode_uses_denoise(current_vision_render_mode_);
         pipeline->set_output_denoise(true);
+        if (!was_denoise_enabled) {
+            prepare_enabled_denoiser_for_runtime_switch(*pipeline);
+            pipeline->clear_view_contexts();
+        }
         runtime.mode = mode;
         current_vision_render_mode_ = mode;
         rekey_active_runtime();

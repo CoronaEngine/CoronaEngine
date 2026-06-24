@@ -255,7 +255,7 @@ CommandBatch Prefilter::dispatch(RealTimeDenoiseInput &input) noexcept {
     PrefilterParam param;
     param.radiance_direct = input.direct.descriptor();
     param.radiance_indirect = input.indirect.descriptor();
-    param.svgf_buffer = svgf_->svgf_buffer().descriptor();
+    param.svgf_buffer = svgf_->svgf_buffer_cur(input.frame_index).descriptor();
     param.visibility_buffer = input.visibility.descriptor();
     param.camera_pos = input.camera_pos;
 

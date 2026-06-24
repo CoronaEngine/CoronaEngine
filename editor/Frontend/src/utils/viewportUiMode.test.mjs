@@ -4,8 +4,12 @@ import {
   createViewportUiCursorController,
   createViewportUiModeStore,
   createViewportUiPointerController,
+  DEFAULT_NATIVE_VIEWPORT_CURSOR_ENABLED,
+  isNativeViewportCursorEnabled,
   normalizeViewportUiCursorShape,
+  normalizeFeatureSwitch,
   normalizeViewportUiMode,
+  NATIVE_VIEWPORT_CURSOR_STORAGE_KEY,
 } from './viewportUiMode.js';
 
 const storage = new Map();
@@ -18,6 +22,21 @@ const store = createViewportUiModeStore({
 
 assert.equal(normalizeViewportUiMode('stereo3d'), 'stereo3d');
 assert.equal(normalizeViewportUiMode('unknown'), 'flat2d');
+assert.equal(DEFAULT_NATIVE_VIEWPORT_CURSOR_ENABLED, false);
+assert.equal(normalizeFeatureSwitch('on'), true);
+assert.equal(normalizeFeatureSwitch('off'), false);
+assert.equal(isNativeViewportCursorEnabled({
+  storage: { getItem: () => null },
+  globalObject: {},
+}), false);
+assert.equal(isNativeViewportCursorEnabled({
+  storage: { getItem: (key) => (key === NATIVE_VIEWPORT_CURSOR_STORAGE_KEY ? 'on' : null) },
+  globalObject: {},
+}), true);
+assert.equal(isNativeViewportCursorEnabled({
+  storage: { getItem: () => null },
+  globalObject: { __CORONA_ENABLE_NATIVE_VIEWPORT_CURSOR__: true },
+}), true);
 
 const mainKey = store.keyFor({ scope: 'main', sceneId: 'demo', cameraHandle: 101 });
 const cameraKey = store.keyFor({ scope: 'camera', sceneId: 'demo', cameraId: 'shotA' });
@@ -59,6 +78,7 @@ const pointerCalls = [];
 const pointerController = createViewportUiPointerController({
   getBridge: () => ({ viewportUiPointer: (...args) => pointerCalls.push(args) }),
   getCameraHandle: () => 777,
+  getNativeCursorEnabled: () => true,
   getHitRect: () => ({ left: 10, top: 20, width: 200, height: 100 }),
   getRenderRect: () => ({
     left: 10,
@@ -98,6 +118,7 @@ const gatedPointerController = createViewportUiPointerController({
   }),
   getCameraHandle: () => 888,
   getEnabled: () => pointerEnabled,
+  getNativeCursorEnabled: () => true,
   getHitRect: () => ({ left: 0, top: 0, width: 100, height: 100 }),
   getRenderRect: () => ({ left: 0, top: 0, width: 100, height: 100 }),
 });
@@ -114,12 +135,12 @@ assert.equal(gatedPointerController.send({
   clientX: 21,
   clientY: 31,
 }, undefined, 'arrow'), false);
-assert.deepEqual(gatedPointerCalls.at(-1), [888, 'pointermove', 20, 30, 0, 0, 'arrow']);
-assert.deepEqual(gatedCursorCalls, [[true, true], [false, true]]);
-const callsAfterDisableHide = gatedPointerCalls.length;
-assert.equal(gatedPointerController.hide(), true);
 assert.deepEqual(gatedPointerCalls.at(-1), [888, 'pointerleave', 20, 30, 0, 0, 'hidden']);
-assert.deepEqual(gatedCursorCalls, [[true, true], [false, true], [false, false]]);
+assert.deepEqual(gatedCursorCalls, [[true, true], [false, false]]);
+const callsAfterDisableHide = gatedPointerCalls.length;
+assert.equal(gatedPointerController.hide(), false);
+assert.deepEqual(gatedPointerCalls.at(-1), [888, 'pointerleave', 20, 30, 0, 0, 'hidden']);
+assert.deepEqual(gatedCursorCalls, [[true, true], [false, false]]);
 const callsAfterExplicitHide = gatedPointerCalls.length;
 assert.equal(gatedPointerController.send({
   type: 'pointermove',
@@ -127,6 +148,25 @@ assert.equal(gatedPointerController.send({
   clientY: 32,
 }, undefined, 'arrow'), false);
 assert.equal(gatedPointerCalls.length, callsAfterExplicitHide);
-assert.equal(callsAfterExplicitHide, callsAfterDisableHide + 1);
-assert.deepEqual(gatedCursorCalls, [[true, true], [false, true], [false, false], [false, true]]);
+assert.equal(callsAfterExplicitHide, callsAfterDisableHide);
+assert.deepEqual(gatedCursorCalls, [[true, true], [false, false]]);
+
+const disabledPointerCalls = [];
+const disabledCursorCalls = [];
+const disabledPointerController = createViewportUiPointerController({
+  getBridge: () => ({
+    viewportUiPointer: (...args) => disabledPointerCalls.push(args),
+    setViewportSystemCursorHidden: (...args) => disabledCursorCalls.push(args),
+  }),
+  getCameraHandle: () => 999,
+  getHitRect: () => ({ left: 0, top: 0, width: 100, height: 100 }),
+  getRenderRect: () => ({ left: 0, top: 0, width: 100, height: 100 }),
+});
+assert.equal(disabledPointerController.send({
+  type: 'pointermove',
+  clientX: 10,
+  clientY: 20,
+}, undefined, 'arrow'), false);
+assert.deepEqual(disabledPointerCalls, []);
+assert.deepEqual(disabledCursorCalls, []);
 console.log('viewport UI mode tests passed');

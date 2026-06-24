@@ -225,7 +225,7 @@ def _run_capture_in_temp_scene(
         temp_scene._cameras.clear()
         temp_scene._main_camera = None
 
-        # 创建截图专用相机（离屏，不绑定任何 surface）
+        # 创建截图专用相机（离屏，不绑定默认 viewport surface）
         capture_camera = PyCamera(
             position=[0.0, 0.0, 0.0],
             forward=[0.0, 0.0, 1.0],
@@ -233,10 +233,6 @@ def _run_capture_in_temp_scene(
             fov=orig_fov,
             name="__six_view_capture_cam__",
         )
-        # Camera 构造函数会自动绑定 default_surface，需显式进入离屏截图模式。
-        set_offscreen_capture_mode = getattr(capture_camera, "set_offscreen_capture_mode", None)
-        if callable(set_offscreen_capture_mode):
-            set_offscreen_capture_mode(True)
         capture_camera.set_surface(0)
         capture_camera.set_output_mode("base_color")
         temp_scene.engine_scene.add_camera(capture_camera.engine_obj)

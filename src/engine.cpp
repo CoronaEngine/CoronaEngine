@@ -236,13 +236,16 @@ bool Engine::register_systems() {
     // Geometry(85) > Mechanics(75)：八叉树在同帧物理前重建，query_pairs() 时序正确
 
     // Display System - 最高优先级
-    sys_mgr->register_system(std::make_shared<Systems::DisplaySystem>());
+    auto display_system = std::make_shared<Systems::DisplaySystem>();
+    sys_mgr->register_system(display_system);
 
     // Optics System (光学系统)
-    sys_mgr->register_system(std::make_shared<Systems::OpticsSystem>());
+    auto optics_system = std::make_shared<Systems::OpticsSystem>();
+    sys_mgr->register_system(optics_system);
 
     // Geometry System (几何 + 八叉树宿主，原 SceneSystem 职责已并入)
-    sys_mgr->register_system(std::make_shared<Systems::GeometrySystem>());
+    auto geometry_system = std::make_shared<Systems::GeometrySystem>();
+    sys_mgr->register_system(geometry_system);
 
     // Mechanics System (力学系统)
     sys_mgr->register_system(std::make_shared<Systems::MechanicsSystem>());

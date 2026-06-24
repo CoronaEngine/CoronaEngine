@@ -12,7 +12,8 @@ namespace vision::svgf {
 struct VarianceEstimatorParam {
     BufferDesc<RadType4> radiance_direct;
     BufferDesc<RadType4> radiance_indirect;
-    BufferDesc<SVGFDataDual> svgf_buffer;
+    BufferDesc<SVGFDataDual> svgf_buffer_prev;
+    BufferDesc<SVGFDataDual> svgf_buffer_cur;
     BufferDesc<TriangleHit> visibility_buffer;
     BufferDesc<TriangleHit> visibility_buffer_prev;
     BufferDesc<float2> motion_vectors;
@@ -23,8 +24,8 @@ struct VarianceEstimatorParam {
 
 }// namespace vision::svgf
 
-OC_PARAM_STRUCT(vision::svgf, VarianceEstimatorParam, 
-radiance_direct, radiance_indirect, svgf_buffer,
+OC_PARAM_STRUCT(vision::svgf, VarianceEstimatorParam,
+radiance_direct, radiance_indirect, svgf_buffer_prev, svgf_buffer_cur,
 visibility_buffer, visibility_buffer_prev, motion_vectors, camera_pos, prev_camera_pos, screen_short_edge){};
 
 namespace vision::svgf {

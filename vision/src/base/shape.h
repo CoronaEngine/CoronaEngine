@@ -218,6 +218,7 @@ public:
     [[nodiscard]] ShapeInstance &instance(uint i) noexcept { return *(instances_[i]); }
     [[nodiscard]] const ShapeInstance &instance(uint i) const noexcept { return *(instances_[i]); }
     void add_instance(const ShapeInstance &instance) noexcept;
+    void add_instance(ShapeInstance &&instance) noexcept;
     void add_instances(vector<ShapeInstance> instances) noexcept;
     void for_each(const std::function<void(SP<const ShapeInstance>, uint)> &func) const noexcept {
         for (uint i = 0; i < instances_.size(); ++i) {

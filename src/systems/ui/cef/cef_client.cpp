@@ -2,10 +2,11 @@
 
 #include <windows.h>
 
-#include <algorithm>
 #include <cstring>
 #include <filesystem>
 #include <string>
+
+#include <corona/kernel/core/i_logger.h>
 
 #include "browser_manager.h"
 #include "cef_bridge_helpers.h"
@@ -65,6 +66,7 @@ void OffscreenRenderHandler::GetViewRect(CefRefPtr<CefBrowser> browser, CefRect&
 void OffscreenRenderHandler::OnPaint(CefRefPtr<CefBrowser> browser, PaintElementType type,
                                      const RectList& dirty_rects, const void* buffer,
                                      int width, int height) {
+    (void)dirty_rects;
     std::lock_guard tab_lock(tab_mutex_);
     BrowserTab* t = tab_;
     if (t && type == PET_VIEW && buffer && width > 0 && height > 0) {
@@ -149,14 +151,26 @@ void OffscreenCefClient::OnAfterCreated(CefRefPtr<CefBrowser> browser) {
 
     if (close_requested) {
         browser->GetHost()->CloseBrowser(true);
+        return;
     }
+
+    browser->GetHost()->WasHidden(false);
+    browser->GetHost()->WasResized();
+    browser->GetHost()->Invalidate(PET_VIEW);
 }
 
 void OffscreenCefClient::OnLoadEnd(CefRefPtr<CefBrowser> browser,
                                    CefRefPtr<CefFrame> frame,
                                    int httpStatusCode) {
     CEF_REQUIRE_UI_THREAD();
-    // Main frame load end
+    if (!browser || !frame || !frame->IsMain()) {
+        return;
+    }
+
+    CFW_LOG_INFO("CEF: main frame load end status={}", httpStatusCode);
+    browser->GetHost()->WasHidden(false);
+    browser->GetHost()->WasResized();
+    browser->GetHost()->Invalidate(PET_VIEW);
 }
 
 void OffscreenCefClient::OnBeforeClose(CefRefPtr<CefBrowser> browser) {
@@ -207,6 +221,7 @@ void OffscreenCefClient::MarkBrowserCreationFailed() {
 void OffscreenCefClient::Resize(int width, int height) {
     if (auto browser = GetBrowser()) {
         browser->GetHost()->WasResized();
+        browser->GetHost()->Invalidate(PET_VIEW);
     }
 }
 
@@ -408,7 +423,7 @@ bool initialize_cef() {
     }
 
     CefString(&settings.user_agent).FromASCII("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
-    settings.background_color = CefColorSetARGB(255, 255, 255, 255);
+    settings.background_color = CefColorSetARGB(0, 0, 0, 0);
     settings.persist_session_cookies = true;
 
     CefRefPtr<CefCommandLine> command_line = CefCommandLine::CreateCommandLine();

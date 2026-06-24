@@ -58,7 +58,7 @@ struct MeshData {
 
 /// LOD 生成配置
 struct LODGenerationOptions {
-    bool enabled = true;                                     // 是否生成 LOD
+    bool enabled = false;                                    // 是否生成 LOD
     std::uint32_t level_count = 3;                            // LOD 级数（不含 LOD 0）
     std::vector<float> target_ratios = {0.5f, 0.25f, 0.05f};  // 各级三角形保留比例
     std::vector<float> max_errors = {0.05f, 0.2f, 1.0f};      // 各级最大允许误差（越大简化越激进）

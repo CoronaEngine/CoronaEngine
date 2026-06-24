@@ -120,26 +120,8 @@ def _as_bool(value: Any, default: bool = False) -> bool:
 
 
 def object_embedding_tools_enabled(config: Any | None = None) -> bool:
-    """Dashscope embedding is opt-in for F5 stability."""
-    env_value = os.environ.get(OBJECT_EMBEDDING_ENABLE_ENV)
-    if env_value is not None:
-        return _as_bool(env_value, default=False)
-
-    if config is None:
-        try:
-            config = get_ai_config()
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("object embedding config read failed; disabled by default: %s", exc)
-            return False
-
-    recognition_cfg = _read_config_value(config, "object_recognition", {}) or {}
-    return _as_bool(
-        _read_config_value(recognition_cfg, "enable_embedding", None),
-        default=False,
-    ) or _as_bool(
-        _read_config_value(recognition_cfg, "enable_dashscope_embedding", None),
-        default=False,
-    )
+    """Dashscope embedding/search is disabled for the formal validation profile."""
+    return False
 
 
 def _object_search_has_embedding_key(config: Any) -> bool:
@@ -162,29 +144,18 @@ def _object_search_has_embedding_key(config: Any) -> bool:
 
 def get_search_tool():
     """获取物体搜索工具。"""
-    try:
-        config = get_ai_config()
-        if not _object_search_has_embedding_key(config):
-            logger.info(
-                "物体 embedding 检索未启用，跳过 search_similar_object，后续将直接进入 3D 生成降级路径"
-            )
-            return None
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("物体图搜凭据预检失败，跳过检索阶段: %s", exc)
-        return None
-    return get_tool("search_similar_object")
+    logger.info("正式试验配置已关闭图搜/embedding，跳过 search_similar_object")
+    return None
 
 
 def get_store_tool():
     """获取物体入库工具。"""
-    if not object_embedding_tools_enabled():
-        logger.info("物体 embedding 入库未启用，跳过 store_object")
-        return None
-    return get_tool("store_object")
+    logger.info("正式试验配置已关闭图搜/embedding，跳过 store_object")
+    return None
 
 
 def get_3d_generate_tool():
-    """获取 3D 模型生成工具。优先混元3D（需启用），回退 Rodin。"""
+    """获取 3D 模型生成工具。正式试验只使用混元3D，不回退 Rodin。"""
     from Quasar.ai_config.ai_config import get_ai_config
     config = get_ai_config()
     hunyuan_cfg = getattr(config, 'hunyuan3d', None)
@@ -192,7 +163,8 @@ def get_3d_generate_tool():
         tool = get_tool("hunyuan_generate_3d")
         if tool is not None:
             return tool
-    return get_tool("rodin_generate_3d")
+    logger.warning("混元 3D 服务不可用，本次模型生成无法继续；Rodin fallback 已关闭")
+    return None
 
 
 def parse_tool_result(raw_result: Any) -> Dict[str, Any]:

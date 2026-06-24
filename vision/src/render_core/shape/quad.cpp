@@ -44,7 +44,8 @@ public:
         for (Vertex &vertex : mesh.vertices()) {
             vertex.set_normal(ng_un);
         }
-        add_instance(ShapeInstance(std::move(mesh)));
+        ShapeInstance instance{std::move(mesh)};
+        add_instance(std::move(instance));
     }
 };
 

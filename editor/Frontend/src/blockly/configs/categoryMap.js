@@ -1,4 +1,7 @@
+// 积木类型 → 工具箱分类映射表
+// 用于搜索、过滤和 UI 组织
 export const BLOCK_CATEGORY_MAP = {
+  // ── 引擎 (17) ──
   engine_move: '引擎',
   engine_rotateX: '引擎',
   engine_rotateY: '引擎',
@@ -16,6 +19,19 @@ export const BLOCK_CATEGORY_MAP = {
   engine_X: '引擎',
   engine_Y: '引擎',
   engine_Z: '引擎',
+  // 物理扩展
+  engine_set_velocity: '引擎',
+  engine_apply_impulse: '引擎',
+  engine_get_velocity: '引擎',
+
+  // ── 摄像机 (5) ──
+  camera_lock_mouse: '摄像机',
+  camera_unlock_mouse: '摄像机',
+  camera_mouse_dx: '摄像机',
+  camera_mouse_dy: '摄像机',
+  camera_set_fov: '摄像机',
+
+  // ── 外观 (11) ──
   appearance_cartoonSet: '外观',
   appearance_nextCartoon: '外观',
   appearance_playCartoon: '外观',
@@ -27,6 +43,11 @@ export const BLOCK_CATEGORY_MAP = {
   appearance_hide: '外观',
   appearance_cartoon: '外观',
   appearance_size: '外观',
+  // 外观扩展
+  appearance_set_color: '外观',
+  appearance_set_alpha: '外观',
+
+  // ── 事件 (10) ──
   event_gameStart: '事件',
   event_keyboard: '事件',
   event_RB: '事件',
@@ -37,6 +58,8 @@ export const BLOCK_CATEGORY_MAP = {
   event_mouse_move: '事件',
   event_mouse_wheel: '事件',
   event_mouse_contextmenu: '事件',
+
+  // ── 控制 (13 自定义 + 8 标准逻辑 + 6 标准循环 = 27) ──
   control_wait: '控制',
   control_for: '控制',
   control_forX: '控制',
@@ -50,6 +73,24 @@ export const BLOCK_CATEGORY_MAP = {
   control_cloneDEL: '控制',
   control_senceSet: '控制',
   control_nextSence: '控制',
+  // 标准逻辑
+  logic_boolean: '控制',
+  logic_compare: '控制',
+  logic_operation: '控制',
+  logic_negate: '控制',
+  logic_null: '控制',
+  logic_ternary: '控制',
+  controls_if: '控制',
+  controls_ifelse: '控制',
+  // 标准循环
+  controls_repeat_ext: '控制',
+  controls_repeat: '控制',
+  controls_whileUntil: '控制',
+  controls_for: '控制',
+  controls_forEach: '控制',
+  controls_flow_statements: '控制',
+
+  // ── 侦测 (8) ──
   detect_touch: '侦测',
   detect_distance: '侦测',
   detect_ask: '侦测',
@@ -58,6 +99,13 @@ export const BLOCK_CATEGORY_MAP = {
   detect_mouse1: '侦测',
   detect_mouse0: '侦测',
   detect_attribute: '侦测',
+  // 射线检测
+  detect_raycast: '侦测',
+  detect_raycast_distance: '侦测',
+  detect_raycast_object: '侦测',
+  detect_raycast_point: '侦测',
+
+  // ── 运算 (12 自定义 + 14 标准数学 = 26) ──
   math_add: '运算',
   math_mul: '运算',
   math_div: '运算',
@@ -70,24 +118,77 @@ export const BLOCK_CATEGORY_MAP = {
   math_OR: '运算',
   math_NOT: '运算',
   math_connect: '运算',
-  /*   'math_str': '运算',
-  'math_strNumber': '运算',
-  'math_strInside': '运算',
-  'math_mod': '运算',
-  'math_other': '运算', */
+  // 标准数学
+  math_number: '运算',
+  math_arithmetic: '运算',
+  math_single: '运算',
+  math_trig: '运算',
+  math_constant: '运算',
+  math_number_property: '运算',
+  math_change: '运算',
+  math_round: '运算',
+  math_on_list: '运算',
+  math_modulo: '运算',
+  math_constrain: '运算',
+  math_random_int: '运算',
+  math_random_float: '运算',
+  math_atan2: '运算',
+
+  // ── 变量 (4 自定义 + 4 标准 = 8) ──
   variable_add: '变量',
   variable_set: '变量',
   variable_show: '变量',
   variable_hide: '变量',
-  /*   'list_add': '列表',
-  'list_del': '列表',
-  'list_delAll': '列表',
-  'list_insert': '列表',
-  'list_override': '列表',
-  'list_list': '列表',
-  'list_fristSer': '列表',
-  'list_number': '列表',
-  'list_incode': '列表', */
+  // 标准变量
+  variables_get: '变量',
+  variables_set: '变量',
+  variables_get_dynamic: '变量',
+  variables_set_dynamic: '变量',
+
+  // ── 列表 (2 自定义 + 12 标准 = 14) ──
   list_show: '列表',
   list_hide: '列表',
+  // 标准列表
+  lists_create_empty: '列表',
+  lists_create_with: '列表',
+  lists_repeat: '列表',
+  lists_reverse: '列表',
+  lists_isEmpty: '列表',
+  lists_length: '列表',
+  lists_indexOf: '列表',
+  lists_getIndex: '列表',
+  lists_setIndex: '列表',
+  lists_getSublist: '列表',
+  lists_sort: '列表',
+  lists_split: '列表',
+
+  // ── 文本 (15 标准) —— 新增分类 ──
+  text: '文本',
+  text_join: '文本',
+  text_append: '文本',
+  text_length: '文本',
+  text_isEmpty: '文本',
+  text_indexOf: '文本',
+  text_charAt: '文本',
+  text_getSubstring: '文本',
+  text_changeCase: '文本',
+  text_trim: '文本',
+  text_count: '文本',
+  text_replace: '文本',
+  text_reverse: '文本',
+  text_print: '文本',
+  text_prompt_ext: '文本',
+
+  // ── 函数 (5 标准) —— 新增分类 ──
+  procedures_defnoreturn: '函数',
+  procedures_defreturn: '函数',
+  procedures_callnoreturn: '函数',
+  procedures_callreturn: '函数',
+  procedures_ifreturn: '函数',
+
+  // ── 音效 (4) ──
+  audio_play: '音效',
+  audio_loop: '音效',
+  audio_stop: '音效',
+  audio_stop_all: '音效',
 };

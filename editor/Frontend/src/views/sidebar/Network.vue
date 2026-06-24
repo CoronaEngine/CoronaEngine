@@ -1,10 +1,10 @@
 <template>
   <div
-    class="flex-1 min-h-0 w-full rounded-lg overflow-hidden relative bg-[#282828]/90 flex flex-col text-white font-sans"
+    class="flex-1 min-h-0 h-full w-full rounded-lg overflow-hidden relative bg-[#282828]/90 flex flex-col text-white font-sans"
   >
     <DockTitleBar
       v-if="!isDocked"
-      title="网络协作"
+      title="局域网聊天"
       extraClass="bg-[#84A65B]"
       routePath="/Network"
       @close="closeFloat"

@@ -57,6 +57,15 @@ target_include_directories(CoronaEngine PUBLIC
         ${PROJECT_SOURCE_DIR}/include
 )
 
+# Public system headers include generated shader headers through relative GLSL()
+# paths. Keep the generated roots ahead of transitive dependency include dirs so
+# stale build-cache shader headers cannot shadow the current Helicon output.
+target_include_directories(CoronaEngine BEFORE PUBLIC
+        ${CMAKE_CURRENT_BINARY_DIR}/systems/optics/generated_shaders
+        ${CMAKE_CURRENT_BINARY_DIR}/systems/display/generated_shaders
+        ${CMAKE_CURRENT_BINARY_DIR}/systems/ui/generated_shaders
+)
+
 # 链接依赖
 target_link_libraries(CoronaEngine PUBLIC
         corona::engine::kernel

@@ -9,6 +9,7 @@
 namespace Corona::Network {
 
 struct LanChatHistoryRoomSummary {
+    std::string session_id;
     std::string room_id;
     size_t message_count = 0;
     uint64_t last_timestamp_ms = 0;
@@ -34,6 +35,8 @@ public:
 private:
     [[nodiscard]] std::filesystem::path room_file(const std::string& room_id) const;
     [[nodiscard]] std::filesystem::path agents_file(const std::string& room_id) const;
+    [[nodiscard]] std::filesystem::path resolve_room_file(const std::string& room_or_session_id) const;
+    [[nodiscard]] std::filesystem::path resolve_agents_file(const std::string& room_or_session_id) const;
 
     std::filesystem::path root_;
 };

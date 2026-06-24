@@ -1,7 +1,12 @@
 ﻿#pragma once
 
-#include <Horizon.h>
+#include "horizon.h"
 #include <corona/shader_include.h>
+
+#include "Codegen/BuiltinVariate.h"
+#include "Codegen/ControlFlows.h"
+#include "Codegen/CustomLibrary.h"
+#include "Codegen/TypeAlias.h"
 
 #include <optional>
 
@@ -9,13 +14,18 @@
 // in SSBO struct members. Provide the missing typedef.
 using uint = uint32_t;
 
+// Generated shader headers currently emit bare `Array` for SSBO pools.
+struct Array {};
+
 // clang-format off
 #include GLSL(../../../assets/shaders/visibility.vert.glsl)
 #include GLSL(../../../assets/shaders/visibility.frag.glsl)
 #include GLSL(../../../assets/shaders/lighting.comp.glsl)
 #include GLSL(../../../assets/shaders/sky.comp.glsl)
+#include GLSL(../../../assets/shaders/sky_sh_project.comp.glsl)
 #include GLSL(../../../assets/shaders/tonemap.comp.glsl)
 #include GLSL(../../../assets/shaders/debug_resolve.comp.glsl)
+#include GLSL(../../../assets/shaders/visibility_debug_resolve.comp.glsl)
 #include GLSL(../../../assets/shaders/actor_pick.comp.glsl)
 #include GLSL(../../../assets/shaders/optics_overlay.comp.glsl)
 #include GLSL(../../../assets/shaders/optics_cursor.comp.glsl)
@@ -28,44 +38,47 @@ using uint = uint32_t;
 
 struct Hardware {
     // === Visibility Buffer (replaces GBuffer rasterization output) ===
-    HardwareImage visibilityImage;  // RGBA32_UINT: R=instanceID, G=primitiveID
-    HardwareImage depthImage;       // D32_FLOAT: depth (kept from GBuffer)
-    HardwareImage uiVisibilityImage;  // Pass 2 visibility, isolated from scene pass
-    HardwareImage uiDepthImage;        // Pass 2 depth, isolated from scene pass
+    Corona::Horizon::HardwareImage visibilityImage;  // RGBA32_UINT: R=instanceID, G=primitiveID
+    Corona::Horizon::HardwareImage depthImage;       // D32_FLOAT: depth (kept from GBuffer)
+    Corona::Horizon::HardwareImage uiVisibilityImage;  // Pass 2 visibility, isolated from scene pass
+    Corona::Horizon::HardwareImage uiDepthImage;        // Pass 2 depth, isolated from scene pass
 
     // === Final composited output ===
-    HardwareImage finalOutputImage;
-    HardwareImage cursorIconImage;
+    Corona::Horizon::HardwareImage finalOutputImage;
+    Corona::Horizon::HardwareImage cursorIconImage;
     bool cursorIconLoadAttempted = false;
-    HardwareExecutor executor;
+    Corona::Horizon::HardwareExecutor executor;
 
     // === Uniform buffers ===
-    HardwareBuffer uniformBuffer;
-    HardwareBuffer vpUniformBuffer;  // renamed: view-projection matrix
-    HardwareBuffer uiVpUniformBuffer;  // Pass 2 orthographic view-projection matrix
+    Corona::Horizon::HardwareBuffer uniformBuffer;
+    Corona::Horizon::HardwareBuffer vpUniformBuffer;  // renamed: view-projection matrix
+    Corona::Horizon::HardwareBuffer uiVpUniformBuffer;  // Pass 2 orthographic view-projection matrix
 
     // === Instance & Material tables (uploaded per frame) ===
-    HardwareBuffer instanceInfoBuffer;
-    HardwareBuffer materialTableBuffer;
-    HardwareBuffer uiInstanceInfoBuffer;
-    HardwareBuffer uiMaterialTableBuffer;
-    HardwareBuffer actorPickBuffer;
+    Corona::Horizon::HardwareBuffer instanceInfoBuffer;
+    Corona::Horizon::HardwareBuffer materialTableBuffer;
+    Corona::Horizon::HardwareBuffer uiInstanceInfoBuffer;
+    Corona::Horizon::HardwareBuffer uiMaterialTableBuffer;
+    Corona::Horizon::HardwareBuffer actorPickBuffer;
+    Corona::Horizon::HardwareBuffer skyIrradianceSHBuffer;  // 9 vec3 SH coeffs (sky-driven ambient)
 
     // === Shader pipelines ===
     bool shaderHasInit = false;
-    std::optional<RasterizerPipeline<visibility_vert_glsl, visibility_frag_glsl>> visibilityPipeline;
-    std::optional<RasterizerPipeline<visibility_vert_glsl, visibility_frag_glsl>> uiVisibilityPipeline;
-    std::optional<ComputePipeline<lighting_comp_glsl>> lightingPipeline;
-    std::optional<ComputePipeline<sky_comp_glsl>> skyPipeline;
-    std::optional<ComputePipeline<tonemap_comp_glsl>> tonemapPipeline;
-    std::optional<ComputePipeline<debug_resolve_comp_glsl>> debugResolvePipeline;
-    std::optional<ComputePipeline<actor_pick_comp_glsl>> actorPickPipeline;
-    std::optional<ComputePipeline<optics_overlay_comp_glsl>> opticsOverlayPipeline;
-    std::optional<ComputePipeline<optics_cursor_comp_glsl>> opticsCursorPipeline;
-    std::optional<ComputePipeline<optics_ui_warp_comp_glsl>> opticsUiWarpPipeline;
-    std::optional<ComputePipeline<optics_composite_comp_glsl>> opticsCompositePipeline;
+    std::optional<Corona::Horizon::RasterizerPipeline<visibility_vert_glsl_t, visibility_frag_glsl_t>> visibilityPipeline;
+    std::optional<Corona::Horizon::RasterizerPipeline<visibility_vert_glsl_t, visibility_frag_glsl_t>> uiVisibilityPipeline;
+    std::optional<Corona::Horizon::ComputePipeline<lighting_comp_glsl_t>> lightingPipeline;
+    std::optional<Corona::Horizon::ComputePipeline<sky_comp_glsl_t>> skyPipeline;
+    std::optional<Corona::Horizon::ComputePipeline<sky_sh_project_comp_glsl_t>> skySHProjectPipeline;
+    std::optional<Corona::Horizon::ComputePipeline<tonemap_comp_glsl_t>> tonemapPipeline;
+    std::optional<Corona::Horizon::ComputePipeline<debug_resolve_comp_glsl_t>> debugResolvePipeline;
+    std::optional<Corona::Horizon::ComputePipeline<visibility_debug_resolve_comp_glsl_t>> visibilityDebugResolvePipeline;
+    std::optional<Corona::Horizon::ComputePipeline<actor_pick_comp_glsl_t>> actorPickPipeline;
+    std::optional<Corona::Horizon::ComputePipeline<optics_overlay_comp_glsl_t>> opticsOverlayPipeline;
+    std::optional<Corona::Horizon::ComputePipeline<optics_cursor_comp_glsl_t>> opticsCursorPipeline;
+    std::optional<Corona::Horizon::ComputePipeline<optics_ui_warp_comp_glsl_t>> opticsUiWarpPipeline;
+    std::optional<Corona::Horizon::ComputePipeline<optics_composite_comp_glsl_t>> opticsCompositePipeline;
 #ifdef CORONA_ENABLE_VISION
-    std::optional<ComputePipeline<vision_resolve_comp_glsl>> visionResolvePipeline;
+    std::optional<Corona::Horizon::ComputePipeline<vision_resolve_comp_glsl_t>> visionResolvePipeline;
 #endif
 
     // === CPU-side uniform data ===

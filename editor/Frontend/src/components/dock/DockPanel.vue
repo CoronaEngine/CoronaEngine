@@ -1,23 +1,24 @@
 <template>
   <div class="dock-panel">
     <div class="dock-panel-header">
-      <span class="dock-panel-title">{{ manifest?.displayName ?? panelId }}</span>
+      <span class="dock-panel-title" :title="panelTitle">{{ panelTitle }}</span>
       <div class="dock-panel-actions">
-        <button class="dock-action-btn" title="弹出为独立窗口" @click="handlePopOut">&#x29C9;</button>
-        <button class="dock-action-btn dock-action-close" title="关闭" @click="handleClose">&times;</button>
+        <button class="dock-action-btn" :title="t('dock.popOut')" @click="handlePopOut">&#x29C9;</button>
+        <button class="dock-action-btn dock-action-close" :title="t('dock.close')" @click="handleClose">&times;</button>
       </div>
     </div>
     <div class="dock-panel-body">
       <component :is="component" v-if="component" />
-      <div v-else class="dock-panel-loading">组件未找到: {{ panelId }}</div>
+      <div v-else class="dock-panel-loading">{{ t('dock.componentMissing', { panelId }) }}</div>
     </div>
   </div>
 </template>
 
 <script setup>
 import { computed, provide } from 'vue';
+import { useI18n } from 'vue-i18n';
 import { useDockStore } from '@/stores/dockStore.js';
-import { getPluginManifest } from '@/config/pluginManifest.js';
+import { getPluginDisplayName, getPluginManifest } from '@/config/pluginManifest.js';
 import { appService } from '@/utils/bridge.js';
 
 const props = defineProps({
@@ -29,8 +30,13 @@ const props = defineProps({
 provide('dockPanelId', props.panelId);
 provide('inDock', true);
 
+const { t, locale } = useI18n();
 const dockStore = useDockStore();
 const manifest = computed(() => getPluginManifest(props.panelId));
+const panelTitle = computed(() => {
+  locale.value;
+  return getPluginDisplayName(manifest.value) || props.panelId;
+});
 
 function handleClose() {
   dockStore.closePanel(props.panelId);
@@ -44,7 +50,8 @@ async function handlePopOut() {
       props.panelId,
       '#' + (m.routePath || ''),
       m.defaultWidth || 400,
-      m.defaultHeight || 600
+      m.defaultHeight || 600,
+      m.defaultFloatPosition || 'right_top'
     );
     const tabId = result?.tab_id ?? result?.data?.tab_id;
     dockStore.setExternal(props.panelId, tabId);
@@ -76,6 +83,10 @@ async function handlePopOut() {
   user-select: none;
 }
 .dock-panel-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: #c0c0c0;
   font-size: 12px;
   font-weight: 500;

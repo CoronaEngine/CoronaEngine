@@ -9,6 +9,7 @@ import os
 import sys
 import types
 from dataclasses import dataclass, field
+from pathlib import Path
 from types import SimpleNamespace
 from typing import List
 
@@ -30,6 +31,7 @@ from cai_extensions.agent.scene_composer_progressive import (  # noqa: E402
     _prioritize_vlm_targets,
     _run_vlm_advisory_review,
     _resolve_pending_resource_requests_for_batch,
+    _vlm_checkpoint_user_message,
     _vlm_checkpoint_reports_user_text,
     _vlm_max_targets,
     build_batch_resource_plan,
@@ -567,6 +569,59 @@ def test_vlm_actionable_advice_flows_to_coordinator_review_result():
     print("[OK] VLM actionable advice flows to Coordinator ReviewResult")
 
 
+def test_vlm_low_confidence_advisory_flows_to_coordinator_review_result():
+    coordinator = FakeCoordinator()
+    advice = SimpleNamespace(
+        actor_id="地毯",
+        overall="WARN",
+        issues=["地毯偏大"],
+        fix_suggestion="地毯偏大，缩小一点",
+        position_correction=[],
+        rotation_correction=[0.0, 0.0, 0.0],
+        scale_correction=[1.0, 1.0, 1.0],
+        confidence=0.42,
+    )
+    report = SimpleNamespace(
+        advices=[advice],
+        skipped=[],
+        timed_out=[],
+        checkpoint_type="final_consistency_review",
+        reviewed_targets=[{"actor_id": "地毯", "checkpoint_type": "final_consistency_review"}],
+        advisory_items=[{
+            "actor_id": "地毯",
+            "checkpoint_type": "final_consistency_review",
+            "overall": "WARN",
+            "issues": ["地毯偏大"],
+            "fix_suggestion": "地毯偏大，缩小一点",
+            "confidence": 0.42,
+            "proposal": False,
+        }],
+        proposal_items=[],
+        actionable=lambda: [],
+    )
+
+    _emit_vlm_review_results(
+        report,
+        interaction_coordinator=coordinator,
+        room_id="room-low",
+        plan_id="seed-low",
+        session_id="sess-low",
+        batch_id="batch-low",
+    )
+
+    assert coordinator.reviews
+    review = coordinator.reviews[-1]
+    assert review["review_type"] == "vlm"
+    assert review["passed"] is False
+    assert review["actor_id"] == "地毯"
+    assert review["severity"] == "warn"
+    assert review["finding_details"][0]["actor_id"] == "地毯"
+    assert review["finding_details"][0]["action"] == "apply_vlm_advisory"
+    assert review["finding_details"][0]["fix_suggestion"] == "地毯偏大，缩小一点"
+    assert review["metadata"]["advisory_items"][0]["confidence"] == 0.42
+    print("[OK] low confidence VLM advisory flows to Coordinator ReviewResult")
+
+
 def test_vlm_review_uses_composer_hooks_under_engine_gate():
     calls = []
 
@@ -609,8 +664,13 @@ def test_vlm_review_uses_composer_hooks_under_engine_gate():
     assert len(report.advices) == 2
     assert len(gate.screenshots) == 2
     assert any(call[0] == "target_provider" for call in calls)
-    assert ("capture", "_vlm_review/actor-a", "statue") in calls
-    assert ("review", "_vlm_review/actor-a/shots", "statue", "decor") in calls
+    capture_calls = [call for call in calls if call[0] == "capture" and call[2] == "statue"]
+    assert capture_calls
+    capture_dir = capture_calls[0][1]
+    assert os.path.isabs(capture_dir)
+    assert os.path.isdir(capture_dir)
+    assert not capture_dir.replace("\\", "/").startswith("_vlm_review/")
+    assert ("review", f"{capture_dir}/shots", "statue", "decor") in calls
     assert report.actionable()[0].actor_id == "actor-a"
     print("[OK] VLM review uses composer target/capture/review hooks under EngineWriteGate")
 
@@ -736,7 +796,13 @@ def test_vlm_checkpoint_reports_summarize_all_stages_without_internal_leakage():
             status="completed",
             reviewed_targets=[{"actor_id": "天使雕像"}, {"actor_id": "小狗"}],
             proposal_items=[],
-            advisory_items=[{"actor_id": "小狗", "proposal": False}],
+            advisory_items=[{
+                "actor_id": "小狗",
+                "issues": ["尺寸偏大"],
+                "fix_suggestion": "缩小一点并靠边摆放",
+                "confidence": 0.42,
+                "proposal": False,
+            }],
             skipped=[],
             timed_out=[],
         ),
@@ -758,10 +824,44 @@ def test_vlm_checkpoint_reports_summarize_all_stages_without_internal_leakage():
     assert "最终一致性审查" in text
     assert "待确认调整建议" in text
     assert "不自动执行" in text
+    assert "小狗：缩小一点并靠边摆放" in text
     assert "PRIVATE" not in text
     assert "provider" not in text
     assert "job_id" not in text
     print("[OK] VLM checkpoint reports summarize all stages without internal leakage")
+
+
+def test_vlm_checkpoint_progress_message_includes_advisory_details():
+    report = SimpleNamespace(
+        status="completed",
+        proposal_items=[],
+        advisory_items=[
+            {
+                "actor_id": "床头柜",
+                "issues": ["可能离床过远"],
+                "fix_suggestion": "靠近床头一侧",
+                "confidence": 0.43,
+            },
+            {
+                "actor_id": "台灯",
+                "issues": ["朝向不明确"],
+                "fix_suggestion": "",
+                "confidence": 0.39,
+            },
+        ],
+    )
+
+    text = _vlm_checkpoint_user_message(
+        "final_consistency_review",
+        ["床头柜", "台灯"],
+        "done",
+        report=report,
+    )
+
+    assert "发现 2 条低风险/低置信提示" in text
+    assert "床头柜：靠近床头一侧" in text
+    assert "台灯：朝向不明确" in text
+    print("[OK] VLM checkpoint progress message includes advisory details")
 
 
 def test_final_report_text_includes_vlm_status_without_duplicate():
@@ -936,6 +1036,52 @@ def test_pending_resource_request_resolves_models_into_current_batch():
     assert session.pending_tasks[-1]["status"] == "completed"
     assert session.pending_tasks[-1]["batch_resource_plan"]["contract_version"] == 5
     print("[OK] pending resource request resolves generated model into current batch")
+
+
+def test_pending_resource_request_defers_while_ready_assets_can_still_import():
+    class FakeComposerWithRetrieval:
+        def __init__(self):
+            self.calls = []
+
+        def _run_model_retrieval(self, items):
+            self.calls.append([dict(item) for item in items])
+            return [
+                {"name": item["name"], "model_path": f"C:/tmp/{item['name']}.glb"}
+                for item in items
+            ]
+
+    composer = FakeComposerWithRetrieval()
+    request = {
+        "request_id": "resource-1",
+        "kind": "add_object",
+        "item_name": "布娃娃",
+        "quantity": 1,
+        "image_prompt": "small rag doll",
+        "original_text": "新增一个布娃娃",
+        "status": "planned",
+    }
+    session = SimpleNamespace(
+        pending_tasks=[],
+        pending_resource_requests=[dict(request)],
+    )
+
+    assets = _resolve_pending_resource_requests_for_batch(
+        composer,
+        [{"name": "床", "model_path": "C:/tmp/bed.glb"}],
+        session,
+        plan_id="seed-a",
+        phase="INTERIOR",
+        contract_version=7,
+        defer_when_assets_ready=True,
+    )
+
+    assert [item["name"] for item in assets] == ["床"]
+    assert composer.calls == []
+    assert session.pending_resource_requests == [request]
+    backlog = [task for task in session.pending_tasks if task.get("kind") == "resource_backlog"][-1]
+    assert backlog["status"] == "queued_for_later_batch"
+    assert backlog["queued_items"] == ["布娃娃"]
+    print("[OK] ready assets import before pending generated resource requests")
 
 
 def test_pending_resource_request_runs_image_stage_before_model_retrieval():
@@ -1218,6 +1364,454 @@ def test_warm_mysterious_market_overrides_generic_stone_wall_boundary():
     print("[OK] warm mysterious market overrides generic stone wall boundary")
 
 
+def _install_fake_corona_scene(initial_actor_names=None):
+    class ExistingActor:
+        def __init__(self, name):
+            self.name = name
+
+    class FakeGeometry:
+        def get_aabb(self):
+            return [-0.5, -0.5, -0.5, 0.5, 0.5, 0.5]
+
+    class FakeActor(ExistingActor):
+        def __init__(self, name, route="", actor_type="", parent_scene=None):
+            super().__init__(name)
+            self.route = route
+            self.actor_type = actor_type
+            self.parent_scene = parent_scene
+            self.position = None
+            self.scale = None
+            self._geometry = FakeGeometry()
+            self._mechanics = SimpleNamespace(set_physics_enabled=lambda _enabled: None)
+
+        def set_position(self, value, _world=True):
+            self.position = list(value)
+
+        def set_scale(self, value, _world=True):
+            self.scale = list(value)
+
+    class FakeScene:
+        def __init__(self):
+            self.actors = [ExistingActor(name) for name in (initial_actor_names or [])]
+
+        def get_actors(self):
+            return list(self.actors)
+
+        def add_actor(self, actor):
+            self.actors.append(actor)
+
+    scene = FakeScene()
+    fake_scene_manager = SimpleNamespace(get=lambda _route="": scene, list_all=lambda: ["fake.scene"])
+
+    fake_corona = types.ModuleType("CoronaCore")
+    fake_core = types.ModuleType("CoronaCore.core")
+    fake_managers = types.ModuleType("CoronaCore.core.managers")
+    fake_entities = types.ModuleType("CoronaCore.core.entities")
+    fake_actor_module = types.ModuleType("CoronaCore.core.entities.actor")
+    fake_managers.scene_manager = fake_scene_manager
+    fake_actor_module.Actor = FakeActor
+
+    module_names = [
+        "CoronaCore",
+        "CoronaCore.core",
+        "CoronaCore.core.managers",
+        "CoronaCore.core.entities",
+        "CoronaCore.core.entities.actor",
+    ]
+    old_modules = {name: sys.modules.get(name) for name in module_names}
+    sys.modules["CoronaCore"] = fake_corona
+    sys.modules["CoronaCore.core"] = fake_core
+    sys.modules["CoronaCore.core.managers"] = fake_managers
+    sys.modules["CoronaCore.core.entities"] = fake_entities
+    sys.modules["CoronaCore.core.entities.actor"] = fake_actor_module
+
+    def restore():
+        for name, old in old_modules.items():
+            if old is None:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = old
+
+    return scene, restore
+
+
+def _actor_by_name(scene, name):
+    return next((actor for actor in scene.get_actors() if actor.name == name), None)
+
+
+def test_scene_framework_indoor_fallback_generates_room_box_only():
+    scene, restore = _install_fake_corona_scene()
+    try:
+        composer = SceneComposer(room_size=[5.0, 3.0, 3.0], scene_name="indoor_matrix")
+        asset_dir = Path(_named_test_dir("framework_indoor"))
+        composer._generated_asset_dir = lambda: (asset_dir, "tmp/framework_indoor")
+
+        composer._generate_scene_framework("一个可爱的室内卧室，有床、台灯和小书桌")
+    finally:
+        restore()
+
+    room_box = _actor_by_name(scene, "__room_box")
+    assert room_box is not None
+    assert _actor_by_name(scene, "__room_terrain") is None
+    assert room_box.scale == [5.0, 3.0, 3.0]
+    assert room_box.position == [0.0, 1.5, 0.0]
+    print("[OK] indoor fallback creates room_box only")
+
+
+def test_scene_framework_outdoor_fallback_generates_terrain_only():
+    scene, restore = _install_fake_corona_scene()
+    try:
+        composer = SceneComposer(room_size=[5.0, 3.0, 3.0], scene_name="outdoor_matrix")
+        asset_dir = Path(_named_test_dir("framework_outdoor"))
+        composer._generated_asset_dir = lambda: (asset_dir, "tmp/framework_outdoor")
+
+        composer._generate_scene_framework("一个温暖神秘的室外夜晚幻想集市，有入口、摊位和灯光")
+    finally:
+        restore()
+
+    terrain = _actor_by_name(scene, "__room_terrain")
+    assert terrain is not None
+    assert _actor_by_name(scene, "__room_box") is None
+    assert terrain.scale and terrain.scale[0] >= 18.0
+    assert terrain.position and len(terrain.position) == 3
+    print("[OK] outdoor fallback creates terrain only")
+
+
+def test_single_indoor_box_decompose_fallback_keeps_room_box():
+    scene, restore = _install_fake_corona_scene()
+    try:
+        composer = SceneComposer(room_size=[5.0, 3.0, 3.0], scene_name="treasure_room")
+        asset_dir = Path(_named_test_dir("framework_treasure_room"))
+        composer._generated_asset_dir = lambda: (asset_dir, "tmp/framework_treasure_room")
+        composer._llm_decompose = lambda _text: [{  # type: ignore[method-assign]
+            "id": "treasure",
+            "name": "山贼藏宝室",
+            "role": "indoor",
+            "enclosure": "box",
+            "size": [6.0, 5.0, 3.0],
+            "style_context": {"material_palette": ["stone", "wood"]},
+        }]
+
+        composer.zone_tree = composer.decompose_zone_tree("山贼据点里的藏宝室，有藏宝箱、木桶和武器架")
+        composer._generate_scene_framework("山贼据点里的藏宝室，有藏宝箱、木桶和武器架")
+    finally:
+        restore()
+
+    room_box = _actor_by_name(scene, "__room_box")
+    assert room_box is not None
+    assert _actor_by_name(scene, "__room_terrain") is None
+    assert room_box.scale == [6.0, 3.0, 5.0]
+    assert room_box.position == [0.0, 1.5, 0.0]
+    print("[OK] single indoor box decompose fallback keeps room_box")
+
+
+def test_scene_framework_mixed_zone_tree_generates_terrain_and_room_box():
+    scene, restore = _install_fake_corona_scene()
+    try:
+        terrain = Zone(
+            zone_id="market",
+            name="night market",
+            role="outdoor",
+            enclosure="terrain",
+            volume=Volume(center=[0.0, 0.0, 0.0], size=[18.0, 18.0, 0.0]),
+        )
+        room = Zone(
+            zone_id="rest_area",
+            name="rest area",
+            role="indoor",
+            enclosure="box",
+            volume=Volume(center=[0.0, 1.5, 0.0], size=[5.0, 5.0, 3.0]),
+            connectors=[
+                Connector(
+                    connector_id="door_rest_area",
+                    type="door",
+                    position=[0.0, 0.0, 2.5],
+                    size=[1.2, 2.2],
+                    target_zone_id="rest_area",
+                )
+            ],
+        )
+        terrain.sub_zones.append(room)
+        composer = SceneComposer(room_size=[5.0, 3.0, 3.0], scene_name="mixed_matrix")
+        composer.zone_tree = ZoneTree(root=terrain)
+        asset_dir = Path(_named_test_dir("framework_mixed"))
+        composer._generated_asset_dir = lambda: (asset_dir, "tmp/framework_mixed")
+
+        composer._generate_scene_framework("室外夜晚幻想集市里有一个可进入的小休息区")
+    finally:
+        restore()
+
+    terrain_actor = _actor_by_name(scene, "__room_terrain")
+    room_box = _actor_by_name(scene, "__room_box")
+    assert terrain_actor is not None
+    assert room_box is not None
+    assert terrain_actor.scale and terrain_actor.scale[0] >= 18.0
+    assert room_box.scale == [5.0, 3.0, 5.0]
+    assert room_box.position == [0.0, 1.5, 0.0]
+    print("[OK] mixed zone_tree creates terrain and room_box")
+
+
+def test_mixed_outdoor_structure_fallback_creates_terrain_and_room_box_when_llm_fails():
+    composer = SceneComposer(room_size=[5.0, 3.0, 3.0], scene_name="mixed_yurt")
+    composer._llm_decompose = lambda _text: []
+
+    tree = composer.decompose_zone_tree("草原上有一个蒙古包，里面有毯子、桌子和火炉")
+
+    assert tree is not None
+    zones = tree.list_all_zones()
+    assert [zone.enclosure for zone in zones] == ["terrain", "box"]
+    assert zones[0].role == "outdoor"
+    assert zones[1].role == "indoor"
+    assert zones[1].metadata.get("parent") == "outdoor_ground"
+    assert any(connector.type == "door" for connector in zones[1].connectors)
+    print("[OK] mixed outdoor structure fallback creates terrain + room box when LLM fails")
+
+
+def test_mixed_outdoor_structure_repairs_terrain_only_llm_decompose():
+    composer = SceneComposer(room_size=[5.0, 3.0, 3.0], scene_name="mixed_terrain_only")
+    composer._llm_decompose = lambda _text: [
+        {
+            "id": "grassland",
+            "name": "草原地形",
+            "role": "outdoor",
+            "enclosure": "terrain",
+            "size": [18.0, 18.0, 0.0],
+        }
+    ]
+
+    tree = composer.decompose_zone_tree("草原上有一个蒙古包，里面有毯子、桌子和火炉")
+
+    assert tree is not None
+    zones = tree.list_all_zones()
+    assert [zone.enclosure for zone in zones] == ["terrain", "box"]
+    assert zones[1].metadata.get("parent") == "grassland"
+    assert any(connector.type == "door" for connector in zones[1].connectors)
+    print("[OK] mixed guardrail repairs terrain-only LLM zone into terrain + room_box")
+
+
+def test_mixed_outdoor_structure_repairs_box_only_llm_decompose():
+    composer = SceneComposer(room_size=[5.0, 3.0, 3.0], scene_name="mixed_box_only")
+    composer._llm_decompose = lambda _text: [
+        {
+            "id": "yurt_inside",
+            "name": "蒙古包内部",
+            "role": "indoor",
+            "enclosure": "box",
+            "size": [5.0, 5.0, 3.0],
+        }
+    ]
+
+    tree = composer.decompose_zone_tree("户外营地有一个蒙古包，内部有地毯和桌子")
+
+    assert tree is not None
+    zones = tree.list_all_zones()
+    assert [zone.enclosure for zone in zones] == ["terrain", "box"]
+    assert zones[1].zone_id == "yurt_inside"
+    assert zones[1].metadata.get("parent") == "outdoor_ground"
+    assert any(connector.type == "door" for connector in zones[1].connectors)
+    print("[OK] mixed guardrail repairs box-only LLM zone into terrain + room_box")
+
+
+def test_mixed_outdoor_structure_keeps_valid_shell_zone():
+    composer = SceneComposer(room_size=[5.0, 3.0, 3.0], scene_name="mixed_shell")
+    composer._llm_decompose = lambda _text: [
+        {
+            "id": "camp_ground",
+            "name": "营地地形",
+            "role": "outdoor",
+            "enclosure": "terrain",
+            "size": [18.0, 18.0, 0.0],
+        },
+        {
+            "id": "yurt_shell",
+            "name": "蒙古包",
+            "role": "indoor",
+            "enclosure": "shell",
+            "parent": "camp_ground",
+            "shell_asset": "蒙古包",
+            "size": [5.0, 5.0, 3.0],
+        },
+    ]
+
+    tree = composer.decompose_zone_tree("户外营地有一个蒙古包，里面有毯子和桌子")
+
+    assert tree is not None
+    zones = tree.list_all_zones()
+    assert [zone.enclosure for zone in zones] == ["terrain", "shell"]
+    assert zones[1].metadata.get("parent") == "camp_ground"
+    assert zones[1].primary_shell_asset_id == "蒙古包"
+    print("[OK] mixed guardrail preserves valid terrain + shell zone")
+
+
+def test_room_box_generation_is_not_blocked_by_existing_room_terrain():
+    class ExistingActor:
+        def __init__(self, name):
+            self.name = name
+
+    class FakeActor(ExistingActor):
+        def __init__(self, name, route="", actor_type="", parent_scene=None):
+            super().__init__(name)
+            self.route = route
+            self.actor_type = actor_type
+            self.parent_scene = parent_scene
+            self.position = None
+            self.scale = None
+            self._mechanics = SimpleNamespace(set_physics_enabled=lambda _enabled: None)
+
+        def set_position(self, value, _world=True):
+            self.position = list(value)
+
+        def set_scale(self, value, _world=True):
+            self.scale = list(value)
+
+    class FakeScene:
+        def __init__(self):
+            self.actors = [ExistingActor("__room_terrain")]
+
+        def get_actors(self):
+            return list(self.actors)
+
+        def add_actor(self, actor):
+            self.actors.append(actor)
+
+    scene = FakeScene()
+    fake_scene_manager = SimpleNamespace(get=lambda _route="": scene, list_all=lambda: ["fake.scene"])
+
+    fake_corona = types.ModuleType("CoronaCore")
+    fake_core = types.ModuleType("CoronaCore.core")
+    fake_managers = types.ModuleType("CoronaCore.core.managers")
+    fake_entities = types.ModuleType("CoronaCore.core.entities")
+    fake_actor_module = types.ModuleType("CoronaCore.core.entities.actor")
+    fake_managers.scene_manager = fake_scene_manager
+    fake_actor_module.Actor = FakeActor
+
+    module_names = [
+        "CoronaCore",
+        "CoronaCore.core",
+        "CoronaCore.core.managers",
+        "CoronaCore.core.entities",
+        "CoronaCore.core.entities.actor",
+    ]
+    old_modules = {name: sys.modules.get(name) for name in module_names}
+    try:
+        sys.modules["CoronaCore"] = fake_corona
+        sys.modules["CoronaCore.core"] = fake_core
+        sys.modules["CoronaCore.core.managers"] = fake_managers
+        sys.modules["CoronaCore.core.entities"] = fake_entities
+        sys.modules["CoronaCore.core.entities.actor"] = fake_actor_module
+
+        composer = SceneComposer()
+        composer.zone_tree = ZoneTree(root=Zone(
+            zone_id="room",
+            name="room",
+            role="indoor",
+            enclosure="box",
+            volume=Volume(center=[0.0, 1.5, 0.0], size=[5.0, 5.0, 3.0]),
+        ))
+        asset_dir = Path(_named_test_dir("room_box_with_terrain"))
+        composer._generated_asset_dir = lambda: (asset_dir, "tmp/room_box_with_terrain")
+
+        composer._generate_room_box()
+    finally:
+        for name, old in old_modules.items():
+            if old is None:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = old
+
+    names = [actor.name for actor in scene.get_actors()]
+    assert "__room_terrain" in names
+    assert "__room_box" in names
+    print("[OK] existing __room_terrain no longer blocks __room_box generation")
+
+
+def test_indoor_detection_prefers_explicit_room_over_terrain_context():
+    prompt = (
+        "用户确认开始生成：奶油风卧室\n"
+        "## 地形与边界约束\n"
+        "terrain_spec={'type': 'neutral_ground', 'surface': 'neutral', 'walkable': True}"
+    )
+
+    assert SceneComposer._detect_scene_indoor(prompt) is True
+    print("[OK] explicit indoor room wins over generic terrain context")
+
+
+def test_indoor_room_budget_expands_for_many_items():
+    composer = SceneComposer(room_size=[5.0, 3.0, 3.0])
+    items = [{"name": f"家具{i}"} for i in range(8)]
+
+    composer._apply_indoor_room_budget(items, "做一个可爱的卧室")
+
+    assert 6.5 <= composer.room_size[0] <= 8.5
+    assert 6.5 <= composer.room_size[1] <= 8.5
+    assert composer.room_size[2] >= 3.0
+    assert composer._last_room_budget_summary["changed"] is True
+    print("[OK] indoor room budget expands moderately for dense furniture lists")
+
+
+def test_indoor_room_budget_stays_compact_for_small_rooms():
+    composer = SceneComposer(room_size=[5.0, 3.0, 3.0])
+
+    composer._apply_indoor_room_budget([{"name": "床"}, {"name": "台灯"}, {"name": "地毯"}], "可爱卧室")
+
+    assert 5.5 <= composer.room_size[0] <= 6.8
+    assert 5.5 <= composer.room_size[1] <= 6.8
+    assert composer.room_size[2] >= 3.0
+    print("[OK] indoor room budget stays compact for small rooms")
+
+
+def test_indoor_room_budget_expands_for_large_furniture():
+    composer = SceneComposer(room_size=[5.0, 3.0, 3.0])
+
+    composer._apply_indoor_room_budget([{"name": "床"}, {"name": "衣柜"}], "可爱卧室")
+
+    assert 5.5 <= composer.room_size[0] <= 7.2
+    assert 5.5 <= composer.room_size[1] <= 7.2
+    assert composer.room_size[2] >= 3.2
+    print("[OK] large indoor furniture expands room footprint")
+
+
+def test_indoor_room_budget_respects_larger_zone_tree_box():
+    composer = SceneComposer(room_size=[5.0, 3.0, 3.0])
+    composer.zone_tree = ZoneTree(root=Zone(
+        zone_id="room",
+        name="room",
+        role="indoor",
+        enclosure="box",
+        volume=Volume(center=[0.0, 1.6, 0.0], size=[9.0, 9.0, 3.2]),
+    ))
+
+    composer._apply_indoor_room_budget([{"name": "床"}], "卧室")
+
+    assert composer.room_size == [9.0, 9.0, 3.2]
+    assert composer.zone_tree.root.volume.size == [9.0, 9.0, 3.2]
+    print("[OK] larger zone_tree boxes are not shrunk by room budget")
+
+
+def test_room_bounds_clamp_uses_actor_extents_and_reports_oversized():
+    pos, changed, issue, fit_scale = SceneComposer._clamp_position_to_room_bounds(
+        [2.4, 0.2, 2.4],
+        [0.5, 0.5, 0.5],
+        [5.0, 5.0, 3.0],
+    )
+
+    assert changed is True
+    assert issue == ""
+    assert fit_scale == 1.0
+    assert pos[0] <= 1.85
+    assert pos[2] <= 1.85
+
+    _pos, changed, issue, fit_scale = SceneComposer._clamp_position_to_room_bounds(
+        [0.0, 0.0, 0.0],
+        [5.0, 1.0, 5.0],
+        [5.0, 5.0, 3.0],
+    )
+    assert changed is False
+    assert issue == "object_too_large_for_room_bounds"
+    assert fit_scale < 0.65
+    print("[OK] room bounds clamp accounts for actor extents and reports oversized objects")
+
+
 if __name__ == "__main__":
     test_zone_and_asset_routing()
     test_zone_and_door_aabb_helpers()
@@ -1234,18 +1828,21 @@ if __name__ == "__main__":
     test_f5_demo_mode_reports_vlm_disabled_in_final_text()
     test_aabb_review_issues_flow_to_coordinator_review_result()
     test_vlm_actionable_advice_flows_to_coordinator_review_result()
+    test_vlm_low_confidence_advisory_flows_to_coordinator_review_result()
     test_vlm_review_uses_composer_hooks_under_engine_gate()
     test_vlm_target_priority_prefers_scene_anchors_and_high_risk_additions()
     test_vlm_checkpoint_policy_selects_structure_high_risk_and_final_targets()
     test_vlm_high_risk_priority_skips_plain_small_items()
     test_vlm_review_result_carries_checkpoint_and_batch_context()
     test_vlm_checkpoint_reports_summarize_all_stages_without_internal_leakage()
+    test_vlm_checkpoint_progress_message_includes_advisory_details()
     test_final_report_text_includes_vlm_status_without_duplicate()
     test_scene_composer_injects_shared_scoped_memory_only()
     test_scene_composer_can_focus_scoped_memory_on_target_actor()
     test_pending_generation_delta_creates_resource_request_for_missing_asset()
     test_batch_resource_plan_carries_contract_version_and_interventions()
     test_pending_resource_request_resolves_models_into_current_batch()
+    test_pending_resource_request_defers_while_ready_assets_can_still_import()
     test_pending_resource_request_runs_image_stage_before_model_retrieval()
     test_scene_composer_passes_generated_images_to_model_retrieval_workflow()
     test_pending_resource_request_backlog_is_visible_when_batch_limit_is_hit()
@@ -1253,4 +1850,19 @@ if __name__ == "__main__":
     test_pending_resource_request_reports_provider_unavailable_without_fake_path()
     test_fantasy_market_terrain_profile_uses_low_decorative_boundary()
     test_warm_mysterious_market_overrides_generic_stone_wall_boundary()
+    test_scene_framework_indoor_fallback_generates_room_box_only()
+    test_scene_framework_outdoor_fallback_generates_terrain_only()
+    test_single_indoor_box_decompose_fallback_keeps_room_box()
+    test_scene_framework_mixed_zone_tree_generates_terrain_and_room_box()
+    test_mixed_outdoor_structure_fallback_creates_terrain_and_room_box_when_llm_fails()
+    test_mixed_outdoor_structure_repairs_terrain_only_llm_decompose()
+    test_mixed_outdoor_structure_repairs_box_only_llm_decompose()
+    test_mixed_outdoor_structure_keeps_valid_shell_zone()
+    test_room_box_generation_is_not_blocked_by_existing_room_terrain()
+    test_indoor_detection_prefers_explicit_room_over_terrain_context()
+    test_indoor_room_budget_expands_for_many_items()
+    test_indoor_room_budget_stays_compact_for_small_rooms()
+    test_indoor_room_budget_expands_for_large_furniture()
+    test_indoor_room_budget_respects_larger_zone_tree_box()
+    test_room_bounds_clamp_uses_actor_extents_and_reports_oversized()
     print("\n=== progressive mixed geometry ALL PASS ===")

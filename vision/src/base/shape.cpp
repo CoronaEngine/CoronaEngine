@@ -228,16 +228,20 @@ ShapeGroup::ShapeGroup(vision::ShapeInstance inst) {
     aabb.extend(inst.aabb);
     inst.set_name(ocarina::format("{}_0", name()));
 
-    instances_.push_back(make_shared<ShapeInstance>(inst));
+    instances_.push_back(make_shared<ShapeInstance>(ocarina::move(inst)));
 }
 
 void ShapeGroup::add_instance(const vision::ShapeInstance &instance) noexcept {
     instances_.push_back(make_shared<ShapeInstance>(instance));
 }
 
+void ShapeGroup::add_instance(vision::ShapeInstance &&instance) noexcept {
+    instances_.push_back(make_shared<ShapeInstance>(ocarina::move(instance)));
+}
+
 void ShapeGroup::add_instances(vector<vision::ShapeInstance> instances) noexcept {
-    for (const auto &instance : instances) {
-        add_instance(instance);
+    for (auto &instance : instances) {
+        add_instance(ocarina::move(instance));
     }
 }
 

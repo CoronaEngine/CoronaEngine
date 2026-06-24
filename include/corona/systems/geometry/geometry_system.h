@@ -1,6 +1,6 @@
 #pragma once
 
-#include <Horizon.h>
+#include <horizon.h>
 
 #include <corona/events/geometry_system_events.h>
 #include <corona/events/scene_system_events.h>
@@ -81,10 +81,10 @@ struct SceneStats {
  *
  */
 struct LODMeshBuffers {
-    HardwareBuffer vertex_buffer;    // GPU 顶点缓冲（Vertex Shader 读取）
-    HardwareBuffer index_buffer;     // GPU 索引缓冲（组装三角形）
-    HardwareBuffer vertex_storage;   // GPU 顶点 StorageBuffer（Compute Shader 用）
-    HardwareBuffer index_storage;    // GPU 索引 StorageBuffer（Compute Shader 用）
+    Horizon::HardwareBuffer vertex_buffer;    // GPU 顶点缓冲（Vertex Shader 读取）
+    Horizon::HardwareBuffer index_buffer;     // GPU 索引缓冲（组装三角形）
+    Horizon::HardwareBuffer vertex_storage;   // GPU 顶点 StorageBuffer（Compute Shader 用）
+    Horizon::HardwareBuffer index_storage;    // GPU 索引 StorageBuffer（Compute Shader 用）
     float  error            = 0.0f;  // 该级别的几何误差（QEM 计算得出，用于调试）
     float  screen_threshold = 1.0f;  // 屏幕占比阈值：低于此值时切换到此级别
     bool   ready            = false; // GPU 缓冲是否已创建完毕（创建前不能用于渲染）
@@ -98,9 +98,9 @@ struct LODMeshBuffers {
  * LODGenerationOptions 控制（参见 corona/resource/types/scene.h）。
  */
 struct MeshSimplificationConfig {
-    bool enabled      = true;   // 总开关：false 时整个 LOD 系统不工作
+    bool enabled      = false;  // 总开关：false 时整个 LOD 系统不工作
     int  max_lod_levels = 4;    // 最大 LOD 级别数（含 LOD 0 原始精度）
-    bool auto_on_load = true;   // 模型加载后是否自动将导入时的 LOD 数据上传 GPU
+    bool auto_on_load = false;  // 模型加载后是否自动将导入时的 LOD 数据上传 GPU
 };
 
 /**

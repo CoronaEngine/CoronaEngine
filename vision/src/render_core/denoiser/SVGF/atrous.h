@@ -17,6 +17,7 @@ struct CombinedAtrousParam {
     BufferDesc<RadType4> indirect_src;
     BufferDesc<RadType4> indirect_dst;
     BufferDesc<TriangleHit> visibility_buffer;
+    BufferDesc<SVGFDataDual> svgf_buffer;
     array_float3 camera_pos{};
     float l_phi{};
     float n_phi{};
@@ -24,12 +25,13 @@ struct CombinedAtrousParam {
     int step_size{};
     uint iteration{};
     uint frame_index{};
+    uint write_history{};
 };
 
 }// namespace vision::svgf
 
 OC_PARAM_STRUCT(vision::svgf, CombinedAtrousParam, direct_src, direct_dst, indirect_src, indirect_dst,
-visibility_buffer, camera_pos, l_phi, n_phi, z_phi, step_size, iteration, frame_index){};
+visibility_buffer, svgf_buffer, camera_pos, l_phi, n_phi, z_phi, step_size, iteration, frame_index, write_history){};
 
 namespace vision::svgf {
 class SVGF;

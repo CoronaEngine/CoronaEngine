@@ -26,7 +26,7 @@
         <span class="absolute left-0 top-0 bottom-0 w-0.5 bg-[#84a65b] rounded-l-xl opacity-0 group-hover:opacity-100 transition-opacity duration-500"></span>
         <span class="flex items-center justify-center gap-3">
           <svg class="w-6 h-6 text-[#84a65b]/70" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H19a1 1 0 0 1 1 1v18a1 1 0 0 1-1 1H6.5A2.5 2.5 0 0 1 4 19.5Z"/><path d="M8 7h6"/><path d="M8 11h8"/><path d="M8 15h5"/></svg>
-          <span>新建游戏</span>
+          <span>{{ t('start.newGame') }}</span>
         </span>
       </button>
 
@@ -37,7 +37,7 @@
         <span class="absolute left-0 top-0 bottom-0 w-0.5 bg-[#84a65b] rounded-l-xl opacity-0 group-hover:opacity-100 transition-opacity duration-500"></span>
         <span class="flex items-center justify-center gap-3">
           <svg class="w-6 h-6 text-[#84a65b]/70" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76Z"/></svg>
-          <span>继续游戏</span>
+          <span>{{ t('start.continueGame') }}</span>
         </span>
       </button>
 
@@ -48,7 +48,7 @@
         <span class="absolute left-0 top-0 bottom-0 w-0.5 bg-[#84a65b] rounded-l-xl opacity-0 group-hover:opacity-100 transition-opacity duration-500"></span>
         <span class="flex items-center justify-center gap-3">
           <svg class="w-6 h-6 text-[#84a65b]/70" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-          <span>加入游戏</span>
+          <span>{{ t('start.joinGame') }}</span>
         </span>
       </button>
 
@@ -59,7 +59,7 @@
         <span class="absolute left-0 top-0 bottom-0 w-0.5 bg-red-500/50 rounded-l-xl opacity-0 group-hover:opacity-100 transition-opacity duration-500"></span>
         <span class="flex items-center justify-center gap-3">
           <svg class="w-6 h-6 text-gray-500 group-hover:text-red-400/70 transition-colors duration-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
-          <span>离开游戏</span>
+          <span>{{ t('start.leaveGame') }}</span>
         </span>
       </button>
     </div>
@@ -73,16 +73,18 @@
 
 <script setup>
 import { useRouter } from 'vue-router';
+import { useI18n } from 'vue-i18n';
 import { appService } from '@/utils/bridge.js';
 
 const router = useRouter();
+const { t } = useI18n();
 
 function handleStoryMode() {
   router.push('/NewGame');
 }
 
 function handleCreativeMode() {
-  router.push('/CreateGame');
+  router.push('/JoinGame');
 }
 
 function handleRecentGames() {

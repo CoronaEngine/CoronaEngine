@@ -12,7 +12,7 @@
 #include <vector>
 #include <filesystem>
 
-#include "Horizon.h"
+#include "horizon.h"
 
 // Forward declarations
 
@@ -21,16 +21,16 @@ namespace Corona {
 class Model;
 
 struct MeshDevice {
-    HardwareBuffer indexBuffer;
-    HardwareBuffer vertexBuffer;
+    Horizon::HardwareBuffer indexBuffer;
+    Horizon::HardwareBuffer vertexBuffer;
 
     // StorageBuffer mirrors for compute shader (VBuffer resolve) access.
     // Horizon BufferUsage is non-combinable, so we keep separate copies.
-    HardwareBuffer indexStorageBuffer;
-    HardwareBuffer vertexStorageBuffer;
+    Horizon::HardwareBuffer indexStorageBuffer;
+    Horizon::HardwareBuffer vertexStorageBuffer;
 
     uint32_t materialIndex;
-    HardwareImage textureBuffer;
+    Horizon::HardwareImage textureBuffer;
 
     // 材质颜色 (RGBA)
     std::array<float, 4> materialColor{1.0f, 1.0f, 1.0f, 1.0f};
@@ -70,6 +70,8 @@ struct GeometryDevice {
     std::uintptr_t transform_handle{};
     std::uintptr_t model_resource_handle{};
     std::vector<MeshDevice> mesh_handles;
+    ktm::fvec3 native_local_correction_offset{0.0f, 0.0f, 0.0f};
+    float native_local_correction_scale{1.0f};
 };
 
 struct MechanicsDevice {
@@ -193,6 +195,7 @@ struct CameraDevice {
     CameraRenderBackend render_backend{CameraRenderBackend::Native};
     CameraVisionRenderMode vision_render_mode{CameraVisionRenderMode::PathTracing};
     bool view_open{false};
+    bool viewport_rect_active{false};
     int view_x{120};
     int view_y{120};
     int view_width{960};
@@ -382,12 +385,12 @@ struct SceneDevice {
 };
 
 struct ImageDevice {
-    HardwareImage image;
-    HardwareExecutor executor;
+    Horizon::HardwareImage image;
+    Horizon::SubmitReceipt submit_receipt;
 
     /// Written by DisplaySystem after compositing finishes reading the image.
     /// Producers wait on this before overwriting with new content to prevent GPU read/write races.
-    HardwareExecutor consumed_executor;
+    Horizon::SubmitReceipt consumed_receipt;
 };
 
 class SharedDataHub {

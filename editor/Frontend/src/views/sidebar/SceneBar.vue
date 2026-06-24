@@ -1,5 +1,5 @@
 <template>
-  <div class="rounded-lg overflow-hidden flex flex-col flex-1 min-h-0 w-full relative bg-[#282828]/70">
+  <div class="scene-tools-panel rounded-lg overflow-hidden flex flex-col flex-1 min-h-0 h-full w-full relative bg-[#282828]/70">
     <DockTitleBar
       v-if="!isDocked"
       title="场景管理"
@@ -29,6 +29,35 @@
           >
             unsupported {{ sceneVision.unsupported_count }}
           </span>
+        </div>
+      </div>
+
+      <div class="viewport-control-strip" data-testid="scenebar-viewport-controls">
+        <div class="viewport-control-group" role="group" aria-label="视口 UI 模式">
+          <button
+            v-for="item in viewportControlState.viewportUiModes"
+            :key="item.mode"
+            class="viewport-mode-button"
+            :class="{ active: viewportControlState.viewportUiMode === item.mode }"
+            type="button"
+            :title="item.title"
+            @click="setViewportUiModeFromSceneBar(item.mode)"
+          >
+            {{ item.label }}
+          </button>
+        </div>
+        <div class="viewport-speed-control">
+          <span>速度</span>
+          <input
+            v-model.number="viewportControlState.cameraSpeed"
+            type="range"
+            min="0.01"
+            max="2"
+            step="0.01"
+            title="摄像头移动速度"
+            @input="handleCameraSpeedInput"
+          />
+          <strong>{{ cameraSpeedLabel }}</strong>
         </div>
       </div>
 
@@ -294,22 +323,6 @@
               stroke-linejoin="round"
               stroke-width="2"
               d="M3 12a9 9 0 1018 0 9 9 0 00-18 0zm9-9v18m-9-9h18"
-            />
-          </svg>
-        </button>
-        <!-- 打开外部 Vision 场景文件（仅 Vision 后端激活时显示） -->
-        <button
-          v-if="visionAvailable"
-          class="p-1.5 hover:bg-[#545454] rounded flex items-center gap-0.5 text-[#e0e0e0]"
-          title="打开 Vision 场景文件 (.json)"
-          @click.stop="OpenVisionScene"
-        >
-          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              stroke-width="2"
-              d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V7z"
             />
           </svg>
         </button>
@@ -681,6 +694,104 @@ import { useDockPanel } from '@/composables/useDockPanel.js';
 const { closePanel: closeDockPanel, isDocked } = useDockPanel();
 
 const { error: logError, warn: logWarn } = useErrorHandler('SceneBar');
+
+const EDITOR_CONTROLS_KEY = '__coronaEditorControls';
+const defaultViewportControls = {
+  available: false,
+  viewportUiMode: 'flat2d',
+  viewportUiModes: [
+    { mode: 'flat2d', label: '2D UI', title: '普通屏幕 UI', active: true },
+    { mode: 'stereo3d', label: '3D UI', title: '光场屏立体 UI', active: false },
+  ],
+  cameraSpeed: 0.2,
+};
+const viewportControlState = ref({ ...defaultViewportControls });
+const cameraSpeedLabel = computed(() =>
+  Number(viewportControlState.value.cameraSpeed || 0).toFixed(2)
+);
+let viewportControlPollTimer = null;
+let speedApplyTimer = null;
+
+const normalizeViewportControls = (state = {}) => {
+  const modes = Array.isArray(state.viewportUiModes) && state.viewportUiModes.length > 0
+    ? state.viewportUiModes
+    : defaultViewportControls.viewportUiModes;
+  const speed = Number(state.cameraSpeed);
+  return {
+    available: Boolean(state.available),
+    viewportUiMode: state.viewportUiMode || defaultViewportControls.viewportUiMode,
+    viewportUiModes: modes.map((item) => ({
+      mode: item.mode,
+      label: item.label,
+      title: item.title || item.label,
+      active: Boolean(item.active),
+    })),
+    cameraSpeed: Number.isFinite(speed) ? Math.min(2, Math.max(0.01, speed)) : defaultViewportControls.cameraSpeed,
+  };
+};
+
+const getEditorControls = () => {
+  if (typeof window === 'undefined') return null;
+  return window[EDITOR_CONTROLS_KEY] || null;
+};
+
+const syncViewportControls = (state = {}) => {
+  viewportControlState.value = normalizeViewportControls(state);
+};
+
+const requestViewportControlsState = () => {
+  const controls = getEditorControls();
+  if (controls && typeof controls.getState === 'function') {
+    try {
+      syncViewportControls(controls.getState());
+      return;
+    } catch (error) {
+      logWarn('读取视口控制状态失败', error);
+    }
+  }
+  appService
+    .crossTabBroadcast('viewport-controls-request', { action: 'getState' })
+    .catch(() => {});
+};
+
+const setViewportUiModeFromSceneBar = async (mode) => {
+  const controls = getEditorControls();
+  if (controls && typeof controls.setViewportUiMode === 'function') {
+    const nextState = await controls.setViewportUiMode(mode);
+    if (nextState !== false) syncViewportControls(nextState);
+    return;
+  }
+  appService
+    .crossTabBroadcast('viewport-controls-request', { action: 'setViewportUiMode', mode })
+    .catch((error) => logWarn('切换视口 UI 模式失败', error));
+};
+
+const applyCameraSpeedFromSceneBar = async (value) => {
+  const speed = Math.min(2, Math.max(0.01, Number(value) || defaultViewportControls.cameraSpeed));
+  const controls = getEditorControls();
+  if (controls && typeof controls.setCameraSpeed === 'function') {
+    const nextState = await controls.setCameraSpeed(speed);
+    if (nextState !== false) syncViewportControls(nextState);
+    return;
+  }
+  appService
+    .crossTabBroadcast('viewport-controls-request', { action: 'setCameraSpeed', value: speed })
+    .catch((error) => logWarn('设置摄像头速度失败', error));
+};
+
+const handleCameraSpeedInput = () => {
+  if (speedApplyTimer) {
+    clearTimeout(speedApplyTimer);
+  }
+  speedApplyTimer = window.setTimeout(() => {
+    speedApplyTimer = null;
+    applyCameraSpeedFromSceneBar(viewportControlState.value.cameraSpeed);
+  }, 60);
+};
+
+const onViewportControlsState = (state) => {
+  syncViewportControls(state);
+};
 
 const getTypeShort = (type) => {
   const lowerType = (type || 'obj').toLowerCase();
@@ -1464,45 +1575,6 @@ const ToggleRenderBackend = async () => {
   }
 };
 
-const OpenVisionScene = async () => {
-  try {
-    const sel = await sceneService.selectVisionScenePath();
-    const selPayload = sel?.data ?? sel;
-    if (selPayload?.status === 'canceled') {
-      return;
-    }
-    if (sel?.success === false || selPayload?.status === 'error' || !selPayload?.path) {
-      logError('Select Vision scene failed', selPayload?.message || sel?.error || 'no path selected');
-      return;
-    }
-
-    const result = await sceneService.importVisionSceneIntoCurrentScene(
-      currentSceneName.value,
-      selPayload.path,
-    );
-    const payload = result?.data ?? result;
-    if (result?.success === false || payload?.status === 'error') {
-      logError('Load Vision scene failed', payload?.message || result?.error || 'unknown error');
-      return;
-    }
-    if (payload?.camera?.name) {
-      selectedCameraName.value = payload.camera.name;
-    }
-    await OnInitObjTree();
-    await RefreshRenderBackendState();
-    const eventPayload = {
-      sceneId: currentSceneName.value,
-      cameraId: payload?.camera?.camera_id || payload?.camera?.id || null,
-      cameraName: payload?.camera?.name || null,
-      visionRenderMode: payload?.vision_render_mode || payload?.camera?.vision_render_mode || null,
-    };
-    coronaEventBus.emit('vision-scene-imported', eventPayload);
-    appService.crossTabBroadcast('vision-scene-imported', [eventPayload]).catch(() => {});
-  } catch (e) {
-    logError('Failed to open Vision scene', e);
-  }
-};
-
 const SetOutputMode = async (mode) => {
   ShowGBufferDropdown.value = false;
   try {
@@ -1861,11 +1933,6 @@ const DeleteActor = async (scene) => {
   sceneImages.value = sceneImages.value.filter((item) => item.name !== scene.name);
 
   try {
-  } catch {
-    // 忽略
-  }
-
-  try {
     await sceneService.removeActor(currentSceneName.value, scene.name);
   } catch {
     // 忽略
@@ -1955,8 +2022,11 @@ onMounted(async () => {
   setupFragmentListener();
   await OnInitObjTree();
   await RefreshRenderBackendState();
+  requestViewportControlsState();
+  viewportControlPollTimer = window.setInterval(requestViewportControlsState, 1000);
 
   // 监听 Python 推送的 actor-change：场景切换/物体变化时重新加载场景树
+  coronaEventBus.on('viewport-controls-state', onViewportControlsState);
   coronaEventBus.on('actor-change', onActorChangeEvent);
   coronaEventBus.on('scene-tree-changed', onSceneTreeChangedEvent);
 });
@@ -2037,6 +2107,14 @@ onUnmounted(() => {
     clearTimeout(searchIndexRetry);
     searchIndexRetry = null;
   }
+  if (viewportControlPollTimer) {
+    clearInterval(viewportControlPollTimer);
+    viewportControlPollTimer = null;
+  }
+  if (speedApplyTimer) {
+    clearTimeout(speedApplyTimer);
+    speedApplyTimer = null;
+  }
   clearFocusPoseCache();
   clearActorSingleClickTimer();
   actorFocusSeq++;
@@ -2051,7 +2129,106 @@ onUnmounted(() => {
     window.__coronaFocusPoseResult = previousFocusPoseResult;
   }
 
+  coronaEventBus.off('viewport-controls-state', onViewportControlsState);
   coronaEventBus.off('actor-change', onActorChangeEvent);
   coronaEventBus.off('scene-tree-changed', onSceneTreeChangedEvent);
 });
 </script>
+
+<style scoped>
+.scene-tools-panel {
+  background: linear-gradient(180deg, rgba(38, 42, 38, 0.96), rgba(28, 31, 29, 0.98));
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 18px 42px rgba(0, 0, 0, 0.34);
+}
+
+.viewport-control-strip {
+  display: grid;
+  grid-template-columns: minmax(124px, auto) minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.34);
+  background:
+    linear-gradient(180deg, rgba(31, 35, 31, 0.96), rgba(24, 27, 24, 0.96)),
+    #1b1f1b;
+}
+
+.viewport-control-group {
+  display: inline-grid;
+  grid-template-columns: repeat(2, minmax(52px, 1fr));
+  gap: 4px;
+  padding: 3px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 6px;
+  background: rgba(11, 13, 12, 0.58);
+}
+
+.viewport-mode-button {
+  height: 25px;
+  padding: 0 8px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: #b9c5b2;
+  background: transparent;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  transition:
+    background-color 140ms ease,
+    border-color 140ms ease,
+    color 140ms ease,
+    transform 140ms ease;
+}
+
+.viewport-mode-button:hover {
+  color: #ffffff;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.viewport-mode-button.active {
+  color: #ffffff;
+  border-color: rgba(138, 166, 106, 0.5);
+  background: rgba(138, 166, 106, 0.24);
+}
+
+.viewport-mode-button:active {
+  transform: translateY(1px);
+}
+
+.viewport-mode-button:focus-visible {
+  outline: 2px solid rgba(138, 166, 106, 0.72);
+  outline-offset: 1px;
+}
+
+.viewport-speed-control {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto minmax(72px, 1fr) 34px;
+  align-items: center;
+  gap: 8px;
+  color: #aeb9aa;
+  font-size: 11px;
+}
+
+.viewport-speed-control input[type='range'] {
+  width: 100%;
+  height: 3px;
+  accent-color: #8aa66a;
+  cursor: pointer;
+}
+
+.viewport-speed-control strong {
+  color: #dfe8da;
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+  font-weight: 600;
+  text-align: right;
+}
+
+@media (max-width: 380px) {
+  .viewport-control-strip {
+    grid-template-columns: 1fr;
+  }
+}
+</style>

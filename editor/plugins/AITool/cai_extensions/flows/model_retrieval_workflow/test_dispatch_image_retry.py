@@ -167,8 +167,42 @@ def test_cached_image_skips_image_retry():
     print("[OK] cached images skip image retry")
 
 
+def test_text_to_3d_hint_skips_image_retry_and_cached_image():
+    tool = FatalImageTool()
+    dispatch = _load_dispatch_module(tool)
+
+    dispatch._lookup_cached_model = lambda _name: ""
+    dispatch._lookup_cached_image = lambda name: "E:/cache/images/wire.png" if name == "铁丝网障碍" else ""
+
+    def fail_if_called(_elements, _session_id):
+        raise AssertionError("text_to_3d_preferred should not enter image retry")
+
+    dispatch._retry_failed_images = fail_if_called
+    result = dispatch.dispatch_node(
+        {
+            "session_id": "session-test",
+            "approved_elements": [
+                {
+                    "item_name": "铁丝网障碍",
+                    "image_prompt": "barbed wire obstacle, visible thickness and depth",
+                    "generation_mode_hint": "text_to_3d_preferred",
+                },
+            ],
+            "generated_images": {},
+        }
+    )
+
+    tasks = result["intermediate"]["retrieval_tasks"]
+    assert len(tasks) == 1
+    assert tasks[0]["item_name"] == "铁丝网障碍"
+    assert tasks[0]["image_url"].startswith("__text_to_3d__:")
+    assert tasks[0]["generation_mode_hint"] == "text_to_3d_preferred"
+    print("[OK] text-to-3D guardrail skips cached image and image retry")
+
+
 if __name__ == "__main__":
     test_fatal_image_retry_error_stops_fanout()
     test_cached_local_model_skips_image_retry()
     test_cached_image_skips_image_retry()
+    test_text_to_3d_hint_skips_image_retry_and_cached_image()
     print("\n=== dispatch image retry ALL PASS ===")

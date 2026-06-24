@@ -51,7 +51,7 @@ endfunction()
 # ------------------------------------------------------------------------------
 FetchContent_Declare(Horizon
     GIT_REPOSITORY https://github.com/CoronaEngine/Horizon.git
-    GIT_TAG merge
+    GIT_TAG f850f17a30abe4bbbc9c5a90f4e7c20167c10be5
     EXCLUDE_FROM_ALL
 )
 
@@ -140,11 +140,32 @@ FetchContent_Declare(
         EXCLUDE_FROM_ALL
 )
 
+set(_CORONA_ONETBB_LOCAL_SOURCE_DIR
+    "${CMAKE_SOURCE_DIR}/third_party/tbb/oneapi-tbb-2022.3.0"
+)
+if(EXISTS "${_CORONA_ONETBB_LOCAL_SOURCE_DIR}/CMakeLists.txt")
+    set(_CORONA_ONETBB_SOURCE_LABEL "vendored source")
+    FetchContent_Declare(
+            oneTBB
+            SOURCE_DIR "${_CORONA_ONETBB_LOCAL_SOURCE_DIR}"
+            EXCLUDE_FROM_ALL
+    )
+else()
+    set(_CORONA_ONETBB_SOURCE_LABEL "release archive")
+    FetchContent_Declare(
+            oneTBB
+            URL https://github.com/uxlfoundation/oneTBB/archive/refs/tags/v2022.3.0.zip
+            DOWNLOAD_EXTRACT_TIMESTAMP FALSE
+            EXCLUDE_FROM_ALL
+    )
+endif()
+
 # ------------------------------------------------------------------------------
 # Fetch and enable dependencies
 # ------------------------------------------------------------------------------
 
 set(BUILD_TESTING OFF CACHE BOOL "Disable building tests for 3rd party dependencies" FORCE)
+set(ASSIMP_BUILD_USD_IMPORTER OFF CACHE BOOL "" FORCE)
 
 # When Vision is enabled, assimp must build with all importers + zlib to satisfy
 # Vision's mesh import paths. Only override these knobs in that case so default
@@ -160,6 +181,9 @@ if(CORONA_BUILD_VISION)
 endif()
 
 FetchContent_MakeAvailable(assimp)
+if(MSVC AND TARGET assimp)
+    target_compile_options(assimp PRIVATE /EHsc)
+endif()
 message(STATUS "[3rdparty] assimp module enabled")
 
 FetchContent_MakeAvailable(stb)
@@ -168,14 +192,41 @@ message(STATUS "[3rdparty] stb module enabled")
 FetchContent_MakeAvailable(nanobind)
 message(STATUS "[3rdparty] nanobind module enabled")
 
+set(TBB_TEST OFF CACHE BOOL "" FORCE)
+set(TBB_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(TBB_STRICT OFF CACHE BOOL "" FORCE)
+
+cmake_path(
+    ABSOLUTE_PATH FETCHCONTENT_BASE_DIR
+    BASE_DIRECTORY "${CMAKE_BINARY_DIR}"
+    NORMALIZE
+    OUTPUT_VARIABLE _CORONA_HORIZON_FETCHCONTENT_SOURCE_ROOT
+)
+set(HORIZON_FETCHCONTENT_SOURCE_ROOT "${_CORONA_HORIZON_FETCHCONTENT_SOURCE_ROOT}" CACHE PATH
+    "Shared FetchContent source checkouts used by Horizon" FORCE)
+
+get_filename_component(
+    _corona_local_tbb_dir
+    "${PROJECT_SOURCE_DIR}/third_party/tbb/oneapi-tbb-2022.3.0/lib/cmake/tbb"
+    ABSOLUTE
+)
+set(_corona_tbb_candidate_dirs "${_corona_local_tbb_dir}")
+
+corona_tbb_package_has_runtime("${_corona_local_tbb_dir}" _corona_local_tbb_ok)
+if(EXISTS "${_corona_local_tbb_dir}/TBBConfig.cmake" AND NOT _corona_local_tbb_ok)
+    message(STATUS
+        "[3rdparty] Local TBB package is incomplete; "
+        "falling back to Horizon package or oneTBB FetchContent")
+endif()
+
+if(DEFINED TBB_DIR AND NOT TBB_DIR STREQUAL "")
+    list(PREPEND _corona_tbb_candidate_dirs "${TBB_DIR}")
+endif()
+
 if(WIN32)
     FetchContent_GetProperties(Horizon SOURCE_DIR _corona_horizon_source_dir)
     if(NOT _corona_horizon_source_dir)
-        if(FETCHCONTENT_BASE_DIR)
-            set(_corona_horizon_source_dir "${FETCHCONTENT_BASE_DIR}/horizon-src")
-        else()
-            set(_corona_horizon_source_dir "${CMAKE_BINARY_DIR}/_deps/horizon-src")
-        endif()
+        set(_corona_horizon_source_dir "${_CORONA_HORIZON_FETCHCONTENT_SOURCE_ROOT}/horizon-src")
     endif()
 
     get_filename_component(
@@ -183,20 +234,31 @@ if(WIN32)
         "${_corona_horizon_source_dir}/modules/corona/third_party/win/oneapi-tbb-2022.3.0/lib/cmake/tbb"
         ABSOLUTE
     )
+    list(APPEND _corona_tbb_candidate_dirs "${_corona_horizon_tbb_dir}")
+endif()
 
-    if(DEFINED TBB_DIR AND NOT TBB_DIR STREQUAL "")
-        corona_tbb_package_has_runtime("${TBB_DIR}" _corona_existing_tbb_ok)
-    else()
-        set(_corona_existing_tbb_ok FALSE)
-    endif()
+corona_select_valid_tbb_dir(_corona_selected_tbb_dir ${_corona_tbb_candidate_dirs})
 
-    if(NOT _corona_existing_tbb_ok)
-        set(TBB_DIR "${_corona_horizon_tbb_dir}" CACHE PATH
-            "Path to TBB cmake configuration directory" FORCE)
-        message(STATUS "[3rdparty] Using Horizon vendored TBB: ${TBB_DIR}")
-    endif()
+if(_corona_selected_tbb_dir)
+    set(TBB_DIR "${_corona_selected_tbb_dir}" CACHE PATH
+        "Path to TBB cmake configuration directory" FORCE)
+    find_package(TBB CONFIG QUIET)
+endif()
 
-    unset(_corona_existing_tbb_ok)
+if(TARGET TBB::tbb)
+    message(STATUS "[3rdparty] oneTBB module provided by package: ${TBB_DIR}")
+else()
+    FetchContent_MakeAvailable(oneTBB)
+    message(STATUS "[3rdparty] oneTBB module enabled from ${_CORONA_ONETBB_SOURCE_LABEL}")
+endif()
+
+unset(_CORONA_ONETBB_LOCAL_SOURCE_DIR)
+unset(_CORONA_ONETBB_SOURCE_LABEL)
+unset(_corona_local_tbb_dir)
+unset(_corona_local_tbb_ok)
+unset(_corona_selected_tbb_dir)
+unset(_corona_tbb_candidate_dirs)
+if(WIN32)
     unset(_corona_horizon_tbb_dir)
     unset(_corona_horizon_source_dir)
 endif()
@@ -205,23 +267,20 @@ if(CORONA_BUILD_VISION)
     set(HORIZON_BUILD_OCARINA ON CACHE BOOL "" FORCE)
     set(HORIZON_BUILD_VISION_HOTFIX ON CACHE BOOL "" FORCE)
 endif()
+set(HORIZON_BUILD_TOOLS ON CACHE BOOL "" FORCE)
 
 FetchContent_MakeAvailable(Horizon)
-# Horizon's Helicon / corona_pal targets publish /source-charset:utf-8 and
+# Horizon's Helicon / corona kernel targets publish /source-charset:utf-8 and
 # /execution-charset:utf-8 via PUBLIC compile options. Strip the INTERFACE
 # side so downstream consumers (which already get /utf-8 globally) do not
 # trigger MSVC D8016 from mixing the long and short UTF-8 charset flags.
 corona_strip_msvc_charset_interface(Helicon)
+corona_strip_msvc_charset_interface(corona_kernel)
 corona_strip_msvc_charset_interface(corona_pal)
 
 if(MSVC OR CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
     if(TARGET ShaderCompileScripts)
         target_compile_options(ShaderCompileScripts PRIVATE
-            $<$<COMPILE_LANGUAGE:C,CXX>:/utf-8>)
-    endif()
-
-    if(TARGET corona_kernel)
-        target_compile_options(corona_kernel PRIVATE
             $<$<COMPILE_LANGUAGE:C,CXX>:/utf-8>)
     endif()
 
@@ -232,6 +291,7 @@ if(MSVC OR CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
 endif()
 
 message(STATUS "[3rdparty] Horizon module enabled")
+unset(_CORONA_HORIZON_FETCHCONTENT_SOURCE_ROOT)
 
 FetchContent_MakeAvailable(glfw)
 message(STATUS "[3rdparty] glfw module enabled")
@@ -325,7 +385,7 @@ if(CORONA_BUILD_VISION)
 endif()
 
 # ==============================================================================
-# UTF-8 flag normalization for Horizon's Helicon target
+# UTF-8 flag normalization for Horizon targets
 #
 # Problem:
 #   Horizon's root CMakeLists adds:
@@ -342,11 +402,10 @@ endif()
 #   which MSVC rejects with `command-line error D8016`.
 #
 # Fix:
-#   Strip ONLY INTERFACE_COMPILE_OPTIONS on Helicon (and defensively on
-#   Horizon). This leaves Helicon's own compilation untouched (no behavioural
-#   change for Helicon's source files, which may contain non-ASCII literals),
-#   while preventing the conflicting pair from leaking into our targets. Our
-#   own targets get /utf-8 from corona_compile_config.cmake via
+#   Strip ONLY INTERFACE_COMPILE_OPTIONS on Horizon-provided targets that
+#   publish the long-form charset flags. This leaves their own compilation
+#   untouched while preventing the conflicting pair from leaking into our
+#   targets. Our own targets get /utf-8 from corona_compile_config.cmake via
 #   add_compile_options().
 #
 # Failure handling:
@@ -363,7 +422,7 @@ if(MSVC)
     # previously only handled the bare-token form.
     set(_CORONA_LEGACY_CHARSET_REGEX "/(source|execution)-charset:utf-8")
 
-    foreach(_corona_charset_target Helicon Horizon)
+    foreach(_corona_charset_target Helicon Horizon corona_kernel corona_pal)
         if(TARGET ${_corona_charset_target})
             get_target_property(_corona_iopts
                 ${_corona_charset_target} INTERFACE_COMPILE_OPTIONS)
@@ -388,24 +447,27 @@ if(MSVC)
         endif()
     endforeach()
 
-    # Post-check: ensure no Helicon consumer can hit D8016. Walk each option
+    # Post-check: ensure no Horizon-provided consumer can hit D8016. Walk each option
     # individually with the same regex used above, so this guard and the
     # stripping logic stay in lock-step (avoids the previous failure mode
     # where REMOVE_ITEM silently no-op'd but string(FIND) still tripped).
-    if(TARGET Helicon)
-        get_target_property(_corona_iopts Helicon INTERFACE_COMPILE_OPTIONS)
-        if(_corona_iopts)
-            foreach(_opt IN LISTS _corona_iopts)
-                if(_opt MATCHES "${_CORONA_LEGACY_CHARSET_REGEX}")
-                    message(FATAL_ERROR
-                        "[3rdparty] Helicon still exposes long-form charset flag "
-                        "via INTERFACE_COMPILE_OPTIONS after stripping: '${_opt}'. "
-                        "The regex in misc/cmake/corona_third_party.cmake must be "
-                        "updated to match the new upstream flag form.")
-                endif()
-            endforeach()
+    foreach(_corona_charset_target Helicon Horizon corona_kernel corona_pal)
+        if(TARGET ${_corona_charset_target})
+            get_target_property(_corona_iopts
+                ${_corona_charset_target} INTERFACE_COMPILE_OPTIONS)
+            if(_corona_iopts)
+                foreach(_opt IN LISTS _corona_iopts)
+                    if(_opt MATCHES "${_CORONA_LEGACY_CHARSET_REGEX}")
+                        message(FATAL_ERROR
+                            "[3rdparty] ${_corona_charset_target} still exposes long-form charset flag "
+                            "via INTERFACE_COMPILE_OPTIONS after stripping: '${_opt}'. "
+                            "The regex in misc/cmake/corona_third_party.cmake must be "
+                            "updated to match the new upstream flag form.")
+                    endif()
+                endforeach()
+            endif()
         endif()
-    endif()
+    endforeach()
 
     unset(_CORONA_LEGACY_CHARSET_REGEX)
 endif()

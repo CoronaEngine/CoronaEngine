@@ -1,9 +1,12 @@
 #include "browser_ui.h"
 
 #include <corona/systems/ui/camera_viewport_manager.h>
+#include <corona/systems/ui/viewport_gizmo_manager.h>
 
 #include <SDL3/SDL.h>
+#include <nlohmann/json.hpp>
 
+#include <algorithm>
 #include <cstdlib>
 #include <cstdint>
 
@@ -18,6 +21,13 @@
 namespace Corona::Systems::UI {
 
 namespace {
+float clamp_float(float value, float min_value, float max_value) {
+    if (max_value < min_value) {
+        return min_value;
+    }
+    return std::clamp(value, min_value, max_value);
+}
+
 #ifdef _WIN32
 bool is_extended_windows_key(int windows_key_code) {
     switch (windows_key_code) {
@@ -260,6 +270,46 @@ static MouseUtils::MouseStateManager mouse_state;
 
 namespace {
 
+void emit_native_viewport_gizmo_events(BrowserTab* tab) {
+    if (!tab || !tab->client) {
+        return;
+    }
+    const auto browser = tab->client->GetBrowser();
+    if (!browser) {
+        return;
+    }
+    const auto frame = browser->GetMainFrame();
+    if (!frame) {
+        return;
+    }
+
+    auto emit_json_event = [&](const char* event_name, const nlohmann::json& payload) {
+        const std::string script =
+            std::string("window.__coronaEmit && window.__coronaEmit(") +
+            nlohmann::json(event_name).dump() + "," + payload.dump() + ");";
+        frame->ExecuteJavaScript(script, frame->GetURL(), 0);
+    };
+
+    for (const auto& event : ViewportGizmoManager::instance().drain_selection_events()) {
+        nlohmann::json payload;
+        payload["sceneId"] = event.scene_id;
+        payload["cameraHandle"] = static_cast<std::uint64_t>(event.camera_handle);
+        payload["actorHandle"] = static_cast<std::uint64_t>(event.actor_handle);
+        emit_json_event("native-gizmo-selection", payload);
+    }
+
+    for (const auto& event : ViewportGizmoManager::instance().drain_transform_events()) {
+        nlohmann::json payload;
+        payload["sceneId"] = event.scene_id;
+        payload["cameraHandle"] = static_cast<std::uint64_t>(event.camera_handle);
+        payload["actorHandle"] = static_cast<std::uint64_t>(event.actor_handle);
+        payload["transform"]["position"] = {event.position[0], event.position[1], event.position[2]};
+        payload["transform"]["rotation"] = {event.rotation[0], event.rotation[1], event.rotation[2]};
+        payload["transform"]["scale"] = {event.scale[0], event.scale[1], event.scale[2]};
+        emit_json_event("native-gizmo-transform", payload);
+    }
+}
+
 SDL_Window* sdl_window_from_viewport(ImGuiViewport* viewport) {
     if (!viewport || !viewport->PlatformHandle) {
         return nullptr;
@@ -270,13 +320,55 @@ SDL_Window* sdl_window_from_viewport(ImGuiViewport* viewport) {
     return SDL_GetWindowFromID(window_id);
 }
 
+void sync_tab_platform_window(BrowserTab* tab) {
+    if (!tab) {
+        return;
+    }
+
+    auto* viewport = ImGui::GetWindowViewport();
+    SDL_Window* platform_window = sdl_window_from_viewport(viewport);
+    void* native_surface = viewport ? viewport->PlatformHandleRaw : nullptr;
+    if (!native_surface && platform_window) {
+        native_surface = SDL_GetPointerProperty(
+            SDL_GetWindowProperties(platform_window),
+            SDL_PROP_WINDOW_WIN32_HWND_POINTER,
+            nullptr);
+    }
+    tab->platform_handle_raw = native_surface;
+    tab->platform_window_id = platform_window
+                                  ? SDL_GetWindowID(platform_window)
+                                  : 0;
+}
+
+void focus_browser_tab_exclusively(int focused_tab_id) {
+    for (const auto& [tab_id, tab] : BrowserManager::instance().get_tabs()) {
+        if (!tab || !tab->client) {
+            continue;
+        }
+        auto browser = tab->client->GetBrowser();
+        if (!browser) {
+            continue;
+        }
+        if (tab_id == focused_tab_id) {
+            browser->GetHost()->SetFocus(true);
+        } else {
+            browser->GetHost()->SetFocus(false);
+        }
+    }
+}
+
 }  // namespace
 
 void BrowserRenderer::setup_window_transform(BrowserTab* tab,
                                              ImGuiID dock_space_id,
                                              bool is_main_tab) {
     if (is_main_tab) {
-        ImGui::SetNextWindowDockID(dock_space_id, ImGuiCond_Always);
+        (void)dock_space_id;
+        ImGuiViewport* main_viewport = ImGui::GetMainViewport();
+        ImGui::SetNextWindowViewport(main_viewport->ID);
+        ImGui::SetNextWindowPos(main_viewport->WorkPos, ImGuiCond_Always);
+        ImGui::SetNextWindowSize(main_viewport->WorkSize, ImGuiCond_Always);
+        tab->dock_initialized = true;
     } else {
         if (tab->camera_view) {
             ImGui::SetNextWindowPos(
@@ -293,23 +385,48 @@ void BrowserRenderer::setup_window_transform(BrowserTab* tab,
         ImVec2 work_pos = browser_viewport->WorkPos;
         ImVec2 work_size = browser_viewport->WorkSize;
 
+        constexpr float panel_margin = 24.0f;
+        constexpr float scene_bar_offset = 64.0f;
+        constexpr float right_stack_gap = 16.0f;
+
         auto target_w = static_cast<float>(tab->dock_width);
         auto target_h = static_cast<float>(tab->dock_height);
+
+        const bool left_panel = tab->docking_pos == "left_bottom";
+        const bool right_panel = tab->docking_pos == "right_top" ||
+                                 tab->docking_pos == "right_bottom";
+
+        const float min_w = left_panel ? 300.0f : 320.0f;
+        const float width_ratio = left_panel ? 0.22f : (right_panel ? 0.27f : 0.42f);
+        const float max_w = std::max(min_w, work_size.x * width_ratio);
+        target_w = clamp_float(target_w, min_w, max_w);
+
+        const float usable_h = std::max(
+            260.0f, work_size.y - scene_bar_offset - panel_margin - right_stack_gap);
+        if (tab->docking_pos == "right_top") {
+            target_h = clamp_float(target_h, 320.0f, usable_h * 0.54f);
+        } else if (tab->docking_pos == "right_bottom") {
+            target_h = clamp_float(target_h, 300.0f, usable_h * 0.46f);
+        } else if (tab->docking_pos == "left_bottom") {
+            target_h = clamp_float(target_h, 300.0f, std::max(300.0f, usable_h * 0.48f));
+        } else {
+            target_h = clamp_float(target_h, 320.0f, usable_h);
+        }
 
         ImVec2 final_pos = work_pos;
 
         if (tab->docking_pos == "left_top") {
-            final_pos.x = work_pos.x;
-            final_pos.y = work_pos.y + 50.f;
+            final_pos.x = work_pos.x + panel_margin;
+            final_pos.y = work_pos.y + scene_bar_offset;
         } else if (tab->docking_pos == "left_bottom") {
-            final_pos.x = work_pos.x;
-            final_pos.y = work_pos.y + work_size.y - target_h;
+            final_pos.x = work_pos.x + panel_margin;
+            final_pos.y = work_pos.y + work_size.y - target_h - panel_margin;
         } else if (tab->docking_pos == "right_top") {
-            final_pos.x = work_pos.x + work_size.x - target_w;
-            final_pos.y = work_pos.y + 50.f;
+            final_pos.x = work_pos.x + work_size.x - target_w - panel_margin;
+            final_pos.y = work_pos.y + scene_bar_offset;
         } else if (tab->docking_pos == "right_bottom") {
-            final_pos.x = work_pos.x + work_size.x - target_w;
-            final_pos.y = work_pos.y + work_size.y - target_h;
+            final_pos.x = work_pos.x + work_size.x - target_w - panel_margin;
+            final_pos.y = work_pos.y + work_size.y - target_h - panel_margin;
         } else if (tab->docking_pos == "bottom_left") {
             final_pos.x = work_pos.x + 300.f;
             final_pos.y = work_pos.y + work_size.y - target_h;
@@ -320,8 +437,8 @@ void BrowserRenderer::setup_window_transform(BrowserTab* tab,
             final_pos.x = work_pos.x + (work_size.x - target_w) * 0.5f;
             final_pos.y = work_pos.y + (work_size.y - target_h) * 0.5f;
         } else {
-            final_pos.x = work_pos.x + 300.f;
-            final_pos.y = work_pos.y + 50.f;
+            final_pos.x = work_pos.x + work_size.x - target_w - panel_margin;
+            final_pos.y = work_pos.y + scene_bar_offset + right_stack_gap;
         }
 
         ImGui::SetNextWindowPos(final_pos, ImGuiCond_FirstUseEver);
@@ -353,7 +470,7 @@ void BrowserRenderer::handle_browser_mouse_events(BrowserTab* tab,
             if (ImGui::IsMouseClicked(imgui_btn)) {
                 active_tab_id = tab_id;
                 url_input_active_tab = -1;
-                browser->GetHost()->SetFocus(true);
+                focus_browser_tab_exclusively(tab_id);
 
                 int clicks = (imgui_btn == ImGuiMouseButton_Left) ? mouse_state.handle_mouse_click(mouse_pos, SDL_GetTicks()) : 1;
 
@@ -417,6 +534,13 @@ void BrowserRenderer::render_single_tab(int tab_id,
 
     bool is_main_tab = (tab->docking_pos == "main");
     if (is_main_tab) {
+        browser_window_flags |= ImGuiWindowFlags_NoBackground |
+                                ImGuiWindowFlags_NoDocking |
+                                ImGuiWindowFlags_NoResize |
+                                ImGuiWindowFlags_NoCollapse |
+                                ImGuiWindowFlags_NoBringToFrontOnFocus;
+    }
+    if (is_main_tab) {
         browser_window_flags |= ImGuiWindowFlags_NoMove;  // 主窗口始终禁止移动
     }
     if (tab->camera_view) {
@@ -468,6 +592,8 @@ void BrowserRenderer::render_single_tab(int tab_id,
             BrowserManager::instance().resize_tab(tab_id, new_width, new_height);
         }
 
+        sync_tab_platform_window(tab);
+
         if (tab->camera_view) {
             auto* viewport = ImGui::GetWindowViewport();
             SDL_Window* platform_window = sdl_window_from_viewport(viewport);
@@ -483,11 +609,22 @@ void BrowserRenderer::render_single_tab(int tab_id,
             tab->platform_window_id = platform_window
                                           ? SDL_GetWindowID(platform_window)
                                           : 0;
+            int render_width = new_width;
+            int render_height = new_height;
+            if (platform_window != nullptr) {
+                int pixel_width = 0;
+                int pixel_height = 0;
+                if (SDL_GetWindowSizeInPixels(platform_window, &pixel_width, &pixel_height) &&
+                    pixel_width > 0 && pixel_height > 0) {
+                    render_width = pixel_width;
+                    render_height = pixel_height;
+                }
+            }
             if (native_surface) {
                 CameraViewportManager::instance().bind_surface(
                     tab_id, native_surface,
                     static_cast<int>(window_pos.x), static_cast<int>(window_pos.y),
-                    new_width, new_height);
+                    render_width, render_height);
             }
             CameraViewportManager::instance().update_layout(
                 tab_id, static_cast<int>(window_pos.x), static_cast<int>(window_pos.y),
@@ -574,13 +711,42 @@ void BrowserRenderer::render_single_tab(int tab_id,
         }
         // -------------------------------------------------------------
 
+        ImVec2 image_origin = ImGui::GetCursorScreenPos();
+        ImVec2 image_size = avail_size;
+        bool viewport_gizmo_captures_mouse = false;
+
         // 渲染浏览器纹理
         if (is_valid_texture_id(tab->texture_id)) {
             ImGui::Image(tab->texture_id, avail_size);
+            image_origin = ImGui::GetItemRectMin();
+            image_size = ImGui::GetItemRectSize();
+        }
+
+        if (tab->camera_view) {
+            if (auto record = CameraViewportManager::instance().find_by_tab(tab_id)) {
+                viewport_gizmo_captures_mouse = ViewportGizmoManager::instance().render(
+                    record->scene_id,
+                    record->camera_handle,
+                    image_origin,
+                    image_size,
+                    ImGui::GetWindowDrawList());
+            }
+        } else if (is_main_tab) {
+            const auto selected_camera = ViewportGizmoManager::instance().selected_camera_handle();
+            if (selected_camera != 0) {
+                viewport_gizmo_captures_mouse = ViewportGizmoManager::instance().render(
+                    std::string{},
+                    selected_camera,
+                    image_origin,
+                    image_size,
+                    ImGui::GetWindowDrawList());
+            }
+            emit_native_viewport_gizmo_events(tab);
         }
 
         // 仅当未拖拽时传递鼠标事件给浏览器
-        if (!tab->dragging_window && !tab->drag_pending && !in_drag_region) {
+        if (!tab->dragging_window && !tab->drag_pending && !in_drag_region &&
+            !viewport_gizmo_captures_mouse) {
             handle_browser_mouse_events(tab, tab_id, active_tab_id, url_input_active_tab, io);
         }
     }

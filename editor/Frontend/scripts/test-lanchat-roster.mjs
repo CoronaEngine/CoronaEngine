@@ -10,6 +10,11 @@ const fail = (message) => {
 const assertIncludes = (source, needle, message) => {
   if (!source.includes(needle)) fail(message);
 };
+const assertAppearsAfter = (source, laterNeedle, earlierNeedle, message) => {
+  const laterIndex = source.indexOf(laterNeedle);
+  const earlierIndex = source.indexOf(earlierNeedle);
+  if (laterIndex < 0 || earlierIndex < 0 || laterIndex <= earlierIndex) fail(message);
+};
 
 const store = read('src/stores/lanchat.js');
 const disclosureStore = read('src/stores/lanchatDisclosure.js');
@@ -136,7 +141,7 @@ assertIncludes(disclosureStore, "sender_role: 'host'", 'GM confirmation builder 
 assertIncludes(disclosureStore, 'is_host: true', 'GM confirmation builder must carry explicit host boolean');
 assertIncludes(disclosureTest, 'confirm.options.sender_role', 'disclosure test must cover explicit host role in GM confirmation options');
 assertIncludes(disclosureTest, "buildManualGmMessageOptions('guest')", 'disclosure test must cover participant manual GM role options');
-assertIncludes(store, 'lanChatService.sendMessage(trimmed, options)', 'lanchat store must pass structured message options through');
+assertIncludes(store, 'lanChatService.sendMessage(trimmed, withStructuredRouteOptions(options))', 'lanchat store must inject structured route metadata while preserving message options');
 assertIncludes(bridge, '{ text, ...(options || {}) }', 'LANChat bridge must preserve structured sendMessage options');
 assertIncludes(bridge, "Bridge.callCEF('LANChat', 'send_message'", 'LANChat bridge must route sendMessage through CEF LANChat module');
 assertIncludes(bridge, "Bridge.callCEF('LANChat', 'get_history'", 'LANChat bridge must expose explicit persisted history reload');
@@ -153,8 +158,8 @@ assertIncludes(roomPanel, 'form.port || 27960', 'RoomPanel join/create calls mus
 if (roomPanel.includes('port: 8770') || roomPanel.includes('form.port || 8770')) {
   fail('RoomPanel must not default LANChat room ports to legacy 8770');
 }
-assertIncludes(roomPanel, "roomMode = 'single'", 'RoomPanel must offer a single-player room mode');
-assertIncludes(roomPanel, "roomMode = 'multi'", 'RoomPanel must offer a multiplayer room mode');
+assertIncludes(roomPanel, "roomMode.value = 'single'", 'RoomPanel must offer a single-player room mode');
+assertIncludes(roomPanel, "roomMode.value = 'multi'", 'RoomPanel must offer a multiplayer room mode');
 assertIncludes(roomPanel, 'mode: roomMode.value', 'RoomPanel must pass the selected room mode when creating a room');
 assertIncludes(roomPanel, "v-if=\"roomMode === 'multi'\"", 'RoomPanel must only show room/password inputs for multiplayer room creation');
 assertIncludes(roomPanel, 'function makeLocalRoomId', 'RoomPanel must auto-generate an internal local room id for single-player rooms');
@@ -163,11 +168,18 @@ assertIncludes(roomPanel, "roomMode.value === 'single'", 'RoomPanel create flow 
 assertIncludes(roomPanel, "s.mode === 'single' ? '单人聊天室' : s.room", 'RoomPanel must not expose internal local room ids as the single-player room title');
 assertIncludes(roomPanel, 'onMounted(refreshHistoryRooms)', 'RoomPanel must load persisted history list when the dock opens');
 assertIncludes(roomPanel, '历史记录', 'RoomPanel must show persisted history before entering a room');
+assertAppearsAfter(roomPanel, '历史记录', '<!-- 加入房间 -->', 'RoomPanel history list must be placed in the lower half of the lobby after create/join controls');
+assertIncludes(roomPanel, 'mt-auto space-y-2 border-t border-gray-700 pt-4', 'RoomPanel history section must anchor to the lower lobby when vertical space is available');
 assertIncludes(roomPanel, 'loadHistoryRoom', 'RoomPanel must let users choose which persisted history to display');
 assertIncludes(roomPanel, 'continueHistoryAsSingle', 'RoomPanel must let users continue a selected history as a single-player room');
 assertIncludes(roomPanel, '作为单人聊天室继续', 'RoomPanel must expose a clear continue-history action');
 assertIncludes(roomPanel, '继续所选历史', 'RoomPanel single-room create button must reflect selected history');
 assertIncludes(roomPanel, "s.mode === 'multi'", 'RoomPanel must only show host IP/port for multiplayer rooms');
+assertIncludes(roomPanel, 'target_scope: targetPayload.scope', 'RoomPanel must include selected target scope in per-message metadata');
+assertIncludes(roomPanel, 'if (targetPayload.agentName) metadata.target_agent_name', 'RoomPanel must include selected target agent in per-message metadata');
+if (roomPanel.includes('draftActionOptions') || roomPanel.includes('selectedDraftAction') || roomPanel.includes('function selectDraftAction')) {
+  fail('RoomPanel must not expose the removed chat/plan/supplement/generate mode buttons');
+}
 
 assertIncludes(memberList, 'peerId', 'MemberList must accept peerId prop');
 assertIncludes(memberList, 'a.owner === peerId', 'agent remove visibility must compare owner to peerId');
@@ -215,6 +227,10 @@ assertIncludes(cefBridge, 'correlation_id, metadata_json', 'LANChat send_message
 assertIncludes(cefBridge, 'const uint16_t actual_port = sys->session_port() != 0 ? sys->session_port() : port', 'LANChat start_room must return the actual session port');
 assertIncludes(cefBridge, 'const std::string nickname = payload_arg.value("nickname", "房主")', 'LANChat start_room must read host nickname from payload');
 assertIncludes(cefBridge, 'data["you"] = host_nickname', 'LANChat start_room must return the final host nickname');
+assertIncludes(cefBridge, 'detect_wlan_ipv4', 'LANChat displayed IP must use a WLAN-preferred adapter detector');
+assertIncludes(cefBridge, 'GetAdaptersAddresses', 'Windows LANChat displayed IP must enumerate adapters instead of hostname DNS order');
+assertIncludes(cefBridge, 'looks_like_wlan_adapter', 'LANChat displayed IP must explicitly prefer WLAN/Wi-Fi adapters');
+assertIncludes(cefBridge, 'data["ip"] = detect_wlan_ipv4()', 'LANChat start_room must display the WLAN-preferred host IP');
 assertIncludes(cefBridge, 'func == "start_local_room"', 'LANChat bridge must expose start_local_room for single-player rooms');
 assertIncludes(cefBridge, 'func == "stop_local_room"', 'LANChat bridge must expose stop_local_room for single-player rooms');
 assertIncludes(cefBridge, 'func == "get_history"', 'LANChat bridge must expose get_history for explicit history reload');

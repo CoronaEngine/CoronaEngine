@@ -140,9 +140,6 @@ export const sceneService = {
   deleteCamera: (sceneName, cameraId) =>
     Bridge.callCEF('SceneTools', 'delete_camera', [sceneName, cameraId]),
   loadVisionScene: (path) => Bridge.callCEF('SceneTools', 'load_vision_scene', [path]),
-  importVisionSceneIntoCurrentScene: (sceneName, path) =>
-    Bridge.callCEF('SceneTools', 'import_vision_scene_into_current_scene', [sceneName, path]),
-  selectVisionScenePath: () => Bridge.callCEF('SceneTools', 'select_vision_scene_path', []),
   listActorTree: (sceneName) => Bridge.callCEF('SceneTools', 'list_actor_tree', [sceneName]),
   listSceneTree: (sceneName) => Bridge.callCEF('SceneTools', 'list_scene_tree', [sceneName]),
   openSceneActor: (sceneName, actorName) =>
@@ -209,8 +206,8 @@ export const projectService = {
 };
 
 export const appService = {
-  createPanelTab: (panelId, routePath, width, height) =>
-    Bridge.callDockCommand({ cmd: 'createPanelTab', panelId, routePath, width, height }),
+  createPanelTab: (panelId, routePath, width, height, dockingPos) =>
+    Bridge.callDockCommand({ cmd: 'createPanelTab', panelId, routePath, width, height, dockingPos }),
   closeThisTab: (panelId) =>
     Bridge.callDockCommand({ cmd: 'closeThisTab', panelId }),
   closePanelTab: (tabId, panelId) =>
@@ -404,6 +401,10 @@ export const projectLauncherService = {
   // 创建项目
   createProject: (projectData) =>
     Bridge.callCEF('ProjectLauncher', 'create_project', [projectData]),
+  // 创建 AI 世界项目：自动命名 + 存到引擎 data 目录，无需 name/path
+  // worldData: { mode: 'story'|'creative', prompt: string } -> { name, path }
+  createWorldProject: (worldData) =>
+    Bridge.callCEF('ProjectLauncher', 'create_world_project', [worldData]),
   // 打开项目（执行加载逻辑）
   openProject: (projectPath) => Bridge.callCEF('ProjectLauncher', 'open_project', [projectPath]),
   // 设置项目模式 (2D/3D/渲染)

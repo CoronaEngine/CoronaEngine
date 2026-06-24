@@ -1,6 +1,6 @@
 ﻿#pragma once
 
-#include <Horizon.h>
+#include "horizon.h"
 #include <corona/events/optics_system_events.h>
 #include <corona/kernel/event/i_event_bus.h>
 #include <corona/kernel/event/i_event_stream.h>
@@ -104,7 +104,7 @@ class OpticsSystem : public Kernel::SystemBase {
                                   uint64_t frame_index);
     void evict_idle_ui_view_resources(uint64_t frame_index);
     void optics_pipeline(float frame_count, uint64_t frame_index);
-    void process_pending_screenshots(std::uintptr_t camera_handle, HardwareImage& render_target);
+    void process_pending_screenshots(std::uintptr_t camera_handle, Horizon::HardwareImage& render_target);
 #ifdef CORONA_ENABLE_VISION
     // Vision 相关私有方法（在 CORONA_ENABLE_VISION 宏保护下实现）
     bool init_vision_lazy();  ///< 首次切换到 Vision 时的 lazy 初始化
@@ -217,10 +217,10 @@ class OpticsSystem : public Kernel::SystemBase {
     // 在同一帧内反复重建全局 GBuffer；Pass 1 scene 与 Pass 2 UI
     // 使用各自的 visibility/depth 中间产物。
     struct SurfaceRenderTarget {
-        HardwareImage final_output;        ///< 该 surface 专属的 RGBA16F 最终输出
-        HardwareImage ui_overlay;          ///< Pass 2 camera-follow actor overlay
-        HardwareImage ui_warped_overlay;   ///< LFD-warped UI overlay for Stereo3D mode
-        HardwareImage composite_output;    ///< Optics-internal scene+overlay result
+        Horizon::HardwareImage final_output;        ///< 该 surface 专属的 RGBA16F 最终输出
+        Horizon::HardwareImage ui_overlay;          ///< Pass 2 camera-follow actor overlay
+        Horizon::HardwareImage ui_warped_overlay;   ///< LFD-warped UI overlay for Stereo3D mode
+        Horizon::HardwareImage composite_output;    ///< Optics-internal scene+overlay result
         std::uintptr_t image_handle = 0;   ///< 该 surface 专属的 image_storage 句柄
         uint32_t width = 0;                ///< 该输出图当前分辨率
         uint32_t height = 0;
@@ -246,14 +246,15 @@ class OpticsSystem : public Kernel::SystemBase {
     /// 返回 &target.composite_output，否则返回 &background；调用方负责 commit + publish。
     /// 前置条件：调用方已设 hardware_->gbufferSize={w,h}、已 ensure_ui_view_resources
     /// 绑定 uiVisibility/uiDepth，且 background 的生产 pass 已在同一 executor 上记录。
-    HardwareImage* compose_surface_ui_overlay(std::uintptr_t camera_handle,
-                                              const CameraDevice& camera,
-                                              const SceneDevice& scene,
-                                              SurfaceRenderTarget& target,
-                                              HardwareImage& background,
-                                              ViewportUiMode mode,
-                                              const ViewportUiCalibration& calibration,
-                                              uint64_t frame_index);
+    Horizon::HardwareImage* compose_surface_ui_overlay(Horizon::HardwareStream& stream,
+                                                       std::uintptr_t camera_handle,
+                                                       const CameraDevice& camera,
+                                                       const SceneDevice& scene,
+                                                       SurfaceRenderTarget& target,
+                                                       Horizon::HardwareImage& background,
+                                                       ViewportUiMode mode,
+                                                       const ViewportUiCalibration& calibration,
+                                                       uint64_t frame_index);
 
     std::unordered_map<void*, SurfaceRenderTarget> surface_targets_;
     std::unordered_map<std::uintptr_t, SurfaceRenderTarget> offscreen_screenshot_targets_;
@@ -288,6 +289,12 @@ class OpticsSystem : public Kernel::SystemBase {
     // LOD 系统引用（渲染时查询 LOD 缓冲）
     GeometrySystem* geometry_system_ = nullptr;
     bool geometry_system_queried_ = false;  // 避免每帧重试失败的获取
+
+    // 天空驱动环境光 (SH9)：仅当环境光照签名（sun_dir + sky_intensity）变化时
+    // 才重新把大气天空投影到 9 个球谐系数，结果常驻 skyIrradianceSHBuffer 供
+    // lighting pass 逐像素求值。静态光照下摊销成本接近零。
+    std::size_t sky_sh_signature_{0};
+    bool sky_sh_initialized_{false};
 
     // Vision 后端状态
     bool vision_initialized_{false};

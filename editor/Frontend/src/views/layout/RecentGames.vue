@@ -1,29 +1,25 @@
 <template>
   <div
-    class="relative min-h-screen border-2 border-[#84a65b] bg-[#282828]/95 text-white overflow-hidden flex flex-col font-sans"
+    class="relative h-screen border-2 border-[#84a65b] bg-[#282828]/95 text-white overflow-hidden flex flex-col font-sans"
   >
-    <DockTitleBar
-      title="最近游戏"
-      extraClass="bg-[#84A65B]"
-      routePath="/RecentGames"
-      @close="closeFloat"
-    />
-
-    <div class="flex-1 p-20 bg-[#1e1e1e] flex flex-col">
-      <div class="mb-10">
+    <div class="flex-1 min-h-0 p-20 bg-[#1e1e1e] flex flex-col">
+      <div class="mb-10 shrink-0">
         <h2 class="text-5xl font-bold text-[#84a65b] mb-2">Corona Editor</h2>
         <p class="text-base text-gray-500">版本: {{ appVersion }}</p>
       </div>
 
-      <div class="flex-1 overflow-y-auto">
-        <h3 class="text-base font-semibold text-gray-400 uppercase tracking-wider mb-6">
+      <div class="shrink-0 mb-6">
+        <h3 class="text-base font-semibold text-gray-400 uppercase tracking-wider">
           最近项目
         </h3>
+      </div>
+
+      <div class="flex-1 min-h-0 overflow-y-auto pr-1">
         <div v-if="recentProjects.length > 0" class="space-y-3">
           <div
             v-for="proj in recentProjects"
             :key="proj.path"
-            class="p-5 rounded bg-[#2d2d2d] transition-colors group"
+            class="p-5 rounded bg-[#2d2d2d] transition-colors group flex items-center gap-6"
             :class="[
               proj.if_exists
                 ? 'cursor-pointer hover:bg-[#3d3d3d]'
@@ -35,11 +31,17 @@
             @click="proj.if_exists && (selectedProject = proj.path)"
             @dblclick="proj.if_exists && handleOpenProject(proj.path)"
           >
-            <div class="text-base font-medium truncate">
-              <span v-if="proj.if_exists">{{ proj.name }}</span>
-              <span v-else class="text-red-500">{{ proj.name }} (路径异常)</span>
+            <div class="min-w-0 flex-1">
+              <div class="text-base font-medium truncate">
+                <span v-if="proj.if_exists">{{ proj.name }}</span>
+                <span v-else class="text-red-500">{{ proj.name }} (路径异常)</span>
+              </div>
+              <div class="text-xs text-gray-500 truncate mt-1">{{ proj.path }}</div>
             </div>
-            <div class="text-xs text-gray-500 truncate mt-1">{{ proj.path }}</div>
+            <div class="shrink-0 min-w-40 text-right">
+              <div class="text-[11px] text-gray-600 uppercase tracking-wider">上次编辑</div>
+              <div class="text-sm text-gray-400 font-mono mt-1">{{ proj.last_edited || '-' }}</div>
+            </div>
           </div>
         </div>
         <div
@@ -50,7 +52,7 @@
         </div>
       </div>
 
-      <div class="mt-6 pt-6 border-t border-[#333] flex items-center gap-3">
+      <div class="mt-6 pt-6 border-t border-[#333] flex items-center gap-3 shrink-0">
         <button
           class="flex-1 py-3 px-6 text-left text-base hover:bg-[#333] rounded flex items-center gap-3"
           @click="handleImport"
@@ -69,7 +71,7 @@
         </button>
       </div>
 
-      <div class="mt-6">
+      <div class="mt-6 shrink-0">
         <button
           class="px-5 py-3 text-base text-gray-400 hover:text-white hover:bg-[#333] rounded transition-colors inline-flex items-center gap-1 w-fit"
           @click="goBack"
@@ -86,7 +88,6 @@
 import { ref, onMounted } from 'vue';
 import { useRouter } from 'vue-router';
 import { projectLauncherService, appService } from '@/utils/bridge';
-import DockTitleBar from '@/components/ui/DockTitleBar.vue';
 
 const router = useRouter();
 
@@ -127,10 +128,6 @@ const handleImport = async () => {
   if (result && result.data.path) {
     handleOpenProject(result.data.path);
   }
-};
-
-const closeFloat = async () => {
-  window.close();
 };
 </script>
 

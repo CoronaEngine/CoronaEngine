@@ -23,6 +23,8 @@ void SVGF::prepare_buffers() {
                    rt_res.x, rt_res.y);
     init_buffer_zero(device(), svgf_data, pixel_num, "SVGF::svgf_data");
     svgf_data.register_self(0, pixel_num);
+    init_buffer_zero(device(), svgf_data2, pixel_num, "SVGF::svgf_data2");
+    svgf_data2.register_self(0, pixel_num);
 }
 
 void SVGF::compute_GBuffer(const vision::RayState &rs, const vision::Interaction &it) noexcept {
@@ -49,8 +51,12 @@ void SVGF::render_sub_UI(Widgets *widgets) noexcept {
                                            0.01, 10.0, 0.1, 0.5);
 }
 
-BufferView<SVGFDataDual> SVGF::svgf_buffer() const noexcept {
-    return svgf_data.view();
+BufferView<SVGFDataDual> SVGF::svgf_buffer_cur(uint frame_index) const noexcept {
+    return ((frame_index & 1u) == 0u) ? svgf_data.view() : svgf_data2.view();
+}
+
+BufferView<SVGFDataDual> SVGF::svgf_buffer_prev(uint frame_index) const noexcept {
+    return ((frame_index & 1u) == 0u) ? svgf_data2.view() : svgf_data.view();
 }
 
 void SVGF::prepare() noexcept {
@@ -120,6 +126,8 @@ void SVGF::update_resolution(uint2 resolution) noexcept {
                    frame_buffer().raytracing_resolution().x, frame_buffer().raytracing_resolution().y);
     init_buffer_zero(device(), svgf_data.super(), pixel_num, "SVGF::svgf_data");
     svgf_data.register_self(0, pixel_num);
+    init_buffer_zero(device(), svgf_data2.super(), pixel_num, "SVGF::svgf_data2");
+    svgf_data2.register_self(0, pixel_num);
     atrous_->update_resolution(resolution);
     variance_estimator_->update_resolution(resolution);
 }

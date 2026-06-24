@@ -4,12 +4,46 @@ export const normalizeViewportUiMode = (mode) => (
   mode === 'stereo3d' ? 'stereo3d' : 'flat2d'
 );
 
+export const NATIVE_VIEWPORT_CURSOR_STORAGE_KEY = 'corona.nativeViewportCursor.enabled';
+export const DEFAULT_NATIVE_VIEWPORT_CURSOR_ENABLED = false;
+
 const safeStorage = () => {
   try {
     return globalThis.localStorage ?? null;
   } catch (_) {
     return null;
   }
+};
+
+const TRUE_SWITCH_VALUES = new Set(['1', 'true', 'on', 'yes', 'enabled']);
+const FALSE_SWITCH_VALUES = new Set(['0', 'false', 'off', 'no', 'disabled']);
+
+export const normalizeFeatureSwitch = (value, fallback = false) => {
+  if (typeof value === 'boolean') return value;
+  if (value === null || value === undefined) return fallback;
+  const normalized = String(value).trim().toLowerCase();
+  if (TRUE_SWITCH_VALUES.has(normalized)) return true;
+  if (FALSE_SWITCH_VALUES.has(normalized)) return false;
+  return fallback;
+};
+
+export const isNativeViewportCursorEnabled = ({
+  storage = safeStorage(),
+  globalObject = globalThis,
+} = {}) => {
+  if (Object.prototype.hasOwnProperty.call(globalObject ?? {}, '__CORONA_ENABLE_NATIVE_VIEWPORT_CURSOR__')) {
+    return normalizeFeatureSwitch(
+      globalObject.__CORONA_ENABLE_NATIVE_VIEWPORT_CURSOR__,
+      DEFAULT_NATIVE_VIEWPORT_CURSOR_ENABLED,
+    );
+  }
+  let stored = null;
+  try {
+    stored = storage?.getItem?.(NATIVE_VIEWPORT_CURSOR_STORAGE_KEY) ?? null;
+  } catch (_) {
+    stored = null;
+  }
+  return normalizeFeatureSwitch(stored, DEFAULT_NATIVE_VIEWPORT_CURSOR_ENABLED);
 };
 
 const sanitizePart = (value, fallback) => {
@@ -182,6 +216,7 @@ export const createViewportUiPointerController = ({
   getHitRect,
   getRenderRect,
   getEnabled = () => true,
+  getNativeCursorEnabled = () => isNativeViewportCursorEnabled(),
   defaultCursor = 'arrow',
 } = {}) => {
   let lastCameraHandle = 0;
@@ -200,7 +235,9 @@ export const createViewportUiPointerController = ({
 
   const bridgeForSend = () => getBridge?.() ?? globalThis.coronaBridge ?? null;
 
-  const isEnabled = () => getEnabled?.() !== false;
+  const isNativeCursorEnabled = () => getNativeCursorEnabled?.() === true;
+
+  const isEnabled = () => getEnabled?.() !== false && isNativeCursorEnabled();
 
   const setSystemCursorState = (hidden, custom) => {
     if (systemCursorHidden === hidden && systemCursorCustom === custom) return false;
@@ -276,10 +313,15 @@ export const createViewportUiPointerController = ({
     }
 
     const opticsPointerEnabled = isEnabled();
-    setSystemCursorState(opticsPointerEnabled, true);
     if (!opticsPointerEnabled) {
+      if (pointerVisible) {
+        hide();
+      } else {
+        setSystemCursorState(false, false);
+      }
       return false;
     }
+    setSystemCursorState(true, true);
 
     const bridge = bridgeForSend();
     if (typeof bridge?.viewportUiPointer !== 'function') return false;

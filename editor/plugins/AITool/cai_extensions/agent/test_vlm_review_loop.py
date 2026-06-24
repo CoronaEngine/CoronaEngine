@@ -14,10 +14,12 @@ import os
 import threading
 import time
 import shutil
+import tempfile
 
 sys.path.insert(0, os.path.dirname(__file__))
 from vlm_review_loop import review_models_async, VlmReviewReport  # noqa: E402
 import model_reviewer  # noqa: E402
+import vlm_capture  # noqa: E402
 
 
 class FakeGate:
@@ -122,6 +124,7 @@ def test_low_confidence_only_vlm_advice_is_disclosed_without_action():
 
     assert not report.actionable()
     assert "低置信建议" in text
+    assert "低置信模型：低置信旋转建议" in text
     assert "不自动执行" in text
     assert "未发现明显语义问题" not in text
     print("[OK] 低置信 VLM 建议会披露为待确认，不误报为无问题")
@@ -293,6 +296,7 @@ class FakeCamera:
         self.up = [0, 1, 0]
         self.fov = 45.0
         self.output_mode = kwargs.get("output_mode", "beauty")
+        self.output_mode_calls = []
         self.surface = 123
         self.offscreen_capture_mode = False
         self.offscreen_capture_calls = []
@@ -317,6 +321,7 @@ class FakeCamera:
         return self.output_mode
 
     def set_output_mode(self, mode):
+        self.output_mode_calls.append(mode)
         self.output_mode = mode
 
     def get_position(self):
@@ -363,6 +368,20 @@ class FakeCamera:
         return True
 
 
+class AsciiOnlyFakeCamera(FakeCamera):
+    def __init__(self, name="main", **kwargs):
+        super().__init__(name, **kwargs)
+        self.screenshot_paths = []
+
+    def save_screenshot_sync(self, path):
+        self.screenshot_paths.append(path)
+        try:
+            path.encode("ascii")
+        except UnicodeEncodeError:
+            return False
+        return super().save_screenshot_sync(path)
+
+
 class FakeScene:
     def __init__(self, cameras=None):
         self.cameras = list(cameras or [])
@@ -399,8 +418,9 @@ def test_vlm_review_camera_reuses_existing():
     camera = model_reviewer.get_or_create_vlm_review_camera(scene, camera_factory=FakeCamera)
     assert camera is existing
     assert not scene.added
-    assert existing.offscreen_capture_calls == [True]
-    assert existing.offscreen_capture_mode is True
+    assert existing.offscreen_capture_calls == []
+    assert existing.get_surface() == 0
+    assert existing.view_state["open"] is False
     print("[OK] VLM review camera reuses existing camera")
 
 
@@ -413,8 +433,8 @@ def test_vlm_review_camera_created_without_switching_active():
     assert scene.get_active_camera() is active_before
     assert camera.kwargs.get("view_open") is False
     assert camera.kwargs.get("deletable") is False
-    assert camera.offscreen_capture_calls == [True]
-    assert camera.offscreen_capture_mode is True
+    assert camera.kwargs.get("output_mode") == "base_color"
+    assert camera.offscreen_capture_calls == []
     assert camera.get_surface() == 0
     assert camera.view_state["open"] is False
     assert camera.internal is True
@@ -428,19 +448,82 @@ def test_vlm_capture_uses_review_camera_not_main():
     review_camera = FakeCamera(model_reviewer.VLM_REVIEW_CAMERA_NAME)
     main_before = list(scene.active.position)
 
-    def pose(center, distance, az, elevation):
-        return {"position": [az / 90.0, 2.0, 3.0], "forward": [0, 0, -1], "up": [0, 1, 0]}
-
     tmp = _test_tmp_dir("capture")
     try:
-        result = model_reviewer._capture_with_review_camera(scene, review_camera, tmp, "sample", pose)
-        assert result == tmp
+        result = vlm_capture.capture_vlm_views(
+            "",
+            tmp,
+            actor_name="sample",
+            scope="actor",
+            scene=scene,
+            review_camera=review_camera,
+        )
+        assert result.status == "success"
+        assert result.output_dir == tmp
+        assert result.view_count == 4
+        assert result.output_mode == "base_color"
         assert review_camera.set_calls == 4
+        assert "base_color" in review_camera.output_mode_calls
+        assert review_camera.get_output_mode() == "beauty"
         assert scene.active.position == main_before
-        assert os.path.exists(os.path.join(tmp, "sample_az000.png"))
+        assert len(result.files) == 4
+        assert all(os.path.exists(path) for path in result.files)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     print("[OK] VLM capture uses review camera and leaves main camera untouched")
+
+
+def test_vlm_capture_bridges_unicode_output_paths_for_engine():
+    scene = FakeScene()
+    review_camera = AsciiOnlyFakeCamera(model_reviewer.VLM_REVIEW_CAMERA_NAME)
+    tmp = _test_tmp_dir("中文项目_截图")
+    try:
+        result = vlm_capture.capture_vlm_views(
+            "",
+            tmp,
+            actor_name="床",
+            scope="actor",
+            scene=scene,
+            review_camera=review_camera,
+        )
+        assert result.status == "success"
+        assert len(result.files) == 4
+        assert all(os.path.exists(path) for path in result.files)
+        assert any("床" in os.path.basename(path) for path in result.files)
+        assert review_camera.screenshot_paths
+        assert all(path == path.encode("ascii").decode("ascii") for path in review_camera.screenshot_paths)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    print("[OK] VLM capture bridges unicode output paths for engine")
+
+
+def test_vlm_review_default_output_dir_uses_project_screenshots():
+    project_screenshots = tempfile.mkdtemp(prefix="vlm_project_screenshots_")
+    old_screenshots = os.environ.get("CAI_SCREENSHOTS_DIR")
+    captured = []
+
+    def capture(out_dir, name):
+        captured.append(out_dir)
+        return f"/shots/{name}"
+
+    def review(_shot_dir, _name, _mtype):
+        return {"overall": "PASS", "confidence": 0.9}
+
+    try:
+        os.environ["CAI_SCREENSHOTS_DIR"] = project_screenshots
+        review_models_async(
+            [{"actor_id": "床"}],
+            capture_fn=capture,
+            review_fn=review,
+        )
+        assert captured == [os.path.join(project_screenshots, "_vlm_review", "床")]
+    finally:
+        if old_screenshots is None:
+            os.environ.pop("CAI_SCREENSHOTS_DIR", None)
+        else:
+            os.environ["CAI_SCREENSHOTS_DIR"] = old_screenshots
+        shutil.rmtree(project_screenshots, ignore_errors=True)
+    print("[OK] VLM review default output dir uses project screenshots")
 
 
 def test_vlm_capture_restores_and_skips_when_main_camera_leaks():
@@ -461,8 +544,15 @@ def test_vlm_capture_restores_and_skips_when_main_camera_leaks():
     review_camera.save_screenshot_sync = leaking_save
     tmp = _test_tmp_dir("main_leak")
     try:
-        result = model_reviewer._capture_with_review_camera(scene, review_camera, tmp, "leak", pose)
-        assert result is None
+        result = vlm_capture.capture_vlm_views(
+            "",
+            tmp,
+            actor_name="leak",
+            scope="actor",
+            scene=scene,
+            review_camera=review_camera,
+        )
+        assert result.status == "skipped"
         assert model_reviewer._snapshot_camera_state(scene.active) == main_before
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
@@ -476,7 +566,7 @@ def test_vlm_review_camera_without_offscreen_surface_is_skipped():
             self.offscreen_capture_mode = False
 
         def set_surface(self, surface):
-            self.surface = 123
+            raise RuntimeError("surface update failed")
 
     scene = FakeScene()
     camera = model_reviewer.get_or_create_vlm_review_camera(scene, camera_factory=NoSurfaceCamera)
@@ -504,25 +594,17 @@ def test_main_camera_fallback_env_is_ignored(monkeypatch=None):
     old = os.environ.get("CORONA_VLM_ALLOW_MAIN_CAMERA_CAPTURE")
     os.environ["CORONA_VLM_ALLOW_MAIN_CAMERA_CAPTURE"] = "1"
     original_scene = model_reviewer._get_current_scene
-    original_fallback = model_reviewer._capture_single_model_main_camera_fallback
-    called = {"fallback": False}
 
     def no_scene():
         return None
 
-    def fallback(*args, **kwargs):
-        called["fallback"] = True
-        return "/should-not-happen"
-
     model_reviewer._get_current_scene = no_scene
-    model_reviewer._capture_single_model_main_camera_fallback = fallback
     tmp = _test_tmp_dir("no_main_fallback")
     try:
+        assert not hasattr(model_reviewer, "_capture_single_model_main_camera_fallback")
         assert model_reviewer._capture_single_model(tmp, "sample") is None
-        assert called["fallback"] is False
     finally:
         model_reviewer._get_current_scene = original_scene
-        model_reviewer._capture_single_model_main_camera_fallback = original_fallback
         shutil.rmtree(tmp, ignore_errors=True)
         if old is None:
             os.environ.pop("CORONA_VLM_ALLOW_MAIN_CAMERA_CAPTURE", None)
@@ -566,6 +648,8 @@ if __name__ == "__main__":
     test_vlm_review_camera_reuses_existing()
     test_vlm_review_camera_created_without_switching_active()
     test_vlm_capture_uses_review_camera_not_main()
+    test_vlm_capture_bridges_unicode_output_paths_for_engine()
+    test_vlm_review_default_output_dir_uses_project_screenshots()
     test_vlm_capture_restores_and_skips_when_main_camera_leaks()
     test_vlm_review_camera_without_offscreen_surface_is_skipped()
     test_vlm_review_camera_legacy_surface_api_still_works()

@@ -43,6 +43,7 @@ class FakeCamera:
         self.output_mode = kwargs.get("output_mode", "final_color")
         self.surface = 123
         self.offscreen_capture_mode = False
+        self.offscreen_capture_calls = []
         self.set_calls = []
         self.async_screenshots = []
         self.sync_screenshots = []
@@ -68,6 +69,7 @@ class FakeCamera:
 
     def set_offscreen_capture_mode(self, enabled):
         self.offscreen_capture_mode = bool(enabled)
+        self.offscreen_capture_calls.append(bool(enabled))
         if enabled:
             self.surface = 0
 
@@ -140,27 +142,30 @@ def _parse_envelope(envelope):
 def test_multiview_uses_offscreen_review_camera_not_main():
     scene = FakeScene()
     tool = camera_tools._build_camera_multiview_tool(FakeSceneManager(scene))
+    assert "output_modes" not in tool.args_schema.model_fields
     output_dir = tempfile.mkdtemp(prefix="camera_multiview_offscreen_")
     try:
         result = _parse_envelope(tool.invoke({
             "actor_name": "chair",
-            "view_count": 2,
             "output_dir": output_dir,
-            "output_modes": ["base_color"],
         }))
     finally:
         shutil.rmtree(output_dir, ignore_errors=True)
 
     assert result["status"] == "success"
+    assert result["view_count"] == 4
+    assert result["output_mode"] == "base_color"
+    assert "output_modes" not in result
     assert scene.active.set_calls == [], "main camera must not be moved by VLM multiview capture"
     assert scene.active.async_screenshots == []
     assert scene.active.sync_screenshots == []
     assert scene.added, "multiview capture should create an offscreen review camera"
     review_camera = scene.added[0]
     assert review_camera.name == "vlm_review_camera"
-    assert review_camera.offscreen_capture_mode is True
-    assert len(review_camera.set_calls) == 2
-    assert len(review_camera.sync_screenshots) == 2
+    assert review_camera.offscreen_capture_calls == []
+    assert review_camera.get_surface() == 0
+    assert len(review_camera.set_calls) == 4
+    assert len(review_camera.sync_screenshots) == 4
     assert review_camera.async_screenshots == []
     print("[OK] camera_multiview_capture uses offscreen review camera")
 
@@ -168,11 +173,11 @@ def test_multiview_uses_offscreen_review_camera_not_main():
 def test_screenshot_uses_offscreen_review_camera_by_default():
     scene = FakeScene()
     tool = camera_tools._build_camera_screenshot_tool(FakeSceneManager(scene))
+    assert "output_mode" not in tool.args_schema.model_fields
     output_path = os.path.join(tempfile.mkdtemp(prefix="camera_screenshot_offscreen_"), "shot.png")
     try:
         result = _parse_envelope(tool.invoke({
             "output_path": output_path,
-            "output_mode": "base_color",
         }))
     finally:
         shutil.rmtree(os.path.dirname(output_path), ignore_errors=True)
@@ -184,10 +189,12 @@ def test_screenshot_uses_offscreen_review_camera_by_default():
     assert scene.added, "camera_screenshot should create an offscreen review camera by default"
     review_camera = scene.added[0]
     assert review_camera.name == "vlm_review_camera"
-    assert review_camera.offscreen_capture_mode is True
+    assert review_camera.offscreen_capture_calls == []
+    assert review_camera.get_surface() == 0
     assert review_camera.sync_screenshots == [output_path]
     assert review_camera.async_screenshots == []
     assert review_camera.output_mode == "base_color"
+    assert result["output_mode"] == "base_color"
     print("[OK] camera_screenshot uses offscreen review camera by default")
 
 

@@ -89,6 +89,22 @@ def test_seed_plan_round_trips_to_dict():
     print("[OK] SeedPlan serializes for structured action payloads")
 
 
+def test_seed_plan_design_brief_round_trips_to_dict():
+    plan = SeedPlan(room_id="room-a", scene_type="outdoor")
+    plan.set_design_brief(
+        "暗黑小巷鬼市：窄巷、三处摊位、红灯笼门牌。",
+        ["药剂摊", "符咒摊", "骨器摊"],
+        source="lanchat_discussion",
+    )
+
+    restored = SeedPlan.from_dict(plan.as_dict())
+
+    assert restored.design_brief == "暗黑小巷鬼市：窄巷、三处摊位、红灯笼门牌。"
+    assert restored.design_items == ["药剂摊", "符咒摊", "骨器摊"]
+    assert restored.design_source == "lanchat_discussion"
+    print("[OK] SeedPlan design brief serializes as authoritative context")
+
+
 def test_seed_plan_review_policy_output_is_sanitized():
     plan = SeedPlan(room_id="room-a")
     plan.review_policy = {
@@ -132,4 +148,5 @@ if __name__ == "__main__":
     test_seed_plan_rejects_empty_host_confirmation()
     test_seed_plan_can_pause_confirmed_or_executing_generation()
     test_seed_plan_round_trips_to_dict()
+    test_seed_plan_design_brief_round_trips_to_dict()
     test_seed_plan_review_policy_output_is_sanitized()

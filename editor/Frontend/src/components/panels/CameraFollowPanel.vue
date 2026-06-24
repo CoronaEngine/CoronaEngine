@@ -37,6 +37,7 @@
 <script setup>
 import { ref, onMounted, onUnmounted } from 'vue';
 import { Bridge } from '@/utils/bridge.js';
+import { shouldHandleCameraFollowKey } from '@/utils/editorInputFocusGate.js';
 
 const visible = ref(false);
 const panelOpen = ref(false);
@@ -149,7 +150,10 @@ function isGamePreviewInputLocked() {
 
 // ── WASD ──
 function onKeyDown(e) {
-  if (isGamePreviewInputLocked()) return;
+  if (!shouldHandleCameraFollowKey(e, {
+    following: following.value,
+    previewLocked: isGamePreviewInputLocked(),
+  })) return;
   const k = e.key.toLowerCase();
   if (k === 'escape' && following.value) {
     e.preventDefault();
@@ -166,7 +170,10 @@ function onKeyDown(e) {
 }
 
 function onKeyUp(e) {
-  if (isGamePreviewInputLocked()) return;
+  if (!shouldHandleCameraFollowKey(e, {
+    following: following.value,
+    previewLocked: isGamePreviewInputLocked(),
+  })) return;
   const k = e.key.toLowerCase();
   if (['w', 'a', 's', 'd'].includes(k) && following.value) {
     e.preventDefault();

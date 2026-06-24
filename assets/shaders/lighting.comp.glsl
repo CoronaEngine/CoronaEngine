@@ -6,7 +6,7 @@ layout (local_size_x = 8, local_size_y = 8) in;
 // Bindless resource pools
 layout (set = 0, binding = 0) uniform sampler2D textures[];
 layout (set = 1, binding = 0) readonly buffer SSBOPool { uint data[]; } ssbos[];
-layout (set = 2, binding = 0, rgba16) uniform image2D imagesRGBA16[];
+layout (set = 2, binding = 0, rgba16f) uniform image2D imagesRGBA16[];
 layout (set = 2, binding = 0, rgba32ui) uniform uimage2D imagesRGBA32UI[];
 
 layout(push_constant) uniform PushConsts
@@ -19,7 +19,7 @@ layout(push_constant) uniform PushConsts
     uint vpBufferIndex;
     uint finalOutputImage;
     uint uniformBufferIndex;
-    uint padding0;
+    uint skyIrradianceSHBufferIndex;  // 9 vec3 SH coeffs of sky radiance (sky-driven ambient)
     vec3 lightColor;
     float ambientIntensity;
     vec3 sun_dir;
@@ -240,6 +240,41 @@ float AnisotropicSmithGGX(float ndots, float sdotx, float sdoty, float ax, float
 //   [44..59] eyeViewMatrix (mat4)
 //   [60..75] eyeProjMatrix (mat4)
 
+// Evaluate sky-driven irradiance from 9 SH coefficients in the SSBO pool.
+// Uses the Ramamoorthi-Hanrahan analytic form which already folds in the
+// cosine (Lambertian) convolution, so the result is diffuse irradiance / PI
+// ready to multiply by albedo. Returns radiance in the same units the sky
+// pass emits (scaled by sky_intensity at projection time).
+vec3 evalSkySH(vec3 n, uint shBuf)
+{
+    vec3 L0  = readVec3(shBuf, 0u);
+    vec3 L1  = readVec3(shBuf, 3u);
+    vec3 L2  = readVec3(shBuf, 6u);
+    vec3 L3  = readVec3(shBuf, 9u);
+    vec3 L4  = readVec3(shBuf, 12u);
+    vec3 L5  = readVec3(shBuf, 15u);
+    vec3 L6  = readVec3(shBuf, 18u);
+    vec3 L7  = readVec3(shBuf, 21u);
+    vec3 L8  = readVec3(shBuf, 24u);
+
+    const float c1 = 0.429043;
+    const float c2 = 0.511664;
+    const float c3 = 0.743125;
+    const float c4 = 0.886227;
+    const float c5 = 0.247708;
+
+    float x = n.x, y = n.y, z = n.z;
+    vec3 irradiance =
+          c1 * L8 * (x * x - y * y)
+        + c3 * L6 * (z * z)
+        + c4 * L0
+        - c5 * L6
+        + 2.0 * c1 * (L4 * x * y + L7 * x * z + L5 * y * z)
+        + 2.0 * c2 * (L3 * x + L1 * y + L2 * z);
+
+    return max(irradiance, vec3(0.0));
+}
+
 vec3 DisneyBRDF(vec3 WorldPos, vec3 Normal, vec3 Tangent, vec3 Bitangent,
     vec3 lightColor, vec3 albedo, MaterialInfo matl)
 {
@@ -256,8 +291,19 @@ vec3 DisneyBRDF(vec3 WorldPos, vec3 Normal, vec3 Tangent, vec3 Bitangent,
     float ndoth = max(dot(N, H), 0.0);
     float ldoth = max(dot(L, H), 0.0);
 
-    float sky_factor = max(dot(N, vec3(0.0, 1.0, 0.0)), 0.0) * 0.5 + 0.5;
-    vec3 ambient = albedo * sky_factor * pushConsts.ambientIntensity;
+    // Sky-driven ambient (SH9). evalSkySH returns the directional irradiance
+    // E(n) from the atmospheric model; Lambertian exitance = albedo·E(n)/π.
+    // The SH already carries the physical sky magnitude, so the old
+    // ambientIntensity fudge (sun_intensity·0.02 ≈ 0.2) is dropped — it was
+    // darkening the fill ~5× and crushing interiors.
+    vec3 skyE = evalSkySH(N, pushConsts.skyIrradianceSHBufferIndex);
+    // Average-sky (DC) fill. Without GI, surfaces the sky cannot reach directly
+    // — down-facing, indoor, occluded — get near-zero directional irradiance and
+    // read as black. Floor the irradiance at a fraction of the average sky
+    // (c4·L00 = DC irradiance) so those faces keep a soft ambient base.
+    vec3 skyDC = vec3(0.886227) * readVec3(pushConsts.skyIrradianceSHBufferIndex, 0u);
+    vec3 irradiance = max(skyE, skyDC * 0.5);
+    vec3 ambient = albedo * irradiance * (1.0 / PI);
 
     if (ndotl <= 0.0) return ambient;
 

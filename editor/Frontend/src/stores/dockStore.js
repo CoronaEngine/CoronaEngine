@@ -85,8 +85,17 @@ export const useDockStore = defineStore('dock', {
 
     setExternal(id, tabId) {
       if (this.panels[id]) {
+        this.panels[id].open = true;
         this.panels[id].mode = 'external';
         this.panels[id].externalTabId = tabId;
+      }
+    },
+
+    markExternalClosed(id) {
+      if (this.panels[id]) {
+        this.panels[id].open = false;
+        this.panels[id].mode = 'docked';
+        this.panels[id].externalTabId = null;
       }
     },
 

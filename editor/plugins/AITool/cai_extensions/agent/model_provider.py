@@ -275,9 +275,11 @@ class ModelProvider:
                 tool = self._get_tool("hunyuan_generate_3d")
                 if tool:
                     return tool
-            return self._get_tool("rodin_generate_3d")
-        except Exception:
-            return self._get_tool("rodin_generate_3d")
+            logger.warning("混元 3D 服务不可用，本次模型生成无法继续；Rodin fallback 已关闭")
+            return None
+        except Exception as e:
+            logger.warning("混元 3D 配置读取失败，本次模型生成无法继续；Rodin fallback 已关闭: %s", e)
+            return None
 
     # ── 解析 ──────────────────────────────────────────────────────────
 

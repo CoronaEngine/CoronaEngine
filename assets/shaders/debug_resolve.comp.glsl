@@ -5,9 +5,9 @@ layout (local_size_x = 8, local_size_y = 8) in;
 
 // Bindless resource pools
 layout (set = 0, binding = 0) uniform sampler2D textures[];
+layout (set = 0, binding = 0) uniform usampler2D uintTextures[];
 layout (set = 1, binding = 0) readonly buffer SSBOPool { uint data[]; } ssbos[];
-layout (set = 2, binding = 0, rgba16) uniform image2D imagesRGBA16[];
-layout (set = 2, binding = 0, rgba32ui) uniform uimage2D imagesRGBA32UI[];
+layout (set = 2, binding = 0, rgba16f) uniform image2D imagesRGBA16[];
 
 layout(push_constant) uniform PushConsts
 {
@@ -204,7 +204,7 @@ void main()
     ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
 
     // --- Read visibility buffer (raw) for VisibilityBuffer debug mode ---
-    uvec4 vis = imageLoad(imagesRGBA32UI[pushConsts.visibilityImageIndex], pixel);
+    uvec4 vis = texelFetch(uintTextures[nonuniformEXT(pushConsts.visibilityImageIndex)], pixel, 0);
     uint instanceID_1based = vis.r;
     uint primitiveID = vis.g;
 

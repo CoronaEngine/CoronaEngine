@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 import tempfile
 from pathlib import Path
@@ -23,6 +24,28 @@ def _write_log(text: str) -> Path:
     return Path(handle.name)
 
 
+def _write_zone_snapshot(prompt: str, enclosures: list[str]) -> Path:
+    handle = tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".json", delete=False)
+    payload = {
+        "prompt": prompt,
+        "raw_zones": [],
+        "normalized_zones": [
+            {"zone_id": f"z{idx}", "name": enclosure, "enclosure": enclosure}
+            for idx, enclosure in enumerate(enclosures)
+        ],
+    }
+    with handle:
+        json.dump(payload, handle, ensure_ascii=False)
+    return Path(handle.name)
+
+
+def _write_png_stub() -> Path:
+    handle = tempfile.NamedTemporaryFile("wb", suffix=".png", delete=False)
+    with handle:
+        handle.write(b"\x89PNG\r\n\x1a\nstub")
+    return Path(handle.name)
+
+
 def _levels(checks):
     return {check.name: check.level for check in checks}
 
@@ -32,6 +55,8 @@ def _details(checks):
 
 
 def test_probe_accepts_healthy_resource_log():
+    snapshot = _write_zone_snapshot("草原上的蒙古包，里面有毯子和桌子", ["terrain", "shell"])
+    screenshot = _write_png_stub()
     path = _write_log(
         "\n".join(
             [
@@ -42,6 +67,8 @@ def test_probe_accepts_healthy_resource_log():
                 "[2026-06-19T03:42:52.000000][1][DEBUG] [MeshOpt] Mesh 'terrain': starting phase1 simplification",
                 "[2026-06-19T03:42:53.000000][1][DEBUG] [MeshOpt] Mesh 'terrain_detail' indexed: 4 -> 4 unique vertices",
                 "[2026-06-19T03:42:53.500000][1][INFO] network_send_system_message 可介入窗口：已记录“新增一只小狗”，会优先进入下一批或最终调整。",
+                f"[2026-06-19T03:42:53.600000][1][INFO] [ModelReviewer][VLMCapture] file ready=True path={screenshot} elapsed=0.20s",
+                f"[2026-06-19T03:42:53.700000][1][INFO] [SceneComposer] Zone decompose snapshot saved: {snapshot}",
                 "[2026-06-19T03:42:54.000000][1][INFO] network_send_agent_reply [场景设计大师] 场景组合完成 • 导入引擎：1 个 ✅ 已放入场景：terrain",
                 "[2026-06-19T03:42:55.000000][1][INFO] network_send_agent_reply • 生成中吸收：1 条后续要求",
             ]
@@ -61,8 +88,23 @@ def test_probe_accepts_healthy_resource_log():
     assert levels["cef-crash"] == "PASS"
     assert levels["completion-integrity"] == "PASS"
     assert levels["intervention-visibility"] == "PASS"
-    assert _MODULE.summarize(checks) == "F5_READY: PASS=9 WARN=0 FAIL=0"
+    assert levels["vlm-capture-write"] == "PASS"
+    assert levels["scene-substrate"] == "PASS"
+    assert _MODULE.summarize(checks) == "F5_READY: PASS=11 WARN=0 FAIL=0"
     print("[OK] V3 F5 log probe accepts healthy resource log")
+
+
+def test_probe_warns_when_vlm_ready_file_is_missing_now():
+    path = _write_log(
+        "[2026-06-19T03:42:53.600000][1][INFO] "
+        "[ModelReviewer][VLMCapture] file ready=True path=C:\\Temp\\missing_vlm_file.png elapsed=0.20s"
+    )
+    checks = _MODULE.run(path)
+    levels = _levels(checks)
+    details = _details(checks)
+    assert levels["vlm-capture-write"] == "WARN"
+    assert "missing/empty" in details["vlm-capture-write"]
+    print("[OK] V3 F5 log probe warns when VLM ready file is missing now")
 
 
 def test_probe_flags_repeated_sync_and_user_visible_leak():
@@ -103,5 +145,6 @@ def test_probe_flags_repeated_sync_and_user_visible_leak():
 
 if __name__ == "__main__":
     test_probe_accepts_healthy_resource_log()
+    test_probe_warns_when_vlm_ready_file_is_missing_now()
     test_probe_flags_repeated_sync_and_user_visible_leak()
     print("\n=== V3 F5 log probe ALL PASS ===")

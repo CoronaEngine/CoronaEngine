@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -24,6 +25,7 @@ MAX_COORDINATOR_DISCLOSURE_EVENTS = 2048
 MAX_PENDING_INTERVENTIONS_PER_PLAN = 256
 MAX_RESOLVED_COORDINATOR_PROPOSALS = 256
 MAX_GENERATION_JOB_REFS_PER_PLAN = 64
+logger = logging.getLogger(__name__)
 _SENSITIVE_CONTROL_PAYLOAD_KEYS = {
     "api_key",
     "auth",
@@ -60,6 +62,13 @@ _SENSITIVE_CONTROL_PAYLOAD_KEYS = {
     "token",
     "vlm_raw",
 }
+
+
+def _coordinator_trace_preview(value: Any, limit: int = 100) -> str:
+    text = str(value or "").replace("\r", "\\r").replace("\n", "\\n")
+    if len(text) > limit:
+        return f"{text[:limit]}..."
+    return text
 
 
 def _sanitize_control_payload(value: Any) -> Any:
@@ -216,6 +225,38 @@ class InterventionDecision:
 
 
 @dataclass
+class LayoutReflowProposal:
+    proposal_id: str
+    room_id: str
+    plan_id: str
+    reason: str
+    actor_hints: list[str] = field(default_factory=list)
+    layout_strategy: list[str] = field(default_factory=list)
+    deltas: list[dict[str, Any]] = field(default_factory=list)
+    risk_level: str = "low"
+    status: str = "proposed"
+    confirmed_by: str = ""
+    created_at: float = field(default_factory=time.time)
+    updated_at: float = field(default_factory=time.time)
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "proposal_id": self.proposal_id,
+            "room_id": self.room_id,
+            "plan_id": self.plan_id,
+            "reason": self.reason,
+            "actor_hints": list(self.actor_hints),
+            "layout_strategy": list(self.layout_strategy),
+            "deltas": [dict(item) for item in self.deltas if isinstance(item, dict)],
+            "risk_level": self.risk_level,
+            "status": self.status,
+            "confirmed_by": self.confirmed_by,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+        }
+
+
+@dataclass
 class BatchEvent:
     room_id: str
     plan_id: str
@@ -314,6 +355,7 @@ class InteractionCoordinator:
         self._pending_interventions: dict[str, list[InterventionRequest]] = {}
         self._pending_conflict_resolutions: dict[str, ConflictResolutionProposal] = {}
         self._pending_final_adjustment_conflicts: dict[str, dict[str, Any]] = {}
+        self._pending_layout_reflow_proposals: dict[str, LayoutReflowProposal] = {}
         self._generation_jobs_by_plan: dict[str, list[GenerationJobRef]] = {}
         self._active_generation_session_by_plan: dict[str, str] = {}
         self._replan_source_by_plan: dict[str, str] = {}
@@ -344,6 +386,21 @@ class InteractionCoordinator:
         active = self.active_plan_for_room(msg.room_id)
         if self._is_status_query(msg.text):
             return self._handle_status_query(msg, active)
+        if active and active.status == SeedPlanStatus.COMPLETED and self._is_layout_reflow_confirmation(msg.text):
+            result = self.confirm_layout_reflow_proposal(
+                self._layout_reflow_proposal_id_from_text(msg.text, msg.room_id),
+                msg.sender_id,
+                decision="reject" if self._is_layout_reflow_rejection(msg.text) else "confirm",
+                room_id=msg.room_id,
+            )
+            event_type = (
+                "layout_reflow_confirmation_failed"
+                if not result.ok
+                else "layout_reflow_rejected"
+                if result.payload.get("status") == "rejected"
+                else "layout_reflow_confirmed"
+            )
+            return self._record(event_type, result.message, result.payload)
         if active and active.status in {SeedPlanStatus.CONFIRMED, SeedPlanStatus.EXECUTING, SeedPlanStatus.PAUSED}:
             request = self._intervention_from_message(msg, active)
             decision = self.ingest_intervention(request)
@@ -374,14 +431,27 @@ class InteractionCoordinator:
             if request.intent_type == "status_query":
                 return self._handle_status_query(msg, active)
             decision = self.ingest_intervention(request)
+            if not self._is_layout_reflow_request(msg.text, request):
+                self._record_disclosures(
+                    room_id=msg.room_id,
+                    stage="final_adjustment",
+                    progress=100,
+                    plan=active.as_dict(),
+                    intervention=decision.payload,
+                )
+                return self._record("final_adjustment_routed", decision.message, decision.payload)
+            proposal = self._create_layout_reflow_proposal(active, msg, request)
             self._record_disclosures(
                 room_id=msg.room_id,
                 stage="final_adjustment",
                 progress=100,
                 plan=active.as_dict(),
-                intervention=decision.payload,
+                intervention={**decision.payload, "layout_reflow_proposal": proposal.as_dict()},
             )
-            return self._record("final_adjustment_routed", decision.message, decision.payload)
+            return self._record("layout_reflow_proposal_created", self._layout_reflow_message(proposal), {
+                **decision.payload,
+                "layout_reflow_proposal": proposal.as_dict(),
+            })
 
         plan = self.create_or_update_seed_plan(msg)
         if active is not None and active.status == SeedPlanStatus.CLARIFYING:
@@ -431,8 +501,39 @@ class InteractionCoordinator:
             text=msg.text,
             priority=1 if msg.is_host else 0,
         ))
+        self._update_plan_agent_ownership(plan, msg)
         self._infer_constraints(plan, msg.text)
+        self._refresh_plan_design_brief(plan, source="coordinator_message")
+        logger.info(
+            "[SeedPlanTrace] phase=update room=%s plan=%s status=%s sender=%s/%s host=%s agent=%s/%s participants=%s text_len=%s design_len=%s source=%s text=%s",
+            msg.room_id,
+            plan.plan_id,
+            str(getattr(plan.status, "value", plan.status)),
+            msg.sender_id,
+            msg.sender_name,
+            msg.is_host,
+            msg.agent_id,
+            msg.agent_name,
+            len(getattr(plan, "participants", {}) or {}),
+            len(str(msg.text or "")),
+            len(str(getattr(plan, "design_brief", "") or "")),
+            str((msg.metadata or {}).get("source") or ""),
+            _coordinator_trace_preview(msg.text),
+        )
         return plan
+
+    def _update_plan_agent_ownership(self, plan: SeedPlan, msg: ChatMessage) -> None:
+        metadata = dict(msg.metadata or {})
+        agent_id = str(msg.agent_id or metadata.get("target_agent_id") or "").strip()
+        agent_name = str(msg.agent_name or metadata.get("target_agent_name") or "").strip()
+        if agent_id or agent_name:
+            plan.review_policy["owner_agent_id"] = agent_id or agent_name
+            plan.review_policy["owner_agent_name"] = agent_name or agent_id
+            plan.review_policy["plan_version"] = plan.version
+        source_agents = plan.review_policy.setdefault("source_context_agents", [])
+        source_name = str(metadata.get("source_context_agent") or metadata.get("source_context_agent_name") or "").strip()
+        if source_name and source_name not in source_agents:
+            source_agents.append(source_name)
 
     def propose_seed_plan(self, room_id: str) -> SeedPlan:
         plan = self.active_plan_for_room(room_id)
@@ -718,10 +819,47 @@ class InteractionCoordinator:
                     "requires_conflict_resolution": True,
                 },
             )
+        contract_text = self._resolved_design_text(plan)
+        logger.info(
+            "[SeedPlanTrace] phase=confirm_attempt room=%s plan=%s status=%s host=%s participants=%s design_len=%s contract_len=%s summary=%s",
+            plan.room_id,
+            plan.plan_id,
+            str(getattr(plan.status, "value", plan.status)),
+            host_id,
+            len(getattr(plan, "participants", {}) or {}),
+            len(str(getattr(plan, "design_brief", "") or "")),
+            len(str(contract_text or "")),
+            _coordinator_trace_preview(getattr(plan, "intent_summary", "") or ""),
+        )
+        if not contract_text:
+            logger.info(
+                "[SeedPlanTrace] phase=confirm_reject_no_contract room=%s plan=%s status=%s host=%s design_len=%s",
+                plan.room_id,
+                plan.plan_id,
+                str(getattr(plan.status, "value", plan.status)),
+                host_id,
+                len(str(getattr(plan, "design_brief", "") or "")),
+            )
+            self._record_disclosures(
+                room_id=plan.room_id,
+                stage=plan.status.value,
+                progress=0,
+                plan=plan.as_dict(),
+                intervention={
+                    "intent_type": "clarification",
+                    "apply_policy": "request_concrete_plan",
+                    "priority": 2,
+                    "requires_clarification": True,
+                    "status_message": "当前没有可确认的具体方案，请先整理或选择一个场景方案。",
+                },
+            )
+            return ConfirmResult(
+                False,
+                plan.plan_id,
+                "当前没有可确认的具体方案，请先整理或选择一个场景方案。",
+                {"plan": plan.as_dict(), "requires_concrete_plan": True},
+            )
         plan.confirm(host_id)
-        contract_text = "；".join(
-            item.text for item in plan.participants if str(item.text or "").strip()
-        ) or plan.intent_summary
         contract = build_scene_design_contract(
             room_id=plan.room_id,
             plan_id=plan.plan_id,
@@ -764,6 +902,15 @@ class InteractionCoordinator:
             stage="confirmed",
             progress=0,
             plan=plan.as_dict(),
+        )
+        logger.info(
+            "[SeedPlanTrace] phase=confirm_ok room=%s plan=%s host=%s version=%s contract_len=%s scene_type=%s",
+            plan.room_id,
+            plan.plan_id,
+            host_id,
+            plan.version,
+            len(str(contract_text or "")),
+            plan.scene_type,
         )
         return ConfirmResult(True, plan.plan_id, f"SeedPlan {plan.plan_id} 已确认。", payload)
 
@@ -1528,6 +1675,171 @@ class InteractionCoordinator:
             "summary_text": summary_text,
         }
 
+    def _create_layout_reflow_proposal(
+        self,
+        plan: SeedPlan,
+        message: ChatMessage,
+        request: InterventionRequest,
+    ) -> LayoutReflowProposal:
+        proposal = LayoutReflowProposal(
+            proposal_id=f"layout-{uuid.uuid4().hex[:12]}",
+            room_id=plan.room_id,
+            plan_id=plan.plan_id,
+            reason=request.content or message.text,
+            actor_hints=self._layout_reflow_actor_hints(request.content or message.text),
+            layout_strategy=[
+                "清出中央通道，优先降低模型互相遮挡和位置冲突",
+                "大型或功能性物体靠边分区摆放，小件围绕功能区聚合",
+                "焦点物体放到后方或中轴，不删除、不替换、不重新生成模型",
+            ],
+            deltas=[
+                {"op": "clear_path", "path": "center"},
+                {"op": "group_align", "group": "large_or_functional", "zone": "side"},
+                {"op": "move", "target": "focal_or_latest", "zone": "back_center"},
+            ],
+        )
+        self._pending_layout_reflow_proposals[proposal.proposal_id] = proposal
+        self._record_memory(
+            room_id=plan.room_id,
+            plan_id=plan.plan_id,
+            entry_type="layout_reflow_proposed",
+            text=proposal.reason,
+            actor_id=message.sender_id,
+            visibility="shared",
+            metadata=proposal.as_dict(),
+        )
+        return proposal
+
+    @staticmethod
+    def _is_layout_reflow_request(text: str, request: InterventionRequest) -> bool:
+        raw = str(text or "")
+        is_broad_layout_request = any(word in raw for word in (
+            "调整一下布局", "布局不合理", "布局不是很合理", "位置冲突",
+            "模型位置冲突", "摆放有问题", "通道被挡", "清出通道", "动线不合理",
+            "浮空", "飘起来", "飘起", "没贴地", "不贴地", "悬空", "离地",
+        )) or (
+            any(word in raw for word in ("布局", "摆放", "动线", "位置"))
+            and any(word in raw for word in ("调整", "冲突", "不合理", "有问题", "挡路"))
+        )
+        if not is_broad_layout_request:
+            return False
+        if request.actor_id:
+            return False
+        generic_layout_hints = {
+            "一下布局",
+            "布局",
+            "摆放",
+            "动线",
+            "位置",
+            "模型位置冲突",
+        }
+        if request.target_hint and request.target_hint not in generic_layout_hints:
+            return False
+        return True
+
+    @staticmethod
+    def _layout_reflow_actor_hints(text: str) -> list[str]:
+        raw = str(text or "")
+        hints: list[str] = []
+        for token in re.split(r"[，,。；;\s]+", raw):
+            token = token.strip("“”\"'：:、")
+            if not token or token in {"调整", "布局", "一下", "我看", "有些", "模型", "位置", "冲突", "不合理"}:
+                continue
+            if any(word in token for word in ("布局", "调整", "冲突", "不合理", "摆放", "通道", "挡路")):
+                continue
+            if 1 <= len(token) <= 16:
+                hints.append(token)
+        seen: set[str] = set()
+        out: list[str] = []
+        for hint in hints:
+            if hint in seen:
+                continue
+            seen.add(hint)
+            out.append(hint)
+        return out[:8]
+
+    @staticmethod
+    def _layout_reflow_message(proposal: LayoutReflowProposal) -> str:
+        return (
+            f"【布局调整建议 {proposal.proposal_id}】建议做一次低风险重排："
+            "清出中央通道、按功能分区摆放，并把焦点物体放到更稳定的位置。"
+            "不会删除、替换或重新生成模型。房主可回复："
+            f"确认调整 {proposal.proposal_id} / 拒绝调整 {proposal.proposal_id}。"
+        )
+
+    def _layout_reflow_proposal_id_from_text(self, text: str, room_id: str = "") -> str:
+        match = re.search(r"\b(layout-[A-Za-z0-9_-]+)\b", str(text or ""))
+        if match:
+            return match.group(1)
+        for proposal in reversed(list(self._pending_layout_reflow_proposals.values())):
+            if proposal.status == "proposed" and (not room_id or proposal.room_id == room_id):
+                return proposal.proposal_id
+        return ""
+
+    @staticmethod
+    def _is_layout_reflow_confirmation(text: str) -> bool:
+        raw = str(text or "").strip()
+        return (
+            bool(re.search(r"\b(layout-[A-Za-z0-9_-]+)\b", raw))
+            and any(word in raw for word in ("确认", "拒绝", "取消"))
+        ) or any(word in raw for word in ("确认调整", "执行调整", "应用调整", "拒绝调整", "取消调整"))
+
+    @staticmethod
+    def _is_layout_reflow_rejection(text: str) -> bool:
+        return any(word in str(text or "") for word in ("拒绝", "取消", "不要调整", "不调整"))
+
+    def confirm_layout_reflow_proposal(
+        self,
+        proposal_id: str,
+        host_id: str,
+        *,
+        decision: str = "confirm",
+        room_id: str = "",
+    ) -> ConfirmResult:
+        proposal_key = str(proposal_id or "").strip()
+        if not proposal_key:
+            proposal_key = self._layout_reflow_proposal_id_from_text("", room_id)
+        proposal = self._pending_layout_reflow_proposals.get(proposal_key)
+        if proposal is None:
+            return ConfirmResult(False, "", "找不到对应布局调整建议。", {"proposal_id": proposal_key, "status": "missing"})
+        host = str(host_id or "").strip()
+        if not host:
+            return ConfirmResult(False, proposal.plan_id, "缺少房主确认身份，不能执行布局调整。", {"proposal": proposal.as_dict()})
+        normalized = "rejected" if str(decision or "").lower() in {"reject", "rejected", "no", "cancel"} else "confirmed"
+        proposal.status = normalized
+        proposal.confirmed_by = host
+        proposal.updated_at = time.time()
+        payload = proposal.as_dict()
+        self._record_memory(
+            room_id=proposal.room_id,
+            plan_id=proposal.plan_id,
+            entry_type="layout_reflow_confirmed" if normalized == "confirmed" else "layout_reflow_rejected",
+            text=proposal.reason,
+            actor_id=host,
+            visibility="shared",
+            metadata=payload,
+        )
+        self._record_disclosures(
+            room_id=proposal.room_id,
+            stage="final_adjustment",
+            progress=100,
+            plan=self._plans.get(proposal.plan_id).as_dict() if proposal.plan_id in self._plans else {"plan_id": proposal.plan_id, "room_id": proposal.room_id},
+            intervention={
+                "intent_type": "final_adjustment_request",
+                "apply_policy": normalized,
+                "priority": 2,
+                "proposal_id": proposal.proposal_id,
+                "status_message": "布局调整建议已确认。" if normalized == "confirmed" else "布局调整建议已取消。",
+                "layout_reflow_proposal": payload,
+            },
+        )
+        return ConfirmResult(
+            True,
+            proposal.plan_id,
+            "布局调整建议已确认，准备执行低风险重排。" if normalized == "confirmed" else "布局调整建议已取消。",
+            payload,
+        )
+
     @staticmethod
     def _final_adjustment_item_target_keys(item: dict[str, Any]) -> set[str]:
         return set(InteractionCoordinator._final_adjustment_item_target_key_list(item))
@@ -2232,6 +2544,116 @@ class InteractionCoordinator:
             plan.conflicts.append(text)
         plan.updated_at = time.time()
 
+    def _refresh_plan_design_brief(self, plan: SeedPlan, *, source: str = "") -> None:
+        if plan.status in {SeedPlanStatus.CONFIRMED, SeedPlanStatus.EXECUTING, SeedPlanStatus.COMPLETED}:
+            return
+        texts = [
+            str(item.text or "").strip()
+            for item in plan.participants
+            if self._is_meaningful_design_text(str(item.text or ""))
+        ]
+        if not texts:
+            return
+        brief = "；".join(texts[-6:])
+        items = self._design_items_from_text(brief)
+        plan.set_design_brief(brief, items, source=source)
+
+    def _resolved_design_text(self, plan: SeedPlan) -> str:
+        brief = str(getattr(plan, "design_brief", "") or "").strip()
+        if brief and self._is_meaningful_design_text(brief):
+            return brief
+        texts = [
+            str(item.text or "").strip()
+            for item in plan.participants
+            if self._is_meaningful_design_text(str(item.text or ""))
+        ]
+        return "；".join(texts[-6:]).strip()
+
+    @staticmethod
+    def _is_meaningful_design_text(text: str) -> bool:
+        raw = re.sub(r"@\S+\s*", "", str(text or "")).strip()
+        if not raw:
+            return False
+        if InteractionCoordinator._is_status_query(raw):
+            return False
+        if InteractionCoordinator._is_confirmation_only_text(raw):
+            return False
+        placeholders = (
+            "写明要改的风格",
+            "物件、布局或限制",
+            "新增一个...",
+            "调整...",
+            "问题...",
+            "请输入",
+        )
+        if any(item in raw for item in placeholders):
+            return False
+        strong_update_words = ("采用", "按", "确认", "补充", "新增", "调整", "修改", "生成", "开始", "做一个")
+        opinion_patterns = ("怎么看", "你觉得", "大家觉得", "评价", "看法")
+        if any(word in raw for word in opinion_patterns) and not any(word in raw for word in strong_update_words):
+            return False
+        elaboration_prefixes = (
+            "继续输出",
+            "继续说",
+            "展开说明",
+            "详细说明",
+            "说说",
+            "讲讲",
+        )
+        if raw.startswith(elaboration_prefixes) and not any(word in raw for word in strong_update_words):
+            return False
+        return True
+
+    @staticmethod
+    def _is_confirmation_only_text(text: str) -> bool:
+        raw = str(text or "").strip()
+        if not raw:
+            return True
+        normalized = re.sub(r"[\s:：，,。.!！?？、；;\"'“”‘’（）()【】\[\]-]+", "", raw)
+        control_words = (
+            "确认开始生成",
+            "确认开始",
+            "确认生成",
+            "确认方案",
+            "开始生成",
+            "开始执行",
+            "直接生成",
+            "执行生成",
+            "按当前方案",
+            "按这个方案",
+            "生成",
+            "确认",
+            "开始",
+        )
+        if normalized in control_words:
+            return True
+        reduced = normalized
+        for word in control_words:
+            reduced = reduced.replace(word, "")
+        reduced = reduced.replace("方案", "").replace("当前", "").replace("这个", "")
+        return not reduced.strip()
+
+    @staticmethod
+    def _design_items_from_text(text: str) -> list[str]:
+        raw = str(text or "")
+        candidates: list[str] = []
+        for token in re.split(r"[、,，；;\n]+", raw):
+            value = token.strip(" ：:。.!！?？")
+            if not value:
+                continue
+            if len(value) > 24:
+                continue
+            if any(word in value for word in ("摊", "灯", "门", "牌", "桌", "椅", "柜", "箱", "墙", "路", "棚", "台")):
+                candidates.append(value)
+        seen: set[str] = set()
+        out: list[str] = []
+        for item in candidates:
+            if item in seen:
+                continue
+            seen.add(item)
+            out.append(item)
+        return out[:12]
+
     @staticmethod
     def _is_status_query(text: str) -> bool:
         raw = str(text or "")
@@ -2316,7 +2738,11 @@ class InteractionCoordinator:
     def _execution_prompt_for_plan(plan: SeedPlan, contract: dict[str, Any] | None = None) -> str:
         contract = dict(contract or {})
         parts: list[str] = []
-        if plan.intent_summary:
+        design_brief = str(getattr(plan, "design_brief", "") or "").strip()
+        if design_brief:
+            parts.append("## 已确认 SeedPlan 方案")
+            parts.append(design_brief)
+        elif plan.intent_summary:
             parts.append("## 已确认多人方案")
             parts.append(plan.intent_summary)
         if plan.style_constraints:
@@ -2536,8 +2962,8 @@ class InteractionCoordinator:
             sender_id=str(message.get("sender_id") or ""),
             sender_name=str(message.get("sender_name") or ""),
             is_host=bool(message.get("is_host") or metadata.get("is_host")),
-            agent_id=str(message.get("agent_id") or ""),
-            agent_name=str(message.get("agent_name") or ""),
+            agent_id=str(message.get("agent_id") or metadata.get("target_agent_id") or ""),
+            agent_name=str(message.get("agent_name") or metadata.get("target_agent_name") or ""),
             metadata=dict(metadata),
         )
 

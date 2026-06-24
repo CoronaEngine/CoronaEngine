@@ -14,6 +14,15 @@
 namespace vision {
 
 struct RealTimeDenoiseInput {
+    /// Semantics of the two radiance channels (direct/indirect buffers). The denoiser
+    /// (e.g. SVGF modulator) demodulates differently per kind, so the producer MUST set
+    /// this. PathTracingIntegrator splits diffuse/specular; RealTimeIntegrator (ReSTIR)
+    /// produces direct/indirect lighting. Mislabeling demodulates by the wrong albedo.
+    enum class ChannelKind : uint {
+        DiffuseSpecular = 0,///< direct = diffuse, indirect = specular
+        DirectIndirect = 1  ///< direct = direct lighting, indirect = indirect lighting
+    };
+
     uint2 resolution{};
     uint frame_index{};
 
@@ -24,14 +33,16 @@ struct RealTimeDenoiseInput {
     BufferView<RadType4> indirect;
 
     BufferView<float2> motion_vec;
-    
+
     /// Primary geometry source - other geometry data computed from this
     BufferView<TriangleHit> visibility;
     BufferView<TriangleHit> prev_visibility;
-    
+
     /// Camera positions for depth calculation from visibility buffer
     array_float3 camera_pos{};
     array_float3 prev_camera_pos{};
+
+    ChannelKind channel_kind{ChannelKind::DiffuseSpecular};
 };
 
 /// Light field specific denoising input (extends RealTimeDenoiseInput)

@@ -13,10 +13,13 @@
 #include <limits>
 #include <mutex>
 #include <shared_mutex>
+#include <span>
+#include <string>
 #include <unordered_map>
 #include <unordered_set>
 #include <filesystem>
 #include <future>
+#include <utility>
 
 #include <corona/resource/resource.h>
 #include <corona/resource/resource_manager.h>
@@ -27,6 +30,34 @@
 namespace Corona::Systems {
 
 using namespace GeometryInternal;
+
+namespace {
+
+template <typename T>
+Horizon::HardwareBuffer make_geometry_buffer(const std::vector<T>& data,
+                                             Horizon::BufferUsageFlags usage,
+                                             std::string name = {}) {
+    Horizon::HardwareBufferDesc desc;
+    desc.element_count = data.size();
+    desc.element_size = static_cast<uint32_t>(sizeof(T));
+    desc.usage = usage;
+    desc.debug_name = std::move(name);
+    return Horizon::HardwareBuffer(desc, std::as_bytes(std::span<const T>(data.data(), data.size())));
+}
+
+Horizon::HardwareImage make_geometry_texture(uint32_t width,
+                                             uint32_t height,
+                                             Horizon::Format format,
+                                             std::string name = {}) {
+    return Horizon::HardwareImage(Horizon::HardwareImageDesc::texture_2d(
+        width,
+        height,
+        format,
+        Horizon::ImageUsageFlags::Sampled | Horizon::ImageUsageFlags::TransferDst,
+        std::move(name)));
+}
+
+}  // namespace
 
 // ============================================================================
 // 生命周期
@@ -760,7 +791,6 @@ void GeometrySystem::rebuild_actor_gpu_resources(std::uintptr_t actor, std::uint
             // 纹理上传涉及 GPU 传输，批量处理比逐个处理效率高
             struct PendingTextureUpload {
                 std::uint32_t mesh_idx;               // 对应 mesh_devices 中的索引
-                HardwareImage* texture;               // 指向已创建的 HardwareImage 对象
                 std::vector<unsigned char> rgba_data; // 纹理像素数据（RGBA 格式）
                 unsigned char* data_ptr;              // 指向 rgba_data 中数据的指针
             };
@@ -772,20 +802,12 @@ void GeometrySystem::rebuild_actor_gpu_resources(std::uintptr_t actor, std::uint
             // 生命周期由 Impl::shared_placeholder_texture 管理，shutdown() 中显式释放
             // 避免 static 局部变量在 GPU device 析构后才析构导致 crash
             if (!impl_->shared_placeholder_texture) {
-                HardwareImageCreateInfo placeholder_info{};
-                placeholder_info.width        = 1;                       // 1 像素宽
-                placeholder_info.height       = 1;                       // 1 像素高
-                placeholder_info.format       = ImageFormat::RGBA8_SRGB; // sRGB 色彩空间
-                placeholder_info.usage        = ImageUsage::SampledImage; // 可作为着色器采样源
-                placeholder_info.arrayLayers  = 1;                       // 无数组层
-                placeholder_info.mipLevels    = 1;                       // 无 mipmap
-
                 static const unsigned char white_pixel[4] = {255, 255, 255, 255};  // 不透明白色
-                impl_->shared_placeholder_texture = std::make_unique<HardwareImage>(placeholder_info);
-                HardwareExecutor temp_executor;                        // 临时命令执行器
-                // 将白色像素数据拷贝到 GPU 纹理，提交执行
-                temp_executor << impl_->shared_placeholder_texture->copyFrom(white_pixel)
-                              << temp_executor.commit();
+                impl_->shared_placeholder_texture = std::make_unique<Horizon::HardwareImage>(
+                    make_geometry_texture(1, 1, Horizon::Format::SRGBA8_UNORM,
+                                          "geometry.placeholder_texture"));
+                impl_->shared_placeholder_texture->write_bytes(
+                    std::as_bytes(std::span<const unsigned char>(white_pixel, sizeof(white_pixel))));
             }
 
             // ---- 第一阶段：遍历所有 mesh，创建 GPU 缓冲 ----
@@ -798,10 +820,24 @@ void GeometrySystem::rebuild_actor_gpu_resources(std::uintptr_t actor, std::uint
                 // vertexStorageBuffer / indexStorageBuffer：Compute Shader 使用（可读写）
                 // get_mesh_vertices() 返回 meshopt 优化后的顶点数组
                 // get_mesh_indices() 返回 meshopt 优化后的索引数组
-                dev.vertexBuffer        = HardwareBuffer(scene.get_mesh_vertices(mesh_idx), BufferUsage::VertexBuffer);
-                dev.indexBuffer         = HardwareBuffer(scene.get_mesh_indices(mesh_idx),  BufferUsage::IndexBuffer);
-                dev.vertexStorageBuffer = HardwareBuffer(scene.get_mesh_vertices(mesh_idx), BufferUsage::StorageBuffer);
-                dev.indexStorageBuffer  = HardwareBuffer(scene.get_mesh_indices(mesh_idx),  BufferUsage::StorageBuffer);
+                dev.vertexBuffer = make_geometry_buffer(
+                    scene.get_mesh_vertices(mesh_idx),
+                    Horizon::BufferUsageFlags::TransferDst | Horizon::BufferUsageFlags::Vertex,
+                    "geometry.vertex");
+                dev.indexBuffer = make_geometry_buffer(
+                    scene.get_mesh_indices(mesh_idx),
+                    Horizon::BufferUsageFlags::TransferDst | Horizon::BufferUsageFlags::Index,
+                    "geometry.index");
+                dev.vertexStorageBuffer = make_geometry_buffer(
+                    scene.get_mesh_vertices(mesh_idx),
+                    Horizon::BufferUsageFlags::TransferSrc | Horizon::BufferUsageFlags::TransferDst |
+                        Horizon::BufferUsageFlags::Storage,
+                    "geometry.vertex_storage");
+                dev.indexStorageBuffer = make_geometry_buffer(
+                    scene.get_mesh_indices(mesh_idx),
+                    Horizon::BufferUsageFlags::TransferSrc | Horizon::BufferUsageFlags::TransferDst |
+                        Horizon::BufferUsageFlags::Storage,
+                    "geometry.index_storage");
 
                 // ---- 材质索引 ----
                 // material_index 指向 scene.data.materials 数组
@@ -818,7 +854,9 @@ void GeometrySystem::rebuild_actor_gpu_resources(std::uintptr_t actor, std::uint
 
                 // ---- 纹理处理 ----
                 bool texture_created = false;               // 标记：是否已创建纹理
-                HardwareImageCreateInfo create_info{};       // 纹理创建参数（零初始化）
+                uint32_t texture_width = 0;
+                uint32_t texture_height = 0;
+                Horizon::Format texture_format = Horizon::Format::SRGBA8_UNORM;
 
                 // 检查是否有有效材质和纹理
                 if (mesh.material_index != Resource::InvalidIndex &&
@@ -841,45 +879,44 @@ void GeometrySystem::rebuild_actor_gpu_resources(std::uintptr_t actor, std::uint
                                 if (texture_data->is_compressed()) {
                                     // 获取压缩后的数据（GPU 可直接使用的格式）
                                     const auto& compressed = texture_data->get_compressed_data();
-                                    create_info.width        = tex_width;
-                                    create_info.height       = tex_height;
-                                    create_info.usage        = ImageUsage::SampledImage;
-                                    create_info.arrayLayers  = 1;
-                                    create_info.mipLevels    = 1;
+                                    texture_width = static_cast<uint32_t>(tex_width);
+                                    texture_height = static_cast<uint32_t>(tex_height);
+                                    bool supported_format = true;
 
                                     // 根据压缩格式设置对应的 GPU 图像格式
                                     if (compressed.format == Resource::CompressedData::Format::BC1) {
-                                        create_info.format = ImageFormat::BC1_RGB_SRGB;     // DXT1，无 alpha
+                                        texture_format = Horizon::Format::BC1_UNORM_SRGB;     // DXT1，无 alpha
                                     } else if (compressed.format == Resource::CompressedData::Format::BC3) {
-                                        create_info.format = ImageFormat::BC3_RGBA_SRGB;    // DXT5，含 alpha
+                                        texture_format = Horizon::Format::BC3_UNORM_SRGB;    // DXT5，含 alpha
                                     } else if (compressed.format == Resource::CompressedData::Format::ASTC_4x4) {
-                                        create_info.format = ImageFormat::ASTC_4x4_SRGB;    // 移动端常用
+                                        CFW_LOG_WARNING("[GeometrySystem] ASTC_4x4 texture is not supported by current Horizon format enum; using placeholder texture");
+                                        supported_format = false;
                                     }
 
                                     // 将压缩数据加入待上传队列
-                                    PendingTextureUpload upload{mesh_idx, nullptr, {}, nullptr};
-                                    upload.rgba_data.assign(compressed.data.begin(), compressed.data.end());
-                                    upload.data_ptr = upload.rgba_data.data();
+                                    if (supported_format) {
+                                        PendingTextureUpload upload{mesh_idx, {}, nullptr};
+                                        upload.rgba_data.assign(compressed.data.begin(), compressed.data.end());
+                                        upload.data_ptr = upload.rgba_data.data();
 
-                                    // 创建 GPU 纹理对象（此时尚未上传像素数据）
-                                    dev.textureBuffer = HardwareImage(create_info);
-                                    upload.texture = &dev.textureBuffer;
-                                    pending_uploads.push_back(std::move(upload));
-                                    texture_created = true;
+                                        // 创建 GPU 纹理对象（此时尚未上传像素数据）
+                                        dev.textureBuffer = make_geometry_texture(
+                                            texture_width, texture_height, texture_format,
+                                            "geometry.material_texture");
+                                        pending_uploads.push_back(std::move(upload));
+                                        texture_created = true;
+                                    }
                                 }
                                 // ========================================
                                 // 分支 B：未压缩纹理（RGBA 像素数据）
                                 // ========================================
                                 else {
-                                    create_info.width        = tex_width;
-                                    create_info.height       = tex_height;
-                                    create_info.format       = ImageFormat::RGBA8_SRGB;   // 统一转为 RGBA8
-                                    create_info.usage        = ImageUsage::SampledImage;
-                                    create_info.arrayLayers  = 1;
-                                    create_info.mipLevels    = 1;
+                                    texture_width = static_cast<uint32_t>(tex_width);
+                                    texture_height = static_cast<uint32_t>(tex_height);
+                                    texture_format = Horizon::Format::SRGBA8_UNORM;   // 统一转为 RGBA8
 
                                     unsigned char* src_data = texture_data->get_data();  // 原始像素数据指针
-                                    PendingTextureUpload upload{mesh_idx, nullptr, {}, nullptr};
+                                    PendingTextureUpload upload{mesh_idx, {}, nullptr};
 
                                     // ---- 根据通道数转换为 RGBA ----
                                     if (tex_channels == 4) {
@@ -911,8 +948,9 @@ void GeometrySystem::rebuild_actor_gpu_resources(std::uintptr_t actor, std::uint
 
                                     // 如果有有效数据，创建 GPU 纹理并加入上传队列
                                     if (upload.data_ptr != nullptr) {
-                                        dev.textureBuffer = HardwareImage(create_info);   // 创建 GPU 纹理对象
-                                        upload.texture = &dev.textureBuffer;              // 指向刚创建的纹理
+                                        dev.textureBuffer = make_geometry_texture(
+                                            texture_width, texture_height, texture_format,
+                                            "geometry.material_texture");   // 创建 GPU 纹理对象
                                         pending_uploads.push_back(std::move(upload));    // 入队等待批量上传
                                         texture_created = true;
                                     }
@@ -934,7 +972,7 @@ void GeometrySystem::rebuild_actor_gpu_resources(std::uintptr_t actor, std::uint
 
             // ================================================================
             // 阶段 B：批量上传纹理像素到 GPU
-            // 使用 HardwareExecutor 执行异步 GPU 传输
+            // 使用 Horizon 图像同步写入执行 GPU 传输
             // 每 32 个纹理一批，平衡内存占用和批次开销
             // ================================================================
             if (!pending_uploads.empty()) {
@@ -942,16 +980,12 @@ void GeometrySystem::rebuild_actor_gpu_resources(std::uintptr_t actor, std::uint
                 for (size_t batch_start = 0; batch_start < pending_uploads.size(); batch_start += kBatchSize) {
                     size_t batch_end = std::min(batch_start + kBatchSize, pending_uploads.size());
 
-                    HardwareExecutor batch_executor;  // GPU 命令执行器
-                    // 将本批次所有纹理的 copyFrom 命令加入执行器
                     for (size_t i = batch_start; i < batch_end; ++i) {
                         auto& upload = pending_uploads[i];
-                        HardwareImage& tex = mesh_devices[upload.mesh_idx].textureBuffer;
-                        batch_executor << tex.copyFrom(upload.data_ptr);  // 将像素数据拷贝到 GPU
+                        Horizon::HardwareImage& tex = mesh_devices[upload.mesh_idx].textureBuffer;
+                        tex.write_bytes(std::as_bytes(
+                            std::span<const unsigned char>(upload.data_ptr, upload.rgba_data.size())));
                     }
-                    // 提交所有命令到 GPU 队列并执行
-                    batch_executor << batch_executor.commit();
-                    batch_executor.waitForDeferredResources();  // 等待本批次传输完成
                 }
             }
 

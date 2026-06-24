@@ -172,6 +172,34 @@ def test_lanchat_room_panel_exposes_host_vlm_toggle() -> None:
     )
 
 
+def test_lanchat_history_rooms_are_session_loadable() -> None:
+    _assert_contains(
+        "include/corona/systems/network/lanchat_history_store.h",
+        "std::string session_id",
+    )
+    _assert_contains(
+        "src/systems/ui/cef/cef_query_bridge.cpp",
+        "display_room_id",
+        "const std::string load_id = room.session_id.empty() ? room.room_id : room.session_id",
+        "{\"room_id\", load_id}",
+    )
+    _assert_contains(
+        "editor/Frontend/src/views/sidebar/lanchat/RoomPanel.vue",
+        "room.display_room_id || room.room_id",
+    )
+
+
+def test_lanchat_displayed_ip_prefers_wlan_adapter() -> None:
+    _assert_contains(
+        "src/systems/ui/cef/cef_query_bridge.cpp",
+        "detect_wlan_ipv4",
+        "GetAdaptersAddresses",
+        "looks_like_wlan_adapter",
+        'payload["local_ip"] = detect_wlan_ipv4()',
+        'data["ip"] = detect_wlan_ipv4()',
+    )
+
+
 if __name__ == "__main__":
     test_lanchat_room_event_bridge_is_pollable_from_python_worker()
     test_lanchat_plain_chat_coordinator_bridge_contract_is_intact()
@@ -181,4 +209,6 @@ if __name__ == "__main__":
     test_network_host_periodic_snapshot_does_not_rebroadcast_actor_creates()
     test_lanchat_room_panel_exposes_validation_agent_bundle()
     test_lanchat_room_panel_exposes_host_vlm_toggle()
+    test_lanchat_history_rooms_are_session_loadable()
+    test_lanchat_displayed_ip_prefers_wlan_adapter()
     print("[OK] LANChat native bridge static contracts")
