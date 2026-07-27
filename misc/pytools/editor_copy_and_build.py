@@ -15,6 +15,7 @@ import argparse
 import os
 import shutil
 import sys
+import uuid
 from pathlib import Path
 import subprocess
 from typing import Optional
@@ -65,6 +66,25 @@ def _cleanup_stale_files(src_root: Path, dst_root: Path, ignore_fn) -> None:
                 dirpath.rmdir()
         except OSError:
             pass
+
+
+def _normalize_destination_case(path: Path) -> Path:
+    """Make a Windows destination entry use the source tree's exact casing."""
+    if os.name != "nt" or not path.parent.exists():
+        return path
+
+    for existing in path.parent.iterdir():
+        if existing.name == path.name:
+            return path
+        if existing.name.casefold() != path.name.casefold():
+            continue
+
+        temporary = path.parent / f".{path.name}.case-normalize-{uuid.uuid4().hex}"
+        existing.rename(temporary)
+        temporary.rename(path)
+        return path
+
+    return path
 
 
 def copy_tree(src: Path, dst: Path, merge_content: bool = False) -> None:
@@ -124,7 +144,7 @@ def copy_tree(src: Path, dst: Path, merge_content: bool = False) -> None:
                 echo(f"[editor-copy] Ignoring: {item.name}")
                 continue
 
-            target = dst / item.name
+            target = _normalize_destination_case(dst / item.name)
             try:
                 if item.is_dir():
                     shutil.copytree(item, target, dirs_exist_ok=True, ignore=_ignore)
@@ -136,7 +156,7 @@ def copy_tree(src: Path, dst: Path, merge_content: bool = False) -> None:
                 print(f"[editor-copy] ERROR copying {item} -> {target}: {e}")
     else:
         # Original behavior: copy src as a subdirectory of dst
-        target = dst / src.name
+        target = _normalize_destination_case(dst / src.name)
         echo(f"[editor-copy] Copying: {src} -> {target}")
         try:
             shutil.copytree(src, target, dirs_exist_ok=True, ignore=_ignore)
