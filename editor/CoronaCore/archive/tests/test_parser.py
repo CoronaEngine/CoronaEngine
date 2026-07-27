@@ -90,6 +90,32 @@ class ArchiveParserTests(unittest.TestCase):
             self.assertEqual(actor["optics"]["metallic"], 0.5)
             self.assertEqual(actor["optics"]["texture"], "assets/chair.png")
 
+    def test_empty_active_camera_id_falls_back_to_first_camera(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / "scene.ini").write_text(
+                "\n".join(
+                    [
+                        "[format]",
+                        "type = corona_scene_folder",
+                        "version = 1",
+                        "[scene]",
+                        "name = VisionImport",
+                        "[camera]",
+                        "count = 1",
+                        "active_id =",
+                        "camera0.name = view1",
+                        "",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            snapshot = parse_archive(str(root))
+
+            self.assertEqual(snapshot["scene"]["active_camera_id"], "scene.ini#camera0")
+            self.assertEqual(snapshot["scene"]["cameras"][0]["id"], "scene.ini#camera0")
+
     def test_portable_scene_rejects_resource_path_outside_project(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir) / "scene"

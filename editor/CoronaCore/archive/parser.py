@@ -326,8 +326,11 @@ def _parse_archive_impl(input_path: str) -> dict[str, Any]:
     if camera_count > MAX_SNAPSHOT_ITEMS:
         raise ArchiveParseError("ARCHIVE_ITEM_LIMIT_EXCEEDED", "Archive has too many cameras")
     cameras = [_parse_camera(camera_section, index, scene_route) for index in range(max(1, camera_count))]
+    default_active_camera_id = cameras[0]["id"]
     active_camera_id = (
-        camera_section.get("active_id", cameras[0]["id"]) if camera_section else cameras[0]["id"]
+        camera_section.get("active_id", "").strip() or default_active_camera_id
+        if camera_section
+        else default_active_camera_id
     )
     actor_guids: set[str] = set()
     for actor in actors:
