@@ -112,6 +112,24 @@ if(BUILD_CORONA_TESTING OR BUILD_TESTING)
     endif()
     add_test(NAME SceneFolderTests COMMAND corona_scene_folder_tests)
 
+    add_executable(corona_vision_output_paths_tests
+        tests/test_vision_output_paths.cpp
+        cef/scene_folder.cpp
+    )
+    target_include_directories(corona_vision_output_paths_tests
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
+    )
+    target_link_libraries(corona_vision_output_paths_tests
+        PRIVATE nlohmann_json::nlohmann_json bcrypt assimp::assimp
+    )
+    target_compile_definitions(corona_vision_output_paths_tests PRIVATE
+        CORONA_SOURCE_DIR="${PROJECT_SOURCE_DIR}"
+    )
+    if(MSVC)
+        target_compile_options(corona_vision_output_paths_tests PRIVATE /EHsc)
+    endif()
+    add_test(NAME VisionOutputPathsTests COMMAND corona_vision_output_paths_tests)
+
     add_executable(corona_cef_app_tests
         tests/test_cef_app.cpp
     )

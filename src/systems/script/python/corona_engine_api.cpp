@@ -188,6 +188,39 @@ std::string vision_render_mode_to_string(Corona::CameraVisionRenderMode mode) {
             return "path_tracing";
     }
 }
+
+bool parse_ssat_view_viewer_mode(const std::string& mode,
+                                 Corona::SsatViewViewerMode& out) {
+    if (mode == "interlaced") {
+        out = Corona::SsatViewViewerMode::Interlaced;
+        return true;
+    }
+    if (mode == "final_view") {
+        out = Corona::SsatViewViewerMode::FinalView;
+        return true;
+    }
+    return false;
+}
+
+Corona::API::SsatViewViewerStatus make_ssat_view_viewer_status(
+    std::uintptr_t camera_handle) {
+    const auto resolved_handle = resolve_camera_handle(camera_handle);
+    Corona::API::SsatViewViewerStatus result;
+    if (resolved_handle == 0) {
+        return result;
+    }
+
+    const auto state = Corona::SharedDataHub::instance().ssat_view_viewer_state(resolved_handle);
+    result.status = state.pending ? "pending" : (state.supported ? "ready" : "unsupported");
+    result.supported = state.supported;
+    result.pending = state.pending;
+    result.mode = state.mode == Corona::SsatViewViewerMode::FinalView
+                      ? "final_view"
+                      : "interlaced";
+    result.view_index = state.effective_view_index;
+    result.view_count = state.view_count;
+    return result;
+}
 }
 
 // ########################
@@ -2336,6 +2369,15 @@ std::string Corona::API::Camera::get_vision_render_mode() const {
     return Corona::API::get_vision_render_mode(handle_);
 }
 
+void Corona::API::Camera::set_ssat_view_viewer(const std::string& mode,
+                                               std::uint32_t view_index) {
+    Corona::API::set_ssat_view_viewer(mode, view_index, handle_);
+}
+
+Corona::API::SsatViewViewerStatus Corona::API::Camera::get_ssat_view_viewer() const {
+    return Corona::API::get_ssat_view_viewer(handle_);
+}
+
 void Corona::API::Camera::set_shadow_cascade_debug(bool enabled) {
     if (handle_ == 0) {
         CFW_LOG_WARNING("[Camera::set_shadow_cascade_debug] Invalid camera handle");
@@ -2626,6 +2668,31 @@ std::string get_vision_render_mode(std::uintptr_t camera_handle) {
         }
     }
     return "path_tracing";
+}
+
+void set_ssat_view_viewer(const std::string& mode,
+                         std::uint32_t view_index,
+                         std::uintptr_t camera_handle) {
+    const auto resolved_handle = resolve_camera_handle(camera_handle);
+    if (resolved_handle == 0) {
+        CFW_LOG_WARNING("[set_ssat_view_viewer] No camera is available");
+        return;
+    }
+
+    SsatViewViewerMode viewer_mode{};
+    if (!parse_ssat_view_viewer_mode(mode, viewer_mode)) {
+        CFW_LOG_WARNING(
+            "[set_ssat_view_viewer] Unknown mode '{}'; expected 'interlaced' or 'final_view'",
+            mode);
+        return;
+    }
+
+    SharedDataHub::instance().set_ssat_view_viewer_request(
+        resolved_handle, viewer_mode, view_index);
+}
+
+SsatViewViewerStatus get_ssat_view_viewer(std::uintptr_t camera_handle) {
+    return make_ssat_view_viewer_status(camera_handle);
 }
 
 void load_vision_scene(const std::string& path) {

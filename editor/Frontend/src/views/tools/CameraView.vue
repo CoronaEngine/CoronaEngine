@@ -40,6 +40,61 @@
           </button>
         </div>
       </div>
+      <div
+        v-if="backend === 'vision' && visionRenderMode === 'ssat'"
+        class="dropdown no-drag"
+      >
+        <button
+          class="control dropdown-trigger ssat-view-trigger"
+          aria-label="SSAT view viewer"
+          :disabled="ssatViewerPending && ssatViewerViewCount === 0"
+          @click.stop="ssatViewerMenuOpen = !ssatViewerMenuOpen"
+        >
+          {{ ssatViewerButtonLabel() }}
+        </button>
+        <div v-if="ssatViewerMenuOpen" class="dropdown-menu ssat-view-menu">
+          <button
+            :class="{ active: ssatViewerMode === 'interlaced' }"
+            @click="selectSsatViewerMode('interlaced')"
+          >
+            LF: Interlaced
+          </button>
+          <button
+            :disabled="!ssatViewerSupported"
+            :class="{ active: ssatViewerMode === 'final_view' }"
+            @click="selectSsatViewerMode('final_view')"
+          >
+            Final View
+          </button>
+          <template v-if="ssatViewerViewCount > 0">
+            <label class="ssat-view-control">
+              <span>View {{ ssatViewerDisplayIndex }}/{{ ssatViewerViewCount }}</span>
+              <input
+                v-model.number="ssatViewerDisplayIndex"
+                type="range"
+                min="1"
+                :max="ssatViewerViewCount"
+                :disabled="!ssatViewerSupported || ssatViewerPending"
+                @change="setSsatViewerIndex"
+              />
+            </label>
+            <label class="ssat-view-number">
+              <span>View</span>
+              <input
+                v-model.number="ssatViewerDisplayIndex"
+                type="number"
+                min="1"
+                :max="ssatViewerViewCount"
+                :disabled="!ssatViewerSupported || ssatViewerPending"
+                @change="setSsatViewerIndex"
+              />
+            </label>
+          </template>
+          <span v-else class="ssat-view-pending">
+            {{ ssatViewerPending ? '初始化中' : '不可用' }}
+          </span>
+        </div>
+      </div>
       <div class="dropdown no-drag">
         <button
           class="control dropdown-trigger"
@@ -142,7 +197,7 @@
 </template>
 
 <script setup>
-import { nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
 import { useRoute } from 'vue-router';
 import { appService, editorApi, projectService, sceneService, scriptingService } from '@/utils/bridge.js';
 import { buildDragRegions, dragRegionsSignature } from '@/utils/cameraDragRegions.js';
@@ -180,9 +235,17 @@ const inputLayerRef = ref(null);
 const backendMenuOpen = ref(false);
 const visionModeMenuOpen = ref(false);
 const outputMenuOpen = ref(false);
+const ssatViewerMenuOpen = ref(false);
+const ssatViewerMode = ref('interlaced');
+const ssatViewerIndex = ref(0);
+const ssatViewerViewCount = ref(0);
+const ssatViewerSupported = ref(false);
+const ssatViewerPending = ref(false);
 const borderlessFullscreen = ref(false);
 let borderlessTogglePending = false;
 let previewHudTimer = 0;
+let ssatViewerTimer = 0;
+let ssatViewerPollInFlight = false;
 let scratchMouseMoveFrame = 0;
 let pendingScratchMouseMove = null;
 let actorPickIndex = new Map();
@@ -217,6 +280,117 @@ const viewportUiModeItems = [
 ];
 
 const unwrap = (result) => result?.data ?? result;
+
+const ssatViewerDisplayIndex = computed({
+  get: () => Math.min(
+    Math.max(ssatViewerIndex.value + 1, 1),
+    Math.max(ssatViewerViewCount.value, 1),
+  ),
+  set: (value) => {
+    const count = Math.max(Number(ssatViewerViewCount.value) || 0, 1);
+    const oneBased = Math.min(Math.max(Math.trunc(Number(value) || 1), 1), count);
+    ssatViewerIndex.value = oneBased - 1;
+  },
+});
+
+const ssatViewerButtonLabel = () => {
+  if (ssatViewerPending.value && ssatViewerViewCount.value === 0) return '初始化中';
+  if (ssatViewerMode.value === 'final_view' && ssatViewerViewCount.value > 0) {
+    return `View ${ssatViewerIndex.value + 1}/${ssatViewerViewCount.value}`;
+  }
+  return 'LF: Interlaced';
+};
+
+const stopSsatViewerPolling = () => {
+  if (ssatViewerTimer) window.clearInterval(ssatViewerTimer);
+  ssatViewerTimer = 0;
+};
+
+const applySsatViewerState = (result) => {
+  const payload = unwrap(result) || {};
+  if (payload.mode === 'interlaced' || payload.mode === 'final_view') {
+    ssatViewerMode.value = payload.mode;
+  }
+  const count = Math.max(Number(payload.view_count) || 0, 0);
+  ssatViewerViewCount.value = count;
+  if (count > 0) {
+    ssatViewerIndex.value = Math.min(
+      Math.max(Number(payload.view_index) || 0, 0),
+      count - 1,
+    );
+  } else {
+    ssatViewerIndex.value = 0;
+  }
+  ssatViewerSupported.value = payload.supported === true;
+  ssatViewerPending.value = payload.pending === true || payload.status === 'pending';
+  if (ssatViewerPending.value) {
+    if (!ssatViewerTimer) {
+      ssatViewerTimer = window.setInterval(refreshSsatViewerState, 1000);
+    }
+  } else {
+    stopSsatViewerPolling();
+  }
+  return payload;
+};
+
+const refreshSsatViewerState = async () => {
+  if (backend.value !== 'vision' || visionRenderMode.value !== 'ssat' || !camera.value) {
+    stopSsatViewerPolling();
+    return;
+  }
+  if (ssatViewerPollInFlight) return;
+  ssatViewerPollInFlight = true;
+  try {
+    applySsatViewerState(await sceneService.getSsatViewViewer(sceneId, cameraId));
+  } catch (error) {
+    ssatViewerSupported.value = false;
+    ssatViewerPending.value = true;
+    ssatViewerViewCount.value = 0;
+    if (!ssatViewerTimer) {
+      ssatViewerTimer = window.setInterval(refreshSsatViewerState, 1000);
+    }
+    if (error?.message) errorText.value = error.message;
+  } finally {
+    ssatViewerPollInFlight = false;
+  }
+};
+
+const resetSsatViewer = async () => {
+  stopSsatViewerPolling();
+  ssatViewerMenuOpen.value = false;
+  if (camera.value) {
+    await sceneService.setSsatViewViewer(sceneId, cameraId, 'interlaced', 0).catch(() => {});
+  }
+  ssatViewerMode.value = 'interlaced';
+  ssatViewerIndex.value = 0;
+  ssatViewerViewCount.value = 0;
+  ssatViewerSupported.value = false;
+  ssatViewerPending.value = false;
+};
+
+const requestSsatViewerState = async (mode, viewIndex = ssatViewerIndex.value) => {
+  if (backend.value !== 'vision' || visionRenderMode.value !== 'ssat') return;
+  try {
+    applySsatViewerState(await sceneService.setSsatViewViewer(
+      sceneId,
+      cameraId,
+      mode,
+      Math.max(0, Math.trunc(Number(viewIndex) || 0)),
+    ));
+  } catch (error) {
+    errorText.value = error.message;
+  }
+};
+
+const selectSsatViewerMode = async (mode) => {
+  ssatViewerMode.value = mode;
+  await requestSsatViewerState(mode);
+};
+
+const setSsatViewerIndex = async () => {
+  if (!ssatViewerSupported.value || ssatViewerViewCount.value < 1) return;
+  await requestSsatViewerState(ssatViewerMode.value, ssatViewerIndex.value);
+};
 
 const loadCamera = async () => {
   const [listResult, visionResult] = await Promise.all([
@@ -262,6 +436,9 @@ const changeBackend = async () => {
       outputMode.value = 'final_color';
       await sceneService.setOutputMode(sceneId, cameraId, 'final_color');
       await sceneService.setVisionRenderMode(sceneId, cameraId, visionRenderMode.value);
+      if (visionRenderMode.value === 'ssat') {
+        await refreshSsatViewerState();
+      }
     }
   } catch (error) {
     errorText.value = error.message;
@@ -272,6 +449,9 @@ const selectBackend = async (mode) => {
   backendMenuOpen.value = false;
   visionModeMenuOpen.value = false;
   if (backend.value === mode) return;
+  if (backend.value === 'vision' && mode !== 'vision') {
+    await resetSsatViewer();
+  }
   backend.value = mode;
   await changeBackend();
 };
@@ -292,6 +472,11 @@ const selectVisionRenderMode = async (mode) => {
         outputMode.value = 'final_color';
         await sceneService.setOutputMode(sceneId, cameraId, 'final_color');
       }
+    }
+    if (visionRenderMode.value === 'ssat' && backend.value === 'vision') {
+      await refreshSsatViewerState();
+    } else if (visionRenderMode.value !== 'ssat') {
+      await resetSsatViewer();
     }
   } catch (error) {
     errorText.value = error.message;
@@ -553,6 +738,7 @@ const toggleBorderlessFullscreen = async () => {
 
 const closeView = async () => {
   try {
+    await resetSsatViewer();
     await sceneService.closeCameraView(sceneId, cameraId);
   } finally {
     await appService.closeThisTab(`camera:${cameraId}`).catch(() => {});
@@ -1012,6 +1198,9 @@ onMounted(async () => {
   await syncDragRegions({ force: true });
   try {
     await loadCamera();
+    if (backend.value === 'vision' && visionRenderMode.value === 'ssat') {
+      await refreshSsatViewerState();
+    }
     await refreshCameraViewActorPickIndex().catch(() => false);
     actorPickResultCallbackToken = await editorApi.events.onActorPickResult(handleCameraViewActorPickResult);
     syncViewportUiMode();
@@ -1031,6 +1220,7 @@ onMounted(async () => {
 });
 
 onBeforeUnmount(() => {
+  resetSsatViewer().catch(() => {});
   cancelAnimationFrame(animationFrame);
   if (dragRegionFrame) window.cancelAnimationFrame(dragRegionFrame);
   if (scratchMouseMoveFrame) window.cancelAnimationFrame(scratchMouseMoveFrame);
@@ -1172,6 +1362,43 @@ onBeforeUnmount(() => {
 .dropdown-menu button:disabled { color: #777; cursor: default; }
 .output-menu { min-width: 92px; }
 .vision-mode-menu { min-width: 148px; }
+.ssat-view-trigger { min-width: 94px; max-width: 112px; }
+.ssat-view-menu { min-width: 178px; }
+.ssat-view-menu button.active {
+  background: rgba(75, 85, 99, 0.9);
+}
+.ssat-view-control {
+  display: grid;
+  gap: 4px;
+  padding: 5px 7px 2px;
+  color: #cbd5e1;
+  font-size: 10px;
+}
+.ssat-view-control input { width: 162px; }
+.ssat-view-number {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 2px 7px 5px;
+  color: #cbd5e1;
+  font-size: 10px;
+}
+.ssat-view-number input {
+  width: 54px;
+  height: 22px;
+  border: 1px solid #555;
+  border-radius: 3px;
+  background: rgba(35, 35, 35, 0.9);
+  color: #eee;
+  font-size: 11px;
+  padding: 0 4px;
+}
+.ssat-view-pending {
+  padding: 6px 8px;
+  color: #facc15;
+  font-size: 10px;
+}
 .speed, .resolution { display: flex; align-items: center; gap: 3px; font-size: 10px; }
 .speed input { width: 54px; padding: 0 4px; }
 .resolution input { width: 58px; padding: 0 4px; }

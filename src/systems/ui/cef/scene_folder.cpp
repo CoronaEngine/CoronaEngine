@@ -216,6 +216,7 @@ void visit_vision_resource_routes(const nlohmann::json& value,
                                   Callback&& callback) {
     if (value.is_object()) {
         for (const auto& item : value.items()) {
+            if (is_vision_output_section_key(item.key())) continue;
             const auto child_field = field.empty() ? item.key() : field + "." + item.key();
             if (vision_resource_key(item.key()) && item.value().is_string()) {
                 callback(item.value().get<std::string>(), child_field);
@@ -691,6 +692,10 @@ bool is_valid_asset_route(std::string_view route) {
     if (!is_relative_inside(path)) return false;
     const auto iterator = path.begin();
     return iterator != path.end() && *iterator == "Assets";
+}
+
+bool is_vision_output_section_key(std::string_view key) {
+    return lower(std::string(key)) == "output";
 }
 
 std::optional<SceneFolderLayout> detect_scene_folder(const fs::path& input) {

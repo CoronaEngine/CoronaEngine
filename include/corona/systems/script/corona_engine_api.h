@@ -26,6 +26,15 @@ struct GeometryRenderStatus {
     std::size_t invalid_mesh_count{0};
 };
 
+struct SsatViewViewerStatus {
+    std::string status{"unsupported"};
+    bool supported{false};
+    bool pending{false};
+    std::string mode{"interlaced"};
+    std::uint32_t view_index{0};
+    std::uint32_t view_count{0};
+};
+
 // ============================================================================
 // UI 侧可设置当前默认显示 surface（例如 SDL 原生窗口句柄）。
 // ============================================================================
@@ -312,6 +321,8 @@ class Camera {
     [[nodiscard]] std::string get_render_backend() const;
     void set_vision_render_mode(const std::string& mode);
     [[nodiscard]] std::string get_vision_render_mode() const;
+    void set_ssat_view_viewer(const std::string& mode, std::uint32_t view_index);
+    [[nodiscard]] SsatViewViewerStatus get_ssat_view_viewer() const;
     void set_shadow_cascade_debug(bool enabled);
     [[nodiscard]] bool get_shadow_cascade_debug() const;
     void set_ssao_enabled(bool enabled);
@@ -457,6 +468,16 @@ void set_vision_render_mode(const std::string& mode, std::uintptr_t camera_handl
 
 /// 获取当前 camera 请求的 Vision 渲染技术。
 [[nodiscard]] std::string get_vision_render_mode(std::uintptr_t camera_handle = 0);
+
+/// Select the SSAT presentation source for one camera. mode is "interlaced"
+/// or "final_view" and view_index is zero-based.
+void set_ssat_view_viewer(const std::string& mode,
+                          std::uint32_t view_index,
+                          std::uintptr_t camera_handle = 0);
+
+/// Get the runtime SSAT viewer status for one camera.
+[[nodiscard]] SsatViewViewerStatus get_ssat_view_viewer(
+    std::uintptr_t camera_handle = 0);
 
 /// 请求加载一个外部 Vision 场景文件（.json）。仅当 Vision 后端可用且处于激活
 /// 状态时生效；实际导入在光学系统渲染线程执行。

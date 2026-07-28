@@ -38,6 +38,7 @@
 #include <iomanip>
 #include <iostream>
 #include <initializer_list>
+#include <limits>
 #include <map>
 #include <memory>
 #include <optional>
@@ -1209,6 +1210,7 @@ void persist_native_scene_common(const NativeEditorScene& scene) {
                                                    const std::string& field) -> void {
                     if (value.is_object()) {
                         for (const auto& item : value.items()) {
+                            if (SceneFolders::is_vision_output_section_key(item.key())) continue;
                             const auto child_field = field.empty() ? item.key() : field + "." + item.key();
                             if (is_vision_resource_path_key(item.key()) && item.value().is_string()) {
                                 const auto route = trim_ascii(item.value().get<std::string>());
@@ -4149,8 +4151,10 @@ nlohmann::json extract_scene_data(const nlohmann::json& document) {
 
 std::map<std::string, std::string> vision_camera_section(const nlohmann::json& document) {
     std::map<std::string, std::string> camera;
+    const std::string camera_id = "scene.ini#camera0";
     camera["count"] = "1";
-    camera["active_id"] = "";
+    camera["active_id"] = camera_id;
+    camera["camera0.id"] = camera_id;
     camera["camera0.render_backend"] = "vision";
     camera["camera0.vision_render_mode"] = "path_tracing";
     camera["camera0.output_mode"] = "final_color";
@@ -5151,6 +5155,7 @@ void rewrite_vision_resource_paths_for_project_archive(nlohmann::json& value,
     if (value.is_object()) {
         for (auto& item : value.items()) {
             auto& child = item.value();
+            if (SceneFolders::is_vision_output_section_key(item.key())) continue;
             if (is_vision_resource_path_key(item.key()) && child.is_string()) {
                 const auto text = trim_ascii(child.get<std::string>());
                 if (!text.empty() && !is_external_resource_reference(text)) {
@@ -5189,6 +5194,7 @@ void import_vision_resource_paths(nlohmann::json& value,
     if (value.is_object()) {
         for (auto& item : value.items()) {
             auto& child = item.value();
+            if (SceneFolders::is_vision_output_section_key(item.key())) continue;
             if (is_vision_resource_path_key(item.key()) && child.is_string()) {
                 const auto text = trim_ascii(child.get<std::string>());
                 if (!text.empty() && !is_external_resource_reference(text)) {
@@ -7270,6 +7276,66 @@ void register_scene_tools_api_handlers(NativeApiRegistry& registry) {
             return native_success({
                 {"status", "success"},
                 {"mode", camera->engine_camera->get_vision_render_mode()},
+                {"camera", camera_to_json(*camera)},
+            });
+        }},
+        {"set_ssat_view_viewer", [](const NativeRequest& request, const NativeContext&) {
+            auto* scene = ensure_native_editor_scene();
+            const auto scene_route = normalize_route(arg_string(request.args, 0));
+            scene = resolve_native_editor_scene_request(scene, scene_route);
+
+            const auto camera_name = arg_string(request.args, 1);
+            const auto mode = arg_string(request.args, 2);
+            if (mode != "interlaced" && mode != "final_view") {
+                return native_failure(
+                    "Invalid SSAT viewer mode: " + mode +
+                        "; expected 'interlaced' or 'final_view'",
+                    1);
+            }
+            if (request.args.size() <= 3 ||
+                (request.args[3].is_number_integer() && request.args[3].get<int64_t>() < 0)) {
+                return native_failure("SSAT viewer view_index must be a non-negative integer", 1);
+            }
+            const auto requested_index = std::min<std::uint64_t>(
+                arg_uint64(request.args, 3, 0),
+                std::numeric_limits<std::uint32_t>::max());
+            auto* camera = find_native_camera(*scene, camera_name);
+            if (!camera || !camera->engine_camera) {
+                return native_failure("Camera not found: " + camera_name, 2);
+            }
+
+            camera->engine_camera->set_ssat_view_viewer(
+                mode, static_cast<std::uint32_t>(requested_index));
+            const auto viewer = camera->engine_camera->get_ssat_view_viewer();
+            return native_success({
+                {"status", viewer.status},
+                {"supported", viewer.supported},
+                {"pending", viewer.pending},
+                {"mode", viewer.mode},
+                {"view_index", viewer.view_index},
+                {"view_count", viewer.view_count},
+                {"camera", camera_to_json(*camera)},
+            });
+        }},
+        {"get_ssat_view_viewer", [](const NativeRequest& request, const NativeContext&) {
+            auto* scene = ensure_native_editor_scene();
+            const auto scene_route = normalize_route(arg_string(request.args, 0));
+            scene = resolve_native_editor_scene_request(scene, scene_route);
+
+            const auto camera_name = arg_string(request.args, 1);
+            auto* camera = find_native_camera(*scene, camera_name);
+            if (!camera || !camera->engine_camera) {
+                return native_failure("Camera not found: " + camera_name, 2);
+            }
+
+            const auto viewer = camera->engine_camera->get_ssat_view_viewer();
+            return native_success({
+                {"status", viewer.status},
+                {"supported", viewer.supported},
+                {"pending", viewer.pending},
+                {"mode", viewer.mode},
+                {"view_index", viewer.view_index},
+                {"view_count", viewer.view_count},
                 {"camera", camera_to_json(*camera)},
             });
         }},

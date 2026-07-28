@@ -38,6 +38,10 @@
 #include <utility>
 #include <vector>
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
 #include <oneapi/tbb/task_group.h>
 
 #include "hardware.h"
@@ -96,6 +100,24 @@ std::mutex g_invalid_optics_mesh_log_mutex;
 std::unordered_set<std::string> g_invalid_optics_mesh_logs;
 std::mutex g_optics_material_log_mutex;
 std::unordered_set<std::string> g_optics_material_logs;
+
+[[nodiscard]] std::filesystem::path current_executable_directory() {
+#ifdef _WIN32
+    std::vector<wchar_t> buffer(MAX_PATH);
+    while (true) {
+        const DWORD length = GetModuleFileNameW(
+            nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
+        if (length == 0) {
+            break;
+        }
+        if (length < buffer.size() - 1) {
+            return std::filesystem::path(std::wstring(buffer.data(), length)).parent_path();
+        }
+        buffer.resize(buffer.size() * 2);
+    }
+#endif
+    return std::filesystem::current_path();
+}
 
 [[nodiscard]] bool env_flag_enabled(const char* name) {
     return Corona::Systems::Diagnostics::parse_env_flag(std::getenv(name));
@@ -989,6 +1011,7 @@ void apply_pending_camera_releases() {
         if (release.actor_pick_handle != 0) {
             hub.actor_pick_storage().deallocate(release.actor_pick_handle);
         }
+        hub.clear_ssat_view_viewer_state(release.camera_handle);
         hub.camera_storage().deallocate(release.camera_handle);
     }
 }
@@ -1916,6 +1939,69 @@ void log_vision_pipeline_diagnostics(vision::Pipeline& pipeline,
         denoiser_enabled,
         output_denoise,
         ssat_active);
+}
+
+void apply_ssat_view_viewer_state(vision::Pipeline& pipeline,
+                                  std::uintptr_t camera_handle,
+                                  const Corona::CameraDevice& camera) {
+    auto& hub = Corona::SharedDataHub::instance();
+    const auto requested = hub.ssat_view_viewer_state(camera_handle);
+
+    auto* fb = pipeline.frame_buffer();
+    auto* lightfield_fb =
+        fb == nullptr ? nullptr : dynamic_cast<vision::ILightFieldFrameBuffer*>(fb);
+
+    vision::Denoiser* denoiser = nullptr;
+    std::string denoiser_type;
+    bool denoiser_enabled = false;
+    bool denoiser_supports_lightfield = false;
+    if (auto* integrator = pipeline.renderer().integrator().get()) {
+        if (auto* illum = dynamic_cast<vision::IlluminationIntegrator*>(integrator)) {
+            denoiser = illum->denoiser();
+            if (denoiser != nullptr) {
+                denoiser_type = std::string(denoiser->impl_type());
+                denoiser_enabled = denoiser->enabled();
+                denoiser_supports_lightfield = denoiser->supports_lightfield();
+            }
+        }
+    }
+
+    const bool ssat_active = camera.vision_render_mode == Corona::CameraVisionRenderMode::SSAT &&
+                             lightfield_fb != nullptr &&
+                             pipeline.output_desc().denoise &&
+                             denoiser != nullptr &&
+                             denoiser_type == "SSAT" &&
+                             denoiser_enabled &&
+                             denoiser_supports_lightfield;
+
+    if (ssat_active) {
+        const auto view_count =
+            vision::lightfield_view_count(lightfield_fb->lenticular_params().num_views);
+        const auto effective_index = vision::lightfield_effective_view_index(
+            requested.requested_view_index, view_count);
+        const auto viewer_mode = requested.mode == Corona::SsatViewViewerMode::FinalView
+                                     ? vision::LightFieldViewerMode::FinalView
+                                     : vision::LightFieldViewerMode::Interlaced;
+        lightfield_fb->set_viewer_state(viewer_mode, effective_index);
+        hub.update_ssat_view_viewer_status(
+            camera_handle, true, false, view_count, effective_index);
+        return;
+    }
+
+    if (lightfield_fb != nullptr) {
+        lightfield_fb->set_viewer_state(vision::LightFieldViewerMode::Interlaced, 0u);
+    }
+
+    if (camera.vision_render_mode != Corona::CameraVisionRenderMode::SSAT) {
+        hub.clear_ssat_view_viewer_state(camera_handle);
+        return;
+    }
+
+    const bool pending = camera.vision_render_mode == Corona::CameraVisionRenderMode::SSAT &&
+                         fb != nullptr &&
+                         (denoiser == nullptr ||
+                          (denoiser_type == "SSAT" && !denoiser_enabled));
+    hub.update_ssat_view_viewer_status(camera_handle, false, pending, 0u, 0u);
 }
 
 std::string describe_vision_pipeline_key(
@@ -6149,9 +6235,27 @@ void OpticsSystem::sync_engine_native_mixed_shapes(VisionPipelineRuntime& runtim
 bool OpticsSystem::init_vision_lazy() {
     if (vision_initialized_) return true;
     try {
+        auto& rhi_context = ocarina::RHIContext::instance();
+        const auto runtime_directory = current_executable_directory();
+        ocarina::DynamicModule::clear_search_path();
+        ocarina::DynamicModule::add_search_path(runtime_directory);
+
+        const auto* cuda_backend = rhi_context.obtain_module("ocarina-backend-cuda.dll");
+        if (cuda_backend == nullptr || cuda_backend->handle() == nullptr) {
+            CFW_LOG_ERROR(
+                "OpticsSystem: CUDA Vision backend could not be loaded from {}",
+                runtime_directory.string());
+            return false;
+        }
+        if (cuda_backend->function_ptr("create_device") == nullptr ||
+            cuda_backend->function_ptr("destroy") == nullptr) {
+            CFW_LOG_ERROR("OpticsSystem: CUDA Vision backend is missing device entry points");
+            return false;
+        }
+
         // ocarina::Device is non-default-constructible; use auto so the type is
         // deduced from create_device(). Function-local static ensures single init.
-        static auto s_device = ocarina::RHIContext::instance().create_device("cuda");
+        static auto s_device = rhi_context.create_device("cuda");
         visionDevicePtr = &s_device;
         visionDevicePtr->init_rtx();
         vision::Global::instance().set_device(visionDevicePtr);
@@ -6472,9 +6576,16 @@ void OpticsSystem::run_vision_frame(float frame_count, uint64_t frame_index) {
 
                 Vision::sync_vision_camera(*pipeline, camera);
                 pipeline->upload_data();
+                auto* fb = pipeline->frame_buffer();
+                if (fb == nullptr) {
+                    SharedDataHub::instance().update_ssat_view_viewer_status(
+                        cam_handle, false, camera.vision_render_mode == CameraVisionRenderMode::SSAT,
+                        0u, 0u);
+                    return;
+                }
+                apply_ssat_view_viewer_state(*pipeline, cam_handle, camera);
                 pipeline->display(1.0 / 60.0);
 
-                auto* fb = pipeline->frame_buffer();
                 const auto res = fb->resolution();
                 const uint32_t w = res.x;
                 const uint32_t h = res.y;
@@ -6802,9 +6913,11 @@ void OpticsSystem::run_vision_frame(float frame_count, uint64_t frame_index) {
         for (auto cam_handle : scene.camera_handles) {
             auto camera = SharedDataHub::instance().camera_storage().try_acquire_read(cam_handle);
             if (!camera || camera->render_backend != CameraRenderBackend::Vision) {
+                SharedDataHub::instance().clear_ssat_view_viewer_state(cam_handle);
                 continue;
             }
             if (camera->surface == nullptr) {
+                SharedDataHub::instance().clear_ssat_view_viewer_state(cam_handle);
                 if (has_pending_screenshot(cam_handle)) {
                     fail_pending_screenshots(cam_handle);
                 }

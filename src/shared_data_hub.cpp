@@ -285,6 +285,61 @@ ViewportUiState SharedDataHub::viewport_ui_state(std::uintptr_t camera_handle) c
     return state;
 }
 
+void SharedDataHub::set_ssat_view_viewer_request(
+    std::uintptr_t camera_handle,
+    SsatViewViewerMode mode,
+    std::uint32_t requested_view_index) {
+    if (camera_handle == 0) {
+        return;
+    }
+
+    std::lock_guard<std::mutex> lock(ssat_view_viewer_mutex_);
+    auto& state = ssat_view_viewer_states_[camera_handle];
+    state.camera_handle = camera_handle;
+    state.mode = mode;
+    state.requested_view_index = requested_view_index;
+    state.pending = true;
+}
+
+void SharedDataHub::update_ssat_view_viewer_status(
+    std::uintptr_t camera_handle,
+    bool supported,
+    bool pending,
+    std::uint32_t view_count,
+    std::uint32_t effective_view_index) {
+    if (camera_handle == 0) {
+        return;
+    }
+
+    std::lock_guard<std::mutex> lock(ssat_view_viewer_mutex_);
+    auto& state = ssat_view_viewer_states_[camera_handle];
+    state.camera_handle = camera_handle;
+    state.supported = supported;
+    state.pending = pending;
+    state.view_count = view_count;
+    state.effective_view_index = effective_view_index;
+}
+
+SsatViewViewerState SharedDataHub::ssat_view_viewer_state(
+    std::uintptr_t camera_handle) const {
+    std::lock_guard<std::mutex> lock(ssat_view_viewer_mutex_);
+    const auto it = ssat_view_viewer_states_.find(camera_handle);
+    if (it != ssat_view_viewer_states_.end()) {
+        return it->second;
+    }
+    SsatViewViewerState state;
+    state.camera_handle = camera_handle;
+    return state;
+}
+
+void SharedDataHub::clear_ssat_view_viewer_state(std::uintptr_t camera_handle) {
+    if (camera_handle == 0) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(ssat_view_viewer_mutex_);
+    ssat_view_viewer_states_.erase(camera_handle);
+}
+
 void SharedDataHub::enqueue_viewport_ui_pointer(ViewportUiPointerCommand command) {
     if (command.camera_handle == 0) {
         return;

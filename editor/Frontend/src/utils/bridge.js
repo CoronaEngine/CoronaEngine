@@ -600,6 +600,10 @@ const editorApiStatic = {
       call_manifest_editor_api('sceneTools.setVisionRenderMode', [sceneName, cameraId, mode]),
     getVisionRenderMode: (sceneName, cameraId = null) =>
       call_manifest_editor_api('sceneTools.getVisionRenderMode', [sceneName, cameraId]),
+    setSsatViewViewer: (sceneName, cameraId = null, mode = 'interlaced', viewIndex = 0) =>
+      call_manifest_editor_api('sceneTools.setSsatViewViewer', [sceneName, cameraId, mode, viewIndex]),
+    getSsatViewViewer: (sceneName, cameraId = null) =>
+      call_manifest_editor_api('sceneTools.getSsatViewViewer', [sceneName, cameraId]),
     createCameraView: (sceneName, name = null) =>
       call_manifest_editor_api('sceneTools.createCameraView', [sceneName, name]),
     openCameraView: (sceneName, cameraId) =>
@@ -749,6 +753,10 @@ export const sceneService = {
     editorApi.sceneTools.setVisionRenderMode(sceneName, cameraId, mode),
   getVisionRenderMode: (sceneName, cameraId = null) =>
     editorApi.sceneTools.getVisionRenderMode(sceneName, cameraId),
+  setSsatViewViewer: (sceneName, cameraId = null, mode = 'interlaced', viewIndex = 0) =>
+    editorApi.sceneTools.setSsatViewViewer(sceneName, cameraId, mode, viewIndex),
+  getSsatViewViewer: (sceneName, cameraId = null) =>
+    editorApi.sceneTools.getSsatViewViewer(sceneName, cameraId),
   createCameraView: (sceneName, name = null) =>
     editorApi.sceneTools.createCameraView(sceneName, name),
   openCameraView: (sceneName, cameraId) =>

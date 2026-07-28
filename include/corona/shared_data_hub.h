@@ -9,6 +9,7 @@
 #include <unordered_map>
 #include <memory>
 #include <optional>
+#include <limits>
 #include <string>
 #include <vector>
 #include <filesystem>
@@ -416,6 +417,24 @@ struct ViewportUiState {
     ViewportUiCalibration calibration{};
 };
 
+enum class SsatViewViewerMode : std::uint8_t {
+    Interlaced,
+    FinalView,
+};
+
+inline constexpr std::uint32_t kSsatViewViewerAutoCenter =
+    std::numeric_limits<std::uint32_t>::max();
+
+struct SsatViewViewerState {
+    std::uintptr_t camera_handle{};
+    SsatViewViewerMode mode{SsatViewViewerMode::Interlaced};
+    std::uint32_t requested_view_index{kSsatViewViewerAutoCenter};
+    bool supported{false};
+    bool pending{false};
+    std::uint32_t view_count{0};
+    std::uint32_t effective_view_index{0};
+};
+
 struct ViewportUiPointerCommand {
     std::uintptr_t camera_handle{};
     std::string event_type;
@@ -559,6 +578,17 @@ class SharedDataHub {
     void set_viewport_ui_calibration(std::uintptr_t camera_handle,
                                      const ViewportUiCalibration& calibration);
     [[nodiscard]] ViewportUiState viewport_ui_state(std::uintptr_t camera_handle) const;
+    void set_ssat_view_viewer_request(std::uintptr_t camera_handle,
+                                      SsatViewViewerMode mode,
+                                      std::uint32_t requested_view_index);
+    void update_ssat_view_viewer_status(std::uintptr_t camera_handle,
+                                        bool supported,
+                                        bool pending,
+                                        std::uint32_t view_count,
+                                        std::uint32_t effective_view_index);
+    [[nodiscard]] SsatViewViewerState ssat_view_viewer_state(
+        std::uintptr_t camera_handle) const;
+    void clear_ssat_view_viewer_state(std::uintptr_t camera_handle);
     void enqueue_viewport_ui_pointer(ViewportUiPointerCommand command);
     std::vector<ViewportUiPointerCommand> drain_viewport_ui_pointer_commands();
 
@@ -594,6 +624,8 @@ class SharedDataHub {
     std::vector<CameraReleaseCommand> pending_camera_releases_;
     mutable std::mutex viewport_ui_mutex_;
     std::unordered_map<std::uintptr_t, ViewportUiState> viewport_ui_states_;
+    mutable std::mutex ssat_view_viewer_mutex_;
+    std::unordered_map<std::uintptr_t, SsatViewViewerState> ssat_view_viewer_states_;
     std::vector<ViewportUiPointerCommand> pending_viewport_ui_pointer_commands_;
     std::uint64_t viewport_ui_pointer_sequence_{0};
 };

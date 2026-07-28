@@ -45,6 +45,7 @@ struct ImportResult {
 };
 
 [[nodiscard]] bool is_valid_asset_route(std::string_view route);
+[[nodiscard]] bool is_vision_output_section_key(std::string_view key);
 [[nodiscard]] std::optional<SceneFolderLayout> detect_scene_folder(
     const std::filesystem::path& input);
 [[nodiscard]] std::optional<SceneFolderLayout> create_scene_folder(

@@ -267,6 +267,13 @@ constexpr std::array<EditorApiParamSpec, 3> kSceneToolsSetVisionRenderModeParams
     param("mode", EditorApiValueType::String, true),
 }};
 
+constexpr std::array<EditorApiParamSpec, 4> kSceneToolsSetSsatViewViewerParams = {{
+    param("scene_name", EditorApiValueType::String),
+    param("camera_name", EditorApiValueType::String, true),
+    param("mode", EditorApiValueType::String),
+    param("view_index", EditorApiValueType::Integer),
+}};
+
 constexpr std::array<EditorApiParamSpec, 2> kSceneToolsReloadSceneParams = {{
     param("scene_name", EditorApiValueType::String),
     param("project_path", EditorApiValueType::String, true),
@@ -403,7 +410,7 @@ constexpr std::array<EditorApiParamSpec, 9> kScratchMouseEventParams = {{
 #define EDITOR_API_METHOD_SCHEMA(module, function, params_array, return_type) \
     EDITOR_API_METHOD_SCHEMA_WRAPPED(module, function, params_array, "", "", return_type)
 
-constexpr std::array<EditorApiMethodSpec, 142> kEditorApiMethods = {{
+constexpr std::array<EditorApiMethodSpec, 144> kEditorApiMethods = {{
     EDITOR_API_METHOD_SCHEMA_WRAPPED(AITool, submit_request, kObjectPayloadParam, "ai.submitRequest", "ai.submit_request", EditorApiValueType::Any),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(AITool, generate_hint, kAiToolGenerateHintParams, "ai.generateHint", "ai.generate_hint", EditorApiValueType::Any),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(AITool, read_local_file_as_base64, kPathParam, "ai.readLocalFileAsBase64", "ai.read_local_file_as_base64", EditorApiValueType::Any),
@@ -509,6 +516,7 @@ constexpr std::array<EditorApiMethodSpec, 142> kEditorApiMethods = {{
     EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, get_shadow_cascade_debug, kSceneToolsCameraOptionalParams, "sceneTools.getShadowCascadeDebug", "scene_tools.get_shadow_cascade_debug", EditorApiValueType::Object),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, get_ssao_enabled, kSceneToolsCameraOptionalParams, "sceneTools.getSsaoEnabled", "scene_tools.get_ssao_enabled", EditorApiValueType::Object),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, get_vision_render_mode, kSceneToolsCameraOptionalParams, "sceneTools.getVisionRenderMode", "scene_tools.get_vision_render_mode", EditorApiValueType::Object),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, get_ssat_view_viewer, kSceneToolsCameraOptionalParams, "sceneTools.getSsatViewViewer", "scene_tools.get_ssat_view_viewer", EditorApiValueType::Object),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, is_vision_available, kNoParams, "sceneTools.isVisionAvailable", "scene_tools.is_vision_available", EditorApiValueType::Object),
     EDITOR_API_METHOD1_WRAPPED(SceneTools, list_actor_tree, "scene.listActorTree", "scene.list_actor_tree", "scene_name", EditorApiValueType::String, EditorApiValueType::Array),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, list_camera_views, kSceneNameParam, "sceneTools.listCameraViews", "scene_tools.list_camera_views", EditorApiValueType::Object),
@@ -532,6 +540,7 @@ constexpr std::array<EditorApiMethodSpec, 142> kEditorApiMethods = {{
     EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, set_shadow_cascade_debug, kSceneToolsSetCameraBoolParams, "sceneTools.setShadowCascadeDebug", "scene_tools.set_shadow_cascade_debug", EditorApiValueType::Object),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, set_ssao_enabled, kSceneToolsSetCameraBoolParams, "sceneTools.setSsaoEnabled", "scene_tools.set_ssao_enabled", EditorApiValueType::Object),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, set_vision_render_mode, kSceneToolsSetVisionRenderModeParams, "sceneTools.setVisionRenderMode", "scene_tools.set_vision_render_mode", EditorApiValueType::Object),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, set_ssat_view_viewer, kSceneToolsSetSsatViewViewerParams, "sceneTools.setSsatViewViewer", "scene_tools.set_ssat_view_viewer", EditorApiValueType::Object),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, stop_audio, kResourceIdParam, "sceneTools.stopAudio", "scene_tools.stop_audio", EditorApiValueType::Object),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, sun_direction, kSceneToolsSunDirectionParams, "sceneTools.sunDirection", "scene_tools.sun_direction", EditorApiValueType::Object),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, update_camera_view, kSceneToolsUpdateCameraViewParams, "sceneTools.updateCameraView", "scene_tools.update_camera_view", EditorApiValueType::Object),

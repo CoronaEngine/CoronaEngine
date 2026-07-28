@@ -38,6 +38,13 @@ private:
     // which is subpixel-sized in light field mode (res_w * res_h * 3).
     RegistrableManaged<float4> encoded_accum_buffer_;
 
+    // Pixel-sized SSAT diagnostic output. It is allocated only after a camera
+    // requests FinalView, so the default interlaced path keeps its old memory
+    // footprint and data flow.
+    RegistrableManaged<float4> viewer_buffer_;
+    LightFieldViewerMode viewer_mode_{LightFieldViewerMode::Interlaced};
+    std::uint32_t viewer_view_index_{0u};
+
 public:
     LightFieldFrameBuffer() = default;
     explicit LightFieldFrameBuffer(const FrameBufferDesc &desc)
@@ -518,6 +525,9 @@ public:
         // Recreate light-field specific buffers
         prepare_encoded_buffer();
         prepare_encoded_accum_buffer();
+        if (viewer_buffer_.device_buffer().size() != 0) {
+            prepare_viewer_buffer();
+        }
         OC_INFO_FORMAT("LightFieldFrameBuffer::update_resolution done pixel_res=({}, {}), subpixel_res=({}, {}), total_subpixels={}",
                        pixel_dispatch_dim().x, pixel_dispatch_dim().y,
                        subpixel_dispatch_dim().x, subpixel_dispatch_dim().y,
@@ -559,6 +569,15 @@ public:
         encoded_accum_buffer_.upload_immediately();
         encoded_accum_buffer_.set_bindless_array(bindless_array());
         encoded_accum_buffer_.register_self();
+    }
+
+    void prepare_viewer_buffer() noexcept {
+        const uint size = total_pixels();
+        viewer_buffer_.reset_all(device(), size, "LightField::viewer");
+        viewer_buffer_.host_buffer().assign(size, float4{});
+        viewer_buffer_.upload_immediately();
+        viewer_buffer_.set_bindless_array(bindless_array());
+        viewer_buffer_.register_self();
     }
 
     // ========== Execution Functions ==========
@@ -671,6 +690,9 @@ public:
     }
 
     [[nodiscard]] BufferView<float4> display_source_buffer() const noexcept override {
+        if (viewer_mode_ == LightFieldViewerMode::FinalView && viewer_output_ready()) {
+            return viewer_buffer_.view();
+        }
         return enable_accumulation() ? encoded_accum_buffer_.view() : encoded_buffer_.view();
     }
 
@@ -689,6 +711,11 @@ public:
     /// Here we optionally accumulate (pixel-sized) then tone-map into output buffer.
     [[nodiscard]] CommandBatch render_final(uint frame_index) const noexcept override {
         CommandBatch ret;
+        if (viewer_mode_ == LightFieldViewerMode::FinalView && viewer_output_ready()) {
+            ret << tone_mapping_(viewer_buffer_.view(), view_texture_, exposure_.hv())
+                       .dispatch(pixel_dispatch_dim());
+            return ret;
+        }
         if (enable_accumulation()) {
             ret << accumulate_encoded(frame_index);
             ret << tone_mapping_(encoded_accum_buffer_.view(), view_texture_, exposure_.hv())
@@ -735,6 +762,32 @@ public:
     /// Get light field parameters (ILightFieldFrameBuffer interface)
     [[nodiscard]] const LenticularParams &lenticular_params() const noexcept override { return lenticular_; }
     [[nodiscard]] const LightFieldGeometry &geometry_params() const noexcept override { return geometry_; }
+
+    void set_viewer_state(LightFieldViewerMode mode,
+                          std::uint32_t view_index) noexcept override {
+        viewer_mode_ = mode;
+        const auto count = lightfield_view_count(lenticular_.num_views);
+        viewer_view_index_ = lightfield_effective_view_index(view_index, count);
+        if (viewer_mode_ == LightFieldViewerMode::FinalView && !viewer_output_ready()) {
+            prepare_viewer_buffer();
+        }
+    }
+
+    [[nodiscard]] LightFieldViewerMode viewer_mode() const noexcept override {
+        return viewer_mode_;
+    }
+
+    [[nodiscard]] std::uint32_t viewer_view_index() const noexcept override {
+        return viewer_view_index_;
+    }
+
+    [[nodiscard]] BufferView<float4> viewer_output_buffer() const noexcept override {
+        return viewer_buffer_.view();
+    }
+
+    [[nodiscard]] bool viewer_output_ready() const noexcept override {
+        return viewer_buffer_.device_buffer().size() == total_pixels();
+    }
 
     /// Get output resolution (pixel resolution, not subpixel)
     [[nodiscard]] uint2 output_resolution() const noexcept {

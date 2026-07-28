@@ -1,5 +1,7 @@
 #include "vision/vision_render_mode_config.h"
 
+#include <corona/shared_data_hub.h>
+
 #include "base/import/json_util.h"
 #include "base/import/project_desc.h"
 
@@ -251,6 +253,34 @@ void mode_names_and_denoise_flags_are_stable() {
            "ssat should enable denoise");
 }
 
+void ssat_viewer_state_is_scoped_to_camera_and_released() {
+    auto& hub = Corona::SharedDataHub::instance();
+    constexpr std::uintptr_t first_camera = 0x101u;
+    constexpr std::uintptr_t second_camera = 0x202u;
+    hub.clear_ssat_view_viewer_state(first_camera);
+    hub.clear_ssat_view_viewer_state(second_camera);
+
+    hub.set_ssat_view_viewer_request(
+        first_camera, Corona::SsatViewViewerMode::FinalView, 7u);
+    hub.update_ssat_view_viewer_status(first_camera, true, false, 24u, 7u);
+    hub.set_ssat_view_viewer_request(
+        second_camera, Corona::SsatViewViewerMode::FinalView, 3u);
+    hub.update_ssat_view_viewer_status(second_camera, true, false, 48u, 3u);
+
+    const auto first = hub.ssat_view_viewer_state(first_camera);
+    const auto second = hub.ssat_view_viewer_state(second_camera);
+    expect(first.view_count == 24u && first.effective_view_index == 7u,
+           "first camera should retain its own SSAT viewer status");
+    expect(second.view_count == 48u && second.effective_view_index == 3u,
+           "second camera should retain an independent SSAT viewer status");
+
+    hub.clear_ssat_view_viewer_state(first_camera);
+    const auto released = hub.ssat_view_viewer_state(first_camera);
+    expect(!released.supported && released.view_count == 0u,
+           "released camera should not retain SSAT viewer state");
+    hub.clear_ssat_view_viewer_state(second_camera);
+}
+
 void cbox_lf_scene_supports_pt_and_ssat_mode_import() {
     const auto scene_path = find_external_ssat_scene();
     if (!scene_path) {
@@ -295,6 +325,7 @@ void cbox_lf_scene_supports_pt_and_ssat_mode_import() {
 
 int main() {
     mode_names_and_denoise_flags_are_stable();
+    ssat_viewer_state_is_scoped_to_camera_and_released();
     path_tracing_preserves_source_lightfield_framebuffer();
     svgf_preserves_source_lightfield_framebuffer();
     path_tracing_and_svgf_preserve_source_normal_framebuffer();

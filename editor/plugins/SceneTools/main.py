@@ -1368,6 +1368,38 @@ class SceneTools(PluginBase):
             return {"status": "error", "message": str(exc)}
 
     @staticmethod
+    def set_ssat_view_viewer(scene_name: str, camera_name: str = None,
+                             mode: str = "interlaced", view_index: int = 0) -> dict:
+        try:
+            if mode not in {"interlaced", "final_view"}:
+                raise ValueError("mode must be 'interlaced' or 'final_view'")
+            if isinstance(view_index, bool) or int(view_index) < 0:
+                raise ValueError("view_index must be a non-negative integer")
+            scene = scene_manager.get(scene_name)
+            if scene is None:
+                raise ValueError(f"Scene '{scene_name}' not found")
+            camera = scene.find_camera(camera_name)
+            if camera is None:
+                raise ValueError(f"Camera '{camera_name}' not found")
+            camera.set_ssat_view_viewer(mode, int(view_index))
+            return camera.get_ssat_view_viewer()
+        except Exception as exc:
+            return {"status": "error", "message": str(exc)}
+
+    @staticmethod
+    def get_ssat_view_viewer(scene_name: str, camera_name: str = None) -> dict:
+        try:
+            scene = scene_manager.get(scene_name)
+            if scene is None:
+                raise ValueError(f"Scene '{scene_name}' not found")
+            camera = scene.find_camera(camera_name)
+            if camera is None:
+                raise ValueError(f"Camera '{camera_name}' not found")
+            return camera.get_ssat_view_viewer()
+        except Exception as exc:
+            return {"status": "error", "message": str(exc)}
+
+    @staticmethod
     def prepare_external_live_vision_scene(scene) -> str:
         return prepare_external_live_vision_scene(scene)
 

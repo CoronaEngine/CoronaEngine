@@ -200,6 +200,35 @@ class Camera:
     def get_vision_render_mode(self) -> str:
         return self.vision_render_mode
 
+    def set_ssat_view_viewer(self, mode: str, view_index: int = 0):
+        if mode not in {"interlaced", "final_view"}:
+            raise ValueError("mode must be 'interlaced' or 'final_view'")
+        setter = getattr(self.engine_obj, 'set_ssat_view_viewer', None)
+        if not callable(setter):
+            raise RuntimeError("SSAT viewer API is unavailable")
+        setter(mode, max(int(view_index), 0))
+
+    def get_ssat_view_viewer(self) -> dict:
+        getter = getattr(self.engine_obj, 'get_ssat_view_viewer', None)
+        if not callable(getter):
+            return {
+                'status': 'unsupported',
+                'supported': False,
+                'pending': False,
+                'mode': 'interlaced',
+                'view_index': 0,
+                'view_count': 0,
+            }
+        raw = getter()
+        return {
+            'status': raw.status,
+            'supported': bool(raw.supported),
+            'pending': bool(raw.pending),
+            'mode': raw.mode,
+            'view_index': int(raw.view_index),
+            'view_count': int(raw.view_count),
+        }
+
     def _flush_view_state(self):
         self.engine_obj.set_view_state(
             self.view_open, self.view_x, self.view_y,

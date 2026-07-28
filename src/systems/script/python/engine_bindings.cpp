@@ -146,6 +146,14 @@ nb::dict lanchat_message_to_dict(const Corona::Network::LanChatMessage& message)
 }  // namespace
 
 void BindAll(nanobind::module_& m) {
+    nb::class_<SsatViewViewerStatus>(m, "SsatViewViewerStatus")
+        .def_ro("status", &SsatViewViewerStatus::status)
+        .def_ro("supported", &SsatViewViewerStatus::supported)
+        .def_ro("pending", &SsatViewViewerStatus::pending)
+        .def_ro("mode", &SsatViewViewerStatus::mode)
+        .def_ro("view_index", &SsatViewViewerStatus::view_index)
+        .def_ro("view_count", &SsatViewViewerStatus::view_count);
+
     // ============================================================================
     // Geometry: 作为所有组件的锚点，存储位置/旋转/缩放和模型数据
     // ============================================================================
@@ -393,6 +401,9 @@ void BindAll(nanobind::module_& m) {
         .def("get_render_backend", &Camera::get_render_backend)
         .def("set_vision_render_mode", &Camera::set_vision_render_mode, nb::arg("mode"))
         .def("get_vision_render_mode", &Camera::get_vision_render_mode)
+        .def("set_ssat_view_viewer", &Camera::set_ssat_view_viewer,
+             nb::arg("mode"), nb::arg("view_index"))
+        .def("get_ssat_view_viewer", &Camera::get_ssat_view_viewer)
         .def("set_shadow_cascade_debug", &Camera::set_shadow_cascade_debug, nb::arg("enabled"))
         .def("get_shadow_cascade_debug", &Camera::get_shadow_cascade_debug)
         .def("set_ssao_enabled", &Camera::set_ssao_enabled, nb::arg("enabled"))
@@ -880,6 +891,12 @@ void BindAll(nanobind::module_& m) {
     m.def("get_vision_render_mode", &get_vision_render_mode,
           nb::arg("camera_handle") = 0,
           "Get the requested Vision render mode");
+    m.def("set_ssat_view_viewer", &set_ssat_view_viewer,
+          nb::arg("mode"), nb::arg("view_index"), nb::arg("camera_handle") = 0,
+          "Select the SSAT viewer source and zero-based view index");
+    m.def("get_ssat_view_viewer", &get_ssat_view_viewer,
+          nb::arg("camera_handle") = 0,
+          "Get the SSAT viewer runtime status");
     m.def("load_vision_scene", &load_vision_scene, nb::arg("path"),
           "Load an external Vision scene file (.json). Pass an empty string to "
           "unload and restore the engine-built scene. Only effective when Vision "

@@ -937,6 +937,8 @@ class NativeSceneToolsRpcTests(unittest.TestCase):
             "SceneTools.get_render_backend": "kSceneToolsCameraOptionalParams",
             "SceneTools.set_vision_render_mode": "kSceneToolsSetVisionRenderModeParams",
             "SceneTools.get_vision_render_mode": "kSceneToolsCameraOptionalParams",
+            "SceneTools.set_ssat_view_viewer": "kSceneToolsSetSsatViewViewerParams",
+            "SceneTools.get_ssat_view_viewer": "kSceneToolsCameraOptionalParams",
         }
         for api_name, params_name in expected.items():
             module, method = api_name.split(".", 1)
@@ -1997,6 +1999,8 @@ class NativeSceneToolsRpcTests(unittest.TestCase):
             "getRenderBackend: (sceneName = null, cameraId = null)",
             "setVisionRenderMode: (sceneName, cameraId = null, mode = 'path_tracing')",
             "getVisionRenderMode: (sceneName, cameraId = null)",
+            "setSsatViewViewer: (sceneName, cameraId = null, mode = 'interlaced', viewIndex = 0)",
+            "getSsatViewViewer: (sceneName, cameraId = null)",
         ):
             with self.subTest(snippet=snippet):
                 self.assertIn(snippet, bridge_source)
@@ -3046,6 +3050,8 @@ class NativeSceneToolsRpcTests(unittest.TestCase):
             "get_render_backend",
             "set_vision_render_mode",
             "get_vision_render_mode",
+            "set_ssat_view_viewer",
+            "get_ssat_view_viewer",
         ):
             with self.subTest(method=method):
                 self.assertIn(f'{{"{method}"', scene_tools_handlers)

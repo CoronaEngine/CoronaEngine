@@ -61,6 +61,7 @@ if((BUILD_CORONA_TESTING OR BUILD_TESTING) AND CORONA_BUILD_VISION)
 
     add_executable(corona_vision_render_mode_config_tests
         tests/test_vision_render_mode_config.cpp
+        ${PROJECT_SOURCE_DIR}/src/shared_data_hub.cpp
     )
     target_include_directories(corona_vision_render_mode_config_tests
         PRIVATE

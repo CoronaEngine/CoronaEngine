@@ -308,6 +308,17 @@ public:
                 }
                 submit(combine_(frame_index_).dispatch(frame_buffer().raytracing_resolution()),
                        &cur_stage_profile_.combine_ms);
+                if (ssat_denoiser != nullptr &&
+                    lf_fb->viewer_mode() == LightFieldViewerMode::FinalView &&
+                    lf_fb->viewer_output_ready()) {
+                    submit(ssat_denoiser->dispatch_view_reconstruction(
+                               frame_buffer().rt_buffer().view(),
+                               lf_fb->viewer_output_buffer(),
+                               lf_input.lenticular,
+                               lf_input.geometry,
+                               lf_fb->viewer_view_index()),
+                           &cur_stage_profile_.postprocess_ms);
+                }
             } else {
                 param.enable_sparse_sampling = 0u;
                 submit(path_tracing(param, frame_buffer().raytracing_resolution()), &cur_stage_profile_.path_tracing_ms);

@@ -5,6 +5,11 @@
 
 #pragma once
 
+#include <algorithm>
+#include <cmath>
+#include <cstdint>
+#include <limits>
+
 #include "math/basic_types.h"
 #include "dsl/dsl.h"
 
@@ -35,6 +40,49 @@ struct LightFieldGeometry {
     float W_f{0.f};             // Focal plane width (derived)
     float H_f{0.f};             // Focal plane height (derived)
 };
+
+/// The presentation source selected for a light-field framebuffer.
+enum class LightFieldViewerMode : std::uint8_t {
+    Interlaced,
+    FinalView,
+};
+
+/// Sentinel used by runtime-only viewer state to request the default center view.
+inline constexpr std::uint32_t kLightFieldAutoViewIndex =
+    std::numeric_limits<std::uint32_t>::max();
+
+/// Convert the serialized float view count into the integer count used by the
+/// renderer. Invalid and sub-unit values still represent one usable view.
+[[nodiscard]] inline std::uint32_t lightfield_view_count(float raw) noexcept {
+    if (!std::isfinite(raw) || raw < 1.f) {
+        return 1u;
+    }
+    const double floored = std::floor(static_cast<double>(raw));
+    if (floored >= static_cast<double>(std::numeric_limits<std::uint32_t>::max())) {
+        return std::numeric_limits<std::uint32_t>::max();
+    }
+    return std::max(1u, static_cast<std::uint32_t>(floored));
+}
+
+[[nodiscard]] inline std::uint32_t lightfield_effective_view_index(
+    std::uint32_t requested,
+    std::uint32_t count) noexcept {
+    count = std::max(1u, count);
+    if (requested == kLightFieldAutoViewIndex) {
+        return (count - 1u) / 2u;
+    }
+    return std::min(requested, count - 1u);
+}
+
+[[nodiscard]] inline float lightfield_view_u(
+    std::uint32_t index,
+    std::uint32_t count) noexcept {
+    count = std::max(1u, count);
+    index = lightfield_effective_view_index(index, count);
+    return count > 1u
+               ? static_cast<float>(index) / static_cast<float>(count - 1u)
+               : 0.5f;
+}
 
 [[nodiscard]] constexpr float lightfield_aspect_from_resolution(
     uint2 resolution) noexcept {
@@ -88,6 +136,22 @@ public:
     
     /// Get previous frame's local-to-world transform (for temporal reprojection)
     [[nodiscard]] virtual float4x4 get_prev_l2w() const noexcept = 0;
+
+    /// Select the presentation source for this framebuffer's camera context.
+    virtual void set_viewer_state(LightFieldViewerMode mode,
+                                  std::uint32_t view_index) noexcept = 0;
+
+    /// Get the currently selected presentation mode.
+    [[nodiscard]] virtual LightFieldViewerMode viewer_mode() const noexcept = 0;
+
+    /// Get the currently effective, clamped view index.
+    [[nodiscard]] virtual std::uint32_t viewer_view_index() const noexcept = 0;
+
+    /// Get the pixel-sized SSAT single-view output buffer.
+    [[nodiscard]] virtual BufferView<float4> viewer_output_buffer() const noexcept = 0;
+
+    /// Whether the pixel-sized viewer output has been allocated for this resolution.
+    [[nodiscard]] virtual bool viewer_output_ready() const noexcept = 0;
 };
 
 }// namespace vision

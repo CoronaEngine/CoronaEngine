@@ -48,6 +48,30 @@ function(corona_examples_copy_assets target_name)
     elseif(CORONA_BUILD_VISION)
         message(STATUS "[${target_name}] Skip Ocarina runtime deps copy because target 'ocarina' is not available")
     endif()
+
+    # The CUDA backend links against NVRTC, which is not part of the Ocarina
+    # target output directory. Stage the NVRTC DLL and its companion runtime
+    # DLLs next to the example so LoadLibrary does not depend on the user's
+    # global CUDA PATH.
+    if(CORONA_BUILD_VISION AND WIN32 AND DEFINED CUDAToolkit_BIN_DIR)
+        file(GLOB _corona_cuda_runtime_files
+            "${CUDAToolkit_BIN_DIR}/x64/nvrtc*.dll"
+            "${CUDAToolkit_BIN_DIR}/nvrtc*.dll"
+            "${CUDAToolkit_BIN_DIR}/x64/nvJitLink*.dll"
+            "${CUDAToolkit_BIN_DIR}/nvJitLink*.dll")
+        list(REMOVE_DUPLICATES _corona_cuda_runtime_files)
+
+        foreach(_corona_cuda_runtime_file IN LISTS _corona_cuda_runtime_files)
+            add_custom_command(
+                TARGET ${target_name}
+                POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${_corona_cuda_runtime_file}"
+                    "$<TARGET_FILE_DIR:${target_name}>"
+                VERBATIM
+            )
+        endforeach()
+    endif()
 endfunction()
 
 # ------------------------------------------------------------------------------
