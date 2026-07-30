@@ -157,15 +157,10 @@ public:
             Uint y = dy;
 
             // ----- Lenticular view selection (same as generate_rays) -----
-            Float D = 3.f * cast<float>(x) +
-                      3.f * cast<float>(y) * tan(lent.angle) +
-                      cast<float>(k) + lent.offset;
-            Float pe_val = lent.pe;
-            Float A = D - floor(D / pe_val) * pe_val;// positive mod in [0, pe)
-            Float num_views_f = lent.num_views;
-            Uint view_id = cast<uint>(floor(A / (pe_val / num_views_f)));
-            // Flip view ID: 0 -> N-1, 1 -> N-2, ..., N-1 -> 0
-            view_id = cast<uint>(num_views_f - 1.f) - view_id;
+            Uint view_count = lightfield_dsl_view_count(lent);
+            Uint view_id = lightfield_subpixel_view_id(
+                x, y, k, lent, view_count);
+            Float num_views_f = cast<float>(view_count);
 
             // ----- Focal plane point (subpixel) -----
             Float pw = geom.W_f / lent.res_w;
@@ -255,15 +250,10 @@ public:
             Uint k = 1u;
 
             // View ID (same as generate_rays)
-            Float D = 3.f * cast<float>(x) +
-                      3.f * cast<float>(y) * tan(lent.angle) +
-                      cast<float>(k) + lent.offset;
-            Float pe_val = lent.pe;
-            Float A = D - floor(D / pe_val) * pe_val;// positive mod in [0, pe)
-            Float num_views_f = lent.num_views;
-            Uint view_id = cast<uint>(floor(A / (pe_val / num_views_f)));
-            // Flip view ID: 0 -> N-1, 1 -> N-2, ..., N-1 -> 0
-            view_id = cast<uint>(num_views_f - 1.f) - view_id;
+            Uint view_count = lightfield_dsl_view_count(lent);
+            Uint view_id = lightfield_subpixel_view_id(
+                x, y, k, lent, view_count);
+            Float num_views_f = cast<float>(view_count);
 
             // Focal plane point (k=1)
             Float pw = geom.W_f / lent.res_w;
@@ -310,19 +300,10 @@ public:
             Uint y = dy;
 
             // ===== 2. Compute view ID (lenticular interlacing) =====
-            // From JS: getViewId(x, y, k)
-            // D = 3*x + 3*y*tan(angle) + k + offset
-            Float D = 3.f * cast<float>(x) +
-                      3.f * cast<float>(y) * tan(lent.angle) +
-                      cast<float>(k) + lent.offset;
-            // NOTE: CUDA backend currently does not implement CallOp::FMOD codegen.
-            // Use A = D - floor(D / pe) * pe to compute a positive modulus in [0, pe).
-            Float pe_val = lent.pe;
-            Float A = D - floor(D / pe_val) * pe_val;
-            Float num_views_f = lent.num_views;
-            Uint view_id = cast<uint>(floor(A / (pe_val / num_views_f)));
-            // Flip view ID: 0 -> N-1, 1 -> N-2, ..., N-1 -> 0
-            view_id = cast<uint>(num_views_f - 1.f) - view_id;
+            Uint view_count = lightfield_dsl_view_count(lent);
+            Uint view_id = lightfield_subpixel_view_id(
+                x, y, k, lent, view_count);
+            Float num_views_f = cast<float>(view_count);
 
             // ===== 3. Compute subpixel position on focal plane (local coords) =====
             // From JS: getSubPixelPosition(x, y, k)

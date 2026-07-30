@@ -216,6 +216,20 @@ void SharedDataHub::enqueue_camera_state_update(CameraStateUpdateCommand command
     }
 }
 
+std::optional<CameraStateUpdateCommand> SharedDataHub::pending_camera_state_update(
+    std::uintptr_t camera_handle) {
+    if (camera_handle == 0) {
+        return std::nullopt;
+    }
+
+    std::lock_guard<std::mutex> lock(camera_state_update_mutex_);
+    const auto it = pending_camera_state_updates_.find(camera_handle);
+    if (it == pending_camera_state_updates_.end()) {
+        return std::nullopt;
+    }
+    return it->second;
+}
+
 std::vector<CameraStateUpdateCommand> SharedDataHub::drain_camera_state_updates() {
     std::vector<CameraStateUpdateCommand> updates;
     {
@@ -329,6 +343,7 @@ SsatViewViewerState SharedDataHub::ssat_view_viewer_state(
     }
     SsatViewViewerState state;
     state.camera_handle = camera_handle;
+    state.pending = true;
     return state;
 }
 

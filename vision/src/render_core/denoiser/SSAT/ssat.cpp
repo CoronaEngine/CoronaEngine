@@ -7,8 +7,8 @@
 
 namespace vision::ssat {
 
-// Main class implementation is in the header
-// This file provides the plugin registration
+// SSAT and its single-view reconstructor are implemented in the headers.
+// This translation unit provides their plugin registration.
 
 }// namespace vision::ssat
 

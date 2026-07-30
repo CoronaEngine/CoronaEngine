@@ -84,6 +84,31 @@ inline constexpr std::uint32_t kLightFieldAutoViewIndex =
                : 0.5f;
 }
 
+/// Map one physical RGB subpixel to the discrete view used by ray generation.
+/// Keeping this host helper beside the DSL overload below makes tests and
+/// runtime code share the same canonicalized view-count semantics.
+[[nodiscard]] inline std::uint32_t lightfield_subpixel_view_id(
+    std::uint32_t pixel_x,
+    std::uint32_t pixel_y,
+    std::uint32_t channel,
+    const LenticularParams &lenticular) noexcept {
+    const std::uint32_t view_count = lightfield_view_count(lenticular.num_views);
+    if (!std::isfinite(lenticular.pe) || lenticular.pe <= 0.f ||
+        !std::isfinite(lenticular.angle) || !std::isfinite(lenticular.offset)) {
+        return 0u;
+    }
+
+    const float d = 3.f * static_cast<float>(pixel_x) +
+                    3.f * static_cast<float>(pixel_y) * std::tan(lenticular.angle) +
+                    static_cast<float>(channel) + lenticular.offset;
+    const float a = d - std::floor(d / lenticular.pe) * lenticular.pe;
+    const float bin_width = lenticular.pe / static_cast<float>(view_count);
+    const auto raw_view = static_cast<std::uint32_t>(
+        std::max(0.f, std::floor(a / bin_width)));
+    const std::uint32_t clamped_view = std::min(raw_view, view_count - 1u);
+    return view_count - 1u - clamped_view;
+}
+
 [[nodiscard]] constexpr float lightfield_aspect_from_resolution(
     uint2 resolution) noexcept {
     return resolution.y == 0u
@@ -114,6 +139,33 @@ OC_MAKE_PROXY(vision::LightFieldGeometry) {};
 // clang-format on
 
 namespace vision {
+
+/// GPU/DSL counterpart of lightfield_view_count(). Light-field parameters are
+/// expected to be finite on device; invalid serialized values are normalized
+/// on the host before dispatch.
+[[nodiscard]] inline Uint lightfield_dsl_view_count(
+    Var<LenticularParams> lenticular) noexcept {
+    return max(1u, cast<uint>(floor(max(lenticular.num_views, 1.f))));
+}
+
+/// GPU/DSL counterpart of lightfield_subpixel_view_id().
+[[nodiscard]] inline Uint lightfield_subpixel_view_id(
+    Uint pixel_x,
+    Uint pixel_y,
+    Uint channel,
+    Var<LenticularParams> lenticular,
+    Uint view_count) noexcept {
+    view_count = max(view_count, 1u);
+    const Float d = 3.f * cast<float>(pixel_x) +
+                    3.f * cast<float>(pixel_y) * tan(lenticular.angle) +
+                    cast<float>(channel) + lenticular.offset;
+    const Float pe = lenticular.pe;
+    const Float a = d - floor(d / pe) * pe;
+    const Float bin_width = pe / cast<float>(view_count);
+    const Uint raw_view = cast<uint>(floor(a / bin_width));
+    const Uint clamped_view = min(raw_view, view_count - 1u);
+    return view_count - 1u - clamped_view;
+}
 
 // ============================================================================
 // Light Field FrameBuffer Interface

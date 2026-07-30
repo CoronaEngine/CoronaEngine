@@ -278,6 +278,21 @@ public:
             if (denoiser_enabled) {
                 submit(path_tracing(param, frame_buffer().raytracing_resolution()), &cur_stage_profile_.path_tracing_ms);
                 if (ssat_denoiser != nullptr) {
+                    // Reconstruct the diagnostic view before SSAT Phase 2/3
+                    // alter each physical sample. The path-tracing color buffer
+                    // uses alpha=1 for sampled (including black) and alpha=0 for
+                    // adaptive-sampling holes.
+                    if (lf_fb->viewer_mode() == LightFieldViewerMode::FinalView &&
+                        lf_fb->viewer_output_ready()) {
+                        submit(ssat_denoiser->dispatch_view_reconstruction(
+                                   frame_buffer().rt_buffer().view(),
+                                   lf_fb->viewer_output_buffer(),
+                                   lf_input.lenticular,
+                                   lf_fb->viewer_view_index(),
+                                   frame_index_),
+                               &cur_stage_profile_.postprocess_ms);
+                    }
+
                     // Merge indirect into direct (always needed)
                     submit(merge_indirect_into_direct_().dispatch(frame_buffer().raytracing_resolution()), nullptr);
 
@@ -308,17 +323,6 @@ public:
                 }
                 submit(combine_(frame_index_).dispatch(frame_buffer().raytracing_resolution()),
                        &cur_stage_profile_.combine_ms);
-                if (ssat_denoiser != nullptr &&
-                    lf_fb->viewer_mode() == LightFieldViewerMode::FinalView &&
-                    lf_fb->viewer_output_ready()) {
-                    submit(ssat_denoiser->dispatch_view_reconstruction(
-                               frame_buffer().rt_buffer().view(),
-                               lf_fb->viewer_output_buffer(),
-                               lf_input.lenticular,
-                               lf_input.geometry,
-                               lf_fb->viewer_view_index()),
-                           &cur_stage_profile_.postprocess_ms);
-                }
             } else {
                 param.enable_sparse_sampling = 0u;
                 submit(path_tracing(param, frame_buffer().raytracing_resolution()), &cur_stage_profile_.path_tracing_ms);

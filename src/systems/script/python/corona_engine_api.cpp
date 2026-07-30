@@ -2639,7 +2639,13 @@ void set_render_backend(const std::string& mode, std::uintptr_t camera_handle) {
 std::string get_render_backend(std::uintptr_t camera_handle) {
     const auto resolved_handle = resolve_camera_handle(camera_handle);
     if (resolved_handle != 0) {
-        if (auto camera = SharedDataHub::instance().camera_storage().acquire_read(resolved_handle)) {
+        auto& hub = SharedDataHub::instance();
+        if (const auto pending = hub.pending_camera_state_update(resolved_handle);
+            pending.has_value() &&
+            has_camera_state_field(pending->fields, CameraStateUpdateField::RenderBackend)) {
+            return pending->render_backend == CameraRenderBackend::Vision ? "vision" : "native";
+        }
+        if (auto camera = hub.camera_storage().acquire_read(resolved_handle)) {
             return camera->render_backend == CameraRenderBackend::Vision ? "vision" : "native";
         }
     }
@@ -2663,7 +2669,13 @@ void set_vision_render_mode(const std::string& mode, std::uintptr_t camera_handl
 std::string get_vision_render_mode(std::uintptr_t camera_handle) {
     const auto resolved_handle = resolve_camera_handle(camera_handle);
     if (resolved_handle != 0) {
-        if (auto camera = SharedDataHub::instance().camera_storage().acquire_read(resolved_handle)) {
+        auto& hub = SharedDataHub::instance();
+        if (const auto pending = hub.pending_camera_state_update(resolved_handle);
+            pending.has_value() &&
+            has_camera_state_field(pending->fields, CameraStateUpdateField::VisionRenderMode)) {
+            return vision_render_mode_to_string(pending->vision_render_mode);
+        }
+        if (auto camera = hub.camera_storage().acquire_read(resolved_handle)) {
             return vision_render_mode_to_string(camera->vision_render_mode);
         }
     }

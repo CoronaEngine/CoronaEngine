@@ -2555,6 +2555,25 @@ OpticsSystem::VisionPipelineRuntime* OpticsSystem::ensure_external_vision_runtim
     try {
         const auto scene_resource_key =
             make_vision_scene_resource_key(key.scene_path, key.source);
+
+        // Embedded Vision scenes use a logical scene key such as
+        // `scene.ini.embedded`; it is not a file on disk. When a camera changes
+        // render mode, the new mode gets a new runtime key, so carry the JSON
+        // payload from any already-loaded runtime for the same scene/source.
+        // Capture it before a forced resource reload erases the old runtimes.
+        std::string embedded_scene_json;
+        std::string embedded_base_dir;
+        for (const auto& [existing_key, existing_runtime] : vision_runtimes_) {
+            if (existing_key.scene_path != key.scene_path ||
+                existing_key.source != key.source ||
+                !existing_runtime || existing_runtime->scene_json.empty()) {
+                continue;
+            }
+            embedded_scene_json = existing_runtime->scene_json;
+            embedded_base_dir = existing_runtime->base_dir;
+            break;
+        }
+
         if (force_reload_scene_resource) {
             for (auto it = vision_runtimes_.begin(); it != vision_runtimes_.end();) {
                 if (!(make_vision_scene_resource_key(it->first.scene_path, it->first.source) ==
@@ -2588,11 +2607,25 @@ OpticsSystem::VisionPipelineRuntime* OpticsSystem::ensure_external_vision_runtim
             return &runtime;
         }
 
-        auto pipeline = import_vision_scene_from_file(
-            std::filesystem::u8path(key.scene_path),
-            key.mode,
-            scene_resource,
-            key.source);
+        ocarina::SP<vision::Pipeline> pipeline;
+        if (!embedded_scene_json.empty()) {
+            const auto base_dir = embedded_base_dir.empty()
+                                      ? std::filesystem::current_path()
+                                      : std::filesystem::u8path(embedded_base_dir);
+            pipeline = import_vision_scene_from_data(
+                vision::DataWrap::parse(embedded_scene_json),
+                base_dir,
+                key.scene_path,
+                key.mode,
+                scene_resource,
+                key.source);
+        } else {
+            pipeline = import_vision_scene_from_file(
+                std::filesystem::u8path(key.scene_path),
+                key.mode,
+                scene_resource,
+                key.source);
+        }
         if (!pipeline) {
             CFW_LOG_ERROR("OpticsSystem: External Vision scene import failed: {}",
                           key.scene_path);
@@ -2605,6 +2638,10 @@ OpticsSystem::VisionPipelineRuntime* OpticsSystem::ensure_external_vision_runtim
             std::string("external import mode=") +
                 std::string(Vision::vision_render_mode_name(key.mode)));
         runtime.reset_pipeline(std::move(pipeline), key.source, key.scene_path, key.mode);
+        if (!embedded_scene_json.empty()) {
+            runtime.scene_json = std::move(embedded_scene_json);
+            runtime.base_dir = std::move(embedded_base_dir);
+        }
         CFW_LOG_INFO("OpticsSystem: loaded Vision runtime ({})",
                      describe_vision_pipeline_key(key));
         return &runtime;

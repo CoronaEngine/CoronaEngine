@@ -55,19 +55,11 @@ public:
         Uint channel_k = dx % 3u;
         Uint pixel_y = dy;
         
-        // Compute view ID using lenticular interlacing formula (from LightFieldFrameBuffer)
-        // D = 3*x + 3*y*tan(angle) + k + offset
-        Float D = 3.f * cast<float>(pixel_x) +
-                  3.f * cast<float>(pixel_y) * tan(lent.angle) +
-                  cast<float>(channel_k) + lent.offset;
-        
-        // Positive modulo: A = D - floor(D/pe) * pe
-        Float pe_val = lent.pe;
-        Float A = D - floor(D / pe_val) * pe_val;
-        Float num_views_f = lent.num_views;
-        Uint view_id = cast<uint>(floor(A / (pe_val / num_views_f)));
-        // Flip view ID: 0 -> N-1, ..., N-1 -> 0
-        view_id = cast<uint>(num_views_f - 1.f) - view_id;
+        // Use the same discrete view mapping as light-field ray generation.
+        Uint view_count = lightfield_dsl_view_count(lent);
+        Uint view_id = lightfield_subpixel_view_id(
+            pixel_x, pixel_y, channel_k, lent, view_count);
+        Float num_views_f = cast<float>(view_count);
         
         // Compute spatial coordinate x (subpixel position on focal plane, normalized)
         Float res_w = lent.res_w;

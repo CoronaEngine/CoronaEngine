@@ -1,6 +1,7 @@
 #include "base/sensor/light_field_types.h"
 
 #include <cmath>
+#include <cstdint>
 #include <cstdlib>
 #include <iostream>
 
@@ -63,6 +64,89 @@ void viewer_view_coordinates_use_zero_based_normalized_angles() {
                 "a single view should use the center angular coordinate");
 }
 
+std::uint32_t reference_subpixel_view_id(
+    std::uint32_t x,
+    std::uint32_t y,
+    std::uint32_t channel,
+    const vision::LenticularParams& lenticular) {
+    const auto view_count =
+        vision::lightfield_view_count(lenticular.num_views);
+    const float d = 3.f * static_cast<float>(x) +
+                    3.f * static_cast<float>(y) * std::tan(lenticular.angle) +
+                    static_cast<float>(channel) + lenticular.offset;
+    const float a =
+        d - std::floor(d / lenticular.pe) * lenticular.pe;
+    const auto raw_view = static_cast<std::uint32_t>(
+        std::floor(a / (lenticular.pe / static_cast<float>(view_count))));
+    return view_count - 1u - std::min(raw_view, view_count - 1u);
+}
+
+void shared_subpixel_view_mapping_matches_ray_generation_formula() {
+    vision::LenticularParams lenticular;
+    lenticular.pe = 19.1849f;
+    lenticular.angle = 0.2333f;
+    lenticular.offset = 10.f;
+    lenticular.num_views = 48.f;
+
+    for (std::uint32_t y = 0u; y < 32u; ++y) {
+        for (std::uint32_t x = 0u; x < 64u; ++x) {
+            for (std::uint32_t channel = 0u; channel < 3u; ++channel) {
+                const auto actual = vision::lightfield_subpixel_view_id(
+                    x, y, channel, lenticular);
+                const auto expected = reference_subpixel_view_id(
+                    x, y, channel, lenticular);
+                if (actual != expected || actual >= 48u) {
+                    std::cerr
+                        << "FAIL: shared subpixel view mapping diverged"
+                        << " (x=" << x << ", y=" << y
+                        << ", channel=" << channel
+                        << ", actual=" << actual
+                        << ", expected=" << expected << ")\n";
+                    std::exit(1);
+                }
+            }
+        }
+    }
+}
+
+void subpixel_view_mapping_uses_canonical_view_count() {
+    vision::LenticularParams integral;
+    integral.pe = 19.1849f;
+    integral.angle = 0.2333f;
+    integral.offset = 10.f;
+    integral.num_views = 48.f;
+    vision::LenticularParams fractional = integral;
+    fractional.num_views = 48.9f;
+
+    for (std::uint32_t channel = 0u; channel < 3u; ++channel) {
+        const auto expected = vision::lightfield_subpixel_view_id(
+            17u, 11u, channel, integral);
+        const auto actual = vision::lightfield_subpixel_view_id(
+            17u, 11u, channel, fractional);
+        if (actual != expected) {
+            std::cerr
+                << "FAIL: fractional view count changed subpixel mapping\n";
+            std::exit(1);
+        }
+    }
+
+    fractional.num_views = 1.f;
+    for (std::uint32_t channel = 0u; channel < 3u; ++channel) {
+        if (vision::lightfield_subpixel_view_id(
+                17u, 11u, channel, fractional) != 0u) {
+            std::cerr << "FAIL: single-view subpixel mapping was not zero\n";
+            std::exit(1);
+        }
+    }
+
+    fractional.num_views = NAN;
+    if (vision::lightfield_subpixel_view_id(
+            17u, 11u, 1u, fractional) != 0u) {
+        std::cerr << "FAIL: invalid view count was not normalized\n";
+        std::exit(1);
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -71,5 +155,7 @@ int main() {
     invalid_camera_output_uses_neutral_lightfield_geometry_aspect();
     viewer_view_count_and_index_handling_are_stable();
     viewer_view_coordinates_use_zero_based_normalized_angles();
+    shared_subpixel_view_mapping_matches_ray_generation_formula();
+    subpixel_view_mapping_uses_canonical_view_count();
     return 0;
 }

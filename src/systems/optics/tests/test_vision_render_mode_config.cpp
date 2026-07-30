@@ -260,6 +260,10 @@ void ssat_viewer_state_is_scoped_to_camera_and_released() {
     hub.clear_ssat_view_viewer_state(first_camera);
     hub.clear_ssat_view_viewer_state(second_camera);
 
+    const auto initial = hub.ssat_view_viewer_state(first_camera);
+    expect(initial.pending && !initial.supported && initial.view_count == 0u,
+           "unevaluated SSAT viewer state should remain pending");
+
     hub.set_ssat_view_viewer_request(
         first_camera, Corona::SsatViewViewerMode::FinalView, 7u);
     hub.update_ssat_view_viewer_status(first_camera, true, false, 24u, 7u);
@@ -276,8 +280,8 @@ void ssat_viewer_state_is_scoped_to_camera_and_released() {
 
     hub.clear_ssat_view_viewer_state(first_camera);
     const auto released = hub.ssat_view_viewer_state(first_camera);
-    expect(!released.supported && released.view_count == 0u,
-           "released camera should not retain SSAT viewer state");
+    expect(released.pending && !released.supported && released.view_count == 0u,
+           "released camera should return fresh pending state without retained data");
     hub.clear_ssat_view_viewer_state(second_camera);
 }
 

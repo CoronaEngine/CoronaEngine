@@ -571,6 +571,8 @@ class SharedDataHub {
     void enqueue_camera_viewport_update(CameraViewportUpdateCommand command);
     std::vector<CameraViewportUpdateCommand> drain_camera_viewport_updates();
     void enqueue_camera_state_update(CameraStateUpdateCommand command);
+    [[nodiscard]] std::optional<CameraStateUpdateCommand> pending_camera_state_update(
+        std::uintptr_t camera_handle);
     std::vector<CameraStateUpdateCommand> drain_camera_state_updates();
     void enqueue_camera_release(CameraReleaseCommand command);
     std::vector<CameraReleaseCommand> drain_camera_releases();

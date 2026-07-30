@@ -16,11 +16,10 @@
 #include "base/denoiser.h"
 #include "base/sensor/frame_buffer.h"
 #include "base/sensor/light_field_types.h"
-#include "phase_space.h"
 #include "adaptive_sampler.h"
 #include "spatial_angular_filter.h"
 #include "temporal_accumulator.h"
-#include "sparse_gather.h"
+#include "view_reconstructor.h"
 #include "utils.h"
 #include "ssat_config.h"
 
@@ -46,9 +45,7 @@ private:
     HotfixSlot<SP<AdaptiveSampler>> adaptive_sampler_;
     HotfixSlot<SP<SpatialAngularFilter>> spatial_angular_filter_;
     HotfixSlot<SP<TemporalAccumulator>> temporal_accumulator_;
-    Shader<void(Buffer<RadType4>, Buffer<float4>, LenticularParams,
-                LightFieldGeometry, uint, uint, float, float, int)>
-        view_reconstruction_;
+    HotfixSlot<SP<SsatViewReconstructor>> view_reconstructor_;
     
     // ========================================================================
     // Parameters
@@ -158,8 +155,9 @@ public:
     }
     
     VS_HOTFIX_MAKE_RESTORE(Denoiser, adaptive_sampler_, spatial_angular_filter_,
-                           temporal_accumulator_, params_, total_subpixels_,
-                           subpixel_resolution_, last_sampling_mask_frame_)
+                           temporal_accumulator_, view_reconstructor_, params_,
+                           total_subpixels_, subpixel_resolution_,
+                           last_sampling_mask_frame_)
     VS_MAKE_PLUGIN_NAME_FUNC
     
     // ========================================================================
@@ -170,6 +168,7 @@ public:
         adaptive_sampler_ = make_shared<AdaptiveSampler>(this);
         spatial_angular_filter_ = make_shared<SpatialAngularFilter>(this);
         temporal_accumulator_ = make_shared<TemporalAccumulator>(this);
+        view_reconstructor_ = make_shared<SsatViewReconstructor>(this);
     }
     
     // ========================================================================
@@ -198,38 +197,7 @@ public:
         adaptive_sampler_->compile();
         spatial_angular_filter_->compile();
         temporal_accumulator_->compile();
-
-        Kernel kernel = [&](BufferVar<RadType4> source,
-                            BufferVar<float4> output,
-                            Var<LenticularParams> lent,
-                            Var<LightFieldGeometry> geom,
-                            Uint selected_view,
-                            Uint view_count,
-                            Float sigma_x,
-                            Float sigma_u,
-                            Int spatial_radius) {
-            const Uint2 pixel = dispatch_idx().xy();
-            const Float2 target_x = make_float2(
-                (cast<float>(pixel.x) + 0.5f) / lent.res_w,
-                (cast<float>(pixel.y) + 0.5f) / lent.res_h);
-            const Float target_u = select(
-                view_count > 1u,
-                cast<float>(selected_view) / cast<float>(view_count - 1u),
-                0.5f);
-
-            PhaseSpaceCoordVar target;
-            target.x = target_x;
-            target.u = make_float2(target_u, 0.5f);
-
-            const Float4 gathered = SparseGather::gather(
-                source, target, lent, geom, sigma_x, sigma_u, spatial_radius);
-            Float4 result = make_float4(0.f, 0.f, 0.f, 1.f);
-            $if(gathered.w > SSATConfig::Gather::kEpsilon) {
-                result.xyz() = gathered.xyz();
-            };
-            output.write(dispatch_id(), result);
-        };
-        view_reconstruction_ = device().compile(kernel, "SSAT-ViewReconstruction");
+        view_reconstructor_->compile();
     }
     
     void update_resolution(uint2 resolution) noexcept override {
@@ -327,35 +295,19 @@ public:
         return ret;
     }
 
-    /// Reconstruct one complete 2D view from the Phase 3 light-field result.
-    /// The target angular coordinate is selected in normalized view space and
-    /// the existing SSAT Υ gather supplies the spatial/angular interpolation.
+    /// Reconstruct one complete 2D view from valid path-traced light-field
+    /// samples before Phase 2/3 can mix angular neighbors.
     [[nodiscard]] CommandBatch dispatch_view_reconstruction(
         BufferView<RadType4> source,
         BufferView<float4> output,
         const LenticularParams &lenticular,
-        const LightFieldGeometry &geometry,
-        std::uint32_t view_index) noexcept {
-        CommandBatch ret;
+        std::uint32_t view_index,
+        std::uint32_t frame_index) noexcept {
         if (!params_.enabled) {
-            return ret;
+            return {};
         }
-        const std::uint32_t view_count = lightfield_view_count(lenticular.num_views);
-        const std::uint32_t effective_index =
-            lightfield_effective_view_index(view_index, view_count);
-        ret << view_reconstruction_(
-                   source,
-                   output,
-                   lenticular,
-                   geometry,
-                   effective_index,
-                   view_count,
-                   params_.sigma_x,
-                   params_.sigma_u,
-                   params_.spatial_radius)
-                   .dispatch(make_uint2(static_cast<uint>(lenticular.res_w),
-                                        static_cast<uint>(lenticular.res_h)));
-        return ret;
+        return view_reconstructor_->dispatch(
+            source, output, lenticular, view_index, frame_index);
     }
 
     [[nodiscard]] CommandBatch dispatch_lightfield(vision::LightFieldDenoiseInput &input) noexcept override {
