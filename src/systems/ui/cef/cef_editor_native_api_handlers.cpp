@@ -7286,10 +7286,12 @@ void register_scene_tools_api_handlers(NativeApiRegistry& registry) {
 
             const auto camera_name = arg_string(request.args, 1);
             const auto mode = arg_string(request.args, 2);
-            if (mode != "interlaced" && mode != "final_view") {
+            if (mode != "interlaced" &&
+                mode != "raw_view" &&
+                mode != "final_view") {
                 return native_failure(
                     "Invalid SSAT viewer mode: " + mode +
-                        "; expected 'interlaced' or 'final_view'",
+                        "; expected 'interlaced', 'raw_view', or 'final_view'",
                     1);
             }
             if (request.args.size() <= 3 ||

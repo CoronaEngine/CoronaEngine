@@ -5,6 +5,8 @@
 
 #pragma once
 
+#include <algorithm>
+
 #include "math/basic_types.h"
 #include "dsl/dsl.h"
 #include "base/mgr/global.h"
@@ -28,11 +30,21 @@ inline void init_buffer_zero(Device &dev, Buffer<T> &buffer, uint num, const str
 // SSAT Per-Pixel Data Structure
 // ============================================================================
 
-/// Per-pixel data for temporal accumulation and variance tracking
+/// Per-subpixel data for temporal accumulation, variance, and viewer support.
 struct SSATData {
     float4 radiance_accum{};   // RGB accumulated radiance + variance in .w
-    float4 moments_history{};  // M1, M2, history_count, shear_magnitude
+    float4 moments_history{};  // M1, M2, history_count, support_validity
 };
+
+[[nodiscard]] inline float ssat_final_support_validity(
+    float current_support,
+    float history_support,
+    bool use_history) noexcept {
+    return std::clamp(
+        std::max(current_support, use_history ? history_support : 0.f),
+        0.f,
+        1.f);
+}
 
 }// namespace vision::ssat
 
@@ -48,12 +60,21 @@ OC_STRUCT(vision::ssat, SSATData, radiance_accum, moments_history) {
     [[nodiscard]] Float second_moment() const noexcept { return moments_history.y; }
     /// Get history count for EMA
     [[nodiscard]] Float history_count() const noexcept { return moments_history.z; }
-    /// Get shear magnitude λ(p) for adaptive sampling
-    [[nodiscard]] Float shear_magnitude() const noexcept { return moments_history.w; }
+    /// Get SSAT reconstruction support for the final-view diagnostic.
+    [[nodiscard]] Float support_validity() const noexcept { return moments_history.w; }
 };
 
 namespace vision::ssat {
 using SSATDataVar = Var<SSATData>;
+
+[[nodiscard]] inline Float ssat_final_support_validity(
+    const Float &current_support,
+    const Float &history_support,
+    const Bool &use_history) noexcept {
+    return saturate(max(
+        current_support,
+        select(use_history, history_support, 0.f)));
+}
 
 // ============================================================================
 // Pixel Index Utilities

@@ -195,6 +195,10 @@ bool parse_ssat_view_viewer_mode(const std::string& mode,
         out = Corona::SsatViewViewerMode::Interlaced;
         return true;
     }
+    if (mode == "raw_view") {
+        out = Corona::SsatViewViewerMode::RawView;
+        return true;
+    }
     if (mode == "final_view") {
         out = Corona::SsatViewViewerMode::FinalView;
         return true;
@@ -214,9 +218,18 @@ Corona::API::SsatViewViewerStatus make_ssat_view_viewer_status(
     result.status = state.pending ? "pending" : (state.supported ? "ready" : "unsupported");
     result.supported = state.supported;
     result.pending = state.pending;
-    result.mode = state.mode == Corona::SsatViewViewerMode::FinalView
-                      ? "final_view"
-                      : "interlaced";
+    switch (state.mode) {
+        case Corona::SsatViewViewerMode::RawView:
+            result.mode = "raw_view";
+            break;
+        case Corona::SsatViewViewerMode::FinalView:
+            result.mode = "final_view";
+            break;
+        case Corona::SsatViewViewerMode::Interlaced:
+        default:
+            result.mode = "interlaced";
+            break;
+    }
     result.view_index = state.effective_view_index;
     result.view_count = state.view_count;
     return result;
@@ -2694,7 +2707,7 @@ void set_ssat_view_viewer(const std::string& mode,
     SsatViewViewerMode viewer_mode{};
     if (!parse_ssat_view_viewer_mode(mode, viewer_mode)) {
         CFW_LOG_WARNING(
-            "[set_ssat_view_viewer] Unknown mode '{}'; expected 'interlaced' or 'final_view'",
+            "[set_ssat_view_viewer] Unknown mode '{}'; expected 'interlaced', 'raw_view', or 'final_view'",
             mode);
         return;
     }

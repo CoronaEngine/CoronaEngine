@@ -419,6 +419,7 @@ struct ViewportUiState {
 
 enum class SsatViewViewerMode : std::uint8_t {
     Interlaced,
+    RawView,
     FinalView,
 };
 

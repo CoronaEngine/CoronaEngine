@@ -216,8 +216,12 @@ public:
             };
 
             Float3 result = sum_radiance / max(sum_weight, SSATConfig::Gather::kEpsilon);
-            // Preserve depth in .w for subsequent à-trous iterations
-            param.radiance_dst.write(linear_idx, make_float4(result, center_depth));
+            // Phase 3 computes depth from visibility. Preserve an explicit
+            // support marker in .w so the final-view branch can distinguish a
+            // valid black reconstruction from an unsupported hole.
+            Float support = select(
+                sum_weight > SSATConfig::Gather::kEpsilon, 1.f, 0.f);
+            param.radiance_dst.write(linear_idx, make_float4(result, support));
         };
 
         filter_shader_ = device().compile(kernel, "SSAT-SpatialAngularFilter");

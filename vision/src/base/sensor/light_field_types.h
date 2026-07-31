@@ -44,6 +44,7 @@ struct LightFieldGeometry {
 /// The presentation source selected for a light-field framebuffer.
 enum class LightFieldViewerMode : std::uint8_t {
     Interlaced,
+    RawView,
     FinalView,
 };
 

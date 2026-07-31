@@ -469,8 +469,8 @@ void set_vision_render_mode(const std::string& mode, std::uintptr_t camera_handl
 /// 获取当前 camera 请求的 Vision 渲染技术。
 [[nodiscard]] std::string get_vision_render_mode(std::uintptr_t camera_handle = 0);
 
-/// Select the SSAT presentation source for one camera. mode is "interlaced"
-/// or "final_view" and view_index is zero-based.
+/// Select the SSAT presentation source for one camera. mode is "interlaced",
+/// "raw_view", or "final_view" and view_index is zero-based.
 void set_ssat_view_viewer(const std::string& mode,
                           std::uint32_t view_index,
                           std::uintptr_t camera_handle = 0);

@@ -278,18 +278,16 @@ public:
             if (denoiser_enabled) {
                 submit(path_tracing(param, frame_buffer().raytracing_resolution()), &cur_stage_profile_.path_tracing_ms);
                 if (ssat_denoiser != nullptr) {
-                    // Reconstruct the diagnostic view before SSAT Phase 2/3
-                    // alter each physical sample. The path-tracing color buffer
-                    // uses alpha=1 for sampled (including black) and alpha=0 for
-                    // adaptive-sampling holes.
-                    if (lf_fb->viewer_mode() == LightFieldViewerMode::FinalView &&
+                    // Raw View branches directly from the current path-tracing
+                    // output. Alpha is 1 for sampled values (including black)
+                    // and 0 for adaptive-sampling holes.
+                    if (lf_fb->viewer_mode() == LightFieldViewerMode::RawView &&
                         lf_fb->viewer_output_ready()) {
-                        submit(ssat_denoiser->dispatch_view_reconstruction(
+                        submit(ssat_denoiser->dispatch_raw_view_reconstruction(
                                    frame_buffer().rt_buffer().view(),
                                    lf_fb->viewer_output_buffer(),
                                    lf_input.lenticular,
-                                   lf_fb->viewer_view_index(),
-                                   frame_index_),
+                                   lf_fb->viewer_view_index()),
                                &cur_stage_profile_.postprocess_ms);
                     }
 
@@ -317,6 +315,22 @@ public:
                                &cur_stage_profile_.temporal_ms);
                     } else {
                         submit(lf_input.direct.copy_from(spatial_result), nullptr);
+                        submit(ssat_denoiser->publish_phase2_support(
+                                   spatial_result, lf_input.resolution),
+                               nullptr);
+                    }
+
+                    // Final View is a diagnostic branch of the actual last SSAT
+                    // result. It runs before combine_ so direct.rgb and the
+                    // explicit support metadata still have their SSAT meaning.
+                    if (lf_fb->viewer_mode() == LightFieldViewerMode::FinalView &&
+                        lf_fb->viewer_output_ready()) {
+                        submit(ssat_denoiser->dispatch_final_view_reconstruction(
+                                   lf_input.direct,
+                                   lf_fb->viewer_output_buffer(),
+                                   lf_input.lenticular,
+                                   lf_fb->viewer_view_index()),
+                               &cur_stage_profile_.postprocess_ms);
                     }
                 } else {
                     submit(denoiser_->dispatch_lightfield(lf_input), &cur_stage_profile_.spatial_angular_ms);

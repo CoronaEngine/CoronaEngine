@@ -261,11 +261,12 @@ void ssat_viewer_state_is_scoped_to_camera_and_released() {
     hub.clear_ssat_view_viewer_state(second_camera);
 
     const auto initial = hub.ssat_view_viewer_state(first_camera);
-    expect(initial.pending && !initial.supported && initial.view_count == 0u,
+    expect(initial.pending && !initial.supported && initial.view_count == 0u &&
+               initial.mode == Corona::SsatViewViewerMode::Interlaced,
            "unevaluated SSAT viewer state should remain pending");
 
     hub.set_ssat_view_viewer_request(
-        first_camera, Corona::SsatViewViewerMode::FinalView, 7u);
+        first_camera, Corona::SsatViewViewerMode::RawView, 7u);
     hub.update_ssat_view_viewer_status(first_camera, true, false, 24u, 7u);
     hub.set_ssat_view_viewer_request(
         second_camera, Corona::SsatViewViewerMode::FinalView, 3u);
@@ -273,10 +274,12 @@ void ssat_viewer_state_is_scoped_to_camera_and_released() {
 
     const auto first = hub.ssat_view_viewer_state(first_camera);
     const auto second = hub.ssat_view_viewer_state(second_camera);
-    expect(first.view_count == 24u && first.effective_view_index == 7u,
-           "first camera should retain its own SSAT viewer status");
-    expect(second.view_count == 48u && second.effective_view_index == 3u,
-           "second camera should retain an independent SSAT viewer status");
+    expect(first.mode == Corona::SsatViewViewerMode::RawView &&
+               first.view_count == 24u && first.effective_view_index == 7u,
+           "first camera should retain its Raw View status");
+    expect(second.mode == Corona::SsatViewViewerMode::FinalView &&
+               second.view_count == 48u && second.effective_view_index == 3u,
+           "second camera should retain an independent Final View status");
 
     hub.clear_ssat_view_viewer_state(first_camera);
     const auto released = hub.ssat_view_viewer_state(first_camera);

@@ -2005,6 +2005,61 @@ class NativeSceneToolsRpcTests(unittest.TestCase):
             with self.subTest(snippet=snippet):
                 self.assertIn(snippet, bridge_source)
 
+    def test_ssat_view_viewer_contract_distinguishes_raw_and_final_modes(self):
+        repo_root = self._repo_root()
+        handler_source = self._handler_source()
+        camera_source = (
+            repo_root / "editor" / "CoronaCore" / "core" / "entities" / "camera.py"
+        ).read_text(encoding="utf-8")
+        scene_tools_source = (
+            repo_root / "editor" / "plugins" / "SceneTools" / "main.py"
+        ).read_text(encoding="utf-8")
+        camera_view_source = (
+            repo_root / "editor" / "Frontend" / "src" / "views" / "tools"
+            / "CameraView.vue"
+        ).read_text(encoding="utf-8")
+        pt_source = (
+            repo_root / "vision" / "src" / "render_core" / "integrator" / "pt.cpp"
+        ).read_text(encoding="utf-8")
+        reconstructor_source = (
+            repo_root / "vision" / "src" / "render_core" / "denoiser" / "SSAT"
+            / "view_reconstructor.h"
+        ).read_text(encoding="utf-8")
+
+        for source in (handler_source, camera_source, scene_tools_source):
+            with self.subTest(source_length=len(source)):
+                self.assertIn('"raw_view"', source)
+                self.assertIn('"final_view"', source)
+
+        for snippet in (
+            "selectSsatViewerMode('raw_view')",
+            "selectSsatViewerMode('final_view')",
+            "Raw View",
+            "Final View",
+            "return `Raw ${ssatViewerIndex.value + 1}/${ssatViewerViewCount.value}`",
+            "return `Final ${ssatViewerIndex.value + 1}/${ssatViewerViewCount.value}`",
+        ):
+            with self.subTest(snippet=snippet):
+                self.assertIn(snippet, camera_view_source)
+
+        render_source = pt_source[pt_source.find("void render() const noexcept override"):]
+        stage_markers = (
+            "dispatch_raw_view_reconstruction",
+            "merge_indirect_into_direct_",
+            "dispatch_spatial_filter",
+            "dispatch_temporal_accumulation",
+            "dispatch_final_view_reconstruction",
+            "combine_(frame_index_)",
+        )
+        stage_positions = [render_source.find(marker) for marker in stage_markers]
+        self.assertTrue(all(position >= 0 for position in stage_positions))
+        self.assertEqual(stage_positions, sorted(stage_positions))
+
+        self.assertIn("raw_reconstruction_shader_", reconstructor_source)
+        self.assertIn("final_reconstruction_shader_", reconstructor_source)
+        self.assertNotIn("accumulation_shader_", reconstructor_source)
+        self.assertNotIn("kMaxHistoryLength", reconstructor_source)
+
     def test_scene_tools_scene_camera_editor_apis_have_explicit_schema(self):
         source = self._editor_api_source()
 

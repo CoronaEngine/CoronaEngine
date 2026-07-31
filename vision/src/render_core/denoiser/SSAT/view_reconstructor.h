@@ -29,16 +29,10 @@ private:
     SSAT *ssat_{nullptr};
     Shader<void(Buffer<RadType4>, Buffer<float4>, LenticularParams,
                 uint, uint, uint, uint, float, int)>
-        reconstruction_shader_;
-    Shader<void(Buffer<float4>, Buffer<float4>, uint)>
-        accumulation_shader_;
-    Buffer<float4> current_buffer_;
-    std::uint32_t last_view_index_{0u};
-    std::uint32_t last_frame_index_{0u};
-    std::uint32_t history_length_{0u};
-    bool history_valid_{false};
-
-    static constexpr std::uint32_t kMaxHistoryLength = 64u;
+        raw_reconstruction_shader_;
+    Shader<void(Buffer<RadType4>, Buffer<SSATData>, Buffer<float4>,
+                LenticularParams, uint, uint, uint, uint, float, int)>
+        final_reconstruction_shader_;
 
     [[nodiscard]] static FilterConfig filter_config(
         std::uint32_t view_count) noexcept {
@@ -52,15 +46,6 @@ private:
         return {sigma, radius};
     }
 
-    void ensure_buffer(std::uint32_t total_pixels) noexcept {
-        if (current_buffer_.size() != total_pixels) {
-            init_buffer_zero(device(), current_buffer_, total_pixels,
-                             "SSAT::view_current");
-            history_valid_ = false;
-            history_length_ = 0u;
-        }
-    }
-
 public:
     explicit SsatViewReconstructor(SSAT *ssat)
         : ssat_(ssat) {}
@@ -68,15 +53,15 @@ public:
     VS_HOTFIX_MAKE_RESTORE(RuntimeObject, ssat_)
 
     void compile() noexcept {
-        Kernel reconstruction = [&](BufferVar<RadType4> source,
-                                    BufferVar<float4> output,
-                                    Var<LenticularParams> lenticular,
-                                    Uint selected_view,
-                                    Uint view_count,
-                                    Uint width,
-                                    Uint height,
-                                    Float sigma,
-                                    Int radius) {
+        Kernel raw_reconstruction = [&](BufferVar<RadType4> source,
+                                        BufferVar<float4> output,
+                                        Var<LenticularParams> lenticular,
+                                        Uint selected_view,
+                                        Uint view_count,
+                                        Uint width,
+                                        Uint height,
+                                        Float sigma,
+                                        Int radius) {
             const Uint2 pixel = dispatch_idx().xy();
             Float3 weighted_rgb = make_float3(0.f);
             Float weight_sum = 0.f;
@@ -138,32 +123,90 @@ public:
             };
             output.write(dispatch_id(), make_float4(result_rgb, 1.f));
         };
-        reconstruction_shader_ = device().compile(
-            reconstruction, "SSAT-ViewExtract2D");
+        raw_reconstruction_shader_ = device().compile(
+            raw_reconstruction, "SSAT-RawViewExtract2D");
 
-        Kernel accumulation = [&](BufferVar<float4> current,
-                                  BufferVar<float4> output,
-                                  Uint history_length) {
-            const Float4 sample = current.read(dispatch_id());
-            Float3 result = sample.xyz();
-            $if(history_length > 0u) {
-                const Float3 history = output.read(dispatch_id()).xyz();
-                const Float history_weight = cast<float>(history_length);
-                result = (history * history_weight + sample.xyz()) /
-                         (history_weight + 1.f);
+        Kernel final_reconstruction = [&](BufferVar<RadType4> source,
+                                          BufferVar<SSATData> support_data,
+                                          BufferVar<float4> output,
+                                          Var<LenticularParams> lenticular,
+                                          Uint selected_view,
+                                          Uint view_count,
+                                          Uint width,
+                                          Uint height,
+                                          Float sigma,
+                                          Int radius) {
+            const Uint2 pixel = dispatch_idx().xy();
+            Float3 weighted_rgb = make_float3(0.f);
+            Float weight_sum = 0.f;
+
+            $for(dy, -radius, radius + 1) {
+                const Int source_y = cast<int>(pixel.y) + dy;
+                $if(source_y < 0 || source_y >= cast<int>(height)) {
+                    $continue;
+                };
+
+                $for(dx, -radius, radius + 1) {
+                    const Int source_x = cast<int>(pixel.x) + dx;
+                    $if(source_x < 0 || source_x >= cast<int>(width)) {
+                        $continue;
+                    };
+
+                    $for(channel, 0, 3) {
+                        const Uint source_x_u = cast<uint>(source_x);
+                        const Uint source_y_u = cast<uint>(source_y);
+                        const Uint channel_u = cast<uint>(channel);
+                        const Uint sample_view = lightfield_subpixel_view_id(
+                            source_x_u, source_y_u, channel_u,
+                            lenticular, view_count);
+                        $if(sample_view != selected_view) {
+                            $continue;
+                        };
+
+                        const Float subpixel_dx =
+                            cast<float>(dx) +
+                            (cast<float>(channel) + 0.5f) / 3.f - 0.5f;
+                        const Float distance_squared =
+                            subpixel_dx * subpixel_dx +
+                            cast<float>(dy * dy);
+                        const Float gaussian_weight = select(
+                            view_count == 1u,
+                            1.f,
+                            exp(-0.5f * distance_squared /
+                                (sigma * sigma)));
+                        const Uint source_index =
+                            source_y_u * (width * 3u) +
+                            source_x_u * 3u + channel_u;
+                        SSATDataVar metadata = support_data.read(source_index);
+                        const Float support =
+                            saturate(metadata->support_validity());
+                        $if(support <= SSATConfig::Gather::kEpsilon) {
+                            $continue;
+                        };
+
+                        const Float weight = gaussian_weight * support;
+                        const Float4 sample = source.read(source_index);
+                        weighted_rgb += sample.xyz() * weight;
+                        weight_sum += weight;
+                    };
+                };
             };
-            output.write(dispatch_id(), make_float4(result, 1.f));
+
+            Float3 result_rgb = make_float3(0.f);
+            $if(weight_sum > SSATConfig::Gather::kEpsilon) {
+                result_rgb = weighted_rgb / weight_sum;
+            };
+            output.write(dispatch_id(), make_float4(result_rgb, 1.f));
         };
-        accumulation_shader_ = device().compile(
-            accumulation, "SSAT-ViewAccumulate");
+        final_reconstruction_shader_ = device().compile(
+            final_reconstruction, "SSAT-FinalViewExtract2D");
     }
 
-    [[nodiscard]] CommandBatch dispatch(
+    [[nodiscard]] CommandBatch dispatch_raw(
         BufferView<RadType4> source,
         BufferView<float4> output,
         const LenticularParams &lenticular,
-        std::uint32_t view_index,
-        std::uint32_t frame_index) noexcept {
+        std::uint32_t view_index) noexcept {
         CommandBatch ret;
         const std::uint32_t width =
             static_cast<std::uint32_t>(lenticular.res_w);
@@ -178,32 +221,41 @@ public:
         const std::uint32_t selected_view =
             lightfield_effective_view_index(view_index, view_count);
         const FilterConfig filter = filter_config(view_count);
-        ensure_buffer(width * height);
 
-        const bool contiguous_history =
-            history_valid_ &&
-            selected_view == last_view_index_ &&
-            frame_index == last_frame_index_ + 1u;
-        if (!contiguous_history) {
-            history_length_ = 0u;
-        }
-        const std::uint32_t prior_history_length = history_length_;
-
-        const uint2 resolution = make_uint2(width, height);
-        ret << reconstruction_shader_(
-                   source, current_buffer_.view(), lenticular,
+        ret << raw_reconstruction_shader_(
+                   source, output, lenticular,
                    selected_view, view_count, width, height,
                    filter.sigma, filter.radius)
-                   .dispatch(resolution);
-        ret << accumulation_shader_(
-                   current_buffer_.view(), output, prior_history_length)
-                   .dispatch(resolution);
+                   .dispatch(make_uint2(width, height));
+        return ret;
+    }
 
-        history_valid_ = true;
-        last_view_index_ = selected_view;
-        last_frame_index_ = frame_index;
-        history_length_ = std::min(
-            prior_history_length + 1u, kMaxHistoryLength);
+    [[nodiscard]] CommandBatch dispatch_final(
+        BufferView<RadType4> source,
+        BufferView<SSATData> support_data,
+        BufferView<float4> output,
+        const LenticularParams &lenticular,
+        std::uint32_t view_index) noexcept {
+        CommandBatch ret;
+        const std::uint32_t width =
+            static_cast<std::uint32_t>(lenticular.res_w);
+        const std::uint32_t height =
+            static_cast<std::uint32_t>(lenticular.res_h);
+        if (width == 0u || height == 0u) {
+            return ret;
+        }
+
+        const std::uint32_t view_count =
+            lightfield_view_count(lenticular.num_views);
+        const std::uint32_t selected_view =
+            lightfield_effective_view_index(view_index, view_count);
+        const FilterConfig filter = filter_config(view_count);
+
+        ret << final_reconstruction_shader_(
+                   source, support_data, output, lenticular,
+                   selected_view, view_count, width, height,
+                   filter.sigma, filter.radius)
+                   .dispatch(make_uint2(width, height));
         return ret;
     }
 };

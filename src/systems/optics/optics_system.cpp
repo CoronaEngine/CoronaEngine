@@ -1979,9 +1979,13 @@ void apply_ssat_view_viewer_state(vision::Pipeline& pipeline,
             vision::lightfield_view_count(lightfield_fb->lenticular_params().num_views);
         const auto effective_index = vision::lightfield_effective_view_index(
             requested.requested_view_index, view_count);
-        const auto viewer_mode = requested.mode == Corona::SsatViewViewerMode::FinalView
-                                     ? vision::LightFieldViewerMode::FinalView
-                                     : vision::LightFieldViewerMode::Interlaced;
+        vision::LightFieldViewerMode viewer_mode =
+            vision::LightFieldViewerMode::Interlaced;
+        if (requested.mode == Corona::SsatViewViewerMode::RawView) {
+            viewer_mode = vision::LightFieldViewerMode::RawView;
+        } else if (requested.mode == Corona::SsatViewViewerMode::FinalView) {
+            viewer_mode = vision::LightFieldViewerMode::FinalView;
+        }
         lightfield_fb->set_viewer_state(viewer_mode, effective_index);
         hub.update_ssat_view_viewer_status(
             camera_handle, true, false, view_count, effective_index);

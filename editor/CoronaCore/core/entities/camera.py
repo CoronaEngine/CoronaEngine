@@ -201,8 +201,9 @@ class Camera:
         return self.vision_render_mode
 
     def set_ssat_view_viewer(self, mode: str, view_index: int = 0):
-        if mode not in {"interlaced", "final_view"}:
-            raise ValueError("mode must be 'interlaced' or 'final_view'")
+        if mode not in {"interlaced", "raw_view", "final_view"}:
+            raise ValueError(
+                "mode must be 'interlaced', 'raw_view', or 'final_view'")
         setter = getattr(self.engine_obj, 'set_ssat_view_viewer', None)
         if not callable(setter):
             raise RuntimeError("SSAT viewer API is unavailable")

@@ -47,7 +47,6 @@
         <button
           class="control dropdown-trigger ssat-view-trigger"
           aria-label="SSAT view viewer"
-          :disabled="ssatViewerPending && ssatViewerViewCount === 0"
           @click.stop="ssatViewerMenuOpen = !ssatViewerMenuOpen"
         >
           {{ ssatViewerButtonLabel() }}
@@ -61,12 +60,21 @@
           </button>
           <button
             :disabled="!ssatViewerSupported"
+            :class="{ active: ssatViewerMode === 'raw_view' }"
+            @click="selectSsatViewerMode('raw_view')"
+          >
+            Raw View
+          </button>
+          <button
+            :disabled="!ssatViewerSupported"
             :class="{ active: ssatViewerMode === 'final_view' }"
             @click="selectSsatViewerMode('final_view')"
           >
             Final View
           </button>
-          <template v-if="ssatViewerViewCount > 0">
+          <template
+            v-if="ssatViewerMode !== 'interlaced' && ssatViewerViewCount > 0"
+          >
             <label class="ssat-view-control">
               <span>View {{ ssatViewerDisplayIndex }}/{{ ssatViewerViewCount }}</span>
               <input
@@ -90,7 +98,7 @@
               />
             </label>
           </template>
-          <span v-else class="ssat-view-pending">
+          <span v-else-if="ssatViewerViewCount === 0" class="ssat-view-pending">
             {{ ssatViewerPending ? '初始化中' : '不可用' }}
           </span>
         </div>
@@ -295,8 +303,11 @@ const ssatViewerDisplayIndex = computed({
 
 const ssatViewerButtonLabel = () => {
   if (ssatViewerPending.value && ssatViewerViewCount.value === 0) return '初始化中';
+  if (ssatViewerMode.value === 'raw_view' && ssatViewerViewCount.value > 0) {
+    return `Raw ${ssatViewerIndex.value + 1}/${ssatViewerViewCount.value}`;
+  }
   if (ssatViewerMode.value === 'final_view' && ssatViewerViewCount.value > 0) {
-    return `View ${ssatViewerIndex.value + 1}/${ssatViewerViewCount.value}`;
+    return `Final ${ssatViewerIndex.value + 1}/${ssatViewerViewCount.value}`;
   }
   return 'LF: Interlaced';
 };
@@ -308,7 +319,11 @@ const stopSsatViewerPolling = () => {
 
 const applySsatViewerState = (result) => {
   const payload = unwrap(result) || {};
-  if (payload.mode === 'interlaced' || payload.mode === 'final_view') {
+  if (
+    payload.mode === 'interlaced'
+    || payload.mode === 'raw_view'
+    || payload.mode === 'final_view'
+  ) {
     ssatViewerMode.value = payload.mode;
   }
   const count = Math.max(Number(payload.view_count) || 0, 0);

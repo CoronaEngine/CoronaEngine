@@ -1371,8 +1371,9 @@ class SceneTools(PluginBase):
     def set_ssat_view_viewer(scene_name: str, camera_name: str = None,
                              mode: str = "interlaced", view_index: int = 0) -> dict:
         try:
-            if mode not in {"interlaced", "final_view"}:
-                raise ValueError("mode must be 'interlaced' or 'final_view'")
+            if mode not in {"interlaced", "raw_view", "final_view"}:
+                raise ValueError(
+                    "mode must be 'interlaced', 'raw_view', or 'final_view'")
             if isinstance(view_index, bool) or int(view_index) < 0:
                 raise ValueError("view_index must be a non-negative integer")
             scene = scene_manager.get(scene_name)

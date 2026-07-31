@@ -39,8 +39,8 @@ private:
     RegistrableManaged<float4> encoded_accum_buffer_;
 
     // Pixel-sized SSAT diagnostic output. It is allocated only after a camera
-    // requests FinalView, so the default interlaced path keeps its old memory
-    // footprint and data flow.
+    // requests a single-view mode, so the default interlaced path keeps its old
+    // memory footprint and data flow.
     RegistrableManaged<float4> viewer_buffer_;
     LightFieldViewerMode viewer_mode_{LightFieldViewerMode::Interlaced};
     std::uint32_t viewer_view_index_{0u};
@@ -671,7 +671,7 @@ public:
     }
 
     [[nodiscard]] BufferView<float4> display_source_buffer() const noexcept override {
-        if (viewer_mode_ == LightFieldViewerMode::FinalView && viewer_output_ready()) {
+        if (viewer_mode_ != LightFieldViewerMode::Interlaced && viewer_output_ready()) {
             return viewer_buffer_.view();
         }
         return enable_accumulation() ? encoded_accum_buffer_.view() : encoded_buffer_.view();
@@ -692,7 +692,7 @@ public:
     /// Here we optionally accumulate (pixel-sized) then tone-map into output buffer.
     [[nodiscard]] CommandBatch render_final(uint frame_index) const noexcept override {
         CommandBatch ret;
-        if (viewer_mode_ == LightFieldViewerMode::FinalView && viewer_output_ready()) {
+        if (viewer_mode_ != LightFieldViewerMode::Interlaced && viewer_output_ready()) {
             ret << tone_mapping_(viewer_buffer_.view(), view_texture_, exposure_.hv())
                        .dispatch(pixel_dispatch_dim());
             return ret;
@@ -749,7 +749,7 @@ public:
         viewer_mode_ = mode;
         const auto count = lightfield_view_count(lenticular_.num_views);
         viewer_view_index_ = lightfield_effective_view_index(view_index, count);
-        if (viewer_mode_ == LightFieldViewerMode::FinalView && !viewer_output_ready()) {
+        if (viewer_mode_ != LightFieldViewerMode::Interlaced && !viewer_output_ready()) {
             prepare_viewer_buffer();
         }
     }

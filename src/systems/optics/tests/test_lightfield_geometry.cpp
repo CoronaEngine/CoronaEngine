@@ -1,4 +1,5 @@
 #include "base/sensor/light_field_types.h"
+#include "render_core/denoiser/SSAT/utils.h"
 
 #include <cmath>
 #include <cstdint>
@@ -147,6 +148,33 @@ void subpixel_view_mapping_uses_canonical_view_count() {
     }
 }
 
+void ssat_final_support_combines_current_and_valid_history() {
+    expect_near(
+        vision::ssat::ssat_final_support_validity(0.75f, 0.25f, true),
+        0.75f,
+        "current SSAT support should be retained");
+    expect_near(
+        vision::ssat::ssat_final_support_validity(0.0f, 0.6f, true),
+        0.6f,
+        "valid historical SSAT support should fill a current hole");
+    expect_near(
+        vision::ssat::ssat_final_support_validity(0.0f, 0.6f, false),
+        0.0f,
+        "rejected history must not publish viewer support");
+    expect_near(
+        vision::ssat::ssat_final_support_validity(2.0f, 0.0f, false),
+        1.0f,
+        "SSAT viewer support should be clamped");
+
+    vision::ssat::SSATData valid_black{};
+    valid_black.radiance_accum = ocarina::make_float4(0.f);
+    valid_black.moments_history.w = 1.f;
+    expect_near(
+        valid_black.moments_history.w,
+        1.0f,
+        "black radiance must carry independent viewer support");
+}
+
 }  // namespace
 
 int main() {
@@ -157,5 +185,6 @@ int main() {
     viewer_view_coordinates_use_zero_based_normalized_angles();
     shared_subpixel_view_mapping_matches_ray_generation_formula();
     subpixel_view_mapping_uses_canonical_view_count();
+    ssat_final_support_combines_current_and_valid_history();
     return 0;
 }

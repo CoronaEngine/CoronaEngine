@@ -70,6 +70,7 @@ private:
     
     // Shader for temporal accumulation
     Shader<void(TemporalAccumParam, LenticularParams, LightFieldGeometry)> accumulate_shader_;
+    Shader<void(Buffer<RadType4>, Buffer<SSATData>)> publish_support_shader_;
 
     // Buffers
     RegistrableBuffer<SSATData> ssat_data_;     // Per-subpixel temporal data
@@ -82,6 +83,7 @@ public:
           history_buffer_(pipeline()->bindless_array()) {}
     
     VS_HOTFIX_MAKE_RESTORE(RuntimeObject, ssat_, accumulate_shader_,
+                           publish_support_shader_,
                            ssat_data_, history_buffer_)
     
     // ========================================================================
@@ -123,6 +125,7 @@ public:
     
     void compile() noexcept {
         compile_accumulate();
+        compile_publish_support();
     }
     
     void update_resolution(uint total_subpixels) noexcept {
@@ -161,7 +164,7 @@ public:
             // Read current spatial result
             Float4 spatial_result = param.spatial_result.read(linear_idx);
             Float3 cur_radiance = spatial_result.xyz();
-            Float cur_variance = spatial_result.w;
+            Float current_support = saturate(spatial_result.w);
             Float cur_lum = luminance(cur_radiance);
             
             // Read current geometry
@@ -220,6 +223,7 @@ public:
             Float acc_history = 0.f;
             Float acc_m1 = 0.f;
             Float acc_m2 = 0.f;
+            Float acc_support = 0.f;
             Float total_tap_weight = 0.f;
 
             auto check_tap = [&](Int2 tap_pixel, Float bilinear_w) {
@@ -245,6 +249,7 @@ public:
                             acc_history += tap_ssat->history_count() * bilinear_w;
                             acc_m1 += tap_ssat->first_moment() * bilinear_w;
                             acc_m2 += tap_ssat->second_moment() * bilinear_w;
+                            acc_support += tap_ssat->support_validity() * bilinear_w;
                             total_tap_weight += bilinear_w;
                         };
                     };
@@ -261,6 +266,7 @@ public:
             Float prev_history_count = acc_history * inv_tap_weight;
             Float prev_m1 = acc_m1 * inv_tap_weight;
             Float prev_m2 = acc_m2 * inv_tap_weight;
+            Float history_support = acc_support * inv_tap_weight;
 
             // ================================================================
             // Read from History Buffer at reprojected position
@@ -334,6 +340,8 @@ public:
             effective_alpha = min(effective_alpha, 0.95f);
 
             Bool use_history = valid_history && (gather_confidence > 0.01f);
+            Float final_support = ssat_final_support_validity(
+                current_support, history_support, use_history);
 
             Float3 blended_radiance = select(use_history,
                 prev_radiance + effective_alpha * (cur_radiance - prev_radiance),
@@ -401,11 +409,32 @@ public:
             // Update SSAT data
             SSATDataVar new_ssat;
             new_ssat.radiance_accum = make_float4(clamped_radiance, new_variance);
-            new_ssat.moments_history = make_float4(new_m1, new_m2, new_history_count, 0.f);
+            new_ssat.moments_history = make_float4(
+                new_m1, new_m2, new_history_count, final_support);
             param.ssat_data.write(linear_idx, new_ssat);
         };
         
         accumulate_shader_ = device().compile(kernel, "SSAT-TemporalAccumulator");
+    }
+
+    void compile_publish_support() noexcept {
+        Kernel kernel = [](BufferVar<RadType4> spatial_result,
+                           BufferVar<SSATData> ssat_data) {
+            const Uint linear_idx = dispatch_id();
+            const Float support = saturate(spatial_result.read(linear_idx).w);
+            SSATDataVar previous = ssat_data.read(linear_idx);
+            SSATDataVar updated;
+            updated.radiance_accum = make_float4(
+                previous->radiance(), previous->variance());
+            updated.moments_history = make_float4(
+                previous->first_moment(),
+                previous->second_moment(),
+                previous->history_count(),
+                support);
+            ssat_data.write(linear_idx, updated);
+        };
+        publish_support_shader_ = device().compile(
+            kernel, "SSAT-PublishPhase2Support");
     }
     
     // ========================================================================
@@ -472,6 +501,15 @@ public:
 
         CommandBatch ret;
         ret << accumulate_shader_(param, lent, geom).dispatch(subpixel_res);
+        return ret;
+    }
+
+    [[nodiscard]] CommandBatch publish_phase2_support(
+        BufferView<RadType4> spatial_result,
+        uint2 subpixel_res) noexcept {
+        CommandBatch ret;
+        ret << publish_support_shader_(spatial_result, ssat_data_.view())
+                   .dispatch(subpixel_res);
         return ret;
     }
 };

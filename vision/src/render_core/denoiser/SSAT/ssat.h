@@ -295,19 +295,45 @@ public:
         return ret;
     }
 
-    /// Reconstruct one complete 2D view from valid path-traced light-field
-    /// samples before Phase 2/3 can mix angular neighbors.
-    [[nodiscard]] CommandBatch dispatch_view_reconstruction(
+    /// Reconstruct one complete 2D view from the current frame's valid
+    /// path-traced samples, before Phase 2/3.
+    [[nodiscard]] CommandBatch dispatch_raw_view_reconstruction(
         BufferView<RadType4> source,
         BufferView<float4> output,
         const LenticularParams &lenticular,
-        std::uint32_t view_index,
-        std::uint32_t frame_index) noexcept {
+        std::uint32_t view_index) noexcept {
         if (!params_.enabled) {
             return {};
         }
-        return view_reconstructor_->dispatch(
-            source, output, lenticular, view_index, frame_index);
+        return view_reconstructor_->dispatch_raw(
+            source, output, lenticular, view_index);
+    }
+
+    /// Reconstruct one complete 2D view from Phase 3's final radiance and its
+    /// explicit temporal/spatial support metadata.
+    [[nodiscard]] CommandBatch dispatch_final_view_reconstruction(
+        BufferView<RadType4> source,
+        BufferView<float4> output,
+        const LenticularParams &lenticular,
+        std::uint32_t view_index) noexcept {
+        if (!params_.enabled) {
+            return {};
+        }
+        return view_reconstructor_->dispatch_final(
+            source, temporal_accumulator_->ssat_data(), output,
+            lenticular, view_index);
+    }
+
+    /// Publish Phase 2 support into the same metadata consumed by Final View
+    /// when Phase 3 is explicitly skipped.
+    [[nodiscard]] CommandBatch publish_phase2_support(
+        BufferView<RadType4> spatial_result,
+        uint2 resolution) noexcept {
+        if (!params_.enabled) {
+            return {};
+        }
+        return temporal_accumulator_->publish_phase2_support(
+            spatial_result, resolution);
     }
 
     [[nodiscard]] CommandBatch dispatch_lightfield(vision::LightFieldDenoiseInput &input) noexcept override {
