@@ -5,17 +5,23 @@
 # Provide embedded Python discovery and dependency validation.
 #
 # Overview:
-# 1. Force the build to use the bundled Python toolchain (minimum version
-# enforced) located under `third_party/Python-3.13.7`.
+# 1. Force the build to use the bundled Python toolchain located under
+# `third_party/Python-3.13.7`.
 # 2. Expose configuration knobs:
-# - `CORONA_PYTHON_MIN_VERSION`: expected minimum Python version
-# (major.minor).
-# 3. Validate requirements listed in `misc/pytools/requirements.txt` via
-# `check_pip_modules.py`, optionally installing missing packages.
-# 4. Create the `check_python_deps` custom target for manual re-validation.
+# - `CORONA_EMBEDDED_PY_DIR`: bundled Python root (overridable on the
+# command line; `Python_ROOT_DIR` is re-forced from it every configure).
+# 3. Assert the discovered interpreter really is the bundled one, and that its
+# ABI matches `libs/python313.lib`. Without these the wrong interpreter is
+# silently baked into the binaries via the `CORONA_PYTHON_*` macros
+# (see corona_compile_config.cmake) instead of failing at configure time.
+# 4. Validate requirements listed in `editor/requirements.txt` via
+# `check_pip_modules.py`, optionally installing missing packages. Only runs
+# when `BUILD_CORONA_EDITOR` is enabled.
+# 5. Create the `check_python_deps` custom target for manual re-validation.
 #
 # Design Goals:
 # - Provide clear error reporting during configuration.
+# - Fail loudly rather than silently using a non-bundled interpreter.
 # - Fail explicitly when dependencies are missing and auto-install is disabled.
 # ==============================================================================
 
@@ -32,13 +38,53 @@ set(Python_ROOT_DIR "${CORONA_EMBEDDED_PY_DIR}" CACHE FILEPATH "Embedded Python 
 message(STATUS "[Python3] Using embedded Python3: ${Python3_ROOT_DIR}")
 message(STATUS "[Python] Using embedded Python: ${Python_ROOT_DIR}")
 
+# Narrow the search before FindPython runs. corona_dev_bootstrap() already
+# injected the conda dev environment into ENV{PATH}, and that environment ships
+# its own (unpinned, `python>=3.11`) interpreter. Without these, configuring
+# from an activated conda/venv shell lets CONDA_PREFIX/VIRTUAL_ENV win over the
+# ROOT_DIR hint.
+set(Python_FIND_STRATEGY   LOCATION)  # honour ROOT_DIR location, do not prefer newest version
+set(Python_FIND_REGISTRY   NEVER)     # ignore system Python in the Windows registry
+set(Python_FIND_VIRTUALENV STANDARD)  # do not let CONDA_PREFIX/VIRTUAL_ENV take precedence
+
 find_package(Python COMPONENTS Interpreter Development Development.Module REQUIRED)
 
-if(NOT Python_FOUND)
-    message(FATAL_ERROR "[Python] Embedded Python interpreter not found at ${CORONA_EMBEDDED_PY_DIR}; cannot continue")
+# `REQUIRED` above already fails when nothing is found, so testing Python_FOUND
+# here would be dead code. The real risk is finding the *wrong* interpreter:
+# corona_compile_config.cmake bakes these paths into every target as
+# CORONA_PYTHON_* macros, and python_api.cpp feeds them to PyConfig at runtime.
+# A mismatch there is silent at configure time and fails at link or run time.
+get_filename_component(_corona_py_real "${Python_EXECUTABLE}"      REALPATH)
+get_filename_component(_corona_py_root "${CORONA_EMBEDDED_PY_DIR}" REALPATH)
+string(TOLOWER "${_corona_py_real}" _corona_py_real_lc)
+string(TOLOWER "${_corona_py_root}" _corona_py_root_lc)
+string(FIND "${_corona_py_real_lc}" "${_corona_py_root_lc}" _corona_py_pos)
+
+if(NOT _corona_py_pos EQUAL 0)
+    message(FATAL_ERROR
+        "[Python] 解释器不在嵌入目录内，拒绝继续。\n"
+        "  找到: ${Python_EXECUTABLE}\n"
+        "  期望位于: ${CORONA_EMBEDDED_PY_DIR}\n"
+        "  编译期会把该路径与 ABI 烘焙进二进制（CORONA_PYTHON_* 宏），"
+        "错误的解释器将导致链接或运行时失败。\n"
+        "  若在 conda/venv 已激活的终端里配置，请退出该环境后重新配置。")
 endif()
 
-message(STATUS "[Python] Final chosen interpreter: ${Python_EXECUTABLE}")
+# Python::Python links libs/python313.lib, so the interpreter's major.minor must
+# match. Checked on major.minor rather than EXACT so a patch-level refresh of
+# the bundled toolchain does not need a code change; the ABI is set by 3.13.
+if(NOT Python_VERSION MATCHES "^3\\.13\\.")
+    message(FATAL_ERROR
+        "[Python] 需要 3.13.x 以匹配 ${CORONA_EMBEDDED_PY_DIR}/libs/python313.lib，实际为 ${Python_VERSION}")
+endif()
+
+unset(_corona_py_real)
+unset(_corona_py_root)
+unset(_corona_py_real_lc)
+unset(_corona_py_root_lc)
+unset(_corona_py_pos)
+
+message(STATUS "[Python] Final chosen interpreter: ${Python_EXECUTABLE} (${Python_VERSION})")
 
 set(CORONA_PY_REQUIREMENTS_FILE "${PROJECT_SOURCE_DIR}/editor/requirements.txt")
 set(CORONA_PY_CHECK_SCRIPT "${PROJECT_SOURCE_DIR}/misc/pytools/check_pip_modules.py")
