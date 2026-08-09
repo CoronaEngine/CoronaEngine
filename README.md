@@ -1,25 +1,5 @@
 # CoronaEngine
 
-CoronaEngine 是一个以 CMake、Conan 2 和 C++20 构建的 Windows x64 引擎工程。它在同一构建图中集成锁定版本的 [Horizon](.workspace/Horizon)，并可选构建 CEF 编辑器、示例、资源系统和 CUDA 驱动的 Vision 功能。
-
-本文档面向首次在本仓库构建的开发者。所有命令均在仓库根目录执行。
-
-## 构建模型
-
-~~~text
-uv / Python
-    └─ tools/dev.py
-        ├─ 校验或准备 .workspace/Horizon
-        ├─ Conan install（一个依赖图、一个 MSVC profile）
-        ├─ 生成 Conan toolchain 与开发环境
-        └─ CMake configure / build
-             └─ add_subdirectory(.workspace/Horizon)
-~~~
-
-- Conan 是第三方库版本、二进制变体和 CMake package target 的唯一所有者；CMake 只查找并链接 Conan 生成的 target。
-- Horizon 是锁定提交的源码子项目，不是由 Conan 安装的 Horizon 包。父工程和 Horizon 共用一次 Conan 解析结果、profile 与 generators 目录。
-- 构建目录按“目标族 × 配置”隔离，例如 <code>build/conan/core/debug</code>、<code>build/conan/examples/debug</code> 和 <code>build/conan/vision-tests/relwithdebinfo</code>。不要把不同目标族或配置的生成文件混用。
-
 ## 环境要求
 
 当前工作流仅支持 **Windows x64**。
