@@ -15,13 +15,6 @@
 
 ## 开发工具环境
 
-首次使用时仅从 Conda Forge 创建 Conda 环境：
-
-```text
-conda create --yes --name coronaengine-dev --override-channels --channel conda-forge "python>=3.11" "conan>=2.28,<3"
-```
-
-后续通过 `conda run -n coronaengine-dev python tools/dev.py <command>` 运行开发工作流。若刚配置 Miniconda PATH，请重新打开终端或 IDE。
 
 ## 通过 CMake preset 构建
 
