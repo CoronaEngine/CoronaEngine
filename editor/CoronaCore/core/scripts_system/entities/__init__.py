@@ -1,11 +1,3 @@
-from .actor_script import ActorScript
-from .project_script import ProjectScript
-from .scene_script import SceneScript
-from .camera_locked_object import CameraLockedObject
+"""Compatibility package for canonical Script Runtime entities."""
 
-__all__ = [
-    "ActorScript",
-    "ProjectScript",
-    "SceneScript",
-    "CameraLockedObject",
-]
+from script_runtime.engine.entities import *  # noqa: F401,F403

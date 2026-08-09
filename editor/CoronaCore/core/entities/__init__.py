@@ -1,16 +1,7 @@
-"""
-Entities - 核心游戏实体
-包括 Actor、Camera、Scene、Environment 等核心对象
+"""Compatibility package for the historical Python scene entities path.
+
+The canonical legacy implementation is in :mod:`runtime.legacy.entities`.
+This package remains an import compatibility path.
 """
 
-from .actor import Actor
-from .camera import Camera
-from .scene import Scene
-from .environment import Environment
-
-__all__ = [
-    "Actor",
-    "Camera",
-    "Scene",
-    "Environment",
-]
+from runtime.legacy.entities import *  # noqa: F401,F403

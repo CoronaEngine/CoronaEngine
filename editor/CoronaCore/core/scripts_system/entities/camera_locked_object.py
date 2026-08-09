@@ -1,6 +1,3 @@
-from .actor_script import ActorScript
+"""Compatibility alias for the canonical camera-lock script runtime."""
 
-
-class CameraLockedObject(ActorScript):
-    """Marker base for actor scripts whose transform is camera-relative."""
-
+from script_runtime.engine.entities.camera_locked_object import *  # noqa: F401,F403

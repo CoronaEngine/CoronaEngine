@@ -1,5 +1,5 @@
-"""Pure archive parsing utilities for the editor runtime."""
+"""Compatibility package for the canonical runtime archive parser."""
 
-from .parser import parse_archive
+from runtime.archive import parse_archive
 
 __all__ = ["parse_archive"]

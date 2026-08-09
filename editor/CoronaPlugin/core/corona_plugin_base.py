@@ -1,13 +1,5 @@
-class PluginBase:
-    module_name = ""
+"""Compatibility import for the historical CoronaPlugin base path."""
 
-    @classmethod
-    def register_web(cls, module_name: str):
-        """
-        旧装饰器兼容层：只标记模块名，不再注册 Python RPC。
-        Python 脚本服务统一由 editor/backend/registry.py 显式注册。
-        """
-        def decorator(c_cls):
-            c_cls.module_name = module_name
-            return c_cls
-        return decorator
+from plugins.CoronaPlugin.compat.legacy_plugin_base import PluginBase
+
+__all__ = ["PluginBase"]
