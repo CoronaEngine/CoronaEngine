@@ -15,6 +15,15 @@
 
 ## 开发工具环境
 
+VS Code / CMake Tools
+
+使用 VS Code 的 CMake Tools 时，在设置中将 <code>CMake: Use VS Developer Environment</code> 设为 <code>always</code>，或加入用户设置：
+
+~~~json
+"cmake.useVsDeveloperEnvironment": "always"
+~~~
+
+否则 CMake Tools 单独启动的进程可能没有 MSVC 和 Windows SDK 环境，常见表现为 <code>fatal error C1083</code> 或找不到 <code>stddef.h</code> 等标准头文件。
 
 ## 通过 CMake preset 构建
 
