@@ -1,8 +1,8 @@
 import unittest
 from unittest import mock
 
-from backend.blockly import main as blockly_main
-from CoronaCore.utils import corona_engine_scratch
+from script_runtime.blockly import main as blockly_main
+from script_runtime.engine import corona_engine as corona_engine_scratch
 
 
 class _NonCooperativeThread:

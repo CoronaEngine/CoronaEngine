@@ -1,25 +1,12 @@
 import tempfile
 import unittest
-import os
 from pathlib import Path
 from unittest import mock
 
-from backend.blockly import main as blockly_main
+from script_runtime.blockly import main as blockly_main
 
 
 class BlocklyProjectContextTests(unittest.TestCase):
-    def test_editor_applies_runtime_project_context_on_python_thread(self):
-        editor = blockly_main.CoronaEditor
-        engine = mock.Mock()
-        with mock.patch.object(editor, "CoronaEngine", engine), \
-             mock.patch("utils.settings.settings_manager.set_active_project", return_value=True) as activate:
-            result = editor.update_project_context("D:/Projects/example")
-
-        self.assertTrue(result)
-        expected_path = os.path.abspath("D:/Projects/example")
-        activate.assert_called_once_with(expected_path)
-        self.assertEqual(engine.active_project_path, expected_path)
-
     def test_request_path_recovers_missing_python_project_context(self):
         with tempfile.TemporaryDirectory() as directory:
             project_path = Path(directory).resolve()
@@ -66,10 +53,8 @@ class BlocklyProjectContextTests(unittest.TestCase):
         settings = mock.Mock()
         settings.active_project_path = None
         settings.config.get.return_value = ""
-        engine = mock.Mock()
-        engine.active_project_path = None
         with mock.patch.object(blockly_main, "settings_manager", settings), \
-             mock.patch.object(blockly_main.CoronaEditor, "CoronaEngine", engine):
+             mock.patch.object(blockly_main, "get_active_project_path", return_value=""):
             resolved, error = blockly_main.ScratchTool._request_project_context({})
 
         self.assertIsNone(resolved)

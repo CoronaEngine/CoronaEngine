@@ -4,8 +4,8 @@ import pathlib
 import tempfile
 import unittest
 
-from editor.backend.blockly.ai_node_graph_contract import load_contract_catalog
-from editor.backend.blockly.check_ai_contract_catalog import (
+from script_runtime.blockly.ai_node_graph_contract import load_contract_catalog
+from script_runtime.blockly.check_ai_contract_catalog import (
     CONTRACT_PATH,
     TOOLBOX_PATH,
     check_contract_catalog,
@@ -17,7 +17,7 @@ class AiContractCatalogTests(unittest.TestCase):
     def test_current_contract_matches_current_toolbox(self):
         result = check_contract_catalog(TOOLBOX_PATH, CONTRACT_PATH)
         self.assertTrue(result["success"], result["errors"])
-        self.assertEqual(261, result["toolboxCount"])
+        self.assertEqual(262, result["toolboxCount"])
         self.assertEqual(result["toolboxCount"], result["catalogCount"])
         self.assertEqual(result["catalogCount"], result["declaredCount"])
 

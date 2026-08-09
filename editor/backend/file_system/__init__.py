@@ -1,1 +1,1 @@
-"""Project file-system backend services."""
+"""Compatibility package for the canonical FileManager plugin."""

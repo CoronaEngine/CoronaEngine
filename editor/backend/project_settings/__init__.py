@@ -1,1 +1,1 @@
-"""Project settings persistence backend."""
+"""Compatibility package for the canonical ProjectSettings plugin."""
