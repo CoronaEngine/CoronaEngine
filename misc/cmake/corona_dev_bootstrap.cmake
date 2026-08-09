@@ -73,7 +73,7 @@ function(corona_dev_bootstrap)
             execute_process(
                 COMMAND "${_corona_conda}" create --yes --name "${CORONA_CONDA_ENV}"
                         --override-channels --channel conda-forge
-                        "python>=3.11" "conan>=2.28,<3"
+                        "python>=3.13,<3.14" "conan>=2.28,<3"
                 RESULT_VARIABLE _corona_env_create_result
                 COMMAND_ECHO STDOUT
             )
