@@ -25,7 +25,55 @@ function(corona_dev_bootstrap)
     set(_corona_build_environment
         "${CMAKE_CURRENT_SOURCE_DIR}/build/conan/${CORONA_DEV_TARGET_FAMILY}/${_corona_configuration_slug}/generators/dev_build_environment.cmake")
     if(NOT DEFINED ENV{CORONA_DEV_BOOTSTRAP_ACTIVE})
-        find_program(_corona_conda NAMES conda REQUIRED)
+        # Search for conda in multiple locations:
+        # - conda.exe in Scripts/ (works in Git Bash)
+        # - conda.bat in condabin/ (works in cmd/PowerShell)
+        # - conda in PATH (Unix-like systems)
+        find_program(_corona_conda
+            NAMES conda.exe conda.bat conda
+            PATHS
+                "$ENV{CONDA_PREFIX}/Scripts"
+                "$ENV{CONDA_PREFIX}/condabin"
+                "$ENV{USERPROFILE}/miniconda3/Scripts"
+                "$ENV{USERPROFILE}/miniconda3/condabin"
+                "$ENV{USERPROFILE}/anaconda3/Scripts"
+                "$ENV{USERPROFILE}/anaconda3/condabin"
+                "$ENV{HOME}/miniconda3/Scripts"
+                "$ENV{HOME}/miniconda3/condabin"
+                "$ENV{HOME}/anaconda3/Scripts"
+                "$ENV{HOME}/anaconda3/condabin"
+            DOC "Conda package manager executable"
+            REQUIRED
+        )
+
+        # Check if the conda environment exists
+        execute_process(
+            COMMAND "${_corona_conda}" env list
+            OUTPUT_VARIABLE _conda_env_list
+            ERROR_QUIET
+        )
+
+        string(FIND "${_conda_env_list}" "${CORONA_CONDA_ENV}" _env_found)
+        if(_env_found EQUAL -1)
+            message(STATUS "Conda environment '${CORONA_CONDA_ENV}' not found, creating it...")
+            execute_process(
+                COMMAND "${_corona_conda}" create --yes --name "${CORONA_CONDA_ENV}"
+                        --override-channels --channel conda-forge
+                        "python>=3.11" "conan>=2.28,<3"
+                RESULT_VARIABLE _corona_env_create_result
+                OUTPUT_VARIABLE _corona_env_create_stdout
+                ERROR_VARIABLE _corona_env_create_stderr
+            )
+            if(NOT _corona_env_create_result EQUAL 0)
+                message(FATAL_ERROR
+                    "Failed to create conda environment '${CORONA_CONDA_ENV}' (${_corona_env_create_result}).\n"
+                    "${_corona_env_create_stdout}\n${_corona_env_create_stderr}")
+            endif()
+            message(STATUS "Conda environment '${CORONA_CONDA_ENV}' created successfully")
+        else()
+            message(STATUS "Using existing conda environment '${CORONA_CONDA_ENV}'")
+        endif()
+
         execute_process(
             COMMAND "${_corona_conda}" run --name "${CORONA_CONDA_ENV}" --no-capture-output
                     python tools/dev.py _bootstrap
@@ -39,8 +87,6 @@ function(corona_dev_bootstrap)
         if(NOT _corona_bootstrap_result EQUAL 0)
             message(FATAL_ERROR
                 "CoronaEngine dependency bootstrap failed (${_corona_bootstrap_result}).\n"
-                "Ensure the '${CORONA_CONDA_ENV}' Conda environment exists: "
-                "conda create --yes --name ${CORONA_CONDA_ENV} --override-channels --channel conda-forge \"python>=3.11\" \"conan>=2.28,<3\".\n"
                 "${_corona_bootstrap_stdout}\n${_corona_bootstrap_stderr}")
         endif()
     endif()

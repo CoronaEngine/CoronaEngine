@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
   "url": "https://github.com/CoronaEngine/Horizon.git",
-  "ref": "feature/conda-dev-environment",
-  "commit": "9106aee6fba03d88e2191b5625652635185b29c2"
+  "ref": "main",
+  "commit": "6e1ae1ae14e2455cf02240e5d4c18c45fbe48737"
 }
