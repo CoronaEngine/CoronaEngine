@@ -46,32 +46,20 @@ function(corona_dev_bootstrap)
             REQUIRED
         )
 
-        # Check if the conda environment exists
+        # Ensure conda environment exists (conda create --yes is idempotent)
+        message(STATUS "Ensuring conda environment '${CORONA_CONDA_ENV}' exists...")
         execute_process(
-            COMMAND "${_corona_conda}" env list
-            OUTPUT_VARIABLE _conda_env_list
-            ERROR_QUIET
+            COMMAND "${_corona_conda}" create --yes --name "${CORONA_CONDA_ENV}"
+                    --override-channels --channel conda-forge
+                    "python>=3.11" "conan>=2.28,<3"
+            RESULT_VARIABLE _corona_env_create_result
+            OUTPUT_VARIABLE _corona_env_create_stdout
+            ERROR_VARIABLE _corona_env_create_stderr
         )
-
-        string(FIND "${_conda_env_list}" "${CORONA_CONDA_ENV}" _env_found)
-        if(_env_found EQUAL -1)
-            message(STATUS "Conda environment '${CORONA_CONDA_ENV}' not found, creating it...")
-            execute_process(
-                COMMAND "${_corona_conda}" create --yes --name "${CORONA_CONDA_ENV}"
-                        --override-channels --channel conda-forge
-                        "python>=3.11" "conan>=2.28,<3"
-                RESULT_VARIABLE _corona_env_create_result
-                OUTPUT_VARIABLE _corona_env_create_stdout
-                ERROR_VARIABLE _corona_env_create_stderr
-            )
-            if(NOT _corona_env_create_result EQUAL 0)
-                message(FATAL_ERROR
-                    "Failed to create conda environment '${CORONA_CONDA_ENV}' (${_corona_env_create_result}).\n"
-                    "${_corona_env_create_stdout}\n${_corona_env_create_stderr}")
-            endif()
-            message(STATUS "Conda environment '${CORONA_CONDA_ENV}' created successfully")
-        else()
-            message(STATUS "Using existing conda environment '${CORONA_CONDA_ENV}'")
+        if(NOT _corona_env_create_result EQUAL 0)
+            message(FATAL_ERROR
+                "Failed to ensure conda environment '${CORONA_CONDA_ENV}' (${_corona_env_create_result}).\n"
+                "${_corona_env_create_stdout}\n${_corona_env_create_stderr}")
         endif()
 
         execute_process(
