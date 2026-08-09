@@ -15,13 +15,15 @@
 
 ## 开发工具环境
 
-首次使用时仅从 Conda Forge 创建 Conda 环境：
+VS Code / CMake Tools
 
-```text
-conda create --yes --name coronaengine-dev --override-channels --channel conda-forge "python>=3.13,<3.14" "conan>=2.28,<3"
-```
+使用 VS Code 的 CMake Tools 时，在设置中将 <code>CMake: Use VS Developer Environment</code> 设为 <code>always</code>，或加入用户设置：
 
-后续通过 `conda run -n coronaengine-dev python tools/dev.py <command>` 运行开发工作流。若刚配置 Miniconda PATH，请重新打开终端或 IDE。
+~~~json
+"cmake.useVsDeveloperEnvironment": "always"
+~~~
+
+否则 CMake Tools 单独启动的进程可能没有 MSVC 和 Windows SDK 环境，常见表现为 <code>fatal error C1083</code> 或找不到 <code>stddef.h</code> 等标准头文件。
 
 ## 通过 CMake preset 构建
 
