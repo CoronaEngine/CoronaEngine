@@ -1,32 +1,19 @@
 import json
 
-from script_runtime.compat.legacy_scene_datas_adapter import LegacySceneDatasApi
+from .lan_chat_adapters import _LanChatQueueAdapter, _LanChatTransportAdapter
 from script_runtime.manifest_adapter import ScriptRuntimeEditorApi
-from runtime.legacy_editor_adapters import (
+from script_runtime.native_engine_adapter import get_script_runtime_adapter
+from runtime.project_context import (
     _resolve_native_engine,
-    emit_compat_editor_event,
     get_active_project_path,
-    get_compat_editor_selection,
-    get_script_runtime_adapter,
     is_native_engine_available,
-    set_compat_active_project_path,
-    set_compat_editor_camera_input_enabled,
+    set_active_project_path,
 )
-from runtime.legacy_network_adapters import (
-    _LanChatQueueAdapter,
-    _LanChatTransportAdapter,
-    _LegacyLanChatAdapter,
-    _LegacyLanChatQueueAdapter,
-    _LegacyLanChatTransportAdapter,
-    _LegacyNetworkAdapter,
+from runtime.editor_host import (
+    emit_editor_event,
+    get_editor_selection,
+    set_editor_camera_input_enabled,
 )
-from runtime.legacy_scene_adapters import (
-    _LegacySceneAdapter,
-    _LegacySceneToolsAdapter,
-    _LegacyViewportAdapter,
-)
-
-
 _CPP_EDITOR_API_METHODS = None
 _CPP_EDITOR_API_EVENTS = None
 _SCRIPT_RUNTIME_API_METHODS = None
@@ -227,7 +214,7 @@ def _invoke_manifest_cpp_api(wrapper_path, args=None):
 
 
 def _invoke_script_cpp_api(api_name, args=None, validate_method=True):
-    """Invoke a legacy Script Runtime API through its restricted C++ channel."""
+    """Invoke the restricted Script Runtime API through its C++ channel."""
     normalized_args = args or []
     spec = None
     if validate_method:
@@ -377,6 +364,12 @@ class _ProjectApi(_DynamicApiNamespace):
     def create_multiplayer_project(project_data):
         return _invoke_manifest_cpp_api(
             "project.create_multiplayer_project", [project_data or {}]
+        )
+
+    @staticmethod
+    def copy_existing_to_data(payload):
+        return _invoke_manifest_cpp_api(
+            "project.copy_existing_to_data", [payload or {}]
         )
 
     @staticmethod
@@ -694,20 +687,12 @@ class _NetworkApi(_DynamicApiNamespace):
 
 
 def get_network_adapter(native_engine=None):
-    """Return the public network contract, with an explicit test fallback.
-
-    The adapter resolves the embedded host by default. Small isolated tests
-    and legacy hosts may still inject an object that does not expose the
-    manifest invoker; retaining that object here keeps dependency injection
-    working without making it a new editor API surface.
-    """
+    """Return the manifest-backed public network contract."""
     native_engine = _resolve_native_engine(native_engine)
     if native_engine is None:
         return None
     if callable(getattr(native_engine, "_invoke_cpp_editor_api", None)):
         return CoronaEditorApi.network
-    if callable(getattr(native_engine, "network_broadcast_intent", None)):
-        return _LegacyNetworkAdapter(native_engine)
     return None
 
 
@@ -718,8 +703,6 @@ def get_lan_chat_adapter(native_engine=None):
         return None
     if callable(getattr(native_engine, "_invoke_cpp_editor_api", None)):
         return CoronaEditorApi.lan_chat
-    if callable(getattr(native_engine, "network_lanchat_agents_snapshot", None)):
-        return _LegacyLanChatAdapter(native_engine)
     return None
 
 
@@ -730,15 +713,6 @@ def get_lan_chat_transport_adapter(native_engine=None):
         return None
     if callable(getattr(native_engine, "_invoke_cpp_editor_api", None)):
         return _LanChatTransportAdapter(CoronaEditorApi.lan_chat)
-    if any(callable(getattr(native_engine, name, None)) for name in (
-        "network_send_agent_reply_ex",
-        "network_send_agent_reply",
-        "network_send_system_message_ex",
-        "network_send_system_message",
-        "network_send_system_message_to_host_ex",
-        "network_send_system_message_to_user_ex",
-    )):
-        return _LegacyLanChatTransportAdapter(native_engine)
     return None
 
 
@@ -749,13 +723,6 @@ def get_lan_chat_queue_adapter(native_engine=None):
         return None
     if callable(getattr(native_engine, "_invoke_cpp_editor_api", None)):
         return _LanChatQueueAdapter(CoronaEditorApi.lan_chat)
-    if any(callable(getattr(native_engine, name, None)) for name in (
-        "network_pop_lanchat_agent_trigger",
-        "network_pop_lanchat_coordinator_sync_message",
-        "network_pop_lanchat_room_event",
-        "network_pop_lanchat_sync_event",
-    )):
-        return _LegacyLanChatQueueAdapter(native_engine)
     return None
 
 
@@ -976,7 +943,7 @@ class _SceneToolsApi(_DynamicApiNamespace):
 
 
 def get_scene_tools_adapter(native_engine=None):
-    """Return the manifest-backed SceneTools contract or an explicit legacy view."""
+    """Return the manifest-backed SceneTools contract."""
     native_engine = _resolve_native_engine(native_engine)
     if native_engine is None:
         return None
@@ -989,16 +956,11 @@ def get_scene_tools_adapter(native_engine=None):
             manifest_spec = None
         if manifest_spec is not None:
             return CoronaEditorApi.scene_tools
-    if any(callable(getattr(native_engine, name, None)) for name in (
-        "create_editor_actor",
-        "remove_editor_actor",
-    )):
-        return _LegacySceneToolsAdapter(native_engine)
     return None
 
 
 def get_scene_adapter(native_engine=None):
-    """Return the scene value-object contract or an explicit legacy view."""
+    """Return the manifest-backed scene value-object contract."""
     native_engine = _resolve_native_engine(native_engine)
     if native_engine is None:
         return None
@@ -1009,17 +971,11 @@ def get_scene_adapter(native_engine=None):
             manifest_spec = None
         if manifest_spec is not None:
             return CoronaEditorApi.scene
-    if any(callable(getattr(native_engine, name, None)) for name in (
-        "get_editor_scene_snapshot",
-        "set_editor_actor_transform",
-        "get_editor_actor_bounds",
-    )):
-        return _LegacySceneAdapter(native_engine)
     return None
 
 
 def get_viewport_adapter(native_engine=None):
-    """Return the manifest-backed viewport contract or an explicit legacy view."""
+    """Return the manifest-backed viewport contract."""
     native_engine = _resolve_native_engine(native_engine)
     if native_engine is None:
         return None
@@ -1030,11 +986,6 @@ def get_viewport_adapter(native_engine=None):
             manifest_spec = None
         if manifest_spec is not None:
             return CoronaEditorApi.viewport
-    if any(callable(getattr(native_engine, name, None)) for name in (
-        "capture_editor_camera_view",
-        "set_editor_camera_transform",
-    )):
-        return _LegacyViewportAdapter(native_engine)
     return None
 
 
@@ -1114,7 +1065,6 @@ class CoronaEditorApi(metaclass=_CoronaEditorApiMeta):
     files = _FilesApi()
     project_settings = _ProjectSettingsApi()
     network = _NetworkApi()
-    scene_datas = LegacySceneDatasApi(_invoke_script_manifest_cpp_api)
     scene = _SceneApi()
     scene_tools = _SceneToolsApi()
     viewport = _ViewportApi()

@@ -541,6 +541,8 @@ const editorApiStatic = {
       call_manifest_editor_api('project.browseFolder', defaultPath ? [defaultPath] : []),
     createMultiplayerProject: (projectData) =>
       call_manifest_editor_api('project.createMultiplayerProject', [projectData || {}]),
+    copyExistingToData: (payload) =>
+      call_manifest_editor_api('project.copyExistingToData', [payload || {}]),
     createProject: (projectData) =>
       call_manifest_editor_api('project.createProject', [projectData || {}]),
     createWorldProject: (worldData) =>
@@ -753,18 +755,6 @@ const editorApiStatic = {
       call_manifest_editor_api('resourceSearch.markIndexDirty', [reason, caller]),
     focusActor: (sceneName, actorName, caller = CURRENT_CALLER) =>
       call_manifest_editor_api('resourceSearch.focusActor', [sceneName, actorName, caller]),
-  },
-  // Legacy Script Runtime/old-host compatibility namespace. New editor UI
-  // code must use scene.* and sceneTools.* aggregate contracts.
-  sceneDatas: {
-    getScene: (sceneId) => call_manifest_editor_api('sceneDatas.getScene', [sceneId]),
-    getActor: (sceneId, actorId) => call_manifest_editor_api('sceneDatas.getActor', [sceneId, actorId]),
-    actorOperation: (sceneName, actorName, operation, vector) =>
-      call_manifest_editor_api('sceneDatas.actorOperation', [sceneName, actorName, operation, vector]),
-    saveActor: (sceneName, actorName) =>
-      call_manifest_editor_api('sceneDatas.saveActor', [sceneName, actorName]),
-    selectModelFile: (sceneId, actorId, fileType) =>
-      call_manifest_editor_api('sceneDatas.selectModelFile', [sceneId, actorId, fileType]),
   },
 };
 

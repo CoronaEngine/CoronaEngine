@@ -6,13 +6,7 @@ EDITOR_ROOT = Path(__file__).resolve().parents[1].parent
 
 def test_runtime_logging_has_a_canonical_owner():
     canonical = EDITOR_ROOT / "runtime" / "logging.py"
-    compatibility = EDITOR_ROOT / "utils" / "compat" / "legacy_logging.py"
-
     assert canonical.is_file()
-    assert not compatibility.exists()
-    assert "from runtime.logging import" in (EDITOR_ROOT / "utils" / "logging.py").read_text(
-        encoding="utf-8"
-    )
     assert "from runtime.logging import" in (EDITOR_ROOT / "runtime" / "bootstrap.py").read_text(
         encoding="utf-8"
     )
@@ -44,10 +38,8 @@ def test_runtime_project_support_has_no_compatibility_wrappers():
     runtime_root = EDITOR_ROOT / "runtime"
     compatibility = runtime_root / "compat"
     support_owner = compatibility / "legacy_project_support.py"
-    copy_owner = compatibility / "legacy_project_copy.py"
 
     assert not support_owner.exists()
-    assert not copy_owner.exists()
     assert not (runtime_root / "project_support.py").exists()
     assert not (runtime_root / "project_copy.py").exists()
 
@@ -61,13 +53,3 @@ def test_project_templates_owns_template_and_project_ini_helpers():
     assert "def normalize_project_runtime_paths" in template_source
     assert "def update_project_config" in template_source
     assert not (EDITOR_ROOT / "runtime" / "project_support.py").exists()
-
-
-def test_legacy_entities_use_canonical_scene_support_for_auto_save():
-    for relative_path in (
-        "legacy/entities/actor.py",
-        "legacy/entities/scene.py",
-    ):
-        source = (EDITOR_ROOT / "runtime" / relative_path).read_text(encoding="utf-8")
-        assert "from runtime.scene_support import auto_save" in source
-        assert "from runtime.project_support import auto_save" not in source

@@ -59,14 +59,11 @@ def test_agent_scene_reads_authoritative_native_actor_views_first():
     with mock.patch(
         "plugins.AITool.cai_extensions.mcp.tools.native_scene_state.native_actor_views",
         return_value=[native_actor],
-    ) as native_views, mock.patch(
-        "runtime.legacy_scene_store._scene_manager"
-    ) as legacy_manager:
+    ) as native_views:
         result = agent_adapter._get_runtime_scene_actors()
 
     assert result == [native_actor]
     native_views.assert_called_once_with("")
-    legacy_manager.get.assert_not_called()
 
 
 def test_agent_scene_does_not_consult_legacy_manager():
@@ -74,11 +71,8 @@ def test_agent_scene_does_not_consult_legacy_manager():
     with mock.patch(
         "plugins.AITool.cai_extensions.mcp.tools.native_scene_state.native_actor_views",
         return_value=[native_actor],
-    ) as actor_views, mock.patch(
-        "runtime.legacy_scene_store._scene_manager"
-    ) as legacy_manager:
+    ) as actor_views:
         result = agent_adapter._get_runtime_scene_actors()
 
     assert result == [native_actor]
     actor_views.assert_called_once_with("")
-    legacy_manager.get.assert_not_called()

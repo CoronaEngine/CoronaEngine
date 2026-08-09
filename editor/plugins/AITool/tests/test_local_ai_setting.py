@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from editor.plugins.AITool.utils.load_local_ai_setting import (
+from editor.plugins.AITool.configuration.local_secrets import (
     apply_api_key_env_overrides,
     load_dotenv_file,
 )
@@ -15,12 +15,6 @@ class LoadLocalAISettingTests(unittest.TestCase):
     def test_local_secret_loader_has_a_config_owner_and_utils_use_it_directly(self):
         aitool_root = Path(__file__).resolve().parents[1]
         config_source = aitool_root / "configuration" / "local_secrets.py"
-        utility_source = (aitool_root / "utils" / "load_local_ai_setting.py").read_text(
-            encoding="utf-8"
-        )
-        utility_package_source = (aitool_root / "utils" / "__init__.py").read_text(
-            encoding="utf-8"
-        )
         main_source = (aitool_root / "main.py").read_text(encoding="utf-8")
         review_source = (
             aitool_root / "services" / "node_graph_review_service.py"
@@ -29,13 +23,10 @@ class LoadLocalAISettingTests(unittest.TestCase):
         self.assertTrue(config_source.is_file())
         self.assertFalse((aitool_root / "compat" / "legacy_local_ai_setting.py").exists())
         self.assertFalse((aitool_root / "compat" / "legacy_aitool_utils.py").exists())
-        self.assertIn(
-            "from ..configuration.local_secrets import", utility_source
-        )
-        self.assertIn(
-            "from ..configuration.local_secrets import",
-            utility_package_source,
-        )
+        self.assertFalse(any(
+            path.is_file() and "__pycache__" not in path.parts
+            for path in (aitool_root / "utils").rglob("*")
+        ))
         self.assertIn("from .configuration.local_secrets import", main_source)
         self.assertIn("from ..configuration.local_secrets import", review_source)
 

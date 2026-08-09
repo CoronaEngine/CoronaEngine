@@ -83,7 +83,7 @@ class AITool(PluginBase):
     def _build_runtime(cls):
         from concurrent.futures import ThreadPoolExecutor
 
-        from api.editor_api import emit_compat_editor_event
+        from runtime.editor_host import emit_editor_event
         from Quasar.ai_service.entrance import get_ai_entrance
         from Quasar.ai_tools.common import build_error_response
         from Quasar.cai import CAIApp
@@ -110,7 +110,7 @@ class AITool(PluginBase):
         cls._executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="AI_")
         cls._request_service = AIRequestService()
         cls._media_ingress = MediaIngress(base64_to_image_file, upload_file_to_server)
-        cls._stream_dispatcher = StreamDispatcher(emit_compat_editor_event)
+        cls._stream_dispatcher = StreamDispatcher(emit_editor_event)
         cai_started = time.perf_counter()
         cls._cai_app = CAIApp.from_legacy_entrance(lambda: get_ai_entrance())
         logger.info(

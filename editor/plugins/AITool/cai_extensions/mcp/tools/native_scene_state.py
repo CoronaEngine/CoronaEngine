@@ -315,9 +315,9 @@ def set_native_actor_physics(
 
 def _emit_scene_tree_changed(scene_name: str) -> None:
     try:
-        from api.editor_api import emit_compat_editor_event
+        from runtime.editor_host import emit_editor_event
 
-        emit_compat_editor_event("scene-tree-changed", [scene_name])
+        emit_editor_event("scene-tree-changed", [scene_name])
     except Exception:
         pass
 

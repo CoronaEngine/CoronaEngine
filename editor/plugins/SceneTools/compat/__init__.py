@@ -1,2 +1,0 @@
-"""SceneTools-owned compatibility adapters."""
-

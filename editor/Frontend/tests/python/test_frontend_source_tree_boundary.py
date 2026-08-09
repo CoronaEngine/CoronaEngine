@@ -44,7 +44,7 @@ def test_frontend_source_tree_declares_the_single_transport_and_compatibility_ow
     assert "api/editorApi.js" in source
     assert "services/" in source
     assert "compat/" not in source
-    assert "utils/bridge.js" in source
+    assert "utils/bridge.js" not in source
     assert "不得" in source
 
 

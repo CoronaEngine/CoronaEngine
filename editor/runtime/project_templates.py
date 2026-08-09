@@ -38,7 +38,7 @@ def create_project_from_template(target_path, project_name, mode):
         update_project_config(project_ini, project_name, mode, False)
         return project_ini
     except Exception as exc:
-        logger.error("ProjectCopy Error: %s", exc)
+        logger.error("Project template error: %s", exc)
         raise
 
 
@@ -112,7 +112,7 @@ def create_scene_from_template(target_path, scene_name):
         update_config_name(target_file, base_name)
         return os.path.basename(target_file)
     except Exception:
-        logger.exception("ProjectCopy scene template failed")
+        logger.exception("Scene template creation failed")
         raise
 
 
@@ -138,7 +138,7 @@ def create_actor_from_template(target_path, scene_name):
         update_config_name(target_file, base_name)
         return os.path.basename(target_file)
     except Exception:
-        logger.exception("ProjectCopy actor template failed")
+        logger.exception("Actor template creation failed")
         raise
 
 

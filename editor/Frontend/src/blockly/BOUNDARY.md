@@ -24,7 +24,7 @@
 - 生成器输出属于受限 Script Runtime 命名空间，不得直接生成编辑器公共 API、
   C++ 原生对象访问或 Vue service 调用；
 - `components/` 通过 `src/api/editorApi.js` 和对应 service 使用保存、运行、项目
-  与 AI 请求，不得调用 `window.cefQuery` 或 `utils/bridge.js`；
+  与 AI 请求，不得调用 `window.cefQuery` 或重新引入已删除的 `utils/bridge.js`；
 - `node-editor/aiNodeGraphService.js` 只负责内部节点图 JSON 的校验、跨窗口协调和
   应用 adapter，不持有 API key、Agent runtime、C++ transport 或 Scene 权威状态；
 - 节点图领域编排仍归 `src/services/nodeGraph*.js`，公共契约归 `src/api`，Script

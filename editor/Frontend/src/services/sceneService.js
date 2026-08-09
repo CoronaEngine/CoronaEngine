@@ -67,7 +67,4 @@ export const sceneService = {
   actorPlayAudio: (actorName, loop = false) => editorApi.sceneTools.actorPlayAudio(actorName, loop),
   actorStopAudio: (actorName) => editorApi.sceneTools.actorStopAudio(actorName),
   getScene: (sceneId) => editorApi.scene.getSnapshot(sceneId),
-  /** @deprecated Script Runtime and old-host compatibility only. */
-  actorOperation: (scene_name, actor_name, operation, vector) =>
-    editorApi.sceneDatas.actorOperation(scene_name, actor_name, operation, vector),
 };

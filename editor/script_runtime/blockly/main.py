@@ -10,12 +10,12 @@ import threading
 import time
 from typing import Any, Optional
 
-from api.editor_api import (
-    emit_compat_editor_event,
-    get_active_project_path,
-    get_compat_editor_selection,
-    set_compat_editor_camera_input_enabled,
+from runtime.editor_host import (
+    emit_editor_event,
+    get_editor_selection,
+    set_editor_camera_input_enabled,
 )
+from runtime.project_context import get_active_project_path
 from runtime.scene_support import (
     cancel_pending_auto_saves,
     flush_pending_auto_saves,
@@ -462,7 +462,7 @@ class ScratchTool:
             cls._exec_input_locked = locked
             cls._exec_state["inputLocked"] = locked
         try:
-            set_compat_editor_camera_input_enabled(not locked, reason="node_graph")
+            set_editor_camera_input_enabled(not locked, reason="node_graph")
         except Exception:
             logger.debug("[ScratchTool] node graph editor camera input gate unavailable", exc_info=True)
 
@@ -993,7 +993,7 @@ class ScratchTool:
             # CoronaEditor owns the reason-based lock set and propagates the aggregate
             # state to the native camera-follow controller.  Do not call the native
             # setter directly here, otherwise another active lock could be released.
-            set_compat_editor_camera_input_enabled(not locked, reason="game_preview")
+            set_editor_camera_input_enabled(not locked, reason="game_preview")
         except Exception:
             logger.debug("[ScratchTool] editor camera input gate unavailable", exc_info=True)
 
@@ -1708,13 +1708,13 @@ class ScratchTool:
     @staticmethod
     def _notify_preview_state_restored(scene_routes: set[str]) -> None:
         try:
-            selected_scene, selected_actor = get_compat_editor_selection()
+            selected_scene, selected_actor = get_editor_selection()
             for route in scene_routes or {selected_scene or ""}:
-                emit_compat_editor_event("scene-tree-changed", [route])
+                emit_editor_event("scene-tree-changed", [route])
             if selected_scene and selected_actor:
-                emit_compat_editor_event("actor-change", ["actor", selected_scene, selected_actor])
+                emit_editor_event("actor-change", ["actor", selected_scene, selected_actor])
             elif selected_scene:
-                emit_compat_editor_event("actor-change", ["scene", selected_scene, ""])
+                emit_editor_event("actor-change", ["scene", selected_scene, ""])
         except Exception:
             logger.exception("[ScratchTool] failed to notify frontend after preview state restore")
 

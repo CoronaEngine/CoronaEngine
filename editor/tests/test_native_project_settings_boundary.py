@@ -15,8 +15,7 @@ PLUGIN = (
     REPO_ROOT
     / "plugins"
     / "ProjectSettings"
-    / "compat"
-    / "legacy_project_settings.py"
+    / "main.py"
 )
 PYTHON_API = REPO_ROOT / "api" / "editor_api.py"
 
@@ -24,7 +23,7 @@ PYTHON_API = REPO_ROOT / "api" / "editor_api.py"
 def test_project_settings_save_is_owned_by_native_handler():
     source = HANDLERS.read_text(encoding="utf-8")
     start = source.index("void register_project_settings_api_handlers")
-    end = source.index("void register_scene_datas_api_handlers", start)
+    end = source.index("void register_scene_tools_api_handlers", start)
     section = source[start:end]
 
     assert '{"save_active_project_info", script_method}' not in section
@@ -40,6 +39,13 @@ def test_project_settings_python_entry_is_only_a_manifest_adapter():
     assert "CoronaEditorApi.project_settings.save_active_project_info" in source
     assert "settings_manager" not in source
     assert "configparser" not in source
+    assert not (
+        REPO_ROOT
+        / "plugins"
+        / "ProjectSettings"
+        / "compat"
+        / "legacy_project_settings.py"
+    ).exists()
 
 
 def test_python_editor_api_has_explicit_project_settings_namespace():

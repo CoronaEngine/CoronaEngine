@@ -1,4 +1,4 @@
-"""Host-facing compatibility entrypoint for the embedded Python runtime."""
+"""Host-facing entrypoint for the embedded Python runtime."""
 
 from runtime.bootstrap import editor, run
 

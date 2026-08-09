@@ -5,11 +5,6 @@ ROOT = Path(__file__).parents[1]
 ADAPTER = (ROOT / "cai_extensions" / "mcp" / "tools" / "native_scene_state.py").read_text(
     encoding="utf-8"
 )
-SCENE_STORE = (ROOT.parents[1] / "runtime" / "legacy_scene_store.py").read_text(
-    encoding="utf-8"
-)
-
-
 def test_legacy_scene_manager_import_is_owned_by_native_scene_adapter():
     files = [
         ROOT / "cai_extensions" / "agent" / "agent_adapter.py",
@@ -23,7 +18,8 @@ def test_legacy_scene_manager_import_is_owned_by_native_scene_adapter():
         ROOT / "cai_extensions" / "mcp" / "tools" / "scene_tools.py",
         ROOT / "cai_extensions" / "flows" / "scene_composition_workflow_v2" / "nodes_tier_place.py",
     ]
-    assert "from runtime.legacy.managers import scene_manager" in SCENE_STORE
+    assert not (ROOT.parents[1] / "runtime" / "legacy_scene_store.py").exists()
+    assert not (ROOT.parents[1] / "runtime" / "legacy" / "managers").exists()
     assert not (ROOT / "compat" / "legacy_aitool_scene_adapter.py").exists()
     assert "from plugins.AITool.compat.legacy_aitool_scene_adapter import" not in ADAPTER
     assert "get_legacy_scene" not in ADAPTER

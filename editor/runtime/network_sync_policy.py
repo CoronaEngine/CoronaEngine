@@ -207,9 +207,9 @@ def set_engine_sync_paused(paused: bool) -> None:
             return
 
     try:
-        from api.editor_api import emit_compat_editor_event
+        from runtime.editor_host import emit_editor_event
 
-        emit_compat_editor_event(
+        emit_editor_event(
             "network-sync-pause-request", [{"paused": bool(paused)}]
         )
     except Exception:

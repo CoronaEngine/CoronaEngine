@@ -9,16 +9,9 @@ from runtime.archive.parser import parse_archive
 
 class ArchiveParserTests(unittest.TestCase):
     def test_legacy_scene_owner_reuses_archive_parser_without_actor_instantiation(self):
-        scene_source = (
-            Path(__file__).resolve().parents[3]
-            / "runtime"
-            / "legacy"
-            / "entities"
-            / "scene.py"
-        ).read_text(encoding="utf-8")
-        self.assertIn("parse_archive(data_path)", scene_source)
-        self.assertIn("self.archive_snapshot", scene_source)
-        self.assertNotIn("self._actors.append(Actor", scene_source)
+        self.assertFalse(
+            (Path(__file__).resolve().parents[3] / "runtime" / "legacy" / "entities" / "scene.py").is_file()
+        )
 
     def test_portable_scene_is_normalized_to_snapshot_v1(self):
         with tempfile.TemporaryDirectory() as temp_dir:

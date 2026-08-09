@@ -6,7 +6,6 @@
 namespace Corona::Systems::UI {
 
 void register_scene_tools_api_handlers(NativeApiRegistry& registry);
-void register_scene_datas_api_handlers(NativeApiRegistry& registry);
 void register_main_view_api_handlers(NativeApiRegistry& registry);
 void register_project_launcher_api_handlers(NativeApiRegistry& registry);
 void register_file_manager_api_handlers(NativeApiRegistry& registry);
@@ -93,7 +92,6 @@ void register_builtin_native_api_handlers() {
         register_project_launcher_api_handlers(registry);
         register_main_view_api_handlers(registry);
         register_project_settings_api_handlers(registry);
-        register_scene_datas_api_handlers(registry);
         register_scene_tools_api_handlers(registry);
         register_network_api_handlers(registry);
         register_lanchat_api_handlers(registry);

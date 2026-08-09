@@ -8,9 +8,7 @@ from importlib import import_module
 from runtime.editor_host import CoronaEditor
 
 
-# Blockly's Python runtime host and generated output owner are canonical here;
-# the historical ``backend/script`` path remains a read-only compatibility
-# fallback for old hosts and previously generated sessions.
+# Blockly's Python runtime host and generated output owner are canonical here.
 _BLOCKLY_PACKAGE = "script_runtime"
 logger = logging.getLogger(__name__)
 
@@ -23,19 +21,16 @@ PYTHON_SCRIPT_SERVICES = {
     "ProjectLauncher": ("plugins.ProjectLauncher.main", "ProjectLauncher"),
     "FileManager": ("plugins.FileManager.main", "FileManager"),
     "ProjectSettings": ("plugins.ProjectSettings.main", "ProjectSettings"),
-    "SceneDatas": ("plugins.SceneDatas.main", "SceneDatas"),
     "SceneTools": ("plugins.SceneTools.main", "SceneTools"),
 }
 
 CORE_PYTHON_SCRIPT_SERVICES = set()
-LEGACY_PYTHON_SCRIPT_SERVICES = {
-    "SceneDatas",
-    "ProjectLauncher",
-    "FileManager",
-    "ProjectSettings",
-    "MainView",
-    "SceneTools",
-}
+# Normal editor startup inventory.
+ACTIVE_PYTHON_SCRIPT_SERVICES = (
+    "ProjectArchive",
+    "AITool",
+    "ScratchTool",
+)
 LAZY_PYTHON_SCRIPT_SERVICES = {"AITool", "ProjectArchive"}
 _managed_services = []
 _registered_service_names = set()
@@ -397,36 +392,10 @@ def register_core_python_script_services():
     )
 
 
-def register_remaining_python_script_services():
-    return _register_python_script_services(
-        name
-        for name in PYTHON_SCRIPT_SERVICES
-        if name not in CORE_PYTHON_SCRIPT_SERVICES
-    )
-
-
 def register_active_python_script_services():
-    """Register editor services required by the current host.
+    """Register editor services required by the current host."""
 
-    Historical Python-only shells remain available through the explicit legacy
-    entry point below, but normal startup must not recreate them after the Vue
-    panel has moved to the native aggregate contract.
-    """
-
-    return _register_python_script_services(
-        name
-        for name in PYTHON_SCRIPT_SERVICES
-        if name not in CORE_PYTHON_SCRIPT_SERVICES
-        and name not in LEGACY_PYTHON_SCRIPT_SERVICES
-    )
-
-
-def register_legacy_python_script_services():
-    """Explicitly register compatibility services for an old host."""
-
-    return _register_python_script_services(
-        name for name in PYTHON_SCRIPT_SERVICES if name in LEGACY_PYTHON_SCRIPT_SERVICES
-    )
+    return _register_python_script_services(ACTIVE_PYTHON_SCRIPT_SERVICES)
 
 
 def shutdown_python_script_services(timeout=2.0):

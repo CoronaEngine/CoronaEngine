@@ -26,9 +26,9 @@ SUPPORTED_EXTS = {".obj", ".dae", ".glb", ".gltf", ".fbx"}
 
 def _active_project_path(legacy_engine: Any = None) -> str:
     """Read project context from settings; keep an old-engine fallback for legacy builds."""
-    from api import editor_api
+    from runtime.project_context import get_active_project_path
 
-    return editor_api.get_active_project_path(legacy_engine)
+    return get_active_project_path(legacy_engine)
 
 
 def _pick_model_file(path: str) -> Optional[str]:
@@ -101,25 +101,13 @@ def _create_native_editor_actor(
     source_path: str,
     actor_type: str,
     actor_data: dict[str, Any],
-    legacy_engine: Any = None,
 ) -> dict[str, Any]:
-    """Create an actor through the manifest API, with an old-engine fallback.
+    """Create an actor through the native SceneTools aggregate contract."""
 
-    New editor builds expose ``SceneTools.create_actor`` through the C++
-    manifest. Older F5 builds and isolated Python tests only expose the direct
-    ``create_editor_actor`` binding, so that path remains a compatibility
-    fallback rather than a second production entry point.
-    """
+    from api.editor_api import CoronaEditorApi
 
-    from api import editor_api
-
-    scene_tools = editor_api.get_scene_tools_adapter(legacy_engine)
-    if scene_tools is None:
-        raise RuntimeError(
-            "current engine exposes neither SceneTools.create_actor nor create_editor_actor"
-        )
     return _normalize_native_result(
-        scene_tools.create_actor(
+        CoronaEditorApi.scene_tools.create_actor(
             scene_name,
             source_path,
             actor_type,
@@ -338,7 +326,6 @@ def _build_import_model_tool(scene_manager=None) -> StructuredTool:
                 source_path=final_path,
                 actor_type="model",
                 actor_data=actor_data,
-                legacy_engine=None,
             )
             if native_result.get("status") == "error":
                 return build_error_result(
@@ -541,7 +528,6 @@ def _build_import_environment_component_tool(scene_manager=None) -> StructuredTo
                 source_path=source_path,
                 actor_type="model",
                 actor_data=actor_data,
-                legacy_engine=None,
             )
             if native_result.get("status") == "error":
                 return build_error_result(
@@ -642,15 +628,11 @@ def _build_remove_model_tool(scene_manager=None) -> StructuredTool:
         scene_name: str = DEFAULT_SCENE_NAME,
     ) -> str:
         try:
-            from api import editor_api
+            from api.editor_api import CoronaEditorApi
 
-            scene_tools = editor_api.get_scene_tools_adapter()
-            if scene_tools is None:
-                return build_error_result(
-                    error_message="当前引擎缺少 SceneTools.remove_actor 或兼容删除接口"
-                ).to_envelope(interface_type="scene")
-
-            native_result_raw = scene_tools.remove_actor(scene_name, actor_name)
+            native_result_raw = CoronaEditorApi.scene_tools.remove_actor(
+                scene_name, actor_name
+            )
             native_result = (
                 json.loads(native_result_raw)
                 if isinstance(native_result_raw, str)

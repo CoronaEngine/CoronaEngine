@@ -1,8 +1,9 @@
 """Canonical runtime access to the active project context.
 
-Project metadata and editor preferences remain owned by ``config.settings``.
-This module only resolves the current project path for runtime consumers and
-keeps the embedded-engine synchronization needed by legacy hosts.
+Project metadata and editor preferences remain owned by ``config.project_state``.
+This module resolves the current project path and synchronizes the embedded
+native host. The native host path is authoritative; persisted project state is
+used when no native context is available.
 """
 
 from __future__ import annotations
@@ -23,6 +24,11 @@ def _resolve_native_engine(native_engine=None):
 
 def get_active_project_path(native_engine=None) -> str:
     """Return the active project path without exposing a native engine object."""
+    engine = _resolve_native_engine(native_engine)
+    native_path = str(getattr(engine, "active_project_path", "") or "")
+    if native_path:
+        return native_path
+
     try:
         from config.project_state import settings_manager
 
@@ -32,8 +38,12 @@ def get_active_project_path(native_engine=None) -> str:
     except Exception:
         pass
 
-    engine = _resolve_native_engine(native_engine)
-    return str(getattr(engine, "active_project_path", "") or "")
+    return ""
+
+
+def is_native_engine_available(native_engine=None) -> bool:
+    """Report host availability without exposing the native engine object."""
+    return _resolve_native_engine(native_engine) is not None
 
 
 def get_project_root(*, fallback_to_environment=True) -> Path:
@@ -49,8 +59,8 @@ def get_project_root(*, fallback_to_environment=True) -> Path:
     return Path.cwd()
 
 
-def set_compat_active_project_path(project_path, native_engine=None):
-    """Synchronize the path with an older embedded host, if available."""
+def set_active_project_path(project_path, native_engine=None):
+    """Synchronize the active path with the embedded native host."""
     engine = _resolve_native_engine(native_engine)
     if engine is None:
         return False

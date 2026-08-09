@@ -2,30 +2,28 @@
 
 ## 目标
 
-整理 `editor/runtime` 根目录中的历史项目导入 wrapper，将其集中到
-`editor/runtime/compat/`，同时保留旧模块路径，避免外部宿主和旧项目工具失效。
+整理 `editor/runtime` 根目录中的历史项目导入 wrapper，并将项目复制语义迁移到
+native 聚合接口。本设计已被后续实现 supersede；本文保留为历史决策记录。
 
 ## 当前状态
 
 - `runtime/project_templates.py` 是模板和 project.ini 初始化的 canonical owner；
-- `runtime/legacy_project_copy.py` 是旧项目复制/打开行为的兼容实现 owner；
-- `runtime/project_support.py` 聚合转发 `project_templates` 与 `scene_support`；
-- `runtime/project_copy.py` 保留旧 `ProjectCopy` 和 `core_path` 注入语义；
-- 新项目生命周期已使用 native `project.*`，旧 wrapper 只服务外部宿主和历史导入。
+- `runtime/project_templates.py` 仍是模板和 project.ini 初始化的 canonical owner；
+- `project.copyExistingToData` 已成为已有项目复制、重名、路径规范化和失败回滚的
+  native owner；
+- `runtime/legacy_project_copy.py`、`runtime/project_copy.py` 及相关兼容路径均已删除；
+- Python/Vue 通过 `CoronaEditorApi.project` / `editorApi.project` 使用同一聚合契约。
 
 ## 设计决策
 
-1. 新增 `runtime/compat/legacy_project_support.py` 和
-   `runtime/compat/legacy_project_copy.py` 作为 wrapper owner。
-2. `runtime/project_support.py`、`runtime/project_copy.py` 保留为单向旧路径 shim。
-3. `plugins/ProjectLauncher/compat/legacy_project_copy.py` 改为转发到新的 runtime
-   compat owner，保留 `ProjectCopy`、`core_path` 和返回语义。
-4. 不移动 `project_templates.py`、`scene_support.py`、`legacy_project_copy.py`，不修改
-   native manifest、项目生命周期或文件复制行为。
+1. 已完成的 owner 迁移：native manifest 声明
+   `project.copyExistingToData`，C++ handler 负责文件系统语义。
+2. Python 和 Frontend 仅提供薄 wrapper，不复制 ProjectCopy schema 或实现。
+3. 删除旧 Python 实现前，保留契约、路径边界和失败回滚验证。
 
 ## 验收
 
-- 新旧模块导入得到等价对象或等价 wrapper 行为；
-- `core_path` 注入仍能影响历史复制流程；
-- runtime 根目录只保留 shim，compat owner 在文档中登记；
-- ProjectLauncher、runtime 和路径边界测试通过。
+- manifest、Python、Frontend wrapper 三者名称一致；
+- native handler 覆盖复制、重名、路径规范化和失败清理；
+- 旧 Python 复制实现不存在；
+- ProjectLauncher、runtime、API 和路径边界测试通过。

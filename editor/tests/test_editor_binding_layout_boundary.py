@@ -5,27 +5,19 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 BINDINGS_ROOT = REPO_ROOT / "src" / "systems" / "script" / "python"
 
 
-def test_editor_compat_binding_owns_editor_vision_and_media_entries():
+def test_editor_aggregate_manifest_owns_vision_and_media_entries():
     engine_source = (BINDINGS_ROOT / "engine_bindings.cpp").read_text(encoding="utf-8")
-    compat_source = (BINDINGS_ROOT / "editor_compat_bindings.cpp").read_text(
-        encoding="utf-8"
-    )
+    manifest_source = (REPO_ROOT / "src/systems/ui/editor_api/cef_editor_api.cpp").read_text(encoding="utf-8")
 
     for entry in (
-        'm.def("is_vision_available"',
-        'm.def("set_render_backend"',
-        'm.def("get_render_backend"',
-        'm.def("set_vision_render_mode"',
-        'm.def("get_vision_render_mode"',
-        'm.def("load_vision_scene"',
-        'm.def("load_vision_scene_from_json"',
-        'nb::class_<MediaInfo>',
-        'm.def("import_media"',
-        'm.def("play_audio"',
-        'm.def("stop_audio"',
+        '"scene_tools.is_vision_available"',
+        '"scene_tools.set_render_backend"',
+        '"scene_tools.load_vision_scene"',
+        '"scene_tools.play_audio"',
+        '"scene_tools.stop_audio"',
     ):
         assert entry not in engine_source
-        assert entry in compat_source
+        assert entry in manifest_source
 
 
 def test_engine_binding_remains_script_runtime_owner():

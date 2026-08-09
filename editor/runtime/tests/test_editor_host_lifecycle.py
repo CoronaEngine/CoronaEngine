@@ -11,8 +11,8 @@ class CoronaEditorLifecycleTests(unittest.TestCase):
         engine = SimpleNamespace()
         corona_engine = ModuleType("runtime.native_engine")
         corona_engine.get_corona_engine = lambda: engine
-        settings = ModuleType("config.settings")
-        settings.core_path = SimpleNamespace(frontend_dist="")
+        settings = ModuleType("config.project_state")
+        settings.settings_manager = SimpleNamespace(set_active_project=lambda *_: True)
         responses = ModuleType("runtime.response_utils")
         responses.create_error_response = lambda message: {"error": message}
         responses.create_success_response = lambda value: {"data": value}
@@ -21,7 +21,7 @@ class CoronaEditorLifecycleTests(unittest.TestCase):
         module = importlib.util.module_from_spec(spec)
         with patch.dict(sys.modules, {
             "runtime.native_engine": corona_engine,
-            "config.settings": settings,
+            "config.project_state": settings,
             "runtime.response_utils": responses,
         }):
             spec.loader.exec_module(module)

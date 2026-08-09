@@ -11,7 +11,6 @@ PLUGIN_DIRECTORIES = (
     "ProjectArchive",
     "ProjectLauncher",
     "ProjectSettings",
-    "SceneDatas",
     "SceneTools",
 )
 
@@ -24,7 +23,6 @@ def test_plugins_have_a_local_boundary_inventory():
     for marker in (
         "业务插件",
         "native aggregate",
-        "compatibility-only",
         "Quasar",
         "runtime",
         "删除条件",
@@ -40,17 +38,13 @@ def test_plugins_keep_registration_and_ownership_in_the_runtime_layer():
 
     assert "runtime/registry.py" in boundary
     assert "PYTHON_SCRIPT_SERVICES" in registry
-    assert "plugins.SceneTools.compat.legacy_scene_tools" in registry
+    assert '"SceneTools": ("plugins.SceneTools.main", "SceneTools")' in registry
     assert "plugins.AITool.main" in registry
 
 
 def test_legacy_service_implementations_live_under_compat_owners():
     registry = (EDITOR_ROOT / "runtime" / "registry.py").read_text(encoding="utf-8")
     expected = {
-        "MainView": "plugins.MainView.compat.legacy_main_view",
-        "ProjectLauncher": "plugins.ProjectLauncher.compat.legacy_project_launcher",
-        "FileManager": "plugins.FileManager.compat.legacy_file_manager",
-        "ProjectSettings": "plugins.ProjectSettings.compat.legacy_project_settings",
     }
 
     for service_name, module_path in expected.items():
@@ -61,6 +55,34 @@ def test_legacy_service_implementations_live_under_compat_owners():
         shim = (PLUGINS_ROOT / package / "main.py").read_text(encoding="utf-8")
         assert f"from {module_path} import {service_name}" in shim
         assert f"class {service_name}" not in shim
+
+    project_launcher = (PLUGINS_ROOT / "ProjectLauncher" / "main.py").read_text(
+        encoding="utf-8"
+    )
+    assert "class ProjectLauncher" in project_launcher
+    assert not (
+        PLUGINS_ROOT / "ProjectLauncher" / "compat" / "legacy_project_launcher.py"
+    ).exists()
+
+    project_settings = (PLUGINS_ROOT / "ProjectSettings" / "main.py").read_text(
+        encoding="utf-8"
+    )
+    assert "class ProjectSettings" in project_settings
+    assert not (
+        PLUGINS_ROOT / "ProjectSettings" / "compat" / "legacy_project_settings.py"
+    ).exists()
+
+    file_manager = (PLUGINS_ROOT / "FileManager" / "main.py").read_text(
+        encoding="utf-8"
+    )
+    assert "class FileManager" in file_manager
+    assert not (
+        PLUGINS_ROOT / "FileManager" / "compat" / "legacy_file_manager.py"
+    ).exists()
+
+    main_view = (PLUGINS_ROOT / "MainView" / "main.py").read_text(encoding="utf-8")
+    assert "class MainView" in main_view
+    assert not (PLUGINS_ROOT / "MainView" / "compat" / "legacy_main_view.py").exists()
 
 
 def test_active_plugins_have_local_boundary_documents():
@@ -85,8 +107,9 @@ def test_quasar_is_explicitly_outside_the_repository_migration_scope():
 def test_unreferenced_scene_tools_helper_is_removed_after_native_migration():
     boundary = (PLUGINS_ROOT / "BOUNDARY.md").read_text(encoding="utf-8")
     helper = PLUGINS_ROOT / "SceneTools" / "compat" / "legacy_vision_import_helper.py"
-    shim = PLUGINS_ROOT / "SceneTools" / "vision_import.py"
+    canonical_import = PLUGINS_ROOT / "SceneTools" / "vision_import.py"
 
     assert not helper.exists()
-    assert not shim.exists()
+    assert canonical_import.is_file()
+    assert "canonical" in boundary
     assert "removed compatibility code" in boundary

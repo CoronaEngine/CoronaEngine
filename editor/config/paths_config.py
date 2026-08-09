@@ -22,17 +22,6 @@ class PathsConfig:
     screenshots_dir: Optional[Path] = None
     media_local_storage: Optional[Path] = None
 
-    @property
-    def backend_root(self) -> Path:
-        """Return the historical backend path for compatibility callers."""
-        return self.repo_root / "backend"
-
-    @property
-    def script_dir(self) -> Path:
-        """Return the historical generated-script path for compatibility callers."""
-        return self.backend_root / "script"
-
-
 def get_default_paths() -> PathsConfig:
     """获取默认路径配置"""
     # 从当前文件位置计算项目根目录
@@ -96,18 +85,6 @@ def get_project_recognition_db() -> Path:
     """获取当前项目的物体识别数据库路径: <project_path>/models/database.db"""
     models_dir = get_project_models_dir()
     return models_dir / "database.db"
-
-
-def get_legacy_project_data_dir(repo_root: Optional[Path] = None) -> Path:
-    """Return the compatibility directory used by legacy project copying.
-
-    This directory is retained for older hosts.  New project creation and
-    project state do not use it as a template or native-state owner.
-    """
-    root = Path(repo_root) if repo_root is not None else get_default_paths().repo_root
-    data_dir = root / "data"
-    data_dir.mkdir(parents=True, exist_ok=True)
-    return data_dir
 
 
 def get_repository_assets_dir() -> Path:

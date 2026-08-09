@@ -36,6 +36,10 @@ class ProjectLauncher(PluginBase):
         return CoronaEditorApi.project.create_multiplayer_project(project_data)
 
     @staticmethod
+    def copy_existing_to_data(payload: dict) -> dict:
+        return CoronaEditorApi.project.copy_existing_to_data(payload)
+
+    @staticmethod
     def open_project(project_path: str) -> dict:
         return CoronaEditorApi.project.open_project(project_path, {})
 

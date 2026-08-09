@@ -32,7 +32,7 @@ def test_generated_script_runner_prefers_script_runtime_output(tmp_path):
         sys.modules.update(previous_modules)
 
 
-def test_generated_script_runner_falls_back_to_legacy_output(tmp_path):
+def test_generated_script_runner_ignores_removed_legacy_output(tmp_path):
     backend = tmp_path / "backend"
     script = backend / "script"
     script.mkdir(parents=True)
@@ -59,11 +59,11 @@ def test_generated_script_runner_falls_back_to_legacy_output(tmp_path):
     try:
         from editor.script_runtime.runner import run_generated_script
 
-        assert run_generated_script(tmp_path) == "first"
+        assert run_generated_script(tmp_path) is None
         (script / "blockly_code.py").write_text(
             "def run():\n    return 'second-result'\n", encoding="utf-8"
         )
-        assert run_generated_script(tmp_path) == "second-result"
+        assert run_generated_script(tmp_path) is None
     finally:
         for name in list(sys.modules):
             if name == "backend" or name.startswith("backend."):

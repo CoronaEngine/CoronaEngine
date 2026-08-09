@@ -19,7 +19,6 @@ function sourceFiles(root) {
 test('Vue production code does not import the compatibility project service', () => {
   const violations = sourceFiles(sourceRoot)
     .filter((filePath) => !filePath.endsWith(`${path.sep}services${path.sep}projectService.js`))
-    .filter((filePath) => !filePath.endsWith(`${path.sep}utils${path.sep}bridge.js`))
     .filter((filePath) => fs.readFileSync(filePath, 'utf8').includes('services/projectService.js'));
 
   assert.deepEqual(violations, []);
@@ -36,7 +35,6 @@ test('Dock drag-region methods belong to appService', () => {
 test('Vue production code does not import the compatibility scripting service', () => {
   const violations = sourceFiles(sourceRoot)
     .filter((filePath) => !filePath.endsWith(`${path.sep}services${path.sep}scriptingService.js`))
-    .filter((filePath) => !filePath.endsWith(`${path.sep}utils${path.sep}bridge.js`))
     .filter((filePath) =>
       fs.readFileSync(filePath, 'utf8').includes('services/scriptingService.js')
     );
@@ -49,7 +47,6 @@ test('Vue production code does not import the compatibility project-settings ser
     .filter(
       (filePath) => !filePath.endsWith(`${path.sep}services${path.sep}projectSettingsService.js`)
     )
-    .filter((filePath) => !filePath.endsWith(`${path.sep}utils${path.sep}bridge.js`))
     .filter((filePath) =>
       fs.readFileSync(filePath, 'utf8').includes('services/projectSettingsService.js')
     );

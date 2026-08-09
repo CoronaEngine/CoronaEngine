@@ -40,7 +40,8 @@ class ModelImportToolsTests(unittest.TestCase):
         )
 
         self.assertNotIn('getattr(CoronaEngine, "remove_editor_actor"', source)
-        self.assertIn("get_scene_tools_adapter", source)
+        self.assertIn("CoronaEditorApi.scene_tools.remove_actor", source)
+        self.assertNotIn("get_scene_tools_adapter", source)
 
     def test_model_import_tools_do_not_import_editor_runtime_container(self) -> None:
         source = (Path(__file__).resolve().parents[1] / "model_import_tools.py").read_text(
@@ -70,7 +71,7 @@ class ModelImportToolsTests(unittest.TestCase):
     def test_relative_model_paths_use_editor_adapter_fallback(self) -> None:
         fake_settings = types.SimpleNamespace(active_project_path="")
         fake_module = types.SimpleNamespace(settings_manager=fake_settings)
-        with mock.patch.dict("sys.modules", {"config.settings": fake_module}), mock.patch(
+        with mock.patch.dict("sys.modules", {"config.project_state": fake_module}), mock.patch(
             "api.editor_api.get_active_project_path",
             return_value="D:/Projects/Legacy",
         ):
@@ -396,75 +397,33 @@ class ModelImportToolsTests(unittest.TestCase):
 
         actor_data = {"position": [1.0, 2.0, 3.0]}
         with mock.patch.object(
-            editor_api, "get_scene_tools_adapter", return_value=FakeSceneTools()
+            editor_api.CoronaEditorApi.scene_tools,
+            "create_actor",
+            side_effect=FakeSceneTools.create_actor,
         ):
             result = _create_native_editor_actor(
                 scene_name="Scene/test.scene",
                 source_path="models/chest.glb",
                 actor_type="model",
                 actor_data=actor_data,
-                legacy_engine=LegacyEngine,
             )
 
         self.assertEqual(result["actor"]["actor_guid"], "manifest-guid")
         self.assertEqual(len(manifest_calls), 1)
         self.assertIs(manifest_calls[0][3], actor_data)
 
-    def test_create_native_editor_actor_falls_back_when_manifest_method_is_missing(self) -> None:
-        legacy_calls = []
-
-        class LegacyEngine:
-            @staticmethod
-            def create_editor_actor(scene_name, source_path, actor_type, actor_data_json):
-                legacy_calls.append((scene_name, source_path, actor_type, actor_data_json))
-                return {"status": "success", "actor": {"actor_guid": "old-build-guid"}}
-
-        legacy_adapter = types.SimpleNamespace(
-            create_actor=lambda scene, source, kind, data: LegacyEngine.create_editor_actor(
-                scene, source, kind, json.dumps(data, ensure_ascii=False)
-            )
-        )
+    def test_create_native_editor_actor_does_not_fallback_to_legacy_engine(self) -> None:
         with mock.patch.object(
-            editor_api, "get_scene_tools_adapter", return_value=legacy_adapter
-        ):
-            result = _create_native_editor_actor(
-                scene_name="Scene/test.scene",
-                source_path="models/chest.glb",
-                actor_type="model",
-                actor_data={"position": [0.0, 0.0, 0.0]},
-                legacy_engine=LegacyEngine,
-            )
-
-        self.assertEqual(result["actor"]["actor_guid"], "old-build-guid")
-        self.assertEqual(len(legacy_calls), 1)
-
-    def test_create_native_editor_actor_falls_back_for_old_engine(self) -> None:
-        legacy_calls = []
-        fake_corona_engine_module = types.ModuleType("CoronaEngine")
-
-        class LegacyEngine:
-            @staticmethod
-            def create_editor_actor(scene_name, source_path, actor_type, actor_data_json):
-                legacy_calls.append(
-                    (scene_name, source_path, actor_type, json.loads(actor_data_json))
-                )
-                return json.dumps(
-                    {"status": "success", "actor": {"actor_guid": "legacy-guid"}}
-                )
-
-        with mock.patch.dict(
-            "sys.modules", {"CoronaEngine": fake_corona_engine_module}
-        ):
-            result = _create_native_editor_actor(
+            editor_api.CoronaEditorApi.scene_tools,
+            "create_actor",
+            side_effect=RuntimeError("native scene tools unavailable"),
+        ), self.assertRaisesRegex(RuntimeError, "native scene tools unavailable"):
+            _create_native_editor_actor(
                 scene_name="Scene/test.scene",
                 source_path="models/chest.glb",
                 actor_type="model",
                 actor_data={"scale": [1.2, 1.2, 1.2]},
-                legacy_engine=LegacyEngine,
             )
-
-        self.assertEqual(result["actor"]["actor_guid"], "legacy-guid")
-        self.assertEqual(legacy_calls[0][3]["scale"], [1.2, 1.2, 1.2])
 
 
 if __name__ == "__main__":

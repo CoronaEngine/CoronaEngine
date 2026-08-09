@@ -15,7 +15,7 @@ import shutil
 from pathlib import Path
 
 # Keep the historical logger name so older host log filters remain effective.
-logger = logging.getLogger("config.settings")
+logger = logging.getLogger("config.project_state")
 
 version = "1.2.0"
 
@@ -99,9 +99,9 @@ class CoronaSettings:
             self._active_project_path = project_path
             self.active_project_config = proj_cfg
             try:
-                from api.editor_api import set_compat_active_project_path
+                from runtime.project_context import set_active_project_path
 
-                set_compat_active_project_path(project_path)
+                set_active_project_path(project_path)
             except Exception:
                 logger.debug(
                     "CoronaEngine active_project_path is not writable; "
@@ -247,9 +247,9 @@ class CoronaSettings:
             proj_cfg.read(ini_path, encoding="utf-8")
             self._active_project_path = project_path
             try:
-                from api.editor_api import set_compat_active_project_path
+                from runtime.project_context import set_active_project_path
 
-                set_compat_active_project_path(project_path)
+                set_active_project_path(project_path)
             except Exception:
                 logger.debug(
                     "CoronaEngine active_project_path is not writable; "

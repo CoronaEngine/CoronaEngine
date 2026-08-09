@@ -22,10 +22,10 @@ MANIFEST = (
 ).resolve()
 EDITOR_API = REPO_ROOT / "api" / "editor_api.py"
 MAIN_VIEW = (
-    REPO_ROOT / "plugins" / "MainView" / "compat" / "legacy_main_view.py"
+    REPO_ROOT / "plugins" / "MainView" / "main.py"
 )
 FRONTEND_API = REPO_ROOT / "Frontend" / "src" / "api" / "editorApi.js"
-FRONTEND_COMPAT = REPO_ROOT / "Frontend" / "src" / "compat" / "sceneService.js"
+FRONTEND_SERVICE = REPO_ROOT / "Frontend" / "src" / "services" / "sceneService.js"
 
 
 def test_main_scene_lifecycle_is_a_native_aggregate_contract():
@@ -65,7 +65,8 @@ def test_editor_api_exposes_main_scene_lifecycle():
 
 def test_vue_scene_creation_uses_the_main_lifecycle_adapter():
     api_source = FRONTEND_API.read_text(encoding="utf-8")
-    compat_source = FRONTEND_COMPAT.read_text(encoding="utf-8")
+    service_source = FRONTEND_SERVICE.read_text(encoding="utf-8")
     assert "createScene: (sceneName) =>" in api_source
     assert "call_manifest_editor_api('main.createScene'" in api_source
-    assert "editorApi.main.createScene(sceneName)" in compat_source
+    assert "editorApi.main.createScene(sceneName)" in service_source
+    assert not (REPO_ROOT / "Frontend" / "src" / "compat" / "sceneService.js").exists()

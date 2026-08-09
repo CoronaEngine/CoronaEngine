@@ -5,7 +5,8 @@ import logging
 import os
 from typing import Optional
 
-from api.editor_api import CoronaEditorApi, emit_compat_editor_event
+from api.editor_api import CoronaEditorApi
+from runtime.editor_host import emit_editor_event
 from runtime.plugin_base import PluginBase
 from config.paths_config import get_default_paths
 
@@ -88,7 +89,7 @@ class MainView(PluginBase):
         if not scene_route:
             logger.warning("Native scene switch returned no scene route")
             return False
-        emit_compat_editor_event("actor-change", ["scene", scene_route, ""])
+        emit_editor_event("actor-change", ["scene", scene_route, ""])
         return True
 
     @staticmethod

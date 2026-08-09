@@ -10,26 +10,8 @@ def test_frontend_compatibility_directory_has_been_removed_after_migration():
     assert not list(COMPAT_ROOT.glob("*"))
 
 
-def test_frontend_bridge_only_reexports_canonical_api_and_service_owners():
-    bridge = (SRC_ROOT / "utils" / "bridge.js").read_text(encoding="utf-8")
-
-    assert "../api/editorApi.js" in bridge
-    for service in (
-        "appService",
-        "sceneService",
-        "projectService",
-        "scriptingService",
-        "fileService",
-        "projectSettingsService",
-        "logService",
-        "lanChatService",
-        "networkService",
-        "aiService",
-        "projectLauncherService",
-        "resourceService",
-    ):
-        assert f"../services/{service}.js" in bridge
-    assert "cefQuery" not in bridge
+def test_removed_frontend_bridge_is_not_supported():
+    assert not (SRC_ROOT / "utils" / "bridge.js").exists()
 
 
 def test_frontend_raw_cef_compatibility_is_isolated_to_compat_directory():

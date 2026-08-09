@@ -71,9 +71,9 @@ class NetworkSyncPolicyTests(unittest.TestCase):
 
         self.assertEqual([item["version"] for item in emitted], [1])
 
-    def test_sync_pause_notification_uses_compatibility_adapter(self) -> None:
+    def test_sync_pause_notification_uses_runtime_event_helper(self) -> None:
         with mock.patch(
-            "CoronaCore.core.editor_api.emit_compat_editor_event"
+            "runtime.editor_host.emit_editor_event"
         ) as emit:
             network_sync_policy.set_engine_sync_paused(True)
             network_sync_policy.set_engine_sync_paused(False)

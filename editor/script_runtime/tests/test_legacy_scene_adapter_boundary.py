@@ -23,3 +23,9 @@ def test_script_runtime_legacy_scene_adapter_is_removed():
 def test_historical_runtime_scene_shims_are_removed():
     assert not (EDITOR_ROOT / "runtime" / "legacy_script_scene_adapter.py").exists()
     assert not (EDITOR_ROOT / "script_runtime" / "legacy_scene_datas_adapter.py").exists()
+
+
+def test_script_runtime_compatibility_package_is_removed_after_adapter_migration():
+    compatibility = EDITOR_ROOT / "script_runtime" / "compat"
+
+    assert not compatibility.exists()

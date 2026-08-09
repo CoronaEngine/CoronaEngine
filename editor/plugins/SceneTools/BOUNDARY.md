@@ -3,8 +3,7 @@
 `plugins/SceneTools` 负责 native 聚合接口和 Vision 文档值编排；Vision 导入通过 native scene snapshot
 与 aggregate mutation 完成，不再持有旧 Python Scene facade。
 当前 Vue、C++ 主流程、AITool 与 Script Runtime 直接使用 `scene.*`、`sceneTools.*`、
-`viewport.*` manifest；`main.py` 是旧宿主 Python service 的 active owner，只能由旧宿主
-显式注册；Vision fallback adapters 仍集中在 `compat/`。
+`viewport.*` manifest；`main.py` 是 Python service adapter，只负责参数转换和编排。
 C++ Engine/Editor Host 持有场景事实、revision、持久化和事件语义。
 
 ## Owner 映射
@@ -26,8 +25,7 @@ C++ Engine/Editor Host 持有场景事实、revision、持久化和事件语义�
 ## 约束
 
 - 新业务必须使用 `scene.*`、`sceneTools.*`、`viewport.*` 等 manifest 聚合接口；
-- 正常 runtime 启动不得注册 `SceneTools` Python facade；只有登记的旧宿主可以调用
-  `register_legacy_python_script_services()` 显式启用它；
+- 正常 runtime 启动按 registry 清单注册服务；SceneTools 不得绕过 manifest 取得底层对象；
 - 不得直接导入 `CoronaCore`、`scene_manager` 或底层 `Actor`/`Camera`/`Scene` 作为公共 API；
 - Vision 导入不得读取 Python Scene；所有 Scene/Actor 状态必须通过 native snapshot、aggregate
   mutation 和 `main.scene_save` 访问；`runtime/legacy_vision_*.py` 不得新增实现；
@@ -41,13 +39,12 @@ C++ Engine/Editor Host 持有场景事实、revision、持久化和事件语义�
 - `vision_bindings.py` 只负责值对象匹配和摘要统计，Actor 查找、删除和 native binding 更新必须留在 handler/adapter；
 - 大型 Vision 逻辑拆分必须保持坐标系转换、proxy identity、绑定和错误语义不变。
 
-## 待处理项和删除条件
+## 迁移状态
 
 `legacy_vision_import_helper.py` 和旧兼容导入实现已从仓库删除。它们此前没有仓内生产
 调用；当前受支持的 Vision 导入由 canonical `vision_import.py` 和 native manifest 负责。
 如发现外部宿主依赖旧入口，使用删除提交的 revert 恢复兼容层后再进行有契约的迁移。
 
-删除旧 Vision 兼容导入实现前必须满足：
 
 - Vision native handler 覆盖所有受支持的导入、绑定、相机和场景切换路径；
 - SceneTools 不再需要旧 Python Scene 的代理/持久化状态；

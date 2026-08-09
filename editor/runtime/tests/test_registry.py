@@ -38,6 +38,15 @@ class PythonScriptServiceRegistryTests(unittest.TestCase):
             "ProjectArchive",
         )
 
+    def test_active_service_list_is_explicit(self):
+        registry = self._load_registry()
+
+        self.assertEqual(
+            registry.ACTIVE_PYTHON_SCRIPT_SERVICES,
+            ("ProjectArchive", "AITool", "ScratchTool"),
+        )
+        self.assertFalse(hasattr(registry, "LEGACY_PYTHON_SCRIPT_SERVICES"))
+
     def test_project_launcher_registry_uses_canonical_plugin_owner(self):
         registry = self._load_registry()
 
@@ -199,6 +208,7 @@ class PythonScriptServiceRegistryTests(unittest.TestCase):
             "SceneTools": ("plugins.SceneTools.main", "SceneTools"),
             "AITool": ("services.ai", "AITool"),
         }
+        registry.ACTIVE_PYTHON_SCRIPT_SERVICES = ("AITool",)
         registered_pages = []
 
         registry.CoronaEditor.register_page = (
@@ -218,29 +228,6 @@ class PythonScriptServiceRegistryTests(unittest.TestCase):
         self.assertEqual(registered, ["AITool"])
         self.assertEqual(registered_pages, ["AITool"])
         import_service.assert_called_once_with("services.ai")
-
-    def test_legacy_registration_keeps_scene_tools_available_for_old_hosts(self):
-        registry = self._load_registry()
-        registry.PYTHON_SCRIPT_SERVICES = {
-            "SceneTools": ("plugins.SceneTools.main", "SceneTools"),
-        }
-        scene_tools = object()
-        registered_pages = []
-        registry.CoronaEditor.register_page = (
-            lambda service_name, service: registered_pages.append(
-                (service_name, service._target),
-            )
-        )
-
-        with patch.object(
-            registry,
-            "import_module",
-            return_value=SimpleNamespace(SceneTools=scene_tools),
-        ):
-            registered = registry.register_legacy_python_script_services()
-
-        self.assertEqual(registered, ["SceneTools"])
-        self.assertEqual(registered_pages, [("SceneTools", scene_tools)])
 
     def test_aitool_uses_post_publish_initialization_without_import_time_worker_start(self):
         source_path = Path(__file__).resolve().parents[2] / "plugins" / "AITool" / "main.py"

@@ -2,8 +2,7 @@
 
 `src/services` 是前端 active domain facade 和 UI 编排目录，不是 C++ manifest/schema owner，
 也不直接持有 Scene/Actor、AI runtime、API key 或 raw CEF transport。公共契约唯一来源仍是
-`src/api/editorApi.js`。已迁移的 service 由本目录直接承载；历史外部宿主 alias 只允许通过
-`utils/bridge.js` 转发，不在 Frontend 建立第二个实现目录。
+`src/api/editorApi.js`。已迁移的 service 由本目录直接承载，外部旧宿主 alias 不再受支持。
 
 ## 分类
 
@@ -40,7 +39,7 @@ Agent runtime、Scene/Actor 权威状态或公共引擎 API。
 ## 依赖约束
 
 - service 只能通过 `src/api/editorApi.js` 或注入的 UI/store 能力访问跨层功能；
-- service 不得导入 `src/utils/bridge.js`，不得使用 `window.cefQuery`；
+- service 不得导入已删除的 `src/utils/bridge.js`，不得使用 `window.cefQuery`；
 - facade 不得复制 manifest 参数校验、错误码、revision、事件协议或状态机；
 - 节点图和 Cabbage service 的本地事件/存储只服务 UI 协调，不得变成第二套引擎事实；
 - 新服务必须先登记职责、canonical API owner、生命周期和删除/迁移条件，再加入本目录。

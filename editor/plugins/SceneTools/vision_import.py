@@ -9,7 +9,8 @@ import json
 import logging
 import os
 
-from api.editor_api import CoronaEditorApi, get_active_project_path
+from api.editor_api import CoronaEditorApi
+from runtime.project_context import get_active_project_path
 from plugins.SceneTools.vision_document import (
     extract_vision_camera_pose as _extract_vision_camera_pose,
     infer_vision_render_mode as _infer_vision_render_mode,

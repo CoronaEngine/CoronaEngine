@@ -19,7 +19,7 @@ def test_main_view_does_not_import_editor_runtime_container_for_compat_event():
     source = MAIN_VIEW_SOURCE.read_text(encoding="utf-8")
 
     assert "from CoronaCore.core.corona_editor import CoronaEditor" not in source
-    assert "emit_compat_editor_event" in source
+    assert "from runtime.editor_host import emit_editor_event" in source
 
 
 def test_main_view_scene_save_uses_native_aggregate_contract():

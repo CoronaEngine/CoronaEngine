@@ -309,6 +309,39 @@ def test_native_actor_proxy_uses_script_runtime_scene_tools_for_actor_operations
     ]
 
 
+def test_native_restore_operation_uses_script_runtime_aggregates(monkeypatch):
+    import api.editor_api
+    from script_runtime.engine import corona_engine
+
+    calls = []
+
+    class SceneToolsApi:
+        def set_actor_state(self, *args):
+            calls.append(("state", args))
+            return {"status": "success"}
+
+        def set_actor_physics(self, *args):
+            calls.append(("physics", args))
+            return {"status": "success"}
+
+    monkeypatch.setattr(
+        api.editor_api,
+        "get_script_runtime_editor_api",
+        lambda: type("Api", (), {"scene_tools": SceneToolsApi()})(),
+    )
+
+    assert corona_engine._native_restore_operation(
+        "Scene/level.scene", "Hero", "SetVisible", [False]
+    )
+    assert corona_engine._native_restore_operation(
+        "Scene/level.scene", "Hero", "SetMass", [3.0]
+    )
+    assert calls == [
+        ("state", ("Scene/level.scene", "Hero", {"visible": False})),
+        ("physics", ("Scene/level.scene", "Hero", {"mass": 3.0})),
+    ]
+
+
 def test_blockly_preview_snapshot_prefers_native_scene_values(monkeypatch):
     import api.editor_api
     from script_runtime.blockly import main as blockly_main

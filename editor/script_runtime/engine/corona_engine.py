@@ -5,7 +5,7 @@ CoronaEngine Scratch 兼容层。
 Blockly 生成的代码通过 Script Runtime adapter 导入本模块：
     from script_runtime.engine import corona_engine as CoronaEngine
 
-旧生成脚本仍可通过 CoronaCore.utils.corona_engine_scratch 兼容转发。
+生成脚本统一通过 `script_runtime.engine` 加载。
 
 运行时状态不再是模块级单例，而是绑定到当前脚本线程的
 ScratchRuntimeContext。这样项目预览可以同时运行项目全局脚本和多个
@@ -523,17 +523,6 @@ def _native_scene_snapshot(scene_name):
                 return payload, errors
     except Exception as exc:
         errors.append(str(exc))
-    try:
-        from api.editor_api import CoronaEditorApi
-        payload = _native_payload(CoronaEditorApi.scene_datas.get_scene(scene_name or ""))
-        if payload is not None:
-            if "scene" not in payload:
-                payload["scene"] = payload.get("scene_id") or payload.get("id") or scene_name
-            if "scene_name" not in payload:
-                payload["scene_name"] = payload.get("name") or ""
-            return payload, errors
-    except Exception as exc:
-        errors.append(str(exc))
     return None, errors
 
 
@@ -605,32 +594,19 @@ class _NativeEditorActorProxy:
         values = [float(value[0]), float(value[1]), float(value[2])]
         self._pace_runtime_transform()
         transform = {key: values, "persist": False}
-        try:
-            from api.editor_api import get_script_runtime_editor_api
-
-            scene_api = get_script_runtime_editor_api().scene
-            setter = getattr(scene_api, "set_actor_transform", None) if scene_api is not None else None
-            if callable(setter):
-                payload = _native_payload(setter(self.scene_route, self.name, transform))
-                if payload is not None:
-                    setattr(self, "_" + key, values)
-                    actor_data = payload.get("actor") if isinstance(payload.get("actor"), dict) else None
-                    if actor_data:
-                        self._data.update(actor_data)
-                        self._aabb = actor_data.get("world_aabb") or actor_data.get("aabb") or self._aabb
-                    return True
-        except Exception as exc:
-            _logger.debug("[ScratchWrapper] aggregate actor transform failed: %s", exc)
-
-        # Explicit legacy fallback remains behind the scene adapter.
         from api.editor_api import get_script_runtime_editor_api
+
         scene_api = get_script_runtime_editor_api().scene
         setter = getattr(scene_api, "set_actor_transform", None) if scene_api is not None else None
         if not callable(setter):
-            raise RuntimeError("native set_editor_actor_transform is unavailable")
+            raise RuntimeError("native set_actor_transform is unavailable")
         # Runtime scripts update the native actor in memory without persisting every frame.
         # Snapshot restore keeps the default persist=True behavior.
-        payload = _native_payload(setter(self.scene_route, self.name, transform))
+        try:
+            payload = _native_payload(setter(self.scene_route, self.name, transform))
+        except Exception as exc:
+            _logger.debug("[ScratchWrapper] aggregate actor transform failed: %s", exc)
+            raise RuntimeError(f"native transform update failed: {self.scene_route}/{self.name}") from exc
         if payload is None:
             raise RuntimeError(f"native transform update failed: {self.scene_route}/{self.name}")
         setattr(self, "_" + key, values)
@@ -966,12 +942,34 @@ def _snapshot_actor_key(data):
 
 def _native_restore_operation(scene_route, actor_name, operation, values):
     assert_engine_operation_allowed()
-    from api.editor_api import CoronaEditorApi
     action = f"Restore actor {actor_name} operation {operation}"
+    state_operations = {
+        "SetVisible": {"visible": bool(values[0])},
+    }
+    physics_operations = {
+        "SetMass": {"mass": float(values[0])},
+        "SetRestitution": {"restitution": float(values[0])},
+        "SetDamping": {"damping": float(values[0])},
+        "SetPhysicsEnabled": {"physics_enabled": bool(values[0])},
+        "SetCollision": {"collision_type": str(values[0])},
+        "SetLinearLock": {"linear_lock": [bool(item) for item in values[:3]]},
+        "SetAngularLock": {"angular_lock": [bool(item) for item in values[:3]]},
+    }
+    from api.editor_api import get_script_runtime_editor_api
+
+    scene_tools = get_script_runtime_editor_api().scene_tools
+    if operation in state_operations:
+        result = scene_tools.set_actor_state(
+            scene_route, actor_name, state_operations[operation]
+        )
+    elif operation in physics_operations:
+        result = scene_tools.set_actor_physics(
+            scene_route, actor_name, physics_operations[operation]
+        )
+    else:
+        raise RuntimeError(f"unsupported native actor operation: {operation}")
     return _native_payload_or_raise(
-        CoronaEditorApi.scene_datas.actor_operation(
-            scene_route, actor_name, operation, list(values)
-        ),
+        result,
         action,
     )
 
@@ -1324,15 +1322,12 @@ def restore_runtime_scene_state(snapshot):
         )
         _clear_scene_runtime_state(scene_route)
         try:
-            from api.editor_api import (
-                emit_compat_editor_event,
-                get_compat_editor_selection,
-            )
+            from runtime.editor_host import emit_editor_event, get_editor_selection
 
-            emit_compat_editor_event("scene-tree-changed", [scene_route])
-            selected_scene, selected_actor = get_compat_editor_selection()
+            emit_editor_event("scene-tree-changed", [scene_route])
+            selected_scene, selected_actor = get_editor_selection()
             if selected_scene == scene_route and selected_actor:
-                emit_compat_editor_event(
+                emit_editor_event(
                     "actor-change", ["actor", scene_route, selected_actor]
                 )
         except Exception:

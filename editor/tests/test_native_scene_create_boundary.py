@@ -13,7 +13,7 @@ HANDLER = (
 ).resolve()
 EDITOR_API = REPO_ROOT / "api" / "editor_api.py"
 MAIN_VIEW = (
-    REPO_ROOT / "plugins" / "MainView" / "compat" / "legacy_main_view.py"
+    REPO_ROOT / "plugins" / "MainView" / "main.py"
 )
 
 

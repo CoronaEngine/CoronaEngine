@@ -26,21 +26,14 @@ class FrontendTestOwnershipTests(unittest.TestCase):
 
     def test_manifest_contract_has_a_dedicated_api_owner(self):
         api_root = self.source_root / "api"
-        bridge = self.source_root / "utils" / "bridge.js"
-
         self.assertTrue((api_root / "editorApi.js").is_file())
-        self.assertIn(
-            "export * from '../api/editorApi.js'",
-            bridge.read_text(encoding="utf-8"),
-        )
+        self.assertFalse((self.source_root / "utils" / "bridge.js").exists())
 
     def test_production_frontend_does_not_import_compatibility_bridge(self):
-        bridge_path = self.source_root / "utils" / "bridge.js"
         offenders = []
         for path in self.source_root.rglob("*"):
             if (
                 not path.is_file()
-                or path == bridge_path
                 or path.suffix not in {".js", ".mjs", ".ts", ".vue"}
             ):
                 continue

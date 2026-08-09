@@ -15,7 +15,6 @@ ACTIVE_UTILS = (
     "viewportPick.js",
     "viewportUiMode.js",
 )
-COMPATIBILITY_UTILS = ("bridge.js",)
 
 
 def test_utils_have_a_local_boundary_inventory():
@@ -25,14 +24,15 @@ def test_utils_have_a_local_boundary_inventory():
     source = boundary.read_text(encoding="utf-8")
     for marker in (
         "低延迟输入 adapter",
-        "历史兼容转发",
+        "低延迟输入 adapter",
         "src/api/editorApi.js",
         "src/services",
         "删除条件",
     ):
         assert marker in source
-    for file_name in ACTIVE_UTILS + COMPATIBILITY_UTILS:
+    for file_name in ACTIVE_UTILS:
         assert file_name in source
+    assert not (UTILS_ROOT / "bridge.js").exists()
 
 
 def test_active_utils_do_not_depend_on_compatibility_bridge_or_raw_cef():
@@ -43,12 +43,9 @@ def test_active_utils_do_not_depend_on_compatibility_bridge_or_raw_cef():
         assert "utils/bridge" not in source, file_name
 
 
-def test_utils_compatibility_wrappers_have_canonical_owners():
-    bridge = (UTILS_ROOT / "bridge.js").read_text(encoding="utf-8")
-
-    assert "../api/editorApi.js" in bridge
-    assert "../services/" in bridge
+def test_removed_compatibility_wrappers_do_not_reappear():
     assert not (UTILS_ROOT / "legacyEditorAdapter.js").exists()
+    assert not (UTILS_ROOT / "bridge.js").exists()
 
 
 def test_utils_files_are_not_hidden_test_or_build_owners():

@@ -38,9 +38,7 @@ class CabbageEditorPathsResolver:
     def get_default_paths(self) -> PathsConfig:
         from config.paths_config import get_default_paths
         editor_paths = get_default_paths()
-        # 只注入 CAI 所需的通用项目路径。编辑器的 backend_root、
-        # frontend_dist 和历史 script_dir 属于宿主/兼容布局，不能泄漏到
-        # AITool 的路径配置中。
+        # 只注入 CAI 所需的通用项目路径，宿主内部路径不泄漏到 AITool 配置中。
         return PathsConfig(
             repo_root=editor_paths.repo_root,
             autosave_dir=editor_paths.autosave_dir,

@@ -4,13 +4,10 @@ from pathlib import Path
 EDITOR_ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_scene_datas_document_records_the_in_repo_object_panel_migration():
-    source = (
-        EDITOR_ROOT / "plugins" / "SceneDatas" / "COMPATIBILITY.md"
-    ).read_text(encoding="utf-8")
-
-    assert "仓内 Object 面板已迁移到 manifest 聚合接口" in source
-    assert "SceneDatas 注册壳仍仅用于外部兼容" in source
+def test_scene_datas_compatibility_plugin_is_removed_after_object_panel_migration():
+    plugin_root = EDITOR_ROOT / "plugins" / "SceneDatas"
+    assert not (plugin_root / "main.py").exists()
+    assert not (plugin_root / "COMPATIBILITY.md").exists()
 
 
 def test_object_panel_does_not_call_legacy_scene_datas_namespace():
@@ -39,3 +36,37 @@ def test_object_panel_uses_a_vue_identity_separate_from_legacy_scene_datas_servi
     assert "Object: ObjectPanel" in registry
     assert "getPluginComponent('Object')" in router
     assert "id: 'SceneDatas'" not in manifest
+
+
+def test_scene_datas_cpp_compatibility_module_is_removed_after_native_facade_migration():
+    api_source = (
+        EDITOR_ROOT
+        / ".."
+        / "src"
+        / "systems"
+        / "ui"
+        / "editor_api"
+        / "cef_editor_api.cpp"
+    ).read_text(encoding="utf-8")
+    handler_source = (
+        EDITOR_ROOT
+        / ".."
+        / "src"
+        / "systems"
+        / "ui"
+        / "cef"
+        / "cef_editor_native_api_handlers.cpp"
+    ).read_text(encoding="utf-8")
+    registry_source = (
+        EDITOR_ROOT
+        / ".."
+        / "src"
+        / "systems"
+        / "ui"
+        / "cef"
+        / "cef_editor_native_api_registry.cpp"
+    ).read_text(encoding="utf-8")
+
+    assert "EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneDatas" not in api_source
+    assert 'registry.register_module("SceneDatas"' not in handler_source
+    assert "register_scene_datas_api_handlers" not in registry_source

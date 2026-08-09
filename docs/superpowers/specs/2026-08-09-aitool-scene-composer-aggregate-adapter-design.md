@@ -16,7 +16,7 @@
 
 ## 设计
 
-SceneComposer 使用 `native_actor_views_with_legacy_fallback` 获取 Actor 视图，并按
+SceneComposer 使用 `native_actor_views` 获取 Actor 视图，并按
 名称建立本地查找表。native 视图提供位置、旋转、缩放和值对象 Mechanics 更新；当
 宿主不具备聚合 scene snapshot 时，该函数内部才回退到
 `plugins.AITool.compat.legacy_aitool_scene_adapter`；旧的

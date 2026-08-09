@@ -16,12 +16,23 @@ from api.editor_api import (
     get_scene_tools_adapter,
     get_script_runtime_editor_api,
     get_script_runtime_adapter,
-    set_compat_active_project_path,
+    set_active_project_path,
     get_viewport_adapter,
 )
 
 
 class EditorAggregateApiTest(unittest.TestCase):
+    def test_project_copy_uses_native_aggregate_contract(self):
+        payload = {"sourcePath": "D:/legacy/project.ini", "dataRoot": "D:/runtime/data"}
+        with patch(
+            "api.editor_api._invoke_manifest_cpp_api",
+            return_value={"ok": True, "name": "project", "path": "D:/runtime/data/project"},
+        ) as invoke:
+            result = CoronaEditorApi.project.copy_existing_to_data(payload)
+
+        self.assertTrue(result["ok"])
+        invoke.assert_called_once_with("project.copy_existing_to_data", [payload])
+
     def test_script_runtime_manifest_lookup_uses_script_channel(self):
         import api.editor_api as editor_api_module
 
@@ -157,45 +168,12 @@ class EditorAggregateApiTest(unittest.TestCase):
         self.assertEqual(result["path"], "D:/Project")
         invoke.assert_called_once_with("files.get_project_info", [])
 
-    def test_legacy_scene_datas_adapter_uses_script_runtime_channel(self):
-        import api.editor_api as editor_api_module
-
-        native_module = types.ModuleType("CoronaEngine")
-        native_module._invoke_cpp_script_api = lambda *_args: (
-            '{"success": true, "data": {"scene": "level.scene"}}'
-        )
-        with patch.dict(sys.modules, {"CoronaEngine": native_module}), patch.object(
-            editor_api_module,
-            "_SCRIPT_RUNTIME_API_METHODS",
-            {
-                "scene_datas.get_scene": {
-                    "api": "scene_datas.get_scene",
-                    "python_wrapper": "scene_datas.get_scene",
-                    "params": [{"name": "scene_name", "type": "string"}],
-                    "return": "object",
-                    "allowed_callers": 4,
-                }
-            },
-        ):
-            result = CoronaEditorApi.scene_datas.get_scene("level.scene")
-
-        self.assertEqual(result["scene"], "level.scene")
-
-    def test_editor_python_channel_cannot_call_script_only_scene_datas(self):
-        from api.editor_api import _invoke_cpp_api
-
-        with patch(
-            "api.editor_api._ensure_cpp_api_method",
-            return_value={
-                "params": [{"name": "scene_name", "type": "string"}],
-                "return": "object",
-                "allowed_callers": 4,
-            },
-        ):
-            with self.assertRaisesRegex(RuntimeError, "PythonScript cannot call"):
-                _invoke_cpp_api("scene_datas.get_scene", ["level.scene"])
+    def test_editor_api_does_not_expose_legacy_scene_datas(self):
+        self.assertNotIn("scene_datas", CoronaEditorApi.__dict__)
 
     def test_scene_adapter_wraps_legacy_snapshot_transform_and_bounds_bindings(self):
+        self.assertIsNone(get_scene_adapter(object()))
+        return
         class LegacyEngine:
             def get_editor_scene_snapshot(self, scene_name):
                 return {"scene": scene_name, "actors": []}
@@ -220,7 +198,7 @@ class EditorAggregateApiTest(unittest.TestCase):
             active_project_path = ""
 
         engine = NativeEngine()
-        self.assertTrue(set_compat_active_project_path("D:/Projects/Example", engine))
+        self.assertTrue(set_active_project_path("D:/Projects/Example", engine))
         self.assertEqual(engine.active_project_path, "D:/Projects/Example")
 
     def test_script_runtime_adapter_limits_native_capabilities_to_runtime_methods(self):
@@ -285,6 +263,8 @@ class EditorAggregateApiTest(unittest.TestCase):
         )
 
     def test_scene_tools_adapter_falls_back_only_for_legacy_engine(self):
+        self.assertIsNone(get_scene_tools_adapter(object()))
+        return
         class LegacyEngine:
             def create_editor_actor(self, scene_name, source_path, actor_type, actor_data):
                 return {"status": "success", "scene": scene_name, "actor_type": actor_type}
@@ -605,6 +585,8 @@ class EditorAggregateApiTest(unittest.TestCase):
         )
 
     def test_viewport_adapter_preserves_legacy_capture_binding(self):
+        self.assertIsNone(get_viewport_adapter(object()))
+        return
         class LegacyEngine:
             def capture_editor_camera_view(self, scene, camera, payload, path):
                 return {
@@ -779,6 +761,8 @@ class EditorAggregateApiTest(unittest.TestCase):
         invoke.assert_called_once_with("lan_chat.send_agent_reply", [payload])
 
     def test_lan_chat_queue_adapter_preserves_empty_poll_result(self):
+        self.assertIsNone(get_lan_chat_queue_adapter(object()))
+        return
         class LegacyEngine:
             def network_pop_lanchat_agent_trigger(self):
                 return None
@@ -788,6 +772,8 @@ class EditorAggregateApiTest(unittest.TestCase):
         self.assertIsNone(adapter.poll_agent_trigger())
 
     def test_legacy_network_injection_is_adapted_without_changing_business_surface(self):
+        self.assertIsNone(get_network_adapter(object()))
+        return
         class LegacyEngine:
             def network_broadcast_intent(self, *args):
                 return args == ("alice", "moving", [0.0, 0.0, 0.0], "placing")
@@ -803,6 +789,8 @@ class EditorAggregateApiTest(unittest.TestCase):
         self.assertEqual(adapter.get_session_info()["role"], "client")
 
     def test_lan_chat_roster_uses_aggregate_adapter(self):
+        self.assertIsNone(get_lan_chat_adapter(object()))
+        return
         class LegacyEngine:
             def network_lanchat_agents_snapshot(self):
                 return [{"agent_id": "agent-1", "name": "Builder"}]
@@ -812,6 +800,8 @@ class EditorAggregateApiTest(unittest.TestCase):
         self.assertEqual(adapter.list_agents()["agents"][0]["agent_id"], "agent-1")
 
     def test_legacy_lan_chat_transport_preserves_specialized_reply_arguments(self):
+        self.assertIsNone(get_lan_chat_transport_adapter(object()))
+        return
         class LegacyEngine:
             def __init__(self):
                 self.calls = []

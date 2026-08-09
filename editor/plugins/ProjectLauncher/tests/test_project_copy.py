@@ -2,10 +2,11 @@ import configparser
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from plugins.ProjectLauncher import main as project_launcher
-from runtime import legacy_project_copy as project_copy
-from config.settings import CoronaSettings
+from api.editor_api import CoronaEditorApi
+from config.project_state import CoronaSettings
 from runtime import project_templates as project_utils
 
 
@@ -26,86 +27,19 @@ class ProjectCopyTests(unittest.TestCase):
             self.assertEqual(Path(project_ini), target / "project.ini")
             self.assertTrue((target / "Scene" / "default.scene").is_file())
 
-    def test_copy_existing_to_data_creates_new_runtime_copy(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            temp_root = Path(temp_dir)
-            source_dir = temp_root / "source_save"
-            source_scene_dir = source_dir / "Scene"
-            source_scene_dir.mkdir(parents=True)
-            (source_scene_dir / "default.scene").write_text("[base]\nname = default\n", encoding="utf-8")
-            source_ini = source_dir / "project.ini"
-            source_ini.write_text(
-                "\n".join([
-                    "[Project]",
-                    "name = sample_save",
-                    "mode = 3d",
-                    "entrance_scene = Scene/default.scene",
-                    "scenes = Scene/default.scene",
-                    "active_scene = Scene/default.scene",
-                    "",
-                ]),
-                encoding="utf-8",
-            )
+    def test_copy_existing_to_data_uses_native_project_contract(self):
+        payload = {
+            "sourcePath": "D:/legacy/source/project.ini",
+            "dataRoot": "D:/runtime/data",
+        }
+        with patch(
+            "api.editor_api._invoke_manifest_cpp_api",
+            return_value={"ok": True, "name": "source", "path": "D:/runtime/data/source"},
+        ) as invoke:
+            result = CoronaEditorApi.project.copy_existing_to_data(payload)
 
-            data_root = temp_root / "runtime" / "data"
-            first = project_copy.ProjectCopy.copy_existing_to_data(
-                str(source_ini), data_root=data_root
-            )
-            second = project_copy.ProjectCopy.copy_existing_to_data(
-                str(source_ini), data_root=data_root
-            )
-
-            first_path = Path(first["path"])
-            second_path = Path(second["path"])
-
-            self.assertEqual(first["name"], "sample_save")
-            self.assertEqual(second["name"], "sample_save_1")
-            self.assertTrue((first_path / "project.ini").is_file())
-            self.assertTrue((first_path / "Scene" / "default.scene").is_file())
-            self.assertTrue((second_path / "project.ini").is_file())
-            self.assertEqual(first_path.parent, temp_root / "runtime" / "data")
-            self.assertEqual(second_path.parent, temp_root / "runtime" / "data")
-
-            source_cfg = configparser.ConfigParser()
-            source_cfg.read(source_ini, encoding="utf-8")
-            self.assertEqual(source_cfg.get("Project", "name"), "sample_save")
-
-            copied_cfg = configparser.ConfigParser()
-            copied_cfg.read(second_path / "project.ini", encoding="utf-8")
-            self.assertEqual(copied_cfg.get("Project", "name"), "sample_save_1")
-
-    def test_copy_existing_to_data_reuses_runtime_project(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            temp_root = Path(temp_dir)
-            runtime_data = temp_root / "runtime" / "data"
-            source_dir = runtime_data / "creative_world_5"
-            source_scene_dir = source_dir / "Scene"
-            source_scene_dir.mkdir(parents=True)
-            (source_scene_dir / "default.scene").write_text(
-                "[base]\nname = default\n", encoding="utf-8"
-            )
-            source_ini = source_dir / "project.ini"
-            source_ini.write_text(
-                "\n".join([
-                    "[Project]",
-                    "name = Coin Collector",
-                    "mode = 3d",
-                    "entrance_scene = Scene/default.scene",
-                    "",
-                ]),
-                encoding="utf-8",
-            )
-
-            result = project_copy.ProjectCopy.copy_existing_to_data(
-                str(source_ini), data_root=runtime_data
-            )
-
-            self.assertEqual(result["name"], "creative_world_5")
-            self.assertEqual(Path(result["path"]), source_dir)
-            self.assertEqual(
-                sorted(path.name for path in runtime_data.iterdir()),
-                ["creative_world_5"],
-            )
+        self.assertTrue(result["ok"])
+        invoke.assert_called_once_with("project.copy_existing_to_data", [payload])
 
     def test_project_launcher_python_does_not_import_project_copy_or_vision_import(self):
         source = Path(project_launcher.__file__).read_text(encoding="utf-8")
@@ -156,7 +90,7 @@ class ProjectCopyTests(unittest.TestCase):
             )
             settings = CoronaSettings(str(config_path))
 
-            with self.assertLogs("config.settings", level="ERROR") as captured:
+            with self.assertLogs("config.project_state", level="ERROR") as captured:
                 self.assertIsNone(settings.active_project_path)
                 self.assertIsNone(settings.active_project_path)
 

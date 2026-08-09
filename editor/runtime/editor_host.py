@@ -317,13 +317,6 @@ class CoronaEditor:
                         return {"ok": True}
             except Exception:
                 logger.debug("Native camera-lock disable unavailable", exc_info=True)
-            # Keep the old host fallback for an injected/legacy host without a
-            # native scene contract or without selection context.
-            try:
-                import CoronaEngine
-                CoronaEngine.camera_follow_clear()
-            except Exception:
-                pass
             cls._camera_follow_actor = None
             cls._camera_follow_scene = None
             cls._held_keys.clear()
@@ -545,3 +538,18 @@ class CoronaEditor:
         if not cls._runtime_started:
             cls.start_runtime()
         return cls.update_runtime()
+
+
+def emit_editor_event(event_name, args=None):
+    """Canonical runtime helper for the historical editor-event vocabulary."""
+    return CoronaEditor.emit_editor_event(event_name, args)
+
+
+def set_editor_camera_input_enabled(enabled, *, reason="global"):
+    """Canonical runtime helper for the aggregated camera-input gate."""
+    return CoronaEditor.set_editor_camera_input_enabled(enabled, reason=reason)
+
+
+def get_editor_selection():
+    """Return the current host selection as a value tuple."""
+    return CoronaEditor._selected_scene, CoronaEditor._selected_actor

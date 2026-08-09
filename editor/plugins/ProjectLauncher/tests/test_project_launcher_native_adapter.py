@@ -35,7 +35,40 @@ def test_python_project_adapter_exposes_native_project_operations():
         "create_project",
         "create_world_project",
         "create_multiplayer_project",
+        "copy_existing_to_data",
         "open_project",
         "set_project_mode",
     ):
         assert f'"project.{method}"' in source
+
+
+def test_native_project_copy_owns_legacy_copy_semantics():
+    manifest = (
+        REPO_ROOT.parent
+        / "src"
+        / "systems"
+        / "ui"
+        / "editor_api"
+        / "cef_editor_api.cpp"
+    ).read_text(encoding="utf-8")
+    handlers = (
+        REPO_ROOT.parent
+        / "src"
+        / "systems"
+        / "ui"
+        / "cef"
+        / "cef_editor_native_api_handlers.cpp"
+    ).read_text(encoding="utf-8")
+
+    assert '"project.copyExistingToData"' in manifest
+    assert '"project.copy_existing_to_data"' in manifest
+    for marker in (
+        "copy_existing_project_to_data_native",
+        'payload.value(\"sourcePath\"',
+        'payload.value(\"dataRoot\"',
+        "std::filesystem::copy_options::recursive",
+        "normalize_project_runtime_paths_native(target)",
+        "project_values[\"name\"]",
+        "std::filesystem::remove_all(target, ec)",
+    ):
+        assert marker in handlers

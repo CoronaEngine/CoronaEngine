@@ -35,8 +35,14 @@ class _FakeNativeSyncEngine:
     def __init__(self, events: list[dict]) -> None:
         self.events = list(events)
 
-    def network_pop_lanchat_sync_event(self):  # noqa: ANN201
-        return self.events.pop(0) if self.events else None
+
+
+class _FakeManifestQueue:
+    def __init__(self, engine: _FakeNativeSyncEngine) -> None:
+        self.engine = engine
+
+    def poll_sync_event(self):  # noqa: ANN201
+        return self.engine.events.pop(0) if self.engine.events else None
 
 
 class LanChatNativeSyncBridgeTests(unittest.TestCase):
@@ -64,11 +70,11 @@ class LanChatNativeSyncBridgeTests(unittest.TestCase):
             },
         ])
         worker = LANChatAgentWorker(
-            corona_engine=engine,
+            corona_engine=None,
             agent_runtime=runtime,
             agent_runtime_flags=AgentRuntimeFlags.from_env({}),
         )
-
+        worker._lan_chat_queue = _FakeManifestQueue(engine)
         self.assertTrue(worker._process_sync_events(max_events=8))
         self.assertEqual(len(runtime.calls), 1)
         call = runtime.calls[0]
@@ -86,7 +92,7 @@ class LanChatNativeSyncBridgeTests(unittest.TestCase):
     def test_native_sources_expose_and_produce_sync_queue_events(self) -> None:
         header = (REPO_ROOT / "include/corona/systems/network/network_system.h").read_text(encoding="utf-8")
         network = (REPO_ROOT / "src/systems/network/network_system.cpp").read_text(encoding="utf-8")
-        bindings = (REPO_ROOT / "src/systems/script/python/editor_network_bindings.cpp").read_text(encoding="utf-8")
+        handlers = (REPO_ROOT / "src/systems/ui/editor_api/cef_editor_api.cpp").read_text(encoding="utf-8")
 
         self.assertIn("struct LanChatSyncEvent", header)
         self.assertIn("lanchat_pop_sync_event", header)
@@ -109,7 +115,7 @@ class LanChatNativeSyncBridgeTests(unittest.TestCase):
         self.assertIn("kHardMaxPendingLanChatSyncEvents", network)
         self.assertIn("actor_id_from_payload", network)
         self.assertNotIn("kMaxPendingLanChatSyncEvents = 256", network)
-        self.assertIn('m.def("network_pop_lanchat_sync_event"', bindings)
+        self.assertIn('"lan_chat.poll_sync_event"', handlers)
 
     def test_peer_snapshot_ack_fields_survive_safe_sync_storage(self) -> None:
         stored = SyncEventValidator.safe_storage_event({
@@ -152,9 +158,10 @@ class LanChatNativeSyncBridgeTests(unittest.TestCase):
             },
         ])
         worker = LANChatAgentWorker(
-            corona_engine=engine,
+            corona_engine=None,
             agent_runtime_flags=AgentRuntimeFlags.from_env({}),
         )
+        worker._lan_chat_queue = _FakeManifestQueue(engine)
         self.assertTrue(worker._process_sync_events(max_events=1))
         received = worker._agent_runtime.query_state("room-lifecycle")["room"]["actors"]["actor-remote"]
         self.assertEqual(received["sync_lifecycle_status"], "received")

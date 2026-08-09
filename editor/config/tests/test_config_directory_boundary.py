@@ -14,13 +14,12 @@ def test_config_has_a_local_boundary_inventory():
         "路径 owner",
         "活动项目状态",
         "应用运行时配置",
-        "utils.settings",
+        "project_state.py",
         "删除条件",
     ):
         assert marker in source
     for file_name in (
         "paths_config.py",
-        "settings.py",
         "app_config.py",
         "runtime_config.py",
     ):
@@ -29,7 +28,6 @@ def test_config_has_a_local_boundary_inventory():
 
 def test_config_modules_have_distinct_canonical_owners():
     paths = (CONFIG_ROOT / "paths_config.py").read_text(encoding="utf-8")
-    settings = (CONFIG_ROOT / "settings.py").read_text(encoding="utf-8")
     app = (CONFIG_ROOT / "app_config.py").read_text(encoding="utf-8")
     runtime = (CONFIG_ROOT / "runtime_config.py").read_text(encoding="utf-8")
 
@@ -43,43 +41,30 @@ def test_config_modules_have_distinct_canonical_owners():
     assert "class RuntimeConfig" in runtime
 
 
-def test_paths_config_owns_legacy_project_data_directory(tmp_path):
-    from config.paths_config import get_legacy_project_data_dir
-
-    data_dir = get_legacy_project_data_dir(tmp_path / "editor")
-
-    assert data_dir == tmp_path / "editor" / "data"
-    assert data_dir.is_dir()
-
-
 def test_paths_config_owns_repository_asset_directory():
     from config.paths_config import get_repository_assets_dir
 
     assert get_repository_assets_dir() == EDITOR_ROOT.parent / "assets"
 
 
-def test_project_state_has_a_canonical_owner_and_settings_is_compatibility_facade():
+def test_project_state_is_the_canonical_owner():
     project_state = (CONFIG_ROOT / "project_state.py").read_text(encoding="utf-8")
-    settings = (CONFIG_ROOT / "settings.py").read_text(encoding="utf-8")
 
     assert "class CoronaSettings" in project_state
     assert "settings_manager = CoronaSettings()" in project_state
-    assert "class CoronaSettings" not in settings
-    assert "from .project_state import" in settings
+    assert not (CONFIG_ROOT / "settings.py").is_file()
 
 
-def test_legacy_utils_settings_points_directly_to_the_canonical_owner():
-    wrapper = (EDITOR_ROOT / "utils" / "settings.py").read_text(encoding="utf-8")
-
-    assert "from config.settings import" in wrapper
-    assert "class CoronaSettings" not in wrapper
-    assert "def get_default_paths" not in wrapper
+def test_removed_utils_settings_has_no_source_owner():
+    assert not any(
+        path.is_file() and "__pycache__" not in path.parts
+        for path in (EDITOR_ROOT / "utils").rglob("*")
+    )
 
 
 def test_active_consumers_do_not_import_project_state_from_settings_facade():
     consumers = (
         EDITOR_ROOT / "runtime" / "editor_host.py",
-        EDITOR_ROOT / "runtime" / "legacy_project_copy.py",
         EDITOR_ROOT / "runtime" / "project_context.py",
         EDITOR_ROOT / "runtime" / "project_templates.py",
         EDITOR_ROOT / "script_runtime" / "blockly" / "main.py",
@@ -93,10 +78,7 @@ def test_active_consumers_do_not_import_project_state_from_settings_facade():
 
 def test_project_state_does_not_own_paths_config_instance():
     project_state = (CONFIG_ROOT / "project_state.py").read_text(encoding="utf-8")
-    settings = (CONFIG_ROOT / "settings.py").read_text(encoding="utf-8")
-
     assert "core_path = get_default_paths()" not in project_state
-    assert "core_path = get_default_paths()" in settings
 
 
 def test_project_state_default_config_path_is_independent_of_process_cwd(

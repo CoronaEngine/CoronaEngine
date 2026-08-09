@@ -13,6 +13,7 @@ def test_project_lifecycle_manifest_methods_have_public_wrappers():
         "ProjectLauncher.create_multiplayer_project": ("project.createMultiplayerProject", "project.create_multiplayer_project"),
         "ProjectLauncher.create_project": ("project.createProject", "project.create_project"),
         "ProjectLauncher.create_world_project": ("project.createWorldProject", "project.create_world_project"),
+        "ProjectLauncher.copy_existing_to_data": ("project.copyExistingToData", "project.copy_existing_to_data"),
         "ProjectLauncher.get_default_project_path": ("project.getDefaultProjectPath", "project.get_default_project_path"),
         "ProjectLauncher.get_project_load_status": ("project.getProjectLoadStatus", "project.get_project_load_status"),
         "ProjectLauncher.get_recent_projects": ("project.getRecentProjects", "project.get_recent_projects"),

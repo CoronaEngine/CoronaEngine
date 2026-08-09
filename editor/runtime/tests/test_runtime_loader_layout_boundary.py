@@ -6,11 +6,13 @@ EDITOR_ROOT = Path(__file__).resolve().parents[1].parent
 
 def test_python_service_loader_has_a_runtime_canonical_owner():
     canonical = EDITOR_ROOT / "runtime" / "plugin_loader.py"
-    compatibility = EDITOR_ROOT / "CoronaPlugin" / "compat" / "legacy_load_utils.py"
     main_source = (EDITOR_ROOT / "runtime" / "bootstrap.py").read_text(encoding="utf-8")
 
     assert canonical.is_file()
-    assert "from runtime.plugin_loader import" in compatibility.read_text(encoding="utf-8")
+    assert not any(
+        path.is_file() and "__pycache__" not in path.parts
+        for path in (EDITOR_ROOT / "CoronaPlugin").rglob("*")
+    )
     assert "from runtime.plugin_loader import reimport" in main_source
 
 
@@ -43,10 +45,11 @@ def test_python_service_loader_does_not_start_legacy_scene_datas_shell():
 
 def test_plugin_base_has_a_runtime_canonical_owner():
     canonical = EDITOR_ROOT / "runtime" / "plugin_base.py"
-    compatibility = EDITOR_ROOT / "CoronaPlugin" / "compat" / "legacy_plugin_base.py"
-
     assert canonical.is_file()
-    assert "from runtime.plugin_base import" in compatibility.read_text(encoding="utf-8")
+    assert not any(
+        path.is_file() and "__pycache__" not in path.parts
+        for path in (EDITOR_ROOT / "CoronaPlugin").rglob("*")
+    )
     for source_path in (EDITOR_ROOT / "plugins").rglob("main.py"):
         source = source_path.read_text(encoding="utf-8")
         if "PluginBase" not in source:
