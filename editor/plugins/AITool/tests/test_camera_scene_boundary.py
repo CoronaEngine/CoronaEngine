@@ -2,6 +2,7 @@ import sys
 from pathlib import Path
 from unittest import mock
 
+import pytest
 
 PROJECT_ROOT = Path(__file__).resolve().parents[4]
 EDITOR_ROOT = PROJECT_ROOT / "editor"
@@ -17,48 +18,36 @@ from cai_extensions.agent import vlm_capture
 
 def test_camera_scene_resolution_prefers_manifest_scene_route():
     with mock.patch(
-        "CoronaCore.core.editor_api.get_scene_adapter", return_value=object()
-    ), mock.patch(
         "cai_extensions.mcp.tools.native_scene_state.get_native_scene_snapshot",
         return_value={"scene": "Scene/current.scene", "scene_name": "Current"},
-    ), mock.patch(
-        "CoronaCore.core.managers.scene_manager"
-    ) as legacy_manager:
+    ):
         scene = camera_tools._resolve_scene(None, "")
 
     assert scene.route == "Scene/current.scene"
     assert scene.name == "Current"
-    legacy_manager.get.assert_not_called()
 
 
-def test_camera_scene_resolution_falls_back_to_explicit_legacy_manager():
-    legacy_scene = mock.Mock(route="Scene/legacy.scene", name="Legacy")
+def test_camera_scene_resolution_fails_closed_without_native_contract():
     manager = mock.Mock()
-    manager.get.return_value = legacy_scene
 
     with mock.patch(
-        "CoronaCore.core.editor_api.get_scene_adapter", return_value=None
-    ):
-        scene = camera_tools._resolve_scene(manager, "Scene/legacy.scene")
+        "cai_extensions.mcp.tools.native_scene_state.get_native_scene_snapshot",
+        side_effect=RuntimeError("native scene unavailable"),
+    ), pytest.raises(RuntimeError, match="native scene unavailable"):
+        camera_tools._resolve_scene(manager, "Scene/legacy.scene")
 
-    assert scene is legacy_scene
-    manager.get.assert_called_once_with("Scene/legacy.scene")
+    manager.get.assert_not_called()
 
 
 def test_vlm_scene_resolution_prefers_native_snapshot():
     with mock.patch(
-        "api.editor_api.get_scene_adapter", return_value=object()
-    ), mock.patch(
         "cai_extensions.mcp.tools.native_scene_state.get_native_scene_snapshot",
         return_value={"scene": "Scene/current.scene", "scene_name": "Current"},
-    ), mock.patch(
-        "CoronaCore.core.managers.scene_manager"
-    ) as legacy_manager:
+    ):
         scene = vlm_capture._resolve_scene("")
 
     assert scene.route == "Scene/current.scene"
     assert scene.name == "Current"
-    legacy_manager.get.assert_not_called()
 
 
 def test_vlm_screenshot_fallback_uses_canonical_project_context(monkeypatch, tmp_path):
@@ -82,15 +71,28 @@ def test_vlm_screenshot_fallback_uses_canonical_project_context(monkeypatch, tmp
 
 def test_multi_view_scene_resolution_prefers_native_snapshot():
     with mock.patch(
-        "CoronaCore.core.editor_api.get_scene_adapter", return_value=object()
-    ), mock.patch(
         "cai_extensions.mcp.tools.native_scene_state.get_native_scene_snapshot",
         return_value={"scene": "Scene/current.scene", "scene_name": "Current"},
-    ), mock.patch(
-        "CoronaCore.core.managers.scene_manager"
-    ) as legacy_manager:
+    ):
         scene = multi_view_capture._resolve_scene(None, "")
 
     assert scene.route == "Scene/current.scene"
     assert scene.name == "Current"
-    legacy_manager.get.assert_not_called()
+
+
+def test_camera_tools_do_not_keep_python_scene_camera_fallbacks():
+    source = (
+        AI_TOOL_ROOT / "cai_extensions" / "mcp" / "tools" / "camera_tools.py"
+    ).read_text(encoding="utf-8")
+
+    assert "scene.find_camera" not in source
+    assert "scene.get_cameras" not in source
+    assert "Explicit compatibility path" not in source
+    assert "get_scene_adapter" not in source
+    assert "get_scene_tools_adapter" not in source
+    assert "get_viewport_adapter" not in source
+    assert "resolve_native_scene_value" in source
+    multi_view_source = (
+        AI_TOOL_ROOT / "cai_extensions" / "mcp" / "tools" / "multi_view_capture.py"
+    ).read_text(encoding="utf-8")
+    assert "resolve_native_scene_value" in multi_view_source

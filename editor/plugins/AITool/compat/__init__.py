@@ -1,2 +1,0 @@
-"""AITool-owned compatibility adapters."""
-

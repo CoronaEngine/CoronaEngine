@@ -23,9 +23,9 @@ class EditorApiAggregateWrapperTests(unittest.TestCase):
         bridge_source = (source_root / "utils" / "bridge.js").read_text(encoding="utf-8")
 
         self.assertTrue(service_path.is_file())
-        self.assertTrue(compatibility_path.is_file())
-        self.assertIn("../compat/sceneService.js", service_path.read_text(encoding="utf-8"))
-        self.assertIn("import { editorApi } from '../api/editorApi.js'", compatibility_path.read_text(encoding="utf-8"))
+        self.assertFalse(compatibility_path.exists())
+        self.assertIn("export const sceneService", service_path.read_text(encoding="utf-8"))
+        self.assertIn("import { editorApi } from '../api/editorApi.js'", service_path.read_text(encoding="utf-8"))
         self.assertNotIn("export const sceneService", api_source)
         self.assertIn("sceneService", bridge_source)
 
@@ -37,11 +37,10 @@ class EditorApiAggregateWrapperTests(unittest.TestCase):
         bridge_source = (source_root / "utils" / "bridge.js").read_text(encoding="utf-8")
 
         self.assertTrue(service_path.is_file())
-        self.assertTrue(compatibility_path.is_file())
+        self.assertFalse(compatibility_path.exists())
         service_source = service_path.read_text(encoding="utf-8")
-        compatibility_source = compatibility_path.read_text(encoding="utf-8")
-        self.assertIn("../compat/projectService.js", service_source)
-        self.assertIn("import { Bridge, editorApi } from '../api/editorApi.js'", compatibility_source)
+        self.assertIn("export const projectService", service_source)
+        self.assertIn("import { Bridge, editorApi } from '../api/editorApi.js'", service_source)
         self.assertNotIn("export const projectService", api_source)
         self.assertIn("projectService", bridge_source)
 
@@ -53,11 +52,11 @@ class EditorApiAggregateWrapperTests(unittest.TestCase):
         bridge_source = (source_root / "utils" / "bridge.js").read_text(encoding="utf-8")
 
         self.assertTrue(service_path.is_file())
-        self.assertTrue(compatibility_path.is_file())
-        self.assertIn("../compat/appService.js", service_path.read_text(encoding="utf-8"))
-        self.assertIn("import { Bridge, editorApi } from '../api/editorApi.js'", compatibility_path.read_text(encoding="utf-8"))
+        self.assertFalse(compatibility_path.exists())
+        self.assertIn("export const appService", service_path.read_text(encoding="utf-8"))
+        self.assertIn("import { Bridge, editorApi } from '../api/editorApi.js'", service_path.read_text(encoding="utf-8"))
         self.assertNotIn("export const appService", api_source)
-        self.assertIn("export { appService } from '../compat/appService.js';", bridge_source)
+        self.assertIn("export { appService } from '../services/appService.js';", bridge_source)
 
     def test_lan_chat_service_has_a_dedicated_service_owner(self):
         source_root = Path(__file__).resolve().parents[2] / "src"
@@ -89,9 +88,9 @@ class EditorApiAggregateWrapperTests(unittest.TestCase):
         bridge_source = (source_root / "utils" / "bridge.js").read_text(encoding="utf-8")
 
         self.assertTrue(service_path.is_file())
-        self.assertTrue(compatibility_path.is_file())
-        self.assertIn("../compat/scriptingService.js", service_path.read_text(encoding="utf-8"))
-        self.assertIn("import { editorApi } from '../api/editorApi.js'", compatibility_path.read_text(encoding="utf-8"))
+        self.assertFalse(compatibility_path.exists())
+        self.assertIn("export const scriptingService", service_path.read_text(encoding="utf-8"))
+        self.assertIn("import { editorApi } from '../api/editorApi.js'", service_path.read_text(encoding="utf-8"))
         self.assertNotIn("export const scriptingService", api_source)
         self.assertIn("scriptingService", bridge_source)
 
@@ -126,13 +125,12 @@ class EditorApiAggregateWrapperTests(unittest.TestCase):
         bridge_source = (source_root / "utils" / "bridge.js").read_text(encoding="utf-8")
 
         self.assertTrue(service_path.is_file())
-        self.assertTrue(compatibility_path.is_file())
+        self.assertFalse(compatibility_path.exists())
         service_source = service_path.read_text(encoding="utf-8")
-        compatibility_source = compatibility_path.read_text(encoding="utf-8")
-        self.assertIn("../compat/fileService.js", service_source)
-        self.assertIn("import { editorApi } from '../api/editorApi.js'", compatibility_source)
+        self.assertIn("export const fileService", service_source)
+        self.assertIn("import { editorApi } from '../api/editorApi.js'", service_source)
         self.assertNotIn("export const fileService", api_source)
-        self.assertIn("export { fileService } from '../compat/fileService.js';", bridge_source)
+        self.assertIn("export { fileService } from '../services/fileService.js';", bridge_source)
 
     def test_project_settings_service_has_a_dedicated_service_owner(self):
         source_root = Path(__file__).resolve().parents[2] / "src"
@@ -142,14 +140,13 @@ class EditorApiAggregateWrapperTests(unittest.TestCase):
         bridge_source = (source_root / "utils" / "bridge.js").read_text(encoding="utf-8")
 
         self.assertTrue(service_path.is_file())
-        self.assertTrue(compatibility_path.is_file())
+        self.assertFalse(compatibility_path.exists())
         service_source = service_path.read_text(encoding="utf-8")
-        compatibility_source = compatibility_path.read_text(encoding="utf-8")
-        self.assertIn("../compat/projectSettingsService.js", service_source)
-        self.assertIn("import { editorApi } from '../api/editorApi.js'", compatibility_source)
+        self.assertIn("export const projectSettingsService", service_source)
+        self.assertIn("import { editorApi } from '../api/editorApi.js'", service_source)
         self.assertNotIn("export const projectSettingsService", api_source)
         self.assertIn(
-            "export { projectSettingsService } from '../compat/projectSettingsService.js';",
+            "export { projectSettingsService } from '../services/projectSettingsService.js';",
             bridge_source,
         )
 
@@ -175,14 +172,12 @@ class EditorApiAggregateWrapperTests(unittest.TestCase):
         bridge_source = (source_root / "utils" / "bridge.js").read_text(encoding="utf-8")
 
         self.assertTrue(service_path.is_file())
-        self.assertTrue(compatibility_path.is_file())
+        self.assertFalse(compatibility_path.exists())
         service_source = service_path.read_text(encoding="utf-8")
-        compatibility_source = compatibility_path.read_text(encoding="utf-8")
         self.assertNotIn("export const logService", api_source)
-        self.assertNotIn("export const logService", service_source)
-        self.assertIn("disabled: true", compatibility_source)
-        self.assertIn("../compat/logService.js", service_source)
-        self.assertIn("export { logService } from '../compat/logService.js';", bridge_source)
+        self.assertIn("export const logService", service_source)
+        self.assertIn("disabled: true", service_source)
+        self.assertIn("export { logService } from '../services/logService.js';", bridge_source)
 
     def test_log_view_does_not_call_the_legacy_log_facade(self):
         source_root = Path(__file__).resolve().parents[2] / "src"
@@ -387,7 +382,7 @@ class EditorApiAggregateWrapperTests(unittest.TestCase):
 
     def test_scene_service_remains_a_thin_adapter(self):
         source = (
-            Path(__file__).resolve().parents[2] / "src" / "compat" / "sceneService.js"
+            Path(__file__).resolve().parents[2] / "src" / "services" / "sceneService.js"
         ).read_text(encoding="utf-8")
         scene_service = source
 
@@ -402,7 +397,6 @@ class EditorApiAggregateWrapperTests(unittest.TestCase):
         source_root = Path(__file__).resolve().parents[2] / "src"
         allowed_transport_files = {
             source_root / "api" / "editorApi.js",
-            source_root / "compat" / "legacyEditorAdapter.js",
         }
         for path in source_root.rglob("*.js"):
             if path in allowed_transport_files:

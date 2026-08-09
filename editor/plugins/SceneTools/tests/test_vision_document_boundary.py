@@ -3,7 +3,7 @@ from pathlib import Path
 
 
 PLUGIN_ROOT = Path(__file__).resolve().parents[1]
-MAIN_SOURCE = (PLUGIN_ROOT / "compat" / "legacy_scene_tools.py").read_text(encoding="utf-8")
+MAIN_SOURCE = (PLUGIN_ROOT / "main.py").read_text(encoding="utf-8")
 
 
 def test_vision_document_parsing_has_a_dedicated_owner():

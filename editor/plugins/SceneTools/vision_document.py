@@ -6,8 +6,11 @@ shape/camera/document value conversion used by that orchestration.
 """
 
 import copy
+import base64
+import json
 import math
 import os
+import zlib
 
 
 _VISION_RESOURCE_PATH_KEYS = {
@@ -18,6 +21,23 @@ _VISION_RESOURCE_PATH_KEYS = {
     "texture",
     "image",
 }
+
+VISION_DOCUMENT_VERSION = "1"
+VISION_DOCUMENT_ENCODING = "zlib_base64_json"
+
+
+def encode_vision_document(document: dict) -> str:
+    payload = json.dumps(document, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    compressor = zlib.compressobj(level=0)
+    return base64.b64encode(compressor.compress(payload) + compressor.flush()).decode("ascii")
+
+
+def decode_vision_document(data: str) -> dict:
+    payload = zlib.decompress(base64.b64decode(data.encode("ascii"))).decode("utf-8")
+    document = json.loads(payload)
+    if not isinstance(document, dict):
+        raise ValueError("Vision document must decode to a JSON object")
+    return document
 
 
 def _as_float3(value):

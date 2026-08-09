@@ -91,6 +91,16 @@ class ScriptRuntimeSceneToolsAdapter:
     def remove_actor(self, scene_name, actor_name):
         return self._invoke_manifest("scene_tools.remove_actor", [scene_name, actor_name])
 
+    def set_actor_state(self, scene_name, actor_name, state):
+        return self._invoke_manifest(
+            "scene_tools.set_actor_state", [scene_name, actor_name, state]
+        )
+
+    def set_actor_physics(self, scene_name, actor_name, physics):
+        return self._invoke_manifest(
+            "scene_tools.set_actor_physics", [scene_name, actor_name, physics]
+        )
+
 
 class ScriptRuntimeViewportAdapter:
     def __init__(self, invoke_manifest):

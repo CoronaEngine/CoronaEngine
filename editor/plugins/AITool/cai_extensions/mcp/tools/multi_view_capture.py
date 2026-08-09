@@ -19,9 +19,9 @@ DEFAULT_SCENE_NAME = ""
 
 
 def _resolve_scene(scene_manager, scene_name: str):
-    from .native_scene_state import resolve_scene_value
+    from .native_scene_state import resolve_native_scene_value
 
-    return resolve_scene_value(scene_name, manager=scene_manager)
+    return resolve_native_scene_value(scene_name)
 
 
 # ===========================================================================

@@ -52,15 +52,16 @@ def test_frontend_services_do_not_define_transport_or_raw_cef_protocols():
         assert "utils/bridge" not in source, source_path
 
 
-def test_compatibility_facades_delegate_to_editor_api():
+def test_canonical_services_delegate_to_editor_api():
     for service_name in (
+        "appService.js",
         "sceneService.js",
         "projectService.js",
         "scriptingService.js",
         "fileService.js",
         "projectSettingsService.js",
     ):
-        source = (COMPAT_ROOT / service_name).read_text(encoding="utf-8")
+        source = (SERVICES_ROOT / service_name).read_text(encoding="utf-8")
         assert "editorApi" in source, service_name
 
     for service_name in (
@@ -76,7 +77,6 @@ def test_compatibility_facades_delegate_to_editor_api():
 
 def test_compatibility_facade_paths_in_services_are_thin_wrappers():
     for service_name in (
-        "appService.js",
         "sceneService.js",
         "projectService.js",
         "scriptingService.js",
@@ -85,5 +85,14 @@ def test_compatibility_facade_paths_in_services_are_thin_wrappers():
         "logService.js",
     ):
         source = (SERVICES_ROOT / service_name).read_text(encoding="utf-8")
-        assert "../compat/" in source, service_name
-        assert "export const " not in source, service_name
+        assert "../compat/" not in source, service_name
+        assert "export const " in source, service_name
+        assert not (COMPAT_ROOT / service_name).exists(), service_name
+
+
+def test_app_service_is_canonical_and_not_a_compatibility_wrapper():
+    source = (SERVICES_ROOT / "appService.js").read_text(encoding="utf-8")
+
+    assert "export const appService" in source
+    assert "../compat/" not in source
+    assert not (COMPAT_ROOT / "appService.js").exists()

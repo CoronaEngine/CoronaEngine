@@ -1,3 +1,0 @@
-"""Compatibility wrapper for the historical ProjectLauncher import path."""
-
-from plugins.ProjectLauncher.compat.legacy_project_copy import *  # noqa: F401,F403

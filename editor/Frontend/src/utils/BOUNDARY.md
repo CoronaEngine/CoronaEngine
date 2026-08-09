@@ -17,7 +17,6 @@ Vue 业务 service 或场景状态的 owner。
 | `viewportPick.js` | active viewport adapter | 视口拾取结果和 Actor handle 索引 | 视口控制器集中管理且完成拾取回归 |
 | `viewportUiMode.js` | active viewport adapter | 视口模式、光标设置和本地 UI 状态 | 视口状态 owner 吸收且完成设置迁移 |
 | `bridge.js` | compatibility wrapper | 历史 bridge 导出 barrel，只 re-export `src/api` 和 `src/services` | 外部旧宿主迁移并完成兼容回归后移除 |
-| `legacyEditorAdapter.js` | compatibility wrapper | 历史 raw CEF adapter 的旧 import 路径转发 | 外部插件无旧 import 后移除 |
 
 ## 依赖方向
 
@@ -27,10 +26,10 @@ Vue 业务 service 或场景状态的 owner。
 - `src/api/editorApi.js` 是 manifest transport 和公共 JS contract 的唯一 owner；
   `src/services` 是领域 facade 的 owner；
 - `bridge.js` 只能保留兼容 re-export，不得复制请求格式、schema 或事件协议；
-- raw CEF 实现集中在 `src/compat`。`src/utils/legacyEditorAdapter.js` 仅保留旧
-  import 路径，不得重新实现 CEF 协议；
+- raw CEF 不再由 canonical Frontend 启动入口安装；新的跨层调用必须使用
+  `src/api/editorApi.js`，不得在 `src/utils` 重新引入旧 CEF wrapper；
 - 新功能不得继续放入本目录：需要跨层契约的功能进入 `src/api`，领域编排进入
-  `src/services`，旧宿主协议进入 `src/compat`。
+  `src/services`；旧宿主历史 alias 只通过本文件中的 `bridge.js` 保留。
 
 ## 验证与删除策略
 

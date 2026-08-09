@@ -6,10 +6,6 @@ import { i18n, setupLocaleSync } from './i18n/index.js';
 import { setupDomTranslation } from './i18n/domTranslator.js';
 import './style.css';
 import 'blockly/blocks';
-import { installLegacyEditorAdapter } from './compat/legacyEditorAdapter.js';
-
-installLegacyEditorAdapter();
-
 const app = createApp(App);
 app.use(createPinia());
 app.use(Router);

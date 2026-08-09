@@ -2,10 +2,9 @@ import configparser
 import tempfile
 import unittest
 from pathlib import Path
-from types import SimpleNamespace
 
 from plugins.ProjectLauncher import main as project_launcher
-from runtime import project_copy
+from runtime import legacy_project_copy as project_copy
 from config.settings import CoronaSettings
 from runtime import project_templates as project_utils
 
@@ -48,13 +47,13 @@ class ProjectCopyTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            original_core_path = project_copy.core_path
-            project_copy.core_path = SimpleNamespace(repo_root=temp_root / "runtime")
-            try:
-                first = project_copy.ProjectCopy.copy_existing_to_data(str(source_ini))
-                second = project_copy.ProjectCopy.copy_existing_to_data(str(source_ini))
-            finally:
-                project_copy.core_path = original_core_path
+            data_root = temp_root / "runtime" / "data"
+            first = project_copy.ProjectCopy.copy_existing_to_data(
+                str(source_ini), data_root=data_root
+            )
+            second = project_copy.ProjectCopy.copy_existing_to_data(
+                str(source_ini), data_root=data_root
+            )
 
             first_path = Path(first["path"])
             second_path = Path(second["path"])
@@ -97,12 +96,9 @@ class ProjectCopyTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            original_core_path = project_copy.core_path
-            project_copy.core_path = SimpleNamespace(repo_root=temp_root / "runtime")
-            try:
-                result = project_copy.ProjectCopy.copy_existing_to_data(str(source_ini))
-            finally:
-                project_copy.core_path = original_core_path
+            result = project_copy.ProjectCopy.copy_existing_to_data(
+                str(source_ini), data_root=runtime_data
+            )
 
             self.assertEqual(result["name"], "creative_world_5")
             self.assertEqual(Path(result["path"]), source_dir)

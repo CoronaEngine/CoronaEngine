@@ -17,5 +17,5 @@ def test_model_reviewer_uses_editor_aggregate_api_for_review_actors():
     assert "CoronaEditor.CoronaEngine.remove_editor_actor" not in source
     assert "CoronaEditorApi.scene_tools.create_actor" in source
     assert "CoronaEditorApi.scene_tools.remove_actor" in source
-    assert "resolve_scene_value" in source
+    assert "resolve_native_scene_value" in source
     assert "get_legacy_scene" not in source

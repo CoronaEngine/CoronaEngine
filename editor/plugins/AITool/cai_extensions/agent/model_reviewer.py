@@ -39,12 +39,12 @@ def _get_current_scene() -> Optional[Any]:
     try:
         try:
             from plugins.AITool.cai_extensions.mcp.tools.native_scene_state import (
-                resolve_scene_value,
+                resolve_native_scene_value,
             )
         except ModuleNotFoundError:
-            from ..mcp.tools.native_scene_state import resolve_scene_value  # type: ignore
+            from ..mcp.tools.native_scene_state import resolve_native_scene_value  # type: ignore
 
-        return resolve_scene_value("")
+        return resolve_native_scene_value("")
     except Exception as exc:
         logger.warning("[ModelReviewer] 无法获取当前场景: %s", exc)
         return None

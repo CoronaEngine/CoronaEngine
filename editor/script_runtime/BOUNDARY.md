@@ -12,9 +12,8 @@ runtime 或 C++ 原生对象的直接导出层。
 | `runner.py` | active execution boundary | 从 `runtime/generated` 加载生成脚本，并保留旧 `backend` 输出只读回退 | 所有旧项目迁移且生成脚本回归通过后移除 fallback |
 | `manifest_adapter.py` | active aggregate adapter | 以独立 ScriptRuntime caller 通道访问 scene 路由、快照、环境、变换、scene_tools 和 viewport 聚合能力 | 新 manifest adapter 完整替代并完成权限/生命周期回归 |
 | `native_engine_adapter.py` | active restricted adapter | 将角色脚本需要的原子引擎能力限制在 Script Runtime 边界内 | 新受限 binding 完整替代并完成脚本回归 |
-| `engine/host.py` | active host lifecycle | 由编辑器 host 调用 ScriptsManager 的 canonical 初始化编排；旧 Scene 查询仍通过登记的 scene adapter | 旧项目脚本迁移到 native scene/project 生命周期后移除 legacy scene fallback |
-| `compat/legacy_scene_adapter.py` | compatibility adapter | 旧 Python Scene Store 的唯一 Script Runtime 兼容实现；仅提供既有查询、切换和 Actor 查找转发 | 旧生成脚本和宿主迁移到 native scene/project 生命周期后删除 |
-| `compat/legacy_scene_datas_adapter.py` | compatibility adapter | 旧 SceneDatas/脚本场景语义的唯一兼容实现；根目录旧路径仅作 shim | 旧脚本和宿主迁移后删除 |
+| `engine/host.py` | active host lifecycle | 由编辑器 host 调用 ScriptsManager 的 canonical 初始化编排；仅使用 native scene target | 保持 native scene/project 生命周期；不得重新引入 legacy Scene fallback |
+| `compat/legacy_scene_datas_adapter.py` | compatibility adapter | 旧 SceneDatas/脚本场景语义的唯一兼容实现；根目录历史 shim 已删除 | 旧脚本和宿主迁移后删除 |
 | `engine/` | active runtime core | `CoronaEngine` 运行时 facade、脚本实体、ScriptsManager 和脚本生命周期 | 新运行时完整替代并完成角色脚本回归 |
 | `engine/contracts.py` | active internal contract | Script Runtime 脚本生命周期所需的 Scene/Actor 结构化类型契约；不定义场景事实或运行时 API | 被统一的 Script Runtime value-object contract 吸收后调整；不得重新导入 `runtime.legacy.entities` |
 | `blockly/` | active compiler/contract | Blockly/Scratch 生成执行合同和 AI 节点图输入合同检查；项目 workspace、持久化脚本和 manifest 写入 `<project>/Scripts/blockly` | 新编译器/合同 owner 替代并完成旧 workspace 回归 |
@@ -30,15 +29,18 @@ runtime 或 C++ 原生对象的直接导出层。
 - `manifest_adapter.py` 是脚本访问编辑器聚合语义的唯一显式 adapter，保持
   `ScriptRuntime` caller 通道和权限边界；
 - `scene.list_routes` 和 `scene.switch` 只返回/接收结构化 route 值，不暴露
-  Python Scene、Actor 或 manager；`corona_engine.setScene` 优先使用 native route，旧
-  Scene Store 仅保留迁移期 fallback；
+  Python Scene、Actor 或 manager；`corona_engine.setScene` 默认使用 native route
+  且失败闭合；旧 Python Scene Store 不再属于 Script Runtime 运行时路径，host 初始化
+  不得回退到 Python Scene；
 - `scene.get_environment` 和 `scene.set_environment` 只传递 sun、grid、physics 值对象；
   Blockly 预览快照、环境恢复、相机姿态和 Actor transform 优先走 native contract，
-  旧 Scene adapter 仅处理未覆盖的历史快照；
-- `compat/legacy_scene_adapter.py` 是 Script Runtime 旧 Scene fallback 的实现 owner；
-  历史的 `runtime/legacy_script_scene_adapter.py` 已删除，不得恢复第二个实现入口；
+  当前项目级快照存储在 `project_scenes`，旧 Scene adapter 仅处理显式旧模式和未覆盖的
+  历史快照；
+- `engine.corona_engine.resolve_runtime_target` 对项目和 Actor 目标均先解析 native
+  scene/value object；默认调用失败闭合，不得隐式进入旧 Python Scene。只有 Blockly
+  native 场景存在但目标不存在时直接返回错误，不得用旧 Scene 补出结果；
 - `compat/legacy_scene_datas_adapter.py` 是 Script Runtime 旧 SceneDatas fallback 的实现
-  owner；`legacy_scene_datas_adapter.py` 仅为历史导入路径的兼容 shim，不得新增实现；
+  owner；根目录历史导入 shim 已删除，不得新增实现；
 - `engine/host.py` 是 ScriptsManager host 初始化的 active owner；历史的
   `legacy_script_runtime_adapter` 导入 shim 已删除，host 只能负责生命周期编排，不得复制
   初始化逻辑；

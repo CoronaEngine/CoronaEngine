@@ -15,12 +15,6 @@ class LoadLocalAISettingTests(unittest.TestCase):
     def test_local_secret_loader_has_a_config_owner_and_utils_use_it_directly(self):
         aitool_root = Path(__file__).resolve().parents[1]
         config_source = aitool_root / "configuration" / "local_secrets.py"
-        compat_source = (
-            aitool_root / "compat" / "legacy_local_ai_setting.py"
-        ).read_text(encoding="utf-8")
-        compat_package_source = (
-            aitool_root / "compat" / "legacy_aitool_utils.py"
-        ).read_text(encoding="utf-8")
         utility_source = (aitool_root / "utils" / "load_local_ai_setting.py").read_text(
             encoding="utf-8"
         )
@@ -33,8 +27,8 @@ class LoadLocalAISettingTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
 
         self.assertTrue(config_source.is_file())
-        self.assertIn("from ..configuration.local_secrets import", compat_source)
-        self.assertIn("from ..configuration.local_secrets import", compat_package_source)
+        self.assertFalse((aitool_root / "compat" / "legacy_local_ai_setting.py").exists())
+        self.assertFalse((aitool_root / "compat" / "legacy_aitool_utils.py").exists())
         self.assertIn(
             "from ..configuration.local_secrets import", utility_source
         )

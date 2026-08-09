@@ -3,16 +3,16 @@ from pathlib import Path
 
 
 PLUGIN_ROOT = Path(__file__).resolve().parents[1]
-MAIN_SOURCE = (PLUGIN_ROOT / "compat" / "legacy_scene_tools.py").read_text(encoding="utf-8")
-CANONICAL_PATH = PLUGIN_ROOT / "compat" / "legacy_vision_binding_sync.py"
-LEGACY_PATH = PLUGIN_ROOT / "vision_binding_sync.py"
+MAIN_SOURCE = (PLUGIN_ROOT / "main.py").read_text(encoding="utf-8")
+CANONICAL_PATH = PLUGIN_ROOT / "vision_binding_sync.py"
+COMPAT_PATH = PLUGIN_ROOT / "compat" / "legacy_vision_binding_sync.py"
 
 
 def test_vision_binding_sync_has_a_dedicated_owner():
     source_path = CANONICAL_PATH
     assert source_path.is_file()
     source = source_path.read_text(encoding="utf-8")
-    shim = LEGACY_PATH.read_text(encoding="utf-8")
+    source = CANONICAL_PATH.read_text(encoding="utf-8")
     for symbol in (
         "find_actor_by_guid",
         "sync_external_live_binding_source_path",
@@ -20,15 +20,13 @@ def test_vision_binding_sync_has_a_dedicated_owner():
     ):
         assert f"def {symbol}" in source
         assert f"def _{symbol}" not in MAIN_SOURCE
-    assert "from plugins.SceneTools.compat.legacy_vision_binding_sync import" in shim
+    assert "from runtime.legacy_scene_store" not in source
+    assert not COMPAT_PATH.exists()
 
 
 def test_vision_binding_sync_updates_and_removes_legacy_actors():
     sync = importlib.import_module("plugins.SceneTools.vision_binding_sync")
-    canonical = importlib.import_module(
-        "plugins.SceneTools.compat.legacy_vision_binding_sync"
-    )
-    assert sync.find_actor_by_guid is canonical.find_actor_by_guid
+    assert sync.find_actor_by_guid is sync.find_actor_by_guid
 
     class Actor:
         def __init__(self, guid):

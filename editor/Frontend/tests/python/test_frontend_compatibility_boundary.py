@@ -6,20 +6,8 @@ SRC_ROOT = FRONTEND_ROOT / "src"
 COMPAT_ROOT = SRC_ROOT / "compat"
 
 
-def test_frontend_compatibility_directory_has_a_local_boundary_document():
-    boundary = COMPAT_ROOT / "BOUNDARY.md"
-
-    assert boundary.is_file()
-    source = boundary.read_text(encoding="utf-8")
-    for marker in (
-        "src/api",
-        "src/services",
-        "utils/bridge.js",
-        "legacyEditorAdapter.js",
-        "legacyCameraLockPanel.js",
-        "删除条件",
-    ):
-        assert marker in source
+def test_frontend_compatibility_directory_has_been_removed_after_migration():
+    assert not list(COMPAT_ROOT.glob("*"))
 
 
 def test_frontend_bridge_only_reexports_canonical_api_and_service_owners():
@@ -33,21 +21,22 @@ def test_frontend_bridge_only_reexports_canonical_api_and_service_owners():
         "scriptingService",
         "fileService",
         "projectSettingsService",
+        "logService",
+        "lanChatService",
+        "networkService",
+        "aiService",
+        "projectLauncherService",
+        "resourceService",
     ):
-        assert f"../compat/{service}.js" in bridge
-    for service in ("lanChatService", "networkService", "aiService", "projectLauncherService", "resourceService"):
         assert f"../services/{service}.js" in bridge
     assert "cefQuery" not in bridge
 
 
 def test_frontend_raw_cef_compatibility_is_isolated_to_compat_directory():
-    legacy_adapter = (COMPAT_ROOT / "legacyEditorAdapter.js").read_text(encoding="utf-8")
     main_source = (SRC_ROOT / "main.js").read_text(encoding="utf-8")
-    legacy_import = (SRC_ROOT / "utils" / "legacyEditorAdapter.js").read_text(encoding="utf-8")
-
-    assert "window.cefQuery" in legacy_adapter
-    assert "./compat/legacyEditorAdapter.js" in main_source
-    assert "../compat/legacyEditorAdapter.js" in legacy_import
+    assert "window.cefQuery" not in main_source
+    assert not list(COMPAT_ROOT.glob("*.js"))
+    assert not (SRC_ROOT / "utils" / "legacyEditorAdapter.js").exists()
 
     active_sources = []
     for source_path in SRC_ROOT.rglob("*"):
@@ -56,7 +45,6 @@ def test_frontend_raw_cef_compatibility_is_isolated_to_compat_directory():
         if (
             "compat" in source_path.parts
             or "api" in source_path.parts
-            or source_path == SRC_ROOT / "utils" / "legacyEditorAdapter.js"
         ):
             continue
         source = source_path.read_text(encoding="utf-8")
@@ -64,3 +52,30 @@ def test_frontend_raw_cef_compatibility_is_isolated_to_compat_directory():
             active_sources.append(source_path)
 
     assert active_sources == []
+
+
+def test_canonical_entrypoint_does_not_boot_legacy_camera_panel():
+    index_source = (FRONTEND_ROOT / "index.html").read_text(encoding="utf-8")
+
+    assert "legacyCameraLockPanel.js" not in index_source
+    assert "legacyCameraLockPanel.css" not in index_source
+
+
+def test_migrated_camera_lock_panel_files_are_removed():
+    assert not (COMPAT_ROOT / "legacyCameraLockPanel.js").exists()
+    assert not (COMPAT_ROOT / "legacyCameraLockPanel.css").exists()
+
+
+def test_migrated_raw_cef_frontend_adapter_is_removed():
+    assert not list(COMPAT_ROOT.glob("*.js"))
+    assert not (SRC_ROOT / "utils" / "legacyEditorAdapter.js").exists()
+
+
+def test_camera_lock_controls_have_a_canonical_vue_owner():
+    object_source = (SRC_ROOT / "views" / "sidebar" / "Object.vue").read_text(
+        encoding="utf-8"
+    )
+
+    assert "actor.cameraLock.enabled" in object_source
+    assert "actor.cameraLock.position" in object_source
+    assert "editorApi.sceneTools.setActorCameraLock" in object_source

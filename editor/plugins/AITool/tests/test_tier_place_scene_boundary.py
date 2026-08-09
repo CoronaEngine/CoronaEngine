@@ -9,15 +9,16 @@ SOURCE = Path(__file__).parents[1].joinpath(
 ).read_text(encoding="utf-8")
 
 
-def test_tier2_scene_resolution_prefers_native_snapshot_and_keeps_legacy_fallback():
-    """Tier2 placement must read scene facts through the aggregate adapter first."""
+def test_tier2_scene_resolution_uses_native_snapshot_only():
+    """Tier2 placement must read scene facts through the native aggregate API."""
     assert "def _resolve_tier2_scene(scene_name: str)" in SOURCE
     native_start = SOURCE.index("def _resolve_tier2_scene(scene_name: str)")
     native_end = SOURCE.index("def _calculate_semantic_position(", native_start)
     resolver = SOURCE[native_start:native_end]
 
     assert "native_scene_state" in resolver
-    assert "native_actor_views_with_legacy_fallback" in resolver
+    assert "native_actor_views" in resolver
+    assert "native_actor_views_with_legacy_fallback" not in resolver
     assert "get_legacy_scene" not in resolver
 
 

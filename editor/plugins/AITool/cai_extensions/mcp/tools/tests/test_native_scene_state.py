@@ -144,96 +144,11 @@ def test_set_native_actor_physics_calls_native_api() -> None:
     ]
 
 
-def test_legacy_scene_resolution_is_centralized_at_adapter_boundary() -> None:
-    class FakeScene:
-        name = "level"
-
-    class FakeManager:
-        def get(self, route):
-            return FakeScene() if route == "level.scene" else None
-
-        def list_all(self):
-            return ["level.scene"]
-
-    scene = state.get_legacy_scene("level.scene", manager=FakeManager())
-    assert isinstance(scene, FakeScene)
-
-
 def test_scene_resolution_prefers_native_route_value_object() -> None:
-    with mock.patch("CoronaCore.core.editor_api.get_scene_adapter", return_value=object()):
-        scene = state.resolve_scene_value("", manager=object())
+    scene = state.resolve_native_scene_value("")
 
     assert scene.route == "Scene/default.scene"
     assert scene.name == "default"
-
-
-def test_scene_resolution_uses_legacy_manager_when_native_adapter_is_unavailable() -> None:
-    class FakeScene:
-        name = "level"
-
-    class FakeManager:
-        def get(self, route):
-            return FakeScene() if route == "level.scene" else None
-
-        def list_all(self):
-            return ["level.scene"]
-
-    with mock.patch("CoronaCore.core.editor_api.get_scene_adapter", return_value=None):
-        scene = state.resolve_scene_value("level.scene", manager=FakeManager())
-
-    assert isinstance(scene, FakeScene)
-
-
-def test_actor_views_with_legacy_fallback_prefers_native_views() -> None:
-    native_actor = object()
-    with mock.patch.object(state, "native_actor_views", return_value=[native_actor]):
-        result = state.native_actor_views_with_legacy_fallback(manager=object())
-
-    assert result == [native_actor]
-
-
-def test_actor_views_with_legacy_fallback_reads_legacy_scene_only_on_native_failure() -> None:
-    legacy_actor = object()
-
-    class FakeScene:
-        def get_actors(self):
-            return [legacy_actor]
-
-    class FakeManager:
-        def get(self, route):
-            return FakeScene() if route == "" else None
-
-        def list_all(self):
-            return [""]
-
-    with mock.patch.object(state, "native_actor_views", side_effect=RuntimeError("native unavailable")):
-        result = state.native_actor_views_with_legacy_fallback(manager=FakeManager())
-
-    assert result == [legacy_actor]
-
-
-def test_find_actor_with_legacy_fallback_prefers_native_actor_view() -> None:
-    native_actor = object()
-    with mock.patch.object(state, "find_native_actor", return_value=native_actor), mock.patch.object(
-        state, "get_legacy_scene"
-    ) as legacy_lookup:
-        result = state.find_actor_with_legacy_fallback("Scene/default.scene", "Bed")
-
-    assert result is native_actor
-    legacy_lookup.assert_not_called()
-
-
-def test_find_actor_with_legacy_fallback_uses_centralized_legacy_lookup() -> None:
-    legacy_actor = object()
-    legacy_scene = mock.Mock()
-    legacy_scene.find_actor.return_value = legacy_actor
-    with mock.patch.object(state, "find_native_actor", side_effect=RuntimeError("native unavailable")), mock.patch.object(
-        state, "get_legacy_scene", return_value=legacy_scene
-    ) as legacy_lookup:
-        result = state.find_actor_with_legacy_fallback("Scene/default.scene", "Bed")
-
-    assert result is legacy_actor
-    legacy_lookup.assert_called_once_with("Scene/default.scene", manager=None)
 
 
 def test_set_actor_physics_value_uses_native_value_object_setter() -> None:
@@ -244,14 +159,14 @@ def test_set_actor_physics_value_uses_native_value_object_setter() -> None:
     actor.set_mechanics.assert_called_once_with({"physics_enabled": False})
 
 
-def test_set_actor_physics_value_updates_legacy_mechanics_only_at_adapter_boundary() -> None:
+def test_set_actor_physics_value_does_not_mutate_legacy_mechanics() -> None:
     mechanics = mock.Mock()
     actor = mock.Mock(set_mechanics=None, _mechanics=mechanics)
 
-    assert state.set_actor_physics_value(
+    assert not state.set_actor_physics_value(
         actor,
         {"physics_enabled": True, "damping": 0.9},
     )
 
-    mechanics.set_physics_enabled.assert_called_once_with(True)
-    mechanics.set_damping.assert_called_once_with(0.9)
+    mechanics.set_physics_enabled.assert_not_called()
+    mechanics.set_damping.assert_not_called()

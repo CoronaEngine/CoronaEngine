@@ -93,7 +93,7 @@ class ProjectCopy:
             raise
 
     @staticmethod
-    def copy_existing_to_data(project_ini_path):
+    def copy_existing_to_data(project_ini_path, data_root=None):
         """Copy an existing legacy project into the runtime data directory."""
         source_ini = os.path.abspath(project_ini_path)
         if not os.path.isfile(source_ini):
@@ -106,7 +106,12 @@ class ProjectCopy:
         if "Project" in config:
             project_name = config["Project"].get("name", project_name)
 
-        data_dir = str(get_legacy_project_data_dir(core_path.repo_root))
+        data_dir = (
+            os.path.abspath(os.fspath(data_root))
+            if data_root is not None
+            else str(get_legacy_project_data_dir(core_path.repo_root))
+        )
+        os.makedirs(data_dir, exist_ok=True)
         if _is_path_within(source_dir, data_dir):
             normalize_project_runtime_paths(source_dir)
             return {"name": os.path.basename(source_dir), "path": source_dir}

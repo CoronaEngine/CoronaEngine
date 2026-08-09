@@ -18,16 +18,13 @@ def test_aitool_runtime_does_not_pass_native_engine_to_network_worker():
 def test_media_helpers_have_a_service_owner_and_utils_use_it_directly():
     aitool_root = Path(__file__).resolve().parents[1]
     service_source = aitool_root / "services" / "media_storage.py"
-    compat_source = (aitool_root / "compat" / "legacy_image_utils.py").read_text(
-        encoding="utf-8"
-    )
     utility_source = (aitool_root / "utils" / "image_utils.py").read_text(
         encoding="utf-8"
     )
     main_source = (aitool_root / "main.py").read_text(encoding="utf-8")
 
     assert service_source.is_file()
-    assert "from ..services.media_storage import" in compat_source
+    assert not (aitool_root / "compat" / "legacy_image_utils.py").exists()
     assert "from ..services.media_storage import" in utility_source
     assert "from .services.media_storage import" in main_source
 

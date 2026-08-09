@@ -10,7 +10,7 @@ def test_python_service_loader_has_a_runtime_canonical_owner():
     main_source = (EDITOR_ROOT / "runtime" / "bootstrap.py").read_text(encoding="utf-8")
 
     assert canonical.is_file()
-    assert "Compatibility" in compatibility.read_text(encoding="utf-8")
+    assert "from runtime.plugin_loader import" in compatibility.read_text(encoding="utf-8")
     assert "from runtime.plugin_loader import reimport" in main_source
 
 
@@ -46,7 +46,7 @@ def test_plugin_base_has_a_runtime_canonical_owner():
     compatibility = EDITOR_ROOT / "CoronaPlugin" / "compat" / "legacy_plugin_base.py"
 
     assert canonical.is_file()
-    assert "Compatibility" in compatibility.read_text(encoding="utf-8")
+    assert "from runtime.plugin_base import" in compatibility.read_text(encoding="utf-8")
     for source_path in (EDITOR_ROOT / "plugins").rglob("main.py"):
         source = source_path.read_text(encoding="utf-8")
         if "PluginBase" not in source:

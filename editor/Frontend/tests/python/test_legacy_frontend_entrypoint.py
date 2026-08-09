@@ -23,39 +23,27 @@ class LegacyFrontendEntrypointTests(unittest.TestCase):
             for call in legacy_calls:
                 self.assertNotIn(call, source, f"legacy call leaked into {path}")
 
-    def test_legacy_entrypoint_documents_its_migration_boundary(self):
+    def test_legacy_camera_panel_has_been_removed_after_vue_migration(self):
         source = (self.frontend_root / "index.html").read_text(encoding="utf-8")
-        panel_source = (
-            self.frontend_root / "src" / "compat" / "legacyCameraLockPanel.js"
-        ).read_text(encoding="utf-8")
-        panel_style = self.frontend_root / "src" / "compat" / "legacyCameraLockPanel.css"
-        adapter_path = self.frontend_root / "src" / "compat" / "legacyEditorAdapter.js"
-        compatibility_wrapper = (
-            self.frontend_root / "src" / "utils" / "legacyEditorAdapter.js"
-        )
-        adapter_source = adapter_path.read_text(encoding="utf-8")
-        wrapper_source = compatibility_wrapper.read_text(encoding="utf-8")
-        self.assertIn("Legacy host compatibility panel", source)
-        self.assertIn("editorApi.sceneTools.setActorCameraLock", source)
-        self.assertIn("camera_lock_set", panel_source)
-        self.assertIn("object_key_down", panel_source)
-        self.assertIn("object_key_up", panel_source)
-        self.assertIn("./src/compat/legacyCameraLockPanel.js", source)
-        self.assertTrue(panel_style.is_file())
-        self.assertIn("__cam_toggle_dot", panel_style.read_text(encoding="utf-8"))
-        self.assertIn("legacyCameraLockPanel.css", source)
+        self.assertNotIn("Legacy host compatibility panel", source)
+        self.assertNotIn("./src/compat/", source)
+        self.assertFalse(list((self.frontend_root / "src" / "compat").glob("*.js")))
         self.assertNotIn("#__cam_toggle_dot", source)
-        self.assertNotIn("camera_lock_set", source)
-        self.assertNotIn("object_key_down", source)
-        self.assertNotIn("object_key_up", source)
-        self.assertIn("__coronaLegacyEditorAdapter", panel_source)
         self.assertNotIn("window.cefQuery", source)
-        self.assertIn("window.cefQuery", adapter_source)
-        self.assertIn("installLegacyEditorAdapter", adapter_source)
-        self.assertIn("from './compat/legacyEditorAdapter.js'", (
+        self.assertFalse(list((self.frontend_root / "src" / "compat").glob("*.js")))
+        self.assertFalse((self.frontend_root / "src" / "utils" / "legacyEditorAdapter.js").exists())
+        self.assertNotIn("installLegacyEditorAdapter", (
             self.frontend_root / "src" / "main.js"
         ).read_text(encoding="utf-8"))
-        self.assertIn("../compat/legacyEditorAdapter.js", wrapper_source)
+
+    def test_canonical_object_panel_owns_camera_lock_controls(self):
+        object_panel = (
+            self.frontend_root / "src" / "views" / "sidebar" / "Object.vue"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("actor.cameraLock.enabled", object_panel)
+        self.assertIn("actor.cameraLock.position", object_panel)
+        self.assertIn("editorApi.sceneTools.setActorCameraLock", object_panel)
 
     def test_obsolete_camera_follow_panel_is_not_kept_as_a_second_ui_owner(self):
         obsolete_panel = (

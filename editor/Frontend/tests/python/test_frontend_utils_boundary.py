@@ -15,7 +15,7 @@ ACTIVE_UTILS = (
     "viewportPick.js",
     "viewportUiMode.js",
 )
-COMPATIBILITY_UTILS = ("bridge.js", "legacyEditorAdapter.js")
+COMPATIBILITY_UTILS = ("bridge.js",)
 
 
 def test_utils_have_a_local_boundary_inventory():
@@ -45,13 +45,10 @@ def test_active_utils_do_not_depend_on_compatibility_bridge_or_raw_cef():
 
 def test_utils_compatibility_wrappers_have_canonical_owners():
     bridge = (UTILS_ROOT / "bridge.js").read_text(encoding="utf-8")
-    legacy_adapter = (UTILS_ROOT / "legacyEditorAdapter.js").read_text(
-        encoding="utf-8"
-    )
 
     assert "../api/editorApi.js" in bridge
     assert "../services/" in bridge
-    assert "../compat/legacyEditorAdapter.js" in legacy_adapter
+    assert not (UTILS_ROOT / "legacyEditorAdapter.js").exists()
 
 
 def test_utils_files_are_not_hidden_test_or_build_owners():

@@ -104,27 +104,34 @@ class ScratchCameraAdapterTests(unittest.TestCase):
             )],
         )
 
-    def test_actor_physics_uses_script_runtime_scene_datas_channel(self):
-        class SceneDatas:
+    def test_actor_physics_uses_script_runtime_scene_tools_contract(self):
+        class SceneTools:
             def __init__(self):
                 self.calls = []
 
-            def actor_operation(self, *args):
+            def set_actor_physics(self, *args):
                 self.calls.append(args)
                 return {"status": "success", "actor": {"name": "Box"}}
 
         class RuntimeScene:
             route = "Scene/test.scene"
 
-        scene_datas = SceneDatas()
+        scene_tools = SceneTools()
         proxy = corona_engine_scratch._NativeEditorActorProxy(
             RuntimeScene(), {"name": "Box", "geometry": {}}
         )
-        with mock.patch.object(editor_api.CoronaEditorApi, "scene_datas", scene_datas), \
+        with mock.patch.object(
+                 editor_api,
+                 "get_script_runtime_editor_api",
+                 return_value=SimpleNamespace(scene_tools=scene_tools),
+             ), \
              mock.patch.object(corona_engine_scratch, "assert_engine_operation_allowed"):
             self.assertTrue(proxy.set_physics_enabled(True))
 
-        self.assertEqual(scene_datas.calls, [("Scene/test.scene", "Box", "SetPhysicsEnabled", [True])])
+        self.assertEqual(
+            scene_tools.calls,
+            [("Scene/test.scene", "Box", {"physics_enabled": True})],
+        )
 
 
 if __name__ == "__main__":

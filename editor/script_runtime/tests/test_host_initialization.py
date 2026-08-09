@@ -56,3 +56,21 @@ def test_script_runtime_host_initializes_scripts_through_active_owner(monkeypatc
         scene,
     )
     assert runtime_host._scripts_initialized is True
+
+
+def test_script_runtime_host_skips_initialization_when_native_scene_is_unavailable(
+    monkeypatch, tmp_path
+):
+    import script_runtime.engine.host as host_module
+
+    monkeypatch.setattr(
+        host_module,
+        "get_script_runtime_editor_api",
+        lambda: (_ for _ in ()).throw(RuntimeError("native scene unavailable")),
+    )
+
+    runtime_host = SimpleNamespace(scripts_mgr=None, _scripts_initialized=False)
+    host_module.initialize_scripts(runtime_host, str(tmp_path))
+
+    assert runtime_host.scripts_mgr is None
+    assert runtime_host._scripts_initialized is False

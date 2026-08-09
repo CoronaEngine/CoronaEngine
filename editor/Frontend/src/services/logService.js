@@ -1,2 +1,5 @@
-// Historical import path. The compatibility implementation lives in compat.
-export { logService } from '../compat/logService.js';
+/** Canonical no-op facade for the retired legacy log lifecycle hooks. */
+export const logService = {
+  setLogReady: () => Promise.resolve({ success: true, disabled: true }),
+  setLogClose: () => Promise.resolve({ success: true, disabled: true }),
+};

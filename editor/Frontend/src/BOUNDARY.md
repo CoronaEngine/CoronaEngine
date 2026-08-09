@@ -11,7 +11,6 @@
 | `api/` | active contract adapter | 将 C++ manifest/schema 转成 JS 公共聚合接口；唯一 transport owner；见 [`api/BOUNDARY.md`](api/BOUNDARY.md) | 不删除公共契约；单个方法迁移需有 manifest、caller 和回归证据 |
 | `assets/` | static assets | 前端静态图片、样式和运行时资源 | 所有引用迁移且构建产物回归通过 |
 | `blockly/` | active editor/compiler | Blockly/Scratch、节点图 UI、受限 Script Runtime 代码生成 | 见 [`blockly/BOUNDARY.md`](blockly/BOUNDARY.md) |
-| `compat/` | compatibility | 旧 CEF/宿主协议和兼容 UI adapter；见 [`compat/BOUNDARY.md`](compat/BOUNDARY.md) | 外部宿主迁移并完成兼容回归后删除 |
 | `components/` | active UI | 可复用 Dock、面板和通用 UI 组件；不反向依赖路由级页面 | 调用方迁移到新 UI 且完成视觉/交互回归 |
 | `composables/` | active UI state | 跨组件可复用的 Vue composition 行为 | 对应状态/行为由明确 owner 吸收后删除 |
 | `config/` | active configuration | 插件面板元数据、应用和静态前端配置；不得静态导入 Vue 组件 | 配置 owner 合并且构建/启动回归通过 |
@@ -29,8 +28,8 @@
   manifest ID 映射到 Vue 组件，配置层不得反向依赖 `views/` 或具体 `.vue` 文件；
 - `services/` 组合 `api/`，`views/` 组合 `api/`、`services/`、`components/` 和已登记
   的 `utils/` adapter；`components/` 不应反向依赖路由级 `views/`；
-- `compat/` 允许 raw CEF，但不得向 active 页面扩散；`utils/bridge.js` 只为外部
-  旧宿主保留 re-export；
+- `utils/bridge.js` 仅为外部旧宿主保留历史 re-export；transport 和 service 实现分别归
+  `api/` 与 `services/`，不得在 Vue 业务中复制旧协议；
 - `window.coronaBridge` 的 `cameraMove`、拾取、Gizmo、视口和输入快速通道，只能在
   `utils/viewport*.js`、视口控制器或明确登记的输入组件中使用；它不构成第二套公共
   编辑器 API，也不得传递 `Camera`、`Actor` 或 `Geometry` 对象；

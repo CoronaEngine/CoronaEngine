@@ -73,18 +73,18 @@ def _legacy_main_workflow_allowed() -> bool:
 
 
 def _get_runtime_scene_actors() -> list[Any]:
-    """Read actors from the authoritative snapshot, with an explicit legacy fallback."""
+    """Read actors from the authoritative native scene snapshot."""
     try:
         try:
             from plugins.AITool.cai_extensions.mcp.tools.native_scene_state import (
-                native_actor_views_with_legacy_fallback,
+                native_actor_views,
             )
         except ModuleNotFoundError:
             from ..mcp.tools.native_scene_state import (  # type: ignore
-                native_actor_views_with_legacy_fallback,
+                native_actor_views,
             )
 
-        return list(native_actor_views_with_legacy_fallback(""))
+        return list(native_actor_views(""))
     except Exception:
         return []
 

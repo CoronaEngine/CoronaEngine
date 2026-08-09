@@ -12,15 +12,13 @@ C++ 引擎对象 owner，也不是角色脚本执行环境。
 | `registry.py`、`plugin_loader.py`、`plugin_base.py` | active registry | 插件注册、按需加载、初始化/关闭顺序和兼容基础设施 | registry 生命周期被明确 host owner 吸收后删除 |
 | `archive/` | active support | 项目归档解析及解析错误类型 | 所有调用方迁移到新的 archive owner 后删除 |
 | `project_templates.py` | active project template support | ProjectLauncher 模板复制、模板路径规范化和项目 INI 初始化 | native project 创建完整覆盖模板初始化且旧宿主完成迁移后删除 |
-| `compat/legacy_project_support.py` | compatibility facade owner | 转发 `project_templates` 与 `scene_support` 的历史导入路径 | 外部旧宿主完成 import 迁移后删除 |
-| `compat/legacy_project_copy.py` | compatibility project support owner | 旧项目复制、打开和 Vision 元数据兼容迁移，并保留 `core_path` 注入 | 外部旧宿主完成 project copy 迁移后删除 |
-| `project_support.py` | compatibility shim | 转发到 `compat/legacy_project_support.py` 的历史导入路径 | 外部旧宿主完成 import 迁移后删除 |
-| `project_copy.py` | compatibility shim | 转发到 `compat/legacy_project_copy.py` 的历史导入路径 | 外部旧宿主完成 import 迁移后删除 |
+| `compat/legacy_project_copy.py` | removed compatibility code | ProjectCopy 已集中到 `legacy_project_copy.py`，新调用传入显式 `data_root` | 如发现外部旧 import，按 canonical owner 迁移 |
+| `project_copy.py` | removed compatibility code | 旧 runtime import 已删除 | 如发现外部旧 import，按 canonical owner 迁移 |
 | `scene_support.py` | active scene support | 场景清单读写和 legacy 场景自动保存 | Script Runtime 与 legacy entity 完成新场景持久化迁移后删除 |
 | `project_context.py` | active project context | 为 Runtime、Script Runtime 和插件解析活动项目路径；兼容同步仍只写入旧宿主状态 | 所有 legacy consumer 完成迁移且 native project context adapter 完整覆盖后删除 |
 | `response_utils.py`、`native_engine.py` | active host support | 结构化响应和嵌入式原生模块解析 | 对应 host support owner 吸收后删除 |
 | `network_sync_policy.py`、`logging.py` | active policy/support | 网络同步策略和 Python 日志配置 | 统一 host policy owner 吸收后删除 |
-| `legacy_*.py` | compatibility adapter/shim | 通用 host legacy 适配和各插件/Script Runtime 兼容入口的历史转发；专属实现归对应 owner 的 `compat` | 对应外部宿主/旧项目迁移且回归通过后删除 |
+| `legacy_*.py` | compatibility adapter/shim | 通用 host legacy 适配和仍登记的插件/Script Runtime 兼容入口；专属实现归对应 owner 的 `compat` | 对应外部宿主/旧项目迁移且回归通过后删除 |
 | `legacy/` | compatibility model | 历史 `Actor`、`Scene`、`Camera`、组件和 manager 的导入/运行兼容层 | 旧脚本与 legacy adapter 完成迁移后删除 |
 
 ## 依赖方向

@@ -529,11 +529,11 @@ class _NativePlacementScene:
 
 
 def _resolve_tier2_scene(scene_name: str):
-    """Resolve tier2's read-only scene view through the aggregate adapter first."""
+    """Resolve tier2's read-only scene view through the native aggregate API."""
     try:
         from ...mcp.tools import native_scene_state
 
-        actors = native_scene_state.native_actor_views_with_legacy_fallback(
+        actors = native_scene_state.native_actor_views(
             scene_name or ""
         )
         if actors:
@@ -779,13 +779,13 @@ def _fix_wall_objects(scene_name: str, wall_names: List[str]) -> int:
         return 0
 
     # Wall placement only changes the actor transform, so use the aggregate
-    # value-object contract before entering the old Python Scene fallback.
+    # value-object contract.
     try:
-        from ...mcp.tools.native_scene_state import find_actor_with_legacy_fallback
+        from ...mcp.tools.native_scene_state import find_native_actor
 
         fixed = 0
         for name in wall_names:
-            actor = find_actor_with_legacy_fallback(scene_name, name)
+            actor = find_native_actor(scene_name, name)
             if actor is None:
                 continue
             pos = actor.get_position()
@@ -825,13 +825,13 @@ def _apply_physics_settlement(scene_name: str, all_actor_names: List[str]) -> in
 
     try:
         from ...mcp.tools.native_scene_state import (
-            find_actor_with_legacy_fallback,
+            find_native_actor,
             set_actor_physics_value,
         )
 
         actors = []
         for name in floor_names:
-            actor = find_actor_with_legacy_fallback(scene_name, name)
+            actor = find_native_actor(scene_name, name)
             if actor is None:
                 continue
             try:
@@ -912,29 +912,20 @@ def _verify_mechanics_available(scene_name: str) -> None:
     try:
         from ...mcp.tools import native_scene_state
 
-        actors = native_scene_state.native_actor_views_with_legacy_fallback(
+        actors = native_scene_state.native_actor_views(
             scene_name or ""
         )
         if not actors and scene_name:
-            actors = native_scene_state.native_actor_views_with_legacy_fallback("")
+            actors = native_scene_state.native_actor_views("")
         if actors:
             sample = actors[0]
             native_mechanics = getattr(sample, "mechanics", None)
-            legacy_mechanics = None
             if isinstance(native_mechanics, dict):
                 mechanics = native_mechanics
                 has_mechanics = True
             else:
-                legacy_mechanics = getattr(sample, "_mechanics", None)
                 mechanics = {}
-                has_mechanics = legacy_mechanics is not None
-                if legacy_mechanics is not None:
-                    try:
-                        mechanics["physics_enabled"] = (
-                            legacy_mechanics.get_physics_enabled()
-                        )
-                    except Exception:
-                        pass
+                has_mechanics = False
             has_physics = bool(mechanics.get("physics_enabled")) if has_mechanics else False
             aabb_ready = bool(getattr(sample, "bounds_ready", False))
             if not aabb_ready:

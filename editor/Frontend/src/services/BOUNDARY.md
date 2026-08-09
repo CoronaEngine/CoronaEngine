@@ -2,8 +2,8 @@
 
 `src/services` 是前端 active domain facade 和 UI 编排目录，不是 C++ manifest/schema owner，
 也不直接持有 Scene/Actor、AI runtime、API key 或 raw CEF transport。公共契约唯一来源仍是
-`src/api/editorApi.js`。历史兼容 facade 的实现归 `src/compat`；services 中同名文件只保留
-旧 import wrapper。
+`src/api/editorApi.js`。已迁移的 service 由本目录直接承载；历史外部宿主 alias 只允许通过
+`utils/bridge.js` 转发，不在 Frontend 建立第二个实现目录。
 
 ## 分类
 
@@ -15,14 +15,15 @@
 `lanChatService.js`、`networkService.js`、`aiService.js`、
 `projectLauncherService.js`、`resourceService.js`。
 
-`sceneService.js`、`projectService.js`、`scriptingService.js`、`fileService.js` 和
-`projectSettingsService.js` 仅为历史路径 wrapper，实际实现位于 `src/compat`。
+`sceneService.js`、`projectService.js`、`scriptingService.js`、`fileService.js`、
+`projectSettingsService.js` 和 `logService.js` 均已迁移为 canonical service owner，
+直接组合 `editorApi`，不再通过兼容实现目录转发。
 
-`appService.js` 也仅为历史路径 wrapper；旧 Dock、CameraView 窗口和进程操作实现位于
-`src/compat/appService.js`。
+`appService.js` 是 Dock、CameraView 窗口和进程操作的 canonical service owner，底层调用
+仍统一经过 `src/api/editorApi.js` 的 `Bridge`/`editorApi`。
 
-旧的 `logService.js` 仅是转发 wrapper；disabled no-op 实现位于
-`src/compat/logService.js`，只供历史 bridge/外部宿主使用。Active Vue 页面不应调用它。
+`logService.js` 仅保留历史 disabled no-op 语义，但实现归 active service owner；Active Vue
+页面不应调用它。
 
 ### 节点图领域编排
 

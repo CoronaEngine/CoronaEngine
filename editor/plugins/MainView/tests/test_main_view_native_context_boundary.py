@@ -2,7 +2,7 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-MAIN_VIEW = REPO_ROOT / "plugins" / "MainView" / "compat" / "legacy_main_view.py"
+MAIN_VIEW = REPO_ROOT / "plugins" / "MainView" / "main.py"
 HANDLERS = (
     REPO_ROOT
     / ".."

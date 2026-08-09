@@ -16,15 +16,15 @@ logger = logging.getLogger(__name__)
 
 
 PYTHON_SCRIPT_SERVICES = {
-    "ProjectArchive": ("plugins.ProjectArchive.compat.legacy_project_archive", "ProjectArchive"),
+    "ProjectArchive": ("plugins.ProjectArchive.main", "ProjectArchive"),
     "AITool": ("plugins.AITool.main", "AITool"),
     "ScratchTool": (f"{_BLOCKLY_PACKAGE}.blockly.main", "ScratchTool"),
-    "MainView": ("plugins.MainView.compat.legacy_main_view", "MainView"),
-    "ProjectLauncher": ("plugins.ProjectLauncher.compat.legacy_project_launcher", "ProjectLauncher"),
-    "FileManager": ("plugins.FileManager.compat.legacy_file_manager", "FileManager"),
-    "ProjectSettings": ("plugins.ProjectSettings.compat.legacy_project_settings", "ProjectSettings"),
-    "SceneDatas": ("plugins.SceneDatas.compat.legacy_scene_datas_plugin", "SceneDatas"),
-    "SceneTools": ("plugins.SceneTools.compat.legacy_scene_tools", "SceneTools"),
+    "MainView": ("plugins.MainView.main", "MainView"),
+    "ProjectLauncher": ("plugins.ProjectLauncher.main", "ProjectLauncher"),
+    "FileManager": ("plugins.FileManager.main", "FileManager"),
+    "ProjectSettings": ("plugins.ProjectSettings.main", "ProjectSettings"),
+    "SceneDatas": ("plugins.SceneDatas.main", "SceneDatas"),
+    "SceneTools": ("plugins.SceneTools.main", "SceneTools"),
 }
 
 CORE_PYTHON_SCRIPT_SERVICES = set()

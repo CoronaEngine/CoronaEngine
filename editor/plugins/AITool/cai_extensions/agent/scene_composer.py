@@ -34,22 +34,13 @@ def _actor_name(actor: Any) -> str:
 
 
 def _update_actor_physics(actor: Any, **values: Any) -> bool:
-    """Update physics through the aggregate actor view or legacy fallback."""
+    """Update physics through the aggregate native actor view."""
     setter = getattr(actor, "set_mechanics", None)
     if callable(setter):
         setter(values)
         return True
 
-    mechanics = getattr(actor, "_mechanics", None)
-    if mechanics is None:
-        return False
-    updated = False
-    for key, value in values.items():
-        method = getattr(mechanics, f"set_{key}", None)
-        if callable(method):
-            method(value)
-            updated = True
-    return updated
+    return False
 
 
 def _safe_generated_asset_name(value: str, fallback: str = "scene") -> str:
@@ -3578,12 +3569,12 @@ class SceneComposer:
                     import time as _t
                     try:
                         from ..mcp.tools.native_scene_state import (
-                            native_actor_views_with_legacy_fallback,
+                            native_actor_views,
                         )
 
                         actors_by_name = {
                             _actor_name(actor).lower(): actor
-                            for actor in native_actor_views_with_legacy_fallback("")
+                            for actor in native_actor_views("")
                             if _actor_name(actor)
                         }
                         if not actors_by_name:

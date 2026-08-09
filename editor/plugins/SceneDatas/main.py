@@ -1,5 +1,10 @@
-"""Compatibility import path for the historical SceneDatas registration shell."""
+"""Explicit legacy registration shell for the historical SceneDatas service."""
 
-from plugins.SceneDatas.compat.legacy_scene_datas_plugin import SceneDatas
+from runtime.plugin_base import PluginBase
+
+
+@PluginBase.register_web("SceneDatas")
+class SceneDatas(PluginBase):
+    """Compatibility-only service; scene state belongs to native aggregates."""
 
 __all__ = ["SceneDatas"]

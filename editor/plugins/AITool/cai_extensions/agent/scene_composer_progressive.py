@@ -1812,10 +1812,10 @@ def _capture_viewport_snapshot(composer: Any) -> Dict[str, Any]:
 
 
 def _get_current_scene() -> Any:
-    """Return the shared native scene value object or legacy fallback."""
-    from ..mcp.tools.native_scene_state import resolve_scene_value
+    """Return the shared native scene value object."""
+    from ..mcp.tools.native_scene_state import resolve_native_scene_value
 
-    return resolve_scene_value("")
+    return resolve_native_scene_value("")
 
 
 def _actor_name(actor: Any) -> str:

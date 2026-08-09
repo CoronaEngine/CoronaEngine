@@ -1,8 +1,8 @@
 """Script Runtime host lifecycle helpers.
 
 The editor host calls this module for canonical Script Runtime startup. Native
-scene route/value objects are preferred; the legacy Scene lookup remains a
-lazy fallback for old projects until their script targets are migrated.
+scene route/value objects are required; startup does not recreate legacy
+Python Scene objects.
 """
 
 from __future__ import annotations
@@ -51,13 +51,6 @@ def initialize_scripts(host: Any, project_path: str) -> None:
     except Exception as exc:
         logger.debug("Native Script Runtime scene target unavailable: %s", exc)
 
-    if scene is None:
-        from script_runtime.compat.legacy_scene_adapter import get_scene, list_scene_routes
-
-        scenes = list_scene_routes()
-        if not scenes:
-            return
-        scene = get_scene(scenes[0])
     if scene is None:
         return
 

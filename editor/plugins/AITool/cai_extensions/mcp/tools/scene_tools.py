@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from typing import Literal, List, Optional, Tuple
 
+from api.editor_api import CoronaEditorApi
 from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field
 
@@ -10,7 +11,6 @@ from Quasar.ai_tools.response_adapter import build_error_result, build_part, bui
 from .native_scene_state import (
     find_native_actor,
     get_native_scene_snapshot,
-    list_legacy_scene_routes,
     native_actor_views,
     set_native_actor_transform,
 )
@@ -131,11 +131,33 @@ def _build_scene_actors_tool(scene_manager) -> StructuredTool:
 def _build_scene_list_tool(scene_manager) -> StructuredTool:
     def _scene_list() -> str:
         try:
-            snapshot = get_native_scene_snapshot("")
-            return _json_result({"count": 1, "scenes": [{"route": snapshot.get("scene", ""), "name": snapshot.get("scene_name", ""), "actor_count": len(snapshot.get("actors") or [])}]})
-        except Exception:
-            routes = list_legacy_scene_routes(manager=scene_manager)
-            return _json_result({"count": len(routes), "scenes": [{"route": route} for route in routes]})
+            raw = CoronaEditorApi.scene.list_routes()
+            payload = json.loads(raw) if isinstance(raw, str) else raw
+            if not isinstance(payload, dict) or payload.get("status") == "error":
+                raise RuntimeError(
+                    str((payload or {}).get("message", "Native scene route query failed"))
+                )
+            scenes = payload.get("scenes")
+            if not isinstance(scenes, list):
+                scenes = []
+            return _json_result(
+                {
+                    "count": len(scenes),
+                    "scenes": [
+                        {
+                            "route": item.get("path", ""),
+                            "name": item.get("name", ""),
+                        }
+                        for item in scenes
+                        if isinstance(item, dict)
+                    ],
+                    "active_index": payload.get("active_index", 0),
+                    "entrance_scene": payload.get("entrance_scene", ""),
+                    "active_scene": payload.get("active_scene", ""),
+                }
+            )
+        except Exception as exc:
+            return build_error_result(error_message=str(exc)).to_envelope(interface_type="scene")
     return StructuredTool(name="scene_list", description="List loaded scenes.", args_schema=SceneListInput, func=_scene_list)
 
 

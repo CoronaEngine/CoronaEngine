@@ -551,7 +551,9 @@ class ScratchTool:
             requested_scene = scene_name or ""
             requested_actor = actor_name or ""
             target_type = "actor" if str(target_type or "actor").lower() == "model" else str(target_type or "actor").lower()
-            resolved = corona_engine_scratch.resolve_runtime_target(target_type, scene_name, actor_name)
+            resolved = corona_engine_scratch.resolve_runtime_target(
+                target_type, scene_name, actor_name
+            )
             if resolved.get("status") != "ok":
                 message = str(resolved.get("message") or "\u65e0\u6cd5\u7ed1\u5b9a\u8fd0\u884c\u76ee\u6807")
                 cls._replace_exec_state(
@@ -1548,7 +1550,7 @@ class ScratchTool:
             ))
         snapshot: dict[str, Any] = {"kind": "runtime", "scope": scope, "snapshots": snapshots}
         if scope == "project" and any(item.get("target_type") == "project" for item in targets):
-            snapshot["legacy"] = cls._create_preview_state_snapshot(project_path)
+            snapshot["project_scenes"] = cls._create_preview_state_snapshot(project_path)
         return snapshot
 
     @classmethod
@@ -1562,7 +1564,7 @@ class ScratchTool:
                 snapshot["scenes"][route] = native_state
                 continue
 
-            snapshot["scenes"][route] = cls._create_legacy_preview_scene_state(route)
+            raise RuntimeError(f"native preview snapshot unavailable for {route}")
 
         logger.info("[ScratchTool] preview state snapshot captured: %d scenes", len(snapshot["scenes"]))
         return snapshot
@@ -1630,62 +1632,6 @@ class ScratchTool:
             return None
 
     @classmethod
-    def _create_legacy_preview_scene_state(cls, route: str) -> dict[str, Any]:
-        from script_runtime.compat.legacy_scene_adapter import get_or_create_scene
-
-        scene = get_or_create_scene(route)
-        scene_state: dict[str, Any] = {
-                "actors": {},
-                "cameras": {},
-                "environment": {},
-                "enabled": cls._safe_call(scene, "is_enabled"),
-                "simulation_enabled": cls._safe_call(scene, "is_simulation_enabled"),
-            }
-
-        env = scene.get_environment() if hasattr(scene, "get_environment") else None
-        if env is not None:
-            scene_state["environment"] = {
-                "sun_direction": cls._safe_call(env, "get_sun_direction"),
-                "floor_grid": cls._safe_call(env, "get_floor_grid"),
-                "gravity": cls._safe_call(env, "get_gravity"),
-                "floor_y": cls._safe_call(env, "get_floor_y"),
-                "floor_restitution": cls._safe_call(env, "get_floor_restitution"),
-                "fixed_dt": cls._safe_call(env, "get_fixed_dt"),
-            }
-
-        for camera in scene.get_cameras():
-            camera_name = getattr(camera, "name", "")
-            if not camera_name:
-                continue
-            scene_state["cameras"][camera_name] = {
-                "position": cls._safe_call(camera, "get_position"),
-                "forward": cls._safe_call(camera, "get_forward"),
-                "world_up": cls._safe_call(camera, "get_world_up"),
-                "fov": cls._safe_call(camera, "get_fov"),
-                "output_mode": cls._safe_call(camera, "get_output_mode"),
-                "width": getattr(camera, "width", None),
-                "height": getattr(camera, "height", None),
-            }
-
-        for actor in scene.get_actors():
-            actor_name = getattr(actor, "name", "")
-            if not actor_name:
-                continue
-            scene_state["actors"][actor_name] = {
-                "position": cls._safe_call(actor, "get_position"),
-                "rotation": cls._safe_call(actor, "get_rotation"),
-                "scale": cls._safe_call(actor, "get_scale"),
-                "visible": cls._safe_call(actor, "get_visible"),
-                "mass": cls._safe_call(actor, "get_mass"),
-                "restitution": cls._safe_call(actor, "get_restitution"),
-                "damping": cls._safe_call(actor, "get_damping"),
-                "physics_enabled": cls._safe_call(actor, "get_physics_enabled"),
-                "collision_enabled": cls._safe_call(actor, "get_collision_enabled"),
-            }
-
-        return scene_state
-
-    @classmethod
     def _restore_preview_state_snapshot(
         cls, clear_snapshot: bool = True
     ) -> tuple[bool, str | None]:
@@ -1702,27 +1648,15 @@ class ScratchTool:
                 for runtime_snapshot in snapshot.get("snapshots") or []:
                     corona_engine_scratch.restore_runtime_scene_state(runtime_snapshot)
                     restored_scenes.add(str(runtime_snapshot.get("scene_name") or ""))
-                legacy = snapshot.get("legacy")
+                project_scenes = snapshot.get("project_scenes") or {}
             else:
-                legacy = snapshot
+                project_scenes = snapshot
 
-            if legacy:
-                for route, scene_state in (legacy.get("scenes") or {}).items():
-                    if scene_state.get("binding_mode") == "native_editor":
-                        cls._restore_native_preview_scene_state(route, scene_state)
-                        restored_scenes.add(route)
-                        continue
-
-                    from script_runtime.compat.legacy_scene_adapter import get_scene
-                    scene = get_scene(route)
-                    if scene is None:
-                        continue
-                    cls._restore_scene_state(scene, scene_state)
-                    restored_scenes.add(route)
-                    try:
-                        scene.save_data()
-                    except Exception:
-                        logger.exception("[ScratchTool] failed to save restored scene: %s", route)
+            for route, scene_state in (project_scenes.get("scenes") or {}).items():
+                if scene_state.get("binding_mode") != "native_editor":
+                    raise RuntimeError(f"non-native preview snapshot is unsupported: {route}")
+                cls._restore_native_preview_scene_state(route, scene_state)
+                restored_scenes.add(route)
 
             cls._notify_preview_state_restored({item for item in restored_scenes if item})
             if clear_snapshot:
@@ -1770,72 +1704,6 @@ class ScratchTool:
                     set_actor_transform(route, actor_name, transform)
                 ) is None:
                     raise RuntimeError(f"native actor restore failed: {route}/{actor_name}")
-
-    @staticmethod
-    def _safe_call(target: object, method_name: str):
-        if target is None or not hasattr(target, method_name):
-            return None
-        try:
-            return getattr(target, method_name)()
-        except Exception:
-            return None
-
-    @staticmethod
-    def _apply_if_present(target: object, method_name: str, value, *extra_args) -> None:
-        if value is None or target is None or not hasattr(target, method_name):
-            return
-        try:
-            getattr(target, method_name)(value, *extra_args)
-        except TypeError:
-            getattr(target, method_name)(value)
-        except Exception:
-            logger.exception("[ScratchTool] restore %s failed", method_name)
-
-    @classmethod
-    def _restore_scene_state(cls, scene: object, scene_state: dict[str, Any]) -> None:
-        cls._apply_if_present(scene, "set_enabled", scene_state.get("enabled"))
-        cls._apply_if_present(scene, "set_simulation_enabled", scene_state.get("simulation_enabled"))
-
-        env = scene.get_environment() if hasattr(scene, "get_environment") else None
-        env_state = scene_state.get("environment") or {}
-        if env is not None:
-            cls._apply_if_present(env, "set_sun_direction", env_state.get("sun_direction"))
-            cls._apply_if_present(env, "set_floor_grid", env_state.get("floor_grid"))
-            cls._apply_if_present(env, "set_gravity", env_state.get("gravity"))
-            cls._apply_if_present(env, "set_floor_y", env_state.get("floor_y"))
-            cls._apply_if_present(env, "set_floor_restitution", env_state.get("floor_restitution"))
-            cls._apply_if_present(env, "set_fixed_dt", env_state.get("fixed_dt"))
-
-        for camera_name, camera_state in (scene_state.get("cameras") or {}).items():
-            camera = scene.find_camera(camera_name) if hasattr(scene, "find_camera") else None
-            if camera is None:
-                continue
-            position = camera_state.get("position")
-            forward = camera_state.get("forward")
-            world_up = camera_state.get("world_up")
-            fov = camera_state.get("fov")
-            if position is not None and forward is not None and world_up is not None and fov is not None:
-                cls._apply_if_present(camera, "set", position, forward, world_up, fov)
-            output_mode = camera_state.get("output_mode")
-            cls._apply_if_present(camera, "set_output_mode", output_mode)
-            width = camera_state.get("width")
-            height = camera_state.get("height")
-            if width is not None and height is not None:
-                cls._apply_if_present(camera, "set_size", int(width), int(height))
-
-        for actor_name, actor_state in (scene_state.get("actors") or {}).items():
-            actor = scene.find_actor(actor_name) if hasattr(scene, "find_actor") else None
-            if actor is None:
-                continue
-            cls._apply_if_present(actor, "set_position", actor_state.get("position"), True)
-            cls._apply_if_present(actor, "set_rotation", actor_state.get("rotation"), True)
-            cls._apply_if_present(actor, "set_scale", actor_state.get("scale"), True)
-            cls._apply_if_present(actor, "set_visible", actor_state.get("visible"))
-            cls._apply_if_present(actor, "set_mass", actor_state.get("mass"))
-            cls._apply_if_present(actor, "set_restitution", actor_state.get("restitution"))
-            cls._apply_if_present(actor, "set_damping", actor_state.get("damping"))
-            cls._apply_if_present(actor, "set_physics_enabled", actor_state.get("physics_enabled"))
-            cls._apply_if_present(actor, "set_collision_enabled", actor_state.get("collision_enabled"))
 
     @staticmethod
     def _notify_preview_state_restored(scene_routes: set[str]) -> None:

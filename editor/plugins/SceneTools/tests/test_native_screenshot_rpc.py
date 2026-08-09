@@ -61,16 +61,8 @@ class NativeSceneToolsRpcTests(unittest.TestCase):
             frontend_root / "api" / "editorApi.js",
         ]
         for directory, names in {
-            "compat": {
-                "appService.js",
-                "fileService.js",
-                "logService.js",
-                "projectService.js",
-                "projectSettingsService.js",
-                "sceneService.js",
-                "scriptingService.js",
-            },
             "services": {
+                "appService.js",
                 "aiService.js",
                 "fileService.js",
                 "lanChatService.js",
@@ -78,6 +70,7 @@ class NativeSceneToolsRpcTests(unittest.TestCase):
                 "networkService.js",
                 "projectLauncherService.js",
                 "projectSettingsService.js",
+                "projectService.js",
                 "resourceService.js",
                 "sceneService.js",
                 "scriptingService.js",
@@ -3118,6 +3111,21 @@ class NativeSceneToolsRpcTests(unittest.TestCase):
         self.assertIsNotNone(match)
         self.assertIn("persist_native_scene_common(*scene)", match.group(0))
 
+    def test_native_scene_snapshot_exposes_embedded_vision_document_metadata(self):
+        source = self._handler_source()
+        for function_name, end_marker in (
+            ("nlohmann::json scene_to_json(const NativeEditorScene& scene)", "NativeEditorActor* find_native_actor"),
+            ("std::string get_editor_scene_snapshot_from_python(const std::string& scene_name)", "std::string set_editor_actor_transform_from_python"),
+        ):
+            start = source.find(function_name)
+            end = source.find(end_marker, start)
+            self.assertGreaterEqual(start, 0)
+            self.assertGreater(end, start)
+            snapshot_body = source[start:end]
+            for field in ("document_version", "document_encoding", "document_asset_root", "document_data"):
+                with self.subTest(function=function_name, field=field):
+                    self.assertIn(f'"{field}"', snapshot_body)
+
     def test_vision_project_open_embeds_document_without_scene_source_path(self):
         source = self._handler_source()
 
@@ -4290,7 +4298,7 @@ class NativeSceneToolsRpcTests(unittest.TestCase):
     def test_project_settings_does_not_write_project_section_into_portable_scene(self):
         repo_root = self._repo_root()
         settings_source = (
-            repo_root / "editor" / "plugins" / "ProjectSettings" / "compat" / "legacy_project_settings.py"
+            repo_root / "editor" / "plugins" / "ProjectSettings" / "main.py"
         ).read_text(encoding="utf-8")
         self.assertIn("CoronaEditorApi.project_settings.get_active_project_info", settings_source)
         self.assertIn("CoronaEditorApi.project_settings.save_active_project_info", settings_source)
@@ -4343,7 +4351,7 @@ class NativeSceneToolsRpcTests(unittest.TestCase):
         )
 
         project_settings_source = (
-            repo_root / "editor" / "plugins" / "ProjectSettings" / "compat" / "legacy_project_settings.py"
+            repo_root / "editor" / "plugins" / "ProjectSettings" / "main.py"
         ).read_text(encoding="utf-8")
         self.assertIn("get_active_project_info", project_settings_source)
         self.assertIn("save_active_project_info", project_settings_source)

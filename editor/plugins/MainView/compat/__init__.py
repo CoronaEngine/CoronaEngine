@@ -1,2 +1,0 @@
-"""MainView-owned compatibility adapters."""
-

@@ -8,7 +8,6 @@ EXPECTED_DIRECTORIES = (
     "api",
     "assets",
     "blockly",
-    "compat",
     "components",
     "composables",
     "config",
@@ -44,7 +43,7 @@ def test_frontend_source_tree_declares_the_single_transport_and_compatibility_ow
 
     assert "api/editorApi.js" in source
     assert "services/" in source
-    assert "compat/" in source
+    assert "compat/" not in source
     assert "utils/bridge.js" in source
     assert "不得" in source
 
@@ -55,7 +54,6 @@ def test_frontend_boundary_documents_existing_local_sub_boundaries():
     for relative_path in (
         "api/BOUNDARY.md",
         "blockly/BOUNDARY.md",
-        "compat/BOUNDARY.md",
         "services/BOUNDARY.md",
         "utils/BOUNDARY.md",
     ):

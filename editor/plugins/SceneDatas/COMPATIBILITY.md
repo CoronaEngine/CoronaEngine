@@ -10,7 +10,7 @@ SceneDatas 注册壳仍仅用于外部兼容，不是仓内面板的数据或状
 
 | 兼容入口 | canonical owner | 当前调用范围 | 删除条件 |
 |---|---|---|---|
-| `SceneDatas/compat/legacy_scene_datas_plugin.py` 的 `SceneDatas` 注册壳（`main.py` 仅为旧入口 wrapper） | `scene.get_snapshot`、`scene.set_actor_transform`、`sceneTools.*` manifest 聚合契约 | 旧 CEF 宿主和 Script Runtime 兼容注册；Vue Object panel 已使用独立 UI ID | native scene/project lifecycle 覆盖旧面板初始化、场景/Actor 绑定、读写、切换和关闭，并通过旧宿主回归 |
+| `SceneDatas/main.py` 的 `SceneDatas` 注册壳 | `scene.get_snapshot`、`scene.set_actor_transform`、`sceneTools.*` manifest 聚合契约 | 旧 CEF 宿主和 Script Runtime 兼容注册；Vue Object panel 已使用独立 UI ID | native scene/project lifecycle 覆盖旧面板初始化、场景/Actor 绑定、读写、切换和关闭，并通过旧宿主回归 |
 
 ## 约束
 

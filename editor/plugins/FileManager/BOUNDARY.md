@@ -8,8 +8,7 @@ Python `FileManager` service 仅为旧宿主兼容，正常编辑器启动不自
 ## 负责内容
 
 - 当前项目文件树、文件读写、重命名、删除和资源操作的请求编排；
-- Python 入口只转发到 native `files.*`；`compat/legacy_file_scene_adapter.py` 保留外部旧宿主兼容事件，
-  `runtime/legacy_file_scene_adapter.py` 仅为历史导入 shim。
+- Python 入口只转发到 native `files.*`；旧 Scene/Actor 文件绑定 adapter 已删除。
 
 ## 不负责
 
@@ -19,7 +18,13 @@ Python `FileManager` service 仅为旧宿主兼容，正常编辑器启动不自
 - 不导入 `CoronaCore`、`backend` 或直接暴露 native engine 对象；
 - `editor/backend/file_system/main.py` 仅是历史导入 wrapper，不得新增实现。
 
+## 删除记录
+
+所有仓内文件面板已切换到 `files.*` handler，且没有仓内生产代码调用旧 Scene/Actor
+绑定 adapter。`compat/legacy_file_scene_adapter.py` 已删除；后续新增文件事件必须
+由 native `files.*` contract 提供，不得恢复新的插件级 Scene/Actor 绑定。
+
 ## 删除条件
 
-当所有支持的文件面板切换到 `files.*` handler、兼容事件由公共 owner 覆盖并通过文件
-面板和项目切换回归后，才可删除 legacy file adapter 或旧导入路径。
+只有外部旧宿主完成 `FileManager` 历史入口迁移，并通过文件树、读写、重命名和删除
+操作的回归测试后，才可删除剩余的历史入口 wrapper。

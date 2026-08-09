@@ -1,24 +1,25 @@
-"""Compatibility owner for importing Vision documents into legacy Python Scenes.
+"""Native SceneTools owner for importing Vision documents.
 
-New editor code must use the native Scene/Vision contracts.  This module keeps
-the old Web API behavior available for hosts that still provide Python Scene
-objects, while keeping that dependency out of the active SceneTools facade.
+The importer uses native scene snapshots, aggregate mutations and scene_save;
+it does not resolve or mutate legacy Python Scene objects.
 """
 
 import copy
 import json
 import logging
 import os
-import uuid
 
 from api.editor_api import CoronaEditorApi, get_active_project_path
-from plugins.SceneTools.compat.legacy_vision_scene_adapter import get_legacy_vision_scene
 from plugins.SceneTools.vision_document import (
     extract_vision_camera_pose as _extract_vision_camera_pose,
     infer_vision_render_mode as _infer_vision_render_mode,
     iter_vision_shapes as _iter_vision_shapes,
     resolve_vision_model_path as _resolve_vision_model_path,
     vision_document_for_embedded_storage as _vision_document_for_embedded_storage,
+    encode_vision_document as _encode_vision_document,
+    decode_vision_document as _decode_vision_document,
+    VISION_DOCUMENT_ENCODING as _VISION_DOCUMENT_ENCODING,
+    VISION_DOCUMENT_VERSION as _VISION_DOCUMENT_VERSION,
     compact_removed_shapes as _compact_removed_shapes,
     remove_shape_at_json_path as _remove_shape_at_json_path,
     shape_at_json_path as _shape_at_json_path,
@@ -44,7 +45,7 @@ from plugins.SceneTools.vision_bindings import (
     vision_shape_guid as _vision_shape_guid,
     vision_shape_identity_key as _vision_shape_identity_key,
 )
-from plugins.SceneTools.compat.legacy_vision_binding_sync import (
+from plugins.SceneTools.vision_binding_sync import (
     find_actor_by_guid as _find_actor_by_guid,
     remove_stale_vision_proxy_actors as _remove_stale_vision_proxy_actors,
     sync_external_live_binding_source_path as _sync_external_live_binding_source_path,
@@ -59,6 +60,134 @@ def _active_project_path():
         return get_active_project_path()
     except Exception:
         return ""
+
+
+class _NativeVisionCamera:
+    def __init__(self, scene, data: dict):
+        self._scene = scene
+        self._data = dict(data or {})
+        self.name = self._data.get("name", "")
+        self.camera_id = self._data.get("camera_id", self.name)
+
+    def set_vision_render_mode(self, mode: str):
+        return CoronaEditorApi.scene_tools.set_vision_render_mode(
+            self._scene.route, self.name, mode
+        )
+
+    def set_camera(self, position, forward, world_up, fov):
+        return CoronaEditorApi.viewport.set_camera_pose(
+            self._scene.route,
+            self.name,
+            {
+                "position": list(position),
+                "forward": list(forward),
+                "world_up": list(world_up),
+                "fov": float(fov),
+                "persist": True,
+            },
+        )
+
+    def to_dict(self):
+        return dict(self._data)
+
+
+class _NativeVisionActor:
+    def __init__(self, data: dict):
+        self._data = dict(data or {})
+        self.actor_guid = self._data.get("actor_guid", "")
+        self.name = self._data.get("name", "")
+        self.route = self._data.get("route", self._data.get("path", ""))
+
+    def get_position(self):
+        return list((self._data.get("geometry") or {}).get("position", [0.0, 0.0, 0.0]))
+
+    def get_rotation(self):
+        return list((self._data.get("geometry") or {}).get("rotation", [0.0, 0.0, 0.0]))
+
+    def get_scale(self):
+        return list((self._data.get("geometry") or {}).get("scale", [1.0, 1.0, 1.0]))
+
+    # Native C++ owns external Vision binding metadata. These methods exist
+    # only so the pure derived-scene writer can consume a value object.
+    def set_external_vision_binding(self, binding):
+        return None
+
+    def clear_external_vision_binding(self):
+        return None
+
+
+class _NativeVisionScene:
+    """Small native snapshot/value facade used by Vision orchestration."""
+
+    def __init__(self, snapshot: dict):
+        self.route = str(snapshot.get("scene") or snapshot.get("scene_id") or "")
+        self.name = str(snapshot.get("scene_name") or self.route)
+        self._snapshot = snapshot
+        self._vision = snapshot.get("vision") if isinstance(snapshot.get("vision"), dict) else {}
+        self.vision_storage = self._vision.get("storage", "")
+        self.vision_source_id = self._vision.get("source_id", "")
+        self.vision_source_path = self._vision.get("source_path", "")
+        self.vision_import_mode = self._vision.get("import_mode", "")
+        self.vision_document_asset_root = self._vision.get("document_asset_root", "")
+        encoded = self._vision.get("document_data", "")
+        try:
+            self.vision_document = _decode_vision_document(encoded) if encoded else None
+        except Exception:
+            self.vision_document = None
+        self.vision_bindings = []
+        self.vision_unsupported_shapes = []
+        self.file_data = {}
+
+    def ensure_default_camera(self):
+        return None
+
+    def get_active_camera(self):
+        camera = self._snapshot.get("camera")
+        return _NativeVisionCamera(self, camera) if isinstance(camera, dict) else None
+
+    def set_camera(self, position, forward, world_up, fov, camera_id=""):
+        camera = self.get_active_camera()
+        return camera.set_camera(position, forward, world_up, fov) if camera else None
+
+    def get_actors(self):
+        actors = self._snapshot.get("actors")
+        return [_NativeVisionActor(actor) for actor in actors or [] if isinstance(actor, dict)]
+
+    def find_actor(self, actor_name):
+        return next((actor for actor in self.get_actors() if actor.name == actor_name or actor.actor_guid == actor_name), None)
+
+    def remove_actor(self, actor):
+        return CoronaEditorApi.scene_tools.remove_actor(self.route, actor.actor_guid or actor.name)
+
+    def save_data(self):
+        document = self.vision_document if isinstance(self.vision_document, dict) else {}
+        return CoronaEditorApi.main.scene_save(
+            self.route,
+            {
+                "vision": {
+                    "storage": self.vision_storage,
+                    "source_id": self.vision_source_id,
+                    "import_mode": self.vision_import_mode,
+                },
+                "vision_document": {
+                    "version": _VISION_DOCUMENT_VERSION,
+                    "encoding": _VISION_DOCUMENT_ENCODING,
+                    "asset_root": self.vision_document_asset_root,
+                    "data": _encode_vision_document(document),
+                },
+            },
+        )
+
+    def _notify_scene_tree_changed(self):
+        return None
+
+
+def _native_scene(scene_name: str) -> _NativeVisionScene | None:
+    raw = CoronaEditorApi.scene.get_snapshot(scene_name)
+    snapshot = json.loads(raw) if isinstance(raw, str) else raw
+    if not isinstance(snapshot, dict) or snapshot.get("status") in ("error", "failed"):
+        return None
+    return _NativeVisionScene(snapshot)
 
 
 def _as_float3(value):
@@ -204,7 +333,7 @@ def import_vision_scene_into_current_scene(scene_name: str, path: str) -> dict:
         with open(abs_path, "r", encoding="utf-8") as file:
             document = json.load(file)
 
-        scene = get_legacy_vision_scene(scene_name)
+        scene = _native_scene(scene_name)
         if scene is None:
             return {"status": "error", "message": f"Scene '{scene_name}' not found"}
 
@@ -228,8 +357,13 @@ def import_vision_scene_into_current_scene(scene_name: str, path: str) -> dict:
         scene.vision_document = _vision_document_for_embedded_storage(document, abs_path)
         scene.vision_source_path = ""
         scene.vision_import_mode = ""
+        scene.vision_storage = "embedded"
         if "vision" in scene.file_data:
             scene.file_data.remove_section("vision")
+
+        # Publish the document through the native scene aggregate before
+        # creating actors. Native C++ then owns persistence and binding sync.
+        scene.save_data()
 
         previous_bindings = list(getattr(scene, "vision_bindings", []))
         new_bindings = []
@@ -266,7 +400,7 @@ def import_vision_scene_into_current_scene(scene_name: str, path: str) -> dict:
                 json_path, abs_path, model_path,
             )
             transform = _extract_vision_shape_transform(shape)
-            actor_guid = (previous_binding.get("actor_guid", "") if previous_binding else "") or f"actor-{uuid.uuid4().hex}"
+            actor_guid = (previous_binding.get("actor_guid", "") if previous_binding else "") or _vision_shape_guid(shape, json_path)
             actor_name = _vision_proxy_name(shape, shape_type, shape_index) if shape_type in _SUPPORTED_VISION_PRIMITIVES else _vision_shape_name(shape, model_path, shape_index)
             actor_data = {
                 "actor_guid": actor_guid, "actor_name": actor_name, "name": actor_name,
@@ -334,7 +468,7 @@ def import_vision_scene_into_current_scene(scene_name: str, path: str) -> dict:
 
 def import_embedded_vision_scene_into_current_scene(scene_name: str) -> dict:
     try:
-        scene = get_legacy_vision_scene(scene_name)
+        scene = _native_scene(scene_name)
         if scene is None:
             return {"status": "error", "message": f"Scene '{scene_name}' not found"}
         if not isinstance(getattr(scene, "vision_document", None), dict):

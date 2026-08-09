@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+import pytest
 
 
 def test_project_scene_routes_prefer_script_runtime_manifest(monkeypatch):
@@ -89,7 +90,7 @@ def test_set_scene_switches_native_route_before_legacy_scene_fallback(monkeypatc
     monkeypatch.setattr(
         corona_engine,
         "resolve_runtime_target",
-        lambda target_type, scene_name, actor_name="": {
+        lambda target_type, scene_name, actor_name="", **kwargs: {
             "status": "ok",
             "scene_name": scene_name,
             "scene": native_scene,
@@ -100,6 +101,132 @@ def test_set_scene_switches_native_route_before_legacy_scene_fallback(monkeypatc
     assert calls == ["Scene/second.scene"]
     assert context.scene is native_scene
     assert context.scene_name == "Scene/second.scene"
+
+
+def test_set_scene_does_not_implicitly_create_a_legacy_scene(monkeypatch):
+    import api.editor_api
+    from script_runtime.engine import corona_engine
+
+    context = SimpleNamespace(
+        scene_name="",
+        target_scene_name="",
+        scene=None,
+        target_scene=None,
+        actor=None,
+        target_actor=None,
+        target_type="project",
+        initialized=False,
+        isolated=False,
+        stop_requested=False,
+    )
+    monkeypatch.setattr(
+        api.editor_api,
+        "get_script_runtime_editor_api",
+        lambda: SimpleNamespace(
+            scene=SimpleNamespace(
+                switch=lambda route: {"status": "success", "scene": route}
+            )
+        ),
+    )
+    monkeypatch.setattr(corona_engine, "_current_context", lambda: context)
+    monkeypatch.setattr(
+        corona_engine,
+        "_native_scene_snapshot",
+        lambda scene_name: (None, ["native scene unavailable"]),
+    )
+    assert corona_engine.setScene("Scene/legacy.scene") is False
+
+
+def test_project_scene_routes_do_not_fallback_to_legacy_scene_adapter():
+    from pathlib import Path
+
+    source = (
+        Path(__file__).resolve().parents[1] / "engine" / "corona_engine.py"
+    ).read_text(encoding="utf-8")
+    start = source.index("def _project_scene_routes")
+    end = source.index("def _resolve_scene_route", start)
+
+    assert "script_runtime.compat.legacy_scene_adapter" not in source[start:end]
+
+
+def test_runtime_scene_does_not_reconstruct_a_legacy_python_scene():
+    from pathlib import Path
+
+    source = (
+        Path(__file__).resolve().parents[1] / "engine" / "corona_engine.py"
+    ).read_text(encoding="utf-8")
+    start = source.index("def _runtime_scene")
+    end = source.index("def _runtime_scene_key", start)
+
+    assert "script_runtime.compat.legacy_scene_adapter" not in source[start:end]
+
+
+def test_known_actor_queries_do_not_fallback_to_legacy_scene_adapter():
+    from pathlib import Path
+
+    source = (
+        Path(__file__).resolve().parents[1] / "engine" / "corona_engine.py"
+    ).read_text(encoding="utf-8")
+    start = source.index("def _iter_known_actors")
+    end = source.index("def _deleted_names", start)
+
+    assert "script_runtime.compat.legacy_scene_adapter" not in source[start:end]
+
+
+def test_actor_resolution_does_not_fallback_to_legacy_scene_adapter():
+    from pathlib import Path
+
+    source = (
+        Path(__file__).resolve().parents[1] / "engine" / "corona_engine.py"
+    ).read_text(encoding="utf-8")
+    start = source.index("def _resolve_actor")
+    end = source.index("def _current_actor", start)
+
+    assert "script_runtime.compat.legacy_scene_adapter" not in source[start:end]
+
+
+def test_actor_runtime_target_prefers_native_snapshot_over_legacy_scene(monkeypatch):
+    from types import SimpleNamespace
+
+    from script_runtime.engine import corona_engine
+
+    native_payload = {
+        "scene": "Scene/level.scene",
+        "scene_name": "Level",
+        "actors": [{"name": "Hero", "handle": 7}],
+    }
+
+    monkeypatch.setattr(
+        corona_engine,
+        "_native_scene_snapshot",
+        lambda scene_name: (native_payload, []),
+    )
+
+    result = corona_engine.resolve_runtime_target(
+        "actor", scene_name="Scene/level.scene", actor_name="Hero"
+    )
+
+    assert result["status"] == "ok"
+    assert result["binding_mode"] == "native_editor"
+    assert result["actor"].name == "Hero"
+    assert result["actor"].handle == 7
+
+
+def test_runtime_target_does_not_implicitly_fallback_to_legacy_scene(monkeypatch):
+    from script_runtime.engine import corona_engine
+
+    monkeypatch.setattr(
+        corona_engine,
+        "_native_scene_snapshot",
+        lambda scene_name: (None, ["native scene unavailable"]),
+    )
+    result = corona_engine.resolve_runtime_target(
+        "project", scene_name="Scene/legacy.scene"
+    )
+
+    assert result["status"] == "error"
+    assert result["binding_mode"] == ""
+    assert "scene" not in result
 
 
 def test_scene_environment_uses_the_script_runtime_scene_contract():
@@ -124,6 +251,61 @@ def test_scene_environment_uses_the_script_runtime_scene_contract():
     assert calls == [
         ("scene.get_environment", ["Scene/level.scene"]),
         ("scene.set_environment", ["Scene/level.scene", state]),
+    ]
+
+
+def test_script_runtime_scene_tools_exposes_actor_state_and_physics_aggregates():
+    from script_runtime.manifest_adapter import ScriptRuntimeEditorApi
+
+    calls = []
+
+    def invoke(method, args):
+        calls.append((method, args))
+        return {"status": "success"}
+
+    api = ScriptRuntimeEditorApi(invoke)
+    api.scene_tools.set_actor_state("Scene/level.scene", "Hero", {"visible": False})
+    api.scene_tools.set_actor_physics(
+        "Scene/level.scene", "Hero", {"physics_enabled": True}
+    )
+
+    assert calls == [
+        ("scene_tools.set_actor_state", ["Scene/level.scene", "Hero", {"visible": False}]),
+        ("scene_tools.set_actor_physics", ["Scene/level.scene", "Hero", {"physics_enabled": True}]),
+    ]
+
+
+def test_native_actor_proxy_uses_script_runtime_scene_tools_for_actor_operations(monkeypatch):
+    import api.editor_api
+    from script_runtime.engine import corona_engine
+
+    calls = []
+
+    class SceneToolsApi:
+        def set_actor_state(self, *args):
+            calls.append(("state", args))
+            return {"status": "success"}
+
+        def set_actor_physics(self, *args):
+            calls.append(("physics", args))
+            return {"status": "success"}
+
+    monkeypatch.setattr(
+        api.editor_api,
+        "get_script_runtime_editor_api",
+        lambda: type("Api", (), {"scene_tools": SceneToolsApi()})(),
+    )
+    actor = corona_engine._NativeEditorActorProxy(
+        type("Scene", (), {"route": "Scene/level.scene"})(),
+        {"name": "Hero", "geometry": {}},
+    )
+
+    actor.set_visible(False)
+    actor.set_physics_enabled(True)
+
+    assert calls == [
+        ("state", ("Scene/level.scene", "Hero", {"visible": False})),
+        ("physics", ("Scene/level.scene", "Hero", {"physics_enabled": True})),
     ]
 
 
@@ -185,6 +367,26 @@ def test_blockly_preview_snapshot_prefers_native_scene_values(monkeypatch):
     assert snapshot["scenes"][route]["binding_mode"] == "native_editor"
     assert snapshot["scenes"][route]["environment"]["physics"]["gravity"] == [0.0, -9.8, 0.0]
     assert snapshot["scenes"][route]["actors"]["Hero"]["position"] == [4.0, 5.0, 6.0]
+
+
+def test_blockly_project_snapshot_fails_closed_when_native_snapshot_is_unavailable(
+    monkeypatch,
+):
+    from script_runtime.blockly import main as blockly_main
+
+    route = "Scene/level.scene"
+    monkeypatch.setattr(
+        blockly_main.ScratchTool,
+        "_project_scene_routes",
+        classmethod(lambda cls, project_path=None: [route]),
+    )
+    monkeypatch.setattr(
+        blockly_main.ScratchTool,
+        "_create_native_preview_scene_state",
+        classmethod(lambda cls, scene_route: None),
+    )
+    with pytest.raises(RuntimeError, match="native"):
+        blockly_main.ScratchTool._create_preview_state_snapshot()
 
 
 def test_blockly_preview_restore_uses_native_environment_camera_and_actor_contract(monkeypatch):

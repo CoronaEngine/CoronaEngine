@@ -6,7 +6,7 @@ CORE_ROOT = Path(__file__).resolve().parents[1].parent / "CoronaCore" / "core"
 REPO_ROOT = CORE_ROOT.parents[2]
 sys.path.insert(0, str(REPO_ROOT / "editor"))
 
-from CoronaCore.core.legacy_scene_store import LegacySceneStore
+from runtime.legacy_scene_store import LegacySceneStore
 from runtime import legacy_scene_store as runtime_scene_store_module
 
 
@@ -25,14 +25,11 @@ def test_scene_host_plugins_do_not_import_scene_manager_directly():
 
 def test_file_system_uses_native_files_handler_for_file_operations():
     source = (REPO_ROOT / "editor/plugins/FileManager/main.py").read_text(encoding="utf-8")
-    adapter = (REPO_ROOT / "editor/plugins/FileManager/compat/legacy_file_scene_adapter.py").read_text(
-        encoding="utf-8"
-    )
 
     assert "from CoronaCore.core.legacy.entities import Actor" not in source
     assert "from api.editor_api import CoronaEditorApi" in source
     assert "CoronaEditorApi.files" in source
-    assert "open_file_binding" in adapter
+    assert not (REPO_ROOT / "editor/plugins/FileManager/compat/legacy_file_scene_adapter.py").exists()
 
 
 def test_legacy_scene_store_creates_compatibility_actor_lazily(monkeypatch):
@@ -63,15 +60,13 @@ def test_legacy_scene_store_is_the_explicit_scene_manager_boundary():
     assert "class LegacySceneStore" in source
 
 
-def test_runtime_owns_legacy_scene_store_and_core_path_is_compatibility_alias():
+def test_runtime_owns_legacy_scene_store_without_a_core_alias():
     runtime_source = (REPO_ROOT / "editor" / "runtime" / "legacy_scene_store.py").read_text(
         encoding="utf-8"
     )
-    compatibility_source = (CORE_ROOT / "legacy_scene_store.py").read_text(encoding="utf-8")
 
     assert "class LegacySceneStore" in runtime_source
-    assert "Compatibility" in compatibility_source
-    assert "from runtime.legacy_scene_store import" in compatibility_source
+    assert not (CORE_ROOT / "legacy_scene_store.py").exists()
     assert runtime_scene_store_module.LegacySceneStore is LegacySceneStore
 
 
@@ -94,19 +89,16 @@ def test_script_runtime_host_uses_active_owner_and_scene_adapter():
         REPO_ROOT / "editor" / "script_runtime" / "engine" / "host.py"
     ).read_text(encoding="utf-8")
     assert "from runtime.legacy_scene_store import" not in source
-    assert "from script_runtime.compat.legacy_scene_adapter import" in source
+    assert "from script_runtime.compat.legacy_scene_adapter import" not in source
     assert not (
         REPO_ROOT / "editor" / "script_runtime" / "compat" / "legacy_script_runtime_adapter.py"
     ).exists()
 
 
-def test_camera_follow_uses_explicit_legacy_scene_store_name():
-    source = (REPO_ROOT / "editor" / "runtime" / "legacy_camera_follow.py").read_text(
-        encoding="utf-8"
-    )
+def test_camera_follow_has_no_python_legacy_scene_store_adapter():
+    source = REPO_ROOT / "editor" / "runtime" / "legacy_camera_follow.py"
 
-    assert "legacy_scene_store as scene_manager" not in source
-    assert "from runtime.legacy_scene_store import legacy_scene_store" in source
+    assert not source.exists()
 
 
 def test_legacy_scene_store_forwards_only_compatibility_operations(monkeypatch):

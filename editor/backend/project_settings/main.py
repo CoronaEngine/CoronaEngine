@@ -2,9 +2,9 @@
 
 The service used to live under the historical ``backend`` package. Keep this
 module for old hosts and generated imports; new registrations must use
-``plugins.ProjectSettings.compat.legacy_project_settings``.
+``plugins.ProjectSettings.main``.
 """
 
-from plugins.ProjectSettings.compat.legacy_project_settings import ProjectSettings
+from plugins.ProjectSettings.main import ProjectSettings
 
 __all__ = ["ProjectSettings"]

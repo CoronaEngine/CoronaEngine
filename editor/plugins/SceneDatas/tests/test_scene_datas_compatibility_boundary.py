@@ -4,7 +4,6 @@ from pathlib import Path
 
 PLUGIN_ROOT = Path(__file__).resolve().parents[1]
 SOURCE_PATH = PLUGIN_ROOT / "main.py"
-COMPAT_SOURCE_PATH = PLUGIN_ROOT / "compat" / "legacy_scene_datas_plugin.py"
 
 
 def test_scene_datas_has_a_local_compatibility_inventory():
@@ -20,12 +19,10 @@ def test_scene_datas_has_a_local_compatibility_inventory():
 
 def test_scene_datas_is_only_a_historical_registration_shell():
     source = SOURCE_PATH.read_text(encoding="utf-8")
-    compat_source = COMPAT_SOURCE_PATH.read_text(encoding="utf-8")
-    tree = ast.parse(compat_source, filename=str(COMPAT_SOURCE_PATH))
+    tree = ast.parse(source, filename=str(SOURCE_PATH))
     classes = [node for node in tree.body if isinstance(node, ast.ClassDef)]
 
-    assert "from plugins.SceneDatas.compat.legacy_scene_datas_plugin import" in source
-    assert "register_web(\"SceneDatas\")" in compat_source
+    assert "register_web(\"SceneDatas\")" in source
     assert len(classes) == 1
     class_body = classes[0].body
     assert all(
@@ -34,5 +31,7 @@ def test_scene_datas_is_only_a_historical_registration_shell():
         and isinstance(node.value.value, str)
         for node in class_body
     )
-    assert "scene.get_snapshot" not in compat_source
-    assert "sceneTools" not in compat_source
+    assert "scene.get_snapshot" not in source
+    assert "sceneTools" not in source
+    assert not (PLUGIN_ROOT / "compat" / "legacy_scene_datas_plugin.py").exists()
+    assert not (PLUGIN_ROOT / "compat" / "__init__.py").exists()

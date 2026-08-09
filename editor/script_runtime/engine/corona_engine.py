@@ -641,12 +641,37 @@ class _NativeEditorActorProxy:
         return True
 
     def _operation(self, operation, values):
-        # SceneDatas is the restricted Script Runtime channel.  Editor
-        # aggregate methods use the PythonScript channel and must not be
-        # invoked directly from this runtime.
+        state_operations = {
+            "SetVisible": lambda: ("state", {"visible": bool(values[0])}),
+        }
+        physics_operations = {
+            "SetMass": lambda: {"mass": float(values[0])},
+            "SetRestitution": lambda: {"restitution": float(values[0])},
+            "SetDamping": lambda: {"damping": float(values[0])},
+            "SetPhysicsEnabled": lambda: {"physics_enabled": bool(values[0])},
+            "SetCollision": lambda: {"collision_type": str(values[0])},
+            "SetLinearLock": lambda: {"linear_lock": [bool(item) for item in values[:3]]},
+            "SetAngularLock": lambda: {"angular_lock": [bool(item) for item in values[:3]]},
+        }
         try:
-            from api.editor_api import CoronaEditorApi
-            CoronaEditorApi.scene_datas.actor_operation(self.scene_route, self.name, operation, list(values))
+            from api.editor_api import get_script_runtime_editor_api
+
+            scene_tools = get_script_runtime_editor_api().scene_tools
+            if operation in state_operations:
+                kind, state = state_operations[operation]()
+                result = scene_tools.set_actor_state(self.scene_route, self.name, state)
+            elif operation in physics_operations:
+                result = scene_tools.set_actor_physics(
+                    self.scene_route, self.name, physics_operations[operation]()
+                )
+            else:
+                raise RuntimeError(f"unsupported native actor operation: {operation}")
+            payload = _native_payload(result)
+            if payload is None:
+                raise RuntimeError("aggregate actor operation returned no payload")
+            actor_data = payload.get("actor") if isinstance(payload.get("actor"), dict) else None
+            if actor_data:
+                self._data.update(actor_data)
             return True
         except Exception as exc:
             raise RuntimeError(f"native actor operation {operation} failed: {exc}") from exc
@@ -764,7 +789,76 @@ class _NativeEditorSceneProxy:
         return True
 
 
-def resolve_runtime_target(target_type="actor", scene_name="", actor_name=""):
+def _resolve_native_actor_target(scene_name, actor_name, base_diag):
+    native_payload, native_errors = _native_scene_snapshot(scene_name)
+    if native_payload is None:
+        if native_errors:
+            base_diag["native_errors"] = native_errors
+        return None
+
+    native_route = str(
+        native_payload.get("scene")
+        or native_payload.get("scene_id")
+        or native_payload.get("id")
+        or scene_name
+        or ""
+    )
+    native_name = str(
+        native_payload.get("scene_name")
+        or native_payload.get("name")
+        or native_route
+    )
+    base_diag["native_scene"] = native_route or native_name
+    actor_payloads = (
+        native_payload.get("actors")
+        if isinstance(native_payload.get("actors"), list)
+        else []
+    )
+    matches = [item for item in actor_payloads if _native_actor_matches(item, actor_name)]
+    base_diag["actor_candidates"] = [
+        str(item.get("name") or item.get("route") or "") for item in matches
+    ]
+    if scene_name and not _native_scene_matches(native_payload, scene_name):
+        return {
+            "status": "error",
+            "message": f"原生场景返回「{native_route or native_name}」，与请求场景「{scene_name}」不一致",
+            **base_diag,
+        }
+    if len(matches) == 1:
+        scene_proxy = _NativeEditorSceneProxy(
+            native_route, native_name, actor_payloads, native_payload
+        )
+        actor_proxy = scene_proxy.find_actor(
+            matches[0].get("actor_guid")
+            or matches[0].get("handle")
+            or matches[0].get("name")
+        )
+        return {
+            "status": "ok",
+            "target_type": "actor",
+            "scene_name": native_route,
+            "actor_name": actor_proxy.name,
+            "scene": scene_proxy,
+            "actor": actor_proxy,
+            **base_diag,
+            "binding_mode": "native_editor",
+        }
+    if len(matches) > 1:
+        return {
+            "status": "error",
+            "message": f"原生场景「{native_name}」中存在多个匹配物体「{actor_name}」",
+            **base_diag,
+        }
+    return {
+        "status": "error",
+        "message": f"原生场景「{native_name}」中未找到物体「{actor_name}」",
+        **base_diag,
+    }
+
+
+def resolve_runtime_target(
+    target_type="actor", scene_name="", actor_name=""
+):
     normalized_type = "actor" if str(target_type or "actor").lower() == "model" else str(target_type or "actor").lower()
     base_diag = {
         "requested_scene": scene_name or "", "requested_actor": actor_name or "",
@@ -815,51 +909,6 @@ def resolve_runtime_target(target_type="actor", scene_name="", actor_name=""):
                 "binding_mode": "native_editor",
             }
 
-        scenes = {}
-        try:
-            from script_runtime.compat.legacy_scene_adapter import get_all_scenes
-            scenes = get_all_scenes() or {}
-        except Exception as exc:
-            base_diag["python_scene_error"] = str(exc)
-        base_diag["python_scenes"] = [
-            str(getattr(scene, "route", key) or key) for key, scene in scenes.items()
-        ]
-        selected_key = ""
-        selected_scene = None
-        if scene_name:
-            matches = [
-                (key, scene)
-                for key, scene in scenes.items()
-                if _scene_matches(key, scene, scene_name)
-            ]
-            if len(matches) == 1:
-                selected_key, selected_scene = matches[0]
-            elif len(matches) > 1:
-                names = [str(getattr(scene, "route", key) or key) for key, scene in matches]
-                return {
-                    "status": "error",
-                    "message": f"\u573a\u666f\u300c{scene_name}\u300d\u5339\u914d\u5230\u591a\u4e2a Python \u573a\u666f: {', '.join(names)}",
-                    **base_diag,
-                }
-        elif len(scenes) == 1:
-            selected_key, selected_scene = next(iter(scenes.items()))
-
-        if selected_scene is not None:
-            route = str(
-                getattr(selected_scene, "route", selected_key or scene_name)
-                or selected_key
-                or scene_name
-            )
-            return {
-                "status": "ok",
-                "target_type": "project",
-                "scene_name": route,
-                "actor_name": "",
-                "scene": selected_scene,
-                **base_diag,
-                "binding_mode": "python_scene",
-            }
-
         if native_errors:
             base_diag["native_errors"] = native_errors
         requested_label = f"\u300c{scene_name}\u300d" if scene_name else "\u5f53\u524d\u7f16\u8f91\u5668\u573a\u666f"
@@ -873,85 +922,17 @@ def resolve_runtime_target(target_type="actor", scene_name="", actor_name=""):
     if not actor_name:
         return {"status": "error", "message": "\u8fd0\u884c\u8282\u70b9\u56fe\u524d\u5fc5\u987b\u9009\u62e9\u4e00\u4e2a\u7269\u4f53", **base_diag}
 
-    scenes = {}
-    try:
-        from script_runtime.compat.legacy_scene_adapter import get_all_scenes
-        scenes = get_all_scenes() or {}
-    except Exception as exc:
-        base_diag["python_scene_error"] = str(exc)
-    base_diag["python_scenes"] = [str(getattr(scene, "route", key) or key) for key, scene in scenes.items()]
-    selected_scene = None
-    selected_key = ""
-    try:
-        from script_runtime.compat.legacy_scene_adapter import get_scene
-        selected_scene = get_scene(scene_name) if scene_name else None
-        selected_key = scene_name if selected_scene is not None else ""
-    except Exception:
-        pass
-    if selected_scene is None and scene_name:
-        matched_scenes = [(key, scene) for key, scene in scenes.items() if _scene_matches(key, scene, scene_name)]
-        if len(matched_scenes) == 1:
-            selected_key, selected_scene = matched_scenes[0]
-        elif len(matched_scenes) > 1:
-            names = [str(getattr(scene, "route", key) or key) for key, scene in matched_scenes]
-            return {"status": "error", "message": f"\u573a\u666f\u6807\u8bc6\u300c{scene_name}\u300d\u5339\u914d\u5230\u591a\u4e2a Python \u573a\u666f: {', '.join(names)}", **base_diag}
+    native_result = _resolve_native_actor_target(scene_name, actor_name, base_diag)
+    if native_result is not None:
+        return native_result
 
-    def actors_in(scene):
-        try: return list(scene.get_actors())
-        except Exception: return list(getattr(scene, "_actors", []) or [])
-
-    if selected_scene is not None:
-        matches = [candidate for candidate in actors_in(selected_scene) if _actor_matches(candidate, actor_name)]
-        if len(matches) > 1:
-            base_diag["actor_candidates"] = [str(getattr(item, "name", actor_name)) for item in matches]
-            return {"status": "error", "message": f"\u573a\u666f\u300c{scene_name}\u300d\u4e2d\u5b58\u5728\u591a\u4e2a\u5339\u914d\u7269\u4f53\u300c{actor_name}\u300d", **base_diag}
-        actor = matches[0] if matches else None
-        if actor is None and hasattr(selected_scene, "find_actor"): actor = selected_scene.find_actor(actor_name)
-        if actor is None and hasattr(selected_scene, "find_actor_by_route"): actor = selected_scene.find_actor_by_route(actor_name)
-        if actor is not None:
-            route = str(getattr(selected_scene, "route", selected_key or scene_name) or selected_key or scene_name)
-            return {"status": "ok", "target_type": "actor", "scene_name": route,
-                    "actor_name": str(getattr(actor, "name", actor_name) or actor_name),
-                    "scene": selected_scene, "actor": actor, **base_diag, "binding_mode": "python_scene"}
-
-    cross_matches = []
-    for key, scene in scenes.items():
-        for actor in actors_in(scene):
-            if _actor_matches(actor, actor_name): cross_matches.append((key, scene, actor))
-    if len(cross_matches) == 1:
-        key, scene, actor = cross_matches[0]
-        return {"status": "ok", "target_type": "actor", "scene_name": str(getattr(scene, "route", key) or key),
-                "actor_name": str(getattr(actor, "name", actor_name) or actor_name),
-                "scene": scene, "actor": actor, **base_diag, "binding_mode": "python_scene"}
-    if len(cross_matches) > 1:
-        base_diag["actor_candidates"] = [f"{getattr(scene, 'name', key)}/{getattr(actor, 'name', actor_name)}" for key, scene, actor in cross_matches]
-        return {"status": "error", "message": f"\u7269\u4f53\u300c{actor_name}\u300d\u5728\u591a\u4e2a Python \u573a\u666f\u4e2d\u5b58\u5728\uff0c\u8bf7\u6307\u5b9a\u51c6\u786e\u573a\u666f", **base_diag}
-
-    native_payload, native_errors = _native_scene_snapshot(scene_name)
-    if native_payload is not None:
-        native_route = str(native_payload.get("scene") or native_payload.get("scene_id") or native_payload.get("id") or scene_name or "")
-        native_name = str(native_payload.get("scene_name") or native_payload.get("name") or native_route)
-        base_diag["native_scene"] = native_route or native_name
-        actor_payloads = native_payload.get("actors") if isinstance(native_payload.get("actors"), list) else []
-        matches = [item for item in actor_payloads if _native_actor_matches(item, actor_name)]
-        base_diag["actor_candidates"] = [str(item.get("name") or item.get("route") or "") for item in matches]
-        if scene_name and not _native_scene_matches(native_payload, scene_name):
-            return {"status": "error", "message": f"\u539f\u751f\u573a\u666f\u8fd4\u56de\u300c{native_route or native_name}\u300d\uff0c\u4e0e\u8bf7\u6c42\u573a\u666f\u300c{scene_name}\u300d\u4e0d\u4e00\u81f4", **base_diag}
-        if len(matches) == 1:
-            scene_proxy = _NativeEditorSceneProxy(native_route, native_name, actor_payloads, native_payload)
-            actor_proxy = scene_proxy.find_actor(matches[0].get("actor_guid") or matches[0].get("handle") or matches[0].get("name"))
-            return {"status": "ok", "target_type": "actor", "scene_name": native_route,
-                    "actor_name": actor_proxy.name, "scene": scene_proxy, "actor": actor_proxy,
-                    **base_diag, "binding_mode": "native_editor"}
-        if len(matches) > 1:
-            return {"status": "error", "message": f"\u539f\u751f\u573a\u666f\u300c{native_name}\u300d\u4e2d\u5b58\u5728\u591a\u4e2a\u5339\u914d\u7269\u4f53\u300c{actor_name}\u300d", **base_diag}
-        return {"status": "error", "message": f"\u539f\u751f\u573a\u666f\u300c{native_name}\u300d\u4e2d\u672a\u627e\u5230\u7269\u4f53\u300c{actor_name}\u300d", **base_diag}
-
-    if native_errors:
-        base_diag["native_errors"] = native_errors
-    if selected_scene is None:
-        return {"status": "error", "message": f"\u672a\u627e\u5230\u573a\u666f\u300c{scene_name}\u300d\uff0c\u4e5f\u672a\u5728 Python \u6216\u539f\u751f\u7f16\u8f91\u573a\u666f\u4e2d\u627e\u5230\u7269\u4f53\u300c{actor_name}\u300d", **base_diag}
-    return {"status": "error", "message": f"\u573a\u666f\u300c{scene_name}\u300d\u4e2d\u672a\u627e\u5230\u7269\u4f53\u300c{actor_name}\u300d", **base_diag}
+    if base_diag.get("native_errors"):
+        base_diag["native_errors"] = base_diag["native_errors"]
+    return {
+        "status": "error",
+        "message": "原生场景契约不可用，旧 Python Scene fallback 已移除",
+        **base_diag,
+    }
 
 
 def capture_runtime_scene_state(scene_name="", scene=None, binding_mode=""):
@@ -973,70 +954,7 @@ def capture_runtime_scene_state(scene_name="", scene=None, binding_mode=""):
         )
         return {"binding_mode": "native_editor", "scene_name": resolved_route, "payload": payload}
 
-    if scene is None:
-        # Older project-level calls may still arrive without a resolved binding.
-        # Empty scene names intentionally ask the native editor for its active scene.
-        payload, errors = _native_scene_snapshot(scene_name)
-        if payload is not None:
-            if scene_name and not _native_scene_matches(payload, scene_name):
-                actual = str(
-                    payload.get("scene")
-                    or payload.get("scene_id")
-                    or payload.get("id")
-                    or payload.get("scene_name")
-                    or payload.get("name")
-                    or ""
-                )
-                raise RuntimeError(
-                    f"\u539f\u751f\u573a\u666f\u8fd4\u56de\u300c{actual}\u300d\uff0c\u4e0e\u8bf7\u6c42\u573a\u666f\u300c{scene_name}\u300d\u4e0d\u4e00\u81f4"
-                )
-            route = str(
-                payload.get("scene")
-                or payload.get("scene_id")
-                or payload.get("id")
-                or scene_name
-                or payload.get("scene_name")
-                or payload.get("name")
-                or ""
-            )
-            return {"binding_mode": "native_editor", "scene_name": route, "payload": payload}
-        detail = f": {'; '.join(errors)}" if errors else ""
-        label = f"\u300c{scene_name}\u300d" if scene_name else "\u5f53\u524d\u7f16\u8f91\u5668\u573a\u666f"
-        raise RuntimeError(f"\u672a\u627e\u5230\u53ef\u6062\u590d\u7684{label}{detail}")
-
-    actors = []
-    for actor in _iter_scene_actors(scene):
-        actors.append({
-            "name": _object_name(actor),
-            "route": str(getattr(actor, "route", "") or ""),
-            "actor_type": str(getattr(actor, "actor_type", "model") or "model"),
-            "geometry": {
-                "position": list(getattr(actor, "get_position", lambda: [0, 0, 0])()),
-                "rotation": list(getattr(actor, "get_rotation", lambda: [0, 0, 0])()),
-                "scale": list(getattr(actor, "get_scale", lambda: [1, 1, 1])()),
-            },
-            "visible": getattr(actor, "get_visible", lambda: True)(),
-            "collision": getattr(actor, "get_collision_enabled", lambda: True)(),
-            "mechanics": {
-                "mass": getattr(actor, "get_mass", lambda: 1.0)(),
-                "restitution": getattr(actor, "get_restitution", lambda: 0.0)(),
-                "damping": getattr(actor, "get_damping", lambda: 0.0)(),
-                "physics_enabled": getattr(actor, "get_physics_enabled", lambda: False)(),
-            },
-        })
-    resolved_scene_name = str(getattr(scene, "route", "") or scene_name or "")
-    native_payload, _native_errors = _native_scene_snapshot(resolved_scene_name)
-    camera_state = None
-    if isinstance(native_payload, dict):
-        candidate = native_payload.get("camera")
-        if isinstance(candidate, dict):
-            camera_state = dict(candidate)
-    return {
-        "binding_mode": "python_scene",
-        "scene_name": resolved_scene_name,
-        "scene": scene,
-        "payload": {"actors": actors, "camera": camera_state},
-    }
+    raise RuntimeError("native scene binding is required for runtime snapshots")
 
 
 def _snapshot_actor_key(data):
@@ -2521,20 +2439,7 @@ def _runtime_scene():
     assert_engine_operation_allowed()
     _init_engine()
     ctx = _current_context()
-    if ctx.scene is not None:
-        return ctx.scene
-    try:
-        from script_runtime.compat.legacy_scene_adapter import get_scene, list_scene_routes
-        if ctx.scene_name:
-            scene = get_scene(ctx.scene_name)
-            if scene is not None:
-                return scene
-        names = list_scene_routes()
-        if names:
-            return get_scene(names[0])
-    except Exception:
-        pass
-    return None
+    return ctx.scene
 
 
 def _runtime_scene_key(ctx=None):
@@ -2607,13 +2512,6 @@ def _iter_known_actors():
         pass
     result.extend(getattr(ctx, 'virtual_objects', {}).values())
     result.extend(_shared_virtual_objects(ctx).values())
-    if not result:
-        try:
-            from script_runtime.compat.legacy_scene_adapter import get_all_scenes
-            for item in get_all_scenes().values():
-                result.extend(_iter_scene_actors(item))
-        except Exception:
-            pass
     deduped = []
     seen = set()
     for actor in result:
@@ -2679,13 +2577,6 @@ def _resolve_actor(name):
                 return None if _is_actor_deleted(actor, target) else actor
         except Exception:
             pass
-    try:
-        from script_runtime.compat.legacy_scene_adapter import find_actor
-        actor = find_actor(target)
-        if actor is not None:
-            return None if _is_actor_deleted(actor, target) else actor
-    except Exception:
-        pass
     for actor in _iter_known_actors():
         if _norm_name(_object_name(actor)) == _norm_name(target):
             return None if _is_actor_deleted(actor, target) else actor
@@ -4029,11 +3920,7 @@ def _project_scene_routes():
                 return routes
     except Exception:
         pass
-    try:
-        from script_runtime.compat.legacy_scene_adapter import list_scene_routes
-        return list(list_scene_routes())
-    except Exception:
-        return []
+    return []
 
 
 def _resolve_scene_route(name):
@@ -4077,28 +3964,7 @@ def setScene(name):
                 return True
     except Exception as exc:
         _logger.debug("[ScratchWrapper] native scene switch unavailable for %s: %s", route, exc)
-    try:
-        from script_runtime.compat.legacy_scene_adapter import get_or_create_scene
-        current = _runtime_scene()
-        if current is not None and getattr(current, 'route', '') != route:
-            if hasattr(current, 'set_enabled'):
-                current.set_enabled(False)
-        scene = get_or_create_scene(route)
-        if scene is None:
-            return False
-        if hasattr(scene, 'set_enabled'):
-            scene.set_enabled(True)
-        ctx.scene_name = getattr(scene, 'route', route)
-        ctx.target_scene_name = ctx.scene_name
-        ctx.scene = scene
-        ctx.target_scene = scene
-        ctx.actor = None
-        ctx.target_actor = None
-        ctx.initialized = ctx.target_type == 'project'
-        return True
-    except Exception as exc:
-        _logger.warning("[ScratchWrapper] setScene failed for %s: %s", route, exc)
-        return False
+    return False
 
 
 def nextScene():

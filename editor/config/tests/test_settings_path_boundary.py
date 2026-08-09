@@ -11,8 +11,7 @@ def test_project_settings_has_a_config_canonical_owner():
         EDITOR_ROOT
         / "plugins"
         / "FileManager"
-        / "compat"
-        / "legacy_file_manager.py"
+        / "main.py"
     ).read_text(encoding="utf-8")
 
     assert canonical.is_file()

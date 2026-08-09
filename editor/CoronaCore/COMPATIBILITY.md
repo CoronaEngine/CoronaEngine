@@ -20,19 +20,16 @@
 | `core/corona_editor.py` | `runtime.editor_host` | 旧编辑器宿主 | 外部宿主完成 runtime host 迁移 |
 | `core/corona_engine.py` | `runtime.native_engine` | 旧 native loader | 外部宿主完成 native loader 迁移 |
 | `core/editor_api.py` | `api.editor_api` | 历史 Editor API 导入 | 外部宿主完成公共 adapter 迁移 |
-| `core/engine_runtime.py` | `runtime.legacy_engine_adapter` | 旧宿主和登记的测试替身 | 外部宿主迁移且测试替身改用 manifest adapter |
-| `core/components/*` | `runtime.legacy.components` | 旧 Python Scene/Script 宿主 | 角色脚本和旧宿主完成受限 runtime 迁移 |
-| `core/entities/*` | `runtime.legacy.entities` | 旧 Python Scene/Script 宿主 | 角色脚本和旧宿主完成值对象迁移 |
-| `core/managers/*` | `runtime.legacy.managers` | 旧 Scene manager 调用方 | 所有旧宿主改用集中 legacy adapter |
-| `core/legacy/*` | `runtime.legacy` | 旧 Scene 实体、组件和 manager | 旧 Python Scene 宿主完全退出 |
+| `core/engine_runtime.py` | removed compatibility code | 仓内生产代码和测试替身已改用 `runtime.legacy_engine_adapter` | 已删除；外部宿主迁移到 runtime canonical owner |
+| `core/components/*`、`core/entities/*`、`core/managers/*` | removed compatibility code | 仓内无生产引用，统一使用 `runtime.legacy.components`、`runtime.legacy.entities`、`runtime.legacy.managers` | 已删除；外部旧宿主迁移到 runtime canonical owner |
+| `core/legacy/*` | removed compatibility code | 仓内无生产引用，旧 Scene 实体、组件和 manager 已统一归 `runtime.legacy` | 已删除；旧 Python Scene 宿主改用 runtime canonical owner |
 | `core/scripts_system/*` | `script_runtime.engine` | 历史角色脚本和生成脚本 | 旧项目脚本和外部生成物完成迁移 |
 | `core/network_sync_policy.py` | `runtime.network_sync_policy` | 历史同步策略导入 | 外部宿主完成 runtime policy 迁移 |
 | `core/project_utils.py` | `runtime.project_templates` + `runtime.scene_support` | 历史项目 helper 导入 | 外部项目工具完成迁移 |
 | `core/response_utils.py` | `runtime.response_utils` | 历史响应 helper 导入 | 外部宿主完成 runtime helper 迁移 |
 | `core/script_runtime_editor_api.py` | `script_runtime.manifest_adapter` | 旧角色脚本 adapter | 外部脚本完成受限 adapter 迁移 |
-| `core/legacy_editor_api.py` | `script_runtime.compat.legacy_scene_datas_adapter` | 历史 SceneDatas 导入 | 旧 SceneDatas 宿主完成迁移 |
-| `core/legacy_scene_datas_adapter.py` | `script_runtime.compat.legacy_scene_datas_adapter` | 历史 SceneDatas 导入 | 旧 SceneDatas 宿主完成迁移 |
-| `core/legacy_scene_store.py` | `runtime.legacy_scene_store` | 登记的 legacy fallback | 所有旧 Scene fallback 删除并通过回归 |
+| `core/legacy_editor_api.py`、`core/legacy_scene_datas_adapter.py` | removed compatibility code | 仓内无生产引用，SceneDatas 实现统一由 `script_runtime/compat/legacy_scene_datas_adapter.py` 持有 | 已删除；外部旧宿主迁移到 canonical Script Runtime adapter |
+| `core/legacy_scene_store.py` | removed compatibility code | 仓内代码已直接使用 `runtime.legacy_scene_store` | 已删除；旧 Scene fallback 仍集中在 runtime canonical owner |
 | `utils/*` | `runtime.` 或 `script_runtime.` | 历史工具和生成脚本 | 外部工具完成 canonical import 迁移 |
 
 ## 约束

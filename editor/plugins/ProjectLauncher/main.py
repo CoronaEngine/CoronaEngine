@@ -1,5 +1,46 @@
-"""Compatibility import for the historical ProjectLauncher service path."""
+"""Legacy ProjectLauncher service adapter owned by the plugin package.
 
-from plugins.ProjectLauncher.compat.legacy_project_launcher import ProjectLauncher
+The editor's normal project workflow uses the native ``project.*`` aggregate
+API.  This class remains only for explicitly registered historical Python
+hosts and does not define a second project contract.
+"""
+
+from runtime.plugin_base import PluginBase
+from api.editor_api import CoronaEditorApi
+
+
+@PluginBase.register_web("ProjectLauncher")
+class ProjectLauncher(PluginBase):
+    @staticmethod
+    def get_default_project_path() -> str:
+        return CoronaEditorApi.project.get_default_project_path()
+
+    @staticmethod
+    def get_app_version() -> str:
+        return CoronaEditorApi.project.get_app_version()
+
+    @staticmethod
+    def get_recent_projects() -> list:
+        return CoronaEditorApi.project.get_recent_projects()
+
+    @staticmethod
+    def create_project(project_data: dict) -> str:
+        return CoronaEditorApi.project.create_project(project_data)
+
+    @staticmethod
+    def create_world_project(world_data: dict) -> dict:
+        return CoronaEditorApi.project.create_world_project(world_data)
+
+    @staticmethod
+    def create_multiplayer_project(project_data: dict) -> dict:
+        return CoronaEditorApi.project.create_multiplayer_project(project_data)
+
+    @staticmethod
+    def open_project(project_path: str) -> dict:
+        return CoronaEditorApi.project.open_project(project_path, {})
+
+    @staticmethod
+    def set_project_mode(mode_data: dict) -> bool:
+        return CoronaEditorApi.project.set_project_mode(mode_data)
 
 __all__ = ["ProjectLauncher"]

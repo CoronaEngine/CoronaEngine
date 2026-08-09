@@ -82,29 +82,22 @@ def test_runtime_owns_project_support_and_core_path_is_compatibility_alias():
     assert "from runtime.scene_support import" in compatibility_source
 
 
-def test_runtime_owns_legacy_scene_implementation_and_core_legacy_path_is_compatibility():
+def test_runtime_owns_legacy_scene_implementation_without_core_legacy_duplicate():
     repo_root = CORE_ROOT.parents[1]
     runtime_entities = repo_root / "runtime" / "legacy" / "entities"
     runtime_components = repo_root / "runtime" / "legacy" / "components"
     runtime_managers = repo_root / "runtime" / "legacy" / "managers"
-    compatibility_source = (
-        repo_root / "CoronaCore" / "core" / "legacy" / "entities" / "actor.py"
-    ).read_text(encoding="utf-8")
-
     assert (runtime_entities / "actor.py").is_file()
     assert (runtime_components / "geometry.py").is_file()
     assert (runtime_managers / "scene_manager.py").is_file()
-    assert "Compatibility" in compatibility_source
-    assert "from runtime.legacy.entities.actor import" in compatibility_source
+    legacy_root = repo_root / "CoronaCore" / "core" / "legacy"
+    assert not list(legacy_root.rglob("*.py")) if legacy_root.exists() else True
 
 
-def test_runtime_owns_legacy_engine_adapter_and_core_path_is_compatibility():
+def test_runtime_owns_legacy_engine_adapter_without_a_core_alias():
     repo_root = CORE_ROOT.parents[1]
     canonical = repo_root / "runtime" / "legacy_engine_adapter.py"
     compatibility = CORE_ROOT / "engine_runtime.py"
 
     assert canonical.is_file()
-    assert "Compatibility" in compatibility.read_text(encoding="utf-8")
-    assert "from runtime.legacy_engine_adapter import" in compatibility.read_text(
-        encoding="utf-8"
-    )
+    assert not compatibility.exists()

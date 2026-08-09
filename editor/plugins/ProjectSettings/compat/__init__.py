@@ -1,1 +1,0 @@
-"""ProjectSettings compatibility service implementations."""

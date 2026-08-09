@@ -9,16 +9,35 @@ for _path in (PROJECT_ROOT, EDITOR_ROOT, AI_TOOL_ROOT):
         sys.path.append(str(_path))
 
 from editor.plugins.AITool.cai_extensions.mcp.tools import camera_tools
+from editor.plugins.AITool.cai_extensions.mcp.tools import native_scene_state
 from api import editor_api
 
 
 CAMERA_TOOLS_SOURCE = Path(__file__).resolve().parents[1] / "camera_tools.py"
 
 
-def test_camera_screenshot_uses_viewport_adapter_instead_of_camera_binding():
+def _install_native_api(monkeypatch, *, scene=None, scene_tools=None, viewport=None):
+    class DefaultScene:
+        @staticmethod
+        def get_snapshot(scene_name):
+            return {"status": "success", "scene": scene_name or "Scene/test.scene"}
+
+    class NativeApi:
+        pass
+
+    NativeApi.scene = scene or DefaultScene()
+    NativeApi.scene_tools = scene_tools
+    NativeApi.viewport = viewport
+    monkeypatch.setattr(native_scene_state, "EDITOR_API_OVERRIDE", NativeApi)
+    monkeypatch.setattr(editor_api.CoronaEditorApi, "scene", NativeApi.scene)
+    monkeypatch.setattr(editor_api.CoronaEditorApi, "scene_tools", NativeApi.scene_tools)
+    monkeypatch.setattr(editor_api.CoronaEditorApi, "viewport", NativeApi.viewport)
+
+
+def test_camera_screenshot_uses_viewport_aggregate_instead_of_camera_binding():
     source = CAMERA_TOOLS_SOURCE.read_text(encoding="utf-8")
 
-    assert "get_viewport_adapter" in source
+    assert "CoronaEditorApi.viewport" in source
     assert "viewport.capture" in source
     assert "save_screenshot_sync" not in source
 
@@ -26,14 +45,14 @@ def test_camera_screenshot_uses_viewport_adapter_instead_of_camera_binding():
 def test_camera_focus_prefers_scene_tools_aggregate_for_manifest_host():
     source = CAMERA_TOOLS_SOURCE.read_text(encoding="utf-8")
 
-    assert "get_scene_tools_adapter" in source
-    assert "aggregate_focus" in source
+    assert "CoronaEditorApi.scene_tools" in source
+    assert "focus_actor" in source
 
 
 def test_camera_move_routes_pose_updates_through_viewport_adapter():
     source = CAMERA_TOOLS_SOURCE.read_text(encoding="utf-8")
 
-    assert "get_viewport_adapter" in source
+    assert "CoronaEditorApi.viewport" in source
     assert "set_camera_pose" in source
 
 
@@ -78,7 +97,24 @@ def test_camera_move_passes_pose_value_object_to_viewport_adapter(monkeypatch):
             }
 
     viewport = Viewport()
-    monkeypatch.setattr(editor_api, "get_viewport_adapter", lambda _engine=None: viewport)
+    class SceneApi:
+        @staticmethod
+        def get_snapshot(_scene_name):
+            return {
+                "status": "success",
+                "camera": {
+                    "name": "MainCamera",
+                    "position": [1.0, 2.0, 3.0],
+                    "forward": [0.0, 0.0, 1.0],
+                    "world_up": [0.0, 1.0, 0.0],
+                    "fov": 45.0,
+                    "width": 640,
+                    "height": 480,
+                },
+                "cameras": [],
+            }
+
+    _install_native_api(monkeypatch, scene=SceneApi(), viewport=viewport)
 
     tool = camera_tools._build_camera_move_tool(SceneManager())
     result = tool.func(
@@ -132,7 +168,7 @@ def test_camera_focus_uses_manifest_result_without_reading_python_actor_geometry
             }
 
     scene_tools = SceneTools()
-    monkeypatch.setattr(editor_api, "get_scene_tools_adapter", lambda _engine=None: scene_tools)
+    _install_native_api(monkeypatch, scene_tools=scene_tools)
 
     tool = camera_tools._build_camera_focus_tool(SceneManager())
     result = tool.func(scene_name="Scene/test.scene", actor_name="Chair")
@@ -188,7 +224,24 @@ def test_camera_screenshot_passes_camera_value_object_to_viewport(monkeypatch, t
             return {"status": "success", "path": args[-1]}
 
     viewport = Viewport()
-    monkeypatch.setattr(editor_api, "get_viewport_adapter", lambda _engine=None: viewport)
+    class SceneApi:
+        @staticmethod
+        def get_snapshot(_scene_name):
+            return {
+                "status": "success",
+                "camera": {
+                    "name": "MainCamera",
+                    "position": [1.0, 2.0, 3.0],
+                    "forward": [0.0, 0.0, 1.0],
+                    "world_up": [0.0, 1.0, 0.0],
+                    "fov": 45.0,
+                    "width": 640,
+                    "height": 480,
+                },
+                "cameras": [],
+            }
+
+    _install_native_api(monkeypatch, scene=SceneApi(), viewport=viewport)
 
     tool = camera_tools._build_camera_screenshot_tool(SceneManager())
     output_path = str(tmp_path / "shot.png")
@@ -244,8 +297,7 @@ def test_camera_screenshot_reads_authoritative_camera_snapshot_on_manifest_host(
             return {"status": "success", "path": args[-1]}
 
     viewport = Viewport()
-    monkeypatch.setattr(editor_api, "get_scene_adapter", lambda _engine=None: SceneApi())
-    monkeypatch.setattr(editor_api, "get_viewport_adapter", lambda _engine=None: viewport)
+    _install_native_api(monkeypatch, scene=SceneApi(), viewport=viewport)
 
     tool = camera_tools._build_camera_screenshot_tool(SceneManager())
     output_path = str(tmp_path / "snapshot.png")
@@ -279,7 +331,7 @@ def test_camera_screenshot_does_not_fall_back_to_python_camera_when_manifest_has
         def get_snapshot(_scene_name):
             return {"status": "success", "camera": None, "cameras": []}
 
-    monkeypatch.setattr(editor_api, "get_scene_adapter", lambda _engine=None: SceneApi())
+    _install_native_api(monkeypatch, scene=SceneApi())
 
     tool = camera_tools._build_camera_screenshot_tool(SceneManager())
     result = tool.func(
@@ -322,7 +374,7 @@ def test_camera_get_reads_authoritative_snapshot_on_manifest_host(monkeypatch):
                 "cameras": [],
             }
 
-    monkeypatch.setattr(editor_api, "get_scene_adapter", lambda _engine=None: SceneApi())
+    _install_native_api(monkeypatch, scene=SceneApi())
 
     tool = camera_tools._build_camera_get_tool(SceneManager())
     result = tool.func(scene_name="Scene/test.scene")
@@ -364,7 +416,7 @@ def test_camera_list_reads_authoritative_snapshot_on_manifest_host(monkeypatch):
                 ],
             }
 
-    monkeypatch.setattr(editor_api, "get_scene_adapter", lambda _engine=None: SceneApi())
+    _install_native_api(monkeypatch, scene=SceneApi())
 
     tool = camera_tools._build_camera_list_tool(SceneManager())
     result = tool.func(scene_name="Scene/test.scene")

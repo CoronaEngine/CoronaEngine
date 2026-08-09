@@ -26,10 +26,11 @@ test('Vue production code does not import the compatibility project service', ()
 });
 
 test('Dock drag-region methods belong to appService', () => {
-  const appService = fs.readFileSync(path.join(sourceRoot, 'compat/appService.js'), 'utf8');
+  const appService = fs.readFileSync(path.join(sourceRoot, 'services/appService.js'), 'utf8');
 
   assert.match(appService, /setDragRegions:/);
   assert.match(appService, /setCurrentTabDragRegions:/);
+  assert.equal(fs.existsSync(path.join(sourceRoot, 'compat/appService.js')), false);
 });
 
 test('Vue production code does not import the compatibility scripting service', () => {

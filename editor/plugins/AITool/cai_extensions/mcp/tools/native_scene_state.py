@@ -5,11 +5,6 @@ import time
 from dataclasses import dataclass
 from typing import Any, Iterable, Sequence
 
-from plugins.AITool.compat.legacy_aitool_scene_adapter import (
-    get_legacy_scene,
-    list_legacy_scene_routes,
-)
-
 EDITOR_API_OVERRIDE: Any | None = None
 
 
@@ -111,24 +106,16 @@ def get_native_scene_snapshot(
         time.sleep(max(0.01, float(interval_s)))
 
 
-def resolve_scene_value(scene_name: str = "", *, manager: Any = None) -> Any:
-    """Resolve a native scene route, with one explicit legacy fallback policy."""
-    try:
-        from api.editor_api import get_scene_adapter
-
-        if get_scene_adapter() is not None:
-            snapshot = get_native_scene_snapshot(scene_name or "")
-            route = str(snapshot.get("scene") or scene_name or "").strip()
-            if route:
-                return NativeSceneRef(
-                    route=route,
-                    name=str(snapshot.get("scene_name") or route),
-                )
-    except Exception:
-        # Legacy hosts may not expose the manifest scene adapter yet.
-        pass
-
-    return get_legacy_scene(scene_name, manager=manager)
+def resolve_native_scene_value(scene_name: str = "") -> NativeSceneRef:
+    """Resolve a scene exclusively through the native value-object contract."""
+    snapshot = get_native_scene_snapshot(scene_name or "")
+    route = str(snapshot.get("scene") or scene_name or "").strip()
+    if not route:
+        raise RuntimeError("Native scene contract returned no scene route")
+    return NativeSceneRef(
+        route=route,
+        name=str(snapshot.get("scene_name") or route),
+    )
 
 
 def actor_bounds_ready(actor: dict[str, Any]) -> bool:
@@ -245,17 +232,6 @@ def native_actor_views(scene_name: str = "", *, wait_for_bounds: bool = False) -
     return [NativeActorView(dict(actor), scene) for actor in actors if isinstance(actor, dict)]
 
 
-def native_actor_views_with_legacy_fallback(
-    scene_name: str = "", *, manager: Any = None
-) -> list[Any]:
-    """Return native actor views, falling back to one legacy scene lookup."""
-    try:
-        return list(native_actor_views(scene_name))
-    except Exception:
-        scene = get_legacy_scene(scene_name, manager=manager)
-        return list(scene.get_actors()) if scene is not None else []
-
-
 def find_native_actor(
     scene_name: str,
     actor_name: str,
@@ -278,23 +254,8 @@ def find_native_actor(
     return NativeActorView(dict(actor), str(snapshot.get("scene") or scene_name or ""))
 
 
-def find_actor_with_legacy_fallback(
-    scene_name: str = "", actor_name: str = "", *, manager: Any = None
-) -> Any:
-    """Resolve one actor through the native view, then the centralized legacy adapter."""
-    try:
-        actor = find_native_actor(scene_name, actor_name)
-        if actor is not None:
-            return actor
-    except Exception:
-        pass
-
-    scene = get_legacy_scene(scene_name, manager=manager)
-    return scene.find_actor(actor_name) if scene is not None else None
-
-
 def set_actor_physics_value(actor: Any, physics: dict[str, Any]) -> bool:
-    """Apply a physics value object to a native view or legacy fallback actor."""
+    """Apply a physics value object to a native actor view."""
     if not isinstance(physics, dict) or not physics:
         raise ValueError("physics must be a non-empty object")
 
@@ -303,16 +264,7 @@ def set_actor_physics_value(actor: Any, physics: dict[str, Any]) -> bool:
         setter(dict(physics))
         return True
 
-    mechanics = getattr(actor, "_mechanics", None)
-    if mechanics is None:
-        return False
-    updated = False
-    for key, value in physics.items():
-        method = getattr(mechanics, f"set_{key}", None)
-        if callable(method):
-            method(value)
-            updated = True
-    return updated
+    return False
 
 
 def set_native_actor_transform(
@@ -391,14 +343,11 @@ __all__ = [
     "NativeSceneRef",
     "actor_bounds_ready",
     "find_native_actor",
-    "find_actor_with_legacy_fallback",
     "set_actor_physics_value",
-    "get_legacy_scene",
     "get_native_scene_snapshot",
     "native_actor_views",
-    "native_actor_views_with_legacy_fallback",
     "native_scene_actors",
-    "resolve_scene_value",
+    "resolve_native_scene_value",
     "set_native_actor_transform",
     "set_native_actor_physics",
     "wait_for_actor_bounds",
