@@ -145,7 +145,8 @@
 <script setup>
 import { nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
 import { useRoute } from 'vue-router';
-import { appService, editorApi, projectService, sceneService, scriptingService } from '@/utils/bridge.js';
+import { editorApi } from '@/api/editorApi.js';
+import { appService } from '@/services/appService.js';
 import { buildDragRegions, dragRegionsSignature } from '@/utils/cameraDragRegions.js';
 import { coronaEventBus } from '@/utils/eventBus.js';
 import { createViewportPickController, indexActorsByHandle } from '@/utils/viewportPick.js';
@@ -231,8 +232,8 @@ const unwrap = (result) => result?.data ?? result;
 
 const loadCamera = async () => {
   const [listResult, visionResult] = await Promise.all([
-    sceneService.listCameraViews(sceneId),
-    sceneService.isVisionAvailable(),
+    editorApi.sceneTools.listCameraViews(sceneId),
+    editorApi.sceneTools.isVisionAvailable(),
   ]);
   const payload = unwrap(listResult);
   camera.value = payload?.cameras?.find(
@@ -256,7 +257,7 @@ const loadCamera = async () => {
 const renameCamera = async () => {
   if (!camera.value || !cameraName.value.trim() || cameraName.value === camera.value.name) return;
   try {
-    const result = unwrap(await sceneService.renameCameraView(sceneId, cameraId, cameraName.value.trim()));
+    const result = unwrap(await editorApi.sceneTools.renameCameraView(sceneId, cameraId, cameraName.value.trim()));
     camera.value = result.camera;
     cameraName.value = result.camera.name;
   } catch (error) {
@@ -267,12 +268,12 @@ const renameCamera = async () => {
 
 const changeBackend = async () => {
   try {
-    const result = unwrap(await sceneService.setRenderBackend(backend.value, sceneId, cameraId));
+    const result = unwrap(await editorApi.sceneTools.setRenderBackend(backend.value, sceneId, cameraId));
     backend.value = result.mode;
     if (backend.value === 'vision') {
       outputMode.value = 'final_color';
-      await sceneService.setOutputMode(sceneId, cameraId, 'final_color');
-      await sceneService.setVisionRenderMode(sceneId, cameraId, visionRenderMode.value);
+      await editorApi.sceneTools.setOutputMode(sceneId, cameraId, 'final_color');
+      await editorApi.sceneTools.setVisionRenderMode(sceneId, cameraId, visionRenderMode.value);
     }
   } catch (error) {
     errorText.value = error.message;
@@ -291,17 +292,17 @@ const selectVisionRenderMode = async (mode) => {
   visionModeMenuOpen.value = false;
   if (visionRenderMode.value === mode && backend.value === 'vision') return;
   try {
-    const result = unwrap(await sceneService.setVisionRenderMode(sceneId, cameraId, mode));
+    const result = unwrap(await editorApi.sceneTools.setVisionRenderMode(sceneId, cameraId, mode));
     visionRenderMode.value = result.mode || mode;
     if (camera.value) {
       camera.value.vision_render_mode = visionRenderMode.value;
     }
     if (backend.value !== 'vision') {
-      const backendResult = unwrap(await sceneService.setRenderBackend('vision', sceneId, cameraId));
+      const backendResult = unwrap(await editorApi.sceneTools.setRenderBackend('vision', sceneId, cameraId));
       backend.value = backendResult.mode || 'vision';
       if (backend.value === 'vision') {
         outputMode.value = 'final_color';
-        await sceneService.setOutputMode(sceneId, cameraId, 'final_color');
+        await editorApi.sceneTools.setOutputMode(sceneId, cameraId, 'final_color');
       }
     }
   } catch (error) {
@@ -312,7 +313,7 @@ const selectVisionRenderMode = async (mode) => {
 const changeOutput = async () => {
   if (backend.value === 'vision') return;
   try {
-    await sceneService.setOutputMode(sceneId, cameraId, outputMode.value);
+    await editorApi.sceneTools.setOutputMode(sceneId, cameraId, outputMode.value);
   } catch (error) {
     errorText.value = error.message;
   }
@@ -330,7 +331,7 @@ const toggleShadowCascadeDebug = async () => {
   const next = !shadowCascadeDebug.value;
   shadowCascadeDebug.value = next;
   try {
-    const result = unwrap(await sceneService.setShadowCascadeDebug(sceneId, cameraId, next));
+    const result = unwrap(await editorApi.sceneTools.setShadowCascadeDebug(sceneId, cameraId, next));
     shadowCascadeDebug.value = !!result.enabled;
     if (camera.value) {
       camera.value.shadow_cascade_debug = shadowCascadeDebug.value;
@@ -346,7 +347,7 @@ const toggleSsaoEnabled = async () => {
   const next = !ssaoEnabled.value;
   ssaoEnabled.value = next;
   try {
-    const result = unwrap(await sceneService.setSsaoEnabled(sceneId, cameraId, next));
+    const result = unwrap(await editorApi.sceneTools.setSsaoEnabled(sceneId, cameraId, next));
     ssaoEnabled.value = result.enabled !== false;
     if (camera.value) {
       camera.value.ssao_enabled = ssaoEnabled.value;
@@ -416,13 +417,13 @@ const viewportGizmoController = createViewportGizmoController({
   getRenderRect: getCameraRenderRect,
   onDragEnd: (payload) => {
     const actorName = String(payload?.actor || '');
-    if (actorName) sceneService.saveActor(sceneId, actorName).catch(() => {});
+    if (actorName) editorApi.sceneTools.saveActor(sceneId, actorName).catch(() => {});
   },
 });
 
 const refreshCameraViewActorPickIndex = async () => {
   if (!sceneId) return false;
-  const result = await sceneService.listSceneTree(sceneId);
+  const result = await editorApi.sceneTools.listSceneTree(sceneId);
   const snapshot = unwrap(result);
   actorPickIndex = indexActorsByHandle(Array.isArray(snapshot?.actors) ? snapshot.actors : []);
   return actorPickIndex.size > 0;
@@ -520,7 +521,7 @@ const saveSettings = async () => {
   try {
     const width = Math.max(Number(renderWidth.value) || 960, 64);
     const height = Math.max(Number(renderHeight.value) || 540, 64);
-    const result = unwrap(await sceneService.updateCameraView(sceneId, cameraId, {
+    const result = unwrap(await editorApi.sceneTools.updateCameraView(sceneId, cameraId, {
       view_open: true,
       move_speed: Math.max(Number(moveSpeed.value) || 1, 0.01),
       width,
@@ -558,7 +559,7 @@ const syncWindowSize = async (force = false) => {
   renderWidth.value = width;
   renderHeight.value = height;
   try {
-    const result = unwrap(await sceneService.updateCameraView(sceneId, cameraId, {
+    const result = unwrap(await editorApi.sceneTools.updateCameraView(sceneId, cameraId, {
       view_open: true,
       width,
       height,
@@ -579,9 +580,9 @@ const scheduleWindowSizeSync = () => {
 
 const takeScreenshot = async () => {
   try {
-    const selected = unwrap(await sceneService.selectScreenshotPath(sceneId, cameraId));
+    const selected = unwrap(await editorApi.sceneTools.selectScreenshotPath(sceneId, cameraId));
     if (selected?.status === 'canceled' || !selected?.path) return;
-    await sceneService.saveScreenshot(sceneId, selected.path, cameraId);
+    await editorApi.sceneTools.saveScreenshot(sceneId, selected.path, cameraId);
   } catch (error) {
     errorText.value = error.message;
   }
@@ -620,7 +621,7 @@ const toggleBorderlessFullscreen = async () => {
 
 const closeView = async () => {
   try {
-    await sceneService.closeCameraView(sceneId, cameraId);
+    await editorApi.sceneTools.closeCameraView(sceneId, cameraId);
   } finally {
     await appService.closeThisTab(`camera:${cameraId}`).catch(() => {});
   }
@@ -768,7 +769,7 @@ const onKeyDown = (event) => {
   if (isTextInputEvent(event)) return;
   if (!event.__coronaScratchKeyForwarded) {
     event.__coronaScratchKeyForwarded = true;
-    scriptingService.sendKeyEvent(
+    editorApi.scratch.sendKeyEvent(
       event.code || event.key || '',
       keyModifiers(event),
       event.key || event.code || '',
@@ -798,7 +799,7 @@ const onKeyUp = (event) => {
   keys.delete(movementCode(event));
   if (!event.__coronaScratchKeyForwarded) {
     event.__coronaScratchKeyForwarded = true;
-    scriptingService.sendKeyUpEvent(
+    editorApi.scratch.sendKeyUpEvent(
       event.code || event.key || '',
       event.key || event.code || '',
     ).catch(() => {});
@@ -820,7 +821,7 @@ const sendScratchMouse = (
   viewportHeight,
   pickedActor = '',
 ) => {
-  scriptingService.sendMouseEvent(
+  editorApi.scratch.sendMouseEvent(
     eventType,
     button,
     x,
@@ -1077,7 +1078,7 @@ const pushDragRegions = async (regions, force = false) => {
   const signature = dragRegionsSignature(regions);
   if (!force && signature === lastDragRegionSignature) return;
   lastDragRegionSignature = signature;
-  await projectService.setCurrentTabDragRegions(regions).catch(() => {});
+  await appService.setCurrentTabDragRegions(regions).catch(() => {});
 };
 
 const syncDragRegions = async ({ force = false } = {}) => {
@@ -1118,7 +1119,7 @@ const gameStateLabel = (state) => ({
 }[state] || state);
 const pollPreviewHud = async () => {
   try {
-    const payload = unwrap(await scriptingService.getGamePreviewStatus()) || {};
+  const payload = unwrap(await editorApi.scratch.getGamePreviewStatus()) || {};
     previewHudStates.value = payload.has_snapshot ? (payload.runtime_states || []) : [];
     gamePreviewInputLocked.value = Boolean(payload.input_locked ?? payload.inputLocked);
     if (gamePreviewInputLocked.value) resetCameraInput();
@@ -1127,7 +1128,7 @@ const pollPreviewHud = async () => {
     gamePreviewInputLocked.value = false;
   }
   try {
-    const scriptStatus = unwrap(await scriptingService.getScriptStatus()) || {};
+  const scriptStatus = unwrap(await editorApi.scratch.getScriptStatus()) || {};
     nodeGraphInputLocked.value = Boolean(scriptStatus.inputLocked);
     if (nodeGraphInputLocked.value) resetCameraInput();
   } catch {

@@ -9,7 +9,8 @@
  * 不直接监听 window 回调；由应用根组件统一分流，避免重复订阅。
  */
 import { reactive, readonly } from 'vue';
-import { lanChatService, networkService } from '../utils/bridge.js';
+import { lanChatService } from '../services/lanChatService.js';
+import { networkService } from '../services/networkService.js';
 import {
   disclosureVisibleForRole,
   disclosureVisibleForRoom,

@@ -18,7 +18,7 @@ const PRELUDE_SNIPPETS = {
   keyboard: {
     global: [
       '# 键盘事件桥接：注册 handle 到 CE 模块',
-      'from CoronaCore.utils import corona_engine_scratch as _CE',
+      'from script_runtime.engine import corona_engine as _CE',
     ].join('\n'),
     runPrologue: [
       '# 将 handle 注册到 CE，CEF bridge 收到键盘事件后会调用它',
@@ -32,7 +32,7 @@ const PRELUDE_SNIPPETS = {
   mouse: {
     global: [
       '# 鼠标事件桥接：注册 handle_mouse 到 CE 模块',
-      'from CoronaCore.utils import corona_engine_scratch as _CE',
+      'from script_runtime.engine import corona_engine as _CE',
     ].join('\n'),
     runPrologue: [
       '# 将 handle_mouse 注册到 CE，CEF bridge 收到鼠标事件后会调用它',

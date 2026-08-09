@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { createDockOverlayStyles } from './dockOverlayLayout.js';
+import { createDockOverlayStyles } from '../../src/components/dock/dockOverlayLayout.js';
 
 test('viewport always fills the workspace regardless of open docks', () => {
   const closed = createDockOverlayStyles({});

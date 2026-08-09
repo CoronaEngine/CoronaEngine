@@ -1,0 +1,50 @@
+#__cam_toggle_dot {
+  position: fixed;
+  top: 12px;
+  right: 12px;
+  z-index: 100000;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: #ec4899;
+  cursor: grab;
+  opacity: 0.85;
+  border: 2px solid #fff;
+  animation: __camPulse 1.5s ease-in-out infinite;
+  font-size: 14px;
+  line-height: 24px;
+  text-align: center;
+  color: #fff;
+  user-select: none;
+}
+
+#__cam_toggle_dot:active {
+  cursor: grabbing;
+}
+
+@keyframes __camPulse {
+  0%,
+  100% {
+    box-shadow: 0 0 6px #ec4899;
+  }
+
+  50% {
+    box-shadow: 0 0 18px #ec4899, 0 0 28px #ec4899;
+  }
+}
+
+#__camlock_ctrl {
+  display: none;
+  position: fixed;
+  top: 42px;
+  right: 12px;
+  z-index: 99999;
+  background: #2d2d2d;
+  border: 2px solid #ec4899;
+  border-radius: 8px;
+  padding: 12px;
+  color: #e0e0e0;
+  font-size: 12px;
+  min-width: 220px;
+  box-shadow: 0 4px 16px rgb(0 0 0 / 60%);
+}

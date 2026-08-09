@@ -28,8 +28,8 @@
 import { computed, provide } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { useDockStore } from '@/stores/dockStore.js';
-import { getPluginDisplayName, getPluginManifest } from '@/config/pluginManifest.js';
-import { appService } from '@/utils/bridge.js';
+import { getPluginManifest } from '@/config/pluginManifest.js';
+import { appService } from '@/services/appService.js';
 
 const props = defineProps({
   panelId: { type: String, required: true },
@@ -45,7 +45,8 @@ const dockStore = useDockStore();
 const manifest = computed(() => getPluginManifest(props.panelId));
 const panelTitle = computed(() => {
   locale.value;
-  return getPluginDisplayName(manifest.value) || props.panelId;
+  const plugin = manifest.value;
+  return plugin?.displayNameKey ? t(plugin.displayNameKey) : plugin?.displayName || props.panelId;
 });
 
 // ============================================================================

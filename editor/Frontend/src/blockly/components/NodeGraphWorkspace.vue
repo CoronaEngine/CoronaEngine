@@ -312,7 +312,8 @@ import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } 
 import MiniBlocklyWorkspace from '@/blockly/components/MiniBlocklyWorkspace.vue';
 import BlocklyToolboxPalette from '@/blockly/components/BlocklyToolboxPalette.vue';
 import { useErrorHandler } from '@/composables/useErrorHandler.js';
-import { editorApi, appService, projectSettingsService, scriptingService, sceneService } from '@/utils/bridge.js';
+import { editorApi } from '@/api/editorApi.js';
+import { appService } from '@/services/appService.js';
 import { coronaEventBus } from '@/utils/eventBus.js';
 import { nodeGraphToCode, validateNodeGraph } from '@/blockly/generators/index.js';
 import { generatedNodeGraphRevision, registerGeneratedNodeGraphConsumer } from '@/blockly/node-editor/aiNodeGraphService.js';
@@ -437,7 +438,7 @@ async function toggleFullscreen() {
   const next = !isFullscreen.value;
   fullscreenTransitionBusy.value = true;
 
-  // SceneDatas runs in an independent CEF surface. A CSS overlay cannot grow beyond
+  // The Object panel runs in an independent CEF surface. A CSS overlay cannot grow beyond
   // that surface, so detach the whole panel first and let the node editor fill the
   // resulting native window. Explicit desired-state commands avoid reversing a
   // still-pending detach transition.
@@ -637,7 +638,7 @@ function extractProjectPath(response) {
 }
 async function refreshActiveProjectPath() {
   try {
-    const response = await projectSettingsService.getActiveProjectInfo();
+    const response = await editorApi.projectSettings.getActiveProjectInfo();
     const projectPath = extractProjectPath(response);
     if (projectPath) {
       activeProjectPath.value = projectPath;
@@ -2395,7 +2396,7 @@ async function saveNow(targetOverride = null, { force = false } = {}) {
 
   saveInFlight = (async () => {
     try {
-      const response = bridgeResult(await scriptingService.saveBlocklyTarget({
+      const response = bridgeResult(await editorApi.scratch.saveBlocklyTarget({
         target_type: target.targetType === 'model' ? 'actor' : target.targetType || 'actor',
         scene_name: isProject ? '' : target.sceneName || '',
         actor_name: isProject ? '' : target.actorName || '',
@@ -2473,7 +2474,7 @@ async function loadGraphForCurrentTarget() {
     for (let attempt = 0; attempt < 2; attempt += 1) {
       target = currentTarget(requestProjectPath);
       const isProject = (target.targetType === 'model' ? 'actor' : target.targetType || 'actor') === 'project';
-      response = bridgeResult(await scriptingService.loadBlocklyTarget({
+      response = bridgeResult(await editorApi.scratch.loadBlocklyTarget({
         target_type: target.targetType === 'model' ? 'actor' : target.targetType || 'actor',
         scene_name: isProject ? '' : target.sceneName || '',
         actor_name: isProject ? '' : target.actorName || '',
@@ -2797,7 +2798,7 @@ function startRunPoll() {
   runPollTimer = window.setInterval(async () => {
     if (!codeRunning.value) return;
     try {
-      const status = normalizeNodeGraphScriptStatus(await scriptingService.getScriptStatus());
+      const status = normalizeNodeGraphScriptStatus(await editorApi.scratch.getScriptStatus());
       currentRunNodeId.value = status?.currentNodeId || '';
       setNodeGraphInputLocked(Boolean(status?.inputLocked));
       runStatus.value = formatRunState(status);
@@ -2840,7 +2841,7 @@ async function stopNodeGraphRun(statusText = '已停止', restoreState = false, 
   let shouldStop = startedRunForTarget || codeRunning.value || runBusy.value;
   if (verifyBackend && !shouldStop) {
     try {
-      const status = bridgeResult(await scriptingService.getScriptStatus()) || {};
+      const status = bridgeResult(await editorApi.scratch.getScriptStatus()) || {};
       shouldStop = scriptStatusBelongsToCurrentTarget(status) && scriptStatusNeedsStop(status);
     } catch (error) {
       // This endpoint only controls the standalone node/script executor, not game preview.
@@ -2851,7 +2852,7 @@ async function stopNodeGraphRun(statusText = '已停止', restoreState = false, 
   }
   try {
     if (shouldStop) {
-      const response = bridgeResult(await scriptingService.stopScriptExecution(Boolean(restoreState)));
+      const response = bridgeResult(await editorApi.scratch.stopScriptExecution(Boolean(restoreState)));
       if (restoreState) {
         if (response?.restored) {
           runStatus.value = '已停止并恢复运行前状态';
@@ -2939,7 +2940,7 @@ async function refreshGamePreviewGuard() {
     });
   }
   try {
-    return applyGamePreviewGuard(await scriptingService.getGamePreviewStatus());
+    return applyGamePreviewGuard(await editorApi.scratch.getGamePreviewStatus());
   } catch (error) {
     logError('查询全局运行状态失败', error);
     return { active: false, scope: '' };
@@ -2999,7 +3000,7 @@ async function handleToggleRun() {
     }
     runStatus.value = '启动中...';
     const response = bridgeResult(
-      await scriptingService.executePythonCode(
+      await editorApi.scratch.executePythonCode(
         code,
         0,
         isProjectTarget.value ? '' : props.sceneName || '',
@@ -3008,7 +3009,7 @@ async function handleToggleRun() {
       )
     );
     if (panelClosing || !componentMounted) {
-      await scriptingService.stopScriptExecution(false).catch(() => {});
+      await editorApi.scratch.stopScriptExecution(false).catch(() => {});
       setNodeGraphInputLocked(false);
       return;
     }
@@ -3098,7 +3099,7 @@ async function refreshSceneActorOptions({ rescan = false } = {}) {
   const refreshSequence = ++actorOptionsRefreshSequence;
   const requestedSceneName = String(props.sceneName || '').trim();
   try {
-    const response = await sceneService.listActorTree(requestedSceneName);
+    const response = await editorApi.scene.listActorTree(requestedSceneName);
     if (response?.success === false || response?.status === 'error') {
       throw new Error(response?.message || 'Actor tree query failed');
     }

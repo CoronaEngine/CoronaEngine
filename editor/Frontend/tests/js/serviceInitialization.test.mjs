@@ -4,7 +4,7 @@ import test from 'node:test';
 import {
   createServiceResponseError,
   createServiceInitializationRetry,
-} from './serviceInitialization.js';
+} from '../../src/utils/serviceInitialization.js';
 
 test('marks an initializing service response as retryable', () => {
   const error = createServiceResponseError(
@@ -13,7 +13,7 @@ test('marks an initializing service response as retryable', () => {
       status: 'initializing',
       message: 'AITool is initializing',
     },
-    'AI service unavailable',
+    'AI service unavailable'
   );
 
   assert.equal(error.message, 'AITool is initializing');

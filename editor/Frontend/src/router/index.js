@@ -1,19 +1,8 @@
 // 路由文件
 import { createRouter, createWebHashHistory } from 'vue-router';
 
-// dock 面板组件（已在 pluginManifest.js 中静态导入，此处复用避免双模式 import 警告）
-import SceneBar from '../views/sidebar/SceneBar.vue';
-import ObjectPanel from '../views/sidebar/Object.vue';
-import LogView from '../views/sidebar/LogView.vue';
-import FileManager from '../views/sidebar/FileManager.vue';
-import NodeGraphPanel from '../views/sidebar/NodeGraphPanel.vue';
-import CabbageChatPanel from '../views/sidebar/CabbageChatPanel.vue';
-import Pet from '../views/tools/Pet.vue';
-import ProjectSettings from '../views/sidebar/ProjectSettings.vue';
 import BlocklyWorkspace from '../blockly/components/BlocklyWorkspace.vue';
-import EditorSettings from '../views/sidebar/EditorSettings.vue';
-import NetworkPanel from '../views/sidebar/Network.vue';
-import LightFieldCalibrationPanel from '../components/panels/LightFieldCalibrationPanel.vue';
+import { getPluginComponent } from '../views/panelRegistry.js';
 
 const routes = [
   {
@@ -44,52 +33,52 @@ const routes = [
   {
     path: '/SceneBar',
     name: 'SceneBar',
-    component: SceneBar,
+    component: getPluginComponent('SceneTools'),
   },
   {
     path: '/NodeGraph',
     name: 'NodeGraphPanel',
-    component: NodeGraphPanel,
+    component: getPluginComponent('NodeGraphPanel'),
   },
   {
     path: '/CabbageChat',
     name: 'CabbageChatPanel',
-    component: CabbageChatPanel,
+    component: getPluginComponent('CabbageChatPanel'),
   },
   {
     path: '/Object',
     name: 'Object',
-    component: ObjectPanel,
+    component: getPluginComponent('Object'),
   },
   {
     path: '/Pet',
     name: 'Pet',
-    component: Pet,
+    component: getPluginComponent('AITool'),
   },
   {
     path: '/LogView',
     name: 'LogView',
-    component: LogView,
+    component: getPluginComponent('LogTool'),
   },
   {
     path: '/FileManager',
     name: 'FileManager',
-    component: FileManager,
+    component: getPluginComponent('FileManager'),
   },
   {
     path: '/SetUp',
     name: 'SetUp',
-    component: EditorSettings,
+    component: getPluginComponent('EditorSettings'),
   },
   {
     path: '/Network',
     name: 'Network',
-    component: NetworkPanel,
+    component: getPluginComponent('Network'),
   },
   {
     path: '/ProjectSettings',
     name: 'ProjectSettings',
-    component: ProjectSettings,
+    component: getPluginComponent('ProjectSettings'),
   },
   {
     path: '/ScratchTool',
@@ -104,7 +93,7 @@ const routes = [
   {
     path: '/LightFieldCalibration',
     name: 'LightFieldCalibration',
-    component: LightFieldCalibrationPanel,
+    component: getPluginComponent('LightFieldCalibration'),
   },
 ];
 

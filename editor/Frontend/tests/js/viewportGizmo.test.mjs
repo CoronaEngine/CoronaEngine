@@ -4,8 +4,8 @@ import test from 'node:test';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { createViewportGizmoController } from './viewportGizmo.js';
-import * as viewportGizmoModule from './viewportGizmo.js';
+import { createViewportGizmoController } from '../../src/utils/viewportGizmo.js';
+import * as viewportGizmoModule from '../../src/utils/viewportGizmo.js';
 
 const frontendRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
@@ -18,42 +18,37 @@ const pointerDownHandler = (source) => {
 };
 
 test('both viewport surfaces capture the pointer synchronously on pointerdown', () => {
-  for (const relativePath of [
-    'src/views/layout/MainPage.vue',
-    'src/views/tools/CameraView.vue',
-  ]) {
+  for (const relativePath of ['src/views/layout/MainPage.vue', 'src/views/tools/CameraView.vue']) {
     const source = readFileSync(join(frontendRoot, relativePath), 'utf8');
     const handler = pointerDownHandler(source);
-    assert.notEqual(handler.indexOf('setPointerCapture'), -1, `${relativePath} must capture pointerdown`);
+    assert.notEqual(
+      handler.indexOf('setPointerCapture'),
+      -1,
+      `${relativePath} must capture pointerdown`
+    );
     assert.ok(
       handler.indexOf('setPointerCapture') < handler.indexOf('viewportUiPointerController.send'),
-      `${relativePath} must capture before forwarding other pointer work`,
+      `${relativePath} must capture before forwarding other pointer work`
     );
     assert.ok(
       handler.indexOf('setPointerCapture') < handler.indexOf('viewportGizmoController.pointer'),
-      `${relativePath} must capture before forwarding the gizmo pointerdown`,
+      `${relativePath} must capture before forwarding the gizmo pointerdown`
     );
   }
 });
 
 test('main viewport pointerdown does not refresh the scene camera binding', () => {
-  const source = readFileSync(
-    join(frontendRoot, 'src/views/layout/MainPage.vue'),
-    'utf8',
-  );
+  const source = readFileSync(join(frontendRoot, 'src/views/layout/MainPage.vue'), 'utf8');
   const handler = pointerDownHandler(source);
   assert.equal(
     handler.includes('refreshSceneCameraBinding'),
     false,
-    'scene camera binding must not refresh during the native pointerdown sequence',
+    'scene camera binding must not refresh during the native pointerdown sequence'
   );
 });
 
 test('viewport pointercancel only cancels the active gizmo pointer', () => {
-  for (const relativePath of [
-    'src/views/layout/MainPage.vue',
-    'src/views/tools/CameraView.vue',
-  ]) {
+  for (const relativePath of ['src/views/layout/MainPage.vue', 'src/views/tools/CameraView.vue']) {
     const source = readFileSync(join(frontendRoot, relativePath), 'utf8');
     const start = source.indexOf('const handleViewportPointerCancel = (event) => {');
     const end = source.indexOf('\n};', start);
@@ -63,21 +58,18 @@ test('viewport pointercancel only cancels the active gizmo pointer', () => {
     assert.match(
       handler,
       /event\.pointerId\s*!==\s*gizmoDownPointerId/,
-      `${relativePath} must ignore cancellation from another pointer`,
+      `${relativePath} must ignore cancellation from another pointer`
     );
   }
 });
 
 test('main viewport pointerdown does not force a focus transition during drag start', () => {
-  const source = readFileSync(
-    join(frontendRoot, 'src/views/layout/MainPage.vue'),
-    'utf8',
-  );
+  const source = readFileSync(join(frontendRoot, 'src/views/layout/MainPage.vue'), 'utf8');
   const handler = pointerDownHandler(source);
   assert.equal(
     handler.includes('focusViewportInput'),
     false,
-    'pointerdown must not force a CEF focus transition while starting a drag',
+    'pointerdown must not force a CEF focus transition while starting a drag'
   );
 });
 
@@ -115,12 +107,10 @@ test('forwards viewport-local pointer coordinates and tracks consumed drag', () 
 
   const requestId = controller.pointer(
     { clientX: 60, clientY: 70, button: 0, buttons: 1 },
-    'pointerdown',
+    'pointerdown'
   );
   assert.equal(requestId, 'gizmo-1');
-  assert.deepEqual(calls[0].slice(0, 7), [
-    11, 'gizmo-1', 'pointerdown', 60, 70, 220, 140,
-  ]);
+  assert.deepEqual(calls[0].slice(0, 7), [11, 'gizmo-1', 'pointerdown', 60, 70, 220, 140]);
 
   const result = controller.handleResult({
     requestId: 'gizmo-1',
@@ -166,7 +156,7 @@ test('pointercancel forwards cancellation and clears the active drag once', () =
 
   const downRequest = controller.pointer(
     { clientX: 10, clientY: 10, button: 0, buttons: 1 },
-    'pointerdown',
+    'pointerdown'
   );
   controller.handleResult({ requestId: downRequest, consumed: true, dragging: true, axis: 'x' });
 
@@ -198,7 +188,7 @@ test('coalesces active drag moves to one animation frame', () => {
   });
   const down = controller.pointer(
     { clientX: 10, clientY: 10, button: 0, buttons: 1 },
-    'pointerdown',
+    'pointerdown'
   );
   controller.handleResult({ requestId: down, consumed: true, dragging: true, axis: 'x' });
   controller.pointer({ clientX: 20, clientY: 10, buttons: 1 }, 'pointermove');
@@ -215,7 +205,7 @@ test('resolves the main viewport gizmo target from a successful pick', () => {
   assert.equal(
     typeof viewportGizmoModule.resolveViewportGizmoTarget,
     'function',
-    'main viewport selection resolver must exist',
+    'main viewport selection resolver must exist'
   );
   const target = viewportGizmoModule.resolveViewportGizmoTarget({
     sceneId: 'scene.ini',
@@ -235,9 +225,7 @@ test('resolves a scene-tree selection through the actor index', () => {
   const target = viewportGizmoModule.resolveViewportGizmoTarget({
     sceneId: 'scene.ini',
     selection: { scene: 'scene.ini', actor: 'Ball', actor_type: 'model' },
-    actorIndex: new Map([
-      [1176640039248, { name: 'Ball', type: 'model' }],
-    ]),
+    actorIndex: new Map([[1176640039248, { name: 'Ball', type: 'model' }]]),
   });
   assert.equal(target?.handle, 1176640039248);
 });
@@ -246,37 +234,52 @@ test('routes a gizmo selection only to its source viewport', () => {
   assert.equal(
     typeof viewportGizmoModule.isViewportGizmoSelectionOwner,
     'function',
-    'viewport ownership resolver must exist',
+    'viewport ownership resolver must exist'
   );
 
   const fromCameraView = {
     source_viewport: 'cameraView',
     source_camera_handle: 22,
   };
-  assert.equal(viewportGizmoModule.isViewportGizmoSelectionOwner({
-    viewportScope: 'main',
-    cameraHandle: 11,
-    selection: fromCameraView,
-  }), false);
-  assert.equal(viewportGizmoModule.isViewportGizmoSelectionOwner({
-    viewportScope: 'cameraView',
-    cameraHandle: 22,
-    selection: fromCameraView,
-  }), true);
-  assert.equal(viewportGizmoModule.isViewportGizmoSelectionOwner({
-    viewportScope: 'cameraView',
-    cameraHandle: 33,
-    selection: fromCameraView,
-  }), false);
+  assert.equal(
+    viewportGizmoModule.isViewportGizmoSelectionOwner({
+      viewportScope: 'main',
+      cameraHandle: 11,
+      selection: fromCameraView,
+    }),
+    false
+  );
+  assert.equal(
+    viewportGizmoModule.isViewportGizmoSelectionOwner({
+      viewportScope: 'cameraView',
+      cameraHandle: 22,
+      selection: fromCameraView,
+    }),
+    true
+  );
+  assert.equal(
+    viewportGizmoModule.isViewportGizmoSelectionOwner({
+      viewportScope: 'cameraView',
+      cameraHandle: 33,
+      selection: fromCameraView,
+    }),
+    false
+  );
 
-  assert.equal(viewportGizmoModule.isViewportGizmoSelectionOwner({
-    viewportScope: 'main',
-    cameraHandle: 11,
-    selection: {},
-  }), true);
-  assert.equal(viewportGizmoModule.isViewportGizmoSelectionOwner({
-    viewportScope: 'cameraView',
-    cameraHandle: 22,
-    selection: {},
-  }), false);
+  assert.equal(
+    viewportGizmoModule.isViewportGizmoSelectionOwner({
+      viewportScope: 'main',
+      cameraHandle: 11,
+      selection: {},
+    }),
+    true
+  );
+  assert.equal(
+    viewportGizmoModule.isViewportGizmoSelectionOwner({
+      viewportScope: 'cameraView',
+      cameraHandle: 22,
+      selection: {},
+    }),
+    false
+  );
 });

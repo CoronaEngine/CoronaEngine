@@ -4,7 +4,7 @@ import {
   actorContextRevision,
   actorRecordFromSceneItem,
   actorRecordsFromSceneTree,
-} from './actorContext.js';
+} from '../../src/blockly/utils/actorContext.js';
 
 test('actorRecordFromSceneItem keeps compact AI-relevant actor data', () => {
   const actor = actorRecordFromSceneItem({
@@ -47,11 +47,19 @@ test('scene and folder rows are excluded', () => {
 });
 
 test('revision changes when transform or physics state changes', () => {
-  const base = [{ name: 'ball', type: 'model', tags: [], aliases: [], transform: { position: [0, 0, 0] }, physicsEnabled: false }];
+  const base = [
+    {
+      name: 'ball',
+      type: 'model',
+      tags: [],
+      aliases: [],
+      transform: { position: [0, 0, 0] },
+      physicsEnabled: false,
+    },
+  ];
   const moved = [{ ...base[0], transform: { position: [1, 0, 0] }, physicsEnabled: true }];
   assert.notEqual(actorContextRevision('default', base), actorContextRevision('default', moved));
 });
-
 
 test('actorRecordsFromSceneTree recursively keeps actors under folders', () => {
   const actors = actorRecordsFromSceneTree({
@@ -61,17 +69,17 @@ test('actorRecordsFromSceneTree recursively keeps actors under folders', () => {
       {
         name: 'Buildings',
         type: 'folder',
-        children: [
-          { name: 'Building A', type: 'model', tags: ['building'] },
-        ],
+        children: [{ name: 'Building A', type: 'model', tags: ['building'] }],
       },
     ],
     renderCache: { ignored: [{ name: 'Not An Actor', type: 'model' }] },
   });
-  assert.deepEqual(actors, [{
-    name: 'Building A',
-    type: 'model',
-    tags: ['building'],
-    aliases: [],
-  }]);
+  assert.deepEqual(actors, [
+    {
+      name: 'Building A',
+      type: 'model',
+      tags: ['building'],
+      aliases: [],
+    },
+  ]);
 });

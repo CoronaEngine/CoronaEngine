@@ -122,7 +122,7 @@ import { useRouter } from 'vue-router';
 import { useI18n } from 'vue-i18n';
 import { useDockPanel } from '@/composables/useDockPanel.js';
 import { setLocale } from '@/i18n/index.js';
-import { appService } from '@/utils/bridge.js';
+import { appService } from '@/services/appService.js';
 import { coronaEventBus } from '@/utils/eventBus.js';
 import DockTitleBar from '@/components/ui/DockTitleBar.vue';
 

@@ -53,7 +53,7 @@
 
 <script setup>
 import { ref, computed, nextTick, onMounted, onUnmounted } from 'vue';
-import { editorApi, logService } from '@/utils/bridge';
+import { editorApi } from '@/api/editorApi.js';
 import SimpleSelect from '@/components/ui/SimpleSelect.vue';
 import DockTitleBar from '@/components/ui/DockTitleBar.vue';
 import { useDockPanel } from '@/composables/useDockPanel.js';
@@ -143,7 +143,6 @@ const closeFloat = () => {
 };
 
 onMounted(async () => {
-  logService.setLogReady();
   logBatchCallbackToken = await editorApi.events.onLogBatch(onLogBatch);
 });
 

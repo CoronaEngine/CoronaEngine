@@ -100,7 +100,8 @@
 <script setup>
 import { onMounted, onUnmounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
-import { projectLauncherService, projectSettingsService } from '@/utils/bridge';
+import { editorApi } from '@/api/editorApi.js';
+import { projectLauncherService } from '@/services/projectLauncherService.js';
 import { initializeWorldTasks } from '@/services/cabbageAssistantContextService.js';
 import lanchat from '@/stores/lanchat.js';
 import { translateUiText } from '@/i18n/domTranslator.js';
@@ -116,7 +117,7 @@ let archiveStatusTimer = null;
 
 const refreshArchiveReady = async () => {
   try {
-    const response = await projectLauncherService.getProjectLoadStatus();
+    const response = await editorApi.project.getProjectLoadStatus();
     const status = response?.data ?? response;
     archiveReady.value = status?.archive_service_ready === true;
   } catch {
@@ -180,7 +181,7 @@ const waitForPythonProjectActivation = async (expectedPath, timeoutMs = 7000) =>
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     try {
-      const response = await projectSettingsService.getActiveProjectInfo();
+    const response = await editorApi.projectSettings.getActiveProjectInfo();
       if (normalizeProjectPath(activeProjectPathFrom(response)) === expected) return true;
     } catch (_) {}
     await new Promise((resolve) => window.setTimeout(resolve, 200));
@@ -195,7 +196,7 @@ const handleCreate = async () => {
   creating.value = true;
   try {
     // 后端自动命名 + 存到引擎 data 目录，返回 { name, path }
-    const result = await projectLauncherService.createWorldProject({
+    const result = await editorApi.project.createWorldProject({
       mode: mode.value,
       prompt,
     });
@@ -214,7 +215,7 @@ const handleCreate = async () => {
         // world can receive the new task plan and a stale node request can cross over.
         const projectReady = await waitForPythonProjectActivation(info.path);
         if (projectReady) {
-          await projectLauncherService.setProjectMode(mode.value, { prompt });
+          await editorApi.project.setProjectMode(mode.value, { prompt });
           try {
             // This operation only creates personalized guidance tasks. It never
             // creates or modifies the project node graph.

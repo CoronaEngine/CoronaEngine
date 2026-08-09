@@ -1,4 +1,5 @@
-import { appService, scriptingService } from '@/utils/bridge.js';
+import { editorApi } from '@/api/editorApi.js';
+import { appService } from '@/services/appService.js';
 import { cabbageContextService } from '@/services/cabbageAssistantContextService.js';
 import { coronaEventBus } from '@/utils/eventBus.js';
 
@@ -286,7 +287,7 @@ async function loadPersistedProjectNodeGraph() {
   let projectPath = readActiveProjectPath();
   let response = null;
   for (let attempt = 0; attempt < 2; attempt += 1) {
-    response = bridgeResult(await scriptingService.loadBlocklyTarget({
+    response = bridgeResult(await editorApi.scratch.loadBlocklyTarget({
       target_type: 'project',
       scene_name: '',
       actor_name: '',
@@ -315,7 +316,7 @@ async function loadPersistedProjectNodeGraph() {
 }
 
 async function queryGamePreviewState() {
-  const preview = bridgeResult(await scriptingService.getGamePreviewStatus()) || {};
+  const preview = bridgeResult(await editorApi.scratch.getGamePreviewStatus()) || {};
   const active = ['starting', 'running', 'stopping'].includes(String(preview.status || ''))
     || Number(preview.runningCount ?? preview.running_count ?? 0) > 0
     || Boolean(preview.hasSnapshot ?? preview.has_snapshot);
@@ -327,7 +328,7 @@ function startBackgroundRunPoll() {
   backgroundRunPollTimer = window.setInterval(async () => {
     if (!backgroundOwnsExecution || !backgroundRuntimeState.running) return;
     try {
-      const status = bridgeResult(await scriptingService.getScriptStatus()) || {};
+      const status = bridgeResult(await editorApi.scratch.getScriptStatus()) || {};
       const nextStatus = formatRuntimeState(status);
       setBackgroundInputLocked(Boolean(status.inputLocked));
       updateBackgroundRuntimeState({
@@ -370,13 +371,13 @@ export async function stopPersistedProjectNodeGraphRuntime({ restoreState = true
   try {
     let shouldStop = backgroundOwnsExecution || backgroundRuntimeState.running;
     if (!shouldStop) {
-      const status = bridgeResult(await scriptingService.getScriptStatus()) || {};
+      const status = bridgeResult(await editorApi.scratch.getScriptStatus()) || {};
       const targetType = String(status.targetType || '').trim().toLowerCase();
       shouldStop = (!targetType || targetType === 'project') && scriptStatusNeedsStop(status);
     }
     let response = {};
     if (shouldStop) {
-      response = bridgeResult(await scriptingService.stopScriptExecution(Boolean(restoreState))) || {};
+      response = bridgeResult(await editorApi.scratch.stopScriptExecution(Boolean(restoreState))) || {};
     }
     let status = '已停止';
     let detail = '';
@@ -450,7 +451,7 @@ export async function togglePersistedProjectNodeGraphRuntime() {
     const analysis = validateNodeGraph(workspace);
     const code = nodeGraphToCode(workspace);
     const warnings = Array.isArray(analysis?.warnings) ? analysis.warnings : [];
-    const response = bridgeResult(await scriptingService.executePythonCode(code, 0, '', '', 'project'));
+    const response = bridgeResult(await editorApi.scratch.executePythonCode(code, 0, '', '', 'project'));
     if (response?.outcome === 'preview_running') {
       resetBackgroundRunLifecycle();
       return updateBackgroundRuntimeState({

@@ -23,7 +23,7 @@
 
 <script setup>
 import { ref, reactive, onMounted, onUnmounted, nextTick } from 'vue';
-import { projectService } from '@/utils/bridge.js';
+import { appService } from '@/services/appService.js';
 import AIHintBubble from '@/components/ui/AIHintBubble.vue';
 
 const petImgRef = ref(null);
@@ -58,7 +58,7 @@ const sendDragRegion = (el) => {
   if (!el) return;
   try {
     const r = el.getBoundingClientRect();
-    projectService.setDragRegions(ROUTE_PATH, Math.floor(r.x), Math.floor(r.y), Math.floor(r.width), Math.floor(r.height));
+    appService.setDragRegions(ROUTE_PATH, Math.floor(r.x), Math.floor(r.y), Math.floor(r.width), Math.floor(r.height));
   } catch { /* ignore */ }
 };
 const throttledSend = throttle(sendDragRegion, 16);

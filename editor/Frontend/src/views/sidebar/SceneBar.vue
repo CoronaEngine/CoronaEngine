@@ -550,7 +550,9 @@
 import { ref, reactive, onMounted, onUnmounted, computed } from 'vue';
 import { useRoute } from 'vue-router';
 import DockTitleBar from '@/components/ui/DockTitleBar.vue';
-import { editorApi, appService, sceneService, projectService, resourceService } from '@/utils/bridge.js';
+import { editorApi } from '@/api/editorApi.js';
+import { appService } from '@/services/appService.js';
+import { resourceService } from '@/services/resourceService.js';
 import { DEFAULT_SCENE_NAME } from '@/utils/constants.js';
 import { useErrorHandler } from '@/composables/useErrorHandler.js';
 import { setActorContext } from '@/blockly/composables/useActorContext.js';
@@ -564,7 +566,6 @@ const { error: logError, warn: logWarn } = useErrorHandler('SceneBar');
 
 const currentSceneName = ref('');
 let actorChangedCallbackToken = null;
-let focusPoseResultCallbackToken = null;
 let sceneTreeChangedCallbackToken = null;
 
 const showLoading = (title, message, progress = 0) => {
@@ -622,15 +623,9 @@ const px = ref('1.0'),
 const recording = ref(false);
 
 const ACTOR_SINGLE_CLICK_DELAY_MS = 280;
-const FOCUS_POSE_TIMEOUT_MS = 1500;
-const CAMERA_FOCUS_WRITE_ATTEMPTS = 6;
 const CAMERA_LIST_HOVER_REFRESH_MS = 500;
 let actorSingleClickTimer = null;
 let actorFocusSeq = 0;
-let focusPoseRequestSeq = 0;
-const pendingFocusPoseRequests = new Map();
-const pendingFocusCameraMoveFrames = new Set();
-let lastActorFocusPose = null;
 let cameraListRefreshInFlight = false;
 let lastCameraListHoverRefreshAt = 0;
 
@@ -883,29 +878,6 @@ const normalizeHandle = (value) => {
   return Number.isFinite(handle) && handle > 0 ? handle : 0;
 };
 
-const normalizePoseVector = (value) => {
-  if (!Array.isArray(value) || value.length !== 3) return null;
-  const next = value.map((item) => Number(item));
-  return next.every((item) => Number.isFinite(item)) ? next : null;
-};
-
-const normalizeFocusPose = (payload) => {
-  const position = normalizePoseVector(payload?.position);
-  const forward = normalizePoseVector(payload?.forward);
-  const up = normalizePoseVector(payload?.up);
-  if (!position || !forward || !up) return null;
-
-  const center = normalizePoseVector(payload?.center);
-  const distance = Number(payload?.distance);
-  return {
-    position,
-    forward,
-    up,
-    center: center || null,
-    distance: Number.isFinite(distance) ? distance : null,
-  };
-};
-
 const clearActorSingleClickTimer = () => {
   if (actorSingleClickTimer) {
     clearTimeout(actorSingleClickTimer);
@@ -913,65 +885,11 @@ const clearActorSingleClickTimer = () => {
   }
 };
 
-const handleFocusPoseResult = (payloadOrRequestId, maybePayload) => {
-  const payload = maybePayload ?? payloadOrRequestId;
-  const requestId =
-    typeof payloadOrRequestId === 'string' ? payloadOrRequestId : payload?.request_id;
-  const pending = pendingFocusPoseRequests.get(requestId);
-  if (!pending) return;
-
-  clearTimeout(pending.timeout);
-  pendingFocusPoseRequests.delete(requestId);
-
-  if (!payload || payload.status === 'error') {
-    pending.reject(new Error(payload?.message || 'computeActorFocusPose failed'));
-    return;
-  }
-
-  const pose = normalizeFocusPose(payload);
-  if (!pose) {
-    pending.reject(new Error('computeActorFocusPose returned invalid pose'));
-    return;
-  }
-
-  pending.resolve(pose);
-};
-
-const computeActorFocusPose = (actorHandle) => {
-  const bridge = window.coronaBridge;
-  if (!bridge || typeof bridge.computeActorFocusPose !== 'function') {
-    return Promise.reject(new Error('coronaBridge.computeActorFocusPose is unavailable'));
-  }
-
-  const requestId = `actor_focus_${Date.now()}_${++focusPoseRequestSeq}`;
-  return new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      pendingFocusPoseRequests.delete(requestId);
-      reject(new Error('computeActorFocusPose timed out'));
-    }, FOCUS_POSE_TIMEOUT_MS);
-
-    pendingFocusPoseRequests.set(requestId, { resolve, reject, timeout });
-
-    try {
-      const ok = bridge.computeActorFocusPose(actorHandle, requestId);
-      if (!ok) {
-        clearTimeout(timeout);
-        pendingFocusPoseRequests.delete(requestId);
-        reject(new Error('computeActorFocusPose bridge call failed'));
-      }
-    } catch (e) {
-      clearTimeout(timeout);
-      pendingFocusPoseRequests.delete(requestId);
-      reject(e);
-    }
-  });
-};
-
 const ControlObject = async (scene) => {
   // 音视频是独立资源，没有可操作的 Actor；但 audio Actor 是真实 Actor。
   if (isMediaItem(scene) && !isAudioActor(scene)) return;
   try {
-    await sceneService.openSceneActor(currentSceneName.value, scene.name);
+    await editorApi.sceneTools.openActor(currentSceneName.value, scene.name);
   } catch (e) {
     logError('Failed to open actor', e);
   }
@@ -1009,7 +927,7 @@ const SelectCamera = (cam) => {
 const OpenCameraView = async (cam) => {
   try {
     const cameraId = cam.camera_id || cam.id || cam.name;
-    const opened = await sceneService.openCameraView(currentSceneName.value, cameraId);
+    const opened = await editorApi.sceneTools.openCameraView(currentSceneName.value, cameraId);
     const payload = opened?.data ?? opened;
     await appService.createCameraView({
       ...(payload.camera || cam),
@@ -1029,7 +947,7 @@ const DeleteCamera = async (cam) => {
     const cameraId = cam.camera_id || cam.id || cam.name;
     await appService.closeCameraView(currentSceneName.value, cameraId);
     await new Promise((resolve) => setTimeout(resolve, 0));
-    await sceneService.deleteCamera(currentSceneName.value, cameraId);
+    await editorApi.sceneTools.deleteCamera(currentSceneName.value, cameraId);
     if (selectedCameraName.value === cam.name) selectedCameraName.value = null;
     if (selectedItem.value === `cam:${cam.name}`) selectedItem.value = null;
     await OnInitObjTree();
@@ -1040,83 +958,9 @@ const DeleteCamera = async (cam) => {
 
 const isActorRowActionEvent = (event) => !!event?.target?.closest?.('button');
 
-const resolveActorHandleForFocus = async (scene) => {
-  let actorHandle = normalizeHandle(scene?.handle);
-  if (actorHandle) {
-    return actorHandle;
-  }
-
-  await OnInitObjTree();
-  const refreshed = sceneImages.value.find((item) => item.name === scene?.name);
-  actorHandle = normalizeHandle(refreshed?.handle);
-  if (actorHandle && refreshed && scene) {
-    scene.handle = actorHandle;
-  }
-  return actorHandle;
-};
-
 const getTargetCamera = () => {
   const cameraName = getTargetCameraName();
   return sceneCameras.value.find((cam) => cam.name === cameraName) || sceneCameras.value[0] || null;
-};
-
-const clearFocusPoseCache = () => {
-  lastActorFocusPose = null;
-};
-
-const getCachedFocusPose = (actorHandle, cameraHandle) => {
-  if (
-    lastActorFocusPose &&
-    lastActorFocusPose.actorHandle === actorHandle &&
-    lastActorFocusPose.cameraHandle === cameraHandle
-  ) {
-    return lastActorFocusPose.pose;
-  }
-  return null;
-};
-
-const setCachedFocusPose = (actorHandle, cameraHandle, pose) => {
-  lastActorFocusPose = {
-    actorHandle,
-    cameraHandle,
-    pose,
-  };
-};
-
-const queueFocusCameraMoveFrame = (callback) => {
-  const rafId = window.requestAnimationFrame(() => {
-    pendingFocusCameraMoveFrames.delete(rafId);
-    callback();
-  });
-  pendingFocusCameraMoveFrames.add(rafId);
-};
-
-const sendFocusCameraMoveBurst = (bridge, cameraHandle, pose, fov, focusSeq) => {
-  let attempt = 0;
-  let immediateSendOk = false;
-
-  const sendOnce = () => {
-    if (focusSeq !== actorFocusSeq) {
-      return;
-    }
-
-    attempt++;
-    try {
-      immediateSendOk =
-        bridge.cameraMove(cameraHandle, pose.position, pose.forward, pose.up, fov) ||
-        immediateSendOk;
-    } catch (e) {
-      logError('Actor focus cameraMove failed', e);
-      return;
-    }
-
-    if (attempt < CAMERA_FOCUS_WRITE_ATTEMPTS) {
-      queueFocusCameraMoveFrame(sendOnce);
-    }
-  };
-
-  sendOnce();
-  return immediateSendOk;
 };
 
 const focusActorFromList = async (scene) => {
@@ -1124,45 +968,36 @@ const focusActorFromList = async (scene) => {
   SelectActor(scene);
 
   try {
-    const actorHandle = await resolveActorHandleForFocus(scene);
+    const cameraName = getTargetCameraName();
+    if (!cameraName) {
+      logWarn('Actor focus skipped: missing target camera', scene?.name);
+      return;
+    }
+
+    const result = await editorApi.sceneTools.focusActor(
+      currentSceneName.value,
+      scene.name,
+      cameraName,
+    );
     if (focusSeq !== actorFocusSeq) return;
-    if (!actorHandle) {
-      logWarn('Actor focus skipped: missing actor handle', scene?.name);
-      return;
+    const payload = result?.data ?? result;
+    if (result?.success === false || payload?.status === 'error') {
+      throw new Error(payload?.message || result?.error || 'Actor focus failed');
     }
 
-    const camera = getTargetCamera();
-    const cameraHandle = normalizeHandle(camera?.handle);
-    if (!cameraHandle) {
-      logWarn('Actor focus skipped: missing camera handle', camera?.name);
-      return;
-    }
-
-    const cachedPose = getCachedFocusPose(actorHandle, cameraHandle);
-    const pose = cachedPose || await computeActorFocusPose(actorHandle);
-    if (focusSeq !== actorFocusSeq) return;
-    if (!cachedPose) {
-      setCachedFocusPose(actorHandle, cameraHandle, pose);
-    }
-
-    const fov = Number.isFinite(Number(camera?.fov)) ? Number(camera.fov) : 45;
-    const bridge = window.coronaBridge;
-    if (!bridge || typeof bridge.cameraMove !== 'function') {
-      logWarn('Actor focus skipped: coronaBridge.cameraMove is unavailable');
-      return;
-    }
-
-    const ok = sendFocusCameraMoveBurst(bridge, cameraHandle, pose, fov, focusSeq);
-    if (!ok) {
-      logWarn('Actor focus skipped: cameraMove bridge call failed');
+    const camera = payload?.camera;
+    if (!camera || !Array.isArray(camera.position) || !Array.isArray(camera.forward)) {
+      logWarn('Actor focus returned no camera pose', payload);
       return;
     }
 
     coronaEventBus.emit('camera-pose-request', {
-      ...pose,
-      fov,
-      cameraHandle,
-      cameraName: camera?.name,
+      position: camera.position,
+      forward: camera.forward,
+      up: camera.world_up,
+      fov: camera.fov,
+      cameraHandle: camera.handle,
+      cameraName: camera.name || cameraName,
     });
   } catch (e) {
     if (focusSeq === actorFocusSeq) {
@@ -1221,9 +1056,9 @@ const handlePlayToggle = async (scene) => {
     // 停止
     try {
       if (isAudioActor) {
-        await sceneService.actorStopAudio(scene.name);
+        await editorApi.sceneTools.actorStopAudio(scene.name);
       } else {
-        await sceneService.stopAudio(rid);
+        await editorApi.sceneTools.stopAudio(rid);
       }
     } catch (e) {
       logError('[audio] stop failed', e);
@@ -1234,9 +1069,9 @@ const handlePlayToggle = async (scene) => {
     // 播放（单次，不循环）
     try {
       if (isAudioActor) {
-        await sceneService.actorPlayAudio(scene.name, false);
+      await editorApi.sceneTools.actorPlayAudio(scene.name, false);
       } else {
-        await sceneService.playAudio(rid, false);
+      await editorApi.sceneTools.playAudio(rid, false);
       }
     } catch (e) {
       logError('[audio] play failed', e);
@@ -1252,9 +1087,11 @@ const ToggleVisible = async (scene) => {
   // 音视频资源没有对应 Actor，仅在前端切换可见标记
   if (isMediaItem(scene)) return;
   try {
-    await sceneService.actorOperation(currentSceneName.value, scene.name, 'SetVisible', [
-      newVisible ? 1 : 0,
-    ]);
+    await editorApi.sceneTools.setActorState(
+      currentSceneName.value,
+      scene.name,
+      { visible: newVisible },
+    );
   } catch (e) {
     scene.visible = !newVisible;
     logError('Failed to toggle visibility', e);
@@ -1269,7 +1106,7 @@ const SaveScene = async () => {
     if (unresolvedCount > 0 && !window.confirm(
       `当前场景仍有 ${unresolvedCount} 个资源未解决。存档会保留原资源引用和对象数据，是否仍然保存？`,
     )) return;
-    const result = await projectService.sceneSave(currentSceneName.value);
+    const result = await editorApi.main.sceneSave(currentSceneName.value);
     const saved = result?.data ?? result;
     if (saved?.unresolved_actor_count > 0) {
       logWarn(`Scene saved with ${saved.unresolved_actor_count} unresolved actors`);
@@ -1281,14 +1118,14 @@ const SaveScene = async () => {
 
 const RebindActorResource = async (scene) => {
   try {
-    const selected = await sceneService.selectModelFileDialog(
+    const selected = await editorApi.sceneTools.selectModelFile(
       currentSceneName.value,
       scene.name,
       'model',
     );
     const path = selected?.data ?? selected;
     if (!path) return;
-    const result = await sceneService.rebindActorResource(
+    const result = await editorApi.sceneTools.rebindActorResource(
       currentSceneName.value,
       scene.actor_guid,
       path,
@@ -1326,7 +1163,7 @@ const getTargetCameraName = () => {
 const TakeScreenshot = async () => {
   try {
     const cameraName = getTargetCameraName();
-    const selectResult = await sceneService.selectScreenshotPath(
+    const selectResult = await editorApi.sceneTools.selectScreenshotPath(
       currentSceneName.value,
       cameraName
     );
@@ -1336,7 +1173,7 @@ const TakeScreenshot = async () => {
       return;
     }
 
-    const result = await sceneService.saveScreenshot(
+    const result = await editorApi.sceneTools.saveScreenshot(
       currentSceneName.value,
       selectPayload.path,
       cameraName
@@ -1356,14 +1193,14 @@ const activeRenderBackend = ref('native');
 
 const RefreshRenderBackendState = async () => {
   try {
-    const availResult = await sceneService.isVisionAvailable();
+    const availResult = await editorApi.sceneTools.isVisionAvailable();
     const availPayload = availResult?.data ?? availResult;
     visionAvailable.value = !!availPayload?.available;
     if (!visionAvailable.value) {
       return;
     }
     const target = getTargetCamera();
-    const modeResult = await sceneService.getRenderBackend(
+    const modeResult = await editorApi.sceneTools.getRenderBackend(
       currentSceneName.value,
       target?.camera_id || target?.name || null,
     );
@@ -1380,7 +1217,7 @@ const ToggleRenderBackend = async () => {
   const next = activeRenderBackend.value === 'vision' ? 'native' : 'vision';
   try {
     const target = getTargetCamera();
-    const result = await sceneService.setRenderBackend(
+    const result = await editorApi.sceneTools.setRenderBackend(
       next,
       currentSceneName.value,
       target?.camera_id || target?.name || null,
@@ -1413,7 +1250,7 @@ const ImportCamera = async () => {
     while (existingNames.has(cameraName)) {
       cameraName = `Camera_${suffix++}`;
     }
-    const result = await sceneService.createCameraView(currentSceneName.value, cameraName);
+    const result = await editorApi.sceneTools.createCameraView(currentSceneName.value, cameraName);
     const payload = result?.data ?? result;
     if (!payload?.camera) throw new Error(payload?.message || 'Camera creation failed');
     await appService.createCameraView({
@@ -1444,7 +1281,7 @@ const createActorFromSelectedFile = async (payload, actorType, logLabel) => {
   }
 
   updateLoading('创建对象', 55);
-  const createResult = await sceneService.createActor(currentSceneName.value, selectedPath, actorType);
+  const createResult = await editorApi.sceneTools.createActor(currentSceneName.value, selectedPath, actorType);
   const createPayload = unwrapBridgePayload(createResult);
   if (createResult?.success === false || createPayload?.status === 'error') {
     throw new Error(createPayload?.message || createResult?.error || `${logLabel} native create failed`);
@@ -1481,7 +1318,7 @@ const HandleFileImport = async () => {
   }
   showLoading('加载中', '请稍候...', 0);
   try {
-    const result = await projectService.importResourceFileByDialog(currentSceneName.value, 'model');
+    const result = await editorApi.main.importResourceFile(currentSceneName.value, 'model');
     const payload = unwrapBridgePayload(result);
     const status = payload?.status;
     if (result?.success === false || status === 'error') {
@@ -1509,7 +1346,7 @@ const HandleUiImageImport = async () => {
   }
   showLoading('加载中', '请稍候...', 0);
   try {
-    const result = await projectService.importResourceFileByDialog(currentSceneName.value, 'ui_image');
+    const result = await editorApi.main.importResourceFile(currentSceneName.value, 'ui_image');
     const payload = unwrapBridgePayload(result);
     const status = payload?.status;
     if (result?.success === false || status === 'error') {
@@ -1535,7 +1372,7 @@ const HandleActorImport = async () => {
   }
   showLoading('加载中', '请稍候...', 0);
   try {
-    const result = await projectService.importResourceFileByDialog(currentSceneName.value, 'actor');
+    const result = await editorApi.main.importResourceFile(currentSceneName.value, 'actor');
     const payload = unwrapBridgePayload(result);
     const status = payload?.status;
     if (result?.success === false || status === 'error') {
@@ -1557,7 +1394,7 @@ const HandleMultimediaImport = async () => {
   ShowModelDropdown.value = false;
   showLoading('加载中', '请稍候...', 0);
   try {
-    const result = await projectService.importResourceFileByDialog(
+    const result = await editorApi.main.importResourceFile(
       currentSceneName.value,
       'multimedia'
     );
@@ -1576,7 +1413,7 @@ const HandleMultimediaImport = async () => {
     if (media && media.name) {
       if (media.type === 'audio' && media.resource_id) {
         // 创建 audio Actor：复用 create_actor，把 resource_id 作为 actor_data 传入。
-        const createResult = await sceneService.createActor(
+        const createResult = await editorApi.sceneTools.createActor(
           currentSceneName.value,
           media.path,
           'audio',
@@ -1626,7 +1463,7 @@ const HandleSceneImport = async () => {
   ShowModelDropdown.value = false;
   showLoading('加载中', '请稍候...', 0);
   try {
-    const result = await projectService.importResourceFileByDialog(currentSceneName.value, 'scene');
+    const result = await editorApi.main.importResourceFile(currentSceneName.value, 'scene');
     const payload = unwrapBridgePayload(result);
     const status = payload?.status;
     if (result?.success === false || status === 'error') {
@@ -1648,11 +1485,10 @@ const HandleSceneImport = async () => {
 };
 
 const DeleteActor = async (scene) => {
-  clearFocusPoseCache();
   sceneImages.value = sceneImages.value.filter((item) => item.name !== scene.name);
 
   try {
-    await sceneService.removeActor(currentSceneName.value, scene.name);
+    await editorApi.sceneTools.removeActor(currentSceneName.value, scene.name);
     await OnInitObjTree();
   } catch (error) {
     logError('Delete actor failed', error);
@@ -1666,8 +1502,7 @@ const CloseFloat = async () => {
 
 const OnInitObjTree = async () => {
   try {
-    clearFocusPoseCache();
-    const result = await sceneService.listSceneTree(currentSceneName.value);
+    const result = await editorApi.sceneTools.listSceneTree(currentSceneName.value);
     sceneImages.value = [];
     sceneCameras.value = [];
     sceneVision.value = {};
@@ -1704,7 +1539,7 @@ const OnInitObjTree = async () => {
 };
 
 onMounted(async () => {
-  const result = await projectService.OnInit();
+  const result = await editorApi.main.onInit();
   if (RESOURCE_SEARCH_ENABLED) {
     resourceService.prepareIndex().catch((error) => {
       logWarn('资源索引预热失败', error);
@@ -1723,7 +1558,6 @@ onMounted(async () => {
   // 后端对象变化：场景切换/物体变化时重新加载场景树
   actorChangedCallbackToken = await editorApi.events.onActorChanged(onActorChangeEvent);
   sceneTreeChangedCallbackToken = await editorApi.events.onSceneTreeChanged(onSceneTreeChangedEvent);
-  focusPoseResultCallbackToken = await editorApi.events.onFocusPoseResult(handleFocusPoseResult);
 });
 
 // 场景切换时刷新当前场景树；actor 选择只更新详情面板，不重建树，避免点击闪烁。
@@ -1776,7 +1610,7 @@ const RefreshCameraListOnly = async () => {
   }
   cameraListRefreshInFlight = true;
   try {
-    const result = await sceneService.listSceneTree(currentSceneName.value);
+    const result = await editorApi.sceneTools.listSceneTree(currentSceneName.value);
     const data = result?.data ?? result;
     if (Array.isArray(data?.cameras)) {
       applyCameraList(data.cameras);
@@ -1806,16 +1640,8 @@ onUnmounted(() => {
     clearTimeout(searchIndexRetry);
     searchIndexRetry = null;
   }
-  clearFocusPoseCache();
   clearActorSingleClickTimer();
   actorFocusSeq++;
-  pendingFocusPoseRequests.forEach((pending) => {
-    clearTimeout(pending.timeout);
-    pending.reject(new Error('SceneBar unmounted'));
-  });
-  pendingFocusPoseRequests.clear();
-  pendingFocusCameraMoveFrames.forEach((rafId) => window.cancelAnimationFrame(rafId));
-  pendingFocusCameraMoveFrames.clear();
 
   if (actorChangedCallbackToken) {
     editorApi.off(actorChangedCallbackToken).catch((error) => {
@@ -1828,12 +1654,6 @@ onUnmounted(() => {
       logError('Failed to unregister scene tree changed callback', error);
     });
     sceneTreeChangedCallbackToken = null;
-  }
-  if (focusPoseResultCallbackToken) {
-    editorApi.off(focusPoseResultCallbackToken).catch((error) => {
-      logError('Failed to unregister focus pose result callback', error);
-    });
-    focusPoseResultCallbackToken = null;
   }
 });
 </script>

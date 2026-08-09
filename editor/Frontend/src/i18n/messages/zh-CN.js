@@ -38,7 +38,7 @@ export default {
   plugins: {
     SceneTools: '场景管理',
     LightFieldCalibration: '光场 3D UI 标定',
-    SceneDatas: '对象',
+    Object: '对象',
     AITool: '白菜助手',
     LogTool: '日志工具',
     FileManager: '文件管理器',

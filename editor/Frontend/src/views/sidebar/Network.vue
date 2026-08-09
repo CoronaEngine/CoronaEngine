@@ -168,7 +168,8 @@
 <script setup>
 import { computed, ref, onMounted, onUnmounted } from 'vue';
 import DockTitleBar from '@/components/ui/DockTitleBar.vue';
-import { editorApi, networkService } from '@/utils/bridge';
+import { editorApi } from '@/api/editorApi.js';
+import { networkService } from '@/services/networkService.js';
 import { useDockPanel } from '@/composables/useDockPanel.js';
 
 const { closePanel: closeDockPanel, isDocked } = useDockPanel();
@@ -273,8 +274,7 @@ async function attachExistingSession({ showErrors = false } = {}) {
 
 async function ensureProjectRoot() {
   try {
-    const mod = await import('@/utils/bridge');
-    const raw = await mod.projectSettingsService.getActiveProjectInfo();
+    const raw = await editorApi.projectSettings.getActiveProjectInfo();
     const info = raw?.data || raw || {};
     const projPath = info?.project_path || '';
     if (projPath) {

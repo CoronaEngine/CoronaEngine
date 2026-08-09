@@ -560,12 +560,9 @@ import { DEFAULT_SCENE_NAME } from '@/utils/constants.js';
 import {
   Bridge,
   editorApi,
-  appService,
-  sceneService,
-  projectService,
-  projectLauncherService,
-  scriptingService,
-} from '@/utils/bridge.js';
+} from '@/api/editorApi.js';
+import { appService } from '@/services/appService.js';
+import { projectLauncherService } from '@/services/projectLauncherService.js';
 import { useErrorHandler } from '@/composables/useErrorHandler.js';
 import { useDockStore } from '@/stores/dockStore.js';
 import { PLUGIN_MANIFEST } from '@/config/pluginManifest.js';
@@ -859,7 +856,7 @@ const seedActorTransformBaseline = async (sceneId, actorName) => {
   const actor = String(actorName || '').trim();
   if (!scene || !actor) return;
   try {
-    const result = await sceneService.getActor(scene, actor);
+    const result = await editorApi.scene.getActor(scene, actor);
     const data = result?.data ?? result ?? {};
     if (!data || data.status === 'error') return;
     actorTransformBaselines.set(
@@ -937,8 +934,8 @@ const handleActorSelectionForObjectDock = async (payload = {}, maybeSceneId = ''
   } else {
     viewportGizmoController.clearTarget();
   }
-  if (!dockStore.panels.SceneDatas?.open) {
-    openDockedPanel('SceneDatas');
+  if (!dockStore.panels.Object?.open) {
+    openDockedPanel('Object');
   }
 };
 
@@ -961,7 +958,7 @@ const viewportGizmoController = createViewportGizmoController({
       String(payload?.sceneId || cameraBindingState.value.sceneId || '').trim();
     const actorName = String(payload?.actor || '').trim();
     if (sceneId && actorName) {
-      sceneService.saveActor(sceneId, actorName).catch((error) => {
+      editorApi.sceneTools.saveActor(sceneId, actorName).catch((error) => {
         logError('Failed to save gizmo actor transform', error);
       });
     }
@@ -1388,7 +1385,7 @@ const selectMainRenderMode = async (mode) => {
       };
       mainRenderBackend.value = 'native';
       const result = unwrapBridgeData(
-        await sceneService.setRenderBackend('native', sceneId, cameraId),
+        await editorApi.sceneTools.setRenderBackend('native', sceneId, cameraId),
       );
       mainRenderBackend.value = result?.mode || 'native';
       await syncSceneCameraBinding(sceneId);
@@ -1405,14 +1402,14 @@ const selectMainRenderMode = async (mode) => {
     mainVisionRenderMode.value = mode;
 
     const modeResult = unwrapBridgeData(
-      await sceneService.setVisionRenderMode(sceneId, cameraId, mode),
+      await editorApi.sceneTools.setVisionRenderMode(sceneId, cameraId, mode),
     );
     mainVisionRenderMode.value = modeResult?.mode || mode;
 
-    await sceneService.setOutputMode(sceneId, cameraId, 'final_color');
+    await editorApi.sceneTools.setOutputMode(sceneId, cameraId, 'final_color');
 
     const backendResult = unwrapBridgeData(
-      await sceneService.setRenderBackend('vision', sceneId, cameraId),
+      await editorApi.sceneTools.setRenderBackend('vision', sceneId, cameraId),
     );
     mainRenderBackend.value = backendResult?.mode || 'native';
     if (mainRenderBackend.value !== 'vision') {
@@ -1545,7 +1542,7 @@ const syncSceneCameraBinding = async (sceneId, { preservePose = false } = {}) =>
 
   const requestRevision = ++sceneCameraBindingRequestRevision;
   try {
-    const result = await sceneService.getScene(sceneId);
+    const result = await editorApi.scene.getSnapshot(sceneId);
     if (requestRevision !== sceneCameraBindingRequestRevision) return false;
     applySceneSnapshot(sceneId, result, { preservePose });
     broadcastViewportControlsState();
@@ -1566,7 +1563,7 @@ const updateSceneLight = async (axis = '') => {
   const direction = sceneLightSettings.direction;
   sceneLightBusy.value = true;
   try {
-    await sceneService.sunDirection(sceneId, sceneLightSettings.enabled, [
+    await editorApi.sceneTools.sunDirection(sceneId, sceneLightSettings.enabled, [
       Number(direction.x) || 0,
       Number(direction.y) || 0,
       Number(direction.z) || 0,
@@ -1614,7 +1611,7 @@ const refreshSceneCameraBinding = ({ force = false, preservePose = true } = {}) 
 const restoreCameraViews = async (sceneId) => {
   if (!sceneId) return;
   try {
-    const result = await sceneService.listCameraViews(sceneId);
+    const result = await editorApi.sceneTools.listCameraViews(sceneId);
     const payload = result?.data ?? result;
     const openCameras = Array.isArray(payload?.cameras)
       ? payload.cameras.filter((camera) => camera.view_open)
@@ -1632,7 +1629,7 @@ const sendScratchPointerEvent = (type, event, pickedActor = '') => {
   const renderRect = getViewportRenderRect();
   const localX = Number(event.clientX || 0) - Number(renderRect.left || 0);
   const localY = Number(event.clientY || 0) - Number(renderRect.top || 0);
-  scriptingService.sendMouseEvent(
+  editorApi.scratch.sendMouseEvent(
     type,
     scratchMouseButton(event.button),
     event.clientX || 0,
@@ -1707,7 +1704,7 @@ const handleKeyDown = (event) => {
   // Native SDL is authoritative in the editor; this is browser-dev fallback.
   if (!window.coronaBridge && !event.__coronaScratchKeyForwarded) {
     event.__coronaScratchKeyForwarded = true;
-    scriptingService.sendKeyEvent(
+    editorApi.scratch.sendKeyEvent(
       event.code || event.key || '',
       modifiers,
       event.key || event.code || ''
@@ -1740,7 +1737,7 @@ const handleKeyUp = (event) => {
   if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
   if (!window.coronaBridge && !event.__coronaScratchKeyForwarded) {
     event.__coronaScratchKeyForwarded = true;
-    scriptingService.sendKeyUpEvent(
+    editorApi.scratch.sendKeyUpEvent(
       event.code || event.key || '',
       event.key || event.code || ''
     ).catch(() => {});
@@ -1848,8 +1845,8 @@ let cameraInputLockReconcileToken = 0;
 async function reconcileEditorCameraInputLocks() {
   const token = ++cameraInputLockReconcileToken;
   const [scriptResult, previewResult] = await Promise.allSettled([
-    scriptingService.getScriptStatus(),
-    scriptingService.getGamePreviewStatus(),
+    editorApi.scratch.getScriptStatus(),
+    editorApi.scratch.getGamePreviewStatus(),
   ]);
   if (token !== cameraInputLockReconcileToken) return;
 
@@ -2276,7 +2273,7 @@ const onContextMenu = (event) => {
 
 const refreshActorPickIndex = async (sceneId) => {
   if (!sceneId) return false;
-  const result = await sceneService.listSceneTree(sceneId);
+  const result = await editorApi.sceneTools.listSceneTree(sceneId);
   const snapshot = result?.data ?? result;
   const actors = Array.isArray(snapshot?.actors) ? snapshot.actors : [];
   actorPickIndex = indexActorsByHandle(actors);
@@ -2414,7 +2411,7 @@ const handleApplyPhysics = async () => {
   const sceneId = tabs.value[activeTab.value]?.id || DEFAULT_SCENE_NAME;
   activeMenu.value = null;
   try {
-    const result = await sceneService.setPhysicsParams(sceneId, {
+    const result = await editorApi.sceneTools.setPhysicsParams(sceneId, {
       gravity: [
         physicsParams.value.gravityX,
         physicsParams.value.gravityY,
@@ -2439,7 +2436,7 @@ const handleApplyPhysics = async () => {
 const loadPhysicsParams = async () => {
   const sceneId = tabs.value[activeTab.value]?.id || DEFAULT_SCENE_NAME;
   try {
-    const result = await sceneService.getPhysicsParams(sceneId);
+    const result = await editorApi.sceneTools.getPhysicsParams(sceneId);
     const data = result?.data ?? result;
     if (data && data.status !== 'error') {
       const g = data.gravity || [0, -9.8, 0];
@@ -2523,7 +2520,7 @@ const pollProjectResourceLoadStatus = async () => {
   stopProjectResourceLoadPolling();
   try {
     const status = unwrapBridgeData(
-      await projectLauncherService.getProjectLoadStatus(),
+      await editorApi.project.getProjectLoadStatus(),
     );
     projectResourceLoadStatus.value = status?.active ? status : null;
     if (status?.loading) {
@@ -2623,7 +2620,7 @@ const pollGamePreviewStatus = () => {
   clearPreviewPoll();
   const poll = async () => {
     try {
-      const result = await scriptingService.getGamePreviewStatus();
+      const result = await editorApi.scratch.getGamePreviewStatus();
       const details = applyPreviewStatus(unwrapBridgeData(result));
       broadcastViewportControlsState();
       if (previewRunning.value) previewPollTimer = setTimeout(poll, 700);
@@ -2662,7 +2659,7 @@ const handleStartGamePreview = async (request = { scope: 'project' }) => {
     // 本地 previewRunning 可能因跨面板广播延迟而滞后。启动前重新读取
     // 后端真值，避免把一次有效点击误判为重复启动。
     try {
-      const live = applyPreviewStatus(unwrapBridgeData(await scriptingService.getGamePreviewStatus()));
+    const live = applyPreviewStatus(unwrapBridgeData(await editorApi.scratch.getGamePreviewStatus()));
       const liveActive = ['starting', 'running', 'stopping'].includes(live.status)
         || live.runningCount > 0
         || live.hasSnapshot;
@@ -2689,7 +2686,7 @@ const handleStartGamePreview = async (request = { scope: 'project' }) => {
         await window.__coronaNodeGraphFlushSave();
       }
     }
-    const result = await scriptingService.startGamePreview(previewRequest);
+    const result = await editorApi.scratch.startGamePreview(previewRequest);
     const payload = unwrapBridgeData(result);
     const details = applyPreviewStatus(payload);
     if (payload?.status === 'error') {
@@ -2725,7 +2722,7 @@ const handleStopGamePreview = async () => {
   previewBusy.value = true;
   previewStatusText.value = '正在停止并恢复...';
   try {
-    const result = await scriptingService.stopGamePreview();
+    const result = await editorApi.scratch.stopGamePreview();
     const payload = unwrapBridgeData(result);
     const details = applyPreviewStatus(payload);
     if (details.status === 'stopping' || details.stopPending) {
@@ -2758,7 +2755,7 @@ const handleRunProject = async () => {
   try {
     console.log('运行项目');
     // 不传参数，运行整个项目
-    const result = await projectService.runProject();
+    const result = await editorApi.main.runProject();
 
     if (result.success) {
       // TODO: 可以显示一个成功提示
@@ -2786,7 +2783,7 @@ const handleRunCurrentScene = async () => {
     }
 
     // 传入场景路径，运行指定场景
-    const result = await projectService.runProject(currentSceneId);
+    const result = await editorApi.main.runProject(currentSceneId);
 
     if (result.success) {
       // TODO: 可以显示一个成功提示
@@ -2844,7 +2841,7 @@ const setSceneGridEnabledFromPanel = async (enabled, requestedSceneId = '') => {
 
   const nextEnabled = Boolean(enabled);
   try {
-    await sceneService.floorGrid(currentSceneId, nextEnabled);
+    await editorApi.sceneTools.floorGrid(currentSceneId, nextEnabled);
     sceneGridEnabled.value = nextEnabled;
     broadcastViewportControlsState();
     return getEditorControlsState();
@@ -3109,13 +3106,13 @@ onMounted(async () => {
   // A reused CEF page must not inherit camera locks from a previous world.
   // Real active workers are added back by reconcileEditorCameraInputLocks().
   clearKnownEditorCameraInputLocks();
-  const result = await projectService.OnInit();
+  const result = await editorApi.main.onInit();
   const initData = result?.data ?? result;
   const scenes = initData?.scenes ?? [];
   const activeIndex = Number(initData?.active_index ?? 0);
   await pollProjectResourceLoadStatus();
   try {
-    const visionResult = unwrapBridgeData(await sceneService.isVisionAvailable());
+    const visionResult = unwrapBridgeData(await editorApi.sceneTools.isVisionAvailable());
     visionAvailable.value = !!visionResult?.available;
   } catch (error) {
     visionAvailable.value = false;
@@ -3191,7 +3188,7 @@ onMounted(async () => {
   // floating tab left by the previous project before resetting the shortcut state.
   for (const panelId of [
     ...dockShortcuts.map((item) => item.id),
-    'SceneDatas',
+    'Object',
     'CabbageChatPanel',
   ]) {
     const panelState = dockStore.panels[panelId];

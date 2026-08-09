@@ -22,7 +22,7 @@ import { onBeforeUnmount, onMounted, ref } from 'vue';
 import NodeGraphWorkspace from '@/blockly/components/NodeGraphWorkspace.vue';
 import DockTitleBar from '@/components/ui/DockTitleBar.vue';
 import { useDockPanel } from '@/composables/useDockPanel.js';
-import { appService } from '@/utils/bridge.js';
+import { appService } from '@/services/appService.js';
 import { coronaEventBus } from '@/utils/eventBus.js';
 
 const { closePanel, isDocked } = useDockPanel();

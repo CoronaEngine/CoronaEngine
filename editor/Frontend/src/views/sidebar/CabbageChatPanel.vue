@@ -120,7 +120,7 @@ import { useI18n } from 'vue-i18n';
 import DockTitleBar from '@/components/ui/DockTitleBar.vue';
 import { useDockPanel } from '@/composables/useDockPanel.js';
 import { useCabbageAssistantStore } from '@/stores/cabbageAssistantStore.js';
-import { aiService } from '@/utils/bridge.js';
+import { aiService } from '@/services/aiService.js';
 import { reviewScopeId } from '@/services/nodeGraphReviewService.js';
 import { guidanceService } from '@/services/cabbageGuidanceService.js';
 import { translateUiText } from '@/i18n/domTranslator.js';

@@ -174,9 +174,9 @@ function unregisterBlocklyWorkspace(api) {
 <script setup>
 import { ref, watch, onMounted, onUnmounted } from 'vue';
 import { useI18n } from 'vue-i18n';
+import { editorApi } from '@/api/editorApi.js';
 import { useErrorHandler } from '@/composables/useErrorHandler.js';
 import { useDockPanel } from '@/composables/useDockPanel.js';
-import { scriptingService } from '@/utils/bridge.js';
 import { translateUiText } from '@/i18n/domTranslator.js';
 
 const { closePanel: closeDockPanel, isDocked } = useDockPanel();
@@ -318,7 +318,7 @@ function setupScriptKeyForwarding() {
       try { bridge.injectInput(0, code, mods.join(','), displayKey); return; } catch (e) {}
     }
     // ── 慢通道：cefQuery 回退 ──
-    scriptingService.sendKeyEvent(code, mods.join(','), displayKey).catch(() => {});
+    editorApi.scratch.sendKeyEvent(code, mods.join(','), displayKey).catch(() => {});
   };
 
   scriptKeyUpHandler = (e) => {
@@ -329,7 +329,7 @@ function setupScriptKeyForwarding() {
     if (bridge && typeof bridge.injectInput === 'function') {
       try { bridge.injectInput(1, e.code || e.key, e.key || e.code); return; } catch (e) {}
     }
-    scriptingService.sendKeyUpEvent(e.code || e.key, e.key || e.code).catch(() => {});
+    editorApi.scratch.sendKeyUpEvent(e.code || e.key, e.key || e.code).catch(() => {});
   };
 
 
@@ -387,7 +387,7 @@ async function handleToggleRun() {
     // 当前正在执行 → 停止
     clearPollTimer();
     try {
-      await scriptingService.stopScriptExecution();
+      await editorApi.scratch.stopScriptExecution();
     } catch (e) {
       console.warn('[Blockly] 停止脚本失败:', e);
     }
@@ -403,7 +403,7 @@ async function handleToggleRun() {
           status: 'starting',
           scope: window.__coronaPreviewPendingScope || 'project',
         }
-      : await scriptingService.getGamePreviewStatus();
+      : await editorApi.scratch.getGamePreviewStatus();
     const preview = previewResult?.data ?? previewResult ?? {};
     const previewActive = ['starting', 'running', 'stopping'].includes(preview.status)
       || Number(preview.runningCount ?? preview.running_count ?? 0) > 0
@@ -434,7 +434,7 @@ async function handleToggleRun() {
 
   codeRunning.value = true;
   try {
-    const result = await scriptingService.executePythonCode(
+    const result = await editorApi.scratch.executePythonCode(
       code,
       0,
       target.scene,
@@ -478,13 +478,13 @@ function startPollTimer() {
     // 安全超时：超过30秒强制重置
     if (Date.now() - startTime > MAX_RUNTIME) {
       console.warn('[Blockly] 脚本执行超时，强制停止');
-      try { await scriptingService.stopScriptExecution(); } catch (_) {}
+      try { await editorApi.scratch.stopScriptExecution(); } catch (_) {}
       codeRunning.value = false;
       return;
     }
 
     try {
-      const status = await scriptingService.getScriptStatus();
+    const status = await editorApi.scratch.getScriptStatus();
       const pollResult = status?.data ?? status;
       if (pollResult?.status === 'idle') {
         codeRunning.value = false;
@@ -533,7 +533,7 @@ function saveCurrentWorkspace() {
     const target = loadedTargetInfo || getCurrentTarget();
     const hasBlocks = Array.isArray(state?.blocks?.blocks) && state.blocks.blocks.length > 0;
     const wasEnabled = targetEnabledByKey.get(getTargetKey(target));
-    latestBlocklySavePromise = scriptingService.saveBlocklyTarget({
+    latestBlocklySavePromise = editorApi.scratch.saveBlocklyTarget({
       target_type: target.targetType,
       scene_name: target.scene,
       actor_name: target.actor,
@@ -624,7 +624,7 @@ function onWorkspaceChange() {
 }
 
 async function loadWorkspaceStateFromProject(target) {
-  const result = await scriptingService.loadBlocklyTarget({
+  const result = await editorApi.scratch.loadBlocklyTarget({
     target_type: target.targetType,
     scene_name: target.scene,
     actor_name: target.actor,

@@ -270,7 +270,9 @@
 <script setup>
 import { ref } from 'vue';
 import { useRouter } from 'vue-router';
-import { networkService, projectLauncherService } from '@/utils/bridge';
+import { editorApi } from '@/api/editorApi.js';
+import { networkService } from '@/services/networkService.js';
+import { projectLauncherService } from '@/services/projectLauncherService.js';
 
 const router = useRouter();
 
@@ -330,13 +332,13 @@ const stopExistingSession = async () => {
 
 const prepareMultiplayerProject = async (role) => {
   busyText.value = '正在准备联机存档…';
-  const result = await projectLauncherService.createMultiplayerProject({ role });
+  const result = await editorApi.project.createMultiplayerProject({ role });
   const project = result?.data ?? result;
   if (!project?.path) {
     throw new Error('创建联机存档失败');
   }
 
-  await projectLauncherService.setProjectMode('3d', { multiplayer: true, role });
+  await editorApi.project.setProjectMode('3d', { multiplayer: true, role });
   const opened = await projectLauncherService.openProject(project.path);
   const openedOk = opened?.data ?? opened?.success ?? opened;
   if (!openedOk) {

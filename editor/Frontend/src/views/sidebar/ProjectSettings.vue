@@ -116,7 +116,7 @@
 <script setup>
 import { ref, onMounted } from 'vue';
 import { useI18n } from 'vue-i18n';
-import { projectSettingsService } from '@/utils/bridge';
+import { editorApi } from '@/api/editorApi.js';
 import { useDockPanel } from '@/composables/useDockPanel.js';
 import DockTitleBar from '@/components/ui/DockTitleBar.vue';
 
@@ -152,7 +152,7 @@ const loadSettings = async () => {
   loading.value = true;
   errorMsg.value = '';
   try {
-    const res = await projectSettingsService.getActiveProjectInfo();
+    const res = await editorApi.projectSettings.getActiveProjectInfo();
     if (res && res.success && res.data) {
       form.value = { ...form.value, ...res.data };
     } else {
@@ -174,7 +174,7 @@ const handleSave = async () => {
       entrance_scene: form.value.entrance_scene,
       core_version: form.value.core_version,
     };
-    const res = await projectSettingsService.saveActiveProjectInfo(payload);
+    const res = await editorApi.projectSettings.saveActiveProjectInfo(payload);
     if (res && res.success) {
       setStatus(t('projectSettings.saveSuccess'), true);
     } else {
@@ -189,7 +189,7 @@ const handleSave = async () => {
 
 const handleBrowseScene = async () => {
   try {
-    const res = await projectSettingsService.browseSceneFile();
+    const res = await editorApi.projectSettings.browseSceneFile();
     if (res && res.success && res.path) {
       form.value.entrance_scene = res.path;
     } else if (res && res.error) {
