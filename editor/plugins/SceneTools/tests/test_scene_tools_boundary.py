@@ -2,9 +2,10 @@ from pathlib import Path
 
 
 PLUGIN_ROOT = Path(__file__).resolve().parents[1]
-MAIN_SOURCE = PLUGIN_ROOT / "main.py"
+MAIN_SOURCE = PLUGIN_ROOT / "compat" / "legacy_scene_tools.py"
 VISION_ADAPTER = PLUGIN_ROOT / "compat" / "legacy_vision_scene_adapter.py"
 VISION_IMPORT_ADAPTER = PLUGIN_ROOT / "compat" / "legacy_vision_import_adapter.py"
+LEGACY_FACADE = PLUGIN_ROOT / "compat" / "legacy_scene_tools.py"
 
 
 def test_scene_tools_has_a_local_boundary_document():
@@ -16,6 +17,18 @@ def test_scene_tools_has_a_local_boundary_document():
     assert "sceneTools.*" in source
     assert "plugins/SceneTools/compat/legacy_vision_scene_adapter.py" in source
     assert "已删除 `legacy_vision_import_helper.py`" in source
+
+
+def test_scene_tools_legacy_facade_has_a_compatibility_owner():
+    shim = (PLUGIN_ROOT / "main.py").read_text(encoding="utf-8")
+    registry = (PLUGIN_ROOT.parents[1] / "runtime" / "registry.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert LEGACY_FACADE.is_file()
+    assert "from plugins.SceneTools.compat.legacy_scene_tools import" in shim
+    assert "class SceneTools" not in shim
+    assert '"plugins.SceneTools.compat.legacy_scene_tools", "SceneTools"' in registry
 
 
 def test_scene_tools_is_the_aggregate_owner_and_isolates_vision_legacy_access():

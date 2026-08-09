@@ -218,10 +218,11 @@ def test_main_view_legacy_scene_adapter_forwards_scene_lifecycle(monkeypatch):
     ]
 
 
-def test_editor_host_legacy_script_initialization_isolated_in_runtime_adapter():
+def test_editor_host_script_initialization_uses_script_runtime_engine_owner():
     source = (BACKEND_ROOT.parents[1] / "editor/runtime/editor_host.py").read_text(
         encoding="utf-8"
     )
+    host_owner = BACKEND_ROOT.parents[1] / "editor/script_runtime/engine/host.py"
     adapter = BACKEND_ROOT.parents[1] / "editor/script_runtime/compat/legacy_script_runtime_adapter.py"
     adapter_shim = BACKEND_ROOT.parents[1] / "editor/runtime/legacy_script_runtime_adapter.py"
     start = source.index("        if not cls._scripts_initialized")
@@ -229,16 +230,12 @@ def test_editor_host_legacy_script_initialization_isolated_in_runtime_adapter():
     initialization_source = source[start:end]
 
     assert "from runtime.legacy_scene_store import" not in initialization_source
-    assert "script_runtime.compat.legacy_script_runtime_adapter" in initialization_source
-    assert adapter.is_file()
-    adapter_source = adapter.read_text(encoding="utf-8")
-    assert "from script_runtime.compat.legacy_scene_adapter import" in adapter_source
-    assert "list_scene_routes" in adapter_source
-    assert "get_scene" in adapter_source
-    assert "def initialize_scripts" in adapter_source
-    assert "from script_runtime.compat.legacy_script_runtime_adapter import *" in adapter_shim.read_text(
-        encoding="utf-8"
-    )
+    assert "from script_runtime.engine.host import initialize_scripts" in initialization_source
+    assert host_owner.is_file()
+    assert not adapter.exists()
+    owner_source = host_owner.read_text(encoding="utf-8")
+    assert "def initialize_scripts" in owner_source
+    assert not adapter_shim.exists()
 
 
 def test_scene_tools_routes_environment_and_physics_through_editor_api():

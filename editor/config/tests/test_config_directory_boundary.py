@@ -68,14 +68,10 @@ def test_project_state_has_a_canonical_owner_and_settings_is_compatibility_facad
     assert "from .project_state import" in settings
 
 
-def test_legacy_utils_settings_remains_a_one_way_wrapper():
+def test_legacy_utils_settings_points_directly_to_the_canonical_owner():
     wrapper = (EDITOR_ROOT / "utils" / "settings.py").read_text(encoding="utf-8")
-    canonical_wrapper = (
-        EDITOR_ROOT / "utils" / "compat" / "legacy_settings.py"
-    ).read_text(encoding="utf-8")
 
-    assert "from utils.compat.legacy_settings import" in wrapper
-    assert "from config.settings import" in canonical_wrapper
+    assert "from config.settings import" in wrapper
     assert "class CoronaSettings" not in wrapper
     assert "def get_default_paths" not in wrapper
 
@@ -83,7 +79,7 @@ def test_legacy_utils_settings_remains_a_one_way_wrapper():
 def test_active_consumers_do_not_import_project_state_from_settings_facade():
     consumers = (
         EDITOR_ROOT / "runtime" / "editor_host.py",
-        EDITOR_ROOT / "runtime" / "project_copy.py",
+        EDITOR_ROOT / "runtime" / "legacy_project_copy.py",
         EDITOR_ROOT / "runtime" / "project_context.py",
         EDITOR_ROOT / "runtime" / "project_templates.py",
         EDITOR_ROOT / "script_runtime" / "blockly" / "main.py",

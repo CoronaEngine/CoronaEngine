@@ -1,7 +1,7 @@
 from pathlib import Path
 
 
-MAIN_VIEW_SOURCE = Path(__file__).resolve().parents[1] / "main.py"
+MAIN_VIEW_SOURCE = Path(__file__).resolve().parents[1] / "compat" / "legacy_main_view.py"
 
 
 def test_main_view_does_not_own_vision_scene_initialization():

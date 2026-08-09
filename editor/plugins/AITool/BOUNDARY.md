@@ -17,8 +17,8 @@
 | `cai_extensions/flows/model_retrieval_workflow/model_library_paths.py` | 本地模型库路径 owner | 新模型库写入活动项目 `Resource/local_model_library`，旧 `assets/local_model_library` 仅作读取兼容 | 不把模型库写入仓库源码或 Quasar 默认目录 |
 | `cai_extensions/agent/scene_composer.py:_generated_asset_project_root` | SceneComposer 生成资产根路径 owner | 使用活动项目的 `Resource/generated/scene_composer` | 不复制 project context 或使用源码目录作为业务输出目录 |
 | `cai_extensions/agent/scene_composer.py` 导入后处理 | SceneComposer Actor 变换和物理后处理编排 | 通过 `native_actor_views_with_legacy_fallback` 获取视图；native 写入走聚合契约，旧宿主只经集中 fallback | 不直接导入 legacy Scene/manager，不定义第二套场景或物理 schema |
-| `compat/legacy_local_ai_setting.py`、`compat/legacy_aitool_utils.py`、`compat/legacy_image_utils.py` | AITool compatibility owner | 历史配置、包级 utility 和媒体 helper wrapper，分别转发到 configuration/service owner | 不新增配置或业务实现 |
-| `utils/` | compatibility-only | 历史配置导入 wrapper 的旧路径，包含包级 alias | 不新增配置或业务实现 |
+| `compat/legacy_local_ai_setting.py`、`compat/legacy_aitool_utils.py`、`compat/legacy_image_utils.py` | AITool external compatibility owner | 仅保留外部历史 import wrapper，分别转发到 configuration/service owner | 外部旧 import 迁移后删除；不新增配置或业务实现 |
+| `utils/` | historical import facade | 继续提供旧包路径，但内部直接导入 configuration/service canonical owner | 不得再依赖 `compat/`，外部旧 import 迁移后删除 |
 | `Quasar/` | 外部子模块 | 上游 AI runtime 内容 | 本仓迁移不修改 |
 
 ## 依赖与生命周期

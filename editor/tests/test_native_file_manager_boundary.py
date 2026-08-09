@@ -11,7 +11,9 @@ HANDLERS = (
     / "cef"
     / "cef_editor_native_api_handlers.cpp"
 ).resolve()
-FILE_MANAGER = REPO_ROOT / "plugins" / "FileManager" / "main.py"
+FILE_MANAGER = (
+    REPO_ROOT / "plugins" / "FileManager" / "compat" / "legacy_file_manager.py"
+)
 
 
 def test_file_manager_has_native_handlers_instead_of_script_fallbacks():

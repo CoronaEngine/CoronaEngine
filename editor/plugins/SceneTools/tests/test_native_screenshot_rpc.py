@@ -4290,7 +4290,7 @@ class NativeSceneToolsRpcTests(unittest.TestCase):
     def test_project_settings_does_not_write_project_section_into_portable_scene(self):
         repo_root = self._repo_root()
         settings_source = (
-            repo_root / "editor" / "plugins" / "ProjectSettings" / "main.py"
+            repo_root / "editor" / "plugins" / "ProjectSettings" / "compat" / "legacy_project_settings.py"
         ).read_text(encoding="utf-8")
         self.assertIn("CoronaEditorApi.project_settings.get_active_project_info", settings_source)
         self.assertIn("CoronaEditorApi.project_settings.save_active_project_info", settings_source)
@@ -4343,7 +4343,7 @@ class NativeSceneToolsRpcTests(unittest.TestCase):
         )
 
         project_settings_source = (
-            repo_root / "editor" / "plugins" / "ProjectSettings" / "main.py"
+            repo_root / "editor" / "plugins" / "ProjectSettings" / "compat" / "legacy_project_settings.py"
         ).read_text(encoding="utf-8")
         self.assertIn("get_active_project_info", project_settings_source)
         self.assertIn("save_active_project_info", project_settings_source)

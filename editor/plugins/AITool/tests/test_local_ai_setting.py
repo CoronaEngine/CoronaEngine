@@ -12,7 +12,7 @@ from editor.plugins.AITool.utils.load_local_ai_setting import (
 
 
 class LoadLocalAISettingTests(unittest.TestCase):
-    def test_local_secret_loader_has_a_config_owner_and_utility_compatibility_wrapper(self):
+    def test_local_secret_loader_has_a_config_owner_and_utils_use_it_directly(self):
         aitool_root = Path(__file__).resolve().parents[1]
         config_source = aitool_root / "configuration" / "local_secrets.py"
         compat_source = (
@@ -36,10 +36,10 @@ class LoadLocalAISettingTests(unittest.TestCase):
         self.assertIn("from ..configuration.local_secrets import", compat_source)
         self.assertIn("from ..configuration.local_secrets import", compat_package_source)
         self.assertIn(
-            "from plugins.AITool.compat.legacy_local_ai_setting import", utility_source
+            "from ..configuration.local_secrets import", utility_source
         )
         self.assertIn(
-            "from plugins.AITool.compat.legacy_aitool_utils import",
+            "from ..configuration.local_secrets import",
             utility_package_source,
         )
         self.assertIn("from .configuration.local_secrets import", main_source)

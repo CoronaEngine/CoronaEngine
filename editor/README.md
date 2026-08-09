@@ -65,8 +65,8 @@ Vue 和 Python 中的方法只是同一契约的薄 adapter，不得各自定义
 | `plugins/SceneTools` | 场景、视口和资源聚合 handler 的 Python 实现 | `active / aggregate owner`；详见 [`plugins/SceneTools/BOUNDARY.md`](plugins/SceneTools/BOUNDARY.md)，通过 `editor_api` 使用 manifest；Vision 旧场景解析由 `plugins/SceneTools/compat/legacy_vision_scene_adapter.py` 承担；旧宿主仍可使用 native `sceneTools.create_scene`，MainView 场景生命周期归 `main.create_scene` |
 | `plugins/MainView` | 项目/场景启动和主视图宿主 adapter | `active / aggregate-adapter`；项目上下文、初始化、创建、切换和删除使用 native contract，关闭兼容仍登记在 [`plugins/MainView/COMPATIBILITY.md`](plugins/MainView/COMPATIBILITY.md)；不得直接访问 scene store |
 | `plugins/ProjectLauncher` | 项目创建、打开和迁移流程 | `active`；公共语义归属 `project.*` |
-| `plugins/ProjectArchive` | 项目归档迁移 compatibility facade | `compatibility`；实现位于 `plugins/ProjectArchive/compat/legacy_project_archive.py`，根 `main.py` 仅保留历史注册入口；解析归属 `runtime.archive`，迁移语义归属 `project.migrateLegacyScene` |
-| `plugins/FileManager` | 文件树、文件操作和项目文件聚合 adapter | `active / aggregate-owner`；文件事实和路径校验归 native `files.*`，Python 仅保留兼容转发；旧宿主事件由 `plugins/FileManager/compat/legacy_file_scene_adapter.py` 保留，runtime 路径仅为 shim |
+| `plugins/ProjectArchive` | 项目归档迁移 facade | `active / compatibility-boundary`；实现位于 `main.py`；解析归属 `runtime.archive`，迁移语义归属 `project.migrateLegacyScene` |
+| `plugins/FileManager` | 文件树、文件操作和项目文件聚合 adapter | `active / aggregate-owner`；文件事实和路径校验归 native `files.*`，service adapter 位于 `main.py`；旧宿主事件由 `plugins/FileManager/compat/legacy_file_scene_adapter.py` 保留，runtime 路径仅为 shim |
 | `plugins/ProjectSettings` | 当前项目设置公共 adapter | `active / aggregate-adapter`；事实读取、校验和保存归 C++ `projectSettings.*`，Python 仅保留兼容转发 |
 | `plugins/SceneDatas` | 旧 Object 面板的 Python 兼容服务壳 | `compatibility-only`；正常启动不自动注册，旧宿主通过显式 legacy registration 使用；详见 [`plugins/SceneDatas/COMPATIBILITY.md`](plugins/SceneDatas/COMPATIBILITY.md) |
 | `scripts` | 历史编辑器脚本兼容目录 | `compatibility`；详见 [`scripts/COMPATIBILITY.md`](scripts/COMPATIBILITY.md)，打包实现已归入仓库顶层 `tools/pack.py` |
@@ -97,7 +97,7 @@ Vue 和 Python 中的方法只是同一契约的薄 adapter，不得各自定义
 | `api/editor_api.py` | Python 对 C++ manifest 的公共契约 adapter | `active / public-contract` | 唯一 Python 公共契约入口；旧 `CoronaCore/core/editor_api.py` 仅作兼容模块别名；`scene_datas` legacy 转发实现位于 `script_runtime/compat/legacy_scene_datas_adapter.py` |
 | `api/tests` | manifest adapter、项目和文件契约测试 | `active / contract-tests` | canonical API 的测试归属；不再放在 `CoronaCore/core/tests` |
 | `script_runtime/compat/legacy_scene_datas_adapter.py` | Script Runtime 专用 SceneDatas 兼容 adapter | `legacy / script-runtime adapter` | 唯一实现 owner；只允许受限 Script Runtime channel，普通 Editor Python 和新业务不得依赖；`script_runtime/legacy_scene_datas_adapter.py`、旧 `CoronaCore/core/legacy_scene_datas_adapter.py` 与 `legacy_editor_api.py` 仅作导入兼容 wrapper |
-| `script_runtime/manifest_adapter.py` | Script Runtime 对 manifest 场景、SceneTools 和视口值对象的受限 adapter | `active / script-runtime adapter` | 唯一实现 owner；复用公共 schema，通过独立 caller channel；不向普通 Python 或角色脚本开放额外底层对象；旧 `CoronaCore/core/script_runtime_editor_api.py` 仅作兼容 wrapper |
+| `script_runtime/manifest_adapter.py` | Script Runtime 对 manifest 场景路由、场景快照、SceneTools 和视口值对象的受限 adapter | `active / script-runtime adapter` | 唯一实现 owner；`scene.list_routes`/`scene.switch`/`scene.get_snapshot`/`scene.set_actor_transform` 复用公共 schema，通过独立 caller channel；不向普通 Python 或角色脚本开放额外底层对象；旧 `CoronaCore/core/script_runtime_editor_api.py` 仅作兼容 wrapper |
 | `script_runtime/native_engine_adapter.py` | 角色脚本/Blockly 的 Engine Runtime 原子能力 adapter | `active / script-runtime adapter` | 唯一 native capability owner；只暴露鼠标、射线、媒体和音频受限能力；`api.editor_api.get_script_runtime_adapter` 仅保留兼容转发 |
 | `runtime/legacy_engine_adapter.py` | 旧实体/组件和登记的 legacy/test 注入使用的引擎内部 adapter | `legacy / internal` | 唯一实现 owner；当前无普通编辑器业务调用，新业务必须使用 manifest adapter；旧 `CoronaCore/core/engine_runtime.py` 仅作兼容 wrapper |
 | `runtime/legacy_network_adapters.py` | 旧 native Network/LANChat fallback adapter | `legacy / adapter` | 唯一兼容实现 owner；`editor_api.py` 只保留公共 manifest factory 和队列规范化，不得新增旧 native 方法 |
@@ -107,17 +107,17 @@ Vue 和 Python 中的方法只是同一契约的薄 adapter，不得各自定义
 | `runtime/native_engine.py` | 嵌入式 CoronaEngine 模块加载与缓存 | `active / host-support` | 仅供 runtime host；旧 `CoronaCore/core/corona_engine.py` 仅兼容转发 |
 | `runtime/response_utils.py` | runtime host 的结构化响应格式化 | `active / host-support` | 仅供 runtime host；旧 `CoronaCore/core/response_utils.py` 仅兼容转发 |
 | `runtime/network_sync_policy.py` | Actor 创建同步过滤、事务延迟和去重策略 | `active / runtime-policy` | 供 SceneTools、AITool 协作和 legacy Actor 使用；旧 `CoronaCore/core/network_sync_policy.py` 仅兼容转发，不是公共 API |
-| `runtime/project_templates.py` | 项目/场景/Actor 模板和 project.ini 初始化 | `active / project-support` | 模板与初始化 helper owner；旧 `project_support.py`、`CoronaCore/core/project_utils.py` 和 `CoronaCore/utils/proejct_utils.py` 仅兼容转发 |
-| `runtime/compat/legacy_project_support.py` | 历史项目 helper 聚合兼容 facade owner | `compatibility / project-support` | 新代码使用 `project_templates` 或 `scene_support`，不得新增实现；`runtime/project_support.py` 仅为旧路径 shim |
+| `runtime/project_templates.py` | 项目/场景/Actor 模板和 project.ini 初始化 | `active / project-support` | 模板与初始化 helper 的唯一 owner；`CoronaCore/core/project_utils.py` 和 `CoronaCore/utils/proejct_utils.py` 仅兼容转发 |
+| `runtime/scene_support.py` | 场景清单和 legacy 自动保存 | `active / scene-support` | 场景持久化 helper 的唯一 owner；旧 project-support 聚合 wrapper 已删除，新代码按职责直接导入 |
 | `runtime/legacy_project_copy.py` | 历史项目复制和打开 facade 实现 | `legacy / project-support` | 只供旧宿主使用；新项目生命周期使用 `project.*` |
-| `runtime/project_copy.py` | legacy ProjectCopy 历史 import shim | `compatibility / project-support` | `runtime/compat/legacy_project_copy.py` 是兼容 owner；本文件及旧插件路径仅保留导入转发 |
+| `runtime/project_copy.py` | removed ProjectCopy import shim | `removed compatibility code` | ProjectCopy 已集中到 `runtime/legacy_project_copy.py`，调用方使用显式 `data_root` |
 | `data/` | legacy 项目复制的 runtime data 目录 | `runtime-data / compatibility` | 仅供旧项目复制流程使用，不是模板 source 或编辑器业务代码目录 |
 | `runtime/legacy_scene_store.py` | 旧 Python Scene 宿主集中转发 | `legacy / canonical` | 旧 `CoronaCore/core/legacy_scene_store.py` 仅兼容转发；保留至旧宿主迁移完成，禁止新增调用 |
 | `plugins/FileManager/compat/legacy_file_scene_adapter.py` | 文件操作触发的旧 Scene/Actor 路由同步和兼容事件 | `legacy / plugin adapter` | 仅供外部旧宿主使用；`runtime/legacy_file_scene_adapter.py` 仅为 shim；native `files.*` 已接管文件操作，待公共事件覆盖旧宿主后删除 |
 | `plugins/SceneTools/compat/legacy_vision_import_adapter.py` | 旧 Vision 文档导入、代理 Actor 和 derived 文件兼容流程 | `legacy / plugin adapter` | 仅供 `plugins/SceneTools` 的旧 Web 兼容方法使用；`runtime/legacy_vision_import_adapter.py` 仅为兼容 shim；新 Vue/Python/AITool 代码不得依赖，待 native Vision 导入契约覆盖后删除 |
 | `plugins/MainView/compat/legacy_main_view_scene_adapter.py` | MainView 旧 Python Scene 关闭和外部宿主兼容 | `legacy / plugin adapter` | 仅供外部旧宿主及 MainView 关闭兼容路径使用；`runtime/legacy_main_view_scene_adapter.py` 仅为 shim；初始化、创建、切换和文件删除已迁移到 native contract，待剩余关闭生命周期覆盖后删除 |
-| `script_runtime/compat/legacy_script_runtime_adapter.py` | 旧 ScriptsManager 与首个 legacy Scene 的懒绑定 | `legacy / script-runtime adapter` | 仅供 `runtime/editor_host.py` 使用；`runtime/legacy_script_runtime_adapter.py` 仅为 shim；场景查询通过 Script Runtime compat adapter；待旧项目脚本迁移到 canonical Script Runtime 后删除 |
-| `script_runtime/compat/legacy_scene_adapter.py` | Script Runtime 访问旧 Python Scene Store 的唯一兼容实现 | `legacy / adapter` | 仅供 `script_runtime/engine`、`script_runtime/blockly` 和旧 ScriptsManager adapter 使用；`runtime/legacy_script_scene_adapter.py` 仅为兼容 shim，待角色脚本完全切换到 native scene/project 生命周期后删除 |
+| `script_runtime/engine/host.py` | ScriptsManager 与首个 legacy Scene 的 host 初始化编排 | `active / script-runtime host` | 编辑器 host 只调用该 owner；旧 Scene 查询仍通过登记的 compat adapter，待旧项目脚本迁移后移除 fallback |
+| `script_runtime/compat/legacy_scene_adapter.py` | Script Runtime 访问旧 Python Scene Store 的唯一兼容实现 | `legacy / adapter` | 仅供 `script_runtime/engine`、`script_runtime/blockly` 和旧 ScriptsManager adapter 使用；历史 runtime shim 已删除，待角色脚本完全切换到 native scene/project 生命周期后删除本 adapter |
 | `plugins/AITool/compat/legacy_aitool_scene_adapter.py` | AITool 访问旧 Python Scene 的唯一兼容 fallback | `legacy / plugin adapter` | 仅供 AITool 的 native scene 兼容入口转发；`runtime/legacy_aitool_scene_adapter.py` 仅为兼容 shim；新业务必须使用 native snapshot/value object，待 AITool 完成 native scene 迁移后删除 |
 | `runtime/legacy_camera_follow.py` | 旧宿主逐帧相机跟随和输入处理 | `legacy / adapter` | 仅供旧宿主转发入口使用；待外部面板迁移并完成输入回归后删除 |
 | `runtime/legacy/entities` | 旧 Python Scene/Actor/Camera 实体模型 | `legacy / canonical` | 旧 `CoronaCore/core/legacy/entities` 仅兼容转发；逐步替换为 manifest value object |
@@ -161,14 +161,14 @@ Vue 和 Python 中的方法只是同一契约的薄 adapter，不得各自定义
 | `plugins/AITool/services/agent_collaboration` | Agent 协作任务、artifact、project state 和 readiness contract | `active / collaboration-service` | 负责协作状态与契约；不发起底层 C++ 调用或持有 API key |
 | `plugins/AITool/services/tests` | AITool service、Agent runtime 和协作服务测试 | `active / service-tests` | 所有 service 测试统一归属此目录；`services` 根目录只保留生产模块 |
 | `plugins/AITool/services/tests/support` | service 测试专用 helper、fixture 和 engine double | `active / service-test-support` | 仅供测试导入；不得从生产模块反向依赖，`services` 根目录不放测试 helper |
-| `plugins/AITool/compat/legacy_local_ai_setting.py`、`legacy_aitool_utils.py`、`legacy_image_utils.py` | 历史配置、包级 utility 和媒体 helper wrapper | `compatibility / plugin-adapter` | AITool 旧入口集中 owner，分别转发到 `configuration.local_secrets` 或 `services.media_storage`；旧 `utils` 包仅保留导入 shim |
+| `plugins/AITool/compat/legacy_local_ai_setting.py`、`legacy_aitool_utils.py`、`legacy_image_utils.py` | 外部历史配置、包级 utility 和媒体 helper wrapper | `compatibility / external-import-shim` | 仅供外部旧入口，分别转发到 `configuration.local_secrets` 或 `services.media_storage`；`utils` 内部不再依赖 compat |
 | `plugins/AITool/utils` | 历史配置和媒体 helper 导入 wrapper 旧路径 | `compatibility` | 只保留配置、包级 `load_ai_setting` 和 `image_utils.py` shim；媒体实现归 `services/media_storage.py`，不得新增业务 owner |
 | `plugins/AITool/tests` | AITool 跨模块边界、配置、Quasar 生命周期测试和非 native 验证 runner | `active / plugin-tests` | 测试插件入口与跨目录契约；`verify_ultimate_plan.py` 只负责验证，不承载生产服务实现 |
 | `plugins/SceneTools` | 场景、视口和资源聚合 handler | `active / aggregate-owner` | Vision legacy 导入和 Scene 查询集中到 `plugins/SceneTools/compat/legacy_vision_*.py`；runtime 路径仅保留兼容 shim |
 | `plugins/MainView` | 启动、项目打开和主视图编排 | `active / aggregate-adapter` | 只保留宿主编排，项目上下文和场景生命周期走 `main.*`/`projectSettings.*` native 聚合契约；关闭仍走登记的 legacy adapter |
 | `plugins/SceneDatas` | 旧 Object 面板插件壳 | `compatibility-only` | 不新增功能，待旧宿主确认后删除 |
 | `plugins/ProjectLauncher` | 项目创建、打开和迁移 | `active` | 归属 `project.*`，与 MainView 解耦 |
-| `plugins/ProjectArchive` | 旧项目归档/解析兼容 facade | `compatibility` | 实现位于 `compat/legacy_project_archive.py`；归属 `project.migrateLegacyScene` |
+| `plugins/ProjectArchive` | 旧项目归档/解析迁移 facade | `compatibility-boundary` | 实现位于 `main.py`；归属 `project.migrateLegacyScene` |
 | `plugins/FileManager` | 文件操作和文件树聚合 handler | `active` | 归属 `files.*`，不依赖旧 backend 实现 |
 | `plugins/ProjectSettings` | 项目设置公共 adapter | `active` | C++ `projectSettings.*` 负责事实、校验和持久化；Python 仅保留旧插件入口 |
 | `Frontend/src/api` | C++ manifest 的 JS contract adapter 和 transport owner | `active / public-contract` | `editorApi.js` 是唯一 manifest transport owner；不定义第二套 schema |

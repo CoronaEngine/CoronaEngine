@@ -1555,12 +1555,86 @@ class ScratchTool:
     def _create_preview_state_snapshot(
         cls, project_path: Optional[Path] = None
     ) -> dict[str, Any]:
-        from script_runtime.compat.legacy_scene_adapter import get_or_create_scene
-
         snapshot: dict[str, Any] = {"scenes": {}}
         for route in cls._project_scene_routes(project_path):
-            scene = get_or_create_scene(route)
-            scene_state: dict[str, Any] = {
+            native_state = cls._create_native_preview_scene_state(route)
+            if native_state is not None:
+                snapshot["scenes"][route] = native_state
+                continue
+
+            snapshot["scenes"][route] = cls._create_legacy_preview_scene_state(route)
+
+        logger.info("[ScratchTool] preview state snapshot captured: %d scenes", len(snapshot["scenes"]))
+        return snapshot
+
+    @staticmethod
+    def _manifest_payload(result: Any) -> dict[str, Any] | None:
+        if not isinstance(result, dict) or result.get("status") in ("error", "failed"):
+            return None
+        payload = result.get("data")
+        return payload if isinstance(payload, dict) else result
+
+    @classmethod
+    def _create_native_preview_scene_state(
+        cls, route: str
+    ) -> dict[str, Any] | None:
+        try:
+            from api.editor_api import get_script_runtime_editor_api
+
+            scene_api = get_script_runtime_editor_api().scene
+            scene_payload = cls._manifest_payload(scene_api.get_snapshot(route))
+            environment_payload = cls._manifest_payload(scene_api.get_environment(route))
+            if scene_payload is None or environment_payload is None:
+                return None
+
+            cameras = {}
+            for camera in scene_payload.get("cameras") or []:
+                if not isinstance(camera, dict) or not camera.get("name"):
+                    continue
+                cameras[str(camera["name"])] = {
+                    key: camera.get(key)
+                    for key in (
+                        "position", "forward", "world_up", "fov", "output_mode",
+                        "width", "height",
+                    )
+                    if key in camera
+                }
+
+            actors = {}
+            for actor in scene_payload.get("actors") or []:
+                if not isinstance(actor, dict) or not actor.get("name"):
+                    continue
+                geometry = actor.get("geometry") or {}
+                mechanics = actor.get("mechanics") or {}
+                actors[str(actor["name"])] = {
+                    "position": geometry.get("position"),
+                    "rotation": geometry.get("rotation"),
+                    "scale": geometry.get("scale"),
+                    "visible": actor.get("visible"),
+                    "mass": mechanics.get("mass"),
+                    "restitution": mechanics.get("restitution"),
+                    "damping": mechanics.get("damping"),
+                    "physics_enabled": mechanics.get("physics_enabled"),
+                    "collision_enabled": actor.get("collision_enabled"),
+                }
+            return {
+                "binding_mode": "native_editor",
+                "environment": environment_payload,
+                "actors": actors,
+                "cameras": cameras,
+                "enabled": None,
+                "simulation_enabled": None,
+            }
+        except Exception as exc:
+            logger.debug("[ScratchTool] native preview snapshot unavailable for %s: %s", route, exc)
+            return None
+
+    @classmethod
+    def _create_legacy_preview_scene_state(cls, route: str) -> dict[str, Any]:
+        from script_runtime.compat.legacy_scene_adapter import get_or_create_scene
+
+        scene = get_or_create_scene(route)
+        scene_state: dict[str, Any] = {
                 "actors": {},
                 "cameras": {},
                 "environment": {},
@@ -1568,51 +1642,48 @@ class ScratchTool:
                 "simulation_enabled": cls._safe_call(scene, "is_simulation_enabled"),
             }
 
-            env = scene.get_environment() if hasattr(scene, "get_environment") else None
-            if env is not None:
-                scene_state["environment"] = {
-                    "sun_direction": cls._safe_call(env, "get_sun_direction"),
-                    "floor_grid": cls._safe_call(env, "get_floor_grid"),
-                    "gravity": cls._safe_call(env, "get_gravity"),
-                    "floor_y": cls._safe_call(env, "get_floor_y"),
-                    "floor_restitution": cls._safe_call(env, "get_floor_restitution"),
-                    "fixed_dt": cls._safe_call(env, "get_fixed_dt"),
-                }
+        env = scene.get_environment() if hasattr(scene, "get_environment") else None
+        if env is not None:
+            scene_state["environment"] = {
+                "sun_direction": cls._safe_call(env, "get_sun_direction"),
+                "floor_grid": cls._safe_call(env, "get_floor_grid"),
+                "gravity": cls._safe_call(env, "get_gravity"),
+                "floor_y": cls._safe_call(env, "get_floor_y"),
+                "floor_restitution": cls._safe_call(env, "get_floor_restitution"),
+                "fixed_dt": cls._safe_call(env, "get_fixed_dt"),
+            }
 
-            for camera in scene.get_cameras():
-                camera_name = getattr(camera, "name", "")
-                if not camera_name:
-                    continue
-                scene_state["cameras"][camera_name] = {
-                    "position": cls._safe_call(camera, "get_position"),
-                    "forward": cls._safe_call(camera, "get_forward"),
-                    "world_up": cls._safe_call(camera, "get_world_up"),
-                    "fov": cls._safe_call(camera, "get_fov"),
-                    "output_mode": cls._safe_call(camera, "get_output_mode"),
-                    "width": getattr(camera, "width", None),
-                    "height": getattr(camera, "height", None),
-                }
+        for camera in scene.get_cameras():
+            camera_name = getattr(camera, "name", "")
+            if not camera_name:
+                continue
+            scene_state["cameras"][camera_name] = {
+                "position": cls._safe_call(camera, "get_position"),
+                "forward": cls._safe_call(camera, "get_forward"),
+                "world_up": cls._safe_call(camera, "get_world_up"),
+                "fov": cls._safe_call(camera, "get_fov"),
+                "output_mode": cls._safe_call(camera, "get_output_mode"),
+                "width": getattr(camera, "width", None),
+                "height": getattr(camera, "height", None),
+            }
 
-            for actor in scene.get_actors():
-                actor_name = getattr(actor, "name", "")
-                if not actor_name:
-                    continue
-                scene_state["actors"][actor_name] = {
-                    "position": cls._safe_call(actor, "get_position"),
-                    "rotation": cls._safe_call(actor, "get_rotation"),
-                    "scale": cls._safe_call(actor, "get_scale"),
-                    "visible": cls._safe_call(actor, "get_visible"),
-                    "mass": cls._safe_call(actor, "get_mass"),
-                    "restitution": cls._safe_call(actor, "get_restitution"),
-                    "damping": cls._safe_call(actor, "get_damping"),
-                    "physics_enabled": cls._safe_call(actor, "get_physics_enabled"),
-                    "collision_enabled": cls._safe_call(actor, "get_collision_enabled"),
-                }
+        for actor in scene.get_actors():
+            actor_name = getattr(actor, "name", "")
+            if not actor_name:
+                continue
+            scene_state["actors"][actor_name] = {
+                "position": cls._safe_call(actor, "get_position"),
+                "rotation": cls._safe_call(actor, "get_rotation"),
+                "scale": cls._safe_call(actor, "get_scale"),
+                "visible": cls._safe_call(actor, "get_visible"),
+                "mass": cls._safe_call(actor, "get_mass"),
+                "restitution": cls._safe_call(actor, "get_restitution"),
+                "damping": cls._safe_call(actor, "get_damping"),
+                "physics_enabled": cls._safe_call(actor, "get_physics_enabled"),
+                "collision_enabled": cls._safe_call(actor, "get_collision_enabled"),
+            }
 
-            snapshot["scenes"][route] = scene_state
-
-        logger.info("[ScratchTool] preview state snapshot captured: %d scenes", len(snapshot["scenes"]))
-        return snapshot
+        return scene_state
 
     @classmethod
     def _restore_preview_state_snapshot(
@@ -1636,8 +1707,13 @@ class ScratchTool:
                 legacy = snapshot
 
             if legacy:
-                from script_runtime.compat.legacy_scene_adapter import get_scene
                 for route, scene_state in (legacy.get("scenes") or {}).items():
+                    if scene_state.get("binding_mode") == "native_editor":
+                        cls._restore_native_preview_scene_state(route, scene_state)
+                        restored_scenes.add(route)
+                        continue
+
+                    from script_runtime.compat.legacy_scene_adapter import get_scene
                     scene = get_scene(route)
                     if scene is None:
                         continue
@@ -1657,6 +1733,43 @@ class ScratchTool:
         except Exception as exc:
             logger.exception("[ScratchTool] preview state restore failed")
             return False, str(exc)
+
+    @classmethod
+    def _restore_native_preview_scene_state(
+        cls, route: str, scene_state: dict[str, Any]
+    ) -> None:
+        from api.editor_api import get_script_runtime_editor_api
+
+        editor_api = get_script_runtime_editor_api()
+        scene_api = editor_api.scene
+        if cls._manifest_payload(
+            scene_api.set_environment(route, scene_state.get("environment") or {})
+        ) is None:
+            raise RuntimeError(f"native environment restore failed: {route}")
+
+        viewport_api = getattr(editor_api, "viewport", None)
+        set_camera_pose = getattr(viewport_api, "set_camera_pose", None)
+        if callable(set_camera_pose):
+            for camera_name, camera_state in (scene_state.get("cameras") or {}).items():
+                if cls._manifest_payload(
+                    set_camera_pose(route, camera_name, camera_state)
+                ) is None:
+                    raise RuntimeError(f"native camera restore failed: {route}/{camera_name}")
+
+        set_actor_transform = getattr(scene_api, "set_actor_transform", None)
+        if callable(set_actor_transform):
+            for actor_name, actor_state in (scene_state.get("actors") or {}).items():
+                transform = {
+                    key: actor_state.get(key)
+                    for key in ("position", "rotation", "scale")
+                    if actor_state.get(key) is not None
+                }
+                if not transform:
+                    continue
+                if cls._manifest_payload(
+                    set_actor_transform(route, actor_name, transform)
+                ) is None:
+                    raise RuntimeError(f"native actor restore failed: {route}/{actor_name}")
 
     @staticmethod
     def _safe_call(target: object, method_name: str):

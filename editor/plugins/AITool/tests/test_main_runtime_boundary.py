@@ -15,7 +15,7 @@ def test_aitool_runtime_does_not_pass_native_engine_to_network_worker():
     assert "corona_engine=corona_engine" not in source
 
 
-def test_media_helpers_have_a_service_owner_and_utility_compatibility_wrapper():
+def test_media_helpers_have_a_service_owner_and_utils_use_it_directly():
     aitool_root = Path(__file__).resolve().parents[1]
     service_source = aitool_root / "services" / "media_storage.py"
     compat_source = (aitool_root / "compat" / "legacy_image_utils.py").read_text(
@@ -28,7 +28,7 @@ def test_media_helpers_have_a_service_owner_and_utility_compatibility_wrapper():
 
     assert service_source.is_file()
     assert "from ..services.media_storage import" in compat_source
-    assert "from plugins.AITool.compat.legacy_image_utils import" in utility_source
+    assert "from ..services.media_storage import" in utility_source
     assert "from .services.media_storage import" in main_source
 
 

@@ -26,10 +26,10 @@ class NativeFileDialogOwnershipTests(unittest.TestCase):
 
     def test_python_runtime_contains_no_editor_file_dialog_implementation(self):
         production_files = (
-            ROOT / "editor/plugins/MainView/main.py",
+            ROOT / "editor/plugins/MainView/compat/legacy_main_view.py",
             ROOT / "editor/plugins/SceneDatas/compat/legacy_scene_datas_plugin.py",
-            ROOT / "editor/plugins/SceneTools/main.py",
-            ROOT / "editor/plugins/ProjectLauncher/main.py",
+            ROOT / "editor/plugins/SceneTools/compat/legacy_scene_tools.py",
+            ROOT / "editor/plugins/ProjectLauncher/compat/legacy_project_launcher.py",
             ROOT / "editor/backend/project_settings/main.py",
         )
         combined = "\n".join(path.read_text(encoding="utf-8") for path in production_files)

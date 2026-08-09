@@ -97,6 +97,36 @@ class EditorAggregateApiTest(unittest.TestCase):
             ],
         )
 
+    def test_script_runtime_scene_routes_use_the_restricted_scene_channel(self):
+        with patch(
+            "api.editor_api._invoke_script_manifest_cpp_api",
+            side_effect=[
+                {
+                    "status": "success",
+                    "scenes": [{"path": "Scene/level.scene", "name": "Level"}],
+                    "active_scene": "Scene/level.scene",
+                },
+                {
+                    "status": "success",
+                    "scene": "Scene/other.scene",
+                    "active_scene": "Scene/other.scene",
+                },
+            ],
+        ) as invoke:
+            adapter = get_script_runtime_editor_api()
+            routes = adapter.scene.list_routes()
+            switched = adapter.scene.switch("Scene/other.scene")
+
+        self.assertEqual(routes["active_scene"], "Scene/level.scene")
+        self.assertEqual(switched["scene"], "Scene/other.scene")
+        self.assertEqual(
+            [call.args for call in invoke.call_args_list],
+            [
+                ("scene.list_routes", []),
+                ("scene.switch", ["Scene/other.scene"]),
+            ],
+        )
+
     def test_resource_search_adapter_uses_manifest_wrapper(self):
         with patch(
             "api.editor_api._find_cpp_api_method_by_python_wrapper",

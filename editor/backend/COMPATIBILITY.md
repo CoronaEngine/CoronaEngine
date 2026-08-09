@@ -14,8 +14,8 @@
 | `blockly/main.py` | `script_runtime.blockly.main` | 历史 Blockly/生成脚本 | 历史生成脚本和外部宿主完成导入迁移 |
 | `blockly/ai_node_graph_contract.py` | `script_runtime.blockly.ai_node_graph_contract` | 历史节点图导入 | 外部节点图生成器完成导入迁移 |
 | `blockly/check_ai_contract_catalog.py` | `script_runtime.blockly.check_ai_contract_catalog` | 历史契约检查入口 | 外部检查脚本完成导入迁移 |
-| `file_system/main.py` | `plugins.FileManager.main` | 旧 FileManager 注册入口 | 外部宿主完成插件路径迁移 |
-| `project_settings/main.py` | `plugins.ProjectSettings.main` | 旧 ProjectSettings 注册入口 | 外部宿主完成插件路径迁移 |
+| `file_system/main.py` | `plugins.FileManager.compat.legacy_file_manager` | 旧 FileManager 注册入口 | 外部宿主完成插件路径迁移 |
+| `project_settings/main.py` | `plugins.ProjectSettings.compat.legacy_project_settings` | 旧 ProjectSettings 注册入口 | 外部宿主完成插件路径迁移 |
 
 ## 约束
 

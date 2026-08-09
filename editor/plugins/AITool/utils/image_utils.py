@@ -1,3 +1,8 @@
-"""Compatibility import for the historical AITool image utility path."""
+"""Historical utility path backed by the canonical media service."""
 
-from plugins.AITool.compat.legacy_image_utils import *  # noqa: F401,F403
+from ..services.media_storage import (  # noqa: F401
+    base64_to_image_file,
+    upload_file_to_server,
+)
+
+__all__ = ["base64_to_image_file", "upload_file_to_server"]

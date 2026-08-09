@@ -4005,6 +4005,21 @@ def deleteClone():
 
 def _project_scene_routes():
     try:
+        from api.editor_api import get_script_runtime_editor_api
+
+        scene_api = get_script_runtime_editor_api().scene
+        result = scene_api.list_routes()
+        scene_items = result.get("scenes") if isinstance(result, dict) else None
+        routes = [
+            str(item.get("path"))
+            for item in scene_items or []
+            if isinstance(item, dict) and item.get("path")
+        ]
+        if routes:
+            return routes
+    except Exception:
+        pass
+    try:
         from runtime.scene_support import get_project_scenes
         from runtime.project_context import get_active_project_path
         root = get_active_project_path()
@@ -4037,9 +4052,33 @@ def setScene(name):
     route = _resolve_scene_route(name)
     if not route:
         return False
+    ctx = _current_context()
+    try:
+        from api.editor_api import get_script_runtime_editor_api
+
+        result = get_script_runtime_editor_api().scene.switch(route)
+        if isinstance(result, dict) and result.get("status") not in ("error", "failed"):
+            target = resolve_runtime_target("project", scene_name=route)
+            scene = target.get("scene") if isinstance(target, dict) else None
+            if scene is not None:
+                current = _runtime_scene()
+                if current is not None and getattr(current, "route", "") != route:
+                    if hasattr(current, "set_enabled"):
+                        current.set_enabled(False)
+                if hasattr(scene, "set_enabled"):
+                    scene.set_enabled(True)
+                ctx.scene_name = getattr(scene, "route", route)
+                ctx.target_scene_name = ctx.scene_name
+                ctx.scene = scene
+                ctx.target_scene = scene
+                ctx.actor = None
+                ctx.target_actor = None
+                ctx.initialized = ctx.target_type == "project"
+                return True
+    except Exception as exc:
+        _logger.debug("[ScratchWrapper] native scene switch unavailable for %s: %s", route, exc)
     try:
         from script_runtime.compat.legacy_scene_adapter import get_or_create_scene
-        ctx = _current_context()
         current = _runtime_scene()
         if current is not None and getattr(current, 'route', '') != route:
             if hasattr(current, 'set_enabled'):

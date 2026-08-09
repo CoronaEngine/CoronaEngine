@@ -21,7 +21,9 @@ MANIFEST = (
     / "cef_editor_api.cpp"
 ).resolve()
 EDITOR_API = REPO_ROOT / "api" / "editor_api.py"
-MAIN_VIEW = REPO_ROOT / "plugins" / "MainView" / "main.py"
+MAIN_VIEW = (
+    REPO_ROOT / "plugins" / "MainView" / "compat" / "legacy_main_view.py"
+)
 FRONTEND_API = REPO_ROOT / "Frontend" / "src" / "api" / "editorApi.js"
 FRONTEND_COMPAT = REPO_ROOT / "Frontend" / "src" / "compat" / "sceneService.js"
 

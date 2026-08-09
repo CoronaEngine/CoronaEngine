@@ -17,8 +17,8 @@
 | `backend.blockly.main` | `script_runtime.blockly.main` | 历史 Blockly/生成脚本导入路径 |
 | `backend.blockly.ai_node_graph_contract` | `script_runtime.blockly.ai_node_graph_contract` | 历史节点图契约导入路径 |
 | `backend.blockly.check_ai_contract_catalog` | `script_runtime.blockly.check_ai_contract_catalog` | 历史契约检查器入口 |
-| `backend.file_system.main` | `plugins.FileManager.main` | FileManager 已迁移到插件 owner |
-| `backend.project_settings.main` | `plugins.ProjectSettings.main` | ProjectSettings 已迁移到插件 owner |
+| `backend.file_system.main` | `plugins.FileManager.compat.legacy_file_manager` | FileManager 已迁移到插件 owner |
+| `backend.project_settings.main` | `plugins.ProjectSettings.compat.legacy_project_settings` | ProjectSettings 已迁移到插件 owner |
 
 `backend/__init__.py` 只声明兼容边界，不定义服务或业务语义。`backend` 下不得新增
 canonical 实现、schema、状态机或测试 owner。
@@ -60,4 +60,3 @@ canonical owner 不得反向依赖 `backend`。兼容 wrapper 只能转发，不
 - 边界测试：验证 wrapper 形态和仓内依赖方向；
 - 文档登记：同步 `editor/README.md`、`editor/ARCHITECTURE.md` 和 owner 清单；
 - 如有必要的 wrapper 修复：只修正转发，不混入其他目录迁移。
-

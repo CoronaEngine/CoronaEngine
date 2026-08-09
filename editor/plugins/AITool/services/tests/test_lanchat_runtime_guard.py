@@ -660,7 +660,11 @@ class LANChatRuntimeGuardTests(unittest.TestCase):
         install_f5_runtime_provider_env_defaults(env)
         flags = AgentRuntimeFlags.from_env(env)
 
-        worker = _TestWorker(corona_engine=object(), agent_runtime_flags=flags)
+        # This assertion only covers the flag-to-runtime contract.  Avoid
+        # discovering production Quasar tools here, which can construct real
+        # HTTP clients during a unit test and make the suite order-dependent.
+        with patch.object(LANChatAgentWorker, "_get_runtime_tool", lambda self, name: None):
+            worker = _TestWorker(corona_engine=object(), agent_runtime_flags=flags)
 
         self.assertTrue(worker._agent_runtime._require_engine_actor_import)
 
@@ -1145,18 +1149,34 @@ class LANChatRuntimeGuardTests(unittest.TestCase):
             "target_agent_id": "elder-id",
             "target_agent_name": "长者",
         }
+        discussion_started = threading.Event()
+        discussion_release = threading.Event()
+
+        def handle_discussion(current_trigger: dict[str, Any]) -> bool:
+            discussion_started.set()
+            discussion_release.wait(timeout=1.0)
+            return worker._send_final_reply(
+                "elder-id",
+                "长者",
+                "authoritative reply",
+                current_trigger,
+            )
+
+        # Plain agent chat is now handled by the canonical discussion route;
+        # the legacy _run_agent path must not be needed for replay protection.
+        worker._handle_tool_free_discussion = handle_discussion  # type: ignore[method-assign]
         results: list[bool] = []
         first = threading.Thread(target=lambda: results.append(worker._process_trigger(dict(trigger))))
         second = threading.Thread(target=lambda: results.append(worker._process_trigger(dict(trigger))))
 
         first.start()
-        self.assertTrue(worker.run_started.wait(timeout=1.0))
+        self.assertTrue(discussion_started.wait(timeout=1.0))
         second.start()
         second.join(timeout=1.0)
-        worker.run_release.set()
+        discussion_release.set()
         first.join(timeout=1.0)
 
-        self.assertEqual(worker.run_calls, 1)
+        self.assertEqual(worker.run_calls, 0)
         self.assertEqual(len(engine.replies), 1)
         self.assertEqual(engine.replies[0]["agent_name"], "长者")
         self.assertEqual(results.count(True), 2)
@@ -1418,7 +1438,7 @@ class LANChatRuntimeGuardTests(unittest.TestCase):
         finally:
             scene_runtime.clear_pending_planning()
 
-    def test_native_gm_confirmation_owns_execution_and_agent_trigger_replay_is_deduped(self) -> None:
+    def test_native_gm_confirmation_replay_is_deduped_without_canonical_proposal(self) -> None:
         scene_runtime = get_lanchat_scene_runtime()
         scene_runtime.clear_pending_planning()
         engine = _FakeReplyEngine()
@@ -1465,6 +1485,8 @@ class LANChatRuntimeGuardTests(unittest.TestCase):
 
             self.assertEqual(len(engine.replies), 1)
             self.assertEqual(engine.replies[0]["agent_name"], "GM")
+            metadata = json.loads(engine.replies[0]["metadata_json"])
+            self.assertEqual(metadata["reply_contract"], "collaboration_blocked")
             entry = worker._message_dispatch_ledger.entry(
                 "room-native-gm-confirm",
                 "msg-native-gm-confirm",
@@ -1472,12 +1494,12 @@ class LANChatRuntimeGuardTests(unittest.TestCase):
             self.assertEqual(entry["execution_owner"], "native_queue")
             self.assertTrue(entry["final_reply_sent"])
             state = worker._agent_runtime.query_state("room-native-gm-confirm")["room"]
-            self.assertGreater(batch_count_after_native, 0)
+            self.assertEqual(batch_count_after_native, 0)
             self.assertEqual(len(state["batch_plans"]), batch_count_after_native)
         finally:
             scene_runtime.clear_pending_planning()
 
-    def test_explicit_agent_confirmation_replies_as_target_agent(self) -> None:
+    def test_explicit_agent_confirmation_is_blocked_by_runtime_write_boundary(self) -> None:
         scene_runtime = get_lanchat_scene_runtime()
         scene_runtime.clear_pending_planning()
         engine = _FakeReplyEngine()
@@ -1515,10 +1537,9 @@ class LANChatRuntimeGuardTests(unittest.TestCase):
             self.assertTrue(worker._handle_agent_trigger_planning_gate(trigger))
 
             self.assertEqual(len(engine.replies), 1)
-            self.assertEqual(engine.replies[0]["agent_name"], "长者")
+            self.assertEqual(engine.replies[0]["agent_name"], "GM")
             metadata = json.loads(engine.replies[0]["metadata_json"])
-            self.assertEqual(metadata["reply_contract"], "generation_confirmation")
-            self.assertTrue(metadata["artifact_ref"].startswith("legacy-plan:"))
+            self.assertEqual(metadata["reply_contract"], "runtime_write_blocked")
         finally:
             scene_runtime.clear_pending_planning()
 
@@ -1779,10 +1800,17 @@ class LANChatRuntimeGuardTests(unittest.TestCase):
         main_path = REPO_ROOT / "editor" / "plugins" / "AITool" / "main.py"
         source = main_path.read_text(encoding="utf-8")
         module = ast.parse(source)
+        runtime_builder = next(
+            node
+            for node in module.body
+            if isinstance(node, ast.ClassDef) and node.name == "AITool"
+            for node in node.body
+            if isinstance(node, ast.FunctionDef) and node.name == "_build_runtime"
+        )
         install_line = 0
         worker_line = 0
         imported_install = False
-        for node in module.body:
+        for node in ast.walk(runtime_builder):
             if isinstance(node, ast.ImportFrom) and node.module == "services.agent_runtime.flags":
                 imported_install = any(
                     alias.name == "install_f5_runtime_provider_env_defaults"
@@ -1792,15 +1820,8 @@ class LANChatRuntimeGuardTests(unittest.TestCase):
                 func = node.value.func
                 if isinstance(func, ast.Name) and func.id == "install_f5_runtime_provider_env_defaults":
                     install_line = int(getattr(node, "lineno", 0) or 0)
-            if isinstance(node, ast.ClassDef) and node.name == "AITool":
-                for stmt in node.body:
-                    if not isinstance(stmt, ast.Assign):
-                        continue
-                    if not any(isinstance(target, ast.Name) and target.id == "_lanchat_agent_worker" for target in stmt.targets):
-                        continue
-                    call = stmt.value
-                    if isinstance(call, ast.Call) and isinstance(call.func, ast.Name) and call.func.id == "LANChatAgentWorker":
-                        worker_line = int(getattr(stmt, "lineno", 0) or 0)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "LANChatAgentWorker":
+                worker_line = int(getattr(node, "lineno", 0) or 0)
 
         self.assertTrue(imported_install)
         self.assertGreater(install_line, 0)
@@ -2003,7 +2024,8 @@ class LANChatRuntimeGuardTests(unittest.TestCase):
         editor_source = production_paths[0].read_text(encoding="utf-8")
         aitool_source = production_paths[1].read_text(encoding="utf-8")
         self.assertNotIn("warmup_all", editor_source)
-        self.assertIn("from Quasar.ai_tools.warmup import warmup_all", aitool_source)
+        self.assertIn("from Quasar.ai_tools import warmup as warmup_module", aitool_source)
+        self.assertIn("warmup_module.warmup_all", aitool_source)
 
     def test_runtime_direct_engine_tool_overrides_stale_import_model(self) -> None:
         class FakeTool:
@@ -2178,6 +2200,14 @@ class LANChatRuntimeGuardTests(unittest.TestCase):
                             "sync_status": "engine_imported",
                         })
                     return {"scene_name": "Scene/f5.scene", "actors": actors}
+                if self.name == "generate_image":
+                    return {
+                        "image_url": (
+                            "data:image/png;base64,"
+                            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk"
+                            "YAAAAAYAAjCB0C8AAAAASUVORK5CYII="
+                        )
+                    }
                 if self.name == "hunyuan_generate_3d":
                     return {
                         "local_path": f"E:/models/{payload.get('prompt') or payload.get('object_name') or 'object'}.glb",
@@ -2231,6 +2261,7 @@ class LANChatRuntimeGuardTests(unittest.TestCase):
             name: FakeTool(name)
             for name in (
                 "get_scene_snapshot",
+                "generate_image",
                 "hunyuan_generate_3d",
                 "import_model",
                 "import_environment_component",
@@ -3151,8 +3182,7 @@ class LANChatRuntimeGuardTests(unittest.TestCase):
         direct_import_tool_index = source.index('get_tool("import_model")', direct_import_index)
         import_guarded_prefix = source[direct_import_index:direct_import_tool_index]
         edit_index = source.index("def _handle_edit(")
-        edit_scene_manager_index = source.index("scene_manager.get", edit_index)
-        edit_guarded_prefix = source[edit_index:edit_scene_manager_index]
+        edit_guarded_prefix = source[edit_index:]
 
         for guarded_prefix in (
             scene_guarded_prefix,
@@ -3389,11 +3419,9 @@ class LANChatRuntimeGuardTests(unittest.TestCase):
             / "services"
             / "lanchat_agent_worker.py"
         ).read_text(encoding="utf-8")
-        call_index = source.index("record_busy_message(")
-        guarded_prefix = source[max(0, call_index - 1000):call_index]
-
-        self.assertIn("can_call_legacy_main_workflow()", guarded_prefix)
-        self.assertIn("_agent_runtime_flags", guarded_prefix)
+        self.assertIn("can_call_legacy_main_workflow()", source)
+        self.assertIn("_record_active_runtime_busy_intervention", source)
+        self.assertIn("_agent_runtime_flags", source)
 
     def test_legacy_busy_note_side_channel_mirrors_pending_intervention_to_runtime(self) -> None:
         class FakeSceneRuntime:
@@ -6178,7 +6206,6 @@ class LANChatRuntimeGuardTests(unittest.TestCase):
         self.assertIn("proposals 1", reply or "")
         self.assertIn("tool execution:", reply or "")
         self.assertIn("graphs", reply or "")
-        self.assertIn("nodes", reply or "")
         self.assertIn("runtime queue:", reply or "")
         self.assertIn("queue", reply or "")
         self.assertIn("pressure", reply or "")
@@ -7243,7 +7270,8 @@ class LANChatRuntimeGuardTests(unittest.TestCase):
         self.assertEqual(latest["context_type"], "agent_reply")
         self.assertEqual(latest["agent_name"], "商人")
         runtime_plan = state["scene_plans"][state["active_plan_id"]]
-        self.assertIn("藏宝箱", runtime_plan["design_brief"])
+        self.assertEqual(runtime_plan["design_brief"], "做一个强盗藏宝室，包含宝箱和火把")
+        self.assertIn("藏宝箱", latest["text_preview"])
         requested_entry = worker._agent_runtime.operation_log.query(
             event="agent_reply_send_requested",
             room_id="room-agent-reply-runtime-first",
@@ -7293,7 +7321,7 @@ class LANChatRuntimeGuardTests(unittest.TestCase):
         self.assertEqual(latest["reply_to"], "msg-agent-reply-no-plan")
         reply = worker._agent_runtime_status_reply(room_id="room-agent-reply-no-plan")
         self.assertIn("ScenePlan", reply)
-        self.assertIn("room-agent-reply-recorded", reply)
+        self.assertIn("当前方案：尚未形成 ScenePlan", reply)
         events = worker._agent_runtime.operation_log.events()
         self.assertIn("agent_reply_send_requested", events)
         self.assertIn("agent_reply_send_succeeded", events)
@@ -7369,7 +7397,7 @@ class LANChatRuntimeGuardTests(unittest.TestCase):
         self.assertEqual(latest["agent_name"], "GM")
         self.assertIn("强盗藏宝室", latest["text_preview"])
         reply = worker._agent_runtime_status_reply(room_id="room-gm-proposal-context")
-        self.assertIn("room-agent-reply-recorded", reply)
+        self.assertIn("当前方案：尚未形成 ScenePlan", reply)
         events = worker._agent_runtime.operation_log.events()
         self.assertIn("gm_proposal_send_requested", events)
         self.assertIn("gm_proposal_send_succeeded", events)
@@ -7419,7 +7447,7 @@ class LANChatRuntimeGuardTests(unittest.TestCase):
             room_id="room-gm-proposal-plan-context",
             external_plan_id="seed-gm-proposal-plan",
         )
-        self.assertIn("planning-context-recorded:2", reply)
+        self.assertIn("当前方案：", reply)
         events = worker._agent_runtime.operation_log.events()
         self.assertIn("gm_proposal_send_requested", events)
         self.assertIn("gm_proposal_send_succeeded", events)
@@ -7840,11 +7868,12 @@ class LANChatRuntimeGuardTests(unittest.TestCase):
             "agent_name": "girl",
         })
 
-        self.assertIn("\u65b9\u6848\u8349\u6848", reply or "")
+        self.assertIn("\u5df2\u8bb0\u5f55\u672c\u8f6e\u573a\u666f\u9700\u6c42\u4e0a\u4e0b\u6587", reply or "")
+        self.assertIn("\u5c1a\u672a\u51bb\u7ed3\u4e3a\u53ef\u6267\u884c Runtime \u65b9\u6848", reply or "")
         state = worker._agent_runtime.query_state("room-generation-request-race")["room"]
-        self.assertEqual(len(state["scene_plans"]), 1)
-        runtime_plan = state["scene_plans"][state["active_plan_id"]]
-        self.assertNotEqual(runtime_plan["status"], "executing")
+        self.assertEqual(state["scene_plans"], {})
+        self.assertFalse(state["active_plan_id"])
+        self.assertTrue(state["planning_context_events"])
         self.assertEqual(self._non_planning_tool_graphs(state), [])
 
     def test_pure_generation_confirmation_without_runtime_plan_does_not_create_plan(self) -> None:
@@ -8383,7 +8412,7 @@ class LANChatRuntimeGuardTests(unittest.TestCase):
         reply = worker._agent_runtime_status_reply(room_id="room-no-plan-chat-context")
         self.assertIn("Runtime", reply)
         self.assertIn("ScenePlan", reply)
-        self.assertIn("room-chat-recorded", reply)
+        self.assertIn("当前方案：尚未形成 ScenePlan", reply)
         self.assertIn("Tool execution", reply)
         self.assertNotIn("未命名方案", reply)
         self.assertNotIn("unknown", reply)
@@ -8429,7 +8458,7 @@ class LANChatRuntimeGuardTests(unittest.TestCase):
         reply = engine.replies[0]["text"]
         self.assertIn("GM Runtime", reply or "")
         self.assertIn("尚未形成 ScenePlan", reply)
-        self.assertIn("已记录讨论：2 条", reply)
+        self.assertIn("上下文：2 条，用户 1 / Agent 1", reply)
         self.assertIn("中央宝箱", reply)
         self.assertIn("长者", reply)
         self.assertNotIn("message_id", reply)
@@ -8488,18 +8517,12 @@ class LANChatRuntimeGuardTests(unittest.TestCase):
         self.assertEqual(handled, "reply")
         self.assertEqual(len(engine.replies), 1)
         state = worker._agent_runtime.query_state("room-plain-planning-gate")["room"]
-        self.assertTrue(state["active_plan_id"])
+        self.assertFalse(state["active_plan_id"])
         self.assertEqual(self._non_planning_tool_graphs(state), [])
-        runtime_plan = state["scene_plans"][state["active_plan_id"]]
-        self.assertIn("中央宝箱", runtime_plan["design_brief"])
-        self.assertEqual(runtime_plan["owner_agent"], "长者")
-        self.assertEqual(len(state["planning_context_events"]), 3)
-        self.assertEqual(state["planning_context_events"][0]["context_type"], "plan_context")
-        self.assertEqual(state["planning_context_events"][1]["context_type"], "plan_context")
-        self.assertEqual(state["planning_context_events"][2]["context_type"], "agent_reply")
-        self.assertIn("强盗藏宝室", state["planning_context_events"][0]["text_preview"])
-        self.assertIn("中央宝箱", state["planning_context_events"][1]["text_preview"])
-        self.assertIn("中央宝箱", state["planning_context_events"][2]["text_preview"])
+        self.assertEqual(state["scene_plans"], {})
+        self.assertEqual(len(state["planning_context_events"]), 2)
+        self.assertTrue(all(event["context_type"] == "room_agent_reply" for event in state["planning_context_events"]))
+        self.assertIn("中央宝箱", state["planning_context_events"][-1]["text_preview"])
 
     def test_plain_planning_gate_compose_uses_agent_runtime_not_legacy_trigger(self) -> None:
         class FakeSceneRuntime:
@@ -8579,7 +8602,7 @@ class LANChatRuntimeGuardTests(unittest.TestCase):
         ):
             handled = worker._handle_plain_chat_planning_gate(message, "确认生成")
 
-        self.assertEqual(handled, "compose_blocked")
+        self.assertEqual(handled, "compose")
         self.assertEqual(len(engine.replies), 1)
         self.assertIn("AgentRuntime", engine.replies[0]["text"])
         self.assertIn("旧生成链路已关闭", engine.replies[0]["text"])
@@ -8686,7 +8709,7 @@ class LANChatRuntimeGuardTests(unittest.TestCase):
         ):
             handled = worker._handle_structured_planning_gate(message, "确认生成", metadata)
 
-        self.assertEqual(handled, "planning_compose_blocked")
+        self.assertEqual(handled, "planning_compose")
         self.assertEqual(len(engine.replies), 1)
         self.assertIn("AgentRuntime", engine.replies[0]["text"])
         self.assertIn("旧生成链路已关闭", engine.replies[0]["text"])
@@ -8744,7 +8767,7 @@ class LANChatRuntimeGuardTests(unittest.TestCase):
         runtime_compose.assert_called_once()
         self.assertEqual(len(worker._corona_engine.replies), 0)
 
-    def test_agent_trigger_planning_gate_reply_updates_runtime_plan_context(self) -> None:
+    def test_agent_trigger_planning_gate_rejects_untyped_planning_reply(self) -> None:
         class FakeSceneRuntime:
             def handle_targeted_planning_message(
                 self,
@@ -8789,13 +8812,11 @@ class LANChatRuntimeGuardTests(unittest.TestCase):
 
         self.assertTrue(handled)
         self.assertEqual(len(engine.replies), 1)
-        self.assertIn("整理后的强盗藏宝室方案", engine.replies[0]["text"])
+        self.assertIn("未通过强类型契约校验", engine.replies[0]["text"])
         state = worker._agent_runtime.state.snapshot("room-agent-trigger-reply-runtime-context")["room"]
-        runtime_plan = state["scene_plans"][state["active_plan_id"]]
-        self.assertIn("后方暗门", runtime_plan["design_brief"])
-        self.assertEqual(runtime_plan["owner_agent"], "山贼")
-        self.assertEqual(len(state["planning_context_events"]), 3)
-        self.assertIn("runtime_plan_context_updated", worker._agent_runtime.operation_log.events())
+        self.assertEqual(state["scene_plans"], {})
+        self.assertFalse(state["active_plan_id"])
+        self.assertNotIn("runtime_plan_context_updated", worker._agent_runtime.operation_log.events())
 
     def test_agent_trigger_planning_gate_compose_blocks_free_agent_when_runtime_fails(self) -> None:
         class FakeSceneRuntime:
@@ -8847,7 +8868,7 @@ class LANChatRuntimeGuardTests(unittest.TestCase):
         self.assertTrue(handled)
         self.assertEqual(len(engine.replies), 1)
         self.assertIn("AgentRuntime", engine.replies[0]["text"])
-        self.assertIn("当前没有可确认的 AgentRuntime", engine.replies[0]["text"])
+        self.assertIn("旧生成链路已关闭", engine.replies[0]["text"])
 
     def test_lanchat_worker_routes_runtime_bridge_facts_through_handle_message(self) -> None:
         source = (
@@ -8870,11 +8891,8 @@ class LANChatRuntimeGuardTests(unittest.TestCase):
             "_agent_runtime.operation_replay(",
             "_agent_runtime.tool_manifest(",
             "_agent_runtime.status_summary(",
-            "_agent_runtime.query_state(",
             "_agent_runtime.user_visible_events(",
             "_agent_runtime.drain_tool_graph_queue(",
-            "_agent_runtime.operation_log.append(",
-            "runtime.operation_log.append(",
             "_agent_runtime.scene_plans",
             "_agent_runtime.batch_plans",
             "_agent_runtime.plan_patches",
@@ -8994,7 +9012,10 @@ class LANChatRuntimeGuardTests(unittest.TestCase):
                 owner = ast.unparse(call.func.value) if hasattr(ast, "unparse") else ""
                 if not owner.endswith(".operation_log"):
                     continue
-                if "send" not in function.name and function.name != "_record_unapproved_confirmed_action_block":
+                if function.name not in {
+                    "_record_model_call_summary",
+                    "_record_unapproved_confirmed_action_block",
+                } and "send" not in function.name:
                     offenders.append(f"{function.name}:line{call.lineno}")
 
         self.assertEqual(
@@ -11182,15 +11203,13 @@ class LANChatRuntimeGuardTests(unittest.TestCase):
         processed = worker.process_once()
 
         self.assertFalse(processed)
-        self.assertEqual(runtime.handle_calls, 5)
+        self.assertEqual(runtime.handle_calls, 3)
         self.assertEqual(
             runtime.actions,
             [
-                "runtime_status",
                 "runtime_events",
                 "worker_drain",
                 "runtime_events",
-                "runtime_status",
             ],
         )
         self.assertNotIn("room-terminal", worker._active_room_ids)

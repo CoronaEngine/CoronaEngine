@@ -12,7 +12,9 @@ HANDLER = (
     / "cef_editor_native_api_handlers.cpp"
 ).resolve()
 EDITOR_API = REPO_ROOT / "api" / "editor_api.py"
-MAIN_VIEW = REPO_ROOT / "plugins" / "MainView" / "main.py"
+MAIN_VIEW = (
+    REPO_ROOT / "plugins" / "MainView" / "compat" / "legacy_main_view.py"
+)
 
 
 def test_native_main_init_owns_scene_list_and_active_scene_resolution():

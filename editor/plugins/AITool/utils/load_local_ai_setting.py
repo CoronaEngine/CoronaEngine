@@ -1,3 +1,13 @@
-"""Compatibility import for the historical local AI settings path."""
+"""Historical utility path backed by the canonical secret loader."""
 
-from plugins.AITool.compat.legacy_local_ai_setting import *  # noqa: F401,F403
+from ..configuration.local_secrets import (  # noqa: F401
+    apply_api_key_env_overrides,
+    load_ai_setting,
+    load_dotenv_file,
+)
+
+__all__ = [
+    "apply_api_key_env_overrides",
+    "load_ai_setting",
+    "load_dotenv_file",
+]

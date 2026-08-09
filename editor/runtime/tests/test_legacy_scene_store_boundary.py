@@ -89,13 +89,15 @@ def test_scene_host_production_code_uses_runtime_scene_store_path():
         assert "CoronaCore.core.legacy_scene_store" not in source
 
 
-def test_script_runtime_host_uses_script_scene_adapter_instead_of_store():
+def test_script_runtime_host_uses_active_owner_and_scene_adapter():
     source = (
-        REPO_ROOT / "editor" / "script_runtime" / "compat" / "legacy_script_runtime_adapter.py"
+        REPO_ROOT / "editor" / "script_runtime" / "engine" / "host.py"
     ).read_text(encoding="utf-8")
-
     assert "from runtime.legacy_scene_store import" not in source
     assert "from script_runtime.compat.legacy_scene_adapter import" in source
+    assert not (
+        REPO_ROOT / "editor" / "script_runtime" / "compat" / "legacy_script_runtime_adapter.py"
+    ).exists()
 
 
 def test_camera_follow_uses_explicit_legacy_scene_store_name():

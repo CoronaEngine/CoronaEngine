@@ -2,7 +2,8 @@
 
 `plugins/SceneTools` 同时包含 native 聚合接口的兼容编排层和 Vision 旧宿主 facade。
 当前 Vue、C++ 主流程、AITool 与 Script Runtime 直接使用 `scene.*`、`sceneTools.*`、
-`viewport.*` manifest；`main.py` 不在正常启动时注册，只能由旧宿主显式注册。
+`viewport.*` manifest；`compat/legacy_scene_tools.py` 不在正常启动时注册，只能由旧宿主显式注册，
+`main.py` 仅保留历史导入 shim。
 C++ Engine/Editor Host 持有场景事实、revision、持久化和事件语义。
 
 ## Owner 映射
@@ -18,7 +19,7 @@ C++ Engine/Editor Host 持有场景事实、revision、持久化和事件语义�
 | Vision proxy 文件 | `vision_proxy.py` | 生成 primitive OBJ proxy、读取模型包围盒校正；不访问 Scene/Actor，不维护 binding 状态 |
 | Vision binding identity | `vision_bindings.py` | 计算 shape identity、匹配历史 binding 和生成导入摘要；不访问 Scene/Actor |
 | Vision binding sync | `compat/legacy_vision_binding_sync.py`（旧入口：`vision_binding_sync.py`） | 负责 legacy Actor 查找、过期 proxy 删除和 source path 回写；不负责公共 manifest、Scene 权威状态或普通 Actor 同步 |
-| Vision 代理导入流程 | `main.py` 的 SceneTools handler | 编排文档转换、proxy binding 和兼容结果；不定义新的跨层 schema |
+| Vision 代理导入流程 | `compat/legacy_scene_tools.py` 的旧宿主 facade | 编排文档转换、proxy binding 和兼容结果；不定义新的跨层 schema；`main.py` 仅保留历史导入 shim |
 | Vision actor helper | 已删除 `legacy_vision_import_helper.py` 与 `vision_import.py` | 原 helper 无仓内生产调用；受支持的 Vision 导入由 `legacy_vision_import_adapter.py` 和 native manifest 流程负责 |
 
 ## 约束

@@ -94,7 +94,12 @@ def test_aitool_node_graph_loader_does_not_depend_on_backend_compatibility_packa
 
 def test_main_view_delegates_generated_script_execution_to_script_runtime():
     runner = EDITOR_ROOT / "script_runtime" / "runner.py"
-    main_view_source = (EDITOR_ROOT / "plugins" / "MainView" / "main.py").read_text(encoding="utf-8")
+    main_view_source = (
+        EDITOR_ROOT
+        / "plugins"
+        / "MainView"
+        / "main.py"
+    ).read_text(encoding="utf-8")
 
     assert runner.is_file()
     assert "from script_runtime.runner import run_generated_script" in main_view_source
@@ -148,7 +153,11 @@ def test_script_runtime_uses_restricted_manifest_adapter_for_native_editor_state
     )
     adapter_source = adapter.read_text(encoding="utf-8")
     for method in (
+        "scene.list_routes",
+        "scene.switch",
         "scene.get_snapshot",
+        "scene.get_environment",
+        "scene.set_environment",
         "scene.set_actor_transform",
         "scene_tools.create_actor",
         "scene_tools.remove_actor",

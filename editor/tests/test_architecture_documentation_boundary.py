@@ -8,10 +8,8 @@ def test_architecture_documentation_names_current_canonical_directory_boundaries
     source = (EDITOR_ROOT / "ARCHITECTURE.md").read_text(encoding="utf-8")
 
     for marker in (
-        "editor/Frontend/src/compat",
         "editor/plugins/AITool/configuration",
         "script_runtime/compat/legacy_scene_adapter.py",
-        "runtime/legacy_script_scene_adapter.py",
         "plugins/AITool/compat/legacy_aitool_scene_adapter.py",
         "runtime/legacy_aitool_scene_adapter.py",
         "script_runtime/blockly",
@@ -24,9 +22,8 @@ def test_architecture_documentation_names_current_canonical_directory_boundaries
 def test_architecture_documentation_keeps_index_as_a_loader_not_a_panel_owner():
     source = (EDITOR_ROOT / "ARCHITECTURE.md").read_text(encoding="utf-8")
 
-    assert "legacyCameraLockPanel.js" in source
     assert "index.html" in source
-    assert "panel 实现不得重新内嵌" in source
+    assert "camera-lock panel 已迁移到 Vue" in source
 
 
 def test_architecture_documentation_distinguishes_compatibility_and_generated_backend_paths():
@@ -63,7 +60,7 @@ def test_scene_datas_compatibility_shell_has_a_registered_lifecycle_owner():
     source = (EDITOR_ROOT / "API_OWNERSHIP.md").read_text(encoding="utf-8")
 
     for marker in (
-        "plugins/SceneDatas/compat/legacy_scene_datas_plugin.py",
+        "plugins/SceneDatas/main.py",
         "runtime/registry.py",
         "Object panel ID",
         "does not call SceneDatas API",

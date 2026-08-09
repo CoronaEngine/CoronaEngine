@@ -123,6 +123,9 @@ schema 始终以 manifest 为准，不从本表手工统计。
 | 公共 API | 契约 handler/owner | Python adapter | Vue adapter | 当前调用方 | 状态 |
 |---|---|---|---|---|---|
 | `scene.get_snapshot` | `SceneTools.get_scene_snapshot` | `CoronaEditorApi.scene.get_snapshot` | `editorApi.scene.getSnapshot` | AITool 场景状态、VLM 包围盒、`camera_get`、`camera_list`、`camera_screenshot` | active |
+| `scene.get_environment` / `scene.set_environment` | `SceneTools.get_environment` / `set_environment` | `CoronaEditorApi.scene.get_environment` / `set_environment` | — | Script Runtime Blockly 预览环境快照与恢复 | active / ScriptRuntime |
+| `scene.list_routes` | `SceneTools.list_routes` | `CoronaEditorApi.scene.list_routes` | — | Script Runtime 场景路由列表和值对象 | active / ScriptRuntime |
+| `scene.switch` | `SceneTools.switch` | `CoronaEditorApi.scene.switch` | — | Script Runtime 场景切换和值对象绑定 | active / ScriptRuntime |
 | `scene.set_actor_transform` | `SceneTools.set_actor_transform` | `CoronaEditorApi.scene.set_actor_transform` | `editorApi.scene.setActorTransform` | AITool Actor 变换 | active |
 | `scene.select_actor` | `SceneTools.select_actor` | `CoronaEditorApi.scene.select_actor` | `editorApi.sceneTools.selectActor` | 主视图、SceneBar、CameraView 的选择同步；可选 viewport context；发布 `actorSelectionChanged` | active |
 | `viewport.capture` | `SceneTools.capture_viewport` | `CoronaEditorApi.viewport.capture` | `editorApi.viewport.capture` | AITool VLM 多视图、`camera_screenshot` | active |
@@ -188,11 +191,11 @@ handler 实现，但仍必须由 C++ manifest 统一定义调用入口、schema�
 
 | 接口组 | 代表性 manifest wrapper | 当前归属 | 后续动作 |
 |---|---|---|---|
-| SceneDatas 兼容入口 | `scene_datas.get_scene`、`scene_datas.get_actor`、`scene_datas.actor_operation` | Scratch/旧脚本宿主兼容层 | 标记为 `legacy`；编辑器新代码必须使用 `scene.get_snapshot`、`scene.set_actor_transform` 或对应 `sceneTools.*` 聚合方法；Script Runtime 的受限物理操作使用 `actor_operation`，直到专用 ScriptRuntime 聚合 adapter 完成；完成旧宿主迁移和回退测试后再移除 |
+| SceneDatas 兼容入口 | `scene_datas.get_scene`、`scene_datas.get_actor`、`scene_datas.actor_operation` | `plugins/SceneDatas/main.py` 注册壳、Scratch/旧脚本宿主兼容层 | 标记为 `legacy`；编辑器新代码必须使用 `scene.get_snapshot`、`scene.set_actor_transform` 或对应 `sceneTools.*` 聚合方法；Script Runtime 的受限物理操作使用 `actor_operation`，直到专用 ScriptRuntime 聚合 adapter 完成；完成旧宿主迁移和回退测试后再移除 |
 | SceneTools 视口、相机和 Vision | `scene_tools.*`、`viewport.*` | SceneTools 聚合 handler；部分仍是 UI 专用能力 | `viewport.capture`、`viewport.set_camera_pose` 和 manifest 宿主的 `focus_actor` 已提供公共契约；旧宿主的 focus 回退仍保留，禁止向 Python 暴露引擎对象 |
 | 协作同步和 pending 队列 | `network.*` 的 actor/snapshot/sync 方法 | Network handler 与 Vue 网络面板 | 将队列消息统一为值对象，补充 revision、所有权和事件顺序 |
 | AI 和媒体入口 | `ai.*`、媒体/资源相关 wrapper | AITool 与编辑器入口 | 明确对话、提醒、生成任务的任务类型和生命周期 |
-| Scratch / Blockly | `scratch.*` | 受限 Script Runtime 和兼容层 | 场景快照、Actor 变换和编辑器相机已优先经过聚合 adapter；其余脚本专用能力保持权限子集，禁止把兼容函数升级为编辑器公共 API |
+| Scratch / Blockly | `scratch.*` | 受限 Script Runtime 和兼容层 | 场景路由、环境快照、Actor 变换和编辑器相机已优先经过聚合 adapter；旧 Scene 只保留显式 fallback，其余脚本专用能力保持权限子集，禁止把兼容函数升级为编辑器公共 API |
 | Script Runtime 媒体能力 | `CoronaEngine.import_media`、`play_audio`、`stop_audio` | `script_runtime.native_engine_adapter.get_script_runtime_adapter()`（兼容入口：`api.editor_api.get_script_runtime_adapter()`） | 角色脚本、Scratch/Blockly 的受限音频和媒体运行时能力；不属于编辑器 Public Contract，不能由 Vue 或普通编辑器 Python 直接调用 |
 | AITool 旧 Agent 编辑路径 | `agent_adapter.py`、部分 `lanchat_agent_worker` 调整逻辑 | 迁移期值对象/兼容操作；由 runtime gate 控制 | Actor 列表和变换数据优先经过 `native_scene_state` 的 `scene.*` adapter；新增和稳定生产路径不得把 Python `scene_manager` 当作场景事实来源 |
 | 场景组合 tier2 放置 | `flows/scene_composition_workflow_v2/nodes_tier_place.py` | `scene.get_snapshot` 值对象 + `native_actor_views_with_legacy_fallback` | 参考 Actor 的位置/缩放优先来自 native snapshot；旧 Actor 仅由集中 adapter 在旧宿主无聚合接口时回退 |
@@ -214,10 +217,6 @@ handler 实现，但仍必须由 C++ manifest 统一定义调用入口、schema�
 | 调用点 | 当前用途 | 替代契约 |
 |---|---|---|
 | `scene_datas.actor_operation` 的旧调用方 | 旧脚本/兼容宿主的 `SetCameraLock*` 等操作 | `sceneTools.setActorCameraLock`；Vue 的摄像机锁定已迁移，旧入口仅作为兼容回退 |
-| `Frontend/index.html` + `src/compat/legacyEditorAdapter.js` 旧面板 | 旧宿主在 Vue 启动前提供相机跟随和键盘控制 | 迁入 Vue 后使用 `sceneTools.setActorCameraLock` 与登记的输入 adapter；迁移前只能通过集中 legacy adapter 保留 |
-| `Frontend/src/compat/legacyEditorAdapter.js` | `main.js` 安装全局旧 CEF 查询适配器，供兼容面板和旧宿主使用 | 新 Vue 代码使用 `editorApi`；外部宿主迁移并完成 raw CEF 回归后移除 |
-| `Frontend/src/compat/legacyCameraLockPanel.js` | `index.html` 启动的旧相机锁定面板 | 相机锁定 Vue 页面和输入 adapter；旧宿主获得稳定 Actor 上下文并完成首次加载/锁定回归后移除 |
-| `Frontend/src/utils/legacyEditorAdapter.js` | 历史 import 路径转发到 `src/compat` | 外部插件确认迁移且无旧 import 后移除；不得新增调用 |
 
 旧入口保留是为了兼容尚未迁移的脚本宿主。它现在由同一 native 状态和
 `CameraFollowController` 实现，避免新旧入口产生两套行为；新功能不得新增表外调用。
@@ -226,7 +225,7 @@ handler 实现，但仍必须由 C++ manifest 统一定义调用入口、schema�
 
 | 入口 | 仓内生产调用 | 当前处理 | 删除条件 |
 |---|---:|---|---|
-| `Frontend/src/utils/bridge.js` 中的 service aliases（`sceneService`、`projectService`、`appService`、`lanChatService`、`networkService`、`scriptingService`、`aiService`、`projectLauncherService`、`fileService`、`projectSettingsService`、`resourceService`、`logService`） | 0 | 统一从 `Frontend/src/services` 或 `Frontend/src/compat` re-export 给外部旧宿主；生产代码直接导入 service owner，不新增 facade 方法 | 外部宿主确认迁移、兼容回归通过、发布说明允许按 alias 分批移除 |
+| `Frontend/src/utils/bridge.js` 中的 service aliases（`sceneService`、`projectService`、`appService`、`lanChatService`、`networkService`、`scriptingService`、`aiService`、`projectLauncherService`、`fileService`、`projectSettingsService`、`resourceService`、`logService`） | 0 | 统一从 `Frontend/src/services` re-export 给外部旧宿主；实现不再分散到兼容目录 | 外部宿主确认迁移、兼容回归通过、发布说明允许按 alias 分批移除 |
 
 ## 适配器和实现归属
 
@@ -240,10 +239,10 @@ handler 实现，但仍必须由 C++ manifest 统一定义调用入口、schema�
 | Legacy scene-store adapter | `editor/runtime/legacy_scene_store.py`（兼容 alias：`editor/CoronaCore/core/legacy_scene_store.py`） | 集中保留旧 Python 场景宿主；不属于新的公共编辑器 API |
 | Legacy Vision import adapter | `editor/plugins/SceneTools/compat/legacy_vision_import_adapter.py` + `legacy_vision_scene_adapter.py`（runtime 路径仅为兼容 alias） | SceneTools 集中保留旧 Vision 导入、derived 文件、代理 Actor 和 legacy Scene 查询；仅供旧 Web 兼容入口，不定义新的公共场景 API |
 | Legacy MainView scene adapter | `editor/plugins/MainView/compat/legacy_main_view_scene_adapter.py`（runtime 路径仅为兼容 alias） | MainView 只保留项目页面编排；旧 Python Scene 关闭和外部旧宿主兼容集中在此，不定义新的场景公共 API；初始化、创建、切换和文件删除已走 native contract |
-| Legacy script runtime adapter | `editor/script_runtime/compat/legacy_script_runtime_adapter.py`（runtime 路径仅为兼容 alias） | 集中完成旧 `ScriptsManager` 与 legacy Scene 的懒绑定；场景查询委托 Script Runtime compat adapter；`editor_host.py` 只负责宿主生命周期、异常和耗时阶段，不定义角色脚本公共 API |
-| Script Runtime legacy scene adapter | `editor/script_runtime/compat/legacy_scene_adapter.py`（兼容 alias：`editor/runtime/legacy_script_scene_adapter.py`） | Script Runtime 访问旧 Python Scene Store 的唯一兼容实现；`script_runtime/engine` 和 `script_runtime/blockly` 只能通过 canonical adapter 访问，adapter 不定义新的场景语义 |
+| Script Runtime host initialization | `editor/script_runtime/engine/host.py` | 负责 `ScriptsManager` 生命周期初始化编排；旧 Scene 查询仍经登记的 `compat/legacy_scene_adapter.py`；历史 host import shim 已删除 |
+| Script Runtime legacy scene adapter | `editor/script_runtime/compat/legacy_scene_adapter.py` | Script Runtime 访问旧 Python Scene Store 的唯一兼容实现；`script_runtime/engine` 和 `script_runtime/blockly` 只能通过 canonical adapter 访问，adapter 不定义新的场景语义；历史 runtime shim 已删除 |
 | Legacy AITool scene adapter | `editor/plugins/AITool/compat/legacy_aitool_scene_adapter.py`（runtime 路径仅为兼容 alias） | AITool 旧 Python Scene fallback 的唯一 owner；native scene 解析文件只转发兼容入口，不定义第二套场景查找协议 |
-| AITool configuration adapter | `editor/plugins/AITool/configuration/local_secrets.py` | `.env` 和环境变量 API key 的唯一加载 owner；`compat/legacy_local_ai_setting.py`、`legacy_aitool_utils.py` 集中保留历史导入兼容，`utils` 仅为 shim，不得新增配置语义 |
+| AITool configuration adapter | `editor/plugins/AITool/configuration/local_secrets.py` | `.env` 和环境变量 API key 的唯一加载 owner；`compat/legacy_local_ai_setting.py`、`legacy_aitool_utils.py` 仅保留外部历史 import，`utils` 旧路径直接导入 canonical owner，不得新增配置语义 |
 | Python engine adapter | `editor/runtime/legacy_engine_adapter.py`、`runtime/legacy/entities`、`runtime/legacy/components` | 由 `legacy_engine_adapter.py` 集中解析底层运行时，供旧实体/组件和登记的 legacy/test 注入兼容；不是普通编辑器或 AITool API；旧 `CoronaCore/core/engine_runtime.py` 仅兼容转发 |
 | Legacy Network/LANChat adapter | `editor/runtime/legacy_network_adapters.py` | 集中保留注入式旧 native Network、LANChat 和队列 fallback，并规范化 manifest LANChat transport/queue adapter；公共生产调用必须经过 `CoronaEditorApi.network` / `CoronaEditorApi.lan_chat`，不得在此复制 manifest schema |
 | Legacy Scene/SceneTools/Viewport adapter | `editor/runtime/legacy_scene_adapters.py` | 集中保留注入式旧 native 场景、Actor 创建/删除、相机截图/姿态 fallback；公共生产调用必须经过 `CoronaEditorApi.scene` / `scene_tools` / `viewport`，不得在此复制 manifest schema |
@@ -253,11 +252,11 @@ handler 实现，但仍必须由 C++ manifest 统一定义调用入口、schema�
 | Realtime viewport adapter | `editor/Frontend/src/utils/viewport*.js`、`MainPage.vue`、`CameraView.vue` | 仅传输低延迟输入、句柄和视口值对象；不定义持久化、权限、revision 或业务错误语义；不得扩散到普通业务组件 |
 | Script adapter | `script_runtime/native_engine_adapter.py`、`script_runtime/engine`、`script_runtime/blockly`、`corona_engine_scratch.py` | 只暴露角色脚本允许的受限能力；鼠标、射线和音频等运行时原子能力必须经过该边界，不属于编辑器 Public Contract；`api.editor_api.get_script_runtime_adapter` 仅为兼容入口，旧 `CoronaCore/core/scripts_system` 仅兼容转发 |
 | Generated script runner | `script_runtime/runner.py:run_generated_script` | 集中加载和清理 `runtime/generated/blockly_code.py`；旧 `backend/runScript.py`、`backend/script` 仅作为只读回退；MainView 不直接导入兼容包 |
-| Project template helper | `editor/runtime/project_templates.py` | 提供模板复制、路径规范化和 project.ini 初始化；不定义 manifest schema、场景权威状态或公共 API；旧 `project_support.py` 与 `CoronaCore` project utils 仅兼容转发 |
-| Scene persistence helper | `editor/runtime/scene_support.py` | 提供场景清单和 legacy 自动保存；不拥有 native Scene/Actor 状态；旧 `project_support.py` 仅兼容转发 |
+| Project template helper | `editor/runtime/project_templates.py` | 提供模板复制、路径规范化和 project.ini 初始化；不定义 manifest schema、场景权威状态或公共 API；`CoronaCore` project utils 仅兼容转发 |
+| Scene persistence helper | `editor/runtime/scene_support.py` | 提供场景清单和 legacy 自动保存；不拥有 native Scene/Actor 状态；旧 project-support 聚合转发已删除 |
 | Archive parser | `editor/runtime/archive` | 只解析项目归档并生成校验后的快照；不创建 Engine/Scene/Actor；`ProjectArchive` 和 legacy Scene 共享此实现，旧 `CoronaCore/archive` 仅兼容转发 |
 | Project template assets | `editor/plugins/ProjectLauncher/templates` | ProjectLauncher 唯一模板 owner；Python/C++ 创建项目流程必须使用此路径，不在 `CoronaCore` 或 C++ handler 中复制模板 |
-| Aggregate handler 内部实现 | `editor/plugins/SceneTools/main.py` | 通过 `editor_api` 使用 manifest 聚合契约；不得把内部 Engine adapter 重新扩散为跨层业务入口 |
+| Aggregate handler 内部实现 | C++ `SceneTools` manifest；旧 Python facade owner 位于 `editor/plugins/SceneTools/main.py` | 通过 `editor_api` 使用 manifest 聚合契约；不得把内部 Engine adapter 重新扩散为跨层业务入口 |
 | Internal Engine adapter | `editor/runtime/legacy_engine_adapter.py:EditorEngineAdapter`（兼容 alias：`editor/CoronaCore/core/engine_runtime.py`） | 当前无普通编辑器生产调用，仅保留给明确登记的外部 legacy/test 注入；不是新的编辑器公共 API，新增生产调用前必须先补 manifest 聚合契约 |
 | Editor host lifecycle | `editor/runtime/editor_host.py:CoronaEditor` | 仅负责嵌入式宿主生命周期、服务注册和兼容事件桥；不是 Vue/Python 业务 API；旧 `CoronaCore.core.corona_editor` 仅为导入兼容 |
 | 配置入口 | `config.paths_config`（路径模型）、`config.project_state.settings_manager`（编辑器设置）、`runtime/legacy_editor_adapters.py:get_active_project_path`（活动项目兼容读取） | 路径模型和编辑器设置分工明确；`config.settings` 与 `utils.settings` 仅为兼容转发，兼容宿主属性只在 runtime adapter 内作为回退 |
@@ -269,9 +268,9 @@ owner，这些 alias 只为外部旧宿主保留。删除前必须完成外部�
 兼容评估；仓内搜索清零本身不是充分删除条件。
 
 其中，`projectService.js` 的仓内调用方已在 `ed31aed7` 中完成收敛：项目和主视图方法由
-`editorApi.main` 直接承载，拖拽区域 Dock 方法由 `appService` 承载；`MainPage`、`SceneBar`、
-`DockTitleBar`、`Pet` 和 `CameraView` 不再导入该兼容 facade。该文件仍通过 `bridge.js`
-为外部旧宿主保留，直到外部导入迁移和兼容回归完成。
+`editorApi.main` 直接承载，拖拽区域 Dock 方法由 canonical `appService` 承载；`MainPage`、
+`SceneBar`、`DockTitleBar`、`Pet` 和 `CameraView` 不再导入旧 compat facade。相关 service
+名称仍可由 `bridge.js` 为外部旧宿主提供，但实现统一位于 `src/services`。
 
 `scriptingService.js` 的仓内调用方已在 `e5aca9b6` 中完成收敛：`App`、`MainPage`、
 `CameraView`、Blockly 工作区、节点图工作区和节点图运行时均直接使用 `editorApi.scratch`。
@@ -298,8 +297,8 @@ Vue adapter 迁移而扩大。
 `editorApi.resourceSearch`；只有开关和兼容响应策略属于该 gate 的职责，schema、权限和资源
 搜索语义仍由 manifest/`ResourceSearch.*` owner 定义。
 
-`appService` 的实现位于 `Frontend/src/compat/appService.js`，只集中旧 Dock/window transport
-和进程操作；`Frontend/src/services/appService.js` 仅保留历史路径 wrapper。`aiService`、
+`appService` 的实现位于 `Frontend/src/services/appService.js`，集中 Dock/window transport
+和进程操作；`aiService`、
 `networkService` 和 `lanChatService` 仍属于 active adapter，分别集中 AI operation/响应、
 Network response 和 LANChat response 的边界转换。它们不能成为第二份 manifest schema、权限、
 状态机或引擎事实 owner；`appService` 和其他 service 的 `bridge.js` re-export 仅为外部旧宿主保留。
@@ -401,12 +400,11 @@ AITool 场景规划的 `scene_element_classifier` 属于 `cai_extensions/agent` 
 | Legacy 入口 | 当前调用方 | 替代接口 | 保留原因 | 删除条件 | 回退测试 |
 |---|---|---|---|---|---|
 | `AITool/cai_extensions/mcp/tools/model_import_tools.py` 的 `create_editor_actor` / `remove_editor_actor` 回退 | 无新宿主的旧 AITool/测试替身 | `sceneTools.createActor` / `sceneTools.removeActor`，经 `get_scene_tools_adapter()` | 兼容没有 manifest 聚合接口的旧宿主 | 所有受支持宿主均提供聚合接口，且旧宿主创建/删除回退测试移除 | model-import boundary tests |
-| `plugins/SceneDatas/compat/legacy_scene_datas_plugin.py` 的兼容插件壳（`main.py` 仅为旧入口 wrapper） | `runtime/registry.py` 的历史服务注册和旧 CEF 宿主；Vue Object panel 已脱离 Object panel ID 的历史绑定 | `scene.*` / `sceneTools.*` manifest 与 native scene/project lifecycle；Object 面板 does not call SceneDatas API | 保留旧宿主的服务名和启动兼容；壳本身不定义 Scene API，SceneDatas native lifecycle 尚未完成 | native lifecycle 覆盖旧面板初始化、场景/Actor 绑定、读写、切换和关闭，并通过旧宿主回归；之后移除注册和兼容壳 | SceneTools native API、Frontend panel 和 runtime registry boundary tests |
+| `plugins/SceneDatas/main.py` 的兼容插件壳 | `runtime/registry.py` 的历史服务注册和旧 CEF 宿主；Vue Object panel 已脱离 Object panel ID 的历史绑定 | `scene.*` / `sceneTools.*` manifest 与 native scene/project lifecycle；Object 面板 does not call SceneDatas API | 保留旧宿主的服务名和启动兼容；壳本身不定义 Scene API，SceneDatas native lifecycle 尚未完成 | native lifecycle 覆盖旧面板初始化、场景/Actor 绑定、读写、切换和关闭，并通过旧宿主回归；之后移除注册和兼容壳 | SceneTools native API、Frontend panel 和 runtime registry boundary tests |
 | AITool 协作服务中的旧网络方法 | 旧宿主、测试替身 | `network.*`、`lan_chat.*` adapter | 保留旧 worker/host action 的消息格式 | 所有 worker 和 host action 都只使用值对象 adapter，旧消息回退测试不再需要 | collaboration API boundary tests |
 | `AITool/cai_extensions/mcp/tools/native_scene_state.py` 的场景树通知 | AITool 旧宿主事件桥 | C++ handler 的统一 Actor/Scene change 事件 | 统一事件发布尚未覆盖所有旧宿主 | C++ 事件覆盖快照、树变化和错误顺序，并通过事件回归测试 | native-scene-state boundary tests |
 | `plugins/MainView` 的 `emit_compat_editor_event` 场景切换事件 | 旧前端宿主 | `project.*` / `scene.*` manifest 事件 | 兼容旧页面的事件订阅 | 旧页面不再订阅兼容事件，且新事件顺序回归通过 | MainView API boundary tests |
 | `plugins/MainView/compat/legacy_main_view_scene_adapter.py` 的 Python Scene 生命周期 | MainView 的旧关闭兼容路径及外部旧宿主 | `main.on_init`、`main.create_scene`、`sceneTools.reload_scene` 与 `main.remove_scene` 的 native 生命周期 | 保留旧宿主对 Python Scene 对象和兼容事件的依赖；MainView 已不再用 adapter 初始化、创建或切换场景；runtime 路径仅作 shim | 外部宿主完成关闭迁移，并通过首次加载、创建、删除、切换和 Vision 回归后删除 adapter | Python runtime boundary tests |
-| `script_runtime/compat/legacy_script_runtime_adapter.py` 的旧 ScriptsManager 初始化 | `runtime/editor_host.py:CoronaEditor._update_runtime_impl` | `script_runtime` 的 canonical runner 与 native scene/project 生命周期 | 旧项目脚本仍需绑定 legacy Scene；适配器通过 Script Runtime compat adapter 查询，宿主只编排生命周期；runtime 旧路径仅作 shim | 旧项目脚本完成 canonical runtime 迁移，并通过初始化、更新、关闭和首场景绑定回归 | Python runtime boundary tests |
 | `script_runtime/compat/legacy_scene_adapter.py` 的旧 Scene Store 访问 | `script_runtime/engine/corona_engine.py` 和 `script_runtime/blockly/main.py` 的旧项目/角色脚本兼容路径 | native scene/project 生命周期与 Script Runtime 受限聚合 adapter | 保留旧生成脚本对 Python Scene 的读取、查找和切换兼容；Script Runtime 主模块不再持有 store 实现路径；旧 runtime 路径仅作 shim | 旧生成脚本完成 native scene/project 迁移，并通过目标解析、Actor 查找、场景切换回归 | Script Runtime legacy scene boundary tests |
 | `backend/script`、`backend/runScript.py` 历史生成输出 | 旧宿主和 `script_runtime.runner` 的兼容回退 | `runtime/generated` 与 `script_runtime.runner.run_generated_script` | 保留既有生成脚本和旧宿主的只读加载能力；Blockly workspace、持久化脚本和 manifest 写入项目 `Scripts/blockly`，预览临时脚本写入 `runtime/generated` | 外部旧宿主不再读取旧路径、兼容回退测试移除，且发布说明允许清理历史运行时数据后删除 | `script_runtime/tests/test_script_runtime_runner.py`、路径边界测试 |
 | `plugins/AITool/compat/legacy_aitool_scene_adapter.py` 的旧 Scene fallback | AITool native scene 兼容入口及其现有调用方 | `scene.get_snapshot` 和 AITool native value adapters | 保留旧宿主 fallback；`native_scene_state.py` 只负责 native 快照、Actor view 和兼容转发；runtime 路径仅作 shim | AITool 所有受支持流程切换到 native scene/value object，并通过 legacy fallback 删除回归 | AITool legacy scene boundary tests |
@@ -415,7 +413,7 @@ AITool 场景规划的 `scene_element_classifier` 属于 `cai_extensions/agent` 
 | `scene_composer_progressive._get_current_scene` 的只读场景视图 | Progressive layout 的 Actor 查询和 AABB 读取 | `native_scene_state.NativeSceneRef` / `resolve_scene_value` | 共享 route、Actor 查找和 legacy fallback；不改变 Progressive 的布局或物理流程 | Progressive 所有场景读取完成 native value-object 迁移后清理旧宿主回退 | progressive scene boundary、native scene state tests |
 | `scene_composer.py` 导入后 Actor/Mechanics 后处理 | 旧 SceneComposer 直接生成流程的导入后位置、旋转、缩放和短时物理脉冲 | `native_actor_views_with_legacy_fallback`；native 路径使用 `scene.set_actor_transform` + `sceneTools.set_actor_physics` 聚合契约，旧宿主仅由集中 adapter 回退 | SceneComposer 不直接导入旧 Scene/manager；壁挂、边界钳制、整平和物理脉冲仍属于生成工作流内部编排 | AgentRuntime/native handler 覆盖位置校正、壁挂策略、物理脉冲和事件顺序，并完成旧流程回归后删除 fallback | SceneComposer aggregate boundary、SceneTools actor-physics tests |
 | `nodes_tier_place.py` Tier2 物理沉降/挂墙回退 | 旧宿主无 `sceneTools.set_actor_physics` 或 native Actor transform 时的放置修正 | `sceneTools.set_actor_physics`、`scene.set_actor_transform`、`native_scene_state.NativeActorView`、`find_actor_with_legacy_fallback` 和 `set_actor_physics_value` | 挂墙和物理沉降均已统一经集中 adapter；旧 Mechanics 只在 adapter 内作为兼容实现，不能扩散到 Tier2 业务模块 | 所有受支持宿主提供 Actor physics/transform 聚合能力，且沉降、挂墙、AABB 回归通过后删除 | Tier2 placement/mechanics boundary tests |
-| `script_runtime/engine/corona_engine.py` 的 scene/viewport/SceneTools adapter 调用 | Script Runtime 的 native 场景快照、变换恢复、相机姿态和运行时 Actor 恢复 | `script_runtime/manifest_adapter.py` 的 ScriptRuntime manifest adapter | 已切换到独立 ScriptRuntime channel；复用同一 schema，不在脚本引擎中直接调用公共 API | 后续仅需随 C++ manifest/schema 变更同步回归，不再新增 PythonScript 旁路 | Script Runtime API boundary tests |
+| `script_runtime/engine/corona_engine.py` 的 scene/viewport/SceneTools adapter 调用 | Script Runtime 的 native 场景路由、快照、变换恢复、相机姿态和运行时 Actor 恢复 | `script_runtime/manifest_adapter.py` 的 ScriptRuntime manifest adapter | 场景列表/切换/快照/变换均经独立 ScriptRuntime channel；不在脚本引擎中直接调用公共 API；实体兼容仅保留显式 fallback | 旧生成脚本完成 native SceneScriptTarget 迁移后删除 legacy Scene fallback | Script Runtime API boundary tests |
 | `plugins/FileManager/compat/legacy_file_scene_adapter.py` 的文件/场景兼容事件 | 外部旧文件面板宿主 | `files.*` / `project.*` manifest 事件 | native `files.*` 已负责文件操作；adapter 仅维护外部旧宿主的 Scene/Actor 路由和兼容事件；runtime 路径仅作 shim | 所有支持的外部宿主切换到公共事件，且 C++ handler 覆盖 Scene/Actor 绑定更新 | Python runtime boundary tests |
 | `runtime/legacy_camera_follow.py:update_camera_follow` | 旧 CEF/宿主逐帧相机跟随入口 | `sceneTools.setActorCameraLock`、`scene.setActorTransform`、`viewport.setCameraPose` | 兼容旧宿主的逐帧输入与跟随行为；宿主入口已缩减为转发，不再持有实现 | 旧宿主完成入口迁移，并通过首次加载、锁定、WASD、右键拖动、偏移和视口姿态回归 | Python runtime boundary tests |
 | `backend/blockly` 合同转发包 | 外部旧 Blockly 导入 | `script_runtime.blockly` | 保留旧模块路径兼容；AITool 生产代码已不再回退到该路径 | 外部宿主完成导入迁移并通过 Script Runtime 回退测试后移除 | Script Runtime layout boundary tests |
@@ -423,9 +421,8 @@ AITool 场景规划的 `scene_element_classifier` 属于 `cai_extensions/agent` 
 | `CoronaCore/core/scripts_system` 角色脚本转发包 | 历史生成脚本、旧宿主和外部脚本导入 | `script_runtime.engine` | 保留旧模块 alias 以维持脚本线程/上下文行为；新 Blockly 生成器已使用 canonical 路径 | 旧项目脚本和外部宿主完成导入迁移，并通过 Script Runtime 回退测试后移除 | Script Runtime layout and core runtime tests |
 | `CoronaCore` `entities` / `components` 底层对象包装 | 角色脚本、Blockly/Scratch、旧 Scene 宿主 | `script_runtime.native_engine_adapter.get_script_runtime_adapter()`；编辑器业务使用 `scene.*` / `sceneTools.*` | 角色脚本仍需要 Engine Runtime 原子能力 | 角色脚本和 Blockly 完成受限 runtime 迁移，且实体导入审计为零 | script adapter and Scratch boundary tests |
 | `runtime/legacy_engine_adapter.py:EditorEngineAdapter`（旧路径：`CoronaCore/core/engine_runtime.py`） | 外部 legacy 宿主或登记的测试替身（仓内无普通编辑器生产调用） | 对应 `scene.*` / `sceneTools.*` / `viewport.*` manifest 聚合方法 | 保留旧宿主注入和测试替身的兼容能力，避免把内部 native 对象扩散到业务层 | 外部宿主完成迁移、测试替身改用 manifest adapter，并通过兼容回归后删除 | runtime boundary tests |
-| `plugins/SceneTools/main.py` 的相机视图生命周期和 Vision 旧场景回退 | SceneTools 聚合 handler + `plugins/SceneTools/compat/legacy_vision_import_adapter.py` + `legacy_vision_scene_adapter.py` | `sceneTools.open/close/update/deleteCameraView` 及 Vision 聚合方法；Vision 导入的 native 操作已切换到 manifest，旧 Web 方法仅转发到 SceneTools compat adapter | 相机视图持久化、Vision 文件绑定和代理清理仍需兼容旧 Python Scene 状态 | 为剩余能力补齐 native handler、schema、revision/事件和旧宿主回归后再移除 compat adapters | SceneTools native screenshot / legacy scene boundary tests |
+| `plugins/SceneTools/main.py`（历史入口：`compat/legacy_scene_tools.py`）的相机视图生命周期和 Vision 旧场景回退 | SceneTools 聚合 handler + `plugins/SceneTools/compat/legacy_vision_import_adapter.py` + `legacy_vision_scene_adapter.py` | `sceneTools.open/close/update/deleteCameraView` 及 Vision 聚合方法；Vision 导入的 native 操作已切换到 manifest，旧 Web 方法仅转发到 SceneTools adapters | 相机视图持久化、Vision 文件绑定和代理清理仍需兼容旧 Python Scene 状态 | 为剩余能力补齐 native handler、schema、revision/事件和旧宿主回归后再移除 compat adapters | SceneTools native screenshot / legacy scene boundary tests |
 | `AITool/cai_extensions/agent/agent_adapter.py` 及旧 Agent 调整逻辑 | 迁移期 Agent runtime gate | `scene.*` / `sceneTools.*` 值对象 adapter | 兼容旧 Agent 的输入和状态格式 | 所有 Agent 调整路径只消费 snapshot/value object，且旧格式回退测试删除 | Agent scene boundary tests |
-| `editor/Frontend/src/compat/legacyEditorAdapter.js` + `legacyCameraLockPanel.js`，由 `index.html` 加载 | 旧宿主注入的调试/兼容面板 | Vue 相机跟随组件调用 `editorApi.sceneTools.setActorCameraLock`；旧 `camera_lock_set` 经 `runtime/editor_host.py` 转发；输入使用登记的 `scratch`/输入 adapter | panel 实现已从启动页移入 compat 目录；仍因旧宿主缺少稳定 Vue Actor 上下文而保留 | 面板迁入 Vue、获得显式 scene/actor 上下文，并完成首次加载、锁定、偏移和 WASD 回归测试 | Frontend legacy-panel boundary test |
 | `include/corona/systems/script/corona_engine_api.h` | 旧 C++ include 路径 | `include/corona/engine/engine_runtime_api.h` | 保持外部/旧模块编译兼容 | 所有仓内 include 已迁移，发布说明允许移除旧路径 | C++ include/build regression |
 
 每个入口必须同时具备替代接口、当前调用方、删除条件和回退测试。迁移期间只能收紧调用方，

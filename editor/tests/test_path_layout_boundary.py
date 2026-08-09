@@ -97,7 +97,7 @@ class PathLayoutBoundaryTests(unittest.TestCase):
     def test_blockly_and_main_view_use_lowercase_backend_module(self):
         repo_root = Path(__file__).resolve().parents[1]
         blockly_source = (repo_root / "script_runtime" / "blockly" / "main.py").read_text(encoding="utf-8")
-        main_view_source = (repo_root / "plugins" / "MainView" / "main.py").read_text(encoding="utf-8")
+        main_view_source = (repo_root / "plugins" / "MainView" / "compat" / "legacy_main_view.py").read_text(encoding="utf-8")
         runtime_source = (repo_root / "config" / "runtime_config.py").read_text(encoding="utf-8")
         generator_constants = (
             repo_root / "Frontend" / "src" / "blockly" / "generators" / "constants.js"
@@ -120,15 +120,15 @@ class PathLayoutBoundaryTests(unittest.TestCase):
         file_service = repo_root / "plugins" / "FileManager" / "main.py"
         project_service = repo_root / "plugins" / "ProjectSettings" / "main.py"
 
-        self.assertIn('"FileManager": ("plugins.FileManager.main", "FileManager")', registry_source)
-        self.assertIn('"ProjectSettings": ("plugins.ProjectSettings.main", "ProjectSettings")', registry_source)
+        self.assertIn('"FileManager": ("plugins.FileManager.compat.legacy_file_manager", "FileManager")', registry_source)
+        self.assertIn('"ProjectSettings": ("plugins.ProjectSettings.compat.legacy_project_settings", "ProjectSettings")', registry_source)
         self.assertTrue(file_service.is_file())
         self.assertTrue(project_service.is_file())
 
         file_compat = (repo_root / "backend" / "file_system" / "main.py").read_text(encoding="utf-8")
         project_compat = (repo_root / "backend" / "project_settings" / "main.py").read_text(encoding="utf-8")
-        self.assertIn("from plugins.FileManager.main import FileManager", file_compat)
-        self.assertIn("from plugins.ProjectSettings.main import ProjectSettings", project_compat)
+        self.assertIn("from plugins.FileManager.compat.legacy_file_manager import FileManager", file_compat)
+        self.assertIn("from plugins.ProjectSettings.compat.legacy_project_settings import ProjectSettings", project_compat)
 
     def test_aggregate_plugin_owners_are_explicit_python_packages(self):
         repo_root = Path(__file__).resolve().parents[1]

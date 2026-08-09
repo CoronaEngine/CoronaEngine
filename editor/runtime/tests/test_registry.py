@@ -31,7 +31,7 @@ class PythonScriptServiceRegistryTests(unittest.TestCase):
         self.assertIn("ProjectArchive", registry.PYTHON_SCRIPT_SERVICES)
         self.assertEqual(
             registry.PYTHON_SCRIPT_SERVICES["ProjectArchive"],
-            ("plugins.ProjectArchive.main", "ProjectArchive"),
+            ("plugins.ProjectArchive.compat.legacy_project_archive", "ProjectArchive"),
         )
         self.assertEqual(
             next(iter(registry.PYTHON_SCRIPT_SERVICES)),
@@ -180,7 +180,7 @@ class PythonScriptServiceRegistryTests(unittest.TestCase):
     def test_active_registration_does_not_start_legacy_scene_tools_service(self):
         registry = self._load_registry()
         registry.PYTHON_SCRIPT_SERVICES = {
-            "SceneTools": ("plugins.SceneTools.main", "SceneTools"),
+            "SceneTools": ("plugins.SceneTools.compat.legacy_scene_tools", "SceneTools"),
             "AITool": ("services.ai", "AITool"),
         }
         registered_pages = []
@@ -193,7 +193,7 @@ class PythonScriptServiceRegistryTests(unittest.TestCase):
             registry,
             "import_module",
             side_effect=lambda module_path: SimpleNamespace(
-                SceneTools=object() if module_path == "plugins.SceneTools.main" else None,
+                SceneTools=object() if module_path == "plugins.SceneTools.compat.legacy_scene_tools" else None,
                 AITool=object(),
             ),
         ) as import_service:
@@ -206,7 +206,7 @@ class PythonScriptServiceRegistryTests(unittest.TestCase):
     def test_legacy_registration_keeps_scene_tools_available_for_old_hosts(self):
         registry = self._load_registry()
         registry.PYTHON_SCRIPT_SERVICES = {
-            "SceneTools": ("plugins.SceneTools.main", "SceneTools"),
+            "SceneTools": ("plugins.SceneTools.compat.legacy_scene_tools", "SceneTools"),
         }
         scene_tools = object()
         registered_pages = []

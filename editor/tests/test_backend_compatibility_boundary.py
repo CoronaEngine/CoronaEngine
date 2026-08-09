@@ -10,8 +10,8 @@ EXPECTED_OWNERS = {
     "blockly/main.py": "script_runtime.blockly.main",
     "blockly/ai_node_graph_contract.py": "script_runtime.blockly.ai_node_graph_contract",
     "blockly/check_ai_contract_catalog.py": "script_runtime.blockly.check_ai_contract_catalog",
-    "file_system/main.py": "plugins.FileManager.main",
-    "project_settings/main.py": "plugins.ProjectSettings.main",
+    "file_system/main.py": "plugins.FileManager.compat.legacy_file_manager",
+    "project_settings/main.py": "plugins.ProjectSettings.compat.legacy_project_settings",
 }
 
 

@@ -2,7 +2,7 @@ from pathlib import Path
 
 
 PLUGIN_ROOT = Path(__file__).resolve().parents[1]
-MAIN_VIEW_SOURCE = PLUGIN_ROOT / "main.py"
+MAIN_VIEW_SOURCE = PLUGIN_ROOT / "compat" / "legacy_main_view.py"
 ADAPTER_SOURCE = PLUGIN_ROOT / "compat" / "legacy_main_view_scene_adapter.py"
 ADAPTER_SHIM = PLUGIN_ROOT.parents[1] / "runtime" / "legacy_main_view_scene_adapter.py"
 

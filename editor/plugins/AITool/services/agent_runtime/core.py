@@ -22964,6 +22964,17 @@ class AgentRuntime:
             project_mode=project_mode,
         )
 
+        return {
+            "handled": True,
+            "action": "runtime.r3_readiness.evaluate",
+            "recorded": False,
+            "found": bool(snapshot_result.get("found")),
+            "plan_id": target_plan_id,
+            "scene_version": scene_version,
+            "profile": str(profile or "full_r3"),
+            "gate_report": report.as_dict(),
+        }
+
     @staticmethod
     def _ready_image_resource_count(resources: Mapping[str, Any]) -> int:
         return sum(
@@ -22978,17 +22989,6 @@ class AgentRuntime:
             and str(resource.get("content_hash") or "").startswith("sha256:")
             and str(resource.get("prompt_hash") or "").startswith("sha256:")
         )
-        return {
-            "handled": True,
-            "action": "runtime.r3_readiness.evaluate",
-            "recorded": False,
-            "found": bool(snapshot_result.get("found")),
-            "plan_id": target_plan_id,
-            "scene_version": scene_version,
-            "profile": str(profile or "full_r3"),
-            "gate_report": report.as_dict(),
-        }
-
     def audit_scene_world_consistency(
         self,
         *,

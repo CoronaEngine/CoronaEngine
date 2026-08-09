@@ -83,7 +83,7 @@ def test_small_legacy_directories_are_one_way_wrappers():
         "utils/compat/legacy_logging.py": "from runtime.logging import",
         "CoronaPlugin/compat/legacy_plugin_base.py": "from runtime.plugin_base import",
         "CoronaPlugin/compat/legacy_load_utils.py": "from runtime.plugin_loader import",
-        "backend/project_settings/main.py": "from plugins.ProjectSettings.main import",
+        "backend/project_settings/main.py": "from plugins.ProjectSettings.compat.legacy_project_settings import",
     }
 
     for relative_path, owner_import in wrappers.items():

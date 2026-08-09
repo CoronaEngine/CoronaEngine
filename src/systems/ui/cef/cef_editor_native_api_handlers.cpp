@@ -982,6 +982,19 @@ std::vector<std::string> build_grid_section_lines(const NativeEditorScene& scene
     };
 }
 
+std::vector<std::string> build_physics_section_lines(const NativeEditorScene& scene) {
+    if (!scene.environment) {
+        return {"[physics]"};
+    }
+    return {
+        "[physics]",
+        "gravity = " + format_float3(scene.environment->get_gravity()),
+        "floor_y = " + std::to_string(scene.environment->get_floor_y()),
+        "floor_restitution = " + std::to_string(scene.environment->get_floor_restitution()),
+        "fixed_dt = " + std::to_string(scene.environment->get_fixed_dt()),
+    };
+}
+
 std::string format_bool(bool value) {
     return value ? "true" : "false";
 }
@@ -1197,6 +1210,7 @@ void persist_native_scene_environment(const NativeEditorScene& scene) {
     const auto scene_file = resolve_project_path(scene.project_root, scene.route);
     replace_ini_section(scene_file, "sun", build_sun_section_lines(scene));
     replace_ini_section(scene_file, "grid", build_grid_section_lines(scene));
+    replace_ini_section(scene_file, "physics", build_physics_section_lines(scene));
 }
 
 void persist_native_scene_cameras(const NativeEditorScene& scene) {
@@ -1352,6 +1366,7 @@ void persist_native_scene_common(const NativeEditorScene& scene) {
     sections["actors"] = build_actors_section_lines(scene);
     sections["sun"] = build_sun_section_lines(scene);
     sections["grid"] = build_grid_section_lines(scene);
+    sections["physics"] = build_physics_section_lines(scene);
     sections["camera"] = build_camera_section_lines(scene);
     sections["scripts"] = {"[scripts]", "path = " + scene.script_path};
     sections["terrain"] = {"[terrain]", "path = " + scene.terrain_path,
@@ -1833,6 +1848,15 @@ std::unique_ptr<NativeEditorScene> load_native_scene_from_ini_legacy(
 
     scene->engine_scene = std::make_unique<Corona::API::Scene>();
     scene->environment = std::make_unique<Corona::API::Environment>();
+    scene->environment->set_gravity(
+        parse_float3(ini_value(scene_ini, "physics", "gravity", "0.0, -9.8, 0.0"),
+                     {0.0f, -9.8f, 0.0f}));
+    scene->environment->set_floor_y(
+        parse_float(ini_value(scene_ini, "physics", "floor_y", "0.0"), 0.0f));
+    scene->environment->set_floor_restitution(
+        parse_float(ini_value(scene_ini, "physics", "floor_restitution", "0.6"), 0.6f));
+    scene->environment->set_fixed_dt(
+        parse_float(ini_value(scene_ini, "physics", "fixed_dt", "0.0166667"), 1.0f / 60.0f));
     apply_native_scene_environment(*scene);
     scene->engine_scene->set_environment(scene->environment.get());
 
@@ -1899,6 +1923,27 @@ std::unique_ptr<NativeEditorScene> load_native_scene_from_ini_legacy(
     apply_native_scene_vision_source(*scene);
     restore_native_camera_lock_target(*scene);
     return scene;
+}
+
+nlohmann::json native_scene_environment_payload(const NativeEditorScene& scene) {
+    if (!scene.environment) {
+        throw std::runtime_error("Native scene environment is unavailable");
+    }
+    return {
+        {"status", "success"},
+        {"scene", scene.route},
+        {"sun", {
+            {"enabled", scene.sun_enabled},
+            {"direction", scene.sun_direction},
+        }},
+        {"grid", {{"enabled", scene.floor_grid_enabled}}},
+        {"physics", {
+            {"gravity", scene.environment->get_gravity()},
+            {"floor_y", scene.environment->get_floor_y()},
+            {"floor_restitution", scene.environment->get_floor_restitution()},
+            {"fixed_dt", scene.environment->get_fixed_dt()},
+        }},
+    };
 }
 
 std::array<float, 3> snapshot_float3(const nlohmann::json& value,
@@ -7810,6 +7855,18 @@ void register_scene_datas_api_handlers(NativeApiRegistry& registry) {
 
 void register_scene_tools_api_handlers(NativeApiRegistry& registry) {
     static const NativeMethodTable methods = {
+        {"get_environment", [](const NativeRequest& request, const NativeContext&) {
+            try {
+                return native_success(native_scene_environment_payload(*scene_for_request_route(request)));
+            } catch (const std::exception& e) {
+                return native_failure(e.what(), 2);
+            }
+        }},
+        {"list_routes", [](const NativeRequest&, const NativeContext&) {
+            auto* scene = ensure_native_editor_scene();
+            const auto index = build_native_project_scene_index(*scene);
+            return native_success(make_native_scene_index_payload(*scene, index));
+        }},
         {"get_scene_snapshot", [](const NativeRequest& request, const NativeContext&) {
             try {
                 const auto raw = get_editor_scene_snapshot_from_python(arg_string(request.args, 0));
@@ -7836,6 +7893,84 @@ void register_scene_tools_api_handlers(NativeApiRegistry& registry) {
             } catch (const std::exception& e) {
                 return native_failure(e.what(), 2);
             }
+        }},
+        {"set_environment", [](const NativeRequest& request, const NativeContext&) {
+            try {
+                auto* scene = scene_for_request_route(request);
+                const auto state = arg_object(request.args, 1);
+                if (!state.is_object()) {
+                    return native_failure("scene environment state must be an object", 2);
+                }
+                if (!scene->environment) {
+                    return native_failure("Native scene environment is unavailable", 2);
+                }
+
+                if (const auto sun = state.find("sun"); sun != state.end() && sun->is_object()) {
+                    if (const auto enabled = sun->find("enabled");
+                        enabled != state.end() && enabled->is_boolean()) {
+                        scene->sun_enabled = enabled->get<bool>();
+                    }
+                    if (const auto direction = sun->find("direction");
+                        direction != state.end()) {
+                        if (const auto value = json_float3_value(*direction)) {
+                            scene->sun_direction = *value;
+                        }
+                    }
+                }
+                if (const auto grid = state.find("grid"); grid != state.end() && grid->is_object()) {
+                    if (const auto enabled = grid->find("enabled");
+                        enabled != state.end() && enabled->is_boolean()) {
+                        scene->floor_grid_enabled = enabled->get<bool>();
+                    }
+                }
+                if (const auto physics = state.find("physics");
+                    physics != state.end() && physics->is_object()) {
+                    if (const auto gravity = physics->find("gravity");
+                        gravity != state.end()) {
+                        if (const auto value = json_float3_value(*gravity)) {
+                            scene->environment->set_gravity(*value);
+                        }
+                    }
+                    if (const auto value = physics->find("floor_y");
+                        value != state.end() && value->is_number()) {
+                        scene->environment->set_floor_y(value->get<float>());
+                    }
+                    if (const auto value = physics->find("floor_restitution");
+                        value != state.end() && value->is_number()) {
+                        scene->environment->set_floor_restitution(value->get<float>());
+                    }
+                    if (const auto value = physics->find("fixed_dt");
+                        value != state.end() && value->is_number()) {
+                        scene->environment->set_fixed_dt(value->get<float>());
+                    }
+                }
+                apply_native_scene_environment(*scene);
+                persist_native_scene_environment(*scene);
+                return native_success(native_scene_environment_payload(*scene));
+            } catch (const std::exception& e) {
+                return native_failure(e.what(), 2);
+            }
+        }},
+        {"switch", [](const NativeRequest& request, const NativeContext&) {
+            const auto route = normalize_route(arg_string(request.args, 0));
+            if (route.empty()) {
+                return native_failure("scene route is required", 2);
+            }
+            auto* scene = reload_native_editor_scene("", route);
+            auto index = build_native_project_scene_index(*scene);
+            if (std::none_of(index.scenes.begin(), index.scenes.end(),
+                             [&](const auto& item) { return item.first == scene->route; })) {
+                index.scenes.emplace_back(scene->route, scene->name);
+            }
+            index.active_scene = scene->route;
+            persist_native_project_scene_index(*scene, index);
+            return native_success({
+                {"status", "success"},
+                {"scene", scene->route},
+                {"active_scene", index.active_scene},
+                {"actor_count", scene->actors.size()},
+                {"camera_count", scene->cameras.size()},
+            });
         }},
         {"save_actor", [](const NativeRequest& request, const NativeContext&) {
             auto* scene = scene_for_request_route(request);

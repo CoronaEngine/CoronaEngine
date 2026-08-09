@@ -2,7 +2,7 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-PLUGIN = REPO_ROOT / "plugins" / "ProjectLauncher" / "main.py"
+PLUGIN = REPO_ROOT / "plugins" / "ProjectLauncher" / "compat" / "legacy_project_launcher.py"
 EDITOR_API = REPO_ROOT / "api" / "editor_api.py"
 
 

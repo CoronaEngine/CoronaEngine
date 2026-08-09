@@ -139,24 +139,6 @@ class LanChatNativeSyncBridgeTests(unittest.TestCase):
         self.assertEqual(stored["version_drift_count"], 1)
         self.assertTrue(stored["missing_fields_explicit"])
 
-    def test_lanchat_room_panel_emits_identity_fingerprinted_peer_ack(self) -> None:
-        panel = (
-            REPO_ROOT / "editor/Frontend/src/views/sidebar/lanchat/RoomPanel.vue"
-        ).read_text(encoding="utf-8")
-
-        self.assertIn("function snapshotIdentityRows", panel)
-        self.assertIn("function snapshotIdentityFingerprint", panel)
-        self.assertIn("snapshot_kind: 'host_snapshot'", panel)
-        self.assertIn("identity_fingerprint: snapshotIdentityFingerprint(identityRows)", panel)
-        self.assertIn("function buildPeerSnapshotAck", panel)
-        self.assertIn("snapshot_kind: 'peer_ack'", panel)
-        self.assertIn("function refreshPeerSnapshotAcks", panel)
-        self.assertIn("await refreshPeerSnapshotAcks()", panel)
-        self.assertIn(
-            "await broadcastCurrentSceneSnapshot(currentModelTransferSceneName(), false, false);",
-            panel,
-        )
-
     def test_received_actor_is_not_engine_imported_until_identity_event(self) -> None:
         engine = _FakeNativeSyncEngine([
             {

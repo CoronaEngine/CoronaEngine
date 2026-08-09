@@ -97,13 +97,12 @@ Script Runtime ────┘          ↑
 仅保留历史导出兼容。
 
 Frontend `src` 顶层目录职责见 `editor/Frontend/src/BOUNDARY.md`；公共契约和 manifest transport 位于 `editor/Frontend/src/api`，领域 service 的分类见
-`editor/Frontend/src/services/BOUNDARY.md`，其旧 CEF 兼容边界见 `editor/Frontend/src/compat/BOUNDARY.md`；低延迟输入 adapter 位于
-`editor/Frontend/src/utils`，具体职责见 `editor/Frontend/src/utils/BOUNDARY.md`；生产组件直接依赖对应的 API/service owner，旧 CEF/宿主实现集中在
-`editor/Frontend/src/compat`，不得把 raw CEF 请求格式重新放回 active utils 或 Vue 业务。
-旧 `sceneService` facade 位于 `editor/Frontend/src/services/sceneService.js`，只允许兼容调用，
-不得重新成为新的场景契约 owner；同目录的 `projectService.js` 只负责旧项目/主视图 facade。
-`appService.js` 只保留历史路径 wrapper；旧 Dock、CameraView 窗口和进程操作 facade 位于
-`editor/Frontend/src/compat/appService.js`。
+`editor/Frontend/src/services/BOUNDARY.md`；低延迟输入 adapter 位于
+`editor/Frontend/src/utils`，具体职责见 `editor/Frontend/src/utils/BOUNDARY.md`；生产组件直接依赖对应的 API/service owner，
+不得把 raw CEF 请求格式重新放回 active utils 或 Vue 业务。
+`sceneService.js`、`projectService.js`、`appService.js`、`fileService.js`、
+`projectSettingsService.js` 和 `scriptingService.js` 均由 `editor/Frontend/src/services`
+直接承载，内部只组合 `editorApi`，不定义第二套 C++ 契约。
 `lanChatService.js` 只负责旧 LANChat/Agent 响应兼容，不定义网络协议或 AI 业务状态。
 `networkService.js` 只负责旧协作网络响应兼容，不定义 NetworkSystem 协议或场景权威状态。
 `scriptingService.js` 只负责旧 Blockly/脚本调用兼容，不扩大 Script Runtime 权限。
@@ -123,8 +122,9 @@ Frontend `src` 顶层目录职责见 `editor/Frontend/src/BOUNDARY.md`；公共�
 `cabbageAssistantContextService.js`、`cabbageGuidanceService.js` 和
 `cabbageTutorialSessionService.js` 是 Cabbage 的上下文/UI service，分别负责跨面板上下文、
 引导窗口和教程会话；它们不持有密钥、Agent runtime 或 Scene/Actor 权威状态。
-`Frontend/index.html` 只负责启动页、迁移说明和 compat module/CSS loader；旧相机跟随面板
-由 `editor/Frontend/src/compat/legacyCameraLockPanel.js` 与对应 CSS 承担，panel 实现不得重新内嵌。
+`Frontend/index.html` 只负责启动页和 Vue loader；camera-lock panel 已迁移到 Vue，旧 panel 实现已删除。
+相机跟随只能由 `Object.vue` 通过 `editorApi.sceneTools.setActorCameraLock` 提供，
+不得在启动页或 compat 目录重新创建第二个 UI owner。
 `src/utils/bridge.js` 仅作为外部旧宿主的兼容 barrel，`src` 内生产代码不得重新导入它。
 Frontend 的 Node 单元测试统一位于 `editor/Frontend/tests/js`，通过 `npm run test:unit`
 执行；Frontend 专用的 Python manifest/compat 边界测试位于 `editor/Frontend/tests/python`，
@@ -170,7 +170,8 @@ Scene/Actor，也不定义 `project.*` manifest。`CoronaCore/archive` 仅为旧
 
 项目模板资产归 `plugins/ProjectLauncher/templates` 所有；`runtime/project_templates.py`
 提供模板复制和 project.ini 初始化，`runtime/scene_support.py` 提供自动保存 helper，
-不通过自身文件位置推断模板目录。`runtime/project_support.py` 仅保留历史兼容转发。旧
+不通过自身文件位置推断模板目录。模板和场景持久化 helper 分别由 `runtime/project_templates.py` 与
+`runtime/scene_support.py` 按职责拥有，旧的 `runtime/project_support.py` 聚合转发已删除。旧
 `CoronaCore/core/project_utils.py` 与 `CoronaCore/utils/proejct_utils.py` 仅为兼容转发。C++ 与
 Python 的项目创建流程必须使用同一个模板 owner。
 
@@ -222,17 +223,17 @@ revision 权威状态。
 `CoronaCore.core.legacy_scene_store` 仅为兼容 alias），不得将 legacy 对象扩散到新业务代码。
 MainView 的项目场景生命周期、宿主脚本初始化和旧相机跟随分别由
 `plugins/MainView/compat/legacy_main_view_scene_adapter.py`（runtime 路径仅为 shim）、
-`script_runtime/compat/legacy_script_runtime_adapter.py`（runtime 路径仅为 shim）和
+`script_runtime/engine/host.py`（历史 runtime/compat host shim 已删除）和
 `legacy_camera_follow.py` 承担。
 
 Script Runtime 的 Engine 与 Blockly 旧场景访问分别通过统一的
 `script_runtime/compat/legacy_scene_adapter.py`；旧的
-`runtime/legacy_script_scene_adapter.py` 仅保留历史导入兼容转发；AITool 的旧场景 fallback 由
+历史的 `runtime/legacy_script_scene_adapter.py` 已删除；AITool 的旧场景 fallback 由
 `plugins/AITool/compat/legacy_aitool_scene_adapter.py` 负责，旧的
 `runtime/legacy_aitool_scene_adapter.py` 仅保留历史导入兼容转发；`native_scene_state.resolve_scene_value` 统一执行
 native-first route 解析并转发该兼容入口，
 不再直接持有旧 store 实现路径。AITool 的本地密钥和 `.env` 加载 canonical owner 是
-`editor/plugins/AITool/configuration`，`plugins/AITool/compat/legacy_local_ai_setting.py` 和 `legacy_aitool_utils.py` 集中保留兼容 wrapper，`utils` 仅为旧路径 shim。
+`editor/plugins/AITool/configuration` 是配置 owner；`plugins/AITool/compat/legacy_local_ai_setting.py`、`legacy_aitool_utils.py` 和 `legacy_image_utils.py` 仅保留外部历史 import wrapper。`utils` 仍提供旧包路径，但内部直接转发到 configuration/service canonical owner，不再依赖 `compat`。
 
 AITool 若必须支持旧宿主，只能通过
 `native_scene_state.get_legacy_scene()` 或 `list_legacy_scene_routes()` 集中解析；业务

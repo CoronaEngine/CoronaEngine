@@ -23,7 +23,7 @@ def test_plugins_have_a_local_boundary_inventory():
     source = boundary.read_text(encoding="utf-8")
     for marker in (
         "业务插件",
-        "active aggregate handler",
+        "native aggregate",
         "compatibility-only",
         "Quasar",
         "runtime",
@@ -40,8 +40,27 @@ def test_plugins_keep_registration_and_ownership_in_the_runtime_layer():
 
     assert "runtime/registry.py" in boundary
     assert "PYTHON_SCRIPT_SERVICES" in registry
-    assert "plugins.SceneTools.main" in registry
+    assert "plugins.SceneTools.compat.legacy_scene_tools" in registry
     assert "plugins.AITool.main" in registry
+
+
+def test_legacy_service_implementations_live_under_compat_owners():
+    registry = (EDITOR_ROOT / "runtime" / "registry.py").read_text(encoding="utf-8")
+    expected = {
+        "MainView": "plugins.MainView.compat.legacy_main_view",
+        "ProjectLauncher": "plugins.ProjectLauncher.compat.legacy_project_launcher",
+        "FileManager": "plugins.FileManager.compat.legacy_file_manager",
+        "ProjectSettings": "plugins.ProjectSettings.compat.legacy_project_settings",
+    }
+
+    for service_name, module_path in expected.items():
+        assert f'"{service_name}": ("{module_path}", "{service_name}")' in registry
+        package = service_name
+        facade = module_path.rsplit(".", 1)[-1] + ".py"
+        assert (PLUGINS_ROOT / package / "compat" / facade).is_file()
+        shim = (PLUGINS_ROOT / package / "main.py").read_text(encoding="utf-8")
+        assert f"from {module_path} import {service_name}" in shim
+        assert f"class {service_name}" not in shim
 
 
 def test_active_plugins_have_local_boundary_documents():

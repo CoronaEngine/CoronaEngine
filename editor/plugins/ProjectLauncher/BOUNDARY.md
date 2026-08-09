@@ -10,7 +10,8 @@
 
 | 路径 | 负责内容 | 不负责 |
 |---|---|---|
-| `main.py` | 旧宿主注册入口、最近项目和项目操作请求转发 | 不直接创建 C++ Scene/Actor，不定义公共契约；不作为 Vue/native 启动入口 |
+| `compat/legacy_project_launcher.py` | 旧宿主注册入口、最近项目和项目操作请求转发 | 不直接创建 C++ Scene/Actor，不定义公共契约；不作为 Vue/native 启动入口 |
+| `main.py` | 历史导入 shim | 不承载项目业务实现 |
 | `runtime/project_templates.py` | 项目模板复制、路径规范化和 INI 初始化 helper owner | 不维护新的项目生命周期或公共 schema |
 | `runtime/compat/legacy_project_support.py` | 历史 project helper 兼容 facade owner | 不新增项目 helper 实现；`runtime/project_support.py` 仅为旧路径 shim |
 | `runtime/legacy_project_copy.py` | 历史项目复制和打开 facade 的实现 owner | 不维护新的项目生命周期或公共 schema |

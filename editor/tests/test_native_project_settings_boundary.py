@@ -11,7 +11,13 @@ HANDLERS = (
     / "cef"
     / "cef_editor_native_api_handlers.cpp"
 ).resolve()
-PLUGIN = REPO_ROOT / "plugins" / "ProjectSettings" / "main.py"
+PLUGIN = (
+    REPO_ROOT
+    / "plugins"
+    / "ProjectSettings"
+    / "compat"
+    / "legacy_project_settings.py"
+)
 PYTHON_API = REPO_ROOT / "api" / "editor_api.py"
 
 

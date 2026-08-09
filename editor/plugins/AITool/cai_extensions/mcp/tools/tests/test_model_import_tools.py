@@ -60,10 +60,11 @@ class ModelImportToolsTests(unittest.TestCase):
         self.assertNotIn("from CoronaCore.core import editor_api", source)
         self.assertIn("from api import editor_api", source)
 
-    def test_relative_model_paths_use_settings_manager_project_context(self) -> None:
-        fake_settings = types.SimpleNamespace(active_project_path="D:/Projects/Example")
-        fake_module = types.SimpleNamespace(settings_manager=fake_settings)
-        with mock.patch.dict("sys.modules", {"config.settings": fake_module}):
+    def test_relative_model_paths_use_editor_project_context(self) -> None:
+        with mock.patch(
+            "api.editor_api.get_active_project_path",
+            return_value="D:/Projects/Example",
+        ):
             self.assertEqual(_active_project_path(), "D:/Projects/Example")
 
     def test_relative_model_paths_use_editor_adapter_fallback(self) -> None:

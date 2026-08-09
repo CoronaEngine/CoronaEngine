@@ -12,7 +12,9 @@ HANDLER = (
     / "cef_editor_native_api_handlers.cpp"
 ).resolve()
 EDITOR_API = REPO_ROOT / "api" / "editor_api.py"
-MAIN_VIEW = REPO_ROOT / "plugins" / "MainView" / "main.py"
+MAIN_VIEW = (
+    REPO_ROOT / "plugins" / "MainView" / "compat" / "legacy_main_view.py"
+)
 
 
 def test_native_reload_scene_uses_the_requested_scene_route():

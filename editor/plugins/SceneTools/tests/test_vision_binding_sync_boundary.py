@@ -3,7 +3,7 @@ from pathlib import Path
 
 
 PLUGIN_ROOT = Path(__file__).resolve().parents[1]
-MAIN_SOURCE = (PLUGIN_ROOT / "main.py").read_text(encoding="utf-8")
+MAIN_SOURCE = (PLUGIN_ROOT / "compat" / "legacy_scene_tools.py").read_text(encoding="utf-8")
 CANONICAL_PATH = PLUGIN_ROOT / "compat" / "legacy_vision_binding_sync.py"
 LEGACY_PATH = PLUGIN_ROOT / "vision_binding_sync.py"
 

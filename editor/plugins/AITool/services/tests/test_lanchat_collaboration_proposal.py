@@ -1,9 +1,15 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
+import sys
 import unittest
 from copy import deepcopy
 from unittest.mock import patch
+
+_EDITOR_ROOT = Path(__file__).resolve().parents[5] / "editor"
+if str(_EDITOR_ROOT) not in sys.path:
+    sys.path.insert(0, str(_EDITOR_ROOT))
 
 from editor.plugins.AITool.services.agent_runtime import AgentRuntime, AgentRuntimeFlags
 from editor.plugins.AITool.services.agent_collaboration.production_reasoners import (

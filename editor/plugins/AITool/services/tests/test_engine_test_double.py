@@ -167,7 +167,7 @@ class EngineTestDoubleTests(unittest.TestCase):
     def test_test_double_preserves_frozen_skeleton_contract_hash(self) -> None:
         self.assertEqual(
             build_skeleton_manifest().contract_hash(),
-            "sha256:6144cabd279c57c8e843c585156e775f213d2575f1c61152100a426f5729e1cd",
+            "sha256:822bbe65a1bfd410cc03bdc761059762f66501daa7f285c9ac48e0f54c889a71",
         )
 
 

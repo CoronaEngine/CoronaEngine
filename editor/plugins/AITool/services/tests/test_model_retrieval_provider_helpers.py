@@ -9,6 +9,9 @@ from pathlib import Path
 
 
 _AITOOL_ROOT = Path(__file__).resolve().parents[2]
+_EDITOR_ROOT = _AITOOL_ROOT.parents[1]
+if str(_EDITOR_ROOT) not in sys.path:
+    sys.path.insert(0, str(_EDITOR_ROOT))
 if str(_AITOOL_ROOT) not in sys.path:
     sys.path.insert(0, str(_AITOOL_ROOT))
 

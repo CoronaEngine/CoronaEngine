@@ -14,7 +14,7 @@ def test_main_view_document_records_native_lifecycle_completion_for_repo_callers
 
 
 def test_main_view_production_source_does_not_import_legacy_scene_adapter():
-    source = (PLUGIN_ROOT / "main.py").read_text(encoding="utf-8")
+    source = (PLUGIN_ROOT / "compat" / "legacy_main_view.py").read_text(encoding="utf-8")
 
     assert "legacy_main_view_scene_adapter" not in source
     assert "CoronaEditorApi.main.on_init" in source

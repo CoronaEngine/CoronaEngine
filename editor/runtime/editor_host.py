@@ -493,7 +493,7 @@ class CoronaEditor:
                     project_path = settings_manager.active_project_path
 
                 if project_path:
-                    from script_runtime.compat.legacy_script_runtime_adapter import initialize_scripts
+                    from script_runtime.engine.host import initialize_scripts
 
                     initialize_scripts(cls, project_path)
             except Exception:

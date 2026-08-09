@@ -64,6 +64,11 @@ constexpr std::array<EditorApiParamSpec, 3> kSceneActorStateParams = {{
     param("state", EditorApiValueType::Object),
 }};
 
+constexpr std::array<EditorApiParamSpec, 2> kSceneEnvironmentStateParams = {{
+    param("scene_name", EditorApiValueType::String),
+    param("state", EditorApiValueType::Object),
+}};
+
 constexpr std::array<EditorApiParamSpec, 3> kSceneActorCameraLockParams = {{
     param("scene_name", EditorApiValueType::String),
     param("actor_name", EditorApiValueType::String),
@@ -604,7 +609,11 @@ constexpr auto kEditorApiMethods = std::to_array<EditorApiMethodSpec>({
     EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, get_vision_render_mode, kSceneToolsCameraOptionalParams, "sceneTools.getVisionRenderMode", "scene_tools.get_vision_render_mode", EditorApiValueType::Object),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, is_vision_available, kNoParams, "sceneTools.isVisionAvailable", "scene_tools.is_vision_available", EditorApiValueType::Object),
     EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, get_scene_snapshot, kSceneNameOptionalParam, "scene.getSnapshot", "scene.get_snapshot", EditorApiValueType::Object, cef_and_script_runtime_callers()),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, get_environment, kSceneNameParam, "", "scene.get_environment", EditorApiValueType::Object, cef_and_script_runtime_callers()),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, list_routes, kNoParams, "", "scene.list_routes", EditorApiValueType::Object, cef_and_script_runtime_callers()),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, set_environment, kSceneEnvironmentStateParams, "", "scene.set_environment", EditorApiValueType::Object, cef_and_script_runtime_callers()),
     EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, set_actor_transform, kSceneActorTransformParams, "scene.setActorTransform", "scene.set_actor_transform", EditorApiValueType::Object, cef_and_script_runtime_callers()),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, switch, kSceneNameParam, "", "scene.switch", EditorApiValueType::Object, cef_and_script_runtime_callers()),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, set_actor_state, kSceneActorStateParams, "sceneTools.setActorState", "scene_tools.set_actor_state", EditorApiValueType::Object),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, set_actor_physics, kSceneActorPhysicsParams, "sceneTools.setActorPhysics", "scene_tools.set_actor_physics", EditorApiValueType::Object),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, set_actor_camera_lock, kSceneActorCameraLockParams, "sceneTools.setActorCameraLock", "scene_tools.set_actor_camera_lock", EditorApiValueType::Object),
