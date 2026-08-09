@@ -56,12 +56,31 @@ class DelayedBoundsEngine:
         return json.dumps({"status": "success", "scene": scene_name, "actor": actor})
 
 
+class FakeEditorApi:
+    def __init__(self, engine: DelayedBoundsEngine) -> None:
+        self.engine = engine
+        self.scene = self.SceneApi(engine)
+
+    class SceneApi:
+        def __init__(self, engine: DelayedBoundsEngine) -> None:
+            self.engine = engine
+
+        def get_snapshot(self, scene_name: str) -> str:
+            return self.engine.get_editor_scene_snapshot(scene_name)
+
+        def set_actor_transform(self, scene_name: str, actor_name: str, transform: dict) -> str:
+            return self.engine.set_editor_actor_transform(
+                scene_name,
+                actor_name,
+                json.dumps(transform),
+            )
+
 def setup_function() -> None:
-    native_scene_state.CORONA_ENGINE_OVERRIDE = DelayedBoundsEngine()
+    native_scene_state.EDITOR_API_OVERRIDE = FakeEditorApi(DelayedBoundsEngine())
 
 
 def teardown_function() -> None:
-    native_scene_state.CORONA_ENGINE_OVERRIDE = None
+    native_scene_state.EDITOR_API_OVERRIDE = None
 
 
 def test_repair_recent_imports_waits_for_delayed_native_bounds() -> None:
@@ -77,7 +96,7 @@ def test_repair_recent_imports_waits_for_delayed_native_bounds() -> None:
 
     repaired = _repair_recent_imports(["床"], layout, None, zone_aabbs={}, door_aabbs={}, issue_sink=[])
 
-    engine = native_scene_state.CORONA_ENGINE_OVERRIDE
+    engine = native_scene_state.EDITOR_API_OVERRIDE.engine
     assert repaired == 1
     assert engine.transform_calls
     assert engine.transform_calls[0][2]["geometry"]["position"] == [0.0, 0.52, 0.0]

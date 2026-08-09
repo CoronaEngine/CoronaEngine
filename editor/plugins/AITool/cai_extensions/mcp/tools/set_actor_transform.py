@@ -24,7 +24,7 @@ class SetActorTransformInput(BaseModel):
     ground_clearance: float = Field(default=0.02, description="Ground clearance")
 
 
-def _build_set_actor_transform_tool(scene_manager) -> StructuredTool:
+def _build_set_actor_transform_tool(_scene_manager=None) -> StructuredTool:
     def _set_actor_transform(*, scene_name: str = DEFAULT_SCENE_NAME, actor_name: str, position: Optional[Tuple[float, float, float]] = None, rotation: Optional[Tuple[float, float, float]] = None, scale: Optional[Tuple[float, float, float]] = None, snap_to_ground: bool = True, ground_y: float = 0.0, ground_clearance: float = 0.02) -> str:
         try:
             if position is None and rotation is None and scale is None:
@@ -83,8 +83,7 @@ def _build_set_actor_transform_tool(scene_manager) -> StructuredTool:
 
 
 def load_set_actor_transform_tools() -> List[StructuredTool]:
-    from CoronaCore.core.managers import scene_manager
-    return [_build_set_actor_transform_tool(scene_manager)]
+    return [_build_set_actor_transform_tool()]
 
 
 __all__ = ["load_set_actor_transform_tools"]

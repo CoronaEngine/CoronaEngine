@@ -510,6 +510,41 @@ _WALL_MOUNT_HEIGHTS: Dict[str, float] = {
 }
 
 
+class _NativePlacementScene:
+    """Read-only scene facade backed by the aggregate scene snapshot."""
+
+    def __init__(self, actors: List[Any]):
+        self._actors = list(actors)
+
+    def find_actor(self, name: str):
+        wanted = str(name or "").lower()
+        for actor in self._actors:
+            actor_name = str(getattr(actor, "name", "") or "").lower()
+            if actor_name == wanted:
+                return actor
+        return None
+
+    def get_actors(self):
+        return list(self._actors)
+
+
+def _resolve_tier2_scene(scene_name: str):
+    """Resolve tier2's read-only scene view through the aggregate adapter first."""
+    try:
+        from ...mcp.tools import native_scene_state
+
+        actors = native_scene_state.native_actor_views_with_legacy_fallback(
+            scene_name or ""
+        )
+        if actors:
+            return _NativePlacementScene(actors)
+    except Exception as exc:
+        logger.info("tier2_place: aggregate scene resolver unavailable: %s", exc)
+        return None
+
+    return None
+
+
 def _validate_positions(
     items: List[Dict[str, Any]], room_size: List[float],
 ) -> int:
@@ -742,42 +777,34 @@ def _fix_wall_objects(scene_name: str, wall_names: List[str]) -> int:
     """挂墙物体直接修正 Y 坐标 (不参与物理, 物理会让它们掉到地上)。"""
     if not wall_names:
         return 0
+
+    # Wall placement only changes the actor transform, so use the aggregate
+    # value-object contract before entering the old Python Scene fallback.
     try:
-        from CoronaCore.core.managers import scene_manager
-        routes = scene_manager.list_all()
-        if not routes:
-            return 0
-        scene = scene_manager.get(routes[0])
-        if scene is None:
-            return 0
+        from ...mcp.tools.native_scene_state import find_actor_with_legacy_fallback
 
         fixed = 0
         for name in wall_names:
-            actor = scene.find_actor(name)
+            actor = find_actor_with_legacy_fallback(scene_name, name)
             if actor is None:
                 continue
-            try:
-                pos = list(actor.get_position())
-                old_y = pos[1]
-                # 根据类型确定目标高度
-                target_y = old_y  # 默认保持
-                for kw, height in _WALL_MOUNT_HEIGHTS.items():
-                    if kw in name:
-                        target_y = height
-                        break
-                if target_y != old_y:
-                    pos[1] = target_y
-                    actor.set_position(pos)
-                    logger.info("[physics] %s wall Y=%.3f → %.3f", name, old_y, target_y)
-                    fixed += 1
-            except Exception as e:
-                logger.info("[physics] 挂墙修正失败 %s: %s", name, e)
-
+            pos = actor.get_position()
+            old_y = pos[1]
+            target_y = old_y
+            for kw, height in _WALL_MOUNT_HEIGHTS.items():
+                if kw in name:
+                    target_y = height
+                    break
+            if target_y != old_y:
+                pos[1] = target_y
+                actor.set_position(pos)
+                logger.info("[physics] %s wall Y=%.3f → %.3f", name, old_y, target_y)
+                fixed += 1
         if fixed:
-            logger.info("[physics] 挂墙修正: %d 个物体", fixed)
+            logger.info("[physics] native 挂墙修正: %d 个物体", fixed)
         return fixed
-    except Exception as e:
-        logger.info("[physics] 挂墙修正异常: %s", e)
+    except Exception as exc:
+        logger.info("[physics] 挂墙修正异常: %s", exc)
         return 0
 
 
@@ -795,34 +822,29 @@ def _apply_physics_settlement(scene_name: str, all_actor_names: List[str]) -> in
     # 落地物体物理沉降
     if not floor_names:
         return wall_fixed
-    try:
-        from CoronaCore.core.managers import scene_manager
-        routes = scene_manager.list_all()
-        if not routes:
-            return 0
-        scene = scene_manager.get(routes[0])
-        if scene is None:
-            return 0
 
-        # 开启物理
+    try:
+        from ...mcp.tools.native_scene_state import (
+            find_actor_with_legacy_fallback,
+            set_actor_physics_value,
+        )
+
         actors = []
         for name in floor_names:
-            actor = scene.find_actor(name)
+            actor = find_actor_with_legacy_fallback(scene_name, name)
             if actor is None:
                 continue
-            mech = getattr(actor, "_mechanics", None)
-            if mech is None:
-                continue
             try:
-                mech.set_damping(0.9)
-                mech.set_restitution(0.1)
-                mech.set_physics_enabled(True)
-                actors.append((actor, name))
-            except Exception as e:
-                logger.info("[physics] 启用失败 %s: %s", name, e)
+                if set_actor_physics_value(
+                    actor,
+                    {"damping": 0.9, "restitution": 0.1, "physics_enabled": True},
+                ):
+                    actors.append((actor, name))
+            except Exception as exc:
+                logger.info("[physics] 启用失败 %s: %s", name, exc)
 
         if not actors:
-            return 0
+            return wall_fixed
 
         # 等待沉降 (1 秒足够 60fps × 0.9 阻尼快速稳定)
         time.sleep(1.2)
@@ -831,18 +853,18 @@ def _apply_physics_settlement(scene_name: str, all_actor_names: List[str]) -> in
         settled = 0
         for actor, name in actors:
             try:
-                actor._mechanics.set_physics_enabled(False)
+                set_actor_physics_value(actor, {"physics_enabled": False})
                 pos = actor.get_position()
                 logger.info("[physics] %s → Y=%.3f", name, pos[1])
                 settled += 1
-            except Exception as e:
-                logger.info("[physics] 关闭失败 %s: %s", name, e)
+            except Exception as exc:
+                logger.info("[physics] 关闭失败 %s: %s", name, exc)
 
         logger.info("[physics] 沉降完成: %d/%d 个物体", settled, len(actors))
-        return settled
-    except Exception as e:
-        logger.info("[physics] 沉降异常: %s", e)
-        return 0
+        return wall_fixed + settled
+    except Exception as exc:
+        logger.info("[physics] 沉降异常: %s", exc)
+        return wall_fixed
 
 
 def _cleanup_tier_actors(
@@ -885,42 +907,53 @@ def _verify_mechanics_available(scene_name: str) -> None:
         return
     _MECHANICS_VERIFIED = True
 
+    # Diagnostics are read-only and can use the authoritative aggregate
+    # snapshot.  Do not obtain an engine Actor merely to inspect Mechanics.
     try:
-        from CoronaCore.core.managers import scene_manager
-        routes = scene_manager.list_all()
-        if not routes:
-            logger.info("[mechanics_verify] 无已加载场景, 跳过")
-            return
-        scene = scene_manager.get(routes[0])
-        actors = scene.get_actors()
-        if not actors:
-            logger.info("[mechanics_verify] 场景无 actor, 跳过")
-            return
+        from ...mcp.tools import native_scene_state
 
-        sample = actors[0]
-        has_mechanics = getattr(sample, "_mechanics", None) is not None
-        has_physics = False
-        aabb_ok = False
-        if has_mechanics:
-            try:
-                has_physics = sample._mechanics.get_physics_enabled()
-            except Exception:
-                pass
-        try:
-            aabb = sample.get_world_aabb()
-            aabb_ok = aabb is not None and len(aabb) >= 6
-        except Exception:
-            pass
-
-        logger.info(
-            "[mechanics_verify] actor=%s  _mechanics=%s  physics_enabled=%s  aabb=%s",
-            getattr(sample, "name", "?"),
-            has_mechanics,
-            has_physics,
-            aabb_ok,
+        actors = native_scene_state.native_actor_views_with_legacy_fallback(
+            scene_name or ""
         )
-    except Exception as e:
-        logger.info("[mechanics_verify] 检测失败: %s", e)
+        if not actors and scene_name:
+            actors = native_scene_state.native_actor_views_with_legacy_fallback("")
+        if actors:
+            sample = actors[0]
+            native_mechanics = getattr(sample, "mechanics", None)
+            legacy_mechanics = None
+            if isinstance(native_mechanics, dict):
+                mechanics = native_mechanics
+                has_mechanics = True
+            else:
+                legacy_mechanics = getattr(sample, "_mechanics", None)
+                mechanics = {}
+                has_mechanics = legacy_mechanics is not None
+                if legacy_mechanics is not None:
+                    try:
+                        mechanics["physics_enabled"] = (
+                            legacy_mechanics.get_physics_enabled()
+                        )
+                    except Exception:
+                        pass
+            has_physics = bool(mechanics.get("physics_enabled")) if has_mechanics else False
+            aabb_ready = bool(getattr(sample, "bounds_ready", False))
+            if not aabb_ready:
+                try:
+                    aabb = sample.get_world_aabb()
+                    aabb_ready = aabb is not None and len(aabb) >= 6
+                except Exception:
+                    pass
+            logger.info(
+                "[mechanics_verify] actor=%s  mechanics=%s  physics_enabled=%s  aabb=%s",
+                getattr(sample, "name", "?"),
+                has_mechanics,
+                has_physics,
+                aabb_ready,
+            )
+            return
+    except Exception as exc:
+        logger.info("[mechanics_verify] native snapshot unavailable: %s", exc)
+        logger.info("[mechanics_verify] 无已加载场景, 跳过")
 
 
 def _import_actors(actors: List[Dict[str, Any]], scene_name: str, skip_names: set = None) -> tuple:
@@ -1331,15 +1364,8 @@ def tier2_place_node(state: Dict[str, Any]) -> Dict[str, Any]:
     scene_name = metadata.get("scene_name", "composed_scene")
     asset_meta = intermediate.get("asset_metadata", {})
 
-    # 获取场景对象用于语义位置计算
-    scene = None
-    try:
-        from CoronaCore.core.managers import scene_manager
-        routes = scene_manager.list_all()
-        if routes:
-            scene = scene_manager.get(routes[0])
-    except Exception:
-        pass
+    # 只读场景事实优先来自 native scene snapshot；旧宿主由集中兼容入口回退。
+    scene = _resolve_tier2_scene(scene_name)
     if scene is None:
         logger.warning("tier2_place: 无法获取场景, 回退绝对坐标")
         return _place_with_absolute_coords(state, 2, tier2_items, TIER2_PLACE_PROMPT)

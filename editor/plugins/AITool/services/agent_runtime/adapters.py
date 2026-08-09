@@ -2673,9 +2673,7 @@ def _create_model_provider(model_provider_factory: Callable[[], Any] | None) -> 
     if model_provider_factory is not None:
         return model_provider_factory()
 
-    from plugins.AITool.cai_extensions.agent.model_provider import ModelProvider
-
-    return ModelProvider()
+    raise RuntimeError("legacy model provider factory was not injected")
 
 
 def _model_resources_from_payload(payload: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -3713,9 +3711,12 @@ def _visible_model_path_candidates(path_text: str) -> list[Any]:
     from pathlib import Path
 
     raw = Path(path_text)
-    candidates = [raw]
-    if not raw.is_absolute():
-        candidates.append(Path.cwd() / raw)
+    if raw.is_absolute():
+        candidates = [raw]
+    else:
+        from runtime import project_context
+
+        candidates = [project_context.get_project_root() / raw, raw]
     visible = []
     for candidate in candidates:
         try:

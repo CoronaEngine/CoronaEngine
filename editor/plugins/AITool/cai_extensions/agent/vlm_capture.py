@@ -6,7 +6,6 @@ views, hidden review camera, base_color only.
 from __future__ import annotations
 
 import logging
-import json
 import math
 import os
 import hashlib
@@ -38,7 +37,7 @@ class NativeSceneRef:
 def get_project_screenshots_root() -> Path:
     """Return the active project's screenshots directory."""
     try:
-        from Quasar.ai_config.paths_config import get_project_screenshots_dir
+        from config.paths_config import get_project_screenshots_dir
         return Path(get_project_screenshots_dir())
     except Exception as exc:
         logger.debug("[VlmCapture] project screenshots resolver unavailable: %s", exc)
@@ -48,7 +47,12 @@ def get_project_screenshots_root() -> Path:
         root = Path(override)
     else:
         project_root = os.environ.get("CAI_PROJECT_ROOT")
-        root = Path(project_root) / "screenshots" if project_root else Path(os.getcwd()) / "screenshots"
+        if project_root:
+            root = Path(project_root) / "screenshots"
+        else:
+            from runtime import project_context
+
+            root = project_context.get_project_root() / "screenshots"
     root.mkdir(parents=True, exist_ok=True)
     return root
 
@@ -231,18 +235,15 @@ class VlmCaptureResult:
 def _resolve_scene(scene_name: str, scene: Any = None) -> Any:
     if scene is not None:
         return scene
+
     try:
-        from CoronaCore.core.managers import scene_manager
-        if scene_name:
-            found = scene_manager.get(scene_name)
-            if found is not None:
-                return found
-        routes = scene_manager.list_all()
-        found = scene_manager.get(routes[0]) if routes else None
-        if found is not None:
-            return found
+        from ..mcp.tools.native_scene_state import resolve_scene_value
+
+        resolved = resolve_scene_value(scene_name or "")
+        if resolved is not None:
+            return resolved
     except Exception as exc:
-        logger.warning("[VlmCapture] resolve scene failed: %s", exc)
+        logger.debug("[VlmCapture] aggregate scene resolver unavailable: %s", exc)
     route = str(scene_name or "").strip()
     return NativeSceneRef(route=route, name=route)
 
@@ -280,47 +281,66 @@ def _native_scene_route(scene: Any) -> str:
     return str(getattr(scene, "route", "") or getattr(scene, "name", "") or "")
 
 
-def _native_bounds_json(method_name: str, *args: str) -> Optional[dict]:
+def _editor_api():
     try:
-        from CoronaCore.core.corona_editor import CoronaEditor
+        from api.editor_api import CoronaEditorApi
     except Exception as exc:
-        logger.debug("[VlmCapture] native bounds bridge unavailable: %s", exc)
+        logger.debug("[VlmCapture] editor aggregate API unavailable: %s", exc)
         return None
-    method = getattr(CoronaEditor.CoronaEngine, method_name, None)
-    if not callable(method):
+
+    return CoronaEditorApi
+
+
+def _native_scene_snapshot(scene: Any) -> Optional[dict]:
+    api = _editor_api()
+    getter = getattr(getattr(api, "scene", None), "get_snapshot", None) if api else None
+    if not callable(getter):
         return None
     try:
-        raw = method(*args)
-        result = json.loads(raw) if isinstance(raw, str) else raw
+        result = getter(_native_scene_route(scene))
     except Exception as exc:
-        logger.debug("[VlmCapture] native bounds call failed %s args=%s error=%s",
-                     method_name, args, exc)
+        logger.debug("[VlmCapture] scene snapshot aggregate call failed error=%s", exc)
         return None
     return result if isinstance(result, dict) else None
+
+
+def _native_actor_record(snapshot: Optional[dict], actor_name: Optional[str]) -> Optional[dict]:
+    if not actor_name or not isinstance(snapshot, dict):
+        return None
+    actors = snapshot.get("actors") if isinstance(snapshot.get("actors"), list) else []
+    wanted = str(actor_name)
+    shell_wanted = f"__shell_{wanted}" if not wanted.startswith("__shell_") else wanted
+    for actor in actors:
+        if not isinstance(actor, dict):
+            continue
+        names = {
+            str(actor.get("name") or ""),
+            str(actor.get("actor_guid") or ""),
+            str(actor.get("handle") or ""),
+        }
+        if wanted in names or shell_wanted in names:
+            return actor
+        if wanted.casefold() and any(name.casefold() == wanted.casefold() for name in names if name):
+            return actor
+    return None
 
 
 def _native_actor_aabb(scene: Any, actor_name: Optional[str]) -> Optional[List[float]]:
-    if not actor_name:
-        return None
-    result = _native_bounds_json(
-        "get_editor_actor_bounds",
-        _native_scene_route(scene),
-        str(actor_name),
-    )
-    if not result or result.get("status") not in ("success", "ok"):
-        return None
-    return _coerce_aabb(result.get("aabb"))
+    actor = _native_actor_record(_native_scene_snapshot(scene), actor_name)
+    return _coerce_aabb(actor.get("world_aabb")) if actor else None
 
 
 def _native_actor_geometry_status(scene: Any, actor_name: Optional[str]) -> Optional[dict]:
-    if not actor_name:
+    snapshot = _native_scene_snapshot(scene)
+    actor = _native_actor_record(snapshot, actor_name)
+    if actor is None:
         return None
-    result = _native_bounds_json(
-        "get_editor_actor_geometry_status",
-        _native_scene_route(scene),
-        str(actor_name),
-    )
-    return result if isinstance(result, dict) else None
+    return {
+        "status": snapshot.get("status", "success") if isinstance(snapshot, dict) else "success",
+        "ready": bool(actor.get("render_ready", actor.get("bounds_ready"))),
+        "failed": bool(actor.get("render_failed")),
+        "gpu_build_state": actor.get("gpu_build_state", ""),
+    }
 
 
 def _wait_for_native_actor_geometry_ready(
@@ -378,7 +398,7 @@ def _scene_snapshot_bounds_ready(snapshot: Optional[dict]) -> tuple[bool, str]:
 
 
 def _wait_for_native_scene_geometry_ready(scene: Any, timeout_sec: float) -> tuple[bool, str]:
-    status = _native_bounds_json("get_editor_scene_snapshot", _native_scene_route(scene))
+    status = _native_scene_snapshot(scene)
     ready, reason = _scene_snapshot_bounds_ready(status)
     if ready:
         return True, reason
@@ -389,17 +409,15 @@ def _wait_for_native_scene_geometry_ready(scene: Any, timeout_sec: float) -> tup
         if time.monotonic() >= deadline:
             return False, f"scene_geometry_not_ready:{last_reason}"
         time.sleep(_READY_POLL_INTERVAL)
-        status = _native_bounds_json("get_editor_scene_snapshot", _native_scene_route(scene))
+        status = _native_scene_snapshot(scene)
         ready, last_reason = _scene_snapshot_bounds_ready(status)
         if ready:
             return True, last_reason
 
 
 def _native_scene_aabb(scene: Any) -> Optional[List[float]]:
-    result = _native_bounds_json("get_editor_scene_bounds", _native_scene_route(scene))
-    if not result or result.get("status") not in ("success", "ok"):
-        return None
-    return _coerce_aabb(result.get("aabb"))
+    snapshot = _native_scene_snapshot(scene)
+    return _coerce_aabb(snapshot.get("scene_aabb")) if snapshot else None
 
 
 def resolve_vlm_target_bounds(scene: Any, actor_name: Optional[str] = None, scope: str = "actor") -> TargetBounds:
@@ -467,11 +485,8 @@ def build_vlm_view_poses(bounds: TargetBounds) -> List[ViewPose]:
 
 
 def _native_camera_capture_available() -> bool:
-    try:
-        from CoronaCore.core.corona_editor import CoronaEditor
-    except Exception:
-        return False
-    return callable(getattr(CoronaEditor.CoronaEngine, "capture_editor_camera_view", None))
+    api = _editor_api()
+    return callable(getattr(getattr(api, "viewport", None), "capture", None)) if api else False
 
 
 def capture_pose_with_native_camera(
@@ -482,11 +497,10 @@ def capture_pose_with_native_camera(
     view_index: int = 0,
 ) -> bool:
     try:
-        from CoronaCore.core.corona_editor import CoronaEditor
-
-        capture_editor_camera_view = getattr(CoronaEditor.CoronaEngine, "capture_editor_camera_view", None)
-        if not callable(capture_editor_camera_view):
-            logger.warning("[VlmCapture] native camera capture bridge unavailable")
+        api = _editor_api()
+        capture_viewport = getattr(getattr(api, "viewport", None), "capture", None) if api else None
+        if not callable(capture_viewport):
+            logger.warning("[VlmCapture] viewport aggregate API unavailable")
             return False
 
         engine_path, needs_copy = _engine_safe_screenshot_path(output_path, view_index)
@@ -500,13 +514,12 @@ def capture_pose_with_native_camera(
             "output_mode": VLM_OUTPUT_MODE,
             "render_backend": "native",
         }
-        raw = capture_editor_camera_view(
+        result = capture_viewport(
             _native_scene_route(scene),
             VLM_REVIEW_CAMERA_NAME,
-            json.dumps(camera_data, ensure_ascii=False),
+            camera_data,
             engine_path,
         )
-        result = json.loads(raw) if isinstance(raw, str) else raw
         saved = isinstance(result, dict) and result.get("status") in ("success", "ok")
         if saved:
             if not needs_copy:

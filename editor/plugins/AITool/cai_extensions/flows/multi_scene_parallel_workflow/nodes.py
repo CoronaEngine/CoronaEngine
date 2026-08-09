@@ -28,6 +28,7 @@ from .constants import (
     make_child_session_id,
 )
 from .progress import ParallelProgressTracker
+from .paths import resolve_multi_scene_output_dir
 
 logger = logging.getLogger(__name__)
 
@@ -223,11 +224,7 @@ def _run_phase1_for_scene(
 
     # 补齐缺失字段
     parent_output = parent_state.get("intermediate", {}).get("output_dir", "")
-    if parent_output:
-        sub_output = os.path.join(parent_output, scene_name)
-    else:
-        from pathlib import Path
-        sub_output = str(Path.cwd() / "output" / scene_name)
+    sub_output = str(resolve_multi_scene_output_dir(parent_output, child_session, scene_name))
     os.makedirs(sub_output, exist_ok=True)
     sub_state["intermediate"]["output_dir"] = sub_output
 

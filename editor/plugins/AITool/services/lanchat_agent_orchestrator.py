@@ -10,6 +10,10 @@ from typing import Any, Callable
 from .lanchat_summary_service import DiscussionState, LANChatSummaryService
 
 
+def _missing_agent_factory() -> Any:
+    raise RuntimeError("LANChat agent factory must be provided by the integration boundary")
+
+
 @dataclass
 class AgentOrchestrationResult:
     """Result sent back through C++ LANChat."""
@@ -63,7 +67,7 @@ class LanChatAgentOrchestrator:
         system_sender_id: str = "gm-system",
         system_sender_name: str = "GM",
     ) -> None:
-        self._agent_factory = agent_factory or self._default_agent_factory
+        self._agent_factory = agent_factory or _missing_agent_factory
         self._summary_service = summary_service or LANChatSummaryService()
         self._system_sender_id = system_sender_id
         self._system_sender_name = system_sender_name
@@ -953,12 +957,5 @@ class LanChatAgentOrchestrator:
     @staticmethod
     def _join_lines(items: list[str]) -> str:
         return "；".join(items) if items else "无"
-
-    @staticmethod
-    def _default_agent_factory() -> Any:
-        from plugins.AITool.cai_extensions.agent.agent_adapter import create_master_agent
-
-        return create_master_agent()
-
 
 __all__ = ["AgentOrchestrationResult", "LanChatAgentOrchestrator"]

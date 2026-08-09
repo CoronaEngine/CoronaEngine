@@ -7,7 +7,13 @@ from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field
 
 from Quasar.ai_tools.response_adapter import build_error_result, build_part, build_success_result
-from .native_scene_state import find_native_actor, get_native_scene_snapshot, native_actor_views, set_native_actor_transform
+from .native_scene_state import (
+    find_native_actor,
+    get_native_scene_snapshot,
+    list_legacy_scene_routes,
+    native_actor_views,
+    set_native_actor_transform,
+)
 from .transform_grounding import resolve_actor_overlaps, snap_actor_to_ground
 
 DEFAULT_SCENE_NAME = ""
@@ -128,13 +134,17 @@ def _build_scene_list_tool(scene_manager) -> StructuredTool:
             snapshot = get_native_scene_snapshot("")
             return _json_result({"count": 1, "scenes": [{"route": snapshot.get("scene", ""), "name": snapshot.get("scene_name", ""), "actor_count": len(snapshot.get("actors") or [])}]})
         except Exception:
-            routes = scene_manager.list_all()
+            routes = list_legacy_scene_routes(manager=scene_manager)
             return _json_result({"count": len(routes), "scenes": [{"route": route} for route in routes]})
     return StructuredTool(name="scene_list", description="List loaded scenes.", args_schema=SceneListInput, func=_scene_list)
 
 
-def load_scene_tools() -> List[StructuredTool]:
-    from CoronaCore.core.managers import scene_manager
+def load_scene_tools(scene_manager=None) -> List[StructuredTool]:
+    """Register native scene tools without importing the legacy manager.
+
+    The optional argument remains for old registries and test doubles.  Native
+    scene reads and writes are handled by ``native_scene_state``.
+    """
     return [_build_scene_list_tool(scene_manager), _build_scene_actors_tool(scene_manager), _build_scene_query_tool(scene_manager), _build_transform_tool(scene_manager)]
 
 

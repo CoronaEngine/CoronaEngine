@@ -11,16 +11,24 @@ from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 _PREVIEW_COLLISION_DELTA = 0.5
+EDITOR_API_OVERRIDE: Any | None = None
 
 
-def _engine():
+def _editor_api():
+    if EDITOR_API_OVERRIDE is not None:
+        return EDITOR_API_OVERRIDE
     try:
-        import CoronaEngine  # type: ignore
+        from api.editor_api import CoronaEditorApi
 
-        return CoronaEngine
+        return CoronaEditorApi
     except Exception as exc:
-        logger.debug("[Collab] CoronaEngine bindings unavailable: %s", exc)
+        logger.debug("[Collab] editor network API unavailable: %s", exc)
         return None
+
+
+def _network_api():
+    api = _editor_api()
+    return getattr(api, "network", None) if api is not None else None
 
 
 def _position3(position: Optional[List[float]]) -> List[float]:
@@ -32,22 +40,28 @@ def _position3(position: Optional[List[float]]) -> List[float]:
 
 class CollaborationManager:
     def lock_object(self, object_id: str, user_id: str, operation: str = "modify") -> bool:
-        engine = _engine()
-        if not engine or not hasattr(engine, "network_lock_object"):
+        network = _network_api()
+        method = getattr(network, "lock_object", None) if network else None
+        if not callable(method):
             return False
-        return bool(engine.network_lock_object(object_id, user_id, operation))
+        result = method(object_id, user_id, operation)
+        return bool(result.get("ok")) if isinstance(result, dict) else bool(result)
 
     def unlock_object(self, object_id: str, user_id: str) -> bool:
-        engine = _engine()
-        if not engine or not hasattr(engine, "network_unlock_object"):
+        network = _network_api()
+        method = getattr(network, "unlock_object", None) if network else None
+        if not callable(method):
             return False
-        return bool(engine.network_unlock_object(object_id, user_id))
+        result = method(object_id, user_id)
+        return bool(result.get("ok")) if isinstance(result, dict) else bool(result)
 
     def is_locked(self, object_id: str) -> Optional[str]:
-        engine = _engine()
-        if not engine or not hasattr(engine, "network_locked_by"):
+        network = _network_api()
+        method = getattr(network, "get_lock_owner", None) if network else None
+        if not callable(method):
             return None
-        owner = engine.network_locked_by(object_id)
+        result = method(object_id)
+        owner = result.get("owner") if isinstance(result, dict) else result
         return owner or None
 
     def broadcast_intent(
@@ -57,9 +71,11 @@ class CollaborationManager:
         preview_position: List[float] = None,
         status: str = "placing_object",
     ):
-        engine = _engine()
-        if engine and hasattr(engine, "network_broadcast_intent"):
-            engine.network_broadcast_intent(user_id, tooltip, _position3(preview_position), status)
+        network = _network_api()
+        method = getattr(network, "broadcast_intent", None) if network else None
+        if callable(method):
+            return method(user_id, tooltip, _position3(preview_position), status)
+        return None
 
     def clear_intent(self, user_id: str):
         self.broadcast_intent(user_id, "", [0.0, 0.0, 0.0], "idle")
@@ -76,12 +92,14 @@ class CollaborationManager:
         position: List[float],
         exclude_user: bool = True,
     ) -> Optional[str]:
-        engine = _engine()
-        if not engine or not hasattr(engine, "network_check_preview_collision"):
+        network = _network_api()
+        method = getattr(network, "check_preview_collision", None) if network else None
+        if not callable(method):
             return None
-        conflict = engine.network_check_preview_collision(
+        result = method(
             user_id, _position3(position), _PREVIEW_COLLISION_DELTA
         )
+        conflict = result.get("conflict_user_id") if isinstance(result, dict) else result
         if exclude_user and conflict == user_id:
             return None
         return conflict or None

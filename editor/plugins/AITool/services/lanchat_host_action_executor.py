@@ -8,6 +8,15 @@ from collections import deque
 from dataclasses import dataclass
 from typing import Any, Callable, Deque
 
+try:
+    from api.editor_api import (
+        get_lan_chat_transport_adapter,
+        get_network_adapter,
+    )
+except Exception:  # pragma: no cover - standalone test/import fallback
+    get_lan_chat_transport_adapter = None
+    get_network_adapter = None
+
 
 _SENSITIVE_TEXT_MARKERS = (
     "prompt",
@@ -63,8 +72,18 @@ class LanChatHostActionExecutor:
         system_sender_name: str = "GM",
     ) -> None:
         self._corona_engine = corona_engine
+        self._network_api = (
+            get_network_adapter(corona_engine)
+            if callable(get_network_adapter)
+            else corona_engine
+        )
+        self._lan_chat_transport = (
+            get_lan_chat_transport_adapter(corona_engine)
+            if callable(get_lan_chat_transport_adapter)
+            else None
+        )
         self._agent_factory = agent_factory
-        self._engine_gate = engine_gate or self._default_engine_gate()
+        self._engine_gate = engine_gate
         self._structured_action_handler = structured_action_handler
         self._send_audit_callback = send_audit_callback
         self._allow_legacy_agent_fallback = bool(allow_legacy_agent_fallback)
@@ -75,6 +94,9 @@ class LanChatHostActionExecutor:
         self._process_lock = threading.RLock()
         self._agent: Any = None
         self._logger = logging.getLogger(__name__)
+
+    def _has_network_transport(self) -> bool:
+        return self._network_api is not None or self._lan_chat_transport is not None
 
     def enqueue(self, action_payload: dict[str, Any]) -> int:
         payload = dict(action_payload or {})
@@ -264,16 +286,17 @@ class LanChatHostActionExecutor:
         return self._agent
 
     def _broadcast_status(self, payload: dict[str, Any], status: str) -> None:
-        if not self._corona_engine:
+        if not self._has_network_transport():
             return
         source_user_id = str(payload.get("source_user_id") or "unknown")
         tooltip = self._safe_text(payload.get("intent_text") or payload.get("proposal_id") or status)
         visible_status = self._visible_status_text(status)
-        if hasattr(self._corona_engine, "network_send_system_message_ex"):
+        transport = self._lan_chat_transport
+        if transport is not None and hasattr(transport, "send_system_message"):
             try:
                 text = f"【执行状态】{visible_status}: {tooltip}"
                 self._audit_send(payload, status, text, "action_status", "host_action_status_ex", "requested")
-                sent = bool(self._corona_engine.network_send_system_message_ex(
+                sent = bool(transport.send_system_message(
                     self._system_sender_id,
                     self._system_sender_name,
                     text,
@@ -305,7 +328,8 @@ class LanChatHostActionExecutor:
                     "failed",
                     sent=False,
                 )
-        if not hasattr(self._corona_engine, "network_broadcast_intent"):
+        network = self._network_api
+        if not network or not hasattr(network, "broadcast_intent"):
             return
         try:
             self._audit_send(
@@ -316,12 +340,13 @@ class LanChatHostActionExecutor:
                 "host_action_intent_broadcast",
                 "requested",
             )
-            sent = bool(self._corona_engine.network_broadcast_intent(
+            result = network.broadcast_intent(
                 source_user_id,
                 tooltip,
                 [0.0, 0.0, 0.0],
                 status,
-            ))
+            )
+            sent = bool(result.get("ok")) if isinstance(result, dict) else bool(result)
             self._audit_send(
                 payload,
                 status,
@@ -353,15 +378,16 @@ class LanChatHostActionExecutor:
         payload: dict[str, Any] | None = None,
         status: str = "",
     ) -> None:
-        if not self._corona_engine:
+        if not self._has_network_transport():
             return
         payload = payload or {}
         safe_message = self._safe_text(message)
         try:
-            if hasattr(self._corona_engine, "network_send_system_message_ex"):
+            transport = self._lan_chat_transport
+            if transport is not None and hasattr(transport, "send_system_message"):
                 text = f"【执行结果】{safe_message}"
                 self._audit_send(payload, status or "executed", text, "action_status", "host_action_result_ex", "requested")
-                sent = bool(self._corona_engine.network_send_system_message_ex(
+                sent = bool(transport.send_system_message(
                     self._system_sender_id,
                     self._system_sender_name,
                     text,
@@ -378,23 +404,6 @@ class LanChatHostActionExecutor:
                     text,
                     "action_status",
                     "host_action_result_ex",
-                    "succeeded" if sent else "failed",
-                    sent=sent,
-                )
-            else:
-                text = f"【执行结果】{safe_message}"
-                self._audit_send(payload, status or "executed", text, "action_status", "host_action_result", "requested")
-                sent = bool(self._corona_engine.network_send_system_message(
-                    self._system_sender_id,
-                    self._system_sender_name,
-                    text,
-                ))
-                self._audit_send(
-                    payload,
-                    status or "executed",
-                    text,
-                    "action_status",
-                    "host_action_result",
                     "succeeded" if sent else "failed",
                     sent=sent,
                 )
@@ -514,15 +523,5 @@ class LanChatHostActionExecutor:
             keep = text[:first].strip(" \t\r\n,;；。")
             return keep or "已收到确认动作，内部执行细节已隐藏。"
         return text
-
-    @staticmethod
-    def _default_engine_gate() -> Any:
-        try:
-            from plugins.AITool.cai_extensions.agent.engine_write_gate import get_engine_write_gate
-
-            return get_engine_write_gate()
-        except Exception:
-            return None
-
 
 __all__ = ["HostActionExecutionResult", "LanChatHostActionExecutor"]

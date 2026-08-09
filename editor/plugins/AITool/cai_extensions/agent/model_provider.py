@@ -70,9 +70,9 @@ def _resolve_model_file(path: str) -> str:
         candidates.append(raw_path)
     else:
         try:
-            paths_config = _import_quasar_module("Quasar.ai_config.paths_config")
-            project_path = Path(paths_config._get_active_project_path())
-            candidates.append(project_path / raw_path)
+            from runtime.project_context import get_project_root
+
+            candidates.append(get_project_root() / raw_path)
         except Exception:
             pass
         candidates.append(raw_path)

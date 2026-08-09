@@ -16,7 +16,7 @@ from .helpers import (
     wait_for_pending_mesh,
 )
 from .progress import publish_user_progress
-from .test_cases import get_test_case
+from ..workflow_test_support import get_test_case
 
 logger = logging.getLogger(__name__)
 

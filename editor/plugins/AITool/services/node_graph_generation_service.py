@@ -27,12 +27,17 @@ from typing import Any
 from .node_graph_review_service import NodeGraphReviewService
 
 try:
-    from editor.backend.blockly.ai_node_graph_contract import (
+    from script_runtime.blockly.ai_node_graph_contract import (
         load_contract_catalog,
         validate_generated_node_graph,
     )
-except ImportError:  # Packaged editor layout places ``backend`` directly on sys.path.
-    from backend.blockly.ai_node_graph_contract import (
+except ModuleNotFoundError as exc:
+    # Tests and package consumers may import the editor as ``editor.*`` while
+    # the embedded host exposes ``editor`` itself as the import root. Both
+    # paths point to the same canonical script runtime package.
+    if exc.name != "script_runtime":
+        raise
+    from editor.script_runtime.blockly.ai_node_graph_contract import (
         load_contract_catalog,
         validate_generated_node_graph,
     )

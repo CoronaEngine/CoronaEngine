@@ -227,7 +227,7 @@ class CabbageWorkflowSyncPlugin:
         # 联机 demo 全部不可用。
         try:
             from Quasar.ai_workflow import register_workflow_execution_scope_factory
-            from CoronaCore.core import network_sync_policy
+            from runtime import network_sync_policy
         except Exception as exc:
             logger.warning(
                 "[cai_extensions] workflow sync scope unavailable (Quasar 版本缺 "

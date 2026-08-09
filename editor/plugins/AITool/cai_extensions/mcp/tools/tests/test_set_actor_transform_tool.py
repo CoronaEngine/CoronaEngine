@@ -16,7 +16,7 @@ from editor.plugins.AITool.cai_extensions.mcp.tools import native_scene_state as
 from editor.plugins.AITool.cai_extensions.mcp.tools.set_actor_transform import _build_set_actor_transform_tool
 
 
-class FakeEngine:
+class FakeEditorApi:
     def __init__(self) -> None:
         self.snapshot = {
             "status": "success",
@@ -38,13 +38,19 @@ class FakeEngine:
             ],
         }
 
-    def get_editor_scene_snapshot(self, scene_name: str) -> str:
-        return json.dumps(self.snapshot)
+        self.scene = self.SceneApi(self)
 
-    def set_editor_actor_transform(self, scene_name: str, actor_name: str, transform_json: str) -> str:
-        actor = self.snapshot["actors"][0]
-        actor["geometry"].update(json.loads(transform_json)["geometry"])
-        return json.dumps({"status": "success", "scene": scene_name, "actor": actor})
+    class SceneApi:
+        def __init__(self, owner) -> None:
+            self.owner = owner
+
+        def get_snapshot(self, scene_name: str) -> dict:
+            return self.owner.snapshot
+
+        def set_actor_transform(self, scene_name: str, actor_name: str, transform: dict) -> dict:
+            actor = self.owner.snapshot["actors"][0]
+            actor["geometry"].update(transform["geometry"])
+            return {"status": "success", "scene": scene_name, "actor": actor}
 
 
 def _payload_from_envelope(raw: str) -> dict:
@@ -55,10 +61,10 @@ def _payload_from_envelope(raw: str) -> dict:
 
 class SetActorTransformToolTests(unittest.TestCase):
     def setUp(self) -> None:
-        state.CORONA_ENGINE_OVERRIDE = FakeEngine()
+        state.EDITOR_API_OVERRIDE = FakeEditorApi()
 
     def tearDown(self) -> None:
-        state.CORONA_ENGINE_OVERRIDE = None
+        state.EDITOR_API_OVERRIDE = None
 
     def test_set_actor_transform_tool_returns_engine_transform_sync_identity(self) -> None:
         tool = _build_set_actor_transform_tool(None)

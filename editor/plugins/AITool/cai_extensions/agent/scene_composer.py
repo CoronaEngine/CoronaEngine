@@ -25,10 +25,44 @@ from typing import Any, Dict, List, Optional, Tuple
 logger = logging.getLogger(__name__)
 
 
+def _actor_name(actor: Any) -> str:
+    value = getattr(actor, "name", None)
+    if value is None:
+        getter = getattr(actor, "get_name", None)
+        value = getter() if callable(getter) else ""
+    return str(value or "")
+
+
+def _update_actor_physics(actor: Any, **values: Any) -> bool:
+    """Update physics through the aggregate actor view or legacy fallback."""
+    setter = getattr(actor, "set_mechanics", None)
+    if callable(setter):
+        setter(values)
+        return True
+
+    mechanics = getattr(actor, "_mechanics", None)
+    if mechanics is None:
+        return False
+    updated = False
+    for key, value in values.items():
+        method = getattr(mechanics, f"set_{key}", None)
+        if callable(method):
+            method(value)
+            updated = True
+    return updated
+
+
 def _safe_generated_asset_name(value: str, fallback: str = "scene") -> str:
     text = re.sub(r"[^0-9A-Za-z_.\-\u4e00-\u9fff]+", "_", str(value or "").strip())
     text = text.strip("._-")
     return (text or fallback)[:48]
+
+
+def _generated_asset_project_root() -> Path:
+    """Return the canonical project root for generated scene assets."""
+    from runtime import project_context
+
+    return project_context.get_project_root().resolve()
 
 
 def _build_room_box_obj(width: float, height: float, depth: float,
@@ -1385,11 +1419,7 @@ class SceneComposer:
         if self._generated_asset_abs_dir is not None and self._generated_asset_rel_dir:
             return self._generated_asset_abs_dir, self._generated_asset_rel_dir
 
-        try:
-            from Quasar.ai_config.paths_config import _get_active_project_path
-            project_root = Path(_get_active_project_path()).resolve()
-        except Exception:
-            project_root = Path(os.getcwd()).resolve()
+        project_root = _generated_asset_project_root()
 
         scene_slug = _safe_generated_asset_name(self.scene_name, "scene")
         unique = f"{scene_slug}_{int(time.time() * 1000)}_{os.getpid()}_{uuid.uuid4().hex[:8]}"
@@ -1415,9 +1445,9 @@ class SceneComposer:
         ground_y: float = 0.0,
     ) -> Dict[str, Any]:
         try:
-            from CoronaCore.core.corona_editor import CoronaEditor
+            from api.editor_api import CoronaEditorApi
         except Exception as exc:
-            raise RuntimeError(f"CoronaEngine native bridge unavailable: {exc}") from exc
+            raise RuntimeError(f"Editor aggregate API unavailable: {exc}") from exc
 
         actor_data = {
             "actor_name": name,
@@ -1432,18 +1462,14 @@ class SceneComposer:
             actor_data["ground_align"] = True
             actor_data["ground_y"] = float(ground_y)
 
-        raw = CoronaEditor.CoronaEngine.create_editor_actor(
+        result = CoronaEditorApi.scene_tools.create_actor(
             self.scene_name or "",
             route,
             actor_type,
-            json.dumps(actor_data, ensure_ascii=False),
+            actor_data,
         )
-        try:
-            result = json.loads(raw) if isinstance(raw, str) else raw
-        except Exception as exc:
-            raise RuntimeError(f"native create_editor_actor returned invalid JSON: {raw!r}") from exc
         if not isinstance(result, dict):
-            raise RuntimeError(f"native create_editor_actor returned non-object: {result!r}")
+            raise RuntimeError(f"editor aggregate create_actor returned non-object: {result!r}")
         if result.get("status") not in ("success", "ok"):
             raise RuntimeError(str(result.get("message") or result.get("error") or result))
         actor = result.get("actor")
@@ -3551,12 +3577,16 @@ class SceneComposer:
                 if imported and actors:
                     import time as _t
                     try:
-                        from CoronaCore.core.managers import scene_manager as _sm
-                        scene = _sm.get("")
-                        if scene is None:
-                            routes = _sm.list_all()
-                            scene = _sm.get(routes[0]) if routes else None
-                        if scene is None:
+                        from ..mcp.tools.native_scene_state import (
+                            native_actor_views_with_legacy_fallback,
+                        )
+
+                        actors_by_name = {
+                            _actor_name(actor).lower(): actor
+                            for actor in native_actor_views_with_legacy_fallback("")
+                            if _actor_name(actor)
+                        }
+                        if not actors_by_name:
                             raise RuntimeError("无可用场景")
 
                         geo_map = {a.get("name") or a.get("source_name", ""): a.get("geometry", {})
@@ -3584,7 +3614,7 @@ class SceneComposer:
                         }
                         wall_hung_n = 0   # 15d：壁挂物计数（沿后墙横向错开）
                         for actor_name in imported:
-                            actor = scene.find_actor(actor_name) if scene else None
+                            actor = actors_by_name.get(str(actor_name).lower())
                             if actor is None:
                                 continue
 
@@ -3593,12 +3623,10 @@ class SceneComposer:
                             # wall_hung 之前是死分类：_infer_placement_type 算出但全代码零消费。
                             ptype = self._get_placement_type(actor_name, asset_meta, geo_map)
                             if ptype == "wall_hung":
-                                wmech = getattr(actor, "_mechanics", None)
-                                if wmech is not None:
-                                    try:
-                                        wmech.set_physics_enabled(False)
-                                    except Exception:
-                                        pass
+                                try:
+                                    _update_actor_physics(actor, physics_enabled=False)
+                                except Exception:
+                                    pass
                                 # 锚定链-5：贴真实 shell 内壁半径（shell_wall_r），无则兜底抽象 hd。
                                 # 定高 0.55h，多个壁挂物沿横向错开、夹在内壁半径内（不扎穿/不飘出）。
                                 wall_r = shell_wall_r if shell_wall_r > 1e-6 else (hd - 0.1)
@@ -3616,15 +3644,16 @@ class SceneComposer:
                                             actor_name, wx, h * 0.55, wz, wall_r, obj_depth)
                                 continue
 
-                            mech = getattr(actor, "_mechanics", None)
-                            if mech is not None:
-                                try:
-                                    mech.set_physics_enabled(False)
-                                    mech.set_damping(0.98)
-                                    mech.set_restitution(0.0)
-                                    mecha.append((actor, mech))
-                                except Exception:
-                                    pass
+                            try:
+                                if _update_actor_physics(
+                                    actor,
+                                    physics_enabled=False,
+                                    damping=0.98,
+                                    restitution=0.0,
+                                ):
+                                    mecha.append(actor)
+                            except Exception:
+                                pass
 
                             geo = geo_map.get(actor_name, {})
                             x, y, z = actor.get_position()
@@ -3698,15 +3727,15 @@ class SceneComposer:
 
                         # 第二步：仅一次极短暂物理消穿模（0.25s，阻尼 0.98 基本不位移）
                         if mecha:
-                            for _actor, mech in mecha:
+                            for actor in mecha:
                                 try:
-                                    mech.set_physics_enabled(True)
+                                    _update_actor_physics(actor, physics_enabled=True)
                                 except Exception:
                                     pass
                             _t.sleep(0.25)
-                            for _actor, mech in mecha:
+                            for actor in mecha:
                                 try:
-                                    mech.set_physics_enabled(False)
+                                    _update_actor_physics(actor, physics_enabled=False)
                                 except Exception:
                                     pass
 

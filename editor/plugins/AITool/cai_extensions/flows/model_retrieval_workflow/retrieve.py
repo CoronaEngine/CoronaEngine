@@ -13,7 +13,7 @@ from .formatters import NO_OUTPUT, publish_node_progress
 from .progress import publish_user_progress
 from .helpers import get_search_tool, parse_search_result
 from .local_model_library import lookup_model
-from .test_cases import get_test_case
+from ..workflow_test_support import get_test_case
 
 logger = logging.getLogger(__name__)
 

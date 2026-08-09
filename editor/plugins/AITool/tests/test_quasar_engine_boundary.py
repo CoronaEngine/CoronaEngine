@@ -38,6 +38,17 @@ class QuasarEngineBoundaryTests(unittest.TestCase):
         self.assertIsNone(paths.frontend_dist)
         self.assertIsNone(paths.script_dir)
 
+    def test_editor_paths_resolver_does_not_export_legacy_backend_layout(self):
+        path = (
+            Path(__file__).resolve().parents[1]
+            / "cai_extensions"
+            / "paths_provider.py"
+        )
+        text = path.read_text(encoding="utf-8")
+
+        self.assertNotIn("backend_root=editor_paths.backend_root", text)
+        self.assertNotIn("script_dir=editor_paths.script_dir", text)
+
     def test_local_storage_accepts_explicit_storage_root(self):
         path = QUASAR_ROOT / "ai_media_resource" / "adapter_local.py"
         text = path.read_text(encoding="utf-8")

@@ -13,7 +13,7 @@ from Quasar.ai_tools.context import reset_current_session, set_current_session
 from .constants import IMAGE_MAX_WORKERS
 from .formatters import NO_OUTPUT, format_generate_image_progress_parts
 from .helpers import extract_image_url, get_generate_image_tool
-from .test_cases import get_test_case
+from ..workflow_test_support import get_test_case
 from ..model_retrieval_workflow.local_model_library import (
     lookup_image,
     lookup_model,

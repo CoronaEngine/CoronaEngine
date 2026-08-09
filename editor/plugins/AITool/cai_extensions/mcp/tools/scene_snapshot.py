@@ -17,7 +17,7 @@ class SceneSnapshotInput(BaseModel):
     wait_for_bounds: bool = Field(default=False, description="Wait briefly for native actor bounds before returning")
 
 
-def _build_scene_snapshot_tool(scene_manager) -> StructuredTool:
+def _build_scene_snapshot_tool(_scene_manager=None) -> StructuredTool:
     def _scene_snapshot(*, scene_name: str = DEFAULT_SCENE_NAME, wait_for_bounds: bool = False) -> str:
         try:
             snapshot = get_native_scene_snapshot(scene_name, wait_for_bounds=wait_for_bounds)
@@ -43,8 +43,7 @@ def _build_scene_snapshot_tool(scene_manager) -> StructuredTool:
 
 
 def load_scene_snapshot_tools() -> List[StructuredTool]:
-    from CoronaCore.core.managers import scene_manager
-    return [_build_scene_snapshot_tool(scene_manager)]
+    return [_build_scene_snapshot_tool()]
 
 
 __all__ = ["load_scene_snapshot_tools"]

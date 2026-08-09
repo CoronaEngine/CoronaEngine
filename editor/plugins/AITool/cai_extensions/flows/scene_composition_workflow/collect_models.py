@@ -21,7 +21,7 @@ def collect_models_node(state) -> Dict[str, Any]:
 
     # --test 模式：注入测试数据，绕过上游 model_retrieval 依赖
     if metadata.get("workflow_test"):
-        from .test_cases import DEFAULT_MODELS, DEFAULT_PROMPT
+        from ..workflow_test_support import DEFAULT_MODELS, DEFAULT_PROMPT
         logger.info("collect_models: --test 模式，注入 %d 个默认测试模型", len(DEFAULT_MODELS))
         placement_items = [
             {

@@ -32,10 +32,7 @@ from .nodes import (
 )
 from ..multi_scene_parallel_workflow.nodes import classify_and_generate_terrain_node
 
-try:
-    from .test_cases import TEST_CASES
-except ImportError:
-    TEST_CASES = {}
+TEST_CASES = {}
 
 if TYPE_CHECKING:
     from langgraph.graph.state import CompiledStateGraph

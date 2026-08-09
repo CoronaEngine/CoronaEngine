@@ -19,18 +19,9 @@ DEFAULT_SCENE_NAME = ""
 
 
 def _resolve_scene(scene_manager, scene_name: str):
-    if scene_name:
-        scene = scene_manager.get(scene_name)
-        if scene is not None:
-            return scene
-        for route in scene_manager.list_all():
-            s = scene_manager.get(route)
-            if s is not None and getattr(s, "name", None) == scene_name:
-                return s
-    routes = scene_manager.list_all()
-    if routes:
-        return scene_manager.get(routes[0])
-    return None
+    from .native_scene_state import resolve_scene_value
+
+    return resolve_scene_value(scene_name, manager=scene_manager)
 
 
 # ===========================================================================
@@ -53,7 +44,7 @@ class SceneMultiViewInput(BaseModel):
 # ===========================================================================
 
 def _get_screenshot_dir() -> str:
-    from Quasar.ai_config.paths_config import get_project_screenshots_dir
+    from config.paths_config import get_project_screenshots_dir
     return str(get_project_screenshots_dir())
 
 
@@ -143,9 +134,8 @@ def _build_scene_multi_view_tool(scene_manager) -> StructuredTool:
 # ===========================================================================
 
 def load_multi_view_tools() -> List[StructuredTool]:
-    from CoronaCore.core.managers import scene_manager
     return [
-        _build_scene_multi_view_tool(scene_manager),
+        _build_scene_multi_view_tool(None),
     ]
 
 
