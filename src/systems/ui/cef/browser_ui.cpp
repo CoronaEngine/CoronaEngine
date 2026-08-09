@@ -1,6 +1,6 @@
 #include "browser_ui.h"
 
-#include <corona/systems/script/corona_engine_api.h>
+#include <corona/engine/engine_runtime_api.h>
 #include <corona/systems/ui/camera_viewport_manager.h>
 
 #include <SDL3/SDL.h>

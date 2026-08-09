@@ -5,7 +5,7 @@
 #include <corona/kernel/core/kernel_context.h>
 #include <corona/kernel/event/i_event_bus.h>
 #include <corona/shared_data_hub.h>
-#include <corona/systems/script/corona_engine_api.h>
+#include <corona/engine/engine_runtime_api.h>
 
 #include <algorithm>
 #include <cstdint>

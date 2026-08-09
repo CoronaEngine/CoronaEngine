@@ -1,7 +1,7 @@
 # =============================================================================
 # CoronaResource dependency checks
 #
-# Dependencies are resolved by Conan in misc/cmake/corona_third_party.cmake.
+# Dependencies are resolved by Conan in cmake/corona_third_party.cmake.
 # This module keeps resource-local assumptions explicit.
 # =============================================================================
 

@@ -23,7 +23,8 @@
 #include <corona/kernel/core/kernel_context.h>
 #include <corona/shared_data_hub.h>
 #include <corona/systems/network/network_system.h>
-#include <corona/systems/script/corona_engine_api.h>
+#include <corona/systems/script/camera_follow_controller.h>
+#include <corona/engine/engine_runtime_api.h>
 #include <corona/utils/path_utils.h>
 
 #include <algorithm>
@@ -530,6 +531,9 @@ struct NativeEditorActor {
     int source_scene_version{1};
     int actor_version{1};
     bool follow_camera{false};
+    bool camera_lock_enabled{false};
+    std::array<float, 3> camera_lock_position_offset{0.0f, 0.0f, 2.0f};
+    std::array<float, 3> camera_lock_rotation_offset{0.0f, 0.0f, 0.0f};
     std::uint64_t audio_resource_id{0};  // 音频物体绑定的音频资源 id（actor_type=="audio"）
     std::array<float, 3> position{0.0f, 0.0f, 0.0f};
     std::array<float, 3> rotation{0.0f, 0.0f, 0.0f};
@@ -602,6 +606,7 @@ std::filesystem::path canonical_project_dir_for_settings(const std::filesystem::
 std::string safe_project_dir_name(std::string name, const std::string& fallback);
 std::string sanitize_vision_source_id(std::string source_id);
 std::string fnv1a_hex12(std::string_view text);
+void restore_native_camera_lock_target(NativeEditorScene& scene);
 std::string encode_vision_document_data(const nlohmann::json& document);
 nlohmann::json decode_vision_document_data(const std::string& data);
 bool is_vision_resource_path_key(std::string key);
@@ -733,6 +738,74 @@ std::string route_for_project_storage(const std::filesystem::path& project_root,
     return normalize_route(path_to_utf8(source_path));
 }
 
+NativeResult create_native_scene_file(NativeEditorScene& active_scene,
+                                      const std::string& requested_name) {
+    const auto trimmed_name = trim_ascii(requested_name);
+    if (trimmed_name.empty()) {
+        return native_failure("scene_name is required", 2);
+    }
+
+    const auto requested_path = path_from_utf8(trimmed_name);
+    if (requested_path.is_absolute() || requested_path.has_parent_path()) {
+        return native_failure("scene_name must be a file name", 2);
+    }
+    if (!requested_path.extension().empty() &&
+        to_lower_ascii(requested_path.extension().string()) != ".scene") {
+        return native_failure("scene_name must use the .scene extension", 2);
+    }
+
+    auto stem = requested_path.stem().string();
+    if (stem.empty() || stem == "." || stem == "..") {
+        return native_failure("scene_name is invalid", 2);
+    }
+
+    const auto scene_dir = active_scene.project_root / "Scene";
+    std::error_code ec;
+    std::filesystem::create_directories(scene_dir, ec);
+    if (ec) {
+        return native_failure("Unable to create project Scene directory: " + ec.message(), 2);
+    }
+
+    auto scene_file = scene_dir / (stem + ".scene");
+    int index = 1;
+    while (std::filesystem::exists(scene_file, ec)) {
+        if (ec) {
+            return native_failure("Unable to inspect scene path: " + ec.message(), 2);
+        }
+        scene_file = scene_dir / (stem + "_" + std::to_string(index++) + ".scene");
+    }
+    if (ec) {
+        return native_failure("Unable to inspect scene path: " + ec.message(), 2);
+    }
+
+    std::ofstream output(scene_file, std::ios::trunc);
+    if (!output) {
+        return native_failure("Unable to create scene file: " + path_to_utf8(scene_file), 2);
+    }
+    output << "[base]\n"
+           << "name = " << stem << "\n\n"
+           << "[sun]\n"
+           << "sun_direction = 1.0, 1.0, 1.0\n"
+           << "enabled = true\n\n"
+           << "[actors]\n\n"
+           << "[scripts]\n"
+           << "path =\n\n"
+           << "[terrain]\n"
+           << "type =\n"
+           << "path =\n";
+    if (!output) {
+        return native_failure("Unable to write scene file: " + path_to_utf8(scene_file), 2);
+    }
+
+    const auto route = route_for_project_storage(
+        active_scene.project_root, path_to_utf8(scene_file));
+    return native_success({
+        {"status", "success"},
+        {"path", route},
+        {"name", stem},
+    });
+}
+
 std::string unique_actor_name(const NativeEditorScene& scene, const std::string& preferred_name) {
     const std::string base = trim_ascii(preferred_name).empty() ? "Actor" : trim_ascii(preferred_name);
     auto exists = [&](const std::string& candidate) {
@@ -822,6 +895,12 @@ std::vector<std::string> build_actors_section_lines(const NativeEditorScene& sce
                         std::to_string(std::max(actor.source_scene_version, 1)));
         lines.push_back(key + ".runtime.actor_version = " + std::to_string(std::max(actor.actor_version, 1)));
         lines.push_back(key + ".follow_camera = " + std::string(actor.follow_camera ? "true" : "false"));
+        lines.push_back(key + ".camera_lock.enabled = " +
+                        std::string(actor.camera_lock_enabled ? "true" : "false"));
+        lines.push_back(key + ".camera_lock.position_offset = " +
+                        format_float3(actor.camera_lock_position_offset));
+        lines.push_back(key + ".camera_lock.rotation_offset = " +
+                        format_float3(actor.camera_lock_rotation_offset));
         if (actor.load_status != ActorLoadStatus::Loaded) {
             lines.push_back(key + ".mechanics.physics_enabled = " +
                             std::string(actor.persisted_physics_enabled ? "true" : "false"));
@@ -867,6 +946,7 @@ std::vector<std::string> build_actors_section_lines(const NativeEditorScene& sce
             "persisted_fields", nlohmann::json::object());
         static const std::set<std::string> normalized_fields{
             "actor_guid", "actor_type", "audio_resource_id", "follow_camera", "name", "route",
+            "camera_lock.enabled", "camera_lock.position_offset", "camera_lock.rotation_offset",
             "geometry.position", "geometry.rotation", "geometry.scale",
             "material.texture", "mechanics.collision_enabled", "mechanics.collision_type",
             "mechanics.physics_enabled", "optics.diffuse", "optics.emission", "optics.metallic",
@@ -1612,6 +1692,18 @@ void load_native_actor(NativeEditorScene& scene,
         1);
     item.follow_camera = actors_section.contains(actor_key + ".follow_camera") &&
                          parse_bool(actors_section.at(actor_key + ".follow_camera"));
+    item.camera_lock_enabled = actors_section.contains(actor_key + ".camera_lock.enabled") &&
+                               parse_bool(actors_section.at(actor_key + ".camera_lock.enabled"));
+    item.camera_lock_position_offset = parse_float3(
+        actors_section.contains(actor_key + ".camera_lock.position_offset")
+            ? actors_section.at(actor_key + ".camera_lock.position_offset")
+            : "0.0, 0.0, 2.0",
+        {0.0f, 0.0f, 2.0f});
+    item.camera_lock_rotation_offset = parse_float3(
+        actors_section.contains(actor_key + ".camera_lock.rotation_offset")
+            ? actors_section.at(actor_key + ".camera_lock.rotation_offset")
+            : "0.0, 0.0, 0.0",
+        {0.0f, 0.0f, 0.0f});
     item.position = parse_float3(
         actors_section.contains(actor_key + ".geometry.position")
             ? actors_section.at(actor_key + ".geometry.position")
@@ -1805,6 +1897,7 @@ std::unique_ptr<NativeEditorScene> load_native_scene_from_ini_legacy(
     scene->engine_scene->set_simulation_enabled(true);
     scene->engine_scene->set_enabled(true);
     apply_native_scene_vision_source(*scene);
+    restore_native_camera_lock_target(*scene);
     return scene;
 }
 
@@ -1975,6 +2068,17 @@ NativeEditorActor native_actor_from_snapshot(const nlohmann::json& actor_data) {
     item.source_scene_version = std::max(actor_data.value("source_scene_version", 1), 1);
     item.actor_version = std::max(actor_data.value("actor_version", 1), 1);
     item.follow_camera = actor_data.value("follow_camera", false);
+    const auto camera_lock = actor_data.value("camera_lock", nlohmann::json::object());
+    if (camera_lock.is_object()) {
+        item.camera_lock_enabled = camera_lock.value("enabled",
+                                                       camera_lock.value("lock_to_camera", false));
+        item.camera_lock_position_offset = snapshot_float3(
+            camera_lock.value("position_offset", nlohmann::json::array()),
+            {0.0f, 0.0f, 2.0f});
+        item.camera_lock_rotation_offset = snapshot_float3(
+            camera_lock.value("rotation_offset", nlohmann::json::array()),
+            {0.0f, 0.0f, 0.0f});
+    }
     item.resolved_asset_path = actor_data.value("asset_path", std::string{});
     const auto transform = actor_data.value("transform", nlohmann::json::object());
     item.position = snapshot_float3(transform.value("position", nlohmann::json::array()),
@@ -2237,6 +2341,7 @@ NativeEditorScene& materialize_scene_snapshot_into_state(
         }
         scene.engine_scene->set_simulation_enabled(true);
         apply_native_scene_vision_source(scene);
+        restore_native_camera_lock_target(scene);
         scene.load_diagnostics = diagnostics;
         state.project_path = path_to_utf8(scene.project_root);
         return scene;
@@ -2336,8 +2441,26 @@ NativeEditorScene* reload_native_editor_scene(const std::string& project_path_ar
         throw std::runtime_error("No active project path for native editor reload");
     }
 
-    (void)scene_route_arg;
-    auto prepared = prepare_archive_load(project_path, "prompt");
+    const auto project_root = path_from_utf8(project_path);
+    auto archive_path = project_root;
+    const auto requested_route = normalize_route(scene_route_arg);
+    if (!requested_route.empty()) {
+        const auto candidate = resolve_project_path(project_root, requested_route);
+        std::error_code relative_ec;
+        const auto relative = std::filesystem::relative(candidate, project_root, relative_ec);
+        const auto candidate_extension = to_lower_ascii(candidate.extension().string());
+        const bool portable_scene = detect_scene_folder(project_root) &&
+                                     requested_route == "scene.ini";
+        if (relative_ec || !path_is_inside_project(relative) ||
+            (!portable_scene && candidate_extension != ".scene") ||
+            !std::filesystem::is_regular_file(candidate)) {
+            throw std::runtime_error("Requested scene does not exist in the active project: " +
+                                     requested_route);
+        }
+        archive_path = candidate;
+    }
+
+    auto prepared = prepare_archive_load(path_to_utf8(archive_path), "prompt");
     if (!prepared.service_ok) {
         throw std::runtime_error(prepared.error.empty() ? "Archive reload failed" : prepared.error);
     }
@@ -2605,9 +2728,10 @@ nlohmann::json actor_to_json(const NativeEditorScene& scene, const NativeEditorA
         item["material"] = {{"texture", actor.persisted_optics.texture}};
     }
     item["camera_lock"] = {
-        {"lock_to_camera", false},
-        {"position_offset", {0.0f, 0.0f, 2.0f}},
-        {"rotation_offset", {0.0f, 0.0f, 0.0f}},
+        {"enabled", actor.camera_lock_enabled},
+        {"lock_to_camera", actor.camera_lock_enabled},
+        {"position_offset", actor.camera_lock_position_offset},
+        {"rotation_offset", actor.camera_lock_rotation_offset},
     };
     return item;
 }
@@ -3494,11 +3618,51 @@ NativeResult apply_actor_operation(NativeEditorScene& scene,
                                               json_bool_at(vector, 1),
                                               json_bool_at(vector, 2));
         }
-    } else if (operation == "SetCameraLock" ||
-               operation == "SetCameraLockOffset" ||
-               operation == "SetCameraLockRotation") {
-        // Camera-lock metadata is not yet stored natively; keep the existing payload shape
-        // alive so the details panel remains usable while native persistence catches up.
+    } else if (operation == "SetCameraLock") {
+        actor.camera_lock_enabled = json_bool_at(vector, 0, false);
+        if (actor.camera_lock_enabled) {
+            auto* camera = find_native_camera(scene, {});
+            if (!camera || !camera->engine_camera || !actor.engine_actor) {
+                return native_failure("Camera-lock requires an active camera and a loaded actor", 2);
+            }
+            auto offset = actor.camera_lock_position_offset;
+            if (offset == std::array<float, 3>{0.0f, 0.0f, 2.0f}) {
+                const auto camera_position = camera->engine_camera->get_position();
+                const auto actor_position = actor.geometry
+                                                ? actor.geometry->get_position()
+                                                : actor.position;
+                for (size_t index = 0; index < offset.size(); ++index) {
+                    offset[index] = camera_position[index] - actor_position[index];
+                }
+                actor.camera_lock_position_offset = offset;
+            }
+            Corona::Systems::CameraFollowController::instance().set_target(
+                actor.engine_actor->get_handle(), camera->engine_camera->get_handle(),
+                offset[0], offset[1], offset[2]);
+        } else {
+            Corona::Systems::CameraFollowController::instance().clear_target();
+        }
+    } else if (operation == "SetCameraLockOffset") {
+        const auto offset = json_float3_value(vector);
+        if (!offset) {
+            return native_failure("Camera-lock offset requires three numbers", 2);
+        }
+        actor.camera_lock_position_offset = *offset;
+        if (actor.camera_lock_enabled) {
+            auto* camera = find_native_camera(scene, {});
+            if (!camera || !camera->engine_camera || !actor.engine_actor) {
+                return native_failure("Camera-lock requires an active camera and a loaded actor", 2);
+            }
+            Corona::Systems::CameraFollowController::instance().set_target(
+                actor.engine_actor->get_handle(), camera->engine_camera->get_handle(),
+                offset->at(0), offset->at(1), offset->at(2));
+        }
+    } else if (operation == "SetCameraLockRotation") {
+        const auto rotation = json_float3_value(vector);
+        if (!rotation) {
+            return native_failure("Camera-lock rotation requires three numbers", 2);
+        }
+        actor.camera_lock_rotation_offset = *rotation;
     } else {
         return native_failure("Unsupported actor operation: " + operation, 2);
     }
@@ -3563,11 +3727,7 @@ std::filesystem::path editor_ini_path() {
 
 std::filesystem::path project_template_path() {
     const auto editor_root = editor_root_path();
-    const auto corona_core_template = editor_root / "CoronaCore" / "demo" / "project";
-    if (std::filesystem::is_directory(corona_core_template)) {
-        return corona_core_template;
-    }
-    return editor_root / "plugins" / "ProjectLauncher" / "demo" / "project";
+    return editor_root / "plugins" / "ProjectLauncher" / "templates" / "project";
 }
 
 std::filesystem::path runtime_data_dir() {
@@ -3812,6 +3972,24 @@ const std::vector<NativeFileDialogFilter>* resource_dialog_filters(
     return nullptr;
 }
 
+void restore_native_camera_lock_target(NativeEditorScene& scene) {
+    auto& controller = Corona::Systems::CameraFollowController::instance();
+    controller.clear_target();
+    auto* camera = find_native_camera(scene, {});
+    if (!camera || !camera->engine_camera) {
+        return;
+    }
+    for (auto& actor : scene.actors) {
+        if (!actor.camera_lock_enabled || !actor.engine_actor) {
+            continue;
+        }
+        const auto& offset = actor.camera_lock_position_offset;
+        controller.set_target(actor.engine_actor->get_handle(), camera->engine_camera->get_handle(),
+                              offset[0], offset[1], offset[2]);
+        return;
+    }
+}
+
 std::optional<std::filesystem::path> select_resource_file_native(
     const std::filesystem::path& default_path,
     const std::string& file_type) {
@@ -4014,6 +4192,151 @@ void update_project_ini_native(const std::filesystem::path& project_ini,
     }
     values["last_opened"] = current_time_string();
     replace_ini_section_from_map(project_ini, "Project", values);
+}
+
+struct NativeProjectSceneIndex {
+    std::vector<std::pair<std::string, std::string>> scenes;
+    std::string entrance_scene;
+    std::string active_scene;
+};
+
+NativeProjectSceneIndex build_native_project_scene_index(
+    const NativeEditorScene& current_scene) {
+    NativeProjectSceneIndex index;
+    if (detect_scene_folder(current_scene.project_root)) {
+        index.scenes.emplace_back(current_scene.route, current_scene.name);
+        index.entrance_scene = current_scene.route;
+        index.active_scene = current_scene.route;
+        return index;
+    }
+
+    const auto project_ini = current_scene.project_root / "project.ini";
+    const auto ini = read_ini_file(project_ini);
+    const auto entrance = normalize_route(ini_value(ini, "Project", "entrance_scene"));
+    auto routes = split_csv_routes(ini_value(ini, "Project", "scenes"));
+    if (routes.empty()) {
+        const auto scene_dir = current_scene.project_root / "Scene";
+        std::error_code ec;
+        if (std::filesystem::is_directory(scene_dir, ec) && !ec) {
+            for (const auto& entry : std::filesystem::directory_iterator(scene_dir, ec)) {
+                if (ec) break;
+                if (entry.is_regular_file() &&
+                    to_lower_ascii(entry.path().extension().string()) == ".scene") {
+                    routes.push_back(route_for_project_storage(
+                        current_scene.project_root, path_to_utf8(entry.path())));
+                }
+            }
+            std::sort(routes.begin(), routes.end());
+        }
+    }
+
+    const auto append_route = [&](const std::string& raw_route) {
+        const auto route = normalize_route(raw_route);
+        if (route.empty() || std::any_of(index.scenes.begin(), index.scenes.end(),
+                                         [&](const auto& item) { return item.first == route; })) {
+            return;
+        }
+        const auto scene_file = resolve_project_path(current_scene.project_root, route);
+        std::error_code ec;
+        const auto relative = std::filesystem::relative(
+            scene_file, current_scene.project_root, ec);
+        if (ec || !path_is_inside_project(relative) ||
+            to_lower_ascii(scene_file.extension().string()) != ".scene" ||
+            !std::filesystem::is_regular_file(scene_file, ec) || ec) {
+            return;
+        }
+        const auto scene_ini = read_ini_file(scene_file);
+        const auto name = ini_value(
+            scene_ini, "scene", "name",
+            ini_value(scene_ini, "base", "name", stem_utf8(route)));
+        index.scenes.emplace_back(route, name);
+    };
+
+    for (const auto& route : routes) append_route(route);
+    if (index.scenes.empty()) append_route(current_scene.route);
+
+    index.entrance_scene = entrance;
+    if (index.scenes.empty()) {
+        index.entrance_scene.clear();
+        index.active_scene.clear();
+        return index;
+    }
+    const auto entrance_it = std::find_if(
+        index.scenes.begin(), index.scenes.end(),
+        [&](const auto& item) { return item.first == index.entrance_scene; });
+    if (entrance_it == index.scenes.end()) {
+        index.entrance_scene = index.scenes.front().first;
+    } else if (entrance_it != index.scenes.begin()) {
+        const auto entry = *entrance_it;
+        index.scenes.erase(entrance_it);
+        index.scenes.insert(index.scenes.begin(), entry);
+    }
+
+    index.active_scene = normalize_route(ini_value(ini, "Project", "active_scene"));
+    const auto active_it = std::find_if(
+        index.scenes.begin(), index.scenes.end(),
+        [&](const auto& item) { return item.first == index.active_scene; });
+    if (active_it == index.scenes.end()) {
+        index.active_scene = index.entrance_scene;
+    }
+    return index;
+}
+
+void persist_native_project_scene_index(const NativeEditorScene& scene,
+                                        const NativeProjectSceneIndex& index) {
+    if (detect_scene_folder(scene.project_root)) return;
+    const auto project_ini = scene.project_root / "project.ini";
+    if (!std::filesystem::is_regular_file(project_ini)) return;
+
+    const auto ini = read_ini_file(project_ini);
+    std::map<std::string, std::string> values;
+    const auto existing = ini.find("project");
+    if (existing != ini.end()) {
+        for (const auto& [key, value] : existing->second) values[key] = value;
+    }
+    std::ostringstream scenes;
+    for (std::size_t i = 0; i < index.scenes.size(); ++i) {
+        if (i) scenes << ",";
+        scenes << index.scenes[i].first;
+    }
+    values["scenes"] = scenes.str();
+    if (!index.entrance_scene.empty()) values["entrance_scene"] = index.entrance_scene;
+    if (!index.active_scene.empty()) values["active_scene"] = index.active_scene;
+    replace_ini_section_from_map(project_ini, "Project", values);
+}
+
+nlohmann::json make_native_scene_index_payload(const NativeEditorScene& current_scene,
+                                               const NativeProjectSceneIndex& index) {
+    nlohmann::json scenes = nlohmann::json::array();
+    std::size_t active_index = 0;
+    for (std::size_t i = 0; i < index.scenes.size(); ++i) {
+        scenes.push_back({{"path", index.scenes[i].first}, {"name", index.scenes[i].second}});
+        if (index.scenes[i].first == current_scene.route) active_index = i;
+    }
+    if (scenes.empty()) {
+        scenes.push_back({{"path", current_scene.route}, {"name", current_scene.name}});
+    }
+    return {
+        {"status", "success"},
+        {"scenes", std::move(scenes)},
+        {"active_index", active_index},
+        {"path", current_scene.route},
+        {"name", current_scene.name},
+        {"entrance_scene", index.entrance_scene},
+        {"active_scene", current_scene.route},
+    };
+}
+
+nlohmann::json make_native_main_init_payload(NativeEditorScene* current_scene) {
+    auto index = build_native_project_scene_index(*current_scene);
+    if (!index.active_scene.empty() && index.active_scene != current_scene->route) {
+        current_scene = reload_native_editor_scene("", index.active_scene);
+    }
+    if (!current_scene) {
+        throw std::runtime_error("Unable to load the active native editor scene");
+    }
+    persist_native_project_scene_index(*current_scene, index);
+    return make_native_scene_index_payload(*current_scene, index);
 }
 
 void normalize_project_runtime_paths_native(const std::filesystem::path& project_dir) {
@@ -5681,6 +6004,8 @@ nlohmann::json active_project_info_json() {
         const auto scene_ini = read_ini_file(portable->scene_file);
         return {
             {"name", portable->scene_name},
+            {"mode", ini_value(scene_ini, "world", "type", "story")},
+            {"prompt", ini_value(scene_ini, "world", "prompt")},
             {"entrance_scene", "scene.ini"},
             {"core_version", ini_value(scene_ini, "scene", "core_version")},
             {"create_time", ini_value(scene_ini, "scene", "create_time")},
@@ -5698,6 +6023,7 @@ nlohmann::json active_project_info_json() {
     return {
         {"name", value("name", project_root.filename().string())},
         {"mode", value("mode", "3d")},
+        {"prompt", value("world_prompt", value("prompt", ""))},
         {"entrance_scene", value("entrance_scene", choose_single_scene_route(project_root, project_ini))},
         {"core_version", value("core_version", value("version", ""))},
         {"create_time", value("create_time", value("created_at", ""))},
@@ -5961,6 +6287,67 @@ nlohmann::json build_lanchat_agents(
     return result;
 }
 
+nlohmann::json build_lanchat_message(
+    const Corona::Network::LanChatMessage& message) {
+    return {
+        {"message_id", message.message_id},
+        {"sender_id", message.sender_id},
+        {"sender_name", message.sender_name},
+        {"room_id", message.room_id},
+        {"seq", message.seq},
+        {"from", message.sender_name},
+        {"text", message.text},
+        {"ts", message.timestamp_ms / 1000},
+        {"sender_type", message.sender_type},
+        {"message_kind", message.message_kind},
+        {"target_agent_id", message.target_agent_id},
+        {"source_user_id", message.source_user_id},
+        {"correlation_id", message.correlation_id},
+        {"metadata_json", message.metadata_json},
+    };
+}
+
+nlohmann::json build_lanchat_agent_trigger(
+    const Corona::Network::LanChatAgentTrigger& trigger) {
+    return {
+        {"trigger_id", trigger.trigger_id},
+        {"message_id", trigger.message_id},
+        {"room_id", trigger.room_id},
+        {"sender_id", trigger.sender_id},
+        {"sender_name", trigger.sender_name},
+        {"sender_type", trigger.sender_type},
+        {"message_kind", trigger.message_kind},
+        {"target_agent_id", trigger.target_agent_id},
+        {"source_user_id", trigger.source_user_id},
+        {"correlation_id", trigger.correlation_id},
+        {"metadata_json", trigger.metadata_json},
+        {"agent_id", trigger.agent_id},
+        {"agent_name", trigger.agent_name},
+        {"persona", trigger.persona},
+        {"text", trigger.text},
+        {"history", [&trigger] {
+            nlohmann::json history = nlohmann::json::array();
+            for (const auto& message : trigger.history) {
+                history.push_back(build_lanchat_message(message));
+            }
+            return history;
+        }()},
+    };
+}
+
+nlohmann::json build_lanchat_message_result(
+    const Corona::Network::LanChatMessageResult& result) {
+    nlohmann::json data;
+    data["ok"] = result.accepted;
+    if (result.accepted) {
+        data["message_id"] = result.message.message_id;
+        data["seq"] = result.message.seq;
+    } else {
+        data["error"] = result.error.empty() ? "SEND_FAILED" : result.error;
+    }
+    return data;
+}
+
 std::string make_agent_id(const std::string& owner, const std::string& name) {
     static uint64_t counter = 0;
     std::ostringstream out;
@@ -6013,6 +6400,11 @@ NativeResult script_method(const NativeRequest& request, const NativeContext&) {
 
 std::shared_ptr<Corona::Systems::NetworkSystem> require_network_system() {
     return get_network_system();
+}
+
+uint64_t collaboration_now_ms() {
+    return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count());
 }
 
 }  // namespace
@@ -6408,6 +6800,239 @@ std::string capture_editor_camera_view_from_python(const std::string& scene_name
             {"message", "capture_editor_camera_view native handler error"},
         }.dump();
     }
+}
+
+std::optional<std::filesystem::path> resolve_file_manager_project_path() {
+    const auto raw_path = resolve_active_project_path(nlohmann::json::array());
+    if (raw_path.empty()) {
+        return std::nullopt;
+    }
+    const auto project_root = canonical_project_dir_for_settings(path_from_utf8(raw_path));
+    if (!is_valid_project_dir(project_root)) {
+        return std::nullopt;
+    }
+    return absolute_normalized_path(project_root);
+}
+
+std::optional<std::filesystem::path> resolve_file_manager_path(
+    const std::filesystem::path& project_root, const std::string& raw_path,
+    bool allow_root = false) {
+    const auto route = normalize_route(raw_path);
+    if (route.empty()) {
+        return allow_root ? std::optional{project_root} : std::nullopt;
+    }
+    const auto candidate = resolve_project_path(project_root, route);
+    const auto normalized_candidate = absolute_normalized_path(candidate);
+    if (!is_path_within(project_root, normalized_candidate) ||
+        (!allow_root && normalized_candidate == absolute_normalized_path(project_root))) {
+        return std::nullopt;
+    }
+    return normalized_candidate;
+}
+
+nlohmann::json file_manager_tree_node(const std::filesystem::path& path,
+                                      const std::filesystem::path& project_root,
+                                      int level) {
+    const auto relative = std::filesystem::relative(path, project_root);
+    const auto route = normalize_route(path_to_utf8(relative));
+    const bool directory = std::filesystem::is_directory(path);
+    nlohmann::json node = {
+        {"name", path.filename().empty() ? path_to_utf8(project_root.filename())
+                                          : path_to_utf8(path.filename())},
+        {"path", route == "." ? std::string{} : route},
+        {"isDirectory", directory},
+        {"level", level},
+    };
+    if (!directory) {
+        std::error_code ec;
+        node["size"] = std::filesystem::file_size(path, ec);
+        return node;
+    }
+
+    node["expanded"] = level <= 1;
+    node["children"] = nlohmann::json::array();
+    std::error_code ec;
+    for (const auto& entry : std::filesystem::directory_iterator(path, ec)) {
+        if (ec) break;
+        node["children"].push_back(file_manager_tree_node(entry.path(), project_root, level + 1));
+    }
+    std::sort(node["children"].begin(), node["children"].end(),
+              [](const nlohmann::json& left, const nlohmann::json& right) {
+                  const auto left_dir = left.value("isDirectory", false);
+                  const auto right_dir = right.value("isDirectory", false);
+                  if (left_dir != right_dir) return left_dir > right_dir;
+                  return left.value("name", "") < right.value("name", "");
+              });
+    return node;
+}
+
+NativeResult create_file_manager_file(const std::filesystem::path& project_root,
+                                      const std::string& path,
+                                      const std::string& requested_name,
+                                      const std::string& file_type) {
+    const auto directory = resolve_file_manager_path(project_root, path, true);
+    if (!directory || !std::filesystem::is_directory(*directory)) {
+        return native_failure("Target directory does not exist", 404);
+    }
+    auto file_name = trim_ascii(requested_name);
+    if (file_name.empty()) return native_failure("file_name is required", 2);
+    auto file_path = path_from_utf8(file_name);
+    if (file_path.is_absolute() || file_path.has_parent_path()) {
+        return native_failure("file_name must be a file name", 2);
+    }
+
+    const std::string extension = file_type == "scene" ? ".scene" :
+                                  file_type == "actor" ? ".actor" : "";
+    if (extension.empty()) return native_failure("Unsupported file type: " + file_type, 2);
+    if (to_lower_ascii(file_path.extension().string()) != extension) {
+        file_name += extension;
+        file_path = path_from_utf8(file_name);
+    }
+
+    const auto template_root = project_template_path().parent_path();
+    const auto template_path = template_root / file_type / ("demo" + extension);
+    if (!std::filesystem::is_regular_file(template_path)) {
+        return native_failure("File template does not exist: " + path_to_utf8(template_path), 404);
+    }
+    auto target = *directory / file_path.filename();
+    const auto stem = target.stem().string();
+    int suffix = 1;
+    std::error_code ec;
+    while (std::filesystem::exists(target, ec)) {
+        if (ec) return native_failure("Unable to inspect target file: " + ec.message(), 2);
+        target = *directory / (stem + "_" + std::to_string(suffix++) + extension);
+    }
+    if (!std::filesystem::copy_file(template_path, target, ec) || ec) {
+        return native_failure("Unable to create file: " + path_to_utf8(target), 2);
+    }
+    const auto base_name = path_to_utf8(target.stem());
+    const auto ini = read_ini_file(target);
+    std::map<std::string, std::string> base;
+    const auto existing_base = ini.find("base");
+    if (existing_base != ini.end()) {
+        for (const auto& [key, value] : existing_base->second) {
+            base[key] = value;
+        }
+    }
+    base["name"] = base_name;
+    replace_ini_section_from_map(target, "base", base);
+    return native_success({
+        {"status", "success"},
+        {"path", route_for_project_storage(project_root, path_to_utf8(target))},
+        {"name", base_name},
+        {"file_type", file_type},
+    });
+}
+
+void register_file_manager_api_handlers(NativeApiRegistry& registry) {
+    static const NativeMethodTable methods = {
+        {"get_project_info", [](const NativeRequest&, const NativeContext&) {
+            const auto project_root = resolve_file_manager_project_path();
+            if (!project_root) {
+                return native_success({{"path", ""}, {"name", "未打开项目"}, {"exists", false}});
+            }
+            return native_success({
+                {"path", path_to_utf8(*project_root)},
+                {"name", path_to_utf8(project_root->filename())},
+                {"exists", true},
+            });
+        }},
+        {"get_file_tree", [](const NativeRequest& request, const NativeContext&) {
+            const auto project_root = resolve_file_manager_project_path();
+            if (!project_root) return native_failure("No active project", 404);
+            const auto target = resolve_file_manager_path(*project_root, arg_string(request.args, 0), true);
+            if (!target || !std::filesystem::is_directory(*target)) {
+                return native_failure("Directory does not exist", 404);
+            }
+            return native_success(file_manager_tree_node(*target, *project_root,
+                                                          arg_string(request.args, 0).empty() ? 0 : 1));
+        }},
+        {"get_files", [](const NativeRequest& request, const NativeContext&) {
+            const auto project_root = resolve_file_manager_project_path();
+            if (!project_root) return native_failure("No active project", 404);
+            const auto target = resolve_file_manager_path(*project_root, arg_string(request.args, 0), true);
+            if (!target || !std::filesystem::is_directory(*target)) {
+                return native_failure("Directory does not exist", 404);
+            }
+            nlohmann::json files = nlohmann::json::array();
+            std::error_code ec;
+            for (const auto& entry : std::filesystem::directory_iterator(*target, ec)) {
+                if (ec) break;
+                files.push_back({
+                    {"name", path_to_utf8(entry.path().filename())},
+                    {"path", route_for_project_storage(*project_root, path_to_utf8(entry.path()))},
+                    {"isDirectory", entry.is_directory(ec)},
+                });
+            }
+            return native_success(std::move(files));
+        }},
+        {"create_folder", [](const NativeRequest& request, const NativeContext&) {
+            const auto project_root = resolve_file_manager_project_path();
+            if (!project_root) return native_failure("No active project", 404);
+            const auto parent = resolve_file_manager_path(*project_root, arg_string(request.args, 0), true);
+            const auto folder_name = path_from_utf8(trim_ascii(arg_string(request.args, 1)));
+            if (!parent || folder_name.empty() || folder_name.is_absolute() || folder_name.has_parent_path()) {
+                return native_failure("Invalid folder name or path", 2);
+            }
+            std::error_code ec;
+            const auto target = *parent / folder_name;
+            if (!std::filesystem::create_directories(target, ec) && ec) {
+                return native_failure("Unable to create folder: " + ec.message(), 2);
+            }
+            return native_success(true);
+        }},
+        {"create_file", [](const NativeRequest& request, const NativeContext&) {
+            const auto project_root = resolve_file_manager_project_path();
+            if (!project_root) return native_failure("No active project", 404);
+            return create_file_manager_file(*project_root, arg_string(request.args, 0),
+                                             arg_string(request.args, 1), arg_string(request.args, 2));
+        }},
+        {"delete_item", [](const NativeRequest& request, const NativeContext&) {
+            const auto project_root = resolve_file_manager_project_path();
+            if (!project_root) return native_failure("No active project", 404);
+            const auto target = resolve_file_manager_path(*project_root, arg_string(request.args, 0));
+            if (!target) return native_failure("Unable to delete the project root or an outside path", 2);
+            std::error_code ec;
+            if (!std::filesystem::exists(*target, ec) || !std::filesystem::remove_all(*target, ec) || ec) {
+                return native_failure("Unable to delete item", 2);
+            }
+            return native_success(true);
+        }},
+        {"rename_item", [](const NativeRequest& request, const NativeContext&) {
+            const auto project_root = resolve_file_manager_project_path();
+            if (!project_root) return native_failure("No active project", 404);
+            const auto source = resolve_file_manager_path(*project_root, arg_string(request.args, 0));
+            const auto new_name = path_from_utf8(trim_ascii(arg_string(request.args, 1)));
+            if (!source || new_name.empty() || new_name.is_absolute() || new_name.has_parent_path()) {
+                return native_failure("Invalid rename path", 2);
+            }
+            std::error_code ec;
+            const auto target = source->parent_path() / new_name;
+            if (!std::filesystem::exists(*source, ec) || std::filesystem::exists(target, ec)) {
+                return native_failure("Source does not exist or target already exists", 2);
+            }
+            std::filesystem::rename(*source, target, ec);
+            if (ec) return native_failure("Unable to rename item: " + ec.message(), 2);
+            return native_success(true);
+        }},
+        {"open_file", [](const NativeRequest& request, const NativeContext&) {
+            const auto project_root = resolve_file_manager_project_path();
+            if (!project_root) return native_failure("No active project", 404);
+            const auto target = resolve_file_manager_path(*project_root, arg_string(request.args, 0));
+            if (!target || !std::filesystem::is_regular_file(*target)) {
+                return native_failure("File does not exist", 404);
+            }
+            const auto file_type = arg_string(request.args, 1);
+            if (file_type == "scene") {
+                const auto route = route_for_project_storage(*project_root, path_to_utf8(*target));
+                reload_native_editor_scene("", route);
+            }
+            return native_success(true);
+        }},
+    };
+    registry.register_module("FileManager", [](const NativeRequest& request, const NativeContext& context) {
+        return dispatch_method("FileManager", methods, request, context);
+    });
 }
 
 void register_project_launcher_api_handlers(NativeApiRegistry& registry) {
@@ -6825,12 +7450,107 @@ void register_main_view_api_handlers(NativeApiRegistry& registry) {
                 }},
             });
         }},
-        {"on_init", [](const NativeRequest&, const NativeContext&) {
+        {"on_init", [](const NativeRequest& request, const NativeContext&) {
             auto& state = native_editor_state();
+            const auto requested_path = normalize_route(arg_string(request.args, 0));
+            if (!requested_path.empty()) {
+                const auto project_root = canonical_project_dir_for_settings(
+                    path_from_utf8(requested_path));
+                if (!is_valid_project_dir(project_root)) {
+                    return native_failure("Project path is invalid: " + requested_path, 2);
+                }
+                if (!state.scene || absolute_normalized_path(state.scene->project_root) !=
+                                      absolute_normalized_path(project_root)) {
+                    reload_native_editor_scene(path_to_utf8(project_root), "");
+                }
+            } else if (!state.scene) {
+                reload_native_editor_scene("", "");
+            }
             if (!state.scene) {
                 return native_failure("No committed native editor scene; open a project first", 404);
             }
-            return native_success(make_on_init_payload(*state.scene));
+            if (!requested_path.empty() &&
+                !enqueue_python_project_context_changed(state.project_path)) {
+                CFW_LOG_WARNING(
+                    "[MainView] Python project context update was not queued for '{}'",
+                    state.project_path);
+            }
+            return native_success(make_native_main_init_payload(state.scene.get()));
+        }},
+        {"create_scene", [](const NativeRequest& request, const NativeContext&) {
+            auto* scene = ensure_native_editor_scene();
+            const auto created = create_native_scene_file(*scene, arg_string(request.args, 0));
+            if (!created.success) {
+                return created;
+            }
+
+            auto index = build_native_project_scene_index(*scene);
+            const auto route = created.data.value("path", std::string{});
+            const auto name = created.data.value("name", stem_utf8(route));
+            if (!route.empty() && std::none_of(
+                    index.scenes.begin(), index.scenes.end(),
+                    [&](const auto& item) { return item.first == route; })) {
+                index.scenes.emplace_back(route, name);
+            }
+            persist_native_project_scene_index(*scene, index);
+
+            auto result = make_native_scene_index_payload(*scene, index);
+            result["path"] = route;
+            result["name"] = name;
+            return native_success(std::move(result));
+        }},
+        {"remove_scene", [](const NativeRequest& request, const NativeContext&) {
+            auto* scene = ensure_native_editor_scene();
+            const auto route = normalize_route(arg_string(request.args, 0));
+            if (route.empty()) {
+                return native_failure("scene_name is required", 2);
+            }
+            if (native_scene_request_matches(*scene, route)) {
+                return native_failure("The active native scene must be switched before removal", 2);
+            }
+
+            const auto candidate = resolve_project_path(scene->project_root, route);
+            std::error_code relative_ec;
+            const auto relative = std::filesystem::relative(
+                candidate, scene->project_root, relative_ec);
+            if (relative_ec || !path_is_inside_project(relative) ||
+                to_lower_ascii(candidate.extension().string()) != ".scene") {
+                return native_failure("scene_name must identify a project .scene file", 2);
+            }
+
+            std::error_code file_ec;
+            if (!std::filesystem::is_regular_file(candidate, file_ec)) {
+                return native_failure("Scene file does not exist: " + route, 404);
+            }
+            if (!std::filesystem::remove(candidate, file_ec) || file_ec) {
+                return native_failure("Unable to remove scene file: " + route, 2);
+            }
+            auto index = build_native_project_scene_index(*scene);
+            index.scenes.erase(
+                std::remove_if(index.scenes.begin(), index.scenes.end(),
+                               [&](const auto& item) { return item.first == route; }),
+                index.scenes.end());
+            if (index.scenes.empty()) {
+                index.entrance_scene.clear();
+                index.active_scene = scene->route;
+            } else {
+                if (index.entrance_scene == route || std::none_of(
+                        index.scenes.begin(), index.scenes.end(),
+                        [&](const auto& item) { return item.first == index.entrance_scene; })) {
+                    index.entrance_scene = index.scenes.front().first;
+                }
+                index.active_scene = scene->route;
+            }
+            persist_native_project_scene_index(*scene, index);
+            return native_success({
+                {"status", "success"},
+                {"scenes", result["scenes"]},
+                {"active_index", result["active_index"]},
+                {"entrance_scene", result["entrance_scene"]},
+                {"active_scene", result["active_scene"]},
+                {"path", route},
+                {"deleted_file", true},
+            });
         }},
         {"run_project", script_method},
         {"scene_save", [](const NativeRequest& request, const NativeContext&) {
@@ -6958,7 +7678,42 @@ void register_project_settings_api_handlers(NativeApiRegistry& registry) {
         {"get_active_project_info", [](const NativeRequest&, const NativeContext&) {
             return native_success(active_project_info_json());
         }},
-        {"save_active_project_info", script_method},
+        {"save_active_project_info", [](const NativeRequest& request, const NativeContext&) {
+            const auto project_path = resolve_active_project_path(nlohmann::json::array());
+            if (project_path.empty()) {
+                return native_failure("未激活任何项目", 404);
+            }
+
+            const auto project_root = path_from_utf8(project_path);
+            const auto portable = detect_scene_folder(project_root);
+            if (!portable) {
+                return native_failure(
+                    "旧项目为只读；请先另存为便携场景",
+                    2);
+            }
+
+            const auto settings = arg_object(request.args, 0);
+            auto scene_ini = read_ini_file(portable->scene_file);
+            std::map<std::string, std::string> scene_values;
+            const auto existing_scene = scene_ini.find("scene");
+            if (existing_scene != scene_ini.end()) {
+                for (const auto& [key, value] : existing_scene->second) {
+                    scene_values[key] = value;
+                }
+            }
+            for (const auto& key : {std::string{"name"}, std::string{"core_version"}}) {
+                const auto value = settings.find(key);
+                if (value != settings.end() && value->is_string()) {
+                    const auto text = trim_ascii(value->get<std::string>());
+                    if (!text.empty()) {
+                        scene_values[key] = text;
+                    }
+                }
+            }
+            replace_ini_section_from_map(portable->scene_file, "scene", scene_values);
+            update_editor_settings_section("General", {{"last_project", project_path}});
+            return native_success({{"message", "保存成功"}});
+        }},
     };
 
     registry.register_module("ProjectSettings", [](const NativeRequest& request,
@@ -7055,6 +7810,291 @@ void register_scene_datas_api_handlers(NativeApiRegistry& registry) {
 
 void register_scene_tools_api_handlers(NativeApiRegistry& registry) {
     static const NativeMethodTable methods = {
+        {"get_scene_snapshot", [](const NativeRequest& request, const NativeContext&) {
+            try {
+                const auto raw = get_editor_scene_snapshot_from_python(arg_string(request.args, 0));
+                const auto data = nlohmann::json::parse(raw);
+                if (data.value("status", std::string{}) == "error") {
+                    return native_failure(data.value("message", std::string{"Scene snapshot failed"}), 2);
+                }
+                return native_success(data);
+            } catch (const std::exception& e) {
+                return native_failure(e.what(), 2);
+            }
+        }},
+        {"set_actor_transform", [](const NativeRequest& request, const NativeContext&) {
+            try {
+                const auto raw = set_editor_actor_transform_from_python(
+                    arg_string(request.args, 0),
+                    arg_string(request.args, 1),
+                    arg_object(request.args, 2).dump());
+                const auto data = nlohmann::json::parse(raw);
+                if (data.value("status", std::string{}) == "error") {
+                    return native_failure(data.value("message", std::string{"Actor transform failed"}), 2);
+                }
+                return native_success(data);
+            } catch (const std::exception& e) {
+                return native_failure(e.what(), 2);
+            }
+        }},
+        {"save_actor", [](const NativeRequest& request, const NativeContext&) {
+            auto* scene = scene_for_request_route(request);
+            const auto actor_name = arg_string(request.args, 1);
+            if (!actor_name.empty() && !find_native_actor(*scene, actor_name)) {
+                return native_failure("Actor not found: " + actor_name, 2);
+            }
+            persist_native_scene_actors(*scene);
+            return native_success({
+                {"status", "success"},
+                {"scene", scene->route},
+                {"actor", actor_name},
+            });
+        }},
+        {"select_model_file", [](const NativeRequest& request, const NativeContext&) {
+            auto* scene = scene_for_request_route(request);
+            const auto file_type = arg_string(request.args, 2, "model");
+            if (!resource_dialog_filters(file_type)) {
+                throw std::runtime_error("Unsupported resource type: " + file_type);
+            }
+            const auto selected = select_resource_file_native(scene->project_root, file_type);
+            if (!selected) {
+                return native_success(std::string{});
+            }
+            return native_success(route_for_project_storage(
+                scene->project_root, path_to_utf8(absolute_normalized_path(*selected))));
+        }},
+        {"set_actor_state", [](const NativeRequest& request, const NativeContext& context) {
+            try {
+                auto* scene = scene_for_request_route(request);
+                const auto actor_name = arg_string(request.args, 1);
+                const auto state = arg_object(request.args, 2);
+                auto* actor = find_native_actor(*scene, actor_name);
+                if (!actor) {
+                    return native_failure("Actor not found: " + actor_name, 2);
+                }
+                if (state.empty()) {
+                    return native_failure("Actor state value object cannot be empty", 2);
+                }
+
+                bool changed = false;
+                if (const auto value = actor_data_bool(state, {"visible"})) {
+                    if (!actor->optics) {
+                        return native_failure("Actor has no optics component: " + actor_name, 2);
+                    }
+                    actor->optics->set_visible(*value);
+                    changed = true;
+                }
+                if (const auto value = actor_data_bool(state, {"follow_camera"})) {
+                    actor->follow_camera = *value;
+                    if (actor->engine_actor) {
+                        actor->engine_actor->set_follow_camera(*value);
+                    }
+                    changed = true;
+                }
+                if (!changed) {
+                    return native_failure("Actor state contains no supported fields", 2);
+                }
+
+                actor->actor_version = std::max(actor->actor_version + 1, 1);
+                sync_native_actor_to_embedded_vision_document(*scene, *actor, false, true);
+                persist_native_scene_actors(*scene);
+                emit_actor_change(context, *scene, *actor);
+                return native_success({
+                    {"status", "success"},
+                    {"scene", scene->route},
+                    {"actor", actor_to_json(*scene, *actor)},
+                });
+            } catch (const std::exception& e) {
+                return native_failure(e.what(), 2);
+            }
+        }},
+        {"set_actor_camera_lock", [](const NativeRequest& request, const NativeContext& context) {
+            try {
+                auto* scene = scene_for_request_route(request);
+                const auto actor_name = arg_string(request.args, 1);
+                const auto camera_lock = arg_object(request.args, 2);
+                auto* actor = find_native_actor(*scene, actor_name);
+                if (!actor) {
+                    return native_failure("Actor not found: " + actor_name, 2);
+                }
+                if (camera_lock.empty()) {
+                    return native_failure("Camera-lock value object cannot be empty", 2);
+                }
+
+                const auto enabled = actor_data_bool(camera_lock, {"enabled", "lock_to_camera"});
+                if (!enabled) {
+                    return native_failure("Camera-lock value requires boolean enabled", 2);
+                }
+
+                const auto read_offset = [&](const char* key,
+                                             const std::array<float, 3>& fallback)
+                    -> std::optional<std::array<float, 3>> {
+                    const auto it = camera_lock.find(key);
+                    if (it == camera_lock.end()) {
+                        return fallback;
+                    }
+                    if (!it->is_array() || it->size() != 3) {
+                        return std::nullopt;
+                    }
+                    std::array<float, 3> result{};
+                    for (size_t index = 0; index < result.size(); ++index) {
+                        if (!(*it)[index].is_number() ||
+                            !std::isfinite((*it)[index].get<double>())) {
+                            return std::nullopt;
+                        }
+                        result[index] = (*it)[index].get<float>();
+                    }
+                    return result;
+                };
+
+                const auto position_offset = read_offset(
+                    "position_offset", actor->camera_lock_position_offset);
+                if (!position_offset) {
+                    return native_failure("camera_lock.position_offset must contain three finite numbers", 2);
+                }
+                const auto rotation_offset = read_offset(
+                    "rotation_offset", actor->camera_lock_rotation_offset);
+                if (!rotation_offset) {
+                    return native_failure("camera_lock.rotation_offset must contain three finite numbers", 2);
+                }
+
+                actor->camera_lock_enabled = *enabled;
+                actor->camera_lock_position_offset = *position_offset;
+                actor->camera_lock_rotation_offset = *rotation_offset;
+
+                if (*enabled) {
+                    auto* camera = find_native_camera(*scene, {});
+                    if (!camera || !camera->engine_camera || !actor->engine_actor) {
+                        return native_failure("Camera-lock requires an active camera and a loaded actor", 2);
+                    }
+                    auto offset = *position_offset;
+                    const auto has_explicit_position_offset = camera_lock.contains("position_offset");
+                    if (!has_explicit_position_offset) {
+                        const auto camera_position = camera->engine_camera->get_position();
+                        const auto actor_position = actor->geometry
+                                                         ? actor->geometry->get_position()
+                                                         : actor->position;
+                        for (size_t index = 0; index < offset.size(); ++index) {
+                            offset[index] = camera_position[index] - actor_position[index];
+                        }
+                        actor->camera_lock_position_offset = offset;
+                    }
+                    Corona::Systems::CameraFollowController::instance().set_target(
+                        actor->engine_actor->get_handle(),
+                        camera->engine_camera->get_handle(),
+                        offset[0], offset[1], offset[2]);
+                } else {
+                    Corona::Systems::CameraFollowController::instance().clear_target();
+                }
+
+                actor->actor_version = std::max(actor->actor_version + 1, 1);
+                sync_native_actor_to_embedded_vision_document(*scene, *actor, false, true);
+                persist_native_scene_actors(*scene);
+                emit_actor_change(context, *scene, *actor);
+                return native_success({
+                    {"status", "success"},
+                    {"scene", scene->route},
+                    {"actor", actor_to_json(*scene, *actor)},
+                });
+            } catch (const std::exception& e) {
+                return native_failure(e.what(), 2);
+            }
+        }},
+        {"set_actor_physics", [](const NativeRequest& request, const NativeContext& context) {
+            try {
+                auto* scene = scene_for_request_route(request);
+                const auto actor_name = arg_string(request.args, 1);
+                const auto physics = arg_object(request.args, 2);
+                auto* actor = find_native_actor(*scene, actor_name);
+                if (!actor) {
+                    return native_failure("Actor not found: " + actor_name, 2);
+                }
+                if (!actor->mechanics) {
+                    return native_failure("Actor has no mechanics component: " + actor_name, 2);
+                }
+                if (physics.empty()) {
+                    return native_failure("Physics value object cannot be empty", 2);
+                }
+
+                if (auto value = actor_data_float(physics, {"mass"})) {
+                    actor->mechanics->set_mass(*value);
+                }
+                if (auto value = actor_data_float(physics, {"restitution"})) {
+                    actor->mechanics->set_restitution(*value);
+                }
+                if (auto value = actor_data_float(physics, {"damping"})) {
+                    actor->mechanics->set_damping(*value);
+                }
+                if (auto value = actor_data_bool(physics, {"physics_enabled"})) {
+                    actor->mechanics->set_physics_enabled(*value);
+                }
+                if (auto value = actor_data_bool(physics, {"collision_enabled"})) {
+                    actor->mechanics->set_collision_enabled(*value);
+                }
+                const auto collision_shape = json_string_value(
+                    physics, {"collision_shape", "collision_type"});
+                if (!collision_shape.empty()) {
+                    actor->mechanics->set_collision_shape(normalize_collision_type(collision_shape));
+                }
+                const auto linear_lock = physics.find("linear_lock");
+                if (linear_lock != physics.end() && linear_lock->is_array() && linear_lock->size() >= 3) {
+                    actor->mechanics->set_linear_lock(
+                        json_bool_at(*linear_lock, 0),
+                        json_bool_at(*linear_lock, 1),
+                        json_bool_at(*linear_lock, 2));
+                }
+                const auto angular_lock = physics.find("angular_lock");
+                if (angular_lock != physics.end() && angular_lock->is_array() && angular_lock->size() >= 3) {
+                    actor->mechanics->set_angular_lock(
+                        json_bool_at(*angular_lock, 0),
+                        json_bool_at(*angular_lock, 1),
+                        json_bool_at(*angular_lock, 2));
+                }
+
+                actor->actor_version = std::max(actor->actor_version + 1, 1);
+                sync_native_actor_to_embedded_vision_document(*scene, *actor, false, true);
+                persist_native_scene_actors(*scene);
+                emit_actor_change(context, *scene, *actor);
+                return native_success({
+                    {"status", "success"},
+                    {"scene", scene->route},
+                    {"actor", actor_to_json(*scene, *actor)},
+                });
+            } catch (const std::exception& e) {
+                return native_failure(e.what(), 2);
+            }
+        }},
+        {"capture_viewport", [](const NativeRequest& request, const NativeContext&) {
+            try {
+                const auto raw = capture_editor_camera_view_from_python(
+                    arg_string(request.args, 0),
+                    arg_string(request.args, 1),
+                    arg_object(request.args, 2).dump(),
+                    arg_string(request.args, 3));
+                const auto data = nlohmann::json::parse(raw);
+                if (data.value("status", std::string{}) == "error") {
+                    return native_failure(data.value("message", std::string{"Viewport capture failed"}), 2);
+                }
+                return native_success(data);
+            } catch (const std::exception& e) {
+                return native_failure(e.what(), 2);
+            }
+        }},
+        {"set_camera_pose", [](const NativeRequest& request, const NativeContext&) {
+            try {
+                const auto raw = set_editor_camera_transform_from_python(
+                    arg_string(request.args, 0),
+                    arg_string(request.args, 1),
+                    arg_object(request.args, 2).dump());
+                const auto data = nlohmann::json::parse(raw);
+                if (data.value("status", std::string{}) == "error") {
+                    return native_failure(data.value("message", std::string{"Camera pose update failed"}), 2);
+                }
+                return native_success(data);
+            } catch (const std::exception& e) {
+                return native_failure(e.what(), 2);
+            }
+        }},
         {"close_camera_view", [](const NativeRequest& request, const NativeContext&) {
             auto* scene = scene_for_request_route(request);
             const auto camera_name = arg_string(request.args, 1);
@@ -7084,7 +8124,10 @@ void register_scene_tools_api_handlers(NativeApiRegistry& registry) {
                 {"camera", camera_to_json(camera)},
             });
         }},
-        {"create_scene", script_method},
+        {"create_scene", [](const NativeRequest& request, const NativeContext&) {
+            auto* scene = ensure_native_editor_scene();
+            return create_native_scene_file(*scene, arg_string(request.args, 0));
+        }},
         {"delete_camera", [](const NativeRequest& request, const NativeContext&) {
             auto* scene = scene_for_request_route(request);
             const auto camera_name = arg_string(request.args, 1);
@@ -7172,9 +8215,17 @@ void register_scene_tools_api_handlers(NativeApiRegistry& registry) {
             const auto scene_route = arg_string(request.args, 0);
             const auto project_path = arg_string(request.args, 1);
             auto* scene = reload_native_editor_scene(project_path, scene_route);
+            auto index = build_native_project_scene_index(*scene);
+            if (std::none_of(index.scenes.begin(), index.scenes.end(),
+                             [&](const auto& item) { return item.first == scene->route; })) {
+                index.scenes.emplace_back(scene->route, scene->name);
+            }
+            index.active_scene = scene->route;
+            persist_native_project_scene_index(*scene, index);
             return native_success({
                 {"status", "success"},
                 {"scene", scene->route},
+                {"active_scene", index.active_scene},
                 {"actor_count", scene->actors.size()},
                 {"camera_count", scene->cameras.size()},
             });
@@ -7888,16 +8939,6 @@ void register_python_script_api_handlers(NativeApiRegistry& registry) {
     static const NativeMethodTable corona_editor_methods = {
         {"close_process", script_method},
     };
-    static const NativeMethodTable file_manager_methods = {
-        {"create_file", script_method},
-        {"create_folder", script_method},
-        {"delete_item", script_method},
-        {"get_file_tree", script_method},
-        {"get_files", script_method},
-        {"get_project_info", script_method},
-        {"open_file", script_method},
-        {"rename_item", script_method},
-    };
     static const NativeMethodTable resource_search_methods = {
         {"focus_actor", script_method},
         {"fuzzy_search", script_method},
@@ -7932,13 +8973,71 @@ void register_python_script_api_handlers(NativeApiRegistry& registry) {
 
     register_script_module("AITool", ai_tool_methods);
     register_script_module("CoronaEditor", corona_editor_methods);
-    register_script_module("FileManager", file_manager_methods);
     register_script_module("ResourceSearch", resource_search_methods);
     register_script_module("ScratchTool", scratch_tool_methods);
 }
 
 void register_network_api_handlers(NativeApiRegistry& registry) {
     static const NativeMethodTable methods = {
+        {"lock_object", [](const NativeRequest& request, const NativeContext&) {
+            auto sys = require_network_system();
+            if (!sys) {
+                return native_failure("NetworkSystem unavailable", 2);
+            }
+            const auto result = sys->lanchat_lock_object(
+                arg_string(request.args, 0),
+                arg_string(request.args, 1),
+                arg_string(request.args, 2, "modify"),
+                collaboration_now_ms());
+            return native_success({{"ok", result.ok}, {"error", result.error}});
+        }},
+        {"unlock_object", [](const NativeRequest& request, const NativeContext&) {
+            auto sys = require_network_system();
+            if (!sys) {
+                return native_failure("NetworkSystem unavailable", 2);
+            }
+            const auto result = sys->lanchat_unlock_object(
+                arg_string(request.args, 0), arg_string(request.args, 1));
+            return native_success({{"ok", result.ok}, {"error", result.error}});
+        }},
+        {"get_lock_owner", [](const NativeRequest& request, const NativeContext&) {
+            auto sys = require_network_system();
+            if (!sys) {
+                return native_failure("NetworkSystem unavailable", 2);
+            }
+            return native_success({
+                {"owner", sys->lanchat_locked_by(arg_string(request.args, 0), collaboration_now_ms())},
+            });
+        }},
+        {"broadcast_intent", [](const NativeRequest& request, const NativeContext&) {
+            auto sys = require_network_system();
+            if (!sys) {
+                return native_failure("NetworkSystem unavailable", 2);
+            }
+            const auto position = json_float3_value(request.args.at(2)).value_or(
+                std::array<float, 3>{0.0f, 0.0f, 0.0f});
+            sys->lanchat_broadcast_intent(
+                arg_string(request.args, 0),
+                arg_string(request.args, 1),
+                position,
+                arg_string(request.args, 3, "placing_object"),
+                collaboration_now_ms());
+            return native_success({{"ok", true}});
+        }},
+        {"check_preview_collision", [](const NativeRequest& request, const NativeContext&) {
+            auto sys = require_network_system();
+            if (!sys) {
+                return native_failure("NetworkSystem unavailable", 2);
+            }
+            const auto position = json_float3_value(request.args.at(1)).value_or(
+                std::array<float, 3>{0.0f, 0.0f, 0.0f});
+            const float delta = request.args.size() > 2 && request.args[2].is_number()
+                ? request.args[2].get<float>() : 0.5f;
+            return native_success({
+                {"conflict_user_id", sys->lanchat_check_preview_collision(
+                    arg_string(request.args, 0), position, delta, collaboration_now_ms())},
+            });
+        }},
         {"start_session", [](const NativeRequest& request, const NativeContext&) {
             auto sys = require_network_system();
             if (!sys) {
@@ -8485,6 +9584,122 @@ void register_lanchat_api_handlers(NativeApiRegistry& registry) {
                 data["error"] = result.error.empty() ? "SEND_FAILED" : result.error;
             }
             return native_success(data);
+        }},
+        {"send_agent_reply", [](const NativeRequest& request, const NativeContext&) {
+            auto sys = require_network_system();
+            if (!sys) {
+                return native_failure("NetworkSystem unavailable", 2);
+            }
+            const auto payload = arg_object(request.args, 0);
+            const auto result = sys->lanchat_send_agent_reply_ex(
+                payload.value("agent_id", ""),
+                payload.value("agent_name", ""),
+                payload.value("text", ""),
+                "agent",
+                payload.value("message_kind", "agent_reply"),
+                payload.value("target_agent_id", ""),
+                payload.value("source_user_id", ""),
+                payload.value("correlation_id", ""),
+                payload.value("metadata_json", ""));
+            return native_success(build_lanchat_message_result(result));
+        }},
+        {"send_system_message", [](const NativeRequest& request, const NativeContext&) {
+            auto sys = require_network_system();
+            if (!sys) {
+                return native_failure("NetworkSystem unavailable", 2);
+            }
+            const auto payload = arg_object(request.args, 0);
+            const auto result = sys->lanchat_send_agent_reply_ex(
+                payload.value("sender_id", ""),
+                payload.value("sender_name", ""),
+                payload.value("text", ""),
+                "system",
+                payload.value("message_kind", "agent_reply"),
+                "",
+                "",
+                payload.value("correlation_id", ""),
+                payload.value("metadata_json", ""));
+            return native_success(build_lanchat_message_result(result));
+        }},
+        {"send_system_message_to_host", [](const NativeRequest& request, const NativeContext&) {
+            auto sys = require_network_system();
+            if (!sys) {
+                return native_failure("NetworkSystem unavailable", 2);
+            }
+            const auto payload = arg_object(request.args, 0);
+            const auto result = sys->lanchat_send_system_message_to_host_ex(
+                payload.value("sender_id", ""),
+                payload.value("sender_name", ""),
+                payload.value("text", ""),
+                payload.value("message_kind", "action_status"),
+                payload.value("correlation_id", ""),
+                payload.value("metadata_json", ""));
+            return native_success(build_lanchat_message_result(result));
+        }},
+        {"send_system_message_to_user", [](const NativeRequest& request, const NativeContext&) {
+            auto sys = require_network_system();
+            if (!sys) {
+                return native_failure("NetworkSystem unavailable", 2);
+            }
+            const auto payload = arg_object(request.args, 0);
+            const auto result = sys->lanchat_send_system_message_to_user_ex(
+                payload.value("target_user_id", ""),
+                payload.value("sender_id", ""),
+                payload.value("sender_name", ""),
+                payload.value("text", ""),
+                payload.value("message_kind", "action_status"),
+                payload.value("correlation_id", ""),
+                payload.value("metadata_json", ""));
+            return native_success(build_lanchat_message_result(result));
+        }},
+        {"poll_agent_trigger", [](const NativeRequest&, const NativeContext&) {
+            auto sys = require_network_system();
+            if (!sys) {
+                return native_failure("NetworkSystem unavailable", 2);
+            }
+            const auto trigger = sys->lanchat_pop_agent_trigger();
+            return native_success(trigger ? build_lanchat_agent_trigger(*trigger)
+                                          : nlohmann::json(nullptr));
+        }},
+        {"poll_coordinator_sync_message", [](const NativeRequest&, const NativeContext&) {
+            auto sys = require_network_system();
+            if (!sys) {
+                return native_failure("NetworkSystem unavailable", 2);
+            }
+            const auto message = sys->lanchat_pop_coordinator_sync_message();
+            return native_success(message ? build_lanchat_message(*message)
+                                          : nlohmann::json(nullptr));
+        }},
+        {"poll_room_event", [](const NativeRequest&, const NativeContext&) {
+            auto sys = require_network_system();
+            if (!sys) {
+                return native_failure("NetworkSystem unavailable", 2);
+            }
+            const auto event = sys->lanchat_pop_room_event();
+            if (!event) {
+                return native_success(nlohmann::json(nullptr));
+            }
+            return native_success({
+                {"channel", "lanchat"},
+                {"event", event->event},
+                {"room_id", event->room_id},
+            });
+        }},
+        {"poll_sync_event", [](const NativeRequest&, const NativeContext&) {
+            auto sys = require_network_system();
+            if (!sys) {
+                return native_failure("NetworkSystem unavailable", 2);
+            }
+            const auto event = sys->lanchat_pop_sync_event();
+            if (!event) {
+                return native_success(nlohmann::json(nullptr));
+            }
+            return native_success({
+                {"channel", "lanchat_sync"},
+                {"event", event->event},
+                {"room_id", event->room_id},
+                {"payload_json", event->payload_json},
+            });
         }},
         {"add_agent", [](const NativeRequest& request, const NativeContext&) {
             auto sys = require_network_system();

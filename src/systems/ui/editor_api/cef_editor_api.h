@@ -18,6 +18,7 @@ namespace Corona::Systems::UI {
 enum class EditorApiCaller : std::uint32_t {
     Cef = 1u << 0u,
     PythonScript = 1u << 1u,
+    ScriptRuntime = 1u << 2u,
 };
 
 enum class EditorApiValueType : std::uint32_t {
@@ -123,6 +124,13 @@ public:
 };
 
 class PythonScriptApiClientEndpoint final : public EditorApiEndpointBase {
+public:
+    NativeResult invoke(const std::string& api_name,
+                        const nlohmann::json& args,
+                        const NativeContext& context) override;
+};
+
+class ScriptRuntimeApiClientEndpoint final : public EditorApiEndpointBase {
 public:
     NativeResult invoke(const std::string& api_name,
                         const nlohmann::json& args,

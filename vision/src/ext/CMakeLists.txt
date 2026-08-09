@@ -4,7 +4,7 @@
 # Vision was originally a stand-alone project that pulled cxxopts / assimp /
 # glfw / oidn as git submodules under this directory. After integration into
 # CoronaEngine those dependencies are resolved once at the engine root via
-# Conan package targets (see misc/cmake/corona_third_party.cmake). This file now
+# Conan package targets (see cmake/corona_third_party.cmake). This file now
 # only:
 #   - asserts the expected upstream targets exist;
 #   - defines small INTERFACE wrappers (`vision-ext`, `vision-ext-assimp_config`,

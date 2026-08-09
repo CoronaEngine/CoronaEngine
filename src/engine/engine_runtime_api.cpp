@@ -7,7 +7,7 @@
 #include <corona/resource/resource_manager.h>
 #include <corona/resource/types/scene.h>
 #include <corona/shared_data_hub.h>
-#include <corona/systems/script/corona_engine_api.h>
+#include <corona/engine/engine_runtime_api.h>
 #include <corona/systems/script/camera_follow_controller.h>
 #include <corona/systems/geometry/geometry_system.h>
 #include <corona/systems/optics/optics_system.h>

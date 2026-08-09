@@ -6,7 +6,7 @@
 #include <corona/resource/types/image.h>
 #include <corona/resource/types/scene.h>
 #include <corona/shared_data_hub.h>
-#include <corona/systems/script/corona_engine_api.h>
+#include <corona/engine/engine_runtime_api.h>
 #include <corona/systems/ui/camera_viewport_manager.h>
 #include <include/cef_values.h>
 #include <nlohmann/json.hpp>

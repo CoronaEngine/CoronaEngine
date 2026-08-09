@@ -25,9 +25,11 @@ corona_add_system(script
         ${PROJECT_SOURCE_DIR}/include/corona/systems/script/python_lifecycle.h
         ${PROJECT_SOURCE_DIR}/include/corona/systems/script/python_runtime_coordinator.h
         script_system.cpp
-        python/corona_engine_api.cpp
+        ${PROJECT_SOURCE_DIR}/src/engine/engine_runtime_api.cpp
         python/corona_engine_module.cpp
         python/engine_bindings.cpp
+        python/editor_compat_bindings.cpp
+        python/editor_network_bindings.cpp
         python/python_api.cpp
         python/python_path_config.cpp
         python/python_error_handler.cpp
