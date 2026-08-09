@@ -16,6 +16,6 @@
 
 ## 通过 CMake preset 构建
 
-脚本是推荐入口。若使用 CMake Tools，选择目标族 preset，例如 <code>core-debug</code>、<code>examples-debug</code>、<code>tests-debug</code>、<code>vision-debug</code>、<code>vision-tests-debug</code> 或 <code>vision-oidn-debug</code>，再执行 Configure 和 Build。根 CMakeLists.txt 会调用开发 bootstrap，生成并加载对应目标族和配置的 Conan toolchain。
+若使用 CMake Tools，选择目标族 preset，例如 <code>core-debug</code>、<code>examples-debug</code>、<code>tests-debug</code>、<code>vision-debug</code>、<code>vision-tests-debug</code> 或 <code>vision-oidn-debug</code>，再执行 Configure 和 Build。根 CMakeLists.txt 会调用开发 bootstrap，生成并加载对应目标族和配置的 Conan toolchain。
 
 旧的 <code>debug</code>、<code>release</code>、<code>relwithdebinfo</code> 和 <code>minsizerel</code> preset 保留为 <code>examples-*</code> 的兼容别名。新开发应直接选择带目标族前缀的 preset。
