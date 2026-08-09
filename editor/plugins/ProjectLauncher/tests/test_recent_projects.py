@@ -14,7 +14,7 @@ _import_cwd = Path.cwd()
 with tempfile.TemporaryDirectory() as _import_temp_dir:
     os.chdir(_import_temp_dir)
     try:
-        from utils.settings import CoronaSettings
+        from config.settings import CoronaSettings
     finally:
         os.chdir(_import_cwd)
 

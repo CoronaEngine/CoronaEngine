@@ -27,7 +27,7 @@ class NativeFileDialogOwnershipTests(unittest.TestCase):
     def test_python_runtime_contains_no_editor_file_dialog_implementation(self):
         production_files = (
             ROOT / "editor/plugins/MainView/main.py",
-            ROOT / "editor/plugins/SceneDatas/main.py",
+            ROOT / "editor/plugins/SceneDatas/compat/legacy_scene_datas_plugin.py",
             ROOT / "editor/plugins/SceneTools/main.py",
             ROOT / "editor/plugins/ProjectLauncher/main.py",
             ROOT / "editor/backend/project_settings/main.py",

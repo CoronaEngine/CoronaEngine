@@ -1,0 +1,2 @@
+"""FileManager-owned compatibility adapters."""
+

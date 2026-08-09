@@ -1,6 +1,5 @@
-from CoronaPlugin.core.corona_plugin_base import PluginBase
+"""Compatibility import path for the historical SceneDatas registration shell."""
 
+from plugins.SceneDatas.compat.legacy_scene_datas_plugin import SceneDatas
 
-@PluginBase.register_web("SceneDatas")
-class SceneDatas(PluginBase):
-    """Scene data web module; interactive file selection is owned by C++."""
+__all__ = ["SceneDatas"]

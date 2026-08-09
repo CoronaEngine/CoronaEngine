@@ -5,11 +5,28 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from plugins.ProjectLauncher import main as project_launcher
-from plugins.ProjectLauncher.utils import project_copy
-from utils.settings import CoronaSettings
+from runtime import project_copy
+from config.settings import CoronaSettings
+from runtime import project_templates as project_utils
 
 
 class ProjectCopyTests(unittest.TestCase):
+    def test_project_template_is_owned_by_project_launcher_and_can_create_project(self):
+        repo_root = Path(__file__).resolve().parents[4]
+        template_root = repo_root / "editor" / "plugins" / "ProjectLauncher" / "templates"
+        self.assertTrue((template_root / "project" / "project.ini").is_file())
+        self.assertTrue((template_root / "scene" / "demo.scene").is_file())
+        self.assertTrue((template_root / "actor" / "demo.actor").is_file())
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            target = Path(temp_dir) / "created"
+            project_ini = project_utils.create_project_from_template(
+                str(target), "Created Project", "3d"
+            )
+
+            self.assertEqual(Path(project_ini), target / "project.ini")
+            self.assertTrue((target / "Scene" / "default.scene").is_file())
+
     def test_copy_existing_to_data_creates_new_runtime_copy(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_root = Path(temp_dir)
@@ -143,7 +160,7 @@ class ProjectCopyTests(unittest.TestCase):
             )
             settings = CoronaSettings(str(config_path))
 
-            with self.assertLogs("utils.settings", level="ERROR") as captured:
+            with self.assertLogs("config.settings", level="ERROR") as captured:
                 self.assertIsNone(settings.active_project_path)
                 self.assertIsNone(settings.active_project_path)
 

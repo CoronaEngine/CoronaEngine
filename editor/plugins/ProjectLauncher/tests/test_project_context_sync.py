@@ -10,7 +10,7 @@ class NativeProjectContextSyncTests(unittest.TestCase):
         handlers = (ROOT / "src/systems/ui/cef/cef_editor_native_api_handlers.cpp").read_text(
             encoding="utf-8"
         )
-        api = (ROOT / "src/systems/ui/cef/cef_editor_api.cpp").read_text(encoding="utf-8")
+        api = (ROOT / "src/systems/ui/editor_api/cef_editor_api.cpp").read_text(encoding="utf-8")
         python_api = (ROOT / "src/systems/script/python/python_api.cpp").read_text(encoding="utf-8")
 
         self.assertIn("enqueue_python_project_context_changed(state.project_path)", handlers)

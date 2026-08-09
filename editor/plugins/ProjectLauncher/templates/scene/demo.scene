@@ -1,0 +1,15 @@
+[base]
+name = demo
+
+[sun]
+sun_direction = 1.0, 1.0, 1.0
+enabled = true
+
+[actors]
+
+[scripts]
+path =
+
+[terrain]
+type =
+path =
