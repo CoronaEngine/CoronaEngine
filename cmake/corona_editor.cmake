@@ -58,7 +58,7 @@ function(corona_install_corona_editor target_name core_target)
         return()
     endif()
 
-    set(_CORONA_PY_SCRIPT "${PROJECT_SOURCE_DIR}/misc/pytools/editor_copy_and_build.py")
+    set(_CORONA_PY_SCRIPT "${PROJECT_SOURCE_DIR}/tools/build/editor_copy_and_build.py")
     set(_CORONA_NODE_DIR "${PROJECT_SOURCE_DIR}/third_party/node-v22.19.0-win-x64")
 
     if(NOT EXISTS "${_CORONA_PY_SCRIPT}")

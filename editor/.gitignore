@@ -36,6 +36,8 @@ logs/
 Backend/**
 !backend/
 !backend/**
+data/
+runtime/generated/
 backend/**/__pycache__/
 backend/**/*.py[cod]
 autosave/

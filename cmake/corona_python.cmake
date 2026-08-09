@@ -10,7 +10,7 @@
 # 2. Expose configuration knobs:
 # - `CORONA_PYTHON_MIN_VERSION`: expected minimum Python version
 # (major.minor).
-# 3. Validate requirements listed in `misc/pytools/requirements.txt` via
+# 3. Validate requirements listed in `editor/requirements.txt` via
 # `check_pip_modules.py`, optionally installing missing packages.
 # 4. Create the `check_python_deps` custom target for manual re-validation.
 #
@@ -41,7 +41,7 @@ endif()
 message(STATUS "[Python] Final chosen interpreter: ${Python_EXECUTABLE}")
 
 set(CORONA_PY_REQUIREMENTS_FILE "${PROJECT_SOURCE_DIR}/editor/requirements.txt")
-set(CORONA_PY_CHECK_SCRIPT "${PROJECT_SOURCE_DIR}/misc/pytools/check_pip_modules.py")
+set(CORONA_PY_CHECK_SCRIPT "${PROJECT_SOURCE_DIR}/tools/build/check_pip_modules.py")
 
 # ------------------------------------------------------------------------------
 # Helper: run a Python script

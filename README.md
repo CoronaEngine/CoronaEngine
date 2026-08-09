@@ -117,7 +117,7 @@ ctest --test-dir build/conan/tests/debug -C Debug --output-on-failure
 工作流脚本自身的快速回归测试不需要原生构建：
 
 ~~~powershell
-uv run --frozen python -m unittest tools/test_workflow.py
+uv run --frozen python -m unittest tools/tests/test_workflow.py
 ~~~
 
 ## 通过 CMake preset 构建
@@ -149,7 +149,7 @@ uv run --frozen python -m unittest tools/test_workflow.py
 - CoronaEngine 自己使用的包：在根 [conanfile.py](conanfile.py) 声明版本和 option，在 CMake 中查找并链接导出的 target。
 - Horizon 新增的、且会被 CoronaEngine 当前启用功能使用的包：除了 Horizon 自己的 conanfile.py 外，也要在根 conanfile.py 声明。因为集成构建只解析父工程的 Conan 图。
 - 仅由当前被关闭的 Horizon target family 使用的包，不应无条件带入父工程依赖图。
-- target 名称不兼容时，在 [misc/cmake/corona_third_party.cmake](misc/cmake/corona_third_party.cmake) 添加兼容别名或明确的 target 校验；只有 Horizon 使用时，通常应由 Horizon 的 CMake 模块完成查找。
+- target 名称不兼容时，在 [cmake/corona_third_party.cmake](cmake/corona_third_party.cmake) 添加兼容别名或明确的 target 校验；只有 Horizon 使用时，通常应由 Horizon 的 CMake 模块完成查找。CMake 调用的 Python 构建辅助脚本统一位于 [tools/build](tools/build)。
 - 不要在 CMake 中重新引入 FetchContent、ExternalProject、file(DOWNLOAD) 或另一套包管理器来下载同一第三方库。
 
 根 Conan recipe 的主要 feature option 包括 <code>with_editor</code>、<code>with_examples</code>、<code>with_tests</code>、<code>with_vision</code>、<code>with_vision_tests</code>、<code>with_oidn</code> 与 <code>with_cef</code>。它们会生成相应的 CMake cache 变量。tools/dev.py 的目标族是这些 option 的唯一开发者入口；需要新增独立 feature 时，应同步调整 Conan option、目标族映射、preset、bootstrap 和 Horizon 子项目开关，而不是只手改 CMake cache。

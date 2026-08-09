@@ -25,6 +25,7 @@ def echo(msg: str) -> None:
 
 
 _STALE_EXTENSIONS = {".py", ".vue", ".js", ".ts", ".jsx", ".tsx", ".css", ".scss"}
+_PROTECTED_DEPLOYED_ROOTS = (Path("data"), Path("runtime") / "generated")
 
 
 def _cleanup_stale_files(src_root: Path, dst_root: Path, ignore_fn) -> None:
@@ -42,6 +43,12 @@ def _cleanup_stale_files(src_root: Path, dst_root: Path, ignore_fn) -> None:
             return
         for entry in entries:
             if ignore_fn("", [entry.name]):
+                continue
+            relative = entry.relative_to(dst_root)
+            if any(
+                relative == protected or protected in relative.parents
+                for protected in _PROTECTED_DEPLOYED_ROOTS
+            ):
                 continue
             if entry.is_dir():
                 _walk(entry)
@@ -128,12 +135,15 @@ def copy_tree(src: Path, dst: Path, merge_content: bool = False) -> None:
             try:
                 if item.is_dir():
                     shutil.copytree(item, target, dirs_exist_ok=True, ignore=_ignore)
-                    # 删除目标中源已不存在的源码文件
-                    _cleanup_stale_files(item, target, _ignore)
                 else:
                     shutil.copy2(item, target)
             except Exception as e:
                 print(f"[editor-copy] ERROR copying {item} -> {target}: {e}")
+        # Sweep from the merge root. Per-directory cleanup cannot see a source
+        # directory that was removed entirely (for example an old compatibility
+        # package), so stale Python/JS sources at that depth would otherwise
+        # survive in the deployed CabbageEditor tree.
+        _cleanup_stale_files(src, dst, _ignore)
     else:
         # Original behavior: copy src as a subdirectory of dst
         target = dst / src.name

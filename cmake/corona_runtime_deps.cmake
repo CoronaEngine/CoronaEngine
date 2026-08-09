@@ -72,7 +72,7 @@ function(corona_install_runtime_deps target_name)
 
     set(_CORONA_DESTINATION_DIR "$<TARGET_FILE_DIR:${target_name}>")
 
-    set(_CORONA_PY_COPY "${PROJECT_SOURCE_DIR}/misc/pytools/copy_files.py")
+    set(_CORONA_PY_COPY "${PROJECT_SOURCE_DIR}/tools/build/copy_files.py")
 
     if(EXISTS "${_CORONA_PY_COPY}" AND DEFINED Python_EXECUTABLE)
         set(_CORONA_DEPS_DIR "${CMAKE_BINARY_DIR}/runtime_deps")
