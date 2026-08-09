@@ -13,22 +13,16 @@
 | Visual Studio 或 Build Tools | 安装“使用 C++ 的桌面开发”、MSVC x64/x86 工具集与 Windows SDK |
 | CUDA Toolkit | 仅 Vision / Ocarina / Vision Hotfix 需要；安装后应存在 CUDA_PATH |
 
-先在新的 PowerShell 中确认基础工具可用：
 
-~~~powershell
-git --version
-uv --version
-cmake --version
-ninja --version
-~~~
+## 通过 CMake preset 构建
 
-首次进入仓库后同步开发环境：
+脚本是推荐入口。若使用 CMake Tools，选择目标族 preset，例如 <code>core-debug</code>、<code>examples-debug</code>、<code>tests-debug</code>、<code>vision-debug</code>、<code>vision-tests-debug</code> 或 <code>vision-oidn-debug</code>，再执行 Configure 和 Build。根 CMakeLists.txt 会调用开发 bootstrap，生成并加载对应目标族和配置的 Conan toolchain。
 
-~~~powershell
-uv sync --frozen
-~~~
+旧的 <code>debug</code>、<code>release</code>、<code>relwithdebinfo</code> 和 <code>minsizerel</code> preset 保留为 <code>examples-*</code> 的兼容别名。新开发应直接选择带目标族前缀的 preset。
 
-项目要求 Python 3.11 及以上；如果本机没有合适版本，uv 会按自身配置处理 Python 安装。首次同步、Conan 安装或编译依赖耗时较长属于正常情况。
+不要把 [.workspace/Horizon/README.md](.workspace/Horizon/README.md) 中的独立 Horizon preset 或工具命令直接套用于父工程：它们用于单独构建 Horizon，目录结构和 target family 与 CoronaEngine 不同。父工程只应使用根目录的 preset 和 tools/dev.py。
+
+
 
 ### VS Code / CMake Tools
 
@@ -99,14 +93,6 @@ ctest --test-dir build/conan/tests/debug -C Debug --output-on-failure
 ~~~powershell
 uv run --frozen python -m unittest tools/test_workflow.py
 ~~~
-
-## 通过 CMake preset 构建
-
-脚本是推荐入口。若使用 CMake Tools，选择目标族 preset，例如 <code>core-debug</code>、<code>examples-debug</code>、<code>tests-debug</code>、<code>vision-debug</code>、<code>vision-tests-debug</code> 或 <code>vision-oidn-debug</code>，再执行 Configure 和 Build。根 CMakeLists.txt 会调用开发 bootstrap，生成并加载对应目标族和配置的 Conan toolchain。
-
-旧的 <code>debug</code>、<code>release</code>、<code>relwithdebinfo</code> 和 <code>minsizerel</code> preset 保留为 <code>examples-*</code> 的兼容别名。新开发应直接选择带目标族前缀的 preset。
-
-不要把 [.workspace/Horizon/README.md](.workspace/Horizon/README.md) 中的独立 Horizon preset 或工具命令直接套用于父工程：它们用于单独构建 Horizon，目录结构和 target family 与 CoronaEngine 不同。父工程只应使用根目录的 preset 和 tools/dev.py。
 
 ## 功能与依赖注意事项
 
