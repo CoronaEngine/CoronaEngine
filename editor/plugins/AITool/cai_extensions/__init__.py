@@ -7,9 +7,8 @@ Quasar（一个通用 AI 库）中。
 - ``paths_provider``：实现 CAI 路径解析器，转发到 runtime project context 和
   ``editor/config/paths_config``。
 - ``app_config_provider``：实现 CAI app_config provider，转发到 ``config.app_config``。
-- ``engine_tools``：注册编辑器 / 引擎相关的 MCP / scene_placement loaders。
+- ``engine_tools``：注册编辑器 / 引擎相关的 MCP loaders。
 - ``flows``：从 CAI 迁出的多步 LangGraph 工作流（场景合成、模型检索等）。
 - ``mcp``：从 CAI 迁出的 MCP 工具集（场景、相机、模型导入等）。
-- ``scene_placement``：从 CAI 迁出的场景布置工具与配置。
 - ``register``：``install()`` 入口，AITool 插件加载时调用。
 """

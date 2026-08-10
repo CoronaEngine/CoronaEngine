@@ -72,15 +72,5 @@ class QuasarEngineBoundaryTests(unittest.TestCase):
         text = path.read_text(encoding="utf-8")
         self.assertNotIn("scene_breakdown_tools", text)
 
-    def test_scene_plan_tool_is_engine_owned(self):
-        quasar_text = (
-            QUASAR_ROOT / "ai_modules" / "text_generate" / "tools" / "text_tools.py"
-        ).read_text(encoding="utf-8")
-        self.assertNotIn("generate_scene_plan", quasar_text)
-        self.assertTrue(
-            (Path(__file__).resolve().parents[1] / "cai_extensions" / "scene_plan_tools.py").exists()
-        )
-
-
 if __name__ == "__main__":
     unittest.main()

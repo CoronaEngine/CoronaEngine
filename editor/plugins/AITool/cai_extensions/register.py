@@ -150,13 +150,9 @@ class CabbageEngineModulesPlugin:
             ".mcp.configs.settings",
             ".mcp.tools.scene_tools",
         ),
-        "scene_placement": (
-            ".scene_placement.configs.settings",
-            ".scene_placement.tools.loader",
-        ),
     }
 
-    def __init__(self, context: CabbageContext, modules: Iterable[str] = ("mcp", "scene_placement")):
+    def __init__(self, context: CabbageContext, modules: Iterable[str] = ("mcp",)):
         self.context = context
         self.modules = tuple(modules)
 

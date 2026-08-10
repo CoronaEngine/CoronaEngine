@@ -11,7 +11,6 @@
 | `services/` | AITool service owner | 对话、协作、Agent runtime、生成请求和报告编排 | 不直接操作 `Actor`/`Scene`，不定义公共 manifest |
 | `services/media_storage.py` | AITool 媒体落盘 owner | 默认将输入媒体写入活动项目 `media`，显式输出路径保持调用方控制 | 不依赖进程 `cwd`，不写入仓库 `uploads/` |
 | `cai_extensions/` | AITool integration owner | Quasar 集成、Agent、MCP 工具和生成 workflow | 不成为引擎底层 API 或场景权威状态 owner |
-| `cai_extensions/scene_placement/paths.py` | 场景放置中间物路径 owner | 将布局 JSON 和下载模型归属到活动项目 `Resource/generated/scene_placement`；绝对配置路径保持显式覆盖 | 不写入 native `Scene/*.scene`，不负责引擎场景状态 |
 | `compat/`、`utils/` | removed compatibility code | 目录和旧导入入口已删除；配置统一由 `configuration/` 负责，媒体统一由 `services/media_storage.py` 负责 | 不得重新创建旧入口 |
 | `Quasar/` | 外部子模块 | 上游 AI runtime 内容 | 本仓迁移不修改 |
 
