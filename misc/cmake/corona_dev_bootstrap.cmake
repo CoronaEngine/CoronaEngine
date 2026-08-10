@@ -9,6 +9,16 @@ function(corona_dev_bootstrap)
         set(CORONA_DEV_TARGET_FAMILY "examples" CACHE STRING "CoronaEngine developer target family")
     endif()
 
+    set_property(CACHE CORONA_DEV_CONFIGURATION PROPERTY STRINGS
+        Debug Release RelWithDebInfo MinSizeRel)
+    set(_corona_configurations Debug Release RelWithDebInfo MinSizeRel)
+    list(FIND _corona_configurations "${CORONA_DEV_CONFIGURATION}" _corona_configuration_index)
+    if(_corona_configuration_index EQUAL -1)
+        message(FATAL_ERROR
+            "Unsupported CORONA_DEV_CONFIGURATION='${CORONA_DEV_CONFIGURATION}'. "
+            "Expected one of: ${_corona_configurations}")
+    endif()
+
     set_property(CACHE CORONA_DEV_TARGET_FAMILY PROPERTY STRINGS
         core examples tests vision vision-tests vision-oidn)
     set(_corona_target_families core examples tests vision vision-tests vision-oidn)
@@ -108,4 +118,30 @@ function(corona_dev_bootstrap)
     endif()
     include("${_corona_build_environment}")
     set(CMAKE_TOOLCHAIN_FILE "${_corona_toolchain}" CACHE FILEPATH "Conan toolchain" FORCE)
+
+    # Conan installs exactly one configuration per build directory, and CMakeDeps
+    # guards every usage requirement (include dirs, compile definitions, imported
+    # libraries) behind $<$<CONFIG:${CORONA_DEV_CONFIGURATION}>:...>. Any other
+    # configuration in this directory therefore compiles with zero third-party
+    # include directories and dies on the first external header.
+    #
+    # Ninja Multi-Config otherwise defaults CMAKE_CONFIGURATION_TYPES to
+    # "Debug;Release;RelWithDebInfo" and builds the first entry when no --config
+    # is given, which is how IDE-driven builds (VS Code CMake Tools synthesizes a
+    # build preset without --config) silently ended up compiling Debug against
+    # RelWithDebInfo-only dependencies.
+    #
+    # Pin the directory to its provisioned configuration so a bare
+    # `cmake --build <dir>` is correct and a mismatched --config fails loudly.
+    if(CMAKE_GENERATOR MATCHES "Multi-Config|Visual Studio|Xcode")
+        set(CMAKE_CONFIGURATION_TYPES "${CORONA_DEV_CONFIGURATION}" CACHE STRING
+            "CoronaEngine configurations provisioned by Conan in this build directory" FORCE)
+        set(CMAKE_DEFAULT_BUILD_TYPE "${CORONA_DEV_CONFIGURATION}" CACHE STRING
+            "Configuration built when --config is omitted" FORCE)
+    else()
+        set(CMAKE_BUILD_TYPE "${CORONA_DEV_CONFIGURATION}" CACHE STRING
+            "CoronaEngine build type provisioned by Conan in this build directory" FORCE)
+    endif()
+    set(CMAKE_TRY_COMPILE_CONFIGURATION "${CORONA_DEV_CONFIGURATION}" CACHE STRING
+        "Configuration used for try_compile checks" FORCE)
 endfunction()
