@@ -2,7 +2,7 @@
 # CoronaEngine - Root CMake Configuration
 #
 # Responsibilities:
-#   - Coordinate the build using modular helper scripts located in misc/cmake.
+#   - Coordinate the build using CMake modules in cmake and Python helpers in tools/build.
 #   - Register project-wide options, toolchains, third-party dependencies, and
 #     runtime asset staging helpers.
 #   - Add subdirectories in module order: src -> engine -> examples.
@@ -11,7 +11,7 @@
 cmake_minimum_required(VERSION 3.29)
 
 list(APPEND CMAKE_MODULE_PATH
-    "${CMAKE_CURRENT_SOURCE_DIR}/misc/cmake"
+    "${CMAKE_CURRENT_SOURCE_DIR}/cmake"
     "${CMAKE_CURRENT_SOURCE_DIR}/modules/corona_resource/cmake"
 )
 

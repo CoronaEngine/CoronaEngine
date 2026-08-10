@@ -27,16 +27,14 @@ class NativeFileDialogOwnershipTests(unittest.TestCase):
     def test_python_runtime_contains_no_editor_file_dialog_implementation(self):
         production_files = (
             ROOT / "editor/plugins/MainView/main.py",
-            ROOT / "editor/plugins/SceneDatas/main.py",
             ROOT / "editor/plugins/SceneTools/main.py",
             ROOT / "editor/plugins/ProjectLauncher/main.py",
-            ROOT / "editor/backend/project_settings/main.py",
         )
         combined = "\n".join(path.read_text(encoding="utf-8") for path in production_files)
 
         self.assertNotIn("FileHandler", combined)
         self.assertNotIn("tkinter", combined)
-        self.assertFalse((ROOT / "editor/CoronaCore/utils/file_handler.py").exists())
+        self.assertFalse((ROOT / "editor/CoronaCore/utils/file_handler.py").is_file())
 
 
 if __name__ == "__main__":

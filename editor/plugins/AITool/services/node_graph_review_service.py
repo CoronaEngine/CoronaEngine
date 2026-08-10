@@ -326,7 +326,7 @@ class NodeGraphReviewService:
             if status in (401, 403):
                 return self._error(
                     "AI_AUTH_FAILED",
-                    "DeepSeek 身份验证失败，请检查 ai_setting.py 中的 deepseek 配置。",
+                    "DeepSeek 身份验证失败，请检查 editor/.env 中的 API key 配置。",
                 )
             if status == 429:
                 return self._error(
@@ -448,7 +448,9 @@ class NodeGraphReviewService:
             # Review/generation can run before the LAN-chat worker finishes warm-up.
             # Lazily register the editor-owned settings before falling back to env.
             try:
-                importlib.import_module("..utils.ai_setting", package=__package__)
+                from ..configuration.local_secrets import load_ai_setting
+
+                load_ai_setting()
             except Exception as exc:
                 logger.debug(
                     "DeepSeek editor settings lazy-load failed: %s",

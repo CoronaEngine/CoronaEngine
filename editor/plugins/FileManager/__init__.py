@@ -1,0 +1,2 @@
+"""Canonical FileManager editor plugin."""
+

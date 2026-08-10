@@ -24,35 +24,11 @@ DEFAULT_SCENE_NAME = ""
 SUPPORTED_EXTS = {".obj", ".dae", ".glb", ".gltf", ".fbx"}
 
 
-class _LazySceneManager:
-    """Delay CoronaCore scene_manager import until a tool is invoked."""
+def _active_project_path(legacy_engine: Any = None) -> str:
+    """Read project context from settings; keep an old-engine fallback for legacy builds."""
+    from runtime.project_context import get_active_project_path
 
-    def _manager(self):
-        from CoronaCore.core.managers import scene_manager
-
-        return scene_manager
-
-    def get(self, *args, **kwargs):
-        return self._manager().get(*args, **kwargs)
-
-    def list_all(self, *args, **kwargs):
-        return self._manager().list_all(*args, **kwargs)
-
-
-def _resolve_scene(scene_manager, scene_name: str):
-    """根据名称获取场景，若为空则自动获取当前已加载的场景。"""
-    if scene_name:
-        scene = scene_manager.get(scene_name)
-        if scene is not None:
-            return scene
-        for route in scene_manager.list_all():
-            s = scene_manager.get(route)
-            if s is not None and getattr(s, "name", None) == scene_name:
-                return s
-    routes = scene_manager.list_all()
-    if routes:
-        return scene_manager.get(routes[0])
-    return None
+    return get_active_project_path(legacy_engine)
 
 
 def _pick_model_file(path: str) -> Optional[str]:
@@ -125,52 +101,17 @@ def _create_native_editor_actor(
     source_path: str,
     actor_type: str,
     actor_data: dict[str, Any],
-    legacy_engine: Any,
 ) -> dict[str, Any]:
-    """Create an actor through the manifest API, with an old-engine fallback.
+    """Create an actor through the native SceneTools aggregate contract."""
 
-    New editor builds expose ``SceneTools.create_actor`` through the C++
-    manifest. Older F5 builds and isolated Python tests only expose the direct
-    ``create_editor_actor`` binding, so that path remains a compatibility
-    fallback rather than a second production entry point.
-    """
+    from api.editor_api import CoronaEditorApi
 
-    try:
-        import CoronaEngine  # type: ignore
-    except ImportError:
-        CoronaEngine = None
-
-    manifest_invoker = getattr(CoronaEngine, "_invoke_cpp_editor_api", None)
-    if callable(manifest_invoker):
-        from CoronaCore.core import editor_api
-
-        try:
-            manifest_spec = editor_api._find_cpp_api_method_by_python_wrapper(
-                "scene_tools.create_actor"
-            )
-        except Exception:  # Old builds can expose the invoker without this method.
-            manifest_spec = None
-        if manifest_spec is not None:
-            return _normalize_native_result(
-                editor_api.CoronaEditorApi.scene_tools.create_actor(
-                    scene_name,
-                    source_path,
-                    actor_type,
-                    actor_data,
-                )
-            )
-
-    legacy_create = getattr(legacy_engine, "create_editor_actor", None)
-    if not callable(legacy_create):
-        raise RuntimeError(
-            "current engine exposes neither SceneTools.create_actor nor create_editor_actor"
-        )
     return _normalize_native_result(
-        legacy_create(
+        CoronaEditorApi.scene_tools.create_actor(
             scene_name,
             source_path,
             actor_type,
-            json.dumps(actor_data, ensure_ascii=False),
+            actor_data,
         )
     )
 
@@ -292,7 +233,7 @@ class ImportEnvironmentComponentInput(BaseModel):
 # Tool Builder
 # ---------------------------------------------------------------------------
 
-def _build_import_model_tool(scene_manager) -> StructuredTool:
+def _build_import_model_tool(scene_manager=None) -> StructuredTool:
     """构建模型导入工具"""
 
     def _import_model(
@@ -319,14 +260,11 @@ def _build_import_model_tool(scene_manager) -> StructuredTool:
         scene_name: str = DEFAULT_SCENE_NAME,
     ) -> str:
         try:
-            from CoronaCore.core.corona_editor import CoronaEditor
-            CoronaEngine = CoronaEditor.CoronaEngine
-
             # 1. 解析模型路径（支持绝对路径和项目相对路径）
             if os.path.isabs(model_path):
                 resolved_path = model_path
             else:
-                project_path = CoronaEngine.active_project_path
+                project_path = _active_project_path()
                 if not project_path:
                     return build_error_result(
                         error_message="未设置活跃项目路径，无法解析相对路径"
@@ -388,7 +326,6 @@ def _build_import_model_tool(scene_manager) -> StructuredTool:
                 source_path=final_path,
                 actor_type="model",
                 actor_data=actor_data,
-                legacy_engine=CoronaEngine,
             )
             if native_result.get("status") == "error":
                 return build_error_result(
@@ -468,7 +405,7 @@ def _build_import_model_tool(scene_manager) -> StructuredTool:
     )
 
 
-def _build_import_environment_component_tool(scene_manager) -> StructuredTool:
+def _build_import_environment_component_tool(scene_manager=None) -> StructuredTool:
     """Build the minimal Runtime environment import tool.
 
     This is intentionally a small native bridge adapter, not a legacy workflow.
@@ -506,9 +443,6 @@ def _build_import_environment_component_tool(scene_manager) -> StructuredTool:
         scene_name: str = DEFAULT_SCENE_NAME,
     ) -> str:
         try:
-            from CoronaCore.core.corona_editor import CoronaEditor
-            CoronaEngine = CoronaEditor.CoronaEngine
-
             safe_component_id = str(component_id or "").strip()
             if not safe_component_id:
                 return build_error_result(
@@ -594,7 +528,6 @@ def _build_import_environment_component_tool(scene_manager) -> StructuredTool:
                 source_path=source_path,
                 actor_type="model",
                 actor_data=actor_data,
-                legacy_engine=CoronaEngine,
             )
             if native_result.get("status") == "error":
                 return build_error_result(
@@ -686,7 +619,7 @@ def _build_import_environment_component_tool(scene_manager) -> StructuredTool:
     )
 
 
-def _build_remove_model_tool(scene_manager) -> StructuredTool:
+def _build_remove_model_tool(scene_manager=None) -> StructuredTool:
     """构建模型删除工具"""
 
     def _remove_model(
@@ -695,16 +628,11 @@ def _build_remove_model_tool(scene_manager) -> StructuredTool:
         scene_name: str = DEFAULT_SCENE_NAME,
     ) -> str:
         try:
-            from CoronaCore.core.corona_editor import CoronaEditor
-            CoronaEngine = CoronaEditor.CoronaEngine
+            from api.editor_api import CoronaEditorApi
 
-            remove_editor_actor = getattr(CoronaEngine, "remove_editor_actor", None)
-            if not callable(remove_editor_actor):
-                return build_error_result(
-                    error_message="当前引擎缺少 remove_editor_actor native 接口"
-                ).to_envelope(interface_type="scene")
-
-            native_result_raw = remove_editor_actor(scene_name, actor_name)
+            native_result_raw = CoronaEditorApi.scene_tools.remove_actor(
+                scene_name, actor_name
+            )
             native_result = (
                 json.loads(native_result_raw)
                 if isinstance(native_result_raw, str)
@@ -752,11 +680,10 @@ def _build_remove_model_tool(scene_manager) -> StructuredTool:
 # ---------------------------------------------------------------------------
 
 def load_model_import_tools() -> List[StructuredTool]:
-    scene_manager = _LazySceneManager()
     return [
-        _build_import_model_tool(scene_manager),
-        _build_import_environment_component_tool(scene_manager),
-        _build_remove_model_tool(scene_manager),
+        _build_import_model_tool(),
+        _build_import_environment_component_tool(),
+        _build_remove_model_tool(),
     ]
 
 

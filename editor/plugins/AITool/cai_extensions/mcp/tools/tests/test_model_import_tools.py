@@ -21,6 +21,7 @@ if str(AI_TOOL_ROOT) not in sys.path:
 
 from editor.plugins.AITool.cai_extensions.mcp.tools.model_import_tools import (
     _actor_identity_from_native_result,
+    _active_project_path,
     _build_import_model_tool,
     _build_import_environment_component_tool,
     _create_native_editor_actor,
@@ -29,15 +30,55 @@ from editor.plugins.AITool.cai_extensions.mcp.tools.model_import_tools import (
 from editor.plugins.AITool.services.agent_runtime.environment_primitives import (
     build_environment_primitive,
 )
+from api import editor_api
 
 
 class ModelImportToolsTests(unittest.TestCase):
+    def test_model_import_tools_routes_actor_deletion_through_scene_tools_adapter(self) -> None:
+        source = (Path(__file__).resolve().parents[1] / "model_import_tools.py").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertNotIn('getattr(CoronaEngine, "remove_editor_actor"', source)
+        self.assertIn("CoronaEditorApi.scene_tools.remove_actor", source)
+        self.assertNotIn("get_scene_tools_adapter", source)
+
+    def test_model_import_tools_do_not_import_editor_runtime_container(self) -> None:
+        source = (Path(__file__).resolve().parents[1] / "model_import_tools.py").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertNotIn(
+            "from CoronaCore.core.corona_editor import CoronaEditor",
+            source,
+        )
+
+    def test_model_import_tools_use_the_canonical_editor_api_package(self) -> None:
+        source = (Path(__file__).resolve().parents[1] / "model_import_tools.py").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertNotIn("from CoronaCore.core import editor_api", source)
+        self.assertIn("from api import editor_api", source)
+
+    def test_relative_model_paths_use_editor_project_context(self) -> None:
+        with mock.patch(
+            "api.editor_api.get_active_project_path",
+            return_value="D:/Projects/Example",
+        ):
+            self.assertEqual(_active_project_path(), "D:/Projects/Example")
+
+    def test_relative_model_paths_use_editor_adapter_fallback(self) -> None:
+        fake_settings = types.SimpleNamespace(active_project_path="")
+        fake_module = types.SimpleNamespace(settings_manager=fake_settings)
+        with mock.patch.dict("sys.modules", {"config.project_state": fake_module}), mock.patch(
+            "api.editor_api.get_active_project_path",
+            return_value="D:/Projects/Legacy",
+        ):
+            self.assertEqual(_active_project_path(), "D:/Projects/Legacy")
+
     def test_model_import_preserves_runtime_asset_identity(self) -> None:
         calls = []
-        fake_editor_module = types.ModuleType("CoronaCore.core.corona_editor")
-        fake_editor_module.CoronaEditor = types.SimpleNamespace(
-            CoronaEngine=types.SimpleNamespace(active_project_path="")
-        )
         tool = _build_import_model_tool(scene_manager=None)
 
         def fake_create(**kwargs):
@@ -55,10 +96,7 @@ class ModelImportToolsTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             model_path = Path(tmp) / "chair.glb"
             model_path.write_bytes(b"glb")
-            with mock.patch.dict(
-                "sys.modules",
-                {"CoronaCore.core.corona_editor": fake_editor_module},
-            ), mock.patch(
+            with mock.patch(
                 "editor.plugins.AITool.cai_extensions.mcp.tools.model_import_tools._create_native_editor_actor",
                 side_effect=fake_create,
             ):
@@ -135,10 +173,6 @@ class ModelImportToolsTests(unittest.TestCase):
 
     def test_room_environment_import_never_uses_audio_actor_type(self) -> None:
         calls = []
-        fake_editor_module = types.ModuleType("CoronaCore.core.corona_editor")
-        fake_editor_module.CoronaEditor = types.SimpleNamespace(
-            CoronaEngine=types.SimpleNamespace()
-        )
         tool = _build_import_environment_component_tool(scene_manager=None)
 
         def fake_create(**kwargs):
@@ -154,10 +188,7 @@ class ModelImportToolsTests(unittest.TestCase):
                 },
             }
 
-        with mock.patch.dict(
-            "sys.modules",
-            {"CoronaCore.core.corona_editor": fake_editor_module},
-        ), mock.patch(
+        with mock.patch(
             "editor.plugins.AITool.cai_extensions.mcp.tools.model_import_tools._create_native_editor_actor",
             side_effect=fake_create,
         ):
@@ -200,10 +231,6 @@ class ModelImportToolsTests(unittest.TestCase):
 
     def test_room_environment_import_uses_plugins_namespace_when_editor_namespace_is_unavailable(self) -> None:
         calls = []
-        fake_editor_module = types.ModuleType("CoronaCore.core.corona_editor")
-        fake_editor_module.CoronaEditor = types.SimpleNamespace(
-            CoronaEngine=types.SimpleNamespace()
-        )
         tool = _build_import_environment_component_tool(scene_manager=None)
         real_import = builtins.__import__
 
@@ -224,10 +251,7 @@ class ModelImportToolsTests(unittest.TestCase):
                 },
             }
 
-        with mock.patch.dict(
-            "sys.modules",
-            {"CoronaCore.core.corona_editor": fake_editor_module},
-        ), mock.patch(
+        with mock.patch(
             "builtins.__import__",
             side_effect=guarded_import,
         ), mock.patch(
@@ -366,102 +390,40 @@ class ModelImportToolsTests(unittest.TestCase):
                     "actor": {"actor_guid": "manifest-guid"},
                 }
 
-        fake_corona_engine_module = types.ModuleType("CoronaEngine")
-        fake_corona_engine_module._invoke_cpp_editor_api = lambda *_args: None
-        fake_editor_api_module = types.ModuleType("CoronaCore.core.editor_api")
-        fake_editor_api_module.CoronaEditorApi = types.SimpleNamespace(
-            scene_tools=FakeSceneTools()
-        )
-        fake_editor_api_module._find_cpp_api_method_by_python_wrapper = (
-            lambda wrapper: {"api": "SceneTools.create_actor"}
-            if wrapper == "scene_tools.create_actor"
-            else None
-        )
-
         class LegacyEngine:
             @staticmethod
             def create_editor_actor(*_args):
                 raise AssertionError("legacy actor API must not be called")
 
         actor_data = {"position": [1.0, 2.0, 3.0]}
-        with mock.patch.dict(
-            "sys.modules",
-            {
-                "CoronaEngine": fake_corona_engine_module,
-                "CoronaCore.core.editor_api": fake_editor_api_module,
-            },
+        with mock.patch.object(
+            editor_api.CoronaEditorApi.scene_tools,
+            "create_actor",
+            side_effect=FakeSceneTools.create_actor,
         ):
             result = _create_native_editor_actor(
                 scene_name="Scene/test.scene",
                 source_path="models/chest.glb",
                 actor_type="model",
                 actor_data=actor_data,
-                legacy_engine=LegacyEngine,
             )
 
         self.assertEqual(result["actor"]["actor_guid"], "manifest-guid")
         self.assertEqual(len(manifest_calls), 1)
         self.assertIs(manifest_calls[0][3], actor_data)
 
-    def test_create_native_editor_actor_falls_back_when_manifest_method_is_missing(self) -> None:
-        fake_corona_engine_module = types.ModuleType("CoronaEngine")
-        fake_corona_engine_module._invoke_cpp_editor_api = lambda *_args: None
-        fake_editor_api_module = types.ModuleType("CoronaCore.core.editor_api")
-        fake_editor_api_module.CoronaEditorApi = types.SimpleNamespace()
-        fake_editor_api_module._find_cpp_api_method_by_python_wrapper = lambda _wrapper: None
-        legacy_calls = []
-
-        class LegacyEngine:
-            @staticmethod
-            def create_editor_actor(scene_name, source_path, actor_type, actor_data_json):
-                legacy_calls.append((scene_name, source_path, actor_type, actor_data_json))
-                return {"status": "success", "actor": {"actor_guid": "old-build-guid"}}
-
-        with mock.patch.dict(
-            "sys.modules",
-            {
-                "CoronaEngine": fake_corona_engine_module,
-                "CoronaCore.core.editor_api": fake_editor_api_module,
-            },
-        ):
-            result = _create_native_editor_actor(
-                scene_name="Scene/test.scene",
-                source_path="models/chest.glb",
-                actor_type="model",
-                actor_data={"position": [0.0, 0.0, 0.0]},
-                legacy_engine=LegacyEngine,
-            )
-
-        self.assertEqual(result["actor"]["actor_guid"], "old-build-guid")
-        self.assertEqual(len(legacy_calls), 1)
-
-    def test_create_native_editor_actor_falls_back_for_old_engine(self) -> None:
-        legacy_calls = []
-        fake_corona_engine_module = types.ModuleType("CoronaEngine")
-
-        class LegacyEngine:
-            @staticmethod
-            def create_editor_actor(scene_name, source_path, actor_type, actor_data_json):
-                legacy_calls.append(
-                    (scene_name, source_path, actor_type, json.loads(actor_data_json))
-                )
-                return json.dumps(
-                    {"status": "success", "actor": {"actor_guid": "legacy-guid"}}
-                )
-
-        with mock.patch.dict(
-            "sys.modules", {"CoronaEngine": fake_corona_engine_module}
-        ):
-            result = _create_native_editor_actor(
+    def test_create_native_editor_actor_does_not_fallback_to_legacy_engine(self) -> None:
+        with mock.patch.object(
+            editor_api.CoronaEditorApi.scene_tools,
+            "create_actor",
+            side_effect=RuntimeError("native scene tools unavailable"),
+        ), self.assertRaisesRegex(RuntimeError, "native scene tools unavailable"):
+            _create_native_editor_actor(
                 scene_name="Scene/test.scene",
                 source_path="models/chest.glb",
                 actor_type="model",
                 actor_data={"scale": [1.2, 1.2, 1.2]},
-                legacy_engine=LegacyEngine,
             )
-
-        self.assertEqual(result["actor"]["actor_guid"], "legacy-guid")
-        self.assertEqual(legacy_calls[0][3]["scale"], [1.2, 1.2, 1.2])
 
 
 if __name__ == "__main__":

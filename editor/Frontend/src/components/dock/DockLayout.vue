@@ -80,9 +80,12 @@
 import { computed, ref, onMounted, onUnmounted } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { useDockStore } from '@/stores/dockStore.js';
-import { getPluginManifest } from '@/config/pluginManifest.js';
 import DockPanel from './DockPanel.vue';
 import { createDockOverlayStyles } from './dockOverlayLayout.js';
+
+const props = defineProps({
+  componentResolver: { type: Function, default: null },
+});
 
 const { t } = useI18n();
 const dockStore = useDockStore();
@@ -116,7 +119,7 @@ const overlayStyles = computed(() => createDockOverlayStyles({
 }));
 
 function getComponent(panelId) {
-  return getPluginManifest(panelId)?.component ?? null;
+  return props.componentResolver?.(panelId) ?? null;
 }
 
 function clampSideWidth(value, oppositeWidth) {

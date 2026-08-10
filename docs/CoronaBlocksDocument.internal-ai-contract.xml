@@ -219,7 +219,7 @@
     "globalVariablesWorkspace": {}
   }
 }</ExampleResult>
-  <Catalog generatedFrom="editor/Frontend/src/blockly/configs/toolboxConfig.js and registered Blockly definitions" blockCount="261" locked="true">
+  <Catalog generatedFrom="editor/Frontend/src/blockly/configs/toolboxConfig.js and registered Blockly definitions" blockCount="262" locked="true">
     <CatalogRules>
       <Rule>AI must preserve this Catalog and may use only listed Block type, Field name, Input name, check type, and dropdown value combinations.</Rule>
       <Rule>projectUsage=project-safe means suitable for the unbound project graph. projectUsage=actor-context means the block expects a current actor context and should normally be avoided here.</Rule>
@@ -230,7 +230,7 @@
       <Group category="事件" types="event_gameStart node_when_enter node_while_active node_when_exit" />
       <Group category="控制" types="control_wait control_if control_else control_cooldown_ready control_start_cooldown" />
       <Group category="条件" types="logic_boolean logic_compare logic_operation logic_negate math_number math_arithmetic variable_get variable_exists detect_object_exists detect_object_not_exists detect_keyboard1 detect_keyboard0 detect_mouse1 detect_mouse0 detect_mouse_x_ratio detect_inside_axis detect_inside_box detect_position_near detect_raycast detect_raycast_hit_tag ui_countdown_finished ui_score ui_lives" />
-      <Group category="运动" types="object_set_position object_get_x object_get_y object_get_z object_move_tag" />
+      <Group category="运动" types="object_set_position object_move_direction object_get_x object_get_y object_get_z object_move_tag" />
       <Group category="摄像机" types="camera_follow_object camera_third_person_orbit camera_first_person_follow camera_raycast" />
       <Group category="侦测" types="detect_crossed_x_once detect_crossed_z_once detect_mouse_pick_object detect_mouse_pick_hit_tag" />
       <Group category="界面" types="ui_set_score ui_add_score ui_set_lives ui_game_win ui_game_over" />
@@ -570,6 +570,11 @@
         <Field name="X" kind="number" defaultJson="0" inputOwner="X" />
         <Field name="Y" kind="number" defaultJson="0" inputOwner="Y" />
         <Field name="Z" kind="number" defaultJson="0" inputOwner="Z" />
+      </Block>
+      <Block type="object_move_direction" category="运动" shape="statement" projectUsage="project-safe" recommended="true" outputCheck="" dynamic="false" label="让对象持续移动" capabilities="movement" aiUse="Move one named actor by a fixed direction and speed during script updates.">
+        <Field name="NAME" kind="string" defaultJson="&quot;&quot;" inputOwner="TARGET" />
+        <Field name="DIRECTION" kind="dropdown" defaultJson="&quot;FORWARD&quot;" inputOwner="MOVEMENT" optionValues="FORWARD|BACKWARD|LEFT|RIGHT|UP|DOWN" optionLabels="向前|向后|向左|向右|向上|向下" />
+        <Field name="SPEED" kind="number" defaultJson="1" inputOwner="MOVEMENT" />
       </Block>
       <Block type="object_get_x" category="运动" shape="output" projectUsage="project-safe" recommended="true" outputCheck="Number" dynamic="false" label="对象  的 X …" capabilities="attraction distance-check" aiUse="Read the live X coordinate of the exact actor in NAME.">
         <Input name="NAME" kind="value" check="String" />

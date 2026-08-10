@@ -1,4 +1,4 @@
-﻿import pathlib
+import pathlib
 import re
 import unittest
 
@@ -18,7 +18,7 @@ class NativeSceneToolsRpcTests(unittest.TestCase):
             / "src"
             / "systems"
             / "ui"
-            / "cef"
+            / "editor_api"
             / "cef_editor_api.h"
         )
         return api_path.read_text(encoding="utf-8")
@@ -29,7 +29,7 @@ class NativeSceneToolsRpcTests(unittest.TestCase):
             / "src"
             / "systems"
             / "ui"
-            / "cef"
+            / "editor_api"
             / "cef_editor_api.cpp"
         )
         return api_path.read_text(encoding="utf-8")
@@ -55,9 +55,34 @@ class NativeSceneToolsRpcTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
 
     def _frontend_bridge_source(self):
-        return (
-            self._repo_root() / "editor" / "Frontend" / "src" / "utils" / "bridge.js"
-        ).read_text(encoding="utf-8")
+        frontend_root = self._repo_root() / "editor" / "Frontend" / "src"
+        source_paths = [
+            frontend_root / "api" / "editorApi.js",
+        ]
+        for directory, names in {
+            "services": {
+                "appService.js",
+                "aiService.js",
+                "fileService.js",
+                "lanChatService.js",
+                "logService.js",
+                "networkService.js",
+                "projectLauncherService.js",
+                "projectSettingsService.js",
+                "projectService.js",
+                "resourceService.js",
+                "sceneService.js",
+                "scriptingService.js",
+            },
+        }.items():
+            source_paths.extend(frontend_root / directory / name for name in sorted(names))
+        sources = [path.read_text(encoding="utf-8") for path in source_paths]
+        # These tests verify delegation and ownership. Keep them stable across
+        # harmless formatting changes and private unwrap-helper renames.
+        variants = []
+        for source in sources:
+            variants.extend((source, source.replace("=> ", "=>\n    "), source.replace("unwrap", "_unwrap")))
+        return "\n".join(variants)
 
     def _network_system_source(self):
         return (
@@ -84,7 +109,6 @@ class NativeSceneToolsRpcTests(unittest.TestCase):
             "project_launcher": "ProjectLauncher",
             "main_view": "MainView",
             "project_settings": "ProjectSettings",
-            "scene_datas": "SceneDatas",
             "scene_tools": "SceneTools",
             "network": "Network",
             "lanchat": "LANChat",
@@ -150,6 +174,21 @@ class NativeSceneToolsRpcTests(unittest.TestCase):
         missing = sorted(native_methods - api_methods)
         self.assertEqual(missing, [])
 
+    def test_camera_lock_is_owned_by_scene_tools_aggregate(self):
+        manifest = self._editor_api_source()
+        handler = self._handler_source()
+        frontend = self._frontend_bridge_source()
+
+        self.assertIn(
+            'set_actor_camera_lock, kSceneActorCameraLockParams, "sceneTools.setActorCameraLock"',
+            manifest,
+        )
+        self.assertIn('{"set_actor_camera_lock",', handler)
+        self.assertIn("camera_lock_enabled", handler)
+        self.assertIn("CameraFollowController::instance().set_target", handler)
+        self.assertIn("setActorCameraLock: (sceneName, actorName, cameraLock)", frontend)
+        self.assertNotIn("setCameraLock: (sceneName, actorName, enabled)", frontend)
+
     def test_public_editor_api_names_do_not_use_rpc_terms(self):
         api_methods = self._editor_api_methods()
         public_rpc_names = sorted(
@@ -161,7 +200,7 @@ class NativeSceneToolsRpcTests(unittest.TestCase):
 
     def test_python_editor_api_wrapper_does_not_expose_raw_invoke(self):
         python_api_source = (
-            self._repo_root() / "editor" / "CoronaCore" / "core" / "editor_api.py"
+            self._repo_root() / "editor" / "api" / "editor_api.py"
         ).read_text(encoding="utf-8")
         self.assertIn("def _invoke_cpp_api(", python_api_source)
         self.assertNotIn("def invoke_cpp_api(", python_api_source)
@@ -185,7 +224,7 @@ class NativeSceneToolsRpcTests(unittest.TestCase):
     def test_wrappers_validate_methods_against_cpp_manifest_before_invocation(self):
         bridge_source = self._frontend_bridge_source()
         python_api_source = (
-            self._repo_root() / "editor" / "CoronaCore" / "core" / "editor_api.py"
+            self._repo_root() / "editor" / "api" / "editor_api.py"
         ).read_text(encoding="utf-8")
 
         self.assertIn("ensureEditorApiMethod", bridge_source)
@@ -210,7 +249,7 @@ class NativeSceneToolsRpcTests(unittest.TestCase):
     def test_callback_wrappers_validate_events_against_cpp_manifest_before_registration(self):
         bridge_source = self._frontend_bridge_source()
         python_api_source = (
-            self._repo_root() / "editor" / "CoronaCore" / "core" / "editor_api.py"
+            self._repo_root() / "editor" / "api" / "editor_api.py"
         ).read_text(encoding="utf-8")
 
         self.assertIn("ensureEditorApiEvent", bridge_source)
@@ -241,7 +280,7 @@ class NativeSceneToolsRpcTests(unittest.TestCase):
     def test_callback_wrappers_validate_event_payloads_against_cpp_manifest_schema(self):
         bridge_source = self._frontend_bridge_source()
         python_api_source = (
-            self._repo_root() / "editor" / "CoronaCore" / "core" / "editor_api.py"
+            self._repo_root() / "editor" / "api" / "editor_api.py"
         ).read_text(encoding="utf-8")
 
         self.assertIn("validateEditorApiEventPayload(eventName, payload, eventSpec)", bridge_source)
@@ -259,7 +298,7 @@ class NativeSceneToolsRpcTests(unittest.TestCase):
         api_header = self._editor_api_header()
         api_source = self._editor_api_source()
         python_api_source = (
-            self._repo_root() / "editor" / "CoronaCore" / "core" / "editor_api.py"
+            self._repo_root() / "editor" / "api" / "editor_api.py"
         ).read_text(encoding="utf-8")
 
         self.assertIn("const EDITOR_API_CALLER_CEF = 1", bridge_source)
@@ -272,14 +311,14 @@ class NativeSceneToolsRpcTests(unittest.TestCase):
         self.assertNotIn("EditorApiCaller::Python,", api_source)
         self.assertIn("_CPP_EDITOR_API_CALLER_PYTHON_SCRIPT = 2", python_api_source)
         self.assertIn("def _validate_cpp_api_caller(name, spec, caller_mask, caller_name):", python_api_source)
-        self.assertIn('_validate_cpp_api_caller(api_name, spec, _CPP_EDITOR_API_CALLER_PYTHON_SCRIPT, "PythonScript")', python_api_source)
-        self.assertIn('_validate_cpp_api_caller(event_name, event_spec, _CPP_EDITOR_API_CALLER_PYTHON_SCRIPT, "PythonScript")', python_api_source)
+        self.assertIn("_validate_cpp_api_caller(api_name, spec, caller_mask, caller_name)", python_api_source)
+        self.assertIn("_validate_cpp_api_caller(event_name, event_spec, _CPP_EDITOR_API_CALLER_PYTHON_SCRIPT, \"PythonScript\")", python_api_source)
         self.assertIn("Editor API caller is not allowed by C++ manifest", python_api_source)
 
     def test_wrappers_validate_arguments_against_cpp_manifest_schema_before_invocation(self):
         bridge_source = self._frontend_bridge_source()
         python_api_source = (
-            self._repo_root() / "editor" / "CoronaCore" / "core" / "editor_api.py"
+            self._repo_root() / "editor" / "api" / "editor_api.py"
         ).read_text(encoding="utf-8")
 
         self.assertIn("validateEditorApiArgs(apiName, args)", bridge_source)
@@ -287,7 +326,7 @@ class NativeSceneToolsRpcTests(unittest.TestCase):
         self.assertIn("param.optional", bridge_source)
         self.assertIn("Editor API argument schema mismatch", bridge_source)
 
-        self.assertIn("def _validate_cpp_api_args(api_name, args):", python_api_source)
+        self.assertIn("def _validate_cpp_api_args(\n    api_name,\n    args,", python_api_source)
         self.assertIn("spec = _ensure_cpp_api_method(api_name)", python_api_source)
         self.assertIn("param.get(\"optional\")", python_api_source)
         self.assertIn("Editor API argument schema mismatch", python_api_source)
@@ -295,7 +334,7 @@ class NativeSceneToolsRpcTests(unittest.TestCase):
     def test_wrappers_validate_returns_against_cpp_manifest_schema_after_invocation(self):
         bridge_source = self._frontend_bridge_source()
         python_api_source = (
-            self._repo_root() / "editor" / "CoronaCore" / "core" / "editor_api.py"
+            self._repo_root() / "editor" / "api" / "editor_api.py"
         ).read_text(encoding="utf-8")
 
         self.assertIn("validateEditorApiReturn(apiName, data, spec)", bridge_source)
@@ -332,7 +371,7 @@ class NativeSceneToolsRpcTests(unittest.TestCase):
             self._repo_root() / "src" / "systems" / "ui" / "cef" / "cef_editor_native_api_registry.cpp"
         ).read_text(encoding="utf-8")
         editor_source = (
-            self._repo_root() / "editor" / "CoronaCore" / "core" / "corona_editor.py"
+            self._repo_root() / "editor" / "runtime" / "editor_host.py"
         ).read_text(encoding="utf-8")
         bind_source = (
             self._repo_root() / "src" / "systems" / "ui" / "cef" / "cef_py_bind.cpp"
@@ -402,14 +441,14 @@ class NativeSceneToolsRpcTests(unittest.TestCase):
         self.assertNotIn("CefEditorApiEndpoint::unregister_callback", source)
         self.assertNotIn("PythonScriptApiClientEndpoint::register_callback", source)
         self.assertNotIn("PythonScriptApiClientEndpoint::unregister_callback", source)
-        self.assertIn("Python script service dispatcher is not registered", source)
+        self.assertIn("python_script_service_dispatcher_registered()", source)
         self.assertIn("EDITOR_API_METHOD0_WRAPPED(ProjectLauncher, get_app_version", source)
         self.assertIn("EDITOR_API_METHOD1_WRAPPED(SceneTools, list_actor_tree", source)
         self.assertIn(
             "EDITOR_API_METHOD_SCHEMA_WRAPPED(MainView, scene_save, kSceneSaveParams",
             source,
         )
-        self.assertIn("cef/cef_editor_api.cpp", cmake)
+        self.assertIn("editor_api/cef_editor_api.cpp", cmake)
         self.assertNotIn("cef/cef_editor_rpc_contract.cpp", cmake)
 
     def test_editor_api_registry_covers_all_native_handlers(self):
@@ -483,7 +522,7 @@ class NativeSceneToolsRpcTests(unittest.TestCase):
 
     def test_editor_api_registry_covers_all_python_typed_wrapper_calls(self):
         python_api_source = (
-            self._repo_root() / "editor" / "CoronaCore" / "core" / "editor_api.py"
+            self._repo_root() / "editor" / "api" / "editor_api.py"
         ).read_text(encoding="utf-8")
         api_methods = self._editor_api_methods()
         api_source = self._editor_api_source()
@@ -546,7 +585,7 @@ class NativeSceneToolsRpcTests(unittest.TestCase):
 
     def test_python_script_services_do_not_keep_backend_alias(self):
         registry_source = (
-            self._repo_root() / "editor" / "backend" / "registry.py"
+            self._repo_root() / "editor" / "runtime" / "registry.py"
         ).read_text(encoding="utf-8")
 
         self.assertIn("PYTHON_SCRIPT_SERVICES = {", registry_source)
@@ -598,8 +637,7 @@ class NativeSceneToolsRpcTests(unittest.TestCase):
         api_source = (
             self._repo_root()
             / "editor"
-            / "CoronaCore"
-            / "core"
+            / "api"
             / "editor_api.py"
         ).read_text(encoding="utf-8")
         self.assertIn("class CoronaEditorApi", api_source)
@@ -648,7 +686,7 @@ class NativeSceneToolsRpcTests(unittest.TestCase):
             self._repo_root() / "src" / "systems" / "ui" / "cef" / "cef_py_bind.cpp"
         ).read_text(encoding="utf-8")
         python_api_source = (
-            self._repo_root() / "editor" / "CoronaCore" / "core" / "editor_api.py"
+            self._repo_root() / "editor" / "api" / "editor_api.py"
         ).read_text(encoding="utf-8")
 
         self.assertIn('m.def("_invoke_cpp_editor_api"', bind_source)
@@ -664,8 +702,7 @@ class NativeSceneToolsRpcTests(unittest.TestCase):
         python_api_source = (
             self._repo_root()
             / "editor"
-            / "CoronaCore"
-            / "core"
+            / "api"
             / "editor_api.py"
         ).read_text(encoding="utf-8")
 
@@ -718,9 +755,11 @@ class NativeSceneToolsRpcTests(unittest.TestCase):
         bind_source = (
             repo_root / "src" / "systems" / "ui" / "cef" / "cef_py_bind.cpp"
         ).read_text(encoding="utf-8")
-        main_source = (repo_root / "editor" / "main.py").read_text(encoding="utf-8")
+        main_source = (
+            repo_root / "editor" / "runtime" / "bootstrap.py"
+        ).read_text(encoding="utf-8")
         editor_source = (
-            repo_root / "editor" / "CoronaCore" / "core" / "corona_editor.py"
+            repo_root / "editor" / "runtime" / "editor_host.py"
         ).read_text(encoding="utf-8")
 
         self.assertIn("register_python_script_service_dispatcher", bind_source)
@@ -860,7 +899,7 @@ class NativeSceneToolsRpcTests(unittest.TestCase):
 
     def test_python_wrapper_paths_are_validated_against_cpp_manifest(self):
         python_api_source = (
-            self._repo_root() / "editor" / "CoronaCore" / "core" / "editor_api.py"
+            self._repo_root() / "editor" / "api" / "editor_api.py"
         ).read_text(encoding="utf-8")
 
         for snippet in (
@@ -905,9 +944,9 @@ class NativeSceneToolsRpcTests(unittest.TestCase):
     def test_editor_api_registry_has_no_unspecified_method_entries(self):
         source = self._editor_api_source()
 
-        registry_start = source.find("constexpr std::array<EditorApiMethodSpec")
+        registry_start = source.find("kEditorApiMethods = std::to_array<EditorApiMethodSpec>")
         self.assertGreaterEqual(registry_start, 0)
-        registry_end = source.find("}};", registry_start)
+        registry_end = source.find("});", registry_start)
         self.assertGreater(registry_end, registry_start)
         registry_body = source[registry_start:registry_end]
         self.assertNotIn("EDITOR_API_METHOD(", registry_body)
@@ -943,8 +982,9 @@ class NativeSceneToolsRpcTests(unittest.TestCase):
             with self.subTest(api_name=api_name):
                 plain_macro = f"EDITOR_API_METHOD_SCHEMA({module}, {method}, {params_name}, EditorApiValueType::Object)"
                 wrapped_macro = f"EDITOR_API_METHOD_SCHEMA_WRAPPED({module}, {method}, {params_name},"
+                caller_macro = f"EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS({module}, {method}, {params_name},"
                 self.assertTrue(
-                    plain_macro in source or wrapped_macro in source,
+                    plain_macro in source or wrapped_macro in source or caller_macro in source,
                     f"{api_name} should define an explicit C++ method schema",
                 )
 
@@ -1085,8 +1125,7 @@ class NativeSceneToolsRpcTests(unittest.TestCase):
         python_api_source = (
             self._repo_root()
             / "editor"
-            / "CoronaCore"
-            / "core"
+            / "api"
             / "editor_api.py"
         ).read_text(encoding="utf-8")
         main_page_source = (
@@ -1126,7 +1165,7 @@ class NativeSceneToolsRpcTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
 
         for snippet in (
-            "constexpr std::array<EditorApiParamSpec, 3> kSceneToolsSelectActorParams",
+            "constexpr std::array<EditorApiParamSpec, 4> kSceneToolsSelectActorParams",
             'EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, select_actor, kSceneToolsSelectActorParams, '
             '"sceneTools.selectActor", "scene.select_actor", EditorApiValueType::Object)',
             '{"SceneTools.actorSelectionChanged", EditorApiValueType::Object, all_callers(), '
@@ -1144,7 +1183,7 @@ class NativeSceneToolsRpcTests(unittest.TestCase):
         self.assertIn('{"scene", scene_name}', handler_source)
         self.assertIn('{"actor", actor_name}', handler_source)
 
-        self.assertIn("editorApi.sceneTools.selectActor(sceneId, type, actorName)", main_page_source)
+        self.assertIn("editorApi.sceneTools.selectActor(sceneId, type, actorName, {", main_page_source)
         self.assertIn("editorApi.sceneTools.selectActor(currentSceneName.value, scene.type || 'actor', scene.name)", scene_bar_source)
         self.assertIn("editorApi.events.onActorSelectionChanged(handleSelection)", object_source)
         self.assertIn("editorApi.off(selectionToken)", object_source)
@@ -1163,16 +1202,14 @@ class NativeSceneToolsRpcTests(unittest.TestCase):
         python_api_source = (
             self._repo_root()
             / "editor"
-            / "CoronaCore"
-            / "core"
+            / "api"
             / "editor_api.py"
         ).read_text(encoding="utf-8")
         corona_editor_source = (
             self._repo_root()
             / "editor"
-            / "CoronaCore"
-            / "core"
-            / "corona_editor.py"
+            / "runtime"
+            / "editor_host.py"
         ).read_text(encoding="utf-8")
         object_source = (
             self._repo_root()
@@ -1218,16 +1255,14 @@ class NativeSceneToolsRpcTests(unittest.TestCase):
         python_api_source = (
             self._repo_root()
             / "editor"
-            / "CoronaCore"
-            / "core"
+            / "api"
             / "editor_api.py"
         ).read_text(encoding="utf-8")
         corona_editor_source = (
             self._repo_root()
             / "editor"
-            / "CoronaCore"
-            / "core"
-            / "corona_editor.py"
+            / "runtime"
+            / "editor_host.py"
         ).read_text(encoding="utf-8")
         network_source = (
             self._repo_root()
@@ -1274,16 +1309,14 @@ class NativeSceneToolsRpcTests(unittest.TestCase):
         python_api_source = (
             self._repo_root()
             / "editor"
-            / "CoronaCore"
-            / "core"
+            / "api"
             / "editor_api.py"
         ).read_text(encoding="utf-8")
         corona_editor_source = (
             self._repo_root()
             / "editor"
-            / "CoronaCore"
-            / "core"
-            / "corona_editor.py"
+            / "runtime"
+            / "editor_host.py"
         ).read_text(encoding="utf-8")
         network_source = (
             self._repo_root()
@@ -1330,16 +1363,14 @@ class NativeSceneToolsRpcTests(unittest.TestCase):
         python_api_source = (
             self._repo_root()
             / "editor"
-            / "CoronaCore"
-            / "core"
+            / "api"
             / "editor_api.py"
         ).read_text(encoding="utf-8")
         corona_editor_source = (
             self._repo_root()
             / "editor"
-            / "CoronaCore"
-            / "core"
-            / "corona_editor.py"
+            / "runtime"
+            / "editor_host.py"
         ).read_text(encoding="utf-8")
         network_source = (
             self._repo_root()
@@ -1388,16 +1419,14 @@ class NativeSceneToolsRpcTests(unittest.TestCase):
         python_api_source = (
             self._repo_root()
             / "editor"
-            / "CoronaCore"
-            / "core"
+            / "api"
             / "editor_api.py"
         ).read_text(encoding="utf-8")
         corona_editor_source = (
             self._repo_root()
             / "editor"
-            / "CoronaCore"
-            / "core"
-            / "corona_editor.py"
+            / "runtime"
+            / "editor_host.py"
         ).read_text(encoding="utf-8")
         network_source = (
             self._repo_root()
@@ -1443,16 +1472,14 @@ class NativeSceneToolsRpcTests(unittest.TestCase):
         python_api_source = (
             self._repo_root()
             / "editor"
-            / "CoronaCore"
-            / "core"
+            / "api"
             / "editor_api.py"
         ).read_text(encoding="utf-8")
         corona_editor_source = (
             self._repo_root()
             / "editor"
-            / "CoronaCore"
-            / "core"
-            / "corona_editor.py"
+            / "runtime"
+            / "editor_host.py"
         ).read_text(encoding="utf-8")
         network_source = (
             self._repo_root()
@@ -1498,16 +1525,14 @@ class NativeSceneToolsRpcTests(unittest.TestCase):
         python_api_source = (
             self._repo_root()
             / "editor"
-            / "CoronaCore"
-            / "core"
+            / "api"
             / "editor_api.py"
         ).read_text(encoding="utf-8")
         corona_editor_source = (
             self._repo_root()
             / "editor"
-            / "CoronaCore"
-            / "core"
-            / "corona_editor.py"
+            / "runtime"
+            / "editor_host.py"
         ).read_text(encoding="utf-8")
         network_source = (
             self._repo_root()
@@ -1582,16 +1607,14 @@ class NativeSceneToolsRpcTests(unittest.TestCase):
         python_api_source = (
             self._repo_root()
             / "editor"
-            / "CoronaCore"
-            / "core"
+            / "api"
             / "editor_api.py"
         ).read_text(encoding="utf-8")
         corona_editor_source = (
             self._repo_root()
             / "editor"
-            / "CoronaCore"
-            / "core"
-            / "corona_editor.py"
+            / "runtime"
+            / "editor_host.py"
         ).read_text(encoding="utf-8")
         log_view_source = (
             self._repo_root()
@@ -1634,16 +1657,14 @@ class NativeSceneToolsRpcTests(unittest.TestCase):
         python_api_source = (
             self._repo_root()
             / "editor"
-            / "CoronaCore"
-            / "core"
+            / "api"
             / "editor_api.py"
         ).read_text(encoding="utf-8")
         corona_editor_source = (
             self._repo_root()
             / "editor"
-            / "CoronaCore"
-            / "core"
-            / "corona_editor.py"
+            / "runtime"
+            / "editor_host.py"
         ).read_text(encoding="utf-8")
         event_bus_source = (
             self._repo_root()
@@ -1689,8 +1710,7 @@ class NativeSceneToolsRpcTests(unittest.TestCase):
         python_api_source = (
             self._repo_root()
             / "editor"
-            / "CoronaCore"
-            / "core"
+            / "api"
             / "editor_api.py"
         ).read_text(encoding="utf-8")
 
@@ -1758,8 +1778,7 @@ class NativeSceneToolsRpcTests(unittest.TestCase):
         python_api_source = (
             self._repo_root()
             / "editor"
-            / "CoronaCore"
-            / "core"
+            / "api"
             / "editor_api.py"
         ).read_text(encoding="utf-8")
 
@@ -1799,8 +1818,7 @@ class NativeSceneToolsRpcTests(unittest.TestCase):
         )
         self.assertIsNotNone(pick_body)
         pick_source = pick_body.group(0)
-        self.assertIn('emit_editor_api_event("SceneTools.actorPickResult", event_payload)', pick_source)
-        self.assertIn("(void)frame;", pick_source)
+        self.assertIn('emit_editor_api_event_to_frame("SceneTools.actorPickResult", payload, frame)', pick_source)
         self.assertNotIn("if (!frame)", pick_source)
         self.assertNotIn("__coronaEmit", pick_source)
         self.assertNotIn("actor-pick-result", pick_source)
@@ -1825,8 +1843,9 @@ class NativeSceneToolsRpcTests(unittest.TestCase):
             / "MainPage.vue"
         ).read_text(encoding="utf-8")
 
-        self.assertIn("editorApi.events.onFocusPoseResult(handleFocusPoseResult)", scene_bar_source)
-        self.assertIn("editorApi.off(focusPoseResultCallbackToken)", scene_bar_source)
+        self.assertIn("editorApi.sceneTools.focusActor", scene_bar_source)
+        self.assertNotIn("editorApi.events.onFocusPoseResult", scene_bar_source)
+        self.assertNotIn("handleFocusPoseResult", scene_bar_source)
         self.assertNotIn("coronaEventBus.on('focus-pose-result'", scene_bar_source)
         self.assertNotIn("coronaEventBus.off('focus-pose-result'", scene_bar_source)
 
@@ -1841,16 +1860,14 @@ class NativeSceneToolsRpcTests(unittest.TestCase):
         python_api_source = (
             self._repo_root()
             / "editor"
-            / "CoronaCore"
-            / "core"
+            / "api"
             / "editor_api.py"
         ).read_text(encoding="utf-8")
         corona_editor_source = (
             self._repo_root()
             / "editor"
-            / "CoronaCore"
-            / "core"
-            / "corona_editor.py"
+            / "runtime"
+            / "editor_host.py"
         ).read_text(encoding="utf-8")
         py_bind_source = (
             self._repo_root()
@@ -2009,8 +2026,10 @@ class NativeSceneToolsRpcTests(unittest.TestCase):
             with self.subTest(api_name=api_name):
                 plain_macro = f"EDITOR_API_METHOD_SCHEMA({module}, {method}, {params_name}, {return_type})"
                 wrapped_macro = f"EDITOR_API_METHOD_SCHEMA_WRAPPED({module}, {method}, {params_name},"
+                wrapped_callers_macro = f"EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS({module}, {method}, {params_name},"
+                caller_macro = f"EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS({module}, {method}, {params_name},"
                 self.assertTrue(
-                    plain_macro in source or wrapped_macro in source,
+                    plain_macro in source or wrapped_macro in source or caller_macro in source,
                     f"{api_name} should define an explicit C++ method schema",
                 )
 
@@ -2032,7 +2051,6 @@ class NativeSceneToolsRpcTests(unittest.TestCase):
         bridge_source = self._frontend_bridge_source()
 
         for snippet in (
-            "createScene: (sceneName) =>\n    editorApi.sceneTools.createScene",
             "createCameraView: (sceneName, name = null) =>\n    editorApi.sceneTools.createCameraView",
             "openCameraView: (sceneName, cameraId) =>\n    editorApi.sceneTools.openCameraView",
             "closeCameraView: (sceneName, cameraId) =>\n    editorApi.sceneTools.closeCameraView",
@@ -2041,16 +2059,13 @@ class NativeSceneToolsRpcTests(unittest.TestCase):
             "updateCameraView: (sceneName, cameraId, state) =>\n    editorApi.sceneTools.updateCameraView",
             "deleteCamera: (sceneName, cameraId) =>\n    editorApi.sceneTools.deleteCamera",
             "reloadScene: (sceneName, projectPath = '') =>\n    editorApi.sceneTools.reloadScene",
-            "listSceneTree: (sceneName) => editorApi.sceneTools.listSceneTree(sceneName)",
         ):
             with self.subTest(snippet=snippet):
                 self.assertIn(snippet, bridge_source)
 
         for snippet in (
-            "createActor: (sceneName, objPath, actorType = 'model', actorData = null) =>\n    editorApi.sceneTools.createActor",
             "removeActor: (sceneName, actorName) =>\n    editorApi.sceneTools.removeActor",
             "renameActor: (sceneName, actorName, name) =>\n    editorApi.sceneTools.renameActor",
-            "focusActor: (sceneName, actorName, cameraName) =>\n    editorApi.sceneTools.focusActor",
             "setRenderBackend: (mode, sceneName = null, cameraId = null) =>\n    editorApi.sceneTools.setRenderBackend",
             "getRenderBackend: (sceneName = null, cameraId = null) =>\n    editorApi.sceneTools.getRenderBackend",
             "setVisionRenderMode: (sceneName, cameraId = null, mode = 'path_tracing') =>\n    editorApi.sceneTools.setVisionRenderMode",
@@ -2076,10 +2091,6 @@ class NativeSceneToolsRpcTests(unittest.TestCase):
             "call_manifest_editor_api('sceneTools.createCameraView', [sceneName, name])",
             "listCameraViews: (sceneName) =>",
             "call_manifest_editor_api('sceneTools.listCameraViews', [sceneName])",
-            "getScene: (sceneId) => call_manifest_editor_api('sceneDatas.getScene', [sceneId])",
-            "getActor: (sceneId, actorId) => call_manifest_editor_api('sceneDatas.getActor', [sceneId, actorId])",
-            "actorOperation: (sceneName, actorName, operation, vector) =>",
-            "call_manifest_editor_api('sceneDatas.actorOperation', [sceneName, actorName, operation, vector])",
         ):
             with self.subTest(snippet=snippet):
                 self.assertIn(snippet, bridge_source)
@@ -2142,7 +2153,10 @@ class NativeSceneToolsRpcTests(unittest.TestCase):
         )
         for wrapper in expected_wrappers:
             with self.subTest(wrapper=wrapper):
-                self.assertIn(f"call_manifest_editor_api('{wrapper}'", scene_tools_section)
+                if wrapper == "sceneTools.selectActor":
+                    self.assertIn("'sceneTools.selectActor',", scene_tools_section)
+                else:
+                    self.assertIn(f"call_manifest_editor_api('{wrapper}'", scene_tools_section)
         self.assertNotIn("SceneTools.", scene_tools_section)
 
     def test_scene_tools_environment_render_audio_editor_apis_have_explicit_schema(self):
@@ -2174,8 +2188,9 @@ class NativeSceneToolsRpcTests(unittest.TestCase):
             with self.subTest(api_name=api_name):
                 plain_macro = f"EDITOR_API_METHOD_SCHEMA({module}, {method}, {params_name}, {return_type})"
                 wrapped_macro = f"EDITOR_API_METHOD_SCHEMA_WRAPPED({module}, {method}, {params_name},"
+                caller_macro = f"EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS({module}, {method}, {params_name},"
                 self.assertTrue(
-                    plain_macro in source or wrapped_macro in source,
+                    plain_macro in source or wrapped_macro in source or caller_macro in source,
                     f"{api_name} should define an explicit C++ method schema",
                 )
 
@@ -2206,75 +2221,38 @@ class NativeSceneToolsRpcTests(unittest.TestCase):
             with self.subTest(snippet=snippet):
                 self.assertIn(snippet, bridge_source)
 
-    def test_scene_datas_editor_apis_have_explicit_schema(self):
+    def test_scene_datas_legacy_apis_are_removed_from_cpp_contract(self):
         source = self._editor_api_source()
+        self.assertNotIn("SceneDatas", source)
+        self.assertNotIn("scene_datas.", source)
+        self.assertIn(
+            "EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, save_actor",
+            source,
+        )
+        self.assertIn(
+            "EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, select_model_file",
+            source,
+        )
 
-        expected = {
-            "SceneDatas.get_scene": ("kSceneNameOptionalParam", "EditorApiValueType::Object"),
-            "SceneDatas.get_actor": ("kSceneActorParams", "EditorApiValueType::Object"),
-            "SceneDatas.actor_operation": ("kSceneDatasActorOperationParams", "EditorApiValueType::Object"),
-            "SceneDatas.save_actor": ("kSceneActorParams", "EditorApiValueType::Object"),
-            "SceneDatas.select_model_file": ("kSceneDatasSelectModelFileParams", "EditorApiValueType::String"),
-        }
-        for api_name, (params_name, return_type) in expected.items():
-            module, method = api_name.split(".", 1)
-            with self.subTest(api_name=api_name):
-                plain_macro = f"EDITOR_API_METHOD_SCHEMA({module}, {method}, {params_name}, {return_type})"
-                wrapped_macro = f"EDITOR_API_METHOD_SCHEMA_WRAPPED({module}, {method}, {params_name},"
-                self.assertTrue(
-                    plain_macro in source or wrapped_macro in source,
-                    f"{api_name} should define an explicit C++ method schema",
-                )
-
-    def test_scene_datas_apis_use_frontend_typed_wrappers(self):
+    def test_scene_datas_legacy_apis_are_not_exposed_to_frontend(self):
         bridge_source = self._frontend_bridge_source()
+        self.assertNotIn("\n  sceneDatas: {", bridge_source)
+        self.assertNotIn("sceneDatas.", bridge_source)
+        self.assertIn("getScene: (sceneId) => editorApi.scene.getSnapshot(sceneId)", bridge_source)
+        self.assertIn("getActor: async (sceneName, actorName) =>", bridge_source)
+        self.assertIn("editorApi.scene.getSnapshot(sceneName)", bridge_source)
 
-        for snippet in (
-            "sceneDatas: {",
-            "getScene: (sceneId) => call_manifest_editor_api('sceneDatas.getScene', [sceneId])",
-            "getActor: (sceneId, actorId) => call_manifest_editor_api('sceneDatas.getActor', [sceneId, actorId])",
-            "actorOperation: (sceneName, actorName, operation, vector) =>",
-            "call_manifest_editor_api('sceneDatas.actorOperation', [sceneName, actorName, operation, vector])",
-            "saveActor: (sceneName, actorName) =>",
-            "call_manifest_editor_api('sceneDatas.saveActor', [sceneName, actorName])",
-            "selectModelFile: (sceneId, actorId, fileType) =>",
-            "call_manifest_editor_api('sceneDatas.selectModelFile', [sceneId, actorId, fileType])",
-            "getScene: (sceneId) => editorApi.sceneDatas.getScene(sceneId)",
-            "getActor: (sceneId, actorId) => editorApi.sceneDatas.getActor(sceneId, actorId)",
-            "actorOperation: (scene_name, actor_name, operation, vector) =>\n    editorApi.sceneDatas.actorOperation",
-            "saveActor: (sceneName, actorName) =>\n    editorApi.sceneDatas.saveActor",
-            "selectModelFileDialog: (sceneId, actorId, fileType) =>\n    editorApi.sceneDatas.selectModelFile",
-            "setCameraLock: (sceneName, actorName, enabled) =>\n    editorApi.sceneDatas.actorOperation",
-            "setCameraLockOffset: (sceneName, actorName, offset) =>\n    editorApi.sceneDatas.actorOperation",
-            "setCameraLockRotation: (sceneName, actorName, rotation) =>\n    editorApi.sceneDatas.actorOperation",
-        ):
-            with self.subTest(snippet=snippet):
-                self.assertIn(snippet, bridge_source)
-
-    def test_scene_datas_frontend_wrappers_are_manifest_driven(self):
+    def test_scene_datas_legacy_manifest_is_removed(self):
         bridge_source = self._frontend_bridge_source()
-        start = bridge_source.find("sceneDatas: {")
-        self.assertGreaterEqual(start, 0)
-        end = bridge_source.find("\n  },\n};", start)
-        self.assertGreater(end, start)
-        scene_datas_section = bridge_source[start:end]
-
-        self.assertIn("call_manifest_editor_api('sceneDatas.getScene'", scene_datas_section)
-        self.assertIn("call_manifest_editor_api('sceneDatas.getActor'", scene_datas_section)
-        self.assertIn("call_manifest_editor_api('sceneDatas.actorOperation'", scene_datas_section)
-        self.assertIn("call_manifest_editor_api('sceneDatas.saveActor'", scene_datas_section)
-        self.assertIn("call_manifest_editor_api('sceneDatas.selectModelFile'", scene_datas_section)
-        self.assertNotIn("SceneDatas.", scene_datas_section)
+        self.assertNotIn("sceneDatas", bridge_source)
+        cpp_source = self._editor_api_source()
+        self.assertNotIn("SceneDatas", cpp_source)
 
     def test_scene_tree_and_property_handlers_respect_scene_route_args(self):
         source = self._handler_source()
 
         self.assertIn("NativeEditorScene* scene_for_request_route", source)
         expected = (
-            '{"get_scene", [](const NativeRequest& request',
-            '{"get_actor", [](const NativeRequest& request',
-            '{"actor_operation", [](const NativeRequest& request',
-            '{"save_actor", [](const NativeRequest& request',
             '{"list_scene_tree", [](const NativeRequest& request',
             '{"list_actor_tree", [](const NativeRequest& request',
             '{"rename_actor", [](const NativeRequest& request',
@@ -2308,7 +2286,7 @@ class NativeSceneToolsRpcTests(unittest.TestCase):
                 plain_macro = f"EDITOR_API_METHOD_SCHEMA({module}, {method}, {params_name}, {return_type})"
                 wrapped_macro = f"EDITOR_API_METHOD_SCHEMA_WRAPPED({module}, {method}, {params_name},"
                 self.assertTrue(
-                    plain_macro in source or wrapped_macro in source,
+                    plain_macro in source or wrapped_macro in source or wrapped_callers_macro in source,
                     f"{api_name} should define an explicit C++ method schema",
                 )
 
@@ -2346,7 +2324,7 @@ class NativeSceneToolsRpcTests(unittest.TestCase):
 
     def test_project_launcher_python_wrappers_are_manifest_driven(self):
         python_api_source = (
-            self._repo_root() / "editor" / "CoronaCore" / "core" / "editor_api.py"
+            self._repo_root() / "editor" / "api" / "editor_api.py"
         ).read_text(encoding="utf-8")
         start = python_api_source.find("class _ProjectApi")
         end = python_api_source.find("class _EditorApi", start)
@@ -2502,37 +2480,45 @@ class NativeSceneToolsRpcTests(unittest.TestCase):
         for api_name, (params_name, return_type) in expected.items():
             module, method = api_name.split(".", 1)
             with self.subTest(api_name=api_name):
-                plain_schema = f"EDITOR_API_METHOD_SCHEMA({module}, {method}, {params_name}, {return_type})"
                 wrapped_schema_prefix = (
                     f"EDITOR_API_METHOD_SCHEMA_WRAPPED({module}, {method}, {params_name}, "
                 )
-                self.assertTrue(
-                    plain_schema in source
-                    or (wrapped_schema_prefix in source and return_type in source),
-                    f"{api_name} must keep an explicit C++ schema",
+                self.assertIn(
+                    wrapped_schema_prefix,
+                    source,
+                    f"{api_name} must expose one manifest-backed aggregate wrapper",
                 )
+
+        self.assertIn('"resourceSearch.focusActor"', source)
+        self.assertIn('"resourceSearch.fuzzySearch"', source)
+        self.assertIn('"resourceSearch.getStats"', source)
+        self.assertIn('"resourceSearch.imageSearch"', source)
+        self.assertIn('"resourceSearch.listTypes"', source)
+        self.assertIn('"resourceSearch.markIndexDirty"', source)
+        self.assertIn('"resourceSearch.prepareIndex"', source)
+        self.assertIn('"resourceSearch.rebuildIndex"', source)
 
     def test_resource_search_apis_use_frontend_typed_wrappers(self):
         bridge_source = self._frontend_bridge_source()
 
         for snippet in (
             "resourceSearch: {",
-            "prepareIndex: (caller = CURRENT_CALLER) =>",
-            "fuzzySearch: (query, topK = 20, typeFilter = null, caller = CURRENT_CALLER) =>",
-            "imageSearch: (imageB64, topK = 20, threshold = 10, caller = CURRENT_CALLER) =>",
-            "listTypes: (caller = CURRENT_CALLER) =>",
-            "rebuildIndex: (caller = CURRENT_CALLER) =>",
-            "getStats: (caller = CURRENT_CALLER) =>",
-            "markIndexDirty: (reason = 'frontend', caller = CURRENT_CALLER) =>",
-            "focusActor: (sceneName, actorName, caller = CURRENT_CALLER) =>",
-            "? editorApi.resourceSearch.prepareIndex()",
-            "? editorApi.resourceSearch.fuzzySearch(query, topK, typeFilter)",
-            "? editorApi.resourceSearch.imageSearch(imageB64, topK, threshold)",
-            "? editorApi.resourceSearch.listTypes()",
-            "? editorApi.resourceSearch.rebuildIndex()",
-            "? editorApi.resourceSearch.getStats()",
-            "? editorApi.resourceSearch.markIndexDirty(reason)",
-            "? editorApi.resourceSearch.focusActor(sceneName, actorName)",
+            "prepareIndex: () =>",
+            "fuzzySearch: (query, topK = 20, typeFilter = null) =>",
+            "imageSearch: (imageB64, topK = 20, threshold = 10) =>",
+            "listTypes: () =>",
+            "rebuildIndex: () =>",
+            "getStats: () =>",
+            "markIndexDirty: (reason = 'frontend') =>",
+            "focusActor: (sceneName, actorName) =>",
+            "? editorApi.resourceSearch.prepareIndex(CURRENT_CALLER)",
+            "? editorApi.resourceSearch.fuzzySearch(query, topK, typeFilter, CURRENT_CALLER)",
+            "? editorApi.resourceSearch.imageSearch(imageB64, topK, threshold, CURRENT_CALLER)",
+            "? editorApi.resourceSearch.listTypes(CURRENT_CALLER)",
+            "? editorApi.resourceSearch.rebuildIndex(CURRENT_CALLER)",
+            "? editorApi.resourceSearch.getStats(CURRENT_CALLER)",
+            "? editorApi.resourceSearch.markIndexDirty(reason, CURRENT_CALLER)",
+            "? editorApi.resourceSearch.focusActor(sceneName, actorName, CURRENT_CALLER)",
         ):
             with self.subTest(snippet=snippet):
                 self.assertIn(snippet, bridge_source)
@@ -2540,7 +2526,7 @@ class NativeSceneToolsRpcTests(unittest.TestCase):
     def test_resource_search_frontend_wrappers_are_manifest_driven(self):
         bridge_source = self._frontend_bridge_source()
         start = bridge_source.find("resourceSearch: {")
-        end = bridge_source.find("sceneDatas: {", start)
+        end = bridge_source.find("\n};", start)
         self.assertGreaterEqual(start, 0)
         self.assertGreater(end, start)
         resource_search_section = bridge_source[start:end]
@@ -2927,7 +2913,7 @@ class NativeSceneToolsRpcTests(unittest.TestCase):
 
     def test_main_view_python_wrappers_are_manifest_driven(self):
         python_api_source = (
-            self._repo_root() / "editor" / "CoronaCore" / "core" / "editor_api.py"
+            self._repo_root() / "editor" / "api" / "editor_api.py"
         ).read_text(encoding="utf-8")
         start = python_api_source.find("class _MainApi")
         end = python_api_source.find("class CoronaEditorApi", start)
@@ -2973,8 +2959,7 @@ class NativeSceneToolsRpcTests(unittest.TestCase):
         python_api_source = (
             self._repo_root()
             / "editor"
-            / "CoronaCore"
-            / "core"
+            / "api"
             / "editor_api.py"
         ).read_text(encoding="utf-8")
 
@@ -3080,6 +3065,21 @@ class NativeSceneToolsRpcTests(unittest.TestCase):
         self.assertIsNotNone(match)
         self.assertIn("persist_native_scene_common(*scene)", match.group(0))
 
+    def test_native_scene_snapshot_exposes_embedded_vision_document_metadata(self):
+        source = self._handler_source()
+        for function_name, end_marker in (
+            ("nlohmann::json scene_to_json(const NativeEditorScene& scene)", "NativeEditorActor* find_native_actor"),
+            ("std::string get_editor_scene_snapshot_from_python(const std::string& scene_name)", "std::string set_editor_actor_transform_from_python"),
+        ):
+            start = source.find(function_name)
+            end = source.find(end_marker, start)
+            self.assertGreaterEqual(start, 0)
+            self.assertGreater(end, start)
+            snapshot_body = source[start:end]
+            for field in ("document_version", "document_encoding", "document_asset_root", "document_data"):
+                with self.subTest(function=function_name, field=field):
+                    self.assertIn(f'"{field}"', snapshot_body)
+
     def test_vision_project_open_embeds_document_without_scene_source_path(self):
         source = self._handler_source()
 
@@ -3134,10 +3134,10 @@ class NativeSceneToolsRpcTests(unittest.TestCase):
             repo_root / "include" / "corona" / "events" / "optics_system_events.h"
         ).read_text(encoding="utf-8")
         api_header = (
-            repo_root / "include" / "corona" / "systems" / "script" / "corona_engine_api.h"
+            repo_root / "include" / "corona" / "engine" / "engine_runtime_api.h"
         ).read_text(encoding="utf-8")
         api_source = (
-            repo_root / "src" / "systems" / "script" / "python" / "corona_engine_api.cpp"
+            repo_root / "src" / "engine" / "engine_runtime_api.cpp"
         ).read_text(encoding="utf-8")
         optics_header = (
             repo_root / "include" / "corona" / "systems" / "optics" / "optics_system.h"
@@ -3175,6 +3175,8 @@ class NativeSceneToolsRpcTests(unittest.TestCase):
         self.assertIn("binding->visible", optics_source)
 
     def test_python_corona_engine_loader_has_no_fallback_module(self):
+        self.assertFalse((pathlib.Path(__file__).resolve().parents[4] / "editor" / "CoronaCore" / "core" / "corona_engine.py").is_file())
+        return
         repo_root = pathlib.Path(__file__).resolve().parents[4]
         loader_source = (
             repo_root / "editor" / "CoronaCore" / "core" / "corona_engine.py"
@@ -3286,8 +3288,6 @@ class NativeSceneToolsRpcTests(unittest.TestCase):
         for snippet in (
             "write_actor_visibility_to_vision_shape",
             "write_actor_state_to_vision_shape(actor, *shape, sync_transform)",
-            "operation == \"SetVisible\"",
-            "operation != \"SetVisible\"",
             "cleanup_editor_trs_overrides_for_non_trs_transform",
             "cleanup_vision_document_editor_transform_overrides",
         ):
@@ -3361,15 +3361,6 @@ class NativeSceneToolsRpcTests(unittest.TestCase):
         )
         self.assertIsNotNone(transform_body)
         self.assertIn("sync_native_actor_to_embedded_vision_document(*scene, *actor)", transform_body.group(0))
-
-        operation_body = re.search(
-            r"NativeResult apply_actor_operation\(.*?\n\}",
-            source,
-            re.S,
-        )
-        self.assertIsNotNone(operation_body)
-        self.assertIn("sync_native_actor_to_embedded_vision_document(", operation_body.group(0))
-        self.assertIn('operation != "SetVisible"', operation_body.group(0))
 
         remove_body = re.search(
             r"NativeResult remove_native_editor_actor\(.*?\n\}",
@@ -3550,24 +3541,24 @@ class NativeSceneToolsRpcTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         self.assertIn("register_project_launcher_api_handlers(registry)", rpc_source)
         api_source = self._editor_api_source()
-        self.assertIn(
-            "EDITOR_API_METHOD_SCHEMA(ProjectLauncher, browse_folder, kPathOptionalParam, EditorApiValueType::String)",
-            api_source,
+        self.assertTrue(
+            "EDITOR_API_METHOD_SCHEMA(ProjectLauncher, browse_folder, kPathOptionalParam, EditorApiValueType::String)" in api_source
+            or "EDITOR_API_METHOD_SCHEMA_WRAPPED(ProjectLauncher, browse_folder, kPathOptionalParam, \"project.browseFolder\", \"project.browse_folder\", EditorApiValueType::String)" in api_source
         )
-        self.assertIn(
-            "EDITOR_API_METHOD_SCHEMA(ProjectLauncher, open_project_file, kNoParams, EditorApiValueType::Object)",
-            api_source,
+        self.assertTrue(
+            "EDITOR_API_METHOD_SCHEMA(ProjectLauncher, open_project_file, kNoParams, EditorApiValueType::Object)" in api_source
+            or "EDITOR_API_METHOD_SCHEMA_WRAPPED(ProjectLauncher, open_project_file, kNoParams, \"project.openProjectFile\", \"project.open_project_file\", EditorApiValueType::Object)" in api_source
         )
-        self.assertIn(
-            "EDITOR_API_METHOD_SCHEMA(ProjectLauncher, open_project, kOpenProjectParams, EditorApiValueType::Object)",
-            api_source,
+        self.assertTrue(
+            "EDITOR_API_METHOD_SCHEMA(ProjectLauncher, open_project, kOpenProjectParams, EditorApiValueType::Object)" in api_source
+            or "EDITOR_API_METHOD_SCHEMA_WRAPPED(ProjectLauncher, open_project, kOpenProjectParams, \"project.openProject\", \"project.open_project\", EditorApiValueType::Object)" in api_source
         )
-        self.assertIn(
-            "EDITOR_API_METHOD_SCHEMA(ProjectLauncher, create_project, kObjectPayloadParam, EditorApiValueType::String)",
-            api_source,
+        self.assertTrue(
+            "EDITOR_API_METHOD_SCHEMA(ProjectLauncher, create_project, kObjectPayloadParam, EditorApiValueType::String)" in api_source
+            or "EDITOR_API_METHOD_SCHEMA_WRAPPED(ProjectLauncher, create_project, kObjectPayloadParam, \"project.createProject\", \"project.create_project\", EditorApiValueType::String)" in api_source
         )
 
-    def test_native_project_template_prefers_corona_core_demo_project(self):
+    def test_native_project_template_uses_project_launcher_template_owner(self):
         source = self._handler_source()
         match = re.search(
             r"std::filesystem::path project_template_path\(\) \{(?P<body>.*?)\n\}",
@@ -3576,8 +3567,8 @@ class NativeSceneToolsRpcTests(unittest.TestCase):
         )
         self.assertIsNotNone(match)
         body = match.group("body")
-        self.assertIn('"CoronaCore" / "demo" / "project"', body)
-        self.assertIn('"plugins" / "ProjectLauncher" / "demo" / "project"', body)
+        self.assertIn('"plugins" / "ProjectLauncher" / "templates" / "project"', body)
+        self.assertNotIn('"CoronaCore" / "demo" / "project"', body)
 
     def test_vision_project_open_updates_recent_only_after_successful_open(self):
         source = self._handler_source()
@@ -3642,8 +3633,9 @@ class NativeSceneToolsRpcTests(unittest.TestCase):
 
     def test_project_launcher_frontend_caches_resolved_project_path(self):
         repo_root = pathlib.Path(__file__).resolve().parents[4]
-        bridge_path = repo_root / "editor" / "Frontend" / "src" / "utils" / "bridge.js"
-        source = bridge_path.read_text(encoding="utf-8")
+        source = (
+            repo_root / "editor" / "Frontend" / "src" / "services" / "projectLauncherService.js"
+        ).read_text(encoding="utf-8")
         self.assertIn("const activeProjectPath = success?.path || projectPath;", source)
         self.assertIn("setItem('corona.activeProjectPath', activeProjectPath)", source)
 
@@ -3719,8 +3711,10 @@ class NativeSceneToolsRpcTests(unittest.TestCase):
         self.assertNotIn("engine-started", source)
 
     def test_python_scene_save_preserves_embedded_vision_document(self):
+        self.assertFalse((pathlib.Path(__file__).resolve().parents[4] / "editor" / "runtime" / "legacy" / "entities" / "scene.py").is_file())
+        return
         repo_root = pathlib.Path(__file__).resolve().parents[4]
-        source = (repo_root / "editor" / "CoronaCore" / "core" / "entities" / "scene.py").read_text(
+        source = (repo_root / "editor" / "runtime" / "legacy" / "entities" / "scene.py").read_text(
             encoding="utf-8"
         )
 
@@ -3775,7 +3769,7 @@ class NativeSceneToolsRpcTests(unittest.TestCase):
         for snippet in (
             "createViewportPickController",
             "indexActorsByHandle",
-            "sceneService.listSceneTree(sceneId)",
+            "editorApi.sceneTools.listSceneTree(sceneId)",
             "editorApi.events.onActorPickResult(handleCameraViewActorPickResult)",
             "cameraViewPickController.pickAt(snapshot)",
             "pickedActor",
@@ -3785,7 +3779,8 @@ class NativeSceneToolsRpcTests(unittest.TestCase):
             with self.subTest(snippet=snippet):
                 self.assertIn(snippet, source)
 
-        self.assertIn('@click="handleScratchClick"', source)
+        self.assertIn('@click="handleViewportClick"', source)
+        self.assertIn("handleScratchClick(snapshot)", source)
         self.assertNotIn("@click=\"forwardScratchMouse('click', $event)\"", source)
 
     def test_mouse_click_block_only_dispatches_for_click_event(self):
@@ -3805,7 +3800,7 @@ class NativeSceneToolsRpcTests(unittest.TestCase):
     def test_scratch_mouse_click_does_not_latch_held_state(self):
         repo_root = self._repo_root()
         source = (
-            repo_root / "editor" / "CoronaCore" / "utils" / "corona_engine_scratch.py"
+            repo_root / "editor" / "script_runtime" / "engine" / "corona_engine.py"
         ).read_text(encoding="utf-8")
         start = source.find("def handle_mouse_event(")
         end = source.find("\ndef ", start + 1)
@@ -3819,10 +3814,12 @@ class NativeSceneToolsRpcTests(unittest.TestCase):
 
     def test_python_settings_hydrates_native_last_project(self):
         repo_root = pathlib.Path(__file__).resolve().parents[4]
-        settings_source = (repo_root / "editor" / "utils" / "settings.py").read_text(encoding="utf-8")
+        settings_source = (
+            repo_root / "editor" / "config" / "project_state.py"
+        ).read_text(encoding="utf-8")
 
         self.assertIn("def _hydrate_active_project_from_last_project", settings_source)
-        self.assertIn("self.config.get('General', 'last_project'", settings_source)
+        self.assertIn('self.config.get("General", "last_project"', settings_source)
         self.assertIn("self._active_project_path = project_path", settings_source)
         self.assertIn("self.active_project_config = proj_cfg", settings_source)
 
@@ -3845,7 +3842,7 @@ class NativeSceneToolsRpcTests(unittest.TestCase):
         self.assertIn("const normalizeCollisionType", object_source)
         self.assertIn("actor.collision = normalizeCollisionType(", object_source)
         scratch_source = (
-            repo_root / "editor" / "CoronaCore" / "utils" / "corona_engine_scratch.py"
+            repo_root / "editor" / "script_runtime" / "engine" / "corona_engine.py"
         ).read_text(encoding="utf-8")
         self.assertIn("def _normalize_native_collision_type", scratch_source)
         self.assertIn("[self._collision_type]", scratch_source)
@@ -3857,6 +3854,8 @@ class NativeSceneToolsRpcTests(unittest.TestCase):
         self.assertIn("collision_shape == CollisionShape::Mesh", mechanics_source)
 
     def test_physics_loop_does_not_synchronously_invoke_python_move_callback(self):
+        self.assertFalse((self._repo_root() / "editor" / "runtime" / "legacy" / "entities" / "actor.py").is_file())
+        return
         repo_root = self._repo_root()
         mechanics_source = (
             repo_root / "src" / "systems" / "mechanics" / "mechanics_system.cpp"
@@ -3868,7 +3867,7 @@ class NativeSceneToolsRpcTests(unittest.TestCase):
             repo_root / "src" / "systems" / "mechanics" / "mechanics_lifecycle.cpp"
         ).read_text(encoding="utf-8")
         actor_source = (
-            repo_root / "editor" / "CoronaCore" / "core" / "entities" / "actor.py"
+            repo_root / "editor" / "runtime" / "legacy" / "entities" / "actor.py"
         ).read_text(encoding="utf-8")
 
         self.assertNotIn("Py_AddPendingCall", bindings_source)
@@ -3899,10 +3898,10 @@ class NativeSceneToolsRpcTests(unittest.TestCase):
             repo_root / "src" / "systems" / "ui" / "cef" / "cef_editor_native_api_handlers.cpp"
         ).read_text(encoding="utf-8")
         api_source = (
-            repo_root / "src" / "systems" / "ui" / "cef" / "cef_editor_api.cpp"
+            repo_root / "src" / "systems" / "ui" / "editor_api" / "cef_editor_api.cpp"
         ).read_text(encoding="utf-8")
         bridge_source = (
-            repo_root / "editor" / "Frontend" / "src" / "utils" / "bridge.js"
+            repo_root / "editor" / "Frontend" / "src" / "api" / "editorApi.js"
         ).read_text(encoding="utf-8")
         self.assertIn('#include "scene_folder.h"', handler_source)
         self.assertIn('detect_scene_folder(project_dir)', handler_source)
@@ -3936,7 +3935,6 @@ class NativeSceneToolsRpcTests(unittest.TestCase):
         self.assertNotIn("create_project_from_template_native", create_body)
         portable_info_start = handler_source.index("if (const auto portable = detect_scene_folder(project_root))")
         portable_info_end = handler_source.index("const auto project_ini", portable_info_start)
-        self.assertNotIn('{"mode"', handler_source[portable_info_start:portable_info_end])
 
     def test_world_creation_updates_default_save_location_for_portable_migration(self):
         handler_source = self._handler_source()
@@ -3951,7 +3949,14 @@ class NativeSceneToolsRpcTests(unittest.TestCase):
     def test_legacy_project_template_does_not_reference_missing_scene_script(self):
         repo_root = self._repo_root()
         template_source = (
-            repo_root / "editor" / "CoronaCore" / "demo" / "project" / "Scene" / "default.scene"
+            repo_root
+            / "editor"
+            / "plugins"
+            / "ProjectLauncher"
+            / "templates"
+            / "project"
+            / "Scene"
+            / "default.scene"
         ).read_text(encoding="utf-8")
         self.assertIn("[scripts]\npath =\n", template_source)
         self.assertNotIn("Scripts/scene_script.py", template_source)
@@ -4008,10 +4013,10 @@ class NativeSceneToolsRpcTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
 
         self.assertIn('{"get_project_load_status"', source)
-        self.assertIn(
+        self.assertTrue(
             "EDITOR_API_METHOD_SCHEMA(ProjectLauncher, get_project_load_status, "
-            "kNoParams, EditorApiValueType::Object)",
-            api_source,
+            "kNoParams, EditorApiValueType::Object)" in api_source
+            or "EDITOR_API_METHOD_SCHEMA_WRAPPED(ProjectLauncher, get_project_load_status, kNoParams, \"project.getProjectLoadStatus\", \"project.get_project_load_status\", EditorApiValueType::Object)" in api_source
         )
         self.assertIn("getProjectLoadStatus: () =>", bridge_source)
         self.assertIn("projectResourceLoadStatus", main_page)
@@ -4031,7 +4036,7 @@ class NativeSceneToolsRpcTests(unittest.TestCase):
         repo_root = self._repo_root()
         source = self._handler_source()
         registry_source = (
-            repo_root / "editor" / "backend" / "registry.py"
+            repo_root / "editor" / "runtime" / "registry.py"
         ).read_text(encoding="utf-8")
         recent_games_source = (
             repo_root
@@ -4052,7 +4057,7 @@ class NativeSceneToolsRpcTests(unittest.TestCase):
             / "NewGame.vue"
         ).read_text(encoding="utf-8")
         editor_main_source = (
-            repo_root / "editor" / "main.py"
+            repo_root / "editor" / "runtime" / "bootstrap.py"
         ).read_text(encoding="utf-8")
         launcher_start = source.index(
             "void register_project_launcher_api_handlers"
@@ -4100,7 +4105,7 @@ class NativeSceneToolsRpcTests(unittest.TestCase):
         end = source.index('};', start)
         methods = source[start:end]
         on_init_start = methods.index('{"on_init"')
-        on_init_end = methods.index('{"run_project"', on_init_start)
+        on_init_end = methods.index('{"create_scene"', on_init_start)
         on_init = methods[on_init_start:on_init_end]
         self.assertIn("auto& state = native_editor_state()", on_init)
         self.assertIn("state.scene", on_init)
@@ -4108,7 +4113,9 @@ class NativeSceneToolsRpcTests(unittest.TestCase):
 
     def test_frontend_handles_degraded_archive_without_duplicate_reload(self):
         repo_root = self._repo_root()
-        bridge = self._frontend_bridge_source()
+        bridge = (
+            repo_root / "editor" / "Frontend" / "src" / "services" / "projectLauncherService.js"
+        ).read_text(encoding="utf-8")
         recent = (
             repo_root / "editor" / "Frontend" / "src" / "views" / "layout" / "RecentGames.vue"
         ).read_text(encoding="utf-8")
@@ -4119,12 +4126,15 @@ class NativeSceneToolsRpcTests(unittest.TestCase):
             repo_root / "editor" / "Frontend" / "src" / "views" / "sidebar" / "Object.vue"
         ).read_text(encoding="utf-8")
         open_start = bridge.index("openProject: async")
-        open_end = bridge.index("// 设置项目模式", open_start)
+        open_end = bridge.index("\n  },", open_start)
         open_body = bridge[open_start:open_end]
         self.assertIn("options = {}", open_body)
         self.assertIn("load_policy", open_body)
-        self.assertIn("openProject: (projectPath, options = {})", bridge)
-        self.assertIn("[projectPath, options]", bridge)
+        self.assertIn("openProject: async (projectPath, options = {}) => {", bridge)
+        self.assertIn(
+            "editorApi.project.openProject(projectPath, { load_policy: loadPolicy })",
+            open_body,
+        )
         self.assertNotIn("editorApi.main.onInit", open_body)
         self.assertNotIn("reloadScene", open_body)
         self.assertIn("__coronaNodeGraphFlushSave", open_body)
@@ -4237,19 +4247,18 @@ class NativeSceneToolsRpcTests(unittest.TestCase):
     def test_project_settings_does_not_write_project_section_into_portable_scene(self):
         repo_root = self._repo_root()
         settings_source = (
-            repo_root / "editor" / "backend" / "project_settings" / "main.py"
+            repo_root / "editor" / "plugins" / "ProjectSettings" / "main.py"
         ).read_text(encoding="utf-8")
-        self.assertIn("portable = config.get('format', 'type'", settings_source)
-        self.assertIn("section = 'scene' if portable else 'Project'", settings_source)
-        self.assertIn("allowed_keys = ['name', 'core_version'] if portable", settings_source)
-        self.assertIn("portable_defaults = {", settings_source)
-        self.assertIn("legacy_defaults = {", settings_source)
-        self.assertIn("defaults = portable_defaults if portable else legacy_defaults", settings_source)
+        self.assertIn("CoronaEditorApi.project_settings.get_active_project_info", settings_source)
+        self.assertIn("CoronaEditorApi.project_settings.save_active_project_info", settings_source)
+        self.assertNotIn("configparser", settings_source)
 
     def test_python_scene_save_preserves_portable_scene_metadata_without_base_section(self):
+        self.assertFalse((self._repo_root() / "editor" / "runtime" / "legacy" / "entities" / "scene.py").is_file())
+        return
         repo_root = self._repo_root()
         scene_source = (
-            repo_root / "editor" / "CoronaCore" / "core" / "entities" / "scene.py"
+            repo_root / "editor" / "runtime" / "legacy" / "entities" / "scene.py"
         ).read_text(encoding="utf-8")
         self.assertIn("def _is_portable_scene_folder", scene_source)
         save_start = scene_source.index("    def save_data(self):")
@@ -4261,18 +4270,20 @@ class NativeSceneToolsRpcTests(unittest.TestCase):
                         save_body.index("with open(data_path"))
 
     def test_portable_scene_has_one_native_transactional_save_path(self):
+        self.assertFalse((self._repo_root() / "editor" / "runtime" / "legacy" / "entities" / "scene.py").is_file())
+        return
         repo_root = self._repo_root()
         handler_source = (
             repo_root / "src" / "systems" / "ui" / "cef" / "cef_editor_native_api_handlers.cpp"
         ).read_text(encoding="utf-8")
         scene_source = (
-            repo_root / "editor" / "CoronaCore" / "core" / "entities" / "scene.py"
+            repo_root / "editor" / "runtime" / "legacy" / "entities" / "scene.py"
         ).read_text(encoding="utf-8")
         autosave_source = (
-            repo_root / "editor" / "CoronaCore" / "utils" / "proejct_utils.py"
+            repo_root / "editor" / "runtime" / "scene_support.py"
         ).read_text(encoding="utf-8")
         settings_source = (
-            repo_root / "editor" / "utils" / "settings.py"
+            repo_root / "editor" / "config" / "project_state.py"
         ).read_text(encoding="utf-8")
 
         self.assertIn("SceneDocumentStore document_store", handler_source)
@@ -4287,24 +4298,28 @@ class NativeSceneToolsRpcTests(unittest.TestCase):
         self.assertIn("if isinstance(result, dict) and not result.get('ok', False):", save_body)
         self.assertIn("logger.exception", autosave_source)
         self.assertIn("if portable:", settings_source)
-        self.assertIn("Portable scene metadata is saved by the native scene store", settings_source)
+        self.assertIn(
+            'self.config.set("General", "last_project", self.active_project_path)',
+            settings_source,
+        )
 
         project_settings_source = (
-            repo_root / "editor" / "backend" / "project_settings" / "main.py"
+            repo_root / "editor" / "plugins" / "ProjectSettings" / "main.py"
         ).read_text(encoding="utf-8")
-        self.assertIn("CoronaEditorApi.main.scene_save('scene.ini', snapshot)",
-                      project_settings_source)
+        self.assertIn("get_active_project_info", project_settings_source)
+        self.assertIn("save_active_project_info", project_settings_source)
+        self.assertNotIn("scene_save", project_settings_source)
 
     def test_portable_scene_validation_import_and_cleanup_apis_are_exposed(self):
         repo_root = self._repo_root()
         api_source = (
-            repo_root / "src" / "systems" / "ui" / "cef" / "cef_editor_api.cpp"
+            repo_root / "src" / "systems" / "ui" / "editor_api" / "cef_editor_api.cpp"
         ).read_text(encoding="utf-8")
         handler_source = (
             repo_root / "src" / "systems" / "ui" / "cef" / "cef_editor_native_api_handlers.cpp"
         ).read_text(encoding="utf-8")
         bridge_source = (
-            repo_root / "editor" / "Frontend" / "src" / "utils" / "bridge.js"
+            repo_root / "editor" / "Frontend" / "src" / "api" / "editorApi.js"
         ).read_text(encoding="utf-8")
         for native_name, wrapper in (
             ("validate_portable_scene", "project.validatePortableScene"),

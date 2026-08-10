@@ -5,15 +5,32 @@ import time
 from dataclasses import dataclass
 from typing import Any, Iterable, Sequence
 
-CORONA_ENGINE_OVERRIDE: Any | None = None
+EDITOR_API_OVERRIDE: Any | None = None
 
 
-def _get_corona_engine() -> Any:
-    if CORONA_ENGINE_OVERRIDE is not None:
-        return CORONA_ENGINE_OVERRIDE
-    from CoronaCore.core.corona_editor import CoronaEditor
+@dataclass(frozen=True)
+class NativeSceneRef:
+    """Route-only scene value object shared by native-first AITool tools."""
 
-    return CoronaEditor.CoronaEngine
+    route: str
+    name: str
+
+    def get_actor(self, actor_name: str) -> "NativeActorView | None":
+        return find_native_actor(self.route, str(actor_name or ""))
+
+    def find_actor(self, actor_name: str) -> "NativeActorView | None":
+        return self.get_actor(actor_name)
+
+    def get_actors(self) -> list["NativeActorView"]:
+        return native_actor_views(self.route)
+
+
+def _get_editor_api() -> Any:
+    if EDITOR_API_OVERRIDE is not None:
+        return EDITOR_API_OVERRIDE
+    from api.editor_api import CoronaEditorApi
+
+    return CoronaEditorApi
 
 
 def _parse_native_json(raw: Any) -> dict[str, Any]:
@@ -66,10 +83,10 @@ def get_native_scene_snapshot(
     timeout_s: float = 1.0,
     interval_s: float = 0.05,
 ) -> dict[str, Any]:
-    engine = _get_corona_engine()
-    getter = getattr(engine, "get_editor_scene_snapshot", None)
+    api = _get_editor_api()
+    getter = getattr(getattr(api, "scene", None), "get_snapshot", None)
     if not callable(getter):
-        raise RuntimeError("Current engine is missing get_editor_scene_snapshot native API")
+        raise RuntimeError("Editor API is missing scene.get_snapshot aggregate API")
 
     deadline = time.monotonic() + max(0.0, float(timeout_s))
     last: dict[str, Any] | None = None
@@ -87,6 +104,18 @@ def get_native_scene_snapshot(
         if time.monotonic() >= deadline:
             return last
         time.sleep(max(0.01, float(interval_s)))
+
+
+def resolve_native_scene_value(scene_name: str = "") -> NativeSceneRef:
+    """Resolve a scene exclusively through the native value-object contract."""
+    snapshot = get_native_scene_snapshot(scene_name or "")
+    route = str(snapshot.get("scene") or scene_name or "").strip()
+    if not route:
+        raise RuntimeError("Native scene contract returned no scene route")
+    return NativeSceneRef(
+        route=route,
+        name=str(snapshot.get("scene_name") or route),
+    )
 
 
 def actor_bounds_ready(actor: dict[str, Any]) -> bool:
@@ -134,6 +163,12 @@ class NativeActorView:
         return str(self.data.get("route") or self.data.get("path") or self.data.get("model") or "")
 
     @property
+    def mechanics(self) -> dict[str, Any]:
+        """Return the actor's physics profile as a detached value object."""
+        value = self.data.get("mechanics")
+        return dict(value) if isinstance(value, dict) else {}
+
+    @property
     def bounds_ready(self) -> bool:
         return actor_bounds_ready(self.data)
 
@@ -168,6 +203,12 @@ class NativeActorView:
 
     def set_scale(self, value: Sequence[float]) -> None:
         result = set_native_actor_transform(self.scene_name, self.name, scale=list(value))
+        actor = result.get("actor") if isinstance(result.get("actor"), dict) else None
+        if actor:
+            self.data = actor
+
+    def set_mechanics(self, value: dict[str, Any]) -> None:
+        result = set_native_actor_physics(self.scene_name, self.name, physics=value)
         actor = result.get("actor") if isinstance(result.get("actor"), dict) else None
         if actor:
             self.data = actor
@@ -213,6 +254,19 @@ def find_native_actor(
     return NativeActorView(dict(actor), str(snapshot.get("scene") or scene_name or ""))
 
 
+def set_actor_physics_value(actor: Any, physics: dict[str, Any]) -> bool:
+    """Apply a physics value object to a native actor view."""
+    if not isinstance(physics, dict) or not physics:
+        raise ValueError("physics must be a non-empty object")
+
+    setter = getattr(actor, "set_mechanics", None)
+    if callable(setter):
+        setter(dict(physics))
+        return True
+
+    return False
+
+
 def set_native_actor_transform(
     scene_name: str,
     actor_name: str,
@@ -231,20 +285,39 @@ def set_native_actor_transform(
     if not transform["geometry"]:
         raise ValueError("position, rotation, or scale is required")
 
-    engine = _get_corona_engine()
-    setter = getattr(engine, "set_editor_actor_transform", None)
+    api = _get_editor_api()
+    setter = getattr(getattr(api, "scene", None), "set_actor_transform", None)
     if not callable(setter):
-        raise RuntimeError("Current engine is missing set_editor_actor_transform native API")
-    result = _parse_native_json(setter(scene_name or "", actor_name, json.dumps(transform, ensure_ascii=False)))
+        raise RuntimeError("Editor API is missing scene.set_actor_transform aggregate API")
+    result = _parse_native_json(setter(scene_name or "", actor_name, transform))
+    _emit_scene_tree_changed(str(result.get("scene") or scene_name or ""))
+    return result
+
+
+def set_native_actor_physics(
+    scene_name: str,
+    actor_name: str,
+    *,
+    physics: dict[str, Any],
+) -> dict[str, Any]:
+    """Apply an actor physics value object through the SceneTools adapter."""
+    if not isinstance(physics, dict) or not physics:
+        raise ValueError("physics must be a non-empty object")
+
+    api = _get_editor_api()
+    setter = getattr(getattr(api, "scene_tools", None), "set_actor_physics", None)
+    if not callable(setter):
+        raise RuntimeError("Editor API is missing scene_tools.set_actor_physics aggregate API")
+    result = _parse_native_json(setter(scene_name or "", actor_name, dict(physics)))
     _emit_scene_tree_changed(str(result.get("scene") or scene_name or ""))
     return result
 
 
 def _emit_scene_tree_changed(scene_name: str) -> None:
     try:
-        from CoronaCore.core.corona_editor import CoronaEditor
+        from runtime.editor_host import emit_editor_event
 
-        CoronaEditor.emit_editor_event("scene-tree-changed", [scene_name])
+        emit_editor_event("scene-tree-changed", [scene_name])
     except Exception:
         pass
 
@@ -267,11 +340,15 @@ def wait_for_actor_bounds(
 
 __all__ = [
     "NativeActorView",
+    "NativeSceneRef",
     "actor_bounds_ready",
     "find_native_actor",
+    "set_actor_physics_value",
     "get_native_scene_snapshot",
     "native_actor_views",
     "native_scene_actors",
+    "resolve_native_scene_value",
     "set_native_actor_transform",
+    "set_native_actor_physics",
     "wait_for_actor_bounds",
 ]

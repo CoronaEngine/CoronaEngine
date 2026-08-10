@@ -96,7 +96,7 @@ class LanChatSceneRuntime:
     side-channel for confirmation and pending scene notes.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, scene_element_classifier: Any = None) -> None:
         self._lock = threading.RLock()
         self._mode: str = MODE_DISCUSSING
         self._pending_confirmations: dict[str, PlanningConfirmation] = {}
@@ -104,6 +104,12 @@ class LanChatSceneRuntime:
         self._active_goal: str = ""
         self._active_since: float = 0.0
         self._pending_notes: list[PendingSceneNote] = []
+        self._scene_element_classifier = scene_element_classifier
+
+    def set_scene_element_classifier(self, classifier: Any) -> None:
+        """Configure the optional classifier supplied by the composition root."""
+        with self._lock:
+            self._scene_element_classifier = classifier
 
     @staticmethod
     def _agent_key(agent_name: str) -> str:
@@ -917,20 +923,18 @@ class LanChatSceneRuntime:
                 out.append(term)
         return out[:8]
 
-    @staticmethod
-    def _classification_disclosure(scene_goal: str, proposed_items: list[str]) -> str:
-        try:
-            from plugins.AITool.cai_extensions.agent.scene_element_classifier import (
-                route_model_items,
-                summarize_classification,
-            )
-        except Exception:
-            return LanChatSceneRuntime._fallback_classification_disclosure(proposed_items)
+    def _classification_disclosure(self, scene_goal: str, proposed_items: list[str]) -> str:
+        classifier = self._scene_element_classifier
+        if classifier is None:
+            return self._fallback_classification_disclosure(proposed_items)
         rows = [{"name": item} for item in LanChatSceneRuntime._concrete_items(proposed_items) if str(item or "").strip()]
         if not rows:
             return ""
-        _, routes = route_model_items(scene_goal, rows)
-        return summarize_classification(routes)
+        try:
+            _, routes = classifier.route_model_items(scene_goal, rows)
+            return classifier.summarize_classification(routes)
+        except Exception:
+            return self._fallback_classification_disclosure(proposed_items)
 
     @staticmethod
     def _fallback_classification_disclosure(proposed_items: list[str]) -> str:
@@ -965,6 +969,12 @@ class LanChatSceneRuntime:
 
 
 _RUNTIME = LanChatSceneRuntime()
+
+
+def configure_lanchat_scene_runtime(scene_element_classifier: Any) -> LanChatSceneRuntime:
+    """Inject optional scene integrations without coupling the runtime to them."""
+    _RUNTIME.set_scene_element_classifier(scene_element_classifier)
+    return _RUNTIME
 
 
 def get_lanchat_scene_runtime() -> LanChatSceneRuntime:

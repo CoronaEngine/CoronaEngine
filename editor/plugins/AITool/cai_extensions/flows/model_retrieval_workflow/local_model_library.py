@@ -6,10 +6,14 @@
 - 简单：纯文件库（index.json + models/ + images/），不引入向量库/embedding。
 - 零阻断：所有函数 try/except 包裹，库故障一律降级为"未命中→照常生成"，绝不中断主链路。
 
-库结构（<project>/assets/local_model_library/）：
+库结构（<project>/Resource/local_model_library/）：
     index.json                 {归一化名: {model_dir, image_file, created_at}}
     models/<safe>_<hash>/       original/ 原始模型目录 + runtime/ 轻量运行时目录
     images/<safe>_<hash>.png    复制进来的文生图图片
+
+Canonical storage is ``<project>/Resource/local_model_library``.  The former
+``assets/local_model_library`` location remains a read-only compatibility
+fallback.
 """
 
 from __future__ import annotations
@@ -23,6 +27,8 @@ import shutil
 import threading
 import time
 from typing import Optional
+
+from .model_library_paths import resolve_model_library_root
 
 logger = logging.getLogger(__name__)
 
@@ -52,15 +58,15 @@ def _now() -> str:
     return time.strftime("%Y-%m-%d %H:%M:%S")
 
 
-def _lib_root() -> Optional[str]:
+def _lib_root(*, for_write: bool = False) -> Optional[str]:
     """库根目录绝对路径；项目路径取不到时返回 None（库降级为不可用）。"""
     try:
-        from Quasar.ai_config.paths_config import _get_active_project_path
+        from runtime.project_context import get_project_root
 
-        project = _get_active_project_path()
+        project = get_project_root(fallback_to_environment=False)
         if not project:
             return None
-        root = os.path.join(str(project), "assets", _LIB_DIRNAME)
+        root = str(resolve_model_library_root(project, for_write=for_write))
         os.makedirs(root, exist_ok=True)
         return root
     except Exception as e:  # noqa: BLE001
@@ -152,7 +158,7 @@ def save_model(item_name: str, model_path: str) -> None:
         if not key or not model_path:
             return
         with _LIB_LOCK:
-            root = _lib_root()
+            root = _lib_root(for_write=True)
             if not root:
                 return
 
@@ -297,7 +303,7 @@ def save_image(item_name: str, src_url_or_path: str) -> None:
         if not key or not src_url_or_path:
             return
         with _LIB_LOCK:
-            root = _lib_root()
+            root = _lib_root(for_write=True)
             if not root:
                 return
             images_root = os.path.join(root, _IMAGES_SUBDIR)

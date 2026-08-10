@@ -1,4 +1,4 @@
-import { aiService } from '@/utils/bridge.js';
+import { aiService } from '@/services/aiService.js';
 import { coronaEventBus } from '@/utils/eventBus.js';
 
 const CHANNEL_NAME = 'corona-node-graph-review-v1';

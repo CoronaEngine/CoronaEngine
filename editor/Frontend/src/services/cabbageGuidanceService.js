@@ -6,7 +6,7 @@ import { getPluginManifest } from '@/config/pluginManifest.js';
 const PANEL_ZONES = Object.freeze({
   MainPage: 'center',
   SceneTools: 'right',
-  SceneDatas: 'right',
+  Object: 'right',
   EditorSettings: 'right',
   // Keep node guidance in the main-page DOM so the highlight can target nodes,
   // ports and blocks without falling back to the legacy bottom dock.
@@ -308,7 +308,7 @@ const LEGACY_TUTORIAL_GUIDANCE = Object.freeze({
     steps: [stepFor('scene-import-model', 'click', '打开场景管理中的导入入口，再选择要导入的模型。')],
   },
   'tutorial.transform_model': {
-    panelId: 'SceneDatas',
+    panelId: 'Object',
     steps: [stepFor('object-transform', 'drag', '展开“变换”，修改位置、旋转或缩放中的任意一个参数。')],
   },
   'tutorial.adjust_lighting': {
@@ -316,7 +316,7 @@ const LEGACY_TUTORIAL_GUIDANCE = Object.freeze({
     steps: [stepFor('scene-lighting', 'click', '在页面左上角切换光照，或修改光照方向的任意轴。')],
   },
   'tutorial.adjust_physics': {
-    panelId: 'SceneDatas',
+    panelId: 'Object',
     steps: [stepFor('object-physics', 'click', '展开“物理”，启用物理或修改质量、弹性、阻尼和锁轴。')],
   },
   'tutorial.create_node': {
@@ -401,11 +401,11 @@ const BASICS_TUTORIAL_GUIDANCE = Object.freeze({
     'click',
     'Select the tutorial model in the scene tree or viewport.'
   )] }),
-  set_position_x: basicGuidance('SceneDatas', { kind: 'selector', selectorKey: 'object-position-x' }, 'input', 'Set Position X to 1.'),
-  set_rotation_y: basicGuidance('SceneDatas', { kind: 'selector', selectorKey: 'object-rotation-y' }, 'input', 'Set Rotation Y to 45.'),
-  set_scale_x: basicGuidance('SceneDatas', { kind: 'selector', selectorKey: 'object-scale-x' }, 'input', 'Set Scale X to 1.5.'),
-  enable_physics: basicGuidance('SceneDatas', { kind: 'selector', selectorKey: 'object-physics-enabled' }, 'click', 'Enable Physics Simulation.'),
-  set_mass: basicGuidance('SceneDatas', { kind: 'selector', selectorKey: 'object-physics-mass' }, 'input', 'Set Mass to 10.'),
+  set_position_x: basicGuidance('Object', { kind: 'selector', selectorKey: 'object-position-x' }, 'input', 'Set Position X to 1.'),
+  set_rotation_y: basicGuidance('Object', { kind: 'selector', selectorKey: 'object-rotation-y' }, 'input', 'Set Rotation Y to 45.'),
+  set_scale_x: basicGuidance('Object', { kind: 'selector', selectorKey: 'object-scale-x' }, 'input', 'Set Scale X to 1.5.'),
+  enable_physics: basicGuidance('Object', { kind: 'selector', selectorKey: 'object-physics-enabled' }, 'click', 'Enable Physics Simulation.'),
+  set_mass: basicGuidance('Object', { kind: 'selector', selectorKey: 'object-physics-mass' }, 'input', 'Set Mass to 10.'),
   set_light_x: basicGuidance('MainPage', { kind: 'selector', selectorKey: 'scene-light-x' }, 'input', 'Set Scene Lighting Direction X to 0.5.'),
   open_nodes: basicGuidance('MainPage', { kind: 'selector', selectorKey: 'node-shortcut' }, 'click', 'Click the Nodes shortcut yourself.'),
   confirm_start_node: (source) => {
@@ -747,7 +747,7 @@ function guidanceForTask(source = {}) {
       : intent === 'import_model'
         ? 'SceneTools'
       : ['transform_model', 'adjust_physics'].includes(intent)
-        ? 'SceneDatas'
+        ? 'Object'
         : 'NodeGraphPanel';
     return { panelId, steps: [{ ...template }] };
   }
@@ -777,7 +777,7 @@ function panelIdForTarget(target = {}) {
   if (['main-viewport', 'scene-shortcut', 'node-shortcut', 'scene-lighting', 'scene-light-x', 'preview-start', 'preview-stop'].includes(selectorKey)) return 'MainPage';
   if (selectorKey.startsWith('scene-')) return 'SceneTools';
   if (selectorKey.startsWith('settings-')) return 'EditorSettings';
-  if (selectorKey.startsWith('object-')) return 'SceneDatas';
+  if (selectorKey.startsWith('object-')) return 'Object';
   if (selectorKey.startsWith('node-')) return 'NodeGraphPanel';
   if (target.kind === 'actor') return 'SceneTools';
   if (['node', 'block', 'block-type', 'edge', 'port'].includes(String(target.kind || ''))) {
@@ -826,7 +826,7 @@ export const guidanceRegistry = {
       const panelId = String(source.panelId || (
         source.guidanceIntent === 'adjust_lighting' ? 'MainPage'
           : source.guidanceIntent === 'import_model' ? 'SceneTools'
-          : ['transform_model', 'adjust_physics'].includes(source.guidanceIntent) ? 'SceneDatas'
+          : ['transform_model', 'adjust_physics'].includes(source.guidanceIntent) ? 'Object'
             : 'NodeGraphPanel'
       ));
       resolved = { panelId, steps: [{ ...template }] };

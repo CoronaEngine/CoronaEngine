@@ -13,9 +13,8 @@ class PathsConfig:
     """路径配置"""
 
     repo_root: Path
-    backend_root: Path
     frontend_dist: Path
-    script_dir: Path
+    generated_script_dir: Path
     autosave_dir: Path
     config_dir: Path
     assets_model_dir: Path
@@ -23,12 +22,10 @@ class PathsConfig:
     screenshots_dir: Optional[Path] = None
     media_local_storage: Optional[Path] = None
 
-
 def get_default_paths() -> PathsConfig:
     """获取默认路径配置"""
     # 从当前文件位置计算项目根目录
     repo_root = Path(__file__).resolve().parents[1]
-    backend_root = repo_root / "Backend"
     config_dir = repo_root / "config"
     autosave_dir = get_project_media_dir()
     assets_model_dir = get_project_models_dir()
@@ -36,9 +33,8 @@ def get_default_paths() -> PathsConfig:
 
     return PathsConfig(
         repo_root=repo_root,
-        backend_root=backend_root,
         frontend_dist=repo_root / "Frontend" / "dist" / "index.html",
-        script_dir=backend_root / "script",
+        generated_script_dir=repo_root / "runtime" / "generated",
         autosave_dir=autosave_dir,
         config_dir=config_dir,
         assets_model_dir=assets_model_dir,
@@ -54,16 +50,11 @@ def get_default_paths() -> PathsConfig:
 def _get_active_project_path() -> Path:
     """获取当前活跃项目路径，未打开项目时回退到 cwd。"""
     try:
-        from CoronaCore.core.corona_editor import CoronaEditor
-        project_path = getattr(CoronaEditor.CoronaEngine, "active_project_path", None)
+        from runtime.project_context import get_active_project_path
+
+        project_path = get_active_project_path()
         if project_path:
             return Path(project_path)
-    except Exception:
-        pass
-    try:
-        from utils.settings import settings_manager
-        if settings_manager.active_project_path:
-            return Path(settings_manager.active_project_path)
     except Exception:
         pass
     return Path(os.getcwd())
@@ -94,3 +85,8 @@ def get_project_recognition_db() -> Path:
     """获取当前项目的物体识别数据库路径: <project_path>/models/database.db"""
     models_dir = get_project_models_dir()
     return models_dir / "database.db"
+
+
+def get_repository_assets_dir() -> Path:
+    """Return the repository-bundled asset root (read-only runtime fallback)."""
+    return get_default_paths().repo_root.parent / "assets"

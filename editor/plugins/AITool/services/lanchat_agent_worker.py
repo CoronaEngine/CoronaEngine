@@ -28,6 +28,126 @@ from .model_call_budget import ModelCallLedger
 from .seed_plan import SeedPlanStatus
 from .lanchat_agent_orchestrator import LanChatAgentOrchestrator
 from .lanchat_host_action_executor import LanChatHostActionExecutor
+from .composition_root import (
+    create_engine_write_gate,
+    create_legacy_model_provider,
+    create_scene_element_classifier,
+)
+from .runtime_query_policy import (
+    is_runtime_engine_write_status_query,
+    is_runtime_enqueue_generation_query,
+    is_runtime_gm_summary_query,
+    is_runtime_operation_replay_query,
+    is_runtime_provider_status_query,
+    is_runtime_r3_gate_query,
+    is_runtime_report_query,
+    is_runtime_scene_snapshot_query,
+    is_runtime_status_query_text,
+    is_runtime_status_summary_query,
+    is_runtime_sync_status_query,
+    is_runtime_tool_manifest_query,
+    is_runtime_worker_drain_query,
+    runtime_command_from_text,
+    runtime_worker_drain_limit_from_text,
+)
+from .runtime_result_policy import (
+    agent_runtime_batches_from_result,
+    agent_runtime_graphs_from_result,
+)
+from .runtime_report_policy import (
+    format_agent_runtime_actor_import_boundary_report,
+    format_agent_runtime_batch_resource_lifecycle_report,
+    format_agent_runtime_batch_tooling_report,
+    format_agent_runtime_closure_report,
+    format_agent_runtime_command_report,
+    format_agent_runtime_context_report,
+    format_agent_runtime_engine_write_readiness_report,
+    format_agent_runtime_engine_write_report,
+    format_agent_runtime_engine_write_boundary_report,
+    format_agent_runtime_environment_report,
+    format_agent_runtime_execution_reply,
+    format_agent_runtime_fact_source_boundary_report,
+    format_agent_runtime_geometry_fact_report,
+    format_agent_runtime_import_stage_report,
+    format_agent_runtime_intervention_digest,
+    format_agent_runtime_intervention_reply,
+    format_agent_runtime_intervention_summary,
+    format_agent_runtime_intervention_batch_summary,
+    format_agent_runtime_layout_report,
+    format_agent_runtime_layout_confirmation_reply,
+    format_agent_runtime_report_health_report,
+    format_agent_runtime_review_confirmation_report,
+    format_agent_runtime_review_proposal_report,
+    format_agent_runtime_review_report,
+    format_agent_runtime_resource_flow_report,
+    format_agent_runtime_resource_readiness_report,
+    format_agent_runtime_resource_report,
+    format_agent_runtime_resource_stage_report,
+    format_agent_runtime_scene_contract_report,
+    format_agent_runtime_scene_snapshot_report,
+    format_agent_runtime_tool_queue_health_report,
+    format_agent_runtime_scene_registry_report,
+    format_agent_runtime_scene_world_consistency_report,
+    format_agent_runtime_semantic_arbitration_report,
+    format_agent_runtime_short_list,
+    format_agent_runtime_tool_execution_digest_report,
+)
+from .runtime_replay_report_policy import (
+    format_agent_runtime_replay_command_report,
+    format_agent_runtime_replay_report,
+    format_agent_runtime_replay_guard_report,
+    format_agent_runtime_replay_state_patch_report,
+    format_agent_runtime_replay_tool_execution_report,
+    format_agent_runtime_replay_tool_queue_report,
+    format_agent_runtime_tool_graph_replay_report,
+    format_agent_runtime_gm_summary_replay_report,
+    format_agent_runtime_worker_drain_replay_report,
+)
+from .runtime_replay_lifecycle_policy import (
+    format_agent_runtime_replay_geometry_report,
+    format_agent_runtime_replay_intervention_report,
+    format_agent_runtime_replay_plan_lifecycle_report,
+)
+from .runtime_replay_event_policy import (
+    format_agent_runtime_event_rows,
+    format_agent_runtime_gm_runtime_event_replay_digest,
+    format_agent_runtime_replay_runtime_event_report,
+)
+from .runtime_replay_detail_policy import (
+    format_agent_runtime_replay_failure_strategy_report,
+    format_agent_runtime_replay_final_adjustment_report,
+    format_agent_runtime_replay_layout_report,
+    format_agent_runtime_replay_review_advisory_report,
+    format_agent_runtime_replay_vlm_report,
+)
+from .runtime_replay_resource_policy import (
+    format_agent_runtime_replay_environment_report,
+    format_agent_runtime_replay_resource_readiness_report,
+)
+from .runtime_replay_transfer_policy import format_agent_runtime_replay_asset_transfer_report
+from .runtime_replay_peer_sync_policy import format_agent_runtime_replay_peer_sync_report
+from .runtime_sync_policy import (
+    format_agent_runtime_asset_transfer_report,
+    format_agent_runtime_sync_actor_rows,
+    format_agent_runtime_sync_asset_rows,
+    format_agent_runtime_gm_sync_replay_digest,
+    format_agent_runtime_sync_report,
+    format_agent_runtime_sync_health_report,
+)
+from .runtime_replay_sync_policy import format_agent_runtime_sync_replay_report
+from .runtime_message_delivery_policy import format_agent_runtime_message_delivery_report
+try:
+    from api.editor_api import (
+        get_lan_chat_adapter,
+        get_lan_chat_queue_adapter,
+        get_lan_chat_transport_adapter,
+        get_network_adapter,
+    )
+except Exception:  # pragma: no cover - standalone test/import fallback
+    get_lan_chat_adapter = None
+    get_lan_chat_queue_adapter = None
+    get_lan_chat_transport_adapter = None
+    get_network_adapter = None
 from .agent_runtime import AgentRuntime, AgentRuntimeFlags
 from .intent_understanding import get_intent_understanding_service
 from .runtime_action_intent import (
@@ -48,6 +168,7 @@ AGENT_RUNTIME_FINALIZER_RETRY_BASE_SECONDS = 1.0
 AGENT_RUNTIME_FINALIZER_RETRY_MAX_SECONDS = 30.0
 MAX_COORDINATOR_SEEN_MESSAGE_IDS = 2048
 MAX_ACTIVE_ROOM_IDS = 256
+_ENGINE_GATE_UNSET = object()
 _SENSITIVE_WORKER_PAYLOAD_KEYS = {
     "prompt",
     "raw_prompt",
@@ -94,6 +215,33 @@ class LANChatAgentWorker:
         async_agent_execution: bool | None = None,
     ) -> None:
         self._corona_engine = corona_engine
+        self._network_api = (
+            get_network_adapter(corona_engine)
+            if callable(get_network_adapter)
+            else corona_engine
+        )
+        self._lan_chat_api = (
+            get_lan_chat_adapter(corona_engine)
+            if callable(get_lan_chat_adapter)
+            else None
+        )
+        self._lan_chat_transport = (
+            get_lan_chat_transport_adapter(corona_engine)
+            if callable(get_lan_chat_transport_adapter)
+            else None
+        )
+        self._lan_chat_queue = (
+            get_lan_chat_queue_adapter(corona_engine)
+            if callable(get_lan_chat_queue_adapter)
+            else None
+        )
+        self._runtime_engine_available = bool(
+            corona_engine is not None
+            or self._network_api is not None
+            or self._lan_chat_api is not None
+            or self._lan_chat_transport is not None
+            or self._lan_chat_queue is not None
+        )
         self._agent_factory = agent_factory
         self._host_action_executor = host_action_executor
         self._interaction_coordinator = interaction_coordinator
@@ -101,7 +249,13 @@ class LANChatAgentWorker:
         self._composer_factory = composer_factory
         self._logger = logging.getLogger(__name__)
         self._agent_runtime_flags = agent_runtime_flags or AgentRuntimeFlags.from_env()
+        self._engine_write_gate: Any = _ENGINE_GATE_UNSET
+        self._scene_element_classifier = create_scene_element_classifier()
         self._agent_runtime = agent_runtime or self._create_agent_runtime()
+        if self._scene_element_classifier is not None:
+            from .lanchat_scene_runtime import configure_lanchat_scene_runtime
+
+            configure_lanchat_scene_runtime(self._scene_element_classifier)
         self._collaboration_model_selector = (
             collaboration_model_selector or default_collaboration_model_selector()
         )
@@ -209,6 +363,12 @@ class LANChatAgentWorker:
         if root_text not in sys.path:
             sys.path.insert(0, root_text)
 
+    def _get_engine_write_gate(self) -> Any:
+        """Return the single lazily-created engine gate owned by this worker."""
+        if self._engine_write_gate is _ENGINE_GATE_UNSET:
+            self._engine_write_gate = create_engine_write_gate()
+        return self._engine_write_gate
+
     def _load_runtime_tool_direct(self, registry: Any, config: Any, tool_name: str) -> Any:
         """Directly register narrow Runtime tools without loading all workflows."""
 
@@ -281,14 +441,12 @@ class LANChatAgentWorker:
                     type(exc).__name__,
                 )
             try:
-                from plugins.AITool import utils as _aitool_utils  # noqa: F401
-                from plugins.AITool.utils import ai_setting as _ai_setting  # noqa: F401
-                self._bind_runtime_ai_config()
+                from ..configuration.local_secrets import load_ai_setting
+
+                load_ai_setting()
             except Exception as exc:  # noqa: BLE001
-                self._logger.debug(
-                    "AgentRuntime local AI setting module unavailable: %s",
-                    type(exc).__name__,
-                )
+                self._logger.debug("AgentRuntime .env loading unavailable: %s", type(exc).__name__)
+            self._bind_runtime_ai_config()
             LANChatAgentWorker._quasar_config_process_loaded = True
             self._runtime_ai_config_loaded = True
             self._logger.info(
@@ -354,7 +512,7 @@ class LANChatAgentWorker:
             }
 
         if (
-            self._corona_engine is not None
+            self._runtime_engine_available
             and self._agent_runtime_flags.can_use_scene_snapshot_provider()
         ):
             try:
@@ -446,7 +604,7 @@ class LANChatAgentWorker:
                 logging.getLogger(__name__).debug("AgentRuntime environment component provider disabled: %s", type(exc).__name__)
                 note_provider("environment_component", requested=True, status="unavailable", reason="adapter_load_failed")
         use_engine_environment_import_provider = (
-            self._corona_engine is not None
+            self._runtime_engine_available
             and self._agent_runtime_flags.can_use_engine_environment_import_provider()
         )
         kwargs["require_engine_environment_import"] = bool(
@@ -455,7 +613,6 @@ class LANChatAgentWorker:
         if use_engine_environment_import_provider:
             try:
                 from .agent_runtime import make_engine_environment_component_import_provider
-                from plugins.AITool.cai_extensions.agent.engine_write_gate import get_engine_write_gate
 
                 environment_import_tool = None
                 environment_import_tool_name = ""
@@ -473,7 +630,7 @@ class LANChatAgentWorker:
                 if environment_import_tool is not None:
                     kwargs["environment_import_provider"] = make_engine_environment_component_import_provider(
                         environment_import_tool=environment_import_tool,
-                        engine_gate=get_engine_write_gate(),
+                        engine_gate=self._get_engine_write_gate(),
                         scene_snapshot_provider=kwargs.get("scene_snapshot_provider"),
                     )
                     note_provider("environment_import", requested=True, status="enabled", reason=environment_import_tool_name)
@@ -528,14 +685,16 @@ class LANChatAgentWorker:
                 from .agent_runtime import make_legacy_model_resource_provider
 
                 if "model_resource_provider" not in kwargs:
-                    kwargs["model_resource_provider"] = make_legacy_model_resource_provider()
+                    kwargs["model_resource_provider"] = make_legacy_model_resource_provider(
+                        model_provider_factory=create_legacy_model_provider,
+                    )
                     model_resource_provider_enabled = True
                     note_provider("model_resource", requested=True, status="enabled", reason="legacy_model_provider")
             except Exception as exc:  # noqa: BLE001
                 logging.getLogger(__name__).debug("AgentRuntime legacy model provider disabled: %s", type(exc).__name__)
                 note_provider("model_resource", requested=True, status="unavailable", reason="adapter_load_failed")
         use_engine_actor_import_provider = (
-            self._corona_engine is not None
+            self._runtime_engine_available
             and model_resource_provider_enabled
             and (
                 self._agent_runtime_flags.agent_runtime_enabled
@@ -548,14 +707,13 @@ class LANChatAgentWorker:
         if use_engine_actor_import_provider:
             try:
                 from .agent_runtime import make_engine_actor_import_provider
-                from plugins.AITool.cai_extensions.agent.engine_write_gate import get_engine_write_gate
 
                 import_tool = self._get_runtime_tool("import_model")
                 if import_tool is not None:
                     initial_grounding_tool = self._get_runtime_tool("set_actor_transform")
                     kwargs["actor_import_provider"] = make_engine_actor_import_provider(
                         import_tool=import_tool,
-                        engine_gate=get_engine_write_gate(),
+                        engine_gate=self._get_engine_write_gate(),
                         scene_snapshot_provider=kwargs.get("scene_snapshot_provider"),
                         transform_tool=initial_grounding_tool,
                     )
@@ -567,16 +725,15 @@ class LANChatAgentWorker:
                 note_provider("actor_import", requested=True, status="unavailable", reason="adapter_load_failed")
         elif self._agent_runtime_flags.can_use_engine_actor_import_provider():
             reason = "missing_engine"
-            if self._corona_engine is not None and not model_resource_provider_enabled:
+            if self._runtime_engine_available and not model_resource_provider_enabled:
                 reason = "missing_model_resource_provider"
             note_provider("actor_import", requested=True, status="unavailable", reason=reason)
         if (
-            self._corona_engine is not None
+            self._runtime_engine_available
             and self._agent_runtime_flags.can_use_engine_actor_delete_provider()
         ):
             try:
                 from .agent_runtime import make_engine_actor_delete_provider
-                from plugins.AITool.cai_extensions.agent.engine_write_gate import get_engine_write_gate
 
                 delete_tool = None
                 delete_tool_name = ""
@@ -592,7 +749,7 @@ class LANChatAgentWorker:
                 if delete_tool is not None:
                     kwargs["actor_delete_provider"] = make_engine_actor_delete_provider(
                         delete_tool=delete_tool,
-                        engine_gate=get_engine_write_gate(),
+                        engine_gate=self._get_engine_write_gate(),
                     )
                     note_provider("actor_delete", requested=True, status="enabled", reason=delete_tool_name)
                 else:
@@ -603,18 +760,17 @@ class LANChatAgentWorker:
         elif self._agent_runtime_flags.can_use_engine_actor_delete_provider():
             note_provider("actor_delete", requested=True, status="unavailable", reason="missing_engine")
         if (
-            self._corona_engine is not None
+            self._runtime_engine_available
             and self._agent_runtime_flags.can_use_engine_layout_transform_provider()
         ):
             try:
                 from .agent_runtime import make_engine_layout_transform_provider
-                from plugins.AITool.cai_extensions.agent.engine_write_gate import get_engine_write_gate
 
                 transform_tool = self._get_runtime_tool("set_actor_transform")
                 if transform_tool is not None:
                     kwargs["layout_transform_provider"] = make_engine_layout_transform_provider(
                         transform_tool=transform_tool,
-                        engine_gate=get_engine_write_gate(),
+                        engine_gate=self._get_engine_write_gate(),
                     )
                     note_provider("layout_transform", requested=True, status="enabled")
                 else:
@@ -641,6 +797,7 @@ class LANChatAgentWorker:
         kwargs["strict_image_to_model_pipeline"] = bool(
             self._agent_runtime_flags.strict_image_to_model_pipeline
         )
+        kwargs["scene_element_classifier"] = self._scene_element_classifier
         return AgentRuntime(**kwargs)
 
     def start(self) -> None:
@@ -2937,51 +3094,11 @@ class LANChatAgentWorker:
 
     @staticmethod
     def _agent_runtime_graphs_from_result(result: dict[str, Any]) -> list[dict[str, Any]]:
-        if not isinstance(result, dict):
-            return []
-        graphs = result.get("graphs")
-        if isinstance(graphs, list):
-            normalized = [dict(graph) for graph in graphs if isinstance(graph, dict)]
-            if normalized:
-                return normalized
-        graph = result.get("graph")
-        if isinstance(graph, dict) and graph:
-            return [dict(graph)]
-        queued = result.get("queued")
-        if isinstance(queued, dict):
-            queued_graphs = queued.get("graphs")
-            if isinstance(queued_graphs, list):
-                normalized = [dict(graph) for graph in queued_graphs if isinstance(graph, dict)]
-                if normalized:
-                    return normalized
-            queued_graph = queued.get("graph")
-            if isinstance(queued_graph, dict) and queued_graph:
-                return [dict(queued_graph)]
-        return []
+        return agent_runtime_graphs_from_result(result)
 
     @staticmethod
     def _agent_runtime_batches_from_result(result: dict[str, Any]) -> list[dict[str, Any]]:
-        if not isinstance(result, dict):
-            return []
-        batches = result.get("batches")
-        if isinstance(batches, list):
-            normalized = [dict(batch) for batch in batches if isinstance(batch, dict)]
-            if normalized:
-                return normalized
-        batch = result.get("batch")
-        if isinstance(batch, dict) and batch:
-            return [dict(batch)]
-        queued = result.get("queued")
-        if isinstance(queued, dict):
-            queued_batches = queued.get("batches")
-            if isinstance(queued_batches, list):
-                normalized = [dict(batch) for batch in queued_batches if isinstance(batch, dict)]
-                if normalized:
-                    return normalized
-            queued_batch = queued.get("batch")
-            if isinstance(queued_batch, dict) and queued_batch:
-                return [dict(queued_batch)]
-        return []
+        return agent_runtime_batches_from_result(result)
 
     def _runtime_evidence_result(
         self,
@@ -3175,36 +3292,34 @@ class LANChatAgentWorker:
             or int(evidence.get("tool_queue_active_count") or 0)
         )
         if any(status == "failed" for status in normalized_graph_statuses):
-            return (
-                f"【AgentRuntime 执行结果】ScenePlan {runtime_plan_id} 执行未完成，"
-                f"批次 {len(batches)} 个，执行图 {graph_status_text}，报告健康：{health_text}。"
-                f"{registry_text}；{classification_text}；{flow_text}；{tool_state_text}；{guard_text}；{queue_text}；{drain_text}；"
-                f"{batch_tooling_text}；{report_source_text}；{engine_text}。"
-            )
-        if normalized_graph_statuses and normalized_graph_statuses <= {"queued", "planned"}:
-            return (
-                f"【AgentRuntime 执行结果】ScenePlan {runtime_plan_id} 已进入 Runtime 执行队列，"
-                f"待 worker drain 执行；批次 {len(batches)} 个，执行图 {graph_status_text}，报告健康：{health_text}。"
-                f"{registry_text}；{classification_text}；{flow_text}；{tool_state_text}；{guard_text}；{queue_text}；{drain_text}；"
-                f"{batch_tooling_text}；{report_source_text}；{engine_text}。"
-            )
-        if (
+            execution_state = "failed"
+        elif normalized_graph_statuses and normalized_graph_statuses <= {"queued", "planned"}:
+            execution_state = "queued"
+        elif (
             "running" in normalized_graph_statuses
             or has_active_queue
             or (drain_status and drain_status not in {"drained", "empty"} and drained_count <= 0)
         ):
-            return (
-                f"【AgentRuntime 执行结果】ScenePlan {runtime_plan_id} 正在 Runtime 执行中，"
-                f"批次 {len(batches)} 个，执行图 {graph_status_text}，报告健康：{health_text}。"
-                f"{registry_text}；{classification_text}；{flow_text}；{tool_state_text}；{guard_text}；{queue_text}；{drain_text}；"
-                f"{batch_tooling_text}；{report_source_text}；{engine_text}。"
-            )
-        return (
-            f"【AgentRuntime 执行结果】ScenePlan {runtime_plan_id} 已执行 Runtime 批次 {len(batches)} 个，"
-            f"执行图 {graph_status_text}，报告健康：{health_text}。"
-            f"{registry_text}；{classification_text}；{flow_text}；{tool_state_text}；{guard_text}；{queue_text}；{drain_text}；"
-            f"{batch_tooling_text}；{report_source_text}；{engine_text}。"
-        )
+            execution_state = "running"
+        else:
+            execution_state = "completed"
+        return format_agent_runtime_execution_reply({
+            "plan_id": runtime_plan_id,
+            "batch_count": len(batches),
+            "graph_status_text": graph_status_text,
+            "health_text": health_text,
+            "registry_text": registry_text,
+            "classification_text": classification_text,
+            "flow_text": flow_text,
+            "tool_state_text": tool_state_text,
+            "guard_text": guard_text,
+            "queue_text": queue_text,
+            "drain_text": drain_text,
+            "batch_tooling_text": batch_tooling_text,
+            "report_source_text": report_source_text,
+            "engine_text": engine_text,
+            "state": execution_state,
+        })
 
     @staticmethod
     def _agent_runtime_evidence_summary(result: dict[str, Any]) -> dict[str, Any]:
@@ -3616,69 +3731,11 @@ class LANChatAgentWorker:
 
     @staticmethod
     def _format_agent_runtime_intervention_reply(result: dict[str, Any]) -> str:
-        if not isinstance(result, dict):
-            return "【AgentRuntime 介入结果】Runtime 未返回介入结果。"
-        plan = result.get("plan") if isinstance(result.get("plan"), dict) else {}
-        patch = result.get("patch") if isinstance(result.get("patch"), dict) else {}
-        runtime_plan_id = str(plan.get("plan_id") or patch.get("plan_id") or "")
-        if not patch:
-            message = str(result.get("message") or "AgentRuntime 未记录介入。")
-            return f"【AgentRuntime 介入结果】{message}"
-        patch_type = str(patch.get("patch_type") or result.get("action") or "intervention").strip().replace("_", "-")
-        status = str(
-            patch.get("status")
-            or ("recorded" if result.get("recorded") else "not-recorded")
-        ).strip().replace("_", "-")
-        raw_items = patch.get("items") if isinstance(patch.get("items"), list) else []
-        item_count = len([item for item in raw_items if str(item or "").strip()])
-        return (
-            f"【AgentRuntime 介入结果】ScenePlan {runtime_plan_id} 已记录 {patch_type}，"
-            f"状态 {status}，对象 {item_count} 个。"
-        )
+        return format_agent_runtime_intervention_reply(result)
 
     @staticmethod
     def _format_agent_runtime_layout_confirmation_reply(result: dict[str, Any]) -> str:
-        if not isinstance(result, dict):
-            return "【AgentRuntime 布局结果】Runtime 未返回布局确认结果。"
-        graph = result.get("graph") if isinstance(result.get("graph"), dict) else {}
-        proposal = result.get("proposal") if isinstance(result.get("proposal"), dict) else {}
-        if not proposal:
-            reason = str(result.get("reason") or "未找到布局调整建议").strip()
-            return f"【AgentRuntime 布局结果】{reason}。"
-        plan_id = str(proposal.get("plan_id") or graph.get("plan_id") or "").strip()
-        proposal_id = str(proposal.get("proposal_id") or proposal.get("id") or "").strip()
-        graph_status = str(graph.get("status") or "unknown").strip().replace("_", "-")
-        applied = proposal.get("applied_deltas") if isinstance(proposal.get("applied_deltas"), list) else []
-        skipped = proposal.get("skipped_deltas") if isinstance(proposal.get("skipped_deltas"), list) else []
-        transform_results = (
-            proposal.get("engine_transform_results")
-            if isinstance(proposal.get("engine_transform_results"), list)
-            else []
-        )
-        transform_success = 0
-        transform_failed = 0
-        ground_snapped = 0
-        overlap_resolved = 0
-        for item in transform_results:
-            if not isinstance(item, dict):
-                continue
-            status = str(item.get("status") or "").strip().lower()
-            if status in {"success", "succeeded", "applied", "ok"}:
-                transform_success += 1
-            elif status in {"failed", "failure", "error", "rejected"}:
-                transform_failed += 1
-            if bool(item.get("ground_snapped")):
-                ground_snapped += 1
-            if bool(item.get("overlap_resolved")):
-                overlap_resolved += 1
-        prefix = f"ScenePlan {plan_id} " if plan_id else ""
-        proposal_part = f"建议 {proposal_id} " if proposal_id else ""
-        return (
-            f"【AgentRuntime 布局结果】{prefix}{proposal_part}已通过 ToolCallGraph 确认，"
-            f"graph {graph_status}，应用 {len(applied)} 项，跳过 {len(skipped)} 项，"
-            f"引擎写入成功 {transform_success} 项、失败 {transform_failed} 项，"
-            f"贴地 {ground_snapped} 项，重叠修正 {overlap_resolved} 项。"
-        )
+        return format_agent_runtime_layout_confirmation_reply(result)
 
     def _log_scene_route(
         self,
@@ -3859,7 +3916,7 @@ class LANChatAgentWorker:
         )
 
         try:
-            trigger = self._corona_engine.network_pop_lanchat_agent_trigger()
+            trigger = self._lan_chat_queue.poll_agent_trigger()
         except Exception as exc:
             self._logger.debug("Failed to poll LANChat agent trigger: %s", type(exc).__name__)
             return processed_room_event or processed_sync_event or processed_coordinator_sync or processed_runtime_drain
@@ -4078,7 +4135,7 @@ class LANChatAgentWorker:
         plan_id: str,
         stop_event: threading.Event,
     ) -> threading.Thread | None:
-        if self._corona_engine is None or not str(plan_id or "").strip():
+        if not self._runtime_engine_available or not str(plan_id or "").strip():
             return None
         try:
             interval_s = max(5.0, min(60.0, float(os.getenv("AGENT_RUNTIME_HEARTBEAT_SECONDS", "30"))))
@@ -4291,7 +4348,7 @@ class LANChatAgentWorker:
             message_kind="runtime_status",
             runtime_event_metadata=runtime_event_metadata,
         )
-        if self._corona_engine is None:
+        if not self._runtime_engine_available:
             self._record_runtime_system_event_send_in_agent_runtime(
                 phase="runtime_system_event_send_failed",
                 room_id=room,
@@ -4302,8 +4359,8 @@ class LANChatAgentWorker:
             )
             return False
         try:
-            if hasattr(self._corona_engine, "network_send_system_message_ex"):
-                sent = bool(self._corona_engine.network_send_system_message_ex(
+            if self._lan_chat_transport is not None:
+                sent = bool(self._lan_chat_transport.send_system_message(
                     "system",
                     "系统",
                     safe_text,
@@ -4311,17 +4368,6 @@ class LANChatAgentWorker:
                     "",
                     json.dumps(metadata, ensure_ascii=False),
                 ))
-                self._record_runtime_system_event_send_in_agent_runtime(
-                    phase="runtime_system_event_send_succeeded" if sent else "runtime_system_event_send_failed",
-                    room_id=room,
-                    message=safe_text,
-                    message_kind="runtime_status",
-                    sent=sent,
-                    runtime_event_metadata=runtime_event_metadata,
-                )
-                return sent
-            if hasattr(self._corona_engine, "network_send_system_message"):
-                sent = bool(self._corona_engine.network_send_system_message("system", "系统", safe_text))
                 self._record_runtime_system_event_send_in_agent_runtime(
                     phase="runtime_system_event_send_succeeded" if sent else "runtime_system_event_send_failed",
                     room_id=room,
@@ -4380,13 +4426,13 @@ class LANChatAgentWorker:
         )
 
     def _process_room_events(self, *, max_events: int) -> bool:
-        if not hasattr(self._corona_engine, "network_pop_lanchat_room_event"):
+        if self._lan_chat_queue is None:
             return False
         processed = False
         limit = max(1, int(max_events or 1))
         for _ in range(limit):
             try:
-                event = self._corona_engine.network_pop_lanchat_room_event()
+                event = self._lan_chat_queue.poll_room_event()
             except Exception as exc:
                 self._logger.debug("Failed to poll LANChat room event: %s", type(exc).__name__)
                 break
@@ -4400,14 +4446,13 @@ class LANChatAgentWorker:
         return processed
 
     def _process_sync_events(self, *, max_events: int) -> bool:
-        pop_event = getattr(self._corona_engine, "network_pop_lanchat_sync_event", None)
-        if not callable(pop_event):
+        if self._lan_chat_queue is None:
             return False
         processed = False
         limit = max(1, int(max_events or 1))
         for _ in range(limit):
             try:
-                raw_event = pop_event()
+                raw_event = self._lan_chat_queue.poll_sync_event()
             except Exception as exc:  # noqa: BLE001
                 self._logger.debug("Failed to poll LANChat sync event: %s", type(exc).__name__)
                 break
@@ -4501,13 +4546,13 @@ class LANChatAgentWorker:
         return expanded
 
     def _process_coordinator_sync_messages(self, *, max_messages: int) -> bool:
-        if not hasattr(self._corona_engine, "network_pop_lanchat_coordinator_sync_message"):
+        if self._lan_chat_queue is None:
             return False
         processed = False
         limit = max(1, int(max_messages or 1))
         for _ in range(limit):
             try:
-                message = self._corona_engine.network_pop_lanchat_coordinator_sync_message()
+                message = self._lan_chat_queue.poll_coordinator_sync_message()
             except Exception as exc:
                 self._logger.debug("Failed to poll LANChat Coordinator sync message: %s", type(exc).__name__)
                 break
@@ -4687,8 +4732,8 @@ class LANChatAgentWorker:
             if not text:
                 return
             try:
-                if hasattr(self._corona_engine, "network_send_agent_reply_ex"):
-                    self._corona_engine.network_send_agent_reply_ex(
+                if self._lan_chat_transport is not None:
+                    self._lan_chat_transport.send_agent_reply(
                         agent_id,
                         agent_name,
                         text,
@@ -4696,12 +4741,6 @@ class LANChatAgentWorker:
                         agent_id,
                         self._correlation_id(trigger),
                         json.dumps({"phase": "progress"}, ensure_ascii=False),
-                    )
-                else:
-                    self._corona_engine.network_send_agent_reply(
-                        agent_id,
-                        agent_name,
-                        text,
                     )
             except Exception as exc:
                 self._logger.debug("Failed to send LANChat progress reply: %s", type(exc).__name__)
@@ -4820,7 +4859,7 @@ class LANChatAgentWorker:
                 return True
             trigger["reply_contract"] = "generation_confirmation"
             trigger["resolved_intent"] = "generation_start"
-            if self._corona_engine is None:
+            if not self._runtime_engine_available:
                 return True
             return bool(self._send_final_reply(
                 str(trigger.get("agent_id") or trigger.get("target_agent_id") or "gm"),
@@ -5072,7 +5111,7 @@ class LANChatAgentWorker:
                     "artifact_refs",
                     [str(value) for value in list(trigger.get("artifact_refs") or []) if str(value)],
                 )
-            if hasattr(self._corona_engine, "network_send_system_message_ex"):
+            if self._lan_chat_transport is not None:
                 self._logger.info(
                     "[LANChatReplyTrace] phase=send_system_message_ex message_id=%s correlation=%s proposal=%s agent=%s/%s text_len=%s action=%s status=%s text=%s",
                     trigger.get("message_id") or "",
@@ -5102,7 +5141,7 @@ class LANChatAgentWorker:
                     message=safe_text,
                 )
                 try:
-                    sent = bool(self._corona_engine.network_send_system_message_ex(
+                    sent = bool(self._lan_chat_transport.send_system_message(
                         agent_id,
                         agent_name,
                         safe_text,
@@ -5133,7 +5172,7 @@ class LANChatAgentWorker:
                     )
                 _complete_reply(sent, safe_text)
                 return sent
-        if hasattr(self._corona_engine, "network_send_agent_reply_ex"):
+        if self._lan_chat_transport is not None:
             self._logger.info(
                 "[LANChatReplyTrace] phase=send_agent_reply_ex message_id=%s correlation=%s reply_to=%s agent=%s/%s text_len=%s text=%s",
                 trigger.get("message_id") or "",
@@ -5182,7 +5221,7 @@ class LANChatAgentWorker:
                         for value in list(trigger.get("artifact_refs") or [])
                         if str(value)
                     ]
-                sent = bool(self._corona_engine.network_send_agent_reply_ex(
+                sent = bool(self._lan_chat_transport.send_agent_reply(
                     agent_id,
                     agent_name,
                     text,
@@ -5234,8 +5273,11 @@ class LANChatAgentWorker:
                 message=text,
                 message_kind="agent_reply",
             )
+        if self._lan_chat_transport is None:
+            _complete_reply(False, text)
+            return False
         try:
-            sent = bool(self._corona_engine.network_send_agent_reply(agent_id, agent_name, text))
+            sent = bool(self._lan_chat_transport.send_agent_reply(agent_id, agent_name, text))
         except Exception:
             _complete_reply(False, text)
             raise
@@ -5367,19 +5409,22 @@ class LANChatAgentWorker:
 
     def _has_engine_api(self) -> bool:
         return (
-            self._corona_engine is not None
-            and hasattr(self._corona_engine, "network_pop_lanchat_agent_trigger")
-            and hasattr(self._corona_engine, "network_send_agent_reply")
+            self._runtime_engine_available
+            and self._lan_chat_queue is not None
+            and self._lan_chat_transport is not None
         )
 
     def _network_session_role_name(self) -> str:
-        if self._corona_engine is None:
+        network = self._network_api
+        if network is None:
             return "none"
-        session_role_name = getattr(self._corona_engine, "network_session_role_name", None)
-        if not callable(session_role_name):
+        get_session_info = getattr(network, "get_session_info", None)
+        if not callable(get_session_info):
             return "none"
         try:
-            return str(session_role_name() or "none").strip().lower()
+            info = get_session_info()
+            role = info.get("role") if isinstance(info, dict) else info
+            return str(role or "none").strip().lower()
         except Exception as exc:  # noqa: BLE001
             self._logger.debug("LANChat network role check skipped: %s", type(exc).__name__)
             return "none"
@@ -6040,34 +6085,15 @@ class LANChatAgentWorker:
 
     @staticmethod
     def _runtime_command_from_text(text: str) -> str:
-        normalized = str(text or "").strip().lower()
-        if not normalized:
-            return ""
-        if any(word in normalized for word in ("取消生成", "取消任务", "停止生成", "终止生成", "不要生成", "cancel generation", "cancel task")):
-            return "cancel"
-        if any(word in normalized for word in ("暂停生成", "暂停一下", "先暂停", "暂停任务", "pause generation", "pause task")):
-            return "pause"
-        if any(word in normalized for word in ("继续生成", "恢复生成", "继续执行", "恢复执行", "resume generation", "resume task")):
-            return "resume"
-        return ""
+        return runtime_command_from_text(text)
 
     @staticmethod
     def _is_runtime_worker_drain_query(text: str) -> bool:
-        normalized = str(text or "").strip().lower()
-        if not normalized:
-            return False
-        runtime_markers = ("runtime", "agentruntime", "agent runtime", "worker", "drain", "闃熷垪", "鎵ц闃熷垪")
-        drain_markers = ("worker drain", "drain queue", "runtime drain", "drain", "执行队列", "推进队列", "跑队列", "消费队列")
-        return any(marker in normalized for marker in runtime_markers) and any(
-            marker in normalized for marker in drain_markers
-        )
+        return is_runtime_worker_drain_query(text)
 
     @staticmethod
     def _runtime_worker_drain_limit_from_text(text: str) -> int:
-        normalized = str(text or "").strip().lower()
-        if any(token in normalized for token in ("鍏ㄩ儴", "鍏ㄩ噺", "鍓╀綑", "all", "rest")):
-            return 1000
-        return 1
+        return runtime_worker_drain_limit_from_text(text)
 
     def _handle_agent_runtime_provider_status_query(self, trigger: dict[str, Any]) -> str | None:
         text = str(trigger.get("text") or "").strip()
@@ -6237,47 +6263,11 @@ class LANChatAgentWorker:
 
     @staticmethod
     def _is_runtime_provider_status_query(text: str) -> bool:
-        normalized = str(text or "").strip().lower()
-        if not normalized:
-            return False
-        provider_markers = (
-            "provider",
-            "adapter",
-            "runtime preflight",
-            "runtime provider",
-            "provider status",
-            "真实provider",
-            "真实 provider",
-            "适配器",
-            "预检",
-            "通道",
-            "真实通道",
-            "接上",
-        )
-        runtime_markers = ("runtime", "agentruntime", "agent runtime")
-        return any(marker in normalized for marker in provider_markers) and any(
-            marker in normalized for marker in runtime_markers
-        )
+        return is_runtime_provider_status_query(text)
 
     @staticmethod
     def _is_runtime_enqueue_generation_query(text: str) -> bool:
-        normalized = str(text or "").strip().lower()
-        if not normalized:
-            return False
-        runtime_markers = ("runtime", "agentruntime", "agent runtime")
-        enqueue_markers = (
-            "confirm_and_enqueue",
-            "enqueue generation",
-            "runtime enqueue",
-            "鍏ラ槦",
-            "运行时",
-            "纭鍏ラ槦",
-            "鎺掑叆闃熷垪",
-        )
-        generation_markers = ("generate", "generation", "鐢熸垚", "鎵ц", "start")
-        return any(marker in normalized for marker in runtime_markers) and any(
-            marker in normalized for marker in enqueue_markers
-        ) and any(marker in normalized for marker in generation_markers)
+        return is_runtime_enqueue_generation_query(text)
 
     def _handle_agent_runtime_engine_write_status_query(self, trigger: dict[str, Any]) -> str | None:
         text = str(trigger.get("text") or "").strip()
@@ -6330,28 +6320,7 @@ class LANChatAgentWorker:
 
     @staticmethod
     def _is_runtime_engine_write_status_query(text: str) -> bool:
-        normalized = str(text or "").strip().lower()
-        if not normalized:
-            return False
-        engine_markers = (
-            "engine write",
-            "engine bridge",
-            "runtime engine",
-            "actor import",
-            "layout transform",
-            "import provider",
-            "transform provider",
-            "寮曟搸鍐欏叆",
-            "鐪熷疄瀵煎叆",
-            "鐪熷疄鍐欏叆",
-            "瀵煎叆閫氶亾",
-            "鍙樻崲閫氶亾",
-            "鍐欏叆閫氶亾",
-        )
-        runtime_markers = ("runtime", "engine", "provider", "adapter", "寮曟搸", "瀵煎叆", "鍐欏叆", "閫氶亾")
-        return any(marker in normalized for marker in engine_markers) and any(
-            marker in normalized for marker in runtime_markers
-        )
+        return is_runtime_engine_write_status_query(text)
 
     def _handle_agent_runtime_scene_snapshot_query(self, trigger: dict[str, Any]) -> str | None:
         text = str(trigger.get("text") or "").strip()
@@ -6391,25 +6360,7 @@ class LANChatAgentWorker:
 
     @staticmethod
     def _is_runtime_scene_snapshot_query(text: str) -> bool:
-        normalized = str(text or "").strip().lower()
-        if not normalized:
-            return False
-        snapshot_markers = (
-            "scene snapshot",
-            "runtime scene snapshot",
-            "snapshot status",
-            "refresh scene snapshot",
-            "鍦烘櫙蹇収",
-            "鍒锋柊鍦烘櫙蹇収",
-            "褰撳墠鍦烘櫙蹇収",
-            "寮曟搸蹇収",
-            "actor蹇収",
-            "actor 蹇収",
-        )
-        runtime_markers = ("runtime", "agentruntime", "agent runtime", "鍦烘櫙蹇収", "寮曟搸蹇収", "actor蹇収", "actor 蹇収")
-        return any(marker in normalized for marker in snapshot_markers) and any(
-            marker in normalized for marker in runtime_markers
-        )
+        return is_runtime_scene_snapshot_query(text)
 
     def _handle_agent_runtime_tool_manifest_query(self, trigger: dict[str, Any]) -> str | None:
         text = str(trigger.get("text") or "").strip()
@@ -6468,23 +6419,7 @@ class LANChatAgentWorker:
 
     @staticmethod
     def _is_runtime_tool_manifest_query(text: str) -> bool:
-        normalized = str(text or "").strip().lower()
-        if not normalized:
-            return False
-        manifest_markers = (
-            "tool manifest",
-            "tool capabilities",
-            "runtime tools",
-            "runtime tool",
-            "工具清单",
-            "工具能力",
-            "可用工具",
-            "能力清单",
-        )
-        runtime_markers = ("runtime", "agentruntime", "agent runtime", "工具", "tool")
-        return any(marker in normalized for marker in manifest_markers) and any(
-            marker in normalized for marker in runtime_markers
-        )
+        return is_runtime_tool_manifest_query(text)
 
     def _handle_agent_runtime_operation_replay_query(self, trigger: dict[str, Any]) -> str | None:
         text = str(trigger.get("text") or "").strip()
@@ -6727,24 +6662,7 @@ class LANChatAgentWorker:
 
     @staticmethod
     def _is_runtime_operation_replay_query(text: str) -> bool:
-        normalized = str(text or "").strip().lower()
-        if not normalized:
-            return False
-        replay_markers = (
-            "operation replay",
-            "operation log",
-            "runtime replay",
-            "runtime operation",
-            "鎵ц鍥炴斁",
-            "鎿嶄綔鍥炴斁",
-            "鎿嶄綔鏃ュ織",
-            "澶嶇洏鏃ュ織",
-            "杩愯鏃ュ織",
-        )
-        runtime_markers = ("runtime", "agentruntime", "agent runtime", "鍥炴斁", "鏃ュ織", "澶嶇洏")
-        return any(marker in normalized for marker in replay_markers) and any(
-            marker in normalized for marker in runtime_markers
-        )
+        return is_runtime_operation_replay_query(text)
 
     def _handle_agent_runtime_report_query(self, trigger: dict[str, Any]) -> str | None:
         text = str(trigger.get("text") or "").strip()
@@ -7018,1408 +6936,158 @@ class LANChatAgentWorker:
 
     @staticmethod
     def _format_agent_runtime_short_list(value: Any, *, fallback: str = "none", limit: int = 6) -> str:
-        if not isinstance(value, list):
-            return fallback
-        items = [str(item).strip() for item in value if str(item).strip()]
-        if not items:
-            return fallback
-        preview = "、".join(items[:max(1, int(limit or 1))])
-        if len(items) > max(1, int(limit or 1)):
-            preview += f" 等 {len(items)} 项"
-        return preview
+        return format_agent_runtime_short_list(value, fallback=fallback, limit=limit)
 
     @staticmethod
     def _format_agent_runtime_scene_registry_report(summary: Any) -> str:
-        if not isinstance(summary, dict) or not summary:
-            return "none"
-        entity_type_counts = dict(summary.get("entity_type_counts") or {})
-        entity_count = int(summary.get("entity_count") or 0)
-        actor_count = int(summary.get("actor_count") or entity_type_counts.get("actor") or 0)
-        terrain_count = int(summary.get("terrain_count") or entity_type_counts.get("terrain") or 0)
-        skybox_count = int(summary.get("skybox_count") or entity_type_counts.get("skybox") or 0)
-        entities = summary.get("entities") if isinstance(summary.get("entities"), list) else []
-        roles: list[str] = []
-        for entity in entities:
-            if not isinstance(entity, dict):
-                continue
-            role = str(entity.get("semantic_role") or entity.get("name") or "").strip()
-            if role and role not in roles:
-                roles.append(role)
-            if len(roles) >= 4:
-                break
-        if entity_count <= 0 and actor_count <= 0 and terrain_count <= 0 and skybox_count <= 0:
-            return "none"
-        parts = [
-            f"entities {entity_count}",
-            f"actor {actor_count}",
-            f"terrain {terrain_count}",
-            f"skybox {skybox_count}",
-        ]
-        if roles:
-            parts.append("roles " + "、".join(roles))
-        return ", ".join(parts)
+        return format_agent_runtime_scene_registry_report(summary)
 
     @staticmethod
     def _format_agent_runtime_scene_world_consistency_report(summary: Any) -> str:
-        if not isinstance(summary, dict) or not summary:
-            return "尚无 Engine/Runtime 对账结果"
-        status = str(summary.get("status") or "blocked").strip().lower()
-        expected = int(summary.get("expected_entity_count") or 0)
-        actual = int(summary.get("engine_actor_count") or 0)
-        matched = int(summary.get("matched_entity_count") or 0)
-        issues = int(summary.get("issue_count") or 0)
-        counts = f"匹配 {matched}/{expected}，Engine 实体 {actual}"
-        if status == "consistent":
-            return f"对账通过，{counts}"
-        if status == "needs_review":
-            return f"需要复核，{counts}，问题 {issues} 项"
-        reason = str(summary.get("reason") or "engine_snapshot_unavailable").strip().lower()
-        if reason == "engine_scene_snapshot_unavailable":
-            return f"对账尚未完成，等待 Engine 场景快照；{counts}"
-        return f"对账尚未完成，{counts}"
+        return format_agent_runtime_scene_world_consistency_report(summary)
 
     @staticmethod
     def _format_agent_runtime_environment_report(summary: Any) -> str:
-        if not isinstance(summary, dict) or not summary:
-            return "none"
-        count = int(summary.get("component_count") or 0)
-        requested = int(summary.get("requested_count") or 0)
-        ready = int(summary.get("ready_count") or count or 0)
-        failed = int(summary.get("failed_count") or 0)
-        imported = int(summary.get("imported_count") or 0)
-        import_failed = int(summary.get("import_failed_count") or 0)
-        event_count = int(summary.get("event_count") or 0)
-        if count <= 0 and requested <= 0 and failed <= 0 and imported <= 0 and import_failed <= 0 and event_count <= 0:
-            return "none"
-        type_counts = summary.get("type_counts") if isinstance(summary.get("type_counts"), dict) else {}
-        parts = [
-            f"{str(key).replace('_', '-')}: {int(value or 0)}"
-            for key, value in sorted(type_counts.items())
-            if int(value or 0) > 0
-        ]
-        detail = "、".join(parts[:4]) if parts else "components tracked"
-        counters = [f"{count} component(s)", f"ready {ready}"]
-        if imported:
-            counters.append(f"imported {imported}")
-        if requested:
-            counters.append(f"requested {requested}")
-        if failed:
-            counters.append(f"failed {failed}")
-        if import_failed:
-            counters.append(f"import-failed {import_failed}")
-        return f"{'；'.join(counters)}, {detail}"
+        return format_agent_runtime_environment_report(summary)
 
     @staticmethod
     def _format_agent_runtime_scene_contract_report(summary: Any) -> str:
-        if not isinstance(summary, dict) or not summary or not summary.get("available"):
-            return "none"
-
-        def safe_label(value: Any) -> str:
-            text = str(value or "").strip().replace("_", "-")
-            for marker in ("prompt", "provider", "url", "raw", "token", "api-key", "path"):
-                text = re.sub(marker, "resource", text, flags=re.IGNORECASE)
-            return text[:80]
-
-        scene_type = safe_label(summary.get("scene_type")) or "unknown-scene"
-        environment_type = safe_label(summary.get("environment_type")) or "unknown-env"
-        terrain_type = safe_label(summary.get("terrain_type")) or "unknown-terrain"
-        boundary_type = safe_label(summary.get("boundary_type")) or "unknown-boundary"
-        mood = LANChatAgentWorker._format_agent_runtime_short_list(
-            summary.get("mood"),
-            fallback="none",
-            limit=3,
-        )
-        style = LANChatAgentWorker._format_agent_runtime_short_list(
-            summary.get("style_keywords"),
-            fallback="none",
-            limit=3,
-        )
-        avoid = LANChatAgentWorker._format_agent_runtime_short_list(
-            summary.get("avoid_keywords"),
-            fallback="none",
-            limit=3,
-        )
-        version = int(summary.get("version") or 0)
-        return (
-            f"{scene_type}/{environment_type}, terrain {terrain_type}, boundary {boundary_type}, "
-            f"mood {mood}, style {style}, avoid {avoid}, v{version}"
-        )
+        return format_agent_runtime_scene_contract_report(summary)
 
     @staticmethod
     def _format_agent_runtime_semantic_arbitration_report(summary: Any) -> str:
-        if not isinstance(summary, dict) or not summary or not summary.get("available"):
-            return "none"
-
-        def safe_label(value: Any) -> str:
-            text = str(value or "").strip().replace("_", "-")
-            for marker in ("prompt", "provider", "url", "raw", "token", "api-key", "path"):
-                text = re.sub(marker, "resource", text, flags=re.IGNORECASE)
-            return text[:80]
-
-        state = safe_label(summary.get("arbitration_state")) or "unknown"
-        readiness = safe_label(summary.get("execution_readiness")) or "unknown"
-        owner = safe_label(summary.get("owner_agent")) or "none"
-        agents = LANChatAgentWorker._format_agent_runtime_short_list(
-            summary.get("contributing_agents"),
-            fallback="none",
-            limit=4,
-        )
-        flags = LANChatAgentWorker._format_agent_runtime_short_list(
-            summary.get("risk_flags"),
-            fallback="none",
-            limit=4,
-        )
-        confirm = "yes" if bool(summary.get("requires_host_confirmation")) else "no"
-        clarify = "yes" if bool(summary.get("needs_clarification")) else "no"
-        multi_agent = "yes" if bool(summary.get("multi_agent_discussion")) else "no"
-        return (
-            f"{state}, readiness {readiness}, owner {owner}, agents {agents}, "
-            f"multi-agent {multi_agent}, confirm {confirm}, clarify {clarify}, flags {flags}"
-        )
+        return format_agent_runtime_semantic_arbitration_report(summary)
 
     @staticmethod
     def _format_agent_runtime_tool_execution_digest_report(summary: Any) -> str:
-        if not isinstance(summary, dict) or not summary or not summary.get("available"):
-            return "none"
-
-        def safe_label(value: Any) -> str:
-            text = str(value or "").strip().replace("_", "-")
-            for marker in (
-                "prompt",
-                "provider",
-                "url",
-                "raw",
-                "token",
-                "api-key",
-                "path",
-                "tool-call",
-                "tool-name",
-            ):
-                text = re.sub(marker, "resource", text, flags=re.IGNORECASE)
-            return text[:80]
-
-        graph_count = int(summary.get("graph_count") or 0)
-        queue_count = int(summary.get("queue_count") or 0)
-        node_count = int(summary.get("node_count") or 0)
-        succeeded = int(summary.get("succeeded_count") or 0)
-        failed = int(summary.get("failed_count") or 0)
-        blocked = int(summary.get("blocked_count") or 0)
-        skipped = int(summary.get("skipped_count") or 0)
-        running = int(summary.get("running_count") or 0)
-        planned = int(summary.get("planned_count") or 0)
-        ready = int(summary.get("ready_count") or 0)
-        attention = "yes" if bool(summary.get("attention_required")) else "no"
-        reasons = LANChatAgentWorker._format_agent_runtime_short_list(
-            summary.get("attention_reasons"),
-            fallback="none",
-            limit=4,
-        )
-        latest = summary.get("latest_attention") if isinstance(summary.get("latest_attention"), dict) else {}
-        latest_status = safe_label(latest.get("status"))
-        latest_reason = safe_label(latest.get("reason")) if latest_status else ""
-        parts = [
-            f"graphs {graph_count}",
-            f"queue {queue_count}",
-            f"nodes {node_count}",
-            f"ok {succeeded}",
-            f"failed {failed}",
-            f"blocked {blocked}",
-            f"skipped {skipped}",
-        ]
-        if running or planned or ready:
-            parts.append(f"active r/p/ready {running}/{planned}/{ready}")
-        parts.append(f"attention {attention}")
-        if reasons != "none":
-            parts.append(f"reasons {reasons}")
-        if latest_status:
-            parts.append(f"latest {latest_status}" + (f": {latest_reason}" if latest_reason else ""))
-        return ", ".join(parts)
+        return format_agent_runtime_tool_execution_digest_report(summary)
 
     @staticmethod
     def _format_agent_runtime_review_report(summary: Any) -> str:
-        if not isinstance(summary, dict) or not summary:
-            return "none"
-        review_count = int(summary.get("review_count") or 0)
-        if review_count <= 0:
-            return "none"
-        issue_count = int(summary.get("issue_count") or 0)
-        advisory_count = int(summary.get("advisory_count") or 0)
-        status_counts = summary.get("status_counts") if isinstance(summary.get("status_counts"), dict) else {}
-        checkpoint_counts = summary.get("checkpoint_counts") if isinstance(summary.get("checkpoint_counts"), dict) else {}
-        statuses = ",".join(
-            f"{str(key).replace('_', '-')}:{int(value or 0)}"
-            for key, value in sorted(status_counts.items())
-            if int(value or 0) > 0
-        )
-        checkpoints = ",".join(
-            f"{str(key).replace('_', '-')}:{int(value or 0)}"
-            for key, value in sorted(checkpoint_counts.items())
-            if int(value or 0) > 0
-        )
-        parts = [f"{review_count} review(s)", f"issues {issue_count}", f"advisory {advisory_count}"]
-        if statuses:
-            parts.append(f"status {statuses}")
-        if checkpoints:
-            parts.append(f"checkpoint {checkpoints}")
-        return "；".join(parts)
-
-    @staticmethod
-    def _format_agent_runtime_geometry_fact_report(summary: Any) -> str:
-        if not isinstance(summary, dict) or not summary:
-            return "none"
-        fact_count = int(summary.get("fact_count") or 0)
-        aabb_count = int(summary.get("aabb_actor_count") or 0)
-        skipped_count = int(summary.get("aabb_skipped_count") or 0)
-        overlap_count = int(summary.get("overlap_issue_count") or 0)
-        if fact_count <= 0 and aabb_count <= 0 and skipped_count <= 0 and overlap_count <= 0:
-            return "none"
-        status_counts = summary.get("status_counts") if isinstance(summary.get("status_counts"), dict) else {}
-        fact_type_counts = summary.get("fact_type_counts") if isinstance(summary.get("fact_type_counts"), dict) else {}
-        statuses = ",".join(
-            f"{str(key).replace('_', '-')}:{int(value or 0)}"
-            for key, value in sorted(status_counts.items())
-            if int(value or 0) > 0
-        )
-        fact_types = ",".join(
-            f"{str(key).replace('_', '-')}:{int(value or 0)}"
-            for key, value in sorted(fact_type_counts.items())
-            if int(value or 0) > 0
-        )
-        parts = [
-            f"{fact_count} fact(s)",
-            f"AABB actors {aabb_count}",
-            f"overlap issues {overlap_count}",
-        ]
-        if skipped_count:
-            parts.append(f"skipped {skipped_count}")
-        if statuses:
-            parts.append(f"status {statuses}")
-        if fact_types:
-            parts.append(f"type {fact_types}")
-        return "；".join(parts)
-
-    @staticmethod
-    def _format_agent_runtime_review_proposal_report(summary: Any) -> str:
-        if not isinstance(summary, dict) or not summary:
-            return "none"
-        proposal_count = int(summary.get("proposal_count") or 0)
-        if proposal_count <= 0:
-            return "none"
-        item_count = int(summary.get("item_count") or 0)
-        status_counts = summary.get("status_counts") if isinstance(summary.get("status_counts"), dict) else {}
-        statuses = ",".join(
-            f"{str(key).replace('_', '-')}:{int(value or 0)}"
-            for key, value in sorted(status_counts.items())
-            if int(value or 0) > 0
-        )
-        pending_count = int(status_counts.get("proposed") or 0)
-        confirmed_count = int(status_counts.get("confirmed") or 0)
-        rejected_count = int(status_counts.get("rejected") or 0)
-        if pending_count > 0:
-            decision_state = "waiting host confirmation"
-        elif confirmed_count > 0 or rejected_count > 0:
-            decision_state = "host decision recorded"
-        else:
-            decision_state = "decision state unknown"
-        parts = [f"{proposal_count} proposal(s)", f"items {item_count}", decision_state]
-        if statuses:
-            parts.append(f"status {statuses}")
-        return "；".join(parts)
-
-    @staticmethod
-    def _format_agent_runtime_review_confirmation_report(summary: Any) -> str:
-        if not isinstance(summary, dict) or not summary:
-            return "none"
-        confirmation_count = int(summary.get("confirmation_count") or 0)
-        if confirmation_count <= 0:
-            return "none"
-        decision_counts = summary.get("decision_counts") if isinstance(summary.get("decision_counts"), dict) else {}
-        decisions = ",".join(
-            f"{str(key).replace('_', '-')}:{int(value or 0)}"
-            for key, value in sorted(decision_counts.items())
-            if int(value or 0) > 0
-        )
-        return f"{confirmation_count} confirmation(s)" + (f"；decision {decisions}" if decisions else "")
-
-    @staticmethod
-    def _format_agent_runtime_layout_report(summary: Any, confirmation_summary: Any = None) -> str:
-        if not isinstance(summary, dict) or not summary:
-            proposal_count = 0
-            proposals: list[Any] = []
-        else:
-            proposal_count = int(summary.get("proposal_count") or 0)
-            proposals = summary.get("proposals") if isinstance(summary.get("proposals"), list) else []
-        confirmation_count = 0
-        if isinstance(confirmation_summary, dict):
-            confirmation_count = int(confirmation_summary.get("confirmation_count") or 0)
-        if proposal_count <= 0 and confirmation_count <= 0:
-            return "none"
-        status_counts: dict[str, int] = {}
-        delta_count = 0
-        applied_delta_count = int(summary.get("applied_delta_count") or 0) if isinstance(summary, dict) else 0
-        skipped_delta_count = int(summary.get("skipped_delta_count") or 0) if isinstance(summary, dict) else 0
-        transform_result_count = int(summary.get("transform_result_count") or 0) if isinstance(summary, dict) else 0
-        ground_snapped_count = int(summary.get("ground_snapped_count") or 0) if isinstance(summary, dict) else 0
-        overlap_resolved_count = int(summary.get("overlap_resolved_count") or 0) if isinstance(summary, dict) else 0
-        transform_failure_code_counts = (
-            summary.get("layout_transform_failure_code_counts")
-            if isinstance(summary, dict) and isinstance(summary.get("layout_transform_failure_code_counts"), dict)
-            else {}
-        )
-        risk_levels: list[str] = []
-        for proposal in proposals:
-            if not isinstance(proposal, dict):
-                continue
-            status = str(proposal.get("status") or "").strip()
-            if status:
-                status_counts[status] = status_counts.get(status, 0) + 1
-            delta_count += int(proposal.get("delta_count") or 0)
-            risk = str(proposal.get("risk_level") or "").strip().replace("_", "-")
-            if risk and risk not in risk_levels:
-                risk_levels.append(risk)
-        parts = [f"{proposal_count} proposal(s)", f"deltas {delta_count}"]
-        parts.append(f"applied {applied_delta_count}")
-        parts.append(f"skipped {skipped_delta_count}")
-        parts.append(f"transforms {transform_result_count}")
-        if ground_snapped_count:
-            parts.append(f"ground-snapped {ground_snapped_count}")
-        if overlap_resolved_count:
-            parts.append(f"overlap-resolved {overlap_resolved_count}")
-        if transform_failure_code_counts:
-            def _safe_layout_failure_label(value: Any) -> str:
-                label = str(value or "").strip().lower().replace("_", "-").replace(" ", "-")
-                blocked = ("provider", "url", "http", "prompt", "raw", "api-key", "apikey", "secret", "token")
-                if any(marker in label for marker in blocked):
-                    return "redacted"
-                return label[:64] or "unknown"
-
-            failure_items = ",".join(
-                f"{_safe_layout_failure_label(key)}:{int(value or 0)}"
-                for key, value in sorted(transform_failure_code_counts.items())
-                if int(value or 0) > 0
-            )
-            if failure_items:
-                parts.append(f"transform-failures {failure_items}")
-        if confirmation_count:
-            parts.append(f"confirmations {confirmation_count}")
-        if risk_levels:
-            parts.append("risk " + ",".join(risk_levels[:3]))
-        if status_counts:
-            statuses = ",".join(
-                f"{str(key).replace('_', '-')}:{int(value or 0)}"
-                for key, value in sorted(status_counts.items())
-                if int(value or 0) > 0
-            )
-            if statuses:
-                parts.append(f"status {statuses}")
-        return "；".join(parts)
-
-    @staticmethod
-    def _format_agent_runtime_command_report(summary: Any) -> str:
-        if not isinstance(summary, dict) or not summary:
-            return "none"
-        command_count = int(summary.get("command_count") or 0)
-        commands = summary.get("latest_commands") if isinstance(summary.get("latest_commands"), list) else []
-        if command_count <= 0 and not commands:
-            return "none"
-
-        def safe_text(value: Any) -> str:
-            text = str(value or "").strip()
-            for marker in ("provider", "prompt", "url", "raw", "token", "api_key"):
-                text = re.sub(marker, "runtime", text, flags=re.IGNORECASE)
-            return text.replace("_", "-")[:80]
-
-        latest_parts: list[str] = []
-        for item in commands[-3:]:
-            if not isinstance(item, dict):
-                continue
-            command = safe_text(item.get("command"))
-            old_status = safe_text(item.get("old_status"))
-            new_status = safe_text(item.get("new_status"))
-            if not command:
-                continue
-            if old_status or new_status:
-                latest_parts.append(f"{command}:{old_status or '?'}->{new_status or '?'}")
-            else:
-                latest_parts.append(command)
-        parts = [f"{command_count} command(s)"]
-        if latest_parts:
-            parts.append("latest " + ",".join(latest_parts))
-        return "；".join(parts)
+        return format_agent_runtime_review_report(summary)
 
     @staticmethod
     def _format_agent_runtime_replay_command_report(summary: Any) -> str:
-        if not isinstance(summary, dict) or not summary:
-            return "none"
-        command_count = int(summary.get("command_count") or 0)
-        if command_count <= 0:
-            return "none"
-
-        def safe_text(value: Any) -> str:
-            text = str(value or "").strip()
-            for marker in ("provider", "prompt", "url", "raw", "token", "api_key"):
-                text = re.sub(marker, "runtime", text, flags=re.IGNORECASE)
-            return text.replace("_", "-")[:80]
-
-        cancelled_batches = int(summary.get("cancelled_batch_total") or 0)
-        cancelled_graphs = int(summary.get("cancelled_graph_total") or 0)
-        resumed_graphs = int(summary.get("resumed_graph_total") or 0)
-        retried_graphs = int(summary.get("retried_graph_total") or 0)
-        parts = [f"{command_count} command(s)"]
-        if cancelled_batches or cancelled_graphs:
-            parts.append(f"cancelled batch/graph {cancelled_batches}/{cancelled_graphs}")
-        if resumed_graphs:
-            parts.append(f"resumed graphs {resumed_graphs}")
-        if retried_graphs:
-            parts.append(f"retried graphs {retried_graphs}")
-        latest = summary.get("latest_command") if isinstance(summary.get("latest_command"), dict) else {}
-        command = safe_text(latest.get("command"))
-        old_status = safe_text(latest.get("old_status"))
-        new_status = safe_text(latest.get("new_status"))
-        if command:
-            if old_status or new_status:
-                parts.append(f"latest {command}:{old_status or '?'}->{new_status or '?'}")
-            else:
-                parts.append(f"latest {command}")
-        return ", ".join(parts)
+        return format_agent_runtime_replay_command_report(summary)
 
     @staticmethod
     def _format_agent_runtime_replay_tool_execution_report(summary: Any) -> str:
-        if not isinstance(summary, dict) or not summary:
-            return "started 0, succeeded 0, failed 0"
-        started = int(summary.get("started_count") or 0)
-        succeeded = int(summary.get("succeeded_count") or 0)
-        failed = int(summary.get("failed_count") or 0)
-        blocked = int(summary.get("blocked_count") or 0)
-        retry_scheduled = int(summary.get("retry_scheduled_count") or 0)
-        skipped = int(summary.get("skipped_count") or 0)
-        parts = [
-            f"started {started}",
-            f"succeeded {succeeded}",
-            f"failed {failed}",
-            f"blocked {blocked}",
-        ]
-        if retry_scheduled:
-            parts.append(f"retry {retry_scheduled}")
-        if skipped:
-            parts.append(f"skipped {skipped}")
-        latest = summary.get("latest_tool_event") if isinstance(summary.get("latest_tool_event"), dict) else {}
-        event = str(latest.get("event") or "").strip().replace("_", "-")
-        status = str(latest.get("status") or "").strip().replace("_", "-")
-        if event:
-            parts.append(f"latest {event}:{status or 'unknown'}")
-        return ", ".join(parts)
+        return format_agent_runtime_replay_tool_execution_report(summary)
 
     @staticmethod
     def _format_agent_runtime_replay_tool_queue_report(summary: Any) -> str:
-        if not isinstance(summary, dict) or not summary:
-            return "queued 0, dequeued 0, completed 0"
-        queued = int(summary.get("queued_count") or 0)
-        dequeued = int(summary.get("dequeued_count") or 0)
-        completed = int(summary.get("completed_count") or 0)
-        rejected = int(summary.get("rejected_count") or 0)
-        empty = int(summary.get("empty_count") or 0)
-        blocked = int(summary.get("blocked_count") or 0)
-        missing_graph = int(summary.get("missing_graph_count") or 0)
-        parts = [
-            f"queued {queued}",
-            f"dequeued {dequeued}",
-            f"completed {completed}",
-        ]
-        if rejected:
-            parts.append(f"rejected {rejected}")
-        if empty:
-            parts.append(f"empty {empty}")
-        if blocked:
-            parts.append(f"blocked {blocked}")
-        if missing_graph:
-            parts.append(f"missing {missing_graph}")
-        latest = summary.get("latest_queue_event") if isinstance(summary.get("latest_queue_event"), dict) else {}
-        event = str(latest.get("event") or "").strip().replace("_", "-")
-        status = str(latest.get("status") or "").strip().replace("_", "-")
-        if event:
-            parts.append(f"latest {event}:{status or 'unknown'}")
-        return ", ".join(parts)
+        return format_agent_runtime_replay_tool_queue_report(summary)
 
     @staticmethod
     def _format_agent_runtime_replay_state_patch_report(summary: Any) -> str:
-        if not isinstance(summary, dict) or not summary:
-            return "applied 0, conflict 0, invalid 0"
-        version_stamped = int(summary.get("version_stamped") or 0)
-        applied = int(summary.get("applied") or 0)
-        conflict = int(summary.get("conflict") or 0)
-        invalid = int(summary.get("invalid") or 0)
-        reconciled = int(summary.get("reconciled") or 0)
-        reconcile_failed = int(summary.get("reconcile_failed") or 0)
-        parts = [
-            f"versioned {version_stamped}",
-            f"applied {applied}",
-            f"conflict {conflict}",
-            f"invalid {invalid}",
-        ]
-        if reconciled:
-            parts.append(f"reconciled {reconciled}")
-        if reconcile_failed:
-            parts.append(f"reconcile-failed {reconcile_failed}")
-        latest_events = summary.get("latest_events") if isinstance(summary.get("latest_events"), list) else []
-        latest = latest_events[-1] if latest_events and isinstance(latest_events[-1], dict) else {}
-        event = str(latest.get("event") or "").strip().replace("_", "-")
-        applied_version = latest.get("applied_version")
-        if event:
-            suffix = f":v{applied_version}" if isinstance(applied_version, int) else ""
-            parts.append(f"latest {event}{suffix}")
-        return ", ".join(parts)
+        return format_agent_runtime_replay_state_patch_report(summary)
 
     @staticmethod
     def _format_agent_runtime_replay_guard_report(summary: Any) -> str:
-        if not isinstance(summary, dict) or not summary:
-            return "blocked 0"
-        blocked = int(summary.get("blocked_count") or 0)
-        high_risk = int(summary.get("high_risk_confirmation_required_count") or 0)
-        write_confirm = int(summary.get("write_confirmation_required_count") or 0)
-        system_actor = int(summary.get("system_actor_write_blocked_count") or 0)
-        visible_blocked = int(summary.get("user_visible_blocked_event_count") or 0)
-        requires_write = int(summary.get("requires_write_blocked_count") or 0)
-        unconfirmed = int(summary.get("unconfirmed_blocked_count") or 0)
-        confirmed = int(summary.get("confirmed_blocked_count") or 0)
-        risk_counts = summary.get("risk_level_counts") if isinstance(summary.get("risk_level_counts"), dict) else {}
-
-        def format_risk_counts() -> str:
-            parts: list[str] = []
-            for risk in ("high", "medium", "low", "unknown"):
-                try:
-                    count = int(risk_counts.get(risk) or 0)
-                except (TypeError, ValueError):
-                    count = 0
-                if count:
-                    parts.append(f"{risk}:{count}")
-            return "/".join(parts)
-        parts = [f"blocked {blocked}"]
-        if high_risk:
-            parts.append(f"high-risk-confirm {high_risk}")
-        if write_confirm:
-            parts.append(f"write-confirm {write_confirm}")
-        if system_actor:
-            parts.append(f"system-actor {system_actor}")
-        if visible_blocked:
-            parts.append(f"visible-blocked {visible_blocked}")
-        if requires_write:
-            parts.append(f"write-blocked {requires_write}")
-        if unconfirmed:
-            parts.append(f"unconfirmed {unconfirmed}")
-        if confirmed:
-            parts.append(f"confirmed-blocked {confirmed}")
-        risk_text = format_risk_counts()
-        if risk_text:
-            parts.append(f"risk {risk_text}")
-        latest = summary.get("latest_block") if isinstance(summary.get("latest_block"), dict) else {}
-        reason = str(latest.get("reason") or "").strip().replace("_", "-")
-        if reason:
-            latest_risk = str(latest.get("risk_level") or "").strip().replace("_", "-")
-            latest_requires_write = bool(latest.get("requires_write"))
-            latest_confirmed = bool(latest.get("confirmed"))
-            latest_suffix = []
-            if latest_risk:
-                latest_suffix.append(f"risk:{latest_risk}")
-            if latest_requires_write:
-                latest_suffix.append("write")
-            latest_suffix.append("confirmed" if latest_confirmed else "unconfirmed")
-            suffix = " " + "/".join(latest_suffix) if latest_suffix else ""
-            parts.append(f"latest {reason}{suffix}")
-        return ", ".join(parts)
+        return format_agent_runtime_replay_guard_report(summary)
 
     @staticmethod
     def _format_agent_runtime_replay_plan_lifecycle_report(summary: Any) -> str:
-        if not isinstance(summary, dict) or not summary:
-            return "created 0, confirmed 0"
-        created = int(summary.get("created_count") or 0)
-        confirmed = int(summary.get("confirmed_count") or 0)
-        state_persisted = int(summary.get("state_persisted_count") or 0)
-        state_failed = int(summary.get("state_persist_failed_count") or 0)
-        status_persisted = int(summary.get("status_persisted_count") or 0)
-        status_failed = int(summary.get("status_persist_failed_count") or 0)
-        extracted = int(summary.get("extracted_count") or 0)
-        parts = [
-            f"created {created}",
-            f"confirmed {confirmed}",
-            f"state {state_persisted}/{state_failed}",
-            f"status {status_persisted}/{status_failed}",
-        ]
-        if extracted:
-            parts.append(f"extracted {extracted}")
-        latest = summary.get("latest_plan_event") if isinstance(summary.get("latest_plan_event"), dict) else {}
-        event = str(latest.get("event") or "").strip().replace("_", "-")
-        status = str(latest.get("status") or "").strip().replace("_", "-")
-        if event:
-            parts.append(f"latest {event}:{status or 'unknown'}")
-        return ", ".join(parts)
+        return format_agent_runtime_replay_plan_lifecycle_report(summary)
 
     @staticmethod
     def _format_agent_runtime_replay_intervention_report(summary: Any) -> str:
-        if not isinstance(summary, dict) or not summary:
-            return "routed 0, queued 0, absorbed 0"
-        routed = int(summary.get("routed_count") or 0)
-        queued = int(summary.get("queued_count") or 0)
-        persisted = int(summary.get("persisted_count") or 0)
-        persist_failed = int(summary.get("persist_failed_count") or 0)
-        skipped = int(summary.get("skipped_count") or 0)
-        enqueue_failed = int(summary.get("enqueue_failed_count") or 0)
-        absorbed = int(summary.get("absorbed_count") or 0)
-        route_absorbable = int(summary.get("route_absorbable_count") or 0)
-        route_non_absorbable = int(summary.get("route_non_absorbable_count") or 0)
-        route_requested_items = int(summary.get("route_requested_item_count") or 0)
-        merge_events = int(summary.get("merge_event_count") or 0)
-        merged_items = int(summary.get("merged_item_count") or 0)
-        merge_absorbed = int(summary.get("merge_absorbed_count") or 0)
-        parts = [
-            f"routed {routed}",
-            f"queued {queued}",
-            f"persisted {persisted}/{persist_failed}",
-            f"absorbed {absorbed}",
-        ]
-        if route_absorbable or route_non_absorbable or route_requested_items:
-            parts.append(
-                f"route {route_absorbable}/{route_non_absorbable} items {route_requested_items}"
-            )
-        if merge_events or merged_items or merge_absorbed:
-            parts.append(f"merge {merge_events} items {merged_items} absorbed {merge_absorbed}")
-        if skipped:
-            parts.append(f"skipped {skipped}")
-        if enqueue_failed:
-            parts.append(f"enqueue-failed {enqueue_failed}")
-        latest = (
-            summary.get("latest_intervention_batch")
-            if isinstance(summary.get("latest_intervention_batch"), dict)
-            else {}
-        )
-        event = str(latest.get("event") or "").strip().replace("_", "-")
-        status = str(latest.get("status") or "").strip().replace("_", "-")
-        item_count = int(latest.get("item_count") or 0)
-        if event:
-            parts.append(f"latest {event}:{status or 'unknown'} items {item_count}")
-        return ", ".join(parts)
+        return format_agent_runtime_replay_intervention_report(summary)
 
     @staticmethod
     def _format_agent_runtime_replay_geometry_report(summary: Any) -> str:
-        if not isinstance(summary, dict) or not summary:
-            return "facts 0, overlap 0"
-        patch_events = int(summary.get("patch_event_count") or 0)
-        fact_count = int(summary.get("fact_count") or 0)
-        aabb_actor_count = int(summary.get("aabb_actor_count") or 0)
-        aabb_skipped_count = int(summary.get("aabb_skipped_count") or 0)
-        overlap_issue_count = int(summary.get("overlap_issue_count") or 0)
-        parts = [
-            f"patches {patch_events}",
-            f"facts {fact_count}",
-            f"aabb {aabb_actor_count}/{aabb_skipped_count}",
-            f"overlap {overlap_issue_count}",
-        ]
-        status_counts = summary.get("status_counts") if isinstance(summary.get("status_counts"), dict) else {}
-        if status_counts:
-            status_text = ", ".join(
-                f"{str(status).strip().replace('_', '-')}:{int(count or 0)}"
-                for status, count in sorted(status_counts.items())
-                if str(status).strip()
-            )
-            if status_text:
-                parts.append(f"status {status_text}")
-        fact_type_counts = (
-            summary.get("fact_type_counts")
-            if isinstance(summary.get("fact_type_counts"), dict)
-            else {}
-        )
-        if fact_type_counts:
-            type_text = ", ".join(
-                f"{str(fact_type).strip().replace('_', '-')}:{int(count or 0)}"
-                for fact_type, count in sorted(fact_type_counts.items())
-                if str(fact_type).strip()
-            )
-            if type_text:
-                parts.append(f"types {type_text}")
-        latest = (
-            summary.get("latest_geometry_event")
-            if isinstance(summary.get("latest_geometry_event"), dict)
-            else {}
-        )
-        latest_type = str(latest.get("fact_type") or "").strip().replace("_", "-")
-        latest_status = str(latest.get("status") or "").strip().replace("_", "-")
-        latest_actor_count = int(latest.get("actor_count") or 0)
-        latest_issue_count = int(latest.get("issue_count") or 0)
-        latest_skipped_count = int(latest.get("skipped_count") or 0)
-        if latest_type:
-            parts.append(
-                f"latest {latest_type}:{latest_status or 'unknown'} "
-                f"actors {latest_actor_count} issues {latest_issue_count} skipped {latest_skipped_count}"
-            )
-        return ", ".join(parts)
+        return format_agent_runtime_replay_geometry_report(summary)
 
     @staticmethod
     def _format_agent_runtime_replay_runtime_event_report(summary: Any) -> str:
-        if not isinstance(summary, dict) or not summary:
-            return "emitted 0, failed 0"
-        def safe_label(value: Any) -> str:
-            text = str(value or "").strip().replace("_", "-")
-            for marker in ("provider", "prompt", "url", "raw", "token", "api-key"):
-                text = re.sub(marker, "resource", text, flags=re.IGNORECASE)
-            return text[:80]
-
-        emitted = int(summary.get("emitted_count") or 0)
-        failed = int(summary.get("emit_failed_count") or 0)
-        skipped_count = int(summary.get("disclosure_skipped_count") or 0)
-        parts = [f"emitted {emitted}", f"failed {failed}"]
-        if skipped_count > 0:
-            parts.append(f"skipped {skipped_count}")
-        type_counts = summary.get("event_type_counts") if isinstance(summary.get("event_type_counts"), dict) else {}
-        top_types = [
-            f"{safe_label(key)}:{int(value or 0)}"
-            for key, value in sorted(type_counts.items())[:4]
-            if str(key).strip() and int(value or 0) > 0
-        ]
-        if top_types:
-            parts.append("types " + ",".join(top_types))
-        report_ready = int(summary.get("report_ready_count") or 0)
-        report_attention = int(summary.get("report_attention_count") or 0)
-        if report_ready > 0:
-            report_part = f"report-ready {report_ready}"
-            if report_attention > 0:
-                report_part += f"/attention {report_attention}"
-            status_counts = (
-                summary.get("report_health_status_counts")
-                if isinstance(summary.get("report_health_status_counts"), dict)
-                else {}
-            )
-            status_parts = [
-                f"{safe_label(key)}:{int(value or 0)}"
-                for key, value in sorted(status_counts.items())[:3]
-                if str(key).strip() and int(value or 0) > 0
-            ]
-            if status_parts:
-                report_part += " " + ",".join(status_parts)
-            parts.append(report_part)
-        latest = summary.get("latest_runtime_event") if isinstance(summary.get("latest_runtime_event"), dict) else {}
-        event_type = safe_label(latest.get("event_type"))
-        status = safe_label(latest.get("status"))
-        if event_type:
-            parts.append(f"latest {event_type}:{status or 'unknown'}")
-        latest_report = summary.get("latest_report_ready") if isinstance(summary.get("latest_report_ready"), dict) else {}
-        report_status = safe_label(latest_report.get("status"))
-        if report_status:
-            parts.append(f"latest-report {report_status}")
-        environment_import_failure_code_counts = (
-            latest_report.get("environment_import_failure_code_counts")
-            if isinstance(latest_report.get("environment_import_failure_code_counts"), dict)
-            else {}
-        )
-        environment_failure_parts = [
-            f"{safe_label(key)}:{int(value or 0)}"
-            for key, value in sorted(environment_import_failure_code_counts.items())[:3]
-            if str(key).strip() and int(value or 0) > 0
-        ]
-        if environment_failure_parts:
-            parts.append("env-import-failures " + ",".join(environment_failure_parts))
-        engine_write_bridge_failed_count = int(
-            latest_report.get("engine_write_bridge_failed_count") or 0
-        )
-        engine_write_bridge_error_code_counts = (
-            latest_report.get("engine_write_bridge_error_code_counts")
-            if isinstance(latest_report.get("engine_write_bridge_error_code_counts"), dict)
-            else {}
-        )
-        engine_write_failure_parts = [
-            f"{safe_label(key)}:{int(value or 0)}"
-            for key, value in sorted(engine_write_bridge_error_code_counts.items())[:3]
-            if str(key).strip() and int(value or 0) > 0
-        ]
-        if engine_write_failure_parts:
-            parts.append("engine-write-failures " + ",".join(engine_write_failure_parts))
-        elif engine_write_bridge_failed_count > 0:
-            parts.append(f"engine-write-failures {engine_write_bridge_failed_count}")
-        engine_write_readiness_mismatch_count = int(
-            latest_report.get("engine_write_readiness_mismatch_count") or 0
-        )
-        engine_write_readiness_mismatch_channels = (
-            latest_report.get("engine_write_readiness_mismatch_channels")
-            if isinstance(latest_report.get("engine_write_readiness_mismatch_channels"), list)
-            else []
-        )
-        engine_write_mismatch_parts = [
-            safe_label(item)
-            for item in engine_write_readiness_mismatch_channels[:4]
-            if safe_label(item)
-        ]
-        if engine_write_readiness_mismatch_count:
-            if engine_write_mismatch_parts:
-                parts.append(
-                    "engine-write-mismatch "
-                    f"{engine_write_readiness_mismatch_count}(" + "/".join(engine_write_mismatch_parts) + ")"
-                )
-            else:
-                parts.append(f"engine-write-mismatch {engine_write_readiness_mismatch_count}")
-        latest_skip = summary.get("latest_disclosure_skip") if isinstance(summary.get("latest_disclosure_skip"), dict) else {}
-        skip_type = safe_label(latest_skip.get("event_type"))
-        skip_audience = safe_label(latest_skip.get("audience"))
-        if skip_type:
-            parts.append(f"latest-skip {skip_type}:{skip_audience or 'unknown'}")
-        return ", ".join(parts)
+        return format_agent_runtime_replay_runtime_event_report(summary)
 
     @staticmethod
     def _format_agent_runtime_replay_failure_strategy_report(summary: Any) -> str:
-        if not isinstance(summary, dict) or not summary:
-            return "retry 0, skipped 0, abandoned 0"
-        retry = int(summary.get("retry_scheduled_count") or 0)
-        skipped = int(summary.get("dependency_skipped_count") or 0)
-        abandoned = int(summary.get("abandoned_late_result_count") or 0)
-        handler_failed = int(summary.get("handler_failed_count") or 0)
-        invalid_result = int(summary.get("invalid_result_count") or 0)
-        invalid_patch = int(summary.get("invalid_state_patch_count") or 0)
-        state_conflict = int(summary.get("state_patch_conflict_count") or 0)
-        stopped = int(summary.get("stopped_by_runtime_command_count") or 0)
-        parts = [
-            f"retry {retry}",
-            f"skipped {skipped}",
-            f"abandoned {abandoned}",
-        ]
-        if handler_failed:
-            parts.append(f"handler-failed {handler_failed}")
-        if invalid_result:
-            parts.append(f"invalid-result {invalid_result}")
-        if invalid_patch:
-            parts.append(f"invalid-patch {invalid_patch}")
-        if state_conflict:
-            parts.append(f"state-conflict {state_conflict}")
-        if stopped:
-            parts.append(f"stopped {stopped}")
-        latest = summary.get("latest_strategy_event") if isinstance(summary.get("latest_strategy_event"), dict) else {}
-        strategy = str(latest.get("strategy") or "").strip().replace("_", "-")
-        status = str(latest.get("status") or "").strip().replace("_", "-")
-        if strategy:
-            parts.append(f"latest {strategy}:{status or 'unknown'}")
-        return ", ".join(parts)
+        return format_agent_runtime_replay_failure_strategy_report(summary)
 
     @staticmethod
     def _format_agent_runtime_replay_layout_report(summary: Any) -> str:
-        if not isinstance(summary, dict) or not summary:
-            return "requests 0, confirmations 0, applied 0"
-        request_count = int(summary.get("request_count") or 0)
-        request_failed = int(summary.get("request_failed_count") or 0)
-        confirmation_count = int(summary.get("confirmation_count") or 0)
-        confirmation_failed = int(summary.get("confirmation_failed_count") or 0)
-        applied = int(summary.get("applied_count") or 0)
-        skipped = int(summary.get("skipped_count") or 0)
-        transform_success = int(summary.get("transform_success_count") or 0)
-        transform_failed = int(summary.get("transform_failed_count") or 0)
-        ground_snapped = int(summary.get("ground_snapped_count") or 0)
-        overlap_resolved = int(summary.get("overlap_resolved_count") or 0)
-        delta_count = int(summary.get("delta_count") or 0)
-        parts = [
-            f"requests {request_count}/{request_failed}",
-            f"confirmations {confirmation_count}/{confirmation_failed}",
-            f"applied {applied}",
-            f"transforms {transform_success}/{transform_failed}",
-        ]
-        if skipped:
-            parts.append(f"skipped {skipped}")
-        if ground_snapped:
-            parts.append(f"ground {ground_snapped}")
-        if overlap_resolved:
-            parts.append(f"overlap {overlap_resolved}")
-        if delta_count:
-            parts.append(f"deltas {delta_count}")
-        latest_status = str(summary.get("latest_graph_status") or "").strip().replace("_", "-")
-        if latest_status:
-            parts.append(f"latest {latest_status}")
-        return ", ".join(parts)
+        return format_agent_runtime_replay_layout_report(summary)
 
     @staticmethod
     def _format_agent_runtime_replay_vlm_report(summary: Any) -> str:
-        if not isinstance(summary, dict) or not summary:
-            return "checkpoints 0, advisory 0"
-        checkpoint_count = int(summary.get("checkpoint_count") or 0)
-        advisory_count = int(summary.get("advisory_count") or 0)
-        parts = [f"checkpoints {checkpoint_count}", f"advisory {advisory_count}"]
-        status_counts = summary.get("status_counts") if isinstance(summary.get("status_counts"), dict) else {}
-        status_text = ",".join(
-            f"{str(key).strip().replace('_', '-')}:{int(value or 0)}"
-            for key, value in sorted(status_counts.items())[:4]
-            if str(key).strip() and int(value or 0) > 0
-        )
-        if status_text:
-            parts.append(f"status {status_text}")
-        checkpoint_counts = (
-            summary.get("checkpoint_counts") if isinstance(summary.get("checkpoint_counts"), dict) else {}
-        )
-        checkpoint_text = ",".join(
-            f"{str(key).strip().replace('_', '-')}:{int(value or 0)}"
-            for key, value in sorted(checkpoint_counts.items())[:4]
-            if str(key).strip() and int(value or 0) > 0
-        )
-        if checkpoint_text:
-            parts.append(f"types {checkpoint_text}")
-        latest = summary.get("latest_checkpoints") if isinstance(summary.get("latest_checkpoints"), list) else []
-        latest_item = latest[-1] if latest and isinstance(latest[-1], dict) else {}
-        checkpoint_type = str(latest_item.get("checkpoint_type") or "").strip().replace("_", "-")
-        status = str(latest_item.get("status") or "").strip().replace("_", "-")
-        if checkpoint_type:
-            parts.append(f"latest {checkpoint_type}:{status or 'unknown'}")
-        return ", ".join(parts)
+        return format_agent_runtime_replay_vlm_report(summary)
 
     @staticmethod
     def _format_agent_runtime_replay_review_advisory_report(summary: Any) -> str:
-        if not isinstance(summary, dict) or not summary:
-            return "proposals 0, confirmations 0"
-        proposals = int(summary.get("proposal_created_count") or 0)
-        confirmations = int(summary.get("confirmation_count") or 0)
-        pending = int(summary.get("pending_proposal_count") or 0)
-        confirmed = int(summary.get("confirmed_proposal_count") or 0)
-        rejected = int(summary.get("rejected_proposal_count") or 0)
-        advisory_items = int(summary.get("advisory_item_count") or 0)
-        parts = [
-            f"proposals {proposals}",
-            f"confirmations {confirmations}",
-        ]
-        status_parts: list[str] = []
-        if pending:
-            status_parts.append(f"pending:{pending}")
-        if confirmed:
-            status_parts.append(f"confirmed:{confirmed}")
-        if rejected:
-            status_parts.append(f"rejected:{rejected}")
-        if status_parts:
-            parts.append("status " + ",".join(status_parts))
-        if advisory_items:
-            parts.append(f"items {advisory_items}")
-        latest_decision = str(summary.get("latest_decision") or "").strip().replace("_", "-")
-        if latest_decision:
-            parts.append(f"latest {latest_decision}")
-        return ", ".join(parts)
+        return format_agent_runtime_replay_review_advisory_report(summary)
 
     @staticmethod
     def _format_agent_runtime_replay_final_adjustment_report(summary: Any) -> str:
-        if not isinstance(summary, dict) or not summary:
-            return "confirmations 0"
-        confirmations = int(summary.get("confirmation_count") or 0)
-        failed = int(summary.get("confirmation_failed_count") or 0)
-        skipped = int(summary.get("confirmation_skipped_count") or 0)
-        parts = [f"confirmations {confirmations}"]
-        if failed:
-            parts.append(f"failed {failed}")
-        if skipped:
-            parts.append(f"skipped {skipped}")
-        decision_counts = summary.get("decision_counts") if isinstance(summary.get("decision_counts"), dict) else {}
-        decision_text = ",".join(
-            f"{str(key).strip().replace('_', '-')}:{int(value or 0)}"
-            for key, value in sorted(decision_counts.items())[:4]
-            if str(key).strip() and int(value or 0) > 0
-        )
-        if decision_text:
-            parts.append(f"decisions {decision_text}")
-        latest = summary.get("latest_confirmation") if isinstance(summary.get("latest_confirmation"), dict) else {}
-        latest_decision = str(latest.get("decision") or "").strip().replace("_", "-")
-        latest_proposal = str(latest.get("proposal_id") or "").strip()
-        conflict_count = int(latest.get("conflict_item_count") or 0)
-        if latest_decision:
-            latest_text = f"latest {latest_decision}"
-            if latest_proposal:
-                latest_text += f" {latest_proposal[:48]}"
-            if conflict_count:
-                latest_text += f" conflicts {conflict_count}"
-            parts.append(latest_text)
-        return ", ".join(parts)
+        return format_agent_runtime_replay_final_adjustment_report(summary)
 
     @staticmethod
     def _format_agent_runtime_replay_environment_report(summary: Any) -> str:
-        if not isinstance(summary, dict) or not summary:
-            return "ready 0, import 0"
-        ready = int(summary.get("ready_event_count") or 0)
-        failed = int(summary.get("failed_event_count") or 0)
-        imported = int(summary.get("import_event_count") or 0)
-        import_failed = int(summary.get("import_failed_event_count") or 0)
-        parts = [
-            f"ready {ready}/{failed}",
-            f"import {imported}/{import_failed}",
-        ]
-        event_counts = summary.get("event_type_counts") if isinstance(summary.get("event_type_counts"), dict) else {}
-        event_text = ",".join(
-            f"{str(key).strip().replace('_', '-')}:{int(value or 0)}"
-            for key, value in sorted(event_counts.items())[:4]
-            if str(key).strip() and int(value or 0) > 0
-        )
-        if event_text:
-            parts.append(f"types {event_text}")
-        latest = str(summary.get("latest_event_type") or "").strip().replace("_", "-")
-        if latest:
-            parts.append(f"latest {latest}")
-        return ", ".join(parts)
+        return format_agent_runtime_replay_environment_report(summary)
 
     @staticmethod
     def _format_agent_runtime_replay_resource_readiness_report(summary: Any) -> str:
-        if not isinstance(summary, dict) or not summary:
-            return "queries 0, published 0, events 0"
-        def safe_label(value: Any) -> str:
-            text = str(value or "").strip().replace("_", "-")
-            for marker in ("prompt", "provider", "url", "raw", "token", "api-key", "path", "session", "job"):
-                text = re.sub(marker, "resource", text, flags=re.IGNORECASE)
-            return text[:60]
+        return format_agent_runtime_replay_resource_readiness_report(summary)
 
-        queries = int(summary.get("status_query_count") or 0)
-        published = int(summary.get("published_count") or 0)
-        publish_failed = int(summary.get("publish_failed_count") or 0)
-        readiness_events = int(summary.get("readiness_event_count") or 0)
-        parts = [
-            f"queries {queries}",
-            f"published {published}/{publish_failed}",
-            f"events {readiness_events}",
-        ]
-        publish_requested = int(summary.get("publish_requested_total") or 0)
-        publish_enabled = int(summary.get("publish_enabled_total") or 0)
-        publish_unavailable = int(summary.get("publish_unavailable_total") or 0)
-        if publish_requested or publish_enabled or publish_unavailable:
-            parts.append(
-                f"publish-ready requested/enabled/unavailable {publish_requested}/{publish_enabled}/{publish_unavailable}"
-            )
-        publish_status_counts = (
-            summary.get("publish_status_counts")
-            if isinstance(summary.get("publish_status_counts"), dict)
-            else {}
-        )
-        publish_status_text = ",".join(
-            f"{safe_label(key)}:{int(value or 0)}"
-            for key, value in sorted(publish_status_counts.items())[:4]
-            if safe_label(key) and int(value or 0) > 0
-        )
-        if publish_status_text:
-            parts.append(f"publish-status {publish_status_text}")
-        requested_total = int(summary.get("status_query_requested_total") or 0)
-        enabled_total = int(summary.get("status_query_enabled_total") or 0)
-        unavailable_total = int(summary.get("status_query_unavailable_total") or 0)
-        if requested_total or enabled_total or unavailable_total:
-            parts.append(f"query-ready requested/enabled/unavailable {requested_total}/{enabled_total}/{unavailable_total}")
-        query_status_counts = (
-            summary.get("status_query_status_counts")
-            if isinstance(summary.get("status_query_status_counts"), dict)
-            else {}
-        )
-        query_status_text = ",".join(
-            f"{safe_label(key)}:{int(value or 0)}"
-            for key, value in sorted(query_status_counts.items())[:4]
-            if safe_label(key) and int(value or 0) > 0
-        )
-        if query_status_text:
-            parts.append(f"query-status {query_status_text}")
-        status_counts = summary.get("status_counts") if isinstance(summary.get("status_counts"), dict) else {}
-        status_text = ",".join(
-            f"{safe_label(key)}:{int(value or 0)}"
-            for key, value in sorted(status_counts.items())[:4]
-            if safe_label(key) and int(value or 0) > 0
-        )
-        if status_text:
-            parts.append(f"status {status_text}")
-        latest = (
-            summary.get("latest_readiness_event")
-            if isinstance(summary.get("latest_readiness_event"), dict)
-            else {}
-        )
-        latest_status = safe_label(latest.get("status"))
-        if latest_status:
-            parts.append(f"latest {latest_status}")
-        return ", ".join(parts)
+    @staticmethod
+    def _format_agent_runtime_replay_asset_transfer_report(summary: Any) -> str:
+        return format_agent_runtime_replay_asset_transfer_report(summary)
 
-    def _format_agent_runtime_sync_report(self, summary: Any) -> str:
-        if not isinstance(summary, dict):
-            return "events 0, actors 0, assets 0"
-        event_count = int(summary.get("event_count") or 0)
-        actor_count = int(summary.get("actor_event_count") or 0)
-        asset_count = int(summary.get("asset_event_count") or 0)
-        latest_actors = summary.get("latest_actors")
-        actor_preview = self._format_agent_runtime_sync_actor_rows(latest_actors if isinstance(latest_actors, list) else [])
-        latest_assets = summary.get("latest_assets")
-        asset_preview = self._format_agent_runtime_sync_asset_rows(latest_assets if isinstance(latest_assets, list) else [])
-        parts = [f"events {event_count}", f"actors {actor_count}", f"assets {asset_count}"]
-        if actor_preview != "none":
-            parts.append(f"latest actors {actor_preview}")
-        if asset_preview != "none":
-            parts.append(f"latest assets {asset_preview}")
-        return ", ".join(parts)
+    @staticmethod
+    def _format_agent_runtime_replay_peer_sync_report(summary: Any) -> str:
+        return format_agent_runtime_replay_peer_sync_report(summary)
+
+    @staticmethod
+    def _format_agent_runtime_sync_actor_rows(rows: Any) -> str:
+        return format_agent_runtime_sync_actor_rows(rows)
+
+    @staticmethod
+    def _format_agent_runtime_sync_asset_rows(rows: Any) -> str:
+        return format_agent_runtime_sync_asset_rows(rows)
+
+    @staticmethod
+    def _format_agent_runtime_sync_replay_report(summary: Any) -> str:
+        return format_agent_runtime_sync_replay_report(summary)
+
+    @staticmethod
+    def _format_agent_runtime_sync_health_report(summary: Any) -> str:
+        return format_agent_runtime_sync_health_report(summary)
+
+    @staticmethod
+    def _format_agent_runtime_asset_transfer_report(summary: Any) -> str:
+        return format_agent_runtime_asset_transfer_report(summary)
+
+    @staticmethod
+    def _format_agent_runtime_message_delivery_report(
+        summary: Any,
+        *,
+        redact_agent_reply: bool = False,
+    ) -> str:
+        return format_agent_runtime_message_delivery_report(
+            summary,
+            redact_agent_reply=redact_agent_reply,
+        )
 
     @staticmethod
     def _format_agent_runtime_resource_flow_report(summary: Any) -> str:
-        if not isinstance(summary, dict) or not summary:
-            return "batches 0"
-        def safe_label(value: Any) -> str:
-            text = str(value or "").strip().replace("_", "-")
-            for marker in ("prompt", "provider", "url", "raw", "token", "api-key", "path", "session", "job"):
-                text = re.sub(marker, "resource", text, flags=re.IGNORECASE)
-            return text[:60]
-
-        batch_count = int(summary.get("batch_count") or 0)
-        completed_count = int(summary.get("completed_count") or 0)
-        partial_count = int(summary.get("partial_count") or 0)
-        failed_count = int(summary.get("failed_count") or 0)
-        waiting_count = int(summary.get("waiting_count") or 0)
-        parts = [
-            f"batches {batch_count}",
-            f"completed {completed_count}",
-            f"partial {partial_count}",
-            f"failed {failed_count}",
-            f"waiting {waiting_count}",
-        ]
-        latest = summary.get("latest_batch") if isinstance(summary.get("latest_batch"), dict) else {}
-        latest_status = str(latest.get("status") or "").strip()
-        latest_index = int(latest.get("batch_index") or 0)
-        latest_total = int(latest.get("total_batches") or 0)
-        requested_count = int(latest.get("requested_count") or 0)
-        image_ready_count = int(latest.get("image_ready_count") or 0)
-        model_ready_count = int(latest.get("model_ready_count") or 0)
-        import_ready_count = int(latest.get("import_ready_count") or 0)
-        import_failure_code_counts = (
-            latest.get("import_failure_code_counts")
-            if isinstance(latest.get("import_failure_code_counts"), dict)
-            else {}
-        )
-        review_status = str(latest.get("review_status") or "").strip()
-        if latest_status or latest_index or requested_count:
-            batch_label = (
-                f"{latest_index}/{latest_total}"
-                if latest_index and latest_total
-                else str(latest_index or "?")
-            )
-            parts.append(
-                "latest "
-                f"{batch_label}:{latest_status or 'unknown'} "
-                f"img/model/import {image_ready_count}/{model_ready_count}/{import_ready_count}"
-                f" of {requested_count}"
-            )
-        if review_status:
-            parts.append(f"review {review_status.replace('_', '-')[:40]}")
-        import_failure_codes = ",".join(
-            f"{safe_label(code)}:{int(count or 0)}"
-            for code, count in sorted(import_failure_code_counts.items())[:4]
-            if safe_label(code) and int(count or 0) > 0
-        )
-        if import_failure_codes:
-            parts.append(f"import-failures {import_failure_codes}")
-        needs_attention = [
-            str(item).strip().replace("_", "-")[:40]
-            for item in list(summary.get("needs_attention") or [])[:4]
-            if str(item).strip()
-        ]
-        if needs_attention:
-            parts.append("needs " + ",".join(needs_attention))
-        return ", ".join(parts)
+        return format_agent_runtime_resource_flow_report(summary)
 
     @staticmethod
     def _format_agent_runtime_scene_snapshot_report(summary: Any) -> str:
-        if not isinstance(summary, dict) or not summary:
-            return "snapshots 0, observed 0"
-        snapshot_count = int(summary.get("scoped_snapshot_count") or summary.get("snapshot_count") or 0)
-        observed_count = int(summary.get("observed_actor_count") or 0)
-        observed_total = int(summary.get("observed_actor_total_count") or observed_count or 0)
-        latest_source = str(summary.get("latest_source") or "").strip().replace("_", "-")[:40]
-        parts = [
-            f"snapshots {snapshot_count}",
-            f"observed {observed_count}/{observed_total}",
-        ]
-        if latest_source:
-            parts.append(f"source {latest_source}")
-        return ", ".join(parts)
+        return format_agent_runtime_scene_snapshot_report(summary)
 
     @staticmethod
     def _format_agent_runtime_resource_stage_report(summary: Any) -> str:
-        if not isinstance(summary, dict) or not summary:
-            return "events 0"
-        by_phase = summary.get("by_phase") if isinstance(summary.get("by_phase"), dict) else {}
-        parts = [f"events {int(summary.get('event_count') or 0)}"]
-        ordered_phases = ["image", "model", "import", "review"]
-        extra_phases = [
-            str(phase)
-            for phase in by_phase.keys()
-            if str(phase) not in set(ordered_phases)
-        ]
-        for phase in ordered_phases + sorted(extra_phases):
-            row = by_phase.get(phase) if isinstance(by_phase.get(phase), dict) else {}
-            if not row:
-                if phase in {"image", "model"}:
-                    parts.append(f"{phase} 0/0 failed 0")
-                continue
-            parts.append(
-                f"{phase} {int(row.get('item_count') or 0)}/"
-                f"{int(row.get('requested_count') or 0)} failed {int(row.get('failed_count') or 0)}"
-            )
-        latest = summary.get("latest_events") if isinstance(summary.get("latest_events"), list) else []
-        latest_row = latest[-1] if latest and isinstance(latest[-1], dict) else {}
-        latest_phase = str(latest_row.get("phase") or "").strip()
-        latest_status = str(latest_row.get("status") or "").strip().replace("_", "-")
-        if latest_phase or latest_status:
-            parts.append(f"latest {latest_phase or 'resource'}:{latest_status or 'unknown'}")
-        needs_attention = [
-            str(item).strip().replace("_", "-")[:40]
-            for item in list(summary.get("needs_attention") or [])[:4]
-            if str(item).strip()
-        ]
-        if needs_attention:
-            parts.append("needs " + ",".join(needs_attention))
-        return ", ".join(parts)
+        return format_agent_runtime_resource_stage_report(summary)
 
     @staticmethod
     def _format_agent_runtime_report_health_report(summary: Any) -> str:
-        if not isinstance(summary, dict) or not summary:
-            return "unknown"
-
-        def safe_label(value: Any) -> str:
-            text = str(value or "").strip().replace("_", "-")
-            for marker in ("prompt", "provider", "url", "raw", "token", "api-key", "path", "session", "job"):
-                text = re.sub(marker, "resource", text, flags=re.IGNORECASE)
-            return text[:60]
-
-        status = safe_label(summary.get("status")) or "unknown"
-        attention = "yes" if bool(summary.get("attention_required")) else "no"
-        batch_failed = int(summary.get("batch_failed_count") or 0)
-        batch_partial = int(summary.get("batch_partial_count") or 0)
-        batch_waiting = int(summary.get("batch_waiting_count") or 0)
-        import_failed = int(summary.get("import_failed_count") or 0)
-        resource_failed = int(summary.get("resource_phase_failed_count") or 0)
-        resource_partial = int(summary.get("resource_phase_partial_count") or 0)
-        resource_waiting = int(summary.get("resource_phase_waiting_count") or 0)
-        asset_failed = int(summary.get("asset_failed_count") or 0)
-        asset_incomplete = int(summary.get("asset_incomplete_count") or 0)
-        sync_health = safe_label(summary.get("sync_health_status")) or "unknown"
-        import_failure_code_counts = (
-            summary.get("import_failure_code_counts")
-            if isinstance(summary.get("import_failure_code_counts"), dict)
-            else {}
-        )
-        import_failure_codes = ", ".join(
-            safe_label(code)
-            for code, count in sorted(import_failure_code_counts.items())
-            if int(count or 0) > 0 and safe_label(code)
-        ) or "none"
-        sync_failure_code_counts = (
-            summary.get("sync_failure_code_counts")
-            if isinstance(summary.get("sync_failure_code_counts"), dict)
-            else {}
-        )
-        sync_failure_codes = ", ".join(
-            safe_label(code)
-            for code, count in sorted(sync_failure_code_counts.items())
-            if int(count or 0) > 0 and safe_label(code)
-        ) or "none"
-        latest_sync_failure_code = safe_label(summary.get("latest_sync_failure_code"))
-        engine_write_readiness_mismatch_count = int(
-            summary.get("engine_write_readiness_mismatch_count") or 0
-        )
-        raw_engine_write_readiness_mismatch_channels = (
-            summary.get("engine_write_readiness_mismatch_channels")
-            if isinstance(summary.get("engine_write_readiness_mismatch_channels"), list)
-            else []
-        )
-        engine_write_readiness_mismatch_channels = "/".join(
-            safe_label(item)
-            for item in raw_engine_write_readiness_mismatch_channels[:4]
-            if safe_label(item)
-        )
-        engine_write_runtime_state_only_count = int(
-            summary.get("engine_write_runtime_state_only_count") or 0
-        )
-        raw_engine_write_runtime_state_only_channels = (
-            summary.get("engine_write_runtime_state_only_channels")
-            if isinstance(summary.get("engine_write_runtime_state_only_channels"), list)
-            else []
-        )
-        engine_write_runtime_state_only_channels = "/".join(
-            safe_label(item)
-            for item in raw_engine_write_runtime_state_only_channels[:4]
-            if safe_label(item)
-        )
-        worker_drain_failed = int(summary.get("worker_drain_failed_count") or 0)
-        worker_drain_exception = int(summary.get("worker_drain_exception_count") or 0)
-        worker_drain_status_failed = int(summary.get("worker_drain_status_failed_count") or 0)
-        worker_drain_plan_resolve_failed = int(
-            summary.get("worker_drain_plan_resolve_failed_count") or 0
-        )
-        raw_reasons = summary.get("reasons") if isinstance(summary.get("reasons"), list) else []
-        reasons = ", ".join(
-            safe_label(reason)
-            for reason in raw_reasons[:5]
-            if safe_label(reason)
-        ) or "none"
-        parts = [
-            status,
-            f"attention {attention}",
-            f"batch failed/partial/waiting {batch_failed}/{batch_partial}/{batch_waiting}",
-            f"import failed {import_failed}",
-            f"resource phase failed/partial/waiting {resource_failed}/{resource_partial}/{resource_waiting}",
-            f"asset failed/incomplete {asset_failed}/{asset_incomplete}",
-            f"sync {sync_health}",
-        ]
-        if import_failure_codes != "none":
-            parts.append(f"import failures {import_failure_codes}")
-        if sync_failure_codes != "none":
-            parts.append(f"sync failures {sync_failure_codes}")
-        if latest_sync_failure_code:
-            parts.append(f"latest sync failure {latest_sync_failure_code}")
-        if engine_write_readiness_mismatch_count:
-            if engine_write_readiness_mismatch_channels:
-                parts.append(
-                    f"engine-write mismatch {engine_write_readiness_mismatch_count}"
-                    f"({engine_write_readiness_mismatch_channels})"
-                )
-            else:
-                parts.append(f"engine-write mismatch {engine_write_readiness_mismatch_count}")
-        if engine_write_runtime_state_only_count:
-            if engine_write_runtime_state_only_channels:
-                parts.append(
-                    f"engine-write runtime-state-only {engine_write_runtime_state_only_count}"
-                    f"({engine_write_runtime_state_only_channels})"
-                )
-            else:
-                parts.append(f"engine-write runtime-state-only {engine_write_runtime_state_only_count}")
-        if (
-            worker_drain_failed
-            or worker_drain_exception
-            or worker_drain_status_failed
-            or worker_drain_plan_resolve_failed
-        ):
-            parts.append(
-                "worker-drain failed/status-failed/exception/plan-resolve "
-                f"{worker_drain_failed}/{worker_drain_status_failed}/"
-                f"{worker_drain_exception}/{worker_drain_plan_resolve_failed}"
-            )
-        if reasons != "none":
-            parts.append(f"reasons {reasons}")
-        return ", ".join(parts)
+        return format_agent_runtime_report_health_report(summary)
 
     @staticmethod
     def _format_agent_runtime_fact_source_boundary_report(summary: Any) -> str:
-        if not isinstance(summary, dict) or not summary:
-            return "runtime 0, external 0, external unavailable"
-        runtime_count = int(summary.get("runtime_business_fact_count") or 0)
-        external_count = int(summary.get("mirrored_external_fact_count") or 0)
-        plan_count = int(summary.get("runtime_plan_fact_count") or 0)
-        batch_count = int(summary.get("runtime_batch_fact_count") or 0)
-        resource_count = int(summary.get("runtime_resource_event_count") or 0)
-        import_count = int(summary.get("runtime_import_event_count") or 0)
-        sync_count = int(summary.get("sync_event_count") or 0)
-        engine_write_count = int(summary.get("engine_write_result_count") or 0)
-        engine_write_boundary_count = int(summary.get("engine_write_boundary_fact_count") or 0)
-        snapshot_count = int(summary.get("scene_snapshot_count") or 0)
-        external_available = bool(summary.get("external_authoritative_available"))
-        parts = [
-            f"runtime {runtime_count}",
-            f"external {external_count}",
-            f"plan/batch {plan_count}/{batch_count}",
-            f"resource/import {resource_count}/{import_count}",
-            f"sync/write/snapshot {sync_count}/{engine_write_count}/{snapshot_count}",
-            f"write-boundary {engine_write_boundary_count}",
-        ]
-        parts.append("external available" if external_available else "external unavailable")
-        notes = [
-            str(item).strip().replace("_", "-")[:48]
-            for item in list(summary.get("boundary_notes") or [])[:3]
-            if str(item).strip()
-        ]
-        if notes:
-            parts.append("notes " + ",".join(notes))
-        return ", ".join(parts)
+        return format_agent_runtime_fact_source_boundary_report(summary)
 
     @staticmethod
     def _format_agent_runtime_closure_report(
@@ -8429,43 +7097,16 @@ class LANChatAgentWorker:
         operation_count: Any = 0,
         operation_total_count: Any = 0,
     ) -> str:
-        fact_data = fact_source if isinstance(fact_source, dict) else {}
-        patch_data = state_patch if isinstance(state_patch, dict) else {}
-        source = str(fact_data.get("runtime_state_source") or "unknown").strip() or "unknown"
-        write_boundary = int(fact_data.get("engine_write_boundary_fact_count") or 0)
-        try:
-            operations = int(operation_count or 0)
-        except (TypeError, ValueError):
-            operations = 0
-        try:
-            operation_total = int(operation_total_count or 0)
-        except (TypeError, ValueError):
-            operation_total = 0
-        return (
-            f"state {source}, operation {operations}/{operation_total}, "
-            f"patch applied/conflict/invalid "
-            f"{int(patch_data.get('applied') or 0)}/"
-            f"{int(patch_data.get('conflict') or 0)}/"
-            f"{int(patch_data.get('invalid') or 0)}, "
-            f"write-boundary {write_boundary}"
+        return format_agent_runtime_closure_report(
+            fact_source,
+            state_patch,
+            operation_count=operation_count,
+            operation_total_count=operation_total_count,
         )
 
     @staticmethod
     def _format_agent_runtime_import_stage_report(summary: Any) -> str:
-        if not isinstance(summary, dict) or not summary:
-            return "events 0, imported 0/0, failed 0"
-        parts = [
-            f"events {int(summary.get('event_count') or 0)}",
-            f"imported {int(summary.get('imported_count') or 0)}/"
-            f"{int(summary.get('requested_count') or 0)}",
-            f"failed {int(summary.get('failed_count') or 0)}",
-        ]
-        latest = summary.get("latest_events") if isinstance(summary.get("latest_events"), list) else []
-        latest_row = latest[-1] if latest and isinstance(latest[-1], dict) else {}
-        latest_status = str(latest_row.get("status") or "").strip().replace("_", "-")
-        if latest_status:
-            parts.append(f"latest {latest_status}")
-        return ", ".join(parts)
+        return format_agent_runtime_import_stage_report(summary)
 
     @staticmethod
     def _format_agent_runtime_actor_import_boundary_report(
@@ -8473,788 +7114,94 @@ class LANChatAgentWorker:
         scene_registry: Any,
         engine_write_boundary: Any,
     ) -> str:
-        import_data = import_summary if isinstance(import_summary, dict) else {}
-        registry_data = scene_registry if isinstance(scene_registry, dict) else {}
-        boundary_data = engine_write_boundary if isinstance(engine_write_boundary, dict) else {}
-        entity_type_counts = dict(registry_data.get("entity_type_counts") or {})
-        requested = int(import_data.get("requested_count") or 0)
-        imported = int(import_data.get("imported_count") or 0)
-        failed = int(import_data.get("failed_count") or 0)
-        actor_count = int(registry_data.get("actor_count") or entity_type_counts.get("actor") or 0)
-        bridge_calls = int(boundary_data.get("bridge_call_count") or 0)
-        bridge_success = int(boundary_data.get("bridge_success_count") or 0)
-        bridge_failed = int(boundary_data.get("bridge_failed_count") or 0)
-        status_counts = boundary_data.get("status_counts") if isinstance(boundary_data.get("status_counts"), dict) else {}
-        runtime_state_only = int(status_counts.get("runtime_state_only") or 0)
-        if bridge_calls > 0:
-            native_state = f"bridge {bridge_success}/{bridge_calls}"
-            if bridge_failed:
-                native_state += f", failed {bridge_failed}"
-        elif runtime_state_only > 0:
-            native_state = f"RuntimeState-only {runtime_state_only}, native pending F5"
-        else:
-            native_state = "native not-observed"
-        return (
-            f"requested/imported/failed {requested}/{imported}/{failed}, "
-            f"registered actor {actor_count}, {native_state}"
+        return format_agent_runtime_actor_import_boundary_report(
+            import_summary,
+            scene_registry,
+            engine_write_boundary,
         )
 
     @staticmethod
     def _format_agent_runtime_tool_queue_health_report(summary: Any) -> str:
-        if not isinstance(summary, dict) or not summary:
-            return "queue 0, active 0, blocked 0, pressure 0%"
-        queue_count = int(summary.get("queue_count") or 0)
-        queued_count = int(summary.get("queued_count") or 0)
-        running_count = int(summary.get("running_count") or 0)
-        blocked_count = int(summary.get("blocked_count") or 0)
-        terminal_count = int(summary.get("terminal_count") or 0)
-        active_count = int(summary.get("active_count") or 0)
-        queue_pressure = float(summary.get("queue_pressure") or 0.0)
-        queue_pressure = max(0.0, min(1.0, queue_pressure))
-        return (
-            f"queue {queue_count}, active {active_count}, "
-            f"queued/running {queued_count}/{running_count}, "
-            f"blocked {blocked_count}, terminal {terminal_count}, "
-            f"pressure {int(queue_pressure * 100)}%"
-        )
+        return format_agent_runtime_tool_queue_health_report(summary)
 
     @staticmethod
     def _format_agent_runtime_batch_tooling_report(summary: Any) -> str:
-        if not isinstance(summary, dict) or not summary:
-            return "facts 0, created-batches 0, priorities 0, merged 0, absorbed 0"
-        fact_count = int(summary.get("fact_count") or 0)
-        created_batch_fact_count = int(summary.get("created_batch_fact_count") or 0)
-        created_batch_count = int(summary.get("created_batch_count") or 0)
-        prioritized_item_count = int(summary.get("prioritized_item_count") or 0)
-        merged_intervention_fact_count = int(summary.get("merged_intervention_fact_count") or 0)
-        merged_intervention_item_count = int(summary.get("merged_intervention_item_count") or 0)
-        absorbed_intervention_count = int(summary.get("absorbed_intervention_count") or 0)
-        latest_types = [
-            str(item).strip().replace("_", "-")[:40]
-            for item in list(summary.get("latest_fact_types") or [])[:5]
-            if str(item).strip()
-        ]
-        parts = [
-            f"facts {fact_count}",
-            f"created-batches {created_batch_count}/{created_batch_fact_count}",
-            f"priorities {prioritized_item_count}",
-            f"merged {merged_intervention_item_count}/{merged_intervention_fact_count}",
-            f"absorbed {absorbed_intervention_count}",
-        ]
-        if latest_types:
-            parts.append("latest " + ",".join(latest_types))
-        return ", ".join(parts)
+        return format_agent_runtime_batch_tooling_report(summary)
 
     @staticmethod
     def _format_agent_runtime_batch_resource_lifecycle_report(summary: Any) -> str:
-        if not isinstance(summary, dict) or not summary:
-            return "events 0"
-        resource_event_count = int(summary.get("resource_event_count") or 0)
-        image_ready_count = int(summary.get("image_ready_count") or 0)
-        image_failed_count = int(summary.get("image_failed_count") or 0)
-        model_ready_count = int(summary.get("model_ready_count") or 0)
-        model_failed_count = int(summary.get("model_failed_count") or 0)
-        import_ready_count = int(summary.get("import_ready_count") or 0)
-        import_failed_count = int(summary.get("import_failed_count") or 0)
-        environment_ready_count = int(summary.get("environment_ready_count") or 0)
-        environment_failed_count = int(summary.get("environment_failed_count") or 0)
-        emit_failed_count = int(summary.get("emit_failed_count") or 0)
-        parts = [
-            f"events {resource_event_count}",
-            f"image {image_ready_count}/{image_failed_count}",
-            f"model {model_ready_count}/{model_failed_count}",
-            f"import {import_ready_count}/{import_failed_count}",
-            f"env {environment_ready_count}/{environment_failed_count}",
-        ]
-        if emit_failed_count:
-            parts.append(f"emit-failed {emit_failed_count}")
-        latest = (
-            summary.get("latest_resource_event")
-            if isinstance(summary.get("latest_resource_event"), dict)
-            else {}
-        )
-        latest_stage = str(latest.get("stage") or "").strip().replace("_", "-")
-        latest_status = "persisted" if bool(latest.get("persisted")) else "not-persisted"
-        if latest_stage:
-            parts.append(f"latest {latest_stage}:{latest_status}")
-        return ", ".join(parts)
+        return format_agent_runtime_batch_resource_lifecycle_report(summary)
 
     @staticmethod
-    def _format_agent_runtime_sync_health_report(summary: Any) -> str:
-        if not isinstance(summary, dict) or not summary:
-            return "unknown"
-        status = str(summary.get("status") or "unknown").strip() or "unknown"
-        needs_attention = [
-            str(item).strip().replace("_", "-")
-            for item in list(summary.get("needs_attention") or [])[:4]
-            if str(item).strip()
-        ]
-        actor_create_count = int(summary.get("actor_create_count") or 0)
-        actor_transform_count = int(summary.get("actor_transform_count") or 0)
-        actor_delete_count = int(summary.get("actor_delete_count") or 0)
-        active_actor_count = int(summary.get("latest_active_actor_count") or 0)
-        peer_join_count = int(summary.get("peer_join_count") or 0)
-        peer_leave_count = int(summary.get("peer_leave_count") or 0)
-        room_close_count = int(summary.get("room_close_count") or 0)
-        parts = [
-            status,
-            f"attention {len(needs_attention)}",
-            f"actors create/transform/delete {actor_create_count}/{actor_transform_count}/{actor_delete_count}",
-            f"active {active_actor_count}",
-        ]
-        if peer_join_count or peer_leave_count:
-            parts.append(f"peers join/leave {peer_join_count}/{peer_leave_count}")
-        if room_close_count:
-            parts.append(f"room-close {room_close_count}")
-        if needs_attention:
-            parts.append("needs " + ",".join(needs_attention))
-        return ", ".join(parts)
+    def _format_agent_runtime_geometry_fact_report(summary: Any) -> str:
+        return format_agent_runtime_geometry_fact_report(summary)
 
     @staticmethod
-    def _format_agent_runtime_asset_transfer_report(summary: Any) -> str:
-        if not isinstance(summary, dict) or not summary:
-            return "none"
-        asset_count = int(summary.get("asset_count") or 0)
-        if asset_count <= 0:
-            return "none"
-        ready_count = int(summary.get("ready_count") or 0)
-        failed_count = int(summary.get("failed_count") or 0)
-        transferring_count = int(summary.get("transferring_count") or 0)
-        completed_count = int(summary.get("completed_count") or 0)
-        progress = int(summary.get("overall_progress") or 0)
-        bytes_transferred = int(summary.get("bytes_transferred") or 0)
-        total_bytes = int(summary.get("total_bytes") or 0)
-        parts = [
-            f"assets {asset_count}",
-            f"ready {ready_count}",
-            f"completed {completed_count}",
-            f"transferring {transferring_count}",
-            f"failed {failed_count}",
-        ]
-        if progress:
-            parts.append(f"progress {max(0, min(100, progress))}%")
-        if total_bytes > 0:
-            parts.append(f"bytes {bytes_transferred}/{total_bytes}")
-        latest_assets = summary.get("latest_assets")
-        if isinstance(latest_assets, list) and latest_assets:
-            latest = latest_assets[-1] if isinstance(latest_assets[-1], dict) else {}
-            asset_id = str(latest.get("asset_id") or "").strip()
-            status = str(latest.get("transfer_status") or "").strip()
-            if asset_id or status:
-                parts.append(f"latest {asset_id or 'asset'}:{status or 'unknown'}")
-        return ", ".join(parts)
+    def _format_agent_runtime_command_report(summary: Any) -> str:
+        return format_agent_runtime_command_report(summary)
 
     @staticmethod
-    def _format_agent_runtime_sync_replay_report(summary: Any) -> str:
-        if not isinstance(summary, dict):
-            return "recorded 0, failed 0"
-        def safe_label(value: Any) -> str:
-            text = str(value or "").strip().replace("_", "-")
-            for marker in ("prompt", "provider", "url", "raw", "token", "api-key", "path", "session", "job"):
-                text = re.sub(marker, "resource", text, flags=re.IGNORECASE)
-            return text[:60]
-
-        recorded_count = int(summary.get("recorded_count") or 0)
-        failed_count = int(summary.get("failed_count") or 0)
-        actor_transform_count = int(summary.get("actor_transform_count") or 0)
-        actor_delete_count = int(summary.get("actor_delete_count") or 0)
-        peer_join_count = int(summary.get("peer_join_count") or 0)
-        peer_leave_count = int(summary.get("peer_leave_count") or 0)
-        transfer_failed_count = int(summary.get("transfer_failed_count") or 0)
-        transfer_progress_count = int(summary.get("transfer_progress_count") or 0)
-        latest_transfer_progress = int(summary.get("latest_transfer_progress") or 0)
-        latest_chunk_index = int(summary.get("latest_chunk_index") or 0)
-        latest_chunk_count = int(summary.get("latest_chunk_count") or 0)
-        latest_bytes_transferred = int(summary.get("latest_bytes_transferred") or 0)
-        latest_total_bytes = int(summary.get("latest_total_bytes") or 0)
-        latest_event_type = str(summary.get("latest_event_type") or "").strip().replace("_", "-")
-        failure_code_counts = (
-            summary.get("failure_code_counts")
-            if isinstance(summary.get("failure_code_counts"), dict)
-            else {}
-        )
-        failure_codes = ", ".join(
-            f"{safe_label(code)}:{int(count or 0)}"
-            for code, count in sorted(failure_code_counts.items())[:5]
-            if int(count or 0) > 0 and safe_label(code)
-        )
-        latest_failure_code = safe_label(summary.get("latest_failure_code"))
-        parts = [f"recorded {recorded_count}", f"failed {failed_count}"]
-        if actor_transform_count:
-            parts.append(f"actor-transform {actor_transform_count}")
-        if actor_delete_count:
-            parts.append(f"actor-delete {actor_delete_count}")
-        if peer_join_count:
-            parts.append(f"peer-join {peer_join_count}")
-        if peer_leave_count:
-            parts.append(f"peer-leave {peer_leave_count}")
-        if transfer_failed_count:
-            parts.append(f"transfer-failed {transfer_failed_count}")
-        if transfer_progress_count:
-            transfer_parts = [f"transfer-progress {transfer_progress_count}"]
-            progress_bits: list[str] = []
-            if latest_transfer_progress:
-                progress_bits.append(f"{max(0, min(100, latest_transfer_progress))}%")
-            if latest_chunk_index and latest_chunk_count:
-                progress_bits.append(f"chunk {latest_chunk_index}/{latest_chunk_count}")
-            byte_text = LANChatAgentWorker._format_runtime_transfer_bytes(
-                latest_bytes_transferred,
-                latest_total_bytes,
-            )
-            if byte_text:
-                progress_bits.append(byte_text.strip())
-            if progress_bits:
-                transfer_parts.append("latest " + " ".join(progress_bits))
-            parts.append(" ".join(transfer_parts))
-        if latest_event_type:
-            parts.append(f"latest {latest_event_type[:48]}")
-        if failure_codes:
-            parts.append(f"failure codes {failure_codes}")
-        if latest_failure_code:
-            parts.append(f"latest failure {latest_failure_code}")
-        return ", ".join(parts)
+    def _format_agent_runtime_review_proposal_report(summary: Any) -> str:
+        return format_agent_runtime_review_proposal_report(summary)
 
     @staticmethod
-    def _format_agent_runtime_replay_asset_transfer_report(summary: Any) -> str:
-        if not isinstance(summary, dict):
-            return "events 0, started 0, progress 0, completed 0, failed 0"
-        event_count = int(summary.get("asset_event_count") or 0)
-        started_count = int(summary.get("asset_transfer_started_count") or 0)
-        progress_count = int(summary.get("asset_transfer_progress_count") or 0)
-        completed_count = int(summary.get("asset_transfer_completed_count") or 0)
-        failed_count = int(summary.get("asset_transfer_failed_count") or 0)
-        peer_ready_count = int(summary.get("peer_asset_ready_count") or 0)
-        latest_progress = int(summary.get("latest_transfer_progress") or 0)
-        latest_chunk_index = int(summary.get("latest_chunk_index") or 0)
-        latest_chunk_count = int(summary.get("latest_chunk_count") or 0)
-        latest_bytes_transferred = int(summary.get("latest_bytes_transferred") or 0)
-        latest_total_bytes = int(summary.get("latest_total_bytes") or 0)
-        latest_status = str(summary.get("latest_transfer_status") or "").strip().replace("_", "-")
-        parts = [
-            f"events {event_count}",
-            f"started {started_count}",
-            f"progress {progress_count}",
-            f"completed {completed_count}",
-            f"failed {failed_count}",
-        ]
-        if peer_ready_count:
-            parts.append(f"peer-ready {peer_ready_count}")
-        latest_bits: list[str] = []
-        if latest_progress:
-            latest_bits.append(f"{max(0, min(100, latest_progress))}%")
-        if latest_chunk_index and latest_chunk_count:
-            latest_bits.append(f"chunk {latest_chunk_index}/{latest_chunk_count}")
-        byte_text = LANChatAgentWorker._format_runtime_transfer_bytes(
-            latest_bytes_transferred,
-            latest_total_bytes,
-        )
-        if byte_text:
-            latest_bits.append(byte_text.strip())
-        if latest_status:
-            latest_bits.append(latest_status[:24])
-        if latest_bits:
-            parts.append("latest " + " ".join(latest_bits))
-        return ", ".join(parts)
+    def _format_agent_runtime_review_confirmation_report(summary: Any) -> str:
+        return format_agent_runtime_review_confirmation_report(summary)
 
     @staticmethod
-    def _format_agent_runtime_replay_peer_sync_report(summary: Any) -> str:
-        if not isinstance(summary, dict):
-            return "events 0, join 0, leave 0, room-close 0, reconcile 0/0, state 0/0"
-        event_count = int(summary.get("peer_event_count") or 0)
-        join_count = int(summary.get("peer_join_count") or 0)
-        leave_count = int(summary.get("peer_leave_count") or 0)
-        room_close_count = int(summary.get("room_close_count") or 0)
-        sync_reconcile_count = int(summary.get("sync_reconcile_count") or 0)
-        sync_reconcile_failed_count = int(summary.get("sync_reconcile_failed_count") or 0)
-        state_reconcile_count = int(summary.get("state_reconcile_count") or 0)
-        state_reconcile_failed_count = int(summary.get("state_reconcile_failed_count") or 0)
-        latest_peer_event_type = str(summary.get("latest_peer_event_type") or "").strip().replace("_", "-")
-        latest_room_status = str(summary.get("latest_room_status") or "").strip().replace("_", "-")
-        latest_reconcile_event = (
-            summary.get("latest_reconcile_event")
-            if isinstance(summary.get("latest_reconcile_event"), dict)
-            else {}
-        )
-        latest_reconcile_status = str(
-            latest_reconcile_event.get("status") if isinstance(latest_reconcile_event, dict) else ""
-        ).strip().replace("_", "-")
-        parts = [
-            f"events {event_count}",
-            f"join {join_count}",
-            f"leave {leave_count}",
-            f"room-close {room_close_count}",
-            f"reconcile {sync_reconcile_count}/{sync_reconcile_failed_count}",
-            f"state {state_reconcile_count}/{state_reconcile_failed_count}",
-        ]
-        if latest_peer_event_type:
-            parts.append(f"latest-peer {latest_peer_event_type[:32]}")
-        if latest_room_status:
-            parts.append(f"room {latest_room_status[:24]}")
-        if latest_reconcile_status:
-            parts.append(f"latest-reconcile {latest_reconcile_status[:24]}")
-        return ", ".join(parts)
-
-    @staticmethod
-    def _format_agent_runtime_replay_report(summary: Any) -> str:
-        if not isinstance(summary, dict) or not summary:
-            return "entries 0"
-        entry_count = int(summary.get("entry_count") or 0)
-        event_counts = summary.get("event_counts") if isinstance(summary.get("event_counts"), dict) else {}
-        latest_events = summary.get("latest_events") if isinstance(summary.get("latest_events"), list) else []
-        environment_replay = (
-            summary.get("environment_component_replay_summary")
-            if isinstance(summary.get("environment_component_replay_summary"), dict)
-            else {}
-        )
-        runtime_event_replay = (
-            summary.get("runtime_event_replay_summary")
-            if isinstance(summary.get("runtime_event_replay_summary"), dict)
-            else {}
-        )
-        worker_drain_replay = (
-            summary.get("worker_drain_replay_summary")
-            if isinstance(summary.get("worker_drain_replay_summary"), dict)
-            else {}
-        )
-        engine_write_boundary = (
-            summary.get("engine_write_boundary_summary")
-            if isinstance(summary.get("engine_write_boundary_summary"), dict)
-            else {}
-        )
-
-        def safe_event(value: Any) -> str:
-            event = str(value or "").strip()
-            if not event:
-                return ""
-            for marker in ("provider", "prompt", "url", "raw"):
-                event = re.sub(marker, "runtime", event, flags=re.IGNORECASE)
-            return event.replace("_", "-")[:80]
-
-        priority_events = [
-            "scene_plan_created",
-            "scene_plan_confirmed",
-            "batch_plan_created",
-            "tool_graph_queued",
-            "tool_graph_completed",
-            "user_report_generated",
-        ]
-        count_parts: list[str] = []
-        for key in priority_events:
-            value = int(event_counts.get(key) or 0)
-            if value > 0:
-                count_parts.append(f"{safe_event(key)}:{value}")
-        if not count_parts:
-            for key, value in sorted(event_counts.items())[:4]:
-                if int(value or 0) > 0:
-                    count_parts.append(f"{safe_event(key)}:{int(value or 0)}")
-        recent: list[str] = []
-        for item in latest_events[-3:]:
-            if isinstance(item, dict):
-                event = safe_event(item.get("event"))
-            else:
-                event = safe_event(item)
-            if event:
-                recent.append(event)
-        parts = [f"entries {entry_count}"]
-        if count_parts:
-            parts.append("events " + ",".join(count_parts[:4]))
-        env_import_count = int(environment_replay.get("import_event_count") or 0)
-        env_import_failed = int(environment_replay.get("import_failed_event_count") or 0)
-        if env_import_count or env_import_failed:
-            env_bits = []
-            if env_import_count:
-                env_bits.append(f"env-import:{env_import_count}")
-            if env_import_failed:
-                env_bits.append(f"env-import-failed:{env_import_failed}")
-            parts.append("environment " + ",".join(env_bits))
-        if int(runtime_event_replay.get("disclosure_skipped_count") or 0) > 0:
-            parts.append(
-                "runtime-events "
-                + LANChatAgentWorker._format_agent_runtime_replay_runtime_event_report(runtime_event_replay)
-            )
-        drain_failed = int(worker_drain_replay.get("failed_count") or event_counts.get("runtime_worker_drain_failed") or 0)
-        drain_exception = int(worker_drain_replay.get("exception_count") or event_counts.get("runtime_worker_drain_exception") or 0)
-        drain_status_failed = int(
-            worker_drain_replay.get("status_failed_count")
-            or event_counts.get("runtime_worker_drain_status_failed")
-            or 0
-        )
-        if drain_failed or drain_exception or drain_status_failed:
-            parts.append(
-                "worker-drain "
-                + LANChatAgentWorker._format_agent_runtime_worker_drain_replay_report(worker_drain_replay or {
-                    "failed_count": drain_failed,
-                    "exception_count": drain_exception,
-                    "status_failed_count": drain_status_failed,
-                })
-            )
-        if int(engine_write_boundary.get("boundary_fact_count") or 0) > 0:
-            parts.append(
-                "engine_write_boundary "
-                + LANChatAgentWorker._format_agent_runtime_engine_write_boundary_report(engine_write_boundary)
-            )
-        if recent:
-            parts.append("recent " + ",".join(recent[:3]))
-        return "；".join(parts)
-
-    @staticmethod
-    def _format_agent_runtime_worker_drain_replay_report(summary: Any) -> str:
-        if not isinstance(summary, dict) or not summary:
-            return "requested 0, drained 0, failed 0, exception 0"
-        requested = int(summary.get("requested_count") or 0)
-        drained_messages = int(summary.get("message_drained_count") or 0)
-        failed = int(summary.get("failed_count") or 0)
-        exception = int(summary.get("exception_count") or 0)
-        status_failed = int(summary.get("status_failed_count") or 0)
-        plan_resolve_failed = int(summary.get("plan_resolve_failed_count") or 0)
-        drained_graph_total = int(summary.get("drained_graph_total") or 0)
-        parts = [
-            f"requested {requested}",
-            f"drained {drained_messages}/{drained_graph_total}",
-            f"failed {failed}",
-            f"exception {exception}",
-        ]
-        if status_failed:
-            parts.append(f"status-failed {status_failed}")
-        if plan_resolve_failed:
-            parts.append(f"plan-resolve-failed {plan_resolve_failed}")
-        latest = summary.get("latest_drain_event") if isinstance(summary.get("latest_drain_event"), dict) else {}
-        latest_event = str(latest.get("event") or "").strip().replace("_", "-")
-        if latest_event:
-            parts.append(f"latest {latest_event[:48]}")
-        return ", ".join(parts)
-
-    @staticmethod
-    def _format_agent_runtime_context_report(summary: Any) -> str:
-        if not isinstance(summary, dict) or not summary:
-            return "0 context(s)"
-        context_count = int(summary.get("context_count") or 0)
-        context_type_counts = (
-            summary.get("context_type_counts")
-            if isinstance(summary.get("context_type_counts"), dict)
-            else {}
-        )
-        speaker_type_counts = (
-            summary.get("speaker_type_counts")
-            if isinstance(summary.get("speaker_type_counts"), dict)
-            else {}
-        )
-        latest_context = summary.get("latest_context") if isinstance(summary.get("latest_context"), list) else []
-
-        def safe_label(value: Any) -> str:
-            text = str(value or "").strip().replace("_", "-")
-            for marker in ("provider", "prompt", "url", "raw", "metadata", "message-id"):
-                text = re.sub(marker, "runtime", text, flags=re.IGNORECASE)
-            return text[:48]
-
-        type_rows = [
-            f"{safe_label(key)}:{int(value or 0)}"
-            for key, value in sorted(context_type_counts.items())
-            if int(value or 0) > 0
-        ]
-        speaker_rows = [
-            f"{safe_label(key)}:{int(value or 0)}"
-            for key, value in sorted(speaker_type_counts.items())
-            if int(value or 0) > 0
-        ]
-        latest_preview = ""
-        if latest_context:
-            latest = latest_context[-1] if isinstance(latest_context[-1], dict) else {}
-            latest_type = safe_label(latest.get("context_type"))
-            latest_speaker = safe_label(latest.get("speaker_type"))
-            latest_message = safe_label(latest.get("message") or latest.get("text_preview"))
-            if latest_message:
-                latest_preview = f"{latest_type or 'context'}/{latest_speaker or 'speaker'}:{latest_message}"
-            elif latest_type or latest_speaker:
-                latest_preview = f"{latest_type or 'context'}/{latest_speaker or 'speaker'}"
-        parts = [f"{context_count} context(s)"]
-        if type_rows:
-            parts.append("types " + ",".join(type_rows[:4]))
-        if speaker_rows:
-            parts.append("speakers " + ",".join(speaker_rows[:4]))
-        if latest_preview:
-            parts.append("latest " + latest_preview)
-        return "；".join(parts)
+    def _format_agent_runtime_layout_report(summary: Any, confirmation_summary: Any = None) -> str:
+        return format_agent_runtime_layout_report(summary, confirmation_summary)
 
     @staticmethod
     def _format_agent_runtime_engine_write_report(summary: Any) -> str:
-        if not isinstance(summary, dict) or not summary:
-            return "import 0, transform 0, env-import 0, actor-delete 0"
-        import_count = int(summary.get("import_result_count") or 0)
-        transform_count = int(summary.get("transform_result_count") or 0)
-        environment_import_count = int(summary.get("environment_import_result_count") or 0)
-        delete_count = int(summary.get("delete_result_count") or 0)
-        import_status_counts = (
-            summary.get("import_status_counts")
-            if isinstance(summary.get("import_status_counts"), dict)
-            else {}
-        )
-        transform_status_counts = (
-            summary.get("transform_status_counts")
-            if isinstance(summary.get("transform_status_counts"), dict)
-            else {}
-        )
-        environment_import_status_counts = (
-            summary.get("environment_import_status_counts")
-            if isinstance(summary.get("environment_import_status_counts"), dict)
-            else {}
-        )
-        delete_status_counts = (
-            summary.get("delete_status_counts")
-            if isinstance(summary.get("delete_status_counts"), dict)
-            else {}
-        )
-        status_export_count = int(summary.get("status_export_count") or 0)
-        latest_status_export = (
-            summary.get("latest_status_export")
-            if isinstance(summary.get("latest_status_export"), dict)
-            else {}
-        )
-
-        def status_text(counts: Any) -> str:
-            if not isinstance(counts, dict) or not counts:
-                return ""
-            rows = [
-                f"{str(key).replace('_', '-')}:{int(value or 0)}"
-                for key, value in sorted(counts.items())
-                if int(value or 0) > 0
-            ]
-            return "(" + ",".join(rows[:4]) + ")" if rows else ""
-
-        parts = [
-            f"import {import_count}{status_text(import_status_counts)}",
-            f"transform {transform_count}{status_text(transform_status_counts)}",
-            f"env-import {environment_import_count}{status_text(environment_import_status_counts)}",
-            f"actor-delete {delete_count}{status_text(delete_status_counts)}",
-        ]
-        mismatch_count = int(summary.get("readiness_mismatch_count") or 0)
-        mismatch_channels = summary.get("readiness_mismatch_channels")
-        if mismatch_count and isinstance(mismatch_channels, list):
-            names = [
-                str(item or "").replace("_", "-")[:32]
-                for item in mismatch_channels[:4]
-                if str(item or "").strip()
-                and "provider" not in str(item).lower()
-                and "secret" not in str(item).lower()
-            ]
-            if names:
-                parts.append(f"readiness-mismatch {mismatch_count}(" + "/".join(names) + ")")
-        if status_export_count > 0:
-            export_bits = ["recorded" if latest_status_export.get("recorded") else "not-recorded"]
-            bridge_failed = int(latest_status_export.get("engine_write_bridge_failed_count") or 0)
-            if bridge_failed:
-                export_bits.append(f"bridge-failed:{bridge_failed}")
-            readiness_bits = []
-            for label, key in (
-                ("native", "engine_write_readiness_native_enabled_count"),
-                ("runtime-state", "engine_write_readiness_runtime_state_only_count"),
-                ("fallback", "engine_write_readiness_fallback_count"),
-                ("disabled", "engine_write_readiness_disabled_count"),
-                ("unavailable", "engine_write_readiness_unavailable_count"),
-            ):
-                value = int(latest_status_export.get(key) or 0)
-                if value:
-                    readiness_bits.append(f"{label}:{value}")
-            if readiness_bits:
-                export_bits.append("readiness " + ",".join(readiness_bits[:5]))
-            channel_bits = []
-            for label, key in (
-                ("native", "engine_write_readiness_native_enabled_channels"),
-                ("runtime-state", "engine_write_readiness_runtime_state_only_channels"),
-                ("fallback", "engine_write_readiness_fallback_channels"),
-                ("disabled", "engine_write_readiness_disabled_channels"),
-                ("unavailable", "engine_write_readiness_unavailable_channels"),
-            ):
-                values = latest_status_export.get(key)
-                if not isinstance(values, list) or not values:
-                    continue
-                names = [
-                    str(item or "").replace("_", "-")[:32]
-                    for item in values[:3]
-                    if str(item or "").strip()
-                    and "provider" not in str(item).lower()
-                    and "secret" not in str(item).lower()
-                ]
-                if names:
-                    channel_bits.append(f"{label} " + "/".join(names))
-            if channel_bits:
-                export_bits.append("channels " + "; ".join(channel_bits[:5]))
-            error_counts = latest_status_export.get("engine_write_bridge_error_code_counts")
-            if isinstance(error_counts, dict) and error_counts:
-                safe_errors = [
-                    f"{str(key).replace('_', '-')}:{int(value or 0)}"
-                    for key, value in sorted(error_counts.items())
-                    if int(value or 0) > 0
-                    and "provider" not in str(key).lower()
-                    and "secret" not in str(key).lower()
-                ]
-                if safe_errors:
-                    export_bits.append("errors " + ",".join(safe_errors[:3]))
-            parts.append(f"status-export {status_export_count}(" + ", ".join(export_bits) + ")")
-        return ", ".join(parts)
-
-    @staticmethod
-    def _format_agent_runtime_engine_write_boundary_report(summary: Any) -> str:
-        if not isinstance(summary, dict) or not summary:
-            return "boundary 0, import/transform/delete 0/0/0"
-        boundary_count = int(summary.get("boundary_fact_count") or 0)
-        import_count = int(summary.get("import_boundary_count") or 0)
-        transform_count = int(summary.get("transform_boundary_count") or 0)
-        delete_count = int(summary.get("delete_boundary_count") or 0)
-
-        def safe_label(value: Any) -> str:
-            text = str(value or "").strip().lower()
-            if not text:
-                return ""
-            text = re.sub(r"provider|prompt|raw|url|api[_-]?key|token", "runtime", text)
-            text = re.sub(r"[^a-z0-9_.:-]+", "-", text)
-            return text[:48].strip("-")
-
-        def count_rows(value: Any) -> str:
-            if not isinstance(value, dict) or not value:
-                return "none"
-            rows: list[str] = []
-            for key, count in sorted(value.items()):
-                label = safe_label(key)
-                if not label:
-                    continue
-                try:
-                    numeric_count = int(count or 0)
-                except (TypeError, ValueError):
-                    continue
-                if numeric_count > 0:
-                    rows.append(f"{label}:{numeric_count}")
-            return ",".join(rows[:4]) if rows else "none"
-
-        source_text = count_rows(summary.get("write_source_counts"))
-        status_text = count_rows(summary.get("status_counts"))
-        bridge_calls = int(summary.get("bridge_call_count") or 0)
-        bridge_success = int(summary.get("bridge_success_count") or 0)
-        bridge_failed = int(summary.get("bridge_failed_count") or 0)
-        bridge_skipped = int(summary.get("bridge_skipped_count") or 0)
-        bridge_error_text = count_rows(summary.get("bridge_error_code_counts"))
-        bridge_skip_text = count_rows(summary.get("bridge_skip_reason_counts"))
-        raw_status_counts = summary.get("status_counts") if isinstance(summary.get("status_counts"), dict) else {}
-        runtime_state_only_count = int(raw_status_counts.get("runtime_state_only") or 0)
-        if bridge_calls > 0:
-            native_text = "native verified" if bridge_success > 0 and bridge_failed <= 0 else "native needs-attention"
-        elif runtime_state_only_count > 0:
-            native_text = "native pending F5"
-        else:
-            native_text = "native not-observed"
-        return (
-            f"boundary {boundary_count}, "
-            f"import/transform/delete {import_count}/{transform_count}/{delete_count}, "
-            f"sources {source_text}, statuses {status_text}, "
-            f"bridge {bridge_calls}/{bridge_success}/{bridge_failed}, skipped {bridge_skipped}({bridge_skip_text}), "
-            f"errors {bridge_error_text}, "
-            f"{native_text}"
-        )
-
-    @staticmethod
-    def _format_agent_runtime_resource_report(summary: Any) -> str:
-        if not isinstance(summary, dict) or not summary:
-            return "default runtime adapters"
-        parts: list[str] = []
-        def safe_value(value: Any) -> str:
-            text = str(value or "").strip()[:80]
-            return text.replace("provider", "adapter").replace("_", "-")
-        for key in ("scene_snapshot", "image_resource", "model_resource", "actor_import", "environment_component", "environment_import", "review", "layout_transform"):
-            value = summary.get(key)
-            if not isinstance(value, dict):
-                continue
-            status = safe_value(value.get("status") or value.get("mode") or "")
-            reason = safe_value(value.get("reason") or "")
-            if not status:
-                continue
-            label = key.replace("_", "-")
-            if reason and status != "enabled":
-                parts.append(f"{label}:{status}({reason[:40]})")
-            else:
-                parts.append(f"{label}:{status}")
-        return "、".join(parts[:7]) if parts else "default runtime adapters"
-
-    @staticmethod
-    def _format_agent_runtime_resource_readiness_report(summary: Any) -> str:
-        if not isinstance(summary, dict) or not summary:
-            return "channels 0, enabled 0, unavailable 0"
-        channel_count = int(summary.get("channel_count") or 0)
-        requested_count = int(summary.get("requested_count") or 0)
-        enabled_count = int(summary.get("enabled_count") or 0)
-        unavailable_count = int(summary.get("unavailable_count") or 0)
-        unavailable = summary.get("unavailable_channels")
-        unavailable_text = ""
-        if isinstance(unavailable, list) and unavailable:
-            names = [
-                str(item or "").replace("_", "-")[:32]
-                for item in unavailable[:3]
-                if str(item or "").strip()
-            ]
-            if names:
-                unavailable_text = ", unavailable " + "、".join(names)
-        return (
-            f"channels {channel_count}, requested {requested_count}, "
-            f"enabled {enabled_count}, unavailable {unavailable_count}{unavailable_text}"
-        )
+        return format_agent_runtime_engine_write_report(summary)
 
     @staticmethod
     def _format_agent_runtime_engine_write_readiness_report(summary: Any) -> str:
-        if not isinstance(summary, dict) or not summary:
-            return "channels 0, native 0, runtime-state 0, fallback 0, disabled 0"
+        return format_agent_runtime_engine_write_readiness_report(summary)
 
-        def count(name: str) -> int:
-            try:
-                return max(0, int(summary.get(name) or 0))
-            except (TypeError, ValueError):
-                return 0
+    @staticmethod
+    def _format_agent_runtime_engine_write_boundary_report(summary: Any) -> str:
+        return format_agent_runtime_engine_write_boundary_report(summary)
 
-        def channel_list(name: str) -> str:
-            values = summary.get(name)
-            if not isinstance(values, list) or not values:
-                return ""
-            names = [
-                str(item or "").replace("_", "-")[:32]
-                for item in values[:3]
-                if str(item or "").strip()
-            ]
-            return "(" + "?".join(names) + ")" if names else ""
+    @staticmethod
+    def _format_agent_runtime_resource_report(summary: Any) -> str:
+        return format_agent_runtime_resource_report(summary)
 
-        parts = [
-            f"channels {count('channel_count')}",
-            f"native {count('native_enabled_count')}{channel_list('native_enabled_channels')}",
-            f"runtime-state {count('runtime_state_only_count')}{channel_list('runtime_state_only_channels')}",
-            f"fallback {count('fallback_count')}{channel_list('fallback_channels')}",
-            f"disabled {count('disabled_count')}{channel_list('disabled_channels')}",
-        ]
-        unavailable_count = count("unavailable_count")
-        if unavailable_count:
-            parts.append(f"unavailable {unavailable_count}{channel_list('unavailable_channels')}")
-        return ", ".join(parts)
+    @staticmethod
+    def _format_agent_runtime_resource_readiness_report(summary: Any) -> str:
+        return format_agent_runtime_resource_readiness_report(summary)
+
+    @staticmethod
+    def _format_agent_runtime_sync_report(summary: Any) -> str:
+        return format_agent_runtime_sync_report(summary)
+
+    @staticmethod
+    def _format_agent_runtime_replay_report(summary: Any) -> str:
+        summary_dict = summary if isinstance(summary, dict) else {}
+        runtime_event_replay = summary_dict.get("runtime_event_replay_summary") if isinstance(summary_dict.get("runtime_event_replay_summary"), dict) else {}
+        worker_drain_replay = summary_dict.get("worker_drain_replay_summary") if isinstance(summary_dict.get("worker_drain_replay_summary"), dict) else {}
+        engine_write_boundary = summary_dict.get("engine_write_boundary_summary") if isinstance(summary_dict.get("engine_write_boundary_summary"), dict) else {}
+        runtime_event_text = format_agent_runtime_replay_runtime_event_report(runtime_event_replay)
+        worker_drain_text = format_agent_runtime_worker_drain_replay_report(worker_drain_replay)
+        engine_write_boundary_text = format_agent_runtime_engine_write_boundary_report(engine_write_boundary)
+        return format_agent_runtime_replay_report(
+            summary,
+            runtime_event_text=runtime_event_text,
+            worker_drain_text=worker_drain_text,
+            engine_write_boundary_text=engine_write_boundary_text,
+        )
+    @staticmethod
+    def _format_agent_runtime_worker_drain_replay_report(summary: Any) -> str:
+        return format_agent_runtime_worker_drain_replay_report(summary)
+
+    @staticmethod
+    def _format_agent_runtime_context_report(summary: Any) -> str:
+        return format_agent_runtime_context_report(summary)
 
     @staticmethod
     def _is_runtime_report_query(text: str) -> bool:
-        normalized = str(text or "").strip().lower()
-        if not normalized:
-            return False
-        report_markers = (
-            "runtime report",
-            "runtime final report",
-            "agent runtime report",
-            "final report",
-            "generate report",
-            "show report",
-            "report summary",
-            "最终报告",
-            "鐢熸垚鎶ュ憡",
-            "鎶ュ憡鎽樿",
-            "鏌ョ湅鎶ュ憡",
-            "杩愯鎶ュ憡",
-            "runtime 鎶ュ憡",
-        )
-        runtime_markers = ("runtime", "agentruntime", "agent runtime", "鎶ュ憡", "report")
-        return any(marker in normalized for marker in report_markers) and any(
-            marker in normalized for marker in runtime_markers
-        )
+        return is_runtime_report_query(text)
 
     def _handle_agent_runtime_sync_status_query(self, trigger: dict[str, Any]) -> str | None:
         text = str(trigger.get("text") or "").strip()
@@ -9303,42 +7250,6 @@ class LANChatAgentWorker:
             f"- latest_actors: {latest_actor_text}\n"
             f"- latest_assets: {latest_asset_text}"
         )
-
-    @staticmethod
-    def _format_agent_runtime_sync_actor_rows(rows: Any) -> str:
-        if not isinstance(rows, list) or not rows:
-            return "none"
-        formatted: list[str] = []
-        for item in rows[:5]:
-            if not isinstance(item, dict):
-                continue
-            actor = str(item.get("actor_name") or item.get("actor_id") or "actor")
-            event_type = str(item.get("event_type") or "")
-            lifecycle = str(item.get("lifecycle_status") or "")
-            status = lifecycle or event_type or "updated"
-            formatted.append(f"{actor}:{status}")
-        return ", ".join(formatted) or "none"
-
-    @staticmethod
-    def _format_agent_runtime_sync_asset_rows(rows: Any) -> str:
-        if not isinstance(rows, list) or not rows:
-            return "none"
-        formatted: list[str] = []
-        for item in rows[:5]:
-            if not isinstance(item, dict):
-                continue
-            asset = str(item.get("asset_id") or "asset")
-            transfer_status = str(item.get("transfer_status") or item.get("status") or item.get("event_type") or "unknown")
-            progress = int(item.get("progress") or 0)
-            chunk_index = int(item.get("chunk_index") or 0)
-            chunk_count = int(item.get("chunk_count") or 0)
-            bytes_transferred = int(item.get("bytes_transferred") or 0)
-            total_bytes = int(item.get("total_bytes") or 0)
-            progress_text = f" {progress}%" if progress else ""
-            chunk_text = f" chunk {chunk_index}/{chunk_count}" if chunk_index and chunk_count else ""
-            byte_text = LANChatAgentWorker._format_runtime_transfer_bytes(bytes_transferred, total_bytes)
-            formatted.append(f"{asset}:{transfer_status}{progress_text}{chunk_text}{byte_text}")
-        return ", ".join(formatted) or "none"
 
     @staticmethod
     def _format_runtime_transfer_bytes(bytes_transferred: int, total_bytes: int) -> str:
@@ -9496,25 +7407,7 @@ class LANChatAgentWorker:
 
     @staticmethod
     def _is_runtime_sync_status_query(text: str) -> bool:
-        normalized = str(text or "").strip().lower()
-        if not normalized:
-            return False
-        sync_markers = (
-            "sync status",
-            "runtime sync",
-            "sync summary",
-            "运行时",
-            "鍚屾鎽樿",
-            "澶氫汉鍚屾",
-            "鑱旀満鍚屾",
-            "actor鍚屾",
-            "actor 鍚屾",
-            "璧勬簮鍚屾",
-        )
-        runtime_markers = ("runtime", "agentruntime", "agent runtime", "鍚屾", "sync")
-        return any(marker in normalized for marker in sync_markers) and any(
-            marker in normalized for marker in runtime_markers
-        )
+        return is_runtime_sync_status_query(text)
 
     @staticmethod
     def _runtime_batch_id_from_message(message: dict[str, Any]) -> str:
@@ -9850,50 +7743,11 @@ class LANChatAgentWorker:
         batch_summary: Any,
         queue_summary: Any,
     ) -> str:
-        if not isinstance(batch_summary, dict):
-            batch_summary = {}
-        if not isinstance(queue_summary, dict):
-            queue_summary = {}
-
-        def count(source: dict[str, Any], name: str) -> int:
-            try:
-                return max(0, int(source.get(name) or 0))
-            except (TypeError, ValueError):
-                return 0
-
-        return (
-            "batch start/done/final "
-            f"{count(batch_summary, 'started_count')}/"
-            f"{count(batch_summary, 'completed_count')}/"
-            f"{count(batch_summary, 'finalized_count')}, "
-            "queue queued/dequeued/rejected/blocked "
-            f"{count(queue_summary, 'queued_count')}/"
-            f"{count(queue_summary, 'dequeued_count')}/"
-            f"{count(queue_summary, 'rejected_count')}/"
-            f"{count(queue_summary, 'blocked_count')}"
-        )
+        return format_agent_runtime_tool_graph_replay_report(batch_summary, queue_summary)
 
     @staticmethod
     def _format_agent_runtime_gm_summary_replay_report(summary: Any) -> str:
-        if not isinstance(summary, dict) or not summary:
-            return "exported 0, failed 0, readiness publish/query 0/0"
-
-        def count(name: str) -> int:
-            try:
-                return max(0, int(summary.get(name) or 0))
-            except (TypeError, ValueError):
-                return 0
-
-        exported = count("exported_count")
-        failed = count("failed_count")
-        available = count("available_count")
-        scene_plan = count("scene_plan_count")
-        readiness_publish = count("resource_readiness_publish_total")
-        readiness_query = count("resource_readiness_query_total")
-        return (
-            f"exported {exported}, failed {failed}, available {available}, "
-            f"scene-plan {scene_plan}, readiness publish/query {readiness_publish}/{readiness_query}"
-        )
+        return format_agent_runtime_gm_summary_replay_report(summary)
 
     def _agent_runtime_gm_summary_reply(
         self,
@@ -10177,284 +8031,23 @@ class LANChatAgentWorker:
 
     @staticmethod
     def _format_agent_runtime_gm_runtime_event_replay_digest(digest: Any) -> str:
-        if not isinstance(digest, dict) or not digest:
-            return "emitted 0, failed 0, skipped 0"
-        def safe_label(value: Any) -> str:
-            text = str(value or "").strip().replace("_", "-")
-            for marker in ("provider", "prompt", "url", "raw", "token", "api-key"):
-                text = re.sub(marker, "resource", text, flags=re.IGNORECASE)
-            return text[:60]
-
-        emitted = int(digest.get("emitted_count") or 0)
-        failed = int(digest.get("emit_failed_count") or 0)
-        skipped = int(digest.get("disclosure_skipped_count") or 0)
-        parts = [f"emitted {emitted}", f"failed {failed}", f"skipped {skipped}"]
-        report_ready = int(digest.get("report_ready_count") or 0)
-        report_attention = int(digest.get("report_attention_count") or 0)
-        if report_ready > 0:
-            report_part = f"report-ready {report_ready}"
-            if report_attention > 0:
-                report_part += f"/attention {report_attention}"
-            status_counts = (
-                digest.get("report_health_status_counts")
-                if isinstance(digest.get("report_health_status_counts"), dict)
-                else {}
-            )
-            status_parts = [
-                f"{safe_label(key)}:{int(value or 0)}"
-                for key, value in sorted(status_counts.items())[:3]
-                if str(key).strip() and int(value or 0) > 0
-            ]
-            if status_parts:
-                report_part += " " + ",".join(status_parts)
-            parts.append(report_part)
-        latest_report = digest.get("latest_report_ready") if isinstance(digest.get("latest_report_ready"), dict) else {}
-        environment_import_failure_code_counts = (
-            latest_report.get("environment_import_failure_code_counts")
-            if isinstance(latest_report.get("environment_import_failure_code_counts"), dict)
-            else {}
-        )
-        environment_failure_parts = [
-            f"{safe_label(key)}:{int(value or 0)}"
-            for key, value in sorted(environment_import_failure_code_counts.items())[:3]
-            if str(key).strip() and int(value or 0) > 0
-        ]
-        if environment_failure_parts:
-            parts.append("env-import-failures " + ",".join(environment_failure_parts))
-        engine_write_bridge_failed_count = int(
-            latest_report.get("engine_write_bridge_failed_count") or 0
-        )
-        engine_write_bridge_error_code_counts = (
-            latest_report.get("engine_write_bridge_error_code_counts")
-            if isinstance(latest_report.get("engine_write_bridge_error_code_counts"), dict)
-            else {}
-        )
-        engine_write_failure_parts = [
-            f"{safe_label(key)}:{int(value or 0)}"
-            for key, value in sorted(engine_write_bridge_error_code_counts.items())[:3]
-            if str(key).strip() and int(value or 0) > 0
-        ]
-        if engine_write_failure_parts:
-            parts.append("engine-write-failures " + ",".join(engine_write_failure_parts))
-        elif engine_write_bridge_failed_count > 0:
-            parts.append(f"engine-write-failures {engine_write_bridge_failed_count}")
-        engine_write_readiness_mismatch_count = int(
-            latest_report.get("engine_write_readiness_mismatch_count") or 0
-        )
-        engine_write_readiness_mismatch_channels = (
-            latest_report.get("engine_write_readiness_mismatch_channels")
-            if isinstance(latest_report.get("engine_write_readiness_mismatch_channels"), list)
-            else []
-        )
-        engine_write_mismatch_parts = [
-            safe_label(item)
-            for item in engine_write_readiness_mismatch_channels[:4]
-            if safe_label(item)
-        ]
-        if engine_write_readiness_mismatch_count:
-            if engine_write_mismatch_parts:
-                parts.append(
-                    "engine-write-mismatch "
-                    f"{engine_write_readiness_mismatch_count}(" + "/".join(engine_write_mismatch_parts) + ")"
-                )
-            else:
-                parts.append(f"engine-write-mismatch {engine_write_readiness_mismatch_count}")
-        latest_skip = digest.get("latest_disclosure_skip") if isinstance(digest.get("latest_disclosure_skip"), dict) else {}
-        skip_type = safe_label(latest_skip.get("event_type"))
-        skip_audience = safe_label(latest_skip.get("audience"))
-        if skip_type:
-            parts.append(f"latest-skip {skip_type}:{skip_audience or 'unknown'}")
-        return ", ".join(parts)
+        return format_agent_runtime_gm_runtime_event_replay_digest(digest)
 
     @staticmethod
     def _format_agent_runtime_gm_sync_replay_digest(digest: Any) -> str:
-        if not isinstance(digest, dict) or not digest:
-            return "recorded 0, asset progress 0, peer join/leave 0/0, reconcile 0/0"
-        def safe_label(value: Any) -> str:
-            text = str(value or "").strip().replace("_", "-")
-            for marker in ("prompt", "provider", "url", "raw", "token", "api-key", "path", "session", "job"):
-                text = re.sub(marker, "resource", text, flags=re.IGNORECASE)
-            return text[:60]
-
-        recorded_count = int(digest.get("recorded_count") or 0)
-        failed_count = int(digest.get("failed_count") or 0)
-        actor_transform_count = int(digest.get("actor_transform_count") or 0)
-        actor_delete_count = int(digest.get("actor_delete_count") or 0)
-        asset_progress_count = int(digest.get("asset_transfer_progress_count") or 0)
-        asset_completed_count = int(digest.get("asset_transfer_completed_count") or 0)
-        asset_failed_count = int(digest.get("asset_transfer_failed_count") or 0)
-        peer_ready_count = int(digest.get("peer_asset_ready_count") or 0)
-        peer_join_count = int(digest.get("peer_join_count") or 0)
-        peer_leave_count = int(digest.get("peer_leave_count") or 0)
-        sync_reconcile_count = int(digest.get("sync_reconcile_count") or 0)
-        sync_reconcile_failed_count = int(digest.get("sync_reconcile_failed_count") or 0)
-        failure_code_counts = (
-            digest.get("failure_code_counts")
-            if isinstance(digest.get("failure_code_counts"), dict)
-            else {}
-        )
-        failure_codes = ", ".join(
-            f"{safe_label(code)}:{int(count or 0)}"
-            for code, count in sorted(failure_code_counts.items())[:5]
-            if int(count or 0) > 0 and safe_label(code)
-        )
-        latest_failure_code = safe_label(digest.get("latest_failure_code"))
-        parts = [
-            f"recorded {recorded_count}/{failed_count}",
-            f"actor transform/delete {actor_transform_count}/{actor_delete_count}",
-            f"asset progress {asset_progress_count}",
-            f"asset completed/failed {asset_completed_count}/{asset_failed_count}",
-            f"peer-ready {peer_ready_count}",
-            f"peer join/leave {peer_join_count}/{peer_leave_count}",
-            f"reconcile {sync_reconcile_count}/{sync_reconcile_failed_count}",
-            *([f"failure codes {failure_codes}"] if failure_codes else []),
-            *([f"latest failure {latest_failure_code}"] if latest_failure_code else []),
-        ]
-        return "；".join(parts)
+        return format_agent_runtime_gm_sync_replay_digest(digest)
 
     @staticmethod
     def _format_agent_runtime_intervention_digest(digest: Any) -> str:
-        if not isinstance(digest, dict) or not digest:
-            return "pending 0, accepted 0, deferred 0"
-        pending_count = int(digest.get("pending_count") or 0)
-        accepted_count = int(digest.get("accepted_count") or 0)
-        deferred_count = int(digest.get("deferred_count") or 0)
-        absorbable_count = int(digest.get("absorbable_pending_count") or 0)
-        non_absorbable_count = int(digest.get("non_absorbable_pending_count") or 0)
-        parts = [
-            f"pending {pending_count}",
-            f"accepted {accepted_count}",
-            f"deferred {deferred_count}",
-        ]
-        if absorbable_count or non_absorbable_count:
-            parts.append(f"absorbable {absorbable_count}")
-            parts.append(f"needs-confirmation {non_absorbable_count}")
-        return ", ".join(parts)
+        return format_agent_runtime_intervention_digest(digest)
 
     @staticmethod
     def _format_agent_runtime_intervention_summary(interventions: Any) -> str:
-        if not isinstance(interventions, dict):
-            return "鏆傛棤"
-        pending_count = int(interventions.get("pending_count") or 0)
-        accepted_count = int(interventions.get("accepted_count") or 0)
-        deferred_count = int(interventions.get("deferred_count") or 0)
-        parts = [
-            f"寰呭鐞?{pending_count}",
-            f"宸插惛鏀?{accepted_count}",
-            f"寤跺悗 {deferred_count}",
-        ]
-        latest_pending = interventions.get("latest_pending")
-        if isinstance(latest_pending, list) and latest_pending:
-            latest = latest_pending[-1] if isinstance(latest_pending[-1], dict) else {}
-            items = [str(item) for item in (latest.get("items") or []) if str(item)]
-            preview = "、".join(items[:3]) if items else str(latest.get("text") or "").strip()
-            if len(preview) > 48:
-                preview = preview[:48] + "..."
-            if preview:
-                parts.append(f"最近待处理：{preview}")
-        return "；".join(parts)
+        return format_agent_runtime_intervention_summary(interventions)
 
     @staticmethod
     def _format_agent_runtime_intervention_batch_summary(summary: Any) -> str:
-        if not isinstance(summary, dict):
-            return "暂无"
-        batch_count = int(summary.get("batch_count") or 0)
-        status_counts = summary.get("status_counts") if isinstance(summary.get("status_counts"), dict) else {}
-        parts = [f"{batch_count} batch(es)"]
-        if status_counts:
-            parts.append(f"鐘舵€?{status_counts}")
-        latest = summary.get("latest_batches")
-        if isinstance(latest, list) and latest:
-            batch = latest[-1] if isinstance(latest[-1], dict) else {}
-            items = [str(item) for item in (batch.get("requested_items") or []) if str(item)]
-            preview = "、".join(items[:3])
-            if len(items) > 3:
-                preview += f" 等 {len(items)} 项"
-            if preview:
-                parts.append(
-                    f"鏈€杩戠 {batch.get('batch_index') or 0}/{batch.get('total_batches') or 0} 鎵癸細{preview}"
-                )
-        return "；".join(parts)
-
-    @staticmethod
-    def _format_agent_runtime_message_delivery_report(summary: Any, *, redact_agent_reply: bool = False) -> str:
-        if not isinstance(summary, dict):
-            return "暂无"
-        def safe_delivery_label(value: Any) -> str:
-            label = str(value or "").strip()
-            if not label:
-                return ""
-            if not redact_agent_reply:
-                return label
-            replacements = {
-                "agent_reply": "reply",
-                "provider": "adapter",
-                "prompt": "detail",
-                "url": "link",
-                "raw": "payload",
-                "token": "credential",
-                "api-key": "credential",
-            }
-            for marker, replacement in replacements.items():
-                label = re.sub(marker, replacement, label, flags=re.IGNORECASE)
-            return label[:80]
-
-        def safe_failure_label(value: Any) -> str:
-            return safe_delivery_label(value).replace("_", "-")
-
-        requested = int(summary.get("requested_count") or 0)
-        succeeded = int(summary.get("succeeded_count") or 0)
-        failed = int(summary.get("failed_count") or 0)
-        parts = [
-            f"璇锋眰 {requested}",
-            f"鎴愬姛 {succeeded}",
-            f"澶辫触 {failed}",
-        ]
-        message_kind_counts = summary.get("message_kind_counts") if isinstance(summary.get("message_kind_counts"), dict) else {}
-        channel_counts = summary.get("channel_counts") if isinstance(summary.get("channel_counts"), dict) else {}
-        latest_kind = str(summary.get("latest_message_kind") or "").strip()
-        latest_channel = str(summary.get("latest_channel") or "").strip()
-        latest_stage = str(summary.get("latest_stage") or "").strip()
-        latest_progress = summary.get("latest_progress")
-        failure_code_counts = (
-            summary.get("failure_code_counts")
-            if isinstance(summary.get("failure_code_counts"), dict)
-            else {}
-        )
-        failure_codes = ", ".join(
-            f"{safe_failure_label(code)}:{int(count or 0)}"
-            for code, count in sorted(failure_code_counts.items())[:5]
-            if int(count or 0) > 0 and safe_failure_label(code)
-        )
-        latest_failure_code = safe_failure_label(summary.get("latest_failure_code"))
-        if message_kind_counts:
-            safe_kinds = {
-                safe_delivery_label(key): int(value or 0)
-                for key, value in message_kind_counts.items()
-                if safe_delivery_label(key)
-            }
-            parts.append(f"绫诲瀷 {safe_kinds}")
-        if channel_counts:
-            safe_channels = {
-                safe_delivery_label(key): int(value or 0)
-                for key, value in channel_counts.items()
-                if safe_delivery_label(key)
-            }
-            parts.append(f"鍑哄彛 {safe_channels}")
-        if failure_codes:
-            parts.append(f"failure codes {failure_codes}")
-        if latest_failure_code:
-            parts.append(f"latest failure {latest_failure_code}")
-        if latest_kind or latest_channel or latest_stage:
-            latest = safe_delivery_label(latest_kind) or "unknown"
-            if latest_channel:
-                latest += f"/{safe_delivery_label(latest_channel)}"
-            if latest_stage:
-                latest += f"@{safe_delivery_label(latest_stage)}"
-            if isinstance(latest_progress, (int, float)):
-                latest += f" {max(0, min(100, int(latest_progress)))}%"
-            parts.append(f"鏈€杩?{latest}")
-        return "；".join(parts)
+        return format_agent_runtime_intervention_batch_summary(summary)
 
     @staticmethod
     def _format_agent_runtime_event_lines(events: Any) -> list[str]:
@@ -10462,93 +8055,23 @@ class LANChatAgentWorker:
 
     @staticmethod
     def _format_agent_runtime_event_rows(events: Any) -> list[tuple[str, dict[str, Any]]]:
-        if not isinstance(events, list):
-            return []
-        rows: list[tuple[str, dict[str, Any]]] = []
-        for event in events:
-            if not isinstance(event, dict):
-                continue
-            title = str(event.get("title") or "").strip()
-            message = str(event.get("message") or "").strip()
-            if not title and not message:
-                continue
-            progress = event.get("progress")
-            prefix = f"{title}" if title else "状态更新"
-            if isinstance(progress, int):
-                prefix = f"{prefix} {max(0, min(100, progress))}%"
-            if message:
-                rows.append((f"{prefix}: {message}", event))
-            else:
-                rows.append((prefix, event))
-        return rows
+        return format_agent_runtime_event_rows(events)
 
     @classmethod
     def _is_runtime_r3_gate_query(cls, trigger: dict[str, Any]) -> bool:
-        text = str((trigger or {}).get("text") or "").strip()
-        if not text:
-            return False
-        normalized = text.lower().replace(" ", "")
-        is_gm_target = cls._is_gm_target_trigger(trigger) or normalized.startswith("@gm")
-        if not is_gm_target:
-            return False
-        return any(token in normalized for token in (
-            "r3门禁",
-            "r3gate",
-            "r3readiness",
-            "game-ready门禁",
-            "gameready门禁",
-            "就绪门禁",
-        ))
+        return is_runtime_r3_gate_query(trigger)
 
     @classmethod
     def _is_runtime_gm_summary_query(cls, trigger: dict[str, Any]) -> bool:
-        text = str((trigger or {}).get("text") or "").strip()
-        if not text:
-            return False
-        is_gm_target = cls._is_gm_target_trigger(trigger) or text.startswith("@GM")
-        if not is_gm_target:
-            return False
-        summary_tokens = ("总结", "整理", "汇总", "当前方案", "当前共识", "复盘", "gm summary", "runtime summary")
-        status_only_tokens = ("进度", "到哪", "到哪里", "什么情况", "现在情况", "生成到哪里")
-        return any(word in text for word in summary_tokens) and not any(
-            word in text for word in status_only_tokens
-        )
+        return is_runtime_gm_summary_query(trigger)
 
     @classmethod
     def _is_runtime_status_summary_query(cls, trigger: dict[str, Any]) -> bool:
-        text = str((trigger or {}).get("text") or "").strip()
-        if not text:
-            return False
-        is_gm_target = cls._is_gm_target_trigger(trigger) or text.startswith("@GM")
-        if not is_gm_target:
-            return False
-        return any(word in text for word in (
-            "运行时",
-            "进度", "到哪", "到哪里", "什么情况", "现在情况",
-        ))
+        return is_runtime_status_summary_query(trigger)
 
     @staticmethod
     def _is_runtime_status_query_text(text: str) -> bool:
-        value = str(text or "").strip()
-        if not value:
-            return False
-        try:
-            from .intent_understanding import IntentUnderstandingService
-
-            decision = IntentUnderstandingService().classify(
-                value,
-                allow_llm=False,
-                generation_active=False,
-            )
-            return decision.intent == "status_query"
-        except Exception:  # noqa: BLE001
-            return any(word in value for word in (
-                "到哪步", "到哪一步", "到哪里", "生成到哪里", "生成情况", "查看生成情况",
-                "运行时",
-                "运行时",
-                "了解现在的生成方案", "我们开始生成了吗", "现在情况", "什么情况",
-                "情况是什么", "生成计划是什么", "为什么执行生成计划", "现在生成到哪里",
-            ))
+        return is_runtime_status_query_text(text)
 
     @staticmethod
     def _is_gm_target_trigger(trigger: dict[str, Any]) -> bool:
@@ -11314,7 +8837,7 @@ class LANChatAgentWorker:
             message=safe_text,
             message_kind="action_status",
         )
-        if self._corona_engine is None:
+        if not self._runtime_engine_available:
             self._record_coordinator_system_reply_send_in_agent_runtime(
                 phase="coordinator_system_reply_send_failed",
                 room_id=room_id,
@@ -11325,8 +8848,8 @@ class LANChatAgentWorker:
             )
             return False
         try:
-            if hasattr(self._corona_engine, "network_send_system_message_ex"):
-                sent = bool(self._corona_engine.network_send_system_message_ex(
+            if self._lan_chat_transport is not None:
+                sent = bool(self._lan_chat_transport.send_system_message(
                     "system",
                     "系统",
                     safe_text,
@@ -11334,17 +8857,6 @@ class LANChatAgentWorker:
                     reply_to,
                     json.dumps(metadata, ensure_ascii=False),
                 ))
-                self._record_coordinator_system_reply_send_in_agent_runtime(
-                    phase="coordinator_system_reply_send_succeeded" if sent else "coordinator_system_reply_send_failed",
-                    room_id=room_id,
-                    reply_to=reply_to,
-                    message=safe_text,
-                    message_kind="action_status",
-                    sent=sent,
-                )
-                return sent
-            if hasattr(self._corona_engine, "network_send_system_message"):
-                sent = bool(self._corona_engine.network_send_system_message("system", "系统", safe_text))
                 self._record_coordinator_system_reply_send_in_agent_runtime(
                     phase="coordinator_system_reply_send_succeeded" if sent else "coordinator_system_reply_send_failed",
                     room_id=room_id,
@@ -13061,7 +10573,7 @@ class LANChatAgentWorker:
         )
 
     def _emit_collaboration_progress_event(self, event: Any) -> None:
-        if self._corona_engine is None:
+        if not self._runtime_engine_available:
             return
         detail = dict(getattr(event, "detail", None) or {})
         event_payload = {
@@ -13092,8 +10604,8 @@ class LANChatAgentWorker:
             ensure_ascii=False,
         )
         try:
-            if hasattr(self._corona_engine, "network_send_system_message_ex"):
-                self._corona_engine.network_send_system_message_ex(
+            if self._lan_chat_transport is not None:
+                self._lan_chat_transport.send_system_message(
                     "system",
                     "系统",
                     text,
@@ -13101,8 +10613,6 @@ class LANChatAgentWorker:
                     event_payload["event_id"],
                     metadata_json,
                 )
-            elif hasattr(self._corona_engine, "network_send_system_message"):
-                self._corona_engine.network_send_system_message("system", "系统", text)
         except Exception as exc:  # noqa: BLE001
             self._logger.debug(
                 "Failed to emit collaboration progress event: %s",
@@ -13248,10 +10758,15 @@ class LANChatAgentWorker:
         if not wanted:
             return "", ""
         roster = []
-        getter = getattr(self._corona_engine, "network_lanchat_agents_snapshot", None)
+        getter = getattr(self._lan_chat_api, "list_agents", None)
         if callable(getter):
             try:
-                roster = list(getter() or [])
+                result = getter()
+                roster = (
+                    result.get("agents", [])
+                    if isinstance(result, dict)
+                    else list(result or [])
+                )
             except Exception as exc:  # noqa: BLE001
                 self._logger.debug("Failed to read LANChat agent roster: %s", type(exc).__name__)
         for item in roster:
@@ -13392,11 +10907,12 @@ class LANChatAgentWorker:
                 str(payload.get("plan_id") or ""),
             )
             return
-        if hasattr(self._corona_engine, "network_broadcast_intent"):
+        network = self._network_api
+        if network is not None and hasattr(network, "broadcast_intent"):
             source_user_id = str(payload.get("source_user_id") or "unknown")
             tooltip = self._safe_control_text(payload.get("intent_text") or payload.get("proposal_id") or "")
             try:
-                self._corona_engine.network_broadcast_intent(
+                network.broadcast_intent(
                     source_user_id,
                     tooltip,
                     [0.0, 0.0, 0.0],
@@ -13598,7 +11114,7 @@ class LANChatAgentWorker:
             self._emit_generation_scheduler_disclosure()
 
     def _send_runtime_structured_action_reply(self, payload: dict[str, Any], text: str | None) -> bool:
-        if self._corona_engine is None:
+        if not self._runtime_engine_available:
             return False
         safe_text = self._safe_control_text(text or "")
         if not safe_text:
@@ -13612,8 +11128,8 @@ class LANChatAgentWorker:
         }
         correlation_id = str(payload.get("proposal_id") or payload.get("plan_id") or "")
         try:
-            if hasattr(self._corona_engine, "network_send_system_message_ex"):
-                return bool(self._corona_engine.network_send_system_message_ex(
+            if self._lan_chat_transport is not None:
+                return bool(self._lan_chat_transport.send_system_message(
                     "gm-system",
                     "GM",
                     safe_text,
@@ -13621,14 +11137,12 @@ class LANChatAgentWorker:
                     correlation_id,
                     json.dumps(metadata, ensure_ascii=False),
                 ))
-            if hasattr(self._corona_engine, "network_send_system_message"):
-                return bool(self._corona_engine.network_send_system_message("gm-system", "GM", safe_text))
         except Exception as exc:  # noqa: BLE001
             self._logger.debug("Failed to send AgentRuntime structured action reply: %s", type(exc).__name__)
         return False
 
     def _emit_new_disclosure_events(self, coordinator: InteractionCoordinator, start_index: int) -> int:
-        if self._corona_engine is None:
+        if not self._runtime_engine_available:
             return 0
         if hasattr(coordinator, "disclosure_events_since"):
             events, cursor_advance = coordinator.disclosure_events_since(start_index)
@@ -13656,7 +11170,7 @@ class LANChatAgentWorker:
                 }
             metadata = json.dumps(metadata_envelope, ensure_ascii=False)
             try:
-                if hasattr(self._corona_engine, "network_send_system_message_ex"):
+                if self._lan_chat_transport is not None:
                     self._record_disclosure_event_send_in_agent_runtime(
                         phase="disclosure_event_send_requested",
                         payload=payload,
@@ -13664,7 +11178,7 @@ class LANChatAgentWorker:
                         message_kind="action_status",
                         channel="broadcast_ex",
                     )
-                    sent = bool(self._corona_engine.network_send_system_message_ex(
+                    sent = bool(self._lan_chat_transport.send_system_message(
                         "system",
                         "系统",
                         text,
@@ -13678,23 +11192,6 @@ class LANChatAgentWorker:
                         message=text,
                         message_kind="action_status",
                         channel="broadcast_ex",
-                        sent=sent,
-                    )
-                elif hasattr(self._corona_engine, "network_send_system_message"):
-                    self._record_disclosure_event_send_in_agent_runtime(
-                        phase="disclosure_event_send_requested",
-                        payload=payload,
-                        message=text,
-                        message_kind="action_status",
-                        channel="broadcast",
-                    )
-                    sent = bool(self._corona_engine.network_send_system_message("system", "系统", text))
-                    self._record_disclosure_event_send_in_agent_runtime(
-                        phase="disclosure_event_send_succeeded" if sent else "disclosure_event_send_failed",
-                        payload=payload,
-                        message=text,
-                        message_kind="action_status",
-                        channel="broadcast",
                         sent=sent,
                     )
             except Exception as exc:  # noqa: BLE001
@@ -13718,13 +11215,13 @@ class LANChatAgentWorker:
             or "host"
         )
         metadata = json.dumps({"disclosure": payload}, ensure_ascii=False)
-        for method_name in (
-            "network_send_system_message_to_host_ex",
-            "network_send_system_message_to_user_ex",
+        transport = self._lan_chat_transport
+        if transport is None:
+            return False
+        for method_name, sender in (
+            ("network_send_system_message_to_host_ex", transport.send_system_message_to_host),
+            ("network_send_system_message_to_user_ex", transport.send_system_message_to_user),
         ):
-            sender = getattr(self._corona_engine, method_name, None)
-            if not callable(sender):
-                continue
             try:
                 self._record_disclosure_event_send_in_agent_runtime(
                     phase="disclosure_event_send_requested",
@@ -13882,7 +11379,7 @@ class LANChatAgentWorker:
         duration_seconds: float = 30.0,
         interval_seconds: float = 0.05,
     ) -> None:
-        if self._corona_engine is None:
+        if not self._runtime_engine_available:
             return
 
         def _watch() -> None:
@@ -13911,7 +11408,7 @@ class LANChatAgentWorker:
         return str(payload.get("public_message") or "")
 
     def _emit_generation_scheduler_disclosure(self) -> None:
-        if self._corona_engine is None:
+        if not self._runtime_engine_available:
             return
         room_ids = sorted(self._active_room_ids)
         snapshots: list[tuple[str, dict[str, Any]]] = []
@@ -13988,7 +11485,7 @@ class LANChatAgentWorker:
         text = public_message
         disclosure_payload = metadata["disclosure"]
         try:
-            if hasattr(self._corona_engine, "network_send_system_message_ex"):
+            if self._lan_chat_transport is not None:
                 self._record_disclosure_event_send_in_agent_runtime(
                     phase="disclosure_event_send_requested",
                     payload=disclosure_payload,
@@ -13996,7 +11493,7 @@ class LANChatAgentWorker:
                     message_kind="action_status",
                     channel="scheduler_broadcast_ex",
                 )
-                sent = bool(self._corona_engine.network_send_system_message_ex(
+                sent = bool(self._lan_chat_transport.send_system_message(
                     "system",
                     "系统",
                     text,
@@ -14010,23 +11507,6 @@ class LANChatAgentWorker:
                     message=text,
                     message_kind="action_status",
                     channel="scheduler_broadcast_ex",
-                    sent=sent,
-                )
-            elif hasattr(self._corona_engine, "network_send_system_message"):
-                self._record_disclosure_event_send_in_agent_runtime(
-                    phase="disclosure_event_send_requested",
-                    payload=disclosure_payload,
-                    message=text,
-                    message_kind="action_status",
-                    channel="scheduler_broadcast",
-                )
-                sent = bool(self._corona_engine.network_send_system_message("system", "系统", text))
-                self._record_disclosure_event_send_in_agent_runtime(
-                    phase="disclosure_event_send_succeeded" if sent else "disclosure_event_send_failed",
-                    payload=disclosure_payload,
-                    message=text,
-                    message_kind="action_status",
-                    channel="scheduler_broadcast",
                     sent=sent,
                 )
         except Exception as exc:  # noqa: BLE001
@@ -14050,6 +11530,7 @@ class LANChatAgentWorker:
             self._host_action_executor = LanChatHostActionExecutor(
                 corona_engine=self._corona_engine,
                 agent_factory=self._agent_factory or self._default_agent_factory,
+                engine_gate=self._get_engine_write_gate(),
                 structured_action_handler=structured_action_handler,
                 send_audit_callback=self._record_host_action_message_send_in_agent_runtime,
                 allow_legacy_agent_fallback=self._agent_runtime_flags.can_call_legacy_main_workflow(),
@@ -14280,7 +11761,7 @@ class LANChatAgentWorker:
         include_progress: bool = True,
     ) -> None:
         text = self._safe_control_text(str(message or "").strip())
-        if not text or self._corona_engine is None:
+        if not text or not self._runtime_engine_available:
             return
         room = str(room_id or "default")
         stage, progress = self._generation_progress_stage_and_percent(text)
@@ -14322,8 +11803,8 @@ class LANChatAgentWorker:
             disclosure["progress"] = progress
         metadata = json.dumps({"disclosure": disclosure}, ensure_ascii=False)
         try:
-            if hasattr(self._corona_engine, "network_send_system_message_ex"):
-                self._corona_engine.network_send_system_message_ex(
+            if self._lan_chat_transport is not None:
+                self._lan_chat_transport.send_system_message(
                     "system",
                     "系统",
                     text,
@@ -14331,8 +11812,6 @@ class LANChatAgentWorker:
                     event_id,
                     metadata,
                 )
-            elif hasattr(self._corona_engine, "network_send_system_message"):
-                self._corona_engine.network_send_system_message("system", "系统", text)
         except Exception as exc:  # noqa: BLE001
             self._logger.debug("Failed to emit generation progress disclosure: %s", type(exc).__name__)
 

@@ -52,12 +52,32 @@ class FakeEngine:
         return json.dumps({"status": "success", "scene": scene_name, "actor": actor})
 
 
+class FakeEditorApi:
+    def __init__(self, engine: FakeEngine) -> None:
+        self.engine = engine
+        self.scene = self.SceneApi(engine)
+
+    class SceneApi:
+        def __init__(self, engine: FakeEngine) -> None:
+            self.engine = engine
+
+        def get_snapshot(self, scene_name: str) -> str:
+            return self.engine.get_editor_scene_snapshot(scene_name)
+
+        def set_actor_transform(self, scene_name: str, actor_name: str, transform: dict) -> str:
+            return self.engine.set_editor_actor_transform(
+                scene_name,
+                actor_name,
+                json.dumps(transform),
+            )
+
+
 def setup_function() -> None:
-    native_scene_state.CORONA_ENGINE_OVERRIDE = FakeEngine()
+    native_scene_state.EDITOR_API_OVERRIDE = FakeEditorApi(FakeEngine())
 
 
 def teardown_function() -> None:
-    native_scene_state.CORONA_ENGINE_OVERRIDE = None
+    native_scene_state.EDITOR_API_OVERRIDE = None
 
 
 def test_ground_fit_final_adjustment_snaps_native_actor_to_ground() -> None:
@@ -77,7 +97,7 @@ def test_ground_fit_final_adjustment_snaps_native_actor_to_ground() -> None:
 
     applied = session.apply_final_adjustments(report)
 
-    engine = native_scene_state.CORONA_ENGINE_OVERRIDE
+    engine = native_scene_state.EDITOR_API_OVERRIDE.engine
     assert applied[0]["actions"] == ["ground_fit"]
     assert engine.transform_calls
     position = engine.transform_calls[0][2]["geometry"]["position"]

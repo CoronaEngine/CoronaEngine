@@ -4,7 +4,8 @@
 Quasar（一个通用 AI 库）中。
 
 子模块：
-- ``paths_provider``：实现 CAI 路径解析器，转发到 ``editor/config/paths_config``。
+- ``paths_provider``：实现 CAI 路径解析器，转发到 runtime project context 和
+  ``editor/config/paths_config``。
 - ``app_config_provider``：实现 CAI app_config provider，转发到 ``config.app_config``。
 - ``engine_tools``：注册编辑器 / 引擎相关的 MCP / scene_placement loaders。
 - ``flows``：从 CAI 迁出的多步 LangGraph 工作流（场景合成、模型检索等）。

@@ -8014,6 +8014,7 @@ class AgentRuntime:
         registry: ToolRegistry | None = None,
         guard: RuntimeGuard | None = None,
         scene_snapshot_provider: Callable[[str], dict[str, Any]] | None = None,
+        scene_element_classifier: Any = None,
         image_resource_provider: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
         model_resource_provider: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
         environment_component_provider: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
@@ -8035,6 +8036,7 @@ class AgentRuntime:
         self.registry = registry or ToolRegistry()
         self.guard = guard or RuntimeGuard()
         self._scene_snapshot_provider = scene_snapshot_provider
+        self._scene_element_classifier = scene_element_classifier
         self._image_resource_provider = image_resource_provider
         self._model_resource_provider = model_resource_provider
         self._environment_component_provider = environment_component_provider
@@ -22962,6 +22964,17 @@ class AgentRuntime:
             project_mode=project_mode,
         )
 
+        return {
+            "handled": True,
+            "action": "runtime.r3_readiness.evaluate",
+            "recorded": False,
+            "found": bool(snapshot_result.get("found")),
+            "plan_id": target_plan_id,
+            "scene_version": scene_version,
+            "profile": str(profile or "full_r3"),
+            "gate_report": report.as_dict(),
+        }
+
     @staticmethod
     def _ready_image_resource_count(resources: Mapping[str, Any]) -> int:
         return sum(
@@ -22976,17 +22989,6 @@ class AgentRuntime:
             and str(resource.get("content_hash") or "").startswith("sha256:")
             and str(resource.get("prompt_hash") or "").startswith("sha256:")
         )
-        return {
-            "handled": True,
-            "action": "runtime.r3_readiness.evaluate",
-            "recorded": False,
-            "found": bool(snapshot_result.get("found")),
-            "plan_id": target_plan_id,
-            "scene_version": scene_version,
-            "profile": str(profile or "full_r3"),
-            "gate_report": report.as_dict(),
-        }
-
     def audit_scene_world_consistency(
         self,
         *,
@@ -35311,6 +35313,7 @@ class AgentRuntime:
 
         register_agent_runtime_planning_tools(
             self.registry,
+            scene_element_classifier=self._scene_element_classifier,
             image_resource_provider=self._image_resource_provider,
             model_resource_provider=self._model_resource_provider,
             environment_component_provider=self._environment_component_provider,

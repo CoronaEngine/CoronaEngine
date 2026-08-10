@@ -45,7 +45,7 @@
 <script setup>
 import { ref, shallowRef, nextTick, onMounted, onUnmounted } from 'vue';
 import { useI18n } from 'vue-i18n';
-import { appService } from '@/utils/bridge.js';
+import { appService } from '@/services/appService.js';
 import * as THREE from 'three';
 import gsap from 'gsap';
 

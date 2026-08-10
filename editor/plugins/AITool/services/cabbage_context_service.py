@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import configparser
 import json
 import logging
 import os
@@ -17,7 +16,8 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
-from utils.settings import settings_manager
+from api.editor_api import CoronaEditorApi
+from runtime.project_context import get_active_project_path
 
 from .node_graph_review_service import NodeGraphReviewService
 
@@ -1065,14 +1065,11 @@ class CabbageContextService:
 
     @classmethod
     def _active_project_path(cls) -> Path:
-        # settings_manager is the authoritative world resolver. Its property already
-        # hydrates from last_project when no world has been activated yet; forcing
-        # last_project on every request can overwrite a newer in-memory world switch.
-        project_path = settings_manager.active_project_path
+        project_path = get_active_project_path()
         if not project_path:
             raise RuntimeError("当前没有打开世界")
         path = Path(project_path).expanduser().resolve()
-        if not (path / "project.ini").is_file():
+        if not path.is_dir():
             raise RuntimeError("当前世界目录无效")
         return path
 
@@ -1082,17 +1079,19 @@ class CabbageContextService:
 
     @staticmethod
     def _project_goal_metadata(project_path: Path) -> tuple[str, str]:
-        project_file = project_path / "project.ini"
-        if not project_file.is_file():
-            return "", "story"
-        parser = configparser.ConfigParser(interpolation=None)
         try:
-            parser.read(project_file, encoding="utf-8-sig")
-            section = parser["Project"] if parser.has_section("Project") else parser.defaults()
-            prompt = str(section.get("world_prompt") or section.get("prompt") or "").strip()[:4000]
-            mode = str(section.get("mode") or "story").strip().lower()
+            project_info = CoronaEditorApi.project_settings.get_active_project_info()
+            if not isinstance(project_info, dict):
+                return "", "story"
+            reported_path = str(project_info.get("project_path") or "").strip()
+            if reported_path and Path(reported_path).expanduser().resolve() != project_path:
+                return "", "story"
+            prompt = str(
+                project_info.get("world_prompt") or project_info.get("prompt") or ""
+            ).strip()[:4000]
+            mode = str(project_info.get("mode") or "story").strip().lower()
         except Exception:
-            logger.debug("Unable to read world prompt from project.ini: %s", project_file, exc_info=True)
+            logger.debug("Unable to read project goal metadata from native project settings", exc_info=True)
             return "", "story"
         if mode not in {"story", "creative"}:
             mode = "story"
@@ -1587,8 +1586,8 @@ class CabbageContextService:
             goal_plan = None
             if should_start_goal_plan:
                 # The creation page can disappear immediately after opening the world.
-                # Recover from its missed/raced request by treating project.ini as the
-                # durable source of the original world description.
+                # Recover from its missed/raced request by using native project settings
+                # as the durable source of the original world description.
                 goal_plan = self.start_goal_plan({
                     "worldId": project_path.name,
                     "prompt": project_prompt,

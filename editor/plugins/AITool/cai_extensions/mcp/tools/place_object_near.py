@@ -75,8 +75,12 @@ def _build_place_object_near_tool(scene_manager) -> StructuredTool:
     return StructuredTool(name="place_object_near", description="Calculate a placement position from a native reference actor world AABB.", args_schema=PlaceObjectNearInput, func=_place_object_near)
 
 
-def load_place_object_near_tools() -> List[StructuredTool]:
-    from CoronaCore.core.managers import scene_manager
+def load_place_object_near_tools(scene_manager=None) -> List[StructuredTool]:
+    """Register native placement tools without resolving a legacy SceneManager.
+
+    ``scene_manager`` remains an ignored compatibility parameter for old tool
+    registries; all scene reads are performed by ``native_scene_state``.
+    """
     return [_build_place_object_near_tool(scene_manager)]
 
 

@@ -178,7 +178,7 @@ import { computed, onMounted, onUnmounted, reactive, ref } from 'vue';
 import DockTitleBar from '@/components/ui/DockTitleBar.vue';
 import { useDockPanel } from '@/composables/useDockPanel.js';
 import { useErrorHandler } from '@/composables/useErrorHandler.js';
-import { editorApi, sceneService } from '@/utils/bridge.js';
+import { editorApi } from '@/api/editorApi.js';
 import { DEFAULT_SCENE_NAME } from '@/utils/constants.js';
 import { getActorContext } from '@/blockly/composables/useActorContext.js';
 import { cabbageContextService } from '@/services/cabbageAssistantContextService.js';
@@ -202,13 +202,10 @@ const collisionOptions = [
   { value: 'mesh', label: '模型网格' },
 ];
 const transformGroups = [
-  { key: 'position', label: '位置', operation: 'SetPosition', operationCode: 0, step: 0.1 },
-  { key: 'rotation', label: '旋转', operation: 'SetRotation', operationCode: 1, step: 1 },
-  { key: 'scale', label: '缩放', operation: 'SetScale', operationCode: 2, step: 0.05 },
+  { key: 'position', label: '位置', operation: 'SetPosition', step: 0.1 },
+  { key: 'rotation', label: '旋转', operation: 'SetRotation', step: 1 },
+  { key: 'scale', label: '缩放', operation: 'SetScale', step: 0.05 },
 ];
-const transformOperationCodes = Object.fromEntries(
-  transformGroups.map((group) => [group.operation, group.operationCode])
-);
 
 function guidanceKeyForTransform(groupKey, axis) {
   const keys = {
@@ -233,7 +230,7 @@ let loadSequence = 0;
 const updateTimers = new Map();
 const pendingTransformUpdates = new Map();
 let transformFrameId = null;
-let transformBridgeWarningShown = false;
+let transformFlushPromise = Promise.resolve();
 let lastSavedCollision = 'none';
 const TRANSFORM_EPSILON = 1e-5;
 const viewportTransformBaseline = {
@@ -274,7 +271,6 @@ const actor = reactive({
 
 const unwrap = (value) => value?.data ?? value ?? {};
 const aliasDirty = computed(() => aliasDraft.value.trim() !== actor.name);
-const numberAt = (value, index, fallback) => Number(value?.[index] ?? fallback);
 const normalizeCollisionType = (value) => {
   const raw = value?.type ?? value?.shape ?? value;
   if (raw === false || raw === 0) return 'none';
@@ -328,7 +324,7 @@ async function loadActor(sceneName, actorName) {
   selectedSceneName.value = sceneName;
   selectedActorName.value = actorName;
   try {
-    const data = unwrap(await sceneService.getActor(sceneName, actorName));
+    const data = unwrap(await editorApi.scene.getActor(sceneName, actorName));
     if (sequence !== loadSequence || selectedActorName.value !== actorName) return;
     if (!data || data.status === 'error') throw new Error(data?.message || '无法读取对象属性');
     actor.name = String(data.name || actorName);
@@ -358,7 +354,7 @@ async function loadActor(sceneName, actorName) {
     actor.mechanics.linearLock = axes.map((_, index) => Boolean(mechanics.linear_lock?.[index]));
     actor.mechanics.angularLock = axes.map((_, index) => Boolean(mechanics.angular_lock?.[index]));
     const cameraLock = data.camera_lock || {};
-    actor.cameraLock.enabled = Boolean(cameraLock.lock_to_camera);
+    actor.cameraLock.enabled = Boolean(cameraLock.enabled ?? cameraLock.lock_to_camera);
     assignVector(actor.cameraLock.position, cameraLock.position_offset, { x: 0, y: 0, z: 2 });
     aliasDraft.value = actor.name;
     aliasError.value = '';
@@ -386,7 +382,7 @@ async function commitAlias() {
   aliasSaving.value = true;
   aliasError.value = '';
   try {
-    const result = unwrap(await sceneService.renameActor(selectedSceneName.value, currentName, nextName));
+    const result = unwrap(await editorApi.sceneTools.renameActor(selectedSceneName.value, currentName, nextName));
     if (result?.status === 'error') throw new Error(result.message || '修改名称失败');
     const savedName = String(result?.actor?.name || result?.new_name || nextName);
     selectedActorName.value = savedName;
@@ -417,32 +413,32 @@ function schedule(key, callback, delay = 120) {
 
 function flushTransformUpdates() {
   transformFrameId = null;
-  const bridge = window.coronaBridge;
-  if (!bridge || typeof bridge.actorTransform !== 'function') {
-    pendingTransformUpdates.clear();
-    if (!transformBridgeWarningShown) {
-      transformBridgeWarningShown = true;
-      logError('更新对象变换失败', new Error('coronaBridge.actorTransform 不可用'));
-    }
-    return;
-  }
-
-  for (const update of pendingTransformUpdates.values()) {
-    try {
-      bridge.actorTransform(update.handle, update.operationCode, update.vector);
-    } catch (error) {
-      logError('更新对象变换失败', error);
-    }
-  }
+  const updates = Array.from(pendingTransformUpdates.values());
   pendingTransformUpdates.clear();
+  if (!selectedSceneName.value || !selectedActorName.value || updates.length === 0) return;
+
+  transformFlushPromise = Promise.all(
+    updates.map((update) => {
+      const key = update.operation === 'SetPosition'
+        ? 'position'
+        : update.operation === 'SetRotation'
+          ? 'rotation'
+          : 'scale';
+      return editorApi.scene.setActorTransform(
+        selectedSceneName.value,
+        selectedActorName.value,
+        { [key]: update.vector, persist: false },
+      );
+    }),
+  ).catch((error) => {
+    logError('更新对象变换失败', error);
+  });
 }
 
 function scheduleTransform(operation) {
-  const operationCode = transformOperationCodes[operation];
-  if (!selectedActorName.value || !actor.handle || operationCode === undefined) return;
+  if (!selectedActorName.value || !['SetPosition', 'SetRotation', 'SetScale'].includes(operation)) return;
   pendingTransformUpdates.set(operation, {
-    handle: actor.handle,
-    operationCode,
+    operation,
     vector: vectorFor(operation),
   });
   if (transformFrameId === null) {
@@ -459,7 +455,8 @@ async function applyTransform(operation, axis = '') {
   updateTimers.delete(`save:${operation}`);
   schedule(`save:${operation}`, async () => {
     try {
-      await sceneService.saveActor(selectedSceneName.value, selectedActorName.value);
+      await transformFlushPromise;
+      await editorApi.sceneTools.saveActor(selectedSceneName.value, selectedActorName.value);
       const eventType = operation === 'SetPosition'
         ? 'transform_position'
         : operation === 'SetRotation'
@@ -489,7 +486,11 @@ async function setRenderSpace(enabled) {
   const previous = actor.followCamera;
   actor.followCamera = enabled;
   try {
-    await sceneService.actorOperation(selectedSceneName.value, selectedActorName.value, 'SetFollowCamera', [Boolean(enabled)]);
+    await editorApi.sceneTools.setActorState(
+      selectedSceneName.value,
+      selectedActorName.value,
+      { follow_camera: Boolean(enabled) },
+    );
     if (enabled) actor.mechanics.physicsEnabled = false;
   } catch (error) {
     actor.followCamera = previous;
@@ -500,7 +501,7 @@ async function setRenderSpace(enabled) {
 async function selectModelFile() {
   if (!selectedActorName.value) return;
   try {
-    const raw = await sceneService.selectModelFileDialog(selectedSceneName.value, selectedActorName.value, 'model');
+    const raw = await editorApi.sceneTools.selectModelFile(selectedSceneName.value, selectedActorName.value, 'model');
     const payload = unwrap(raw);
     const path = typeof payload === 'string' ? payload : payload?.path || payload?.data || '';
     if (path) actor.modelPath = String(path);
@@ -514,7 +515,7 @@ async function rebindPlaceholderResource() {
   placeholderRebinding.value = true;
   try {
     const selected = unwrap(
-      await sceneService.selectModelFileDialog(
+      await editorApi.sceneTools.selectModelFile(
         selectedSceneName.value,
         selectedActorName.value,
         'model'
@@ -525,7 +526,7 @@ async function rebindPlaceholderResource() {
       : selected?.path || selected?.data || '';
     if (!path) return;
     const result = unwrap(
-      await sceneService.rebindActorResource(
+      await editorApi.sceneTools.rebindActorResource(
         selectedSceneName.value,
         actor.actorGuid,
         path
@@ -543,14 +544,11 @@ async function rebindPlaceholderResource() {
 }
 
 function applyCollisionFast(collisionType) {
-  const bridge = window.coronaBridge;
-  if (!bridge || typeof bridge.setProperty !== 'function' || !actor.handle) return;
-  const value = { none: 0, box: 1, mesh: 2 }[normalizeCollisionType(collisionType)] ?? 1;
-  try {
-    bridge.setProperty(actor.handle, 8, value);
-  } catch (_) {
-    // 慢速 Actor API 仍会负责更新和保存。
-  }
+  return editorApi.sceneTools.setActorPhysics(
+    selectedSceneName.value,
+    selectedActorName.value,
+    { collision_shape: normalizeCollisionType(collisionType) },
+  );
 }
 
 async function updateCollision() {
@@ -558,9 +556,8 @@ async function updateCollision() {
   const previous = lastSavedCollision;
   const selected = normalizeCollisionType(actor.collision);
   actor.collision = selected;
-  applyCollisionFast(selected);
   try {
-    await sceneService.actorOperation(selectedSceneName.value, selectedActorName.value, 'SetCollision', [selected]);
+    await applyCollisionFast(selected);
     lastSavedCollision = selected;
     void cabbageContextService.recordEvent({
       type: 'physics_changed',
@@ -582,8 +579,23 @@ async function updateCollision() {
 
 async function updateMechanic(operation, value) {
   if (!selectedActorName.value) return;
+  const fieldByOperation = {
+    SetPhysicsEnabled: 'physics_enabled',
+    SetMass: 'mass',
+    SetRestitution: 'restitution',
+    SetDamping: 'damping',
+  };
+  const field = fieldByOperation[operation];
+  if (!field) {
+    logError('更新对象物理属性失败', new Error(`Unsupported physics operation: ${operation}`));
+    return;
+  }
   try {
-    await sceneService.actorOperation(selectedSceneName.value, selectedActorName.value, operation, [value]);
+    await editorApi.sceneTools.setActorPhysics(
+      selectedSceneName.value,
+      selectedActorName.value,
+      { [field]: value },
+    );
     void cabbageContextService.recordEvent({
       type: 'physics_changed',
       category: 'physics',
@@ -603,12 +615,16 @@ async function updateMechanic(operation, value) {
 
 async function updateLocks(operation, values) {
   if (!selectedActorName.value) return;
+  const field = operation === 'SetLinearLock' ? 'linear_lock' : operation === 'SetAngularLock' ? 'angular_lock' : null;
+  if (!field) {
+    logError('更新对象轴锁失败', new Error(`Unsupported lock operation: ${operation}`));
+    return;
+  }
   try {
-    await sceneService.actorOperation(
+    await editorApi.sceneTools.setActorPhysics(
       selectedSceneName.value,
       selectedActorName.value,
-      operation,
-      values.map((value) => value ? 1 : 0)
+      { [field]: values.map((value) => Boolean(value)) },
     );
     void cabbageContextService.recordEvent({
       type: 'physics_changed',
@@ -627,7 +643,11 @@ async function updateLocks(operation, values) {
 
 async function updateCameraLock() {
   try {
-    await sceneService.setCameraLock(selectedSceneName.value, selectedActorName.value, actor.cameraLock.enabled);
+    await editorApi.sceneTools.setActorCameraLock(
+      selectedSceneName.value,
+      selectedActorName.value,
+      { enabled: actor.cameraLock.enabled },
+    );
   } catch (error) {
     logError('更新摄像机跟随失败', error);
   }
@@ -635,8 +655,23 @@ async function updateCameraLock() {
 
 async function updateCameraLockOffset() {
   const value = actor.cameraLock.position;
+  const toFinite = (input, fallback) => {
+    const number = Number(input);
+    return Number.isFinite(number) ? number : fallback;
+  };
   try {
-    await sceneService.setCameraLockOffset(selectedSceneName.value, selectedActorName.value, [Number(value.x) || 0, Number(value.y) || 0, Number(value.z) || 0]);
+    await editorApi.sceneTools.setActorCameraLock(
+      selectedSceneName.value,
+      selectedActorName.value,
+      {
+        enabled: true,
+        position_offset: [
+          toFinite(value.x, 0),
+          toFinite(value.y, 0),
+          toFinite(value.z, 2),
+        ],
+      },
+    );
   } catch (error) {
     logError('更新摄像机偏移失败', error);
   }
@@ -646,7 +681,7 @@ async function saveActor() {
   if (!selectedActorName.value || saving.value) return;
   saving.value = true;
   try {
-    await sceneService.saveActor(selectedSceneName.value, selectedActorName.value);
+    await editorApi.sceneTools.saveActor(selectedSceneName.value, selectedActorName.value);
   } catch (error) {
     logError('保存对象失败', error);
   } finally {
@@ -711,7 +746,7 @@ function handleTransform(payload = {}) {
 }
 
 function handleGuidancePrepare(event) {
-  if (event?.detail?.panelId !== 'SceneDatas') return;
+  if (event?.detail?.panelId !== 'Object') return;
   const selectorKey = String(event.detail.selectorKey || '');
   if (selectorKey === 'object-transform' || selectorKey.startsWith('object-position-') || selectorKey.startsWith('object-rotation-') || selectorKey.startsWith('object-scale-')) collapsedSections.transform = false;
   if (selectorKey === 'object-physics' || selectorKey.startsWith('object-physics-')) collapsedSections.physics = false;

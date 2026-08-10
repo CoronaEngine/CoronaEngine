@@ -1,19 +1,39 @@
 # Corona Engine Editor
-- 此仓库为 Corona Engine 的编辑器
-- 前端 Web：
-	- 基于 Node.js（Vue + Tailwind）
-	- 实现基于积木可视化编程（类似 Scratch），积木运行时转为 Python
-- 后端/脚本层 Python：
-	- 基于 MCP 接入大模型
-	- 使用 PySide6 的 QWebEngineView 及 QDockWidget 搭建前端界面布局
-- 底层 C++：
-	- 支持 Python 层的热重载，保存文件自动更新 Python 代码逻辑
-  
-### 环境配置
-- Editor 作为 CoronaEngine 的内置模块构建，不再维护独立的一键构建入口。
-- Python 依赖由顶层 CMake 检查 `editor/requirements.txt`。
-- 前端构建由顶层 CMake post-build 步骤触发，使用 `third_party/node-v22.19.0-win-x64` 中的 Node/npm。
-- 程序入口为 `main.py`，运行时由引擎从 `CabbageEditor/` 目录加载。
-- Blockly 生成脚本位于运行时的 `Backend/script/`。
-- 编辑器专项文档统一维护在 `../docs/editor/`。
 
+`editor` 是嵌入引擎进程的编辑器运行时和 UI 工程，不是独立 Web 后端。
+
+Python 负责 AI/Agent、角色脚本、Blockly/Scratch 和自动化；C++ 持有场景、Actor、资源、
+变换和 revision 的权威状态；Vue 负责页面、输入和结果展示。跨层业务只能调用同一份
+C++ manifest 聚合契约，Vue/Python 只做薄适配，不直接暴露 `camera()`、`geometry()` 等
+引擎底层对象。
+
+## 入口文档
+
+- [ARCHITECTURE.md](ARCHITECTURE.md)：层次、目录职责和依赖方向。
+- [API_OWNERSHIP.md](API_OWNERSHIP.md)：公共业务语义的 owner 和调用规则。
+- [config/BOUNDARY.md](config/BOUNDARY.md)：路径、活动项目和配置边界。
+- [runtime/BOUNDARY.md](runtime/BOUNDARY.md)：Python host、registry 和生命周期。
+- [script_runtime/BOUNDARY.md](script_runtime/BOUNDARY.md)：受限角色脚本与 Blockly 运行时。
+- [plugins/BOUNDARY.md](plugins/BOUNDARY.md)：编辑器插件边界。
+- [Frontend/src/BOUNDARY.md](Frontend/src/BOUNDARY.md)：Vue 源码目录和依赖方向。
+
+## 目录职责
+
+| 目录 | 职责 |
+|---|---|
+| `Frontend` | Vue 页面、输入交互、JS manifest adapter |
+| `api` | Python 对 C++ manifest 的唯一公共契约 adapter |
+| `config` | 路径、活动项目和应用配置 |
+| `runtime` | 嵌入式 Python host、服务注册和生命周期 |
+| `script_runtime` | 受限角色脚本、Blockly 编排和生成脚本执行 |
+| `plugins` | MainView、SceneTools、AITool、ProjectLauncher 等业务插件 |
+| `data` | native 项目运行时数据，不是 Python 业务 owner |
+
+`runtime/generated` 只保存 Blockly/Scratch 生成物；旧 backend、CoronaCore、CoronaPlugin、
+utils 和 scripts 兼容目录已删除，新增代码不得重新引入这些路径。
+
+## API 规则
+
+C++ manifest 是契约唯一来源。Python 使用 `api.editor_api.CoronaEditorApi`，Vue 使用
+Frontend manifest facade，Script Runtime 使用受限 `script_runtime.manifest_adapter`。
+三者共享 schema，但不复制业务状态机；场景事实始终由 C++ 持有。

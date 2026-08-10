@@ -1812,14 +1812,10 @@ def _capture_viewport_snapshot(composer: Any) -> Dict[str, Any]:
 
 
 def _get_current_scene() -> Any:
-    """Return the active/default Corona scene using the public scene_manager API."""
-    from CoronaCore.core.managers import scene_manager
+    """Return the shared native scene value object."""
+    from ..mcp.tools.native_scene_state import resolve_native_scene_value
 
-    scene = scene_manager.get("")
-    if scene is not None:
-        return scene
-    routes = scene_manager.list_all()
-    return scene_manager.get(routes[0]) if routes else None
+    return resolve_native_scene_value("")
 
 
 def _actor_name(actor: Any) -> str:

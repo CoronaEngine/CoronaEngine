@@ -1,4 +1,4 @@
-import { aiService } from '@/utils/bridge.js';
+import { aiService } from '@/services/aiService.js';
 import { createServiceResponseError } from '@/utils/serviceInitialization.js';
 
 const CHANNEL_NAME = 'corona-cabbage-assistant-context-v2';

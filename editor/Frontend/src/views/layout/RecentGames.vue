@@ -104,7 +104,8 @@
 <script setup>
 import { ref, onMounted, onUnmounted } from 'vue';
 import { useRouter } from 'vue-router';
-import { projectLauncherService } from '@/utils/bridge';
+import { editorApi } from '@/api/editorApi.js';
+import { projectLauncherService } from '@/services/projectLauncherService.js';
 
 const router = useRouter();
 
@@ -120,14 +121,14 @@ const goBack = () => {
 
 onMounted(async () => {
   try {
-    const version = await projectLauncherService.getAppVersion();
+    const version = await editorApi.project.getAppVersion();
     if (version) appVersion.value = version.data;
 
-    const saved = await projectLauncherService.getRecentProjects();
+    const saved = await editorApi.project.getRecentProjects();
     if (saved) recentProjects.value = saved.data;
 
     const refreshArchiveReady = async () => {
-      const response = await projectLauncherService.getProjectLoadStatus();
+      const response = await editorApi.project.getProjectLoadStatus();
       const status = unwrapResponse(response);
       archiveReady.value = status?.archive_service_ready === true;
     };
@@ -166,7 +167,7 @@ const openSelectedProject = () => {
 const migrateLegacyProject = async (project) => {
   if (!project?.path || !project.if_exists || !project.legacy) return false;
   try {
-    const selected = await projectLauncherService.choosePortableSceneTarget();
+    const selected = await editorApi.project.choosePortableSceneTarget();
     const targetPath = unwrapResponse(selected);
     if (!targetPath) return false;
 
@@ -246,7 +247,7 @@ const handleOpenProject = async (path, project = null) => {
 
 const handleImport = async () => {
   try {
-    const result = await projectLauncherService.openProjectFile();
+    const result = await editorApi.project.openProjectFile();
     if (result?.data?.path) {
       await handleOpenProject(result.data.path);
     }

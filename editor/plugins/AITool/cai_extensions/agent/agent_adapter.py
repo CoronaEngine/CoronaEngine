@@ -71,6 +71,23 @@ def _legacy_main_workflow_allowed() -> bool:
     except Exception:  # noqa: BLE001
         return False
 
+
+def _get_runtime_scene_actors() -> list[Any]:
+    """Read actors from the authoritative native scene snapshot."""
+    try:
+        try:
+            from plugins.AITool.cai_extensions.mcp.tools.native_scene_state import (
+                native_actor_views,
+            )
+        except ModuleNotFoundError:
+            from ..mcp.tools.native_scene_state import (  # type: ignore
+                native_actor_views,
+            )
+
+        return list(native_actor_views(""))
+    except Exception:
+        return []
+
 # ═══════════════════════════════════════════════════════════════════════════
 # 场景指令检测
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1436,21 +1453,13 @@ class MasterAgent:
             return AGENT_RUNTIME_REQUIRED_MESSAGE
 
         # 1. 取真实 actor 列表（含 __shell_，排除 __room_/__interior_ 基础设施）
-        try:
-            from CoronaCore.core.managers import scene_manager
-            sc = scene_manager.get("")
-            if sc is None:
-                routes = scene_manager.list_all()
-                sc = scene_manager.get(routes[0]) if routes else None
-        except Exception as e:
-            logger.warning("[MasterAgent] edit: 无法访问场景: %s", e)
-            sc = None
-        if sc is None:
+        native_actors = _get_runtime_scene_actors()
+        if not native_actors:
             return "⚠️ 当前没有可编辑的场景，请先生成一个场景。"
 
         editable_actors = []
         actors_lines = []
-        for a in sc.get_actors():
+        for a in native_actors:
             nm = a.name
             # 基础设施 actor（地形/草原/盒子/内皮地面）默认不进 AI 编辑列表（选项 B）：
             # 草原由建筑足迹自动派生（terrain=platform_radius×8），手动改它既歧义
@@ -1750,19 +1759,14 @@ class MasterAgent:
         sender = self._extract_sender(messages)
 
         # 注入引擎场景中已有的物体列表（供 LLM 感知当前状态，实现渐进式交互）
+        native_actors = _get_runtime_scene_actors()
         try:
-            from CoronaCore.core.managers import scene_manager
-            sc = scene_manager.get("")
-            if sc is None:
-                routes = scene_manager.list_all()
-                sc = scene_manager.get(routes[0]) if routes else None
-            if sc is not None:
-                actors = [{"name": a.name, "position": list(a.get_position())}
-                          for a in sc.get_actors()
-                          if not a.name.startswith("__room_")]
-                if actors:
-                    scene_state.setdefault("intermediate", {})["locked_actors"] = actors
-                    logger.info("[MasterAgent] scene: 注入 %d 个已有物体到 LLM 上下文", len(actors))
+            actors = [{"name": a.name, "position": list(a.get_position())}
+                      for a in native_actors
+                      if not a.name.startswith("__room_")]
+            if actors:
+                scene_state.setdefault("intermediate", {})["locked_actors"] = actors
+                logger.info("[MasterAgent] scene: 注入 %d 个已有物体到 LLM 上下文", len(actors))
         except Exception:
             pass
 

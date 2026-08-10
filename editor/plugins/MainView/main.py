@@ -1,351 +1,133 @@
+"""MainView's legacy-host adapter over the native main/scene contracts."""
+
 import json
 import logging
 import os
-import sys
-from typing import Dict, List, Any, Optional
+from typing import Optional
 
-from CoronaCore.core.corona_editor import CoronaEditor
-from CoronaPlugin.core.corona_plugin_base import PluginBase
-from CoronaCore.core.managers import scene_manager
-from CoronaCore.utils.proejct_utils import (
-    create_scene_from_template,
-    get_project_scenes,
-    set_project_scenes,
-)
-from utils.settings import core_path, settings_manager
-from plugins.SceneTools.main import SceneTools
+from api.editor_api import CoronaEditorApi
+from runtime.editor_host import emit_editor_event
+from runtime.plugin_base import PluginBase
+from config.paths_config import get_default_paths
+
+core_path = get_default_paths()
 
 logger = logging.getLogger(__name__)
 
 
 @PluginBase.register_web("MainView")
 class MainView(PluginBase):
+    @staticmethod
+    def _active_project_path() -> str:
+        try:
+            info = CoronaEditorApi.project_settings.get_active_project_info()
+        except Exception:
+            return ""
+        return info.get("project_path", "") if isinstance(info, dict) else ""
 
     @staticmethod
     def _normalize_scene_path(scene_path: str) -> str:
         scene_path = (scene_path or "").strip().replace("\\", "/")
-        project_path = settings_manager.active_project_path
+        project_path = MainView._active_project_path()
         if project_path and os.path.isabs(scene_path):
             scene_path = os.path.relpath(scene_path, project_path).replace("\\", "/")
         return scene_path
 
     @staticmethod
-    def _sync_project_field(key: str, value: str) -> None:
-        config = settings_manager.active_project_config
-        if config is None:
-            return
-        if "Project" not in config:
-            config["Project"] = {}
-        config["Project"][key] = value
-
-    @staticmethod
-    def _write_project_scenes(ini_path: str, scenes: List[str]) -> None:
-        normalized = [MainView._normalize_scene_path(scene) for scene in scenes if scene]
-        set_project_scenes(ini_path, normalized)
-        MainView._sync_project_field("scenes", ",".join(normalized))
-
-    @staticmethod
-    def _project_scene_file(scene_path: str) -> Optional[str]:
-        project_path = settings_manager.active_project_path
-        scene_path = MainView._normalize_scene_path(scene_path)
-        if not project_path or not scene_path.lower().endswith(".scene"):
-            return None
-
-        scene_file = os.path.abspath(os.path.join(project_path, scene_path))
-        scene_dir = os.path.abspath(os.path.join(project_path, "Scene"))
-        try:
-            if os.path.commonpath([scene_file, scene_dir]) != scene_dir:
-                return None
-        except ValueError:
-            return None
-        return scene_file
-
-    @staticmethod
-    def _apply_vision_source_for_scene(scene) -> None:
-        try:
-            if not CoronaEditor.CoronaEngine.is_vision_available():
-                return
-            if getattr(scene, "vision_document", None):
-                if not getattr(scene, "vision_bindings", []) and hasattr(scene, "get_actors"):
-                    result = SceneTools.import_embedded_vision_scene_into_current_scene(scene.route)
-                    if isinstance(result, dict) and result.get("status") == "success":
-                        return
-                CoronaEditor.CoronaEngine.load_vision_scene(
-                    SceneTools.prepare_external_live_vision_scene(scene))
-                return
-            source_path = getattr(scene, "vision_source_path", "") or ""
-            import_mode = getattr(scene, "vision_import_mode", "") or ""
-            if source_path and import_mode == "external_live":
-                # Legacy .scene files persisted only a Vision file path. Import once
-                # so the CoronaEngine scene owns the embedded Vision document.
-                SceneTools.import_vision_scene_into_current_scene(scene.route, source_path)
-            elif source_path and import_mode == "external":
-                CoronaEditor.CoronaEngine.load_vision_scene(source_path)
-            else:
-                CoronaEditor.CoronaEngine.load_vision_scene("")
-        except Exception:
-            logger.exception("Failed to apply Vision source for scene %s", getattr(scene, "route", ""))
-
-    @staticmethod
-    def _save_project_field(key: str, value: str) -> None:
-        MainView._sync_project_field(key, value)
-        settings_manager.save_active_project_info()
-
-    @staticmethod
-    def _discard_python_runtime_scene(scene_name: str) -> None:
-        scene = scene_manager.get(scene_name)
-        if scene is not None:
-            try:
-                scene.set_enabled(False)
-            except Exception:
-                logger.debug("Failed to disable Python runtime scene %s", scene_name, exc_info=True)
-        try:
-            scene_manager.remove(scene_name)
-        except Exception:
-            logger.debug("Failed to discard Python runtime scene %s", scene_name, exc_info=True)
-
-    @staticmethod
     def on_init(project_path: str = ""):
-        requested_path = os.path.abspath(os.path.expanduser(str(project_path or "").strip())) if project_path else ""
-        current_path = settings_manager.active_project_path or ""
-        if requested_path:
-            current_id = os.path.normcase(os.path.abspath(current_path)) if current_path else ""
-            requested_id = os.path.normcase(requested_path)
-            if current_id != requested_id and not settings_manager.set_active_project(requested_path):
-                raise ValueError(f"无法激活目标项目: {requested_path}")
-
-        project_path = settings_manager.active_project_path
-        project_config_root = settings_manager.active_project_config
-        if not project_path or project_config_root is None or 'Project' not in project_config_root:
-            raise ValueError("当前项目尚未完成激活")
-        ini_path = os.path.join(project_path, 'project.ini')
-        project_config = project_config_root['Project']
-        default_scene = MainView._normalize_scene_path(project_config.get('entrance_scene', ''))
-        active_scene = MainView._normalize_scene_path(project_config.get('active_scene', default_scene))
-
-        # 从 project.ini 读取有序场景列表
-        ini_scenes = [MainView._normalize_scene_path(s) for s in get_project_scenes(ini_path)] if ini_path else []
-
-        # 首次加载： ini 内没有列表时，自动扫描 Scene 目录并写回 ini
-        if not ini_scenes and project_path:
-            scene_dir = os.path.join(project_path, 'Scene')
-            if os.path.isdir(scene_dir):
-                ini_scenes = [
-                    f'Scene/{f}'
-                    for f in sorted(os.listdir(scene_dir))
-                    if f.endswith('.scene')
-                ]
-            # 确保入口场景在列表中，且处于首位
-            if default_scene and default_scene not in ini_scenes:
-                ini_scenes.insert(0, default_scene)
-            elif default_scene and ini_scenes[0] != default_scene:
-                ini_scenes.remove(default_scene)
-                ini_scenes.insert(0, default_scene)
-            if ini_path:
-                MainView._write_project_scenes(ini_path, ini_scenes)
-
-        # 按 ini 列表顺序创建/获取场景对象，稍后按 active_scene 激活
-        scenes = []
-        for route in ini_scenes:
-            try:
-                s = scene_manager.get_or_create(route)
-                scenes.append({"path": s.route, "name": s.name})
-            except Exception as e:
-                logger.warning("加载场景 '%s' 失败，已跳过：%s", route, e)
-
-        # 如果列表为空，则使用入口场景兜底
-        if not scenes and default_scene:
-            s = scene_manager.get_or_create(default_scene)
-            scenes.insert(0, {"path": s.route, "name": s.name})
-            if ini_path:
-                MainView._write_project_scenes(ini_path, [default_scene])
-
-        scene_paths = [s['path'] for s in scenes]
-        if active_scene not in scene_paths:
-            active_scene = default_scene if default_scene in scene_paths else (scene_paths[0] if scene_paths else "")
-
-        for route in scene_paths:
-            scene = scene_manager.get(route)
-            if scene:
-                scene.set_enabled(route == active_scene)
-                if route == active_scene:
-                    MainView._apply_vision_source_for_scene(scene)
-
-        if active_scene:
-            MainView._save_project_field("active_scene", active_scene)
-
-        active_index = next((i for i, s in enumerate(scenes) if s['path'] == active_scene), 0)
-        return {"scenes": scenes, "active_index": active_index}
+        result = CoronaEditorApi.main.on_init(project_path)
+        if not isinstance(result, dict) or result.get("status") != "success":
+            message = result.get("message", "初始化场景失败") if isinstance(result, dict) else "初始化场景失败"
+            raise RuntimeError(message)
+        return {"scenes": result.get("scenes", []), "active_index": result.get("active_index", 0)}
 
     @staticmethod
     def create_new_scene(scene_name: str) -> dict:
-        """在项目文件夹中创建场景文件，然后初始化引擎场景"""
-        project_path = settings_manager.active_project_path
-        if not project_path:
-            raise ValueError("没有打开的项目")
-
-        scene_dir = os.path.join(project_path, "Scene")
-        actual_filename = create_scene_from_template(scene_dir, scene_name)
-        route = f"Scene/{actual_filename}"
-
-        scene = scene_manager.get_or_create(route)
-        scene.ensure_default_camera()
-
-        # 将新场景追加写入 project.ini
-        ini_path = os.path.join(project_path, 'project.ini')
-        scenes = [MainView._normalize_scene_path(s) for s in get_project_scenes(ini_path)]
-        if route not in scenes:
-            scenes.append(route)
-            MainView._write_project_scenes(ini_path, scenes)
-
+        result = CoronaEditorApi.main.create_scene(scene_name)
+        if not isinstance(result, dict) or result.get("status") != "success":
+            message = result.get("message", "创建场景失败") if isinstance(result, dict) else "创建场景失败"
+            raise RuntimeError(message)
+        route = MainView._normalize_scene_path(result.get("path", ""))
+        if not route:
+            raise RuntimeError("native create_scene returned no scene path")
+        scene_display_name = result.get("name") or os.path.splitext(os.path.basename(route))[0]
         logger.info("New scene file created: %s -> %s", scene_name, route)
-        return {"path": route, "name": scene.name}
+        return {"path": route, "name": scene_display_name}
 
     @staticmethod
     def remove_scene(scene_path: str) -> dict:
-        """从 project.ini 的 scenes 列表中移除指定场景，并禁用其引擎对象"""
-        project_path = settings_manager.active_project_path
-        if not project_path:
-            raise ValueError("没有打开的项目")
-
-        ini_path = os.path.join(project_path, 'project.ini')
         scene_path = MainView._normalize_scene_path(scene_path)
-        scenes = [MainView._normalize_scene_path(s) for s in get_project_scenes(ini_path)]
-        if scene_path in scenes:
-            scenes.remove(scene_path)
-            MainView._write_project_scenes(ini_path, scenes)
-
-        scene = scene_manager.get(scene_path)
-        if scene:
-            scene.set_enabled(False)
-            scene_manager.remove(scene_path)
-
-        project_config = settings_manager.active_project_config['Project']
-        active_scene = MainView._normalize_scene_path(project_config.get('active_scene', ''))
-        entrance_scene = MainView._normalize_scene_path(project_config.get('entrance_scene', ''))
-        fallback_scene = scenes[0] if scenes else ""
-
+        index = CoronaEditorApi.main.on_init()
+        scenes = index.get("scenes", []) if isinstance(index, dict) else []
+        scene_paths = [
+            MainView._normalize_scene_path(item.get("path", ""))
+            for item in scenes
+            if isinstance(item, dict)
+        ]
+        fallback_scene = next((route for route in scene_paths if route != scene_path), "")
+        active_scene = MainView._normalize_scene_path(index.get("active_scene", "")) if isinstance(index, dict) else ""
         if active_scene == scene_path:
-            MainView._save_project_field("active_scene", fallback_scene)
-        if entrance_scene == scene_path:
-            MainView._save_project_field("entrance_scene", fallback_scene)
-
-        deleted_file = False
-        scene_file = MainView._project_scene_file(scene_path)
-        if scene_file and os.path.exists(scene_file):
-            try:
-                os.remove(scene_file)
-                deleted_file = True
-            except OSError as exc:
-                logger.exception("Failed to delete scene file: %s", scene_file)
-                return {"status": "error", "path": scene_path, "message": str(exc)}
-
+            if not fallback_scene or not MainView.switch_scene(active_scene, fallback_scene):
+                return {"status": "error", "path": scene_path, "message": "Cannot remove the active scene without a fallback scene"}
+        result = CoronaEditorApi.main.remove_scene(scene_path)
+        if not isinstance(result, dict) or result.get("status") != "success":
+            return result if isinstance(result, dict) else {"status": "error", "path": scene_path, "message": "删除场景失败"}
         logger.info("Scene removed from project: %s", scene_path)
-        return {"status": "success", "path": scene_path, "deleted_file": deleted_file}
+        return {**result, "status": "success", "path": scene_path, "deleted_file": bool(result.get("deleted_file"))}
 
     @staticmethod
     def switch_scene(current_scene_path: str, to_scene_path: str) -> bool:
-        current_scene_path = MainView._normalize_scene_path(current_scene_path)
         to_scene_path = MainView._normalize_scene_path(to_scene_path)
         if not to_scene_path:
             logger.warning("switch_scene ignored empty target scene")
             return False
-
-        # 隐藏当前场景（仅禁用，不销毁任何 C++ 对象，避免 ProfileDevice 中的 handle 失效）
-        if current_scene_path:
-            now_scene = scene_manager.get(current_scene_path)
-            if now_scene:
-                now_scene.save_data()
-                now_scene.set_enabled(False)
-
-        # 激活目标场景（若首次访问则自动创建并加载 actors）
-        scene = scene_manager.get_or_create(to_scene_path)
-        scene.set_enabled(True)
-        MainView._apply_vision_source_for_scene(scene)
-
-        CoronaEditor.emit_editor_event("actor-change", ['scene', scene.route, ""])
-        MainView._save_project_field("active_scene", scene.route)
+        result = CoronaEditorApi.scene_tools.reload_scene(to_scene_path)
+        if not isinstance(result, dict) or result.get("status") != "success":
+            logger.warning("Native scene switch failed: %s", result)
+            return False
+        scene_route = MainView._normalize_scene_path(result.get("scene") or to_scene_path)
+        if not scene_route:
+            logger.warning("Native scene switch returned no scene route")
+            return False
+        emit_editor_event("actor-change", ["scene", scene_route, ""])
         return True
 
     @staticmethod
     def scene_save(scene_name: str) -> str:
         try:
-            scene = scene_manager.get(scene_name)
-            if scene is None:
-                return json.dumps({
-                    "status": "error",
-                    "message": f"Scene '{scene_name}' not found",
-                })
-            scene.save_data()
-            route = getattr(scene, "route", scene_name)
-            if route and os.path.isabs(route):
-                save_path = route
-            else:
-                project_path = settings_manager.active_project_path or ""
-                save_path = os.path.abspath(os.path.join(project_path, route or scene_name))
-            return json.dumps({
-                "status": "success",
-                "filepath": save_path,
-                "format": "corona_scene",
-            })
+            return json.dumps(CoronaEditorApi.main.scene_save(scene_name), ensure_ascii=False)
         except Exception as exc:
             return json.dumps({"status": "error", "message": str(exc)})
 
     @staticmethod
     def run_project(scene_path: Optional[str] = None) -> dict:
-        """
-        运行项目或场景。
-        如果传入 scene_path，则运行指定场景；否则运行整个项目。
-        同时加载并执行 Backend/runScript.py（由 Blockly 积木编辑器生成）。
-        """
-        import importlib
-
         try:
             if scene_path:
-                scene = scene_manager.get(scene_path)
-                if not scene:
-                    return {"status": "error", "message": f"场景不存在: {scene_path}"}
-                scene_name = scene.name
-                logger.info(f"开始运行场景: {scene_name}")
+                snapshot = CoronaEditorApi.scene.get_snapshot(scene_path)
+                if not isinstance(snapshot, dict) or snapshot.get("status") == "error":
+                    message = snapshot.get("message", f"场景不存在: {scene_path}") if isinstance(snapshot, dict) else f"场景不存在: {scene_path}"
+                    return {"status": "error", "message": message}
+                scene_name = snapshot.get("scene_name") or snapshot.get("scene") or scene_path
+                logger.info("开始运行场景: %s", scene_name)
             else:
-                project_name = settings_manager.active_project_config['Project']['entrance_scene']
-                scene_name = project_name
+                index = CoronaEditorApi.main.on_init()
+                if not isinstance(index, dict) or index.get("status") != "success":
+                    return {"status": "error", "message": "当前项目尚未完成初始化"}
+                scene_name = index.get("entrance_scene") or index.get("active_scene")
+                if not scene_name:
+                    return {"status": "error", "message": "当前项目没有入口场景"}
                 logger.info("开始运行项目...")
-
-            # ── 执行 Blockly 生成的脚本（如果存在） ──
             blockly_result = None
-            run_script_path = core_path.repo_root / "Backend" / "runScript.py"
-            if run_script_path.exists():
-                try:
-                    # 清除旧模块缓存，确保加载最新版本
-                    modules_to_clear = [
-                        name for name in sys.modules.keys()
-                        if name.startswith('Backend.script.blockly_code')
-                           or name in ('Backend.runScript', 'runScript')
-                    ]
-                    for mod_name in modules_to_clear:
-                        del sys.modules[mod_name]
-
-                    # 确保 repo_root 在 sys.path 中
-                    backend_root = str(core_path.repo_root)
-                    if backend_root not in sys.path:
-                        sys.path.insert(0, backend_root)
-
-                    from Backend import runScript
-                    importlib.reload(runScript)
-                    runScript.run()
-                    logger.debug("Blockly 脚本执行完成")
-                    blockly_result = "executed"
-                except Exception as e:
-                    logger.exception(f"Blockly 脚本执行失败: {e}")
-                    blockly_result = f"error: {e}"
-
-            return {
-                "status": "success",
-                "type": "scene" if scene_path else "project",
-                "scene_name": scene_name,
-                "blockly_result": blockly_result,
-            }
+            try:
+                from script_runtime.runner import run_generated_script
+                run_generated_script(core_path.repo_root)
+                blockly_result = "executed"
+            except Exception as exc:
+                logger.exception("Blockly 脚本执行失败: %s", exc)
+                blockly_result = f"error: {exc}"
+            return {"status": "success", "type": "scene" if scene_path else "project", "scene_name": scene_name, "blockly_result": blockly_result}
         except Exception as exc:
-            logger.error(f"运行失败: {str(exc)}")
+            logger.error("运行失败: %s", exc)
             return {"status": "error", "message": str(exc)}
+
+__all__ = ["MainView", "core_path"]

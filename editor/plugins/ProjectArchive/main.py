@@ -1,8 +1,14 @@
+"""Project archive migration facade.
+
+Archive format parsing belongs to :mod:`runtime.archive`; this plugin owns
+only the historical request facade and its load-policy/diagnostic mapping.
+"""
+
 from __future__ import annotations
 
-from CoronaCore.archive.errors import ArchiveParseError
-from CoronaCore.archive.parser import parse_archive
-from CoronaPlugin.core.corona_plugin_base import PluginBase
+from runtime.archive.errors import ArchiveParseError
+from runtime.archive.parser import parse_archive
+from runtime.plugin_base import PluginBase
 
 
 @PluginBase.register_web("ProjectArchive")
@@ -51,3 +57,5 @@ class ProjectArchive(PluginBase):
             "snapshot": snapshot,
             "diagnostics": diagnostics,
         }
+
+__all__ = ["ProjectArchive"]

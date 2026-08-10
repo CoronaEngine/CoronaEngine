@@ -33,10 +33,7 @@ from .retrieve import retrieve_node
 from .six_view_capture_tool import six_view_capture_tool_node
 from .visual_review import visual_review_node
 
-try:
-    from .test_cases import TEST_CASES
-except ImportError:
-    TEST_CASES = {}
+TEST_CASES = {}
 
 if TYPE_CHECKING:
     from langgraph.graph.state import CompiledStateGraph

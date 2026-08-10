@@ -38,7 +38,7 @@ export default {
   plugins: {
     SceneTools: 'Scene Manager',
     LightFieldCalibration: 'Light Field 3D UI Calibration',
-    SceneDatas: 'Object',
+    Object: 'Object',
     AITool: 'Cabbage Assistant',
     LogTool: 'Log Tool',
     FileManager: 'File Manager',

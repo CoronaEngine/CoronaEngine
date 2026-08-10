@@ -137,7 +137,8 @@
 
 <script setup>
 import { ref, onMounted, nextTick } from 'vue';
-import { fileService, projectLauncherService } from '@/utils/bridge';
+import { editorApi } from '@/api/editorApi.js';
+import { projectLauncherService } from '@/services/projectLauncherService.js';
 import { useDockPanel } from '@/composables/useDockPanel.js';
 import DockTitleBar from '@/components/ui/DockTitleBar.vue';
 import FileTreeNode from '@/components/ui/FileTreeNode.vue';
@@ -162,7 +163,7 @@ const dialog = ref({
 const migrateLegacyScene = async () => {
   const sourcePath = window.localStorage?.getItem('corona.activeProjectPath') || '';
   if (!sourcePath) return;
-  const selected = await projectLauncherService.choosePortableSceneTarget();
+  const selected = await editorApi.project.choosePortableSceneTarget();
   const targetPath = selected?.data ?? selected;
   if (!targetPath) return;
   const result = await projectLauncherService.migrateLegacyScene({
@@ -187,7 +188,7 @@ const migrateLegacyScene = async () => {
 // 加载文件树
 const loadFileTree = async () => {
   loading.value = true;
-  const res = await fileService.getFileTree('');
+  const res = await editorApi.files.getFileTree('');
   if (res && res.data) {
     fileTree.value = res.data;
   }
@@ -196,7 +197,7 @@ const loadFileTree = async () => {
 
 // 初始化
 const init = async () => {
-  const info = await fileService.getProjectInfo();
+  const info = await editorApi.files.getProjectInfo();
   if (info?.data?.exists) {
     projectName.value = info.data.name;
     await loadFileTree();
@@ -216,9 +217,9 @@ const handleNodeClick = (node) => {
 const handleNodeDblClick = (node) => {
   if (!node.isDirectory) {
     if (node.name.endsWith('.scene')) {
-      fileService.openFile(node.path, 'scene');
+      editorApi.files.openFile(node.path, 'scene');
     } else if (node.name.endsWith('.actor')) {
-      fileService.openFile(node.path, 'actor');
+      editorApi.files.openFile(node.path, 'actor');
     }
   }
 };
@@ -307,7 +308,7 @@ const handleDelete = async () => {
   if (!contextMenu.value.item) return;
 
   if (confirm(translateUiText(`确定要删除 "${contextMenu.value.item.name}" 吗？`))) {
-    const res = await fileService.deleteItem(contextMenu.value.item.path);
+    const res = await editorApi.files.deleteItem(contextMenu.value.item.path);
     if (res?.data) {
       await loadFileTree();
     }
@@ -319,9 +320,9 @@ const handleDelete = async () => {
 const handleOpenFile = (node) => {
   if (node && !node.isDirectory) {
     if (node.name.endsWith('.scene')) {
-      fileService.openFile(node.path, 'scene');
+      editorApi.files.openFile(node.path, 'scene');
     } else if (node.name.endsWith('.actor')) {
-      fileService.openFile(node.path, 'actor');
+      editorApi.files.openFile(node.path, 'actor');
     }
   }
   closeContextMenu();
@@ -338,11 +339,11 @@ const handleDialogConfirm = async () => {
 
   switch (dialog.value.type) {
     case 'newFolder':
-      await fileService.createFolder(dialog.value.targetPath, name);
+      await editorApi.files.createFolder(dialog.value.targetPath, name);
       break;
     case 'newScene':
       // 创建.scene文件
-      await fileService.createFile(
+          await editorApi.files.createFile(
         dialog.value.targetPath,
         name.endsWith('.scene') ? name : name + '.scene',
         'scene'
@@ -350,14 +351,14 @@ const handleDialogConfirm = async () => {
       break;
     case 'newActor':
       // 创建.actor文件
-      await fileService.createFile(
+          await editorApi.files.createFile(
         dialog.value.targetPath,
         name.endsWith('.actor') ? name : name + '.actor',
         'actor'
       );
       break;
     case 'rename':
-      await fileService.renameItem(dialog.value.targetPath, name);
+          await editorApi.files.renameItem(dialog.value.targetPath, name);
       break;
   }
 

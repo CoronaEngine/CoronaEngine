@@ -10,7 +10,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # UTF-8 source/execution charset.
 # When built inside CoronaEngine, the parent project enforces /utf-8 globally
-# from misc/cmake/corona_compile_config.cmake. For standalone builds (no
+# from cmake/corona_compile_config.cmake. For standalone builds (no
 # parent CoronaEngine target), apply it here so source files with non-ASCII
 # literals still compile correctly.
 if(MSVC AND NOT TARGET CoronaEngine)

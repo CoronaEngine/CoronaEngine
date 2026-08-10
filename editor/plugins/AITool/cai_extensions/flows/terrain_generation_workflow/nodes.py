@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import time
 from typing import Any, Dict
 
@@ -21,6 +20,7 @@ from .constants import (
     TERRAIN_GENERATE_FUNCTION_ID,
 )
 from .terrain_generator import generate_terrain
+from .paths import resolve_terrain_output_dir
 
 logger = logging.getLogger(__name__)
 
@@ -99,8 +99,7 @@ def generate_terrain_node(state: WorkflowState) -> Dict[str, Any]:
     terrain_config = state.get("intermediate", {}).get("terrain_config", PRESET_GRASSLAND)
     resolution = DEFAULT_RESOLUTION
     session_id = state.get("session_id", "default")
-    from pathlib import Path
-    output_dir = str(Path(__file__).resolve().parents[6] / "output" / "terrain" / session_id)
+    output_dir = str(resolve_terrain_output_dir(session_id=session_id))
 
     logger.info("[terrain] generating: scene='%s', res=%d, output=%s",
                 terrain_config.get("scene_name", "?"), resolution, output_dir)

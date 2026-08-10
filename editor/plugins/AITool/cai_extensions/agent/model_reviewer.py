@@ -37,9 +37,14 @@ _REVIEW_SYSTEM_PROMPT = """你是 3D 模型质量检查员。检查单个模型�
 
 def _get_current_scene() -> Optional[Any]:
     try:
-        from CoronaCore.core.managers import scene_manager
-        routes = scene_manager.list_all()
-        return scene_manager.get(routes[0]) if routes else None
+        try:
+            from plugins.AITool.cai_extensions.mcp.tools.native_scene_state import (
+                resolve_native_scene_value,
+            )
+        except ModuleNotFoundError:
+            from ..mcp.tools.native_scene_state import resolve_native_scene_value  # type: ignore
+
+        return resolve_native_scene_value("")
     except Exception as exc:
         logger.warning("[ModelReviewer] 无法获取当前场景: %s", exc)
         return None
@@ -141,9 +146,7 @@ def review_single_model(
         actor_name = None
         scene_name = ""
         try:
-            from CoronaCore.core.managers import scene_manager
-            routes = scene_manager.list_all()
-            scene = scene_manager.get(routes[0]) if routes else None
+            scene = _get_current_scene()
         except Exception as e:
             logger.debug("[ModelReviewer] Python scene unavailable for %s, using native current scene: %s", model_name, e)
             scene = None
@@ -190,12 +193,8 @@ def _empty_review() -> Dict[str, Any]:
 
 def _create_review_actor(scene_name: str, model_path: str, model_name: str) -> bool:
     try:
-        from CoronaCore.core.corona_editor import CoronaEditor
+        from api.editor_api import CoronaEditorApi
 
-        create_editor_actor = getattr(CoronaEditor.CoronaEngine, "create_editor_actor", None)
-        if not callable(create_editor_actor):
-            logger.warning("[ModelReviewer] 缺少 native create_editor_actor")
-            return False
         actor_data = {
             "actor_name": model_name,
             "model_name": model_name,
@@ -205,13 +204,12 @@ def _create_review_actor(scene_name: str, model_path: str, model_name: str) -> b
             "update_if_exists": True,
             "physics_enabled": False,
         }
-        raw = create_editor_actor(
+        result = CoronaEditorApi.scene_tools.create_actor(
             scene_name,
             model_path,
             "model",
-            json.dumps(actor_data, ensure_ascii=False),
+            actor_data,
         )
-        result = json.loads(raw) if isinstance(raw, str) else raw
         return isinstance(result, dict) and result.get("status") != "error"
     except Exception as exc:
         logger.warning("[ModelReviewer] native 创建审查 actor 失败 %s: %s", model_name, exc)
@@ -220,11 +218,9 @@ def _create_review_actor(scene_name: str, model_path: str, model_name: str) -> b
 
 def _remove_actor_safe(scene_name: str, name: str) -> None:
     try:
-        from CoronaCore.core.corona_editor import CoronaEditor
+        from api.editor_api import CoronaEditorApi
 
-        remove_editor_actor = getattr(CoronaEditor.CoronaEngine, "remove_editor_actor", None)
-        if callable(remove_editor_actor):
-            remove_editor_actor(scene_name, name)
+        CoronaEditorApi.scene_tools.remove_actor(scene_name, name)
     except Exception as exc:
         logger.debug("[ModelReviewer] native 清理审查 actor 失败 %s: %s", name, exc)
 

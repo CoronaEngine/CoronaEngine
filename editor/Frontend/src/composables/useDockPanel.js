@@ -1,6 +1,6 @@
 import { inject } from 'vue';
 import { useDockStore } from '@/stores/dockStore.js';
-import { appService } from '@/utils/bridge.js';
+import { appService } from '@/services/appService.js';
 
 /**
  * 面板组件在使用时的 composable
@@ -36,7 +36,7 @@ function getPanelIdFromRoute() {
   const path = hash.replace('#', '').split('?')[0];
   const map = {
     '/SceneBar': 'SceneTools',
-    '/Object': 'SceneDatas',
+    '/Object': 'Object',
     '/Pet': 'AITool',
     '/LogView': 'LogTool',
     '/FileManager': 'FileManager',

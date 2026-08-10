@@ -18,7 +18,7 @@ from .formatters import (
 from .progress import publish_user_progress
 from .helpers import get_3d_generate_tool, parse_3d_result
 from .local_model_library import save_model
-from .test_cases import get_test_case
+from ..workflow_test_support import get_test_case
 
 logger = logging.getLogger(__name__)
 

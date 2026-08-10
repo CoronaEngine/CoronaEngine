@@ -2,10 +2,10 @@
 import { computed, onMounted, onUnmounted } from 'vue';
 import { useRoute } from 'vue-router';
 import { useDockStore } from '@/stores/dockStore.js';
-import { getPluginManifest } from '@/config/pluginManifest.js';
+import { getPluginComponent } from '@/views/panelRegistry.js';
 import DockLayout from '@/components/dock/DockLayout.vue';
 import DockPanel from '@/components/dock/DockPanel.vue';
-import { editorApi, scriptingService } from '@/utils/bridge.js';
+import { editorApi } from '@/api/editorApi.js';
 import lanchat from '@/stores/lanchat.js';
 import '@/utils/eventBus.js'; // init window.__coronaEmit
 
@@ -67,7 +67,7 @@ function forwardScratchKey(event, released = false) {
 
   event[SCRATCH_KEY_FORWARDED] = true;
   if (released) {
-    scriptingService.sendKeyUpEvent(code, displayKey).catch(() => {});
+    editorApi.scratch.sendKeyUpEvent(code, displayKey).catch(() => {});
     return;
   }
   const modifiers = [
@@ -75,7 +75,7 @@ function forwardScratchKey(event, released = false) {
     event.shiftKey ? 'Shift' : '',
     event.altKey ? 'Alt' : '',
   ].filter(Boolean).join(',');
-  scriptingService.sendKeyEvent(code, modifiers, displayKey).catch(() => {});
+  editorApi.scratch.sendKeyEvent(code, modifiers, displayKey).catch(() => {});
 }
 
 function isGamePreviewActive() {
@@ -179,7 +179,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <DockLayout v-if="isEditorRoute" />
+  <DockLayout v-if="isEditorRoute" :component-resolver="getPluginComponent" />
   <div v-else :class="isStandalonePanel ? 'standalone-route-shell' : null">
     <router-view />
     <template v-if="isStandalonePanel">
@@ -197,7 +197,7 @@ onUnmounted(() => {
   <template v-for="p in centerPanels" :key="p.id">
     <div class="global-center-overlay" @mousedown.self="dockStore.closePanel(p.id)">
       <div class="global-center-overlay-panel" :style="{ width: p.width + 'px', height: p.height + 'px' }">
-        <DockPanel :panel-id="p.id" :component="getPluginManifest(p.id)?.component" />
+        <DockPanel :panel-id="p.id" :component="getPluginComponent(p.id)" />
       </div>
     </div>
   </template>

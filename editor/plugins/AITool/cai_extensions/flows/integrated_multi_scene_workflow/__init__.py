@@ -26,10 +26,7 @@ from .generate_images import generate_images_node
 from .generate_layout_text import generate_layout_text_node
 from .human_review import human_review_node
 
-try:
-    from .test_cases import TEST_CASES
-except ImportError:
-    TEST_CASES = {}
+TEST_CASES = {}
 
 if TYPE_CHECKING:
     from langgraph.graph.state import CompiledStateGraph

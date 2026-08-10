@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 from editor.plugins.AITool.services.node_graph_generation_service import NodeGraphGenerationService
+from editor.script_runtime.blockly.ai_node_graph_contract import load_contract_catalog
 
 
 def minimal_workspace():
@@ -808,7 +809,8 @@ class NodeGraphGenerationServiceTests(unittest.TestCase):
             unknown, contract_path, contract, requirements
         )
         self.assertEqual("full", selection["mode"])
-        self.assertEqual(261, len(selection["selectedTypes"]))
+        expected_contract_size = len(load_contract_catalog(contract_path)["blocks"])
+        self.assertEqual(expected_contract_size, len(selection["selectedTypes"]))
 
         unknown_with_existing_graph = self.service._normalize_payload(
             request_payload(
@@ -825,7 +827,7 @@ class NodeGraphGenerationServiceTests(unittest.TestCase):
             unknown_with_existing_graph, contract_path, contract, requirements
         )
         self.assertEqual("full", selection["mode"])
-        self.assertEqual(261, len(selection["selectedTypes"]))
+        self.assertEqual(expected_contract_size, len(selection["selectedTypes"]))
 
     def test_contract_selector_uses_xml_capability_metadata(self):
         contract_path, contract = self.service._load_contract()

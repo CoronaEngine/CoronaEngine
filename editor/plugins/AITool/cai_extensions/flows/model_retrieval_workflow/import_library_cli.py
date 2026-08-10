@@ -2,10 +2,10 @@
 
 用途：复用历史已生成的模型（如 hs_test/models），免得 F5 重新生成、烧混元 token。
 
-与 local_model_library.py 完全对齐（必须一致，否则引擎 lookup_model 找不到）：
+与 local_model_library.py 完全对齐（必须一致，否则引擎 lookup_model 找不到）。模型库归档到项目 Resource：
 - key = item_name.strip().lower()
 - 库目录名 = _safe_dirname(key) = clean(key)[:48] + "_" + sha1(key)[:8]
-- 库根 = <project>/assets/local_model_library/，index.json + models/<safe>/
+- 库根 = <project>/Resource/local_model_library/，index.json + models/<safe>/
 
 按基名去重：源目录 "地毯"/"地毯_1".."地毯_10" 是同一物体多次生成，
 归并到物体名 "地毯"，每个物体只入一个代表版本（优先无后缀目录）。
@@ -23,6 +23,11 @@ import os
 import re
 import shutil
 import time
+
+try:
+    from .model_library_paths import canonical_model_library_root
+except ImportError:  # direct ``python import_library_cli.py`` compatibility
+    from model_library_paths import canonical_model_library_root
 
 _MODEL_EXTS = {".obj", ".dae", ".glb", ".gltf", ".fbx", ".stl", ".usdz"}
 _LIB_DIRNAME = "local_model_library"
@@ -67,7 +72,7 @@ def _first_model_file(d: str) -> str:
 def import_models(src: str, project: str, force: bool = False) -> None:
     if not os.path.isdir(src):
         raise SystemExit(f"源目录不存在: {src}")
-    root = os.path.join(project, "assets", _LIB_DIRNAME)
+    root = str(canonical_model_library_root(project))
     models_root = os.path.join(root, _MODELS_SUBDIR)
     os.makedirs(models_root, exist_ok=True)
     index_path = os.path.join(root, "index.json")
@@ -129,7 +134,7 @@ def import_models(src: str, project: str, force: bool = False) -> None:
 def main() -> None:
     ap = argparse.ArgumentParser(description="批量导入模型到本地模型库")
     ap.add_argument("--src", required=True, help="源模型目录(其下每个子目录=一个物体)")
-    ap.add_argument("--project", required=True, help="目标项目根路径(库写到 <project>/assets/local_model_library/)")
+    ap.add_argument("--project", required=True, help="目标项目根路径(库写到 <project>/Resource/local_model_library/)")
     ap.add_argument("--force", action="store_true", help="覆盖已存在的同名条目")
     args = ap.parse_args()
     import_models(args.src, args.project, args.force)

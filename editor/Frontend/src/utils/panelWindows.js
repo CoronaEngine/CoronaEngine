@@ -1,9 +1,9 @@
-import { appService } from '@/utils/bridge.js';
+import { appService } from '@/services/appService.js';
 import { getPluginManifest, PLUGIN_MANIFEST } from '@/config/pluginManifest.js';
 
 export const FLOATING_PANEL_IDS = [
   'SceneTools',
-  'SceneDatas',
+  'Object',
   'NodeGraphPanel',
   'CabbageChatPanel',
 ];

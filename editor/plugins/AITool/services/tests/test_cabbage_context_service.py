@@ -1227,6 +1227,37 @@ class CabbageContextServiceTests(unittest.TestCase):
         self.assertTrue(any(task.get("type") == "tutorial" for task in context["activeTasks"]))
         self.assertFalse(any(task.get("type") == "goal" for task in context["activeTasks"]))
 
+    def test_project_goal_metadata_uses_native_project_settings(self):
+        with mock.patch(
+            "plugins.AITool.services.cabbage_context_service.CoronaEditorApi.project_settings.get_active_project_info",
+            return_value={
+                "project_path": str(self.world),
+                "prompt": "a native project goal",
+                "mode": "creative",
+            },
+        ):
+            prompt, mode = self.service._project_goal_metadata(self.world)
+
+        self.assertEqual("a native project goal", prompt)
+        self.assertEqual("creative", mode)
+
+    def test_active_project_path_accepts_portable_scene_without_project_ini(self):
+        portable = pathlib.Path(self.temp_dir.name) / "portable_scene"
+        portable.mkdir()
+        portable.joinpath("scene.ini").write_text(
+            "[format]\ntype=corona_scene_folder\n", encoding="utf-8"
+        )
+
+        self.path_patch.stop()
+        try:
+            with mock.patch(
+                "plugins.AITool.services.cabbage_context_service.get_active_project_path",
+                return_value=str(portable),
+            ):
+                self.assertEqual(portable.resolve(), self.service._active_project_path())
+        finally:
+            self.path_patch.start()
+
     def test_context_load_rejects_a_different_world_id(self):
         response = self.service.load({"worldId": "another_world"})
         self.assertFalse(response["success"])
@@ -1370,16 +1401,18 @@ class CabbageContextServiceTests(unittest.TestCase):
         archived = self.history_task(matched["context"], "goal.ai.02")
         self.assertEqual(["object_third_person_move"], archived["observedBlockTypes"])
 
-    def test_load_recovers_personalized_plan_from_project_ini(self):
-        self.world.joinpath("project.ini").write_text(
-            "[Project]\nname=story_world_test\nmode=creative\n"
-            "world_prompt=an ink fantasy world with rabbits and mechanisms\n",
-            encoding="utf-8",
-        )
+    def test_load_recovers_personalized_plan_from_native_project_info(self):
         with mock.patch.object(
             CabbageContextService,
             "_call_deepseek_for_goal_plan",
             return_value=self.goal_plan_payload(),
+        ), mock.patch(
+            "plugins.AITool.services.cabbage_context_service.CoronaEditorApi.project_settings.get_active_project_info",
+            return_value={
+                "project_path": str(self.world),
+                "mode": "creative",
+                "prompt": "an ink fantasy world with rabbits and mechanisms",
+            },
         ):
             response = self.service.load()
             task_id = response["goalPlan"]["taskId"]

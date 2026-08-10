@@ -41,8 +41,7 @@
 <script setup>
 import { onMounted, onUnmounted, ref, defineProps, defineEmits } from 'vue';
 import { useI18n } from 'vue-i18n';
-// 引入 projectService / appService
-import { projectService, appService } from '@/utils/bridge.js';
+import { appService } from '@/services/appService.js';
 
 const props = defineProps({
   title: { type: String, default: '' },
@@ -91,9 +90,7 @@ const sendRegionsToNative = (routePath, element) => {
   const w = Math.floor(rect.width);
   const h = Math.floor(rect.height);
 
-  // 使用 bridge.js 中定义的 projectService 设置拖拽区域
-  // 注意：projectService.setDragRegions 内部已经封装 DockCommand
-  projectService.setDragRegions(routePath, x, y, w, h);
+  appService.setDragRegions(routePath, x, y, w, h);
 };
 
 // 创建节流版本的发送函数
@@ -138,7 +135,7 @@ onUnmounted(() => {
 // panelId 带进 panel-closed 广播，主窗口据此用 dockStore.popIn 恢复对应 DOM 面板。
 const ROUTE_TO_PANEL_ID = {
   '/SceneBar': 'SceneTools',
-  '/Object': 'SceneDatas',
+  '/Object': 'Object',
   '/Pet': 'AITool',
   '/LogView': 'LogTool',
   '/FileManager': 'FileManager',

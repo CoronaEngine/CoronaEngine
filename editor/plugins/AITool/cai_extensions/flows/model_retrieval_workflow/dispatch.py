@@ -14,7 +14,7 @@ from Quasar.ai_workflow.streaming import stream_output_node
 from .formatters import NO_OUTPUT
 from .helpers import normalize_object_id
 from .progress import publish_user_progress
-from .test_cases import get_test_case
+from ..workflow_test_support import get_test_case
 
 logger = logging.getLogger(__name__)
 

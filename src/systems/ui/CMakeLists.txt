@@ -18,7 +18,7 @@ set(UI_SYSTEM_SOURCES
     cef/browser_ui.cpp
     cef/cef_app.cpp
     cef/cef_client.cpp
-    cef/cef_editor_api.cpp
+    editor_api/cef_editor_api.cpp
     cef/cef_editor_native_api_registry.cpp
     cef/cef_editor_native_api_handlers.cpp
     cef/scene_folder.cpp
@@ -43,6 +43,7 @@ set(UI_SYSTEM_SOURCES
     cef/request_response_broker.h
     cef/cef_client.h
     cef/cef_editor_native_api_registry.h
+    editor_api/cef_editor_api.h
     cef/scene_folder.h
     cef/vision_actor_material_bridge.h
     cef/vision_actor_transform_bridge.h
@@ -84,14 +85,24 @@ corona_add_system(ui
         assimp::assimp
         nlohmann_json::nlohmann_json
         corona::python::runtime
+        corona::system::script
     INCLUDE_DIRS
         ${CMAKE_CURRENT_SOURCE_DIR}
         ${CMAKE_CURRENT_SOURCE_DIR}/cef
+        ${CMAKE_CURRENT_SOURCE_DIR}/editor_api
         ${CEF_INCLUDE_DIR}
         ${CEF_ROOT}
 )
 
 target_compile_definitions(corona_ui_system PUBLIC VK_NO_PROTOTYPES)
+
+# The camera-follow controller is an implementation detail of the Script
+# system, but the native editor handler invokes it as part of the aggregate
+# editor API.  Keep its header private to UI instead of widening Script's
+# public include surface.
+target_include_directories(corona_ui_system PRIVATE
+    ${PROJECT_SOURCE_DIR}/src/systems/script/include
+)
 
 helicon_compile_shaders(corona_ui_system
     OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated_shaders"

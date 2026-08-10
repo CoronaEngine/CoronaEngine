@@ -3,7 +3,8 @@ import {
   getGeneratedNodeGraphSnapshot,
   PROJECT_NODE_GRAPH_TARGET_ID,
 } from '@/blockly/node-editor/aiNodeGraphService.js';
-import { aiService, appService } from '@/utils/bridge.js';
+import { aiService } from '@/services/aiService.js';
+import { appService } from '@/services/appService.js';
 import { coronaEventBus } from '@/utils/eventBus.js';
 import { translateUiText } from '@/i18n/domTranslator.js';
 

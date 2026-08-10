@@ -9,7 +9,10 @@ for candidate in (EDITOR_DIR, AITOOL_DIR):
     if str(candidate) not in sys.path:
         sys.path.insert(0, str(candidate))
 
-from plugins.AITool.cai_extensions.agent.scene_composer import SceneComposer
+from plugins.AITool.cai_extensions.agent.scene_composer import (
+    SceneComposer,
+    _generated_asset_project_root,
+)
 
 
 def test_bedroom_inventory_fallback_uses_room_specific_furniture(monkeypatch) -> None:
@@ -28,3 +31,24 @@ def test_bedroom_inventory_fallback_uses_room_specific_furniture(monkeypatch) ->
     assert "功能支撑物件" not in names
     assert "导视牌" not in names
     assert "储物道具" not in names
+
+
+def test_generated_asset_root_uses_canonical_project_context(monkeypatch, tmp_path) -> None:
+    project_root = tmp_path / "ActiveProject"
+    project_root.mkdir()
+    monkeypatch.setattr(
+        "runtime.project_context.get_project_root",
+        lambda: project_root,
+    )
+
+    assert _generated_asset_project_root() == project_root
+
+    composer = SceneComposer(max_items=1)
+    asset_dir, relative_dir = composer._generated_asset_dir()
+    assert asset_dir.parent.parent.parent == project_root / "Resource"
+    assert relative_dir.startswith("Resource/generated/scene_composer/")
+
+    source = (
+        Path(__file__).resolve().parents[1] / "scene_composer.py"
+    ).read_text(encoding="utf-8")
+    assert "Path(os.getcwd()).resolve()" not in source

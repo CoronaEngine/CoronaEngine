@@ -17,6 +17,10 @@ from Quasar.ai_media_resource import get_media_registry  # type: ignore
 from Quasar.ai_tools.response_adapter import build_part, build_success_result, build_error_result  # type: ignore
 
 from .loader import load_scene_placement_config
+from ..paths import (
+    resolve_scene_placement_asset_root,
+    resolve_scene_placement_output_path,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -170,28 +174,15 @@ def _ensure_vec3(x: Any, default: List[float]) -> List[float]:
     return default
 
 
-def _get_active_project_path() -> Path:
-    """获取当前活跃项目路径，与编辑器场景系统保持一致。"""
-    try:
-        from CoronaCore.core.corona_editor import CoronaEditor
-        project_path = CoronaEditor.CoronaEngine.active_project_path
-        if project_path:
-            return Path(project_path)
-    except Exception:
-        pass
-    # 兜底：环境变量 > cwd
-    env = (os.environ.get("CORONAENGINE_PROJECT") or "").strip()
-    if env:
-        return Path(env)
-    return Path(os.getcwd())
+def _get_project_root() -> Path:
+    """获取 canonical 项目根目录，不在此模块持有项目状态。"""
+    from runtime.project_context import get_project_root
+
+    return get_project_root()
 
 
 def _normalize_scene_output_path(scene_path: str, scene_name: str) -> Path:
-    project = _get_active_project_path().resolve()  # 强制转换为绝对路径，避免相对路径导致的读取失败
-    out_dir = project / "Scene"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    fname = _safe_filename(scene_name or "scene") + ".json"
-    return (out_dir / fname).resolve()
+    return resolve_scene_placement_output_path(scene_path, scene_name)
 
 
 def _extract_first_file_path(env: Dict[str, Any]) -> Optional[str]:
@@ -248,7 +239,10 @@ class DownloadModelInput(BaseModel):
 
 
 class PlaceSceneInput(BaseModel):
-    scene_path: str = Field(..., description="Output scene.json path (will be normalized into CoronaEngine)")
+    scene_path: str = Field(
+        ...,
+        description="兼容保留的场景路径提示；布局中间 JSON 由 scene_placement 路径 owner 归档",
+    )
     scene_name: str = Field("scene", description="Scene name")
     room_size: List[float] = Field(
         default_factory=lambda: [5, 5, 3],
@@ -281,6 +275,7 @@ def load_placement_tools(config: AIConfig) -> List[StructuredTool]:
     sun_dir = [float(cfg.sun_direction_x), float(cfg.sun_direction_y), float(cfg.sun_direction_z)]
 
     media_registry = get_media_registry()
+    asset_root = resolve_scene_placement_asset_root(str(cfg.asset_root))
 
     def _resolve_mesh_url(mesh_url: str) -> str:
         u = (mesh_url or "").strip()
@@ -295,7 +290,7 @@ def load_placement_tools(config: AIConfig) -> List[StructuredTool]:
             if not url:
                 raise ValueError("mesh_url 为空或无法解析 fileid://")
 
-            out_dir = Path(str(cfg.asset_root)) / (subdir or str(cfg.model_subdir)) / str(object_id)
+            out_dir = asset_root / (subdir or str(cfg.model_subdir)) / str(object_id)
             fname = _safe_filename(file_name) if file_name else _filename_from_url(url)
             saved = _download_url(
                 url,
@@ -465,7 +460,8 @@ def load_placement_tools(config: AIConfig) -> List[StructuredTool]:
         logger.info("[scene_placement] update_actor_transform called scene_path=%s actor_name=%s", scene_path, actor_name)
         try:
             # ✅ update 也按同样规则归一（避免用户传 C:\xxx.json）
-            sp = _normalize_scene_output_path(scene_path, "scene")
+            requested_name = Path(str(scene_path or "scene")).stem or "scene"
+            sp = _normalize_scene_output_path(scene_path, requested_name)
             if not sp.exists():
                 raise FileNotFoundError(f"scene.json not found: {sp}")
 
@@ -513,7 +509,7 @@ def load_placement_tools(config: AIConfig) -> List[StructuredTool]:
         ),
         StructuredTool(
             name="place_scene_from_items",
-            description="按模板格式生成 scene.json（name/sun_direction/actors），并返回 scene.json",
+            description="按模板格式生成场景布局中间 JSON（name/sun_direction/actors），并返回其路径",
             func=place_scene_from_items,
             args_schema=PlaceSceneInput,
         ),

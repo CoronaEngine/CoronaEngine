@@ -1,20 +1,7 @@
 /**
- * 面板静态注册表 - 替代 Python register_web 装饰器中的 UI 元数据
- * 每个面板的 id 必须与 Python 端 module_name 一致（用于 cefQuery 路由）
+ * 面板静态注册表 - Vue 面板的 UI 元数据
+ * 面板 id 是前端状态/路由身份；旧 Python service 名称只在兼容边界中保留。
  */
-import SceneBar from '@/views/sidebar/SceneBar.vue';
-import ObjectPanel from '@/views/sidebar/Object.vue';
-import Pet from '@/views/tools/Pet.vue';
-import LogView from '@/views/sidebar/LogView.vue';
-import FileManager from '@/views/sidebar/FileManager.vue';
-import ProjectSettings from '@/views/sidebar/ProjectSettings.vue';
-import NodeGraphPanel from '@/views/sidebar/NodeGraphPanel.vue';
-import CabbageChatPanel from '@/views/sidebar/CabbageChatPanel.vue';
-import EditorSettings from '@/views/sidebar/EditorSettings.vue';
-import NetworkPanel from '@/views/sidebar/Network.vue';
-import LightFieldCalibrationPanel from '@/components/panels/LightFieldCalibrationPanel.vue';
-import { translate } from '@/i18n/index.js';
-
 export const PLUGIN_MANIFEST = [
   {
     id: 'SceneTools',
@@ -31,7 +18,6 @@ export const PLUGIN_MANIFEST = [
     minFloatWidth: 340,
     minFloatHeight: 360,
     floatingPriority: 10,
-    component: SceneBar,
   },
   {
     id: 'LightFieldCalibration',
@@ -43,12 +29,11 @@ export const PLUGIN_MANIFEST = [
     defaultWidth: 300,
     defaultHeight: 300,
     autoInit: false,
-    component: LightFieldCalibrationPanel,
   },
   {
-    id: 'SceneDatas',
+    id: 'Object',
     routePath: '/Object',
-    displayNameKey: 'plugins.SceneDatas',
+    displayNameKey: 'plugins.Object',
     displayName: '对象',
     pageType: 'view',
     defaultDock: 'right',
@@ -60,7 +45,6 @@ export const PLUGIN_MANIFEST = [
     minFloatWidth: 320,
     minFloatHeight: 320,
     floatingPriority: 10,
-    component: ObjectPanel,
   },
   {
     id: 'AITool',
@@ -72,7 +56,6 @@ export const PLUGIN_MANIFEST = [
     defaultWidth: 200,
     defaultHeight: 200,
     autoInit: false,
-    component: Pet,
   },
   {
     id: 'LogTool',
@@ -84,7 +67,6 @@ export const PLUGIN_MANIFEST = [
     defaultWidth: 1100,
     defaultHeight: 200,
     autoInit: false,
-    component: LogView,
   },
   {
     id: 'FileManager',
@@ -96,7 +78,6 @@ export const PLUGIN_MANIFEST = [
     defaultWidth: 300,
     defaultHeight: 600,
     autoInit: false,
-    component: FileManager,
   },
   {
     id: 'ProjectSettings',
@@ -108,7 +89,6 @@ export const PLUGIN_MANIFEST = [
     defaultWidth: 600,
     defaultHeight: 800,
     autoInit: false,
-    component: ProjectSettings,
   },
   {
     id: 'NodeGraphPanel',
@@ -132,7 +112,6 @@ export const PLUGIN_MANIFEST = [
     minFloatWidth: 760,
     minFloatHeight: 440,
     floatingPriority: 100,
-    component: NodeGraphPanel,
   },
   {
     id: 'CabbageChatPanel',
@@ -149,7 +128,6 @@ export const PLUGIN_MANIFEST = [
     minFloatWidth: 340,
     minFloatHeight: 400,
     floatingPriority: 110,
-    component: CabbageChatPanel,
   },
   {
     id: 'EditorSettings',
@@ -161,7 +139,6 @@ export const PLUGIN_MANIFEST = [
     defaultWidth: 620,
     defaultHeight: 720,
     autoInit: false,
-    component: EditorSettings,
   },
   {
     id: 'Network',
@@ -173,16 +150,10 @@ export const PLUGIN_MANIFEST = [
     defaultWidth: 360,
     defaultHeight: 430,
     autoInit: false,
-    component: NetworkPanel,
   },
 ];
 
 /** 按 id 快速查找 */
 export function getPluginManifest(id) {
   return PLUGIN_MANIFEST.find((p) => p.id === id);
-}
-
-export function getPluginDisplayName(plugin) {
-  if (!plugin) return '';
-  return plugin.displayNameKey ? translate(plugin.displayNameKey) : plugin.displayName;
 }

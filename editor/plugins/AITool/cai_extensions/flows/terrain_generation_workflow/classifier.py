@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import time
 from typing import Any, Dict, List, Optional
 
@@ -156,8 +155,8 @@ def generate_terrain_for_outdoor_scenes(sub_scenes: List[Dict[str, Any]], state:
         logger.info("[classifier] scene='%s' type=%s terrain_hint=%s",
                     sc.get("scene_name", "?"), sc.get("scene_type", "indoor"), sc.get("terrain_keyword") or "-")
 
-    from pathlib import Path
     from .terrain_generator import generate_terrain
+    from .paths import resolve_terrain_output_dir
 
     terrain_results: Dict[str, Any] = {}
 
@@ -176,9 +175,9 @@ def generate_terrain_for_outdoor_scenes(sub_scenes: List[Dict[str, Any]], state:
             continue
         try:
             if output_base:
-                output_dir = os.path.join(output_base, scene_name, "terrain")
+                output_dir = str(resolve_terrain_output_dir(output_base, session_id, scene_name))
             else:
-                output_dir = str(Path(__file__).resolve().parents[6] / "output" / "terrain" / session_id / scene_name)
+                output_dir = str(resolve_terrain_output_dir(session_id=session_id, scene_name=scene_name))
 
             _inject_scene_seed(config, scene_name)
             logger.info("[classifier] generating terrain for '%s': preset=%s seed=%d output=%s",
@@ -206,9 +205,9 @@ def generate_terrain_for_outdoor_scenes(sub_scenes: List[Dict[str, Any]], state:
             )
 
             if output_base:
-                output_dir = os.path.join(output_base, scene_name, "terrain")
+                output_dir = str(resolve_terrain_output_dir(output_base, session_id, scene_name))
             else:
-                output_dir = str(Path(__file__).resolve().parents[6] / "output" / "terrain" / session_id / scene_name)
+                output_dir = str(resolve_terrain_output_dir(session_id=session_id, scene_name=scene_name))
 
             # Match floor style + size to scene prompt
             prompt_text = sc.get("scene_prompt", "")

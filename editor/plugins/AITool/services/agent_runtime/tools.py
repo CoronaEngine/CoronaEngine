@@ -7,10 +7,9 @@ without wrapping SceneComposer or ProgressiveWorkflow as a large legacy tool.
 
 from __future__ import annotations
 
-import importlib.util
+from functools import partial
 from pathlib import Path
 import re
-import sys
 import time
 from typing import Any, Callable, Mapping, Sequence
 import uuid
@@ -41,6 +40,78 @@ _ABSTRACT_LAYOUT_TERMS = (
     "通行动线",
     "入口/边界",
 )
+
+_FALLBACK_SUBSTRATE_TERMS = (
+    "天空", "天幕", "草地", "草原", "森林", "树林", "地形", "地面", "山坡",
+    "道路", "河流", "小河", "溪流", "湖泊", "湖面", "水面", "sky", "grassland",
+    "grass", "forest", "woods", "terrain", "ground", "hill", "road", "river",
+    "stream", "lake", "water",
+)
+_FALLBACK_LAYOUT_TERMS = (
+    "入口", "出口", "通道", "动线", "主路", "主街", "区域", "边界", "围合",
+    "休息区", "layout", "entrance", "exit", "walkway", "zone", "area", "boundary",
+)
+
+
+class _FallbackSceneElementRoute:
+    def __init__(self, name: str, target_pipeline: str) -> None:
+        self.name = name
+        self.target_pipeline = target_pipeline
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "name": self.name,
+            "category": "environment" if self.target_pipeline == "scene_substrate" else (
+                "layout" if self.target_pipeline == "layout_structure" else "asset"
+            ),
+            "target_pipeline": self.target_pipeline,
+            "confidence": 0.5,
+            "reason": "runtime fallback classification",
+            "generation_mode_hint": "",
+        }
+
+
+class _FallbackSceneElementClassifier:
+    """Rule-only classifier used when the integration classifier is unavailable."""
+
+    @staticmethod
+    def route_model_items(
+        _scene_goal: str,
+        items: list[dict[str, Any]],
+    ) -> tuple[list[dict[str, Any]], list[_FallbackSceneElementRoute]]:
+        model_items: list[dict[str, Any]] = []
+        routes: list[_FallbackSceneElementRoute] = []
+        for item in items:
+            name = str(item.get("name") or item.get("item_name") or "").strip()
+            if not name:
+                continue
+            folded = name.lower()
+            if any(term in name or term.lower() in folded for term in _FALLBACK_SUBSTRATE_TERMS):
+                pipeline = "scene_substrate"
+            elif any(term in name or term.lower() in folded for term in _FALLBACK_LAYOUT_TERMS):
+                pipeline = "layout_structure"
+            else:
+                pipeline = "model"
+                model_items.append(dict(item))
+            routes.append(_FallbackSceneElementRoute(name, pipeline))
+        return model_items, routes
+
+    @staticmethod
+    def summarize_classification(routes: Sequence[_FallbackSceneElementRoute]) -> str:
+        model_names = [route.name for route in routes if route.target_pipeline == "model"]
+        substrate_names = [route.name for route in routes if route.target_pipeline == "scene_substrate"]
+        layout_names = [route.name for route in routes if route.target_pipeline == "layout_structure"]
+        parts: list[str] = []
+        if model_names:
+            parts.append("准备生成模型：" + "、".join(model_names))
+        if substrate_names:
+            parts.append("环境/地形：" + "、".join(substrate_names) + " 将作为场景基底处理，不单独生成模型")
+        if layout_names:
+            parts.append("布局结构：" + "、".join(layout_names) + " 会进入摆放/结构规划")
+        return "；".join(parts)
+
+
+_FALLBACK_SCENE_ELEMENT_CLASSIFIER = _FallbackSceneElementClassifier()
 
 _TREASURE_ROOM_ITEMS = ("木门", "藏宝箱", "金币堆", "木桌", "木椅", "木箱", "酒桶", "武器架", "火把")
 _BEDROOM_ITEMS = ("床", "书桌", "衣柜", "台灯", "地毯", "玩偶", "书架")
@@ -91,6 +162,7 @@ ResourceProvider = Callable[[dict[str, Any]], dict[str, Any]]
 def register_agent_runtime_planning_tools(
     registry: ToolRegistry,
     *,
+    scene_element_classifier: Any = None,
     image_resource_provider: ResourceProvider | None = None,
     model_resource_provider: ResourceProvider | None = None,
     environment_component_provider: ResourceProvider | None = None,
@@ -103,6 +175,8 @@ def register_agent_runtime_planning_tools(
     strict_image_to_model_pipeline: bool = False,
 ) -> None:
     """Register no-side-effect planning/classification tools."""
+
+    classifier = scene_element_classifier or _FALLBACK_SCENE_ELEMENT_CLASSIFIER
 
     if not registry.has("runtime.plan.extract"):
         registry.register(
@@ -117,7 +191,7 @@ def register_agent_runtime_planning_tools(
     if not registry.has("scene.extract_objects"):
         registry.register(
             "scene.extract_objects",
-            _scene_extract_objects_tool,
+            partial(_scene_extract_objects_tool, scene_element_classifier=classifier),
             category=ToolCategory.PLAN,
             default_risk_level=RiskLevel.LOW,
             required_args=("room_id", "text"),
@@ -147,7 +221,7 @@ def register_agent_runtime_planning_tools(
     if not registry.has("room.estimate_bounds"):
         registry.register(
             "room.estimate_bounds",
-            _room_estimate_bounds_tool,
+            partial(_room_estimate_bounds_tool, scene_element_classifier=classifier),
             category=ToolCategory.PLAN,
             default_risk_level=RiskLevel.LOW,
             required_args=("room_id", "text"),
@@ -167,7 +241,7 @@ def register_agent_runtime_planning_tools(
     if not registry.has("asset.route_item"):
         registry.register(
             "asset.route_item",
-            _asset_route_item_tool,
+            partial(_asset_route_item_tool, scene_element_classifier=classifier),
             category=ToolCategory.ASSET,
             default_risk_level=RiskLevel.LOW,
             required_args=("room_id", "items"),
@@ -183,7 +257,7 @@ def register_agent_runtime_planning_tools(
     if not registry.has("placement.prepare_items"):
         registry.register(
             "placement.prepare_items",
-            _placement_prepare_items_tool,
+            partial(_placement_prepare_items_tool, scene_element_classifier=classifier),
             category=ToolCategory.GEOMETRY,
             default_risk_level=RiskLevel.LOW,
             required_args=("room_id", "items"),
@@ -277,7 +351,7 @@ def register_agent_runtime_planning_tools(
     if not registry.has("scene.extract_environment"):
         registry.register(
             "scene.extract_environment",
-            _scene_extract_environment_tool,
+            partial(_scene_extract_environment_tool, scene_element_classifier=classifier),
             category=ToolCategory.PLAN,
             default_risk_level=RiskLevel.LOW,
             required_args=("room_id", "text"),
@@ -287,7 +361,7 @@ def register_agent_runtime_planning_tools(
     if not registry.has("runtime.elements.classify"):
         registry.register(
             "runtime.elements.classify",
-            _classify_scene_elements_tool,
+            partial(_classify_scene_elements_tool, scene_element_classifier=classifier),
             category=ToolCategory.PLAN,
             default_risk_level=RiskLevel.LOW,
             required_args=("room_id", "text", "items"),
@@ -899,13 +973,18 @@ def _validate_entity_names(
     return valid, rejected
 
 
-def route_candidate_model_names(text: str, items: list[str] | None = None) -> list[str]:
+def route_candidate_model_names(
+    text: str,
+    items: list[str] | None = None,
+    *,
+    scene_element_classifier: Any = None,
+) -> list[str]:
     candidates, _ = _validate_entity_names(
         list(items or extract_candidate_items(text)),
         source_text=text,
     )
     rows = [{"name": item} for item in candidates]
-    classifier = _load_scene_element_classifier()
+    classifier = scene_element_classifier or _FALLBACK_SCENE_ELEMENT_CLASSIFIER
     route_model_items = classifier.route_model_items
     model_items, _ = route_model_items(text, rows)
     routed = [str(item.get("name") or "") for item in model_items if str(item.get("name") or "")]
@@ -967,7 +1046,11 @@ def _extract_scene_plan_tool(call: ToolCall) -> ToolResult:
     )
 
 
-def _scene_extract_objects_tool(call: ToolCall) -> ToolResult:
+def _scene_extract_objects_tool(
+    call: ToolCall,
+    *,
+    scene_element_classifier: Any = None,
+) -> ToolResult:
     room_id = str(call.args.get("room_id") or "")
     text = str(call.args.get("text") or "")
     extraction_id = str(call.args.get("plan_id") or call.args.get("extraction_id") or call.tool_call_id)
@@ -975,7 +1058,11 @@ def _scene_extract_objects_tool(call: ToolCall) -> ToolResult:
         _filter_abstract_items(extract_candidate_items(text)),
         source_text=text,
     )
-    object_items = route_candidate_model_names(text, candidates)
+    object_items = route_candidate_model_names(
+        text,
+        candidates,
+        scene_element_classifier=scene_element_classifier,
+    )
     layout_items = _derive_layout_items(text)
     return ToolResult(
         True,
@@ -1167,11 +1254,20 @@ def _scene_extract_constraints_tool(call: ToolCall) -> ToolResult:
     )
 
 
-def _estimate_bounds_from_text(text: str, items: list[str] | None = None) -> dict[str, Any]:
+def _estimate_bounds_from_text(
+    text: str,
+    items: list[str] | None = None,
+    *,
+    scene_element_classifier: Any = None,
+) -> dict[str, Any]:
     clean = str(text or "")
     inferred = _infer_scene_type(clean)
     raw_items = items if items is not None else extract_candidate_items(clean)
-    object_items = route_candidate_model_names(clean, _filter_abstract_items(raw_items))
+    object_items = route_candidate_model_names(
+        clean,
+        _filter_abstract_items(raw_items),
+        scene_element_classifier=scene_element_classifier,
+    )
     lowered_items = " ".join(str(item or "").lower() for item in object_items)
     item_count = len(object_items)
     large_terms = (
@@ -1254,13 +1350,21 @@ def _estimate_bounds_from_text(text: str, items: list[str] | None = None) -> dic
     }
 
 
-def _room_estimate_bounds_tool(call: ToolCall) -> ToolResult:
+def _room_estimate_bounds_tool(
+    call: ToolCall,
+    *,
+    scene_element_classifier: Any = None,
+) -> ToolResult:
     room_id = str(call.args.get("room_id") or "")
     text = str(call.args.get("text") or "")
     fact_id = str(call.args.get("plan_id") or call.args.get("fact_id") or call.tool_call_id)
     items_arg = call.args.get("items")
     items = [str(item) for item in items_arg] if isinstance(items_arg, list) else None
-    bounds = _estimate_bounds_from_text(text, items)
+    bounds = _estimate_bounds_from_text(
+        text,
+        items,
+        scene_element_classifier=scene_element_classifier,
+    )
     fact = {
         "fact_id": fact_id,
         "fact_type": "room_bounds_estimate",
@@ -1377,12 +1481,20 @@ def _layout_items_from_raw_items(raw_items: Any) -> list[str]:
     return []
 
 
-def _asset_route_item_tool(call: ToolCall) -> ToolResult:
+def _asset_route_item_tool(
+    call: ToolCall,
+    *,
+    scene_element_classifier: Any = None,
+) -> ToolResult:
     room_id = str(call.args.get("room_id") or "")
     plan_id = str(call.args.get("plan_id") or call.args.get("batch_id") or call.tool_call_id)
     raw_items = call.args.get("items") or []
     text = str(call.args.get("text") or "")
-    item_names = route_candidate_model_names(text, _coerce_item_names(raw_items))
+    item_names = route_candidate_model_names(
+        text,
+        _coerce_item_names(raw_items),
+        scene_element_classifier=scene_element_classifier,
+    )
     asset_requests = {
         name: {
             "asset_request_id": f"asset-route-{index + 1:02d}",
@@ -1404,7 +1516,11 @@ def _asset_route_item_tool(call: ToolCall) -> ToolResult:
     )
 
 
-def _placement_prepare_items_tool(call: ToolCall) -> ToolResult:
+def _placement_prepare_items_tool(
+    call: ToolCall,
+    *,
+    scene_element_classifier: Any = None,
+) -> ToolResult:
     room_id = str(call.args.get("room_id") or "")
     plan_id = str(call.args.get("plan_id") or call.args.get("batch_id") or call.tool_call_id)
     text = str(call.args.get("text") or "")
@@ -1414,7 +1530,11 @@ def _placement_prepare_items_tool(call: ToolCall) -> ToolResult:
         layout_items = _layout_items_from_raw_items(raw_items)
     if not layout_items:
         layout_items = _derive_layout_items(text)
-    item_names = route_candidate_model_names(text, _coerce_item_names(raw_items))
+    item_names = route_candidate_model_names(
+        text,
+        _coerce_item_names(raw_items),
+        scene_element_classifier=scene_element_classifier,
+    )
     proposals = build_placement_proposals(item_names, layout_items)
     return ToolResult(
         True,
@@ -1751,14 +1871,18 @@ def _mark_tool_graph_queue_status_tool(call: ToolCall) -> ToolResult:
     )
 
 
-def _scene_extract_environment_tool(call: ToolCall) -> ToolResult:
+def _scene_extract_environment_tool(
+    call: ToolCall,
+    *,
+    scene_element_classifier: Any = None,
+) -> ToolResult:
     room_id = str(call.args.get("room_id") or "")
     text = str(call.args.get("text") or "")
     batch_id = str(call.args.get("batch_id") or call.args.get("plan_id") or call.tool_call_id)
     raw_items = call.args.get("items")
     candidates = _filter_abstract_items(extract_candidate_items(text)) if raw_items is None else raw_items
     items = [{"name": str(item)} if not isinstance(item, dict) else dict(item) for item in (candidates or [])]
-    classifier = _load_scene_element_classifier()
+    classifier = scene_element_classifier or _FALLBACK_SCENE_ELEMENT_CLASSIFIER
     _, routed = classifier.route_model_items(text, items)
     route_rows = [route.as_dict() for route in routed]
     environment_items: list[dict[str, Any]] = []
@@ -1867,7 +1991,11 @@ def _plan_next_intervention_batch_tool(call: ToolCall) -> ToolResult:
     )
 
 
-def _classify_scene_elements_tool(call: ToolCall) -> ToolResult:
+def _classify_scene_elements_tool(
+    call: ToolCall,
+    *,
+    scene_element_classifier: Any = None,
+) -> ToolResult:
     room_id = str(call.args.get("room_id") or "")
     text = str(call.args.get("text") or "")
     raw_items = call.args.get("items") or []
@@ -1878,7 +2006,7 @@ def _classify_scene_elements_tool(call: ToolCall) -> ToolResult:
         if candidate not in merged_raw_items:
             merged_raw_items.append(candidate)
     items = [{"name": str(item)} if not isinstance(item, dict) else dict(item) for item in merged_raw_items]
-    classifier = _load_scene_element_classifier()
+    classifier = scene_element_classifier or _FALLBACK_SCENE_ELEMENT_CLASSIFIER
     route_model_items = classifier.route_model_items
     summarize_classification = classifier.summarize_classification
 
@@ -3636,9 +3764,13 @@ def _model_resource_has_importable_path(resource: Mapping[str, Any] | None) -> b
     if not path_text:
         return False
     try:
-        candidates = [Path(path_text)]
-        if not candidates[0].is_absolute():
-            candidates.append(Path.cwd() / path_text)
+        raw_path = Path(path_text)
+        if raw_path.is_absolute():
+            candidates = [raw_path]
+        else:
+            from runtime import project_context
+
+            candidates = [project_context.get_project_root() / raw_path, raw_path]
         supported = {".obj", ".dae", ".glb", ".gltf", ".fbx", ".stl", ".usdz"}
         visible = [candidate for candidate in candidates if candidate.exists()]
         if not visible:
@@ -6211,22 +6343,3 @@ def _float(value: Any) -> float:
         return float(value)
     except Exception:
         return 0.0
-
-
-def _load_scene_element_classifier() -> Any:
-    """Load the classifier module without importing cai_extensions.agent package.
-
-    The package __init__ imports Quasar workflow plumbing, which is unavailable
-    in lightweight Runtime tests.  The classifier file itself is pure enough for
-    this low-risk tool adapter.
-    """
-
-    module_name = "_agent_runtime_scene_element_classifier"
-    module_path = Path(__file__).resolve().parents[2] / "cai_extensions" / "agent" / "scene_element_classifier.py"
-    spec = importlib.util.spec_from_file_location(module_name, module_path)
-    if spec is None or spec.loader is None:
-        raise ImportError(f"cannot load scene_element_classifier from {module_path}")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[module_name] = module
-    spec.loader.exec_module(module)
-    return module

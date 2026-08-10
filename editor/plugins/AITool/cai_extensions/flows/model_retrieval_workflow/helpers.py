@@ -13,7 +13,7 @@ import numpy as np
 from Quasar.ai_config.ai_config import get_ai_config
 from Quasar.ai_tools.registry import get_tool_registry
 from Quasar.ai_tools.response_adapter import FILEID_SCHEME
-from Quasar.ai_config.paths_config import _get_active_project_path
+from runtime.project_context import get_project_root
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +51,7 @@ def _resolve_preview_part_url(part: Dict[str, Any]) -> str:
 
         suffix = path_obj.suffix.lower()
         if suffix in PREVIEW_IMAGE_EXTENSIONS:
-            abs_path = (_get_active_project_path() / path_obj).resolve()
+            abs_path = (get_project_root() / path_obj).resolve()
             return str(abs_path)
 
     return ""
@@ -395,7 +395,7 @@ def resolve_model_file(model_path: str) -> str:
     if os.path.isabs(path_text):
         resolved_path = path_text
     else:
-        project_path = str(_get_active_project_path())
+        project_path = str(get_project_root())
         resolved_path = os.path.join(project_path, path_text) if project_path else path_text
 
     supported_exts = {".obj", ".dae", ".glb", ".gltf", ".fbx", ".stl", ".usdz"}

@@ -7,7 +7,7 @@ from Quasar.ai_models.base_pool import MediaCategory, OmniRequest, get_pool_regi
 
 from Quasar.ai_workflow.streaming import stream_output_node
 from .formatters import NO_OUTPUT
-from .test_cases import get_test_case
+from ..workflow_test_support import get_test_case
 
 logger = logging.getLogger(__name__)
 

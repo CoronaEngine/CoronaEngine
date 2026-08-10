@@ -16,7 +16,7 @@ from .constants import (
 )
 from .formatters import NO_OUTPUT
 from .helpers import analyze_images_with_vlm, clean_json_text, extract_text, get_llm
-from .test_cases import get_test_case
+from ..workflow_test_support import get_test_case
 
 logger = logging.getLogger(__name__)
 
