@@ -7558,15 +7558,11 @@ void register_main_view_api_handlers(NativeApiRegistry& registry) {
                 index.active_scene = scene->route;
             }
             persist_native_project_scene_index(*scene, index);
-            return native_success({
-                {"status", "success"},
-                {"scenes", result["scenes"]},
-                {"active_index", result["active_index"]},
-                {"entrance_scene", result["entrance_scene"]},
-                {"active_scene", result["active_scene"]},
-                {"path", route},
-                {"deleted_file", true},
-            });
+            auto result = make_native_scene_index_payload(*scene, index);
+            result["status"] = "success";
+            result["path"] = route;
+            result["deleted_file"] = true;
+            return native_success(std::move(result));
         }},
         {"run_project", script_method},
         {"scene_save", [](const NativeRequest& request, const NativeContext&) {

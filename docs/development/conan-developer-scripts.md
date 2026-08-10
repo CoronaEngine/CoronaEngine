@@ -5,7 +5,7 @@ CoronaEngine 的唯一开发入口是 `tools/dev.py`。开发工具环境由 Con
 首次使用时创建环境：
 
 ```text
-conda create --yes --name coronaengine-dev --override-channels --channel conda-forge "python>=3.11" "conan>=2.28,<3"
+conda create --yes --name coronaengine-dev --override-channels --channel conda-forge "python>=3.13,<3.14" "conan>=2.28,<3"
 ```
 
 默认配置为 `RelWithDebInfo`，默认构建目标为 `corona_engine`：

@@ -133,7 +133,7 @@ unset(_corona_conda_env_path)
 message(STATUS "[Python] Final chosen interpreter: ${Python_EXECUTABLE} (${Python_VERSION})")
 
 set(CORONA_PY_REQUIREMENTS_FILE "${PROJECT_SOURCE_DIR}/editor/requirements.txt")
-set(CORONA_PY_CHECK_SCRIPT "${PROJECT_SOURCE_DIR}/misc/pytools/check_pip_modules.py")
+set(CORONA_PY_CHECK_SCRIPT "${PROJECT_SOURCE_DIR}/tools/build/check_pip_modules.py")
 
 # ------------------------------------------------------------------------------
 # Helper: run a Python script

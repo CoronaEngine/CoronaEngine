@@ -146,6 +146,13 @@ function(corona_configure_runtime_deps target_name)
     if(DEFINED Python_RUNTIME_LIBRARY_DIRS)
         file(GLOB _CORONA_PY_DLLS "${Python_RUNTIME_LIBRARY_DIRS}/*.dll")
         file(GLOB _CORONA_PY_PDBS "${Python_RUNTIME_LIBRARY_DIRS}/*.pdb")
+        # Conda keeps native runtime dependencies such as OpenSSL in Library/bin,
+        # beside the Python DLLs in DLLs.
+        get_filename_component(_CORONA_PY_ENV_DIR "${Python_EXECUTABLE}" DIRECTORY)
+        file(GLOB _CORONA_CONDA_DLLS "${_CORONA_PY_ENV_DIR}/Library/bin/*.dll")
+        file(GLOB _CORONA_CONDA_PDBS "${_CORONA_PY_ENV_DIR}/Library/bin/*.pdb")
+        list(APPEND _CORONA_PY_DLLS ${_CORONA_CONDA_DLLS})
+        list(APPEND _CORONA_PY_PDBS ${_CORONA_CONDA_PDBS})
         if(_CORONA_PY_DLLS)
             list(APPEND _CORONA_ALL_DEPS ${_CORONA_PY_DLLS})
         endif()
