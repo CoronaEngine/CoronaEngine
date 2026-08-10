@@ -82,11 +82,11 @@ class AgentRuntimeFlags:
         if self.can_call_legacy_main_workflow():
             raise RuntimeError("legacy main workflow is enabled; this violates Agent-native migration invariants")
 
-    def can_use_legacy_model_resource_provider(self) -> bool:
-        return self.can_call_legacy_function_adapter() and self.use_legacy_model_resource_provider
-
     def can_use_model_resource_provider(self) -> bool:
         return self.can_call_legacy_function_adapter() and self.use_model_resource_provider
+
+    def can_use_legacy_model_resource_provider(self) -> bool:
+        return self.can_call_legacy_function_adapter() and self.use_legacy_model_resource_provider
 
     def can_use_image_resource_provider(self) -> bool:
         return self.can_call_legacy_function_adapter() and self.use_image_resource_provider

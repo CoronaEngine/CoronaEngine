@@ -13,19 +13,10 @@ import sys
 from typing import Any
 
 
-def create_legacy_model_provider() -> Any:
-    """Construct the optional legacy model provider at the integration boundary."""
-    from plugins.AITool.cai_extensions.agent.model_provider import ModelProvider
-
-    return ModelProvider()
-
-
 def create_engine_write_gate() -> Any:
     """Construct the optional engine gate at the integration boundary."""
     try:
-        from plugins.AITool.cai_extensions.agent.engine_write_gate import (
-            get_engine_write_gate,
-        )
+        from .engine_write_gate import get_engine_write_gate
 
         return get_engine_write_gate()
     except Exception:
@@ -38,8 +29,7 @@ def create_scene_element_classifier() -> Any:
         module_name = "_aitool_scene_element_classifier"
         module_path = (
             Path(__file__).resolve().parents[1]
-            / "cai_extensions"
-            / "agent"
+            / "services"
             / "scene_element_classifier.py"
         )
         spec = importlib.util.spec_from_file_location(module_name, module_path)
@@ -55,6 +45,5 @@ def create_scene_element_classifier() -> Any:
 
 __all__ = [
     "create_engine_write_gate",
-    "create_legacy_model_provider",
     "create_scene_element_classifier",
 ]

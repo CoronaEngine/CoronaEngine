@@ -20,9 +20,9 @@ DEFAULT_SCENE_NAME = ""
 
 def _import_vlm_capture():
     try:
-        from plugins.AITool.cai_extensions.agent.vlm_capture import capture_vlm_views
+        from .vlm_capture import capture_vlm_views
     except ModuleNotFoundError:
-        from cai_extensions.agent.vlm_capture import capture_vlm_views
+        from plugins.AITool.cai_extensions.mcp.tools.vlm_capture import capture_vlm_views
     return capture_vlm_views
 
 

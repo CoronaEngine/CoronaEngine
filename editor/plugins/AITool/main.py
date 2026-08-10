@@ -17,10 +17,19 @@ if str(_AITOOL_DIR) not in sys.path:
 INITIALIZE_AFTER_PUBLISH = True
 
 
-def _create_lanchat_scene_composer():
-    from .cai_extensions.agent.scene_composer import SceneComposer
+def _create_lanchat_chat_agent(cai_app):
+    """Adapt the canonical CAI chat runtime for LANChat role replies."""
+    def _agent(persona: str, messages: list[str]) -> str:
+        from Quasar.cai.protocol.request import ChatRequest
 
-    return SceneComposer(scene_name="Scene/default.scene")
+        prompt = "\n".join([str(persona or "").strip(), *(str(item) for item in messages)])
+        request = ChatRequest.from_text(
+            text=prompt,
+            metadata={"lan_chat_agent": True, "skip_conversation_store": True},
+        )
+        return "".join(cai_app.chat(request)).strip()
+
+    return _agent
 
 
 def initialize_script_service(stop_token=None):
@@ -131,7 +140,7 @@ class AITool(PluginBase):
             build_error_response,
         )
         cls._lanchat_agent_worker = LANChatAgentWorker(
-            composer_factory=_create_lanchat_scene_composer,
+            agent_factory=lambda: _create_lanchat_chat_agent(cls._cai_app),
             async_agent_execution=True,
         )
         cls._request_states = cls._request_service.states

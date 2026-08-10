@@ -30,7 +30,6 @@ from .lanchat_agent_orchestrator import LanChatAgentOrchestrator
 from .lanchat_host_action_executor import LanChatHostActionExecutor
 from .composition_root import (
     create_engine_write_gate,
-    create_legacy_model_provider,
     create_scene_element_classifier,
 )
 from .runtime_query_policy import (
@@ -206,8 +205,6 @@ class LANChatAgentWorker:
         agent_factory: Callable[[], Any] | None = None,
         host_action_executor: Any = None,
         interaction_coordinator: InteractionCoordinator | None = None,
-        generation_scheduler: Any = None,
-        composer_factory: Callable[[], Any] | None = None,
         agent_runtime_flags: AgentRuntimeFlags | None = None,
         agent_runtime: AgentRuntime | None = None,
         collaboration_model_selector: CollaborationModelSelector | None = None,
@@ -245,8 +242,6 @@ class LANChatAgentWorker:
         self._agent_factory = agent_factory
         self._host_action_executor = host_action_executor
         self._interaction_coordinator = interaction_coordinator
-        self._generation_scheduler = generation_scheduler
-        self._composer_factory = composer_factory
         self._logger = logging.getLogger(__name__)
         self._agent_runtime_flags = agent_runtime_flags or AgentRuntimeFlags.from_env()
         self._engine_write_gate: Any = _ENGINE_GATE_UNSET
@@ -259,7 +254,6 @@ class LANChatAgentWorker:
         self._collaboration_model_selector = (
             collaboration_model_selector or default_collaboration_model_selector()
         )
-        self._owns_generation_scheduler = generation_scheduler is None and interaction_coordinator is None
         self._sleep_seconds = sleep_seconds
         self._async_agent_execution = (
             os.getenv("LANCHAT_AGENT_ASYNC", "1") == "1"
@@ -293,8 +287,6 @@ class LANChatAgentWorker:
         self._runtime_event_disclosure_cursor_by_room: dict[str, str] = {}
         self._runtime_event_report_ready_keys_by_room: dict[str, set[str]] = {}
         self._logged_media_lineage_keys: set[tuple[str, ...]] = set()
-        if self._generation_scheduler is not None:
-            self._install_generation_scheduler_hooks(self._generation_scheduler)
 
     def _get_runtime_tool(self, name: str) -> Any:
         """Resolve a Quasar tool without importing legacy workflow packages."""
@@ -498,7 +490,7 @@ class LANChatAgentWorker:
         """Create the Runtime control plane with optional narrow legacy adapters.
 
         The adapters are explicitly feature-flagged and function-sized.  They do
-        not re-enable SceneComposer / ProgressiveWorkflow as a main workflow.
+        keep complete generation owned by AgentRuntime.
         """
 
         kwargs: dict[str, Any] = {}
@@ -680,19 +672,6 @@ class LANChatAgentWorker:
             except Exception as exc:  # noqa: BLE001
                 logging.getLogger(__name__).debug("AgentRuntime model provider disabled: %s", type(exc).__name__)
                 note_provider("model_resource", requested=True, status="unavailable", reason="adapter_load_failed")
-        if self._agent_runtime_flags.can_use_legacy_model_resource_provider():
-            try:
-                from .agent_runtime import make_legacy_model_resource_provider
-
-                if "model_resource_provider" not in kwargs:
-                    kwargs["model_resource_provider"] = make_legacy_model_resource_provider(
-                        model_provider_factory=create_legacy_model_provider,
-                    )
-                    model_resource_provider_enabled = True
-                    note_provider("model_resource", requested=True, status="enabled", reason="legacy_model_provider")
-            except Exception as exc:  # noqa: BLE001
-                logging.getLogger(__name__).debug("AgentRuntime legacy model provider disabled: %s", type(exc).__name__)
-                note_provider("model_resource", requested=True, status="unavailable", reason="adapter_load_failed")
         use_engine_actor_import_provider = (
             self._runtime_engine_available
             and model_resource_provider_enabled
@@ -818,58 +797,6 @@ class LANChatAgentWorker:
         self._stop_event.set()
         if self._thread is not None and self._thread.is_alive():
             self._thread.join(timeout=timeout)
-        if self._generation_scheduler is not None:
-            self._clear_generation_scheduler_hooks(self._generation_scheduler)
-        if self._owns_generation_scheduler and self._generation_scheduler is not None:
-            shutdown = getattr(self._generation_scheduler, "shutdown", None)
-            if callable(shutdown):
-                shutdown()
-
-    def generation_scheduler_snapshot(self) -> dict[str, Any]:
-        if not self._agent_runtime_flags.can_call_legacy_main_workflow():
-            return {"available": False, "reason": "legacy generation scheduler is disabled"}
-        scheduler = self._generation_scheduler
-        if scheduler is None:
-            return {"available": False, "reason": "generation scheduler has not been initialized"}
-        snapshot = getattr(scheduler, "public_snapshot", None)
-        if not callable(snapshot):
-            snapshot = getattr(scheduler, "snapshot", None)
-        if not callable(snapshot):
-            return {"available": False, "reason": "generation scheduler does not expose snapshot"}
-        data = snapshot()
-        if isinstance(data, dict):
-            return {"available": True, **data}
-        return {"available": False, "reason": "generation scheduler snapshot returned non-dict"}
-
-    def generation_scheduler_session_snapshot(self, session_id: str) -> dict[str, Any]:
-        if not self._agent_runtime_flags.can_call_legacy_main_workflow():
-            return {"available": False, "reason": "legacy generation scheduler is disabled"}
-        scheduler = self._generation_scheduler
-        if scheduler is None:
-            return {"available": False, "reason": "generation scheduler has not been initialized"}
-        session_snapshot = getattr(scheduler, "public_session_snapshot", None)
-        if not callable(session_snapshot):
-            session_snapshot = getattr(scheduler, "session_snapshot", None)
-        if not callable(session_snapshot):
-            return {"available": False, "reason": "generation scheduler does not expose session_snapshot"}
-        data = session_snapshot(session_id)
-        if isinstance(data, dict):
-            return {"available": True, **data}
-        return {"available": False, "reason": "generation scheduler session_snapshot returned non-dict"}
-
-    def cancel_generation_session(self, session_id: str, *, abandon_remote: bool = False) -> dict[str, Any]:
-        if not self._agent_runtime_flags.can_call_legacy_main_workflow():
-            return {"available": False, "reason": "legacy generation scheduler is disabled"}
-        scheduler = self._generation_scheduler
-        if scheduler is None:
-            return {"available": False, "reason": "generation scheduler has not been initialized"}
-        cancel_session = getattr(scheduler, "cancel_session", None)
-        if not callable(cancel_session):
-            return {"available": False, "reason": "generation scheduler does not expose cancel_session"}
-        result = cancel_session(session_id, abandon_remote=abandon_remote)
-        if isinstance(result, dict):
-            return {"available": True, **result}
-        return {"available": False, "reason": "generation scheduler cancel_session returned non-dict"}
 
     def handle_lanchat_room_event(self, event: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(event, dict):
@@ -3782,15 +3709,11 @@ class LANChatAgentWorker:
                 or coordinator._is_post_generation_adjustment(text)
             )
         try:
-            from plugins.AITool.cai_extensions.agent.agent_adapter import classify_intent
-        except Exception:  # noqa: BLE001
-            try:
-                from cai_extensions.agent.agent_adapter import classify_intent  # type: ignore
-            except Exception as exc:  # noqa: BLE001
-                self._logger.debug("Failed to import scene intent classifier for %s: %s", source, type(exc).__name__)
-                return False
-        try:
-            intent = classify_intent(text)
+            intent = get_intent_understanding_service().classify(
+                text,
+                allow_llm=False,
+                generation_active=False,
+            ).intent
         except Exception as exc:  # noqa: BLE001
             self._logger.debug("Failed to classify LANChat chat message for Coordinator sync: %s", type(exc).__name__)
             return False
@@ -5779,7 +5702,6 @@ class LANChatAgentWorker:
             emitted = self._emit_new_disclosure_events(coordinator, disclosure_start)
             self._start_coordinator_disclosure_watch(coordinator, disclosure_start + emitted)
             self._set_runtime_mode_for_pace(action, trigger=trigger)
-            self._emit_generation_scheduler_disclosure()
             return f"【GM】{event.message}"
         except Exception as exc:  # noqa: BLE001
             self._logger.debug("Coordinator GM pace control skipped: %s", type(exc).__name__)
@@ -8440,7 +8362,6 @@ class LANChatAgentWorker:
             )
             emitted = self._emit_new_disclosure_events(coordinator, disclosure_start)
             self._start_coordinator_disclosure_watch(coordinator, disclosure_start + emitted)
-            self._emit_generation_scheduler_disclosure()
             return f"【执行结果】SeedPlan {plan.plan_id} 已进入生成队列：{ref.job_id} ({ref.status})"
         return None
 
@@ -11111,7 +11032,6 @@ class LANChatAgentWorker:
             if coordinator is not None:
                 emitted = self._emit_new_disclosure_events(coordinator, disclosure_start)
                 self._start_coordinator_disclosure_watch(coordinator, disclosure_start + emitted)
-            self._emit_generation_scheduler_disclosure()
 
     def _send_runtime_structured_action_reply(self, payload: dict[str, Any], text: str | None) -> bool:
         if not self._runtime_engine_available:
@@ -11407,119 +11327,6 @@ class LANChatAgentWorker:
             return "当前状态暂不可用，请稍后再试。"
         return str(payload.get("public_message") or "")
 
-    def _emit_generation_scheduler_disclosure(self) -> None:
-        if not self._runtime_engine_available:
-            return
-        room_ids = sorted(self._active_room_ids)
-        snapshots: list[tuple[str, dict[str, Any]]] = []
-        if room_ids:
-            for room_id in room_ids:
-                snapshot = self.generation_scheduler_session_snapshot(room_id)
-                if snapshot.get("available"):
-                    snapshots.append((room_id, snapshot))
-        else:
-            snapshot = self.generation_scheduler_snapshot()
-            if snapshot.get("available"):
-                snapshots.append(("", snapshot))
-        for room_id, snapshot in snapshots:
-            self._emit_generation_scheduler_snapshot_disclosure(room_id, snapshot)
-
-    def _emit_generation_scheduler_snapshot_disclosure(self, room_id: str, snapshot: dict[str, Any]) -> None:
-        queued_count = int(snapshot.get("queued_count") or 0)
-        total_jobs = int(snapshot.get("total_jobs") or 0)
-        active_count = int(snapshot.get("active_count") or len(snapshot.get("active_jobs") or []))
-        paused_sessions = list(snapshot.get("paused_sessions") or [])
-        paused_session_count = int(snapshot.get("paused_session_count") or len(paused_sessions))
-        queue_pressure = float(snapshot.get("queue_pressure") or 0.0)
-        diagnosis = snapshot.get("diagnosis") if isinstance(snapshot.get("diagnosis"), dict) else {}
-        if queued_count <= 0 and active_count <= 0 and paused_session_count <= 0:
-            return
-        progress = max(0, min(100, int(round(queue_pressure * 100))))
-        if paused_session_count > 0:
-            public_message = "生成任务正在执行，当前阶段会持续更新。"
-            available_actions = ["continue_generation", "add_note"]
-        elif queue_pressure >= 1.0:
-            public_message = "生成任务正在执行，当前阶段会持续更新。"
-            available_actions = ["pause_after_batch", "add_note"]
-        elif queued_count > 0:
-            public_message = "生成任务正在执行，当前阶段会持续更新。"
-            available_actions = ["add_note", "pause_after_batch"]
-        else:
-            public_message = "生成任务正在执行，当前阶段会持续更新。"
-            available_actions = ["add_note"]
-        metadata = {
-            "disclosure": {
-                "event_id": f"scheduler-{room_id or 'global'}-{int(time.time() * 1000)}",
-                "room_id": room_id,
-                "audience": "participant",
-                "stage": "璧勬簮璋冨害",
-                "progress": progress,
-                "public_message": public_message,
-                "available_actions": available_actions,
-                "requires_confirmation": False,
-                "metadata": {
-                    "queue_pressure": queue_pressure,
-                    "queued_count": queued_count,
-                    "active_count": active_count,
-                    "paused_session_count": paused_session_count,
-                    "total_jobs": total_jobs,
-                    "diagnosis": {
-                        "state": str(diagnosis.get("state") or ""),
-                        "reasons": [
-                            str(item) for item in list(diagnosis.get("reasons") or [])[:6]
-                            if str(item)
-                        ],
-                        "recommended_actions": [
-                            str(item) for item in list(diagnosis.get("recommended_actions") or [])[:6]
-                            if str(item)
-                        ],
-                    },
-                    "recent_event_types": [
-                        str(event.get("event_type") or "")
-                        for event in (snapshot.get("recent_events") or [])[-5:]
-                        if isinstance(event, dict)
-                    ],
-                },
-            },
-        }
-        text = public_message
-        disclosure_payload = metadata["disclosure"]
-        try:
-            if self._lan_chat_transport is not None:
-                self._record_disclosure_event_send_in_agent_runtime(
-                    phase="disclosure_event_send_requested",
-                    payload=disclosure_payload,
-                    message=text,
-                    message_kind="action_status",
-                    channel="scheduler_broadcast_ex",
-                )
-                sent = bool(self._lan_chat_transport.send_system_message(
-                    "system",
-                    "系统",
-                    text,
-                    "action_status",
-                    disclosure_payload["event_id"],
-                    json.dumps(metadata, ensure_ascii=False),
-                ))
-                self._record_disclosure_event_send_in_agent_runtime(
-                    phase="disclosure_event_send_succeeded" if sent else "disclosure_event_send_failed",
-                    payload=disclosure_payload,
-                    message=text,
-                    message_kind="action_status",
-                    channel="scheduler_broadcast_ex",
-                    sent=sent,
-                )
-        except Exception as exc:  # noqa: BLE001
-            self._logger.debug("Failed to emit generation scheduler disclosure: %s", type(exc).__name__)
-            self._record_disclosure_event_send_in_agent_runtime(
-                phase="disclosure_event_send_failed",
-                payload=disclosure_payload,
-                message=text,
-                message_kind="action_status",
-                channel="scheduler_broadcast",
-                sent=False,
-            )
-
     def _get_host_action_executor(self) -> Any:
         if self._host_action_executor is None:
             structured_action_handler = (
@@ -11577,149 +11384,8 @@ class LANChatAgentWorker:
 
     def _get_interaction_coordinator(self) -> InteractionCoordinator:
         if self._interaction_coordinator is None:
-            self._interaction_coordinator = InteractionCoordinator(
-                scheduler=self._get_generation_scheduler(),
-            )
+            self._interaction_coordinator = InteractionCoordinator()
         return self._interaction_coordinator
-
-    def _get_generation_scheduler(self) -> Any:
-        if not self._agent_runtime_flags.can_call_legacy_main_workflow():
-            return None
-        if self._generation_scheduler is None:
-            from .generation_scheduler import GenerationScheduler
-
-            if self._composer_factory is not None:
-                from .generation_composer_adapter import SceneComposerJobRunner
-
-                runner = SceneComposerJobRunner(
-                    self._composer_factory,
-                    agent_runtime_flags=self._agent_runtime_flags,
-                )
-                self._generation_scheduler = GenerationScheduler(
-                    stage_handlers=runner.stage_handlers(),
-                    stage_order=("compose",),
-                )
-            else:
-                self._generation_scheduler = GenerationScheduler()
-            self._install_generation_scheduler_hooks(self._generation_scheduler)
-        return self._generation_scheduler
-
-    def _install_generation_scheduler_hooks(self, scheduler: Any) -> None:
-        self._install_deferred_download_scheduler(scheduler)
-        self._install_media_task_scheduler(scheduler)
-        self._install_generation_scheduler_runtime_audit(scheduler)
-        self._install_progress_disclosure_scheduler(scheduler)
-
-    def _clear_generation_scheduler_hooks(self, scheduler: Any) -> None:
-        self._clear_deferred_download_scheduler(scheduler)
-        self._clear_media_task_scheduler(scheduler)
-        self._clear_generation_scheduler_runtime_audit(scheduler)
-        self._clear_progress_disclosure_scheduler(scheduler)
-
-    def _install_generation_scheduler_runtime_audit(self, scheduler: Any) -> None:
-        record_event = getattr(scheduler, "_record_event_locked", None)
-        if not callable(record_event):
-            return
-        if getattr(scheduler, "_lanchat_runtime_audit_installed", False):
-            return
-        worker = self
-
-        def record_event_with_runtime_audit(event_type: str, **payload: Any) -> Any:
-            result = record_event(event_type, **payload)
-            worker._record_generation_scheduler_event_in_agent_runtime(
-                event_type=str(event_type or ""),
-                payload=dict(payload or {}),
-            )
-            return result
-
-        try:
-            setattr(scheduler, "_lanchat_runtime_audit_original_record_event", record_event)
-            setattr(scheduler, "_lanchat_runtime_audit_installed", True)
-            setattr(scheduler, "_record_event_locked", record_event_with_runtime_audit)
-        except Exception as exc:  # noqa: BLE001
-            self._logger.debug("Failed to install generation scheduler Runtime audit hook: %s", type(exc).__name__)
-
-    def _clear_generation_scheduler_runtime_audit(self, scheduler: Any) -> None:
-        if not getattr(scheduler, "_lanchat_runtime_audit_installed", False):
-            return
-        original = getattr(scheduler, "_lanchat_runtime_audit_original_record_event", None)
-        try:
-            if callable(original):
-                setattr(scheduler, "_record_event_locked", original)
-            setattr(scheduler, "_lanchat_runtime_audit_installed", False)
-        except Exception as exc:  # noqa: BLE001
-            self._logger.debug("Failed to clear generation scheduler Runtime audit hook: %s", type(exc).__name__)
-
-    def _record_generation_scheduler_event_in_agent_runtime(
-        self,
-        *,
-        event_type: str,
-        payload: dict[str, Any],
-    ) -> dict[str, Any]:
-        room_id = str(payload.get("room_id") or payload.get("session_id") or "default")
-        external_plan_id = str(payload.get("plan_id") or "")
-        safe_payload: dict[str, Any] = {
-            "event_type": str(event_type or ""),
-            "status": str(payload.get("status") or ""),
-            "current_stage": str(payload.get("current_stage") or ""),
-            "priority": int(payload.get("priority") or 0),
-            "cancelled_count": int(payload.get("cancelled_count") or 0),
-            "pruned_count": int(payload.get("pruned_count") or 0),
-        }
-        if payload.get("batch_id"):
-            safe_payload["batch_id"] = str(payload.get("batch_id") or "")
-        return self._record_runtime_audit_event(
-            event=f"generation_scheduler_{event_type or 'event'}",
-            room_id=room_id,
-            message=str(event_type or ""),
-            payload=safe_payload,
-            external_plan_id=external_plan_id,
-            batch_id=str(payload.get("batch_id") or ""),
-        )
-
-    def _install_progress_disclosure_scheduler(self, scheduler: Any) -> None:
-        submit = getattr(scheduler, "submit", None)
-        if not callable(submit):
-            return
-        if getattr(scheduler, "_lanchat_progress_disclosure_installed", False):
-            return
-        worker = self
-
-        def submit_with_progress(payload: dict[str, Any]) -> Any:
-            job_payload = dict(payload or {})
-            job_type = str(job_payload.get("job_type") or "")
-            if job_type.startswith("scene_generation"):
-                runtime_context = dict(job_payload.get("_runtime_context") or {})
-                if not callable(runtime_context.get("progress_sink")):
-                    runtime_context["progress_sink"] = worker._make_generation_progress_sink(
-                        room_id=str(job_payload.get("room_id") or job_payload.get("session_id") or ""),
-                        plan_id=str(job_payload.get("plan_id") or ""),
-                    )
-                if not callable(runtime_context.get("runtime_status_provider")):
-                    runtime_context["runtime_status_provider"] = worker._make_generation_runtime_status_provider(
-                        room_id=str(job_payload.get("room_id") or job_payload.get("session_id") or ""),
-                        plan_id=str(job_payload.get("plan_id") or ""),
-                    )
-                job_payload["_runtime_context"] = runtime_context
-            return submit(job_payload)
-
-        try:
-            setattr(scheduler, "_lanchat_progress_disclosure_original_submit", submit)
-            setattr(scheduler, "_lanchat_progress_disclosure_installed", True)
-            setattr(scheduler, "submit", submit_with_progress)
-        except Exception as exc:  # noqa: BLE001
-            self._logger.debug("Failed to install LANChat progress disclosure scheduler hook: %s", type(exc).__name__)
-
-    def _clear_progress_disclosure_scheduler(self, scheduler: Any) -> None:
-        if not getattr(scheduler, "_lanchat_progress_disclosure_installed", False):
-            return
-        original = getattr(scheduler, "_lanchat_progress_disclosure_original_submit", None)
-        try:
-            if callable(original):
-                setattr(scheduler, "submit", original)
-            setattr(scheduler, "_lanchat_progress_disclosure_installed", False)
-        except Exception as exc:  # noqa: BLE001
-            self._logger.debug("Failed to clear LANChat progress disclosure scheduler hook: %s", type(exc).__name__)
 
     def _make_generation_progress_sink(self, *, room_id: str, plan_id: str) -> Callable[[str], None]:
         def sink(message: str) -> None:
@@ -11832,64 +11498,6 @@ class LANChatAgentWorker:
         if "完成空间" in text or "理解场景" in text:
             return "理解方案", progress
         return "生成中", progress
-
-    def _install_deferred_download_scheduler(self, scheduler: Any) -> None:
-        try:
-            from Quasar.ai_modules.three_d_generate.tools import model_tools
-        except Exception:
-            return
-        setter = getattr(model_tools, "set_deferred_download_scheduler", None)
-        if callable(setter):
-            try:
-                from .generation_provider_adapter import DeferredDownloadScheduler
-
-                setter(DeferredDownloadScheduler(scheduler))
-            except Exception as exc:  # noqa: BLE001
-                self._logger.debug("Failed to install deferred download scheduler: %s", type(exc).__name__)
-
-    def _clear_deferred_download_scheduler(self, scheduler: Any) -> None:
-        try:
-            from Quasar.ai_modules.three_d_generate.tools import model_tools
-        except Exception:
-            return
-        getter = getattr(model_tools, "get_deferred_download_scheduler", None)
-        setter = getattr(model_tools, "set_deferred_download_scheduler", None)
-        if not callable(getter) or not callable(setter):
-            return
-        try:
-            # Quasar receives an engine-owned facade, so identity is not the
-            # original GenerationScheduler. Clearing is scoped to this worker.
-            if getter() is not None:
-                setter(None)
-        except Exception as exc:  # noqa: BLE001
-            self._logger.debug("Failed to clear deferred download scheduler: %s", type(exc).__name__)
-
-    def _install_media_task_scheduler(self, scheduler: Any) -> None:
-        try:
-            from Quasar.ai_media_resource import registry
-        except Exception:
-            return
-        setter = getattr(registry, "set_media_task_scheduler", None)
-        if callable(setter):
-            try:
-                setter(scheduler)
-            except Exception as exc:  # noqa: BLE001
-                self._logger.debug("Failed to install media task scheduler: %s", type(exc).__name__)
-
-    def _clear_media_task_scheduler(self, scheduler: Any) -> None:
-        try:
-            from Quasar.ai_media_resource import registry
-        except Exception:
-            return
-        getter = getattr(registry, "get_media_task_scheduler", None)
-        setter = getattr(registry, "set_media_task_scheduler", None)
-        if not callable(getter) or not callable(setter):
-            return
-        try:
-            if getter() is scheduler:
-                setter(None)
-        except Exception as exc:  # noqa: BLE001
-            self._logger.debug("Failed to clear media task scheduler: %s", type(exc).__name__)
 
     def _resolve_runtime_media_file(self, file_id: str, timeout: float = 120.0) -> dict[str, Any]:
         """Resolve one canonical MediaRegistry file ID with byte-backed lineage."""
@@ -12183,6 +11791,7 @@ class LANChatAgentWorker:
 
     @staticmethod
     def _default_agent_factory() -> Any:
-        from plugins.AITool.cai_extensions.agent.agent_adapter import create_master_agent
+        def _unconfigured_agent(_persona: str, _messages: list[str]) -> str:
+            raise RuntimeError("LANChat chat agent factory is not configured")
 
-        return create_master_agent()
+        return _unconfigured_agent

@@ -14,23 +14,6 @@ from importlib import import_module
 from pathlib import Path
 from typing import Iterable
 
-try:
-    from plugins.AITool.services.workflow_command_policy import (
-        classify_workflow_command_exposure,
-        install_workflow_command_policy,
-        install_workflow_function_policy,
-        record_workflow_function_exposure,
-        should_register_workflow_command,
-    )
-except Exception:  # noqa: BLE001
-    from services.workflow_command_policy import (  # type: ignore
-        classify_workflow_command_exposure,
-        install_workflow_command_policy,
-        install_workflow_function_policy,
-        record_workflow_function_exposure,
-        should_register_workflow_command,
-    )
-
 logger = logging.getLogger(__name__)
 
 
@@ -111,105 +94,6 @@ class CabbageEngineToolsPlugin:
         runtime.metadata.setdefault("cabbage_adapter", {})[self.name] = True
         logger.debug("[cai_extensions] engine loaders registered")
         return {"name": self.name}
-
-
-class CabbageWorkflowPlugin:
-    name = "cabbage.workflows"
-    enabled = True
-
-    flow_modules: tuple[str, ...] = ()
-    legacy_flow_modules = (
-        ".agent",
-        ".flows.scene_composition_workflow",
-        ".flows.model_retrieval_workflow",
-        ".flows.full_pipeline_workflow",
-        ".flows.integrated_multi_scene_workflow",
-        ".flows.multi_scene_parallel_workflow",
-        ".flows.scene_composition_workflow_v2",
-    )
-
-    def __init__(self, context: CabbageContext):
-        self.context = context
-
-    def register(self, runtime) -> dict:
-        registry = runtime.get_registry("workflow")
-        command_registry = runtime.get_registry("workflow_command")
-        install_workflow_command_policy(command_registry)
-        install_workflow_function_policy(registry, command_registry)
-        registered_flows: list[int] = []
-        registered_commands: list[str] = []
-        hidden_commands: list[str] = []
-        hidden_deprecated_commands: list[str] = []
-        hidden_internal_commands: list[str] = []
-
-        for module_name in self.flow_modules:
-            try:
-                module = import_module(module_name, __package__)
-            except Exception as exc:
-                logger.warning("[cai_extensions] import flow %s failed: %s", module_name, exc)
-                continue
-
-            workflows = getattr(module, "WORKFLOWS", None)
-            if isinstance(workflows, dict):
-                for function_id, graph in workflows.items():
-                    if not isinstance(function_id, int):
-                        continue
-                    try:
-                        registry.register(function_id, graph, overwrite=True)
-                        registered_flows.append(function_id)
-                    except Exception as exc:
-                        logger.warning(
-                            "[cai_extensions] register flow %s fid=%s failed: %s",
-                            module_name,
-                            function_id,
-                            exc,
-                        )
-
-            commands = getattr(module, "WORKFLOW_COMMANDS", None)
-            if isinstance(commands, dict):
-                for command, function_id in commands.items():
-                    if not isinstance(command, str) or not isinstance(function_id, int):
-                        continue
-                    exposure = classify_workflow_command_exposure(command)
-                    record_workflow_function_exposure(command_registry, command, function_id)
-                    if not should_register_workflow_command(command):
-                        hidden_commands.append(command)
-                        if exposure == "deprecated":
-                            hidden_deprecated_commands.append(command)
-                        elif exposure == "internal":
-                            hidden_internal_commands.append(command)
-                        continue
-                    try:
-                        command_registry.register(command, function_id, overwrite=True)
-                        registered_commands.append(command)
-                    except Exception as exc:
-                        logger.warning(
-                            "[cai_extensions] register command %s -> %s failed: %s",
-                            command,
-                            function_id,
-                            exc,
-                        )
-
-        runtime.metadata.setdefault("cabbage_adapter", {})[self.name] = {
-            "flows": registered_flows,
-            "commands": registered_commands,
-            "hidden_commands": hidden_commands,
-            "hidden_deprecated_commands": hidden_deprecated_commands,
-            "hidden_internal_commands": hidden_internal_commands,
-        }
-        logger.info(
-            "[cai_extensions] commands registered: %s hidden: %s",
-            registered_commands,
-            hidden_commands,
-        )
-        return {
-            "name": self.name,
-            "flows": registered_flows,
-            "commands": registered_commands,
-            "hidden_commands": hidden_commands,
-            "hidden_deprecated_commands": hidden_deprecated_commands,
-            "hidden_internal_commands": hidden_internal_commands,
-        }
 
 
 class CabbageWorkflowSyncPlugin:
@@ -303,7 +187,6 @@ def create_plugins(context: CabbageContext | None = None):
         CabbagePathsPlugin(context),
         CabbageAppConfigPlugin(context),
         CabbageEngineToolsPlugin(context),
-        CabbageWorkflowPlugin(context),
         CabbageWorkflowSyncPlugin(context),
         CabbageEngineModulesPlugin(context),
     ]

@@ -1,8 +1,8 @@
 """Low-risk adapters from existing capabilities into AgentRuntime providers.
 
-These adapters are intentionally narrower than the legacy workflows they touch.
+These adapters are intentionally narrow and capability-oriented.
 They expose function-sized resource providers to ToolCallGraph execution without
-letting old SceneComposer/ProgressiveWorkflow regain control of the runtime.
+keeping provider and engine integration behind the canonical runtime boundary.
 """
 
 from __future__ import annotations
@@ -47,8 +47,7 @@ class RuntimeCppBridgeResult:
 class RuntimeCppBridge:
     """Narrow Runtime boundary for C++/engine writes.
 
-    The bridge does not know about SceneComposer, Scheduler, or progressive
-    workflow.  It only invokes an already selected low-level binding through
+    The bridge does not know about workflow orchestration.  It only invokes an already selected low-level binding through
     EngineWriteGate and normalizes the binding result into a Runtime-safe shape.
     """
 
@@ -374,7 +373,7 @@ def make_image_resource_provider(
     """Create a Runtime image-resource provider from a function-sized image tool.
 
     The adapter normalizes reference-image facts for RuntimeState.  It does not
-    call SceneComposer, start a model workflow, import actors, or mutate engine
+    start a model workflow, import actors, or mutate engine
     state.  The injected image_tool may expose ``invoke(payload)`` or be a plain
     callable that accepts the same payload.
     """
@@ -448,7 +447,7 @@ def make_model_resource_provider(
     """Create a Runtime model-resource provider from a function-sized model tool.
 
     The adapter prepares model resource facts only.  It does not call
-    SceneComposer, ProgressiveWorkflow, GenerationScheduler, or import actors.
+    legacy orchestration or import actors.
     The injected model_tool may expose ``invoke(payload)`` or be a plain
     callable accepting the same payload.
     """
@@ -537,6 +536,52 @@ def make_model_resource_provider(
                     indexed_results[futures[future]] = future.result()
                 prepared = [indexed_results[index] for index in sorted(indexed_results)]
         return {name: resource for name, resource in prepared}
+
+    return _provider
+
+
+def make_legacy_model_resource_provider(
+    model_provider_factory: Callable[[], Any] | None = None,
+) -> ResourceProvider:
+    """Compatibility provider retained for isolated migration tests only.
+
+    It is not registered by the production composition root; production model
+    generation uses the function-sized provider above.
+    """
+    provider_instance: Any | None = None
+
+    def _provider(payload: dict[str, Any]) -> dict[str, dict[str, Any]]:
+        nonlocal provider_instance
+        batch_id = str(payload.get("batch_id") or "")
+        model_items = [str(item) for item in (payload.get("model_items") or []) if str(item or "")]
+        resources: dict[str, dict[str, Any]] = {}
+        if provider_instance is None:
+            try:
+                provider_instance = _create_model_provider(model_provider_factory)
+            except Exception:  # noqa: BLE001
+                return {
+                    name: _failed_model_resource(
+                        name=name, batch_id=batch_id, index=index,
+                        source="legacy_model_adapter_unavailable",
+                        failure_code="legacy_model_adapter_unavailable",
+                    )
+                    for index, name in enumerate(model_items, start=1)
+                }
+        for index, name in enumerate(model_items, start=1):
+            try:
+                result = provider_instance.acquire(
+                    name,
+                    image_url=str(_item_value(payload, name, "image_url") or _image_resource_value(payload, name) or ""),
+                    prompt_text=str(_item_value(payload, name, "prompt_text") or name),
+                    object_id=f"{batch_id}-{index:02d}" if batch_id else f"runtime-{index:02d}",
+                )
+                resources[name] = _normalize_acquire_result(result, name=name, batch_id=batch_id, index=index)
+            except Exception:  # noqa: BLE001
+                resources[name] = _failed_model_resource(
+                    name=name, batch_id=batch_id, index=index,
+                    failure_code="legacy_model_acquire_exception",
+                )
+        return resources
 
     return _provider
 
@@ -1059,69 +1104,6 @@ def make_engine_environment_component_import_provider(
                 **_merge_bridge_boundary_facts(bridge_results),
             },
         }
-
-    return _provider
-
-
-def make_legacy_model_resource_provider(
-    model_provider_factory: Callable[[], Any] | None = None,
-) -> ResourceProvider:
-    """Create a Runtime model-resource provider backed by legacy ModelProvider.
-
-    The returned provider only acquires and normalizes model resource facts.  It
-    does not import actors, mutate the engine scene, or call the old scene
-    composition workflow.  Per-item acquisition failures are persisted as failed
-    resource facts so later Runtime stages can report partial progress without
-    creating fake actors for unavailable models.
-    """
-
-    provider_instance: Any | None = None
-
-    def _provider(payload: dict[str, Any]) -> dict[str, dict[str, Any]]:
-        nonlocal provider_instance
-        batch_id = str(payload.get("batch_id") or "")
-        model_items = [str(item) for item in (payload.get("model_items") or []) if str(item or "")]
-        resources: dict[str, dict[str, Any]] = {}
-        if provider_instance is None:
-            try:
-                provider_instance = _create_model_provider(model_provider_factory)
-            except Exception:  # noqa: BLE001
-                for index, name in enumerate(model_items, start=1):
-                    resources[name] = _failed_model_resource(
-                        name=name,
-                        batch_id=batch_id,
-                        index=index,
-                        source="legacy_model_adapter_unavailable",
-                        failure_code="legacy_model_adapter_unavailable",
-                    )
-                return resources
-        for index, name in enumerate(model_items, start=1):
-            object_id = f"{batch_id}-{index:02d}" if batch_id else f"runtime-{index:02d}"
-            try:
-                result = provider_instance.acquire(
-                    name,
-                    image_url=str(_item_value(payload, name, "image_url") or _image_resource_value(payload, name) or ""),
-                    prompt_text=str(_item_value(payload, name, "prompt_text") or name),
-                    object_id=object_id,
-                )
-            except Exception:  # noqa: BLE001
-                resources[name] = _failed_model_resource(
-                    name=name,
-                    batch_id=batch_id,
-                    index=index,
-                    failure_code="legacy_model_acquire_exception",
-                )
-                continue
-            try:
-                resources[name] = _normalize_acquire_result(result, name=name, batch_id=batch_id, index=index)
-            except RuntimeError:
-                resources[name] = _failed_model_resource(
-                    name=name,
-                    batch_id=batch_id,
-                    index=index,
-                    failure_code="legacy_model_invalid_result",
-                )
-        return resources
 
     return _provider
 
@@ -3714,9 +3696,12 @@ def _visible_model_path_candidates(path_text: str) -> list[Any]:
     if raw.is_absolute():
         candidates = [raw]
     else:
-        from runtime import project_context
+        try:
+            from runtime import project_context
 
-        candidates = [project_context.get_project_root() / raw, raw]
+            candidates = [project_context.get_project_root() / raw, raw]
+        except Exception:  # standalone tests and non-editor callers
+            candidates = [raw]
     visible = []
     for candidate in candidates:
         try:

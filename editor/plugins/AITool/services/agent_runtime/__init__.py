@@ -1,7 +1,6 @@
 """Agent-native runtime Phase 1 foundation.
 
-This package is intentionally independent from the legacy SceneComposer and
-GenerationScheduler control paths.  Phase 1 provides a runnable mock slice:
+This package owns the canonical AgentRuntime control path. Phase 1 provides a runnable mock slice:
 message -> ScenePlan -> confirmation -> ToolCallGraph -> RuntimeState ->
 OperationLog-backed report.
 """
@@ -72,6 +71,7 @@ from .adapters import (
     make_environment_component_provider,
     make_image_resource_provider,
     make_model_resource_provider,
+    make_legacy_model_resource_provider,
     make_current_unversioned_v1_scene_snapshot_reader,
     normalize_current_unversioned_v1_scene_snapshot,
     make_scene_review_provider,
@@ -79,7 +79,6 @@ from .adapters import (
     make_engine_actor_import_provider,
     make_engine_actor_delete_provider,
     make_engine_layout_transform_provider,
-    make_legacy_model_resource_provider,
 )
 from .flags import AgentRuntimeFlags, install_f5_runtime_provider_env_defaults
 from .r3_readiness import (
@@ -154,11 +153,11 @@ __all__ = [
     "make_environment_component_provider",
     "make_image_resource_provider",
     "make_model_resource_provider",
+    "make_legacy_model_resource_provider",
     "make_current_unversioned_v1_scene_snapshot_reader",
     "normalize_current_unversioned_v1_scene_snapshot",
     "make_scene_review_provider",
     "make_scene_snapshot_provider",
-    "make_legacy_model_resource_provider",
     "make_engine_actor_import_provider",
     "make_engine_actor_delete_provider",
     "make_engine_layout_transform_provider",

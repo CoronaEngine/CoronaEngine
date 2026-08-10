@@ -50,7 +50,6 @@ _SENSITIVE_CONTROL_PAYLOAD_KEYS = {
     "request",
     "response",
     "runtime_context",
-    "scheduler_updates",
     "session_id",
     "stage_handlers",
     "stack",
@@ -341,12 +340,10 @@ class InteractionCoordinator:
     def __init__(
         self,
         *,
-        scheduler: Any = None,
         gm_proposer: Callable[[ChatMessage, SeedPlan], str] | None = None,
         disclosure_policy: DisclosurePolicy | None = None,
         memory_store: MemoryScopeStore | None = None,
     ) -> None:
-        self._scheduler = scheduler
         self._gm_proposer = gm_proposer
         self._disclosure_policy = disclosure_policy or DisclosurePolicy()
         self._memory_store = memory_store or MemoryScopeStore()
@@ -928,7 +925,6 @@ class InteractionCoordinator:
             visibility="shared",
             metadata={"plan_version": plan.version, "source_plan_id": self._replan_source_by_plan.get(plan.plan_id, "")},
         )
-        scheduler_resume = self._resume_scheduler_for_replan(plan)
         execution_session_id = f"exec-{plan.plan_id}-{uuid.uuid4().hex[:8]}"
         self._active_generation_session_by_plan[plan.plan_id] = execution_session_id
         payload = {
@@ -943,26 +939,6 @@ class InteractionCoordinator:
             "scene_design_contract": self.scene_design_contract(plan.plan_id),
             "_runtime_context": {"interaction_coordinator": self},
         }
-        if scheduler_resume:
-            payload["scheduler_resume"] = scheduler_resume
-        if self._scheduler is not None and hasattr(self._scheduler, "submit"):
-            self._start_lanchat_runtime_compose(plan)
-            submitted = self._scheduler.submit(payload)
-            if isinstance(submitted, GenerationJobRef):
-                self._record_generation_ref_disclosure(plan, submitted)
-                self._remember_generation_job_ref(submitted)
-                return submitted
-            if isinstance(submitted, dict):
-                ref = GenerationJobRef(
-                    job_id=str(submitted.get("job_id") or f"job-{uuid.uuid4().hex[:12]}"),
-                    plan_id=plan.plan_id,
-                    status=str(submitted.get("status") or "queued"),
-                    session_id=str(submitted.get("session_id") or execution_session_id),
-                    payload=submitted,
-                )
-                self._record_generation_ref_disclosure(plan, ref)
-                self._remember_generation_job_ref(ref)
-                return ref
         self._record_disclosures(
             room_id=plan.room_id,
             stage="queued",
@@ -1081,34 +1057,13 @@ class InteractionCoordinator:
             "scene_design_contract": self.scene_design_contract(plan.plan_id),
             "_runtime_context": {"interaction_coordinator": self},
         }
-        if self._scheduler is not None and hasattr(self._scheduler, "submit"):
-            submitted = self._scheduler.submit(job_payload)
-            if isinstance(submitted, GenerationJobRef):
-                ref = submitted
-            elif isinstance(submitted, dict):
-                ref = GenerationJobRef(
-                    job_id=str(submitted.get("job_id") or f"job-{uuid.uuid4().hex[:12]}"),
-                    plan_id=plan.plan_id,
-                    status=str(submitted.get("status") or "queued"),
-                    session_id=str(submitted.get("session_id") or execution_session_id),
-                    payload=submitted,
-                )
-            else:
-                ref = GenerationJobRef(
-                    job_id=f"job-{uuid.uuid4().hex[:12]}",
-                    plan_id=plan.plan_id,
-                    status="queued",
-                    session_id=execution_session_id,
-                    payload=job_payload,
-                )
-        else:
-            ref = GenerationJobRef(
-                job_id=f"job-{uuid.uuid4().hex[:12]}",
-                plan_id=plan.plan_id,
-                status="queued",
-                session_id=execution_session_id,
-                payload=job_payload,
-            )
+        ref = GenerationJobRef(
+            job_id=f"job-{uuid.uuid4().hex[:12]}",
+            plan_id=plan.plan_id,
+            status="queued",
+            session_id=execution_session_id,
+            payload=job_payload,
+        )
         self._remember_generation_job_ref(ref)
         self._record_memory(
             room_id=plan.room_id,
@@ -1152,8 +1107,6 @@ class InteractionCoordinator:
         normalized = self._normalize_pace_action(action)
         plan = self.active_plan_for_room(room)
         previous_status = plan.status.value if plan is not None else ""
-        scheduler_control: dict[str, Any] = {}
-
         if normalized in {"pause", "discuss"}:
             if plan is not None and plan.status in {
                 SeedPlanStatus.CONFIRMED,
@@ -1163,7 +1116,6 @@ class InteractionCoordinator:
                 if plan.status != SeedPlanStatus.PAUSED:
                     plan.review_policy["_pace_before_pause_status"] = plan.status.value
                 plan.pause_execution()
-            scheduler_control = self._pause_scheduler_session(room)
             message = (
                 "已切到讨论模式，后续生成会在批次边界暂停。"
                 if normalized == "discuss"
@@ -1176,7 +1128,6 @@ class InteractionCoordinator:
                 restored = str(plan.review_policy.pop("_pace_before_pause_status", "") or "executing")
                 plan.status = SeedPlanStatus.CONFIRMED if restored == "confirmed" else SeedPlanStatus.EXECUTING
                 plan.updated_at = time.time()
-            scheduler_control = self._resume_scheduler_session(room)
             message = "已恢复生成节奏；后续批次会继续按确认方案推进。"
             disclosure_stage = "executing"
             apply_policy = "continue_generation"
@@ -1193,7 +1144,6 @@ class InteractionCoordinator:
             "note": str(note or ""),
             "previous_status": previous_status,
             "status": plan.status.value if plan is not None else "",
-            "scheduler_control": scheduler_control,
         }
         self._record_memory(
             room_id=room,
@@ -1317,13 +1267,6 @@ class InteractionCoordinator:
             },
         )
         payload = request.as_dict()
-        scheduler_updates = self._try_update_future_generation_jobs(request)
-        if scheduler_updates:
-            payload["scheduler_updates"] = scheduler_updates
-            payload["scheduler_update_summary"] = self._summarize_scheduler_updates(scheduler_updates)
-        scheduler_control = self._apply_scheduler_control_for_intervention(plan, request)
-        if scheduler_control:
-            payload["scheduler_control"] = scheduler_control
         return InterventionDecision(True, route, message, payload)
 
     def pending_interventions(self, plan_id: str) -> list[InterventionRequest]:
@@ -2374,110 +2317,6 @@ class InteractionCoordinator:
             return "recent_batch_intervention"
         return "older_context_kept_for_reference"
 
-    def _try_update_future_generation_jobs(self, request: InterventionRequest) -> list[dict[str, Any]]:
-        if request.apply_policy != "next_batch":
-            return []
-        updater = getattr(self._scheduler, "update_job", None)
-        if not callable(updater):
-            return []
-        job_refs = self._generation_jobs_by_plan.get(request.plan_id, [])
-        if not job_refs:
-            return []
-        pending_next_batch = [
-            item.as_dict()
-            for item in self._pending_interventions.get(request.plan_id, [])
-            if item.apply_policy == "next_batch"
-        ]
-        payload_updates = {
-            "latest_intervention": request.as_dict(),
-            "pending_interventions": pending_next_batch,
-            "intervention_revision": len(pending_next_batch),
-        }
-        next_batch_priority = max(
-            [int(item.get("priority") or 0) for item in pending_next_batch] or [request.priority]
-        )
-        updates: list[dict[str, Any]] = []
-        for ref in job_refs:
-            result = updater(ref.job_id, priority=next_batch_priority, payload_updates=payload_updates)
-            if isinstance(result, dict):
-                ref.status = str(result.get("status") or ref.status)
-                ref.payload = result
-                updates.append({
-                    "job_id": ref.job_id,
-                    "status": str(result.get("status") or ""),
-                    "success": bool(result.get("success")),
-                    "error": str(result.get("error") or ""),
-                })
-        return updates
-
-    @staticmethod
-    def _summarize_scheduler_updates(updates: list[dict[str, Any]]) -> dict[str, Any]:
-        attempted = len(updates)
-        updated = sum(1 for item in updates if item.get("success"))
-        failed = attempted - updated
-        return {
-            "attempted_count": attempted,
-            "updated_count": updated,
-            "failed_count": failed,
-            "deferred_to_pending": attempted > 0 and updated == 0,
-            "reason": (
-                "queued future generation job accepted the intervention update"
-                if updated
-                else "no queued future generation job accepted the intervention update"
-            ),
-        }
-
-    def _apply_scheduler_control_for_intervention(
-        self,
-        plan: SeedPlan,
-        request: InterventionRequest,
-    ) -> dict[str, Any]:
-        if request.apply_policy != "pause_and_replan":
-            return {}
-        try:
-            plan.pause_execution()
-        except ValueError as exc:
-            return {"action": "pause_session", "success": False, "error": str(exc)}
-        pauser = getattr(self._scheduler, "pause_session", None)
-        if not callable(pauser):
-            return {"action": "pause_session", "success": False, "error": "scheduler has no pause_session"}
-        result = pauser(plan.room_id)
-        if isinstance(result, dict):
-            return {
-                "action": "pause_session",
-                "session_id": str(result.get("session_id") or plan.room_id),
-                "status": str(result.get("status") or ""),
-                "success": bool(result.get("success")),
-                "error": str(result.get("error") or ""),
-            }
-        return {"action": "pause_session", "session_id": plan.room_id, "success": True, "status": "paused", "error": ""}
-
-    def _resume_scheduler_for_replan(self, plan: SeedPlan) -> dict[str, Any]:
-        source_plan_id = self._replan_source_by_plan.get(plan.plan_id, "")
-        if not source_plan_id:
-            return {}
-        resumer = getattr(self._scheduler, "resume_session", None)
-        if not callable(resumer):
-            return {"action": "resume_session", "success": False, "error": "scheduler has no resume_session"}
-        result = resumer(plan.room_id)
-        if isinstance(result, dict):
-            return {
-                "action": "resume_session",
-                "source_plan_id": source_plan_id,
-                "session_id": str(result.get("session_id") or plan.room_id),
-                "status": str(result.get("status") or ""),
-                "success": bool(result.get("success")),
-                "error": str(result.get("error") or ""),
-            }
-        return {
-            "action": "resume_session",
-            "source_plan_id": source_plan_id,
-            "session_id": plan.room_id,
-            "status": "running",
-            "success": True,
-            "error": "",
-        }
-
     @staticmethod
     def _normalize_pace_action(action: str) -> str:
         text = str(action or "").strip().lower()
@@ -2488,34 +2327,6 @@ class InteractionCoordinator:
         if text in {"discuss", "discussion", "先讨论", "不要生成", "别生成", "先规划"}:
             return "discuss"
         return text or "control"
-
-    def _pause_scheduler_session(self, room_id: str) -> dict[str, Any]:
-        if self._scheduler is None:
-            return {"available": False, "reason": "generation scheduler has not been initialized"}
-        pause = getattr(self._scheduler, "pause_session", None)
-        if not callable(pause):
-            return {"available": False, "reason": "generation scheduler does not expose pause_session"}
-        try:
-            result = pause(room_id)
-        except Exception as exc:  # noqa: BLE001
-            return {"available": True, "success": False, "error": str(exc), "session_id": room_id}
-        if isinstance(result, dict):
-            return {"available": True, **result}
-        return {"available": True, "success": True, "result": result, "session_id": room_id}
-
-    def _resume_scheduler_session(self, room_id: str) -> dict[str, Any]:
-        if self._scheduler is None:
-            return {"available": False, "reason": "generation scheduler has not been initialized"}
-        resume = getattr(self._scheduler, "resume_session", None)
-        if not callable(resume):
-            return {"available": False, "reason": "generation scheduler does not expose resume_session"}
-        try:
-            result = resume(room_id)
-        except Exception as exc:  # noqa: BLE001
-            return {"available": True, "success": False, "error": str(exc), "session_id": room_id}
-        if isinstance(result, dict):
-            return {"available": True, **result}
-        return {"available": True, "success": True, "result": result, "session_id": room_id}
 
     def _batch_index(self, batch_id: str) -> int:
         if not batch_id:

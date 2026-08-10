@@ -1,9 +1,8 @@
 """Minimal Agent-native runtime foundation.
 
 This module implements the first runnable slice of the Agent-native plan.  It
-does not call SceneComposer, ProgressiveWorkflow, C++, or provider APIs.  The
-purpose is to establish the new control-plane invariants before old workflow
-owners are decomposed into tools.
+does not call C++ or provider APIs directly. The purpose is to establish the
+canonical control-plane invariants for decomposed runtime tools.
 """
 
 from __future__ import annotations
@@ -4203,26 +4202,8 @@ class ToolDefinitionValidator:
         ".write",
     )
     _FORBIDDEN_LEGACY_MAIN_CONTROL_TOKENS = (
-        "scenecomposer",
-        "scene_composer.compose",
-        "scenecomposer.compose",
-        "run_progressive_workflow",
-        "progressiveworkflow",
-        "progressive_workflow",
-        "generationscheduler",
-        "generation_scheduler",
-        "legacy." + "scene_compose",
-        "legacy." + "progressive_compose",
-        "legacy." + "generation_scheduler",
-        "legacy." + "workflow_orchestrator",
-        "scene_composition_workflow",
-        "full_pipeline",
-        "full_pipeline_workflow",
-        "multi_scene",
-        "multi_scene_workflow",
-        "parallel_generate",
-        "parallel_generate_workflow",
         "workflow_orchestrator",
+        "legacy.main_workflow",
     )
 
     @staticmethod
@@ -11004,7 +10985,7 @@ class AgentRuntime:
         """Run the first decomposed planning tool before ScenePlan persistence.
 
         This is the Phase 3 bridge away from embedding extraction logic inside
-        SceneComposer/Runtime helpers: the Runtime still owns orchestration, but
+        Runtime helpers: the Runtime still owns orchestration, but
         the actual extraction is a ToolCallGraph node with OperationLog evidence.
         """
 

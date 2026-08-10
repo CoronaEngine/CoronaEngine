@@ -1,8 +1,7 @@
 """Function-level AgentRuntime tool adapters.
 
 These adapters are deliberately small and side-effect free.  They are the first
-step toward decomposing old workflow capabilities into ToolCall-sized units
-without wrapping SceneComposer or ProgressiveWorkflow as a large legacy tool.
+step toward decomposing generation capabilities into ToolCall-sized units.
 """
 
 from __future__ import annotations
