@@ -2,8 +2,6 @@ import sys
 from pathlib import Path
 from unittest import mock
 
-import pytest
-
 PROJECT_ROOT = Path(__file__).resolve().parents[4]
 EDITOR_ROOT = PROJECT_ROOT / "editor"
 AI_TOOL_ROOT = EDITOR_ROOT / "plugins" / "AITool"
@@ -13,7 +11,7 @@ for path in (PROJECT_ROOT, EDITOR_ROOT, AI_TOOL_ROOT):
 
 from cai_extensions.mcp.tools import camera_tools
 from cai_extensions.mcp.tools import multi_view_capture
-from cai_extensions.agent import vlm_capture
+from cai_extensions.mcp.tools import vlm_capture
 
 
 def test_camera_scene_resolution_prefers_manifest_scene_route():
@@ -33,8 +31,13 @@ def test_camera_scene_resolution_fails_closed_without_native_contract():
     with mock.patch(
         "cai_extensions.mcp.tools.native_scene_state.get_native_scene_snapshot",
         side_effect=RuntimeError("native scene unavailable"),
-    ), pytest.raises(RuntimeError, match="native scene unavailable"):
-        camera_tools._resolve_scene(manager, "Scene/legacy.scene")
+    ):
+        try:
+            camera_tools._resolve_scene(manager, "Scene/legacy.scene")
+        except RuntimeError as exc:
+            assert str(exc) == "native scene unavailable"
+        else:
+            raise AssertionError("native scene resolution must fail closed")
 
     manager.get.assert_not_called()
 

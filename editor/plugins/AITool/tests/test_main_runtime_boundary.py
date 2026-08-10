@@ -53,7 +53,7 @@ def test_agent_runtime_does_not_construct_concrete_cai_model_provider():
 
     assert "cai_extensions.agent.model_provider" not in runtime_source
     assert "model_provider_factory=" in worker_source
-    assert "cai_extensions.agent.model_provider" in composition_source
+    assert "create_legacy_model_provider" not in composition_source
 
 
 def test_orchestrator_requires_agent_factory_from_integration_boundary():
@@ -125,7 +125,6 @@ def test_aitool_composition_factories_have_a_dedicated_owner():
     assert composition_path.is_file()
     composition_source = composition_path.read_text(encoding="utf-8")
     for symbol in (
-        "create_legacy_model_provider",
         "create_engine_write_gate",
         "create_scene_element_classifier",
     ):
