@@ -522,13 +522,8 @@ struct OpticsEventViewport {
 
 [[nodiscard]] Corona::Horizon::RasterizerPipelineDesc make_visibility_pipeline_desc() {
     Corona::Horizon::RasterizerPipelineDesc desc;
-    auto vertex_shader = Corona::Horizon::PipelineShaderDesc::from_slang_module(
-        Corona::Horizon::PipelineShaderStage::Vertex,
-        visibility_vert_glsl_t::slangModule);
-    auto fragment_shader = Corona::Horizon::PipelineShaderDesc::from_slang_module(
-        Corona::Horizon::PipelineShaderStage::Fragment,
-        visibility_frag_glsl_t::slangModule);
-    desc.set_shaders(std::move(vertex_shader), std::move(fragment_shader));
+    desc.set_shaders_from_slang(visibility_vert_glsl_t::slangModule,
+                                visibility_frag_glsl_t::slangModule);
     desc.depth_stencil.depth_test_enabled = true;
     desc.depth_stencil.depth_write_enabled = true;
     desc.depth_stencil.depth_compare_op = Corona::Horizon::CompareOp::LessOrEqual;
@@ -541,13 +536,8 @@ struct OpticsEventViewport {
 
 [[nodiscard]] Corona::Horizon::RasterizerPipelineDesc make_shadow_pipeline_desc() {
     Corona::Horizon::RasterizerPipelineDesc desc;
-    auto vertex_shader = Corona::Horizon::PipelineShaderDesc::from_slang_module(
-        Corona::Horizon::PipelineShaderStage::Vertex,
-        shadow_vert_glsl_t::slangModule);
-    auto fragment_shader = Corona::Horizon::PipelineShaderDesc::from_slang_module(
-        Corona::Horizon::PipelineShaderStage::Fragment,
-        shadow_frag_glsl_t::slangModule);
-    desc.set_shaders(std::move(vertex_shader), std::move(fragment_shader));
+    desc.set_shaders_from_slang(shadow_vert_glsl_t::slangModule,
+                                shadow_frag_glsl_t::slangModule);
     desc.depth_stencil.depth_test_enabled = true;
     desc.depth_stencil.depth_write_enabled = true;
     desc.depth_stencil.depth_compare_op = Corona::Horizon::CompareOp::LessOrEqual;
