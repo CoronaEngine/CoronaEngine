@@ -25,7 +25,7 @@ endif()
 if(NOT DEFINED CORONA_CEF_ROOT OR CORONA_CEF_ROOT STREQUAL "")
     message(FATAL_ERROR
         "CEF is enabled but CORONA_CEF_ROOT is not set. "
-        "Run 'uv run python tools/dev.py configure' so cef-binary provides it.")
+        "Run 'conda run -n coronaengine-dev python tools/dev.py configure' so cef-binary provides it.")
 endif()
 
 get_filename_component(CEF_ROOT "${CORONA_CEF_ROOT}" ABSOLUTE)

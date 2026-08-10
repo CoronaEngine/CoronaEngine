@@ -5,7 +5,7 @@ function(corona_add_horizon_workspace)
     if(NOT EXISTS "${_corona_horizon_source}/CMakeLists.txt")
         message(FATAL_ERROR
             "Horizon workspace was not prepared at ${_corona_horizon_source}. "
-            "Run 'uv run python tools/dev.py configure'.")
+            "Run 'conda run -n coronaengine-dev python tools/dev.py configure'.")
     endif()
 
     set(HORIZON_BUILD_TOOLS ON CACHE BOOL "" FORCE)

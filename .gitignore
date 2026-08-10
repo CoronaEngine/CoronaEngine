@@ -38,11 +38,18 @@ TaskSplitting.md
 __pycache__/
 
 # third-party libraries (manually added)
+#
+# Python-3.13.7 故意不在下方白名单中：其基础 CPython 文件已在索引内
+# （已跟踪文件不受 ignore 约束），而 pip 装进 Lib/site-packages 的 ~2G
+# editor 依赖需要保持被忽略。若为它添加 ! 白名单，会让这些依赖全部
+# 出现在 git status 里。新增基础 CPython 文件需 git add -f。
+#
+# tbb 曾在此白名单中，现已移除：TBB 统一由 Conan 提供
+# （conanfile.py 的 onetbb 依赖），misc/cmake/corona_tbb.cmake 要求
+# TBB::tbb 目标且无本地目录回退。
 /third_party/*
 !/third_party/node-v22.19.0-win-x64/
 !/third_party/node-v22.19.0-win-x64/**
-!/third_party/tbb/
-!/third_party/tbb/**
 
 # Log files
 *.log
