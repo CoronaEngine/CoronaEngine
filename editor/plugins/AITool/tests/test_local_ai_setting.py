@@ -85,6 +85,23 @@ class LoadLocalAISettingTests(unittest.TestCase):
         )
         self.assertEqual("suno-test-key", settings["music"]["api_key"])
 
+    def test_engine_adds_deepseek_provider_without_changing_quasar_defaults(self):
+        settings = {"providers": [{"name": "example", "api_key": ""}]}
+        with patch.dict(
+            os.environ,
+            {"CORONA_DEEPSEEK_API_KEY": "deepseek-test-key"},
+            clear=False,
+        ):
+            apply_api_key_env_overrides(settings)
+
+        self.assertEqual("deepseek", settings["providers"][0]["name"])
+        self.assertEqual("deepseek-test-key", settings["providers"][0]["api_key"])
+        self.assertEqual(
+            "https://api.deepseek.com/v1",
+            settings["providers"][0]["base_url"],
+        )
+        self.assertEqual("example", settings["providers"][1]["name"])
+
     def test_key_values_are_not_logged_or_returned(self):
         settings = {"providers": [{"name": "openai", "api_key": "placeholder"}]}
         with patch.dict(os.environ, {"OPENAI_API_KEY": "secret-test-key"}, clear=False):

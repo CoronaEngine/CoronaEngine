@@ -21,6 +21,13 @@ _KNOWN_PROVIDER_ENV_NAMES = {
     "moonshot": "MOONSHOT_API_KEY",
     "siliconflow": "SILICONFLOW_API_KEY",
 }
+_ENGINE_PROVIDER_DEFAULTS = {
+    "deepseek": {
+        "type": "openai-compatible",
+        "base_url": "https://api.deepseek.com/v1",
+        "api_key_env": "CORONA_DEEPSEEK_API_KEY",
+    },
+}
 
 
 def _unquote(value: str) -> str:
@@ -79,6 +86,25 @@ def apply_api_key_env_overrides(settings: dict[str, Any]) -> dict[str, int]:
     """Apply environment-backed keys and return counts only, never secrets."""
     changed = 0
     providers = settings.get("providers")
+    if isinstance(providers, list):
+        existing_names = {
+            str(provider.get("name", "")).strip().lower()
+            for provider in providers
+            if isinstance(provider, dict)
+        }
+        for provider_name, defaults in _ENGINE_PROVIDER_DEFAULTS.items():
+            key = _env_value(*_provider_env_names(provider_name, defaults["api_key_env"]))
+            if key and provider_name not in existing_names:
+                providers.insert(
+                    0,
+                    {
+                        "name": provider_name,
+                        **defaults,
+                        "api_key": key,
+                    },
+                )
+                existing_names.add(provider_name)
+                changed += 1
     if isinstance(providers, list):
         for provider in providers:
             if not isinstance(provider, dict) or not provider.get("name"):
