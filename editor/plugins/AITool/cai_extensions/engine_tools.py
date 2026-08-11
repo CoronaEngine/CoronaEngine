@@ -28,6 +28,7 @@ def register_engine_loaders(registry: ToolRegistry) -> None:
             dependencies=[],
             requires_config=False,
             source="cai_extensions.mcp.scene",
+            tags={"engine_native", "scene_generation"},
         )
     except ImportError as exc:
         logger.warning("scene_tools 注册失败（跳过）: %s", exc)
@@ -41,6 +42,7 @@ def register_engine_loaders(registry: ToolRegistry) -> None:
             dependencies=[],
             requires_config=False,
             source="cai_extensions.mcp.camera",
+            tags={"engine_native", "scene_generation"},
         )
     except ImportError as exc:
         logger.warning("camera_tools 注册失败（跳过）: %s", exc)
@@ -54,6 +56,7 @@ def register_engine_loaders(registry: ToolRegistry) -> None:
             dependencies=[],
             requires_config=False,
             source="cai_extensions.mcp.model_import",
+            tags={"engine_native", "scene_generation"},
         )
     except ImportError as exc:
         logger.warning("model_import_tools 注册失败（跳过）: %s", exc)
@@ -67,6 +70,7 @@ def register_engine_loaders(registry: ToolRegistry) -> None:
             dependencies=[],
             requires_config=False,
             source="cai_extensions.mcp.scene_review",
+            tags={"engine_native", "scene_generation"},
         )
     except ImportError as exc:
         logger.warning("scene_review_tools 注册失败（跳过）: %s", exc)
@@ -80,6 +84,7 @@ def register_engine_loaders(registry: ToolRegistry) -> None:
             dependencies=[],
             requires_config=False,
             source="cai_extensions.mcp.scene_snapshot",
+            tags={"engine_native", "scene_generation"},
         )
     except ImportError as exc:
         logger.warning("scene_snapshot_tools 注册失败（跳过）: %s", exc)
@@ -93,6 +98,7 @@ def register_engine_loaders(registry: ToolRegistry) -> None:
             dependencies=[],
             requires_config=False,
             source="cai_extensions.mcp.set_actor_transform",
+            tags={"engine_native", "scene_generation"},
         )
     except ImportError as exc:
         logger.warning("set_actor_transform_tools 注册失败（跳过）: %s", exc)
