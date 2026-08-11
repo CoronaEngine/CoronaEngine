@@ -8,6 +8,14 @@ ENGINE_TOOLS = CAI_EXTENSIONS / "engine_tools.py"
 
 
 class LegacyAIWorkchainsRemovedTests(unittest.TestCase):
+    def test_scene_loader_exposes_only_single_scene_transform_operation(self):
+        text = (CAI_EXTENSIONS / "mcp" / "tools" / "scene_tools.py").read_text(
+            encoding="utf-8"
+        )
+        for retired_tool in ("scene_list", "scene_get_actors", "scene_query"):
+            self.assertNotIn(f'name="{retired_tool}"', text)
+        self.assertIn('name="transform_model"', text)
+
     def test_legacy_scene_planning_and_placement_sources_are_removed(self):
         self.assertFalse((CAI_EXTENSIONS / "scene_plan_tools.py").exists())
         self.assertFalse((CAI_EXTENSIONS / "scene_placement").exists())

@@ -1,28 +1,20 @@
 from __future__ import annotations
 
 import json
-from typing import Literal, List, Optional, Tuple
+from typing import Literal, List, Tuple
 
-from api.editor_api import CoronaEditorApi
 from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field
 
 from Quasar.ai_tools.response_adapter import build_error_result, build_part, build_success_result
 from .native_scene_state import (
     find_native_actor,
-    get_native_scene_snapshot,
     native_actor_views,
     set_native_actor_transform,
 )
 from .transform_grounding import resolve_actor_overlaps, snap_actor_to_ground
 
 DEFAULT_SCENE_NAME = ""
-
-
-class SceneQueryInput(BaseModel):
-    scene_name: str = Field(default=DEFAULT_SCENE_NAME, description="Target scene name")
-    query: Literal["list_models", "get_model_by_name"] = Field(description="Query type")
-    name: str | None = Field(default=None, description="Actor name")
 
 
 class TransformModelInput(BaseModel):
@@ -36,34 +28,9 @@ class TransformModelInput(BaseModel):
     ground_clearance: float = Field(default=0.02, description="Ground clearance")
 
 
-class SceneActorsInput(BaseModel):
-    scene_name: str = Field(default=DEFAULT_SCENE_NAME, description="Target scene name")
-    actor_name: str | None = Field(default=None, description="Optional actor name")
-
-
-class SceneListInput(BaseModel):
-    pass
-
-
 def _json_result(payload: dict) -> str:
     part = build_part(content_type="text", content_text=json.dumps(payload, ensure_ascii=False))
     return build_success_result(parts=[part]).to_envelope(interface_type="scene")
-
-
-def _build_scene_query_tool(scene_manager) -> StructuredTool:
-    def _query_scene(*, scene_name: str = DEFAULT_SCENE_NAME, query: Literal["list_models", "get_model_by_name"], name: str | None = None) -> str:
-        try:
-            snapshot = get_native_scene_snapshot(scene_name)
-            actors = snapshot.get("actors") if isinstance(snapshot.get("actors"), list) else []
-            if query == "list_models":
-                return _json_result({"scene": snapshot.get("scene", scene_name), "actors": [a.get("name") for a in actors if isinstance(a, dict)]})
-            if query == "get_model_by_name":
-                actor = find_native_actor(scene_name, name or "")
-                return _json_result({"scene": snapshot.get("scene", scene_name), "actor": actor.name if actor else None, "model_path": actor.model_path if actor else "", "found": actor is not None, "actor_data": actor.data if actor else None})
-            return build_error_result(error_message=f"Unsupported query type: {query}").to_envelope(interface_type="scene")
-        except Exception as exc:
-            return build_error_result(error_message=str(exc)).to_envelope(interface_type="scene")
-    return StructuredTool(name="scene_query", description="Query native scene actors.", args_schema=SceneQueryInput, func=_query_scene)
 
 
 def _build_transform_tool(scene_manager) -> StructuredTool:
@@ -112,62 +79,13 @@ def _build_transform_tool(scene_manager) -> StructuredTool:
     return StructuredTool(name="transform_model", description="Apply relative transform to a native actor.", args_schema=TransformModelInput, func=_transform_model)
 
 
-def _build_scene_actors_tool(scene_manager) -> StructuredTool:
-    def _scene_actors(*, scene_name: str = DEFAULT_SCENE_NAME, actor_name: str | None = None) -> str:
-        try:
-            if actor_name:
-                actor = find_native_actor(scene_name, actor_name)
-                if actor is None:
-                    return build_error_result(error_message=f"Actor {actor_name!r} not found").to_envelope(interface_type="scene")
-                return _json_result(actor.data)
-            snapshot = get_native_scene_snapshot(scene_name)
-            actors = snapshot.get("actors") if isinstance(snapshot.get("actors"), list) else []
-            return _json_result({"scene": snapshot.get("scene", scene_name), "count": len(actors), "actors": actors, "scene_aabb": snapshot.get("scene_aabb"), "bounds_ready": bool(snapshot.get("bounds_ready"))})
-        except Exception as exc:
-            return build_error_result(error_message=str(exc)).to_envelope(interface_type="scene")
-    return StructuredTool(name="scene_get_actors", description="Return authoritative native scene actor data.", args_schema=SceneActorsInput, func=_scene_actors)
-
-
-def _build_scene_list_tool(scene_manager) -> StructuredTool:
-    def _scene_list() -> str:
-        try:
-            raw = CoronaEditorApi.scene.list_routes()
-            payload = json.loads(raw) if isinstance(raw, str) else raw
-            if not isinstance(payload, dict) or payload.get("status") == "error":
-                raise RuntimeError(
-                    str((payload or {}).get("message", "Native scene route query failed"))
-                )
-            scenes = payload.get("scenes")
-            if not isinstance(scenes, list):
-                scenes = []
-            return _json_result(
-                {
-                    "count": len(scenes),
-                    "scenes": [
-                        {
-                            "route": item.get("path", ""),
-                            "name": item.get("name", ""),
-                        }
-                        for item in scenes
-                        if isinstance(item, dict)
-                    ],
-                    "active_index": payload.get("active_index", 0),
-                    "entrance_scene": payload.get("entrance_scene", ""),
-                    "active_scene": payload.get("active_scene", ""),
-                }
-            )
-        except Exception as exc:
-            return build_error_result(error_message=str(exc)).to_envelope(interface_type="scene")
-    return StructuredTool(name="scene_list", description="List loaded scenes.", args_schema=SceneListInput, func=_scene_list)
-
-
 def load_scene_tools(scene_manager=None) -> List[StructuredTool]:
     """Register native scene tools without importing the legacy manager.
 
     The optional argument remains for old registries and test doubles.  Native
     scene reads and writes are handled by ``native_scene_state``.
     """
-    return [_build_scene_list_tool(scene_manager), _build_scene_actors_tool(scene_manager), _build_scene_query_tool(scene_manager), _build_transform_tool(scene_manager)]
+    return [_build_transform_tool(scene_manager)]
 
 
 __all__ = ["load_scene_tools"]
