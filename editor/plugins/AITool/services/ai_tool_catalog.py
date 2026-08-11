@@ -12,6 +12,7 @@ from typing import Literal
 
 
 ToolLayer = Literal["public", "runtime_internal", "engine_native", "unclassified"]
+Workflow = Literal["conversation", "node_logic", "scene_generation"]
 
 
 RUNTIME_INTERNAL_PREFIXES = frozenset(
@@ -61,6 +62,32 @@ PUBLIC_TOOLS = frozenset(
 )
 
 
+NODE_LOGIC_OPERATIONS = frozenset(
+    {
+        "connect_object_reference",
+        "select_existing_object",
+        "create_node",
+        "move_node",
+        "connect_nodes",
+        "edit_block_parameter",
+        "set_transition_condition",
+        "run_node_graph",
+    }
+)
+
+
+CONVERSATION_TOOLS = frozenset(PUBLIC_TOOLS - {"hunyuan_generate_3d"})
+
+
+SCENE_GENERATION_TOOLS = frozenset(
+    set(ENGINE_NATIVE_TOOLS)
+    | {
+        "generate_image",
+        "hunyuan_generate_3d",
+    }
+)
+
+
 def classify_tool_layer(name: str) -> ToolLayer:
     """Return the intended ownership/exposure layer for a tool name."""
 
@@ -74,10 +101,32 @@ def classify_tool_layer(name: str) -> ToolLayer:
     return "unclassified"
 
 
+def classify_tool_workflows(name: str) -> frozenset[Workflow]:
+    """Return the workflows that may own a tool or operation."""
+
+    normalized = str(name or "").strip()
+    workflows: set[Workflow] = set()
+    if normalized in CONVERSATION_TOOLS:
+        workflows.add("conversation")
+    if normalized in NODE_LOGIC_OPERATIONS:
+        workflows.add("node_logic")
+    if normalized in SCENE_GENERATION_TOOLS or classify_tool_layer(normalized) in {
+        "runtime_internal",
+        "engine_native",
+    }:
+        workflows.add("scene_generation")
+    return frozenset(workflows)
+
+
 __all__ = [
     "ENGINE_NATIVE_TOOLS",
+    "CONVERSATION_TOOLS",
+    "NODE_LOGIC_OPERATIONS",
     "PUBLIC_TOOLS",
     "RUNTIME_INTERNAL_PREFIXES",
+    "SCENE_GENERATION_TOOLS",
     "ToolLayer",
+    "Workflow",
     "classify_tool_layer",
+    "classify_tool_workflows",
 ]

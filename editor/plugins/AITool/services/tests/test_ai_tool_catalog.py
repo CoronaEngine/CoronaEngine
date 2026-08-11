@@ -5,6 +5,7 @@ from editor.plugins.AITool.services.ai_tool_catalog import (
     PUBLIC_TOOLS,
     RUNTIME_INTERNAL_PREFIXES,
     classify_tool_layer,
+    classify_tool_workflows,
 )
 
 
@@ -39,6 +40,11 @@ class AIToolCatalogTests(unittest.TestCase):
     def test_catalog_has_no_overlap(self):
         self.assertFalse(ENGINE_NATIVE_TOOLS & PUBLIC_TOOLS)
         self.assertTrue(RUNTIME_INTERNAL_PREFIXES)
+
+    def test_workflow_ownership_is_explicit(self):
+        self.assertEqual(classify_tool_workflows("create_node"), {"node_logic"})
+        self.assertIn("conversation", classify_tool_workflows("generate_product_text"))
+        self.assertIn("scene_generation", classify_tool_workflows("runtime.layout.apply_delta"))
 
 
 if __name__ == "__main__":
