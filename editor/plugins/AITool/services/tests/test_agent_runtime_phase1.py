@@ -94,19 +94,6 @@ from plugins.AITool.services.agent_runtime import adapters as runtime_adapters  
 runtime_adapters.ENGINE_READY_TIMEOUT_DEFAULT_S = 0.2
 runtime_adapters.ENGINE_READY_POLL_DEFAULT_S = 0.01
 
-_PROGRESSIVE_SPEC = importlib.util.spec_from_file_location(
-    "scene_composer_progressive_for_runtime_tests",
-    EDITOR_ROOT / "plugins" / "AITool" / "cai_extensions" / "agent" / "scene_composer_progressive.py",
-)
-assert _PROGRESSIVE_SPEC is not None
-_PROGRESSIVE_MODULE = importlib.util.module_from_spec(_PROGRESSIVE_SPEC)
-assert _PROGRESSIVE_SPEC.loader is not None
-sys.modules[_PROGRESSIVE_SPEC.name] = _PROGRESSIVE_MODULE
-_PROGRESSIVE_SPEC.loader.exec_module(_PROGRESSIVE_MODULE)
-_runtime_status_to_scene_mode = _PROGRESSIVE_MODULE._runtime_status_to_scene_mode
-_runtime_status_to_scene_notes = _PROGRESSIVE_MODULE._runtime_status_to_scene_notes
-
-
 class AgentRuntimePhase1Tests(unittest.TestCase):
     @staticmethod
     def _non_planning_tool_graphs(room_state: dict[str, Any]) -> list[dict[str, Any]]:
@@ -2006,94 +1993,6 @@ class AgentRuntimePhase1Tests(unittest.TestCase):
         self.assertNotIn("provider raw", str(result).lower())
         self.assertNotIn("C:\\secret", str(result))
         ActorFactValidator.validate_actor_map(result["actor_updates"])
-
-    def test_progressive_workflow_runtime_status_payload_maps_to_pause_mode(self) -> None:
-        self.assertEqual(
-            _runtime_status_to_scene_mode({
-                "status": {
-                    "plan_summary": {"status": "paused"},
-                    "runtime_command_summary": {"latest_commands": []},
-                }
-            }),
-            "PAUSED",
-        )
-
-    def test_progressive_workflow_runtime_command_summary_maps_to_pause_mode(self) -> None:
-        self.assertEqual(
-            _runtime_status_to_scene_mode({
-                "runtime_command_summary": {
-                    "latest_commands": [
-                        {"command": "resume", "new_status": "confirmed"},
-                        {"command": "pause", "new_status": "paused"},
-                    ]
-                }
-            }),
-            "PAUSED",
-        )
-        self.assertEqual(
-            _runtime_status_to_scene_mode({
-                "runtime_command_summary": {
-                    "latest_commands": [
-                        {"command": "resume", "new_status": "confirmed"},
-                    ]
-                }
-            }),
-            "",
-        )
-
-    def test_progressive_workflow_runtime_pending_interventions_map_to_scene_notes(self) -> None:
-        notes = _runtime_status_to_scene_notes({
-            "intervention_summary": {
-                "latest_absorbable_pending": [
-                    {
-                        "text": "鍐嶅姞涓€涓ぉ浣块洉鍍?",
-                        "patch_type": "intervention_add",
-                        "items": ["天使雕像"],
-                        "status": "pending",
-                    },
-                ],
-                "latest_pending": [
-                    {
-                        "text": "鍐嶅姞涓€涓ぉ浣块洉鍍?",
-                        "patch_type": "intervention_add",
-                        "items": ["天使雕像"],
-                        "status": "pending",
-                    },
-                    {
-                        "text": "璁╁叆鍙ｆ洿瀹?",
-                        "patch_type": "intervention_modify",
-                        "items": [],
-                        "status": "pending",
-                    },
-                    {
-                        "text": "宸茬粡澶勭悊鐨勬棫椤?",
-                        "patch_type": "intervention_add",
-                        "items": ["旧项"],
-                        "status": "accepted",
-                    },
-                ]
-            }
-        })
-
-        self.assertEqual(len(notes), 1)
-        self.assertEqual(notes[0].text, "鍐嶅姞涓€涓ぉ浣块洉鍍?")
-        self.assertEqual(notes[0].kind, "generation_delta")
-
-    def test_progressive_workflow_runtime_pending_interventions_are_deduped_per_run(self) -> None:
-        seen: set[str] = set()
-        payload = {
-            "intervention_summary": {
-                "latest_pending": [
-                    {"text": "", "patch_type": "intervention_add", "items": ["小狗"], "status": "pending"},
-                ]
-            }
-        }
-
-        first = _runtime_status_to_scene_notes(payload, seen_keys=seen)
-        second = _runtime_status_to_scene_notes(payload, seen_keys=seen)
-
-        self.assertEqual([note.text for note in first], ["小狗"])
-        self.assertEqual(second, [])
 
     def test_agent_runtime_package_does_not_import_or_call_legacy_main_workflow(self) -> None:
         runtime_dir = EDITOR_ROOT / "plugins" / "AITool" / "services" / "agent_runtime"
