@@ -26,6 +26,7 @@ from ..schema_versions import (
     ACTION_PROPOSAL_SCHEMA_VERSION,
     PLAN_PATCH_PAYLOAD_SCHEMA_VERSION,
 )
+from ..ai_tool_catalog import classify_tool_layer
 from .scene_world_consistency import (
     audit_scene_world_consistency as build_scene_world_consistency_audit,
     constrain_scene_world_snapshot_readiness,
@@ -4173,6 +4174,7 @@ class ToolDefinition:
         }
         return {
             "name": ToolDefinition._safe_manifest_identifier(self.name),
+            "layer": classify_tool_layer(self.name),
             "category": self.category.value,
             "default_risk_level": self.default_risk_level.value,
             "requires_write": self.requires_write,
