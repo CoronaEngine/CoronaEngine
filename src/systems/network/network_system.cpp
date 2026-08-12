@@ -1681,6 +1681,10 @@ void NetworkSystem::persist_lanchat_agents(const std::string& room_id) {
 void NetworkSystem::on_peer_connected(const Network::PeerManager::PeerInfo& info) {
     CFW_LOG_INFO("NetworkSystem: Peer connected — {} ({})", info.id, info.name);
 
+    // Snapshot is idempotent and versioned; until PeerManager exposes a
+    // targeted send primitive, the existing outgoing path broadcasts it.
+    impl_->sync_engine.sync_full_to(info.id);
+
     if (impl_->session_role == SessionRole::Client && !impl_->lanchat.room_id().empty()) {
         auto packet = Network::build_chat_join(
             impl_->lanchat.room_id(), local_peer_id(), impl_->lanchat_nickname);

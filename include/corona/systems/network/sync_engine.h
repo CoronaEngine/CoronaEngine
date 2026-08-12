@@ -73,6 +73,9 @@ public:
      */
     void sync_full_to(const std::string& /*target_peer_id*/);
 
+    /// Emit the current versioned editor state as idempotent operations.
+    void emit_snapshot();
+
     // ========================================================================
     // Inbound (network → local)
     // ========================================================================

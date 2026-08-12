@@ -661,7 +661,15 @@ void SyncEngine::poll_and_sync() {
 }
 
 void SyncEngine::sync_full_to(const std::string& /*target_peer_id*/) {
-    CFW_LOG_DEBUG("SyncEngine: sync_full_to not yet implemented");
+    emit_snapshot();
+}
+
+void SyncEngine::emit_snapshot() {
+    if (!impl_->on_outgoing) return;
+    for (const auto& operation : impl_->lww_state.snapshot()) {
+        auto packet = build_editor_sync_operation(operation);
+        if (!packet.empty()) impl_->on_outgoing(packet);
+    }
 }
 
 // ============================================================================

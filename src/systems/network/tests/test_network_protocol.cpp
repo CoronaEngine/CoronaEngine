@@ -145,6 +145,32 @@ void test_sync_engine_delete_tombstone_is_idempotent() {
     sync.shutdown();
 }
 
+void test_sync_engine_emits_versioned_snapshot() {
+    Corona::Network::SyncEngine sync;
+    std::vector<std::vector<uint8_t>> packets;
+    sync.initialize("local-peer");
+    Corona::Network::EditorSyncOperation op;
+    op.kind = Corona::Network::EditorSyncOperationKind::Upsert;
+    op.actor_guid = "actor-snapshot";
+    op.field_name = "name";
+    op.value = {'s'};
+    op.version = {4, "local-peer"};
+    expect_true(sync.apply_editor_operation(op) ==
+                    Corona::Network::LwwApplyResult::Applied,
+                "snapshot test seeds LWW state");
+    sync.set_on_outgoing([&](const std::vector<uint8_t>& packet) {
+        packets.push_back(packet);
+    });
+    sync.sync_full_to("peer-b");
+    bool found = false;
+    for (const auto& packet : packets) {
+        auto decoded = Corona::Network::parse_editor_sync_operation(packet.data(), packet.size());
+        if (decoded && decoded->actor_guid == "actor-snapshot") found = true;
+    }
+    expect_true(found, "snapshot emits seeded versioned operation");
+    sync.shutdown();
+}
+
 void test_file_request_carries_transfer_id() {
     constexpr uint64_t transfer_id = 0x1122334455667788ull;
     auto packet = Corona::Network::build_file_request(transfer_id, "Resource/mesh.obj");
@@ -1891,6 +1917,7 @@ int main() {
     test_lww_state_advances_lamport_counter();
     test_sync_engine_applies_versioned_editor_operation();
     test_sync_engine_delete_tombstone_is_idempotent();
+    test_sync_engine_emits_versioned_snapshot();
     test_actor_create_carries_actor_guid();
     test_actor_create_unpack_preserves_wire_transform();
     test_actor_create_carries_dependency_paths();

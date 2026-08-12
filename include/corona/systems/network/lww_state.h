@@ -39,6 +39,9 @@ inline bool operator<(const LwwVersion& lhs, const LwwVersion& rhs) {
 
 class LwwState {
 public:
+    struct SnapshotEntry {
+        EditorSyncOperation operation;
+    };
     explicit LwwState(std::string local_peer_id)
         : local_peer_id_(std::move(local_peer_id)) {}
 
@@ -110,6 +113,31 @@ public:
     [[nodiscard]] bool is_deleted(const std::string& actor_guid) const {
         std::lock_guard lock(mutex_);
         return tombstones_.find(actor_guid) != tombstones_.end();
+    }
+
+    [[nodiscard]] std::vector<EditorSyncOperation> snapshot() const {
+        std::lock_guard lock(mutex_);
+        std::vector<EditorSyncOperation> result;
+        result.reserve(fields_.size() + tombstones_.size());
+        for (const auto& [key, field] : fields_) {
+            const auto sep = key.find('\x1f');
+            if (sep == std::string::npos) continue;
+            EditorSyncOperation op;
+            op.kind = EditorSyncOperationKind::Upsert;
+            op.actor_guid = key.substr(0, sep);
+            op.field_name = key.substr(sep + 1);
+            op.value = field.value;
+            op.version = field.version;
+            result.push_back(std::move(op));
+        }
+        for (const auto& [actor_guid, version] : tombstones_) {
+            EditorSyncOperation op;
+            op.kind = EditorSyncOperationKind::Delete;
+            op.actor_guid = actor_guid;
+            op.version = version;
+            result.push_back(std::move(op));
+        }
+        return result;
     }
 
 private:
