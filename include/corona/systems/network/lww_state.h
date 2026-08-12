@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <mutex>
+#include <algorithm>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -137,6 +138,13 @@ public:
             op.version = version;
             result.push_back(std::move(op));
         }
+        std::sort(result.begin(), result.end(), [](const auto& lhs, const auto& rhs) {
+            if (lhs.actor_guid != rhs.actor_guid) return lhs.actor_guid < rhs.actor_guid;
+            if (lhs.kind != rhs.kind) {
+                return lhs.kind == EditorSyncOperationKind::Delete;
+            }
+            return lhs.field_name < rhs.field_name;
+        });
         return result;
     }
 

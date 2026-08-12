@@ -199,6 +199,20 @@ void test_editor_snapshot_request_has_schema_version() {
                 "snapshot request carries schema version");
 }
 
+void test_editor_snapshot_chunk_round_trips_operation_packets() {
+    Corona::Network::EditorSyncOperation op;
+    op.kind = Corona::Network::EditorSyncOperationKind::Upsert;
+    op.actor_guid = "actor-chunk";
+    op.field_name = "name";
+    op.value = {'x'};
+    op.version = {3, "peer-a"};
+    auto encoded = Corona::Network::build_editor_sync_operation(op);
+    auto chunk = Corona::Network::build_editor_snapshot_chunk(9, 0, 1, {encoded});
+    expect_true(chunk.size() > encoded.size(), "snapshot chunk wraps operation packet");
+    expect_true(chunk[0] == static_cast<uint8_t>(Corona::Network::MessageType::EDITOR_SNAPSHOT_CHUNK),
+                "snapshot chunk message type");
+}
+
 void test_file_request_carries_transfer_id() {
     constexpr uint64_t transfer_id = 0x1122334455667788ull;
     auto packet = Corona::Network::build_file_request(transfer_id, "Resource/mesh.obj");
@@ -1949,6 +1963,7 @@ int main() {
     test_sync_engine_creates_versioned_actor_upsert();
     test_peer_manager_targeted_send_rejects_unknown_peer();
     test_editor_snapshot_request_has_schema_version();
+    test_editor_snapshot_chunk_round_trips_operation_packets();
     test_actor_create_carries_actor_guid();
     test_actor_create_unpack_preserves_wire_transform();
     test_actor_create_carries_dependency_paths();

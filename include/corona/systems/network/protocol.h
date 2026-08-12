@@ -53,6 +53,7 @@ constexpr uint16_t kMaxEditorSyncStringBytes = 1024;
 constexpr uint32_t kMaxEditorSyncValueBytes = 1024 * 1024;
 constexpr uint32_t kMaxEditorSyncOperations = 4096;
 constexpr uint8_t kEditorSyncSchemaVersion = 1;
+constexpr uint32_t kEditorSnapshotChunkOperations = 256;
 
 // ============================================================================
 // Message types (single byte prefix on every packet)
@@ -64,6 +65,7 @@ enum class MessageType : uint8_t {
     HELLO         = 0x04,  // Post-connect handshake: exchange stable identity
     EDITOR_SYNC   = 0x05,  // Versioned collaborative editor state operation
     EDITOR_SNAPSHOT_REQUEST = 0x06, // Request current versioned editor state
+    EDITOR_SNAPSHOT_CHUNK = 0x07, // Chunked versioned editor state
     ACTOR_CREATE  = 0x10,  // Actor creation event (scene_name + model_path + transform + optics)
     FILE_REQUEST  = 0x11,  // Request model file from peer
     FILE_CHUNK    = 0x12,  // File chunk transfer
@@ -384,6 +386,26 @@ inline std::vector<uint8_t> build_heartbeat(uint32_t seq) {
 inline std::vector<uint8_t> build_editor_snapshot_request() {
     return {static_cast<uint8_t>(MessageType::EDITOR_SNAPSHOT_REQUEST),
             kEditorSyncSchemaVersion};
+}
+
+inline std::vector<uint8_t> build_editor_snapshot_chunk(
+    uint32_t snapshot_id, uint16_t chunk_index, uint16_t chunk_total,
+    const std::vector<std::vector<uint8_t>>& operations) {
+    if (chunk_total == 0 || chunk_index >= chunk_total ||
+        operations.size() > kEditorSnapshotChunkOperations) return {};
+    std::vector<uint8_t> buf;
+    write_u8(buf, static_cast<uint8_t>(MessageType::EDITOR_SNAPSHOT_CHUNK));
+    write_u8(buf, kEditorSyncSchemaVersion);
+    write_u32(buf, snapshot_id);
+    write_u16(buf, chunk_index);
+    write_u16(buf, chunk_total);
+    write_u16(buf, static_cast<uint16_t>(operations.size()));
+    for (const auto& operation : operations) {
+        if (operation.empty() || operation.size() > kMaxEditorSyncValueBytes) return {};
+        write_u32(buf, static_cast<uint32_t>(operation.size()));
+        write_bytes(buf, operation.data(), operation.size());
+    }
+    return buf;
 }
 
 // ============================================================================

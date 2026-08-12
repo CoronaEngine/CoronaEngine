@@ -4,6 +4,7 @@
 #include <corona/kernel/core/i_logger.h>
 
 #include <chrono>
+#include <algorithm>
 #include <cstring>
 #include <deque>
 #include <mutex>
@@ -683,10 +684,22 @@ void SyncEngine::sync_full_to(const std::string& target_peer_id) {
     impl_->on_outgoing = {};
     poll_and_sync();
     impl_->on_outgoing = std::move(outgoing);
+    const auto operations = impl_->lww_state.snapshot();
     if (!target_peer_id.empty() && impl_->on_targeted_outgoing) {
-        for (const auto& operation : impl_->lww_state.snapshot()) {
-            auto packet = build_editor_sync_operation(operation);
-            if (!packet.empty()) impl_->on_targeted_outgoing(target_peer_id, packet);
+        const auto total = static_cast<uint16_t>(std::max<size_t>(
+            1, (operations.size() + kEditorSnapshotChunkOperations - 1) /
+                   kEditorSnapshotChunkOperations));
+        const auto snapshot_id = impl_->seq++;
+        for (uint16_t index = 0; index < total; ++index) {
+            std::vector<std::vector<uint8_t>> encoded;
+            const auto begin = static_cast<size_t>(index) * kEditorSnapshotChunkOperations;
+            const auto end = std::min(operations.size(), begin + kEditorSnapshotChunkOperations);
+            for (size_t i = begin; i < end; ++i) {
+                auto packet = build_editor_sync_operation(operations[i]);
+                if (!packet.empty()) encoded.push_back(std::move(packet));
+            }
+            auto chunk = build_editor_snapshot_chunk(snapshot_id, index, total, encoded);
+            if (!chunk.empty()) impl_->on_targeted_outgoing(target_peer_id, chunk);
         }
         return;
     }
@@ -722,6 +735,27 @@ void SyncEngine::handle_incoming(const std::string& sender_peer_id,
     if (data[0] == static_cast<uint8_t>(MessageType::EDITOR_SNAPSHOT_REQUEST)) {
         if (len != 2 || data[1] != kEditorSyncSchemaVersion || !impl_->on_full_sync_request) return;
         impl_->on_full_sync_request(sender_peer_id);
+        return;
+    }
+    if (data[0] == static_cast<uint8_t>(MessageType::EDITOR_SNAPSHOT_CHUNK)) {
+        BufferReader r(data, len);
+        if (!r.has_remaining(1 + 1 + 4 + 2 + 2 + 2) ||
+            r.read_u8() != static_cast<uint8_t>(MessageType::EDITOR_SNAPSHOT_CHUNK) ||
+            r.read_u8() != kEditorSyncSchemaVersion) return;
+        (void)r.read_u32();
+        const auto index = r.read_u16();
+        const auto total = r.read_u16();
+        const auto count = r.read_u16();
+        if (total == 0 || index >= total || count > kEditorSnapshotChunkOperations) return;
+        for (uint16_t i = 0; i < count; ++i) {
+            if (!r.has_remaining(4)) return;
+            const auto operation_len = r.read_u32();
+            if (operation_len == 0 || operation_len > kMaxEditorSyncValueBytes ||
+                !r.has_remaining(operation_len)) return;
+            const auto* operation_data = r.data + r.pos;
+            (void)handle_incoming(sender_peer_id, operation_data, operation_len);
+            r.pos += operation_len;
+        }
         return;
     }
 
