@@ -2215,6 +2215,52 @@ void test_sync_engine_drops_unresolved_actor_transform() {
     hub.model_transform_storage().deallocate(transform);
 }
 
+void test_sync_engine_rejects_legacy_dirty_for_resolved_actor() {
+    auto& hub = Corona::SharedDataHub::instance();
+    auto transform = hub.model_transform_storage().allocate();
+    {
+        auto t = hub.model_transform_storage().acquire_write(transform);
+        t->position.x = 4.0f;
+        t->position.y = 5.0f;
+        t->position.z = 6.0f;
+        t->scale.x = 1.0f;
+        t->scale.y = 1.0f;
+        t->scale.z = 1.0f;
+    }
+    const auto local_seq = hub.model_transform_storage().seq_id(transform);
+    Corona::Network::SyncEngine sync;
+    sync.initialize("local-peer");
+    sync.set_identity_mapping_callbacks(
+        [](Corona::Network::StorageID, uint64_t) {
+            return std::string("actor-resolved");
+        },
+        [local_seq](Corona::Network::StorageID storage_id, const std::string& guid)
+            -> std::optional<uint64_t> {
+            if (storage_id == Corona::Network::StorageID::ST_MODEL_TRANSFORM &&
+                guid == "actor-resolved") return local_seq;
+            return std::nullopt;
+        });
+    const float remote_transform[9] = {
+        90.0f, 91.0f, 92.0f, 0.0f, 0.0f, 0.0f, 1.0f, 1.0f, 1.0f};
+    const std::string key = "actor:actor-resolved:xform";
+    const auto entry = Corona::Network::build_dirty_entries(
+        Corona::Network::StorageID::ST_MODEL_TRANSFORM, local_seq,
+        key.c_str(), static_cast<uint16_t>(key.size()),
+        remote_transform, sizeof(remote_transform));
+    const auto packet = Corona::Network::build_sync_dirty(1, 1, entry, 1);
+
+    sync.handle_incoming("legacy-peer", packet.data(), packet.size());
+
+    {
+        auto t = hub.model_transform_storage().acquire_read(transform);
+        expect_true(t->position.x == 4.0f && t->position.y == 5.0f &&
+                        t->position.z == 6.0f,
+                    "legacy dirty cannot bypass LWW for resolved actor");
+    }
+    sync.shutdown();
+    hub.model_transform_storage().deallocate(transform);
+}
+
 }  // namespace
 
 int main() {
@@ -2298,6 +2344,7 @@ int main() {
     test_sync_engine_does_not_emit_remote_owned_transform();
     test_sync_engine_does_not_emit_unregistered_transform_when_mapping_enabled();
     test_sync_engine_drops_unresolved_actor_transform();
+    test_sync_engine_rejects_legacy_dirty_for_resolved_actor();
 
     if (g_failed != 0) {
         std::cerr << g_failed << " network protocol test(s) failed\n";

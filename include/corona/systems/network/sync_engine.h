@@ -19,7 +19,7 @@ namespace Corona::Network {
 
 /**
  * @brief Poll-sync engine: dirty-poll SharedDataHub → serialize → broadcast;
- *        receive remote SYNC_DIRTY/SYNC_FULL → LWW merge → write back.
+ *        receive versioned EDITOR_SYNC operations → LWW merge → write back.
  *
  * Architecture assumptions:
  *  - Dirty detection is done by keeping a per-entity hash snapshot and
@@ -63,7 +63,7 @@ public:
 
     /**
      * @brief Poll all tracked storages, serialize dirty entries, and call
-     *        on_outgoing for each SYNC_DIRTY packet to broadcast.
+     *        on_outgoing for each versioned editor operation to broadcast.
      *
      * Called every kSyncIntervalMs from NetworkSystem::update().
      */
@@ -83,7 +83,7 @@ public:
     // Inbound (network → local)
     // ========================================================================
 
-    /// Process a received SYNC_DIRTY or SYNC_FULL packet.
+    /// Process a received editor operation or snapshot packet.
     void handle_incoming(const std::string& sender_peer_id,
                          const uint8_t* data, size_t len);
 

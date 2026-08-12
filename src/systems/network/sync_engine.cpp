@@ -584,8 +584,6 @@ void SyncEngine::poll_and_sync() {
     impl_->rebuild_entity_maps();
 
     auto& hub = impl_->hub;
-    std::vector<uint8_t> entries_payload;
-    uint32_t dirty_count = 0;
 
     // --- ModelTransform ---
     {
@@ -595,15 +593,10 @@ void SyncEngine::poll_and_sync() {
             auto obj_id = reinterpret_cast<std::uintptr_t>(&data);
             auto ent_seq = store.seq_id(obj_id);
 
-            std::string wire_key = "xform";
-            if (impl_->guid_for_entity) {
-                auto actor_guid = impl_->guid_for_entity(
-                    StorageID::ST_MODEL_TRANSFORM, ent_seq);
-                if (actor_guid.empty()) {
-                    continue;
-                }
-                wire_key = "actor:" + actor_guid + ":xform";
-            }
+            if (!impl_->guid_for_entity) continue;
+            auto actor_guid = impl_->guid_for_entity(
+                StorageID::ST_MODEL_TRANSFORM, ent_seq);
+            if (actor_guid.empty()) continue;
 
             if (impl_->ownership_for_entity) {
                 auto locally_owned = impl_->ownership_for_entity(
@@ -617,25 +610,20 @@ void SyncEngine::poll_and_sync() {
             std::string snap_key = impl_->make_key(StorageID::ST_MODEL_TRANSFORM, ent_seq, "xform");
 
             if (impl_->check_snapshot(snap_key, cur_hash)) {
-                if (wire_key.rfind("actor:", 0) == 0 && impl_->on_outgoing) {
-                    EditorSyncOperation op;
-                    op.kind = EditorSyncOperationKind::Upsert;
-                    op.actor_guid = wire_key.substr(6, wire_key.size() - 6 - 6);
-                    op.field_name = "xform";
-                    op.value.resize(36);
-                    float values[9] = {data.position.x, data.position.y, data.position.z,
-                                       data.euler_rotation.x, data.euler_rotation.y, data.euler_rotation.z,
-                                       data.scale.x, data.scale.y, data.scale.z};
-                    std::memcpy(op.value.data(), values, sizeof(values));
-                    op.version = impl_->lww_state.next_local_version();
-                    (void)impl_->lww_state.apply_upsert(op.actor_guid, op.field_name,
-                                                         op.value, op.version);
-                    auto packet = build_editor_sync_operation(op);
-                    if (!packet.empty()) impl_->on_outgoing(packet);
-                } else {
-                    serialize_mt(data, ent_seq, wire_key, entries_payload);
-                    ++dirty_count;
-                }
+                EditorSyncOperation op;
+                op.kind = EditorSyncOperationKind::Upsert;
+                op.actor_guid = actor_guid;
+                op.field_name = "xform";
+                op.value.resize(36);
+                float values[9] = {data.position.x, data.position.y, data.position.z,
+                                   data.euler_rotation.x, data.euler_rotation.y, data.euler_rotation.z,
+                                   data.scale.x, data.scale.y, data.scale.z};
+                std::memcpy(op.value.data(), values, sizeof(values));
+                op.version = impl_->lww_state.next_local_version();
+                (void)impl_->lww_state.apply_upsert(op.actor_guid, op.field_name,
+                                                     op.value, op.version);
+                auto packet = build_editor_sync_operation(op);
+                if (!packet.empty() && impl_->on_outgoing) impl_->on_outgoing(packet);
             }
         }
     }
@@ -700,40 +688,22 @@ void SyncEngine::poll_and_sync() {
             std::string snap_key = impl_->make_key(StorageID::ST_ENVIRONMENT, ent_seq, "env");
 
             if (impl_->check_snapshot(snap_key, cur_hash)) {
-                if (impl_->on_outgoing) {
-                    EditorSyncOperation op;
-                    op.kind = EditorSyncOperationKind::Upsert;
-                    op.actor_guid = "__scene__";
-                    op.field_name = "environment";
-                    op.value.resize(20);
-                    float values[5] = {data.sun_position.x, data.sun_position.y,
-                                       data.sun_position.z, data.sun_intensity,
-                                       data.exposure};
-                    std::memcpy(op.value.data(), values, sizeof(values));
-                    op.version = impl_->lww_state.next_local_version();
-                    (void)impl_->lww_state.apply_upsert(op.actor_guid, op.field_name,
-                                                         op.value, op.version);
-                    auto packet = build_editor_sync_operation(op);
-                    if (!packet.empty()) impl_->on_outgoing(packet);
-                } else {
-                    serialize_env(data, ent_seq, "env", entries_payload);
-                    ++dirty_count;
-                }
+                EditorSyncOperation op;
+                op.kind = EditorSyncOperationKind::Upsert;
+                op.actor_guid = "__scene__";
+                op.field_name = "environment";
+                op.value.resize(20);
+                float values[5] = {data.sun_position.x, data.sun_position.y,
+                                   data.sun_position.z, data.sun_intensity,
+                                   data.exposure};
+                std::memcpy(op.value.data(), values, sizeof(values));
+                op.version = impl_->lww_state.next_local_version();
+                (void)impl_->lww_state.apply_upsert(op.actor_guid, op.field_name,
+                                                     op.value, op.version);
+                auto packet = build_editor_sync_operation(op);
+                if (!packet.empty() && impl_->on_outgoing) impl_->on_outgoing(packet);
             }
         }
-    }
-
-    if (dirty_count == 0) return;
-
-    using namespace std::chrono;
-    auto now_ms = duration_cast<milliseconds>(
-        steady_clock::now().time_since_epoch()).count();
-
-    auto pkt = build_sync_dirty(impl_->seq++, static_cast<uint64_t>(now_ms),
-                                entries_payload, dirty_count);
-
-    if (impl_->on_outgoing) {
-        impl_->on_outgoing(pkt);
     }
 }
 
@@ -949,85 +919,9 @@ void SyncEngine::handle_incoming(const std::string& sender_peer_id,
     auto type = static_cast<MessageType>(r.read_u8());
 
     if (type == MessageType::SYNC_DIRTY) {
-        if (!r.has_remaining(16)) return;
-        (void)r.read_u32();  // seq
-        (void)r.read_u64();  // remote_ts
-        uint32_t count = r.read_u32();
-
-        impl_->rebuild_entity_maps();
-        auto& hub = impl_->hub;
-
-        for (uint32_t i = 0; i < count; ++i) {
-            if (!r.has_remaining(2 + 8 + 2 + 2)) break;
-            auto storage_id = static_cast<StorageID>(r.read_u16());
-            uint64_t entity_seq = r.read_u64();
-            uint16_t key_len = r.read_u16();
-            uint16_t value_len = r.read_u16();
-
-            if (!r.has_remaining(key_len + value_len)) break;
-            std::string key = r.read_string(key_len);
-            const uint8_t* value_ptr = r.data + r.pos;
-            r.read_string(value_len);
-            const auto resolved_key = impl_->resolve_dirty_key(storage_id, entity_seq, key);
-            if (!resolved_key.valid) {
-                continue;
-            }
-            const uint64_t target_seq = resolved_key.entity_seq;
-            const std::string& field_key = resolved_key.field;
-
-            impl_->syncing_from_remote = true;
-
-            switch (storage_id) {
-            case StorageID::ST_MODEL_TRANSFORM: {
-                auto& store = hub.model_transform_storage();
-                auto map_it = impl_->mt_seq_to_id.find(target_seq);
-                if (map_it != impl_->mt_seq_to_id.end()) {
-                    // Blocking write — must not silently drop transform updates
-                    // or remote objects will jitter.  Render threads hold shared
-                    // read locks only briefly; the block is O(µs).
-                    auto handle = store.try_acquire_write(map_it->second);
-                    if (handle.valid()) {
-                        deserialize_mt(*handle, value_ptr, value_len);
-                        impl_->set_snapshot(
-                            impl_->make_key(storage_id, target_seq, field_key),
-                            hash_mt(*handle, target_seq));
-                    }
-                }
-                break;
-            }
-            case StorageID::ST_MODEL_RESOURCE: {
-                // Model resources are created by the actor/file-transfer path.
-                // Ignore remote handle-bearing updates to avoid breaking local links.
-                break;
-            }
-            case StorageID::ST_GEOMETRY: {
-                // Geometry stores local object handles; actor creation owns it.
-                break;
-            }
-            case StorageID::ST_OPTICS: {
-                // Keep optics local for now; transform-only object sync is safer.
-                break;
-            }
-            case StorageID::ST_ENVIRONMENT: {
-                auto& store = hub.environment_storage();
-                auto map_it = impl_->env_seq_to_id.find(target_seq);
-                if (map_it != impl_->env_seq_to_id.end()) {
-                    auto handle = store.try_acquire_write(map_it->second);
-                    if (handle.valid()) {
-                        deserialize_env(*handle, value_ptr, value_len);
-                        impl_->set_snapshot(
-                            impl_->make_key(storage_id, target_seq, field_key),
-                            hash_env(*handle, target_seq));
-                    }
-                }
-                break;
-            }
-            default:
-                break;
-            }
-
-            impl_->syncing_from_remote = false;
-        }
+        // Legacy dirty packets carry no LWW version and must never mutate
+        // collaborative editor state. New peers use EDITOR_SYNC exclusively.
+        return;
     }
     else if (type == MessageType::SYNC_FULL) {
         // Legacy SYNC_FULL has no LWW versions and its old parser treated the
