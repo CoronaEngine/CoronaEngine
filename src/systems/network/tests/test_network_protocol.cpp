@@ -171,6 +171,14 @@ void test_sync_engine_emits_versioned_snapshot() {
     sync.shutdown();
 }
 
+void test_peer_manager_targeted_send_rejects_unknown_peer() {
+    Corona::Network::PeerManager manager;
+    const uint8_t byte = 1;
+    expect_true(!manager.send_to_peer_id("missing", Corona::Network::kChannelReliable,
+                                        &byte, sizeof(byte), true),
+                "targeted peer send rejects unknown peer");
+}
+
 void test_file_request_carries_transfer_id() {
     constexpr uint64_t transfer_id = 0x1122334455667788ull;
     auto packet = Corona::Network::build_file_request(transfer_id, "Resource/mesh.obj");
@@ -1918,6 +1926,7 @@ int main() {
     test_sync_engine_applies_versioned_editor_operation();
     test_sync_engine_delete_tombstone_is_idempotent();
     test_sync_engine_emits_versioned_snapshot();
+    test_peer_manager_targeted_send_rejects_unknown_peer();
     test_actor_create_carries_actor_guid();
     test_actor_create_unpack_preserves_wire_transform();
     test_actor_create_carries_dependency_paths();

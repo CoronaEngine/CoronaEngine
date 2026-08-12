@@ -268,6 +268,7 @@ struct SyncEngine::Impl {
 
     // Callbacks
     OnSyncOutgoing on_outgoing;
+    OnTargetedSyncOutgoing on_targeted_outgoing;
     OnFullSyncRequest on_full_sync_request;
     OnEditorOperationApplied on_editor_operation_applied;
     ResolveActorGuidForEntity guid_for_entity;
@@ -660,7 +661,14 @@ void SyncEngine::poll_and_sync() {
     }
 }
 
-void SyncEngine::sync_full_to(const std::string& /*target_peer_id*/) {
+void SyncEngine::sync_full_to(const std::string& target_peer_id) {
+    if (!target_peer_id.empty() && impl_->on_targeted_outgoing) {
+        for (const auto& operation : impl_->lww_state.snapshot()) {
+            auto packet = build_editor_sync_operation(operation);
+            if (!packet.empty()) impl_->on_targeted_outgoing(target_peer_id, packet);
+        }
+        return;
+    }
     emit_snapshot();
 }
 
@@ -785,6 +793,10 @@ void SyncEngine::handle_incoming(const std::string& sender_peer_id,
 // ============================================================================
 void SyncEngine::set_on_outgoing(OnSyncOutgoing cb) {
     impl_->on_outgoing = std::move(cb);
+}
+
+void SyncEngine::set_on_targeted_outgoing(OnTargetedSyncOutgoing cb) {
+    impl_->on_targeted_outgoing = std::move(cb);
 }
 
 void SyncEngine::set_on_full_sync_request(OnFullSyncRequest cb) {

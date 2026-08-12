@@ -107,6 +107,10 @@ public:
     void send_to(_ENetPeer* peer, int channel, const void* data, size_t len,
                  bool reliable);
 
+    /// Send to a ready peer identified by its stable lookup ID.
+    bool send_to_peer_id(const std::string& peer_id, int channel,
+                         const void* data, size_t len, bool reliable);
+
     // ========================================================================
     // Polling
     // ========================================================================

@@ -267,6 +267,21 @@ void PeerManager::send_to(_ENetPeer* peer, int channel,
     enet_peer_send(peer, channel, pkt);
 }
 
+bool PeerManager::send_to_peer_id(const std::string& peer_id, int channel,
+                                  const void* data, size_t len, bool reliable) {
+    if (peer_id.empty() || !data || len == 0 || !impl_->host) return false;
+    _ENetPeer* peer = nullptr;
+    {
+        std::lock_guard lock(impl_->peer_mutex);
+        auto* info = impl_->find_peer_by_id_unsafe(peer_id);
+        if (!info || !info->connected || !info->hello_done) return false;
+        peer = info->peer;
+    }
+    if (!peer) return false;
+    send_to(peer, channel, data, len, reliable);
+    return true;
+}
+
 // ============================================================================
 void PeerManager::poll() {
     if (!impl_->host) return;

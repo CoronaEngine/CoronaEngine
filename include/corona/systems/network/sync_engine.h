@@ -29,6 +29,8 @@ namespace Corona::Network {
 class SyncEngine {
 public:
     using OnSyncOutgoing = std::function<void(const std::vector<uint8_t>& packet)>;
+    using OnTargetedSyncOutgoing = std::function<void(
+        const std::string& peer_id, const std::vector<uint8_t>& packet)>;
     using OnFullSyncRequest = std::function<void(const std::string& requesting_peer_id)>;
     using OnEditorOperationApplied = std::function<void(const EditorSyncOperation&)>;
     using ResolveActorGuidForEntity =
@@ -71,7 +73,7 @@ public:
      * @brief Build a SYNC_FULL snapshot of ALL current state and call
      *        on_outgoing with the packet.  Sent to a newly joined peer.
      */
-    void sync_full_to(const std::string& /*target_peer_id*/);
+    void sync_full_to(const std::string& target_peer_id);
 
     /// Emit the current versioned editor state as idempotent operations.
     void emit_snapshot();
@@ -89,6 +91,7 @@ public:
     // ========================================================================
 
     void set_on_outgoing(OnSyncOutgoing cb);
+    void set_on_targeted_outgoing(OnTargetedSyncOutgoing cb);
     void set_on_full_sync_request(OnFullSyncRequest cb);
     void set_on_editor_operation_applied(OnEditorOperationApplied cb);
     void set_identity_mapping_callbacks(ResolveActorGuidForEntity guid_for_entity,

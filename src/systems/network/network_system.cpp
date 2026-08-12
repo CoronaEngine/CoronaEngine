@@ -523,6 +523,11 @@ bool NetworkSystem::initialize(Kernel::ISystemContext* ctx) {
             packet.data(), packet.size(),
             true);
     });
+    impl_->sync_engine.set_on_targeted_outgoing(
+        [this](const std::string& peer_id, const std::vector<uint8_t>& packet) {
+            impl_->peer_manager.send_to_peer_id(peer_id, Network::kChannelReliable,
+                                                packet.data(), packet.size(), true);
+        });
     impl_->sync_engine.set_identity_mapping_callbacks(
         [this](Network::StorageID storage_id, uint64_t entity_seq) {
             return impl_->identity_registry.actor_guid_for_storage_seq(storage_id, entity_seq);
@@ -1681,8 +1686,7 @@ void NetworkSystem::persist_lanchat_agents(const std::string& room_id) {
 void NetworkSystem::on_peer_connected(const Network::PeerManager::PeerInfo& info) {
     CFW_LOG_INFO("NetworkSystem: Peer connected — {} ({})", info.id, info.name);
 
-    // Snapshot is idempotent and versioned; until PeerManager exposes a
-    // targeted send primitive, the existing outgoing path broadcasts it.
+    // Snapshot is idempotent and versioned, and is sent only to this peer.
     impl_->sync_engine.sync_full_to(info.id);
 
     if (impl_->session_role == SessionRole::Client && !impl_->lanchat.room_id().empty()) {
