@@ -676,6 +676,12 @@ void SyncEngine::poll_and_sync() {
 }
 
 void SyncEngine::sync_full_to(const std::string& target_peer_id) {
+    // A peer may connect before the first 16 ms sync tick. Seed the LWW table
+    // from current local state without broadcasting those seed operations.
+    auto outgoing = std::move(impl_->on_outgoing);
+    impl_->on_outgoing = {};
+    poll_and_sync();
+    impl_->on_outgoing = std::move(outgoing);
     if (!target_peer_id.empty() && impl_->on_targeted_outgoing) {
         for (const auto& operation : impl_->lww_state.snapshot()) {
             auto packet = build_editor_sync_operation(operation);
