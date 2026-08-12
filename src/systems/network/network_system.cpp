@@ -1484,6 +1484,9 @@ bool NetworkSystem::has_pending_transfers() const {
 
 void NetworkSystem::set_sync_paused(bool paused) {
     impl_->sync_paused = paused;
+    if (!paused) {
+        impl_->sync_engine.retry_pending_operations();
+    }
 }
 
 bool NetworkSystem::pop_pending_actor_create(std::string& actor_guid,
