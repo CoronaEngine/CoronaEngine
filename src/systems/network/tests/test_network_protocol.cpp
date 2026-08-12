@@ -145,6 +145,37 @@ void test_sync_engine_delete_tombstone_is_idempotent() {
     sync.shutdown();
 }
 
+void test_sync_engine_does_not_apply_delete_older_than_actor_field() {
+    Corona::Network::SyncEngine sync;
+    sync.initialize("local-peer");
+    int deletes = 0;
+    sync.set_on_editor_operation_applied(
+        [&](const Corona::Network::EditorSyncOperation& operation) {
+            if (operation.kind == Corona::Network::EditorSyncOperationKind::Delete) {
+                ++deletes;
+            }
+        });
+    Corona::Network::EditorSyncOperation field;
+    field.kind = Corona::Network::EditorSyncOperationKind::Upsert;
+    field.actor_guid = "actor-live";
+    field.field_name = "actor.create";
+    field.value = {1};
+    field.version = {5, "peer-a"};
+    expect_true(sync.apply_editor_operation(field) ==
+                    Corona::Network::LwwApplyResult::Applied,
+                "new actor field applies before stale delete");
+    Corona::Network::EditorSyncOperation deletion;
+    deletion.kind = Corona::Network::EditorSyncOperationKind::Delete;
+    deletion.actor_guid = field.actor_guid;
+    deletion.version = {4, "peer-b"};
+    expect_true(sync.apply_editor_operation(deletion) ==
+                    Corona::Network::LwwApplyResult::Applied,
+                "older tombstone remains as a stale update barrier");
+    expect_true(deletes == 0,
+                "delete older than current actor field does not delete actor");
+    sync.shutdown();
+}
+
 void test_sync_engine_emits_versioned_snapshot() {
     Corona::Network::SyncEngine sync;
     std::vector<std::vector<uint8_t>> packets;
@@ -183,6 +214,28 @@ void test_sync_engine_creates_versioned_actor_upsert() {
     sync.shutdown();
 }
 
+void test_sync_engine_does_not_retry_logical_actor_state() {
+    Corona::Network::SyncEngine sync;
+    sync.initialize("local-peer");
+    int applied = 0;
+    sync.set_on_editor_operation_applied(
+        [&](const Corona::Network::EditorSyncOperation&) { ++applied; });
+
+    Corona::Network::EditorSyncOperation op;
+    op.kind = Corona::Network::EditorSyncOperationKind::Upsert;
+    op.actor_guid = "actor-state";
+    op.field_name = "actor.state";
+    op.value = {1, 2, 3};
+    op.version = {2, "remote-peer"};
+    expect_true(sync.apply_editor_operation(op) ==
+                    Corona::Network::LwwApplyResult::Applied,
+                "logical actor state applies through LWW");
+    sync.retry_pending_operations();
+    expect_true(applied == 1,
+                "logical actor state is not retained as a storage retry");
+    sync.shutdown();
+}
+
 void test_peer_manager_targeted_send_rejects_unknown_peer() {
     Corona::Network::PeerManager manager;
     const uint8_t byte = 1;
@@ -211,6 +264,34 @@ void test_editor_snapshot_chunk_round_trips_operation_packets() {
     expect_true(chunk.size() > encoded.size(), "snapshot chunk wraps operation packet");
     expect_true(chunk[0] == static_cast<uint8_t>(Corona::Network::MessageType::EDITOR_SNAPSHOT_CHUNK),
                 "snapshot chunk message type");
+}
+
+void test_editor_snapshot_accepts_operation_from_original_writer() {
+    Corona::Network::SyncEngine sync;
+    sync.initialize("receiver");
+    Corona::Network::EditorSyncOperation op;
+    op.kind = Corona::Network::EditorSyncOperationKind::Upsert;
+    op.actor_guid = "actor-forwarded";
+    op.field_name = "name";
+    op.value = {'x'};
+    op.version = {5, "original-writer"};
+    const auto encoded = Corona::Network::build_editor_sync_operation(op);
+    const auto chunk = Corona::Network::build_editor_snapshot_chunk(
+        11, 0, 1, {encoded});
+
+    int applied = 0;
+    sync.set_on_editor_operation_applied(
+        [&](const Corona::Network::EditorSyncOperation& operation) {
+            if (operation.actor_guid == op.actor_guid &&
+                operation.version.writer_peer_id == op.version.writer_peer_id) {
+                ++applied;
+            }
+        });
+    sync.handle_incoming("snapshot-sender", chunk.data(), chunk.size());
+
+    expect_true(applied == 1,
+                "snapshot preserves and accepts the original field writer");
+    sync.shutdown();
 }
 
 void test_file_request_carries_transfer_id() {
@@ -1959,11 +2040,14 @@ int main() {
     test_lww_state_advances_lamport_counter();
     test_sync_engine_applies_versioned_editor_operation();
     test_sync_engine_delete_tombstone_is_idempotent();
+    test_sync_engine_does_not_apply_delete_older_than_actor_field();
     test_sync_engine_emits_versioned_snapshot();
     test_sync_engine_creates_versioned_actor_upsert();
+    test_sync_engine_does_not_retry_logical_actor_state();
     test_peer_manager_targeted_send_rejects_unknown_peer();
     test_editor_snapshot_request_has_schema_version();
     test_editor_snapshot_chunk_round_trips_operation_packets();
+    test_editor_snapshot_accepts_operation_from_original_writer();
     test_actor_create_carries_actor_guid();
     test_actor_create_unpack_preserves_wire_transform();
     test_actor_create_carries_dependency_paths();

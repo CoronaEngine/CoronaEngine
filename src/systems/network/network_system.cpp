@@ -6,6 +6,8 @@
 #include <corona/systems/network/lanchat_history_store.h>
 #include <corona/systems/network/network_identity.h>
 #include <corona/systems/network/network_system.h>
+#include <corona/systems/network/actor_editor_sync.h>
+#include <corona/systems/network/scoped_bool_override.h>
 #include <corona/shared_data_hub.h>
 
 #include <chrono>
@@ -91,7 +93,7 @@ struct NetworkSystem::Impl {
 
     // Sync pause (suppress poll_and_sync during incoming actor creation)
     bool sync_paused = false;
-    bool applying_versioned_create = false;
+    bool applying_versioned_actor_message = false;
 
     // Deferred actions to execute in update() (avoid GIL in network thread)
     struct PendingAction {
@@ -549,15 +551,26 @@ bool NetworkSystem::initialize(Kernel::ISystemContext* ctx) {
     impl_->sync_engine.set_on_editor_operation_applied(
         [this](const Network::EditorSyncOperation& operation) {
             if (operation.kind == Network::EditorSyncOperationKind::Upsert &&
-                operation.field_name == "actor.create") {
-                std::vector<uint8_t> packet;
-                packet.reserve(operation.value.size() + 1);
-                packet.push_back(static_cast<uint8_t>(Network::MessageType::ACTOR_CREATE));
-                packet.insert(packet.end(), operation.value.begin(), operation.value.end());
-                impl_->applying_versioned_create = true;
+                (operation.field_name == "actor.create" ||
+                 operation.field_name == "actor.state" ||
+                 operation.field_name == "actor.transform")) {
+                if (operation.field_name == "actor.create") {
+                    std::erase_if(impl_->pending_actor_deletes,
+                                  [&](const Impl::PendingActorDelete& pending) {
+                                      return pending.actor_guid == operation.actor_guid;
+                                  });
+                }
+                const auto legacy_type = operation.field_name == "actor.create"
+                    ? Network::MessageType::ACTOR_CREATE
+                    : operation.field_name == "actor.state"
+                        ? Network::MessageType::ACTOR_STATE_UPDATE
+                        : Network::MessageType::ACTOR_TRANSFORM_UPDATE;
+                auto packet = Network::rebuild_actor_editor_packet(operation, legacy_type);
+                if (packet.empty()) return;
+                Network::ScopedBoolOverride guard(
+                    impl_->applying_versioned_actor_message, true);
                 on_custom_message(operation.version.writer_peer_id,
                                   packet.data(), packet.size());
-                impl_->applying_versioned_create = false;
                 return;
             }
             if (operation.kind != Network::EditorSyncOperationKind::Delete) return;
@@ -1433,23 +1446,18 @@ void NetworkSystem::broadcast_actor_create(const std::string& actor_guid,
                                            const void* optics_packed, size_t optics_size,
                                            const std::string& actor_json) {
     if (impl_->session_state != SessionState::Active) return;
-    if (impl_->peer_manager.peer_count() == 0) {
-        CFW_LOG_DEBUG("NetworkSystem: No peers — skipping actor create broadcast");
-        return;
-    }
+    if (actor_guid.empty()) return;
     auto pkt = Network::build_actor_create(actor_guid, scene_name, model_path, transform,
                                            optics_packed, optics_size, dependency_paths,
                                            actor_json);
-    impl_->peer_manager.broadcast(Network::kChannelReliable, pkt.data(), pkt.size(), true);
-    if (!pkt.empty()) {
-        std::vector<uint8_t> create_payload(pkt.begin() + 1, pkt.end());
-        auto versioned = impl_->sync_engine.make_local_upsert(
-            actor_guid, "actor.create", std::move(create_payload));
-        auto versioned_packet = Network::build_editor_sync_operation(versioned);
-        if (!versioned_packet.empty()) {
-            impl_->peer_manager.broadcast(Network::kChannelReliable,
-                                          versioned_packet.data(), versioned_packet.size(), true);
-        }
+    if (pkt.empty()) return;
+    std::vector<uint8_t> create_payload(pkt.begin() + 1, pkt.end());
+    auto versioned = impl_->sync_engine.make_local_upsert(
+        actor_guid, "actor.create", std::move(create_payload));
+    auto versioned_packet = Network::build_editor_sync_operation(versioned);
+    if (impl_->peer_manager.peer_count() > 0 && !versioned_packet.empty()) {
+        impl_->peer_manager.broadcast(Network::kChannelReliable,
+                                      versioned_packet.data(), versioned_packet.size(), true);
     }
     CFW_LOG_INFO("NetworkSystem: Broadcast actor create — actor='{}' scene='{}' model='{}' deps={}",
                  actor_guid, scene_name, model_path, dependency_paths.size());
@@ -1462,13 +1470,17 @@ void NetworkSystem::broadcast_actor_transform_update(const std::string& actor_gu
                                                      const std::string& correlation_id) {
     if (impl_->session_state != SessionState::Active) return;
     if (actor_guid.empty() || transform == nullptr) return;
-    if (impl_->peer_manager.peer_count() == 0) {
-        CFW_LOG_DEBUG("NetworkSystem: No peers — skipping actor transform broadcast");
-        return;
-    }
     auto pkt = Network::build_actor_transform_update(
         actor_guid, scene_name, transform, source_user_id, correlation_id);
-    impl_->peer_manager.broadcast(Network::kChannelReliable, pkt.data(), pkt.size(), true);
+    if (pkt.empty()) return;
+    std::vector<uint8_t> transform_payload(pkt.begin() + 1, pkt.end());
+    auto versioned = impl_->sync_engine.make_local_upsert(
+        actor_guid, "actor.transform", std::move(transform_payload));
+    auto versioned_packet = Network::build_editor_sync_operation(versioned);
+    if (impl_->peer_manager.peer_count() > 0 && !versioned_packet.empty()) {
+        impl_->peer_manager.broadcast(Network::kChannelReliable,
+                                      versioned_packet.data(), versioned_packet.size(), true);
+    }
     CFW_LOG_INFO("NetworkSystem: Broadcast actor transform — actor='{}' scene='{}' corr='{}'",
                  actor_guid, scene_name, correlation_id);
 }
@@ -1477,16 +1489,10 @@ void NetworkSystem::broadcast_actor_delete(const std::string& actor_guid,
                                            const std::string& scene_name,
                                            const std::string& actor_name) {
     if (impl_->session_state != SessionState::Active) return;
-    if (actor_guid.empty() && actor_name.empty()) return;
-    if (impl_->peer_manager.peer_count() == 0) {
-        CFW_LOG_DEBUG("NetworkSystem: No peers — skipping actor delete broadcast");
-        return;
-    }
-    auto pkt = Network::build_actor_delete(actor_guid, scene_name, actor_name);
-    impl_->peer_manager.broadcast(Network::kChannelReliable, pkt.data(), pkt.size(), true);
+    if (actor_guid.empty()) return;
     auto lww_delete = impl_->sync_engine.make_local_delete(actor_guid);
     auto lww_packet = Network::build_editor_sync_operation(lww_delete);
-    if (!lww_packet.empty()) {
+    if (impl_->peer_manager.peer_count() > 0 && !lww_packet.empty()) {
         impl_->peer_manager.broadcast(Network::kChannelReliable,
                                       lww_packet.data(), lww_packet.size(), true);
     }
@@ -1525,12 +1531,16 @@ void NetworkSystem::broadcast_actor_state_update(const std::string& actor_guid,
                                                  const std::string& actor_json) {
     if (impl_->session_state != SessionState::Active) return;
     if (actor_guid.empty() || scene_name.empty()) return;
-    if (impl_->peer_manager.peer_count() == 0) {
-        CFW_LOG_DEBUG("NetworkSystem: No peers — skipping actor state update broadcast");
-        return;
-    }
     auto pkt = Network::build_actor_state_update(actor_guid, scene_name, actor_json);
-    impl_->peer_manager.broadcast(Network::kChannelReliable, pkt.data(), pkt.size(), true);
+    if (pkt.empty()) return;
+    std::vector<uint8_t> state_payload(pkt.begin() + 1, pkt.end());
+    auto versioned = impl_->sync_engine.make_local_upsert(
+        actor_guid, "actor.state", std::move(state_payload));
+    auto versioned_packet = Network::build_editor_sync_operation(versioned);
+    if (impl_->peer_manager.peer_count() > 0 && !versioned_packet.empty()) {
+        impl_->peer_manager.broadcast(Network::kChannelReliable,
+                                      versioned_packet.data(), versioned_packet.size(), true);
+    }
     CFW_LOG_INFO("NetworkSystem: Broadcast actor state update — actor='{}' scene='{}' bytes={}",
                  actor_guid, scene_name, actor_json.size());
 }
@@ -1789,16 +1799,19 @@ void NetworkSystem::on_custom_message(const std::string& sender_peer_id,
 
     if (mt == MessageType::ACTOR_CREATE) {
         Network::BufferReader r(data + 1, len - 1);
+        if (!r.has_remaining(2)) return;
         uint16_t guid_len = r.read_u16();
+        if (!r.has_remaining(guid_len)) return;
         std::string actor_guid = r.read_string(guid_len);
-        if (!impl_->applying_versioned_create && !actor_guid.empty()) {
+        if (!impl_->applying_versioned_actor_message && !actor_guid.empty()) {
             Network::EditorSyncOperation legacy_create;
             legacy_create.kind = Network::EditorSyncOperationKind::Upsert;
             legacy_create.actor_guid = actor_guid;
             legacy_create.field_name = "actor.create";
+            legacy_create.value.assign(data + 1, data + len);
             legacy_create.version = {0, sender_peer_id};
-            const auto result = impl_->sync_engine.apply_editor_operation(legacy_create);
-            if (result != Network::LwwApplyResult::Applied) return;
+            (void)impl_->sync_engine.apply_editor_operation(legacy_create);
+            return;
         }
         uint16_t sn_len = r.read_u16();
         std::string scene_name = r.read_string(sn_len);
@@ -2011,6 +2024,16 @@ void NetworkSystem::on_custom_message(const std::string& sender_peer_id,
         uint16_t guid_len = r.read_u16();
         if (!r.has_remaining(guid_len + 2)) return;
         std::string actor_guid = r.read_string(guid_len);
+        if (!impl_->applying_versioned_actor_message && !actor_guid.empty()) {
+            Network::EditorSyncOperation legacy_transform;
+            legacy_transform.kind = Network::EditorSyncOperationKind::Upsert;
+            legacy_transform.actor_guid = actor_guid;
+            legacy_transform.field_name = "actor.transform";
+            legacy_transform.value.assign(data + 1, data + len);
+            legacy_transform.version = {0, sender_peer_id};
+            (void)impl_->sync_engine.apply_editor_operation(legacy_transform);
+            return;
+        }
         uint16_t scene_len = r.read_u16();
         if (!r.has_remaining(scene_len + 36)) return;
         std::string scene_name = r.read_string(scene_len);
@@ -2066,36 +2089,8 @@ void NetworkSystem::on_custom_message(const std::string& sender_peer_id,
             legacy_delete.kind = Network::EditorSyncOperationKind::Delete;
             legacy_delete.actor_guid = pending.actor_guid;
             legacy_delete.version = {0, sender_peer_id};
-            const auto delete_result = impl_->sync_engine.apply_editor_operation(legacy_delete);
-            if (delete_result != Network::LwwApplyResult::Applied) {
-                return;
-            }
-            std::erase_if(impl_->pending_actor_creates,
-                          [&](const Impl::PendingAction& action) {
-                              return action.actor_guid == pending.actor_guid;
-                          });
-            std::erase_if(impl_->pending_actor_transform_updates,
-                          [&](const Impl::PendingTransformUpdate& update) {
-                              return update.actor_guid == pending.actor_guid;
-                          });
-            for (auto it = impl_->pending_file_transfer_groups.begin();
-                 it != impl_->pending_file_transfer_groups.end(); ) {
-                auto& actions = it->second.actor_actions;
-                std::erase_if(actions, [&](const Impl::PendingAction& action) {
-                    return action.actor_guid == pending.actor_guid;
-                });
-                if (actions.empty()) {
-                    for (uint64_t transfer_id : it->second.transfer_ids) {
-                        impl_->transfer_to_group.erase(transfer_id);
-                    }
-                    if (!it->second.asset_id.empty()) {
-                        impl_->asset_to_transfer_group.erase(it->second.asset_id);
-                    }
-                    it = impl_->pending_file_transfer_groups.erase(it);
-                } else {
-                    ++it;
-                }
-            }
+            (void)impl_->sync_engine.apply_editor_operation(legacy_delete);
+            return;
         }
         enqueue_lanchat_sync_event(
             "actor_deleted",
@@ -2210,6 +2205,16 @@ void NetworkSystem::on_custom_message(const std::string& sender_peer_id,
         if (!r.has_remaining(guid_len + 2)) return;
         Impl::PendingActorStateUpdate pending;
         pending.actor_guid = r.read_string(guid_len);
+        if (!impl_->applying_versioned_actor_message && !pending.actor_guid.empty()) {
+            Network::EditorSyncOperation legacy_state;
+            legacy_state.kind = Network::EditorSyncOperationKind::Upsert;
+            legacy_state.actor_guid = pending.actor_guid;
+            legacy_state.field_name = "actor.state";
+            legacy_state.value.assign(data + 1, data + len);
+            legacy_state.version = {0, sender_peer_id};
+            (void)impl_->sync_engine.apply_editor_operation(legacy_state);
+            return;
+        }
         uint16_t scene_len = r.read_u16();
         if (!r.has_remaining(scene_len + 4)) return;
         pending.scene_name = r.read_string(scene_len);

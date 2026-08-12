@@ -400,8 +400,10 @@ LwwApplyResult SyncEngine::apply_editor_operation(
         ? impl_->lww_state.apply_delete(operation.actor_guid, operation.version)
         : impl_->lww_state.apply_upsert(operation.actor_guid, operation.field_name,
                                         operation.value, operation.version);
-    if (result != LwwApplyResult::Applied || operation.kind == EditorSyncOperationKind::Delete) {
-        if (result == LwwApplyResult::Applied && impl_->on_editor_operation_applied) {
+    if (result != LwwApplyResult::Applied) return result;
+    if (operation.kind == EditorSyncOperationKind::Delete) {
+        if (impl_->lww_state.is_deleted(operation.actor_guid) &&
+            impl_->on_editor_operation_applied) {
             impl_->on_editor_operation_applied(operation);
         }
         return result;
@@ -441,7 +443,9 @@ EditorSyncOperation SyncEngine::make_local_upsert(
 
 bool SyncEngine::apply_operation_to_storage(const EditorSyncOperation& operation) {
     if (operation.kind == EditorSyncOperationKind::Delete) return true;
-    if (operation.field_name == "actor.create") return true;
+    if (operation.field_name == "actor.create" ||
+        operation.field_name == "actor.state" ||
+        operation.field_name == "actor.transform") return true;
 
     impl_->rebuild_entity_maps();
     auto& hub = impl_->hub;
@@ -748,14 +752,25 @@ void SyncEngine::handle_incoming(const std::string& sender_peer_id,
         const auto total = r.read_u16();
         const auto count = r.read_u16();
         if (total == 0 || index >= total || count > kEditorSnapshotChunkOperations) return;
+        std::vector<EditorSyncOperation> operations;
+        operations.reserve(count);
         for (uint16_t i = 0; i < count; ++i) {
             if (!r.has_remaining(4)) return;
             const auto operation_len = r.read_u32();
             if (operation_len == 0 || operation_len > kMaxEditorSyncValueBytes ||
                 !r.has_remaining(operation_len)) return;
             const auto* operation_data = r.data + r.pos;
-            (void)handle_incoming(sender_peer_id, operation_data, operation_len);
+            auto operation = parse_editor_sync_operation(operation_data, operation_len);
+            if (!operation) return;
+            // A snapshot forwards the winning version it currently stores.
+            // Its writer may therefore be a third peer rather than the peer
+            // transporting this snapshot chunk.
+            operations.push_back(std::move(*operation));
             r.pos += operation_len;
+        }
+        if (r.pos != len) return;
+        for (const auto& operation : operations) {
+            (void)apply_editor_operation(operation);
         }
         return;
     }

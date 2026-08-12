@@ -113,7 +113,16 @@ public:
 
     [[nodiscard]] bool is_deleted(const std::string& actor_guid) const {
         std::lock_guard lock(mutex_);
-        return tombstones_.find(actor_guid) != tombstones_.end();
+        const auto tombstone = tombstones_.find(actor_guid);
+        if (tombstone == tombstones_.end()) return false;
+        const auto prefix = actor_guid + '\x1f';
+        for (const auto& [key, field] : fields_) {
+            if (key.starts_with(prefix) &&
+                compare_lww_version(field.version, tombstone->second) > 0) {
+                return false;
+            }
+        }
+        return true;
     }
 
     [[nodiscard]] std::vector<EditorSyncOperation> snapshot() const {
