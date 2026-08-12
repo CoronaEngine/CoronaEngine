@@ -43,6 +43,7 @@ set(UI_SYSTEM_SOURCES
     cef/request_response_broker.h
     cef/cef_client.h
     cef/cef_editor_native_api_registry.h
+    cef/cef_editor_native_api_test_support.h
     editor_api/cef_editor_api.h
     cef/scene_folder.h
     cef/vision_actor_material_bridge.h
@@ -162,6 +163,54 @@ if(BUILD_CORONA_TESTING OR BUILD_TESTING)
         VERBATIM
     )
     add_test(NAME CefAppTests COMMAND corona_cef_app_tests)
+
+    add_executable(corona_collaborative_editor_loopback_tests
+        tests/test_collaborative_editor_loopback.cpp
+        ${PROJECT_SOURCE_DIR}/src/shared_data_hub.cpp
+    )
+    target_include_directories(corona_collaborative_editor_loopback_tests
+        PRIVATE ${PROJECT_SOURCE_DIR}/include
+                ${CMAKE_CURRENT_SOURCE_DIR}
+    )
+    target_link_libraries(corona_collaborative_editor_loopback_tests
+        PRIVATE corona_ui_system
+    )
+    if(COMMAND helicon_install_runtime_deps)
+        helicon_install_runtime_deps(corona_collaborative_editor_loopback_tests)
+    endif()
+    add_custom_command(TARGET corona_collaborative_editor_loopback_tests POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "$<IF:$<CONFIG:Debug>,${CEF_ROOT}/Debug/libcef.dll,${CEF_ROOT}/Release/libcef.dll>"
+                "$<TARGET_FILE_DIR:corona_collaborative_editor_loopback_tests>/libcef.dll"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "$<IF:$<CONFIG:Debug>,${CEF_ROOT}/Debug/chrome_elf.dll,${CEF_ROOT}/Release/chrome_elf.dll>"
+                "$<TARGET_FILE_DIR:corona_collaborative_editor_loopback_tests>/chrome_elf.dll"
+        VERBATIM
+    )
+    add_test(NAME CollaborativeEditorLoopbackTests
+             COMMAND corona_collaborative_editor_loopback_tests)
+    get_filename_component(_CORONA_LOOPBACK_PYTHON_DIR "${Python_EXECUTABLE}" DIRECTORY)
+    set(_CORONA_LOOPBACK_PATH_DIRS "${_CORONA_LOOPBACK_PYTHON_DIR}")
+    foreach(_tbb_runtime IN LISTS CORONA_TBB_REDIS_DLLS)
+        get_filename_component(_tbb_runtime_dir "${_tbb_runtime}" DIRECTORY)
+        list(APPEND _CORONA_LOOPBACK_PATH_DIRS "${_tbb_runtime_dir}")
+    endforeach()
+    list(REMOVE_DUPLICATES _CORONA_LOOPBACK_PATH_DIRS)
+    set(_CORONA_LOOPBACK_ENVIRONMENT)
+    foreach(_runtime_dir IN LISTS _CORONA_LOOPBACK_PATH_DIRS)
+        list(APPEND _CORONA_LOOPBACK_ENVIRONMENT
+             "PATH=path_list_prepend:${_runtime_dir}")
+    endforeach()
+    set_tests_properties(CollaborativeEditorLoopbackTests PROPERTIES
+        RUN_SERIAL TRUE
+        TIMEOUT 30
+        ENVIRONMENT_MODIFICATION "${_CORONA_LOOPBACK_ENVIRONMENT}"
+    )
+    unset(_CORONA_LOOPBACK_PYTHON_DIR)
+    unset(_CORONA_LOOPBACK_PATH_DIRS)
+    unset(_CORONA_LOOPBACK_ENVIRONMENT)
+    unset(_runtime_dir)
+    unset(_tbb_runtime_dir)
 
     add_executable(corona_ui_surface_lifecycle_tests
         tests/test_ui_surface_lifecycle.cpp

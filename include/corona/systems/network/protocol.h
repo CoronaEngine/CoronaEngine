@@ -444,7 +444,8 @@ inline std::vector<uint8_t> build_editor_snapshot_chunk(
 // Carries the sender's stable identity so the receiver can rekey the peer:
 // ENet's inbound CONNECT event only exposes the remote's ephemeral source port,
 // not its listen port, so peer ids would otherwise be asymmetric between the
-// two ends. After HELLO, both ends agree on stable_id = "name@listen_port".
+// two ends. After HELLO, both ends agree on a routable connection id of
+// "name@ip:listen_port" and authenticate LWW writes with "name@listen_port".
 //   [1B type=0x04] [2B name_len] [instance_name] [2B listen_port]
 // ============================================================================
 inline std::vector<uint8_t> build_hello(const std::string& instance_name,

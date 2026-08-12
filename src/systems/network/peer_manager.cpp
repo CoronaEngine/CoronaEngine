@@ -246,6 +246,12 @@ const PeerManager::PeerInfo* PeerManager::find_peer(
     return impl_->find_peer_by_id_unsafe(peer_id);
 }
 
+std::string PeerManager::writer_peer_id(const std::string& peer_id) const {
+    std::lock_guard lock(impl_->peer_mutex);
+    const auto* peer = impl_->find_peer_by_id_unsafe(peer_id);
+    return peer && peer->hello_done ? peer->writer_id : std::string{};
+}
+
 const std::string& PeerManager::local_peer_id() const {
     return impl_->local_id;
 }
@@ -442,6 +448,8 @@ void PeerManager::handle_hello(ENetPeer* peer, const uint8_t* data, size_t len) 
     enet_address_get_host_ip(&peer->address, ip, sizeof(ip));
     std::string stable_id = remote_name + "@" + std::string(ip) + ":" +
                             std::to_string(remote_listen_port);
+    const std::string writer_id = remote_name + "@" +
+                                  std::to_string(remote_listen_port);
 
     PeerInfo notify_info;
     bool should_notify = false;
@@ -480,6 +488,7 @@ void PeerManager::handle_hello(ENetPeer* peer, const uint8_t* data, size_t len) 
                 // Rekey self
                 self->stable_id = stable_id;
                 self->id = stable_id;
+                self->writer_id = writer_id;
                 self->name = remote_name;
                 self->hello_done = true;
                 notify_info = *self;
@@ -496,6 +505,7 @@ void PeerManager::handle_hello(ENetPeer* peer, const uint8_t* data, size_t len) 
         } else if (self) {
             self->stable_id = stable_id;
             self->id = stable_id;       // rekey lookup key to the stable id
+            self->writer_id = writer_id;
             self->name = remote_name;
             self->hello_done = true;
             self->last_receive_ms = peer_now_ms();

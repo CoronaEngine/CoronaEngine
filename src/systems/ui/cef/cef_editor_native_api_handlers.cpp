@@ -15,6 +15,7 @@
 #include "cef_client.h"
 #include "cef_editor_api.h"
 #include "cef_editor_native_api_registry.h"
+#include "cef_editor_native_api_test_support.h"
 #include "scene_folder.h"
 #include "vision_actor_material_bridge.h"
 #include "vision_actor_transform_bridge.h"
@@ -6898,6 +6899,18 @@ uint64_t collaboration_now_ms() {
 }
 
 }  // namespace
+
+void load_native_editor_scene_for_test(const nlohmann::json& snapshot) {
+    nlohmann::json diagnostics = nlohmann::json::array();
+    materialize_scene_snapshot_into_state(
+        native_editor_state(), snapshot, false, diagnostics);
+}
+
+void reset_native_editor_scene_for_test() {
+    auto& state = native_editor_state();
+    state.scene.reset();
+    state.project_path.clear();
+}
 
 std::string create_editor_actor_from_python(const std::string& scene_name,
                                             const std::string& asset_path,

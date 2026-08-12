@@ -1859,7 +1859,14 @@ void NetworkSystem::on_peer_disconnected(const Network::PeerManager::PeerInfo& i
 
 void NetworkSystem::on_data_received(const std::string& peer_id,
                                      const uint8_t* data, size_t len) {
-    impl_->sync_engine.handle_incoming(peer_id, data, len);
+    std::string authenticated_sender = peer_id;
+    if (len >= 1 &&
+        static_cast<Network::MessageType>(data[0]) ==
+            Network::MessageType::EDITOR_SYNC) {
+        authenticated_sender = impl_->peer_manager.writer_peer_id(peer_id);
+        if (authenticated_sender.empty()) return;
+    }
+    impl_->sync_engine.handle_incoming(authenticated_sender, data, len);
 
     if (impl_->ctx && impl_->ctx->event_bus()) {
         Events::RemoteSyncReceivedEvent ev{peer_id};

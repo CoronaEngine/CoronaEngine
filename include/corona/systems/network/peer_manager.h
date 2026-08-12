@@ -27,6 +27,7 @@ public:
     struct PeerInfo {
         std::string id;         // current lookup key (= stable_id after HELLO)
         std::string stable_id;  // "name@ip:listen_port" — identical on both ends
+        std::string writer_id;  // authenticated HELLO identity: "name@listen_port"
         std::string name;       // instance_name (from HELLO)
         _ENetPeer* peer = nullptr;
         bool connected = false;
@@ -91,6 +92,9 @@ public:
 
     /// Look up a peer by ID.
     [[nodiscard]] const PeerInfo* find_peer(const std::string& peer_id) const;
+
+    /// Resolve the authenticated LWW writer identity for a ready peer.
+    [[nodiscard]] std::string writer_peer_id(const std::string& peer_id) const;
 
     /// Local peer ID string ("ip:port").
     [[nodiscard]] const std::string& local_peer_id() const;
