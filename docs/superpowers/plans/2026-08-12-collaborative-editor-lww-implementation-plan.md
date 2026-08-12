@@ -88,6 +88,12 @@ Files: `SyncEngine`, `NetworkSystem`, protocol tests, integration tests.
   them by version.
 - Trigger the same exchange after a disconnect/reconnect; do not rely on dirty
   polling to recover missed changes.
+- On a newly started host session, seed pre-existing native editor Actors into
+  LWW at the native editor API boundary using the complete logical scene
+  snapshot. Do not reseed when UI reattaches to an active session. Reject
+  Actors without a stable GUID instead of synthesizing identity from mutable
+  names or paths, and strip process-local/observed runtime fields before
+  creating LWW payloads.
 
 Exit criterion: a new or reconnected peer converges to the complete scene,
 including changes made while it was offline.

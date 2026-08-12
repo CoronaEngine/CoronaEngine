@@ -55,6 +55,17 @@ GPU handles, storage handles, pointers, and other process-local objects are
 never serialized. Geometry and model resources are reconstructed locally after
 their logical resource identity and required files are available.
 
+When a new host session starts through the editor network API, the current
+native editor scene snapshot is used to seed complete Actor create payloads
+into the LWW state before peers rely on the snapshot. Reattaching UI to an
+already active session does not reseed or create newer artificial versions.
+Only Actors with an existing stable Actor GUID and logical model/resource path
+are eligible. Mutable-data hashes and `scene:model` fallbacks are forbidden.
+The seed and all later Actor create/state updates remove process-local or
+observed runtime fields such as handles, entity IDs, AABBs, load status, and
+GPU build status before serialization. Clients do not seed their pre-join
+scene into the shared state.
+
 Actor create, field update, and delete all use the same version model:
 
 ```text

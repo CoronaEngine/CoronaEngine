@@ -12,6 +12,20 @@ class NativeSceneToolsRpcTests(unittest.TestCase):
         handler_path = repo_root / "src" / "systems" / "ui" / "cef" / "cef_editor_native_api_handlers.cpp"
         return handler_path.read_text(encoding="utf-8")
 
+    def test_network_actor_create_rejects_missing_stable_guid(self):
+        source = self._handler_source()
+        start = source.find('{"broadcast_actor_create"')
+        end = source.find('        }},', start)
+        self.assertGreaterEqual(start, 0)
+        self.assertGreater(end, start)
+        handler = source[start:end]
+
+        self.assertIn('return native_failure("Actor GUID is required", 2);', handler)
+        self.assertNotIn('actor_guid = scene_name + ":" + model_path;', handler)
+        self.assertIn("initialize_actor_create_packed(opt);", handler)
+
+        self.assertIn("initialize_actor_create_packed(optics);", source)
+
     def _editor_api_header(self):
         api_path = (
             self._repo_root()
@@ -1970,6 +1984,18 @@ class NativeSceneToolsRpcTests(unittest.TestCase):
         self.assertIn("const sceneName = payload?.scene ?? payload;", network_source)
         self.assertNotIn("coronaEventBus.on('scene-tree-changed'", network_source)
         self.assertNotIn("coronaEventBus.off('scene-tree-changed'", network_source)
+
+    def test_network_host_session_seeds_native_editor_actors(self):
+        source = self._handler_source()
+        start = source.find('{"start_session"')
+        end = source.find('        }},', start)
+        self.assertGreaterEqual(start, 0)
+        self.assertGreater(end, start)
+        handler = source[start:end]
+
+        self.assertIn("seed_network_editor_state(*sys, role)", handler)
+        self.assertIn('payload["seeded_actor_count"]', handler)
+        self.assertIn("is_network_editor_seed_actor(actor)", source)
 
     def test_scene_bar_uses_cpp_defined_actor_changed_event_wrapper(self):
         scene_bar_source = (

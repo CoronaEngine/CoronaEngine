@@ -7,6 +7,7 @@
 #include <corona/systems/network/network_identity.h>
 #include <corona/systems/network/network_system.h>
 #include <corona/systems/network/actor_editor_sync.h>
+#include <corona/systems/network/actor_editor_payload.h>
 #include <corona/systems/network/scoped_bool_override.h>
 #include <corona/systems/network/scene_snapshot_policy.h>
 #include <corona/shared_data_hub.h>
@@ -1450,9 +1451,15 @@ void NetworkSystem::broadcast_actor_create(const std::string& actor_guid,
                                            const std::string& actor_json) {
     if (impl_->session_state != SessionState::Active) return;
     if (actor_guid.empty()) return;
+    const auto logical_actor_json = Network::logical_actor_editor_json(actor_json);
+    if (!logical_actor_json) {
+        CFW_LOG_WARNING("NetworkSystem: Rejected malformed actor create JSON - actor='{}'",
+                        actor_guid);
+        return;
+    }
     auto pkt = Network::build_actor_create(actor_guid, scene_name, model_path, transform,
-                                           optics_packed, optics_size, dependency_paths,
-                                           actor_json);
+                                            optics_packed, optics_size, dependency_paths,
+                                            *logical_actor_json);
     if (pkt.empty()) return;
     std::vector<uint8_t> create_payload(pkt.begin() + 1, pkt.end());
     auto versioned = impl_->sync_engine.make_local_upsert(
@@ -1534,7 +1541,13 @@ void NetworkSystem::broadcast_actor_state_update(const std::string& actor_guid,
                                                  const std::string& actor_json) {
     if (impl_->session_state != SessionState::Active) return;
     if (actor_guid.empty() || scene_name.empty()) return;
-    auto pkt = Network::build_actor_state_update(actor_guid, scene_name, actor_json);
+    const auto logical_actor_json = Network::logical_actor_editor_json(actor_json);
+    if (!logical_actor_json) {
+        CFW_LOG_WARNING("NetworkSystem: Rejected malformed actor state JSON - actor='{}'",
+                        actor_guid);
+        return;
+    }
+    auto pkt = Network::build_actor_state_update(actor_guid, scene_name, *logical_actor_json);
     if (pkt.empty()) return;
     std::vector<uint8_t> state_payload(pkt.begin() + 1, pkt.end());
     auto versioned = impl_->sync_engine.make_local_upsert(

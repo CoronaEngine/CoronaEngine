@@ -6400,6 +6400,100 @@ std::shared_ptr<Corona::Systems::NetworkSystem> require_network_system() {
     return get_network_system();
 }
 
+void initialize_actor_create_packed(Corona::Network::ActorCreatePacked& packed) {
+    std::memset(&packed, 0, sizeof(packed));
+    packed.visible = true;
+    packed.bEnableLighting = true;
+    packed.metallic = 0.0f;
+    packed.roughness = 0.5f;
+    packed.specular = 0.5f;
+    packed.specularTint = 0.0f;
+    packed.sheen = 0.0f;
+    packed.sheenTint = 0.5f;
+    packed.clearcoat = 0.0f;
+    packed.clearcoatGloss = 1.0f;
+    packed.ambient[0] = 0.2f;
+    packed.ambient[1] = 0.2f;
+    packed.ambient[2] = 0.2f;
+    packed.diffuse[0] = 0.8f;
+    packed.diffuse[1] = 0.8f;
+    packed.diffuse[2] = 0.8f;
+    packed.specular_color[0] = 1.0f;
+    packed.specular_color[1] = 1.0f;
+    packed.specular_color[2] = 1.0f;
+    packed.shininess = 32.0f;
+}
+
+bool is_network_editor_seed_actor(const NativeEditorActor& actor) {
+    if (actor.actor_guid.empty() || actor.route.empty() || !actor.engine_actor ||
+        !actor.geometry || actor.actor_type == "actor") {
+        return false;
+    }
+    const auto is_ai_framework_name = [](const std::string& value) {
+        static const std::unordered_set<std::string> kNames = {
+            "__room_box",
+            "__room_terrain",
+            "__terrain_grass",
+            "__terrain_boundary",
+            "__interior_floor",
+            "__foundation_surface",
+        };
+        return kNames.contains(value) || value.starts_with("__shell_");
+    };
+    if (actor.name.starts_with("__") && !is_ai_framework_name(actor.name)) return false;
+    return true;
+}
+
+std::size_t seed_network_editor_state(
+    Corona::Systems::NetworkSystem& network_system,
+    Corona::Systems::NetworkSystem::SessionRole role) {
+    if (role != Corona::Systems::NetworkSystem::SessionRole::Host) return 0;
+
+    auto* scene = ensure_native_editor_scene();
+    if (scene == nullptr) return 0;
+    const auto scene_route = normalize_route(scene->route);
+    const auto scene_leaf = path_to_utf8(path_from_utf8(scene_route).filename());
+    if (scene_route.starts_with("__") || scene_leaf.starts_with("__")) return 0;
+
+    std::size_t seeded_actor_count = 0;
+    for (const auto& actor : scene->actors) {
+        if (!is_network_editor_seed_actor(actor)) continue;
+
+        const auto actor_data = actor_to_json(*scene, actor);
+        float transform[9] = {0, 0, 0, 0, 0, 0, 1, 1, 1};
+        read_transform_from_actor_json(actor_data, transform);
+
+        Corona::Network::ActorCreatePacked optics;
+        initialize_actor_create_packed(optics);
+        optics.visible = actor_data.value("visible", true);
+        optics.bEnableLighting = true;
+        optics.metallic = actor_data.value("optics", nlohmann::json::object())
+                              .value("metallic", 0.0f);
+        optics.roughness = actor_data.value("optics", nlohmann::json::object())
+                               .value("roughness", 0.5f);
+        optics.specular = actor_data.value("optics", nlohmann::json::object())
+                              .value("specular", 0.5f);
+        optics.shininess = actor_data.value("optics", nlohmann::json::object())
+                               .value("shininess", 32.0f);
+
+        network_system.register_actor_identity(
+            actor.actor_guid,
+            actor.engine_actor->get_handle(),
+            true);
+        network_system.broadcast_actor_create(
+            actor.actor_guid,
+            scene->route,
+            actor.route,
+            {},
+            transform,
+            &optics,
+            sizeof(optics),
+            actor_data.dump());
+        ++seeded_actor_count;
+    }
+    return seeded_actor_count;
+}
+
 uint64_t collaboration_now_ms() {
     return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now().time_since_epoch()).count());
@@ -9076,9 +9170,13 @@ void register_network_api_handlers(NativeApiRegistry& registry) {
                 ? parse_network_session_role(request.args[3])
                 : Corona::Systems::NetworkSystem::SessionRole::Host;
 
+            const bool was_active =
+                sys->session_state() == Corona::Systems::NetworkSystem::SessionState::Active;
             const bool ok = sys->start_session(name, project_id, port, role);
             auto payload = build_network_session_info(sys);
             payload["ok"] = ok;
+            payload["seeded_actor_count"] =
+                ok && !was_active ? seed_network_editor_state(*sys, role) : 0;
             return native_success(payload);
         }},
         {"stop_session", [](const NativeRequest&, const NativeContext&) {
@@ -9389,25 +9487,11 @@ void register_network_api_handlers(NativeApiRegistry& registry) {
                 read_transform_from_actor_json(actor_data, transform);
             }
             if (actor_guid.empty()) {
-                actor_guid = scene_name + ":" + model_path;
+                return native_failure("Actor GUID is required", 2);
             }
 
             Corona::Network::ActorCreatePacked opt;
-            std::memset(&opt, 0, sizeof(opt));
-            opt.visible = true;
-            opt.bEnableLighting = true;
-            opt.metallic = 0.0f;
-            opt.roughness = 0.5f;
-            opt.specular = 0.5f;
-            opt.specularTint = 0.0f;
-            opt.sheen = 0.0f;
-            opt.sheenTint = 0.5f;
-            opt.clearcoat = 0.0f;
-            opt.clearcoatGloss = 1.0f;
-            opt.ambient[0] = 0.2f; opt.ambient[1] = 0.2f; opt.ambient[2] = 0.2f;
-            opt.diffuse[0] = 0.8f; opt.diffuse[1] = 0.8f; opt.diffuse[2] = 0.8f;
-            opt.specular_color[0] = 1.0f; opt.specular_color[1] = 1.0f; opt.specular_color[2] = 1.0f;
-            opt.shininess = 32.0f;
+            initialize_actor_create_packed(opt);
 
             sys->broadcast_actor_create(actor_guid, scene_name, model_path,
                                         dependency_paths, transform,

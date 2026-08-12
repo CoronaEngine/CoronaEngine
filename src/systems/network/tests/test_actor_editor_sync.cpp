@@ -1,4 +1,5 @@
 #include <corona/systems/network/actor_editor_sync.h>
+#include <corona/systems/network/actor_editor_payload.h>
 #include <corona/systems/network/scoped_bool_override.h>
 #include <corona/systems/network/scene_snapshot_policy.h>
 
@@ -136,6 +137,33 @@ void test_scene_snapshot_policy_never_applies_unversioned_scene_state() {
                 __func__);
 }
 
+void test_actor_editor_payload_excludes_process_local_fields() {
+    const nlohmann::json actor = {
+        {"actor_guid", CORONA_TEST_STRINGIZE(actor-chair)},
+        {"handle", 42},
+        {"entity_id", 99},
+        {"gpu_build_state", CORONA_TEST_STRINGIZE(ready)},
+        {"world_aabb", nlohmann::json::array({0, 0, 0, 1, 1, 1})},
+        {"name", CORONA_TEST_STRINGIZE(Chair)},
+        {"geometry", {{"position", nlohmann::json::array({1, 2, 3})}}},
+        {"optics", {{"roughness", 0.5}}},
+    };
+
+    const auto logical = Corona::Network::logical_actor_editor_payload(actor);
+    expect_true(!logical.contains("handle") && !logical.contains("entity_id") &&
+                    !logical.contains("gpu_build_state") &&
+                    !logical.contains("world_aabb"),
+                __func__);
+    expect_true(logical.value("name", std::string{}) ==
+                    CORONA_TEST_STRINGIZE(Chair) &&
+                    logical.contains("geometry") && logical.contains("optics"),
+                __func__);
+}
+
+void test_actor_editor_json_rejects_malformed_payload() {
+    expect_true(!Corona::Network::logical_actor_editor_json("{"), __func__);
+}
+
 }  // namespace
 
 int main() {
@@ -146,5 +174,7 @@ int main() {
     test_scoped_bool_override_restores_previous_value();
     test_newer_upsert_clears_actor_tombstone();
     test_scene_snapshot_policy_never_applies_unversioned_scene_state();
+    test_actor_editor_payload_excludes_process_local_fields();
+    test_actor_editor_json_rejects_malformed_payload();
     return g_failed == 0 ? 0 : 1;
 }

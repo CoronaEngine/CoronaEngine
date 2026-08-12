@@ -34,6 +34,11 @@ if(BUILD_CORONA_TESTING OR BUILD_TESTING)
             ${PROJECT_SOURCE_DIR}/include
     )
 
+    target_link_libraries(corona_actor_editor_sync_tests
+        PRIVATE
+            nlohmann_json::nlohmann_json
+    )
+
     add_test(NAME ActorEditorSyncTests COMMAND corona_actor_editor_sync_tests)
 
     add_executable(corona_peer_liveness_tests

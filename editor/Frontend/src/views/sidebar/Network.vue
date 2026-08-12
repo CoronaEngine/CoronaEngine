@@ -381,8 +381,7 @@ async function pollPeers() {
           pending.actor_data = pending.actor_data || {};
           pending.actor_data.actor_guid = pending.actor_guid || '';
           pending.actor_data._suppress_network_broadcast = true;
-          remoteActorLog.value =
-            '收到远程 Actor 创建事件；SceneTools native 创建接口尚未接入';
+          remoteActorLog.value = '收到远程 Actor 创建事件；SceneTools native 创建接口尚未接入';
         } finally {
           await networkService.setSyncPaused(false);
         }
@@ -429,8 +428,7 @@ async function pollPeers() {
         }
         actorData.actor_guid = actorData.actor_guid || pendingState.actor_guid || '';
         actorData._suppress_network_broadcast = true;
-        remoteActorLog.value =
-          `收到远程 Actor 状态事件: ${actorData.name || actorData.actor_guid || 'unknown'}`;
+        remoteActorLog.value = `收到远程 Actor 状态事件: ${actorData.name || actorData.actor_guid || 'unknown'}`;
         setTimeout(() => {
           remoteActorLog.value = '';
         }, 3000);
@@ -462,8 +460,7 @@ async function pollPeers() {
       for (let i = 0; i < PENDING_POLL_BATCH_LIMIT; i += 1) {
         const pendingDelete = await networkService.pollPendingActorDelete();
         if (!pendingDelete || !pendingDelete.has_pending) break;
-        remoteActorLog.value =
-          `收到远程 Actor 删除事件: ${pendingDelete.actor_name || pendingDelete.actor_guid || 'unknown'}`;
+        remoteActorLog.value = `收到远程 Actor 删除事件: ${pendingDelete.actor_name || pendingDelete.actor_guid || 'unknown'}`;
         setTimeout(() => {
           remoteActorLog.value = '';
         }, 3000);
@@ -645,10 +642,11 @@ function onNetworkActorSyncBroadcastRequested(actorData = {}) {
   const modelPath = actorData.path || actorData.model || '';
   if (!modelPath) return;
   const sceneName = rememberSceneName(actorData.scene || 'Scene/default.scene');
-  const actorGuid =
-    actorData.actor_guid ||
-    `actor-${hashString(`${sceneName}|${modelPath}|${actorData.name || ''}`)}`;
-  actorData.actor_guid = actorGuid;
+  const actorGuid = String(actorData.actor_guid || '').trim();
+  if (!actorGuid) {
+    remoteActorLog.value = `Actor has no stable GUID; sync skipped: ${actorData.name || modelPath}`;
+    return;
+  }
   registerActorIdentityFromData(actorData);
   networkService
     .broadcastActorCreate(actorGuid, sceneName, modelPath, actorData)
