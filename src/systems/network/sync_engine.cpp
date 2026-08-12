@@ -391,14 +391,28 @@ void SyncEngine::initialize(const std::string& local_peer_id) {
 
 LwwApplyResult SyncEngine::apply_editor_operation(
     const EditorSyncOperation& operation) {
-    if (operation.kind == EditorSyncOperationKind::Delete) {
-        return impl_->lww_state.apply_delete(operation.actor_guid,
-                                              operation.version);
+    const auto result = operation.kind == EditorSyncOperationKind::Delete
+        ? impl_->lww_state.apply_delete(operation.actor_guid, operation.version)
+        : impl_->lww_state.apply_upsert(operation.actor_guid, operation.field_name,
+                                        operation.value, operation.version);
+    if (result != LwwApplyResult::Applied || operation.kind == EditorSyncOperationKind::Delete) {
+        return result;
     }
-    return impl_->lww_state.apply_upsert(operation.actor_guid,
-                                         operation.field_name,
-                                         operation.value,
-                                         operation.version);
+
+    impl_->rebuild_entity_maps();
+    auto& hub = impl_->hub;
+    auto apply_to_transform = [&]() {
+        if (!impl_->entity_for_guid) return;
+        auto seq = impl_->entity_for_guid(StorageID::ST_MODEL_TRANSFORM, operation.actor_guid);
+        if (!seq) return;
+        auto it = impl_->mt_seq_to_id.find(*seq);
+        if (it == impl_->mt_seq_to_id.end()) return;
+        auto handle = hub.model_transform_storage().try_acquire_write(it->second);
+        if (handle.valid()) deserialize_mt(*handle, operation.value.data(),
+                                           static_cast<uint16_t>(operation.value.size()));
+    };
+    if (operation.field_name == "xform") apply_to_transform();
+    return result;
 }
 
 void SyncEngine::shutdown() {
@@ -448,8 +462,23 @@ void SyncEngine::poll_and_sync() {
             std::string snap_key = impl_->make_key(StorageID::ST_MODEL_TRANSFORM, ent_seq, "xform");
 
             if (impl_->check_snapshot(snap_key, cur_hash)) {
-                serialize_mt(data, ent_seq, wire_key, entries_payload);
-                ++dirty_count;
+                if (wire_key.rfind("actor:", 0) == 0 && impl_->on_outgoing) {
+                    EditorSyncOperation op;
+                    op.kind = EditorSyncOperationKind::Upsert;
+                    op.actor_guid = wire_key.substr(6, wire_key.size() - 6 - 6);
+                    op.field_name = "xform";
+                    op.value.resize(36);
+                    float values[9] = {data.position.x, data.position.y, data.position.z,
+                                       data.euler_rotation.x, data.euler_rotation.y, data.euler_rotation.z,
+                                       data.scale.x, data.scale.y, data.scale.z};
+                    std::memcpy(op.value.data(), values, sizeof(values));
+                    op.version = impl_->lww_state.next_local_version();
+                    auto packet = build_editor_sync_operation(op);
+                    if (!packet.empty()) impl_->on_outgoing(packet);
+                } else {
+                    serialize_mt(data, ent_seq, wire_key, entries_payload);
+                    ++dirty_count;
+                }
             }
         }
     }
@@ -471,8 +500,23 @@ void SyncEngine::poll_and_sync() {
             std::string snap_key = impl_->make_key(StorageID::ST_ENVIRONMENT, ent_seq, "env");
 
             if (impl_->check_snapshot(snap_key, cur_hash)) {
-                serialize_env(data, ent_seq, "env", entries_payload);
-                ++dirty_count;
+                if (impl_->on_outgoing) {
+                    EditorSyncOperation op;
+                    op.kind = EditorSyncOperationKind::Upsert;
+                    op.actor_guid = "__scene__";
+                    op.field_name = "environment";
+                    op.value.resize(20);
+                    float values[5] = {data.sun_position.x, data.sun_position.y,
+                                       data.sun_position.z, data.sun_intensity,
+                                       data.exposure};
+                    std::memcpy(op.value.data(), values, sizeof(values));
+                    op.version = impl_->lww_state.next_local_version();
+                    auto packet = build_editor_sync_operation(op);
+                    if (!packet.empty()) impl_->on_outgoing(packet);
+                } else {
+                    serialize_env(data, ent_seq, "env", entries_payload);
+                    ++dirty_count;
+                }
             }
         }
     }

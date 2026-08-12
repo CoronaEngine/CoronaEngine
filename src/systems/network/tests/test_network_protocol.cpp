@@ -1561,7 +1561,7 @@ void test_sync_engine_marks_actor_dirty_entries_with_guid() {
                 "actor guid registration for sync succeeds");
 
     Corona::Network::SyncEngine sync;
-    std::vector<uint8_t> outgoing;
+    std::vector<std::vector<uint8_t>> outgoing;
     sync.initialize("local-peer");
     sync.set_identity_mapping_callbacks(
         [&](Corona::Network::StorageID sid, uint64_t seq) {
@@ -1572,11 +1572,11 @@ void test_sync_engine_marks_actor_dirty_entries_with_guid() {
             return registry.storage_seq_for_actor_guid(sid, guid);
         });
     sync.set_on_outgoing([&](const std::vector<uint8_t>& packet) {
-        outgoing = packet;
+        outgoing.push_back(packet);
     });
     sync.poll_and_sync();
 
-    expect_true(!outgoing.empty(), "sync dirty packet exists");
+    expect_true(!outgoing.empty(), "sync packet exists");
     if (outgoing.empty()) {
         sync.shutdown();
         hub.actor_storage().deallocate(actor);
@@ -1586,27 +1586,16 @@ void test_sync_engine_marks_actor_dirty_entries_with_guid() {
         return;
     }
 
-    bool found_actor_key = false;
-    Corona::Network::BufferReader reader(outgoing.data(), outgoing.size());
-    expect_true(static_cast<Corona::Network::MessageType>(reader.read_u8()) ==
-                    Corona::Network::MessageType::SYNC_DIRTY,
-                "sync dirty packet emitted");
-    (void)reader.read_u32();
-    (void)reader.read_u64();
-    uint32_t count = reader.read_u32();
-    for (uint32_t i = 0; i < count; ++i) {
-        auto sid = static_cast<Corona::Network::StorageID>(reader.read_u16());
-        (void)reader.read_u64();
-        uint16_t key_len = reader.read_u16();
-        uint16_t value_len = reader.read_u16();
-        std::string key = reader.read_string(key_len);
-        reader.pos += value_len;
-        if (sid == Corona::Network::StorageID::ST_MODEL_TRANSFORM &&
-            key == "actor:actor-guid-sync:xform") {
-            found_actor_key = true;
+    bool found_actor_operation = false;
+    for (const auto& packet : outgoing) {
+        auto operation = Corona::Network::parse_editor_sync_operation(
+            packet.data(), packet.size());
+        if (operation && operation->actor_guid == "actor-guid-sync" &&
+            operation->field_name == "xform") {
+            found_actor_operation = true;
         }
     }
-    expect_true(found_actor_key, "sync dirty transform key carries actor guid");
+    expect_true(found_actor_operation, "editor sync transform carries actor guid");
 
     sync.shutdown();
     hub.actor_storage().deallocate(actor);
