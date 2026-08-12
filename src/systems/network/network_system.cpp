@@ -585,6 +585,10 @@ bool NetworkSystem::initialize(Kernel::ISystemContext* ctx) {
                           [&](const Impl::PendingTransformUpdate& update) {
                               return update.actor_guid == guid;
                           });
+            std::erase_if(impl_->pending_actor_state_updates,
+                          [&](const Impl::PendingActorStateUpdate& update) {
+                              return update.actor_guid == guid;
+                          });
             std::erase_if(impl_->pending_actor_deletes,
                           [&](const Impl::PendingActorDelete& pending) {
                               return pending.actor_guid == guid;
@@ -1579,8 +1583,21 @@ bool NetworkSystem::pop_pending_actor_create(std::string& actor_guid,
                                               std::string& model_path,
                                               void* actor_packed_out, size_t packed_size,
                                               std::string* actor_json_out) {
+    if (!peek_pending_actor_create(actor_guid, scene_name, model_path,
+                                   actor_packed_out, packed_size, actor_json_out)) {
+        return false;
+    }
+    return ack_pending_actor_create(actor_guid);
+}
+
+bool NetworkSystem::peek_pending_actor_create(std::string& actor_guid,
+                                               std::string& scene_name,
+                                               std::string& model_path,
+                                               void* actor_packed_out,
+                                               size_t packed_size,
+                                               std::string* actor_json_out) const {
     if (impl_->pending_actor_creates.empty()) return false;
-    auto& pa = impl_->pending_actor_creates.front();
+    const auto& pa = impl_->pending_actor_creates.front();
     actor_guid = pa.actor_guid;
     scene_name = pa.scene_name;
     model_path = pa.model_path;
@@ -1590,6 +1607,12 @@ bool NetworkSystem::pop_pending_actor_create(std::string& actor_guid,
     if (actor_json_out) {
         *actor_json_out = pa.actor_json;
     }
+    return true;
+}
+
+bool NetworkSystem::ack_pending_actor_create(const std::string& actor_guid) {
+    if (impl_->pending_actor_creates.empty() ||
+        impl_->pending_actor_creates.front().actor_guid != actor_guid) return false;
     impl_->pending_actor_creates.erase(impl_->pending_actor_creates.begin());
     return true;
 }
@@ -1600,8 +1623,18 @@ bool NetworkSystem::pop_pending_actor_transform_update(std::string& actor_guid,
                                                        size_t transform_count,
                                                        std::string& source_user_id,
                                                        std::string& correlation_id) {
+    if (!peek_pending_actor_transform_update(actor_guid, scene_name, transform_out,
+                                             transform_count, source_user_id,
+                                             correlation_id)) return false;
+    return ack_pending_actor_transform_update(actor_guid);
+}
+
+bool NetworkSystem::peek_pending_actor_transform_update(
+    std::string& actor_guid, std::string& scene_name,
+    float* transform_out, size_t transform_count,
+    std::string& source_user_id, std::string& correlation_id) const {
     if (impl_->pending_actor_transform_updates.empty()) return false;
-    auto& update = impl_->pending_actor_transform_updates.front();
+    const auto& update = impl_->pending_actor_transform_updates.front();
     actor_guid = update.actor_guid;
     scene_name = update.scene_name;
     source_user_id = update.source_user_id;
@@ -1609,6 +1642,12 @@ bool NetworkSystem::pop_pending_actor_transform_update(std::string& actor_guid,
     if (transform_out && transform_count >= 9) {
         std::memcpy(transform_out, update.transform, sizeof(update.transform));
     }
+    return true;
+}
+
+bool NetworkSystem::ack_pending_actor_transform_update(const std::string& actor_guid) {
+    if (impl_->pending_actor_transform_updates.empty() ||
+        impl_->pending_actor_transform_updates.front().actor_guid != actor_guid) return false;
     impl_->pending_actor_transform_updates.erase(
         impl_->pending_actor_transform_updates.begin());
     return true;
@@ -1617,11 +1656,24 @@ bool NetworkSystem::pop_pending_actor_transform_update(std::string& actor_guid,
 bool NetworkSystem::pop_pending_actor_delete(std::string& actor_guid,
                                              std::string& scene_name,
                                              std::string& actor_name) {
+    if (!peek_pending_actor_delete(actor_guid, scene_name, actor_name)) return false;
+    return ack_pending_actor_delete(actor_guid);
+}
+
+bool NetworkSystem::peek_pending_actor_delete(std::string& actor_guid,
+                                               std::string& scene_name,
+                                               std::string& actor_name) const {
     if (impl_->pending_actor_deletes.empty()) return false;
-    auto& pending = impl_->pending_actor_deletes.front();
+    const auto& pending = impl_->pending_actor_deletes.front();
     actor_guid = pending.actor_guid;
     scene_name = pending.scene_name;
     actor_name = pending.actor_name;
+    return true;
+}
+
+bool NetworkSystem::ack_pending_actor_delete(const std::string& actor_guid) {
+    if (impl_->pending_actor_deletes.empty() ||
+        impl_->pending_actor_deletes.front().actor_guid != actor_guid) return false;
     impl_->pending_actor_deletes.erase(impl_->pending_actor_deletes.begin());
     return true;
 }
@@ -1649,11 +1701,24 @@ bool NetworkSystem::pop_pending_actor_scene_snapshot(std::string& scene_name,
 bool NetworkSystem::pop_pending_actor_state_update(std::string& actor_guid,
                                                    std::string& scene_name,
                                                    std::string& actor_json) {
+    if (!peek_pending_actor_state_update(actor_guid, scene_name, actor_json)) return false;
+    return ack_pending_actor_state_update(actor_guid);
+}
+
+bool NetworkSystem::peek_pending_actor_state_update(std::string& actor_guid,
+                                                     std::string& scene_name,
+                                                     std::string& actor_json) const {
     if (impl_->pending_actor_state_updates.empty()) return false;
-    auto& pending = impl_->pending_actor_state_updates.front();
+    const auto& pending = impl_->pending_actor_state_updates.front();
     actor_guid = pending.actor_guid;
     scene_name = pending.scene_name;
     actor_json = pending.actor_json;
+    return true;
+}
+
+bool NetworkSystem::ack_pending_actor_state_update(const std::string& actor_guid) {
+    if (impl_->pending_actor_state_updates.empty() ||
+        impl_->pending_actor_state_updates.front().actor_guid != actor_guid) return false;
     impl_->pending_actor_state_updates.erase(impl_->pending_actor_state_updates.begin());
     return true;
 }

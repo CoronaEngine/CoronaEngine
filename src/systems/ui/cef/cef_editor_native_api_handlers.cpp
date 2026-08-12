@@ -3631,6 +3631,404 @@ void emit_scene_tree_changed(const std::string& scene_route) {
     emit_editor_api_event("SceneTools.sceneTreeChanged", {{"scene", scene_route}});
 }
 
+enum class PendingNetworkActorApplyResult {
+    Applied,
+    Retry,
+    Discard,
+};
+
+struct PendingNetworkActorApplyOutcome {
+    PendingNetworkActorApplyResult result{PendingNetworkActorApplyResult::Discard};
+    std::string error;
+    nlohmann::json actor = nlohmann::json::object();
+};
+
+PendingNetworkActorApplyOutcome pending_actor_outcome(
+    PendingNetworkActorApplyResult result,
+    std::string error = {},
+    nlohmann::json actor = nlohmann::json::object()) {
+    return {result, std::move(error), std::move(actor)};
+}
+
+PendingNetworkActorApplyOutcome apply_pending_network_actor_state(
+    const std::string& actor_guid,
+    const std::string& scene_name,
+    const nlohmann::json& actor_data,
+    const NativeContext& context);
+
+PendingNetworkActorApplyOutcome apply_pending_network_actor_create(
+    const std::string& actor_guid,
+    const std::string& scene_name,
+    const std::string& model_path,
+    nlohmann::json actor_data,
+    const NativeContext& context) {
+    if (trim_ascii(actor_guid).empty() || !actor_data.is_object()) {
+        return pending_actor_outcome(PendingNetworkActorApplyResult::Discard,
+                                     "Remote actor create requires an object and stable GUID");
+    }
+    actor_data["actor_guid"] = actor_guid;
+    actor_data["skip_if_exists"] = true;
+    actor_data["update_if_exists"] = true;
+    const auto source_path = !model_path.empty()
+        ? model_path
+        : json_string_value(actor_data, {"asset_path", "route", "path", "model"});
+    if (trim_ascii(source_path).empty()) {
+        return pending_actor_outcome(PendingNetworkActorApplyResult::Discard,
+                                     "Remote actor create has no logical resource path");
+    }
+    try {
+        auto* scene = resolve_native_editor_scene_request(
+            ensure_native_editor_scene(), normalize_route(scene_name));
+        const auto requested_name = trim_ascii(actor_data.value("name", std::string{}));
+        auto* existing = find_native_actor(*scene, actor_guid);
+        if (!requested_name.empty()) {
+            auto* named = find_native_actor(*scene, requested_name);
+            if (named && named->actor_guid != actor_guid) {
+                return pending_actor_outcome(PendingNetworkActorApplyResult::Discard,
+                                             "Remote actor name already belongs to another GUID");
+            }
+        }
+        if (!existing) {
+            const auto actor_type = actor_data.value("actor_type", std::string{"model"});
+            const auto created = create_native_editor_actor(
+                scene_name, source_path, actor_type, actor_data);
+            if (!created.success) {
+                return pending_actor_outcome(PendingNetworkActorApplyResult::Retry, created.error);
+            }
+        }
+        auto* actor = find_native_actor(*scene, actor_guid);
+        if (!actor) {
+            return pending_actor_outcome(PendingNetworkActorApplyResult::Retry,
+                                         "Created remote actor is not materialized yet");
+        }
+        if (auto sys = get_network_system(); actor->engine_actor) {
+            sys->register_actor_identity(actor_guid, actor->engine_actor->get_handle(), false);
+        }
+        actor_data["route"] = actor->route;
+        actor_data["path"] = actor->route;
+        actor_data["model"] = actor->route;
+        actor_data["asset_path"] = actor->resolved_asset_path;
+        return apply_pending_network_actor_state(
+            actor_guid, scene_name, actor_data, context);
+    } catch (const std::exception& error) {
+        return pending_actor_outcome(PendingNetworkActorApplyResult::Retry, error.what());
+    }
+}
+
+PendingNetworkActorApplyOutcome apply_pending_network_actor_transform(
+    const std::string& actor_guid,
+    const std::string& scene_name,
+    const nlohmann::json& transform_data,
+    const NativeContext& context) {
+    if (trim_ascii(actor_guid).empty() || !transform_data.is_object()) {
+        return pending_actor_outcome(PendingNetworkActorApplyResult::Discard,
+                                     "Remote actor transform is malformed");
+    }
+    if (!transform_float3_value(transform_data, "position", "pos") ||
+        !transform_float3_value(transform_data, "rotation", "rot") ||
+        !transform_float3_value(transform_data, "scale", "scl")) {
+        return pending_actor_outcome(PendingNetworkActorApplyResult::Discard,
+                                     "Remote actor transform requires three finite vectors");
+    }
+    try {
+        auto* scene = resolve_native_editor_scene_request(
+            ensure_native_editor_scene(), normalize_route(scene_name));
+        if (!find_native_actor(*scene, actor_guid)) {
+            return pending_actor_outcome(PendingNetworkActorApplyResult::Retry,
+                                         "Remote transform target is not materialized yet");
+        }
+        const auto applied = set_native_editor_actor_transform(scene_name, actor_guid, transform_data);
+        if (!applied.success) {
+            return pending_actor_outcome(PendingNetworkActorApplyResult::Retry, applied.error);
+        }
+        auto* actor = find_native_actor(*scene, actor_guid);
+        if (actor) emit_actor_change(context, *scene, *actor);
+        return pending_actor_outcome(PendingNetworkActorApplyResult::Applied, {},
+                                     actor ? actor_to_json(*scene, *actor) : nlohmann::json::object());
+    } catch (const std::exception& error) {
+        return pending_actor_outcome(PendingNetworkActorApplyResult::Retry, error.what());
+    }
+}
+
+PendingNetworkActorApplyOutcome apply_pending_network_actor_state(
+    const std::string& actor_guid,
+    const std::string& scene_name,
+    const nlohmann::json& actor_data,
+    const NativeContext& context) {
+    if (trim_ascii(actor_guid).empty() || !actor_data.is_object() || actor_data.empty()) {
+        return pending_actor_outcome(PendingNetworkActorApplyResult::Discard,
+                                     "Remote actor state requires an object and stable GUID");
+    }
+    const auto payload_guid = actor_data.value("actor_guid", actor_guid);
+    if (payload_guid != actor_guid) {
+        return pending_actor_outcome(PendingNetworkActorApplyResult::Discard,
+                                     "Remote actor state GUID does not match its envelope");
+    }
+    try {
+        auto* scene = resolve_native_editor_scene_request(
+            ensure_native_editor_scene(), normalize_route(scene_name));
+        auto* actor = find_native_actor(*scene, actor_guid);
+        if (!actor) {
+            return pending_actor_outcome(PendingNetworkActorApplyResult::Retry,
+                                         "Remote state target is not materialized yet");
+        }
+
+        const auto requested_name = trim_ascii(actor_data.value("name", actor->name));
+        if (requested_name.empty()) {
+            return pending_actor_outcome(PendingNetworkActorApplyResult::Discard,
+                                         "Remote actor state contains an empty name");
+        }
+        const auto duplicate = std::any_of(
+            scene->actors.begin(), scene->actors.end(), [&](const NativeEditorActor& other) {
+                return &other != actor && other.name == requested_name;
+            });
+        if (duplicate) {
+            return pending_actor_outcome(PendingNetworkActorApplyResult::Discard,
+                                         "Remote actor state contains a duplicate name");
+        }
+        const auto geometry = actor_data.value("geometry", nlohmann::json::object());
+        if (!geometry.is_object()) {
+            return pending_actor_outcome(PendingNetworkActorApplyResult::Discard,
+                                         "Remote actor geometry must be an object");
+        }
+        for (const char* field : {"position", "rotation", "scale"}) {
+            if (geometry.contains(field) &&
+                !actor_data_float3(actor_data, field)) {
+                return pending_actor_outcome(PendingNetworkActorApplyResult::Discard,
+                                             std::string("Remote actor state has invalid geometry.") + field);
+            }
+        }
+
+        const auto optics = actor_data.value("optics", nlohmann::json::object());
+        if (!optics.is_object()) {
+            return pending_actor_outcome(PendingNetworkActorApplyResult::Discard,
+                                         "Remote actor optics must be an object");
+        }
+        if (optics.contains("diffuse") && !json_float3_value(optics["diffuse"])) {
+            return pending_actor_outcome(PendingNetworkActorApplyResult::Discard,
+                                         "Remote actor diffuse value is invalid");
+        }
+        for (const char* key : {"metallic", "roughness", "specular", "shininess"}) {
+            if (optics.contains(key) &&
+                (!optics[key].is_number() || !std::isfinite(optics[key].get<double>()))) {
+                return pending_actor_outcome(PendingNetworkActorApplyResult::Discard,
+                                             std::string("Remote actor optics.") + key + " is invalid");
+            }
+        }
+
+        const auto mechanics = actor_data.value("mechanics", nlohmann::json::object());
+        if (!mechanics.is_object()) {
+            return pending_actor_outcome(PendingNetworkActorApplyResult::Discard,
+                                         "Remote actor mechanics must be an object");
+        }
+        for (const char* key : {"mass", "restitution", "damping"}) {
+            if (mechanics.contains(key) && !actor_data_float(mechanics, {key})) {
+                return pending_actor_outcome(PendingNetworkActorApplyResult::Discard,
+                                             std::string("Remote actor mechanics.") + key + " is invalid");
+            }
+        }
+
+        const auto camera_lock = actor_data.value("camera_lock", nlohmann::json::object());
+        if (!camera_lock.is_object()) {
+            return pending_actor_outcome(PendingNetworkActorApplyResult::Discard,
+                                         "Remote actor camera lock must be an object");
+        }
+        std::optional<bool> camera_lock_enabled;
+        if (!camera_lock.empty()) {
+            camera_lock_enabled = actor_data_bool(camera_lock, {"enabled", "lock_to_camera"});
+            if (!camera_lock_enabled) {
+                return pending_actor_outcome(PendingNetworkActorApplyResult::Discard,
+                                             "Remote actor camera lock requires enabled");
+            }
+            for (const char* key : {"position_offset", "rotation_offset"}) {
+                if (camera_lock.contains(key) && !json_float3_value(camera_lock[key])) {
+                    return pending_actor_outcome(PendingNetworkActorApplyResult::Discard,
+                                                 std::string("Remote camera ") + key + " is invalid");
+                }
+            }
+            if (*camera_lock_enabled) {
+                auto* camera = find_native_camera(*scene, {});
+                if (!camera || !camera->engine_camera || !actor->engine_actor) {
+                    return pending_actor_outcome(PendingNetworkActorApplyResult::Retry,
+                                                 "Remote camera lock target is not ready");
+                }
+            }
+        }
+
+        auto merged_actor_data = actor_to_json(*scene, *actor);
+        merged_actor_data.merge_patch(actor_data);
+        merged_actor_data["actor_guid"] = actor_guid;
+        auto desired = native_actor_from_snapshot(merged_actor_data);
+        const auto desired_route = normalize_route(desired.route);
+        if (!desired_route.empty() && desired_route != normalize_route(actor->route)) {
+            const auto replacement_path = resolve_native_actor_asset_path(*scene, desired);
+            std::error_code resource_ec;
+            if (!std::filesystem::is_regular_file(replacement_path, resource_ec) || resource_ec) {
+                return pending_actor_outcome(PendingNetworkActorApplyResult::Retry,
+                                             "Remote actor replacement resource is unavailable");
+            }
+            const auto actor_index = static_cast<std::size_t>(actor - scene->actors.data());
+            auto& loaded = add_native_actor_to_scene(*scene, std::move(desired), replacement_path);
+            loaded.load_status = ActorLoadStatus::Loaded;
+            if (loaded.optics) loaded.optics->set_visible(loaded.persisted_visible);
+            if (loaded.mechanics && loaded.actor_type != "ui_image") {
+                loaded.mechanics->set_physics_enabled(loaded.persisted_physics_enabled);
+                loaded.mechanics->set_collision_shape(loaded.persisted_collision_type);
+            }
+            if (scene->actors[actor_index].engine_actor) {
+                scene->engine_scene->remove_actor(scene->actors[actor_index].engine_actor.get());
+            }
+            scene->actors.erase(scene->actors.begin() + static_cast<std::ptrdiff_t>(actor_index));
+            actor = find_native_actor(*scene, actor_guid);
+            if (!actor) {
+                return pending_actor_outcome(PendingNetworkActorApplyResult::Retry,
+                                             "Remote actor replacement did not materialize");
+            }
+            if (auto sys = get_network_system(); actor->engine_actor) {
+                sys->register_actor_identity(actor_guid, actor->engine_actor->get_handle(), false);
+            }
+        }
+
+        actor->name = requested_name;
+        actor->actor_type = actor_data.value("actor_type", actor->actor_type);
+        actor->asset_id = actor_data.value("asset_id", actor->asset_id);
+        actor->model_ref = actor_data.value("model_ref", actor->model_ref);
+        actor->entity_type = actor_data.value("entity_type", actor->entity_type);
+        actor->semantic_role = actor_data.value("semantic_role", actor->semantic_role);
+        actor->source_plan_id = actor_data.value("source_plan_id", actor->source_plan_id);
+        actor->source_batch_id = actor_data.value("source_batch_id", actor->source_batch_id);
+        actor->source_scene_version = std::max(
+            actor_data.value("source_scene_version", actor->source_scene_version), 1);
+        actor->actor_version = std::max(actor_data.value("actor_version", actor->actor_version), 1);
+        actor->persisted_snapshot = actor_data;
+
+        if (auto value = actor_data_float3(actor_data, "position")) {
+            actor->position = *value;
+            if (actor->geometry) actor->geometry->set_position(*value);
+        }
+        if (auto value = actor_data_float3(actor_data, "rotation")) {
+            actor->rotation = *value;
+            if (actor->geometry) actor->geometry->set_rotation(*value);
+        }
+        if (auto value = actor_data_float3(actor_data, "scale")) {
+            actor->scale = *value;
+            if (actor->geometry) actor->geometry->set_scale(*value);
+        }
+        if (auto value = actor_data_bool(actor_data, {"visible"})) {
+            actor->persisted_visible = *value;
+            if (actor->optics) actor->optics->set_visible(*value);
+        }
+        if (auto value = actor_data_bool(actor_data, {"follow_camera"})) {
+            actor->follow_camera = *value;
+            if (actor->engine_actor) actor->engine_actor->set_follow_camera(*value);
+        }
+
+        if (optics.contains("diffuse")) {
+            const auto diffuse = json_float3_value(optics["diffuse"]);
+            if (!diffuse) return pending_actor_outcome(PendingNetworkActorApplyResult::Discard,
+                                                       "Remote actor diffuse value is invalid");
+            actor->persisted_optics.diffuse = *diffuse;
+        }
+        const auto apply_optics_float = [&](const char* key, std::optional<float>& target) {
+            if (!optics.contains(key)) return true;
+            if (!optics[key].is_number() || !std::isfinite(optics[key].get<double>())) return false;
+            target = optics[key].get<float>();
+            return true;
+        };
+        if (!apply_optics_float("metallic", actor->persisted_optics.metallic) ||
+            !apply_optics_float("roughness", actor->persisted_optics.roughness) ||
+            !apply_optics_float("specular", actor->persisted_optics.specular) ||
+            !apply_optics_float("shininess", actor->persisted_optics.shininess)) {
+            return pending_actor_outcome(PendingNetworkActorApplyResult::Discard,
+                                         "Remote actor optics contains a non-finite value");
+        }
+        apply_native_actor_optics_state(*actor);
+
+        if (actor->mechanics) {
+            if (auto value = actor_data_float(mechanics, {"mass"})) actor->mechanics->set_mass(*value);
+            if (auto value = actor_data_float(mechanics, {"restitution"})) actor->mechanics->set_restitution(*value);
+            if (auto value = actor_data_float(mechanics, {"damping"})) actor->mechanics->set_damping(*value);
+            if (auto value = actor_data_bool(mechanics, {"physics_enabled"})) {
+                actor->persisted_physics_enabled = *value;
+                actor->mechanics->set_physics_enabled(*value);
+            }
+            if (auto value = actor_data_bool(mechanics, {"collision_enabled"})) {
+                actor->mechanics->set_collision_enabled(*value);
+            }
+            const auto collision = json_string_value(mechanics, {"collision_shape", "collision_type"});
+            if (!collision.empty()) {
+                actor->persisted_collision_type = normalize_collision_type(collision);
+                actor->mechanics->set_collision_shape(actor->persisted_collision_type);
+            }
+            const auto linear = mechanics.find("linear_lock");
+            if (linear != mechanics.end() && linear->is_array() && linear->size() >= 3) {
+                actor->mechanics->set_linear_lock(json_bool_at(*linear, 0), json_bool_at(*linear, 1), json_bool_at(*linear, 2));
+            }
+            const auto angular = mechanics.find("angular_lock");
+            if (angular != mechanics.end() && angular->is_array() && angular->size() >= 3) {
+                actor->mechanics->set_angular_lock(json_bool_at(*angular, 0), json_bool_at(*angular, 1), json_bool_at(*angular, 2));
+            }
+        }
+
+        if (!camera_lock.empty()) {
+            actor->camera_lock_enabled = *camera_lock_enabled;
+            if (camera_lock.contains("position_offset")) {
+                const auto value = json_float3_value(camera_lock["position_offset"]);
+                if (!value) return pending_actor_outcome(PendingNetworkActorApplyResult::Discard,
+                                                         "Remote camera position offset is invalid");
+                actor->camera_lock_position_offset = *value;
+            }
+            if (camera_lock.contains("rotation_offset")) {
+                const auto value = json_float3_value(camera_lock["rotation_offset"]);
+                if (!value) return pending_actor_outcome(PendingNetworkActorApplyResult::Discard,
+                                                         "Remote camera rotation offset is invalid");
+                actor->camera_lock_rotation_offset = *value;
+            }
+            if (*camera_lock_enabled) {
+                auto* camera = find_native_camera(*scene, {});
+                const auto& offset = actor->camera_lock_position_offset;
+                Corona::Systems::CameraFollowController::instance().set_target(
+                    actor->engine_actor->get_handle(), camera->engine_camera->get_handle(),
+                    offset[0], offset[1], offset[2]);
+            } else {
+                Corona::Systems::CameraFollowController::instance().clear_target();
+            }
+        }
+
+        sync_native_actor_to_embedded_vision_document(*scene, *actor, false, true);
+        persist_native_scene_actors(*scene);
+        emit_actor_change(context, *scene, *actor);
+        return pending_actor_outcome(PendingNetworkActorApplyResult::Applied, {},
+                                     actor_to_json(*scene, *actor));
+    } catch (const nlohmann::json::exception& error) {
+        return pending_actor_outcome(PendingNetworkActorApplyResult::Discard, error.what());
+    } catch (const std::exception& error) {
+        return pending_actor_outcome(PendingNetworkActorApplyResult::Retry, error.what());
+    }
+}
+
+PendingNetworkActorApplyOutcome apply_pending_network_actor_delete(
+    const std::string& actor_guid,
+    const std::string& scene_name) {
+    if (trim_ascii(actor_guid).empty()) {
+        return pending_actor_outcome(PendingNetworkActorApplyResult::Discard,
+                                     "Remote actor delete requires a stable GUID");
+    }
+    try {
+        auto* scene = resolve_native_editor_scene_request(
+            ensure_native_editor_scene(), normalize_route(scene_name));
+        if (!find_native_actor(*scene, actor_guid)) {
+            return pending_actor_outcome(PendingNetworkActorApplyResult::Applied);
+        }
+        const auto removed = remove_native_editor_actor(scene_name, actor_guid);
+        return removed.success
+            ? pending_actor_outcome(PendingNetworkActorApplyResult::Applied)
+            : pending_actor_outcome(PendingNetworkActorApplyResult::Retry, removed.error);
+    } catch (const std::exception& error) {
+        return pending_actor_outcome(PendingNetworkActorApplyResult::Retry, error.what());
+    }
+}
+
 std::string current_time_string() {
     const auto now = std::chrono::system_clock::now();
     const std::time_t raw = std::chrono::system_clock::to_time_t(now);
@@ -9225,7 +9623,7 @@ void register_network_api_handlers(NativeApiRegistry& registry) {
             }
             return native_success({{"ok", true}});
         }},
-        {"poll_pending_actor_create", [](const NativeRequest&, const NativeContext&) {
+        {"poll_pending_actor_create", [](const NativeRequest&, const NativeContext& context) {
             auto sys = require_network_system();
             if (!sys) {
                 return native_failure("NetworkSystem unavailable", 2);
@@ -9233,21 +9631,22 @@ void register_network_api_handlers(NativeApiRegistry& registry) {
             nlohmann::json payload;
             std::string actor_guid, scene_name, model_path, actor_json;
             Corona::Network::ActorCreatePacked packed;
-            if (sys->pop_pending_actor_create(actor_guid, scene_name, model_path,
-                                               &packed, sizeof(packed), &actor_json)) {
+            if (sys->peek_pending_actor_create(actor_guid, scene_name, model_path,
+                                                &packed, sizeof(packed), &actor_json)) {
                 payload["has_pending"] = true;
                 payload["actor_guid"] = actor_guid;
                 payload["scene_name"] = scene_name;
                 payload["model_path"] = model_path;
                 nlohmann::json actor_data = nlohmann::json::object();
+                std::string parse_error;
                 if (!actor_json.empty()) {
                     try {
                         actor_data = nlohmann::json::parse(actor_json);
                         if (!actor_data.is_object()) {
-                            actor_data = nlohmann::json::object();
+                            parse_error = "Remote actor create payload must be an object";
                         }
-                    } catch (const nlohmann::json::parse_error&) {
-                        actor_data = nlohmann::json::object();
+                    } catch (const nlohmann::json::parse_error& error) {
+                        parse_error = error.what();
                     }
                 }
                 actor_data["geometry"]["position"] = {
@@ -9260,13 +9659,25 @@ void register_network_api_handlers(NativeApiRegistry& registry) {
                     packed.transform[6], packed.transform[7], packed.transform[8]
                 };
                 payload["actor_data"] = actor_data;
+                const auto outcome = parse_error.empty()
+                    ? apply_pending_network_actor_create(
+                        actor_guid, scene_name, model_path, actor_data, context)
+                    : pending_actor_outcome(PendingNetworkActorApplyResult::Discard,
+                                            parse_error);
+                payload["applied"] = outcome.result == PendingNetworkActorApplyResult::Applied;
+                payload["retrying"] = outcome.result == PendingNetworkActorApplyResult::Retry;
+                payload["apply_error"] = outcome.error;
+                if (!outcome.actor.empty()) payload["actor"] = outcome.actor;
+                if (outcome.result != PendingNetworkActorApplyResult::Retry) {
+                    sys->ack_pending_actor_create(actor_guid);
+                }
             } else {
                 payload["has_pending"] = false;
             }
             payload["ok"] = true;
             return native_success(payload);
         }},
-        {"poll_pending_actor_transform", [](const NativeRequest&, const NativeContext&) {
+        {"poll_pending_actor_transform", [](const NativeRequest&, const NativeContext& context) {
             auto sys = require_network_system();
             if (!sys) {
                 return native_failure("NetworkSystem unavailable", 2);
@@ -9274,7 +9685,7 @@ void register_network_api_handlers(NativeApiRegistry& registry) {
             nlohmann::json payload;
             std::string actor_guid, scene_name, source_user_id, correlation_id;
             float transform[9] = {0,0,0, 0,0,0, 1,1,1};
-            if (sys->pop_pending_actor_transform_update(
+            if (sys->peek_pending_actor_transform_update(
                     actor_guid, scene_name, transform, 9,
                     source_user_id, correlation_id)) {
                 payload["has_pending"] = true;
@@ -9285,6 +9696,16 @@ void register_network_api_handlers(NativeApiRegistry& registry) {
                 payload["geometry"]["position"] = {transform[0], transform[1], transform[2]};
                 payload["geometry"]["rotation"] = {transform[3], transform[4], transform[5]};
                 payload["geometry"]["scale"] = {transform[6], transform[7], transform[8]};
+                nlohmann::json transform_data = payload["geometry"];
+                const auto outcome = apply_pending_network_actor_transform(
+                    actor_guid, scene_name, transform_data, context);
+                payload["applied"] = outcome.result == PendingNetworkActorApplyResult::Applied;
+                payload["retrying"] = outcome.result == PendingNetworkActorApplyResult::Retry;
+                payload["apply_error"] = outcome.error;
+                if (!outcome.actor.empty()) payload["actor"] = outcome.actor;
+                if (outcome.result != PendingNetworkActorApplyResult::Retry) {
+                    sys->ack_pending_actor_transform_update(actor_guid);
+                }
             } else {
                 payload["has_pending"] = false;
             }
@@ -9298,11 +9719,18 @@ void register_network_api_handlers(NativeApiRegistry& registry) {
             }
             nlohmann::json payload;
             std::string actor_guid, scene_name, actor_name;
-            if (sys->pop_pending_actor_delete(actor_guid, scene_name, actor_name)) {
+            if (sys->peek_pending_actor_delete(actor_guid, scene_name, actor_name)) {
                 payload["has_pending"] = true;
                 payload["actor_guid"] = actor_guid;
                 payload["scene_name"] = scene_name;
                 payload["actor_name"] = actor_name;
+                const auto outcome = apply_pending_network_actor_delete(actor_guid, scene_name);
+                payload["applied"] = outcome.result == PendingNetworkActorApplyResult::Applied;
+                payload["retrying"] = outcome.result == PendingNetworkActorApplyResult::Retry;
+                payload["apply_error"] = outcome.error;
+                if (outcome.result != PendingNetworkActorApplyResult::Retry) {
+                    sys->ack_pending_actor_delete(actor_guid);
+                }
             } else {
                 payload["has_pending"] = false;
             }
@@ -9342,18 +9770,35 @@ void register_network_api_handlers(NativeApiRegistry& registry) {
             payload["ok"] = true;
             return native_success(payload);
         }},
-        {"poll_pending_actor_state_update", [](const NativeRequest&, const NativeContext&) {
+        {"poll_pending_actor_state_update", [](const NativeRequest&, const NativeContext& context) {
             auto sys = require_network_system();
             if (!sys) {
                 return native_failure("NetworkSystem unavailable", 2);
             }
             nlohmann::json payload;
             std::string actor_guid, scene_name, actor_json;
-            if (sys->pop_pending_actor_state_update(actor_guid, scene_name, actor_json)) {
+            if (sys->peek_pending_actor_state_update(actor_guid, scene_name, actor_json)) {
                 payload["has_pending"] = true;
                 payload["actor_guid"] = actor_guid;
                 payload["scene_name"] = scene_name;
                 payload["actor_json"] = actor_json;
+                try {
+                    const auto actor_data = nlohmann::json::parse(actor_json);
+                    const auto outcome = apply_pending_network_actor_state(
+                        actor_guid, scene_name, actor_data, context);
+                    payload["applied"] = outcome.result == PendingNetworkActorApplyResult::Applied;
+                    payload["retrying"] = outcome.result == PendingNetworkActorApplyResult::Retry;
+                    payload["apply_error"] = outcome.error;
+                    if (!outcome.actor.empty()) payload["actor"] = outcome.actor;
+                    if (outcome.result != PendingNetworkActorApplyResult::Retry) {
+                        sys->ack_pending_actor_state_update(actor_guid);
+                    }
+                } catch (const nlohmann::json::parse_error& error) {
+                    payload["applied"] = false;
+                    payload["retrying"] = false;
+                    payload["apply_error"] = error.what();
+                    sys->ack_pending_actor_state_update(actor_guid);
+                }
             } else {
                 payload["has_pending"] = false;
             }

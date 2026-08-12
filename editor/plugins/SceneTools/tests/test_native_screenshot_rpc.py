@@ -1997,6 +1997,108 @@ class NativeSceneToolsRpcTests(unittest.TestCase):
         self.assertIn('payload["seeded_actor_count"]', handler)
         self.assertIn("is_network_editor_seed_actor(actor)", source)
 
+    def test_network_pending_actor_operations_apply_before_acknowledgement(self):
+        source = self._handler_source()
+        for handler_name, apply_call, ack_call in (
+            ("poll_pending_actor_create", "apply_pending_network_actor_create", "ack_pending_actor_create"),
+            ("poll_pending_actor_state_update", "apply_pending_network_actor_state", "ack_pending_actor_state_update"),
+            ("poll_pending_actor_transform", "apply_pending_network_actor_transform", "ack_pending_actor_transform_update"),
+            ("poll_pending_actor_delete", "apply_pending_network_actor_delete", "ack_pending_actor_delete"),
+        ):
+            with self.subTest(handler=handler_name):
+                start = source.find(f'{{"{handler_name}",')
+                end = source.find('        }},', start)
+                self.assertGreaterEqual(start, 0)
+                self.assertGreater(end, start)
+                handler = source[start:end]
+                self.assertIn(apply_call, handler)
+                self.assertIn(ack_call, handler)
+                self.assertLess(handler.find(apply_call), handler.find(ack_call))
+
+        self.assertIn("peek_pending_actor_create", source)
+        self.assertIn("peek_pending_actor_state_update", source)
+        self.assertIn("peek_pending_actor_transform_update", source)
+        self.assertIn("peek_pending_actor_delete", source)
+
+    def test_network_pending_actor_apply_covers_editor_fields_and_retry_policy(self):
+        source = self._handler_source()
+        state_start = source.find("apply_pending_network_actor_state(")
+        state_end = source.find("apply_pending_network_actor_delete(", state_start)
+        self.assertGreaterEqual(state_start, 0)
+        self.assertGreater(state_end, state_start)
+        state = source[state_start:state_end]
+        for token in (
+            "merge_patch",
+            "set_position",
+            "set_rotation",
+            "set_scale",
+            "set_visible",
+            "set_follow_camera",
+            "apply_native_actor_optics_state",
+            "set_mass",
+            "set_restitution",
+            "set_damping",
+            "set_physics_enabled",
+            "set_collision_enabled",
+            "set_collision_shape",
+            "set_linear_lock",
+            "set_angular_lock",
+            "camera_lock_position_offset",
+            "persist_native_scene_actors",
+        ):
+            self.assertIn(token, state)
+
+        create_start = source.find("apply_pending_network_actor_create(")
+        create_end = source.find("apply_pending_network_actor_transform(", create_start)
+        create = source[create_start:create_end]
+        self.assertIn('actor_data["skip_if_exists"] = true', create)
+        self.assertIn("register_actor_identity", create)
+        self.assertIn("apply_pending_network_actor_state", create)
+        self.assertIn("PendingNetworkActorApplyResult::Retry", create)
+
+        delete_start = state_end
+        delete_end = source.find("void register_", delete_start)
+        delete = source[delete_start:delete_end]
+        self.assertIn("if (!find_native_actor", delete)
+        self.assertIn("PendingNetworkActorApplyResult::Applied", delete)
+
+    def test_network_polling_stops_batch_when_native_apply_retries(self):
+        source = (
+            self._repo_root()
+            / "editor"
+            / "Frontend"
+            / "src"
+            / "views"
+            / "sidebar"
+            / "Network.vue"
+        ).read_text(encoding="utf-8")
+        self.assertNotIn("native 创建接口尚未接入", source)
+        for pending_name in (
+            "pending.retrying",
+            "pendingState.retrying",
+            "pendingTransform.retrying",
+            "pendingDelete.retrying",
+        ):
+            start = source.find(f"if ({pending_name})")
+            self.assertGreaterEqual(start, 0)
+            self.assertIn("break;", source[start : start + 300])
+
+    def test_network_actor_delete_clears_pending_state_updates(self):
+        source = (
+            self._repo_root()
+            / "src"
+            / "systems"
+            / "network"
+            / "network_system.cpp"
+        ).read_text(encoding="utf-8")
+        callback_start = source.find("set_on_editor_operation_applied(")
+        callback_end = source.find("// Wire up PeerManager", callback_start)
+        self.assertGreaterEqual(callback_start, 0)
+        self.assertGreater(callback_end, callback_start)
+        callback = source[callback_start:callback_end]
+        self.assertIn("pending_actor_state_updates", callback)
+        self.assertIn("PendingActorStateUpdate", callback)
+
     def test_scene_bar_uses_cpp_defined_actor_changed_event_wrapper(self):
         scene_bar_source = (
             self._repo_root()
