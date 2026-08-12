@@ -1604,7 +1604,7 @@ void test_sync_engine_marks_actor_dirty_entries_with_guid() {
     hub.model_transform_storage().deallocate(transform);
 }
 
-void test_sync_engine_does_not_emit_geometry_resource_or_optics_entries() {
+void test_sync_engine_emits_optics_but_not_local_handles() {
     auto& hub = Corona::SharedDataHub::instance();
 
     auto transform = hub.model_transform_storage().allocate();
@@ -1642,7 +1642,7 @@ void test_sync_engine_does_not_emit_geometry_resource_or_optics_entries() {
                 "actor guid registration for transform-only sync succeeds");
 
     Corona::Network::SyncEngine sync;
-    std::vector<uint8_t> outgoing;
+    std::vector<std::vector<uint8_t>> outgoing;
     sync.initialize("local-peer");
     sync.set_identity_mapping_callbacks(
         [&](Corona::Network::StorageID sid, uint64_t seq) {
@@ -1653,31 +1653,20 @@ void test_sync_engine_does_not_emit_geometry_resource_or_optics_entries() {
             return registry.storage_seq_for_actor_guid(sid, guid);
         });
     sync.set_on_outgoing([&](const std::vector<uint8_t>& packet) {
-        outgoing = packet;
+        outgoing.push_back(packet);
     });
     sync.poll_and_sync();
 
-    expect_true(!outgoing.empty(), "transform-only sync dirty packet exists");
-    if (!outgoing.empty()) {
-        Corona::Network::BufferReader reader(outgoing.data(), outgoing.size());
-        (void)reader.read_u8();
-        (void)reader.read_u32();
-        (void)reader.read_u64();
-        uint32_t count = reader.read_u32();
-        for (uint32_t i = 0; i < count; ++i) {
-            auto sid = static_cast<Corona::Network::StorageID>(reader.read_u16());
-            (void)reader.read_u64();
-            uint16_t key_len = reader.read_u16();
-            uint16_t value_len = reader.read_u16();
-            reader.pos += key_len + value_len;
-            expect_true(sid != Corona::Network::StorageID::ST_GEOMETRY,
-                        "sync dirty does not emit geometry entries");
-            expect_true(sid != Corona::Network::StorageID::ST_MODEL_RESOURCE,
-                        "sync dirty does not emit model resource entries");
-            expect_true(sid != Corona::Network::StorageID::ST_OPTICS,
-                        "sync dirty does not emit optics entries");
+    expect_true(!outgoing.empty(), "editor sync emits logical state packets");
+    bool found_optics = false;
+    for (const auto& packet : outgoing) {
+        auto op = Corona::Network::parse_editor_sync_operation(packet.data(), packet.size());
+        if (op && op->actor_guid == "actor-transform-only" && op->field_name == "optics") {
+            found_optics = true;
+            expect_true(op->value.size() > 0, "optics operation carries logical fields");
         }
     }
+    expect_true(found_optics, "sync emits optics editor operation");
 
     sync.shutdown();
     hub.actor_storage().deallocate(actor);
@@ -1945,7 +1934,7 @@ int main() {
     test_network_identity_registry_tracks_local_ownership();
     test_network_identity_registry_applies_pending_ownership_override();
     test_sync_engine_marks_actor_dirty_entries_with_guid();
-    test_sync_engine_does_not_emit_geometry_resource_or_optics_entries();
+    test_sync_engine_emits_optics_but_not_local_handles();
     test_sync_engine_does_not_emit_remote_owned_transform();
     test_sync_engine_does_not_emit_unregistered_transform_when_mapping_enabled();
     test_sync_engine_drops_unresolved_actor_transform();

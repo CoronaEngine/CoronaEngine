@@ -430,6 +430,22 @@ bool SyncEngine::apply_operation_to_storage(const EditorSyncOperation& operation
         }
     };
     if (operation.field_name == "xform") apply_to_transform();
+    if (operation.field_name == "optics" && impl_->entity_for_guid) {
+        auto seq = impl_->entity_for_guid(StorageID::ST_OPTICS, operation.actor_guid);
+        if (seq) {
+            auto it = impl_->opt_seq_to_id.find(*seq);
+            if (it != impl_->opt_seq_to_id.end()) {
+                auto handle = hub.optics_storage().try_acquire_write(it->second);
+                if (handle.valid()) {
+                    deserialize_opt(*handle, operation.value.data(),
+                                    static_cast<uint16_t>(operation.value.size()));
+                    impl_->set_snapshot(impl_->make_key(StorageID::ST_OPTICS, *seq, "optics"),
+                                        hash_opt(*handle, *seq));
+                    applied = true;
+                }
+            }
+        }
+    }
     if (operation.actor_guid == "__scene__" && operation.field_name == "environment") {
         auto& store = hub.environment_storage();
         if (!impl_->env_seq_to_id.empty()) {
@@ -531,10 +547,53 @@ void SyncEngine::poll_and_sync() {
         }
     }
 
-    // Geometry, model resource, and optics are intentionally not synced here.
+    // Geometry and model resource handles remain local; optics editor state is
+    // serialized below without its process-local geometry handle.
     // Actor creation and file transfer build those local objects on each peer;
     // syncing handle-bearing structures afterward can overwrite valid local
     // links with seq/handle values from another process and make meshes vanish.
+
+    // --- OpticsDevice (logical material/editor state; geometry handle excluded) ---
+    {
+        auto& store = hub.optics_storage();
+        for (auto it = store.cbegin(); it != store.cend(); ++it) {
+            const OpticsDevice& data = *it;
+            auto obj_id = reinterpret_cast<std::uintptr_t>(&data);
+            auto ent_seq = store.seq_id(obj_id);
+            if (!impl_->guid_for_entity) continue;
+            auto actor_guid = impl_->guid_for_entity(StorageID::ST_OPTICS, ent_seq);
+            if (actor_guid.empty()) continue;
+            if (impl_->ownership_for_entity) {
+                auto locally_owned = impl_->ownership_for_entity(StorageID::ST_OPTICS, ent_seq);
+                if (locally_owned && !*locally_owned) continue;
+            }
+            auto cur_hash = hash_opt(data, ent_seq);
+            auto snap_key = impl_->make_key(StorageID::ST_OPTICS, ent_seq, "optics");
+            if (!impl_->check_snapshot(snap_key, cur_hash)) continue;
+            EditorSyncOperation op;
+            op.kind = EditorSyncOperationKind::Upsert;
+            op.actor_guid = actor_guid;
+            op.field_name = "optics";
+            OpticsPacked packed{};
+            packed.visible = data.visible;
+            packed.bEnableLighting = data.bEnableLighting;
+            packed.metallic = data.metallic; packed.roughness = data.roughness;
+            packed.subsurface = data.subsurface; packed.specular = data.specular;
+            packed.specularTint = data.specularTint; packed.anisotropic = data.anisotropic;
+            packed.sheen = data.sheen; packed.sheenTint = data.sheenTint;
+            packed.clearcoat = data.clearcoat; packed.clearcoatGloss = data.clearcoatGloss;
+            packed.ambient[0] = data.ambient.x; packed.ambient[1] = data.ambient.y; packed.ambient[2] = data.ambient.z;
+            packed.diffuse[0] = data.diffuse.x; packed.diffuse[1] = data.diffuse.y; packed.diffuse[2] = data.diffuse.z;
+            packed.specular_color[0] = data.specular_color.x; packed.specular_color[1] = data.specular_color.y; packed.specular_color[2] = data.specular_color.z;
+            packed.shininess = data.shininess;
+            op.value.resize(sizeof(packed));
+            std::memcpy(op.value.data(), &packed, sizeof(packed));
+            op.version = impl_->lww_state.next_local_version();
+            (void)impl_->lww_state.apply_upsert(op.actor_guid, op.field_name, op.value, op.version);
+            auto packet = build_editor_sync_operation(op);
+            if (!packet.empty() && impl_->on_outgoing) impl_->on_outgoing(packet);
+        }
+    }
 
     // --- EnvironmentDevice ---
     {
