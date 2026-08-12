@@ -1,5 +1,6 @@
 #include <corona/systems/network/actor_editor_sync.h>
 #include <corona/systems/network/scoped_bool_override.h>
+#include <corona/systems/network/scene_snapshot_policy.h>
 
 #include <iostream>
 
@@ -120,6 +121,21 @@ void test_newer_upsert_clears_actor_tombstone() {
     expect_true(!state.is_deleted(CORONA_TEST_STRINGIZE(actor-chair)), __func__);
 }
 
+void test_scene_snapshot_policy_never_applies_unversioned_scene_state() {
+    expect_true(Corona::Network::classify_scene_snapshot(
+                    CORONA_TEST_STRINGIZE(peer_ack)) ==
+                    Corona::Network::SceneSnapshotDisposition::PeerAcknowledgement,
+                __func__);
+    expect_true(Corona::Network::classify_scene_snapshot(
+                    CORONA_TEST_STRINGIZE(host_snapshot)) ==
+                    Corona::Network::SceneSnapshotDisposition::DiagnosticOnly,
+                __func__);
+    expect_true(Corona::Network::classify_scene_snapshot(
+                    CORONA_TEST_STRINGIZE(unknown)) ==
+                    Corona::Network::SceneSnapshotDisposition::DiagnosticOnly,
+                __func__);
+}
+
 }  // namespace
 
 int main() {
@@ -129,5 +145,6 @@ int main() {
     test_actor_editor_upsert_rejects_wrong_legacy_type();
     test_scoped_bool_override_restores_previous_value();
     test_newer_upsert_clears_actor_tombstone();
+    test_scene_snapshot_policy_never_applies_unversioned_scene_state();
     return g_failed == 0 ? 0 : 1;
 }

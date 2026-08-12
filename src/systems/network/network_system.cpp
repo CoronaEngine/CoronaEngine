@@ -8,6 +8,7 @@
 #include <corona/systems/network/network_system.h>
 #include <corona/systems/network/actor_editor_sync.h>
 #include <corona/systems/network/scoped_bool_override.h>
+#include <corona/systems/network/scene_snapshot_policy.h>
 #include <corona/shared_data_hub.h>
 
 #include <chrono>
@@ -2136,7 +2137,8 @@ void NetworkSystem::on_custom_message(const std::string& sender_peer_id,
             const std::string plan_id = snapshot.value("plan_id", std::string{});
             const std::string snapshot_kind =
                 snapshot.value("snapshot_kind", std::string{"host_snapshot"});
-            if (snapshot_kind == "peer_ack") {
+            if (Network::classify_scene_snapshot(snapshot_kind) ==
+                Network::SceneSnapshotDisposition::PeerAcknowledgement) {
                 if (!plan_id.empty()) {
                     enqueue_lanchat_sync_event(
                         "scene_snapshot_peer_ack",
@@ -2183,22 +2185,8 @@ void NetworkSystem::on_custom_message(const std::string& sender_peer_id,
                 "NetworkSystem: Ignoring invalid actor scene snapshot metadata from {}",
                 sender_peer_id);
         }
-        auto upsert_pending_actor_scene_snapshot = [&](Impl::PendingActorSceneSnapshot snapshot) {
-            auto it = std::find_if(
-                impl_->pending_actor_scene_snapshots.begin(),
-                impl_->pending_actor_scene_snapshots.end(),
-                [&](const Impl::PendingActorSceneSnapshot& existing) {
-                    return existing.scene_name == snapshot.scene_name;
-                });
-            if (it != impl_->pending_actor_scene_snapshots.end()) {
-                *it = std::move(snapshot);
-                return;
-            }
-            impl_->pending_actor_scene_snapshots.push_back(std::move(snapshot));
-        };
-        upsert_pending_actor_scene_snapshot(std::move(pending));
         CFW_LOG_INFO(
-            "NetworkSystem: Received ACTOR_SCENE_SNAPSHOT from {} — scene='{}' bytes={}",
+            "NetworkSystem: Received diagnostic ACTOR_SCENE_SNAPSHOT from {} — scene='{}' bytes={}",
             sender_peer_id, pending_scene_name, pending_snapshot_size);
     } else if (mt == MessageType::ACTOR_STATE_UPDATE) {
         Network::BufferReader r(data + 1, len - 1);
