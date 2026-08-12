@@ -7,7 +7,7 @@
 | 工具 | 要求 |
 | --- | --- |
 | Git | 克隆源码及管理锁定的 Horizon 工作区 |
-| [Miniconda / Conda](https://docs.conda.io/) | 管理开发工具 Python 环境和 Conan；无需单独安装 Python 或 Conan |
+| [Miniforge](https://github.com/conda-forge/miniforge) / [Miniconda / Conda](https://docs.conda.io/) | 管理开发工具 Python 环境和 Conan；无需单独安装 Python 或 Conan |
 | CMake | 3.29 或更高版本 |
 | Ninja | 必须在 PATH 中；工程使用 Ninja Multi-Config |
 | Visual Studio 或 Build Tools | 安装“使用 C++ 的桌面开发”、MSVC x64/x86 工具集与 Windows SDK |
