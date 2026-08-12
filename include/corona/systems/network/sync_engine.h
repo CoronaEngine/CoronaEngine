@@ -102,6 +102,9 @@ public:
     /// and focused tests; normal network traffic enters via handle_incoming().
     LwwApplyResult apply_editor_operation(const EditorSyncOperation& operation);
     EditorSyncOperation make_local_delete(const std::string& actor_guid);
+    EditorSyncOperation make_local_upsert(const std::string& actor_guid,
+                                          const std::string& field_name,
+                                          std::vector<uint8_t> value);
 
     /// Retry remote operations whose storage write was temporarily busy.
     void retry_pending_operations();

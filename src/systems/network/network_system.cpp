@@ -91,6 +91,7 @@ struct NetworkSystem::Impl {
 
     // Sync pause (suppress poll_and_sync during incoming actor creation)
     bool sync_paused = false;
+    bool applying_versioned_create = false;
 
     // Deferred actions to execute in update() (avoid GIL in network thread)
     struct PendingAction {
@@ -543,6 +544,18 @@ bool NetworkSystem::initialize(Kernel::ISystemContext* ctx) {
         });
     impl_->sync_engine.set_on_editor_operation_applied(
         [this](const Network::EditorSyncOperation& operation) {
+            if (operation.kind == Network::EditorSyncOperationKind::Upsert &&
+                operation.field_name == "actor.create") {
+                std::vector<uint8_t> packet;
+                packet.reserve(operation.value.size() + 1);
+                packet.push_back(static_cast<uint8_t>(Network::MessageType::ACTOR_CREATE));
+                packet.insert(packet.end(), operation.value.begin(), operation.value.end());
+                impl_->applying_versioned_create = true;
+                on_custom_message(operation.version.writer_peer_id,
+                                  packet.data(), packet.size());
+                impl_->applying_versioned_create = false;
+                return;
+            }
             if (operation.kind != Network::EditorSyncOperationKind::Delete) return;
             const auto& guid = operation.actor_guid;
             std::erase_if(impl_->pending_actor_creates,
@@ -1422,6 +1435,16 @@ void NetworkSystem::broadcast_actor_create(const std::string& actor_guid,
                                            optics_packed, optics_size, dependency_paths,
                                            actor_json);
     impl_->peer_manager.broadcast(Network::kChannelReliable, pkt.data(), pkt.size(), true);
+    if (!pkt.empty()) {
+        std::vector<uint8_t> create_payload(pkt.begin() + 1, pkt.end());
+        auto versioned = impl_->sync_engine.make_local_upsert(
+            actor_guid, "actor.create", std::move(create_payload));
+        auto versioned_packet = Network::build_editor_sync_operation(versioned);
+        if (!versioned_packet.empty()) {
+            impl_->peer_manager.broadcast(Network::kChannelReliable,
+                                          versioned_packet.data(), versioned_packet.size(), true);
+        }
+    }
     CFW_LOG_INFO("NetworkSystem: Broadcast actor create — actor='{}' scene='{}' model='{}' deps={}",
                  actor_guid, scene_name, model_path, dependency_paths.size());
 }
@@ -1759,6 +1782,15 @@ void NetworkSystem::on_custom_message(const std::string& sender_peer_id,
         Network::BufferReader r(data + 1, len - 1);
         uint16_t guid_len = r.read_u16();
         std::string actor_guid = r.read_string(guid_len);
+        if (!impl_->applying_versioned_create && !actor_guid.empty()) {
+            Network::EditorSyncOperation legacy_create;
+            legacy_create.kind = Network::EditorSyncOperationKind::Upsert;
+            legacy_create.actor_guid = actor_guid;
+            legacy_create.field_name = "actor.create";
+            legacy_create.version = {0, sender_peer_id};
+            const auto result = impl_->sync_engine.apply_editor_operation(legacy_create);
+            if (result != Network::LwwApplyResult::Applied) return;
+        }
         uint16_t sn_len = r.read_u16();
         std::string scene_name = r.read_string(sn_len);
         uint16_t mp_len = r.read_u16();

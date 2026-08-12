@@ -424,6 +424,20 @@ EditorSyncOperation SyncEngine::make_local_delete(const std::string& actor_guid)
     return op;
 }
 
+EditorSyncOperation SyncEngine::make_local_upsert(
+    const std::string& actor_guid, const std::string& field_name,
+    std::vector<uint8_t> value) {
+    EditorSyncOperation op;
+    op.kind = EditorSyncOperationKind::Upsert;
+    op.actor_guid = actor_guid;
+    op.field_name = field_name;
+    op.value = std::move(value);
+    op.version = impl_->lww_state.next_local_version();
+    (void)impl_->lww_state.apply_upsert(op.actor_guid, op.field_name,
+                                         op.value, op.version);
+    return op;
+}
+
 bool SyncEngine::apply_operation_to_storage(const EditorSyncOperation& operation) {
     if (operation.kind == EditorSyncOperationKind::Delete) return true;
 

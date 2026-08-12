@@ -171,6 +171,18 @@ void test_sync_engine_emits_versioned_snapshot() {
     sync.shutdown();
 }
 
+void test_sync_engine_creates_versioned_actor_upsert() {
+    Corona::Network::SyncEngine sync;
+    sync.initialize("local-peer");
+    auto op = sync.make_local_upsert("actor-create", "actor.create", {1, 2});
+    expect_true(op.version.counter == 1 && op.version.writer_peer_id == "local-peer",
+                "actor create uses local LWW version");
+    expect_true(sync.apply_editor_operation(op) ==
+                    Corona::Network::LwwApplyResult::Ignored,
+                "actor create duplicate is ignored");
+    sync.shutdown();
+}
+
 void test_peer_manager_targeted_send_rejects_unknown_peer() {
     Corona::Network::PeerManager manager;
     const uint8_t byte = 1;
@@ -1926,6 +1938,7 @@ int main() {
     test_sync_engine_applies_versioned_editor_operation();
     test_sync_engine_delete_tombstone_is_idempotent();
     test_sync_engine_emits_versioned_snapshot();
+    test_sync_engine_creates_versioned_actor_upsert();
     test_peer_manager_targeted_send_rejects_unknown_peer();
     test_actor_create_carries_actor_guid();
     test_actor_create_unpack_preserves_wire_transform();
