@@ -1,6 +1,7 @@
 #include <corona/systems/network/file_transfer.h>
 #include <corona/systems/network/lanchat_history_store.h>
 #include <corona/systems/network/lanchat_state.h>
+#include <corona/systems/network/lww_state.h>
 #include <corona/systems/network/network_identity.h>
 #include <corona/systems/network/network_system.h>
 #include <corona/systems/network/protocol.h>
@@ -70,6 +71,50 @@ void test_editor_sync_has_distinct_message_type() {
     expect_true(Corona::Network::MessageType::EDITOR_SYNC !=
                     Corona::Network::MessageType::SYNC_DIRTY,
                 "editor sync message type is distinct from legacy dirty sync");
+}
+
+void test_lww_state_merges_by_version_and_field() {
+    Corona::Network::LwwState state("peer-a");
+    Corona::Network::LwwVersion first{1, "peer-a"};
+    Corona::Network::LwwVersion second{2, "peer-b"};
+    expect_true(state.apply_upsert("actor", "x", {1}, first) ==
+                    Corona::Network::LwwApplyResult::Applied,
+                "lww applies first value");
+    expect_true(state.apply_upsert("actor", "x", {2}, first) ==
+                    Corona::Network::LwwApplyResult::Ignored,
+                "lww ignores duplicate version");
+    expect_true(state.apply_upsert("actor", "x", {3}, second) ==
+                    Corona::Network::LwwApplyResult::Applied,
+                "lww applies newer version");
+    expect_true(state.apply_upsert("actor", "y", {4}, first) ==
+                    Corona::Network::LwwApplyResult::Applied,
+                "lww merges independent field");
+    expect_true(state.value("actor", "x") == std::vector<uint8_t>{3} &&
+                    state.value("actor", "y") == std::vector<uint8_t>{4},
+                "lww stores field values independently");
+}
+
+void test_lww_state_tombstone_blocks_old_updates() {
+    Corona::Network::LwwState state("peer-a");
+    expect_true(state.apply_upsert("actor", "x", {1}, {3, "peer-a"}) ==
+                    Corona::Network::LwwApplyResult::Applied,
+                "lww seed value before delete");
+    expect_true(state.apply_delete("actor", {4, "peer-a"}) ==
+                    Corona::Network::LwwApplyResult::Applied,
+                "lww applies delete tombstone");
+    expect_true(state.apply_upsert("actor", "x", {2}, {3, "peer-b"}) ==
+                    Corona::Network::LwwApplyResult::Ignored,
+                "lww tombstone blocks stale resurrection");
+    expect_true(state.is_deleted("actor"), "lww retains delete tombstone");
+}
+
+void test_lww_state_advances_lamport_counter() {
+    Corona::Network::LwwState state("peer-a");
+    expect_true(state.next_local_version().counter == 1,
+                "lww local counter starts at one");
+    state.observe({9, "peer-b"});
+    expect_true(state.next_local_version().counter == 10,
+                "lww local counter advances past remote version");
 }
 
 void test_file_request_carries_transfer_id() {
@@ -1835,6 +1880,9 @@ int main() {
     test_editor_sync_upsert_round_trips_with_lww_version();
     test_editor_sync_rejects_truncated_and_oversized_packets();
     test_editor_sync_has_distinct_message_type();
+    test_lww_state_merges_by_version_and_field();
+    test_lww_state_tombstone_blocks_old_updates();
+    test_lww_state_advances_lamport_counter();
     test_actor_create_carries_actor_guid();
     test_actor_create_unpack_preserves_wire_transform();
     test_actor_create_carries_dependency_paths();
