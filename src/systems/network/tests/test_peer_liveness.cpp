@@ -1,4 +1,7 @@
 #include <corona/systems/network/peer_liveness.h>
+#include <corona/systems/network/peer_list_utils.h>
+
+#include <cstdint>
 
 #include <iostream>
 
@@ -33,10 +36,28 @@ void test_disconnecting_peer_does_not_repeat_disconnect_request() {
                 __func__);
 }
 
+void test_erasing_duplicate_refinds_retained_peer() {
+    using PeerInfo = Corona::Network::PeerManager::PeerInfo;
+    auto* discarded = reinterpret_cast<_ENetPeer*>(static_cast<uintptr_t>(1));
+    auto* retained = reinterpret_cast<_ENetPeer*>(static_cast<uintptr_t>(2));
+    std::vector<PeerInfo> peers(2);
+    peers[0].peer = discarded;
+    peers[1].peer = retained;
+    peers[1].outbound = true;
+
+    auto* retained_info = Corona::Network::erase_peer_and_refind(
+        peers, discarded, retained);
+
+    expect_true(peers.size() == 1 && retained_info != nullptr &&
+                    retained_info->peer == retained && retained_info->outbound,
+                __func__);
+}
+
 }  // namespace
 
 int main() {
     test_receive_timeout_ignores_recent_heartbeat_send();
     test_disconnecting_peer_does_not_repeat_disconnect_request();
+    test_erasing_duplicate_refinds_retained_peer();
     return g_failed == 0 ? 0 : 1;
 }

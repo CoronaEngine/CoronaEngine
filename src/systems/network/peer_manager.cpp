@@ -3,6 +3,7 @@
 #include <enet/enet.h>
 #include <corona/kernel/core/i_logger.h>
 #include <corona/systems/network/peer_liveness.h>
+#include <corona/systems/network/peer_list_utils.h>
 
 #include <algorithm>
 #include <chrono>
@@ -466,15 +467,16 @@ void PeerManager::handle_hello(ENetPeer* peer, const uint8_t* data, size_t len) 
             if (self->outbound) {
                 // SELF is our outbound — keep it, drop existing
                 auto* discarded_peer = existing->peer;
+                auto* retained_peer = self->peer;
                 existing->peer = nullptr;
                 existing->connected = false;
                 existing->hello_done = false;
-                // Remove existing from peer_list so it won't be found again
-                impl_->peer_list.erase(
-                    std::remove_if(impl_->peer_list.begin(), impl_->peer_list.end(),
-                        [&](const PeerInfo& p) { return p.peer == discarded_peer; }),
-                    impl_->peer_list.end());
+                // Erase may invalidate all vector pointers, so locate the
+                // retained connection again before updating it.
+                self = erase_peer_and_refind(
+                    impl_->peer_list, discarded_peer, retained_peer);
                 if (discarded_peer) enet_peer_disconnect_later(discarded_peer, 0);
+                if (!self) return;
                 // Rekey self
                 self->stable_id = stable_id;
                 self->id = stable_id;
