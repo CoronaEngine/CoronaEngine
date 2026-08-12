@@ -5,6 +5,7 @@
 
 #include <chrono>
 #include <cstring>
+#include <deque>
 #include <mutex>
 
 namespace Corona::Network {
@@ -250,6 +251,7 @@ struct SyncEngine::Impl {
     SharedDataHub& hub;
     std::string local_peer_id;
     LwwState lww_state;
+    std::deque<EditorSyncOperation> pending_editor_operations;
 
     // Snapshot: key → hash of last-synced value
     std::unordered_map<std::string, std::string> last_synced;
@@ -399,8 +401,18 @@ LwwApplyResult SyncEngine::apply_editor_operation(
         return result;
     }
 
+    if (!apply_operation_to_storage(operation)) {
+        impl_->pending_editor_operations.push_back(operation);
+    }
+    return result;
+}
+
+bool SyncEngine::apply_operation_to_storage(const EditorSyncOperation& operation) {
+    if (operation.kind == EditorSyncOperationKind::Delete) return true;
+
     impl_->rebuild_entity_maps();
     auto& hub = impl_->hub;
+    bool applied = false;
     auto apply_to_transform = [&]() {
         if (!impl_->entity_for_guid) return;
         auto seq = impl_->entity_for_guid(StorageID::ST_MODEL_TRANSFORM, operation.actor_guid);
@@ -414,6 +426,7 @@ LwwApplyResult SyncEngine::apply_editor_operation(
             impl_->set_snapshot(impl_->make_key(StorageID::ST_MODEL_TRANSFORM,
                                                  *seq, "xform"),
                                 hash_mt(*handle, *seq));
+            applied = true;
         }
     };
     if (operation.field_name == "xform") apply_to_transform();
@@ -428,10 +441,22 @@ LwwApplyResult SyncEngine::apply_editor_operation(
                                 static_cast<uint16_t>(operation.value.size()));
                 impl_->set_snapshot(impl_->make_key(StorageID::ST_ENVIRONMENT, seq, "env"),
                                     hash_env(*handle, seq));
+                applied = true;
             }
         }
     }
-    return result;
+    return applied;
+}
+
+void SyncEngine::retry_pending_operations() {
+    for (auto it = impl_->pending_editor_operations.begin();
+         it != impl_->pending_editor_operations.end();) {
+        if (apply_operation_to_storage(*it)) {
+            it = impl_->pending_editor_operations.erase(it);
+        } else {
+            ++it;
+        }
+    }
 }
 
 void SyncEngine::shutdown() {
@@ -444,6 +469,8 @@ void SyncEngine::shutdown() {
 
 void SyncEngine::poll_and_sync() {
     if (impl_->syncing_from_remote) return;
+
+    retry_pending_operations();
 
     impl_->rebuild_entity_maps();
 
@@ -492,6 +519,8 @@ void SyncEngine::poll_and_sync() {
                                        data.scale.x, data.scale.y, data.scale.z};
                     std::memcpy(op.value.data(), values, sizeof(values));
                     op.version = impl_->lww_state.next_local_version();
+                    (void)impl_->lww_state.apply_upsert(op.actor_guid, op.field_name,
+                                                         op.value, op.version);
                     auto packet = build_editor_sync_operation(op);
                     if (!packet.empty()) impl_->on_outgoing(packet);
                 } else {
@@ -530,6 +559,8 @@ void SyncEngine::poll_and_sync() {
                                        data.exposure};
                     std::memcpy(op.value.data(), values, sizeof(values));
                     op.version = impl_->lww_state.next_local_version();
+                    (void)impl_->lww_state.apply_upsert(op.actor_guid, op.field_name,
+                                                         op.value, op.version);
                     auto packet = build_editor_sync_operation(op);
                     if (!packet.empty()) impl_->on_outgoing(packet);
                 } else {

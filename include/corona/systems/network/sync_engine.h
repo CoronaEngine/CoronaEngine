@@ -94,7 +94,11 @@ public:
     /// and focused tests; normal network traffic enters via handle_incoming().
     LwwApplyResult apply_editor_operation(const EditorSyncOperation& operation);
 
+    /// Retry remote operations whose storage write was temporarily busy.
+    void retry_pending_operations();
+
 private:
+    bool apply_operation_to_storage(const EditorSyncOperation& operation);
     struct StorageAccessor;
     struct Impl;
     std::unique_ptr<Impl> impl_;
