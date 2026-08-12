@@ -536,6 +536,25 @@ bool NetworkSystem::initialize(Kernel::ISystemContext* ctx) {
             return impl_->identity_registry.local_ownership_for_storage_seq(
                 storage_id, entity_seq);
         });
+    impl_->sync_engine.set_on_editor_operation_applied(
+        [this](const Network::EditorSyncOperation& operation) {
+            if (operation.kind != Network::EditorSyncOperationKind::Delete) return;
+            const auto& guid = operation.actor_guid;
+            std::erase_if(impl_->pending_actor_creates,
+                          [&](const Impl::PendingAction& action) {
+                              return action.actor_guid == guid;
+                          });
+            std::erase_if(impl_->pending_actor_transform_updates,
+                          [&](const Impl::PendingTransformUpdate& update) {
+                              return update.actor_guid == guid;
+                          });
+            std::erase_if(impl_->pending_actor_deletes,
+                          [&](const Impl::PendingActorDelete& pending) {
+                              return pending.actor_guid == guid;
+                          });
+            impl_->pending_actor_deletes.push_back(
+                Impl::PendingActorDelete{guid, {}, {}});
+        });
 
     // Wire up PeerManager → SyncEngine inbound path
     impl_->peer_manager.set_on_data_received(
@@ -1431,6 +1450,12 @@ void NetworkSystem::broadcast_actor_delete(const std::string& actor_guid,
     }
     auto pkt = Network::build_actor_delete(actor_guid, scene_name, actor_name);
     impl_->peer_manager.broadcast(Network::kChannelReliable, pkt.data(), pkt.size(), true);
+    auto lww_delete = impl_->sync_engine.make_local_delete(actor_guid);
+    auto lww_packet = Network::build_editor_sync_operation(lww_delete);
+    if (!lww_packet.empty()) {
+        impl_->peer_manager.broadcast(Network::kChannelReliable,
+                                      lww_packet.data(), lww_packet.size(), true);
+    }
     CFW_LOG_INFO("NetworkSystem: Broadcast actor delete — actor='{}' name='{}' scene='{}'",
                  actor_guid, actor_name, scene_name);
 }
@@ -1988,6 +2013,14 @@ void NetworkSystem::on_custom_message(const std::string& sender_peer_id,
         if (!r.has_remaining(name_len)) return;
         pending.actor_name = r.read_string(name_len);
         if (!pending.actor_guid.empty()) {
+            Network::EditorSyncOperation legacy_delete;
+            legacy_delete.kind = Network::EditorSyncOperationKind::Delete;
+            legacy_delete.actor_guid = pending.actor_guid;
+            legacy_delete.version = {0, sender_peer_id};
+            const auto delete_result = impl_->sync_engine.apply_editor_operation(legacy_delete);
+            if (delete_result != Network::LwwApplyResult::Applied) {
+                return;
+            }
             std::erase_if(impl_->pending_actor_creates,
                           [&](const Impl::PendingAction& action) {
                               return action.actor_guid == pending.actor_guid;
@@ -2015,7 +2048,6 @@ void NetworkSystem::on_custom_message(const std::string& sender_peer_id,
                 }
             }
         }
-        impl_->pending_actor_deletes.push_back(pending);
         enqueue_lanchat_sync_event(
             "actor_deleted",
             nlohmann::json({

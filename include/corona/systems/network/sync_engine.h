@@ -30,6 +30,7 @@ class SyncEngine {
 public:
     using OnSyncOutgoing = std::function<void(const std::vector<uint8_t>& packet)>;
     using OnFullSyncRequest = std::function<void(const std::string& requesting_peer_id)>;
+    using OnEditorOperationApplied = std::function<void(const EditorSyncOperation&)>;
     using ResolveActorGuidForEntity =
         std::function<std::string(StorageID storage_id, uint64_t entity_seq)>;
     using ResolveEntitySeqForActorGuid =
@@ -86,6 +87,7 @@ public:
 
     void set_on_outgoing(OnSyncOutgoing cb);
     void set_on_full_sync_request(OnFullSyncRequest cb);
+    void set_on_editor_operation_applied(OnEditorOperationApplied cb);
     void set_identity_mapping_callbacks(ResolveActorGuidForEntity guid_for_entity,
                                         ResolveEntitySeqForActorGuid entity_for_guid,
                                         ResolveLocalOwnershipForEntity ownership_for_entity = {});
@@ -93,6 +95,7 @@ public:
     /// Apply one versioned editor operation. Exposed for transport adapters
     /// and focused tests; normal network traffic enters via handle_incoming().
     LwwApplyResult apply_editor_operation(const EditorSyncOperation& operation);
+    EditorSyncOperation make_local_delete(const std::string& actor_guid);
 
     /// Retry remote operations whose storage write was temporarily busy.
     void retry_pending_operations();

@@ -269,6 +269,7 @@ struct SyncEngine::Impl {
     // Callbacks
     OnSyncOutgoing on_outgoing;
     OnFullSyncRequest on_full_sync_request;
+    OnEditorOperationApplied on_editor_operation_applied;
     ResolveActorGuidForEntity guid_for_entity;
     ResolveEntitySeqForActorGuid entity_for_guid;
     ResolveLocalOwnershipForEntity ownership_for_entity;
@@ -398,13 +399,28 @@ LwwApplyResult SyncEngine::apply_editor_operation(
         : impl_->lww_state.apply_upsert(operation.actor_guid, operation.field_name,
                                         operation.value, operation.version);
     if (result != LwwApplyResult::Applied || operation.kind == EditorSyncOperationKind::Delete) {
+        if (result == LwwApplyResult::Applied && impl_->on_editor_operation_applied) {
+            impl_->on_editor_operation_applied(operation);
+        }
         return result;
     }
 
     if (!apply_operation_to_storage(operation)) {
         impl_->pending_editor_operations.push_back(operation);
     }
+    if (impl_->on_editor_operation_applied) {
+        impl_->on_editor_operation_applied(operation);
+    }
     return result;
+}
+
+EditorSyncOperation SyncEngine::make_local_delete(const std::string& actor_guid) {
+    EditorSyncOperation op;
+    op.kind = EditorSyncOperationKind::Delete;
+    op.actor_guid = actor_guid;
+    op.version = impl_->lww_state.next_local_version();
+    (void)impl_->lww_state.apply_delete(op.actor_guid, op.version);
+    return op;
 }
 
 bool SyncEngine::apply_operation_to_storage(const EditorSyncOperation& operation) {
@@ -765,6 +781,10 @@ void SyncEngine::set_on_outgoing(OnSyncOutgoing cb) {
 
 void SyncEngine::set_on_full_sync_request(OnFullSyncRequest cb) {
     impl_->on_full_sync_request = std::move(cb);
+}
+
+void SyncEngine::set_on_editor_operation_applied(OnEditorOperationApplied cb) {
+    impl_->on_editor_operation_applied = std::move(cb);
 }
 
 void SyncEngine::set_identity_mapping_callbacks(

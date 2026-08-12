@@ -135,6 +135,16 @@ void test_sync_engine_applies_versioned_editor_operation() {
     sync.shutdown();
 }
 
+void test_sync_engine_delete_tombstone_is_idempotent() {
+    Corona::Network::SyncEngine sync;
+    sync.initialize("local-peer");
+    auto op = sync.make_local_delete("actor-delete");
+    expect_true(sync.apply_editor_operation(op) ==
+                    Corona::Network::LwwApplyResult::Ignored,
+                "sync engine ignores duplicate delete tombstone");
+    sync.shutdown();
+}
+
 void test_file_request_carries_transfer_id() {
     constexpr uint64_t transfer_id = 0x1122334455667788ull;
     auto packet = Corona::Network::build_file_request(transfer_id, "Resource/mesh.obj");
@@ -1880,6 +1890,7 @@ int main() {
     test_lww_state_tombstone_blocks_old_updates();
     test_lww_state_advances_lamport_counter();
     test_sync_engine_applies_versioned_editor_operation();
+    test_sync_engine_delete_tombstone_is_idempotent();
     test_actor_create_carries_actor_guid();
     test_actor_create_unpack_preserves_wire_transform();
     test_actor_create_carries_dependency_paths();
