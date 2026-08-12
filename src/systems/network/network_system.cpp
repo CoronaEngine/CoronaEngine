@@ -529,6 +529,10 @@ bool NetworkSystem::initialize(Kernel::ISystemContext* ctx) {
             impl_->peer_manager.send_to_peer_id(peer_id, Network::kChannelReliable,
                                                 packet.data(), packet.size(), true);
         });
+    impl_->sync_engine.set_on_full_sync_request(
+        [this](const std::string& peer_id) {
+            impl_->sync_engine.sync_full_to(peer_id);
+        });
     impl_->sync_engine.set_identity_mapping_callbacks(
         [this](Network::StorageID storage_id, uint64_t entity_seq) {
             return impl_->identity_registry.actor_guid_for_storage_seq(storage_id, entity_seq);
@@ -584,6 +588,7 @@ bool NetworkSystem::initialize(Kernel::ISystemContext* ctx) {
                 auto mt = static_cast<MessageType>(data[0]);
                 if (mt == MessageType::SYNC_DIRTY || mt == MessageType::SYNC_FULL ||
                     mt == MessageType::EDITOR_SYNC ||
+                    mt == MessageType::EDITOR_SNAPSHOT_REQUEST ||
                     mt == MessageType::HEARTBEAT) {
                     on_data_received(peer_id, data, len);
                 } else {
@@ -1711,6 +1716,9 @@ void NetworkSystem::on_peer_connected(const Network::PeerManager::PeerInfo& info
 
     // Snapshot is idempotent and versioned, and is sent only to this peer.
     impl_->sync_engine.sync_full_to(info.id);
+    auto request = impl_->sync_engine.make_snapshot_request();
+    impl_->peer_manager.send_to_peer_id(info.id, Network::kChannelReliable,
+                                        request.data(), request.size(), true);
 
     if (impl_->session_role == SessionRole::Client && !impl_->lanchat.room_id().empty()) {
         auto packet = Network::build_chat_join(

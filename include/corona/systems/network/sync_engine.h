@@ -77,6 +77,7 @@ public:
 
     /// Emit the current versioned editor state as idempotent operations.
     void emit_snapshot();
+    std::vector<uint8_t> make_snapshot_request() const;
 
     // ========================================================================
     // Inbound (network → local)

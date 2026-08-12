@@ -63,6 +63,7 @@ enum class MessageType : uint8_t {
     HEARTBEAT     = 0x03,  // Keep-alive
     HELLO         = 0x04,  // Post-connect handshake: exchange stable identity
     EDITOR_SYNC   = 0x05,  // Versioned collaborative editor state operation
+    EDITOR_SNAPSHOT_REQUEST = 0x06, // Request current versioned editor state
     ACTOR_CREATE  = 0x10,  // Actor creation event (scene_name + model_path + transform + optics)
     FILE_REQUEST  = 0x11,  // Request model file from peer
     FILE_CHUNK    = 0x12,  // File chunk transfer
@@ -378,6 +379,11 @@ inline std::vector<uint8_t> build_heartbeat(uint32_t seq) {
     write_u8(buf, static_cast<uint8_t>(MessageType::HEARTBEAT));
     write_u32(buf, seq);
     return buf;
+}
+
+inline std::vector<uint8_t> build_editor_snapshot_request() {
+    return {static_cast<uint8_t>(MessageType::EDITOR_SNAPSHOT_REQUEST),
+            kEditorSyncSchemaVersion};
 }
 
 // ============================================================================

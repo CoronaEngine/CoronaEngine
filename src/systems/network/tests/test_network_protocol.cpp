@@ -191,6 +191,14 @@ void test_peer_manager_targeted_send_rejects_unknown_peer() {
                 "targeted peer send rejects unknown peer");
 }
 
+void test_editor_snapshot_request_has_schema_version() {
+    auto packet = Corona::Network::build_editor_snapshot_request();
+    expect_true(packet.size() == 2 &&
+                    packet[0] == static_cast<uint8_t>(Corona::Network::MessageType::EDITOR_SNAPSHOT_REQUEST) &&
+                    packet[1] == Corona::Network::kEditorSyncSchemaVersion,
+                "snapshot request carries schema version");
+}
+
 void test_file_request_carries_transfer_id() {
     constexpr uint64_t transfer_id = 0x1122334455667788ull;
     auto packet = Corona::Network::build_file_request(transfer_id, "Resource/mesh.obj");
@@ -1940,6 +1948,7 @@ int main() {
     test_sync_engine_emits_versioned_snapshot();
     test_sync_engine_creates_versioned_actor_upsert();
     test_peer_manager_targeted_send_rejects_unknown_peer();
+    test_editor_snapshot_request_has_schema_version();
     test_actor_create_carries_actor_guid();
     test_actor_create_unpack_preserves_wire_transform();
     test_actor_create_carries_dependency_paths();

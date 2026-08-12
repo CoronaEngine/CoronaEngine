@@ -694,6 +694,10 @@ void SyncEngine::emit_snapshot() {
     }
 }
 
+std::vector<uint8_t> SyncEngine::make_snapshot_request() const {
+    return build_editor_snapshot_request();
+}
+
 // ============================================================================
 // Inbound
 // ============================================================================
@@ -706,6 +710,11 @@ void SyncEngine::handle_incoming(const std::string& sender_peer_id,
         auto operation = parse_editor_sync_operation(data, len);
         if (!operation || operation->version.writer_peer_id != sender_peer_id) return;
         (void)apply_editor_operation(*operation);
+        return;
+    }
+    if (data[0] == static_cast<uint8_t>(MessageType::EDITOR_SNAPSHOT_REQUEST)) {
+        if (len != 2 || data[1] != kEditorSyncSchemaVersion || !impl_->on_full_sync_request) return;
+        impl_->on_full_sync_request(sender_peer_id);
         return;
     }
 
