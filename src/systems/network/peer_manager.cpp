@@ -4,9 +4,18 @@
 #include <corona/kernel/core/i_logger.h>
 
 #include <algorithm>
+#include <chrono>
 #include <mutex>
 
 namespace Corona::Network {
+
+namespace {
+uint64_t peer_now_ms() {
+    using namespace std::chrono;
+    return static_cast<uint64_t>(duration_cast<milliseconds>(
+        steady_clock::now().time_since_epoch()).count());
+}
+}
 
 struct PeerManager::Impl {
     ENetHost* host = nullptr;
@@ -286,6 +295,28 @@ bool PeerManager::send_to_peer_id(const std::string& peer_id, int channel,
 void PeerManager::poll() {
     if (!impl_->host) return;
 
+    const auto now = peer_now_ms();
+    std::vector<_ENetPeer*> timed_out;
+    {
+        std::lock_guard lock(impl_->peer_mutex);
+        for (auto& info : impl_->peer_list) {
+            if (!info.connected || !info.hello_done || !info.peer) continue;
+            if (info.last_activity_ms == 0) info.last_activity_ms = now;
+            if (now - info.last_activity_ms >= static_cast<uint64_t>(kPeerTimeoutMs)) {
+                timed_out.push_back(info.peer);
+                continue;
+            }
+            if (now - info.last_activity_ms >= static_cast<uint64_t>(kHeartbeatIntervalMs)) {
+                auto heartbeat = build_heartbeat(next_seq());
+                send_to(info.peer, kChannelUnreliable, heartbeat.data(), heartbeat.size(), false);
+                info.last_activity_ms = now;
+            }
+        }
+    }
+    for (auto* peer : timed_out) {
+        if (peer) enet_peer_disconnect(peer, 0);
+    }
+
     ENetEvent event;
     while (enet_host_service(impl_->host, &event, 0) > 0) {
         switch (event.type) {
@@ -308,10 +339,12 @@ void PeerManager::poll() {
                     pinfo.name = remote_id;
                     pinfo.peer = event.peer;
                     pinfo.connected = true;
+                    pinfo.last_activity_ms = now;
                     impl_->peer_list.push_back(pinfo);
                 } else {
                     info->connected = true;
                     info->peer = event.peer;
+                    info->last_activity_ms = now;
                 }
             }
 
@@ -354,7 +387,16 @@ void PeerManager::poll() {
                 {
                     std::lock_guard lock(impl_->peer_mutex);
                     auto* info = impl_->find_peer_unsafe(event.peer);
-                    if (info) { peer_id = info->id; ready = info->hello_done; }
+                    if (info) {
+                        info->last_activity_ms = now;
+                        peer_id = info->id;
+                        ready = info->hello_done;
+                    }
+                }
+                if (event.packet->dataLength >= 1 &&
+                    static_cast<MessageType>(event.packet->data[0]) == MessageType::HEARTBEAT) {
+                    enet_packet_destroy(event.packet);
+                    break;
                 }
                 // Drop data from peers that haven't completed HELLO yet
                 if (ready && !peer_id.empty() && impl_->on_data) {
@@ -413,14 +455,16 @@ void PeerManager::handle_hello(ENetPeer* peer, const uint8_t* data, size_t len) 
             // `self->outbound` takes priority; drop inbound extras.
             if (self->outbound) {
                 // SELF is our outbound — keep it, drop existing
+                auto* discarded_peer = existing->peer;
                 existing->peer = nullptr;
                 existing->connected = false;
                 existing->hello_done = false;
                 // Remove existing from peer_list so it won't be found again
                 impl_->peer_list.erase(
                     std::remove_if(impl_->peer_list.begin(), impl_->peer_list.end(),
-                        [&](const PeerInfo& p) { return p.peer == existing->peer; }),
+                        [&](const PeerInfo& p) { return p.peer == discarded_peer; }),
                     impl_->peer_list.end());
+                if (discarded_peer) enet_peer_disconnect_later(discarded_peer, 0);
                 // Rekey self
                 self->stable_id = stable_id;
                 self->id = stable_id;
@@ -442,6 +486,7 @@ void PeerManager::handle_hello(ENetPeer* peer, const uint8_t* data, size_t len) 
             self->id = stable_id;       // rekey lookup key to the stable id
             self->name = remote_name;
             self->hello_done = true;
+            self->last_activity_ms = peer_now_ms();
             notify_info = *self;
             should_notify = true;
         }

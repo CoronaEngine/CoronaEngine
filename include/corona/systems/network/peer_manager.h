@@ -32,6 +32,7 @@ public:
         bool connected = false;
         bool hello_done = false;  // true once HELLO exchanged and peer rekeyed
         bool outbound = false;    // true if WE initiated this connection
+        uint64_t last_activity_ms = 0;
     };
 
     /// Called when a new peer connects (after the HELLO handshake completes).
