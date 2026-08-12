@@ -54,6 +54,7 @@ constexpr uint32_t kMaxEditorSyncValueBytes = 1024 * 1024;
 constexpr uint32_t kMaxEditorSyncOperations = 4096;
 constexpr uint8_t kEditorSyncSchemaVersion = 1;
 constexpr uint32_t kEditorSnapshotChunkOperations = 256;
+constexpr uint32_t kMaxEditorSnapshotChunkBytes = 1024 * 1024;
 
 // ============================================================================
 // Message types (single byte prefix on every packet)
@@ -404,6 +405,7 @@ inline std::vector<uint8_t> build_editor_snapshot_chunk(
         if (operation.empty() || operation.size() > kMaxEditorSyncValueBytes) return {};
         write_u32(buf, static_cast<uint32_t>(operation.size()));
         write_bytes(buf, operation.data(), operation.size());
+        if (buf.size() > kMaxEditorSnapshotChunkBytes) return {};
     }
     return buf;
 }

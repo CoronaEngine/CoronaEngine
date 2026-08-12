@@ -681,7 +681,7 @@ void SyncEngine::sync_full_to(const std::string& target_peer_id) {
     // A peer may connect before the first 16 ms sync tick. Seed the LWW table
     // from current local state without broadcasting those seed operations.
     auto outgoing = std::move(impl_->on_outgoing);
-    impl_->on_outgoing = {};
+    impl_->on_outgoing = [](const std::vector<uint8_t>&) {};
     poll_and_sync();
     impl_->on_outgoing = std::move(outgoing);
     const auto operations = impl_->lww_state.snapshot();
@@ -738,6 +738,7 @@ void SyncEngine::handle_incoming(const std::string& sender_peer_id,
         return;
     }
     if (data[0] == static_cast<uint8_t>(MessageType::EDITOR_SNAPSHOT_CHUNK)) {
+        if (len > kMaxEditorSnapshotChunkBytes) return;
         BufferReader r(data, len);
         if (!r.has_remaining(1 + 1 + 4 + 2 + 2 + 2) ||
             r.read_u8() != static_cast<uint8_t>(MessageType::EDITOR_SNAPSHOT_CHUNK) ||
@@ -844,10 +845,10 @@ void SyncEngine::handle_incoming(const std::string& sender_peer_id,
         }
     }
     else if (type == MessageType::SYNC_FULL) {
-        if (!r.has_remaining(8)) return;
-        (void)r.read_u32();  // seq
-        uint32_t count = r.read_u32();
-        handle_incoming(sender_peer_id, data + 1 + 8, len - 1 - 8);
+        // Legacy SYNC_FULL has no LWW versions and its old parser treated the
+        // first entry byte as a message type. Reject it; new peers use the
+        // versioned snapshot request/chunk protocol above.
+        return;
     }
     else if (type == MessageType::HEARTBEAT) {
         // No action needed
