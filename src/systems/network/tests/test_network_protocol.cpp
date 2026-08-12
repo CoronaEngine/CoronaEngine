@@ -26,6 +26,52 @@ void expect_true(bool condition, const char* message) {
     }
 }
 
+void test_editor_sync_upsert_round_trips_with_lww_version() {
+    Corona::Network::EditorSyncOperation op;
+    op.kind = Corona::Network::EditorSyncOperationKind::Upsert;
+    op.actor_guid = "actor-1";
+    op.field_name = "transform.position";
+    op.value = {1, 2, 3, 4};
+    op.version.counter = 42;
+    op.version.writer_peer_id = "peer-b";
+
+    auto packet = Corona::Network::build_editor_sync_operation(op);
+    auto decoded = Corona::Network::parse_editor_sync_operation(
+        packet.data(), packet.size());
+    expect_true(decoded.has_value(), "editor sync upsert parses");
+    if (!decoded) return;
+    expect_true(decoded->kind == op.kind, "editor sync operation kind round trips");
+    expect_true(decoded->actor_guid == op.actor_guid, "editor sync actor guid round trips");
+    expect_true(decoded->field_name == op.field_name, "editor sync field name round trips");
+    expect_true(decoded->value == op.value, "editor sync value round trips");
+    expect_true(decoded->version.counter == op.version.counter &&
+                    decoded->version.writer_peer_id == op.version.writer_peer_id,
+                "editor sync LWW version round trips");
+}
+
+void test_editor_sync_rejects_truncated_and_oversized_packets() {
+    Corona::Network::EditorSyncOperation op;
+    op.kind = Corona::Network::EditorSyncOperationKind::Delete;
+    op.actor_guid = "actor-1";
+    op.version.counter = 1;
+    op.version.writer_peer_id = "peer-a";
+    auto packet = Corona::Network::build_editor_sync_operation(op);
+
+    expect_true(!Corona::Network::parse_editor_sync_operation(
+                    packet.data(), packet.size() - 1),
+                "editor sync rejects truncated packet");
+
+    op.actor_guid.assign(Corona::Network::kMaxEditorSyncStringBytes + 1, 'x');
+    expect_true(Corona::Network::build_editor_sync_operation(op).empty(),
+                "editor sync rejects oversized actor guid");
+}
+
+void test_editor_sync_has_distinct_message_type() {
+    expect_true(Corona::Network::MessageType::EDITOR_SYNC !=
+                    Corona::Network::MessageType::SYNC_DIRTY,
+                "editor sync message type is distinct from legacy dirty sync");
+}
+
 void test_file_request_carries_transfer_id() {
     constexpr uint64_t transfer_id = 0x1122334455667788ull;
     auto packet = Corona::Network::build_file_request(transfer_id, "Resource/mesh.obj");
@@ -1786,6 +1832,9 @@ void test_sync_engine_drops_unresolved_actor_transform() {
 }  // namespace
 
 int main() {
+    test_editor_sync_upsert_round_trips_with_lww_version();
+    test_editor_sync_rejects_truncated_and_oversized_packets();
+    test_editor_sync_has_distinct_message_type();
     test_actor_create_carries_actor_guid();
     test_actor_create_unpack_preserves_wire_transform();
     test_actor_create_carries_dependency_paths();

@@ -4,6 +4,7 @@
 #include <cstring>
 #include <corona/systems/network/lanchat_state.h>
 #include <string>
+#include <optional>
 #include <vector>
 
 namespace Corona::Network {
@@ -46,6 +47,13 @@ constexpr int kSyncIntervalMs = 16;
 constexpr int kChannelReliable = 0;    // SYNC_DIRTY, SYNC_FULL
 constexpr int kChannelUnreliable = 1;  // HEARTBEAT
 
+// Bounds for editor-state packets. Values are deliberately conservative so a
+// malformed peer cannot force unbounded allocations during decode.
+constexpr uint16_t kMaxEditorSyncStringBytes = 1024;
+constexpr uint32_t kMaxEditorSyncValueBytes = 1024 * 1024;
+constexpr uint32_t kMaxEditorSyncOperations = 4096;
+constexpr uint8_t kEditorSyncSchemaVersion = 1;
+
 // ============================================================================
 // Message types (single byte prefix on every packet)
 // ============================================================================
@@ -54,6 +62,7 @@ enum class MessageType : uint8_t {
     SYNC_FULL     = 0x02,  // Full state snapshot (new peer joins)
     HEARTBEAT     = 0x03,  // Keep-alive
     HELLO         = 0x04,  // Post-connect handshake: exchange stable identity
+    EDITOR_SYNC   = 0x05,  // Versioned collaborative editor state operation
     ACTOR_CREATE  = 0x10,  // Actor creation event (scene_name + model_path + transform + optics)
     FILE_REQUEST  = 0x11,  // Request model file from peer
     FILE_CHUNK    = 0x12,  // File chunk transfer
@@ -92,6 +101,24 @@ enum class StorageID : uint16_t {
     ST_ACTOR           = 7,
     ST_ENVIRONMENT     = 8,
     ST_MODEL_RESOURCE  = 9,
+};
+
+enum class EditorSyncOperationKind : uint8_t {
+    Upsert = 1,
+    Delete = 2,
+};
+
+struct LwwVersion {
+    uint64_t counter = 0;
+    std::string writer_peer_id;
+};
+
+struct EditorSyncOperation {
+    EditorSyncOperationKind kind = EditorSyncOperationKind::Upsert;
+    std::string actor_guid;
+    std::string field_name;
+    std::vector<uint8_t> value;
+    LwwVersion version;
 };
 
 // ============================================================================
@@ -209,6 +236,76 @@ struct BufferReader {
         return s;
     }
 };
+
+inline bool valid_editor_sync_operation(const EditorSyncOperation& op) {
+    if (op.actor_guid.empty() || op.actor_guid.size() > kMaxEditorSyncStringBytes ||
+        op.version.writer_peer_id.empty() ||
+        op.version.writer_peer_id.size() > kMaxEditorSyncStringBytes) {
+        return false;
+    }
+    if (op.kind == EditorSyncOperationKind::Upsert) {
+        if (op.field_name.empty() || op.field_name.size() > kMaxEditorSyncStringBytes ||
+            op.value.size() > kMaxEditorSyncValueBytes) {
+            return false;
+        }
+    } else if (op.kind == EditorSyncOperationKind::Delete) {
+        if (!op.field_name.empty() || !op.value.empty()) return false;
+    } else {
+        return false;
+    }
+    return true;
+}
+
+inline std::vector<uint8_t> build_editor_sync_operation(
+    const EditorSyncOperation& op) {
+    if (!valid_editor_sync_operation(op)) return {};
+    std::vector<uint8_t> buf;
+    buf.reserve(1 + 1 + 1 + 2 + op.actor_guid.size() + 2 + op.field_name.size() +
+                4 + op.value.size() + 8 + 2 + op.version.writer_peer_id.size());
+    write_u8(buf, static_cast<uint8_t>(MessageType::EDITOR_SYNC));
+    write_u8(buf, kEditorSyncSchemaVersion);
+    write_u8(buf, static_cast<uint8_t>(op.kind));
+    write_u16(buf, static_cast<uint16_t>(op.actor_guid.size()));
+    write_bytes(buf, op.actor_guid.data(), op.actor_guid.size());
+    write_u16(buf, static_cast<uint16_t>(op.field_name.size()));
+    write_bytes(buf, op.field_name.data(), op.field_name.size());
+    write_u32(buf, static_cast<uint32_t>(op.value.size()));
+    write_bytes(buf, op.value.data(), op.value.size());
+    write_u64(buf, op.version.counter);
+    write_u16(buf, static_cast<uint16_t>(op.version.writer_peer_id.size()));
+    write_bytes(buf, op.version.writer_peer_id.data(), op.version.writer_peer_id.size());
+    return buf;
+}
+
+inline std::optional<EditorSyncOperation> parse_editor_sync_operation(
+    const uint8_t* data, size_t len) {
+    if (!data || len < 1 + 1 + 1 + 2 + 2 + 4 + 8 + 2) return std::nullopt;
+    BufferReader r(data, len);
+    if (r.read_u8() != static_cast<uint8_t>(MessageType::EDITOR_SYNC)) return std::nullopt;
+    if (r.read_u8() != kEditorSyncSchemaVersion) return std::nullopt;
+    EditorSyncOperation op;
+    op.kind = static_cast<EditorSyncOperationKind>(r.read_u8());
+    if (!r.has_remaining(2)) return std::nullopt;
+    const auto guid_len = r.read_u16();
+    if (guid_len == 0 || guid_len > kMaxEditorSyncStringBytes || !r.has_remaining(guid_len)) return std::nullopt;
+    op.actor_guid = r.read_string(guid_len);
+    if (!r.has_remaining(2)) return std::nullopt;
+    const auto field_len = r.read_u16();
+    if (field_len > kMaxEditorSyncStringBytes || !r.has_remaining(field_len)) return std::nullopt;
+    op.field_name = r.read_string(field_len);
+    if (!r.has_remaining(4)) return std::nullopt;
+    const auto value_len = r.read_u32();
+    if (value_len > kMaxEditorSyncValueBytes || !r.has_remaining(value_len)) return std::nullopt;
+    op.value.assign(r.data + r.pos, r.data + r.pos + value_len);
+    r.pos += value_len;
+    if (!r.has_remaining(8 + 2)) return std::nullopt;
+    op.version.counter = r.read_u64();
+    const auto writer_len = r.read_u16();
+    if (writer_len == 0 || writer_len > kMaxEditorSyncStringBytes || !r.has_remaining(writer_len)) return std::nullopt;
+    op.version.writer_peer_id = r.read_string(writer_len);
+    if (r.pos != r.size || !valid_editor_sync_operation(op)) return std::nullopt;
+    return op;
+}
 
 // ============================================================================
 // SYNC_DIRTY message builder
