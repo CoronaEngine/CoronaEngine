@@ -408,10 +408,29 @@ LwwApplyResult SyncEngine::apply_editor_operation(
         auto it = impl_->mt_seq_to_id.find(*seq);
         if (it == impl_->mt_seq_to_id.end()) return;
         auto handle = hub.model_transform_storage().try_acquire_write(it->second);
-        if (handle.valid()) deserialize_mt(*handle, operation.value.data(),
-                                           static_cast<uint16_t>(operation.value.size()));
+        if (handle.valid()) {
+            deserialize_mt(*handle, operation.value.data(),
+                           static_cast<uint16_t>(operation.value.size()));
+            impl_->set_snapshot(impl_->make_key(StorageID::ST_MODEL_TRANSFORM,
+                                                 *seq, "xform"),
+                                hash_mt(*handle, *seq));
+        }
     };
     if (operation.field_name == "xform") apply_to_transform();
+    if (operation.actor_guid == "__scene__" && operation.field_name == "environment") {
+        auto& store = hub.environment_storage();
+        if (!impl_->env_seq_to_id.empty()) {
+            auto seq_it = impl_->env_seq_to_id.begin();
+            auto seq = seq_it->first;
+            auto handle = store.try_acquire_write(seq_it->second);
+            if (handle.valid()) {
+                deserialize_env(*handle, operation.value.data(),
+                                static_cast<uint16_t>(operation.value.size()));
+                impl_->set_snapshot(impl_->make_key(StorageID::ST_ENVIRONMENT, seq, "env"),
+                                    hash_env(*handle, seq));
+            }
+        }
+    }
     return result;
 }
 
