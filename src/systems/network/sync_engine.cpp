@@ -249,6 +249,7 @@ void deserialize_env(EnvironmentDevice& e, const uint8_t* value, uint16_t value_
 struct SyncEngine::Impl {
     SharedDataHub& hub;
     std::string local_peer_id;
+    LwwState lww_state;
 
     // Snapshot: key → hash of last-synced value
     std::unordered_map<std::string, std::string> last_synced;
@@ -276,7 +277,7 @@ struct SyncEngine::Impl {
     // True while we are applying remote data — suppress outgoing re-broadcast
     bool syncing_from_remote = false;
 
-    Impl(SharedDataHub& h) : hub(h) {}
+    Impl(SharedDataHub& h) : hub(h), lww_state("uninitialized") {}
 
     void rebuild_entity_maps() {
         mt_seq_to_id.clear();
@@ -383,8 +384,21 @@ SyncEngine::~SyncEngine() = default;
 
 void SyncEngine::initialize(const std::string& local_peer_id) {
     impl_->local_peer_id = local_peer_id;
+    impl_->lww_state.set_local_peer_id(local_peer_id);
     impl_->last_synced.clear();
     impl_->seq = 0;
+}
+
+LwwApplyResult SyncEngine::apply_editor_operation(
+    const EditorSyncOperation& operation) {
+    if (operation.kind == EditorSyncOperationKind::Delete) {
+        return impl_->lww_state.apply_delete(operation.actor_guid,
+                                              operation.version);
+    }
+    return impl_->lww_state.apply_upsert(operation.actor_guid,
+                                         operation.field_name,
+                                         operation.value,
+                                         operation.version);
 }
 
 void SyncEngine::shutdown() {
@@ -488,6 +502,13 @@ void SyncEngine::sync_full_to(const std::string& /*target_peer_id*/) {
 void SyncEngine::handle_incoming(const std::string& sender_peer_id,
                                  const uint8_t* data, size_t len) {
     if (len < 2) return;
+
+    if (data[0] == static_cast<uint8_t>(MessageType::EDITOR_SYNC)) {
+        auto operation = parse_editor_sync_operation(data, len);
+        if (!operation || operation->version.writer_peer_id != sender_peer_id) return;
+        (void)apply_editor_operation(*operation);
+        return;
+    }
 
     BufferReader r(data, len);
     auto type = static_cast<MessageType>(r.read_u8());

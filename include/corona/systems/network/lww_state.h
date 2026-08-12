@@ -45,6 +45,11 @@ public:
     LwwState(const LwwState&) = delete;
     LwwState& operator=(const LwwState&) = delete;
 
+    void set_local_peer_id(std::string peer_id) {
+        std::lock_guard lock(mutex_);
+        local_peer_id_ = std::move(peer_id);
+    }
+
     [[nodiscard]] LwwVersion next_local_version() {
         std::lock_guard lock(mutex_);
         return {++lamport_counter_, local_peer_id_};

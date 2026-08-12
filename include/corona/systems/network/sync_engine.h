@@ -1,6 +1,7 @@
 #pragma once
 
 #include <corona/systems/network/protocol.h>
+#include <corona/systems/network/lww_state.h>
 
 #include <cstdint>
 #include <functional>
@@ -23,8 +24,7 @@ namespace Corona::Network {
  * Architecture assumptions:
  *  - Dirty detection is done by keeping a per-entity hash snapshot and
  *    comparing current data vs that snapshot each tick.
- *  - "Last-write-wins" uses the sender's monotonic timestamp_ms.
- *  - Ties are broken by comparing peer-id strings (lexicographic, deterministic).
+ *  - Editor updates use LwwState versions (Lamport counter + writer peer ID).
  */
 class SyncEngine {
 public:
@@ -89,6 +89,10 @@ public:
     void set_identity_mapping_callbacks(ResolveActorGuidForEntity guid_for_entity,
                                         ResolveEntitySeqForActorGuid entity_for_guid,
                                         ResolveLocalOwnershipForEntity ownership_for_entity = {});
+
+    /// Apply one versioned editor operation. Exposed for transport adapters
+    /// and focused tests; normal network traffic enters via handle_incoming().
+    LwwApplyResult apply_editor_operation(const EditorSyncOperation& operation);
 
 private:
     struct StorageAccessor;

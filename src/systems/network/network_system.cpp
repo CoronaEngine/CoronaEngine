@@ -546,6 +546,7 @@ bool NetworkSystem::initialize(Kernel::ISystemContext* ctx) {
                 using Network::MessageType;
                 auto mt = static_cast<MessageType>(data[0]);
                 if (mt == MessageType::SYNC_DIRTY || mt == MessageType::SYNC_FULL ||
+                    mt == MessageType::EDITOR_SYNC ||
                     mt == MessageType::HEARTBEAT) {
                     on_data_received(peer_id, data, len);
                 } else {
