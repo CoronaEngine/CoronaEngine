@@ -110,6 +110,9 @@ public:
     /// Retry remote operations whose storage write was temporarily busy.
     void retry_pending_operations();
 
+    /// Expire incomplete snapshot sessions and replay their queued incrementals.
+    void maintain_snapshot_sessions(uint64_t now_ms);
+
 private:
     bool apply_operation_to_storage(const EditorSyncOperation& operation);
     struct StorageAccessor;

@@ -248,8 +248,29 @@ void test_editor_snapshot_request_has_schema_version() {
     auto packet = Corona::Network::build_editor_snapshot_request();
     expect_true(packet.size() == 2 &&
                     packet[0] == static_cast<uint8_t>(Corona::Network::MessageType::EDITOR_SNAPSHOT_REQUEST) &&
-                    packet[1] == Corona::Network::kEditorSyncSchemaVersion,
+                    packet[1] == Corona::Network::kEditorSnapshotSchemaVersion,
                 "snapshot request carries schema version");
+}
+
+void test_editor_snapshot_begin_and_end_carry_session_metadata() {
+    const auto begin = Corona::Network::build_editor_snapshot_begin(17, 3, 513);
+    Corona::Network::BufferReader begin_reader(begin.data(), begin.size());
+    expect_true(static_cast<Corona::Network::MessageType>(begin_reader.read_u8()) ==
+                    Corona::Network::MessageType::EDITOR_SNAPSHOT_BEGIN,
+                "snapshot begin message type");
+    expect_true(begin_reader.read_u8() == Corona::Network::kEditorSnapshotSchemaVersion &&
+                    begin_reader.read_u32() == 17 &&
+                    begin_reader.read_u16() == 3 &&
+                    begin_reader.read_u32() == 513,
+                "snapshot begin carries id chunk and operation totals");
+
+    const auto end = Corona::Network::build_editor_snapshot_end(17);
+    Corona::Network::BufferReader end_reader(end.data(), end.size());
+    expect_true(static_cast<Corona::Network::MessageType>(end_reader.read_u8()) ==
+                    Corona::Network::MessageType::EDITOR_SNAPSHOT_END &&
+                    end_reader.read_u8() == Corona::Network::kEditorSnapshotSchemaVersion &&
+                    end_reader.read_u32() == 17,
+                "snapshot end carries schema and snapshot id");
 }
 
 void test_editor_snapshot_chunk_round_trips_operation_packets() {
@@ -287,10 +308,175 @@ void test_editor_snapshot_accepts_operation_from_original_writer() {
                 ++applied;
             }
         });
+    const auto begin = Corona::Network::build_editor_snapshot_begin(11, 1, 1);
+    const auto end = Corona::Network::build_editor_snapshot_end(11);
+    sync.handle_incoming("snapshot-sender", begin.data(), begin.size());
     sync.handle_incoming("snapshot-sender", chunk.data(), chunk.size());
+    expect_true(applied == 0, "snapshot does not apply before end marker");
+    sync.handle_incoming("snapshot-sender", end.data(), end.size());
 
     expect_true(applied == 1,
                 "snapshot preserves and accepts the original field writer");
+    sync.shutdown();
+}
+
+void test_editor_snapshot_missing_chunk_does_not_mutate_state() {
+    Corona::Network::SyncEngine sync;
+    sync.initialize("receiver");
+    int applied = 0;
+    sync.set_on_editor_operation_applied(
+        [&](const Corona::Network::EditorSyncOperation&) { ++applied; });
+    const auto begin = Corona::Network::build_editor_snapshot_begin(12, 2, 1);
+    const auto end = Corona::Network::build_editor_snapshot_end(12);
+    sync.handle_incoming("snapshot-sender", begin.data(), begin.size());
+    sync.handle_incoming("snapshot-sender", end.data(), end.size());
+    expect_true(applied == 0, "incomplete snapshot does not mutate state");
+    sync.shutdown();
+}
+
+void test_editor_snapshot_queues_sender_incremental_until_complete() {
+    Corona::Network::SyncEngine sync;
+    sync.initialize("receiver");
+    std::vector<std::string> applied_fields;
+    sync.set_on_editor_operation_applied(
+        [&](const Corona::Network::EditorSyncOperation& operation) {
+            applied_fields.push_back(operation.field_name);
+        });
+    Corona::Network::EditorSyncOperation snapshot_op;
+    snapshot_op.kind = Corona::Network::EditorSyncOperationKind::Upsert;
+    snapshot_op.actor_guid = "actor-queued";
+    snapshot_op.field_name = "actor.state";
+    snapshot_op.value = {1};
+    snapshot_op.version = {4, "original-writer"};
+    Corona::Network::EditorSyncOperation incremental = snapshot_op;
+    incremental.field_name = "actor.transform";
+    incremental.value = {2};
+    incremental.version = {5, "snapshot-sender"};
+    const auto encoded_snapshot =
+        Corona::Network::build_editor_sync_operation(snapshot_op);
+    const auto chunk = Corona::Network::build_editor_snapshot_chunk(
+        13, 0, 1, {encoded_snapshot});
+    const auto begin = Corona::Network::build_editor_snapshot_begin(13, 1, 1);
+    const auto end = Corona::Network::build_editor_snapshot_end(13);
+    const auto encoded_incremental =
+        Corona::Network::build_editor_sync_operation(incremental);
+
+    sync.handle_incoming("snapshot-sender", begin.data(), begin.size());
+    sync.handle_incoming("snapshot-sender", encoded_incremental.data(),
+                         encoded_incremental.size());
+    sync.handle_incoming("snapshot-sender", chunk.data(), chunk.size());
+    expect_true(applied_fields.empty(),
+                "sender incremental remains queued during snapshot");
+    sync.handle_incoming("snapshot-sender", end.data(), end.size());
+    expect_true(applied_fields ==
+                    std::vector<std::string>{"actor.state", "actor.transform"},
+                "snapshot applies before queued sender incremental replay");
+    sync.shutdown();
+}
+
+void test_editor_snapshot_timeout_replays_incremental_and_requests_retry() {
+    Corona::Network::SyncEngine sync;
+    sync.initialize("receiver");
+    int applied = 0;
+    int requests = 0;
+    sync.set_on_editor_operation_applied(
+        [&](const Corona::Network::EditorSyncOperation&) { ++applied; });
+    sync.set_on_targeted_outgoing(
+        [&](const std::string& peer_id, const std::vector<uint8_t>& packet) {
+            if (peer_id == "snapshot-sender" && packet.size() == 2 &&
+                packet[0] == static_cast<uint8_t>(
+                    Corona::Network::MessageType::EDITOR_SNAPSHOT_REQUEST)) {
+                ++requests;
+            }
+        });
+    const auto begin = Corona::Network::build_editor_snapshot_begin(14, 1, 1);
+    Corona::Network::EditorSyncOperation incremental;
+    incremental.kind = Corona::Network::EditorSyncOperationKind::Upsert;
+    incremental.actor_guid = "actor-timeout";
+    incremental.field_name = "actor.state";
+    incremental.value = {3};
+    incremental.version = {6, "snapshot-sender"};
+    const auto encoded = Corona::Network::build_editor_sync_operation(incremental);
+    sync.handle_incoming("snapshot-sender", begin.data(), begin.size());
+    sync.handle_incoming("snapshot-sender", encoded.data(), encoded.size());
+
+    sync.maintain_snapshot_sessions(UINT64_MAX);
+
+    expect_true(applied == 1,
+                "snapshot timeout replays queued sender incremental");
+    expect_true(requests == 1,
+                "snapshot timeout requests a replacement snapshot");
+    sync.shutdown();
+}
+
+void test_editor_snapshot_conflicting_duplicate_recovers_incremental() {
+    Corona::Network::SyncEngine sync;
+    sync.initialize("receiver");
+    int applied = 0;
+    int requests = 0;
+    sync.set_on_editor_operation_applied(
+        [&](const Corona::Network::EditorSyncOperation&) { ++applied; });
+    sync.set_on_targeted_outgoing(
+        [&](const std::string&, const std::vector<uint8_t>& packet) {
+            if (packet.size() == 2 &&
+                packet[0] == static_cast<uint8_t>(
+                    Corona::Network::MessageType::EDITOR_SNAPSHOT_REQUEST)) {
+                ++requests;
+            }
+        });
+    Corona::Network::EditorSyncOperation first;
+    first.kind = Corona::Network::EditorSyncOperationKind::Upsert;
+    first.actor_guid = "actor-conflict";
+    first.field_name = "actor.state";
+    first.value = {1};
+    first.version = {2, "original-writer"};
+    auto second = first;
+    second.value = {2};
+    second.version = {3, "other-writer"};
+    Corona::Network::EditorSyncOperation incremental = first;
+    incremental.field_name = "actor.transform";
+    incremental.version = {4, "snapshot-sender"};
+    const auto begin = Corona::Network::build_editor_snapshot_begin(15, 1, 1);
+    const auto first_chunk = Corona::Network::build_editor_snapshot_chunk(
+        15, 0, 1, {Corona::Network::build_editor_sync_operation(first)});
+    const auto conflicting_chunk = Corona::Network::build_editor_snapshot_chunk(
+        15, 0, 1, {Corona::Network::build_editor_sync_operation(second)});
+    const auto encoded_incremental =
+        Corona::Network::build_editor_sync_operation(incremental);
+
+    sync.handle_incoming("snapshot-sender", begin.data(), begin.size());
+    sync.handle_incoming("snapshot-sender", encoded_incremental.data(),
+                         encoded_incremental.size());
+    sync.handle_incoming("snapshot-sender", first_chunk.data(), first_chunk.size());
+    sync.handle_incoming("snapshot-sender", conflicting_chunk.data(),
+                         conflicting_chunk.size());
+
+    expect_true(applied == 1,
+                "conflicting duplicate chunk replays queued incremental");
+    expect_true(requests == 1,
+                "conflicting duplicate chunk requests replacement snapshot");
+    sync.shutdown();
+}
+
+void test_sync_full_to_sends_begin_chunk_end() {
+    Corona::Network::SyncEngine sync;
+    sync.initialize("sender");
+    (void)sync.make_local_upsert("actor-session", "actor.state", {1});
+    std::vector<Corona::Network::MessageType> types;
+    sync.set_on_targeted_outgoing(
+        [&](const std::string& peer_id, const std::vector<uint8_t>& packet) {
+            if (peer_id == "receiver" && !packet.empty()) {
+                types.push_back(static_cast<Corona::Network::MessageType>(packet[0]));
+            }
+        });
+
+    sync.sync_full_to("receiver");
+
+    expect_true(types.size() == 3 &&
+                    types[0] == Corona::Network::MessageType::EDITOR_SNAPSHOT_BEGIN &&
+                    types[1] == Corona::Network::MessageType::EDITOR_SNAPSHOT_CHUNK &&
+                    types[2] == Corona::Network::MessageType::EDITOR_SNAPSHOT_END,
+                "targeted snapshot sends begin chunk and end in order");
     sync.shutdown();
 }
 
@@ -2046,8 +2232,14 @@ int main() {
     test_sync_engine_does_not_retry_logical_actor_state();
     test_peer_manager_targeted_send_rejects_unknown_peer();
     test_editor_snapshot_request_has_schema_version();
+    test_editor_snapshot_begin_and_end_carry_session_metadata();
     test_editor_snapshot_chunk_round_trips_operation_packets();
     test_editor_snapshot_accepts_operation_from_original_writer();
+    test_editor_snapshot_missing_chunk_does_not_mutate_state();
+    test_editor_snapshot_queues_sender_incremental_until_complete();
+    test_editor_snapshot_timeout_replays_incremental_and_requests_retry();
+    test_editor_snapshot_conflicting_duplicate_recovers_incremental();
+    test_sync_full_to_sends_begin_chunk_end();
     test_actor_create_carries_actor_guid();
     test_actor_create_unpack_preserves_wire_transform();
     test_actor_create_carries_dependency_paths();

@@ -17,6 +17,12 @@ namespace Corona::Network {
 
 namespace {
 
+uint64_t editor_now_ms() {
+    using namespace std::chrono;
+    return static_cast<uint64_t>(duration_cast<milliseconds>(
+        steady_clock::now().time_since_epoch()).count());
+}
+
 // ---- ModelTransform helpers ----
 std::string hash_mt(const ModelTransform& t, uint64_t entity_seq) {
     uint64_t h = entity_seq;
@@ -254,6 +260,19 @@ struct SyncEngine::Impl {
     LwwState lww_state;
     std::deque<EditorSyncOperation> pending_editor_operations;
 
+    struct IncomingEditorSnapshot {
+        uint32_t snapshot_id = 0;
+        uint16_t chunk_total = 0;
+        uint32_t operation_total = 0;
+        uint32_t received_operation_count = 0;
+        uint64_t last_activity_ms = 0;
+        std::vector<bool> received_chunks;
+        std::vector<std::vector<uint8_t>> raw_chunks;
+        std::vector<std::vector<EditorSyncOperation>> chunk_operations;
+        std::vector<EditorSyncOperation> queued_incremental;
+    };
+    std::unordered_map<std::string, IncomingEditorSnapshot> incoming_editor_snapshots;
+
     // Snapshot: key → hash of last-synced value
     std::unordered_map<std::string, std::string> last_synced;
     mutable std::mutex snapshot_mutex;
@@ -281,6 +300,20 @@ struct SyncEngine::Impl {
 
     // True while we are applying remote data — suppress outgoing re-broadcast
     bool syncing_from_remote = false;
+
+    void recover_incomplete_snapshot(
+        const std::string& sender_peer_id,
+        IncomingEditorSnapshot snapshot,
+        const std::function<LwwApplyResult(const EditorSyncOperation&)>& apply,
+        bool request_retry = true) {
+        for (const auto& operation : snapshot.queued_incremental) {
+            (void)apply(operation);
+        }
+        if (request_retry && on_targeted_outgoing) {
+            auto request = build_editor_snapshot_request();
+            on_targeted_outgoing(sender_peer_id, request);
+        }
+    }
 
     Impl(SharedDataHub& h) : hub(h), lww_state("uninitialized") {}
 
@@ -391,6 +424,8 @@ void SyncEngine::initialize(const std::string& local_peer_id) {
     impl_->local_peer_id = local_peer_id;
     impl_->lww_state.set_local_peer_id(local_peer_id);
     impl_->last_synced.clear();
+    impl_->pending_editor_operations.clear();
+    impl_->incoming_editor_snapshots.clear();
     impl_->seq = 0;
 }
 
@@ -512,8 +547,28 @@ void SyncEngine::retry_pending_operations() {
     }
 }
 
+void SyncEngine::maintain_snapshot_sessions(uint64_t now_ms) {
+    for (auto it = impl_->incoming_editor_snapshots.begin();
+         it != impl_->incoming_editor_snapshots.end();) {
+        if (now_ms - it->second.last_activity_ms < kEditorSnapshotTimeoutMs) {
+            ++it;
+            continue;
+        }
+        const auto sender_peer_id = it->first;
+        auto session = std::move(it->second);
+        it = impl_->incoming_editor_snapshots.erase(it);
+        impl_->recover_incomplete_snapshot(
+            sender_peer_id, std::move(session),
+            [this](const EditorSyncOperation& operation) {
+                return apply_editor_operation(operation);
+            });
+    }
+}
+
 void SyncEngine::shutdown() {
     impl_->last_synced.clear();
+    impl_->pending_editor_operations.clear();
+    impl_->incoming_editor_snapshots.clear();
 }
 
 // ============================================================================
@@ -523,6 +578,7 @@ void SyncEngine::shutdown() {
 void SyncEngine::poll_and_sync() {
     if (impl_->syncing_from_remote) return;
 
+    maintain_snapshot_sessions(editor_now_ms());
     retry_pending_operations();
 
     impl_->rebuild_entity_maps();
@@ -694,6 +750,10 @@ void SyncEngine::sync_full_to(const std::string& target_peer_id) {
             1, (operations.size() + kEditorSnapshotChunkOperations - 1) /
                    kEditorSnapshotChunkOperations));
         const auto snapshot_id = impl_->seq++;
+        auto begin_packet = build_editor_snapshot_begin(
+            snapshot_id, total, static_cast<uint32_t>(operations.size()));
+        if (begin_packet.empty()) return;
+        impl_->on_targeted_outgoing(target_peer_id, begin_packet);
         for (uint16_t index = 0; index < total; ++index) {
             std::vector<std::vector<uint8_t>> encoded;
             const auto begin = static_cast<size_t>(index) * kEditorSnapshotChunkOperations;
@@ -703,8 +763,11 @@ void SyncEngine::sync_full_to(const std::string& target_peer_id) {
                 if (!packet.empty()) encoded.push_back(std::move(packet));
             }
             auto chunk = build_editor_snapshot_chunk(snapshot_id, index, total, encoded);
-            if (!chunk.empty()) impl_->on_targeted_outgoing(target_peer_id, chunk);
+            if (chunk.empty()) return;
+            impl_->on_targeted_outgoing(target_peer_id, chunk);
         }
+        auto end_packet = build_editor_snapshot_end(snapshot_id);
+        if (!end_packet.empty()) impl_->on_targeted_outgoing(target_peer_id, end_packet);
         return;
     }
     emit_snapshot();
@@ -733,12 +796,55 @@ void SyncEngine::handle_incoming(const std::string& sender_peer_id,
     if (data[0] == static_cast<uint8_t>(MessageType::EDITOR_SYNC)) {
         auto operation = parse_editor_sync_operation(data, len);
         if (!operation || operation->version.writer_peer_id != sender_peer_id) return;
+        auto snapshot = impl_->incoming_editor_snapshots.find(sender_peer_id);
+        if (snapshot != impl_->incoming_editor_snapshots.end()) {
+            if (snapshot->second.queued_incremental.size() >=
+                kMaxEditorSyncOperations) return;
+            snapshot->second.queued_incremental.push_back(std::move(*operation));
+            snapshot->second.last_activity_ms = editor_now_ms();
+            return;
+        }
         (void)apply_editor_operation(*operation);
         return;
     }
     if (data[0] == static_cast<uint8_t>(MessageType::EDITOR_SNAPSHOT_REQUEST)) {
-        if (len != 2 || data[1] != kEditorSyncSchemaVersion || !impl_->on_full_sync_request) return;
+        if (len != 2 || data[1] != kEditorSnapshotSchemaVersion ||
+            !impl_->on_full_sync_request) return;
         impl_->on_full_sync_request(sender_peer_id);
+        return;
+    }
+    if (data[0] == static_cast<uint8_t>(MessageType::EDITOR_SNAPSHOT_BEGIN)) {
+        if (len != 12) return;
+        BufferReader r(data, len);
+        if (r.read_u8() != static_cast<uint8_t>(MessageType::EDITOR_SNAPSHOT_BEGIN) ||
+            r.read_u8() != kEditorSnapshotSchemaVersion) return;
+        Impl::IncomingEditorSnapshot snapshot;
+        snapshot.snapshot_id = r.read_u32();
+        snapshot.chunk_total = r.read_u16();
+        snapshot.operation_total = r.read_u32();
+        snapshot.last_activity_ms = editor_now_ms();
+        if (snapshot.chunk_total == 0 ||
+            snapshot.chunk_total > kMaxEditorSnapshotChunks ||
+            snapshot.operation_total > kMaxEditorSyncOperations) return;
+        auto existing = impl_->incoming_editor_snapshots.find(sender_peer_id);
+        if (existing != impl_->incoming_editor_snapshots.end()) {
+            if (existing->second.snapshot_id == snapshot.snapshot_id &&
+                existing->second.chunk_total == snapshot.chunk_total &&
+                existing->second.operation_total == snapshot.operation_total) {
+                return;
+            }
+            auto old_session = std::move(existing->second);
+            impl_->incoming_editor_snapshots.erase(existing);
+            impl_->recover_incomplete_snapshot(
+                sender_peer_id, std::move(old_session),
+                [this](const EditorSyncOperation& operation) {
+                    return apply_editor_operation(operation);
+                }, false);
+        }
+        snapshot.received_chunks.resize(snapshot.chunk_total, false);
+        snapshot.raw_chunks.resize(snapshot.chunk_total);
+        snapshot.chunk_operations.resize(snapshot.chunk_total);
+        impl_->incoming_editor_snapshots[sender_peer_id] = std::move(snapshot);
         return;
     }
     if (data[0] == static_cast<uint8_t>(MessageType::EDITOR_SNAPSHOT_CHUNK)) {
@@ -746,12 +852,16 @@ void SyncEngine::handle_incoming(const std::string& sender_peer_id,
         BufferReader r(data, len);
         if (!r.has_remaining(1 + 1 + 4 + 2 + 2 + 2) ||
             r.read_u8() != static_cast<uint8_t>(MessageType::EDITOR_SNAPSHOT_CHUNK) ||
-            r.read_u8() != kEditorSyncSchemaVersion) return;
-        (void)r.read_u32();
+            r.read_u8() != kEditorSnapshotSchemaVersion) return;
+        const auto snapshot_id = r.read_u32();
         const auto index = r.read_u16();
         const auto total = r.read_u16();
         const auto count = r.read_u16();
         if (total == 0 || index >= total || count > kEditorSnapshotChunkOperations) return;
+        auto snapshot = impl_->incoming_editor_snapshots.find(sender_peer_id);
+        if (snapshot == impl_->incoming_editor_snapshots.end() ||
+            snapshot->second.snapshot_id != snapshot_id ||
+            snapshot->second.chunk_total != total) return;
         std::vector<EditorSyncOperation> operations;
         operations.reserve(count);
         for (uint16_t i = 0; i < count; ++i) {
@@ -769,8 +879,68 @@ void SyncEngine::handle_incoming(const std::string& sender_peer_id,
             r.pos += operation_len;
         }
         if (r.pos != len) return;
-        for (const auto& operation : operations) {
-            (void)apply_editor_operation(operation);
+        auto& session = snapshot->second;
+        session.last_activity_ms = editor_now_ms();
+        const std::vector<uint8_t> raw(data, data + len);
+        if (session.received_chunks[index]) {
+            if (session.raw_chunks[index] != raw) {
+                auto failed_session = std::move(session);
+                impl_->incoming_editor_snapshots.erase(snapshot);
+                impl_->recover_incomplete_snapshot(
+                    sender_peer_id, std::move(failed_session),
+                    [this](const EditorSyncOperation& operation) {
+                        return apply_editor_operation(operation);
+                    });
+            }
+            return;
+        }
+        if (operations.size() >
+            session.operation_total - session.received_operation_count) {
+            auto failed_session = std::move(session);
+            impl_->incoming_editor_snapshots.erase(snapshot);
+            impl_->recover_incomplete_snapshot(
+                sender_peer_id, std::move(failed_session),
+                [this](const EditorSyncOperation& operation) {
+                    return apply_editor_operation(operation);
+                });
+            return;
+        }
+        session.received_chunks[index] = true;
+        session.received_operation_count += static_cast<uint32_t>(operations.size());
+        session.raw_chunks[index] = raw;
+        session.chunk_operations[index] = std::move(operations);
+        return;
+    }
+    if (data[0] == static_cast<uint8_t>(MessageType::EDITOR_SNAPSHOT_END)) {
+        if (len != 6) return;
+        BufferReader r(data, len);
+        if (r.read_u8() != static_cast<uint8_t>(MessageType::EDITOR_SNAPSHOT_END) ||
+            r.read_u8() != kEditorSnapshotSchemaVersion) return;
+        const auto snapshot_id = r.read_u32();
+        auto snapshot = impl_->incoming_editor_snapshots.find(sender_peer_id);
+        if (snapshot == impl_->incoming_editor_snapshots.end() ||
+            snapshot->second.snapshot_id != snapshot_id) return;
+        auto session = std::move(snapshot->second);
+        impl_->incoming_editor_snapshots.erase(snapshot);
+        const bool complete =
+            std::find(session.received_chunks.begin(), session.received_chunks.end(),
+                      false) == session.received_chunks.end();
+        if (complete &&
+            session.received_operation_count == session.operation_total) {
+            for (const auto& operations : session.chunk_operations) {
+                for (const auto& operation : operations) {
+                    (void)apply_editor_operation(operation);
+                }
+            }
+            for (const auto& operation : session.queued_incremental) {
+                (void)apply_editor_operation(operation);
+            }
+        } else {
+            impl_->recover_incomplete_snapshot(
+                sender_peer_id, std::move(session),
+                [this](const EditorSyncOperation& operation) {
+                    return apply_editor_operation(operation);
+                });
         }
         return;
     }

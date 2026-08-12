@@ -602,7 +602,9 @@ bool NetworkSystem::initialize(Kernel::ISystemContext* ctx) {
                 if (mt == MessageType::SYNC_DIRTY || mt == MessageType::SYNC_FULL ||
                     mt == MessageType::EDITOR_SYNC ||
                     mt == MessageType::EDITOR_SNAPSHOT_REQUEST ||
+                    mt == MessageType::EDITOR_SNAPSHOT_BEGIN ||
                     mt == MessageType::EDITOR_SNAPSHOT_CHUNK ||
+                    mt == MessageType::EDITOR_SNAPSHOT_END ||
                     mt == MessageType::HEARTBEAT) {
                     on_data_received(peer_id, data, len);
                 } else {

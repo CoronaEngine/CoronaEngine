@@ -53,8 +53,12 @@ constexpr uint16_t kMaxEditorSyncStringBytes = 1024;
 constexpr uint32_t kMaxEditorSyncValueBytes = 1024 * 1024;
 constexpr uint32_t kMaxEditorSyncOperations = 4096;
 constexpr uint8_t kEditorSyncSchemaVersion = 1;
+constexpr uint8_t kEditorSnapshotSchemaVersion = 2;
 constexpr uint32_t kEditorSnapshotChunkOperations = 256;
 constexpr uint32_t kMaxEditorSnapshotChunkBytes = 1024 * 1024;
+constexpr uint16_t kMaxEditorSnapshotChunks =
+    static_cast<uint16_t>(kMaxEditorSyncOperations);
+constexpr uint64_t kEditorSnapshotTimeoutMs = 5000;
 
 // ============================================================================
 // Message types (single byte prefix on every packet)
@@ -67,6 +71,8 @@ enum class MessageType : uint8_t {
     EDITOR_SYNC   = 0x05,  // Versioned collaborative editor state operation
     EDITOR_SNAPSHOT_REQUEST = 0x06, // Request current versioned editor state
     EDITOR_SNAPSHOT_CHUNK = 0x07, // Chunked versioned editor state
+    EDITOR_SNAPSHOT_BEGIN = 0x08, // Begin bounded editor snapshot session
+    EDITOR_SNAPSHOT_END = 0x09, // End editor snapshot session
     ACTOR_CREATE  = 0x10,  // Actor creation event (scene_name + model_path + transform + optics)
     FILE_REQUEST  = 0x11,  // Request model file from peer
     FILE_CHUNK    = 0x12,  // File chunk transfer
@@ -386,7 +392,28 @@ inline std::vector<uint8_t> build_heartbeat(uint32_t seq) {
 
 inline std::vector<uint8_t> build_editor_snapshot_request() {
     return {static_cast<uint8_t>(MessageType::EDITOR_SNAPSHOT_REQUEST),
-            kEditorSyncSchemaVersion};
+            kEditorSnapshotSchemaVersion};
+}
+
+inline std::vector<uint8_t> build_editor_snapshot_begin(
+    uint32_t snapshot_id, uint16_t chunk_total, uint32_t operation_total) {
+    if (chunk_total == 0 || chunk_total > kMaxEditorSnapshotChunks ||
+        operation_total > kMaxEditorSyncOperations) return {};
+    std::vector<uint8_t> buf;
+    write_u8(buf, static_cast<uint8_t>(MessageType::EDITOR_SNAPSHOT_BEGIN));
+    write_u8(buf, kEditorSnapshotSchemaVersion);
+    write_u32(buf, snapshot_id);
+    write_u16(buf, chunk_total);
+    write_u32(buf, operation_total);
+    return buf;
+}
+
+inline std::vector<uint8_t> build_editor_snapshot_end(uint32_t snapshot_id) {
+    std::vector<uint8_t> buf;
+    write_u8(buf, static_cast<uint8_t>(MessageType::EDITOR_SNAPSHOT_END));
+    write_u8(buf, kEditorSnapshotSchemaVersion);
+    write_u32(buf, snapshot_id);
+    return buf;
 }
 
 inline std::vector<uint8_t> build_editor_snapshot_chunk(
@@ -396,7 +423,7 @@ inline std::vector<uint8_t> build_editor_snapshot_chunk(
         operations.size() > kEditorSnapshotChunkOperations) return {};
     std::vector<uint8_t> buf;
     write_u8(buf, static_cast<uint8_t>(MessageType::EDITOR_SNAPSHOT_CHUNK));
-    write_u8(buf, kEditorSyncSchemaVersion);
+    write_u8(buf, kEditorSnapshotSchemaVersion);
     write_u32(buf, snapshot_id);
     write_u16(buf, chunk_index);
     write_u16(buf, chunk_total);
