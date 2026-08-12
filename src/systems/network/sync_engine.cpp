@@ -440,6 +440,7 @@ EditorSyncOperation SyncEngine::make_local_upsert(
 
 bool SyncEngine::apply_operation_to_storage(const EditorSyncOperation& operation) {
     if (operation.kind == EditorSyncOperationKind::Delete) return true;
+    if (operation.field_name == "actor.create") return true;
 
     impl_->rebuild_entity_maps();
     auto& hub = impl_->hub;
