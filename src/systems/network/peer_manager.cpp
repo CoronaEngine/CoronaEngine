@@ -2,6 +2,7 @@
 
 #include <enet/enet.h>
 #include <corona/kernel/core/i_logger.h>
+#include <corona/systems/network/peer_liveness.h>
 
 #include <algorithm>
 #include <chrono>
@@ -296,26 +297,6 @@ void PeerManager::poll() {
     if (!impl_->host) return;
 
     const auto now = peer_now_ms();
-    std::vector<_ENetPeer*> timed_out;
-    {
-        std::lock_guard lock(impl_->peer_mutex);
-        for (auto& info : impl_->peer_list) {
-            if (!info.connected || !info.hello_done || !info.peer) continue;
-            if (info.last_activity_ms == 0) info.last_activity_ms = now;
-            if (now - info.last_activity_ms >= static_cast<uint64_t>(kPeerTimeoutMs)) {
-                timed_out.push_back(info.peer);
-                continue;
-            }
-            if (now - info.last_activity_ms >= static_cast<uint64_t>(kHeartbeatIntervalMs)) {
-                auto heartbeat = build_heartbeat(next_seq());
-                send_to(info.peer, kChannelUnreliable, heartbeat.data(), heartbeat.size(), false);
-                info.last_activity_ms = now;
-            }
-        }
-    }
-    for (auto* peer : timed_out) {
-        if (peer) enet_peer_disconnect(peer, 0);
-    }
 
     ENetEvent event;
     while (enet_host_service(impl_->host, &event, 0) > 0) {
@@ -339,12 +320,12 @@ void PeerManager::poll() {
                     pinfo.name = remote_id;
                     pinfo.peer = event.peer;
                     pinfo.connected = true;
-                    pinfo.last_activity_ms = now;
+                    pinfo.last_receive_ms = now;
                     impl_->peer_list.push_back(pinfo);
                 } else {
                     info->connected = true;
                     info->peer = event.peer;
-                    info->last_activity_ms = now;
+                    info->last_receive_ms = now;
                 }
             }
 
@@ -388,7 +369,7 @@ void PeerManager::poll() {
                     std::lock_guard lock(impl_->peer_mutex);
                     auto* info = impl_->find_peer_unsafe(event.peer);
                     if (info) {
-                        info->last_activity_ms = now;
+                        info->last_receive_ms = now;
                         peer_id = info->id;
                         ready = info->hello_done;
                     }
@@ -411,6 +392,35 @@ void PeerManager::poll() {
         default:
             break;
         }
+    }
+
+    // Process queued receive events before checking liveness so a packet
+    // arriving on the timeout boundary refreshes last_receive_ms first.
+    const auto maintenance_now = peer_now_ms();
+    std::vector<_ENetPeer*> timed_out;
+    {
+        std::lock_guard lock(impl_->peer_mutex);
+        for (auto& info : impl_->peer_list) {
+            if (!info.connected || !info.hello_done || !info.peer) continue;
+            if (info.last_receive_ms == 0) info.last_receive_ms = maintenance_now;
+            const auto action = peer_liveness_action(
+                {info.last_receive_ms, info.last_heartbeat_sent_ms, info.disconnecting},
+                maintenance_now);
+            if (action == PeerLivenessAction::Disconnect) {
+                info.disconnecting = true;
+                timed_out.push_back(info.peer);
+                continue;
+            }
+            if (action == PeerLivenessAction::SendHeartbeat) {
+                auto heartbeat = build_heartbeat(next_seq());
+                send_to(info.peer, kChannelUnreliable,
+                        heartbeat.data(), heartbeat.size(), false);
+                info.last_heartbeat_sent_ms = maintenance_now;
+            }
+        }
+    }
+    for (auto* peer : timed_out) {
+        if (peer) enet_peer_disconnect(peer, 0);
     }
 }
 
@@ -486,7 +496,7 @@ void PeerManager::handle_hello(ENetPeer* peer, const uint8_t* data, size_t len) 
             self->id = stable_id;       // rekey lookup key to the stable id
             self->name = remote_name;
             self->hello_done = true;
-            self->last_activity_ms = peer_now_ms();
+            self->last_receive_ms = peer_now_ms();
             notify_info = *self;
             should_notify = true;
         }

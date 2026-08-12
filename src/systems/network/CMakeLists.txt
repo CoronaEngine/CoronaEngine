@@ -25,6 +25,17 @@ if(WIN32)
 endif()
 
 if(BUILD_CORONA_TESTING OR BUILD_TESTING)
+    add_executable(corona_peer_liveness_tests
+        tests/test_peer_liveness.cpp
+    )
+
+    target_include_directories(corona_peer_liveness_tests
+        PRIVATE
+            ${PROJECT_SOURCE_DIR}/include
+    )
+
+    add_test(NAME PeerLivenessTests COMMAND corona_peer_liveness_tests)
+
     add_executable(corona_network_protocol_tests
         tests/test_network_protocol.cpp
         ${PROJECT_SOURCE_DIR}/src/shared_data_hub.cpp
