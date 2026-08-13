@@ -1,6 +1,6 @@
 # Python 开发工作流
 
-CoronaEngine 的唯一开发入口是 `tools/dev.py`。开发工具环境由 Conda Forge 中的 Conda 环境管理；开发机只需要预装 Miniconda / Conda、CMake、Ninja 和 Visual Studio C++ 工具链，不需要单独安装 Python 或 Conan。
+CoronaEngine 的唯一开发入口是 `tools/dev.py`。开发工具环境由 Conda Forge 中的 Conda 环境管理；开发机只需要预装 Miniforge / Miniconda / Conda、CMake、Ninja 和 Visual Studio C++ 工具链，不需要单独安装 Python 或 Conan。
 
 首次使用时创建环境：
 

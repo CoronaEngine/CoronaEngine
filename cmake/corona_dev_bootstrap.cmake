@@ -44,6 +44,8 @@ function(corona_dev_bootstrap)
             PATHS
                 "$ENV{CONDA_PREFIX}/Scripts"
                 "$ENV{CONDA_PREFIX}/condabin"
+                "$ENV{USERPROFILE}/miniforge3/Scripts"
+                "$ENV{USERPROFILE}/miniforge3/condabin"
                 "$ENV{USERPROFILE}/miniconda3/Scripts"
                 "$ENV{USERPROFILE}/miniconda3/condabin"
                 "$ENV{USERPROFILE}/anaconda3/Scripts"
