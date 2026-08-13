@@ -111,6 +111,20 @@ void test_network_channels_partition_control_transform_bulk_and_realtime() {
                 "versioned actor transform uses transform channel");
 }
 
+void test_bulk_poll_budget_limits_packets_and_bytes() {
+    Corona::Network::BulkPollBudget budget;
+    for (size_t i = 0; i < Corona::Network::kBulkPacketsPerPollBudget; ++i) {
+        expect_true(budget.try_consume(1), "bulk budget accepts packet under count limit");
+    }
+    expect_true(!budget.try_consume(1), "bulk budget rejects packet over count limit");
+
+    Corona::Network::BulkPollBudget bytes;
+    expect_true(bytes.try_consume(Corona::Network::kBulkBytesPerPollBudget / 2),
+                "bulk budget accepts first byte batch");
+    expect_true(!bytes.try_consume(Corona::Network::kBulkBytesPerPollBudget / 2 + 1),
+                "bulk budget rejects byte batch over limit");
+}
+
 void test_lww_state_merges_by_version_and_field() {
     Corona::Network::LwwState state("peer-a");
     Corona::Network::LwwVersion first{1, "peer-a"};
@@ -2306,6 +2320,7 @@ int main() {
     test_editor_sync_rejects_truncated_and_oversized_packets();
     test_editor_sync_has_distinct_message_type();
     test_network_channels_partition_control_transform_bulk_and_realtime();
+    test_bulk_poll_budget_limits_packets_and_bytes();
     test_lww_state_merges_by_version_and_field();
     test_lww_state_tombstone_blocks_old_updates();
     test_lww_state_advances_lamport_counter();

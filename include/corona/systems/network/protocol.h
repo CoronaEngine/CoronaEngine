@@ -54,6 +54,21 @@ constexpr int kChannelUnreliable = kChannelRealtime; // Backward-compatible alia
 constexpr size_t kBulkPacketsPerPollBudget = 8;
 constexpr size_t kBulkBytesPerPollBudget = 256 * 1024;
 
+struct BulkPollBudget {
+    size_t packets = 0;
+    size_t bytes = 0;
+
+    bool try_consume(size_t packet_bytes) {
+        if (packets >= kBulkPacketsPerPollBudget) return false;
+        if (packets > 0 && bytes + packet_bytes > kBulkBytesPerPollBudget) {
+            return false;
+        }
+        ++packets;
+        bytes += packet_bytes;
+        return true;
+    }
+};
+
 // Bounds for editor-state packets. Values are deliberately conservative so a
 // malformed peer cannot force unbounded allocations during decode.
 constexpr uint16_t kMaxEditorSyncStringBytes = 1024;

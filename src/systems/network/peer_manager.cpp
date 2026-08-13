@@ -457,6 +457,16 @@ void PeerManager::poll() {
                             [&](const PeerInfo& p) { return p.peer == event.peer; }),
                         impl_->peer_list.end());
                 }
+                std::erase_if(impl_->bulk_queue,
+                              [&](const Impl::BulkPacket& packet) {
+                                  return !packet.broadcast &&
+                                         packet.peer == event.peer;
+                              });
+                std::erase_if(impl_->transform_queue,
+                              [&](const Impl::TransformPacket& packet) {
+                                  return !packet.broadcast &&
+                                         packet.peer == event.peer;
+                              });
             }
             if (found) handle_disconnect(disconnected);
             break;
@@ -530,15 +540,10 @@ void PeerManager::poll() {
         if (peer) enet_peer_disconnect(peer, 0);
     }
 
-    size_t bulk_packets = 0;
-    size_t bulk_bytes = 0;
+    BulkPollBudget bulk_budget;
     while (!impl_->bulk_queue.empty() &&
-           bulk_packets < kBulkPacketsPerPollBudget) {
+           bulk_budget.try_consume(impl_->bulk_queue.front().data.size())) {
         auto packet = std::move(impl_->bulk_queue.front());
-        if (bulk_bytes + packet.data.size() > kBulkBytesPerPollBudget &&
-            bulk_packets > 0) {
-            break;
-        }
         impl_->bulk_queue.pop_front();
         if (packet.broadcast) {
             ENetPacket* enet_packet = enet_packet_create(
@@ -553,8 +558,6 @@ void PeerManager::poll() {
                                   ENET_PACKET_FLAG_UNSEQUENCED);
             enet_peer_send(packet.peer, kChannelBulk, enet_packet);
         }
-        bulk_bytes += packet.data.size();
-        ++bulk_packets;
     }
 
     auto transform_queue = std::move(impl_->transform_queue);
