@@ -73,6 +73,44 @@ void test_editor_sync_has_distinct_message_type() {
                 "editor sync message type is distinct from legacy dirty sync");
 }
 
+void test_network_channels_partition_control_transform_bulk_and_realtime() {
+    expect_true(Corona::Network::channel_for_message_type(
+                    Corona::Network::MessageType::EDITOR_SYNC) ==
+                    Corona::Network::kChannelReliable,
+                "editor sync uses control channel");
+    expect_true(Corona::Network::channel_for_message_type(
+                    Corona::Network::MessageType::ACTOR_TRANSFORM_UPDATE) ==
+                    Corona::Network::kChannelTransform,
+                "actor transform uses transform channel");
+    expect_true(Corona::Network::channel_for_message_type(
+                    Corona::Network::MessageType::EDITOR_SNAPSHOT_CHUNK) ==
+                    Corona::Network::kChannelBulk,
+                "snapshot chunks use bulk channel");
+    expect_true(Corona::Network::channel_for_message_type(
+                    Corona::Network::MessageType::FILE_CHUNK) ==
+                    Corona::Network::kChannelBulk,
+                "file chunks use bulk channel");
+    expect_true(Corona::Network::channel_for_message_type(
+                    Corona::Network::MessageType::HEARTBEAT) ==
+                    Corona::Network::kChannelRealtime,
+                "heartbeat uses realtime channel");
+    expect_true(Corona::Network::kChannelBulk != Corona::Network::kChannelReliable,
+                "bulk channel is isolated from control channel");
+
+    Corona::Network::EditorSyncOperation transform;
+    transform.kind = Corona::Network::EditorSyncOperationKind::Upsert;
+    transform.actor_guid = "actor-transform";
+    transform.field_name = "actor.transform";
+    transform.value = {1, 2, 3};
+    transform.version = {1, "peer-a"};
+    const auto transform_packet =
+        Corona::Network::build_editor_sync_operation(transform);
+    expect_true(Corona::Network::channel_for_packet(
+                    transform_packet.data(), transform_packet.size()) ==
+                    Corona::Network::kChannelTransform,
+                "versioned actor transform uses transform channel");
+}
+
 void test_lww_state_merges_by_version_and_field() {
     Corona::Network::LwwState state("peer-a");
     Corona::Network::LwwVersion first{1, "peer-a"};
@@ -2267,6 +2305,7 @@ int main() {
     test_editor_sync_upsert_round_trips_with_lww_version();
     test_editor_sync_rejects_truncated_and_oversized_packets();
     test_editor_sync_has_distinct_message_type();
+    test_network_channels_partition_control_transform_bulk_and_realtime();
     test_lww_state_merges_by_version_and_field();
     test_lww_state_tombstone_blocks_old_updates();
     test_lww_state_advances_lamport_counter();

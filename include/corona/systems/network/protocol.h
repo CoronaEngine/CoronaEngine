@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <cstring>
+#include <cstddef>
 #include <corona/systems/network/lanchat_state.h>
 #include <string>
 #include <optional>
@@ -44,8 +45,14 @@ constexpr int kSyncIntervalMs = 16;
 // ============================================================================
 // ENet channel allocation
 // ============================================================================
-constexpr int kChannelReliable = 0;    // SYNC_DIRTY, SYNC_FULL
-constexpr int kChannelUnreliable = 1;  // HEARTBEAT
+constexpr int kChannelReliable = 0;    // Control and editor operations
+constexpr int kChannelTransform = 1;   // Coalesced reliable actor transforms
+constexpr int kChannelBulk = 2;        // Snapshots and file/history transfer
+constexpr int kChannelRealtime = 3;    // Unreliable keep-alive traffic
+constexpr int kChannelUnreliable = kChannelRealtime; // Backward-compatible alias
+
+constexpr size_t kBulkPacketsPerPollBudget = 8;
+constexpr size_t kBulkBytesPerPollBudget = 256 * 1024;
 
 // Bounds for editor-state packets. Values are deliberately conservative so a
 // malformed peer cannot force unbounded allocations during decode.
@@ -96,6 +103,23 @@ enum class MessageType : uint8_t {
     CHAT_AGENT_REPLY_V2 = 0x2B, // LANChat structured agent/system reply
     CHAT_HISTORY_SNAPSHOT_V2 = 0x2C, // LANChat structured history snapshot
 };
+
+inline int channel_for_message_type(MessageType type) {
+    switch (type) {
+    case MessageType::EDITOR_SNAPSHOT_CHUNK:
+    case MessageType::FILE_REQUEST:
+    case MessageType::FILE_CHUNK:
+    case MessageType::CHAT_HISTORY_SNAPSHOT:
+    case MessageType::CHAT_HISTORY_SNAPSHOT_V2:
+        return kChannelBulk;
+    case MessageType::ACTOR_TRANSFORM_UPDATE:
+        return kChannelTransform;
+    case MessageType::HEARTBEAT:
+        return kChannelRealtime;
+    default:
+        return kChannelReliable;
+    }
+}
 
 // ============================================================================
 // Storage ID — maps to a SharedDataHub Storage type
@@ -315,6 +339,19 @@ inline std::optional<EditorSyncOperation> parse_editor_sync_operation(
     op.version.writer_peer_id = r.read_string(writer_len);
     if (r.pos != r.size || !valid_editor_sync_operation(op)) return std::nullopt;
     return op;
+}
+
+inline int channel_for_packet(const uint8_t* data, size_t len,
+                              int fallback = kChannelReliable) {
+    if (!data || len == 0) return fallback;
+    const auto type = static_cast<MessageType>(data[0]);
+    if (type == MessageType::EDITOR_SYNC) {
+        const auto operation = parse_editor_sync_operation(data, len);
+        if (operation && operation->field_name == "actor.transform") {
+            return kChannelTransform;
+        }
+    }
+    return channel_for_message_type(type);
 }
 
 // ============================================================================

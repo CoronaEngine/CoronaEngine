@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <deque>
 #include <mutex>
 
 namespace Corona::Network {
@@ -20,6 +21,20 @@ uint64_t peer_now_ms() {
 }
 
 struct PeerManager::Impl {
+    struct BulkPacket {
+        _ENetPeer* peer = nullptr;
+        bool broadcast = false;
+        std::vector<uint8_t> data;
+        bool reliable = true;
+    };
+    struct TransformPacket {
+        _ENetPeer* peer = nullptr;
+        bool broadcast = false;
+        std::string actor_guid;
+        std::vector<uint8_t> data;
+        bool reliable = true;
+    };
+
     ENetHost* host = nullptr;
     bool enet_initialized = false;
     std::string local_id;
@@ -29,6 +44,8 @@ struct PeerManager::Impl {
     // Peer tracking
     std::vector<PeerInfo> peer_list;
     mutable std::mutex peer_mutex;
+    std::deque<BulkPacket> bulk_queue;
+    std::vector<TransformPacket> transform_queue;
 
     // Sequence counter
     std::atomic<uint32_t> sequence{0};
@@ -61,6 +78,25 @@ struct PeerManager::Impl {
             if (p.hello_done && p.stable_id == sid) return &p;
         }
         return nullptr;
+    }
+
+    static int route_channel(const void* data, size_t len, int requested) {
+        if (!data || len == 0) return requested;
+        return channel_for_packet(static_cast<const uint8_t*>(data), len,
+                                  requested);
+    }
+
+    static std::string transform_actor_guid(const void* data, size_t len) {
+        if (!data || len == 0) return {};
+        const auto* bytes = static_cast<const uint8_t*>(data);
+        auto type = static_cast<MessageType>(bytes[0]);
+        if (type == MessageType::EDITOR_SYNC) {
+            auto operation = parse_editor_sync_operation(bytes, len);
+            if (operation && operation->field_name == "actor.transform") {
+                return operation->actor_guid;
+            }
+        }
+        return {};
     }
 };
 
@@ -102,7 +138,7 @@ bool PeerManager::start(uint16_t port, const std::string& instance_name) {
     impl_->host = enet_host_create(
         &addr,      // listen address
         64,         // max peers
-        2,          // channel count
+        4,          // channel count: control, transform, bulk, realtime
         0,          // incoming bandwidth (unlimited)
         0           // outgoing bandwidth (unlimited)
     );
@@ -117,6 +153,8 @@ bool PeerManager::start(uint16_t port, const std::string& instance_name) {
 
 void PeerManager::stop() {
     if (!impl_->host) {
+        impl_->bulk_queue.clear();
+        impl_->transform_queue.clear();
         // Even with no host, release ENet if we initialized it.
         if (impl_->enet_initialized) {
             enet_deinitialize();
@@ -144,6 +182,8 @@ void PeerManager::stop() {
         std::lock_guard lock(impl_->peer_mutex);
         impl_->peer_list.clear();
     }
+    impl_->bulk_queue.clear();
+    impl_->transform_queue.clear();
 
     // Release ENet (and its WinSock refcount) now that the host is gone.
     if (impl_->enet_initialized) {
@@ -197,7 +237,7 @@ void PeerManager::connect_to_peer(const std::string& ip, uint16_t port,
     enet_address_set_host(&addr, ip.c_str());
     addr.port = port;
 
-    ENetPeer* peer = enet_host_connect(impl_->host, &addr, 2, 0);
+    ENetPeer* peer = enet_host_connect(impl_->host, &addr, 4, 0);
     if (!peer) {
         CFW_LOG_ERROR("PeerManager: Failed to initiate connection to {}", remote_id);
         return;
@@ -265,6 +305,36 @@ void PeerManager::broadcast(int channel, const void* data, size_t len,
                             bool reliable) {
     if (!impl_->host || len == 0) return;
 
+    channel = Impl::route_channel(data, len, channel);
+    if (channel == kChannelTransform) {
+        const auto actor_guid = Impl::transform_actor_guid(data, len);
+        if (!actor_guid.empty()) {
+            std::erase_if(impl_->transform_queue,
+                          [&](const Impl::TransformPacket& packet) {
+                              return packet.broadcast &&
+                                     packet.actor_guid == actor_guid;
+                          });
+            impl_->transform_queue.push_back({nullptr, true, actor_guid,
+                                              std::vector<uint8_t>(
+                                                  static_cast<const uint8_t*>(data),
+                                                  static_cast<const uint8_t*>(data) + len),
+                                              reliable});
+            return;
+        }
+    }
+    if (channel == kChannelBulk) {
+        if (impl_->bulk_queue.size() >= kMaxEditorSyncOperations) {
+            CFW_LOG_WARNING("PeerManager: Bulk queue full; dropping broadcast packet ({} bytes)", len);
+            return;
+        }
+        impl_->bulk_queue.push_back({nullptr, true,
+                                     std::vector<uint8_t>(
+                                         static_cast<const uint8_t*>(data),
+                                         static_cast<const uint8_t*>(data) + len),
+                                     reliable});
+        return;
+    }
+
     ENetPacket* pkt = enet_packet_create(
         data, len,
         reliable ? ENET_PACKET_FLAG_RELIABLE : ENET_PACKET_FLAG_UNSEQUENCED);
@@ -276,6 +346,36 @@ void PeerManager::broadcast(int channel, const void* data, size_t len,
 void PeerManager::send_to(_ENetPeer* peer, int channel,
                           const void* data, size_t len, bool reliable) {
     if (!peer || len == 0) return;
+
+    channel = Impl::route_channel(data, len, channel);
+    if (channel == kChannelTransform) {
+        const auto actor_guid = Impl::transform_actor_guid(data, len);
+        if (!actor_guid.empty()) {
+            std::erase_if(impl_->transform_queue,
+                          [&](const Impl::TransformPacket& packet) {
+                              return !packet.broadcast && packet.peer == peer &&
+                                     packet.actor_guid == actor_guid;
+                          });
+            impl_->transform_queue.push_back({peer, false, actor_guid,
+                                              std::vector<uint8_t>(
+                                                  static_cast<const uint8_t*>(data),
+                                                  static_cast<const uint8_t*>(data) + len),
+                                              reliable});
+            return;
+        }
+    }
+    if (channel == kChannelBulk) {
+        if (impl_->bulk_queue.size() >= kMaxEditorSyncOperations) {
+            CFW_LOG_WARNING("PeerManager: Bulk queue full; dropping targeted packet ({} bytes)", len);
+            return;
+        }
+        impl_->bulk_queue.push_back({peer, false,
+                                     std::vector<uint8_t>(
+                                         static_cast<const uint8_t*>(data),
+                                         static_cast<const uint8_t*>(data) + len),
+                                     reliable});
+        return;
+    }
 
     ENetPacket* pkt = enet_packet_create(
         data, len,
@@ -428,6 +528,49 @@ void PeerManager::poll() {
     }
     for (auto* peer : timed_out) {
         if (peer) enet_peer_disconnect(peer, 0);
+    }
+
+    size_t bulk_packets = 0;
+    size_t bulk_bytes = 0;
+    while (!impl_->bulk_queue.empty() &&
+           bulk_packets < kBulkPacketsPerPollBudget) {
+        auto packet = std::move(impl_->bulk_queue.front());
+        if (bulk_bytes + packet.data.size() > kBulkBytesPerPollBudget &&
+            bulk_packets > 0) {
+            break;
+        }
+        impl_->bulk_queue.pop_front();
+        if (packet.broadcast) {
+            ENetPacket* enet_packet = enet_packet_create(
+                packet.data.data(), packet.data.size(),
+                packet.reliable ? ENET_PACKET_FLAG_RELIABLE :
+                                  ENET_PACKET_FLAG_UNSEQUENCED);
+            enet_host_broadcast(impl_->host, kChannelBulk, enet_packet);
+        } else if (packet.peer) {
+            ENetPacket* enet_packet = enet_packet_create(
+                packet.data.data(), packet.data.size(),
+                packet.reliable ? ENET_PACKET_FLAG_RELIABLE :
+                                  ENET_PACKET_FLAG_UNSEQUENCED);
+            enet_peer_send(packet.peer, kChannelBulk, enet_packet);
+        }
+        bulk_bytes += packet.data.size();
+        ++bulk_packets;
+    }
+
+    auto transform_queue = std::move(impl_->transform_queue);
+    impl_->transform_queue.clear();
+    for (auto& packet : transform_queue) {
+        ENetPacket* enet_packet = enet_packet_create(
+            packet.data.data(), packet.data.size(),
+            packet.reliable ? ENET_PACKET_FLAG_RELIABLE :
+                              ENET_PACKET_FLAG_UNSEQUENCED);
+        if (packet.broadcast) {
+            enet_host_broadcast(impl_->host, kChannelTransform, enet_packet);
+        } else if (packet.peer) {
+            enet_peer_send(packet.peer, kChannelTransform, enet_packet);
+        } else {
+            enet_packet_destroy(enet_packet);
+        }
     }
 }
 

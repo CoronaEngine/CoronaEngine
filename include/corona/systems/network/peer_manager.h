@@ -44,7 +44,7 @@ public:
     /// Called when a peer disconnects (timeout or explicit leave).
     using OnPeerDisconnected = std::function<void(const PeerInfo&)>;
 
-    /// Called when a sync/data message arrives on the reliable channel.
+    /// Called when a sync/data message arrives on any ENet channel.
     using OnDataReceived = std::function<void(const std::string& peer_id,
                                               const uint8_t* data, size_t len)>;
 
