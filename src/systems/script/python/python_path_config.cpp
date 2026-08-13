@@ -3,7 +3,6 @@
 //
 #include <algorithm>
 #include <filesystem>
-#include <regex>
 #include <string>
 #include <vector>
 
@@ -13,20 +12,19 @@
 
 namespace Corona::Script::Python::PathCfg {
 
-static auto normalize(std::string s) -> std::string {
-    std::ranges::replace(s, '\\', '/');
-    return s;
-}
+namespace {
 
-static auto executable_dir() -> std::filesystem::path {
+std::filesystem::path resolve_executable_dir() {
 #ifdef _WIN32
     std::vector<wchar_t> buffer(MAX_PATH);
-    DWORD length = 0;
     while (true) {
-        length = GetModuleFileNameW(nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
+        const DWORD length = GetModuleFileNameW(
+            nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
         if (length == 0) {
             break;
         }
+        // On Windows, an exact-size result means the buffer may have been too
+        // small. Grow it and retry rather than returning a truncated path.
         if (length < buffer.size() - 1) {
             return std::filesystem::path(std::wstring(buffer.data(), length)).parent_path();
         }
@@ -36,50 +34,61 @@ static auto executable_dir() -> std::filesystem::path {
     return std::filesystem::current_path();
 }
 
+std::string normalize(const std::filesystem::path& path) {
+    auto value = path.generic_string();
+    std::ranges::replace(value, '\\', '/');
+    return value;
+}
+
+}  // namespace
+
+const std::filesystem::path& executable_dir() {
+    static const auto path = resolve_executable_dir();
+    return path;
+}
+
+const std::filesystem::path& engine_root_path() {
+    // The packaged runtime root is the directory containing corona_engine.exe.
+    return executable_dir();
+}
+
 auto engine_root() -> const std::string& {
-    static std::string root = [] {
-        std::string resultPath;
-        std::string runtimePath = std::filesystem::current_path().string();
-        std::regex pattern(R"((.*)CoronaEngine\b)");
-        std::smatch matches;
-        if (std::regex_search(runtimePath, matches, pattern)) {
-            if (matches.size() > 1) {
-                resultPath = matches[1].str() + "CoronaEngine";
-            } else {
-                throw std::runtime_error("Failed to resolve source path.");
-            }
-        }
-        return normalize(resultPath);
-    }();
+    static const std::string root = normalize(engine_root_path());
     return root;
 }
 
 auto editor_backend_rel() -> const std::string& {
-    static const std::string rel = "editor";
+    static const std::string rel = "CabbageEditor";
     return rel;
 }
 
 auto editor_backend_abs() -> const std::string& {
-    static const std::string abs = normalize(engine_root() + "/" + editor_backend_rel());
+    static const std::string abs = normalize(engine_root_path() / editor_backend_rel());
     return abs;
 }
 
 auto runtime_backend_abs() -> std::string {
-    const auto cwd_runtime = std::filesystem::current_path() / "CabbageEditor";
-    if (std::filesystem::exists(cwd_runtime / "main.py")) {
-        return normalize(cwd_runtime.string());
-    }
+    return editor_backend_abs();
+}
 
-    const auto exe_runtime = executable_dir() / "CabbageEditor";
-    if (std::filesystem::exists(exe_runtime / "main.py")) {
-        return normalize(exe_runtime.string());
-    }
+auto python_home_dir() -> std::string {
+    return normalize(engine_root_path() / "python-runtime");
+}
 
-    return normalize(exe_runtime.string());
+auto python_stdlib_zip() -> std::string {
+    return normalize(engine_root_path() / "python313.zip");
+}
+
+auto python_dll_dir() -> std::string {
+    return normalize(engine_root_path() / "python-runtime" / "DLLs");
+}
+
+auto python_lib_dir() -> std::string {
+    return normalize(engine_root_path() / "python-runtime" / "Lib");
 }
 
 auto site_packages_dir() -> std::string {
-    return normalize(std::string(CORONA_PYTHON_MODULE_LIB_DIR) + "/site-packages");
+    return normalize(engine_root_path() / "python-runtime" / "Lib" / "site-packages");
 }
 
 }  // namespace Corona::Script::Python::PathCfg

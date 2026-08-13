@@ -11,12 +11,15 @@
 #include <nlohmann/json.hpp>
 #include <windows.h>
 
+#include <array>
 #include <iostream>
 #include <sstream>
 #include <ranges>
 #include <regex>
 #include <set>
+#include <filesystem>
 #include <unordered_map>
+#include <vector>
 
 
 extern "C" PyObject* PyInit_CoronaEngine();
@@ -195,32 +198,51 @@ bool PythonAPI::initializeInterpreterLocked() {
         return false;
     };
 
-    if (!check_status(PyConfig_SetBytesString(&config, &config.home, CORONA_PYTHON_HOME_DIR),
-                      "set Python home")) {
-        return false;
-    }
-    if (!check_status(PyConfig_SetBytesString(&config, &config.pythonpath_env, CORONA_PYTHON_HOME_DIR),
-                      "set Python path")) {
-        return false;
-    }
+    // Do not inherit Python settings from the developer machine. The runtime
+    // is portable and all paths are resolved beside corona_engine.exe.
+    config.use_environment = 0;
     config.module_search_paths_set = 1;
 
-    {
-        std::string runtimePath = PathCfg::runtime_backend_abs();
-        if (!check_status(PyWideStringList_Append(&config.module_search_paths, str2wstr(runtimePath).c_str()),
-                          "append runtime backend path")) {
-            return false;
+    const auto bundled_home = PathCfg::python_home_dir();
+    const auto bundled_stdlib = PathCfg::python_stdlib_zip();
+    const auto bundled_dlls = PathCfg::python_dll_dir();
+    const auto bundled_lib = PathCfg::python_lib_dir();
+    const auto bundled_site_packages = PathCfg::site_packages_dir();
+    const auto bundled_editor = PathCfg::runtime_backend_abs();
+    const auto bundled_root = PathCfg::engine_root();
+
+    const auto bundled_stdlib_path = std::filesystem::path(bundled_stdlib);
+    const auto bundled_dlls_path = std::filesystem::path(bundled_dlls);
+    const auto bundled_editor_main_path = std::filesystem::path(bundled_editor) / "main.py";
+    if (!std::filesystem::exists(bundled_stdlib_path) ||
+        !std::filesystem::exists(bundled_dlls_path) ||
+        !std::filesystem::exists(bundled_editor_main_path)) {
+        const std::string message =
+            "Bundled Python runtime is incomplete. Expected: " + bundled_stdlib + ", " +
+            bundled_dlls + ", and " + bundled_editor_main_path.generic_string();
+        lifecycle_.transition(PythonLifecycleState::Failed);
+        {
+            std::lock_guard lock(lifecycle_mtx_);
+            lifecycle_snapshot_.state = lifecycle_.state();
+            lifecycle_snapshot_.phase = "bundled_runtime_validation";
+            lifecycle_snapshot_.error = message;
         }
-        if (!check_status(PyWideStringList_Append(&config.module_search_paths, str2wstr(CORONA_PYTHON_MODULE_DLL_DIR).c_str()),
-                          "append Python DLL path")) {
-            return false;
-        }
-        if (!check_status(PyWideStringList_Append(&config.module_search_paths, str2wstr(CORONA_PYTHON_MODULE_LIB_DIR).c_str()),
-                          "append Python lib path")) {
-            return false;
-        }
-        if (!check_status(PyWideStringList_Append(&config.module_search_paths, str2wstr(PathCfg::site_packages_dir()).c_str()),
-                          "append site-packages path")) {
+        CFW_LOG_CRITICAL("PythonAPI: {}", message);
+        PyConfig_Clear(&config);
+        config = PyConfig{};
+        return false;
+    }
+    const std::array<std::string, 6> module_paths{{
+        bundled_editor,
+        bundled_stdlib,
+        bundled_root,
+        bundled_dlls,
+        bundled_lib,
+        bundled_site_packages,
+    }};
+    for (const auto& path : module_paths) {
+        if (!check_status(PyWideStringList_Append(&config.module_search_paths, str2wstr(path).c_str()),
+                          "append bundled Python module path")) {
             return false;
         }
     }
