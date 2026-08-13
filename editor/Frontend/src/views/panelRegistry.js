@@ -7,7 +7,6 @@ import ProjectSettings from '@/views/sidebar/ProjectSettings.vue';
 import NodeGraphPanel from '@/views/sidebar/NodeGraphPanel.vue';
 import CabbageChatPanel from '@/views/sidebar/CabbageChatPanel.vue';
 import EditorSettings from '@/views/sidebar/EditorSettings.vue';
-import NetworkPanel from '@/views/sidebar/Network.vue';
 import LightFieldCalibrationPanel from '@/components/panels/LightFieldCalibrationPanel.vue';
 
 /**
@@ -27,7 +26,6 @@ export const PANEL_COMPONENTS = Object.freeze({
   NodeGraphPanel,
   CabbageChatPanel,
   EditorSettings,
-  Network: NetworkPanel,
 });
 
 export function getPluginComponent(id) {

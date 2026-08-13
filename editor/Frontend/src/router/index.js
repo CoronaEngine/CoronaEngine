@@ -71,11 +71,6 @@ const routes = [
     component: getPluginComponent('EditorSettings'),
   },
   {
-    path: '/Network',
-    name: 'Network',
-    component: getPluginComponent('Network'),
-  },
-  {
     path: '/ProjectSettings',
     name: 'ProjectSettings',
     component: getPluginComponent('ProjectSettings'),

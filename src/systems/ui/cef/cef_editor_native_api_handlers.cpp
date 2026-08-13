@@ -6587,6 +6587,20 @@ nlohmann::json build_network_session_info(
     payload["host_port"] = sys->host_port();
     payload["listen_port"] = sys->session_port();
     payload["local_ip"] = detect_wlan_ipv4();
+    payload["discovered_peers"] = nlohmann::json::array();
+    for (const auto& peer : sys->discovered_peers()) {
+        payload["discovered_peers"].push_back({
+            {"ip", peer.ip},
+            {"name", peer.name},
+            {"port", peer.port},
+            {"project_id", peer.project_id},
+            {"role", peer.role == Corona::Systems::NetworkSystem::SessionRole::Host
+                ? "host" : peer.role == Corona::Systems::NetworkSystem::SessionRole::Client
+                    ? "client" : "none"},
+            {"stable_id", peer.stable_id},
+            {"last_seen_ms", peer.last_seen_ms},
+        });
+    }
     return payload;
 }
 
@@ -9611,6 +9625,27 @@ void register_network_api_handlers(NativeApiRegistry& registry) {
                 return native_failure("NetworkSystem unavailable", 2);
             }
             return native_success(build_network_session_info(sys));
+        }},
+        {"get_discovered_peers", [](const NativeRequest&, const NativeContext&) {
+            auto sys = require_network_system();
+            if (!sys) return native_failure("NetworkSystem unavailable", 2);
+            auto payload = build_network_session_info(sys);
+            return native_success({{"ok", true},
+                                   {"peers", payload.value("discovered_peers", nlohmann::json::array())}});
+        }},
+        {"search_lan", [](const NativeRequest& request, const NativeContext&) {
+            auto sys = require_network_system();
+            if (!sys) return native_failure("NetworkSystem unavailable", 2);
+            const auto name = arg_string(request.args, 0, "Corona Peer");
+            const auto project_id = arg_uint64(request.args, 1, 0);
+            const bool ok = sys->start_discovery(name, project_id);
+            return native_success({{"ok", ok}, {"peers", sys->discovered_peers().size()}});
+        }},
+        {"clear_discovered_peers", [](const NativeRequest&, const NativeContext&) {
+            auto sys = require_network_system();
+            if (!sys) return native_failure("NetworkSystem unavailable", 2);
+            sys->clear_discovered_peers();
+            return native_success({{"ok", true}});
         }},
         {"connect_to_peer", [](const NativeRequest& request, const NativeContext&) {
             auto sys = require_network_system();

@@ -99,6 +99,9 @@ public:
     /// Local peer ID string ("ip:port").
     [[nodiscard]] const std::string& local_peer_id() const;
 
+    /// Actual ENet listen port, including an OS-assigned port when started with 0.
+    [[nodiscard]] uint16_t listen_port() const;
+
     /// The next outgoing packet sequence number (per-peer seq would be better,
     /// but a global monotonic counter is fine for debugging).
     [[nodiscard]] uint32_t next_seq();

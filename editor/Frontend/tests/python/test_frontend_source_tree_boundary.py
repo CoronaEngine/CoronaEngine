@@ -84,7 +84,6 @@ def test_panel_components_have_a_dedicated_registry_owner():
         "NodeGraphPanel",
         "CabbageChatPanel",
         "EditorSettings",
-        "NetworkPanel",
         "LightFieldCalibrationPanel",
     ):
         assert panel in registry
@@ -101,3 +100,20 @@ def test_reusable_components_do_not_import_page_views():
 
     for path in component_sources:
         assert "@/views/" not in path.read_text(encoding="utf-8"), path
+
+
+def test_join_game_loads_local_ip_without_starting_a_session():
+    source = (SRC_ROOT / "views" / "layout" / "JoinGame.vue").read_text(encoding="utf-8")
+
+    assert "editorApi.lanChat.getLocalIp()" in source
+    assert "loadLocalIp" in source
+
+
+def test_network_panel_is_not_registered_as_a_user_entrypoint():
+    router = (SRC_ROOT / "router" / "index.js").read_text(encoding="utf-8")
+    registry = (SRC_ROOT / "views" / "panelRegistry.js").read_text(encoding="utf-8")
+    manifest = (SRC_ROOT / "config" / "pluginManifest.js").read_text(encoding="utf-8")
+
+    assert "path: '/Network'" not in router
+    assert "Network: NetworkPanel" not in registry
+    assert "id: 'Network'" not in manifest

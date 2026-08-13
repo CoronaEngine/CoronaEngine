@@ -143,7 +143,6 @@ const ROUTE_TO_PANEL_ID = {
   '/ScratchTool': 'ScratchTool',
   '/NodeGraph': 'NodeGraphPanel',
   '/CabbageChat': 'CabbageChatPanel',
-  '/Network': 'Network',
   '/SetUp': 'EditorSettings',
 };
 

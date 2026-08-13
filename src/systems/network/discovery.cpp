@@ -142,7 +142,9 @@ struct Discovery::Impl {
 Discovery::Discovery() : impl_(std::make_unique<Impl>()) {}
 Discovery::~Discovery() { impl_->stop(); }
 
-bool Discovery::start(uint16_t port, const std::string& instance_name, uint64_t project_id) {
+bool Discovery::start(uint16_t port, const std::string& instance_name,
+                      uint64_t project_id, uint16_t listen_port,
+                      uint8_t session_role) {
     if (impl_->running.load()) return true; // already running
 
     if (!impl_->init_sockets()) {
@@ -161,8 +163,10 @@ bool Discovery::start(uint16_t port, const std::string& instance_name, uint64_t 
 
     // Fill outgoing discovery packet
     impl_->outgoing_packet = DiscoveryPacket{};
-    impl_->outgoing_packet.protocol_version = kProtocolVersion;
+    impl_->outgoing_packet.protocol_version = kDiscoveryProtocolVersion;
     impl_->outgoing_packet.project_id = project_id;
+    impl_->outgoing_packet.listen_port = listen_port;
+    impl_->outgoing_packet.session_role = session_role;
     std::strncpy(impl_->outgoing_packet.instance_name, instance_name.c_str(),
                  sizeof(impl_->outgoing_packet.instance_name) - 1);
 
@@ -219,6 +223,9 @@ void Discovery::poll() {
         // Validate magic
         if (std::strncmp(incoming.magic, "CORONA", 6) != 0) continue;
 
+        if (incoming.protocol_version != kDiscoveryProtocolVersion ||
+            incoming.listen_port == 0) continue;
+
         // Filter: only same project
         if (incoming.project_id != impl_->project_id) continue;
 
@@ -238,7 +245,8 @@ void Discovery::poll() {
             strnlen(incoming.instance_name, sizeof(incoming.instance_name)));
 
         if (impl_->callback) {
-            impl_->callback(ip_str, name, incoming.project_id);
+            impl_->callback(ip_str, name, incoming.project_id,
+                            incoming.listen_port, incoming.session_role);
         }
     }
 }

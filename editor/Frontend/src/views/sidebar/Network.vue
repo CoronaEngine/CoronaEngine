@@ -6,7 +6,6 @@
       v-if="!isDocked"
       title="局域网聊天"
       extraClass="bg-[#D8B86C]"
-      routePath="/Network"
       @close="closeFloat"
     />
 
@@ -65,6 +64,29 @@
 
       <!-- ═══ 手动连接 ═══ -->
       <div class="border-t border-gray-700 pt-4 space-y-3">
+        <div class="flex items-center justify-between">
+          <span class="text-gray-400">局域网会话</span>
+          <button
+            @click="searchLanPeers"
+            :disabled="lanSearchPending"
+            class="px-3 py-1 bg-[#4a9eff] hover:bg-[#3a8eef] rounded text-white text-xs disabled:opacity-50"
+          >
+            {{ lanSearchPending ? '搜索中...' : '搜索局域网' }}
+          </button>
+        </div>
+        <div v-if="discoveredPeers.length" class="space-y-1">
+          <button
+            v-for="peer in discoveredPeers"
+            :key="peer.stable_id"
+            @click="selectDiscoveredPeer(peer)"
+            class="w-full text-left px-2 py-1.5 bg-[#1e1e1e] hover:bg-[#333] rounded"
+          >
+            <div class="text-gray-200 truncate">{{ peer.name }}</div>
+            <div class="text-gray-500 text-[10px]">{{ peer.ip }}:{{ peer.port }} · {{ peer.role === 'host' ? '房主' : '客户端' }}</div>
+          </button>
+        </div>
+        <div v-else class="text-gray-500 text-xs">未发现同项目会话</div>
+
         <span class="text-gray-400">手动连接</span>
         <div class="flex flex-col gap-1">
           <label class="text-gray-500">IP 地址</label>
@@ -182,6 +204,8 @@ const hostAddress = ref('');
 const hostPort = ref(0);
 const errorMsg = ref('');
 const peers = ref([]);
+const discoveredPeers = ref([]);
+const lanSearchPending = ref(false);
 
 const remoteIp = ref('');
 const remotePort = ref(27960);
@@ -333,6 +357,9 @@ async function pollPeers() {
   try {
     const res = await networkService.getPeerCount();
     applySessionInfo(res);
+    discoveredPeers.value = Array.isArray(res?.discovered_peers)
+      ? res.discovered_peers
+      : discoveredPeers.value;
     if (res && res.active === false) {
       stopPolling();
       return;
@@ -487,6 +514,24 @@ async function pollPeers() {
   } catch (e) {
     // ignore polling errors
   }
+}
+
+async function searchLanPeers() {
+  lanSearchPending.value = true;
+  try {
+    const res = await networkService.getDiscoveredPeers();
+    discoveredPeers.value = Array.isArray(res?.peers) ? res.peers : [];
+  } catch (e) {
+    errorMsg.value = e?.message || '局域网搜索失败';
+  } finally {
+    lanSearchPending.value = false;
+  }
+}
+
+function selectDiscoveredPeer(peer) {
+  remoteIp.value = peer.ip || '';
+  remotePort.value = Number(peer.port || 27960);
+  remotePeerName.value = peer.name || '';
 }
 
 function startPolling() {

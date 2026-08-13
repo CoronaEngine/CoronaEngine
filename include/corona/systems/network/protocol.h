@@ -14,6 +14,7 @@ namespace Corona::Network {
 // Protocol version — increment when binary format changes
 // ============================================================================
 constexpr uint8_t kProtocolVersion = 1;
+constexpr uint8_t kDiscoveryProtocolVersion = 2;
 
 // ============================================================================
 // Default port for ENet communication
@@ -175,9 +176,12 @@ struct EditorSyncOperation {
 // ============================================================================
 struct DiscoveryPacket {
     char magic[6] = {'C','O','R','O','N','A'};  // Magic identifier
-    uint8_t protocol_version = kProtocolVersion;
+    uint8_t protocol_version = kDiscoveryProtocolVersion;
     char instance_name[32] = {};
     uint64_t project_id = 0;
+    uint16_t listen_port = kDefaultPort;
+    uint8_t session_role = 0;
+    uint8_t reserved = 0;
 };
 
 // ============================================================================

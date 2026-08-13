@@ -497,6 +497,9 @@ const editorApiStatic = {
     stopSession: () => call_manifest_editor_api('network.stopSession', []),
     getPeerCount: () => call_manifest_editor_api('network.getPeerCount', []),
     getSessionInfo: () => call_manifest_editor_api('network.getSessionInfo', []),
+    getDiscoveredPeers: () => call_manifest_editor_api('network.getDiscoveredPeers', []),
+    clearDiscoveredPeers: () => call_manifest_editor_api('network.clearDiscoveredPeers', []),
+    searchLan: () => call_manifest_editor_api('network.searchLan', []),
     connectToPeer: (ip, port, peerName) =>
       call_manifest_editor_api('network.connectToPeer', [ip, port, peerName]),
     lockObject: (objectId, userId, operation = 'modify') =>

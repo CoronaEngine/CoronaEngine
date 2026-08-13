@@ -296,6 +296,10 @@ const std::string& PeerManager::local_peer_id() const {
     return impl_->local_id;
 }
 
+uint16_t PeerManager::listen_port() const {
+    return impl_->host ? impl_->host->address.port : 0;
+}
+
 uint32_t PeerManager::next_seq() {
     return impl_->sequence.fetch_add(1);
 }

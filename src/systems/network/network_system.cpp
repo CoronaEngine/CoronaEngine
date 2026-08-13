@@ -35,6 +35,7 @@ struct NetworkSystem::Impl {
 
     // Subsystems
     Network::PeerManager peer_manager;
+    Network::Discovery discovery;
     Network::SyncEngine sync_engine;
     Network::NetworkIdentityRegistry identity_registry{SharedDataHub::instance()};
     Network::LanChatState lanchat;
@@ -59,6 +60,8 @@ struct NetworkSystem::Impl {
     uint16_t host_port = 0;
     uint64_t project_id = 0;
     uint16_t port = Network::kDefaultPort;
+    std::unordered_map<std::string, DiscoveredPeer> discovered_peers;
+    bool discovery_only = false;
 
     // Timing for sync ticks
     using Clock = std::chrono::steady_clock;
@@ -634,6 +637,7 @@ bool NetworkSystem::initialize(Kernel::ISystemContext* ctx) {
 }
 
 void NetworkSystem::update() {
+    impl_->discovery.poll();
     if (impl_->session_state != SessionState::Active) return;
 
     auto now = Impl::Clock::now();
@@ -736,7 +740,12 @@ bool NetworkSystem::start_session(const std::string& instance_name,
         return true;
     }
 
+    if (impl_->discovery_only) {
+        impl_->discovery.stop();
+        impl_->discovered_peers.clear();
+    }
     impl_->session_state = SessionState::Starting;
+    impl_->discovery_only = false;
     impl_->session_role = role == SessionRole::None ? SessionRole::Host : role;
     impl_->instance_name = instance_name;
     impl_->host_address.clear();
@@ -754,6 +763,34 @@ bool NetworkSystem::start_session(const std::string& instance_name,
         CFW_LOG_ERROR("NetworkSystem: Failed to start PeerManager");
         return false;
     }
+    impl_->port = impl_->peer_manager.listen_port();
+
+    impl_->discovery.set_on_peer_discovered(
+        [this](const std::string& ip, const std::string& name,
+               uint64_t discovered_project, uint16_t listen_port,
+               uint8_t role) {
+            if ((impl_->project_id != 0 && discovered_project != impl_->project_id) ||
+                listen_port == 0) return;
+            const auto now = static_cast<uint64_t>(
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    Impl::Clock::now().time_since_epoch()).count());
+            DiscoveredPeer peer;
+            peer.ip = ip;
+            peer.name = name;
+            peer.port = listen_port;
+            peer.project_id = discovered_project;
+            peer.role = role == 1 ? SessionRole::Host :
+                        role == 2 ? SessionRole::Client : SessionRole::None;
+            peer.stable_id = name + "@" + ip + ":" +
+                             std::to_string(listen_port);
+            peer.last_seen_ms = now;
+            impl_->discovered_peers[peer.stable_id] = std::move(peer);
+        });
+    if (!impl_->discovery.start(Network::kDefaultPort + Network::kDiscoveryPortOffset,
+                                instance_name, project_id, impl_->port,
+                                impl_->session_role == SessionRole::Host ? 1 : 2)) {
+        CFW_LOG_WARNING("NetworkSystem: LAN discovery unavailable; manual IP remains available");
+    }
 
     // 2. SyncEngine
     impl_->sync_engine.initialize(impl_->peer_manager.local_peer_id());
@@ -763,21 +800,23 @@ bool NetworkSystem::start_session(const std::string& instance_name,
 
     // Publish event
     if (impl_->ctx && impl_->ctx->event_bus()) {
-        Events::NetworkHostStartedEvent ev{port};
+        Events::NetworkHostStartedEvent ev{impl_->port};
         impl_->ctx->event_bus()->publish(ev);
     }
 
     CFW_LOG_INFO("NetworkSystem: Session active — listening on port {} role={}",
-                 port, session_role_label(impl_->session_role));
+                 impl_->port, session_role_label(impl_->session_role));
     return true;
 }
 
 void NetworkSystem::stop_session() {
     if (impl_->session_state != SessionState::Active &&
-        impl_->session_state != SessionState::Error) return;
+        impl_->session_state != SessionState::Error &&
+        !impl_->discovery_only) return;
 
     notify_lanchat_room_closed();
     impl_->peer_manager.stop();
+    impl_->discovery.stop();
     impl_->sync_engine.shutdown();
     impl_->identity_registry.clear();
     impl_->incoming_transfers.clear();
@@ -799,6 +838,8 @@ void NetworkSystem::stop_session() {
     impl_->session_role = SessionRole::None;
     impl_->host_address.clear();
     impl_->host_port = 0;
+    impl_->discovered_peers.clear();
+    impl_->discovery_only = false;
 
     // Publish event
     if (impl_->ctx && impl_->ctx->event_bus()) {
@@ -839,6 +880,57 @@ size_t NetworkSystem::peer_count() const {
 
 std::string NetworkSystem::local_peer_id() const {
     return impl_->peer_manager.local_peer_id();
+}
+
+bool NetworkSystem::start_discovery(const std::string& instance_name,
+                                    uint64_t project_id) {
+    if (impl_->session_state == SessionState::Idle) {
+        impl_->discovery_only = true;
+        impl_->project_id = project_id;
+    }
+    impl_->discovery.set_on_peer_discovered(
+        [this](const std::string& ip, const std::string& name,
+               uint64_t discovered_project, uint16_t listen_port,
+               uint8_t role) {
+            if ((impl_->project_id != 0 && discovered_project != impl_->project_id) ||
+                listen_port == 0) return;
+            const auto now = static_cast<uint64_t>(
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    Impl::Clock::now().time_since_epoch()).count());
+            DiscoveredPeer peer;
+            peer.ip = ip;
+            peer.name = name;
+            peer.port = listen_port;
+            peer.project_id = discovered_project;
+            peer.role = role == 1 ? SessionRole::Host :
+                        role == 2 ? SessionRole::Client : SessionRole::None;
+            peer.stable_id = name + "@" + ip + ":" + std::to_string(listen_port);
+            peer.last_seen_ms = now;
+            impl_->discovered_peers[peer.stable_id] = std::move(peer);
+        });
+    if (impl_->discovery.start(
+            Network::kDefaultPort + Network::kDiscoveryPortOffset,
+            instance_name, project_id, 0, 0)) {
+        return true;
+    }
+    return false;
+}
+
+std::vector<NetworkSystem::DiscoveredPeer> NetworkSystem::discovered_peers() const {
+    const auto now = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            Impl::Clock::now().time_since_epoch()).count());
+    std::vector<DiscoveredPeer> result;
+    for (const auto& [key, peer] : impl_->discovered_peers) {
+        if (now >= peer.last_seen_ms && now - peer.last_seen_ms <= 5000) {
+            result.push_back(peer);
+        }
+    }
+    return result;
+}
+
+void NetworkSystem::clear_discovered_peers() {
+    impl_->discovered_peers.clear();
 }
 
 bool NetworkSystem::is_connected_host_peer(

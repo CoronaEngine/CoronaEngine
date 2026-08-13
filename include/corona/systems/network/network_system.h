@@ -10,6 +10,7 @@
 #include <corona/systems/network/lanchat_state.h>
 #include <corona/systems/network/network_identity.h>
 #include <corona/systems/network/peer_manager.h>
+#include <corona/systems/network/discovery.h>
 #include <corona/systems/network/sync_engine.h>
 
 #include <array>
@@ -63,6 +64,16 @@ public:
         std::string payload_json;
     };
 
+    struct DiscoveredPeer {
+        std::string ip;
+        std::string name;
+        uint16_t port = 0;
+        uint64_t project_id = 0;
+        SessionRole role = SessionRole::None;
+        std::string stable_id;
+        uint64_t last_seen_ms = 0;
+    };
+
     NetworkSystem();
     ~NetworkSystem() override;
 
@@ -93,6 +104,9 @@ public:
                        uint16_t port = Network::kDefaultPort,
                        SessionRole role = SessionRole::Host);
 
+    /// Start LAN discovery without opening an ENet collaboration session.
+    bool start_discovery(const std::string& instance_name, uint64_t project_id = 0);
+
     /// 停止会话，断开所有 peer，关闭 host。
     void stop_session();
 
@@ -119,6 +133,8 @@ public:
 
     /// 本机稳定 peer id，用于 LANChat 消息 sender_id/去重。
     [[nodiscard]] std::string local_peer_id() const;
+    [[nodiscard]] std::vector<DiscoveredPeer> discovered_peers() const;
+    void clear_discovered_peers();
 
     /// 手动连接到指定 IP 的房主或 peer。
     /// 要求会话已启动。force=true 跳过 ID 排序，由主动方发起连接。

@@ -44,7 +44,6 @@ function getPanelIdFromRoute() {
     '/ScratchTool': 'ScratchTool',
     '/NodeGraph': 'NodeGraphPanel',
     '/CabbageChat': 'CabbageChatPanel',
-    '/Network': 'Network',
     '/SetUp': 'EditorSettings',
   };
   return map[path] || null;

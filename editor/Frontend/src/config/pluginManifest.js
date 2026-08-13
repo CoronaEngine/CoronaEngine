@@ -140,17 +140,6 @@ export const PLUGIN_MANIFEST = [
     defaultHeight: 720,
     autoInit: false,
   },
-  {
-    id: 'Network',
-    routePath: '/Network',
-    displayNameKey: 'plugins.Network',
-    displayName: '局域网聊天',
-    pageType: 'plugin',
-    defaultDock: 'right',
-    defaultWidth: 360,
-    defaultHeight: 430,
-    autoInit: false,
-  },
 ];
 
 /** 按 id 快速查找 */

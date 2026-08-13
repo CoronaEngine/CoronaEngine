@@ -25,7 +25,13 @@ public:
     /// @param ip  Remote peer's IP address (string form).
     /// @param name Instance name (for UI display).
     /// @param project_id  Project identifier hash.
-    using OnPeerDiscovered = std::function<void(const std::string& ip, const std::string& name, uint64_t project_id)>;
+    /// @param listen_port ENet port advertised by the peer.
+    /// @param session_role 0=none, 1=host, 2=client.
+    using OnPeerDiscovered = std::function<void(const std::string& ip,
+                                                const std::string& name,
+                                                uint64_t project_id,
+                                                uint16_t listen_port,
+                                                uint8_t session_role)>;
 
     Discovery();
     ~Discovery();
@@ -43,7 +49,8 @@ public:
      * @param project_id    Project identifier hash (same-project filtering).
      * @return true on success.
      */
-    bool start(uint16_t port, const std::string& instance_name, uint64_t project_id);
+    bool start(uint16_t port, const std::string& instance_name,
+               uint64_t project_id, uint16_t listen_port, uint8_t session_role);
 
     /// Stop discovery and release the socket.
     void stop();

@@ -71,7 +71,7 @@
             @click="handleRefresh"
           >
             <svg class="w-4 h-4" :class="{ 'animate-spin': scanning }" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg>
-            {{ scanning ? '扫描中…' : '刷新' }}
+            {{ scanning ? '搜索中…' : '搜索局域网' }}
           </button>
         </div>
 
@@ -268,7 +268,7 @@
 </template>
 
 <script setup>
-import { ref } from 'vue';
+import { onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { editorApi } from '@/api/editorApi.js';
 import { networkService } from '@/services/networkService.js';
@@ -364,17 +364,40 @@ const startSession = async (role, port, instanceName = playerName()) => {
 
 const handleRefresh = () => {
   scanning.value = true;
-  setTimeout(() => { scanning.value = false; }, 800);
+  networkService.searchLan()
+    .then(() => new Promise((resolve) => setTimeout(resolve, 800)))
+    .then(() => networkService.getDiscoveredPeers())
+    .then((result) => {
+      const peers = Array.isArray(result?.peers) ? result.peers : [];
+      rooms.value = peers
+        .filter((peer) => peer.role === 'host')
+        .map((peer) => ({
+          id: peer.stable_id,
+          name: peer.name || '局域网房间',
+          host: peer.ip,
+          port: peer.port,
+          hostName: peer.name,
+          players: 0,
+          maxPlayers: 999,
+          ping: '--',
+          locked: false,
+        }));
+      selectedRoom.value = rooms.value[0]?.id || null;
+    })
+    .catch((error) => {
+      errorMsg.value = error?.message || '局域网搜索失败';
+    })
+    .finally(() => { scanning.value = false; });
 };
 
-const joinHost = async ({ ip, port }) => {
+const joinHost = async ({ ip, port, peerName = '' }) => {
   await runBusy('正在加入房间…', async () => {
     await stopExistingSession();
     await prepareMultiplayerProject('guest');
     await startSession('client', port);
 
     busyText.value = '正在连接房主…';
-    const result = await networkService.connectToPeer(ip, port, playerName());
+    const result = await networkService.connectToPeer(ip, port, peerName || playerName());
     if (!result?.ok) {
       throw new Error(result?.error || '连接房主失败');
     }
@@ -384,7 +407,7 @@ const joinHost = async ({ ip, port }) => {
 
 const handleJoinRoom = (room) => {
   if (!room) return;
-  joinHost({ ip: room.host, port: parsePort(room.port) });
+  joinHost({ ip: room.host, port: parsePort(room.port), peerName: room.hostName });
 };
 
 const handleJoinSelected = () => {
@@ -410,6 +433,23 @@ const handleCreateRoom = () => {
 const goHome = () => {
   router.push('/StartScreen');
 };
+
+const loadLocalIp = async () => {
+  try {
+    const result = await editorApi.lanChat.getLocalIp();
+    const data = result?.data ?? result;
+    if (data?.ip) {
+      localIp.value = data.ip;
+    }
+  } catch (_) {
+    localIp.value = '--';
+  }
+};
+
+onMounted(() => {
+  loadLocalIp();
+  handleRefresh();
+});
 </script>
 
 <style scoped>

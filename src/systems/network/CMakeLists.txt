@@ -63,4 +63,12 @@ if(BUILD_CORONA_TESTING OR BUILD_TESTING)
     )
 
     add_test(NAME NetworkProtocolTests COMMAND corona_network_protocol_tests)
+
+    add_executable(corona_discovery_tests
+        tests/test_discovery.cpp
+    )
+    target_link_libraries(corona_discovery_tests
+        PRIVATE corona::system::network
+    )
+    add_test(NAME DiscoveryTests COMMAND corona_discovery_tests)
 endif()

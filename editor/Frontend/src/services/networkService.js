@@ -10,6 +10,9 @@ export const networkService = {
   stopSession: () => editorApi.network.stopSession().then(unwrap),
   getPeerCount: () => editorApi.network.getPeerCount().then(unwrap),
   getSessionInfo: () => editorApi.network.getSessionInfo().then(unwrap),
+  getDiscoveredPeers: () => editorApi.network.getDiscoveredPeers().then(unwrap),
+  clearDiscoveredPeers: () => editorApi.network.clearDiscoveredPeers().then(unwrap),
+  searchLan: () => editorApi.network.searchLan().then(unwrap),
   connectToPeer: (ip, port, peerName) =>
     editorApi.network.connectToPeer(ip, port, peerName).then(unwrap),
   lockObject: (objectId, userId, operation = 'modify') =>
