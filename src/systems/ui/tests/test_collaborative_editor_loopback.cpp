@@ -2,6 +2,7 @@
 #include <corona/systems/network/network_system.h>
 
 #include "cef/cef_editor_native_api_registry.h"
+#include "collaborative_editor_runtime.h"
 #include "cef/cef_editor_native_api_test_support.h"
 #include "cef/scene_folder.h"
 
@@ -131,6 +132,17 @@ NativeResult poll_until_applied(NetworkSystem& host, NetworkSystem& client,
     return last;
 }
 
+nlohmann::json scene_snapshot();
+nlohmann::json actor_by_guid(const nlohmann::json& snapshot, const std::string& guid);
+
+void tick_until_actor_created(NetworkSystem& host, NetworkSystem& client,
+                              const std::string& guid) {
+    wait_until(host, client, [&] {
+        Corona::Systems::UI::tick_collaborative_editor_runtime();
+        return actor_by_guid(scene_snapshot(), guid).is_object();
+    }, "collaborative runtime did not apply remote Actor create");
+}
+
 nlohmann::json scene_snapshot() {
     return invoke("SceneTools", "get_scene_snapshot", nlohmann::json::array({"scene.ini"})).data;
 }
@@ -231,7 +243,7 @@ void run_loopback_test() {
     };
     host.broadcast_actor_create(guid, "scene.ini", "remote.obj", {}, create_transform,
                                 &packed, sizeof(packed), create_state.dump());
-    poll_until_applied(host, *receiver, "poll_pending_actor_create");
+    tick_until_actor_created(host, *receiver, guid);
 
     auto actor = actor_by_guid(scene_snapshot(), guid);
     require(actor.is_object(), "remote create did not add the Actor to the native scene");

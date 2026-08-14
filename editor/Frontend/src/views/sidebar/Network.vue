@@ -225,7 +225,6 @@ let networkAssetImportCompletedCallbackToken = null;
 let networkFileSyncStatusCallbackToken = null;
 let networkSyncPauseCallbackToken = null;
 const CONNECT_TIMEOUT_MS = 5000;
-const PENDING_POLL_BATCH_LIMIT = 16;
 const connectionAttemptStartedAt = ref(0);
 const ownershipClaimTimes = new Map();
 const currentSceneName = ref('Scene/default.scene');
@@ -397,120 +396,6 @@ async function pollPeers() {
       }
     }
 
-    // Poll for pending remote actor creation (file transfer completed) before
-    // applying snapshots/state updates that may target those actors.
-    try {
-      for (let i = 0; i < PENDING_POLL_BATCH_LIMIT; i += 1) {
-        const pending = await networkService.pollPendingActorCreate();
-        if (!pending || !pending.has_pending) break;
-        if (pending.retrying) {
-          remoteActorLog.value = `远程 Actor 创建等待重试: ${pending.apply_error || pending.actor_guid || 'unknown'}`;
-          break;
-        }
-        remoteActorLog.value = pending.applied
-          ? `已应用远程 Actor 创建: ${pending.actor?.name || pending.actor_guid || 'unknown'}`
-          : `已丢弃无效 Actor 创建: ${pending.apply_error || pending.actor_guid || 'unknown'}`;
-      }
-    } catch (_) {
-      /* best effort — actor creation polling is secondary */
-    }
-
-    try {
-      for (let i = 0; i < PENDING_POLL_BATCH_LIMIT; i += 1) {
-        const pendingRequest = await networkService.pollPendingSceneSnapshotRequest();
-        if (!pendingRequest || !pendingRequest.has_pending) break;
-        if (sessionRole.value === 'host') {
-          const sceneName = pendingRequest.scene_name || currentSceneName.value;
-          await broadcastCurrentSceneSnapshot(sceneName, true, true);
-        }
-      }
-    } catch (_) {
-      /* best effort — snapshot request polling is secondary */
-    }
-
-    try {
-      for (let i = 0; i < PENDING_POLL_BATCH_LIMIT; i += 1) {
-        const pendingSnapshot = await networkService.pollPendingSceneSnapshot();
-        if (!pendingSnapshot || !pendingSnapshot.has_pending) break;
-        await applyRemoteSceneSnapshot(
-          pendingSnapshot.scene_name || currentSceneName.value,
-          pendingSnapshot.snapshot_json
-        );
-      }
-    } catch (_) {
-      /* best effort — snapshot polling is secondary */
-    }
-
-    try {
-      for (let i = 0; i < PENDING_POLL_BATCH_LIMIT; i += 1) {
-        const pendingState = await networkService.pollPendingActorStateUpdate();
-        if (!pendingState || !pendingState.has_pending) break;
-        if (pendingState.retrying) {
-          remoteActorLog.value = `远程 Actor 状态等待重试: ${pendingState.apply_error || pendingState.actor_guid || 'unknown'}`;
-          break;
-        }
-        let actorData = {};
-        try {
-          actorData = JSON.parse(pendingState.actor_json || '{}');
-        } catch (_) {
-          actorData = {};
-        }
-        actorData.actor_guid = actorData.actor_guid || pendingState.actor_guid || '';
-        actorData._suppress_network_broadcast = true;
-        remoteActorLog.value = pendingState.applied
-          ? `已应用远程 Actor 状态: ${pendingState.actor?.name || actorData.name || actorData.actor_guid || 'unknown'}`
-          : `已丢弃无效 Actor 状态: ${pendingState.apply_error || actorData.actor_guid || 'unknown'}`;
-        setTimeout(() => {
-          remoteActorLog.value = '';
-        }, 3000);
-      }
-    } catch (_) {
-      /* best effort — state sync is secondary */
-    }
-
-    try {
-      for (let i = 0; i < PENDING_POLL_BATCH_LIMIT; i += 1) {
-        const pendingTransform = await networkService.pollPendingActorTransform();
-        if (!pendingTransform || !pendingTransform.has_pending) break;
-        if (pendingTransform.retrying) {
-          remoteActorLog.value = `远程 Actor Transform 等待重试: ${pendingTransform.apply_error || pendingTransform.actor_guid || 'unknown'}`;
-          break;
-        }
-        const actorData = {
-          actor_guid: pendingTransform.actor_guid || '',
-          geometry: pendingTransform.geometry || {},
-          source_user_id: pendingTransform.source_user_id || '',
-          correlation_id: pendingTransform.correlation_id || '',
-        };
-        remoteActorLog.value = pendingTransform.applied
-          ? `已应用远程 Actor Transform: ${pendingTransform.actor?.name || actorData.actor_guid || 'unknown'}`
-          : `已丢弃无效 Actor Transform: ${pendingTransform.apply_error || actorData.actor_guid || 'unknown'}`;
-        setTimeout(() => {
-          remoteActorLog.value = '';
-        }, 3000);
-      }
-    } catch (_) {
-      /* best effort — transform sync is demo-grade */
-    }
-
-    try {
-      for (let i = 0; i < PENDING_POLL_BATCH_LIMIT; i += 1) {
-        const pendingDelete = await networkService.pollPendingActorDelete();
-        if (!pendingDelete || !pendingDelete.has_pending) break;
-        if (pendingDelete.retrying) {
-          remoteActorLog.value = `远程 Actor 删除等待重试: ${pendingDelete.apply_error || pendingDelete.actor_guid || 'unknown'}`;
-          break;
-        }
-        remoteActorLog.value = pendingDelete.applied
-          ? `已应用远程 Actor 删除: ${pendingDelete.actor_name || pendingDelete.actor_guid || 'unknown'}`
-          : `已丢弃无效 Actor 删除: ${pendingDelete.apply_error || pendingDelete.actor_guid || 'unknown'}`;
-        setTimeout(() => {
-          remoteActorLog.value = '';
-        }, 3000);
-      }
-    } catch (_) {
-      /* best effort — actor delete polling is secondary */
-    }
   } catch (e) {
     // ignore polling errors
   }

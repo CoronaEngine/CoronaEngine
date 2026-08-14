@@ -8,6 +8,8 @@ set(UI_SYSTEM_SOURCES
     ui_surface_lifecycle.cpp
     camera_viewport_manager.cpp
     panel_layout.cpp
+    collaborative_editor_runtime.cpp
+    collaborative_editor_runtime.h
 
     vulk/vulkan_backend.cpp
     vulk/quad_compositor.cpp

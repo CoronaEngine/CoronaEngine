@@ -22,6 +22,7 @@
 #include <iomanip>
 #include <nlohmann/json.hpp>
 #include <sstream>
+#include <mutex>
 #include <unordered_map>
 
 namespace Corona::Systems {
@@ -99,6 +100,11 @@ struct NetworkSystem::Impl {
     // Sync pause (suppress poll_and_sync during incoming actor creation)
     bool sync_paused = false;
     bool applying_versioned_actor_message = false;
+
+    // Network callbacks run independently from the engine/UI update thread.
+    // All deferred editor work is exchanged through this mutex-protected set
+    // of queues and transfer groups.
+    mutable std::recursive_mutex pending_mutex;
 
     // Deferred actions to execute in update() (avoid GIL in network thread)
     struct PendingAction {
@@ -555,6 +561,7 @@ bool NetworkSystem::initialize(Kernel::ISystemContext* ctx) {
         });
     impl_->sync_engine.set_on_editor_operation_applied(
         [this](const Network::EditorSyncOperation& operation) {
+            std::lock_guard lock(impl_->pending_mutex);
             if (operation.kind == Network::EditorSyncOperationKind::Upsert &&
                 (operation.field_name == "actor.create" ||
                  operation.field_name == "actor.state" ||
@@ -637,6 +644,7 @@ bool NetworkSystem::initialize(Kernel::ISystemContext* ctx) {
 }
 
 void NetworkSystem::update() {
+    std::lock_guard pending_lock(impl_->pending_mutex);
     impl_->discovery.poll();
     if (impl_->session_state != SessionState::Active) return;
 
@@ -821,16 +829,19 @@ void NetworkSystem::stop_session() {
     impl_->identity_registry.clear();
     impl_->incoming_transfers.clear();
     impl_->outgoing_cache.clear();
-    impl_->pending_actor_creates.clear();
-    impl_->pending_actor_transform_updates.clear();
-    impl_->pending_actor_deletes.clear();
-    impl_->pending_actor_scene_snapshot_requests.clear();
-    impl_->pending_actor_scene_snapshots.clear();
-    impl_->pending_actor_state_updates.clear();
-    impl_->pending_file_transfer_groups.clear();
-    impl_->transfer_to_group.clear();
-    impl_->asset_to_transfer_group.clear();
-    impl_->received_asset_cache.clear();
+    {
+        std::lock_guard lock(impl_->pending_mutex);
+        impl_->pending_actor_creates.clear();
+        impl_->pending_actor_transform_updates.clear();
+        impl_->pending_actor_deletes.clear();
+        impl_->pending_actor_scene_snapshot_requests.clear();
+        impl_->pending_actor_scene_snapshots.clear();
+        impl_->pending_actor_state_updates.clear();
+        impl_->pending_file_transfer_groups.clear();
+        impl_->transfer_to_group.clear();
+        impl_->asset_to_transfer_group.clear();
+        impl_->received_asset_cache.clear();
+    }
     clear_lanchat_room_state();
     impl_->stop_session_after_peer_disconnect = false;
 
@@ -1658,6 +1669,7 @@ void NetworkSystem::broadcast_actor_state_update(const std::string& actor_guid,
 }
 
 bool NetworkSystem::has_pending_transfers() const {
+    std::lock_guard lock(impl_->pending_mutex);
     return !impl_->pending_actor_creates.empty() ||
            !impl_->incoming_transfers.empty() ||
            !impl_->pending_file_transfer_groups.empty();
@@ -1688,6 +1700,7 @@ bool NetworkSystem::peek_pending_actor_create(std::string& actor_guid,
                                                void* actor_packed_out,
                                                size_t packed_size,
                                                std::string* actor_json_out) const {
+    std::lock_guard lock(impl_->pending_mutex);
     if (impl_->pending_actor_creates.empty()) return false;
     const auto& pa = impl_->pending_actor_creates.front();
     actor_guid = pa.actor_guid;
@@ -1703,6 +1716,7 @@ bool NetworkSystem::peek_pending_actor_create(std::string& actor_guid,
 }
 
 bool NetworkSystem::ack_pending_actor_create(const std::string& actor_guid) {
+    std::lock_guard lock(impl_->pending_mutex);
     if (impl_->pending_actor_creates.empty() ||
         impl_->pending_actor_creates.front().actor_guid != actor_guid) return false;
     impl_->pending_actor_creates.erase(impl_->pending_actor_creates.begin());
@@ -1725,6 +1739,7 @@ bool NetworkSystem::peek_pending_actor_transform_update(
     std::string& actor_guid, std::string& scene_name,
     float* transform_out, size_t transform_count,
     std::string& source_user_id, std::string& correlation_id) const {
+    std::lock_guard lock(impl_->pending_mutex);
     if (impl_->pending_actor_transform_updates.empty()) return false;
     const auto& update = impl_->pending_actor_transform_updates.front();
     actor_guid = update.actor_guid;
@@ -1738,6 +1753,7 @@ bool NetworkSystem::peek_pending_actor_transform_update(
 }
 
 bool NetworkSystem::ack_pending_actor_transform_update(const std::string& actor_guid) {
+    std::lock_guard lock(impl_->pending_mutex);
     if (impl_->pending_actor_transform_updates.empty() ||
         impl_->pending_actor_transform_updates.front().actor_guid != actor_guid) return false;
     impl_->pending_actor_transform_updates.erase(
@@ -1755,6 +1771,7 @@ bool NetworkSystem::pop_pending_actor_delete(std::string& actor_guid,
 bool NetworkSystem::peek_pending_actor_delete(std::string& actor_guid,
                                                std::string& scene_name,
                                                std::string& actor_name) const {
+    std::lock_guard lock(impl_->pending_mutex);
     if (impl_->pending_actor_deletes.empty()) return false;
     const auto& pending = impl_->pending_actor_deletes.front();
     actor_guid = pending.actor_guid;
@@ -1764,6 +1781,7 @@ bool NetworkSystem::peek_pending_actor_delete(std::string& actor_guid,
 }
 
 bool NetworkSystem::ack_pending_actor_delete(const std::string& actor_guid) {
+    std::lock_guard lock(impl_->pending_mutex);
     if (impl_->pending_actor_deletes.empty() ||
         impl_->pending_actor_deletes.front().actor_guid != actor_guid) return false;
     impl_->pending_actor_deletes.erase(impl_->pending_actor_deletes.begin());
@@ -1771,6 +1789,7 @@ bool NetworkSystem::ack_pending_actor_delete(const std::string& actor_guid) {
 }
 
 bool NetworkSystem::pop_pending_actor_scene_snapshot_request(std::string& scene_name) {
+    std::lock_guard lock(impl_->pending_mutex);
     if (impl_->pending_actor_scene_snapshot_requests.empty()) return false;
     auto& pending = impl_->pending_actor_scene_snapshot_requests.front();
     scene_name = pending.scene_name;
@@ -1781,6 +1800,7 @@ bool NetworkSystem::pop_pending_actor_scene_snapshot_request(std::string& scene_
 
 bool NetworkSystem::pop_pending_actor_scene_snapshot(std::string& scene_name,
                                                      std::string& snapshot_json) {
+    std::lock_guard lock(impl_->pending_mutex);
     if (impl_->pending_actor_scene_snapshots.empty()) return false;
     auto& pending = impl_->pending_actor_scene_snapshots.front();
     scene_name = pending.scene_name;
@@ -1800,6 +1820,7 @@ bool NetworkSystem::pop_pending_actor_state_update(std::string& actor_guid,
 bool NetworkSystem::peek_pending_actor_state_update(std::string& actor_guid,
                                                      std::string& scene_name,
                                                      std::string& actor_json) const {
+    std::lock_guard lock(impl_->pending_mutex);
     if (impl_->pending_actor_state_updates.empty()) return false;
     const auto& pending = impl_->pending_actor_state_updates.front();
     actor_guid = pending.actor_guid;
@@ -1809,6 +1830,7 @@ bool NetworkSystem::peek_pending_actor_state_update(std::string& actor_guid,
 }
 
 bool NetworkSystem::ack_pending_actor_state_update(const std::string& actor_guid) {
+    std::lock_guard lock(impl_->pending_mutex);
     if (impl_->pending_actor_state_updates.empty() ||
         impl_->pending_actor_state_updates.front().actor_guid != actor_guid) return false;
     impl_->pending_actor_state_updates.erase(impl_->pending_actor_state_updates.begin());
@@ -1968,6 +1990,7 @@ void NetworkSystem::on_data_received(const std::string& peer_id,
 
 void NetworkSystem::on_custom_message(const std::string& sender_peer_id,
                                         const uint8_t* data, size_t len) {
+    std::lock_guard pending_lock(impl_->pending_mutex);
     if (len < 1) return;
     using Network::MessageType;
     auto mt = static_cast<MessageType>(data[0]);
@@ -2783,6 +2806,7 @@ void NetworkSystem::handle_file_request(const std::string& sender_peer_id,
 
 void NetworkSystem::handle_file_chunk(const std::string& sender_peer_id,
                                       const uint8_t* data, size_t len) {
+    std::lock_guard pending_lock(impl_->pending_mutex);
     if (len < 1 + 8 + 2) return;
     Network::BufferReader r(data + 1, len - 1);
 

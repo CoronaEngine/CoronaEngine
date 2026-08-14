@@ -16,6 +16,7 @@
 
 #include "cef/browser_manager.h"
 #include "cef/cef_client.h"
+#include "collaborative_editor_runtime.h"
 
 namespace Corona::Systems {
 
@@ -180,6 +181,10 @@ void UiSystem::update() {
     if (!running_ || !sdl_initialized_) {
         return;
     }
+
+    // Collaborative scene mutations must run on the UI/engine main thread and
+    // must not depend on the lifetime of a particular Vue network page.
+    UI::tick_collaborative_editor_runtime();
 
     static UI::UiFrameRunner frame_runner;
     UI::UiFrameContext context{
