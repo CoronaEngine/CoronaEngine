@@ -12,6 +12,7 @@
 
 #include "browser_manager.h"
 #include "actor_selection_routing.h"
+#include "../collaborative_editor_runtime.h"
 #include "cef_client.h"
 #include "cef_editor_api.h"
 #include "cef_editor_native_api_registry.h"
@@ -6913,6 +6914,58 @@ uint64_t collaboration_now_ms() {
 }
 
 }  // namespace
+
+namespace {
+
+Corona::Systems::UI::CollaborativeEditorApplyOutcome to_collaborative_outcome(
+    PendingNetworkActorApplyOutcome outcome) {
+    using PublicResult = Corona::Systems::UI::CollaborativeEditorApplyResult;
+    const auto result = outcome.result == PendingNetworkActorApplyResult::Applied
+        ? PublicResult::Applied
+        : outcome.result == PendingNetworkActorApplyResult::Retry
+            ? PublicResult::Retry
+            : PublicResult::Discard;
+    return {result, std::move(outcome.error), std::move(outcome.actor)};
+}
+
+}  // namespace
+
+std::shared_ptr<Corona::Systems::NetworkSystem> collaborative_editor_network_system() {
+    return get_network_system();
+}
+
+CollaborativeEditorApplyOutcome apply_collaborative_actor_create(
+    const std::string& actor_guid,
+    const std::string& scene_name,
+    const std::string& model_path,
+    nlohmann::json actor_data) {
+    return to_collaborative_outcome(apply_pending_network_actor_create(
+        actor_guid, scene_name, model_path, std::move(actor_data), NativeContext{}));
+}
+
+CollaborativeEditorApplyOutcome apply_collaborative_actor_state(
+    const std::string& actor_guid,
+    const std::string& scene_name,
+    const nlohmann::json& actor_data) {
+    return to_collaborative_outcome(
+        apply_pending_network_actor_state(actor_guid, scene_name, actor_data, NativeContext{}));
+}
+
+CollaborativeEditorApplyOutcome apply_collaborative_actor_transform(
+    const std::string& actor_guid,
+    const std::string& scene_name,
+    const nlohmann::json& transform_data) {
+    return to_collaborative_outcome(
+        apply_pending_network_actor_transform(
+            actor_guid, scene_name, transform_data, NativeContext{}));
+}
+
+CollaborativeEditorApplyOutcome apply_collaborative_actor_delete(
+    const std::string& actor_guid,
+    const std::string& scene_name) {
+    return to_collaborative_outcome(
+        apply_pending_network_actor_delete(actor_guid, scene_name));
+}
 
 void load_native_editor_scene_for_test(const nlohmann::json& snapshot) {
     nlohmann::json diagnostics = nlohmann::json::array();
