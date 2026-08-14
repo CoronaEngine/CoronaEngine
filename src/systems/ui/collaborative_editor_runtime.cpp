@@ -3,6 +3,7 @@
 #include <string>
 #include <utility>
 
+#include <corona/kernel/core/i_logger.h>
 #include <corona/systems/network/network_system.h>
 
 namespace Corona::Systems::UI {
@@ -11,6 +12,28 @@ namespace {
 
 bool is_retry(const CollaborativeEditorApplyOutcome& outcome) {
     return outcome.result == CollaborativeEditorApplyResult::Retry;
+}
+
+void log_apply_outcome(const char* kind,
+                       const std::string& actor_guid,
+                       const std::string& scene_name,
+                       const CollaborativeEditorApplyOutcome& outcome) {
+    switch (outcome.result) {
+        case CollaborativeEditorApplyResult::Applied:
+            CFW_LOG_DEBUG("CollaborativeEditorRuntime: {} applied actor='{}' scene='{}'",
+                          kind, actor_guid, scene_name);
+            break;
+        case CollaborativeEditorApplyResult::Retry:
+            CFW_LOG_WARNING(
+                "CollaborativeEditorRuntime: {} retry actor='{}' scene='{}' reason='{}'",
+                kind, actor_guid, scene_name, outcome.error);
+            break;
+        case CollaborativeEditorApplyResult::Discard:
+            CFW_LOG_WARNING(
+                "CollaborativeEditorRuntime: {} discarded actor='{}' scene='{}' reason='{}'",
+                kind, actor_guid, scene_name, outcome.error);
+            break;
+    }
 }
 
 }  // namespace
@@ -44,6 +67,7 @@ void tick_collaborative_editor_runtime(std::size_t batch_limit) {
             packed.transform[6], packed.transform[7], packed.transform[8]};
         const auto outcome = apply_collaborative_actor_create(
             actor_guid, scene_name, model_path, std::move(actor_data));
+        log_apply_outcome("create", actor_guid, scene_name, outcome);
         if (is_retry(outcome)) break;
         sys->ack_pending_actor_create(actor_guid);
     }
@@ -57,6 +81,7 @@ void tick_collaborative_editor_runtime(std::size_t batch_limit) {
             const auto actor_data = nlohmann::json::parse(actor_json);
             const auto outcome = apply_collaborative_actor_state(
                 actor_guid, scene_name, actor_data);
+            log_apply_outcome("state", actor_guid, scene_name, outcome);
             if (is_retry(outcome)) break;
             sys->ack_pending_actor_state_update(actor_guid);
         } catch (const nlohmann::json::parse_error&) {
@@ -78,6 +103,7 @@ void tick_collaborative_editor_runtime(std::size_t batch_limit) {
         };
         const auto outcome = apply_collaborative_actor_transform(
             actor_guid, scene_name, transform_data);
+        log_apply_outcome("transform", actor_guid, scene_name, outcome);
         if (is_retry(outcome)) break;
         sys->ack_pending_actor_transform_update(actor_guid);
     }
@@ -88,6 +114,7 @@ void tick_collaborative_editor_runtime(std::size_t batch_limit) {
             break;
         }
         const auto outcome = apply_collaborative_actor_delete(actor_guid, scene_name);
+        log_apply_outcome("delete", actor_guid, scene_name, outcome);
         if (is_retry(outcome)) break;
         sys->ack_pending_actor_delete(actor_guid);
     }
