@@ -268,7 +268,7 @@
 </template>
 
 <script setup>
-import { onMounted, ref } from 'vue';
+import { onMounted, onUnmounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { editorApi } from '@/api/editorApi.js';
 import { networkService } from '@/services/networkService.js';
@@ -291,6 +291,7 @@ const busyText = ref('');
 const errorMsg = ref('');
 
 const rooms = ref([]);
+let discoveryRefreshTimer = null;
 
 const manual = ref({ ip: '', port: '27960', password: '' });
 
@@ -363,9 +364,12 @@ const startSession = async (role, port, instanceName = playerName()) => {
 };
 
 const handleRefresh = () => {
+  if (scanning.value) return;
   scanning.value = true;
-  networkService.searchLan()
-    .then(() => new Promise((resolve) => setTimeout(resolve, 800)))
+  networkService.clearDiscoveredPeers()
+    .catch(() => {})
+    .then(() => networkService.searchLan())
+    .then(() => new Promise((resolve) => setTimeout(resolve, 1500)))
     .then(() => networkService.getDiscoveredPeers())
     .then((result) => {
       const peers = Array.isArray(result?.peers) ? result.peers : [];
@@ -449,6 +453,16 @@ const loadLocalIp = async () => {
 onMounted(() => {
   loadLocalIp();
   handleRefresh();
+  discoveryRefreshTimer = setInterval(() => {
+    if (!scanning.value) handleRefresh();
+  }, 3000);
+});
+
+onUnmounted(() => {
+  if (discoveryRefreshTimer) {
+    clearInterval(discoveryRefreshTimer);
+    discoveryRefreshTimer = null;
+  }
 });
 </script>
 

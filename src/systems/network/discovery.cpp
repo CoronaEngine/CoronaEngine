@@ -7,12 +7,15 @@
 #  endif
 #  include <winsock2.h>
 #  include <ws2tcpip.h>
+#  include <iphlpapi.h>
 #  pragma comment(lib, "ws2_32.lib")
+#  pragma comment(lib, "iphlpapi.lib")
 using socklen_t = int;
 static int last_error() { return WSAGetLastError(); }
 #else
 #  include <sys/socket.h>
 #  include <netinet/in.h>
+#  include <ifaddrs.h>
 #  include <arpa/inet.h>
 #  include <unistd.h>
 #  include <fcntl.h>
@@ -22,7 +25,9 @@ using SOCKET = int;
 static int last_error() { return errno; }
 #endif
 
+#include <algorithm>
 #include <cstring>
+#include <vector>
 #include <thread>
 
 namespace Corona::Network {
@@ -36,7 +41,7 @@ struct Discovery::Impl {
 
     std::atomic<bool> running{false};
     std::thread broadcast_thread;
-    struct sockaddr_in broadcast_addr{};
+    std::vector<struct sockaddr_in> broadcast_addrs;
     struct sockaddr_in listen_addr{};
 
 #ifdef _WIN32
@@ -104,11 +109,74 @@ struct Discovery::Impl {
             return false;
         }
 
-        // Broadcast address
-        std::memset(&broadcast_addr, 0, sizeof(broadcast_addr));
-        broadcast_addr.sin_family = AF_INET;
-        broadcast_addr.sin_port = htons(port);
-        broadcast_addr.sin_addr.s_addr = INADDR_BROADCAST;
+        broadcast_addrs.clear();
+        const auto add_broadcast = [&](uint32_t address) {
+            if (std::any_of(broadcast_addrs.begin(), broadcast_addrs.end(),
+                            [address](const sockaddr_in& existing) {
+                                return existing.sin_addr.s_addr == address;
+                            })) {
+                return;
+            }
+            sockaddr_in target{};
+            target.sin_family = AF_INET;
+            target.sin_port = htons(port);
+            target.sin_addr.s_addr = address;
+            broadcast_addrs.push_back(target);
+        };
+
+        // Keep limited broadcast as a fallback, then add directed broadcasts
+        // for active interfaces so Wi-Fi/AP isolation and routed LANs still
+        // receive discovery traffic.
+        add_broadcast(INADDR_BROADCAST);
+#ifdef _WIN32
+        ULONG size = 16 * 1024;
+        std::vector<uint8_t> buffer(size);
+        ULONG result = GetAdaptersAddresses(
+            AF_INET, 0, nullptr,
+            reinterpret_cast<PIP_ADAPTER_ADDRESSES>(buffer.data()), &size);
+        if (result == ERROR_BUFFER_OVERFLOW) {
+            buffer.resize(size);
+            result = GetAdaptersAddresses(
+                AF_INET, 0, nullptr,
+                reinterpret_cast<PIP_ADAPTER_ADDRESSES>(buffer.data()), &size);
+        }
+        if (result == NO_ERROR) {
+            for (auto* adapter = reinterpret_cast<PIP_ADAPTER_ADDRESSES>(buffer.data());
+                 adapter; adapter = adapter->Next) {
+                if (adapter->OperStatus != IfOperStatusUp ||
+                    adapter->IfType == IF_TYPE_SOFTWARE_LOOPBACK) {
+                    continue;
+                }
+                for (auto* unicast = adapter->FirstUnicastAddress;
+                     unicast; unicast = unicast->Next) {
+                    if (!unicast->Address.lpSockaddr ||
+                        unicast->Address.lpSockaddr->sa_family != AF_INET) {
+                        continue;
+                    }
+                    const auto* address = reinterpret_cast<const sockaddr_in*>(
+                        unicast->Address.lpSockaddr);
+                    const auto host = ntohl(address->sin_addr.s_addr);
+                    const auto prefix = std::min<ULONG>(unicast->OnLinkPrefixLength, 32);
+                    const uint32_t mask = prefix == 0 ? 0u : 0xffffffffu << (32 - prefix);
+                    add_broadcast(htonl(host | ~mask));
+                }
+            }
+        }
+#else
+        ifaddrs* interfaces = nullptr;
+        if (getifaddrs(&interfaces) == 0) {
+            for (auto* it = interfaces; it; it = it->ifa_next) {
+                if (!it->ifa_addr || !it->ifa_netmask ||
+                    it->ifa_addr->sa_family != AF_INET) {
+                    continue;
+                }
+                const auto* address = reinterpret_cast<const sockaddr_in*>(it->ifa_addr);
+                const auto* mask = reinterpret_cast<const sockaddr_in*>(it->ifa_netmask);
+                add_broadcast(address->sin_addr.s_addr | ~mask->sin_addr.s_addr);
+            }
+            freeifaddrs(interfaces);
+        }
+#endif
 
         return true;
     }
@@ -176,11 +244,17 @@ bool Discovery::start(uint16_t port, const std::string& instance_name,
     impl_->broadcast_thread = std::thread([this]() {
         int elapsed = 0;
         while (impl_->running.load()) {
-            sendto(impl_->sock,
-                   reinterpret_cast<const char*>(&impl_->outgoing_packet),
-                   sizeof(DiscoveryPacket), 0,
-                   reinterpret_cast<const struct sockaddr*>(&impl_->broadcast_addr),
-                   sizeof(impl_->broadcast_addr));
+            for (const auto& target : impl_->broadcast_addrs) {
+                const auto sent = sendto(
+                    impl_->sock,
+                    reinterpret_cast<const char*>(&impl_->outgoing_packet),
+                    sizeof(DiscoveryPacket), 0,
+                    reinterpret_cast<const struct sockaddr*>(&target),
+                    sizeof(target));
+                if (sent == SOCKET_ERROR) {
+                    CFW_LOG_DEBUG("Discovery: broadcast send failed, errno={}", last_error());
+                }
+            }
 
             // Sleep in short chunks so stop() joins quickly instead of
             // waiting up to a full kDiscoveryIntervalMs.
