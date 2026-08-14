@@ -34,3 +34,18 @@ def test_removed_compatibility_roots_contain_no_source_files():
             path.is_file() and "__pycache__" not in path.parts
             for path in (EDITOR_ROOT / name).rglob("*")
         )
+
+
+def test_embedded_python_path_resolution_supports_packaged_and_conda_layouts():
+    root = EDITOR_ROOT.parent
+    path_source = (root / "src" / "systems" / "script" / "python" / "python_path_config.cpp").read_text(
+        encoding="utf-8"
+    )
+    api_source = (root / "src" / "systems" / "script" / "python" / "python_api.cpp").read_text(
+        encoding="utf-8"
+    )
+
+    assert "CORONA_PYTHON_HOME_DIR" in path_source
+    assert "std::filesystem::exists" in path_source
+    assert "bundled_lib_path" in api_source
+    assert "python stdlib zip or Lib directory" in api_source

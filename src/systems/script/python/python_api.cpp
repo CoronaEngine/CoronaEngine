@@ -213,12 +213,14 @@ bool PythonAPI::initializeInterpreterLocked() {
 
     const auto bundled_stdlib_path = std::filesystem::path(bundled_stdlib);
     const auto bundled_dlls_path = std::filesystem::path(bundled_dlls);
+    const auto bundled_lib_path = std::filesystem::path(bundled_lib);
     const auto bundled_editor_main_path = std::filesystem::path(bundled_editor) / "main.py";
-    if (!std::filesystem::exists(bundled_stdlib_path) ||
+    if ((!std::filesystem::exists(bundled_stdlib_path) &&
+         !std::filesystem::exists(bundled_lib_path)) ||
         !std::filesystem::exists(bundled_dlls_path) ||
         !std::filesystem::exists(bundled_editor_main_path)) {
         const std::string message =
-            "Bundled Python runtime is incomplete. Expected: " + bundled_stdlib + ", " +
+            "Bundled Python runtime is incomplete. Expected python stdlib zip or Lib directory, " +
             bundled_dlls + ", and " + bundled_editor_main_path.generic_string();
         lifecycle_.transition(PythonLifecycleState::Failed);
         {
@@ -232,14 +234,21 @@ bool PythonAPI::initializeInterpreterLocked() {
         config = PyConfig{};
         return false;
     }
-    const std::array<std::string, 6> module_paths{{
+    if (!check_status(PyConfig_SetString(&config, &config.home,
+                                         str2wstr(PathCfg::python_home_dir()).c_str()),
+                      "set bundled Python home")) {
+        return false;
+    }
+    std::vector<std::string> module_paths{
         bundled_editor,
-        bundled_stdlib,
         bundled_root,
         bundled_dlls,
         bundled_lib,
         bundled_site_packages,
-    }};
+    };
+    if (std::filesystem::exists(bundled_stdlib_path)) {
+        module_paths.insert(module_paths.begin() + 1, bundled_stdlib);
+    }
     for (const auto& path : module_paths) {
         if (!check_status(PyWideStringList_Append(&config.module_search_paths, str2wstr(path).c_str()),
                           "append bundled Python module path")) {

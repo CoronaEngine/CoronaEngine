@@ -14,6 +14,30 @@ namespace Corona::Script::Python::PathCfg {
 
 namespace {
 
+std::filesystem::path resolve_executable_dir();
+
+std::filesystem::path configured_python_home() {
+#ifdef CORONA_PYTHON_HOME_DIR
+    return std::filesystem::path(CORONA_PYTHON_HOME_DIR);
+#else
+    return {};
+#endif
+}
+
+std::filesystem::path packaged_or_configured(const std::filesystem::path& packaged,
+                                              const std::filesystem::path& configured) {
+    if (std::filesystem::exists(packaged)) {
+        return packaged;
+    }
+    return configured;
+}
+
+bool packaged_python_runtime_available() {
+    const auto root = resolve_executable_dir() / "python-runtime";
+    return std::filesystem::exists(root / "Lib") &&
+           std::filesystem::exists(root / "DLLs");
+}
+
 std::filesystem::path resolve_executable_dir() {
 #ifdef _WIN32
     std::vector<wchar_t> buffer(MAX_PATH);
@@ -72,19 +96,36 @@ auto runtime_backend_abs() -> std::string {
 }
 
 auto python_home_dir() -> std::string {
-    return normalize(engine_root_path() / "python-runtime");
+    return normalize(packaged_python_runtime_available()
+                         ? engine_root_path() / "python-runtime"
+                         : configured_python_home());
 }
 
 auto python_stdlib_zip() -> std::string {
-    return normalize(engine_root_path() / "python313.zip");
+    return normalize(packaged_or_configured(
+        engine_root_path() / "python313.zip", configured_python_home() / "python313.zip"));
 }
 
 auto python_dll_dir() -> std::string {
-    return normalize(engine_root_path() / "python-runtime" / "DLLs");
+    return normalize(packaged_python_runtime_available()
+                         ? engine_root_path() / "python-runtime" / "DLLs"
+#ifdef CORONA_PYTHON_MODULE_DLL_DIR
+                         : std::filesystem::path(CORONA_PYTHON_MODULE_DLL_DIR)
+#else
+                         : configured_python_home() / "DLLs"
+#endif
+    );
 }
 
 auto python_lib_dir() -> std::string {
-    return normalize(engine_root_path() / "python-runtime" / "Lib");
+    return normalize(packaged_python_runtime_available()
+                         ? engine_root_path() / "python-runtime" / "Lib"
+#ifdef CORONA_PYTHON_MODULE_LIB_DIR
+                         : std::filesystem::path(CORONA_PYTHON_MODULE_LIB_DIR)
+#else
+                         : configured_python_home() / "Lib"
+#endif
+    );
 }
 
 auto site_packages_dir() -> std::string {
