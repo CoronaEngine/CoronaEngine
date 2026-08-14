@@ -119,19 +119,6 @@ void wait_until(NetworkSystem& host, NetworkSystem& client,
     require(false, message);
 }
 
-NativeResult poll_until_applied(NetworkSystem& host, NetworkSystem& client,
-                                const std::string& function) {
-    NativeResult last;
-    wait_until(host, client, [&] {
-        last = invoke("Network", function);
-        return last.data.value("has_pending", false) &&
-               !last.data.value("retrying", false);
-    }, function + " did not reach a terminal native apply result");
-    require(last.data.value("applied", false),
-            function + " was discarded: " + last.data.value("apply_error", std::string{}));
-    return last;
-}
-
 nlohmann::json scene_snapshot();
 nlohmann::json actor_by_guid(const nlohmann::json& snapshot, const std::string& guid);
 
@@ -262,7 +249,11 @@ void run_loopback_test() {
     state["mechanics"]["mass"] = 5.0;
     state["mechanics"]["linear_lock"] = {true, false, true};
     host.broadcast_actor_state_update(guid, "scene.ini", state.dump());
-    poll_until_applied(host, *receiver, "poll_pending_actor_state_update");
+    wait_until(host, *receiver, [&] {
+        Corona::Systems::UI::tick_collaborative_editor_runtime();
+        const auto current = actor_by_guid(scene_snapshot(), guid);
+        return current.value("name", std::string{}) == "Remote Renamed";
+    }, "collaborative runtime did not apply remote Actor state");
 
     actor = actor_by_guid(scene_snapshot(), guid);
     require(actor.value("name", std::string{}) == "Remote Renamed", "remote rename did not apply");
@@ -276,7 +267,13 @@ void run_loopback_test() {
 
     float moved[9] = {8.0f, 9.0f, 10.0f, 0.4f, 0.5f, 0.6f, 2.0f, 3.0f, 4.0f};
     host.broadcast_actor_transform_update(guid, "scene.ini", moved, "loopback-user", "move-1");
-    poll_until_applied(host, *receiver, "poll_pending_actor_transform");
+    wait_until(host, *receiver, [&] {
+        Corona::Systems::UI::tick_collaborative_editor_runtime();
+        const auto current = actor_by_guid(scene_snapshot(), guid);
+        return current.value("geometry", nlohmann::json::object())
+                   .value("position", nlohmann::json::array()) ==
+               nlohmann::json::array({8.0, 9.0, 10.0});
+    }, "collaborative runtime did not apply remote Actor transform");
     actor = actor_by_guid(scene_snapshot(), guid);
     require(actor["geometry"]["position"] == nlohmann::json::array({8.0, 9.0, 10.0}),
             "remote position did not apply");
@@ -284,9 +281,27 @@ void run_loopback_test() {
             "remote scale did not apply");
 
     host.broadcast_actor_delete(guid, "scene.ini", "Remote Renamed");
-    poll_until_applied(host, *receiver, "poll_pending_actor_delete");
+    wait_until(host, *receiver, [&] {
+        Corona::Systems::UI::tick_collaborative_editor_runtime();
+        return actor_by_guid(scene_snapshot(), guid).is_null();
+    }, "collaborative runtime did not apply remote Actor delete");
     require(actor_by_guid(scene_snapshot(), guid).is_null(),
             "remote delete did not remove the Actor from the native scene");
+
+    const std::string stale_guid = "loopback-stale-project-actor";
+    host.broadcast_actor_create(stale_guid, "scene.ini", "remote.obj", {}, create_transform,
+                                &packed, sizeof(packed), create_state.dump());
+    wait_until(host, *receiver, [&] {
+        return receiver->has_pending_transfers();
+    }, "remote Actor create was not queued before project switch");
+    const auto switched_root = project.root / "switched-project";
+    std::filesystem::create_directories(switched_root);
+    receiver->set_project_root(switched_root.string());
+    require(!receiver->has_pending_transfers(),
+            "project switch retained pending collaborative network work");
+    Corona::Systems::UI::tick_collaborative_editor_runtime();
+    require(actor_by_guid(scene_snapshot(), stale_guid).is_null(),
+            "stale Actor create applied after project switch");
 
     host.stop_session();
     receiver->stop_session();

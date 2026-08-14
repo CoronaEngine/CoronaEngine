@@ -1880,6 +1880,16 @@ bool NetworkSystem::claim_actor_ownership(const std::string& actor_guid) {
 void NetworkSystem::set_project_root(const std::string& project_root) {
     std::lock_guard lock(impl_->pending_mutex);
     if (impl_->project_root != project_root) {
+        impl_->incoming_transfers.clear();
+        impl_->pending_actor_creates.clear();
+        impl_->pending_actor_transform_updates.clear();
+        impl_->pending_actor_deletes.clear();
+        impl_->pending_actor_scene_snapshot_requests.clear();
+        impl_->pending_actor_scene_snapshots.clear();
+        impl_->pending_actor_state_updates.clear();
+        impl_->pending_file_transfer_groups.clear();
+        impl_->transfer_to_group.clear();
+        impl_->asset_to_transfer_group.clear();
         impl_->received_asset_cache.clear();
     }
     impl_->project_root = project_root;
