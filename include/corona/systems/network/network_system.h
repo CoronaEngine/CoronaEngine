@@ -288,6 +288,14 @@ public:
                                    std::string* actor_json_out = nullptr) const;
     bool ack_pending_actor_create(const std::string& actor_guid);
 
+    using PendingActorCreateProcessor = std::function<bool(
+        const std::string& actor_guid,
+        const std::string& scene_name,
+        const std::string& model_path,
+        const Network::ActorCreatePacked& actor_packed,
+        const std::string& actor_json)>;
+    bool process_pending_actor_create(const PendingActorCreateProcessor& processor);
+
     bool pop_pending_actor_transform_update(std::string& actor_guid,
                                             std::string& scene_name,
                                             float* transform_out,
@@ -302,6 +310,15 @@ public:
                                              std::string& correlation_id) const;
     bool ack_pending_actor_transform_update(const std::string& actor_guid);
 
+    using PendingActorTransformProcessor = std::function<bool(
+        const std::string& actor_guid,
+        const std::string& scene_name,
+        const float* transform,
+        const std::string& source_user_id,
+        const std::string& correlation_id)>;
+    bool process_pending_actor_transform_update(
+        const PendingActorTransformProcessor& processor);
+
     bool pop_pending_actor_delete(std::string& actor_guid,
                                   std::string& scene_name,
                                   std::string& actor_name);
@@ -309,6 +326,12 @@ public:
                                    std::string& scene_name,
                                    std::string& actor_name) const;
     bool ack_pending_actor_delete(const std::string& actor_guid);
+
+    using PendingActorDeleteProcessor = std::function<bool(
+        const std::string& actor_guid,
+        const std::string& scene_name,
+        const std::string& actor_name)>;
+    bool process_pending_actor_delete(const PendingActorDeleteProcessor& processor);
 
     bool pop_pending_actor_scene_snapshot_request(std::string& scene_name);
 
@@ -322,6 +345,12 @@ public:
                                          std::string& scene_name,
                                          std::string& actor_json) const;
     bool ack_pending_actor_state_update(const std::string& actor_guid);
+
+    using PendingActorStateProcessor = std::function<bool(
+        const std::string& actor_guid,
+        const std::string& scene_name,
+        const std::string& actor_json)>;
+    bool process_pending_actor_state_update(const PendingActorStateProcessor& processor);
 
     /**
      * @brief 注册稳定 Actor 网络 ID 到本地 SharedDataHub handle 映射。

@@ -1723,6 +1723,23 @@ bool NetworkSystem::ack_pending_actor_create(const std::string& actor_guid) {
     return true;
 }
 
+bool NetworkSystem::process_pending_actor_create(
+    const PendingActorCreateProcessor& processor) {
+    if (!processor) return false;
+    std::lock_guard lock(impl_->pending_mutex);
+    if (impl_->pending_actor_creates.empty()) return false;
+    const auto& pending = impl_->pending_actor_creates.front();
+    bool consume = false;
+    try {
+        consume = processor(pending.actor_guid, pending.scene_name, pending.model_path,
+                            pending.actor_packed, pending.actor_json);
+    } catch (...) {
+        return true;
+    }
+    if (consume) impl_->pending_actor_creates.erase(impl_->pending_actor_creates.begin());
+    return true;
+}
+
 bool NetworkSystem::pop_pending_actor_transform_update(std::string& actor_guid,
                                                        std::string& scene_name,
                                                        float* transform_out,
@@ -1761,6 +1778,26 @@ bool NetworkSystem::ack_pending_actor_transform_update(const std::string& actor_
     return true;
 }
 
+bool NetworkSystem::process_pending_actor_transform_update(
+    const PendingActorTransformProcessor& processor) {
+    if (!processor) return false;
+    std::lock_guard lock(impl_->pending_mutex);
+    if (impl_->pending_actor_transform_updates.empty()) return false;
+    const auto& pending = impl_->pending_actor_transform_updates.front();
+    bool consume = false;
+    try {
+        consume = processor(pending.actor_guid, pending.scene_name, pending.transform,
+                            pending.source_user_id, pending.correlation_id);
+    } catch (...) {
+        return true;
+    }
+    if (consume) {
+        impl_->pending_actor_transform_updates.erase(
+            impl_->pending_actor_transform_updates.begin());
+    }
+    return true;
+}
+
 bool NetworkSystem::pop_pending_actor_delete(std::string& actor_guid,
                                              std::string& scene_name,
                                              std::string& actor_name) {
@@ -1785,6 +1822,22 @@ bool NetworkSystem::ack_pending_actor_delete(const std::string& actor_guid) {
     if (impl_->pending_actor_deletes.empty() ||
         impl_->pending_actor_deletes.front().actor_guid != actor_guid) return false;
     impl_->pending_actor_deletes.erase(impl_->pending_actor_deletes.begin());
+    return true;
+}
+
+bool NetworkSystem::process_pending_actor_delete(
+    const PendingActorDeleteProcessor& processor) {
+    if (!processor) return false;
+    std::lock_guard lock(impl_->pending_mutex);
+    if (impl_->pending_actor_deletes.empty()) return false;
+    const auto& pending = impl_->pending_actor_deletes.front();
+    bool consume = false;
+    try {
+        consume = processor(pending.actor_guid, pending.scene_name, pending.actor_name);
+    } catch (...) {
+        return true;
+    }
+    if (consume) impl_->pending_actor_deletes.erase(impl_->pending_actor_deletes.begin());
     return true;
 }
 
@@ -1834,6 +1887,22 @@ bool NetworkSystem::ack_pending_actor_state_update(const std::string& actor_guid
     if (impl_->pending_actor_state_updates.empty() ||
         impl_->pending_actor_state_updates.front().actor_guid != actor_guid) return false;
     impl_->pending_actor_state_updates.erase(impl_->pending_actor_state_updates.begin());
+    return true;
+}
+
+bool NetworkSystem::process_pending_actor_state_update(
+    const PendingActorStateProcessor& processor) {
+    if (!processor) return false;
+    std::lock_guard lock(impl_->pending_mutex);
+    if (impl_->pending_actor_state_updates.empty()) return false;
+    const auto& pending = impl_->pending_actor_state_updates.front();
+    bool consume = false;
+    try {
+        consume = processor(pending.actor_guid, pending.scene_name, pending.actor_json);
+    } catch (...) {
+        return true;
+    }
+    if (consume) impl_->pending_actor_state_updates.erase(impl_->pending_actor_state_updates.begin());
     return true;
 }
 
