@@ -1878,6 +1878,7 @@ bool NetworkSystem::claim_actor_ownership(const std::string& actor_guid) {
 }
 
 void NetworkSystem::set_project_root(const std::string& project_root) {
+    std::lock_guard lock(impl_->pending_mutex);
     if (impl_->project_root != project_root) {
         impl_->received_asset_cache.clear();
     }
