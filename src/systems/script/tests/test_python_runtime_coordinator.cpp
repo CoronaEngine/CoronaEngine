@@ -2,7 +2,9 @@
 
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <iostream>
+#include <mutex>
 #include <thread>
 #include <vector>
 
@@ -133,6 +135,52 @@ int main() {
                      "an expired request must never enter the Python consumer") ||
             !require(ticket.wait(50ms).status == PythonRuntimeResponseStatus::Timeout,
                      "an expired queued request should complete as timeout")) return 1;
+    }
+
+    {
+        PythonRuntimeCoordinator coordinator(4);
+        std::mutex mutex;
+        std::condition_variable cv;
+        bool request_popped = false;
+        bool allow_handler = false;
+        std::atomic<bool> side_effect{false};
+        std::thread consumer([&] {
+            auto item = coordinator.wait_pop(100ms);
+            if (!item) return;
+            {
+                std::lock_guard lock(mutex);
+                request_popped = true;
+            }
+            cv.notify_one();
+            {
+                std::unique_lock lock(mutex);
+                cv.wait(lock, [&] { return allow_handler; });
+            }
+            if (!item->cancelled()) {
+                side_effect.store(true);
+            }
+            coordinator.complete(item->request_id, PythonRuntimeResponse::success());
+        });
+
+        std::thread producer([&] {
+            const auto response = coordinator.submit_and_wait(request("in-flight"), 20ms);
+            if (response.status != PythonRuntimeResponseStatus::Timeout) {
+                side_effect.store(true);
+            }
+        });
+        {
+            std::unique_lock lock(mutex);
+            if (!cv.wait_for(lock, 100ms, [&] { return request_popped; })) return 1;
+        }
+        producer.join();
+        {
+            std::lock_guard lock(mutex);
+            allow_handler = true;
+        }
+        cv.notify_one();
+        consumer.join();
+        if (!require(!side_effect.load(),
+                     "timed out in-flight requests must not execute their side effects")) return 1;
     }
 
     {

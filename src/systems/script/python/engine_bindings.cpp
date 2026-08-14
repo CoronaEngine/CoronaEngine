@@ -95,6 +95,9 @@ Corona::Script::Python::PythonRuntimeResponse execute_python_callback(
     if (it == g_python_callback_registry.end()) {
         return PythonRuntimeResponse::failure("python callback token is no longer registered");
     }
+    if (request.cancelled()) {
+        return PythonRuntimeResponse::timeout();
+    }
     const auto args_json = nlohmann::json::parse(request.payload_json.empty() ? "[]" : request.payload_json,
                                                  nullptr, false);
     if (args_json.is_discarded() || !args_json.is_array()) {

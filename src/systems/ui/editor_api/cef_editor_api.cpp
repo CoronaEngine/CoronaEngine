@@ -877,14 +877,24 @@ Script::Python::PythonRuntimeResponse execute_editor_python_callback(
     }
     const auto payload_text = envelope.value("payload", nlohmann::json::object()).dump();
     const auto event_text = envelope.value("event", std::string{});
+    if (request.cancelled()) {
+        Py_DECREF(callback);
+        return PythonRuntimeResponse::timeout();
+    }
     PyObject* py_payload = PyUnicode_FromString(payload_text.c_str());
     PyObject* py_event = PyUnicode_FromString(event_text.c_str());
     PyObject* py_args = (py_payload && py_event) ? PyTuple_Pack(2, py_payload, py_event) : nullptr;
     Py_XDECREF(py_payload);
     Py_XDECREF(py_event);
-    PyObject* result = py_args ? PyObject_CallObject(callback, py_args) : nullptr;
+    PyObject* result = request.cancelled() || !py_args
+                           ? nullptr
+                           : PyObject_CallObject(callback, py_args);
     Py_XDECREF(py_args);
     Py_DECREF(callback);
+    if (request.cancelled()) {
+        Py_XDECREF(result);
+        return PythonRuntimeResponse::timeout();
+    }
     if (!result) {
         PyErr_Print();
         return PythonRuntimeResponse::failure("editor callback raised an exception");

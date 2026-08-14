@@ -442,6 +442,9 @@ void PythonAPI::process_runtime_requests() {
 }
 
 PythonRuntimeResponse PythonAPI::execute_runtime_request(const PythonRuntimeRequest& request) {
+    if (request.cancelled()) {
+        return PythonRuntimeResponse::timeout();
+    }
     runtime_coordinator_.set_execution_phase("gil_wait:coordinator_request");
     nanobind::gil_scoped_acquire gil;
     runtime_coordinator_.set_execution_phase("coordinator_request");
@@ -495,14 +498,23 @@ PythonRuntimeResponse PythonAPI::execute_runtime_request(const PythonRuntimeRequ
         }
 
         if (request.kind == PythonRuntimeRequestKind::ServiceCall) {
+            if (request.cancelled()) {
+                return PythonRuntimeResponse::timeout();
+            }
             if (!pEditor.is_valid()) {
                 return PythonRuntimeResponse::failure("python editor is unavailable");
             }
             auto dispatcher = nanobind::getattr(pEditor, "dispatch_script_request_from_cpp");
             auto result = dispatcher(request.payload_json.c_str());
+            if (request.cancelled()) {
+                return PythonRuntimeResponse::timeout();
+            }
             return PythonRuntimeResponse::success(nanobind::cast<std::string>(result));
         }
         if (request.kind == PythonRuntimeRequestKind::Callback && request.handler) {
+            if (request.cancelled()) {
+                return PythonRuntimeResponse::timeout();
+            }
             return request.handler(request);
         }
         return PythonRuntimeResponse::failure("unsupported python runtime request");

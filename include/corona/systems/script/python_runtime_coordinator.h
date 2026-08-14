@@ -39,6 +39,8 @@ enum class PythonRuntimeState {
 
 struct PythonRuntimeResponse;
 
+using PythonRuntimeCancellation = std::atomic<bool>;
+
 struct PythonRuntimeRequest {
     using Handler = PythonRuntimeResponse (*)(const PythonRuntimeRequest&);
 
@@ -50,8 +52,13 @@ struct PythonRuntimeRequest {
     std::string function;
     std::string payload_json;
     Handler handler = nullptr;
+    std::shared_ptr<PythonRuntimeCancellation> cancellation;
     std::chrono::steady_clock::time_point deadline =
         std::chrono::steady_clock::time_point::max();
+
+    bool cancelled() const noexcept {
+        return cancellation && cancellation->load(std::memory_order_acquire);
+    }
 };
 
 struct PythonRuntimeResponse {

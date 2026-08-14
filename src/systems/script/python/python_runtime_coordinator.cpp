@@ -15,6 +15,7 @@ struct PythonRuntimeTicketState {
     std::condition_variable cv;
     bool done = false;
     PythonRuntimeResponse response;
+    std::shared_ptr<PythonRuntimeCancellation> cancellation;
 };
 }  // namespace Detail
 
@@ -72,6 +73,10 @@ PythonRuntimeTicket PythonRuntimeCoordinator::submit(PythonRuntimeRequest reques
     }
 
     auto ticket = std::make_shared<Detail::PythonRuntimeTicketState>();
+    if (!request.cancellation) {
+        request.cancellation = std::make_shared<PythonRuntimeCancellation>(false);
+    }
+    ticket->cancellation = request.cancellation;
     {
         std::lock_guard lock(mutex_);
         if (state_.load(std::memory_order_relaxed) != PythonRuntimeState::Accepting) {
@@ -134,6 +139,9 @@ std::optional<PythonRuntimeRequest> PythonRuntimeCoordinator::wait_pop(
             continue;
         }
         if (request.deadline <= std::chrono::steady_clock::now()) {
+            if (request.cancellation) {
+                request.cancellation->store(true, std::memory_order_release);
+            }
             auto ticket = std::move(pending->second);
             pending_.erase(pending);
             finish_ticket(ticket, PythonRuntimeResponse::timeout());
@@ -163,6 +171,17 @@ bool PythonRuntimeCoordinator::complete(std::uint64_t request_id,
 
 bool PythonRuntimeCoordinator::cancel(std::uint64_t request_id,
                                       PythonRuntimeResponse response) {
+    std::shared_ptr<PythonRuntimeCancellation> cancellation;
+    {
+        std::lock_guard lock(mutex_);
+        const auto it = pending_.find(request_id);
+        if (it != pending_.end()) {
+            cancellation = it->second->cancellation;
+        }
+    }
+    if (cancellation) {
+        cancellation->store(true, std::memory_order_release);
+    }
     return complete(request_id, std::move(response));
 }
 
@@ -172,7 +191,12 @@ void PythonRuntimeCoordinator::transition_and_cancel(PythonRuntimeState next) {
         std::lock_guard lock(mutex_);
         state_.store(next, std::memory_order_release);
         tickets.reserve(pending_.size());
-        for (auto& [_, ticket] : pending_) tickets.push_back(std::move(ticket));
+        for (auto& [_, ticket] : pending_) {
+            if (ticket->cancellation) {
+                ticket->cancellation->store(true, std::memory_order_release);
+            }
+            tickets.push_back(std::move(ticket));
+        }
         pending_.clear();
         queue_.clear();
     }
