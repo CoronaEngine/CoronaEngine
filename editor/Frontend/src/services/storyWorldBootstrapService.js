@@ -1,10 +1,13 @@
 import { editorApi } from '../api/editorApi.js';
 import {
   createStoryWorldActorData,
+  storyWorldExpectedSize,
+  storyWorldFinalScale,
   STORY_WORLD_ACTORS,
   STORY_WORLD_ACTOR_PREFIX,
   STORY_WORLD_CAMERA_SPAWN,
   STORY_WORLD_PLAN_ID,
+  STORY_WORLD_SCENE_VERSION,
   STORY_WORLD_SUN_DIRECTION,
   STORY_WORLD_TERRAIN_ACTOR,
 } from '../config/storyWorld.js';
@@ -18,6 +21,15 @@ const IGNORED_ACTOR_TYPES = new Set([
   'ui',
   'ui_image',
 ]);
+const STORY_WORLD_LEGACY_SIZE_RATIO = 0.35;
+const STORY_WORLD_VALIDATION_LIMITS = Object.freeze({
+  terrainX: 100,
+  terrainZ: 100,
+  lakeX: 40,
+  lakeZ: 25,
+  houseY: 6,
+  sceneY: 8,
+});
 
 export function normalizeStoryWorldPath(value) {
   return String(value || '')
@@ -108,6 +120,68 @@ function actorName(actor) {
   return String(actor?.name || actor?.actor_name || '').trim();
 }
 
+function actorGuid(actor) {
+  return String(actor?.actor_guid || actor?.guid || '').trim();
+}
+
+function finiteVector(value, fallback = [0, 0, 0]) {
+  if (Array.isArray(value) && value.length >= 3) {
+    const vector = value.slice(0, 3).map(Number);
+    if (vector.every(Number.isFinite)) return vector;
+  }
+  if (value && typeof value === 'object') {
+    const vector = [value.x, value.y, value.z].map(Number);
+    if (vector.every(Number.isFinite)) return vector;
+  }
+  return [...fallback];
+}
+
+export function normalizeStoryWorldAabb(value) {
+  const source = Array.isArray(value)
+    ? value
+    : value && typeof value === 'object'
+      ? [value.min_x, value.min_y, value.min_z, value.max_x, value.max_y, value.max_z]
+      : [];
+  if (source.length < 6) return null;
+  const aabb = source.slice(0, 6).map(Number);
+  if (!aabb.every(Number.isFinite)) return null;
+  return [
+    Math.min(aabb[0], aabb[3]),
+    Math.min(aabb[1], aabb[4]),
+    Math.min(aabb[2], aabb[5]),
+    Math.max(aabb[0], aabb[3]),
+    Math.max(aabb[1], aabb[4]),
+    Math.max(aabb[2], aabb[5]),
+  ];
+}
+
+export function storyWorldAabbSize(value) {
+  const aabb = normalizeStoryWorldAabb(value);
+  return aabb ? [aabb[3] - aabb[0], aabb[4] - aabb[1], aabb[5] - aabb[2]] : null;
+}
+
+function actorWorldAabb(actor) {
+  return normalizeStoryWorldAabb(
+    actor?.world_aabb ||
+      actor?.worldAabb ||
+      actor?.geometry?.world_aabb ||
+      actor?.geometry?.worldAabb
+  );
+}
+
+function actorScale(actor) {
+  return finiteVector(actor?.geometry?.scale || actor?.scale, [1, 1, 1]);
+}
+
+function actorSceneVersion(actor) {
+  const version = Number(actor?.source_scene_version ?? actor?.sourceSceneVersion ?? 1);
+  return Number.isFinite(version) ? Math.max(1, Math.trunc(version)) : 1;
+}
+
+function actorVisible(actor) {
+  return actor?.visible !== false && actor?.optics?.visible !== false;
+}
+
 export function isStoryWorldActor(actor = {}) {
   return (
     actorName(actor).startsWith(STORY_WORLD_ACTOR_PREFIX) ||
@@ -116,7 +190,7 @@ export function isStoryWorldActor(actor = {}) {
 }
 
 export function isWorldGeometryActor(actor = {}) {
-  if (!actor || typeof actor !== 'object' || actor.visible === false || actor.follow_camera)
+  if (!actor || typeof actor !== 'object' || !actorVisible(actor) || actor.follow_camera)
     return false;
   const actorType = String(actor.actor_type || actor.type || actor.entity_type || '')
     .trim()
@@ -146,7 +220,7 @@ export function missingStoryWorldActors(snapshot = {}, definitions = STORY_WORLD
   const identities = new Set();
   for (const actor of actors) {
     const name = actorName(actor);
-    const guid = String(actor?.actor_guid || actor?.guid || '').trim();
+    const guid = actorGuid(actor);
     if (name) identities.add(`name:${name.toLowerCase()}`);
     if (guid) identities.add(`guid:${guid.toLowerCase()}`);
   }
@@ -155,6 +229,148 @@ export function missingStoryWorldActors(snapshot = {}, definitions = STORY_WORLD
       !identities.has(`name:${definition.name.toLowerCase()}`) &&
       !identities.has(`guid:${definition.guid.toLowerCase()}`)
   );
+}
+
+function storyActorForDefinition(snapshot, definition) {
+  const scene = resolveSceneSnapshot(snapshot);
+  const actors = Array.isArray(scene.actors) ? scene.actors : [];
+  const expectedName = definition.name.toLowerCase();
+  const expectedGuid = definition.guid.toLowerCase();
+  return actors.find(
+    (actor) =>
+      actorName(actor).toLowerCase() === expectedName ||
+      actorGuid(actor).toLowerCase() === expectedGuid
+  );
+}
+
+export function storyWorldMigrationForActor(actor, definition) {
+  if (!actor || !definition || !isStoryWorldActor(actor)) return null;
+  const currentVersion = actorSceneVersion(actor);
+  if (currentVersion >= STORY_WORLD_SCENE_VERSION) return null;
+
+  const currentScale = actorScale(actor);
+  const actualSize = storyWorldAabbSize(actorWorldAabb(actor));
+  const expectedSize = storyWorldExpectedSize(definition);
+  const actualMax = actualSize ? Math.max(...actualSize) : 0;
+  const expectedMax = Math.max(...expectedSize);
+  const expectedFinalScale = storyWorldFinalScale(definition);
+  const currentScaleMax = Math.max(...currentScale.map((value) => Math.abs(value)));
+  const expectedScaleMax = Math.max(...expectedFinalScale.map((value) => Math.abs(value)));
+  const normalizedLegacySize =
+    expectedMax > 0 &&
+    (!actualSize ||
+      actualMax < expectedMax * STORY_WORLD_LEGACY_SIZE_RATIO ||
+      (currentVersion <= 1 && currentScaleMax < expectedScaleMax * 0.75));
+  const scale = normalizedLegacySize
+    ? currentScale.map((value) => value * definition.importScale)
+    : currentScale;
+
+  return {
+    actor,
+    definition,
+    currentVersion,
+    actualSize,
+    expectedSize,
+    scale,
+    repaired: normalizedLegacySize,
+    needsResourceRebind: currentVersion < STORY_WORLD_SCENE_VERSION,
+    actorGuid: actorGuid(actor) || definition.guid,
+  };
+}
+
+export function storyWorldMigrations(snapshot, definitions = STORY_WORLD_ACTORS) {
+  return definitions
+    .map((definition) =>
+      storyWorldMigrationForActor(storyActorForDefinition(snapshot, definition), definition)
+    )
+    .filter(Boolean);
+}
+
+export function createStoryWorldMigrationActorData(migration) {
+  const { definition } = migration;
+  return {
+    actor_name: definition.name,
+    name: definition.name,
+    actor_guid: migration.actorGuid || definition.guid,
+    ...(migration.repaired ? { scale: [...migration.scale] } : {}),
+    source_plan_id: STORY_WORLD_PLAN_ID,
+    source_scene_version: STORY_WORLD_SCENE_VERSION,
+    skip_if_exists: true,
+    update_if_exists: true,
+  };
+}
+
+function unionAabbs(aabbs) {
+  const valid = aabbs.map(normalizeStoryWorldAabb).filter(Boolean);
+  if (valid.length === 0) return null;
+  return valid.reduce(
+    (result, aabb) => [
+      Math.min(result[0], aabb[0]),
+      Math.min(result[1], aabb[1]),
+      Math.min(result[2], aabb[2]),
+      Math.max(result[3], aabb[3]),
+      Math.max(result[4], aabb[4]),
+      Math.max(result[5], aabb[5]),
+    ],
+    [...valid[0]]
+  );
+}
+
+export function validateStoryWorldSnapshot(snapshot = {}) {
+  const scene = resolveSceneSnapshot(snapshot);
+  const actors = Array.isArray(scene.actors) ? scene.actors : [];
+  const terrain = storyActorForDefinition(scene, STORY_WORLD_TERRAIN_ACTOR);
+  const lakeDefinition = STORY_WORLD_ACTORS.find(
+    (definition) => definition.name === 'StoryWorld_YunxiLake'
+  );
+  const lake = lakeDefinition ? storyActorForDefinition(scene, lakeDefinition) : null;
+  const houses = actors.filter(
+    (actor) => isStoryWorldActor(actor) && actorName(actor).startsWith('StoryWorld_House_')
+  );
+  const terrainSize = storyWorldAabbSize(actorWorldAabb(terrain));
+  const lakeSize = storyWorldAabbSize(actorWorldAabb(lake));
+  const houseHeights = houses
+    .filter(actorVisible)
+    .map((actor) => storyWorldAabbSize(actorWorldAabb(actor))?.[1])
+    .filter(Number.isFinite);
+  const worldBounds =
+    unionAabbs(actors.filter(isStoryWorldActor).map(actorWorldAabb)) ||
+    normalizeStoryWorldAabb(scene.scene_aabb || scene.sceneAabb || scene.world_aabb);
+  const sceneSize = storyWorldAabbSize(worldBounds);
+  const errors = [];
+
+  if (!terrain || !actorVisible(terrain) || !terrainSize) errors.push('基础地形不可见或边界无效');
+  else if (
+    terrainSize[0] < STORY_WORLD_VALIDATION_LIMITS.terrainX ||
+    terrainSize[2] < STORY_WORLD_VALIDATION_LIMITS.terrainZ
+  ) {
+    errors.push('基础地形尺寸不足');
+  }
+  if (!lake || !actorVisible(lake) || !lakeSize) errors.push('云溪湖不可见或边界无效');
+  else if (
+    lakeSize[0] < STORY_WORLD_VALIDATION_LIMITS.lakeX ||
+    lakeSize[2] < STORY_WORLD_VALIDATION_LIMITS.lakeZ
+  ) {
+    errors.push('云溪湖尺寸不足');
+  }
+  if (!houseHeights.some((height) => height >= STORY_WORLD_VALIDATION_LIMITS.houseY)) {
+    errors.push('村落建筑尺寸不足');
+  }
+  if (!sceneSize || sceneSize[1] < STORY_WORLD_VALIDATION_LIMITS.sceneY) {
+    errors.push('场景垂直跨度不足');
+  }
+
+  return {
+    valid: errors.length === 0,
+    errors,
+    worldBounds,
+    metrics: {
+      terrainSize,
+      lakeSize,
+      maximumHouseHeight: houseHeights.length > 0 ? Math.max(...houseHeights) : 0,
+      sceneSize,
+    },
+  };
 }
 
 export function editorCallSucceeded(response) {
@@ -197,6 +413,19 @@ async function safeDefaultProjectPath(api) {
   }
 }
 
+async function enableStoryWorldLighting(api, sceneId, warnings) {
+  const sunlight = await api.sceneTools.sunDirection(sceneId, true, [...STORY_WORLD_SUN_DIRECTION]);
+  if (!editorCallSucceeded(sunlight)) {
+    throw new Error(editorCallErrorMessage(sunlight, '太阳光初始化失败'));
+  }
+  try {
+    const grid = await api.sceneTools.floorGrid(sceneId, false);
+    if (!editorCallSucceeded(grid)) warnings.push('未能隐藏编辑器地面网格。');
+  } catch (_) {
+    warnings.push('未能隐藏编辑器地面网格。');
+  }
+}
+
 export async function runStoryWorldBootstrap({
   api = editorApi,
   sceneId,
@@ -225,6 +454,10 @@ export async function runStoryWorldBootstrap({
       managedWorld: false,
       skipReason: 'not-story',
       warnings: [],
+      migrationWarnings: [],
+      repairedCount: 0,
+      validation: null,
+      worldBounds: null,
     };
   }
 
@@ -239,50 +472,44 @@ export async function runStoryWorldBootstrap({
       managedWorld: false,
       skipReason: 'existing-world',
       warnings: [],
+      migrationWarnings: [],
+      repairedCount: 0,
+      validation: null,
+      worldBounds: normalizeStoryWorldAabb(initialSnapshot.scene_aabb),
     };
   }
 
   const missing = missingStoryWorldActors(initialSnapshot);
-  if (missing.length === 0) {
-    return {
-      generated: false,
-      skipped: false,
-      managedWorld: true,
-      warnings: [],
-      createdCount: 0,
-      terrainCreated: false,
-    };
-  }
+  const migrations = storyWorldMigrations(initialSnapshot);
   const terrainWasMissing = missing.some(
     (definition) => definition.name === STORY_WORLD_TERRAIN_ACTOR.name
   );
-
   const activeProjectPath = storyProjectPathFromResponse(projectInfoResponse);
-  const defaultProjectPath = await safeDefaultProjectPath(api);
-  if (isCancelled()) return null;
-  const assetRoot = resolveStoryWorldAssetRoot({
-    frontendLocation,
-    activeProjectPath,
-    defaultProjectPath,
-  });
-  if (!assetRoot) {
-    throw createBootstrapError(
-      '无法定位剧情模式山水村落资源，请检查编辑器安装目录。',
-      'ASSET_ROOT_UNAVAILABLE'
-    );
+  let assetRoot = '';
+  if (missing.length > 0 || migrations.length > 0) {
+    const defaultProjectPath = await safeDefaultProjectPath(api);
+    if (isCancelled()) return null;
+    assetRoot = resolveStoryWorldAssetRoot({
+      frontendLocation,
+      activeProjectPath,
+      defaultProjectPath,
+    });
+    if (!assetRoot) {
+      throw createBootstrapError(
+        '无法定位剧情模式山水村落资源，请检查编辑器安装目录。',
+        'ASSET_ROOT_UNAVAILABLE'
+      );
+    }
   }
 
   const warnings = [];
-  const shouldInitializeLighting = classification.kind === 'empty' || terrainWasMissing;
+  const migrationWarnings = [];
+  const shouldInitializeLighting =
+    classification.kind === 'empty' || terrainWasMissing || migrations.length > 0;
   if (shouldInitializeLighting) {
     onProgress({ status: 'lighting', progress: 15, message: '点亮天光' });
     try {
-      const sunlight = await api.sceneTools.sunDirection(activeSceneId, true, [
-        ...STORY_WORLD_SUN_DIRECTION,
-      ]);
-      if (!editorCallSucceeded(sunlight)) {
-        throw new Error(editorCallErrorMessage(sunlight, '太阳光初始化失败'));
-      }
+      await enableStoryWorldLighting(api, activeSceneId, warnings);
     } catch (error) {
       throw createBootstrapError(
         '无法启用引擎太阳光与天空环境光，请重试。',
@@ -290,18 +517,63 @@ export async function runStoryWorldBootstrap({
         error
       );
     }
-    try {
-      const grid = await api.sceneTools.floorGrid(activeSceneId, false);
-      if (!editorCallSucceeded(grid)) warnings.push('未能隐藏编辑器地面网格。');
-    } catch (_) {
-      warnings.push('未能隐藏编辑器地面网格。');
-    }
     if (isCancelled()) return null;
   }
+
+  let repairedCount = 0;
+  let upgradedCount = 0;
+  if (migrations.length > 0) {
+    onProgress({ status: 'repairing', progress: 22, message: '升级云溪村模型与材质' });
+    for (const migration of migrations) {
+      if (isCancelled()) return null;
+      try {
+        const resourcePath = assetPath(assetRoot, migration.definition.asset);
+        if (migration.needsResourceRebind) {
+          if (typeof api.sceneTools.rebindActorResource !== 'function') {
+            throw new Error('当前编辑器不支持剧情资源重新绑定。');
+          }
+          const rebound = await api.sceneTools.rebindActorResource(
+            activeSceneId,
+            migration.actorGuid,
+            resourcePath
+          );
+          if (!editorCallSucceeded(rebound)) {
+            throw new Error(
+              editorCallErrorMessage(rebound, `升级 ${migration.definition.name} 模型失败`)
+            );
+          }
+          upgradedCount += 1;
+        }
+
+        const updated = await api.sceneTools.createActor(
+          activeSceneId,
+          resourcePath,
+          'model',
+          createStoryWorldMigrationActorData(migration)
+        );
+        if (!editorCallSucceeded(updated)) {
+          throw new Error(
+            editorCallErrorMessage(updated, `更新 ${migration.definition.name} 版本失败`)
+          );
+        }
+        if (migration.repaired) repairedCount += 1;
+      } catch (error) {
+        const warning = `${migration.definition.name} 模型升级失败，将在下次进入时重试。`;
+        if (migration.definition.critical) {
+          throw createBootstrapError(
+            '基础地形模型升级失败，请重试。',
+            'WORLD_MIGRATION_FAILED',
+            error
+          );
+        }
+        migrationWarnings.push(warning);
+      }
+    }
+  }
+
   let terrainCreated = false;
   let createdCount = 0;
   let currentPhase = '';
-
   for (let index = 0; index < missing.length; index += 1) {
     if (isCancelled()) return null;
     const definition = missing[index];
@@ -367,10 +639,25 @@ export async function runStoryWorldBootstrap({
 
     const rangeStart = definition.phase === 'decorations' ? 88 : 38;
     const progress = Math.min(
-      96,
+      94,
       rangeStart + Math.round(((index + 1) / Math.max(missing.length, 1)) * 8)
     );
     onProgress({ status: definition.phase, progress, message: phaseDetails(definition.phase)[2] });
+  }
+
+  if (isCancelled()) return null;
+  onProgress({ status: 'validating', progress: 97, message: '确认世界画面' });
+  const finalSnapshotResponse = await api.scene.getSnapshot(activeSceneId);
+  if (isCancelled()) return null;
+  const finalSnapshot = resolveSceneSnapshot(finalSnapshotResponse);
+  const validation = validateStoryWorldSnapshot(finalSnapshot);
+  if (!validation.valid) {
+    const error = createBootstrapError(
+      '剧情资源尺寸异常，世界修复未完成。',
+      'WORLD_VALIDATION_FAILED'
+    );
+    error.validation = validation;
+    throw error;
   }
 
   onProgress({ status: 'complete', progress: 100, message: '云溪村已就绪' });
@@ -378,9 +665,14 @@ export async function runStoryWorldBootstrap({
     generated: createdCount > 0,
     skipped: false,
     managedWorld: true,
-    warnings,
+    warnings: [...warnings, ...migrationWarnings],
+    migrationWarnings,
     createdCount,
+    repairedCount,
+    upgradedCount,
     terrainCreated,
+    validation,
+    worldBounds: validation.worldBounds,
     assetRoot,
   };
 }

@@ -98,6 +98,7 @@ test('managed Story World camera positions are clamped above terrain and below t
   );
   assert.deepEqual(descending.position, [0, 1.5, 0]);
   assert.equal(descending.moved, false);
+
 });
 
 test('detects invalid or underground camera poses without resetting valid positions', () => {
@@ -111,5 +112,57 @@ test('detects invalid or underground camera poses without resetting valid positi
   assert.equal(
     isStoryCameraPoseUnsafe({ ...validOrientation, position: [0, 9, 0], forward: [0, 0, 0] }, 1.5),
     true
+  );
+});
+
+test('detects upward-looking, over-height and outward-facing camera poses', () => {
+  const worldBounds = [-60, -8, -60, 60, 20, 60];
+  const options = { minimumY: 1.5, maximumY: 80, worldBounds };
+
+  assert.equal(
+    isStoryCameraPoseUnsafe(
+      { position: [0, 9, 0], forward: [0, 0.7, 0.7], worldUp: [0, 1, 0] },
+      options
+    ),
+    true
+  );
+  assert.equal(
+    isStoryCameraPoseUnsafe(
+      { position: [0, 81, 0], forward: [0, 0, 1], worldUp: [0, 1, 0] },
+      options
+    ),
+    true
+  );
+  assert.equal(
+    isStoryCameraPoseUnsafe(
+      { position: [90, 9, 0], forward: [1, 0, 0], worldUp: [0, 1, 0] },
+      options
+    ),
+    true
+  );
+  assert.equal(
+    isStoryCameraPoseUnsafe(
+      { position: [90, 9, 0], forward: [-1, -0.1, 0], worldUp: [0, 1, 0] },
+      options
+    ),
+    false
+  );
+});
+
+test('keeps the Yunxi Village spawn pose when it is in bounds and looks slightly downward', () => {
+  assert.equal(
+    isStoryCameraPoseUnsafe(
+      {
+        position: [-45, 9, -34],
+        forward: [0.737, -0.123, 0.667],
+        worldUp: [0, 1, 0],
+      },
+      {
+        minimumY: 1.5,
+        maximumY: 80,
+        worldBounds: [-60, -8, -60, 60, 20, 60],
+      }
+    ),
+    false
   );
 });

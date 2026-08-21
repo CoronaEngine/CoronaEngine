@@ -1,5 +1,5 @@
 export const STORY_WORLD_PLAN_ID = 'story-world-v1';
-export const STORY_WORLD_SCENE_VERSION = 1;
+export const STORY_WORLD_SCENE_VERSION = 3;
 export const STORY_WORLD_ACTOR_PREFIX = 'StoryWorld_';
 export const STORY_WORLD_LOCATION_TITLE = '云溪村';
 export const STORY_WORLD_LOCATION_OBJECTIVE = '探索村落';
@@ -17,6 +17,51 @@ export const STORY_WORLD_CAMERA_BOUNDS = Object.freeze({
   minY: STORY_WORLD_CAMERA_MIN_Y,
   maxY: STORY_WORLD_CAMERA_MAX_Y,
 });
+
+export const STORY_WORLD_ASSET_METADATA = Object.freeze({
+  'terrain_v3.obj': Object.freeze({ importScale: 120, sourceSize: [120, 16.40251, 120] }),
+  'water_v3.obj': Object.freeze({ importScale: 50, sourceSize: [50, 1.8524, 36.348] }),
+  'road_v3.obj': Object.freeze({ importScale: 16, sourceSize: [5.24114, 0.125, 16] }),
+  'bridge_v3.obj': Object.freeze({ importScale: 12, sourceSize: [5.04, 2.65, 12] }),
+  'gate_v3.obj': Object.freeze({ importScale: 12, sourceSize: [12, 8.596, 2.394] }),
+  'house_small_v3.obj': Object.freeze({ importScale: 10.8, sourceSize: [10.8, 7.998, 9.321] }),
+  'house_large_v3.obj': Object.freeze({ importScale: 13.8, sourceSize: [13.8, 9.119, 11.287] }),
+  'pavilion_v3.obj': Object.freeze({ importScale: 9, sourceSize: [9, 6.925, 8.955] }),
+  'tree_v3_a.obj': Object.freeze({ importScale: 9.1, sourceSize: [6.262, 9.1, 4.538] }),
+  'tree_v3_b.obj': Object.freeze({ importScale: 9.1, sourceSize: [5.649, 9.1, 4.642] }),
+  'rock_v3.obj': Object.freeze({ importScale: 4.48466, sourceSize: [4.48466, 4.154, 3.966] }),
+  'fence_v3.obj': Object.freeze({ importScale: 8.2, sourceSize: [8.2, 2.229, 0.3] }),
+  'lantern_v3.obj': Object.freeze({ importScale: 4.2, sourceSize: [1.92, 4.2, 0.95] }),
+  'courtyard_v3.obj': Object.freeze({ importScale: 10, sourceSize: [10, 2.27, 7.64] }),
+  'barrels_v3.obj': Object.freeze({ importScale: 2.3, sourceSize: [2.3, 1.431, 1.109] }),
+  'woodpile_v3.obj': Object.freeze({ importScale: 3, sourceSize: [3, 1.51, 1.486] }),
+  'reeds_v3.obj': Object.freeze({ importScale: 4.2, sourceSize: [4.2, 2.88, 2.09] }),
+});
+
+function finiteScale(scale = [1, 1, 1]) {
+  return [0, 1, 2].map((index) => {
+    const value = Number(scale?.[index]);
+    return Number.isFinite(value) ? value : 1;
+  });
+}
+
+export function storyWorldFinalScale(definition = {}) {
+  const variantScale = finiteScale(definition.scale);
+  const importScale = Number(
+    definition.importScale ?? STORY_WORLD_ASSET_METADATA[definition.asset]?.importScale
+  );
+  const compensation = Number.isFinite(importScale) && importScale > 0 ? importScale : 1;
+  return variantScale.map((value) => value * compensation);
+}
+
+export function storyWorldExpectedSize(definition = {}) {
+  const sourceSize = definition.sourceSize ??
+    STORY_WORLD_ASSET_METADATA[definition.asset]?.sourceSize ?? [0, 0, 0];
+  const variantScale = finiteScale(definition.scale);
+  return [0, 1, 2].map(
+    (index) => Math.abs(Number(sourceSize[index]) || 0) * Math.abs(variantScale[index])
+  );
+}
 
 const STATIC_MESH_PHYSICS = Object.freeze({
   physics_enabled: true,
@@ -41,7 +86,7 @@ const NO_PHYSICS = Object.freeze({
 
 function storyActor(index, definition) {
   const suffix = String(index).padStart(12, '0');
-  return Object.freeze({
+  const actor = {
     guid: `9bce0001-1a11-4a11-8a11-${suffix}`,
     position: [0, 0, 0],
     rotation: [0, 0, 0],
@@ -50,13 +95,19 @@ function storyActor(index, definition) {
     critical: false,
     phase: 'village',
     ...definition,
+  };
+  const assetMetadata = STORY_WORLD_ASSET_METADATA[actor.asset] || {};
+  return Object.freeze({
+    ...actor,
+    importScale: Number(assetMetadata.importScale) || 1,
+    sourceSize: Array.isArray(assetMetadata.sourceSize) ? [...assetMetadata.sourceSize] : [0, 0, 0],
   });
 }
 
 const actors = [
   storyActor(1, {
     name: 'StoryWorld_Terrain',
-    asset: 'terrain.obj',
+    asset: 'terrain_v3.obj',
     semanticRole: 'terrain_ground',
     entityType: 'terrain',
     physics: STATIC_MESH_PHYSICS,
@@ -65,7 +116,7 @@ const actors = [
   }),
   storyActor(2, {
     name: 'StoryWorld_YunxiLake',
-    asset: 'water.obj',
+    asset: 'water_v3.obj',
     semanticRole: 'water_lake',
     entityType: 'water',
     phase: 'water',
@@ -79,7 +130,7 @@ const actors = [
   ].map(([x, y, z, rotationY], index) =>
     storyActor(3 + index, {
       name: `StoryWorld_Road_${index + 1}`,
-      asset: 'road_segment.obj',
+      asset: 'road_v3.obj',
       position: [x, y, z],
       rotation: [0, rotationY, 0],
       semanticRole: 'terrain_road',
@@ -90,7 +141,7 @@ const actors = [
   ),
   storyActor(8, {
     name: 'StoryWorld_WoodBridge',
-    asset: 'bridge.obj',
+    asset: 'bridge_v3.obj',
     position: [20, -0.15, 3],
     rotation: [0, -28, 0],
     semanticRole: 'landmark_bridge',
@@ -100,7 +151,7 @@ const actors = [
   }),
   storyActor(9, {
     name: 'StoryWorld_VillageGate',
-    asset: 'gate.obj',
+    asset: 'gate_v3.obj',
     position: [-34, 0.15, -23],
     rotation: [0, -26, 0],
     semanticRole: 'landmark_gate',
@@ -108,7 +159,7 @@ const actors = [
   }),
   storyActor(10, {
     name: 'StoryWorld_LakesidePavilion',
-    asset: 'pavilion.obj',
+    asset: 'pavilion_v3.obj',
     position: [15, -0.15, 16],
     rotation: [0, 18, 0],
     semanticRole: 'landmark_pavilion',
@@ -116,13 +167,13 @@ const actors = [
     physics: STATIC_BOX_PHYSICS,
   }),
   ...[
-    ['House_Liu', 'house_large.obj', -14, 0.2, 8, 15, 1.05],
-    ['House_Tea', 'house_small.obj', -1, 0.2, 12, -8, 1],
-    ['House_Smith', 'house_small.obj', -17, 0.2, -3, 168, 0.92],
-    ['House_Healer', 'house_large.obj', 2, 0.2, -5, 188, 0.94],
-    ['House_East', 'house_small.obj', 14, 0.15, -7, 205, 0.9],
-    ['House_North', 'house_small.obj', 0, 0.3, 25, 5, 0.9],
-    ['House_Fisher', 'house_small.obj', 22, -0.2, 15, -72, 0.82],
+    ['House_Liu', 'house_large_v3.obj', -14, 0.2, 8, 15, 1.05],
+    ['House_Tea', 'house_small_v3.obj', -1, 0.2, 12, -8, 1],
+    ['House_Smith', 'house_small_v3.obj', -17, 0.2, -3, 168, 0.92],
+    ['House_Healer', 'house_large_v3.obj', 2, 0.2, -5, 188, 0.94],
+    ['House_East', 'house_small_v3.obj', 14, 0.15, -7, 205, 0.9],
+    ['House_North', 'house_small_v3.obj', 0, 0.3, 25, 5, 0.9],
+    ['House_Fisher', 'house_small_v3.obj', 22, -0.2, 15, -72, 0.82],
   ].map(([label, asset, x, y, z, rotationY, scale], index) =>
     storyActor(11 + index, {
       name: `StoryWorld_${label}`,
@@ -162,7 +213,7 @@ for (const [x, y, z, scale] of treePositions) {
   actors.push(
     storyActor(index, {
       name: `StoryWorld_Tree_${String(index - 17).padStart(2, '0')}`,
-      asset: 'tree.obj',
+      asset: index % 2 === 0 ? 'tree_v3_a.obj' : 'tree_v3_b.obj',
       position: [x, y, z],
       rotation: [0, (index * 47) % 360, 0],
       scale: [scale, scale, scale],
@@ -186,7 +237,7 @@ for (const [x, y, z, scale] of rockPositions) {
   actors.push(
     storyActor(index, {
       name: `StoryWorld_Rock_${String(index - 35).padStart(2, '0')}`,
-      asset: 'rock.obj',
+      asset: 'rock_v3.obj',
       position: [x, y, z],
       rotation: [0, (index * 31) % 360, 0],
       scale: [scale, scale, scale],
@@ -210,7 +261,7 @@ for (const [x, y, z, rotationY] of fencePositions) {
   actors.push(
     storyActor(index, {
       name: `StoryWorld_Fence_${String(index - 41).padStart(2, '0')}`,
-      asset: 'fence.obj',
+      asset: 'fence_v3.obj',
       position: [x, y, z],
       rotation: [0, rotationY, 0],
       semanticRole: 'building_fence',
@@ -230,10 +281,72 @@ for (const [x, y, z, rotationY] of [
   actors.push(
     storyActor(index, {
       name: `StoryWorld_Lantern_${String(index - 47).padStart(2, '0')}`,
-      asset: 'lantern.obj',
+      asset: 'lantern_v3.obj',
       position: [x, y, z],
       rotation: [0, rotationY, 0],
       semanticRole: 'landmark_lantern',
+      entityType: 'decoration',
+      phase: 'decorations',
+    })
+  );
+}
+
+const villageDetailActors = [
+  ['StoryWorld_Courtyard_Liu', 'courtyard_v3.obj', -14, 0.12, 8, 15, 0.96, 'building_courtyard'],
+  ['StoryWorld_Courtyard_Healer', 'courtyard_v3.obj', 2, 0.12, -5, 8, 0.9, 'building_courtyard'],
+  [
+    'StoryWorld_Barrels_Tea',
+    'barrels_v3.obj',
+    -4.2,
+    0.18,
+    9.2,
+    -10,
+    0.92,
+    'decoration_village_prop',
+  ],
+  [
+    'StoryWorld_Barrels_Fisher',
+    'barrels_v3.obj',
+    19.6,
+    -0.05,
+    12.7,
+    18,
+    0.86,
+    'decoration_village_prop',
+  ],
+  [
+    'StoryWorld_Woodpile_Smith',
+    'woodpile_v3.obj',
+    -20.6,
+    0.18,
+    -0.8,
+    82,
+    1,
+    'decoration_village_prop',
+  ],
+  [
+    'StoryWorld_Woodpile_North',
+    'woodpile_v3.obj',
+    4.6,
+    0.2,
+    24,
+    -12,
+    0.88,
+    'decoration_village_prop',
+  ],
+  ['StoryWorld_Reeds_West', 'reeds_v3.obj', 27.5, -0.58, 16.5, 12, 1, 'vegetation_reeds'],
+  ['StoryWorld_Reeds_East', 'reeds_v3.obj', 42, -0.58, 21.5, -20, 0.9, 'vegetation_reeds'],
+];
+for (const [name, asset, x, y, z, rotationY, scale, semanticRole] of villageDetailActors) {
+  const index = actors.length + 1;
+  actors.push(
+    storyActor(index, {
+      name,
+      asset,
+      position: [x, y, z],
+      rotation: [0, rotationY, 0],
+      scale: [scale, scale, scale],
+      semanticRole,
       entityType: 'decoration',
       phase: 'decorations',
     })
@@ -250,7 +363,7 @@ export function createStoryWorldActorData(definition) {
     actor_guid: definition.guid,
     position: [...definition.position],
     rotation: [...definition.rotation],
-    scale: [...definition.scale],
+    scale: storyWorldFinalScale(definition),
     semantic_role: definition.semanticRole,
     entity_type: definition.entityType,
     source_plan_id: STORY_WORLD_PLAN_ID,

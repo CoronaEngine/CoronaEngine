@@ -72,7 +72,9 @@ function hasMovementKey(activeKeys, code) {
   return false;
 }
 
-export function isStoryCameraPoseUnsafe(pose = {}, minimumY = -Infinity) {
+
+
+export function isStoryCameraPoseUnsafe(pose = {}, options = -Infinity) {
   const finiteVector = (value, { requireDirection = false } = {}) => {
     if (!Array.isArray(value) || value.length !== 3) return false;
     const numeric = value.map(Number);
@@ -83,8 +85,50 @@ export function isStoryCameraPoseUnsafe(pose = {}, minimumY = -Infinity) {
   if (!finiteVector(pose?.position)) return true;
   if (!finiteVector(pose?.forward, { requireDirection: true })) return true;
   if (!finiteVector(pose?.worldUp ?? pose?.world_up, { requireDirection: true })) return true;
-  const safeMinimumY = Number(minimumY);
-  return Number.isFinite(safeMinimumY) && Number(pose.position[1]) < safeMinimumY;
+
+  const settings =
+    options && typeof options === 'object'
+      ? options
+      : { minimumY: Number(options) };
+  const position = pose.position.map(Number);
+  const forward = normalizeVector(pose.forward, DEFAULT_FORWARD);
+  const worldUp = normalizeVector(pose.worldUp ?? pose.world_up, DEFAULT_UP);
+  const minimumY = Number(settings.minimumY ?? settings.minY);
+  const maximumY = Number(settings.maximumY ?? settings.maxY);
+  if (Number.isFinite(minimumY) && position[1] < minimumY) return true;
+  if (Number.isFinite(maximumY) && position[1] > maximumY) return true;
+
+  const upwardDotLimit = Number(settings.upwardDotLimit ?? 0.55);
+  if (Number.isFinite(upwardDotLimit) && dotVector(forward, worldUp) > upwardDotLimit) {
+    return true;
+  }
+
+  const bounds = Array.isArray(settings.worldBounds)
+    ? settings.worldBounds.slice(0, 6).map(Number)
+    : null;
+  if (bounds?.length === 6 && bounds.every(Number.isFinite)) {
+    const minX = Math.min(bounds[0], bounds[3]);
+    const minZ = Math.min(bounds[2], bounds[5]);
+    const maxX = Math.max(bounds[0], bounds[3]);
+    const maxZ = Math.max(bounds[2], bounds[5]);
+    const margin = Math.max(0, Number(settings.outsideMargin) || 8);
+    const outside =
+      position[0] < minX - margin ||
+      position[0] > maxX + margin ||
+      position[2] < minZ - margin ||
+      position[2] > maxZ + margin;
+    if (outside) {
+      const centerDirection = normalizeVector(
+        [(minX + maxX) * 0.5 - position[0], 0, (minZ + maxZ) * 0.5 - position[2]],
+        DEFAULT_FORWARD
+      );
+      const horizontalForwardValue = [forward[0], 0, forward[2]];
+      if (vectorLength(horizontalForwardValue) <= 1e-8) return true;
+      const horizontalForward = normalizeVector(horizontalForwardValue, DEFAULT_FORWARD);
+      if (dotVector(horizontalForward, centerDirection) <= 0) return true;
+    }
+  }
+  return false;
 }
 
 export function clampStoryCameraPosition(positionValue, bounds = null) {

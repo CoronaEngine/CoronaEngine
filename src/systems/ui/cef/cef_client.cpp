@@ -21,7 +21,7 @@ namespace Corona::Systems::UI {
 
 namespace {
 
-bool is_main_editor_route(const std::string& url) {
+bool is_main_viewport_route(const std::string& url) {
     const auto hash_pos = url.find('#');
     if (hash_pos == std::string::npos) {
         return false;
@@ -32,7 +32,10 @@ bool is_main_editor_route(const std::string& url) {
         route = route.substr(0, query_pos);
     }
 
-    return route == "/" || route == "/MainPage";
+    // Both editor and Story Mode render the native camera underneath the main
+    // CEF surface. Preserve CEF alpha for these routes so transparent DOM
+    // regions do not become an opaque black layer over the Vulkan viewport.
+    return route == "/" || route == "/MainPage" || route == "/StoryMode";
 }
 
 bool should_preserve_alpha(BrowserTab* tab, CefRefPtr<CefBrowser> browser) {
@@ -50,7 +53,7 @@ bool should_preserve_alpha(BrowserTab* tab, CefRefPtr<CefBrowser> browser) {
     if (browser && browser->GetMainFrame()) {
         url = browser->GetMainFrame()->GetURL().ToString();
     }
-    return is_main_editor_route(url);
+    return is_main_viewport_route(url);
 }
 
 }  // namespace

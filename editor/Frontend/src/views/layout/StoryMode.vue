@@ -210,11 +210,13 @@ const inventoryOpen = ref(false);
 const mapOpen = ref(false);
 const exitPending = ref(false);
 const cameraResetPending = ref(false);
+const cameraSafetyPending = ref(true);
 const cameraNotice = ref('');
 const locationVisible = ref(false);
 let noticeTimer = null;
 let cameraNoticeTimer = null;
 let locationTimer = null;
+let automaticCameraRecoveryKey = '';
 
 const {
   status: viewportStatus,
@@ -264,6 +266,7 @@ const {
   errorMessage: bootstrapErrorMessage,
   warningMessages: bootstrapWarnings,
   managedWorld,
+  worldBounds: bootstrapWorldBounds,
   isReady: bootstrapReady,
   retry: retryBootstrap,
 } = useStoryWorldBootstrap({
@@ -271,28 +274,15 @@ const {
   viewportStatus,
   setCameraPose,
   onComplete: async (result) => {
-    if (
-      result.managedWorld &&
-      isStoryCameraPoseUnsafe(cameraBinding.value, STORY_WORLD_CAMERA_MIN_Y)
-    ) {
-      try {
-        await setCameraPose(STORY_WORLD_CAMERA_SPAWN, { persist: true });
-        showCameraNotice('检测到玩家位于地形下方，已返回云溪村村口。');
-      } catch (error) {
-        console.warn('[StoryMode] failed to recover the underground camera pose', error);
-        showCameraNotice('自动恢复视角失败，可按 R 返回云溪村村口。');
-      }
-    }
     await refreshMap();
-    if (result.generated) showLocationTitle();
+    if (result.generated || Number(result.repairedCount) > 0) showLocationTitle();
   },
 });
 
 const gameReady = computed(() => viewportReady.value && bootstrapReady.value);
 const hasBlockingOverlay = computed(() => menuOpen.value || inventoryOpen.value || mapOpen.value);
-const controlsEnabled = computed(() => gameReady.value && !hasBlockingOverlay.value);
-const cameraPositionBounds = computed(() =>
-  managedWorld.value ? STORY_WORLD_CAMERA_BOUNDS : null
+const controlsEnabled = computed(
+  () => gameReady.value && !hasBlockingOverlay.value && !cameraSafetyPending.value
 );
 const hudVisible = computed(() => gameReady.value && !hasBlockingOverlay.value);
 const activeLoadError = computed(() => {
@@ -313,6 +303,9 @@ const bootstrapWarningNotice = computed(() => {
     : `${warnings[0]}（另有 ${warnings.length - 1} 项提示）`;
 });
 
+const cameraPositionBounds = computed(() =>
+  managedWorld.value ? STORY_WORLD_CAMERA_BOUNDS : null
+);
 const {
   isLooking,
   stop: stopCameraControls,
@@ -324,6 +317,55 @@ const {
   refreshCameraBinding,
   positionBounds: cameraPositionBounds,
 });
+
+watch(
+  [bootstrapReady, managedWorld, sceneId, bootstrapWorldBounds],
+  async ([ready, isManagedWorld, activeSceneId]) => {
+    const normalizedSceneId = String(activeSceneId || '').trim();
+    if (!ready || !normalizedSceneId) {
+      cameraSafetyPending.value = true;
+      if (!normalizedSceneId) automaticCameraRecoveryKey = '';
+      return;
+    }
+    if (!isManagedWorld) {
+      cameraSafetyPending.value = false;
+      return;
+    }
+    if (automaticCameraRecoveryKey === normalizedSceneId) return;
+    automaticCameraRecoveryKey = normalizedSceneId;
+    cameraSafetyPending.value = true;
+
+    const safetyOptions = {
+      minimumY: STORY_WORLD_CAMERA_MIN_Y,
+      maximumY: STORY_WORLD_CAMERA_BOUNDS.maxY,
+      worldBounds: bootstrapWorldBounds.value,
+    };
+
+    try {
+      await stopCameraControls({ persist: false });
+      const refreshed = await refreshCameraBinding({ preservePose: false });
+      if (!refreshed) throw new Error('Unable to refresh the Story camera binding.');
+      if (!isStoryCameraPoseUnsafe(cameraBinding.value, safetyOptions)) {
+        cameraSafetyPending.value = false;
+        return;
+      }
+
+      await setCameraPose(STORY_WORLD_CAMERA_SPAWN, { persist: true });
+      const recovered = await refreshCameraBinding({ preservePose: false });
+      if (!recovered || isStoryCameraPoseUnsafe(cameraBinding.value, safetyOptions)) {
+        throw new Error('Story camera recovery pose did not pass validation.');
+      }
+      cameraSafetyPending.value = false;
+      showCameraNotice('检测到视角未朝向世界，已返回云溪村村口。');
+    } catch (error) {
+      automaticCameraRecoveryKey = '';
+      cameraSafetyPending.value = true;
+      console.warn('[StoryMode] failed to recover the Story World camera pose', error);
+      showCameraNotice('自动恢复视角失败，可按 R 返回云溪村村口。');
+    }
+  },
+  { flush: 'post' }
+);
 
 const applyUiState = (nextState) => {
   const wasBlocked = hasBlockingOverlay.value;
@@ -387,9 +429,14 @@ const resetStoryCamera = async () => {
   }
 
   cameraResetPending.value = true;
+  cameraSafetyPending.value = true;
   await stopCameraControls({ persist: false });
   try {
     await setCameraPose(STORY_WORLD_CAMERA_SPAWN, { persist: true });
+    const refreshed = await refreshCameraBinding({ preservePose: false });
+    if (!refreshed) throw new Error('Unable to refresh the Story camera binding.');
+    cameraSafetyPending.value = false;
+    automaticCameraRecoveryKey = String(sceneId.value || '').trim();
     showCameraNotice('已返回云溪村村口。');
     return true;
   } catch (error) {

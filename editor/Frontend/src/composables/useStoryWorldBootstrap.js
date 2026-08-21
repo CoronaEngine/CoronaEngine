@@ -16,6 +16,11 @@ export function useStoryWorldBootstrap({
   const generated = ref(false);
   const skipped = ref(false);
   const managedWorld = ref(false);
+  const repairedCount = ref(0);
+  const upgradedCount = ref(0);
+  const migrationWarnings = ref([]);
+  const validation = ref(null);
+  const worldBounds = ref(null);
 
   let disposed = false;
   let revision = 0;
@@ -43,6 +48,11 @@ export function useStoryWorldBootstrap({
     generated.value = false;
     skipped.value = false;
     managedWorld.value = false;
+    repairedCount.value = 0;
+    upgradedCount.value = 0;
+    migrationWarnings.value = [];
+    validation.value = null;
+    worldBounds.value = null;
     applyProgress({ status: 'checking', progress: 3, message: '检查剧情世界' });
 
     const pending = runStoryWorldBootstrap({
@@ -59,6 +69,13 @@ export function useStoryWorldBootstrap({
         skipped.value = Boolean(result.skipped);
         managedWorld.value = Boolean(result.managedWorld);
         warningMessages.value = Array.isArray(result.warnings) ? result.warnings : [];
+        repairedCount.value = Math.max(0, Number(result.repairedCount) || 0);
+        upgradedCount.value = Math.max(0, Number(result.upgradedCount) || 0);
+        migrationWarnings.value = Array.isArray(result.migrationWarnings)
+          ? result.migrationWarnings
+          : [];
+        validation.value = result.validation || null;
+        worldBounds.value = Array.isArray(result.worldBounds) ? [...result.worldBounds] : null;
         if (typeof onComplete === 'function') await onComplete(result);
         completedSceneId = activeSceneId;
         applyProgress({
@@ -106,6 +123,11 @@ export function useStoryWorldBootstrap({
         generated.value = false;
         skipped.value = false;
         managedWorld.value = false;
+        repairedCount.value = 0;
+        upgradedCount.value = 0;
+        migrationWarnings.value = [];
+        validation.value = null;
+        worldBounds.value = null;
       }
       if (nextSceneId && nextViewportStatus === 'ready') void run();
     },
@@ -127,6 +149,11 @@ export function useStoryWorldBootstrap({
     generated,
     skipped,
     managedWorld,
+    repairedCount,
+    upgradedCount,
+    migrationWarnings,
+    validation,
+    worldBounds,
     isReady,
     retry,
   };
