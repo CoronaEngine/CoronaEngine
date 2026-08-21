@@ -72,6 +72,34 @@ function hasMovementKey(activeKeys, code) {
   return false;
 }
 
+export function isStoryCameraPoseUnsafe(pose = {}, minimumY = -Infinity) {
+  const finiteVector = (value, { requireDirection = false } = {}) => {
+    if (!Array.isArray(value) || value.length !== 3) return false;
+    const numeric = value.map(Number);
+    if (!numeric.every(Number.isFinite)) return false;
+    return !requireDirection || vectorLength(numeric) > 1e-8;
+  };
+
+  if (!finiteVector(pose?.position)) return true;
+  if (!finiteVector(pose?.forward, { requireDirection: true })) return true;
+  if (!finiteVector(pose?.worldUp ?? pose?.world_up, { requireDirection: true })) return true;
+  const safeMinimumY = Number(minimumY);
+  return Number.isFinite(safeMinimumY) && Number(pose.position[1]) < safeMinimumY;
+}
+
+export function clampStoryCameraPosition(positionValue, bounds = null) {
+  const position = Array.isArray(positionValue)
+    ? positionValue.map((value) => (Number.isFinite(Number(value)) ? Number(value) : 0))
+    : [0, 0, -5];
+  if (!bounds || typeof bounds !== 'object') return position;
+
+  const minimumY = Number(bounds.minY);
+  const maximumY = Number(bounds.maxY);
+  if (Number.isFinite(minimumY)) position[1] = Math.max(position[1], minimumY);
+  if (Number.isFinite(maximumY)) position[1] = Math.min(position[1], maximumY);
+  return position;
+}
+
 function cameraBasis(pose = {}) {
   const forward = normalizeVector(pose.forward, DEFAULT_FORWARD);
   const worldUp = normalizeVector(pose.worldUp ?? pose.world_up ?? pose.up, DEFAULT_UP);
@@ -91,7 +119,8 @@ export function applyStoryCameraMovement(
   pose = {},
   activeKeys = new Set(),
   deltaSeconds = 0,
-  speed = pose.moveSpeed ?? DEFAULT_STORY_CAMERA_MOVE_SPEED
+  speed = pose.moveSpeed ?? DEFAULT_STORY_CAMERA_MOVE_SPEED,
+  positionBounds = null
 ) {
   const dt = Math.min(
     Math.max(Number.isFinite(Number(deltaSeconds)) ? Number(deltaSeconds) : 0, 0),
@@ -119,9 +148,13 @@ export function applyStoryCameraMovement(
   if (vectorLength(direction) <= 1e-8) return { position, moved: false };
   const unitDirection = normalizeVector(direction);
   const distance = moveSpeed * dt;
+  const nextPosition = clampStoryCameraPosition(
+    position.map((value, index) => value + unitDirection[index] * distance),
+    positionBounds
+  );
   return {
-    position: position.map((value, index) => value + unitDirection[index] * distance),
-    moved: true,
+    position: nextPosition,
+    moved: nextPosition.some((value, index) => Math.abs(value - position[index]) > 1e-8),
   };
 }
 

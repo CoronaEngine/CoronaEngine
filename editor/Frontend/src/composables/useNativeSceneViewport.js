@@ -84,6 +84,47 @@ export function useNativeSceneViewport(viewportRef) {
     return binding;
   };
 
+  const setCameraPose = async (pose = {}, { persist = true } = {}) => {
+    const current = cameraBinding.value;
+    const cameraId = current?.cameraId || current?.cameraName;
+    if (!current?.sceneId || !cameraId) {
+      throw new Error('Story camera binding is unavailable.');
+    }
+
+    const nextBinding = applyBinding({
+      ...current,
+      position: Array.isArray(pose.position) ? [...pose.position] : [...current.position],
+      forward: Array.isArray(pose.forward) ? [...pose.forward] : [...current.forward],
+      worldUp: Array.isArray(pose.worldUp ?? pose.world_up)
+        ? [...(pose.worldUp ?? pose.world_up)]
+        : [...current.worldUp],
+      fov: Number.isFinite(Number(pose.fov)) ? Number(pose.fov) : current.fov,
+    });
+
+    const bridge = window.coronaBridge;
+    if (bridge && typeof bridge.cameraMove === 'function') {
+      bridge.cameraMove(
+        nextBinding.cameraHandle,
+        [...nextBinding.position],
+        [...nextBinding.forward],
+        [...nextBinding.worldUp],
+        nextBinding.fov
+      );
+    }
+
+    if (persist) {
+      await editorApi.viewport.setCameraPose(nextBinding.sceneId, cameraId, {
+        position: [...nextBinding.position],
+        forward: [...nextBinding.forward],
+        world_up: [...nextBinding.worldUp],
+        fov: nextBinding.fov,
+        persist: true,
+      });
+    }
+    scheduleViewportSync();
+    return true;
+  };
+
   const syncViewportRect = () => {
     if (disposed) return false;
     const bridge = window.coronaBridge;
@@ -345,6 +386,7 @@ export function useNativeSceneViewport(viewportRef) {
     cameraHandle,
     cameraBinding,
     refreshCameraBinding,
+    setCameraPose,
     retry: initialize,
     scheduleViewportSync,
   };

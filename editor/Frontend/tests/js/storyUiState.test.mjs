@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { reduceStoryUiState, storyShortcutFromEvent } from '../../src/utils/storyUiState.js';
+import {
+  reduceStoryUiState,
+  shouldResetStoryCamera,
+  storyShortcutFromEvent,
+} from '../../src/utils/storyUiState.js';
 
 const readyState = {
   ready: true,
@@ -14,6 +18,7 @@ test('recognizes unmodified story UI shortcuts and ignores repeats or editable t
   assert.equal(storyShortcutFromEvent({ code: 'KeyB' }), 'inventory');
   assert.equal(storyShortcutFromEvent({ key: 'm' }), 'map');
   assert.equal(storyShortcutFromEvent({ code: 'Escape' }), 'escape');
+  assert.equal(storyShortcutFromEvent({ code: 'KeyR' }), 'reset-camera');
   assert.equal(storyShortcutFromEvent({ code: 'KeyB', repeat: true }), '');
   assert.equal(storyShortcutFromEvent({ code: 'KeyM', ctrlKey: true }), '');
   assert.equal(storyShortcutFromEvent({ code: 'KeyB', target: { tagName: 'INPUT' } }), '');
@@ -42,12 +47,26 @@ test('Escape closes game panels before toggling the game menu', () => {
 });
 
 test('menu and loading states reject inventory and map shortcuts', () => {
-  assert.deepEqual(
-    reduceStoryUiState({ ...readyState, menuOpen: true }, 'inventory'),
-    { ...readyState, menuOpen: true }
+  assert.deepEqual(reduceStoryUiState({ ...readyState, menuOpen: true }, 'inventory'), {
+    ...readyState,
+    menuOpen: true,
+  });
+  assert.deepEqual(reduceStoryUiState({ ...readyState, ready: false }, 'map'), {
+    ...readyState,
+    ready: false,
+  });
+});
+
+test('camera reset is only available in a ready, unobstructed managed Story World', () => {
+  assert.equal(shouldResetStoryCamera({ ...readyState, managedWorld: true }), true);
+  assert.equal(shouldResetStoryCamera({ ...readyState, managedWorld: false }), false);
+  assert.equal(
+    shouldResetStoryCamera({ ...readyState, managedWorld: true, inventoryOpen: true }),
+    false
   );
-  assert.deepEqual(
-    reduceStoryUiState({ ...readyState, ready: false }, 'map'),
-    { ...readyState, ready: false }
+  assert.equal(
+    shouldResetStoryCamera({ ...readyState, managedWorld: true, menuOpen: true }),
+    false
   );
+  assert.equal(shouldResetStoryCamera({ ...readyState, managedWorld: true, ready: false }), false);
 });

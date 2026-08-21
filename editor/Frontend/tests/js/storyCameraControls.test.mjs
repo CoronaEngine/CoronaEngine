@@ -3,7 +3,9 @@ import test from 'node:test';
 
 import {
   applyStoryCameraMovement,
+  clampStoryCameraPosition,
   dotVector,
+  isStoryCameraPoseUnsafe,
   normalizeStoryCameraKey,
   rotateStoryCamera,
   STORY_CAMERA_PITCH_DOT_LIMIT,
@@ -80,4 +82,34 @@ test('pitch is clamped before the camera can flip over', () => {
   const pitchedDown = rotateStoryCamera(pose.forward, pose.worldUp, 0, 5000);
   assert.ok(dotVector(pitchedDown, pose.worldUp) >= -STORY_CAMERA_PITCH_DOT_LIMIT - 1e-9);
   assert.ok(dotVector(pitchedDown, pose.worldUp) < 0);
+});
+
+test('managed Story World camera positions are clamped above terrain and below the flight ceiling', () => {
+  assert.deepEqual(clampStoryCameraPosition([3, -9, 4], { minY: 1.5, maxY: 80 }), [3, 1.5, 4]);
+  assert.deepEqual(clampStoryCameraPosition([3, 120, 4], { minY: 1.5, maxY: 80 }), [3, 80, 4]);
+
+  const atGround = { ...pose, position: [0, 1.5, 0] };
+  const descending = applyStoryCameraMovement(
+    atGround,
+    new Set(['KeyE']),
+    0.1,
+    atGround.moveSpeed,
+    { minY: 1.5, maxY: 80 }
+  );
+  assert.deepEqual(descending.position, [0, 1.5, 0]);
+  assert.equal(descending.moved, false);
+});
+
+test('detects invalid or underground camera poses without resetting valid positions', () => {
+  const validOrientation = { forward: [0, 0, 1], worldUp: [0, 1, 0] };
+  assert.equal(isStoryCameraPoseUnsafe({ ...validOrientation, position: [0, -29, 0] }, 1.5), true);
+  assert.equal(
+    isStoryCameraPoseUnsafe({ ...validOrientation, position: [0, Number.NaN, 0] }, 1.5),
+    true
+  );
+  assert.equal(isStoryCameraPoseUnsafe({ ...validOrientation, position: [0, 9, 0] }, 1.5), false);
+  assert.equal(
+    isStoryCameraPoseUnsafe({ ...validOrientation, position: [0, 9, 0], forward: [0, 0, 0] }, 1.5),
+    true
+  );
 });

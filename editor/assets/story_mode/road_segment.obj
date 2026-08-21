@@ -1,0 +1,18 @@
+# Deterministic Story World asset: StoryWorld_RoadSegment
+mtllib story_world.mtl
+o StoryWorld_RoadSegment
+v -2.50000 0.00000 -8.00000
+v 2.50000 0.00000 -8.00000
+v 2.50000 0.12000 -8.00000
+v -2.50000 0.12000 -8.00000
+v -2.50000 0.00000 8.00000
+v 2.50000 0.00000 8.00000
+v 2.50000 0.12000 8.00000
+v -2.50000 0.12000 8.00000
+usemtl earth
+f 1 2 3 4
+f 6 5 8 7
+f 5 1 4 8
+f 2 6 7 3
+f 4 3 7 8
+f 5 6 2 1

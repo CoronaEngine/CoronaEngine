@@ -19,23 +19,69 @@
           </span>
         </button>
         <div class="story-mode__control-hint">
-          <span><kbd>WASD</kbd> 移动</span>
-          <span><kbd>QE</kbd> 升降</span>
-          <span><kbd>右键</kbd> 观察</span>
+          <span>
+            <kbd>WASD</kbd>
+            移动
+          </span>
+          <span>
+            <kbd>QE</kbd>
+            升降
+          </span>
+          <span>
+            <kbd>右键</kbd>
+            观察
+          </span>
+          <span v-if="managedWorld">
+            <kbd>R</kbd>
+            回村口
+          </span>
         </div>
       </div>
 
       <StoryMiniMap :markers="mapMarkers" :player-state="playerState" @open="openMap" />
     </section>
 
+    <div v-if="hudVisible" class="story-mode__crosshair" aria-hidden="true">
+      <span></span>
+      <span></span>
+    </div>
+
+    <Transition name="story-location">
+      <section v-if="locationVisible" class="story-mode__location" aria-live="polite">
+        <p>{{ STORY_WORLD_LOCATION_OBJECTIVE }}</p>
+        <h1>{{ STORY_WORLD_LOCATION_TITLE }}</h1>
+        <div></div>
+      </section>
+    </Transition>
+
     <Transition name="story-toast">
       <div
-        v-if="inventory.notice && status === 'ready' && !menuOpen"
+        v-if="inventory.notice && gameReady && !menuOpen"
         class="story-mode__toast"
         :class="`story-mode__toast--${inventory.notice.kind}`"
         role="status"
       >
         {{ inventory.notice.message }}
+      </div>
+    </Transition>
+
+    <Transition name="story-toast">
+      <div
+        v-if="cameraNotice && gameReady && !hasBlockingOverlay"
+        class="story-mode__toast story-mode__toast--success"
+        role="status"
+      >
+        {{ cameraNotice }}
+      </div>
+    </Transition>
+
+    <Transition name="story-toast">
+      <div
+        v-if="bootstrapWarningNotice && gameReady && !hasBlockingOverlay"
+        class="story-mode__toast story-mode__toast--warning story-mode__toast--bootstrap"
+        role="status"
+      >
+        {{ bootstrapWarningNotice }}
       </div>
     </Transition>
 
@@ -53,13 +99,19 @@
       @refresh="refreshMap"
     />
 
-    <section v-if="status !== 'ready'" class="story-mode__status" aria-live="polite">
+    <section v-if="!gameReady" class="story-mode__status" aria-live="polite">
       <div class="story-mode__status-card">
-        <div v-if="status === 'loading'" class="story-mode__spinner" aria-hidden="true"></div>
-        <h1>{{ status === 'loading' ? '正在进入世界' : '世界加载失败' }}</h1>
-        <p v-if="status === 'loading'">正在连接当前场景与活动相机…</p>
-        <p v-else>{{ errorMessage }}</p>
-        <div v-if="status === 'error'" class="story-mode__status-actions">
+        <div v-if="!activeLoadError" class="story-mode__spinner" aria-hidden="true"></div>
+        <p v-if="!activeLoadError" class="story-mode__status-kicker">STORY WORLD BOOTSTRAP</p>
+        <h1>{{ activeLoadError ? '世界构建失败' : '正在进入世界' }}</h1>
+        <p>{{ activeLoadError || activeLoadMessage }}</p>
+        <div v-if="!activeLoadError && viewportStatus === 'ready'" class="story-mode__progress">
+          <span :style="{ width: `${bootstrapProgress}%` }"></span>
+        </div>
+        <small v-if="!activeLoadError && viewportStatus === 'ready'">
+          {{ bootstrapProgress }}%
+        </small>
+        <div v-if="activeLoadError" class="story-mode__status-actions">
           <button
             type="button"
             class="story-button story-button--secondary"
@@ -68,7 +120,11 @@
           >
             返回主界面
           </button>
-          <button type="button" class="story-button story-button--primary" @click="retry">
+          <button
+            type="button"
+            class="story-button story-button--primary"
+            @click="retryCurrentFailure"
+          >
             重试
           </button>
         </div>
@@ -125,12 +181,25 @@ import { editorApi } from '@/api/editorApi.js';
 import StoryInventoryPanel from '@/components/story/StoryInventoryPanel.vue';
 import StoryMapPanel from '@/components/story/StoryMapPanel.vue';
 import StoryMiniMap from '@/components/story/StoryMiniMap.vue';
+import {
+  STORY_WORLD_CAMERA_BOUNDS,
+  STORY_WORLD_CAMERA_MIN_Y,
+  STORY_WORLD_CAMERA_SPAWN,
+  STORY_WORLD_LOCATION_OBJECTIVE,
+  STORY_WORLD_LOCATION_TITLE,
+} from '@/config/storyWorld.js';
 import { useNativeSceneViewport } from '@/composables/useNativeSceneViewport.js';
 import { useStoryCameraControls } from '@/composables/useStoryCameraControls.js';
 import { useStoryMap } from '@/composables/useStoryMap.js';
 import { useStoryPlayerState } from '@/composables/useStoryPlayerState.js';
+import { useStoryWorldBootstrap } from '@/composables/useStoryWorldBootstrap.js';
 import { useStoryInventoryStore } from '@/stores/storyInventory.js';
-import { reduceStoryUiState, storyShortcutFromEvent } from '@/utils/storyUiState.js';
+import { isStoryCameraPoseUnsafe } from '@/utils/storyCameraControls.js';
+import {
+  reduceStoryUiState,
+  shouldResetStoryCamera,
+  storyShortcutFromEvent,
+} from '@/utils/storyUiState.js';
 
 const router = useRouter();
 const inventory = useStoryInventoryStore();
@@ -140,18 +209,24 @@ const menuOpen = ref(false);
 const inventoryOpen = ref(false);
 const mapOpen = ref(false);
 const exitPending = ref(false);
+const cameraResetPending = ref(false);
+const cameraNotice = ref('');
+const locationVisible = ref(false);
 let noticeTimer = null;
+let cameraNoticeTimer = null;
+let locationTimer = null;
 
 const {
-  status,
-  errorMessage,
+  status: viewportStatus,
+  errorMessage: viewportErrorMessage,
   sceneId,
   cameraBinding,
   refreshCameraBinding,
-  retry,
+  setCameraPose,
+  retry: retryViewport,
 } = useNativeSceneViewport(viewportRef);
-const playerReady = computed(() => status.value === 'ready');
-const playerStateRef = useStoryPlayerState(cameraBinding, playerReady);
+const viewportReady = computed(() => viewportStatus.value === 'ready');
+const playerStateRef = useStoryPlayerState(cameraBinding, viewportReady);
 const playerState = computed(() => playerStateRef.value);
 const {
   loading: mapLoading,
@@ -163,15 +238,81 @@ const {
   refresh: refreshMap,
 } = useStoryMap(sceneId, playerStateRef);
 
-const hasBlockingOverlay = computed(
-  () => menuOpen.value || inventoryOpen.value || mapOpen.value
+const showLocationTitle = () => {
+  if (locationTimer !== null) window.clearTimeout(locationTimer);
+  locationVisible.value = true;
+  locationTimer = window.setTimeout(() => {
+    locationTimer = null;
+    locationVisible.value = false;
+  }, 3600);
+};
+
+const showCameraNotice = (message) => {
+  if (cameraNoticeTimer !== null) window.clearTimeout(cameraNoticeTimer);
+  cameraNotice.value = String(message || '').trim();
+  if (!cameraNotice.value) return;
+  cameraNoticeTimer = window.setTimeout(() => {
+    cameraNoticeTimer = null;
+    cameraNotice.value = '';
+  }, 3200);
+};
+
+const {
+  status: bootstrapStatus,
+  progress: bootstrapProgress,
+  phaseMessage: bootstrapPhaseMessage,
+  errorMessage: bootstrapErrorMessage,
+  warningMessages: bootstrapWarnings,
+  managedWorld,
+  isReady: bootstrapReady,
+  retry: retryBootstrap,
+} = useStoryWorldBootstrap({
+  sceneId,
+  viewportStatus,
+  setCameraPose,
+  onComplete: async (result) => {
+    if (
+      result.managedWorld &&
+      isStoryCameraPoseUnsafe(cameraBinding.value, STORY_WORLD_CAMERA_MIN_Y)
+    ) {
+      try {
+        await setCameraPose(STORY_WORLD_CAMERA_SPAWN, { persist: true });
+        showCameraNotice('检测到玩家位于地形下方，已返回云溪村村口。');
+      } catch (error) {
+        console.warn('[StoryMode] failed to recover the underground camera pose', error);
+        showCameraNotice('自动恢复视角失败，可按 R 返回云溪村村口。');
+      }
+    }
+    await refreshMap();
+    if (result.generated) showLocationTitle();
+  },
+});
+
+const gameReady = computed(() => viewportReady.value && bootstrapReady.value);
+const hasBlockingOverlay = computed(() => menuOpen.value || inventoryOpen.value || mapOpen.value);
+const controlsEnabled = computed(() => gameReady.value && !hasBlockingOverlay.value);
+const cameraPositionBounds = computed(() =>
+  managedWorld.value ? STORY_WORLD_CAMERA_BOUNDS : null
 );
-const controlsEnabled = computed(
-  () => status.value === 'ready' && !hasBlockingOverlay.value
+const hudVisible = computed(() => gameReady.value && !hasBlockingOverlay.value);
+const activeLoadError = computed(() => {
+  if (viewportStatus.value === 'error') return viewportErrorMessage.value;
+  if (bootstrapStatus.value === 'error') return bootstrapErrorMessage.value;
+  return '';
+});
+const activeLoadMessage = computed(() =>
+  viewportStatus.value !== 'ready'
+    ? '正在连接当前场景与活动相机…'
+    : bootstrapPhaseMessage.value || '正在准备剧情世界…'
 );
-const hudVisible = computed(
-  () => status.value === 'ready' && !hasBlockingOverlay.value
-);
+const bootstrapWarningNotice = computed(() => {
+  const warnings = bootstrapWarnings.value;
+  if (!Array.isArray(warnings) || warnings.length === 0) return '';
+  return warnings.length === 1
+    ? warnings[0]
+    : `${warnings[0]}（另有 ${warnings.length - 1} 项提示）`;
+});
+
 const {
   isLooking,
   stop: stopCameraControls,
@@ -181,6 +322,7 @@ const {
   cameraBinding,
   enabled: controlsEnabled,
   refreshCameraBinding,
+  positionBounds: cameraPositionBounds,
 });
 
 const applyUiState = (nextState) => {
@@ -196,7 +338,7 @@ const transitionUi = (shortcut) => {
   applyUiState(
     reduceStoryUiState(
       {
-        ready: status.value === 'ready',
+        ready: gameReady.value,
         menuOpen: menuOpen.value,
         inventoryOpen: inventoryOpen.value,
         mapOpen: mapOpen.value,
@@ -207,12 +349,12 @@ const transitionUi = (shortcut) => {
 };
 
 const openInventory = () => {
-  if (status.value !== 'ready' || menuOpen.value) return;
+  if (!gameReady.value || menuOpen.value) return;
   applyUiState({ ready: true, menuOpen: false, inventoryOpen: true, mapOpen: false });
 };
 
 const openMap = () => {
-  if (status.value !== 'ready' || menuOpen.value) return;
+  if (!gameReady.value || menuOpen.value) return;
   applyUiState({ ready: true, menuOpen: false, inventoryOpen: false, mapOpen: true });
 };
 
@@ -223,6 +365,40 @@ const closeGamePanel = () => {
 
 const closeMenu = () => {
   menuOpen.value = false;
+};
+
+const retryCurrentFailure = () => {
+  if (viewportStatus.value === 'error') return retryViewport();
+  return retryBootstrap();
+};
+
+const resetStoryCamera = async () => {
+  if (
+    cameraResetPending.value ||
+    !shouldResetStoryCamera({
+      ready: gameReady.value,
+      managedWorld: managedWorld.value,
+      menuOpen: menuOpen.value,
+      inventoryOpen: inventoryOpen.value,
+      mapOpen: mapOpen.value,
+    })
+  ) {
+    return false;
+  }
+
+  cameraResetPending.value = true;
+  await stopCameraControls({ persist: false });
+  try {
+    await setCameraPose(STORY_WORLD_CAMERA_SPAWN, { persist: true });
+    showCameraNotice('已返回云溪村村口。');
+    return true;
+  } catch (error) {
+    console.warn('[StoryMode] failed to reset the Story World camera', error);
+    showCameraNotice('返回村口失败，请稍后重试。');
+    return false;
+  } finally {
+    cameraResetPending.value = false;
+  }
 };
 
 const exitToStart = async () => {
@@ -239,9 +415,26 @@ const exitToStart = async () => {
 const handleShortcut = (event) => {
   const shortcut = storyShortcutFromEvent(event);
   if (!shortcut) return;
+  if (
+    shortcut === 'reset-camera' &&
+    !shouldResetStoryCamera({
+      ready: gameReady.value,
+      managedWorld: managedWorld.value,
+      menuOpen: menuOpen.value,
+      inventoryOpen: inventoryOpen.value,
+      mapOpen: mapOpen.value,
+    })
+  ) {
+    return;
+  }
+
   event.preventDefault();
   event.stopPropagation();
   event.stopImmediatePropagation?.();
+  if (shortcut === 'reset-camera') {
+    void resetStoryCamera();
+    return;
+  }
   transitionUi(shortcut);
 };
 
@@ -259,9 +452,7 @@ const projectPathFromResponse = (response) => {
 const initializeProjectInventory = async () => {
   let projectPath = '';
   try {
-    projectPath = projectPathFromResponse(
-      await editorApi.projectSettings.getActiveProjectInfo()
-    );
+    projectPath = projectPathFromResponse(await editorApi.projectSettings.getActiveProjectInfo());
   } catch (error) {
     console.warn('[StoryMode] failed to resolve the active project for inventory', error);
   }
@@ -279,20 +470,18 @@ const initializeProjectInventory = async () => {
   inventory.resetForProject(projectPath || sceneId.value || 'active-project');
 };
 
-watch(
-  [menuOpen, inventoryOpen, mapOpen],
-  async ([isMenuOpen, isInventoryOpen, isMapOpen]) => {
-    await nextTick();
-    if (isMenuOpen) continueButtonRef.value?.focus?.();
-    else if (!isInventoryOpen && !isMapOpen) viewportRef.value?.focus?.({ preventScroll: true });
-  }
-);
+watch([menuOpen, inventoryOpen, mapOpen], async ([isMenuOpen, isInventoryOpen, isMapOpen]) => {
+  await nextTick();
+  if (isMenuOpen) continueButtonRef.value?.focus?.();
+  else if (!isInventoryOpen && !isMapOpen) viewportRef.value?.focus?.({ preventScroll: true });
+});
 
-watch(status, (nextStatus) => {
-  if (nextStatus === 'ready') return;
+watch(gameReady, (ready) => {
+  if (ready) return;
   menuOpen.value = false;
   inventoryOpen.value = false;
   mapOpen.value = false;
+  locationVisible.value = false;
   void stopCameraControls({ persist: true });
 });
 
@@ -315,13 +504,14 @@ onMounted(() => {
 
 onUnmounted(() => {
   window.removeEventListener('keydown', handleShortcut, true);
-  if (noticeTimer !== null) {
-    window.clearTimeout(noticeTimer);
-    noticeTimer = null;
-  }
+  if (noticeTimer !== null) window.clearTimeout(noticeTimer);
+  if (cameraNoticeTimer !== null) window.clearTimeout(cameraNoticeTimer);
+  if (locationTimer !== null) window.clearTimeout(locationTimer);
+  noticeTimer = null;
+  cameraNoticeTimer = null;
+  locationTimer = null;
 });
 </script>
-
 <style scoped>
 .story-mode {
   position: relative;
@@ -456,12 +646,18 @@ onUnmounted(() => {
   pointer-events: none;
 }
 
-.story-mode__toast--success { border-color: rgba(111, 197, 155, 0.5); }
-.story-mode__toast--warning { border-color: rgba(224, 157, 86, 0.55); }
+.story-mode__toast--success {
+  border-color: rgba(111, 197, 155, 0.5);
+}
+.story-mode__toast--warning {
+  border-color: rgba(224, 157, 86, 0.55);
+}
 
 .story-toast-enter-active,
 .story-toast-leave-active {
-  transition: opacity 160ms ease, transform 160ms ease;
+  transition:
+    opacity 160ms ease,
+    transform 160ms ease;
 }
 
 .story-toast-enter-from,
@@ -603,6 +799,120 @@ onUnmounted(() => {
   border-color: rgba(216, 184, 108, 0.62);
   background: rgba(216, 184, 108, 0.09);
   color: #fff5dc;
+}
+
+.story-mode__crosshair {
+  position: absolute;
+  z-index: 18;
+  top: 50%;
+  left: 50%;
+  width: 20px;
+  height: 20px;
+  transform: translate(-50%, -50%);
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.9));
+  pointer-events: none;
+}
+
+.story-mode__crosshair span {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  display: block;
+  background: rgba(245, 232, 199, 0.82);
+  transform: translate(-50%, -50%);
+}
+
+.story-mode__crosshair span:first-child {
+  width: 16px;
+  height: 1px;
+}
+.story-mode__crosshair span:last-child {
+  width: 1px;
+  height: 16px;
+}
+
+.story-mode__location {
+  position: absolute;
+  z-index: 24;
+  top: 20%;
+  left: 50%;
+  width: min(480px, calc(100vw - 40px));
+  transform: translateX(-50%);
+  color: #f6e9c9;
+  text-align: center;
+  text-shadow: 0 3px 14px rgba(0, 0, 0, 0.94);
+  pointer-events: none;
+}
+
+.story-mode__location p {
+  margin: 0 0 7px;
+  color: #d7c394;
+  font-size: 11px;
+  letter-spacing: 0.38em;
+}
+
+.story-mode__location h1 {
+  margin: 0;
+  font-family: 'STKaiti', 'KaiTi', serif;
+  font-size: clamp(34px, 5vw, 58px);
+  font-weight: 500;
+  letter-spacing: 0.18em;
+}
+
+.story-mode__location div {
+  width: 180px;
+  height: 1px;
+  margin: 15px auto 0;
+  background: linear-gradient(90deg, transparent, #d8b86c, transparent);
+}
+
+.story-location-enter-active {
+  transition:
+    opacity 700ms ease,
+    transform 700ms ease;
+}
+.story-location-leave-active {
+  transition:
+    opacity 900ms ease,
+    transform 900ms ease;
+}
+.story-location-enter-from,
+.story-location-leave-to {
+  opacity: 0;
+  transform: translate(-50%, 12px);
+}
+
+.story-mode__toast--bootstrap {
+  bottom: 78px;
+}
+
+.story-mode__status-kicker {
+  color: #8f805d !important;
+  font-size: 10px !important;
+  letter-spacing: 0.24em;
+}
+
+.story-mode__progress {
+  overflow: hidden;
+  width: 100%;
+  height: 4px;
+  margin: 24px 0 8px;
+  border-radius: 999px;
+  background: rgba(216, 184, 108, 0.12);
+}
+
+.story-mode__progress span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #876c31, #e1c477);
+  box-shadow: 0 0 16px rgba(216, 184, 108, 0.5);
+  transition: width 280ms ease;
+}
+
+.story-mode__status-card small {
+  color: #766d5a;
+  font-size: 10px;
 }
 
 @keyframes story-spin {

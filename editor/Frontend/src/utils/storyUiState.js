@@ -17,7 +17,18 @@ export function storyShortcutFromEvent(event = {}) {
   if (code === 'Escape' || key === 'escape') return 'escape';
   if (code === 'KeyB' || key === 'b') return 'inventory';
   if (code === 'KeyM' || key === 'm') return 'map';
+  if (code === 'KeyR' || key === 'r') return 'reset-camera';
   return '';
+}
+
+export function shouldResetStoryCamera(state = {}) {
+  return (
+    Boolean(state.ready) &&
+    Boolean(state.managedWorld) &&
+    !state.menuOpen &&
+    !state.inventoryOpen &&
+    !state.mapOpen
+  );
 }
 
 export function reduceStoryUiState(state = {}, shortcut = '') {

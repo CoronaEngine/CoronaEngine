@@ -46,11 +46,45 @@ test('clamps an out-of-bounds player marker without changing map bounds', () => 
 });
 
 test('filters unsupported actors and assigns semantic marker kinds', () => {
-  assert.equal(storyMapMarkerFromActor({ actor_type: 'audio', geometry: { position: [0, 0, 0] } }), null);
-  assert.equal(storyMapMarkerFromActor({ follow_camera: true, geometry: { position: [0, 0, 0] } }), null);
   assert.equal(
-    storyMapMarkerFromActor({ name: 'Goal', semantic_role: 'quest_target', geometry: { position: [1, 0, 2] } }).kind,
+    storyMapMarkerFromActor({ actor_type: 'audio', geometry: { position: [0, 0, 0] } }),
+    null
+  );
+  assert.equal(
+    storyMapMarkerFromActor({ follow_camera: true, geometry: { position: [0, 0, 0] } }),
+    null
+  );
+  assert.equal(
+    storyMapMarkerFromActor({
+      name: 'Goal',
+      semantic_role: 'quest_target',
+      geometry: { position: [1, 0, 2] },
+    }).kind,
     'quest'
+  );
+  assert.equal(
+    storyMapMarkerFromActor({
+      name: 'Lake',
+      semantic_role: 'water_lake',
+      geometry: { position: [1, 0, 2] },
+    }).kind,
+    'water'
+  );
+  assert.equal(
+    storyMapMarkerFromActor({
+      name: 'House',
+      semantic_role: 'building_village_house',
+      geometry: { position: [1, 0, 2] },
+    }).kind,
+    'building'
+  );
+  assert.equal(
+    storyMapMarkerFromActor({
+      name: 'Gate',
+      semantic_role: 'landmark_gate',
+      geometry: { position: [1, 0, 2] },
+    }).kind,
+    'landmark'
   );
 });
 

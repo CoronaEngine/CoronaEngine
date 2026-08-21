@@ -11,7 +11,13 @@
     </defs>
 
     <rect width="100" height="100" rx="3" class="story-map-canvas__background" />
-    <rect width="100" height="100" rx="3" :fill="`url(#${gridPatternId})`" class="story-map-canvas__grid" />
+    <rect
+      width="100"
+      height="100"
+      rx="3"
+      :fill="`url(#${gridPatternId})`"
+      class="story-map-canvas__grid"
+    />
     <circle
       v-if="playerPoint"
       :cx="playerPoint.x"
@@ -42,7 +48,9 @@
       <path d="M 0 -5 L -3.6 4 L 0 2.6 L 3.6 4 Z" />
     </g>
 
-    <text v-if="showNorth" x="50" y="7" text-anchor="middle" class="story-map-canvas__north">N</text>
+    <text v-if="showNorth" x="50" y="7" text-anchor="middle" class="story-map-canvas__north">
+      N
+    </text>
   </svg>
 </template>
 
@@ -120,6 +128,23 @@ const heading = computed(() => storyPlayerHeadingDegrees(props.playerForward));
 
 .story-map-canvas__marker--light {
   fill: #eee3aa;
+}
+
+.story-map-canvas__marker--water {
+  fill: #4aa2ad;
+}
+.story-map-canvas__marker--building {
+  fill: #d8c39b;
+}
+.story-map-canvas__marker--landmark {
+  fill: #d98b4d;
+}
+.story-map-canvas__marker--vegetation {
+  fill: #5f9c5b;
+}
+.story-map-canvas__marker--terrain {
+  fill: #7b765d;
+  opacity: 0.72;
 }
 
 .story-map-canvas__player path {

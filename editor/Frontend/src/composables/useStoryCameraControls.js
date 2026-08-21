@@ -23,6 +23,7 @@ export function useStoryCameraControls({
   cameraBinding,
   enabled,
   refreshCameraBinding,
+  positionBounds = null,
 }) {
   const isLooking = ref(false);
   const activeKeys = new Set();
@@ -115,7 +116,13 @@ export function useStoryCameraControls({
     const binding = cameraBinding.value;
     const deltaSeconds = previousFrameTime ? (timestamp - previousFrameTime) / 1000 : 0;
     previousFrameTime = timestamp;
-    const result = applyStoryCameraMovement(binding, activeKeys, deltaSeconds, binding.moveSpeed);
+    const result = applyStoryCameraMovement(
+      binding,
+      activeKeys,
+      deltaSeconds,
+      binding.moveSpeed,
+      unref(positionBounds)
+    );
     if (result.moved) {
       updateBindingPose({ position: result.position });
       publishPose();

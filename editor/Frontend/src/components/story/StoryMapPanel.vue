@@ -56,17 +56,49 @@
           </div>
           <div class="story-map-panel__legend-list">
             <h2>地图图例</h2>
-            <div><i class="story-map-panel__legend-dot story-map-panel__legend-dot--player"></i>玩家</div>
-            <div><i class="story-map-panel__legend-dot story-map-panel__legend-dot--quest"></i>任务目标</div>
-            <div><i class="story-map-panel__legend-dot story-map-panel__legend-dot--item"></i>可收集对象</div>
-            <div><i class="story-map-panel__legend-dot story-map-panel__legend-dot--danger"></i>危险目标</div>
-            <div><i class="story-map-panel__legend-dot"></i>场景对象</div>
+            <div>
+              <i class="story-map-panel__legend-dot story-map-panel__legend-dot--player"></i>
+              玩家
+            </div>
+            <div>
+              <i class="story-map-panel__legend-dot story-map-panel__legend-dot--quest"></i>
+              任务目标
+            </div>
+            <div>
+              <i class="story-map-panel__legend-dot story-map-panel__legend-dot--item"></i>
+              可收集对象
+            </div>
+            <div>
+              <i class="story-map-panel__legend-dot story-map-panel__legend-dot--danger"></i>
+              危险目标
+            </div>
+            <div>
+              <i class="story-map-panel__legend-dot story-map-panel__legend-dot--building"></i>
+              村落建筑
+            </div>
+            <div>
+              <i class="story-map-panel__legend-dot story-map-panel__legend-dot--water"></i>
+              水域
+            </div>
+            <div>
+              <i class="story-map-panel__legend-dot story-map-panel__legend-dot--landmark"></i>
+              地标
+            </div>
+            <div>
+              <i class="story-map-panel__legend-dot"></i>
+              场景对象
+            </div>
           </div>
           <div class="story-map-panel__summary">
             <span>已标记对象</span>
             <strong>{{ markers.length }}</strong>
           </div>
-          <button type="button" class="story-map-panel__refresh" :disabled="loading" @click="$emit('refresh')">
+          <button
+            type="button"
+            class="story-map-panel__refresh"
+            :disabled="loading"
+            @click="$emit('refresh')"
+          >
             {{ loading ? '同步中…' : '刷新地图' }}
           </button>
           <p class="story-map-panel__hint">按 M 或 Esc 返回游戏</p>
@@ -316,10 +348,27 @@ onMounted(async () => {
   background: #a9a59b;
 }
 
-.story-map-panel__legend-dot--player { background: #f5dd9f; }
-.story-map-panel__legend-dot--quest { background: #e6c765; }
-.story-map-panel__legend-dot--item { background: #6fc59b; }
-.story-map-panel__legend-dot--danger { background: #e06d61; }
+.story-map-panel__legend-dot--player {
+  background: #f5dd9f;
+}
+.story-map-panel__legend-dot--quest {
+  background: #e6c765;
+}
+.story-map-panel__legend-dot--item {
+  background: #6fc59b;
+}
+.story-map-panel__legend-dot--danger {
+  background: #e06d61;
+}
+.story-map-panel__legend-dot--building {
+  background: #d8c39b;
+}
+.story-map-panel__legend-dot--water {
+  background: #4aa2ad;
+}
+.story-map-panel__legend-dot--landmark {
+  background: #d98b4d;
+}
 
 .story-map-panel__summary {
   display: flex;
@@ -352,16 +401,24 @@ onMounted(async () => {
 }
 
 @keyframes map-spin {
-  to { transform: rotate(360deg); }
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 @media (max-width: 760px) {
-  .story-map-overlay { padding: 14px; }
+  .story-map-overlay {
+    padding: 14px;
+  }
   .story-map-panel {
     width: calc(100vw - 28px);
     height: calc(100vh - 28px);
   }
-  .story-map-panel__body { grid-template-columns: 1fr; }
-  .story-map-panel__legend { display: none; }
+  .story-map-panel__body {
+    grid-template-columns: 1fr;
+  }
+  .story-map-panel__legend {
+    display: none;
+  }
 }
 </style>
