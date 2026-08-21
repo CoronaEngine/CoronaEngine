@@ -1,0 +1,229 @@
+newmtl grass
+Ka 0.126 0.165 0.075
+Kd 0.420 0.550 0.250
+Ks 0.080 0.080 0.080
+Ns 8.000
+d 1.000
+illum 2
+map_Kd textures/grass_diffuse.png
+map_Bump -bm 0.65 textures/grass_normal.png
+
+newmtl grass_light
+Ka 0.159 0.195 0.093
+Kd 0.530 0.650 0.310
+Ks 0.080 0.080 0.080
+Ns 8.000
+d 1.000
+illum 2
+map_Kd textures/grass_diffuse.png
+map_Bump -bm 0.65 textures/grass_normal.png
+
+newmtl highland
+Ka 0.108 0.126 0.072
+Kd 0.360 0.420 0.240
+Ks 0.080 0.080 0.080
+Ns 7.000
+d 1.000
+illum 2
+map_Kd textures/grass_diffuse.png
+map_Bump -bm 0.65 textures/grass_normal.png
+
+newmtl rock
+Ka 0.129 0.132 0.123
+Kd 0.430 0.440 0.410
+Ks 0.080 0.080 0.080
+Ns 16.000
+d 1.000
+illum 2
+map_Kd textures/rock_diffuse.png
+map_Bump -bm 0.65 textures/rock_normal.png
+
+newmtl stone
+Ka 0.153 0.159 0.150
+Kd 0.510 0.530 0.500
+Ks 0.080 0.080 0.080
+Ns 18.000
+d 1.000
+illum 2
+map_Kd textures/stone_diffuse.png
+map_Bump -bm 0.65 textures/stone_normal.png
+
+newmtl stone_dark
+Ka 0.096 0.105 0.102
+Kd 0.320 0.350 0.340
+Ks 0.080 0.080 0.080
+Ns 12.000
+d 1.000
+illum 2
+map_Kd textures/stone_diffuse.png
+map_Bump -bm 0.65 textures/stone_normal.png
+
+newmtl water
+Ka 0.024 0.126 0.141
+Kd 0.080 0.420 0.470
+Ks 0.080 0.080 0.080
+Ns 90.000
+d 0.920
+illum 2
+
+newmtl shallows
+Ka 0.057 0.162 0.147
+Kd 0.190 0.540 0.490
+Ks 0.080 0.080 0.080
+Ns 60.000
+d 0.900
+illum 2
+
+newmtl earth
+Ka 0.150 0.105 0.060
+Kd 0.500 0.350 0.200
+Ks 0.080 0.080 0.080
+Ns 7.000
+d 1.000
+illum 2
+map_Kd textures/dirt_diffuse.png
+map_Bump -bm 0.65 textures/dirt_normal.png
+
+newmtl plaster
+Ka 0.264 0.255 0.225
+Kd 0.880 0.850 0.750
+Ks 0.080 0.080 0.080
+Ns 10.000
+d 1.000
+illum 2
+map_Kd textures/plaster_diffuse.png
+map_Bump -bm 0.65 textures/plaster_normal.png
+
+newmtl plaster_weathered
+Ka 0.210 0.210 0.183
+Kd 0.700 0.700 0.610
+Ks 0.080 0.080 0.080
+Ns 7.000
+d 1.000
+illum 2
+map_Kd textures/plaster_diffuse.png
+map_Bump -bm 0.65 textures/plaster_normal.png
+
+newmtl wood
+Ka 0.102 0.054 0.024
+Kd 0.340 0.180 0.080
+Ks 0.080 0.080 0.080
+Ns 22.000
+d 1.000
+illum 2
+map_Kd textures/wood_diffuse.png
+map_Bump -bm 0.65 textures/wood_normal.png
+
+newmtl wood_dark
+Ka 0.060 0.027 0.011
+Kd 0.200 0.090 0.035
+Ks 0.080 0.080 0.080
+Ns 18.000
+d 1.000
+illum 2
+map_Kd textures/wood_diffuse.png
+map_Bump -bm 0.65 textures/wood_normal.png
+
+newmtl roof
+Ka 0.057 0.075 0.081
+Kd 0.190 0.250 0.270
+Ks 0.080 0.080 0.080
+Ns 30.000
+d 1.000
+illum 2
+map_Kd textures/roof_tile_diffuse.png
+map_Bump -bm 0.65 textures/roof_tile_normal.png
+
+newmtl roof_edge
+Ka 0.030 0.045 0.051
+Kd 0.100 0.150 0.170
+Ks 0.080 0.080 0.080
+Ns 24.000
+d 1.000
+illum 2
+map_Kd textures/roof_tile_diffuse.png
+map_Bump -bm 0.65 textures/roof_tile_normal.png
+
+newmtl roof_red
+Ka 0.099 0.039 0.024
+Kd 0.330 0.130 0.080
+Ks 0.080 0.080 0.080
+Ns 25.000
+d 1.000
+illum 2
+map_Kd textures/roof_tile_diffuse.png
+map_Bump -bm 0.65 textures/roof_tile_normal.png
+
+newmtl leaf
+Ka 0.036 0.102 0.048
+Kd 0.120 0.340 0.160
+Ks 0.080 0.080 0.080
+Ns 10.000
+d 1.000
+illum 2
+map_Kd textures/grass_diffuse.png
+map_Bump -bm 0.65 textures/grass_normal.png
+
+newmtl leaf_light
+Ka 0.081 0.144 0.057
+Kd 0.270 0.480 0.190
+Ks 0.080 0.080 0.080
+Ns 11.000
+d 1.000
+illum 2
+map_Kd textures/grass_diffuse.png
+map_Bump -bm 0.65 textures/grass_normal.png
+
+newmtl leaf_dark
+Ka 0.024 0.072 0.036
+Kd 0.080 0.240 0.120
+Ks 0.080 0.080 0.080
+Ns 8.000
+d 1.000
+illum 2
+map_Kd textures/grass_diffuse.png
+map_Bump -bm 0.65 textures/grass_normal.png
+
+newmtl reed
+Ka 0.120 0.144 0.051
+Kd 0.400 0.480 0.170
+Ks 0.080 0.080 0.080
+Ns 8.000
+d 1.000
+illum 2
+map_Kd textures/reed_diffuse.png
+map_Bump -bm 0.65 textures/reed_normal.png
+
+newmtl gold
+Ka 0.225 0.156 0.048
+Kd 0.750 0.520 0.160
+Ks 0.080 0.080 0.080
+Ns 48.000
+d 1.000
+illum 2
+
+newmtl lantern
+Ka 0.210 0.022 0.011
+Kd 0.700 0.075 0.035
+Ks 0.080 0.080 0.080
+Ns 18.000
+d 1.000
+illum 2
+
+newmtl paper
+Ka 0.288 0.216 0.096
+Kd 0.960 0.720 0.320
+Ks 0.080 0.080 0.080
+Ns 12.000
+d 0.940
+illum 2
+
+newmtl metal
+Ka 0.060 0.063 0.060
+Kd 0.200 0.210 0.200
+Ks 0.080 0.080 0.080
+Ns 54.000
+d 1.000
+illum 2
+map_Kd textures/rock_diffuse.png
+map_Bump -bm 0.65 textures/rock_normal.png
