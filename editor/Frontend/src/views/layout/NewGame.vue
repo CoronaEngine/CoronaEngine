@@ -105,6 +105,7 @@ import { projectLauncherService } from '@/services/projectLauncherService.js';
 import { initializeWorldTasks } from '@/services/cabbageAssistantContextService.js';
 import lanchat from '@/stores/lanchat.js';
 import { translateUiText } from '@/i18n/domTranslator.js';
+import { destinationForWorldMode } from '@/utils/worldModeRouting.js';
 
 const router = useRouter();
 
@@ -192,12 +193,13 @@ const waitForPythonProjectActivation = async (expectedPath, timeoutMs = 7000) =>
 const handleCreate = async () => {
   if (creating.value || !archiveReady.value) return;
   const prompt = worldPrompt.value.trim(); // 允许为空：无提示词也可创建
+  const selectedMode = mode.value;
 
   creating.value = true;
   try {
     // 后端自动命名 + 存到引擎 data 目录，返回 { name, path }
     const result = await editorApi.project.createWorldProject({
-      mode: mode.value,
+      mode: selectedMode,
       prompt,
     });
     const info = result?.data;
@@ -210,18 +212,24 @@ const handleCreate = async () => {
         return;
       }
       if (openResult?.ok) {
+        const destination = destinationForWorldMode(selectedMode);
+        if (destination !== '/') {
+          router.push(destination);
+          return;
+        }
+
         // Never send a world description or task request until Python confirms
         // that the newly created world is the active project. Otherwise the old
         // world can receive the new task plan and a stale node request can cross over.
         const projectReady = await waitForPythonProjectActivation(info.path);
         if (projectReady) {
-          await editorApi.project.setProjectMode(mode.value, { prompt });
+          await editorApi.project.setProjectMode(selectedMode, { prompt });
           try {
             // This operation only creates personalized guidance tasks. It never
             // creates or modifies the project node graph.
             await initializeWorldTasks({
               prompt,
-              mode: mode.value,
+              mode: selectedMode,
               waitForCompletion: Boolean(prompt),
             });
           } catch (taskError) {
@@ -250,7 +258,7 @@ const handleCreate = async () => {
         } catch (roomError) {
           console.warn('Default AI conversation room initialization failed:', roomError);
         }
-        router.push('/');
+        router.push(destination);
         return;
       }
     }

@@ -14,6 +14,7 @@ const dockStore = useDockStore();
 
 // DockLayout 只在编辑器主页面显示，StartScreen / launcher 等不显示
 const isEditorRoute = computed(() => route.path === '/');
+const showGlobalCenterPanels = computed(() => route.path !== '/StoryMode');
 const isStandalonePanel = computed(() => route.query?.standalone === '1');
 
 const centerPanels = computed(() => dockStore.panelsByZone('center'));
@@ -193,13 +194,15 @@ onUnmounted(() => {
     </template>
   </div>
 
-  <!-- 全局中心面板覆盖层（所有页面可用） -->
-  <template v-for="p in centerPanels" :key="p.id">
+  <!-- 全局中心面板覆盖层；剧情模式必须保持独立，不挂载编辑器面板 -->
+  <template v-if="showGlobalCenterPanels">
+    <template v-for="p in centerPanels" :key="p.id">
     <div class="global-center-overlay" @mousedown.self="dockStore.closePanel(p.id)">
       <div class="global-center-overlay-panel" :style="{ width: p.width + 'px', height: p.height + 'px' }">
         <DockPanel :panel-id="p.id" :component="getPluginComponent(p.id)" />
       </div>
     </div>
+    </template>
   </template>
 </template>
 

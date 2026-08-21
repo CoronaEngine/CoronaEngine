@@ -106,6 +106,7 @@ import { ref, onMounted, onUnmounted } from 'vue';
 import { useRouter } from 'vue-router';
 import { editorApi } from '@/api/editorApi.js';
 import { projectLauncherService } from '@/services/projectLauncherService.js';
+import { destinationForWorldMode } from '@/utils/worldModeRouting.js';
 
 const router = useRouter();
 
@@ -238,7 +239,16 @@ const handleOpenProject = async (path, project = null) => {
       }
     }
     if (opened?.ok) {
-      router.push('/');
+      let destination = '/';
+      try {
+        const projectInfo = unwrapResponse(
+          await editorApi.projectSettings.getActiveProjectInfo(),
+        );
+        destination = destinationForWorldMode(projectInfo?.mode);
+      } catch (modeError) {
+        console.warn('读取项目模式失败，将使用创造模式打开:', modeError);
+      }
+      router.push(destination);
     }
   } catch (error) {
     console.error('打开项目失败:', error);
