@@ -118,6 +118,12 @@ const heading = computed(() => storyPlayerHeadingDegrees(props.playerForward));
   fill: #e06d61;
 }
 
+.story-map-canvas__marker--boss {
+  fill: #a93d31;
+  stroke: #f3b076;
+  stroke-width: 0.8;
+  filter: drop-shadow(0 0 1.8px rgba(225, 86, 58, 0.95));
+}
 .story-map-canvas__marker--quest {
   fill: #e6c765;
 }

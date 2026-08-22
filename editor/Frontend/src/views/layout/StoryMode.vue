@@ -6,6 +6,7 @@
       :class="{ 'story-mode__viewport--looking': isLooking }"
       aria-label="剧情世界画面"
       tabindex="-1"
+      @mousedown.left="handleViewportAttack"
       @dragstart.prevent
     ></div>
 
@@ -18,33 +19,59 @@
             {{ inventory.occupiedSlots }}/{{ inventory.slots.length }} 格
           </span>
         </button>
-        <div class="story-mode__control-hint">
-          <span>
-            <kbd>WASD</kbd>
-            移动
-          </span>
-          <span>
-            <kbd>QE</kbd>
-            升降
-          </span>
-          <span>
-            <kbd>右键</kbd>
-            观察
-          </span>
-          <span v-if="managedWorld">
-            <kbd>R</kbd>
-            回村口
-          </span>
-        </div>
       </div>
 
       <StoryMiniMap :markers="mapMarkers" :player-state="playerState" @open="openMap" />
     </section>
 
-    <div v-if="hudVisible" class="story-mode__crosshair" aria-hidden="true">
+    <section v-if="hudVisible && bossHud" class="story-mode__boss-hud" aria-label="Boss 生命">
+      <div>
+        <span>{{ bossHud.name }}</span>
+        <strong>{{ bossHud.health }} / {{ bossHud.maxHealth }}</strong>
+      </div>
+      <div class="story-mode__boss-track">
+        <span :style="{ width: `${(bossHud.health / bossHud.maxHealth) * 100}%` }"></span>
+      </div>
+    </section>
+
+    <div
+      v-if="hudVisible"
+      class="story-mode__crosshair"
+      :class="{ 'story-mode__crosshair--target': aimedMonster }"
+      aria-hidden="true"
+    >
       <span></span>
       <span></span>
+      <div v-if="aimedMonster" class="story-mode__target-label">
+        <strong>{{ aimedMonster.name }}</strong>
+        <span>{{ aimedMonster.health }} / {{ aimedMonster.maxHealth }}</span>
+      </div>
     </div>
+
+    <section
+      v-if="gameReady && !hasBlockingOverlay && !playerDead"
+      class="story-mode__health-hud"
+      aria-label="玩家生命"
+    >
+      <div class="story-mode__health-label">
+        <span>生命</span>
+        <strong>{{ playerHealth }} / {{ playerMaxHealth }}</strong>
+      </div>
+      <div class="story-mode__health-track">
+        <span :class="healthBarClass" :style="{ width: `${healthPercent}%` }"></span>
+      </div>
+    </section>
+
+    <div v-if="damageNumber" :key="damageNumber.id" class="story-mode__damage-number">
+      -{{ damageNumber.amount }}
+    </div>
+    <div
+      v-if="damageNumber"
+      :key="`flash-${damageFlash}`"
+      class="story-mode__damage-vignette"
+    ></div>
+    <div v-if="attackPulse" :key="`attack-${attackPulse}`" class="story-mode__attack-swing"></div>
+    <div v-if="hitPulse" :key="`hit-${hitPulse}`" class="story-mode__hit-marker">×</div>
 
     <Transition name="story-location">
       <section v-if="locationVisible" class="story-mode__location" aria-live="polite">
@@ -77,11 +104,22 @@
 
     <Transition name="story-toast">
       <div
-        v-if="bootstrapWarningNotice && gameReady && !hasBlockingOverlay"
+        v-if="combatNotice && gameReady && !hasBlockingOverlay && !playerDead"
+        class="story-mode__toast story-mode__toast--combat"
+        :class="`story-mode__toast--${combatNotice.kind}`"
+        role="status"
+      >
+        {{ combatNotice.message }}
+      </div>
+    </Transition>
+
+    <Transition name="story-toast">
+      <div
+        v-if="systemWarningNotice && gameReady && !hasBlockingOverlay"
         class="story-mode__toast story-mode__toast--warning story-mode__toast--bootstrap"
         role="status"
       >
-        {{ bootstrapWarningNotice }}
+        {{ systemWarningNotice }}
       </div>
     </Transition>
 
@@ -128,6 +166,17 @@
             重试
           </button>
         </div>
+      </div>
+    </section>
+
+    <section v-if="playerDead" class="story-mode__death-overlay" aria-label="玩家死亡">
+      <div class="story-mode__death-card" role="dialog" aria-modal="true">
+        <p>YOU HAVE FALLEN</p>
+        <h1>你倒下了</h1>
+        <span>云溪村的风仍在等待你。</span>
+        <button type="button" class="story-button story-button--primary" @click="respawnAtVillage">
+          返回村口
+        </button>
       </div>
     </section>
 
@@ -190,6 +239,8 @@ import {
 } from '@/config/storyWorld.js';
 import { useNativeSceneViewport } from '@/composables/useNativeSceneViewport.js';
 import { useStoryCameraControls } from '@/composables/useStoryCameraControls.js';
+import { useStoryCombat } from '@/composables/useStoryCombat.js';
+import { useStoryGameClock } from '@/composables/useStoryGameClock.js';
 import { useStoryMap } from '@/composables/useStoryMap.js';
 import { useStoryPlayerState } from '@/composables/useStoryPlayerState.js';
 import { useStoryWorldBootstrap } from '@/composables/useStoryWorldBootstrap.js';
@@ -213,6 +264,7 @@ const cameraResetPending = ref(false);
 const cameraSafetyPending = ref(true);
 const cameraNotice = ref('');
 const locationVisible = ref(false);
+const activeProjectKey = ref('');
 let noticeTimer = null;
 let cameraNoticeTimer = null;
 let locationTimer = null;
@@ -234,7 +286,7 @@ const {
   loading: mapLoading,
   errorMessage: mapErrorMessage,
   sceneName: mapSceneName,
-  markers: mapMarkers,
+  markers: sceneMapMarkers,
   sceneBounds,
   boundsReady,
   refresh: refreshMap,
@@ -281,10 +333,6 @@ const {
 
 const gameReady = computed(() => viewportReady.value && bootstrapReady.value);
 const hasBlockingOverlay = computed(() => menuOpen.value || inventoryOpen.value || mapOpen.value);
-const controlsEnabled = computed(
-  () => gameReady.value && !hasBlockingOverlay.value && !cameraSafetyPending.value
-);
-const hudVisible = computed(() => gameReady.value && !hasBlockingOverlay.value);
 const activeLoadError = computed(() => {
   if (viewportStatus.value === 'error') return viewportErrorMessage.value;
   if (bootstrapStatus.value === 'error') return bootstrapErrorMessage.value;
@@ -302,6 +350,71 @@ const bootstrapWarningNotice = computed(() => {
     ? warnings[0]
     : `${warnings[0]}（另有 ${warnings.length - 1} 项提示）`;
 });
+
+const { totalGameTimeMs, lightingError, shutdown: shutdownStoryClock } = useStoryGameClock({
+  sceneId,
+  projectKey: activeProjectKey,
+  enabled: gameReady,
+});
+
+const combatPaused = computed(
+  () => !gameReady.value || hasBlockingOverlay.value || cameraSafetyPending.value
+);
+const combatEnabled = computed(
+  () => gameReady.value && managedWorld.value && Boolean(activeProjectKey.value)
+);
+const {
+  playerHealth,
+  playerMaxHealth,
+  playerDead,
+  warningMessage: combatWarningMessage,
+  notice: combatNotice,
+  aimedMonster,
+  bossHud,
+  monsterMarkers,
+  attackPulse,
+  hitPulse,
+  damageFlash,
+  damageNumber,
+  attack: combatAttack,
+  respawnPlayer,
+  shutdown: shutdownStoryCombat,
+} = useStoryCombat({
+  sceneId,
+  projectKey: activeProjectKey,
+  enabled: combatEnabled,
+  paused: combatPaused,
+  totalGameTimeMs,
+  playerState: playerStateRef,
+  cameraBinding,
+  viewportRef,
+  onActorsReady: refreshMap,
+});
+
+const controlsEnabled = computed(
+  () =>
+    gameReady.value && !hasBlockingOverlay.value && !cameraSafetyPending.value && !playerDead.value
+);
+const hudVisible = computed(
+  () => gameReady.value && !hasBlockingOverlay.value && !playerDead.value
+);
+
+const mapMarkers = computed(() => {
+  const staticMarkers = sceneMapMarkers.value.filter(
+    (marker) => !String(marker.name || '').startsWith('StoryMonster_')
+  );
+  return [...staticMarkers, ...monsterMarkers.value];
+});
+const healthPercent = computed(() =>
+  Math.max(0, Math.min(100, (playerHealth.value / playerMaxHealth) * 100))
+);
+const healthBarClass = computed(() => ({
+  'story-mode__health-fill--warning': healthPercent.value <= 60 && healthPercent.value > 30,
+  'story-mode__health-fill--danger': healthPercent.value <= 30,
+}));
+const systemWarningNotice = computed(
+  () => bootstrapWarningNotice.value || combatWarningMessage.value || lightingError.value
+);
 
 const cameraPositionBounds = computed(() =>
   managedWorld.value ? STORY_WORLD_CAMERA_BOUNDS : null
@@ -448,6 +561,17 @@ const resetStoryCamera = async () => {
   }
 };
 
+const handleViewportAttack = (event) => {
+  if (event.button !== 0 || event.ctrlKey || event.altKey || event.metaKey || event.shiftKey)
+    return;
+  combatAttack();
+};
+
+const respawnAtVillage = async () => {
+  await resetStoryCamera();
+  respawnPlayer();
+};
+
 const exitToStart = async () => {
   if (exitPending.value) return;
   exitPending.value = true;
@@ -456,6 +580,8 @@ const exitToStart = async () => {
   mapOpen.value = false;
   await stopCameraControls({ persist: false });
   await persistPose();
+  await shutdownStoryCombat();
+  await shutdownStoryClock();
   await router.push('/StartScreen');
 };
 
@@ -514,7 +640,8 @@ const initializeProjectInventory = async () => {
       console.warn('[StoryMode] failed to resolve the file project for inventory', error);
     }
   }
-  inventory.resetForProject(projectPath || sceneId.value || 'active-project');
+  activeProjectKey.value = projectPath || sceneId.value || 'active-project';
+  inventory.resetForProject(activeProjectKey.value);
 };
 
 watch([menuOpen, inventoryOpen, mapOpen], async ([isMenuOpen, isInventoryOpen, isMapOpen]) => {
@@ -628,8 +755,7 @@ onUnmounted(() => {
   outline: none;
 }
 
-.story-mode__hud-button kbd,
-.story-mode__control-hint kbd {
+.story-mode__hud-button kbd {
   border: 1px solid rgba(216, 184, 108, 0.35);
   border-radius: 5px;
   background: rgba(0, 0, 0, 0.3);
@@ -654,28 +780,267 @@ onUnmounted(() => {
   font-size: 12px;
 }
 
-.story-mode__control-hint {
-  display: flex;
-  gap: 6px;
-  color: #8e887b;
-  font-size: 9px;
-}
-
-.story-mode__control-hint span {
-  padding: 5px 7px;
-  border-radius: 6px;
-  background: rgba(3, 5, 4, 0.58);
-}
-
-.story-mode__control-hint kbd {
-  padding: 1px 3px;
-  margin-right: 3px;
-}
-
 .story-mode__hud > :last-child {
   pointer-events: auto;
 }
 
+.story-mode__boss-hud {
+  position: absolute;
+  z-index: 17;
+  top: 88px;
+  left: 50%;
+  width: min(520px, calc(100vw - 48px));
+  transform: translateX(-50%);
+  color: #f4ddd0;
+  text-align: center;
+  pointer-events: none;
+}
+
+.story-mode__boss-hud > div:first-child {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 4px 6px;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-shadow: 0 2px 5px rgba(0, 0, 0, 0.9);
+}
+
+.story-mode__boss-hud strong {
+  color: #e7b4a1;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.story-mode__boss-track,
+.story-mode__health-track {
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 999px;
+  background: rgba(6, 7, 6, 0.82);
+  box-shadow:
+    inset 0 1px 4px rgba(0, 0, 0, 0.9),
+    0 5px 18px rgba(0, 0, 0, 0.45);
+}
+
+.story-mode__boss-track {
+  height: 9px;
+  border-color: rgba(151, 62, 46, 0.72);
+}
+
+.story-mode__boss-track span,
+.story-mode__health-track span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  transition:
+    width 220ms ease,
+    background 220ms ease;
+}
+
+.story-mode__boss-track span {
+  background: linear-gradient(90deg, #5e1715, #a63227 58%, #df7459);
+  box-shadow: 0 0 14px rgba(190, 62, 45, 0.58);
+}
+
+.story-mode__health-hud {
+  position: absolute;
+  z-index: 24;
+  bottom: 26px;
+  left: 50%;
+  width: min(360px, calc(100vw - 48px));
+  padding: 10px 14px 12px;
+  border: 1px solid rgba(216, 184, 108, 0.34);
+  border-radius: 12px;
+  background: linear-gradient(180deg, rgba(14, 17, 13, 0.9), rgba(5, 7, 6, 0.88));
+  box-shadow: 0 12px 34px rgba(0, 0, 0, 0.48);
+  transform: translateX(-50%);
+  pointer-events: none;
+  backdrop-filter: blur(5px);
+}
+
+.story-mode__health-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 7px;
+  color: #d7cfba;
+  font-size: 11px;
+  letter-spacing: 0.12em;
+}
+
+.story-mode__health-label strong {
+  color: #eff4dd;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.story-mode__health-track {
+  height: 12px;
+  border-color: rgba(118, 170, 93, 0.58);
+}
+
+.story-mode__health-track span {
+  background: linear-gradient(90deg, #2f7f40, #67b958 62%, #9bd26d);
+  box-shadow: 0 0 14px rgba(91, 179, 85, 0.48);
+}
+
+.story-mode__health-track .story-mode__health-fill--warning {
+  background: linear-gradient(90deg, #9b6c1e, #d4a83a, #efd16d);
+  box-shadow: 0 0 14px rgba(217, 170, 52, 0.5);
+}
+
+.story-mode__health-track .story-mode__health-fill--danger {
+  background: linear-gradient(90deg, #7b1818, #c8322c, #e6624f);
+  box-shadow: 0 0 16px rgba(212, 53, 43, 0.58);
+  animation: story-health-danger 800ms ease-in-out infinite alternate;
+}
+
+.story-mode__crosshair--target span {
+  background: #ef6a55;
+}
+
+.story-mode__target-label {
+  position: absolute;
+  top: 28px;
+  left: 50%;
+  display: grid;
+  min-width: 126px;
+  padding: 6px 10px;
+  border: 1px solid rgba(221, 96, 76, 0.42);
+  border-radius: 7px;
+  background: rgba(12, 8, 7, 0.78);
+  color: #e4b4a8;
+  font-size: 9px;
+  text-align: center;
+  transform: translateX(-50%);
+  backdrop-filter: blur(3px);
+}
+
+.story-mode__target-label strong {
+  color: #f4ddd4;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.story-mode__target-label span {
+  position: static;
+  display: block;
+  margin-top: 2px;
+  background: none;
+  color: #d88774;
+  transform: none;
+}
+
+.story-mode__damage-number {
+  position: absolute;
+  z-index: 36;
+  top: 58%;
+  left: 50%;
+  color: #ff6f5c;
+  font-size: 30px;
+  font-weight: 800;
+  text-shadow: 0 3px 12px rgba(90, 0, 0, 0.9);
+  transform: translate(-50%, -50%);
+  animation: story-damage-number 720ms ease-out forwards;
+  pointer-events: none;
+}
+
+.story-mode__damage-vignette {
+  position: absolute;
+  z-index: 20;
+  inset: 0;
+  background: radial-gradient(circle, transparent 35%, rgba(155, 12, 5, 0.62) 100%);
+  animation: story-damage-vignette 480ms ease-out forwards;
+  pointer-events: none;
+}
+
+.story-mode__attack-swing {
+  position: absolute;
+  z-index: 19;
+  top: 51%;
+  left: 51%;
+  width: 230px;
+  height: 120px;
+  border-top: 5px solid rgba(242, 225, 183, 0.72);
+  border-radius: 50%;
+  filter: drop-shadow(0 0 8px rgba(230, 192, 104, 0.55));
+  transform: translate(-50%, -50%) rotate(-34deg);
+  transform-origin: 18% 75%;
+  animation: story-attack-swing 260ms ease-out forwards;
+  pointer-events: none;
+}
+
+.story-mode__hit-marker {
+  position: absolute;
+  z-index: 25;
+  top: 50%;
+  left: 50%;
+  color: #fff1ce;
+  font-size: 30px;
+  font-weight: 300;
+  line-height: 1;
+  text-shadow: 0 0 8px #c34835;
+  transform: translate(-50%, -50%);
+  animation: story-hit-marker 300ms ease-out forwards;
+  pointer-events: none;
+}
+
+.story-mode__death-overlay {
+  position: absolute;
+  z-index: 38;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background:
+    radial-gradient(circle at 50% 42%, rgba(87, 17, 12, 0.16), transparent 34%), rgba(3, 2, 2, 0.83);
+  pointer-events: auto;
+  backdrop-filter: grayscale(0.85) blur(4px);
+}
+
+.story-mode__death-card {
+  display: grid;
+  justify-items: center;
+  width: min(430px, calc(100vw - 40px));
+  padding: 38px 34px;
+  border: 1px solid rgba(178, 74, 59, 0.5);
+  border-radius: 14px;
+  background: linear-gradient(145deg, rgba(33, 15, 13, 0.97), rgba(8, 6, 5, 0.98));
+  box-shadow: 0 28px 90px rgba(0, 0, 0, 0.72);
+  text-align: center;
+}
+
+.story-mode__death-card p {
+  margin: 0;
+  color: #93493e;
+  font-size: 10px;
+  letter-spacing: 0.32em;
+}
+
+.story-mode__death-card h1 {
+  margin: 10px 0 8px;
+  color: #f1d4ca;
+  font-family: 'STKaiti', 'KaiTi', serif;
+  font-size: 38px;
+  font-weight: 500;
+  letter-spacing: 0.12em;
+}
+
+.story-mode__death-card span {
+  margin-bottom: 26px;
+  color: #a88e84;
+  font-size: 13px;
+}
+
+.story-mode__toast--combat {
+  bottom: 104px;
+}
+
+.story-mode__toast--danger {
+  border-color: rgba(220, 82, 63, 0.68);
+  color: #f0b5a7;
+}
 .story-mode__toast {
   position: absolute;
   z-index: 35;
@@ -962,6 +1327,70 @@ onUnmounted(() => {
   font-size: 10px;
 }
 
+@keyframes story-health-danger {
+  from {
+    opacity: 0.72;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes story-damage-number {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, 8px) scale(0.8);
+  }
+  18% {
+    opacity: 1;
+    transform: translate(-50%, -6px) scale(1.08);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -48px) scale(0.96);
+  }
+}
+
+@keyframes story-damage-vignette {
+  0% {
+    opacity: 0;
+  }
+  18% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+@keyframes story-attack-swing {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, -50%) rotate(-55deg) scale(0.65);
+  }
+  28% {
+    opacity: 0.88;
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -50%) rotate(28deg) scale(1.08);
+  }
+}
+
+@keyframes story-hit-marker {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(1.65);
+  }
+  24% {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(0.9);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(1.1);
+  }
+}
 @keyframes story-spin {
   to {
     transform: rotate(360deg);

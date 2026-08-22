@@ -6,6 +6,7 @@ import {
   STORY_WORLD_ACTORS,
   STORY_WORLD_ACTOR_PREFIX,
   STORY_WORLD_CAMERA_SPAWN,
+  STORY_WORLD_DEPRECATED_ACTORS,
   STORY_WORLD_PLAN_ID,
   STORY_WORLD_SCENE_VERSION,
   STORY_WORLD_SUN_DIRECTION,
@@ -261,9 +262,12 @@ export function storyWorldMigrationForActor(actor, definition) {
     (!actualSize ||
       actualMax < expectedMax * STORY_WORLD_LEGACY_SIZE_RATIO ||
       (currentVersion <= 1 && currentScaleMax < expectedScaleMax * 0.75));
-  const scale = normalizedLegacySize
-    ? currentScale.map((value) => value * definition.importScale)
-    : currentScale;
+  const resetManagedLayout = currentVersion < STORY_WORLD_SCENE_VERSION;
+  const scale = resetManagedLayout
+    ? storyWorldFinalScale(definition)
+    : normalizedLegacySize
+      ? currentScale.map((value) => value * definition.importScale)
+      : currentScale;
 
   return {
     actor,
@@ -273,6 +277,7 @@ export function storyWorldMigrationForActor(actor, definition) {
     expectedSize,
     scale,
     repaired: normalizedLegacySize,
+    resetManagedLayout,
     needsResourceRebind: currentVersion < STORY_WORLD_SCENE_VERSION,
     actorGuid: actorGuid(actor) || definition.guid,
   };
@@ -292,7 +297,11 @@ export function createStoryWorldMigrationActorData(migration) {
     actor_name: definition.name,
     name: definition.name,
     actor_guid: migration.actorGuid || definition.guid,
-    ...(migration.repaired ? { scale: [...migration.scale] } : {}),
+    position: [...definition.position],
+    rotation: [...definition.rotation],
+    scale: [...migration.scale],
+    semantic_role: definition.semanticRole,
+    entity_type: definition.entityType,
     source_plan_id: STORY_WORLD_PLAN_ID,
     source_scene_version: STORY_WORLD_SCENE_VERSION,
     skip_if_exists: true,
@@ -479,14 +488,24 @@ export async function runStoryWorldBootstrap({
     };
   }
 
-  const missing = missingStoryWorldActors(initialSnapshot);
-  const migrations = storyWorldMigrations(initialSnapshot);
+  const deprecatedNames = new Set(STORY_WORLD_DEPRECATED_ACTORS.map((name) => name.toLowerCase()));
+  const deprecatedActors = classification.storyActors.filter((actor) =>
+    deprecatedNames.has(actorName(actor).toLowerCase())
+  );
+  const migrationSnapshot = {
+    ...initialSnapshot,
+    actors: (Array.isArray(initialSnapshot.actors) ? initialSnapshot.actors : []).filter(
+      (actor) => !deprecatedNames.has(actorName(actor).toLowerCase())
+    ),
+  };
+  const missing = missingStoryWorldActors(migrationSnapshot);
+  const migrations = storyWorldMigrations(migrationSnapshot);
   const terrainWasMissing = missing.some(
     (definition) => definition.name === STORY_WORLD_TERRAIN_ACTOR.name
   );
   const activeProjectPath = storyProjectPathFromResponse(projectInfoResponse);
   let assetRoot = '';
-  if (missing.length > 0 || migrations.length > 0) {
+  if (missing.length > 0 || migrations.length > 0 || deprecatedActors.length > 0) {
     const defaultProjectPath = await safeDefaultProjectPath(api);
     if (isCancelled()) return null;
     assetRoot = resolveStoryWorldAssetRoot({
@@ -504,6 +523,25 @@ export async function runStoryWorldBootstrap({
 
   const warnings = [];
   const migrationWarnings = [];
+  let deprecatedRemovedCount = 0;
+  if (deprecatedActors.length > 0) {
+    onProgress({ status: 'repairing', progress: 19, message: '整理旧道路布局' });
+    if (typeof api.sceneTools.removeActor !== 'function') {
+      throw createBootstrapError('当前编辑器不支持清理旧道路。', 'ROAD_MIGRATION_UNAVAILABLE');
+    }
+    for (const actor of deprecatedActors) {
+      if (isCancelled()) return null;
+      const name = actorName(actor);
+      const removed = await api.sceneTools.removeActor(activeSceneId, name);
+      if (!editorCallSucceeded(removed)) {
+        throw createBootstrapError(
+          `旧道路 ${name} 清理失败，请重试。`,
+          'ROAD_MIGRATION_FAILED'
+        );
+      }
+      deprecatedRemovedCount += 1;
+    }
+  }
   const shouldInitializeLighting =
     classification.kind === 'empty' || terrainWasMissing || migrations.length > 0;
   if (shouldInitializeLighting) {
@@ -555,6 +593,16 @@ export async function runStoryWorldBootstrap({
           throw new Error(
             editorCallErrorMessage(updated, `更新 ${migration.definition.name} 版本失败`)
           );
+        }
+        if (migration.definition.physics?.physics_enabled) {
+          const physics = await api.sceneTools.setActorPhysics(
+            activeSceneId,
+            migration.definition.name,
+            migration.definition.physics
+          );
+          if (!editorCallSucceeded(physics)) {
+            migrationWarnings.push(`${migration.definition.name} 的底层碰撞更新失败。`);
+          }
         }
         if (migration.repaired) repairedCount += 1;
       } catch (error) {
@@ -670,6 +718,7 @@ export async function runStoryWorldBootstrap({
     createdCount,
     repairedCount,
     upgradedCount,
+    deprecatedRemovedCount,
     terrainCreated,
     validation,
     worldBounds: validation.worldBounds,

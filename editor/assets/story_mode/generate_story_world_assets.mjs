@@ -65,6 +65,11 @@ const materials = {
   lantern: [[0.7, 0.075, 0.035], null, 18],
   paper: [[0.96, 0.72, 0.32], null, 12, 0.94],
   metal: [[0.2, 0.21, 0.2], "rock", 54],
+  monster_skin: [[0.22, 0.29, 0.22], "rock", 10],
+  monster_hide: [[0.09, 0.12, 0.1], "rock", 8],
+  monster_bone: [[0.66, 0.61, 0.48], "stone", 18],
+  monster_eye: [[0.9, 0.08, 0.025], null, 80],
+  monster_boss: [[0.31, 0.08, 0.055], "rock", 14],
 };
 const mtl = Object.entries(materials)
   .map(([name, [c, tex, ns = 12, opacity = 1]]) => {
@@ -258,11 +263,11 @@ class ObjBuilder {
           [n[r][s], n[r + 1][s], n[r + 1][s + 1], n[r][s + 1]],
         );
   }
-  write(filename) {
+  write(filename, materialLibrary = mtlName, assetVersion = 3) {
     const lines = [
-      `# Deterministic Story World v3 asset: ${this.name}`,
+      `# Deterministic Story World v${assetVersion} asset: ${this.name}`,
       `# Triangles: ${this.triangles.length}`,
-      `mtllib ${mtlName}`,
+      `mtllib ${materialLibrary}`,
       `o ${this.name}`,
       "s 1",
     ];
@@ -854,8 +859,248 @@ makeTree("tree_v3_b.obj", 1);
   }
   b.write("reeds_v3.obj");
 }
+function makeStoryMonster(filename, boss = false) {
+  const b = new ObjBuilder(boss ? "StoryMonster_Boss" : "StoryMonster_Minion");
+  const k = boss ? 1.85 : 1;
+  const skin = boss ? "monster_boss" : "monster_skin";
+  const hide = "monster_hide";
+  const bone = "monster_bone";
+  const legHeight = 0.62 * k;
+  const torsoY = legHeight + 0.62 * k;
+  for (const x of [-0.24 * k, 0.24 * k]) {
+    b.cylinderBetween([x, 0, 0], [x * 0.92, legHeight, 0.02 * k], 0.13 * k, 8, hide);
+    b.ellipsoid([x, 0.08 * k, -0.03 * k], [0.2 * k, 0.12 * k, 0.33 * k], 8, 5, hide, 700 + Math.round(x * 100));
+  }
+  b.ellipsoid([0, torsoY, 0], [0.48 * k, 0.62 * k, 0.33 * k], 12, 8, skin, boss ? 720 : 710);
+  b.ellipsoid([0, legHeight + 1.25 * k, -0.02 * k], [0.38 * k, 0.38 * k, 0.34 * k], 12, 8, skin, boss ? 730 : 715);
+  for (const side of [-1, 1]) {
+    b.cylinderBetween(
+      [side * 0.38 * k, torsoY + 0.22 * k, 0],
+      [side * 0.68 * k, torsoY - 0.34 * k, 0.06 * k],
+      0.11 * k,
+      8,
+      skin,
+    );
+    b.cylinderBetween(
+      [side * 0.2 * k, legHeight + 1.52 * k, 0],
+      [side * 0.45 * k, legHeight + 1.82 * k, 0.03 * k],
+      0.07 * k,
+      7,
+      bone,
+    );
+    b.ellipsoid(
+      [side * 0.14 * k, legHeight + 1.31 * k, -0.31 * k],
+      [0.055 * k, 0.055 * k, 0.035 * k],
+      7,
+      5,
+      "monster_eye",
+      boss ? 750 + side : 740 + side,
+    );
+  }
+  b.cylinderBetween(
+    [-0.28 * k, torsoY + 0.08 * k, -0.28 * k],
+    [0.28 * k, torsoY + 0.08 * k, -0.28 * k],
+    0.055 * k,
+    7,
+    bone,
+  );
+  if (boss) {
+    b.cylinderBetween([-0.5 * k, torsoY + 0.38 * k, 0], [-0.85 * k, torsoY + 0.72 * k, 0], 0.09 * k, 8, bone);
+    b.cylinderBetween([0.5 * k, torsoY + 0.38 * k, 0], [0.85 * k, torsoY + 0.72 * k, 0], 0.09 * k, 8, bone);
+    b.box(0, torsoY - 0.02 * k, 0.28 * k, 0.85 * k, 0.22 * k, 0.18 * k, "metal");
+  }
+  b.write(filename);
+}
+makeStoryMonster("monster_minion_v1.obj");
+makeStoryMonster("monster_boss_v1.obj", true);
+
+const v4MtlName = "story_world_v4.mtl";
+const v4Materials = {
+  ...materials,
+  grass: [[0.24, 0.34, 0.16], "grass", 6],
+  grass_light: [[0.31, 0.41, 0.2], "grass", 6],
+  highland: [[0.28, 0.32, 0.2], "grass", 6],
+  earth: [[0.39, 0.27, 0.16], "dirt", 6],
+  rock: [[0.36, 0.37, 0.35], "rock", 12],
+  stone: [[0.44, 0.46, 0.43], "stone", 14],
+  plaster: [[0.75, 0.73, 0.65], "plaster", 8],
+};
+const v4Mtl = Object.entries(v4Materials)
+  .map(([name, [c, tex, ns = 12, opacity = 1]]) => {
+    const lines = [
+      `newmtl ${name}`,
+      `Ka ${c.map((v) => (v * 0.24).toFixed(3)).join(" ")}`,
+      `Kd ${c.map((v) => v.toFixed(3)).join(" ")}`,
+      "Ks 0.050 0.050 0.050",
+      `Ns ${ns.toFixed(3)}`,
+      `d ${opacity.toFixed(3)}`,
+      "illum 2",
+    ];
+    if (tex)
+      lines.push(
+        `map_Kd textures/${tex}_diffuse.png`,
+        `map_Bump -bm 0.72 textures/${tex}_normal.png`,
+      );
+    return lines.join("\n");
+  })
+  .join("\n\n");
+fs.writeFileSync(path.join(outputDir, v4MtlName), `${v4Mtl}\n`, "utf8");
+
+function terrainMaterialV4(x, z) {
+  const h = terrainHeight(x, z);
+  const slope = 1 - terrainNormal(x, z, 0.6)[1];
+  const broadNoise =
+    Math.sin(x * 0.071 + z * 0.043) * 0.55 +
+    Math.cos(z * 0.058 - x * 0.031) * 0.35 +
+    Math.sin((x - z) * 0.024) * 0.28;
+  if (slope > 0.28 || h > 7.2) return "rock";
+  if (h < -0.55 || broadNoise < -0.72) return "earth";
+  if (h > 3.8) return "highland";
+  return broadNoise > 0.56 ? "grass_light" : "grass";
+}
+
+{
+  const b = new ObjBuilder("StoryWorld_Terrain_v4"),
+    size = 120,
+    cells = 72,
+    step = size / cells,
+    p = [],
+    n = [];
+  for (let iz = 0; iz <= cells; iz++) {
+    const z = -60 + iz * step,
+      pr = [],
+      nr = [];
+    for (let ix = 0; ix <= cells; ix++) {
+      const x = -60 + ix * step;
+      pr.push([x, terrainHeight(x, z), z]);
+      nr.push(terrainNormal(x, z));
+    }
+    p.push(pr);
+    n.push(nr);
+  }
+  for (let iz = 0; iz < cells; iz++)
+    for (let ix = 0; ix < cells; ix++) {
+      const cx = -60 + (ix + 0.5) * step,
+        cz = -60 + (iz + 0.5) * step,
+        material = terrainMaterialV4(cx, cz),
+        u0 = (ix / cells) * 9,
+        u1 = ((ix + 1) / cells) * 9,
+        v0 = (iz / cells) * 9,
+        v1 = ((iz + 1) / cells) * 9;
+      b.quad(
+        p[iz][ix],
+        p[iz + 1][ix],
+        p[iz + 1][ix + 1],
+        p[iz][ix + 1],
+        material,
+        [[u0, v0], [u0, v1], [u1, v1], [u1, v0]],
+        [n[iz][ix], n[iz + 1][ix], n[iz + 1][ix + 1], n[iz][ix + 1]],
+      );
+    }
+  b.write("terrain_v4.obj", v4MtlName, 4);
+}
+
+{
+  const b = new ObjBuilder("StoryWorld_YunxiLake_v4"),
+    segments = 72,
+    center = [0, 0, 0],
+    inner = [],
+    outer = [];
+  for (let i = 0; i <= segments; i++) {
+    const a = (Math.PI * 2 * i) / segments,
+      wobble = 0.97 + Math.sin(a * 3 + 0.7) * 0.024 + Math.sin(a * 7) * 0.012;
+    outer.push([Math.cos(a) * 22 * wobble, 0.008, Math.sin(a) * 14 * wobble]);
+    inner.push([Math.cos(a) * 19.5 * wobble, 0, Math.sin(a) * 11.8 * wobble]);
+  }
+  for (let i = 0; i < segments; i++) {
+    b.triangle(center, inner[i], inner[i + 1], "water", null, [[0, 1, 0], [0, 1, 0], [0, 1, 0]]);
+    b.quad(inner[i], outer[i], outer[i + 1], inner[i + 1], "shallows", null, [[0, 1, 0], [0, 1, 0], [0, 1, 0], [0, 1, 0]]);
+  }
+  b.write("water_v4.obj", v4MtlName, 4);
+}
+
+function resamplePath(points, spacing = 1.5) {
+  const sampled = [];
+  for (let segment = 0; segment < points.length - 1; segment++) {
+    const a = points[segment], b = points[segment + 1];
+    const distance = Math.hypot(b[0] - a[0], b[1] - a[1]);
+    const steps = Math.max(1, Math.ceil(distance / spacing));
+    for (let step = 0; step < steps; step++) {
+      if (segment > 0 && step === 0) continue;
+      const t = step / steps;
+      sampled.push([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]);
+    }
+  }
+  sampled.push([...points.at(-1)]);
+  return sampled;
+}
+
+function addRoadRibbon(b, controlPoints, width, uvOffset = 0) {
+  const points = resamplePath(controlPoints);
+  const rows = points.map(([x, z], index) => {
+    const previous = points[Math.max(0, index - 1)];
+    const next = points[Math.min(points.length - 1, index + 1)];
+    const tangent = norm([next[0] - previous[0], 0, next[1] - previous[1]], [0, 0, 1]);
+    const side = [-tangent[2], 0, tangent[0]];
+    return [-0.5, -0.28, 0.28, 0.5].map((ratio) => {
+      const px = x + side[0] * width * ratio;
+      const pz = z + side[2] * width * ratio;
+      return [px, terrainHeight(px, pz) + 0.035 + (Math.abs(ratio) < 0.3 ? 0.008 : 0), pz];
+    });
+  });
+  const materialsByBand = ["earth", "stone", "earth"];
+  for (let row = 0; row < rows.length - 1; row++)
+    for (let band = 0; band < 3; band++) {
+      const u0 = band / 3, u1 = (band + 1) / 3;
+      b.quad(
+        rows[row][band], rows[row + 1][band], rows[row + 1][band + 1], rows[row][band + 1],
+        materialsByBand[band],
+        [[u0, row * 0.45 + uvOffset], [u0, (row + 1) * 0.45 + uvOffset], [u1, (row + 1) * 0.45 + uvOffset], [u1, row * 0.45 + uvOffset]],
+      );
+    }
+}
+
+{
+  const b = new ObjBuilder("StoryWorld_RoadNetwork_v4");
+  addRoadRibbon(b, [[-38, -28], [-31, -21], [-23, -14], [-15, -7], [-8, 2], [-7, 14], [-6, 28]], 4.3, 0);
+  addRoadRibbon(b, [[-8, 2], [-1, 1], [7, 1], [14, 4], [20, 8]], 3.6, 30);
+  addRoadRibbon(b, [[-16, 15], [-11, 15], [-7, 14]], 3.2, 48);
+  addRoadRibbon(b, [[-7, 24], [-3, 28], [-1, 31]], 3.2, 58);
+  b.write("road_network_v4.obj", v4MtlName, 4);
+}
+
+function groundedV4Copy(sourceName, targetName) {
+  const sourcePath = path.join(outputDir, sourceName);
+  const lines = fs.readFileSync(sourcePath, "utf8").split(/\r?\n/);
+  let minY = Infinity;
+  for (const line of lines) {
+    if (!line.startsWith("v ")) continue;
+    const [, , y] = line.trim().split(/\s+/).map(Number);
+    if (Number.isFinite(y)) minY = Math.min(minY, y);
+  }
+  const grounded = lines.map((line) => {
+    if (line.startsWith("# Deterministic Story World")) return `# Deterministic Story World v4 grounded asset: ${targetName}`;
+    if (line.startsWith("mtllib ")) return `mtllib ${v4MtlName}`;
+    if (line.startsWith("o ")) return `o ${targetName.replace(/\.obj$/i, "")}`;
+    if (!line.startsWith("v ") || !Number.isFinite(minY)) return line;
+    const values = line.trim().split(/\s+/).slice(1).map(Number);
+    values[1] -= minY;
+    return `v ${values.map((value) => value.toFixed(6)).join(" ")}`;
+  });
+  fs.writeFileSync(path.join(outputDir, targetName), `${grounded.join("\n").trim()}\n`, "utf8");
+}
+
+for (const stem of [
+  "bridge", "gate", "house_small", "house_large", "pavilion", "tree_v3_a", "tree_v3_b",
+  "rock", "fence", "lantern", "courtyard", "barrels", "woodpile", "reeds",
+]) {
+  const sourceName = stem.includes("_v3_") ? `${stem}.obj` : `${stem}_v3.obj`;
+  const targetName = stem.includes("_v3_") ? stem.replace("_v3_", "_v4_") + ".obj" : `${stem}_v4.obj`;
+  groundedV4Copy(sourceName, targetName);
+}
+
 const assets = fs
   .readdirSync(outputDir)
-  .filter((name) => name.includes("_v3") && name.endsWith(".obj"))
+  .filter((name) => /_v[34]/.test(name) && name.endsWith(".obj"))
   .sort();
-console.log(`Generated ${assets.length} Story World v3 assets in ${outputDir}`);
+console.log(`Generated ${assets.length} Story World v3/v4 assets in ${outputDir}`);

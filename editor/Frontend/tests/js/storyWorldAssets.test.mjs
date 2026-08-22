@@ -4,9 +4,11 @@ import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
+import { STORY_MONSTER_DEFINITIONS } from '../../src/config/storyCombat.js';
 import {
   STORY_WORLD_ACTORS,
   STORY_WORLD_ASSET_METADATA,
+  STORY_WORLD_DEPRECATED_ACTORS,
   STORY_WORLD_SCENE_VERSION,
 } from '../../src/config/storyWorld.js';
 
@@ -21,7 +23,11 @@ function materialNames(mtlText) {
   );
 }
 
-function validateObj(filename, materials, { requireDetailedGeometry = false } = {}) {
+function validateObj(
+  filename,
+  materials,
+  { requireDetailedGeometry = false, materialLibrary = 'story_world_v3.mtl' } = {}
+) {
   const text = fs.readFileSync(path.join(assetRoot, filename), 'utf8');
   assert.ok(!/\b(?:NaN|Infinity|undefined)\b/.test(text), `${filename} contains invalid data`);
   const lines = text.split(/\r?\n/);
@@ -65,7 +71,10 @@ function validateObj(filename, materials, { requireDetailedGeometry = false } = 
   }
 
   if (requireDetailedGeometry) {
-    assert.match(text, /^mtllib story_world_v3\.mtl$/m);
+    assert.match(
+      text,
+      new RegExp(`^mtllib ${materialLibrary.replaceAll('.', '\\.')}$$`, 'm')
+    );
     assert.ok(
       textureCoordinates.length >= vertices.length,
       `${filename} is missing UV coordinates`
@@ -99,9 +108,9 @@ test('legacy Story World resources remain available for existing project referen
   }
 });
 
-test('v3 Story World models contain UVs, normals, local materials and valid texture references', () => {
-  assert.equal(STORY_WORLD_SCENE_VERSION, 3);
-  const mtlPath = path.join(assetRoot, 'story_world_v3.mtl');
+test('v4 Story World models contain grounded detailed geometry and valid local materials', () => {
+  assert.equal(STORY_WORLD_SCENE_VERSION, 4);
+  const mtlPath = path.join(assetRoot, 'story_world_v4.mtl');
   assert.ok(fs.existsSync(mtlPath));
   const mtlText = fs.readFileSync(mtlPath, 'utf8');
   const materials = materialNames(mtlText);
@@ -117,18 +126,54 @@ test('v3 Story World models contain UVs, normals, local materials and valid text
 
   const expectedAssets = new Set(Object.keys(STORY_WORLD_ASSET_METADATA));
   assert.ok(expectedAssets.size >= 17);
+  assert.ok(expectedAssets.has('terrain_v4.obj'));
+  assert.ok(expectedAssets.has('road_network_v4.obj'));
+  assert.equal(
+    STORY_WORLD_ACTORS.filter((actor) => actor.entityType === 'road').length,
+    1
+  );
+  assert.ok(
+    STORY_WORLD_DEPRECATED_ACTORS.every(
+      (name) => !STORY_WORLD_ACTORS.some((actor) => actor.name === name)
+    )
+  );
+
   let totalSceneTriangles = 0;
   const trianglesByAsset = new Map();
   for (const filename of expectedAssets) {
     assert.ok(fs.existsSync(path.join(assetRoot, filename)), `${filename} is missing`);
-    const triangleCount = validateObj(filename, materials, { requireDetailedGeometry: true });
+    const triangleCount = validateObj(filename, materials, {
+      requireDetailedGeometry: true,
+      materialLibrary: 'story_world_v4.mtl',
+    });
     trianglesByAsset.set(filename, triangleCount);
+
+    if (!['terrain_v4.obj', 'water_v4.obj', 'road_network_v4.obj'].includes(filename)) {
+      const yValues = fs
+        .readFileSync(path.join(assetRoot, filename), 'utf8')
+        .split(/\r?\n/)
+        .filter((line) => line.startsWith('v '))
+        .map((line) => Number(line.trim().split(/\s+/)[2]));
+      assert.ok(Math.abs(Math.min(...yValues)) <= 1e-6, `${filename} is not grounded`);
+    }
   }
   for (const actor of STORY_WORLD_ACTORS) {
     totalSceneTriangles += trianglesByAsset.get(actor.asset) || 0;
   }
   assert.ok(totalSceneTriangles > 20000, 'the upgraded village should contain meaningful detail');
   assert.ok(totalSceneTriangles < 200000, `scene triangle budget exceeded: ${totalSceneTriangles}`);
+
+  const generatorText = fs.readFileSync(
+    path.join(assetRoot, 'generate_story_world_assets.mjs'),
+    'utf8'
+  );
+  const v4TerrainSection = generatorText.slice(
+    generatorText.indexOf('function terrainMaterialV4'),
+    generatorText.indexOf('function resamplePath')
+  );
+  assert.match(v4TerrainSection, /slope/);
+  assert.match(v4TerrainSection, /broadNoise/);
+  assert.doesNotMatch(v4TerrainSection, /\(ix \+ iz\) % 4/);
 });
 
 test('the deterministic generators and all local texture maps are included', () => {
@@ -150,4 +195,47 @@ test('the deterministic generators and all local texture maps are included', () 
       assert.ok(fs.statSync(file).size > 1000, `${path.basename(file)} is unexpectedly small`);
     }
   }
+});
+
+test('story combat monster models contain complete local geometry and boss scale', () => {
+  const mtlPath = path.join(assetRoot, 'story_world_v3.mtl');
+  const mtlText = fs.readFileSync(mtlPath, 'utf8');
+  const materials = materialNames(mtlText);
+  for (const material of [
+    'monster_skin',
+    'monster_hide',
+    'monster_bone',
+    'monster_eye',
+    'monster_boss',
+  ]) {
+    assert.ok(materials.has(material), `missing monster material ${material}`);
+  }
+
+  const vertexBounds = (filename) => {
+    const text = fs.readFileSync(path.join(assetRoot, filename), 'utf8');
+    const vertices = text
+      .split(/\r?\n/)
+      .filter((line) => line.startsWith('v '))
+      .map((line) => line.trim().split(/\s+/).slice(1).map(Number));
+    const minimum = [Infinity, Infinity, Infinity];
+    const maximum = [-Infinity, -Infinity, -Infinity];
+    for (const vertex of vertices) {
+      for (let axis = 0; axis < 3; axis += 1) {
+        minimum[axis] = Math.min(minimum[axis], vertex[axis]);
+        maximum[axis] = Math.max(maximum[axis], vertex[axis]);
+      }
+    }
+    return maximum.map((value, axis) => value - minimum[axis]);
+  };
+
+  const assets = new Set(STORY_MONSTER_DEFINITIONS.map((definition) => definition.asset));
+  assert.deepEqual([...assets].sort(), ['monster_boss_v1.obj', 'monster_minion_v1.obj']);
+  for (const filename of assets) {
+    assert.ok(fs.existsSync(path.join(assetRoot, filename)), `${filename} is missing`);
+    validateObj(filename, materials, { requireDetailedGeometry: true });
+  }
+
+  const minionBounds = vertexBounds('monster_minion_v1.obj');
+  const bossBounds = vertexBounds('monster_boss_v1.obj');
+  assert.ok(Math.max(...bossBounds) > Math.max(...minionBounds) * 1.7);
 });

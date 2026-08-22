@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
   STORY_WORLD_ACTORS,
   STORY_WORLD_ASSET_METADATA,
+  STORY_WORLD_DEPRECATED_ACTORS,
   STORY_WORLD_PLAN_ID,
   STORY_WORLD_SCENE_VERSION,
   STORY_WORLD_TERRAIN_ACTOR,
@@ -174,6 +175,13 @@ function createMockApi({
         calls.push(['floorGrid', ...args]);
         return { success: true };
       },
+      removeActor: async (...args) => {
+        calls.push(['removeActor', ...args]);
+        const targetName = String(args[1] || '');
+        const existingIndex = actorState.findIndex((actor) => actor.name === targetName);
+        if (existingIndex >= 0) actorState.splice(existingIndex, 1);
+        return { success: true };
+      },
       rebindActorResource: async (...args) => {
         calls.push(['rebindActorResource', ...args]);
         const actorGuid = String(args[1] || '');
@@ -281,7 +289,7 @@ test('only reports missing deterministic actors by name or guid', () => {
   );
 });
 
-test('records all OBJ normalization compensation values and combines them with variant scale', () => {
+test('records all v4 OBJ normalization compensation values and combines variant scale', () => {
   assert.deepEqual(
     Object.fromEntries(
       Object.entries(STORY_WORLD_ASSET_METADATA).map(([asset, metadata]) => [
@@ -290,23 +298,23 @@ test('records all OBJ normalization compensation values and combines them with v
       ])
     ),
     {
-      'terrain_v3.obj': 120,
-      'water_v3.obj': 50,
-      'road_v3.obj': 16,
-      'bridge_v3.obj': 12,
-      'gate_v3.obj': 12,
-      'house_small_v3.obj': 10.8,
-      'house_large_v3.obj': 13.8,
-      'pavilion_v3.obj': 9,
-      'tree_v3_a.obj': 9.1,
-      'tree_v3_b.obj': 9.1,
-      'rock_v3.obj': 4.48466,
-      'fence_v3.obj': 8.2,
-      'lantern_v3.obj': 4.2,
-      'courtyard_v3.obj': 10,
-      'barrels_v3.obj': 2.3,
-      'woodpile_v3.obj': 3,
-      'reeds_v3.obj': 4.2,
+      'terrain_v4.obj': 120,
+      'water_v4.obj': 43.027531,
+      'road_network_v4.obj': 61.038173,
+      'bridge_v4.obj': 12,
+      'gate_v4.obj': 11.827528,
+      'house_small_v4.obj': 10.844932,
+      'house_large_v4.obj': 13.644932,
+      'pavilion_v4.obj': 9.044984,
+      'tree_v4_a.obj': 8.860601,
+      'tree_v4_b.obj': 9.155378,
+      'rock_v4.obj': 3.460254,
+      'fence_v4.obj': 8.203424,
+      'lantern_v4.obj': 4.2,
+      'courtyard_v4.obj': 10,
+      'barrels_v4.obj': 2.281324,
+      'woodpile_v4.obj': 2.662435,
+      'reeds_v4.obj': 4.148509,
     }
   );
 
@@ -314,11 +322,14 @@ test('records all OBJ normalization compensation values and combines them with v
     (definition) => definition.name === 'StoryWorld_House_East'
   );
   assert.deepEqual(storyWorldFinalScale(STORY_WORLD_TERRAIN_ACTOR), [120, 120, 120]);
-  storyWorldFinalScale(eastHouse).forEach((value) => closeTo(value, 9.72));
-  assert.deepEqual(storyWorldExpectedSize(eastHouse), [9.72, 7.1982, 8.3889]);
+  storyWorldFinalScale(eastHouse).forEach((value) => closeTo(value, 10.19423608));
+  assert.deepEqual(
+    storyWorldExpectedSize(eastHouse).map((value) => Number(value.toFixed(6))),
+    [10.194236, 7.549363, 8.7984]
+  );
 });
 
-test('builds a scale-only v1 migration and never overwrites position or rotation', () => {
+test('builds a v4 managed-layout migration that resets transform and resource metadata', () => {
   const legacyTerrain = storyActorSnapshot(STORY_WORLD_TERRAIN_ACTOR, {
     actor_guid: 'legacy-managed-terrain-guid',
     source_scene_version: 1,
@@ -330,31 +341,40 @@ test('builds a scale-only v1 migration and never overwrites position or rotation
   });
   const migration = storyWorldMigrationForActor(legacyTerrain, STORY_WORLD_TERRAIN_ACTOR);
   assert.equal(migration.repaired, true);
+  assert.equal(migration.resetManagedLayout, true);
+  assert.equal(migration.needsResourceRebind, true);
   assert.deepEqual(migration.scale, [120, 120, 120]);
 
   const actorData = createStoryWorldMigrationActorData(migration);
+  assert.deepEqual(actorData.position, STORY_WORLD_TERRAIN_ACTOR.position);
+  assert.deepEqual(actorData.rotation, STORY_WORLD_TERRAIN_ACTOR.rotation);
   assert.deepEqual(actorData.scale, [120, 120, 120]);
   assert.equal(actorData.actor_guid, 'legacy-managed-terrain-guid');
   assert.equal(actorData.source_scene_version, STORY_WORLD_SCENE_VERSION);
   assert.equal(actorData.update_if_exists, true);
-  assert.equal('position' in actorData, false);
-  assert.equal('rotation' in actorData, false);
 });
 
-test('does not repeatedly enlarge current, already-sized, or non-managed actors', () => {
+test('only migrates managed actors below v4 and never touches user actors', () => {
   const currentTerrain = storyActorSnapshot(STORY_WORLD_TERRAIN_ACTOR);
   assert.equal(storyWorldMigrationForActor(currentTerrain, STORY_WORLD_TERRAIN_ACTOR), null);
 
   const sizedLegacyTerrain = storyActorSnapshot(STORY_WORLD_TERRAIN_ACTOR, {
-    source_scene_version: 1,
-    geometry: { scale: storyWorldFinalScale(STORY_WORLD_TERRAIN_ACTOR) },
+    source_scene_version: 3,
+    geometry: {
+      position: [10, 4, -8],
+      rotation: [0, 45, 0],
+      scale: storyWorldFinalScale(STORY_WORLD_TERRAIN_ACTOR),
+    },
   });
-  const metadataMigration = storyWorldMigrationForActor(
+  const layoutMigration = storyWorldMigrationForActor(
     sizedLegacyTerrain,
     STORY_WORLD_TERRAIN_ACTOR
   );
-  assert.equal(metadataMigration.repaired, false);
-  assert.equal('scale' in createStoryWorldMigrationActorData(metadataMigration), false);
+  assert.equal(layoutMigration.repaired, false);
+  const actorData = createStoryWorldMigrationActorData(layoutMigration);
+  assert.deepEqual(actorData.position, STORY_WORLD_TERRAIN_ACTOR.position);
+  assert.deepEqual(actorData.rotation, STORY_WORLD_TERRAIN_ACTOR.rotation);
+  assert.deepEqual(actorData.scale, storyWorldFinalScale(STORY_WORLD_TERRAIN_ACTOR));
 
   const userActor = {
     name: 'UserTerrain',
@@ -419,7 +439,7 @@ test('bootstraps an empty story scene with native light, compensated actors and 
   assert.equal(createCalls[0][4].source_scene_version, STORY_WORLD_SCENE_VERSION);
   assert.deepEqual(createCalls[0][4].scale, [120, 120, 120]);
   assert.equal(createCalls[0][4].skip_if_exists, true);
-  assert.ok(createCalls[0][2].endsWith('/assets/story_mode/terrain_v3.obj'));
+  assert.ok(createCalls[0][2].endsWith('/assets/story_mode/terrain_v4.obj'));
 });
 
 test('skips creative projects and existing user worlds without changing light', async () => {
@@ -442,7 +462,7 @@ test('skips creative projects and existing user worlds without changing light', 
   assert.equal(existing.calls.length, 0);
 });
 
-test('partial generation does not reset spawn pose when v3 terrain already exists', async () => {
+test('partial generation does not reset spawn pose when v4 terrain already exists', async () => {
   const terrain = storyActorSnapshot(STORY_WORLD_TERRAIN_ACTOR);
   const { api, calls } = createMockApi({ actors: [terrain] });
   let poseCount = 0;
@@ -463,7 +483,7 @@ test('partial generation does not reset spawn pose when v3 terrain already exist
   );
 });
 
-test('a complete v3 generated world preserves its saved lighting and camera state', async () => {
+test('a complete v4 generated world preserves its saved lighting and camera state', async () => {
   const { api, calls } = createMockApi({
     actors: STORY_WORLD_ACTORS.map((definition) => storyActorSnapshot(definition)),
   });
@@ -484,10 +504,10 @@ test('a complete v3 generated world preserves its saved lighting and camera stat
   assert.equal(poseCount, 0);
 });
 
-test('upgrades v2 managed models once without changing user transforms or scale', async () => {
-  const v2Actors = STORY_WORLD_ACTORS.map((definition) =>
+test('upgrades v3 managed models once and resets the complete managed layout', async () => {
+  const v3Actors = STORY_WORLD_ACTORS.map((definition) =>
     storyActorSnapshot(definition, {
-      source_scene_version: 2,
+      source_scene_version: 3,
       geometry: {
         position: definition.position.map((value, index) => value + (index === 2 ? 0.4 : 0)),
         rotation: definition.rotation.map((value, index) => value + (index === 1 ? 3 : 0)),
@@ -495,7 +515,7 @@ test('upgrades v2 managed models once without changing user transforms or scale'
       },
     })
   );
-  const { api, calls, actorState } = createMockApi({ actors: v2Actors });
+  const { api, calls, actorState } = createMockApi({ actors: v3Actors });
   const result = await runStoryWorldBootstrap({ api, sceneId: 'scene.ini' });
 
   assert.equal(result.generated, false);
@@ -508,9 +528,9 @@ test('upgrades v2 managed models once without changing user transforms or scale'
   );
 
   const terrain = actorState.find((actor) => actor.name === STORY_WORLD_TERRAIN_ACTOR.name);
-  assert.deepEqual(terrain.geometry.position, [0, 0, 0.4]);
-  assert.deepEqual(terrain.geometry.rotation, [0, 3, 0]);
-  terrain.geometry.scale.forEach((value) => closeTo(value, 124.8));
+  assert.deepEqual(terrain.geometry.position, STORY_WORLD_TERRAIN_ACTOR.position);
+  assert.deepEqual(terrain.geometry.rotation, STORY_WORLD_TERRAIN_ACTOR.rotation);
+  assert.deepEqual(terrain.geometry.scale, storyWorldFinalScale(STORY_WORLD_TERRAIN_ACTOR));
   assert.equal(terrain.source_scene_version, STORY_WORLD_SCENE_VERSION);
 
   const firstRebindCount = calls.filter(([name]) => name === 'rebindActorResource').length;
@@ -537,7 +557,7 @@ test('does not upgrade user-owned actors that resemble normal scene geometry', a
   );
 });
 
-test('migrates a complete v1 world once, restores lighting and preserves transforms', async () => {
+test('migrates a complete v1 world once, restores lighting and resets managed transforms', async () => {
   const legacyActors = STORY_WORLD_ACTORS.map((definition) =>
     storyActorSnapshot(definition, {
       source_scene_version: 1,
@@ -561,9 +581,9 @@ test('migrates a complete v1 world once, restores lighting and preserves transfo
     STORY_WORLD_ACTORS.length
   );
   const repairedTerrain = actorState.find((actor) => actor.name === STORY_WORLD_TERRAIN_ACTOR.name);
-  assert.deepEqual(repairedTerrain.geometry.position, [0.25, 0, 0]);
-  assert.deepEqual(repairedTerrain.geometry.rotation, [0, 0, 0]);
-  assert.deepEqual(repairedTerrain.geometry.scale, [120, 120, 120]);
+  assert.deepEqual(repairedTerrain.geometry.position, STORY_WORLD_TERRAIN_ACTOR.position);
+  assert.deepEqual(repairedTerrain.geometry.rotation, STORY_WORLD_TERRAIN_ACTOR.rotation);
+  assert.deepEqual(repairedTerrain.geometry.scale, storyWorldFinalScale(STORY_WORLD_TERRAIN_ACTOR));
   assert.equal(repairedTerrain.source_scene_version, STORY_WORLD_SCENE_VERSION);
 
   const firstCreateCount = calls.filter(([name]) => name === 'createActor').length;
@@ -571,6 +591,53 @@ test('migrates a complete v1 world once, restores lighting and preserves transfo
   const secondCreateCount = calls.filter(([name]) => name === 'createActor').length;
   assert.equal(second.repairedCount, 0);
   assert.equal(secondCreateCount, firstCreateCount);
+});
+
+test('replaces five deprecated road actors once and preserves user-created actors', async () => {
+  const managedV3Actors = STORY_WORLD_ACTORS.filter(
+    (definition) => definition.name !== 'StoryWorld_RoadNetwork'
+  ).map((definition) => storyActorSnapshot(definition, { source_scene_version: 3 }));
+  const legacyRoads = STORY_WORLD_DEPRECATED_ACTORS.map((name, index) => ({
+    name,
+    actor_guid: `legacy-road-${index + 1}`,
+    actor_type: 'model',
+    source_plan_id: STORY_WORLD_PLAN_ID,
+    source_scene_version: 3,
+    visible: true,
+    geometry: { position: [index, 0.2, index], rotation: [0, 0, 0], scale: [16, 16, 16] },
+    world_aabb: [index, 0, index, index + 10, 1, index + 3],
+  }));
+  const userActor = {
+    name: 'UserGardenStatue',
+    actor_guid: 'user-garden-statue',
+    actor_type: 'model',
+    visible: true,
+    geometry: { position: [12, 1, -7], rotation: [0, 22, 0], scale: [1.5, 1.5, 1.5] },
+    world_aabb: [11, 0, -8, 13, 3, -6],
+  };
+  const { api, calls, actorState } = createMockApi({
+    actors: [...managedV3Actors, ...legacyRoads, userActor],
+  });
+
+  const first = await runStoryWorldBootstrap({ api, sceneId: 'scene.ini' });
+  assert.equal(first.deprecatedRemovedCount, STORY_WORLD_DEPRECATED_ACTORS.length);
+  assert.equal(
+    calls.filter(([name]) => name === 'removeActor').length,
+    STORY_WORLD_DEPRECATED_ACTORS.length
+  );
+  assert.ok(actorState.some((actor) => actor.name === 'StoryWorld_RoadNetwork'));
+  assert.ok(
+    STORY_WORLD_DEPRECATED_ACTORS.every(
+      (name) => !actorState.some((actor) => actor.name === name)
+    )
+  );
+  const preservedUserActor = actorState.find((actor) => actor.name === userActor.name);
+  assert.deepEqual(preservedUserActor.geometry, userActor.geometry);
+
+  const callCount = calls.length;
+  const second = await runStoryWorldBootstrap({ api, sceneId: 'scene.ini' });
+  assert.equal(second.deprecatedRemovedCount, 0);
+  assert.equal(calls.length, callCount);
 });
 
 test('lighting and terrain failures are blocking while decoration failures are warnings', async () => {

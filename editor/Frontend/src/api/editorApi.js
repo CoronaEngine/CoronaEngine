@@ -625,6 +625,8 @@ const editorApiStatic = {
       ]),
   },
   sceneTools: {
+    getEnvironment: (sceneName) =>
+      call_manifest_editor_api('sceneTools.getEnvironment', [sceneName]),
     createScene: (sceneName) => call_manifest_editor_api('sceneTools.createScene', [sceneName]),
     listSceneTree: (sceneName) => call_manifest_editor_api('sceneTools.listSceneTree', [sceneName]),
     reloadScene: (sceneName, projectPath = '') =>
@@ -680,8 +682,11 @@ const editorApiStatic = {
       call_manifest_editor_api('sceneTools.updateCameraView', [sceneName, cameraId, state]),
     deleteCamera: (sceneName, cameraId) =>
       call_manifest_editor_api('sceneTools.deleteCamera', [sceneName, cameraId]),
-    sunDirection: (sceneName, enable, direction) =>
-      call_manifest_editor_api('sceneTools.sunDirection', [sceneName, enable, direction]),
+    sunDirection: (sceneName, enable, direction, options = undefined) =>
+      call_manifest_editor_api(
+        'sceneTools.sunDirection',
+        options === undefined ? [sceneName, enable, direction] : [sceneName, enable, direction, options]
+      ),
     floorGrid: (sceneName, enabled) =>
       call_manifest_editor_api('sceneTools.floorGrid', [sceneName, enabled]),
     setPhysicsParams: (sceneName, params) =>

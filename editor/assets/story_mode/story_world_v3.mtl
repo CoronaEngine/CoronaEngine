@@ -227,3 +227,51 @@ d 1.000
 illum 2
 map_Kd textures/rock_diffuse.png
 map_Bump -bm 0.65 textures/rock_normal.png
+
+newmtl monster_skin
+Ka 0.066 0.087 0.066
+Kd 0.220 0.290 0.220
+Ks 0.080 0.080 0.080
+Ns 10.000
+d 1.000
+illum 2
+map_Kd textures/rock_diffuse.png
+map_Bump -bm 0.65 textures/rock_normal.png
+
+newmtl monster_hide
+Ka 0.027 0.036 0.030
+Kd 0.090 0.120 0.100
+Ks 0.080 0.080 0.080
+Ns 8.000
+d 1.000
+illum 2
+map_Kd textures/rock_diffuse.png
+map_Bump -bm 0.65 textures/rock_normal.png
+
+newmtl monster_bone
+Ka 0.198 0.183 0.144
+Kd 0.660 0.610 0.480
+Ks 0.080 0.080 0.080
+Ns 18.000
+d 1.000
+illum 2
+map_Kd textures/stone_diffuse.png
+map_Bump -bm 0.65 textures/stone_normal.png
+
+newmtl monster_eye
+Ka 0.270 0.024 0.007
+Kd 0.900 0.080 0.025
+Ks 0.080 0.080 0.080
+Ns 80.000
+d 1.000
+illum 2
+
+newmtl monster_boss
+Ka 0.093 0.024 0.017
+Kd 0.310 0.080 0.055
+Ks 0.080 0.080 0.080
+Ns 14.000
+d 1.000
+illum 2
+map_Kd textures/rock_diffuse.png
+map_Bump -bm 0.65 textures/rock_normal.png

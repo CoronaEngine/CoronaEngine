@@ -1931,6 +1931,8 @@ nlohmann::json native_scene_environment_payload(const NativeEditorScene& scene) 
         {"sun", {
             {"enabled", scene.sun_enabled},
             {"direction", scene.sun_direction},
+            {"sun_intensity", scene.environment->get_sun_intensity()},
+            {"sky_intensity", scene.environment->get_sky_intensity()},
         }},
         {"grid", {{"enabled", scene.floor_grid_enabled}}},
         {"physics", {
@@ -8957,12 +8959,37 @@ void register_scene_tools_api_handlers(NativeApiRegistry& registry) {
             }
             scene->sun_direction = direction;
 
-            apply_native_scene_environment(*scene);
-            persist_native_scene_environment(*scene);
+            const auto options = request.args.is_array() && request.args.size() > 3 &&
+                                         request.args[3].is_object()
+                                     ? request.args[3]
+                                     : nlohmann::json::object();
+            const bool persist = json_bool_value(options, "persist", true);
+            const float default_sun_intensity = scene->sun_enabled ? 10.0f : 0.0f;
+            const float default_sky_intensity = scene->sun_enabled ? 20.0f : 0.0f;
+            const float sun_intensity = std::max(
+                0.0f, json_float_value(options, "sunIntensity", default_sun_intensity));
+            const float sky_intensity = std::max(
+                0.0f, json_float_value(options, "skyIntensity", default_sky_intensity));
+
+            if (scene->environment) {
+                scene->environment->set_sun_direction(scene->sun_direction);
+                scene->environment->set_floor_grid(scene->floor_grid_enabled);
+                scene->environment->set_sun_intensity(sun_intensity);
+                scene->environment->set_sky_intensity(sky_intensity);
+            }
+            if (persist) {
+                persist_native_scene_environment(*scene);
+            }
             return native_success({
                 {"status", "success"},
                 {"scene", scene->route},
-                {"sun", {{"enabled", scene->sun_enabled}, {"direction", scene->sun_direction}}},
+                {"persisted", persist},
+                {"sun", {
+                    {"enabled", scene->sun_enabled},
+                    {"direction", scene->sun_direction},
+                    {"sun_intensity", sun_intensity},
+                    {"sky_intensity", sky_intensity},
+                }},
             });
         }},
         {"floor_grid", [](const NativeRequest& request, const NativeContext&) {
