@@ -11,6 +11,7 @@ import {
   STORY_PLAYER_DAMAGE_INVULNERABILITY_MS,
   STORY_PLAYER_MAX_HEALTH,
   STORY_PLAYER_RESPAWN_PROTECTION_MS,
+  STORY_MINION_FRAGMENT_DROP_CHANCE,
 } from '@/config/storyCombat.js';
 import {
   editorCallErrorMessage,
@@ -27,6 +28,11 @@ import {
   storyCombatStorageKey,
   storyDistance3,
   storyHorizontalDistance,
+  storyMonsterActorDiagnostic,
+  resolveStoryMonsterActors,
+  storyMonsterActorHandle,
+  storyMonsterActorIsRenderable,
+  storyMonsterActorVisible,
   storyMonsterAiState,
   storyWanderPoint,
   storyYawTowards,
@@ -38,7 +44,7 @@ const FIXED_STEP_SECONDS = 1 / 20;
 const MAX_FRAME_SECONDS = 0.2;
 const AIM_REFRESH_MS = 250;
 const PICK_TIMEOUT_MS = 1500;
-const SNAPSHOT_RETRY_COUNT = 12;
+const SNAPSHOT_RETRY_COUNT = 19;
 const SNAPSHOT_RETRY_MS = 160;
 
 function browserStorage() {
@@ -47,18 +53,6 @@ function browserStorage() {
   } catch {
     return null;
   }
-}
-
-function actorGuid(actor) {
-  return String(actor?.actor_guid || actor?.guid || '')
-    .trim()
-    .toLowerCase();
-}
-
-function actorName(actor) {
-  return String(actor?.name || actor?.actor_name || '')
-    .trim()
-    .toLowerCase();
 }
 
 function payloadValue(payload) {
@@ -81,6 +75,8 @@ export function useStoryCombat({
   cameraBinding,
   viewportRef,
   onActorsReady,
+  onMonsterDefeated,
+  onItemDrop,
 } = {}) {
   const playerHealth = ref(STORY_PLAYER_MAX_HEALTH);
   const playerDead = ref(false);
@@ -112,7 +108,6 @@ export function useStoryCombat({
   let playerProtectedUntil = 0;
   let combatStorageKey = '';
   let bossDefeatedAtGameTimeMs = null;
-  let bossEngagedUntil = 0;
   let noticeTimer = null;
   let damageTimer = null;
 
@@ -178,10 +173,11 @@ export function useStoryCombat({
     bossDefeatedAtGameTimeMs = normalizeStoryCombatProgress(document).bossDefeatedAtGameTimeMs;
   };
 
-  const setRuntimeVisible = (runtime, visible) => {
+  const setRuntimeVisible = (runtime, visible, { force = false } = {}) => {
     const next = Boolean(visible);
-    if (!runtime?.handle || runtime.visible === next) return;
+    if (!runtime?.handle || (!force && runtime.visible === next)) return;
     runtime.visible = next;
+    runtime.nativeVisible = next;
     const nativeBridge = bridge();
     if (!nativeBridge || typeof nativeBridge.setProperty !== 'function') return;
     try {
@@ -223,19 +219,31 @@ export function useStoryCombat({
   };
 
   const resolveMonsterActors = async (activeSceneId) => {
+    // Resolve each actor independently. A single minion that is still loading must
+    // never prevent the boss from becoming available to the game loop.
+    const resolved = STORY_MONSTER_DEFINITIONS.map(() => null);
+    const observed = STORY_MONSTER_DEFINITIONS.map(() => null);
     for (let attempt = 0; attempt < SNAPSHOT_RETRY_COUNT; attempt += 1) {
       const actors = await snapshotActors(activeSceneId);
-      const resolved = STORY_MONSTER_DEFINITIONS.map((definition) => {
-        const guid = definition.guid.toLowerCase();
-        const name = definition.name.toLowerCase();
-        return (
-          actors.find((actor) => actorGuid(actor) === guid || actorName(actor) === name) || null
-        );
-      });
-      if (resolved.every((actor) => Number(actor?.handle || 0) > 0)) return resolved;
+      for (let index = 0; index < STORY_MONSTER_DEFINITIONS.length; index += 1) {
+        const definition = STORY_MONSTER_DEFINITIONS[index];
+        const actor = resolveStoryMonsterActors([definition], actors)[0];
+        if (actor) observed[index] = actor;
+        if (actor && storyMonsterActorIsRenderable(actor)) resolved[index] = actor;
+      }
+
+      const bossIndex = STORY_MONSTER_DEFINITIONS.findIndex(
+        (definition) => definition.kind === 'boss'
+      );
+      const hasRenderableBoss = bossIndex >= 0 && Boolean(resolved[bossIndex]);
+      const hasRenderableActor = resolved.some(Boolean);
+      if (hasRenderableActor && hasRenderableBoss) return resolved;
       if (attempt + 1 < SNAPSHOT_RETRY_COUNT) await delay(SNAPSHOT_RETRY_MS);
     }
-    return [];
+
+    // Return the last observed actor for diagnostics, but only renderable actors
+    // are admitted into the runtime map below.
+    return resolved.map((actor, index) => actor || observed[index] || null);
   };
 
   const buildRuntime = (definition, actor) => ({
@@ -244,12 +252,18 @@ export function useStoryCombat({
     name: definition.name,
     displayName: definition.displayName,
     kind: definition.kind,
-    handle: Number(actor?.handle || 0),
+    handle: storyMonsterActorHandle(actor),
     position: [...definition.position],
     rotationY: 0,
     health: definition.maxHealth,
     alive: true,
-    visible: true,
+    visible: storyMonsterActorVisible(actor, true),
+    nativeVisible: storyMonsterActorVisible(actor, true),
+    loadStatus: String(actor?.load_status ?? actor?.loadStatus ?? '')
+      .trim()
+      .toLowerCase(),
+    renderReady: actor?.render_ready !== false && actor?.renderReady !== false,
+    renderFailed: actor?.render_failed === true || actor?.renderFailed === true,
     state: 'idle',
     lastAttackAt: Number.NEGATIVE_INFINITY,
     lastSpawnDayId: null,
@@ -282,7 +296,14 @@ export function useStoryCombat({
     const activeSceneId = String(unref(sceneId) || '').trim();
     const activeProjectKey = String(unref(projectKey) || '').trim();
     if (!activeSceneId || !activeProjectKey || !isActive()) return false;
-    if (initializedSceneId === activeSceneId && monstersReady.value) return true;
+    // A partial roster is playable, but keep retrying while the boss is not
+    // bound so a slow native resource load can recover without a full page reload.
+    if (
+      initializedSceneId === activeSceneId &&
+      monstersReady.value &&
+      runtimes.has('boss')
+    )
+      return true;
     if (initializationPromise) return initializationPromise;
     const generation = initializationGeneration;
 
@@ -324,26 +345,58 @@ export function useStoryCombat({
       for (let index = 0; index < STORY_MONSTER_DEFINITIONS.length; index += 1) {
         const definition = STORY_MONSTER_DEFINITIONS[index];
         const actor = actors[index];
-        if (!actor || Number(actor.handle || 0) <= 0) {
-          creationWarnings.push(`${definition.displayName} 尚未加载完成。`);
+        if (!actor) {
+          creationWarnings.push(`${definition.displayName}创建失败或尚未加载完成，请重试。`);
           continue;
         }
-        runtimes.set(definition.id, buildRuntime(definition, actor));
+        if (!storyMonsterActorIsRenderable(actor)) {
+          creationWarnings.push(
+            storyMonsterActorDiagnostic(actor, definition.displayName) ||
+              `${definition.displayName}模型加载失败。`
+          );
+          continue;
+        }
+        const runtime = buildRuntime(definition, actor);
+        runtimes.set(definition.id, runtime);
+        if (!runtime.renderReady) {
+          creationWarnings.push(storyMonsterActorDiagnostic(actor, definition.displayName));
+        }
       }
 
+      const bossDefinition = STORY_MONSTER_DEFINITIONS.find(
+        (definition) => definition.kind === 'boss'
+      );
       const boss = runtimes.get('boss');
-      if (boss && bossDefeatedAtGameTimeMs !== null) {
+      if (!boss) {
+        creationWarnings.push(
+          `${bossDefinition?.displayName || '山魈王'}未成功绑定（请检查句柄和资源加载状态）。`
+        );
+      } else if (bossDefeatedAtGameTimeMs !== null) {
         if (shouldRespawnStoryBoss(bossDefeatedAtGameTimeMs, unref(totalGameTimeMs))) {
           bossDefeatedAtGameTimeMs = null;
+          boss.health = boss.definition.maxHealth;
+          boss.alive = true;
+          resetRuntimeToSpawn(boss, { visible: true });
           persistBossProgress();
         } else {
           boss.health = 0;
           boss.alive = false;
-          setRuntimeVisible(boss, false);
+          boss.state = 'dead';
+          setRuntimeVisible(boss, false, { force: true });
+          creationWarnings.push(`${boss.displayName}当前处于复活等待期。`);
         }
+      } else {
+        // The snapshot is authoritative for diagnostics, but alive monsters must
+        // be visible in the native scene even when a previous session hid them.
+        setRuntimeVisible(boss, true, { force: true });
+        showNotice(`山魈王已出现（句柄 ${boss.handle}）。`, 'info', 2400);
       }
 
-      warningMessage.value = creationWarnings[0] || '';
+      for (const runtime of runtimes.values()) {
+        if (runtime !== boss) setRuntimeVisible(runtime, runtime.alive, { force: true });
+      }
+
+      warningMessage.value = [...new Set(creationWarnings.filter(Boolean))].join(' ');
       initializedSceneId = activeSceneId;
       monstersReady.value = runtimes.size > 0;
       publishMonsters();
@@ -399,10 +452,15 @@ export function useStoryCombat({
     if (runtime.kind === 'minion') {
       runtime.deadDayId = storyDayId(unref(totalGameTimeMs));
       showNotice(`击败了 ${runtime.displayName}。`, 'success');
+      onMonsterDefeated?.({ kind: runtime.kind, id: runtime.id, displayName: runtime.displayName });
+      if (Math.random() < STORY_MINION_FRAGMENT_DROP_CHANCE)
+        onItemDrop?.({ itemId: 'world_fragment', quantity: 1, source: runtime.id });
     } else {
       bossDefeatedAtGameTimeMs = Math.max(Number(unref(totalGameTimeMs)) || 0, 0);
       persistBossProgress();
       showNotice('山魈王已被击败，两个游戏日后它会再次出现。', 'success', 4200);
+      onMonsterDefeated?.({ kind: runtime.kind, id: runtime.id, displayName: runtime.displayName });
+      onItemDrop?.({ itemId: 'world_fragment', quantity: 3, source: runtime.id, guaranteed: true });
     }
   };
 
@@ -412,7 +470,6 @@ export function useStoryCombat({
     if (result.damage <= 0) return false;
     runtime.health = result.health;
     hitPulse.value += 1;
-    if (runtime.kind === 'boss') bossEngagedUntil = Date.now() + 7000;
     if (result.dead) killMonster(runtime);
     else showNotice(`${runtime.displayName} 受到 ${result.damage} 点伤害。`, 'success', 1100);
     publishMonsters();
@@ -589,7 +646,6 @@ export function useStoryCombat({
         ) {
           runtime.lastAttackAt = simulationTimeMs;
           damagePlayer(definition.damage, runtime.displayName);
-          if (runtime.kind === 'boss') bossEngagedUntil = Date.now() + 7000;
         }
         continue;
       }
@@ -687,8 +743,6 @@ export function useStoryCombat({
     void monsterRevision.value;
     const boss = runtimes.get('boss');
     if (!boss?.alive || !boss.visible) return null;
-    const distance = storyDistance3(unref(playerState)?.position, boss.position);
-    if (distance > 16 && Date.now() > bossEngagedUntil) return null;
     return {
       name: boss.displayName,
       health: boss.health,

@@ -18,6 +18,7 @@ export function storyShortcutFromEvent(event = {}) {
   if (code === 'KeyB' || key === 'b') return 'inventory';
   if (code === 'KeyM' || key === 'm') return 'map';
   if (code === 'KeyR' || key === 'r') return 'reset-camera';
+  if (code === 'KeyF' || key === 'f') return 'interact';
   return '';
 }
 

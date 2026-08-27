@@ -10,6 +10,7 @@ export const STORY_PLAYER_RESPAWN_PROTECTION_MS = 3000;
 export const STORY_PLAYER_ATTACK_DAMAGE = 10;
 export const STORY_PLAYER_ATTACK_RANGE = 3;
 export const STORY_PLAYER_ATTACK_COOLDOWN_MS = 600;
+export const STORY_MINION_FRAGMENT_DROP_CHANCE = 0.35;
 export const STORY_BOSS_RESPAWN_GAME_MS = 48 * 60 * 60 * 1000;
 
 const groundSpawn = (x, z) => [x, storyWorldTerrainHeight(x, z), z];

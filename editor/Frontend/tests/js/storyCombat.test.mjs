@@ -23,10 +23,51 @@ import {
   storyCombatStorageKey,
   storyDistance3,
   storyHorizontalDistance,
+  resolveStoryMonsterActors,
+  storyMonsterActorDiagnostic,
+  storyMonsterActorHandle,
+  storyMonsterActorIsRenderable,
+  storyMonsterActorVisible,
   storyMonsterAiState,
   storyWanderPoint,
   storyYawTowards,
 } from '../../src/utils/storyCombat.js';
+
+test('monster actors resolve independently and expose native loading diagnostics', () => {
+  const definitions = [
+    { guid: 'minion-guid', name: 'StoryMonster_Minion_01' },
+    { guid: 'boss-guid', name: 'StoryMonster_Boss' },
+  ];
+  const actors = [
+    {
+      actor_guid: 'minion-guid',
+      handle: 44,
+      load_status: 'failed',
+      render_failed: true,
+    },
+    {
+      actor_guid: 'BOSS-GUID',
+      handle: 77,
+      visible: false,
+      load_status: 'loaded',
+      render_ready: true,
+    },
+  ];
+  const resolved = resolveStoryMonsterActors(definitions, actors);
+  assert.equal(resolved[0], actors[0]);
+  assert.equal(resolved[1], actors[1]);
+  assert.equal(storyMonsterActorHandle(resolved[1]), 77);
+  assert.equal(storyMonsterActorVisible(resolved[1], true), false);
+  assert.equal(storyMonsterActorIsRenderable(resolved[0]), false);
+  assert.equal(storyMonsterActorIsRenderable(resolved[1]), true);
+  assert.match(storyMonsterActorDiagnostic(resolved[0], '夜行山怪'), /渲染失败/);
+});
+
+test('monster actor loading state is not treated as ready', () => {
+  const actor = { handle: 88, load_status: 'loading', render_ready: false };
+  assert.equal(storyMonsterActorIsRenderable(actor), false);
+  assert.match(storyMonsterActorDiagnostic(actor, '山魈王'), /加载中/);
+});
 
 test('combat definitions provide six minions and one fixed boss with unique identities', () => {
   const minions = STORY_MONSTER_DEFINITIONS.filter((definition) => definition.kind === 'minion');

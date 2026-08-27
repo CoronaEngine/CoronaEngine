@@ -16,6 +16,11 @@ const routes = [
     component: () => import('../views/layout/StoryMode.vue'),
   },
   {
+    path: '/StoryCreation',
+    name: 'StoryCreation',
+    component: () => import('../views/layout/StoryCreation.vue'),
+  },
+  {
     path: '/StartScreen',
     name: 'StartScreen',
     component: () => import('../views/layout/StartScreen.vue'),

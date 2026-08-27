@@ -8,6 +8,103 @@ export function storyCombatStorageKey(projectPath) {
   return `${STORY_COMBAT_STORAGE_PREFIX}${encodeURIComponent(normalizeStoryGameProjectKey(projectPath))}`;
 }
 
+export function storyMonsterActorHandle(actor) {
+  const handle = Number(actor?.handle ?? actor?.actor_handle ?? 0);
+  return Number.isFinite(handle) && handle > 0 ? handle : 0;
+}
+
+export function storyMonsterActorGuid(actor) {
+  return String(actor?.actor_guid ?? actor?.guid ?? '')
+    .trim()
+    .toLowerCase();
+}
+
+export function storyMonsterActorName(actor) {
+  return String(actor?.name ?? actor?.actor_name ?? '')
+    .trim()
+    .toLowerCase();
+}
+
+export function storyMonsterActorLoadState(actor) {
+  return String(actor?.load_status ?? actor?.loadStatus ?? '')
+    .trim()
+    .toLowerCase();
+}
+
+export function storyMonsterActorIsRenderable(actor) {
+  if (!actor || storyMonsterActorHandle(actor) <= 0) return false;
+  if (
+    [
+      'failed',
+      'error',
+      'invalid',
+      'missing_resource',
+      'decode_failed',
+      'unsupported_resource',
+      'loading',
+      'pending',
+      'queued',
+      'unloaded',
+    ].includes(storyMonsterActorLoadState(actor))
+  )
+    return false;
+  if (actor?.render_failed === true || actor?.renderFailed === true) return false;
+  if (actor?.render_ready === false || actor?.renderReady === false) return false;
+  return true;
+}
+
+export function resolveStoryMonsterActors(definitions = [], actors = []) {
+  const candidates = Array.isArray(actors) ? actors : [];
+  return (Array.isArray(definitions) ? definitions : []).map((definition) => {
+    const guid = String(definition?.guid || '')
+      .trim()
+      .toLowerCase();
+    const name = String(definition?.name || '')
+      .trim()
+      .toLowerCase();
+    return (
+      candidates.find(
+        (actor) =>
+          (guid && storyMonsterActorGuid(actor) === guid) ||
+          (name && storyMonsterActorName(actor) === name)
+      ) || null
+    );
+  });
+}
+
+export function storyMonsterActorVisible(actor, fallback = true) {
+  if (typeof actor?.visible === 'boolean') return actor.visible;
+  if (typeof actor?.optics?.visible === 'boolean') return actor.optics.visible;
+  return Boolean(fallback);
+}
+
+export function storyMonsterActorDiagnostic(actor, displayName = '怪物') {
+  if (!actor || storyMonsterActorHandle(actor) <= 0) return `${displayName}尚未加载完成。`;
+  if (actor?.render_failed === true || actor?.renderFailed === true) {
+    return `${displayName}模型渲染失败。`;
+  }
+  if (
+    [
+      'failed',
+      'error',
+      'invalid',
+      'missing_resource',
+      'decode_failed',
+      'unsupported_resource',
+    ].includes(storyMonsterActorLoadState(actor))
+  ) {
+    return `${displayName}模型加载失败。`;
+  }
+  if (
+    actor?.render_ready === false ||
+    actor?.renderReady === false ||
+    ['loading', 'pending', 'queued', 'unloaded'].includes(storyMonsterActorLoadState(actor))
+  ) {
+    return `${displayName}资源加载中。`;
+  }
+  return '';
+}
+
 export function normalizeStoryCombatProgress(document) {
   const source =
     document && typeof document === 'object' && !Array.isArray(document) ? document : {};

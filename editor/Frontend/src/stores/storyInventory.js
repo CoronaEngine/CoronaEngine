@@ -134,6 +134,45 @@ export const useStoryInventoryStore = defineStore('storyInventory', {
       return result;
     },
 
+    enchantSelectedItem(componentType, componentId = `${componentType}-basic`) {
+      const slot = this.selectedSlot;
+      if (!slot || slot.itemId !== 'world_fragment') {
+        this.notify('请选择一个普通世界碎片。', 'warning');
+        return { success: false, reason: 'invalid-source' };
+      }
+      const allowed = new Set(['terrain', 'object', 'enemy', 'objective']);
+      if (!allowed.has(String(componentType))) {
+        this.notify('未知的附魔类型。', 'warning');
+        return { success: false, reason: 'invalid-type' };
+      }
+      const result = removeInventorySlotQuantity(this.slots, this.selectedIndex, 1);
+      this.slots = result.slots;
+      const itemId = `enchanted_${componentType}_fragment`;
+      const added = addItemToInventory(this.slots, itemId, 1, STORY_ITEM_CATALOG);
+      this.slots = added.slots;
+      if (added.remaining > 0) {
+        // Keep the source fragment when the converted component cannot fit.
+        const restored = addItemToInventory(this.slots, 'world_fragment', 1, STORY_ITEM_CATALOG);
+        this.slots = restored.slots;
+        this.notify('背包已满，无法保存附魔结果。', 'warning');
+        return { success: false, reason: 'full' };
+      }
+      const componentSlot = this.slots.findIndex((candidate) => candidate?.itemId === itemId);
+      if (componentSlot >= 0) {
+        const current = this.slots[componentSlot];
+        this.slots[componentSlot] = {
+          ...current,
+          metadata: {
+            ...(current.metadata || {}),
+            enchantment: { componentType, componentId, source: 'creator-npc', version: 1 },
+          },
+        };
+      }
+      this.persist();
+      this.notify(`世界碎片已附魔为${componentType}组件。`, 'success');
+      return { success: true, itemId, componentType, componentId };
+    },
+
     removeItem(itemId, quantity = 1) {
       const result = removeItemFromInventory(this.slots, itemId, quantity);
       this.slots = result.slots;

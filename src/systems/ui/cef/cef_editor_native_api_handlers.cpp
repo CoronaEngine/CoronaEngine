@@ -7617,6 +7617,199 @@ void register_file_manager_api_handlers(NativeApiRegistry& registry) {
     });
 }
 
+void copy_story_demo_directory_contents(const std::filesystem::path& source,
+                                        const std::filesystem::path& destination) {
+    std::error_code ec;
+    if (!std::filesystem::is_directory(source, ec)) {
+        if (ec) {
+            throw std::runtime_error("Unable to inspect Demo source directory: " +
+                                     path_to_utf8(source) + " (" + ec.message() + ")");
+        }
+        return;
+    }
+
+    std::filesystem::create_directories(destination);
+    for (std::filesystem::recursive_directory_iterator it(
+             source, std::filesystem::directory_options::skip_permission_denied, ec),
+         end;
+         it != end;
+         it.increment(ec)) {
+        if (ec) {
+            throw std::runtime_error("Unable to enumerate Demo source directory: " +
+                                     path_to_utf8(source) + " (" + ec.message() + ")");
+        }
+        const auto& entry = *it;
+        if (entry.is_symlink(ec)) {
+            it.disable_recursion_pending();
+            ec.clear();
+            continue;
+        }
+        const auto relative = std::filesystem::relative(entry.path(), source, ec);
+        if (ec || relative.empty() || relative == ".") {
+            throw std::runtime_error("Unable to resolve Demo asset path: " +
+                                     path_to_utf8(entry.path()));
+        }
+        const auto target = destination / relative;
+        if (entry.is_directory(ec)) {
+            std::filesystem::create_directories(target);
+        } else if (entry.is_regular_file(ec)) {
+            std::filesystem::create_directories(target.parent_path());
+            std::filesystem::copy_file(
+                entry.path(), target, std::filesystem::copy_options::overwrite_existing, ec);
+            if (ec) {
+                throw std::runtime_error("Unable to copy Demo asset: " + path_to_utf8(entry.path()) +
+                                         " -> " + path_to_utf8(target) + " (" + ec.message() + ")");
+            }
+        }
+        ec.clear();
+    }
+}
+
+void copy_story_demo_runtime_assets(const std::filesystem::path& package_root,
+                                    nlohmann::json& manifest) {
+    const auto source = editor_root_path() / "assets" / "story_mode";
+    const auto destination = package_root / "Assets" / "story_mode";
+    std::error_code ec;
+    if (!std::filesystem::is_directory(source, ec)) {
+        manifest["runtimeAssets"] = nlohmann::json::array();
+        manifest["runtimeAssetWarning"] = "剧情模式资源目录不存在，导出包可能无法独立运行。";
+        return;
+    }
+    copy_story_demo_directory_contents(source, destination);
+    manifest["runtimeAssets"] = nlohmann::json::array({"Assets/story_mode"});
+}
+
+void copy_story_demo_project(const std::filesystem::path& source_root,
+                             const std::filesystem::path& package_root) {
+    const auto project_dir = package_root / "Project";
+    const auto assets_dir = package_root / "Assets";
+    const auto scenes_dir = package_root / "Scenes";
+    std::filesystem::create_directories(project_dir);
+    std::filesystem::create_directories(assets_dir);
+    std::filesystem::create_directories(scenes_dir);
+
+    std::error_code ec;
+    for (const auto& entry : std::filesystem::directory_iterator(
+             source_root, std::filesystem::directory_options::skip_permission_denied, ec)) {
+        if (ec) {
+            throw std::runtime_error("Unable to enumerate Demo project: " +
+                                     path_to_utf8(source_root) + " (" + ec.message() + ")");
+        }
+        const auto file_name = to_lower_ascii(entry.path().filename().string());
+        if (entry.is_symlink(ec)) {
+            ec.clear();
+            continue;
+        }
+        if (entry.is_directory(ec)) {
+            if (file_name == "assets") {
+                copy_story_demo_directory_contents(entry.path(), assets_dir);
+            } else if (file_name == "scene" || file_name == "scenes") {
+                copy_story_demo_directory_contents(entry.path(), scenes_dir);
+            } else if (!file_name.empty() && file_name.front() != '.') {
+                copy_story_demo_directory_contents(entry.path(), project_dir / entry.path().filename());
+            }
+        } else if (entry.is_regular_file(ec)) {
+            std::filesystem::create_directories(project_dir);
+            const auto target = project_dir / entry.path().filename();
+            std::filesystem::copy_file(
+                entry.path(), target, std::filesystem::copy_options::overwrite_existing, ec);
+            if (ec) {
+                throw std::runtime_error("Unable to copy Demo project file: " +
+                                         path_to_utf8(entry.path()) + " -> " +
+                                         path_to_utf8(target) + " (" + ec.message() + ")");
+            }
+        }
+        ec.clear();
+    }
+}
+
+std::filesystem::path export_story_demo_package_native(const nlohmann::json& data) {
+    auto source_text = data.value("sourceProjectPath", std::string{});
+    if (source_text.empty()) {
+        source_text = data.value("source_project_path", std::string{});
+    }
+    if (source_text.empty()) {
+        source_text = resolve_active_project_path(nlohmann::json::array());
+    }
+    auto source_root = path_from_utf8(source_text);
+    const auto source_name = to_lower_ascii(source_root.filename().string());
+    if (source_name == "project.ini" || source_name == "scene.ini") {
+        source_root = source_root.parent_path();
+    }
+    source_root = canonical_project_dir_for_settings(source_root);
+    if (!is_valid_project_dir(source_root)) {
+        throw std::runtime_error("Demo source project is invalid: " + path_to_utf8(source_root));
+    }
+
+    auto target_text = data.value("targetDirectory", std::string{});
+    if (target_text.empty()) {
+        target_text = data.value("target_directory", std::string{});
+    }
+    if (target_text.empty()) {
+        throw std::runtime_error("targetDirectory is required");
+    }
+    const auto target_parent = absolute_normalized_path(path_from_utf8(target_text));
+    if (target_parent.empty()) {
+        throw std::runtime_error("targetDirectory is invalid");
+    }
+    std::filesystem::create_directories(target_parent);
+
+    nlohmann::json manifest = data.value("manifest", nlohmann::json::object());
+    if (!manifest.is_object()) manifest = nlohmann::json::object();
+    nlohmann::json document = data.value("document", nlohmann::json::object());
+    if (!document.is_object()) document = nlohmann::json::object();
+
+    auto demo_name = manifest.value("demoName", std::string{});
+    if (demo_name.empty()) demo_name = document.value("name", std::string{});
+    if (demo_name.empty()) demo_name = "Corona Story Demo";
+    demo_name = safe_project_dir_name(std::move(demo_name), "story_demo");
+
+    auto package_root = target_parent / path_from_utf8(demo_name);
+    int suffix = 1;
+    while (std::filesystem::exists(package_root)) {
+        package_root = target_parent / path_from_utf8(demo_name + "_" + std::to_string(suffix++));
+    }
+    if (is_path_within(source_root, package_root) || is_path_within(package_root, source_root)) {
+        throw std::runtime_error("Demo export target cannot be inside the source project");
+    }
+
+    const auto staging = target_parent / path_from_utf8("." + package_root.filename().string() + ".exporting");
+    std::error_code ec;
+    std::filesystem::remove_all(staging, ec);
+    try {
+        std::filesystem::create_directories(staging);
+        copy_story_demo_project(source_root, staging);
+        copy_story_demo_runtime_assets(staging, manifest);
+
+        manifest["format"] = "corona-story-demo-package";
+        manifest["packageVersion"] = 1;
+        manifest["packageOnly"] = true;
+        manifest["launchSupported"] = false;
+        manifest["readOnly"] = true;
+        manifest["sourceProject"] = path_to_utf8(source_root);
+        manifest["document"] = std::move(document);
+        manifest["exportedAt"] = compact_timestamp();
+        std::ofstream output(staging / "demo.manifest.json", std::ios::binary | std::ios::trunc);
+        if (!output) {
+            throw std::runtime_error("Unable to create demo.manifest.json");
+        }
+        output << manifest.dump(2) << '\n';
+        if (!output) {
+            throw std::runtime_error("Unable to write demo.manifest.json");
+        }
+
+        std::filesystem::rename(staging, package_root, ec);
+        if (ec) {
+            throw std::runtime_error("Unable to finalize Demo package: " + ec.message());
+        }
+    } catch (...) {
+        std::filesystem::remove_all(staging, ec);
+        throw;
+    }
+
+    return package_root;
+}
+
 void register_project_launcher_api_handlers(NativeApiRegistry& registry) {
     static const NativeMethodTable methods = {
         {"browse_folder", [](const NativeRequest& request, const NativeContext&) {
@@ -7656,6 +7849,16 @@ void register_project_launcher_api_handlers(NativeApiRegistry& registry) {
             }
             update_editor_settings_section("General", {{"default_path", path_to_utf8(base_dir)}});
             return native_success(path_to_utf8(target));
+        }},
+        {"export_playable_story_demo", [](const NativeRequest& request, const NativeContext&) {
+            const auto package_path = export_story_demo_package_native(arg_object(request.args, 0));
+            return native_success({
+                {"ok", true},
+                {"packageOnly", true},
+                {"launchSupported", false},
+                {"packagePath", path_to_utf8(package_path)},
+                {"message", "已导出 Demo 资源包；当前运行时尚未支持双击直达 Demo。"},
+            });
         }},
         {"create_world_project", [](const NativeRequest& request, const NativeContext&) {
             const auto data = arg_object(request.args, 0);

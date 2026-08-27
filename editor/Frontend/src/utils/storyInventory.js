@@ -1,8 +1,68 @@
-export const STORY_INVENTORY_VERSION = 1;
+export const STORY_INVENTORY_VERSION = 2;
 export const STORY_INVENTORY_SLOT_COUNT = 24;
 export const STORY_INVENTORY_STORAGE_PREFIX = 'corona.story.inventory.v1:';
 
 export const STORY_ITEM_CATALOG = Object.freeze({
+  world_fragment: Object.freeze({
+    id: 'world_fragment',
+    name: '世界碎片',
+    description: '蕴含一段创作逻辑的原始程序片段，需要创造 NPC 附魔后才能装入世界核心。',
+    category: '创作材料',
+    symbol: '✦',
+    color: '#c084fc',
+    stackLimit: 99,
+    usable: false,
+  }),
+  world_ball: Object.freeze({
+    id: 'world_ball',
+    name: '世界小球',
+    description: '通往独立小世界的入口。每个小球都对应一个可编辑 Demo。',
+    category: '世界入口',
+    symbol: '◉',
+    color: '#70d6ff',
+    stackLimit: 9,
+    usable: false,
+  }),
+  enchanted_terrain_fragment: Object.freeze({
+    id: 'enchanted_terrain_fragment',
+    name: '附魔·地形碎片',
+    description: '可安装到世界核心的地形创作组件。',
+    category: '创作组件',
+    symbol: '▰',
+    color: '#72c58c',
+    stackLimit: 9,
+    usable: false,
+  }),
+  enchanted_object_fragment: Object.freeze({
+    id: 'enchanted_object_fragment',
+    name: '附魔·物体碎片',
+    description: '可解锁一个可放置的世界物体。',
+    category: '创作组件',
+    symbol: '◆',
+    color: '#e3b66b',
+    stackLimit: 9,
+    usable: false,
+  }),
+  enchanted_enemy_fragment: Object.freeze({
+    id: 'enchanted_enemy_fragment',
+    name: '附魔·敌人碎片',
+    description: '可为 Demo 添加基础敌人组件。',
+    category: '创作组件',
+    symbol: '☠',
+    color: '#e87979',
+    stackLimit: 9,
+    usable: false,
+  }),
+  enchanted_objective_fragment: Object.freeze({
+    id: 'enchanted_objective_fragment',
+    name: '附魔·目标碎片',
+    description: '可为 Demo 设置一个基础完成目标。',
+    category: '创作组件',
+    symbol: '◎',
+    color: '#8bb4ff',
+    stackLimit: 9,
+    usable: false,
+  }),
   bandage: Object.freeze({
     id: 'bandage',
     name: '绷带',
@@ -42,10 +102,16 @@ export const STORY_INITIAL_ITEMS = Object.freeze([
   Object.freeze({ itemId: 'blue_crystal', quantity: 12 }),
 ]);
 
-const cloneSlot = (slot) =>
-  slot && typeof slot === 'object'
-    ? { itemId: String(slot.itemId || ''), quantity: Math.max(Math.trunc(Number(slot.quantity) || 0), 0) }
-    : null;
+const cloneSlot = (slot) => {
+  if (!slot || typeof slot !== 'object') return null;
+  const itemId = String(slot.itemId || '').trim();
+  const quantity = Math.max(Math.trunc(Number(slot.quantity) || 0), 0);
+  if (!itemId || quantity <= 0) return null;
+  const metadata = slot.metadata && typeof slot.metadata === 'object' && !Array.isArray(slot.metadata)
+    ? JSON.parse(JSON.stringify(slot.metadata))
+    : undefined;
+  return metadata ? { itemId, quantity, metadata } : { itemId, quantity };
+};
 
 export function createEmptyInventorySlots(count = STORY_INVENTORY_SLOT_COUNT) {
   return Array.from({ length: Math.max(Math.trunc(Number(count) || 0), 0) }, () => null);

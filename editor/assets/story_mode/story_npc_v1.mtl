@@ -1,0 +1,48 @@
+newmtl robe_warm
+Ka 0.12 0.04 0.02
+Kd 0.72 0.16 0.06
+Ks 0.10 0.06 0.03
+Ns 12
+illum 2
+
+newmtl robe_blue
+Ka 0.02 0.05 0.14
+Kd 0.10 0.28 0.78
+Ks 0.14 0.16 0.30
+Ns 18
+illum 2
+
+newmtl robe_brown
+Ka 0.08 0.035 0.012
+Kd 0.42 0.18 0.05
+Ks 0.08 0.05 0.02
+Ns 10
+illum 2
+
+newmtl skin
+Ka 0.16 0.08 0.04
+Kd 0.72 0.42 0.25
+Ks 0.04 0.03 0.02
+Ns 8
+illum 2
+
+newmtl dark
+Ka 0.012 0.012 0.016
+Kd 0.055 0.06 0.08
+Ks 0.08 0.08 0.10
+Ns 20
+illum 2
+
+newmtl gold
+Ka 0.16 0.09 0.02
+Kd 0.85 0.56 0.12
+Ks 0.35 0.25 0.08
+Ns 32
+illum 2
+
+newmtl crystal
+Ka 0.04 0.18 0.20
+Kd 0.10 0.72 0.78
+Ks 0.60 0.85 0.90
+Ns 80
+illum 2

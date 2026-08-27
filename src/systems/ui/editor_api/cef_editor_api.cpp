@@ -559,6 +559,7 @@ constexpr auto kEditorApiMethods = std::to_array<EditorApiMethodSpec>({
     EDITOR_API_METHOD_SCHEMA_WRAPPED(Network, stop_session, kNoParams, "network.stopSession", "network.stop_session", EditorApiValueType::Object),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(ProjectLauncher, browse_folder, kPathOptionalParam, "project.browseFolder", "project.browse_folder", EditorApiValueType::String),
     EDITOR_API_METHOD0_WRAPPED(ProjectLauncher, choose_portable_scene_target, "project.choosePortableSceneTarget", "project.choose_portable_scene_target", EditorApiValueType::String),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED(ProjectLauncher, export_playable_story_demo, kObjectPayloadParam, "project.exportPlayableStoryDemo", "project.export_playable_story_demo", EditorApiValueType::Object),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(ProjectLauncher, cleanup_portable_scene_assets, kObjectPayloadParam, "project.cleanupPortableSceneAssets", "project.cleanup_portable_scene_assets", EditorApiValueType::Object),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(ProjectLauncher, create_multiplayer_project, kObjectPayloadParam, "project.createMultiplayerProject", "project.create_multiplayer_project", EditorApiValueType::Object),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(ProjectLauncher, create_project, kObjectPayloadParam, "project.createProject", "project.create_project", EditorApiValueType::String),

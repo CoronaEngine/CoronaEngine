@@ -35,7 +35,7 @@ bool is_main_viewport_route(const std::string& url) {
     // Both editor and Story Mode render the native camera underneath the main
     // CEF surface. Preserve CEF alpha for these routes so transparent DOM
     // regions do not become an opaque black layer over the Vulkan viewport.
-    return route == "/" || route == "/MainPage" || route == "/StoryMode";
+    return route == "/" || route == "/MainPage" || route == "/StoryMode" || route == "/StoryCreation";
 }
 
 bool should_preserve_alpha(BrowserTab* tab, CefRefPtr<CefBrowser> browser) {

@@ -552,6 +552,8 @@ const editorApiStatic = {
       call_manifest_editor_api('project.createWorldProject', [worldData || {}]),
     choosePortableSceneTarget: () =>
       call_manifest_editor_api('project.choosePortableSceneTarget', []),
+    exportPlayableStoryDemo: (payload) =>
+      call_manifest_editor_api('project.exportPlayableStoryDemo', [payload || {}]),
     validatePortableScene: (payload) =>
       call_manifest_editor_api('project.validatePortableScene', [payload || {}]),
     importPortableAsset: (payload) =>

@@ -11,6 +11,9 @@
     ></div>
 
     <section v-if="hudVisible" class="story-mode__hud" aria-label="剧情模式状态栏">
+      <div v-if="nearbyTarget" class="story-mode__interaction-hint" role="status">
+        <kbd>F</kbd> {{ interactionLabel }}
+      </div>
       <div class="story-mode__quick-actions">
         <button type="button" class="story-mode__hud-button" @click="openInventory">
           <kbd>B</kbd>
@@ -121,6 +124,141 @@
       >
         {{ systemWarningNotice }}
       </div>
+    </Transition>
+
+    <Transition name="story-dialog">
+      <section
+        v-if="dialogOpen"
+        class="story-mode__dialog-overlay"
+        aria-label="剧情交互"
+        @pointerdown.stop
+        @mousedown.stop
+        @click.stop
+        @wheel.stop.prevent
+      >
+        <div
+          class="story-mode__dialog"
+          :class="`story-mode__dialog--${dialogProfile.tone}`"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="story-dialog-title"
+        >
+          <div class="story-mode__dialog-accent" aria-hidden="true"></div>
+          <div class="story-mode__dialog-avatar" aria-hidden="true">
+            <span>{{ dialogProfile.symbol }}</span>
+          </div>
+
+          <div class="story-mode__dialog-main">
+            <header class="story-mode__dialog-header">
+              <div>
+                <p class="story-mode__dialog-kicker">{{ dialogProfile.eyebrow }}</p>
+                <h2 id="story-dialog-title">{{ dialogTitle }}</h2>
+              </div>
+              <button
+                type="button"
+                class="story-mode__dialog-close"
+                aria-label="关闭对话"
+                @click="closeDialog"
+              >
+                <span aria-hidden="true">×</span>
+              </button>
+            </header>
+
+            <div class="story-mode__dialog-speaker">
+              <span class="story-mode__dialog-speaker-dot" aria-hidden="true"></span>
+              <span>{{ dialogProfile.subtitle }}</span>
+              <span class="story-mode__dialog-separator" aria-hidden="true">/</span>
+              <span>{{ dialogTarget?.distance ? `${dialogTarget.distance.toFixed(1)}m` : '近距离交互' }}</span>
+            </div>
+
+            <p class="story-mode__dialog-text">{{ dialogText }}</p>
+
+            <div v-if="dialogKind === 'quest'" class="story-mode__quest-list">
+              <button
+                v-for="quest in questOptions"
+                :key="quest.id"
+                type="button"
+                class="story-mode__quest-button"
+                :disabled="storyProgress.completedQuestIds.includes(quest.id) || Boolean(storyProgress.activeQuest && storyProgress.activeQuest.id !== quest.id)"
+                @click="acceptQuest(quest)"
+              >
+                <span class="story-mode__quest-icon" aria-hidden="true">{{ quest.icon || '✦' }}</span>
+                <span class="story-mode__quest-copy">
+                  <strong>{{ quest.title }}</strong>
+                  <span>{{ quest.description }}</span>
+                  <small v-if="storyProgress.completedQuestIds.includes(quest.id)">已完成 · 奖励已领取</small>
+                  <small v-else-if="storyProgress.activeQuest?.id === quest.id">
+                    进度 {{ questProgress(quest).current }} / {{ questProgress(quest).target }}
+                    <template v-if="canClaimQuest(quest)"> · 现在可以领取奖励</template>
+                  </small>
+                  <small v-else-if="storyProgress.activeQuest">请先完成当前委托</small>
+                  <small v-else>可选委托 · 完成后回来领取奖励</small>
+                </span>
+                <span class="story-mode__quest-action">
+                  <span>{{ storyProgress.completedQuestIds.includes(quest.id) ? '已领取' : (canClaimQuest(quest) ? '领取奖励' : (storyProgress.activeQuest?.id === quest.id ? '进行中' : '接受')) }}</span>
+                  <b aria-hidden="true">›</b>
+                </span>
+              </button>
+            </div>
+
+            <div v-if="dialogKind === 'creator'" class="story-mode__enchant-grid">
+              <button
+                v-for="type in enchantTypes"
+                :key="type.id"
+                type="button"
+                class="story-mode__choice-card"
+                :disabled="!hasWorldFragment"
+                @click="enchantFragment(type)"
+              >
+                <span class="story-mode__choice-icon" aria-hidden="true">{{ type.symbol }}</span>
+                <span>
+                  <strong>{{ type.label }}</strong>
+                  <small>{{ type.description }}</small>
+                </span>
+                <b aria-hidden="true">›</b>
+              </button>
+            </div>
+
+            <div v-if="dialogKind === 'merchant'" class="story-mode__quest-list">
+              <button
+                v-for="stock in merchantStock"
+                :key="stock.itemId"
+                type="button"
+                class="story-mode__quest-button story-mode__merchant-button"
+                :disabled="!canBuy(stock)"
+                @click="buyStock(stock)"
+              >
+                <span class="story-mode__quest-icon" aria-hidden="true">{{ getStoryItemDefinition(stock.itemId).symbol }}</span>
+                <span class="story-mode__quest-copy">
+                  <strong>{{ stock.label }}</strong>
+                  <span>库存 ×{{ stock.quantity }} · 每日限购</span>
+                  <small>{{ getStoryItemDefinition(stock.itemId).description }}</small>
+                </span>
+                <span class="story-mode__quest-action story-mode__merchant-price">
+                  <span>{{ stock.price }} 蓝晶矿</span>
+                  <b aria-hidden="true">›</b>
+                </span>
+              </button>
+            </div>
+
+            <div v-if="dialogKind === 'world_ball'" class="story-mode__dialog-actions">
+              <button type="button" class="story-button story-button--primary" @click="enterStoryCreation">
+                <span>进入小世界</span><b aria-hidden="true">→</b>
+              </button>
+            </div>
+            <div v-if="dialogKind === 'world_core'" class="story-mode__dialog-actions">
+              <button type="button" class="story-button story-button--secondary" @click="enterStoryCreation">
+                <span>打开世界核心</span><b aria-hidden="true">→</b>
+              </button>
+            </div>
+
+            <footer class="story-mode__dialog-footer">
+              <span><kbd>Esc</kbd> 返回世界</span>
+              <button type="button" class="story-mode__dialog-footer-close" @click="closeDialog">暂时离开</button>
+            </footer>
+          </div>
+        </div>
+      </section>
     </Transition>
 
     <StoryInventoryPanel v-if="inventoryOpen" @close="closeGamePanel" />
@@ -245,6 +383,11 @@ import { useStoryMap } from '@/composables/useStoryMap.js';
 import { useStoryPlayerState } from '@/composables/useStoryPlayerState.js';
 import { useStoryWorldBootstrap } from '@/composables/useStoryWorldBootstrap.js';
 import { useStoryInventoryStore } from '@/stores/storyInventory.js';
+import { useStoryProgressStore } from '@/stores/storyProgress.js';
+import { useStoryNpcInteraction } from '@/composables/useStoryNpcInteraction.js';
+import { bootstrapStoryNpcs, ensureStoryWorldBall } from '@/services/storyNpcBootstrapService.js';
+import { STORY_QUEST_DEFINITIONS, STORY_MERCHANT_STOCK } from '@/config/storyNpc.js';
+import { getStoryItemDefinition } from '@/utils/storyInventory.js';
 import { isStoryCameraPoseUnsafe } from '@/utils/storyCameraControls.js';
 import {
   reduceStoryUiState,
@@ -254,6 +397,7 @@ import {
 
 const router = useRouter();
 const inventory = useStoryInventoryStore();
+const storyProgress = useStoryProgressStore();
 const viewportRef = ref(null);
 const continueButtonRef = ref(null);
 const menuOpen = ref(false);
@@ -265,6 +409,21 @@ const cameraSafetyPending = ref(true);
 const cameraNotice = ref('');
 const locationVisible = ref(false);
 const activeProjectKey = ref('');
+const dialogOpen = ref(false);
+const dialogKind = ref('');
+const dialogTitle = ref('');
+const dialogText = ref('');
+const dialogTarget = ref(null);
+const dialogProfile = computed(() => {
+  const profiles = {
+    quest: { eyebrow: 'QUEST BOARD', subtitle: '村口委托人', symbol: '✦', tone: 'quest' },
+    creator: { eyebrow: 'WORLD FORGE', subtitle: '创作师', symbol: '◇', tone: 'creator' },
+    merchant: { eyebrow: 'TRAVELING MERCHANT', subtitle: '行脚商人', symbol: '◈', tone: 'merchant' },
+    world_ball: { eyebrow: 'WORLD BALL', subtitle: '独立 Demo 入口', symbol: '◉', tone: 'world' },
+    world_core: { eyebrow: 'WORLD CORE', subtitle: '小世界创作核心', symbol: '◎', tone: 'core' },
+  };
+  return profiles[dialogKind.value] || { eyebrow: 'STORY INTERACTION', subtitle: '剧情交互', symbol: '✦', tone: 'default' };
+});
 let noticeTimer = null;
 let cameraNoticeTimer = null;
 let locationTimer = null;
@@ -282,6 +441,12 @@ const {
 const viewportReady = computed(() => viewportStatus.value === 'ready');
 const playerStateRef = useStoryPlayerState(cameraBinding, viewportReady);
 const playerState = computed(() => playerStateRef.value);
+const { nearbyTarget, refresh: refreshNpcActors, interact: interactWithNpc } = useStoryNpcInteraction({
+  sceneId,
+  playerState: playerStateRef,
+  enabled: computed(() => viewportReady.value && !menuOpen.value && !inventoryOpen.value && !mapOpen.value && !dialogOpen.value),
+  onInteract: (target) => openInteraction(target),
+});
 const {
   loading: mapLoading,
   errorMessage: mapErrorMessage,
@@ -327,12 +492,13 @@ const {
   setCameraPose,
   onComplete: async (result) => {
     await refreshMap();
+    if (activeProjectKey.value) { await bootstrapStoryNpcs({ sceneId: sceneId.value, dayNumber: dayNumber.value, progressStore: storyProgress }); await refreshNpcActors(); }
     if (result.generated || Number(result.repairedCount) > 0) showLocationTitle();
   },
 });
 
 const gameReady = computed(() => viewportReady.value && bootstrapReady.value);
-const hasBlockingOverlay = computed(() => menuOpen.value || inventoryOpen.value || mapOpen.value);
+const hasBlockingOverlay = computed(() => menuOpen.value || inventoryOpen.value || mapOpen.value || dialogOpen.value);
 const activeLoadError = computed(() => {
   if (viewportStatus.value === 'error') return viewportErrorMessage.value;
   if (bootstrapStatus.value === 'error') return bootstrapErrorMessage.value;
@@ -351,7 +517,7 @@ const bootstrapWarningNotice = computed(() => {
     : `${warnings[0]}（另有 ${warnings.length - 1} 项提示）`;
 });
 
-const { totalGameTimeMs, lightingError, shutdown: shutdownStoryClock } = useStoryGameClock({
+const { totalGameTimeMs, dayNumber, lightingError, shutdown: shutdownStoryClock } = useStoryGameClock({
   sceneId,
   projectKey: activeProjectKey,
   enabled: gameReady,
@@ -363,6 +529,24 @@ const combatPaused = computed(
 const combatEnabled = computed(
   () => gameReady.value && managedWorld.value && Boolean(activeProjectKey.value)
 );
+function handleMonsterDefeated(result = {}) {
+  const stats = storyProgress.data.questStats || {};
+  storyProgress.updateStats({
+    minionKills: Math.max(0, Number(stats.minionKills) || 0) + (result.kind === 'minion' ? 1 : 0),
+    bossKills: Math.max(0, Number(stats.bossKills) || 0) + (result.kind === 'boss' ? 1 : 0),
+  });
+}
+
+function handleItemDrop(drop = {}) {
+  const quantity = Math.max(0, Math.trunc(Number(drop.quantity) || 0));
+  if (!drop.itemId || quantity <= 0) return;
+  const result = inventory.addItem(drop.itemId, quantity);
+  const stats = storyProgress.data.questStats || {};
+  storyProgress.updateStats({
+    fragmentCount: Math.max(0, Number(stats.fragmentCount) || 0) + (drop.itemId === 'world_fragment' ? result.added : 0),
+  });
+}
+
 const {
   playerHealth,
   playerMaxHealth,
@@ -389,6 +573,8 @@ const {
   cameraBinding,
   viewportRef,
   onActorsReady: refreshMap,
+  onMonsterDefeated: handleMonsterDefeated,
+  onItemDrop: handleItemDrop,
 });
 
 const controlsEnabled = computed(
@@ -504,13 +690,91 @@ const transitionUi = (shortcut) => {
 };
 
 const openInventory = () => {
-  if (!gameReady.value || menuOpen.value) return;
+  if (!gameReady.value || menuOpen.value || dialogOpen.value) return;
   applyUiState({ ready: true, menuOpen: false, inventoryOpen: true, mapOpen: false });
 };
 
 const openMap = () => {
-  if (!gameReady.value || menuOpen.value) return;
+  if (!gameReady.value || menuOpen.value || dialogOpen.value) return;
   applyUiState({ ready: true, menuOpen: false, inventoryOpen: false, mapOpen: true });
+};
+
+const questOptions = STORY_QUEST_DEFINITIONS;
+const enchantTypes = [
+  { id: 'terrain', label: '附魔为地形组件', symbol: '▰', description: '塑造一片可探索的地形区域。' },
+  { id: 'object', label: '附魔为物体组件', symbol: '◆', description: '解锁可以放置到小世界里的物体。' },
+  { id: 'enemy', label: '附魔为敌人组件', symbol: '☠', description: '为 Demo 添加一个基础敌人。' },
+  { id: 'objective', label: '附魔为目标组件', symbol: '◎', description: '设置一个可完成的 Demo 目标。' },
+];
+const merchantStock = computed(() => (STORY_MERCHANT_STOCK || []).map((stock) => ({ ...stock, label: getStoryItemDefinition(stock.itemId).name })));
+const hasWorldFragment = computed(() => inventory.slots.some((slot) => slot?.itemId === 'world_fragment'));
+const interactionLabel = computed(() => {
+  const role = nearbyTarget.value?.interactionRole;
+  if (role === 'story_npc_quest') return '与任务 NPC 对话';
+  if (role === 'story_npc_creator') return '与创造 NPC 对话';
+  if (role === 'story_npc_merchant') return '与商人交易';
+  if (role === 'story_world_ball') return '进入小世界';
+  if (role === 'story_world_core') return '打开世界核心';
+  return '交互';
+});
+const openInteraction = (target = nearbyTarget.value) => {
+  if (!target || hasBlockingOverlay.value || !gameReady.value || playerDead.value) return false;
+  dialogTarget.value = target;
+  const role = String(target.interactionRole || '').toLowerCase();
+  dialogKind.value = role.replace(/^story_npc_/, '').replace(/^story_/, '') || 'world';
+  if (dialogKind.value === 'quest') { dialogTitle.value = '村口委托'; dialogText.value = '选择一个可选委托，完成后回来领取创作资源。'; }
+  else if (dialogKind.value === 'creator') { dialogTitle.value = '创作师'; dialogText.value = '把普通世界碎片附魔成可以安装到世界核心的组件。'; }
+  else if (dialogKind.value === 'merchant') { dialogTitle.value = '行脚商人'; dialogText.value = '用蓝晶矿换取世界创作材料。'; }
+  else if (dialogKind.value === 'world_ball') { dialogTitle.value = '世界小球'; dialogText.value = '这里将进入你的独立 Demo 小世界。'; }
+  else { dialogTitle.value = '世界核心'; dialogText.value = '在创作宿主中管理你的四类世界组件。'; }
+  dialogOpen.value = true; void stopCameraControls({ persist: true }); return true;
+};
+const closeDialog = () => { dialogOpen.value = false; dialogTarget.value = null; };
+const questProgress = (quest) => storyProgress.questProgress(quest.id);
+const canClaimQuest = (quest) => storyProgress.activeQuest?.id === quest.id && questProgress(quest).complete;
+const acceptQuest = (quest) => {
+  if (storyProgress.activeQuest?.id === quest.id && canClaimQuest(quest)) {
+    const result = storyProgress.claimQuest(quest.id);
+    if (result.success) {
+      const reward = inventory.addItem(result.reward.itemId, result.reward.quantity);
+      if (reward.added > 0 && result.reward.itemId === 'world_ball') {
+        storyProgress.unlockWorldBall('demo-1');
+        void ensureStoryWorldBall({ sceneId: sceneId.value, worldBallId: 'demo-1' }).then(() => refreshNpcActors());
+      }
+      dialogText.value = reward.remaining > 0 ? '任务完成，但背包空间不足，部分奖励未能放入。' : `任务完成，获得 ${getStoryItemDefinition(result.reward.itemId).name} ×${reward.added}。`;
+    }
+    return;
+  }
+  if (storyProgress.acceptQuest(quest.id)) dialogText.value = `已接受委托：${quest.title}。完成后回来领取奖励。`;
+};
+const enchantFragment = (type) => {
+  const index = inventory.slots.findIndex((slot) => slot?.itemId === 'world_fragment');
+  if (index < 0) { dialogText.value = '请先获得普通世界碎片。'; return; }
+  inventory.selectSlot(index);
+  const result = inventory.enchantSelectedItem(type.id);
+  if (result.success) dialogText.value = `附魔完成：${type.label}。`;
+};
+const canBuy = (stock) => {
+  if (!stock || storyProgress.hasMerchantPurchase(dayNumber.value, stock)) return false;
+  return inventory.slots.reduce((sum, slot) => sum + (slot?.itemId === stock.currency ? slot.quantity : 0), 0) >= stock.price;
+};
+const buyStock = (stock) => {
+  if (!canBuy(stock)) return;
+  const added = inventory.addItem(stock.itemId, stock.quantity);
+  if (added.added < stock.quantity) return;
+  inventory.removeItem(stock.currency, stock.price);
+  storyProgress.markMerchantPurchase(dayNumber.value, stock);
+  dialogText.value = `已购买 ${getStoryItemDefinition(stock.itemId).name} ×${stock.quantity}。`;
+};
+
+const enterStoryCreation = () => {
+  const worldBallId = String(dialogTarget.value?.name || 'StoryWorldBall_demo-1').replace(/^StoryWorldBall_/i, '') || 'demo-1';
+  if (!storyProgress.unlockedWorldBalls.includes(worldBallId) && !inventory.slots.some((slot) => slot?.itemId === 'world_ball')) {
+    dialogText.value = '你还没有获得这个世界小球，请先完成任务 NPC 的委托。';
+    return;
+  }
+  dialogOpen.value = false;
+  router.push({ path: '/StoryCreation', query: { worldBallId, sourceScene: sceneId.value, projectKey: activeProjectKey.value } });
 };
 
 const closeGamePanel = () => {
@@ -577,6 +841,7 @@ const exitToStart = async () => {
   exitPending.value = true;
   menuOpen.value = false;
   inventoryOpen.value = false;
+  dialogOpen.value = false;
   mapOpen.value = false;
   await stopCameraControls({ persist: false });
   await persistPose();
@@ -588,6 +853,15 @@ const exitToStart = async () => {
 const handleShortcut = (event) => {
   const shortcut = storyShortcutFromEvent(event);
   if (!shortcut) return;
+  if (dialogOpen.value) {
+    event.preventDefault(); event.stopPropagation(); event.stopImmediatePropagation?.();
+    if (shortcut === 'escape') closeDialog();
+    return;
+  }
+  if (shortcut === 'interact') {
+    event.preventDefault(); event.stopPropagation(); event.stopImmediatePropagation?.();
+    interactWithNpc(); return;
+  }
   if (
     shortcut === 'reset-camera' &&
     !shouldResetStoryCamera({
@@ -642,12 +916,26 @@ const initializeProjectInventory = async () => {
   }
   activeProjectKey.value = projectPath || sceneId.value || 'active-project';
   inventory.resetForProject(activeProjectKey.value);
+  storyProgress.load(activeProjectKey.value);
+  if (sceneId.value && managedWorld.value) await bootstrapStoryNpcs({ sceneId: sceneId.value, dayNumber: dayNumber.value, progressStore: storyProgress });
+  await refreshNpcActors();
 };
 
 watch([menuOpen, inventoryOpen, mapOpen], async ([isMenuOpen, isInventoryOpen, isMapOpen]) => {
   await nextTick();
   if (isMenuOpen) continueButtonRef.value?.focus?.();
-  else if (!isInventoryOpen && !isMapOpen) viewportRef.value?.focus?.({ preventScroll: true });
+  else if (!isInventoryOpen && !isMapOpen && !dialogOpen.value) viewportRef.value?.focus?.({ preventScroll: true });
+});
+
+watch(dayNumber, (day, previousDay) => {
+  if (previousDay == null || day <= previousDay || !sceneId.value || !managedWorld.value) return;
+  void bootstrapStoryNpcs({
+    sceneId: sceneId.value,
+    dayNumber: day,
+    progressStore: storyProgress,
+  }).then(() => refreshNpcActors()).catch((error) => {
+    console.warn('[StoryMode] failed to refresh daily merchant NPC', error);
+  });
 });
 
 watch(gameReady, (ready) => {
@@ -1076,6 +1364,463 @@ onUnmounted(() => {
 .story-toast-leave-to {
   opacity: 0;
   transform: translate(-50%, 8px);
+}
+
+
+.story-mode__dialog-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 28;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding: 24px;
+  background: linear-gradient(180deg, transparent 28%, rgba(3, 5, 4, 0.14) 52%, rgba(3, 5, 4, 0.78) 100%);
+  pointer-events: auto;
+  backdrop-filter: blur(1.5px);
+}
+
+.story-mode__dialog {
+  position: relative;
+  display: grid;
+  grid-template-columns: 92px minmax(0, 1fr);
+  width: min(920px, calc(100vw - 48px));
+  max-height: min(680px, calc(100vh - 48px));
+  overflow: hidden;
+  border: 1px solid rgba(216, 184, 108, 0.44);
+  border-radius: 18px;
+  background:
+    linear-gradient(135deg, rgba(42, 37, 25, 0.98), rgba(13, 16, 13, 0.98) 48%, rgba(7, 10, 9, 0.99));
+  box-shadow:
+    0 28px 90px rgba(0, 0, 0, 0.68),
+    0 0 0 1px rgba(0, 0, 0, 0.45),
+    inset 0 1px 0 rgba(255, 244, 207, 0.08);
+  color: #eee3ca;
+  isolation: isolate;
+}
+
+.story-mode__dialog::before {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background:
+    radial-gradient(circle at 8% 12%, rgba(216, 184, 108, 0.12), transparent 24%),
+    radial-gradient(circle at 92% 88%, rgba(80, 134, 106, 0.12), transparent 26%);
+  content: '';
+  pointer-events: none;
+}
+
+.story-mode__dialog-accent {
+  position: absolute;
+  top: 0;
+  right: 26px;
+  left: 26px;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, #d8b86c 22%, #f0d891 50%, #d8b86c 78%, transparent);
+  box-shadow: 0 0 18px rgba(216, 184, 108, 0.44);
+}
+
+.story-mode__dialog--creator .story-mode__dialog-accent {
+  background: linear-gradient(90deg, transparent, #79c99e 24%, #c4f0c7 50%, #79c99e 76%, transparent);
+}
+
+.story-mode__dialog--merchant .story-mode__dialog-accent {
+  background: linear-gradient(90deg, transparent, #76b7d0 24%, #c8eff6 50%, #76b7d0 76%, transparent);
+}
+
+.story-mode__dialog-avatar {
+  display: grid;
+  place-items: center;
+  align-self: stretch;
+  margin: 24px 0 24px 24px;
+  min-height: 82px;
+  border: 1px solid rgba(216, 184, 108, 0.32);
+  border-radius: 14px;
+  background: linear-gradient(145deg, rgba(216, 184, 108, 0.2), rgba(216, 184, 108, 0.04));
+  box-shadow: inset 0 0 22px rgba(216, 184, 108, 0.08), 0 10px 24px rgba(0, 0, 0, 0.24);
+  color: #f3d98d;
+}
+
+.story-mode__dialog-avatar span {
+  display: grid;
+  width: 48px;
+  height: 48px;
+  place-items: center;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+  font-size: 25px;
+  line-height: 1;
+  text-shadow: 0 0 16px currentColor;
+}
+
+.story-mode__dialog--creator .story-mode__dialog-avatar {
+  border-color: rgba(121, 201, 158, 0.36);
+  background: linear-gradient(145deg, rgba(121, 201, 158, 0.2), rgba(121, 201, 158, 0.04));
+  color: #a8e7b8;
+}
+
+.story-mode__dialog--merchant .story-mode__dialog-avatar {
+  border-color: rgba(118, 183, 208, 0.38);
+  background: linear-gradient(145deg, rgba(118, 183, 208, 0.2), rgba(118, 183, 208, 0.04));
+  color: #a6e4ed;
+}
+
+.story-mode__dialog--world .story-mode__dialog-avatar,
+.story-mode__dialog--core .story-mode__dialog-avatar {
+  border-color: rgba(139, 180, 255, 0.34);
+  background: linear-gradient(145deg, rgba(139, 180, 255, 0.2), rgba(139, 180, 255, 0.04));
+  color: #aed0ff;
+}
+
+.story-mode__dialog-main {
+  min-width: 0;
+  padding: 24px 28px 20px;
+}
+
+.story-mode__dialog-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.story-mode__dialog-kicker {
+  margin: 0 0 6px;
+  color: #b39b66;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.24em;
+}
+
+.story-mode__dialog h2 {
+  margin: 0;
+  color: #fff1cd;
+  font-family: 'STKaiti', 'KaiTi', serif;
+  font-size: clamp(25px, 3vw, 34px);
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  line-height: 1.15;
+  text-shadow: 0 2px 14px rgba(0, 0, 0, 0.42);
+}
+
+.story-mode__dialog-close {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid rgba(238, 224, 186, 0.18);
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.045);
+  color: #b9ad91;
+  cursor: pointer;
+  font-size: 24px;
+  line-height: 1;
+  transition: border-color 160ms ease, background 160ms ease, color 160ms ease, transform 160ms ease;
+}
+
+.story-mode__dialog-close:hover,
+.story-mode__dialog-close:focus-visible {
+  border-color: rgba(216, 184, 108, 0.7);
+  background: rgba(216, 184, 108, 0.12);
+  color: #f6dda0;
+  outline: none;
+  transform: rotate(8deg);
+}
+
+.story-mode__dialog-speaker {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  color: #8f9b88;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+}
+
+.story-mode__dialog-speaker-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #d8b86c;
+  box-shadow: 0 0 10px rgba(216, 184, 108, 0.72);
+}
+
+.story-mode__dialog-separator {
+  color: rgba(216, 184, 108, 0.48);
+}
+
+.story-mode__dialog-text {
+  max-width: 720px;
+  margin: 18px 0 20px;
+  color: #d5ccb8;
+  font-size: 14px;
+  line-height: 1.75;
+}
+
+.story-mode__quest-list,
+.story-mode__enchant-grid {
+  display: grid;
+  gap: 9px;
+}
+
+.story-mode__quest-button,
+.story-mode__choice-card {
+  width: 100%;
+  border: 1px solid rgba(216, 184, 108, 0.18);
+  border-radius: 11px;
+  background: rgba(255, 255, 255, 0.045);
+  color: #d9cfb9;
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 160ms ease, background 160ms ease, transform 160ms ease, box-shadow 160ms ease;
+}
+
+.story-mode__quest-button {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  min-height: 70px;
+  padding: 11px 13px;
+}
+
+.story-mode__quest-button:hover:not(:disabled),
+.story-mode__quest-button:focus-visible,
+.story-mode__choice-card:hover:not(:disabled),
+.story-mode__choice-card:focus-visible {
+  border-color: rgba(216, 184, 108, 0.65);
+  background: linear-gradient(100deg, rgba(216, 184, 108, 0.14), rgba(255, 255, 255, 0.06));
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.2);
+  outline: none;
+  transform: translateY(-1px);
+}
+
+.story-mode__quest-button:disabled,
+.story-mode__choice-card:disabled {
+  cursor: not-allowed;
+  filter: saturate(0.55);
+  opacity: 0.48;
+}
+
+.story-mode__quest-icon,
+.story-mode__choice-icon {
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(216, 184, 108, 0.28);
+  border-radius: 9px;
+  background: rgba(216, 184, 108, 0.1);
+  color: #e6c879;
+  font-size: 17px;
+}
+
+.story-mode__quest-icon {
+  width: 34px;
+  height: 34px;
+}
+
+.story-mode__quest-copy {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.story-mode__quest-copy strong {
+  overflow: hidden;
+  color: #f0e3c1;
+  font-size: 13px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.story-mode__quest-copy span,
+.story-mode__quest-copy small {
+  overflow: hidden;
+  color: #9e9a89;
+  font-size: 11px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.story-mode__quest-copy small {
+  color: #cda964;
+}
+
+.story-mode__quest-action {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #d8b86c;
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.story-mode__quest-action b,
+.story-mode__dialog-actions b,
+.story-mode__choice-card > b {
+  color: #f0d88f;
+  font-size: 19px;
+  font-weight: 400;
+  line-height: 1;
+}
+
+.story-mode__merchant-price {
+  color: #9fd7e7;
+}
+
+.story-mode__merchant-button .story-mode__quest-icon {
+  border-color: rgba(118, 183, 208, 0.3);
+  background: rgba(118, 183, 208, 0.1);
+  color: #a6e4ed;
+}
+
+.story-mode__choice-card {
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 11px;
+  min-height: 62px;
+  padding: 10px 13px;
+}
+
+.story-mode__choice-icon {
+  width: 38px;
+  height: 38px;
+  font-size: 19px;
+}
+
+.story-mode__choice-card > span:nth-child(2) {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.story-mode__choice-card strong {
+  color: #e9e0ca;
+  font-size: 13px;
+}
+
+.story-mode__choice-card small {
+  overflow: hidden;
+  color: #9e9a89;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.story-mode__dialog-actions {
+  display: grid;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.story-mode__dialog-actions .story-button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  text-align: left;
+}
+
+.story-mode__dialog-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 20px;
+  padding-top: 14px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  color: #847f70;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+}
+
+.story-mode__dialog-footer kbd {
+  margin-right: 5px;
+  padding: 3px 6px;
+  border: 1px solid rgba(216, 184, 108, 0.34);
+  border-radius: 4px;
+  background: rgba(216, 184, 108, 0.08);
+  color: #d8b86c;
+  font: inherit;
+}
+
+.story-mode__dialog-footer-close {
+  border: 0;
+  background: transparent;
+  color: #b7ad98;
+  cursor: pointer;
+  font: inherit;
+  transition: color 160ms ease;
+}
+
+.story-mode__dialog-footer-close:hover,
+.story-mode__dialog-footer-close:focus-visible {
+  color: #f1d68e;
+  outline: none;
+}
+
+.story-dialog-enter-active,
+.story-dialog-leave-active {
+  transition: opacity 180ms ease;
+}
+
+.story-dialog-enter-active .story-mode__dialog,
+.story-dialog-leave-active .story-mode__dialog {
+  transition: transform 220ms ease, opacity 180ms ease;
+}
+
+.story-dialog-enter-from,
+.story-dialog-leave-to {
+  opacity: 0;
+}
+
+.story-dialog-enter-from .story-mode__dialog,
+.story-dialog-leave-to .story-mode__dialog {
+  opacity: 0;
+  transform: translateY(18px) scale(0.985);
+}
+
+@media (max-width: 680px) {
+  .story-mode__dialog-overlay {
+    padding: 12px;
+  }
+
+  .story-mode__dialog {
+    grid-template-columns: 1fr;
+    width: calc(100vw - 24px);
+    max-height: calc(100vh - 24px);
+    border-radius: 14px;
+  }
+
+  .story-mode__dialog-avatar {
+    display: none;
+  }
+
+  .story-mode__dialog-main {
+    padding: 22px 18px 16px;
+  }
+
+  .story-mode__quest-button {
+    grid-template-columns: 32px minmax(0, 1fr);
+  }
+
+  .story-mode__quest-action {
+    grid-column: 2;
+    justify-content: flex-start;
+    margin-top: -3px;
+  }
+
+  .story-mode__choice-card {
+    grid-template-columns: 34px minmax(0, 1fr) auto;
+  }
+
+  .story-mode__choice-icon {
+    width: 34px;
+    height: 34px;
+  }
 }
 
 .story-mode__status,
