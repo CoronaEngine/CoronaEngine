@@ -108,9 +108,9 @@ test('legacy Story World resources remain available for existing project referen
   }
 });
 
-test('v4 Story World models contain grounded detailed geometry and valid local materials', () => {
-  assert.equal(STORY_WORLD_SCENE_VERSION, 4);
-  const mtlPath = path.join(assetRoot, 'story_world_v4.mtl');
+test('v5 Story World models contain grounded detailed geometry and valid local materials', () => {
+  assert.equal(STORY_WORLD_SCENE_VERSION, 5);
+  const mtlPath = path.join(assetRoot, 'story_world_v5.mtl');
   assert.ok(fs.existsSync(mtlPath));
   const mtlText = fs.readFileSync(mtlPath, 'utf8');
   const materials = materialNames(mtlText);
@@ -126,8 +126,8 @@ test('v4 Story World models contain grounded detailed geometry and valid local m
 
   const expectedAssets = new Set(Object.keys(STORY_WORLD_ASSET_METADATA));
   assert.ok(expectedAssets.size >= 17);
-  assert.ok(expectedAssets.has('terrain_v4.obj'));
-  assert.ok(expectedAssets.has('road_network_v4.obj'));
+  assert.ok(expectedAssets.has('terrain_v5.obj'));
+  assert.ok(expectedAssets.has('road_network_v5.obj'));
   assert.equal(
     STORY_WORLD_ACTORS.filter((actor) => actor.entityType === 'road').length,
     1
@@ -144,11 +144,11 @@ test('v4 Story World models contain grounded detailed geometry and valid local m
     assert.ok(fs.existsSync(path.join(assetRoot, filename)), `${filename} is missing`);
     const triangleCount = validateObj(filename, materials, {
       requireDetailedGeometry: true,
-      materialLibrary: 'story_world_v4.mtl',
+      materialLibrary: 'story_world_v5.mtl',
     });
     trianglesByAsset.set(filename, triangleCount);
 
-    if (!['terrain_v4.obj', 'water_v4.obj', 'road_network_v4.obj'].includes(filename)) {
+    if (!['terrain_v5.obj', 'water_v5.obj', 'road_network_v5.obj'].includes(filename)) {
       const yValues = fs
         .readFileSync(path.join(assetRoot, filename), 'utf8')
         .split(/\r?\n/)
@@ -167,13 +167,13 @@ test('v4 Story World models contain grounded detailed geometry and valid local m
     path.join(assetRoot, 'generate_story_world_assets.mjs'),
     'utf8'
   );
-  const v4TerrainSection = generatorText.slice(
-    generatorText.indexOf('function terrainMaterialV4'),
+  const v5TerrainSection = generatorText.slice(
+    generatorText.indexOf('function terrainMaterialV5'),
     generatorText.indexOf('function resamplePath')
   );
-  assert.match(v4TerrainSection, /slope/);
-  assert.match(v4TerrainSection, /broadNoise/);
-  assert.doesNotMatch(v4TerrainSection, /\(ix \+ iz\) % 4/);
+  assert.match(v5TerrainSection, /slope/);
+  assert.match(v5TerrainSection, /broadNoise/);
+  assert.doesNotMatch(v5TerrainSection, /\(ix \+ iz\) % 4/);
 });
 
 test('the deterministic generators and all local texture maps are included', () => {

@@ -17,10 +17,10 @@ const closeTo = (actual, expected, epsilon = 1e-6) => {
   assert.ok(Math.abs(actual - expected) <= epsilon, `${actual} is not close to ${expected}`);
 };
 
-test('v4 village uses one road network and keeps the lake east of the courtyard groups', () => {
+test('v5 village uses one road network and keeps the lake east of the courtyard groups', () => {
   const roads = STORY_WORLD_ACTORS.filter((definition) => definition.entityType === 'road');
   assert.deepEqual(roads.map((definition) => definition.name), ['StoryWorld_RoadNetwork']);
-  assert.equal(roads[0].asset, 'road_network_v4.obj');
+  assert.equal(roads[0].asset, 'road_network_v5.obj');
   assert.ok(
     STORY_WORLD_DEPRECATED_ACTORS.every(
       (name) => !STORY_WORLD_ACTORS.some((definition) => definition.name === name)
@@ -94,7 +94,7 @@ test('trees and monsters stay off roads, buildings and open water', () => {
   }
 });
 
-test('all placed v4 assets share the terrain height function and grounded contact offsets', () => {
+test('all placed v5 assets share the terrain height function and grounded contact offsets', () => {
   const explicitWaterActors = new Set([
     'StoryWorld_YunxiLake',
     'StoryWorld_Reeds_West',

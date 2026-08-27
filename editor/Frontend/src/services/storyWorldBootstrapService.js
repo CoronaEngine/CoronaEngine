@@ -9,10 +9,17 @@ import {
   STORY_WORLD_DEPRECATED_ACTORS,
   STORY_WORLD_PLAN_ID,
   STORY_WORLD_SCENE_VERSION,
+  STORY_WORLD_LAYOUT_REVISION,
+  STORY_WORLD_LAKE,
   STORY_WORLD_SUN_DIRECTION,
   STORY_WORLD_TERRAIN_ACTOR,
+  storyWorldTerrainHeight,
 } from '../config/storyWorld.js';
 import { resolveSceneSnapshot } from '../utils/nativeSceneViewport.js';
+import {
+  calculateStoryActorGroundingCorrection,
+  createGroundedActorTransform,
+} from '../utils/storyWorldGrounding.js';
 
 const IGNORED_ACTOR_TYPES = new Set([
   'audio',
@@ -179,6 +186,11 @@ function actorSceneVersion(actor) {
   return Number.isFinite(version) ? Math.max(1, Math.trunc(version)) : 1;
 }
 
+export function actorLayoutRevision(actor) {
+  const revision = Number(actor?.source_layout_revision ?? actor?.sourceLayoutRevision ?? 0);
+  return Number.isFinite(revision) ? Math.max(0, Math.trunc(revision)) : 0;
+}
+
 function actorVisible(actor) {
   return actor?.visible !== false && actor?.optics?.visible !== false;
 }
@@ -247,7 +259,10 @@ function storyActorForDefinition(snapshot, definition) {
 export function storyWorldMigrationForActor(actor, definition) {
   if (!actor || !definition || !isStoryWorldActor(actor)) return null;
   const currentVersion = actorSceneVersion(actor);
-  if (currentVersion >= STORY_WORLD_SCENE_VERSION) return null;
+  const currentLayoutRevision = actorLayoutRevision(actor);
+  const needsSceneMigration = currentVersion < STORY_WORLD_SCENE_VERSION;
+  const needsLayoutMigration = currentLayoutRevision < STORY_WORLD_LAYOUT_REVISION;
+  if (!needsSceneMigration && !needsLayoutMigration) return null;
 
   const currentScale = actorScale(actor);
   const actualSize = storyWorldAabbSize(actorWorldAabb(actor));
@@ -262,7 +277,9 @@ export function storyWorldMigrationForActor(actor, definition) {
     (!actualSize ||
       actualMax < expectedMax * STORY_WORLD_LEGACY_SIZE_RATIO ||
       (currentVersion <= 1 && currentScaleMax < expectedScaleMax * 0.75));
-  const resetManagedLayout = currentVersion < STORY_WORLD_SCENE_VERSION;
+  // Managed v5 actors without the layout marker are deliberately reset once.
+  // Older scene versions are also reset so that the v5 arrangement is deterministic.
+  const resetManagedLayout = needsSceneMigration || needsLayoutMigration;
   const scale = resetManagedLayout
     ? storyWorldFinalScale(definition)
     : normalizedLegacySize
@@ -273,12 +290,14 @@ export function storyWorldMigrationForActor(actor, definition) {
     actor,
     definition,
     currentVersion,
+    currentLayoutRevision,
     actualSize,
     expectedSize,
     scale,
-    repaired: normalizedLegacySize,
+    repaired: normalizedLegacySize || resetManagedLayout,
     resetManagedLayout,
-    needsResourceRebind: currentVersion < STORY_WORLD_SCENE_VERSION,
+    needsLayoutMigration,
+    needsResourceRebind: needsSceneMigration,
     actorGuid: actorGuid(actor) || definition.guid,
   };
 }
@@ -304,6 +323,7 @@ export function createStoryWorldMigrationActorData(migration) {
     entity_type: definition.entityType,
     source_plan_id: STORY_WORLD_PLAN_ID,
     source_scene_version: STORY_WORLD_SCENE_VERSION,
+    source_layout_revision: STORY_WORLD_LAYOUT_REVISION,
     skip_if_exists: true,
     update_if_exists: true,
   };
@@ -325,7 +345,7 @@ function unionAabbs(aabbs) {
   );
 }
 
-export function validateStoryWorldSnapshot(snapshot = {}) {
+export function validateStoryWorldSnapshot(snapshot = {}, options = {}) {
   const scene = resolveSceneSnapshot(snapshot);
   const actors = Array.isArray(scene.actors) ? scene.actors : [];
   const terrain = storyActorForDefinition(scene, STORY_WORLD_TERRAIN_ACTOR);
@@ -346,27 +366,59 @@ export function validateStoryWorldSnapshot(snapshot = {}) {
     unionAabbs(actors.filter(isStoryWorldActor).map(actorWorldAabb)) ||
     normalizeStoryWorldAabb(scene.scene_aabb || scene.sceneAabb || scene.world_aabb);
   const sceneSize = storyWorldAabbSize(worldBounds);
+  const dimensionErrors = [];
   const errors = [];
 
-  if (!terrain || !actorVisible(terrain) || !terrainSize) errors.push('基础地形不可见或边界无效');
+  if (!terrain || !actorVisible(terrain) || !terrainSize) dimensionErrors.push('基础地形不可见或边界无效');
   else if (
     terrainSize[0] < STORY_WORLD_VALIDATION_LIMITS.terrainX ||
     terrainSize[2] < STORY_WORLD_VALIDATION_LIMITS.terrainZ
   ) {
-    errors.push('基础地形尺寸不足');
+    dimensionErrors.push('基础地形尺寸不足');
   }
-  if (!lake || !actorVisible(lake) || !lakeSize) errors.push('云溪湖不可见或边界无效');
+  if (!lake || !actorVisible(lake) || !lakeSize) dimensionErrors.push('云溪湖不可见或边界无效');
   else if (
     lakeSize[0] < STORY_WORLD_VALIDATION_LIMITS.lakeX ||
     lakeSize[2] < STORY_WORLD_VALIDATION_LIMITS.lakeZ
   ) {
-    errors.push('云溪湖尺寸不足');
+    dimensionErrors.push('云溪湖尺寸不足');
   }
   if (!houseHeights.some((height) => height >= STORY_WORLD_VALIDATION_LIMITS.houseY)) {
-    errors.push('村落建筑尺寸不足');
+    dimensionErrors.push('村落建筑尺寸不足');
   }
   if (!sceneSize || sceneSize[1] < STORY_WORLD_VALIDATION_LIMITS.sceneY) {
-    errors.push('场景垂直跨度不足');
+    dimensionErrors.push('场景垂直跨度不足');
+  }
+
+  errors.push(...dimensionErrors);
+
+  const groundingIssues = [];
+  const groundingWarnings = [];
+  if (options?.checkGrounding) {
+    for (const definition of STORY_WORLD_ACTORS) {
+      const mode = String(definition.groundingMode || 'terrain').toLowerCase();
+      if (definition.name === STORY_WORLD_TERRAIN_ACTOR.name || mode === 'water') continue;
+      const actor = storyActorForDefinition(scene, definition);
+      if (!actor || !actorVisible(actor)) continue;
+      const correction = calculateStoryActorGroundingCorrection({
+        actor,
+        definition,
+        terrainHeightAt: storyWorldTerrainHeight,
+        waterY: STORY_WORLD_LAKE.waterY,
+        contactOffset: definition.groundingOffset,
+        threshold: 0.08,
+      });
+      if (!correction.valid || Math.abs(correction.correctionY) > 0.08) {
+        const issue = {
+          name: definition.name,
+          correctionY: correction.correctionY,
+          reason: correction.reason || 'misaligned',
+        };
+        if (isBlockingGroundingDefinition(definition)) groundingIssues.push(issue);
+        else groundingWarnings.push(issue);
+      }
+    }
+    if (groundingIssues.length > 0) errors.push('剧情场景存在悬浮或穿地模型');
   }
 
   return {
@@ -378,8 +430,93 @@ export function validateStoryWorldSnapshot(snapshot = {}) {
       lakeSize,
       maximumHouseHeight: houseHeights.length > 0 ? Math.max(...houseHeights) : 0,
       sceneSize,
+      dimensionErrors,
+      groundingIssues,
+      groundingWarnings,
     },
   };
+}
+
+
+function isBlockingGroundingDefinition(definition = {}) {
+  const entityType = String(definition.entityType || '').toLowerCase();
+  return (
+    definition.critical === true ||
+    entityType === 'road' ||
+    entityType === 'building' ||
+    entityType === 'bridge' ||
+    entityType === 'landmark'
+  );
+}
+
+export async function groundStoryWorldActors({
+  api = editorApi,
+  sceneId,
+  snapshot,
+  definitions = STORY_WORLD_ACTORS,
+  warnings = [],
+  onProgress = () => {},
+} = {}) {
+  const activeSceneId = String(sceneId || '').trim();
+  if (!activeSceneId) return { adjustedCount: 0, checkedCount: 0, skipped: true };
+  const scene = resolveSceneSnapshot(snapshot);
+  const actors = Array.isArray(scene.actors) ? scene.actors : [];
+  const transform = api?.scene?.setActorTransform;
+  let adjustedCount = 0;
+  let checkedCount = 0;
+  const adjustments = [];
+
+  for (const definition of definitions) {
+    const mode = String(definition?.groundingMode || 'terrain').toLowerCase();
+    if (!definition || definition.name === STORY_WORLD_TERRAIN_ACTOR.name || mode === 'water') {
+      continue;
+    }
+    const actor = storyActorForDefinition(scene, definition);
+    if (!actor || !actorVisible(actor)) continue;
+    checkedCount += 1;
+    const correction = calculateStoryActorGroundingCorrection({
+      actor,
+      definition,
+      terrainHeightAt: storyWorldTerrainHeight,
+      waterY: STORY_WORLD_LAKE.waterY,
+      contactOffset: definition.groundingOffset,
+      threshold: mode === 'road' ? 0.08 : 0.03,
+    });
+    if (!correction.valid) {
+      const error = new Error(`${definition.name} 缺少有效包围盒或地形高度。`);
+      if (isBlockingGroundingDefinition(definition)) throw error;
+      warnings.push(`${definition.name} 暂时无法读取真实接地点，将在下次进入时重试。`);
+      continue;
+    }
+    if (Math.abs(correction.correctionY) <= (mode === 'road' ? 0.08 : 0.03)) continue;
+    if (typeof transform !== 'function') {
+      warnings.push(`${definition.name} 无法执行接地校正，当前编辑器缺少变换接口。`);
+      continue;
+    }
+    try {
+      const response = await transform(
+        activeSceneId,
+        actorName(actor) || definition.name,
+        createGroundedActorTransform(actor, correction.correctionY),
+      );
+      if (!editorCallSucceeded(response)) {
+        throw new Error(editorCallErrorMessage(response, `${definition.name} 接地校正失败`));
+      }
+      adjustedCount += 1;
+      adjustments.push({
+        name: definition.name,
+        correctionY: correction.correctionY,
+        targetMinY: correction.targetMinY,
+        actualMinY: correction.actualMinY,
+      });
+    } catch (error) {
+      if (isBlockingGroundingDefinition(definition)) throw error;
+      warnings.push(`${definition.name} 接地校正失败，将保留当前高度。`);
+    }
+  }
+
+  onProgress({ status: 'grounding', progress: 94, message: '校正模型接地点' });
+  return { adjustedCount, checkedCount, adjustments, skipped: false };
 }
 
 export function editorCallSucceeded(response) {
@@ -694,15 +831,52 @@ export async function runStoryWorldBootstrap({
   }
 
   if (isCancelled()) return null;
+  const snapshotBeforeGroundingResponse = await api.scene.getSnapshot(activeSceneId);
+  if (isCancelled()) return null;
+  const snapshotBeforeGrounding = resolveSceneSnapshot(snapshotBeforeGroundingResponse);
+  const preliminaryValidation = validateStoryWorldSnapshot(snapshotBeforeGrounding, {
+    checkGrounding: true,
+  });
+  const layoutChanged =
+    migrations.length > 0 || missing.length > 0 || deprecatedRemovedCount > 0;
+  const shouldRepairGrounding =
+    layoutChanged || preliminaryValidation.metrics.groundingIssues.length > 0;
+  let grounding = { adjustedCount: 0, checkedCount: 0, adjustments: [], skipped: true };
+  if (shouldRepairGrounding) {
+    onProgress({ status: 'grounding', progress: 94, message: '校正模型接地点' });
+    try {
+      grounding = await groundStoryWorldActors({
+        api,
+        sceneId: activeSceneId,
+        snapshot: snapshotBeforeGrounding,
+        warnings,
+      });
+    } catch (error) {
+      throw createBootstrapError(
+        '剧情场景布局异常，请重试修复。',
+        'WORLD_LAYOUT_VALIDATION_FAILED',
+        error
+      );
+    }
+  }
+
+  if (isCancelled()) return null;
   onProgress({ status: 'validating', progress: 97, message: '确认世界画面' });
-  const finalSnapshotResponse = await api.scene.getSnapshot(activeSceneId);
+  const finalSnapshotResponse = shouldRepairGrounding
+    ? await api.scene.getSnapshot(activeSceneId)
+    : snapshotBeforeGroundingResponse;
   if (isCancelled()) return null;
   const finalSnapshot = resolveSceneSnapshot(finalSnapshotResponse);
-  const validation = validateStoryWorldSnapshot(finalSnapshot);
+  const validation = validateStoryWorldSnapshot(finalSnapshot, { checkGrounding: true });
   if (!validation.valid) {
+    const layoutInvalid =
+      validation.metrics.dimensionErrors.length === 0 &&
+      validation.metrics.groundingIssues.length > 0;
     const error = createBootstrapError(
-      '剧情资源尺寸异常，世界修复未完成。',
-      'WORLD_VALIDATION_FAILED'
+      layoutInvalid
+        ? '剧情场景布局异常，请重试修复。'
+        : '剧情资源尺寸异常，世界修复未完成。',
+      layoutInvalid ? 'WORLD_LAYOUT_VALIDATION_FAILED' : 'WORLD_VALIDATION_FAILED'
     );
     error.validation = validation;
     throw error;
@@ -719,6 +893,8 @@ export async function runStoryWorldBootstrap({
     repairedCount,
     upgradedCount,
     deprecatedRemovedCount,
+    groundedCount: grounding.adjustedCount,
+    grounding,
     terrainCreated,
     validation,
     worldBounds: validation.worldBounds,

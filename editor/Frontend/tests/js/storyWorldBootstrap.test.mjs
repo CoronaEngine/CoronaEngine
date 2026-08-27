@@ -7,6 +7,7 @@ import {
   STORY_WORLD_DEPRECATED_ACTORS,
   STORY_WORLD_PLAN_ID,
   STORY_WORLD_SCENE_VERSION,
+  STORY_WORLD_LAYOUT_REVISION,
   STORY_WORLD_TERRAIN_ACTOR,
   storyWorldExpectedSize,
   storyWorldFinalScale,
@@ -55,15 +56,29 @@ const worldSizeForScale = (definition, scale) => {
   return normalizedSourceSize.map((value, index) => Math.abs(value * scale[index]));
 };
 
+const sourceVerticalBounds = (definition) => {
+  if (definition.name === 'StoryWorld_Terrain') return [-1.3, 15.102511];
+  if (definition.name === 'StoryWorld_RoadNetwork') return [-1.265, 4.631842];
+  return [0, Number(definition.sourceSize?.[1]) || 0];
+};
+
 const worldAabbForActor = (actor, definition) => {
   const position = actorPosition(actor, definition);
-  const size = worldSizeForScale(definition, actorScale(actor, definition));
+  const scale = actorScale(actor, definition);
+  const size = worldSizeForScale(definition, scale);
+  const [sourceMinY, sourceMaxY] = sourceVerticalBounds(definition);
+  const normalizedMinY = sourceMinY / Math.max(definition.importScale, 1e-8);
+  const normalizedMaxY = sourceMaxY / Math.max(definition.importScale, 1e-8);
+  const scaledY0 = normalizedMinY * scale[1];
+  const scaledY1 = normalizedMaxY * scale[1];
+  const minY = position[1] + Math.min(scaledY0, scaledY1);
+  const maxY = position[1] + Math.max(scaledY0, scaledY1);
   return [
     position[0] - size[0] * 0.5,
-    position[1] - size[1] * 0.5,
+    minY,
     position[2] - size[2] * 0.5,
     position[0] + size[0] * 0.5,
-    position[1] + size[1] * 0.5,
+    maxY,
     position[2] + size[2] * 0.5,
   ];
 };
@@ -81,6 +96,7 @@ const storyActorSnapshot = (definition, overrides = {}) => {
     actor_type: 'model',
     source_plan_id: STORY_WORLD_PLAN_ID,
     source_scene_version: STORY_WORLD_SCENE_VERSION,
+    source_layout_revision: STORY_WORLD_LAYOUT_REVISION,
     visible: true,
     ...overrides,
     geometry,
@@ -165,6 +181,36 @@ function createMockApi({
           },
         };
       },
+      setActorTransform: async (...args) => {
+        calls.push(['setActorTransform', ...args]);
+        const actorName = String(args[1] || '');
+        const transform = args[2] || {};
+        const actorIndex = actorState.findIndex((actor) => actor.name === actorName);
+        if (actorIndex < 0) return { success: false, data: { message: 'actor missing' } };
+        const definition = definitionByIdentity(actorName);
+        if (!definition) return { success: false, data: { message: 'unknown actor' } };
+        const current = actorState[actorIndex];
+        const currentPosition = current.geometry?.position ?? definition.position;
+        const nextPosition = transform.position ?? currentPosition;
+        const delta = [0, 1, 2].map((index) => Number(nextPosition[index]) - Number(currentPosition[index]));
+        const currentAabb = Array.isArray(current.world_aabb)
+          ? current.world_aabb
+          : worldAabbForActor(current, definition);
+        const translatedAabb = currentAabb.map(
+          (value, index) => Number(value) + delta[index % 3]
+        );
+        const updated = storyActorSnapshot(definition, {
+          ...current,
+          world_aabb: translatedAabb,
+          geometry: {
+            position: nextPosition,
+            rotation: transform.rotation ?? current.geometry?.rotation ?? definition.rotation,
+            scale: transform.scale ?? current.geometry?.scale ?? storyWorldFinalScale(definition),
+          },
+        });
+        actorState.splice(actorIndex, 1, updated);
+        return { success: true };
+      },
     },
     sceneTools: {
       sunDirection: async (...args) => {
@@ -213,6 +259,10 @@ function createMockApi({
           source_plan_id: actorData.source_plan_id ?? existing?.source_plan_id,
           source_scene_version:
             actorData.source_scene_version ?? existing?.source_scene_version ?? 1,
+          source_layout_revision:
+            actorData.source_layout_revision ??
+            existing?.source_layout_revision ??
+            STORY_WORLD_LAYOUT_REVISION,
           visible: existing?.visible !== false,
           world_aabb: undefined,
           geometry: {
@@ -289,7 +339,7 @@ test('only reports missing deterministic actors by name or guid', () => {
   );
 });
 
-test('records all v4 OBJ normalization compensation values and combines variant scale', () => {
+test('records all v5 OBJ normalization compensation values and combines variant scale', () => {
   assert.deepEqual(
     Object.fromEntries(
       Object.entries(STORY_WORLD_ASSET_METADATA).map(([asset, metadata]) => [
@@ -298,23 +348,23 @@ test('records all v4 OBJ normalization compensation values and combines variant 
       ])
     ),
     {
-      'terrain_v4.obj': 120,
-      'water_v4.obj': 43.027531,
-      'road_network_v4.obj': 61.038173,
-      'bridge_v4.obj': 12,
-      'gate_v4.obj': 11.827528,
-      'house_small_v4.obj': 10.844932,
-      'house_large_v4.obj': 13.644932,
-      'pavilion_v4.obj': 9.044984,
-      'tree_v4_a.obj': 8.860601,
-      'tree_v4_b.obj': 9.155378,
-      'rock_v4.obj': 3.460254,
-      'fence_v4.obj': 8.203424,
-      'lantern_v4.obj': 4.2,
-      'courtyard_v4.obj': 10,
-      'barrels_v4.obj': 2.281324,
-      'woodpile_v4.obj': 2.662435,
-      'reeds_v4.obj': 4.148509,
+      'terrain_v5.obj': 120,
+      'water_v5.obj': 43.027531,
+      'road_network_v5.obj': 61.038173,
+      'bridge_v5.obj': 12,
+      'gate_v5.obj': 11.827528,
+      'house_small_v5.obj': 10.844932,
+      'house_large_v5.obj': 13.644932,
+      'pavilion_v5.obj': 9.044984,
+      'tree_v5_a.obj': 8.860601,
+      'tree_v5_b.obj': 9.155378,
+      'rock_v5.obj': 3.460254,
+      'fence_v5.obj': 8.203424,
+      'lantern_v5.obj': 4.2,
+      'courtyard_v5.obj': 10,
+      'barrels_v5.obj': 2.281324,
+      'woodpile_v5.obj': 2.662435,
+      'reeds_v5.obj': 4.148509,
     }
   );
 
@@ -329,7 +379,7 @@ test('records all v4 OBJ normalization compensation values and combines variant 
   );
 });
 
-test('builds a v4 managed-layout migration that resets transform and resource metadata', () => {
+test('builds a v5 managed-layout migration that resets transform and resource metadata', () => {
   const legacyTerrain = storyActorSnapshot(STORY_WORLD_TERRAIN_ACTOR, {
     actor_guid: 'legacy-managed-terrain-guid',
     source_scene_version: 1,
@@ -351,12 +401,24 @@ test('builds a v4 managed-layout migration that resets transform and resource me
   assert.deepEqual(actorData.scale, [120, 120, 120]);
   assert.equal(actorData.actor_guid, 'legacy-managed-terrain-guid');
   assert.equal(actorData.source_scene_version, STORY_WORLD_SCENE_VERSION);
+  assert.equal(actorData.source_layout_revision, STORY_WORLD_LAYOUT_REVISION);
   assert.equal(actorData.update_if_exists, true);
 });
 
-test('only migrates managed actors below v4 and never touches user actors', () => {
+test('only migrates managed actors below v5 and never touches user actors', () => {
   const currentTerrain = storyActorSnapshot(STORY_WORLD_TERRAIN_ACTOR);
   assert.equal(storyWorldMigrationForActor(currentTerrain, STORY_WORLD_TERRAIN_ACTOR), null);
+
+  const ungroundedV5Terrain = storyActorSnapshot(STORY_WORLD_TERRAIN_ACTOR, {
+    source_layout_revision: 0,
+  });
+  const layoutOnlyMigration = storyWorldMigrationForActor(
+    ungroundedV5Terrain,
+    STORY_WORLD_TERRAIN_ACTOR
+  );
+  assert.equal(layoutOnlyMigration.needsLayoutMigration, true);
+  assert.equal(layoutOnlyMigration.needsResourceRebind, false);
+  assert.equal(layoutOnlyMigration.resetManagedLayout, true);
 
   const sizedLegacyTerrain = storyActorSnapshot(STORY_WORLD_TERRAIN_ACTOR, {
     source_scene_version: 3,
@@ -370,7 +432,7 @@ test('only migrates managed actors below v4 and never touches user actors', () =
     sizedLegacyTerrain,
     STORY_WORLD_TERRAIN_ACTOR
   );
-  assert.equal(layoutMigration.repaired, false);
+  assert.equal(layoutMigration.repaired, true);
   const actorData = createStoryWorldMigrationActorData(layoutMigration);
   assert.deepEqual(actorData.position, STORY_WORLD_TERRAIN_ACTOR.position);
   assert.deepEqual(actorData.rotation, STORY_WORLD_TERRAIN_ACTOR.rotation);
@@ -439,7 +501,7 @@ test('bootstraps an empty story scene with native light, compensated actors and 
   assert.equal(createCalls[0][4].source_scene_version, STORY_WORLD_SCENE_VERSION);
   assert.deepEqual(createCalls[0][4].scale, [120, 120, 120]);
   assert.equal(createCalls[0][4].skip_if_exists, true);
-  assert.ok(createCalls[0][2].endsWith('/assets/story_mode/terrain_v4.obj'));
+  assert.ok(createCalls[0][2].endsWith('/assets/story_mode/terrain_v5.obj'));
 });
 
 test('skips creative projects and existing user worlds without changing light', async () => {
@@ -462,7 +524,7 @@ test('skips creative projects and existing user worlds without changing light', 
   assert.equal(existing.calls.length, 0);
 });
 
-test('partial generation does not reset spawn pose when v4 terrain already exists', async () => {
+test('partial generation does not reset spawn pose when v5 terrain already exists', async () => {
   const terrain = storyActorSnapshot(STORY_WORLD_TERRAIN_ACTOR);
   const { api, calls } = createMockApi({ actors: [terrain] });
   let poseCount = 0;
@@ -483,7 +545,7 @@ test('partial generation does not reset spawn pose when v4 terrain already exist
   );
 });
 
-test('a complete v4 generated world preserves its saved lighting and camera state', async () => {
+test('a complete v5 generated world preserves its saved lighting and camera state', async () => {
   const { api, calls } = createMockApi({
     actors: STORY_WORLD_ACTORS.map((definition) => storyActorSnapshot(definition)),
   });
@@ -519,7 +581,7 @@ test('upgrades v3 managed models once and resets the complete managed layout', a
   const result = await runStoryWorldBootstrap({ api, sceneId: 'scene.ini' });
 
   assert.equal(result.generated, false);
-  assert.equal(result.repairedCount, 0);
+  assert.equal(result.repairedCount, STORY_WORLD_ACTORS.length);
   assert.equal(result.upgradedCount, STORY_WORLD_ACTORS.length);
   assert.equal(result.validation.valid, true);
   assert.equal(
@@ -659,6 +721,52 @@ test('lighting and terrain failures are blocking while decoration failures are w
   assert.ok(result.warnings.some((warning) => warning.includes(decoration.name)));
   assert.equal(result.terrainCreated, true);
   assert.equal(result.validation.valid, true);
+});
+
+test('grounds floating managed actors once without touching user actors', async () => {
+  const floatingHouseDefinition = STORY_WORLD_ACTORS.find(
+    (definition) => definition.name === 'StoryWorld_House_Liu'
+  );
+  const completeWorld = STORY_WORLD_ACTORS.map((definition) => storyActorSnapshot(definition));
+  const floatingHouseIndex = completeWorld.findIndex(
+    (actor) => actor.name === floatingHouseDefinition.name
+  );
+  completeWorld[floatingHouseIndex] = storyActorSnapshot(floatingHouseDefinition, {
+    world_aabb: completeWorld[floatingHouseIndex].world_aabb.map((value, index) =>
+      index === 1 || index === 4 ? value + 5 : value
+    ),
+  });
+  const userActor = {
+    name: 'UserFloatingDecoration',
+    actor_guid: 'user-floating-decoration',
+    actor_type: 'model',
+    visible: true,
+    geometry: { position: [2, 20, 3], rotation: [0, 0, 0], scale: [1, 1, 1] },
+    world_aabb: [1, 19, 2, 3, 21, 4],
+  };
+  const { api, calls, actorState } = createMockApi({ actors: [...completeWorld, userActor] });
+
+  const first = await runStoryWorldBootstrap({ api, sceneId: 'scene.ini' });
+  assert.ok(first.groundedCount > 0);
+  assert.ok(
+    calls.some(
+      ([name, , actorName]) =>
+        name === 'setActorTransform' && actorName === floatingHouseDefinition.name
+    )
+  );
+  assert.equal(
+    calls.some(([name, , actorName]) => name === 'setActorTransform' && actorName === userActor.name),
+    false
+  );
+  assert.deepEqual(
+    actorState.find((actor) => actor.name === userActor.name).geometry,
+    userActor.geometry
+  );
+
+  const transformCount = calls.filter(([name]) => name === 'setActorTransform').length;
+  const second = await runStoryWorldBootstrap({ api, sceneId: 'scene.ini' });
+  assert.equal(second.groundedCount, 0);
+  assert.equal(calls.filter(([name]) => name === 'setActorTransform').length, transformCount);
 });
 
 test('blocks gameplay when the refreshed snapshot still reports miniature resources', async () => {

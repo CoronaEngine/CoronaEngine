@@ -370,10 +370,12 @@ import StoryMapPanel from '@/components/story/StoryMapPanel.vue';
 import StoryMiniMap from '@/components/story/StoryMiniMap.vue';
 import {
   STORY_WORLD_CAMERA_BOUNDS,
+  STORY_WORLD_CAMERA_GROUND_OFFSET,
   STORY_WORLD_CAMERA_MIN_Y,
   STORY_WORLD_CAMERA_SPAWN,
   STORY_WORLD_LOCATION_OBJECTIVE,
   STORY_WORLD_LOCATION_TITLE,
+  storyWorldTerrainHeight,
 } from '@/config/storyWorld.js';
 import { useNativeSceneViewport } from '@/composables/useNativeSceneViewport.js';
 import { useStoryCameraControls } from '@/composables/useStoryCameraControls.js';
@@ -388,7 +390,10 @@ import { useStoryNpcInteraction } from '@/composables/useStoryNpcInteraction.js'
 import { bootstrapStoryNpcs, ensureStoryWorldBall } from '@/services/storyNpcBootstrapService.js';
 import { STORY_QUEST_DEFINITIONS, STORY_MERCHANT_STOCK } from '@/config/storyNpc.js';
 import { getStoryItemDefinition } from '@/utils/storyInventory.js';
-import { isStoryCameraPoseUnsafe } from '@/utils/storyCameraControls.js';
+import {
+  groundStoryCameraPose,
+  isStoryCameraPoseUnsafe,
+} from '@/utils/storyCameraControls.js';
 import {
   reduceStoryUiState,
   shouldResetStoryCamera,
@@ -602,9 +607,14 @@ const systemWarningNotice = computed(
   () => bootstrapWarningNotice.value || combatWarningMessage.value || lightingError.value
 );
 
-const cameraPositionBounds = computed(() =>
-  managedWorld.value ? STORY_WORLD_CAMERA_BOUNDS : null
-);
+const cameraPositionBounds = computed(() => {
+  if (managedWorld.value) return STORY_WORLD_CAMERA_BOUNDS;
+
+  const bounds = bootstrapWorldBounds.value;
+  if (!Array.isArray(bounds) || bounds.length < 6) return null;
+  const minimumWorldY = Number(bounds[1]);
+  return Number.isFinite(minimumWorldY) ? { minY: minimumWorldY + 1.6 } : null;
+});
 const {
   isLooking,
   stop: stopCameraControls,
@@ -615,6 +625,10 @@ const {
   enabled: controlsEnabled,
   refreshCameraBinding,
   positionBounds: cameraPositionBounds,
+  terrainHeightAt: computed(() => (managedWorld.value ? storyWorldTerrainHeight : null)),
+  groundOffset: STORY_WORLD_CAMERA_GROUND_OFFSET,
+  gravity: 9.8,
+  enableGravity: computed(() => gameReady.value),
 });
 
 watch(
@@ -644,18 +658,32 @@ watch(
       await stopCameraControls({ persist: false });
       const refreshed = await refreshCameraBinding({ preservePose: false });
       if (!refreshed) throw new Error('Unable to refresh the Story camera binding.');
-      if (!isStoryCameraPoseUnsafe(cameraBinding.value, safetyOptions)) {
+      const groundedPose = groundStoryCameraPose(cameraBinding.value, {
+        terrainHeightAt: storyWorldTerrainHeight,
+        groundOffset: STORY_WORLD_CAMERA_GROUND_OFFSET,
+        fallbackMinY: STORY_WORLD_CAMERA_MIN_Y,
+        maximumHoverHeight: 3,
+        maximumY: STORY_WORLD_CAMERA_BOUNDS.maxY,
+        fallbackPose: STORY_WORLD_CAMERA_SPAWN,
+      });
+      const orientationUnsafe = isStoryCameraPoseUnsafe(groundedPose.pose, safetyOptions);
+      if (!groundedPose.changed && !orientationUnsafe) {
         cameraSafetyPending.value = false;
         return;
       }
 
-      await setCameraPose(STORY_WORLD_CAMERA_SPAWN, { persist: true });
+      const recoveryPose = orientationUnsafe ? STORY_WORLD_CAMERA_SPAWN : groundedPose.pose;
+      await setCameraPose(recoveryPose, { persist: true });
       const recovered = await refreshCameraBinding({ preservePose: false });
       if (!recovered || isStoryCameraPoseUnsafe(cameraBinding.value, safetyOptions)) {
         throw new Error('Story camera recovery pose did not pass validation.');
       }
       cameraSafetyPending.value = false;
-      showCameraNotice('检测到视角未朝向世界，已返回云溪村村口。');
+      showCameraNotice(
+        orientationUnsafe
+          ? '检测到视角未朝向世界，已返回云溪村村口。'
+          : '检测到摄像机悬浮或穿地，已自动贴合地面。'
+      );
     } catch (error) {
       automaticCameraRecoveryKey = '';
       cameraSafetyPending.value = true;

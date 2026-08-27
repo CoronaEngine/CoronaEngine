@@ -74,17 +74,108 @@ function hasMovementKey(activeKeys, code) {
 
 
 
-export function isStoryCameraPoseUnsafe(pose = {}, options = -Infinity) {
-  const finiteVector = (value, { requireDirection = false } = {}) => {
-    if (!Array.isArray(value) || value.length !== 3) return false;
-    const numeric = value.map(Number);
-    if (!numeric.every(Number.isFinite)) return false;
-    return !requireDirection || vectorLength(numeric) > 1e-8;
-  };
+function finiteStoryCameraVector(value, { requireDirection = false } = {}) {
+  if (!Array.isArray(value) || value.length !== 3) return null;
+  const numeric = value.map(Number);
+  if (!numeric.every(Number.isFinite)) return null;
+  if (requireDirection && vectorLength(numeric) <= 1e-8) return null;
+  return numeric;
+}
 
-  if (!finiteVector(pose?.position)) return true;
-  if (!finiteVector(pose?.forward, { requireDirection: true })) return true;
-  if (!finiteVector(pose?.worldUp ?? pose?.world_up, { requireDirection: true })) return true;
+export function storyCameraGroundY(
+  positionValue,
+  terrainHeightAt = null,
+  groundOffset = 1.6,
+  fallbackMinY = Number.NEGATIVE_INFINITY
+) {
+  const position = finiteStoryCameraVector(positionValue);
+  if (!position) return Number.NaN;
+  const sampledTerrain =
+    typeof terrainHeightAt === 'function'
+      ? Number(terrainHeightAt(position[0], position[2]))
+      : Number.NaN;
+  const offset = Math.max(0, Number(groundOffset) || DEFAULT_STORY_CAMERA_GROUND_OFFSET);
+  if (Number.isFinite(sampledTerrain)) return sampledTerrain + offset;
+  const fallback = Number(fallbackMinY);
+  return Number.isFinite(fallback) ? fallback : Number.NaN;
+}
+
+export function groundStoryCameraPose(
+  pose = {},
+  {
+    terrainHeightAt = null,
+    groundOffset = 1.6,
+    fallbackMinY = Number.NEGATIVE_INFINITY,
+    maximumHoverHeight = 3,
+    maximumY = Number.POSITIVE_INFINITY,
+    fallbackPose = {},
+    tolerance = 0.03,
+  } = {}
+) {
+  const numericFallbackMinY = Number(fallbackMinY);
+  const fallbackPosition =
+    finiteStoryCameraVector(fallbackPose?.position) || [
+      0,
+      Number.isFinite(numericFallbackMinY) ? numericFallbackMinY : 0,
+      0,
+    ];
+  const fallbackForward =
+    finiteStoryCameraVector(fallbackPose?.forward, { requireDirection: true }) || DEFAULT_FORWARD;
+  const fallbackWorldUp =
+    finiteStoryCameraVector(fallbackPose?.worldUp ?? fallbackPose?.world_up, {
+      requireDirection: true,
+    }) || DEFAULT_UP;
+  const sourcePosition = finiteStoryCameraVector(pose?.position);
+  const sourceForward = finiteStoryCameraVector(pose?.forward, { requireDirection: true });
+  const sourceWorldUp = finiteStoryCameraVector(pose?.worldUp ?? pose?.world_up, {
+    requireDirection: true,
+  });
+  const reasons = [];
+  const position = sourcePosition ? [...sourcePosition] : [...fallbackPosition];
+  if (!sourcePosition) reasons.push('invalid-position');
+
+  const groundY = storyCameraGroundY(position, terrainHeightAt, groundOffset, fallbackMinY);
+  const hoverLimit = Math.max(0, Number(maximumHoverHeight) || 3);
+  const epsilon = Math.max(0, Number(tolerance) || 0.03);
+  if (Number.isFinite(groundY)) {
+    if (position[1] < groundY - epsilon) {
+      position[1] = groundY;
+      reasons.push('below-ground');
+    } else if (position[1] > groundY + hoverLimit) {
+      position[1] = groundY;
+      reasons.push('hovering');
+    }
+  }
+  const ceiling = Number(maximumY);
+  if (Number.isFinite(ceiling) && position[1] > ceiling) {
+    position[1] = ceiling;
+    reasons.push('above-ceiling');
+  }
+  if (!sourceForward) reasons.push('invalid-forward');
+  if (!sourceWorldUp) reasons.push('invalid-world-up');
+
+  const fov = Number(pose?.fov);
+  const fallbackFov = Number(fallbackPose?.fov);
+  return {
+    pose: {
+      position,
+      forward: normalizeVector(sourceForward || fallbackForward, fallbackForward),
+      worldUp: normalizeVector(sourceWorldUp || fallbackWorldUp, fallbackWorldUp),
+      fov: Number.isFinite(fov) ? fov : Number.isFinite(fallbackFov) ? fallbackFov : 45,
+    },
+    changed: reasons.length > 0,
+    grounded: Number.isFinite(groundY) && Math.abs(position[1] - groundY) <= epsilon,
+    groundY,
+    reasons,
+  };
+}
+
+export function isStoryCameraPoseUnsafe(pose = {}, options = -Infinity) {
+  if (!finiteStoryCameraVector(pose?.position)) return true;
+  if (!finiteStoryCameraVector(pose?.forward, { requireDirection: true })) return true;
+  if (!finiteStoryCameraVector(pose?.worldUp ?? pose?.world_up, { requireDirection: true })) {
+    return true;
+  }
 
   const settings =
     options && typeof options === 'object'
@@ -199,6 +290,87 @@ export function applyStoryCameraMovement(
   return {
     position: nextPosition,
     moved: nextPosition.some((value, index) => Math.abs(value - position[index]) > 1e-8),
+  };
+}
+
+export const DEFAULT_STORY_CAMERA_GRAVITY = 9.8;
+export const DEFAULT_STORY_CAMERA_GROUND_OFFSET = 1.6;
+
+export function applyStoryCameraGravity(
+  positionValue,
+  deltaSeconds = 0,
+  verticalVelocity = 0,
+  activeKeys = new Set(),
+  terrainHeightAt = null,
+  groundOffset = DEFAULT_STORY_CAMERA_GROUND_OFFSET,
+  positionBounds = null,
+  gravity = DEFAULT_STORY_CAMERA_GRAVITY
+) {
+  const dt = Math.min(
+    Math.max(Number.isFinite(Number(deltaSeconds)) ? Number(deltaSeconds) : 0, 0),
+    STORY_CAMERA_MAX_DELTA_SECONDS
+  );
+  const position = Array.isArray(positionValue)
+    ? positionValue.map((value) => (Number.isFinite(Number(value)) ? Number(value) : 0))
+    : [0, 0, 0];
+  const velocity = Number.isFinite(Number(verticalVelocity)) ? Number(verticalVelocity) : 0;
+  const manualVerticalInput =
+    hasMovementKey(activeKeys, 'KeyQ') || hasMovementKey(activeKeys, 'KeyE');
+  const fallbackGround = Number(positionBounds?.minY);
+  const sampledTerrain = typeof terrainHeightAt === 'function'
+    ? Number(terrainHeightAt(position[0], position[2]))
+    : Number.NaN;
+  const offset = Math.max(0, Number(groundOffset) || DEFAULT_STORY_CAMERA_GROUND_OFFSET);
+  const groundY = Number.isFinite(sampledTerrain)
+    ? sampledTerrain + offset
+    : Number.isFinite(fallbackGround)
+      ? fallbackGround
+      : -Infinity;
+  if (manualVerticalInput || dt <= 0 || !Number.isFinite(groundY)) {
+    const clampedPosition = [...position];
+    if (manualVerticalInput && Number.isFinite(groundY) && clampedPosition[1] < groundY) {
+      clampedPosition[1] = groundY;
+    }
+    return {
+      position: clampedPosition,
+      verticalVelocity: manualVerticalInput ? 0 : velocity,
+      grounded: Number.isFinite(groundY) && clampedPosition[1] <= groundY + 1e-5,
+      moved: clampedPosition.some((value, index) => Math.abs(value - position[index]) > 1e-8),
+    };
+  }
+
+  if (position[1] <= groundY && velocity <= 0) {
+    const landed = [...position];
+    landed[1] = groundY;
+    return {
+      position: landed,
+      verticalVelocity: 0,
+      grounded: true,
+      moved: Math.abs(landed[1] - position[1]) > 1e-8,
+    };
+  }
+
+  const acceleration = Math.max(0, Number(gravity) || DEFAULT_STORY_CAMERA_GRAVITY);
+  const nextVelocity = velocity - acceleration * dt;
+  const nextPosition = [...position];
+  nextPosition[1] += (velocity + nextVelocity) * 0.5 * dt;
+  if (nextPosition[1] <= groundY) {
+    nextPosition[1] = groundY;
+    return {
+      position: nextPosition,
+      verticalVelocity: 0,
+      grounded: true,
+      moved: Math.abs(nextPosition[1] - position[1]) > 1e-8,
+    };
+  }
+  if (Number.isFinite(positionBounds?.maxY)) {
+    nextPosition[1] = Math.min(nextPosition[1], Number(positionBounds.maxY));
+  }
+  return {
+    position: nextPosition,
+    verticalVelocity: nextVelocity,
+    grounded: false,
+    moved: Math.abs(nextPosition[1] - position[1]) > 1e-8,
   };
 }
 

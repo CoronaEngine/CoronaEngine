@@ -2,6 +2,7 @@ import { onMounted, onUnmounted, ref, unref, watch } from 'vue';
 
 import { editorApi } from '@/api/editorApi.js';
 import {
+  applyStoryCameraGravity,
   applyStoryCameraMovement,
   normalizeStoryCameraKey,
   rotateStoryCamera,
@@ -24,6 +25,10 @@ export function useStoryCameraControls({
   enabled,
   refreshCameraBinding,
   positionBounds = null,
+  terrainHeightAt = null,
+  groundOffset = 1.6,
+  gravity = 9.8,
+  enableGravity = false,
 }) {
   const isLooking = ref(false);
   const activeKeys = new Set();
@@ -37,8 +42,30 @@ export function useStoryCameraControls({
   let poseVersion = 0;
   let persistedPoseVersion = 0;
   let refreshToken = 0;
+  let verticalVelocity = 0;
 
   const isEnabled = () => !disposed && Boolean(unref(enabled)) && Boolean(cameraBinding.value);
+
+  const currentGroundY = (binding) => {
+    if (!binding || !unref(enableGravity)) return Number.NEGATIVE_INFINITY;
+    const terrainSampler = unref(terrainHeightAt);
+    const sampled = typeof terrainSampler === 'function'
+      ? Number(terrainSampler(binding.position[0], binding.position[2]))
+      : Number.NaN;
+    if (Number.isFinite(sampled)) return sampled + Math.max(0, Number(groundOffset) || 1.6);
+    const fallback = Number(unref(positionBounds)?.minY);
+    return Number.isFinite(fallback) ? fallback : Number.NEGATIVE_INFINITY;
+  };
+
+  const gravityNeeded = (binding) => {
+    if (!unref(enableGravity) || !Number.isFinite(binding?.position?.[1])) return false;
+    const groundY = currentGroundY(binding);
+    if (!Number.isFinite(groundY)) return false;
+    // Run one more frame when horizontal movement enters a higher/lower
+    // terrain cell.  This lets applyStoryCameraGravity snap the camera up to
+    // a rising surface as well as falling down from a ledge.
+    return Math.abs(binding.position[1] - groundY) > 1e-5 || Math.abs(verticalVelocity) > 1e-5;
+  };
 
   const updateBindingPose = (changes) => {
     const current = cameraBinding.value;
@@ -107,8 +134,9 @@ export function useStoryCameraControls({
 
   const movementFrame = (timestamp) => {
     movementFrameId = null;
-    if (!isEnabled() || activeKeys.size === 0) {
+    if (!isEnabled()) {
       previousFrameTime = 0;
+      verticalVelocity = 0;
       persistIfIdle();
       return;
     }
@@ -116,22 +144,44 @@ export function useStoryCameraControls({
     const binding = cameraBinding.value;
     const deltaSeconds = previousFrameTime ? (timestamp - previousFrameTime) / 1000 : 0;
     previousFrameTime = timestamp;
-    const result = applyStoryCameraMovement(
-      binding,
-      activeKeys,
-      deltaSeconds,
-      binding.moveSpeed,
-      unref(positionBounds)
-    );
-    if (result.moved) {
-      updateBindingPose({ position: result.position });
+    const movement = activeKeys.size > 0
+      ? applyStoryCameraMovement(
+        binding,
+        activeKeys,
+        deltaSeconds,
+        binding.moveSpeed,
+        unref(positionBounds)
+      )
+      : { position: [...binding.position], moved: false };
+    const gravityResult = unref(enableGravity)
+      ? applyStoryCameraGravity(
+        movement.position,
+        deltaSeconds,
+        verticalVelocity,
+        activeKeys,
+        unref(terrainHeightAt),
+        groundOffset,
+        unref(positionBounds),
+        gravity
+      )
+      : { position: movement.position, verticalVelocity: 0, moved: false, grounded: true };
+    verticalVelocity = gravityResult.verticalVelocity;
+    const nextPosition = gravityResult.position;
+    const moved = movement.moved || gravityResult.moved;
+    if (moved) {
+      updateBindingPose({ position: nextPosition });
       publishPose();
     }
-    movementFrameId = window.requestAnimationFrame(movementFrame);
+    if (activeKeys.size > 0 || gravityNeeded(cameraBinding.value)) {
+      movementFrameId = window.requestAnimationFrame(movementFrame);
+    } else {
+      previousFrameTime = 0;
+      persistIfIdle();
+    }
   };
 
   const startMovementFrame = () => {
-    if (!isEnabled() || activeKeys.size === 0 || movementFrameId !== null) return;
+    if (!isEnabled() || (activeKeys.size === 0 && !gravityNeeded(cameraBinding.value)) || movementFrameId !== null) return;
     previousFrameTime = 0;
     movementFrameId = window.requestAnimationFrame(movementFrame);
   };
@@ -150,6 +200,7 @@ export function useStoryCameraControls({
     refreshToken += 1;
     activeKeys.clear();
     isLooking.value = false;
+    verticalVelocity = 0;
     cancelMovementFrame();
     if (persist && persistedPoseVersion < poseVersion) return persistPose();
     return Promise.resolve(false);
@@ -178,8 +229,12 @@ export function useStoryCameraControls({
     if (!code) return;
     activeKeys.delete(code);
     if (activeKeys.size === 0) {
-      cancelMovementFrame();
-      persistIfIdle();
+      if (unref(enableGravity) && gravityNeeded(cameraBinding.value)) {
+        startMovementFrame();
+      } else {
+        cancelMovementFrame();
+        persistIfIdle();
+      }
     }
   };
 
@@ -233,7 +288,20 @@ export function useStoryCameraControls({
   watch(
     () => Boolean(unref(enabled)),
     (controlsEnabled) => {
-      if (!controlsEnabled) void stop({ persist: true });
+      if (!controlsEnabled) {
+        void stop({ persist: true });
+        return;
+      }
+      if (unref(enableGravity) && gravityNeeded(cameraBinding.value)) startMovementFrame();
+    }
+  );
+
+  watch(
+    () => cameraBinding.value,
+    () => {
+      if (isEnabled() && unref(enableGravity) && gravityNeeded(cameraBinding.value)) {
+        startMovementFrame();
+      }
     }
   );
 

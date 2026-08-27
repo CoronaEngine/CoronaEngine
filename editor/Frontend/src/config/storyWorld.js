@@ -1,17 +1,24 @@
 export const STORY_WORLD_PLAN_ID = 'story-world-v1';
-export const STORY_WORLD_SCENE_VERSION = 4;
+export const STORY_WORLD_SCENE_VERSION = 5;
+export const STORY_WORLD_LAYOUT_REVISION = 2;
 export const STORY_WORLD_ACTOR_PREFIX = 'StoryWorld_';
 export const STORY_WORLD_LOCATION_TITLE = '云溪村';
 export const STORY_WORLD_LOCATION_OBJECTIVE = '探索村落';
 
 export const STORY_WORLD_SUN_DIRECTION = [1, 10, 1];
+export const STORY_WORLD_CAMERA_GROUND_OFFSET = 1.6;
+export const STORY_WORLD_CAMERA_SPAWN_XZ = Object.freeze([-42, -27]);
 export const STORY_WORLD_CAMERA_SPAWN = Object.freeze({
-  position: [-45, 9, -34],
-  forward: [0.737, -0.123, 0.667],
+  position: [
+    STORY_WORLD_CAMERA_SPAWN_XZ[0],
+    storyWorldTerrainHeight(...STORY_WORLD_CAMERA_SPAWN_XZ) + STORY_WORLD_CAMERA_GROUND_OFFSET,
+    STORY_WORLD_CAMERA_SPAWN_XZ[1],
+  ],
+  forward: [0.56, -0.16, 0.81],
   worldUp: [0, 1, 0],
   fov: 45,
 });
-export const STORY_WORLD_CAMERA_MIN_Y = 1.5;
+export const STORY_WORLD_CAMERA_MIN_Y = -1.3 + STORY_WORLD_CAMERA_GROUND_OFFSET;
 export const STORY_WORLD_CAMERA_MAX_Y = 80;
 export const STORY_WORLD_CAMERA_BOUNDS = Object.freeze({
   minY: STORY_WORLD_CAMERA_MIN_Y,
@@ -27,48 +34,28 @@ export const STORY_WORLD_DEPRECATED_ACTORS = Object.freeze([
 ]);
 
 export const STORY_WORLD_LAKE = Object.freeze({
-  center: Object.freeze([34, 18]),
-  radii: Object.freeze([22, 14]),
-  waterY: -1.15,
+  center: Object.freeze([38, 18]),
+  radii: Object.freeze([18, 12]),
+  waterY: -0.8,
 });
 
 export const STORY_WORLD_ROADS = Object.freeze([
   Object.freeze({
-    width: 4.3,
+    width: 4.2,
     points: Object.freeze([
-      [-38, -28],
-      [-31, -21],
-      [-23, -14],
-      [-15, -7],
-      [-8, 2],
-      [-7, 14],
-      [-6, 28],
+      [-42, -30], [-34, -24], [-26, -18], [-18, -10], [-10, -2], [-8, 8], [-8, 30],
     ].map((point) => Object.freeze(point))),
   }),
   Object.freeze({
     width: 3.6,
     points: Object.freeze([
-      [-8, 2],
-      [-1, 1],
-      [7, 1],
-      [14, 4],
-      [20, 8],
+      [-8, 4], [2, 5], [12, 9], [24, 14], [31, 16],
     ].map((point) => Object.freeze(point))),
   }),
   Object.freeze({
     width: 3.2,
     points: Object.freeze([
-      [-16, 15],
-      [-11, 15],
-      [-7, 14],
-    ].map((point) => Object.freeze(point))),
-  }),
-  Object.freeze({
-    width: 3.2,
-    points: Object.freeze([
-      [-7, 24],
-      [-3, 28],
-      [-1, 31],
+      [-8, 20], [0, 25], [8, 29],
     ].map((point) => Object.freeze(point))),
   }),
 ]);
@@ -78,23 +65,23 @@ export const STORY_WORLD_ROAD_PATHS = Object.freeze(
 );
 
 export const STORY_WORLD_ASSET_METADATA = Object.freeze({
-  'terrain_v4.obj': Object.freeze({ importScale: 120, sourceSize: [120, 16.402511, 120] }),
-  'water_v4.obj': Object.freeze({ importScale: 43.027531, sourceSize: [43.027531, 0.008, 27.209498] }),
-  'road_network_v4.obj': Object.freeze({ importScale: 61.038173, sourceSize: [59.52028, 3.783623, 61.038173] }),
-  'bridge_v4.obj': Object.freeze({ importScale: 12, sourceSize: [5.04, 2.65, 12] }),
-  'gate_v4.obj': Object.freeze({ importScale: 11.827528, sourceSize: [11.827528, 8.472384, 2.36] }),
-  'house_small_v4.obj': Object.freeze({ importScale: 10.844932, sourceSize: [10.844932, 8.031237, 9.36] }),
-  'house_large_v4.obj': Object.freeze({ importScale: 13.644932, sourceSize: [13.644932, 9.01614, 11.16] }),
-  'pavilion_v4.obj': Object.freeze({ importScale: 9.044984, sourceSize: [9.044984, 6.96, 9] }),
-  'tree_v4_a.obj': Object.freeze({ importScale: 8.860601, sourceSize: [6.097172, 8.860601, 4.418872] }),
-  'tree_v4_b.obj': Object.freeze({ importScale: 9.155378, sourceSize: [5.68297, 9.155378, 4.670034] }),
-  'rock_v4.obj': Object.freeze({ importScale: 3.460254, sourceSize: [3.460254, 3.205199, 3.060377] }),
-  'fence_v4.obj': Object.freeze({ importScale: 8.203424, sourceSize: [8.203424, 2.230118, 0.3] }),
-  'lantern_v4.obj': Object.freeze({ importScale: 4.2, sourceSize: [1.92, 4.2, 0.95] }),
-  'courtyard_v4.obj': Object.freeze({ importScale: 10, sourceSize: [10, 2.27, 7.64] }),
-  'barrels_v4.obj': Object.freeze({ importScale: 2.281324, sourceSize: [2.281324, 1.41853, 1.1] }),
-  'woodpile_v4.obj': Object.freeze({ importScale: 2.662435, sourceSize: [2.662435, 1.33995, 1.31904] }),
-  'reeds_v4.obj': Object.freeze({ importScale: 4.148509, sourceSize: [4.148509, 2.844571, 2.066766] }),
+  'terrain_v5.obj': Object.freeze({ importScale: 120, sourceSize: [120, 16.402511, 120] }),
+  'water_v5.obj': Object.freeze({ importScale: 43.027531, sourceSize: [43.027531, 0.008, 27.209498] }),
+  'road_network_v5.obj': Object.freeze({ importScale: 61.038173, sourceSize: [59.52028, 5.896842, 61.038173] }),
+  'bridge_v5.obj': Object.freeze({ importScale: 12, sourceSize: [5.04, 2.65, 12] }),
+  'gate_v5.obj': Object.freeze({ importScale: 11.827528, sourceSize: [11.827528, 8.472384, 2.36] }),
+  'house_small_v5.obj': Object.freeze({ importScale: 10.844932, sourceSize: [10.844932, 8.031237, 9.36] }),
+  'house_large_v5.obj': Object.freeze({ importScale: 13.644932, sourceSize: [13.644932, 9.01614, 11.16] }),
+  'pavilion_v5.obj': Object.freeze({ importScale: 9.044984, sourceSize: [9.044984, 6.96, 9] }),
+  'tree_v5_a.obj': Object.freeze({ importScale: 8.860601, sourceSize: [6.097172, 8.860601, 4.418872] }),
+  'tree_v5_b.obj': Object.freeze({ importScale: 9.155378, sourceSize: [5.68297, 9.155378, 4.670034] }),
+  'rock_v5.obj': Object.freeze({ importScale: 3.460254, sourceSize: [3.460254, 3.205199, 3.060377] }),
+  'fence_v5.obj': Object.freeze({ importScale: 8.203424, sourceSize: [8.203424, 2.230118, 0.3] }),
+  'lantern_v5.obj': Object.freeze({ importScale: 4.2, sourceSize: [1.92, 4.2, 0.95] }),
+  'courtyard_v5.obj': Object.freeze({ importScale: 10, sourceSize: [10, 2.27, 7.64] }),
+  'barrels_v5.obj': Object.freeze({ importScale: 2.281324, sourceSize: [2.281324, 1.41853, 1.1] }),
+  'woodpile_v5.obj': Object.freeze({ importScale: 2.662435, sourceSize: [2.662435, 1.33995, 1.31904] }),
+  'reeds_v5.obj': Object.freeze({ importScale: 4.148509, sourceSize: [4.148509, 2.844571, 2.066766] }),
 });
 
 export function storyWorldTerrainHeight(x, z) {
@@ -299,6 +286,8 @@ function storyActor(index, definition) {
     rotation: [0, 0, 0],
     scale: [1, 1, 1],
     footprint: null,
+    groundingOffset: 0,
+    groundingMode: 'terrain',
     physics: NO_PHYSICS,
     critical: false,
     phase: 'village',
@@ -318,61 +307,61 @@ function storyActor(index, definition) {
 
 const ground = (x, z, offset = 0) => storyWorldGroundPosition(x, z, offset);
 const actors = [
-  storyActor(1, { name: 'StoryWorld_Terrain', asset: 'terrain_v4.obj', semanticRole: 'terrain_ground', entityType: 'terrain', physics: STATIC_MESH_PHYSICS, critical: true, phase: 'terrain', footprint: [120, 120] }),
-  storyActor(2, { name: 'StoryWorld_YunxiLake', asset: 'water_v4.obj', position: [34, STORY_WORLD_LAKE.waterY, 18], semanticRole: 'water_lake', entityType: 'water', phase: 'water', footprint: [44, 28] }),
-  storyActor(100, { name: 'StoryWorld_RoadNetwork', asset: 'road_network_v4.obj', semanticRole: 'terrain_road', entityType: 'road', physics: STATIC_MESH_PHYSICS, phase: 'roads' }),
-  storyActor(8, { name: 'StoryWorld_WoodBridge', asset: 'bridge_v4.obj', position: ground(20, 8, -0.05), rotation: [0, 90, 0], semanticRole: 'landmark_bridge', entityType: 'bridge', physics: STATIC_MESH_PHYSICS, phase: 'roads', footprint: [12, 5.04] }),
-  storyActor(9, { name: 'StoryWorld_VillageGate', asset: 'gate_v4.obj', position: ground(-38, -28, -0.05), rotation: [0, -45, 0], semanticRole: 'landmark_gate', entityType: 'landmark', physics: STATIC_BOX_PHYSICS, footprint: [11.83, 2.36] }),
-  storyActor(10, { name: 'StoryWorld_LakesidePavilion', asset: 'pavilion_v4.obj', position: ground(16, 31, -0.04), rotation: [0, 12, 0], semanticRole: 'landmark_pavilion', entityType: 'landmark', physics: STATIC_BOX_PHYSICS, footprint: [9.05, 9] }),
-  storyActor(11, { name: 'StoryWorld_House_Liu', asset: 'house_large_v4.obj', position: ground(-28, 19, -0.05), rotation: [0, -90, 0], scale: [1.02, 1.02, 1.02], semanticRole: 'building_village_house', entityType: 'building', physics: STATIC_BOX_PHYSICS, footprint: [11.4, 13.92] }),
-  storyActor(12, { name: 'StoryWorld_House_Tea', asset: 'house_small_v4.obj', position: ground(5, 11, -0.05), rotation: [0, 90, 0], semanticRole: 'building_village_house', entityType: 'building', physics: STATIC_BOX_PHYSICS, footprint: [9.36, 10.85] }),
-  storyActor(13, { name: 'StoryWorld_House_Smith', asset: 'house_small_v4.obj', position: ground(-28, -4, -0.05), rotation: [0, -90, 0], scale: [0.96, 0.96, 0.96], semanticRole: 'building_village_house', entityType: 'building', physics: STATIC_BOX_PHYSICS, footprint: [8.99, 10.41] }),
-  storyActor(14, { name: 'StoryWorld_House_Healer', asset: 'house_large_v4.obj', position: ground(-28, 37, -0.05), rotation: [0, -90, 0], scale: [0.98, 0.98, 0.98], semanticRole: 'building_village_house', entityType: 'building', physics: STATIC_BOX_PHYSICS, footprint: [10.94, 13.37] }),
-  storyActor(15, { name: 'StoryWorld_House_East', asset: 'house_small_v4.obj', position: ground(5, -11, -0.05), rotation: [0, 180, 0], scale: [0.94, 0.94, 0.94], semanticRole: 'building_village_house', entityType: 'building', physics: STATIC_BOX_PHYSICS, footprint: [10.2, 8.8] }),
-  storyActor(16, { name: 'StoryWorld_House_North', asset: 'house_small_v4.obj', position: ground(-5, 39, -0.05), rotation: [0, 90, 0], scale: [0.92, 0.92, 0.92], semanticRole: 'building_village_house', entityType: 'building', physics: STATIC_BOX_PHYSICS, footprint: [8.62, 9.98] }),
-  storyActor(17, { name: 'StoryWorld_House_Fisher', asset: 'house_small_v4.obj', position: ground(8, 23, -0.05), rotation: [0, 0, 0], scale: [0.86, 0.86, 0.86], semanticRole: 'building_village_house', entityType: 'building', physics: STATIC_BOX_PHYSICS, footprint: [9.33, 8.05] }),
+  storyActor(1, { name: 'StoryWorld_Terrain', asset: 'terrain_v5.obj', semanticRole: 'terrain_ground', entityType: 'terrain', groundingMode: 'terrain', physics: STATIC_MESH_PHYSICS, critical: true, phase: 'terrain', footprint: [120, 120] }),
+  storyActor(2, { name: 'StoryWorld_YunxiLake', asset: 'water_v5.obj', position: [38, STORY_WORLD_LAKE.waterY, 18], semanticRole: 'water_lake', entityType: 'water', groundingMode: 'water', phase: 'water', footprint: [36, 24] }),
+  storyActor(100, { name: 'StoryWorld_RoadNetwork', asset: 'road_network_v5.obj', position: [0, 0, 0], semanticRole: 'terrain_road', entityType: 'road', groundingMode: 'road', groundingTargetHeight: -1.3, physics: STATIC_MESH_PHYSICS, phase: 'roads', footprint: [78, 64] }),
+  storyActor(8, { name: 'StoryWorld_WoodBridge', asset: 'bridge_v5.obj', position: ground(29, 16, -0.04), rotation: [0, 90, 0], semanticRole: 'landmark_bridge', entityType: 'bridge', physics: STATIC_MESH_PHYSICS, phase: 'roads', footprint: [12, 5.04] }),
+  storyActor(9, { name: 'StoryWorld_VillageGate', asset: 'gate_v5.obj', position: ground(-42, -30, -0.05), rotation: [0, -45, 0], semanticRole: 'landmark_gate', entityType: 'landmark', physics: STATIC_BOX_PHYSICS, phase: 'village', footprint: [11.83, 2.36] }),
+  storyActor(10, { name: 'StoryWorld_LakesidePavilion', asset: 'pavilion_v5.obj', position: ground(25, 32, -0.04), rotation: [0, 12, 0], semanticRole: 'landmark_pavilion', entityType: 'landmark', physics: STATIC_BOX_PHYSICS, phase: 'village', footprint: [9.05, 9] }),
+  storyActor(11, { name: 'StoryWorld_House_Liu', asset: 'house_large_v5.obj', position: ground(-28, 15, -0.05), rotation: [0, -90, 0], scale: [1.02, 1.02, 1.02], semanticRole: 'building_village_house', entityType: 'building', physics: STATIC_BOX_PHYSICS, groundingOffset: -0.04, footprint: [11.4, 13.92] }),
+  storyActor(12, { name: 'StoryWorld_House_Tea', asset: 'house_small_v5.obj', position: ground(-2, -10, -0.05), rotation: [0, 90, 0], semanticRole: 'building_village_house', entityType: 'building', physics: STATIC_BOX_PHYSICS, groundingOffset: -0.04, footprint: [9.36, 10.85] }),
+  storyActor(13, { name: 'StoryWorld_House_Smith', asset: 'house_small_v5.obj', position: ground(-29, -5, -0.05), rotation: [0, -90, 0], scale: [0.96, 0.96, 0.96], semanticRole: 'building_village_house', entityType: 'building', physics: STATIC_BOX_PHYSICS, groundingOffset: -0.04, footprint: [8.99, 10.41] }),
+  storyActor(14, { name: 'StoryWorld_House_Healer', asset: 'house_large_v5.obj', position: ground(-24, 32, -0.05), rotation: [0, -90, 0], scale: [0.98, 0.98, 0.98], semanticRole: 'building_village_house', entityType: 'building', physics: STATIC_BOX_PHYSICS, groundingOffset: -0.04, footprint: [10.94, 13.37] }),
+  storyActor(15, { name: 'StoryWorld_House_East', asset: 'house_small_v5.obj', position: ground(12, -6, -0.05), rotation: [0, 180, 0], scale: [0.94, 0.94, 0.94], semanticRole: 'building_village_house', entityType: 'building', physics: STATIC_BOX_PHYSICS, groundingOffset: -0.04, footprint: [10.2, 8.8] }),
+  storyActor(16, { name: 'StoryWorld_House_North', asset: 'house_small_v5.obj', position: ground(8, 37, -0.05), rotation: [0, 90, 0], scale: [0.92, 0.92, 0.92], semanticRole: 'building_village_house', entityType: 'building', physics: STATIC_BOX_PHYSICS, groundingOffset: -0.04, footprint: [8.62, 9.98] }),
+  storyActor(17, { name: 'StoryWorld_House_Fisher', asset: 'house_small_v5.obj', position: ground(8, 18, -0.05), rotation: [0, 0, 0], scale: [0.86, 0.86, 0.86], semanticRole: 'building_village_house', entityType: 'building', physics: STATIC_BOX_PHYSICS, groundingOffset: -0.04, footprint: [9.33, 8.05] }),
 ];
 
 const treePositions = [
-  [-50, -10, 0.92], [-47, 8, 1.08], [-42, 32, 1], [-40, 48, 0.88], [-16, 50, 1.04], [8, 46, 0.9],
-  [28, 43, 1.08], [47, 39, 1.12], [58, 4, 1], [52, -7, 0.94], [40, -26, 1.1], [23, -38, 0.88],
-  [2, -44, 1.05], [-18, -43, 0.94], [-38, -41, 1.12], [-52, -29, 1], [20, -24, 0.82], [-8, -31, 0.86],
+  [-51, -15, 0.92], [-50, 4, 1.08], [-45, 26, 1], [-40, 48, 0.88], [-18, 50, 1.04], [4, 50, 0.9],
+  [28, 49, 1.08], [54, 42, 1.12], [57, 2, 1], [55, -14, 0.94], [45, -35, 1.1], [20, -46, 0.88],
+  [-2, -47, 1.05], [-24, -45, 0.94], [-43, -42, 1.12], [-54, -30, 1], [25, -28, 0.82], [-8, -34, 0.86],
 ];
 for (let offset = 0; offset < treePositions.length; offset += 1) {
   const [x, z, scale] = treePositions[offset];
-  actors.push(storyActor(18 + offset, { name: `StoryWorld_Tree_${String(offset + 1).padStart(2, '0')}`, asset: offset % 2 === 0 ? 'tree_v4_a.obj' : 'tree_v4_b.obj', position: ground(x, z), rotation: [0, (offset * 67 + 19) % 360, 0], scale: [scale, scale, scale], semanticRole: 'vegetation_tree', entityType: 'vegetation', phase: 'decorations', footprint: [5.6 * scale, 4.5 * scale] }));
+  actors.push(storyActor(18 + offset, { name: `StoryWorld_Tree_${String(offset + 1).padStart(2, '0')}`, asset: offset % 2 === 0 ? 'tree_v5_a.obj' : 'tree_v5_b.obj', position: ground(x, z), rotation: [0, (offset * 67 + 19) % 360, 0], scale: [scale, scale, scale], semanticRole: 'vegetation_tree', entityType: 'vegetation', phase: 'decorations', footprint: [5.6 * scale, 4.5 * scale] }));
 }
 
-const rockPositions = [[-52, 20, 1.35], [-31, 43, 1], [47, 33, 1.42], [52, -27, 1.2], [28, -45, 1.08], [-48, -34, 0.92]];
+const rockPositions = [[-51, 22, 1.35], [-33, 45, 1], [52, 32, 1.42], [53, -28, 1.2], [32, -46, 1.08], [-49, -37, 0.92]];
 for (let offset = 0; offset < rockPositions.length; offset += 1) {
   const [x, z, scale] = rockPositions[offset];
-  actors.push(storyActor(36 + offset, { name: `StoryWorld_Rock_${String(offset + 1).padStart(2, '0')}`, asset: 'rock_v4.obj', position: ground(x, z, -0.02), rotation: [0, (offset * 53 + 11) % 360, 0], scale: [scale, scale, scale], semanticRole: 'terrain_rock', entityType: 'decoration', phase: 'decorations', footprint: [3.5 * scale, 3.1 * scale] }));
+  actors.push(storyActor(36 + offset, { name: `StoryWorld_Rock_${String(offset + 1).padStart(2, '0')}`, asset: 'rock_v5.obj', position: ground(x, z, -0.02), rotation: [0, (offset * 53 + 11) % 360, 0], scale: [scale, scale, scale], semanticRole: 'terrain_rock', entityType: 'decoration', phase: 'decorations', footprint: [3.5 * scale, 3.1 * scale] }));
 }
 
-const fencePositions = [[-15, 15, 90], [-19, 22, 0], [-15, -3, 90], [9, -9, 90], [1, 36, 0], [11, 25, 0]];
+const fencePositions = [[-36, -1, 0], [-35, 19, 0], [-17, -1, 90], [3, 1, 90], [-14, 39, 0], [18, 28, 90]];
 for (let offset = 0; offset < fencePositions.length; offset += 1) {
   const [x, z, rotationY] = fencePositions[offset];
-  actors.push(storyActor(42 + offset, { name: `StoryWorld_Fence_${String(offset + 1).padStart(2, '0')}`, asset: 'fence_v4.obj', position: ground(x, z, -0.02), rotation: [0, rotationY, 0], semanticRole: 'building_fence', entityType: 'decoration', phase: 'decorations', footprint: rotationY === 90 ? [0.3, 8.2] : [8.2, 0.3] }));
+  actors.push(storyActor(42 + offset, { name: `StoryWorld_Fence_${String(offset + 1).padStart(2, '0')}`, asset: 'fence_v5.obj', position: ground(x, z, -0.02), rotation: [0, rotationY, 0], semanticRole: 'building_fence', entityType: 'decoration', phase: 'decorations', footprint: rotationY === 90 ? [0.3, 8.2] : [8.2, 0.3] }));
 }
 
-const lanternPositions = [[-34.5, -24.5, -45], [-18.5, -10.5, -45], [-10, 6, -15], [12, 10.5, 90]];
+const lanternPositions = [[-37, -25, -45], [-22, -13, -45], [-9, 6, -15], [10, 10, 90]];
 for (let offset = 0; offset < lanternPositions.length; offset += 1) {
   const [x, z, rotationY] = lanternPositions[offset];
-  actors.push(storyActor(48 + offset, { name: `StoryWorld_Lantern_${String(offset + 1).padStart(2, '0')}`, asset: 'lantern_v4.obj', position: ground(x, z), rotation: [0, rotationY, 0], semanticRole: 'landmark_lantern', entityType: 'decoration', phase: 'decorations', footprint: [1.92, 0.95] }));
+  actors.push(storyActor(48 + offset, { name: `StoryWorld_Lantern_${String(offset + 1).padStart(2, '0')}`, asset: 'lantern_v5.obj', position: ground(x, z), rotation: [0, rotationY, 0], semanticRole: 'landmark_lantern', entityType: 'decoration', phase: 'decorations', footprint: [1.92, 0.95] }));
 }
 
 const details = [
-  [52, 'StoryWorld_Courtyard_Liu', 'courtyard_v4.obj', -18.5, 19, -90, 0.96, 'building_courtyard', [7.34, 9.6]],
-  [53, 'StoryWorld_Courtyard_Healer', 'courtyard_v4.obj', -18.5, 37, -90, 0.92, 'building_courtyard', [7.03, 9.2]],
-  [54, 'StoryWorld_Barrels_Tea', 'barrels_v4.obj', -1.8, 8, 15, 0.92, 'decoration_village_prop', [2.1, 1.1]],
-  [55, 'StoryWorld_Barrels_Fisher', 'barrels_v4.obj', 11.5, 18, -10, 0.86, 'decoration_village_prop', [2, 1]],
-  [56, 'StoryWorld_Woodpile_Smith', 'woodpile_v4.obj', -16.5, -4.5, 90, 1, 'decoration_village_prop', [2.7, 1.4]],
-  [57, 'StoryWorld_Woodpile_North', 'woodpile_v4.obj', 1.8, 35.8, -10, 0.88, 'decoration_village_prop', [2.4, 1.25]],
-  [58, 'StoryWorld_Reeds_West', 'reeds_v4.obj', 17.5, 14, 12, 1, 'vegetation_reeds', [4.15, 2.1], STORY_WORLD_LAKE.waterY + 0.01],
-  [59, 'StoryWorld_Reeds_East', 'reeds_v4.obj', 49, 22, -20, 0.9, 'vegetation_reeds', [3.75, 1.9], STORY_WORLD_LAKE.waterY + 0.01],
+  [52, 'StoryWorld_Courtyard_Liu', 'courtyard_v5.obj', -18, 15, -90, 0.86, 'building_courtyard', [7.34, 9.6]],
+  [53, 'StoryWorld_Courtyard_Healer', 'courtyard_v5.obj', -15, 32, -90, 0.84, 'building_courtyard', [7.03, 9.2]],
+  [54, 'StoryWorld_Barrels_Tea', 'barrels_v5.obj', -3.5, -1, 15, 0.8, 'decoration_village_prop', [2.1, 1.1]],
+  [55, 'StoryWorld_Barrels_Fisher', 'barrels_v5.obj', 18, 20, -10, 0.78, 'decoration_village_prop', [2, 1]],
+  [56, 'StoryWorld_Woodpile_Smith', 'woodpile_v5.obj', -23, -10, 90, 0.8, 'decoration_village_prop', [2.7, 1.4]],
+  [57, 'StoryWorld_Woodpile_North', 'woodpile_v5.obj', 13, 39, -10, 0.76, 'decoration_village_prop', [2.4, 1.25]],
+  [58, 'StoryWorld_Reeds_West', 'reeds_v5.obj', 24, 13, 12, 0.8, 'vegetation_reeds', [4.15, 2.1], STORY_WORLD_LAKE.waterY + 0.01],
+  [59, 'StoryWorld_Reeds_East', 'reeds_v5.obj', 52, 20, -20, 0.72, 'vegetation_reeds', [3.75, 1.9], STORY_WORLD_LAKE.waterY + 0.01],
 ];
 for (const [index, name, asset, x, z, rotationY, scale, semanticRole, footprint, explicitY] of details) {
-  actors.push(storyActor(index, { name, asset, position: [x, Number.isFinite(explicitY) ? explicitY : storyWorldTerrainHeight(x, z) - 0.02, z], rotation: [0, rotationY, 0], scale: [scale, scale, scale], semanticRole, entityType: 'decoration', phase: 'decorations', footprint }));
+  actors.push(storyActor(index, { name, asset, position: [x, Number.isFinite(explicitY) ? explicitY : storyWorldTerrainHeight(x, z) - 0.02, z], rotation: [0, rotationY, 0], scale: [scale, scale, scale], semanticRole, entityType: 'decoration', groundingMode: Number.isFinite(explicitY) ? 'water' : 'terrain', phase: 'decorations', footprint }));
 }
 
 export const STORY_WORLD_ACTORS = Object.freeze(actors);
@@ -390,6 +379,7 @@ export function createStoryWorldActorData(definition) {
     entity_type: definition.entityType,
     source_plan_id: STORY_WORLD_PLAN_ID,
     source_scene_version: STORY_WORLD_SCENE_VERSION,
+    source_layout_revision: STORY_WORLD_LAYOUT_REVISION,
     skip_if_exists: true,
     update_if_exists: false,
     physics_enabled: false,

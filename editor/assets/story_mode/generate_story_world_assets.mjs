@@ -946,6 +946,40 @@ const v4Mtl = Object.entries(v4Materials)
   .join("\n\n");
 fs.writeFileSync(path.join(outputDir, v4MtlName), `${v4Mtl}\n`, "utf8");
 
+// v5 intentionally has its own material-library name so the engine cannot reuse
+// a cached v4 import.  Keep the palette deterministic and local to this asset
+// generator; the v5 OBJ files use the same texture set with a less saturated,
+// more grounded surface response.
+const v5MtlName = "story_world_v5.mtl";
+const v5Materials = {
+  ...v4Materials,
+  grass: [[0.22, 0.31, 0.15], "grass", 6],
+  grass_light: [[0.28, 0.37, 0.18], "grass", 6],
+  highland: [[0.25, 0.29, 0.18], "grass", 6],
+  earth: [[0.35, 0.24, 0.14], "dirt", 6],
+  rock: [[0.34, 0.35, 0.33], "rock", 12],
+};
+const v5Mtl = Object.entries(v5Materials)
+  .map(([name, [c, tex, ns = 12, opacity = 1]]) => {
+    const lines = [
+      `newmtl ${name}`,
+      `Ka ${c.map((v) => (v * 0.24).toFixed(3)).join(" ")}`,
+      `Kd ${c.map((v) => v.toFixed(3)).join(" ")}`,
+      "Ks 0.050 0.050 0.050",
+      `Ns ${ns.toFixed(3)}`,
+      `d ${opacity.toFixed(3)}`,
+      "illum 2",
+    ];
+    if (tex)
+      lines.push(
+        `map_Kd textures/${tex}_diffuse.png`,
+        `map_Bump -bm 0.72 textures/${tex}_normal.png`,
+      );
+    return lines.join("\n");
+  })
+  .join("\n\n");
+fs.writeFileSync(path.join(outputDir, v5MtlName), `${v5Mtl}\n`, "utf8");
+
 function terrainMaterialV4(x, z) {
   const h = terrainHeight(x, z);
   const slope = 1 - terrainNormal(x, z, 0.6)[1];
@@ -1000,6 +1034,44 @@ function terrainMaterialV4(x, z) {
   b.write("terrain_v4.obj", v4MtlName, 4);
 }
 
+// Keep the richer checked-in v5 asset stable during ordinary v3/v4 regeneration.
+// Set GENERATE_STORY_WORLD_V5=1 when a clean deterministic v5 rebuild is desired.
+if (process.env.GENERATE_STORY_WORLD_V5 === "1" && !fs.existsSync(path.join(outputDir, "terrain_v5.obj"))) {
+  const b = new ObjBuilder("StoryWorld_Terrain_v5"),
+    size = 120,
+    cells = 84,
+    step = size / cells,
+    p = [],
+    n = [];
+  for (let iz = 0; iz <= cells; iz++) {
+    const row = [], normals = [];
+    for (let ix = 0; ix <= cells; ix++) {
+      const x = -60 + ix * step;
+      const z = -60 + iz * step;
+      row.push([x, terrainHeight(x, z), z]);
+      normals.push(terrainNormal(x, z));
+    }
+    p.push(row);
+    n.push(normals);
+  }
+  for (let iz = 0; iz < cells; iz++)
+    for (let ix = 0; ix < cells; ix++) {
+      const cx = -60 + (ix + 0.5) * step;
+      const cz = -60 + (iz + 0.5) * step;
+      const u0 = (ix / cells) * 9;
+      const u1 = ((ix + 1) / cells) * 9;
+      const v0 = (iz / cells) * 9;
+      const v1 = ((iz + 1) / cells) * 9;
+      b.quad(
+        p[iz][ix], p[iz + 1][ix], p[iz + 1][ix + 1], p[iz][ix + 1],
+        terrainMaterialV5(cx, cz),
+        [[u0, v0], [u0, v1], [u1, v1], [u1, v0]],
+        [n[iz][ix], n[iz + 1][ix], n[iz + 1][ix + 1], n[iz][ix + 1]],
+      );
+    }
+  b.write("terrain_v5.obj", v5MtlName, 5);
+}
+
 {
   const b = new ObjBuilder("StoryWorld_YunxiLake_v4"),
     segments = 72,
@@ -1017,6 +1089,19 @@ function terrainMaterialV4(x, z) {
     b.quad(inner[i], outer[i], outer[i + 1], inner[i + 1], "shallows", null, [[0, 1, 0], [0, 1, 0], [0, 1, 0], [0, 1, 0]]);
   }
   b.write("water_v4.obj", v4MtlName, 4);
+}
+
+function terrainMaterialV5(x, z) {
+  const h = terrainHeight(x, z);
+  const slope = 1 - terrainNormal(x, z, 0.6)[1];
+  const broadNoise =
+    Math.sin(x * 0.071 + z * 0.043) * 0.55 +
+    Math.cos(z * 0.058 - x * 0.031) * 0.35 +
+    Math.sin((x - z) * 0.024) * 0.28;
+  if (slope > 0.28 || h > 7.2) return "rock";
+  if (h < -0.55 || broadNoise < -0.72) return "earth";
+  if (h > 3.8) return "highland";
+  return broadNoise > 0.56 ? "grass_light" : "grass";
 }
 
 function resamplePath(points, spacing = 1.5) {
@@ -1101,6 +1186,6 @@ for (const stem of [
 
 const assets = fs
   .readdirSync(outputDir)
-  .filter((name) => /_v[34]/.test(name) && name.endsWith(".obj"))
+  .filter((name) => /_v[345]/.test(name) && name.endsWith(".obj"))
   .sort();
-console.log(`Generated ${assets.length} Story World v3/v4 assets in ${outputDir}`);
+console.log(`Generated ${assets.length} Story World v3/v4/v5 assets in ${outputDir}`);
