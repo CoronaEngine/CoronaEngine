@@ -250,3 +250,33 @@ export function inventoryOccupiedSlotCount(slots) {
 export function inventoryTotalItemCount(slots) {
   return normalizeInventorySlots(slots).reduce((total, slot) => total + (slot?.quantity || 0), 0);
 }
+
+export function inventoryItemQuantity(slots, itemId) {
+  const id = String(itemId || '').trim();
+  return normalizeInventorySlots(slots).reduce(
+    (total, slot) => total + (slot?.itemId === id ? slot.quantity : 0),
+    0,
+  );
+}
+
+export function applyInventoryTransaction(sourceSlots, transaction = {}, catalog = STORY_ITEM_CATALOG) {
+  let slots = normalizeInventorySlots(sourceSlots);
+  const removals = Array.isArray(transaction.remove) ? transaction.remove : [];
+  const additions = Array.isArray(transaction.add) ? transaction.add : [];
+  for (const entry of removals) {
+    const quantity = Math.max(0, Math.trunc(Number(entry?.quantity) || 0));
+    if (inventoryItemQuantity(slots, entry?.itemId) < quantity) {
+      return { success: false, reason: 'missing-items', itemId: String(entry?.itemId || ''), slots: normalizeInventorySlots(sourceSlots) };
+    }
+    const result = removeItemFromInventory(slots, entry?.itemId, quantity);
+    slots = result.slots;
+  }
+  for (const entry of additions) {
+    const result = addItemToInventory(slots, entry?.itemId, entry?.quantity, catalog);
+    if (result.remaining > 0) {
+      return { success: false, reason: 'inventory-full', itemId: String(entry?.itemId || ''), remaining: result.remaining, slots: normalizeInventorySlots(sourceSlots) };
+    }
+    slots = result.slots;
+  }
+  return { success: true, slots };
+}

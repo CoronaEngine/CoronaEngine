@@ -736,6 +736,7 @@ const editorApiStatic = {
     onInit: (projectPath = '') =>
       call_manifest_editor_api('main.onInit', projectPath ? [projectPath] : []),
     createScene: (sceneName) => call_manifest_editor_api('main.createScene', [sceneName]),
+    removeScene: (sceneName) => call_manifest_editor_api('main.removeScene', [sceneName]),
     runProject: (scenePath = '') =>
       call_manifest_editor_api('main.runProject', scenePath ? [scenePath] : []),
     sceneSave: (sceneName) => call_manifest_editor_api('main.sceneSave', [sceneName]),
@@ -775,3 +776,4 @@ export const editorApi = create_dynamic_editor_api_namespace('', editorApiStatic
 // LANChat 主事件由 C++ Editor API registry 定义为 LANChat.event。
 
 // End of manifest-backed editor API definitions.
+

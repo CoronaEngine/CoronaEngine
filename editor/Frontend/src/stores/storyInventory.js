@@ -5,6 +5,8 @@ import {
   STORY_INVENTORY_VERSION,
   STORY_ITEM_CATALOG,
   addItemToInventory,
+  applyInventoryTransaction,
+  inventoryItemQuantity,
   getStoryItemDefinition,
   inventoryOccupiedSlotCount,
   inventoryTotalItemCount,
@@ -121,6 +123,20 @@ export const useStoryInventoryStore = defineStore('storyInventory', {
       return true;
     },
 
+    itemQuantity(itemId) {
+      return inventoryItemQuantity(this.slots, itemId);
+    },
+
+    transact(transaction, { notify = true } = {}) {
+      const result = applyInventoryTransaction(this.slots, transaction, STORY_ITEM_CATALOG);
+      if (!result.success) {
+        if (notify) this.notify(result.reason === 'inventory-full' ? '背包空间不足，操作已取消。' : '所需道具不足。', 'warning');
+        return result;
+      }
+      this.slots = result.slots;
+      if (!this.persist()) return { success: false, reason: 'persist-failed' };
+      return result;
+    },
     addItem(itemId, quantity = 1) {
       const result = addItemToInventory(this.slots, itemId, quantity, STORY_ITEM_CATALOG);
       this.slots = result.slots;
@@ -213,3 +229,4 @@ export const useStoryInventoryStore = defineStore('storyInventory', {
     },
   },
 });
+
