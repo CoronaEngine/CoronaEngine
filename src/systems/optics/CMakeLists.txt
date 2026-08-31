@@ -268,7 +268,7 @@ if(BUILD_CORONA_TESTING OR BUILD_TESTING)
             ${PROJECT_SOURCE_DIR}/include
             ${CMAKE_CURRENT_SOURCE_DIR}
     )
-    target_link_libraries(corona_shadow_culling_tests PRIVATE Horizon)
+    target_link_libraries(corona_shadow_culling_tests PRIVATE Horizon corona::resource::manager)
     add_test(NAME ShadowCullingTests
              COMMAND corona_shadow_culling_tests)
 

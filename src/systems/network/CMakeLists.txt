@@ -14,6 +14,7 @@ corona_add_system(network
         Horizon
         enet
         nlohmann_json
+        corona::resource::manager
 )
 
 if(WIN32)
@@ -60,6 +61,7 @@ if(BUILD_CORONA_TESTING OR BUILD_TESTING)
     target_link_libraries(corona_network_protocol_tests
         PRIVATE
             corona::system::network
+            corona::resource::manager
     )
 
     add_test(NAME NetworkProtocolTests COMMAND corona_network_protocol_tests)

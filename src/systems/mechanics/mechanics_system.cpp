@@ -1021,7 +1021,7 @@ void MechanicsSystem::update_physics(float fixed_dt) {
                     impl_->deferred_collision_callbacks.push_back({std::move(cb), actor_a, false, zero_normal, zero_point});
                 }
             }
-        }w
+        }
         // 更新上一帧碰撞对
         impl_->prev_active_collisions.swap(curr_active_collisions);
     } else {

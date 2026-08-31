@@ -175,7 +175,7 @@ if(BUILD_CORONA_TESTING OR BUILD_TESTING)
                 ${CMAKE_CURRENT_SOURCE_DIR}
     )
     target_link_libraries(corona_collaborative_editor_loopback_tests
-        PRIVATE corona_ui_system
+        PRIVATE corona_ui_system corona::resource::manager
     )
     if(COMMAND helicon_install_runtime_deps)
         helicon_install_runtime_deps(corona_collaborative_editor_loopback_tests)
@@ -279,7 +279,7 @@ if(BUILD_CORONA_TESTING OR BUILD_TESTING)
     target_include_directories(corona_viewport_gizmo_state_tests
         PRIVATE ${PROJECT_SOURCE_DIR}/include
     )
-    target_link_libraries(corona_viewport_gizmo_state_tests PRIVATE Horizon)
+    target_link_libraries(corona_viewport_gizmo_state_tests PRIVATE Horizon corona::resource::manager)
     add_test(NAME ViewportGizmoStateTests
              COMMAND corona_viewport_gizmo_state_tests)
 
@@ -292,7 +292,7 @@ if(BUILD_CORONA_TESTING OR BUILD_TESTING)
                 ${CMAKE_CURRENT_SOURCE_DIR}
     )
     target_link_libraries(corona_ui_multisurface_smoke
-        PRIVATE corona_ui_system corona_display_system corona_script_system
+        PRIVATE corona_ui_system corona_display_system corona_script_system corona::resource::manager
     )
     if(COMMAND helicon_install_runtime_deps)
         helicon_install_runtime_deps(corona_ui_multisurface_smoke)
