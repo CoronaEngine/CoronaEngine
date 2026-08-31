@@ -494,7 +494,10 @@ inline void extract_bone_weights(const aiMesh* ai_mesh,
 }
 
 /// 递归复刻 aiNode 树到扁平 BoneNode 数组，返回新建节点的下标。
-inline int read_skeleton_hierarchy(const aiNode* ai_node, SkeletonData& skeleton) {
+/// parent_index 为父节点在 skeleton.nodes 中的下标（根节点传 -1），
+/// 供 IK 沿链从末端上溯到根使用。
+inline int read_skeleton_hierarchy(const aiNode* ai_node, SkeletonData& skeleton,
+                                   int parent_index = -1) {
     int index = static_cast<int>(skeleton.nodes.size());
     skeleton.nodes.emplace_back();
     // 注意：先 emplace 再递归子节点，递归会让 vector 重新分配，
@@ -503,12 +506,13 @@ inline int read_skeleton_hierarchy(const aiNode* ai_node, SkeletonData& skeleton
         BoneNode& node = skeleton.nodes[index];
         node.name = ai_node->mName.C_Str();
         node.local = ai_to_mat4_colmajor(ai_node->mTransformation);
+        node.parent = parent_index;
     }
 
     std::vector<int> child_indices;
     child_indices.reserve(ai_node->mNumChildren);
     for (unsigned int i = 0; i < ai_node->mNumChildren; ++i) {
-        child_indices.push_back(read_skeleton_hierarchy(ai_node->mChildren[i], skeleton));
+        child_indices.push_back(read_skeleton_hierarchy(ai_node->mChildren[i], skeleton, index));
     }
     skeleton.nodes[index].children = std::move(child_indices);
     return index;

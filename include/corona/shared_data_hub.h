@@ -1,7 +1,9 @@
 #pragma once
 #include <corona/kernel/utils/storage.h>
 #include <corona/memory/gpu_mem_ledger.h>
+#include <corona/resource/types/scene.h>  // Resource::IkChain（GeometryDevice::ik_chains）
 #include <corona/systems/optics/viewport_gizmo_math.h>
+
 #include <ktm/ktm.h>
 
 #include <array>
@@ -126,6 +128,12 @@ struct GeometryDevice {
     bool skinned_aabb_valid{false};
     ktm::fvec3 skinned_aabb_min{0.0f, 0.0f, 0.0f};
     ktm::fvec3 skinned_aabb_max{0.0f, 0.0f, 0.0f};
+
+    // ---- IK（CCD）----
+    // 该蒙皮实例上的 IK 链集合。update_skinned_geometry 每帧在 compute_pose 之后、
+    // 蒙皮之前对 enabled 的链跑 solve_ccd，产出的 local override 注入下一次 compute_pose，
+    // 叠加在动画姿态之上。非蒙皮 / 无 IK 需求时为空，零开销。
+    std::vector<Resource::IkChain> ik_chains;
 };
 
 enum class CollisionShape : std::uint8_t {
