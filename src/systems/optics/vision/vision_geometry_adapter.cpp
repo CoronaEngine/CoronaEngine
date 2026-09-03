@@ -100,10 +100,12 @@ struct CpuMeshData {
     }
 
     out_mesh.vertices.resize(static_cast<std::size_t>(vertex_bytes / vertex_stride));
-    if (!vertex_buffer->read_bytes(std::as_writable_bytes(std::span(out_mesh.vertices)))) {
+    void* vertex_data = vertex_buffer->get_mapped_data();
+    if (!vertex_data) {
         out_mesh.vertices.clear();
         return false;
     }
+    std::memcpy(out_mesh.vertices.data(), vertex_data, vertex_bytes);
 
     Corona::Horizon::HardwareBuffer const* index_buffer = &mesh_dev.indexBuffer;
     if (!(*index_buffer) || index_buffer->get_element_count() == 0) {
@@ -122,10 +124,12 @@ struct CpuMeshData {
     }
 
     std::vector<uint8_t> index_data(index_bytes);
-    if (!index_buffer->read_bytes(std::as_writable_bytes(std::span(index_data)))) {
+    void* index_data_ptr = index_buffer->get_mapped_data();
+    if (!index_data_ptr) {
         out_mesh.vertices.clear();
         return false;
     }
+    std::memcpy(index_data.data(), index_data_ptr, index_bytes);
 
     out_mesh.indices.clear();
     out_mesh.indices.reserve(static_cast<std::size_t>(index_bytes / element_size));

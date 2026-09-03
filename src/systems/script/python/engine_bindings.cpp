@@ -1,4 +1,3 @@
-#include <corona/kernel/core/callback_sink.h>
 #include <corona/kernel/core/i_logger.h>
 #include <corona/engine/engine_runtime_api.h>
 #include <corona/systems/script/engine_scripts.h>
@@ -534,15 +533,19 @@ void BindAll(nanobind::module_& m) {
     // ============================================================================
     // Logger: 日志前端转发接口
     // ============================================================================
-    nb::class_<Corona::Kernel::LogEntry>(m, "LogEntry")
-        .def_ro("level", &Corona::Kernel::LogEntry::level,
-                "Log level string: TRACE/DEBUG/INFO/WARNING/ERROR/CRITICAL")
-        .def_ro("message", &Corona::Kernel::LogEntry::message,
-                "Formatted log message")
-        .def_ro("timestamp", &Corona::Kernel::LogEntry::timestamp,
-                "Timestamp in nanoseconds since epoch");
+    // NOTE: LogEntry 和 drain_logs() 已在新版 Horizon 中移除
+    // 新版日志系统基于 Quill，采用完全异步架构，不再支持同步日志队列拉取
+    // Python 端如需查看日志，应直接读取日志文件或使用 Quill 的回调机制
 
-    m.def("drain_logs", []() -> std::vector<Corona::Kernel::LogEntry> { return Corona::Kernel::CoronaLogger::drain_logs(); }, "Drain all pending log entries from the engine log queue");
+    // nb::class_<Corona::Kernel::LogEntry>(m, "LogEntry")
+    //     .def_ro("level", &Corona::Kernel::LogEntry::level,
+    //             "Log level string: TRACE/DEBUG/INFO/WARNING/ERROR/CRITICAL")
+    //     .def_ro("message", &Corona::Kernel::LogEntry::message,
+    //             "Formatted log message")
+    //     .def_ro("timestamp", &Corona::Kernel::LogEntry::timestamp,
+    //             "Timestamp in nanoseconds since epoch");
+
+    // m.def("drain_logs", []() -> std::vector<Corona::Kernel::LogEntry> { return Corona::Kernel::CoronaLogger::drain_logs(); }, "Drain all pending log entries from the engine log queue");
 
     m.def("send_log", [](const std::string& level, const std::string& message) {
               const auto is_optional_tool_config_error = [&message]() {

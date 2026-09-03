@@ -66,7 +66,7 @@ bool VisionZeroCopyBridge::ensure(::vision::Pipeline& pipeline, uint32_t width, 
 
         auto desc = Corona::Horizon::HardwareBufferDesc::typed<float>(
             pixel_count * 4u,
-            Corona::Horizon::BufferUsageFlags::Storage,
+            Corona::Horizon::BufferUsage_Storage,
             "VisionZeroCopyBridge::imported");
         desc.dedicated = true;
 

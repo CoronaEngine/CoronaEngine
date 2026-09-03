@@ -24,7 +24,7 @@ void drain_vision_interop_submissions(ReceiptMap& receipts,
                                       WaitFn&& wait,
                                       ReleaseFn&& release_resources) {
     for (const auto& [camera_handle, receipt] : receipts) {
-        if (!receipt.empty()) {
+        if (receipt.serial != 0) {
             std::invoke(wait, camera_handle, receipt);
         }
     }

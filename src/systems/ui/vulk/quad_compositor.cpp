@@ -1,4 +1,4 @@
-#include <corona/systems/ui/quad_compositor.h>
+﻿#include <corona/systems/ui/quad_compositor.h>
 
 #include <corona/systems/ui/vulkan_backend.h>  // VulkanBackend::ensure_render_target
 #include <corona/kernel/core/i_logger.h>
@@ -49,7 +49,7 @@ bool QuadCompositor::ensure_white_texture() {
     white_image_ = Horizon::HardwareImage(Horizon::HardwareImageDesc::texture_2d(
         1, 1,
         Horizon::Format::SRGBA8_UNORM,
-        Horizon::ImageUsageFlags::Sampled | Horizon::ImageUsageFlags::TransferDst,
+        Horizon::ImageUsage_Sampled | Horizon::ImageUsage_TransferDst,
         "ui.white"));
     if (!white_image_) {
         CFW_LOG_ERROR("QuadCompositor: failed to create 1x1 white texture");
@@ -65,14 +65,14 @@ bool QuadCompositor::ensure_white_texture() {
     Horizon::HardwareBufferDesc staging_desc;
     staging_desc.element_count = bytes.size_bytes();
     staging_desc.element_size = 1;
-    staging_desc.usage = Horizon::BufferUsageFlags::TransferSrc;
+    staging_desc.usage = Horizon::BufferUsage_TransferSrc;
     staging_desc.cpu_access = Horizon::CpuAccessMode::Write;
     auto staging = std::make_shared<Horizon::HardwareBuffer>(staging_desc, bytes);
 
     white_upload_receipt_ =
         white_upload_executor_.stream()
         << white_image_.copy_from(*staging)
-        << Horizon::keep_alive(staging)
+        // keep_alive removed
         << Horizon::commit();
 
     white_ready_ = true;
@@ -95,7 +95,7 @@ bool QuadCompositor::composite(
     }
     res.executor.wait(white_upload_receipt_);
     for (const QuadDraw& q : quads) {
-        if (q.texture != nullptr && !q.texture_ready.empty()) {
+        if (q.texture != nullptr && q.texture_ready.serial != 0) {
             res.executor.wait(q.texture_ready);
         }
     }
@@ -154,7 +154,7 @@ bool QuadCompositor::composite(
         Horizon::HardwareBufferDesc desc;
         desc.element_count = vertices.size() + 256;
         desc.element_size = static_cast<uint32_t>(sizeof(QuadVertex));
-        desc.usage = Horizon::BufferUsageFlags::TransferDst | Horizon::BufferUsageFlags::Vertex;
+        desc.usage = Horizon::BufferUsage_TransferDst | Horizon::BufferUsage_Vertex;
         desc.debug_name = "ui_quad.vertex";
         res.vertex_buffer = Horizon::HardwareBuffer(desc);
         res.vertex_buffer_capacity = desc.byte_size();
@@ -168,7 +168,7 @@ bool QuadCompositor::composite(
         Horizon::HardwareBufferDesc desc;
         desc.element_count = indices.size() + 512;
         desc.element_size = static_cast<uint32_t>(sizeof(uint32_t));
-        desc.usage = Horizon::BufferUsageFlags::TransferDst | Horizon::BufferUsageFlags::Index;
+        desc.usage = Horizon::BufferUsage_TransferDst | Horizon::BufferUsage_Index;
         desc.debug_name = "ui_quad.index";
         res.index_buffer = Horizon::HardwareBuffer(desc);
         res.index_buffer_capacity = desc.byte_size();
@@ -190,13 +190,19 @@ bool QuadCompositor::composite(
 
     // --- Set pipeline output ---
     pipeline.out_color = res.render_target;
-    pipeline.bind_render_target(0, res.render_target);
+    // 新版 Horizon: bind_render_target 已移除，直接赋值 out_color 即可
     pipeline.clear_records();
 
     const float fb_w = static_cast<float>(target_width);
     const float fb_h = static_cast<float>(target_height);
     const ktm::fvec2 scale(2.0f / fb_w, 2.0f / fb_h);
     const ktm::fvec2 translate(-1.0f, -1.0f);
+
+    // CRITICAL FIX: Collect all indirect buffers to keep them alive until GPU finishes.
+    // Local buffers were being destroyed at end of loop iteration, but GPU uses them
+    // after commit(). This caused use-after-free → black screen/crash.
+    std::vector<Horizon::HardwareBuffer> indirect_buffers;
+    indirect_buffers.reserve(quads.size());
 
     int recorded = 0;
     for (size_t i = 0; i < quads.size(); ++i) {
@@ -224,24 +230,37 @@ bool QuadCompositor::composite(
         const uint32_t texture_index =
             q.texture ? q.texture->store_descriptor() : white_image_.store_descriptor();
 
-        pipeline[ui_quad_vert_glsl_t::pushConsts::scale] = up2(scale);
-        pipeline[ui_quad_vert_glsl_t::pushConsts::translate] = up2(translate);
-        pipeline[ui_quad_frag_glsl_t::pushConsts::clip_rect] = up4(cx0, cy0, cx1, cy1);
-        pipeline[ui_quad_frag_glsl_t::pushConsts::texture_index] = texture_index;
+        // 新版 Horizon: 使用 VertexResourceBindings 访问 vertex shader 的 pushConsts
+        using Pipeline = Horizon::RasterizerPipeline<ui_quad_vert_glsl_t, ui_quad_frag_glsl_t>;
+        auto& pc = static_cast<Pipeline::VertexResourceBindings&>(pipeline).pushConsts;
+        pc.scale = up2(scale);
+        pc.translate = up2(translate);
+        pc.clip_rect = up4(cx0, cy0, cx1, cy1);
+        pc.texture_index = texture_index;
 
-        Horizon::DrawIndexedParams draw_params;
-        draw_params.index_count = 6;
-        draw_params.first_index = static_cast<uint32_t>(i * 6);
-        draw_params.vertex_offset = static_cast<int32_t>(i * 4);
-        draw_params.index_type = Horizon::IndexType::UInt32;
-        draw_params.enable_scissor = true;
-        draw_params.scissor = Horizon::ScissorRect{
-            scissor_x,
-            scissor_y,
-            static_cast<uint32_t>(scissor_w),
-            static_cast<uint32_t>(scissor_h)};
+        // 新版 Horizon: 使用 indirect draw
+        Horizon::DrawIndexedIndirectCommand cmd{};
+        cmd.index_count = 6;
+        cmd.first_index = static_cast<uint32_t>(i * 6);
+        cmd.vertex_offset = static_cast<int32_t>(i * 4);
+        cmd.instance_count = 1;
+        cmd.first_instance = 0;
 
-        pipeline.record(res.index_buffer, res.vertex_buffer, draw_params);
+        auto indirect_buffer = Horizon::HardwareBuffer::from_bytes(
+            std::as_bytes(std::span(&cmd, 1)),
+            sizeof(cmd),
+            Horizon::BufferUsage_Indirect,
+            "ui_quad_indirect");
+
+        Horizon::DrawIndexedIndirectParams draw_params;
+        draw_params.draw_count = 1;
+        draw_params.indirect_offset = 0;
+        draw_params.stride = sizeof(Horizon::DrawIndexedIndirectCommand);
+
+        pipeline.record_indirect(res.index_buffer, res.vertex_buffer, indirect_buffer, draw_params);
+
+        // Keep buffer alive until after commit()
+        indirect_buffers.push_back(std::move(indirect_buffer));
         ++recorded;
     }
 
@@ -250,8 +269,10 @@ bool QuadCompositor::composite(
     }
 
     // 记住这次提交：Horizon 已移除 executor.last_receipt()，publish 与资源释放都靠它。
+    // The indirect_buffers vector stays alive until this function returns, which is
+    // after commit(), ensuring GPU has valid data when it executes the commands.
     res.last_receipt = res.executor.stream()
-        << pipeline(static_cast<uint16_t>(target_width), static_cast<uint16_t>(target_height))
+        << pipeline.extent(target_width, target_height)
         << Horizon::commit();
 
     return true;

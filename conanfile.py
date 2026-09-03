@@ -75,6 +75,10 @@ class CoronaEngineConan(ConanFile):
         self.requires("quill/11.0.2", transitive_headers=True, transitive_libs=True)
         self.requires("slang/2026.10", transitive_headers=True, transitive_libs=True)
         self.requires("tracy/0.13.1", options={"on_demand": True})
+        # Required by Horizon core (as of commit 5b4d13fa)
+        self.requires("fmt/12.1.0", transitive_headers=True, transitive_libs=True)
+        self.requires("spdlog/1.17.0", transitive_headers=True, transitive_libs=True)
+        self.requires("xxhash/0.8.3", transitive_headers=True, transitive_libs=True)
         self.requires("assimp/5.4.3", transitive_headers=True, transitive_libs=True)
         self.requires("stb/cci.20230920", transitive_headers=True)
         self.requires("nanobind/2.9.2", transitive_headers=True, transitive_libs=True)
@@ -93,9 +97,6 @@ class CoronaEngineConan(ConanFile):
                           transitive_headers=True, transitive_libs=True)
 
         if bool(self.options.with_vision):
-            self.requires("fmt/12.1.0", transitive_headers=True, transitive_libs=True)
-            self.requires("spdlog/1.17.0", transitive_headers=True, transitive_libs=True)
-            self.requires("xxhash/0.8.3", transitive_headers=True, transitive_libs=True)
             self.requires("cxxopts/3.2.0", transitive_headers=True)
             self.requires("glfw/3.4", transitive_headers=True, transitive_libs=True)
             if bool(self.options.with_oidn):

@@ -666,7 +666,9 @@ void UiFrameRunner::run_frame(UiFrameContext& context) {
     //    and BEFORE the render loop so a newly-created window is rendered this frame and a
     //    redocked window is already gone.
     reconcile_detach_states(context);
+    printf("[FRAME_DEBUG] After reconcile_detach_states\n"); fflush(stdout);
 
+    printf("[FRAME_DEBUG] Before BrowserManager tabs loop\n"); fflush(stdout);
     std::vector<int> tabs_to_close;
     for (auto& [tab_id, tab] : BrowserManager::instance().get_tabs()) {
         if (!tab || !tab->open) {
@@ -681,9 +683,12 @@ void UiFrameRunner::run_frame(UiFrameContext& context) {
 
     // 5) Render every window (main + detached). Snapshot the window list first, since
     //    render_window does not mutate it (detach/redock already reconciled above).
+    printf("[FRAME_DEBUG] After tabs loop\n"); fflush(stdout);
+    printf("[FRAME_DEBUG] Before window snapshot\n"); fflush(stdout);
     std::vector<ManagedWindow> windows;
     window_manager.for_each_window([&](const ManagedWindow& w) { windows.push_back(w); });
     for (const ManagedWindow& managed : windows) {
+        printf("[FRAME_DEBUG] Before render_window loop\n"); fflush(stdout);
         render_window(context, managed);
     }
 

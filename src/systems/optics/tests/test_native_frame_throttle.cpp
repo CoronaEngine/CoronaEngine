@@ -8,17 +8,14 @@ namespace {
 Corona::Horizon::SubmitReceipt receipt(std::uint64_t serial) {
     Corona::Horizon::SubmitReceipt value;
     value.serial = serial;
-    value.tokens.push_back({});
     return value;
 }
 
 }  // namespace
 
 int main() {
-    static_assert(requires(Corona::Horizon::HardwareExecutor& executor,
-                           const Corona::Horizon::SubmitReceipt& value) {
-        executor.wait_for_completion(value);
-    });
+    // Note: wait_for_completion removed in new Horizon API
+    // This test validates NativeFrameThrottle logic only
 
     Corona::Systems::OpticsDetail::NativeFrameThrottle throttle;
     std::vector<std::uint64_t> waited;

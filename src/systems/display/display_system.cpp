@@ -34,13 +34,6 @@ struct PixelExtent {
     }
 };
 
-[[nodiscard]] PixelExtent hardware_image_extent(const Corona::Horizon::HardwareImage& image) {
-    if (!image) {
-        return {};
-    }
-    const auto extent = image.extent();
-    return {extent.width, extent.height};
-}
 
 [[nodiscard]] PixelExtent max_extent(PixelExtent lhs, PixelExtent rhs) {
     return {std::max(lhs.width, rhs.width), std::max(lhs.height, rhs.height)};
@@ -434,24 +427,25 @@ bool DisplaySystem::initialize(Kernel::ISystemContext* ctx) {
     // Create 1x1 transparent fallback images for single-layer compositing.
     // Porter-Duff Source Over with a transparent layer is an identity operation.
     try {
+        const std::array<std::uint16_t, 4> zero_rgba16f = {0, 0, 0, 0};
         auto transparent_storage_desc = Horizon::HardwareImageDesc::texture_2d(
             1,
             1,
             Horizon::Format::RGBA16_FLOAT,
-            Horizon::ImageUsageFlags::Storage |
-                Horizon::ImageUsageFlags::TransferDst,
+            Horizon::ImageUsage_Storage |
+                Horizon::ImageUsage_TransferDst,
             "display.transparent_storage");
         transparent_storage_desc.cpu_access = Horizon::CpuAccessMode::Write;
-        transparent_storage_ = Horizon::HardwareImage(transparent_storage_desc);
+
+        // 新版 Horizon: 在构造时上传初始数据
+        transparent_storage_ = Horizon::HardwareImage(
+            transparent_storage_desc,
+            std::as_bytes(std::span(zero_rgba16f)));
 
         if (!transparent_storage_) {
             return initialization_failed(
                 "initialization failed: transparent fallback image was not created");
         }
-
-        const std::array<std::uint16_t, 4> zero_rgba16f = {0, 0, 0, 0};
-        (void)transparent_storage_.write(
-            std::span<const std::uint16_t>(zero_rgba16f));
     } catch (const std::exception& error) {
         return initialization_failed(
             std::string("initialization failed while creating fallback image: ") +
@@ -698,7 +692,7 @@ void DisplaySystem::update() {
 
         bool use_optics_layer = optics_img_ptr && *optics_img_ptr;
         bool use_ui_layer = ui_img_ptr && *ui_img_ptr;
-        if (use_optics_layer && optics_receipt_ptr != nullptr && optics_receipt_ptr->empty()) {
+        if (use_optics_layer && optics_receipt_ptr != nullptr && optics_receipt_ptr->serial == 0) {
             if (state.optics.frame_index <= 1 || state.optics.frame_index % 120 == 0) {
                 CFW_LOG_WARNING(
                     "DisplaySystem: skipping optics layer with empty submit receipt "
@@ -712,7 +706,7 @@ void DisplaySystem::update() {
             use_optics_layer = false;
             optics_receipt_ptr = nullptr;
         }
-        if (use_ui_layer && ui_receipt_ptr != nullptr && ui_receipt_ptr->empty()) {
+        if (use_ui_layer && ui_receipt_ptr != nullptr && ui_receipt_ptr->serial == 0) {
             if (state.ui.frame_index <= 1 || state.ui.frame_index % 120 == 0) {
                 CFW_LOG_WARNING(
                     "DisplaySystem: skipping UI layer with empty submit receipt "
@@ -790,10 +784,10 @@ void DisplaySystem::update() {
                         surface,
                         state.optics.image_handle,
                         state.optics.frame_index,
-                        optics_receipt_ptr == nullptr || optics_receipt_ptr->empty(),
+                        optics_receipt_ptr == nullptr || optics_receipt_ptr->serial == 0,
                         state.ui.image_handle,
                         state.ui.frame_index,
-                        ui_receipt_ptr == nullptr || ui_receipt_ptr->empty(),
+                        ui_receipt_ptr == nullptr || ui_receipt_ptr->serial == 0,
                         composite_resources.width,
                         composite_resources.height,
                         error.what());
@@ -815,10 +809,10 @@ void DisplaySystem::update() {
                 surface,
                 state.optics.image_handle,
                 state.optics.frame_index,
-                optics_receipt_ptr == nullptr || optics_receipt_ptr->empty(),
+                optics_receipt_ptr == nullptr || optics_receipt_ptr->serial == 0,
                 state.ui.image_handle,
                 state.ui.frame_index,
-                ui_receipt_ptr == nullptr || ui_receipt_ptr->empty(),
+                ui_receipt_ptr == nullptr || ui_receipt_ptr->serial == 0,
                 composite_resources.width,
                 composite_resources.height,
                 error.what());
@@ -856,7 +850,7 @@ void DisplaySystem::update() {
         const Horizon::SubmitReceipt consumed_receipt = composite_resources.last_receipt;
         if (use_optics_layer && optics_frame) {
             optics_frame->consumed_receipt = consumed_receipt;
-            if (optics_receipt_ptr != nullptr && !optics_receipt_ptr->empty()) {
+            if (optics_receipt_ptr != nullptr && optics_receipt_ptr->serial != 0) {
                 if (auto* event_bus = context()->event_bus()) {
                     event_bus->publish(Events::OpticsFrameConsumedEvent{
                         surface,
@@ -893,9 +887,9 @@ bool DisplaySystem::ensure_composite_resources(CompositeResources& resources,
             width,
             height,
             Horizon::Format::RGBA16_FLOAT,
-            Horizon::ImageUsageFlags::Storage | Horizon::ImageUsageFlags::ColorAttachment |
-                Horizon::ImageUsageFlags::Sampled | Horizon::ImageUsageFlags::TransferSrc |
-                Horizon::ImageUsageFlags::TransferDst,
+            Horizon::ImageUsage_Storage | Horizon::ImageUsage_ColorAttachment |
+                Horizon::ImageUsage_Sampled | Horizon::ImageUsage_TransferSrc |
+                Horizon::ImageUsage_TransferDst,
             "display.composite_output"));
         if (!resources.output) {
             CFW_LOG_ERROR("DisplaySystem: Failed to create composite output ({}x{})", width, height);
@@ -924,24 +918,24 @@ Detail::PresentOutcome DisplaySystem::compose_and_present(
     //                  state.optics.width, state.optics.height, state.ui.image_handle,
     //                  state.ui.frame_index);
     // }
-    const PixelExtent optics_extent = hardware_image_extent(optics_image);
-    const PixelExtent ui_extent = hardware_image_extent(ui_image);
 
-    const PixelExtent state_optics_extent{state.optics.width, state.optics.height};
-    const PixelExtent state_ui_extent{state.ui.width, state.ui.height};
+    // WORKAROUND for Horizon API change (removed HardwareImage::extent()):
+    // Images passed through SharedDataHub have different addresses than when created,
+    // so address-based extent cache lookups fail. Use state.width/height directly
+    // instead of querying from the image objects.
+    const PixelExtent optics_extent{state.optics.width, state.optics.height};
+    const PixelExtent ui_extent{state.ui.width, state.ui.height};
+
     PixelExtent output_extent = surface_client_extent(surface);
     if (!output_extent) {
         output_extent = max_extent(optics_extent, ui_extent);
     }
     if (!output_extent) {
-        output_extent = max_extent(state_optics_extent, state_ui_extent);
-    }
-    if (!output_extent) {
         return Detail::PresentOutcome::Skipped;
     }
 
-    const PixelExtent bg_extent = optics_extent ? optics_extent : state_optics_extent;
-    const PixelExtent fg_extent = ui_extent ? ui_extent : state_ui_extent;
+    const PixelExtent bg_extent = optics_extent;
+    const PixelExtent fg_extent = ui_extent;
     const uint32_t output_width = output_extent.width;
     const uint32_t output_height = output_extent.height;
 
@@ -984,9 +978,8 @@ Detail::PresentOutcome DisplaySystem::compose_and_present(
     // ColorAttachment）。这里删除三个 bind 调用，依赖 images 数组自身的注册（如果有），
     // 或 rendering attachment 的自动转换。
 
-    // 组数换算用管线反射的真实 local size(经 Horizon SPIR-V patch, composite 为 8x8)。
-    const auto [dispatch_x, dispatch_y] =
-        composite_pipeline.dispatch_groups(output_width, output_height);
+    // 新版 Horizon: 使用 dispatch_extent 替代 dispatch_groups
+    // composite_pipeline 使用 8x8 local size，extent 会自动计算 group 数量
     {
         std::ostringstream label;
         label << "Display/composite"
@@ -1003,24 +996,25 @@ Detail::PresentOutcome DisplaySystem::compose_and_present(
               << " output_extent=" << output_width << "x" << output_height
               << " optics_frame=" << state.optics.frame_index
               << " optics_receipt_empty="
-              << (optics_receipt == nullptr || optics_receipt->empty())
+              << (optics_receipt == nullptr || optics_receipt->serial == 0)
               << " ui_frame=" << state.ui.frame_index
               << " ui_receipt_empty="
-              << (ui_receipt == nullptr || ui_receipt->empty());
-        composite_pipeline.set_debug_label(label.str());
+              << (ui_receipt == nullptr || ui_receipt->serial == 0);
+        // NOTE: set_debug_label() 已在新版 Horizon 中移除
+        CFW_LOG_TRACE("{}", label.str());
     }
 
     // GPU sync: wait for each producer's rendering to finish before reading their images
-    if (optics_receipt != nullptr && !optics_receipt->empty()) {
+    if (optics_receipt != nullptr && optics_receipt->serial != 0) {
         resources.executor.wait(*optics_receipt);
     }
-    if (ui_receipt != nullptr && !ui_receipt->empty()) {
+    if (ui_receipt != nullptr && ui_receipt->serial != 0) {
         resources.executor.wait(*ui_receipt);
     }
 
     // 记住这次提交，供调用方回写 consumed_receipt（executor.last_receipt() 已移除）。
     resources.last_receipt = resources.executor.stream()
-        << composite_pipeline(dispatch_x, dispatch_y, 1)
+        << composite_pipeline.dispatch_extent(output_width, output_height)
         << Horizon::present(displayer, resources.output)
         << Horizon::commit();
     return Detail::PresentOutcome::Presented;
@@ -1172,6 +1166,8 @@ void DisplaySystem::shutdown() {
             shutdown_message);
     }
     device_lost_.store(false, std::memory_order_release);
+
+
     CFW_LOG_INFO("DisplaySystem: display resources destroyed");
 }
 

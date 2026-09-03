@@ -72,7 +72,7 @@ class VulkanBackend {
     // Ensure `resources` holds a render target of the given size, (re)creating it on
     // size change. Shared with the quad compositor.
     static bool ensure_render_target(ViewportRenderResources& resources, uint32_t width, uint32_t height,
-                                     Horizon::ImageUsageFlags usage = Horizon::ImageUsageFlags::Sampled);
+                                     Horizon::ImageUsageFlags usage = Horizon::ImageUsage_Sampled);
 
    private:
     // Per-surface rendering + presentation state.

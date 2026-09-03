@@ -1,4 +1,4 @@
-#include "horizon.h"
+﻿#include "horizon.h"
 #include <corona/events/acoustics_system_events.h>
 #include <corona/events/display_system_events.h>
 #include <corona/events/optics_system_events.h>
@@ -53,7 +53,7 @@ H::HardwareImageDesc make_sampled_texture_desc(uint32_t width,
         width,
         height,
         format,
-        H::ImageUsageFlags::Sampled | H::ImageUsageFlags::TransferDst,
+        H::ImageUsage_Sampled | H::ImageUsage_TransferDst,
         std::move(name));
 }
 
@@ -862,19 +862,19 @@ Corona::API::Geometry Corona::API::Geometry::from_image(const std::string& image
     MeshDevice dev{};
     dev.vertexBuffer = make_horizon_buffer(
         vertices,
-        H::BufferUsageFlags::TransferDst | H::BufferUsageFlags::Vertex,
+        H::BufferUsage_TransferDst | H::BufferUsage_Vertex,
         "script.image.vertex");
     dev.indexBuffer = make_horizon_buffer(
         indices,
-        H::BufferUsageFlags::TransferDst | H::BufferUsageFlags::Index,
+        H::BufferUsage_TransferDst | H::BufferUsage_Index,
         "script.image.index");
     dev.vertexStorageBuffer = make_horizon_buffer(
         vertices,
-        H::BufferUsageFlags::TransferSrc | H::BufferUsageFlags::TransferDst | H::BufferUsageFlags::Storage,
+        H::BufferUsage_TransferSrc | H::BufferUsage_TransferDst | H::BufferUsage_Storage,
         "script.image.vertex_storage");
     dev.indexStorageBuffer = make_horizon_buffer(
         indices,
-        H::BufferUsageFlags::TransferSrc | H::BufferUsageFlags::TransferDst | H::BufferUsageFlags::Storage,
+        H::BufferUsage_TransferSrc | H::BufferUsage_TransferDst | H::BufferUsage_Storage,
         "script.image.index_storage");
     dev.materialIndex = 0;
     dev.materialColor = {1.0f, 1.0f, 1.0f, 1.0f};
@@ -903,10 +903,12 @@ Corona::API::Geometry Corona::API::Geometry::from_image(const std::string& image
         2u * vertices.size() * sizeof(Resource::Vertex) +
         2u * indices.size()  * sizeof(std::uint16_t));
     if (dev.textureBuffer) {
-        const auto ext = dev.textureBuffer.extent();
+        // NOTE: 新版 Horizon 移除了 extent() 方法
+        // 暂时使用顶点数作为纹理大小的粗略估算
+        // TODO: 在 upload_image_to_texture 中返回实际的纹理大小
         dev.tex_mem = Corona::Memory::GpuMemToken(
             Corona::Memory::ResKind::Texture,
-            static_cast<std::size_t>(ext.width) * ext.height * 4);
+            static_cast<std::size_t>(vertices.size() * 16)); // 粗略估算
     }
 
     std::vector<MeshDevice> mesh_devices;
