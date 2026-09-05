@@ -217,6 +217,8 @@ struct BoneNode {
     std::string name;
     std::array<float, 16> local{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
     std::vector<int> children;  // SkeletonData::nodes 中的下标
+    int parent = -1;            // 父节点下标（根为 -1）。IK 需沿链从末端上溯到根，
+                                // 仅有 children 无法反向遍历，故导入期回填。
 };
 
 /// 一根骨骼的动画通道：位置/旋转/缩放关键帧（各自带时间戳，单位 tick）。
@@ -243,6 +245,25 @@ struct SkeletonData {
     std::unordered_map<std::string, BoneInfo> bone_map;   // 骨骼名 → {id, offset}
     int bone_count = 0;                                   // 唯一骨骼数（= final 矩阵数组长度）
     std::array<float, 16> global_inverse{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+};
+
+/// 一条 IK 链（CCD 求解，运行时可写）。
+/// 语义：让 end_node 从末端沿 parent 上溯 chain_length 个关节组成的链，
+/// 其末端尽量够到 target（模型空间）。求解产出被改写关节的新 local，
+/// 经 compute_pose 的 local_overrides 注入 FK，叠加在原动画姿态之上。
+struct IkChain {
+    int end_node = -1;                        // 末端骨骼节点下标（SkeletonData::nodes）
+    int chain_length = 2;                     // 参与求解的关节数（含末端，沿 parent 上溯）
+    std::array<float, 3> target{0, 0, 0};     // 目标点（模型空间，与蒙皮网格同空间；solve_ccd 内部会
+                                              // 用 inverse(global_inverse) 变换到节点空间求解）
+    float weight = 1.0f;                      // [0,1]：IK 结果与原动画姿态的混合权重
+    int max_iterations = 10;                  // CCD 最大迭代轮数
+    float tolerance = 1e-3f;                  // 末端-目标距离收敛阈值
+    float damping = 1.0f;                     // [0,1]：每步旋转的衰减系数，<1 压抖动
+    bool enabled = false;                     // 是否参与求解
+
+    // 预留：每关节角度约束（首版不实现，需要时再启用）。
+    // std::vector<std::array<float,2>> angle_limits;  // 每关节 [min,max]
 };
 
 struct SceneData {

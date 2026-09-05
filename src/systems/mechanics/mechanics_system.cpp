@@ -968,14 +968,13 @@ void MechanicsSystem::update_physics(float fixed_dt) {
                         }
                     }
                     // =====================================================
-                }
-            }
-    
+                }  // 末轮：impulse_iter == k_impulse_iterations - 1
+            }      // 内层：collision_pairs
 
-        // 收敛早退：本轮所有碰撞对的速度修正都极小，说明已稳定，无需继续迭代
-        if (max_delta_v_sq_this_iter < k_early_exit_vel_eps * k_early_exit_vel_eps) {
-            break;
-        }
+            // 收敛早退：本轮所有碰撞对的速度修正都极小，说明已稳定，无需继续迭代
+            if (max_delta_v_sq_this_iter < k_early_exit_vel_eps * k_early_exit_vel_eps) {
+                break;
+            }
         }  // 外层：impulse_iter
 
         // ===== 碰撞结束检测：遍历上帧活跃但本帧消失的碰撞对，延迟触发 end 回调 =====
@@ -1023,7 +1022,6 @@ void MechanicsSystem::update_physics(float fixed_dt) {
                 }
             }
         }
-
         // 更新上一帧碰撞对
         impl_->prev_active_collisions.swap(curr_active_collisions);
     } else {
@@ -1391,12 +1389,14 @@ void MechanicsSystem::update_skinned_geometry() {
         std::vector<Horizon::HardwareBuffer> vbufs;
         std::vector<Horizon::HardwareBuffer> vstoragebufs;
         std::size_t mesh_count = 0;
+        std::vector<Resource::IkChain> ik_chains;  // 锁外跑 CCD 用（拷出避免持锁）
         {
             auto geom_write = geom_storage.try_acquire_write(geom_handle);
             if (!geom_write) continue;
             geom_write->is_skinned = true;
             geom_write->anim_time = Resource::advance_anim_time(geom_write->anim_time, dt, clip);
             anim_time = geom_write->anim_time;
+            ik_chains = geom_write->ik_chains;  // 拷贝一份 IK 链定义（锁外跑 CCD）
             mesh_count = geom_write->mesh_handles.size();
             vbufs.reserve(mesh_count);
             vstoragebufs.reserve(mesh_count);
@@ -1424,8 +1424,38 @@ void MechanicsSystem::update_skinned_geometry() {
         }
 
         // ---- 第 5 步：锁外计算骨骼最终矩阵（每 geom 一次）----
+        // 若该实例有启用的 IK 链：采样动画 local → 逐链 CCD 求解并写回 working_locals →
+        // 用 working_locals 算 finals，使 IK 姿态叠加在动画之上。无 IK 链时走原路径。
         std::vector<std::array<float, 16>> finals;
-        Resource::compute_pose(skeleton, clip, anim_time, finals);
+        bool has_active_ik = false;
+        for (const auto& ch : ik_chains) {
+            if (ch.enabled) {
+                has_active_ik = true;
+                break;
+            }
+        }
+        if (has_active_ik) {
+            // working_locals：每条链解完后把结果写回，供下一条链感知前链修改（Bug-2 修复）。
+            // 解完所有链后直接作为 precomputed_locals 传给 compute_pose，避免重复采样（Perf-1 修复）。
+            std::vector<std::array<float, 16>> working_locals;
+            Resource::sample_pose_locals(skeleton, clip, anim_time, working_locals);
+
+            for (const auto& ch : ik_chains) {
+                if (!ch.enabled) continue;
+                std::unordered_map<int, std::array<float, 16>> chain_ov;
+                Resource::solve_ccd(skeleton, ch, working_locals, chain_ov);
+                // 把本链改写的关节写回 working_locals，下一条链从更新后的状态出发。
+                // 注：weight < 1 时此处写入的是 IK 与原动画的混合值，后链的 weight 混合
+                //     以此为基准而非原动画——多链叠加语义，首版可接受。
+                for (const auto& kv : chain_ov) {
+                    working_locals[static_cast<std::size_t>(kv.first)] = kv.second;
+                }
+            }
+            // working_locals 已含所有链的 IK 结果，直接传入跳过 compute_pose 内部的重复采样。
+            Resource::compute_pose(skeleton, clip, anim_time, finals, nullptr, &working_locals);
+        } else {
+            Resource::compute_pose(skeleton, clip, anim_time, finals);
+        }
 
         // ---- 第 6 步：锁外 CPU 蒙皮每个 mesh + 重传 GPU ----
         // skinned_cpu_vertices：每 mesh 一份原始字节（布局即 Resource::Vertex 数组），

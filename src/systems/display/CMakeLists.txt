@@ -7,6 +7,7 @@ corona_add_system(display
         display_system.cpp
     DEPENDENCIES
         Horizon
+        corona::resource::manager
 )
 
 helicon_compile_shaders(corona_display_system
@@ -23,7 +24,7 @@ if(BUILD_CORONA_TESTING OR BUILD_TESTING)
         PRIVATE ${PROJECT_SOURCE_DIR}/include
     )
     target_link_libraries(corona_ui_surface_removal_race_tests
-        PRIVATE corona_display_system
+        PRIVATE corona_display_system corona::resource::manager
     )
     if(COMMAND helicon_install_runtime_deps)
         helicon_install_runtime_deps(corona_ui_surface_removal_race_tests)
