@@ -3,20 +3,27 @@
   <main
     ref="root"
     class="story-mode"
-    :class="{ looking: input?.isPointerLocked?.() }"
+    :class="{
+      looking: store.pointerLocked || store.mouseActive,
+      'overlay-open': store.inventoryOpen || store.mapOpen,
+    }"
     tabindex="0"
     @pointerdown="lockPointer"
   >
     <canvas ref="canvas" class="viewport"></canvas>
+    <div class="screen-vignette" aria-hidden="true"></div>
 
-    <StoryHud
-      :hint="interactionHint"
-      :debug="debugState"
-      :debug-visible="store.debugVisible"
-    />
+    <StoryHud :hint="interactionHint" :debug="debugState" :debug-visible="store.debugVisible" />
 
-    <button class="menu-button" type="button" @pointerdown.stop @click.stop="exit">
-      退出剧情模式
+    <button
+      class="menu-button"
+      type="button"
+      aria-label="退出剧情模式"
+      @pointerdown.stop
+      @click.stop="exit"
+    >
+      <span class="menu-icon">↩</span>
+      <span>退出剧情模式</span>
     </button>
 
     <InventoryPanel
@@ -26,11 +33,7 @@
       @use-orb="useWorldOrb"
     />
 
-    <MapPanel
-      v-if="store.mapOpen"
-      :player="mapPlayer"
-      @close="closeOverlay"
-    />
+    <MapPanel v-if="store.mapOpen" :player="mapPlayer" @close="closeOverlay" />
   </main>
 </template>
 
@@ -51,11 +54,7 @@ import { createStoryPlayer } from '@/story/storyPlayer.js';
 import { createStoryRuntime } from '@/story/storyRuntime.js';
 import { inventorySystem } from '@/story/inventorySystem.js';
 import { createUgcWorldSession } from '@/story/ugc/ugcWorldSession.js';
-import {
-  storyModeStore as store,
-  toggleInventory,
-  toggleMap,
-} from '@/story/storyModeStore.js';
+import { storyModeStore as store, toggleInventory, toggleMap } from '@/story/storyModeStore.js';
 
 const root = ref(null);
 const canvas = ref(null);
@@ -69,6 +68,7 @@ const debugState = reactive({
   pitch: 0,
   grounded: true,
   pointerLocked: false,
+  mouseActive: false,
   move: false,
   worldType: 'main',
   bossHealth: 100,
@@ -103,15 +103,11 @@ function showHint(message, timeout = 2500) {
 
 function lockPointer(event) {
   const target = event?.target;
-  if (
-    store.inventoryOpen
-    || store.mapOpen
-    || target?.closest?.('.menu-button, .panel, button')
-  ) {
+  if (store.inventoryOpen || store.mapOpen || target?.closest?.('.menu-button, .overlay, button'))
     return;
-  }
 
   input?.setMouseActive?.(true);
+  store.mouseActive = true;
   root.value?.focus?.({ preventScroll: true });
   canvas.value?.requestPointerLock?.();
 }
@@ -121,6 +117,7 @@ function closeOverlay() {
   store.mapOpen = false;
   input?.clearTransient?.();
   input?.setMouseActive?.(false);
+  store.mouseActive = false;
 }
 
 function exit() {
@@ -137,7 +134,7 @@ function useWorldOrb() {
   const fragments = store.items.filter((item) => item.category === 'ugc');
   ugcSession?.loadResources(
     store.items.filter((item) => item.category === 'material'),
-    fragments,
+    fragments
   );
   ugcSession?.enter({
     player: store.player,
@@ -274,6 +271,7 @@ onMounted(async () => {
       if (document.pointerLockElement) document.exitPointerLock();
       input.setMouseActive(false);
       input.clearTransient();
+      store.mouseActive = false;
     } else {
       runtime.update(delta);
     }
@@ -284,6 +282,7 @@ onMounted(async () => {
     if (!target && interactionHint.value?.startsWith('按 F')) interactionHint.value = '';
 
     store.pointerLocked = input.isPointerLocked();
+    store.mouseActive = input.isMouseActive();
     store.player.x = player.position.x;
     store.player.y = player.position.y;
     store.player.z = player.position.z;
@@ -295,6 +294,7 @@ onMounted(async () => {
     debugState.pitch = player.pitch;
     debugState.grounded = player.grounded;
     debugState.pointerLocked = input.isPointerLocked();
+    debugState.mouseActive = input.isMouseActive();
     debugState.move = !blocked && Boolean(input.getMoveAxis().x || input.getMoveAxis().z);
     debugState.worldType = store.worldType;
     debugState.bossHealth = store.bossHealth;
@@ -317,6 +317,7 @@ onUnmounted(() => {
   document.exitPointerLock?.();
   store.running = false;
   store.pointerLocked = false;
+  store.mouseActive = false;
   store.inventoryOpen = false;
   store.mapOpen = false;
   store.worldType = 'main';
@@ -326,11 +327,21 @@ onUnmounted(() => {
 
 <style scoped>
 .story-mode {
+  --game-bg: #07131f;
+  --game-panel: #101d2a;
+  --game-panel-deep: #0b1723;
+  --game-border: #304656;
+  --game-border-strong: #456173;
+  --game-text: #e5ebee;
+  --game-muted: #8f9da6;
+  --game-cyan: #75cdbd;
+  --game-gold: #c6a15b;
+  --game-font: 'Segoe UI', 'Microsoft YaHei', sans-serif;
   position: fixed;
   inset: 0;
   overflow: hidden;
-  background: #18212b;
-  color: #fff;
+  background: var(--game-bg);
+  color: var(--game-text);
   cursor: default;
   outline: none;
 }
@@ -339,26 +350,70 @@ onUnmounted(() => {
   cursor: none;
 }
 
+.story-mode.overlay-open .viewport {
+  filter: brightness(0.68) saturate(0.82);
+}
+
 .viewport {
+  position: relative;
+  z-index: 0;
   display: block;
   width: 100%;
   height: 100%;
+  transition: filter 180ms ease;
+}
+
+.screen-vignette {
+  position: absolute;
+  z-index: 1;
+  inset: 0;
+  pointer-events: none;
+  background: rgb(4 12 21 / 14%);
 }
 
 .menu-button {
   position: absolute;
-  top: 18px;
-  right: 18px;
-  z-index: 3;
-  padding: 8px 12px;
-  border: 1px solid #8397a8;
-  border-radius: 6px;
-  background: #14202bcc;
-  color: #fff;
+  z-index: 4;
+  top: 24px;
+  right: 28px;
+  display: inline-flex;
+  min-height: 34px;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  border: 1px solid var(--game-border-strong);
+  border-radius: 7px;
+  background: var(--game-panel);
+  color: var(--game-muted);
   cursor: pointer;
+  font: 11px var(--game-font);
+  letter-spacing: 0.04em;
+  box-shadow: 0 8px 20px rgb(0 0 0 / 24%);
+  transition: 160ms ease;
 }
 
-.menu-button:hover {
-  background: #2b4054;
+.menu-button:hover,
+.menu-button:focus-visible {
+  border-color: var(--game-cyan);
+  background: #18323c;
+  color: var(--game-text);
+  outline: none;
+}
+
+.menu-icon {
+  color: var(--game-gold);
+  font-size: 16px;
+}
+
+@media (max-width: 620px) {
+  .menu-button {
+    top: 14px;
+    right: 14px;
+    padding: 0 9px;
+  }
+
+  .menu-button span:last-child {
+    display: none;
+  }
 }
 </style>

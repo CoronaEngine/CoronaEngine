@@ -9,6 +9,7 @@ export const storyModeStore = reactive({
   inventoryOpen: false,
   mapOpen: false,
   pointerLocked: false,
+  mouseActive: false,
   debugVisible: false,
   player: { x: 0, y: 1.7, z: 4 },
   bossHealth: 100,
@@ -41,6 +42,7 @@ export const storyModeStore = reactive({
 export function closeOverlays() {
   storyModeStore.inventoryOpen = false;
   storyModeStore.mapOpen = false;
+  storyModeStore.mouseActive = false;
 }
 
 export function toggleInventory() {
