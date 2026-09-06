@@ -1,3 +1,9 @@
+// 兼容通过 Vite 直接访问 /StoryMode 的地址。
+// 项目使用 hash history，旧地址需要转换为 /#/StoryMode，避免误进入创造模式。
+if (window.location.pathname.endsWith('/StoryMode') && !window.location.hash) {
+  const basePath = window.location.pathname.slice(0, -'/StoryMode'.length) || '/';
+  window.history.replaceState({}, '', `${basePath}#/StoryMode`);
+}
 // 路由文件
 import { createRouter, createWebHashHistory } from 'vue-router';
 
