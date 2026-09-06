@@ -13,6 +13,7 @@ const route = useRoute();
 const dockStore = useDockStore();
 
 // DockLayout 只在编辑器主页面显示，StartScreen / launcher 等不显示
+const isStoryRoute = computed(() => route.path === '/StoryMode');
 const isEditorRoute = computed(() => route.path === '/');
 const isStandalonePanel = computed(() => route.query?.standalone === '1');
 
@@ -104,6 +105,7 @@ function consumeNativeGameplayDomEvent(event) {
 }
 
 function onGlobalKeyDown(event) {
+  if (isStoryRoute.value) return;
   consumeNativeGameplayDomEvent(event);
   forwardScratchKey(event, false);
   if (event.defaultPrevented) return;
@@ -118,6 +120,7 @@ function onGlobalKeyDown(event) {
 }
 
 function onGlobalKeyUp(event) {
+  if (isStoryRoute.value) return;
   consumeNativeGameplayDomEvent(event);
   forwardScratchKey(event, true);
 }
@@ -299,3 +302,4 @@ onUnmounted(() => {
   cursor: nwse-resize;
 }
 </style>
+

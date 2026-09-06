@@ -250,7 +250,7 @@ const handleCreate = async () => {
         } catch (roomError) {
           console.warn('Default AI conversation room initialization failed:', roomError);
         }
-        router.push('/');
+        router.push(mode.value === 'story' ? '/StoryMode' : '/');
         return;
       }
     }
