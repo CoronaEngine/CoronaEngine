@@ -19,6 +19,13 @@ const bindings = Object.freeze({
   KeyB: 'inventory',
   KeyM: 'map',
   KeyF: 'interact',
+  Digit1: 'hotbar1',
+  Digit2: 'hotbar2',
+  Digit3: 'hotbar3',
+  Digit4: 'hotbar4',
+  Digit5: 'hotbar5',
+  Digit6: 'hotbar6',
+  Digit7: 'hotbar7',
 });
 
 const keyFallbackCodes = Object.freeze({
@@ -29,6 +36,13 @@ const keyFallbackCodes = Object.freeze({
   b: 'KeyB',
   m: 'KeyM',
   f: 'KeyF',
+  1: 'Digit1',
+  2: 'Digit2',
+  3: 'Digit3',
+  4: 'Digit4',
+  5: 'Digit5',
+  6: 'Digit6',
+  7: 'Digit7',
   ' ': 'Space',
   Spacebar: 'Space',
 });
@@ -44,9 +58,7 @@ function resolveCode(event) {
 
 function isEditableTarget(event) {
   const tagName = event?.target?.tagName;
-  return Boolean(
-    event?.target?.isContentEditable || editableTags.has(tagName),
-  );
+  return Boolean(event?.target?.isContentEditable || editableTags.has(tagName));
 }
 
 /**
@@ -100,9 +112,14 @@ export function createStoryInputManager(target = document) {
   };
 
   const onPointerLockChange = () => {
+    const wasPointerLocked = pointerLocked;
     pointerLocked = target.pointerLockElement != null;
     if (pointerLocked) {
       mouseActive = true;
+    } else if (wasPointerLocked) {
+      // 用户按 Esc 主动退出 Pointer Lock 后，等待下一次点击重新激活视角。
+      mouseActive = false;
+      clearTransient();
     }
   };
 

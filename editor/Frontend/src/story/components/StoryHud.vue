@@ -1,4 +1,4 @@
-<!-- 剧情模式 HUD：负责呈现准星、交互提示、玩家状态、资源数量和调试信息。 -->
+<!-- 剧情模式 HUD：负责呈现准星、交互提示、生命、体力和调试信息。 -->
 <template>
   <div class="hud">
     <div class="crosshair" :class="{ active: Boolean(hint) }" aria-hidden="true">
@@ -14,43 +14,18 @@
       <span>{{ hint }}</span>
     </div>
 
-    <div class="hud-bottom">
-      <section class="player-status" aria-label="玩家状态">
-        <div class="avatar-mark" aria-hidden="true">P</div>
-        <div class="status-content">
-          <div class="status-name">
-            <strong>探索者</strong>
-          </div>
-          <div class="meter-row">
-            <span class="meter-label">生命</span>
-            <div class="meter health-meter" aria-label="生命值 100"><i></i></div>
-            <span class="meter-value">100</span>
-          </div>
-          <div class="meter-row">
-            <span class="meter-label">体力</span>
-            <div class="meter stamina-meter" aria-label="体力值 100"><i></i></div>
-            <span class="meter-value">100</span>
-          </div>
-        </div>
-      </section>
-
-      <section class="resource-strip" aria-label="资源数量">
-        <div class="resource-item">
-          <span class="resource-icon material-icon" aria-hidden="true">◆</span>
-          <span>
-            <small>木材</small>
-            <strong>12</strong>
-          </span>
-        </div>
-        <div class="resource-item">
-          <span class="resource-icon fragment-icon" aria-hidden="true">✦</span>
-          <span>
-            <small>世界碎片</small>
-            <strong>1</strong>
-          </span>
-        </div>
-      </section>
-    </div>
+    <section class="player-status" aria-label="玩家生命和体力">
+      <div class="meter-row">
+        <span class="meter-label">生命</span>
+        <div class="meter health-meter" aria-label="生命值 100"><i></i></div>
+        <span class="meter-value">100</span>
+      </div>
+      <div class="meter-row">
+        <span class="meter-label">体力</span>
+        <div class="meter stamina-meter" aria-label="体力值 100"><i></i></div>
+        <span class="meter-value">100</span>
+      </div>
+    </section>
 
     <div v-if="debugVisible" class="debug-panel">
       <div class="debug-title">灰盒调试 · 运行状态</div>
@@ -104,17 +79,6 @@ function format(value) {
   pointer-events: none;
   color: var(--game-text, #e5ebee);
   font-family: var(--game-font, 'Segoe UI', 'Microsoft YaHei', sans-serif);
-}
-
-.hud-bottom {
-  position: absolute;
-  right: 28px;
-  bottom: 24px;
-  left: 28px;
-  display: grid;
-  grid-template-columns: 1fr auto 1fr;
-  align-items: end;
-  gap: 18px;
 }
 
 .crosshair {
@@ -209,48 +173,19 @@ function format(value) {
   letter-spacing: 0.08em;
 }
 
-.player-status,
-.resource-strip,
-.debug-panel {
+.player-status {
+  position: absolute;
+  bottom: 24px;
+  left: 28px;
+  display: flex;
+  min-width: 220px;
+  flex-direction: column;
+  gap: 8px;
+  padding: 11px 14px;
   border: 1px solid var(--game-border, #304656);
+  border-radius: 8px;
   background: var(--game-panel, #101d2a);
   box-shadow: 0 10px 24px rgb(0 0 0 / 24%);
-}
-
-.player-status {
-  grid-column: 1;
-  display: flex;
-  min-width: 244px;
-  align-items: center;
-  justify-self: start;
-  gap: 11px;
-  padding: 11px 14px;
-  border-radius: 8px;
-}
-
-.avatar-mark {
-  display: grid;
-  width: 38px;
-  height: 38px;
-  flex: 0 0 auto;
-  place-items: center;
-  border: 1px solid var(--game-cyan, #75cdbd);
-  border-radius: 50%;
-  background: #1a3038;
-  color: var(--game-cyan, #75cdbd);
-  font-size: 16px;
-  font-weight: 800;
-}
-
-.status-content {
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.status-name strong {
-  font-size: 12px;
 }
 
 .meter-row {
@@ -296,67 +231,17 @@ function format(value) {
   text-align: right;
 }
 
-.resource-strip {
-  grid-column: 2;
-  display: flex;
-  gap: 8px;
-  padding: 8px;
-  border-radius: 8px;
-}
-
-.resource-item {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  min-width: 100px;
-  padding: 5px 8px;
-  border-radius: 5px;
-  background: #182a38;
-}
-
-.resource-item > span:last-child {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.resource-item small {
-  color: var(--game-muted, #8f9da6);
-  font-size: 10px;
-}
-
-.resource-item strong {
-  color: var(--game-text, #e5ebee);
-  font-size: 12px;
-}
-
-.resource-icon {
-  display: grid;
-  width: 26px;
-  height: 26px;
-  place-items: center;
-  border-radius: 5px;
-  font-size: 14px;
-}
-
-.material-icon {
-  background: #3d3327;
-  color: #d1a56d;
-}
-
-.fragment-icon {
-  background: #3a3428;
-  color: var(--game-gold, #c6a15b);
-}
-
 .debug-panel {
   position: absolute;
   right: 28px;
   bottom: 98px;
   min-width: 240px;
   padding: 11px 13px;
+  border: 1px solid var(--game-border, #304656);
   border-radius: 6px;
+  background: var(--game-panel, #101d2a);
   color: #b8c8cf;
+  box-shadow: 0 10px 24px rgb(0 0 0 / 24%);
   font:
     11px/1.65 ui-monospace,
     SFMono-Regular,
@@ -376,6 +261,7 @@ function format(value) {
     opacity: 0;
     transform: translate(-50%, 8px);
   }
+
   to {
     opacity: 1;
     transform: translate(-50%, 0);
@@ -383,19 +269,11 @@ function format(value) {
 }
 
 @media (max-width: 620px) {
-  .hud-bottom {
-    right: 14px;
-    bottom: 14px;
-    left: 14px;
-    grid-template-columns: 1fr auto;
-  }
-
   .player-status {
+    right: 14px;
+    bottom: 82px;
+    left: 14px;
     min-width: 0;
-  }
-
-  .resource-strip {
-    grid-column: 2;
   }
 }
 </style>

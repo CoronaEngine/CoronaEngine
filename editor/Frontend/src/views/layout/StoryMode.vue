@@ -1,4 +1,4 @@
-<!-- 剧情模式根组件：只负责游戏视口生命周期、HUD 绑定和模式退出。 -->
+<!-- 剧情模式根组件：只负责 Three.js 生命周期、HUD、快捷栏和模式退出。 -->
 <template>
   <main
     ref="root"
@@ -15,6 +15,12 @@
 
     <StoryHud :hint="interactionHint" :debug="debugState" :debug-visible="store.debugVisible" />
 
+    <StoryHotbar
+      :slots="hotbarSlots"
+      :selected-index="selectedHotbarIndex"
+      @select="selectHotbarSlot"
+    />
+
     <button
       class="menu-button"
       type="button"
@@ -29,7 +35,10 @@
     <InventoryPanel
       v-if="store.inventoryOpen"
       :items="store.items"
+      :hotbar-slots="hotbarSlots"
+      :selected-hotbar-index="selectedHotbarIndex"
       @close="closeOverlay"
+      @select-hotbar="selectHotbarSlot"
       @use-orb="useWorldOrb"
     />
 
@@ -38,10 +47,11 @@
 </template>
 
 <script setup>
-import { computed, onMounted, onUnmounted, reactive, ref } from 'vue';
+import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import * as THREE from 'three';
 import StoryHud from '@/story/components/StoryHud.vue';
+import StoryHotbar from '@/story/components/StoryHotbar.vue';
 import InventoryPanel from '@/story/components/InventoryPanel.vue';
 import MapPanel from '@/story/components/MapPanel.vue';
 import { createFallbackScene } from '@/story/adapters/fallbackSceneAdapter.js';
@@ -52,6 +62,7 @@ import { createStoryInteractionSystem } from '@/story/storyInteractionSystem.js'
 import { createStoryPhysicsSystem } from '@/story/storyPhysicsSystem.js';
 import { createStoryPlayer } from '@/story/storyPlayer.js';
 import { createStoryRuntime } from '@/story/storyRuntime.js';
+import { hotbarSystem } from '@/story/hotbarSystem.js';
 import { inventorySystem } from '@/story/inventorySystem.js';
 import { createUgcWorldSession } from '@/story/ugc/ugcWorldSession.js';
 import { storyModeStore as store, toggleInventory, toggleMap } from '@/story/storyModeStore.js';
@@ -78,6 +89,8 @@ const mapPlayer = computed(() => ({
   x: Math.max(5, Math.min(95, 50 + store.player.x * 2)),
   z: Math.max(5, Math.min(95, 50 + store.player.z * 2)),
 }));
+const hotbarSlots = computed(() => hotbarSystem.getSlots());
+const selectedHotbarIndex = computed(() => hotbarSystem.getSelectedIndex());
 
 let renderer;
 let sceneBundle;
@@ -92,6 +105,14 @@ let ugcSession;
 const { player, resetToSpawn } = createStoryPlayer();
 const cameraController = createStoryCameraController();
 
+watch(
+  () => store.items,
+  (items) => {
+    hotbarSystem.syncFromInventory(items);
+  },
+  { immediate: true, deep: true }
+);
+
 function showHint(message, timeout = 2500) {
   interactionHint.value = message;
   if (timeout > 0) {
@@ -103,8 +124,13 @@ function showHint(message, timeout = 2500) {
 
 function lockPointer(event) {
   const target = event?.target;
-  if (store.inventoryOpen || store.mapOpen || target?.closest?.('.menu-button, .overlay, button'))
+  if (
+    store.inventoryOpen ||
+    store.mapOpen ||
+    target?.closest?.('.menu-button, .overlay, .hotbar, button')
+  ) {
     return;
+  }
 
   input?.setMouseActive?.(true);
   store.mouseActive = true;
@@ -112,12 +138,21 @@ function lockPointer(event) {
   canvas.value?.requestPointerLock?.();
 }
 
+function pauseOverlayInput() {
+  if (document.pointerLockElement) document.exitPointerLock();
+  input?.setMouseActive?.(false);
+  input?.clearAll?.();
+  store.mouseActive = false;
+}
+
 function closeOverlay() {
   store.inventoryOpen = false;
   store.mapOpen = false;
-  input?.clearTransient?.();
-  input?.setMouseActive?.(false);
-  store.mouseActive = false;
+  pauseOverlayInput();
+}
+
+function selectHotbarSlot(index) {
+  hotbarSystem.select(index);
 }
 
 function exit() {
@@ -148,6 +183,7 @@ function useWorldOrb() {
 
 function handleInteraction(result) {
   if (!result) return;
+
   if (result.type === 'picked-item') {
     inventorySystem.addItem(result.item);
     result.object.visible = false;
@@ -214,7 +250,7 @@ onMounted(async () => {
 
   const physics = createStoryPhysicsSystem({
     player,
-    onRespawn: () => showHint('你离开了灰盒区域，已回到出生点。', 1800),
+    onRespawn: () => showHint('你离开了场景区域，已回到出生点。', 1800),
   });
   const combatSystem = createStoryCombatSystem({
     camera,
@@ -263,16 +299,25 @@ onMounted(async () => {
     const delta = Math.min(0.05, (time - (tick.last || time)) / 1000);
     tick.last = time;
 
-    if (input.consumePressed('inventory')) toggleInventory();
-    if (input.consumePressed('map')) toggleMap();
+    if (input.consumePressed('inventory')) {
+      toggleInventory();
+      if (store.inventoryOpen) pauseOverlayInput();
+    }
+    if (input.consumePressed('map')) {
+      toggleMap();
+      if (store.mapOpen) pauseOverlayInput();
+    }
 
     const blocked = store.inventoryOpen || store.mapOpen;
     if (blocked) {
-      if (document.pointerLockElement) document.exitPointerLock();
-      input.setMouseActive(false);
-      input.clearTransient();
-      store.mouseActive = false;
+      pauseOverlayInput();
     } else {
+      for (let index = 0; index < 7; index += 1) {
+        if (input.consumePressed(`hotbar${index + 1}`)) {
+          hotbarSystem.select(index);
+          break;
+        }
+      }
       runtime.update(delta);
     }
 

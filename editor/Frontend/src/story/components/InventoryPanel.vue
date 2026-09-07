@@ -1,11 +1,9 @@
-<!-- 剧情模式背包 UI：负责展示物品分类、物品详情和世界小球使用入口。 -->
+<!-- 剧情模式完整背包：提供 Minecraft 风格物品网格、物品详情和世界小球入口。 -->
 <template>
   <section class="overlay" @pointerdown.stop @click.stop>
     <div class="panel" role="dialog" aria-modal="true" aria-labelledby="inventory-title">
       <header class="panel-header">
-        <div class="title-group">
-          <h2 id="inventory-title">背包</h2>
-        </div>
+        <h2 id="inventory-title">背包</h2>
         <div class="header-actions">
           <span class="item-count">{{ items.length }} 类物品</span>
           <button class="icon-button" type="button" aria-label="关闭背包" @click="closePanel">
@@ -15,85 +13,87 @@
       </header>
 
       <div class="panel-body">
-        <nav class="category-nav" aria-label="物品分类">
-          <span class="nav-label">分类</span>
-          <button
-            v-for="category in categories"
-            :key="category.id"
-            type="button"
-            class="category-button"
-            :class="{ active: activeCategory === category.id }"
-            @click="activeCategory = category.id"
-          >
-            <span class="category-icon" aria-hidden="true">{{ category.icon }}</span>
-            <span>{{ category.label }}</span>
-            <b>{{ categoryCount(category.id) }}</b>
-          </button>
-        </nav>
-
-        <section class="item-section" aria-label="物品列表">
+        <section class="inventory-section" aria-label="物品栏">
           <div class="section-heading">
-            <h3>{{ currentCategoryLabel }}</h3>
-            <span class="section-count">{{ filteredItems.length }} 项</span>
+            <h3>物品栏</h3>
+            <span>7 × 3</span>
           </div>
 
-          <div v-if="filteredItems.length" class="item-grid">
+          <div class="inventory-grid">
             <button
-              v-for="item in filteredItems"
-              :key="item.id"
+              v-for="(item, index) in inventorySlots"
+              :key="`inventory-${index}`"
+              class="inventory-slot"
+              :class="{ selected: selected?.id === item?.id }"
               type="button"
-              class="item-card"
-              :class="[`item-card-${item.category}`, { active: selected?.id === item.id }]"
-              @click="selected = item"
+              :aria-label="item ? `${item.name}，数量 ${item.quantity}` : `空槽位 ${index + 1}`"
+              @click="selectItem(item)"
             >
-              <span class="item-icon" aria-hidden="true">{{ itemIcon(item) }}</span>
-              <span class="item-card-copy">
-                <strong>{{ item.name }}</strong>
-                <small>{{ categoryLabel(item.category) }}</small>
-              </span>
-              <span class="item-quantity">×{{ item.quantity }}</span>
+              <template v-if="item">
+                <span class="slot-icon" aria-hidden="true">{{ itemIcon(item) }}</span>
+                <span class="slot-quantity">{{ item.quantity }}</span>
+              </template>
             </button>
           </div>
 
-          <div v-else class="empty-state">
-            <span class="empty-icon" aria-hidden="true">◇</span>
-            <strong>暂无该类物品</strong>
+          <div class="hotbar-heading">
+            <h3>快捷栏</h3>
+            <span>1 - 7</span>
+          </div>
+          <div class="hotbar-preview" aria-label="快捷栏预览">
+            <button
+              v-for="(slot, index) in normalizedHotbarSlots"
+              :key="`hotbar-${index}`"
+              class="inventory-slot hotbar-slot"
+              :class="{ selected: selectedHotbarIndex === index }"
+              type="button"
+              :aria-label="
+                slot ? `${slot.name}，快捷栏第 ${index + 1} 格` : `空快捷栏 ${index + 1}`
+              "
+              @click="selectHotbar(index)"
+            >
+              <span class="slot-number">{{ index + 1 }}</span>
+              <template v-if="slot">
+                <span class="slot-icon" aria-hidden="true">{{ itemIcon(slot) }}</span>
+                <span class="slot-quantity">{{ slot.quantity }}</span>
+              </template>
+            </button>
           </div>
         </section>
 
-        <aside v-if="selected" class="detail-panel" aria-label="物品详情">
-          <div class="detail-art" :class="`detail-art-${selected.category}`">
-            <span aria-hidden="true">{{ itemIcon(selected) }}</span>
-            <small>{{ categoryLabel(selected.category) }}</small>
-          </div>
-          <div class="detail-copy">
-            <h3>{{ selected.name }}</h3>
-            <p>{{ selected.description }}</p>
-          </div>
-          <div class="detail-meta">
-            <div>
-              <span>类别</span>
-              <strong>{{ categoryLabel(selected.category) }}</strong>
+        <aside class="detail-panel" aria-label="物品详情">
+          <template v-if="selected">
+            <div class="detail-art" :class="`detail-art-${selected.category}`">
+              <span aria-hidden="true">{{ itemIcon(selected) }}</span>
             </div>
-            <div>
-              <span>数量</span>
-              <strong>×{{ selected.quantity }}</strong>
+            <div class="detail-copy">
+              <h3>{{ selected.name }}</h3>
+              <span>{{ categoryLabel(selected.category) }}</span>
+              <p>{{ selected.description }}</p>
             </div>
+            <div class="detail-meta">
+              <div>
+                <span>数量</span>
+                <strong>×{{ selected.quantity }}</strong>
+              </div>
+              <div>
+                <span>槽位</span>
+                <strong>{{ slotLabel(selected) }}</strong>
+              </div>
+            </div>
+            <button
+              v-if="selected.id === 'world-orb-demo'"
+              class="primary-button"
+              type="button"
+              @click="useSelectedOrb"
+            >
+              进入空白世界
+            </button>
+          </template>
+          <div v-else class="detail-empty">
+            <span class="empty-icon" aria-hidden="true">◇</span>
+            <strong>选择一件物品</strong>
           </div>
-          <div class="detail-divider"></div>
-          <button
-            v-if="selected.id === 'world-orb-demo'"
-            class="primary-button"
-            type="button"
-            @click="useSelectedOrb"
-          >
-            进入空白世界
-          </button>
-          <button v-else class="secondary-button" type="button" disabled>暂无可用操作</button>
-        </aside>
-        <aside v-else class="detail-panel detail-empty" aria-label="物品详情">
-          <span class="empty-icon" aria-hidden="true">✦</span>
-          <strong>选择一件物品</strong>
         </aside>
       </div>
     </div>
@@ -103,62 +103,76 @@
 <script setup>
 import { computed, ref, watch } from 'vue';
 
+const INVENTORY_SLOT_COUNT = 21;
+
 const props = defineProps({
   items: {
     type: Array,
     default: () => [],
   },
+  hotbarSlots: {
+    type: Array,
+    default: () => [],
+  },
+  selectedHotbarIndex: {
+    type: Number,
+    default: 0,
+  },
 });
 
-const emit = defineEmits(['close', 'use-orb']);
-
-const categories = [
-  { id: 'all', label: '全部', icon: '▦' },
-  { id: 'material', label: '材料', icon: '◆' },
-  { id: 'ugc', label: 'UGC 组件', icon: '✦' },
-];
-
-const activeCategory = ref('all');
+const emit = defineEmits(['close', 'use-orb', 'select-hotbar']);
 const selected = ref(null);
 
-const filteredItems = computed(() => {
-  if (activeCategory.value === 'all') return props.items;
-  return props.items.filter((item) => item.category === activeCategory.value);
-});
+const inventorySlots = computed(() =>
+  Array.from({ length: INVENTORY_SLOT_COUNT }, (_, index) => props.items[index] || null)
+);
 
-const currentCategoryLabel = computed(
-  () => categories.find((category) => category.id === activeCategory.value)?.label || '全部'
+const normalizedHotbarSlots = computed(() =>
+  Array.from({ length: 7 }, (_, index) => props.hotbarSlots[index] || null)
 );
 
 watch(
   () => props.items,
   (items) => {
-    if (!selected.value || !items.some((item) => item.id === selected.value.id)) {
-      selected.value = items[0] || null;
+    if (
+      !selected.value ||
+      !items.some((item) => item.id === selected.value.id && item.quantity > 0)
+    ) {
+      selected.value = items.find((item) => item.quantity > 0) || null;
     }
   },
   { immediate: true, deep: true }
 );
 
-watch(activeCategory, () => {
-  if (!filteredItems.value.some((item) => item.id === selected.value?.id)) {
-    selected.value = filteredItems.value[0] || null;
-  }
-});
-
-function categoryCount(categoryId) {
-  if (categoryId === 'all') return props.items.length;
-  return props.items.filter((item) => item.category === categoryId).length;
+function itemIcon(item) {
+  if (item.category === 'material') return '◆';
+  if (item.id === 'world-orb-demo') return '●';
+  if (item.id === 'world-fragment-demo') return '✦';
+  return '◇';
 }
 
 function categoryLabel(category) {
-  return categories.find((value) => value.id === category)?.label || '其他';
+  return (
+    {
+      material: '材料',
+      ugc: 'UGC 道具',
+    }[category] || '物品'
+  );
 }
 
-function itemIcon(item) {
-  if (item.category === 'material') return '◆';
-  if (item.id === 'world-orb-demo') return '◉';
-  return '✦';
+function slotLabel(item) {
+  const index = props.hotbarSlots.findIndex((slot) => slot?.id === item.id);
+  return index >= 0 ? `${index + 1}` : '背包';
+}
+
+function selectItem(item) {
+  if (item) selected.value = item;
+}
+
+function selectHotbar(index) {
+  emit('select-hotbar', index);
+  const item = props.hotbarSlots[index];
+  if (item) selected.value = item;
 }
 
 function closePanel() {
@@ -166,7 +180,7 @@ function closePanel() {
 }
 
 function useSelectedOrb() {
-  if (selected.value) emit('use-orb', selected.value);
+  emit('use-orb');
 }
 </script>
 
@@ -183,11 +197,11 @@ function useSelectedOrb() {
 }
 
 .panel {
-  width: min(1080px, 100%);
-  max-height: min(760px, calc(100vh - 56px));
+  width: min(900px, 100%);
+  max-height: min(720px, calc(100vh - 56px));
   overflow: hidden;
   border: 1px solid var(--game-border-strong, #456173);
-  border-radius: 14px;
+  border-radius: 10px;
   background: var(--game-panel, #101d2a);
   color: var(--game-text, #e5ebee);
   box-shadow: 0 18px 42px rgb(0 0 0 / 34%);
@@ -197,233 +211,150 @@ function useSelectedOrb() {
 .panel-header,
 .header-actions,
 .section-heading,
-.category-button,
-.detail-meta,
-.primary-button,
-.secondary-button {
+.hotbar-heading {
   display: flex;
   align-items: center;
 }
 
 .panel-header,
 .section-heading,
-.primary-button,
-.secondary-button {
+.hotbar-heading {
   justify-content: space-between;
 }
 
 .panel-header {
-  padding: 22px 26px;
+  padding: 18px 22px;
   border-bottom: 1px solid var(--game-border, #304656);
 }
 
-.title-group h2 {
+.panel-header h2,
+.section-heading h3,
+.hotbar-heading h3 {
   margin: 0;
-  font-size: 26px;
+}
+
+.panel-header h2 {
+  font-size: 24px;
   letter-spacing: 0.04em;
 }
 
 .header-actions {
-  gap: 16px;
+  gap: 14px;
 }
 
 .item-count,
-.section-count,
-.nav-label {
+.section-heading span,
+.hotbar-heading span {
   color: var(--game-muted, #8f9da6);
   font-size: 11px;
 }
 
 .icon-button {
   display: grid;
-  width: 36px;
-  height: 36px;
+  width: 30px;
+  height: 30px;
   place-items: center;
-  border: 1px solid var(--game-border-strong, #456173);
-  border-radius: 7px;
-  background: #162735;
-  color: var(--game-text, #e5ebee);
+  border: 1px solid var(--game-border, #304656);
+  border-radius: 5px;
+  background: #172936;
+  color: var(--game-muted, #8f9da6);
   cursor: pointer;
-  font-size: 22px;
+  font-size: 20px;
   line-height: 1;
-  transition: 160ms ease;
 }
 
 .icon-button:hover,
 .icon-button:focus-visible {
   border-color: var(--game-cyan, #75cdbd);
-  background: #1b3440;
+  background: #1c3441;
+  color: var(--game-text, #e5ebee);
   outline: none;
 }
 
 .panel-body {
   display: grid;
-  grid-template-columns: 180px minmax(0, 1fr) 250px;
-  min-height: 430px;
+  grid-template-columns: minmax(0, 1fr) 250px;
+  min-height: 420px;
 }
 
-.category-nav {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 22px 14px;
-  border-right: 1px solid var(--game-border, #304656);
-  background: var(--game-panel-deep, #0b1723);
-}
-
-.nav-label {
-  padding: 0 10px 5px;
-}
-
-.category-button {
-  display: grid;
-  grid-template-columns: 24px 1fr auto;
-  gap: 9px;
-  min-height: 42px;
-  padding: 0 10px;
-  border: 1px solid transparent;
-  border-radius: 7px;
-  background: transparent;
-  color: var(--game-muted, #8f9da6);
-  cursor: pointer;
-  text-align: left;
-  transition: 160ms ease;
-}
-
-.category-button:hover,
-.category-button:focus-visible {
-  border-color: var(--game-border-strong, #456173);
-  background: #142936;
-  color: var(--game-text, #e5ebee);
-  outline: none;
-}
-
-.category-button.active {
-  border-color: var(--game-cyan, #75cdbd);
-  background: #18323c;
-  color: var(--game-cyan, #75cdbd);
-}
-
-.category-icon {
-  color: var(--game-gold, #c6a15b);
-}
-
-.category-button b {
-  color: var(--game-text, #e5ebee);
-  font-size: 11px;
-  font-weight: 600;
-}
-
-.item-section {
-  min-width: 0;
+.inventory-section {
   padding: 22px;
 }
 
-.section-heading {
-  margin-bottom: 14px;
+.section-heading,
+.hotbar-heading {
+  margin-bottom: 12px;
 }
 
-.section-heading h3 {
-  margin: 0;
-  font-size: 18px;
+.section-heading h3,
+.hotbar-heading h3 {
+  font-size: 14px;
 }
 
-.item-grid {
+.inventory-grid,
+.hotbar-preview {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
+  grid-template-columns: repeat(7, minmax(42px, 1fr));
+  gap: 5px;
 }
 
-.item-card {
+.inventory-slot {
   position: relative;
   display: grid;
-  grid-template-columns: 42px minmax(0, 1fr) auto;
-  gap: 10px;
-  align-items: center;
-  min-height: 72px;
-  padding: 10px;
-  border: 1px solid var(--game-border, #304656);
-  border-radius: 8px;
-  background: #142735;
+  min-width: 0;
+  min-height: 58px;
+  place-items: center;
+  padding: 0;
+  border: 1px solid #3a5060;
+  background: #172936;
   color: var(--game-text, #e5ebee);
   cursor: pointer;
-  text-align: left;
-  transition: 160ms ease;
 }
 
-.item-card:hover,
-.item-card:focus-visible,
-.item-card.active {
-  border-color: var(--game-cyan, #75cdbd);
-  background: #1a3540;
+.inventory-slot:hover,
+.inventory-slot:focus-visible {
+  border-color: var(--game-border-strong, #456173);
+  background: #1c3441;
   outline: none;
 }
 
-.item-icon {
-  display: grid;
-  width: 42px;
-  height: 42px;
-  place-items: center;
-  border-radius: 6px;
-  background: #263847;
+.inventory-slot.selected {
+  border-color: var(--game-gold, #c6a15b);
+  background: #263422;
+}
+
+.slot-icon {
   color: var(--game-gold, #c6a15b);
-  font-size: 21px;
+  font-size: 25px;
+  line-height: 1;
 }
 
-.item-card-material .item-icon {
-  background: #3d3327;
-  color: #d1a56d;
-}
-
-.item-card-copy {
-  display: flex;
-  min-width: 0;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.item-card-copy strong {
-  overflow: hidden;
-  font-size: 12px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.item-card-copy small,
-.detail-copy p,
-.detail-meta span,
-.empty-state,
-.detail-empty {
-  color: var(--game-muted, #8f9da6);
-  font-size: 11px;
-}
-
-.item-quantity {
-  align-self: start;
-  color: var(--game-gold, #c6a15b);
-  font-size: 12px;
-  font-weight: 800;
-}
-
-.empty-state,
-.detail-empty {
-  display: flex;
-  min-height: 220px;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  text-align: center;
-}
-
-.empty-state strong,
-.detail-empty strong {
+.slot-quantity {
+  position: absolute;
+  right: 5px;
+  bottom: 4px;
   color: var(--game-text, #e5ebee);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+  text-shadow: 1px 1px 0 #07131f;
 }
 
-.empty-icon {
-  color: var(--game-gold, #c6a15b);
-  font-size: 26px;
+.slot-number {
+  position: absolute;
+  top: 4px;
+  left: 5px;
+  color: var(--game-muted, #8f9da6);
+  font-size: 10px;
+  line-height: 1;
+}
+
+.hotbar-heading {
+  margin-top: 24px;
+}
+
+.hotbar-slot {
+  min-height: 62px;
 }
 
 .detail-panel {
@@ -436,13 +367,11 @@ function useSelectedOrb() {
 }
 
 .detail-art {
-  display: flex;
-  min-height: 118px;
-  align-items: center;
-  justify-content: space-between;
-  padding: 18px;
+  display: grid;
+  min-height: 130px;
+  place-items: center;
   border: 1px solid var(--game-border-strong, #456173);
-  border-radius: 8px;
+  border-radius: 7px;
   background: #182b39;
 }
 
@@ -453,14 +382,8 @@ function useSelectedOrb() {
 
 .detail-art > span {
   color: var(--game-gold, #c6a15b);
-  font-size: 54px;
+  font-size: 56px;
   line-height: 1;
-}
-
-.detail-art small {
-  align-self: flex-end;
-  color: var(--game-muted, #8f9da6);
-  font-size: 10px;
 }
 
 .detail-copy {
@@ -472,16 +395,25 @@ function useSelectedOrb() {
 
 .detail-copy h3 {
   margin: 0;
-  font-size: 22px;
+  font-size: 21px;
+}
+
+.detail-copy > span,
+.detail-copy p,
+.detail-meta span,
+.detail-empty {
+  color: var(--game-muted, #8f9da6);
+  font-size: 11px;
 }
 
 .detail-copy p {
-  min-height: 40px;
+  min-height: 42px;
   margin: 0;
   line-height: 1.7;
 }
 
 .detail-meta {
+  display: flex;
   gap: 8px;
   margin-top: 18px;
 }
@@ -492,7 +424,6 @@ function useSelectedOrb() {
   flex-direction: column;
   gap: 5px;
   padding: 9px;
-  border-radius: 6px;
   background: #142735;
 }
 
@@ -500,29 +431,17 @@ function useSelectedOrb() {
   font-size: 12px;
 }
 
-.detail-divider {
-  height: 1px;
-  margin: 18px 0;
-  background: var(--game-border, #304656);
-}
-
-.primary-button,
-.secondary-button {
-  gap: 12px;
+.primary-button {
   width: 100%;
   min-height: 44px;
+  margin-top: auto;
   padding: 0 12px;
-  border-radius: 7px;
-  cursor: pointer;
-  font: inherit;
-  transition: 160ms ease;
-}
-
-.primary-button {
-  justify-content: center;
   border: 1px solid var(--game-gold, #c6a15b);
+  border-radius: 6px;
   background: #3a3020;
   color: #f0d99f;
+  cursor: pointer;
+  font: inherit;
 }
 
 .primary-button:hover,
@@ -532,12 +451,23 @@ function useSelectedOrb() {
   outline: none;
 }
 
-.secondary-button {
+.detail-empty {
+  display: flex;
+  min-height: 220px;
+  flex-direction: column;
+  align-items: center;
   justify-content: center;
-  border: 1px solid var(--game-border, #304656);
-  background: #142735;
-  color: var(--game-muted, #8f9da6);
-  cursor: not-allowed;
+  gap: 8px;
+  text-align: center;
+}
+
+.detail-empty strong {
+  color: var(--game-text, #e5ebee);
+}
+
+.empty-icon {
+  color: var(--game-gold, #c6a15b);
+  font-size: 26px;
 }
 
 @keyframes overlay-in {
@@ -562,66 +492,42 @@ function useSelectedOrb() {
   }
 }
 
-@media (max-width: 900px) {
+@media (max-width: 760px) {
   .panel-body {
-    grid-template-columns: 140px minmax(0, 1fr);
+    grid-template-columns: 1fr;
+    max-height: calc(100vh - 110px);
+    overflow-y: auto;
   }
 
   .detail-panel {
-    display: none;
+    min-height: 260px;
+    border-top: 1px solid var(--game-border, #304656);
+    border-left: 0;
   }
 }
 
-@media (max-width: 640px) {
+@media (max-width: 560px) {
   .overlay {
     padding: 12px;
   }
 
   .panel {
     max-height: calc(100vh - 24px);
-    border-radius: 12px;
   }
 
-  .panel-header {
-    padding: 18px;
-  }
-
-  .panel-body {
-    display: block;
-    min-height: 0;
-    max-height: calc(100vh - 110px);
-    overflow-y: auto;
-  }
-
-  .category-nav {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    padding: 12px;
-    border-right: 0;
-    border-bottom: 1px solid var(--game-border, #304656);
-  }
-
-  .nav-label {
-    display: none;
-  }
-
-  .category-button {
-    grid-template-columns: 20px 1fr;
-    min-height: 38px;
-    padding: 0 7px;
-    font-size: 11px;
-  }
-
-  .category-button b {
-    display: none;
-  }
-
-  .item-section {
+  .panel-header,
+  .inventory-section,
+  .detail-panel {
     padding: 16px;
   }
 
-  .item-grid {
-    grid-template-columns: 1fr;
+  .inventory-grid,
+  .hotbar-preview {
+    gap: 3px;
+  }
+
+  .inventory-slot {
+    min-height: 48px;
   }
 }
 </style>
