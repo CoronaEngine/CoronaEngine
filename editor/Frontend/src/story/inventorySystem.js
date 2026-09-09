@@ -3,29 +3,37 @@
  */
 import { storyModeStore } from './storyModeStore.js';
 
+function isUniqueUgcItem(item) {
+  return item?.category === 'ugc' && (item?.logic || item?.id === 'world-fragment-demo');
+}
+
 export const inventorySystem = {
   getItems() {
     return storyModeStore.items;
   },
 
   addItem(item) {
-    const quantity = item.quantity ?? 1;
+    const quantity = Math.max(1, item.quantity ?? 1);
     const existing = storyModeStore.items.find((value) => value.id === item.id);
+
     if (existing) {
-      existing.quantity += quantity;
+      Object.assign(existing, item, { quantity: existing.quantity });
+      if (!isUniqueUgcItem(item)) existing.quantity += quantity;
       return existing;
     }
 
-    const nextItem = { quantity: 1, ...item };
+    const nextItem = { quantity, ...item };
     storyModeStore.items.push(nextItem);
     return nextItem;
   },
 
   removeItem(id, quantity = 1) {
+    if (!Number.isSafeInteger(quantity) || quantity < 1) return false;
     const item = storyModeStore.items.find((value) => value.id === id);
     if (!item || item.quantity < quantity) return false;
 
     item.quantity -= quantity;
+    if (item.quantity === 0) storyModeStore.items.splice(storyModeStore.items.indexOf(item), 1);
     return true;
   },
 

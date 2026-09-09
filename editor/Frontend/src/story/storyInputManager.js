@@ -66,13 +66,16 @@ function isEditableTarget(event) {
  * @param {Document} target 用于监听鼠标和 Pointer Lock 的文档对象。
  * @returns {object} 剧情模式输入接口。
  */
-export function createStoryInputManager(target = document) {
+export function createStoryInputManager(target = document, options = {}) {
+  const gameElement = options.gameElement || null;
+  const windowTarget = options.windowTarget || globalThis.window || target;
   const held = new Set();
   const pressed = new Set();
   const look = { x: 0, y: 0 };
 
   let pointerLocked = false;
   let mouseActive = false;
+  let lastPointer = null;
 
   const onKeyDown = (event) => {
     if (isEditableTarget(event)) return;
@@ -97,15 +100,33 @@ export function createStoryInputManager(target = document) {
     }
   };
 
+  const isGameSurfaceEvent = (event) => {
+    if (!gameElement) return true;
+    const eventTarget = event?.target;
+    return eventTarget === gameElement || gameElement.contains?.(eventTarget);
+  };
+
   const onMouseMove = (event) => {
     if (!mouseActive && !pointerLocked) return;
+    if (!pointerLocked && !isGameSurfaceEvent(event)) return;
 
-    look.x += Number(event.movementX) || 0;
-    look.y += Number(event.movementY) || 0;
+    const movementX = Number(event.movementX);
+    const movementY = Number(event.movementY);
+    if (pointerLocked || Number.isFinite(movementX) || Number.isFinite(movementY)) {
+      look.x += Number.isFinite(movementX) ? movementX : 0;
+      look.y += Number.isFinite(movementY) ? movementY : 0;
+    } else if (Number.isFinite(event.clientX) && Number.isFinite(event.clientY)) {
+      if (lastPointer) {
+        look.x += event.clientX - lastPointer.x;
+        look.y += event.clientY - lastPointer.y;
+      }
+      lastPointer = { x: event.clientX, y: event.clientY };
+    }
   };
 
   const onMouseDown = (event) => {
     if (event.button !== 0 || (!mouseActive && !pointerLocked)) return;
+    if (!pointerLocked && !isGameSurfaceEvent(event)) return;
 
     event.preventDefault();
     pressed.add('attack');
@@ -116,6 +137,7 @@ export function createStoryInputManager(target = document) {
     pointerLocked = target.pointerLockElement != null;
     if (pointerLocked) {
       mouseActive = true;
+      lastPointer = null;
     } else if (wasPointerLocked) {
       // 用户按 Esc 主动退出 Pointer Lock 后，等待下一次点击重新激活视角。
       mouseActive = false;
@@ -127,6 +149,7 @@ export function createStoryInputManager(target = document) {
     pressed.clear();
     look.x = 0;
     look.y = 0;
+    lastPointer = null;
   };
 
   const clearAll = () => {
@@ -138,6 +161,7 @@ export function createStoryInputManager(target = document) {
     clearAll();
     mouseActive = false;
     pointerLocked = false;
+    target.exitPointerLock?.();
   };
 
   const onVisibilityChange = () => {
@@ -146,12 +170,12 @@ export function createStoryInputManager(target = document) {
     }
   };
 
-  window.addEventListener('keydown', onKeyDown, true);
-  window.addEventListener('keyup', onKeyUp, true);
+  windowTarget.addEventListener('keydown', onKeyDown, true);
+  windowTarget.addEventListener('keyup', onKeyUp, true);
   target.addEventListener('mousemove', onMouseMove, true);
   target.addEventListener('mousedown', onMouseDown, true);
   target.addEventListener('pointerlockchange', onPointerLockChange);
-  window.addEventListener('blur', onWindowBlur);
+  windowTarget.addEventListener('blur', onWindowBlur);
   target.addEventListener('visibilitychange', onVisibilityChange);
 
   return {
@@ -189,12 +213,12 @@ export function createStoryInputManager(target = document) {
     clearAll,
 
     dispose: () => {
-      window.removeEventListener('keydown', onKeyDown, true);
-      window.removeEventListener('keyup', onKeyUp, true);
+      windowTarget.removeEventListener('keydown', onKeyDown, true);
+      windowTarget.removeEventListener('keyup', onKeyUp, true);
       target.removeEventListener('mousemove', onMouseMove, true);
       target.removeEventListener('mousedown', onMouseDown, true);
       target.removeEventListener('pointerlockchange', onPointerLockChange);
-      window.removeEventListener('blur', onWindowBlur);
+      windowTarget.removeEventListener('blur', onWindowBlur);
       target.removeEventListener('visibilitychange', onVisibilityChange);
       clearAll();
     },

@@ -1,4 +1,4 @@
-<!-- 剧情模式根组件：只负责 Three.js 生命周期、HUD、快捷栏和模式退出。 -->
+<!-- 剧情模式根组件：只负责 Three.js 生命周期、HUD 数据绑定和主世界/小世界切换。 -->
 <template>
   <main
     ref="root"
@@ -26,7 +26,7 @@
       type="button"
       aria-label="退出剧情模式"
       @pointerdown.stop
-      @click.stop="exit"
+      @click.stop="exitStoryMode"
     >
       <span class="menu-icon">↩</span>
       <span>退出剧情模式</span>
@@ -43,6 +43,33 @@
     />
 
     <MapPanel v-if="store.mapOpen" :player="mapPlayer" @close="closeOverlay" />
+
+    <UgcWorldPicker
+      v-if="ugcPickerOpen"
+      class="ugc-world-picker"
+      :worlds="ugcWorlds"
+      :loading="ugcPickerLoading"
+      :error="ugcPickerError"
+      @cancel="cancelUgcPicker"
+      @create="createNewUgcWorld"
+      @open="openExistingUgcWorld"
+    />
+
+    <UgcWorldOverlay
+      v-if="store.worldType === 'ugc'"
+      :view-state="ugcViewState"
+      :exit-confirm="ugcExitConfirm"
+      :error="ugcError"
+      @set-mode="setUgcMode"
+      @save="saveUgcWorld"
+      @exit="requestExitUgcWorld"
+      @save-exit="saveAndExitUgcWorld"
+      @discard-exit="discardAndExitUgcWorld"
+      @cancel-exit="cancelExitUgc"
+      @place="placeUgcObject"
+      @delete="deleteUgcObject"
+      @bind="bindUgcFragment"
+    />
   </main>
 </template>
 
@@ -54,6 +81,8 @@ import StoryHud from '@/story/components/StoryHud.vue';
 import StoryHotbar from '@/story/components/StoryHotbar.vue';
 import InventoryPanel from '@/story/components/InventoryPanel.vue';
 import MapPanel from '@/story/components/MapPanel.vue';
+import UgcWorldOverlay from '@/story/components/UgcWorldOverlay.vue';
+import UgcWorldPicker from '@/story/components/UgcWorldPicker.vue';
 import { createFallbackScene } from '@/story/adapters/fallbackSceneAdapter.js';
 import { createStoryCameraController } from '@/story/storyCameraController.js';
 import { createStoryCombatSystem } from '@/story/storyCombatSystem.js';
@@ -64,13 +93,32 @@ import { createStoryPlayer } from '@/story/storyPlayer.js';
 import { createStoryRuntime } from '@/story/storyRuntime.js';
 import { hotbarSystem } from '@/story/hotbarSystem.js';
 import { inventorySystem } from '@/story/inventorySystem.js';
-import { createUgcWorldSession } from '@/story/ugc/ugcWorldSession.js';
+import { createUgcWorldController } from '@/story/ugc/ugcWorldController.js';
+import { createUgcId } from '@/story/ugc/ugcWorldState.js';
+import { createDemoWorldFragment } from '@/story/ugc/worldFragment.js';
 import { storyModeStore as store, toggleInventory, toggleMap } from '@/story/storyModeStore.js';
 
 const root = ref(null);
 const canvas = ref(null);
 const router = useRouter();
 const interactionHint = ref('');
+const ugcViewState = ref({
+  world: null,
+  resources: { materials: [], fragments: [] },
+  mode: 'build',
+  dirty: false,
+  saving: false,
+  active: false,
+  error: '',
+});
+const ugcExitConfirm = ref(false);
+const ugcError = ref('');
+const ugcPickerOpen = ref(false);
+const ugcPickerLoading = ref(false);
+const ugcPickerError = ref('');
+const ugcWorlds = ref([]);
+const ugcEntering = ref(false);
+let ugcPickerRequestId = 0;
 const debugState = reactive({
   x: 0,
   y: 1.7,
@@ -92,24 +140,26 @@ const mapPlayer = computed(() => ({
 const hotbarSlots = computed(() => hotbarSystem.getSlots());
 const selectedHotbarIndex = computed(() => hotbarSystem.getSelectedIndex());
 
-let renderer;
-let sceneBundle;
-let camera;
-let input;
-let runtime;
-let interactionSystem;
-let frame;
-let resize;
-let ugcSession;
+let renderer = null;
+let mainSceneBundle = null;
+let activeSceneBundle = null;
+let camera = null;
+let input = null;
+let runtime = null;
+let interactionSystem = null;
+let combatSystem = null;
+let animationFrame = 0;
+let resize = null;
+let ugcController = null;
+let ugcPickerController = null;
+let disposed = false;
 
 const { player, resetToSpawn } = createStoryPlayer();
 const cameraController = createStoryCameraController();
 
 watch(
   () => store.items,
-  (items) => {
-    hotbarSystem.syncFromInventory(items);
-  },
+  (items) => hotbarSystem.syncFromInventory(items),
   { immediate: true, deep: true }
 );
 
@@ -122,12 +172,29 @@ function showHint(message, timeout = 2500) {
   }
 }
 
+function updateUgcView(viewState) {
+  ugcViewState.value = viewState || ugcViewState.value;
+  ugcError.value = viewState?.error || '';
+}
+
+function isGameInputBlocked() {
+  return (
+    store.inventoryOpen ||
+    store.mapOpen ||
+    ugcPickerOpen.value ||
+    ugcPickerLoading.value ||
+    ugcEntering.value ||
+    ugcExitConfirm.value ||
+    ugcViewState.value.saving ||
+    (store.worldType === 'ugc' && ugcViewState.value.mode === 'build')
+  );
+}
+
 function lockPointer(event) {
   const target = event?.target;
   if (
-    store.inventoryOpen ||
-    store.mapOpen ||
-    target?.closest?.('.menu-button, .overlay, .hotbar, button')
+    isGameInputBlocked() ||
+    target?.closest?.('.menu-button, .ugc-overlay, .ugc-world-picker, .overlay, .hotbar, button')
   ) {
     return;
   }
@@ -135,69 +202,134 @@ function lockPointer(event) {
   input?.setMouseActive?.(true);
   store.mouseActive = true;
   root.value?.focus?.({ preventScroll: true });
-  canvas.value?.requestPointerLock?.();
+  const request = canvas.value?.requestPointerLock?.();
+  if (request?.catch) request.catch(() => input?.setMouseActive?.(true));
 }
 
-function pauseOverlayInput() {
+function pauseGameInput() {
   if (document.pointerLockElement) document.exitPointerLock();
   input?.setMouseActive?.(false);
   input?.clearAll?.();
   store.mouseActive = false;
 }
 
+function resumeGameInput() {
+  input?.clearAll?.();
+  store.mouseActive = false;
+  store.pointerLocked = false;
+}
+
 function closeOverlay() {
   store.inventoryOpen = false;
   store.mapOpen = false;
-  pauseOverlayInput();
+  pauseGameInput();
 }
 
 function selectHotbarSlot(index) {
   hotbarSystem.select(index);
 }
 
-function exit() {
-  document.exitPointerLock?.();
-  router.push('/StartScreen');
+function applyPlayerSpawn(spawn = {}) {
+  const position = spawn.position || [0, 1.7, 4];
+  player.spawn.set(position[0], position[1], position[2]);
+  player.position.copy(player.spawn);
+  player.velocityY = 0;
+  player.grounded = true;
+  player.yaw = spawn.yaw || 0;
+  player.pitch = spawn.pitch || 0;
+  cameraController.applyToCamera(camera, player);
 }
 
-function useWorldOrb() {
-  if (!inventorySystem.hasItem('world-orb-demo')) {
-    showHint('你没有世界小球。');
-    return;
+function syncMainStore() {
+  if (store.worldType === 'main') {
+    store.player.x = player.position.x;
+    store.player.y = player.position.y;
+    store.player.z = player.position.z;
+  }
+  store.pointerLocked = input?.isPointerLocked?.() || false;
+  store.mouseActive = input?.isMouseActive?.() || false;
+  debugState.x = player.position.x;
+  debugState.y = player.position.y;
+  debugState.z = player.position.z;
+  debugState.yaw = player.yaw;
+  debugState.pitch = player.pitch;
+  debugState.grounded = player.grounded;
+  debugState.pointerLocked = store.pointerLocked;
+  debugState.mouseActive = store.mouseActive;
+  debugState.worldType = store.worldType;
+  debugState.bossHealth = store.bossHealth;
+  debugState.target = store.interactionTarget;
+}
+
+function restoreMainWorld(snapshot) {
+  if (!snapshot) return;
+
+  activeSceneBundle = mainSceneBundle;
+  interactionSystem.setScene(mainSceneBundle.scene);
+  combatSystem.setScene(mainSceneBundle.scene);
+
+  if (snapshot.items) store.items.splice(0, store.items.length, ...snapshot.items);
+  if (snapshot.bossHealth !== undefined) store.bossHealth = snapshot.bossHealth;
+  if (snapshot.storyState?.worldType) store.worldType = snapshot.storyState.worldType;
+
+  const savedBoss = snapshot.boss;
+  if (savedBoss && mainSceneBundle.storyObjects.boss) {
+    const boss = mainSceneBundle.storyObjects.boss;
+    boss.userData.health = savedBoss.health;
+    boss.visible = savedBoss.visible;
+    boss.userData.disabled = savedBoss.disabled;
   }
 
-  const fragments = store.items.filter((item) => item.category === 'ugc');
-  ugcSession?.loadResources(
-    store.items.filter((item) => item.category === 'material'),
-    fragments
-  );
-  ugcSession?.enter({
-    player: store.player,
-    items: store.items,
-    worldType: store.worldType,
-  });
-  store.worldType = 'ugc';
-  showHint('已进入 UGC 空白世界会话，资源注入接口已完成。', 3500);
-  closeOverlay();
+  if (snapshot.player) {
+    const savedSpawn = snapshot.player.spawn || [0, 1.7, 4];
+    player.spawn.fromArray(savedSpawn);
+    player.position.set(snapshot.player.x, snapshot.player.y, snapshot.player.z);
+    player.velocityY = snapshot.player.velocityY || 0;
+    player.grounded = snapshot.player.grounded !== false;
+    player.yaw = snapshot.camera?.yaw ?? snapshot.player.yaw ?? 0;
+    player.pitch = snapshot.camera?.pitch ?? snapshot.player.pitch ?? 0;
+  }
+
+  cameraController.applyToCamera(camera, player);
+  store.worldType = 'main';
+  ugcViewState.value = { ...ugcViewState.value, active: false };
+  resumeGameInput();
+  syncMainStore();
 }
 
 function handleInteraction(result) {
   if (!result) return;
-
   if (result.type === 'picked-item') {
     inventorySystem.addItem(result.item);
     result.object.visible = false;
     result.object.userData.disabled = true;
     showHint(`已获得：${result.item.name}`);
-  } else if (result.type === 'boss-status') {
-    showHint(`灰盒 Boss：${Math.max(0, store.bossHealth)} / 100`);
+    return;
   }
+  if (result.type === 'boss-status') {
+    showHint(`灰盒 Boss：${Math.max(0, store.bossHealth)} / 100`);
+    return;
+  }
+  if (result.errors?.length) showHint(result.errors[0], 2500);
 }
 
 function handleAttack(result) {
   const target = result?.target;
   if (!target) {
-    showHint('攻击未命中目标', 900);
+    if (result?.accepted) showHint('攻击未命中目标', 900);
+    return;
+  }
+
+  if (store.worldType === 'ugc') {
+    const objectId = target.userData.objectId;
+    if (objectId) {
+      ugcController?.recordAttack(objectId, target.userData.health);
+      if (target.userData.health <= 0) {
+        target.visible = false;
+        target.userData.disabled = true;
+      }
+      showHint(`目标生命：${Math.max(0, target.userData.health)}`, 900);
+    }
     return;
   }
 
@@ -207,157 +339,341 @@ function handleAttack(result) {
 
   target.visible = false;
   target.userData.disabled = true;
-  const fragment = sceneBundle.storyObjects.fragment;
+  const fragment = mainSceneBundle.storyObjects.fragment;
   fragment.position.copy(target.position).add(new THREE.Vector3(0, -1, 0));
   fragment.visible = true;
   fragment.userData.disabled = false;
   showHint('Boss 已被击败，世界碎片已掉落！', 3500);
 }
 
-onMounted(async () => {
-  sceneBundle = await createFallbackScene();
-  camera = new THREE.PerspectiveCamera(70, 1, 0.1, 1000);
-  input = createStoryInputManager(document);
-  ugcSession = createUgcWorldSession();
+function setActiveScene(bundle) {
+  activeSceneBundle = bundle;
+  interactionSystem.setScene(bundle.scene);
+  combatSystem.setScene(bundle.scene);
+}
 
-  const boss = sceneBundle.storyObjects.boss;
-  const fragment = sceneBundle.storyObjects.fragment;
-  fragment.visible = false;
+async function openUgcWorldPicker() {
+  const requestId = ++ugcPickerRequestId;
+  ugcPickerOpen.value = true;
+  ugcPickerLoading.value = true;
+  ugcPickerError.value = '';
+  ugcWorlds.value = [];
+  pauseGameInput();
 
-  boss.userData.interact = () => ({ type: 'boss-status' });
-  sceneBundle.storyObjects.orb.userData.interact = () => ({
-    type: 'picked-item',
-    object: sceneBundle.storyObjects.orb,
-    item: {
-      id: 'world-orb-demo',
-      name: '世界小球',
-      category: 'ugc',
-      quantity: 1,
-      description: '进入空白 UGC 世界的入口。',
+  ugcPickerController?.dispose?.();
+  ugcPickerController = createUgcWorldController({ mainItems: store.items });
+  try {
+    ugcWorlds.value = await ugcPickerController.listWorlds();
+  } catch (error) {
+    // 浏览器预览没有 C++ bridge 时仍允许创建，但保存会明确提示接口不可用。
+    ugcPickerError.value = error.message || '无法读取当前项目的小世界列表。';
+  } finally {
+    if (requestId === ugcPickerRequestId) {
+      ugcPickerLoading.value = false;
+      ugcPickerController?.dispose?.();
+      ugcPickerController = null;
+    }
+  }
+}
+
+function cancelUgcPicker() {
+  ugcPickerRequestId += 1;
+  ugcPickerOpen.value = false;
+  ugcPickerLoading.value = false;
+  ugcPickerError.value = '';
+  resumeGameInput();
+}
+
+async function enterUgcWorld({ worldId, loadExisting = false } = {}) {
+  ugcPickerRequestId += 1;
+  ugcPickerOpen.value = false;
+  ugcPickerLoading.value = false;
+  ugcEntering.value = true;
+  pauseGameInput();
+
+  ugcController?.dispose?.();
+  ugcController = createUgcWorldController({
+    mainItems: store.items,
+    onChanged: updateUgcView,
+    onMessage: ({ type, message }) => {
+      if (type === 'message') showHint(message, 2800);
     },
   });
-  fragment.userData.interact = () => ({
-    type: 'picked-item',
-    object: fragment,
-    item: {
-      id: 'world-fragment-demo',
-      name: '世界碎片',
-      category: 'ugc',
-      quantity: 1,
-      description: '承载受控游戏逻辑，可用于制作 Demo。',
-    },
-  });
 
-  const physics = createStoryPhysicsSystem({
-    player,
-    onRespawn: () => showHint('你离开了场景区域，已回到出生点。', 1800),
-  });
-  const combatSystem = createStoryCombatSystem({
-    camera,
-    scene: sceneBundle.scene,
-    onHit: (target, damage) => {
-      target.userData.health = Math.max(0, target.userData.health - damage);
+  const snapshot = {
+    player: {
+      x: player.position.x,
+      y: player.position.y,
+      z: player.position.z,
+      velocityY: player.velocityY,
+      grounded: player.grounded,
+      yaw: player.yaw,
+      pitch: player.pitch,
+      spawn: player.spawn.toArray(),
     },
-  });
-  interactionSystem = createStoryInteractionSystem({
-    camera,
-    scene: sceneBundle.scene,
-    onTargetChanged: (target) => {
-      store.interactionTarget = target?.userData?.name || '';
+    camera: { yaw: player.yaw, pitch: player.pitch },
+    items: store.items,
+    bossHealth: store.bossHealth,
+    boss: {
+      health: mainSceneBundle.storyObjects.boss.userData.health,
+      visible: mainSceneBundle.storyObjects.boss.visible,
+      disabled: Boolean(mainSceneBundle.storyObjects.boss.userData.disabled),
     },
-  });
-  runtime = createStoryRuntime({
-    input,
-    camera,
-    player,
-    physics,
-    cameraController,
-    interactionSystem,
-    combatSystem,
-    onInteraction: handleInteraction,
-    onAttack: handleAttack,
-  });
-
-  cameraController.applyToCamera(camera, player);
-  store.running = true;
-  renderer = new THREE.WebGLRenderer({ canvas: canvas.value, antialias: true });
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
-
-  resize = () => {
-    const width = root.value?.clientWidth || 1;
-    const height = root.value?.clientHeight || 1;
-    camera.aspect = width / height;
-    camera.updateProjectionMatrix();
-    renderer.setSize(width, height, false);
+    storyState: { worldType: store.worldType },
+    activeScene: mainSceneBundle,
   };
 
-  resize();
-  window.addEventListener('resize', resize);
-  runtime.start();
+  try {
+    const viewState = await ugcController.enter({
+      worldId: worldId || createUgcId('ugc-world'),
+      mainItems: store.items,
+      mainWorldSnapshot: snapshot,
+      loadExisting,
+    });
+    updateUgcView(viewState);
+    setActiveScene(ugcController.getSceneBundle());
+    applyPlayerSpawn(viewState.world.spawn);
+    store.worldType = 'ugc';
+    closeOverlay();
+    showHint('已进入小世界，当前为建造模式。', 3200);
+  } catch (error) {
+    ugcController?.dispose();
+    ugcController = null;
+    ugcError.value = error.message || '进入小世界失败。';
+    showHint(ugcError.value, 3200);
+  } finally {
+    ugcEntering.value = false;
+  }
+}
 
-  const tick = (time) => {
-    const delta = Math.min(0.05, (time - (tick.last || time)) / 1000);
-    tick.last = time;
+function createNewUgcWorld() {
+  enterUgcWorld({ worldId: createUgcId('ugc-world') });
+}
 
-    if (input.consumePressed('inventory')) {
-      toggleInventory();
-      if (store.inventoryOpen) pauseOverlayInput();
-    }
-    if (input.consumePressed('map')) {
-      toggleMap();
-      if (store.mapOpen) pauseOverlayInput();
-    }
+function openExistingUgcWorld(worldId) {
+  if (!worldId) return;
+  enterUgcWorld({ worldId, loadExisting: true });
+}
 
-    const blocked = store.inventoryOpen || store.mapOpen;
-    if (blocked) {
-      pauseOverlayInput();
-    } else {
+async function useWorldOrb() {
+  if (store.worldType !== 'main') {
+    showHint('请先返回主世界。');
+    return;
+  }
+  if (!inventorySystem.hasItem('world-orb-demo')) {
+    showHint('你没有世界小球。');
+    return;
+  }
+  await openUgcWorldPicker();
+}
+
+function setUgcMode(mode) {
+  if (!ugcController?.setMode(mode)) return;
+  updateUgcView(ugcController.getViewState());
+  pauseGameInput();
+  if (mode === 'play') {
+    const spawn = ugcController.getWorld()?.spawn;
+    applyPlayerSpawn(spawn);
+    showHint('试玩模式已开启。', 1800);
+  }
+}
+
+function placeUgcObject(options) {
+  const result = ugcController?.placeObject(options);
+  if (!result?.ok) showHint(result?.error || '放置失败。', 2200);
+  else showHint('对象已放置。', 1200);
+}
+
+function deleteUgcObject(id) {
+  const result = ugcController?.removeObject(id);
+  if (!result?.ok) showHint(result?.error || '删除失败。', 2200);
+}
+
+function bindUgcFragment({ objectId, fragmentId }) {
+  const result = ugcController?.bindFragment(objectId, fragmentId);
+  if (!result?.ok) showHint(result?.error || '绑定失败。', 2200);
+}
+
+async function saveUgcWorld() {
+  const result = await ugcController?.save();
+  if (!result?.ok) showHint(result?.error || '保存失败。', 3200);
+  else showHint('小世界已保存。', 1800);
+}
+
+function requestExitUgcWorld() {
+  if (!ugcController) return;
+  if (ugcController.isDirty()) ugcExitConfirm.value = true;
+  else discardAndExitUgcWorld();
+}
+
+async function saveAndExitUgcWorld() {
+  ugcExitConfirm.value = false;
+  const result = await ugcController?.exit({ save: true });
+  if (!result?.ok) {
+    showHint(result?.error || '保存并退出失败。', 3200);
+    return;
+  }
+  finishUgcExit(result.snapshot);
+}
+
+function discardAndExitUgcWorld() {
+  ugcExitConfirm.value = false;
+  ugcController?.exit({ discard: true }).then((result) => {
+    if (result?.ok) finishUgcExit(result.snapshot);
+    else showHint(result?.error || '退出小世界失败。', 2600);
+  });
+}
+
+function cancelExitUgc() {
+  ugcExitConfirm.value = false;
+}
+
+async function finishUgcExit(snapshot) {
+  ugcController?.dispose();
+  ugcController = null;
+  restoreMainWorld(snapshot);
+  showHint('已返回主世界。', 1800);
+}
+
+async function exitStoryMode() {
+  if (store.worldType === 'ugc') {
+    requestExitUgcWorld();
+    return;
+  }
+  document.exitPointerLock?.();
+  router.push('/StartScreen');
+}
+
+onMounted(async () => {
+  try {
+    mainSceneBundle = await createFallbackScene();
+    activeSceneBundle = mainSceneBundle;
+    camera = new THREE.PerspectiveCamera(70, 1, 0.1, 1000);
+    input = createStoryInputManager(document, {
+      gameElement: canvas.value,
+    });
+
+    const boss = mainSceneBundle.storyObjects.boss;
+    const fragment = mainSceneBundle.storyObjects.fragment;
+    fragment.visible = false;
+    boss.userData.interact = () => ({ type: 'boss-status' });
+    mainSceneBundle.storyObjects.orb.userData.interact = () => ({
+      type: 'picked-item',
+      object: mainSceneBundle.storyObjects.orb,
+      item: {
+        id: 'world-orb-demo',
+        name: '世界小球',
+        category: 'ugc',
+        quantity: 1,
+        description: '进入空白 UGC 世界的入口。',
+      },
+    });
+    fragment.userData.interact = () => ({
+      type: 'picked-item',
+      object: fragment,
+      item: createDemoWorldFragment(),
+    });
+
+    const physics = createStoryPhysicsSystem({
+      player,
+      onRespawn: () => showHint('你离开了场景区域，已回到出生点。', 1800),
+    });
+    combatSystem = createStoryCombatSystem({
+      camera,
+      scene: mainSceneBundle.scene,
+      maxDistance: 60,
+      onHit: (target, damage) => {
+        target.userData.health = Math.max(0, target.userData.health - damage);
+      },
+    });
+    interactionSystem = createStoryInteractionSystem({
+      camera,
+      scene: mainSceneBundle.scene,
+      onTargetChanged: (target) => {
+        store.interactionTarget = target?.userData?.name || '';
+      },
+    });
+    runtime = createStoryRuntime({
+      input,
+      camera,
+      player,
+      physics,
+      cameraController,
+      interactionSystem,
+      combatSystem,
+      onInteraction: handleInteraction,
+      onAttack: handleAttack,
+    });
+
+    cameraController.applyToCamera(camera, player);
+    store.running = true;
+    renderer = new THREE.WebGLRenderer({ canvas: canvas.value, antialias: true });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+
+    resize = () => {
+      const width = root.value?.clientWidth || 1;
+      const height = root.value?.clientHeight || 1;
+      camera.aspect = width / height;
+      camera.updateProjectionMatrix();
+      renderer.setSize(width, height, false);
+    };
+    resize();
+    window.addEventListener('resize', resize);
+    runtime.start();
+
+    const tick = (time) => {
+      if (disposed) return;
+      const delta = Math.min(0.05, (time - (tick.last || time)) / 1000);
+      tick.last = time;
+
+      if (input.consumePressed('inventory')) {
+        toggleInventory();
+        if (store.inventoryOpen) pauseGameInput();
+      }
+      if (input.consumePressed('map')) {
+        toggleMap();
+        if (store.mapOpen) pauseGameInput();
+      }
       for (let index = 0; index < 7; index += 1) {
         if (input.consumePressed(`hotbar${index + 1}`)) {
           hotbarSystem.select(index);
           break;
         }
       }
-      runtime.update(delta);
-    }
 
-    const target = interactionSystem.getFocusedTarget();
-    const prompt = interactionSystem.getPrompt();
-    if (!blocked && prompt) showHint(prompt, 0);
-    if (!target && interactionHint.value?.startsWith('按 F')) interactionHint.value = '';
+      if (isGameInputBlocked()) {
+        runtime.pause();
+        pauseGameInput();
+      } else {
+        runtime.resume();
+        runtime.update(delta);
+        if (store.worldType === 'ugc' && ugcViewState.value.mode === 'play') {
+          ugcController?.updatePlayerPosition(player.position);
+        }
+      }
 
-    store.pointerLocked = input.isPointerLocked();
-    store.mouseActive = input.isMouseActive();
-    store.player.x = player.position.x;
-    store.player.y = player.position.y;
-    store.player.z = player.position.z;
-
-    debugState.x = player.position.x;
-    debugState.y = player.position.y;
-    debugState.z = player.position.z;
-    debugState.yaw = player.yaw;
-    debugState.pitch = player.pitch;
-    debugState.grounded = player.grounded;
-    debugState.pointerLocked = input.isPointerLocked();
-    debugState.mouseActive = input.isMouseActive();
-    debugState.move = !blocked && Boolean(input.getMoveAxis().x || input.getMoveAxis().z);
-    debugState.worldType = store.worldType;
-    debugState.bossHealth = store.bossHealth;
-    debugState.target = store.interactionTarget;
-
-    renderer.render(sceneBundle.scene, camera);
-    frame = requestAnimationFrame(tick);
-  };
-
-  frame = requestAnimationFrame(tick);
+      const target = interactionSystem.getFocusedTarget();
+      const prompt = interactionSystem.getPrompt();
+      if (!isGameInputBlocked() && prompt) interactionHint.value = prompt;
+      if (!target && interactionHint.value?.startsWith('按 F')) interactionHint.value = '';
+      syncMainStore();
+      renderer.render(activeSceneBundle.scene, camera);
+      animationFrame = requestAnimationFrame(tick);
+    };
+    animationFrame = requestAnimationFrame(tick);
+  } catch (error) {
+    showHint(error.message || '剧情模式初始化失败。', 0);
+  }
 });
 
 onUnmounted(() => {
-  cancelAnimationFrame(frame);
+  disposed = true;
+  cancelAnimationFrame(animationFrame);
   input?.dispose();
   renderer?.dispose();
-  sceneBundle?.dispose?.();
-  ugcSession?.dispose?.();
+  mainSceneBundle?.dispose?.();
+  ugcController?.dispose?.();
+  ugcPickerController?.dispose?.();
   if (resize) window.removeEventListener('resize', resize);
   document.exitPointerLock?.();
   store.running = false;
@@ -434,7 +750,6 @@ onUnmounted(() => {
   font: 11px var(--game-font);
   letter-spacing: 0.04em;
   box-shadow: 0 8px 20px rgb(0 0 0 / 24%);
-  transition: 160ms ease;
 }
 
 .menu-button:hover,

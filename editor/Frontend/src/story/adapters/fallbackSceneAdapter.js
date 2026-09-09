@@ -267,7 +267,7 @@ export async function createFallbackScene(sceneName = '场景1') {
 
   // 地形模型加载成功后隐藏视觉平面，避免平面遮挡地形。
   // 物理系统仍独立使用 groundY = 0，不依赖复杂地形碰撞。
-  ground.visible = true;
+  ground.visible = !terrain;
 
   addStoryObjects(scene);
 

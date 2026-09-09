@@ -16,11 +16,16 @@ test('story physics applies gravity and permits grounded jump only', () => {
   assert.equal(player.grounded, true);
 });
 
-test('world fragment uses controlled logic data', () => {
-  const fragment = createWorldFragment({ id: 'fragment-1', logic: { triggers: ['boss-defeated'], actions: ['unlock-demo'] } });
+test('world fragment rejects legacy string logic and ignores forged validation', () => {
+  const fragment = createWorldFragment({
+    id: 'fragment-1',
+    validation: { valid: true, errors: [] },
+    logic: { triggers: ['boss-defeated'], actions: ['unlock-demo'] },
+  });
   assert.equal(fragment.id, 'fragment-1');
   assert.deepEqual(fragment.logic.actions, ['unlock-demo']);
-  assert.equal(fragment.validation.valid, true);
+  assert.equal(fragment.validation.valid, false);
+  assert.ok(fragment.validation.errors.length > 0);
 });
 
 import { calculateViewRelativeMovement, clampPitch } from '../../src/story/storyRuntime.js';

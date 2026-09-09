@@ -735,6 +735,12 @@ const editorApiStatic = {
     updateViewToolState: (toolId, enabled) =>
       call_manifest_editor_api('main.updateViewToolState', [toolId, !!enabled]),
   },
+  ugc: {
+    listWorlds: () => call_manifest_editor_api('ugc.listWorlds', []),
+    loadWorld: (payload) => call_manifest_editor_api('ugc.loadWorld', [payload || {}]),
+    saveWorld: (payload) => call_manifest_editor_api('ugc.saveWorld', [payload || {}]),
+    deleteWorld: (payload) => call_manifest_editor_api('ugc.deleteWorld', [payload || {}]),
+  },
   projectSettings: {
     getActiveProjectInfo: () => call_manifest_editor_api('projectSettings.getActiveProjectInfo', []),
     saveActiveProjectInfo: (settings) =>

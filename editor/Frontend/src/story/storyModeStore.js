@@ -23,13 +23,6 @@ export const storyModeStore = reactive({
       description: '基础建造材料。',
     },
     {
-      id: 'world-fragment-demo',
-      name: '世界碎片',
-      category: 'ugc',
-      quantity: 1,
-      description: '承载受控游戏逻辑，可用于制作 Demo。',
-    },
-    {
       id: 'world-orb-demo',
       name: '世界小球',
       category: 'ugc',
