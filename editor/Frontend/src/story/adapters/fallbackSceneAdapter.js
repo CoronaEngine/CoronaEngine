@@ -7,6 +7,8 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { editorApi } from '@/api/editorApi.js';
+import { loadMossModelLibrary } from './mossModelLibrary.js';
+import { addMossEnvironment } from './mossEnvironmentAdapter.js';
 import { STORY_ASSETS } from '@/story/config/storyAssetConfig.js';
 
 const unwrap = (value) => value?.data ?? value ?? {};
@@ -219,6 +221,8 @@ function disposeSceneResources(root) {
   const disposedTextures = new Set();
 
   root.traverse((object) => {
+    // 启用阴影后，灯光持有的阴影渲染目标也必须显式释放。
+    if (object.isLight) object.dispose?.();
     object.geometry?.dispose?.();
 
     const materials = Array.isArray(object.material) ? object.material : [object.material];
@@ -252,7 +256,15 @@ export async function createFallbackScene(sceneName = '场景1') {
   sun.position.set(-20, 30, 12);
   sun.castShadow = true;
   sun.shadow.mapSize.set(1024, 1024);
-  scene.add(sun);
+  // 扩大阴影视锥以覆盖主路线，而不是只照亮原点附近五米。
+  sun.target.position.set(0, 0, -18);
+  sun.shadow.camera.left = -35;
+  sun.shadow.camera.right = 35;
+  sun.shadow.camera.top = 35;
+  sun.shadow.camera.bottom = -35;
+  sun.shadow.camera.far = 100;
+  sun.shadow.normalBias = 0.04;
+  scene.add(sun, sun.target);
 
   const ground = new THREE.Mesh(
     new THREE.PlaneGeometry(200, 200),
@@ -280,13 +292,19 @@ export async function createFallbackScene(sceneName = '场景1') {
   }
 
   addSnapshotActors(scene, actors);
+  const models = await loadMossModelLibrary(STORY_ASSETS.mossRuins);
+  const environment = addMossEnvironment(scene, models);
 
   return {
     scene,
     actors,
     terrain,
+    models,
     storyObjects: scene.userData.storyObjects,
     dispose() {
+      // 先移除模型实例，再释放场景自身几何体，避免重复销毁共享资源。
+      environment.removeFromParent();
+      models.dispose();
       disposeSceneResources(scene);
     },
   };

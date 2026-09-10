@@ -8,6 +8,10 @@
 const baseUrl = typeof import.meta.env?.BASE_URL === 'string' ? import.meta.env.BASE_URL : '/';
 
 export const STORY_ASSETS = Object.freeze({
+  mossRuins: Object.freeze({
+    enabled: true,
+    baseUrl: `${baseUrl}assets/story/moss-ruins/`,
+  }),
   terrain: Object.freeze({
     enabled: false,
     url: `${baseUrl}assets/story/terrain/terrain.glb`,
