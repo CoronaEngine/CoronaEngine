@@ -2,8 +2,12 @@
  * 剧情模式状态：集中保存覆盖层、玩家状态、世界状态和调试状态。
  */
 import { reactive } from 'vue';
+import { emptyEquipment } from './equipmentSystem.js';
 
 export const storyModeStore = reactive({
+  vitals: { health: 100, maxHealth: 100, dead: false },
+  equipment: emptyEquipment(),
+  equipmentSeeded: false,
   running: false,
   worldType: 'main',
   inventoryOpen: false,

@@ -198,10 +198,10 @@ function objectLabel(object) {
   max-height: calc(100vh - 110px);
   overflow: auto;
   padding: 14px;
-  border: 1px solid var(--game-border, #304656);
-  background: var(--game-panel, #101d2a);
+  border: 1px solid var(--game-border, #443c2a);
+  background: var(--game-panel, #171714);
   box-shadow: 0 10px 24px rgb(0 0 0 / 24%);
-  color: var(--game-text, #e5ebee);
+  color: var(--game-text, #e8e3d6);
   pointer-events: auto;
 }
 
@@ -228,7 +228,7 @@ function objectLabel(object) {
 .subheading,
 .empty-text,
 .selection-info {
-  color: var(--game-muted, #8f9da6);
+  color: var(--game-muted, #aaa594);
   font-size: 11px;
 }
 
@@ -243,9 +243,9 @@ function objectLabel(object) {
 .action-button,
 .danger-button {
   min-height: 32px;
-  border: 1px solid var(--game-border, #304656);
-  background: var(--game-panel-deep, #0b1723);
-  color: var(--game-text, #e5ebee);
+  border: 1px solid var(--game-border, #443c2a);
+  background: var(--game-panel-deep, #10100e);
+  color: var(--game-text, #e8e3d6);
   font: inherit;
   font-size: 12px;
 }
@@ -269,7 +269,7 @@ function objectLabel(object) {
 .coordinate-grid label span {
   display: block;
   margin-bottom: 3px;
-  color: var(--game-muted, #8f9da6);
+  color: var(--game-muted, #aaa594);
   font-size: 10px;
 }
 
@@ -284,7 +284,7 @@ function objectLabel(object) {
 .action-button:focus-visible,
 .object-row:hover,
 .object-row:focus-visible {
-  border-color: var(--game-cyan, #75cdbd);
+  border-color: var(--game-cyan, #e8ca80);
   outline: none;
 }
 
@@ -320,7 +320,7 @@ function objectLabel(object) {
 
 .resource-row {
   padding: 5px 0;
-  border-bottom: 1px solid rgb(48 70 86 / 55%);
+  border-bottom: 1px solid rgb(107 91 54 / 55%);
   font-size: 12px;
 }
 

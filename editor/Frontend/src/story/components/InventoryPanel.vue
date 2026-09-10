@@ -13,13 +13,45 @@
       </header>
 
       <div class="panel-body">
+        <!-- 装备槽持有实际装备实例，不另行复制背包物品。 -->
+        <aside class="equipment-panel" aria-label="装备栏">
+          <h3>旅行者装备</h3>
+          <svg class="figure" viewBox="0 0 120 190" aria-label="装备人物轮廓" role="img">
+            <circle cx="60" cy="24" r="17" />
+            <path
+              d="M39 47 L81 47 L100 108 L86 114 L74 78 L74 124 L84 179 L66 179 L60 134 L54 179 L36 179 L46 124 L46 78 L34 114 L20 108 Z"
+            />
+          </svg>
+          <button
+            v-for="(label, slot) in EQUIPMENT_SLOTS"
+            :key="slot"
+            class="equip-slot"
+            :class="{ compatible: dragged?.item?.slot === slot, occupied: equipment[slot] }"
+            :aria-label="`${label}槽：${equipment[slot]?.name || '空'}`"
+            :draggable="Boolean(equipment[slot])"
+            @dragstart="startDrag($event, equipment[slot], slot)"
+            @dragend="cancelDrag"
+            @dragover.prevent
+            @drop.prevent.stop="dropEquipment(slot)"
+            @click="equipment[slot] && $emit('unequip', slot)"
+          >
+            <span>{{ label }}</span>
+            <strong>{{ equipment[slot]?.name || '拖入装备' }}</strong>
+          </button>
+          <p class="equipment-help">
+            点击已穿戴装备可卸下；刀与斧共用主手。护甲 {{ armorValue(equipment) }} / 20
+          </p>
+          <p v-if="dragMessage || transferError" class="drag-message" role="status">
+            {{ dragMessage || transferError }}
+          </p>
+        </aside>
         <section class="inventory-section" aria-label="物品栏">
           <div class="section-heading">
             <h3>物品栏</h3>
             <span>7 × 3</span>
           </div>
 
-          <div class="inventory-grid">
+          <div class="inventory-grid" @dragover.prevent @drop.prevent.stop="dropInventory">
             <button
               v-for="(item, index) in inventorySlots"
               :key="`inventory-${index}`"
@@ -27,6 +59,9 @@
               :class="{ selected: selected?.id === item?.id }"
               type="button"
               :aria-label="item ? `${item.name}，数量 ${item.quantity}` : `空槽位 ${index + 1}`"
+              :draggable="item?.category === 'equipment'"
+              @dragstart="startDrag($event, item)"
+              @dragend="cancelDrag"
               @click="selectItem(item)"
             >
               <template v-if="item">
@@ -82,6 +117,14 @@
               </div>
             </div>
             <button
+              v-if="selected.category === 'equipment'"
+              class="primary-button"
+              type="button"
+              @click="$emit('equip', { id: selected.id, slot: selected.slot })"
+            >
+              装备到{{ EQUIPMENT_SLOTS[selected.slot] }}槽
+            </button>
+            <button
               v-if="selected.id === 'world-orb-demo'"
               class="primary-button"
               type="button"
@@ -102,10 +145,14 @@
 
 <script setup>
 import { computed, ref, watch } from 'vue';
+import { EQUIPMENT_SLOTS, armorValue } from '../equipmentSystem.js';
 
 const INVENTORY_SLOT_COUNT = 21;
 
 const props = defineProps({
+  // 父组件把原子转移失败的原因显示在弹窗内部，避免被弹窗遮挡。
+  transferError: { type: String, default: '' },
+  equipment: { type: Object, default: () => ({}) },
   items: {
     type: Array,
     default: () => [],
@@ -120,8 +167,35 @@ const props = defineProps({
   },
 });
 
-const emit = defineEmits(['close', 'use-orb', 'select-hotbar']);
+const emit = defineEmits(['close', 'use-orb', 'select-hotbar', 'equip', 'unequip']);
 const selected = ref(null);
+const dragged = ref(null);
+const dragMessage = ref('');
+// 拖拽数据仅在本组件内有效，外部拖入内容不能创建或转移背包物品。
+function startDrag(event, item, sourceSlot = null) {
+  if (item?.category !== 'equipment') {
+    event.preventDefault();
+    return;
+  }
+  dragged.value = { item, sourceSlot };
+  dragMessage.value = '';
+  event.dataTransfer.effectAllowed = 'move';
+  event.dataTransfer.setData('text/plain', item.id);
+}
+function cancelDrag() {
+  dragged.value = null;
+}
+function dropEquipment(slot) {
+  if (!dragged.value) return;
+  if (dragged.value.sourceSlot) dragMessage.value = '已穿戴装备请先拖回背包。';
+  else if (dragged.value.item.slot !== slot) dragMessage.value = '装备类型与槽位不匹配。';
+  else emit('equip', { id: dragged.value.item.id, slot });
+  cancelDrag();
+}
+function dropInventory() {
+  if (dragged.value?.sourceSlot) emit('unequip', dragged.value.sourceSlot);
+  cancelDrag();
+}
 
 const inventorySlots = computed(() =>
   Array.from({ length: INVENTORY_SLOT_COUNT }, (_, index) => props.items[index] || null)
@@ -145,6 +219,8 @@ watch(
 );
 
 function itemIcon(item) {
+  if (item.category === 'equipment')
+    return { head: '♜', chest: '◇', legs: 'Ⅱ', feet: '▰', mainHand: '⚔' }[item.slot];
   if (item.category === 'material') return '◆';
   if (item.id === 'world-orb-demo') return '●';
   if (item.id === 'world-fragment-demo') return '✦';
@@ -154,6 +230,7 @@ function itemIcon(item) {
 function categoryLabel(category) {
   return (
     {
+      equipment: '装备',
       material: '材料',
       ugc: 'UGC 道具',
     }[category] || '物品'
@@ -185,6 +262,7 @@ function useSelectedOrb() {
 </script>
 
 <style scoped>
+/* 普通界面表面沿用创造模式的黑金主题，危险提示保留红色。 */
 .overlay {
   position: absolute;
   z-index: 10;
@@ -197,13 +275,13 @@ function useSelectedOrb() {
 }
 
 .panel {
-  width: min(900px, 100%);
+  width: min(1120px, 100%);
   max-height: min(720px, calc(100vh - 56px));
-  overflow: hidden;
-  border: 1px solid var(--game-border-strong, #456173);
+  overflow: auto;
+  border: 1px solid var(--game-border-strong, #6b5b36);
   border-radius: 10px;
-  background: var(--game-panel, #101d2a);
-  color: var(--game-text, #e5ebee);
+  background: var(--game-panel, #171714);
+  color: var(--game-text, #e8e3d6);
   box-shadow: 0 18px 42px rgb(0 0 0 / 34%);
   animation: panel-in 180ms ease-out;
 }
@@ -224,7 +302,7 @@ function useSelectedOrb() {
 
 .panel-header {
   padding: 18px 22px;
-  border-bottom: 1px solid var(--game-border, #304656);
+  border-bottom: 1px solid var(--game-border, #443c2a);
 }
 
 .panel-header h2,
@@ -245,7 +323,7 @@ function useSelectedOrb() {
 .item-count,
 .section-heading span,
 .hotbar-heading span {
-  color: var(--game-muted, #8f9da6);
+  color: var(--game-muted, #aaa594);
   font-size: 11px;
 }
 
@@ -254,10 +332,10 @@ function useSelectedOrb() {
   width: 30px;
   height: 30px;
   place-items: center;
-  border: 1px solid var(--game-border, #304656);
+  border: 1px solid var(--game-border, #443c2a);
   border-radius: 5px;
-  background: #172936;
-  color: var(--game-muted, #8f9da6);
+  background: var(--ce-black-2);
+  color: var(--game-muted, #aaa594);
   cursor: pointer;
   font-size: 20px;
   line-height: 1;
@@ -265,9 +343,9 @@ function useSelectedOrb() {
 
 .icon-button:hover,
 .icon-button:focus-visible {
-  border-color: var(--game-cyan, #75cdbd);
-  background: #1c3441;
-  color: var(--game-text, #e5ebee);
+  border-color: var(--game-cyan, #e8ca80);
+  background: var(--ce-black-3);
+  color: var(--game-text, #e8e3d6);
   outline: none;
 }
 
@@ -305,22 +383,22 @@ function useSelectedOrb() {
   min-height: 58px;
   place-items: center;
   padding: 0;
-  border: 1px solid #3a5060;
-  background: #172936;
-  color: var(--game-text, #e5ebee);
+  border: 1px solid var(--game-border);
+  background: var(--ce-black-2);
+  color: var(--game-text, #e8e3d6);
   cursor: pointer;
 }
 
 .inventory-slot:hover,
 .inventory-slot:focus-visible {
-  border-color: var(--game-border-strong, #456173);
-  background: #1c3441;
+  border-color: var(--game-border-strong, #6b5b36);
+  background: var(--ce-black-3);
   outline: none;
 }
 
 .inventory-slot.selected {
   border-color: var(--game-gold, #c6a15b);
-  background: #263422;
+  background: color-mix(in srgb, var(--ce-gold-primary) 16%, var(--ce-black-1));
 }
 
 .slot-icon {
@@ -333,18 +411,18 @@ function useSelectedOrb() {
   position: absolute;
   right: 5px;
   bottom: 4px;
-  color: var(--game-text, #e5ebee);
+  color: var(--game-text, #e8e3d6);
   font-size: 12px;
   font-weight: 700;
   line-height: 1;
-  text-shadow: 1px 1px 0 #07131f;
+  text-shadow: 1px 1px 0 var(--ce-black-0);
 }
 
 .slot-number {
   position: absolute;
   top: 4px;
   left: 5px;
-  color: var(--game-muted, #8f9da6);
+  color: var(--game-muted, #aaa594);
   font-size: 10px;
   line-height: 1;
 }
@@ -362,17 +440,17 @@ function useSelectedOrb() {
   min-width: 0;
   flex-direction: column;
   padding: 22px 20px;
-  border-left: 1px solid var(--game-border, #304656);
-  background: var(--game-panel-deep, #0b1723);
+  border-left: 1px solid var(--game-border, #443c2a);
+  background: var(--game-panel-deep, #10100e);
 }
 
 .detail-art {
   display: grid;
   min-height: 130px;
   place-items: center;
-  border: 1px solid var(--game-border-strong, #456173);
+  border: 1px solid var(--game-border-strong, #6b5b36);
   border-radius: 7px;
-  background: #182b39;
+  background: var(--ce-black-2);
 }
 
 .detail-art-material {
@@ -402,7 +480,7 @@ function useSelectedOrb() {
 .detail-copy p,
 .detail-meta span,
 .detail-empty {
-  color: var(--game-muted, #8f9da6);
+  color: var(--game-muted, #aaa594);
   font-size: 11px;
 }
 
@@ -424,7 +502,7 @@ function useSelectedOrb() {
   flex-direction: column;
   gap: 5px;
   padding: 9px;
-  background: #142735;
+  background: var(--ce-black-2);
 }
 
 .detail-meta strong {
@@ -462,7 +540,7 @@ function useSelectedOrb() {
 }
 
 .detail-empty strong {
-  color: var(--game-text, #e5ebee);
+  color: var(--game-text, #e8e3d6);
 }
 
 .empty-icon {
@@ -501,7 +579,7 @@ function useSelectedOrb() {
 
   .detail-panel {
     min-height: 260px;
-    border-top: 1px solid var(--game-border, #304656);
+    border-top: 1px solid var(--game-border, #443c2a);
     border-left: 0;
   }
 }
@@ -528,6 +606,88 @@ function useSelectedOrb() {
 
   .inventory-slot {
     min-height: 48px;
+  }
+}
+/* 紧凑的人物轮廓与装备槽和现有的 7×3 背包并排显示。 */
+.panel-body {
+  grid-template-columns: 185px minmax(320px, 1fr) 215px;
+}
+.equipment-panel {
+  min-width: 0;
+  border-right: 1px solid var(--game-border);
+  padding: 18px 12px;
+}
+.equipment-panel h3 {
+  font-size: 13px;
+  margin-bottom: 8px;
+  color: var(--ce-gold-primary);
+}
+.figure {
+  height: 135px;
+  width: 100%;
+  fill: var(--ce-black-3);
+  stroke: var(--ce-gold-muted);
+  stroke-width: 2;
+}
+.equip-slot {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 34px 1fr;
+  text-align: left;
+  gap: 5px;
+  margin: 5px 0;
+  padding: 8px 5px;
+  border: 1px dashed var(--game-border);
+  background: var(--game-panel-deep);
+  font-size: 10px;
+  color: var(--game-muted);
+  cursor: pointer;
+}
+.equip-slot strong {
+  color: var(--game-text);
+  font-weight: 500;
+}
+.equip-slot.compatible,
+.equip-slot:hover {
+  border-color: var(--ce-gold-bright);
+  background: var(--ce-black-3);
+}
+.equip-slot.occupied {
+  border-style: solid;
+}
+.equipment-help,
+.drag-message {
+  font-size: 10px;
+  line-height: 1.7;
+  margin-top: 10px;
+  color: var(--game-muted);
+}
+.drag-message {
+  color: #f0ad7f;
+}
+@media (max-width: 900px) {
+  .panel-body {
+    grid-template-columns: 145px minmax(280px, 1fr);
+  }
+  .detail-panel {
+    grid-column: 1 / -1;
+  }
+  .figure {
+    height: 95px;
+  }
+}
+@media (max-width: 550px) {
+  .overlay {
+    padding: 8px;
+  }
+  .panel-body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .equipment-panel {
+    border-right: 0;
+  }
+  .figure {
+    display: none;
   }
 }
 </style>

@@ -13,6 +13,23 @@ export const inventorySystem = {
   },
 
   addItem(item) {
+    // 装备实例不堆叠，也不覆盖具有相同标识的另一实例。
+    if (item.category === 'equipment') {
+      if (
+        !item.instanceId ||
+        storyModeStore.items.some(
+          (value) => value.id === item.id || value.instanceId === item.instanceId
+        ) ||
+        Object.values(storyModeStore.equipment).some(
+          (value) => value && (value.id === item.id || value.instanceId === item.instanceId)
+        )
+      )
+        return null;
+      if (storyModeStore.items.length >= 21) return null;
+      const instance = { ...item, quantity: 1 };
+      storyModeStore.items.push(instance);
+      return instance;
+    }
     const quantity = Math.max(1, item.quantity ?? 1);
     const existing = storyModeStore.items.find((value) => value.id === item.id);
 

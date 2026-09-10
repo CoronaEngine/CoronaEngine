@@ -65,10 +65,10 @@ const statusLabel = computed(() => {
   align-items: center;
   gap: 22px;
   padding: 8px 12px;
-  border: 1px solid var(--game-border, #304656);
-  background: var(--game-panel, #101d2a);
+  border: 1px solid var(--game-border, #443c2a);
+  background: var(--game-panel, #171714);
   box-shadow: 0 10px 24px rgb(0 0 0 / 24%);
-  color: var(--game-text, #e5ebee);
+  color: var(--game-text, #e8e3d6);
   pointer-events: auto;
 }
 
@@ -87,7 +87,7 @@ const statusLabel = computed(() => {
 }
 
 .save-state {
-  color: var(--game-muted, #8f9da6);
+  color: var(--game-muted, #aaa594);
   font-size: 11px;
 }
 
@@ -109,9 +109,9 @@ const statusLabel = computed(() => {
 .ugc-toolbar button {
   min-height: 32px;
   padding: 0 11px;
-  border: 1px solid var(--game-border, #304656);
-  background: var(--game-panel-deep, #0b1723);
-  color: var(--game-muted, #8f9da6);
+  border: 1px solid var(--game-border, #443c2a);
+  background: var(--game-panel-deep, #10100e);
+  color: var(--game-muted, #aaa594);
   cursor: pointer;
   font: inherit;
   font-size: 12px;
@@ -119,16 +119,16 @@ const statusLabel = computed(() => {
 
 .ugc-toolbar button:hover:not(:disabled),
 .ugc-toolbar button:focus-visible {
-  border-color: var(--game-border-strong, #456173);
-  background: #172936;
-  color: var(--game-text, #e5ebee);
+  border-color: var(--game-border-strong, #6b5b36);
+  background: var(--ce-black-2);
+  color: var(--game-text, #e8e3d6);
   outline: none;
 }
 
 .mode-switch button.active {
-  border-color: var(--game-cyan, #75cdbd);
-  background: #18323c;
-  color: var(--game-text, #e5ebee);
+  border-color: var(--game-cyan, #e8ca80);
+  background: var(--ce-black-3);
+  color: var(--game-text, #e8e3d6);
 }
 
 .toolbar-actions button:first-child {

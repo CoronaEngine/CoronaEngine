@@ -13,8 +13,26 @@
     <canvas ref="canvas" class="viewport"></canvas>
     <div class="screen-vignette" aria-hidden="true"></div>
 
-    <StoryHud :hint="interactionHint" :debug="debugState" :debug-visible="store.debugVisible" />
+    <StoryHud
+      :health="store.vitals.health"
+      :max-health="store.vitals.maxHealth"
+      :armor="armor"
+      :hint="interactionHint"
+      :debug="debugState"
+      :debug-visible="store.debugVisible"
+    />
 
+    <!-- 死亡界面采用模态显示，玩家主动复活之前暂停战斗。 -->
+    <section v-if="store.vitals.dead" class="death-overlay" @pointerdown.stop>
+      <div role="dialog" aria-modal="true" aria-label="玩家死亡">
+        <h2>你倒下了</h2>
+        <p>背包和装备已保留。</p>
+        <button @click="respawnPlayer">返回出生点</button>
+      </div>
+    </section>
+    <div v-if="store.worldType === 'ugc' && ugcViewState.mode === 'build'" class="build-controls">
+      右键看向 · WASD 移动 · Q 上升 / E 下降 · 方向键旋转 · 滚轮前后移动 · Shift＋滚轮调速
+    </div>
     <StoryHotbar
       :slots="hotbarSlots"
       :selected-index="selectedHotbarIndex"
@@ -22,6 +40,7 @@
     />
 
     <button
+      v-if="store.worldType === 'main'"
       class="menu-button"
       type="button"
       aria-label="退出剧情模式"
@@ -35,8 +54,12 @@
     <InventoryPanel
       v-if="store.inventoryOpen"
       :items="store.items"
+      :equipment="store.equipment"
+      :transfer-error="equipmentError"
       :hotbar-slots="hotbarSlots"
       :selected-hotbar-index="selectedHotbarIndex"
+      @equip="equipItem"
+      @unequip="unequipItem"
       @close="closeOverlay"
       @select-hotbar="selectHotbarSlot"
       @use-orb="useWorldOrb"
@@ -98,6 +121,48 @@ import { createUgcId } from '@/story/ugc/ugcWorldState.js';
 import { createDemoWorldFragment } from '@/story/ugc/worldFragment.js';
 import { storyModeStore as store, toggleInventory, toggleMap } from '@/story/storyModeStore.js';
 
+import { createEquipmentSystem, armorValue, attackProfile } from '@/story/equipmentSystem.js';
+import { createPlayerVitals } from '@/story/playerVitals.js';
+import { createMonsterSystem } from '@/story/monsterSystem.js';
+import { createMonsterSceneAdapter } from '@/story/adapters/monsterSceneAdapter.js';
+import { createBuildCameraController } from '@/story/buildCameraController.js';
+const equipmentSystem = createEquipmentSystem(store);
+equipmentSystem.seed();
+const armor = computed(() => armorValue(store.equipment));
+const vitals = createPlayerVitals(store.vitals, () => armor.value);
+const windowFocused = ref(true);
+const equipmentError = ref('');
+let monsters = null,
+  monsterScene = null,
+  buildCamera = null;
+function equipItem({ id, slot }) {
+  const result = equipmentSystem.equip(id, slot);
+  equipmentError.value = result.ok ? '' : result.error;
+  showHint(result.ok ? '装备已穿戴' : result.error);
+}
+function unequipItem(slot) {
+  const result = equipmentSystem.unequip(slot);
+  equipmentError.value = result.ok ? '' : result.error;
+  showHint(result.ok ? '装备已放回背包' : result.error);
+}
+function respawnPlayer() {
+  vitals.respawn();
+  resetToSpawn();
+  monsters?.resetAggro();
+  pauseGameInput();
+}
+function onFocus() {
+  windowFocused.value = true;
+}
+function onBlur() {
+  windowFocused.value = false;
+  pauseGameInput();
+  buildCamera?.clear();
+}
+function onVisibility() {
+  if (document.hidden) onBlur();
+  else onFocus();
+}
 const root = ref(null);
 const canvas = ref(null);
 const router = useRouter();
@@ -153,6 +218,7 @@ let resize = null;
 let ugcController = null;
 let ugcPickerController = null;
 let disposed = false;
+let hintTimeout = 0;
 
 const { player, resetToSpawn } = createStoryPlayer();
 const cameraController = createStoryCameraController();
@@ -164,9 +230,11 @@ watch(
 );
 
 function showHint(message, timeout = 2500) {
+  if (disposed) return;
+  window.clearTimeout(hintTimeout);
   interactionHint.value = message;
   if (timeout > 0) {
-    window.setTimeout(() => {
+    hintTimeout = window.setTimeout(() => {
       if (interactionHint.value === message) interactionHint.value = '';
     }, timeout);
   }
@@ -186,7 +254,9 @@ function isGameInputBlocked() {
     ugcEntering.value ||
     ugcExitConfirm.value ||
     ugcViewState.value.saving ||
-    (store.worldType === 'ugc' && ugcViewState.value.mode === 'build')
+    store.vitals.dead ||
+    !windowFocused.value ||
+    document.hidden
   );
 }
 
@@ -194,6 +264,7 @@ function lockPointer(event) {
   const target = event?.target;
   if (
     isGameInputBlocked() ||
+    (store.worldType === 'ugc' && ugcViewState.value.mode === 'build') ||
     target?.closest?.('.menu-button, .ugc-overlay, .ugc-world-picker, .overlay, .hotbar, button')
   ) {
     return;
@@ -207,6 +278,7 @@ function lockPointer(event) {
 }
 
 function pauseGameInput() {
+  buildCamera?.clear();
   if (document.pointerLockElement) document.exitPointerLock();
   input?.setMouseActive?.(false);
   input?.clearAll?.();
@@ -268,6 +340,8 @@ function restoreMainWorld(snapshot) {
   interactionSystem.setScene(mainSceneBundle.scene);
   combatSystem.setScene(mainSceneBundle.scene);
 
+  if (snapshot.vitals) Object.assign(store.vitals, snapshot.vitals);
+  if (snapshot.equipment) Object.assign(store.equipment, snapshot.equipment);
   if (snapshot.items) store.items.splice(0, store.items.length, ...snapshot.items);
   if (snapshot.bossHealth !== undefined) store.bossHealth = snapshot.bossHealth;
   if (snapshot.storyState?.worldType) store.worldType = snapshot.storyState.worldType;
@@ -333,6 +407,11 @@ function handleAttack(result) {
     return;
   }
 
+  if (target.userData.monsterId) {
+    showHint(`测试怪物生命：${target.userData.health}`, 900);
+    return;
+  }
+  if (target !== mainSceneBundle.storyObjects.boss) return;
   store.bossHealth = target.userData.health;
   showHint(`命中灰盒 Boss，剩余生命：${target.userData.health}`, 900);
   if (target.userData.health > 0) return;
@@ -392,8 +471,10 @@ async function enterUgcWorld({ worldId, loadExisting = false } = {}) {
   pauseGameInput();
 
   ugcController?.dispose?.();
+  // 资源提交使用独立背包副本，临时装备交换不会污染保存结果。
+  const committedInventory = JSON.parse(JSON.stringify(store.items));
   ugcController = createUgcWorldController({
-    mainItems: store.items,
+    mainItems: committedInventory,
     onChanged: updateUgcView,
     onMessage: ({ type, message }) => {
       if (type === 'message') showHint(message, 2800);
@@ -413,6 +494,8 @@ async function enterUgcWorld({ worldId, loadExisting = false } = {}) {
     },
     camera: { yaw: player.yaw, pitch: player.pitch },
     items: store.items,
+    vitals: { ...store.vitals },
+    equipment: JSON.parse(JSON.stringify(store.equipment)),
     bossHealth: store.bossHealth,
     boss: {
       health: mainSceneBundle.storyObjects.boss.userData.health,
@@ -426,13 +509,17 @@ async function enterUgcWorld({ worldId, loadExisting = false } = {}) {
   try {
     const viewState = await ugcController.enter({
       worldId: worldId || createUgcId('ugc-world'),
-      mainItems: store.items,
+      mainItems: committedInventory,
       mainWorldSnapshot: snapshot,
       loadExisting,
     });
+    if (disposed) return;
     updateUgcView(viewState);
     setActiveScene(ugcController.getSceneBundle());
     applyPlayerSpawn(viewState.world.spawn);
+    // 装备实例与主世界快照、材料提交背包相互隔离。
+    Object.assign(store.equipment, JSON.parse(JSON.stringify(store.equipment)));
+    buildCamera?.reset();
     store.worldType = 'ugc';
     closeOverlay();
     showHint('已进入小世界，当前为建造模式。', 3200);
@@ -475,6 +562,8 @@ function setUgcMode(mode) {
     const spawn = ugcController.getWorld()?.spawn;
     applyPlayerSpawn(spawn);
     showHint('试玩模式已开启。', 1800);
+  } else {
+    showHint('建造模式已开启，已恢复自由视角。', 1800);
   }
 }
 
@@ -547,12 +636,30 @@ async function exitStoryMode() {
 onMounted(async () => {
   try {
     mainSceneBundle = await createFallbackScene();
+    if (disposed) {
+      mainSceneBundle.dispose();
+      return;
+    }
+    window.addEventListener('focus', onFocus);
+    window.addEventListener('blur', onBlur);
+    document.addEventListener('visibilitychange', onVisibility);
     activeSceneBundle = mainSceneBundle;
     camera = new THREE.PerspectiveCamera(70, 1, 0.1, 1000);
     input = createStoryInputManager(document, {
       gameElement: canvas.value,
     });
 
+    buildCamera = createBuildCameraController(camera, canvas.value);
+    monsters = createMonsterSystem({
+      visible: (a, b) => monsterScene.visible(a, b),
+      canMove: (a, b) => monsterScene.canMove(a, b),
+      onDamage: (damage) => {
+        vitals.damage(damage);
+        if (store.vitals.dead) pauseGameInput();
+      },
+    });
+    monsterScene = createMonsterSceneAdapter(mainSceneBundle.scene, monsters.monsters);
+    monsterScene.sync();
     const boss = mainSceneBundle.storyObjects.boss;
     const fragment = mainSceneBundle.storyObjects.fragment;
     fragment.visible = false;
@@ -581,9 +688,12 @@ onMounted(async () => {
     combatSystem = createStoryCombatSystem({
       camera,
       scene: mainSceneBundle.scene,
-      maxDistance: 60,
+      getAttackProfile: () => attackProfile(store.equipment),
       onHit: (target, damage) => {
-        target.userData.health = Math.max(0, target.userData.health - damage);
+        if (target.userData.monsterId) {
+          monsters.hit(target.userData.monsterId, damage);
+          monsterScene.sync();
+        } else target.userData.health = Math.max(0, target.userData.health - damage);
       },
     });
     interactionSystem = createStoryInteractionSystem({
@@ -641,7 +751,14 @@ onMounted(async () => {
         }
       }
 
-      if (isGameInputBlocked()) {
+      const building = store.worldType === 'ugc' && ugcViewState.value.mode === 'build';
+      const blocked = isGameInputBlocked();
+      buildCamera.setActive(building && !blocked);
+      if (building && !blocked) {
+        runtime.pause();
+        input.clearAll();
+        buildCamera.update(delta);
+      } else if (blocked) {
         runtime.pause();
         pauseGameInput();
       } else {
@@ -652,6 +769,20 @@ onMounted(async () => {
         }
       }
 
+      if (store.worldType === 'main') {
+        monsters.update(
+          delta,
+          {
+            position: player.position,
+            height: player.height,
+            get dead() {
+              return store.vitals.dead;
+            },
+          },
+          blocked
+        );
+        monsterScene.sync();
+      }
       const target = interactionSystem.getFocusedTarget();
       const prompt = interactionSystem.getPrompt();
       if (!isGameInputBlocked() && prompt) interactionHint.value = prompt;
@@ -669,7 +800,13 @@ onMounted(async () => {
 onUnmounted(() => {
   disposed = true;
   cancelAnimationFrame(animationFrame);
+  window.clearTimeout(hintTimeout);
   input?.dispose();
+  buildCamera?.dispose();
+  monsterScene?.dispose();
+  window.removeEventListener('focus', onFocus);
+  window.removeEventListener('blur', onBlur);
+  document.removeEventListener('visibilitychange', onVisibility);
   renderer?.dispose();
   mainSceneBundle?.dispose?.();
   ugcController?.dispose?.();
@@ -688,15 +825,15 @@ onUnmounted(() => {
 
 <style scoped>
 .story-mode {
-  --game-bg: #07131f;
-  --game-panel: #101d2a;
-  --game-panel-deep: #0b1723;
-  --game-border: #304656;
-  --game-border-strong: #456173;
-  --game-text: #e5ebee;
-  --game-muted: #8f9da6;
-  --game-cyan: #75cdbd;
-  --game-gold: #c6a15b;
+  --game-bg: var(--ce-black-0);
+  --game-panel: var(--ce-black-1);
+  --game-panel-deep: var(--ce-black-0);
+  --game-border: var(--ce-gold-border);
+  --game-border-strong: var(--ce-gold-muted);
+  --game-text: var(--ce-text-primary);
+  --game-muted: var(--ce-text-secondary);
+  --game-cyan: var(--ce-gold-bright);
+  --game-gold: var(--ce-gold-primary);
   --game-font: 'Segoe UI', 'Microsoft YaHei', sans-serif;
   position: fixed;
   inset: 0;
@@ -755,7 +892,7 @@ onUnmounted(() => {
 .menu-button:hover,
 .menu-button:focus-visible {
   border-color: var(--game-cyan);
-  background: #18323c;
+  background: var(--ce-black-3);
   color: var(--game-text);
   outline: none;
 }
@@ -775,5 +912,41 @@ onUnmounted(() => {
   .menu-button span:last-child {
     display: none;
   }
+}
+/* 建造操作提示和死亡弹窗共用创造模式的主题变量。 */
+.build-controls {
+  position: absolute;
+  bottom: 105px;
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: 70%;
+  padding: 8px 12px;
+  color: var(--ce-text-secondary);
+  background: var(--ce-black-1);
+  border: 1px solid var(--ce-gold-border);
+  font-size: 11px;
+  pointer-events: none;
+}
+.death-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  display: grid;
+  place-items: center;
+  background: #080806bb;
+}
+.death-overlay > div {
+  padding: 32px 48px;
+  text-align: center;
+  border: 1px solid var(--ce-gold-primary);
+  background: var(--ce-black-1);
+  color: var(--ce-text-primary);
+}
+.death-overlay button {
+  margin-top: 18px;
+  padding: 10px 20px;
+  background: var(--ce-black-3);
+  border: 1px solid var(--ce-gold-primary);
+  cursor: pointer;
 }
 </style>

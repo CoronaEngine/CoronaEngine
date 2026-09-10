@@ -136,10 +136,10 @@ function closePanel() {
   width: min(1020px, 100%);
   max-height: min(760px, calc(100vh - 56px));
   overflow: hidden;
-  border: 1px solid var(--game-border-strong, #456173);
+  border: 1px solid var(--game-border-strong, #6b5b36);
   border-radius: 14px;
-  background: var(--game-panel, #101d2a);
-  color: var(--game-text, #e5ebee);
+  background: var(--game-panel, #171714);
+  color: var(--game-text, #e8e3d6);
   box-shadow: 0 18px 42px rgb(0 0 0 / 34%);
   animation: panel-in 180ms ease-out;
 }
@@ -160,7 +160,7 @@ function closePanel() {
 
 .panel-header {
   padding: 22px 26px;
-  border-bottom: 1px solid var(--game-border, #304656);
+  border-bottom: 1px solid var(--game-border, #443c2a);
 }
 
 .title-group {
@@ -179,7 +179,7 @@ function closePanel() {
 .coordinate-readout,
 .map-info small {
   margin: 0;
-  color: var(--game-muted, #8f9da6);
+  color: var(--game-muted, #aaa594);
   font-size: 11px;
 }
 
@@ -192,10 +192,10 @@ function closePanel() {
   width: 36px;
   height: 36px;
   place-items: center;
-  border: 1px solid var(--game-border-strong, #456173);
+  border: 1px solid var(--game-border-strong, #6b5b36);
   border-radius: 7px;
-  background: #162735;
-  color: var(--game-text, #e5ebee);
+  background: var(--ce-black-2);
+  color: var(--game-text, #e8e3d6);
   cursor: pointer;
   font-size: 22px;
   line-height: 1;
@@ -204,8 +204,8 @@ function closePanel() {
 
 .icon-button:hover,
 .icon-button:focus-visible {
-  border-color: var(--game-cyan, #75cdbd);
-  background: #1b3440;
+  border-color: var(--game-cyan, #e8ca80);
+  background: var(--ce-black-3);
   outline: none;
 }
 
@@ -224,9 +224,9 @@ function closePanel() {
   position: relative;
   height: 470px;
   overflow: hidden;
-  border: 1px solid var(--game-border-strong, #456173);
+  border: 1px solid var(--game-border-strong, #6b5b36);
   border-radius: 8px;
-  background: #0d202c;
+  background: var(--ce-black-0);
 }
 
 .map-grid {
@@ -234,8 +234,8 @@ function closePanel() {
   inset: 0;
   opacity: 0.55;
   background-image:
-    linear-gradient(rgb(117 205 189 / 10%) 1px, transparent 1px),
-    linear-gradient(90deg, rgb(117 205 189 / 10%) 1px, transparent 1px);
+    linear-gradient(rgb(198 161 91 / 10%) 1px, transparent 1px),
+    linear-gradient(90deg, rgb(198 161 91 / 10%) 1px, transparent 1px);
   background-size: 36px 36px;
 }
 
@@ -248,7 +248,7 @@ function closePanel() {
 .map-contour {
   width: 62%;
   height: 54%;
-  border: 1px solid rgb(117 205 189 / 18%);
+  border: 1px solid rgb(198 161 91 / 18%);
   border-radius: 48% 52% 42% 58%;
   transform: rotate(-14deg);
 }
@@ -296,7 +296,7 @@ function closePanel() {
 }
 
 .location {
-  color: var(--game-muted, #8f9da6);
+  color: var(--game-muted, #aaa594);
   font-size: 10px;
 }
 
@@ -309,8 +309,8 @@ function closePanel() {
 }
 
 .location i {
-  border: 1px solid rgb(154 190 206 / 55%);
-  background: rgb(154 190 206 / 35%);
+  border: 1px solid color-mix(in srgb, var(--ce-text-secondary) 55%, transparent);
+  background: color-mix(in srgb, var(--ce-text-secondary) 35%, transparent);
 }
 
 .location-gate {
@@ -342,7 +342,7 @@ function closePanel() {
 .marker b {
   padding: 3px 6px;
   border-radius: 4px;
-  background: #122735;
+  background: var(--ce-black-2);
 }
 
 .spawn {
@@ -359,7 +359,7 @@ function closePanel() {
 }
 
 .player {
-  color: var(--game-cyan, #75cdbd);
+  color: var(--game-cyan, #e8ca80);
   transition:
     left 120ms linear,
     top 120ms linear;
@@ -368,8 +368,8 @@ function closePanel() {
 .player i {
   width: 14px;
   height: 14px;
-  border: 2px solid #d8fff7;
-  background: var(--game-cyan, #75cdbd);
+  border: 2px solid var(--ce-gold-bright);
+  background: var(--game-cyan, #e8ca80);
 }
 
 .compass {
@@ -399,17 +399,17 @@ function closePanel() {
 .legend-card,
 .discover-card {
   padding: 14px;
-  border: 1px solid var(--game-border, #304656);
+  border: 1px solid var(--game-border, #443c2a);
   border-radius: 8px;
-  background: #142735;
+  background: var(--ce-black-2);
 }
 
 .current-card {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  border-color: #3c756e;
-  background: #17333b;
+  border-color: var(--ce-gold-border);
+  background: color-mix(in srgb, var(--ce-gold-primary) 12%, var(--ce-black-1));
 }
 
 .current-card strong {
@@ -418,7 +418,7 @@ function closePanel() {
 }
 
 .info-title {
-  color: var(--game-text, #e5ebee);
+  color: var(--game-text, #e8e3d6);
   font-size: 12px;
   font-weight: 600;
 }
@@ -432,7 +432,7 @@ function closePanel() {
 
 .legend-row {
   gap: 9px;
-  color: var(--game-muted, #8f9da6);
+  color: var(--game-muted, #aaa594);
   font-size: 11px;
 }
 
@@ -445,7 +445,7 @@ function closePanel() {
 }
 
 .legend-player {
-  background: var(--game-cyan, #75cdbd);
+  background: var(--game-cyan, #e8ca80);
 }
 
 .legend-spawn {
@@ -453,12 +453,12 @@ function closePanel() {
 }
 
 .legend-location {
-  border: 1px solid rgb(154 190 206 / 60%);
-  background: rgb(154 190 206 / 30%);
+  border: 1px solid color-mix(in srgb, var(--ce-text-secondary) 60%, transparent);
+  background: color-mix(in srgb, var(--ce-text-secondary) 30%, transparent);
 }
 
 .discover-heading strong {
-  color: var(--game-cyan, #75cdbd);
+  color: var(--game-cyan, #e8ca80);
   font-size: 12px;
 }
 
@@ -466,7 +466,7 @@ function closePanel() {
   height: 5px;
   overflow: hidden;
   border-radius: 99px;
-  background: #263843;
+  background: var(--ce-black-3);
 }
 
 .progress-track i {
@@ -474,7 +474,7 @@ function closePanel() {
   width: 38%;
   height: 100%;
   border-radius: inherit;
-  background: var(--game-cyan, #75cdbd);
+  background: var(--game-cyan, #e8ca80);
 }
 
 @keyframes overlay-in {

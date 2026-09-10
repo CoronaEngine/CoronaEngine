@@ -39,7 +39,10 @@ const normalizedSlots = computed(() =>
   Array.from({ length: 7 }, (_, index) => props.slots[index] || null)
 );
 
+// 装备图标用于区分槽位类型，选择快捷栏不会自动装备武器。
 function itemIcon(item) {
+  if (item.category === 'equipment')
+    return { head: '♜', chest: '◇', legs: 'Ⅱ', feet: '▰', mainHand: '⚔' }[item.slot];
   if (item.category === 'material') return '◆';
   if (item.id === 'world-orb-demo') return '●';
   if (item.id === 'world-fragment-demo') return '✦';
@@ -61,8 +64,8 @@ function selectSlot(index) {
   grid-template-columns: repeat(7, 64px);
   gap: 4px;
   padding: 5px;
-  border: 1px solid var(--game-border, #304656);
-  background: #0b1723;
+  border: 1px solid var(--game-border, #443c2a);
+  background: #10100e;
   box-shadow: 0 10px 24px rgb(0 0 0 / 24%);
   transform: translateX(-50%);
 }
@@ -74,30 +77,30 @@ function selectSlot(index) {
   height: 64px;
   place-items: center;
   padding: 0;
-  border: 1px solid #3a5060;
-  background: #172936;
-  color: var(--game-text, #e5ebee);
+  border: 1px solid var(--game-border);
+  background: var(--ce-black-2);
+  color: var(--game-text, #e8e3d6);
   cursor: pointer;
   font: inherit;
 }
 
 .hotbar-slot:hover,
 .hotbar-slot:focus-visible {
-  border-color: var(--game-border-strong, #456173);
-  background: #1c3441;
+  border-color: var(--game-border-strong, #6b5b36);
+  background: var(--ce-black-3);
   outline: none;
 }
 
 .hotbar-slot.selected {
   border-color: var(--game-gold, #c6a15b);
-  background: #263422;
+  background: color-mix(in srgb, var(--ce-gold-primary) 16%, var(--ce-black-1));
 }
 
 .slot-number {
   position: absolute;
   top: 3px;
   left: 5px;
-  color: var(--game-muted, #8f9da6);
+  color: var(--game-muted, #aaa594);
   font-size: 10px;
   line-height: 1;
 }
@@ -112,11 +115,11 @@ function selectSlot(index) {
   position: absolute;
   right: 5px;
   bottom: 4px;
-  color: var(--game-text, #e5ebee);
+  color: var(--game-text, #e8e3d6);
   font-size: 12px;
   font-weight: 700;
   line-height: 1;
-  text-shadow: 1px 1px 0 #07131f;
+  text-shadow: 1px 1px 0 var(--ce-black-0);
 }
 
 .slot-name {
@@ -125,7 +128,7 @@ function selectSlot(index) {
   bottom: 4px;
   left: 3px;
   overflow: hidden;
-  color: var(--game-muted, #8f9da6);
+  color: var(--game-muted, #aaa594);
   font-size: 8px;
   line-height: 1;
   text-overflow: ellipsis;

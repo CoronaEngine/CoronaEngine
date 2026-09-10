@@ -1,4 +1,4 @@
-<!-- 剧情模式 HUD：负责呈现准星、交互提示、生命、体力和调试信息。 -->
+<!-- 剧情模式 HUD：负责呈现准星、交互提示、生命、护甲和调试信息。 -->
 <template>
   <div class="hud">
     <div class="crosshair" :class="{ active: Boolean(hint) }" aria-hidden="true">
@@ -14,16 +14,20 @@
       <span>{{ hint }}</span>
     </div>
 
-    <section class="player-status" aria-label="玩家生命和体力">
+    <section class="player-status" aria-label="玩家生命和护甲">
       <div class="meter-row">
         <span class="meter-label">生命</span>
-        <div class="meter health-meter" aria-label="生命值 100"><i></i></div>
-        <span class="meter-value">100</span>
+        <div class="meter health-meter" :aria-label="`生命值 ${displayHealth(health)}`">
+          <i :style="{ width: `${(health / maxHealth) * 100}%` }"></i>
+        </div>
+        <span class="meter-value">{{ displayHealth(health) }}</span>
       </div>
       <div class="meter-row">
-        <span class="meter-label">体力</span>
-        <div class="meter stamina-meter" aria-label="体力值 100"><i></i></div>
-        <span class="meter-value">100</span>
+        <span class="meter-label">护甲</span>
+        <div class="meter armor-meter" :aria-label="`护甲值 ${armor}`">
+          <i :style="{ width: `${(Math.min(armor, 20) / 20) * 100}%` }"></i>
+        </div>
+        <span class="meter-value">{{ armor }}</span>
       </div>
     </section>
 
@@ -44,7 +48,13 @@
 </template>
 
 <script setup>
+// 仅在显示时进行舍入，生命服务内部保留小数伤害。
+const displayHealth = (value) => Number(value.toFixed(2));
+// 抬头显示界面不处理战斗逻辑，数值由当前会话的生命和装备服务提供。
 defineProps({
+  health: { type: Number, default: 100 },
+  maxHealth: { type: Number, default: 100 },
+  armor: { type: Number, default: 0 },
   hint: { type: String, default: '' },
   debugVisible: { type: Boolean, default: false },
   debug: {
@@ -77,7 +87,7 @@ function format(value) {
   z-index: 2;
   inset: 0;
   pointer-events: none;
-  color: var(--game-text, #e5ebee);
+  color: var(--game-text, #e8e3d6);
   font-family: var(--game-font, 'Segoe UI', 'Microsoft YaHei', sans-serif);
 }
 
@@ -105,7 +115,7 @@ function format(value) {
   width: 2px;
   height: 7px;
   border-radius: 2px;
-  background: #e5ebee;
+  background: #e8e3d6;
 }
 
 .crosshair-line-top {
@@ -138,7 +148,7 @@ function format(value) {
   width: 4px;
   height: 4px;
   border-radius: 50%;
-  background: var(--game-cyan, #75cdbd);
+  background: var(--game-cyan, #e8ca80);
 }
 
 .interaction-hint {
@@ -151,7 +161,7 @@ function format(value) {
   padding: 9px 13px 9px 9px;
   border: 1px solid var(--game-gold, #c6a15b);
   border-radius: 6px;
-  background: var(--game-panel-deep, #0b1723);
+  background: var(--game-panel-deep, #10100e);
   color: #fff2ca;
   box-shadow: 0 8px 18px rgb(0 0 0 / 22%);
   transform: translateX(-50%);
@@ -166,7 +176,7 @@ function format(value) {
   justify-content: center;
   border: 1px solid var(--game-gold, #c6a15b);
   border-radius: 4px;
-  background: #263443;
+  background: var(--ce-black-3);
   color: var(--game-gold, #c6a15b);
   font-size: 10px;
   font-weight: 800;
@@ -182,9 +192,9 @@ function format(value) {
   flex-direction: column;
   gap: 8px;
   padding: 11px 14px;
-  border: 1px solid var(--game-border, #304656);
+  border: 1px solid var(--game-border, #443c2a);
   border-radius: 8px;
-  background: var(--game-panel, #101d2a);
+  background: var(--game-panel, #171714);
   box-shadow: 0 10px 24px rgb(0 0 0 / 24%);
 }
 
@@ -196,7 +206,7 @@ function format(value) {
 
 .meter-label {
   width: 26px;
-  color: var(--game-muted, #8f9da6);
+  color: var(--game-muted, #aaa594);
   font-size: 10px;
 }
 
@@ -205,7 +215,7 @@ function format(value) {
   flex: 1;
   overflow: hidden;
   border-radius: 99px;
-  background: #26343f;
+  background: var(--ce-black-3);
 }
 
 .meter i {
@@ -219,14 +229,13 @@ function format(value) {
   background: #d56f7c;
 }
 
-.stamina-meter i {
-  width: 82%;
-  background: var(--game-cyan, #75cdbd);
+.armor-meter i {
+  background: var(--game-cyan, #e8ca80);
 }
 
 .meter-value {
   width: 24px;
-  color: var(--game-muted, #8f9da6);
+  color: var(--game-muted, #aaa594);
   font-size: 10px;
   text-align: right;
 }
@@ -237,9 +246,9 @@ function format(value) {
   bottom: 98px;
   min-width: 240px;
   padding: 11px 13px;
-  border: 1px solid var(--game-border, #304656);
+  border: 1px solid var(--game-border, #443c2a);
   border-radius: 6px;
-  background: var(--game-panel, #101d2a);
+  background: var(--game-panel, #171714);
   color: #b8c8cf;
   box-shadow: 0 10px 24px rgb(0 0 0 / 24%);
   font:

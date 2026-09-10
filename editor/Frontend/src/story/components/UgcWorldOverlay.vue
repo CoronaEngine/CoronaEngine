@@ -12,6 +12,7 @@
     />
 
     <UgcWorldResourcePanel
+      v-if="viewState.mode === 'build'"
       :world="viewState.world"
       :resources="viewState.resources"
       :mode="viewState.mode"
@@ -83,9 +84,9 @@ defineEmits([
   left: 50%;
   max-width: min(420px, calc(100% - 32px));
   padding: 9px 12px;
-  border: 1px solid var(--game-border-strong, #456173);
-  background: var(--game-panel, #101d2a);
-  color: var(--game-text, #e5ebee);
+  border: 1px solid var(--game-border-strong, #6b5b36);
+  background: var(--game-panel, #171714);
+  color: var(--game-text, #e8e3d6);
   font-size: 12px;
   pointer-events: auto;
   transform: translateX(-50%);
@@ -109,8 +110,8 @@ defineEmits([
 .confirm-dialog {
   width: min(360px, calc(100% - 32px));
   padding: 20px;
-  border: 1px solid var(--game-border-strong, #456173);
-  background: var(--game-panel, #101d2a);
+  border: 1px solid var(--game-border-strong, #6b5b36);
+  background: var(--game-panel, #171714);
   box-shadow: 0 10px 24px rgb(0 0 0 / 30%);
 }
 
@@ -121,7 +122,7 @@ defineEmits([
 
 .confirm-dialog p {
   margin: 0 0 18px;
-  color: var(--game-muted, #8f9da6);
+  color: var(--game-muted, #aaa594);
   font-size: 12px;
 }
 
@@ -134,9 +135,9 @@ defineEmits([
 .confirm-actions button {
   min-height: 32px;
   padding: 0 10px;
-  border: 1px solid var(--game-border, #304656);
-  background: var(--game-panel-deep, #0b1723);
-  color: var(--game-text, #e5ebee);
+  border: 1px solid var(--game-border, #443c2a);
+  background: var(--game-panel-deep, #10100e);
+  color: var(--game-text, #e8e3d6);
   cursor: pointer;
   font: inherit;
   font-size: 12px;
@@ -149,7 +150,7 @@ defineEmits([
 
 .confirm-actions button:hover,
 .confirm-actions button:focus-visible {
-  border-color: var(--game-cyan, #75cdbd);
+  border-color: var(--game-cyan, #e8ca80);
   outline: none;
 }
 </style>

@@ -66,10 +66,10 @@ defineEmits(['cancel', 'create', 'open']);
   max-height: min(560px, 100%);
   overflow: auto;
   padding: 20px;
-  border: 1px solid var(--game-border-strong, #456173);
-  background: var(--game-panel, #101d2a);
+  border: 1px solid var(--game-border-strong, #6b5b36);
+  background: var(--game-panel, #171714);
   box-shadow: 0 12px 28px rgb(0 0 0 / 32%);
-  color: var(--game-text, #e5ebee);
+  color: var(--game-text, #e8e3d6);
 }
 
 .picker-header {
@@ -100,7 +100,7 @@ h2 {
 
 h3 {
   margin-bottom: 8px;
-  color: var(--game-muted, #8f9da6);
+  color: var(--game-muted, #aaa594);
   font-size: 12px;
   font-weight: 500;
 }
@@ -108,9 +108,9 @@ h3 {
 .close-button {
   width: 30px;
   height: 30px;
-  border: 1px solid var(--game-border, #304656);
-  background: var(--game-panel-deep, #0b1723);
-  color: var(--game-muted, #8f9da6);
+  border: 1px solid var(--game-border, #443c2a);
+  background: var(--game-panel-deep, #10100e);
+  color: var(--game-muted, #aaa594);
   cursor: pointer;
   font-size: 20px;
   line-height: 1;
@@ -123,9 +123,9 @@ h3 {
   flex-direction: column;
   align-items: flex-start;
   gap: 4px;
-  border: 1px solid var(--game-border, #304656);
-  background: var(--game-panel-deep, #0b1723);
-  color: var(--game-text, #e5ebee);
+  border: 1px solid var(--game-border, #443c2a);
+  background: var(--game-panel-deep, #10100e);
+  color: var(--game-text, #e8e3d6);
   cursor: pointer;
   font: inherit;
   text-align: left;
@@ -148,7 +148,7 @@ h3 {
 }
 
 .world-row:last-child {
-  border-bottom: 1px solid var(--game-border, #304656);
+  border-bottom: 1px solid var(--game-border, #443c2a);
 }
 
 .create-button:hover,
@@ -157,8 +157,8 @@ h3 {
 .world-row:focus-visible,
 .close-button:hover,
 .close-button:focus-visible {
-  border-color: var(--game-cyan, #75cdbd);
-  background: #172936;
+  border-color: var(--game-cyan, #e8ca80);
+  background: var(--ce-black-2);
   outline: none;
 }
 
@@ -172,7 +172,7 @@ h3 {
 .world-id,
 .empty-message,
 .error-message {
-  color: var(--game-muted, #8f9da6);
+  color: var(--game-muted, #aaa594);
   font-size: 11px;
 }
 

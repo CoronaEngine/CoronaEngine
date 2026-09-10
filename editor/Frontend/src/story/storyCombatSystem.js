@@ -6,8 +6,8 @@
 import * as THREE from 'three';
 
 const DEFAULT_COOLDOWN = 350;
-const DEFAULT_DAMAGE = 25;
-const DEFAULT_DISTANCE = 8;
+const DEFAULT_DAMAGE = 10;
+const DEFAULT_DISTANCE = 3;
 
 /**
  * 创建剧情模式攻击系统。
@@ -21,6 +21,7 @@ export function createStoryCombatSystem({
   damage = DEFAULT_DAMAGE,
   maxDistance = DEFAULT_DISTANCE,
   onHit,
+  getAttackProfile,
 } = {}) {
   const raycaster = new THREE.Raycaster();
   const direction = new THREE.Vector3();
@@ -42,7 +43,7 @@ export function createStoryCombatSystem({
 
     /** 判断当前时间是否允许攻击。 */
     canAttack(now = performance.now()) {
-      return now - lastAttackAt >= cooldown;
+      return now - lastAttackAt >= (getAttackProfile?.().cooldown ?? cooldown);
     },
 
     /** 发出攻击射线并返回命中目标。 */
@@ -59,15 +60,24 @@ export function createStoryCombatSystem({
 
       camera.getWorldDirection(direction);
       raycaster.set(camera.position, direction);
-      const hit = raycaster.intersectObjects(activeScene.children, true).find(({ object, distance }) => (
-        distance <= maxDistance
-        && object.userData?.combatTarget
-        && !object.userData.disabled
-      ));
-      lastHit = hit?.object || null;
-      if (lastHit) {
-        onHit?.(lastHit, damage);
-      }
+      // 最近的可见实体表面会遮挡后方目标，防止隔墙命中。
+      const profile = getAttackProfile?.() || { damage, maxDistance };
+      const isVisible = (object) => {
+        for (let node = object; node; node = node.parent) if (!node.visible) return false;
+        return !object.userData.disabled;
+      };
+      const hit = raycaster
+        .intersectObjects(activeScene.children, true)
+        .find(
+          ({ object, distance }) =>
+            distance <= profile.maxDistance &&
+            object.isMesh &&
+            isVisible(object) &&
+            !object.userData.nonBlocking &&
+            !object.geometry?.type?.includes('Torus')
+        );
+      lastHit = hit?.object?.userData.combatTarget ? hit.object : null;
+      if (lastHit) onHit?.(lastHit, profile.damage);
       return { accepted: true, target: lastHit };
     },
 

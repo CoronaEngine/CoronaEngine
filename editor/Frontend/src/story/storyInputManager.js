@@ -125,6 +125,7 @@ export function createStoryInputManager(target = document, options = {}) {
   };
 
   const onMouseDown = (event) => {
+    if (isEditableTarget(event) || !isGameSurfaceEvent(event)) return;
     if (event.button !== 0 || (!mouseActive && !pointerLocked)) return;
     if (!pointerLocked && !isGameSurfaceEvent(event)) return;
 
