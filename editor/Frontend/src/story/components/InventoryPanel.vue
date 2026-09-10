@@ -16,12 +16,7 @@
         <!-- 装备槽持有实际装备实例，不另行复制背包物品。 -->
         <aside class="equipment-panel" aria-label="装备栏">
           <h3>旅行者装备</h3>
-          <svg class="figure" viewBox="0 0 120 190" aria-label="装备人物轮廓" role="img">
-            <circle cx="60" cy="24" r="17" />
-            <path
-              d="M39 47 L81 47 L100 108 L86 114 L74 78 L74 124 L84 179 L66 179 L60 134 L54 179 L36 179 L46 124 L46 78 L34 114 L20 108 Z"
-            />
-          </svg>
+          <EquipmentPreview :equipment="equipment" :model-library="modelLibrary" />
           <button
             v-for="(label, slot) in EQUIPMENT_SLOTS"
             :key="slot"
@@ -145,11 +140,13 @@
 
 <script setup>
 import { computed, ref, watch } from 'vue';
+import EquipmentPreview from './EquipmentPreview.vue';
 import { EQUIPMENT_SLOTS, armorValue } from '../equipmentSystem.js';
 
 const INVENTORY_SLOT_COUNT = 21;
 
 const props = defineProps({
+  modelLibrary: { type: Object, default: null },
   // 父组件把原子转移失败的原因显示在弹窗内部，避免被弹窗遮挡。
   transferError: { type: String, default: '' },
   equipment: { type: Object, default: () => ({}) },
@@ -622,13 +619,7 @@ function useSelectedOrb() {
   margin-bottom: 8px;
   color: var(--ce-gold-primary);
 }
-.figure {
-  height: 135px;
-  width: 100%;
-  fill: var(--ce-black-3);
-  stroke: var(--ce-gold-muted);
-  stroke-width: 2;
-}
+
 .equip-slot {
   width: 100%;
   display: grid;
@@ -672,9 +663,6 @@ function useSelectedOrb() {
   .detail-panel {
     grid-column: 1 / -1;
   }
-  .figure {
-    height: 95px;
-  }
 }
 @media (max-width: 550px) {
   .overlay {
@@ -685,9 +673,6 @@ function useSelectedOrb() {
   }
   .equipment-panel {
     border-right: 0;
-  }
-  .figure {
-    display: none;
   }
 }
 </style>
