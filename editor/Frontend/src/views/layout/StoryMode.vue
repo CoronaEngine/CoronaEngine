@@ -55,6 +55,7 @@
       v-if="store.inventoryOpen"
       :items="store.items"
       :equipment="store.equipment"
+      :model-library="mainSceneBundle?.models"
       :transfer-error="equipmentError"
       :hotbar-slots="hotbarSlots"
       :selected-hotbar-index="selectedHotbarIndex"
@@ -124,6 +125,7 @@ import { storyModeStore as store, toggleInventory, toggleMap } from '@/story/sto
 import { createEquipmentSystem, armorValue, attackProfile } from '@/story/equipmentSystem.js';
 import { createPlayerVitals } from '@/story/playerVitals.js';
 import { createMonsterSystem } from '@/story/monsterSystem.js';
+import { createFirstPersonEquipment } from '@/story/adapters/equipmentModelAdapter.js';
 import { createMonsterSceneAdapter } from '@/story/adapters/monsterSceneAdapter.js';
 import { createBuildCameraController } from '@/story/buildCameraController.js';
 const equipmentSystem = createEquipmentSystem(store);
@@ -134,6 +136,7 @@ const windowFocused = ref(true);
 const equipmentError = ref('');
 let monsters = null,
   monsterScene = null,
+  firstPersonEquipment = null,
   buildCamera = null;
 function equipItem({ id, slot }) {
   const result = equipmentSystem.equip(id, slot);
@@ -388,6 +391,8 @@ function handleInteraction(result) {
 }
 
 function handleAttack(result) {
+  // 挥动只作视觉反馈；命中与冷却仍由原战斗系统决定。
+  if (result?.accepted) firstPersonEquipment?.swing();
   const target = result?.target;
   if (!target) {
     if (result?.accepted) showHint('攻击未命中目标', 900);
@@ -408,7 +413,7 @@ function handleAttack(result) {
   }
 
   if (target.userData.monsterId) {
-    showHint(`测试怪物生命：${target.userData.health}`, 900);
+    showHint(`${target.userData.name}生命：${target.userData.health}`, 900);
     return;
   }
   if (target !== mainSceneBundle.storyObjects.boss) return;
@@ -658,8 +663,15 @@ onMounted(async () => {
         if (store.vitals.dead) pauseGameInput();
       },
     });
-    monsterScene = createMonsterSceneAdapter(mainSceneBundle.scene, monsters.monsters);
+    monsterScene = createMonsterSceneAdapter(
+      mainSceneBundle.scene,
+      monsters.monsters,
+      mainSceneBundle.models
+    );
     monsterScene.sync();
+    firstPersonEquipment = createFirstPersonEquipment(mainSceneBundle.models);
+    if (mainSceneBundle.models.errors.length)
+      showHint(`部分试装模型加载失败：${mainSceneBundle.models.errors.join('、')}`, 6000);
     const boss = mainSceneBundle.storyObjects.boss;
     const fragment = mainSceneBundle.storyObjects.fragment;
     fragment.visible = false;
@@ -718,6 +730,10 @@ onMounted(async () => {
     cameraController.applyToCamera(camera, player);
     store.running = true;
     renderer = new THREE.WebGLRenderer({ canvas: canvas.value, antialias: true });
+    // 试装模型启用软阴影，沿用现有天空、地面和灯光。
+    renderer.info.autoReset = false;
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
 
     resize = () => {
@@ -781,14 +797,18 @@ onMounted(async () => {
           },
           blocked
         );
-        monsterScene.sync();
+        monsterScene.sync(blocked ? 0 : delta);
       }
       const target = interactionSystem.getFocusedTarget();
       const prompt = interactionSystem.getPrompt();
       if (!isGameInputBlocked() && prompt) interactionHint.value = prompt;
       if (!target && interactionHint.value?.startsWith('按 F')) interactionHint.value = '';
       syncMainStore();
+      firstPersonEquipment.sync(store.equipment, blocked ? 0 : delta);
+      // 主场景与持械叠加层按同一帧统计，避免只看到武器的绘制数据。
+      renderer.info.reset();
       renderer.render(activeSceneBundle.scene, camera);
+      if (!building && !blocked) firstPersonEquipment.render(renderer, camera.aspect);
       animationFrame = requestAnimationFrame(tick);
     };
     animationFrame = requestAnimationFrame(tick);
@@ -804,6 +824,7 @@ onUnmounted(() => {
   input?.dispose();
   buildCamera?.dispose();
   monsterScene?.dispose();
+  firstPersonEquipment?.dispose();
   window.removeEventListener('focus', onFocus);
   window.removeEventListener('blur', onBlur);
   document.removeEventListener('visibilitychange', onVisibility);
