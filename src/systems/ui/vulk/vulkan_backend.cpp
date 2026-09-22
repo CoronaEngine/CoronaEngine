@@ -137,9 +137,13 @@ void VulkanBackend::shutdown() {
     for (auto& [surface, render] : surfaces_) {
         if (render && render->image_handle != 0) {
             if (auto image = SharedDataHub::instance().image_storage().acquire_write(render->image_handle)) {
-                render->resources.executor.wait(image->consumed_receipt);
+                if (image->consumed_receipt.serial != 0) {
+                    render->resources.executor.wait_idle(image->consumed_receipt);
+                }
             }
-            render->resources.executor.wait_idle(render->resources.last_receipt);
+            if (render->resources.last_receipt.serial != 0) {
+                render->resources.executor.wait_idle(render->resources.last_receipt);
+            }
             SharedDataHub::instance().image_storage().deallocate(render->image_handle);
             render->image_handle = 0;
         }
@@ -200,10 +204,14 @@ void VulkanBackend::unregister_surface(void* surface) {
     auto& render = *it->second;
     if (render.image_handle != 0) {
         if (auto image = SharedDataHub::instance().image_storage().acquire_write(render.image_handle)) {
-            render.resources.executor.wait(image->consumed_receipt);
+            if (image->consumed_receipt.serial != 0) {
+                render.resources.executor.wait_idle(image->consumed_receipt);
+            }
         }
     }
-    render.resources.executor.wait_idle(render.resources.last_receipt);
+    if (render.resources.last_receipt.serial != 0) {
+        render.resources.executor.wait_idle(render.resources.last_receipt);
+    }
 
     if (render.image_handle != 0) {
         SharedDataHub::instance().image_storage().deallocate(render.image_handle);
@@ -225,7 +233,10 @@ void VulkanBackend::new_frame(void* surface) {
     // GPU sync: wait for Display to finish consuming our image before we render new content.
     if (auto image_device =
             SharedDataHub::instance().image_storage().acquire_write(render->image_handle)) {
-        render->resources.executor.wait(image_device->consumed_receipt);
+        // The first frame has no Display submission to wait for yet.
+        if (image_device->consumed_receipt.serial != 0) {
+            render->resources.executor.wait(image_device->consumed_receipt);
+        }
     }
 }
 
@@ -349,10 +360,14 @@ void VulkanBackend::rebuild(void* surface, uint32_t pixel_w, uint32_t pixel_h) {
         if (render->image_handle != 0) {
             if (auto image_device =
                     SharedDataHub::instance().image_storage().acquire_write(render->image_handle)) {
-                render->resources.executor.wait_idle(image_device->consumed_receipt);
+                if (image_device->consumed_receipt.serial != 0) {
+                    render->resources.executor.wait_idle(image_device->consumed_receipt);
+                }
             }
         }
-        render->resources.executor.wait_idle(render->resources.last_receipt);
+        if (render->resources.last_receipt.serial != 0) {
+            render->resources.executor.wait_idle(render->resources.last_receipt);
+        }
     }
 
     if (!ensure_render_target(render->resources, pixel_w, pixel_h, kUiRenderTargetUsage)) {

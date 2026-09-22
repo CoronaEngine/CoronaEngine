@@ -107,7 +107,9 @@ bool QuadCompositor::composite(
     // --- Build merged vertex/index arrays (4 verts + 6 indices per quad) ---
     std::vector<QuadVertex> vertices;
     vertices.reserve(quads.size() * 4);
-    std::vector<uint32_t> indices;
+    // Horizon's indexed draw path consumes 16-bit indices. Each quad uses local
+    // indices, with vertex_offset selecting its vertices in the merged buffer.
+    std::vector<uint16_t> indices;
     indices.reserve(quads.size() * 6);
 
     for (const QuadDraw& q : quads) {
@@ -148,7 +150,7 @@ bool QuadCompositor::composite(
 
     // --- Ensure buffer capacity, reallocate only when needed ---
     const size_t vtx_bytes = vertices.size() * sizeof(QuadVertex);
-    const size_t idx_bytes = indices.size() * sizeof(uint32_t);
+    const size_t idx_bytes = indices.size() * sizeof(uint16_t);
 
     if (!res.vertex_buffer || res.vertex_buffer_capacity < vtx_bytes) {
         Horizon::HardwareBufferDesc desc;
@@ -167,7 +169,7 @@ bool QuadCompositor::composite(
     if (!res.index_buffer || res.index_buffer_capacity < idx_bytes) {
         Horizon::HardwareBufferDesc desc;
         desc.element_count = indices.size() + 512;
-        desc.element_size = static_cast<uint32_t>(sizeof(uint32_t));
+        desc.element_size = static_cast<uint32_t>(sizeof(uint16_t));
         desc.usage = Horizon::BufferUsage_TransferDst | Horizon::BufferUsage_Index;
         desc.debug_name = "ui_quad.index";
         res.index_buffer = Horizon::HardwareBuffer(desc);
@@ -181,7 +183,7 @@ bool QuadCompositor::composite(
     const bool vertex_write_ok = res.vertex_buffer.write_bytes(
         std::as_bytes(std::span<const QuadVertex>(vertices.data(), vertices.size())));
     const bool index_write_ok = res.index_buffer.write_bytes(
-        std::as_bytes(std::span<const uint32_t>(indices.data(), indices.size())));
+        std::as_bytes(std::span<const uint16_t>(indices.data(), indices.size())));
     if (!vertex_write_ok || !index_write_ok) {
         CFW_LOG_ERROR("QuadCompositor: geometry upload failed vertex_ok={} index_ok={}",
                       vertex_write_ok, index_write_ok);

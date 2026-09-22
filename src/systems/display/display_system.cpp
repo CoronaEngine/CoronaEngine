@@ -882,7 +882,9 @@ bool DisplaySystem::ensure_composite_resources(CompositeResources& resources,
     }
 
     if (resources.width != width || resources.height != height || !resources.output) {
-        resources.executor.wait_idle(resources.last_receipt);
+        if (resources.last_receipt.serial != 0) {
+            resources.executor.wait_idle(resources.last_receipt);
+        }
         resources.output = Horizon::HardwareImage(Horizon::HardwareImageDesc::texture_2d(
             width,
             height,

@@ -1769,7 +1769,9 @@ bool upload_instance_tables(const RenderInstanceBatch& batch,
     const auto material_count = static_cast<std::uint64_t>(batch.materials.size());
     if (instance_count > instance_capacity || material_count > material_capacity ||
         !instance_buffer || !material_buffer) {
-        hardware.executor.wait_idle(hardware.last_receipt);
+        if (hardware.last_receipt.serial != 0) {
+            hardware.executor.wait_idle(hardware.last_receipt);
+        }
     }
 
     const std::string instance_name = std::string(label) + ".instances";
@@ -2930,7 +2932,9 @@ void OpticsSystem::bind_native_view_resources(std::uintptr_t camera_handle,
         !resources.ssao_raw || !resources.ssao_temp || !resources.ssao_filtered ||
         !resources.shadow_raw || !resources.shadow_filtered ||
         !resources.visibility_pipeline) {
-        hardware_->executor.wait(hardware_->last_receipt);
+        if (hardware_->last_receipt.serial != 0) {
+            hardware_->executor.wait_idle(hardware_->last_receipt);
+        }
         resources.visibility =
             make_storage_image(width, height, Horizon::Format::RGBA32_UINT, "optics.native_visibility");
         resources.depth = make_depth_image(width, height, "optics.native_depth");
@@ -2977,7 +2981,9 @@ void OpticsSystem::ensure_ui_view_resources(std::uintptr_t camera_handle,
     auto& resources = *resources_ptr;
     if (resources.width != width || resources.height != height ||
         !resources.ui_visibility || !resources.ui_depth) {
-        hardware_->executor.wait_idle(hardware_->last_receipt);
+        if (hardware_->last_receipt.serial != 0) {
+            hardware_->executor.wait_idle(hardware_->last_receipt);
+        }
         resources.ui_visibility =
             make_storage_image(width, height, Horizon::Format::RGBA32_UINT, "optics.ui_visibility");
         resources.ui_depth = make_depth_image(width, height, "optics.ui_depth");
@@ -3045,10 +3051,14 @@ OpticsSystem::SurfaceRenderTarget& OpticsSystem::acquire_surface_target(void* su
         if (target.image_handle != 0) {
             if (auto image_device =
                     SharedDataHub::instance().image_storage().acquire_write(target.image_handle)) {
-                hardware_->executor.wait_idle(image_device->consumed_receipt);
+                if (image_device->consumed_receipt.serial != 0) {
+                    hardware_->executor.wait_idle(image_device->consumed_receipt);
+                }
             }
         }
-        hardware_->executor.wait_idle(hardware_->last_receipt);
+        if (hardware_->last_receipt.serial != 0) {
+            hardware_->executor.wait_idle(hardware_->last_receipt);
+        }
         target.final_output =
             make_storage_image(width, height, Horizon::Format::RGBA16_FLOAT, "optics.surface_final");
         target.ui_overlay =
@@ -3076,7 +3086,9 @@ OpticsSystem::SurfaceRenderTarget& OpticsSystem::acquire_offscreen_screenshot_ta
     auto& target = offscreen_screenshot_targets_[camera_handle];
     if (!target.final_output || !target.ui_overlay || !target.composite_output ||
         target.width != width || target.height != height) {
-        hardware_->executor.wait_idle(hardware_->last_receipt);
+        if (hardware_->last_receipt.serial != 0) {
+            hardware_->executor.wait_idle(hardware_->last_receipt);
+        }
         target.final_output =
             make_storage_image(width, height, Horizon::Format::RGBA16_FLOAT, "optics.offscreen_final");
         target.ui_overlay =
@@ -3400,7 +3412,9 @@ void OpticsSystem::optics_pipeline(float frame_count, uint64_t frame_index) {
                 if (!offscreen_screenshot) {
                     if (auto consumed_device =
                             SharedDataHub::instance().image_storage().acquire_write(target.image_handle)) {
-                        hardware_->executor.wait(consumed_device->consumed_receipt);
+                        if (consumed_device->consumed_receipt.serial != 0) {
+                            hardware_->executor.wait(consumed_device->consumed_receipt);
+                        }
                     }
                 }
                 bind_native_view_resources(cam_handle, camera->width, camera->height,
@@ -4597,6 +4611,7 @@ void OpticsSystem::optics_pipeline(float frame_count, uint64_t frame_index) {
                     // NOTE: keep_alive removed in new Horizon - resource lifecycle managed by shared_ptr
                            ;
                     latest_submit_receipt = stream << Horizon::commit();
+                    hardware_->last_receipt = latest_submit_receipt;
                     native_commit_ms = elapsed_ms(native_commit_start, PerfClock::now());
                     native_submit_ms = elapsed_ms(native_submit_start, PerfClock::now());
                 }
@@ -5262,6 +5277,7 @@ void OpticsSystem::process_vision_actor_pick(std::uintptr_t camera_handle,
     actor_pick_stream << visibility.extent(hardware_->gbufferSize.x, hardware_->gbufferSize.y);
     const Horizon::SubmitReceipt actor_pick_receipt =
         actor_pick_stream << actor_pick.dispatch_extent(1, 1) << Horizon::commit();
+    hardware_->last_receipt = actor_pick_receipt;
     enqueue_actor_pick_readback(*actor_pick_request,
                                 std::move(*actor_pick_result_buffer),
                                 actor_pick_receipt,
@@ -6764,7 +6780,9 @@ void OpticsSystem::run_vision_frame(float frame_count, uint64_t frame_index) {
                 if (auto consumed_device =
                         SharedDataHub::instance().image_storage().acquire_write(
                             target.image_handle)) {
-                    hardware_->executor.wait(consumed_device->consumed_receipt);
+                    if (consumed_device->consumed_receipt.serial != 0) {
+                        hardware_->executor.wait(consumed_device->consumed_receipt);
+                    }
                 }
 
                 auto stream = hardware_->executor.stream();
@@ -6793,6 +6811,7 @@ void OpticsSystem::run_vision_frame(float frame_count, uint64_t frame_index) {
 
                 const Horizon::SubmitReceipt vision_submit_receipt =
                     stream << Horizon::commit();
+                hardware_->last_receipt = vision_submit_receipt;
                 if (used_zero_copy) {
                     runtime.interop_submissions.insert_or_assign(cam_handle,
                                                                  vision_submit_receipt);
