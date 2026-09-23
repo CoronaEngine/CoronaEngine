@@ -1,4 +1,4 @@
-/// @file geometry_mesh_builder.cpp
+﻿/// @file geometry_mesh_builder.cpp
 /// @brief 从 Resource::Scene 构建 GPU MeshDevice 数组的单一实现。
 ///
 /// 详见 geometry_mesh_builder.h。本文件是初始加载 / 距离重载 / LRU 恢复
@@ -48,7 +48,7 @@ Horizon::HardwareImage make_geometry_texture(uint32_t width,
         width,
         height,
         format,
-        Horizon::ImageUsageFlags::Sampled | Horizon::ImageUsageFlags::TransferDst,
+        Horizon::ImageUsage_Sampled | Horizon::ImageUsage_TransferDst,
         std::move(name)));
 }
 
@@ -77,7 +77,7 @@ bool upload_geometry_texture(Horizon::HardwareImage& texture,
         Horizon::HardwareBufferDesc staging_desc;
         staging_desc.element_count = bytes.size_bytes();
         staging_desc.element_size = 1;
-        staging_desc.usage = Horizon::BufferUsageFlags::TransferSrc;
+        staging_desc.usage = Horizon::BufferUsage_TransferSrc;
         staging_desc.cpu_access = Horizon::CpuAccessMode::Write;
         const Horizon::HardwareBuffer staging(staging_desc, bytes);
 
@@ -181,21 +181,21 @@ std::vector<MeshDevice> build_mesh_devices_from_scene(
         // vertexStorageBuffer / indexStorageBuffer：Compute Shader 使用（可读写）
         dev.vertexBuffer = make_geometry_buffer(
             vertices,
-            Horizon::BufferUsageFlags::TransferDst | Horizon::BufferUsageFlags::Vertex,
+            Horizon::BufferUsage_TransferDst | Horizon::BufferUsage_Vertex,
             "geometry.vertex");
         dev.indexBuffer = make_geometry_buffer(
             indices,
-            Horizon::BufferUsageFlags::TransferDst | Horizon::BufferUsageFlags::Index,
+            Horizon::BufferUsage_TransferDst | Horizon::BufferUsage_Index,
             "geometry.index");
         dev.vertexStorageBuffer = make_geometry_buffer(
             vertices,
-            Horizon::BufferUsageFlags::TransferSrc | Horizon::BufferUsageFlags::TransferDst |
-                Horizon::BufferUsageFlags::Storage,
+            Horizon::BufferUsage_TransferSrc | Horizon::BufferUsage_TransferDst |
+                Horizon::BufferUsage_Storage,
             "geometry.vertex_storage");
         dev.indexStorageBuffer = make_geometry_buffer(
             indices,
-            Horizon::BufferUsageFlags::TransferSrc | Horizon::BufferUsageFlags::TransferDst |
-                Horizon::BufferUsageFlags::Storage,
+            Horizon::BufferUsage_TransferSrc | Horizon::BufferUsage_TransferDst |
+                Horizon::BufferUsage_Storage,
             "geometry.index_storage");
 
         // ---- GPU mesh 显存记账（P0）----
@@ -381,11 +381,10 @@ std::vector<MeshDevice> build_mesh_devices_from_scene(
                     std::as_bytes(std::span<const unsigned char>(upload.data_ptr, upload.rgba_data.size())),
                     "material");
                 if (!texture_upload_ok) {
-                    const auto extent = tex.extent();
+                    // NOTE: 新版 Horizon 移除了 extent() 方法，无法获取图像尺寸用于日志
                     CFW_LOG_WARNING("[GeometryMeshBuilder] Failed to upload material texture "
-                                    "(mesh={}, bytes={}, extent={}x{}x{}); using placeholder",
-                                    upload.mesh_idx, upload.rgba_data.size(),
-                                    extent.width, extent.height, extent.depth);
+                                    "(mesh={}, bytes={}); using placeholder",
+                                    upload.mesh_idx, upload.rgba_data.size());
                     tex = placeholder_texture;
                     mesh_devices[upload.mesh_idx].tex_mem = Corona::Memory::GpuMemToken{};
                 }

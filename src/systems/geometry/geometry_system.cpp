@@ -1,4 +1,4 @@
-#include <corona/events/engine_events.h>
+﻿#include <corona/events/engine_events.h>
 #include <corona/kernel/core/i_logger.h>
 #include <corona/kernel/utils/storage.h>
 #include <corona/resource/resource.h>
@@ -3443,13 +3443,13 @@ void GeometrySystem::reconcile_lod_residency() {
                                     Impl::LODBuildResult r;
                                     try {
                                         r.vertex_buffer = make_geometry_buffer(
-                                            verts, Horizon::BufferUsageFlags::TransferDst | Horizon::BufferUsageFlags::Vertex, "geometry.lod_vertex");
+                                            verts, Horizon::BufferUsage_TransferDst | Horizon::BufferUsage_Vertex, "geometry.lod_vertex");
                                         r.index_buffer = make_geometry_buffer(
-                                            inds, Horizon::BufferUsageFlags::TransferDst | Horizon::BufferUsageFlags::Index, "geometry.lod_index");
+                                            inds, Horizon::BufferUsage_TransferDst | Horizon::BufferUsage_Index, "geometry.lod_index");
                                         r.vertex_storage = make_geometry_buffer(
-                                            verts, Horizon::BufferUsageFlags::TransferSrc | Horizon::BufferUsageFlags::TransferDst | Horizon::BufferUsageFlags::Storage, "geometry.lod_vertex_storage");
+                                            verts, Horizon::BufferUsage_TransferSrc | Horizon::BufferUsage_TransferDst | Horizon::BufferUsage_Storage, "geometry.lod_vertex_storage");
                                         r.index_storage = make_geometry_buffer(
-                                            inds, Horizon::BufferUsageFlags::TransferSrc | Horizon::BufferUsageFlags::TransferDst | Horizon::BufferUsageFlags::Storage, "geometry.lod_index_storage");
+                                            inds, Horizon::BufferUsage_TransferSrc | Horizon::BufferUsage_TransferDst | Horizon::BufferUsage_Storage, "geometry.lod_index_storage");
                                         r.gpu_bytes = gpu_bytes;
                                         r.ok = static_cast<bool>(r.vertex_buffer)
                                                && static_cast<bool>(r.index_buffer);
@@ -3488,10 +3488,10 @@ void GeometrySystem::reconcile_lod_residency() {
                                 Impl::PendingLodBuild{model_id, epoch, shadow_demand, promise->get_future(), Impl::LodBuildPurpose::Shadow};
                             impl_->lod_build_tasks.run([verts=std::move(verts), inds=std::move(inds), bytes, promise]() {
                                 Impl::LODBuildResult r; try {
-                                    r.vertex_buffer=make_geometry_buffer(verts,Horizon::BufferUsageFlags::TransferDst|Horizon::BufferUsageFlags::Vertex,"geometry.shadow_lod_vertex");
-                                    r.index_buffer=make_geometry_buffer(inds,Horizon::BufferUsageFlags::TransferDst|Horizon::BufferUsageFlags::Index,"geometry.shadow_lod_index");
-                                    r.vertex_storage=make_geometry_buffer(verts,Horizon::BufferUsageFlags::TransferSrc|Horizon::BufferUsageFlags::TransferDst|Horizon::BufferUsageFlags::Storage,"geometry.shadow_lod_vertex_storage");
-                                    r.index_storage=make_geometry_buffer(inds,Horizon::BufferUsageFlags::TransferSrc|Horizon::BufferUsageFlags::TransferDst|Horizon::BufferUsageFlags::Storage,"geometry.shadow_lod_index_storage");
+                                    r.vertex_buffer=make_geometry_buffer(verts,Horizon::BufferUsage_TransferDst|Horizon::BufferUsage_Vertex,"geometry.shadow_lod_vertex");
+                                    r.index_buffer=make_geometry_buffer(inds,Horizon::BufferUsage_TransferDst|Horizon::BufferUsage_Index,"geometry.shadow_lod_index");
+                                    r.vertex_storage=make_geometry_buffer(verts,Horizon::BufferUsage_TransferSrc|Horizon::BufferUsage_TransferDst|Horizon::BufferUsage_Storage,"geometry.shadow_lod_vertex_storage");
+                                    r.index_storage=make_geometry_buffer(inds,Horizon::BufferUsage_TransferSrc|Horizon::BufferUsage_TransferDst|Horizon::BufferUsage_Storage,"geometry.shadow_lod_index_storage");
                                     r.gpu_bytes=bytes; r.ok=static_cast<bool>(r.vertex_buffer)&&static_cast<bool>(r.index_buffer);
                                 } catch (...) { r.ok=false; } promise->set_value(std::move(r));
                             });
@@ -3541,13 +3541,13 @@ void GeometrySystem::reconcile_lod_residency() {
                                     Impl::LODBuildResult r;
                                     try {
                                         r.vertex_buffer = make_geometry_buffer(
-                                            verts, Horizon::BufferUsageFlags::TransferDst | Horizon::BufferUsageFlags::Vertex, "geometry.lod0_vertex");
+                                            verts, Horizon::BufferUsage_TransferDst | Horizon::BufferUsage_Vertex, "geometry.lod0_vertex");
                                         r.index_buffer = make_geometry_buffer(
-                                            inds, Horizon::BufferUsageFlags::TransferDst | Horizon::BufferUsageFlags::Index, "geometry.lod0_index");
+                                            inds, Horizon::BufferUsage_TransferDst | Horizon::BufferUsage_Index, "geometry.lod0_index");
                                         r.vertex_storage = make_geometry_buffer(
-                                            verts, Horizon::BufferUsageFlags::TransferSrc | Horizon::BufferUsageFlags::TransferDst | Horizon::BufferUsageFlags::Storage, "geometry.lod0_vertex_storage");
+                                            verts, Horizon::BufferUsage_TransferSrc | Horizon::BufferUsage_TransferDst | Horizon::BufferUsage_Storage, "geometry.lod0_vertex_storage");
                                         r.index_storage = make_geometry_buffer(
-                                            inds, Horizon::BufferUsageFlags::TransferSrc | Horizon::BufferUsageFlags::TransferDst | Horizon::BufferUsageFlags::Storage, "geometry.lod0_index_storage");
+                                            inds, Horizon::BufferUsage_TransferSrc | Horizon::BufferUsage_TransferDst | Horizon::BufferUsage_Storage, "geometry.lod0_index_storage");
                                         r.gpu_bytes = gpu_bytes;
                                         r.ok = static_cast<bool>(r.vertex_buffer)
                                                && static_cast<bool>(r.index_buffer);
@@ -4513,10 +4513,11 @@ MemoryReport GeometrySystem::compute_memory_report() const {
     r.vram_texture_peak  = led.texture_peak();
 
     // 容量（仅大小）来自 Horizon：DEVICE_LOCAL 显存总量；可被手动 vram_budget 下调。
-    std::size_t vram_cap = static_cast<std::size_t>(Horizon::query_device_memory_size());
+    // NOTE: query_device_memory_size() 已在新版 Horizon 中移除
+    // 使用默认值 8GB，可通过 vram_budget_bytes 手动配置
+    std::size_t vram_cap = 8ULL * 1024 * 1024 * 1024; // 8 GB default
     if (impl_->vram_budget_bytes > 0)
-        vram_cap = (vram_cap == 0) ? impl_->vram_budget_bytes
-                                   : std::min(vram_cap, impl_->vram_budget_bytes);
+        vram_cap = std::min(vram_cap, impl_->vram_budget_bytes);
 
     // ---- RAM ----
     // used = 我们追踪的 mesh+texture CPU（按 rid 去重）；容量 = SDL 系统物理内存总量。

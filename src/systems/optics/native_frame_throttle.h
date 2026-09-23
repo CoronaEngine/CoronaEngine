@@ -32,7 +32,7 @@ public:
     }
 
     void submitted(Corona::Horizon::SubmitReceipt receipt) {
-        if (!receipt.empty()) {
+        if (receipt.serial != 0) {
             if (in_flight_.size() >= kMaxInFlight) {
                 throw std::logic_error("NativeFrameThrottle capacity was not made available before submit");
             }

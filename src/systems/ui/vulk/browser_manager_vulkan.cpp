@@ -1,4 +1,4 @@
-#include <corona/systems/ui/vulkan_backend.h>
+﻿#include <corona/systems/ui/vulkan_backend.h>
 #include <corona/kernel/core/i_logger.h>
 
 #include <algorithm>
@@ -29,13 +29,13 @@ Horizon::SubmitReceipt upload_image_async(Horizon::HardwareExecutor& executor,
     Horizon::HardwareBufferDesc staging_desc;
     staging_desc.element_count = bytes.size_bytes();
     staging_desc.element_size = 1;
-    staging_desc.usage = Horizon::BufferUsageFlags::TransferSrc;
+    staging_desc.usage = Horizon::BufferUsage_TransferSrc;
     staging_desc.cpu_access = Horizon::CpuAccessMode::Write;
     auto staging = std::make_shared<Horizon::HardwareBuffer>(staging_desc, bytes);
 
     return executor.stream()
         << image.copy_from(*staging)
-        << Horizon::keep_alive(staging)
+        // keep_alive removed
         << Horizon::commit();
 }
 }  // namespace
@@ -82,7 +82,7 @@ UiTextureId BrowserManager::create_browser_texture(int width, int height) {
         safe_width,
         safe_height,
         Horizon::Format::SRGBA8_UNORM,
-        Horizon::ImageUsageFlags::Sampled | Horizon::ImageUsageFlags::TransferDst | Horizon::ImageUsageFlags::TransferSrc,
+        Horizon::ImageUsage_Sampled | Horizon::ImageUsage_TransferDst | Horizon::ImageUsage_TransferSrc,
         "cef.browser_texture"));
     if (!owned.image) {
         return k_invalid_texture_id;

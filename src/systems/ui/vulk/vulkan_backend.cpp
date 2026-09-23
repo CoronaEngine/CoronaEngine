@@ -1,4 +1,4 @@
-#include <corona/systems/ui/vulkan_backend.h>
+﻿#include <corona/systems/ui/vulkan_backend.h>
 
 #include <corona/events/display_system_events.h>
 #include <corona/kernel/core/i_logger.h>
@@ -17,15 +17,15 @@ namespace {
 [[nodiscard]] Corona::Horizon::RasterizerPipelineDesc make_ui_pipeline_desc() {
     Corona::Horizon::RasterizerPipelineDesc desc;
     desc.debug_name = "corona.ui_quad";
-    desc.rasterizer.cull_mode = Corona::Horizon::CullMode::None;
-    desc.depth_stencil.depth_test_enabled = false;
-    desc.depth_stencil.depth_write_enabled = false;
-    desc.depth_stencil.stencil_test_enabled = false;
+    // 新版 Horizon: 字段扁平化，没有 cull_mode
+    desc.depth_test_enabled = false;
+    desc.depth_write_enabled = false;
+    // 新版没有 stencil_test_enabled
     return desc;
 }
 
 constexpr auto kUiRenderTargetUsage =
-    Corona::Horizon::ImageUsageFlags::Sampled | Corona::Horizon::ImageUsageFlags::Storage;
+    Corona::Horizon::ImageUsage_Sampled | Corona::Horizon::ImageUsage_Storage;
 
 std::uintptr_t select_main_camera_handle(const Corona::SceneDevice& scene) {
     if (scene.active_camera_handle != 0 &&
@@ -137,9 +137,13 @@ void VulkanBackend::shutdown() {
     for (auto& [surface, render] : surfaces_) {
         if (render && render->image_handle != 0) {
             if (auto image = SharedDataHub::instance().image_storage().acquire_write(render->image_handle)) {
-                render->resources.executor.wait(image->consumed_receipt);
+                if (image->consumed_receipt.serial != 0) {
+                    render->resources.executor.wait_idle(image->consumed_receipt);
+                }
             }
-            render->resources.executor.wait_idle(render->resources.last_receipt);
+            if (render->resources.last_receipt.serial != 0) {
+                render->resources.executor.wait_idle(render->resources.last_receipt);
+            }
             SharedDataHub::instance().image_storage().deallocate(render->image_handle);
             render->image_handle = 0;
         }
@@ -200,10 +204,14 @@ void VulkanBackend::unregister_surface(void* surface) {
     auto& render = *it->second;
     if (render.image_handle != 0) {
         if (auto image = SharedDataHub::instance().image_storage().acquire_write(render.image_handle)) {
-            render.resources.executor.wait(image->consumed_receipt);
+            if (image->consumed_receipt.serial != 0) {
+                render.resources.executor.wait_idle(image->consumed_receipt);
+            }
         }
     }
-    render.resources.executor.wait_idle(render.resources.last_receipt);
+    if (render.resources.last_receipt.serial != 0) {
+        render.resources.executor.wait_idle(render.resources.last_receipt);
+    }
 
     if (render.image_handle != 0) {
         SharedDataHub::instance().image_storage().deallocate(render.image_handle);
@@ -225,7 +233,10 @@ void VulkanBackend::new_frame(void* surface) {
     // GPU sync: wait for Display to finish consuming our image before we render new content.
     if (auto image_device =
             SharedDataHub::instance().image_storage().acquire_write(render->image_handle)) {
-        render->resources.executor.wait(image_device->consumed_receipt);
+        // The first frame has no Display submission to wait for yet.
+        if (image_device->consumed_receipt.serial != 0) {
+            render->resources.executor.wait(image_device->consumed_receipt);
+        }
     }
 }
 
@@ -288,7 +299,7 @@ void VulkanBackend::present_surface(void* surface) {
     if (auto image_device =
             SharedDataHub::instance().image_storage().acquire_write(render->image_handle)) {
         const auto submit_receipt = render->resources.last_receipt;
-        if (submit_receipt.empty()) {
+        if (submit_receipt.serial == 0) {
             CFW_LOG_WARNING(
                 "VulkanBackend: publishing UI frame with empty submit receipt "
                 "(surface={}, image_handle={}, frame={}, extent={}x{})",
@@ -349,10 +360,14 @@ void VulkanBackend::rebuild(void* surface, uint32_t pixel_w, uint32_t pixel_h) {
         if (render->image_handle != 0) {
             if (auto image_device =
                     SharedDataHub::instance().image_storage().acquire_write(render->image_handle)) {
-                render->resources.executor.wait_idle(image_device->consumed_receipt);
+                if (image_device->consumed_receipt.serial != 0) {
+                    render->resources.executor.wait_idle(image_device->consumed_receipt);
+                }
             }
         }
-        render->resources.executor.wait_idle(render->resources.last_receipt);
+        if (render->resources.last_receipt.serial != 0) {
+            render->resources.executor.wait_idle(render->resources.last_receipt);
+        }
     }
 
     if (!ensure_render_target(render->resources, pixel_w, pixel_h, kUiRenderTargetUsage)) {
@@ -391,9 +406,9 @@ bool VulkanBackend::ensure_render_target(ViewportRenderResources& resources, uin
     // SRGBA8_UNORM does not support VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT on many GPUs.
     // When the render target is used as a storage image, use a storage-capable format
     // (RGBA16_FLOAT) to avoid VK_ERROR_FORMAT_NOT_SUPPORTED.
-    const Horizon::ImageUsageFlags target_usage = usage | Horizon::ImageUsageFlags::ColorAttachment;
+    const Horizon::ImageUsageFlags target_usage = usage | Horizon::ImageUsage_ColorAttachment;
     const Horizon::Format target_format =
-        Horizon::has_flag(target_usage, Horizon::ImageUsageFlags::Storage) ? Horizon::Format::RGBA16_FLOAT : Horizon::Format::SRGBA8_UNORM;
+        ((target_usage & Horizon::ImageUsage_Storage) != 0) ? Horizon::Format::RGBA16_FLOAT : Horizon::Format::SRGBA8_UNORM;
 
     Horizon::HardwareImage new_target(Horizon::HardwareImageDesc::texture_2d(
         width,

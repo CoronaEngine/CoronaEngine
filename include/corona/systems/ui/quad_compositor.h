@@ -75,7 +75,7 @@ class QuadCompositor {
                    Horizon::RasterizerPipeline<ui_quad_vert_glsl_t, ui_quad_frag_glsl_t>& pipeline,
                    uint32_t target_width,
                    uint32_t target_height,
-                   Horizon::ImageUsageFlags render_target_usage = Horizon::ImageUsageFlags::Sampled);
+                   Horizon::ImageUsageFlags render_target_usage = Horizon::ImageUsage_Sampled);
 
    private:
     // Lazily create + upload the 1x1 white texture used for solid (non-textured) quads.
