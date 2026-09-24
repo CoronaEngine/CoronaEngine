@@ -101,7 +101,9 @@
 import { onMounted, onUnmounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { editorApi } from '@/api/editorApi.js';
-import { projectLauncherService } from '@/services/projectLauncherService.js';
+import { worldModeState } from '@/services/worldModeService.js';
+import { projectLauncherService, isProjectOpenSuperseded, cancelPendingProjectOpen } from '@/services/projectLauncherService.js';
+import { notifyWorldError } from '@/services/worldSessionLifecycle.js';
 import { initializeWorldTasks } from '@/services/cabbageAssistantContextService.js';
 import lanchat from '@/stores/lanchat.js';
 import { translateUiText } from '@/i18n/domTranslator.js';
@@ -114,6 +116,7 @@ const creating = ref(false);
 const archiveReady = ref(false);
 const promptRef = ref(null);
 let archiveStatusTimer = null;
+let disposed = false;
 
 const refreshArchiveReady = async () => {
   try {
@@ -131,6 +134,7 @@ onMounted(() => {
 });
 
 onUnmounted(() => {
+  disposed = true;
   if (archiveStatusTimer !== null) {
     window.clearInterval(archiveStatusTimer);
   }
@@ -160,6 +164,7 @@ const applyHint = (text) => {
 };
 
 const goHome = () => {
+  cancelPendingProjectOpen();
   router.push('/StartScreen');
 };
 
@@ -200,22 +205,30 @@ const handleCreate = async () => {
       mode: mode.value,
       prompt,
     });
-    const info = result?.data;
+    if (disposed) return;
+    const info = result?.data ?? result;
 
     if (info && info.path) {
       const opened = await projectLauncherService.openProject(info.path);
+      if (disposed || isProjectOpenSuperseded(opened)) return;
       const openResult = opened?.data ?? opened;
       if (openResult?.status === 'service_initializing') {
         alert('存档服务正在初始化，请稍后重试');
         return;
       }
       if (openResult?.ok) {
+        const revision = worldModeState.revision;
+        const current = () => !disposed && worldModeState.status === 'ready' && worldModeState.revision === revision;
+        if (worldModeState.mode === 'story') {
+          await router.push('/');
+          return;
+        }
         // Never send a world description or task request until Python confirms
         // that the newly created world is the active project. Otherwise the old
         // world can receive the new task plan and a stale node request can cross over.
         const projectReady = await waitForPythonProjectActivation(info.path);
+        if (!current()) return;
         if (projectReady) {
-          await editorApi.project.setProjectMode(mode.value, { prompt });
           try {
             // This operation only creates personalized guidance tasks. It never
             // creates or modifies the project node graph.
@@ -232,6 +245,7 @@ const handleCreate = async () => {
           // current world and let the task service recover from that durable value.
           console.warn('Python project activation is still pending; skipped the creation-page task request to protect the previous world.');
         }
+        if (!current()) return;
         try {
           if (lanchat.state.inRoom) {
             if (lanchat.state.role === 'host') {
@@ -240,6 +254,7 @@ const handleCreate = async () => {
               await lanchat.leaveRoom();
             }
           }
+          if (!current()) return;
           lanchat.setWorkspaceMode('multiplayer_multi_agent');
           await lanchat.openRoom({
             room: 'world-default',
@@ -250,14 +265,16 @@ const handleCreate = async () => {
         } catch (roomError) {
           console.warn('Default AI conversation room initialization failed:', roomError);
         }
-        router.push('/');
+        if (current()) router.push('/');
         return;
       }
     }
     alert(translateUiText('创建失败'));
   } catch (error) {
+    if (disposed) return;
     console.error('创造世界失败:', error);
-    alert(translateUiText(`创建失败: ${error?.message || error}`));
+    await router.replace('/StartScreen');
+    notifyWorldError(error, '创建失败');
   } finally {
     creating.value = false;
   }

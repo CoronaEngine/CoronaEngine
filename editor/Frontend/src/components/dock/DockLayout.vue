@@ -77,7 +77,8 @@
 </template>
 
 <script setup>
-import { computed, ref, onMounted, onUnmounted } from 'vue';
+import { computed, onMounted, onUnmounted } from 'vue';
+import { storeToRefs } from 'pinia';
 import { useI18n } from 'vue-i18n';
 import { useDockStore } from '@/stores/dockStore.js';
 import DockPanel from './DockPanel.vue';
@@ -99,9 +100,7 @@ const leftVisible = computed(() => leftPanels.value.length > 0 || isDragging.val
 const rightVisible = computed(() => rightPanels.value.length > 0 || isDragging.value);
 const bottomVisible = computed(() => bottomPanels.value.length > 0 || isDragging.value);
 
-const leftWidth = ref(360);
-const rightWidth = ref(400);
-const bottomHeight = ref(320);
+const { leftWidth, rightWidth, bottomHeight } = storeToRefs(dockStore);
 
 const MIN_SIDE = 260;
 const MIN_CENTER = 520;

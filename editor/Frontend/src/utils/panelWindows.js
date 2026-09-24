@@ -1,3 +1,4 @@
+import { editorUiAllowed, worldModeState } from '../services/worldModeService.js';
 import { appService } from '@/services/appService.js';
 import { getPluginManifest, PLUGIN_MANIFEST } from '@/config/pluginManifest.js';
 
@@ -94,6 +95,7 @@ export function floatingPanelManifests() {
 }
 
 async function closeFloatingPanelNow(dockStore, panelId) {
+  const revision = worldModeState.revision;
   const panelState = dockStore?.panels?.[panelId];
   if (!panelState) {
     console.error('[panelWindows] Unknown panel:', panelId);
@@ -116,7 +118,7 @@ async function closeFloatingPanelNow(dockStore, panelId) {
     await appService.closePanelTab(tabId, panelId);
     // Native broadcasts panel-closed as well. The expected-event token prevents a
     // delayed broadcast from closing a newer tab opened by the next queued click.
-    dockStore.markExternalClosed(panelId);
+    if (revision === worldModeState.revision && panelState.externalTabId === tabId) dockStore.markExternalClosed(panelId);
     return true;
   } catch (error) {
     forgetExpectedClose(panelId, closeToken);
@@ -125,7 +127,8 @@ async function closeFloatingPanelNow(dockStore, panelId) {
   }
 }
 
-async function openFloatingPanelNow(dockStore, panelId) {
+async function openFloatingPanelNow(dockStore, panelId, revision) {
+  if (!editorUiAllowed()) return false;
   const manifest = getPluginManifest(panelId);
   if (!manifest || !dockStore?.panels?.[panelId]) {
     console.error('[panelWindows] Unknown panel:', panelId);
@@ -147,9 +150,11 @@ async function openFloatingPanelNow(dockStore, panelId) {
       forgetExpectedClose(panelId, closeToken);
       console.warn(`[panelWindows] Failed to clear stale floating panel ${panelId}:`, error);
     }
+    if (revision !== worldModeState.revision) return false;
     dockStore.markExternalClosed(panelId);
   }
 
+  if (!editorUiAllowed() || revision !== worldModeState.revision) return false;
   const routePath = `#${manifest.routePath || ''}`;
   const width = manifest.defaultFloatWidth || manifest.defaultWidth || 400;
   const height = manifest.defaultFloatHeight || manifest.defaultHeight || 600;
@@ -190,8 +195,9 @@ function requestFloatingPanelState(dockStore, panelId, desiredOpen) {
     return Promise.resolve(false);
   }
 
+  const revision = worldModeState.revision;
   const existing = panelDesiredStates.get(panelId);
-  if (existing) {
+  if (existing && existing.revision === revision) {
     // Keep only the user's latest intent. Repeated open/close clicks while native CEF is
     // creating or destroying the heavy node editor no longer enqueue every intermediate
     // state and therefore cannot leave a stale tab id behind.
@@ -200,6 +206,7 @@ function requestFloatingPanelState(dockStore, panelId, desiredOpen) {
   }
 
   const state = {
+    revision,
     desiredOpen: Boolean(desiredOpen),
     promise: null,
   };
@@ -207,13 +214,14 @@ function requestFloatingPanelState(dockStore, panelId, desiredOpen) {
   state.promise = enqueuePanelOperation(panelId, async () => {
     let result = true;
     while (result) {
+      if (revision !== worldModeState.revision) return false;
       const requestedState = state.desiredOpen;
       const current = dockStore?.panels?.[panelId];
       if (!current) return false;
 
       if (!panelMatchesDesiredState(current, requestedState)) {
         if (requestedState) {
-          result = await openFloatingPanelNow(dockStore, panelId);
+          result = await openFloatingPanelNow(dockStore, panelId, revision);
         } else if (current.mode === 'external') {
           result = await closeFloatingPanelNow(dockStore, panelId);
         } else {
@@ -237,6 +245,7 @@ export function closeFloatingPanel(dockStore, panelId) {
 }
 
 export function openFloatingPanel(dockStore, panelId) {
+  if (!editorUiAllowed()) return Promise.resolve(false);
   return requestFloatingPanelState(dockStore, panelId, true);
 }
 

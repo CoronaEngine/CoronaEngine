@@ -1,3 +1,4 @@
+import { isCurrentWindowEvent } from '../services/appService.js';
 /**
  * 事件总线 —— 同一 JS 上下文内的发布-订阅
  *
@@ -48,5 +49,6 @@ window.__coronaEmit = (event, ...rest) => {
   const isCross = last && typeof last === 'object' && last._fromCross;
   const args = isCross ? rest.slice(0, -1) : rest;
 
+  if (args[0]?.uiGeneration !== undefined && !isCurrentWindowEvent(args[0])) return;
   coronaEventBus.emit(event, ...args);
 };

@@ -15,6 +15,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
@@ -31,6 +32,11 @@
 namespace Corona::Systems::UI {
 
 namespace {
+
+// World UI policy is separate from scene data and never changes saved camera flags.
+static std::atomic_bool s_editor_ui_enabled{true};
+static std::atomic_uint64_t s_editor_ui_revision{0};
+static std::string s_editor_ui_session;
 
 static std::mutex s_input_mutex;
 static std::vector<InputEvent> s_input_queue;
@@ -1668,6 +1674,66 @@ bool handle_dock_command(CefRefPtr<CefBrowser> browser,
         const std::string cmd = command.value("cmd", "");
         auto& bm = BrowserManager::instance();
 
+        if (cmd == "setEditorUiEnabled") {
+            const int source_id = find_tab_id_for_browser(browser);
+            const auto* source = bm.get_tab(source_id);
+            if (!source || source->docking_pos != "main") {
+                send_dock_callback(frame, request_id,
+                                   {{"message", "Only the main world surface can change editor UI policy"}}, nullptr);
+                return true;
+            }
+            const bool enabled = command.value("enabled", false);
+            const std::string session = command.value("session", "");
+            // Duplicate preparation in one session is idempotent. A later creative
+            // session never revives queued work belonging to an earlier session.
+            if (enabled != s_editor_ui_enabled.load() || session != s_editor_ui_session) {
+                s_editor_ui_enabled.store(enabled);
+                s_editor_ui_session = session;
+                ++s_editor_ui_revision;
+            }
+            const auto policy_revision = s_editor_ui_revision.load();
+            bm.enqueue_main_thread_task([enabled, frame, request_id, policy_revision] {
+                auto& manager = BrowserManager::instance();
+                if (!enabled && policy_revision == s_editor_ui_revision.load()) {
+                    for (const auto& [id, tab] : manager.get_tabs()) {
+                        if (!tab || tab->docking_pos == "main") continue;
+                        // Let the frame runner destroy secondary SDL surfaces safely.
+                        // Camera-view suspension must not persist open=false in the scene.
+                        if (tab->camera_view) tab->preserve_camera_open_on_close = true;
+                        tab->open = false;
+                    }
+                }
+                // A second frame lets UiFrameRunner retire the closed SDL surfaces
+                // before the caller opens a new scene or restores its cameras.
+                manager.enqueue_main_thread_task([enabled, frame, request_id, policy_revision] {
+                    send_dock_callback(frame, request_id, nullptr,
+                                       {{"enabled", enabled}, {"ui_generation", policy_revision}});
+                });
+            });
+            return true;
+        }
+        const auto* source_tab = bm.get_tab(find_tab_id_for_browser(browser));
+        if (source_tab && source_tab->docking_pos != "main" &&
+            (!s_editor_ui_enabled.load() || source_tab->editor_ui_revision != s_editor_ui_revision.load()) &&
+            cmd != "closeThisTab") {
+            send_dock_callback(frame, request_id, {{"message", "Editor window belongs to a retired world session"}}, nullptr);
+            return true;
+        }
+        if (cmd == "getEditorUiPolicy") {
+            send_dock_callback(frame, request_id, nullptr,
+                               {{"enabled", s_editor_ui_enabled.load()}, {"ui_generation", s_editor_ui_revision.load()}});
+            return true;
+        }
+        const auto editor_ui_revision = s_editor_ui_revision.load();
+        if (!s_editor_ui_enabled.load() &&
+            (cmd == "createPanelTab" || cmd == "createDetachedPanel" ||
+             cmd == "createCameraView" || cmd == "detachPanel" ||
+             cmd == "redockPanel" || cmd == "togglePanelWindowMode")) {
+            send_dock_callback(frame, request_id,
+                               {{"message", "Editor windows are disabled for this world"}}, nullptr);
+            return true;
+        }
+
         if (cmd == "createDetachedPanel") {
             CFW_LOG_INFO("DockCommand createDetachedPanel received: panel_id={}, route={}, size={}x{}, pos=({}, {})",
                          command.value("panelId", ""), command.value("routePath", ""),
@@ -1710,7 +1776,8 @@ bool handle_dock_command(CefRefPtr<CefBrowser> browser,
 
             const std::string base_url = source_base_url(browser);
             bm.enqueue_main_thread_task(
-                [base_url, route, scene_id, camera_id, camera_handle, width, height, x, y] {
+                [base_url, route, scene_id, camera_id, camera_handle, width, height, x, y, editor_ui_revision] {
+                    if (!s_editor_ui_enabled.load() || editor_ui_revision != s_editor_ui_revision.load()) return;
                     auto& browser_manager = BrowserManager::instance();
                     if (CameraViewportManager::instance().find_by_camera(
                             scene_id, camera_id)) {
@@ -1723,6 +1790,7 @@ bool handle_dock_command(CefRefPtr<CefBrowser> browser,
                         // detachment before it can be laid out in the main window, so the
                         // frame runner creates the SDL child window and routes this camera's
                         // image to its own surface.
+                        tab->editor_ui_revision = editor_ui_revision;
                         tab->detach_x = x;
                         tab->detach_y = y;
                         tab->detach_w = (width > 0) ? width : std::max(1, tab->width);
@@ -2132,14 +2200,26 @@ bool handle_dock_command(CefRefPtr<CefBrowser> browser,
             std::string standalone_route = route;
             standalone_route += (standalone_route.find('?') == std::string::npos) ? "?standalone=1" : "&standalone=1";
 
-            int tab_id = bm.create_tab(source_base_url(browser), standalone_route,
-                                       docking_pos, width, height, false);
+            const auto base_url = source_base_url(browser);
             // Phase 10: a popped-out panel is an in-main-window floating, draggable rectangle.
             // Seed an initial position from its anchor so multiple pop-outs don't stack at 0,0;
             // the user can then drag it by its title bar. Done on the UI thread.
-            bm.enqueue_main_thread_task([tab_id, docking_pos, width, height, z_priority] {
-                auto* tab = BrowserManager::instance().get_tab(tab_id);
+            bm.enqueue_main_thread_task([base_url, standalone_route, panel_id, docking_pos, width, height, z_priority, editor_ui_revision, frame, request_id] {
+                if (!s_editor_ui_enabled.load() || editor_ui_revision != s_editor_ui_revision.load()) {
+                    send_dock_callback(frame, request_id, {{"message", "World session changed"}}, nullptr);
+                    return;
+                }
+                auto& manager = BrowserManager::instance();
+                const int tab_id = manager.create_tab(base_url, standalone_route, docking_pos, width, height, false);
+                auto* tab = manager.get_tab(tab_id);
                 if (!tab) {
+                    send_dock_callback(frame, request_id, {{"message", "Window creation failed"}}, nullptr);
+                    return;
+                }
+                tab->editor_ui_revision = editor_ui_revision;
+                if (!s_editor_ui_enabled.load() || editor_ui_revision != s_editor_ui_revision.load()) {
+                    tab->open = false;
+                    send_dock_callback(frame, request_id, {{"message", "World session changed"}}, nullptr);
                     return;
                 }
                 tab->floating = true;
@@ -2153,11 +2233,11 @@ bool handle_dock_command(CefRefPtr<CefBrowser> browser,
                 else if (docking_pos == "center") { ix = 600; iy = 300; }
                 tab->initial_x = ix;
                 tab->initial_y = iy;
+                nlohmann::json result;
+                result["tab_id"] = tab_id;
+                result["panel_id"] = panel_id;
+                send_dock_callback(frame, request_id, nullptr, result);
             });
-            nlohmann::json result;
-            result["tab_id"] = tab_id;
-            result["panel_id"] = panel_id;
-            send_dock_callback(frame, request_id, nullptr, result);
             return true;
         }
 
@@ -2183,7 +2263,12 @@ bool handle_dock_command(CefRefPtr<CefBrowser> browser,
 
             const std::string base_url = source_base_url(browser);
             bm.enqueue_main_thread_task([base_url, standalone_route, panel_id, width, height, x, y,
-                                         frame, request_id] {
+                                         frame, request_id, editor_ui_revision] {
+                if (!s_editor_ui_enabled.load() || editor_ui_revision != s_editor_ui_revision.load()) {
+                    send_dock_callback(frame, request_id,
+                                       {{"message", "World changed before panel creation"}}, nullptr);
+                    return;
+                }
                 auto& bmgr = BrowserManager::instance();
                 // docking_pos "right_top" is only a placeholder; the tab is detached below before
                 // it can ever be laid out in the main window.
@@ -2191,6 +2276,7 @@ bool handle_dock_command(CefRefPtr<CefBrowser> browser,
                                              width, height, false);
                 auto* tab = bmgr.get_tab(tab_id);
                 if (tab) {
+                    tab->editor_ui_revision = editor_ui_revision;
                     tab->detach_x = x;
                     tab->detach_y = y;
                     tab->detach_w = (width > 0) ? width : std::max(1, tab->width);
@@ -2218,9 +2304,11 @@ bool handle_dock_command(CefRefPtr<CefBrowser> browser,
 
             nlohmann::json payload;
             payload["panelId"] = panel_id;
+            int tab_id = find_tab_id_for_browser(browser);
+            payload["tabId"] = tab_id;
+            payload["uiGeneration"] = source_tab ? source_tab->editor_ui_revision : 0;
             broadcast_dock_event("panel-closed", payload);
 
-            int tab_id = find_tab_id_for_browser(browser);
             if (tab_id >= 0) {
                 // Mark closed rather than removing directly: the frame loop's close path
                 // tears down a detached tab's secondary OS window (promise-synced) BEFORE
@@ -2247,6 +2335,9 @@ bool handle_dock_command(CefRefPtr<CefBrowser> browser,
 
             nlohmann::json payload;
             payload["panelId"] = panel_id;
+            payload["tabId"] = tab_id;
+            const auto* target = bm.get_tab(tab_id);
+            payload["uiGeneration"] = target ? target->editor_ui_revision : 0;
             broadcast_dock_event("panel-closed", payload);
             send_dock_callback(frame, request_id, nullptr, payload);
             return true;
@@ -2255,6 +2346,14 @@ bool handle_dock_command(CefRefPtr<CefBrowser> browser,
         if (cmd == "broadcast") {
             std::string event = command.value("event", "");
             nlohmann::json payload = command.value("payload", nlohmann::json::object());
+            if (!s_editor_ui_enabled.load()) {
+                send_dock_callback(frame, request_id, {{"message", "Editor UI is disabled"}}, nullptr);
+                return true;
+            }
+            if (payload.is_object()) {
+                payload["uiGeneration"] = s_editor_ui_revision.load();
+                payload["tabId"] = find_tab_id_for_browser(browser);
+            }
             broadcast_dock_event(event, payload);
             send_dock_callback(frame, request_id, nullptr, event);
             return true;
@@ -2299,7 +2398,8 @@ bool handle_dock_command(CefRefPtr<CefBrowser> browser,
             // reconcile step does the actual window create + surface register next frame. All
             // mutation of detach_state goes through enqueue_main_thread_task so the field stays
             // single-threaded (UI thread), needing no lock. See Phase 7d design notes.
-            bm.enqueue_main_thread_task([tab_id, x, y, w, h, maximized] {
+            bm.enqueue_main_thread_task([tab_id, x, y, w, h, maximized, editor_ui_revision] {
+                if (!s_editor_ui_enabled.load() || editor_ui_revision != s_editor_ui_revision.load()) return;
                 auto* tab = BrowserManager::instance().get_tab(tab_id);
                 if (!tab || tab->detach_state != BrowserTab::DetachState::Docked) {
                     return;  // unknown tab or mid-transition: reject (guards ABA / double-detach)
@@ -2328,7 +2428,8 @@ bool handle_dock_command(CefRefPtr<CefBrowser> browser,
             const int w = command.value("width", 0);
             const int h = command.value("height", 0);
 
-            bm.enqueue_main_thread_task([tab_id, x, y, w, h] {
+            bm.enqueue_main_thread_task([tab_id, x, y, w, h, editor_ui_revision] {
+                if (!s_editor_ui_enabled.load() || editor_ui_revision != s_editor_ui_revision.load()) return;
                 auto* tab = BrowserManager::instance().get_tab(tab_id);
                 if (!tab) {
                     return;
@@ -2359,7 +2460,8 @@ bool handle_dock_command(CefRefPtr<CefBrowser> browser,
             }
             // Desired-state only: flip Detached -> Redocking on the UI thread. The frame runner
             // tears the window down (promise-synced) next frame.
-            bm.enqueue_main_thread_task([tab_id] {
+            bm.enqueue_main_thread_task([tab_id, editor_ui_revision] {
+                if (!s_editor_ui_enabled.load() || editor_ui_revision != s_editor_ui_revision.load()) return;
                 auto* tab = BrowserManager::instance().get_tab(tab_id);
                 if (!tab || tab->detach_state != BrowserTab::DetachState::Detached) {
                     return;  // only a fully Detached panel can be redocked (guards ABA)

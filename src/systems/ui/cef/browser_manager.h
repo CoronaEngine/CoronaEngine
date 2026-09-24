@@ -71,6 +71,7 @@ struct BrowserTab {
     // Higher values are composed and hit-tested above ordinary floating panels.
     int z_priority = 0;
 
+    uint64_t editor_ui_revision = 0;
     bool open = true;
     bool minimized = false;  // 新增：是否最小化
     bool needs_resize = false;
