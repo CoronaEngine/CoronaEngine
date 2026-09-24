@@ -18,6 +18,7 @@ conda run -n coronaengine-dev --no-capture-output python tools/dev.py build
 conda run -n coronaengine-dev --no-capture-output python tools/dev.py build-fast
 conda run -n coronaengine-dev --no-capture-output python tools/dev.py rebuild
 conda run -n coronaengine-dev --no-capture-output python tools/dev.py update
+conda run -n coronaengine-dev --no-capture-output python tools/dev.py horizon-sync
 conda run -n coronaengine-dev --no-capture-output python tools/dev.py clean
 ```
 
@@ -38,6 +39,16 @@ Horizon 不再是 Conan package 或 editable。首次 `install`、`configure`、
 - HEAD 与锁定 commit 一致时允许本地 dirty 修改。
 - HEAD 不一致时立即失败，脚本不会覆盖开发者工作。
 - `update` 只在工作区干净时 fetch 指定 ref，更新锁文件并切换到新的完整 commit。
+- `horizon-sync` 只把本地 clone 恢复到锁定的 commit，不改锁文件；工作区有本地改动时拒绝执行并列出改动文件。
+
+`.workspace/Horizon` 不在 CoronaEngine 的版本控制范围内，所以 `git pull` 只会更新锁文件、不会动那份本地 clone。锁文件升级后第一次 `configure`/`build` 会因此失败，`status` 报告漂移方向和提交数：
+
+```text
+conda run -n coronaengine-dev --no-capture-output python tools/dev.py status
+conda run -n coronaengine-dev --no-capture-output python tools/dev.py horizon-sync
+```
+
+恢复或切换 Horizon 之后要重新跑一次 `configure`/`build`：依赖集合和 CMake 缓存都会过期，`build-fast` 不刷新依赖。
 
 ## IDE / CMake Presets
 

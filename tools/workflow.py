@@ -70,9 +70,18 @@ def run_command(
     cwd: Path,
     env: Mapping[str, str] | None = None,
     capture_output: bool = False,
+    quiet: bool = False,
+    check: bool = True,
 ) -> subprocess.CompletedProcess[str]:
+    """Run a command, echoing it unless ``quiet`` is set.
+
+    ``check=False`` returns the completed process instead of raising, which is what
+    read-only probes such as ``git merge-base --is-ancestor`` need: a non-zero exit
+    code there is a valid answer rather than a failure.
+    """
     args = [os.fspath(value) for value in command]
-    print(f"+ {subprocess.list2cmdline(args)}", flush=True)
+    if not quiet:
+        print(f"+ {subprocess.list2cmdline(args)}", flush=True)
     result = subprocess.run(
         args,
         cwd=cwd,
@@ -81,7 +90,7 @@ def run_command(
         capture_output=capture_output,
         check=False,
     )
-    if result.returncode != 0:
+    if check and result.returncode != 0:
         if capture_output:
             if result.stdout:
                 print(result.stdout, end="")

@@ -4,7 +4,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from horizon_workspace import ensure_workspace, update_workspace
+from horizon_workspace import ensure_workspace, inspect_workspace, sync_workspace, update_workspace
 from workflow import (
     CONFIGURATIONS,
     DEFAULT_CONFIGURATION,
@@ -126,8 +126,10 @@ def execute(args: argparse.Namespace) -> None:
     target_family = args.target_family or target_family_for_targets(targets)
     if args.command == "status":
         run_command(("git", "status", "--short", "--branch"), cwd=REPO_ROOT)
-        lock = ensure_workspace(REPO_ROOT)
-        print(f"Horizon: {lock.commit} ({lock.ref})")
+        try:
+            print(inspect_workspace(REPO_ROOT).summary())
+        except RuntimeError as error:
+            print(f"[WARN] Horizon workspace could not be inspected: {error}")
         run_command(("conan", "--version"), cwd=REPO_ROOT)
         run_command(("cmake", "--list-presets"), cwd=REPO_ROOT)
     elif args.command in {"install", "_bootstrap"}:
@@ -151,6 +153,9 @@ def execute(args: argparse.Namespace) -> None:
         update_workspace(REPO_ROOT)
         install(configuration, target_family, update=True)
         cmake_configure(REPO_ROOT, configuration, target_family)
+    elif args.command == "horizon-sync":
+        sync_workspace(REPO_ROOT)
+        print(inspect_workspace(REPO_ROOT).summary())
     elif args.command == "clean":
         clean_repo(REPO_ROOT)
     else:
@@ -158,10 +163,19 @@ def execute(args: argparse.Namespace) -> None:
 
 
 def create_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="CoronaEngine developer workflow")
+    parser = argparse.ArgumentParser(
+        description="CoronaEngine developer workflow",
+        epilog=(
+            "Horizon lock drift: 'horizon-sync' restores the commit pinned by the lock file "
+            "(refused when the workspace is dirty); 'update' moves the lock to the ref tip."
+        ),
+    )
     parser.add_argument(
         "command", nargs="?", default="status",
-        choices=("status", "install", "configure", "build", "build-fast", "rebuild", "update", "clean", "_bootstrap"),
+        choices=(
+            "status", "install", "configure", "build", "build-fast", "rebuild", "update", "horizon-sync",
+            "clean", "_bootstrap",
+        ),
     )
     parser.add_argument("targets", nargs="*")
     parser.add_argument("--configuration", choices=CONFIGURATIONS, default=DEFAULT_CONFIGURATION)
