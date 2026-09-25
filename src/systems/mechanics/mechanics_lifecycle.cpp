@@ -73,6 +73,8 @@ void MechanicsSystem::update() {
     if (impl_->first_update) {
         impl_->last_update_time = now;
         impl_->first_update = false;
+        // 首帧：先蒙皮（dt=0，建立初始姿态 AABB），再跑一步物理
+        update_skinned_geometry(0.0f);
         update_physics(resolve_fixed_dt());
         return;
     }
@@ -84,6 +86,14 @@ void MechanicsSystem::update() {
     const float max_frame_time = 0.1f;
     actual_dt = std::min(actual_dt, max_frame_time);
 
+    // ---- 骨骼动画 CPU 蒙皮（Phase 1：移至物理步进之前）----
+    // 先蒙皮生成本帧正确 AABB 和蒙皮顶点，物理帧随后消费同帧数据，
+    // 消除之前 update_physics 使用上一帧 AABB 的一帧延迟。
+    // 蒙皮模型即使未开物理（simulation_enabled=false）也照常播放。
+    if (!impl_->shutdown_requested.load(std::memory_order_acquire)) {
+        update_skinned_geometry(actual_dt);
+    }
+
     impl_->time_accumulator += actual_dt;
 
     const float fixed_dt = resolve_fixed_dt();
@@ -94,15 +104,6 @@ void MechanicsSystem::update() {
         update_physics(fixed_dt);
         impl_->time_accumulator -= fixed_dt;
         ++catch_up_steps;
-    }
-
-    // ---- 骨骼动画 CPU 蒙皮（P2，自 GeometrySystem 迁入）----
-    // 每真实帧一次（自带 steady_clock dt），独立于上面的固定步进次数：
-    // 蒙皮模型即使未开物理（simulation_enabled=false）也应自动循环播放，故放在
-    // 物理步进之外、不受其门控。蒙皮结果写回 GeometryDevice（所有 GPU/CPU buffer
-    // 仍归 GeometrySystem 持有以便流式 LRU 管理），供 Native / Vision / 物理消费。
-    if (!impl_->shutdown_requested.load(std::memory_order_acquire)) {
-        update_skinned_geometry();
     }
 }
 

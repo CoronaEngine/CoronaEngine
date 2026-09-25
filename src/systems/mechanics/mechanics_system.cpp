@@ -430,14 +430,32 @@ void MechanicsSystem::update_physics(float fixed_dt) {
         if (impl_->shutdown_requested.load(std::memory_order_acquire)) {
             return;
         }
-        // 蒙皮物体跳过三角网格：其网格随动画每帧变形，静态绑定姿态三角网格已失真，
-        // 且窄相一旦双方都有网格就走三角 SAT，会绕开我们要的动态 AABB 碰撞（P4）。
-        if (entry.is_skinned) continue;
         const auto params_it = frame_params.find(entry.handle);
-        if (params_it != frame_params.end() &&
-            params_it->second.collision_shape == CollisionShape::Mesh &&
-            entry.model_id != 0) {
-            ensure_collision_mesh(entry.model_id, impl_->collision_mesh_cache);
+        if (params_it == frame_params.end()) continue;
+        if (params_it->second.collision_shape != CollisionShape::Mesh) continue;
+
+        if (entry.is_skinned) {
+            // 蒙皮物体：从 skinned_collision_cache 取本帧实例化网格。
+            // 顶点由 update_skinned_geometry 每帧填入（已是本帧蒙皮后坐标，模型空间）；
+            // 索引和 triangle_bone_ids 在首帧由 ensure_collision_mesh 顺带算好后存入
+            // static_triangle_index_cache / static_triangle_bone_cache，每帧复用。
+            // 若本帧 update_skinned_geometry 尚未运行（极端情况），缓存为空，跳过三角窄相。
+            if (entry.model_id != 0 &&
+                !impl_->static_triangle_index_cache.count(entry.model_id)) {
+                // 首次：借用 ensure_collision_mesh 解析静态索引和骨骼映射
+                ensure_collision_mesh(entry.model_id,
+                                      impl_->collision_mesh_cache,
+                                      &impl_->static_triangle_index_cache,
+                                      &impl_->static_triangle_bone_cache);
+            }
+        } else {
+            // 非蒙皮物体：走原有静态网格路径
+            if (entry.model_id != 0) {
+                ensure_collision_mesh(entry.model_id,
+                                      impl_->collision_mesh_cache,
+                                      &impl_->static_triangle_index_cache,
+                                      &impl_->static_triangle_bone_cache);
+            }
         }
     }
 
@@ -637,46 +655,94 @@ void MechanicsSystem::update_physics(float fixed_dt) {
 #endif
 
                 // ===== 三角形窄相精化（可选）=====
-                // 当双方都有碰撞网格且三角形数在限制内时，用三角形级 SAT 替换 AABB/OBB 的法线和穿透
+                // 蒙皮物体：从 skinned_collision_cache 取本帧实例化碰撞网格（顶点已是蒙皮后坐标）；
+                // 非蒙皮物体：从 collision_mesh_cache 取静态绑定姿态网格。
+                // 两者都有网格且三角形数在限制内时，用三角形级 SAT 精化法线方向。
 #if CORONA_MECHANICS_USE_TRIANGLE_NARROWPHASE
                 const bool both_mesh =
                     frame_params.at(ha).collision_shape == CollisionShape::Mesh &&
                     frame_params.at(hb).collision_shape == CollisionShape::Mesh;
-                if (both_mesh && a.model_id != 0 && b.model_id != 0) {
-                    auto it_mesh_a = impl_->collision_mesh_cache.find(a.model_id);
-                    auto it_mesh_b = impl_->collision_mesh_cache.find(b.model_id);
-                    if (it_mesh_a != impl_->collision_mesh_cache.end() &&
-                        it_mesh_b != impl_->collision_mesh_cache.end()) {
-                        // 惰性计算世界空间顶点（每物体每帧最多算一次）
+                if (both_mesh) {
+                    // 按蒙皮/非蒙皮分别取碰撞网格指针
+                    const CollisionMesh* mesh_a_ptr = nullptr;
+                    const CollisionMesh* mesh_b_ptr = nullptr;
+
+                    if (a.is_skinned) {
+                        auto sit = impl_->skinned_collision_cache.find(a.handle);
+                        if (sit != impl_->skinned_collision_cache.end() && !sit->second.triangles.empty())
+                            mesh_a_ptr = &sit->second;
+                    } else if (a.model_id != 0) {
+                        auto sit = impl_->collision_mesh_cache.find(a.model_id);
+                        if (sit != impl_->collision_mesh_cache.end())
+                            mesh_a_ptr = &sit->second;
+                    }
+
+                    if (b.is_skinned) {
+                        auto sit = impl_->skinned_collision_cache.find(b.handle);
+                        if (sit != impl_->skinned_collision_cache.end() && !sit->second.triangles.empty())
+                            mesh_b_ptr = &sit->second;
+                    } else if (b.model_id != 0) {
+                        auto sit = impl_->collision_mesh_cache.find(b.model_id);
+                        if (sit != impl_->collision_mesh_cache.end())
+                            mesh_b_ptr = &sit->second;
+                    }
+
+                    if (mesh_a_ptr && mesh_b_ptr) {
+                        // 蒙皮物体的碰撞顶点已在模型空间（由 update_skinned_geometry 每帧写入），
+                        // 仍需乘 o2w 变换到世界空间；非蒙皮物体与原逻辑相同。
                         if (world_verts_cache.find(ha) == world_verts_cache.end()) {
                             auto tx_a = transform_storage.try_acquire_read(a.transform_handle);
                             if (tx_a) {
-                                transform_vertices_to_world(
-                                    it_mesh_a->second.vertices, *tx_a, world_verts_cache[ha]);
+                                transform_vertices_to_world(mesh_a_ptr->vertices, *tx_a, world_verts_cache[ha]);
                             }
                         }
                         if (world_verts_cache.find(hb) == world_verts_cache.end()) {
                             auto tx_b = transform_storage.try_acquire_read(b.transform_handle);
                             if (tx_b) {
-                                transform_vertices_to_world(
-                                    it_mesh_b->second.vertices, *tx_b, world_verts_cache[hb]);
+                                transform_vertices_to_world(mesh_b_ptr->vertices, *tx_b, world_verts_cache[hb]);
                             }
                         }
 
                         auto wit_a = world_verts_cache.find(ha);
                         auto wit_b = world_verts_cache.find(hb);
-                        if (wit_a != world_verts_cache.end() && wit_b != world_verts_cache.end() && !wit_a->second.empty() && !wit_b->second.empty()) {
-                            auto& wv_a = wit_a->second;
-                            auto& wv_b = wit_b->second;
+                        if (wit_a != world_verts_cache.end() && wit_b != world_verts_cache.end() &&
+                            !wit_a->second.empty() && !wit_b->second.empty()) {
                             TriangleContactResult tri_result;
-                            triangle_narrowphase(wv_a, it_mesh_a->second,
-                                                 wv_b, it_mesh_b->second,
+                            triangle_narrowphase(wit_a->second, *mesh_a_ptr,
+                                                 wit_b->second, *mesh_b_ptr,
                                                  a.center_world, b.center_world, tri_result);
                             if (tri_result.has_contact) {
                                 normal = tri_result.normal;
                                 // 保留 AABB/OBB 级别的穿透深度；三角形 SAT 深度只反映
                                 // 单个三角形对的局部重叠，远小于物体级实际穿透，会导致严重穿模。
-                                // 三角形窄相的价值在于提供更精确的碰撞法线方向。
+
+                                // Phase 3：蒙皮物体被碰到时记录接触骨骼，帧末驱动 IK target
+                                // 接触点在世界空间；帧末变换到模型空间后写入匹配的 contact_driven IK 链。
+                                auto try_enqueue_ik = [&](bool is_skinned_body,
+                                                          std::uintptr_t mech_h,
+                                                          int tri_idx,
+                                                          const MechanicsWorldAABB& body_data) {
+                                    if (!is_skinned_body || tri_idx < 0) return;
+                                    auto sit = impl_->skinned_collision_cache.find(body_data.handle);
+                                    if (sit == impl_->skinned_collision_cache.end()) return;
+                                    const auto& sc = sit->second;
+                                    if (tri_idx >= static_cast<int>(sc.triangle_bone_ids.size())) return;
+                                    int node_idx = sc.triangle_bone_ids[static_cast<std::size_t>(tri_idx)];
+                                    if (node_idx < 0) return;
+                                    std::uintptr_t geom_h = 0;
+                                    {
+                                        auto m_acc = mechanics_storage.try_acquire_read(mech_h);
+                                        if (m_acc) geom_h = m_acc->geometry_handle;
+                                    }
+                                    if (!geom_h) return;
+                                    impl_->deferred_ik_target_updates.push_back({
+                                        geom_h,
+                                        body_data.transform_handle,
+                                        node_idx,
+                                        tri_result.contact_point});
+                                };
+                                try_enqueue_ik(a.is_skinned, ha, tri_result.best_tri_a, a);
+                                try_enqueue_ik(b.is_skinned, hb, tri_result.best_tri_b, b);
                             } else {
                                 continue;  // 三角形级无接触，跳过此对
                             }
@@ -1294,6 +1360,50 @@ void MechanicsSystem::update_physics(float fixed_dt) {
     }
     impl_->deferred_collision_callbacks.clear();
 
+    // Phase 3：帧末执行碰撞→IK target 更新（在 geometry_storage 锁外执行，避免死锁）
+    // 把接触点从世界空间变换到模型空间，写入 contact_driven IK 链的 target，启用 IK。
+    if (!impl_->deferred_ik_target_updates.empty()) {
+        auto& geom_storage = SharedDataHub::instance().geometry_storage();
+        auto& transform_st  = SharedDataHub::instance().model_transform_storage();
+
+        for (const auto& upd : impl_->deferred_ik_target_updates) {
+            if (impl_->shutdown_requested.load(std::memory_order_acquire)) break;
+
+            // 取 o2w 矩阵，求逆得 w2o，把世界接触点变换到模型空间
+            ktm::fmat4x4 inv_m{};
+            bool have_inv = false;
+            {
+                auto tx = transform_st.try_acquire_read(upd.transform_handle);
+                if (tx) {
+                    ktm::fmat4x4 m = tx->compute_matrix();
+                    // 直接用 ktm 求逆（4x4 通用逆）
+                    inv_m = ktm::inverse(m);
+                    have_inv = true;
+                }
+            }
+            if (!have_inv) continue;
+
+            // 世界接触点 → 模型空间
+            const auto& wp = upd.contact_world;
+            const float mx = inv_m[0][0]*wp.x + inv_m[1][0]*wp.y + inv_m[2][0]*wp.z + inv_m[3][0];
+            const float my = inv_m[0][1]*wp.x + inv_m[1][1]*wp.y + inv_m[2][1]*wp.z + inv_m[3][1];
+            const float mz = inv_m[0][2]*wp.x + inv_m[1][2]*wp.y + inv_m[2][2]*wp.z + inv_m[3][2];
+
+            // 写入匹配的 contact_driven IK 链（end_node == node_idx）
+            auto geom_w = geom_storage.try_acquire_write(upd.geom_handle);
+            if (!geom_w) continue;
+            for (auto& chain : geom_w->ik_chains) {
+                if (!chain.contact_driven) continue;
+                if (chain.end_node != upd.node_idx) continue;
+                chain.target = {mx, my, mz};
+                chain.weight = 1.0f;
+                chain.enabled = true;
+                break;  // 每个 node_idx 只驱动一条链
+            }
+        }
+        impl_->deferred_ik_target_updates.clear();
+    }
+
     // 清理无效句柄的缓存
     std::unordered_set<std::uintptr_t> alive_handles(mechanics_handles.begin(), mechanics_handles.end());
 
@@ -1310,9 +1420,9 @@ void MechanicsSystem::update_physics(float fixed_dt) {
 // ============================================================================
 // update_skinned_geometry（P2，自 GeometrySystem 迁入）
 // 功能：每真实帧对蒙皮 actor 做 CPU 线性混合蒙皮（LBS），把结果重传到 GPU 顶点缓冲。
-// 调用时机：MechanicsSystem::update() 的固定步进循环之后（每真实帧一次，独立于
-//           物理 fixed_dt 的步进次数，也不受 simulation_enabled 影响——蒙皮模型
-//           即使未开物理也应自动循环播放）。
+// 调用时机：MechanicsSystem::update() 的固定步进循环之前（Phase 1 调整）。
+//           先蒙皮生成本帧正确 AABB 和蒙皮顶点，物理随后消费同帧数据，消除旧版
+//           一帧延迟。蒙皮模型即使未开物理也应自动循环播放。
 //
 // 数据流：Scene(绑定顶点+骨骼权重+骨架+动画) → compute_pose 算 final[] →
 //         skin_one_vertex 蒙皮 → write_bytes 重传 vertexBuffer/vertexStorageBuffer。
@@ -1330,7 +1440,7 @@ void MechanicsSystem::update_physics(float fixed_dt) {
 //
 // 自动循环：始终播放 animations[0]，anim_time 由 advance_anim_time 推进并 fmod 回绕。
 // ============================================================================
-void MechanicsSystem::update_skinned_geometry() {
+void MechanicsSystem::update_skinned_geometry(float dt) {
     // 懒缓存 GeometrySystem 指针（first_update 路径可能未经过 update_physics）
     if (!impl_->geometry_sys && impl_->ctx) {
         impl_->geometry_sys = dynamic_cast<GeometrySystem*>(impl_->ctx->get_system("Geometry"));
@@ -1341,14 +1451,31 @@ void MechanicsSystem::update_skinned_geometry() {
     auto& hub = SharedDataHub::instance();
     auto& geom_storage = hub.geometry_storage();
 
-    // ---- 计算 dt（首帧为 0）----
-    const auto now = std::chrono::steady_clock::now();
-    float dt = 0.0f;
-    if (impl_->last_skin_update_time.has_value()) {
-        dt = std::chrono::duration<float>(now - *impl_->last_skin_update_time).count();
+    // dt 由 update() 测量并传入（已钳制 ≤0.1s），此处不再独立计时。
+    // last_skin_update_time 保留但不再用于计算 dt，仅供外部诊断查询。
+    impl_->last_skin_update_time = std::chrono::steady_clock::now();
+
+    // Phase 3：IK target 衰减（contact_driven 链每帧把 weight 减小，碰撞结束后平滑归零）
+    // 在收集 geom_handles 之前处理，避免在遍历 storage 时持锁写 ik_chains。
+    {
+        auto& geom_st = hub.geometry_storage();
+        std::vector<std::uintptr_t> all_geom_handles;
+        for (auto it = geom_st.cbegin(); it != geom_st.cend(); ++it) {
+            all_geom_handles.push_back(reinterpret_cast<std::uintptr_t>(&*it));
+        }
+        for (auto gh : all_geom_handles) {
+            auto gw = geom_st.try_acquire_write(gh);
+            if (!gw) continue;
+            for (auto& chain : gw->ik_chains) {
+                if (!chain.contact_driven || !chain.enabled) continue;
+                chain.weight -= chain.contact_weight_decay * dt;
+                if (chain.weight <= 0.0f) {
+                    chain.weight = 0.0f;
+                    chain.enabled = false;
+                }
+            }
+        }
     }
-    impl_->last_skin_update_time = now;
-    if (dt > 0.1f) dt = 0.1f;  // 容错：断点/卡顿导致的大 dt 夹住，避免动画跳跃
 
     // 先收集所有 geometry handle，避免在迭代 storage 期间持锁做重计算
     std::vector<std::uintptr_t> geom_handles;
@@ -1396,6 +1523,27 @@ void MechanicsSystem::update_skinned_geometry() {
             geom_write->is_skinned = true;
             geom_write->anim_time = Resource::advance_anim_time(geom_write->anim_time, dt, clip);
             anim_time = geom_write->anim_time;
+
+            // ---- 自动推导 contact_driven IK 链（首帧且链列表为空时触发）----
+            // 为每个出现在 bone_map 里的蒙皮骨骼生成一条 contact_driven 链，
+            // chain_length=3（末端+2级父骨），浅骨骼不足时 solve_ccd 会静默提前退出。
+            // ik_chains 非空时完全跳过，不覆盖手动设置的链。
+            if (geom_write->ik_chains.empty() && !skeleton.bone_map.empty()) {
+                for (std::size_t ni = 0; ni < skeleton.nodes.size(); ++ni) {
+                    const auto& node = skeleton.nodes[ni];
+                    if (skeleton.bone_map.find(node.name) == skeleton.bone_map.end()) continue;
+                    Resource::IkChain chain;
+                    chain.end_node          = static_cast<int>(ni);
+                    chain.chain_length      = 3;
+                    chain.contact_driven    = true;
+                    chain.enabled           = false;
+                    chain.weight            = 0.0f;
+                    chain.damping           = 0.85f;
+                    chain.contact_weight_decay = 2.0f;
+                    geom_write->ik_chains.push_back(chain);
+                }
+            }
+
             ik_chains = geom_write->ik_chains;  // 拷贝一份 IK 链定义（锁外跑 CCD）
             mesh_count = geom_write->mesh_handles.size();
             vbufs.reserve(mesh_count);
@@ -1541,6 +1689,10 @@ void MechanicsSystem::update_skinned_geometry() {
         }
 
         // ---- 第 7 步：brief 写锁存回蒙皮结果 + 动态 AABB（供 Vision / 物理消费）----
+        // 同时更新 skinned_collision_cache：把本帧蒙皮顶点（模型空间）装入物理系统的
+        // 每帧实例化碰撞网格。索引和 triangle_bone_ids 从 static_triangle_index_cache /
+        // static_triangle_bone_cache 复用（首帧由 ensure_collision_mesh 顺带解析好），
+        // 只刷新顶点坐标，避免每帧重解 Scene。
         {
             auto geom_write = geom_storage.try_acquire_write(geom_handle);
             if (geom_write) {
@@ -1549,6 +1701,52 @@ void MechanicsSystem::update_skinned_geometry() {
                     geom_write->skinned_aabb_min = ktm::fvec3{aabb_min_x, aabb_min_y, aabb_min_z};
                     geom_write->skinned_aabb_max = ktm::fvec3{aabb_max_x, aabb_max_y, aabb_max_z};
                     geom_write->skinned_aabb_valid = true;
+                }
+
+                // ---- 更新蒙皮碰撞网格（Phase 2）----
+                // 从 static_triangle_index_cache 取索引（首帧需先确保已解析）
+                bool have_static = impl_->static_triangle_index_cache.count(model_id) > 0;
+                if (!have_static && model_id != 0) {
+                    // 首帧：触发 ensure_collision_mesh 解析索引和骨骼映射，存入 static 缓存
+                    // 注意：此调用在 geom 写锁内；ensure_collision_mesh 只访问 ResourceManager
+                    // 的 Scene 读锁，与 geom_storage 无锁序冲突。
+                    MechanicsInternal::ensure_collision_mesh(
+                        model_id,
+                        impl_->collision_mesh_cache,
+                        &impl_->static_triangle_index_cache,
+                        &impl_->static_triangle_bone_cache);
+                    have_static = impl_->static_triangle_index_cache.count(model_id) > 0;
+                }
+
+                if (have_static && !geom_write->skinned_cpu_vertices.empty()) {
+                    const auto& static_tris  = impl_->static_triangle_index_cache.at(model_id);
+                    const auto& static_bones = impl_->static_triangle_bone_cache.count(model_id)
+                                                ? impl_->static_triangle_bone_cache.at(model_id)
+                                                : std::vector<int>{};
+
+                    MechanicsInternal::CollisionMesh& sc = impl_->skinned_collision_cache[geom_handle];
+                    sc.triangles        = static_tris;
+                    sc.triangle_bone_ids = static_bones;
+
+                    // 从 skinned_cpu_vertices（bytes → Resource::Vertex）提取位置坐标
+                    sc.vertices.clear();
+                    float min_y = std::numeric_limits<float>::max();
+                    for (std::size_t mi = 0; mi < geom_write->skinned_cpu_vertices.size(); ++mi) {
+                        const auto& blob = geom_write->skinned_cpu_vertices[mi];
+                        if (blob.empty()) continue;
+                        constexpr std::size_t kVertexStride = sizeof(Corona::Resource::Vertex);
+                        const std::size_t vert_count = blob.size() / kVertexStride;
+                        const auto* vptr = reinterpret_cast<const Corona::Resource::Vertex*>(blob.data());
+                        for (std::size_t vi = 0; vi < vert_count; ++vi) {
+                            ktm::fvec3 p;
+                            p.x = vptr[vi].position[0];
+                            p.y = vptr[vi].position[1];
+                            p.z = vptr[vi].position[2];
+                            sc.vertices.push_back(p);
+                            min_y = std::min(min_y, p.y);
+                        }
+                    }
+                    sc.min_local_y = (sc.vertices.empty() ? 0.0f : min_y);
                 }
             }
         }
