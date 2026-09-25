@@ -272,7 +272,7 @@ import { onMounted, onUnmounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { editorApi } from '@/api/editorApi.js';
 import { networkService } from '@/services/networkService.js';
-import { projectLauncherService } from '@/services/projectLauncherService.js';
+import { projectLauncherService, isProjectOpenSuperseded } from '@/services/projectLauncherService.js';
 
 const router = useRouter();
 
@@ -339,10 +339,10 @@ const prepareMultiplayerProject = async (role) => {
     throw new Error('创建联机存档失败');
   }
 
-  await editorApi.project.setProjectMode('3d', { multiplayer: true, role });
   const opened = await projectLauncherService.openProject(project.path);
-  const openedOk = opened?.data ?? opened?.success ?? opened;
-  if (!openedOk) {
+  if (isProjectOpenSuperseded(opened)) return null;
+  const openedOk = opened?.data ?? opened;
+  if (!openedOk?.ok) {
     throw new Error('打开联机存档失败');
   }
 
@@ -397,7 +397,7 @@ const handleRefresh = () => {
 const joinHost = async ({ ip, port, peerName = '' }) => {
   await runBusy('正在加入房间…', async () => {
     await stopExistingSession();
-    await prepareMultiplayerProject('guest');
+    if (!await prepareMultiplayerProject('guest')) return;
     await startSession('client', port);
 
     busyText.value = '正在连接房主…';
@@ -428,7 +428,7 @@ const handleManualJoin = () => {
 const handleCreateRoom = () => {
   runBusy('正在创建房间…', async () => {
     await stopExistingSession();
-    await prepareMultiplayerProject('host');
+    if (!await prepareMultiplayerProject('host')) return;
     await startSession('host', parsePort(host.value.port), host.value.roomName.trim() || playerName());
     router.push('/');
   });

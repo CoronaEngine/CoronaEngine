@@ -1,5 +1,9 @@
+import { notifyWorldError } from '../services/worldSessionLifecycle.js';
 // 路由文件
 import { createRouter, createWebHashHistory } from 'vue-router';
+
+import { createWorldModeRouteGuard, worldModeService } from '../services/worldModeService.js';
+import { appService } from '../services/appService.js';
 
 import BlocklyWorkspace from '../blockly/components/BlocklyWorkspace.vue';
 import { getPluginComponent } from '../views/panelRegistry.js';
@@ -8,7 +12,7 @@ const routes = [
   {
     path: '/',
     name: 'MainPage',
-    component: () => import('../views/layout/MainPage.vue'),
+    component: () => import('../views/layout/WorldEntry.vue'),
   },
   {
     path: '/StartScreen',
@@ -97,7 +101,11 @@ const router = createRouter({
   routes,
 });
 
-router.beforeEach((to, from) => {});
+router.beforeEach(createWorldModeRouteGuard({
+  controller: worldModeService,
+  closePanel: () => appService.closeThisTab(''),
+  notify: (message, error) => notifyWorldError(error, message),
+}));
 
 window.__ROUTES__ = routes;
 

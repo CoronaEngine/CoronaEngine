@@ -12,6 +12,8 @@ Vue 业务 service 或场景状态的 owner。
 | `eventBus.js` | active event adapter | 同一 JS 上下文内的 C++ 事件转发与订阅 | 公共事件 adapter 替代并完成跨 Tab/C++ 回归 |
 | `panelWindows.js` | active UI adapter | 浮动面板窗口操作队列和布局辅助 | 窗口 transport/service 完整吸收后删除 |
 | `serviceInitialization.js` | active lifecycle helper | 服务初始化响应错误和有限重试策略 | 统一 service lifecycle owner 吸收后删除 |
+| `viewportCameraController.js` | active viewport adapter | 创造/剧情共用的自由相机输入、运动及帧调度；不拥有场景绑定 | 统一相机控制器替代且完成两种模式的输入回归 |
+| `viewportStoryCamera.js` | active viewport adapter | 剧情场景相机绑定、视口尺寸同步及编辑器临时 UI 清理；委托共享相机输入 | 剧情宿主吸收绑定职责且完成生命周期回归 |
 | `viewportGizmo.js` | active viewport adapter | Gizmo 命中、拖拽、取消和完成状态机 | 视口控制器集中管理且完成 pointer 回归 |
 | `viewportPick.js` | active viewport adapter | 视口拾取结果和 Actor handle 索引 | 视口控制器集中管理且完成拾取回归 |
 | `viewportUiMode.js` | active viewport adapter | 视口模式、光标设置和本地 UI 状态 | 视口状态 owner 吸收且完成设置迁移 |

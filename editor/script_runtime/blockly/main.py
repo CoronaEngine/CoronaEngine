@@ -484,11 +484,13 @@ class ScratchTool:
     def _restore_exec_snapshot(cls) -> tuple[bool, str | None]:
         with cls._exec_lock:
             snapshot = cls._exec_state_snapshot
+            if snapshot is None:
+                # Stopping an idle/already-restored world is a successful no-op.
+                cls._exec_state.update(
+                    snapshotCaptured=False, restoreStatus="idle", restoreError=""
+                )
+                return False, None
             cls._exec_state.update(restoreStatus="restoring", restoreError="")
-        if not snapshot:
-            error = "\u6ca1\u6709\u53ef\u7528\u4e8e\u6062\u590d\u7684\u8282\u70b9\u56fe\u8fd0\u884c\u5feb\u7167"
-            cls._replace_exec_state(restoreStatus="error", restoreError=error)
-            return False, error
         try:
             cancel_pending_auto_saves()
             from script_runtime.engine import corona_engine as corona_engine_scratch
@@ -555,7 +557,7 @@ class ScratchTool:
                 target_type, scene_name, actor_name
             )
             if resolved.get("status") != "ok":
-                message = str(resolved.get("message") or "\u65e0\u6cd5\u7ed1\u5b9a\u8fd0\u884c\u76ee\u6807")
+                message = str(resolved.get("message") or "无法绑定运行目标")
                 cls._replace_exec_state(
                     status="error",
                     outcome="binding_error",
@@ -599,7 +601,7 @@ class ScratchTool:
                 if active_thread:
                     return {
                         "status": "error",
-                        "message": "\u4e0a\u4e00\u6b21\u8282\u70b9\u56fe\u811a\u672c\u4ecd\u5728\u7ed3\u675f\u4e2d\uff0c\u8bf7\u7a0d\u540e\u91cd\u8bd5",
+                        "message": "上一次节点图脚本仍在结束中，请稍后重试",
                         "outcome": "execution_finishing",
                     }
                 # A failed execution is terminal.  Its diagnostic remains visible in
@@ -619,12 +621,12 @@ class ScratchTool:
                 if cls._exec_state_snapshot is not None:
                     return {
                         "status": "error",
-                        "message": "\u4e0a\u4e00\u6b21\u8282\u70b9\u56fe\u8fd0\u884c\u4ecd\u4fdd\u7559\u53ef\u6062\u590d\u5feb\u7167\uff0c\u8bf7\u5148\u505c\u6b62\u5e76\u6062\u590d\u6216\u91cd\u65b0\u52a0\u8f7d\u7f16\u8f91\u5668",
+                        "message": "上一次节点图运行仍保留可恢复快照，请先停止并恢复或重新加载编辑器",
                         "outcome": "snapshot_pending",
                     }
             state_snapshot, snapshot_error = cls._capture_exec_snapshot(resolved)
             if state_snapshot is None:
-                message = f"\u65e0\u6cd5\u521b\u5efa\u8fd0\u884c\u524d\u573a\u666f\u5feb\u7167: {snapshot_error or '\u672a\u77e5\u9519\u8bef'}"
+                message = f"无法创建运行前场景快照: {snapshot_error or '未知错误'}"
                 with cls._exec_lock:
                     cls._exec_state_snapshot = None
                 cls._set_exec_input_locked(False)
@@ -839,7 +841,7 @@ class ScratchTool:
             cls._exec_state.update(
                 status="stopped",
                 outcome="stopped",
-                error="" if not restore_error else f"\u573a\u666f\u6062\u590d\u5931\u8d25: {restore_error}",
+                error="" if not restore_error else f"场景恢复失败: {restore_error}",
                 finishedAt=time.time(),
                 inputLocked=False,
             )
@@ -851,7 +853,7 @@ class ScratchTool:
         }
         if restore_error:
             result["restoreError"] = restore_error
-            result["message"] = f"\u5df2\u505c\u6b62\uff0c\u4f46\u573a\u666f\u6062\u590d\u5931\u8d25: {restore_error}"
+            result["message"] = f"已停止，但场景恢复失败: {restore_error}"
         return result
 
     @classmethod

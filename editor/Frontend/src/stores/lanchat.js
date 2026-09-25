@@ -9,6 +9,7 @@
  * 不直接监听 window 回调；由应用根组件统一分流，避免重复订阅。
  */
 import { reactive, readonly } from 'vue';
+import { trackWorldSessionWork } from '../services/worldSessionLifecycle.js';
 import { lanChatService } from '../services/lanChatService.js';
 import { networkService } from '../services/networkService.js';
 import {
@@ -529,7 +530,7 @@ async function continueHistoryAsMultiRoom({ room, port, nickname } = {}) {
 }
 
 /** 房主开房。返回 { ok, ip, port } 或 { ok:false, error }。 */
-async function openRoom({ room, password, port, nickname, mode = 'multi' }) {
+async function openRoomNow({ room, password, port, nickname, mode = 'multi' }) {
   if (mode === 'single') {
     return openLocalRoom({ room, password, nickname });
   }
@@ -549,6 +550,20 @@ async function openRoom({ room, password, port, nickname, mode = 'multi' }) {
   }
   state.error = (res && res.error) || 'START_FAILED';
   return res;
+}
+
+let pendingRoomOpen = null;
+function openRoom(options) {
+  const operation = trackWorldSessionWork(openRoomNow(options));
+  pendingRoomOpen = operation;
+  const clear = () => { if (pendingRoomOpen === operation) pendingRoomOpen = null; };
+  operation.then(clear, clear);
+  return operation;
+}
+async function finishWorldSession() {
+  if (pendingRoomOpen) await pendingRoomOpen.catch(() => {});
+  if (state.role === ROLE.HOST) await closeRoom();
+  else if (state.role === ROLE.GUEST) await leaveRoom();
 }
 
 /** 房主关房。 */
@@ -838,6 +853,7 @@ export const lanchat = {
   state: readonly(state),
   ROLE,
   openRoom,
+  finishWorldSession,
   openLocalRoom,
   continueHistoryAsLocalRoom,
   continueHistoryAsMultiRoom,

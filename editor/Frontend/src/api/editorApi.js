@@ -10,6 +10,27 @@ let editorApiEventManifestPromise = null;
 const EDITOR_API_CALLER_CEF = 1;
 // Default caller for the manifest-backed resource-search namespace.
 const CURRENT_CALLER = 'SceneBar';
+const dockChannels = new WeakMap();
+let dockRequestSequence = 0;
+const DOCK_RESPONSE_TIMEOUT_MS = 30_000;
+
+// One callback per browser surface. Replies never replace another request's handler.
+function getDockChannel(surface) {
+  let channel = dockChannels.get(surface);
+  if (!channel) {
+    const pending = new Map();
+    const dispatch = (id, error, result) => {
+      const request = pending.get(id);
+      if (!request) return; // Unknown, duplicate, or untracked timed-out native response.
+      request.finish(error, result);
+    };
+    channel = { pending, dispatch };
+    dockChannels.set(surface, channel);
+    surface.__dockCallback = dispatch;
+  }
+  return channel;
+}
+
 export class Bridge {
   static async ensureEditorApiManifest() {
     if (!editorApiMethodSpecs) {
@@ -182,41 +203,43 @@ export class Bridge {
     }
   }
 
-  static async callDockCommand(params) {
-    const requestId = `dock_${Date.now()}_${Math.random().toString(36).slice(2)}`;
-    const payload = {
-      ...params,
-      requestId,
-    };
-
+  static async callDockCommand(params, { onLateResult } = {}) {
+    const requestId = `dock_${Date.now()}_${++dockRequestSequence}`;
+    const command = params.cmd || 'unknown';
     return new Promise((resolve, reject) => {
       if (!window.coronaBridge || typeof window.coronaBridge.dockCommand !== 'function') {
         reject(new Error('coronaBridge.dockCommand is unavailable'));
         return;
       }
-
-      const previousCallback = window.__dockCallback;
-      window.__dockCallback = (id, error, result) => {
-        if (id !== requestId) {
-          if (typeof previousCallback === 'function') {
-            previousCallback(id, error, result);
-          }
+      const { pending } = getDockChannel(window);
+      let timedOut = false;
+      const finish = (error, result) => {
+        if (!pending.delete(requestId)) return;
+        clearTimeout(timer);
+        if (timedOut) {
+          Promise.resolve().then(() => onLateResult?.(error, result))
+            .catch(error => console.error('[Dock] late cleanup failed:', error));
           return;
         }
-
-        window.__dockCallback = previousCallback;
         if (error) {
-          reject(new Error(error.message || String(error)));
-        } else {
-          resolve(result);
-        }
+          const failure = new Error(`Dock ${command} (${requestId}): ${error.message || String(error)}`);
+          if (error.code) failure.code = error.code;
+          reject(failure);
+        } else resolve(result);
       };
-
+      const timer = setTimeout(() => {
+        const error = new Error('response timed out after 30 seconds; native execution may have completed');
+        error.code = 'DOCK_TIMEOUT';
+        if (onLateResult) {
+          timedOut = true;
+          reject(Object.assign(new Error(`Dock ${command} (${requestId}): ${error.message}`), { code: error.code }));
+        } else finish(error);
+      }, DOCK_RESPONSE_TIMEOUT_MS);
+      pending.set(requestId, { finish });
       try {
-        window.coronaBridge.dockCommand(JSON.stringify(payload));
+        window.coronaBridge.dockCommand(JSON.stringify({ ...params, requestId }));
       } catch (error) {
-        window.__dockCallback = previousCallback;
-        reject(error);
+        finish(error);
       }
     });
   }
