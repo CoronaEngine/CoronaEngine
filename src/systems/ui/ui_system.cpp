@@ -210,7 +210,7 @@ void UiSystem::update() {
 
     frame_runner.run_frame(context);
 
-    std::printf("[UI_DEBUG] frame_runner.run_frame() completed\n");
+    // std::printf("[UI_DEBUG] frame_runner.run_frame() completed\n");
     std::fflush(stdout);
 }
 
