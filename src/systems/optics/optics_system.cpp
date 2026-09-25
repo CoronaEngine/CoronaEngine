@@ -54,6 +54,9 @@
 //#define CORONA_VISION_IMPORT_DEMO
 
 #ifdef CORONA_ENABLE_VISION
+#ifdef _WIN32
+#include <Windows.h>
+#endif
 #include "base/import/parameter_set.h"
 #include "base/import/json_util.h"
 #include "base/import/project_desc.h"
@@ -6439,7 +6442,26 @@ bool OpticsSystem::init_vision_lazy() {
     try {
         // ocarina::Device is non-default-constructible; use auto so the type is
         // deduced from create_device(). Function-local static ensures single init.
-        static auto s_device = ocarina::RHIContext::instance().create_device("cuda");
+        static auto s_device = [] {
+            // Engine deployment puts Vision plugins beside the executable. The
+            // standalone hotfix setup may have registered ../bin first; its
+            // missing DLL aborts loading before the runtime directory is tried.
+            auto runtime_directory = std::filesystem::current_path();
+#ifdef _WIN32
+            std::vector<wchar_t> executable_path(32768);
+            const auto length = GetModuleFileNameW(
+                nullptr, executable_path.data(), static_cast<DWORD>(executable_path.size()));
+            if (length == 0 || length >= executable_path.size()) {
+                throw std::runtime_error("Cannot resolve the Vision runtime directory");
+            }
+            runtime_directory = std::filesystem::path(
+                std::wstring(executable_path.data(), length)).parent_path();
+#endif
+            auto& context = ocarina::RHIContext::instance();
+            ocarina::DynamicModule::clear_search_path();
+            context.init(runtime_directory);
+            return context.create_device("cuda");
+        }();
         visionDevicePtr = &s_device;
         visionDevicePtr->init_rtx();
         vision::Global::instance().set_device(visionDevicePtr);
