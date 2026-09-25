@@ -23,9 +23,10 @@ if(BUILD_CORONA_TESTING OR BUILD_TESTING)
     )
     target_include_directories(corona_geometry_storage_snapshot_tests
         PRIVATE
+            ${PROJECT_SOURCE_DIR}/include
             ${CMAKE_CURRENT_SOURCE_DIR}
     )
-    target_link_libraries(corona_geometry_storage_snapshot_tests PRIVATE Horizon)
+    target_link_libraries(corona_geometry_storage_snapshot_tests PRIVATE Horizon corona::engine::logging)
     add_test(NAME GeometryStorageSnapshotTests
              COMMAND corona_geometry_storage_snapshot_tests)
 

@@ -19,6 +19,13 @@ function(corona_add_horizon_workspace)
     add_subdirectory(
         "${_corona_horizon_source}"
         "${CMAKE_BINARY_DIR}/workspace/horizon")
+    # Horizon's public engine API does not expose Core. Keep its implementation
+    # dependency linked, but do not export src/core's generic header paths into
+    # Vision translation units, where core/... belongs to the legacy renderer.
+    get_target_property(_corona_horizon_links Horizon INTERFACE_LINK_LIBRARIES)
+    list(TRANSFORM _corona_horizon_links REPLACE "^horizon-core$" "$<LINK_ONLY:horizon-core>")
+    set_property(TARGET Horizon PROPERTY INTERFACE_LINK_LIBRARIES "${_corona_horizon_links}")
+
     if(MSVC AND TARGET ocarina-backend-cuda)
         target_compile_options(ocarina-backend-cuda PRIVATE /FIio.h)
     endif()

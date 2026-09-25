@@ -101,7 +101,7 @@ if((BUILD_CORONA_TESTING OR BUILD_TESTING) AND CORONA_BUILD_VISION)
     add_test(NAME VisionRenderModeConfigTests
              COMMAND corona_vision_render_mode_config_tests)
     set_tests_properties(VisionRenderModeConfigTests PROPERTIES
-        WORKING_DIRECTORY "${CMAKE_BINARY_DIR}/bin/$<CONFIG>")
+        WORKING_DIRECTORY "$<TARGET_FILE_DIR:vision-material-principled_bsdf>")
 
     add_executable(corona_lightfield_geometry_tests
         tests/test_lightfield_geometry.cpp
@@ -115,7 +115,7 @@ if((BUILD_CORONA_TESTING OR BUILD_TESTING) AND CORONA_BUILD_VISION)
     add_test(NAME LightFieldGeometryTests
              COMMAND corona_lightfield_geometry_tests)
     set_tests_properties(LightFieldGeometryTests PROPERTIES
-        WORKING_DIRECTORY "${CMAKE_BINARY_DIR}/bin/$<CONFIG>")
+        WORKING_DIRECTORY "$<TARGET_FILE_DIR:vision-material-principled_bsdf>")
 
     add_executable(corona_vision_material_adapter_tests
         tests/test_vision_material_adapter.cpp
@@ -149,7 +149,7 @@ if((BUILD_CORONA_TESTING OR BUILD_TESTING) AND CORONA_BUILD_VISION)
     add_test(NAME VisionPipelineKeyTests
              COMMAND corona_vision_pipeline_key_tests)
     set_tests_properties(VisionPipelineKeyTests PROPERTIES
-        WORKING_DIRECTORY "${CMAKE_BINARY_DIR}/bin/$<CONFIG>")
+        WORKING_DIRECTORY "$<TARGET_FILE_DIR:vision-material-principled_bsdf>")
 
     add_executable(corona_vision_scene_resource_tests
         tests/test_vision_scene_resource.cpp
@@ -165,7 +165,7 @@ if((BUILD_CORONA_TESTING OR BUILD_TESTING) AND CORONA_BUILD_VISION)
     add_test(NAME VisionSceneResourceTests
              COMMAND corona_vision_scene_resource_tests)
     set_tests_properties(VisionSceneResourceTests PROPERTIES
-        WORKING_DIRECTORY "${CMAKE_BINARY_DIR}/bin/$<CONFIG>")
+        WORKING_DIRECTORY "$<TARGET_FILE_DIR:vision-material-principled_bsdf>")
 
     add_executable(corona_vision_interop_lifetime_tests
         tests/test_vision_interop_lifetime.cpp
@@ -182,7 +182,7 @@ if((BUILD_CORONA_TESTING OR BUILD_TESTING) AND CORONA_BUILD_VISION)
     add_test(NAME VisionInteropLifetimeTests
              COMMAND corona_vision_interop_lifetime_tests)
     set_tests_properties(VisionInteropLifetimeTests PROPERTIES
-        WORKING_DIRECTORY "${CMAKE_BINARY_DIR}/bin/$<CONFIG>")
+        WORKING_DIRECTORY "$<TARGET_FILE_DIR:vision-material-principled_bsdf>")
 
     add_executable(corona_vision_geometry_gpu_resource_tests
         tests/test_vision_geometry_gpu_resource.cpp
@@ -200,7 +200,7 @@ if((BUILD_CORONA_TESTING OR BUILD_TESTING) AND CORONA_BUILD_VISION)
     add_test(NAME VisionGeometryGpuResourceTests
              COMMAND corona_vision_geometry_gpu_resource_tests)
     set_tests_properties(VisionGeometryGpuResourceTests PROPERTIES
-        WORKING_DIRECTORY "${CMAKE_BINARY_DIR}/bin/$<CONFIG>")
+        WORKING_DIRECTORY "$<TARGET_FILE_DIR:vision-material-principled_bsdf>")
 endif()
 
 if(BUILD_CORONA_TESTING OR BUILD_TESTING)
@@ -232,9 +232,10 @@ if(BUILD_CORONA_TESTING OR BUILD_TESTING)
     )
     target_include_directories(corona_optics_storage_snapshot_tests
         PRIVATE
+            ${PROJECT_SOURCE_DIR}/include
             ${CMAKE_CURRENT_SOURCE_DIR}
     )
-    target_link_libraries(corona_optics_storage_snapshot_tests PRIVATE Horizon)
+    target_link_libraries(corona_optics_storage_snapshot_tests PRIVATE Horizon corona::engine::logging)
     add_test(NAME OpticsStorageSnapshotTests
              COMMAND corona_optics_storage_snapshot_tests)
 

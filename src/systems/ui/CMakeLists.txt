@@ -267,7 +267,7 @@ if(BUILD_CORONA_TESTING OR BUILD_TESTING)
         PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/cef
     )
     target_link_libraries(corona_request_response_broker_tests
-        PRIVATE Horizon nlohmann_json::nlohmann_json
+        PRIVATE corona::engine::logging nlohmann_json::nlohmann_json
     )
     add_test(NAME RequestResponseBrokerTests
              COMMAND corona_request_response_broker_tests)
