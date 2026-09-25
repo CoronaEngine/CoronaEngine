@@ -768,7 +768,10 @@ Corona::API::Geometry::Geometry(const std::string& model_path) {
         handle->model_resource_handle = model_resource_handle_;
         handle->mesh_handles.clear();  // 留空，待 GeometrySystem 异步构建
         handle->model_path_utf8 = model_path;  // 供 GeometrySystem 异步 import
-        handle->gpu_build_state = GeometryDevice::GpuBuildState::PendingImport;
+        // 空路径（如 audio actor）无需导入，直接 Ready；有路径才进 PendingImport。
+        handle->gpu_build_state = model_path.empty()
+            ? GeometryDevice::GpuBuildState::Ready
+            : GeometryDevice::GpuBuildState::PendingImport;
     } else {
         CFW_LOG_CRITICAL("[Geometry::Geometry] Failed to acquire write access to geometry storage");
         // 清理已分配的资源

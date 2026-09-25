@@ -407,6 +407,38 @@ void dae_import_collects_declared_external_texture_and_rejects_missing_one() {
     expect(!broken.ok(), "DAE with missing declared texture should fail");
 }
 
+// 真实 COLLADA（如 Mixamo 导出）里 <init_from> 出现在两个地方：<library_images>
+// 中是文件路径，<profile_COMMON><surface> 中只是 image 的 id 引用。早先的实现不
+// 分场合全文搜索，把 id "file1-image" 当文件名拼成 <模型目录>/file1-image，导致
+// 整个模型以 missing_dependency 被拒。
+void dae_import_ignores_surface_image_id_references() {
+    TempDir temp;
+    const auto source = temp.path / "source";
+    write_text(source / "vampire.dae",
+               "<COLLADA>\n"
+               "  <library_images>\n"
+               "    <image id=\"file1-image\" name=\"file1\">\n"
+               "      <init_from>textures/diffuse.png</init_from>\n"
+               "    </image>\n"
+               "  </library_images>\n"
+               "  <library_effects><effect><profile_COMMON>\n"
+               "    <newparam sid=\"file1-surface\"><surface type=\"2D\">\n"
+               "      <init_from>file1-image</init_from>\n"
+               "    </surface></newparam>\n"
+               "  </profile_COMMON></effect></library_effects>\n"
+               "</COLLADA>\n");
+    write_text(source / "textures" / "diffuse.png", "image");
+
+    SceneAssetStore store(temp.path / "portable");
+    const auto imported = store.import_model(source / "vampire.dae");
+    expect(imported.ok(), "surface id reference must not fail the import");
+    expect(imported.files.size() == 2, "only the DAE and its real texture should be bundled");
+    for (const auto& file : imported.files) {
+        expect(file.route.find("file1-image") == std::string::npos,
+               "an image id must never be treated as a file dependency");
+    }
+}
+
 void portable_scene_reopens_after_copy_to_another_root() {
     TempDir temp;
     const auto original = temp.path / "portable";
@@ -707,6 +739,7 @@ int main() {
     legacy_actor_model_path_is_resolved_beside_actor_before_project_root();
     manifest_rejects_unlisted_but_existing_asset_route();
     dae_import_collects_declared_external_texture_and_rejects_missing_one();
+    dae_import_ignores_surface_image_id_references();
     portable_scene_reopens_after_copy_to_another_root();
     portable_scene_validation_checks_every_persisted_resource_field();
     portable_scene_validation_decodes_embedded_vision_resource_paths();

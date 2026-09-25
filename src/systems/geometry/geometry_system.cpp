@@ -2661,7 +2661,11 @@ void GeometrySystem::process_pending_geometry_imports() {
         if (geom_dev.gpu_build_state != GeometryDevice::GpuBuildState::PendingImport) continue;
         auto geom_handle = reinterpret_cast<std::uintptr_t>(&geom_dev);
         if (impl_->pending_import_tasks.count(geom_handle)) continue;  // 已在途
-        if (geom_dev.model_path_utf8.empty()) continue;
+        if (geom_dev.model_path_utf8.empty()) {
+            CFW_LOG_WARNING("[GeometrySystem] Skipping PendingImport geometry {:#x} — model_path is empty",
+                            geom_handle);
+            continue;
+        }
 
         ktm::fvec3 world_pos = make_fvec3(0.0f, 0.0f, 0.0f);
         if (geom_dev.transform_handle != 0) {

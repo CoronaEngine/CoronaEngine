@@ -1733,6 +1733,8 @@ void load_native_actor(NativeEditorScene& scene,
     item.persisted_optics = load_native_actor_optics_state(actors_section, actor_key);
 
     if (item.route.empty()) {
+        CFW_LOG_WARNING("[LoadNativeActor] Skipping actor '{}' (key='{}') — route is empty",
+                        item.name, actor_key);
         return;
     }
 

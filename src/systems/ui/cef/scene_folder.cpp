@@ -21,6 +21,7 @@
 #include <stdexcept>
 #include <system_error>
 
+#include <corona/kernel/core/i_logger.h>
 #include <nlohmann/json.hpp>
 #include <assimp/Importer.hpp>
 #include <assimp/material.h>
@@ -243,15 +244,25 @@ struct SourceFile {
     fs::path relative;
 };
 
+// optional=true 表示"缺了也能用"的依赖（贴图）。模型引用但磁盘上不存在的贴图很常见
+// （导出时没带上、路径写死在美术机器上）。引擎加载器遇到这种情况只是少一张贴图，不会
+// 拒绝整个模型；打包器若当成硬错误，一张缺失贴图就能让整个模型导不进来。
+// 结构性依赖（OBJ 的 MTL、glTF 的 buffer）仍然是硬错误——缺了模型就是坏的。
 void add_dependency(std::vector<SourceFile>& files,
                     std::vector<Diagnostic>& diagnostics,
                     const fs::path& source,
-                    const fs::path& relative) {
+                    const fs::path& relative,
+                    bool optional = false) {
     if (!is_relative_inside(relative)) {
         diagnostics.push_back({"unsafe_dependency", "Resource dependency escapes its bundle", source});
         return;
     }
     if (!fs::is_regular_file(source)) {
+        if (optional) {
+            CFW_LOG_WARNING("[SceneFolders] Optional model texture missing, skipping: '{}'",
+                            path_utf8(source));
+            return;
+        }
         diagnostics.push_back({"missing_dependency", "Resource dependency is missing", source});
         return;
     }
@@ -295,7 +306,7 @@ void collect_mtl(const fs::path& mtl,
         if (ec) {
             diagnostics.push_back({"unsafe_dependency", "Unable to relativize material texture", texture});
         } else {
-            add_dependency(files, diagnostics, texture, relative);
+            add_dependency(files, diagnostics, texture, relative, /*optional=*/true);
         }
     }
 }
@@ -303,14 +314,22 @@ void collect_mtl(const fs::path& mtl,
 void collect_assimp_textures(const fs::path& source,
                              const fs::path& source_root,
                              std::vector<SourceFile>& files,
-                             std::vector<Diagnostic>& diagnostics,
-                             bool require_parse) {
+                             std::vector<Diagnostic>& diagnostics) {
     Assimp::Importer importer;
-    const auto* scene = importer.ReadFile(source.string(), aiProcess_ValidateDataStructure);
+    // source.string() 在 Windows 上走 ANSI 窄化，非 ASCII 路径会变成乱码导致 Assimp
+    // 直接打不开文件。引擎真正的加载器（SceneParser::parse_assimp）传的是 UTF-8，
+    // 这里必须保持一致，否则"引擎能加载但打包器说文件无效"。
+    const auto source_utf8 = path_utf8(source);
+    const auto* scene = importer.ReadFile(source_utf8, aiProcess_ValidateDataStructure);
     if (!scene) {
-        if (require_parse) {
-            diagnostics.push_back({"invalid_model", importer.GetErrorString(), source});
-        }
+        // 这里只负责"收集贴图依赖"，不是权威的模型校验。引擎加载器用的是自定义
+        // UnicodeIOSystem + 完整 postprocess 流程，能读它读不了的文件；把解析失败
+        // 当成导入失败会把本来可用的模型挡在门外（FBX/USDC 尤其明显）。
+        // 失败时退化为"不收集额外贴图"，主文件照常导入。
+        CFW_LOG_WARNING(
+            "[SceneFolders] Assimp dependency scan failed for '{}': {} — importing main file only, "
+            "external textures may be missing",
+            source_utf8, importer.GetErrorString());
         return;
     }
     for (unsigned int material_index = 0; material_index < scene->mNumMaterials; ++material_index) {
@@ -338,7 +357,7 @@ void collect_assimp_textures(const fs::path& source,
                 if (ec) {
                     diagnostics.push_back({"unsafe_dependency", "Unable to relativize model texture", dependency});
                 } else {
-                    add_dependency(files, diagnostics, dependency, relative);
+                    add_dependency(files, diagnostics, dependency, relative, /*optional=*/true);
                 }
             }
         }
@@ -408,16 +427,47 @@ std::vector<SourceFile> collect_bundle(const fs::path& source,
                                std::istreambuf_iterator<char>());
         std::vector<std::string> references;
         if (extension == ".dae") {
+            // COLLADA 里 <init_from> 有两种含义，不能一把梭全文搜：
+            //   <library_images><image><init_from>textures/x.png  ← 真正的文件路径
+            //   <profile_COMMON><surface><init_from>file1-image   ← 只是 image 的 id 引用
+            // 之前不分场合全抓，于是把 id "file1-image" 当文件名拼成
+            // <模型目录>/file1-image 去找，必然 missing_dependency，整个模型被挡下。
             constexpr std::string_view open_tag = "<init_from>";
             constexpr std::string_view close_tag = "</init_from>";
-            size_t cursor = 0;
-            while ((cursor = text.find(open_tag, cursor)) != std::string::npos) {
-                const auto start = cursor + open_tag.size();
-                const auto end = text.find(close_tag, start);
-                if (end == std::string::npos) break;
-                references.push_back(trim(text.substr(start, end - start)));
-                cursor = end + close_tag.size();
+            constexpr std::string_view library_close = "</library_images>";
+
+            // 在 [begin, end) 区间内收集 <init_from> 文本。
+            auto scan_range = [&](size_t begin, size_t end) {
+                size_t cursor = begin;
+                while ((cursor = text.find(open_tag, cursor)) != std::string::npos && cursor < end) {
+                    const auto start = cursor + open_tag.size();
+                    const auto stop = text.find(close_tag, start);
+                    if (stop == std::string::npos || stop > end) break;
+                    references.push_back(trim(text.substr(start, stop - start)));
+                    cursor = stop + close_tag.size();
+                }
+            };
+
+            bool scanned_library = false;
+            size_t library_cursor = 0;
+            while ((library_cursor = text.find("<library_images", library_cursor)) != std::string::npos) {
+                const auto header_end = text.find('>', library_cursor);
+                if (header_end == std::string::npos) break;
+                // 自闭合 <library_images/> 没有内容，跳过且不算"扫过"，
+                // 否则会白白压掉下面的全文兜底。
+                if (text[header_end - 1] == '/') {
+                    library_cursor = header_end + 1;
+                    continue;
+                }
+                const auto library_end = text.find(library_close, header_end);
+                scan_range(header_end + 1, library_end == std::string::npos ? text.size() : library_end);
+                scanned_library = true;
+                if (library_end == std::string::npos) break;
+                library_cursor = library_end + library_close.size();
             }
+            // 没有 <library_images> 的文档里不存在 id 引用可混淆（surface 引用的 image
+            // 根本没声明），退回全文扫描以兼容精简/非标准导出。
+            if (!scanned_library) scan_range(0, text.size());
         } else {
             size_t cursor = 0;
             while ((cursor = text.find('@', cursor)) != std::string::npos) {
@@ -440,9 +490,10 @@ std::vector<SourceFile> collect_bundle(const fs::path& source,
             if (ec) diagnostics.push_back({"unsafe_dependency", "Unable to relativize model dependency", dependency});
             else add_dependency(files, diagnostics, dependency, relative);
         }
-        collect_assimp_textures(source, source_root, files, diagnostics, false);
-    } else if (extension == ".fbx" || extension == ".usdc") {
-        collect_assimp_textures(source, source_root, files, diagnostics, true);
+        collect_assimp_textures(source, source_root, files, diagnostics);
+    } else if (extension == ".fbx" || extension == ".usdc" || extension == ".usdz" ||
+               extension == ".3ds" || extension == ".stl") {
+        collect_assimp_textures(source, source_root, files, diagnostics);
     }
     return files;
 }
@@ -798,8 +849,11 @@ ImportResult SceneAssetStore::import_model(const fs::path& source) {
         result.diagnostics.push_back(*manifest_error_);
         return result;
     }
+    // 必须与 SceneParser 实际注册的扩展名保持一致（modules/corona_resource：
+    // scene.cpp register_extension），否则文件选择器能选、引擎能加载的格式会在
+    // 这里被判为"不支持"。.usdz/.3ds/.stl 此前缺失。
     static const std::set<std::string> supported{
-        ".obj", ".gltf", ".glb", ".fbx", ".dae", ".usd", ".usda", ".usdc"};
+        ".obj", ".gltf", ".glb", ".fbx", ".dae", ".usd", ".usda", ".usdc", ".usdz", ".3ds", ".stl"};
     if (!supported.contains(lower(source.extension().string()))) {
         result.diagnostics.push_back({"unsupported_model", "Unsupported model extension", source});
         return result;
