@@ -2216,13 +2216,11 @@ const createScene = async () => {
 
 // 项目菜单
 const handleNewProject = () => {
-  console.log('新建项目');
   activeMenu.value = null;
   // TODO: 实现新建项目逻辑
 };
 
 const handleOpenProject = () => {
-  console.log('打开项目');
   activeMenu.value = null;
   // TODO: 实现打开项目逻辑
 };
@@ -2233,7 +2231,6 @@ const handleProjectSettings = () => {
 };
 
 const handleSaveProject = () => {
-  console.log('保存项目');
   activeMenu.value = null;
   // TODO: 实现保存项目逻辑
 };
@@ -2496,7 +2493,6 @@ const handleStopGamePreview = async () => {
 
 const handleRunProject = async () => {
   try {
-    console.log('运行项目');
     // 不传参数，运行整个项目
     const result = await editorApi.main.runProject();
 
@@ -2517,7 +2513,6 @@ const handleRunProject = async () => {
 
 const handleRunCurrentScene = async () => {
   try {
-    console.log('运行当前场景');
     const currentSceneId = tabs.value[activeTab.value]?.id;
 
     if (!currentSceneId) {
@@ -2707,13 +2702,11 @@ const unregisterEditorControls = () => {
 
 // 帮助菜单
 const handleHelpDocs = () => {
-  console.log('帮助文档');
   activeMenu.value = null;
   // TODO: 实现打开帮助文档逻辑
 };
 
 const handleAbout = () => {
-  console.log('关于');
   activeMenu.value = null;
   // TODO: 实现显示关于信息逻辑
 };

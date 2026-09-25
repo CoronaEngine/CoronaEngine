@@ -98,8 +98,6 @@ const stopTimedHints = () => {
 let resizeObserver = null;
 
 onMounted(() => {
-  console.log('[Pet] mounted');
-
   startTimedHints();
 
   if (petImgRef.value) {

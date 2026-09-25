@@ -2,8 +2,6 @@
 #include <wrapper/cef_helpers.h>
 #include <wrapper/cef_message_router.h>
 
-#include <iostream>
-
 #include "cef_app.h"
 #include "cef_renderer_bridge.h"
 
@@ -621,8 +619,6 @@ class CoronaRenderProcessHandler : public CefRenderProcessHandler {
         bridge->SetValue("dockCommand", dock_command, V8_PROPERTY_ATTRIBUTE_NONE);
         bridge->SetValue("computeActorFocusPose", compute_actor_focus_pose, V8_PROPERTY_ATTRIBUTE_NONE);
         global->SetValue("coronaBridge", bridge, V8_PROPERTY_ATTRIBUTE_NONE);
-
-        std::cout << "[Renderer] V8 context created, cefQuery injected" << std::endl;
     }
 
     void OnContextReleased(CefRefPtr<CefBrowser> browser,
