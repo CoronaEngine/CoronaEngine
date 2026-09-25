@@ -646,100 +646,117 @@ void MechanicsSystem::update_physics(float fixed_dt) {
                 }
 #endif
 
-                // ===== 三角形窄相精化（可选）=====
-                // 蒙皮物体：从 skinned_collision_cache 取本帧实例化碰撞网格（顶点已是蒙皮后坐标）；
-                // 非蒙皮物体：从 collision_mesh_cache 取静态绑定姿态网格。
-                // 两者都有网格且三角形数在限制内时，用三角形级 SAT 精化法线方向。
+                // ===== 三角形窄相（最终碰撞判断）=====
+                // 流水线：AABB 粗筛（上方已通过）→ 三角形 SAT（最终判断）。
+                // 三角 SAT 未命中 → continue，不施加任何冲量。
+                // 三角 SAT 命中   → 用三角的法线和穿透深度，忽略 AABB 的结果。
+                // 无三角网格      → 退回 AABB 法线和穿透（兜底，保证有模型的物体参与碰撞）。
 #if CORONA_MECHANICS_USE_TRIANGLE_NARROWPHASE
-                const bool both_mesh =
-                    frame_params.at(ha).collision_shape == CollisionShape::Mesh &&
-                    frame_params.at(hb).collision_shape == CollisionShape::Mesh;
-                if (both_mesh) {
-                    // 按蒙皮/非蒙皮分别取碰撞网格指针
-                    const CollisionMesh* mesh_a_ptr = nullptr;
-                    const CollisionMesh* mesh_b_ptr = nullptr;
-
-                    if (a.is_skinned) {
-                        auto sit = impl_->skinned_collision_cache.find(a.handle);
-                        if (sit != impl_->skinned_collision_cache.end() && !sit->second.triangles.empty())
-                            mesh_a_ptr = &sit->second;
-                    } else if (a.model_id != 0) {
-                        auto sit = impl_->collision_mesh_cache.find(a.model_id);
-                        if (sit != impl_->collision_mesh_cache.end())
-                            mesh_a_ptr = &sit->second;
-                    }
-
-                    if (b.is_skinned) {
-                        auto sit = impl_->skinned_collision_cache.find(b.handle);
-                        if (sit != impl_->skinned_collision_cache.end() && !sit->second.triangles.empty())
-                            mesh_b_ptr = &sit->second;
-                    } else if (b.model_id != 0) {
-                        auto sit = impl_->collision_mesh_cache.find(b.model_id);
-                        if (sit != impl_->collision_mesh_cache.end())
-                            mesh_b_ptr = &sit->second;
-                    }
-
-                    if (mesh_a_ptr && mesh_b_ptr) {
-                        // 蒙皮物体的碰撞顶点已在模型空间（由 update_skinned_geometry 每帧写入），
-                        // 仍需乘 o2w 变换到世界空间；非蒙皮物体与原逻辑相同。
-                        if (world_verts_cache.find(ha) == world_verts_cache.end()) {
-                            auto tx_a = transform_storage.try_acquire_read(a.transform_handle);
-                            if (tx_a) {
-                                transform_vertices_to_world(mesh_a_ptr->vertices, *tx_a, world_verts_cache[ha]);
-                            }
+                {
+                    auto get_mesh = [&](const MechanicsWorldAABB& body) -> const CollisionMesh* {
+                        if (body.is_skinned) {
+                            auto it = impl_->skinned_collision_cache.find(body.handle);
+                            if (it != impl_->skinned_collision_cache.end() && !it->second.triangles.empty())
+                                return &it->second;
+                        } else if (body.model_id != 0) {
+                            auto it = impl_->collision_mesh_cache.find(body.model_id);
+                            if (it != impl_->collision_mesh_cache.end() && !it->second.triangles.empty())
+                                return &it->second;
                         }
-                        if (world_verts_cache.find(hb) == world_verts_cache.end()) {
-                            auto tx_b = transform_storage.try_acquire_read(b.transform_handle);
-                            if (tx_b) {
-                                transform_vertices_to_world(mesh_b_ptr->vertices, *tx_b, world_verts_cache[hb]);
+                        return nullptr;
+                    };
+
+                    const CollisionMesh* mesh_a = get_mesh(a);
+                    const CollisionMesh* mesh_b = get_mesh(b);
+
+                    if (mesh_a || mesh_b) {
+                        // 惰性变换世界空间顶点（只为有网格的一方）
+                        auto ensure_world_verts = [&](std::uintptr_t h,
+                                                       std::uintptr_t transform_h,
+                                                       const CollisionMesh* mesh) {
+                            if (!mesh || world_verts_cache.count(h)) return;
+                            auto tx = transform_storage.try_acquire_read(transform_h);
+                            if (tx) transform_vertices_to_world(mesh->vertices, *tx, world_verts_cache[h]);
+                        };
+                        ensure_world_verts(ha, a.transform_handle, mesh_a);
+                        ensure_world_verts(hb, b.transform_handle, mesh_b);
+
+                        auto get_verts = [&](std::uintptr_t h) -> const std::vector<ktm::fvec3>* {
+                            auto it = world_verts_cache.find(h);
+                            return (it != world_verts_cache.end() && !it->second.empty()) ? &it->second : nullptr;
+                        };
+                        const auto* verts_a = get_verts(ha);
+                        const auto* verts_b = get_verts(hb);
+
+                        if (mesh_a && mesh_b && verts_a && verts_b) {
+                            // ── 双方都有三角网格：三角-三角 SAT 是最终判断 ──
+                            TriangleContactResult tri;
+                            triangle_narrowphase(*verts_a, *mesh_a, *verts_b, *mesh_b,
+                                                 a.center_world, b.center_world, tri);
+                            if (!tri.has_contact) {
+                                continue;  // AABB 重叠但三角无接触：真的没碰，跳过整对
                             }
+                            normal = tri.normal;
+                            penetration = tri.penetration > 0.0f ? tri.penetration : penetration;
+
+                            // Phase 3：IK 反馈
+                            auto enqueue_ik = [&](bool skinned, std::uintptr_t mh,
+                                                  int tri_idx, const MechanicsWorldAABB& body) {
+                                if (!skinned || tri_idx < 0) return;
+                                auto sit = impl_->skinned_collision_cache.find(body.handle);
+                                if (sit == impl_->skinned_collision_cache.end()) return;
+                                const auto& sc = sit->second;
+                                if (tri_idx >= static_cast<int>(sc.triangle_bone_ids.size())) return;
+                                int node = sc.triangle_bone_ids[static_cast<std::size_t>(tri_idx)];
+                                if (node < 0) return;
+                                std::uintptr_t gh = 0;
+                                { auto m = mechanics_storage.try_acquire_read(mh); if (m) gh = m->geometry_handle; }
+                                if (!gh) return;
+                                impl_->deferred_ik_target_updates.push_back(
+                                    {gh, body.transform_handle, node, tri.contact_point});
+                            };
+                            enqueue_ik(a.is_skinned, ha, tri.best_tri_a, a);
+                            enqueue_ik(b.is_skinned, hb, tri.best_tri_b, b);
+
+                        } else if ((mesh_a && verts_a) || (mesh_b && verts_b)) {
+                            // ── 只有一方有三角网格：找对方质心最近的三角面法线 ──
+                            // 对方（无网格方）用质心作为"点探针"，检测是否在有网格方的表面附近。
+                            // 找到有效接触面则精化法线，找不到则 continue（AABB 重叠但三角面不命中）。
+                            const CollisionMesh* mesh_ref  = mesh_a ? mesh_a : mesh_b;
+                            const auto*          verts_ref = mesh_a ? verts_a : verts_b;
+                            const ktm::fvec3&    probe     = mesh_a ? b.center_world : a.center_world;
+
+                            float best_d = std::numeric_limits<float>::max();
+                            ktm::fvec3 best_n{};
+                            bool found = false;
+                            for (const auto& tri_idx : mesh_ref->triangles) {
+                                const ktm::fvec3& v0 = (*verts_ref)[tri_idx[0]];
+                                const ktm::fvec3& v1 = (*verts_ref)[tri_idx[1]];
+                                const ktm::fvec3& v2 = (*verts_ref)[tri_idx[2]];
+                                ktm::fvec3 fn = normalize_safe(cross(sub(v1, v0), sub(v2, v0)));
+                                float d = dot(fn, sub(probe, v0));
+                                // 探针在三角正面且距离小于穿透深度（说明质心刚进入表面）
+                                if (d >= 0.0f && d <= penetration && d < best_d) {
+                                    best_d = d;
+                                    best_n = fn;
+                                    found  = true;
+                                }
+                            }
+                            if (!found) {
+                                continue;  // 质心未在任何三角面的有效接触范围内：跳过
+                            }
+                            if (dot(best_n, sub(b.center_world, a.center_world)) < 0.0f)
+                                best_n = make_fvec3(-best_n.x, -best_n.y, -best_n.z);
+                            normal = best_n;
+                            // penetration 仍用 AABB 值（单侧网格无法精确算穿透深度）
                         }
-
-                        auto wit_a = world_verts_cache.find(ha);
-                        auto wit_b = world_verts_cache.find(hb);
-                        if (wit_a != world_verts_cache.end() && wit_b != world_verts_cache.end() &&
-                            !wit_a->second.empty() && !wit_b->second.empty()) {
-                            TriangleContactResult tri_result;
-                            triangle_narrowphase(wit_a->second, *mesh_a_ptr,
-                                                 wit_b->second, *mesh_b_ptr,
-                                                 a.center_world, b.center_world, tri_result);
-                            if (tri_result.has_contact) {
-                                normal = tri_result.normal;
-                                // 保留 AABB/OBB 级别的穿透深度；三角形 SAT 深度只反映
-                                // 单个三角形对的局部重叠，远小于物体级实际穿透，会导致严重穿模。
-
-                                // Phase 3：蒙皮物体被碰到时记录接触骨骼，帧末驱动 IK target
-                                // 接触点在世界空间；帧末变换到模型空间后写入匹配的 contact_driven IK 链。
-                                auto try_enqueue_ik = [&](bool is_skinned_body,
-                                                          std::uintptr_t mech_h,
-                                                          int tri_idx,
-                                                          const MechanicsWorldAABB& body_data) {
-                                    if (!is_skinned_body || tri_idx < 0) return;
-                                    auto sit = impl_->skinned_collision_cache.find(body_data.handle);
-                                    if (sit == impl_->skinned_collision_cache.end()) return;
-                                    const auto& sc = sit->second;
-                                    if (tri_idx >= static_cast<int>(sc.triangle_bone_ids.size())) return;
-                                    int node_idx = sc.triangle_bone_ids[static_cast<std::size_t>(tri_idx)];
-                                    if (node_idx < 0) return;
-                                    std::uintptr_t geom_h = 0;
-                                    {
-                                        auto m_acc = mechanics_storage.try_acquire_read(mech_h);
-                                        if (m_acc) geom_h = m_acc->geometry_handle;
-                                    }
-                                    if (!geom_h) return;
-                                    impl_->deferred_ik_target_updates.push_back({
-                                        geom_h,
-                                        body_data.transform_handle,
-                                        node_idx,
-                                        tri_result.contact_point});
-                                };
-                                try_enqueue_ik(a.is_skinned, ha, tri_result.best_tri_a, a);
-                                try_enqueue_ik(b.is_skinned, hb, tri_result.best_tri_b, b);
-                            } else {
-                                continue;  // 三角形级无接触，跳过此对
-                            }
+                        // 两方都没有有效世界顶点：跳过（网格尚未加载完成的首帧保护）
+                        else {
+                            continue;
                         }
                     }
+                    // mesh_a == nullptr && mesh_b == nullptr：两方都没有三角网格
+                    // 退回 AABB 法线和穿透继续施加冲量（纯包围盒 vs 包围盒的兜底）
                 }
 #endif
 
