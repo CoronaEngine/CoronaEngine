@@ -178,23 +178,23 @@ void UiSystem::stop() {
 }
 
 void UiSystem::update() {
-    std::printf("[UI_DEBUG] UiSystem::update() called\n");
+    // std::printf("[UI_DEBUG] UiSystem::update() called\n");
     std::fflush(stdout);
 
     if (!running_ || !sdl_initialized_) {
-        std::printf("[UI_DEBUG] Early return: running_=%d, sdl_initialized_=%d\n", running_, sdl_initialized_);
+        // std::printf("[UI_DEBUG] Early return: running_=%d, sdl_initialized_=%d\n", running_, sdl_initialized_);
         std::fflush(stdout);
         return;
     }
 
-    std::printf("[UI_DEBUG] About to call tick_collaborative_editor_runtime()\n");
+    // std::printf("[UI_DEBUG] About to call tick_collaborative_editor_runtime()\n");
     std::fflush(stdout);
 
     // Collaborative scene mutations must run on the UI/engine main thread and
     // must not depend on the lifetime of a particular Vue network page.
     UI::tick_collaborative_editor_runtime();
 
-    std::printf("[UI_DEBUG] About to create UiFrameRunner\n");
+    // std::printf("[UI_DEBUG] About to create UiFrameRunner\n");
     std::fflush(stdout);
 
     static UI::UiFrameRunner frame_runner;
@@ -205,7 +205,7 @@ void UiSystem::update() {
         &running_,
         &window_size_changed_};
 
-    std::printf("[UI_DEBUG] About to call frame_runner.run_frame()\n");
+    // std::printf("[UI_DEBUG] About to call frame_runner.run_frame()\n");
     std::fflush(stdout);
 
     frame_runner.run_frame(context);
