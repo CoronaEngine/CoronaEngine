@@ -505,10 +505,6 @@ inline bool ensure_collision_mesh(
 
         if (!src_verts || src_verts->empty() || !src_indices || src_indices->empty()) continue;
 
-        // 三角形数过多时跳过此 mesh（降级为 AABB）
-        constexpr std::size_t kMaxTrianglesPerMesh = 500;
-        if (src_indices->size() / 3 > kMaxTrianglesPerMesh && lod_count == 0) continue;
-
         // 复制顶点（绑定姿态；蒙皮物体运行期会覆盖为蒙皮后坐标）
         for (const auto& v : *src_verts) {
             ktm::fvec3 pos;

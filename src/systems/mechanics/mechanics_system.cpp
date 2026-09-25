@@ -426,36 +426,28 @@ void MechanicsSystem::update_physics(float fixed_dt) {
     }
 
     // 预加载所有物理物体的碰撞网格（用于三角形碰撞检测和精确地板碰撞）
+    // 无论 collision_shape 是 Mesh 还是 Box，只要有 model_id 就尝试建碰撞网格。
+    // AABB 宽相已经完成粗筛；三角窄相是精化阶段，不需要额外的形状类型过滤。
     for (const auto& entry : mechanics_data) {
         if (impl_->shutdown_requested.load(std::memory_order_acquire)) {
             return;
         }
-        const auto params_it = frame_params.find(entry.handle);
-        if (params_it == frame_params.end()) continue;
-        if (params_it->second.collision_shape != CollisionShape::Mesh) continue;
+        if (entry.model_id == 0) continue;
 
         if (entry.is_skinned) {
-            // 蒙皮物体：从 skinned_collision_cache 取本帧实例化网格。
-            // 顶点由 update_skinned_geometry 每帧填入（已是本帧蒙皮后坐标，模型空间）；
-            // 索引和 triangle_bone_ids 在首帧由 ensure_collision_mesh 顺带算好后存入
-            // static_triangle_index_cache / static_triangle_bone_cache，每帧复用。
-            // 若本帧 update_skinned_geometry 尚未运行（极端情况），缓存为空，跳过三角窄相。
-            if (entry.model_id != 0 &&
-                !impl_->static_triangle_index_cache.count(entry.model_id)) {
-                // 首次：借用 ensure_collision_mesh 解析静态索引和骨骼映射
+            // 蒙皮物体：确保 static_triangle_index_cache 已解析（顶点每帧由 update_skinned_geometry 刷新）
+            if (!impl_->static_triangle_index_cache.count(entry.model_id)) {
                 ensure_collision_mesh(entry.model_id,
                                       impl_->collision_mesh_cache,
                                       &impl_->static_triangle_index_cache,
                                       &impl_->static_triangle_bone_cache);
             }
         } else {
-            // 非蒙皮物体：走原有静态网格路径
-            if (entry.model_id != 0) {
-                ensure_collision_mesh(entry.model_id,
-                                      impl_->collision_mesh_cache,
-                                      &impl_->static_triangle_index_cache,
-                                      &impl_->static_triangle_bone_cache);
-            }
+            // 非蒙皮物体：静态碰撞网格，只建一次
+            ensure_collision_mesh(entry.model_id,
+                                  impl_->collision_mesh_cache,
+                                  &impl_->static_triangle_index_cache,
+                                  &impl_->static_triangle_bone_cache);
         }
     }
 
