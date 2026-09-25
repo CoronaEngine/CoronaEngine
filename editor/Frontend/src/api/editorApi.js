@@ -21,7 +21,7 @@ function getDockChannel(surface) {
     const pending = new Map();
     const dispatch = (id, error, result) => {
       const request = pending.get(id);
-      if (!request) return; // Unknown, duplicate, or timed-out native response.
+      if (!request) return; // Unknown, duplicate, or untracked timed-out native response.
       request.finish(error, result);
     };
     channel = { pending, dispatch };
@@ -203,7 +203,7 @@ export class Bridge {
     }
   }
 
-  static async callDockCommand(params) {
+  static async callDockCommand(params, { onLateResult } = {}) {
     const requestId = `dock_${Date.now()}_${++dockRequestSequence}`;
     const command = params.cmd || 'unknown';
     return new Promise((resolve, reject) => {
@@ -212,14 +212,28 @@ export class Bridge {
         return;
       }
       const { pending } = getDockChannel(window);
+      let timedOut = false;
       const finish = (error, result) => {
         if (!pending.delete(requestId)) return;
         clearTimeout(timer);
-        if (error) reject(new Error(`Dock ${command} (${requestId}): ${error.message || String(error)}`));
-        else resolve(result);
+        if (timedOut) {
+          Promise.resolve().then(() => onLateResult?.(error, result))
+            .catch(error => console.error('[Dock] late cleanup failed:', error));
+          return;
+        }
+        if (error) {
+          const failure = new Error(`Dock ${command} (${requestId}): ${error.message || String(error)}`);
+          if (error.code) failure.code = error.code;
+          reject(failure);
+        } else resolve(result);
       };
       const timer = setTimeout(() => {
-        finish(new Error('response timed out after 30 seconds; native execution may have completed'));
+        const error = new Error('response timed out after 30 seconds; native execution may have completed');
+        error.code = 'DOCK_TIMEOUT';
+        if (onLateResult) {
+          timedOut = true;
+          reject(Object.assign(new Error(`Dock ${command} (${requestId}): ${error.message}`), { code: error.code }));
+        } else finish(error);
       }, DOCK_RESPONSE_TIMEOUT_MS);
       pending.set(requestId, { finish });
       try {

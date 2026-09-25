@@ -1,3 +1,4 @@
+import { memoryStorage } from './windowSessionFixtures.mjs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { setImmediate } from 'node:timers/promises';
@@ -10,7 +11,7 @@ import { worldModeService, worldModeState } from '../../src/services/worldModeSe
 function nativeSurface(t) {
   const sent = [];
   const surface = { coronaBridge: { dockCommand: payload => sent.push(JSON.parse(payload)) },
-    localStorage: { setItem() {} }, dispatchEvent() {} };
+    localStorage: memoryStorage(), dispatchEvent() {} };
   const previous = globalThis.window;
   globalThis.window = surface;
   t.after(() => { globalThis.window = previous; });
@@ -64,9 +65,18 @@ test('real Vue watcher and launcher concurrent cleanup opens native project once
   t.after(stop);
   const opened = projectLauncherService.openProject('story');
   await nextTick(); await setImmediate();
+  assert.equal(sent.length, 1); // watcher and launcher share the same retirement
+  reply(0); await setImmediate();
   assert.equal(sent.length, 2);
-  reply(0); reply(1); await setImmediate();
-  for (let i = 2; i < sent.length; i++) reply(i);
+  reply(1); await setImmediate();
+  let settled = false;
+  opened.finally(() => { settled = true; });
+  let replied = 2;
+  for (let round = 0; round < 40; round++) {
+    await setImmediate();
+    while (replied < sent.length) reply(replied++);
+  }
+  assert.equal(settled, true);
   await opened; await Promise.all(watched);
   assert.equal(nativeOpens, 1);
   assert.equal(worldModeState.mode, 'story');
@@ -83,6 +93,44 @@ test('failed retirement blocks opening but leaves queue available for retry', as
   await setImmediate(); reply(0, 'retirement failed'); await rejected;
   assert.equal(opens, 0); assert.equal(worldModeService.opening, false);
   const retry = projectLauncherService.openProject('story');
+  await setImmediate(); reply(sent.length - 1);
   await setImmediate(); reply(sent.length - 1); await retry;
   assert.equal(opens, 1); assert.equal(worldModeService.opening, false);
+});
+
+test('Dock late-result cleanup runs once and cannot settle another request', async (t) => {
+  const { sent, reply } = nativeSurface(t);
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const lateResults = [];
+  const request = Bridge.callDockCommand({ cmd: 'createPanelTab' }, {
+    onLateResult: (error, result) => lateResults.push({ error, result }),
+  });
+  const rejected = assert.rejects(request, error => {
+    assert.equal(error.code, 'DOCK_TIMEOUT');
+    assert.match(error.message, /createPanelTab.*dock_.*30 seconds/);
+    return true;
+  });
+  t.mock.timers.tick(30_000);
+  await rejected;
+  const other = Bridge.callDockCommand({ cmd: 'other' });
+  reply(0); reply(0); reply(1);
+  await Promise.resolve();
+  assert.deepEqual(lateResults, [{ error: null, result: { index: 0 } }]);
+  assert.deepEqual(await other, { index: 1 });
+  assert.equal(sent.length, 2);
+});
+
+test('retired camera surfaces cannot queue controls against the next creative world', async (t) => {
+  const { sent, surface } = nativeSurface(t);
+  t.mock.method(editorApi.projectSettings, 'getActiveProjectInfo', async () => ({ project_path: 'creative', mode: 'creative' }));
+  await worldModeService.resolve('creative', { force: true });
+  surface.location = { hash: '#/CameraView?standalone=1&uiSession=old&uiOwner=main&uiWindow=camera' };
+  surface.localStorage.setItem('corona.editorUi.policy.v1', JSON.stringify({
+    enabled: true, owner: 'main', generation: 'new', revision: worldModeState.revision,
+  }));
+  for (const method of ['toggleMaximizeThisCameraView', 'cycleThisCameraViewWindowMode',
+    'toggleBorderlessThisCameraView', 'resizeThisCameraView', 'closeCameraView']) {
+    await assert.rejects(appService[method](), /不允许/);
+  }
+  assert.equal(sent.length, 0);
 });

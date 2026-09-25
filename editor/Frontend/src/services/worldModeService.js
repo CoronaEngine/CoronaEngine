@@ -1,4 +1,4 @@
-/** Project-mode presentation lifecycle. The native project metadata remains authoritative. */
+/** Project-mode presentation lifecycle. Mode policy lives in Web, not the native bridge. */
 import { shallowReactive } from 'vue';
 import { editorApi } from '../api/editorApi.js';
 
@@ -14,6 +14,45 @@ export function unwrapProjectInfo(response) {
     throw new Error('无法读取当前世界的模式，请重新打开世界。');
   }
   return info;
+}
+
+// The pre-isolation native API defaults a portable scene with no [world] type
+// to story. Read the actual marker through the existing Python file adapter;
+// never migrate/save project files merely to decide which UI to render.
+export function portableWorldMode(text, legacyMode = 'creative') {
+  let section = '';
+  let mode;
+  const format = {};
+  for (const line of String(text).replace(/^\uFEFF/, '').split(/\r?\n/)) {
+    const value = line.trim();
+    if (!value || value.startsWith(';') || value.startsWith('#')) continue;
+    if (value.startsWith('[') && value.endsWith(']')) {
+      section = value.slice(1, -1).trim().toLowerCase();
+      continue;
+    }
+    const equals = value.indexOf('=');
+    if (section === 'world' && equals >= 0 && value.slice(0, equals).trim().toLowerCase() === 'type') {
+      mode = value.slice(equals + 1).trim();
+    }
+    if (section === 'format' && equals >= 0) {
+      format[value.slice(0, equals).trim().toLowerCase()] = value.slice(equals + 1).trim();
+    }
+  }
+  return normalizeWorldMode(format.type === 'corona_scene_folder' && format.version === '1' ? mode : legacyMode);
+}
+export async function readWorldProjectInfo(api) {
+  const info = unwrapProjectInfo(await api.projectSettings.getActiveProjectInfo());
+  // Other modes are already unambiguous, including legacy/multiplayer projects.
+  if (info.mode !== 'story' || info.entrance_scene !== 'scene.ini') return info;
+  const path = `${info.project_path.replace(/[\\/]+$/, '')}/scene.ini`;
+  const response = await api.ai.readLocalFileAsBase64(path);
+  const data = response?.data ?? response;
+  if (typeof data !== 'string' || !/^data:[^,]*;base64,/.test(data)) {
+    throw new Error('无法读取世界模式配置，请重新打开世界。');
+  }
+  const bytes = Uint8Array.from(atob(data.slice(data.indexOf(',') + 1)), char => char.charCodeAt(0));
+  const text = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+  return { ...info, mode: portableWorldMode(text, info.mode) };
 }
 
 export function createWorldModeController({ readProjectInfo, publish = () => {} }) {
@@ -81,7 +120,7 @@ export const worldModeState = shallowReactive({
   status: 'idle', mode: null, projectPath: '', revision: 0, error: null,
 });
 export const worldModeService = createWorldModeController({
-  readProjectInfo: () => editorApi.projectSettings.getActiveProjectInfo(),
+  readProjectInfo: () => readWorldProjectInfo(editorApi),
   publish: (state) => Object.assign(worldModeState, state),
 });
 export const editorUiAllowed = () => worldModeState.status === 'ready' && worldModeState.mode === 'creative';

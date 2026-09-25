@@ -8,38 +8,34 @@
 import { Bridge, editorApi } from '../api/editorApi.js';
 import { editorUiAllowed, worldModeState } from './worldModeService.js';
 
-const surfaceSession = `${Date.now()}_${Math.random().toString(36).slice(2)}`;
-let nativeUiGeneration = null;
-export const isCurrentWindowEvent = (payload) => editorUiAllowed()
-  && (payload?.uiGeneration === undefined || payload.uiGeneration === nativeUiGeneration);
+import { createEditorWindowSession } from './editorWindowSession.js';
 
-async function openEditorWindow(command) {
-  if (!editorUiAllowed()) throw new Error('当前世界不允许打开编辑器窗口');
-  const revision = worldModeState.revision;
-  const result = await Bridge.callDockCommand(command);
-  if (!editorUiAllowed() || revision !== worldModeState.revision) {
-    const tabId = result?.tab_id ?? result?.data?.tab_id;
-    if (Number.isInteger(tabId)) {
-      await Bridge.callDockCommand({ cmd: 'closePanelTab', tabId, panelId: command.panelId || '' });
+const windowSessions = new WeakMap();
+function session() {
+  let controller = windowSessions.get(window);
+  if (!controller) {
+    let owner = window.sessionStorage?.getItem('corona.editorUi.owner');
+    if (!owner) {
+      owner = `${Date.now()}_${Math.random().toString(36).slice(2)}`;
+      window.sessionStorage?.setItem('corona.editorUi.owner', owner);
     }
-    throw new Error('世界已切换，已丢弃旧窗口请求');
+    controller = createEditorWindowSession({
+      owner,
+      storage: window.localStorage,
+      send: (...args) => Bridge.callDockCommand(...args),
+      getWorld: () => worldModeState,
+      getQuery: () => new URLSearchParams((window.location?.hash || '').split('?')[1] || ''),
+    });
+    windowSessions.set(window, controller);
   }
-  return result;
+  return controller;
 }
+export const isCurrentWindowEvent = payload => editorUiAllowed() && session().accepts(payload);
+const openEditorWindow = command => session().open(command);
 
 export const appService = {
-  readEditorUiPolicy: async () => {
-    const result = await Bridge.callDockCommand({ cmd: 'getEditorUiPolicy' });
-    nativeUiGeneration = result?.ui_generation ?? null;
-    return result;
-  },
-  setEditorUiEnabled: async (enabled) => {
-    const revision = worldModeState.revision;
-    const result = await Bridge.callDockCommand({ cmd: 'setEditorUiEnabled', enabled,
-      session: `${surfaceSession}:${revision}` });
-    if (revision === worldModeState.revision) nativeUiGeneration = result?.ui_generation ?? null;
-    return result;
-  },
+  readEditorUiPolicy: async () => session().policy(),
+  setEditorUiEnabled: enabled => session().prepare(enabled),
   setDragRegions: (_routePath, x, y, w, h) =>
     Bridge.callDockCommand({
       cmd: 'setDragRegions',
@@ -64,21 +60,21 @@ export const appService = {
     }),
   createDetachedPanel: ({ panelId, routePath, width, height, x, y }) =>
     openEditorWindow({ cmd: 'createDetachedPanel', panelId, routePath, width, height, x, y }),
-  closeThisTab: (panelId) => Bridge.callDockCommand({ cmd: 'closeThisTab', panelId }),
+  closeThisTab: (panelId) => session().closeThis(panelId),
   closePanelTab: (tabId, panelId) =>
-    Bridge.callDockCommand({ cmd: 'closePanelTab', tabId, panelId }),
+    session().closeTab(tabId, panelId),
   detachPanel: (opts = {}) => openEditorWindow({ cmd: 'detachPanel', ...opts }),
   togglePanelWindowMode: (opts = {}) =>
     openEditorWindow({ cmd: 'togglePanelWindowMode', ...opts }),
   redockPanel: (opts = {}) => openEditorWindow({ cmd: 'redockPanel', ...opts }),
   toggleMaximizeThisCameraView: (sceneId = '', cameraId = '') =>
-    Bridge.callDockCommand({ cmd: 'toggleMaximizeThisCameraView', sceneId, cameraId }),
+    openEditorWindow({ cmd: 'toggleMaximizeThisCameraView', sceneId, cameraId }),
   cycleThisCameraViewWindowMode: (sceneId = '', cameraId = '') =>
-    Bridge.callDockCommand({ cmd: 'cycleThisCameraViewWindowMode', sceneId, cameraId }),
+    openEditorWindow({ cmd: 'cycleThisCameraViewWindowMode', sceneId, cameraId }),
   toggleBorderlessThisCameraView: (sceneId = '', cameraId = '') =>
-    Bridge.callDockCommand({ cmd: 'toggleBorderlessThisCameraView', sceneId, cameraId }),
+    openEditorWindow({ cmd: 'toggleBorderlessThisCameraView', sceneId, cameraId }),
   resizeThisCameraView: (width, height, sceneId = '', cameraId = '') =>
-    Bridge.callDockCommand({ cmd: 'resizeThisCameraView', width, height, sceneId, cameraId }),
+    openEditorWindow({ cmd: 'resizeThisCameraView', width, height, sceneId, cameraId }),
   createCameraView: (camera) =>
     openEditorWindow({
       cmd: 'createCameraView',
@@ -92,9 +88,9 @@ export const appService = {
       y: camera.view_y || 120,
     }),
   closeCameraView: (sceneId, cameraId) =>
-    Bridge.callDockCommand({ cmd: 'closeCameraView', sceneId, cameraId }),
+    openEditorWindow({ cmd: 'closeCameraView', sceneId, cameraId }),
   suspendCameraViews: (sceneId) => Bridge.callDockCommand({ cmd: 'suspendCameraViews', sceneId }),
   crossTabBroadcast: (event, payload) =>
-    Bridge.callDockCommand({ cmd: 'broadcast', event, payload }),
+    session().broadcast(event, payload),
   closeProcess: () => editorApi.app.closeProcess(),
 };

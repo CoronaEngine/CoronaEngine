@@ -7,6 +7,7 @@ import DockLayout from '@/components/dock/DockLayout.vue';
 import DockPanel from '@/components/dock/DockPanel.vue';
 import { editorApi } from '@/api/editorApi.js';
 import { appService } from '@/services/appService.js';
+import { EDITOR_UI_POLICY_KEY } from '@/services/editorWindowSession.js';
 import { LAUNCHER_ROUTES, normalizeProjectPath, editorUiAllowed, worldModeService, worldModeState } from '@/services/worldModeService.js';
 import lanchat from '@/stores/lanchat.js';
 import { cancelPendingProjectOpen } from '@/services/projectLauncherService.js';
@@ -21,6 +22,7 @@ const dockStore = useDockStore();
 const isEditorRoute = computed(() => route.path === '/' && editorUiAllowed());
 const isLauncherRoute = computed(() => LAUNCHER_ROUTES.has(route.path));
 const preparedRevision = ref(-1);
+const windowPolicyRevision = ref(0);
 const worldReady = computed(() => worldModeState.status === 'ready'
   && preparedRevision.value === worldModeState.revision);
 const mayRenderRoute = computed(() => isLauncherRoute.value || (worldReady.value
@@ -46,7 +48,7 @@ let preparationRevision = 0;
 
 // Only the main surface controls native windows. Standalone pages independently
 // resolve the same native metadata before mounting their panel component.
-watch(() => [worldModeState.status, worldModeState.revision, route.path, route.matched.length], async () => {
+watch(() => [worldModeState.status, worldModeState.revision, route.path, route.matched.length, windowPolicyRevision.value], async () => {
   if (!route.matched.length) return;
   const preparation = ++preparationRevision;
   const revision = worldModeState.revision;
@@ -54,7 +56,9 @@ watch(() => [worldModeState.status, worldModeState.revision, route.path, route.m
   preparedRevision.value = -1;
   try {
     if (!isStandalonePanel.value && typeof window.coronaBridge?.dockCommand === 'function') {
-      await appService.setEditorUiEnabled(editorUiAllowed() && !isLauncherRoute.value);
+      const enabled = editorUiAllowed() && !isLauncherRoute.value;
+      if (!enabled) dockStore.clearSession();
+      await appService.setEditorUiEnabled(enabled);
     } else if (isStandalonePanel.value && typeof window.coronaBridge?.dockCommand === 'function') {
       const policy = await appService.readEditorUiPolicy();
       if (!policy?.enabled) { await appService.closeThisTab(''); return; }
@@ -96,6 +100,9 @@ async function refreshWorldMode(projectPath = '', force = false) {
     await router.replace('/StartScreen');
     notifyWorldError(error, '读取世界模式失败');
   }
+}
+function onWindowPolicyChanged(event) {
+  if (event.key === EDITOR_UI_POLICY_KEY && isStandalonePanel.value) windowPolicyRevision.value++;
 }
 function onActiveProjectChanged(event) {
   void refreshWorldMode(event.detail?.projectPath || '');
@@ -232,6 +239,7 @@ onMounted(() => {
   appUnmounted = false;
   window.addEventListener('corona-active-project-changed', onActiveProjectChanged);
   window.addEventListener('storage', onProjectStorageChanged);
+  window.addEventListener('storage', onWindowPolicyChanged);
   void editorApi.events.onProjectOpened((payload) => {
     void refreshWorldMode(payload?.path || '', true);
   }).then((token) => {
@@ -259,6 +267,7 @@ onUnmounted(() => {
   ++refreshRevision;
   window.removeEventListener('corona-active-project-changed', onActiveProjectChanged);
   window.removeEventListener('storage', onProjectStorageChanged);
+  window.removeEventListener('storage', onWindowPolicyChanged);
   if (projectOpenedToken) void editorApi.off(projectOpenedToken).catch(() => {});
   if (lanChatEventCallbackToken) {
     const callbackToken = lanChatEventCallbackToken;

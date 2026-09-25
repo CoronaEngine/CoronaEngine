@@ -6402,7 +6402,7 @@ nlohmann::json active_project_info_json() {
         const auto scene_ini = read_ini_file(portable->scene_file);
         return {
             {"name", portable->scene_name},
-            {"mode", ini_value(scene_ini, "world", "type", "creative")},
+            {"mode", ini_value(scene_ini, "world", "type", "story")},
             {"prompt", ini_value(scene_ini, "world", "prompt")},
             {"entrance_scene", "scene.ini"},
             {"core_version", ini_value(scene_ini, "scene", "core_version")},

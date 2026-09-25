@@ -1,3 +1,4 @@
+import { memoryStorage } from './windowSessionFixtures.mjs';
 import { setImmediate } from 'node:timers';
 import assert from 'node:assert/strict';
 import test from 'node:test';
@@ -97,6 +98,9 @@ test('failed mode reads return to launcher and never fall back to creative', asy
 });
 
 test('late native panel completion is closed even after creative -> story -> creative', async (t) => {
+  const previousWindow = globalThis.window;
+  globalThis.window = { localStorage: memoryStorage() };
+  t.after(() => { globalThis.window = previousWindow; });
   t.mock.method(editorApi.projectSettings, 'getActiveProjectInfo', async () => info('creative', 'creative'));
   await worldModeService.resolve('creative', { force: true });
   const request = deferred(), commands = [];
@@ -104,6 +108,8 @@ test('late native panel completion is closed even after creative -> story -> cre
     commands.push(command);
     return command.cmd === 'createPanelTab' ? request.promise : {};
   });
+  await appService.setEditorUiEnabled(true);
+  commands.length = 0;
   const pending = appService.createPanelTab('Object', '/Object', 400, 600, 'right');
   worldModeService.invalidate('story');
   await worldModeService.resolve('creative', { force: true });
