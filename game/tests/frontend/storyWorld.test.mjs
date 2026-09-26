@@ -1,0 +1,376 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import { createRequire } from 'node:module';
+import test from 'node:test';
+import { createPlayerController } from '../../frontend/playerController.mjs';
+import { createPlayerSave } from '../../frontend/playerSave.mjs';
+import { ensureStoryCharacters } from '../../frontend/storyActors.mjs';
+import { STORY_CHARACTERS } from '../../frontend/storyCharacters.mjs';
+import { actorFixture } from './fixtures.mjs';
+import { createStoryNavigationController } from '../../frontend/storyNavigation.mjs';
+import { createStoryCameraController } from '../../../editor/Frontend/src/utils/viewportStoryCamera.js';
+import { editorApi } from '../../../editor/Frontend/src/api/editorApi.js';
+import * as launcher from '../../../editor/Frontend/src/services/projectLauncherService.js';
+import * as worldMode from '../../../editor/Frontend/src/services/worldModeService.js';
+import * as lifecycle from '../../../editor/Frontend/src/services/worldSessionLifecycle.js';
+import lanchat from '../../../editor/Frontend/src/stores/lanchat.js';
+
+const require = createRequire(new URL('../../../editor/Frontend/package.json', import.meta.url));
+const { ref } = require('vue');
+const { parse, compileScript, babelParse } = require('vue/compiler-sfc');
+const { descriptor } = parse(fs.readFileSync(new URL('../../../editor/Frontend/src/views/layout/StoryWorld.vue', import.meta.url), 'utf8'));
+const compiled = compileScript(descriptor, { id: 'story-navigation-test', genDefaultAs: 'StoryWorld' });
+let setupSource = compiled.content;
+for (const node of babelParse(compiled.content, { sourceType: 'module' }).program.body
+  .filter(node => node.type === 'ImportDeclaration').reverse()) {
+  const bindings = node.specifiers.map(specifier => `${JSON.stringify(specifier.imported.name)}: ${specifier.local.name}`).join(', ');
+  setupSource = setupSource.slice(0, node.start) + `const { ${bindings} } = modules[${JSON.stringify(node.source.value)}];`
+    + setupSource.slice(node.end);
+}
+const makeComponent = new Function('modules', `${setupSource}; return StoryWorld;`);
+const turn = () => new Promise(resolve => setImmediate(resolve));
+const deferred = () => { let resolve, reject; const promise = new Promise((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; };
+const MAIN = 'D:/story', CHILD = `${MAIN}/.game/subworld`;
+const event = (props = {}) => ({ code: 'KeyO', preventDefault() { this.defaultPrevented = true; }, stopPropagation() {}, ...props });
+const pose = position => ({ name: 'main', position, forward: [0, 0, 1], world_up: [0, 1, 0], fov: 65 });
+
+async function fixture(t, options = {}) {
+  const globals = ['window', 'document', 'CustomEvent', 'ResizeObserver', 'requestAnimationFrame', 'cancelAnimationFrame'];
+  const previous = Object.fromEntries(globals.map(key => [key, globalThis[key]]));
+  const calls = [], alerts = [], frames = new Map(), pages = [];
+  let activePath = MAIN, route = '/', frameId = 0, page = null, handle = 10;
+  const poses = new Map([[MAIN, pose([1, 2, 3])], [CHILD, pose([5, 6, 7])]]);
+  const actors = new Map([MAIN, CHILD].map(path => [path, STORY_CHARACTERS.map(character => actorFixture(character))]));
+  function surface() {
+    const listeners = new Map();
+    return {
+      listeners,
+      addEventListener(name, fn) { if (!listeners.has(name)) listeners.set(name, new Set()); listeners.get(name).add(fn); },
+      removeEventListener(name, fn) { listeners.get(name)?.delete(fn); },
+      dispatchEvent(event) { for (const fn of listeners.get(event.type) || []) fn(event); },
+    };
+  }
+  const bridge = Object.fromEntries(['actorTransform', 'cameraMove', 'setCameraViewport', 'setViewportGizmoTarget', 'setViewportUiMode', 'setViewportSystemCursorHidden']
+    .map(name => [name, (...args) => { calls.push([name, ...args]); return true; }]));
+  globalThis.window = Object.assign(surface(), { coronaBridge: bridge, devicePixelRatio: 1,
+    location: { href: 'file:///D:/engine/editor/Frontend/dist/index.html' },
+    localStorage: { setItem() {} }, alert: message => alerts.push(message) });
+  globalThis.document = Object.assign(surface(), { hidden: false, hasFocus: () => true });
+  globalThis.CustomEvent = class { constructor(type, options) { Object.assign(this, { type }, options); } };
+  globalThis.ResizeObserver = class { observe() {} disconnect() { calls.push(['disconnect']); } };
+  globalThis.requestAnimationFrame = callback => { frames.set(++frameId, callback); return frameId; };
+  globalThis.cancelAnimationFrame = id => frames.delete(id);
+
+  t.mock.method(editorApi.projectSettings, 'getActiveProjectInfo', async () => ({ project_path: activePath, mode: 'story' }));
+  t.mock.method(editorApi.main, 'onInit', async () => options.init ? options.init() : { scenes: [{ path: 'scene.ini' }], active_index: 0 });
+  t.mock.method(editorApi.scene, 'setActorTransform', async (sceneId, guid, transform) => {
+    const source = activePath;
+    calls.push(['playerSave', source, sceneId, guid, structuredClone(transform)]);
+    await options.save?.();
+    assert.equal(activePath, source, 'a pending save must never cross native scene replacement');
+    const actor = actors.get(source).find(item => item.actor_guid === guid);
+    for (const key of ['position', 'rotation']) if (transform[key]) actor.geometry[key] = [...transform[key]];
+    return { status: 'success', actor: structuredClone(actor) };
+  });
+  t.mock.method(editorApi.scene, 'getSnapshot', async () => ({ scene: 'scene.ini', active_camera_name: 'main',
+    actors: structuredClone(actors.get(activePath)),
+    cameras: [{ ...poses.get(activePath), handle: ++handle }] }));
+  t.mock.method(editorApi.viewport, 'setCameraPose', async (sceneId, name, camera) => {
+    calls.push(['pose', activePath, sceneId, name, camera]);
+    await options.pose?.();
+    poses.set(activePath, { name, ...structuredClone(camera) });
+    return { data: { status: 'success' } };
+  });
+  t.mock.method(editorApi.scratch, 'sendKeyEvent', async (key, mods, displayKey) => {
+    calls.push(['key', key, mods, displayKey]);
+    if (options.prepare) return options.prepare(key);
+    if ((activePath === CHILD && key === 'KeyO') || (activePath === MAIN && key === 'KeyP')) return { status: 'noop' };
+    return { data: { status: 'ok', navigation: { source: activePath, target: activePath === MAIN ? CHILD : MAIN,
+      direction: key === 'KeyO' ? 'enter' : 'exit', mode: 'story' } } };
+  });
+  t.mock.method(editorApi.project, 'openProject', async path => {
+    calls.push(['nativeOpen', path]);
+    const response = options.open ? await options.open(path) : { ok: true, path };
+    if (response?.ok) activePath = path;
+    return response;
+  });
+  t.mock.method(lanchat, 'finishWorldSession', async () => { calls.push(['chatCleanup']); });
+  const realOpen = launcher.projectLauncherService.openProject;
+  t.mock.method(launcher.projectLauncherService, 'openProject', (...args) => {
+    const result = realOpen(...args);
+    page?.unmount(); // App.vue removes the routed component on beginOpen.
+    return result;
+  });
+  await worldMode.worldModeService.resolve(MAIN, { force: true });
+  function mount() {
+    const mounted = [], unmounted = [];
+    const component = makeComponent({
+      vue: { ref, onMounted: fn => mounted.push(fn), onUnmounted: fn => unmounted.push(fn) },
+      'vue-router': { onBeforeRouteLeave() {}, useRouter: () => ({ replace: async path => { route = path; } }) },
+      '@/api/editorApi.js': { editorApi },
+      '@/services/worldModeService.js': worldMode,
+      '@/services/projectLauncherService.js': launcher,
+      '@/services/worldSessionLifecycle.js': lifecycle,
+      '@/utils/viewportStoryCamera.js': { createStoryCameraController },
+      '../../../../../game/frontend/storyNavigation.mjs': { createStoryNavigationController },
+      '../../../../../game/frontend/storyActors.mjs': { ensureStoryCharacters },
+      '../../../../../game/frontend/playerController.mjs': { createPlayerController },
+      '../../../../../game/frontend/playerSave.mjs': { createPlayerSave },
+    });
+    const instance = component.setup({}, { expose() {} });
+    instance.surface.value = { focus() {}, getBoundingClientRect: () => ({ left: 0, top: 0, width: 800, height: 600 }) };
+    let disposed = false;
+    page = { instance, mount: () => Promise.all(mounted.map(fn => fn())),
+      unmount() { if (!disposed) { disposed = true; for (const fn of unmounted) fn(); } } };
+    pages.push(page);
+    return page;
+  }
+  t.after(async () => {
+    for (const p of pages) p.unmount();
+    await lifecycle.drainWorldSession();
+    await lifecycle.flushWorldSessionSaves();
+    worldMode.worldModeService.invalidate();
+    Object.assign(globalThis, previous);
+  });
+  return { mount, calls, alerts, frames, poses, actors, get route() { return route; },
+    step() { const pending = [...frames.values()]; frames.clear(); pending.forEach(fn => fn(performance.now() + 50)); },
+    opens: () => calls.filter(call => call[0] === 'nativeOpen').map(call => call[1]) };
+}
+
+test('real story page O/P retains independent poses, stays story, and never reuses old handles', async t => {
+  const f = await fixture(t);
+  let page = f.mount(); await page.mount();
+  page.instance.camera.wheel(event({ deltaY: -100 })); f.step();
+  page.instance.onKeyDown(event({ code: 'KeyW' }));
+  const stale = [...f.frames.values()][0];
+  const mainPose = page.instance.camera.snapshotPose().camera;
+  page.instance.onKeyDown(event());
+  assert.equal(page.instance.navigation.busy, true);
+  const afterLock = page.instance.camera.snapshotPose().camera;
+  page.instance.camera.wheel(event({ deltaY: -100 }));
+  assert.deepEqual(page.instance.camera.snapshotPose().camera, afterLock);
+  await turn();
+  assert.deepEqual(f.opens(), [CHILD]);
+  assert.equal(f.frames.size, 0);
+  const count = f.calls.length; stale(100);
+  assert.equal(f.calls.length, count);
+  assert.deepEqual(f.poses.get(MAIN).position, mainPose.position);
+  assert.equal(worldMode.worldModeState.mode, 'story');
+  assert.equal(f.route, '/');
+  assert.equal(document.listeners.get('keydown').size, 0);
+  assert.equal(window.listeners.get('pointermove').size, 0);
+
+  page = f.mount(); await page.mount();
+  page.instance.camera.pointerDown(event({ button: 2, clientX: 0, clientY: 0 }));
+  page.instance.camera.pointerMove(event({ buttons: 2, clientX: 50, clientY: 20 }));
+  page.instance.camera.wheel(event({ deltaY: -1 }));
+  f.step();
+  const childPose = page.instance.camera.snapshotPose().camera;
+  page.instance.onKeyDown(event({ code: 'KeyP' }));
+  await turn();
+  assert.deepEqual(f.opens(), [CHILD, MAIN]);
+  page = f.mount(); await page.mount();
+  assert.deepEqual(page.instance.camera.snapshotPose().camera, mainPose);
+  page.instance.onKeyDown(event()); await turn();
+  page = f.mount(); await page.mount();
+  assert.deepEqual(page.instance.camera.snapshotPose().camera, childPose);
+  // Rebinding must restore the controller orbit too, not just display one
+  // saved frame before jumping back to default yaw/pitch on the next input.
+  page.instance.onKeyDown(event({ code: 'KeyW' })); f.step();
+  const resumedPose = page.instance.camera.snapshotPose().camera;
+  for (let i = 0; i < 3; ++i) assert.ok(Math.abs(resumedPose.forward[i] - childPose.forward[i]) < 1e-9);
+  assert.deepEqual(f.alerts, []);
+  assert.ok(f.calls.filter(call => call[0] === 'setViewportUiMode').every(call => call[2] === 'flat2d'));
+});
+
+test('O is ignored before bind; Escape cancels pending init and never binds a stale viewport', async t => {
+  const init = deferred();
+  const f = await fixture(t, { init: () => init.promise });
+  const page = f.mount(); const mounted = page.mount();
+  page.instance.onKeyDown(event());
+  assert.ok(!f.calls.some(call => call[0] === 'key'));
+  page.instance.onKeyDown(event({ code: 'Escape' }));
+  init.resolve({ path: 'scene.ini' }); await mounted; await turn();
+  assert.equal(f.route, '/StartScreen');
+  assert.ok(!f.calls.some(call => call[0] === 'setCameraViewport'));
+});
+
+test('real page filters repeated/editable/composition O and locks camera while preparation runs', async t => {
+  const prep = deferred();
+  const f = await fixture(t, { prepare: () => prep.promise });
+  const page = f.mount(); await page.mount();
+  for (const props of [{ repeat: true }, { ctrlKey: true }, { altKey: true }, { metaKey: true },
+    { isComposing: true }, { target: { isContentEditable: true } }]) page.instance.onKeyDown(event(props));
+  assert.ok(!f.calls.some(call => call[0] === 'pose'));
+  page.instance.onKeyDown(event()); await turn();
+  const pose = page.instance.camera.snapshotPose();
+  page.instance.onKeyDown(event({ code: 'KeyW' }));
+  page.instance.camera.pointerDown(event({ button: 2 }));
+  page.instance.camera.wheel(event({ deltaY: -1 }));
+  page.instance.onKeyDown(event());
+  assert.equal(f.frames.size, 0);
+  assert.deepEqual(page.instance.camera.snapshotPose(), pose);
+  prep.resolve({ status: 'error', message: 'copy failed' }); await turn();
+  assert.deepEqual(f.opens(), []);
+  assert.deepEqual(f.alerts, ['copy failed']);
+  assert.equal(page.instance.navigation.busy, false);
+});
+
+test('Escape during copy ignores its late response and leaves the game page', async t => {
+  const prep = deferred();
+  const f = await fixture(t, { prepare: () => prep.promise });
+  const page = f.mount(); await page.mount();
+  page.instance.onKeyDown(event()); await turn();
+  page.instance.onKeyDown(event({ code: 'Escape' }));
+  prep.resolve({ status: 'ok', navigation: { source: MAIN, target: CHILD, direction: 'enter', mode: 'story' } });
+  await turn();
+  assert.deepEqual(f.opens(), []);
+  assert.equal(f.route, '/StartScreen');
+  assert.deepEqual(f.alerts, []);
+});
+
+test('a newer canonical open drains preparation and prevents late subworld navigation', async t => {
+  const prep = deferred();
+  const f = await fixture(t, { prepare: () => prep.promise });
+  const page = f.mount(); await page.mount();
+  page.instance.onKeyDown(event()); await turn();
+  const other = launcher.projectLauncherService.openProject('D:/other'); await turn();
+  assert.deepEqual(f.opens(), []); // Python still works against the source scene.
+  prep.resolve({ status: 'ok', navigation: { source: MAIN, target: CHILD, direction: 'enter', mode: 'story' } });
+  await other; await turn();
+  assert.deepEqual(f.opens(), ['D:/other']);
+  assert.equal(worldMode.worldModeState.projectPath, 'D:/other');
+  assert.deepEqual(f.alerts, []);
+});
+
+test('failed target open recovers through canonical launcher after source disposal', async t => {
+  const f = await fixture(t, { open: path => path === CHILD ? { ok: false, message: 'bad asset' } : { ok: true, path } });
+  const page = f.mount(); await page.mount();
+  page.instance.onKeyDown(event()); await turn();
+  assert.deepEqual(f.opens(), [CHILD, MAIN]);
+  assert.equal(worldMode.worldModeState.status, 'ready');
+  assert.equal(worldMode.worldModeState.mode, 'story');
+  assert.match(f.alerts[0], /已恢复来源世界.*bad asset/);
+  const restored = f.mount(); await restored.mount();
+  assert.ok(restored.instance.camera.snapshotPose());
+});
+
+test('failed recovery routes to launcher and explains both failures', async t => {
+  const f = await fixture(t, { open: () => { throw new Error('native open failed'); } });
+  const page = f.mount(); await page.mount();
+  page.instance.onKeyDown(event()); await turn();
+  assert.deepEqual(f.opens(), [CHILD, MAIN]);
+  assert.equal(f.route, '/StartScreen');
+  assert.match(f.alerts[0], /恢复来源世界也失败/);
+});
+
+test('global Escape during native open invalidates recovery and late mode changes', async t => {
+  const opened = deferred();
+  const f = await fixture(t, { open: () => opened.promise });
+  const page = f.mount(); await page.mount();
+  page.instance.onKeyDown(event()); await turn();
+  launcher.cancelPendingProjectOpen(); // App.vue owns Escape after source-page removal.
+  opened.reject(new Error('late failure')); await turn();
+  assert.deepEqual(f.opens(), [CHILD]);
+  assert.deepEqual(f.alerts, []);
+  assert.notEqual(worldMode.worldModeState.status, 'ready');
+});
+
+
+test('Escape saves the final moved player once; reopening restores position and facing', async t => {
+  const f = await fixture(t); let page = f.mount(); await page.mount();
+  page.instance.onKeyDown(event({ code: 'KeyD' })); f.step();
+  const moved = page.instance.camera.snapshotPlayer();
+  assert.ok(moved.position[0] > 0);
+  assert.equal(f.calls.filter(c => c[0] === 'playerSave').length, 0);
+  await page.instance.exitStory();
+  assert.equal(f.route, '/StartScreen'); assert.equal(f.frames.size, 0);
+  assert.equal(f.calls.filter(c => c[0] === 'playerSave').length, 1);
+  page.unmount(); await worldMode.worldModeService.resolve(MAIN, { force: true });
+  page = f.mount(); await page.mount();
+  assert.deepEqual(page.instance.camera.snapshotPlayer().position, moved.position);
+  assert.deepEqual(page.instance.camera.snapshotPlayer().rotation, moved.rotation);
+  assert.ok(page.instance.camera.snapshotPose().camera.position[0] < moved.position[0]);
+  assert.equal(f.calls.filter(c => c[0] === 'playerSave').length, 1);
+});
+
+test('failed exit save keeps the route and supports a successful retry', async t => {
+  let fail = true;
+  const f = await fixture(t, { save: async () => { if (fail) throw new Error('disk is full'); } });
+  const page = f.mount(); await page.mount();
+  page.instance.onKeyDown(event({ code: 'KeyW' })); f.step();
+  await page.instance.exitStory();
+  assert.equal(f.route, '/'); assert.deepEqual(f.opens(), []);
+  assert.deepEqual(f.alerts, ['disk is full']); assert.equal(f.frames.size, 0);
+  fail = false; await page.instance.exitStory();
+  assert.equal(f.route, '/StartScreen'); assert.equal(f.calls.filter(c => c[0] === 'playerSave').length, 2);
+});
+
+test('canonical open waits for the old player save; later selections supersede earlier ones', async t => {
+  const saved = deferred();
+  const f = await fixture(t, { save: () => saved.promise }); const page = f.mount(); await page.mount();
+  page.instance.onKeyDown(event({ code: 'KeyD' })); f.step();
+  const stale = [...f.frames.values()][0];
+  const first = launcher.projectLauncherService.openProject(CHILD); await turn();
+  const second = launcher.projectLauncherService.openProject(MAIN); await turn();
+  assert.deepEqual(f.opens(), []); assert.equal(f.frames.size, 0);
+  const count = f.calls.length; stale(performance.now() + 100); assert.equal(f.calls.length, count);
+  saved.resolve(); assert.equal((await first).status, 'superseded'); await second;
+  assert.deepEqual(f.opens(), [MAIN]);
+  assert.equal(f.calls.filter(c => c[0] === 'playerSave').length, 1);
+});
+
+test('canonical open cannot replace a scene after save failure; retry retains the old pose', async t => {
+  let fail = true;
+  const f = await fixture(t, { save: async () => { if (fail) throw new Error('cannot write scene'); } });
+  const page = f.mount(); await page.mount(); page.instance.onKeyDown(event({ code: 'KeyW' })); f.step();
+  await assert.rejects(launcher.projectLauncherService.openProject(CHILD), /cannot write scene/);
+  assert.deepEqual(f.opens(), []);
+  fail = false; await launcher.projectLauncherService.openProject(CHILD);
+  assert.deepEqual(f.opens(), [CHILD]);
+  assert.equal(f.calls.filter(c => c[0] === 'playerSave').length, 2);
+});
+
+test('a timed-out save blocks movement and replacement until its real acknowledgement', async t => {
+  const saved = deferred();
+  const f = await fixture(t, { save: () => saved.promise }); const page = f.mount(); await page.mount();
+  page.instance.onKeyDown(event({ code: 'KeyW' })); f.step();
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const leaving = page.instance.exitStory(); await turn();
+  t.mock.timers.tick(30_001); await leaving;
+  assert.equal(f.route, '/'); assert.match(f.alerts[0], /超时/);
+  page.instance.onKeyDown(event({ code: 'KeyW' })); assert.equal(f.frames.size, 0);
+  const opening = launcher.projectLauncherService.openProject(CHILD); await turn();
+  assert.deepEqual(f.opens(), []);
+  saved.resolve(); await opening;
+  assert.deepEqual(f.opens(), [CHILD]);
+  assert.equal(f.calls.filter(c => c[0] === 'playerSave').length, 1);
+});
+
+test('world replacement drains pending initialization and never binds its late result', async t => {
+  const init = deferred(); const f = await fixture(t, { init: () => init.promise });
+  const page = f.mount(); const mounting = page.mount();
+  const opening = launcher.projectLauncherService.openProject(CHILD); await turn();
+  assert.deepEqual(f.opens(), []);
+  init.resolve({ path: 'scene.ini' }); await mounting; await opening;
+  assert.deepEqual(f.opens(), [CHILD]);
+  assert.ok(!f.calls.some(c => ['setCameraViewport', 'actorTransform', 'playerSave'].includes(c[0])));
+});
+
+
+test('Escape fences a late O result even when the exit save fails', async t => {
+  const prep = deferred();
+  const f = await fixture(t, { prepare: () => prep.promise });
+  const page = f.mount(); await page.mount();
+  page.instance.onKeyDown(event()); await turn();
+  // Simulate a failed finalizer, independently of the already saved O snapshot.
+  const failed = t.mock.method(page.instance.saveRegistration, 'flush', async () => { throw new Error('exit save failed'); });
+  await page.instance.exitStory();
+  assert.equal(f.route, '/');
+  prep.resolve({ status: 'ok', navigation: { source: MAIN, target: CHILD, direction: 'enter', mode: 'story' } });
+  await turn();
+  assert.deepEqual(f.opens(), []);
+  assert.deepEqual(f.alerts, ['exit save failed']);
+  assert.equal(page.instance.navigation.busy, false);
+  failed.mock.restore();
+});

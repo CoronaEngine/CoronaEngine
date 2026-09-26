@@ -4,7 +4,7 @@ import { nextTick } from 'vue';
 import { appService } from './appService.js';
 import { editorApi } from '../api/editorApi.js';
 import { worldModeService, worldModeState } from './worldModeService.js';
-import { drainWorldSession, withWorldTimeout } from './worldSessionLifecycle.js';
+import { drainWorldSession, flushWorldSessionSaves, withWorldTimeout } from './worldSessionLifecycle.js';
 import lanchat from '../stores/lanchat.js';
 
 let projectOpenQueue = Promise.resolve();
@@ -14,6 +14,9 @@ const pendingWorldSaves = new Set();
 const superseded = () => ({ ok: false, status: 'superseded' });
 export const projectOpenResult = (result) => result?.data ?? result;
 export const isProjectOpenSuperseded = (result) => projectOpenResult(result)?.status === 'superseded';
+
+// Consumers may recover a failed open only while its selection still owns the launcher.
+export const getProjectSelectionVersion = () => selectionVersion;
 
 export function cancelPendingProjectOpen() {
   ++selectionVersion;
@@ -107,6 +110,7 @@ export const projectLauncherService = {
           await appService.setEditorUiEnabled(false);
         }
         await drainWorldSession();
+        await flushWorldSessionSaves();
         await withWorldTimeout(lanchat.finishWorldSession(), '关闭旧世界聊天室');
         if (runtimeCleanupRequired) {
           await withWorldTimeout(stopWorldRuntimeBeforeOpen(editorApi.scratch), '停止旧世界运行');

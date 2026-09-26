@@ -5,6 +5,12 @@ import { ref, reactive } from 'vue';
 import { babelParse, compileScript, parse } from 'vue/compiler-sfc';
 import { cameraMovementKey, createViewportCameraController } from '../../src/utils/viewportCameraController.js';
 import { createStoryCameraController } from '../../src/utils/viewportStoryCamera.js';
+import { createStoryNavigationController } from '../../../../game/frontend/storyNavigation.mjs';
+import { createPlayerController } from '../../../../game/frontend/playerController.mjs';
+import { createPlayerSave } from '../../../../game/frontend/playerSave.mjs';
+import { ensureStoryCharacters } from '../../../../game/frontend/storyActors.mjs';
+import { sceneFixture } from '../../../../game/tests/frontend/fixtures.mjs';
+import { registerWorldSessionSave, flushWorldSessionSaves, trackWorldSessionWork } from '../../src/services/worldSessionLifecycle.js';
 
 const source = fs.readFileSync(new URL('../../src/views/layout/MainPage.vue', import.meta.url), 'utf8');
 const { descriptor } = parse(source);
@@ -184,17 +190,24 @@ async function mountStory(t, { pendingInit = null, sceneSnapshot = { data: snaps
   });
   const document = { ...dom(), hasFocus: () => true, hidden: false };
   const worldModeState = { mode: 'story', status: 'ready', revision: 1, projectPath: 'world' };
-  const window = { ...dom(), devicePixelRatio: 1, alert: message => calls.push(['alert', message]),
-    coronaBridge: Object.fromEntries(['cameraMove', 'setCameraViewport', 'setViewportGizmoTarget', 'setViewportUiMode', 'setViewportSystemCursorHidden']
+  const window = { ...dom(), devicePixelRatio: 1, location: { href: 'file:///D:/engine/editor/Frontend/dist/index.html' }, alert: message => calls.push(['alert', message]),
+    coronaBridge: Object.fromEntries(['actorTransform', 'cameraMove', 'setCameraViewport', 'setViewportGizmoTarget', 'setViewportUiMode', 'setViewportSystemCursorHidden']
       .map(name => [name, (...args) => { calls.push([name, ...args]); return true; }])) };
   const component = makeStory({
     vue: { ref, onMounted: fn => mounted.push(fn), onUnmounted: fn => unmounted.push(fn) },
-    'vue-router': { useRouter: () => ({ replace: async path => routes.push(path) }) },
+    'vue-router': { onBeforeRouteLeave() {}, useRouter: () => ({ replace: async path => routes.push(path) }) },
     '@/api/editorApi.js': { editorApi: {
       main: { onInit: async () => pendingInit ? pendingInit.promise : ({ scenes: [{ path: 'scene.ini' }] }) },
-      scene: { getSnapshot: async () => sceneSnapshot },
+      scene: { getSnapshot: async () => ({ actors: sceneFixture().actors, ...(sceneSnapshot.data ?? sceneSnapshot) }),
+        setActorTransform: async () => { calls.push(['playerSave']); return { status: 'success' }; } },
     } },
     '@/services/worldModeService.js': { worldModeState },
+    '@/services/projectLauncherService.js': { projectLauncherService: {}, cancelPendingProjectOpen() {}, getProjectSelectionVersion: () => 0 },
+    '@/services/worldSessionLifecycle.js': { registerWorldSessionSave, trackWorldSessionWork, notifyWorldError: error => window.alert(error.message) },
+    '../../../../../game/frontend/storyNavigation.mjs': { createStoryNavigationController },
+    '../../../../../game/frontend/storyActors.mjs': { ensureStoryCharacters },
+    '../../../../../game/frontend/playerController.mjs': { createPlayerController },
+    '../../../../../game/frontend/playerSave.mjs': { createPlayerSave },
     '@/utils/viewportStoryCamera.js': { createStoryCameraController: options => createStoryCameraController({
       ...options, now: () => time,
       requestFrame: callback => { frames.set(++id, callback); return id; }, cancelFrame: id => frames.delete(id),
@@ -204,16 +217,16 @@ async function mountStory(t, { pendingInit = null, sceneSnapshot = { data: snaps
   page.surface.value = { focus() {}, getBoundingClientRect: () => ({ left: 0, top: 0, width: 800, height: 600 }) };
   const mounting = Promise.all(mounted.map(fn => fn()));
   if (!pendingInit) await mounting;
-  const cleanup = () => { for (const fn of unmounted) fn(); assert.equal(listeners.size, 0); assert.equal(frames.size, 0); };
+  const cleanup = async () => { for (const fn of unmounted) fn(); await flushWorldSessionSaves(); assert.equal(listeners.size, 0); assert.equal(frames.size, 0); };
   t.after(cleanup);
   return { page, calls, routes, frames, document, worldModeState, mounting,
     step(next) { time = next; const callbacks = [...frames.values()]; frames.clear(); for (const cb of callbacks) cb(time); } };
 }
 
-test('real story page only binds a viewport and stops on blur, hidden state, exit and revision changes', async t => {
+test('real story page binds player follow and stops on blur, hidden state, exit and revision changes', async t => {
   const h = await mountStory(t), p = h.page;
-  p.onKeyDown(input({ code: 'ArrowRight' })); h.step(50);
-  assert.ok(h.calls.some(call => call[0] === 'cameraMove' && call[3][0] > 0));
+  p.onKeyDown(input({ code: 'KeyD' })); h.step(50);
+  assert.ok(h.calls.some(call => call[0] === 'actorTransform' && call[2] === 0 && call[3][0] > 0));
   p.onBlur(); assert.equal(h.frames.size, 0);
   const count = h.calls.length;
   p.camera.wheel(input({ deltaY: -1 })); h.step(100); assert.equal(h.calls.length, count);
@@ -223,14 +236,16 @@ test('real story page only binds a viewport and stops on blur, hidden state, exi
   h.worldModeState.revision++; h.step(150); assert.equal(h.calls.length, count);
   h.worldModeState.revision--;
   p.onKeyDown(input({ code: 'Escape', stopPropagation() {} }));
+  await new Promise(resolve => setImmediate(resolve));
   assert.deepEqual(h.routes, ['/StartScreen']);
-  p.camera.wheel(input({ deltaY: -1 })); h.step(200); assert.equal(h.calls.length, count);
+  p.camera.wheel(input({ deltaY: -1 })); h.step(200); assert.equal(h.calls.length, count + 1); // One final persisted player pose.
 });
 
 test('story Escape works during loading and late initialization cannot bind a camera', async t => {
   const pending = deferred(), h = await mountStory(t, { pendingInit: pending });
   h.page.onKeyDown(input({ code: 'Escape', stopPropagation() {} }));
   pending.resolve({ scenes: [{ path: 'scene.ini' }] }); await h.mounting;
+  await new Promise(resolve => setImmediate(resolve));
   assert.deepEqual(h.routes, ['/StartScreen']); assert.equal(h.calls.length, 0);
 });
 
