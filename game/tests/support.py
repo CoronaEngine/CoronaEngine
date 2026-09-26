@@ -5,8 +5,7 @@
 import unittest
 
 from game import GameSession, Position, Result
-from game.core.events import EventPayload, GameEvent
-from game.core.types import distance
+from game.game_types import EventPayload, GameEvent, distance
 
 
 def count_events(events: tuple[GameEvent, ...], kind: type[EventPayload]) -> int:

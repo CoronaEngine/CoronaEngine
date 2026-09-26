@@ -6,13 +6,13 @@ from copy import deepcopy
 from dataclasses import replace
 from random import Random
 
-from ..core.config import GameConfig
-from ..core.state import BossState
-from ..core.types import (
-    NS_PER_SECOND, BossPhase, Error, Position, Result, horizontal_distance, valid_delta_ns,
+from .game_config import GameConfig
+from .game_types import (
+    NS_PER_SECOND, BossPhase, BossState, Error, Position, Result,
+    horizontal_distance, valid_delta_ns,
 )
-from ..world.safe_zone import SafeZone
-from ..world.spawn import sample_boss_spawn
+from .safe_zone import SafeZone
+from .spawn_utils import sample_boss_spawn
 
 
 class BossSystem:

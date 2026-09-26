@@ -2,20 +2,15 @@
 统一导出会话、配置、身份类型、状态和事件，供调用方通过 game 包访问。
 导入时不创建会话、不启动线程，也不调用引擎接口。"""
 
-from .core.config import GameConfig
-from .core.events import (
-    BossChaseStarted, BossDefeated, BossSpawned, CreativeWorldCreated, DayNightChanged,
-    DropCollected, DropSpawned, EventPayload, GameEvent, ItemGranted, MerchantDeparted,
-    MerchantSpawned, WorldChanged,
-)
-from .core.session import GameSession
-from .core.state import (
-    BossState, ClockState, ClockTransition, CreativeWorldState, DropState, InventoryState,
-    MerchantState, WorldNavigation, WorldOrb,
-)
-from .core.types import (
-    BossPhase, DayPhase, DropId, Error, ItemKind, MerchantPhase, OrbId, Position, Result,
-    WorldId, WorldKind,
+from .game_config import GameConfig
+from .game_session import GameSession
+from .game_types import (
+    BossChaseStarted, BossDefeated, BossPhase, BossSpawned, BossState,
+    ClockState, ClockTransition, CreativeWorldCreated, CreativeWorldState,
+    DayNightChanged, DayPhase, DropCollected, DropId, DropSpawned, DropState,
+    Error, EventPayload, GameEvent, InventoryState, ItemGranted, ItemKind,
+    MerchantDeparted, MerchantPhase, MerchantSpawned, MerchantState,
+    OrbId, Position, Result, WorldChanged, WorldId, WorldKind, WorldNavigation, WorldOrb,
 )
 
 __all__ = [

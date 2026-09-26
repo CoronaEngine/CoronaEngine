@@ -5,7 +5,7 @@
 from dataclasses import dataclass
 import math
 
-from .types import MAX_TIME_NS, NS_PER_SECOND, finite_number, valid_position
+from .game_types import MAX_TIME_NS, NS_PER_SECOND, finite_number, valid_position
 
 
 @dataclass(frozen=True, slots=True)

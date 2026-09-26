@@ -7,9 +7,11 @@ from copy import deepcopy
 from dataclasses import replace
 from types import MappingProxyType
 
-from ..core.config import GameConfig
-from ..core.state import CreativeWorldState, WorldNavigation, WorldOrb
-from ..core.types import Error, OrbId, Position, Result, WorldId, valid_id
+from .game_config import GameConfig
+from .game_types import (
+    CreativeWorldState, Error, OrbId, Position, Result, WorldId, WorldNavigation,
+    WorldOrb, valid_id,
+)
 
 
 class WorldOrbSystem:

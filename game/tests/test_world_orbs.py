@@ -6,9 +6,9 @@ from game import (
     CreativeWorldCreated, DropId, Error, GameSession, ItemKind, MerchantPhase,
     OrbId, Position, WorldChanged, WorldId, WorldKind, WorldOrb,
 )
-from game.core.types import NS_PER_SECOND as S
-from game.world.orbs import WorldOrbSystem
-from ..support import GameTestCase, count_events, snapshot
+from game.game_types import NS_PER_SECOND as S
+from game.world_orb_system import WorldOrbSystem
+from .support import GameTestCase, count_events, snapshot
 
 
 class WorldOrbTests(GameTestCase):

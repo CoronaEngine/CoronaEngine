@@ -7,26 +7,20 @@ from copy import deepcopy
 from dataclasses import replace
 from random import Random
 
-from .config import GameConfig
-from .events import (
-    BossChaseStarted, BossDefeated, BossSpawned, CreativeWorldCreated, DayNightChanged,
-    DropCollected, DropSpawned, EventPayload, GameEvent, ItemGranted, MerchantDeparted,
-    MerchantSpawned, WorldChanged,
+from .boss_system import BossSystem
+from .game_config import GameConfig
+from .game_types import (
+    BossChaseStarted, BossDefeated, BossSpawned, BossState, ClockState, ClockTransition,
+    CreativeWorldCreated, CreativeWorldState, DayNightChanged, DayPhase, DropCollected,
+    DropId, DropSpawned, DropState, Error, EventPayload, GameEvent, InventoryState,
+    ItemGranted, ItemKind, MerchantDeparted, MerchantSpawned, MerchantState, OrbId,
+    Position, Result, WorldChanged, WorldId, WorldNavigation, distance, seconds_to_ns, valid_id,
 )
-from .state import (
-    BossState, ClockState, ClockTransition, CreativeWorldState, DropState, InventoryState,
-    MerchantState, WorldNavigation,
-)
-from .types import (
-    DayPhase, DropId, Error, ItemKind, OrbId, Position, Result, WorldId,
-    distance, seconds_to_ns, valid_id,
-)
-from ..systems.boss import BossSystem
-from ..systems.inventory import Inventory
-from ..systems.merchant import MerchantSystem
-from ..world.clock import WorldClock
-from ..world.orbs import WorldOrbSystem
-from ..world.safe_zone import SafeZone
+from .inventory import Inventory
+from .merchant_system import MerchantSystem
+from .safe_zone import SafeZone
+from .world_clock import WorldClock
+from .world_orb_system import WorldOrbSystem
 
 
 class GameSession:

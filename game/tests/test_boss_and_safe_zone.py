@@ -1,14 +1,20 @@
-"""验证 Boss 生命周期、追击、安全区交互和击败掉落。"""
+"""验证 Boss 生命周期、生成位置和安全区阻挡。
+检查一次生成、白天保留、按时追击、击败掉落及不再生成的规则。
+通过多方向线段和多组随机种子，验证水平保护、切线阻挡、边界停留与离开后的追击。"""
+
+from random import Random
 
 from game import (
     BossChaseStarted, BossDefeated, BossPhase, BossSpawned, DropSpawned,
     Error, GameSession, ItemKind, Position, WorldId,
 )
-from game.core.types import NS_PER_SECOND as S, horizontal_distance
-from ..support import GameTestCase, count_events
+from game.game_types import NS_PER_SECOND as S, horizontal_distance
+from game.safe_zone import SafeZone
+from game.spawn_utils import sample_boss_spawn, sample_ring
+from .support import GameTestCase, count_events
 
 
-class BossTests(GameTestCase):
+class BossAndSafeZoneTests(GameTestCase):
     def test_boss_spawns_once_and_survives_daytime(self) -> None:
         session = GameSession(seed=42)
         self.assertEqual(session.notify_boss_defeated().error, Error.BOSS_NOT_ALIVE)
@@ -33,6 +39,30 @@ class BossTests(GameTestCase):
         self.assertEqual(count_events(session.events, BossSpawned), 1)
         self.assertEqual(count_events(session.events, BossChaseStarted), 1)
 
+    def test_safe_zone_uses_fixed_horizontal_center(self) -> None:
+        center = Position(17, 99, -25)
+        zone = SafeZone(center)
+        self.assertTrue(zone.contains(Position(17, -100000, -25)))
+        self.assertTrue(zone.contains(Position(27, 1e8, -25)))
+        self.assertFalse(zone.contains(Position(27.01, 99, -25)))
+        session = GameSession(spawn=center)
+        self.assert_ok(session.update_player_position(session.story_world, Position(100, 200, 300)))
+        self.assertEqual(session.safe_zone.center, center)
+
+    def test_safe_zone_blocks_entire_segment_and_tunneling(self) -> None:
+        zone = SafeZone(Position())
+        blocked = zone.constrain_movement(Position(-20, 5, 0), Position(20, 5, 0))
+        self.assertLess(blocked.x, -10)
+        self.assertFalse(zone.contains(blocked))
+        self.assertAlmostEqual(blocked.y, 5)
+        self.assert_position_near(zone.constrain_movement(blocked, Position(20, 5, 0)), blocked)
+        self.assertEqual(zone.constrain_movement(Position(-20, 0, 11), Position(20, 0, 11)),
+                         Position(20, 0, 11))
+        self.assertEqual(zone.constrain_movement(blocked, Position(-40, 5, 0)), Position(-40, 5, 0))
+        tangent = zone.constrain_movement(Position(-20, 0, 10), Position(20, 0, 10))
+        self.assertLess(tangent.x, 0)
+        self.assertFalse(zone.contains(tangent))
+
     def test_boss_waits_outside_safe_zone_then_resumes(self) -> None:
         session = GameSession(seed=7)
         self.assert_ok(session.advance_seconds(580))
@@ -46,6 +76,15 @@ class BossTests(GameTestCase):
         self.assert_ok(session.advance_seconds(1))
         self.assertAlmostEqual(horizontal_distance(waiting, session.boss.position), 3)
         self.assertEqual(session.boss.position.y, waiting.y)
+
+    def test_spawn_remains_outside_zone_for_many_seeds_and_players(self) -> None:
+        zone = SafeZone(Position())
+        for seed in range(300):
+            player = Position(seed % 90 - 45, 123, seed % 30 - 15)
+            spawn = sample_boss_spawn(player, 25, 40, zone, Random(seed))
+            self.assertTrue(zone.allows_spawn(spawn))
+            self.assertTrue(25 - 1e-10 <= horizontal_distance(player, spawn) <= 40 + 1e-10)
+            self.assertEqual(spawn.y, player.y)
 
     def test_defeat_drops_exactly_two_items_once_and_prevents_respawn(self) -> None:
         session = GameSession(seed=9)
@@ -85,3 +124,26 @@ class BossTests(GameTestCase):
         self.assertGreater(stopped.x * spawn.x + stopped.z * spawn.z, 0)
         self.assertLess(horizontal_distance(stopped, Position()), 10.001)
         self.assertEqual(session.boss.phase, BossPhase.CHASING)
+
+    def test_safe_zone_clipped_segments_remain_outside_for_many_directions(self) -> None:
+        zone = SafeZone(Position(3, 7, -9))
+        random = Random(33)
+        for _ in range(1000):
+            start = sample_ring(zone.center, 11, 100, random)
+            desired = sample_ring(zone.center, 0, 100, random)
+            clipped = zone.constrain_movement(start, desired)
+            self.assertFalse(zone.contains(clipped))
+            dx, dz = clipped.x - start.x, clipped.z - start.z
+            length_squared = dx * dx + dz * dz
+            t = 0.0
+            if length_squared:
+                t = max(0, min(1, ((zone.center.x - start.x) * dx
+                                   + (zone.center.z - start.z) * dz) / length_squared))
+            self.assertFalse(zone.contains(Position(start.x + t * dx, start.y, start.z + t * dz)))
+
+    def test_boss_spawn_fallback_stays_in_ring_with_extremely_narrow_legal_band(self) -> None:
+        zone = SafeZone(Position())
+        maximum = zone.exclusion_radius + 1e-8
+        spawn = sample_boss_spawn(Position(), 0.1, maximum, zone, Random(3))
+        self.assertTrue(zone.allows_spawn(spawn))
+        self.assertTrue(0.1 <= horizontal_distance(Position(), spawn) <= maximum + 1e-10)

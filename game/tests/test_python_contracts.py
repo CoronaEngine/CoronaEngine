@@ -9,17 +9,15 @@ import re
 import subprocess
 import sys
 
-import game
-
 from game import (
     BossPhase, CreativeWorldCreated, DayNightChanged, DropCollected, DropId, DropSpawned,
     Error, GameConfig, GameSession, ItemGranted, ItemKind, OrbId, Position, WorldChanged, WorldId,
 )
-from game.core.types import NS_PER_SECOND as S
-from ..support import GameTestCase, count_events, snapshot
+from game.game_types import NS_PER_SECOND as S
+from .support import GameTestCase, count_events, snapshot
 
 
-class ContractTests(GameTestCase):
+class PythonContractTests(GameTestCase):
     def test_id_types_are_distinct_and_malformed_ids_do_not_mutate(self) -> None:
         self.assertEqual(len({WorldId(1), OrbId(1), DropId(1)}), 3)
         session = GameSession()
@@ -239,13 +237,13 @@ assert threading.enumerate() == before
 assert random.getstate() == state
 assert not any(isinstance(v, game.GameSession) for v in vars(game).values())
 '''
-        result = subprocess.run([sys.executable, '-c', code], cwd=Path(game.__file__).resolve().parent.parent,
+        result = subprocess.run([sys.executable, '-c', code], cwd=Path(__file__).resolve().parents[2],
                                 capture_output=True, text=True, timeout=15)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout, '')
 
     def test_readme_python_examples_run(self) -> None:
-        readme = Path(game.__file__).resolve().parent / 'README.md'
+        readme = Path(__file__).resolve().parents[1] / 'README.md'
         blocks = re.findall(r'```python\n(.*?)```', readme.read_text(encoding='utf-8-sig'), re.DOTALL)
         self.assertGreater(len(blocks), 0)
         for code in blocks:
