@@ -5,6 +5,7 @@ import test from 'node:test';
 import { createPlayerController } from '../../frontend/playerController.mjs';
 import { createPlayerSave } from '../../frontend/playerSave.mjs';
 import { ensureStoryCharacters } from '../../frontend/storyActors.mjs';
+import * as gameplayModule from '../../frontend/storyGameplay.mjs';
 import { STORY_CHARACTERS } from '../../frontend/storyCharacters.mjs';
 import { actorFixture } from './fixtures.mjs';
 import { createStoryNavigationController } from '../../frontend/storyNavigation.mjs';
@@ -38,6 +39,7 @@ async function fixture(t, options = {}) {
   const globals = ['window', 'document', 'CustomEvent', 'ResizeObserver', 'requestAnimationFrame', 'cancelAnimationFrame'];
   const previous = Object.fromEntries(globals.map(key => [key, globalThis[key]]));
   const calls = [], alerts = [], frames = new Map(), pages = [];
+  let frameTime = performance.now();
   let activePath = MAIN, route = '/', frameId = 0, page = null, handle = 10;
   const poses = new Map([[MAIN, pose([1, 2, 3])], [CHILD, pose([5, 6, 7])]]);
   const actors = new Map([MAIN, CHILD].map(path => [path, STORY_CHARACTERS.map(character => actorFixture(character))]));
@@ -81,7 +83,19 @@ async function fixture(t, options = {}) {
     poses.set(activePath, { name, ...structuredClone(camera) });
     return { data: { status: 'success' } };
   });
+  t.mock.method(editorApi.sceneTools, 'setActorState', async (scene, guid, state) => {
+    const actor = actors.get(activePath).find(item => item.actor_guid === guid);
+    Object.assign(actor, state);
+    return { status: 'success', actor: structuredClone(actor) };
+  });
   t.mock.method(editorApi.scratch, 'sendKeyEvent', async (key, mods, displayKey) => {
+    if (key === gameplayModule.GAMEPLAY_KEY) {
+      if (options.gameplay) return options.gameplay(JSON.parse(displayKey));
+      return { status: 'ok', role: activePath === MAIN ? 'main' : 'child',
+        state: { version: 1, revision: 0, boss: { hp: 200 }, drop: null, inventory: { worldFragment: 0 } },
+        config: { playerHp: 100, playerMp: 100, bossHp: 200, damage: 20, cooldownMs: 400,
+          bossBarRadius: 10, meleeRange: 2.5, meleeHalfAngle: Math.PI / 3, pickupRange: 2 } };
+    }
     calls.push(['key', key, mods, displayKey]);
     if (options.prepare) return options.prepare(key);
     if ((activePath === CHILD && key === 'KeyO') || (activePath === MAIN && key === 'KeyP')) return { status: 'noop' };
@@ -116,6 +130,8 @@ async function fixture(t, options = {}) {
       '../../../../../game/frontend/storyActors.mjs': { ensureStoryCharacters },
       '../../../../../game/frontend/playerController.mjs': { createPlayerController },
       '../../../../../game/frontend/playerSave.mjs': { createPlayerSave },
+      '../../../../../game/frontend/storyGameplay.mjs': gameplayModule,
+      '../../../../../game/frontend/storyCharacters.mjs': { STORY_CHARACTERS },
     });
     const instance = component.setup({}, { expose() {} });
     instance.surface.value = { focus() {}, getBoundingClientRect: () => ({ left: 0, top: 0, width: 800, height: 600 }) };
@@ -133,7 +149,8 @@ async function fixture(t, options = {}) {
     Object.assign(globalThis, previous);
   });
   return { mount, calls, alerts, frames, poses, actors, get route() { return route; },
-    step() { const pending = [...frames.values()]; frames.clear(); pending.forEach(fn => fn(performance.now() + 50)); },
+    step(ms = 50) { frameTime = Math.max(frameTime, performance.now()) + ms;
+      const pending = [...frames.values()]; frames.clear(); pending.forEach(fn => fn(frameTime)); },
     opens: () => calls.filter(call => call[0] === 'nativeOpen').map(call => call[1]) };
 }
 
@@ -373,4 +390,70 @@ test('Escape fences a late O result even when the exit save fails', async t => {
   assert.deepEqual(f.alerts, ['exit save failed']);
   assert.equal(page.instance.navigation.busy, false);
   failed.mock.restore();
+});
+
+test('Tab captures gameplay, repeated Tab/F are ignored and Escape closes inventory first', async t => {
+  const f = await fixture(t); const page = f.mount(); await page.mount();
+  page.instance.camera.pointerMove(event({ clientX: 799, clientY: 300 }));
+  page.instance.onKeyDown(event({ code: 'Tab' }));
+  assert.equal(page.instance.inventoryOpen.value, true); assert.equal(f.frames.size, 0);
+  page.instance.onKeyDown(event({ code: 'Tab', repeat: true }));
+  assert.equal(page.instance.inventoryOpen.value, true);
+  const before = page.instance.camera.snapshotPose();
+  page.instance.onKeyDown(event({ code: 'KeyW' }));
+  page.instance.camera.pointerMove(event({ clientX: 600, clientY: 300 }));
+  page.instance.onPointerDown(event({ button: 0 }));
+  page.instance.onKeyDown(event()); page.instance.onKeyDown(event({ code: 'KeyF' }));
+  await turn();
+  assert.deepEqual(page.instance.camera.snapshotPose(), before); assert.deepEqual(f.opens(), []);
+  assert.equal(page.instance.actionBusy.value, false);
+  page.instance.onKeyDown(event({ code: 'Escape' })); await turn();
+  assert.equal(page.instance.inventoryOpen.value, false); assert.equal(f.route, '/');
+  page.instance.onKeyDown(event({ code: 'KeyF', repeat: true }));
+  assert.equal(page.instance.actionBusy.value, false);
+  page.instance.onKeyDown(event({ code: 'Escape' })); await turn();
+  assert.equal(f.route, '/StartScreen');
+});
+
+test('blur, hidden page and inventory close reseed mouse without a jump', async t => {
+  const f = await fixture(t); const page = f.mount(); await page.mount();
+  page.instance.camera.pointerMove(event({ clientX: 799, clientY: 300 })); f.step();
+  page.instance.onBlur(); assert.equal(f.frames.size, 0);
+  const before = page.instance.camera.snapshotPose();
+  page.instance.onFocus();
+  page.instance.camera.pointerMove(event({ clientX: 400, clientY: 300 })); f.step();
+  assert.deepEqual(page.instance.camera.snapshotPose(), before);
+  page.instance.camera.pointerMove(event({ clientX: 799, clientY: 300 }));
+  document.hidden = true; page.instance.onVisibilityChange(); assert.equal(f.frames.size, 0);
+  document.hidden = false; page.instance.onFocus();
+});
+
+test('unacknowledged combat blocks native replacement; retry does not change operation identity', async t => {
+  let fail = true; const commands = [];
+  const state = { version: 1, revision: 0, boss: { hp: 200 }, drop: null, inventory: { worldFragment: 0 } };
+  const config = { playerHp: 100, playerMp: 100, bossHp: 200, damage: 20, cooldownMs: 400,
+    bossBarRadius: 10, meleeRange: 2.5, meleeHalfAngle: Math.PI / 3, pickupRange: 2 };
+  const f = await fixture(t, { gameplay: async request => {
+    if (request.action !== 'load') {
+      commands.push(request);
+      if (fail) throw new Error('combat disk full');
+      state.boss.hp = 180; state.revision = 1;
+    }
+    return { status: 'ok', role: 'main', state: structuredClone(state), config };
+  } });
+  const page = f.mount(); await page.mount();
+  page.instance.onKeyDown(event({ code: 'KeyW' }));
+  for (let i = 0; i < 60; i++) f.step(50);
+  page.instance.camera.keyUp(event({ code: 'KeyW' }));
+  assert.equal(page.instance.bossNearby.value, true);
+  page.instance.onPointerDown(event({ button: 0 })); await turn();
+  assert.match(page.instance.gameplayError.value, /combat disk full/);
+  assert.equal(page.instance.gameplay.needsSave, true);
+  await assert.rejects(launcher.projectLauncherService.openProject(CHILD), /combat disk full/);
+  assert.deepEqual(f.opens(), []);
+  fail = false;
+  await launcher.projectLauncherService.openProject(CHILD);
+  assert.deepEqual(f.opens(), [CHILD]);
+  assert.equal(new Set(commands.map(c => c.operationId)).size, 1);
+  assert.ok(commands.every(c => c.projectPath === MAIN));
 });

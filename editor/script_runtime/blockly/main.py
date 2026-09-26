@@ -1949,6 +1949,11 @@ class ScratchTool:
     def key_event(cls, key: str, modifiers: str = "", display_key: str = "") -> dict:
         from script_runtime.engine import corona_engine as corona_engine_scratch
 
+        # Reserved domain RPC on the existing string bridge, never a Scratch key.
+        if key == "__corona_story_gameplay_v1__":
+            from game.runtime.story_gameplay import handle_gameplay_request
+
+            return handle_gameplay_request(display_key)
         mods = [m.strip() for m in modifiers.split(",") if m.strip()] if modifiers else []
         if key in ("KeyO", "KeyP", "o", "p", "O", "P"):
             from game.runtime.story_navigation import handle_story_key

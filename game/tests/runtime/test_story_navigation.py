@@ -119,3 +119,12 @@ class ScratchNavigationBridgeTests(unittest.TestCase):
         with patch.object(self.engine, 'handle_key_release') as release:
             self.assertEqual(self.tool.key_release('KeyP', 'P'), {'status': 'ok'})
             release.assert_called_once_with('KeyP', 'P')
+
+    def test_gameplay_rpc_is_not_forwarded_to_scratch_or_navigation(self):
+        from game.runtime import story_gameplay
+        response = {'status': 'ok', 'state': {}}
+        with patch.object(story_gameplay, 'handle_gameplay_request', return_value=response) as handler:
+            with patch.object(self.engine, 'handle_key_event') as scratch:
+                self.assertIs(self.tool.key_event(story_gameplay.REQUEST_KEY, '', '{"action":"load"}'), response)
+                handler.assert_called_once_with('{"action":"load"}')
+                scratch.assert_not_called()

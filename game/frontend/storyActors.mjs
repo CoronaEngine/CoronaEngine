@@ -1,3 +1,4 @@
+import { FRAGMENT, FRAGMENT_GUID } from './storyGameplay.mjs';
 import { STORY_CHARACTERS, PLAYER_GUID, unwrap, sceneSnapshot, resolveStoryAssetPath,
   characterTransform, rotatedBounds, hasUsableBounds } from './storyCharacters.mjs';
 
@@ -15,14 +16,31 @@ const sameVector = (a, b) => Array.isArray(a) && a.length === b.length
 
 /** All native mutations are awaited; the host registers this work before world replacement. */
 export async function ensureStoryCharacters({ api, sceneId, frontendUrl, isCurrent = () => true,
-  wait = ms => new Promise(resolve => setTimeout(resolve, ms)), renderAttempts = 120 }) {
+  wait = ms => new Promise(resolve => setTimeout(resolve, ms)), renderAttempts = 120,
+  gameplay = null, combatOnly = false, assertSource = async () => {} }) {
   const check = () => { if (!isCurrent()) throw canceled(); };
-  const call = async (operation, invoke) => { check(); const result = success(await invoke(), operation); check(); return result; };
+  const call = async (operation, invoke) => { check(); await assertSource(); check();
+    const result = success(await invoke(), operation); check(); return result; };
   check();
+  await assertSource();
   let snapshot = sceneSnapshot(await api.scene.getSnapshot(sceneId));
   check();
   const actors = new Map((snapshot?.actors || []).map(actor => [actor.actor_guid, actor]));
-  for (const character of STORY_CHARACTERS) {
+  const characters = STORY_CHARACTERS.filter(character => (!combatOnly || character.role === 'boss')
+    && (character.role !== 'boss' || !gameplay || (gameplay.role === 'main' && gameplay.state.boss.hp > 0)));
+  if (gameplay?.role === 'main' && gameplay.state.drop && !gameplay.state.drop.collected) {
+    characters.push({ ...FRAGMENT, x: gameplay.state.drop.position[0], z: gameplay.state.drop.position[2] });
+  }
+  if (gameplay) {
+    // Copied scenes can still contain a live boss/drop. Never resurrect them on reentry.
+    for (const guid of [STORY_CHARACTERS[1].guid, FRAGMENT_GUID]) {
+      const actor = actors.get(guid);
+      if (actor?.visible !== false && actor && !characters.some(character => character.guid === guid)) {
+        await call('隐藏已结束的战斗物体', () => api.sceneTools.setActorState(sceneId, guid, { visible: false }));
+      }
+    }
+  }
+  for (const character of characters) {
     check();
     let actor = actors.get(character.guid);
     const wasPresent = Boolean(actor);
@@ -54,6 +72,7 @@ export async function ensureStoryCharacters({ api, sceneId, frontendUrl, isCurre
         }
         await wait(100);
         check();
+        await assertSource();
         const refreshed = sceneSnapshot(await api.scene.getSnapshot(sceneId));
         check();
         actor = refreshed?.actors?.find(item => item.actor_guid === character.guid);
@@ -90,11 +109,12 @@ export async function ensureStoryCharacters({ api, sceneId, frontendUrl, isCurre
   // CPU import success does not guarantee a renderable GPU resource.
   for (let attempt = 0; attempt < renderAttempts; attempt++) {
     check();
+    await assertSource();
     snapshot = sceneSnapshot(await api.scene.getSnapshot(sceneId));
     check();
     const rendered = new Map((snapshot?.actors || []).map(actor => [actor.actor_guid, actor]));
     const pending = [];
-    for (const character of STORY_CHARACTERS) {
+    for (const character of characters) {
       const actor = rendered.get(character.guid);
       if (!loaded(actor) || actor.render_failed || ['Failed', 'Invalid'].includes(actor.gpu_build_state)) {
         throw new Error(`${character.name}渲染失败（${actor?.route || character.asset}）：${actor?.load_error?.message || '模型未就绪'}`);
@@ -104,6 +124,7 @@ export async function ensureStoryCharacters({ api, sceneId, frontendUrl, isCurre
       }
     }
     if (!pending.length) {
+      if (combatOnly) return { snapshot };
       const player = rendered.get(PLAYER_GUID);
       const bounds = rotatedBounds(player.local_aabb, player.geometry.rotation);
       const targetOffset = (bounds[1] + (bounds[4] - bounds[1]) * 0.75) * player.geometry.scale[1];

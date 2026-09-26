@@ -7,7 +7,7 @@ const vector = (value, fallback) => Array.isArray(value) && value.length === 3 &
 export function createStoryCameraController({
   getBridge, getRect, getPixelRatio = () => 1,
   isCurrent = () => true, isInputLocked = () => false,
-  requestFrame, cancelFrame, now, createControls = createViewportCameraController, onError,
+  requestFrame, cancelFrame, now, onPlayerChanged, createControls = createViewportCameraController, onError,
 }) {
   let camera = null, disposed = false;
   const current = () => !disposed && isCurrent();
@@ -19,7 +19,7 @@ export function createStoryCameraController({
       if (!current()) return;
       return getBridge()?.cameraMove?.(pose.handle, [...pose.position], [...pose.forward], [...pose.up], pose.fov) ?? false;
     },
-    isCurrent: current, isInputLocked, requestFrame, cancelFrame, now,
+    isCurrent: current, isInputLocked, requestFrame, cancelFrame, now, getRect, onPlayerChanged,
   });
   function syncViewport() {
     const rect = getRect();

@@ -1,3 +1,5 @@
+import * as gameplayModule from '../../../../game/frontend/storyGameplay.mjs';
+import { STORY_CHARACTERS } from '../../../../game/frontend/storyCharacters.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
@@ -197,17 +199,24 @@ async function mountStory(t, { pendingInit = null, sceneSnapshot = { data: snaps
     vue: { ref, onMounted: fn => mounted.push(fn), onUnmounted: fn => unmounted.push(fn) },
     'vue-router': { onBeforeRouteLeave() {}, useRouter: () => ({ replace: async path => routes.push(path) }) },
     '@/api/editorApi.js': { editorApi: {
+      projectSettings: { getActiveProjectInfo: async () => ({ mode: 'story', project_path: 'world' }) },
+      scratch: { sendKeyEvent: async () => ({ status: 'ok', role: 'main',
+        state: { revision: 0, boss: { hp: 200 }, drop: null, inventory: { worldFragment: 0 } },
+        config: { playerHp: 100, playerMp: 100, bossHp: 200, damage: 20, cooldownMs: 400,
+          bossBarRadius: 10, meleeRange: 2.5, meleeHalfAngle: Math.PI / 3, pickupRange: 2 } }) },
       main: { onInit: async () => pendingInit ? pendingInit.promise : ({ scenes: [{ path: 'scene.ini' }] }) },
       scene: { getSnapshot: async () => ({ actors: sceneFixture().actors, ...(sceneSnapshot.data ?? sceneSnapshot) }),
         setActorTransform: async () => { calls.push(['playerSave']); return { status: 'success' }; } },
     } },
-    '@/services/worldModeService.js': { worldModeState },
+    '@/services/worldModeService.js': { worldModeState, normalizeProjectPath: value => String(value).toLowerCase() },
     '@/services/projectLauncherService.js': { projectLauncherService: {}, cancelPendingProjectOpen() {}, getProjectSelectionVersion: () => 0 },
     '@/services/worldSessionLifecycle.js': { registerWorldSessionSave, trackWorldSessionWork, notifyWorldError: error => window.alert(error.message) },
     '../../../../../game/frontend/storyNavigation.mjs': { createStoryNavigationController },
     '../../../../../game/frontend/storyActors.mjs': { ensureStoryCharacters },
     '../../../../../game/frontend/playerController.mjs': { createPlayerController },
     '../../../../../game/frontend/playerSave.mjs': { createPlayerSave },
+    '../../../../../game/frontend/storyGameplay.mjs': gameplayModule,
+    '../../../../../game/frontend/storyCharacters.mjs': { STORY_CHARACTERS },
     '@/utils/viewportStoryCamera.js': { createStoryCameraController: options => createStoryCameraController({
       ...options, now: () => time,
       requestFrame: callback => { frames.set(++id, callback); return id; }, cancelFrame: id => frames.delete(id),

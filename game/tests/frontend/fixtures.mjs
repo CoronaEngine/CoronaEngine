@@ -1,3 +1,4 @@
+import { FRAGMENT } from '../../frontend/storyGameplay.mjs';
 import { STORY_CHARACTERS, characterTransform } from '../../frontend/storyCharacters.mjs';
 export const deferred = () => { let resolve, reject; const promise = new Promise((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; };
 export const url = 'file:///D:/Corona%20Engine/editor/Frontend/dist/index.html#/world';
@@ -30,7 +31,7 @@ export function apiFixture({ actors = [], wrapped = true } = {}) {
     sceneTools: {
       createActor: async (scene, path, type, data) => {
         calls.push(['create', data.actor_guid, path, type, data]);
-        const character = STORY_CHARACTERS.find(c => c.guid === data.actor_guid);
+        const character = [...STORY_CHARACTERS, FRAGMENT].find(c => c.guid === data.actor_guid);
         const actor = { ...actorFixture(character), route: `Assets/${path.split('/').at(-1)}`,
           geometry: { position: [...data.position], rotation: [...data.rotation], scale: [...data.scale] } };
         state.actors.push(actor);

@@ -3,14 +3,14 @@ import test from 'node:test';
 import { createPlayerController, PLAYER_CONTROLS } from '../../frontend/playerController.mjs';
 import { createPlayerSave } from '../../frontend/playerSave.mjs';
 import { actorFixture, apiFixture, deferred } from './fixtures.mjs';
-export function controlFixture() {
+export function controlFixture(options = {}) {
   const calls = [], frames = new Map(), errors = []; let id = 0, time = 0, current = true, locked = false;
   let pose = { handle: 12, position: [0,0,0], forward: [0,0,1], up: [0,1,0], fov: 60 };
   const bridge = { actorTransform: (...args) => { calls.push(['actor', ...args]); return true; } };
   const controller = createPlayerController({ getPose: () => pose, setPose: p => { pose = p; },
     submitPose: p => calls.push(['camera', structuredClone(p)]),
     getBridge: () => ({ ...bridge, cameraMove() {} }), onError: e => errors.push(e),
-    isCurrent: () => current, isInputLocked: () => locked,
+    isCurrent: () => current, isInputLocked: () => locked, ...options,
     now: () => time, requestFrame: cb => { frames.set(++id, cb); return id; }, cancelFrame: id => frames.delete(id) });
   const actor = actorFixture(); controller.bindPlayer(actor, 0.45);
   return { controller, calls, frames, actor, errors, bridge, get pose() { return pose; },
@@ -103,4 +103,38 @@ test('a partially accepted movement frame remains saveable when rotation fails',
     writes.push(args); return { status: 'success' };
   } } }, sceneId: 'old.ini', readPlayer: f.controller.snapshotPlayer, stopInput: f.controller.resetInput });
   await saver.save(); near(writes[0][2].position[0], 0.15);
+});
+
+test('mouse turns without buttons; first sample and reset never jump', () => {
+  const f = controlFixture(); const before = structuredClone(f.pose);
+  f.controller.pointerMove({ clientX: 400, clientY: 300, buttons: 0 }); f.step(16);
+  assert.deepEqual(f.pose, before);
+  f.controller.pointerMove({ clientX: 450, clientY: 320, buttons: 0 }); f.step(16);
+  assert.notDeepEqual(f.pose.forward, before.forward);
+  f.controller.resetInput(); const saved = structuredClone(f.pose);
+  f.controller.pointerMove({ clientX: 100, clientY: 100, buttons: 0 }); f.step(16);
+  assert.deepEqual(f.pose, saved); f.controller.dispose();
+});
+test('edge turning continues without pointer events and stops on leave/lock', () => {
+  const f = controlFixture({ getRect: () => ({ left: 0, top: 0, width: 800, height: 600 }) });
+  f.controller.pointerMove({ clientX: 799, clientY: 300, buttons: 0 });
+  f.step(50); const first = [...f.pose.forward]; f.step(50);
+  assert.notDeepEqual(f.pose.forward, first); assert.equal(f.frames.size, 1);
+  f.controller.keyDown(key('KeyW')); f.controller.keyUp(key('KeyW'));
+  assert.equal(f.frames.size, 1);
+  f.controller.pointerLeave(); assert.equal(f.frames.size, 0);
+  const saved = structuredClone(f.pose);
+  f.controller.pointerMove({ clientX: 400, clientY: 300, buttons: 0 }); f.step(16);
+  assert.deepEqual(f.pose, saved);
+  f.controller.pointerMove({ clientX: 799, clientY: 300, buttons: 0 }); f.lock(true); f.step(16);
+  assert.equal(f.frames.size, 0); f.controller.dispose();
+});
+test('outside viewport cancels edge turning and detached callbacks', () => {
+  const f = controlFixture({ getRect: () => ({ left: 0, top: 0, width: 800, height: 600 }) });
+  f.controller.pointerMove({ clientX: 10, clientY: 10 });
+  const stale = [...f.frames.values()][0];
+  f.controller.pointerMove({ clientX: -1, clientY: 200 });
+  const count = f.calls.length; stale(100);
+  assert.equal(f.calls.length, count); assert.equal(f.frames.size, 0);
+  f.controller.dispose();
 });

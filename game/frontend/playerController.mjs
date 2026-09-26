@@ -4,7 +4,7 @@ import { PLAYER_GUID, vector3 } from './storyCharacters.mjs';
 export const PLAYER_CONTROLS = Object.freeze({ speed: 3, maxDelta: 0.05,
   distance: 4.5, minDistance: 2.5, maxDistance: 10,
   pitch: 20 * Math.PI / 180, minPitch: 10 * Math.PI / 180, maxPitch: 65 * Math.PI / 180,
-  sensitivity: 0.005 });
+  sensitivity: 0.005, edgeWidth: 40, edgeYawSpeed: Math.PI / 2, edgePitchSpeed: Math.PI / 3 });
 const clamp = (n, lo, hi) => Math.max(lo, Math.min(hi, n));
 const movementKey = event => {
   const code = String(event.code || '').toLowerCase();
@@ -16,16 +16,17 @@ const editing = event => (event.composedPath?.() || [event.target]).some(target 
 
 export function createPlayerController({ getPose, setPose, submitPose, getBridge,
   isCurrent = () => true, isInputLocked = () => false, onError = () => {},
+  getRect = () => null, onPlayerChanged = () => {},
   requestFrame = callback => requestAnimationFrame(callback), cancelFrame = id => cancelAnimationFrame(id),
   now = () => globalThis.performance.now(), config = PLAYER_CONTROLS }) {
   let player = null, targetOffset = 0, yaw = 0, pitch = config.pitch, distance = config.distance;
-  let frame = null, epoch = 0, lastTime = null, dragging = null, disposed = false;
+  let frame = null, epoch = 0, lastTime = null, pointer = null, disposed = false;
   const keys = new Set();
   const ready = () => !disposed && isCurrent() && !isInputLocked() && player && getPose();
   function resetInput() {
     epoch++;
     if (frame !== null) cancelFrame(frame);
-    frame = null; lastTime = null; dragging = null; keys.clear();
+    frame = null; lastTime = null; pointer = null; keys.clear();
   }
   function poseCamera() {
     const pose = getPose();
@@ -44,6 +45,10 @@ export function createPlayerController({ getPose, setPose, submitPose, getBridge
     const delta = clamp((time - (lastTime ?? time)) / 1000, 0, config.maxDelta);
     lastTime = time;
     try {
+      if (pointer) {
+        yaw += pointer.edgeX * config.edgeYawSpeed * delta;
+        pitch = clamp(pitch + pointer.edgeY * config.edgePitchSpeed * delta, config.minPitch, config.maxPitch);
+      }
       let x = Number(keys.has('d')) - Number(keys.has('a'));
       let z = Number(keys.has('w')) - Number(keys.has('s'));
       const length = Math.hypot(x, z);
@@ -61,9 +66,11 @@ export function createPlayerController({ getPose, setPose, submitPose, getBridge
         player = { ...player, position, version: player.version + 1 };
         if (bridge.actorTransform(player.handle, 1, rotation) !== true) throw new Error('玩家实时朝向接口不可用');
         player = { ...player, rotation };
+        onPlayerChanged();
       }
       poseCamera();
-      if (keys.size) schedule();
+      if (keys.size || (pointer && (pointer.edgeX || pointer.edgeY))) schedule();
+      else lastTime = null;
     } catch (error) { resetInput(); onError(error); }
   }
   function schedule() {
@@ -121,29 +128,44 @@ export function createPlayerController({ getPose, setPose, submitPose, getBridge
       const key = movementKey(event);
       if (!keys.delete(key)) return false;
       event.preventDefault?.();
-      if (!keys.size && !dragging) resetInput();
+      if (!keys.size && !(pointer?.edgeX || pointer?.edgeY)) {
+        epoch++;
+        if (frame !== null) cancelFrame(frame);
+        frame = null; lastTime = null;
+      }
       return true;
     },
     pointerDown(event) {
-      if (event.button !== 2 || !ready()) return false;
-      event.preventDefault?.();
-      dragging = { id: event.pointerId, x: event.clientX, y: event.clientY };
+      if (!ready() || !Number.isFinite(event.clientX) || !Number.isFinite(event.clientY)) return false;
+      // Seed on clicks as well as first entry; no held mouse button is required.
+      pointer = { id: event.pointerId, x: event.clientX, y: event.clientY, edgeX: 0, edgeY: 0 };
       return true;
     },
     pointerMove(event) {
-      if (!dragging || event.pointerId !== dragging.id) return false;
-      if (!ready() || (Number.isFinite(event.buttons) && !(event.buttons & 2))) { resetInput(); return false; }
-      const dx = event.clientX - dragging.x, dy = event.clientY - dragging.y;
-      if (!Number.isFinite(dx) || !Number.isFinite(dy)) return false;
-      yaw += dx * config.sensitivity;
-      pitch = clamp(pitch + dy * config.sensitivity, config.minPitch, config.maxPitch);
-      dragging = { id: event.pointerId, x: event.clientX, y: event.clientY };
+      if (!ready()) { resetInput(); return false; }
+      const x = event.clientX, y = event.clientY, rect = getRect();
+      if (!Number.isFinite(x) || !Number.isFinite(y)) return false;
+      if (rect && (x < rect.left || y < rect.top || x >= rect.left + rect.width || y >= rect.top + rect.height)) {
+        resetInput(); return false;
+      }
+      const old = pointer?.id === event.pointerId ? pointer : null;
+      if (old) {
+        yaw += (x - old.x) * config.sensitivity;
+        pitch = clamp(pitch + (y - old.y) * config.sensitivity, config.minPitch, config.maxPitch);
+      }
+      const edge = (coordinate, start, extent) => {
+        const band = Math.min(config.edgeWidth, extent / 2);
+        if (band <= 0) return 0;
+        return clamp((coordinate - start - extent + band) / band, 0, 1)
+          - clamp((start + band - coordinate) / band, 0, 1);
+      };
+      pointer = { id: event.pointerId, x, y,
+        edgeX: rect ? edge(x, rect.left, rect.width) : 0,
+        edgeY: rect ? edge(y, rect.top, rect.height) : 0 };
       schedule(); return true;
     },
-    pointerUp(event) {
-      if (dragging && event.pointerId === dragging.id) { dragging = null; return true; }
-      return false;
-    },
+    pointerUp() { return false; },
+    pointerLeave: resetInput,
     wheel(event) {
       if (!ready() || !Number.isFinite(event.deltaY) || !event.deltaY) return false;
       event.preventDefault?.();
