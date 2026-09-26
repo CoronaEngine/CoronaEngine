@@ -4,10 +4,9 @@
 
 from copy import deepcopy
 
-from .game_config import GameConfig
-from .game_types import (
-    MAX_TIME_NS, ClockState, ClockTransition, DayPhase, Error, Result, valid_delta_ns,
-)
+from ..core.config import GameConfig
+from ..core.state import ClockState, ClockTransition
+from ..core.types import MAX_TIME_NS, DayPhase, Error, Result, valid_delta_ns
 
 
 class WorldClock:

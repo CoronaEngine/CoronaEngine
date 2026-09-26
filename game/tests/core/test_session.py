@@ -8,8 +8,8 @@ from game import (
     BossChaseStarted, BossPhase, BossSpawned, DayNightChanged, DropId, Error,
     GameSession, ItemKind, MerchantDeparted, MerchantSpawned, OrbId, Position, WorldId,
 )
-from game.game_types import MAX_TIME_NS, NS_PER_SECOND as S, horizontal_distance
-from .support import GameTestCase, snapshot
+from game.core.types import MAX_TIME_NS, NS_PER_SECOND as S, horizontal_distance
+from ..support import GameTestCase, snapshot
 
 
 class GameSessionTests(GameTestCase):

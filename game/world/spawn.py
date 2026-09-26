@@ -5,7 +5,7 @@ Boss 生成点须位于安全区外；有限次采样未命中时，沿远离安
 import math
 from random import Random
 
-from .game_types import Position, horizontal_distance
+from ..core.types import Position, horizontal_distance
 from .safe_zone import SafeZone
 
 

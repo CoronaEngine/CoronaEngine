@@ -1,20 +1,17 @@
-"""验证商人赠品、掉落拾取和背包存储规则。
-覆盖商人出现与离开的边界、三维交互距离、两种赠品分别限领和重复拾取保护。
-检查小球身份去重、碎片大整数累加，以及非法道具或数量被拒绝后的状态不变性。"""
+"""验证商人出现、离开、交互范围和一次性赠品。"""
 
 from random import Random
 
 from game import (
-    DropCollected, DropId, Error, GameSession, ItemGranted, ItemKind, MerchantDeparted,
-    MerchantPhase, MerchantSpawned, OrbId, Position, WorldId, WorldOrb,
+    Error, GameSession, ItemGranted, ItemKind, MerchantDeparted,
+    MerchantPhase, MerchantSpawned, Position,
 )
-from game.game_types import NS_PER_SECOND as S, horizontal_distance
-from game.inventory import Inventory
-from game.merchant_system import MerchantSystem
-from .support import GameTestCase, count_events, snapshot
+from game.core.types import NS_PER_SECOND as S, horizontal_distance
+from game.systems.merchant import MerchantSystem
+from ..support import GameTestCase, count_events, snapshot
 
 
-class MerchantAndInventoryTests(GameTestCase):
+class MerchantTests(GameTestCase):
     def test_merchant_arrives_at_600_and_leaves_at_780_once(self) -> None:
         session = GameSession(seed=42)
         self.assertEqual(session.claim_merchant_gift(ItemKind.WORLD_ORB).error, Error.MERCHANT_UNAVAILABLE)
@@ -76,49 +73,3 @@ class MerchantAndInventoryTests(GameTestCase):
         self.assert_ok(merchant.depart())
         self.assertFalse(merchant.depart().ok)
         self.assertFalse(merchant.spawn(Position(), random).ok)
-
-    def test_drops_require_distance_and_are_collectible_exactly_once(self) -> None:
-        session = GameSession(seed=42)
-        self.assertEqual(session.collect_drop(DropId(1)).error, Error.DROP_NOT_FOUND)
-        session.advance_seconds(180)
-        session.notify_boss_defeated()
-        p = session.boss.position
-        before = snapshot(session)
-        self.assertEqual(session.collect_drop(DropId(1)).error, Error.OUT_OF_RANGE)
-        self.assertEqual(session.use_world_orb(session.drops[0].orb.id).error, Error.ORB_NOT_OWNED)
-        self.assertEqual(snapshot(session), before)
-        session.update_player_position(session.story_world, Position(p.x, p.y + 3.01, p.z))
-        self.assertEqual(session.collect_drop(DropId(2)).error, Error.OUT_OF_RANGE)
-        session.update_player_position(session.story_world, Position(p.x, p.y + 3, p.z))
-        self.assert_ok(session.collect_drop(DropId(2)))
-        self.assert_ok(session.collect_drop(DropId(1)))
-        self.assertEqual(len(session.inventory.orbs), 1)
-        self.assertEqual(session.inventory.fragment_count, 1)
-        self.assertEqual(session.inventory.orbs[0], session.drops[0].orb)
-        before = snapshot(session)
-        for drop in session.drops:
-            self.assertEqual(session.collect_drop(drop.id).error, Error.ALREADY_COLLECTED)
-        self.assertEqual(session.collect_drop(DropId(999)).error, Error.DROP_NOT_FOUND)
-        self.assertEqual(snapshot(session), before)
-        self.assertEqual(count_events(session.events, DropCollected), 2)
-        self.assertEqual(count_events(session.events, ItemGranted), 2)
-
-    def test_inventory_rejects_duplicate_identity_and_invalid_fragment_types(self) -> None:
-        inventory = Inventory()
-        self.assert_ok(inventory.add_orb(WorldOrb(OrbId(1), WorldId(2))))
-        for orb in (WorldOrb(OrbId(1), WorldId(3)), WorldOrb(OrbId(2), WorldId(2))):
-            self.assertEqual(inventory.add_orb(orb).error, Error.DUPLICATE_ORB)
-        for invalid in (None, [], WorldOrb(OrbId(0), WorldId(3)), WorldOrb(OrbId(3), WorldId(0)),
-                        WorldOrb(WorldId(3), WorldId(4)), WorldOrb(OrbId(True), WorldId(4))):
-            self.assertEqual(inventory.add_orb(invalid).error, Error.INVALID_ITEM)
-        self.assertEqual(len(inventory.state.orbs), 1)
-        self.assertIsNotNone(inventory.find_orb(OrbId(1)))
-        self.assertIsNone(inventory.find_orb(OrbId(9)))
-        self.assert_ok(inventory.add_fragments(2**100))
-        self.assert_ok(inventory.add_fragments())
-        self.assert_ok(inventory.add_fragments(0))
-        self.assertEqual(inventory.state.fragment_count, 2**100 + 1)
-        before = inventory.state
-        for invalid in (-1, 1.5, True, False, None, '1', float('inf'), float('nan')):
-            self.assertEqual(inventory.add_fragments(invalid).error, Error.INVALID_ITEM)
-            self.assertEqual(inventory.state, before)

@@ -5,7 +5,7 @@
 from dataclasses import dataclass
 import math
 
-from .game_types import Position, finite_number, horizontal_distance, valid_position
+from ..core.types import Position, finite_number, horizontal_distance, valid_position
 
 
 @dataclass(frozen=True, slots=True)
