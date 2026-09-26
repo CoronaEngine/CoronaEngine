@@ -369,7 +369,8 @@ void BindAll(nanobind::module_& m) {
         .def("set_external_vision_binding", &Actor::set_external_vision_binding,
              nb::arg("source_path"), nb::arg("shape_guid"), nb::arg("shape_index"),
              nb::arg("json_path"), nb::arg("shape_type"), nb::arg("shape_identity_key"),
-             nb::arg("model_path"), nb::arg("visible") = true)
+             nb::arg("model_path"), nb::arg("visible") = true,
+             nb::arg("source_base_dir") = "")
         .def("clear_external_vision_binding", &Actor::clear_external_vision_binding)
         .def("has_external_vision_binding", &Actor::has_external_vision_binding)
         .def("get_handle", &Actor::get_handle, "Get the underlying handle of this actor");

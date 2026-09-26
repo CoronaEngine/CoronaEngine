@@ -220,6 +220,9 @@ struct ExternalVisionBindingDevice {
     std::string shape_type;
     std::string shape_identity_key;
     std::string model_path;
+    // Runtime-only path context and derived identity; never persist the key.
+    std::string source_base_dir;
+    std::string source_path_key;
 };
 
 struct ActorDevice {
@@ -599,7 +602,10 @@ class SharedDataHub {
     // systems such as OpticsSystem/ExternalVisionSceneAdapter.
     void set_actor_guid(std::uintptr_t actor_handle, std::string actor_guid);
     [[nodiscard]] std::string actor_guid(std::uintptr_t actor_handle) const;
-    void set_external_vision_binding(std::uintptr_t actor_handle, ExternalVisionBindingDevice binding);
+    void set_external_vision_binding(std::uintptr_t actor_handle, ExternalVisionBindingDevice binding,
+                                     bool refresh_source_path = false);
+    // Explicit scene reload also refreshes retained actors (e.g. directory links).
+    void refresh_external_vision_binding_paths();
     void clear_external_vision_binding(std::uintptr_t actor_handle);
     [[nodiscard]] std::optional<ExternalVisionBindingDevice> external_vision_binding(
         std::uintptr_t actor_handle) const;

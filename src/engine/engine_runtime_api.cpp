@@ -1928,7 +1928,8 @@ void Corona::API::Actor::set_external_vision_binding(const std::string& source_p
                                                      const std::string& shape_type,
                                                      const std::string& shape_identity_key,
                                                      const std::string& model_path,
-                                                     bool visible) {
+                                                     bool visible,
+                                                     const std::string& source_base_dir) {
     if (handle_ == 0) {
         CFW_LOG_WARNING("[Actor::set_external_vision_binding] Invalid actor handle");
         return;
@@ -1938,6 +1939,7 @@ void Corona::API::Actor::set_external_vision_binding(const std::string& source_p
     binding.enabled = true;
     binding.visible = visible;
     binding.source_path = source_path;
+    binding.source_base_dir = source_base_dir;
     binding.shape_guid = shape_guid;
     binding.shape_index = shape_index;
     binding.json_path = json_path;

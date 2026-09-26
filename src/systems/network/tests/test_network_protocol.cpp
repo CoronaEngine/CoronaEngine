@@ -7,6 +7,7 @@
 #include <corona/systems/network/protocol.h>
 #include <corona/systems/network/sync_engine.h>
 #include <corona/shared_data_hub.h>
+#include <corona/utils/scene_path_key.h>
 
 #include <cstring>
 #include <filesystem>
@@ -1809,6 +1810,85 @@ void test_actor_metadata_handle_cleanup_removes_guid_and_binding() {
     hub.actor_storage().deallocate(reused);
 }
 
+void test_external_vision_binding_path_identity() {
+    auto& hub = Corona::SharedDataHub::instance();
+    const auto actor = hub.actor_storage().allocate();
+    const auto other = hub.actor_storage().allocate();
+    const auto root = std::filesystem::temp_directory_path() / "corona-binding-path-tests";
+    const auto base = root.generic_string();
+    Corona::ExternalVisionBindingDevice binding{};
+    binding.source_path = "scenes/../kitchen.json";
+    binding.source_base_dir = base;
+    binding.source_path_key = "untrusted caller key";
+    hub.set_external_vision_binding(actor, binding);
+    auto stored = *hub.external_vision_binding(actor);
+    const auto key = Corona::Utils::normalize_scene_path_key("kitchen.json", base);
+    expect_true(stored.source_path_key == key, "first binding derives a trusted scene key");
+    expect_true(stored.source_path == binding.source_path, "raw source remains portable");
+
+    binding.source_path = (root / "kitchen.json").generic_string();
+    hub.set_external_vision_binding(other, binding);
+    expect_true(hub.external_vision_binding(other)->source_path_key == key,
+                "absolute and relative equivalent sources share a key");
+#ifdef _WIN32
+    expect_true(Corona::Utils::normalize_scene_path_key("SCENES\\..\\KITCHEN.JSON", base) == key,
+                "Windows case and separator variants share a key");
+#endif
+    const auto cwd = std::filesystem::current_path();
+    std::filesystem::current_path(std::filesystem::temp_directory_path());
+    stored.visible = false;
+    stored.shape_index = 42;
+    stored.source_path_key = "stale caller key";
+    hub.set_external_vision_binding(actor, stored);
+    std::filesystem::current_path(cwd);
+    stored = *hub.external_vision_binding(actor);
+    expect_true(stored.source_path_key == key && !stored.visible && stored.shape_index == 42,
+                "unrelated updates reuse hub key independently of current directory");
+    stored.source_path = "other.json";
+    hub.set_external_vision_binding(actor, stored);
+    expect_true(hub.external_vision_binding(actor)->source_path_key != key,
+                "changed source invalidates copied key and isolates scenes");
+    stored.source_path = "scenes/../kitchen.json";
+    stored.source_base_dir = (root / "migrated").generic_string();
+    hub.set_external_vision_binding(actor, stored);
+    const auto migrated = Corona::Utils::normalize_scene_path_key(stored.source_path, stored.source_base_dir);
+    expect_true(hub.external_vision_binding(actor)->source_path_key == migrated && migrated != key,
+                "project migration or base change rebuilds source identity");
+    hub.clear_external_vision_binding(actor);
+    hub.set_external_vision_binding(actor, stored);
+    expect_true(hub.external_vision_binding(actor)->source_path_key == migrated,
+                "scene reload rebuilds key from source and base");
+    hub.set_external_vision_binding(actor, stored, true);
+    expect_true(hub.external_vision_binding(actor)->source_path_key == migrated,
+                "explicit refresh rebuilds valid source identity");
+    hub.refresh_external_vision_binding_paths();
+    expect_true(hub.external_vision_binding(actor)->source_path_key == migrated &&
+                    !hub.external_vision_binding(actor)->visible &&
+                    hub.external_vision_binding(actor)->shape_index == 42,
+                "reload refresh preserves unrelated binding state");
+    const std::string unicode_source = "\xe5\x9c\xba\xe6\x99\xaf/kitchen.json";
+    expect_true(Corona::Utils::normalize_scene_path_key(unicode_source, base).find(unicode_source) !=
+                    std::string::npos,
+                "runtime scene keys preserve UTF-8 paths");
+    stored.source_base_dir.clear();
+    bool rejected = false;
+    try {
+        hub.set_external_vision_binding(actor, stored);
+    } catch (const std::invalid_argument&) {
+        rejected = true;
+    }
+    expect_true(rejected && hub.external_vision_binding(actor)->source_path_key == migrated,
+                "relative source without explicit absolute base cannot publish a partial binding");
+    stored.source_path.clear();
+    hub.set_external_vision_binding(actor, stored);
+    expect_true(hub.external_vision_binding(actor)->source_path_key.empty(),
+                "empty source clears derived identity");
+    hub.clear_actor_metadata(actor);
+    hub.clear_actor_metadata(other);
+    hub.actor_storage().deallocate(actor);
+    hub.actor_storage().deallocate(other);
+}
+
 void test_network_identity_registry_resolves_actor_components() {
     auto& hub = Corona::SharedDataHub::instance();
 
@@ -2389,6 +2469,7 @@ int main() {
     test_actor_device_follow_camera_defaults_false_and_round_trips();
     test_actor_metadata_guid_round_trips_and_clears();
     test_external_vision_binding_round_trips_and_clears();
+    test_external_vision_binding_path_identity();
     test_actor_metadata_handle_cleanup_removes_guid_and_binding();
     test_network_identity_registry_resolves_actor_components();
     test_network_identity_registry_tracks_local_ownership();

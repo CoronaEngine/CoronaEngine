@@ -5377,7 +5377,8 @@ void register_embedded_vision_actor_binding(NativeEditorScene& scene,
         vision_shape_type(shape),
         shape_guid,
         normalize_route(actor->route),
-        visible);
+        visible,
+        path_to_utf8(scene.project_root));
 }
 
 void register_embedded_vision_actor_bindings(NativeEditorScene& scene,

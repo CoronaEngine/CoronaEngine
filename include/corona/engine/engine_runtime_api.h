@@ -252,6 +252,8 @@ class Actor {
     [[nodiscard]] bool get_follow_camera() const;
     void set_actor_guid(const std::string& actor_guid);
     [[nodiscard]] std::string get_actor_guid() const;
+    // Relative sources require an absolute scene/project source_base_dir.
+    // Clear and rebind (or reload the scene) to refresh changed directory links.
     void set_external_vision_binding(const std::string& source_path,
                                      const std::string& shape_guid,
                                      int shape_index,
@@ -259,7 +261,8 @@ class Actor {
                                      const std::string& shape_type,
                                      const std::string& shape_identity_key,
                                      const std::string& model_path,
-                                     bool visible = true);
+                                     bool visible = true,
+                                     const std::string& source_base_dir = {});
     void clear_external_vision_binding();
     [[nodiscard]] bool has_external_vision_binding() const;
 
