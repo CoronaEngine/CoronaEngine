@@ -131,8 +131,10 @@ if(BUILD_CORONA_TESTING OR BUILD_TESTING)
     target_include_directories(corona_scene_folder_tests
         PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
     )
+    # scene_folder.cpp 现在会打 CFW_LOG_WARNING（缺失贴图/Assimp 扫描失败降级为警告），
+    # 需要当前引擎日志目标提供头文件和共享的 Quill 后端。
     target_link_libraries(corona_scene_folder_tests
-        PRIVATE nlohmann_json::nlohmann_json bcrypt assimp::assimp
+        PRIVATE corona::engine::logging nlohmann_json::nlohmann_json bcrypt assimp::assimp
     )
     target_compile_definitions(corona_scene_folder_tests PRIVATE
         CORONA_SOURCE_DIR="${PROJECT_SOURCE_DIR}"

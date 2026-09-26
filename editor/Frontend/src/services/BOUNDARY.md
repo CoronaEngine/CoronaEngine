@@ -24,6 +24,20 @@
 `logService.js` 仅保留历史 disabled no-op 语义，但实现归 active service owner；Active Vue
 页面不应调用它。
 
+### 世界界面会话
+
+`worldModeService.js` 负责剧情/创造模式的 Web 判定；只读取原生项目元数据及现有
+`ai.readLocalFileAsBase64` Python 文件能力，不保存或迁移项目。只有明确的 `world.type=story`
+进入剧情模式，缺省及历史模式仍为创造模式，读取失败则阻止进入世界。
+
+`editorWindowSession.js` 负责 UI 策略、窗口请求登记、跨窗口会话令牌与过期事件过滤，
+通过 `appService.js` 复用已有 Dock 命令；localStorage 仅存临时 UI 协调信息，
+不拥有场景数据。不引入模式专属 C++ 命令，也不改写 camera.open。
+窗口退休等待未完成请求，并用已有 `suspendCameraViews` 回调作为主线程队列屏障；
+超时保持阻塞，迟到回调只清理旧窗口；关闭面板前等待该面板发出的请求结束，
+避免销毁回调上下文。主窗口使用 sessionStorage 中的 owner，在页面重载时退休原有窗口。
+删除该服务前需通过跨窗口、切换及迟到响应测试。
+
 ### 节点图领域编排
 
 `nodeGraphGenerationService.js`、`nodeGraphReviewService.js`、

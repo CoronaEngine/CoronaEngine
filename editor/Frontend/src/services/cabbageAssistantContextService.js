@@ -1,3 +1,5 @@
+import { worldModeState, editorUiAllowed } from './worldModeService.js';
+import { trackWorldSessionWork } from './worldSessionLifecycle.js';
 import { aiService } from '@/services/aiService.js';
 import { createServiceResponseError } from '@/utils/serviceInitialization.js';
 
@@ -251,8 +253,11 @@ function goalPlanError(response, fallback) {
 
 async function pollGoalPlan(taskId, expectedScopeId = '') {
   const deadline = Date.now() + GOAL_PLAN_TIMEOUT_MS;
+  const revision = worldModeState.revision;
   while (Date.now() < deadline) {
+    if (revision !== worldModeState.revision || !editorUiAllowed()) return null;
     const response = await aiService.getCabbageGoalPlanStatus(taskId);
+    if (revision !== worldModeState.revision || !editorUiAllowed()) return null;
     if (response?.success !== true) throw goalPlanError(response);
     if (response.status === 'completed') {
       const result = response.result || {};
@@ -281,13 +286,20 @@ function trackGoalPlan(taskId, expectedScopeId = '') {
   return pending;
 }
 
-export async function initializeWorldTasks({ prompt = '', mode = 'story', waitForCompletion = true } = {}) {
+export function initializeWorldTasks(options = {}) {
+  if (!editorUiAllowed()) return Promise.resolve(null);
+  return trackWorldSessionWork(initializeWorldTasksNow(options));
+}
+
+async function initializeWorldTasksNow({ prompt = '', mode = 'story', waitForCompletion = true } = {}) {
   const expectedScopeId = currentScopeId();
+  const revision = worldModeState.revision;
   const response = await aiService.startCabbageGoalPlan({
     worldId: currentWorldId(),
     prompt: String(prompt || '').trim(),
     mode: String(mode || 'story'),
   });
+  if (revision !== worldModeState.revision || !editorUiAllowed()) return null;
   if (response?.success !== true) throw goalPlanError(response);
   if (response.status === 'completed' && response.context) {
     return currentScopeId() === expectedScopeId ? publishBackendContext(response.context) : null;

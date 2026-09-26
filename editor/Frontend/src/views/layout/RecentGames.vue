@@ -102,10 +102,11 @@
 </template>
 
 <script setup>
+import { notifyWorldError } from '@/services/worldSessionLifecycle.js';
 import { ref, onMounted, onUnmounted } from 'vue';
 import { useRouter } from 'vue-router';
 import { editorApi } from '@/api/editorApi.js';
-import { projectLauncherService } from '@/services/projectLauncherService.js';
+import { projectLauncherService, isProjectOpenSuperseded } from '@/services/projectLauncherService.js';
 
 const router = useRouter();
 
@@ -199,6 +200,7 @@ const migrateLegacyProject = async (project) => {
 const handleOpenProject = async (path, project = null) => {
   try {
     let result = await projectLauncherService.openProject(path);
+    if (isProjectOpenSuperseded(result)) return;
     let opened = unwrapResponse(result);
     if (opened?.status === 'decision_required') {
       const details = archiveDiagnostics(opened);
@@ -207,6 +209,7 @@ const handleOpenProject = async (path, project = null) => {
       );
       if (!proceed) return;
       result = await projectLauncherService.openProject(path, { loadPolicy: 'degraded' });
+      if (isProjectOpenSuperseded(result)) return;
       opened = unwrapResponse(result);
     }
     if (opened?.status === 'invalid_archive') {
@@ -242,6 +245,8 @@ const handleOpenProject = async (path, project = null) => {
     }
   } catch (error) {
     console.error('打开项目失败:', error);
+    await router.replace('/StartScreen');
+    notifyWorldError(error);
   }
 };
 
@@ -253,6 +258,7 @@ const handleImport = async () => {
     }
   } catch (error) {
     console.error('打开现有项目失败:', error);
+    notifyWorldError(error);
   }
 };
 </script>

@@ -1,3 +1,4 @@
+import { editorUiAllowed } from '../services/worldModeService.js';
 import { defineStore } from 'pinia';
 import { PLUGIN_MANIFEST } from '@/config/pluginManifest.js';
 
@@ -23,6 +24,9 @@ function buildDefaultPanels() {
 export const useDockStore = defineStore('dock', {
   state: () => ({
     panels: buildDefaultPanels(),
+    leftWidth: 360,
+    rightWidth: 400,
+    bottomHeight: 320,
     // Transient: the panel id currently being dragged in the DOM dock (null when idle).
     // Drives drop-target highlighting in DockLayout; not persisted.
     draggingId: null,
@@ -59,7 +63,17 @@ export const useDockStore = defineStore('dock', {
   },
 
   actions: {
+    clearSession() {
+      this.draggingId = null;
+      this.dragOverZone = null;
+      for (const panel of Object.values(this.panels)) {
+        panel.open = false;
+        panel.mode = 'docked';
+        panel.externalTabId = null;
+      }
+    },
     openPanel(id) {
+      if (!editorUiAllowed()) return;
       if (this.panels[id]) {
         this.panels[id].open = true;
         this.panels[id].mode = 'docked';
@@ -73,6 +87,7 @@ export const useDockStore = defineStore('dock', {
     },
 
     togglePanel(id) {
+      if (!editorUiAllowed()) return;
       if (!this.panels[id]) return;
       if (this.panels[id].open && this.panels[id].mode === 'docked') {
         this.closePanel(id);
@@ -92,6 +107,7 @@ export const useDockStore = defineStore('dock', {
     // target zone so the visual order matches panelsByZone's sort. Used by drag-reorder /
     // cross-zone drag in DockLayout.
     movePanel(id, zone, beforeId = null) {
+      if (!editorUiAllowed()) return;
       const moving = this.panels[id];
       if (!moving) return;
 
@@ -131,6 +147,7 @@ export const useDockStore = defineStore('dock', {
     },
 
     setExternal(id, tabId) {
+      if (!editorUiAllowed()) return;
       if (this.panels[id]) {
         this.panels[id].open = true;
         this.panels[id].mode = 'external';
@@ -147,6 +164,7 @@ export const useDockStore = defineStore('dock', {
     },
 
     popIn(id) {
+      if (!editorUiAllowed()) return;
       if (this.panels[id]) {
         this.panels[id].mode = 'docked';
         this.panels[id].externalTabId = null;
@@ -167,6 +185,7 @@ export const useDockStore = defineStore('dock', {
     },
 
     initDefaultLayout() {
+      if (!editorUiAllowed()) return;
       for (const p of PLUGIN_MANIFEST) {
         if (p.autoInit && this.panels[p.id]) {
           this.panels[p.id].open = true;

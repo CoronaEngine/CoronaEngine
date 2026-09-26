@@ -580,6 +580,15 @@ const hideLoading = () => {
   coronaEventBus.emit('loading-hide');
 };
 
+// 导入失败此前只走 console.error，用户侧完全没有反馈：模型不出现在场景栏，
+// 也没有任何提示，看起来就像"点了没反应"。这里统一负责记日志 + 弹出可见错误。
+const reportImportError = (label, error) => {
+  logError(label, error);
+  const detail = error instanceof Error ? error.message : error ? String(error) : '';
+  hideLoading();
+  window.alert(detail ? `${label}：${detail}` : label);
+};
+
 const getTypeShort = (type) => {
   const lowerType = (type || 'obj').toLowerCase();
   const typeMap = {
@@ -1276,8 +1285,9 @@ const createActorFromSelectedFile = async (payload, actorType, logLabel) => {
   }
   const selectedPath = selectedPathFromImportPayload(payload);
   if (!selectedPath) {
-    logWarn(`${logLabel} returned without selected file path`, payload);
-    return null;
+    // 静默 return null 会让调用方以为成功，但场景栏里什么都没有。
+    // 抛出去交给统一的错误上报，用户至少知道失败了。
+    throw new Error(`${logLabel}: 未能获取所选文件路径`);
   }
 
   updateLoading('创建对象', 55);
@@ -1313,7 +1323,7 @@ const createActorFromSelectedFile = async (payload, actorType, logLabel) => {
 const HandleFileImport = async () => {
   ShowModelDropdown.value = false;
   if (!currentSceneName.value) {
-    logWarn('File import aborted: no active scene');
+    reportImportError('模型导入失败', '当前没有活动场景，请先打开或新建场景');
     return;
   }
   showLoading('加载中', '请稍候...', 0);
@@ -1322,7 +1332,7 @@ const HandleFileImport = async () => {
     const payload = unwrapBridgePayload(result);
     const status = payload?.status;
     if (result?.success === false || status === 'error') {
-      logError('File import failed', payload?.message || result?.error || 'unknown error');
+      reportImportError('模型导入失败', payload?.message || result?.error || 'unknown error');
       return;
     }
     if (status === 'canceled') {
@@ -1331,7 +1341,7 @@ const HandleFileImport = async () => {
     }
     await createActorFromSelectedFile(payload, 'model', 'File import');
   } catch (e) {
-    logError('File import failed', e);
+    reportImportError('模型导入失败', e);
   } finally {
     hideLoading();
   }
@@ -1341,7 +1351,7 @@ const HandleUiImageImport = async () => {
   // 导入一张图片，自动创建一个带该图为纹理的 quad（光场 UI 平面），默认作为 UI。
   ShowModelDropdown.value = false;
   if (!currentSceneName.value) {
-    logWarn('UI image import aborted: no active scene');
+    reportImportError('图片导入失败', '当前没有活动场景，请先打开或新建场景');
     return;
   }
   showLoading('加载中', '请稍候...', 0);
@@ -1350,7 +1360,7 @@ const HandleUiImageImport = async () => {
     const payload = unwrapBridgePayload(result);
     const status = payload?.status;
     if (result?.success === false || status === 'error') {
-      logError('UI image import failed', payload?.message || result?.error || 'unknown error');
+      reportImportError('图片导入失败', payload?.message || result?.error || 'unknown error');
       return;
     }
     if (status === 'canceled') {
@@ -1358,7 +1368,7 @@ const HandleUiImageImport = async () => {
     }
     await createActorFromSelectedFile(payload, 'ui_image', 'UI image import');
   } catch (e) {
-    logError('UI image import failed', e);
+    reportImportError('图片导入失败', e);
   } finally {
     hideLoading();
   }
@@ -1367,7 +1377,7 @@ const HandleUiImageImport = async () => {
 const HandleActorImport = async () => {
   ShowModelDropdown.value = false;
   if (!currentSceneName.value) {
-    logWarn('Actor import aborted: no active scene');
+    reportImportError('Actor 导入失败', '当前没有活动场景，请先打开或新建场景');
     return;
   }
   showLoading('加载中', '请稍候...', 0);
@@ -1376,7 +1386,7 @@ const HandleActorImport = async () => {
     const payload = unwrapBridgePayload(result);
     const status = payload?.status;
     if (result?.success === false || status === 'error') {
-      logError('Actor import failed', payload?.message || result?.error || 'unknown error');
+      reportImportError('Actor 导入失败', payload?.message || result?.error || 'unknown error');
       return;
     }
     if (status === 'canceled') {
@@ -1384,7 +1394,7 @@ const HandleActorImport = async () => {
     }
     await createActorFromSelectedFile(payload, 'actor', 'Actor import');
   } catch (e) {
-    logError('Actor import failed', e);
+    reportImportError('Actor 导入失败', e);
   } finally {
     hideLoading();
   }
@@ -1402,7 +1412,7 @@ const HandleMultimediaImport = async () => {
     const payload = result?.data ?? result;
     const status = payload?.status;
     if (result?.success === false || status === 'error') {
-      logError('Multimedia import failed', payload?.message || result?.error || 'unknown error');
+      reportImportError('音视频导入失败', payload?.message || result?.error || 'unknown error');
       return;
     }
     if (status === 'canceled') {
@@ -1421,7 +1431,7 @@ const HandleMultimediaImport = async () => {
         );
         const createPayload = unwrapBridgePayload(createResult);
         if (createResult?.success === false || createPayload?.status === 'error') {
-          logError('Audio actor create failed', createPayload?.message || createResult?.error);
+          reportImportError('音频对象创建失败', createPayload?.message || createResult?.error);
         } else {
           await OnInitObjTree();
           const actor = createPayload?.actor;
@@ -1435,7 +1445,7 @@ const HandleMultimediaImport = async () => {
       updateLoading('导入完成', 100);
     }
   } catch (e) {
-    logError('Multimedia import failed', e);
+    reportImportError('音视频导入失败', e);
   }
   hideLoading();
 };
@@ -1467,18 +1477,19 @@ const HandleSceneImport = async () => {
     const payload = unwrapBridgePayload(result);
     const status = payload?.status;
     if (result?.success === false || status === 'error') {
-      logError('Scene import failed', payload?.message || result?.error || 'unknown error');
+      reportImportError('场景导入失败', payload?.message || result?.error || 'unknown error');
       return;
     }
     if (status === 'canceled') {
       return;
     }
 
+    // 功能未实现时也要告诉用户，否则选完文件毫无反应。
     logWarn('Scene JSON import is selected but native scene import is not implemented yet', payload);
-    updateLoading('导入完成', 100);
+    reportImportError('场景导入', '场景 JSON 导入尚未实现');
     await OnInitObjTree();
   } catch (e) {
-    logError('Scene import failed', e);
+    reportImportError('场景导入失败', e);
   } finally {
     hideLoading();
   }

@@ -561,7 +561,8 @@ import {
   Bridge,
   editorApi,
 } from '@/api/editorApi.js';
-import { appService } from '@/services/appService.js';
+import { appService, isCurrentWindowEvent } from '@/services/appService.js';
+import { worldModeState } from '@/services/worldModeService.js';
 import { projectLauncherService } from '@/services/projectLauncherService.js';
 import { useErrorHandler } from '@/composables/useErrorHandler.js';
 import { useDockStore } from '@/stores/dockStore.js';
@@ -575,6 +576,7 @@ import {
   toggleFloatingPanel,
 } from '@/utils/panelWindows.js';
 import { createViewportPickController, indexActorsByHandle } from '@/utils/viewportPick.js';
+import { cameraMovementKey, createViewportCameraController } from '@/utils/viewportCameraController.js';
 import {
   createViewportGizmoController,
   isViewportGizmoSelectionOwner,
@@ -607,6 +609,17 @@ import { setActorContext } from '@/blockly/composables/useActorContext.js';
 import { closeTutorialSessionChannel } from '@/services/cabbageTutorialSessionService.js';
 
 const { error: logError, warn: logWarn } = useErrorHandler('MainPage');
+
+// Every asynchronous continuation belongs to the world instance that mounted it.
+const worldRevision = worldModeState.revision;
+let viewDisposed = false;
+const viewCurrent = () => !viewDisposed && worldModeState.revision === worldRevision;
+async function subscribeWhileCurrent(register, handler) {
+  const token = await register((...args) => { if (viewCurrent()) handler(...args); });
+  if (viewCurrent()) return token;
+  await editorApi.off(token).catch(() => {});
+  return null;
+}
 
 const router = useRouter();
 const { t: translate } = useI18n();
@@ -774,14 +787,9 @@ const sceneLightSettings = reactive({
 const sceneLightBusy = ref(false);
 const mouseSensitivity = ref(0.15);
 
-// 鼠标旋转状态
-const mouseRotate = reactive({
-  active: false,
-  lastX: 0,
-  lastY: 0,
-  startForward: null,
-  moved: false,
-});
+// Only interaction analytics stay in the host; input state belongs to the controller.
+let mouseRotateStartForward = null;
+let mouseRotateMoved = false;
 const cameraMovementGestures = new Map();
 const movementAxisGroups = Object.freeze({
   w: 'forward_back',
@@ -1005,6 +1013,7 @@ let cameraViewportResizeObserver = null;
 let lastCameraViewportSignature = '';
 
 const syncCameraViewportRect = () => {
+  if (!viewCurrent()) return false;
   const bridge = window.coronaBridge;
   const cameraHandle = Number(cameraBindingState.value.cameraHandle || 0);
   const rect = getViewportHitRect();
@@ -1043,6 +1052,7 @@ const syncCameraViewportRect = () => {
 };
 
 const scheduleCameraViewportSync = () => {
+  if (!viewCurrent()) return;
   if (cameraViewportSyncRafId != null) return;
   cameraViewportSyncRafId = requestAnimationFrame(() => {
     cameraViewportSyncRafId = null;
@@ -1082,28 +1092,23 @@ const selectViewportUiMode = (mode) => {
   syncViewportUiCalibrationPanel(viewportUiMode.value);
 };
 
-const hasActiveMovementKeys = () => Object.values(movementKeys).some((value) => value);
-
-const isRealtimeCameraInputActive = () => mouseRotate.active || hasActiveMovementKeys();
-
-// 摄像头更新节流：用 rAF 合并高频输入，每帧最多发送一次
-let cameraDirty = false;
-let cameraRafId = null;
-
-const scheduleCameraUpdate = () => {
-  cameraDirty = true;
-  if (cameraRafId != null) return;
-  cameraRafId = requestAnimationFrame(() => {
-    cameraRafId = null;
-    if (cameraDirty) {
-      cameraDirty = false;
-      if (!sendCameraUpdateFast()) {
-        const sceneId = tabs.value[activeTab.value]?.id || DEFAULT_SCENE_NAME;
-        syncSceneCameraBinding(sceneId);
-      }
+const cameraControls = createViewportCameraController({
+  getPose: () => cameraBindingState.value.cameraHandle ? cameraState.value : null,
+  setPose: (pose) => { cameraState.value = pose; },
+  getSpeed: () => cameraSpeed.value,
+  setSpeed: (speed) => { cameraSpeed.value = speed; },
+  getSensitivity: () => mouseSensitivity.value,
+  isCurrent: viewCurrent,
+  isInputLocked: () => document.hidden || isGamePreviewInputLocked(),
+  submitPose: () => {
+    if (!sendCameraUpdateFast()) {
+      const sceneId = tabs.value[activeTab.value]?.id || DEFAULT_SCENE_NAME;
+      void syncSceneCameraBinding(sceneId);
     }
-  });
-};
+  },
+});
+const isRealtimeCameraInputActive = cameraControls.isInputActive;
+const scheduleCameraUpdate = cameraControls.scheduleUpdate;
 
 // 标签页数据
 const tabs = ref([]);
@@ -1215,6 +1220,7 @@ async function persistCabbageTaskActions(actions = []) {
 }
 
 async function loadCabbageWorldContext({ reset = true } = {}) {
+  if (!viewCurrent()) return null;
   const generation = ++cabbageWorldLoadGeneration;
   const expectedProjectPath = normalizeActiveProjectPath(readActiveProjectPath());
   const scopeId = currentProjectReviewScopeId();
@@ -1230,7 +1236,7 @@ async function loadCabbageWorldContext({ reset = true } = {}) {
   }
   try {
     const snapshot = await cabbageContextService.loadCurrentWorld();
-    if (generation !== cabbageWorldLoadGeneration
+    if (!viewCurrent() || generation !== cabbageWorldLoadGeneration
       || normalizeActiveProjectPath(readActiveProjectPath()) !== expectedProjectPath) {
       return null;
     }
@@ -1254,7 +1260,7 @@ async function loadCabbageWorldContext({ reset = true } = {}) {
     }
     return snapshot;
   } catch (error) {
-    if (generation === cabbageWorldLoadGeneration) {
+    if (viewCurrent() && generation === cabbageWorldLoadGeneration) {
       if (cachedSnapshot) cabbageAssistant.hydrateContext(cachedSnapshot);
       if (error?.retryable) {
         cabbageWorldInitializationRetry.schedule(() => {
@@ -1285,6 +1291,7 @@ function refreshCameraAfterProjectChange() {
 }
 
 function applyActualProjectChange(projectPath) {
+  if (!viewCurrent()) return false;
   const normalizedPath = normalizeActiveProjectPath(projectPath);
   if (normalizedPath === activeProjectPathSnapshot) return false;
 
@@ -1462,11 +1469,17 @@ const sceneGridEnabledFromSnapshot = (snapshot = {}) => {
 };
 
 const applySceneSnapshot = (sceneId, payload, { preservePose = false } = {}) => {
-  const snapshot = payload?.scene ?? payload?.data?.scene ?? payload?.data ?? payload;
-  if (!snapshot || typeof snapshot !== 'object') {
+  // Native snapshots use `scene` for the route, not a nested snapshot.
+  const data = payload?.data ?? payload;
+  const snapshot = data?.scene && typeof data.scene === 'object' && !Array.isArray(data.scene)
+    ? data.scene : data;
+  if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) {
+    resetRealtimeCameraInput();
     cameraBindingState.value = {
-      ...cameraBindingState.value,
       sceneId: sceneId ?? cameraBindingState.value.sceneId,
+      cameraId: null,
+      cameraName: null,
+      cameraHandle: null,
     };
     return;
   }
@@ -1488,6 +1501,10 @@ const applySceneSnapshot = (sceneId, payload, { preservePose = false } = {}) => 
   const activeCamera =
     cameras.find((cam) => cam?.name === activeCameraName) ?? cameras[0] ?? snapshot.camera ?? null;
 
+  const nextHandle = activeCamera?.handle ?? activeCamera?.camera_handle ?? null;
+  const bindingChanged = cameraBindingState.value.sceneId !== normalizedSceneId
+    || cameraBindingState.value.cameraHandle !== nextHandle;
+  if (bindingChanged) resetRealtimeCameraInput();
   cameraBindingState.value = {
     sceneId: normalizedSceneId,
     cameraId: activeCamera?.camera_id ?? activeCamera?.id ?? null,
@@ -1512,7 +1529,7 @@ const applySceneSnapshot = (sceneId, payload, { preservePose = false } = {}) => 
 
   if (
     activeCamera &&
-    !preservePose &&
+    (!preservePose || bindingChanged) &&
     !isRealtimeCameraInputActive() &&
     (isVector3(activeCamera.position) ||
       isVector3(activeCamera.forward) ||
@@ -1536,14 +1553,14 @@ const applySceneSnapshot = (sceneId, payload, { preservePose = false } = {}) => 
 };
 
 const syncSceneCameraBinding = async (sceneId, { preservePose = false } = {}) => {
-  if (!sceneId) {
+  if (!viewCurrent() || !sceneId) {
     return false;
   }
 
   const requestRevision = ++sceneCameraBindingRequestRevision;
   try {
     const result = await editorApi.scene.getSnapshot(sceneId);
-    if (requestRevision !== sceneCameraBindingRequestRevision) return false;
+    if (!viewCurrent() || requestRevision !== sceneCameraBindingRequestRevision) return false;
     applySceneSnapshot(sceneId, result, { preservePose });
     broadcastViewportControlsState();
     return true;
@@ -1609,7 +1626,7 @@ const refreshSceneCameraBinding = ({ force = false, preservePose = true } = {}) 
 };
 
 const restoreCameraViews = async (sceneId) => {
-  if (!sceneId) return;
+  if (!viewCurrent() || !sceneId) return;
   try {
     const result = await editorApi.sceneTools.listCameraViews(sceneId);
     const payload = result?.data ?? result;
@@ -1617,6 +1634,7 @@ const restoreCameraViews = async (sceneId) => {
       ? payload.cameras.filter((camera) => camera.view_open)
       : [];
     for (const camera of openCameras) {
+      if (!viewCurrent()) return;
       await appService.createCameraView({ ...camera, scene_id: sceneId });
     }
   } catch (e) {
@@ -1647,18 +1665,8 @@ const vectorDistance = (left = [], right = []) => Math.sqrt(
 
 const handleWheel = (event) => {
   sendScratchPointerEvent('wheel', event);
-  if (isGamePreviewInputLocked()) return;
-  if (event.shiftKey) {
-    // Shift+滚轮：调节摄像头速度
-    const delta = event.deltaY > 0 ? -0.02 : 0.02;
-    cameraSpeed.value =
-      Math.round(Math.max(0.01, Math.min(2, cameraSpeed.value + delta)) * 100) / 100;
-    event.preventDefault();
-    return;
-  }
   const before = [...cameraState.value.position];
-  const direction = event.deltaY > 0 ? 'backward' : 'forward';
-  handleCameraMove(direction);
+  if (!cameraControls.wheel(event)) return;
   const actualDelta = vectorDistance(before, cameraState.value.position);
   if (actualDelta > 1e-6) {
     void cabbageContextService.recordEvent({
@@ -1715,10 +1723,11 @@ const handleKeyDown = (event) => {
     return;
   }
 
-  const key = event.key.toLowerCase();
-  if (movementKeys[key] !== undefined) {
-    event.preventDefault();
-    if (!movementKeys[key]) {
+  const key = cameraMovementKey(event);
+  if (key) {
+    const wasDown = cameraControls.isKeyDown(key);
+    if (!cameraControls.keyDown(event)) return;
+    if (!wasDown) {
       if (movementAxisGroups[key]) {
         cameraMovementGestures.set(key, [...cameraState.value.position]);
       }
@@ -1727,12 +1736,11 @@ const handleKeyDown = (event) => {
       // continuing to publish WASD/QE updates to a released camera.
       void refreshSceneCameraBinding({ preservePose: true });
     }
-    movementKeys[key] = true;
-    startMoveLoop();
   }
 };
 
 const handleKeyUp = (event) => {
+  cameraControls.keyUp(event);
   const tag = event.target?.tagName;
   if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
   if (!window.coronaBridge && !event.__coronaScratchKeyForwarded) {
@@ -1747,9 +1755,8 @@ const handleKeyUp = (event) => {
     return;
   }
 
-  const key = event.key.toLowerCase();
-  if (movementKeys[key] !== undefined) {
-    movementKeys[key] = false;
+  const key = cameraMovementKey(event);
+  if (key) {
     const gestureStart = cameraMovementGestures.get(key);
     cameraMovementGestures.delete(key);
     const axisGroup = movementAxisGroups[key];
@@ -1764,39 +1771,6 @@ const handleKeyUp = (event) => {
         });
       }
     }
-    if (!hasActiveMovementKeys()) {
-      stopMoveLoop();
-      scheduleCameraUpdate();
-    }
-  }
-};
-
-// ---- 平滑移动系统 ----
-const movementKeys = reactive({
-  w: false,
-  s: false,
-  a: false,
-  d: false,
-  q: false,
-  e: false,
-  arrowleft: false,
-  arrowright: false,
-  arrowup: false,
-  arrowdown: false,
-});
-let moveLoopId = null;
-let lastMoveTime = 0;
-
-const startMoveLoop = () => {
-  if (moveLoopId !== null) return;
-  lastMoveTime = performance.now();
-  moveLoopId = requestAnimationFrame(moveLoop);
-};
-
-const stopMoveLoop = () => {
-  if (moveLoopId !== null) {
-    cancelAnimationFrame(moveLoopId);
-    moveLoopId = null;
   }
 };
 
@@ -1809,14 +1783,10 @@ const isGamePreviewInputLocked = () => {
 };
 
 const resetRealtimeCameraInput = () => {
-  Object.keys(movementKeys).forEach((key) => {
-    movementKeys[key] = false;
-  });
-  stopMoveLoop();
+  cameraControls.resetInput();
   cameraMovementGestures.clear();
-  mouseRotate.active = false;
-  mouseRotate.startForward = null;
-  mouseRotate.moved = false;
+  mouseRotateStartForward = null;
+  mouseRotateMoved = false;
 };
 
 const setEditorCameraInputLock = (reason, locked) => {
@@ -1848,7 +1818,7 @@ async function reconcileEditorCameraInputLocks() {
     editorApi.scratch.getScriptStatus(),
     editorApi.scratch.getGamePreviewStatus(),
   ]);
-  if (token !== cameraInputLockReconcileToken) return;
+  if (!viewCurrent() || token !== cameraInputLockReconcileToken) return;
 
   if (scriptResult.status === 'fulfilled') {
     const scriptStatus = unwrapBridgeData(scriptResult.value) || {};
@@ -1867,90 +1837,6 @@ async function reconcileEditorCameraInputLocks() {
     );
   }
 }
-
-const moveLoop = (now) => {
-  if (isGamePreviewInputLocked()) {
-    resetRealtimeCameraInput();
-    return;
-  }
-
-  const dt = Math.min((now - lastMoveTime) / 1000, 0.1); // 秒，上限 0.1s
-  lastMoveTime = now;
-
-  const anyActive = hasActiveMovementKeys();
-  if (!anyActive) {
-    moveLoopId = null;
-    return;
-  }
-
-  const speed = cameraSpeed.value * 60 * dt; // 归一化到帧率无关
-  const rotSpeed = 2.0 * 60 * dt;
-  const { position, forward, up } = cameraState.value;
-  const fwd = vec3.normalize(forward);
-  const worldUp = vec3.normalize(up);
-  const right = vec3.normalize(vec3.cross(worldUp, fwd));
-  let moved = false;
-
-  if (movementKeys.w) {
-    position[0] += fwd[0] * speed;
-    position[1] += fwd[1] * speed;
-    position[2] += fwd[2] * speed;
-    moved = true;
-  }
-  if (movementKeys.s) {
-    position[0] -= fwd[0] * speed;
-    position[1] -= fwd[1] * speed;
-    position[2] -= fwd[2] * speed;
-    moved = true;
-  }
-  if (movementKeys.a) {
-    position[0] -= right[0] * speed;
-    position[1] -= right[1] * speed;
-    position[2] -= right[2] * speed;
-    moved = true;
-  }
-  if (movementKeys.d) {
-    position[0] += right[0] * speed;
-    position[1] += right[1] * speed;
-    position[2] += right[2] * speed;
-    moved = true;
-  }
-  if (movementKeys.q) {
-    position[0] += worldUp[0] * speed;
-    position[1] += worldUp[1] * speed;
-    position[2] += worldUp[2] * speed;
-    moved = true;
-  }
-  if (movementKeys.e) {
-    position[0] -= worldUp[0] * speed;
-    position[1] -= worldUp[1] * speed;
-    position[2] -= worldUp[2] * speed;
-    moved = true;
-  }
-
-  if (movementKeys.arrowleft) {
-    rotateCameraView('rotateLeft', rotSpeed);
-    moved = true;
-  }
-  if (movementKeys.arrowright) {
-    rotateCameraView('rotateRight', rotSpeed);
-    moved = true;
-  }
-  if (movementKeys.arrowup) {
-    rotateCameraView('rotateUp', rotSpeed);
-    moved = true;
-  }
-  if (movementKeys.arrowdown) {
-    rotateCameraView('rotateDown', rotSpeed);
-    moved = true;
-  }
-
-  if (moved && !sendCameraUpdateFast()) {
-    scheduleCameraUpdate();
-  }
-
-  moveLoopId = requestAnimationFrame(moveLoop);
-};
 
 // ---- 向量工具 ----
 const vec3 = {
@@ -2014,81 +1900,7 @@ const sceneAxisVectors = computed(() => {
     .sort((a, b) => a.depth - b.depth);
 });
 
-/**
- * 绕任意轴旋转向量 v（罗德里格斯公式）
- * @param {number[]} v   待旋转向量
- * @param {number[]} axis 旋转轴（需归一化）
- * @param {number} angle  旋转角度（弧度）
- */
-const rotateVecAroundAxis = (v, axis, angle) => {
-  const c = Math.cos(angle);
-  const s = Math.sin(angle);
-  const k = axis;
-  const dot = vec3.dot(k, v);
-  const cross = vec3.cross(k, v);
-  return [
-    v[0] * c + cross[0] * s + k[0] * dot * (1 - c),
-    v[1] * c + cross[1] * s + k[1] * dot * (1 - c),
-    v[2] * c + cross[2] * s + k[2] * dot * (1 - c),
-  ];
-};
-
-/**
- * 旋转摄像头 forward 向量
- * @param {'rotateLeft'|'rotateRight'|'rotateUp'|'rotateDown'} direction
- * @param {number} [angleDeg=2] 每步旋转角度
- */
-const rotateCameraView = (direction, angleDeg = 2) => {
-  const { forward, up } = cameraState.value;
-  const fwd = vec3.normalize(forward);
-  const worldUp = vec3.normalize(up);
-  const angleRad = (angleDeg * Math.PI) / 180;
-
-  let newFwd;
-  if (direction === 'rotateLeft' || direction === 'rotateRight') {
-    // 水平旋转（绕 world_up 轴）
-    const yawAngle = direction === 'rotateLeft' ? -angleRad : angleRad;
-    newFwd = rotateVecAroundAxis(fwd, worldUp, yawAngle);
-  } else {
-    // 垂直旋转（绕 right 轴，即 forward × up）
-    const right = vec3.normalize(vec3.cross(fwd, worldUp));
-    const pitchAngle = direction === 'rotateUp' ? angleRad : -angleRad;
-    newFwd = rotateVecAroundAxis(fwd, right, pitchAngle);
-    // 限制俯仰角，防止翻转（与 world_up 夹角保持在 10°~170°）
-    const dotUp = vec3.dot(vec3.normalize(newFwd), worldUp);
-    if (Math.abs(dotUp) > 0.985) return; // cos(10°) ≈ 0.985
-  }
-
-  cameraState.value.forward = vec3.normalize(newFwd);
-};
-
-/**
- * 鼠标拖拽旋转摄像头（灵敏度与分辨率无关）
- */
-const handleMouseRotate = (dx, dy) => {
-  const sensitivity = mouseSensitivity.value; // 度/像素
-  const { forward, up } = cameraState.value;
-  const fwd = vec3.normalize(forward);
-  const worldUp = vec3.normalize(up);
-
-  // 水平 yaw
-  const yawRad = (dx * sensitivity * Math.PI) / 180;
-  let newFwd = rotateVecAroundAxis(fwd, worldUp, yawRad);
-
-  // 垂直 pitch
-  const right = vec3.normalize(vec3.cross(newFwd, worldUp));
-  const pitchRad = (-dy * sensitivity * Math.PI) / 180;
-  const pitched = rotateVecAroundAxis(newFwd, right, pitchRad);
-
-  const dotUp = vec3.dot(vec3.normalize(pitched), worldUp);
-  if (Math.abs(dotUp) < 0.985) {
-    newFwd = pitched;
-  }
-
-  cameraState.value.forward = vec3.normalize(newFwd);
-};
-
-const viewportCursorShape = () => (mouseRotate.active ? 'grabbing' : 'arrow');
+const viewportCursorShape = () => (cameraControls.isLooking() ? 'grabbing' : 'arrow');
 
 const handleViewportPointer = (event) => {
   viewportGizmoController.pointer(event, event.type);
@@ -2121,6 +1933,7 @@ const handleViewportPointerDown = (event) => {
 };
 
 const handleViewportPointerCancel = (event) => {
+  resetRealtimeCameraInput();
   if (event.pointerId !== gizmoDownPointerId) return;
   try {
     viewportPickSurfaceRef.value?.releasePointerCapture?.(event.pointerId);
@@ -2145,7 +1958,13 @@ const handleViewportGizmoPointerResult = (payload = {}) => {
   }
 };
 
-const handleMainViewportBlur = () => viewportGizmoController.cancel('blur');
+const handleMainViewportBlur = () => {
+  resetRealtimeCameraInput();
+  viewportGizmoController.cancel('blur');
+};
+const handleMainViewportVisibility = () => {
+  if (document.hidden) handleMainViewportBlur();
+};
 
 let pendingScratchClick = null;
 
@@ -2207,63 +2026,30 @@ const finishScratchClickFromPick = (payload, result) => {
 };
 
 const onMouseDown = (event) => {
-  // 右键拖拽旋转（原有逻辑不变）
-  if (event.button === 2) {
-    if (isGamePreviewInputLocked()) return;
-    mouseRotate.active = true;
-    mouseRotate.lastX = event.clientX;
-    mouseRotate.lastY = event.clientY;
-    mouseRotate.startForward = [...cameraState.value.forward];
-    mouseRotate.moved = false;
-    event.preventDefault();
-    return;
+  if (cameraControls.pointerDown(event)) {
+    mouseRotateStartForward = [...cameraState.value.forward];
+    mouseRotateMoved = false;
   }
-
-  // 左键拾取只由 viewportPickSurfaceRef 对应的视口层触发。
 };
 
 const onMouseMove = (event) => {
-  if (isGamePreviewInputLocked()) {
-    mouseRotate.active = false;
-    return;
-  }
-  if (!mouseRotate.active) return;
-  const dx = event.clientX - mouseRotate.lastX;
-  const dy = event.clientY - mouseRotate.lastY;
-  mouseRotate.lastX = event.clientX;
-  mouseRotate.lastY = event.clientY;
-
-  if (dx === 0 && dy === 0) return;
-  handleMouseRotate(dx, dy);
-  mouseRotate.moved = true;
-  scheduleCameraUpdate();
+  if (cameraControls.pointerMove(event)) mouseRotateMoved = true;
 };
 
 const onMouseUp = (event) => {
-  if (isGamePreviewInputLocked()) {
-    mouseRotate.active = false;
-    return;
+  if (!cameraControls.pointerUp(event)) return;
+  const actualDelta = mouseRotateStartForward
+    ? vectorDistance(mouseRotateStartForward, cameraState.value.forward) : 0;
+  if (mouseRotateMoved && actualDelta > 1e-6) {
+    void cabbageContextService.recordEvent({
+      type: 'camera_rotated',
+      category: 'camera',
+      success: true,
+      details: { interaction: 'right_mouse_drag', actualDelta },
+    });
   }
-  if (event.button === 2 && mouseRotate.active) {
-    mouseRotate.active = false;
-    const actualDelta = mouseRotate.startForward
-      ? vectorDistance(mouseRotate.startForward, cameraState.value.forward)
-      : 0;
-    if (mouseRotate.moved && actualDelta > 1e-6) {
-      void cabbageContextService.recordEvent({
-        type: 'camera_rotated',
-        category: 'camera',
-        success: true,
-        details: { interaction: 'right_mouse_drag', actualDelta },
-      });
-    }
-    mouseRotate.startForward = null;
-    mouseRotate.moved = false;
-    if (!sendCameraUpdateFast()) {
-      const sceneId = tabs.value[activeTab.value]?.id || DEFAULT_SCENE_NAME;
-      syncSceneCameraBinding(sceneId);
-    }
-  }
+  mouseRotateStartForward = null;
+  mouseRotateMoved = false;
 };
 
 const onContextMenu = (event) => {
@@ -2322,6 +2108,7 @@ const handleActorPickResult = (payload) => {
 };
 
 const sendCameraUpdateFast = () => {
+  if (!viewCurrent()) return;
   // During Blockly/node-graph execution the editor must not publish camera
   // poses. Keyboard/mouse events are still sent to Scratch by their handlers.
   if (isGamePreviewInputLocked()) return true;
@@ -2354,58 +2141,7 @@ const sendCameraUpdateFast = () => {
 
 /** 发送当前 cameraState 到引擎——已移除，全部走快速通道 */
 
-const handleCameraMove = (direction) => {
-  if (isGamePreviewInputLocked()) return;
-
-  const speed = cameraSpeed.value;
-  const { position, forward, up } = cameraState.value;
-
-  // 基于摄像头朝向计算移动方向（左手坐标系：right = up × forward）
-  const fwd = vec3.normalize(forward);
-  const worldUp = vec3.normalize(up);
-  const right = vec3.normalize(vec3.cross(worldUp, fwd));
-
-  switch (direction) {
-    case 'up':
-      position[0] += worldUp[0] * speed;
-      position[1] += worldUp[1] * speed;
-      position[2] += worldUp[2] * speed;
-      break;
-    case 'down':
-      position[0] -= worldUp[0] * speed;
-      position[1] -= worldUp[1] * speed;
-      position[2] -= worldUp[2] * speed;
-      break;
-    case 'left':
-      position[0] -= right[0] * speed;
-      position[1] -= right[1] * speed;
-      position[2] -= right[2] * speed;
-      break;
-    case 'right':
-      position[0] += right[0] * speed;
-      position[1] += right[1] * speed;
-      position[2] += right[2] * speed;
-      break;
-    case 'forward':
-      position[0] += fwd[0] * speed;
-      position[1] += fwd[1] * speed;
-      position[2] += fwd[2] * speed;
-      break;
-    case 'backward':
-      position[0] -= fwd[0] * speed;
-      position[1] -= fwd[1] * speed;
-      position[2] -= fwd[2] * speed;
-      break;
-    case 'rotateRight':
-    case 'rotateLeft':
-    case 'rotateUp':
-    case 'rotateDown':
-      rotateCameraView(direction);
-      break;
-  }
-
-  scheduleCameraUpdate();
-};
+const handleCameraMove = (direction) => cameraControls.move(direction);
 
 const handleApplyPhysics = async () => {
   const sceneId = tabs.value[activeTab.value]?.id || DEFAULT_SCENE_NAME;
@@ -2480,13 +2216,11 @@ const createScene = async () => {
 
 // 项目菜单
 const handleNewProject = () => {
-  console.log('新建项目');
   activeMenu.value = null;
   // TODO: 实现新建项目逻辑
 };
 
 const handleOpenProject = () => {
-  console.log('打开项目');
   activeMenu.value = null;
   // TODO: 实现打开项目逻辑
 };
@@ -2497,7 +2231,6 @@ const handleProjectSettings = () => {
 };
 
 const handleSaveProject = () => {
-  console.log('保存项目');
   activeMenu.value = null;
   // TODO: 实现保存项目逻辑
 };
@@ -2517,11 +2250,13 @@ const stopProjectResourceLoadPolling = () => {
 };
 
 const pollProjectResourceLoadStatus = async () => {
+  if (!viewCurrent()) return;
   stopProjectResourceLoadPolling();
   try {
     const status = unwrapBridgeData(
       await editorApi.project.getProjectLoadStatus(),
     );
+    if (!viewCurrent()) return;
     projectResourceLoadStatus.value = status?.active ? status : null;
     if (status?.loading) {
       projectResourceLoadPollTimer = window.setTimeout(
@@ -2570,7 +2305,7 @@ const normalizePreviewDetails = (payload = {}) => ({
 });
 
 const publishGamePreviewStatus = (details = {}) => {
-  if (typeof window === 'undefined') return;
+  if (!viewCurrent() || typeof window === 'undefined') return;
   window.__coronaGamePreviewState = details;
   window.dispatchEvent(new CustomEvent('corona-game-preview-status', { detail: details }));
 };
@@ -2621,6 +2356,7 @@ const pollGamePreviewStatus = () => {
   const poll = async () => {
     try {
       const result = await editorApi.scratch.getGamePreviewStatus();
+      if (!viewCurrent()) return;
       const details = applyPreviewStatus(unwrapBridgeData(result));
       broadcastViewportControlsState();
       if (previewRunning.value) previewPollTimer = setTimeout(poll, 700);
@@ -2659,7 +2395,9 @@ const handleStartGamePreview = async (request = { scope: 'project' }) => {
     // 本地 previewRunning 可能因跨面板广播延迟而滞后。启动前重新读取
     // 后端真值，避免把一次有效点击误判为重复启动。
     try {
-    const live = applyPreviewStatus(unwrapBridgeData(await editorApi.scratch.getGamePreviewStatus()));
+    const liveResult = await editorApi.scratch.getGamePreviewStatus();
+    if (!viewCurrent()) return false;
+    const live = applyPreviewStatus(unwrapBridgeData(liveResult));
       const liveActive = ['starting', 'running', 'stopping'].includes(live.status)
         || live.runningCount > 0
         || live.hasSnapshot;
@@ -2686,7 +2424,9 @@ const handleStartGamePreview = async (request = { scope: 'project' }) => {
         await window.__coronaNodeGraphFlushSave();
       }
     }
+    if (!viewCurrent()) return false;
     const result = await editorApi.scratch.startGamePreview(previewRequest);
+    if (!viewCurrent()) return false;
     const payload = unwrapBridgeData(result);
     const details = applyPreviewStatus(payload);
     if (payload?.status === 'error') {
@@ -2753,7 +2493,6 @@ const handleStopGamePreview = async () => {
 
 const handleRunProject = async () => {
   try {
-    console.log('运行项目');
     // 不传参数，运行整个项目
     const result = await editorApi.main.runProject();
 
@@ -2774,7 +2513,6 @@ const handleRunProject = async () => {
 
 const handleRunCurrentScene = async () => {
   try {
-    console.log('运行当前场景');
     const currentSceneId = tabs.value[activeTab.value]?.id;
 
     if (!currentSceneId) {
@@ -2815,8 +2553,7 @@ const coerceNumber = (value, fallback) => {
 };
 
 const setCameraSpeedFromPanel = (value) => {
-  const next = Math.min(2, Math.max(0.01, coerceNumber(value, cameraSpeed.value)));
-  cameraSpeed.value = next;
+  cameraControls.setSpeed(coerceNumber(value, cameraSpeed.value));
   broadcastViewportControlsState();
   return getEditorControlsState();
 };
@@ -2895,6 +2632,7 @@ const getEditorControlsState = () => ({
 });
 
 const broadcastViewportControlsState = () => {
+  if (!viewCurrent()) return;
   appService
     .crossTabBroadcast('viewport-controls-state', getEditorControlsState())
     .catch(() => {});
@@ -2964,13 +2702,11 @@ const unregisterEditorControls = () => {
 
 // 帮助菜单
 const handleHelpDocs = () => {
-  console.log('帮助文档');
   activeMenu.value = null;
   // TODO: 实现打开帮助文档逻辑
 };
 
 const handleAbout = () => {
-  console.log('关于');
   activeMenu.value = null;
   // TODO: 实现显示关于信息逻辑
 };
@@ -3010,6 +2746,7 @@ const applyCameraPose = (pose = {}) => {
     return false;
   }
 
+  resetRealtimeCameraInput();
   cameraState.value = {
     position,
     forward,
@@ -3062,6 +2799,8 @@ const pendingPanelRedocks = new Map();
 const PANEL_REDOCK_TTL_MS = 5000;
 
 const handlePanelRedockRequest = (payload) => {
+  if (!viewCurrent() || !isCurrentWindowEvent(payload)) return;
+  if (Number.isInteger(payload?.tabId) && dockStore.panels[payload?.panelId]?.externalTabId !== payload.tabId) return;
   const panelId = payload?.panelId;
   if (!panelId || !dockStore.panels[panelId]) return;
   const previousTimer = pendingPanelRedocks.get(panelId);
@@ -3077,6 +2816,8 @@ const handlePanelRedockRequest = (payload) => {
 };
 
 const handlePanelClosed = (payload) => {
+  if (!viewCurrent() || !isCurrentWindowEvent(payload)) return;
+  if (Number.isInteger(payload?.tabId) && dockStore.panels[payload?.panelId]?.externalTabId !== payload.tabId) return;
   const panelId = payload?.panelId;
   if (!panelId) return;
   const redockTimer = pendingPanelRedocks.get(panelId);
@@ -3107,12 +2848,15 @@ onMounted(async () => {
   // Real active workers are added back by reconcileEditorCameraInputLocks().
   clearKnownEditorCameraInputLocks();
   const result = await editorApi.main.onInit();
+  if (!viewCurrent()) return;
   const initData = result?.data ?? result;
   const scenes = initData?.scenes ?? [];
   const activeIndex = Number(initData?.active_index ?? 0);
   await pollProjectResourceLoadStatus();
+  if (!viewCurrent()) return;
   try {
     const visionResult = unwrapBridgeData(await editorApi.sceneTools.isVisionAvailable());
+    if (!viewCurrent()) return;
     visionAvailable.value = !!visionResult?.available;
   } catch (error) {
     visionAvailable.value = false;
@@ -3136,10 +2880,13 @@ onMounted(async () => {
   activeTab.value = resolvedActiveIndex;
 
   await startEngine();
+  if (!viewCurrent()) return;
   // 等待 Vue 渲染 dock 面板（SceneBar/Object 等），确保 eventBus 监听就绪
   await nextTick();
+  if (!viewCurrent()) return;
   const initialSceneId = tabs.value[resolvedActiveIndex]?.id || DEFAULT_SCENE_NAME;
   await syncSceneCameraBinding(tabs.value[activeTab.value]?.id || DEFAULT_SCENE_NAME);
+  if (!viewCurrent()) return;
   syncViewportUiMode();
   scheduleCameraViewportSync();
   if (typeof ResizeObserver !== 'undefined' && viewportPickSurfaceRef.value) {
@@ -3147,13 +2894,16 @@ onMounted(async () => {
     cameraViewportResizeObserver.observe(viewportPickSurfaceRef.value);
   }
   await restoreCameraViews(initialSceneId);
+  if (!viewCurrent()) return;
   // Restoring detached camera windows can overlap native scene initialization.
   // Always take a second snapshot after that phase so the main viewport owns the
   // current camera handle rather than the camera object that was just destroyed.
   await syncSceneCameraBinding(initialSceneId);
+  if (!viewCurrent()) return;
   // The CEF window can survive project creation/switching, so discard stale
   // frontend lock reasons using the backend's self-healed runtime truth.
   await reconcileEditorCameraInputLocks();
+  if (!viewCurrent()) return;
 
   document.addEventListener('keydown', handleKeyDown);
   document.addEventListener('keyup', handleKeyUp);
@@ -3164,6 +2914,8 @@ onMounted(async () => {
   document.addEventListener('contextmenu', onContextMenu);
   window.addEventListener('resize', handleViewportLayoutChange);
   window.addEventListener('blur', handleMainViewportBlur);
+  window.addEventListener('pointercancel', resetRealtimeCameraInput);
+  document.addEventListener('visibilitychange', handleMainViewportVisibility);
   registerEditorControls();
 
   // 跨窗口事件监听：panel / loading / viewport 等 UI 本地通道
@@ -3175,13 +2927,19 @@ onMounted(async () => {
   coronaEventBus.on('camera-pose-request', applyCameraPose);
   coronaEventBus.on('viewport-controls-request', handleViewportControlsRequest);
   coronaEventBus.on('node-graph-panel-open-request', handleNodeGraphPanelOpenRequest);
-  sceneAddedCallbackToken = await editorApi.events.onSceneAdded(onSceneAddedEvent);
-  sceneRenamedCallbackToken = await editorApi.events.onSceneRenamed(onSceneRenamedEvent);
-  actorSelectionCallbackToken = await editorApi.events.onActorSelectionChanged(handleActorSelectionForObjectDock);
-  actorTransformCallbackToken = await editorApi.events.onActorTransformUpdated(handleActorTransformForCabbage);
-  actorPickResultCallbackToken = await editorApi.events.onActorPickResult(handleActorPickResult);
+  sceneAddedCallbackToken = await subscribeWhileCurrent(editorApi.events.onSceneAdded, onSceneAddedEvent);
+  if (!viewCurrent()) return;
+  sceneRenamedCallbackToken = await subscribeWhileCurrent(editorApi.events.onSceneRenamed, onSceneRenamedEvent);
+  if (!viewCurrent()) return;
+  actorSelectionCallbackToken = await subscribeWhileCurrent(editorApi.events.onActorSelectionChanged, handleActorSelectionForObjectDock);
+  if (!viewCurrent()) return;
+  actorTransformCallbackToken = await subscribeWhileCurrent(editorApi.events.onActorTransformUpdated, handleActorTransformForCabbage);
+  if (!viewCurrent()) return;
+  actorPickResultCallbackToken = await subscribeWhileCurrent(editorApi.events.onActorPickResult, handleActorPickResult);
+  if (!viewCurrent()) return;
   gizmoPointerResultCallbackToken =
-    await editorApi.events.onViewportGizmoPointerResult(handleViewportGizmoPointerResult);
+    await subscribeWhileCurrent(editorApi.events.onViewportGizmoPointerResult, handleViewportGizmoPointerResult);
+    if (!viewCurrent()) return;
   coronaEventBus.on('viewport-ui-calibration-changed', applyViewportUiCalibration);
 
   // Primary work docks start hidden. If this main CEF page is reused, close any native
@@ -3194,11 +2952,13 @@ onMounted(async () => {
     const panelState = dockStore.panels[panelId];
     if (panelState?.mode === 'external') {
       await closeFloatingPanel(dockStore, panelId);
+      if (!viewCurrent()) return;
     } else {
       dockStore.closePanel(panelId);
     }
   }
   await syncSceneCameraBinding(initialSceneId);
+  if (!viewCurrent()) return;
   broadcastViewportControlsState();
 
   // Subscribe to proactive DeepSeek reviews and the world-scoped assistant context.
@@ -3212,6 +2972,7 @@ onMounted(async () => {
     { projectScopeId: currentProjectReviewScopeId }
   );
   await loadCabbageWorldContext({ reset: true });
+  if (!viewCurrent()) return;
   cabbageCandidateTimer = window.setInterval(() => promoteDueCabbageTasks(), 1000);
   window.addEventListener('cabbage-run-failed', onCabbageRunFailed);
   window.addEventListener('corona-active-project-changed', onActiveProjectChanged);
@@ -3219,6 +2980,12 @@ onMounted(async () => {
 });
 
 onUnmounted(() => {
+  viewDisposed = true;
+  ++cabbageWorldLoadGeneration;
+  ++cameraInputLockReconcileToken;
+  cameraControls.dispose();
+  cancelPendingTransformEvents();
+  void cancelActiveNodeGraphGeneration();
   cabbageWorldInitializationRetry.cancel();
   stopProjectResourceLoadPolling();
   clearPreviewPoll();
@@ -3290,9 +3057,10 @@ onUnmounted(() => {
   }
   window.removeEventListener('resize', handleViewportLayoutChange);
   window.removeEventListener('blur', handleMainViewportBlur);
+  window.removeEventListener('pointercancel', resetRealtimeCameraInput);
+  document.removeEventListener('visibilitychange', handleMainViewportVisibility);
   sceneCameraBindingRequestRevision += 1;
   sceneCameraBindingRefreshPromise = null;
-  stopMoveLoop();
   if (cameraViewportSyncRafId != null) {
     cancelAnimationFrame(cameraViewportSyncRafId);
     cameraViewportSyncRafId = null;
