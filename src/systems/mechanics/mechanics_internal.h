@@ -610,6 +610,19 @@ inline ktm::fvec3 normalize_safe(const ktm::fvec3& v) {
     return make_fvec3(v.x / len, v.y / len, v.z / len);
 }
 
+// 判断点 p 的平面投影是否落在三角形 (v0,v1,v2) 内。
+// n 必须是 normalize_safe(cross(v1-v0, v2-v0)) 得到的面法线，保证绕序一致。
+// pit_eps 给少量浮点噪声留容差，避免边界点被误判为在外部。
+inline bool point_in_triangle_projected(
+    const ktm::fvec3& p,
+    const ktm::fvec3& v0, const ktm::fvec3& v1, const ktm::fvec3& v2,
+    const ktm::fvec3& n) {
+    constexpr float pit_eps = -1e-4f;
+    return dot(cross(sub(v1, v0), sub(p, v0)), n) >= pit_eps &&
+           dot(cross(sub(v2, v1), sub(p, v1)), n) >= pit_eps &&
+           dot(cross(sub(v0, v2), sub(p, v2)), n) >= pit_eps;
+}
+
 /// 将局部空间碰撞网格顶点变换到世界空间
 inline void transform_vertices_to_world(
     const std::vector<ktm::fvec3>& local_verts,
@@ -752,7 +765,8 @@ inline void triangle_narrowphase(
     const CollisionMesh& mesh_b,
     const ktm::fvec3& center_a,
     const ktm::fvec3& center_b,
-    TriangleContactResult& result) {
+    TriangleContactResult& result,
+    float contact_threshold = 0.02f) {
     result.has_contact = false;
     float best_depth = 0.0f;
     ktm::fvec3 best_normal = make_fvec3(0.0f, 1.0f, 0.0f);
@@ -817,6 +831,69 @@ inline void triangle_narrowphase(
                 best_point = tri_center;
                 best_tri_a_idx = cur_tri_a;
                 best_tri_b_idx = cur_tri_b;
+            }
+        }
+    }
+
+    // 顶点-面近接检测：捕获三角形面对面贴合（无体积穿透）时的接触
+    // B 的顶点 对 A 的三角形面
+    for (int cur_ta = 0; cur_ta < (int)mesh_a.triangles.size(); ++cur_ta) {
+        const auto& ta_idx = mesh_a.triangles[cur_ta];
+        const ktm::fvec3& a0 = world_verts_a[ta_idx[0]];
+        const ktm::fvec3& a1 = world_verts_a[ta_idx[1]];
+        const ktm::fvec3& a2 = world_verts_a[ta_idx[2]];
+        ktm::fvec3 raw_n = cross(sub(a1, a0), sub(a2, a0));
+        float n_len = std::sqrt(dot(raw_n, raw_n));
+        if (n_len < 1e-10f) continue;
+        ktm::fvec3 fn = make_fvec3(raw_n.x / n_len, raw_n.y / n_len, raw_n.z / n_len);
+        float pd = dot(fn, a0);
+
+        for (size_t vi = 0; vi < world_verts_b.size(); ++vi) {
+            const ktm::fvec3& vb = world_verts_b[vi];
+            float sd = dot(fn, vb) - pd;  // >0: vb 在三角形正面侧
+            if (sd < 0.0f || sd > contact_threshold) continue;
+            if (!point_in_triangle_projected(vb, a0, a1, a2, fn)) continue;
+
+            float depth = contact_threshold - sd;
+            ktm::fvec3 cp = make_fvec3(vb.x - fn.x * sd, vb.y - fn.y * sd, vb.z - fn.z * sd);
+            contact_sum.x += cp.x; contact_sum.y += cp.y; contact_sum.z += cp.z;
+            ++contact_count;
+            if (depth > best_depth) {
+                best_depth = depth;
+                best_normal = fn;
+                best_point = cp;
+                best_tri_a_idx = cur_ta;
+            }
+        }
+    }
+
+    // A 的顶点 对 B 的三角形面
+    for (int cur_tb = 0; cur_tb < (int)mesh_b.triangles.size(); ++cur_tb) {
+        const auto& tb_idx = mesh_b.triangles[cur_tb];
+        const ktm::fvec3& b0 = world_verts_b[tb_idx[0]];
+        const ktm::fvec3& b1 = world_verts_b[tb_idx[1]];
+        const ktm::fvec3& b2 = world_verts_b[tb_idx[2]];
+        ktm::fvec3 raw_n = cross(sub(b1, b0), sub(b2, b0));
+        float n_len = std::sqrt(dot(raw_n, raw_n));
+        if (n_len < 1e-10f) continue;
+        ktm::fvec3 fn = make_fvec3(raw_n.x / n_len, raw_n.y / n_len, raw_n.z / n_len);
+        float pd = dot(fn, b0);
+
+        for (size_t vi = 0; vi < world_verts_a.size(); ++vi) {
+            const ktm::fvec3& va = world_verts_a[vi];
+            float sd = dot(fn, va) - pd;
+            if (sd < 0.0f || sd > contact_threshold) continue;
+            if (!point_in_triangle_projected(va, b0, b1, b2, fn)) continue;
+
+            float depth = contact_threshold - sd;
+            ktm::fvec3 cp = make_fvec3(va.x - fn.x * sd, va.y - fn.y * sd, va.z - fn.z * sd);
+            contact_sum.x += cp.x; contact_sum.y += cp.y; contact_sum.z += cp.z;
+            ++contact_count;
+            if (depth > best_depth) {
+                best_depth = depth;
+                best_normal = fn;
+                best_point = cp;
+                best_tri_b_idx = cur_tb;
             }
         }
     }

@@ -34,13 +34,6 @@
 // Note: do not depend on nanobind in the mechanics system. Callbacks provided
 // from the scripting layer are expected to manage GIL acquisition themselves.
 
-#ifndef CORONA_MECHANICS_USE_OBB_SAT
-#define CORONA_MECHANICS_USE_OBB_SAT 1
-#endif
-
-#ifndef CORONA_MECHANICS_USE_TRIANGLE_NARROWPHASE
-#define CORONA_MECHANICS_USE_TRIANGLE_NARROWPHASE 1
-#endif
 
 #include "mechanics_internal.h"
 
@@ -404,9 +397,6 @@ void MechanicsSystem::update_physics(float fixed_dt) {
             (entry.max_world.x - entry.min_world.x) * 0.5f,  // 世界 AABB 半宽
             (entry.max_world.y - entry.min_world.y) * 0.5f,
             (entry.max_world.z - entry.min_world.z) * 0.5f);
-#if CORONA_MECHANICS_USE_OBB_SAT
-        build_mechanics_obb(entry, t_collision);  // 由同一预测位姿构造 OBB
-#endif
 
         const float mass = frame_params[h].mass;                    // kg
         const float w = std::abs(e_local.x * t.scale.x) * 2.0f;  // 世界系盒子 X 向全长（缩放后）
@@ -514,7 +504,6 @@ void MechanicsSystem::update_physics(float fixed_dt) {
 
         // 5.4 对候选对做法向/切向冲量（半隐式 GS：多轮依次解每对约束近似同时满足）
         constexpr float eps = 1e-8f;                   // 分母稳定项，非物理
-        constexpr float min_overlap = 0.001f;          // 小于此视为数值噪声/SAT 抖振，跳过
         constexpr float k_positional_slop = 0.004f;    // Baumgarte 式校正：小穿透只靠冲量，不修位姿
         constexpr float k_positional_percent = 0.35f;  // 仅末轮按穿透拆分平移，且只推一部分，防过冲
         constexpr int k_impulse_iterations = 8;        // 轮数↑ 堆叠更稳；提升到8以改善坡面接触收敛
@@ -562,96 +551,12 @@ void MechanicsSystem::update_physics(float fixed_dt) {
 
                 ktm::fvec3 normal{};
                 float penetration = 0.f;
-#if CORONA_MECHANICS_USE_OBB_SAT
-                if (!sat_obb_obb(a.obb_center, a.obb_u, a.obb_v, a.obb_w, a.obb_hu, a.obb_hv, a.obb_hw,
-                                 b.obb_center, b.obb_u, b.obb_v, b.obb_w, b.obb_hu, b.obb_hv, b.obb_hw,
-                                 normal, penetration)) {
-                    continue;
-                }
-                if (penetration < min_overlap) {
-                    continue;
-                }
-#else
-                // AABB–AABB：MTD 必沿世界轴；旋转体用世界 AABB 包络时斜面接触法线仍错，真斜碰请开 OBB+SAT。
-                // 稳定：在「并列最浅穿透」的轴里优先 |Δcenter| 最大者，避免主轴每帧切换；符号用死区避免 0 附近翻转。
-                const float diff_x = b.center_world.x - a.center_world.x;
-                const float diff_y = b.center_world.y - a.center_world.y;
-                const float diff_z = b.center_world.z - a.center_world.z;
-                const float overlap_x =
-                    (a.max_world.x - a.min_world.x) * 0.5f + (b.max_world.x - b.min_world.x) * 0.5f - std::abs(diff_x);
-                const float overlap_y =
-                    (a.max_world.y - a.min_world.y) * 0.5f + (b.max_world.y - b.min_world.y) * 0.5f - std::abs(diff_y);
-                const float overlap_z =
-                    (a.max_world.z - a.min_world.z) * 0.5f + (b.max_world.z - b.min_world.z) * 0.5f - std::abs(diff_z);
-                if (overlap_x < min_overlap || overlap_y < min_overlap || overlap_z < min_overlap) {
-                    continue;
-                }
-                const float mtd_min = std::min({overlap_x, overlap_y, overlap_z});
-                constexpr float k_mtd_tie_abs = 0.0025f;
-                constexpr float k_mtd_tie_rel = 0.04f;
-                const float mtd_band = std::max(k_mtd_tie_abs, k_mtd_tie_rel * std::max(mtd_min, min_overlap));
-                const float adx = std::abs(diff_x);
-                const float ady = std::abs(diff_y);
-                const float adz = std::abs(diff_z);
-                int axis = 0;
-                float best_dabs = -1.f;
-                int best_stack_pri = 999;
-                for (int i = 0; i < 3; ++i) {
-                    const float ov = (i == 0) ? overlap_x : (i == 1) ? overlap_y
-                                                                     : overlap_z;
-                    const float ab = (i == 0) ? adx : (i == 1) ? ady
-                                                               : adz;
-                    if (ov > mtd_min + mtd_band) {
-                        continue;
-                    }
-                    const int stack_pri = (i == 1) ? 0 : (i == 0) ? 1
-                                                                  : 2;
-                    if (ab > best_dabs + 1e-6f) {
-                        axis = i;
-                        best_dabs = ab;
-                        best_stack_pri = stack_pri;
-                    } else if (std::abs(ab - best_dabs) <= 1e-6f && stack_pri < best_stack_pri) {
-                        axis = i;
-                        best_stack_pri = stack_pri;
-                    }
-                }
-                if (best_dabs < 0.f) {
-                    if (overlap_y <= overlap_x && overlap_y <= overlap_z) {
-                        axis = 1;
-                    } else if (overlap_x <= overlap_z) {
-                        axis = 0;
-                    } else {
-                        axis = 2;
-                    }
-                }
-                constexpr float k_mtd_sign_eps = 1e-4f;
-                auto mtd_axis_sign = [](float d) -> float {
-                    if (d > k_mtd_sign_eps) {
-                        return 1.f;
-                    }
-                    if (d < -k_mtd_sign_eps) {
-                        return -1.f;
-                    }
-                    return 1.f;
-                };
-                if (axis == 0) {
-                    penetration = overlap_x;
-                    normal = make_fvec3(mtd_axis_sign(diff_x), 0.f, 0.f);
-                } else if (axis == 1) {
-                    penetration = overlap_y;
-                    normal = make_fvec3(0.f, mtd_axis_sign(diff_y), 0.f);
-                } else {
-                    penetration = overlap_z;
-                    normal = make_fvec3(0.f, 0.f, mtd_axis_sign(diff_z));
-                }
-#endif
+                // contact_point 由三角窄相精确填写；初始化为两质心中点作为首帧兜底
+                ktm::fvec3 contact_point = vec3_mul(vec3_add(a.center_world, b.center_world), 0.5f);
 
                 // ===== 三角形窄相（最终碰撞判断）=====
-                // 流水线：AABB 粗筛（上方已通过）→ 三角形 SAT（最终判断）。
-                // 三角 SAT 未命中 → continue，不施加任何冲量。
-                // 三角 SAT 命中   → 用三角的法线和穿透深度，忽略 AABB 的结果。
-                // 无三角网格      → 退回 AABB 法线和穿透（兜底，保证有模型的物体参与碰撞）。
-#if CORONA_MECHANICS_USE_TRIANGLE_NARROWPHASE
+                // 流水线：AABB 粗筛（上方已通过）→ 三角形 SAT + 顶点-面近接（最终判断）。
+                // 三角未命中或无网格 → continue，不施加任何冲量。
                 {
                     auto get_mesh = [&](const MechanicsWorldAABB& body) -> const CollisionMesh* {
                         if (body.is_skinned) {
@@ -698,6 +603,7 @@ void MechanicsSystem::update_physics(float fixed_dt) {
                             }
                             normal = tri.normal;
                             penetration = tri.penetration > 0.0f ? tri.penetration : penetration;
+                            contact_point = tri.contact_point;
 
                             // Phase 3：IK 反馈
                             auto enqueue_ik = [&](bool skinned, std::uintptr_t mh,
@@ -726,6 +632,8 @@ void MechanicsSystem::update_physics(float fixed_dt) {
                             const auto*          verts_ref = mesh_a ? verts_a : verts_b;
                             const ktm::fvec3&    probe     = mesh_a ? b.center_world : a.center_world;
 
+                            // 使用固定阈值而非 AABB penetration，以覆盖首帧刚接触时穿透深度接近零的情况
+                            constexpr float k_surface_threshold = 0.05f;
                             float best_d = std::numeric_limits<float>::max();
                             ktm::fvec3 best_n{};
                             bool found = false;
@@ -735,30 +643,34 @@ void MechanicsSystem::update_physics(float fixed_dt) {
                                 const ktm::fvec3& v2 = (*verts_ref)[tri_idx[2]];
                                 ktm::fvec3 fn = normalize_safe(cross(sub(v1, v0), sub(v2, v0)));
                                 float d = dot(fn, sub(probe, v0));
-                                // 探针在三角正面且距离小于穿透深度（说明质心刚进入表面）
-                                if (d >= 0.0f && d <= penetration && d < best_d) {
+                                if (d >= 0.0f && d <= k_surface_threshold && d < best_d) {
                                     best_d = d;
                                     best_n = fn;
                                     found  = true;
                                 }
                             }
                             if (!found) {
-                                continue;  // 质心未在任何三角面的有效接触范围内：跳过
+                                continue;
                             }
                             if (dot(best_n, sub(b.center_world, a.center_world)) < 0.0f)
                                 best_n = make_fvec3(-best_n.x, -best_n.y, -best_n.z);
                             normal = best_n;
-                            // penetration 仍用 AABB 值（单侧网格无法精确算穿透深度）
+                            penetration = k_surface_threshold - best_d;
+                            contact_point = make_fvec3(
+                                probe.x - best_n.x * best_d,
+                                probe.y - best_n.y * best_d,
+                                probe.z - best_n.z * best_d);
                         }
                         // 两方都没有有效世界顶点：跳过（网格尚未加载完成的首帧保护）
                         else {
                             continue;
                         }
                     }
-                    // mesh_a == nullptr && mesh_b == nullptr：两方都没有三角网格
-                    // 退回 AABB 法线和穿透继续施加冲量（纯包围盒 vs 包围盒的兜底）
+                    // mesh_a == nullptr && mesh_b == nullptr：两方都没有三角网格，跳过
+                    else {
+                        continue;
+                    }
                 }
-#endif
 
                 const float mass_a = frame_params[ha].mass;
                 const float mass_b = frame_params[hb].mass;
@@ -772,23 +684,9 @@ void MechanicsSystem::update_physics(float fixed_dt) {
                 // 前几轮 e=0：先把接触簇里的相对法向「扎进」速度吃掉；末轮再加 e，减轻来回弹
                 const float rest_use = (impulse_iter == k_impulse_iterations - 1) ? rest : 0.f;
 
-#if CORONA_MECHANICS_USE_OBB_SAT
-                const ktm::fvec3 p_a = obb_support_point(a.obb_center, a.obb_u, a.obb_v, a.obb_w,
-                                                         a.obb_hu, a.obb_hv, a.obb_hw, normal);
-                const ktm::fvec3 p_b = obb_support_point(b.obb_center, b.obb_u, b.obb_v, b.obb_w,
-                                                         b.obb_hu, b.obb_hv, b.obb_hw,
-                                                         make_fvec3(-normal.x, -normal.y, -normal.z));
-                const ktm::fvec3 p_contact = vec3_mul(vec3_add(p_a, p_b), 0.5f);  // 近似接触点：两支撑点中点
-                const ktm::fvec3 r_a = vec3_sub(p_contact, a.obb_center);         // 质心/盒心到触点的臂
-                const ktm::fvec3 r_b = vec3_sub(p_contact, b.obb_center);
-#else
-                const ktm::fvec3 p_a = aabb_support_world(a.center_world, a.half_extents, normal);
-                const ktm::fvec3 p_b = aabb_support_world(b.center_world, b.half_extents,
-                                                          make_fvec3(-normal.x, -normal.y, -normal.z));
-                const ktm::fvec3 p_contact = vec3_mul(vec3_add(p_a, p_b), 0.5f);  // AABB 模式下同样用中点
-                const ktm::fvec3 r_a = vec3_sub(p_contact, a.center_world);       // 此处 center_world≈AABB 心
+                const ktm::fvec3 p_contact = contact_point;
+                const ktm::fvec3 r_a = vec3_sub(p_contact, a.center_world);
                 const ktm::fvec3 r_b = vec3_sub(p_contact, b.center_world);
-#endif
 
                 ktm::fvec3& va = impl_->body(ha).velocity;
                 ktm::fvec3& vb = impl_->body(hb).velocity;
