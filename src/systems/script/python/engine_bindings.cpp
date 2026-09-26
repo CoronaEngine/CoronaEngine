@@ -212,14 +212,10 @@ void BindAll(nanobind::module_& m) {
              "Set velocity damping factor")
         .def("get_damping", &Mechanics::get_damping,
              "Get velocity damping factor")
-        .def("set_physics_enabled", &Mechanics::set_physics_enabled, nb::arg("enabled"),
-             "Enable or disable physics simulation for this object")
-        .def("get_physics_enabled", &Mechanics::get_physics_enabled,
-             "Get whether physics simulation is enabled for this object")
-        .def("set_collision_enabled", &Mechanics::set_collision_enabled, nb::arg("enabled"),
-             "Enable or disable collision detection for this object")
-        .def("get_collision_enabled", &Mechanics::get_collision_enabled,
-             "Get whether collision detection is enabled for this object")
+        .def("set_body_type", &Mechanics::set_body_type, nb::arg("type"),
+             "Set body type: \"dynamic\" (gravity + impulses), \"kinematic\" (externally driven), \"static\" (immovable), or \"phantom\" (no collision at all)")
+        .def("get_body_type", &Mechanics::get_body_type,
+             "Get body type string: \"dynamic\", \"kinematic\", \"static\", or \"phantom\"")
         .def("set_linear_lock", &Mechanics::set_linear_lock,
              nb::arg("lock_x"), nb::arg("lock_y"), nb::arg("lock_z"),
              "Lock/unlock linear movement on X/Y/Z axes")
@@ -267,8 +263,7 @@ void BindAll(nanobind::module_& m) {
                 };
 
                 self.set_on_move_callback(cb); }, nb::arg("callback"), "Set move callback for geometry.")
-        .def("set_collision_shape", &Mechanics::set_collision_shape, nb::arg("shape"))
-        .def("get_collision_shape", &Mechanics::get_collision_shape);
+        ;
 
     // ============================================================================
     // Optics: 光学/渲染组件

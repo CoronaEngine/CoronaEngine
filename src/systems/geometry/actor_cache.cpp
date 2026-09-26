@@ -89,7 +89,7 @@ std::string ActorStreamingRecord::to_json() const {
     j["scl_z"] = transform.scale.z;
 
     // 布尔标志
-    j["physics_enabled"] = physics_enabled;
+    j["body_type"] = std::string(body_type_to_string(body_type));
     j["optics_visible"]  = optics_visible;
     j["follow_camera"]   = follow_camera;
     j["pinned"]          = pinned;
@@ -134,7 +134,13 @@ std::optional<ActorStreamingRecord> ActorStreamingRecord::from_json(const std::s
         rec.transform.scale.y           = j.value("scl_y", 1.0f);
         rec.transform.scale.z           = j.value("scl_z", 1.0f);
 
-        rec.physics_enabled = j.value("physics_enabled", false);
+        // body_type：优先读新字段；旧存档只有 physics_enabled bool 时做迁移
+        if (j.contains("body_type") && j["body_type"].is_string()) {
+            rec.body_type = body_type_from_string(j["body_type"].get<std::string>());
+        } else {
+            // 向后兼容：physics_enabled=true → Dynamic, false → Static
+            rec.body_type = j.value("physics_enabled", false) ? BodyType::Dynamic : BodyType::Static;
+        }
         rec.optics_visible  = j.value("optics_visible", true);
         rec.follow_camera   = j.value("follow_camera", false);
         rec.pinned          = j.value("pinned", false);

@@ -110,14 +110,9 @@ class Mechanics {
     void set_damping(float damping);
     [[nodiscard]] float get_damping() const;
 
-    void set_physics_enabled(bool enabled);
-    [[nodiscard]] bool get_physics_enabled() const;
-
-    // 碰撞检测开关：false 时物体不参与碰撞检测（不与其他物体或地面碰撞）
-    void set_collision_enabled(bool enabled);
-    [[nodiscard]] bool get_collision_enabled() const;
-    void set_collision_shape(std::string_view shape);
-    [[nodiscard]] std::string get_collision_shape() const;
+    // 物体类型：决定物体如何参与物理模拟（"dynamic"/"kinematic"/"static"）
+    void set_body_type(std::string_view type);
+    [[nodiscard]] std::string get_body_type() const;
 
     // 轴锁定：锁定指定轴上的线性运动（平移）
     void set_linear_lock(bool lock_x, bool lock_y, bool lock_z);

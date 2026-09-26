@@ -2036,7 +2036,7 @@ void GeometrySystem::on_evict_requested(const Events::ActorEvictRequestedEvent& 
             auto mech = hub.mechanics_storage().try_acquire_read(profile->mechanics_handle);
             if (mech) {
                 if (!physics_captured) {
-                    rec.physics_enabled = mech->physics_enabled;
+                    rec.body_type = mech->body_type;
                     physics_captured = true;
                 }
                 if (mech->geometry_handle && !seen_geoms.count(mech->geometry_handle)) {
@@ -2097,11 +2097,11 @@ void GeometrySystem::on_evict_requested(const Events::ActorEvictRequestedEvent& 
 
     CFW_LOG_NOTICE("[GeometrySystem] Actor {} evicted: cached stream record "
                    "({} profiles, {} geometries, {} resource_ids, path={}, "
-                   "physics={}, optics_visible={}, follow_camera={})",
+                   "body_type={}, optics_visible={}, follow_camera={})",
                    event.actor,
                    rec.profile_handles.size(), rec.geometry_handles.size(),
                    rec.resource_ids.size(), rec.model_path.string(),
-                   rec.physics_enabled, rec.optics_visible, rec.follow_camera);
+                   body_type_to_string(rec.body_type), rec.optics_visible, rec.follow_camera);
 
     lock.unlock();
     if (impl_->ctx && impl_->ctx->event_bus()) {
@@ -2133,11 +2133,11 @@ void GeometrySystem::on_restore_requested(const Events::ActorRestoreRequestedEve
         model_path = rec->model_path;
         CFW_LOG_NOTICE("[GeometrySystem] Restoring actor {} from cache: "
                        "path={}, profiles={}, geometries={}, resource_ids={}, "
-                       "follow_camera={}, physics_enabled={}, optics_visible={}, priority={}",
+                       "follow_camera={}, body_type={}, optics_visible={}, priority={}",
                        event.actor, model_path.string(),
                        rec->profile_handles.size(), rec->geometry_handles.size(),
                        rec->resource_ids.size(), rec->follow_camera,
-                       rec->physics_enabled, rec->optics_visible, rec->priority);
+                       body_type_to_string(rec->body_type), rec->optics_visible, rec->priority);
     } else {
         // 缓存未命中：回退到从 ActorDevice 读取 model_path
         auto actor_read = hub.actor_storage().try_acquire_read(event.actor);
@@ -2156,7 +2156,7 @@ void GeometrySystem::on_restore_requested(const Events::ActorRestoreRequestedEve
     }
 
     // ---- 第 1.5 步：恢复运行时状态到 SharedDataHub ----
-    // evict 时存入 ActorStreamingRecord 的 transform / physics_enabled /
+    // evict 时存入 ActorStreamingRecord 的 transform / body_type /
     // optics_visible 在 restore 时写回对应的存储槽位，保证 actor 恢复后
     // 渲染/物理看到的是 evict 前的状态而非默认值。
     if (rec) {
@@ -2179,12 +2179,12 @@ void GeometrySystem::on_restore_requested(const Events::ActorRestoreRequestedEve
                     }
                 }
 
-                // 恢复 physics_enabled
+                // 恢复 body_type
                 if (profile->mechanics_handle) {
                     auto mech = hub.mechanics_storage().try_acquire_write(
                         profile->mechanics_handle);
                     if (mech) {
-                        mech->physics_enabled = rec->physics_enabled;
+                        mech->body_type = rec->body_type;
                     }
                 }
 
@@ -2199,11 +2199,11 @@ void GeometrySystem::on_restore_requested(const Events::ActorRestoreRequestedEve
             }
         }
         // CFW_LOG_NOTICE("[GeometrySystem] Restored actor {} state: pos=({:.1f},{:.1f},{:.1f}) "
-        //                "physics={} optics_visible={}",
+        //                "body_type={} optics_visible={}",
         //                event.actor,
         //                rec->transform.position.x, rec->transform.position.y,
         //                rec->transform.position.z,
-        //                rec->physics_enabled, rec->optics_visible);
+        //                body_type_to_string(rec->body_type), rec->optics_visible);
     }
 
     // ---- 第 2 步：检查是否已在加载/卸载中，然后启动异步导入 ----

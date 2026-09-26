@@ -136,11 +136,34 @@ struct GeometryDevice {
     std::vector<Resource::IkChain> ik_chains;
 };
 
-enum class CollisionShape : std::uint8_t {
-    None,
-    Box,
-    Mesh,
+// 物体参与物理模拟的方式。
+// Dynamic  ：受重力和冲量影响，与其他物体碰撞并弹开（原 physics_enabled=true）。
+// Kinematic：外部驱动（脚本/动画），不受重力和碰撞冲量影响，但推开 Dynamic 物体；触发碰撞回调。
+// Static   ：完全静止（地形/场景固定件），不受任何力影响；触发碰撞回调。
+// Phantom  ：完全不参与碰撞检测，不受任何力；适用于纯视觉/音频物体（原 collision_enabled=false）。
+enum class BodyType : std::uint8_t {
+    Dynamic,
+    Kinematic,
+    Static,
+    Phantom,
 };
+
+inline std::string_view body_type_to_string(BodyType bt) {
+    switch (bt) {
+        case BodyType::Dynamic:   return "dynamic";
+        case BodyType::Kinematic: return "kinematic";
+        case BodyType::Static:    return "static";
+        case BodyType::Phantom:   return "phantom";
+    }
+    return "dynamic";
+}
+
+inline BodyType body_type_from_string(std::string_view s) {
+    if (s == "kinematic") return BodyType::Kinematic;
+    if (s == "static")    return BodyType::Static;
+    if (s == "phantom")   return BodyType::Phantom;
+    return BodyType::Dynamic;
+}
 
 struct MechanicsDevice {
     std::uintptr_t geometry_handle{};
@@ -152,11 +175,8 @@ struct MechanicsDevice {
     float restitution{0.8f};
     float damping{0.99f};
 
-    // 物理开关：false 时物理系统跳过该对象（不参与模拟，但仍保留数据）
-    bool physics_enabled{false};
-
-    // 权威碰撞形状。None 完全禁用；Box 使用包围体；Mesh 允许三角形窄相。
-    CollisionShape collision_shape{CollisionShape::Box};
+    // 物体参与物理的方式（取代旧 physics_enabled + collision_shape 双字段）
+    BodyType body_type{BodyType::Dynamic};
 
     // 轴锁定位掩码：bit0=锁定X轴, bit1=锁定Y轴, bit2=锁定Z轴
     uint8_t linear_lock_mask{0};   // 锁定线性运动（平移）的轴

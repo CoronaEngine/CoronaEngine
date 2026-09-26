@@ -1438,66 +1438,22 @@ float Corona::API::Mechanics::get_damping() const {
     return 0.99f;
 }
 
-void Corona::API::Mechanics::set_physics_enabled(bool enabled) {
+void Corona::API::Mechanics::set_body_type(std::string_view type) {
     if (handle_ == 0) {
-        CFW_LOG_WARNING("[Mechanics::set_physics_enabled] Invalid mechanics handle");
+        CFW_LOG_WARNING("[Mechanics::set_body_type] Invalid mechanics handle");
         return;
     }
     if (auto accessor = SharedDataHub::instance().mechanics_storage().acquire_write(handle_)) {
-        accessor->physics_enabled = enabled;
+        accessor->body_type = body_type_from_string(type);
     }
 }
 
-bool Corona::API::Mechanics::get_physics_enabled() const {
-    if (handle_ == 0) return true;
+std::string Corona::API::Mechanics::get_body_type() const {
+    if (handle_ == 0) return "dynamic";
     if (auto accessor = SharedDataHub::instance().mechanics_storage().try_acquire_read(handle_)) {
-        return accessor->physics_enabled;
+        return std::string(body_type_to_string(accessor->body_type));
     }
-    return true;
-}
-
-void Corona::API::Mechanics::set_collision_enabled(bool enabled) {
-    if (handle_ == 0) {
-        CFW_LOG_WARNING("[Mechanics::set_collision_enabled] Invalid mechanics handle");
-        return;
-    }
-    if (auto accessor = SharedDataHub::instance().mechanics_storage().acquire_write(handle_)) {
-        accessor->collision_shape = enabled ? CollisionShape::Box : CollisionShape::None;
-    }
-}
-
-bool Corona::API::Mechanics::get_collision_enabled() const {
-    if (handle_ == 0) return true;
-    if (auto accessor = SharedDataHub::instance().mechanics_storage().try_acquire_read(handle_)) {
-        return accessor->collision_shape != CollisionShape::None;
-    }
-    return true;
-}
-
-void Corona::API::Mechanics::set_collision_shape(std::string_view shape) {
-    if (handle_ == 0) return;
-    CollisionShape value = CollisionShape::Box;
-    if (shape == "none") value = CollisionShape::None;
-    else if (shape == "mesh") value = CollisionShape::Mesh;
-    else if (shape != "box") {
-        CFW_LOG_WARNING("[Mechanics::set_collision_shape] Invalid shape '{}'; using box", shape);
-    }
-    if (auto accessor = SharedDataHub::instance().mechanics_storage().acquire_write(handle_)) {
-        accessor->collision_shape = value;
-    }
-}
-
-std::string Corona::API::Mechanics::get_collision_shape() const {
-    if (handle_ != 0) {
-        if (auto accessor = SharedDataHub::instance().mechanics_storage().try_acquire_read(handle_)) {
-            switch (accessor->collision_shape) {
-                case CollisionShape::None: return "none";
-                case CollisionShape::Mesh: return "mesh";
-                case CollisionShape::Box: return "box";
-            }
-        }
-    }
-    return "box";
+    return "dynamic";
 }
 
 void Corona::API::Mechanics::set_linear_lock(bool lock_x, bool lock_y, bool lock_z) {

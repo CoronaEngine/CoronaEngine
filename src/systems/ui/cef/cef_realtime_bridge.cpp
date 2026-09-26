@@ -1474,27 +1474,14 @@ bool handle_property_fast(const CefRefPtr<CefProcessMessage>& message) {
                     }
                 }
                 break;
-            case 4:  // CollisionEnabled
+            case 4:  // BodyType: 0=Dynamic, 1=Kinematic, 2=Static, 3=Phantom
                 if (profile->mechanics_handle != 0) {
                     if (auto mech = hub.mechanics_storage().try_acquire_write(profile->mechanics_handle)) {
-                        mech->collision_shape = (value != 0.0)
-                            ? CollisionShape::Box : CollisionShape::None;
-                    }
-                }
-                break;
-            case 5:  // PhysicsEnabled
-                if (profile->mechanics_handle != 0) {
-                    if (auto mech = hub.mechanics_storage().try_acquire_write(profile->mechanics_handle)) {
-                        mech->physics_enabled = (value != 0.0);
-                    }
-                }
-                break;
-            case 8:  // CollisionShape: 0=None, 1=Box, 2=Mesh
-                if (profile->mechanics_handle != 0) {
-                    if (auto mech = hub.mechanics_storage().try_acquire_write(profile->mechanics_handle)) {
-                        const int shape = static_cast<int>(value);
-                        mech->collision_shape = shape == 0 ? CollisionShape::None
-                            : (shape == 2 ? CollisionShape::Mesh : CollisionShape::Box);
+                        const int bt = static_cast<int>(value);
+                        mech->body_type = bt == 1 ? BodyType::Kinematic
+                                        : bt == 2 ? BodyType::Static
+                                        : bt == 3 ? BodyType::Phantom
+                                                  : BodyType::Dynamic;
                     }
                 }
                 break;

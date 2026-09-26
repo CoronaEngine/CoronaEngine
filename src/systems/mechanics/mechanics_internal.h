@@ -408,8 +408,7 @@ struct BodyFrameParams {
     float mass = 1.0f;
     float damping = 0.99f;
     float restitution = 0.8f;
-    bool collision_enabled = true;
-    CollisionShape collision_shape = CollisionShape::Box;
+    BodyType body_type = BodyType::Dynamic;
     std::uintptr_t actor = 0;
 };
 

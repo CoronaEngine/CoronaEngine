@@ -175,8 +175,8 @@ void MechanicsSystem::update_physics(float fixed_dt) {
                 return;
             }
             // 跳过未加载的 actor — 无 GPU 资源 / 无全量物理数据
-            // TODO: 后续实现 offline physics proxy —— Unloaded + physics_enabled
-            //       的 actor 用简化 AABB 碰撞体继续参与物理
+            // TODO: 后续实现 offline physics proxy —— Unloaded + body_type=Dynamic
+            //       的 actor 用简化 AABB 碰撞体继续参与物理            //       的 actor 用简化 AABB 碰撞体继续参与物理
             {
                 std::shared_lock lock(impl_->residency_mtx_);
                 if (!impl_->resident_actors_.count(actor_handle)) continue;
@@ -216,22 +216,23 @@ void MechanicsSystem::update_physics(float fixed_dt) {
                             uint8_t new_linear = 0;
                             uint8_t new_angular = 0;
                             if (auto m_acc = mechanics_storage.try_acquire_read(h)) {
-                                if (!m_acc->physics_enabled) continue;  // 物理已禁用，跳过本 mechanics
                                 params.mass = m_acc->mass;
                                 params.damping = m_acc->damping;
                                 params.restitution = m_acc->restitution;
-                                params.collision_shape = m_acc->collision_shape;
-                                params.collision_enabled = m_acc->collision_shape != CollisionShape::None;
+                                params.body_type = m_acc->body_type;
                                 new_linear = m_acc->linear_lock_mask;
                                 new_angular = m_acc->angular_lock_mask;
-                                body.linear_lock = new_linear;    // 缓存线性轴锁
-                                body.angular_lock = new_angular;  // 缓存角度轴锁
+                                body.linear_lock = new_linear;
+                                body.angular_lock = new_angular;
                             } else {
                                 params = BodyFrameParams{};
                                 params.actor = actor_handle;
-                                body.linear_lock = 0;   // 读失败时默认不锁任何轴
+                                body.linear_lock = 0;
                                 body.angular_lock = 0;
                             }
+
+                            // Phantom 完全不参与碰撞检测和物理模拟，直接跳过
+                            if (params.body_type == BodyType::Phantom) continue;
 
                             mechanics_handles.push_back(h);
 
@@ -266,6 +267,7 @@ void MechanicsSystem::update_physics(float fixed_dt) {
         if (impl_->shutdown_requested.load(std::memory_order_acquire)) {
             return;
         }
+        if (frame_params[h].body_type != BodyType::Dynamic) continue;  // Static/Kinematic 不受重力
         if (impl_->body(h).sleeping) continue;    // 休眠体本阶段不改速度
 
         float damping = frame_params[h].damping;   // 线性阻尼乘子（以 60Hz 为基准的每步保留系数）
@@ -398,25 +400,30 @@ void MechanicsSystem::update_physics(float fixed_dt) {
             (entry.max_world.y - entry.min_world.y) * 0.5f,
             (entry.max_world.z - entry.min_world.z) * 0.5f);
 
-        const float mass = frame_params[h].mass;                    // kg
-        const float w = std::abs(e_local.x * t.scale.x) * 2.0f;  // 世界系盒子 X 向全长（缩放后）
-        const float hh = std::abs(e_local.y * t.scale.y) * 2.0f;
-        const float d = std::abs(e_local.z * t.scale.z) * 2.0f;
-        float Ix = mass * (hh * hh + d * d) / 12.0f;  // 长方体主轴惯量（近似；均质 box）
-        float Iy = mass * (w * w + d * d) / 12.0f;
-        float Iz = mass * (w * w + hh * hh) / 12.0f;
-        Ix = std::max(Ix, min_inertia);  // 下限防止除零
-        Iy = std::max(Iy, min_inertia);
-        Iz = std::max(Iz, min_inertia);
-        entry.rot_body_to_world = q_pred.matrix3x3();                          // 体→世界旋转（预测姿态）
-        entry.inertia_inv_body = make_fvec3(1.0f / Ix, 1.0f / Iy, 1.0f / Iz);  // 体系逆惯量对角
+        entry.rot_body_to_world = q_pred.matrix3x3();  // 体→世界旋转（预测姿态）
+        if (frame_params[h].body_type != BodyType::Dynamic) {
+            // Static/Kinematic：无限质量，逆惯量为零，不接收冲量速度修正
+            entry.inertia_inv_body = make_fvec3(0.0f, 0.0f, 0.0f);
+        } else {
+            const float mass = frame_params[h].mass;                    // kg
+            const float w = std::abs(e_local.x * t.scale.x) * 2.0f;  // 世界系盒子 X 向全长（缩放后）
+            const float hh = std::abs(e_local.y * t.scale.y) * 2.0f;
+            const float d = std::abs(e_local.z * t.scale.z) * 2.0f;
+            float Ix = mass * (hh * hh + d * d) / 12.0f;  // 长方体主轴惯量（近似；均质 box）
+            float Iy = mass * (w * w + d * d) / 12.0f;
+            float Iz = mass * (w * w + hh * hh) / 12.0f;
+            Ix = std::max(Ix, min_inertia);  // 下限防止除零
+            Iy = std::max(Iy, min_inertia);
+            Iz = std::max(Iz, min_inertia);
+            entry.inertia_inv_body = make_fvec3(1.0f / Ix, 1.0f / Iy, 1.0f / Iz);  // 体系逆惯量对角
+        }
 
         handle_to_index[h] = mechanics_data.size();  // 句柄→本轮 mechanics_data 下标
         mechanics_data.push_back(entry);
     }
 
     // 预加载所有物理物体的碰撞网格（用于三角形碰撞检测和精确地板碰撞）
-    // 无论 collision_shape 是 Mesh 还是 Box，只要有 model_id 就尝试建碰撞网格。
+    // 只要有 model_id 就尝试建碰撞网格；SIGGRAPH 替换后此阶段由新代码接管。
     // AABB 宽相已经完成粗筛；三角窄相是精化阶段，不需要额外的形状类型过滤。
     for (const auto& entry : mechanics_data) {
         if (impl_->shutdown_requested.load(std::memory_order_acquire)) {
@@ -532,17 +539,6 @@ void MechanicsSystem::update_physics(float fixed_dt) {
 
                 const MechanicsWorldAABB& a = mechanics_data[it_a->second];
                 const MechanicsWorldAABB& b = mechanics_data[it_b->second];
-
-                // 碰撞检测开关判断：任一物体关闭碰撞则跳过此对
-                // 使用 find() 而非 operator[] 避免默认构造 false 导致碰撞被静默跳过
-                {
-                    bool col_a = true, col_b = true;
-                    auto it_col_a = frame_params.find(ha);
-                    if (it_col_a != frame_params.end()) col_a = it_col_a->second.collision_enabled;
-                    auto it_col_b = frame_params.find(hb);
-                    if (it_col_b != frame_params.end()) col_b = it_col_b->second.collision_enabled;
-                    if (!col_a || !col_b) continue;
-                }
 
                 // ===== Phase 1: AABB 碰撞检测（Broadphase 确认）=====
                 if (!aabb_overlap(a.min_world, a.max_world, b.min_world, b.max_world)) {
@@ -674,10 +670,13 @@ void MechanicsSystem::update_physics(float fixed_dt) {
 
                 const float mass_a = frame_params[ha].mass;
                 const float mass_b = frame_params[hb].mass;
-                const bool sleep_a = impl_->body(ha).sleeping;  // 休眠体当「动不了」：不接收冲量速度增量
+                const bool sleep_a = impl_->body(ha).sleeping;
                 const bool sleep_b = impl_->body(hb).sleeping;
-                const float inv_ma = sleep_a ? 0.f : 1.0f / mass_a;  // Δv = (j/m)·n 中的 1/m
-                const float inv_mb = sleep_b ? 0.f : 1.0f / mass_b;
+                // Static/Kinematic 视为无限质量：inv_mass = 0，不接收冲量速度修正
+                const bool fixed_a = frame_params[ha].body_type != BodyType::Dynamic;
+                const bool fixed_b = frame_params[hb].body_type != BodyType::Dynamic;
+                const float inv_ma = (sleep_a || fixed_a) ? 0.f : 1.0f / mass_a;
+                const float inv_mb = (sleep_b || fixed_b) ? 0.f : 1.0f / mass_b;
                 const float rest_a = frame_params[ha].restitution;  // 双方恢复系数各取组件；此处简单平均
                 const float rest_b = frame_params[hb].restitution;
                 const float rest = (rest_a + rest_b) * 0.5f;
@@ -705,9 +704,9 @@ void MechanicsSystem::update_physics(float fixed_dt) {
                 const ktm::fvec3 raxn = ktm::cross(r_a, normal);  // r×n，进入 ω 的有效惯量投影公式
                 const ktm::fvec3 rbxn = ktm::cross(r_b, normal);
                 // 标量 ang_n：世界系下 (I_w^{-1} (r×n))·(r×n)，即柔度矩阵 K 中法对角项
-                const float ang_n_a = sleep_a ? 0.f
+                const float ang_n_a = (sleep_a || fixed_a) ? 0.f
                                               : ktm::dot(raxn, world_inertia_inv_apply(a.rot_body_to_world, a.inertia_inv_body, raxn));
-                const float ang_n_b = sleep_b ? 0.f
+                const float ang_n_b = (sleep_b || fixed_b) ? 0.f
                                               : ktm::dot(rbxn, world_inertia_inv_apply(b.rot_body_to_world, b.inertia_inv_body, rbxn));
                 const float denom_n = inv_ma + inv_mb + ang_n_a + ang_n_b + eps;  // 1 / (有效质量)
                 if (denom_n <= 1e-12f) {
@@ -1071,6 +1070,10 @@ void MechanicsSystem::update_physics(float fixed_dt) {
 
         if (impl_->body(h).sleeping)
             continue;  // 休眠体不再推进变换
+
+        // Static/Kinematic 不被积分器移动（由外部脚本/动画驱动）
+        if (frame_params[h].body_type != BodyType::Dynamic)
+            continue;
 
         // 阻塞写锁：位置积分每帧都要写回，_nowait 拿不到锁会跳过本帧导致物体卡顿/抖动。
         // 用阻塞版等锁（不漏帧），槽位失效时返回无效句柄而非抛异常。

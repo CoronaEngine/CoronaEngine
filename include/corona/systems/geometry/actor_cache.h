@@ -9,7 +9,7 @@
 /// - transform（position / euler_rotation / scale，ModelTransform 值类型）
 /// - profile_handles / geometry_handles（用于恢复时校验和诊断）
 /// - resource_ids（geometry → model_resource → model_id 链，用于恢复时匹配）
-/// - 运行时标志：physics_enabled / optics_visible / follow_camera / pinned
+/// - 运行时标志：body_type / optics_visible / follow_camera / pinned
 /// - priority（流式调度优先级，预留）
 ///
 /// 注意：mesh / texture 等重资源由 ResourceManager 自行管理；
@@ -39,7 +39,7 @@ struct ActorStreamingRecord {
     std::vector<std::uintptr_t> geometry_handles;    // 每个 profile 的 geometry_handle
     std::vector<std::uint64_t>  resource_ids;        // geometry → model_resource → model_id
     ModelTransform              transform;           // world position / euler rotation / scale
-    bool                        physics_enabled{false};
+    BodyType                    body_type{BodyType::Dynamic};
     bool                        optics_visible{true};
     bool                        follow_camera{false};
     bool                        pinned{false};

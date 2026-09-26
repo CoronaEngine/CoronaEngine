@@ -539,8 +539,7 @@ struct NativeEditorActor {
     std::string load_error_message;
     std::string resolved_asset_path;
     bool persisted_visible{true};
-    bool persisted_physics_enabled{true};
-    std::string persisted_collision_type{"box"};
+    std::string persisted_body_type{"dynamic"};
     nlohmann::json persisted_snapshot = nlohmann::json::object();
     NativeEditorActorOpticsState persisted_optics;
     std::unique_ptr<Corona::API::Geometry> geometry;
@@ -550,14 +549,17 @@ struct NativeEditorActor {
     std::unique_ptr<Corona::API::Actor> engine_actor;
 };
 
-std::string collision_shape_name(const Corona::API::Mechanics& mechanics) {
-    return mechanics.get_collision_shape();
+std::string body_type_name(const Corona::API::Mechanics& mechanics) {
+    return mechanics.get_body_type();
 }
 
-std::string normalize_collision_type(std::string value) {
-    if (value == "none" || value == "box" || value == "mesh") return value;
-    CFW_LOG_WARNING("Invalid collision type '{}'; using box", value);
-    return "box";
+std::string normalize_body_type(std::string value) {
+    if (value == "dynamic" || value == "kinematic" || value == "static" || value == "phantom") return value;
+    // 向后兼容旧碰撞形状字段映射
+    if (value == "none") return "phantom";
+    if (value == "box" || value == "mesh") return "dynamic";
+    CFW_LOG_WARNING("Invalid body type '{}'; using dynamic", value);
+    return "dynamic";
 }
 
 struct NativeEditorScene {
@@ -898,14 +900,12 @@ std::vector<std::string> build_actors_section_lines(const NativeEditorScene& sce
         lines.push_back(key + ".camera_lock.rotation_offset = " +
                         format_float3(actor.camera_lock_rotation_offset));
         if (actor.load_status != ActorLoadStatus::Loaded) {
-            lines.push_back(key + ".mechanics.physics_enabled = " +
-                            std::string(actor.persisted_physics_enabled ? "true" : "false"));
-            lines.push_back(key + ".mechanics.collision_type = " + actor.persisted_collision_type);
-        } else if (actor.mechanics) {
-            lines.push_back(key + ".mechanics.physics_enabled = " +
-                            std::string(actor.mechanics->get_physics_enabled() ? "true" : "false"));
-            lines.push_back(key + ".mechanics.collision_type = " +
-                            collision_shape_name(*actor.mechanics));
+            lines.push_back(key + ".mechanics.body_type = " +
+                            (actor.mechanics ? body_type_name(*actor.mechanics)
+                                             : actor.persisted_body_type));        } else if (actor.mechanics) {
+            lines.push_back(key + ".mechanics.body_type = " +
+                            (actor.mechanics ? body_type_name(*actor.mechanics)
+                                             : actor.persisted_body_type));
         }
         lines.push_back(key + ".geometry.position = " + format_float3(actor.geometry ? actor.geometry->get_position() : actor.position));
         lines.push_back(key + ".geometry.rotation = " + format_float3(actor.geometry ? actor.geometry->get_rotation() : actor.rotation));
@@ -944,8 +944,7 @@ std::vector<std::string> build_actors_section_lines(const NativeEditorScene& sce
             "actor_guid", "actor_type", "audio_resource_id", "follow_camera", "name", "route",
             "camera_lock.enabled", "camera_lock.position_offset", "camera_lock.rotation_offset",
             "geometry.position", "geometry.rotation", "geometry.scale",
-            "material.texture", "mechanics.collision_enabled", "mechanics.collision_type",
-            "mechanics.physics_enabled", "optics.diffuse", "optics.emission", "optics.metallic",
+            "material.texture", "mechanics.body_type", "optics.diffuse", "optics.emission", "optics.metallic",
             "optics.roughness", "optics.shininess", "optics.specular", "optics.visible",
             "runtime.entity_id", "runtime.asset_id", "runtime.model_ref", "runtime.entity_type",
             "runtime.semantic_role", "runtime.source_plan_id", "runtime.source_batch_id",
@@ -1643,12 +1642,12 @@ NativeEditorActor& add_native_actor_to_scene(NativeEditorScene& scene,
     apply_native_actor_optics_state(item);
     if (item.actor_type == "ui_image") {
         item.optics->set_lighting_enabled(false);
-        item.mechanics->set_physics_enabled(false);
+        item.mechanics->set_body_type("phantom");
         item.follow_camera = true;
     } else if (item.actor_type == "audio") {
         // 音频物体不渲染、不参与物理；绑定音频资源。
         item.optics->set_visible(false);
-        item.mechanics->set_physics_enabled(false);
+        item.mechanics->set_body_type("phantom");
         if (item.audio_resource_id != 0) {
             item.acoustics->set_audio_resource(item.audio_resource_id);
         }
@@ -1749,22 +1748,22 @@ void load_native_actor(NativeEditorScene& scene,
         actor.optics->set_visible(
             parse_bool(actors_section.at(actor_key + ".optics.visible"), true));
     }
-    if (actor.actor_type != "ui_image" && actors_section.contains(actor_key + ".mechanics.physics_enabled")) {
-        actor.mechanics->set_physics_enabled(
-            parse_bool(actors_section.at(actor_key + ".mechanics.physics_enabled"), true));
-    }
-    if (actor.actor_type != "ui_image" && actor.mechanics) {
-        if (actors_section.contains(actor_key + ".mechanics.collision_type")) {
-            actor.mechanics->set_collision_shape(normalize_collision_type(
-                actors_section.at(actor_key + ".mechanics.collision_type")));
-        } else if (actors_section.contains(actor_key + ".mechanics.collision_enabled")) {
-            actor.mechanics->set_collision_shape(
-                parse_bool(actors_section.at(actor_key + ".mechanics.collision_enabled"), true)
-                    ? "box" : "none");
-        } else {
-            actor.mechanics->set_collision_shape("box");
+        if (actor.actor_type != "ui_image" && actors_section.contains(actor_key + ".mechanics.body_type")) {
+            actor.mechanics->set_body_type(normalize_body_type(
+                actors_section.at(actor_key + ".mechanics.body_type")));
+        } else if (actor.actor_type != "ui_image" && actors_section.contains(actor_key + ".mechanics.physics_enabled")) {
+            // 向后兼容旧 INI：physics_enabled=true → dynamic, false → static
+            const bool pe = parse_bool(actors_section.at(actor_key + ".mechanics.physics_enabled"), true);
+            actor.mechanics->set_body_type(pe ? "dynamic" : "static");
         }
-    }
+        if (actor.actor_type != "ui_image" && actor.mechanics) {
+            if (actors_section.contains(actor_key + ".mechanics.collision_type")) {
+                // 旧字段迁移：collision_type 映射到 body_type
+                const auto ct = actors_section.at(actor_key + ".mechanics.collision_type");
+                if (!actors_section.contains(actor_key + ".mechanics.body_type"))
+                    actor.mechanics->set_body_type(normalize_body_type(ct));
+            }
+        }
 }
 
 NativeEditorCamera make_native_camera(NativeEditorScene& scene,
@@ -2134,9 +2133,11 @@ NativeEditorActor native_actor_from_snapshot(const nlohmann::json& actor_data) {
                                  {1.0f, 1.0f, 1.0f});
     item.persisted_visible = actor_data.value("visible", true);
     const auto mechanics = actor_data.value("mechanics", nlohmann::json::object());
-    item.persisted_physics_enabled = mechanics.value("physics_enabled", true);
-    item.persisted_collision_type = normalize_collision_type(
-        mechanics.value("collision_type", std::string{"box"}));
+    item.persisted_body_type = normalize_body_type(
+        mechanics.value("body_type",
+            // 向后兼容：优先旧 collision_type，再看 physics_enabled bool
+            mechanics.contains("collision_type") ? mechanics.value("collision_type", std::string{"dynamic"})
+            : (mechanics.value("physics_enabled", true) ? std::string{"dynamic"} : std::string{"static"})));
     const auto optics = actor_data.value("optics", nlohmann::json::object());
     if (optics.contains("diffuse")) {
         item.persisted_optics.diffuse = snapshot_float3(optics["diffuse"], {0.8f, 0.8f, 0.8f});
@@ -2249,8 +2250,7 @@ void materialize_actor_snapshot(NativeEditorScene& scene,
                 scene, std::move(item), asset_path);
             if (actor.optics) actor.optics->set_visible(actor.persisted_visible);
             if (actor.mechanics && actor.actor_type != "ui_image") {
-                actor.mechanics->set_physics_enabled(actor.persisted_physics_enabled);
-                actor.mechanics->set_collision_shape(actor.persisted_collision_type);
+                actor.mechanics->set_body_type(actor.persisted_body_type);
             }
             return;
         } catch (const std::exception& error) {
@@ -2276,8 +2276,7 @@ void materialize_actor_snapshot(NativeEditorScene& scene,
     placeholder.actor_type = original_type;
     if (placeholder.optics) placeholder.optics->set_visible(false);
     if (placeholder.mechanics) {
-        placeholder.mechanics->set_physics_enabled(false);
-        placeholder.mechanics->set_collision_shape("none");
+        placeholder.mechanics->set_body_type("phantom");
     }
 }
 
@@ -2706,9 +2705,9 @@ nlohmann::json actor_to_json(const NativeEditorScene& scene, const NativeEditorA
     if (actor.actor_type == "audio") {
         item["audio_resource_id"] = std::to_string(actor.audio_resource_id);
     }
-    item["collision"] = actor.load_status == ActorLoadStatus::Loaded && actor.mechanics
-                            ? collision_shape_name(*actor.mechanics)
-                            : actor.persisted_collision_type;
+    item["body_type"] = actor.load_status == ActorLoadStatus::Loaded && actor.mechanics
+                           ? body_type_name(*actor.mechanics)
+                           : actor.persisted_body_type;
     item["visible"] = actor.load_status == ActorLoadStatus::Loaded && actor.optics
                           ? actor.optics->get_visible()
                           : actor.persisted_visible;
@@ -2750,9 +2749,9 @@ nlohmann::json actor_to_json(const NativeEditorScene& scene, const NativeEditorA
             {"mass", actor.mechanics->get_mass()},
             {"restitution", actor.mechanics->get_restitution()},
             {"damping", actor.mechanics->get_damping()},
-            {"physics_enabled", actor.load_status == ActorLoadStatus::Loaded
-                                    ? actor.mechanics->get_physics_enabled()
-                                    : actor.persisted_physics_enabled},
+            {"body_type", actor.load_status == ActorLoadStatus::Loaded
+                             ? actor.mechanics->get_body_type()
+                             : actor.persisted_body_type},
             {"linear_lock", {linear_x, linear_y, linear_z}},
             {"angular_lock", {angular_x, angular_y, angular_z}},
         };
@@ -3323,12 +3322,12 @@ NativeResult create_native_editor_actor(const std::string& scene_route_arg,
         if (auto follow_camera = actor_data_bool(actor_data, {"follow_camera"})) {
             target.follow_camera = *follow_camera;
         }
-        if (auto physics_enabled = actor_data_bool(actor_data, {"physics_enabled"})) {
-            if (target.mechanics) {
-                target.mechanics->set_physics_enabled(*physics_enabled);
-            }
+        if (auto loaded_bt = json_string_value(actor_data, {"body_type"}); !loaded_bt.empty()) {
+            if (target.mechanics) target.mechanics->set_body_type(normalize_body_type(loaded_bt));
+        } else if (auto physics_enabled = actor_data_bool(actor_data, {"physics_enabled"})) {
+            if (target.mechanics)
+                target.mechanics->set_body_type(*physics_enabled ? "dynamic" : "static");
         }
-        apply_runtime_metadata(target);
     };
 
     const auto preferred_name = json_string_value(
@@ -3473,10 +3472,11 @@ NativeResult create_native_editor_actor(const std::string& scene_route_arg,
             }
         }
     }
-    if (auto physics_enabled = actor_data_bool(actor_data, {"physics_enabled"})) {
-        if (actor.mechanics) {
-            actor.mechanics->set_physics_enabled(*physics_enabled);
-        }
+    if (auto loaded_bt = json_string_value(actor_data, {"body_type"}); !loaded_bt.empty()) {
+        if (actor.mechanics) actor.mechanics->set_body_type(normalize_body_type(loaded_bt));
+    } else if (auto physics_enabled = actor_data_bool(actor_data, {"physics_enabled"})) {
+        if (actor.mechanics)
+            actor.mechanics->set_body_type(*physics_enabled ? "dynamic" : "static");
     }
     sync_native_actor_to_embedded_vision_document(*scene, actor, true);
     persist_native_scene_actors(*scene);
@@ -3878,8 +3878,7 @@ PendingNetworkActorApplyOutcome apply_pending_network_actor_state(
             loaded.load_status = ActorLoadStatus::Loaded;
             if (loaded.optics) loaded.optics->set_visible(loaded.persisted_visible);
             if (loaded.mechanics && loaded.actor_type != "ui_image") {
-                loaded.mechanics->set_physics_enabled(loaded.persisted_physics_enabled);
-                loaded.mechanics->set_collision_shape(loaded.persisted_collision_type);
+                loaded.mechanics->set_body_type(loaded.persisted_body_type);
             }
             if (scene->actors[actor_index].engine_actor) {
                 scene->engine_scene->remove_actor(scene->actors[actor_index].engine_actor.get());
@@ -3954,17 +3953,14 @@ PendingNetworkActorApplyOutcome apply_pending_network_actor_state(
             if (auto value = actor_data_float(mechanics, {"mass"})) actor->mechanics->set_mass(*value);
             if (auto value = actor_data_float(mechanics, {"restitution"})) actor->mechanics->set_restitution(*value);
             if (auto value = actor_data_float(mechanics, {"damping"})) actor->mechanics->set_damping(*value);
-            if (auto value = actor_data_bool(mechanics, {"physics_enabled"})) {
-                actor->persisted_physics_enabled = *value;
-                actor->mechanics->set_physics_enabled(*value);
-            }
-            if (auto value = actor_data_bool(mechanics, {"collision_enabled"})) {
-                actor->mechanics->set_collision_enabled(*value);
-            }
-            const auto collision = json_string_value(mechanics, {"collision_shape", "collision_type"});
-            if (!collision.empty()) {
-                actor->persisted_collision_type = normalize_collision_type(collision);
-                actor->mechanics->set_collision_shape(actor->persisted_collision_type);
+            const auto bt = json_string_value(mechanics, {"body_type"});
+            if (!bt.empty()) {
+                actor->persisted_body_type = normalize_body_type(bt);
+                actor->mechanics->set_body_type(actor->persisted_body_type);
+            } else if (auto value = actor_data_bool(mechanics, {"physics_enabled"})) {
+                // 向后兼容
+                actor->persisted_body_type = *value ? "dynamic" : "static";
+                actor->mechanics->set_body_type(actor->persisted_body_type);
             }
             const auto linear = mechanics.find("linear_lock");
             if (linear != mechanics.end() && linear->is_array() && linear->size() >= 3) {
@@ -6172,7 +6168,7 @@ void persist_vision_proxy_actors_from_document(const std::filesystem::path& proj
         actors[key + ".route"] = normalize_route(path_to_utf8(route));
         actors[key + ".actor_guid"] = vision_shape_guid(shape, index);
         actors[key + ".follow_camera"] = "false";
-        actors[key + ".mechanics.physics_enabled"] = "false";
+        actors[key + ".mechanics.body_type"] = "static";
         actors[key + ".geometry.position"] = format_float3(position);
         actors[key + ".geometry.rotation"] = format_float3(rotation);
         actors[key + ".geometry.scale"] = format_float3(scale);
@@ -8632,16 +8628,11 @@ void register_scene_tools_api_handlers(NativeApiRegistry& registry) {
                 if (auto value = actor_data_float(physics, {"damping"})) {
                     actor->mechanics->set_damping(*value);
                 }
-                if (auto value = actor_data_bool(physics, {"physics_enabled"})) {
-                    actor->mechanics->set_physics_enabled(*value);
-                }
-                if (auto value = actor_data_bool(physics, {"collision_enabled"})) {
-                    actor->mechanics->set_collision_enabled(*value);
-                }
-                const auto collision_shape = json_string_value(
-                    physics, {"collision_shape", "collision_type"});
-                if (!collision_shape.empty()) {
-                    actor->mechanics->set_collision_shape(normalize_collision_type(collision_shape));
+                if (const auto bt = json_string_value(physics, {"body_type"}); !bt.empty()) {
+                    actor->mechanics->set_body_type(normalize_body_type(bt));
+                } else if (auto value = actor_data_bool(physics, {"physics_enabled"})) {
+                    // 向后兼容
+                    actor->mechanics->set_body_type(*value ? "dynamic" : "static");
                 }
                 const auto linear_lock = physics.find("linear_lock");
                 if (linear_lock != physics.end() && linear_lock->is_array() && linear_lock->size() >= 3) {
@@ -8911,8 +8902,7 @@ void register_scene_tools_api_handlers(NativeApiRegistry& registry) {
                 loaded.load_error_message.clear();
                 if (loaded.optics) loaded.optics->set_visible(loaded.persisted_visible);
                 if (loaded.mechanics && loaded.actor_type != "ui_image") {
-                    loaded.mechanics->set_physics_enabled(loaded.persisted_physics_enabled);
-                    loaded.mechanics->set_collision_shape(loaded.persisted_collision_type);
+                    loaded.mechanics->set_body_type(loaded.persisted_body_type);
                 }
                 if (scene->actors[actor_index].engine_actor) {
                     scene->engine_scene->remove_actor(scene->actors[actor_index].engine_actor.get());
