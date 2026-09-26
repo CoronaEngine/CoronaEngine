@@ -350,6 +350,7 @@ void MechanicsSystem::update_physics(float fixed_dt) {
 
         MechanicsWorldAABB entry;  // 本物体本帧用的缓存结构
         entry.handle = h;
+        entry.geom_handle = m.geometry_handle;  // skinned_collision_cache 的键（geom_handle，非 mechanics handle）
         entry.transform_handle = geom_acc->transform_handle;  // 之后写位置修正用同一 handle
         entry.model_id = entry_model_id;
         entry.local_min = m.min_xyz;
@@ -560,7 +561,8 @@ void MechanicsSystem::update_physics(float fixed_dt) {
                 {
                     auto get_mesh = [&](const MechanicsWorldAABB& body) -> const CollisionMesh* {
                         if (body.is_skinned) {
-                            auto it = impl_->skinned_collision_cache.find(body.handle);
+                            // 键是 geom_handle（update_skinned_geometry 写入时用的地址），不是 mechanics handle
+                            auto it = impl_->skinned_collision_cache.find(body.geom_handle);
                             if (it != impl_->skinned_collision_cache.end() && !it->second.triangles.empty())
                                 return &it->second;
                         } else if (body.model_id != 0) {

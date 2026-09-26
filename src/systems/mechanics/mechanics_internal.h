@@ -191,6 +191,7 @@ inline ktm::fvec3 world_inertia_inv_apply(const ktm::fmat3x3& R_body_to_world,
 // 本帧单个 mechanics 物体的碰撞/渲染用几何缓存
 struct MechanicsWorldAABB {
     std::uintptr_t handle;               // mechanics 设备句柄键
+    std::uintptr_t geom_handle;          // geometry 设备句柄（skinned_collision_cache 的键）
     std::uintptr_t transform_handle;     // 几何上的 ModelTransform 句柄
     ktm::fvec3 min_world;                // 世界 AABB 最小角
     ktm::fvec3 max_world;                // 世界 AABB 最大角
@@ -488,15 +489,18 @@ inline bool ensure_collision_mesh(
         const std::vector<std::uint16_t>* src_indices = nullptr;
         const std::vector<Corona::Resource::BoneWeights>* src_bw = nullptr;
 
+        const bool is_skinned_model = scene->data.skeleton.has_value();
         std::uint32_t lod_count = scene->get_mesh_lod_count(mi);
-        if (lod_count > 0) {
-            // 取最后一级 LOD（最简化）
+
+        if (!is_skinned_model && lod_count > 0) {
+            // 静态网格：取最后一级 LOD（最简化），减少碰撞三角数
             const auto& lod = scene->get_mesh_lod(mi, lod_count - 1);
             src_verts = &lod.vertices;
             src_indices = &lod.indices;
             src_bw = lod.bone_weights.empty() ? nullptr : &lod.bone_weights;
         } else {
-            // 无 LOD，回退原始网格
+            // 蒙皮网格：必须用 LOD0（update_skinned_geometry 每帧写入 sc.vertices 时也用 LOD0）
+            // 用低 LOD 索引而 LOD0 顶点会导致越界/错误三角形，是穿模主因之一。
             src_verts = &scene->get_mesh_vertices(mi);
             src_indices = &scene->get_mesh_indices(mi);
             const auto& bw = scene->data.meshes[mi].bone_weights;
