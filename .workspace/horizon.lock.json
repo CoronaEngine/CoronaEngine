@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
   "url": "https://github.com/CoronaEngine/Horizon.git",
-  "ref": "refactor_dsl",
+  "ref": "main",
   "commit": "2d8883bb6b03fba438fd17ac70563ffe37b0e7ff"
 }
