@@ -1,4 +1,4 @@
-#include <corona/kernel/core/i_logger.h>
+#include <horizon/core/logging.h>
 #include <corona/systems/geometry/geometry_system.h>
 #include <corona/systems/mechanics/mechanics_system.h>
 

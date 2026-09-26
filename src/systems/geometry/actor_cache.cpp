@@ -3,7 +3,7 @@
 
 #include <corona/systems/geometry/actor_cache.h>
 
-#include <corona/kernel/core/i_logger.h>
+#include <horizon/core/logging.h>
 
 #include <nlohmann/json.hpp>
 

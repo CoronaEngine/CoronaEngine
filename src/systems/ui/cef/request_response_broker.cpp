@@ -1,6 +1,6 @@
 #include "request_response_broker.h"
 
-#include <corona/kernel/core/i_logger.h>
+#include <horizon/core/logging.h>
 
 #include <algorithm>
 #include <utility>

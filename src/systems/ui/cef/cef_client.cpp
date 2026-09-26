@@ -9,7 +9,7 @@
 #include <system_error>
 #include <thread>
 
-#include <corona/kernel/core/i_logger.h>
+#include <horizon/core/logging.h>
 
 #include "browser_manager.h"
 #include "cef_app.h"

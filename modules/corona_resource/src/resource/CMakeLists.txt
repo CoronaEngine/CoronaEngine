@@ -95,7 +95,6 @@ target_link_libraries(CoronaResourceManager
     tinyexr_headers
     PUBLIC
     Horizon
-    corona::engine::logging
     TBB::tbb
     ktm::ktm
 )

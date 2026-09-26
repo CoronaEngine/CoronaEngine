@@ -1,7 +1,7 @@
 #include "cef_bridge_helpers.h"
 #include "cef_editor_api.h"
 
-#include <corona/kernel/core/i_logger.h>
+#include <horizon/core/logging.h>
 #include <corona/resource/resource_manager.h>
 #include <corona/resource/types/image.h>
 #include <corona/resource/types/scene.h>

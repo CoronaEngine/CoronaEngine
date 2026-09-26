@@ -1,6 +1,6 @@
 #include "corona/resource/resource_manager.h"
 
-#include "corona/kernel/core/i_logger.h"
+#include "horizon/core/logging.h"
 
 #include <unordered_set>
 

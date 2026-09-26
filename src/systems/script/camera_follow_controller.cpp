@@ -1,6 +1,6 @@
 #include <corona/systems/script/camera_follow_controller.h>
 
-#include <corona/kernel/core/i_logger.h>
+#include <horizon/core/logging.h>
 #include <corona/shared_data_hub.h>
 
 #ifdef _WIN32

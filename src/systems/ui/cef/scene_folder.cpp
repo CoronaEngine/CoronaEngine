@@ -21,7 +21,7 @@
 #include <stdexcept>
 #include <system_error>
 
-#include <corona/kernel/core/i_logger.h>
+#include <horizon/core/logging.h>
 #include <nlohmann/json.hpp>
 #include <assimp/Importer.hpp>
 #include <assimp/material.h>

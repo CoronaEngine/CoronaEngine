@@ -1,7 +1,5 @@
 #include "vision/vision_interop_lifetime.h"
 
-#include <horizon.h>
-
 #include <cstdlib>
 #include <iostream>
 #include <string>
@@ -25,7 +23,12 @@ void expect(bool condition, std::string_view message) {
     }
 }
 
-using Receipt = Corona::Horizon::SubmitReceipt;
+struct FakeReceipt {
+    int serial{};
+    bool is_empty{};
+
+    [[nodiscard]] bool empty() const noexcept { return is_empty; }
+};
 
 void zero_copy_disable_flag_accepts_boolean_values() {
     expect(!vision_zero_copy_disabled_from_value(nullptr),
@@ -45,16 +48,16 @@ void zero_copy_disable_flag_accepts_boolean_values() {
 }
 
 void interop_resources_are_released_only_after_submissions_finish() {
-    std::unordered_map<std::uintptr_t, Receipt> receipts{
-        {10u, Receipt{.serial = 101}},
-        {20u, Receipt{}},
-        {30u, Receipt{.serial = 303}},
+    std::unordered_map<std::uintptr_t, FakeReceipt> receipts{
+        {10u, FakeReceipt{.serial = 101, .is_empty = false}},
+        {20u, FakeReceipt{.serial = 202, .is_empty = true}},
+        {30u, FakeReceipt{.serial = 303, .is_empty = false}},
     };
     std::vector<std::string> events;
 
     drain_vision_interop_submissions(
         receipts,
-        [&](std::uintptr_t camera, const Receipt& receipt) {
+        [&](std::uintptr_t camera, const FakeReceipt& receipt) {
             events.push_back("wait:" + std::to_string(camera) + ":" +
                              std::to_string(receipt.serial));
         },

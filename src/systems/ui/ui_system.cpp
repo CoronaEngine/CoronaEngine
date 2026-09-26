@@ -1,4 +1,4 @@
-﻿#include <corona/kernel/core/i_logger.h>
+﻿#include <horizon/core/logging.h>
 #include <corona/shared_data_hub.h>
 #include <corona/systems/script/script_system.h>
 #include <corona/systems/ui/camera_viewport_manager.h>

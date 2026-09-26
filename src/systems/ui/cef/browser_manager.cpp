@@ -9,7 +9,7 @@
 
 #include "cef_client.h"
 #include "cef_bridge_helpers.h"
-#include "corona/kernel/core/i_logger.h"
+#include "horizon/core/logging.h"
 #include "corona/systems/ui/camera_viewport_manager.h"
 
 namespace fs = std::filesystem;

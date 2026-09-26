@@ -1,6 +1,6 @@
 ﻿#include "cef_editor_api.h"
 
-#include <corona/kernel/core/i_logger.h>
+#include <horizon/core/logging.h>
 #include <corona/systems/script/python_runtime_coordinator.h>
 
 #include <array>

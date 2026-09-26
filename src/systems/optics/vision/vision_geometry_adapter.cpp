@@ -2,7 +2,7 @@
 
 #ifdef CORONA_ENABLE_VISION
 
-#include <corona/kernel/core/i_logger.h>
+#include <horizon/core/logging.h>
 #include <corona/resource/resource_manager.h>
 #include <corona/resource/types/scene.h>
 #include <corona/shared_data_hub.h>
