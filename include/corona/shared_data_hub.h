@@ -1,5 +1,5 @@
 #pragma once
-#include <corona/kernel/utils/storage.h>
+#include <horizon/core/storage.h>
 #include <corona/memory/gpu_mem_ledger.h>
 #include <corona/resource/types/scene.h>  // Resource::IkChain（GeometryDevice::ik_chains）
 #include <corona/systems/optics/viewport_gizmo_math.h>

@@ -1303,6 +1303,8 @@ void persist_native_scene_common(const NativeEditorScene& scene) {
                                                    const std::string& field) -> void {
                     if (value.is_object()) {
                         for (const auto& item : value.items()) {
+                            // Top-level output describes generated files, not input assets.
+                            if (field == "vision_document.data" && item.key() == "output") continue;
                             const auto child_field = field.empty() ? item.key() : field + "." + item.key();
                             if (is_vision_resource_path_key(item.key()) && item.value().is_string()) {
                                 const auto route = trim_ascii(item.value().get<std::string>());
@@ -4987,7 +4989,6 @@ nlohmann::json extract_scene_data(const nlohmann::json& document) {
 std::map<std::string, std::string> vision_camera_section(const nlohmann::json& document) {
     std::map<std::string, std::string> camera;
     camera["count"] = "1";
-    camera["active_id"] = "";
     camera["camera0.render_backend"] = "vision";
     camera["camera0.vision_render_mode"] = "path_tracing";
     camera["camera0.output_mode"] = "final_color";
@@ -5984,9 +5985,12 @@ std::string copy_vision_archive_asset(const std::filesystem::path& source,
 void rewrite_vision_resource_paths_for_project_archive(nlohmann::json& value,
                                                        const std::filesystem::path& source_dir,
                                                        const std::filesystem::path& project_dir,
-                                                       const std::filesystem::path& archive_root_rel) {
+                                                       const std::filesystem::path& archive_root_rel,
+                                                       bool document_root = true) {
     if (value.is_object()) {
         for (auto& item : value.items()) {
+            // Preserve render output settings without archiving generated files.
+            if (document_root && item.key() == "output") continue;
             auto& child = item.value();
             if (is_vision_resource_path_key(item.key()) && child.is_string()) {
                 const auto text = trim_ascii(child.get<std::string>());
@@ -6002,14 +6006,14 @@ void rewrite_vision_resource_paths_for_project_archive(nlohmann::json& value,
                     }
                 }
             }
-            rewrite_vision_resource_paths_for_project_archive(child, source_dir, project_dir, archive_root_rel);
+            rewrite_vision_resource_paths_for_project_archive(child, source_dir, project_dir, archive_root_rel, false);
         }
         return;
     }
 
     if (value.is_array()) {
         for (auto& child : value) {
-            rewrite_vision_resource_paths_for_project_archive(child, source_dir, project_dir, archive_root_rel);
+            rewrite_vision_resource_paths_for_project_archive(child, source_dir, project_dir, archive_root_rel, false);
         }
     }
 }
@@ -6022,9 +6026,12 @@ bool is_vision_model_asset(const std::filesystem::path& path) {
 
 void import_vision_resource_paths(nlohmann::json& value,
                                   const std::filesystem::path& source_dir,
-                                  SceneAssetStore& store) {
+                                  SceneAssetStore& store,
+                                  bool document_root = true) {
     if (value.is_object()) {
         for (auto& item : value.items()) {
+            // output.fn is a destination and does not need to exist before rendering.
+            if (document_root && item.key() == "output") continue;
             auto& child = item.value();
             if (is_vision_resource_path_key(item.key()) && child.is_string()) {
                 const auto text = trim_ascii(child.get<std::string>());
@@ -6047,13 +6054,13 @@ void import_vision_resource_paths(nlohmann::json& value,
                     continue;
                 }
             }
-            import_vision_resource_paths(child, source_dir, store);
+            import_vision_resource_paths(child, source_dir, store, false);
         }
         return;
     }
     if (value.is_array()) {
         for (auto& child : value) {
-            import_vision_resource_paths(child, source_dir, store);
+            import_vision_resource_paths(child, source_dir, store, false);
         }
     }
 }

@@ -132,7 +132,7 @@ if(BUILD_CORONA_TESTING OR BUILD_TESTING)
         PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
     )
     # scene_folder.cpp 现在会打 CFW_LOG_WARNING（缺失贴图/Assimp 扫描失败降级为警告），
-    # 需要 Horizon 提供的 quill logger。
+    # 需要 Horizon 提供日志头文件和共享的 Quill 后端。
     target_link_libraries(corona_scene_folder_tests
         PRIVATE Horizon nlohmann_json::nlohmann_json bcrypt assimp::assimp
     )

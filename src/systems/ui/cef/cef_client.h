@@ -12,7 +12,7 @@
 #include <iostream>
 #include <mutex>
 
-#include "corona/kernel/core/i_logger.h"
+#include "horizon/core/logging.h"
 
 namespace Corona::Systems::UI {
 

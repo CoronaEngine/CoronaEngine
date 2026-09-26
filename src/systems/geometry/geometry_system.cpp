@@ -1,6 +1,6 @@
 ﻿#include <corona/events/engine_events.h>
-#include <corona/kernel/core/i_logger.h>
-#include <corona/kernel/utils/storage.h>
+#include <horizon/core/logging.h>
+#include <horizon/core/storage.h>
 #include <corona/resource/resource.h>
 #include <corona/resource/resource_manager.h>
 #include <corona/resource/types/scene.h>

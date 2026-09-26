@@ -1,6 +1,6 @@
 #include "corona/resource/types/video.h"
 
-#include "corona/kernel/core/i_logger.h"
+#include "horizon/core/logging.h"
 
 #ifdef CORONA_RESOURCE_HAVE_FFMPEG
 #include "ffmpeg_common.h"

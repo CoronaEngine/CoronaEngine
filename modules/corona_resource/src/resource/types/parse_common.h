@@ -17,7 +17,7 @@
 #include <unordered_map>
 #include <vector>
 
-#include "corona/kernel/core/i_logger.h"
+#include "horizon/core/logging.h"
 #include "corona/resource/types/scene.h"
 
 namespace Corona::Resource {

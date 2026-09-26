@@ -1,7 +1,7 @@
 #include <corona/systems/network/peer_manager.h>
 
 #include <enet/enet.h>
-#include <corona/kernel/core/i_logger.h>
+#include <horizon/core/logging.h>
 #include <corona/systems/network/peer_liveness.h>
 #include <corona/systems/network/peer_list_utils.h>
 

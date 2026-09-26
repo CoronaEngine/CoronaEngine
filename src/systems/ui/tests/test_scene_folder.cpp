@@ -506,6 +506,21 @@ void portable_scene_validation_decodes_embedded_vision_resource_paths() {
            "Vision diagnostic should identify the exact embedded field");
 }
 
+void portable_scene_validation_does_not_require_vision_output_file() {
+    TempDir temp;
+    const auto scene = temp.path / "portable";
+    expect(create_scene_folder(scene, "Vision output").has_value(), "portable scene should be created");
+    write_text(scene / "scene.ini",
+               "[format]\ntype = corona_scene_folder\nversion = 1\n"
+               "[scene]\nname = Vision output\n"
+               "[vision]\nstorage = embedded\n"
+               "[vision_document]\nversion = 1\nencoding = zlib_base64_json\nasset_root = Assets\n"
+               // {"output":{"fn":"kitchen.png","spp":0}}
+               "data = eAEBJwDY/3sib3V0cHV0Ijp7ImZuIjoia2l0Y2hlbi5wbmciLCJzcHAiOjB9fQ64DTw=\n");
+    expect(validate_portable_scene(scene, true).ok(),
+           "Vision output filename is not an input asset and need not exist");
+}
+
 void scene_document_store_commits_multiple_sections_in_one_snapshot() {
     TempDir temp;
     const auto scene = temp.path / "portable";
@@ -743,6 +758,7 @@ int main() {
     portable_scene_reopens_after_copy_to_another_root();
     portable_scene_validation_checks_every_persisted_resource_field();
     portable_scene_validation_decodes_embedded_vision_resource_paths();
+    portable_scene_validation_does_not_require_vision_output_file();
     scene_document_store_commits_multiple_sections_in_one_snapshot();
     scene_document_store_recovers_interrupted_transaction();
     scene_document_store_reports_unrecoverable_transaction_without_deleting_marker();

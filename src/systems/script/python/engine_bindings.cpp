@@ -1,4 +1,4 @@
-#include <corona/kernel/core/i_logger.h>
+#include <horizon/core/logging.h>
 #include <corona/engine/engine_runtime_api.h>
 #include <corona/systems/script/engine_scripts.h>
 #include <corona/systems/script/python_runtime_coordinator.h>
