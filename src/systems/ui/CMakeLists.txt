@@ -112,6 +112,17 @@ helicon_compile_shaders(corona_ui_system
 )
 
 if(BUILD_CORONA_TESTING OR BUILD_TESTING)
+    add_executable(corona_vision_camera_direction_tests
+        tests/test_vision_camera_direction.cpp
+    )
+    target_include_directories(corona_vision_camera_direction_tests
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
+    )
+    target_link_libraries(corona_vision_camera_direction_tests
+        PRIVATE nlohmann_json::nlohmann_json
+    )
+    add_test(NAME VisionCameraDirectionTests COMMAND corona_vision_camera_direction_tests)
+
     add_executable(corona_actor_selection_routing_tests
         tests/test_actor_selection_routing.cpp
     )

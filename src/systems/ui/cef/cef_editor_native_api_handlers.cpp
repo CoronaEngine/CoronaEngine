@@ -20,6 +20,7 @@
 #include "scene_folder.h"
 #include "vision_actor_material_bridge.h"
 #include "vision_actor_transform_bridge.h"
+#include "vision_camera_direction.h"
 
 #include <corona/events/acoustics_system_events.h>
 #include <corona/kernel/core/kernel_context.h>
@@ -5014,10 +5015,11 @@ std::map<std::string, std::string> vision_camera_section(const nlohmann::json& d
             transform_params.contains("position") ? transform_params["position"] :
             transform_params.contains("t") ? transform_params["t"] : json_member_or(params, "position", empty_vector),
             {0.0f, 0.0f, 5.0f});
-        const auto forward = vision_vec_to_corona(
+        const auto fallback_forward = vision_vec_to_corona(
             transform_params.contains("forward") ? transform_params["forward"] :
             transform_params.contains("direction") ? transform_params["direction"] : json_member_or(params, "direction", default_direction),
             {0.0f, 0.0f, 1.0f});
+        const auto forward = vision_camera_direction(transform_params, position, fallback_forward);
         const auto up = vision_vec_to_corona(
             transform_params.contains("up") ? transform_params["up"] : json_member_or(params, "up", default_up),
             {0.0f, 1.0f, 0.0f});
