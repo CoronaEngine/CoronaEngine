@@ -24,7 +24,7 @@ test('third-person starts behind player and movement/facing is camera relative',
   const f = controlFixture();
   assert.ok(f.pose.position[2] < 0); assert.ok(f.pose.position[1] > f.actor.geometry.position[1]);
   f.controller.keyDown(key('KeyW')); f.step(50);
-  const p = f.controller.snapshotPlayer(); near(p.position[2], 0.15); near(p.rotation[1], 0);
+  const p = f.controller.snapshotPlayer(); near(p.position[2], 0.15); near(p.rotation[1], Math.PI); near(p.facingYaw, 0); assert.equal(p.grounded, true);
   near(p.position[1], f.actor.geometry.position[1]);
   assert.equal(f.calls.filter(c => c[0] === 'actor').length, 2);
   near(f.pose.position[2], 0.15 - Math.cos(PLAYER_CONTROLS.pitch) * 4.5);
@@ -33,7 +33,7 @@ test('third-person starts behind player and movement/facing is camera relative',
 test('diagonal movement is normalized and a stalled frame does not teleport', () => {
   const f = controlFixture(); f.controller.keyDown(key('KeyW')); f.controller.keyDown(key('KeyD'));
   f.step(5000); const p = f.controller.snapshotPlayer(); near(Math.hypot(p.position[0],p.position[2]), 0.15);
-  near(p.rotation[1], Math.PI/4); f.controller.dispose();
+  near(p.rotation[1], Math.PI + Math.PI/4); near(p.facingYaw, Math.PI/4); f.controller.dispose();
 });
 test('right drag rotates the camera, clamps pitch, and determines WASD direction', () => {
   const f = controlFixture();
@@ -136,5 +136,139 @@ test('outside viewport cancels edge turning and detached callbacks', () => {
   f.controller.pointerMove({ clientX: -1, clientY: 200 });
   const count = f.calls.length; stale(100);
   assert.equal(f.calls.length, count); assert.equal(f.frames.size, 0);
+  f.controller.dispose();
+});
+
+
+test('standing and directional jumps use logical facing or normalized camera-relative WASD', () => {
+  const cases = [ [[], [0, 4]], [['KeyW'], [0, 4]], [['KeyS'], [0, -4]],
+    [['KeyA'], [-4, 0]], [['KeyD'], [4, 0]], [['KeyW', 'KeyD'], [Math.SQRT2 * 2, Math.SQRT2 * 2]] ];
+  for (const [keys, expected] of cases) {
+    const f = controlFixture();
+    for (const code of keys) f.controller.keyDown(key(code));
+    f.controller.keyDown(key('Space'));
+    for (const code of keys) f.controller.keyUp(key(code));
+    f.controller.keyUp(key('Space'));
+    assert.equal(f.controller.snapshotPlayer().grounded, false);
+    for (let i = 0; i < 7; i++) f.step(50);
+    near(f.controller.snapshotPlayer().position[1] - f.actor.geometry.position[1], 1.2);
+    for (let i = 0; i < 7; i++) f.step(50);
+    const p = f.controller.snapshotPlayer();
+    near(p.position[0], expected[0]); near(p.position[2], expected[1]);
+    near(p.position[1], f.actor.geometry.position[1]); near(p.rotation[1], p.facingYaw + Math.PI);
+    assert.equal(p.grounded, true); assert.equal(f.frames.size, 0);
+    f.controller.dispose();
+  }
+});
+test('jump distance, apex and duration are invariant across normal and uneven frame rates', () => {
+  for (const steps of [[50], [1000 / 30], [1000 / 60], [1000 / 144], [7, 23, 41, 16]]) {
+    const f = controlFixture(); f.controller.keyDown(key('Space'));
+    let elapsed = 0, index = 0;
+    for (const end of [350, 700]) {
+      while (end - elapsed > 1e-7) {
+        const step = Math.min(steps[index++ % steps.length], end - elapsed);
+        f.step(step); elapsed += step;
+      }
+      const p = f.controller.snapshotPlayer();
+      near(p.position[2], end === 350 ? 2 : 4);
+      near(p.position[1] - f.actor.geometry.position[1], end === 350 ? 1.2 : 0);
+      assert.equal(p.grounded, end === 700);
+    }
+    f.controller.dispose();
+  }
+});
+test('a stalled jump frame remains clamped, and released keys never cancel the trajectory', () => {
+  const f = controlFixture(); f.controller.keyDown(key('Space')); f.controller.keyUp(key('Space'));
+  f.step(5000); near(f.controller.snapshotPlayer().position[2], 4 * 0.05 / 0.7);
+  assert.equal(f.controller.snapshotPlayer().grounded, false);
+  for (let i = 0; i < 13; i++) f.step(50);
+  near(f.controller.snapshotPlayer().position[2], 4); assert.equal(f.controller.snapshotPlayer().grounded, true);
+  f.controller.dispose();
+});
+test('airborne WASD, repeated Space and camera turns cannot alter the fixed jump path', () => {
+  const f = controlFixture();
+  f.controller.pointerMove({ clientX: 0, clientY: 0 });
+  f.controller.pointerMove({ clientX: Math.PI / 2 / PLAYER_CONTROLS.sensitivity, clientY: 0 }); f.step(16);
+  f.controller.keyDown(key('KeyW')); f.controller.keyDown(key('Space')); f.step(50);
+  f.controller.keyUp(key('KeyW')); f.controller.keyUp(key('Space'));
+  f.controller.keyDown(key('KeyS')); f.controller.keyDown(key('Space'));
+  f.controller.pointerMove({ clientX: 0, clientY: 0 });
+  for (let i = 0; i < 13; i++) { f.controller.keyDown({ ...key('Space'), repeat: true }); f.step(50); }
+  const p = f.controller.snapshotPlayer(); near(p.position[0], 4); near(p.position[2], 0); near(p.facingYaw, Math.PI / 2);
+  assert.equal(p.grounded, true); f.controller.keyUp(key('KeyS'));
+  f.controller.keyDown({ ...key('Space'), repeat: true }); f.step(50); assert.equal(f.controller.snapshotPlayer().grounded, true);
+  f.controller.keyDown(key('Space')); assert.equal(f.controller.snapshotPlayer().grounded, true);
+  f.controller.keyUp(key('Space')); f.controller.keyDown(key('Space'));
+  for (let i = 0; i < 14; i++) f.step(50);
+  // Standing second jump follows facing, not the camera which now looks down +Z.
+  near(f.controller.snapshotPlayer().position[0], 8); near(f.controller.snapshotPlayer().position[2], 0);
+  f.controller.dispose();
+});
+test('input interruptions land at the current XZ and fence stale animation callbacks', () => {
+  for (const stop of [f => f.controller.resetInput(), f => f.controller.pointerLeave(),
+    f => { f.lock(true); f.step(16); }]) {
+    const f = controlFixture(); f.controller.keyDown(key('Space')); f.step(50);
+    const airborne = f.controller.snapshotPlayer(), stale = [...f.frames.values()][0]; stop(f);
+    const grounded = f.controller.snapshotPlayer();
+    assert.equal(grounded.grounded, true); near(grounded.position[1], f.actor.geometry.position[1]);
+    near(grounded.position[2], airborne.position[2]); assert.ok(grounded.version > airborne.version);
+    const count = f.calls.length; stale(5000); f.step(100);
+    assert.equal(f.calls.length, count); assert.equal(f.frames.size, 0); f.controller.dispose();
+  }
+});
+test('invalidated/disposed jump never uses old handles and the barrier persists only the landed pose', async () => {
+  for (const dispose of [false, true]) {
+    const f = controlFixture(); f.controller.keyDown(key('Space')); f.step(50);
+    const airborne = f.controller.snapshotPlayer(), stale = [...f.frames.values()][0];
+    const count = f.calls.length;
+    if (dispose) f.controller.dispose(); else { f.current(false); f.step(16); }
+    stale(5000); assert.equal(f.calls.length, count);
+    const writes = [];
+    const saver = createPlayerSave({ api: { scene: { setActorTransform: async (...args) => {
+      writes.push(args); return { status: 'success' };
+    } } }, sceneId: 'old', readPlayer: f.controller.snapshotPlayer, stopInput: f.controller.resetInput,
+    onSaved: f.controller.acknowledgePlayerSave });
+    await saver.save();
+    near(writes[0][2].position[1], f.actor.geometry.position[1]); near(writes[0][2].position[2], airborne.position[2]);
+    assert.deepEqual(writes[0][2].rotation, airborne.rotation);
+    assert.deepEqual(Object.keys(writes[0][2]).sort(), ['persist', 'position', 'rotation']);
+    assert.equal(f.calls.length, count); assert.equal(f.controller.snapshotPlayer().grounded, true);
+    f.controller.dispose();
+  }
+});
+test('landing bridge failure locks control until an acknowledged retry; stale acknowledgements cannot release it', async () => {
+  const f = controlFixture(); f.controller.keyDown(key('Space')); f.step(50);
+  const oldPose = f.controller.snapshotPlayer(); f.bridge.actorTransform = () => false;
+  f.controller.resetInput(); const landed = f.controller.snapshotPlayer();
+  near(landed.position[1], f.actor.geometry.position[1]); assert.equal(landed.grounded, false);
+  assert.equal(f.controller.keyDown(key('Space')), false); assert.equal(f.controller.keyDown(key('KeyW')), false);
+  f.controller.acknowledgePlayerSave(oldPose); assert.equal(f.controller.snapshotPlayer().grounded, false);
+  let fail = true, writes = 0;
+  const saver = createPlayerSave({ api: { scene: { setActorTransform: async () => {
+    writes++; if (fail) throw new Error('disk full'); return { status: 'success' };
+  } } }, sceneId: 'old', readPlayer: f.controller.snapshotPlayer, stopInput: f.controller.resetInput,
+    onSaved: f.controller.acknowledgePlayerSave });
+  await assert.rejects(saver.save(), /disk full/); assert.equal(f.controller.snapshotPlayer().grounded, false);
+  fail = false; await saver.save(); await saver.save(); assert.equal(writes, 2);
+  assert.equal(f.controller.snapshotPlayer().grounded, true); assert.equal(f.errors.length, 1);
+  f.controller.dispose();
+});
+test('player save validates the native source before writing a pending landing', async () => {
+  const f = controlFixture(); f.controller.keyDown(key('Space')); f.step(50); f.current(false);
+  let writes = 0;
+  const saver = createPlayerSave({ api: { scene: { setActorTransform: async () => { writes++; } } }, sceneId: 'old',
+    readPlayer: f.controller.snapshotPlayer, stopInput: f.controller.resetInput,
+    assertSource: async () => { throw new Error('source changed'); } });
+  await assert.rejects(saver.save(), /source changed/); assert.equal(writes, 0); f.controller.dispose();
+});
+test('Space respects readiness, composition, editable targets and modifiers', () => {
+  const f = controlFixture();
+  for (const props of [{ repeat: true }, { isComposing: true }, { ctrlKey: true }, { altKey: true },
+    { metaKey: true }, { keyCode: 229 }, { target: { isContentEditable: true } }]) {
+    f.controller.keyDown({ ...key('Space'), ...props });
+    assert.equal(f.controller.snapshotPlayer().grounded, true);
+  }
+  f.lock(true); assert.equal(f.controller.keyDown(key('Space')), false);
+  f.lock(false); f.current(false); assert.equal(f.controller.keyDown(key('Space')), false);
   f.controller.dispose();
 });

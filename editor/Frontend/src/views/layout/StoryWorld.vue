@@ -44,7 +44,10 @@ const current = () => !disposed && !leaving && worldModeState.status === 'ready'
   && worldModeState.mode === 'story' && worldModeState.revision === revision;
 const camera = createStoryCameraController({
   createControls: createPlayerController,
-  onError: notifyWorldError,
+  onError: error => {
+    if (current()) gameplayError.value = error.message;
+    notifyWorldError(error);
+  },
   getBridge: () => current() ? window.coronaBridge : null,
   isCurrent: current,
   isInputLocked: () => !focused || document.hidden || navigation.busy || savingPlayer || inventoryOpen.value,
@@ -54,6 +57,7 @@ const camera = createStoryCameraController({
 });
 const unwrap = (response) => response?.data ?? response;
 function updateProximity() {
+  if (!current()) return;
   const data = gameplayState.value, player = camera.snapshotPlayer();
   bossNearby.value = Boolean(data?.role === 'main' && data.state.boss.hp > 0
     && distanceToBounds(player?.position, bossBounds) <= data.config.bossBarRadius);
@@ -90,7 +94,8 @@ const gameplay = createStoryGameplay({
   },
 });
 async function runAction(action) {
-  if (!current() || inventoryOpen.value || navigation.busy || savingPlayer || actionBusy.value || !cameraReady) return;
+  if (!current() || !focused || document.hidden || inventoryOpen.value
+    || navigation.busy || savingPlayer || actionBusy.value || !cameraReady) return;
   actionBusy.value = true;
   try {
     await action();
@@ -116,6 +121,10 @@ const saveRegistration = registerWorldSessionSave(async () => {
     await initialization.catch(() => {});
     await gameplay.flush();
     await playerSave?.save();
+    if (current()) gameplayError.value = '';
+  } catch (error) {
+    if (current()) gameplayError.value = error.message || '保存失败，请重试';
+    throw error;
   } finally { savingPlayer = false; }
 });
 async function saveBeforeLeave() {
@@ -129,6 +138,7 @@ async function saveBeforeLeave() {
       return true;
     } catch (error) {
       leaving = false;
+      if (current()) gameplayError.value = error.message || '保存失败，请重试';
       if (current() && gameplay.data) {
         gameplayState.value = gameplay.data;
         updateProximity();
@@ -149,7 +159,7 @@ async function exitStory() {
 }
 const navigation = createStoryNavigationController({
   projectPath,
-  isReady: () => cameraReady && focused && !document.hidden && !inventoryOpen.value,
+  isReady: () => cameraReady && focused && !document.hidden && !inventoryOpen.value && !savingPlayer,
   isSourceCurrent: current,
   getSelectionVersion: getProjectSelectionVersion,
   readSession: () => worldModeState,
@@ -189,8 +199,12 @@ function onKeyDown(event) {
     if (!event.repeat && focused) void runAction(gameplay.pickup);
     return;
   }
+  if ((event.code === 'Space' || event.key === ' ' || event.key === 'Spacebar')
+    && (actionBusy.value || gameplay.busy || gameplay.needsSave)) {
+    event.preventDefault(); event.stopPropagation(); return;
+  }
   if (navigation.keyDown(event)) return;
-  if (focused) camera.keyDown(event);
+  if (focused && camera.keyDown(event)) event.stopPropagation?.();
 }
 function onBlur() { focused = false; camera.resetInput(); }
 function onFocus() { focused = !document.hidden; }
@@ -241,7 +255,8 @@ onMounted(async () => {
     camera.bindPlayer(player, targetOffset);
     updateProximity();
     playerSave = createPlayerSave({ api: editorApi, sceneId,
-      readPlayer: camera.snapshotPlayer, stopInput: camera.resetInput });
+      readPlayer: camera.snapshotPlayer, stopInput: camera.resetInput,
+      assertSource, onSaved: camera.acknowledgePlayerSave });
     if (typeof ResizeObserver !== 'undefined') {
       resizeObserver = new ResizeObserver(camera.syncViewport);
       resizeObserver.observe(surface.value);
@@ -287,13 +302,6 @@ onUnmounted(() => {
     @pointerdown="onPointerDown" @pointerleave="camera.resetInput" @wheel.prevent="camera.wheel" @contextmenu.prevent
   >
     <div v-if="gameplayState" class="story-hud" aria-label="战斗界面">
-      <section class="player-vitals" aria-label="人物生命与法力">
-        <div class="hud-eyebrow">{{ gameplayState.role === 'main' ? '主世界' : '子世界' }} · 旅者</div>
-        <div class="vital-label"><span>生命</span><span>{{ gameplayState.config.playerHp }} / {{ gameplayState.config.playerHp }}</span></div>
-        <div class="vital-bar health" role="progressbar" aria-label="生命" :aria-valuenow="gameplayState.config.playerHp" :aria-valuemax="gameplayState.config.playerHp" aria-valuemin="0"><span /></div>
-        <div class="vital-label"><span>法力</span><span>{{ gameplayState.config.playerMp }} / {{ gameplayState.config.playerMp }}</span></div>
-        <div class="vital-bar mana" role="progressbar" aria-label="法力" :aria-valuenow="gameplayState.config.playerMp" :aria-valuemax="gameplayState.config.playerMp" aria-valuemin="0"><span /></div>
-      </section>
       <section v-if="bossNearby && !inventoryOpen" class="boss-status" aria-label="Boss 血条">
         <div class="boss-name">BOSS · 巨龙</div>
         <div class="boss-bar" role="progressbar" aria-label="Boss 生命" :aria-valuenow="gameplayState.state.boss.hp" :aria-valuemax="gameplayState.config.bossHp" aria-valuemin="0">
@@ -301,17 +309,28 @@ onUnmounted(() => {
         </div>
         <div class="boss-number">{{ gameplayState.state.boss.hp }} / {{ gameplayState.config.bossHp }}</div>
       </section>
-      <div class="story-feedback" role="status" aria-live="polite">
-        <div v-if="feedback" class="feedback-text">{{ feedback }}</div>
-        <div v-if="canPickup && !inventoryOpen" class="pickup-hint"><kbd>F</kbd> 拾取 世界碎片</div>
-      </div>
-      <div v-if="gameplayError" class="gameplay-error" role="alert" @pointerdown.stop @wheel.stop @pointermove.stop="camera.resetInput">
-        <span>{{ gameplayError }}</span>
-        <button :disabled="actionBusy || inventoryOpen" @click.stop="runAction(gameplay.flush)">重试保存</button>
+      <div class="story-bottom-stack">
+        <div v-if="gameplayError" class="gameplay-error" role="alert" @pointerdown.stop @wheel.stop @pointermove.stop="camera.resetInput">
+          <span>{{ gameplayError }}</span>
+          <button :disabled="actionBusy || inventoryOpen" @click.stop="runAction(saveRegistration.flush)">重试保存</button>
+        </div>
+        <div v-if="feedback || (canPickup && !inventoryOpen)" class="story-feedback" role="status" aria-live="polite">
+          <div v-if="feedback" class="feedback-text">{{ feedback }}</div>
+          <div v-if="canPickup && !inventoryOpen" class="pickup-hint"><kbd>F</kbd> 拾取 世界碎片</div>
+        </div>
+        <section class="player-vitals" aria-label="人物生命与法力">
+          <div class="hud-eyebrow">{{ gameplayState.role === 'main' ? '主世界' : '子世界' }} · 旅者</div>
+          <div class="vital-label"><span>生命</span><span>{{ gameplayState.config.playerHp }} / {{ gameplayState.config.playerHp }}</span></div>
+          <div class="vital-bar health" role="progressbar" aria-label="生命" :aria-valuenow="gameplayState.config.playerHp" :aria-valuemax="gameplayState.config.playerHp" aria-valuemin="0"><span /></div>
+          <div class="vital-label"><span>法力</span><span>{{ gameplayState.config.playerMp }} / {{ gameplayState.config.playerMp }}</span></div>
+          <div class="vital-bar mana" role="progressbar" aria-label="法力" :aria-valuenow="gameplayState.config.playerMp" :aria-valuemax="gameplayState.config.playerMp" aria-valuemin="0"><span /></div>
+        </section>
       </div>
       <div class="story-controls">
-        <span><kbd>W A S D</kbd> 移动</span><span>鼠标 转视角 · 边缘持续转向</span>
-        <span><kbd>左键</kbd> 攻击</span><span><kbd>F</kbd> 拾取</span><span><kbd>Tab</kbd> 背包</span>
+        <span><kbd>W A S D</kbd> 移动</span>
+        <span><kbd>鼠标</kbd> 转视角 · 滚轮缩放<small>靠近屏幕边缘持续转向</small></span>
+        <span><kbd>空格</kbd> 跳远</span><span><kbd>左键</kbd> 攻击</span>
+        <span><kbd>F</kbd> 拾取</span><span><kbd>Tab</kbd> 背包</span>
         <span><kbd>O / P</kbd> 进入 / 返回</span><span><kbd>Esc</kbd> {{ inventoryOpen ? '关闭背包' : '保存退出' }}</span>
       </div>
     </div>
@@ -332,32 +351,37 @@ onUnmounted(() => {
 
 <style scoped>
 .story-world-viewport { position: fixed; inset: 0; background: transparent; outline: none; overflow: hidden; touch-action: none; color: #f2ede6; font-family: "Microsoft YaHei", sans-serif; }
-.story-hud { position: absolute; inset: 0; pointer-events: none; }
-.player-vitals { position: absolute; top: 28px; left: 28px; width: min(240px, 27vw); padding: 18px 20px; border: 1px solid #ffffff20; background: #10151ddb; border-radius: 8px; }
+.story-hud { position: absolute; inset: 0; pointer-events: none; display: grid; grid-template-rows: 76px minmax(0, 1fr) auto; gap: 12px; padding: 20px; box-sizing: border-box; }
+.story-bottom-stack { grid-area: 3 / 1; justify-self: center; width: min(560px, 100%); display: flex; flex-direction: column; align-items: center; gap: 10px; }
+.player-vitals { width: min(280px, 100%); box-sizing: border-box; padding: 10px 16px 12px; border: 1px solid #ffffff20; background: #10151ddb; border-radius: 8px; }
+.player-vitals .hud-eyebrow { margin-bottom: 6px; }
 .hud-eyebrow { color: #c9b58d; font-size: 11px; letter-spacing: 2px; margin-bottom: 14px; }
-.vital-label { display: flex; justify-content: space-between; font-size: 12px; margin: 9px 0 5px; }
+.vital-label { display: flex; justify-content: space-between; font-size: 12px; margin: 6px 0 4px; }
 .vital-bar, .boss-bar { overflow: hidden; background: #05070cba; border: 1px solid #ffffff24; border-radius: 3px; }
 .vital-bar { height: 9px; }
 .vital-bar span, .boss-bar span { display: block; height: 100%; width: 100%; }
 .health span { background: linear-gradient(90deg, #914347, #df756c); }
 .mana span { background: linear-gradient(90deg, #365f9d, #75b8e3); }
-.boss-status { position: absolute; top: 30px; left: 50%; transform: translateX(-50%); width: min(430px, 38vw); text-align: center; text-shadow: 0 2px 5px #000; }
+.boss-status { grid-area: 1 / 1; justify-self: center; align-self: start; width: min(430px, 64vw); text-align: center; text-shadow: 0 2px 5px #000; }
 .boss-name { font-size: 17px; letter-spacing: 4px; margin-bottom: 10px; }
 .boss-bar { height: 12px; }
 .boss-bar span { background: linear-gradient(90deg, #8e292e, #e36256); transition: width .15s; }
 .boss-number { font-size: 12px; margin-top: 5px; }
-.story-feedback { position: absolute; bottom: 105px; width: 100%; text-align: center; }
-.feedback-text { font-size: 18px; color: #f7dba9; text-shadow: 0 2px 5px #000; margin-bottom: 16px; }
-.pickup-hint { display: inline-flex; gap: 12px; align-items: center; padding: 12px 22px; border: 1px solid #cdb88b88; border-radius: 6px; background: #10151de8; }
+.story-feedback { display: flex; flex-direction: column; align-items: center; gap: 10px; width: 100%; text-align: center; }
+.feedback-text { font-size: 18px; color: #f7dba9; text-shadow: 0 2px 5px #000; overflow-wrap: anywhere; }
+.pickup-hint { display: inline-flex; gap: 12px; align-items: center; padding: 9px 18px; border: 1px solid #cdb88b88; border-radius: 6px; background: #10151de8; }
 kbd { display: inline-block; font: inherit; font-size: 11px; color: #f6dfb5; padding: 2px 6px; border: 1px solid #b9a78977; border-radius: 3px; white-space: nowrap; }
-.story-controls { position: absolute; bottom: 18px; left: 50%; transform: translateX(-50%); width: max-content; max-width: calc(100% - 40px); display: flex; flex-wrap: wrap; justify-content: center; gap: 10px 17px; font-size: 11px; padding: 11px 16px; border-radius: 6px; background: #10151ddd; }
+.story-controls { grid-area: 2 / 1; justify-self: start; align-self: center; display: flex; flex-direction: column; gap: 7px; font-size: 11px; padding: 12px 14px; border-radius: 6px; background: #10151ddd; }
 .story-controls span { white-space: nowrap; }
-.gameplay-error { pointer-events: auto; position: absolute; bottom: 180px; left: 50%; transform: translateX(-50%); width: min(600px, 85vw); background: #431e22f0; padding: 16px; border: 1px solid #e89a89; display: flex; align-items: center; gap: 18px; font-size: 13px; }
+.story-controls small { display: block; margin: 4px 0 0; color: #b2bac6; font-size: 10px; }
+.gameplay-error { pointer-events: auto; width: 100%; box-sizing: border-box; background: #431e22f0; padding: 12px 14px; border: 1px solid #e89a89; border-radius: 6px; display: flex; align-items: center; gap: 12px; font-size: 13px; }
+.gameplay-error > span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+
 button { color: #eddfc5; border: 1px solid #b5a27f66; background: #ffffff09; padding: 8px 12px; border-radius: 4px; cursor: pointer; white-space: nowrap; }
 button:hover { background: #ffffff18; } button:disabled { opacity: .5; cursor: wait; }
 .inventory-overlay, .inventory-panel { pointer-events: auto; }
 .inventory-overlay { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; background: #040810b8; }
-.inventory-panel { width: min(620px, 86vw); background: #141b24f5; border: 1px solid #ad93675c; border-radius: 12px; box-shadow: 0 24px 100px #0008; padding: 28px; }
+.inventory-panel { width: min(620px, 86vw); box-sizing: border-box; max-height: calc(100% - 32px); overflow-y: auto; background: #141b24f5; border: 1px solid #ad93675c; border-radius: 12px; box-shadow: 0 24px 100px #0008; padding: 28px; }
 .inventory-panel header { display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid #ffffff14; padding-bottom: 20px; }
 .inventory-panel h1 { margin: 0; font-size: 26px; letter-spacing: 4px; } .inventory-panel .hud-eyebrow { margin-bottom: 8px; }
 .inventory-item { display: flex; gap: 18px; align-items: center; margin: 26px 0; padding: 20px; border: 1px solid #b4a07d40; background: #ffffff04; border-radius: 6px; }
@@ -366,5 +390,23 @@ button:hover { background: #ffffff18; } button:disabled { opacity: .5; cursor: w
 .inventory-item strong { margin-left: auto; color: #f1d9b3; white-space: nowrap; }
 .inventory-empty { text-align: center; padding: 50px 0; color: #bfc1c7; } .inventory-empty > span { font-size: 42px; color: #b6a17b; } .inventory-empty small { color: #9198a4; }
 .inventory-panel footer { border-top: 1px solid #ffffff14; padding-top: 16px; font-size: 12px; color: #a7aab1; text-align: right; }
-@media (max-width: 720px) { .player-vitals { left: 12px; top: 12px; padding: 12px; } .boss-status { left: auto; right: 12px; transform: none; top: 20px; width: 45vw; } .story-controls { font-size: 10px; } }
+@media (max-width: 720px), (max-height: 680px) {
+  .story-hud { padding: 12px; gap: 8px; grid-template-rows: 66px minmax(0, 1fr) auto; }
+  .story-controls { font-size: 10px; padding: 8px 10px; gap: 4px; }
+  .player-vitals { padding: 8px 12px; }
+  .boss-status { width: min(430px, 80vw); }
+  .feedback-text { font-size: 15px; }
+  .inventory-panel { padding: 20px; }
+}
+@media (max-height: 560px) {
+  .story-hud { grid-template-rows: 56px minmax(0, 1fr) auto; }
+  .story-controls { display: grid; grid-template-columns: repeat(2, max-content); gap: 4px 14px; }
+  .story-controls small { display: none; }
+  .story-bottom-stack, .story-feedback { gap: 6px; }
+  .boss-name { font-size: 14px; margin-bottom: 6px; }
+  .player-vitals .hud-eyebrow { display: none; }
+  .gameplay-error { font-size: 12px; padding: 8px 10px; }
+  .pickup-hint { padding: 6px 14px; font-size: 13px; }
+}
+
 </style>

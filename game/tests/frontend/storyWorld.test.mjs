@@ -511,3 +511,120 @@ test('inventory template captures pointer input and its close button restores co
   page.instance.camera.pointerMove(event({ clientX: 400, clientY: 300 })); f.step();
   assert.deepEqual(page.instance.camera.snapshotPose(), before);
 });
+
+
+test('real story page settles airborne Tab, blur, pointerleave and hidden-page interruptions', async t => {
+  const f = await fixture(t); const page = f.mount(); await page.mount();
+  const groundY = page.instance.camera.snapshotPlayer().position[1];
+  const stopCases = [
+    [() => page.instance.onKeyDown(event({ code: 'Tab' })), () => page.instance.toggleInventory()],
+    [() => page.instance.onBlur(), () => page.instance.onFocus()],
+    [() => page.instance.camera.pointerLeave(), () => {}],
+    [() => { document.hidden = true; page.instance.onVisibilityChange(); },
+      () => { document.hidden = false; page.instance.onVisibilityChange(); }],
+  ];
+  for (const [stop, resume] of stopCases) {
+    page.instance.onKeyDown(event({ code: 'Space' })); f.step();
+    const airborne = page.instance.camera.snapshotPlayer();
+    assert.equal(airborne.grounded, false); assert.ok(airborne.position[1] > groundY);
+    const stale = [...f.frames.values()][0]; stop();
+    const landed = page.instance.camera.snapshotPlayer();
+    assert.equal(landed.grounded, true); assert.equal(landed.position[1], groundY);
+    assert.equal(landed.position[2], airborne.position[2]);
+    assert.equal(f.frames.size, 0); const count = f.calls.length; stale(50000); assert.equal(f.calls.length, count);
+    // Locks reject new Space; pointerleave instead clears held state.
+    if (document.hidden || page.instance.inventoryOpen.value) {
+      page.instance.onKeyDown(event({ code: 'Space' })); assert.equal(f.frames.size, 0);
+    }
+    resume();
+    const camera = page.instance.camera.snapshotPose();
+    page.instance.camera.pointerMove(event({ clientX: 400, clientY: 300 })); f.step();
+    assert.deepEqual(page.instance.camera.snapshotPose(), camera);
+  }
+  await page.instance.saveRegistration.flush();
+  assert.equal(f.actors.get(MAIN)[0].geometry.position[1], groundY);
+  assert.deepEqual(f.alerts, []);
+});
+test('half-jump O/P saves ground and the corrected model once, preserves camera and keeps child combat hidden', async t => {
+  const f = await fixture(t); let page = f.mount(); await page.mount();
+  page.instance.onKeyDown(event({ code: 'Space' })); f.step(); f.step();
+  const airborne = page.instance.camera.snapshotPlayer(), groundY = f.actors.get(MAIN)[0].geometry.position[1];
+  page.instance.onKeyDown(event({ code: 'KeyO' })); await turn();
+  assert.deepEqual(f.opens(), [CHILD]);
+  const saved = f.actors.get(MAIN)[0].geometry;
+  assert.equal(saved.position[1], groundY); assert.equal(saved.position[2], airborne.position[2]);
+  assert.deepEqual(saved.rotation, airborne.rotation);
+  const savedCamera = structuredClone(f.poses.get(MAIN));
+  page = f.mount(); await page.mount();
+  assert.equal(page.instance.bossNearby.value, false); assert.equal(f.actors.get(CHILD)[1].visible, false);
+  page.instance.onKeyDown(event({ code: 'KeyP' })); await turn();
+  page = f.mount(); await page.mount();
+  const restored = page.instance.camera.snapshotPlayer();
+  assert.equal(restored.grounded, true); assert.deepEqual(restored.position, saved.position);
+  assert.deepEqual(restored.rotation, saved.rotation); assert.equal(restored.facingYaw, airborne.facingYaw);
+  assert.deepEqual(page.instance.camera.snapshotPose().camera.position, savedCamera.position);
+  assert.deepEqual(f.alerts, []);
+});
+test('half-jump Escape waits for the ground save, blocks Space and remains in world on save failure', async t => {
+  const gate = deferred(); let fail = true, block = true;
+  const f = await fixture(t, { save: async () => { if (block) await gate.promise; if (fail) throw new Error('landing disk full'); } });
+  const page = f.mount(); await page.mount(); const groundY = page.instance.camera.snapshotPlayer().position[1];
+  page.instance.onKeyDown(event({ code: 'Space' })); f.step();
+  const before = page.instance.camera.snapshotPlayer(); page.instance.onKeyDown(event({ code: 'Escape' }));
+  await turn(); assert.equal(f.route, '/');
+  page.instance.onKeyDown(event({ code: 'Space' })); assert.equal(f.frames.size, 0);
+  gate.resolve(); await turn();
+  assert.equal(f.route, '/'); assert.match(page.instance.gameplayError.value, /landing disk full/);
+  assert.equal(page.instance.camera.snapshotPlayer().position[1], groundY);
+  const writes = f.calls.filter(c => c[0] === 'playerSave'); assert.equal(writes.length, 1);
+  assert.equal(writes[0][4].position[1], groundY); assert.equal(writes[0][4].position[2], before.position[2]);
+  fail = false; block = false; page.instance.onKeyDown(event({ code: 'Escape' })); await turn();
+  assert.equal(f.route, '/StartScreen'); assert.deepEqual(f.actors.get(MAIN)[0].geometry.position, writes[0][4].position);
+});
+test('unrelated world replacement settles locally after invalidation and saves without using old handles', async t => {
+  const f = await fixture(t); const page = f.mount(); await page.mount();
+  const groundY = page.instance.camera.snapshotPlayer().position[1];
+  page.instance.onKeyDown(event({ code: 'Space' })); f.step();
+  const before = page.instance.camera.snapshotPlayer(), stale = [...f.frames.values()][0];
+  const index = f.calls.length;
+  await launcher.projectLauncherService.openProject('D:/other'); stale(99999);
+  assert.deepEqual(f.opens(), ['D:/other']);
+  assert.ok(!f.calls.slice(index).some(c => ['actorTransform', 'cameraMove'].includes(c[0])));
+  const write = f.calls.slice(index).find(c => c[0] === 'playerSave');
+  assert.equal(write[1], MAIN); assert.equal(write[4].position[1], groundY);
+  assert.equal(write[4].position[2], before.position[2]);
+});
+test('Space cannot start during an acknowledged save; a late save never leaves the player airborne', async t => {
+  const gate = deferred(); const f = await fixture(t, { save: () => gate.promise });
+  const page = f.mount(); await page.mount();
+  page.instance.onKeyDown(event({ code: 'Space' })); f.step();
+  const saved = page.instance.saveRegistration.flush(); await turn();
+  page.instance.onKeyDown(event({ code: 'Space' })); page.instance.onKeyDown(event({ code: 'KeyO' }));
+  assert.equal(f.frames.size, 0); assert.deepEqual(f.opens(), []);
+  gate.resolve(); await saved;
+  assert.equal(page.instance.camera.snapshotPlayer().grounded, true);
+  assert.equal(page.instance.camera.snapshotPlayer().position[1], f.actors.get(MAIN)[0].geometry.position[1]);
+});
+test('HUD puts feedback/errors above compact bottom vitals and lists Space with side controls', async t => {
+  const f = await fixture(t); const page = f.mount(); await page.mount();
+  page.instance.feedback.value = '获得 世界碎片 ×1'; page.instance.canPickup.value = true;
+  page.instance.gameplayError.value = '保存失败，请重试';
+  const tree = renderStory(proxyRefs(page.instance), []);
+  const bottom = findNode(tree, node => node.props?.class === 'story-bottom-stack');
+  assert.deepEqual(bottom.children.filter(node => node.type !== vue.Comment).map(node => node.props?.class),
+    ['gameplay-error', 'story-feedback', 'player-vitals']);
+  const controls = findNode(tree, node => node.props?.class === 'story-controls');
+  assert.match(JSON.stringify(controls, (key, value) => key === 'ctx' ? undefined : value), /空格/);
+  const declarations = selector => {
+    const values = {};
+    styles.walkRules(rule => { if (rule.parent.type === 'root' && rule.selectors.includes(selector))
+      rule.walkDecls(d => { values[d.prop] = d.value; }); });
+    return values;
+  };
+  assert.equal(declarations('.story-hud')['pointer-events'], 'none');
+  assert.equal(declarations('.story-bottom-stack')['grid-area'], '3 / 1');
+  assert.equal(declarations('.story-controls')['flex-direction'], 'column');
+  assert.equal(declarations('.story-controls')['align-self'], 'center');
+  assert.equal(declarations('.player-vitals').position, undefined);
+  assert.equal(declarations('.gameplay-error').position, undefined);
+});

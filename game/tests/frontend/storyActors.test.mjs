@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { STORY_CHARACTERS, PLAYER_GUID, resolveStoryAssetPath, characterTransform, rotatedBounds } from '../../frontend/storyCharacters.mjs';
+import { STORY_CHARACTERS, PLAYER_GUID, PLAYER_MODEL_REF, resolveStoryAssetPath, characterTransform, rotatedBounds } from '../../frontend/storyCharacters.mjs';
 import { ensureStoryCharacters } from '../../frontend/storyActors.mjs';
 import { actorFixture, apiFixture, url, deferred } from './fixtures.mjs';
 const load = (f, extra = {}) => ensureStoryCharacters({ api: f.api, sceneId: 'scene.ini', frontendUrl: url, wait: async () => {}, ...extra });
@@ -183,4 +183,65 @@ test('a failed async import reports the role without waiting for a bounds timeou
   await assert.rejects(load(f, { wait: async () => { waited = true; } }), /玩家加载失败.*模型导入失败/);
   assert.equal(waited, false);
   assert.equal(f.calls.length, 0);
+});
+
+
+test('legacy player facing is migrated with its marker in one write, preserving position and portable art', async () => {
+  const player = actorFixture(); delete player.model_ref;
+  player.route = 'Assets/Models/maria.dae';
+  player.geometry.position = [7, 0.9, -9]; player.geometry.rotation = [0, 0.42, 0];
+  const f = apiFixture({ actors: [player, ...STORY_CHARACTERS.slice(1).map(c => actorFixture(c))] });
+  const result = await load(f, { frontendUrl: 'http://source-art-unavailable' });
+  assert.deepEqual(result.player.geometry.position, player.geometry.position);
+  assert.deepEqual(result.player.geometry.rotation, [0, 0.42 + Math.PI, 0]);
+  assert.equal(result.player.model_ref, PLAYER_MODEL_REF);
+  assert.equal(f.calls.length, 1);
+  assert.equal(f.calls[0][0], 'create');
+  assert.equal(f.calls[0][2], player.route);
+  assert.equal(f.calls[0][4].skip_if_exists, true); assert.equal(f.calls[0][4].update_if_exists, true);
+  assert.equal(f.calls[0][4].model_ref, PLAYER_MODEL_REF);
+  for (let i = 0; i < 3; i++) await load(f);
+  assert.equal(f.calls.length, 1); assert.equal(f.state.actors.length, 4);
+});
+test('migration retries before/after commit never rotate twice or duplicate a player', async () => {
+  for (const committed of [false, true]) {
+    const player = actorFixture(); delete player.model_ref; player.geometry.rotation = [0, -0.8, 0];
+    const f = apiFixture({ actors: [player] }), create = f.api.sceneTools.createActor;
+    f.api.sceneTools.createActor = async (...args) => {
+      if (committed) await create(...args);
+      throw new Error(committed ? 'reply lost' : 'disk full');
+    };
+    await assert.rejects(load(f), /玩家加载失败.*(reply lost|disk full)/);
+    f.api.sceneTools.createActor = create;
+    await load(f); await load(f);
+    assert.deepEqual(f.get(PLAYER_GUID).geometry.rotation, [0, -0.8 + Math.PI, 0]);
+    assert.equal(f.get(PLAYER_GUID).model_ref, PLAYER_MODEL_REF); assert.equal(f.state.actors.length, 4);
+  }
+});
+test('legacy incomplete import receives the default corrected pose, not a second half-turn', async () => {
+  const player = actorFixture(); delete player.model_ref;
+  player.geometry = { position: [0, 0, 0], rotation: [0, 0, 0], scale: [1, 1, 1] };
+  const f = apiFixture({ actors: [player] }); await load(f); await load(f);
+  assert.deepEqual(f.get(PLAYER_GUID).geometry.rotation, [0, Math.PI, 0]);
+  assert.ok(f.get(PLAYER_GUID).geometry.position[1] > 0);
+  assert.equal(f.state.actors.length, 4);
+});
+test('existing NPC GUIDs are moved behind spawn in both worlds; corrected dragon bounds stay grounded', async () => {
+  for (const role of ['main', 'child']) {
+    const actors = STORY_CHARACTERS.map(c => actorFixture(c));
+    actors[1].geometry.rotation = [Math.PI / 2, Math.PI, 0];
+    actors[2].geometry.position = [-4, 0, 4]; actors[3].geometry.position = [4, 0, 4];
+    const f = apiFixture({ actors });
+    await load(f, { gameplay: { role, state: { boss: { hp: 200 }, drop: null } } });
+    assert.deepEqual(f.get(STORY_CHARACTERS[2].guid).geometry.position.filter((_, i) => i !== 1), [-30, -15]);
+    assert.deepEqual(f.get(STORY_CHARACTERS[3].guid).geometry.position.filter((_, i) => i !== 1), [30, -15]);
+    assert.equal(f.calls.filter(call => call[0] === 'create').length, 0);
+    assert.equal(f.state.actors.length, 4);
+    const boss = f.get(STORY_CHARACTERS[1].guid);
+    if (role === 'main') {
+      assert.deepEqual(boss.geometry.rotation, [Math.PI / 2, 0, 0]);
+      const bounds = rotatedBounds(boss.local_aabb, boss.geometry.rotation);
+      assert.ok(Math.abs(bounds[1] * boss.geometry.scale[1] + boss.geometry.position[1]) < 1e-9);
+    } else assert.equal(boss.visible, false);
+  }
 });

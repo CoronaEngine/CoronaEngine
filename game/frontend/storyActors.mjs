@@ -1,5 +1,5 @@
 import { FRAGMENT, FRAGMENT_GUID } from './storyGameplay.mjs';
-import { STORY_CHARACTERS, PLAYER_GUID, unwrap, sceneSnapshot, resolveStoryAssetPath,
+import { STORY_CHARACTERS, PLAYER_GUID, PLAYER_MODEL_REF, PLAYER_MODEL_YAW_OFFSET, unwrap, sceneSnapshot, resolveStoryAssetPath,
   characterTransform, rotatedBounds, hasUsableBounds } from './storyCharacters.mjs';
 
 const canceled = () => Object.assign(new Error('剧情世界初始化已取消'), { name: 'AbortError' });
@@ -52,6 +52,7 @@ export async function ensureStoryCharacters({ api, sceneId, frontendUrl, isCurre
         const created = await call('创建模型', () => api.sceneTools.createActor(sceneId, source, 'model', {
           name: character.name, actor_guid: character.guid, semantic_role: character.role,
           entity_id: `story.${character.role}`, entity_type: 'story_character',
+          ...(character.role === 'player' ? { model_ref: PLAYER_MODEL_REF } : {}),
           position: [character.x, 0, character.z], rotation: character.rotation, scale: [1, 1, 1],
           follow_camera: false, physics_enabled: false,
         }));
@@ -84,8 +85,26 @@ export async function ensureStoryCharacters({ api, sceneId, frontendUrl, isCurre
       // Only preserve its saved pose once the normalization step was committed.
       const initializedPlayer = wasPresent && character.role === 'player'
         && sameVector(actor.geometry?.scale, placement.scale);
-      const transform = characterTransform(character, actor.local_aabb, initializedPlayer ? actor.geometry : null);
-      if (Object.entries(transform).some(([key, value]) => !sameVector(actor.geometry?.[key], value))) {
+      const legacyPlayer = character.role === 'player' && actor.model_ref !== PLAYER_MODEL_REF;
+      let savedGeometry = initializedPlayer ? actor.geometry : null;
+      if (legacyPlayer && savedGeometry) {
+        savedGeometry = { ...savedGeometry, rotation: [...savedGeometry.rotation] };
+        savedGeometry.rotation[1] += PLAYER_MODEL_YAW_OFFSET;
+      }
+      const transform = characterTransform(character, actor.local_aabb, savedGeometry);
+      if (legacyPlayer) {
+        // Persist the art correction and its version together. Never rotate first
+        // and mark later: a lost reply/reentry would otherwise flip the player again.
+        // Reuse the portable resource route; an existing world needs no source art.
+        const route = actor.route || source || resolveStoryAssetPath(frontendUrl, character.asset);
+        actor = (await call('校正玩家朝向', () => api.sceneTools.createActor(sceneId, route, 'model', {
+          actor_guid: character.guid, skip_if_exists: true, update_if_exists: true,
+          model_ref: PLAYER_MODEL_REF, ...transform,
+        }))).actor;
+        if (actor?.model_ref !== PLAYER_MODEL_REF || !sameVector(actor.geometry?.rotation, transform.rotation)) {
+          throw new Error('引擎未确认玩家朝向版本，请重试进入世界');
+        }
+      } else if (Object.entries(transform).some(([key, value]) => !sameVector(actor.geometry?.[key], value))) {
         actor = (await call('设置模型位置', () => api.scene.setActorTransform(sceneId, character.guid, transform))).actor;
       }
       if (actor.mechanics?.physics_enabled !== false) {

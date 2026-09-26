@@ -23,15 +23,16 @@ export function distanceToBounds(position, bounds) {
   return Math.hypot(...[0, 2].map(axis => Math.max(bounds[axis] - position[axis], 0, position[axis] - bounds[axis + 3])));
 }
 export function canHitBoss(player, bounds, config) {
-  if (!player || distanceToBounds(player.position, bounds) > config.meleeRange) return false;
+  if (!player?.grounded || !Number.isFinite(player.facingYaw)
+    || distanceToBounds(player.position, bounds) > config.meleeRange) return false;
   const dx = (bounds[0] + bounds[3]) / 2 - player.position[0];
   const dz = (bounds[2] + bounds[5]) / 2 - player.position[2];
   const length = Math.hypot(dx, dz);
-  return length < 1e-8 || (Math.sin(player.rotation[1]) * dx + Math.cos(player.rotation[1]) * dz)
+  return length < 1e-8 || (Math.sin(player.facingYaw) * dx + Math.cos(player.facingYaw) * dz)
     / length >= Math.cos(config.meleeHalfAngle) - 1e-9;
 }
 export function pickupDistance(player, drop) {
-  return player && vector3(drop?.position)
+  return player?.grounded && vector3(drop?.position)
     ? Math.hypot(player.position[0] - drop.position[0], player.position[2] - drop.position[2]) : Infinity;
 }
 export function unwrapGameplay(value) {
@@ -111,7 +112,7 @@ export function createStoryGameplay({ api, projectPath, readPlayer, readBoss,
     attack() {
       if (inFlight) return inFlight;
       if (pending || visualDirty) return flush();
-      if (!data || data.role !== 'main' || data.state.boss.hp <= 0) return Promise.resolve(false);
+      if (!data || data.role !== 'main' || data.state.boss.hp <= 0 || !readPlayer()?.grounded) return Promise.resolve(false);
       const time = now(), boss = readBoss(), bounds = worldBounds(boss);
       if (time - lastAttack < data.config.cooldownMs) return Promise.resolve(false);
       lastAttack = time;

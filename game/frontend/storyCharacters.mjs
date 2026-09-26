@@ -1,13 +1,16 @@
 /** Models in game/art/models and stable identities owned by the story game. */
+// Maria faces local -Z. Gameplay and the camera use logical +Z instead.
+export const PLAYER_MODEL_YAW_OFFSET = Math.PI;
+export const PLAYER_MODEL_REF = 'story.player.facing.v1';
 export const STORY_CHARACTERS = Object.freeze([
   { role: 'player', name: '玩家', guid: 'f9f5c8b0-7324-4b6c-a011-000000000001',
-    asset: 'player/Maria WProp J J Ong.dae', x: 0, z: 0, height: 1.8, rotation: [0, 0, 0] },
+    asset: 'player/Maria WProp J J Ong.dae', x: 0, z: 0, height: 1.8, rotation: [0, PLAYER_MODEL_YAW_OFFSET, 0] },
   { role: 'boss', name: 'Boss', guid: 'f9f5c8b0-7324-4b6c-a011-000000000002',
-    asset: 'boss/Dragon 2.5_dae.dae', x: 0, z: 12, size: 8, rotation: [Math.PI / 2, Math.PI, 0] },
+    asset: 'boss/Dragon 2.5_dae.dae', x: 0, z: 12, size: 8, rotation: [Math.PI / 2, 0, 0] },
   { role: 'merchant', name: '商人', guid: 'f9f5c8b0-7324-4b6c-a011-000000000003',
-    asset: 'merchant/Maw J Laygo.dae', x: -4, z: 4, height: 1.8, rotation: [0, Math.PI, 0] },
+    asset: 'merchant/Maw J Laygo.dae', x: -30, z: -15, height: 1.8, rotation: [0, Math.PI, 0] },
   { role: 'prophet', name: '先知', guid: 'f9f5c8b0-7324-4b6c-a011-000000000004',
-    asset: 'prophet/dancing_vampire.dae', x: 4, z: 4, height: 1.8, rotation: [0, Math.PI, 0] },
+    asset: 'prophet/dancing_vampire.dae', x: 30, z: -15, height: 1.8, rotation: [0, Math.PI, 0] },
 ].map(character => Object.freeze({ ...character, rotation: Object.freeze(character.rotation) })));
 
 export const PLAYER_GUID = STORY_CHARACTERS[0].guid;

@@ -11,7 +11,7 @@ function fixture() {
   let state = { version: 1, revision: 0, boss: { hp: 200 }, drop: null, inventory: { worldFragment: 0 } };
   let role = 'main', time = 0, id = 0, fail = false, lostReply = false, visualFail = false, gate = null, replyGate = null;
   const boss = actorFixture(STORY_CHARACTERS[1]), bounds = worldBounds(boss);
-  const player = { position: [0, 0, bounds[2] - 1], rotation: [0, 0, 0] };
+  const player = { position: [0, 0, bounds[2] - 1], rotation: [0, Math.PI, 0], facingYaw: 0, grounded: true };
   const requests = [], feedback = [], states = [], visuals = [], operations = new Set();
   const response = () => ({ status: 'ok', role, state: structuredClone(state), config });
   const game = createStoryGameplay({ projectPath: 'D:/story', readPlayer: () => player, readBoss: () => boss,
@@ -55,9 +55,9 @@ test('world bounds include scale and rotation; range uses the model edge, not it
   }
   const ground = [0, 0, bounds[2] - 2];
   assert.equal(distanceToBounds(ground, bounds), 2);
-  assert.ok(canHitBoss({ position: ground, rotation: [0, 0, 0] }, bounds, config));
-  assert.equal(canHitBoss({ position: ground, rotation: [0, Math.PI, 0] }, bounds, config), false);
-  assert.equal(canHitBoss({ position: [0, 0, bounds[2] - 2.51], rotation: [0, 0, 0] }, bounds, config), false);
+  assert.ok(canHitBoss({ position: ground, rotation: [0, Math.PI, 0], facingYaw: 0, grounded: true }, bounds, config));
+  assert.equal(canHitBoss({ position: ground, rotation: [0, 0, 0], facingYaw: Math.PI, grounded: true }, bounds, config), false);
+  assert.equal(canHitBoss({ position: [0, 0, bounds[2] - 2.51], rotation: [0, Math.PI, 0], facingYaw: 0, grounded: true }, bounds, config), false);
   assert.equal(canHitBoss(null, null, config), false);
 });
 
@@ -78,8 +78,8 @@ test('ten acknowledged hits, cooldown, one drop and one pickup', async () => {
 });
 
 test('out of range, behind and child world never dispatch damage', async () => {
-  const f = fixture(); await f.game.load(); f.player.rotation[1] = Math.PI;
-  await f.game.attack(); f.tick(); f.player.rotation[1] = 0; f.player.position[2] = -100;
+  const f = fixture(); await f.game.load(); f.player.facingYaw = Math.PI;
+  await f.game.attack(); f.tick(); f.player.facingYaw = 0; f.player.position[2] = -100;
   await f.game.attack(); f.tick(); f.player.position[2] = 10;
   f.role('child'); await f.game.load(); await f.game.attack(); await f.game.pickup();
   assert.ok(f.requests.every(v => v.action === 'load'));
@@ -187,4 +187,17 @@ test('a missing initial load reply fails visibly without accepting its late stat
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(game.data, null);
   assert.deepEqual(accepted, []);
+});
+
+
+test('airborne attacks and pickups never mutate progress or consume the next grounded attack', async () => {
+  const f = fixture(); await f.game.load(); f.player.grounded = false;
+  for (let i = 0; i < 3; i++) { await f.game.attack(); await f.game.pickup(); }
+  assert.equal(f.requests.length, 1); assert.equal(f.state.boss.hp, 200);
+  f.player.grounded = true; await f.game.attack(); assert.equal(f.state.boss.hp, 180);
+  for (let i = 0; i < 9; i++) { f.tick(); await f.game.attack(); }
+  f.player.position = [0, 1.2, 12]; f.player.grounded = false;
+  await f.game.pickup(); assert.equal(f.state.inventory.worldFragment, 0);
+  f.player.position[1] = 0; f.player.grounded = true;
+  await f.game.pickup(); assert.equal(f.state.inventory.worldFragment, 1);
 });

@@ -1,7 +1,8 @@
 /** Third-person, kinematic player control. Native animation continues independently. */
-import { PLAYER_GUID, vector3 } from './storyCharacters.mjs';
+import { PLAYER_GUID, PLAYER_MODEL_YAW_OFFSET, vector3 } from './storyCharacters.mjs';
 
 export const PLAYER_CONTROLS = Object.freeze({ speed: 3, maxDelta: 0.05,
+  jumpDistance: 4, jumpDuration: 0.7, jumpHeight: 1.2,
   distance: 4.5, minDistance: 2.5, maxDistance: 10,
   pitch: 20 * Math.PI / 180, minPitch: 10 * Math.PI / 180, maxPitch: 65 * Math.PI / 180,
   sensitivity: 0.005, edgeWidth: 40, edgeYawSpeed: Math.PI / 2, edgePitchSpeed: Math.PI / 3 });
@@ -11,6 +12,7 @@ const movementKey = event => {
   const key = code.startsWith('key') ? code.slice(3) : String(event.key || '').toLowerCase();
   return ['w', 'a', 's', 'd'].includes(key) ? key : '';
 };
+const jumpKey = event => event.code === 'Space' || event.key === ' ' || event.key === 'Spacebar';
 const editing = event => (event.composedPath?.() || [event.target]).some(target => target?.isContentEditable
   || target?.closest?.('input, textarea, select, [contenteditable]:not([contenteditable="false"]), [role="textbox"]'));
 
@@ -21,12 +23,57 @@ export function createPlayerController({ getPose, setPose, submitPose, getBridge
   now = () => globalThis.performance.now(), config = PLAYER_CONTROLS }) {
   let player = null, targetOffset = 0, yaw = 0, pitch = config.pitch, distance = config.distance;
   let frame = null, epoch = 0, lastTime = null, pointer = null, disposed = false;
+  let jump = null, spaceHeld = false, landingPending = false;
   const keys = new Set();
-  const ready = () => !disposed && isCurrent() && !isInputLocked() && player && getPose();
+  const ready = () => !disposed && isCurrent() && !isInputLocked() && !landingPending && player && getPose();
+  const hasWork = () => jump || keys.size || pointer?.edgeX || pointer?.edgeY;
   function resetInput() {
     epoch++;
     if (frame !== null) cancelFrame(frame);
-    frame = null; lastTime = null; pointer = null; keys.clear();
+    frame = null; lastTime = null; pointer = null; keys.clear(); spaceHeld = false;
+    if (!jump) return;
+    // This is a desired *ground* pose, even if the old world's handles have
+    // already expired. Its dirty version must survive until the save barrier.
+    player = { ...player, position: [player.position[0], jump.groundY, player.position[2]],
+      grounded: false, version: player.version + 1 };
+    jump = null; landingPending = true;
+    if (!landingPending || disposed || !isCurrent()) return;
+    try {
+      const bridge = getBridge();
+      if (bridge?.actorTransform?.(player.handle, 0, player.position) !== true) {
+        throw new Error('玩家落地接口不可用，请重试保存');
+      }
+      landingPending = false;
+      player = { ...player, grounded: true };
+      poseCamera();
+    } catch (error) { onError(error); }
+    onPlayerChanged();
+  }
+  function movementDirection() {
+    const x = Number(keys.has('d')) - Number(keys.has('a'));
+    const z = Number(keys.has('w')) - Number(keys.has('s'));
+    const length = Math.hypot(x, z);
+    return length > 0 ? [(x * Math.cos(yaw) + z * Math.sin(yaw)) / length,
+      (z * Math.cos(yaw) - x * Math.sin(yaw)) / length] : null;
+  }
+  function movePlayer(position) {
+    if (getBridge()?.actorTransform?.(player.handle, 0, position) !== true) throw new Error('玩家实时移动接口不可用');
+    // Keep accepted native changes even if the next operation fails.
+    player = { ...player, position, version: player.version + 1 };
+  }
+  function facePlayer(facingYaw, markDirty = false) {
+    const rotation = [player.rotation[0], facingYaw + PLAYER_MODEL_YAW_OFFSET, player.rotation[2]];
+    if (getBridge()?.actorTransform?.(player.handle, 1, rotation) !== true) throw new Error('玩家实时朝向接口不可用');
+    player = { ...player, rotation, facingYaw, version: player.version + Number(markDirty) };
+  }
+  function beginJump() {
+    const [dx, dz] = movementDirection() || [Math.sin(player.facingYaw), Math.cos(player.facingYaw)];
+    facePlayer(Math.atan2(dx, dz), true);
+    jump = { x: player.position[0], z: player.position[2], groundY: player.position[1], dx, dz, elapsed: 0 };
+    player = { ...player, grounded: false };
+    lastTime = now();
+    onPlayerChanged();
+    schedule();
   }
   function poseCamera() {
     const pose = getPose();
@@ -49,27 +96,28 @@ export function createPlayerController({ getPose, setPose, submitPose, getBridge
         yaw += pointer.edgeX * config.edgeYawSpeed * delta;
         pitch = clamp(pitch + pointer.edgeY * config.edgePitchSpeed * delta, config.minPitch, config.maxPitch);
       }
-      let x = Number(keys.has('d')) - Number(keys.has('a'));
-      let z = Number(keys.has('w')) - Number(keys.has('s'));
-      const length = Math.hypot(x, z);
-      if (length > 0 && delta > 0) {
-        x /= length; z /= length;
-        const dx = x * Math.cos(yaw) + z * Math.sin(yaw);
-        const dz = z * Math.cos(yaw) - x * Math.sin(yaw);
-        const position = [player.position[0] + dx * config.speed * delta, player.position[1],
-          player.position[2] + dz * config.speed * delta];
-        const rotation = [player.rotation[0], Math.atan2(dx, dz), player.rotation[2]];
-        const bridge = getBridge();
-        if (!bridge || bridge.actorTransform(player.handle, 0, position) !== true) throw new Error('玩家实时移动接口不可用');
-        // Keep every accepted native change even if the next operation fails,
-        // so exit saves the actual final pose instead of the previous frame.
-        player = { ...player, position, version: player.version + 1 };
-        if (bridge.actorTransform(player.handle, 1, rotation) !== true) throw new Error('玩家实时朝向接口不可用');
-        player = { ...player, rotation };
+      if (jump && delta > 0) {
+        let elapsed = Math.min(jump.elapsed + delta, config.jumpDuration);
+        if (config.jumpDuration - elapsed < 1e-9) elapsed = config.jumpDuration;
+        const t = elapsed / config.jumpDuration;
+        movePlayer([jump.x + jump.dx * config.jumpDistance * t,
+          jump.groundY + 4 * config.jumpHeight * t * (1 - t),
+          jump.z + jump.dz * config.jumpDistance * t]);
+        jump.elapsed = elapsed;
+        if (t === 1) { jump = null; player = { ...player, grounded: true }; }
         onPlayerChanged();
+      } else if (!jump && delta > 0) {
+        const direction = movementDirection();
+        if (direction) {
+          const [dx, dz] = direction;
+          movePlayer([player.position[0] + dx * config.speed * delta, player.position[1],
+            player.position[2] + dz * config.speed * delta]);
+          facePlayer(Math.atan2(dx, dz));
+          onPlayerChanged();
+        }
       }
       poseCamera();
-      if (keys.size || (pointer && (pointer.edgeX || pointer.edgeY))) schedule();
+      if (hasWork()) schedule();
       else lastTime = null;
     } catch (error) { resetInput(); onError(error); }
   }
@@ -90,8 +138,10 @@ export function createPlayerController({ getPose, setPose, submitPose, getBridge
         throw new Error('当前引擎缺少玩家实时控制接口');
       }
       player = { handle: Number(actor.handle), actorGuid: actor.actor_guid,
-        position: [...actor.geometry.position], rotation: [...actor.geometry.rotation], version: 0 };
-      targetOffset = offset; yaw = player.rotation[1]; pitch = config.pitch; distance = config.distance;
+        position: [...actor.geometry.position], rotation: [...actor.geometry.rotation], facingYaw: actor.geometry.rotation[1] - PLAYER_MODEL_YAW_OFFSET,
+        grounded: true, version: 0 };
+      landingPending = false;
+      targetOffset = offset; yaw = player.facingYaw; pitch = config.pitch; distance = config.distance;
       // O/P saves each world's camera alongside its player. Reuse a valid saved
       // orbit rather than resetting its yaw/pitch/distance on every scene bind.
       const saved = getPose();
@@ -117,18 +167,45 @@ export function createPlayerController({ getPose, setPose, submitPose, getBridge
     // Retain the last submitted pose after disposal so the old-world save barrier can flush it.
     snapshotPlayer() {
       return player ? { actorGuid: player.actorGuid, position: [...player.position],
-        rotation: [...player.rotation], version: player.version } : null;
+        rotation: [...player.rotation], facingYaw: player.facingYaw, grounded: player.grounded,
+        version: player.version } : null;
+    },
+    // A deferred landing can be accepted by the persistent API after the real-
+    // time bridge failed or the source component was invalidated. Never use an
+    // old acknowledgement to overwrite a newer pose or start a new jump.
+    acknowledgePlayerSave(pose) {
+      if (!player || pose.version !== player.version || !landingPending) return;
+      landingPending = false;
+      player = { ...player, grounded: true };
+      if (!disposed && isCurrent()) {
+        try { poseCamera(); } catch (error) { onError(error); }
+        onPlayerChanged();
+      }
     },
     keyDown(event) {
-      const key = movementKey(event);
-      if (!key || event.ctrlKey || event.altKey || event.metaKey || event.isComposing || editing(event) || !ready()) return false;
-      event.preventDefault?.(); keys.add(key); schedule(); return true;
+      const key = movementKey(event), space = jumpKey(event);
+      if ((!key && !space) || event.defaultPrevented || event.ctrlKey || event.altKey || event.metaKey
+        || event.isComposing || event.keyCode === 229 || editing(event) || !ready()) return false;
+      event.preventDefault?.();
+      if (space) {
+        if (event.repeat || spaceHeld) return true;
+        spaceHeld = true;
+        if (!jump) {
+          try { beginJump(); } catch (error) { resetInput(); onError(error); }
+        }
+      } else { keys.add(key); schedule(); }
+      return true;
     },
     keyUp(event) {
+      if (jumpKey(event)) {
+        if (!spaceHeld) return false;
+        event.preventDefault?.(); spaceHeld = false; return true;
+      }
       const key = movementKey(event);
       if (!keys.delete(key)) return false;
       event.preventDefault?.();
-      if (!keys.size && !(pointer?.edgeX || pointer?.edgeY)) {
+      // Releasing WASD must not stop an airborne trajectory.
+      if (!hasWork()) {
         epoch++;
         if (frame !== null) cancelFrame(frame);
         frame = null; lastTime = null;
@@ -173,6 +250,6 @@ export function createPlayerController({ getPose, setPose, submitPose, getBridge
       schedule(); return true;
     },
     resetInput,
-    dispose() { resetInput(); disposed = true; },
+    dispose() { disposed = true; resetInput(); },
   };
 }
