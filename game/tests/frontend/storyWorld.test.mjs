@@ -17,8 +17,9 @@ import * as lifecycle from '../../../editor/Frontend/src/services/worldSessionLi
 import lanchat from '../../../editor/Frontend/src/stores/lanchat.js';
 
 const require = createRequire(new URL('../../../editor/Frontend/package.json', import.meta.url));
-const { ref } = require('vue');
-const { parse, compileScript, babelParse } = require('vue/compiler-sfc');
+const vue = require('vue');
+const { ref, proxyRefs } = vue;
+const { parse, compileScript, compileTemplate, babelParse } = require('vue/compiler-sfc');
 const { descriptor } = parse(fs.readFileSync(new URL('../../../editor/Frontend/src/views/layout/StoryWorld.vue', import.meta.url), 'utf8'));
 const compiled = compileScript(descriptor, { id: 'story-navigation-test', genDefaultAs: 'StoryWorld' });
 let setupSource = compiled.content;
@@ -29,6 +30,20 @@ for (const node of babelParse(compiled.content, { sourceType: 'module' }).progra
     + setupSource.slice(node.end);
 }
 const makeComponent = new Function('modules', `${setupSource}; return StoryWorld;`);
+const template = compileTemplate({ source: descriptor.template.content, filename: 'StoryWorld.vue',
+  id: 'story-ui-test', compilerOptions: { mode: 'function' } });
+assert.deepEqual(template.errors, []);
+const renderStory = new Function('Vue', template.code)(vue);
+const styles = require('postcss').parse(descriptor.styles.map(style => style.content).join('\n'));
+function findNode(node, predicate) {
+  if (!node || typeof node !== 'object') return null;
+  if (predicate(node)) return node;
+  for (const child of Array.isArray(node.children) ? node.children : []) {
+    const match = findNode(child, predicate);
+    if (match) return match;
+  }
+  return null;
+}
 const turn = () => new Promise(resolve => setImmediate(resolve));
 const deferred = () => { let resolve, reject; const promise = new Promise((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; };
 const MAIN = 'D:/story', CHILD = `${MAIN}/.game/subworld`;
@@ -456,4 +471,43 @@ test('unacknowledged combat blocks native replacement; retry does not change ope
   assert.deepEqual(f.opens(), [CHILD]);
   assert.equal(new Set(commands.map(c => c.operationId)).size, 1);
   assert.ok(commands.every(c => c.projectPath === MAIN));
+});
+
+
+test('inventory template captures pointer input and its close button restores control without an attack or jump', async t => {
+  const f = await fixture(t); const page = f.mount(); await page.mount();
+  const attack = t.mock.method(page.instance.gameplay, 'attack', async () => {});
+  page.instance.camera.pointerMove(event({ clientX: 799, clientY: 300 })); f.step();
+  page.instance.onKeyDown(event({ code: 'Tab' }));
+  const before = page.instance.camera.snapshotPose();
+  const tree = renderStory(proxyRefs(page.instance), []);
+  const overlay = findNode(tree, node => node.props?.class === 'inventory-overlay');
+  const close = findNode(overlay, node => node.type === 'button' && node.props?.['aria-label'] === '关闭背包');
+  assert.ok(overlay); assert.ok(close);
+
+  for (const selector of ['.inventory-overlay', '.inventory-panel']) {
+    let interactive = false;
+    styles.walkRules(rule => {
+      if (rule.selectors.includes(selector)) rule.walkDecls('pointer-events', declaration => {
+        interactive = declaration.value === 'auto';
+      });
+    });
+    assert.ok(interactive, `${selector} must explicitly participate in hit testing`);
+  }
+  for (const name of ['onPointerdown', 'onPointermove', 'onWheel']) {
+    let stopped = false;
+    const input = event({ button: 0, clientX: 799, clientY: 300, deltaY: 200,
+      stopPropagation() { stopped = true; } });
+    overlay.props[name](input);
+    assert.ok(stopped, `${name} must not bubble into the viewport`);
+    if (name === 'onWheel') assert.ok(input.defaultPrevented);
+  }
+  assert.equal(page.instance.inventoryOpen.value, true);
+  assert.equal(f.frames.size, 0);
+  close.props.onClick(event()); await turn();
+  assert.equal(page.instance.inventoryOpen.value, false);
+  assert.equal(attack.mock.callCount(), 0);
+  assert.equal(f.route, '/');
+  page.instance.camera.pointerMove(event({ clientX: 400, clientY: 300 })); f.step();
+  assert.deepEqual(page.instance.camera.snapshotPose(), before);
 });

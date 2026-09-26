@@ -9,7 +9,7 @@ const config = { playerHp: 100, playerMp: 100, bossHp: 200, damage: 20, cooldown
   bossBarRadius: 10, meleeRange: 2.5, meleeHalfAngle: Math.PI / 3, pickupRange: 2 };
 function fixture() {
   let state = { version: 1, revision: 0, boss: { hp: 200 }, drop: null, inventory: { worldFragment: 0 } };
-  let role = 'main', time = 0, id = 0, fail = false, lostReply = false, visualFail = false, gate = null;
+  let role = 'main', time = 0, id = 0, fail = false, lostReply = false, visualFail = false, gate = null, replyGate = null;
   const boss = actorFixture(STORY_CHARACTERS[1]), bounds = worldBounds(boss);
   const player = { position: [0, 0, bounds[2] - 1], rotation: [0, 0, 0] };
   const requests = [], feedback = [], states = [], visuals = [], operations = new Set();
@@ -33,11 +33,14 @@ function fixture() {
         } else { state.drop.collected = true; state.inventory.worldFragment++; }
       }
       if (lostReply) { lostReply = false; throw new Error('reply lost'); }
-      return { data: response() };
+      const reply = { data: response() };
+      if (replyGate) await replyGate.promise;
+      return reply;
     } } } });
   return { game, player, boss, requests, feedback, states, visuals,
     tick: () => { time += 400; }, fail: value => { fail = value; }, loseReply: () => { lostReply = true; },
     failVisual: value => { visualFail = value; }, gate: value => { gate = value; }, role: value => { role = value; },
+    delayReply: value => { replyGate = value; },
     get state() { return state; }, conflict: () => { state.revision++; state.boss.hp -= 20; } };
 }
 
@@ -144,4 +147,44 @@ test('source guard prevents any stale actor mutation', async () => {
   await assert.rejects(ensureStoryCharacters({ api: f.api, sceneId: 'scene.ini', frontendUrl: url,
     assertSource: async () => { throw new Error('changed source'); } }), /changed source/);
   assert.equal(f.calls.length, 0);
+});
+
+
+test('a missing CEF reply times out; an identical retry commits once and ignores stale replies', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const f = fixture(); await f.game.load();
+  const reply = deferred(); f.delayReply(reply);
+  const rejected = assert.rejects(f.game.attack(), /玩法请求超时/);
+  assert.equal(f.state.boss.hp, 180); // Native commit succeeded, but its reply never arrived.
+  assert.equal(f.game.data.state.boss.hp, 200);
+  t.mock.timers.tick(15_001); await rejected;
+  assert.equal(f.game.busy, false);
+  assert.equal(f.game.needsSave, true);
+
+  f.delayReply(null); await f.game.flush();
+  assert.deepEqual(f.requests[1], f.requests[2]);
+  assert.equal(f.state.boss.hp, 180);
+  assert.equal(f.game.needsSave, false);
+  f.tick(); await f.game.attack();
+  assert.equal(f.game.data.state.boss.hp, 160);
+  const accepted = f.states.length, feedback = f.feedback.length;
+  reply.resolve(); await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.game.data.state.boss.hp, 160);
+  assert.equal(f.states.length, accepted);
+  assert.equal(f.feedback.length, feedback);
+});
+
+test('a missing initial load reply fails visibly without accepting its late state', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const reply = deferred(), accepted = [];
+  const game = createStoryGameplay({ projectPath: 'D:/story', onState: state => accepted.push(state),
+    api: { scratch: { sendKeyEvent: () => reply.promise } } });
+  const rejected = assert.rejects(game.load(), /玩法请求超时/);
+  t.mock.timers.tick(15_001); await rejected;
+  assert.equal(game.data, null);
+  reply.resolve({ status: 'ok', role: 'main', config,
+    state: { version: 1, revision: 0, boss: { hp: 200 }, drop: null, inventory: { worldFragment: 0 } } });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(game.data, null);
+  assert.deepEqual(accepted, []);
 });

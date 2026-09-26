@@ -41,9 +41,23 @@ export function unwrapGameplay(value) {
 
 export function createStoryGameplay({ api, projectPath, readPlayer, readBoss,
   reconcile = async () => {}, onState = () => {}, onFeedback = () => {},
-  trackWork = promise => promise, now = () => performance.now(), newId = () => crypto.randomUUID() }) {
+  trackWork = promise => promise, now = () => performance.now(), newId = () => crypto.randomUUID(),
+  requestTimeoutMs = 15_000 }) {
   let data = null, pending = null, inFlight = null, visualDirty = false, lastAttack = -Infinity;
-  const request = payload => api.scratch.sendKeyEvent(GAMEPLAY_KEY, '', JSON.stringify({ projectPath, ...payload }));
+  async function request(payload) {
+    let timer;
+    try {
+      // The existing CEF bridge has no response timeout. Only this bounded RPC
+      // feeds state: a late transport reply cannot overwrite a confirmed retry.
+      // Retrying the same operation ID is safe even if its first reply is lost.
+      return await Promise.race([
+        api.scratch.sendKeyEvent(GAMEPLAY_KEY, '', JSON.stringify({ projectPath, ...payload })),
+        new Promise((_, reject) => {
+          timer = setTimeout(() => reject(new Error('玩法请求超时，结果尚未确认，请重试')), requestTimeoutMs);
+        }),
+      ]);
+    } finally { clearTimeout(timer); }
+  }
   function accept(response) {
     if (!response?.state || !response.config || !['main', 'child'].includes(response.role)) {
       throw new Error('玩法状态响应无效');

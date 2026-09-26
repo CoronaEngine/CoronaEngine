@@ -355,6 +355,7 @@ kbd { display: inline-block; font: inherit; font-size: 11px; color: #f6dfb5; pad
 .gameplay-error { pointer-events: auto; position: absolute; bottom: 180px; left: 50%; transform: translateX(-50%); width: min(600px, 85vw); background: #431e22f0; padding: 16px; border: 1px solid #e89a89; display: flex; align-items: center; gap: 18px; font-size: 13px; }
 button { color: #eddfc5; border: 1px solid #b5a27f66; background: #ffffff09; padding: 8px 12px; border-radius: 4px; cursor: pointer; white-space: nowrap; }
 button:hover { background: #ffffff18; } button:disabled { opacity: .5; cursor: wait; }
+.inventory-overlay, .inventory-panel { pointer-events: auto; }
 .inventory-overlay { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; background: #040810b8; }
 .inventory-panel { width: min(620px, 86vw); background: #141b24f5; border: 1px solid #ad93675c; border-radius: 12px; box-shadow: 0 24px 100px #0008; padding: 28px; }
 .inventory-panel header { display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid #ffffff14; padding-bottom: 20px; }
