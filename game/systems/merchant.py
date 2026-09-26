@@ -6,9 +6,10 @@ from copy import deepcopy
 from dataclasses import replace
 from random import Random
 
-from .game_config import GameConfig
-from .game_types import Error, ItemKind, MerchantPhase, MerchantState, Position, Result, distance
-from .spawn_utils import sample_ring
+from ..core.config import GameConfig
+from ..core.state import MerchantState
+from ..core.types import Error, ItemKind, MerchantPhase, Position, Result, distance
+from ..world.spawn import sample_ring
 
 
 class MerchantSystem:

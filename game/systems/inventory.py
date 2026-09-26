@@ -4,7 +4,8 @@
 
 from copy import deepcopy
 
-from .game_types import Error, InventoryState, OrbId, Result, WorldId, WorldOrb, valid_id
+from ..core.state import InventoryState, WorldOrb
+from ..core.types import Error, OrbId, Result, WorldId, valid_id
 
 
 class Inventory:

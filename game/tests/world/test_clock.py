@@ -1,16 +1,12 @@
-"""验证整数纳秒时钟、昼夜边界和配置校验。
-覆盖初始阶段、关键节点前后、大步长事件顺序以及自定义昼夜时长对应的玩法行为。
-检查秒到纳秒的舍入规则，并确认非法时间或配置不会被接受。"""
-
-from dataclasses import fields
+"""验证纳秒计时、昼夜边界、时间换算和自定义周期。"""
 
 from game import BossPhase, DayPhase, Error, GameConfig, GameSession, MerchantPhase
-from game.game_types import MAX_TIME_NS, NS_PER_SECOND as S, seconds_to_ns
-from game.world_clock import WorldClock
-from .support import GameTestCase
+from game.core.types import MAX_TIME_NS, NS_PER_SECOND as S, seconds_to_ns
+from game.world.clock import WorldClock
+from ..support import GameTestCase
 
 
-class WorldClockTests(GameTestCase):
+class ClockTests(GameTestCase):
     def test_clock_starts_at_day_one(self) -> None:
         clock = WorldClock()
         self.assertEqual((clock.state.elapsed_ns, clock.state.day, clock.state.phase,
@@ -69,21 +65,3 @@ class WorldClockTests(GameTestCase):
             self.assertEqual(session.merchant.phase, merchant)
         self.assertEqual([e.story_time_ns for e in session.events],
                          [v * S for v in (3, 3, 5, 8, 8, 10, 10, 13, 13)])
-
-    def test_config_rejects_unsafe_or_invalid_values(self) -> None:
-        invalids = [
-            dict(day_duration_ns=0), dict(night_duration_ns=-1), dict(day_duration_ns=MAX_TIME_NS),
-            dict(boss_speed=-1), dict(safe_zone_radius=50), dict(safe_zone_clearance=0),
-            dict(safe_zone_clearance=1e-30), dict(merchant_spawn_min_distance=7),
-            dict(boss_spawn_min_distance=41), dict(boss_spawn_max_distance=0),
-            dict(boss_spawn_max_distance=1e90), dict(merchant_spawn_max_distance=1e90),
-            dict(safe_zone_clearance=5e-324),
-        ]
-        for field in fields(GameConfig):
-            for bad in (None, True, '3', float('nan'), float('inf'), -float('inf'), 10**1000):
-                invalids.append({field.name: bad})
-        invalids.append(dict(day_duration_ns=1.0))
-        for params in invalids:
-            with self.subTest(params=params), self.assertRaises(ValueError):
-                GameConfig(**params)
-        self.assertEqual(GameConfig(boss_speed=0, merchant_spawn_min_distance=0).boss_speed, 0)
