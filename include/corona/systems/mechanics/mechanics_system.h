@@ -69,8 +69,10 @@ class MechanicsSystem : public Kernel::SystemBase {
     /// → 对每个 mesh 做 CPU 蒙皮 → write_bytes 重传到 GPU 顶点缓冲（含已驻留 LOD 级别，
     /// LOD1..N 句柄经 GeometrySystem::get_skinning_targets 借出）。蒙皮后顶点 + 动态 AABB
     /// 写回 GeometryDevice（结果槽：所有 buffer/CPU 数据仍归 GeometrySystem 持有，便于
-    /// 流式加载 LRU 管理），供 Vision / 物理消费。在 update() 的固定步进循环之后调用。
-    void update_skinned_geometry();
+    /// 流式加载 LRU 管理），供 Vision / 物理消费。在 update() 的固定步进循环之前调用，
+    /// 使物理帧消费同帧蒙皮 AABB，而非上一帧数据。
+    /// @param dt 本真实帧经过时间（秒），由 update() 测量并传入；首帧传 0。
+    void update_skinned_geometry(float dt);
 
     struct Impl;
     std::unique_ptr<Impl> impl_;

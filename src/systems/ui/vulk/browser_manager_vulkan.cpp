@@ -1,5 +1,5 @@
 ﻿#include <corona/systems/ui/vulkan_backend.h>
-#include <corona/kernel/core/i_logger.h>
+#include <horizon/core/logging.h>
 
 #include <algorithm>
 #include <cstddef>

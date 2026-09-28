@@ -1,6 +1,6 @@
 #include <corona/resource/cache/lru_cache.h>
 
-#include <corona/kernel/core/i_logger.h>
+#include <horizon/core/logging.h>
 
 #include <algorithm>
 #include <cctype>

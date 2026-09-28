@@ -1,9 +1,12 @@
 #include <corona/engine.h>
-#include <corona/kernel/core/i_logger.h>
+#include <horizon/core/logging.h>
 #include <corona/systems/ui/cef_runtime.h>
 
 #include <csignal>
 #include <cstdint>
+#include <ctime>
+#include <iomanip>
+#include <sstream>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -87,7 +90,21 @@ int main(int argc, char* argv[]) {
         return *exit_code;
     }
 
-    Corona::Kernel::CoronaLogger::initialize();
+    // Horizon now leaves output configuration to the application.
+    const auto now = std::time(nullptr);
+    std::tm local_time{};
+#ifdef _WIN32
+    localtime_s(&local_time, &now);
+#else
+    localtime_r(&now, &local_time);
+#endif
+    std::ostringstream log_filename;
+    log_filename << std::put_time(&local_time, "%Y-%m-%d_%H-%M-%S") << "_corona.log";
+    horizon::core::LoggingOptions logging_options;
+    logging_options.file_path = std::filesystem::path("logs") / log_filename.str();
+    logging_options.install_signal_handlers = true;
+    logging_options.configure_utf8_console = true;
+    horizon::core::initialize_logging(logging_options);
     Corona::Kernel::CoronaLogger::set_log_level(Corona::Kernel::LogLevel::debug);
 
     CFW_LOG_NOTICE(

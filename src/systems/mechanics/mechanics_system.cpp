@@ -1,6 +1,6 @@
 #include <corona/events/engine_events.h>
 #include <corona/events/mechanics_system_events.h>
-#include <corona/kernel/core/i_logger.h>
+#include <horizon/core/logging.h>
 #include <corona/kernel/event/i_event_bus.h>
 #include <corona/kernel/event/i_event_stream.h>
 #include <corona/resource/resource_manager.h>
@@ -34,13 +34,6 @@
 // Note: do not depend on nanobind in the mechanics system. Callbacks provided
 // from the scripting layer are expected to manage GIL acquisition themselves.
 
-#ifndef CORONA_MECHANICS_USE_OBB_SAT
-#define CORONA_MECHANICS_USE_OBB_SAT 1
-#endif
-
-#ifndef CORONA_MECHANICS_USE_TRIANGLE_NARROWPHASE
-#define CORONA_MECHANICS_USE_TRIANGLE_NARROWPHASE 1
-#endif
 
 #include "mechanics_internal.h"
 
@@ -182,8 +175,8 @@ void MechanicsSystem::update_physics(float fixed_dt) {
                 return;
             }
             // 跳过未加载的 actor — 无 GPU 资源 / 无全量物理数据
-            // TODO: 后续实现 offline physics proxy —— Unloaded + physics_enabled
-            //       的 actor 用简化 AABB 碰撞体继续参与物理
+            // TODO: 后续实现 offline physics proxy —— Unloaded + body_type=Dynamic
+            //       的 actor 用简化 AABB 碰撞体继续参与物理            //       的 actor 用简化 AABB 碰撞体继续参与物理
             {
                 std::shared_lock lock(impl_->residency_mtx_);
                 if (!impl_->resident_actors_.count(actor_handle)) continue;
@@ -223,22 +216,23 @@ void MechanicsSystem::update_physics(float fixed_dt) {
                             uint8_t new_linear = 0;
                             uint8_t new_angular = 0;
                             if (auto m_acc = mechanics_storage.try_acquire_read(h)) {
-                                if (!m_acc->physics_enabled) continue;  // 物理已禁用，跳过本 mechanics
                                 params.mass = m_acc->mass;
                                 params.damping = m_acc->damping;
                                 params.restitution = m_acc->restitution;
-                                params.collision_shape = m_acc->collision_shape;
-                                params.collision_enabled = m_acc->collision_shape != CollisionShape::None;
+                                params.body_type = m_acc->body_type;
                                 new_linear = m_acc->linear_lock_mask;
                                 new_angular = m_acc->angular_lock_mask;
-                                body.linear_lock = new_linear;    // 缓存线性轴锁
-                                body.angular_lock = new_angular;  // 缓存角度轴锁
+                                body.linear_lock = new_linear;
+                                body.angular_lock = new_angular;
                             } else {
                                 params = BodyFrameParams{};
                                 params.actor = actor_handle;
-                                body.linear_lock = 0;   // 读失败时默认不锁任何轴
+                                body.linear_lock = 0;
                                 body.angular_lock = 0;
                             }
+
+                            // Phantom 完全不参与碰撞检测和物理模拟，直接跳过
+                            if (params.body_type == BodyType::Phantom) continue;
 
                             mechanics_handles.push_back(h);
 
@@ -273,6 +267,7 @@ void MechanicsSystem::update_physics(float fixed_dt) {
         if (impl_->shutdown_requested.load(std::memory_order_acquire)) {
             return;
         }
+        if (frame_params[h].body_type != BodyType::Dynamic) continue;  // Static/Kinematic 不受重力
         if (impl_->body(h).sleeping) continue;    // 休眠体本阶段不改速度
 
         float damping = frame_params[h].damping;   // 线性阻尼乘子（以 60Hz 为基准的每步保留系数）
@@ -404,40 +399,52 @@ void MechanicsSystem::update_physics(float fixed_dt) {
             (entry.max_world.x - entry.min_world.x) * 0.5f,  // 世界 AABB 半宽
             (entry.max_world.y - entry.min_world.y) * 0.5f,
             (entry.max_world.z - entry.min_world.z) * 0.5f);
-#if CORONA_MECHANICS_USE_OBB_SAT
-        build_mechanics_obb(entry, t_collision);  // 由同一预测位姿构造 OBB
-#endif
 
-        const float mass = frame_params[h].mass;                    // kg
-        const float w = std::abs(e_local.x * t.scale.x) * 2.0f;  // 世界系盒子 X 向全长（缩放后）
-        const float hh = std::abs(e_local.y * t.scale.y) * 2.0f;
-        const float d = std::abs(e_local.z * t.scale.z) * 2.0f;
-        float Ix = mass * (hh * hh + d * d) / 12.0f;  // 长方体主轴惯量（近似；均质 box）
-        float Iy = mass * (w * w + d * d) / 12.0f;
-        float Iz = mass * (w * w + hh * hh) / 12.0f;
-        Ix = std::max(Ix, min_inertia);  // 下限防止除零
-        Iy = std::max(Iy, min_inertia);
-        Iz = std::max(Iz, min_inertia);
-        entry.rot_body_to_world = q_pred.matrix3x3();                          // 体→世界旋转（预测姿态）
-        entry.inertia_inv_body = make_fvec3(1.0f / Ix, 1.0f / Iy, 1.0f / Iz);  // 体系逆惯量对角
+        entry.rot_body_to_world = q_pred.matrix3x3();  // 体→世界旋转（预测姿态）
+        if (frame_params[h].body_type != BodyType::Dynamic) {
+            // Static/Kinematic：无限质量，逆惯量为零，不接收冲量速度修正
+            entry.inertia_inv_body = make_fvec3(0.0f, 0.0f, 0.0f);
+        } else {
+            const float mass = frame_params[h].mass;                    // kg
+            const float w = std::abs(e_local.x * t.scale.x) * 2.0f;  // 世界系盒子 X 向全长（缩放后）
+            const float hh = std::abs(e_local.y * t.scale.y) * 2.0f;
+            const float d = std::abs(e_local.z * t.scale.z) * 2.0f;
+            float Ix = mass * (hh * hh + d * d) / 12.0f;  // 长方体主轴惯量（近似；均质 box）
+            float Iy = mass * (w * w + d * d) / 12.0f;
+            float Iz = mass * (w * w + hh * hh) / 12.0f;
+            Ix = std::max(Ix, min_inertia);  // 下限防止除零
+            Iy = std::max(Iy, min_inertia);
+            Iz = std::max(Iz, min_inertia);
+            entry.inertia_inv_body = make_fvec3(1.0f / Ix, 1.0f / Iy, 1.0f / Iz);  // 体系逆惯量对角
+        }
 
         handle_to_index[h] = mechanics_data.size();  // 句柄→本轮 mechanics_data 下标
         mechanics_data.push_back(entry);
     }
 
     // 预加载所有物理物体的碰撞网格（用于三角形碰撞检测和精确地板碰撞）
+    // 只要有 model_id 就尝试建碰撞网格；SIGGRAPH 替换后此阶段由新代码接管。
+    // AABB 宽相已经完成粗筛；三角窄相是精化阶段，不需要额外的形状类型过滤。
     for (const auto& entry : mechanics_data) {
         if (impl_->shutdown_requested.load(std::memory_order_acquire)) {
             return;
         }
-        // 蒙皮物体跳过三角网格：其网格随动画每帧变形，静态绑定姿态三角网格已失真，
-        // 且窄相一旦双方都有网格就走三角 SAT，会绕开我们要的动态 AABB 碰撞（P4）。
-        if (entry.is_skinned) continue;
-        const auto params_it = frame_params.find(entry.handle);
-        if (params_it != frame_params.end() &&
-            params_it->second.collision_shape == CollisionShape::Mesh &&
-            entry.model_id != 0) {
-            ensure_collision_mesh(entry.model_id, impl_->collision_mesh_cache);
+        if (entry.model_id == 0) continue;
+
+        if (entry.is_skinned) {
+            // 蒙皮物体：确保 static_triangle_index_cache 已解析（顶点每帧由 update_skinned_geometry 刷新）
+            if (!impl_->static_triangle_index_cache.count(entry.model_id)) {
+                ensure_collision_mesh(entry.model_id,
+                                      impl_->collision_mesh_cache,
+                                      &impl_->static_triangle_index_cache,
+                                      &impl_->static_triangle_bone_cache);
+            }
+        } else {
+            // 非蒙皮物体：静态碰撞网格，只建一次
+            ensure_collision_mesh(entry.model_id,
+                                  impl_->collision_mesh_cache,
+                                  &impl_->static_triangle_index_cache,
+                                  &impl_->static_triangle_bone_cache);
         }
     }
 
@@ -504,7 +511,6 @@ void MechanicsSystem::update_physics(float fixed_dt) {
 
         // 5.4 对候选对做法向/切向冲量（半隐式 GS：多轮依次解每对约束近似同时满足）
         constexpr float eps = 1e-8f;                   // 分母稳定项，非物理
-        constexpr float min_overlap = 0.001f;          // 小于此视为数值噪声/SAT 抖振，跳过
         constexpr float k_positional_slop = 0.004f;    // Baumgarte 式校正：小穿透只靠冲量，不修位姿
         constexpr float k_positional_percent = 0.35f;  // 仅末轮按穿透拆分平移，且只推一部分，防过冲
         constexpr int k_impulse_iterations = 8;        // 轮数↑ 堆叠更稳；提升到8以改善坡面接触收敛
@@ -534,17 +540,6 @@ void MechanicsSystem::update_physics(float fixed_dt) {
                 const MechanicsWorldAABB& a = mechanics_data[it_a->second];
                 const MechanicsWorldAABB& b = mechanics_data[it_b->second];
 
-                // 碰撞检测开关判断：任一物体关闭碰撞则跳过此对
-                // 使用 find() 而非 operator[] 避免默认构造 false 导致碰撞被静默跳过
-                {
-                    bool col_a = true, col_b = true;
-                    auto it_col_a = frame_params.find(ha);
-                    if (it_col_a != frame_params.end()) col_a = it_col_a->second.collision_enabled;
-                    auto it_col_b = frame_params.find(hb);
-                    if (it_col_b != frame_params.end()) col_b = it_col_b->second.collision_enabled;
-                    if (!col_a || !col_b) continue;
-                }
-
                 // ===== Phase 1: AABB 碰撞检测（Broadphase 确认）=====
                 if (!aabb_overlap(a.min_world, a.max_world, b.min_world, b.max_world)) {
                     continue;
@@ -552,168 +547,145 @@ void MechanicsSystem::update_physics(float fixed_dt) {
 
                 ktm::fvec3 normal{};
                 float penetration = 0.f;
-#if CORONA_MECHANICS_USE_OBB_SAT
-                if (!sat_obb_obb(a.obb_center, a.obb_u, a.obb_v, a.obb_w, a.obb_hu, a.obb_hv, a.obb_hw,
-                                 b.obb_center, b.obb_u, b.obb_v, b.obb_w, b.obb_hu, b.obb_hv, b.obb_hw,
-                                 normal, penetration)) {
-                    continue;
-                }
-                if (penetration < min_overlap) {
-                    continue;
-                }
-#else
-                // AABB–AABB：MTD 必沿世界轴；旋转体用世界 AABB 包络时斜面接触法线仍错，真斜碰请开 OBB+SAT。
-                // 稳定：在「并列最浅穿透」的轴里优先 |Δcenter| 最大者，避免主轴每帧切换；符号用死区避免 0 附近翻转。
-                const float diff_x = b.center_world.x - a.center_world.x;
-                const float diff_y = b.center_world.y - a.center_world.y;
-                const float diff_z = b.center_world.z - a.center_world.z;
-                const float overlap_x =
-                    (a.max_world.x - a.min_world.x) * 0.5f + (b.max_world.x - b.min_world.x) * 0.5f - std::abs(diff_x);
-                const float overlap_y =
-                    (a.max_world.y - a.min_world.y) * 0.5f + (b.max_world.y - b.min_world.y) * 0.5f - std::abs(diff_y);
-                const float overlap_z =
-                    (a.max_world.z - a.min_world.z) * 0.5f + (b.max_world.z - b.min_world.z) * 0.5f - std::abs(diff_z);
-                if (overlap_x < min_overlap || overlap_y < min_overlap || overlap_z < min_overlap) {
-                    continue;
-                }
-                const float mtd_min = std::min({overlap_x, overlap_y, overlap_z});
-                constexpr float k_mtd_tie_abs = 0.0025f;
-                constexpr float k_mtd_tie_rel = 0.04f;
-                const float mtd_band = std::max(k_mtd_tie_abs, k_mtd_tie_rel * std::max(mtd_min, min_overlap));
-                const float adx = std::abs(diff_x);
-                const float ady = std::abs(diff_y);
-                const float adz = std::abs(diff_z);
-                int axis = 0;
-                float best_dabs = -1.f;
-                int best_stack_pri = 999;
-                for (int i = 0; i < 3; ++i) {
-                    const float ov = (i == 0) ? overlap_x : (i == 1) ? overlap_y
-                                                                     : overlap_z;
-                    const float ab = (i == 0) ? adx : (i == 1) ? ady
-                                                               : adz;
-                    if (ov > mtd_min + mtd_band) {
+                // contact_point 由三角窄相精确填写；初始化为两质心中点作为首帧兜底
+                ktm::fvec3 contact_point = vec3_mul(vec3_add(a.center_world, b.center_world), 0.5f);
+
+                // ===== 三角形窄相（最终碰撞判断）=====
+                // 流水线：AABB 粗筛（上方已通过）→ 三角形 SAT + 顶点-面近接（最终判断）。
+                // 三角未命中或无网格 → continue，不施加任何冲量。
+                {
+                    auto get_mesh = [&](const MechanicsWorldAABB& body) -> const CollisionMesh* {
+                        if (body.is_skinned) {
+                            auto it = impl_->skinned_collision_cache.find(body.handle);
+                            if (it != impl_->skinned_collision_cache.end() && !it->second.triangles.empty())
+                                return &it->second;
+                        } else if (body.model_id != 0) {
+                            auto it = impl_->collision_mesh_cache.find(body.model_id);
+                            if (it != impl_->collision_mesh_cache.end() && !it->second.triangles.empty())
+                                return &it->second;
+                        }
+                        return nullptr;
+                    };
+
+                    const CollisionMesh* mesh_a = get_mesh(a);
+                    const CollisionMesh* mesh_b = get_mesh(b);
+
+                    if (mesh_a || mesh_b) {
+                        // 惰性变换世界空间顶点（只为有网格的一方）
+                        auto ensure_world_verts = [&](std::uintptr_t h,
+                                                       std::uintptr_t transform_h,
+                                                       const CollisionMesh* mesh) {
+                            if (!mesh || world_verts_cache.count(h)) return;
+                            auto tx = transform_storage.try_acquire_read(transform_h);
+                            if (tx) transform_vertices_to_world(mesh->vertices, *tx, world_verts_cache[h]);
+                        };
+                        ensure_world_verts(ha, a.transform_handle, mesh_a);
+                        ensure_world_verts(hb, b.transform_handle, mesh_b);
+
+                        auto get_verts = [&](std::uintptr_t h) -> const std::vector<ktm::fvec3>* {
+                            auto it = world_verts_cache.find(h);
+                            return (it != world_verts_cache.end() && !it->second.empty()) ? &it->second : nullptr;
+                        };
+                        const auto* verts_a = get_verts(ha);
+                        const auto* verts_b = get_verts(hb);
+
+                        if (mesh_a && mesh_b && verts_a && verts_b) {
+                            // ── 双方都有三角网格：三角-三角 SAT 是最终判断 ──
+                            TriangleContactResult tri;
+                            triangle_narrowphase(*verts_a, *mesh_a, *verts_b, *mesh_b,
+                                                 a.center_world, b.center_world, tri);
+                            if (!tri.has_contact) {
+                                continue;  // AABB 重叠但三角无接触：真的没碰，跳过整对
+                            }
+                            normal = tri.normal;
+                            penetration = tri.penetration > 0.0f ? tri.penetration : penetration;
+                            contact_point = tri.contact_point;
+
+                            // Phase 3：IK 反馈
+                            auto enqueue_ik = [&](bool skinned, std::uintptr_t mh,
+                                                  int tri_idx, const MechanicsWorldAABB& body) {
+                                if (!skinned || tri_idx < 0) return;
+                                auto sit = impl_->skinned_collision_cache.find(body.handle);
+                                if (sit == impl_->skinned_collision_cache.end()) return;
+                                const auto& sc = sit->second;
+                                if (tri_idx >= static_cast<int>(sc.triangle_bone_ids.size())) return;
+                                int node = sc.triangle_bone_ids[static_cast<std::size_t>(tri_idx)];
+                                if (node < 0) return;
+                                std::uintptr_t gh = 0;
+                                { auto m = mechanics_storage.try_acquire_read(mh); if (m) gh = m->geometry_handle; }
+                                if (!gh) return;
+                                impl_->deferred_ik_target_updates.push_back(
+                                    {gh, body.transform_handle, node, tri.contact_point});
+                            };
+                            enqueue_ik(a.is_skinned, ha, tri.best_tri_a, a);
+                            enqueue_ik(b.is_skinned, hb, tri.best_tri_b, b);
+
+                        } else if ((mesh_a && verts_a) || (mesh_b && verts_b)) {
+                            // ── 只有一方有三角网格：找对方质心最近的三角面法线 ──
+                            // 对方（无网格方）用质心作为"点探针"，检测是否在有网格方的表面附近。
+                            // 找到有效接触面则精化法线，找不到则 continue（AABB 重叠但三角面不命中）。
+                            const CollisionMesh* mesh_ref  = mesh_a ? mesh_a : mesh_b;
+                            const auto*          verts_ref = mesh_a ? verts_a : verts_b;
+                            const ktm::fvec3&    probe     = mesh_a ? b.center_world : a.center_world;
+
+                            // 使用固定阈值而非 AABB penetration，以覆盖首帧刚接触时穿透深度接近零的情况
+                            constexpr float k_surface_threshold = 0.05f;
+                            float best_d = std::numeric_limits<float>::max();
+                            ktm::fvec3 best_n{};
+                            bool found = false;
+                            for (const auto& tri_idx : mesh_ref->triangles) {
+                                const ktm::fvec3& v0 = (*verts_ref)[tri_idx[0]];
+                                const ktm::fvec3& v1 = (*verts_ref)[tri_idx[1]];
+                                const ktm::fvec3& v2 = (*verts_ref)[tri_idx[2]];
+                                ktm::fvec3 fn = normalize_safe(cross(sub(v1, v0), sub(v2, v0)));
+                                float d = dot(fn, sub(probe, v0));
+                                if (d >= 0.0f && d <= k_surface_threshold && d < best_d) {
+                                    best_d = d;
+                                    best_n = fn;
+                                    found  = true;
+                                }
+                            }
+                            if (!found) {
+                                continue;
+                            }
+                            if (dot(best_n, sub(b.center_world, a.center_world)) < 0.0f)
+                                best_n = make_fvec3(-best_n.x, -best_n.y, -best_n.z);
+                            normal = best_n;
+                            penetration = k_surface_threshold - best_d;
+                            contact_point = make_fvec3(
+                                probe.x - best_n.x * best_d,
+                                probe.y - best_n.y * best_d,
+                                probe.z - best_n.z * best_d);
+                        }
+                        // 两方都没有有效世界顶点：跳过（网格尚未加载完成的首帧保护）
+                        else {
+                            continue;
+                        }
+                    }
+                    // mesh_a == nullptr && mesh_b == nullptr：两方都没有三角网格，跳过
+                    else {
                         continue;
                     }
-                    const int stack_pri = (i == 1) ? 0 : (i == 0) ? 1
-                                                                  : 2;
-                    if (ab > best_dabs + 1e-6f) {
-                        axis = i;
-                        best_dabs = ab;
-                        best_stack_pri = stack_pri;
-                    } else if (std::abs(ab - best_dabs) <= 1e-6f && stack_pri < best_stack_pri) {
-                        axis = i;
-                        best_stack_pri = stack_pri;
-                    }
                 }
-                if (best_dabs < 0.f) {
-                    if (overlap_y <= overlap_x && overlap_y <= overlap_z) {
-                        axis = 1;
-                    } else if (overlap_x <= overlap_z) {
-                        axis = 0;
-                    } else {
-                        axis = 2;
-                    }
-                }
-                constexpr float k_mtd_sign_eps = 1e-4f;
-                auto mtd_axis_sign = [](float d) -> float {
-                    if (d > k_mtd_sign_eps) {
-                        return 1.f;
-                    }
-                    if (d < -k_mtd_sign_eps) {
-                        return -1.f;
-                    }
-                    return 1.f;
-                };
-                if (axis == 0) {
-                    penetration = overlap_x;
-                    normal = make_fvec3(mtd_axis_sign(diff_x), 0.f, 0.f);
-                } else if (axis == 1) {
-                    penetration = overlap_y;
-                    normal = make_fvec3(0.f, mtd_axis_sign(diff_y), 0.f);
-                } else {
-                    penetration = overlap_z;
-                    normal = make_fvec3(0.f, 0.f, mtd_axis_sign(diff_z));
-                }
-#endif
-
-                // ===== 三角形窄相精化（可选）=====
-                // 当双方都有碰撞网格且三角形数在限制内时，用三角形级 SAT 替换 AABB/OBB 的法线和穿透
-#if CORONA_MECHANICS_USE_TRIANGLE_NARROWPHASE
-                const bool both_mesh =
-                    frame_params.at(ha).collision_shape == CollisionShape::Mesh &&
-                    frame_params.at(hb).collision_shape == CollisionShape::Mesh;
-                if (both_mesh && a.model_id != 0 && b.model_id != 0) {
-                    auto it_mesh_a = impl_->collision_mesh_cache.find(a.model_id);
-                    auto it_mesh_b = impl_->collision_mesh_cache.find(b.model_id);
-                    if (it_mesh_a != impl_->collision_mesh_cache.end() &&
-                        it_mesh_b != impl_->collision_mesh_cache.end()) {
-                        // 惰性计算世界空间顶点（每物体每帧最多算一次）
-                        if (world_verts_cache.find(ha) == world_verts_cache.end()) {
-                            auto tx_a = transform_storage.try_acquire_read(a.transform_handle);
-                            if (tx_a) {
-                                transform_vertices_to_world(
-                                    it_mesh_a->second.vertices, *tx_a, world_verts_cache[ha]);
-                            }
-                        }
-                        if (world_verts_cache.find(hb) == world_verts_cache.end()) {
-                            auto tx_b = transform_storage.try_acquire_read(b.transform_handle);
-                            if (tx_b) {
-                                transform_vertices_to_world(
-                                    it_mesh_b->second.vertices, *tx_b, world_verts_cache[hb]);
-                            }
-                        }
-
-                        auto wit_a = world_verts_cache.find(ha);
-                        auto wit_b = world_verts_cache.find(hb);
-                        if (wit_a != world_verts_cache.end() && wit_b != world_verts_cache.end() && !wit_a->second.empty() && !wit_b->second.empty()) {
-                            auto& wv_a = wit_a->second;
-                            auto& wv_b = wit_b->second;
-                            TriangleContactResult tri_result;
-                            triangle_narrowphase(wv_a, it_mesh_a->second,
-                                                 wv_b, it_mesh_b->second,
-                                                 a.center_world, b.center_world, tri_result);
-                            if (tri_result.has_contact) {
-                                normal = tri_result.normal;
-                                // 保留 AABB/OBB 级别的穿透深度；三角形 SAT 深度只反映
-                                // 单个三角形对的局部重叠，远小于物体级实际穿透，会导致严重穿模。
-                                // 三角形窄相的价值在于提供更精确的碰撞法线方向。
-                            } else {
-                                continue;  // 三角形级无接触，跳过此对
-                            }
-                        }
-                    }
-                }
-#endif
 
                 const float mass_a = frame_params[ha].mass;
                 const float mass_b = frame_params[hb].mass;
-                const bool sleep_a = impl_->body(ha).sleeping;  // 休眠体当「动不了」：不接收冲量速度增量
+                const bool sleep_a = impl_->body(ha).sleeping;
                 const bool sleep_b = impl_->body(hb).sleeping;
-                const float inv_ma = sleep_a ? 0.f : 1.0f / mass_a;  // Δv = (j/m)·n 中的 1/m
-                const float inv_mb = sleep_b ? 0.f : 1.0f / mass_b;
+                // Static/Kinematic 视为无限质量：inv_mass = 0，不接收冲量速度修正
+                const bool fixed_a = frame_params[ha].body_type != BodyType::Dynamic;
+                const bool fixed_b = frame_params[hb].body_type != BodyType::Dynamic;
+                const float inv_ma = (sleep_a || fixed_a) ? 0.f : 1.0f / mass_a;
+                const float inv_mb = (sleep_b || fixed_b) ? 0.f : 1.0f / mass_b;
                 const float rest_a = frame_params[ha].restitution;  // 双方恢复系数各取组件；此处简单平均
                 const float rest_b = frame_params[hb].restitution;
                 const float rest = (rest_a + rest_b) * 0.5f;
                 // 前几轮 e=0：先把接触簇里的相对法向「扎进」速度吃掉；末轮再加 e，减轻来回弹
                 const float rest_use = (impulse_iter == k_impulse_iterations - 1) ? rest : 0.f;
 
-#if CORONA_MECHANICS_USE_OBB_SAT
-                const ktm::fvec3 p_a = obb_support_point(a.obb_center, a.obb_u, a.obb_v, a.obb_w,
-                                                         a.obb_hu, a.obb_hv, a.obb_hw, normal);
-                const ktm::fvec3 p_b = obb_support_point(b.obb_center, b.obb_u, b.obb_v, b.obb_w,
-                                                         b.obb_hu, b.obb_hv, b.obb_hw,
-                                                         make_fvec3(-normal.x, -normal.y, -normal.z));
-                const ktm::fvec3 p_contact = vec3_mul(vec3_add(p_a, p_b), 0.5f);  // 近似接触点：两支撑点中点
-                const ktm::fvec3 r_a = vec3_sub(p_contact, a.obb_center);         // 质心/盒心到触点的臂
-                const ktm::fvec3 r_b = vec3_sub(p_contact, b.obb_center);
-#else
-                const ktm::fvec3 p_a = aabb_support_world(a.center_world, a.half_extents, normal);
-                const ktm::fvec3 p_b = aabb_support_world(b.center_world, b.half_extents,
-                                                          make_fvec3(-normal.x, -normal.y, -normal.z));
-                const ktm::fvec3 p_contact = vec3_mul(vec3_add(p_a, p_b), 0.5f);  // AABB 模式下同样用中点
-                const ktm::fvec3 r_a = vec3_sub(p_contact, a.center_world);       // 此处 center_world≈AABB 心
+                const ktm::fvec3 p_contact = contact_point;
+                const ktm::fvec3 r_a = vec3_sub(p_contact, a.center_world);
                 const ktm::fvec3 r_b = vec3_sub(p_contact, b.center_world);
-#endif
 
                 ktm::fvec3& va = impl_->body(ha).velocity;
                 ktm::fvec3& vb = impl_->body(hb).velocity;
@@ -732,9 +704,9 @@ void MechanicsSystem::update_physics(float fixed_dt) {
                 const ktm::fvec3 raxn = ktm::cross(r_a, normal);  // r×n，进入 ω 的有效惯量投影公式
                 const ktm::fvec3 rbxn = ktm::cross(r_b, normal);
                 // 标量 ang_n：世界系下 (I_w^{-1} (r×n))·(r×n)，即柔度矩阵 K 中法对角项
-                const float ang_n_a = sleep_a ? 0.f
+                const float ang_n_a = (sleep_a || fixed_a) ? 0.f
                                               : ktm::dot(raxn, world_inertia_inv_apply(a.rot_body_to_world, a.inertia_inv_body, raxn));
-                const float ang_n_b = sleep_b ? 0.f
+                const float ang_n_b = (sleep_b || fixed_b) ? 0.f
                                               : ktm::dot(rbxn, world_inertia_inv_apply(b.rot_body_to_world, b.inertia_inv_body, rbxn));
                 const float denom_n = inv_ma + inv_mb + ang_n_a + ang_n_b + eps;  // 1 / (有效质量)
                 if (denom_n <= 1e-12f) {
@@ -1099,6 +1071,10 @@ void MechanicsSystem::update_physics(float fixed_dt) {
         if (impl_->body(h).sleeping)
             continue;  // 休眠体不再推进变换
 
+        // Static/Kinematic 不被积分器移动（由外部脚本/动画驱动）
+        if (frame_params[h].body_type != BodyType::Dynamic)
+            continue;
+
         // 阻塞写锁：位置积分每帧都要写回，_nowait 拿不到锁会跳过本帧导致物体卡顿/抖动。
         // 用阻塞版等锁（不漏帧），槽位失效时返回无效句柄而非抛异常。
         auto tx_w = transform_storage.try_acquire_write(data.transform_handle);
@@ -1152,11 +1128,11 @@ void MechanicsSystem::update_physics(float fixed_dt) {
             object_bottom_y += corr_it->second.y;
         }
 
-        // 碰撞检测开关判断：若物体关闭碰撞，跳过地板碰撞处理
+        // Phantom 物体不参与地板碰撞
         bool collision_enabled = true;
         auto frame_it = frame_params.find(h);
         if (frame_it != frame_params.end()) {
-            collision_enabled = frame_it->second.collision_enabled;
+            collision_enabled = frame_it->second.body_type != BodyType::Phantom;
         }
 
         // 水平 floor_y：穿插时整体上抬，并做法向/切向「处方」（非完整接触流形）
@@ -1294,6 +1270,50 @@ void MechanicsSystem::update_physics(float fixed_dt) {
     }
     impl_->deferred_collision_callbacks.clear();
 
+    // Phase 3：帧末执行碰撞→IK target 更新（在 geometry_storage 锁外执行，避免死锁）
+    // 把接触点从世界空间变换到模型空间，写入 contact_driven IK 链的 target，启用 IK。
+    if (!impl_->deferred_ik_target_updates.empty()) {
+        auto& geom_storage = SharedDataHub::instance().geometry_storage();
+        auto& transform_st  = SharedDataHub::instance().model_transform_storage();
+
+        for (const auto& upd : impl_->deferred_ik_target_updates) {
+            if (impl_->shutdown_requested.load(std::memory_order_acquire)) break;
+
+            // 取 o2w 矩阵，求逆得 w2o，把世界接触点变换到模型空间
+            ktm::fmat4x4 inv_m{};
+            bool have_inv = false;
+            {
+                auto tx = transform_st.try_acquire_read(upd.transform_handle);
+                if (tx) {
+                    ktm::fmat4x4 m = tx->compute_matrix();
+                    // 直接用 ktm 求逆（4x4 通用逆）
+                    inv_m = ktm::inverse(m);
+                    have_inv = true;
+                }
+            }
+            if (!have_inv) continue;
+
+            // 世界接触点 → 模型空间
+            const auto& wp = upd.contact_world;
+            const float mx = inv_m[0][0]*wp.x + inv_m[1][0]*wp.y + inv_m[2][0]*wp.z + inv_m[3][0];
+            const float my = inv_m[0][1]*wp.x + inv_m[1][1]*wp.y + inv_m[2][1]*wp.z + inv_m[3][1];
+            const float mz = inv_m[0][2]*wp.x + inv_m[1][2]*wp.y + inv_m[2][2]*wp.z + inv_m[3][2];
+
+            // 写入匹配的 contact_driven IK 链（end_node == node_idx）
+            auto geom_w = geom_storage.try_acquire_write(upd.geom_handle);
+            if (!geom_w) continue;
+            for (auto& chain : geom_w->ik_chains) {
+                if (!chain.contact_driven) continue;
+                if (chain.end_node != upd.node_idx) continue;
+                chain.target = {mx, my, mz};
+                chain.weight = 1.0f;
+                chain.enabled = true;
+                break;  // 每个 node_idx 只驱动一条链
+            }
+        }
+        impl_->deferred_ik_target_updates.clear();
+    }
+
     // 清理无效句柄的缓存
     std::unordered_set<std::uintptr_t> alive_handles(mechanics_handles.begin(), mechanics_handles.end());
 
@@ -1310,9 +1330,9 @@ void MechanicsSystem::update_physics(float fixed_dt) {
 // ============================================================================
 // update_skinned_geometry（P2，自 GeometrySystem 迁入）
 // 功能：每真实帧对蒙皮 actor 做 CPU 线性混合蒙皮（LBS），把结果重传到 GPU 顶点缓冲。
-// 调用时机：MechanicsSystem::update() 的固定步进循环之后（每真实帧一次，独立于
-//           物理 fixed_dt 的步进次数，也不受 simulation_enabled 影响——蒙皮模型
-//           即使未开物理也应自动循环播放）。
+// 调用时机：MechanicsSystem::update() 的固定步进循环之前（Phase 1 调整）。
+//           先蒙皮生成本帧正确 AABB 和蒙皮顶点，物理随后消费同帧数据，消除旧版
+//           一帧延迟。蒙皮模型即使未开物理也应自动循环播放。
 //
 // 数据流：Scene(绑定顶点+骨骼权重+骨架+动画) → compute_pose 算 final[] →
 //         skin_one_vertex 蒙皮 → write_bytes 重传 vertexBuffer/vertexStorageBuffer。
@@ -1330,7 +1350,7 @@ void MechanicsSystem::update_physics(float fixed_dt) {
 //
 // 自动循环：始终播放 animations[0]，anim_time 由 advance_anim_time 推进并 fmod 回绕。
 // ============================================================================
-void MechanicsSystem::update_skinned_geometry() {
+void MechanicsSystem::update_skinned_geometry(float dt) {
     // 懒缓存 GeometrySystem 指针（first_update 路径可能未经过 update_physics）
     if (!impl_->geometry_sys && impl_->ctx) {
         impl_->geometry_sys = dynamic_cast<GeometrySystem*>(impl_->ctx->get_system("Geometry"));
@@ -1341,14 +1361,31 @@ void MechanicsSystem::update_skinned_geometry() {
     auto& hub = SharedDataHub::instance();
     auto& geom_storage = hub.geometry_storage();
 
-    // ---- 计算 dt（首帧为 0）----
-    const auto now = std::chrono::steady_clock::now();
-    float dt = 0.0f;
-    if (impl_->last_skin_update_time.has_value()) {
-        dt = std::chrono::duration<float>(now - *impl_->last_skin_update_time).count();
+    // dt 由 update() 测量并传入（已钳制 ≤0.1s），此处不再独立计时。
+    // last_skin_update_time 保留但不再用于计算 dt，仅供外部诊断查询。
+    impl_->last_skin_update_time = std::chrono::steady_clock::now();
+
+    // Phase 3：IK target 衰减（contact_driven 链每帧把 weight 减小，碰撞结束后平滑归零）
+    // 在收集 geom_handles 之前处理，避免在遍历 storage 时持锁写 ik_chains。
+    {
+        auto& geom_st = hub.geometry_storage();
+        std::vector<std::uintptr_t> all_geom_handles;
+        for (auto it = geom_st.cbegin(); it != geom_st.cend(); ++it) {
+            all_geom_handles.push_back(reinterpret_cast<std::uintptr_t>(&*it));
+        }
+        for (auto gh : all_geom_handles) {
+            auto gw = geom_st.try_acquire_write(gh);
+            if (!gw) continue;
+            for (auto& chain : gw->ik_chains) {
+                if (!chain.contact_driven || !chain.enabled) continue;
+                chain.weight -= chain.contact_weight_decay * dt;
+                if (chain.weight <= 0.0f) {
+                    chain.weight = 0.0f;
+                    chain.enabled = false;
+                }
+            }
+        }
     }
-    impl_->last_skin_update_time = now;
-    if (dt > 0.1f) dt = 0.1f;  // 容错：断点/卡顿导致的大 dt 夹住，避免动画跳跃
 
     // 先收集所有 geometry handle，避免在迭代 storage 期间持锁做重计算
     std::vector<std::uintptr_t> geom_handles;
@@ -1396,6 +1433,27 @@ void MechanicsSystem::update_skinned_geometry() {
             geom_write->is_skinned = true;
             geom_write->anim_time = Resource::advance_anim_time(geom_write->anim_time, dt, clip);
             anim_time = geom_write->anim_time;
+
+            // ---- 自动推导 contact_driven IK 链（首帧且链列表为空时触发）----
+            // 为每个出现在 bone_map 里的蒙皮骨骼生成一条 contact_driven 链，
+            // chain_length=3（末端+2级父骨），浅骨骼不足时 solve_ccd 会静默提前退出。
+            // ik_chains 非空时完全跳过，不覆盖手动设置的链。
+            if (geom_write->ik_chains.empty() && !skeleton.bone_map.empty()) {
+                for (std::size_t ni = 0; ni < skeleton.nodes.size(); ++ni) {
+                    const auto& node = skeleton.nodes[ni];
+                    if (skeleton.bone_map.find(node.name) == skeleton.bone_map.end()) continue;
+                    Resource::IkChain chain;
+                    chain.end_node          = static_cast<int>(ni);
+                    chain.chain_length      = 3;
+                    chain.contact_driven    = true;
+                    chain.enabled           = false;
+                    chain.weight            = 0.0f;
+                    chain.damping           = 0.85f;
+                    chain.contact_weight_decay = 2.0f;
+                    geom_write->ik_chains.push_back(chain);
+                }
+            }
+
             ik_chains = geom_write->ik_chains;  // 拷贝一份 IK 链定义（锁外跑 CCD）
             mesh_count = geom_write->mesh_handles.size();
             vbufs.reserve(mesh_count);
@@ -1541,6 +1599,10 @@ void MechanicsSystem::update_skinned_geometry() {
         }
 
         // ---- 第 7 步：brief 写锁存回蒙皮结果 + 动态 AABB（供 Vision / 物理消费）----
+        // 同时更新 skinned_collision_cache：把本帧蒙皮顶点（模型空间）装入物理系统的
+        // 每帧实例化碰撞网格。索引和 triangle_bone_ids 从 static_triangle_index_cache /
+        // static_triangle_bone_cache 复用（首帧由 ensure_collision_mesh 顺带解析好），
+        // 只刷新顶点坐标，避免每帧重解 Scene。
         {
             auto geom_write = geom_storage.try_acquire_write(geom_handle);
             if (geom_write) {
@@ -1549,6 +1611,52 @@ void MechanicsSystem::update_skinned_geometry() {
                     geom_write->skinned_aabb_min = ktm::fvec3{aabb_min_x, aabb_min_y, aabb_min_z};
                     geom_write->skinned_aabb_max = ktm::fvec3{aabb_max_x, aabb_max_y, aabb_max_z};
                     geom_write->skinned_aabb_valid = true;
+                }
+
+                // ---- 更新蒙皮碰撞网格（Phase 2）----
+                // 从 static_triangle_index_cache 取索引（首帧需先确保已解析）
+                bool have_static = impl_->static_triangle_index_cache.count(model_id) > 0;
+                if (!have_static && model_id != 0) {
+                    // 首帧：触发 ensure_collision_mesh 解析索引和骨骼映射，存入 static 缓存
+                    // 注意：此调用在 geom 写锁内；ensure_collision_mesh 只访问 ResourceManager
+                    // 的 Scene 读锁，与 geom_storage 无锁序冲突。
+                    MechanicsInternal::ensure_collision_mesh(
+                        model_id,
+                        impl_->collision_mesh_cache,
+                        &impl_->static_triangle_index_cache,
+                        &impl_->static_triangle_bone_cache);
+                    have_static = impl_->static_triangle_index_cache.count(model_id) > 0;
+                }
+
+                if (have_static && !geom_write->skinned_cpu_vertices.empty()) {
+                    const auto& static_tris  = impl_->static_triangle_index_cache.at(model_id);
+                    const auto& static_bones = impl_->static_triangle_bone_cache.count(model_id)
+                                                ? impl_->static_triangle_bone_cache.at(model_id)
+                                                : std::vector<int>{};
+
+                    MechanicsInternal::CollisionMesh& sc = impl_->skinned_collision_cache[geom_handle];
+                    sc.triangles        = static_tris;
+                    sc.triangle_bone_ids = static_bones;
+
+                    // 从 skinned_cpu_vertices（bytes → Resource::Vertex）提取位置坐标
+                    sc.vertices.clear();
+                    float min_y = std::numeric_limits<float>::max();
+                    for (std::size_t mi = 0; mi < geom_write->skinned_cpu_vertices.size(); ++mi) {
+                        const auto& blob = geom_write->skinned_cpu_vertices[mi];
+                        if (blob.empty()) continue;
+                        constexpr std::size_t kVertexStride = sizeof(Corona::Resource::Vertex);
+                        const std::size_t vert_count = blob.size() / kVertexStride;
+                        const auto* vptr = reinterpret_cast<const Corona::Resource::Vertex*>(blob.data());
+                        for (std::size_t vi = 0; vi < vert_count; ++vi) {
+                            ktm::fvec3 p;
+                            p.x = vptr[vi].position[0];
+                            p.y = vptr[vi].position[1];
+                            p.z = vptr[vi].position[2];
+                            sc.vertices.push_back(p);
+                            min_y = std::min(min_y, p.y);
+                        }
+                    }
+                    sc.min_local_y = (sc.vertices.empty() ? 0.0f : min_y);
                 }
             }
         }

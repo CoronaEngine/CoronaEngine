@@ -109,35 +109,12 @@
         </div>
       </section>
 
-      <section v-if="actor.loadStatus === 'loaded'" class="property-section" data-assistant-title="碰撞设置" data-assistant-description="选择模型参与碰撞检测时使用的形状。">
-        <div class="section-title">碰撞</div>
-        <div class="property-row">
-          <label for="actor-collision">碰撞形状</label>
-          <div id="actor-collision" class="collision-options" role="radiogroup" aria-label="碰撞形状">
-            <label
-              v-for="option in collisionOptions"
-              :key="option.value"
-              :class="{ active: actor.collision === option.value }"
-            >
-              <input
-                v-model="actor.collision"
-                type="radio"
-                name="actor-collision-shape"
-                :value="option.value"
-                @change="updateCollision"
-              />
-              <span>{{ option.label }}</span>
-            </label>
-          </div>
-        </div>
-      </section>
-
       <section
         v-if="actor.loadStatus === 'loaded'"
         class="property-section property-section-collapsible"
         data-guidance="object-physics"
         data-assistant-title="物理设置"
-        data-assistant-description="控制模型是否参与物理模拟，以及质量、弹性、阻尼和轴向锁定。"
+        data-assistant-description="设置物体的物理行为类型，以及质量、弹性、阻尼和轴向锁定。"
       >
         <button
           type="button"
@@ -149,23 +126,35 @@
           <span class="section-chevron" :class="{ expanded: !collapsedSections.physics }">&#8964;</span>
         </button>
         <div v-show="!collapsedSections.physics" class="section-collapsible-body">
-          <div class="physics-enable-row">
-            <span>物理模拟</span>
-            <label class="switch-label"><input v-model="actor.mechanics.physicsEnabled" data-guidance="object-physics-enabled" type="checkbox" @change="updateMechanic('SetPhysicsEnabled', actor.mechanics.physicsEnabled)" />启用</label>
+          <div class="property-row">
+            <label for="actor-body-type">物体类型</label>
+            <div id="actor-body-type" class="segmented body-type-seg" role="radiogroup" aria-label="物体类型">
+              <button
+                v-for="option in bodyTypeOptions"
+                :key="option.value"
+                type="button"
+                :class="{ active: actor.mechanics.bodyType === option.value }"
+                :aria-pressed="actor.mechanics.bodyType === option.value"
+                @click="setBodyType(option.value)"
+              >{{ option.label }}</button>
+            </div>
           </div>
-          <div class="physics-grid" :class="{ disabled: !actor.mechanics.physicsEnabled }">
-            <label>质量<input v-model.number="actor.mechanics.mass" data-guidance="object-physics-mass" type="number" min="0" step="0.1" :disabled="!actor.mechanics.physicsEnabled" @change="updateMechanic('SetMass', actor.mechanics.mass)" /></label>
-            <label>弹性<input v-model.number="actor.mechanics.restitution" type="number" min="0" max="1" step="0.05" :disabled="!actor.mechanics.physicsEnabled" @change="updateMechanic('SetRestitution', actor.mechanics.restitution)" /></label>
-            <label>阻尼<input v-model.number="actor.mechanics.damping" type="number" min="0" max="1" step="0.01" :disabled="!actor.mechanics.physicsEnabled" @change="updateMechanic('SetDamping', actor.mechanics.damping)" /></label>
+          <div v-if="actor.mechanics.bodyType === 'phantom'" class="body-type-hint">幽灵模式：物体完全脱离物理与碰撞检测。</div>
+          <div class="physics-grid" :class="{ disabled: actor.mechanics.bodyType !== 'dynamic' }">
+            <label>质量<input v-model.number="actor.mechanics.mass" data-guidance="object-physics-mass" type="number" min="0" step="0.1" :disabled="actor.mechanics.bodyType !== 'dynamic'" @change="updateMechanic('SetMass', actor.mechanics.mass)" /></label>
+            <label>弹性<input v-model.number="actor.mechanics.restitution" type="number" min="0" max="1" step="0.05" :disabled="actor.mechanics.bodyType !== 'dynamic'" @change="updateMechanic('SetRestitution', actor.mechanics.restitution)" /></label>
+            <label>阻尼<input v-model.number="actor.mechanics.damping" type="number" min="0" max="1" step="0.01" :disabled="actor.mechanics.bodyType !== 'dynamic'" @change="updateMechanic('SetDamping', actor.mechanics.damping)" /></label>
           </div>
-          <div class="lock-row">
-            <span>锁定移动</span>
-            <label v-for="(axis, index) in axes" :key="axis"><input v-model="actor.mechanics.linearLock[index]" type="checkbox" @change="updateLocks('SetLinearLock', actor.mechanics.linearLock)" />{{ axis.toUpperCase() }}</label>
-          </div>
-          <div class="lock-row">
-            <span>锁定旋转</span>
-            <label v-for="(axis, index) in axes" :key="axis"><input v-model="actor.mechanics.angularLock[index]" type="checkbox" @change="updateLocks('SetAngularLock', actor.mechanics.angularLock)" />{{ axis.toUpperCase() }}</label>
-          </div>
+          <template v-if="actor.mechanics.bodyType !== 'phantom'">
+            <div class="lock-row">
+              <span>锁定移动</span>
+              <label v-for="(axis, index) in axes" :key="axis"><input v-model="actor.mechanics.linearLock[index]" type="checkbox" @change="updateLocks('SetLinearLock', actor.mechanics.linearLock)" />{{ axis.toUpperCase() }}</label>
+            </div>
+            <div class="lock-row">
+              <span>锁定旋转</span>
+              <label v-for="(axis, index) in axes" :key="axis"><input v-model="actor.mechanics.angularLock[index]" type="checkbox" @change="updateLocks('SetAngularLock', actor.mechanics.angularLock)" />{{ axis.toUpperCase() }}</label>
+            </div>
+          </template>
         </div>
       </section>
 
@@ -196,10 +185,11 @@ function togglePropertySection(section) {
     collapsedSections[section] = !collapsedSections[section];
   }
 }
-const collisionOptions = [
-  { value: 'none', label: '无' },
-  { value: 'box', label: '包围盒' },
-  { value: 'mesh', label: '模型网格' },
+const bodyTypeOptions = [
+  { value: 'dynamic',   label: '动态' },
+  { value: 'kinematic', label: '运动学' },
+  { value: 'static',    label: '静态' },
+  { value: 'phantom',   label: '幽灵' },
 ];
 const transformGroups = [
   { key: 'position', label: '位置', operation: 'SetPosition', step: 0.1 },
@@ -231,7 +221,6 @@ const updateTimers = new Map();
 const pendingTransformUpdates = new Map();
 let transformFrameId = null;
 let transformFlushPromise = Promise.resolve();
-let lastSavedCollision = 'none';
 const TRANSFORM_EPSILON = 1e-5;
 const viewportTransformBaseline = {
   actorKey: '',
@@ -254,9 +243,8 @@ const actor = reactive({
     rotation: { x: 0, y: 0, z: 0 },
     scale: { x: 1, y: 1, z: 1 },
   },
-  collision: 'none',
   mechanics: {
-    physicsEnabled: true,
+    bodyType: 'dynamic',
     mass: 1,
     restitution: 0.8,
     damping: 0.99,
@@ -271,16 +259,12 @@ const actor = reactive({
 
 const unwrap = (value) => value?.data ?? value ?? {};
 const aliasDirty = computed(() => aliasDraft.value.trim() !== actor.name);
-const normalizeCollisionType = (value) => {
-  const raw = value?.type ?? value?.shape ?? value;
-  if (raw === false || raw === 0) return 'none';
-  if (raw === true || raw === 1) return 'box';
-  if (raw === 2) return 'mesh';
-  const candidate = String(raw ?? '').trim().toLowerCase();
-  if (['none', 'disabled', 'off'].includes(candidate)) return 'none';
-  if (['mesh', 'model_mesh', 'model-mesh'].includes(candidate)) return 'mesh';
-  if (['box', 'aabb', 'bounding_box', 'bounding-box'].includes(candidate)) return 'box';
-  return 'box';
+const normalizeBodyType = (value) => {
+  const candidate = String(value ?? '').trim().toLowerCase();
+  if (['kinematic'].includes(candidate)) return 'kinematic';
+  if (['static'].includes(candidate)) return 'static';
+  if (['phantom'].includes(candidate)) return 'phantom';
+  return 'dynamic';
 };
 const readFollowCamera = (data) => data?.render_space === 'ui' || data?.follow_camera === true || data?.follow_camera === 1 || data?.follow_camera === 'true' || data?.follow_camera === '1';
 
@@ -340,14 +324,10 @@ async function loadActor(sceneName, actorName) {
     assignVector(actor.transform.rotation, geometry.rotation, { x: 0, y: 0, z: 0 });
     assignVector(actor.transform.scale, geometry.scale, { x: 1, y: 1, z: 1 });
     const mechanics = data.mechanics || {};
-    actor.collision = normalizeCollisionType(
-      data.collision
-      ?? data.collision_type
-      ?? mechanics.collision_type
-      ?? mechanics.collision_shape
+    actor.mechanics.bodyType = normalizeBodyType(
+      data.body_type
+      ?? mechanics.body_type
     );
-    lastSavedCollision = actor.collision;
-    actor.mechanics.physicsEnabled = mechanics.physics_enabled !== false;
     actor.mechanics.mass = Number(mechanics.mass ?? 1);
     actor.mechanics.restitution = Number(mechanics.restitution ?? 0.8);
     actor.mechanics.damping = Number(mechanics.damping ?? 0.99);
@@ -491,7 +471,7 @@ async function setRenderSpace(enabled) {
       selectedActorName.value,
       { follow_camera: Boolean(enabled) },
     );
-    if (enabled) actor.mechanics.physicsEnabled = false;
+    if (enabled) actor.mechanics.bodyType = 'kinematic';
   } catch (error) {
     actor.followCamera = previous;
     logError('更新对象渲染空间失败', error);
@@ -543,22 +523,17 @@ async function rebindPlaceholderResource() {
   }
 }
 
-function applyCollisionFast(collisionType) {
-  return editorApi.sceneTools.setActorPhysics(
-    selectedSceneName.value,
-    selectedActorName.value,
-    { collision_shape: normalizeCollisionType(collisionType) },
-  );
-}
-
-async function updateCollision() {
+async function setBodyType(type) {
   if (!selectedActorName.value) return;
-  const previous = lastSavedCollision;
-  const selected = normalizeCollisionType(actor.collision);
-  actor.collision = selected;
+  const previous = actor.mechanics.bodyType;
+  const next = normalizeBodyType(type);
+  actor.mechanics.bodyType = next;
   try {
-    await applyCollisionFast(selected);
-    lastSavedCollision = selected;
+    await editorApi.sceneTools.setActorPhysics(
+      selectedSceneName.value,
+      selectedActorName.value,
+      { body_type: next },
+    );
     void cabbageContextService.recordEvent({
       type: 'physics_changed',
       category: 'physics',
@@ -566,21 +541,20 @@ async function updateCollision() {
       details: {
         sceneName: selectedSceneName.value,
         actorName: selectedActorName.value,
-        operation: 'SetCollision',
-        collisionType: selected,
+        operation: 'SetBodyType',
+        value: next,
+        source: 'property_panel',
       },
     });
   } catch (error) {
-    actor.collision = previous;
-    applyCollisionFast(previous);
-    logError('更新对象碰撞失败', error);
+    actor.mechanics.bodyType = previous;
+    logError('更新物体类型失败', error);
   }
 }
 
 async function updateMechanic(operation, value) {
   if (!selectedActorName.value) return;
   const fieldByOperation = {
-    SetPhysicsEnabled: 'physics_enabled',
     SetMass: 'mass',
     SetRestitution: 'restitution',
     SetDamping: 'damping',
@@ -833,11 +807,9 @@ onUnmounted(() => {
 .property-row { display:grid; grid-template-columns:72px minmax(0,1fr) auto; align-items:center; gap:7px; margin-top:7px; }
 .property-row-wide { grid-template-columns:72px minmax(0,1fr) auto; }
 .property-row>label { color:#b9ad8f; font-size:11px; }
-.collision-options { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:5px; }
-.collision-options label { display:flex; align-items:center; justify-content:center; min-width:0; padding:5px 4px; border:1px solid rgba(216,184,108,.2); border-radius:4px; background:#0f0e0a; color:#b9ad8f; font-size:10px; cursor:pointer; transition:border-color .15s,background .15s,color .15s; }
-.collision-options label:hover { border-color:#8c6f36; color:#f2ead5; }
-.collision-options label.active { border-color:#D8B86C; background:#4b391c; color:#fff; }
-.collision-options input { position:absolute; width:1px; height:1px; opacity:0; pointer-events:none; }
+.body-type-seg { width:100%; }
+.body-type-seg button { flex:1; font-size:10px; padding:5px 4px; }
+.body-type-hint { margin:5px 0 0; padding:4px 6px; border-radius:4px; background:rgba(216,184,108,.08); color:#b9ad8f; font-size:10px; line-height:1.4; }
 input[type='text'],input[type='number'],select { min-width:0; width:100%; border:1px solid rgba(216,184,108,.22); border-radius:4px; background:#0f0e0a; color:#f2ead5; padding:5px 6px; font-size:11px; outline:none; }
 input:focus,select:focus { border-color:#D8B86C; box-shadow:0 0 0 1px rgba(216,184,108,.18); }
 .property-error { margin:5px 0 0 79px; color:#ff9e91; font-size:10px; }

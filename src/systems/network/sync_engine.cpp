@@ -1,7 +1,7 @@
 #include <corona/systems/network/sync_engine.h>
 
 #include <corona/shared_data_hub.h>
-#include <corona/kernel/core/i_logger.h>
+#include <horizon/core/logging.h>
 
 #include <chrono>
 #include <algorithm>

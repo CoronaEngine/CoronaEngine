@@ -3,7 +3,7 @@
 #include <string>
 #include <utility>
 
-#include <corona/kernel/core/i_logger.h>
+#include <horizon/core/logging.h>
 #include <corona/systems/network/network_system.h>
 
 namespace Corona::Systems::UI {

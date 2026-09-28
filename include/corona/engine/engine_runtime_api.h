@@ -110,14 +110,9 @@ class Mechanics {
     void set_damping(float damping);
     [[nodiscard]] float get_damping() const;
 
-    void set_physics_enabled(bool enabled);
-    [[nodiscard]] bool get_physics_enabled() const;
-
-    // 碰撞检测开关：false 时物体不参与碰撞检测（不与其他物体或地面碰撞）
-    void set_collision_enabled(bool enabled);
-    [[nodiscard]] bool get_collision_enabled() const;
-    void set_collision_shape(std::string_view shape);
-    [[nodiscard]] std::string get_collision_shape() const;
+    // 物体类型：决定物体如何参与物理模拟（"dynamic"/"kinematic"/"static"）
+    void set_body_type(std::string_view type);
+    [[nodiscard]] std::string get_body_type() const;
 
     // 轴锁定：锁定指定轴上的线性运动（平移）
     void set_linear_lock(bool lock_x, bool lock_y, bool lock_z);
@@ -252,6 +247,8 @@ class Actor {
     [[nodiscard]] bool get_follow_camera() const;
     void set_actor_guid(const std::string& actor_guid);
     [[nodiscard]] std::string get_actor_guid() const;
+    // Relative sources require an absolute scene/project source_base_dir.
+    // Clear and rebind (or reload the scene) to refresh changed directory links.
     void set_external_vision_binding(const std::string& source_path,
                                      const std::string& shape_guid,
                                      int shape_index,
@@ -259,7 +256,8 @@ class Actor {
                                      const std::string& shape_type,
                                      const std::string& shape_identity_key,
                                      const std::string& model_path,
-                                     bool visible = true);
+                                     bool visible = true,
+                                     const std::string& source_base_dir = {});
     void clear_external_vision_binding();
     [[nodiscard]] bool has_external_vision_binding() const;
 

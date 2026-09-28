@@ -2,7 +2,7 @@
 
 #include <algorithm>
 
-#include "corona/kernel/core/i_logger.h"
+#include "horizon/core/logging.h"
 
 #ifdef CORONA_RESOURCE_HAVE_MINIAUDIO
 #include <miniaudio.h>

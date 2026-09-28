@@ -21,7 +21,7 @@
 #include <stdexcept>
 #include <system_error>
 
-#include <corona/kernel/core/i_logger.h>
+#include <horizon/core/logging.h>
 #include <nlohmann/json.hpp>
 #include <assimp/Importer.hpp>
 #include <assimp/material.h>
@@ -217,6 +217,8 @@ void visit_vision_resource_routes(const nlohmann::json& value,
                                   Callback&& callback) {
     if (value.is_object()) {
         for (const auto& item : value.items()) {
+            // Render output destinations are not dependencies of the scene archive.
+            if (field == "vision_document.data" && item.key() == "output") continue;
             const auto child_field = field.empty() ? item.key() : field + "." + item.key();
             if (vision_resource_key(item.key()) && item.value().is_string()) {
                 callback(item.value().get<std::string>(), child_field);

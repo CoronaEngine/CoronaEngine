@@ -222,7 +222,7 @@ class CoronaRenderProcessHandler : public CefRenderProcessHandler {
             // ── setProperty: 属性编辑快速通道 ──
             if (name == "setProperty") {
                 // arguments: (actorHandle: number, propertyType: int, value: number)
-                // propertyType: 0=Mass, 1=Restitution, 2=Damping, 3=Visible, 4=CollisionEnabled, 5=PhysicsEnabled, 6=LinearLockMask, 7=AngularLockMask, 8=CollisionShape
+                // propertyType: 0=Mass, 1=Restitution, 2=Damping, 3=Visible, 4=BodyType (0=Dynamic/1=Kinematic/2=Static), 5=LinearLockMask, 6=AngularLockMask
                 if (arguments.size() < 3) {
                     exception = "setProperty(handle, propertyType, value) requires 3 arguments";
                     retval = CefV8Value::CreateBool(false);

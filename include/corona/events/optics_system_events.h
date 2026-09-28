@@ -1,6 +1,6 @@
 #pragma once
 
-#include <corona/kernel/utils/storage.h>
+#include <horizon/core/storage.h>
 
 #include <future>
 #include <memory>

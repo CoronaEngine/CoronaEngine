@@ -1,6 +1,6 @@
 #include "corona/resource/resource_cache.h"
 
-#include "corona/kernel/core/i_logger.h"
+#include "horizon/core/logging.h"
 
 namespace Corona::Resource {
 

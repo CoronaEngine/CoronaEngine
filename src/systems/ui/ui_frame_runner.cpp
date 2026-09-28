@@ -1,6 +1,6 @@
 #include <corona/systems/ui/ui_frame_runner.h>
 
-#include <corona/kernel/core/i_logger.h>
+#include <horizon/core/logging.h>
 #include <corona/memory/gpu_mem_ledger.h>
 #include <corona/systems/ui/camera_viewport_manager.h>
 #include <corona/systems/ui/quad_compositor.h>

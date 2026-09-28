@@ -1,7 +1,7 @@
 ﻿#include "corona/engine.h"
 
 #include <corona/events/engine_events.h>
-#include <corona/kernel/core/i_logger.h>
+#include <horizon/core/logging.h>
 #include <corona/resource/resource_manager.h>
 #include <corona/resource/types/audio.h>
 #include <corona/resource/types/image.h>

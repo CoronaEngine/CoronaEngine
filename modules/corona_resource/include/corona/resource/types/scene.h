@@ -262,6 +262,15 @@ struct IkChain {
     float damping = 1.0f;                     // [0,1]：每步旋转的衰减系数，<1 压抖动
     bool enabled = false;                     // 是否参与求解
 
+    // Phase 3 — 碰撞驱动 IK：
+    // contact_driven=true 表示本链的 target/weight 由碰撞系统写入（而非脚本/编辑器固定）。
+    // 每帧 update_skinned_geometry 对 contact_driven=true 且 enabled=true 的链把
+    // weight 乘以 (1 - contact_weight_decay * dt)，降到 0 时 enabled=false，
+    // 使碰撞结束后手臂/肢体平滑归回原动画，不会冻住。
+    // contact_driven=false（默认）时 weight 和 enabled 由外部完全控制，行为与旧版相同。
+    bool contact_driven = false;              // true=碰撞系统驱动；false=脚本/编辑器控制
+    float contact_weight_decay = 2.0f;        // 碰撞结束后 weight 每秒衰减速率（默认 2s 归零）
+
     // 预留：每关节角度约束（首版不实现，需要时再启用）。
     // std::vector<std::array<float,2>> angle_limits;  // 每关节 [min,max]
 };

@@ -5,7 +5,7 @@
 #include <thread>
 
 #include "corona/events/engine_events.h"
-#include "corona/kernel/core/i_logger.h"
+#include "horizon/core/logging.h"
 #include "corona/kernel/event/i_event_stream.h"
 
 namespace Corona::Kernel {

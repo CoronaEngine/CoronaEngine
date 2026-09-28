@@ -3,6 +3,7 @@ function(vision_add_plugin name)
     set(lib_name vision-${PLUGIN_CATEGORY}-${name})
 
     add_library(${lib_name} MODULE ${PLUGIN_SOURCES})
+    set_property(GLOBAL APPEND PROPERTY CORONA_VISION_PLUGIN_TARGETS ${lib_name})
     target_link_libraries(${lib_name} PRIVATE
             vision-base
             vision-math

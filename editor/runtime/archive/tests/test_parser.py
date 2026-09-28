@@ -1,6 +1,8 @@
+import configparser
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 from runtime.archive.errors import ArchiveParseError
@@ -8,6 +10,58 @@ from runtime.archive.parser import parse_archive
 
 
 class ArchiveParserTests(unittest.TestCase):
+    def test_blank_active_camera_uses_first_camera_but_unknown_id_is_rejected(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            scene = root / "scene.ini"
+            content = (
+                "[format]\ntype = corona_scene_folder\nversion = 1\n"
+                "[scene]\nname = Vision camera\n"
+                "[camera]\ncount = 1\nactive_id = \ncamera0.name = view1\n"
+            )
+            scene.write_text(content, encoding="utf-8")
+            snapshot = parse_archive(str(root))
+            self.assertEqual(snapshot["scene"]["active_camera_id"], "scene.ini#camera0")
+            self.assertEqual(snapshot["scene"]["cameras"][0]["id"], "scene.ini#camera0")
+            scene.write_text(content.replace("active_id = ", "active_id = unknown"), encoding="utf-8")
+            with self.assertRaises(ArchiveParseError) as raised:
+                parse_archive(str(root))
+            self.assertEqual(raised.exception.code, "ACTIVE_CAMERA_NOT_FOUND")
+
+    def test_actor_fields_are_resolved_once_instead_of_rescanning_for_each_actor(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            actor_count = 100
+            lines = ["[format]", "type = corona_scene_folder", "version = 1",
+                     "[scene]", "name = Large scene", "[actors]"]
+            for index in range(actor_count):
+                lines.extend([f"actor{index}.name = Item {index}",
+                              f"actor{index}.actor_guid = guid-{index}",
+                              f"actor{index}.custom.label = %(actor{index}.name)s"])
+            (root / "scene.ini").write_text("\n".join(lines), encoding="utf-8")
+            original_get = configparser.ConfigParser.get
+            actor_reads = 0
+
+            def count_get(parser, section, option, *args, **kwargs):
+                nonlocal actor_reads
+                if section == "actors":
+                    actor_reads += 1
+                return original_get(parser, section, option, *args, **kwargs)
+
+            with patch.object(configparser.ConfigParser, "get", count_get):
+                snapshot = parse_archive(str(root))
+            actors = snapshot["scene"]["actors"]
+            self.assertEqual(len(actors), actor_count)
+            for actor in actors:
+                index = actor["actor_guid"].removeprefix("guid-")
+                self.assertEqual(actor["persisted_fields"], {
+                    f"actor{index}.name": f"Item {index}",
+                    f"actor{index}.actor_guid": f"guid-{index}",
+                    f"actor{index}.custom.label": f"Item {index}",
+                })
+            self.assertLess(actor_reads, actor_count * 100,
+                            "archive parsing must not resolve every actor's fields for each actor")
+
     def test_legacy_scene_owner_reuses_archive_parser_without_actor_instantiation(self):
         self.assertFalse(
             (Path(__file__).resolve().parents[3] / "runtime" / "legacy" / "entities" / "scene.py").is_file()

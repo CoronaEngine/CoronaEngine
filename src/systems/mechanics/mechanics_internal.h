@@ -379,6 +379,15 @@ struct DeferredCollisionCallback {
 	std::array<float, 3> point;
 };
 
+/// Phase 3 — 碰撞→IK target 延迟更新（帧末锁外执行，避免物理循环持锁写 GeometryDevice）。
+/// 三角窄相末轮命中蒙皮物体时入队；帧末统一写入匹配的 contact_driven IK 链的 target/weight。
+struct DeferredIkTargetUpdate {
+    std::uintptr_t geom_handle;       // GeometryDevice（含 ik_chains）
+    std::uintptr_t transform_handle;  // 用于 world→model 坐标变换
+    int node_idx;                     // 接触骨骼的 SkeletonData::nodes 下标
+    ktm::fvec3 contact_world;         // 世界空间接触点（从 tri_result.contact_point 拷贝）
+};
+
 // 注意：八叉树实现已迁移到 include/corona/spatial/octree.h，由 GeometrySystem 持有并维护。
 // MechanicsSystem 仅作为消费者使用（宽相候选对生成仍可复用该通用实现）。
 
@@ -399,8 +408,7 @@ struct BodyFrameParams {
     float mass = 1.0f;
     float damping = 0.99f;
     float restitution = 0.8f;
-    bool collision_enabled = true;
-    CollisionShape collision_shape = CollisionShape::Box;
+    BodyType body_type = BodyType::Dynamic;
     std::uintptr_t actor = 0;
 };
 
@@ -410,9 +418,15 @@ struct BodyFrameParams {
 
 /// 碰撞网格：存储局部空间顶点和三角形索引
 struct CollisionMesh {
-    std::vector<ktm::fvec3> vertices;                     // 局部空间顶点
-    std::vector<std::array<std::uint16_t, 3>> triangles;  // 三角形索引三元组
+    std::vector<ktm::fvec3> vertices;                     // 局部/世界空间顶点（蒙皮网格每帧刷新）
+    std::vector<std::array<std::uint16_t, 3>> triangles;  // 三角形索引三元组（静态，不随蒙皮变化）
     float min_local_y = 0.0f;                             // 最低点Y（精确地板碰撞）
+
+    // 每个三角形的主导骨骼 node_idx（SkeletonData::nodes 下标）。
+    // 导入期一次性计算：取三个顶点 BoneWeights 中权重最大的 bone_id，
+    // 再经 bone_id → node_idx 反查表映射。非蒙皮网格此数组为空。
+    // Phase 3（碰撞→IK）靠此字段确定接触三角形归属哪条 IK 链。
+    std::vector<int> triangle_bone_ids;  // 下标对齐 triangles，-1=无归属骨骼
 };
 
 /// 三角形碰撞检测结果
@@ -421,16 +435,26 @@ struct TriangleContactResult {
     ktm::fvec3 normal;         // 碰撞法线（从 A 指向 B）
     float penetration = 0.0f;  // 穿透深度
     ktm::fvec3 contact_point;  // 接触点
+
+    // Phase 3：记录穿透最深的三角形在各自 CollisionMesh::triangles 中的下标（-1=未记录）。
+    // 供碰撞→IK 反馈通路查 triangle_bone_ids，确定接触归属哪条 IK 链。
+    int best_tri_a = -1;  // 对应 mesh_a 的三角形下标
+    int best_tri_b = -1;  // 对应 mesh_b 的三角形下标
 };
 
 // ============================================================================
 // 碰撞网格加载
 // ============================================================================
 
-/// 从 Resource 层加载最低级 LOD 碰撞网格
-/// 返回 true 表示成功加载（或已在缓存中）
-inline bool ensure_collision_mesh(std::uint64_t model_id,
-                                  std::unordered_map<std::uint64_t, CollisionMesh>& collision_mesh_cache) {
+/// 从 Resource 层加载最低级 LOD 碰撞网格（静态非蒙皮物体专用）。
+/// 返回 true 表示成功加载（或已在缓存中）。
+/// 同时把三角索引和骨骼映射写入 static_triangle_index_cache / static_triangle_bone_cache
+/// （供蒙皮物体的每帧实例化路径复用，避免重复解析 Scene）。
+inline bool ensure_collision_mesh(
+    std::uint64_t model_id,
+    std::unordered_map<std::uint64_t, CollisionMesh>& collision_mesh_cache,
+    std::unordered_map<std::uint64_t, std::vector<std::array<std::uint16_t, 3>>>* static_tri_cache = nullptr,
+    std::unordered_map<std::uint64_t, std::vector<int>>* static_bone_cache = nullptr) {
     if (model_id == 0) return false;
     if (collision_mesh_cache.count(model_id)) return true;
 
@@ -438,12 +462,30 @@ inline bool ensure_collision_mesh(std::uint64_t model_id,
                      .acquire_read<Corona::Resource::Scene>(model_id);
     if (!scene) return false;
 
+    // 构建 bone_id → node_idx 反查表（仅蒙皮场景需要）
+    // bone_id 是 BoneInfo::id（骨骼在 final 矩阵数组中的下标），
+    // node_idx 是 SkeletonData::nodes 的扁平下标。
+    std::unordered_map<int, int> bone_id_to_node_idx;
+    if (scene->data.skeleton.has_value()) {
+        const auto& skel = *scene->data.skeleton;
+        for (std::size_t ni = 0; ni < skel.nodes.size(); ++ni) {
+            const auto& node = skel.nodes[ni];
+            auto it = skel.bone_map.find(node.name);
+            if (it != skel.bone_map.end() && it->second.id >= 0) {
+                bone_id_to_node_idx[it->second.id] = static_cast<int>(ni);
+            }
+        }
+    }
+
     CollisionMesh mesh;
+    std::vector<std::array<std::uint16_t, 3>> static_tris;
+    std::vector<int> static_bone_ids;
     std::uint16_t vertex_offset = 0;
 
     for (std::uint32_t mi = 0; mi < static_cast<std::uint32_t>(scene->data.meshes.size()); ++mi) {
         const std::vector<Corona::Resource::Vertex>* src_verts = nullptr;
         const std::vector<std::uint16_t>* src_indices = nullptr;
+        const std::vector<Corona::Resource::BoneWeights>* src_bw = nullptr;
 
         std::uint32_t lod_count = scene->get_mesh_lod_count(mi);
         if (lod_count > 0) {
@@ -451,19 +493,18 @@ inline bool ensure_collision_mesh(std::uint64_t model_id,
             const auto& lod = scene->get_mesh_lod(mi, lod_count - 1);
             src_verts = &lod.vertices;
             src_indices = &lod.indices;
+            src_bw = lod.bone_weights.empty() ? nullptr : &lod.bone_weights;
         } else {
             // 无 LOD，回退原始网格
             src_verts = &scene->get_mesh_vertices(mi);
             src_indices = &scene->get_mesh_indices(mi);
+            const auto& bw = scene->data.meshes[mi].bone_weights;
+            src_bw = bw.empty() ? nullptr : &bw;
         }
 
         if (!src_verts || src_verts->empty() || !src_indices || src_indices->empty()) continue;
 
-        // 三角形数过多时跳过此 mesh（降级为 AABB）
-        constexpr std::size_t kMaxTrianglesPerMesh = 500;
-        if (src_indices->size() / 3 > kMaxTrianglesPerMesh && lod_count == 0) continue;
-
-        // 复制顶点
+        // 复制顶点（绑定姿态；蒙皮物体运行期会覆盖为蒙皮后坐标）
         for (const auto& v : *src_verts) {
             ktm::fvec3 pos;
             pos.x = v.position[0];
@@ -472,13 +513,37 @@ inline bool ensure_collision_mesh(std::uint64_t model_id,
             mesh.vertices.push_back(pos);
         }
 
-        // 复制三角形索引（加偏移）
+        // 复制三角形索引（加偏移）+ 计算每三角主导骨骼 node_idx
         for (std::size_t i = 0; i + 2 < src_indices->size(); i += 3) {
-            mesh.triangles.push_back({
-                static_cast<std::uint16_t>((*src_indices)[i] + vertex_offset),
+            const auto tri = std::array<std::uint16_t, 3>{
+                static_cast<std::uint16_t>((*src_indices)[i]     + vertex_offset),
                 static_cast<std::uint16_t>((*src_indices)[i + 1] + vertex_offset),
                 static_cast<std::uint16_t>((*src_indices)[i + 2] + vertex_offset),
-            });
+            };
+            mesh.triangles.push_back(tri);
+            static_tris.push_back(tri);
+
+            // 主导骨骼：三顶点中权重最大的 bone_id → node_idx
+            int dominant_node = -1;
+            if (src_bw && !bone_id_to_node_idx.empty()) {
+                float best_w = 0.0f;
+                for (int vi = 0; vi < 3; ++vi) {
+                    std::uint16_t vidx = (*src_indices)[i + static_cast<std::size_t>(vi)];
+                    if (vidx >= src_bw->size()) continue;
+                    const auto& bw = (*src_bw)[vidx];
+                    for (int bi = 0; bi < Corona::Resource::MAX_BONE_INFLUENCE; ++bi) {
+                        if (bw.ids[bi] >= 0 && bw.weights[bi] > best_w) {
+                            auto nit = bone_id_to_node_idx.find(bw.ids[bi]);
+                            if (nit != bone_id_to_node_idx.end()) {
+                                best_w = bw.weights[bi];
+                                dominant_node = nit->second;
+                            }
+                        }
+                    }
+                }
+            }
+            mesh.triangle_bone_ids.push_back(dominant_node);
+            static_bone_ids.push_back(dominant_node);
         }
 
         vertex_offset = static_cast<std::uint16_t>(mesh.vertices.size());
@@ -491,6 +556,10 @@ inline bool ensure_collision_mesh(std::uint64_t model_id,
     for (const auto& v : mesh.vertices) {
         mesh.min_local_y = std::min(mesh.min_local_y, v.y);
     }
+
+    // 写入静态索引/骨骼缓存（供蒙皮物体每帧复用索引和映射，不重解析 Scene）
+    if (static_tri_cache)  (*static_tri_cache)[model_id]  = std::move(static_tris);
+    if (static_bone_cache) (*static_bone_cache)[model_id] = std::move(static_bone_ids);
 
     collision_mesh_cache[model_id] = std::move(mesh);
     return true;
@@ -538,6 +607,19 @@ inline ktm::fvec3 normalize_safe(const ktm::fvec3& v) {
     float len = vec_length(v);
     if (len < 1e-8f) return make_fvec3(0.0f, 1.0f, 0.0f);
     return make_fvec3(v.x / len, v.y / len, v.z / len);
+}
+
+// 判断点 p 的平面投影是否落在三角形 (v0,v1,v2) 内。
+// n 必须是 normalize_safe(cross(v1-v0, v2-v0)) 得到的面法线，保证绕序一致。
+// pit_eps 给少量浮点噪声留容差，避免边界点被误判为在外部。
+inline bool point_in_triangle_projected(
+    const ktm::fvec3& p,
+    const ktm::fvec3& v0, const ktm::fvec3& v1, const ktm::fvec3& v2,
+    const ktm::fvec3& n) {
+    constexpr float pit_eps = -1e-4f;
+    return dot(cross(sub(v1, v0), sub(p, v0)), n) >= pit_eps &&
+           dot(cross(sub(v2, v1), sub(p, v1)), n) >= pit_eps &&
+           dot(cross(sub(v0, v2), sub(p, v2)), n) >= pit_eps;
 }
 
 /// 将局部空间碰撞网格顶点变换到世界空间
@@ -682,15 +764,20 @@ inline void triangle_narrowphase(
     const CollisionMesh& mesh_b,
     const ktm::fvec3& center_a,
     const ktm::fvec3& center_b,
-    TriangleContactResult& result) {
+    TriangleContactResult& result,
+    float contact_threshold = 0.02f) {
     result.has_contact = false;
     float best_depth = 0.0f;
     ktm::fvec3 best_normal = make_fvec3(0.0f, 1.0f, 0.0f);
     ktm::fvec3 best_point = make_fvec3(0.0f, 0.0f, 0.0f);
     int contact_count = 0;
     ktm::fvec3 contact_sum = make_fvec3(0.0f, 0.0f, 0.0f);
+    int best_tri_a_idx = -1;  // 穿透最深那对三角形在 mesh_a 中的下标
+    int best_tri_b_idx = -1;  // 同上，mesh_b
 
+    int cur_tri_a = -1;
     for (const auto& tri_a_idx : mesh_a.triangles) {
+        ++cur_tri_a;
         // 三角形 A 的世界空间顶点
         const ktm::fvec3& a0 = world_verts_a[tri_a_idx[0]];
         const ktm::fvec3& a1 = world_verts_a[tri_a_idx[1]];
@@ -702,7 +789,9 @@ inline void triangle_narrowphase(
         ktm::fvec3 a_max = make_fvec3(
             std::max({a0.x, a1.x, a2.x}), std::max({a0.y, a1.y, a2.y}), std::max({a0.z, a1.z, a2.z}));
 
+        int cur_tri_b = -1;
         for (const auto& tri_b_idx : mesh_b.triangles) {
+            ++cur_tri_b;
             // 三角形 B 的世界空间顶点
             const ktm::fvec3& b0 = world_verts_b[tri_b_idx[0]];
             const ktm::fvec3& b1 = world_verts_b[tri_b_idx[1]];
@@ -734,11 +823,76 @@ inline void triangle_narrowphase(
             contact_sum.z += tri_center.z;
             ++contact_count;
 
-            // 取穿透最深的法线和深度（最深接触代表主碰撞方向）
+            // 取穿透最深的法线和深度，同时记录对应三角形下标（Phase 3 IK 反馈用）
             if (depth > best_depth) {
                 best_depth = depth;
                 best_normal = normal;
                 best_point = tri_center;
+                best_tri_a_idx = cur_tri_a;
+                best_tri_b_idx = cur_tri_b;
+            }
+        }
+    }
+
+    // 顶点-面近接检测：捕获三角形面对面贴合（无体积穿透）时的接触
+    // B 的顶点 对 A 的三角形面
+    for (int cur_ta = 0; cur_ta < (int)mesh_a.triangles.size(); ++cur_ta) {
+        const auto& ta_idx = mesh_a.triangles[cur_ta];
+        const ktm::fvec3& a0 = world_verts_a[ta_idx[0]];
+        const ktm::fvec3& a1 = world_verts_a[ta_idx[1]];
+        const ktm::fvec3& a2 = world_verts_a[ta_idx[2]];
+        ktm::fvec3 raw_n = cross(sub(a1, a0), sub(a2, a0));
+        float n_len = std::sqrt(dot(raw_n, raw_n));
+        if (n_len < 1e-10f) continue;
+        ktm::fvec3 fn = make_fvec3(raw_n.x / n_len, raw_n.y / n_len, raw_n.z / n_len);
+        float pd = dot(fn, a0);
+
+        for (size_t vi = 0; vi < world_verts_b.size(); ++vi) {
+            const ktm::fvec3& vb = world_verts_b[vi];
+            float sd = dot(fn, vb) - pd;  // >0: vb 在三角形正面侧
+            if (sd < 0.0f || sd > contact_threshold) continue;
+            if (!point_in_triangle_projected(vb, a0, a1, a2, fn)) continue;
+
+            float depth = contact_threshold - sd;
+            ktm::fvec3 cp = make_fvec3(vb.x - fn.x * sd, vb.y - fn.y * sd, vb.z - fn.z * sd);
+            contact_sum.x += cp.x; contact_sum.y += cp.y; contact_sum.z += cp.z;
+            ++contact_count;
+            if (depth > best_depth) {
+                best_depth = depth;
+                best_normal = fn;
+                best_point = cp;
+                best_tri_a_idx = cur_ta;
+            }
+        }
+    }
+
+    // A 的顶点 对 B 的三角形面
+    for (int cur_tb = 0; cur_tb < (int)mesh_b.triangles.size(); ++cur_tb) {
+        const auto& tb_idx = mesh_b.triangles[cur_tb];
+        const ktm::fvec3& b0 = world_verts_b[tb_idx[0]];
+        const ktm::fvec3& b1 = world_verts_b[tb_idx[1]];
+        const ktm::fvec3& b2 = world_verts_b[tb_idx[2]];
+        ktm::fvec3 raw_n = cross(sub(b1, b0), sub(b2, b0));
+        float n_len = std::sqrt(dot(raw_n, raw_n));
+        if (n_len < 1e-10f) continue;
+        ktm::fvec3 fn = make_fvec3(raw_n.x / n_len, raw_n.y / n_len, raw_n.z / n_len);
+        float pd = dot(fn, b0);
+
+        for (size_t vi = 0; vi < world_verts_a.size(); ++vi) {
+            const ktm::fvec3& va = world_verts_a[vi];
+            float sd = dot(fn, va) - pd;
+            if (sd < 0.0f || sd > contact_threshold) continue;
+            if (!point_in_triangle_projected(va, b0, b1, b2, fn)) continue;
+
+            float depth = contact_threshold - sd;
+            ktm::fvec3 cp = make_fvec3(va.x - fn.x * sd, va.y - fn.y * sd, va.z - fn.z * sd);
+            contact_sum.x += cp.x; contact_sum.y += cp.y; contact_sum.z += cp.z;
+            ++contact_count;
+            if (depth > best_depth) {
+                best_depth = depth;
+                best_normal = fn;
+                best_point = cp;
+                best_tri_b_idx = cur_tb;
             }
         }
     }
@@ -747,6 +901,8 @@ inline void triangle_narrowphase(
 
     result.has_contact = true;
     result.penetration = best_depth;
+    result.best_tri_a = best_tri_a_idx;
+    result.best_tri_b = best_tri_b_idx;
     result.contact_point = make_fvec3(
         contact_sum.x / static_cast<float>(contact_count),
         contact_sum.y / static_cast<float>(contact_count),
@@ -778,8 +934,7 @@ struct MechanicsSystem::Impl {
     std::chrono::steady_clock::time_point last_update_time{};
     bool first_update = true;
 
-    /// 骨骼动画上一帧时间戳（用于 update_skinned_geometry 计算 dt）。
-    /// 未初始化时（首帧）取 dt=0。自 GeometrySystem 迁入。
+    /// 骨骼动画上一次蒙皮的时间戳（诊断用；dt 已由 update() 测量并传入，不再用于计算）。
     std::optional<std::chrono::steady_clock::time_point> last_skin_update_time;
 
     std::atomic<bool> shutdown_requested{false};
@@ -787,6 +942,17 @@ struct MechanicsSystem::Impl {
 
     std::unordered_map<std::uintptr_t, MechanicsInternal::BodyRuntimeState> bodies;
     std::unordered_map<std::uint64_t, MechanicsInternal::CollisionMesh> collision_mesh_cache;
+
+    // 蒙皮物体的每帧碰撞网格（键：geom_handle，每帧顶点刷新，索引/bone_ids 不变）
+    std::unordered_map<std::uintptr_t, MechanicsInternal::CollisionMesh> skinned_collision_cache;
+
+    // 按 model_id 缓存的静态三角索引和骨骼映射（同一模型所有实例共享，只在首次导入时算一次）
+    std::unordered_map<std::uint64_t, std::vector<std::array<std::uint16_t, 3>>> static_triangle_index_cache;
+    std::unordered_map<std::uint64_t, std::vector<int>>                          static_triangle_bone_cache;
+
+    // Phase 3：碰撞→IK target 延迟更新队列（帧末在 geometry_storage 锁外执行）
+    std::vector<MechanicsInternal::DeferredIkTargetUpdate> deferred_ik_target_updates;
+
     std::unordered_set<std::pair<std::uintptr_t, std::uintptr_t>, MechanicsInternal::PairHash> prev_active_collisions;
     std::vector<std::function<void()>> deferred_move_callbacks;
     std::vector<MechanicsInternal::DeferredCollisionCallback> deferred_collision_callbacks;
@@ -797,9 +963,11 @@ struct MechanicsSystem::Impl {
     void clear_runtime_state() {
         deferred_move_callbacks.clear();
         deferred_collision_callbacks.clear();
+        deferred_ik_target_updates.clear();
         prev_active_collisions.clear();
         bodies.clear();
         collision_mesh_cache.clear();
+        skinned_collision_cache.clear();
         global_simulation_time = 0.0f;
         time_accumulator = 0.0f;
         first_update = true;

@@ -6,7 +6,7 @@
 
 #include <corona/systems/geometry/geometry_mesh_builder.h>
 
-#include <corona/kernel/core/i_logger.h>
+#include <horizon/core/logging.h>
 #include <corona/resource/resource.h>
 #include <corona/resource/resource_manager.h>
 #include <corona/resource/types/scene.h>

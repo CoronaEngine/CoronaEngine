@@ -1,5 +1,5 @@
 #include <corona/systems/network/discovery.h>
-#include <corona/kernel/core/i_logger.h>
+#include <horizon/core/logging.h>
 
 #ifdef _WIN32
 #  ifndef WIN32_LEAN_AND_MEAN

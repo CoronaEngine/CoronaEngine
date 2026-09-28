@@ -1,5 +1,5 @@
 #include <corona/shared_data_hub.h>
-#include <corona/kernel/core/i_logger.h>
+#include <horizon/core/logging.h>
 #include <corona/systems/ui/camera_viewport_manager.h>
 
 #include <algorithm>

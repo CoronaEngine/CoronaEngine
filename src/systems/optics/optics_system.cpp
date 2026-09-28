@@ -1,6 +1,7 @@
-﻿#include <corona/events/display_system_events.h>
+﻿#include <corona/utils/scene_path_key.h>
+#include <corona/events/display_system_events.h>
 #include <corona/events/optics_system_events.h>
-#include <corona/kernel/core/i_logger.h>
+#include <horizon/core/logging.h>
 #include <corona/kernel/core/kernel_context.h>
 #include <corona/kernel/event/i_event_bus.h>
 #include <corona/kernel/event/i_event_stream.h>
@@ -54,6 +55,9 @@
 //#define CORONA_VISION_IMPORT_DEMO
 
 #ifdef CORONA_ENABLE_VISION
+#ifdef _WIN32
+#include <Windows.h>
+#endif
 #include "base/import/parameter_set.h"
 #include "base/import/json_util.h"
 #include "base/import/project_desc.h"
@@ -668,29 +672,7 @@ std::optional<CursorIconPixels> load_rgba_icon_pixels(
     return pixels;
 }
 
-[[nodiscard]] std::string normalize_scene_path_key(const std::string& raw_path) {
-    if (raw_path.empty()) {
-        return {};
-    }
-
-    std::error_code ec;
-    std::filesystem::path path = std::filesystem::u8path(raw_path);
-    auto normalized = std::filesystem::weakly_canonical(path, ec);
-    if (ec) {
-        ec.clear();
-        normalized = path.is_absolute() ? path : std::filesystem::absolute(path, ec);
-        if (ec) {
-            normalized = path;
-        }
-    }
-    auto key = normalized.lexically_normal().generic_string();
-#ifdef _WIN32
-    std::transform(key.begin(), key.end(), key.begin(), [](unsigned char ch) {
-        return static_cast<char>(std::tolower(ch));
-    });
-#endif
-    return key;
-}
+using Corona::Utils::normalize_scene_path_key;
 
 [[nodiscard]] bool has_external_live_bindings_for_scene(const std::string& scene_path) {
     const auto target_key = normalize_scene_path_key(scene_path);
@@ -709,7 +691,7 @@ std::optional<CursorIconPixels> load_rgba_icon_pixels(
             if (!binding) {
                 continue;
             }
-            if (normalize_scene_path_key(binding->source_path) == target_key) {
+            if (binding->source_path_key == target_key) {
                 return true;
             }
         }
@@ -3210,14 +3192,22 @@ bool OpticsSystem::initialize(Kernel::ISystemContext* ctx) {
                 // Only stash the request here (any thread). The actual import touches
                 // the CUDA pipeline and MUST run on the render thread, so it is
                 // deferred to apply_pending_vision_scene_load() in update().
-                std::lock_guard<std::mutex> lock(vision_scene_load_mutex_);
-                pending_vision_scene_load_ = VisionSceneLoadRequest{
-                    event.scene_path,
+                // Capture legacy relative load paths now, before deferred work.
+                // Embedded scene keys are relative to their explicit resource base.
+                const auto base = event.base_dir.empty()
+                    ? std::filesystem::current_path()
+                    : std::filesystem::absolute(std::filesystem::u8path(event.base_dir));
+                const auto base_utf8 = base.generic_u8string();
+                const std::string base_text(base_utf8.begin(), base_utf8.end());
+                VisionSceneLoadRequest request{
+                    normalize_scene_path_key(event.scene_path, base_text),
                     event.scene_json,
-                    event.base_dir,
-                    event.scene_key,
+                    base_text,
+                    normalize_scene_path_key(event.scene_key, base_text),
                     event.external_live,
                 };
+                std::lock_guard<std::mutex> lock(vision_scene_load_mutex_);
+                pending_vision_scene_load_ = std::move(request);
             });
 #endif
 
@@ -5781,9 +5771,7 @@ void OpticsSystem::sync_external_live_vision_transforms(VisionPipelineRuntime& r
         return;
     }
 
-    const auto current_scene_key = scene_resource->key.source_path_key.empty()
-                                       ? normalize_scene_path_key(runtime.scene_path)
-                                       : scene_resource->key.source_path_key;
+    const auto& current_scene_key = scene_resource->key.source_path_key;
     if (current_scene_key.empty()) {
         return;
     }
@@ -5810,7 +5798,7 @@ void OpticsSystem::sync_external_live_vision_transforms(VisionPipelineRuntime& r
             if (!binding) {
                 continue;
             }
-            if (normalize_scene_path_key(binding->source_path) != current_scene_key) {
+            if (binding->source_path_key != current_scene_key) {
                 continue;
             }
             active_bound_actors.insert(actor_handle);
@@ -6439,7 +6427,26 @@ bool OpticsSystem::init_vision_lazy() {
     try {
         // ocarina::Device is non-default-constructible; use auto so the type is
         // deduced from create_device(). Function-local static ensures single init.
-        static auto s_device = ocarina::RHIContext::instance().create_device("cuda");
+        static auto s_device = [] {
+            // Engine deployment puts Vision plugins beside the executable. The
+            // standalone hotfix setup may have registered ../bin first; its
+            // missing DLL aborts loading before the runtime directory is tried.
+            auto runtime_directory = std::filesystem::current_path();
+#ifdef _WIN32
+            std::vector<wchar_t> executable_path(32768);
+            const auto length = GetModuleFileNameW(
+                nullptr, executable_path.data(), static_cast<DWORD>(executable_path.size()));
+            if (length == 0 || length >= executable_path.size()) {
+                throw std::runtime_error("Cannot resolve the Vision runtime directory");
+            }
+            runtime_directory = std::filesystem::path(
+                std::wstring(executable_path.data(), length)).parent_path();
+#endif
+            auto& context = ocarina::RHIContext::instance();
+            ocarina::DynamicModule::clear_search_path();
+            context.init(runtime_directory);
+            return context.create_device("cuda");
+        }();
         visionDevicePtr = &s_device;
         visionDevicePtr->init_rtx();
         vision::Global::instance().set_device(visionDevicePtr);
@@ -7334,6 +7341,9 @@ bool OpticsSystem::load_external_vision_scene(const std::string& scene_path,
                                               CameraVisionRenderMode mode,
                                               std::optional<VisionPipelineSource> source_override,
                                               bool force_reload_scene_resource) {
+    if (force_reload_scene_resource) {
+        SharedDataHub::instance().refresh_external_vision_binding_paths();
+    }
     const auto source = source_override.value_or(
         has_external_live_bindings_for_scene(scene_path)
             ? VisionPipelineSource::ExternalLive
@@ -7358,6 +7368,9 @@ bool OpticsSystem::load_external_vision_scene_from_json(const VisionSceneLoadReq
         return false;
     }
 
+    if (force_reload_scene_resource) {
+        SharedDataHub::instance().refresh_external_vision_binding_paths();
+    }
     const auto source = request.external_live
         ? VisionPipelineSource::ExternalLive
         : VisionPipelineSource::ExternalFile;
@@ -7366,6 +7379,7 @@ bool OpticsSystem::load_external_vision_scene_from_json(const VisionSceneLoadReq
         scene_key = std::string("embedded_vision_") +
                     std::to_string(std::hash<std::string>{}(request.scene_json));
     }
+    scene_key = normalize_scene_path_key(scene_key, request.base_dir);
     const auto key = make_vision_pipeline_key(scene_key, mode, source);
 
     try {

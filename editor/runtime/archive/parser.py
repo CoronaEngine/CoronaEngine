@@ -33,8 +33,13 @@ def _is_relative_to(path: Path, root: Path) -> bool:
         return False
 
 
-def _actor_keys(section: configparser.SectionProxy) -> list[str]:
-    return sorted({key.split(".", 1)[0] for key in section if "." in key})
+def _actor_fields(section: configparser.SectionProxy) -> dict[str, dict[str, str]]:
+    fields: dict[str, dict[str, str]] = {}
+    for name, value in section.items():
+        key, separator, _ = name.partition(".")
+        if separator:
+            fields.setdefault(key, {})[name] = value
+    return fields
 
 
 def _read_ini(path: Path) -> configparser.ConfigParser:
@@ -141,6 +146,7 @@ def _parse_actor(
     project_root: Path,
     *,
     require_project_relative: bool,
+    persisted_fields: dict[str, str],
 ) -> dict[str, Any]:
     route = section.get(f"{key}.route", "").strip().replace("\\", "/")
     asset_path = (project_root / route).resolve() if route else project_root.resolve()
@@ -243,9 +249,7 @@ def _parse_actor(
         },
         "optics": optics,
         "audio_resource_id": section.get(f"{key}.audio_resource_id", ""),
-        "persisted_fields": {
-            name: value for name, value in section.items() if name.startswith(f"{key}.")
-        },
+        "persisted_fields": persisted_fields,
     }
 
 
@@ -302,6 +306,7 @@ def _parse_archive_impl(input_path: str) -> dict[str, Any]:
     metadata_section = "base" if legacy else "scene"
     scene_section = config[metadata_section] if config.has_section(metadata_section) else {}
     actors_section = config["actors"] if config.has_section("actors") else None
+    actor_fields = _actor_fields(actors_section) if actors_section else {}
     actors = (
         [
             _parse_actor(
@@ -309,8 +314,9 @@ def _parse_archive_impl(input_path: str) -> dict[str, Any]:
                 key,
                 root,
                 require_project_relative=archive_type == "portable_scene",
+                persisted_fields=actor_fields[key],
             )
-            for key in _actor_keys(actors_section)
+            for key in sorted(actor_fields)
         ]
         if actors_section
         else []
@@ -328,7 +334,7 @@ def _parse_archive_impl(input_path: str) -> dict[str, Any]:
     cameras = [_parse_camera(camera_section, index, scene_route) for index in range(max(1, camera_count))]
     active_camera_id = (
         camera_section.get("active_id", cameras[0]["id"]) if camera_section else cameras[0]["id"]
-    )
+    ) or cameras[0]["id"]
     actor_guids: set[str] = set()
     for actor in actors:
         guid = actor["actor_guid"]
