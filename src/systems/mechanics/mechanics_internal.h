@@ -450,17 +450,21 @@ struct TriangleContactResult {
 /// 返回 true 表示成功加载（或已在缓存中）。
 /// 同时把三角索引和骨骼映射写入 static_triangle_index_cache / static_triangle_bone_cache
 /// （供蒙皮物体的每帧实例化路径复用，避免重复解析 Scene）。
+///
+/// 此重载**不加任何 ResourceManager 锁**，调用方必须已持有该 model_id 的 Scene 读锁并传入 *handle。
+/// 已持锁的调用方（如 update_skinned_geometry 的 scene_read）必须用此重载：对同一 ResourceEntry 的
+/// std::shared_mutex 再加一次 shared 锁是递归加锁（UB），在写者优先的 SRWLOCK 上会与等待中的
+/// acquire_write<Scene> 互等挂死。未持锁的调用方用下方自行加锁的重载。
 inline bool ensure_collision_mesh(
     std::uint64_t model_id,
+    const Corona::Resource::Scene& scene_ref,
     std::unordered_map<std::uint64_t, CollisionMesh>& collision_mesh_cache,
     std::unordered_map<std::uint64_t, std::vector<std::array<std::uint16_t, 3>>>* static_tri_cache = nullptr,
     std::unordered_map<std::uint64_t, std::vector<int>>* static_bone_cache = nullptr) {
     if (model_id == 0) return false;
     if (collision_mesh_cache.count(model_id)) return true;
 
-    auto scene = Corona::Resource::ResourceManager::get_instance()
-                     .acquire_read<Corona::Resource::Scene>(model_id);
-    if (!scene) return false;
+    const Corona::Resource::Scene* scene = &scene_ref;  // 以下沿用 scene-> 访问
 
     // 构建 bone_id → node_idx 反查表（仅蒙皮场景需要）
     // bone_id 是 BoneInfo::id（骨骼在 final 矩阵数组中的下标），
@@ -563,6 +567,22 @@ inline bool ensure_collision_mesh(
 
     collision_mesh_cache[model_id] = std::move(mesh);
     return true;
+}
+
+/// 自行获取 Scene 读锁的重载，供**未持有**该 model_id Scene 锁的调用方使用
+/// （如 update_physics 的预加载）。已持锁的调用方必须改用上方的 const Scene& 重载。
+inline bool ensure_collision_mesh(
+    std::uint64_t model_id,
+    std::unordered_map<std::uint64_t, CollisionMesh>& collision_mesh_cache,
+    std::unordered_map<std::uint64_t, std::vector<std::array<std::uint16_t, 3>>>* static_tri_cache = nullptr,
+    std::unordered_map<std::uint64_t, std::vector<int>>* static_bone_cache = nullptr) {
+    if (model_id == 0) return false;
+    if (collision_mesh_cache.count(model_id)) return true;
+
+    auto scene = Corona::Resource::ResourceManager::get_instance()
+                     .acquire_read<Corona::Resource::Scene>(model_id);
+    if (!scene) return false;
+    return ensure_collision_mesh(model_id, *scene, collision_mesh_cache, static_tri_cache, static_bone_cache);
 }
 
 /// 获取 mechanics handle 对应的 model_id

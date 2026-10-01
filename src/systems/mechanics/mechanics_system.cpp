@@ -448,10 +448,10 @@ void MechanicsSystem::update_physics(float fixed_dt) {
         }
     }
 
-    // 临时校正表：记录 Phase 5 末轮的位置校正量，在 Phase 6 积分后统一应用
+    // 临时校正表：记录 Phase 5 迭代后处理（每子步一次）的位置校正量，在 Phase 6 积分后统一应用
     std::unordered_map<std::uintptr_t, ktm::fvec3> position_correction;
 
-    // 阶段 5：从 GeometrySystem 获取宽相候选对 → 窄相（AABB 或 OBB+SAT）→ 顺序冲量 + 摩擦 + 末轮位置校正 ---
+    // 阶段 5：从 GeometrySystem 获取宽相候选对 → 窄相（AABB 或 OBB+SAT）→ 顺序冲量 + 摩擦 + 迭代后位置校正 ---
     //GeometrySystem 八叉树 payload 是 actor_handle，query_pairs() 返回 (actor_a, actor_b)
     //一个 actor 可能挂多个含 mechanics 的 profile，故用 vector 存储所有 mechanics_handle
     //转换时展开笛卡尔积；遍历 actor_a 的每个 mechanics vs actor_b 的每个 mechanics
@@ -512,18 +512,38 @@ void MechanicsSystem::update_physics(float fixed_dt) {
         // 5.4 对候选对做法向/切向冲量（半隐式 GS：多轮依次解每对约束近似同时满足）
         constexpr float eps = 1e-8f;                   // 分母稳定项，非物理
         constexpr float k_positional_slop = 0.004f;    // Baumgarte 式校正：小穿透只靠冲量，不修位姿
-        constexpr float k_positional_percent = 0.35f;  // 仅末轮按穿透拆分平移，且只推一部分，防过冲
+        constexpr float k_positional_percent = 0.35f;  // 迭代结束后按穿透拆分平移（每子步一次），且只推一部分，防过冲
         constexpr int k_impulse_iterations = 8;        // 轮数↑ 堆叠更稳；提升到8以改善坡面接触收敛
         constexpr float k_early_exit_vel_eps = 0.002f; // 本轮最大速度修正低于此值则提前退出
+
+        // E1：每个候选对的本子步接触记录。迭代内只写记录，迭代结束后统一执行一次后处理
+        // （位置校正 / 唤醒 / 活跃对 / 开始回调），与是否收敛早退无关。
+        struct PairContactRecord {
+            bool in_contact = false;  // 本子步窄相判定接触（与轮次、接近/分离状态无关）
+            std::size_t index_a = 0;  // mechanics_data 下标
+            std::size_t index_b = 0;
+            ktm::fvec3 normal{};      // A→B
+            float penetration = 0.f;
+            float inv_ma = 0.f;
+            float inv_mb = 0.f;
+            float last_j = 0.f;       // 最后一轮施加的法向冲量；该轮处于分离（未施加）则为 0
+        };
+        std::vector<PairContactRecord> pair_records(collision_pairs.size());
+
         for (int impulse_iter = 0; impulse_iter < k_impulse_iterations; ++impulse_iter) {
             float max_delta_v_sq_this_iter = 0.0f;  // 本轮最大速度修正平方，用于收敛检测
             if (impl_->shutdown_requested.load(std::memory_order_acquire)) {
                 return;
             }
-            for (const auto& pair : collision_pairs) {  // 内层：单对接触解一次（顺序依赖）
+            for (std::size_t pair_idx = 0; pair_idx < collision_pairs.size(); ++pair_idx) {  // 内层：单对接触解一次（顺序依赖）
                 if (impl_->shutdown_requested.load(std::memory_order_acquire)) {
                     return;
                 }
+                const auto& pair = collision_pairs[pair_idx];
+                PairContactRecord& rec = pair_records[pair_idx];
+                // 每轮重置：窄相输入（世界顶点、中心、休眠状态）在迭代间不变，结果与上一轮一致
+                rec.in_contact = false;
+                rec.last_j = 0.f;
                 std::uintptr_t ha = pair.first;
                 std::uintptr_t hb = pair.second;
                 // 两个都休眠则跳过
@@ -677,6 +697,15 @@ void MechanicsSystem::update_physics(float fixed_dt) {
                 const bool fixed_b = frame_params[hb].body_type != BodyType::Dynamic;
                 const float inv_ma = (sleep_a || fixed_a) ? 0.f : 1.0f / mass_a;
                 const float inv_mb = (sleep_b || fixed_b) ? 0.f : 1.0f / mass_b;
+
+                // E1：窄相已确认接触 → 登记本对（后处理不再依赖末轮是否恰好处于接近状态）
+                rec.in_contact = true;
+                rec.index_a = it_a->second;
+                rec.index_b = it_b->second;
+                rec.normal = normal;
+                rec.penetration = penetration;
+                rec.inv_ma = inv_ma;
+                rec.inv_mb = inv_mb;
                 const float rest_a = frame_params[ha].restitution;  // 双方恢复系数各取组件；此处简单平均
                 const float rest_b = frame_params[hb].restitution;
                 const float rest = (rest_a + rest_b) * 0.5f;
@@ -715,6 +744,7 @@ void MechanicsSystem::update_physics(float fixed_dt) {
                 const float j_raw = -(1.0f + rest_use) * v_n / denom_n;  // 法向冲量标量（未钳制）
                 const float j = std::max(-max_impulse_per_contact,
                                          std::min(max_impulse_per_contact, j_raw));  // 钳制防止单帧爆炸
+                rec.last_j = j;
 
                 va.x += normal.x * j * inv_ma;
                 va.y += normal.y * j * inv_ma;
@@ -855,92 +885,6 @@ void MechanicsSystem::update_physics(float fixed_dt) {
                     float dv_max_t = std::max(dv_a_t, dv_b_t);
                     max_delta_v_sq_this_iter = std::max(max_delta_v_sq_this_iter, dv_max_t * dv_max_t);
                 }
-
-                if (impulse_iter == k_impulse_iterations - 1) {
-                    // 末轮：按穿透深度记录软位置校正（延迟到 Phase 6 积分后统一应用，避免抖动）
-                    const float pen = std::max(0.f, penetration - k_positional_slop);
-                    // 钳制穿透深度以防止大穿透时的位置校正过大（如物体生成在碰撞体内部）
-                    const float pen_clamped = std::min(pen, max_position_correction / k_positional_percent);
-                    if (pen_clamped > 0.f) {
-                        const float inv_sum = inv_ma + inv_mb;  // 按逆质量比例分摊平移
-                        if (inv_sum > eps) {
-                            const float corr_scale = k_positional_percent * pen_clamped / inv_sum;
-                            const auto record_corr = [&](std::uintptr_t handle, float inv_eff, float sign) {
-                                if (inv_eff <= eps) return;
-                                auto& corr = position_correction[handle];  // 默认初始化为 {0,0,0}
-                                corr.x += sign * normal.x * corr_scale * inv_eff;
-                                corr.y += sign * normal.y * corr_scale * inv_eff;
-                                corr.z += sign * normal.z * corr_scale * inv_eff;
-                            };
-                            record_corr(ha, inv_ma, -1.f);
-                            record_corr(hb, inv_mb, +1.f);
-                        }
-                    }
-
-                    // 只有当法向冲量导致的速度变化超过休眠阈值时才唤醒
-                    {
-                        const float wake_impulse_threshold = sleep_threshold * 2.0f;
-                        const float delta_v_a = std::abs(j) * inv_ma;
-                        const float delta_v_b = std::abs(j) * inv_mb;
-
-                        if (delta_v_a > wake_impulse_threshold) {
-                            impl_->body(ha).sleeping = false;
-                            impl_->body(ha).sleep_timer = 0.0f;
-                        }
-                        if (delta_v_b > wake_impulse_threshold) {
-                            impl_->body(hb).sleeping = false;
-                            impl_->body(hb).sleep_timer = 0.0f;
-                        }
-                    }
-
-                    // 记录活跃碰撞对
-                    auto actor_a = actor_for_mechanics(ha);
-                    auto actor_b = actor_for_mechanics(hb);
-                    auto sorted_pair = (actor_a < actor_b) ? std::make_pair(actor_a, actor_b) : std::make_pair(actor_b, actor_a);
-                    curr_active_collisions.insert(sorted_pair);
-
-                    // ==================== 碰撞回调（延迟到帧末执行，避免在物理循环中持有锁时调用） ========================
-                    {
-                        ktm::fvec3 point;
-                        point.x = (a.center_world.x + b.center_world.x) * 0.5f;
-                        point.y = (a.center_world.y + b.center_world.y) * 0.5f;
-                        point.z = (a.center_world.z + b.center_world.z) * 0.5f;
-
-                        std::function<void(std::uintptr_t, bool, const std::array<float, 3>&, const std::array<float, 3>&)> cb_a;
-                        std::function<void(std::uintptr_t, bool, const std::array<float, 3>&, const std::array<float, 3>&)> cb_b;
-
-                        {
-                            auto mech_a_acc = mechanics_storage.try_acquire_read(ha);
-                            if (mech_a_acc && mech_a_acc->collision_callback) {
-                                cb_a = mech_a_acc->collision_callback;
-                            }
-                        }
-
-                        {
-                            auto mech_b_acc = mechanics_storage.try_acquire_read(hb);
-                            if (mech_b_acc && mech_b_acc->collision_callback) {
-                                cb_b = mech_b_acc->collision_callback;
-                            }
-                        }
-
-                        std::array<float, 3> normal_arr = {normal.x, normal.y, normal.z};
-                        std::array<float, 3> point_arr = {point.x, point.y, point.z};
-
-                        bool was_active = (impl_->prev_active_collisions.find(sorted_pair) != impl_->prev_active_collisions.end());
-
-                        if (!was_active && !impl_->shutdown_requested.load(std::memory_order_acquire)) {
-                            if (cb_a) {
-                                impl_->deferred_collision_callbacks.push_back({std::move(cb_a), actor_b, true, normal_arr, point_arr});
-                            }
-
-                            if (cb_b) {
-                                std::array<float, 3> reverse_normal_arr = {-normal.x, -normal.y, -normal.z};
-                                impl_->deferred_collision_callbacks.push_back({std::move(cb_b), actor_a, true, reverse_normal_arr, point_arr});
-                            }
-                        }
-                    }
-                    // =====================================================
-                }  // 末轮：impulse_iter == k_impulse_iterations - 1
             }      // 内层：collision_pairs
 
             // 收敛早退：本轮所有碰撞对的速度修正都极小，说明已稳定，无需继续迭代
@@ -948,6 +892,115 @@ void MechanicsSystem::update_physics(float fixed_dt) {
                 break;
             }
         }  // 外层：impulse_iter
+
+        // ===== E1：迭代后处理（每子步恰好一次，与是否收敛早退无关）=====
+        // 原先这四项放在 impulse_iter == 末轮 的分支里，而收敛早退在其后：静止接触通常
+        // 1–2 轮即满足早退，于是位置校正 / 唤醒 / 活跃对 / 开始回调几乎从不执行。
+        // 「是否接触」以本子步窄相结论为准，不再取决于末轮恰好处于接近还是分离。
+        for (std::size_t pair_idx = 0; pair_idx < collision_pairs.size(); ++pair_idx) {
+            if (impl_->shutdown_requested.load(std::memory_order_acquire)) {
+                return;
+            }
+            const PairContactRecord& rec = pair_records[pair_idx];
+            if (!rec.in_contact) {
+                continue;
+            }
+            const std::uintptr_t ha = collision_pairs[pair_idx].first;
+            const std::uintptr_t hb = collision_pairs[pair_idx].second;
+            const MechanicsWorldAABB& a = mechanics_data[rec.index_a];
+            const MechanicsWorldAABB& b = mechanics_data[rec.index_b];
+            const ktm::fvec3& normal = rec.normal;
+            const float inv_ma = rec.inv_ma;
+            const float inv_mb = rec.inv_mb;
+
+            // 按穿透深度记录软位置校正（延迟到 Phase 6 积分后统一应用，避免抖动）
+            const float pen = std::max(0.f, rec.penetration - k_positional_slop);
+            // 钳制穿透深度以防止大穿透时的位置校正过大（如物体生成在碰撞体内部）
+            const float pen_clamped = std::min(pen, max_position_correction / k_positional_percent);
+            if (pen_clamped > 0.f) {
+                const float inv_sum = inv_ma + inv_mb;  // 按逆质量比例分摊平移
+                if (inv_sum > eps) {
+                    const float corr_scale = k_positional_percent * pen_clamped / inv_sum;
+                    const auto record_corr = [&](std::uintptr_t handle, float inv_eff, float sign) {
+                        if (inv_eff <= eps) return;
+                        auto& corr = position_correction[handle];  // 默认初始化为 {0,0,0}
+                        corr.x += sign * normal.x * corr_scale * inv_eff;
+                        corr.y += sign * normal.y * corr_scale * inv_eff;
+                        corr.z += sign * normal.z * corr_scale * inv_eff;
+                    };
+                    record_corr(ha, inv_ma, -1.f);
+                    record_corr(hb, inv_mb, +1.f);
+                }
+            }
+
+            // 只有当法向冲量导致的速度变化超过休眠阈值时才唤醒。
+            // 取最后一轮施加的冲量（与原末轮语义一致）而非累计冲量：静止堆叠每子步
+            // 都要抵消重力，累计值恒超阈值，会让堆叠永远无法入睡。
+            // 早退时最后一轮 |j|·inv_m < k_early_exit_vel_eps，远低于阈值，不会误唤醒。
+            {
+                const float wake_impulse_threshold = sleep_threshold * 2.0f;
+                const float delta_v_a = std::abs(rec.last_j) * inv_ma;
+                const float delta_v_b = std::abs(rec.last_j) * inv_mb;
+
+                if (delta_v_a > wake_impulse_threshold) {
+                    impl_->body(ha).sleeping = false;
+                    impl_->body(ha).sleep_timer = 0.0f;
+                }
+                if (delta_v_b > wake_impulse_threshold) {
+                    impl_->body(hb).sleeping = false;
+                    impl_->body(hb).sleep_timer = 0.0f;
+                }
+            }
+
+            // 记录活跃碰撞对（窄相判定接触即记录，末轮恰好分离的接触对也不再漏记，
+            // 避免持续接触在相邻子步间反复触发 end/begin）
+            auto actor_a = actor_for_mechanics(ha);
+            auto actor_b = actor_for_mechanics(hb);
+            auto sorted_pair = (actor_a < actor_b) ? std::make_pair(actor_a, actor_b) : std::make_pair(actor_b, actor_a);
+            curr_active_collisions.insert(sorted_pair);
+
+            // ==================== 碰撞回调（延迟到帧末执行，避免在物理循环中持有锁时调用） ========================
+            {
+                ktm::fvec3 point;
+                point.x = (a.center_world.x + b.center_world.x) * 0.5f;
+                point.y = (a.center_world.y + b.center_world.y) * 0.5f;
+                point.z = (a.center_world.z + b.center_world.z) * 0.5f;
+
+                std::function<void(std::uintptr_t, bool, const std::array<float, 3>&, const std::array<float, 3>&)> cb_a;
+                std::function<void(std::uintptr_t, bool, const std::array<float, 3>&, const std::array<float, 3>&)> cb_b;
+
+                {
+                    auto mech_a_acc = mechanics_storage.try_acquire_read(ha);
+                    if (mech_a_acc && mech_a_acc->collision_callback) {
+                        cb_a = mech_a_acc->collision_callback;
+                    }
+                }
+
+                {
+                    auto mech_b_acc = mechanics_storage.try_acquire_read(hb);
+                    if (mech_b_acc && mech_b_acc->collision_callback) {
+                        cb_b = mech_b_acc->collision_callback;
+                    }
+                }
+
+                std::array<float, 3> normal_arr = {normal.x, normal.y, normal.z};
+                std::array<float, 3> point_arr = {point.x, point.y, point.z};
+
+                bool was_active = (impl_->prev_active_collisions.find(sorted_pair) != impl_->prev_active_collisions.end());
+
+                if (!was_active && !impl_->shutdown_requested.load(std::memory_order_acquire)) {
+                    if (cb_a) {
+                        impl_->deferred_collision_callbacks.push_back({std::move(cb_a), actor_b, true, normal_arr, point_arr});
+                    }
+
+                    if (cb_b) {
+                        std::array<float, 3> reverse_normal_arr = {-normal.x, -normal.y, -normal.z};
+                        impl_->deferred_collision_callbacks.push_back({std::move(cb_b), actor_a, true, reverse_normal_arr, point_arr});
+                    }
+                }
+            }
+            // =====================================================
+        }  // E1：迭代后处理
 
         // ===== 碰撞结束检测：遍历上帧活跃但本帧消失的碰撞对，延迟触发 end 回调 =====
         for (const auto& old_pair : impl_->prev_active_collisions) {
@@ -1618,10 +1671,15 @@ void MechanicsSystem::update_skinned_geometry(float dt) {
                 bool have_static = impl_->static_triangle_index_cache.count(model_id) > 0;
                 if (!have_static && model_id != 0) {
                     // 首帧：触发 ensure_collision_mesh 解析索引和骨骼映射，存入 static 缓存
-                    // 注意：此调用在 geom 写锁内；ensure_collision_mesh 只访问 ResourceManager
-                    // 的 Scene 读锁，与 geom_storage 无锁序冲突。
+                    // 锁序注意（A3）：此处位于 geom 写锁内，且本循环体开头取得的 Scene 读锁
+                    // scene_read 仍然持有。必须复用它（传 const Scene& 的重载），不能调用自行
+                    // acquire_read 的版本：那会对同一 ResourceEntry 的 std::shared_mutex 再加一次
+                    // shared 锁——递归 shared 锁是 UB；MSVC 的 SRWLOCK 写者优先，若 Geometry 线程
+                    // 恰在 acquire_write<Scene>（LOD 驻留回收）上等待，第二次 shared 会排到写者
+                    // 之后，而写者又在等本线程已持有的第一次 shared，双方互等挂死。
                     MechanicsInternal::ensure_collision_mesh(
                         model_id,
+                        scene,
                         impl_->collision_mesh_cache,
                         &impl_->static_triangle_index_cache,
                         &impl_->static_triangle_bone_cache);
