@@ -1,11 +1,11 @@
 import { FRAGMENT } from '../../frontend/storyGameplay.mjs';
-import { STORY_CHARACTERS, PLAYER_MODEL_REF, characterTransform } from '../../frontend/storyCharacters.mjs';
+import { STORY_CHARACTERS, PLAYER_MODEL_REF, PROPHET_MODEL_REF, characterTransform } from '../../frontend/storyCharacters.mjs';
 export const deferred = () => { let resolve, reject; const promise = new Promise((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; };
 export const url = 'file:///D:/Corona%20Engine/editor/Frontend/dist/index.html#/world';
 export function actorFixture(character = STORY_CHARACTERS[0]) {
   const local_aabb = character.role === 'boss' ? [-0.5, -0.325, -0.107, 0.5, 0.325, 0.107]
     : [-0.5, -0.4, -0.25, 0.5, 0.4, 0.25];
-  return { ...(character.role === 'player' ? { model_ref: PLAYER_MODEL_REF } : {}), name: character.name, actor_guid: character.guid, handle: 100 + STORY_CHARACTERS.indexOf(character),
+  return { ...(character.role === 'player' ? { model_ref: PLAYER_MODEL_REF } : character.role === 'prophet' ? { model_ref: PROPHET_MODEL_REF } : {}), name: character.name, actor_guid: character.guid, handle: 100 + STORY_CHARACTERS.indexOf(character),
     load_status: 'loaded', render_ready: true, gpu_build_state: 'Ready',
     local_aabb, geometry: characterTransform(character, local_aabb),
     mechanics: { physics_enabled: false }, visible: true, follow_camera: false, camera_lock: { enabled: false } };
@@ -55,3 +55,13 @@ export function apiFixture({ actors = [], wrapped = true } = {}) {
   };
   return { api, calls, state, get, wrap };
 }
+
+export const gameplayConfig = { playerHp: 100, rageMax: 100, ragePerHit: 10, bossHp: 200,
+  damage: 20, cooldownMs: 400, bossBarRadius: 10, meleeRange: 2.5, meleeHalfAngle: Math.PI / 3, pickupRange: 2,
+  skills: {
+    heavy: { key: 'E', name: '重斩', damage: 50, rageCost: 30, range: 2.5, halfAngle: Math.PI / 3, cooldownMs: 1200 },
+    sweep: { key: 'R', name: '横扫', damage: 80, rageCost: 50, range: 3.5, halfAngle: Math.PI / 2, cooldownMs: 3000 },
+  },
+};
+export const projectReady = path => ({ active: true, archive_service_ready: true, path,
+  pending: 0, failed: 0, ready: 2, total: 2, loading: false });

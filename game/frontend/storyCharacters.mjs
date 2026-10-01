@@ -1,6 +1,7 @@
 /** Models in game/art/models and stable identities owned by the story game. */
 // Maria faces local -Z. Gameplay and the camera use logical +Z instead.
 export const PLAYER_MODEL_YAW_OFFSET = Math.PI;
+export const PROPHET_MODEL_REF = 'story.prophet.placement.v1';
 export const PLAYER_MODEL_REF = 'story.player.facing.v1';
 export const STORY_CHARACTERS = Object.freeze([
   { role: 'player', name: '玩家', guid: 'f9f5c8b0-7324-4b6c-a011-000000000001',
@@ -50,12 +51,12 @@ export function rotatedBounds(bounds, rotation) {
     ...[0, 1, 2].map(axis => Math.max(...points.map(p => p[axis])))];
 }
 export function characterTransform(character, localBounds, savedGeometry = null) {
-  const rotation = character.role === 'player' && vector3(savedGeometry?.rotation)
+  const rotation = ['player', 'prophet'].includes(character.role) && vector3(savedGeometry?.rotation)
     ? [...savedGeometry.rotation] : [...character.rotation];
   const bounds = rotatedBounds(localBounds, rotation);
   const extent = [0, 1, 2].map(i => bounds[i + 3] - bounds[i]);
   const scale = character.height ? character.height / extent[1] : character.size / Math.max(...extent);
-  const position = character.role === 'player' && vector3(savedGeometry?.position)
+  const position = ['player', 'prophet'].includes(character.role) && vector3(savedGeometry?.position)
     ? [...savedGeometry.position] : [character.x, -bounds[1] * scale, character.z];
   return { position, rotation, scale: [scale, scale, scale] };
 }

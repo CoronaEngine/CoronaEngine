@@ -61,7 +61,7 @@ test('project lifecycle callers use editorApi for pure project operations', () =
     'getRecentProjects',
     'choosePortableSceneTarget',
     'openProjectFile',
-    'createWorldProject',
+    // createWorldProject now owns the serialized loading/timeout fence, not a pure call.
     'createMultiplayerProject',
     'setProjectMode',
   ];

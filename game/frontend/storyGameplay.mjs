@@ -22,8 +22,9 @@ export function distanceToBounds(position, bounds) {
   if (!vector3(position) || !hasUsableBounds(bounds)) return Infinity;
   return Math.hypot(...[0, 2].map(axis => Math.max(bounds[axis] - position[axis], 0, position[axis] - bounds[axis + 3])));
 }
+export const canAct = player => Boolean(player?.grounded && player.movementState !== 'dodging');
 export function canHitBoss(player, bounds, config) {
-  if (!player?.grounded || !Number.isFinite(player.facingYaw)
+  if (!canAct(player) || !Number.isFinite(player.facingYaw)
     || distanceToBounds(player.position, bounds) > config.meleeRange) return false;
   const dx = (bounds[0] + bounds[3]) / 2 - player.position[0];
   const dz = (bounds[2] + bounds[5]) / 2 - player.position[2];
@@ -32,7 +33,7 @@ export function canHitBoss(player, bounds, config) {
     / length >= Math.cos(config.meleeHalfAngle) - 1e-9;
 }
 export function pickupDistance(player, drop) {
-  return player?.grounded && vector3(drop?.position)
+  return canAct(player) && vector3(drop?.position)
     ? Math.hypot(player.position[0] - drop.position[0], player.position[2] - drop.position[2]) : Infinity;
 }
 export function unwrapGameplay(value) {
@@ -45,6 +46,7 @@ export function createStoryGameplay({ api, projectPath, readPlayer, readBoss,
   trackWork = promise => promise, now = () => performance.now(), newId = () => crypto.randomUUID(),
   requestTimeoutMs = 15_000 }) {
   let data = null, pending = null, inFlight = null, visualDirty = false, lastAttack = -Infinity;
+  const skillUntil = { heavy: -Infinity, sweep: -Infinity };
   async function request(payload) {
     let timer;
     try {
@@ -52,7 +54,7 @@ export function createStoryGameplay({ api, projectPath, readPlayer, readBoss,
       // feeds state: a late transport reply cannot overwrite a confirmed retry.
       // Retrying the same operation ID is safe even if its first reply is lost.
       return await Promise.race([
-        api.scratch.sendKeyEvent(GAMEPLAY_KEY, '', JSON.stringify({ projectPath, ...payload })),
+        trackWork(api.scratch.sendKeyEvent(GAMEPLAY_KEY, '', JSON.stringify({ projectPath, ...payload }))),
         new Promise((_, reject) => {
           timer = setTimeout(() => reject(new Error('玩法请求超时，结果尚未确认，请重试')), requestTimeoutMs);
         }),
@@ -87,8 +89,10 @@ export function createStoryGameplay({ api, projectPath, readPlayer, readBoss,
         pending = null; visualDirty = true;
         // Already committed; visual retry must not resend or grant the reward again.
         await applyVisuals();
-        onFeedback(operation.action === 'pickupDrop' ? '获得 世界碎片 ×1'
-          : data.state.boss.hp === 0 ? 'Boss 已击败 · 世界碎片已掉落' : `命中 −${data.config.damage}`);
+        if (operation.action === 'pickupDrop') onFeedback('获得 世界碎片 ×1');
+        else if (data.state.boss.hp === 0 && (operation.action === 'hitBoss' || operation.hit)) {
+          onFeedback('Boss 已击败 · 小世界已开启');
+        }
       } else await applyVisuals();
     })();
     inFlight = trackWork(work);
@@ -112,7 +116,7 @@ export function createStoryGameplay({ api, projectPath, readPlayer, readBoss,
     attack() {
       if (inFlight) return inFlight;
       if (pending || visualDirty) return flush();
-      if (!data || data.role !== 'main' || data.state.boss.hp <= 0 || !readPlayer()?.grounded) return Promise.resolve(false);
+      if (!data || data.role !== 'main' || data.state.boss.hp <= 0 || !canAct(readPlayer())) return Promise.resolve(false);
       const time = now(), boss = readBoss(), bounds = worldBounds(boss);
       if (time - lastAttack < data.config.cooldownMs) return Promise.resolve(false);
       lastAttack = time;
@@ -120,6 +124,31 @@ export function createStoryGameplay({ api, projectPath, readPlayer, readBoss,
         onFeedback('靠近并面向 Boss 后攻击'); return Promise.resolve(false);
       }
       return commit('hitBoss', { bossPosition: [boss.geometry.position[0], 0, boss.geometry.position[2]] });
+    },
+    skillStatus(skillId) {
+      const skill = data?.config.skills?.[skillId];
+      if (!skill) return { available: false, remainingMs: 0, reason: '未就绪' };
+      const remainingMs = Math.max(0, skillUntil[skillId] - now());
+      const reason = data.role !== 'main' ? '小世界禁用' : remainingMs > 0 ? '冷却中'
+        : data.state.rage < skill.rageCost ? '怒气不足' : !canAct(readPlayer()) ? '动作中' : '';
+      return { available: !reason && !pending && !visualDirty && !inFlight
+        && now() - lastAttack >= data.config.cooldownMs, remainingMs, reason };
+    },
+    castSkill(skillId) {
+      if (inFlight) return inFlight;
+      if (pending || visualDirty) return flush();
+      const skill = data?.config.skills?.[skillId];
+      if (!skill || data.role !== 'main' || !canAct(readPlayer())) return Promise.resolve(false);
+      const time = now();
+      if (time - lastAttack < data.config.cooldownMs || time < skillUntil[skillId]) return Promise.resolve(false);
+      if (data.state.rage < skill.rageCost) { onFeedback('怒气不足'); return Promise.resolve(false); }
+      const boss = readBoss();
+      const hit = data.state.boss.hp > 0 && canHitBoss(readPlayer(), worldBounds(boss),
+        { meleeRange: skill.range, meleeHalfAngle: skill.halfAngle });
+      lastAttack = time;
+      skillUntil[skillId] = time + skill.cooldownMs;
+      return commit('castSkill', { skillId, hit,
+        ...(hit ? { bossPosition: [boss.geometry.position[0], 0, boss.geometry.position[2]] } : {}) });
     },
     pickup() {
       if (inFlight) return inFlight;

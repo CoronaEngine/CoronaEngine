@@ -1954,13 +1954,11 @@ class ScratchTool:
             from game.runtime.story_gameplay import handle_gameplay_request
 
             return handle_gameplay_request(display_key)
-        mods = [m.strip() for m in modifiers.split(",") if m.strip()] if modifiers else []
-        if key in ("KeyO", "KeyP", "o", "p", "O", "P"):
-            from game.runtime.story_navigation import handle_story_key
+        if key == "__corona_story_navigation_v1__":
+            from game.runtime.story_navigation import handle_navigation_request
 
-            navigation = handle_story_key(key, mods)
-            if navigation is not None:
-                return navigation
+            return handle_navigation_request(display_key)
+        mods = [m.strip() for m in modifiers.split(",") if m.strip()] if modifiers else []
         corona_engine_scratch.handle_key_event(key, mods, display_key or key)
         return {"status": "ok"}
 

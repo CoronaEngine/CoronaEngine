@@ -48,8 +48,8 @@ async function mountCreationPage(t, { creative = true, stopResult = idle(), wrap
     localStorage: { setItem: (...args) => saves.push(args) },
     dispatchEvent() {},
     alert: message => alerts.push(message),
-    setInterval: callback => { const id = timers.size + 1; timers.set(id, callback); return id; },
-    clearInterval: id => timers.delete(id),
+    setTimeout: callback => { const id = timers.size + 1; timers.set(id, callback); return id; },
+    clearTimeout: id => timers.delete(id),
   };
   globalThis.alert = globalThis.window.alert;
   globalThis.CustomEvent = class { constructor(type, options) { Object.assign(this, { type }, options); } };
@@ -60,7 +60,7 @@ async function mountCreationPage(t, { creative = true, stopResult = idle(), wrap
     worldMode.worldModeService.invalidate();
   });
   t.mock.method(console, 'error', () => {});
-  t.mock.method(editorApi.project, 'getProjectLoadStatus', async () => wrap({ archive_service_ready: true }));
+  t.mock.method(editorApi.project, 'getProjectLoadStatus', async () => wrap({ archive_service_ready: true, path: activePath, pending: 0, failed: 0, loading: false }));
   t.mock.method(editorApi.projectSettings, 'getActiveProjectInfo', async () => wrap({ project_path: activePath, mode: activeMode }));
   t.mock.method(editorApi.project, 'createWorldProject', async payload => {
     calls.push(['create', payload]);
@@ -101,8 +101,7 @@ async function mountCreationPage(t, { creative = true, stopResult = idle(), wrap
     '@/i18n/domTranslator.js': { translateUiText: text => text },
   });
   const page = component.setup({}, { expose() {} });
-  for (const hook of mounted) hook();
-  await page.refreshArchiveReady();
+  for (const hook of mounted) await hook();
   assert.equal(page.mode.value, 'story');
   assert.match(descriptor.template.content, /@click="handleCreate"/);
   return {

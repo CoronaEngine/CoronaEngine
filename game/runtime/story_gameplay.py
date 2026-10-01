@@ -17,15 +17,21 @@ REQUEST_KEY = '__corona_story_gameplay_v1__'
 SAVE_PATH = Path('.game/story-gameplay.json')
 DROP_ID = 'story.boss.world-fragment'
 CONFIG = {
-    'playerHp': 100, 'playerMp': 100, 'bossHp': 200, 'damage': 20,
+    'playerHp': 100, 'rageMax': 100, 'ragePerHit': 10, 'bossHp': 200, 'damage': 20,
     'cooldownMs': 400, 'bossBarRadius': 10, 'meleeRange': 2.5,
     'meleeHalfAngle': math.pi / 3, 'pickupRange': 2,
+    'skills': {
+        'heavy': {'name': '重斩', 'key': 'E', 'damage': 50, 'rageCost': 30,
+                  'range': 2.5, 'halfAngle': math.pi / 3, 'cooldownMs': 1200},
+        'sweep': {'name': '横扫', 'key': 'R', 'damage': 80, 'rageCost': 50,
+                  'range': 3.5, 'halfAngle': math.pi, 'cooldownMs': 3000},
+    },
 }
 _lock = threading.RLock()
 
 
 def initial_state():
-    return {'version': 1, 'revision': 0, 'boss': {'hp': CONFIG['bossHp']},
+    return {'version': 2, 'revision': 0, 'legacyRevision': 0, 'rage': 0, 'boss': {'hp': CONFIG['bossHp']},
             'drop': None, 'inventory': {'worldFragment': 0}, 'operations': []}
 
 
@@ -34,7 +40,7 @@ def _vector(value):
             and all(type(n) in (int, float) and math.isfinite(n) and abs(n) < 1e7 for n in value))
 
 
-def _validate(state):
+def _validate_v1(state):
     """Reject broken saves instead of resetting a previously earned reward."""
     if not isinstance(state, dict) or state.get('version') != 1:
         raise ValueError('不支持的玩法存档版本')
@@ -63,6 +69,94 @@ def _validate(state):
     elif (not isinstance(drop, dict) or drop.get('id') != DROP_ID
           or not _vector(drop.get('position')) or type(drop.get('collected')) is not bool
           or drop['collected'] != bool(count)):
+        raise ValueError('世界碎片状态无效')
+    return state
+
+
+def _operation(request):
+    """Canonical durable command; clients never choose damage or resource costs."""
+    action = request.get('action')
+    if action not in ('hitBoss', 'castSkill', 'pickupDrop'):
+        raise ValueError('未知玩法操作')
+    ident, revision = request.get('operationId'), request.get('expectedRevision')
+    if not isinstance(ident, str) or str(uuid.UUID(ident)) != ident:
+        raise ValueError('无效的玩法操作 ID')
+    if type(revision) is not int or revision < 0:
+        raise ValueError('无效的玩法存档版本号')
+    operation = {'operationId': ident, 'action': action, 'expectedRevision': revision}
+    if action == 'castSkill':
+        if request.get('skillId') not in CONFIG['skills'] or type(request.get('hit')) is not bool:
+            raise ValueError('无效的技能或命中结果')
+        operation.update(skillId=request['skillId'], hit=request['hit'])
+    if action == 'hitBoss' or (action == 'castSkill' and operation['hit']):
+        if not _vector(request.get('bossPosition')):
+            raise ValueError('Boss 掉落位置无效')
+        operation['bossPosition'] = request['bossPosition']
+    if action == 'pickupDrop':
+        if request.get('dropId') != DROP_ID:
+            raise ValueError('未知的世界碎片')
+        operation['dropId'] = DROP_ID
+    return operation
+
+
+def _apply(state, operation, *, legacy=False):
+    action, damage = operation['action'], 0
+    if action == 'hitBoss':
+        if state['boss']['hp'] <= 0:
+            raise ValueError('Boss 已死亡')
+        damage = CONFIG['damage']
+        if not legacy:
+            state['rage'] = min(CONFIG['rageMax'], state['rage'] + CONFIG['ragePerHit'])
+    elif action == 'castSkill':
+        if legacy:
+            raise ValueError('旧版操作记录不能包含技能')
+        skill = CONFIG['skills'][operation['skillId']]
+        if state['rage'] < skill['rageCost']:
+            raise ValueError('怒气不足')
+        if operation['hit'] and state['boss']['hp'] <= 0:
+            raise ValueError('Boss 已死亡，不能再次命中')
+        state['rage'] -= skill['rageCost']
+        damage = skill['damage'] if operation['hit'] else 0
+    else:
+        if state['drop'] is None or state['drop']['collected']:
+            raise ValueError('世界碎片不可拾取')
+        state['drop']['collected'] = True
+        state['inventory']['worldFragment'] += 1
+    if damage:
+        state['boss']['hp'] = max(0, state['boss']['hp'] - damage)
+        if state['boss']['hp'] == 0:
+            state['drop'] = {'id': DROP_ID, 'position': operation['bossPosition'], 'collected': False}
+
+
+def _validate(state):
+    if not isinstance(state, dict) or type(state.get('version')) is not int:
+        raise ValueError('不支持的玩法存档版本')
+    if state['version'] == 1:
+        _validate_v1(state)
+        state = deepcopy(state)
+        state.update(version=2, legacyRevision=state['revision'], rage=0)
+    if state['version'] != 2:
+        raise ValueError('不支持的玩法存档版本')
+    revision, boundary, operations = state['revision'], state['legacyRevision'], state['operations']
+    if (type(revision) is not int or revision < 0 or type(boundary) is not int
+            or not 0 <= boundary <= min(revision, 11) or not isinstance(operations, list)
+            or len(operations) != revision or type(state['rage']) is not int
+            or type(state['boss']['hp']) is not int or type(state['inventory']['worldFragment']) is not int):
+        raise ValueError('玩法状态或存档版本号无效')
+    replay, seen = initial_state(), set()
+    for i, operation in enumerate(operations):
+        if not isinstance(operation, dict) or _operation(operation) != operation:
+            raise ValueError('玩法操作记录无效')
+        ident = operation['operationId']
+        if ident in seen or operation['expectedRevision'] != i:
+            raise ValueError('玩法操作记录无效')
+        seen.add(ident)
+        _apply(replay, operation, legacy=i < boundary)
+    for key in ('boss', 'drop', 'inventory', 'rage'):
+        if replay[key] != state[key]:
+            raise ValueError('玩法状态与操作记录不一致')
+    drop = state['drop']
+    if drop is not None and (type(drop.get('collected')) is not bool or not _vector(drop.get('position'))):
         raise ValueError('世界碎片状态无效')
     return state
 
@@ -97,12 +191,12 @@ def _write(root, state, assert_source):
 
 
 def handle_gameplay_request(payload: str, *, api=None):
-    """Only three domain actions; no caller-selected write path or arbitrary code."""
+    """Only bounded domain actions; no caller-selected write path or arbitrary code."""
     try:
         if not isinstance(payload, str) or len(payload) > 8192:
             raise ValueError('玩法请求格式无效')
         request = json.loads(payload)
-        if not isinstance(request, dict) or request.get('action') not in ('load', 'hitBoss', 'pickupDrop'):
+        if not isinstance(request, dict) or request.get('action') not in ('load', 'hitBoss', 'castSkill', 'pickupDrop'):
             raise ValueError('未知玩法操作')
         if not isinstance(request.get('projectPath'), str) or not request['projectPath'].strip():
             raise ValueError('缺少来源世界')
@@ -137,21 +231,9 @@ def handle_gameplay_request(payload: str, *, api=None):
                     return response()
                 if role != 'main':
                     raise ValueError('子世界没有 Boss 或战斗掉落')
-                operation_id = request.get('operationId')
-                if not isinstance(operation_id, str) or str(uuid.UUID(operation_id)) != operation_id:
-                    raise ValueError('无效的玩法操作 ID')
-                expected = request.get('expectedRevision')
-                if type(expected) is not int or expected < 0:
-                    raise ValueError('无效的玩法存档版本号')
-                operation = {'operationId': operation_id, 'action': action, 'expectedRevision': expected}
-                if action == 'hitBoss':
-                    if not _vector(request.get('bossPosition')):
-                        raise ValueError('Boss 掉落位置无效')
-                    operation['bossPosition'] = request['bossPosition']
-                else:
-                    if request.get('dropId') != DROP_ID:
-                        raise ValueError('未知的世界碎片')
-                    operation['dropId'] = DROP_ID
+                operation = _operation(request)
+                operation_id = operation['operationId']
+                expected = operation['expectedRevision']
                 prior = next((item for item in state['operations'] if item['operationId'] == operation_id), None)
                 if prior is not None:
                     if prior != operation:
@@ -160,17 +242,7 @@ def handle_gameplay_request(payload: str, *, api=None):
                 if expected != state['revision']:
                     return response('error', code='REVISION_CONFLICT', message='玩法进度已更新，已重新同步，请重试')
                 next_state = deepcopy(state)
-                if action == 'hitBoss':
-                    if state['boss']['hp'] <= 0:
-                        raise ValueError('Boss 已死亡')
-                    next_state['boss']['hp'] = max(0, state['boss']['hp'] - CONFIG['damage'])
-                    if next_state['boss']['hp'] == 0:
-                        next_state['drop'] = {'id': DROP_ID, 'position': request['bossPosition'], 'collected': False}
-                else:
-                    if state['drop'] is None or state['drop']['collected']:
-                        raise ValueError('世界碎片不可拾取')
-                    next_state['drop']['collected'] = True
-                    next_state['inventory']['worldFragment'] += 1
+                _apply(next_state, operation)
                 next_state['revision'] += 1
                 next_state['operations'].append(operation)
                 _validate(next_state)

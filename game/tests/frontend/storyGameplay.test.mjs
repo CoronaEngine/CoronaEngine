@@ -2,13 +2,12 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createStoryGameplay, GAMEPLAY_KEY, FRAGMENT, worldBounds, canHitBoss, distanceToBounds } from '../../frontend/storyGameplay.mjs';
 import { STORY_CHARACTERS, rotatePoint } from '../../frontend/storyCharacters.mjs';
-import { actorFixture, apiFixture, deferred, url } from './fixtures.mjs';
+import { actorFixture, apiFixture, deferred, url, gameplayConfig } from './fixtures.mjs';
 import { ensureStoryCharacters } from '../../frontend/storyActors.mjs';
 
-const config = { playerHp: 100, playerMp: 100, bossHp: 200, damage: 20, cooldownMs: 400,
-  bossBarRadius: 10, meleeRange: 2.5, meleeHalfAngle: Math.PI / 3, pickupRange: 2 };
+const config = gameplayConfig;
 function fixture() {
-  let state = { version: 1, revision: 0, boss: { hp: 200 }, drop: null, inventory: { worldFragment: 0 } };
+  let state = { version: 2, revision: 0, rage: 0, boss: { hp: 200 }, drop: null, inventory: { worldFragment: 0 } };
   let role = 'main', time = 0, id = 0, fail = false, lostReply = false, visualFail = false, gate = null, replyGate = null;
   const boss = actorFixture(STORY_CHARACTERS[1]), bounds = worldBounds(boss);
   const player = { position: [0, 0, bounds[2] - 1], rotation: [0, Math.PI, 0], facingYaw: 0, grounded: true };
@@ -29,7 +28,12 @@ function fixture() {
         state.revision++;
         if (request.action === 'hitBoss') {
           state.boss.hp -= 20;
+          state.rage = Math.min(config.rageMax, state.rage + config.ragePerHit);
           if (!state.boss.hp) state.drop = { id: 'story.boss.world-fragment', position: request.bossPosition, collected: false };
+        } else if (request.action === 'castSkill') {
+          const skill = config.skills[request.skillId];
+          state.rage -= skill.rageCost;
+          if (request.hit) state.boss.hp = Math.max(0, state.boss.hp - skill.damage);
         } else { state.drop.collected = true; state.inventory.worldFragment++; }
       }
       if (lostReply) { lostReply = false; throw new Error('reply lost'); }
@@ -38,7 +42,7 @@ function fixture() {
       return reply;
     } } } });
   return { game, player, boss, requests, feedback, states, visuals,
-    tick: () => { time += 400; }, fail: value => { fail = value; }, loseReply: () => { lostReply = true; },
+    tick: (ms = 400) => { time += ms; }, fail: value => { fail = value; }, loseReply: () => { lostReply = true; },
     failVisual: value => { visualFail = value; }, gate: value => { gate = value; }, role: value => { role = value; },
     delayReply: value => { replyGate = value; },
     get state() { return state; }, conflict: () => { state.revision++; state.boss.hp -= 20; } };
@@ -138,7 +142,7 @@ test('child hides copied boss and fragment and never creates either', async () =
   const empty = apiFixture();
   await ensureStoryCharacters({ api: empty.api, sceneId: 'scene.ini', frontendUrl: url,
     gameplay: { role: 'child', state: { boss: { hp: 0 }, drop: null } } });
-  assert.equal(empty.calls.filter(c => c[0] === 'create').length, 3);
+  assert.equal(empty.calls.filter(c => c[0] === 'create').length, 2);
   assert.equal(empty.get(STORY_CHARACTERS[1].guid), undefined);
 });
 
@@ -183,7 +187,7 @@ test('a missing initial load reply fails visibly without accepting its late stat
   t.mock.timers.tick(15_001); await rejected;
   assert.equal(game.data, null);
   reply.resolve({ status: 'ok', role: 'main', config,
-    state: { version: 1, revision: 0, boss: { hp: 200 }, drop: null, inventory: { worldFragment: 0 } } });
+    state: { version: 2, revision: 0, rage: 0, boss: { hp: 200 }, drop: null, inventory: { worldFragment: 0 } } });
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(game.data, null);
   assert.deepEqual(accepted, []);
@@ -200,4 +204,47 @@ test('airborne attacks and pickups never mutate progress or consume the next gro
   await f.game.pickup(); assert.equal(f.state.inventory.worldFragment, 0);
   f.player.position[1] = 0; f.player.grounded = true;
   await f.game.pickup(); assert.equal(f.state.inventory.worldFragment, 1);
+});
+
+test('normal hits and misses keep the shared action interval without showing skill cooldowns', async () => {
+  for (const hit of [true, false]) {
+    const f = fixture(); f.state.rage = 100; await f.game.load();
+    if (!hit) f.player.facingYaw = Math.PI;
+    await f.game.attack();
+    for (const id of ['heavy', 'sweep']) {
+      assert.equal(f.game.skillStatus(id).remainingMs, 0);
+      assert.equal(f.game.skillStatus(id).available, false);
+    }
+    const commands = f.requests.length;
+    await f.game.castSkill('heavy'); assert.equal(f.requests.length, commands);
+    f.tick(399); assert.equal(f.game.skillStatus('heavy').available, false);
+    f.tick(1); assert.equal(f.game.skillStatus('heavy').available, true);
+  }
+});
+test('E and R count only their own cooldowns, with unchanged rage costs and durations', async () => {
+  const f = fixture(); f.state.rage = 100; await f.game.load();
+  await f.game.castSkill('heavy');
+  assert.equal(f.game.skillStatus('heavy').remainingMs, 1200);
+  assert.equal(f.game.skillStatus('sweep').remainingMs, 0);
+  assert.equal(f.state.rage, 70); assert.equal(f.state.boss.hp, 150);
+  f.tick(); await f.game.castSkill('sweep');
+  assert.equal(f.game.skillStatus('heavy').remainingMs, 800);
+  assert.equal(f.game.skillStatus('sweep').remainingMs, 3000);
+  assert.equal(f.state.rage, 20); assert.equal(f.state.boss.hp, 70);
+  f.tick(800); await f.game.attack();
+  assert.equal(f.game.skillStatus('heavy').remainingMs, 0);
+  assert.equal(f.game.skillStatus('sweep').remainingMs, 2200);
+});
+test('insufficient rage, dodging and pending acknowledgements cannot start another skill cooldown', async () => {
+  const f = fixture(); await f.game.load();
+  await f.game.castSkill('heavy'); await f.game.castSkill('sweep');
+  assert.equal(f.requests.length, 1);
+  assert.equal(f.game.skillStatus('heavy').remainingMs, 0);
+  f.state.rage = 100; await f.game.load(); f.player.movementState = 'dodging';
+  await f.game.castSkill('heavy'); assert.equal(f.game.skillStatus('heavy').remainingMs, 0);
+  f.player.movementState = 'idle'; const gate = deferred(); f.gate(gate);
+  const casting = f.game.castSkill('heavy'); f.tick(); const duplicate = f.game.castSkill('sweep');
+  assert.equal(f.game.skillStatus('sweep').remainingMs, 0);
+  assert.equal(f.game.skillStatus('sweep').available, false);
+  gate.resolve(); await Promise.all([casting, duplicate]);
 });

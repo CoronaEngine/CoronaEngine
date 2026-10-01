@@ -80,15 +80,15 @@ test('cancellation after an in-flight import never schedules another mutation', 
 test('GPU failure and timeout are not reported as successful initialization', async () => {
   const f = apiFixture({ actors: STORY_CHARACTERS.map(c => actorFixture(c)) });
   f.get(PLAYER_GUID).render_failed = true;
-  await assert.rejects(load(f), /玩家渲染失败/);
+  await assert.rejects(load(f), /玩家加载失败.*模型渲染失败/);
   f.get(PLAYER_GUID).render_failed = false; f.get(PLAYER_GUID).render_ready = false; f.get(PLAYER_GUID).gpu_build_state = 'Pending';
-  await assert.rejects(load(f, { renderAttempts: 2 }), /超时.*玩家/);
+  await assert.rejects(load(f, { renderAttempts: 2 }), /玩家.*超时/);
 });
 
 test('GPU Ready without valid render slots still waits for actual render readiness', async () => {
   const f = apiFixture({ actors: STORY_CHARACTERS.map(c => actorFixture(c)) });
   f.get(PLAYER_GUID).render_ready = false; f.get(PLAYER_GUID).gpu_build_state = 'Ready';
-  await assert.rejects(load(f, { renderAttempts: 2 }), /超时.*玩家.*Maria/);
+  await assert.rejects(load(f, { renderAttempts: 2 }), /玩家.*Maria.*超时/);
 });
 
 
@@ -226,17 +226,19 @@ test('legacy incomplete import receives the default corrected pose, not a second
   assert.ok(f.get(PLAYER_GUID).geometry.position[1] > 0);
   assert.equal(f.state.actors.length, 4);
 });
-test('existing NPC GUIDs are moved behind spawn in both worlds; corrected dragon bounds stay grounded', async () => {
+test('main hides NPCs; child reuses only prophet; corrected dragon bounds stay grounded', async () => {
   for (const role of ['main', 'child']) {
     const actors = STORY_CHARACTERS.map(c => actorFixture(c));
     actors[1].geometry.rotation = [Math.PI / 2, Math.PI, 0];
     actors[2].geometry.position = [-4, 0, 4]; actors[3].geometry.position = [4, 0, 4];
     const f = apiFixture({ actors });
     await load(f, { gameplay: { role, state: { boss: { hp: 200 }, drop: null } } });
-    assert.deepEqual(f.get(STORY_CHARACTERS[2].guid).geometry.position.filter((_, i) => i !== 1), [-30, -15]);
-    assert.deepEqual(f.get(STORY_CHARACTERS[3].guid).geometry.position.filter((_, i) => i !== 1), [30, -15]);
+    assert.deepEqual(f.get(STORY_CHARACTERS[2].guid).geometry.position.filter((_, i) => i !== 1), [-4, 4]);
+    assert.deepEqual(f.get(STORY_CHARACTERS[3].guid).geometry.position.filter((_, i) => i !== 1), [4, 4]);
     assert.equal(f.calls.filter(call => call[0] === 'create').length, 0);
     assert.equal(f.state.actors.length, 4);
+    assert.equal(f.get(STORY_CHARACTERS[2].guid).visible, false);
+    assert.equal(f.get(STORY_CHARACTERS[3].guid).visible, role === 'child');
     const boss = f.get(STORY_CHARACTERS[1].guid);
     if (role === 'main') {
       assert.deepEqual(boss.geometry.rotation, [Math.PI / 2, 0, 0]);
@@ -244,4 +246,25 @@ test('existing NPC GUIDs are moved behind spawn in both worlds; corrected dragon
       assert.ok(Math.abs(bounds[1] * boss.geometry.scale[1] + boss.geometry.position[1]) < 1e-9);
     } else assert.equal(boss.visible, false);
   }
+});
+
+
+test('each character reaches real render readiness before the next character is submitted', async () => {
+  const f = apiFixture(), gate = deferred(), entered = deferred();
+  const create = f.api.sceneTools.createActor;
+  f.api.sceneTools.createActor = async (...args) => {
+    const result = await create(...args);
+    if (args[3].actor_guid === PLAYER_GUID) {
+      f.get(PLAYER_GUID).render_ready = false;
+      (result.data ?? result).actor.render_ready = false;
+    }
+    return result;
+  };
+  const loading = load(f, { wait: async ms => { assert.equal(ms, 200); entered.resolve(); await gate.promise; } });
+  await entered.promise;
+  assert.deepEqual(f.calls.filter(c => c[0] === 'create').map(c => c[1]), [PLAYER_GUID]);
+  f.get(PLAYER_GUID).render_ready = true;
+  gate.resolve();
+  await loading;
+  assert.deepEqual(f.calls.filter(c => c[0] === 'create').map(c => c[1]), STORY_CHARACTERS.map(c => c.guid));
 });

@@ -10,6 +10,7 @@ import { worldModeService, worldModeState } from '../../src/services/worldModeSe
 
 function nativeSurface(t) {
   const sent = [];
+  t.mock.method(editorApi.project, 'getProjectLoadStatus', async () => ({ path: 'story', archive_service_ready: true, pending: 0, failed: 0, loading: false }));
   const surface = { coronaBridge: { dockCommand: payload => sent.push(JSON.parse(payload)) },
     localStorage: memoryStorage(), dispatchEvent() {} };
   const previous = globalThis.window;

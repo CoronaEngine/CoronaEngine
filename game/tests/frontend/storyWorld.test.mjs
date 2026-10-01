@@ -13,12 +13,16 @@ import { createStoryCameraController } from '../../../editor/Frontend/src/utils/
 import { editorApi } from '../../../editor/Frontend/src/api/editorApi.js';
 import * as launcher from '../../../editor/Frontend/src/services/projectLauncherService.js';
 import * as worldMode from '../../../editor/Frontend/src/services/worldModeService.js';
+import * as loadingService from '../../../editor/Frontend/src/services/worldLoadingService.js';
+import * as worldLoading from '../../frontend/worldLoading.mjs';
+import { NAVIGATION_KEY } from '../../frontend/storyNavigation.mjs';
+import { gameplayConfig, projectReady } from './fixtures.mjs';
 import * as lifecycle from '../../../editor/Frontend/src/services/worldSessionLifecycle.js';
 import lanchat from '../../../editor/Frontend/src/stores/lanchat.js';
 
 const require = createRequire(new URL('../../../editor/Frontend/package.json', import.meta.url));
 const vue = require('vue');
-const { ref, proxyRefs } = vue;
+const { ref, proxyRefs, nextTick } = vue;
 const { parse, compileScript, compileTemplate, babelParse } = require('vue/compiler-sfc');
 const { descriptor } = parse(fs.readFileSync(new URL('../../../editor/Frontend/src/views/layout/StoryWorld.vue', import.meta.url), 'utf8'));
 const compiled = compileScript(descriptor, { id: 'story-navigation-test', genDefaultAs: 'StoryWorld' });
@@ -47,6 +51,7 @@ function findNode(node, predicate) {
 const turn = () => new Promise(resolve => setImmediate(resolve));
 const deferred = () => { let resolve, reject; const promise = new Promise((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; };
 const MAIN = 'D:/story', CHILD = `${MAIN}/.game/subworld`;
+function clickWorld(page) { if (!page.instance.inventoryOpen.value) page.instance.toggleInventory(); void page.instance.navigateWorld(); }
 const event = (props = {}) => ({ code: 'KeyO', preventDefault() { this.defaultPrevented = true; }, stopPropagation() {}, ...props });
 const pose = position => ({ name: 'main', position, forward: [0, 0, 1], world_up: [0, 1, 0], fov: 65 });
 
@@ -79,6 +84,7 @@ async function fixture(t, options = {}) {
   globalThis.cancelAnimationFrame = id => frames.delete(id);
 
   t.mock.method(editorApi.projectSettings, 'getActiveProjectInfo', async () => ({ project_path: activePath, mode: 'story' }));
+  t.mock.method(editorApi.project, 'getProjectLoadStatus', async () => options.loadStatus ? options.loadStatus(activePath) : projectReady(activePath));
   t.mock.method(editorApi.main, 'onInit', async () => options.init ? options.init() : { scenes: [{ path: 'scene.ini' }], active_index: 0 });
   t.mock.method(editorApi.scene, 'setActorTransform', async (sceneId, guid, transform) => {
     const source = activePath;
@@ -107,15 +113,16 @@ async function fixture(t, options = {}) {
     if (key === gameplayModule.GAMEPLAY_KEY) {
       if (options.gameplay) return options.gameplay(JSON.parse(displayKey));
       return { status: 'ok', role: activePath === MAIN ? 'main' : 'child',
-        state: { version: 1, revision: 0, boss: { hp: 200 }, drop: null, inventory: { worldFragment: 0 } },
-        config: { playerHp: 100, playerMp: 100, bossHp: 200, damage: 20, cooldownMs: 400,
-          bossBarRadius: 10, meleeRange: 2.5, meleeHalfAngle: Math.PI / 3, pickupRange: 2 } };
+        state: { version: 2, revision: 0, rage: 0, boss: { hp: 0 }, drop: null, inventory: { worldFragment: 0 } },
+        config: gameplayConfig };
     }
     calls.push(['key', key, mods, displayKey]);
     if (options.prepare) return options.prepare(key);
-    if ((activePath === CHILD && key === 'KeyO') || (activePath === MAIN && key === 'KeyP')) return { status: 'noop' };
+    const { direction } = JSON.parse(displayKey);
+    assert.equal(key, NAVIGATION_KEY);
+    if ((activePath === CHILD && direction === 'enter') || (activePath === MAIN && direction === 'exit')) return { status: 'noop' };
     return { data: { status: 'ok', navigation: { source: activePath, target: activePath === MAIN ? CHILD : MAIN,
-      direction: key === 'KeyO' ? 'enter' : 'exit', mode: 'story' } } };
+      direction, mode: 'story' } } };
   });
   t.mock.method(editorApi.project, 'openProject', async path => {
     calls.push(['nativeOpen', path]);
@@ -134,14 +141,16 @@ async function fixture(t, options = {}) {
   function mount() {
     const mounted = [], unmounted = [];
     const component = makeComponent({
-      vue: { ref, onMounted: fn => mounted.push(fn), onUnmounted: fn => unmounted.push(fn) },
+      vue: { ref, nextTick, onMounted: fn => mounted.push(fn), onUnmounted: fn => unmounted.push(fn) },
       'vue-router': { onBeforeRouteLeave() {}, useRouter: () => ({ replace: async path => { route = path; } }) },
       '@/api/editorApi.js': { editorApi },
       '@/services/worldModeService.js': worldMode,
       '@/services/projectLauncherService.js': launcher,
       '@/services/worldSessionLifecycle.js': lifecycle,
+      '@/services/worldLoadingService.js': loadingService,
+      '../../../../../game/frontend/worldLoading.mjs': worldLoading,
       '@/utils/viewportStoryCamera.js': { createStoryCameraController },
-      '../../../../../game/frontend/storyNavigation.mjs': { createStoryNavigationController },
+      '../../../../../game/frontend/storyNavigation.mjs': { createStoryNavigationController, NAVIGATION_KEY },
       '../../../../../game/frontend/storyActors.mjs': { ensureStoryCharacters },
       '../../../../../game/frontend/playerController.mjs': { createPlayerController },
       '../../../../../game/frontend/playerSave.mjs': { createPlayerSave },
@@ -169,14 +178,14 @@ async function fixture(t, options = {}) {
     opens: () => calls.filter(call => call[0] === 'nativeOpen').map(call => call[1]) };
 }
 
-test('real story page O/P retains independent poses, stays story, and never reuses old handles', async t => {
+test('real story page inventory button retains independent poses, stays story, and never reuses old handles', async t => {
   const f = await fixture(t);
   let page = f.mount(); await page.mount();
   page.instance.camera.wheel(event({ deltaY: -100 })); f.step();
   page.instance.onKeyDown(event({ code: 'KeyW' }));
   const stale = [...f.frames.values()][0];
   const mainPose = page.instance.camera.snapshotPose().camera;
-  page.instance.onKeyDown(event());
+  clickWorld(page);
   assert.equal(page.instance.navigation.busy, true);
   const afterLock = page.instance.camera.snapshotPose().camera;
   page.instance.camera.wheel(event({ deltaY: -100 }));
@@ -198,12 +207,12 @@ test('real story page O/P retains independent poses, stays story, and never reus
   page.instance.camera.wheel(event({ deltaY: -1 }));
   f.step();
   const childPose = page.instance.camera.snapshotPose().camera;
-  page.instance.onKeyDown(event({ code: 'KeyP' }));
+  clickWorld(page);
   await turn();
   assert.deepEqual(f.opens(), [CHILD, MAIN]);
   page = f.mount(); await page.mount();
   assert.deepEqual(page.instance.camera.snapshotPose().camera, mainPose);
-  page.instance.onKeyDown(event()); await turn();
+  clickWorld(page); await turn();
   page = f.mount(); await page.mount();
   assert.deepEqual(page.instance.camera.snapshotPose().camera, childPose);
   // Rebinding must restore the controller orbit too, not just display one
@@ -218,8 +227,8 @@ test('real story page O/P retains independent poses, stays story, and never reus
 test('O is ignored before bind; Escape cancels pending init and never binds a stale viewport', async t => {
   const init = deferred();
   const f = await fixture(t, { init: () => init.promise });
-  const page = f.mount(); const mounted = page.mount();
-  page.instance.onKeyDown(event());
+  const page = f.mount(); const mounted = page.mount(); await turn();
+  clickWorld(page);
   assert.ok(!f.calls.some(call => call[0] === 'key'));
   page.instance.onKeyDown(event({ code: 'Escape' }));
   init.resolve({ path: 'scene.ini' }); await mounted; await turn();
@@ -234,12 +243,12 @@ test('real page filters repeated/editable/composition O and locks camera while p
   for (const props of [{ repeat: true }, { ctrlKey: true }, { altKey: true }, { metaKey: true },
     { isComposing: true }, { target: { isContentEditable: true } }]) page.instance.onKeyDown(event(props));
   assert.ok(!f.calls.some(call => call[0] === 'pose'));
-  page.instance.onKeyDown(event()); await turn();
+  clickWorld(page); await turn();
   const pose = page.instance.camera.snapshotPose();
   page.instance.onKeyDown(event({ code: 'KeyW' }));
   page.instance.camera.pointerDown(event({ button: 2 }));
   page.instance.camera.wheel(event({ deltaY: -1 }));
-  page.instance.onKeyDown(event());
+  clickWorld(page);
   assert.equal(f.frames.size, 0);
   assert.deepEqual(page.instance.camera.snapshotPose(), pose);
   prep.resolve({ status: 'error', message: 'copy failed' }); await turn();
@@ -252,7 +261,7 @@ test('Escape during copy ignores its late response and leaves the game page', as
   const prep = deferred();
   const f = await fixture(t, { prepare: () => prep.promise });
   const page = f.mount(); await page.mount();
-  page.instance.onKeyDown(event()); await turn();
+  clickWorld(page); await turn();
   page.instance.onKeyDown(event({ code: 'Escape' }));
   prep.resolve({ status: 'ok', navigation: { source: MAIN, target: CHILD, direction: 'enter', mode: 'story' } });
   await turn();
@@ -265,7 +274,7 @@ test('a newer canonical open drains preparation and prevents late subworld navig
   const prep = deferred();
   const f = await fixture(t, { prepare: () => prep.promise });
   const page = f.mount(); await page.mount();
-  page.instance.onKeyDown(event()); await turn();
+  clickWorld(page); await turn();
   const other = launcher.projectLauncherService.openProject('D:/other'); await turn();
   assert.deepEqual(f.opens(), []); // Python still works against the source scene.
   prep.resolve({ status: 'ok', navigation: { source: MAIN, target: CHILD, direction: 'enter', mode: 'story' } });
@@ -278,7 +287,7 @@ test('a newer canonical open drains preparation and prevents late subworld navig
 test('failed target open recovers through canonical launcher after source disposal', async t => {
   const f = await fixture(t, { open: path => path === CHILD ? { ok: false, message: 'bad asset' } : { ok: true, path } });
   const page = f.mount(); await page.mount();
-  page.instance.onKeyDown(event()); await turn();
+  clickWorld(page); await turn();
   assert.deepEqual(f.opens(), [CHILD, MAIN]);
   assert.equal(worldMode.worldModeState.status, 'ready');
   assert.equal(worldMode.worldModeState.mode, 'story');
@@ -290,7 +299,7 @@ test('failed target open recovers through canonical launcher after source dispos
 test('failed recovery routes to launcher and explains both failures', async t => {
   const f = await fixture(t, { open: () => { throw new Error('native open failed'); } });
   const page = f.mount(); await page.mount();
-  page.instance.onKeyDown(event()); await turn();
+  clickWorld(page); await turn();
   assert.deepEqual(f.opens(), [CHILD, MAIN]);
   assert.equal(f.route, '/StartScreen');
   assert.match(f.alerts[0], /恢复来源世界也失败/);
@@ -300,7 +309,7 @@ test('global Escape during native open invalidates recovery and late mode change
   const opened = deferred();
   const f = await fixture(t, { open: () => opened.promise });
   const page = f.mount(); await page.mount();
-  page.instance.onKeyDown(event()); await turn();
+  clickWorld(page); await turn();
   launcher.cancelPendingProjectOpen(); // App.vue owns Escape after source-page removal.
   opened.reject(new Error('late failure')); await turn();
   assert.deepEqual(f.opens(), [CHILD]);
@@ -372,16 +381,19 @@ test('a timed-out save blocks movement and replacement until its real acknowledg
   t.mock.timers.tick(30_001); await leaving;
   assert.equal(f.route, '/'); assert.match(f.alerts[0], /超时/);
   page.instance.onKeyDown(event({ code: 'KeyW' })); assert.equal(f.frames.size, 0);
-  const opening = launcher.projectLauncherService.openProject(CHILD); await turn();
+  await assert.rejects(launcher.projectLauncherService.openProject(CHILD), /请求未结束/);
   assert.deepEqual(f.opens(), []);
-  saved.resolve(); await opening;
+  saved.resolve(); await turn();
+  // A late acknowledgement never retries automatically. A fresh user action may now open.
+  assert.deepEqual(f.opens(), []);
+  await launcher.projectLauncherService.openProject(CHILD);
   assert.deepEqual(f.opens(), [CHILD]);
   assert.equal(f.calls.filter(c => c[0] === 'playerSave').length, 1);
 });
 
 test('world replacement drains pending initialization and never binds its late result', async t => {
   const init = deferred(); const f = await fixture(t, { init: () => init.promise });
-  const page = f.mount(); const mounting = page.mount();
+  const page = f.mount(); const mounting = page.mount(); await turn();
   const opening = launcher.projectLauncherService.openProject(CHILD); await turn();
   assert.deepEqual(f.opens(), []);
   init.resolve({ path: 'scene.ini' }); await mounting; await opening;
@@ -394,7 +406,7 @@ test('Escape fences a late O result even when the exit save fails', async t => {
   const prep = deferred();
   const f = await fixture(t, { prepare: () => prep.promise });
   const page = f.mount(); await page.mount();
-  page.instance.onKeyDown(event()); await turn();
+  clickWorld(page); await turn();
   // Simulate a failed finalizer, independently of the already saved O snapshot.
   const failed = t.mock.method(page.instance.saveRegistration, 'flush', async () => { throw new Error('exit save failed'); });
   await page.instance.exitStory();
@@ -418,7 +430,7 @@ test('Tab captures gameplay, repeated Tab/F are ignored and Escape closes invent
   page.instance.onKeyDown(event({ code: 'KeyW' }));
   page.instance.camera.pointerMove(event({ clientX: 600, clientY: 300 }));
   page.instance.onPointerDown(event({ button: 0 }));
-  page.instance.onKeyDown(event()); page.instance.onKeyDown(event({ code: 'KeyF' }));
+  page.instance.onKeyDown(event({ code: 'KeyO' })); page.instance.onKeyDown(event({ code: 'KeyF' }));
   await turn();
   assert.deepEqual(page.instance.camera.snapshotPose(), before); assert.deepEqual(f.opens(), []);
   assert.equal(page.instance.actionBusy.value, false);
@@ -445,9 +457,8 @@ test('blur, hidden page and inventory close reseed mouse without a jump', async 
 
 test('unacknowledged combat blocks native replacement; retry does not change operation identity', async t => {
   let fail = true; const commands = [];
-  const state = { version: 1, revision: 0, boss: { hp: 200 }, drop: null, inventory: { worldFragment: 0 } };
-  const config = { playerHp: 100, playerMp: 100, bossHp: 200, damage: 20, cooldownMs: 400,
-    bossBarRadius: 10, meleeRange: 2.5, meleeHalfAngle: Math.PI / 3, pickupRange: 2 };
+  const state = { version: 2, revision: 0, rage: 0, boss: { hp: 200 }, drop: null, inventory: { worldFragment: 0 } };
+  const config = gameplayConfig;
   const f = await fixture(t, { gameplay: async request => {
     if (request.action !== 'load') {
       commands.push(request);
@@ -545,11 +556,11 @@ test('real story page settles airborne Tab, blur, pointerleave and hidden-page i
   assert.equal(f.actors.get(MAIN)[0].geometry.position[1], groundY);
   assert.deepEqual(f.alerts, []);
 });
-test('half-jump O/P saves ground and the corrected model once, preserves camera and keeps child combat hidden', async t => {
+test('half-jump inventory travel saves ground and the corrected model once, preserves camera and keeps child combat hidden', async t => {
   const f = await fixture(t); let page = f.mount(); await page.mount();
   page.instance.onKeyDown(event({ code: 'Space' })); f.step(); f.step();
   const airborne = page.instance.camera.snapshotPlayer(), groundY = f.actors.get(MAIN)[0].geometry.position[1];
-  page.instance.onKeyDown(event({ code: 'KeyO' })); await turn();
+  clickWorld(page); await turn();
   assert.deepEqual(f.opens(), [CHILD]);
   const saved = f.actors.get(MAIN)[0].geometry;
   assert.equal(saved.position[1], groundY); assert.equal(saved.position[2], airborne.position[2]);
@@ -557,7 +568,7 @@ test('half-jump O/P saves ground and the corrected model once, preserves camera 
   const savedCamera = structuredClone(f.poses.get(MAIN));
   page = f.mount(); await page.mount();
   assert.equal(page.instance.bossNearby.value, false); assert.equal(f.actors.get(CHILD)[1].visible, false);
-  page.instance.onKeyDown(event({ code: 'KeyP' })); await turn();
+  clickWorld(page); await turn();
   page = f.mount(); await page.mount();
   const restored = page.instance.camera.snapshotPlayer();
   assert.equal(restored.grounded, true); assert.deepEqual(restored.position, saved.position);
@@ -599,7 +610,7 @@ test('Space cannot start during an acknowledged save; a late save never leaves t
   const page = f.mount(); await page.mount();
   page.instance.onKeyDown(event({ code: 'Space' })); f.step();
   const saved = page.instance.saveRegistration.flush(); await turn();
-  page.instance.onKeyDown(event({ code: 'Space' })); page.instance.onKeyDown(event({ code: 'KeyO' }));
+  page.instance.onKeyDown(event({ code: 'Space' })); clickWorld(page);
   assert.equal(f.frames.size, 0); assert.deepEqual(f.opens(), []);
   gate.resolve(); await saved;
   assert.equal(page.instance.camera.snapshotPlayer().grounded, true);
@@ -614,7 +625,7 @@ test('HUD puts feedback/errors above compact bottom vitals and lists Space with 
   assert.deepEqual(bottom.children.filter(node => node.type !== vue.Comment).map(node => node.props?.class),
     ['gameplay-error', 'story-feedback', 'player-vitals']);
   const controls = findNode(tree, node => node.props?.class === 'story-controls');
-  assert.match(JSON.stringify(controls, (key, value) => key === 'ctx' ? undefined : value), /空格/);
+  assert.match(JSON.stringify(controls, (key, value) => key === 'ctx' ? undefined : value), /Space/);
   const declarations = selector => {
     const values = {};
     styles.walkRules(rule => { if (rule.parent.type === 'root' && rule.selectors.includes(selector))
@@ -622,9 +633,48 @@ test('HUD puts feedback/errors above compact bottom vitals and lists Space with 
     return values;
   };
   assert.equal(declarations('.story-hud')['pointer-events'], 'none');
-  assert.equal(declarations('.story-bottom-stack')['grid-area'], '3 / 1');
-  assert.equal(declarations('.story-controls')['flex-direction'], 'column');
-  assert.equal(declarations('.story-controls')['align-self'], 'center');
+  assert.equal(declarations('.story-bottom-stack').bottom, '22px');
+  assert.equal(declarations('.story-controls').display, 'grid');
+  assert.equal(declarations('.story-controls').top, '50%');
   assert.equal(declarations('.player-vitals').position, undefined);
   assert.equal(declarations('.gameplay-error').position, undefined);
+});
+
+
+test('inventory arrows reach slots, close, locked tooltip and enabled world button; Tab/Esc close', async t => {
+  const f = await fixture(t); const page = f.mount(); await page.mount();
+  const node = label => ({ label, focus() { document.activeElement = this; } });
+  const slots = Array.from({ length: 20 }, (_, i) => node(`slot-${i}`));
+  const close = node('close'), hint = node('unlock-hint'), travel = node('travel');
+  let locked = true;
+  page.instance.inventoryPanel.value = {
+    querySelectorAll: () => slots,
+    querySelector: selector => selector === '[data-inventory-close]' ? close
+      : selector === '[data-inventory-travel-focus]' ? hint : locked ? null : travel,
+  };
+  page.instance.toggleInventory(); await turn(); assert.equal(document.activeElement, close);
+  const press = code => page.instance.onInventoryKey(event({ code }));
+  press('ArrowDown'); assert.equal(document.activeElement, slots[0]);
+  press('ArrowRight'); assert.equal(document.activeElement, slots[1]);
+  press('ArrowDown'); assert.equal(document.activeElement, slots[6]);
+  press('End'); assert.equal(document.activeElement, slots[19]);
+  press('ArrowDown'); assert.equal(document.activeElement, hint);
+  locked = false; press('ArrowUp'); assert.equal(document.activeElement, slots[19]);
+  press('ArrowDown'); assert.equal(document.activeElement, travel);
+  press('Home'); press('ArrowUp'); assert.equal(document.activeElement, close);
+  page.instance.onKeyDown(event({ code: 'Tab' })); assert.equal(page.instance.inventoryOpen.value, false);
+  page.instance.onKeyDown(event({ code: 'Tab' })); assert.equal(page.instance.inventoryOpen.value, true);
+  page.instance.onKeyDown(event({ code: 'Escape' })); assert.equal(page.instance.inventoryOpen.value, false);
+  assert.equal(f.route, '/'); assert.deepEqual(f.opens(), []);
+});
+
+test('a living Boss disables inventory travel without submitting preparation or native opens', async t => {
+  const f = await fixture(t, { gameplay: async () => ({ status: 'ok', role: 'main', config: gameplayConfig,
+    state: { version: 2, revision: 0, rage: 20, boss: { hp: 200 }, drop: null, inventory: { worldFragment: 0 } } }) });
+  const page = f.mount(); await page.mount(); clickWorld(page); await turn();
+  assert.equal(page.instance.navigationPending.value, false); assert.deepEqual(f.opens(), []);
+  assert.equal(f.calls.some(c => c[0] === 'key'), false);
+  const tree = renderStory(proxyRefs(page.instance), []);
+  const button = findNode(tree, node => node.props?.class === 'world-travel-button');
+  assert.equal(button.props.disabled, true);
 });

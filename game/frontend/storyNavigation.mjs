@@ -1,21 +1,13 @@
-/** Story-only hotkeys and navigation ownership, independent of Vue and the native bridge. */
+/** Explicit story navigation and navigation ownership, independent of Vue and the native bridge. */
 const unwrap = value => value?.data ?? value;
 const normalizePath = value => String(value || '').replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
 
-export function storyNavigationKey(event) {
-  if (event.defaultPrevented || event.repeat || event.isComposing || event.keyCode === 229
-    || event.ctrlKey || event.altKey || event.metaKey) return '';
-  const targets = event.composedPath?.() || [event.target];
-  if (targets.some(target => target?.isContentEditable
-    || target?.closest?.('input, textarea, select, [contenteditable]:not([contenteditable="false"]), [role="textbox"]'))) return '';
-  if (event.code === 'KeyO' || event.code === 'KeyP') return event.code;
-  return { o: 'KeyO', p: 'KeyP' }[String(event.key || '').toLowerCase()] || '';
-}
+export const NAVIGATION_KEY = '__corona_story_navigation_v1__';
 
 export function createStoryNavigationController({
   projectPath, isReady, isSourceCurrent, getSelectionVersion, readSession,
   resetInput, flushCamera, prepare, trackPreparation, openProject, cancelProjectOpen,
-  leave, notify,
+  leave, notify, runPhase = (_label, task) => task(),
 }) {
   let busy = false, canceled = false, disposed = false, handedOff = false;
   let selection = getSelectionVersion(), attempt = 0;
@@ -42,7 +34,8 @@ export function createStoryNavigationController({
     return true;
   }
 
-  async function navigate(key) {
+  async function navigate(direction) {
+    if (!['enter', 'exit'].includes(direction) || busy || !sourceCurrent() || !isReady()) return false;
     const request = ++attempt;
     busy = true;
     selection = getSelectionVersion();
@@ -51,9 +44,9 @@ export function createStoryNavigationController({
       // Track only source-world work. Tracking open() itself would deadlock the
       // launcher, which drains source-world work before replacing the scene.
       const work = trackPreparation((async () => {
-        await flushCamera();
+        await runPhase('保存来源世界', flushCamera);
         if (!requestCurrent(request)) return null;
-        return prepare(key);
+        return runPhase('准备世界切换', () => prepare(direction));
       })());
       const result = unwrap(await work);
       if (!requestCurrent(request)) return;
@@ -63,13 +56,16 @@ export function createStoryNavigationController({
       if (!navigation || navigation.mode !== 'story' || !navigation.target
         || normalizePath(navigation.source) !== normalizePath(projectPath)
         || normalizePath(navigation.target) === normalizePath(projectPath)
-        || navigation.direction !== (key === 'KeyO' ? 'enter' : 'exit')) {
+        || navigation.direction !== direction) {
         throw new Error('世界导航信息与当前世界不匹配');
       }
       try {
         await open(navigation.target, request);
       } catch (error) {
         if (!ownsRequest(request)) return;
+        // A UI timeout cannot cancel native work. Do not queue a recovery that
+        // could replace a scene still being written/uploaded by the late request.
+        if (error.nativePending || error.code === 'WORLD_LOAD_TIMEOUT') { notify(error); return; }
         try {
           if (!await open(projectPath, request)) return;
           if (ownsRequest(request)) notify(new Error(`切换失败，已恢复来源世界：${error.message}`));
@@ -88,16 +84,9 @@ export function createStoryNavigationController({
 
   return {
     get busy() { return busy; },
-    keyDown(event) {
-      const key = storyNavigationKey(event);
-      if (!key || !sourceCurrent() || !isReady()) return false;
-      event.preventDefault?.();
-      event.stopPropagation?.();
-      if (busy) return true;
-      return navigate(key);
-    },
+    navigate,
     // Fence pending source work before an async exit save. If saving fails,
-    // this page stays usable, but the abandoned O/P request can never revive.
+    // this page stays usable, but the abandoned navigation request can never revive.
     interrupt() {
       ++attempt;
       resetInput();

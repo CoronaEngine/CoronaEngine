@@ -24,7 +24,7 @@ class GameDeploymentTests(unittest.TestCase):
             self.assertTrue((root / 'game/runtime/story_navigation.py').is_file())
             self.assertFalse((root / 'game/tests').exists())
             code = ('import sys; sys.path.insert(0, sys.argv[1]); '
-                    'from game.runtime.story_navigation import handle_story_key; '
+                    'from game.runtime.story_navigation import handle_navigation_request; '
                     'from game.runtime.subworlds import StorySubworlds; '
                     'from game import GameSession; assert GameSession(seed=1)')
             result = subprocess.run([sys.executable, '-B', '-I', '-c', code, str(root)], cwd=root,

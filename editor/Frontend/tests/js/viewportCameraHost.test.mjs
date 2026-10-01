@@ -1,9 +1,13 @@
+import * as loadingService from '../../src/services/worldLoadingService.js';
+import * as worldLoading from '../../../../game/frontend/worldLoading.mjs';
+import { NAVIGATION_KEY } from '../../../../game/frontend/storyNavigation.mjs';
+import { gameplayConfig, projectReady } from '../../../../game/tests/frontend/fixtures.mjs';
 import * as gameplayModule from '../../../../game/frontend/storyGameplay.mjs';
 import { STORY_CHARACTERS } from '../../../../game/frontend/storyCharacters.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
-import { ref, reactive } from 'vue';
+import { ref, reactive, nextTick } from 'vue';
 import { babelParse, compileScript, parse } from 'vue/compiler-sfc';
 import { cameraMovementKey, createViewportCameraController } from '../../src/utils/viewportCameraController.js';
 import { createStoryCameraController } from '../../src/utils/viewportStoryCamera.js';
@@ -196,14 +200,15 @@ async function mountStory(t, { pendingInit = null, sceneSnapshot = { data: snaps
     coronaBridge: Object.fromEntries(['actorTransform', 'cameraMove', 'setCameraViewport', 'setViewportGizmoTarget', 'setViewportUiMode', 'setViewportSystemCursorHidden']
       .map(name => [name, (...args) => { calls.push([name, ...args]); return true; }])) };
   const component = makeStory({
-    vue: { ref, onMounted: fn => mounted.push(fn), onUnmounted: fn => unmounted.push(fn) },
+    vue: { ref, nextTick, onMounted: fn => mounted.push(fn), onUnmounted: fn => unmounted.push(fn) },
     'vue-router': { onBeforeRouteLeave() {}, useRouter: () => ({ replace: async path => routes.push(path) }) },
     '@/api/editorApi.js': { editorApi: {
+      project: { getProjectLoadStatus: async () => projectReady('world') },
+      sceneTools: { setActorState: async () => ({ status: 'success' }) },
       projectSettings: { getActiveProjectInfo: async () => ({ mode: 'story', project_path: 'world' }) },
       scratch: { sendKeyEvent: async () => ({ status: 'ok', role: 'main',
-        state: { revision: 0, boss: { hp: 200 }, drop: null, inventory: { worldFragment: 0 } },
-        config: { playerHp: 100, playerMp: 100, bossHp: 200, damage: 20, cooldownMs: 400,
-          bossBarRadius: 10, meleeRange: 2.5, meleeHalfAngle: Math.PI / 3, pickupRange: 2 } }) },
+        state: { version: 2, revision: 0, rage: 0, boss: { hp: 200 }, drop: null, inventory: { worldFragment: 0 } },
+        config: gameplayConfig }) },
       main: { onInit: async () => pendingInit ? pendingInit.promise : ({ scenes: [{ path: 'scene.ini' }] }) },
       scene: { getSnapshot: async () => ({ actors: sceneFixture().actors, ...(sceneSnapshot.data ?? sceneSnapshot) }),
         setActorTransform: async () => { calls.push(['playerSave']); return { status: 'success' }; } },
@@ -211,7 +216,9 @@ async function mountStory(t, { pendingInit = null, sceneSnapshot = { data: snaps
     '@/services/worldModeService.js': { worldModeState, normalizeProjectPath: value => String(value).toLowerCase() },
     '@/services/projectLauncherService.js': { projectLauncherService: {}, cancelPendingProjectOpen() {}, getProjectSelectionVersion: () => 0 },
     '@/services/worldSessionLifecycle.js': { registerWorldSessionSave, trackWorldSessionWork, notifyWorldError: error => window.alert(error.message) },
-    '../../../../../game/frontend/storyNavigation.mjs': { createStoryNavigationController },
+    '../../../../../game/frontend/storyNavigation.mjs': { createStoryNavigationController, NAVIGATION_KEY },
+    '@/services/worldLoadingService.js': loadingService,
+    '../../../../../game/frontend/worldLoading.mjs': worldLoading,
     '../../../../../game/frontend/storyActors.mjs': { ensureStoryCharacters },
     '../../../../../game/frontend/playerController.mjs': { createPlayerController },
     '../../../../../game/frontend/playerSave.mjs': { createPlayerSave },

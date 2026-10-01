@@ -1,11 +1,13 @@
-"""Narrow Scratch O/P adapter. Scene opening remains owned by the frontend launcher."""
+"""Explicit story navigation adapter over the existing string bridge. Scene opening remains owned by the frontend launcher."""
 from __future__ import annotations
 
+import json
 from pathlib import Path
 import threading
 
 from .subworlds import StorySubworlds, SubworldError, story_scene
 
+REQUEST_KEY = '__corona_story_navigation_v1__'
 _preparing = threading.Lock()
 
 
@@ -29,11 +31,18 @@ def _success(result, operation):
     return data
 
 
-def handle_story_key(key: str, modifiers=(), *, api=None) -> dict | None:
-    """None means ordinary Scratch behavior; never interpret native mirrored SDL input."""
-    normalized = {'KeyO': 'O', 'KeyP': 'P', 'o': 'O', 'p': 'P', 'O': 'O', 'P': 'P'}.get(key)
-    if not normalized or any(str(mod).lower() in ('ctrl', 'control', 'alt', 'meta', 'cmd', 'super') for mod in modifiers):
-        return None
+def handle_navigation_request(payload: str, *, api=None) -> dict:
+    """Only explicit UI requests navigate; O/P remain ordinary Scratch keys."""
+    try:
+        if not isinstance(payload, str) or len(payload) > 8192:
+            raise ValueError('导航请求格式无效')
+        request = json.loads(payload)
+        if not isinstance(request, dict) or request.get('direction') not in ('enter', 'exit'):
+            raise ValueError('导航方向无效')
+        if not isinstance(request.get('projectPath'), str) or not request['projectPath'].strip():
+            raise ValueError('缺少来源世界')
+    except (ValueError, TypeError) as error:
+        return {'status': 'error', 'message': str(error)}
     if api is None:
         from api.editor_api import CoronaEditorApi
         api = CoronaEditorApi
@@ -44,10 +53,10 @@ def handle_story_key(key: str, modifiers=(), *, api=None) -> dict | None:
         if not isinstance(info, dict) or not info.get('project_path'):
             raise SubworldError('无法确定当前世界，已取消切换')
         if info.get('mode') != 'story':
-            return None
+            raise SubworldError('当前不是剧情世界')
         root = Path(info['project_path']).resolve(strict=True)
-        if not story_scene(root):
-            return None
+        if Path(request['projectPath']).resolve() != root or not story_scene(root):
+            raise SubworldError('来源世界与当前剧情世界不匹配')
 
         def assert_source():
             active = _unwrap(api.project_settings.get_active_project_info())
@@ -73,7 +82,16 @@ def handle_story_key(key: str, modifiers=(), *, api=None) -> dict | None:
             if data.get('status') != 'portable_v1':
                 raise SubworldError('仅支持可移植剧情世界，不能切换旧格式场景')
 
-        result = StorySubworlds(save=save, validate=validate).prepare(root, normalized)
+        if request['direction'] == 'enter':
+            # Gameplay owns the main save and its filesystem lock. Release before
+            # prepare acquires the navigation lock; death is a monotonic unlock.
+            from .story_gameplay import handle_gameplay_request
+            progress = handle_gameplay_request(json.dumps({'action': 'load', 'projectPath': str(root)}), api=api)
+            if progress.get('status') != 'ok':
+                raise SubworldError(progress.get('message', '读取 Boss 进度失败'))
+            if progress['role'] == 'main' and progress['state']['boss']['hp'] > 0:
+                raise SubworldError('击败 Boss 后才能开启小世界')
+        result = StorySubworlds(save=save, validate=validate).prepare(root, request['direction'])
         assert_source()
         return result
     except Exception as error:

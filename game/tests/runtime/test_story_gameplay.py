@@ -52,7 +52,7 @@ class GameplayTests(unittest.TestCase):
 
     def child(self):
         return Path(StorySubworlds(save=lambda _: None, validate=lambda _: None)
-                    .prepare(self.root, 'O')['navigation']['target'])
+                    .prepare(self.root, 'enter')['navigation']['target'])
 
     def test_ten_hits_death_pickup_and_reopen(self):
         self.assertEqual(self.call()['state']['boss']['hp'], 200)

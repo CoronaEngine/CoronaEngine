@@ -36,7 +36,7 @@ class SubworldTests(unittest.TestCase):
         self.assertEqual((root / 'Assets/model.glb').read_bytes(), b'model bytes')
 
     def enter(self):
-        return self.manager.prepare(self.root, 'O')
+        return self.manager.prepare(self.root, 'enter')
 
     def assert_clean_failure(self):
         self.assertFalse((self.root / CHILD).exists())
@@ -77,8 +77,8 @@ class SubworldTests(unittest.TestCase):
         (child / 'Assets/model.glb').write_bytes(b'independent child')
         manager = StorySubworlds(save=self.save, validate=lambda _: None,
                                 copy_scene=lambda *_: self.fail('must not recopy'))
-        self.assertEqual(manager.prepare(child, 'P')['navigation']['target'], str(self.root))
-        result = manager.prepare(self.root, 'O')['navigation']
+        self.assertEqual(manager.prepare(child, 'exit')['navigation']['target'], str(self.root))
+        result = manager.prepare(self.root, 'enter')['navigation']
         self.assertFalse(result['created'])
         self.assertEqual((child / 'Assets/model.glb').read_bytes(), b'independent child')
         self.assertEqual((self.root / 'Assets/model.glb').read_bytes(), b'model bytes')
@@ -87,10 +87,10 @@ class SubworldTests(unittest.TestCase):
         self.assertEqual(self.saved, [self.root, child, self.root])
 
     def test_noop_keys_do_not_save_or_create_nested_worlds(self):
-        self.assertEqual(self.manager.prepare(self.root, 'P'), {'status': 'noop'})
+        self.assertEqual(self.manager.prepare(self.root, 'exit'), {'status': 'noop'})
         self.assertEqual(self.saved, [])
         child = Path(self.enter()['navigation']['target'])
-        self.assertEqual(self.manager.prepare(child, 'O'), {'status': 'noop'})
+        self.assertEqual(self.manager.prepare(child, 'enter'), {'status': 'noop'})
         self.assertFalse((child / CHILD).exists())
         self.assertEqual(len(self.saved), 1)
 
@@ -99,8 +99,8 @@ class SubworldTests(unittest.TestCase):
         moved = self.root.with_name('moved')
         self.root.rename(moved)
         manager = StorySubworlds(save=self.save, validate=self.validate)
-        self.assertEqual(manager.prepare(moved / CHILD, 'P')['navigation']['target'], str(moved))
-        self.assertFalse(manager.prepare(moved, 'O')['navigation']['created'])
+        self.assertEqual(manager.prepare(moved / CHILD, 'exit')['navigation']['target'], str(moved))
+        self.assertFalse(manager.prepare(moved, 'enter')['navigation']['created'])
 
     def test_save_failure_never_creates_a_copy(self):
         self.manager.save = lambda _: (_ for _ in ()).throw(OSError('disk full'))
@@ -164,10 +164,10 @@ class SubworldTests(unittest.TestCase):
                 with self.assertRaises(SubworldError):
                     self.enter()
                 with self.assertRaises(SubworldError):
-                    self.manager.prepare(child, 'O')
+                    self.manager.prepare(child, 'enter')
         (child / METADATA).unlink()
         with self.assertRaisesRegex(SubworldError, '嵌套'):
-            self.manager.prepare(child, 'O')
+            self.manager.prepare(child, 'enter')
         with self.assertRaises(SubworldError):
             self.enter()
 
@@ -256,7 +256,7 @@ class SubworldTests(unittest.TestCase):
         child = Path(self.enter()['navigation']['target'])
         self.assertFalse((child / '.game/private.txt').exists())
         self.assertFalse((child / '.game/subworld').exists())
-        self.assertEqual(self.manager.prepare(child, 'P')['navigation']['target'], str(self.root))
+        self.assertEqual(self.manager.prepare(child, 'exit')['navigation']['target'], str(self.root))
 
     @unittest.skipUnless(os.name == 'nt', 'Case-insensitive Windows filesystem')
     def test_case_variant_unlinked_child_cannot_create_nested_world(self):
@@ -264,7 +264,7 @@ class SubworldTests(unittest.TestCase):
         child.mkdir(parents=True)
         (child / 'scene.ini').write_text(SCENE, encoding='utf-8')
         with self.assertRaisesRegex(SubworldError, '嵌套'):
-            self.manager.prepare(child, 'O')
+            self.manager.prepare(child, 'enter')
         self.assertEqual(self.saved, [])
         self.assertFalse((child / CHILD).exists())
 
