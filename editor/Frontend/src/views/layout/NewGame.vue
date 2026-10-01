@@ -122,21 +122,21 @@ const refreshArchiveReady = async () => {
   try {
     const response = await editorApi.project.getProjectLoadStatus();
     const status = response?.data ?? response;
-    if (!disposed) archiveReady.value = status?.archive_service_ready === true;
+    archiveReady.value = status?.archive_service_ready === true;
   } catch {
-    if (!disposed) archiveReady.value = false;
-  } finally {
-    // Schedule only after the previous reply; a slow native read must not overlap.
-    if (!disposed) archiveStatusTimer = window.setTimeout(refreshArchiveReady, 200);
+    archiveReady.value = false;
   }
 };
 
-onMounted(refreshArchiveReady);
+onMounted(() => {
+  refreshArchiveReady();
+  archiveStatusTimer = window.setInterval(refreshArchiveReady, 250);
+});
 
 onUnmounted(() => {
   disposed = true;
   if (archiveStatusTimer !== null) {
-    window.clearTimeout(archiveStatusTimer);
+    window.clearInterval(archiveStatusTimer);
   }
 });
 
@@ -201,7 +201,7 @@ const handleCreate = async () => {
   creating.value = true;
   try {
     // 后端自动命名 + 存到引擎 data 目录，返回 { name, path }
-    const result = await projectLauncherService.createWorldProject({
+    const result = await editorApi.project.createWorldProject({
       mode: mode.value,
       prompt,
     });

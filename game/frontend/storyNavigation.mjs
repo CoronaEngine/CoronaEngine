@@ -7,7 +7,7 @@ export const NAVIGATION_KEY = '__corona_story_navigation_v1__';
 export function createStoryNavigationController({
   projectPath, isReady, isSourceCurrent, getSelectionVersion, readSession,
   resetInput, flushCamera, prepare, trackPreparation, openProject, cancelProjectOpen,
-  leave, notify, runPhase = (_label, task) => task(),
+  leave, notify,
 }) {
   let busy = false, canceled = false, disposed = false, handedOff = false;
   let selection = getSelectionVersion(), attempt = 0;
@@ -44,9 +44,9 @@ export function createStoryNavigationController({
       // Track only source-world work. Tracking open() itself would deadlock the
       // launcher, which drains source-world work before replacing the scene.
       const work = trackPreparation((async () => {
-        await runPhase('保存来源世界', flushCamera);
+        await flushCamera();
         if (!requestCurrent(request)) return null;
-        return runPhase('准备世界切换', () => prepare(direction));
+        return prepare(direction);
       })());
       const result = unwrap(await work);
       if (!requestCurrent(request)) return;
@@ -63,9 +63,6 @@ export function createStoryNavigationController({
         await open(navigation.target, request);
       } catch (error) {
         if (!ownsRequest(request)) return;
-        // A UI timeout cannot cancel native work. Do not queue a recovery that
-        // could replace a scene still being written/uploaded by the late request.
-        if (error.nativePending || error.code === 'WORLD_LOAD_TIMEOUT') { notify(error); return; }
         try {
           if (!await open(projectPath, request)) return;
           if (ownsRequest(request)) notify(new Error(`切换失败，已恢复来源世界：${error.message}`));

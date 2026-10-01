@@ -139,7 +139,6 @@ test('preview restoration finishes before script shutdown and times out safely',
 test('project opening is serialized and stores only verified authoritative worlds', async (t) => {
   const first = deferred(), paths = [], saved = [];
   let activePath = 'first';
-  t.mock.method(editorApi.project, 'getProjectLoadStatus', async () => ({ path: activePath, archive_service_ready: true, pending: 0, failed: 0, loading: false }));
   t.mock.method(editorApi.project, 'openProject', async (path) => {
     paths.push(path); if (path === 'first') await first.promise;
     activePath = path; return { data: { ok: true, path } };
@@ -219,7 +218,6 @@ test('creative to story opens only after safe cleanup and can retry genuine fail
   t.mock.method(editorApi.projectSettings, 'getActiveProjectInfo', async () => info(activePath, activeMode));
   t.mock.method(editorApi.scratch, 'stopGamePreview', async () => { calls.push('preview'); return { status: 'stopped' }; });
   t.mock.method(editorApi.scratch, 'stopScriptExecution', async restore => { calls.push(`script:${restore}`); return { data: stopResult }; });
-  t.mock.method(editorApi.project, 'getProjectLoadStatus', async () => ({ path: activePath, archive_service_ready: true, pending: 0, failed: 0, loading: false }));
   t.mock.method(editorApi.project, 'openProject', async path => {
     calls.push(`open:${path}`);
     activePath = path;

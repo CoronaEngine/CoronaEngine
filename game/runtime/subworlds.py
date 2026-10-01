@@ -156,16 +156,16 @@ class StorySubworlds:
         self.validate = validate
         self.copy_scene = copy_scene
 
-    def prepare(self, source: str | Path, direction: str) -> dict:
-        if direction not in ('enter', 'exit'):
-            raise ValueError('Expected enter or exit navigation direction')
+    def prepare(self, source: str | Path, key: str) -> dict:
+        if key not in ('O', 'P'):
+            raise ValueError('Only O/P are navigation keys')
         root = Path(source).absolute()
         _plain(root)
         root = root.resolve(strict=True)
         _require_story(root)
         with _exclusive(root):
             role, target, exists = _relation(root)
-            if (direction == 'enter' and role == 'child') or (direction == 'exit' and role == 'main'):
+            if (key == 'O' and role == 'child') or (key == 'P' and role == 'main'):
                 return {'status': 'noop'}
             if exists:
                 self.validate(target)
@@ -177,7 +177,7 @@ class StorySubworlds:
                 self._create(root, target)
             return {'status': 'ok', 'navigation': {
                 'source': str(root), 'target': str(target), 'mode': 'story',
-                'direction': direction, 'created': not exists,
+                'direction': 'enter' if key == 'O' else 'exit', 'created': not exists,
             }}
 
     def _create(self, root: Path, target: Path) -> None:

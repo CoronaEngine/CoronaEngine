@@ -1,4 +1,3 @@
-import { createLoadOperation, LOAD_POLL_MS } from './worldLoading.mjs';
 import { FRAGMENT, FRAGMENT_GUID } from './storyGameplay.mjs';
 import { STORY_CHARACTERS, PLAYER_GUID, PLAYER_MODEL_REF, PROPHET_MODEL_REF, PLAYER_MODEL_YAW_OFFSET, unwrap, sceneSnapshot, resolveStoryAssetPath,
   characterTransform, rotatedBounds, hasUsableBounds } from './storyCharacters.mjs';
@@ -15,19 +14,42 @@ const loaded = actor => actor?.load_status === 'loaded' && Number(actor?.handle)
 const sameVector = (a, b) => Array.isArray(a) && a.length === b.length
   && a.every((value, i) => Math.abs(value - b[i]) < 1e-5);
 
+// Keep the real resource work inside the host's existing world-session barrier,
+// including on cancellation. Readiness polling never submits overlapping reads.
+async function waitForStoryResources({ api, projectPath, wait = ms => new Promise(resolve => setTimeout(resolve, ms)) }, allowFailed = false) {
+  if (!projectPath) return;
+  const normalize = value => String(value || '').replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+  for (;;) {
+    const status = unwrap(await api.project.getProjectLoadStatus());
+    if (status?.status === 'error' || status?.ok === false) throw new Error(status.message || '无法读取世界资源状态');
+    if (normalize(status?.path) !== normalize(projectPath)) throw new Error('资源状态不属于目标世界，已停止加载');
+    if (!Number.isFinite(status.pending) || !Number.isFinite(status.failed) || status.pending < 0 || status.failed < 0) {
+      throw new Error('引擎未返回有效的世界资源状态');
+    }
+    if (status.pending === 0 && status.loading !== true && status.archive_service_ready === true) {
+      if (status.failed > 0 && !allowFailed) throw new Error(`世界资源加载失败（${status.failed} 个模型）`);
+      return;
+    }
+    await wait(200);
+  }
+}
+
 /** All native mutations are awaited; the host registers this work before world replacement. */
-export async function ensureStoryCharacters({ api, sceneId, frontendUrl, isCurrent = () => true,
-  wait = ms => new Promise(resolve => setTimeout(resolve, ms)), renderAttempts = Infinity,
-  gameplay = null, combatOnly = false, assertSource = async () => {}, trackWork = promise => promise, operation = createLoadOperation({ isCurrent, trackWork }),
-}) {
-  const check = () => { if (!isCurrent()) throw canceled(); operation.check(); };
+export async function ensureStoryCharacters(options) {
+  await waitForStoryResources(options);
+  try { return await initializeStoryCharacters(options); }
+  finally { await waitForStoryResources(options, true); }
+}
+
+async function initializeStoryCharacters({ api, sceneId, frontendUrl, isCurrent = () => true,
+  wait = ms => new Promise(resolve => setTimeout(resolve, ms)), renderAttempts = 150,
+  gameplay = null, combatOnly = false, assertSource = async () => {} }) {
+  const check = () => { if (!isCurrent()) throw canceled(); };
   const call = async (operation, invoke) => { check(); await assertSource(); check();
     const result = success(await invoke(), operation); check(); return result; };
   check();
-  let snapshot = await operation.phase('读取剧情角色', async () => {
-    await assertSource(); check();
-    return sceneSnapshot(await api.scene.getSnapshot(sceneId));
-  });
+  await assertSource();
+  let snapshot = sceneSnapshot(await api.scene.getSnapshot(sceneId));
   check();
   const actors = new Map((snapshot?.actors || []).map(actor => [actor.actor_guid, actor]));
   const visibleCharacters = STORY_CHARACTERS.filter(character => !gameplay || character.role === 'player'
@@ -36,21 +58,20 @@ export async function ensureStoryCharacters({ api, sceneId, frontendUrl, isCurre
   if (gameplay?.role === 'main' && gameplay.state.drop && !gameplay.state.drop.collected) {
     visibleCharacters.push({ ...FRAGMENT, x: gameplay.state.drop.position[0], z: gameplay.state.drop.position[2] });
   }
-  if (gameplay) await operation.phase('更新角色可见性', async () => {
+  if (gameplay) {
     const visibleGuids = new Set(visibleCharacters.map(character => character.guid));
-    for (const actor of actors.values()) {
-      // Cameras/lights are separate snapshot collections. Do not hide audio/UI actors.
-      const model = !actor.actor_type || ['model', 'actor'].includes(actor.actor_type);
-      if (model && actor.visible !== false && !visibleGuids.has(actor.actor_guid)) {
+    // Only manage game-owned actors; scenery and user-authored models stay untouched.
+    for (const guid of [...STORY_CHARACTERS.map(character => character.guid), FRAGMENT_GUID]) {
+      const actor = actors.get(guid);
+      if (actor && actor.visible !== false && !visibleGuids.has(guid)) {
         await call('隐藏当前世界之外的模型', () => api.sceneTools.setActorState(sceneId, actor.actor_guid, { visible: false }));
       }
     }
-  });
+  }
   // Never use the update subset to decide which actors should be visible.
   const characters = visibleCharacters.filter(character => !combatOnly || ['boss', 'fragment'].includes(character.role));
   for (let character of characters) {
     check();
-    await operation.phase(`初始化${character.name}`, async () => {
     let actor = actors.get(character.guid);
     const wasPresent = Boolean(actor);
     if (gameplay?.role === 'child' && character.role === 'prophet' && actor?.model_ref !== PROPHET_MODEL_REF) {
@@ -68,8 +89,7 @@ export async function ensureStoryCharacters({ api, sceneId, frontendUrl, isCurre
         const created = await call('创建模型', () => api.sceneTools.createActor(sceneId, source, 'model', {
           name: character.name, actor_guid: character.guid, semantic_role: character.role,
           entity_id: `story.${character.role}`, entity_type: 'story_character',
-          ...(character.role === 'player' ? { model_ref: PLAYER_MODEL_REF }
-            : gameplay?.role === 'child' && character.role === 'prophet' ? { model_ref: PROPHET_MODEL_REF } : {}),
+          ...(character.role === 'player' ? { model_ref: PLAYER_MODEL_REF } : {}),
           position: [character.x, 0, character.z], rotation: character.rotation, scale: [1, 1, 1],
           follow_camera: false, physics_enabled: false,
         }));
@@ -88,7 +108,7 @@ export async function ensureStoryCharacters({ api, sceneId, frontendUrl, isCurre
         if (attempt >= renderAttempts) {
           throw new Error(`等待模型包围盒超时（${actor.gpu_build_state || '未就绪'}），请重试进入世界`);
         }
-        await wait(LOAD_POLL_MS);
+        await wait(200);
         if (!isCurrent()) throw canceled();
         await assertSource();
         const refreshed = sceneSnapshot(await api.scene.getSnapshot(sceneId));
@@ -114,8 +134,8 @@ export async function ensureStoryCharacters({ api, sceneId, frontendUrl, isCurre
       const transform = characterTransform(character, actor.local_aabb, savedGeometry);
       if (legacyPlayer || legacyProphet) {
         const modelRef = legacyPlayer ? PLAYER_MODEL_REF : PROPHET_MODEL_REF;
-        // Persist the art correction and its version together. Never rotate first
-        // and mark later: a lost reply/reentry would otherwise flip the player again.
+        // Commit placement and its marker together, not while the new actor is still unscaled.
+        // A lost reply/reentry must neither flip the player again nor preserve an ungrounded prophet.
         // Reuse the portable resource route; an existing world needs no source art.
         const route = actor.route || source || resolveStoryAssetPath(frontendUrl, character.asset);
         actor = (await call('校正玩家朝向', () => api.sceneTools.createActor(sceneId, route, 'model', {
@@ -153,7 +173,7 @@ export async function ensureStoryCharacters({ api, sceneId, frontendUrl, isCurre
         }
         if (actor.render_ready === true && hasUsableBounds(actor.local_aabb)) break;
         if (attempt >= renderAttempts - 1) throw new Error('等待模型渲染超时');
-        await wait(LOAD_POLL_MS);
+        await wait(200);
       }
       check();
       actors.set(character.guid, actor);
@@ -161,7 +181,6 @@ export async function ensureStoryCharacters({ api, sceneId, frontendUrl, isCurre
       if (error.name === 'AbortError') throw error;
       throw new Error(`${character.name}加载失败（${source || actor?.route || character.asset}）：${error.message}`, { cause: error });
     }
-    }, { model: character.name, guid: character.guid });
   }
   if (combatOnly) return { snapshot };
   const player = actors.get(PLAYER_GUID);

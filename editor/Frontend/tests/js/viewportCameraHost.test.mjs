@@ -1,5 +1,3 @@
-import * as loadingService from '../../src/services/worldLoadingService.js';
-import * as worldLoading from '../../../../game/frontend/worldLoading.mjs';
 import { NAVIGATION_KEY } from '../../../../game/frontend/storyNavigation.mjs';
 import { gameplayConfig, projectReady } from '../../../../game/tests/frontend/fixtures.mjs';
 import * as gameplayModule from '../../../../game/frontend/storyGameplay.mjs';
@@ -217,8 +215,6 @@ async function mountStory(t, { pendingInit = null, sceneSnapshot = { data: snaps
     '@/services/projectLauncherService.js': { projectLauncherService: {}, cancelPendingProjectOpen() {}, getProjectSelectionVersion: () => 0 },
     '@/services/worldSessionLifecycle.js': { registerWorldSessionSave, trackWorldSessionWork, notifyWorldError: error => window.alert(error.message) },
     '../../../../../game/frontend/storyNavigation.mjs': { createStoryNavigationController, NAVIGATION_KEY },
-    '@/services/worldLoadingService.js': loadingService,
-    '../../../../../game/frontend/worldLoading.mjs': worldLoading,
     '../../../../../game/frontend/storyActors.mjs': { ensureStoryCharacters },
     '../../../../../game/frontend/playerController.mjs': { createPlayerController },
     '../../../../../game/frontend/playerSave.mjs': { createPlayerSave },

@@ -142,7 +142,8 @@ test('child hides copied boss and fragment and never creates either', async () =
   const empty = apiFixture();
   await ensureStoryCharacters({ api: empty.api, sceneId: 'scene.ini', frontendUrl: url,
     gameplay: { role: 'child', state: { boss: { hp: 0 }, drop: null } } });
-  assert.equal(empty.calls.filter(c => c[0] === 'create').length, 2);
+  assert.equal(empty.calls.filter(c => c[0] === 'create' && !c[4].skip_if_exists).length, 2);
+  assert.equal(empty.state.actors.length, 2);
   assert.equal(empty.get(STORY_CHARACTERS[1].guid), undefined);
 });
 

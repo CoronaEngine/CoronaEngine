@@ -12,8 +12,6 @@ import { ensureStoryCharacters } from '../../../../../game/frontend/storyActors.
 import { createPlayerController } from '../../../../../game/frontend/playerController.mjs';
 import { createPlayerSave } from '../../../../../game/frontend/playerSave.mjs';
 import { createStoryGameplay, worldBounds, distanceToBounds, pickupDistance } from '../../../../../game/frontend/storyGameplay.mjs';
-import { beginWorldLoad, worldLoadingState } from '@/services/worldLoadingService.js';
-import { waitForProjectResources, hasPendingLoadTimeout, withLoadTimeout } from '../../../../../game/frontend/worldLoading.mjs';
 import { STORY_CHARACTERS } from '../../../../../game/frontend/storyCharacters.mjs';
 
 const router = useRouter();
@@ -22,10 +20,10 @@ const inventoryOpen = ref(false);
 const inventoryPanel = ref(null);
 const selectedSlot = ref(0);
 const navigationPending = ref(false);
+const initializing = ref(true);
 const cooldownTick = ref(0);
 let cooldownTimer = null;
 const gameplayState = ref(null);
-const initializing = ref(true);
 const bossNearby = ref(false);
 const canPickup = ref(false);
 const feedback = ref('');
@@ -43,7 +41,6 @@ let cameraReady = false;
 let playerSave = null;
 let savingPlayer = false;
 let initialization = Promise.resolve();
-let navigationLoad = null;
 let exitPending = null;
 let resizeObserver = null;
 let leaving = false;
@@ -59,7 +56,7 @@ const camera = createStoryCameraController({
   },
   getBridge: () => current() ? window.coronaBridge : null,
   isCurrent: current,
-  isInputLocked: () => initializing.value || worldLoadingState.busy || worldLoadingState.error || hasPendingLoadTimeout() || !focused || document.hidden || navigation.busy || savingPlayer || inventoryOpen.value,
+  isInputLocked: () => initializing.value || !focused || document.hidden || navigation.busy || savingPlayer || inventoryOpen.value,
   onPlayerChanged: updateProximity,
   getRect: () => surface.value?.getBoundingClientRect(),
   getPixelRatio: () => window.devicePixelRatio,
@@ -97,13 +94,13 @@ const gameplay = createStoryGameplay({
     const next = signature(data);
     if (next === visualSignature) return;
     await ensureStoryCharacters({ api: editorApi, sceneId, frontendUrl: window.location.href,
-      gameplay: data, combatOnly: true, assertSource, trackWork: trackWorldSessionWork });
+      gameplay: data, combatOnly: true, assertSource, projectPath });
     visualSignature = next;
     if (current()) updateProximity();
   },
 });
 async function runAction(action) {
-  if (!current() || initializing.value || worldLoadingState.busy || worldLoadingState.error || hasPendingLoadTimeout() || !focused || document.hidden || inventoryOpen.value
+  if (!current() || !focused || document.hidden || inventoryOpen.value
     || navigation.busy || savingPlayer || actionBusy.value || !cameraReady) return;
   actionBusy.value = true;
   try {
@@ -117,7 +114,7 @@ async function runAction(action) {
   }
 }
 function toggleInventory() {
-  if (initializing.value || worldLoadingState.busy || worldLoadingState.error || hasPendingLoadTimeout() || navigation.busy || navigationPending.value || savingPlayer) return;
+  if (initializing.value || navigation.busy || navigationPending.value || savingPlayer) return;
   camera.resetInput();
   inventoryOpen.value = !inventoryOpen.value;
   void nextTick(() => {
@@ -167,12 +164,8 @@ async function navigateWorld() {
     || (data.role === 'main' && data.state.boss.hp > 0)) return;
   navigationPending.value = true;
   gameplayError.value = '';
-  navigationLoad = beginWorldLoad({ source: projectPath, target: data.role === 'main' ? `${projectPath}/.game/subworld` : '主世界', isCurrent: current });
   try { await navigation.navigate(data.role === 'main' ? 'enter' : 'exit'); }
-  finally {
-    navigationPending.value = false;
-    if (!worldLoadingState.error) navigationLoad?.finish();
-  }
+  finally { navigationPending.value = false; }
 }
 const saveRegistration = registerWorldSessionSave(async () => {
   camera.resetInput();
@@ -222,7 +215,6 @@ async function exitStory() {
 }
 const navigation = createStoryNavigationController({
   projectPath,
-  runPhase: (label, task) => navigationLoad ? navigationLoad.phase(label, task) : task(),
   isReady: () => cameraReady && focused && !document.hidden && !savingPlayer,
   isSourceCurrent: current,
   getSelectionVersion: getProjectSelectionVersion,
@@ -235,13 +227,12 @@ const navigation = createStoryNavigationController({
     const result = unwrap(await editorApi.viewport.setCameraPose(pose.sceneId, pose.cameraName, pose.camera));
     if (result?.status !== 'success') throw new Error(result?.message || '保存相机视角失败');
   },
-  prepare: direction => withLoadTimeout(trackWorldSessionWork(editorApi.scratch.sendKeyEvent(
-    NAVIGATION_KEY, '', JSON.stringify({ projectPath, direction }))), '准备世界切换'),
+  prepare: direction => editorApi.scratch.sendKeyEvent(NAVIGATION_KEY, '', JSON.stringify({ projectPath, direction })),
   trackPreparation: trackWorldSessionWork,
   openProject: path => projectLauncherService.openProject(path),
   cancelProjectOpen: cancelPendingProjectOpen,
   leave: () => router.replace('/StartScreen'),
-  notify: error => { navigationLoad?.fail(error); if (current()) gameplayError.value = error.message; notifyWorldError(error); },
+  notify: error => { if (current()) gameplayError.value = error.message; notifyWorldError(error); },
 });
 function onKeyDown(event) {
   if (!current()) return;
@@ -293,7 +284,7 @@ function watchDpi() {
 }
 function onDpiChanged() { camera.syncViewport(); watchDpi(); }
 function onPointerDown(event) {
-  if (inventoryOpen.value || initializing.value || worldLoadingState.busy || worldLoadingState.error || hasPendingLoadTimeout()) return;
+  if (inventoryOpen.value) return;
   surface.value?.focus();
   if (!focused) return;
   if (event.button === 0) {
@@ -310,22 +301,17 @@ onMounted(async () => {
   window.addEventListener('blur', onBlur);
   window.addEventListener('focus', onFocus);
   document.addEventListener('visibilitychange', onVisibilityChange);
-  const loading = beginWorldLoad({ source: projectPath, target: projectPath,
-    operationId: worldLoadingState.operationId || undefined, isCurrent: current });
   initialization = trackWorldSessionWork((async () => {
-    await loading.phase('等待场景资源', () => waitForProjectResources({
-      getStatus: () => editorApi.project.getProjectLoadStatus(), projectPath,
-    }));
-    const init = unwrap(await loading.phase('读取场景', () => editorApi.main.onInit()));
+    const init = unwrap(await editorApi.main.onInit());
     if (!current()) return;
     const scenes = init?.scenes || [];
     const index = Math.min(Math.max(Number(init?.active_index) || 0, 0), Math.max(0, scenes.length - 1));
     sceneId = scenes[index]?.path || init?.path;
     if (!sceneId) throw new Error('当前世界没有可用场景');
-    const loadedGameplay = await loading.phase('读取剧情进度', gameplay.load);
+    const loadedGameplay = await gameplay.load();
     if (!current()) return;
     const { snapshot, player, targetOffset } = await ensureStoryCharacters({
-      api: editorApi, sceneId, frontendUrl: window.location.href, gameplay: loadedGameplay, assertSource, operation: loading,
+      api: editorApi, sceneId, frontendUrl: window.location.href, gameplay: loadedGameplay, assertSource, projectPath,
       isCurrent: () => current() && worldModeState.projectPath === projectPath,
     });
     if (!current() || worldModeState.projectPath !== projectPath) return;
@@ -349,17 +335,12 @@ onMounted(async () => {
     window.addEventListener('pointercancel', camera.resetInput);
     document.addEventListener('keyup', camera.keyUp);
     initializing.value = false;
-    loading.finish();
     if (focused) surface.value?.focus();
   })());
   try { await initialization; } catch (error) {
-    loading.fail(error);
     if (!current()) return;
-    gameplayError.value = error.message || '剧情世界加载失败';
-    // Do not unmount/recover while an uncancelled native request is outstanding.
-    if (error.nativePending) return;
     await router.replace('/StartScreen');
-    notifyWorldError(error, '剧情世界加载失败');
+    window.alert(error.message || '剧情世界加载失败');
   }
 });
 onUnmounted(() => {
@@ -395,6 +376,7 @@ onUnmounted(() => {
         <symbol id="story-sweep" viewBox="0 0 48 48"><path d="M7 30C-1 8 28-2 41 15M6 34C17 45 40 38 42 25M35 12l7 4 1-9M12 30l20-17-13 24Z"/></symbol>
       </defs>
     </svg>
+    <div v-if="initializing" class="story-loading" role="status">{{ gameplayError || '剧情世界加载中…（Esc 取消）' }}</div>
     <div v-if="gameplayState && !initializing" class="story-hud" aria-label="战斗界面">
       <section v-if="bossNearby && !inventoryOpen" class="boss-status" aria-label="Boss 血条">
         <div class="boss-name">巨龙</div>
@@ -475,6 +457,7 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
+.story-loading { position: absolute; inset: 0; display: grid; place-items: center; background: #10151de8; }
 .story-world-viewport { position: fixed; inset: 0; overflow: hidden; outline: none; background: transparent; color: #eee3ca; font-family: 'Microsoft YaHei', sans-serif; }
 .hud-symbols { position: absolute; width: 0; height: 0; overflow: hidden; }
 .story-hud { position: absolute; inset: 0; pointer-events: none; }

@@ -91,7 +91,7 @@ def handle_navigation_request(payload: str, *, api=None) -> dict:
                 raise SubworldError(progress.get('message', '读取 Boss 进度失败'))
             if progress['role'] == 'main' and progress['state']['boss']['hp'] > 0:
                 raise SubworldError('击败 Boss 后才能开启小世界')
-        result = StorySubworlds(save=save, validate=validate).prepare(root, request['direction'])
+        result = StorySubworlds(save=save, validate=validate).prepare(root, 'O' if request['direction'] == 'enter' else 'P')
         assert_source()
         return result
     except Exception as error:

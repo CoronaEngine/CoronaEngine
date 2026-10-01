@@ -13,8 +13,6 @@ import { createStoryCameraController } from '../../../editor/Frontend/src/utils/
 import { editorApi } from '../../../editor/Frontend/src/api/editorApi.js';
 import * as launcher from '../../../editor/Frontend/src/services/projectLauncherService.js';
 import * as worldMode from '../../../editor/Frontend/src/services/worldModeService.js';
-import * as loadingService from '../../../editor/Frontend/src/services/worldLoadingService.js';
-import * as worldLoading from '../../frontend/worldLoading.mjs';
 import { NAVIGATION_KEY } from '../../frontend/storyNavigation.mjs';
 import { gameplayConfig, projectReady } from './fixtures.mjs';
 import * as lifecycle from '../../../editor/Frontend/src/services/worldSessionLifecycle.js';
@@ -147,8 +145,6 @@ async function fixture(t, options = {}) {
       '@/services/worldModeService.js': worldMode,
       '@/services/projectLauncherService.js': launcher,
       '@/services/worldSessionLifecycle.js': lifecycle,
-      '@/services/worldLoadingService.js': loadingService,
-      '../../../../../game/frontend/worldLoading.mjs': worldLoading,
       '@/utils/viewportStoryCamera.js': { createStoryCameraController },
       '../../../../../game/frontend/storyNavigation.mjs': { createStoryNavigationController, NAVIGATION_KEY },
       '../../../../../game/frontend/storyActors.mjs': { ensureStoryCharacters },
@@ -381,12 +377,9 @@ test('a timed-out save blocks movement and replacement until its real acknowledg
   t.mock.timers.tick(30_001); await leaving;
   assert.equal(f.route, '/'); assert.match(f.alerts[0], /超时/);
   page.instance.onKeyDown(event({ code: 'KeyW' })); assert.equal(f.frames.size, 0);
-  await assert.rejects(launcher.projectLauncherService.openProject(CHILD), /请求未结束/);
+  const opening = launcher.projectLauncherService.openProject(CHILD); await turn();
   assert.deepEqual(f.opens(), []);
-  saved.resolve(); await turn();
-  // A late acknowledgement never retries automatically. A fresh user action may now open.
-  assert.deepEqual(f.opens(), []);
-  await launcher.projectLauncherService.openProject(CHILD);
+  saved.resolve(); await opening;
   assert.deepEqual(f.opens(), [CHILD]);
   assert.equal(f.calls.filter(c => c[0] === 'playerSave').length, 1);
 });
@@ -675,6 +668,6 @@ test('a living Boss disables inventory travel without submitting preparation or 
   assert.equal(page.instance.navigationPending.value, false); assert.deepEqual(f.opens(), []);
   assert.equal(f.calls.some(c => c[0] === 'key'), false);
   const tree = renderStory(proxyRefs(page.instance), []);
-  const button = findNode(tree, node => node.props?.class === 'world-travel-button');
+  const button = findNode(tree, node => node.props?.['data-inventory-travel'] !== undefined);
   assert.equal(button.props.disabled, true);
 });

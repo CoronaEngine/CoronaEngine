@@ -52,7 +52,7 @@ class GameplayTests(unittest.TestCase):
 
     def child(self):
         return Path(StorySubworlds(save=lambda _: None, validate=lambda _: None)
-                    .prepare(self.root, 'enter')['navigation']['target'])
+                    .prepare(self.root, 'O')['navigation']['target'])
 
     def test_ten_hits_death_pickup_and_reopen(self):
         self.assertEqual(self.call()['state']['boss']['hp'], 200)
@@ -104,6 +104,44 @@ class GameplayTests(unittest.TestCase):
         self.assertFalse((child / game.SAVE_PATH).exists())
         self.info['project_path'] = str(self.root)
         self.assertEqual(self.call()['state']['inventory']['worldFragment'], 1)
+
+    def test_rage_skills_charge_once_on_hit_or_miss_and_survive_reload(self):
+        for hit in (True, False):
+            with self.subTest(hit=hit):
+                for _ in range(3):
+                    self.hit()
+                before = self.call()['state']
+                self.assertEqual(before['rage'], 30)
+                request = self.request('castSkill', skillId='heavy', hit=hit, bossPosition=[0, 0, 12])
+                result = self.call(request)
+                self.assertEqual(result['status'], 'ok', result)
+                self.assertEqual(result['state']['rage'], 0)
+                self.assertEqual(result['state']['boss']['hp'], before['boss']['hp'] - (50 if hit else 0))
+                self.assertEqual(self.call(request)['state'], result['state'])
+                self.assertEqual(self.call()['state'], result['state'])
+                self.assertEqual(self.call(action='castSkill', skillId='heavy', hit=False)['status'], 'error')
+
+    def test_v1_migration_preserves_progress_without_granting_retroactive_rage(self):
+        for _ in range(3):
+            old = self.hit()['state']
+        old.update(version=1)
+        del old['rage'], old['legacyRevision']
+        path = self.root / game.SAVE_PATH
+        path.write_text(json.dumps(old), encoding='utf-8')
+        migrated = self.call()['state']
+        self.assertEqual(migrated['version'], 2)
+        self.assertEqual(migrated['legacyRevision'], 3)
+        self.assertEqual(migrated['rage'], 0)
+        self.assertEqual(migrated['boss'], old['boss'])
+        self.assertEqual(migrated['operations'], old['operations'])
+        state = self.hit()['state']
+        self.assertEqual(state['rage'], 10)
+        self.assertEqual(self.call()['state'], state)
+        state['rage'] = 100
+        path.write_text(json.dumps(state), encoding='utf-8')
+        previous = path.read_bytes()
+        self.assertEqual(self.call()['status'], 'error')
+        self.assertEqual(path.read_bytes(), previous)
 
     def test_bad_save_is_not_overwritten(self):
         self.hit()

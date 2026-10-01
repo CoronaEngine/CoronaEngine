@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { STORY_CHARACTERS, PLAYER_GUID, PLAYER_MODEL_REF, resolveStoryAssetPath, characterTransform, rotatedBounds } from '../../frontend/storyCharacters.mjs';
+import { STORY_CHARACTERS, PLAYER_GUID, PLAYER_MODEL_REF, PROPHET_MODEL_REF, resolveStoryAssetPath, characterTransform, rotatedBounds } from '../../frontend/storyCharacters.mjs';
 import { ensureStoryCharacters } from '../../frontend/storyActors.mjs';
-import { actorFixture, apiFixture, url, deferred } from './fixtures.mjs';
+import { actorFixture, apiFixture, url, deferred, projectReady } from './fixtures.mjs';
 const load = (f, extra = {}) => ensureStoryCharacters({ api: f.api, sceneId: 'scene.ini', frontendUrl: url, wait: async () => {}, ...extra });
 
 test('source/deployed/UNC asset resolution handles encoded Chinese and spaces', () => {
@@ -267,4 +267,89 @@ test('each character reaches real render readiness before the next character is 
   gate.resolve();
   await loading;
   assert.deepEqual(f.calls.filter(c => c[0] === 'create').map(c => c[1]), STORY_CHARACTERS.map(c => c.guid));
+});
+
+test('gameplay visibility leaves unrelated scene models untouched', async () => {
+  const scenery = [undefined, 'model', 'actor', 'audio', 'ui'].map((actor_type, index) => ({
+    ...actorFixture(), actor_guid: `scenery-${index}`, actor_type,
+  }));
+  scenery.push({ ...actorFixture(), actor_guid: 'hidden-scenery', visible: false });
+  for (const role of ['main', 'child']) for (const combatOnly of [false, true]) {
+    const f = apiFixture({ actors: [...scenery, ...STORY_CHARACTERS.map(c => actorFixture(c))] });
+    await load(f, { gameplay: { role, state: { boss: { hp: 200 }, drop: null } }, combatOnly });
+    for (const actor of scenery) assert.deepEqual(f.get(actor.actor_guid), actor);
+    assert.ok(f.calls.every(call => !scenery.some(actor => actor.actor_guid === call[1])));
+    assert.equal(f.get(STORY_CHARACTERS[2].guid).visible, false);
+    assert.equal(f.get(STORY_CHARACTERS[1].guid).visible, role === 'main');
+    assert.equal(f.get(STORY_CHARACTERS[3].guid).visible, role === 'child');
+  }
+});
+
+test('interrupted prophet creation retries placement before preserving its saved pose', async () => {
+  const player = actorFixture(), prophet = STORY_CHARACTERS[3];
+  player.geometry.position = [7, 0.9, -3];
+  player.geometry.rotation = [0, Math.PI + 0.4, 0];
+  const f = apiFixture({ actors: [player] });
+  const gameplay = { role: 'child', state: { boss: { hp: 0 }, drop: null } };
+  const create = f.api.sceneTools.createActor;
+  let current = true;
+  f.api.sceneTools.createActor = async (...args) => {
+    const result = await create(...args);
+    if (args[3].actor_guid === prophet.guid && !args[3].skip_if_exists) current = false;
+    return result;
+  };
+  await assert.rejects(load(f, { gameplay, isCurrent: () => current }), { name: 'AbortError' });
+  assert.deepEqual(f.get(prophet.guid).geometry.scale, [1, 1, 1]);
+  current = true;
+  await load(f, { gameplay, frontendUrl: 'http://source-art-unavailable' });
+  const facing = player.geometry.rotation[1] - Math.PI;
+  const expected = characterTransform({ ...prophet,
+    x: player.geometry.position[0] + Math.sin(facing) * 4,
+    z: player.geometry.position[2] + Math.cos(facing) * 4,
+    rotation: [0, facing + Math.PI, 0],
+  }, f.get(prophet.guid).local_aabb);
+  assert.deepEqual(f.get(prophet.guid).geometry, expected);
+  assert.equal(f.get(prophet.guid).model_ref, PROPHET_MODEL_REF);
+  assert.equal(f.state.actors.length, 2);
+  const writes = f.calls.length;
+  await load(f, { gameplay, frontendUrl: 'http://source-art-unavailable' });
+  assert.equal(f.calls.length, writes);
+  assert.deepEqual(f.get(prophet.guid).geometry, expected);
+});
+
+
+test('story initialization waits for project resources, validates their source and drains failures', async () => {
+  const f = apiFixture(), waits = []; let reads = 0;
+  f.api.project = { getProjectLoadStatus: async () => ({ data: {
+    ...projectReady('d:/story'), pending: ++reads === 1 ? 1 : 0,
+  } }) };
+  await load(f, { projectPath: 'D:\\story\\', wait: async ms => waits.push(ms) });
+  assert.deepEqual(waits, [200]);
+  f.api.project.getProjectLoadStatus = async () => projectReady('D:/other');
+  await assert.rejects(load(f, { projectPath: 'D:/story' }), /不属于目标世界/);
+  const gate = deferred(), entered = deferred(); reads = 0;
+  f.api.project.getProjectLoadStatus = async () => ({ ...projectReady('D:/story'), failed: 1, pending: ++reads === 1 ? 1 : 0 });
+  let settled = false;
+  const outcome = assert.rejects(load(f, { projectPath: 'D:/story', wait: async () => {
+    entered.resolve(); await gate.promise;
+  } }), /1 个模型/).then(() => { settled = true; });
+  await entered.promise; assert.equal(settled, false);
+  gate.resolve(); await outcome;
+});
+
+test('canceling an import keeps its resource work pending without submitting more mutations', async () => {
+  const f = apiFixture(), gate = deferred(), entered = deferred();
+  let current = true, pending = 0, settled = false;
+  f.api.project = { getProjectLoadStatus: async () => ({ ...projectReady('D:/story'), pending }) };
+  const create = f.api.sceneTools.createActor;
+  f.api.sceneTools.createActor = async (...args) => {
+    const result = await create(...args); current = false; pending = 1; return result;
+  };
+  const outcome = assert.rejects(load(f, { projectPath: 'D:/story', isCurrent: () => current, wait: async () => {
+    entered.resolve(); await gate.promise; pending = 0;
+  } }), { name: 'AbortError' }).then(() => { settled = true; });
+  await entered.promise; assert.equal(settled, false);
+  assert.deepEqual(f.calls.map(c => c[0]), ['create']);
+  gate.resolve(); await outcome;
+  assert.deepEqual(f.calls.map(c => c[0]), ['create']);
 });

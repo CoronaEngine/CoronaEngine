@@ -49,6 +49,15 @@ class StoryNavigationTests(unittest.TestCase):
         result = self.navigate('exit')
         self.assertEqual(result['navigation']['target'], str(self.root))
 
+    def test_living_boss_blocks_explicit_navigation_before_save_or_copy(self):
+        from game.runtime import story_gameplay
+        (self.root / story_gameplay.SAVE_PATH).write_text(json.dumps(story_gameplay.initial_state()), encoding='utf-8')
+        result = self.navigate()
+        self.assertEqual(result['status'], 'error')
+        self.assertIn('击败 Boss', result['message'])
+        self.api.main.scene_save.assert_not_called()
+        self.assertFalse((self.root / '.game/subworld').exists())
+
     def test_malformed_directions_and_non_story_sources_are_rejected(self):
         for direction in ['KeyO', 'KeyP', 'O', 'P', None]:
             self.assertEqual(self.navigate(direction)['status'], 'error')

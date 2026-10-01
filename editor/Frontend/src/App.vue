@@ -12,8 +12,6 @@ import { LAUNCHER_ROUTES, normalizeProjectPath, editorUiAllowed, worldModeServic
 import lanchat from '@/stores/lanchat.js';
 import { cancelPendingProjectOpen } from '@/services/projectLauncherService.js';
 import { notifyWorldError } from '@/services/worldSessionLifecycle.js';
-import WorldLoadingOverlay from '@/components/WorldLoadingOverlay.vue';
-import { worldLoadingState } from '@/services/worldLoadingService.js';
 import '@/utils/eventBus.js'; // init window.__coronaEmit
 
 const route = useRoute();
@@ -87,7 +85,7 @@ watch(() => [worldModeState.status, worldModeState.revision, route.path, route.m
 }, { immediate: true });
 
 async function refreshWorldMode(projectPath = '', force = false) {
-  if (worldModeService.opening || worldLoadingState.blocked || worldLoadingState.error) return;
+  if (worldModeService.opening) return;
   if (!force && worldModeState.status === 'ready' && projectPath
     && normalizeProjectPath(projectPath) === normalizeProjectPath(worldModeState.projectPath)) return;
   const request = ++refreshRevision;
@@ -189,9 +187,6 @@ function consumeNativeGameplayDomEvent(event) {
 }
 
 function onGlobalKeyDown(event) {
-  if ((worldLoadingState.busy || worldLoadingState.blocked) && !isEscapeKey(event)) {
-    event.preventDefault(); event.stopImmediatePropagation(); return;
-  }
   // The route may not be mounted yet while native mode/window preparation waits.
   if (isEscapeKey(event) && !isStandalonePanel.value
     && (worldModeService.opening || (!isLauncherRoute.value && !worldReady.value))) {
@@ -292,7 +287,6 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <WorldLoadingOverlay v-if="!isStandalonePanel" />
   <DockLayout v-if="isEditorRoute && worldReady" :key="worldModeState.projectPath" :component-resolver="getPluginComponent" />
   <div v-else-if="mayRenderRoute" :key="isLauncherRoute ? route.path : worldModeState.projectPath" :class="isStandalonePanel ? 'standalone-route-shell' : null">
     <router-view />
