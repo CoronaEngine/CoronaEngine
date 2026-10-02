@@ -909,7 +909,7 @@ Corona::API::Geometry Corona::API::Geometry::from_image(const std::string& image
         // NOTE: 新版 Horizon 移除了 extent() 方法
         // 暂时使用顶点数作为纹理大小的粗略估算
         // TODO: 在 upload_image_to_texture 中返回实际的纹理大小
-        dev.tex_mem = Corona::Memory::GpuMemToken(
+        dev.tex_mem = std::make_shared<Corona::Memory::GpuMemToken>(
             Corona::Memory::ResKind::Texture,
             static_cast<std::size_t>(vertices.size() * 16)); // 粗略估算
     }

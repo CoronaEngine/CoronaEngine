@@ -4603,8 +4603,10 @@ void GeometrySystem::estimate_actor_memory(std::uintptr_t actor,
                 auto geom = hub.geometry_storage().try_acquire_read(geom_handle);
                 if (!geom) continue;
                 mesh_count = static_cast<uint32_t>(geom->mesh_handles.size());
-                for (const auto& md : geom->mesh_handles)
-                    out_gpu_bytes += md.mesh_mem.bytes() + md.tex_mem.bytes();
+                for (const auto& md : geom->mesh_handles) {
+                    out_gpu_bytes += md.mesh_mem.bytes();
+                    if (md.tex_mem) out_gpu_bytes += md.tex_mem->bytes();
+                }
                 if (geom->model_resource_handle) {
                     if (auto mr = hub.model_resource_storage().try_acquire_read(geom->model_resource_handle))
                         model_id = mr->model_id;

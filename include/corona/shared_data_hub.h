@@ -46,10 +46,11 @@ struct MeshDevice {
 
     // ---- GPU 显存记账令牌（P0：mesh/texture 计量）----
     // mesh_mem 覆盖本 MeshDevice 的 4 个 GPU 缓冲（vertex/index/storage）；
-    // tex_mem 覆盖 textureBuffer（仅真实纹理时非空，占位/共享纹理计 0）。
-    // move-only：随 MeshDevice 析构/移动自动扣减/转移，与真实 HardwareBuffer 同寿。
+    // tex_mem 覆盖 textureBuffer（仅真实纹理时非空；占位纹理为空）。
+    // 纹理句柄可按材质/资源 ID 被多个 MeshDevice 共享，故纹理令牌用 shared_ptr：
+    // 同一张 GPU 纹理只记账一次，最后一个引用释放时才扣减。
     Corona::Memory::GpuMemToken mesh_mem;
-    Corona::Memory::GpuMemToken tex_mem;
+    std::shared_ptr<Corona::Memory::GpuMemToken> tex_mem;
 };
 
 struct ModelTransform {
