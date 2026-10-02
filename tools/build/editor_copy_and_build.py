@@ -24,7 +24,7 @@ def echo(msg: str) -> None:
     print(msg)
 
 
-_STALE_EXTENSIONS = {".py", ".vue", ".js", ".ts", ".jsx", ".tsx", ".css", ".scss"}
+_STALE_EXTENSIONS = {".py", ".vue", ".js", ".ts", ".jsx", ".tsx", ".css", ".scss", ".mjs"}
 _PROTECTED_DEPLOYED_ROOTS = (Path("data"), Path("runtime") / "generated")
 
 
@@ -206,6 +206,45 @@ def maybe_run_npm(frontend_dir: Path, node_dir: Path) -> int:
     return 0
 
 
+def copy_game_frontend(dest_root: Path, repository_root: Path | None = None) -> None:
+    """Keep the story modules beside CabbageEditor, as in the source checkout."""
+    root = repository_root or Path(__file__).resolve().parents[2]
+    source = root / "game" / "frontend"
+    destination = dest_root.parent / "game"
+    if not source.is_dir():
+        raise FileNotFoundError(f"Story frontend modules not found: {source}")
+    if source.resolve() == (destination / "frontend").resolve():
+        return
+    copy_tree(source, destination)
+
+
+def copy_game_art(dest_root: Path, repository_root: Path | None = None) -> None:
+    """Deploy game-owned models/textures without modifying the shared engine assets."""
+    root = repository_root or Path(__file__).resolve().parents[2]
+    source = root / "game" / "art"
+    destination = dest_root.parent / "game" / "art"
+    if not source.is_dir():
+        raise FileNotFoundError(f"Game art resources not found: {source}")
+    if source.resolve() == destination.resolve():
+        return
+    echo(f"[editor-copy] Copying game art: {source} -> {destination}")
+    # Preserve model-relative texture paths and attribution, and propagate copy failures.
+    shutil.copytree(source, destination, dirs_exist_ok=True)
+
+
+def copy_game_runtime(dest_root: Path, repository_root: Path | None = None) -> None:
+    """Deploy Python gameplay next to editor; no C++ manifest or engine rebuild needed."""
+    root = repository_root or Path(__file__).resolve().parents[2]
+    source = root / "game"
+    destination = dest_root.parent / "game"
+    if source.resolve() == destination.resolve():
+        return
+    destination.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source / "__init__.py", destination / "__init__.py")
+    for package in ("core", "systems", "world", "runtime"):
+        copy_tree(source / package, destination)
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Copy editor resources and run npm build")
     ap.add_argument("--dest-root", required=True, help="Destination root directory (CabbageEditor under target dir)")
@@ -226,6 +265,10 @@ def main(argv: list[str] | None = None) -> int:
 
     for s in src_dirs:
         copy_tree(s, dest_root, merge_content=args.merge_content)
+
+    copy_game_runtime(dest_root)
+    copy_game_art(dest_root)
+    copy_game_frontend(dest_root)
 
     # Run npm build last
     return maybe_run_npm(frontend_dir, node_dir)

@@ -7,18 +7,19 @@ const vector = (value, fallback) => Array.isArray(value) && value.length === 3 &
 export function createStoryCameraController({
   getBridge, getRect, getPixelRatio = () => 1,
   isCurrent = () => true, isInputLocked = () => false,
-  requestFrame, cancelFrame, now,
+  requestFrame, cancelFrame, now, onPlayerChanged, createControls = createViewportCameraController, onError,
 }) {
   let camera = null, disposed = false;
   const current = () => !disposed && isCurrent();
-  const controls = createViewportCameraController({
+  const controls = createControls({
+    getBridge, onError,
     getPose: () => camera,
     setPose: (pose) => { camera = pose; },
     submitPose: (pose) => {
       if (!current()) return;
-      getBridge()?.cameraMove?.(pose.handle, [...pose.position], [...pose.forward], [...pose.up], pose.fov);
+      return getBridge()?.cameraMove?.(pose.handle, [...pose.position], [...pose.forward], [...pose.up], pose.fov) ?? false;
     },
-    isCurrent: current, isInputLocked, requestFrame, cancelFrame, now,
+    isCurrent: current, isInputLocked, requestFrame, cancelFrame, now, getRect, onPlayerChanged,
   });
   function syncViewport() {
     const rect = getRect();
@@ -46,7 +47,7 @@ export function createStoryCameraController({
       const active = cameras.find((item) => item.name === name) ?? cameras[0] ?? snapshot?.camera;
       const handle = Number(active?.handle ?? active?.camera_handle ?? 0);
       if (!Number.isFinite(handle) || handle <= 0) throw new Error('当前场景没有可用相机');
-      camera = { handle, position: vector(active.position, [0, 0, -5]),
+      camera = { handle, sceneId, name: active.name, position: vector(active.position, [0, 0, -5]),
         forward: vector(active.forward, [0, 0, 1]), up: vector(active.world_up, [0, 1, 0]),
         fov: Number(active.fov) > 0 ? Number(active.fov) : 60 };
       // Clear transient editor UI without changing scene data or running scripts.
@@ -54,7 +55,17 @@ export function createStoryCameraController({
       getBridge()?.setViewportUiMode?.(handle, 'flat2d');
       getBridge()?.setViewportSystemCursorHidden?.(false, false);
       syncViewport();
+      controls.onCameraBound?.();
       return true;
+    },
+    // Capture local changes even when their animation-frame submission was canceled.
+    // No handle crosses the acknowledged persistence boundary.
+    snapshotPose() {
+      if (!current() || !camera) return null;
+      return { sceneId: camera.sceneId, cameraName: camera.name, camera: {
+        position: [...camera.position], forward: [...camera.forward],
+        world_up: [...camera.up], fov: camera.fov,
+      } };
     },
     syncViewport,
     dispose() { controls.dispose(); disposed = true; camera = null; },
