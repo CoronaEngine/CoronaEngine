@@ -34,8 +34,16 @@ const navigationPending = ref(false);
 // The gameplay object is a plain, non-reactive controller, so `computed` cannot
 // track it. Mirror the confirmed world role into a ref instead of reading through it.
 const roleRef = ref(null);
-// Reserved for the small-world naming feature; stays empty until that lands.
-const subworldName = ref(null);
+// The small-world roster: named small worlds the player owns. Mirrored from the
+// backend (authoritative), independent of the combat state like the exhibits.
+const subworlds = ref([]);
+// Which roster entry the player last entered; its name surfaces in the HUD.
+const activeSubworldId = ref(null);
+// A small world's display name, read from the roster entry being visited.
+const subworldName = computed(() {
+  const entry = subworlds.value.find(item => item.id === activeSubworldId.value);
+  return entry?.name || (subworlds.value.length ? subworlds.value[0].name : '');
+});
 const initializing = ref(true);
 const cooldownTick = ref(0);
 let cooldownTimer = null;
@@ -58,6 +66,16 @@ const placements = ref([]);
 const exhibitItems = computed(() => {
   void viewTick.value;
   return exhibitItemsFor(gameplayState.value?.state?.inventory, placements.value);
+});
+// A roster entry opens only from the main world once the boss is defeated; both
+// gates read from the confirmed role so the panel matches the travel button.
+const canEnterRoster = computed(() => {
+  const data = gameplayState.value;
+  return Boolean(data && data.role === 'main' && data.state.boss.hp <= 0 && !navigation.busy);
+});
+const canAddSubworld = computed(() => {
+  const data = gameplayState.value;
+  return Boolean(data && data.role === 'main' && data.state.boss.hp <= 0);
 });
 const siteNames = PLACEMENT_SITES.map(site => site.name).join(' → ');
 let visualPlacements = null;
@@ -479,6 +497,63 @@ async function navigateWorld() {
   try { await navigation.navigate(data.role === 'main' ? 'enter' : 'exit'); }
   finally { navigationPending.value = false; }
 }
+// Sync the roster mirror from the authoritative backend. `seed` adds one entry the
+// first time when the player has earned a small world (boss defeated) but the list
+// is still empty, so killing the boss visibly opens the player's first small world.
+async function syncSubworlds(seed = false) {
+  if (!gameplay.subworlds) return;
+  const list = gameplay.subworlds?.subworlds || [];
+  subworlds.value = [...list];
+  if (seed && !subworlds.value.length
+    && gameplayState.value?.state?.inventory?.worldFragment > 0) {
+    try {
+      const grown = await gameplay.addSubworld();
+      subworlds.value = [...(grown?.subworlds || [])];
+      if (!activeSubworldId.value && subworlds.value.length) {
+        activeSubworldId.value = subworlds.value[0].id;
+      }
+    } catch (error) { if (current()) gameplayError.value = error.message; }
+  }
+}
+// Roster actions run inside the open bag panel, unlike `runAction` (which is for
+// panel-closing combat/exhibit work), so they get their own busy guard.
+async function runPanelAction(action) {
+  if (!current() || navigation.busy || savingPlayer || actionBusy.value) return;
+  actionBusy.value = true;
+  try {
+    await action();
+    if (current()) gameplayError.value = '';
+  } catch (error) {
+    if (current()) gameplayError.value = error.message || '保存失败，请重试';
+  } finally {
+    actionBusy.value = false;
+    if (current()) updateProximity();
+  }
+}
+async function addSubworldEntry() {
+  await runPanelAction(async () => {
+    const grown = await gameplay.addSubworld();
+    subworlds.value = [...(grown?.subworlds || [])];
+    showFeedback('已记录一座小世界');
+  });
+}
+async function renameSubworldEntry(entry) {
+  const name = window.prompt(`为「${entry.name}」起一个新名字`, entry.name);
+  if (!name || !name.trim()) return;
+  await runPanelAction(async () => {
+    const grown = await gameplay.renameSubworld(entry.id, name.trim());
+    subworlds.value = [...(grown?.subworlds || [])];
+    showFeedback('小世界已命名');
+  });
+}
+// Enter a specific roster entry; remember which one so its name shows in the HUD.
+async function enterSubworldEntry(entry) {
+  const data = gameplayState.value;
+  if (!current() || !inventoryOpen.value || !data || navigationPending.value || navigation.busy
+    || data.role !== 'main' || data.state.boss.hp > 0) return;
+  activeSubworldId.value = entry.id;
+  await navigateWorld();
+}
 const saveRegistration = registerWorldSessionSave(async () => {
   camera.resetInput();
   // Keep input locked until the actual acknowledgement, even after a UI timeout.
@@ -701,6 +776,7 @@ onMounted(async () => {
     // A main world reports an empty layout, so this is a no-op there and the exhibits
     // are already known before the scene is reconciled below.
     placements.value = sanitizePlacements(gameplay.placements?.placements);
+    await syncSubworlds(true);
     const { snapshot, player, targetOffset } = await ensureStoryCharacters({
       api: editorApi, sceneId, frontendUrl: window.location.href, gameplay: loadedGameplay, assertSource, projectPath,
       isCurrent: () => current() && worldModeState.projectPath === projectPath,
@@ -965,6 +1041,31 @@ onUnmounted(() => {
             </template>
           </button>
         </div>
+        <section class="roster-section" aria-label="小世界名册">
+          <header class="roster-header">
+            <h2>小世界名册</h2>
+            <span class="roster-total">共 {{ subworlds.length }} 座</span>
+          </header>
+          <p v-if="!subworlds.length" class="roster-empty">
+            还没有小世界。击败巨龙夺取世界碎片后，将开启你的第一座小世界。
+          </p>
+          <ul v-else class="roster-list">
+            <li v-for="entry in subworlds" :key="entry.id" class="roster-row">
+              <div class="roster-info">
+                <strong>{{ entry.name }}</strong>
+                <span class="roster-id">{{ entry.id }}</span>
+              </div>
+              <div class="roster-actions">
+                <button class="roster-action" :disabled="!canEnterRoster || navigationPending"
+                  :aria-label="`进入 ${entry.name}`" @click="enterSubworldEntry(entry)">进入</button>
+                <button class="roster-action rename" :disabled="navigationPending || actionBusy"
+                  :aria-label="`给 ${entry.name} 改名`" @click="renameSubworldEntry(entry)">改名</button>
+              </div>
+            </li>
+          </ul>
+          <button v-if="canAddSubworld" class="roster-add" :disabled="navigationPending || actionBusy"
+            @click="addSubworldEntry">记录一座新小世界</button>
+        </section>
         <section v-if="inSubworld" class="exhibit-section" aria-label="小世界陈列">
           <header class="exhibit-header">
             <h2>陈列主世界的物质</h2>
@@ -1090,6 +1191,22 @@ kbd { font-family: inherit; font-size: 11px; color: #dfcb94; }
 .slot-count { position: absolute; bottom: 4px; right: 6px; font-size: 12px; }
 .inventory-footer { display: flex; justify-content: center; padding-top: 22px; }
 .exhibit-section { margin-top: 22px; padding-top: 18px; border-top: 1px solid #4e513d; }
+.roster-section { margin-top: 22px; padding-top: 18px; border-top: 1px solid #4e513d; }
+.roster-header { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 10px; }
+.roster-header h2 { margin: 0; font-size: 14px; font-weight: 500; letter-spacing: 2px; color: #dfcb94; }
+.roster-total { font-size: 11px; color: #a89d85; }
+.roster-empty { margin: 0; font-size: 12px; color: #a89d85; line-height: 1.8; }
+.roster-list { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.roster-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; border: 1px solid #4e513d; background: linear-gradient(120deg, #151711f5, #090c09ec); }
+.roster-info { display: grid; gap: 2px; min-width: 0; }
+.roster-info strong { font-size: 13px; font-weight: 500; color: #f0d69a; }
+.roster-id { font-size: 10px; color: #8e8a78; }
+.roster-actions { display: flex; gap: 8px; flex-shrink: 0; }
+.roster-action { padding: 5px 12px; border: 1px solid #bfa167; color: #f0d69a; background: #343820; font-size: 12px; cursor: pointer; }
+.roster-action.rename { border-color: #706441; background: #171813; }
+.roster-action:disabled { opacity: .45; cursor: default; }
+.roster-add { margin-top: 10px; padding: 7px 14px; width: 100%; border: 1px dashed #bfa167; color: #dfcb94; background: #23261c; font-size: 12px; cursor: pointer; }
+.roster-add:disabled { opacity: .45; cursor: default; }
 .exhibit-header { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
 .exhibit-header h2 { margin: 0; font-size: 14px; font-weight: 500; letter-spacing: 2px; }
 .exhibit-total { font-size: 11px; color: #a89d85; font-variant-numeric: tabular-nums; }

@@ -14,11 +14,13 @@ from .subworlds import _exclusive, _plain, _relation, _require_story
 from .story_navigation import _unwrap
 from . import placements
 from . import world_rules
+from . import subworld_roster as roster
 
 REQUEST_KEY = '__corona_story_gameplay_v1__'
 SAVE_PATH = Path('.game/story-gameplay.json')
 PLACEMENT_ACTIONS = ('loadPlacements', 'savePlacements', 'clearPlacements')
 WORLD_RULE_ACTIONS = ('loadWorldRules', 'saveWorldRules', 'clearWorldRules')
+ROSTER_ACTIONS = ('loadSubworlds', 'addSubworld', 'renameSubworld')
 DROP_ID = 'story.boss.world-fragment'
 CONFIG = {
     'playerHp': 100, 'rageMax': 100, 'ragePerHit': 10, 'bossHp': 200, 'damage': 20,
@@ -238,6 +240,48 @@ def handle_placement_request(request, source, api):
             return response(placements.save(owner, listed))
 
 
+def _roster_root(source):
+    """The link owner keeps the roster beside the navigation metadata, exactly like
+    the exhibition layout: a small world's roster and the main world's roster are
+    the same document, so neither world can fork it into a divergent list."""
+    role, target, _ = _relation(source)
+    return target if role == 'child' else source
+
+
+def handle_roster_request(request, source, api):
+    """Small-world roster: read, add one entry, rename one entry. Written one
+    operation at a time under the same lock as the navigation metadata so a copy/
+    restore transaction can never observe a half-saved roster."""
+    action = request['action']
+
+    def assert_source():
+        active = _unwrap(api.project_settings.get_active_project_info())
+        if (not isinstance(active, dict) or active.get('mode') != 'story'
+                or not active.get('project_path')
+                or Path(active['project_path']).resolve() != source):
+            raise ValueError('当前世界已改变，已拒绝旧世界名册请求')
+
+    with _lock:
+        assert_source()
+        _require_story(source)
+        owner = _roster_root(source)
+
+        def response(state, status='ok'):
+            return {'status': status, 'role': _relation(source)[0], 'state': state}
+
+        with _exclusive(owner):
+            assert_source()
+            if action == 'loadSubworlds':
+                return response(roster.load(owner))
+            if action == 'addSubworld':
+                return response(roster.add(owner))
+            if action == 'renameSubworld':
+                ident = request.get('subworldId')
+                name = request.get('name')
+                return response(roster.rename(owner, ident, name))
+            raise ValueError('未知名册操作')
+
+
 def handle_world_rule_request(request, source, api):
     """World rules belong to the small world whose prophet installed them.
 
@@ -285,7 +329,8 @@ def handle_gameplay_request(payload: str, *, api=None):
         if not isinstance(payload, str) or len(payload) > 65536:
             raise ValueError('玩法请求格式无效')
         request = json.loads(payload)
-        known = ('load', 'hitBoss', 'castSkill', 'pickupDrop', *PLACEMENT_ACTIONS, *WORLD_RULE_ACTIONS)
+        known = ('load', 'hitBoss', 'castSkill', 'pickupDrop', *PLACEMENT_ACTIONS,
+                 *WORLD_RULE_ACTIONS, *ROSTER_ACTIONS)
         if not isinstance(request, dict) or request.get('action') not in known:
             raise ValueError('未知玩法操作')
         if not isinstance(request.get('projectPath'), str) or not request['projectPath'].strip():
@@ -300,6 +345,8 @@ def handle_gameplay_request(payload: str, *, api=None):
             return handle_placement_request(request, source, api)
         if request['action'] in WORLD_RULE_ACTIONS:
             return handle_world_rule_request(request, source, api)
+        if request['action'] in ROSTER_ACTIONS:
+            return handle_roster_request(request, source, api)
 
         def assert_source():
             active = _unwrap(api.project_settings.get_active_project_info())

@@ -59,6 +59,9 @@ export function createStoryGameplay({ api, projectPath, readPlayer, readBoss,
   // combat state, so it is cached separately and never merged into `data.state`.
   let placementCache = null;
   let ruleCache = null;
+  // The roster (named small worlds the player owns) is likewise its own document,
+  // cached separately so a rename never rides on a combat revision.
+  let rosterCache = null;
   const skillUntil = { heavy: -Infinity, sweep: -Infinity };
   async function request(payload) {
     let timer;
@@ -127,6 +130,7 @@ export function createStoryGameplay({ api, projectPath, readPlayer, readBoss,
       // A main world reports an empty layout, so one await covers both worlds.
       try { await loadPlacements(); } catch { placementCache = null; }
       try { await loadWorldRules(); } catch { ruleCache = null; }
+      try { await loadSubworlds(); } catch { rosterCache = null; }
       return data;
     },
     // Exhibits are authored one write at a time and never share the combat revision,
@@ -168,6 +172,31 @@ export function createStoryGameplay({ api, projectPath, readPlayer, readBoss,
       return (ruleCache = response.state);
     },
     get worldRules() { return ruleCache; },
+    async loadSubworlds() {
+      const response = unwrapGameplay(await request({ action: 'loadSubworlds' }));
+      if (response?.status !== 'ok' || !response.state?.subworlds) {
+        throw new Error(response?.message || '读取小世界名册失败');
+      }
+      return (rosterCache = response.state);
+    },
+    // One entry at a time, like placements; the backend stays authoritative.
+    async addSubworld() {
+      const response = unwrapGameplay(await request({ action: 'addSubworld' }));
+      if (response?.status !== 'ok' || !response.state?.subworlds) {
+        throw new Error(response?.message || '新增小世界失败');
+      }
+      rosterCache = response.state;
+      return rosterCache;
+    },
+    async renameSubworld(subworldId, name) {
+      const response = unwrapGameplay(await request({ action: 'renameSubworld', subworldId, name }));
+      if (response?.status !== 'ok' || !response.state?.subworlds) {
+        throw new Error(response?.message || '重命名小世界失败');
+      }
+      rosterCache = response.state;
+      return rosterCache;
+    },
+    get subworlds() { return rosterCache; },
     attack() {
       if (inFlight) return inFlight;
       if (pending || visualDirty) return flush();
