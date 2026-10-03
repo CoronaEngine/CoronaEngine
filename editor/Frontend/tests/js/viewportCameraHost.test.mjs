@@ -1,18 +1,20 @@
 import { NAVIGATION_KEY } from '../../../../game/frontend/storyNavigation.mjs';
 import { gameplayConfig, projectReady } from '../../../../game/tests/frontend/fixtures.mjs';
 import * as gameplayModule from '../../../../game/frontend/storyGameplay.mjs';
-import { STORY_CHARACTERS } from '../../../../game/frontend/storyCharacters.mjs';
+import * as storyPropsModule from '../../../../game/frontend/storyProps.mjs';
+import * as prophetDialogueModule from '../../../../game/frontend/prophetDialogue.mjs';
+import { STORY_CHARACTERS, PROPHET_GUID } from '../../../../game/frontend/storyCharacters.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
-import { ref, reactive, nextTick } from 'vue';
+import { ref, reactive, computed, nextTick } from 'vue';
 import { babelParse, compileScript, parse } from 'vue/compiler-sfc';
 import { cameraMovementKey, createViewportCameraController } from '../../src/utils/viewportCameraController.js';
 import { createStoryCameraController } from '../../src/utils/viewportStoryCamera.js';
 import { createStoryNavigationController } from '../../../../game/frontend/storyNavigation.mjs';
-import { createPlayerController } from '../../../../game/frontend/playerController.mjs';
+import { createPlayerController, VIEW_LABELS } from '../../../../game/frontend/playerController.mjs';
 import { createPlayerSave } from '../../../../game/frontend/playerSave.mjs';
-import { ensureStoryCharacters } from '../../../../game/frontend/storyActors.mjs';
+import { ensureStoryCharacters, syncPlacementActors } from '../../../../game/frontend/storyActors.mjs';
 import { sceneFixture } from '../../../../game/tests/frontend/fixtures.mjs';
 import { registerWorldSessionSave, flushWorldSessionSaves, trackWorldSessionWork } from '../../src/services/worldSessionLifecycle.js';
 
@@ -198,7 +200,7 @@ async function mountStory(t, { pendingInit = null, sceneSnapshot = { data: snaps
     coronaBridge: Object.fromEntries(['actorTransform', 'cameraMove', 'setCameraViewport', 'setViewportGizmoTarget', 'setViewportUiMode', 'setViewportSystemCursorHidden']
       .map(name => [name, (...args) => { calls.push([name, ...args]); return true; }])) };
   const component = makeStory({
-    vue: { ref, nextTick, onMounted: fn => mounted.push(fn), onUnmounted: fn => unmounted.push(fn) },
+    vue: { ref, computed, nextTick, onMounted: fn => mounted.push(fn), onUnmounted: fn => unmounted.push(fn) },
     'vue-router': { onBeforeRouteLeave() {}, useRouter: () => ({ replace: async path => routes.push(path) }) },
     '@/api/editorApi.js': { editorApi: {
       project: { getProjectLoadStatus: async () => projectReady('world') },
@@ -215,11 +217,13 @@ async function mountStory(t, { pendingInit = null, sceneSnapshot = { data: snaps
     '@/services/projectLauncherService.js': { projectLauncherService: {}, cancelPendingProjectOpen() {}, getProjectSelectionVersion: () => 0 },
     '@/services/worldSessionLifecycle.js': { registerWorldSessionSave, trackWorldSessionWork, notifyWorldError: error => window.alert(error.message) },
     '../../../../../game/frontend/storyNavigation.mjs': { createStoryNavigationController, NAVIGATION_KEY },
-    '../../../../../game/frontend/storyActors.mjs': { ensureStoryCharacters },
-    '../../../../../game/frontend/playerController.mjs': { createPlayerController },
+    '../../../../../game/frontend/storyActors.mjs': { ensureStoryCharacters, syncPlacementActors },
+    '../../../../../game/frontend/storyProps.mjs': storyPropsModule,
+    '../../../../../game/frontend/prophetDialogue.mjs': prophetDialogueModule,
+    '../../../../../game/frontend/playerController.mjs': { createPlayerController, VIEW_LABELS },
     '../../../../../game/frontend/playerSave.mjs': { createPlayerSave },
     '../../../../../game/frontend/storyGameplay.mjs': gameplayModule,
-    '../../../../../game/frontend/storyCharacters.mjs': { STORY_CHARACTERS },
+    '../../../../../game/frontend/storyCharacters.mjs': { STORY_CHARACTERS, PROPHET_GUID },
     '@/utils/viewportStoryCamera.js': { createStoryCameraController: options => createStoryCameraController({
       ...options, now: () => time,
       requestFrame: callback => { frames.set(++id, callback); return id; }, cancelFrame: id => frames.delete(id),

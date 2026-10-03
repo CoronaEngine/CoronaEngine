@@ -1,4 +1,4 @@
-/** Third-person, kinematic player control. Native animation continues independently. */
+/** Kinematic player control with three camera modes. Native animation continues independently. */
 import { PLAYER_GUID, PLAYER_MODEL_YAW_OFFSET, vector3 } from './storyCharacters.mjs';
 
 export const PLAYER_CONTROLS = Object.freeze({ speed: 3, maxDelta: 0.05, sprintMultiplier: 1.5, sprintThresholdMs: 200,
@@ -6,7 +6,13 @@ export const PLAYER_CONTROLS = Object.freeze({ speed: 3, maxDelta: 0.05, sprintM
   jumpDistance: 4, jumpDuration: 0.7, jumpHeight: 1.2,
   distance: 4.5, minDistance: 2.5, maxDistance: 10,
   pitch: 20 * Math.PI / 180, minPitch: 10 * Math.PI / 180, maxPitch: 65 * Math.PI / 180,
-  sensitivity: 0.005, edgeWidth: 40, edgeYawSpeed: Math.PI / 2, edgePitchSpeed: Math.PI / 3 });
+  sensitivity: 0.005, edgeWidth: 40, edgeYawSpeed: Math.PI / 2, edgePitchSpeed: Math.PI / 3,
+  // 'first' is the descent/possession view: eyes at head height looking along yaw.
+  // 'top' is the building view: a steep, high orbit instead of a separate projection.
+  view: 'third', firstPersonEyeHeight: 1.6,
+  topPitch: 82 * Math.PI / 180, topDistance: 16, maxTopDistance: 30 });
+export const PLAYER_VIEWS = Object.freeze(['third', 'first', 'top']);
+export const VIEW_LABELS = Object.freeze({ third: '第三人称', first: '降临视角', top: '俯视建筑' });
 const clamp = (n, lo, hi) => Math.max(lo, Math.min(hi, n));
 const movementKey = event => {
   const code = String(event.code || '').toLowerCase();
@@ -27,10 +33,32 @@ export function createPlayerController({ getPose, setPose, submitPose, getBridge
   let player = null, targetOffset = 0, yaw = 0, pitch = config.pitch, distance = config.distance;
   let frame = null, epoch = 0, lastTime = null, pointer = null, disposed = false;
   let jump = null, spaceHeld = false, landingPending = false;
+  let view = PLAYER_VIEWS.includes(config.view) ? config.view : 'third';
+  let hiddenPlayer = false;
   const keys = new Set(), shifts = new Set();
   let shiftSince = null, dodge = null, lastDodge = -Infinity;
   const ready = () => !disposed && isCurrent() && !isInputLocked() && !landingPending && player && getPose();
-  const hasWork = () => jump || dodge || shifts.size || keys.size || pointer?.edgeX || pointer?.edgeY;
+  // First person ignores edge turning, so an edge pointer must not keep the frame loop
+  // alive doing nothing.
+  const hasWork = () => jump || dodge || shifts.size || keys.size
+    || (view !== 'first' && Boolean(pointer?.edgeX || pointer?.edgeY));
+  // A steep building view needs more headroom than the third-person orbit, so the
+  // pitch and distance ceilings follow the active mode instead of one global cap.
+  const pitchLimits = () => view === 'top'
+    ? [config.topPitch, Math.PI / 2 - 1e-3] : [config.minPitch, config.maxPitch];
+  const distanceLimits = () => view === 'top'
+    ? [config.minDistance, config.maxTopDistance] : [config.minDistance, config.maxDistance];
+  // Visibility is persisted by the native side, so it is only written on an actual
+  // transition and always reclaimed by bindPlayer and dispose.
+  function setPlayerHidden(hidden) {
+    if (!player || hidden === hiddenPlayer) return;
+    const bridge = getBridge();
+    if (typeof bridge?.setActorState !== 'function') return;
+    try {
+      if (bridge.setActorState(player.handle, { visible: !hidden }) !== true) return;
+      hiddenPlayer = hidden;
+    } catch (error) { onError(error); }
+  }
   function resetInput() {
     epoch++;
     if (frame !== null) cancelFrame(frame);
@@ -91,10 +119,38 @@ export function createPlayerController({ getPose, setPose, submitPose, getBridge
     if (!pose || !player || !isCurrent() || disposed) return;
     const forward = [Math.sin(yaw) * Math.cos(pitch), -Math.sin(pitch), Math.cos(yaw) * Math.cos(pitch)];
     const target = [player.position[0], player.position[1] + targetOffset, player.position[2]];
-    const next = { ...pose, position: target.map((value, i) => value - forward[i] * distance),
+    // 'first' places the eye at head height and looks straight along yaw/pitch, so the
+    // body must be hidden or the camera renders from inside the head. 'top' only pulls
+    // the existing orbit further back and steeper.
+    const eye = view === 'first'
+      ? [player.position[0], player.position[1] + config.firstPersonEyeHeight, player.position[2]]
+      : target;
+    const travel = view === 'first' ? 0 : distance;
+    const next = { ...pose, position: eye.map((value, i) => value - forward[i] * travel),
       forward, up: [0, 1, 0] };
     setPose(next);
-    if (submitPose(next) === false) throw new Error('第三人称相机实时接口不可用');
+    if (submitPose(next) === false) throw new Error('相机实时接口不可用');
+  }
+  function setView(next) {
+    if (!PLAYER_VIEWS.includes(next) || next === view) return view;
+    view = next;
+    // Entering a mode that has its own defaults should not inherit the previous cap;
+    // returning to 'third' must restore a persistable orbit.
+    if (view === 'top') distance = config.topDistance;
+    else if (view === 'third') {
+      distance = clamp(distance, config.minDistance, config.maxDistance);
+      pitch = clamp(pitch, config.minPitch, config.maxPitch);
+    }
+    const [lo, hi] = pitchLimits();
+    pitch = clamp(pitch, lo, hi);
+    setPlayerHidden(view === 'first');
+    // Outside a live session there is no camera to move; the next bind re-poses with
+    // this mode, and never restores a first-person eye as a saved orbit.
+    if (ready()) {
+      resetInput();
+      poseCamera();
+    }
+    return view;
   }
   function tick(time, token) {
     if (token !== epoch) return;
@@ -103,9 +159,12 @@ export function createPlayerController({ getPose, setPose, submitPose, getBridge
     const delta = clamp((time - (lastTime ?? time)) / 1000, 0, config.maxDelta);
     lastTime = time;
     try {
-      if (pointer) {
+      if (pointer && view !== 'first') {
+        // Edge turning exists to orbit around the player. In first person it would
+        // rotate the view the player is looking through, so look is drag/delta only.
         yaw += pointer.edgeX * config.edgeYawSpeed * delta;
-        pitch = clamp(pitch + pointer.edgeY * config.edgePitchSpeed * delta, config.minPitch, config.maxPitch);
+        const [lo, hi] = pitchLimits();
+        pitch = clamp(pitch + pointer.edgeY * config.edgePitchSpeed * delta, lo, hi);
       }
       if (dodge && delta > 0) {
         dodge.elapsed = Math.min(config.dodgeDuration, dodge.elapsed + delta);
@@ -164,6 +223,10 @@ export function createPlayerController({ getPose, setPose, submitPose, getBridge
         grounded: true, version: 0 };
       landingPending = false;
       targetOffset = offset; yaw = player.facingYaw; pitch = config.pitch; distance = config.distance;
+      // Every bind starts in third person: a first-person eye or a top-down orbit must
+      // never be written into the scene camera that the next world restores.
+      view = 'third';
+      setPlayerHidden(false);
       // Navigation saves each world's camera alongside its player. Reuse a valid saved
       // orbit rather than resetting its yaw/pitch/distance on every scene bind.
       const saved = getPose();
@@ -186,6 +249,9 @@ export function createPlayerController({ getPose, setPose, submitPose, getBridge
       poseCamera();
     },
     onCameraBound: poseCamera,
+    viewMode() { return view; },
+    setViewMode(next) { return setView(next); },
+    cycleViewMode() { return setView(PLAYER_VIEWS[(PLAYER_VIEWS.indexOf(view) + 1) % PLAYER_VIEWS.length]); },
     // Retain the last submitted pose after disposal so the old-world save barrier can flush it.
     snapshotPlayer() {
       return player ? { actorGuid: player.actorGuid, position: [...player.position],
@@ -268,8 +334,9 @@ export function createPlayerController({ getPose, setPose, submitPose, getBridge
       }
       const old = pointer?.id === event.pointerId ? pointer : null;
       if (old) {
+        const [lo, hi] = pitchLimits();
         yaw += (x - old.x) * config.sensitivity;
-        pitch = clamp(pitch + (y - old.y) * config.sensitivity, config.minPitch, config.maxPitch);
+        pitch = clamp(pitch + (y - old.y) * config.sensitivity, lo, hi);
       }
       const edge = (coordinate, start, extent) => {
         const band = Math.min(config.edgeWidth, extent / 2);
@@ -285,12 +352,17 @@ export function createPlayerController({ getPose, setPose, submitPose, getBridge
     pointerUp() { return false; },
     pointerLeave: resetInput,
     wheel(event) {
-      if (!ready() || !Number.isFinite(event.deltaY) || !event.deltaY) return false;
+      // The eye is fixed to the head in first person; zooming it out would silently
+      // turn the possession view back into an orbit.
+      if (!ready() || view === 'first' || !Number.isFinite(event.deltaY) || !event.deltaY) return false;
       event.preventDefault?.();
-      distance = clamp(distance * Math.exp(clamp(event.deltaY * 0.001, -1, 1)), config.minDistance, config.maxDistance);
+      const [lo, hi] = distanceLimits();
+      distance = clamp(distance * Math.exp(clamp(event.deltaY * 0.001, -1, 1)), lo, hi);
       schedule(); return true;
     },
     resetInput,
-    dispose() { disposed = true; resetInput(); },
+    // Reclaim a hidden player even when the source world is already going away;
+    // visibility is persisted, so leaving it false would erase the model for good.
+    dispose() { setPlayerHidden(false); disposed = true; resetInput(); },
   };
 }
