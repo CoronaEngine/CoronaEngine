@@ -12,9 +12,11 @@ import uuid
 
 from .subworlds import _exclusive, _plain, _relation, _require_story
 from .story_navigation import _unwrap
+from . import placements
 
 REQUEST_KEY = '__corona_story_gameplay_v1__'
 SAVE_PATH = Path('.game/story-gameplay.json')
+PLACEMENT_ACTIONS = ('loadPlacements', 'savePlacements', 'clearPlacements')
 DROP_ID = 'story.boss.world-fragment'
 CONFIG = {
     'playerHp': 100, 'rageMax': 100, 'ragePerHit': 10, 'bossHp': 200, 'damage': 20,
@@ -190,13 +192,58 @@ def _write(root, state, assert_source):
         Path(temporary).unlink(missing_ok=True)
 
 
+def handle_placement_request(request, source, api):
+    """Exhibits belong to the small world, so the main world reads an empty layout.
+
+    A small world keeps its own arrangement, which is why the file lives beside the
+    copied scene instead of in the main world.
+    """
+    action = request['action']
+
+    def assert_source():
+        active = _unwrap(api.project_settings.get_active_project_info())
+        if (not isinstance(active, dict) or active.get('mode') != 'story'
+                or not active.get('project_path')
+                or Path(active['project_path']).resolve() != source):
+            raise ValueError('当前世界已改变，已拒绝旧世界陈列请求')
+
+    with _lock:
+        assert_source()
+        _require_story(source)
+        role, target, _ = _relation(source)
+        # The link owner keeps the metadata for both worlds, and its `.game` folder is
+        # the only one the navigation lock guards. Storing a small world's layout
+        # beside `story-link.json` therefore keeps reads and writes mutually exclusive
+        # with the copy/restore transaction that owns that same folder.
+        owner = target if role == 'child' else source
+
+        def response(state, status='ok'):
+            return {'status': status, 'role': role, 'state': state}
+
+        if role != 'child':
+            if action != 'loadPlacements':
+                raise ValueError('只有小世界可以陈列主世界取得的物质')
+            return response(placements.initial_state())
+        with _exclusive(owner):
+            assert_source()
+            if action == 'loadPlacements':
+                return response(placements.load(owner))
+            if action == 'clearPlacements':
+                return response(placements.clear(owner))
+            listed = request.get('placements')
+            if not isinstance(listed, list):
+                raise ValueError('陈列列表无效')
+            return response(placements.save(owner, listed))
+
+
 def handle_gameplay_request(payload: str, *, api=None):
     """Only bounded domain actions; no caller-selected write path or arbitrary code."""
     try:
-        if not isinstance(payload, str) or len(payload) > 8192:
+        if not isinstance(payload, str) or len(payload) > 65536:
             raise ValueError('玩法请求格式无效')
         request = json.loads(payload)
-        if not isinstance(request, dict) or request.get('action') not in ('load', 'hitBoss', 'castSkill', 'pickupDrop'):
+        known = ('load', 'hitBoss', 'castSkill', 'pickupDrop', *PLACEMENT_ACTIONS)
+        if not isinstance(request, dict) or request.get('action') not in known:
             raise ValueError('未知玩法操作')
         if not isinstance(request.get('projectPath'), str) or not request['projectPath'].strip():
             raise ValueError('缺少来源世界')
@@ -206,6 +253,8 @@ def handle_gameplay_request(payload: str, *, api=None):
         source = Path(request['projectPath']).absolute()
         _plain(source)
         source = source.resolve(strict=True)
+        if request['action'] in PLACEMENT_ACTIONS:
+            return handle_placement_request(request, source, api)
 
         def assert_source():
             active = _unwrap(api.project_settings.get_active_project_info())

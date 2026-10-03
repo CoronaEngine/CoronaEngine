@@ -1,4 +1,5 @@
 import { FRAGMENT, FRAGMENT_GUID } from './storyGameplay.mjs';
+import { PLACEMENT_PREFIX, placementScene } from './storyProps.mjs';
 import { STORY_CHARACTERS, PLAYER_GUID, PLAYER_MODEL_REF, PROPHET_MODEL_REF, PLAYER_MODEL_YAW_OFFSET, unwrap, sceneSnapshot, resolveStoryAssetPath,
   characterTransform, rotatedBounds, hasUsableBounds } from './storyCharacters.mjs';
 
@@ -187,4 +188,98 @@ async function initializeStoryCharacters({ api, sceneId, frontendUrl, isCurrent 
   const bounds = rotatedBounds(player.local_aabb, player.geometry.rotation);
   const targetOffset = (bounds[1] + (bounds[4] - bounds[1]) * 0.75) * player.geometry.scale[1];
   return { snapshot, player, targetOffset };
+}
+
+/**
+ * Reconcile the exhibits a small world advertises with the actors it actually has.
+ *
+ * The layout is authoritative: entries are created or moved into place, and any
+ * placement actor the layout no longer lists is removed. Only this game's own
+ * placement guids are ever touched, so authored scenery is never disturbed.
+ */
+export async function syncPlacementActors({ api, sceneId, frontendUrl, placements = [],
+  assertSource = async () => {}, isCurrent = () => true,
+  wait = ms => new Promise(resolve => setTimeout(resolve, ms)), renderAttempts = 150 }) {
+  const check = () => { if (!isCurrent()) throw canceled(); };
+  const call = async (operation, invoke) => { check(); await assertSource(); check();
+    const result = success(await invoke(), operation); check(); return result; };
+  const desired = placementScene(placements);
+  check();
+  await assertSource();
+  let snapshot = sceneSnapshot(await api.scene.getSnapshot(sceneId));
+  check();
+  let actors = new Map((snapshot?.actors || []).map(actor => [actor.actor_guid, actor]));
+
+  // Retire exhibits the layout dropped before creating new ones, so a removal always
+  // takes effect even if the rest of the reconciliation fails.
+  const wanted = new Set(desired.map(entry => entry.guid));
+  for (const guid of [...actors.keys()]) {
+    if (!guid.startsWith(PLACEMENT_PREFIX) || wanted.has(guid)) continue;
+    await call('移除陈列物', () => api.sceneTools.removeActor(sceneId, guid));
+    actors.delete(guid);
+  }
+
+  for (const entry of desired) {
+    check();
+    const { prop, guid } = entry;
+    const source = resolveStoryAssetPath(frontendUrl, prop.asset);
+    let actor = actors.get(guid);
+    const wasPresent = Boolean(actor);
+    try {
+      if (!actor) {
+        actor = (await call('创建陈列物', () => api.sceneTools.createActor(sceneId, source, 'model', {
+          name: `${prop.name}${entry.index + 1}`, actor_guid: guid,
+          semantic_role: 'placement', entity_id: `story.placement.${prop.id}`,
+          entity_type: 'story_prop',
+          position: [...entry.position], rotation: [...entry.rotation],
+          scale: [entry.scale, entry.scale, entry.scale],
+          follow_camera: false, physics_enabled: false,
+        }))).actor;
+      } else if (!loaded(actor)) {
+        actor = (await call('重新绑定陈列物', () => api.sceneTools.rebindActorResource(sceneId, guid, source))).actor;
+      }
+      if (!loaded(actor)) throw new Error(actor?.load_error?.message || '模型解码失败');
+      // createActor acknowledges the handle before the import fills the AABB, and a
+      // ground offset needs real bounds; guessing one would sink the exhibit.
+      for (let attempt = 0; !hasUsableBounds(actor.local_aabb); attempt++) {
+        if (!isCurrent()) throw canceled();
+        if (actor.render_failed || ['Failed', 'Invalid'].includes(actor.gpu_build_state)) {
+          throw new Error(actor.load_error?.message || `模型导入失败（${actor.gpu_build_state || 'Failed'}）`);
+        }
+        if (attempt >= renderAttempts) throw new Error('等待陈列物包围盒超时，请重试进入世界');
+        await wait(200);
+        if (!isCurrent()) throw canceled();
+        await assertSource();
+        actor = sceneSnapshot(await api.scene.getSnapshot(sceneId))?.actors
+          ?.find(item => item.actor_guid === guid);
+        if (!loaded(actor)) throw new Error(actor?.load_error?.message || '陈列物实例已失效');
+      }
+      check();
+      // The stored y is the ground line: the prop stands on it, not centred on it.
+      const normalized = characterTransform({ rotation: [...entry.rotation], height: prop.height },
+        actor.local_aabb).scale[0];
+      const scale = wasPresent && sameVector(actor.geometry?.scale,
+        [normalized, normalized, normalized]) ? [...actor.geometry.scale]
+        : [entry.scale, entry.scale, entry.scale];
+      const bounds = rotatedBounds(actor.local_aabb, entry.rotation);
+      const transform = { position: [entry.position[0], entry.position[1] - bounds[1] * scale[1],
+        entry.position[2]], rotation: [...entry.rotation], scale };
+      if (Object.entries(transform).some(([key, value]) => !sameVector(actor.geometry?.[key], value))) {
+        actor = (await call('摆放陈列物', () => api.scene.setActorTransform(sceneId, guid, transform))).actor;
+      }
+      if (actor.mechanics?.physics_enabled !== false) {
+        actor = (await call('关闭陈列物物理', () => api.sceneTools.setActorPhysics(sceneId, guid,
+          { physics_enabled: false }))).actor;
+      }
+      if (actor.follow_camera || !actor.visible) {
+        actor = (await call('设置陈列物可见性', () => api.sceneTools.setActorState(sceneId, guid,
+          { visible: true, follow_camera: false }))).actor;
+      }
+      actors.set(guid, actor);
+    } catch (error) {
+      if (error.name === 'AbortError') throw error;
+      throw new Error(`${prop.name}陈列失败（${source}）：${error.message}`, { cause: error });
+    }
+  }
+  return { snapshot, placements: desired };
 }

@@ -2,11 +2,13 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { createRequire } from 'node:module';
 import test from 'node:test';
-import { createPlayerController } from '../../frontend/playerController.mjs';
+import { createPlayerController, VIEW_LABELS } from '../../frontend/playerController.mjs';
 import { createPlayerSave } from '../../frontend/playerSave.mjs';
-import { ensureStoryCharacters } from '../../frontend/storyActors.mjs';
+import { ensureStoryCharacters, syncPlacementActors } from '../../frontend/storyActors.mjs';
 import * as gameplayModule from '../../frontend/storyGameplay.mjs';
-import { STORY_CHARACTERS } from '../../frontend/storyCharacters.mjs';
+import * as storyPropsModule from '../../frontend/storyProps.mjs';
+import * as prophetDialogueModule from '../../frontend/prophetDialogue.mjs';
+import { STORY_CHARACTERS, PROPHET_GUID } from '../../frontend/storyCharacters.mjs';
 import { actorFixture } from './fixtures.mjs';
 import { createStoryNavigationController } from '../../frontend/storyNavigation.mjs';
 import { createStoryCameraController } from '../../../editor/Frontend/src/utils/viewportStoryCamera.js';
@@ -20,7 +22,7 @@ import lanchat from '../../../editor/Frontend/src/stores/lanchat.js';
 
 const require = createRequire(new URL('../../../editor/Frontend/package.json', import.meta.url));
 const vue = require('vue');
-const { ref, proxyRefs, nextTick } = vue;
+const { ref, computed, proxyRefs, nextTick } = vue;
 const { parse, compileScript, compileTemplate, babelParse } = require('vue/compiler-sfc');
 const { descriptor } = parse(fs.readFileSync(new URL('../../../editor/Frontend/src/views/layout/StoryWorld.vue', import.meta.url), 'utf8'));
 const compiled = compileScript(descriptor, { id: 'story-navigation-test', genDefaultAs: 'StoryWorld' });
@@ -139,7 +141,7 @@ async function fixture(t, options = {}) {
   function mount() {
     const mounted = [], unmounted = [];
     const component = makeComponent({
-      vue: { ref, nextTick, onMounted: fn => mounted.push(fn), onUnmounted: fn => unmounted.push(fn) },
+      vue: { ref, computed, nextTick, onMounted: fn => mounted.push(fn), onUnmounted: fn => unmounted.push(fn) },
       'vue-router': { onBeforeRouteLeave() {}, useRouter: () => ({ replace: async path => { route = path; } }) },
       '@/api/editorApi.js': { editorApi },
       '@/services/worldModeService.js': worldMode,
@@ -147,11 +149,13 @@ async function fixture(t, options = {}) {
       '@/services/worldSessionLifecycle.js': lifecycle,
       '@/utils/viewportStoryCamera.js': { createStoryCameraController },
       '../../../../../game/frontend/storyNavigation.mjs': { createStoryNavigationController, NAVIGATION_KEY },
-      '../../../../../game/frontend/storyActors.mjs': { ensureStoryCharacters },
-      '../../../../../game/frontend/playerController.mjs': { createPlayerController },
+      '../../../../../game/frontend/storyActors.mjs': { ensureStoryCharacters, syncPlacementActors },
+      '../../../../../game/frontend/playerController.mjs': { createPlayerController, VIEW_LABELS },
       '../../../../../game/frontend/playerSave.mjs': { createPlayerSave },
       '../../../../../game/frontend/storyGameplay.mjs': gameplayModule,
-      '../../../../../game/frontend/storyCharacters.mjs': { STORY_CHARACTERS },
+      '../../../../../game/frontend/storyCharacters.mjs': { STORY_CHARACTERS, PROPHET_GUID },
+      '../../../../../game/frontend/storyProps.mjs': storyPropsModule,
+      '../../../../../game/frontend/prophetDialogue.mjs': prophetDialogueModule,
     });
     const instance = component.setup({}, { expose() {} });
     instance.surface.value = { focus() {}, getBoundingClientRect: () => ({ left: 0, top: 0, width: 800, height: 600 }) };

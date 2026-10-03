@@ -15,6 +15,7 @@ export const STORY_CHARACTERS = Object.freeze([
 ].map(character => Object.freeze({ ...character, rotation: Object.freeze(character.rotation) })));
 
 export const PLAYER_GUID = STORY_CHARACTERS[0].guid;
+export const PROPHET_GUID = STORY_CHARACTERS[3].guid;
 export const unwrap = value => value?.data ?? value;
 export const sceneSnapshot = value => {
   const data = unwrap(value);
