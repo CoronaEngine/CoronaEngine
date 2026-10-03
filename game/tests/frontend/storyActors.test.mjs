@@ -226,6 +226,23 @@ test('legacy incomplete import receives the default corrected pose, not a second
   assert.ok(f.get(PLAYER_GUID).geometry.position[1] > 0);
   assert.equal(f.state.actors.length, 4);
 });
+test('every versioned role is created with its placement marker in one call', async () => {
+  // Regression: the prophet was created without its marker, so every entry took the
+  // legacy repair path, which never persisted the marker. The world then failed to
+  // load on every attempt with "引擎未确认玩家朝向版本".
+  const f = apiFixture({ actors: [] });
+  await load(f, { gameplay: { role: 'child', state: { boss: { hp: 0 }, drop: null } } });
+  const creation = guid => f.calls.filter(call => call[0] === 'create' && call[1] === guid)
+    .find(call => !call[4].skip_if_exists);
+  assert.equal(creation(STORY_CHARACTERS[0].guid)[4].model_ref, PLAYER_MODEL_REF);
+  assert.equal(creation(STORY_CHARACTERS[3].guid)[4].model_ref, PROPHET_MODEL_REF);
+  // Committing the marker means the repair path is no longer needed to version the
+  // actor. The prophet is the one exception: its first placement still has to be
+  // normalized away from the raw unit-scale pose, and that must happen exactly once.
+  const repairs = f.calls.filter(call => call[0] === 'create' && call[4].skip_if_exists);
+  assert.deepEqual(repairs.map(call => call[1]), [STORY_CHARACTERS[3].guid]);
+});
+
 test('main hides NPCs; child reuses only prophet; corrected dragon bounds stay grounded', async () => {
   for (const role of ['main', 'child']) {
     const actors = STORY_CHARACTERS.map(c => actorFixture(c));
@@ -285,7 +302,7 @@ test('gameplay visibility leaves unrelated scene models untouched', async () => 
   }
 });
 
-test('interrupted prophet creation retries placement before preserving its saved pose', async () => {
+test('interrupted prophet creation is grounded on retry and then preserved', async () => {
   const player = actorFixture(), prophet = STORY_CHARACTERS[3];
   player.geometry.position = [7, 0.9, -3];
   player.geometry.rotation = [0, Math.PI + 0.4, 0];
@@ -299,18 +316,22 @@ test('interrupted prophet creation retries placement before preserving its saved
     return result;
   };
   await assert.rejects(load(f, { gameplay, isCurrent: () => current }), { name: 'AbortError' });
-  assert.deepEqual(f.get(prophet.guid).geometry.scale, [1, 1, 1]);
+  // Creation owns the placement marker immediately, so a later entry never mistakes
+  // this actor for an unversioned legacy one.
+  assert.equal(f.get(prophet.guid).model_ref, PROPHET_MODEL_REF);
+
   current = true;
   await load(f, { gameplay, frontendUrl: 'http://source-art-unavailable' });
-  const facing = player.geometry.rotation[1] - Math.PI;
-  const expected = characterTransform({ ...prophet,
-    x: player.geometry.position[0] + Math.sin(facing) * 4,
-    z: player.geometry.position[2] + Math.cos(facing) * 4,
-    rotation: [0, facing + Math.PI, 0],
-  }, f.get(prophet.guid).local_aabb);
+  // The raw unit-scale placeholder pose must be normalized and grounded in this same
+  // load: the prophet is placed on demand, so a second entry never comes to fix it.
+  const expected = characterTransform(prophet, f.get(prophet.guid).local_aabb);
   assert.deepEqual(f.get(prophet.guid).geometry, expected);
+  assert.deepEqual(expected.position.slice(0, 3), [prophet.x, 0.9, prophet.z]);
+  assert.deepEqual(expected.rotation, [...prophet.rotation]);
   assert.equal(f.get(prophet.guid).model_ref, PROPHET_MODEL_REF);
   assert.equal(f.state.actors.length, 2);
+
+  // Once the committed pose matches, re-entering is a no-op that preserves it.
   const writes = f.calls.length;
   await load(f, { gameplay, frontendUrl: 'http://source-art-unavailable' });
   assert.equal(f.calls.length, writes);
