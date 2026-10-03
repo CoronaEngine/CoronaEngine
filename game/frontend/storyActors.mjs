@@ -90,7 +90,11 @@ async function initializeStoryCharacters({ api, sceneId, frontendUrl, isCurrent 
         const created = await call('创建模型', () => api.sceneTools.createActor(sceneId, source, 'model', {
           name: character.name, actor_guid: character.guid, semantic_role: character.role,
           entity_id: `story.${character.role}`, entity_type: 'story_character',
-          ...(character.role === 'player' ? { model_ref: PLAYER_MODEL_REF } : {}),
+          // Every role that owns a placement version must be created with it. Omitting
+          // the prophet's marker made every entry take the legacy repair path, and that
+          // path never persisted the marker, so the world failed to load forever.
+          ...(character.role === 'player' ? { model_ref: PLAYER_MODEL_REF }
+            : character.role === 'prophet' ? { model_ref: PROPHET_MODEL_REF } : {}),
           position: [character.x, 0, character.z], rotation: character.rotation, scale: [1, 1, 1],
           follow_camera: false, physics_enabled: false,
         }));
@@ -120,13 +124,21 @@ async function initializeStoryCharacters({ api, sceneId, frontendUrl, isCurrent 
       check();
       // Do not use native ground_align/world_aabb: those bounds omit actor rotation.
       const placement = characterTransform(character, actor.local_aabb);
-      // A canceled/failed first import can leave the player at unit scale and y=0.
-      // Only preserve its saved pose once the normalization step was committed.
+      // A canceled/failed first import can leave the actor at unit scale and y=0.
+      // Only preserve its saved pose once the normalization step was committed, which
+      // the normalized scale proves. The marker alone is not enough: an interrupted
+      // first attempt owns the marker but still carries the raw placeholder pose.
       const initializedPlayer = wasPresent && character.role === 'player'
         && sameVector(actor.geometry?.scale, placement.scale);
       const legacyPlayer = character.role === 'player' && actor.model_ref !== PLAYER_MODEL_REF;
-      const initializedProphet = wasPresent && character.role === 'prophet' && actor.model_ref === PROPHET_MODEL_REF;
-      const legacyProphet = gameplay?.role === 'child' && character.role === 'prophet' && actor.model_ref !== PROPHET_MODEL_REF;
+      const initializedProphet = wasPresent && character.role === 'prophet'
+        && actor.model_ref === PROPHET_MODEL_REF && sameVector(actor.geometry?.scale, placement.scale);
+      // The prophet is placed on demand, so a first attempt must be committed in one
+      // load: waiting for the next entry left it standing at ground level meanwhile.
+      const unplacedProphet = character.role === 'prophet'
+        && !sameVector(actor.geometry?.scale, placement.scale);
+      const legacyProphet = gameplay?.role === 'child' && character.role === 'prophet'
+        && (actor.model_ref !== PROPHET_MODEL_REF || unplacedProphet);
       let savedGeometry = initializedPlayer || initializedProphet ? actor.geometry : null;
       if (legacyPlayer && savedGeometry) {
         savedGeometry = { ...savedGeometry, rotation: [...savedGeometry.rotation] };
