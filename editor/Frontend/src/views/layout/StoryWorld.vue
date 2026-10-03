@@ -40,7 +40,7 @@ const subworlds = ref([]);
 // Which roster entry the player last entered; its name surfaces in the HUD.
 const activeSubworldId = ref(null);
 // A small world's display name, read from the roster entry being visited.
-const subworldName = computed(() {
+const subworldName = computed(() => {
   const entry = subworlds.value.find(item => item.id === activeSubworldId.value);
   return entry?.name || (subworlds.value.length ? subworlds.value[0].name : '');
 });
