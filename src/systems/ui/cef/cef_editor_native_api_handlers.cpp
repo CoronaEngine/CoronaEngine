@@ -3342,6 +3342,12 @@ NativeResult create_native_editor_actor(const std::string& scene_route_arg,
         if (existing != nullptr) {
             if (actor_data_bool(actor_data, {"update_if_exists"}).value_or(false)) {
                 apply_actor_data_to_existing(*existing);
+                // Runtime metadata belongs to the update path too: model_ref is only ever
+                // written from actor_data here, and the caller reads it back to verify the
+                // placement it just asked for. Leaving it untouched makes every
+                // update_if_exists call a silent no-op for model_ref, so story placement
+                // fails its read-back check and the small world refuses to open.
+                apply_runtime_metadata(*existing);
                 persist_native_scene_actors(*scene);
                 emit_scene_tree_changed(scene->route);
             }

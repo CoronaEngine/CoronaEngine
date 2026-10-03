@@ -1,0 +1,21 @@
+{
+  "$comment": "碎片目录：每个碎片对应一个「世界规则」。只读数据，不是存档——玩家把哪个碎片装进了哪个小世界，记在该小世界的 .game/story-world-rules.json 里。initial=true 表示开局即拥有（对应需求：初始获得的碎片为让所有物体持续左右小范围浮动）。",
+  "version": 1,
+  "fragments": [
+    {
+      "id": "sway",
+      "name": "浮动碎片",
+      "initial": true,
+      "description": "让小世界里的物体持续左右小范围浮动。",
+      "rule": {
+        "type": "sway",
+        "axis": "x",
+        "amplitude": 0.25,
+        "periodMs": 2400,
+        "excludeRoles": [
+          "player"
+        ]
+      }
+    }
+  ]
+}

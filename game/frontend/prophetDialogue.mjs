@@ -1,29 +1,25 @@
+import { PROPHET_CONTRACT, PROPHET_SCRIPT } from './storyDialogue.mjs';
+
 /**
  * What the prophet says, and how the player reaches them.
  *
- * Every line lives in `PROPHET_DIALOGUE` so the script can be rewritten without
- * touching the page. Interaction rules stay here too, because they must agree with
- * how `storyActors.mjs` places the prophet beside the player.
+ * The content now comes from `game/data/prophet.json` through `storyDialogue.mjs`, so
+ * rewriting the script is a data edit and never a code edit. Interaction rules stay
+ * here too, because they must agree with how `storyActors.mjs` places the prophet
+ * beside the player.
  */
 
 export const PROPHET_ROLE = 'prophet';
-export const PROPHET_NAME = '先知';
+export const PROPHET_NAME = PROPHET_SCRIPT.name;
 
-/**
- * Placeholder script. Replace the `lines` below with the final text; the panel reads
- * this structure directly, so no code changes are needed for a rewrite.
- */
+/** Read straight from the script projection; `normalizeDialogue` still guards edits. */
 export const PROPHET_DIALOGUE = Object.freeze({
-  id: 'prophet',
-  name: PROPHET_NAME,
-  title: '小世界的守望者',
-  hint: 'F 交谈 · Enter 继续 · Esc 离开',
-  lines: Object.freeze([
-    '你从小世界之外回来了。',
-    '外面的巨龙倒下了，你带回了它的碎片。',
-    '把碎片留在这里吧——它会记住你走过的路。',
-  ]),
-  closing: '去想放什么，就去放吧。',
+  id: PROPHET_SCRIPT.id,
+  name: PROPHET_SCRIPT.name,
+  title: PROPHET_SCRIPT.title,
+  hint: PROPHET_SCRIPT.hint,
+  lines: PROPHET_SCRIPT.lines,
+  closing: PROPHET_SCRIPT.closing,
 });
 
 /**
@@ -34,7 +30,7 @@ export const PROPHET_DIALOGUE = Object.freeze({
  * model's proportions. The range is therefore measured to the body and kept generous
  * enough to cover that placement, while still refusing a prophet across the world.
  */
-export const PROPHET_INTERACTION = Object.freeze({ range: 12 });
+export const PROPHET_INTERACTION = Object.freeze({ range: PROPHET_CONTRACT.interaction.range });
 
 /** The prophet is a small-world only inhabitant; the main world never has one. */
 export function prophetAvailable(role) {

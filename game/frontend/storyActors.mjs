@@ -2,6 +2,7 @@ import { FRAGMENT, FRAGMENT_GUID } from './storyGameplay.mjs';
 import { PLACEMENT_PREFIX, placementScene } from './storyProps.mjs';
 import { STORY_CHARACTERS, PLAYER_GUID, PLAYER_MODEL_REF, PROPHET_MODEL_REF, PLAYER_MODEL_YAW_OFFSET, unwrap, sceneSnapshot, resolveStoryAssetPath,
   characterTransform, rotatedBounds, hasUsableBounds } from './storyCharacters.mjs';
+import { PROPHET_PLACEMENT } from './storyDialogue.mjs';
 
 const canceled = () => Object.assign(new Error('剧情世界初始化已取消'), { name: 'AbortError' });
 const success = (response, operation) => {
@@ -79,8 +80,9 @@ async function initializeStoryCharacters({ api, sceneId, frontendUrl, isCurrent 
       const player = actors.get(PLAYER_GUID);
       if (!player?.geometry) throw new Error('先知初始化前玩家位置未就绪');
       const facing = player.geometry.rotation[1] - PLAYER_MODEL_YAW_OFFSET;
-      character = { ...character, x: player.geometry.position[0] + Math.sin(facing) * 4,
-        z: player.geometry.position[2] + Math.cos(facing) * 4, rotation: [0, facing + Math.PI, 0] };
+      character = { ...character, x: player.geometry.position[0] + Math.sin(facing) * PROPHET_PLACEMENT.aheadDistance,
+        z: player.geometry.position[2] + Math.cos(facing) * PROPHET_PLACEMENT.aheadDistance,
+        rotation: [0, facing + PROPHET_PLACEMENT.yawOffset, 0] };
     }
     let source;
     try {
@@ -139,12 +141,15 @@ async function initializeStoryCharacters({ api, sceneId, frontendUrl, isCurrent 
         // A lost reply/reentry must neither flip the player again nor preserve an ungrounded prophet.
         // Reuse the portable resource route; an existing world needs no source art.
         const route = actor.route || source || resolveStoryAssetPath(frontendUrl, character.asset);
-        actor = (await call('校正玩家朝向', () => api.sceneTools.createActor(sceneId, route, 'model', {
+        actor = (await call(`校正${character.name}摆位`, () => api.sceneTools.createActor(sceneId, route, 'model', {
           actor_guid: character.guid, skip_if_exists: true, update_if_exists: true,
           model_ref: modelRef, ...transform,
         }))).actor;
+        // Name the actor and the field that disagreed: this used to report "玩家朝向" even when
+        // the prophet was the one the engine failed to confirm, which sent debugging the wrong way.
         if (actor?.model_ref !== modelRef || !sameVector(actor.geometry?.rotation, transform.rotation)) {
-          throw new Error('引擎未确认玩家朝向版本，请重试进入世界');
+          const unconfirmed = actor?.model_ref !== modelRef ? `摆位标记 ${modelRef}` : '朝向';
+          throw new Error(`${character.name}摆位未被引擎确认（${unconfirmed}），请重试进入世界`);
         }
       } else if (Object.entries(transform).some(([key, value]) => !sameVector(actor.geometry?.[key], value))) {
         actor = (await call('设置模型位置', () => api.scene.setActorTransform(sceneId, character.guid, transform))).actor;

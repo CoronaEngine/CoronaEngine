@@ -3,7 +3,10 @@ import { gameplayConfig, projectReady } from '../../../../game/tests/frontend/fi
 import * as gameplayModule from '../../../../game/frontend/storyGameplay.mjs';
 import * as storyPropsModule from '../../../../game/frontend/storyProps.mjs';
 import * as prophetDialogueModule from '../../../../game/frontend/prophetDialogue.mjs';
-import { STORY_CHARACTERS, PROPHET_GUID } from '../../../../game/frontend/storyCharacters.mjs';
+import * as storyCubeModule from '../../../../game/frontend/storyCube.mjs';
+import * as storyWorldRulesModule from '../../../../game/frontend/storyWorldRules.mjs';
+import * as storyProphetActionsModule from '../../../../game/frontend/storyProphetActions.mjs';
+import { STORY_CHARACTERS, PROPHET_GUID, resolveStoryAssetPath } from '../../../../game/frontend/storyCharacters.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
@@ -220,10 +223,13 @@ async function mountStory(t, { pendingInit = null, sceneSnapshot = { data: snaps
     '../../../../../game/frontend/storyActors.mjs': { ensureStoryCharacters, syncPlacementActors },
     '../../../../../game/frontend/storyProps.mjs': storyPropsModule,
     '../../../../../game/frontend/prophetDialogue.mjs': prophetDialogueModule,
+    '../../../../../game/frontend/storyCube.mjs': storyCubeModule,
+    '../../../../../game/frontend/storyWorldRules.mjs': storyWorldRulesModule,
+    '../../../../../game/frontend/storyProphetActions.mjs': storyProphetActionsModule,
     '../../../../../game/frontend/playerController.mjs': { createPlayerController, VIEW_LABELS },
     '../../../../../game/frontend/playerSave.mjs': { createPlayerSave },
     '../../../../../game/frontend/storyGameplay.mjs': gameplayModule,
-    '../../../../../game/frontend/storyCharacters.mjs': { STORY_CHARACTERS, PROPHET_GUID },
+    '../../../../../game/frontend/storyCharacters.mjs': { STORY_CHARACTERS, PROPHET_GUID, resolveStoryAssetPath },
     '@/utils/viewportStoryCamera.js': { createStoryCameraController: options => createStoryCameraController({
       ...options, now: () => time,
       requestFrame: callback => { frames.set(++id, callback); return id; }, cancelFrame: id => frames.delete(id),

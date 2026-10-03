@@ -245,6 +245,24 @@ def copy_game_runtime(dest_root: Path, repository_root: Path | None = None) -> N
         copy_tree(source / package, destination)
 
 
+def copy_game_data(dest_root: Path, repository_root: Path | None = None) -> None:
+    """Deploy the read-only story content (prophet script, placement, contract).
+
+    game/data is not a Python package and holds no runtime state, so it is copied as
+    plain JSON: the shipped program must carry the same authoritative content the
+    repository validates against.
+    """
+    root = repository_root or Path(__file__).resolve().parents[2]
+    source = root / "game" / "data"
+    destination = dest_root.parent / "game" / "data"
+    if not source.is_dir():
+        raise FileNotFoundError(f"Story content data not found: {source}")
+    if source.resolve() == destination.resolve():
+        return
+    echo(f"[editor-copy] Copying game data: {source} -> {destination}")
+    shutil.copytree(source, destination, dirs_exist_ok=True)
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Copy editor resources and run npm build")
     ap.add_argument("--dest-root", required=True, help="Destination root directory (CabbageEditor under target dir)")
@@ -268,6 +286,7 @@ def main(argv: list[str] | None = None) -> int:
 
     copy_game_runtime(dest_root)
     copy_game_art(dest_root)
+    copy_game_data(dest_root)
     copy_game_frontend(dest_root)
 
     # Run npm build last

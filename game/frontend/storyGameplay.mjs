@@ -58,6 +58,7 @@ export function createStoryGameplay({ api, projectPath, readPlayer, readBoss,
   // The small world's exhibit layout is its own document: it is not part of the
   // combat state, so it is cached separately and never merged into `data.state`.
   let placementCache = null;
+  let ruleCache = null;
   const skillUntil = { heavy: -Infinity, sweep: -Infinity };
   async function request(payload) {
     let timer;
@@ -125,6 +126,7 @@ export function createStoryGameplay({ api, projectPath, readPlayer, readBoss,
       accept(response);
       // A main world reports an empty layout, so one await covers both worlds.
       try { await loadPlacements(); } catch { placementCache = null; }
+      try { await loadWorldRules(); } catch { ruleCache = null; }
       return data;
     },
     // Exhibits are authored one write at a time and never share the combat revision,
@@ -148,6 +150,24 @@ export function createStoryGameplay({ api, projectPath, readPlayer, readBoss,
       return placementCache;
     },
     get placements() { return placementCache; },
+    // World rules a small world was given by installing a fragment. They change no scene
+    // membership, so unlike exhibits they never mark the visuals dirty: the rule engine
+    // animates actors that already exist.
+    async loadWorldRules() {
+      const response = unwrapGameplay(await request({ action: 'loadWorldRules' }));
+      if (response?.status !== 'ok' || !Array.isArray(response.state?.rules)) {
+        throw new Error(response?.message || '读取世界规则失败');
+      }
+      return (ruleCache = response.state);
+    },
+    async saveWorldRules(rules) {
+      const response = unwrapGameplay(await request({ action: 'saveWorldRules', rules }));
+      if (response?.status !== 'ok' || !Array.isArray(response.state?.rules)) {
+        throw new Error(response?.message || '保存世界规则失败');
+      }
+      return (ruleCache = response.state);
+    },
+    get worldRules() { return ruleCache; },
     attack() {
       if (inFlight) return inFlight;
       if (pending || visualDirty) return flush();

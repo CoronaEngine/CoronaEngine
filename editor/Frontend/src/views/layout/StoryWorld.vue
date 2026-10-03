@@ -17,7 +17,13 @@ import { PROPHET_INTERACTION, canTalkToProphet, normalizeDialogue,
 import { createPlayerController, VIEW_LABELS } from '../../../../../game/frontend/playerController.mjs';
 import { createPlayerSave } from '../../../../../game/frontend/playerSave.mjs';
 import { createStoryGameplay, worldBounds, distanceToBounds, pickupDistance } from '../../../../../game/frontend/storyGameplay.mjs';
-import { STORY_CHARACTERS } from '../../../../../game/frontend/storyCharacters.mjs';
+import { STORY_CHARACTERS, resolveStoryAssetPath, sceneSnapshot } from '../../../../../game/frontend/storyCharacters.mjs';
+import { ensureStoryCube, cubeTransformOf, playerFacingYaw } from '../../../../../game/frontend/storyCube.mjs';
+import { collectSwayTargets, createWorldRuleRunner,
+  findFragment } from '../../../../../game/frontend/storyWorldRules.mjs';
+import { ADJUST_ACTIONS, PROPHET_SCREENS, adjustFeedback, fragmentPanel,
+  nextObjectTransform, objectLabel, prophetKeyAction, selectableObjects,
+  toggleFragment } from '../../../../../game/frontend/storyProphetActions.mjs';
 
 const router = useRouter();
 const surface = ref(null);
@@ -230,6 +236,9 @@ const dialogueLine = ref(0);
 const prophetNearby = ref(false);
 const dialogue = normalizeDialogue(null);
 let prophetActor = null;
+let playerActor = null;
+let cubeActor = null;
+let cubeTransform = null;
 // Derived per check rather than cached: the prophet is an engine-owned actor whose
 // transform can change (a reload, a hand edit, or another world's restore), and a
 // stale box would keep F answering from where the prophet used to stand.
@@ -244,6 +253,8 @@ function openDialogue() {
 }
 function closeDialogue() {
   if (!dialogueOpen.value) return;
+  leaveProphetScreen();
+  exitAdjustMode({ reopenDialogue: false });
   dialogueOpen.value = false;
   dialogueLine.value = 0;
   // Re-arm the proximity hint immediately; nothing else moves the player here, so
@@ -261,6 +272,157 @@ function advanceDialogue() {
 function interact() {
   if (prophetNearby.value) openDialogue();
   else void runAction(gameplay.pickup);
+}
+
+// ---- 「先知」旁的物体与世界规则（李淳珺任务）-----------------------------------
+// The cube is a game-owned prop the prophet lets the player scale or move; the rule
+// engine animates the small world once a fragment is installed. Both live in their own
+// modules, so this page only wires them up: it renders the menu and applies what the
+// pure functions return.
+const installedRules = ref([]);
+const actionFeedback = ref('');
+// The saved records only say which fragments are installed; the semantics come from the
+// catalogue, so a rewrite of a rule never invalidates an existing world.
+const resolvedRules = computed(() => installedRules.value
+  .map(record => findFragment(record?.fragmentId)?.rule).filter(Boolean));
+// The panel has two main options. «碎片» is a screen inside the panel; «调整物体» leaves the
+// panel for the overhead editing mode, and leaving that mode reopens the panel.
+const prophetScreen = ref(null);
+const adjustMode = ref(false);
+const previousViewMode = ref(null);
+const adjustSelection = ref(null);
+const fragmentList = computed(() => fragmentPanel(installedRules.value));
+const adjustHint = computed(() => (adjustSelection.value
+  ? `已选中：${adjustSelection.value.name}`
+  : '俯瞰视角：点击物体选中它，再用下面的按钮调整'));
+function enterAdjustMode() {
+  actionFeedback.value = '';
+  prophetScreen.value = null;
+  adjustSelection.value = null;
+  // The overhead view is what makes the arrangement readable; remember where to return.
+  previousViewMode.value = camera.viewMode?.() || null;
+  camera.setViewMode?.('top');
+  adjustMode.value = true;
+  dialogueOpen.value = false;
+  camera.resetInput();
+  void nextTick(() => surface.value?.focus());
+  void loadSelectableObjects();
+}
+// The list is the reliable way to choose an object: clicking a name cannot miss, while
+// clicking a pixel depends on the engine's readback settling.
+const selectableList = ref([]);
+const isSelected = entry => Boolean(adjustSelection.value
+  && adjustSelection.value.guid === entry?.guid);
+async function loadSelectableObjects() {
+  try {
+    selectableList.value = selectableObjects(await editorApi.scene.getSnapshot(sceneId));
+  } catch (error) {
+    selectableList.value = [];
+    actionFeedback.value = `读取物体列表失败：${error.message}`;
+  }
+}
+function selectObjectFromList(entry) {
+  adjustSelection.value = { guid: entry.guid, name: entry.name,
+    route: entry.route, modelRef: entry.modelRef,
+    actor: { actor_guid: entry.guid, name: entry.name, geometry: entry.transform },
+    transform: entry.transform };
+  actionFeedback.value = `已选中：${entry.name}`;
+}
+function exitAdjustMode({ reopenDialogue = true } = {}) {
+  if (!adjustMode.value) return;
+  if (previousViewMode.value) camera.setViewMode?.(previousViewMode.value);
+  previousViewMode.value = null;
+  adjustMode.value = false;
+  adjustSelection.value = null;
+  actionFeedback.value = '';
+  camera.resetInput();
+  if (reopenDialogue) {
+    // Back to the conversation, positioned on the last line so the script is not replayed.
+    dialogueOpen.value = true;
+    dialogueLine.value = Math.max(0, dialogue.lines.length - 1);
+    void nextTick(() => dialoguePanel?.focus());
+  }
+}
+function openProphetScreen(id) {
+  if (id === 'adjust') { enterAdjustMode(); return; }
+  actionFeedback.value = '';
+  prophetScreen.value = id;
+}
+function leaveProphetScreen() {
+  prophetScreen.value = null;
+  actionFeedback.value = '';
+}
+const worldRuleRunner = createWorldRuleRunner({
+  bridge: () => (typeof window === 'undefined' ? null : window.coronaBridge),
+  onError: error => showFeedback(`世界规则已停止：${error.message}`),
+});
+function rememberCube(actor) {
+  cubeActor = actor || null;
+  cubeTransform = cubeTransformOf(cubeActor);
+  return cubeTransform;
+}
+// Rebuild the animated set from a fresh snapshot: reading the scene is an asynchronous
+// CEF round trip, so the frame loop only replays the handles captured here. Passing no
+// snapshot stops the rule, which is what the main world wants.
+function applyWorldRules(snapshot) {
+  worldRuleRunner.stop();
+  if (!snapshot || !inSubworld.value || !resolvedRules.value.length) return false;
+  worldRuleRunner.setTargets(collectSwayTargets(snapshot, resolvedRules.value[0]));
+  worldRuleRunner.setRules(resolvedRules.value);
+  return worldRuleRunner.start();
+}
+async function runProphetAction(chosen) {
+  // Adjusting deliberately leaves the dialogue, so the guard has to accept either context.
+  // Gating only on `dialogueOpen` silently dropped every adjustment action.
+  if ((!dialogueOpen.value && !adjustMode.value) || !chosen) return;
+  if (chosen.type === 'open-screen') { openProphetScreen(chosen.screen); return; }
+  actionFeedback.value = '';
+  if (chosen.type === 'toggle-fragment') {
+    await runAction(async () => {
+      const result = toggleFragment(installedRules.value, chosen.fragmentId);
+      const saved = await gameplay.saveWorldRules(result.rules);
+      installedRules.value = Array.isArray(saved?.rules) ? saved.rules : result.rules;
+      actionFeedback.value = result.feedback;
+      // A snapshot is what teaches the rule which objects to animate.
+      applyWorldRules(await editorApi.scene.getSnapshot(sceneId));
+    });
+    return;
+  }
+  // An adjustment acts on whatever the player clicked; until then, on the prophet's cube.
+  const target = adjustSelection.value?.actor || cubeActor;
+  const current = cubeTransformOf(target)
+    || (adjustSelection.value ? adjustSelection.value.transform : cubeTransform);
+  if (!target || !current || !prophetActor || !playerActor) {
+    actionFeedback.value = '物体尚未就绪，请先点击一个物体';
+    return;
+  }
+  await runAction(async () => {
+    const next = nextObjectTransform(chosen.id, { current, reference: prophetActor,
+      facingYaw: playerFacingYaw(playerActor) });
+    if (!next) return;
+    // The light path: the setter does not re-import the resource, so it cannot add mesh work
+    // to the geometry thread while the renderer is submitting. `persist: true` is explicit
+    // because a runtime transform that is never persisted is exactly what made an earlier
+    // adjustment look like it "did nothing"; the engine's own default is not relied on.
+    const data = unwrap(await editorApi.scene.setActorTransform(sceneId, target.actor_guid,
+      { ...next, persist: true }));
+    if (!data || data.ok === false || !['success', 'loaded'].includes(data.status)) {
+      throw new Error(data?.message || data?.diagnostics?.[0]?.message || '引擎未确认调整');
+    }
+    const actor = data.actor || { ...target, geometry: next };
+    if (target === cubeActor) rememberCube(actor);
+    if (adjustSelection.value) adjustSelection.value = { ...adjustSelection.value, actor, transform: next };
+    // Re-anchor the sway, otherwise the next frame would undo the player's own move.
+    worldRuleRunner.refreshBase(target.actor_guid, next.position);
+    // Confirm against the engine instead of our own optimism. Reading the actor back is the
+    // only way to separate "the engine refused the write" from "the engine took it but the
+    // change is not on screen" — and those two need completely different fixes.
+    const kept = (await readBackTransform(target.actor_guid))?.scale?.[0];
+    const summary = adjustFeedback(chosen.id, next, prophetActor);
+    actionFeedback.value = Number.isFinite(kept) && Math.abs(kept - next.scale[0]) < 1e-3
+      ? `${summary}（引擎已接受）`
+      : `${summary}｜引擎未保留，实际缩放 ${Number.isFinite(kept) ? kept.toFixed(2) : '读不到'}`;
+  });
 }
 // Exhibits are laid out by the game, so the panel lists what the main world yielded
 // rather than free-form placement. Site order is fixed and cycles per exhibit.
@@ -413,11 +575,39 @@ function onKeyDown(event) {
   if (!current()) return;
   // The dialogue panel owns the keyboard while it is open, and swallowing keys here
   // keeps F/Space from reaching the camera or another interaction.
+  if (adjustMode.value) {
+    // The editing mode owns the keyboard: only the adjustment steps and the way out get
+    // through, so a stray key cannot cast a skill or swing while the player is arranging.
+    event.preventDefault();
+    event.stopPropagation();
+    if (event.code === 'Escape' || event.key === 'Escape') {
+      if (!event.repeat) exitAdjustMode();
+      return;
+    }
+    if (!event.repeat) {
+      const chosen = prophetKeyAction(event.key, 'adjust');
+      if (chosen) void runProphetAction(chosen);
+    }
+    return;
+  }
   if (dialogueOpen.value) {
     event.preventDefault();
     event.stopPropagation();
-    if (event.code === 'Escape' || event.key === 'Escape') { if (!event.repeat) closeDialogue(); return; }
-    if (!event.repeat && ['Enter', 'Space', 'NumpadEnter'].includes(event.code)) advanceDialogue();
+    if (event.code === 'Escape' || event.key === 'Escape') {
+      // Escape walks back one level before it closes the panel.
+      if (!event.repeat) {
+        if (prophetScreen.value) leaveProphetScreen();
+        else closeDialogue();
+      }
+      return;
+    }
+    if (!prophetScreen.value && !event.repeat
+      && ['Enter', 'Space', 'NumpadEnter'].includes(event.code)) advanceDialogue();
+    // Number keys pick an option on the current screen; the script keeps Enter and Space.
+    if (!event.repeat) {
+      const chosen = prophetKeyAction(event.key, prophetScreen.value);
+      if (chosen) void runProphetAction(chosen);
+    }
     return;
   }
   if (event.code === 'Escape' || event.key === 'Escape') {
@@ -472,14 +662,23 @@ function watchDpi() {
   dpiQuery?.addEventListener('change', onDpiChanged);
 }
 function onDpiChanged() { camera.syncViewport(); watchDpi(); }
+/** Read one actor's transform back from the engine, to confirm that a write was kept. */
+async function readBackTransform(guid) {
+  const actors = sceneSnapshot(await editorApi.scene.getSnapshot(sceneId))?.actors;
+  const actor = (Array.isArray(actors) ? actors : []).find(entry => entry.actor_guid === guid);
+  return actor ? cubeTransformOf(actor) : null;
+}
 function onPointerDown(event) {
   if (inventoryOpen.value) return;
   surface.value?.focus();
-  if (!focused) return;
-  if (event.button === 0) {
-    event.preventDefault();
-    void runAction(gameplay.attack);
-  } else camera.pointerDown(event);
+  // While adjusting, the click that focuses the viewport must not be swallowed by the gate.
+  if (!focused && !adjustMode.value) return;
+  if (event.button !== 0) { camera.pointerDown(event); return; }
+  event.preventDefault();
+  // Adjusting is label-driven: the left button neither attacks nor picks an object, it only
+  // focuses the viewport so dragging and the wheel still let the player look at the object.
+  if (adjustMode.value) return;
+  void runAction(gameplay.attack);
 }
 
 onMounted(async () => {
@@ -512,6 +711,30 @@ onMounted(async () => {
     // The prophet is created on demand in the small world, so it may legitimately be
     // absent here; interaction simply stays unavailable until it exists.
     prophetActor = snapshot.actors?.find(actor => actor.actor_guid === PROPHET_GUID) || null;
+    playerActor = player;
+    // The prophet's cube and the rules this small world already carries (李淳珺任务).
+    // A main world has no prophet, so the cube is hidden rather than created there.
+    // The cube is decoration: if it cannot be created the world must still load and the
+    // prophet must still talk, so a failure here is reported rather than thrown.
+    try {
+      rememberCube(prophetActor && playerActor ? await ensureStoryCube({
+        api: editorApi, sceneId, frontendUrl: window.location.href,
+        role: loadedGameplay?.role, prophetActor, playerActor, resolveAsset: resolveStoryAssetPath,
+      }) : null);
+    } catch (error) {
+      rememberCube(null);
+      actionFeedback.value = `物体未能创建：${error.message}`;
+    }
+    installedRules.value = Array.isArray(gameplay.worldRules?.rules) ? gameplay.worldRules.rules : [];
+    // The sway needs a fresh read so it also covers the cube that was just created; a rule
+    // that cannot start is reported, never fatal to loading the world.
+    try {
+      applyWorldRules(installedRules.value.length && inSubworld.value
+        ? await editorApi.scene.getSnapshot(sceneId) : null);
+    } catch (error) {
+      worldRuleRunner.stop();
+      actionFeedback.value = `世界规则未能启动：${error.message}`;
+    }
     visualSignature = signature(loadedGameplay);
     cameraReady = camera.bind(snapshot, sceneId);
     camera.bindPlayer(player, targetOffset);
@@ -545,6 +768,10 @@ onUnmounted(() => {
   document.removeEventListener('focusin', onInventoryFocus);
   cameraReady = false;
   navigation.dispose();
+  // Leaving the world must not keep the overhead view: a non-standard camera pose would
+  // otherwise be the one flushed into the scene on the way out.
+  exitAdjustMode({ reopenDialogue: false });
+  worldRuleRunner.dispose();
   camera.dispose();
   saveRegistration.retire();
   resizeObserver?.disconnect();
@@ -578,13 +805,15 @@ onUnmounted(() => {
       :aria-label="inSubworld ? '小世界界面' : '战斗界面'">
       <div class="world-indicator" role="status" aria-live="polite">{{ worldLabel }}</div>
       <div
-        v-if="dialogueOpen"
+        v-if="dialogueOpen || adjustMode"
         class="dialogue-overlay"
+        :class="{ 'dialogue-overlay-passive': adjustMode }"
         @pointerdown.stop
         @pointermove.stop
         @wheel.stop.prevent
         @contextmenu.prevent>
         <section
+          v-if="dialogueOpen"
           ref="dialoguePanel"
           class="dialogue-panel"
           role="dialog"
@@ -599,6 +828,33 @@ onUnmounted(() => {
           <p v-if="dialogueLine + 1 >= dialogue.lines.length && dialogue.closing" class="dialogue-closing">
             {{ dialogue.closing }}
           </p>
+          <div class="prophet-actions" aria-label="先知的两个主选项">
+            <template v-if="!prophetScreen">
+              <button v-for="screen in PROPHET_SCREENS" :key="screen.id" class="prophet-action"
+                :data-prophet-screen="screen.id" @click="openProphetScreen(screen.id)">
+                <span class="prophet-action-key">{{ screen.key }}</span>
+                <span class="prophet-action-label">{{ screen.label }}</span>
+                <span class="prophet-action-detail">{{ screen.detail }}</span>
+              </button>
+            </template>
+
+            <template v-else>
+              <button v-for="(entry, index) in fragmentList" :key="entry.id" class="prophet-action"
+                :data-prophet-fragment="entry.id" :disabled="!entry.owned"
+                @click="runProphetAction({ type: 'toggle-fragment', fragmentId: entry.id })">
+                <span class="prophet-action-key">{{ index + 1 }}</span>
+                <span class="prophet-action-label">{{ entry.name }}</span>
+                <span class="prophet-action-state" :data-state="entry.state">{{ entry.stateLabel }}</span>
+                <span class="prophet-action-detail">{{ entry.description }} · {{ entry.details }}</span>
+              </button>
+            </template>
+
+            <button v-if="prophetScreen" class="prophet-action prophet-action-back"
+              data-prophet-back @click="leaveProphetScreen">
+              <span class="prophet-action-label">返回</span>
+            </button>
+            <p v-if="actionFeedback" class="prophet-action-feedback" role="status">{{ actionFeedback }}</p>
+          </div>
           <footer class="dialogue-footer">
             <span class="dialogue-progress">{{ dialogueLine + 1 }} / {{ dialogue.lines.length }}</span>
             <span class="dialogue-hint">{{ dialogue.hint }}</span>
@@ -606,6 +862,37 @@ onUnmounted(() => {
               {{ dialogueLine + 1 >= dialogue.lines.length ? '结束交谈' : '继续' }}
             </button>
           </footer>
+        </section>
+        <section v-if="adjustMode" class="dialogue-panel" data-adjust-panel role="group"
+          aria-label="调整物体" tabindex="-1">
+          <strong>调整物体 · 俯瞰视角</strong>
+          <p class="dialogue-line">{{ adjustHint }}</p>
+          <div class="prophet-actions" style="flex-basis: 100%; max-height: 150px; overflow-y: auto;">
+            <button v-for="entry in selectableList" :key="entry.guid" class="prophet-action"
+              :data-adjust-object="entry.guid"
+              :style="isSelected(entry) ? { borderColor: '#a08750', background: '#2a2f22' } : null"
+              @click="selectObjectFromList(entry)">
+              <span class="prophet-action-label">{{ objectLabel(entry) }}</span>
+            </button>
+            <button class="prophet-action" data-adjust-refresh @click="loadSelectableObjects">
+              <span class="prophet-action-label">刷新列表</span>
+            </button>
+            <p v-if="!selectableList.length" class="prophet-action-detail">
+              场景里没有读出可调整的物体，点「刷新列表」重试
+            </p>
+          </div>
+          <div class="prophet-actions">
+            <button v-for="action in ADJUST_ACTIONS" :key="action.id" class="prophet-action"
+              :data-prophet-action="action.id" @click="runProphetAction({ type: 'adjust', id: action.id })">
+              <span class="prophet-action-key">{{ action.key }}</span>
+              <span class="prophet-action-group">{{ action.group }}</span>
+              <span class="prophet-action-label">{{ action.label }}</span>
+            </button>
+            <button class="prophet-action prophet-action-back" data-adjust-exit @click="exitAdjustMode()">
+              <span class="prophet-action-label">退出调整，回到对话</span>
+            </button>
+            <p v-if="actionFeedback" class="prophet-action-feedback" role="status">{{ actionFeedback }}</p>
+          </div>
         </section>
       </div>
       <section v-if="bossNearby && !inventoryOpen && showCombatHud" class="boss-status" aria-label="Boss 血条">
@@ -746,6 +1033,10 @@ kbd { font-family: inherit; font-size: 11px; color: #dfcb94; }
 .subworld-notice strong { font-size: 14px; font-weight: 500; letter-spacing: 3px; color: #f0d69a; }
 .subworld-notice span { font-size: 11px; color: #a89d85; }
 .dialogue-overlay { pointer-events: auto; position: absolute; inset: 0; display: grid; align-items: end; justify-items: center; padding: 0 20px 92px; background: #05080766; }
+/* While adjusting an object the overlay must not cover the viewport: the click has to
+   reach the surface to pick something. Only the panel itself stays interactive. */
+.dialogue-overlay-passive { pointer-events: none; background: none; padding: 0; }
+.dialogue-overlay-passive > * { pointer-events: auto; }
 .dialogue-panel { width: min(560px, 100%); box-sizing: border-box; padding: 18px 22px; border: 1px solid #a08750; background: linear-gradient(145deg, #20231cec, #0f1411fa); box-shadow: 0 18px 60px #0009; outline: none; }
 .dialogue-header { display: flex; align-items: baseline; gap: 12px; padding-bottom: 12px; border-bottom: 1px solid #4e513d; }
 .dialogue-header strong { font-size: 15px; font-weight: 500; letter-spacing: 3px; color: #f0d69a; }
@@ -755,6 +1046,20 @@ kbd { font-family: inherit; font-size: 11px; color: #dfcb94; }
 .dialogue-footer { display: flex; align-items: center; gap: 12px; padding-top: 16px; }
 .dialogue-progress { font-size: 11px; color: #8e8a78; font-variant-numeric: tabular-nums; }
 .dialogue-hint { flex: 1; font-size: 11px; color: #8e8a78; }
+.prophet-actions { display: flex; flex-wrap: wrap; gap: 6px; margin: 12px 0 0; }
+.prophet-action { display: inline-flex; align-items: center; gap: 6px; padding: 5px 9px; cursor: pointer;
+  border: 1px solid #6d6350; background: #171a15; color: #ded4bb; font-size: 12px; }
+.prophet-action:hover:not(:disabled) { border-color: #a08750; background: #22261d; }
+.prophet-action:disabled { cursor: not-allowed; opacity: 0.45; }
+.prophet-action-key { min-width: 14px; padding: 0 3px; border: 1px solid #6d6350; text-align: center;
+  font-size: 11px; color: #cbbd97; }
+.prophet-action-group { color: #8e8a78; font-size: 11px; }
+.prophet-action-feedback { flex-basis: 100%; margin: 4px 0 0; font-size: 11px; color: #d8c98f; }
+.prophet-action-detail { flex-basis: 100%; font-size: 11px; color: #8e8a78; }
+.prophet-action-state { padding: 0 4px; border: 1px solid #6d6350; font-size: 11px; color: #cbbd97; }
+.prophet-action-state[data-state="installed"] { border-color: #7f9a5c; color: #cbe0a6; }
+.prophet-action-state[data-state="locked"] { opacity: 0.5; }
+.prophet-action-back { margin-left: auto; }
 .dialogue-next { flex-shrink: 0; padding: 7px 16px; border: 1px solid #bfa167; color: #f0d69a; background: #343820; font-size: 12px; cursor: pointer; }
 .player-vitals { display: flex; align-items: center; gap: 22px; padding: 12px 16px; border: 1px solid #8f7846; background: linear-gradient(120deg, #151711f5, #090c09ec); box-shadow: 0 5px 24px #0007; }
 .vitals-content { flex: 1; min-width: 0; }

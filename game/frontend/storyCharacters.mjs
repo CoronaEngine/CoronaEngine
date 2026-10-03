@@ -1,4 +1,5 @@
 /** Models in game/art/models and stable identities owned by the story game. */
+import { PROPHET_PLACEMENT } from './storyDialogue.mjs';
 // Maria faces local -Z. Gameplay and the camera use logical +Z instead.
 export const PLAYER_MODEL_YAW_OFFSET = Math.PI;
 export const PROPHET_MODEL_REF = 'story.prophet.placement.v1';
@@ -11,7 +12,7 @@ export const STORY_CHARACTERS = Object.freeze([
   { role: 'merchant', name: '商人', guid: 'f9f5c8b0-7324-4b6c-a011-000000000003',
     asset: 'merchant/Maw J Laygo.dae', x: -30, z: -15, height: 1.8, rotation: [0, Math.PI, 0] },
   { role: 'prophet', name: '先知', guid: 'f9f5c8b0-7324-4b6c-a011-000000000004',
-    asset: 'prophet/dancing_vampire.dae', x: 30, z: -15, height: 1.8, rotation: [0, Math.PI, 0] },
+    asset: PROPHET_PLACEMENT.asset, x: 30, z: -15, height: PROPHET_PLACEMENT.height, rotation: [0, Math.PI, 0] },
 ].map(character => Object.freeze({ ...character, rotation: Object.freeze(character.rotation) })));
 
 export const PLAYER_GUID = STORY_CHARACTERS[0].guid;

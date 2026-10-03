@@ -8,7 +8,10 @@ import { ensureStoryCharacters, syncPlacementActors } from '../../frontend/story
 import * as gameplayModule from '../../frontend/storyGameplay.mjs';
 import * as storyPropsModule from '../../frontend/storyProps.mjs';
 import * as prophetDialogueModule from '../../frontend/prophetDialogue.mjs';
-import { STORY_CHARACTERS, PROPHET_GUID } from '../../frontend/storyCharacters.mjs';
+import * as storyCubeModule from '../../frontend/storyCube.mjs';
+import * as storyWorldRulesModule from '../../frontend/storyWorldRules.mjs';
+import * as storyProphetActionsModule from '../../frontend/storyProphetActions.mjs';
+import { STORY_CHARACTERS, PROPHET_GUID, resolveStoryAssetPath } from '../../frontend/storyCharacters.mjs';
 import { actorFixture } from './fixtures.mjs';
 import { createStoryNavigationController } from '../../frontend/storyNavigation.mjs';
 import { createStoryCameraController } from '../../../editor/Frontend/src/utils/viewportStoryCamera.js';
@@ -153,9 +156,12 @@ async function fixture(t, options = {}) {
       '../../../../../game/frontend/playerController.mjs': { createPlayerController, VIEW_LABELS },
       '../../../../../game/frontend/playerSave.mjs': { createPlayerSave },
       '../../../../../game/frontend/storyGameplay.mjs': gameplayModule,
-      '../../../../../game/frontend/storyCharacters.mjs': { STORY_CHARACTERS, PROPHET_GUID },
+      '../../../../../game/frontend/storyCharacters.mjs': { STORY_CHARACTERS, PROPHET_GUID, resolveStoryAssetPath },
       '../../../../../game/frontend/storyProps.mjs': storyPropsModule,
       '../../../../../game/frontend/prophetDialogue.mjs': prophetDialogueModule,
+      '../../../../../game/frontend/storyCube.mjs': storyCubeModule,
+      '../../../../../game/frontend/storyWorldRules.mjs': storyWorldRulesModule,
+      '../../../../../game/frontend/storyProphetActions.mjs': storyProphetActionsModule,
     });
     const instance = component.setup({}, { expose() {} });
     instance.surface.value = { focus() {}, getBoundingClientRect: () => ({ left: 0, top: 0, width: 800, height: 600 }) };
