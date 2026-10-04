@@ -20,7 +20,7 @@ import lanchat from '../../../editor/Frontend/src/stores/lanchat.js';
 
 const require = createRequire(new URL('../../../editor/Frontend/package.json', import.meta.url));
 const vue = require('vue');
-const { ref, proxyRefs, nextTick } = vue;
+const { ref, proxyRefs, nextTick, watch } = vue;
 const { parse, compileScript, compileTemplate, babelParse } = require('vue/compiler-sfc');
 const { descriptor } = parse(fs.readFileSync(new URL('../../../editor/Frontend/src/views/layout/StoryWorld.vue', import.meta.url), 'utf8'));
 const compiled = compileScript(descriptor, { id: 'story-navigation-test', genDefaultAs: 'StoryWorld' });
@@ -139,7 +139,7 @@ async function fixture(t, options = {}) {
   function mount() {
     const mounted = [], unmounted = [];
     const component = makeComponent({
-      vue: { ref, nextTick, onMounted: fn => mounted.push(fn), onUnmounted: fn => unmounted.push(fn) },
+      vue: { ref, nextTick, watch, onMounted: fn => mounted.push(fn), onUnmounted: fn => unmounted.push(fn) },
       'vue-router': { onBeforeRouteLeave() {}, useRouter: () => ({ replace: async path => { route = path; } }) },
       '@/api/editorApi.js': { editorApi },
       '@/services/worldModeService.js': worldMode,
@@ -609,16 +609,24 @@ test('Space cannot start during an acknowledged save; a late save never leaves t
   assert.equal(page.instance.camera.snapshotPlayer().grounded, true);
   assert.equal(page.instance.camera.snapshotPlayer().position[1], f.actors.get(MAIN)[0].geometry.position[1]);
 });
-test('HUD puts feedback/errors above compact bottom vitals and lists Space with side controls', async t => {
+test('HUD pins the boss plate top-center, vitals bottom-left and skills bottom-right, with Space listed in the left tip', async t => {
   const f = await fixture(t); const page = f.mount(); await page.mount();
+  // Mounted state so the whole HUD renders before its anchors are inspected.
+  page.instance.gameplayState.value = { role: 'main', config: gameplayConfig,
+    state: { revision: 0, rage: 40, boss: { hp: 200 }, drop: null, inventory: { worldFragment: 1 } } };
   page.instance.feedback.value = '获得 世界碎片 ×1'; page.instance.canPickup.value = true;
   page.instance.gameplayError.value = '保存失败，请重试';
+  page.instance.bossNearby.value = true;
   const tree = renderStory(proxyRefs(page.instance), []);
   const bottom = findNode(tree, node => node.props?.class === 'story-bottom-stack');
   assert.deepEqual(bottom.children.filter(node => node.type !== vue.Comment).map(node => node.props?.class),
-    ['gameplay-error', 'story-feedback', 'player-vitals']);
-  const controls = findNode(tree, node => node.props?.class === 'story-controls');
+    ['gameplay-error', 'story-feedback']);
+  const controls = findNode(tree, node => node.props?.class === 'story-controls tip');
   assert.match(JSON.stringify(controls, (key, value) => key === 'ctx' ? undefined : value), /Space/);
+  const vitals = findNode(tree, node => node.props?.class === 'player-vitals vitals plate');
+  const skills = findNode(tree, node => node.props?.class === 'skill-strip skills');
+  const boss = findNode(tree, node => node.props?.class === 'boss-status plate');
+  assert.ok(vitals && skills && boss, 'vitals, skills and the boss plate are independent HUD anchors');
   const declarations = selector => {
     const values = {};
     styles.walkRules(rule => { if (rule.parent.type === 'root' && rule.selectors.includes(selector))
@@ -626,10 +634,26 @@ test('HUD puts feedback/errors above compact bottom vitals and lists Space with 
     return values;
   };
   assert.equal(declarations('.story-hud')['pointer-events'], 'none');
-  assert.equal(declarations('.story-bottom-stack').bottom, '22px');
-  assert.equal(declarations('.story-controls').display, 'grid');
-  assert.equal(declarations('.story-controls').top, '50%');
-  assert.equal(declarations('.player-vitals').position, undefined);
+  // The notice stack owns the bottom-center lane only; vitals and skills anchor the corners.
+  assert.equal(declarations('.story-bottom-stack')['pointer-events'], undefined);
+  assert.match(declarations('.story-bottom-stack').bottom, /^calc\(/);
+  assert.equal(declarations('.story-bottom-stack').position, 'absolute');
+  assert.equal(declarations('.story-bottom-stack').left, '50%');
+  assert.equal(declarations('.player-vitals').position, 'absolute');
+  assert.equal(declarations('.player-vitals')['pointer-events'], 'auto');
+  assert.match(declarations('.player-vitals').left, /^var\(--gap-edge\)$/);
+  assert.match(declarations('.player-vitals').bottom, /^var\(--gap-edge\)$/);
+  assert.equal(declarations('.skills').position, 'absolute');
+  assert.equal(declarations('.skills')['pointer-events'], 'auto');
+  assert.match(declarations('.skills').right, /^var\(--gap-edge\)$/);
+  assert.match(declarations('.skills').bottom, /^var\(--gap-edge\)$/);
+  assert.equal(declarations('.boss-status').position, 'absolute');
+  assert.equal(declarations('.boss-status').top, 'var(--boss-top)');
+  assert.equal(declarations('.tip').position, 'absolute');
+  assert.equal(declarations('.story-controls')['display'], undefined);
+  assert.equal(declarations('.tip span').display, 'flex');
+  assert.equal(declarations('.tip').display, 'grid');
+  assert.match(declarations('.tip').top, /^clamp\(/);
   assert.equal(declarations('.gameplay-error').position, undefined);
 });
 
