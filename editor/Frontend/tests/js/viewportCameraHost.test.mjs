@@ -5,7 +5,7 @@ import { STORY_CHARACTERS } from '../../../../game/frontend/storyCharacters.mjs'
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
-import { ref, reactive, nextTick, watch } from 'vue';
+import { ref, reactive, nextTick, watch, computed } from 'vue';
 import { babelParse, compileScript, parse } from 'vue/compiler-sfc';
 import { cameraMovementKey, createViewportCameraController } from '../../src/utils/viewportCameraController.js';
 import { createStoryCameraController } from '../../src/utils/viewportStoryCamera.js';
@@ -180,6 +180,8 @@ const compiled = compileScript(storyDescriptor, { id: 'story-camera-regression',
 let setupSource = compiled.content;
 const imports = babelParse(setupSource, { sourceType: 'module' }).program.body.filter(node => node.type === 'ImportDeclaration');
 for (const node of [...imports].reverse()) {
+  // 样式副作用导入在测试里无需执行，直接摘除
+  if (/\.css$/.test(node.source.value)) { setupSource = setupSource.slice(0, node.start) + setupSource.slice(node.end); continue; }
   const bindings = node.specifiers.map(specifier => `${specifier.imported.name}: ${specifier.local.name}`).join(', ');
   setupSource = setupSource.slice(0, node.start) + `const { ${bindings} } = modules[${JSON.stringify(node.source.value)}];` + setupSource.slice(node.end);
 }
@@ -198,7 +200,7 @@ async function mountStory(t, { pendingInit = null, sceneSnapshot = { data: snaps
     coronaBridge: Object.fromEntries(['actorTransform', 'cameraMove', 'setCameraViewport', 'setViewportGizmoTarget', 'setViewportUiMode', 'setViewportSystemCursorHidden']
       .map(name => [name, (...args) => { calls.push([name, ...args]); return true; }])) };
   const component = makeStory({
-    vue: { ref, nextTick, watch, onMounted: fn => mounted.push(fn), onUnmounted: fn => unmounted.push(fn) },
+    vue: { ref, nextTick, watch, reactive, computed, onMounted: fn => mounted.push(fn), onUnmounted: fn => unmounted.push(fn) },
     'vue-router': { onBeforeRouteLeave() {}, useRouter: () => ({ replace: async path => routes.push(path) }) },
     '@/api/editorApi.js': { editorApi: {
       project: { getProjectLoadStatus: async () => projectReady('world') },
