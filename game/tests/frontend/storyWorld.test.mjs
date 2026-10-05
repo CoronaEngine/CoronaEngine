@@ -25,13 +25,15 @@ import lanchat from '../../../editor/Frontend/src/stores/lanchat.js';
 
 const require = createRequire(new URL('../../../editor/Frontend/package.json', import.meta.url));
 const vue = require('vue');
-const { ref, computed, proxyRefs, nextTick } = vue;
+const { ref, proxyRefs, nextTick, watch, reactive, computed, withDirectives } = vue;
 const { parse, compileScript, compileTemplate, babelParse } = require('vue/compiler-sfc');
 const { descriptor } = parse(fs.readFileSync(new URL('../../../editor/Frontend/src/views/layout/StoryWorld.vue', import.meta.url), 'utf8'));
 const compiled = compileScript(descriptor, { id: 'story-navigation-test', genDefaultAs: 'StoryWorld' });
 let setupSource = compiled.content;
 for (const node of babelParse(compiled.content, { sourceType: 'module' }).program.body
   .filter(node => node.type === 'ImportDeclaration').reverse()) {
+  // 样式副作用导入在这里无需执行，直接摘除
+  if (/\.css$/.test(node.source.value)) { setupSource = setupSource.slice(0, node.start) + setupSource.slice(node.end); continue; }
   const bindings = node.specifiers.map(specifier => `${JSON.stringify(specifier.imported.name)}: ${specifier.local.name}`).join(', ');
   setupSource = setupSource.slice(0, node.start) + `const { ${bindings} } = modules[${JSON.stringify(node.source.value)}];`
     + setupSource.slice(node.end);
@@ -112,6 +114,16 @@ async function fixture(t, options = {}) {
     Object.assign(actor, state);
     return { status: 'success', actor: structuredClone(actor) };
   });
+  // 世界碎片（红球）在快照里并不存在，由剧情建模流程创建：这里补上同一份建模夹具
+  t.mock.method(editorApi.sceneTools, 'createActor', async (scene, path, type, data) => {
+    calls.push(['create', activePath, scene, path, structuredClone(data)]);
+    const character = [...STORY_CHARACTERS, gameplayModule.FRAGMENT].find(item => item.guid === data.actor_guid);
+    assert.ok(character, `createActor 收到未知 GUID：${data.actor_guid}`);
+    const actor = { ...actorFixture(character), model_ref: data.model_ref || '',
+      geometry: { position: [...data.position], rotation: [...data.rotation], scale: [...data.scale] } };
+    actors.get(activePath).push(actor);
+    return { status: 'success', actor: structuredClone(actor) };
+  });
   t.mock.method(editorApi.scratch, 'sendKeyEvent', async (key, mods, displayKey) => {
     if (key === gameplayModule.GAMEPLAY_KEY) {
       if (options.gameplay) return options.gameplay(JSON.parse(displayKey));
@@ -144,7 +156,7 @@ async function fixture(t, options = {}) {
   function mount() {
     const mounted = [], unmounted = [];
     const component = makeComponent({
-      vue: { ref, computed, nextTick, onMounted: fn => mounted.push(fn), onUnmounted: fn => unmounted.push(fn) },
+      vue: { ref, nextTick, watch, reactive, computed, withDirectives, onMounted: fn => mounted.push(fn), onUnmounted: fn => unmounted.push(fn) },
       'vue-router': { onBeforeRouteLeave() {}, useRouter: () => ({ replace: async path => { route = path; } }) },
       '@/api/editorApi.js': { editorApi },
       '@/services/worldModeService.js': worldMode,
@@ -495,11 +507,11 @@ test('inventory template captures pointer input and its close button restores co
   page.instance.onKeyDown(event({ code: 'Tab' }));
   const before = page.instance.camera.snapshotPose();
   const tree = renderStory(proxyRefs(page.instance), []);
-  const overlay = findNode(tree, node => node.props?.class === 'inventory-overlay');
-  const close = findNode(overlay, node => node.type === 'button' && node.props?.['aria-label'] === '关闭背包');
+  const overlay = findNode(tree, node => node.props?.class === 'story-bag');
+  const close = findNode(overlay, node => node.type === 'button' && node.props?.['aria-label'] === '合上行囊');
   assert.ok(overlay); assert.ok(close);
 
-  for (const selector of ['.inventory-overlay', '.inventory-panel']) {
+  for (const selector of ['.story-bag']) {
     let interactive = false;
     styles.walkRules(rule => {
       if (rule.selectors.includes(selector)) rule.walkDecls('pointer-events', declaration => {
@@ -619,16 +631,24 @@ test('Space cannot start during an acknowledged save; a late save never leaves t
   assert.equal(page.instance.camera.snapshotPlayer().grounded, true);
   assert.equal(page.instance.camera.snapshotPlayer().position[1], f.actors.get(MAIN)[0].geometry.position[1]);
 });
-test('HUD puts feedback/errors above compact bottom vitals and lists Space with side controls', async t => {
+test('HUD pins the boss plate top-center, vitals bottom-left and skills bottom-right, with Space listed in the left tip', async t => {
   const f = await fixture(t); const page = f.mount(); await page.mount();
+  // Mounted state so the whole HUD renders before its anchors are inspected.
+  page.instance.gameplayState.value = { role: 'main', config: gameplayConfig,
+    state: { revision: 0, rage: 40, boss: { hp: 200 }, drop: null, inventory: { worldFragment: 1 } } };
   page.instance.feedback.value = '获得 世界碎片 ×1'; page.instance.canPickup.value = true;
   page.instance.gameplayError.value = '保存失败，请重试';
+  page.instance.bossNearby.value = true;
   const tree = renderStory(proxyRefs(page.instance), []);
   const bottom = findNode(tree, node => node.props?.class === 'story-bottom-stack');
   assert.deepEqual(bottom.children.filter(node => node.type !== vue.Comment).map(node => node.props?.class),
-    ['gameplay-error', 'story-feedback', 'player-vitals']);
-  const controls = findNode(tree, node => node.props?.class === 'story-controls');
+    ['gameplay-error', 'story-feedback']);
+  const controls = findNode(tree, node => node.props?.class === 'story-controls tip');
   assert.match(JSON.stringify(controls, (key, value) => key === 'ctx' ? undefined : value), /Space/);
+  const vitals = findNode(tree, node => node.props?.class === 'player-vitals vitals plate');
+  const skills = findNode(tree, node => node.props?.class === 'skill-strip skills');
+  const boss = findNode(tree, node => node.props?.class === 'boss-status plate');
+  assert.ok(vitals && skills && boss, 'vitals, skills and the boss plate are independent HUD anchors');
   const declarations = selector => {
     const values = {};
     styles.walkRules(rule => { if (rule.parent.type === 'root' && rule.selectors.includes(selector))
@@ -636,10 +656,26 @@ test('HUD puts feedback/errors above compact bottom vitals and lists Space with 
     return values;
   };
   assert.equal(declarations('.story-hud')['pointer-events'], 'none');
-  assert.equal(declarations('.story-bottom-stack').bottom, '22px');
-  assert.equal(declarations('.story-controls').display, 'grid');
-  assert.equal(declarations('.story-controls').top, '50%');
-  assert.equal(declarations('.player-vitals').position, undefined);
+  // The notice stack owns the bottom-center lane only; vitals and skills anchor the corners.
+  assert.equal(declarations('.story-bottom-stack')['pointer-events'], undefined);
+  assert.match(declarations('.story-bottom-stack').bottom, /^calc\(/);
+  assert.equal(declarations('.story-bottom-stack').position, 'absolute');
+  assert.equal(declarations('.story-bottom-stack').left, '50%');
+  assert.equal(declarations('.player-vitals').position, 'absolute');
+  assert.equal(declarations('.player-vitals')['pointer-events'], 'auto');
+  assert.match(declarations('.player-vitals').left, /^var\(--gap-edge\)$/);
+  assert.match(declarations('.player-vitals').bottom, /^var\(--gap-edge\)$/);
+  assert.equal(declarations('.skills').position, 'absolute');
+  assert.equal(declarations('.skills')['pointer-events'], 'auto');
+  assert.match(declarations('.skills').right, /^var\(--gap-edge\)$/);
+  assert.match(declarations('.skills').bottom, /^var\(--gap-edge\)$/);
+  assert.equal(declarations('.boss-status').position, 'absolute');
+  assert.equal(declarations('.boss-status').top, 'var(--boss-top)');
+  assert.equal(declarations('.tip').position, 'absolute');
+  assert.equal(declarations('.story-controls')['display'], undefined);
+  assert.equal(declarations('.tip span').display, 'flex');
+  assert.equal(declarations('.tip').display, 'grid');
+  assert.match(declarations('.tip').top, /^clamp\(/);
   assert.equal(declarations('.gameplay-error').position, undefined);
 });
 
@@ -671,13 +707,53 @@ test('inventory arrows reach slots, close, locked tooltip and enabled world butt
   assert.equal(f.route, '/'); assert.deepEqual(f.opens(), []);
 });
 
-test('a living Boss disables inventory travel without submitting preparation or native opens', async t => {
-  const f = await fixture(t, { gameplay: async () => ({ status: 'ok', role: 'main', config: gameplayConfig,
-    state: { version: 2, revision: 0, rage: 20, boss: { hp: 200 }, drop: null, inventory: { worldFragment: 0 } } }) });
-  const page = f.mount(); await page.mount(); clickWorld(page); await turn();
-  assert.equal(page.instance.navigationPending.value, false); assert.deepEqual(f.opens(), []);
-  assert.equal(f.calls.some(c => c[0] === 'key'), false);
-  const tree = renderStory(proxyRefs(page.instance), []);
-  const button = findNode(tree, node => node.props?.['data-inventory-travel'] !== undefined);
-  assert.equal(button.props.disabled, true);
+test('the bag travel entry appears only after the world fragment is collected, then enters without a native open', async t => {
+  // 小世界一览本来只有一条（主世界）；拾得碎片后才多出可出入的第二条。
+  const state = { version: 2, revision: 0, rage: 20, boss: { hp: 20 }, drop: null, inventory: { worldFragment: 0 } };
+  let pageInstance = null;
+  const f = await fixture(t, { gameplay: async request => {
+    if (request.action !== 'load') {
+      state.revision += 1;
+      if (request.action === 'pickupDrop') {
+        state.drop.collected = true; state.inventory.worldFragment += 1;
+      } else if (request.action === 'hitBoss' || request.hit) {
+        state.boss.hp = Math.max(0, state.boss.hp - 100);
+      }
+      if (state.boss.hp === 0 && !state.drop) {
+        // 红球落在玩家脚下，便于拾取
+        const player = pageInstance?.instance.camera.snapshotPlayer().position || [0, 0, 0];
+        state.drop = { id: 'story.boss.world-fragment', position: [player[0], 0, player[2]], collected: false };
+      }
+    }
+    return { status: 'ok', role: 'main', config: gameplayConfig, state: structuredClone(state) };
+  } });
+  const page = f.mount(); pageInstance = page; await page.mount();
+  const entry = () => findNode(renderStory(proxyRefs(page.instance), []),
+    node => node.props?.['data-inventory-travel'] !== undefined);
+
+  clickWorld(page); await turn();
+  assert.equal(f.opens().length, 0, 'a living Boss cannot travel');
+  assert.equal(entry(), null, 'no second world exists before the fragment is collected');
+
+  // 走到 Boss 身前击败它，再拾起红色球（世界碎片）：一览里随即辟出第二界
+  page.instance.inventoryOpen.value = false;
+  page.instance.onKeyDown(event({ code: 'KeyW', key: 'w' }));
+  for (let i = 0; i < 100 && page.instance.camera.snapshotPlayer().position[2] < 7.6; i++) f.step(50);
+  page.instance.camera.keyUp(event({ code: 'KeyW', key: 'w' }));
+  assert.ok(page.instance.camera.snapshotPlayer().position[2] >= 7.6, 'the player can reach the Boss');
+  await page.instance.gameplay.attack();
+  assert.equal(page.instance.gameplay.data.state.boss.hp, 0);
+  await page.instance.gameplay.pickup();
+  assert.equal(page.instance.gameplayState.value.state.inventory.worldFragment, 1);
+  page.instance.inventoryOpen.value = true;
+  const node = entry();
+  assert.ok(node, 'the fragment opens a second small world');
+  assert.equal(node.props.disabled, false);
+
+  // 点它＝原来的「小世界」按钮：走既有换场景流程，并收起行囊
+  await page.instance.bagTravel(1);
+  await turn();
+  assert.equal(page.instance.inventoryOpen.value, false);
+  assert.equal(page.instance.gameplayError.value, '');
+  assert.deepEqual(f.opens(), [CHILD]);
 });
