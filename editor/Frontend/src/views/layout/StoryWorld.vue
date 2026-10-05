@@ -17,8 +17,7 @@ import { createStoryGameplay, worldBounds, distanceToBounds, pickupDistance } fr
 import { STORY_CHARACTERS, PROPHET_GUID } from '../../../../../game/frontend/storyCharacters.mjs';
 import { PLACEMENT_SITES, exhibitItems as exhibitItemsFor, nextPlacementIndex,
   placementGuid, sanitizePlacements } from '../../../../../game/frontend/storyProps.mjs';
-import { PROPHET_INTERACTION, canTalkToProphet, normalizeDialogue,
-  prophetAvailable } from '../../../../../game/frontend/prophetDialogue.mjs';
+import { PROPHET_INTERACTION, canTalkToProphet, normalizeDialogue } from '../../../../../game/frontend/prophetDialogue.mjs';
 
 const router = useRouter();
 const surface = ref(null);
