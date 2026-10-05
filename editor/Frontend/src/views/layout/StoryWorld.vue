@@ -14,10 +14,17 @@ import { ensureStoryCharacters, syncPlacementActors } from '../../../../../game/
 import { createPlayerController, VIEW_LABELS } from '../../../../../game/frontend/playerController.mjs';
 import { createPlayerSave } from '../../../../../game/frontend/playerSave.mjs';
 import { createStoryGameplay, worldBounds, distanceToBounds, pickupDistance } from '../../../../../game/frontend/storyGameplay.mjs';
-import { STORY_CHARACTERS, PROPHET_GUID } from '../../../../../game/frontend/storyCharacters.mjs';
+import { STORY_CHARACTERS, PROPHET_GUID, resolveStoryAssetPath,
+  sceneSnapshot } from '../../../../../game/frontend/storyCharacters.mjs';
 import { PLACEMENT_SITES, exhibitItems as exhibitItemsFor, nextPlacementIndex,
   placementGuid, sanitizePlacements } from '../../../../../game/frontend/storyProps.mjs';
 import { PROPHET_INTERACTION, canTalkToProphet, normalizeDialogue } from '../../../../../game/frontend/prophetDialogue.mjs';
+import { ensureStoryCube, cubeTransformOf, playerFacingYaw } from '../../../../../game/frontend/storyCube.mjs';
+import { collectSwayTargets, createWorldRuleRunner,
+  findFragment } from '../../../../../game/frontend/storyWorldRules.mjs';
+import { ADJUST_ACTIONS, PROPHET_SCREENS, adjustFeedback, fragmentPanel,
+  nextObjectTransform, objectLabel, prophetKeyAction, selectableObjects,
+  toggleFragment } from '../../../../../game/frontend/storyProphetActions.mjs';
 
 const router = useRouter();
 const surface = ref(null);
@@ -57,6 +64,10 @@ const dialogueLine = ref(0);
 const prophetNearby = ref(false);
 const dialogue = normalizeDialogue(null);
 let prophetActor = null;
+// 先知旁的方块与世界规则（李淳珺任务）：方块是玩家可调整的场景道具，不是角色。
+let playerActor = null;
+let cubeActor = null;
+let cubeTransform = null;
 let dialoguePanel = null;
 // 小世界陈列
 const placements = ref([]);
@@ -941,6 +952,8 @@ function openDialogue() {
 }
 function closeDialogue() {
   if (!dialogueOpen.value) return;
+  leaveProphetScreen();
+  exitAdjustMode({ reopenDialogue: false });
   dialogueOpen.value = false;
   dialogueLine.value = 0;
   // 立刻重新计算邻近提示；此处玩家没有移动，否则下一次 F 会被判为“不在范围内”。
@@ -957,6 +970,163 @@ function advanceDialogue() {
 function interact() {
   if (prophetNearby.value) openDialogue();
   else void runAction(gameplay.pickup);
+}
+
+// ---- 「先知」旁的物体与世界规则（李淳珺任务）-----------------------------------
+// The cube is a game-owned prop the prophet lets the player scale or move; the rule
+// engine animates the small world once a fragment is installed. Both live in their own
+// modules, so this page only wires them up: it renders the menu and applies what the
+// pure functions return.
+const installedRules = ref([]);
+const actionFeedback = ref('');
+// The saved records only say which fragments are installed; the semantics come from the
+// catalogue, so a rewrite of a rule never invalidates an existing world.
+const resolvedRules = computed(() => installedRules.value
+  .map(record => findFragment(record?.fragmentId)?.rule).filter(Boolean));
+// The panel has two main options. «碎片» is a screen inside the panel; «调整物体» leaves the
+// panel for the overhead editing mode, and leaving that mode reopens the panel.
+const prophetScreen = ref(null);
+const adjustMode = ref(false);
+const previousViewMode = ref(null);
+const adjustSelection = ref(null);
+const fragmentList = computed(() => fragmentPanel(installedRules.value));
+const adjustHint = computed(() => (adjustSelection.value
+  ? `已选中：${adjustSelection.value.name}`
+  : '俯瞰视角：点击物体选中它，再用下面的按钮调整'));
+function enterAdjustMode() {
+  actionFeedback.value = '';
+  prophetScreen.value = null;
+  adjustSelection.value = null;
+  // The overhead view is what makes the arrangement readable; remember where to return.
+  previousViewMode.value = camera.viewMode?.() || null;
+  camera.setViewMode?.('top');
+  adjustMode.value = true;
+  dialogueOpen.value = false;
+  camera.resetInput();
+  void nextTick(() => surface.value?.focus());
+  void loadSelectableObjects();
+}
+// The list is the reliable way to choose an object: clicking a name cannot miss, while
+// clicking a pixel depends on the engine's readback settling.
+const selectableList = ref([]);
+const isSelected = entry => Boolean(adjustSelection.value
+  && adjustSelection.value.guid === entry?.guid);
+async function loadSelectableObjects() {
+  try {
+    selectableList.value = selectableObjects(await editorApi.scene.getSnapshot(sceneId));
+  } catch (error) {
+    selectableList.value = [];
+    actionFeedback.value = `读取物体列表失败：${error.message}`;
+  }
+}
+// 选择只由名字列表驱动：视口里不做拾取，因此这里只用列表项自身携带的字段。
+function selectObjectFromList(entry) {
+  adjustSelection.value = { guid: entry.guid, name: entry.name,
+    actor: { actor_guid: entry.guid, name: entry.name, geometry: entry.transform },
+    transform: entry.transform };
+  actionFeedback.value = `已选中：${entry.name}`;
+}
+function exitAdjustMode({ reopenDialogue = true } = {}) {
+  if (!adjustMode.value) return;
+  if (previousViewMode.value) camera.setViewMode?.(previousViewMode.value);
+  previousViewMode.value = null;
+  adjustMode.value = false;
+  adjustSelection.value = null;
+  actionFeedback.value = '';
+  camera.resetInput();
+  if (reopenDialogue) {
+    // Back to the conversation, positioned on the last line so the script is not replayed.
+    dialogueOpen.value = true;
+    dialogueLine.value = Math.max(0, dialogue.lines.length - 1);
+    void nextTick(() => dialoguePanel?.focus());
+  }
+}
+function openProphetScreen(id) {
+  if (id === 'adjust') { enterAdjustMode(); return; }
+  actionFeedback.value = '';
+  prophetScreen.value = id;
+}
+function leaveProphetScreen() {
+  prophetScreen.value = null;
+  actionFeedback.value = '';
+}
+const worldRuleRunner = createWorldRuleRunner({
+  bridge: () => (typeof window === 'undefined' ? null : window.coronaBridge),
+  onError: error => showFeedback(`世界规则已停止：${error.message}`),
+});
+function rememberCube(actor) {
+  cubeActor = actor || null;
+  cubeTransform = cubeTransformOf(cubeActor);
+  return cubeTransform;
+}
+// Rebuild the animated set from a fresh snapshot: reading the scene is an asynchronous
+// CEF round trip, so the frame loop only replays the handles captured here. Passing no
+// snapshot stops the rule, which is what the main world wants.
+function applyWorldRules(snapshot) {
+  worldRuleRunner.stop();
+  if (!snapshot || !inSubworld.value || !resolvedRules.value.length) return false;
+  worldRuleRunner.setTargets(collectSwayTargets(snapshot, resolvedRules.value[0]));
+  worldRuleRunner.setRules(resolvedRules.value);
+  return worldRuleRunner.start();
+}
+/** Read one actor's transform back from the engine, to confirm that a write was kept. */
+async function readBackTransform(guid) {
+  const actors = sceneSnapshot(await editorApi.scene.getSnapshot(sceneId))?.actors;
+  const actor = (Array.isArray(actors) ? actors : []).find(entry => entry.actor_guid === guid);
+  return actor ? cubeTransformOf(actor) : null;
+}
+async function runProphetAction(chosen) {
+  // Adjusting deliberately leaves the dialogue, so the guard has to accept either context.
+  // Gating only on `dialogueOpen` silently dropped every adjustment action.
+  if ((!dialogueOpen.value && !adjustMode.value) || !chosen) return;
+  if (chosen.type === 'open-screen') { openProphetScreen(chosen.screen); return; }
+  actionFeedback.value = '';
+  if (chosen.type === 'toggle-fragment') {
+    await runAction(async () => {
+      const result = toggleFragment(installedRules.value, chosen.fragmentId);
+      const saved = await gameplay.saveWorldRules(result.rules);
+      installedRules.value = Array.isArray(saved?.rules) ? saved.rules : result.rules;
+      actionFeedback.value = result.feedback;
+      // A snapshot is what teaches the rule which objects to animate.
+      applyWorldRules(await editorApi.scene.getSnapshot(sceneId));
+    });
+    return;
+  }
+  // An adjustment acts on whatever the player picked from the list; until then, on the cube.
+  const target = adjustSelection.value?.actor || cubeActor;
+  const current = cubeTransformOf(target)
+    || (adjustSelection.value ? adjustSelection.value.transform : cubeTransform);
+  if (!target || !current || !prophetActor || !playerActor) {
+    actionFeedback.value = '物体尚未就绪，请先从列表中选择一个物体';
+    return;
+  }
+  await runAction(async () => {
+    const next = nextObjectTransform(chosen.id, { current, reference: prophetActor,
+      facingYaw: playerFacingYaw(playerActor) });
+    if (!next) return;
+    // The light path: the setter does not re-import the resource, so it cannot add mesh work
+    // to the geometry thread while the renderer is submitting. `persist: true` is explicit
+    // because a runtime transform that is never persisted is exactly what made an earlier
+    // adjustment look like it "did nothing"; the engine's own default is not relied on.
+    const data = unwrap(await editorApi.scene.setActorTransform(sceneId, target.actor_guid,
+      { ...next, persist: true }));
+    if (!data || data.ok === false || !['success', 'loaded'].includes(data.status)) {
+      throw new Error(data?.message || data?.diagnostics?.[0]?.message || '引擎未确认调整');
+    }
+    const actor = data.actor || { ...target, geometry: next };
+    if (target === cubeActor) rememberCube(actor);
+    if (adjustSelection.value) adjustSelection.value = { ...adjustSelection.value, actor, transform: next };
+    // Re-anchor the sway, otherwise the next frame would undo the player's own move.
+    worldRuleRunner.refreshBase(target.actor_guid, next.position);
+    // Confirm against the engine instead of our own optimism. Reading the actor back is the
+    // only way to separate "the engine refused the write" from "the engine took it but the
+    // change is not on screen" — and those two need completely different fixes.
+    const kept = (await readBackTransform(target.actor_guid))?.scale?.[0];
+    const summary = adjustFeedback(chosen.id, next, prophetActor);
+    actionFeedback.value = Number.isFinite(kept) && Math.abs(kept - next.scale[0]) < 1e-3
+      ? `${summary}（引擎已接受）`
+      : `${summary}｜引擎未保留，实际缩放 ${Number.isFinite(kept) ? kept.toFixed(2) : '读不到'}`;
+  });
 }
 // 陈列物按固定点位顺序布置，序号取最小空位，删一件不会让其它件重编号。
 function nextSite() {
@@ -1075,12 +1245,40 @@ const navigation = createStoryNavigationController({
 });
 function onKeyDown(event) {
   if (!current()) return;
+  // The adjustment mode owns the keyboard outright: only the adjustment steps and the way out
+  // get through, so a stray key cannot cast a skill or swing while the player is arranging.
+  if (adjustMode.value) {
+    event.preventDefault();
+    event.stopPropagation();
+    if (event.code === 'Escape' || event.key === 'Escape') {
+      if (!event.repeat) exitAdjustMode();
+      return;
+    }
+    if (!event.repeat) {
+      const chosen = prophetKeyAction(event.key, 'adjust');
+      if (chosen) void runProphetAction(chosen);
+    }
+    return;
+  }
   // 对话面板打开时独占键盘：Esc 不再退出世界，F/Space 也不会漏给相机或其它交互。
   if (dialogueOpen.value) {
     event.preventDefault();
     event.stopPropagation();
-    if (event.code === 'Escape' || event.key === 'Escape') { if (!event.repeat) closeDialogue(); return; }
-    if (!event.repeat && ['Enter', 'Space', 'NumpadEnter'].includes(event.code)) advanceDialogue();
+    if (event.code === 'Escape' || event.key === 'Escape') {
+      // Escape walks back one level before it closes the panel.
+      if (!event.repeat) {
+        if (prophetScreen.value) leaveProphetScreen();
+        else closeDialogue();
+      }
+      return;
+    }
+    // 「碎片」屏里 Enter/Space 不再推进剧本，数字键才是选择键。
+    if (!prophetScreen.value && !event.repeat
+      && ['Enter', 'Space', 'NumpadEnter'].includes(event.code)) advanceDialogue();
+    if (!event.repeat) {
+      const chosen = prophetKeyAction(event.key, prophetScreen.value);
+      if (chosen) void runProphetAction(chosen);
+    }
     return;
   }
   if (event.code === 'Escape' || event.key === 'Escape') {
@@ -1138,11 +1336,14 @@ function onDpiChanged() { camera.syncViewport(); watchDpi(); }
 function onPointerDown(event) {
   if (inventoryOpen.value) return;
   surface.value?.focus();
-  if (!focused) return;
-  if (event.button === 0) {
-    event.preventDefault();
-    void runAction(gameplay.attack);
-  } else camera.pointerDown(event);
+  // While adjusting, the click that focuses the viewport must not be swallowed by the gate.
+  if (!focused && !adjustMode.value) return;
+  if (event.button !== 0) { camera.pointerDown(event); return; }
+  event.preventDefault();
+  // Adjusting is label-driven: the left button neither attacks nor picks an object, it only
+  // focuses the viewport so dragging and the wheel still let the player look at the object.
+  if (adjustMode.value) return;
+  void runAction(gameplay.attack);
 }
 
 onMounted(async () => {
@@ -1178,6 +1379,28 @@ onMounted(async () => {
     bossBounds = worldBounds(bossActor);
     // 先知只在小世界按需生成，主世界里缺失是正常的：交互保持不可用即可。
     prophetActor = snapshot.actors?.find(actor => actor.actor_guid === PROPHET_GUID) || null;
+    playerActor = player;
+    // 先知旁的方块，以及这个小世界已经装填的世界规则（李淳珺任务）：
+    // 主世界没有先知，方块只隐藏不创建。方块只是摆设：创建失败必须仍能进世界并照常对话，
+    // 因此这里只报告、不抛出。
+    try {
+      rememberCube(prophetActor && playerActor ? await ensureStoryCube({
+        api: editorApi, sceneId, frontendUrl: window.location.href,
+        role: loadedGameplay?.role, prophetActor, playerActor, resolveAsset: resolveStoryAssetPath,
+      }) : null);
+    } catch (error) {
+      rememberCube(null);
+      actionFeedback.value = `物体未能创建：${error.message}`;
+    }
+    installedRules.value = Array.isArray(gameplay.worldRules?.rules) ? gameplay.worldRules.rules : [];
+    // 浮动需要重新读一次场景，才能把刚创建的方块也纳入；规则起不来同样不致命。
+    try {
+      applyWorldRules(installedRules.value.length && inSubworld.value
+        ? await editorApi.scene.getSnapshot(sceneId) : null);
+    } catch (error) {
+      worldRuleRunner.stop();
+      actionFeedback.value = `世界规则未能启动：${error.message}`;
+    }
     visualSignature = signature(loadedGameplay);
     visualPlacements = placementSignature(placements.value);
     cameraReady = camera.bind(snapshot, sceneId);
@@ -1214,6 +1437,9 @@ onUnmounted(() => {
   document.removeEventListener('focusin', onInventoryFocus);
   cameraReady = false;
   navigation.dispose();
+  // 离开世界不能把俯瞰视角留下来：否则存进场景的就是这个非常规机位。
+  exitAdjustMode({ reopenDialogue: false });
+  worldRuleRunner.dispose();
   camera.dispose();
   saveRegistration.retire();
   resizeObserver?.disconnect();
@@ -1343,10 +1569,11 @@ onUnmounted(() => {
         <span>此处为沙盒空间 · 无战斗目标</span>
       </section>
     </div>
-    <!-- ============ 先知对话：F 交谈，Enter 继续，Esc 离开 ============ -->
-    <div v-if="dialogueOpen" class="dialogue-overlay"
+    <!-- ============ 先知对话 + 调整物体：(F 交谈，Enter 继续，Esc 离开) ============ -->
+    <div v-if="dialogueOpen || adjustMode" class="dialogue-overlay"
+      :class="{ 'dialogue-overlay-passive': adjustMode }"
       @pointerdown.stop @pointermove.stop @wheel.stop.prevent @contextmenu.prevent>
-      <section ref="dialoguePanel" class="dialogue-panel" role="dialog" aria-modal="true"
+      <section v-if="dialogueOpen" ref="dialoguePanel" class="dialogue-panel" role="dialog" aria-modal="true"
         aria-labelledby="dialogue-title" tabindex="-1">
         <header class="dialogue-header">
           <strong id="dialogue-title">{{ dialogue.name }}</strong>
@@ -1356,6 +1583,34 @@ onUnmounted(() => {
         <p v-if="dialogueLine + 1 >= dialogue.lines.length && dialogue.closing" class="dialogue-closing">
           {{ dialogue.closing }}
         </p>
+        <!-- 先知的两个主选项：1 调整物体（离开对话面板）／2 碎片（面板内的另一屏） -->
+        <div class="prophet-actions" aria-label="先知的两个主选项">
+          <template v-if="!prophetScreen">
+            <button v-for="screen in PROPHET_SCREENS" :key="screen.id" class="prophet-action"
+              :data-prophet-screen="screen.id" @click="openProphetScreen(screen.id)">
+              <span class="prophet-action-key">{{ screen.key }}</span>
+              <span class="prophet-action-label">{{ screen.label }}</span>
+              <span class="prophet-action-detail">{{ screen.detail }}</span>
+            </button>
+          </template>
+
+          <template v-else>
+            <button v-for="(entry, index) in fragmentList" :key="entry.id" class="prophet-action"
+              :data-prophet-fragment="entry.id" :disabled="!entry.owned"
+              @click="runProphetAction({ type: 'toggle-fragment', fragmentId: entry.id })">
+              <span class="prophet-action-key">{{ index + 1 }}</span>
+              <span class="prophet-action-label">{{ entry.name }}</span>
+              <span class="prophet-action-state" :data-state="entry.state">{{ entry.stateLabel }}</span>
+              <span class="prophet-action-detail">{{ entry.description }} · {{ entry.details }}</span>
+            </button>
+          </template>
+
+          <button v-if="prophetScreen" class="prophet-action prophet-action-back"
+            data-prophet-back @click="leaveProphetScreen">
+            <span class="prophet-action-label">返回</span>
+          </button>
+          <p v-if="actionFeedback" class="prophet-action-feedback" role="status">{{ actionFeedback }}</p>
+        </div>
         <footer class="dialogue-footer">
           <span class="dialogue-progress">{{ dialogueLine + 1 }} / {{ dialogue.lines.length }}</span>
           <span class="dialogue-hint">{{ dialogue.hint }}</span>
@@ -1363,6 +1618,38 @@ onUnmounted(() => {
             {{ dialogueLine + 1 >= dialogue.lines.length ? '结束交谈' : '继续' }}
           </button>
         </footer>
+      </section>
+      <!-- 调整物体：只用名字列表选择，视口里不做拾取；左键此时只用来聚焦视口 -->
+      <section v-if="adjustMode" class="dialogue-panel" data-adjust-panel role="group"
+        aria-label="调整物体" tabindex="-1">
+        <strong>调整物体 · 俯瞰视角</strong>
+        <p class="dialogue-line">{{ adjustHint }}</p>
+        <div class="prophet-actions" style="flex-basis: 100%; max-height: 150px; overflow-y: auto;">
+          <button v-for="entry in selectableList" :key="entry.guid" class="prophet-action"
+            :data-adjust-object="entry.guid"
+            :style="isSelected(entry) ? { borderColor: '#a08750', background: '#2a2f22' } : null"
+            @click="selectObjectFromList(entry)">
+            <span class="prophet-action-label">{{ objectLabel(entry) }}</span>
+          </button>
+          <button class="prophet-action" data-adjust-refresh @click="loadSelectableObjects">
+            <span class="prophet-action-label">刷新列表</span>
+          </button>
+          <p v-if="!selectableList.length" class="prophet-action-detail">
+            场景里没有读出可调整的物体，点「刷新列表」重试
+          </p>
+        </div>
+        <div class="prophet-actions">
+          <button v-for="action in ADJUST_ACTIONS" :key="action.id" class="prophet-action"
+            :data-prophet-action="action.id" @click="runProphetAction({ type: 'adjust', id: action.id })">
+            <span class="prophet-action-key">{{ action.key }}</span>
+            <span class="prophet-action-group">{{ action.group }}</span>
+            <span class="prophet-action-label">{{ action.label }}</span>
+          </button>
+          <button class="prophet-action prophet-action-back" data-adjust-exit @click="exitAdjustMode()">
+            <span class="prophet-action-label">退出调整，回到对话</span>
+          </button>
+          <p v-if="actionFeedback" class="prophet-action-feedback" role="status">{{ actionFeedback }}</p>
+        </div>
       </section>
     </div>
     <!-- ============ 行囊（Tab 背包）：复刻 111/bag.html ============ -->
@@ -2371,6 +2658,10 @@ kbd {
   display: grid; align-items: end; justify-items: center;
   padding: 0 20px 92px; background: rgba(5, 8, 7, .42);
 }
+/* 调整物体时叠加层不能挡住视口：点击必须落到场景表面上的对准提示。
+   只有面板本身保持可交互。 */
+.dialogue-overlay-passive { pointer-events: none; background: none; padding: 0; }
+.dialogue-overlay-passive > * { pointer-events: auto; }
 .dialogue-panel {
   width: min(560px, 100%); box-sizing: border-box; padding: 18px 22px; outline: none;
   background: linear-gradient(145deg, rgba(32, 35, 28, .93), rgba(15, 20, 17, .98));
@@ -2389,6 +2680,26 @@ kbd {
   flex-shrink: 0; padding: 7px 16px; font-size: 12px; cursor: pointer;
   color: var(--c-gold-bright); background: #343820; border: 1px solid var(--c-gold);
 }
+/* 先知的选项：两个主选项／调整步骤／碎片条目 */
+.prophet-actions { display: flex; flex-wrap: wrap; gap: 6px; margin: 12px 0 0; }
+.prophet-action {
+  display: inline-flex; align-items: center; gap: 6px; padding: 5px 9px; cursor: pointer;
+  border: 1px solid var(--c-stone); background: rgba(23, 26, 21, .9);
+  color: var(--c-paper); font-size: 12px; font-family: inherit;
+}
+.prophet-action:hover:not(:disabled) { border-color: var(--c-gold); background: #22261d; }
+.prophet-action:disabled { cursor: not-allowed; opacity: .45; }
+.prophet-action-key {
+  min-width: 14px; padding: 0 3px; border: 1px solid var(--c-stone);
+  text-align: center; font-size: 11px; color: var(--c-gold);
+}
+.prophet-action-group { color: var(--c-paper-dim); font-size: 11px; }
+.prophet-action-feedback { flex-basis: 100%; margin: 4px 0 0; font-size: 11px; color: var(--c-gold-bright); }
+.prophet-action-detail { flex-basis: 100%; font-size: 11px; color: var(--c-paper-dim); }
+.prophet-action-state { padding: 0 4px; border: 1px solid var(--c-stone); font-size: 11px; color: var(--c-gold); }
+.prophet-action-state[data-state="installed"] { border-color: #7f9a5c; color: #cbe0a6; }
+.prophet-action-state[data-state="locked"] { opacity: .5; }
+.prophet-action-back { margin-left: auto; }
 
 .exhibit { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--c-stone); }
 .exhibit__head { display: flex; align-items: center; gap: 8px; }

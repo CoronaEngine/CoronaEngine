@@ -6,7 +6,7 @@ import * as prophetDialogueModule from '../../../../game/frontend/prophetDialogu
 import * as storyCubeModule from '../../../../game/frontend/storyCube.mjs';
 import * as storyWorldRulesModule from '../../../../game/frontend/storyWorldRules.mjs';
 import * as storyProphetActionsModule from '../../../../game/frontend/storyProphetActions.mjs';
-import { STORY_CHARACTERS, PROPHET_GUID, resolveStoryAssetPath } from '../../../../game/frontend/storyCharacters.mjs';
+import { STORY_CHARACTERS, PROPHET_GUID, resolveStoryAssetPath, sceneSnapshot } from '../../../../game/frontend/storyCharacters.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
@@ -268,7 +268,7 @@ async function mountStory(t, { pendingInit = null, sceneSnapshot = { data: snaps
       // Observing the real controller keeps the page's own wiring under test.
       createStoryGameplay: options => { gameplayOptions = options; return gameplayModule.createStoryGameplay(options); },
     },
-    '../../../../../game/frontend/storyCharacters.mjs': { STORY_CHARACTERS, PROPHET_GUID, resolveStoryAssetPath },
+    '../../../../../game/frontend/storyCharacters.mjs': { STORY_CHARACTERS, PROPHET_GUID, resolveStoryAssetPath, sceneSnapshot },
     '@/utils/viewportStoryCamera.js': { createStoryCameraController: options => createStoryCameraController({
       ...options, now: () => time,
       requestFrame: callback => { frames.set(++id, callback); return id; }, cancelFrame: id => frames.delete(id),
