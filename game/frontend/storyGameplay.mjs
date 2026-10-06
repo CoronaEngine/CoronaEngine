@@ -38,7 +38,16 @@ export function pickupDistance(player, drop) {
 }
 export function unwrapGameplay(value) {
   for (let i = 0; i < 3 && value?.data; i++) value = value.data;
-  return value;
+  // The CEF scratch bridge answers a key event with `{ response: '<json string>' }`,
+  // which is the handler's own reply. Unwrap and parse it so callers see the payload.
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    if (Array.isArray(value.errors) && value.errors.length) {
+      throw new Error(String(value.errors[0]?.message || value.errors[0]));
+    }
+    if (typeof value.response === 'string') value = value.response;
+  }
+  if (typeof value !== 'string') return value;
+  try { return JSON.parse(value); } catch { return value; }
 }
 
 export function createStoryGameplay({ api, projectPath, readPlayer, readBoss,
@@ -46,6 +55,13 @@ export function createStoryGameplay({ api, projectPath, readPlayer, readBoss,
   trackWork = promise => promise, now = () => performance.now(), newId = () => crypto.randomUUID(),
   requestTimeoutMs = 15_000 }) {
   let data = null, pending = null, inFlight = null, visualDirty = false, lastAttack = -Infinity;
+  // The small world's exhibit layout is its own document: it is not part of the
+  // combat state, so it is cached separately and never merged into `data.state`.
+  let placementCache = null;
+  let ruleCache = null;
+  // The roster (named small worlds the player owns) is likewise its own document,
+  // cached separately so a rename never rides on a combat revision.
+  let rosterCache = null;
   const skillUntil = { heavy: -Infinity, sweep: -Infinity };
   async function request(payload) {
     let timer;
@@ -111,8 +127,76 @@ export function createStoryGameplay({ api, projectPath, readPlayer, readBoss,
       const response = unwrapGameplay(await request({ action: 'load' }));
       if (response?.status !== 'ok') throw new Error(response?.message || '读取玩法进度失败');
       accept(response);
+      // A main world reports an empty layout, so one await covers both worlds.
+      try { await loadPlacements(); } catch { placementCache = null; }
+      try { await loadWorldRules(); } catch { ruleCache = null; }
+      try { await loadSubworlds(); } catch { rosterCache = null; }
       return data;
     },
+    // Exhibits are authored one write at a time and never share the combat revision,
+    // so a rejected layout can never corrupt a boss or drop reward.
+    async loadPlacements() {
+      const response = unwrapGameplay(await request({ action: 'loadPlacements' }));
+      if (response?.status !== 'ok' || !response.state?.placements) {
+        throw new Error(response?.message || '读取小世界陈列失败');
+      }
+      return (placementCache = response.state);
+    },
+    async savePlacements(placed) {
+      const response = unwrapGameplay(await request({ action: 'savePlacements', placements: placed }));
+      if (response?.status !== 'ok' || !response.state?.placements) {
+        throw new Error(response?.message || '保存小世界陈列失败');
+      }
+      // The scene must follow the confirmed layout, so mark the visuals dirty and let
+      // the same reconcile path that handles combat redraw the exhibits.
+      placementCache = response.state;
+      visualDirty = true;
+      return placementCache;
+    },
+    get placements() { return placementCache; },
+    // World rules a small world was given by installing a fragment. They change no scene
+    // membership, so unlike exhibits they never mark the visuals dirty: the rule engine
+    // animates actors that already exist.
+    async loadWorldRules() {
+      const response = unwrapGameplay(await request({ action: 'loadWorldRules' }));
+      if (response?.status !== 'ok' || !Array.isArray(response.state?.rules)) {
+        throw new Error(response?.message || '读取世界规则失败');
+      }
+      return (ruleCache = response.state);
+    },
+    async saveWorldRules(rules) {
+      const response = unwrapGameplay(await request({ action: 'saveWorldRules', rules }));
+      if (response?.status !== 'ok' || !Array.isArray(response.state?.rules)) {
+        throw new Error(response?.message || '保存世界规则失败');
+      }
+      return (ruleCache = response.state);
+    },
+    get worldRules() { return ruleCache; },
+    async loadSubworlds() {
+      const response = unwrapGameplay(await request({ action: 'loadSubworlds' }));
+      if (response?.status !== 'ok' || !response.state?.subworlds) {
+        throw new Error(response?.message || '读取小世界名册失败');
+      }
+      return (rosterCache = response.state);
+    },
+    // One entry at a time, like placements; the backend stays authoritative.
+    async addSubworld() {
+      const response = unwrapGameplay(await request({ action: 'addSubworld' }));
+      if (response?.status !== 'ok' || !response.state?.subworlds) {
+        throw new Error(response?.message || '新增小世界失败');
+      }
+      rosterCache = response.state;
+      return rosterCache;
+    },
+    async renameSubworld(subworldId, name) {
+      const response = unwrapGameplay(await request({ action: 'renameSubworld', subworldId, name }));
+      if (response?.status !== 'ok' || !response.state?.subworlds) {
+        throw new Error(response?.message || '重命名小世界失败');
+      }
+      rosterCache = response.state;
+      return rosterCache;
+    },
+    get subworlds() { return rosterCache; },
     attack() {
       if (inFlight) return inFlight;
       if (pending || visualDirty) return flush();
