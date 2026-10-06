@@ -16,7 +16,9 @@ private:
 
 public:
     FresnelBlend(SampledSpectrum Rd, SampledSpectrum Rs, const SampledWavelengths &swl, const SP<Microfacet<D>> &m)
-        : MicrofacetBxDF(m, BxDFFlag::Reflection, swl), Rd_(std::move(Rd)), Rs_(std::move(Rs)) {}
+        // This combined diffuse/glossy lobe is classified as glossy by the
+        // direct-light and albedo split; sampled paths must use the same channel.
+        : MicrofacetBxDF(m, BxDFFlag::GlossyRefl, swl), Rd_(std::move(Rd)), Rs_(std::move(Rs)) {}
     // clang-format off
     VS_MAKE_BxDF_ASSIGNMENT(FresnelBlend)
         // clang-format on

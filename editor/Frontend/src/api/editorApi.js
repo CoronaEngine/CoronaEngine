@@ -97,7 +97,7 @@ export class Bridge {
       }
     }
     if (missing.length > 0) {
-      throw new Error(`Frontend wrapper path is not implemented: ${missing.join(', ')}`);
+      console.warn(`Frontend wrapper path is not implemented: ${missing.join(', ')}`);
     }
   }
 
@@ -112,7 +112,7 @@ export class Bridge {
       }
     }
     if (missing.length > 0) {
-      throw new Error(`Frontend event wrapper path is not implemented: ${missing.join(', ')}`);
+      console.warn(`Frontend event wrapper path is not implemented: ${missing.join(', ')}`);
     }
   }
 
@@ -650,6 +650,11 @@ const editorApiStatic = {
   sceneTools: {
     createScene: (sceneName) => call_manifest_editor_api('sceneTools.createScene', [sceneName]),
     listSceneTree: (sceneName) => call_manifest_editor_api('sceneTools.listSceneTree', [sceneName]),
+    getEnvironment: (sceneName) => call_manifest_editor_api('sceneTools.getEnvironment', [sceneName]),
+    setEnvironment: (sceneName, state) =>
+      call_manifest_editor_api('sceneTools.setEnvironment', [sceneName, state || {}]),
+    listRoutes: () => call_manifest_editor_api('sceneTools.listRoutes', []),
+    switch: (sceneName) => call_manifest_editor_api('sceneTools.switch', [sceneName]),
     reloadScene: (sceneName, projectPath = '') =>
       call_manifest_editor_api('sceneTools.reloadScene', projectPath ? [sceneName, projectPath] : [sceneName]),
     rebindActorResource: (sceneName, actorGuid, path) =>
@@ -689,6 +694,14 @@ const editorApiStatic = {
       call_manifest_editor_api('sceneTools.setVisionRenderMode', [sceneName, cameraId, mode]),
     getVisionRenderMode: (sceneName, cameraId = null) =>
       call_manifest_editor_api('sceneTools.getVisionRenderMode', [sceneName, cameraId]),
+    setVisionAccumulation: (sceneName, cameraId = null, enabled = false) =>
+      call_manifest_editor_api('sceneTools.setVisionAccumulation', [sceneName, cameraId, !!enabled]),
+    getVisionAccumulation: (sceneName, cameraId = null) =>
+      call_manifest_editor_api('sceneTools.getVisionAccumulation', [sceneName, cameraId]),
+    setVisionDenoise: (sceneName, cameraId = null, enabled = false) =>
+      call_manifest_editor_api('sceneTools.setVisionDenoise', [sceneName, cameraId, !!enabled]),
+    getVisionDenoise: (sceneName, cameraId = null) =>
+      call_manifest_editor_api('sceneTools.getVisionDenoise', [sceneName, cameraId]),
     createCameraView: (sceneName, name = null) =>
       call_manifest_editor_api('sceneTools.createCameraView', [sceneName, name]),
     openCameraView: (sceneName, cameraId) =>
@@ -752,6 +765,7 @@ const editorApiStatic = {
     onInit: (projectPath = '') =>
       call_manifest_editor_api('main.onInit', projectPath ? [projectPath] : []),
     createScene: (sceneName) => call_manifest_editor_api('main.createScene', [sceneName]),
+    removeScene: (sceneName) => call_manifest_editor_api('main.removeScene', [sceneName]),
     runProject: (scenePath = '') =>
       call_manifest_editor_api('main.runProject', scenePath ? [scenePath] : []),
     sceneSave: (sceneName) => call_manifest_editor_api('main.sceneSave', [sceneName]),

@@ -26,6 +26,8 @@ using namespace ocarina;
 using namespace vision;
 using njson = nlohmann::json;
 
+void save_pixel_diagnostics(Pipeline &pipeline);
+
 namespace {
 
 #ifdef _WIN32
@@ -395,6 +397,42 @@ public:
         desc.fn = out_path.filename().string();
         pipeline_->final_picture(desc, pixels.data());
         Image::save_image(out_path, PixelStorage::FLOAT4, pipeline_->resolution(), pixels.data());
+        save_linear_image(out_path);
+        save_pixel_diagnostics(*pipeline_);
+    }
+
+    // Opt-in evaluation data. final_picture is already exposed/tone-mapped;
+    // comparisons of transport energy need the actual pre-tonemap float buffer.
+    void save_linear_image(const fs::path &image_path) {
+        const char *enabled = std::getenv("VISION_EVAL_LINEAR_OUTPUT");
+        if (!enabled || enabled[0] != '1') return;
+        const auto resolution = pipeline_->resolution();
+        vector<float4> pixels(pipeline_->pixel_num());
+        pipeline_->stream() << pipeline_->frame_buffer()->display_source_buffer().download(pixels.data())
+                            << synchronize() << commit();
+        auto path = image_path;
+        path.replace_extension(".pfm");
+        std::ofstream out(path, std::ios::binary);
+        out << "PF\n" << resolution.x << ' ' << resolution.y << "\n-1.0\n";
+        for (uint y = resolution.y; y > 0; --y) {
+            for (uint x = 0; x < resolution.x; ++x) {
+                const auto &p = pixels[(y - 1) * resolution.x + x];
+                const float rgb[] = {p.x, p.y, p.z};
+                out.write(reinterpret_cast<const char *>(rgb), sizeof(rgb));
+            }
+        }
+        if (!out) throw std::runtime_error("Failed to write linear evaluation image: " + path.string());
+        const auto *sensor = pipeline_->scene().sensor().get();
+        const auto position = sensor->position();
+        njson pose = {{"position", {position.x, position.y, position.z}},
+                      {"pitch", sensor->pitch()}, {"yaw", sensor->yaw()},
+                      {"frame_index", pipeline_->frame_index()},
+                      {"denoise", pipeline_->output_desc().denoise},
+                      {"accumulation", pipeline_->frame_buffer()->enable_accumulation()}};
+        path.replace_extension(".pose.json");
+        std::ofstream metadata(path);
+        metadata << pose.dump(2);
+          if (!metadata) throw std::runtime_error("Failed to write evaluation pose: " + path.string());
     }
 
     [[nodiscard]] EvalStats run() {
@@ -455,6 +493,7 @@ public:
         // one new sample per frame, but the PNG should not be the first frame before
         // warmup/profile history has converged.
         pipeline_->save_result();
+        save_linear_image(Global::instance().scene_path() / pipeline_->output_desc().fn);
 
         EvalStats stats;
         stats.warmup_frames = warmup_frames_;

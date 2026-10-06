@@ -4,6 +4,9 @@
 
 #include <cstdlib>
 #include <cstring>
+#include <algorithm>
+#include <atomic>
+#include <cstdint>
 #include <filesystem>
 #include <string>
 #include <system_error>
@@ -15,6 +18,7 @@
 #include "cef_app.h"
 #include "cef_bridge_helpers.h"
 #include "cef_editor_api.h"
+#include "cef_shared_texture_probe.h"
 #include "request_response_broker.h"
 
 namespace Corona::Systems::UI {
@@ -72,10 +76,23 @@ void OffscreenRenderHandler::GetViewRect(CefRefPtr<CefBrowser> browser, CefRect&
 void OffscreenRenderHandler::OnPaint(CefRefPtr<CefBrowser> browser, PaintElementType type,
                                      const RectList& dirty_rects, const void* buffer,
                                      int width, int height) {
-    (void)dirty_rects;
     std::lock_guard tab_lock(tab_mutex_);
+    record_dirty_stats(type, dirty_rects, width, height);
     BrowserTab* t = tab_;
-    if (t && type == PET_VIEW && buffer && width > 0 && height > 0) {
+    if (t == nullptr) {
+        return;
+    }
+
+    if (type == PET_POPUP) {
+        if (buffer != nullptr && width > 0 && height > 0) {
+            std::lock_guard<std::mutex> lock(t->mutex);
+            t->popup.update_pixels(buffer, width, height);
+            t->buffer_dirty = true;
+        }
+        return;
+    }
+
+    if (type == PET_VIEW && buffer && width > 0 && height > 0) {
         const bool preserve_alpha = should_preserve_alpha(t, browser);
         size_t bufferSize = static_cast<size_t>(width) * height * 4;
         std::lock_guard<std::mutex> lock(t->mutex);
@@ -93,6 +110,141 @@ void OffscreenRenderHandler::OnPaint(CefRefPtr<CefBrowser> browser, PaintElement
 
         t->buffer_dirty = true;
     }
+}
+
+void OffscreenRenderHandler::OnAcceleratedPaint(CefRefPtr<CefBrowser> browser, PaintElementType type,
+                                                const RectList& dirty_rects,
+                                                const CefAcceleratedPaintInfo& info) {
+    (void)browser;
+    (void)dirty_rects;
+
+    const auto handle = reinterpret_cast<std::uintptr_t>(info.shared_texture_handle);
+
+    if (type == PET_POPUP) {
+        static std::atomic<std::uint64_t> popup_frames{0};
+        const std::uint64_t popup_frame = popup_frames.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (popup_frame == 1 || popup_frame % 600 == 0) {
+            CFW_LOG_INFO(
+                "[CEF/OSR] OnAcceleratedPaint PET_POPUP frame={} handle=0x{:X} coded={}x{}"
+                "（加速路径未消费弹层纹理）",
+                popup_frame, handle, info.extra.coded_size.width, info.extra.coded_size.height);
+        }
+        return;
+    }
+    if (type != PET_VIEW) {
+        return;
+    }
+
+    static std::atomic<std::uint64_t> frame_counter{0};
+    const std::uint64_t frame = frame_counter.fetch_add(1, std::memory_order_relaxed);
+
+    if (frame < 3 || frame % 600 == 0) {
+        CFW_LOG_INFO("[CEF/OSR] OnAcceleratedPaint frame={} handle=0x{:X} coded={}x{} visible={}x{} format={}",
+                     frame, handle,
+                     info.extra.coded_size.width, info.extra.coded_size.height,
+                     info.extra.visible_rect.width, info.extra.visible_rect.height,
+                     static_cast<int>(info.format));
+    }
+
+    probe_cef_shared_texture(handle, info.extra.coded_size.width, info.extra.coded_size.height);
+}
+
+void OffscreenRenderHandler::record_dirty_stats(PaintElementType type, const RectList& dirty_rects,
+                                                int width, int height) {
+    if (type != PET_VIEW) {
+        ++popup_paints_;
+        return;
+    }
+    if (width <= 0 || height <= 0) {
+        return;
+    }
+
+    ++paint_frames_;
+    dirty_rect_total_ += dirty_rects.size();
+    if (dirty_rects.empty()) {
+        ++zero_dirty_frames_;
+    }
+
+    constexpr int kGridWidth = 64;
+    constexpr int kGridHeight = 32;
+    constexpr int kGridCells = kGridWidth * kGridHeight;
+
+    std::fill(dirty_cells_.begin(), dirty_cells_.end(), std::uint8_t{0});
+    for (const auto& rect : dirty_rects) {
+        const int x0 = std::clamp(rect.x, 0, width);
+        const int y0 = std::clamp(rect.y, 0, height);
+        const int x1 = std::clamp(rect.x + rect.width, 0, width);
+        const int y1 = std::clamp(rect.y + rect.height, 0, height);
+        if (x1 <= x0 || y1 <= y0) {
+            continue;
+        }
+        const int cx0 = x0 * kGridWidth / width;
+        const int cy0 = y0 * kGridHeight / height;
+        const int cx1 = std::min((x1 * kGridWidth + width - 1) / width, kGridWidth - 1);
+        const int cy1 = std::min((y1 * kGridHeight + height - 1) / height, kGridHeight - 1);
+        for (int cy = cy0; cy <= cy1; ++cy) {
+            for (int cx = cx0; cx <= cx1; ++cx) {
+                dirty_cells_[static_cast<std::size_t>(cy) * kGridWidth + cx] = 1;
+            }
+        }
+    }
+
+    const std::uint64_t marked = static_cast<std::uint64_t>(
+        std::count(dirty_cells_.begin(), dirty_cells_.end(), std::uint8_t{1}));
+    covered_cells_total_ += marked;
+    if (marked * 10 >= static_cast<std::uint64_t>(kGridCells) * 9) {
+        ++full_dirty_frames_;
+    }
+
+    constexpr std::uint64_t kStatsIntervalFrames = 600;
+    if (paint_frames_ % kStatsIntervalFrames == 0) {
+        flush_dirty_stats(width, height);
+    }
+}
+
+void OffscreenRenderHandler::flush_dirty_stats(int width, int height) {
+    constexpr double kGridCells = 64.0 * 32.0;
+    const double frames = static_cast<double>(paint_frames_);
+    const double avg_rects = frames > 0.0 ? static_cast<double>(dirty_rect_total_) / frames : 0.0;
+    const double avg_cover = frames > 0.0
+                                 ? 100.0 * static_cast<double>(covered_cells_total_) / (frames * kGridCells)
+                                 : 0.0;
+    CFW_LOG_INFO(
+        "[CEF/Paint] tab={} frames={} view={}x{} avg_dirty_rects={:.2f} avg_dirty_area={:.1f}% "
+        "zero_dirty_frames={} full_dirty_frames={} popup_paints={}",
+        tab_ != nullptr ? tab_->tab_id : -1, paint_frames_, width, height, avg_rects, avg_cover,
+        zero_dirty_frames_, full_dirty_frames_, popup_paints_);
+
+    paint_frames_ = 0;
+    dirty_rect_total_ = 0;
+    zero_dirty_frames_ = 0;
+    full_dirty_frames_ = 0;
+    covered_cells_total_ = 0;
+    popup_paints_ = 0;
+}
+
+void OffscreenRenderHandler::OnPopupShow(CefRefPtr<CefBrowser> browser, bool show) {
+    (void)browser;
+    std::lock_guard tab_lock(tab_mutex_);
+    BrowserTab* t = tab_;
+    if (t == nullptr) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(t->mutex);
+    t->popup.set_visible(show);
+    t->buffer_dirty = true;
+    CFW_LOG_INFO("[CEF/Popup] show={} tab={}", show, t->tab_id);
+}
+
+void OffscreenRenderHandler::OnPopupSize(CefRefPtr<CefBrowser> browser, const CefRect& rect) {
+    (void)browser;
+    std::lock_guard tab_lock(tab_mutex_);
+    BrowserTab* t = tab_;
+    if (t == nullptr) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(t->mutex);
+    t->popup.set_rect(rect.x, rect.y, rect.width, rect.height);
 }
 
 bool OffscreenRenderHandler::GetScreenPoint(CefRefPtr<CefBrowser> browser, int viewX, int viewY, int& screenX, int& screenY) {
@@ -264,6 +416,26 @@ void OffscreenCefClient::OnPaint(CefRefPtr<CefBrowser> browser, PaintElementType
                                  int width, int height) {
     if (render_handler_) {
         render_handler_->OnPaint(browser, type, dirtyRects, buffer, width, height);
+    }
+}
+
+void OffscreenCefClient::OnAcceleratedPaint(CefRefPtr<CefBrowser> browser, PaintElementType type,
+                                            const RectList& dirtyRects,
+                                            const CefAcceleratedPaintInfo& info) {
+    if (render_handler_) {
+        render_handler_->OnAcceleratedPaint(browser, type, dirtyRects, info);
+    }
+}
+
+void OffscreenCefClient::OnPopupShow(CefRefPtr<CefBrowser> browser, bool show) {
+    if (render_handler_) {
+        render_handler_->OnPopupShow(browser, show);
+    }
+}
+
+void OffscreenCefClient::OnPopupSize(CefRefPtr<CefBrowser> browser, const CefRect& rect) {
+    if (render_handler_) {
+        render_handler_->OnPopupSize(browser, rect);
     }
 }
 

@@ -11,8 +11,14 @@
 
 namespace vision {
 class ImagePool {
+public:
+    // Source-scoped CPU images. Descriptor hashes include decoding options;
+    // separate source revisions use separate caches even for identical paths.
+    using SourceCache = map<uint64_t, SP<const Image>>;
+
 private:
     map<uint64_t, RegistrableTexture3D> textures_;
+    SP<SourceCache> source_cache_;
     static ImagePool *s_image_pool;
     ImagePool(const ImagePool &) = delete;
     ImagePool(ImagePool &&) = delete;
@@ -21,6 +27,7 @@ private:
 
 public:
     ImagePool() = default;
+    void set_source_cache(SP<SourceCache> cache) { source_cache_ = ocarina::move(cache); }
     static ImagePool &instance();
     static void destroy_instance();
     [[nodiscard]] RegistrableTexture3D load_texture(const ShaderNodeDesc &desc,

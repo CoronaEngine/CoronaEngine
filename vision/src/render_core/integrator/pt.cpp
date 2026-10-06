@@ -51,13 +51,15 @@ public:
                        res.x, res.y,
                        frame_buffer().resolution().x, frame_buffer().resolution().y,
                        rt_res.x, rt_res.y);
-        if (!denoiser_runtime_disabled() && denoiser_ && denoiser_->enabled()) {
+        if (!denoiser_runtime_disabled() && denoiser_ &&
+            (denoiser_->enabled() || denoiser_->has_prepared_resources())) {
             denoiser_->update_resolution(rt_res);
         }
 //        taa_history_->update_resolution(rt_res, device());
     }
 
     void prepare() noexcept override {
+        switch_profile::Scope profile{"integrator.prepare", "buffers"};
         IlluminationIntegrator::prepare();
 //        inspector_->prepare();
         if (!denoiser_runtime_disabled() && denoiser_ && denoiser_->enabled()) {
@@ -78,10 +80,13 @@ public:
     }
 
     void compile() noexcept override {
+        switch_profile::Scope profile{"integrator.compile", "compile"};
         ILightFieldFrameBuffer *lf_fb = dynamic_cast<ILightFieldFrameBuffer *>(&frame_buffer());
         bool denoiser_enabled = !denoiser_runtime_disabled() && denoiser_ && denoiser_->enabled();
         bool compatible_lightfield_denoiser = denoiser_ && denoiser_->supports_lightfield();
-        bool should_compile_denoiser = denoiser_enabled && (!lf_fb || compatible_lightfield_denoiser);
+        bool denoiser_prepared = !denoiser_runtime_disabled() && denoiser_ && denoiser_->has_prepared_resources();
+        bool should_compile_denoiser = (denoiser_enabled || denoiser_prepared) &&
+                                      (!lf_fb || compatible_lightfield_denoiser);
         OC_INFO_FORMAT("PathTracingIntegrator::compile begin framebuffer=({}, {}), raytracing=({}, {}), denoiser_enabled={}, lightfield_fb={}, lightfield_compatible={}",
                        frame_buffer().resolution().x, frame_buffer().resolution().y,
                        frame_buffer().raytracing_resolution().x, frame_buffer().raytracing_resolution().y,

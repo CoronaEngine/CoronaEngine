@@ -14,6 +14,7 @@
 #include "pipeline_ui.h"
 #include "UI/GUI.h"
 #include "base/using.h"
+#include "switch_profile.h"
 
 namespace vision {
 class Window;
@@ -59,6 +60,8 @@ protected:
     Postprocessor postprocessor_{this};
     bool need_save_{false};
     OutputDesc output_desc_{};
+    float3 light_world_center_{};
+    float light_world_radius_{};
 
     vision::Window *window_{};
 
@@ -115,6 +118,7 @@ public:
     /// virtual function start
     void update_runtime_object(const vision::IObjectConstructor *constructor) noexcept override;
     virtual void init_project(const ProjectDesc &project_desc) {
+        switch_profile::Scope profile{"scene.init_project", "scene"};
         activate_global_context();
         output_desc_ = project_desc.output_desc;
         renderer_desc_ = project_desc.renderer_desc;
@@ -125,6 +129,8 @@ public:
         }
         scene_view_.init(project_desc.scene_desc);
         scene_view_.set_min_radius(project_desc.renderer_desc.render_setting.min_world_radius);
+        light_world_center_ = scene_view_.world_center();
+        light_world_radius_ = scene_view_.world_radius();
         renderer_.init(project_desc.renderer_desc, scene_view_);
         sync_output_denoise();
     };
@@ -134,12 +140,14 @@ public:
     virtual void change_resolution(uint2 res) noexcept;
     virtual void invalidate() noexcept;
     virtual void clear_geometry() noexcept;
-    virtual void prepare_geometry() noexcept;
+    virtual void prepare_geometry(bool geometry_changed = false) noexcept;
     virtual void rebuild_geometry_gpu() noexcept;
     virtual void update_geometry() noexcept;
+    void refresh_world_bounds_dependents(bool geometry_changed = false) noexcept;
     void upload_scene_bindless_array() noexcept;
     virtual void prepare_render_graph() noexcept {}
     virtual void compile() noexcept {
+        switch_profile::Scope profile{"display.compile", "compile"};
         activate_global_context();
         frame_buffer()->compile();
     }
@@ -185,16 +193,22 @@ public:
     template<typename T>
     [[nodiscard]] CommandBatch reset_buffer(BufferView<T> buffer, T elm = T{},
                                            string desc = "clear_buffer") const noexcept {
-        static Kernel kernel = [&](BufferVar<T> buffer_var, Var<T> value) {
+        static Kernel kernel = [](BufferVar<T> buffer_var, Var<T> value) {
             buffer_var.write(dispatch_id(), value);
         };
         using shader_t = decltype(device().compile(kernel, desc));
-        static shader_t *shader = [&] {
-            UP<shader_t> uptr = make_unique<shader_t>(device().compile(kernel, desc));
-            auto ret = static_cast<shader_t *>(uptr.get());
-            shaders_.push_back(std::move(uptr));
-            return ret;
-        }();
+        // A compiled shader belongs to this pipeline/device. A static raw
+        // pointer survives its owning pipeline and dangles after mode retirement.
+        shader_t *shader = nullptr;
+        for (const auto &candidate : shaders_) {
+            shader = dynamic_cast<shader_t *>(candidate.get());
+            if (shader) break;
+        }
+        if (!shader) {
+            auto owned_shader = make_unique<shader_t>(device().compile(kernel, desc));
+            shader = owned_shader.get();
+            shaders_.push_back(std::move(owned_shader));
+        }
         CommandBatch ret;
         ret << (*shader)(buffer, elm).dispatch(buffer.size());
         return ret;

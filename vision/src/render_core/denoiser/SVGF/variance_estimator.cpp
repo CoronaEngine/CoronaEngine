@@ -1,6 +1,7 @@
 #include "variance_estimator.h"
 #include "svgf.h"
 #include "svgf_config.h"
+#include "base/sensor/sensor.h"
 
 namespace vision::svgf {
 
@@ -11,6 +12,7 @@ void VarianceEstimator::prepare() noexcept {}
 void VarianceEstimator::compile() noexcept {
 Pipeline *pipeline_ref = pipeline();
 Kernel variance_kernel = [&, pipeline_ref](Var<VarianceEstimatorParam> param) {
+    Float4 film_offsets = frame_filter_offsets(pipeline_ref, param.frame_index);
     Int2 screen_size = make_int2(dispatch_dim().xy());
     Uint index = dispatch_id();
         
@@ -20,55 +22,20 @@ Kernel variance_kernel = [&, pipeline_ref](Var<VarianceEstimatorParam> param) {
         RadType4Var cur_direct = param.radiance_direct.read(index);
         RadType4Var cur_indirect = param.radiance_indirect.read(index);
 
-        // === Input anti-firefly clamp (NRD-style) ===
-        // Specular highlights leave isolated single-pixel luminance spikes that SVGF
-        // cannot remove (a spike is not proportional to any surface quantity, and its
-        // view-dependent position breaks surface-motion reprojection, so it neither
-        // blurs nor accumulates cleanly). Clamp the current pixel luminance to the
-        // neighbour distribution's upper bound BEFORE it pollutes moments/history.
-        // The neighbourMax floor protects genuine multi-pixel highlights; only lone
-        // outliers above the local max are reined in.
-        {
-            Int2 ff_pixel = make_int2(dispatch_idx().xy());
-            Float ff_m1_d = 0.f, ff_m2_d = 0.f, ff_max_d = 0.f;
-            Float ff_m1_i = 0.f, ff_m2_i = 0.f, ff_max_i = 0.f;
-            Float ff_cnt = 0.f;
-            for (int fy = -Cfg::InputFirefly::kRadius; fy <= Cfg::InputFirefly::kRadius; ++fy) {
-                for (int fx = -Cfg::InputFirefly::kRadius; fx <= Cfg::InputFirefly::kRadius; ++fx) {
-                    if (fx == 0 && fy == 0) { continue; }
-                    Int2 fp = ff_pixel + make_int2(fx, fy);
-                    $if(all(fp >= 0) && all(fp < screen_size)) {
-                        Uint fidx = cast<uint>(fp.y) * cast<uint>(screen_size.x) + cast<uint>(fp.x);
-                        Float ld = luminance(param.radiance_direct.read(fidx).xyz());
-                        Float li = luminance(param.radiance_indirect.read(fidx).xyz());
-                        ff_m1_d += ld;
-                        ff_m2_d += ld * ld;
-                        ff_max_d = max(ff_max_d, ld);
-                        ff_m1_i += li;
-                        ff_m2_i += li * li;
-                        ff_max_i = max(ff_max_i, li);
-                        ff_cnt += 1.f;
-                    };
-                }
-            }
-            Float inv_ff = 1.f / max(ff_cnt, 1.f);
-            auto clamp_firefly = [&](RadType4Var c, Float m1, Float m2, Float nmax) -> RadType4Var {
-                Float mean = m1 * inv_ff;
-                Float variance = max(m2 * inv_ff - mean * mean, 0.f);
-                Float hi = max(mean + Cfg::InputFirefly::kSigmaScale * sqrt(variance), nmax);
-                Float lum = luminance(c.xyz());
-                Float scale = ocarina::select(lum > hi, hi / max(lum, 1e-4f), 1.f);
-                return make_RadType4(c.xyz() * RadTypeVar(scale), Float(c.w));
-            };
-            cur_direct = clamp_firefly(cur_direct, ff_m1_d, ff_m2_d, ff_max_d);
-            cur_indirect = clamp_firefly(cur_indirect, ff_m1_i, ff_m2_i, ff_max_i);
-        }
+        // Accumulate the original Monte Carlo samples. A bright indirect sample
+        // surrounded by eight zero samples still carries valid illumination;
+        // clipping it to the current 1-spp neighbourhood biases the mean dark.
 
         Float lum_direct = luminance(cur_direct.xyz());
         Float lum_indirect = luminance(cur_indirect.xyz());
             
         Interaction cur_it = pipeline_ref->geometry().compute_surface_interaction(cur_hit, false);
-        Float cur_depth = length(cur_it.pos - param.camera_pos.as_vec3());
+        Float3 shading_normal = PixelStateUtils::query_shading_normal(
+            pipeline_ref, cur_hit, param.camera_pos.as_vec3());
+        // Reprojection tests the current surface against the previous view.
+        // Both distances must use that same eye position: comparing current-eye
+        // and previous-eye distances rejects a stationary surface on dolly moves.
+        Float expected_prev_depth = length(cur_it.pos - param.prev_camera_pos.as_vec3());
             
         Float2 motion_vec = param.motion_vectors.read(index);
         Float motion_length = length(motion_vec);
@@ -76,7 +43,7 @@ Kernel variance_kernel = [&, pipeline_ref](Var<VarianceEstimatorParam> param) {
         Float2 cur_pos_float = make_float2(dispatch_idx().xy()) + 0.5f;
         Float2 prev_pos_float = cur_pos_float - motion_vec;
         
-        Float2 prev_texel = prev_pos_float - 0.5f;
+        Float2 prev_texel = prev_pos_float - 0.5f + film_offsets.xy() - film_offsets.zw();
         Float2 floor_pos = floor(prev_texel);
         Float2 frac_pos = prev_texel - floor_pos;
         
@@ -93,9 +60,10 @@ Kernel variance_kernel = [&, pipeline_ref](Var<VarianceEstimatorParam> param) {
         Float acc_m1_indirect = 0.f;
         Float acc_m2_indirect = 0.f;
         Float acc_history = 0.f;
+        Float acc_history_indirect = 0.f;
         Float total_weight = 0.f;
         
-        auto check_tap_consistency = [&](Int2 tap_pixel, Float bilinear_w) {
+        auto check_tap_consistency = [&](Int2 tap_pixel, Float bilinear_w, bool fallback = false) {
             $if(bilinear_w > 0.001f && 
                 all(tap_pixel >= 0) && all(tap_pixel < screen_size)) {
                 
@@ -108,8 +76,14 @@ Kernel variance_kernel = [&, pipeline_ref](Var<VarianceEstimatorParam> param) {
                     Float tap_depth = length(tap_it.pos - param.prev_camera_pos.as_vec3());
                     Bool tap_is_emissive = PixelStateUtils::is_emissive(pipeline_ref, tap_hit);
                     
-                    Float depth_diff = abs(cur_depth - tap_depth) / max(cur_depth, 0.1f);
-                    Float normal_sim = pow(max(dot(cur_it.ng, tap_it.ng), 0.f), Cfg::Temporal::kNormalExp);
+                    Float depth_diff = abs(expected_prev_depth - tap_depth) / max(expected_prev_depth, 0.1f);
+                    // A subpixel curve may land on a different facet next frame.
+                    // ReSTIR has sparse mixed-light samples: rejecting normals
+                    // just six degrees apart repeatedly resets them to black.
+                    Float normal_exponent = ocarina::select(param.channel_kind ==
+                        uint(RealTimeDenoiseInput::ChannelKind::DirectIndirect),
+                        Cfg::Temporal::kReSTIRNormalExp, Cfg::Temporal::kNormalExp);
+                    Float normal_sim = pow(max(dot(cur_it.ng, tap_it.ng), 0.f), normal_exponent);
                     Bool same_instance = cur_hit.inst_id == tap_hit.inst_id;
                     Bool emission_match = (cur_it.has_emission() == tap_is_emissive) &&
                         (!cur_it.has_emission() || cur_it.light_id() == tap_it.light_id());
@@ -118,6 +92,14 @@ Kernel variance_kernel = [&, pipeline_ref](Var<VarianceEstimatorParam> param) {
                         (depth_diff < Cfg::Temporal::kDepthThreshold) &&
                         (normal_sim > Cfg::Temporal::kNormalThreshold) &&
                         emission_match;
+                    SVGFDataDualVar tap_svgf = param.svgf_buffer_prev.read(tap_idx);
+                    if (fallback) {
+                        // Nearby history may lie on another parallel surface of
+                        // this instance. Keep the search on the current plane.
+                        tap_consistent = tap_consistent &&
+                            abs(dot(tap_it.pos - cur_it.pos, cur_it.ng)) <
+                                Cfg::Temporal::kFallbackPlaneThreshold * max(expected_prev_depth, 0.1f);
+                    }
                     
                     Float effective_weight = 0.f;
                     
@@ -126,7 +108,6 @@ Kernel variance_kernel = [&, pipeline_ref](Var<VarianceEstimatorParam> param) {
                     };
                     
                     $if(effective_weight > 0.001f) {
-                        SVGFDataDualVar tap_svgf = param.svgf_buffer_prev.read(tap_idx);
                         acc_direct += tap_svgf->illumination_direct() * effective_weight;
                         acc_indirect += tap_svgf->illumination_indirect() * effective_weight;
                         acc_m1_direct += tap_svgf->first_moment_direct() * effective_weight;
@@ -135,6 +116,7 @@ Kernel variance_kernel = [&, pipeline_ref](Var<VarianceEstimatorParam> param) {
                         acc_m2_indirect += tap_svgf->second_moment_indirect() * effective_weight;
                         Float history_scale = ocarina::select(tap_consistent, 1.f, 0.5f);
                         acc_history += tap_svgf->history_count() * effective_weight * history_scale;
+                        acc_history_indirect += tap_svgf->history_count_indirect() * effective_weight * history_scale;
                         total_weight += effective_weight;
                     };
                 };
@@ -146,8 +128,34 @@ Kernel variance_kernel = [&, pipeline_ref](Var<VarianceEstimatorParam> param) {
         check_tap_consistency(base_pixel + make_int2(1, 0), w10);
         check_tap_consistency(base_pixel + make_int2(0, 1), w01);
         check_tap_consistency(base_pixel + make_int2(1, 1), w11);
+
+        // Jitter and camera motion can move a thin surface outside the bilinear
+        // footprint. Recover nearby history on the same instance and plane
+        // instead of cold-starting every frame. Limit the borrowed history's age
+        // below, and reject large jumps or disocclusions with no matching surface.
+        Bool fallback_history = false;
+        $if(param.frame_index > 0u && total_weight <= 0.01f &&
+            motion_length < Cfg::Temporal::kFallbackMotionThreshold) {
+            fallback_history = true;
+            acc_direct = make_float3(0.f);
+            acc_indirect = make_float3(0.f);
+            acc_m1_direct = 0.f; acc_m2_direct = 0.f;
+            acc_m1_indirect = 0.f; acc_m2_indirect = 0.f;
+            acc_history = 0.f; acc_history_indirect = 0.f;
+            total_weight = 0.f;
+            Int2 nearest_pixel = make_int2(floor(prev_texel + 0.5f));
+            for (int y = -1; y <= 1; ++y) {
+                for (int x = -1; x <= 1; ++x) {
+                    Int2 tap_pixel = nearest_pixel + make_int2(x, y);
+                    Float2 delta = make_float2(tap_pixel) - prev_texel;
+                    check_tap_consistency(tap_pixel, 1.f / (1.f + dot(delta, delta)), true);
+                }
+            }
+        };
         
-        Bool valid_history = total_weight > 0.01f;
+        // Explicit integrator invalidation (including lighting edits) starts a
+        // new history even when the camera and surface geometry are unchanged.
+        Bool valid_history = param.frame_index > 0u && total_weight > 0.01f;
         Float inv_weight = 1.f / max(total_weight, 0.001f);
         
         // Keep as Float3 for precision during blending
@@ -158,55 +166,15 @@ Kernel variance_kernel = [&, pipeline_ref](Var<VarianceEstimatorParam> param) {
         Float prev_m1_indirect = acc_m1_indirect * inv_weight;
         Float prev_m2_indirect = acc_m2_indirect * inv_weight;
         Float prev_history = acc_history * inv_weight;
+        Float prev_history_indirect = acc_history_indirect * inv_weight;
 
-        // === NRD/ReLAX-style history color clamping (anti-ghosting) ===
-        // Reprojected history that has drifted outside the current frame's local
-        // colour distribution is the direct cause of trailing/smearing. Clamp the
-        // history luminance into the current 3x3 neighbourhood box
-        // [mean - k*sigma, mean + k*sigma] (chroma preserved by scaling). In smooth
-        // regions (small sigma) the box is tight and kills ghosting where it is most
-        // visible; in noisy regions (large sigma) it widens automatically and leaves
-        // detail untouched. This lets us keep a long, clean history (see
-        // kMaxHistoryStatic) for noise reduction without re-introducing trails.
-        $if(valid_history) {
-            Float box_m1_direct = 0.f, box_m2_direct = 0.f;
-            Float box_m1_indirect = 0.f, box_m2_indirect = 0.f;
-            Float box_count = 0.f;
-            $for(by, -Cfg::HistoryClamp::kRadius, Cfg::HistoryClamp::kRadius + 1) {
-                $for(bx, -Cfg::HistoryClamp::kRadius, Cfg::HistoryClamp::kRadius + 1) {
-                    Int2 bp = make_int2(dispatch_idx().xy()) + make_int2(bx, by);
-                    $if(all(bp >= 0) && all(bp < screen_size)) {
-                        Uint bidx = cast<uint>(bp.y) * cast<uint>(screen_size.x) + cast<uint>(bp.x);
-                        Float ld = HalfSafeUtils::clamp_luminance(luminance(param.radiance_direct.read(bidx).xyz()));
-                        Float li = HalfSafeUtils::clamp_luminance(luminance(param.radiance_indirect.read(bidx).xyz()));
-                        box_m1_direct += ld;
-                        box_m2_direct += ld * ld;
-                        box_m1_indirect += li;
-                        box_m2_indirect += li * li;
-                        box_count += 1.f;
-                    };
-                };
-            };
-            Float inv_box = 1.f / max(box_count, 1.f);
-            auto clamp_history = [&](Float3 hist, Float m1, Float m2) -> Float3 {
-                Float mean = m1 * inv_box;
-                Float variance = max(m2 * inv_box - mean * mean, 0.f);
-                Float sigma = sqrt(variance);
-                Float lo = max(mean - Cfg::HistoryClamp::kSigmaScale * sigma, 0.f);
-                Float hi = mean + Cfg::HistoryClamp::kSigmaScale * sigma;
-                Float lum = luminance(hist);
-                Float clamped = clamp(lum, lo, hi);
-                return hist * (clamped / max(lum, 1e-4f));
-            };
-            prev_direct = clamp_history(prev_direct, box_m1_direct, box_m2_direct);
-            prev_indirect = clamp_history(prev_indirect, box_m1_indirect, box_m2_indirect);
-        };
+        // Do not clip accumulated illumination to a 1-spp colour box, even under
+        // motion: sparse indirect samples make that box dark and leave a biased
+        // history after the camera stops. Reject geometry-inconsistent history
+        // and use the motion-dependent alpha below for responsiveness instead.
 
         Float3 cur_color = make_float3(cur_direct.xyz() + cur_indirect.xyz());
         Float3 prev_color = prev_direct + prev_indirect;
-        Float prev_lum = luminance(prev_color);
-        Float cur_lum = luminance(cur_color);
-        Float lum_ratio = prev_lum / max(cur_lum, 0.01f);
         
         Float ghosting_factor = 0.f;
         
@@ -218,43 +186,65 @@ Kernel variance_kernel = [&, pipeline_ref](Var<VarianceEstimatorParam> param) {
             ghosting_factor = max(ghosting_factor, t * t * (3.f - 2.f * t));
         };
         
-        $if(prev_lum > Cfg::Ghosting::kBrightHistoryMinLum) {
-            Float t = saturate((lum_ratio - Cfg::Ghosting::kBrightHistoryRatio * 0.6f) / 
-                (Cfg::Ghosting::kBrightHistoryRatio * 0.6f));
-            ghosting_factor = max(ghosting_factor, t * t * (3.f - 2.f * t));
-        };
-        
-        $if(prev_lum > Cfg::Ghosting::kMotionLumMinPrev) {
-            Float t_motion = saturate((motion_length - Cfg::Ghosting::kFastMotionThreshold * 0.6f) / 
-                (Cfg::Ghosting::kFastMotionThreshold * 0.8f));
-            Float t_lum = saturate((lum_ratio - Cfg::Ghosting::kMotionLumRatio * 0.6f) / 
-                (Cfg::Ghosting::kMotionLumRatio * 0.6f));
-            Float motion_ghosting = t_motion * t_motion * (3.f - 2.f * t_motion) * 
-                                    t_lum * t_lum * (3.f - 2.f * t_lum);
-            ghosting_factor = max(ghosting_factor, motion_ghosting);
-        };
-        
+        Bool diffuse_specular = param.channel_kind ==
+            uint(RealTimeDenoiseInput::ChannelKind::DiffuseSpecular);
+        // Surface-reprojected specular history depends on the outgoing world
+        // direction, as in RELAX's surface-motion confidence. Pure camera
+        // rotation moves pixels but does not change that direction. Convert
+        // angular parallax to pixel units so translation retains the existing
+        // response scale, including when rotation cancels its screen motion.
+        Float3 current_to_eye = param.camera_pos.as_vec3() - cur_it.pos;
+        Float3 previous_to_eye = param.prev_camera_pos.as_vec3() - cur_it.pos;
+        Float3 current_view = current_to_eye / max(length(current_to_eye), 1e-6f);
+        Float3 previous_view = previous_to_eye / max(length(previous_to_eye), 1e-6f);
+        Float view_motion = length(current_view - previous_view) * param.pixels_per_radian;
+        // ReSTIR's mixed direct/indirect channels are also invariant to pure
+        // rotation at a fixed eye. Only parallax changes their outgoing view.
+        Float response_motion = view_motion;
+
         Float max_history_for_motion = max(
             Cfg::Temporal::kMaxHistoryStatic - 
-            tanh(motion_length / Cfg::Temporal::kMotionScaleDivisor) * 
+            tanh(response_motion / Cfg::Temporal::kMotionScaleDivisor) *
             (Cfg::Temporal::kMaxHistoryStatic - Cfg::Temporal::kMaxHistoryFast),
             Cfg::Temporal::kMaxHistoryFast);
-        Float base_history = min(prev_history + 1.f, max_history_for_motion);
+        // PT's first channel contains view-independent diffuse lighting. A
+        // matching surface can retain it during camera motion; specular and
+        // legacy direct/indirect producers retain the responsive motion policy.
+        Float max_history_direct = ocarina::select(diffuse_specular,
+            Cfg::Temporal::kMaxHistoryStatic, max_history_for_motion);
+        Float base_history = min(prev_history + 1.f, max_history_direct);
+        Float base_history_indirect = min(prev_history_indirect + 1.f, max_history_for_motion);
+        // Spatially borrowed colour must not inherit a neighbour's full age:
+        // that would freeze a shifted shadow or highlight behind alpha=1/128.
+        base_history = ocarina::select(fallback_history,
+            min(base_history, Cfg::Temporal::kFallbackMaxHistory), base_history);
+        base_history_indirect = ocarina::select(fallback_history,
+            min(base_history_indirect, Cfg::Temporal::kFallbackMaxHistory), base_history_indirect);
         
         Float history_scale = 1.f - ghosting_factor * 0.85f;
         Float effective_history = max(base_history * history_scale, 1.f);
         
         Float new_history = ocarina::select(valid_history, effective_history, 1.f);
+        Float new_history_indirect = ocarina::select(valid_history,
+            max(base_history_indirect * history_scale, 1.f), 1.f);
         
         Float base_alpha = 1.f / new_history;
         
-        Float motion_boost = tanh(motion_length / Cfg::Temporal::kMotionAlphaDivisor) * 
+        Float motion_boost = tanh(response_motion / Cfg::Temporal::kMotionAlphaDivisor) *
                              Cfg::Temporal::kMotionAlphaScale;
         
-        Float alpha = max(base_alpha, motion_boost);
+        Float alpha = max(base_alpha, ocarina::select(diffuse_specular, 0.f, motion_boost));
+        Float alpha_indirect = max(1.f / new_history_indirect, motion_boost);
         
         Float max_alpha = 0.95f;
         alpha = min(alpha, max_alpha);
+        alpha_indirect = min(alpha_indirect, max_alpha);
+
+        // Motion can raise alpha above 1/history. Store the corresponding
+        // effective window, not the camera's age, so stopping does not freeze
+        // a noisy moving estimate behind an artificially long history.
+        new_history = min(new_history, 1.f / max(alpha, 1e-6f));
+        new_history_indirect = min(new_history_indirect, 1.f / max(alpha_indirect, 1e-6f));
         
         Bool use_history = valid_history;
         
@@ -267,7 +257,7 @@ Kernel variance_kernel = [&, pipeline_ref](Var<VarianceEstimatorParam> param) {
             prev_direct + alpha * (make_float3(cur_direct.xyz()) - prev_direct),
             make_float3(cur_direct.xyz()));
         Float3 new_indirect_f = ocarina::select(use_history,
-            prev_indirect + alpha * (make_float3(cur_indirect.xyz()) - prev_indirect),
+            prev_indirect + alpha_indirect * (make_float3(cur_indirect.xyz()) - prev_indirect),
             make_float3(cur_indirect.xyz()));
         
         
@@ -286,20 +276,25 @@ Kernel variance_kernel = [&, pipeline_ref](Var<VarianceEstimatorParam> param) {
             lum_direct_clamped * lum_direct_clamped);
             
         Float new_m1_indirect = ocarina::select(use_history,
-            prev_m1_indirect + alpha * (lum_indirect_clamped - prev_m1_indirect),
+            prev_m1_indirect + alpha_indirect * (lum_indirect_clamped - prev_m1_indirect),
             lum_indirect_clamped);
         Float new_m2_indirect = ocarina::select(use_history,
-            prev_m2_indirect + alpha * (lum_indirect_clamped * lum_indirect_clamped - prev_m2_indirect),
+            prev_m2_indirect + alpha_indirect * (lum_indirect_clamped * lum_indirect_clamped - prev_m2_indirect),
             lum_indirect_clamped * lum_indirect_clamped);
             
         Float temporal_var_direct = VarianceUtils::compute_variance(new_m1_direct, new_m2_direct);
         Float temporal_var_indirect = VarianceUtils::compute_variance(new_m1_indirect, new_m2_indirect);
             
         SVGFDataDualVar output;
+        output.surface_normal = make_RadType4(shading_normal, 1.f);
         output.illumi_direct = make_RadType4(new_direct, temporal_var_direct);
         output.illumi_indirect = make_RadType4(new_indirect, temporal_var_indirect);
-        output.moments_direct = make_RadType4(new_m1_direct, new_m2_direct, new_history, 0.f);
-        output.moments_indirect = make_RadType4(new_m1_indirect, new_m2_indirect, 0.f, 0.f);
+        // Independent effective windows, without increasing history-buffer size.
+        output.moments_direct = make_RadType4(new_m1_direct, new_m2_direct, new_history, new_history_indirect);
+        // Current reflectance scales, not temporal moments. The raw PT path
+        // supplies 1; demodulation supplies the luminance of its safe RGB guide.
+        output.moments_indirect = make_RadType4(new_m1_indirect, new_m2_indirect,
+                                               cur_direct.w, cur_indirect.w);
         param.svgf_buffer_cur.write(index, output);
     };
 };
@@ -318,7 +313,11 @@ CommandBatch VarianceEstimator::dispatch_variance(RealTimeDenoiseInput &input) n
     param.motion_vectors = input.motion_vec.descriptor();
     param.camera_pos = input.camera_pos;
     param.prev_camera_pos = input.prev_camera_pos;
-    param.screen_short_edge = compute_screen_short_edge(input.resolution);
+    // Sensor projects the configured FOV across the shorter image dimension.
+    param.pixels_per_radian = 0.5f * compute_screen_short_edge(input.resolution) /
+        tan(radians(pipeline()->scene().sensor()->fov_y()) * 0.5f);
+    param.frame_index = input.frame_index;
+    param.channel_kind = static_cast<uint>(input.channel_kind);
     CommandBatch ret;
     ret << variance_shader_(param).dispatch(input.resolution);
     return ret;

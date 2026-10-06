@@ -4,6 +4,8 @@
 #include <SDL3/SDL.h>
 #include <include/internal/cef_types.h>
 
+#include "popup_overlay.h"
+
 #include <atomic>
 #include <cstdint>
 #include <memory>
@@ -108,7 +110,8 @@ struct BrowserTab {
 
     char url_buffer[1024] = "";
     std::vector<uint8_t> pixel_buffer;
-    std::mutex mutex;  // 保护 pixel_buffer 和 buffer_dirty
+    PopupOverlay popup;
+    std::mutex mutex;
 
     std::vector<DragRegion> drag_regions;
     bool drag_pending = false;
@@ -157,6 +160,7 @@ class BrowserManager {
 
     // 设置主窗口指针
     void set_main_window(SDL_Window* window) { main_window_ = window; }
+    [[nodiscard]] SDL_Window* main_window() const { return main_window_; }
     void set_tab_drag_regions(int tab_id, const std::vector<DragRegion>& regions);
 
    private:

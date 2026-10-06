@@ -217,7 +217,9 @@ public:
     }
 
     void prepare() noexcept override {
-        warper_ = renderer().load_warper2d();
+        if (!warper_) {
+            warper_ = renderer().load_warper2d();
+        }
         uint2 res = color_->resolution();
         vector<float> weights;
         if (any(res == 0u)) {

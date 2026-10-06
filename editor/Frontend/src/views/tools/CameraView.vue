@@ -28,7 +28,7 @@
           aria-label="Vision render mode"
           @click.stop="visionModeMenuOpen = !visionModeMenuOpen"
         >
-          {{ visionRenderModes.find((mode) => mode.value === visionRenderMode)?.label || 'Vision Path Tracing' }}
+          {{ visionRenderModes.find((mode) => mode.value === visionRenderMode)?.label || 'Vision PT' }}
         </button>
         <div v-if="visionModeMenuOpen" class="dropdown-menu vision-mode-menu">
           <button
@@ -40,6 +40,24 @@
           </button>
         </div>
       </div>
+      <label class="vision-setting no-drag" title="累积 PT / ReSTIR 样本">
+        <input
+          type="checkbox"
+          :checked="visionAccumulation"
+          :disabled="backend !== 'vision' || visionRenderMode === 'ssat' || visionAccumulationBusy"
+          @change="toggleVisionAccumulation"
+        />
+        <span>累积样本</span>
+      </label>
+      <label class="vision-setting no-drag" title="SVGF 降噪">
+        <input
+          type="checkbox"
+          :checked="visionDenoise"
+          :disabled="backend !== 'vision' || visionRenderMode === 'ssat' || visionDenoiseBusy"
+          @change="toggleVisionDenoise"
+        />
+        <span>SVGF</span>
+      </label>
       <div class="dropdown no-drag">
         <button
           class="control dropdown-trigger"
@@ -149,6 +167,9 @@ import { editorApi } from '@/api/editorApi.js';
 import { appService } from '@/services/appService.js';
 import { buildDragRegions, dragRegionsSignature } from '@/utils/cameraDragRegions.js';
 import { coronaEventBus } from '@/utils/eventBus.js';
+import {
+  normalizeVisionRenderMode, visionAccumulationFromCamera, visionDenoiseFromCamera, visionRenderModes,
+} from '@/utils/visionRenderModes.js';
 import { createViewportPickController, indexActorsByHandle } from '@/utils/viewportPick.js';
 import {
   createViewportGizmoController,
@@ -169,6 +190,10 @@ const camera = ref(null);
 const cameraName = ref('Camera');
 const backend = ref('native');
 const visionRenderMode = ref('path_tracing');
+const visionAccumulation = ref(false);
+const visionAccumulationBusy = ref(false);
+const visionDenoise = ref(false);
+const visionDenoiseBusy = ref(false);
 const outputMode = ref('final_color');
 const shadowCascadeDebug = ref(false);
 const ssaoEnabled = ref(true);
@@ -213,12 +238,6 @@ const outputModes = [
   { value: 'shadow_mask_raw', label: 'Shadow Raw' },
   { value: 'shadow_mask', label: 'Shadow Mask' },
 ];
-const visionRenderModes = [
-  { value: 'path_tracing', label: 'Vision Path Tracing' },
-  { value: 'svgf', label: 'Vision SVGF' },
-  { value: 'ssat', label: 'Vision SSAT' },
-];
-
 const viewportUiModeStore = createViewportUiModeStore();
 const viewportUiCalibrationStore = createViewportUiCalibrationStore();
 const viewportUiCalibrationDescriptor = {};
@@ -243,7 +262,12 @@ const loadCamera = async () => {
   visionAvailable.value = !!unwrap(visionResult)?.available;
   cameraName.value = camera.value.name;
   backend.value = camera.value.render_backend || 'native';
-  visionRenderMode.value = camera.value.vision_render_mode || 'path_tracing';
+  visionAccumulation.value = visionAccumulationFromCamera(camera.value);
+  visionDenoise.value = visionDenoiseFromCamera(camera.value);
+  visionRenderMode.value = normalizeVisionRenderMode(camera.value.vision_render_mode);
+  camera.value.vision_render_mode = visionRenderMode.value;
+  camera.value.vision_accumulation = visionAccumulation.value;
+  camera.value.vision_denoise = visionDenoise.value;
   outputMode.value = backend.value === 'vision'
     ? 'final_color'
     : camera.value.output_mode || 'final_color';
@@ -293,7 +317,7 @@ const selectVisionRenderMode = async (mode) => {
   if (visionRenderMode.value === mode && backend.value === 'vision') return;
   try {
     const result = unwrap(await editorApi.sceneTools.setVisionRenderMode(sceneId, cameraId, mode));
-    visionRenderMode.value = result.mode || mode;
+    visionRenderMode.value = result.pending ? mode : result.mode || mode;
     if (camera.value) {
       camera.value.vision_render_mode = visionRenderMode.value;
     }
@@ -307,6 +331,54 @@ const selectVisionRenderMode = async (mode) => {
     }
   } catch (error) {
     errorText.value = error.message;
+  }
+};
+
+const toggleVisionAccumulation = async () => {
+  if (backend.value !== 'vision' || visionRenderMode.value === 'ssat' || visionAccumulationBusy.value) {
+    return false;
+  }
+  const previous = visionAccumulation.value;
+  const next = !previous;
+  visionAccumulationBusy.value = true;
+  visionAccumulation.value = next;
+  errorText.value = '';
+  try {
+    const result = unwrap(await editorApi.sceneTools.setVisionAccumulation(sceneId, cameraId, next));
+    visionAccumulation.value = result?.pending || typeof result?.enabled !== 'boolean'
+      ? next : result.enabled;
+    if (camera.value) camera.value.vision_accumulation = visionAccumulation.value;
+    return true;
+  } catch (error) {
+    visionAccumulation.value = previous;
+    errorText.value = error.message;
+    return false;
+  } finally {
+    visionAccumulationBusy.value = false;
+  }
+};
+
+const toggleVisionDenoise = async () => {
+  if (backend.value !== 'vision' || visionRenderMode.value === 'ssat' || visionDenoiseBusy.value) {
+    return false;
+  }
+  const previous = visionDenoise.value;
+  const next = !previous;
+  visionDenoiseBusy.value = true;
+  visionDenoise.value = next;
+  errorText.value = '';
+  try {
+    const result = unwrap(await editorApi.sceneTools.setVisionDenoise(sceneId, cameraId, next));
+    visionDenoise.value = result?.pending || typeof result?.enabled !== 'boolean'
+      ? next : result.enabled;
+    if (camera.value) camera.value.vision_denoise = visionDenoise.value;
+    return true;
+  } catch (error) {
+    visionDenoise.value = previous;
+    errorText.value = error.message;
+    return false;
+  } finally {
+    visionDenoiseBusy.value = false;
   }
 };
 
@@ -1318,6 +1390,16 @@ onBeforeUnmount(() => {
 .dropdown-menu button:disabled { color: #777; cursor: default; }
 .output-menu { min-width: 92px; }
 .vision-mode-menu { min-width: 148px; }
+.vision-setting {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.vision-setting input { margin: 0; accent-color: #f59e0b; }
+.vision-setting:has(input:disabled) { opacity: 0.45; cursor: default; }
 .speed, .resolution { display: flex; align-items: center; gap: 3px; font-size: 10px; }
 .speed input { width: 54px; padding: 0 4px; }
 .resolution input { width: 58px; padding: 0 4px; }
@@ -1332,6 +1414,7 @@ onBeforeUnmount(() => {
   color: #fff7c2;
   background: rgba(120, 80, 12, 0.78);
 }
+.cascade-toggle:disabled { opacity: 0.45; cursor: default; }
 .window-action { width: 24px; cursor: pointer; }
 .maximize { margin-left: auto; }
 .close { color: #ffb4b4; }

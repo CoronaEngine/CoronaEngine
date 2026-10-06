@@ -679,7 +679,7 @@ public:
         ret << FrameBuffer::clear_accumulation_history();
         if (encoded_accum_buffer_.device_buffer().size() != 0) {
             ret << pipeline()->reset_buffer(encoded_accum_buffer_.view(), make_float4(0.f),
-                                            "LightField::clear_encoded_accum_history");
+                                            "LightField_clear_encoded_accum_history");
         }
         return ret;
     }

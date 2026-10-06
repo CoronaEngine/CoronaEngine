@@ -159,6 +159,7 @@ protected:
 
 public:
     Box3f aabb;
+    uint64_t geometry_sync_identity{0};
 
 public:
     explicit ShapeInstance(SP<Mesh> mesh);
@@ -200,6 +201,7 @@ public:
 
 public:
     Box3f aabb;
+    uint64_t geometry_sync_identity{0};
 
 private:
     vector<SP<ShapeInstance>> instances_;

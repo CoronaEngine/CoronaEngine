@@ -5,6 +5,7 @@
 // avoid a circular dependency.
 #include <corona/systems/ui/quad_compositor.h>
 #include <corona/systems/ui/ui_surface_lifecycle.h>
+#include <corona/systems/display/published_image.h>
 
 #include <SDL3/SDL.h>
 
@@ -79,6 +80,7 @@ class VulkanBackend {
     struct PerSurfaceRender {
         ViewportRenderResources resources;
         std::uintptr_t image_handle = 0;
+        Detail::PublishedImage published_image;
         uint64_t frame_index = 0;
         UI::SurfaceCompletionTicket first_present_ticket;
         bool first_present_published = false;

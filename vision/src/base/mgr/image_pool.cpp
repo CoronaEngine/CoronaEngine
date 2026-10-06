@@ -6,6 +6,8 @@
 #include "pipeline.h"
 #include "global.h"
 #include "rhi/device.h"
+#include "switch_profile.h"
+#include <cstring>
 
 namespace vision {
 using namespace ocarina;
@@ -14,7 +16,16 @@ RegistrableTexture3D ImagePool::load_texture(const ShaderNodeDesc &desc,
                                              BindlessArray &bindless_array,
                                              Device &device) noexcept {
     Image image_io;
-    if (desc.sub_type == "constant") {
+    const auto hash = desc.hash();
+    const auto cached = source_cache_ ? source_cache_->find(hash) : SourceCache::iterator{};
+    if (source_cache_ && cached != source_cache_->end()) {
+        switch_profile::Scope profile{"ImagePool::reuse_source", "scene_reuse"};
+        const auto &source = *cached->second;
+        image_io = Image::create_empty(source.pixel_storage(), source.resolution());
+        std::memcpy(image_io.pixel_ptr(), source.pixel_ptr(), source.size_in_bytes());
+        image_io.path() = source.path();
+        std::memcpy(&image_io.average<1>(), &source.average<1>(), source.channel_num() * sizeof(float));
+    } else if (desc.sub_type == "constant") {
         image_io = Image::pure_color(desc["value"].as_float4(), ocarina::LINEAR, make_uint2(1));
     } else {
         string color_space = desc["color_space"].as_string();
@@ -27,7 +38,15 @@ RegistrableTexture3D ImagePool::load_texture(const ShaderNodeDesc &desc,
         if (!fpath.is_absolute()) {
             fpath = Global::instance().scene_path() / fpath;
         }
+        switch_profile::Scope profile{"ImagePool::read_source", "scene_images"};
         image_io = Image::load(fpath, cs);
+    }
+    if (source_cache_ && cached == source_cache_->end()) {
+        auto source = Image::create_empty(image_io.pixel_storage(), image_io.resolution());
+        std::memcpy(source.pixel_ptr(), image_io.pixel_ptr(), image_io.size_in_bytes());
+        source.path() = image_io.path();
+        std::memcpy(&source.average<1>(), &image_io.average<1>(), image_io.channel_num() * sizeof(float));
+        source_cache_->emplace(hash, std::make_shared<const Image>(std::move(source)));
     }
     RegistrableTexture3D ret{bindless_array};
     ret.host_tex() = ocarina::move(image_io);
@@ -56,6 +75,7 @@ RegistrableTexture3D &ImagePool::obtain_texture(const ShaderNodeDesc &desc,
 }
 
 void ImagePool::prepare(Stream &stream) noexcept {
+    switch_profile::Scope profile{"images.prepare", "images"};
     for (auto &iter : textures_) {
         stream << iter.second.upload();
     }

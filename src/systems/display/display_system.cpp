@@ -177,6 +177,7 @@ void DisplaySystem::handle_optics_frame(
     auto& layer = surface_states_[surface_id].optics;
     if (event.frame_index >= layer.frame_index) {
         layer.image_handle = event.image_handle;
+        layer.published_image = event.published_image;
         layer.frame_index = event.frame_index;
         layer.width = event.width;
         layer.height = event.height;
@@ -218,6 +219,7 @@ void DisplaySystem::handle_ui_frame(const Events::UIFrameReadyEvent& event) {
                 auto& layer = surface_states_[surface_id].ui;
                 if (event.frame_index >= layer.frame_index) {
                     layer.image_handle = event.image_handle;
+                    layer.published_image = event.published_image;
                     layer.frame_index = event.frame_index;
                     layer.width = event.width;
                     layer.height = event.height;
@@ -642,32 +644,37 @@ void DisplaySystem::update() {
         // The coordinator owns the ordering boundary between the surface lease
         // and image access. It also owns the handles with the lease so an
         // acquisition exception destroys partial results before lease release.
+        using ImageAccess = std::optional<Detail::SurfaceFrameCoordinator::FrameAccess<
+            SharedDataHub::ImageStorage::WriteHandle>>;
         struct FrameImages {
-            SharedDataHub::ImageStorage::WriteHandle optics;
-            SharedDataHub::ImageStorage::WriteHandle ui;
+            ImageAccess optics;
+            ImageAccess ui;
         };
         auto frame_access = surface_frame_coordinator_.begin_frame(
             gate_it->second,
             [&]() -> FrameImages {
-                FrameImages images;
-                if (has_optics) {
-                    images.optics = SharedDataHub::instance()
-                                        .image_storage()
-                                        .acquire_write(
-                                            state.optics.image_handle);
-                }
-                if (has_ui) {
-                    images.ui = SharedDataHub::instance()
-                                    .image_storage()
-                                    .acquire_write(state.ui.image_handle);
-                }
-                return images;
+                auto& storage = SharedDataHub::instance().image_storage();
+                return {state.optics.published_image.acquire_write(storage, state.optics),
+                        state.ui.published_image.acquire_write(storage, state.ui)};
             });
         if (!frame_access) {
             continue;
         }
-        auto& optics_frame = frame_access->images().optics;
-        auto& ui_frame = frame_access->images().ui;
+        auto& optics_access = frame_access->images().optics;
+        auto& ui_access = frame_access->images().ui;
+        auto* optics_frame = optics_access ? &*optics_access->images() : nullptr;
+        auto* ui_frame = ui_access ? &*ui_access->images() : nullptr;
+        // A retired allocation is a missing layer, including its extent and
+        // viewport metadata. Keep the UI acknowledgement boundary for this
+        // snapshot even when its producer has retired.
+        if (!optics_frame) {
+            state.optics = {};
+        }
+        if (!ui_frame) {
+            state.ui.image_handle = 0;
+            state.ui.width = 0;
+            state.ui.height = 0;
+        }
 
         // Resolve images: use producer image if available, transparent fallback otherwise.
         Horizon::HardwareImage* optics_img_ptr = nullptr;
@@ -921,10 +928,8 @@ Detail::PresentOutcome DisplaySystem::compose_and_present(
     //                  state.ui.frame_index);
     // }
 
-    // WORKAROUND for Horizon API change (removed HardwareImage::extent()):
-    // Images passed through SharedDataHub have different addresses than when created,
-    // so address-based extent cache lookups fail. Use state.width/height directly
-    // instead of querying from the image objects.
+    // These extents and viewport coordinates were refreshed from the acquired
+    // ImageDevice under its write lock, so they describe the images used here.
     const PixelExtent optics_extent{state.optics.width, state.optics.height};
     const PixelExtent ui_extent{state.ui.width, state.ui.height};
 

@@ -31,7 +31,9 @@ public:
     }
 
     void prepare_warper() noexcept {
-        warper_ = renderer().load_warper();
+        if (!warper_) {
+            warper_ = renderer().load_warper();
+        }
         vector<float> weights;
         if (env_separate_) {
             lights().for_each_instance([&](TLight light) {

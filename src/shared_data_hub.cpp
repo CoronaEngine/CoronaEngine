@@ -332,6 +332,16 @@ void SharedDataHub::enqueue_camera_state_update(CameraStateUpdateCommand command
     if (has_camera_state_field(command.fields, CameraStateUpdateField::VisionRenderMode)) {
         pending.vision_render_mode = command.vision_render_mode;
     }
+    if (has_camera_state_field(command.fields, CameraStateUpdateField::VisionDenoise)) {
+        pending.vision_denoise = command.vision_denoise;
+        requested_camera_vision_denoise_[command.camera_handle] = {
+            command.vision_denoise, pending.sequence};
+    }
+    if (has_camera_state_field(command.fields, CameraStateUpdateField::VisionAccumulation)) {
+        pending.vision_accumulation = command.vision_accumulation;
+        requested_camera_vision_accumulation_[command.camera_handle] = {
+            command.vision_accumulation, pending.sequence};
+    }
     if (has_camera_state_field(command.fields, CameraStateUpdateField::ShadowCascadeDebug)) {
         pending.shadow_cascade_debug = command.shadow_cascade_debug;
     }
@@ -365,11 +375,59 @@ std::vector<CameraStateUpdateCommand> SharedDataHub::drain_camera_state_updates(
     return updates;
 }
 
+std::optional<bool> SharedDataHub::requested_camera_vision_denoise(
+    std::uintptr_t camera_handle) const {
+    std::lock_guard<std::mutex> lock(camera_state_update_mutex_);
+    const auto it = requested_camera_vision_denoise_.find(camera_handle);
+    if (it != requested_camera_vision_denoise_.end()) {
+        return it->second.enabled;
+    }
+    return std::nullopt;
+}
+
+void SharedDataHub::acknowledge_camera_vision_denoise(
+    std::uintptr_t camera_handle, std::uint64_t applied_sequence) {
+    std::lock_guard<std::mutex> lock(camera_state_update_mutex_);
+    const auto it = requested_camera_vision_denoise_.find(camera_handle);
+    if (it != requested_camera_vision_denoise_.end() &&
+        it->second.sequence <= applied_sequence) {
+        requested_camera_vision_denoise_.erase(it);
+    }
+}
+
+std::optional<bool> SharedDataHub::requested_camera_vision_accumulation(
+    std::uintptr_t camera_handle) const {
+    std::lock_guard<std::mutex> lock(camera_state_update_mutex_);
+    const auto it = requested_camera_vision_accumulation_.find(camera_handle);
+    if (it != requested_camera_vision_accumulation_.end()) {
+        return it->second.enabled;
+    }
+    return std::nullopt;
+}
+
+void SharedDataHub::acknowledge_camera_vision_accumulation(
+    std::uintptr_t camera_handle, std::uint64_t applied_sequence) {
+    std::lock_guard<std::mutex> lock(camera_state_update_mutex_);
+    const auto it = requested_camera_vision_accumulation_.find(camera_handle);
+    if (it != requested_camera_vision_accumulation_.end() &&
+        it->second.sequence <= applied_sequence) {
+        requested_camera_vision_accumulation_.erase(it);
+    }
+}
+
+void SharedDataHub::clear_camera_state_updates(std::uintptr_t camera_handle) {
+    std::lock_guard<std::mutex> lock(camera_state_update_mutex_);
+    pending_camera_state_updates_.erase(camera_handle);
+    requested_camera_vision_denoise_.erase(camera_handle);
+    requested_camera_vision_accumulation_.erase(camera_handle);
+}
+
 void SharedDataHub::enqueue_camera_release(CameraReleaseCommand command) {
     if (command.camera_handle == 0) {
         return;
     }
 
+    clear_camera_state_updates(command.camera_handle);
     std::lock_guard<std::mutex> lock(camera_release_mutex_);
     pending_camera_releases_.push_back(command);
 }

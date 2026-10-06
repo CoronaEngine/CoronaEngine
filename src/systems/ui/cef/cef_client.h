@@ -7,8 +7,10 @@
 #include <wrapper/cef_helpers.h>
 #include <wrapper/cef_message_router.h>
 
+#include <array>
 #include <chrono>
 #include <condition_variable>
+#include <cstdint>
 #include <iostream>
 #include <mutex>
 
@@ -28,14 +30,30 @@ class OffscreenRenderHandler : public CefRenderHandler {
     void OnPaint(CefRefPtr<CefBrowser> browser, PaintElementType type,
                  const RectList& dirty_rects, const void* buffer,
                  int width, int height) override;
+    void OnAcceleratedPaint(CefRefPtr<CefBrowser> browser, PaintElementType type,
+                            const RectList& dirty_rects,
+                            const CefAcceleratedPaintInfo& info) override;
+    void OnPopupShow(CefRefPtr<CefBrowser> browser, bool show) override;
+    void OnPopupSize(CefRefPtr<CefBrowser> browser, const CefRect& rect) override;
     bool GetScreenPoint(CefRefPtr<CefBrowser> browser, int viewX, int viewY, int& screenX, int& screenY);
     void SetTab(BrowserTab* tab);
 
     IMPLEMENT_REFCOUNTING(OffscreenRenderHandler);
 
    private:
+    void record_dirty_stats(PaintElementType type, const RectList& dirty_rects, int width, int height);
+    void flush_dirty_stats(int width, int height);
+
     std::mutex tab_mutex_;
     BrowserTab* tab_ = nullptr;
+
+    std::uint64_t paint_frames_ = 0;
+    std::uint64_t dirty_rect_total_ = 0;
+    std::uint64_t zero_dirty_frames_ = 0;
+    std::uint64_t full_dirty_frames_ = 0;
+    std::uint64_t covered_cells_total_ = 0;
+    std::uint64_t popup_paints_ = 0;
+    std::array<std::uint8_t, 64 * 32> dirty_cells_{};
 };
 
 // ============================================================================
@@ -108,6 +126,11 @@ class OffscreenCefClient : public CefClient,
     void OnPaint(CefRefPtr<CefBrowser> browser, PaintElementType type,
                  const RectList& dirtyRects, const void* buffer,
                  int width, int height) override;
+    void OnAcceleratedPaint(CefRefPtr<CefBrowser> browser, PaintElementType type,
+                            const RectList& dirtyRects,
+                            const CefAcceleratedPaintInfo& info) override;
+    void OnPopupShow(CefRefPtr<CefBrowser> browser, bool show) override;
+    void OnPopupSize(CefRefPtr<CefBrowser> browser, const CefRect& rect) override;
 
     // CefDisplayHandler
     bool OnConsoleMessage(CefRefPtr<CefBrowser> browser,

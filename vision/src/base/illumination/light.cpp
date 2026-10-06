@@ -51,11 +51,13 @@ uint64_t Light::compute_topology_hash() const noexcept {
 }
 
 void Light::initialize_root(const Desc &desc) noexcept {
+    source_desc_ = desc;
     initialize_root_graph();
     initialize_slots(desc);
 }
 
 void Light::initialize_attached(const SP<ShaderGraph> &graph, const Desc &desc) noexcept {
+    source_desc_ = desc;
     initialize_attached_graph(graph);
     initialize_slots(desc);
 }

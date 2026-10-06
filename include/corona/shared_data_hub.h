@@ -2,6 +2,7 @@
 #include <horizon/core/storage.h>
 #include <corona/memory/gpu_mem_ledger.h>
 #include <corona/resource/types/scene.h>  // Resource::IkChain（GeometryDevice::ik_chains）
+#include <corona/systems/display/image_frame_metadata.h>
 #include <corona/systems/optics/viewport_gizmo_math.h>
 
 #include <ktm/ktm.h>
@@ -46,10 +47,11 @@ struct MeshDevice {
 
     // ---- GPU 显存记账令牌（P0：mesh/texture 计量）----
     // mesh_mem 覆盖本 MeshDevice 的 4 个 GPU 缓冲（vertex/index/storage）；
-    // tex_mem 覆盖 textureBuffer（仅真实纹理时非空，占位/共享纹理计 0）。
-    // move-only：随 MeshDevice 析构/移动自动扣减/转移，与真实 HardwareBuffer 同寿。
+    // tex_mem 覆盖 textureBuffer（仅真实纹理时非空；占位纹理为空）。
+    // 纹理句柄可按材质/资源 ID 被多个 MeshDevice 共享，故纹理令牌用 shared_ptr：
+    // 同一张 GPU 纹理只记账一次，最后一个引用释放时才扣减。
     Corona::Memory::GpuMemToken mesh_mem;
-    Corona::Memory::GpuMemToken tex_mem;
+    std::shared_ptr<Corona::Memory::GpuMemToken> tex_mem;
 };
 
 struct ModelTransform {
@@ -274,6 +276,8 @@ enum class CameraVisionRenderMode : uint8_t {
     PathTracing,
     SVGF,
     SSAT,
+    ProgressivePathTracing,
+    ReSTIR,
 };
 
 struct CameraDevice {
@@ -292,6 +296,8 @@ struct CameraDevice {
     CameraOutputMode output_mode{CameraOutputMode::FinalColor};
     CameraRenderBackend render_backend{CameraRenderBackend::Native};
     CameraVisionRenderMode vision_render_mode{CameraVisionRenderMode::PathTracing};
+    bool vision_denoise{false};
+    bool vision_accumulation{false};
     bool shadow_cascade_debug{false};
     bool ssao_enabled{true};
     bool view_open{false};
@@ -399,6 +405,8 @@ enum class CameraStateUpdateField : std::uint32_t {
     VisionRenderMode = 1u << 5,
     ShadowCascadeDebug = 1u << 6,
     SsaoEnabled = 1u << 7,
+    VisionDenoise = 1u << 8,
+    VisionAccumulation = 1u << 9,
 };
 
 constexpr CameraStateUpdateField operator|(CameraStateUpdateField lhs,
@@ -422,6 +430,8 @@ struct CameraStateUpdateCommand {
     CameraOutputMode output_mode{CameraOutputMode::FinalColor};
     CameraRenderBackend render_backend{CameraRenderBackend::Native};
     CameraVisionRenderMode vision_render_mode{CameraVisionRenderMode::PathTracing};
+    bool vision_denoise{false};
+    bool vision_accumulation{false};
     bool shadow_cascade_debug{false};
     bool ssao_enabled{true};
     bool view_open{false};
@@ -557,6 +567,7 @@ struct ImageDevice {
     /// Written by DisplaySystem after compositing finishes reading the image.
     /// Producers wait on this before overwriting with new content to prevent GPU read/write races.
     Horizon::SubmitReceipt consumed_receipt;
+    Systems::Detail::ImageFrameMetadata metadata;
 };
 
 class SharedDataHub {
@@ -657,6 +668,15 @@ class SharedDataHub {
     std::vector<CameraViewportUpdateCommand> drain_camera_viewport_updates();
     void enqueue_camera_state_update(CameraStateUpdateCommand command);
     std::vector<CameraStateUpdateCommand> drain_camera_state_updates();
+    [[nodiscard]] std::optional<bool> requested_camera_vision_denoise(
+        std::uintptr_t camera_handle) const;
+    void acknowledge_camera_vision_denoise(std::uintptr_t camera_handle,
+                                          std::uint64_t applied_sequence);
+    [[nodiscard]] std::optional<bool> requested_camera_vision_accumulation(
+        std::uintptr_t camera_handle) const;
+    void acknowledge_camera_vision_accumulation(std::uintptr_t camera_handle,
+                                               std::uint64_t applied_sequence);
+    void clear_camera_state_updates(std::uintptr_t camera_handle);
     void enqueue_camera_release(CameraReleaseCommand command);
     std::vector<CameraReleaseCommand> drain_camera_releases();
     void set_viewport_ui_mode(std::uintptr_t camera_handle, ViewportUiMode mode);
@@ -702,9 +722,18 @@ class SharedDataHub {
     std::unordered_map<std::uintptr_t, CameraViewportUpdateCommand>
         pending_camera_viewport_updates_;
     std::uint64_t camera_viewport_update_sequence_{0};
-    std::mutex camera_state_update_mutex_;
+    mutable std::mutex camera_state_update_mutex_;
     std::unordered_map<std::uintptr_t, CameraStateUpdateCommand>
         pending_camera_state_updates_;
+    struct RequestedCameraBool {
+        bool enabled{false};
+        std::uint64_t sequence{};
+    };
+    // Retained after drain until the render thread commits or discards the request.
+    std::unordered_map<std::uintptr_t, RequestedCameraBool>
+        requested_camera_vision_denoise_;
+    std::unordered_map<std::uintptr_t, RequestedCameraBool>
+        requested_camera_vision_accumulation_;
     std::uint64_t camera_state_update_sequence_{0};
     std::mutex camera_release_mutex_;
     std::vector<CameraReleaseCommand> pending_camera_releases_;

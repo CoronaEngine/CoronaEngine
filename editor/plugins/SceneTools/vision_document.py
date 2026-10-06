@@ -157,18 +157,31 @@ def extract_vision_camera_pose(document: dict):
     }
 
 
+def infer_vision_denoise(document: dict) -> bool:
+    output = document.get("output") if isinstance(document, dict) else None
+    value = output.get("denoise", False) if isinstance(output, dict) else False
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(value) if isinstance(value, (bool, int)) else False
+
+
+def infer_vision_accumulation(document: dict) -> bool:
+    current = document
+    for key in ("pipeline", "param", "frame_buffer", "param", "accumulation"):
+        current = current.get(key) if isinstance(current, dict) else None
+    if isinstance(current, str):
+        return current.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(current) if isinstance(current, (bool, int)) else False
+
+
 def infer_vision_render_mode(document: dict) -> str:
     if not isinstance(document, dict):
         return "path_tracing"
 
-    output = document.get("output")
-    output_denoise = (
-        bool(output.get("denoise"))
-        if isinstance(output, dict) and "denoise" in output
-        else False
-    )
     render = document.get("render")
     integrator = render.get("integrator") if isinstance(render, dict) else {}
+    if isinstance(integrator, dict) and str(integrator.get("type") or "").strip().lower() == "rt":
+        return "restir"
     integrator_param = integrator.get("param") if isinstance(integrator, dict) else {}
     denoiser = integrator_param.get("denoiser") if isinstance(integrator_param, dict) else {}
     denoiser_type = (
@@ -188,8 +201,6 @@ def infer_vision_render_mode(document: dict) -> str:
 
     if frame_buffer_type == "lightfield" or denoiser_type == "ssat":
         return "ssat"
-    if output_denoise and denoiser_type == "svgf":
-        return "svgf"
     return "path_tracing"
 
 

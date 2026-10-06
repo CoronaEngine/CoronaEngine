@@ -26,12 +26,14 @@ struct CombinedAtrousParam {
     uint iteration{};
     uint frame_index{};
     uint write_history{};
+    uint channel_kind{};
+    uint use_shading_normal{};
 };
 
 }// namespace vision::svgf
 
 OC_PARAM_STRUCT(vision::svgf, CombinedAtrousParam, direct_src, direct_dst, indirect_src, indirect_dst,
-visibility_buffer, svgf_buffer, camera_pos, l_phi, n_phi, z_phi, step_size, iteration, frame_index, write_history){};
+visibility_buffer, svgf_buffer, camera_pos, l_phi, n_phi, z_phi, step_size, iteration, frame_index, write_history, channel_kind, use_shading_normal){};
 
 namespace vision::svgf {
 class SVGF;
@@ -62,7 +64,7 @@ public:
     
     [[nodiscard]] CommandBatch dispatch_combined(vision::RealTimeDenoiseInput &input, 
                                                  uint step_width, 
-                                                 uint iteration) noexcept;
+                                                 uint iteration, bool use_shading_normal = true) noexcept;
     
     void update_resolution(uint2 resolution) noexcept;
 };

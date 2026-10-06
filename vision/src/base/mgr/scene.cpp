@@ -4,6 +4,7 @@
 
 #include "scene.h"
 #include "pipeline.h"
+#include "switch_profile.h"
 
 #include <optional>
 #include <unordered_set>
@@ -102,6 +103,7 @@ CommandBatch LightManager::upload(bool async) noexcept {
 // ========== Scene ==========
 
 void Scene::init(const SceneDesc &scene_desc) {
+    switch_profile::Scope profile{"Scene::init", "scene"};
     TIMER(init_scene);
     std::optional<Global::SceneGpuContextScope> scene_gpu_context;
     if (geometry().has_gpu_resource()) {
@@ -122,11 +124,18 @@ void Scene::init(const SceneDesc &scene_desc) {
     data_->light_manager_.init(scene_desc.light_descs);
     load_materials(scene_desc.material_descs);
     load_mediums(scene_desc.mediums_desc);
-    load_shapes(scene_desc.shape_descs);
+    if (cached_shape_initializer_) {
+        switch_profile::Scope restore_profile{"Scene::restore_cached_shapes", "scene_reuse"};
+        auto initializer = std::move(cached_shape_initializer_);
+        initializer(*this);
+    } else {
+        load_shapes(scene_desc.shape_descs);
+    }
     data_->initialized_ = true;
 }
 
 void Scene::prepare() noexcept {
+    switch_profile::Scope profile{"scene.prepare", "scene"};
     std::optional<Global::SceneGpuContextScope> scene_gpu_context;
     if (geometry().has_gpu_resource()) {
         scene_gpu_context.emplace(geometry().bindless_array(),
@@ -187,6 +196,7 @@ TLight Scene::load_light(const LightDesc &desc) noexcept {
 }
 
 void Scene::load_materials(const vector<MaterialDesc> &material_descs) {
+    switch_profile::Scope profile{"Scene::load_materials", "scene_materials"};
     for (const MaterialDesc &desc : material_descs) {
         auto material = Material::create_root(desc);
         add_material(ocarina::move(material));
@@ -260,7 +270,20 @@ void Scene::clear_shapes() noexcept {
     data_->aabb_ = {};
 }
 
-void Scene::remove_shape(uint group_index) noexcept {
+bool Scene::recompute_world_bounds() noexcept {
+    Box3f bounds;
+    for (const auto &group : groups()) {
+        if (group && !group->aabb.empty()) {
+            bounds.extend(group->aabb);
+        }
+    }
+    const bool changed = any(bounds.lower != data_->aabb_.lower) ||
+                         any(bounds.upper != data_->aabb_.upper);
+    data_->aabb_ = bounds;
+    return changed;
+}
+
+void Scene::remove_shape(uint group_index, bool defer_world_bounds) noexcept {
     if (group_index >= data_->groups_.size()) {
         return;
     }
@@ -279,15 +302,13 @@ void Scene::remove_shape(uint group_index) noexcept {
     }
 
     data_->groups_.erase(data_->groups_.begin() + group_index);
-    data_->aabb_ = {};
-    for (const auto &remaining_group : data_->groups_) {
-        if (remaining_group) {
-            data_->aabb_.extend(remaining_group->aabb);
-        }
+    if (!defer_world_bounds) {
+        recompute_world_bounds();
     }
 }
 
 void Scene::load_shapes(const vector<ShapeDesc> &descs) {
+    switch_profile::Scope profile{"Scene::load_shapes", "scene_shapes"};
     for (const auto &desc : descs) {
         SP<ShapeGroup> group = Node::create_shared<ShapeGroup>(desc);
         add_shape(group, desc);
@@ -295,6 +316,29 @@ void Scene::load_shapes(const vector<ShapeDesc> &descs) {
 }
 
 void Scene::fill_instances() {
+    // Membership/order can change independently of the source light registry.
+    // Area-light CPU and generated GPU code both consume this instance index.
+    std::unordered_set<IAreaLight*> live_emissions;
+    for (uint i = 0; i < data_->instances_.size(); ++i) {
+        auto& instance = data_->instances_[i];
+        if (!instance->has_emission()) continue;
+        auto light = instance->emission();
+        if (!live_emissions.insert(light.get()).second) {
+            auto desc = light->source_desc();
+            desc.set_value("inst_id", i);
+            light = dynamic_object_cast<IAreaLight>(load_light(desc)).impl();
+            instance->set_emission(light);
+            live_emissions.insert(light.get());
+        }
+        light->bind_instance(i);
+    }
+    auto& lights = light_manager().lights();
+    for (auto it = lights.begin(); it != lights.end();) {
+        if ((*it)->match(LightType::Area) &&
+            !live_emissions.contains(static_cast<IAreaLight*>(it->get()))) it = lights.erase(it);
+        else ++it;
+    }
+    light_manager().tidy_up();
     for (auto &instance : data_->instances_) {
         if (instance->has_material()) {
             const Material *material = instance->material().get();

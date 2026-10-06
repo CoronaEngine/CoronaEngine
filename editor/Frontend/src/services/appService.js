@@ -72,7 +72,9 @@ export const appService = {
   cycleThisCameraViewWindowMode: (sceneId = '', cameraId = '') =>
     openEditorWindow({ cmd: 'cycleThisCameraViewWindowMode', sceneId, cameraId }),
   toggleBorderlessThisCameraView: (sceneId = '', cameraId = '') =>
-    openEditorWindow({ cmd: 'toggleBorderlessThisCameraView', sceneId, cameraId }),
+    Bridge.callDockCommand({ cmd: 'toggleBorderlessThisCameraView', sceneId, cameraId }),
+  toggleMainWindowBorderless: () =>
+    Bridge.callDockCommand({ cmd: 'toggleMainWindowBorderless' }),
   resizeThisCameraView: (width, height, sceneId = '', cameraId = '') =>
     openEditorWindow({ cmd: 'resizeThisCameraView', width, height, sceneId, cameraId }),
   createCameraView: (camera) =>

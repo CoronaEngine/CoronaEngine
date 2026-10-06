@@ -47,6 +47,15 @@ Kernel kernel = [&, pipeline_ref](Var<CombinedAtrousParam> param) {
         Float lum_center_direct = HalfSafeUtils::clamp_luminance(luminance(direct_center.xyz()));
         Float lum_center_indirect = HalfSafeUtils::clamp_luminance(luminance(indirect_center.xyz()));
 
+        // ReSTIR's mixed lighting channels need a noise floor at fine scales,
+        // but keeping it constant across wide passes erases converged shadows.
+        // Measured variance still widens the filter where noise remains.
+        Float floor_scale = ocarina::select(
+            param.channel_kind == static_cast<uint>(RealTimeDenoiseInput::ChannelKind::DirectIndirect),
+            1.f / cast<float>(param.step_size), 1.f);
+        Float floor_variance_scale = floor_scale * floor_scale;
+        Float variance_epsilon = Cfg::Epsilon::kVariance * floor_variance_scale;
+
         // Variance must be 3x3 Gaussian pre-filtered before deriving the luminance
         // edge-stopping width (Schied et al. 2017). Using raw per-pixel variance makes
         // phi_l noisy, and at large a-trous steps that noisy edge-stopping collapses to
@@ -63,17 +72,32 @@ Kernel kernel = [&, pipeline_ref](Var<CombinedAtrousParam> param) {
                 Int2 gp = cur_pixel + make_int2(gx, gy);
                 $if(all(gp >= 0) && all(gp < screen_size)) {
                     Uint gidx = cast<uint>(gp.y) * cast<uint>(screen_size.x) + cast<uint>(gp.x);
-                    var_sum_direct += max(Float(param.direct_src.read(gidx).w), Cfg::Epsilon::kVariance) * gw;
-                    var_sum_indirect += max(Float(param.indirect_src.read(gidx).w), Cfg::Epsilon::kVariance) * gw;
+                    var_sum_direct += max(Float(param.direct_src.read(gidx).w), variance_epsilon) * gw;
+                    var_sum_indirect += max(Float(param.indirect_src.read(gidx).w), variance_epsilon) * gw;
                     var_gw_sum += gw;
                 };
             }
         }
         Float inv_var_gw = 1.f / max(var_gw_sum, 1e-4f);
-        Float var_direct_clamped = max(var_sum_direct * inv_var_gw, Cfg::Epsilon::kVariance);
-        Float var_indirect_clamped = max(var_sum_indirect * inv_var_gw, Cfg::Epsilon::kVariance);
-        Float phi_l_direct = LuminanceWeightUtils::compute_phi_l(param.l_phi, var_direct_clamped);
-        Float phi_l_indirect = LuminanceWeightUtils::compute_phi_l(param.l_phi, var_indirect_clamped);
+        Float var_direct_clamped = max(var_sum_direct * inv_var_gw, variance_epsilon);
+        Float var_indirect_clamped = max(var_sum_indirect * inv_var_gw, variance_epsilon);
+        // The absolute filter floors are specified in radiance units. Convert
+        // them with the current reflectance guide, just like the signal itself.
+        // Otherwise a dark guide (e.g. 0.03) makes the effective radiance floor
+        // ~33 times smaller and leaves fine noise even after spatial filtering.
+        // A scalar guide is a luminance approximation for coloured reflectance;
+        // RGB illumination and texture reconstruction remain unchanged.
+        auto metadata = param.svgf_buffer.read(cur_idx).moments_indirect;
+        // A producer may write a zero signal with w=0 when demodulation is
+        // bypassed. Only positive metadata represents a reflectance scale.
+        Float scale_direct = ocarina::select(metadata.z > 0.f, Float(metadata.z), 1.f);
+        Float scale_indirect = ocarina::select(metadata.w > 0.f, Float(metadata.w), 1.f);
+        Float phi_l_direct = LuminanceWeightUtils::compute_phi_l(param.l_phi, var_direct_clamped,
+            Cfg::Atrous::kMinVariance * floor_variance_scale / (scale_direct * scale_direct),
+            Cfg::Atrous::kMinPhi * floor_scale / scale_direct);
+        Float phi_l_indirect = LuminanceWeightUtils::compute_phi_l(param.l_phi, var_indirect_clamped,
+            Cfg::Atrous::kMinVariance * floor_variance_scale / (scale_indirect * scale_indirect),
+            Cfg::Atrous::kMinPhi * floor_scale / scale_indirect);
 
         // Center tap: kernel weight h(0)*h(0), geometry/luminance weight == 1.
         constexpr float kW0 = Cfg::Atrous::kBSpline1D[0] * Cfg::Atrous::kBSpline1D[0];
@@ -81,8 +105,11 @@ Kernel kernel = [&, pipeline_ref](Var<CombinedAtrousParam> param) {
         Float3 sum_indirect = indirect_center.xyz() * kW0;
         Float weight_sum_direct = kW0;
         Float weight_sum_indirect = kW0;
-        Float variance_sum_direct = var_direct_clamped * (kW0 * kW0);
-        Float variance_sum_indirect = var_indirect_clamped * (kW0 * kW0);
+        // The Gaussian above controls only phi_l. Propagate variance with the
+        // same accepted samples as RGB; otherwise rejected neighbours inject
+        // uncertainty through the centre term and widen every later pass.
+        Float variance_sum_direct = max(Float(direct_center.w), variance_epsilon) * (kW0 * kW0);
+        Float variance_sum_indirect = max(Float(indirect_center.w), variance_epsilon) * (kW0 * kW0);
 
         auto accumulate_tap = [&](int dx, int dy, float h) {
             // h is the host-side separable B-spline kernel weight for this tap.
@@ -103,9 +130,13 @@ Kernel kernel = [&, pipeline_ref](Var<CombinedAtrousParam> param) {
                 Float w_geo = 0.f;
                 $if(!neighbor_is_sky && boundary_weight > 0.f) {
                     Interaction neighbor_it = pipeline_ref->geometry().compute_surface_interaction(neighbor_hit, false);
-                    w_geo = GeometryWeightUtils::compute_geometry_weight(
-                        center_it.pos, center_it.ng, neighbor_it.pos, neighbor_it.ng,
-                        param.n_phi, param.z_phi, Cfg::GeometryWeight::kEpsilon);
+                    w_geo = GeometryWeightUtils::compute_depth_weight(
+                        center_it.pos, neighbor_it.pos, center_it.ng, param.z_phi) *
+                        GeometryWeightUtils::compute_normal_weight(
+                            ocarina::select(param.use_shading_normal != 0u,
+                                make_float3(param.svgf_buffer.read(cur_idx).surface_normal.xyz()), center_it.ng),
+                            ocarina::select(param.use_shading_normal != 0u,
+                                make_float3(param.svgf_buffer.read(idx).surface_normal.xyz()), neighbor_it.ng), param.n_phi);
                 };
                 w_geo *= boundary_weight;
 
@@ -114,11 +145,16 @@ Kernel kernel = [&, pipeline_ref](Var<CombinedAtrousParam> param) {
 
                 Float w_direct = h * w_geo *
                     LuminanceWeightUtils::compute_variance_guided(lum_center_direct, lum_neighbor_direct, phi_l_direct);
-                Float w_indirect = h * w_geo *
+                // Specular illumination depends on the surface BRDF as well as
+                // lighting. Borrowing demodulated values across objects can turn
+                // a small reflectance guide into a bright halo after remodulation.
+                Float w_specular_geo = ocarina::select(
+                    param.channel_kind != 0u || center_hit.inst_id == neighbor_hit.inst_id, w_geo, 0.f);
+                Float w_indirect = h * w_specular_geo *
                     LuminanceWeightUtils::compute_variance_guided(lum_center_indirect, lum_neighbor_indirect, phi_l_indirect);
 
-                Float var_neighbor_direct = max(Float(direct_neighbor.w), Cfg::Epsilon::kVariance);
-                Float var_neighbor_indirect = max(Float(indirect_neighbor.w), Cfg::Epsilon::kVariance);
+                Float var_neighbor_direct = max(Float(direct_neighbor.w), variance_epsilon);
+                Float var_neighbor_indirect = max(Float(indirect_neighbor.w), variance_epsilon);
 
                 sum_direct += direct_neighbor.xyz() * w_direct;
                 sum_indirect += indirect_neighbor.xyz() * w_indirect;
@@ -157,8 +193,8 @@ Kernel kernel = [&, pipeline_ref](Var<CombinedAtrousParam> param) {
         // full multi-iteration result. Moments (M1/M2/history) are intentionally left
         // untouched: they must keep tracking the RAW signal so variance still drives
         // edge stopping. svgf_buffer is not read by this pass (only input buffers are),
-        // so this center-only write is race-free. The history-clamp in the temporal
-        // stage keeps the fed-back history from drifting (ReLAX-style pairing).
+        // so this center-only write is race-free. Feedback is disabled by default
+        // to avoid compounding spatial blur in the temporal illumination history.
         //
         // illumi_direct = DIFFUSE channel, illumi_indirect = SPECULAR channel. The
         // specular channel is NOT fed back by default (kFeedbackSpecular=false): feeding
@@ -187,8 +223,9 @@ Kernel kernel = [&, pipeline_ref](Var<CombinedAtrousParam> param) {
 
 
 CommandBatch AtrousFilter::dispatch_combined(vision::RealTimeDenoiseInput &input,
-                                         uint step_width, uint iteration) noexcept {
+                                         uint step_width, uint iteration, bool use_shading_normal) noexcept {
     CombinedAtrousParam param;
+    param.use_shading_normal = use_shading_normal;
     
     bool read_from_temp = (iteration % 2 == 1);
     if (!read_from_temp) {
@@ -208,9 +245,13 @@ CommandBatch AtrousFilter::dispatch_combined(vision::RealTimeDenoiseInput &input
     param.camera_pos = input.camera_pos;
 
     float l_phi = svgf_->sigma_rt();
+    if (input.channel_kind == RealTimeDenoiseInput::ChannelKind::DirectIndirect) {
+        l_phi *= Cfg::Atrous::kReSTIRLPhiMultiplier;
+    }
     float n_phi = svgf_->sigma_normal();
 
-    if (step_width >= Cfg::Atrous::kLargeStepThreshold) {
+    if (input.channel_kind != RealTimeDenoiseInput::ChannelKind::DirectIndirect &&
+        step_width >= Cfg::Atrous::kLargeStepThreshold) {
         l_phi *= Cfg::Atrous::kLargeStepLPhiMultiplier;
         n_phi *= Cfg::Atrous::kLargeStepNPhiMultiplier;
     }
@@ -223,6 +264,7 @@ CommandBatch AtrousFilter::dispatch_combined(vision::RealTimeDenoiseInput &input
     param.frame_index = input.frame_index;
     // Feed back only the first a-trous iteration as colour history (Schied 2017).
     param.write_history = (iteration == 0u) ? 1u : 0u;
+    param.channel_kind = static_cast<uint>(input.channel_kind);
     
     CommandBatch ret;
     ret << combined_shader_(param).dispatch(input.resolution);

@@ -287,11 +287,13 @@ SP<Material> Material::create_root(const Desc &desc) noexcept {
 }
 
 void Material::initialize_root(const Desc &desc) noexcept {
+    source_desc_ = desc;
     initialize_root_graph();
     initialize_slots(desc);
 }
 
 void Material::initialize_attached(const SP<ShaderGraph> &graph, const Desc &desc) noexcept {
+    source_desc_ = desc;
     initialize_attached_graph(graph);
     initialize_slots(desc);
 }
@@ -325,6 +327,7 @@ void Material::initialize_(const NodeDesc &node_desc) noexcept {
 void Material::restore(vision::RuntimeObject *old_obj) noexcept {
     Node::restore(old_obj);
     VS_HOTFIX_MOVE_ATTRS(index_, normal_)
+    source_desc_ = old_obj_->source_desc_;
     slot_infos_ = old_obj_->slot_infos_;
     for (int i = 0; i < slot_num(); ++i) {
         ShaderNodeSlot &slot = get_slot(i);

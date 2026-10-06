@@ -127,6 +127,15 @@ void BrowserManager::update_texture(int tab_id) {
         texture_id = tab->texture_id;
         pixels.swap(tab->pixel_buffer);
         tab->buffer_dirty = false;
+
+        if (tab->popup.visible()) {
+            const int view_width = tab->width;
+            const int view_height = view_width > 0
+                                        ? static_cast<int>(pixels.size() /
+                                                           (static_cast<std::size_t>(view_width) * 4u))
+                                        : 0;
+            tab->popup.composite_over(pixels, view_width, view_height);
+        }
     }
 
     auto image_it = owned_images_.find(texture_id);
@@ -190,6 +199,12 @@ void BrowserManager::resize_tab(int tab_id, int width, int height) {
 
     tab->width = width;
     tab->height = height;
+
+    {
+        std::lock_guard<std::mutex> lock(tab->mutex);
+        tab->popup.clear();
+        tab->buffer_dirty = false;
+    }
 
     destroy_tab_texture(tab);
     tab->texture_id = create_browser_texture(tab->width, tab->height);

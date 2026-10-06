@@ -178,6 +178,51 @@ bool PythonAPI::initializeInterpreterLocked() {
     }
     CFW_LOG_INFO("PythonAPI: Initializing Python interpreter...");
 
+    {
+        const auto packaged = PathCfg::inspect_deployed_runtime();
+        const std::string configured_home = PathCfg::configured_python_home_dir();
+        std::error_code fallback_ec;
+        const bool fallback_available =
+            !configured_home.empty() && std::filesystem::exists(configured_home, fallback_ec);
+        const auto decision = PathCfg::decide_packaged_runtime_usage(
+            packaged, PathCfg::packaged_runtime_required(), fallback_available);
+
+        const auto fail_init = [&](const std::string& message, const char* phase) {
+            lifecycle_.transition(PythonLifecycleState::Failed);
+            {
+                std::lock_guard lock(lifecycle_mtx_);
+                lifecycle_snapshot_.state = lifecycle_.state();
+                lifecycle_snapshot_.phase = phase;
+                lifecycle_snapshot_.error = message;
+            }
+            CFW_LOG_CRITICAL("PythonAPI: {}", message);
+        };
+
+        switch (decision) {
+            case PathCfg::PackagedRuntimeDecision::UsePackaged:
+                CFW_LOG_INFO("PythonAPI: {}", packaged.describe());
+                break;
+            case PathCfg::PackagedRuntimeDecision::UseFallback:
+                CFW_LOG_WARNING(
+                    "PythonAPI: {}; falling back to the build-machine Python at '{}'. "
+                    "This build output is NOT portable: it only runs where that interpreter exists.",
+                    packaged.describe(), configured_home);
+                break;
+            case PathCfg::PackagedRuntimeDecision::RejectNoPackaged:
+                fail_init(packaged.describe() +
+                              "; CORONA_REQUIRE_PACKAGED_PYTHON=1 forbids falling back to the "
+                              "build-machine Python ('" +
+                              configured_home + "')",
+                          "packaged_runtime_required");
+                return false;
+            case PathCfg::PackagedRuntimeDecision::RejectNoFallback:
+                fail_init(packaged.describe() +
+                              "; no build-machine Python fallback available ('" + configured_home + "')",
+                          "no_python_runtime");
+                return false;
+        }
+    }
+
     PyImport_AppendInittab("CoronaEngine", &PyInit_CoronaEngine);
 
     PyConfig_InitPythonConfig(&config);
@@ -268,6 +313,8 @@ bool PythonAPI::initializeInterpreterLocked() {
         lifecycle_snapshot_.phase = "interpreter_ready";
     }
     CFW_LOG_INFO("PythonAPI: Python interpreter initialized successfully");
+    CFW_LOG_INFO("PythonAPI: interpreter paths home='{}' lib='{}' dlls='{}' site-packages='{}'",
+                 bundled_home, bundled_lib, bundled_dlls, bundled_site_packages);
 
     return true;
 }

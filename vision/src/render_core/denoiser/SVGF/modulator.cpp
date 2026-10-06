@@ -45,8 +45,8 @@ auto linear_modulate = [&](RadType3Var value, Float3 albedo,
             !PixelStateUtils::is_emissive(pipeline_ref, cur_hit)) {
             RadType4Var radiance_direct = param.radiance_direct.read(idx);
             RadType4Var radiance_indirect = param.radiance_indirect.read(idx);
-            // channel_kind == DiffuseSpecular: diffuse channel demodulated by DIFFUSE
-            // albedo; specular channel left in radiance space (unless kDemodulateSpecular).
+            // channel_kind == DiffuseSpecular: use each channel's reflectance guide.
+            // Composite glossy lobes can carry diffuse textures in the specular channel.
             // channel_kind == DirectIndirect (ReSTIR): both channels are lighting signals,
             // demodulate BOTH by the full surface albedo (canonical SVGF).
             $if(param.channel_kind == 0u) {
@@ -54,24 +54,24 @@ auto linear_modulate = [&](RadType3Var value, Float3 albedo,
                 param.radiance_direct.write(idx, make_RadType4(
                                                      linear_demodulate(radiance_direct.xyz(), diff_albedo,
                                                                        Cfg::Modulator::kSoftEpsilon),
-                                                     0.f));
+                                                     luminance(safe_albedo(diff_albedo, Cfg::Modulator::kSoftEpsilon))));
                 if constexpr (Cfg::Modulator::kDemodulateSpecular) {
                     Float3 spec_albedo = PixelStateUtils::query_specular_albedo(pipeline_ref, cur_hit, param.camera_pos.as_vec3());
                     param.radiance_indirect.write(idx, make_RadType4(
                                                            linear_demodulate(radiance_indirect.xyz(), spec_albedo,
                                                                            Cfg::Modulator::kSoftEpsilon),
-                                                           0.f));
+                                                           luminance(safe_albedo(spec_albedo, Cfg::Modulator::kSoftEpsilon))));
                 }
             } $else {
                 Float3 albedo = PixelStateUtils::query_albedo(pipeline_ref, cur_hit, param.camera_pos.as_vec3());
                 param.radiance_direct.write(idx, make_RadType4(
                                                      linear_demodulate(radiance_direct.xyz(), albedo,
                                                                      Cfg::Modulator::kSoftEpsilon),
-                                                     0.f));
+                                                     luminance(safe_albedo(albedo, Cfg::Modulator::kSoftEpsilon))));
                 param.radiance_indirect.write(idx, make_RadType4(
                                                        linear_demodulate(radiance_indirect.xyz(), albedo,
                                                                        Cfg::Modulator::kSoftEpsilon),
-                                                       0.f));
+                                                       luminance(safe_albedo(albedo, Cfg::Modulator::kSoftEpsilon))));
             };
         };
     };

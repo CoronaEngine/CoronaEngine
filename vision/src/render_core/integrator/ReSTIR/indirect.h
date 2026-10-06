@@ -5,11 +5,13 @@
 #pragma once
 
 #include "common.h"
+#include "base/mgr/switch_profile.h"
 #include "reservoir.h"
 #include "base/sensor/upsampler.h"
 
 namespace vision {
 struct GIParam {
+    uint camera_jitter{1u};
     uint max_age{};
     float diff_factor{};
 
@@ -29,7 +31,7 @@ struct GIParam {
 };
 }// namespace vision
 
-OC_PARAM_STRUCT(vision, GIParam, max_age, diff_factor, spatial, N,
+OC_PARAM_STRUCT(vision, GIParam, camera_jitter, max_age, diff_factor, spatial, N,
                 s_dot, s_depth, s_radius, temporal, history_limit,
                 t_dot, t_depth, t_radius){};
 
@@ -45,6 +47,7 @@ private:
     RegistrableBuffer<GISample> samples_{pipeline()->bindless_array()};
     uint sample_num_{1u};
     uint ratio_{2u};
+    bool debias_{true};
 
     /**
      * initial sample
@@ -65,7 +68,7 @@ protected:
 public:
     ReSTIRGI() = default;
     ReSTIRGI(IntegratorPtr integrator, const ParameterSet &desc);
-    VS_HOTFIX_MAKE_RESTORE(ReSTIR, radiance_, reservoirs_, samples_, sample_num_, ratio_,
+    VS_HOTFIX_MAKE_RESTORE(ReSTIR, radiance_, reservoirs_, samples_, sample_num_, ratio_, debias_,
                            initial_samples_, temporal_pass_, spatial_shading_)
     OC_MAKE_MEMBER_GETTER(open, )
     OC_MAKE_MEMBER_GETTER(radiance, &)
@@ -77,8 +80,12 @@ public:
     HOTFIX_VIRTUAL void compile_temporal_reuse() noexcept;
     [[nodiscard]] HOTFIX_VIRTUAL ScatterEval eval_bsdf(const Interaction &it, const GISampleVar &sample, MaterialEvalMode mode) const noexcept;
     [[nodiscard]] HOTFIX_VIRTUAL Float compute_p_hat(const Interaction &it, const GISampleVar &sample) const noexcept;
+    [[nodiscard]] HOTFIX_VIRTUAL Float selected_sample_support(const Interaction &target_it,
+                                                               const Interaction &source_it,
+                                                               const GISampleVar &sample) const noexcept;
     HOTFIX_VIRTUAL void compile_spatial_shading() noexcept;
     void compile() noexcept {
+        switch_profile::Scope profile{"ReSTIR.GI.compile", "compile"};
         compile_initial_samples();
         compile_temporal_reuse();
         compile_spatial_shading();
@@ -113,9 +120,11 @@ public:
                                                 const Var<GIParam> &param,
                                                 GISampleVar *sample) noexcept {
         Bool cond = sample ? sample->age < param.max_age : true;
+        // Compare both primary-surface depths in the current camera space.
+        Float prev_depth = scene().sensor()->linear_depth(prev_surface->position());
         return cond && vision::is_valid_neighbor(cur_surface, prev_surface,
                                                  param.t_dot, param.t_depth,
-                                                 param.diff_factor);
+                                                 param.diff_factor, prev_depth);
     }
     [[nodiscard]] uint reservoir_base() const noexcept { return reservoirs_.index().hv(); }
     [[nodiscard]] auto prev_reservoirs() const noexcept {

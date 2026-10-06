@@ -47,6 +47,23 @@
           </span>
         </div>
 
+        <label class="viewport-setting-row" data-guidance="settings-render-mode">
+          <span class="setting-label">{{ t('editorSettings.render') }}</span>
+          <select
+            v-model="viewportControlState.renderMode"
+            class="render-mode-select"
+            :aria-label="t('editorSettings.render')"
+            :disabled="!viewportControlState.available || renderApplying"
+            @change="setRenderMode"
+          >
+            <option v-for="mode in viewportControlState.renderModes" :key="mode.value"
+                    :value="mode.value" :disabled="mode.disabled">
+              {{ mode.label }}
+            </option>
+          </select>
+        </label>
+        <p v-if="renderError" role="alert">{{ t('editorSettings.status.actionFailed') }}</p>
+
         <div class="viewport-setting-row" data-guidance="settings-viewport-ui">
           <span class="setting-label">{{ t('editorSettings.viewportUiMode') }}</span>
           <div class="viewport-mode-switch" role="group" :aria-label="t('editorSettings.viewportUiMode')">
@@ -134,6 +151,8 @@ const EDITOR_CONTROLS_KEY = '__coronaEditorControls';
 const defaultViewportControls = {
   available: false,
   sceneId: '',
+  renderMode: 'native',
+  renderModes: [],
   viewportUiMode: 'flat2d',
   viewportUiModes: [
     { mode: 'flat2d', label: '2D UI' },
@@ -144,6 +163,8 @@ const defaultViewportControls = {
 };
 const viewportControlState = ref({ ...defaultViewportControls });
 const gridApplying = ref(false);
+const renderApplying = ref(false);
+const renderError = ref(false);
 const cameraSpeedLabel = computed(() => Number(viewportControlState.value.cameraSpeed || 0).toFixed(2));
 let viewportControlPollTimer = null;
 let speedApplyTimer = null;
@@ -156,6 +177,8 @@ function normalizeViewportControls(state = {}) {
   return {
     available: Boolean(state.available),
     sceneId: String(state.sceneId || ''),
+    renderMode: String(state.renderMode || 'native'),
+    renderModes: Array.isArray(state.renderModes) ? state.renderModes : [],
     viewportUiMode: String(state.viewportUiMode || defaultViewportControls.viewportUiMode),
     viewportUiModes: modes.map((item) => ({
       mode: String(item.mode || ''),
@@ -190,6 +213,29 @@ function requestViewportControlsState() {
     }
   }
   appService.crossTabBroadcast('viewport-controls-request', { action: 'getState' }).catch(() => {});
+}
+
+async function setRenderMode() {
+  if (renderApplying.value) return;
+  renderApplying.value = true;
+  renderError.value = false;
+  try {
+    const mode = viewportControlState.value.renderMode;
+    const controls = getEditorControls();
+    if (controls && typeof controls.selectRenderMode === 'function') {
+      renderError.value = await controls.selectRenderMode(mode) === false;
+      requestViewportControlsState();
+    } else {
+      await appService.crossTabBroadcast('viewport-controls-request', {
+        action: 'selectRenderMode', mode, sceneId: viewportControlState.value.sceneId,
+      });
+    }
+  } catch (error) {
+    renderError.value = true;
+    requestViewportControlsState();
+  } finally {
+    renderApplying.value = false;
+  }
 }
 
 async function setViewportUiMode(mode) {
@@ -313,6 +359,16 @@ function goHome() {
 </script>
 
 <style scoped>
+.render-mode-select {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 8px;
+  color: var(--text-main);
+  background: var(--panel-surface);
+  border: 1px solid var(--panel-border);
+  border-radius: 4px;
+}
+
 .esc-panel {
   --panel-bg: #151715;
   --panel-surface: #1c1f1c;

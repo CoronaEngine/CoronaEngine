@@ -42,6 +42,9 @@ auto compute_spatial_weight = [](Float history) -> Float {
             RadTypeVar temporal_var_direct = svgf_data->variance_direct();
             RadTypeVar temporal_var_indirect = svgf_data->variance_indirect();
             Float history = svgf_data->history_count();
+            Float history_indirect = svgf_data->history_count_indirect();
+            Bool low_history_direct = history < Cfg::Variance::kHistoryThreshold;
+            Bool low_history_indirect = history_indirect < Cfg::Variance::kHistoryThreshold;
 
             RadType3Var output_direct = center_direct;
             RadType3Var output_indirect = center_indirect;
@@ -93,11 +96,16 @@ auto compute_spatial_weight = [](Float history) -> Float {
                             Float w_geo = 1.f;
                             $if(!n_is_sky) {
                                 Interaction n_it = pipeline_ref->geometry().compute_surface_interaction(n_hit, false);
-                                w_geo = GeometryWeightUtils::compute_geometry_weight(
-                                    it.pos, it.ng, n_it.pos, n_it.ng,
-                                    Cfg::GeometryWeight::kPrefilterNormalPower,
-                                    Cfg::GeometryWeight::kPrefilterDepthScale,
-                                    Cfg::GeometryWeight::kEpsilon);
+                                // Keep the geometric plane test, but stop blur at
+                                // shading-normal details rather than mesh facets.
+                                w_geo = GeometryWeightUtils::compute_depth_weight(
+                                    it.pos, n_it.pos, it.ng, Cfg::GeometryWeight::kPrefilterDepthScale) *
+                                    GeometryWeightUtils::compute_normal_weight(
+                                        ocarina::select(param.use_shading_normal != 0u,
+                                            make_float3(svgf_data.surface_normal.xyz()), it.ng),
+                                        ocarina::select(param.use_shading_normal != 0u,
+                                            make_float3(n_svgf.surface_normal.xyz()), n_it.ng),
+                                        Cfg::GeometryWeight::kPrefilterNormalPower);
                             };
                             w_geo = GeometryWeightUtils::handle_sky_weight(false, n_is_sky, w_geo);
                             
@@ -121,6 +129,11 @@ auto compute_spatial_weight = [](Float history) -> Float {
                             
                             Float w_total_direct = w * w_lum_direct;
                             Float w_total_indirect = w * w_lum_indirect;
+                            // Match the a-trous specular boundary rule during
+                            // low-history reconstruction as well. Direct/indirect
+                            // producers keep their original cross-surface weights.
+                            w_total_indirect *= ocarina::select(
+                                param.channel_kind != 0u || center_hit.inst_id == n_hit.inst_id, 1.f, 0.f);
                             
                             sum_direct += n_direct * w_total_direct;
                             sum_indirect += n_indirect * w_total_indirect;
@@ -143,7 +156,9 @@ auto compute_spatial_weight = [](Float history) -> Float {
                 RadType3Var firefly_clamped_direct = center_direct;
                 RadType3Var firefly_clamped_indirect = center_indirect;
                 
-                $if(spatial_weight_sum > 0.5f) {
+                // Only stabilize newly exposed pixels. Repeated clipping of an
+                // established estimate removes real indirect light and reflections.
+                $if((low_history_direct || low_history_indirect) && spatial_weight_sum > 0.5f) {
                     Float inv_spatial_w = 1.f / max(spatial_weight_sum, 1e-4f);
                     Float safe_spatial_mean_direct = max(luminance(spatial_sum_direct * inv_spatial_w), 0.01f);
                     Float safe_spatial_mean_indirect = max(luminance(spatial_sum_indirect * inv_spatial_w), 0.01f);
@@ -157,36 +172,39 @@ auto compute_spatial_weight = [](Float history) -> Float {
                     Float temporal_thresh_direct = spatial_thresh_direct;
                     Float temporal_thresh_indirect = spatial_thresh_indirect;
                     
-                    $if(history > Cfg::Prefilter::kFireflyHistoryThreshold) {
-                        Float k = lerp(Cfg::Firefly::kSigmaMultiplierMax, 
-                                      Cfg::Firefly::kSigmaMultiplierMin, 
-                                      saturate(history / Cfg::Temporal::kMaxHistoryStatic));
-                        
-                        $if(temporal_var_direct > Cfg::Variance::kMinVarianceConsistent) {
-                            temporal_thresh_direct = max(svgf_data->first_moment_direct(), RadTypeVar (0.01f)) +
-                                k * max(sqrt(temporal_var_direct), Cfg::Firefly::kMinSigma);
-                        };
-                        
-                        $if(temporal_var_indirect > Cfg::Variance::kMinVarianceConsistent) {
-                            temporal_thresh_indirect = max(svgf_data->first_moment_indirect(),  RadTypeVar (0.01f)) +
-                                k * 0.8f * max(sqrt(temporal_var_indirect), Cfg::Firefly::kMinSigma);
-                        };
+                    $if(history > Cfg::Prefilter::kFireflyHistoryThreshold &&
+                        temporal_var_direct > Cfg::Variance::kMinVarianceConsistent) {
+                        Float k = lerp(saturate(history / Cfg::Temporal::kMaxHistoryStatic),
+                                      Cfg::Firefly::kSigmaMultiplierMax,
+                                      Cfg::Firefly::kSigmaMultiplierMin);
+                        temporal_thresh_direct = max(svgf_data->first_moment_direct(), RadTypeVar (0.01f)) +
+                            k * max(sqrt(temporal_var_direct), Cfg::Firefly::kMinSigma);
+                    };
+                    $if(history_indirect > Cfg::Prefilter::kFireflyHistoryThreshold &&
+                        temporal_var_indirect > Cfg::Variance::kMinVarianceConsistent) {
+                        Float k = lerp(saturate(history_indirect / Cfg::Temporal::kMaxHistoryStatic),
+                                      Cfg::Firefly::kSigmaMultiplierMax,
+                                      Cfg::Firefly::kSigmaMultiplierMin);
+                        temporal_thresh_indirect = max(svgf_data->first_moment_indirect(), RadTypeVar (0.01f)) +
+                            k * 0.8f * max(sqrt(temporal_var_indirect), Cfg::Firefly::kMinSigma);
                     };
                     
-                    Float combined_thresh_direct = max(lerp(temporal_thresh_direct, spatial_thresh_direct,
+                    Float combined_thresh_direct = max(lerp(
                         ocarina::select(isolation_ratio_direct > Cfg::Firefly::kSpatialIsolationThreshold,
-                            Cfg::Firefly::kSpatialWeightIsolated, Cfg::Firefly::kSpatialWeightNormal)), 0.1f);
-                    Float combined_thresh_indirect = max(lerp(temporal_thresh_indirect, spatial_thresh_indirect,
+                            Cfg::Firefly::kSpatialWeightIsolated, Cfg::Firefly::kSpatialWeightNormal),
+                        temporal_thresh_direct, spatial_thresh_direct), 0.1f);
+                    Float combined_thresh_indirect = max(lerp(
                         ocarina::select(isolation_ratio_indirect > Cfg::Firefly::kSpatialIsolationThreshold,
-                            Cfg::Firefly::kSpatialWeightIsolated, Cfg::Firefly::kSpatialWeightNormal)), 0.1f);
+                            Cfg::Firefly::kSpatialWeightIsolated, Cfg::Firefly::kSpatialWeightNormal),
+                        temporal_thresh_indirect, spatial_thresh_indirect), 0.1f);
                     
-                    $if(isolation_ratio_direct > Cfg::Firefly::kSpatialIsolationThreshold) {
+                    $if(low_history_direct && isolation_ratio_direct > Cfg::Firefly::kSpatialIsolationThreshold) {
                         Float scale = soft_clamp_asinh(center_lum_direct, combined_thresh_direct, 
                             Cfg::Firefly::kSoftnessDefault, Cfg::Firefly::kRetainRatio) / max(center_lum_direct, 0.001f);
                         firefly_clamped_direct = center_direct *  RadTypeVar(min(scale, 1.f));
                     };
                     
-                    $if(isolation_ratio_indirect > Cfg::Firefly::kSpatialIsolationThreshold) {
+                    $if(low_history_indirect && isolation_ratio_indirect > Cfg::Firefly::kSpatialIsolationThreshold) {
                         Float scale = soft_clamp_asinh(center_lum_indirect, combined_thresh_indirect, 
                             Cfg::Firefly::kSoftnessIndirect, Cfg::Firefly::kRetainRatio) / max(center_lum_indirect, 0.001f);
                         firefly_clamped_indirect = center_indirect *  RadTypeVar (min(scale, 1.f));
@@ -205,14 +223,16 @@ auto compute_spatial_weight = [](Float history) -> Float {
                 Float spatial_variance_direct = max(sum_m2_direct * inv_w_geo - spatial_m1_direct * spatial_m1_direct, 0.f);
                 Float spatial_variance_indirect = max(sum_m2_indirect * inv_w_geo - spatial_m1_indirect * spatial_m1_indirect, 0.f);
 
-                Float spatial_weight = compute_spatial_weight(history);
-                Float history_factor = saturate((history - Cfg::VarianceBlend::kSoftTransitionStart) / 
-                    (Cfg::VarianceBlend::kSoftTransitionEnd - Cfg::VarianceBlend::kSoftTransitionStart));
-                history_factor = history_factor * history_factor * (3.f - 2.f * history_factor);
-                Float max_allowed = lerp(Cfg::VarianceBlend::kMinSpatialWeight, 
-                                         Cfg::VarianceBlend::kMaxSpatialWeight, 
-                                         history_factor);
-                spatial_weight = min(spatial_weight, max_allowed);
+                auto channel_spatial_weight = [&](Float age) {
+                    Float factor = saturate((age - Cfg::VarianceBlend::kSoftTransitionStart) /
+                        (Cfg::VarianceBlend::kSoftTransitionEnd - Cfg::VarianceBlend::kSoftTransitionStart));
+                    factor = factor * factor * (3.f - 2.f * factor);
+                    Float max_allowed = lerp(factor, Cfg::VarianceBlend::kMinSpatialWeight,
+                                             Cfg::VarianceBlend::kMaxSpatialWeight);
+                    return min(compute_spatial_weight(age), max_allowed);
+                };
+                Float spatial_weight = channel_spatial_weight(history);
+                Float spatial_weight_indirect = channel_spatial_weight(history_indirect);
                 
                 Float lum_floor_direct = center_lum_direct * Cfg::VarianceBlend::kLumFloorScale;
                 Float lum_floor_indirect = center_lum_indirect * Cfg::VarianceBlend::kLumFloorScale;
@@ -220,8 +240,11 @@ auto compute_spatial_weight = [](Float history) -> Float {
                 Float enhanced_spatial_var_direct = max(spatial_variance_direct, lum_floor_direct);
                 Float enhanced_spatial_var_indirect = max(spatial_variance_indirect, lum_floor_indirect);
                 
-                Float blended_var_direct = lerp(temporal_var_direct, enhanced_spatial_var_direct, spatial_weight);
-                Float blended_var_indirect = lerp(temporal_var_indirect, enhanced_spatial_var_indirect, spatial_weight);
+                // Ocarina uses lerp(t, a, b). With mature history t=0, retain
+                // temporal variance even when it exceeds one. Swapping t/a
+                // extrapolates to a negative value and marks noisy pixels clean.
+                Float blended_var_direct = lerp(spatial_weight, temporal_var_direct, enhanced_spatial_var_direct);
+                Float blended_var_indirect = lerp(spatial_weight_indirect, temporal_var_indirect, enhanced_spatial_var_indirect);
                 
                 output_variance_direct = max(blended_var_direct, Cfg::Variance::kMinVarianceConsistent);
                 output_variance_indirect = max(blended_var_indirect, Cfg::Variance::kMinVarianceConsistent);
@@ -233,14 +256,14 @@ auto compute_spatial_weight = [](Float history) -> Float {
                 // the spatial filter is allowed to smooth aggressively until temporal history is
                 // rebuilt. apply_min_variance degrades to max(var, kMinVarianceConsistent) when the
                 // pixel is NOT low-history, matching the line above (no effect on stable pixels).
-                Bool low_history = history < Cfg::Variance::kHistoryThreshold;
-                output_variance_direct = VarianceUtils::apply_min_variance(output_variance_direct, low_history);
-                output_variance_indirect = VarianceUtils::apply_min_variance(output_variance_indirect, low_history);
+                output_variance_direct = VarianceUtils::apply_min_variance(output_variance_direct, low_history_direct);
+                output_variance_indirect = VarianceUtils::apply_min_variance(output_variance_indirect, low_history_indirect);
 
                 Float radiance_blend = spatial_weight * Cfg::Prefilter::kMaxRadianceBlend;
+                Float radiance_blend_indirect = spatial_weight_indirect * Cfg::Prefilter::kMaxRadianceBlend;
                 
                 output_direct = firefly_clamped_direct + radiance_blend * (filtered_direct - firefly_clamped_direct);
-                output_indirect = firefly_clamped_indirect + radiance_blend * (filtered_indirect - firefly_clamped_indirect);
+                output_indirect = firefly_clamped_indirect + radiance_blend_indirect * (filtered_indirect - firefly_clamped_indirect);
             };
 
             param.radiance_direct.write(idx, make_RadType4(make_float4(output_direct, output_variance_direct)));
@@ -251,13 +274,15 @@ auto compute_spatial_weight = [](Float history) -> Float {
     prefilter_shader_ = device().compile(kernel, "SVGF-Prefilter-SpatioTemporalFirefly");
 }
 
-CommandBatch Prefilter::dispatch(RealTimeDenoiseInput &input) noexcept {
+CommandBatch Prefilter::dispatch(RealTimeDenoiseInput &input, bool use_shading_normal) noexcept {
     PrefilterParam param;
+    param.use_shading_normal = use_shading_normal;
     param.radiance_direct = input.direct.descriptor();
     param.radiance_indirect = input.indirect.descriptor();
     param.svgf_buffer = svgf_->svgf_buffer_cur(input.frame_index).descriptor();
     param.visibility_buffer = input.visibility.descriptor();
     param.camera_pos = input.camera_pos;
+    param.channel_kind = static_cast<uint>(input.channel_kind);
 
     CommandBatch ret;
     ret << prefilter_shader_(param).dispatch(input.resolution);

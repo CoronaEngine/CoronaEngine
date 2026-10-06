@@ -99,6 +99,9 @@ public:
 
     virtual void compile() noexcept {}
 
+    /// Cached resources still need resize/scene recompilation while disabled.
+    [[nodiscard]] virtual bool has_prepared_resources() const noexcept { return false; }
+
     bool render_UI(Widgets *widgets) noexcept override {
         return widgets->use_folding_header(ocarina::format("{} denoiser", impl_type().data()), [&] {
             render_sub_UI(widgets);

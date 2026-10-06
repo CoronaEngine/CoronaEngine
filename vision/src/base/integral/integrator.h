@@ -72,6 +72,8 @@ public:
         return make_float3(0.f);
     }
     [[nodiscard]] virtual bool has_denoiser() const noexcept { return false; }
+    // Subpixel film samples need accumulation or reconstruction before display.
+    [[nodiscard]] virtual bool jitter_primary_samples() const noexcept { return true; }
     virtual void set_denoise_enabled(bool enabled) noexcept {}
     void upload_immediately() noexcept override {
         EncodedObject::upload_immediately();

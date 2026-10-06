@@ -27,11 +27,15 @@ Makefile
 .venv/
 .claude/
 .agents/
-.superpowers/
 codex.md
 AGENTS.md
 implementation.md
 TaskSplitting.md
+
+# Local Superpowers documents and development process records
+.superpowers/
+/docs/superpowers/
+/docs/development/
 
 # Tool caches
 **/.cache/

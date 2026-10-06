@@ -1,9 +1,13 @@
 //
 // Created by 25473 on 2025/11/19.
 //
+#include <corona/systems/script/python/python_path_config.h>
+
 #include <algorithm>
+#include <cstdlib>
 #include <filesystem>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #ifdef _WIN32
@@ -65,6 +69,78 @@ std::string normalize(const std::filesystem::path& path) {
 }
 
 }  // namespace
+
+PackagedRuntimeInspection inspect_packaged_runtime(const std::filesystem::path& root) {
+    PackagedRuntimeInspection result;
+    result.root = root;
+
+    std::error_code ec;
+    if (!std::filesystem::is_directory(root / "Lib", ec)) {
+        result.issue = PackagedRuntimeIssue::MissingLib;
+        return result;
+    }
+    if (!std::filesystem::is_directory(root / "DLLs", ec)) {
+        result.issue = PackagedRuntimeIssue::MissingDlls;
+        return result;
+    }
+    if (!std::filesystem::is_regular_file(root / "Lib" / "site.py", ec)) {
+        result.issue = PackagedRuntimeIssue::MissingSiteModule;
+        return result;
+    }
+    if (!std::filesystem::is_directory(root / "Lib" / "encodings", ec)) {
+        result.issue = PackagedRuntimeIssue::MissingEncodings;
+        return result;
+    }
+
+    result.issue = PackagedRuntimeIssue::None;
+    return result;
+}
+
+std::string PackagedRuntimeInspection::describe() const {
+    const std::string root_text = root.string();
+    switch (issue) {
+        case PackagedRuntimeIssue::None:
+            return "packaged python runtime is usable: " + root_text;
+        case PackagedRuntimeIssue::MissingLib:
+            return "packaged python runtime is unusable (missing Lib/): " + root_text;
+        case PackagedRuntimeIssue::MissingDlls:
+            return "packaged python runtime is unusable (missing DLLs/): " + root_text;
+        case PackagedRuntimeIssue::MissingSiteModule:
+            return "packaged python runtime is unusable (missing Lib/site.py): " + root_text;
+        case PackagedRuntimeIssue::MissingEncodings:
+            return "packaged python runtime is unusable (missing Lib/encodings/): " + root_text;
+    }
+    return "packaged python runtime state unknown: " + root_text;
+}
+
+PackagedRuntimeInspection inspect_deployed_runtime() {
+    return inspect_packaged_runtime(engine_root_path() / "python-runtime");
+}
+
+std::string configured_python_home_dir() {
+    const auto home = configured_python_home();
+    return home.empty() ? std::string{} : normalize(home);
+}
+
+bool packaged_runtime_required() {
+    const char* value = std::getenv("CORONA_REQUIRE_PACKAGED_PYTHON");
+    return value != nullptr && std::string_view(value) == "1";
+}
+
+PackagedRuntimeDecision decide_packaged_runtime_usage(const PackagedRuntimeInspection& inspection,
+                                                      bool packaged_required,
+                                                      bool fallback_available) {
+    if (inspection.available()) {
+        return PackagedRuntimeDecision::UsePackaged;
+    }
+    if (packaged_required) {
+        return PackagedRuntimeDecision::RejectNoPackaged;
+    }
+    if (!fallback_available) {
+        return PackagedRuntimeDecision::RejectNoFallback;
+    }
+    return PackagedRuntimeDecision::UseFallback;
+}
 
 const std::filesystem::path& executable_dir() {
     static const auto path = resolve_executable_dir();

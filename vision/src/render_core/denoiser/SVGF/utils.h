@@ -6,11 +6,27 @@
 #include "base/mgr/scene.h"
 #include "base/scattering/interaction.h"
 #include "base/scattering/material.h"
+#include "base/sampler.h"
 #include "base/color/spectrum.h"
 #include "svgf_config.h"
 #include "base/using.h"
 
 namespace vision::svgf {
+// Normal GBuffer rays use a shared frame-wide film sample. Point-sampled
+// illumination/visibility histories live on that jittered grid, whereas the
+// final coverage history lives on the pixel-centre grid.
+[[nodiscard]] inline Float4 frame_filter_offsets(Pipeline *pipeline, Uint frame) {
+    auto &camera = pipeline->scene().sensor();
+    auto &sampler = pipeline->renderer().sampler();
+    camera->load_data();
+    sampler->load_data();
+    sampler->set_seed(make_uint2(0u), frame, 0u);
+    Float2 current = camera->filter()->sample(sampler->next_2d()).p;
+    sampler->set_seed(make_uint2(0u), max(frame, 1u) - 1u, 0u);
+    Float2 previous = camera->filter()->sample(sampler->next_2d()).p;
+    return make_float4(current, previous);
+}
+
 template<typename T>
 inline void init_buffer_zero(Device &dev, Buffer<T> &buffer, uint num, const string &desc = "") {
     buffer = dev.create_buffer<T>(num, desc);
@@ -23,11 +39,13 @@ struct SVGFDataDual {
     RadType4 illumi_indirect{};
     RadType4 moments_direct{};
     RadType4 moments_indirect{};
+    // World-space shading normal, including smooth vertex normals and normal maps.
+    RadType4 surface_normal{};
 };
 
 }// namespace vision::svgf
 
-OC_STRUCT(vision::svgf, SVGFDataDual, illumi_direct, illumi_indirect, moments_direct, moments_indirect) {
+OC_STRUCT(vision::svgf, SVGFDataDual, illumi_direct, illumi_indirect, moments_direct, moments_indirect, surface_normal) {
     [[nodiscard]] vision::RadTypeVar variance_direct() const noexcept { return illumi_direct.w; }
     [[nodiscard]] vision::RadType3Var illumination_direct() const noexcept { return illumi_direct.xyz(); }
     [[nodiscard]] vision::RadTypeVar first_moment_direct() const noexcept { return moments_direct.x; }
@@ -39,6 +57,7 @@ OC_STRUCT(vision::svgf, SVGFDataDual, illumi_direct, illumi_indirect, moments_di
     [[nodiscard]] vision::RadTypeVar second_moment_indirect() const noexcept { return moments_indirect.y; }
     
     [[nodiscard]] vision::RadTypeVar history_count() const noexcept { return moments_direct.z; }
+    [[nodiscard]] vision::RadTypeVar history_count_indirect() const noexcept { return moments_direct.w; }
 };
 
 
@@ -182,6 +201,23 @@ struct LuminanceWeightUtils {
 };
 
 struct PixelStateUtils {
+    [[nodiscard]] static Float3 query_shading_normal(Pipeline *pipeline,
+        const TriangleHitVar &hit, const Float3 &camera_pos) noexcept {
+        Interaction it = pipeline->geometry().compute_surface_interaction(hit, camera_pos);
+        Float3 normal = it.shading.normal();
+        if (MaterialRegistry::instance().individual_ns()) {
+            $if(it.has_material()) {
+                SampledWavelengths swl{pipeline->renderer().spectrum()->dimension()};
+                pipeline->scene().materials().dispatch(it.material_id(), [&](const Material *material) {
+                    normal = material->shading_normal(it, swl);
+                });
+            };
+        }
+        normal = ocarina::zero_if_nan_inf(normal);
+        Float norm2 = dot(normal, normal);
+        return ocarina::select(norm2 > 1e-10f, normal / sqrt(max(norm2, 1e-10f)), it.ng);
+    }
+
 [[nodiscard]] static Bool is_sky(const TriangleHitVar &hit) noexcept {
     return hit->is_miss() || hit.inst_id == InvalidUI32;
 }
@@ -216,7 +252,12 @@ struct PixelStateUtils {
                 SampledWavelengths swl{sp->dimension()};
                 scene.materials().dispatch(it.material_id(), [&](const Material *material) {
                     MaterialEvaluator bsdf = material->create_evaluator(it, swl);
-                    SampledSpectrum albedo_spec = bsdf.albedo(it.wo);
+                    // Match the specular guide's reflectance convention. A
+                    // negative incidence cosine can create Fresnel poles in
+                    // substrate's total albedo and amplify filtered lighting.
+                    Float3 guide_wo = ocarina::select(
+                        dot(bsdf.shading_frame().normal(), it.wo) < 0.f, -it.wo, it.wo);
+                    SampledSpectrum albedo_spec = bsdf.albedo(guide_wo);
                     albedo = sp->linear_srgb(albedo_spec, swl);
                 });
             };
@@ -275,7 +316,13 @@ struct PixelStateUtils {
                     MaterialEvaluator bsdf = material->create_evaluator(it, swl);
                     SampledSpectrum diffuse_spec{swl.dimension()};
                     SampledSpectrum specular_spec{swl.dimension()};
-                    bsdf.albedo_split(it.wo, diffuse_spec, specular_spec);
+                    // Reflectance guides use an absolute incidence cosine. A
+                    // back-facing substrate otherwise feeds a negative cosine
+                    // into Fresnel, creating poles that filtering amplifies into
+                    // bright bands when the guide is multiplied back in.
+                    Float3 guide_wo = ocarina::select(
+                        dot(bsdf.shading_frame().normal(), it.wo) < 0.f, -it.wo, it.wo);
+                    bsdf.albedo_split(guide_wo, diffuse_spec, specular_spec);
                     albedo = sp->linear_srgb(specular_spec, swl);
                 });
             };

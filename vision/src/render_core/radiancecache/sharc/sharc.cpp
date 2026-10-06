@@ -4,6 +4,7 @@
 
 #include "sharc.h"
 #include "base/integral/radiance_cache.h"
+#include "base/mgr/switch_profile.h"
 
 namespace vision {
 using namespace ocarina;
@@ -25,6 +26,7 @@ public:
     }
 
     void prepare() noexcept override {
+        switch_profile::Scope profile{"RadianceCache::prepare", "buffers"};
         voxel_data_.super() = device().create_buffer<uint4>(buffer_size, "Sharc::voxel_data_");
         prev_voxel_data_.super() = device().create_buffer<uint4>(buffer_size, "Sharc::prev_voxel_data_");
         hash_entries_.super() = device().create_buffer<ulong>(buffer_size, "Sharc::hash_entries_");

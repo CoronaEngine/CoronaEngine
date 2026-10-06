@@ -19,6 +19,7 @@
 #include "base/using.h"
 #include "image_pool.h"
 #include <cstdint>
+#include <functional>
 
 namespace vision {
 
@@ -95,6 +96,7 @@ private:
     PolymorphicGUI<TSensor> sensors_{};
     uint cur_sensor_index_{0};
     TSensor *sensor_override_{nullptr};
+    std::function<void(Scene &)> cached_shape_initializer_;
     friend class Pipeline;
 
 public:
@@ -111,6 +113,11 @@ public:
     }
     [[nodiscard]] bool is_initialized() const noexcept { return data_->initialized_; }
     void init(const SceneDesc &scene_desc);
+    // One-shot restoration after local materials/media exist, before Pipeline
+    // consumes world bounds. The callback must create independent instances.
+    void set_cached_shape_initializer(std::function<void(Scene &)> initializer) {
+        cached_shape_initializer_ = std::move(initializer);
+    }
     void set_min_radius(float min_radius) noexcept { data_->min_radius_ = min_radius; }
     void prepare() noexcept;
     void update_runtime_object(const vision::IObjectConstructor *constructor) noexcept override;
@@ -172,7 +179,8 @@ public:
     [[nodiscard]] const vector<SP<ShapeInstance>> &instances() const noexcept { return data_->instances_; }
     void load_shapes(const vector<ShapeDesc> &descs);
     void add_shape(const SP<ShapeGroup> &group, ShapeDesc desc = {});
-    void remove_shape(uint group_index) noexcept;
+    // Batch callers defer the union until Pipeline commits the geometry update.
+    void remove_shape(uint group_index, bool defer_world_bounds = false) noexcept;
     void clear_shapes() noexcept;
 
     // Materials
@@ -206,8 +214,13 @@ public:
     [[nodiscard]] const ShapeInstance *get_instance(uint id) const noexcept { return data_->instances_[id].get(); }
 
     // World bounds
-    [[nodiscard]] float3 world_center() const noexcept { return data_->aabb_.center(); }
-    [[nodiscard]] float world_radius() const noexcept { return ocarina::max(data_->aabb_.radius(), data_->min_radius_); }
+    bool recompute_world_bounds() noexcept;
+    [[nodiscard]] float3 world_center() const noexcept {
+        return data_->aabb_.empty() ? make_float3(0.f) : data_->aabb_.center();
+    }
+    [[nodiscard]] float world_radius() const noexcept {
+        return ocarina::max(data_->aabb_.empty() ? 0.f : data_->aabb_.radius(), data_->min_radius_);
+    }
     [[nodiscard]] float world_diameter() const noexcept { return world_radius() * 2; }
 
     void tidy_up() noexcept;

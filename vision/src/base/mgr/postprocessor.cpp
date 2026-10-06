@@ -4,6 +4,7 @@
 
 #include "postprocessor.h"
 #include "pipeline.h"
+#include "switch_profile.h"
 
 namespace vision {
 using namespace ocarina;
@@ -12,6 +13,7 @@ Postprocessor::Postprocessor(Pipeline *rp)
     : rp_(rp) {}
 
 void Postprocessor::compile_tone_mapping() noexcept {
+    switch_profile::Scope profile{"tonemapping.compile", "compile"};
     Kernel<signature> kernel = [&](BufferVar<float4> input, BufferVar<float4> output, Bool gamma) {
         Float4 input_pixel = input.read(dispatch_id());
         Float4 output_pixel = tone_mapper_->apply(input_pixel);

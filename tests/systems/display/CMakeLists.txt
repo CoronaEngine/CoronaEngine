@@ -1,0 +1,8 @@
+add_executable(corona_published_image_tests test_published_image.cpp)
+target_include_directories(corona_published_image_tests PRIVATE ${PROJECT_SOURCE_DIR}/include)
+target_link_libraries(corona_published_image_tests PRIVATE Horizon)
+if(COMMAND helicon_install_runtime_deps)
+    helicon_install_runtime_deps(corona_published_image_tests)
+endif()
+add_test(NAME PublishedImageTests COMMAND corona_published_image_tests)
+set_tests_properties(PublishedImageTests PROPERTIES TIMEOUT 15)

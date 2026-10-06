@@ -642,6 +642,9 @@ const RUNTIME_DOM_TEXT_TRANSLATIONS = {
   连接房主失败: 'Failed to Connect to the Host',
 
   相似度: 'Similarity',
+  'Vision PT · 实时': 'Vision PT · Realtime',
+  'Vision PT · 渐进收敛': 'Vision PT · Progressive',
+  'Vision ReSTIR · 实时': 'Vision ReSTIR · Realtime',
   '当前: Vision (路径追踪)，点击切换到 Native':
     'Current: Vision (Path Tracing). Click to Switch to Native',
   '当前: Native (光栅化)，点击切换到 Vision':

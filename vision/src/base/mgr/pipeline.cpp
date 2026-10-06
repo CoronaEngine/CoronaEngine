@@ -3,6 +3,7 @@
 //
 
 #include "pipeline.h"
+#include "switch_profile.h"
 #include "interactive_runtime_switches.h"
 #include "base/sensor/photosensory.h"
 #include "base/color/spectrum.h"
@@ -49,6 +50,7 @@ void Pipeline::activate_global_context() noexcept {
 }
 
 bool Pipeline::create_view_context(uint64_t view_id, uint2 resolution) noexcept {
+    switch_profile::Scope profile{"view.create_context", "view"};
     activate_global_context();
     if (view_id == 0u || view_contexts_.contains(view_id)) {
         return view_id != 0u;
@@ -152,25 +154,12 @@ void Pipeline::init() noexcept {
 }
 
 void Pipeline::sync_output_denoise() noexcept {
-    /// output.denoise is the per-mode switch; the integrator-owned denoiser consumes it.
-    ///
-    /// FORCE: SVGF is force-enabled for the path-tracing pipeline regardless of the
-    /// selected CameraVisionRenderMode. PathTracing mode still instantiates an SVGF
-    /// denoiser with a normal framebuffer (see configure_vision_scene_for_mode), so
-    /// handing the integrator `true` here turns SVGF on for PT without touching the
-    /// canonical optics-layer mode model or its unit tests. This is the single point
-    /// every denoise-sync path funnels through, so it cannot be undone by upstream
-    /// merges of the mode mapping. `VISION_DISABLE_DENOISER` still hard-disables at the
-    /// integrator gate. NOTE: output_desc_.denoise (and the create_view_context log)
-    /// keep reporting the mode's nominal value, so logs may say denoise=false while it runs.
-    const bool force_svgf_for_path_tracing =
-        !output_desc_.denoise &&
-        renderer_desc_.integrator_desc.denoiser_desc.sub_type == "svgf";
-    renderer().integrator()->set_denoise_enabled(output_desc_.denoise ||
-                                                 force_svgf_for_path_tracing);
+    // Denoising is independent of the algorithm and framebuffer accumulation.
+    renderer().integrator()->set_denoise_enabled(output_desc_.denoise);
 }
 
 void Pipeline::prepare() noexcept {
+    switch_profile::Scope profile{"framebuffer.prepare", "buffers"};
     activate_global_context();
     if (!scene_view_.geometry().has_gpu_resource()) {
         scene_view_.geometry().init(device());
@@ -264,17 +253,19 @@ void Pipeline::change_resolution(uint2 res) noexcept {
     upload_bindless_array();
 }
 
-void Pipeline::prepare_geometry() noexcept {
+void Pipeline::prepare_geometry(bool geometry_changed) noexcept {
+    switch_profile::Scope profile{"geometry.prepare", "geometry"};
     activate_global_context();
     scene_view_.update_geometry_instances();
     scene_view_.geometry().reset_device_buffer();
     scene_view_.geometry().upload(stream());
     scene_view_.geometry().build_accel(stream());
     scene_view_.geometry().upload_bindless_array(stream());
+    refresh_world_bounds_dependents(geometry_changed);
 }
 
 void Pipeline::rebuild_geometry_gpu() noexcept {
-    prepare_geometry();
+    prepare_geometry(true);
 }
 
 void Pipeline::update_geometry() noexcept {
@@ -283,6 +274,49 @@ void Pipeline::update_geometry() noexcept {
     scene_view_.geometry().upload(stream());
     scene_view_.geometry().update_accel(stream());
     scene_view_.geometry().upload_bindless_array(stream());
+    refresh_world_bounds_dependents();
+}
+
+void Pipeline::refresh_world_bounds_dependents(bool geometry_changed) noexcept {
+    activate_global_context();
+    scene_view_.recompute_world_bounds();
+    const auto center = scene_view_.world_center();
+    const auto radius = scene_view_.world_radius();
+    // Compare the last consumed sphere, not recompute's return value: add/remove
+    // can already have updated SceneData, and each pipeline owns its light data.
+    if (!geometry_changed && all(center == light_world_center_) && radius == light_world_radius_) {
+        return;
+    }
+
+    // prepare_lights replaces encoded buffers and power-sampling tables. Drain
+    // users of the old tables before replacement; compiled kernels may capture
+    // their handles (and, in EInstance mode, the light values themselves).
+    stream() << synchronize() << commit();
+    Global::SceneGpuContextScope scope{scene_view_.geometry().bindless_array(), device()};
+    auto *previous_renderer = active_renderer_;
+    auto *previous_sensor = scene_view_.sensor_override_;
+    // Lights themselves are shared by the views. Finish every prepare before
+    // compiling any consumer of their final encoded values and sampling tables.
+    activate_view_context(0u);
+    renderer().prepare_lights(scene_view_);
+    for (const auto &[view_id, context] : view_contexts_) {
+        activate_view_context(view_id);
+        renderer().prepare_lights(scene_view_);
+    }
+    upload_scene_bindless_array();
+    upload_bindless_array();
+    activate_view_context(0u);
+    compile();
+    invalidate();
+    for (const auto &[view_id, context] : view_contexts_) {
+        activate_view_context(view_id);
+        compile();
+        invalidate();
+    }
+    active_renderer_ = previous_renderer;
+    scene_view_.sensor_override_ = previous_sensor;
+    light_world_center_ = center;
+    light_world_radius_ = radius;
 }
 
 void Pipeline::upload_scene_bindless_array() noexcept {
@@ -301,6 +335,7 @@ void Pipeline::clear_geometry() noexcept {
 }
 
 void Pipeline::upload_bindless_array() noexcept {
+    switch_profile::Scope profile{"bindless.upload", "upload"};
     activate_global_context();
     stream_ << bindless_array_.update_slotSOA() << synchronize() << commit();
     stream_ << bindless_array_.upload_handles() << synchronize() << commit();

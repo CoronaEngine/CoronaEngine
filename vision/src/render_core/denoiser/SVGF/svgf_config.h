@@ -23,69 +23,52 @@ struct Epsilon {
         static constexpr float kPrefilterNormalPower = 32.f;
         static constexpr float kPrefilterDepthScale = 0.1f;
         static constexpr float kAtrousNormalPowerDefault = 128.f;
-        static constexpr float kAtrousDepthScaleDefault = 1.0f;
+        static constexpr float kAtrousDepthScaleDefault = 0.1f;
     };
 
     struct Modulator {
-        static constexpr float kSoftEpsilon = 0.1f;
-        // Demodulation strategy is now chosen at runtime by RealTimeDenoiseInput::channel_kind
-        // (the producer declares whether the buffers are diffuse/specular or direct/indirect),
-        // NOT by kDualSignal. In the diffuse/specular case the diffuse channel is demodulated by
-        // DIFFUSE albedo and the specular channel is left in radiance space by default
-        // (kDemodulateSpecular=false): a highlight is a directional spike not proportional to
-        // specular reflectance, and dividing by tiny F0 would re-create fireflies. In the
-        // direct/indirect case both channels are demodulated by the full surface albedo.
-        static constexpr bool kDemodulateSpecular = false;
+        static constexpr float kSoftEpsilon = 0.02f;
+        // Composite glossy lobes (e.g. substrate) also carry textured diffuse
+        // reflectance. Preserve that albedo in both channels rather than filtering
+        // it as illumination. The soft floor keeps near-black guides invertible.
+        static constexpr bool kDemodulateSpecular = true;
     };
 
     struct Temporal {
-        // P1 (anti-ghosting): the previous values leaned far too hard on temporal
-        // accumulation (48-frame history, alpha capped at 0.15 under motion) to hide
-        // noise the weak spatial filter could not remove. After the P0 a-trous rewrite
-        // (dense 4-iteration B-spline) the spatial filter carries its weight, so history
-        // is shortened and motion response opened up to kill smearing/trailing.
+        // Bounded history for stationary 1-spp rendering; motion still raises alpha
+        // and disocclusion rejects history rather than accumulating indefinitely.
         static constexpr float kDepthThreshold = 0.03f;    // tighter disocclusion reject (was 0.05)
         static constexpr float kAlbedoThreshold = 0.15f;
         static constexpr float kNormalExp = 128.f;
+        static constexpr float kReSTIRNormalExp = 8.f;
         static constexpr float kNormalThreshold = 0.5f;
-        static constexpr float kMaxHistoryStatic = 32.f;   // long clean history; ghosting handled by HistoryClamp (was 16/48)
+        static constexpr float kMaxHistoryStatic = 128.f;
         static constexpr float kMaxHistoryFast = 4.f;      // fast-motion alpha_min 1/4 (was 8)
         static constexpr float kMotionScaleDivisor = 16.f;
         static constexpr float kMotionAlphaScale = 0.5f;   // motion can reach alpha 0.5 (was 0.15)
         static constexpr float kMotionAlphaDivisor = 8.f;
+        static constexpr float kFallbackMotionThreshold = 32.f;
+        static constexpr float kFallbackPlaneThreshold = 0.005f;
+        static constexpr float kFallbackMaxHistory = 16.f;
     };
 
-    // NRD/ReLAX-style temporal history color clamping (anti-ghosting).
-    // Reprojected history is clamped to the current frame's local luminance box
-    // [mean - kSigmaScale*sigma, mean + kSigmaScale*sigma] computed over a small
-    // neighborhood. This decouples anti-ghosting from history length, so a long,
-    // clean history can be used for noise reduction without trailing/smearing.
-    struct HistoryClamp {
-        static constexpr float kSigmaScale = 1.5f;   // tightened from 2.0 (ReLAX default): with race-free
-                                                     // history (double-buffered) trailing on high-contrast
-                                                     // edges is now the dominant artifact; lower = stronger
-                                                     // anti-ghost, more flicker risk.
-        static constexpr int kRadius = 1;            // 3x3 neighborhood
-    };
-
-    // Input anti-firefly clamp (NRD-style). Specular highlights leave isolated
-    // single-pixel luminance spikes that SVGF cannot remove. Clamp the current pixel's
-    // luminance to max(neighbourMax, mean + kSigmaScale*sigma) over the neighbours
-    // (centre excluded) BEFORE it pollutes moments/history. The neighbourMax floor
-    // protects real multi-pixel highlights; only lone outliers above the local max are
-    // reined in. kSigmaScale is generous on purpose to avoid dimming highlights.
-    struct InputFirefly {
-        static constexpr float kSigmaScale = 4.0f;
-        static constexpr int kRadius = 1;            // 3x3 neighborhood
+    struct Resolve {
+        // A stationary image must keep converging. A short, fixed EMA leaves a
+        // permanent noise floor and makes jittered silhouettes slowly breathe.
+        // This is only a numerical guard: FP32 represents every integer up to 2^24.
+        static constexpr uint kHistoryPrecisionLimit = 1u << 24u;
+        // Surface interiors retain responsive illumination history. Only pixels
+        // near geometric coverage boundaries use the progressively longer mean.
+        static constexpr uint kInteriorHistory = 32u;
+        static constexpr float kNormalThreshold = 0.99f;
+        static constexpr float kPlaneThreshold = 0.005f;
+        static constexpr float kMovingAlpha = 0.25f;
+        static constexpr float kMotionRejectPixels = 32.f;
+        static constexpr float kMinReprojectionSupport = 0.1f;
     };
 
     struct Ghosting {
         static constexpr float kColorDiffThreshold = 0.7f;
-        static constexpr float kBrightHistoryRatio = 50.f;
-        static constexpr float kBrightHistoryMinLum = 5.0f;
-        static constexpr float kFastMotionThreshold = 12.f;
-        static constexpr float kMotionLumRatio = 35.f;
-        static constexpr float kMotionLumMinPrev = 2.0f;
     };
 
     struct Firefly {
@@ -128,6 +111,9 @@ struct Epsilon {
         static constexpr uint kStepSizes[4] = {1, 2, 4, 8};
 
         static constexpr uint kLargeStepThreshold = 4;
+        // Correct temporal variance is much wider than the former accidental
+        // floor. Keep mixed ReSTIR lighting responsive to real reflections.
+        static constexpr float kReSTIRLPhiMultiplier = 0.25f;
         static constexpr float kLargeStepLPhiMultiplier = 1.4f;
         static constexpr float kLargeStepNPhiMultiplier = 0.85f;
 

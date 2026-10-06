@@ -6,6 +6,10 @@ namespace Corona::Systems::Vision {
 
 std::string_view vision_render_mode_name(CameraVisionRenderMode mode) noexcept {
     switch (mode) {
+        case CameraVisionRenderMode::ReSTIR:
+            return "restir";
+        case CameraVisionRenderMode::ProgressivePathTracing:
+            return "progressive_path_tracing";
         case CameraVisionRenderMode::SVGF:
             return "svgf";
         case CameraVisionRenderMode::SSAT:
@@ -17,7 +21,8 @@ std::string_view vision_render_mode_name(CameraVisionRenderMode mode) noexcept {
 }
 
 bool vision_render_mode_uses_denoise(CameraVisionRenderMode mode) noexcept {
-    return mode != CameraVisionRenderMode::PathTracing;
+    // Legacy combined modes remain readable; algorithms have a separate camera toggle.
+    return mode == CameraVisionRenderMode::SVGF || mode == CameraVisionRenderMode::SSAT;
 }
 
 namespace {
@@ -85,10 +90,26 @@ void configure_vision_scene_for_mode(::vision::DataWrap& data,
 
     auto& render = ensure_vision_json_object(data, "render");
     auto& integrator = ensure_vision_json_object(render, "integrator");
+    if (mode == CameraVisionRenderMode::ReSTIR) {
+        integrator["type"] = "rt";
+    } else if (mode == CameraVisionRenderMode::PathTracing ||
+               mode == CameraVisionRenderMode::ProgressivePathTracing) {
+        integrator["type"] = "pt";
+    }
     auto& integrator_param = ensure_vision_json_object(integrator, "param");
+    if (mode == CameraVisionRenderMode::ReSTIR) {
+        // ReSTIR reads nested ParameterSets during its noexcept initialization.
+        // Missing blocks must be objects, not JSON null, so leaf defaults work.
+        for (const auto channel : {"direct", "indirect"}) {
+            auto& parameters = ensure_vision_json_object(integrator_param, channel);
+            ensure_vision_json_object(parameters, "spatial");
+            ensure_vision_json_object(parameters, "temporal");
+        }
+    }
     auto& denoiser = ensure_vision_json_object(integrator_param, "denoiser");
     denoiser["type"] = mode == CameraVisionRenderMode::SSAT ? "SSAT" : "svgf";
     auto& denoiser_param = ensure_vision_json_object(denoiser, "param");
+    denoiser_param["enabled"] = vision_render_mode_uses_denoise(mode);
     if (mode == CameraVisionRenderMode::SSAT) {
         apply_ssat_denoiser_defaults(denoiser_param);
     }
@@ -102,6 +123,11 @@ void configure_vision_scene_for_mode(::vision::DataWrap& data,
         set_default_vision_json_value(frame_buffer, "type", "normal");
     }
     auto& frame_buffer_param = ensure_vision_json_object(frame_buffer, "param");
+    if (mode == CameraVisionRenderMode::ProgressivePathTracing) {
+        frame_buffer_param["accumulation"] = true;
+    } else if (mode != CameraVisionRenderMode::SSAT) {
+        frame_buffer_param["accumulation"] = false;
+    }
     if (mode == CameraVisionRenderMode::SSAT) {
         apply_ssat_framebuffer_defaults(frame_buffer_param);
     }

@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -20,6 +21,9 @@ class SceneData;
 }
 
 namespace Corona::Systems::Vision {
+
+struct VisionGeometrySnapshot;
+struct VisionSceneImportCache;
 
 enum class VisionResourceOwnership {
     SharedLogicalScene,
@@ -183,9 +187,31 @@ struct EngineMixedShapeRecord {
     std::size_t transform_signature{0};
 };
 
+enum class VisionSceneSourceKind { File, Embedded };
+
+// Scene identity is not a filename. Retain the import source independently of
+// render-mode runtimes; paths are captured once when a load request is accepted.
+struct VisionSceneSourceDesc {
+    VisionSceneSourceKind kind{VisionSceneSourceKind::File};
+    std::string file_path;
+    std::string scene_json;
+    std::string base_dir;
+
+    friend bool operator==(const VisionSceneSourceDesc&, const VisionSceneSourceDesc&) = default;
+};
+
 struct VisionSceneResource {
     VisionSceneResourceKey key;
     std::string display_source_path;
+    std::optional<VisionSceneSourceDesc> source_desc;
+    std::uint64_t source_revision{0};
+    // Parsed geometry and decoded images only; survives retirement of GPU runtimes.
+    std::shared_ptr<VisionSceneImportCache> import_cache;
+    // CPU-only publication survives idle runtime eviction; a new source replaces
+    // the whole resource. No SceneData or GPU object is owned by this snapshot.
+    std::shared_ptr<const VisionGeometrySnapshot> geometry_snapshot;
+    std::uint64_t geometry_version{0};
+    std::uint64_t next_geometry_identity{1};
     std::string overlay_path;
     std::string overlay_guid;
     std::shared_ptr<::vision::SceneData> logical_scene;
@@ -193,6 +219,7 @@ struct VisionSceneResource {
     std::uint64_t logical_transform_version{0};
     std::uint64_t scene_gpu_transform_version{0};
     std::unordered_map<std::uintptr_t, std::size_t> external_live_transform_signatures;
+    std::uint64_t external_live_cache_generation{0};
     std::unordered_map<std::uintptr_t, std::size_t>
         external_live_original_transform_signatures;
     std::unordered_map<VisionLogicalInstanceKey,
@@ -208,6 +235,10 @@ struct VisionSceneResource {
     // Engine-native actors mixed into this ExternalLive scene (no binding).
     std::unordered_map<std::uintptr_t, EngineMixedShapeRecord>
         engine_mixed_shapes_by_actor;
+
+    [[nodiscard]] bool is_embedded() const noexcept {
+        return source_desc && source_desc->kind == VisionSceneSourceKind::Embedded;
+    }
 
     [[nodiscard]] bool is_external_live() const noexcept {
         return key.source == VisionPipelineSource::ExternalLive;
@@ -252,6 +283,7 @@ struct VisionSceneResource {
         logical_transform_version = 0;
         scene_gpu_transform_version = 0;
         external_live_transform_signatures.clear();
+        ++external_live_cache_generation;
         external_live_original_transform_signatures.clear();
         logical_instances.clear();
         external_live_original_instances.clear();
@@ -305,6 +337,7 @@ struct VisionSceneResource {
     }
 
     void replace_logical_instances(std::vector<VisionLogicalInstanceRecord> records) {
+        ++external_live_cache_generation;
         logical_instances.clear();
         for (auto& record : records) {
             logical_instances.emplace(record.key, std::move(record));
@@ -377,6 +410,7 @@ struct VisionSceneResource {
             }
         }
         external_live_shapes_by_actor.erase(actor_handle);
+        ++external_live_cache_generation;
         external_live_transform_signatures.erase(actor_handle);
         external_live_original_transform_signatures.erase(actor_handle);
     }
@@ -397,6 +431,7 @@ struct VisionSceneResource {
         if (removed_shape_index < 0) {
             return actors_to_rewrite;
         }
+        ++external_live_cache_generation;
 
         std::vector<VisionLogicalInstanceRecord> remapped_logical_instances;
         remapped_logical_instances.reserve(logical_instances.size());

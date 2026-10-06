@@ -1,8 +1,11 @@
 #include <corona/engine.h>
 #include <horizon/core/logging.h>
 #include <corona/systems/ui/cef_runtime.h>
+#include <corona/utils/path_utils.h>
+#include "startup_config.h"
 
 #include <csignal>
+#include <cstdlib>
 #include <cstdint>
 #include <ctime>
 #include <iomanip>
@@ -106,6 +109,22 @@ int main(int argc, char* argv[]) {
     logging_options.configure_utf8_console = true;
     horizon::core::initialize_logging(logging_options);
     Corona::Kernel::CoronaLogger::set_log_level(Corona::Kernel::LogLevel::debug);
+
+    try {
+        const auto startup = Corona::Startup::read_startup_config(
+            Corona::Startup::default_startup_config_path(), std::getenv("CORONA_SWITCH_PROFILE"));
+        Corona::Startup::apply_startup_config(startup);
+        CFW_LOG_INFO("[Startup] Configuration: {} ({})",
+                     Corona::Utils::path_to_utf8(startup.path),
+                     startup.file_loaded ? "loaded" : "missing; using defaults");
+        CFW_LOG_INFO("[Startup] Switch profiler: {} (source: {})",
+                     startup.switch_profile ? "enabled" : "disabled",
+                     startup.from_environment ? "environment" : "configuration/default");
+    } catch (const std::exception& error) {
+        CFW_LOG_ERROR("[Startup] {}", error.what());
+        CFW_LOG_FLUSH();
+        return EXIT_FAILURE;
+    }
 
     CFW_LOG_NOTICE(
         "\n"

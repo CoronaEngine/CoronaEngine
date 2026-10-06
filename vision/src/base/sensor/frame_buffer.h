@@ -102,13 +102,14 @@ OC_STRUCT(vision, RayData, org_ior,dir_medium) {
 namespace vision {
 struct GBufferParam {
     uint frame_index{};
+    uint camera_jitter{1u};
     BufferDesc<TriangleHit> visibility_buffer;
     BufferDesc<float2> motion_vectors;
     BufferDesc<RayData> rays;
 };
 }// namespace vision
 
-OC_PARAM_STRUCT(vision, GBufferParam, frame_index, visibility_buffer, motion_vectors, rays){};
+OC_PARAM_STRUCT(vision, GBufferParam, frame_index, camera_jitter, visibility_buffer, motion_vectors, rays){};
 
 namespace vision {
 
@@ -189,6 +190,10 @@ public:                                                                     \
         return ByteBufferView(buffer_name##_.view());                       \
     }
 
+    // Host-dispatched kernels need a pointer to the selected half, with offset
+    // already applied. The bindless host view loses its slot's byte offset, and
+    // CUDA parameter-buffer indexing does not apply a descriptor offset either.
+    // Keep each view bounded to one frame so writes cannot alias previous data.
 #define VS_MAKE_DOUBLE_BUFFER(Type, buffer_name)                                                                              \
     VS_MAKE_BUFFER(Type, buffer_name, 2)                                                                                      \
     template<typename T>                                                                                                      \
@@ -202,10 +207,12 @@ public:                                                                     \
         return cur_index(frame_index) + buffer_name##_base();                                                                 \
     }                                                                                                                         \
     [[nodiscard]] auto prev_##buffer_name##_view(uint frame_index) const noexcept {                                           \
-        return bindless_array().buffer_view<decltype(buffer_name##_)::element_type>(prev_##buffer_name##_index(frame_index)); \
+        auto view = buffer_name##_.view().subview(prev_index(frame_index) * frame_buffer_size(), frame_buffer_size());        \
+        return decltype(view)(view.handle() + view.offset_in_byte(), view.size());                                             \
     }                                                                                                                         \
     [[nodiscard]] auto cur_##buffer_name##_view(uint frame_index) const noexcept {                                            \
-        return bindless_array().buffer_view<decltype(buffer_name##_)::element_type>(cur_##buffer_name##_index(frame_index));  \
+        auto view = buffer_name##_.view().subview(cur_index(frame_index) * frame_buffer_size(), frame_buffer_size());         \
+        return decltype(view)(view.handle() + view.offset_in_byte(), view.size());                                             \
     }                                                                                                                         \
     [[nodiscard]] auto prev_##buffer_name##_var(const Uint &frame_index) const noexcept {                                     \
         return bindless_array().buffer_var<decltype(buffer_name##_)::element_type>(prev_##buffer_name##_index(frame_index));  \

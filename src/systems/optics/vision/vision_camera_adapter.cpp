@@ -76,16 +76,20 @@ void sync_vision_camera(::vision::Pipeline& pipeline, const CameraDevice& camera
         invalidate = true;
     }
 
-    // Only reset path-tracing accumulation when the camera actually changed. Comparing
-    // against the exact values Vision will store (yaw/pitch/position/fov) lets the
-    // integrator keep converging while the camera is held still.
+    // Independent sample accumulation averages fixed pixels and must restart
+    // after a pose change. Realtime SVGF instead reprojects history using the previous
+    // sensor transform. Resetting its frame index on every camera movement made
+    // every moving frame a cold start (including the same random sample seed),
+    // continuously triggering the aggressive low-history spatial filter.
+    // Projection and resolution changes still discard incompatible history.
     const auto current_position = sensor->position();
-    if (!nearly_equal(sensor->fov_y(), camera.fov) ||
-        !nearly_equal(sensor->yaw(), yaw_deg) ||
+    const bool projection_changed = !nearly_equal(sensor->fov_y(), camera.fov);
+    const bool pose_changed = !nearly_equal(sensor->yaw(), yaw_deg) ||
         !nearly_equal(sensor->pitch(), pitch_deg) ||
         !nearly_equal(current_position.x, position.x) ||
         !nearly_equal(current_position.y, position.y) ||
-        !nearly_equal(current_position.z, position.z)) {
+        !nearly_equal(current_position.z, position.z);
+    if (projection_changed || (pose_changed && pipeline.frame_buffer()->enable_accumulation())) {
         invalidate = true;
     }
 

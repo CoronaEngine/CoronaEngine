@@ -170,7 +170,9 @@ public:
     }
 
     void prepare() noexcept override {
-        warper_ = renderer().load_warper();
+        if (!warper_) {
+            warper_ = renderer().load_warper();
+        }
         vector<float> weights = instance()->surface_areas();
         warper_->allocate(weights.size());
         warper_->build(std::move(weights));

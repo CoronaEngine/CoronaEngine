@@ -20,6 +20,7 @@
 #include "scene_folder.h"
 #include "vision_actor_material_bridge.h"
 #include "vision_actor_transform_bridge.h"
+#include "vision_camera_direction.h"
 
 #include <corona/events/acoustics_system_events.h>
 #include <corona/kernel/core/kernel_context.h>
@@ -451,6 +452,20 @@ bool parse_bool(std::string value, bool fallback = false) {
     return fallback;
 }
 
+bool legacy_svgf_mode(std::string mode) {
+    mode = to_lower_ascii(trim_ascii(std::move(mode)));
+    std::replace(mode.begin(), mode.end(), '-', '_');
+    return mode == "svgf" || mode == "vision_svgf";
+}
+
+bool legacy_progressive_mode(std::string mode) {
+    mode = to_lower_ascii(trim_ascii(std::move(mode)));
+    std::replace(mode.begin(), mode.end(), '-', '_');
+    return mode == "progressive_path_tracing";
+}
+
+bool json_bool_value(const nlohmann::json& object, const char* key, bool fallback);
+
 int parse_int(const std::string& value, int fallback) {
     try {
         return std::stoi(trim_ascii(value));
@@ -473,7 +488,6 @@ struct NativeEditorCamera {
     bool deletable{true};
     std::string vision_spp;
     std::string vision_max_depth;
-    std::string vision_denoise;
     int width{1920};
     int height{1080};
     bool view_open{false};
@@ -1020,15 +1034,14 @@ std::vector<std::string> build_camera_section_lines(const NativeEditorScene& sce
             lines.push_back(prefix + ".ssao_enabled = " + format_bool(camera.engine_camera->get_ssao_enabled()));
             lines.push_back(prefix + ".render_backend = " + camera.engine_camera->get_render_backend());
             lines.push_back(prefix + ".vision_render_mode = " + camera.engine_camera->get_vision_render_mode());
+            lines.push_back(prefix + ".vision_denoise = " + format_bool(camera.engine_camera->get_requested_vision_denoise()));
+            lines.push_back(prefix + ".vision_accumulation = " + format_bool(camera.engine_camera->get_requested_vision_accumulation()));
         }
         if (!camera.vision_spp.empty()) {
             lines.push_back(prefix + ".vision_spp = " + camera.vision_spp);
         }
         if (!camera.vision_max_depth.empty()) {
             lines.push_back(prefix + ".vision_max_depth = " + camera.vision_max_depth);
-        }
-        if (!camera.vision_denoise.empty()) {
-            lines.push_back(prefix + ".vision_denoise = " + camera.vision_denoise);
         }
         lines.push_back(prefix + ".width = " + std::to_string(camera.width));
         lines.push_back(prefix + ".height = " + std::to_string(camera.height));
@@ -1796,13 +1809,17 @@ NativeEditorCamera make_native_camera(NativeEditorScene& scene,
     item.move_speed = parse_float(section_value("move_speed", "1.0"), 1.0f);
     item.vision_spp = section_value("vision_spp", "");
     item.vision_max_depth = section_value("vision_max_depth", "");
-    item.vision_denoise = section_value("vision_denoise", "");
 
     item.engine_camera = std::make_unique<Corona::API::Camera>(position, forward, world_up, fov);
     item.engine_camera->set_size(item.width, item.height);
     item.engine_camera->set_output_mode(section_value("output_mode", "final_color"));
     item.engine_camera->set_render_backend(section_value("render_backend", "native"));
-    item.engine_camera->set_vision_render_mode(section_value("vision_render_mode", "path_tracing"));
+    const auto vision_mode = section_value("vision_render_mode", "path_tracing");
+    item.engine_camera->set_vision_render_mode(vision_mode);
+    item.engine_camera->set_vision_denoise(
+        parse_bool(section_value("vision_denoise", ""), legacy_svgf_mode(vision_mode)));
+    item.engine_camera->set_vision_accumulation(
+        parse_bool(section_value("vision_accumulation", ""), legacy_progressive_mode(vision_mode)));
     item.engine_camera->set_ssao_enabled(parse_bool(section_value("ssao_enabled", "true"), true));
     item.engine_camera->set_view_state(item.view_open, item.view_x, item.view_y,
                                        item.view_width, item.view_height, item.move_speed);
@@ -2298,7 +2315,6 @@ NativeEditorCamera materialize_camera_snapshot(NativeEditorScene& scene,
     item.move_speed = camera_data.value("move_speed", 1.0f);
     item.vision_spp = camera_data.value("vision_spp", std::string{});
     item.vision_max_depth = camera_data.value("vision_max_depth", std::string{});
-    item.vision_denoise = camera_data.value("vision_denoise", std::string{});
     const auto position = snapshot_float3(camera_data.value("position", nlohmann::json::array()),
                                           {0.0f, 0.0f, -5.0f});
     const auto forward = snapshot_float3(camera_data.value("forward", nlohmann::json::array()),
@@ -2310,8 +2326,12 @@ NativeEditorCamera materialize_camera_snapshot(NativeEditorScene& scene,
     item.engine_camera->set_size(item.width, item.height);
     item.engine_camera->set_output_mode(camera_data.value("output_mode", std::string{"final_color"}));
     item.engine_camera->set_render_backend(camera_data.value("render_backend", std::string{"native"}));
-    item.engine_camera->set_vision_render_mode(
-        camera_data.value("vision_render_mode", std::string{"path_tracing"}));
+    const auto vision_mode = camera_data.value("vision_render_mode", std::string{"path_tracing"});
+    item.engine_camera->set_vision_render_mode(vision_mode);
+    item.engine_camera->set_vision_denoise(
+        json_bool_value(camera_data, "vision_denoise", legacy_svgf_mode(vision_mode)));
+    item.engine_camera->set_vision_accumulation(
+        json_bool_value(camera_data, "vision_accumulation", legacy_progressive_mode(vision_mode)));
     item.engine_camera->set_ssao_enabled(camera_data.value("ssao_enabled", true));
     item.engine_camera->set_view_state(item.view_open, item.view_x, item.view_y,
                                        item.view_width, item.view_height, item.move_speed);
@@ -2652,7 +2672,8 @@ nlohmann::json camera_to_json(const NativeEditorCamera& camera) {
     item["vision_render_mode"] = camera.engine_camera ? camera.engine_camera->get_vision_render_mode() : "path_tracing";
     item["vision_spp"] = camera.vision_spp;
     item["vision_max_depth"] = camera.vision_max_depth;
-    item["vision_denoise"] = camera.vision_denoise;
+    item["vision_denoise"] = camera.engine_camera ? camera.engine_camera->get_vision_denoise() : false;
+    item["vision_accumulation"] = camera.engine_camera ? camera.engine_camera->get_vision_accumulation() : false;
     item["shadow_cascade_debug"] = camera.engine_camera ? camera.engine_camera->get_shadow_cascade_debug() : false;
     item["ssao_enabled"] = camera.engine_camera ? camera.engine_camera->get_ssao_enabled() : true;
     item["move_speed"] = camera.move_speed;
@@ -3182,9 +3203,12 @@ NativeEditorCamera* ensure_native_editor_camera(NativeEditorScene& scene,
     item.engine_camera->set_render_backend(json_string_value(camera_data, {"render_backend"}).empty()
                                                ? "native"
                                                : json_string_value(camera_data, {"render_backend"}));
-    item.engine_camera->set_vision_render_mode(json_string_value(camera_data, {"vision_render_mode"}).empty()
-                                                   ? "path_tracing"
-                                                   : json_string_value(camera_data, {"vision_render_mode"}));
+    const auto vision_mode = json_string_value(camera_data, {"vision_render_mode"});
+    item.engine_camera->set_vision_render_mode(vision_mode.empty() ? "path_tracing" : vision_mode);
+    item.engine_camera->set_vision_denoise(
+        json_bool_value(camera_data, "vision_denoise", legacy_svgf_mode(vision_mode)));
+    item.engine_camera->set_vision_accumulation(
+        json_bool_value(camera_data, "vision_accumulation", legacy_progressive_mode(vision_mode)));
     item.engine_camera->set_ssao_enabled(json_bool_value(camera_data, "ssao_enabled", true));
     item.engine_camera->set_view_state(false, item.view_x, item.view_y,
                                        item.view_width, item.view_height, item.move_speed);
@@ -5016,10 +5040,11 @@ std::map<std::string, std::string> vision_camera_section(const nlohmann::json& d
             transform_params.contains("position") ? transform_params["position"] :
             transform_params.contains("t") ? transform_params["t"] : json_member_or(params, "position", empty_vector),
             {0.0f, 0.0f, 5.0f});
-        const auto forward = vision_vec_to_corona(
+        const auto fallback_forward = vision_vec_to_corona(
             transform_params.contains("forward") ? transform_params["forward"] :
             transform_params.contains("direction") ? transform_params["direction"] : json_member_or(params, "direction", default_direction),
             {0.0f, 0.0f, 1.0f});
+        const auto forward = vision_camera_direction(transform_params, position, fallback_forward);
         const auto up = vision_vec_to_corona(
             transform_params.contains("up") ? transform_params["up"] : json_member_or(params, "up", default_up),
             {0.0f, 1.0f, 0.0f});
@@ -5040,6 +5065,15 @@ std::map<std::string, std::string> vision_camera_section(const nlohmann::json& d
     if (integrator_params.contains("max_depth")) camera["camera0.vision_max_depth"] = integrator_params["max_depth"].dump();
     const auto output = json_object_or_empty(document, "output");
     if (output.contains("denoise")) camera["camera0.vision_denoise"] = json_bool_value(output, "denoise", false) ? "true" : "false";
+    const auto& pipeline = json_object_or_empty(document, "pipeline");
+    const auto& pipeline_params = vision_param_object(pipeline);
+    const auto& frame_buffer = json_object_or_empty(pipeline_params, "frame_buffer");
+    const auto& frame_buffer_params = vision_param_object(frame_buffer);
+    if (frame_buffer_params.contains("accumulation")) {
+        camera["camera0.vision_accumulation"] = json_bool_value(frame_buffer_params, "accumulation", false) ? "true" : "false";
+    } else if (output.contains("accumulation")) {
+        camera["camera0.vision_accumulation"] = json_bool_value(output, "accumulation", false) ? "true" : "false";
+    }
     return camera;
 }
 
@@ -9103,7 +9137,10 @@ void register_scene_tools_api_handlers(NativeApiRegistry& registry) {
             }
 
             camera->engine_camera->set_render_backend(mode);
-            const auto actual = camera->engine_camera->get_render_backend();
+            // The renderer consumes this command asynchronously. Acknowledge
+            // the accepted backend, not the camera's previous committed value.
+            const std::string actual = mode == "vision" && Corona::API::is_vision_available()
+                ? "vision" : "native";
             return native_success({
                 {"status", "success"},
                 {"mode", actual},
@@ -9143,6 +9180,7 @@ void register_scene_tools_api_handlers(NativeApiRegistry& registry) {
             camera->engine_camera->set_vision_render_mode(mode);
             return native_success({
                 {"status", "success"},
+                {"pending", true},
                 {"mode", camera->engine_camera->get_vision_render_mode()},
                 {"camera", camera_to_json(*camera)},
             });
@@ -9161,6 +9199,79 @@ void register_scene_tools_api_handlers(NativeApiRegistry& registry) {
             return native_success({
                 {"status", "success"},
                 {"mode", camera->engine_camera->get_vision_render_mode()},
+                {"camera", camera_to_json(*camera)},
+            });
+        }},
+        {"set_vision_denoise", [](const NativeRequest& request, const NativeContext&) {
+            auto* scene = ensure_native_editor_scene();
+            const auto scene_route = normalize_route(arg_string(request.args, 0));
+            scene = resolve_native_editor_scene_request(scene, scene_route);
+            const auto camera_name = arg_string(request.args, 1);
+            auto* camera = find_native_camera(*scene, camera_name);
+            if (!camera || !camera->engine_camera) {
+                return native_failure("Camera not found: " + camera_name, 2);
+            }
+
+            const bool enabled = json_bool_at(request.args, 2, false);
+            camera->engine_camera->set_vision_denoise(enabled);
+            // The renderer commits the queued update asynchronously.
+            auto snapshot = camera_to_json(*camera);
+            snapshot["vision_denoise"] = enabled;
+            return native_success({
+                {"status", "success"},
+                {"pending", true},
+                {"enabled", enabled},
+                {"camera", std::move(snapshot)},
+            });
+        }},
+        {"get_vision_denoise", [](const NativeRequest& request, const NativeContext&) {
+            auto* scene = ensure_native_editor_scene();
+            const auto scene_route = normalize_route(arg_string(request.args, 0));
+            scene = resolve_native_editor_scene_request(scene, scene_route);
+            const auto camera_name = arg_string(request.args, 1);
+            auto* camera = find_native_camera(*scene, camera_name);
+            if (!camera || !camera->engine_camera) {
+                return native_failure("Camera not found: " + camera_name, 2);
+            }
+
+            return native_success({
+                {"status", "success"},
+                {"enabled", camera->engine_camera->get_vision_denoise()},
+                {"camera", camera_to_json(*camera)},
+            });
+        }},
+        {"set_vision_accumulation", [](const NativeRequest& request, const NativeContext&) {
+            auto* scene = ensure_native_editor_scene();
+            const auto scene_route = normalize_route(arg_string(request.args, 0));
+            scene = resolve_native_editor_scene_request(scene, scene_route);
+            const auto camera_name = arg_string(request.args, 1);
+            auto* camera = find_native_camera(*scene, camera_name);
+            if (!camera || !camera->engine_camera) {
+                return native_failure("Camera not found: " + camera_name, 2);
+            }
+
+            const bool enabled = json_bool_at(request.args, 2, false);
+            camera->engine_camera->set_vision_accumulation(enabled);
+            return native_success({
+                {"status", "success"},
+                {"pending", true},
+                {"enabled", enabled},
+                {"camera", camera_to_json(*camera)},
+            });
+        }},
+        {"get_vision_accumulation", [](const NativeRequest& request, const NativeContext&) {
+            auto* scene = ensure_native_editor_scene();
+            const auto scene_route = normalize_route(arg_string(request.args, 0));
+            scene = resolve_native_editor_scene_request(scene, scene_route);
+            const auto camera_name = arg_string(request.args, 1);
+            auto* camera = find_native_camera(*scene, camera_name);
+            if (!camera || !camera->engine_camera) {
+                return native_failure("Camera not found: " + camera_name, 2);
+            }
+
+            return native_success({
+                {"status", "success"},
+                {"enabled", camera->engine_camera->get_vision_accumulation()},
                 {"camera", camera_to_json(*camera)},
             });
         }},

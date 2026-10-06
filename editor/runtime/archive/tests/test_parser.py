@@ -10,6 +10,75 @@ from runtime.archive.parser import parse_archive
 
 
 class ArchiveParserTests(unittest.TestCase):
+    def test_accumulation_migrates_legacy_mode_with_explicit_flag_priority(self):
+        cases = [
+            ("path_tracing", None, "true", "path_tracing", False, True),
+            ("restir", "on", "false", "restir", True, False),
+            ("restir", "off", "true", "restir", False, True),
+            ("progressive_path_tracing", None, None, "path_tracing", True, False),
+            ("PROGRESSIVE-PATH-TRACING", "false", "true", "path_tracing", False, True),
+            ("progressive_path_tracing", "0", None, "path_tracing", False, False),
+            ("svgf", None, None, "path_tracing", False, True),
+            ("svgf", "yes", "false", "path_tracing", True, False),
+        ]
+        with tempfile.TemporaryDirectory() as temp_dir:
+            scene = Path(temp_dir) / "scene.ini"
+            for mode, accumulation, denoise, expected_mode, expected_accumulation, expected_denoise in cases:
+                with self.subTest(mode=mode, accumulation=accumulation, denoise=denoise):
+                    content = (
+                        "[format]\ntype = corona_scene_folder\nversion = 1\n"
+                        "[scene]\nname = Independent preferences\n"
+                        "[camera]\ncount = 1\n"
+                        f"camera0.vision_render_mode = {mode}\n"
+                    )
+                    if accumulation is not None:
+                        content += f"camera0.vision_accumulation = {accumulation}\n"
+                    if denoise is not None:
+                        content += f"camera0.vision_denoise = {denoise}\n"
+                    scene.write_text(content, encoding="utf-8")
+                    camera = parse_archive(str(scene))["scene"]["cameras"][0]
+                    self.assertEqual(camera["vision_render_mode"], expected_mode)
+                    self.assertIs(camera.get("vision_accumulation"), expected_accumulation)
+                    self.assertIs(camera["vision_denoise"], expected_denoise)
+
+    def test_accumulation_defaults_to_false_for_default_camera(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            scene = Path(temp_dir) / "scene.ini"
+            scene.write_text(
+                "[format]\ntype = corona_scene_folder\nversion = 1\n[scene]\nname = Default\n",
+                encoding="utf-8",
+            )
+            camera = parse_archive(str(scene))["scene"]["cameras"][0]
+            self.assertIs(camera.get("vision_accumulation"), False)
+
+    def test_vision_denoise_is_an_independent_boolean_and_migrates_legacy_svgf(self):
+        cases = [
+            ("path_tracing", None, "path_tracing", False),
+            ("restir", "true", "restir", True),
+            ("restir", "false", "restir", False),
+            ("svgf", None, "path_tracing", True),
+            ("VISION-SVGF", None, "path_tracing", True),
+            ("svgf", "false", "path_tracing", False),
+            ("svgf", "0", "path_tracing", False),
+            ("path_tracing", "on", "path_tracing", True),
+        ]
+        with tempfile.TemporaryDirectory() as temp_dir:
+            scene = Path(temp_dir) / "scene.ini"
+            for mode, denoise, expected_mode, expected_enabled in cases:
+                with self.subTest(mode=mode, denoise=denoise):
+                    content = (
+                        "[format]\ntype = corona_scene_folder\nversion = 1\n"
+                        "[scene]\nname = Denoise preferences\n"
+                        "[camera]\ncount = 1\n"
+                        f"camera0.vision_render_mode = {mode}\n"
+                    )
+                    if denoise is not None:
+                        content += f"camera0.vision_denoise = {denoise}\n"
+                    scene.write_text(content, encoding="utf-8")
+                    camera = parse_archive(str(scene))["scene"]["cameras"][0]
+                    self.assertEqual(camera["vision_render_mode"], expected_mode)
+                    self.assertIs(camera["vision_denoise"], expected_enabled)
+
     def test_blank_active_camera_uses_first_camera_but_unknown_id_is_rejected(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

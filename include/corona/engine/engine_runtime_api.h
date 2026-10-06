@@ -310,6 +310,12 @@ class Camera {
     [[nodiscard]] std::string get_render_backend() const;
     void set_vision_render_mode(const std::string& mode);
     [[nodiscard]] std::string get_vision_render_mode() const;
+    void set_vision_denoise(bool enabled);
+    [[nodiscard]] bool get_vision_denoise() const;
+    [[nodiscard]] bool get_requested_vision_denoise() const;
+    void set_vision_accumulation(bool enabled);
+    [[nodiscard]] bool get_vision_accumulation() const;
+    [[nodiscard]] bool get_requested_vision_accumulation() const;
     void set_shadow_cascade_debug(bool enabled);
     [[nodiscard]] bool get_shadow_cascade_debug() const;
     void set_ssao_enabled(bool enabled);
@@ -450,11 +456,33 @@ void set_render_backend(const std::string& mode, std::uintptr_t camera_handle = 
 /// 获取当前请求的渲染后端，返回 "native" 或 "vision"。
 [[nodiscard]] std::string get_render_backend(std::uintptr_t camera_handle = 0);
 
-/// 设置 Vision 后端的渲染技术。mode: "path_tracing", "svgf" 或 "ssat"。
+/// Set the Vision algorithm without changing independent denoise/accumulation preferences.
+/// Legacy "svgf" selects "path_tracing" and enables denoise; "ssat" remains supported.
+/// Legacy "progressive_path_tracing" selects "path_tracing" and enables accumulation.
 void set_vision_render_mode(const std::string& mode, std::uintptr_t camera_handle = 0);
 
 /// 获取当前 camera 请求的 Vision 渲染技术。
 [[nodiscard]] std::string get_vision_render_mode(std::uintptr_t camera_handle = 0);
+
+/// Queue an independent SVGF preference for this camera (disabled by default).
+void set_vision_denoise(bool enabled, std::uintptr_t camera_handle = 0);
+
+/// Return the camera's committed SVGF preference.
+[[nodiscard]] bool get_vision_denoise(std::uintptr_t camera_handle = 0);
+
+/// Return the latest uncommitted preference, or committed state when none is pending.
+/// Persistence uses this to preserve setter requests even while a render update is in flight.
+[[nodiscard]] bool get_requested_vision_denoise(std::uintptr_t camera_handle = 0);
+
+/// Queue an independent accumulation preference for this camera (disabled by default).
+void set_vision_accumulation(bool enabled, std::uintptr_t camera_handle = 0);
+
+/// Return the camera's committed accumulation preference.
+[[nodiscard]] bool get_vision_accumulation(std::uintptr_t camera_handle = 0);
+
+/// Return the latest uncommitted preference, or committed state when none is pending.
+/// Persistence uses this while a render update is in flight.
+[[nodiscard]] bool get_requested_vision_accumulation(std::uintptr_t camera_handle = 0);
 
 /// 请求加载一个外部 Vision 场景文件（.json）。仅当 Vision 后端可用且处于激活
 /// 状态时生效；实际导入在光学系统渲染线程执行。

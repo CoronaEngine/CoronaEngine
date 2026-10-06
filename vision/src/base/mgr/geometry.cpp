@@ -248,6 +248,7 @@ void Geometry::build_accel(Stream &stream) {
     auto &resource = *gpu_resource_;
     rebuild_accel(resource.data(), resource.device(), resource.bindless_array(), stream, resource.accel());
     resource.accel_mesh_ids() = collect_instance_mesh_ids(resource.data());
+    resource.record_build();
 }
 
 void Geometry::reset_device_buffer() {

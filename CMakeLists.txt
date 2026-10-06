@@ -5,7 +5,7 @@
 #   - Coordinate the build using CMake modules in cmake and Python helpers in tools/build.
 #   - Register project-wide options, toolchains, third-party dependencies, and
 #     runtime asset staging helpers.
-#   - Add subdirectories in module order: src -> engine -> examples.
+#   - Add production modules before the engine tests and examples.
 # ============================================================================== 
 
 cmake_minimum_required(VERSION 3.29)
@@ -46,6 +46,15 @@ endif()
 # Modular Configuration Includes
 # ------------------------------------------------------------------------------
 include(corona_options)             # Global build options (editor/examples/runtime switches)
+
+# Enable testing before adding dependency directories. Otherwise CMake can keep
+# stale CTestTestfile.cmake files from a previously enabled dependency test suite.
+include(CTest)
+if(BUILD_CORONA_TESTING)
+    enable_testing()
+    set(CORONA_RESOURCE_BUILD_TESTS ON CACHE BOOL "Build CoronaResource tests" FORCE)
+endif()
+
 include(corona_python)              # Embedded Python discovery and dependency checks
 include(corona_compile_config)      # Compiler settings, standards, and shared definitions
 include(corona_third_party)         # Conan-provided external dependency targets
@@ -54,15 +63,6 @@ include(corona_add_system)          # Helper for adding system modules
 include(corona_runtime_deps)        # Runtime dependency collection and copy helpers
 include(corona_editor)              # Editor asset packaging helpers
 include(corona_cef)
-
-# ------------------------------------------------------------------------------
-# Testing Support
-# ------------------------------------------------------------------------------
-include(CTest)
-if(BUILD_CORONA_TESTING)
-    enable_testing()
-    set(CORONA_RESOURCE_BUILD_TESTS ON CACHE BOOL "Build CoronaResource tests" FORCE)
-endif()
 
 # ------------------------------------------------------------------------------
 # Subdirectories
@@ -74,9 +74,18 @@ if(CORONA_BUILD_VISION)
     add_subdirectory(vision)        # Vision renderer module (local source)
 endif()
 
+if(BUILD_CORONA_TESTING OR BUILD_TESTING)
+    add_subdirectory(tests)         # Core engine module and integration tests
+endif()
+
 if(BUILD_CORONA_EXAMPLES)
     add_subdirectory(examples)      # Example applications
 endif()
+
+# Apply after all subdirectories have registered their tests, including tests
+# contributed by dependency projects such as Horizon.
+include(corona_test_runtime)
+corona_configure_test_runtime("${CMAKE_CURRENT_SOURCE_DIR}")
 
 # ------------------------------------------------------------------------------
 # Configuration Summary

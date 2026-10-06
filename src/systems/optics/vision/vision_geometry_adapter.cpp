@@ -357,7 +357,7 @@ bool remove_vision_shape_for_actor(::vision::Scene& scene, unsigned int shape_in
     if (shape_index >= scene.groups().size()) {
         return false;
     }
-    scene.remove_shape(shape_index);
+    scene.remove_shape(shape_index, true);
     return true;
 }
 

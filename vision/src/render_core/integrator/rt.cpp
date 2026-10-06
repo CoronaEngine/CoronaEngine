@@ -5,11 +5,13 @@
 #include "base/integral/integrator.h"
 #include "base/integral/radiance_cache.h"
 #include "base/mgr/pipeline.h"
+#include "base/mgr/switch_profile.h"
 #include "math/warp.h"
 #include "base/color/spectrum.h"
 #include "ReSTIR/direct.h"
 #include "ReSTIR/indirect.h"
 #include <cstdlib>
+#include <fstream>
 
 namespace vision {
 namespace {
@@ -63,7 +65,8 @@ public:
     void update_resolution(ocarina::uint2 res) noexcept override {
         direct_->update_resolution(res);
         indirect_->update_resolution(res);
-        if (!denoiser_runtime_disabled() && denoiser_ && denoiser_->enabled()) {
+        if (!denoiser_runtime_disabled() && denoiser_ &&
+            (denoiser_->enabled() || denoiser_->has_prepared_resources())) {
             denoiser_->update_resolution(res);
         }
     }
@@ -74,7 +77,15 @@ public:
     }
 
     VS_MAKE_PLUGIN_NAME_FUNC
+    [[nodiscard]] bool jitter_primary_samples() const noexcept override {
+        // A raw frame is displayed directly, so shared film jitter otherwise
+        // moves every silhouette even with a stationary camera. Keep stochastic
+        // lighting/lens sampling and retain film jitter for reconstructed output.
+        return frame_buffer().enable_accumulation() ||
+               (!denoiser_runtime_disabled() && denoiser_ && denoiser_->enabled());
+    }
     void prepare() noexcept override {
+        switch_profile::Scope profile{"integrator.prepare", "buffers"};
         IlluminationIntegrator::prepare();
         direct_->prepare();
         indirect_->prepare();
@@ -99,9 +110,11 @@ public:
     }
 
     void compile() noexcept override {
+        switch_profile::Scope profile{"integrator.compile", "compile"};
         direct_->compile();
         indirect_->compile();
-        if (!denoiser_runtime_disabled() && denoiser_ && denoiser_->enabled()) {
+        if (!denoiser_runtime_disabled() && denoiser_ &&
+            (denoiser_->enabled() || denoiser_->has_prepared_resources())) {
             denoiser_->compile();
         }
         TSensor &camera = scene().sensor();
@@ -112,7 +125,10 @@ public:
             Float3 L = direct + indirect;
             frame_buffer().add_sample(dispatch_idx().xy(), L, frame_index);
         };
-        combine_ = device().compile(kernel, "combine");
+        {
+            switch_profile::Scope combine_profile{"combine.compile", "compile"};
+            combine_ = device().compile(kernel, "combine");
+        }
     }
 
     RealTimeDenoiseInput denoise_input() const noexcept {
@@ -156,9 +172,26 @@ public:
         submit(frame_buffer().compute_GBuffer(frame_index_), &cur_stage_profile_.gbuffer_ms);
         submit(direct_->dispatch(frame_index_), &cur_stage_profile_.path_tracing_ms);
         submit(indirect_->dispatch(frame_index_), &cur_stage_profile_.path_tracing_ms);
+        auto debug_readback = [&](const char *stage) {
+            const char *frame = std::getenv("VISION_EVAL_DEBUG_FRAME");
+            const char *directory = std::getenv("VISION_EVAL_DEBUG_DIR");
+            if (!frame || !directory || frame_index_ != std::strtoul(frame, nullptr, 10)) return;
+            fs::create_directories(directory);
+            vector<float4> direct(rp->pixel_num()), indirect(rp->pixel_num());
+            stream << direct_->radiance()->view().download(direct.data())
+                << indirect_->radiance()->view().download(indirect.data()) << synchronize() << commit();
+            auto write = [&](const char *channel, const auto &pixels) {
+                std::ofstream out(fs::path(directory) / (std::string(stage) + channel + ".f32"), std::ios::binary);
+                out.write(reinterpret_cast<const char *>(pixels.data()), pixels.size() * sizeof(float4));
+                if (!out) throw std::runtime_error("ReSTIR diagnostic write failed");
+            };
+            write("_direct", direct); write("_indirect", indirect);
+        };
+        debug_readback("raw");
         if (!denoiser_runtime_disabled() && denoiser_ && denoiser_->enabled()) {
             auto dn_input = denoise_input();
             submit(denoiser_->dispatch(dn_input), &cur_stage_profile_.spatial_angular_ms);
+            debug_readback("filtered");
             submit(combine_(frame_index_, direct_->factor(),
                             indirect_->factor())
                        .dispatch(pipeline()->resolution()),

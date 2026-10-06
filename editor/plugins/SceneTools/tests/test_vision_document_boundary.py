@@ -76,3 +76,16 @@ def test_embedded_document_without_source_path_keeps_relative_resources():
     embedded = module.vision_document_for_embedded_storage(document, "")
 
     assert embedded["scene"]["shapes"][0]["param"]["fn"] == "assets/a.obj"
+
+
+def test_restir_import_is_identified_by_integrator_before_denoiser_or_framebuffer():
+    module = importlib.import_module("plugins.SceneTools.vision_document")
+    for framebuffer in ("normal", "lightfield"):
+        for denoiser in ("svgf", "SSAT"):
+            document = {
+                "render": {"integrator": {"type": "rt", "param": {
+                    "denoiser": {"type": denoiser}}}},
+                "pipeline": {"param": {"frame_buffer": {"type": framebuffer}}},
+                "output": {"denoise": True},
+            }
+            assert module.infer_vision_render_mode(document) == "restir"

@@ -2030,6 +2030,54 @@ bool handle_dock_command(CefRefPtr<CefBrowser> browser,
             return true;
         }
 
+        if (cmd == "toggleMainWindowBorderless") {
+            bm.enqueue_main_thread_task([] {
+                SDL_Window* window = BrowserManager::instance().main_window();
+                if (!window) {
+                    CFW_LOG_WARNING("toggleMainWindowBorderless skipped: no main window");
+                    return;
+                }
+                static bool s_main_borderless = false;
+                static int s_saved_x = 0, s_saved_y = 0, s_saved_w = 0, s_saved_h = 0;
+                static bool s_saved_maximized = false;
+                if (s_main_borderless) {
+                    CFW_LOG_DEBUG("Restoring main window from borderless fullscreen");
+                    SDL_SetWindowFullscreen(window, false);
+                    SDL_SetWindowBordered(window, true);
+                    SDL_RestoreWindow(window);
+                    SDL_SetWindowPosition(window, s_saved_x, s_saved_y);
+                    SDL_SetWindowSize(window, s_saved_w, s_saved_h);
+                    if (s_saved_maximized) {
+                        SDL_MaximizeWindow(window);
+                    }
+                    s_main_borderless = false;
+                } else {
+                    SDL_GetWindowPosition(window, &s_saved_x, &s_saved_y);
+                    SDL_GetWindowSize(window, &s_saved_w, &s_saved_h);
+                    s_saved_maximized = (SDL_GetWindowFlags(window) & SDL_WINDOW_MAXIMIZED) != 0;
+                    const SDL_DisplayID display_id = SDL_GetDisplayForWindow(window);
+                    SDL_Rect bounds{};
+                    if (!SDL_GetDisplayBounds(display_id, &bounds)) {
+                        bounds = SDL_Rect{s_saved_x, s_saved_y, s_saved_w, s_saved_h};
+                    }
+                    CFW_LOG_DEBUG("Setting main window borderless fullscreen: x={}, y={}, w={}, h={}",
+                                  bounds.x, bounds.y, bounds.w, bounds.h);
+                    SDL_SetWindowFullscreen(window, false);
+                    SDL_RestoreWindow(window);
+                    SDL_SetWindowBordered(window, false);
+                    SDL_SetWindowPosition(window, bounds.x, bounds.y);
+                    SDL_SetWindowSize(window, bounds.w, bounds.h);
+                    SDL_RaiseWindow(window);
+                    s_main_borderless = true;
+                }
+            });
+
+            nlohmann::json result;
+            result["queued"] = true;
+            send_dock_callback(frame, request_id, nullptr, result);
+            return true;
+        }
+
         if (cmd == "resizeThisCameraView") {
             const int tab_id = resolve_camera_tab_id(command, browser);
             const int width = std::max(command.value("width", 960), 64);
@@ -2201,6 +2249,13 @@ bool handle_dock_command(CefRefPtr<CefBrowser> browser,
             std::string panel_id = command.value("panelId", "");
             nlohmann::json result;
             result["panel_id"] = panel_id;
+            {
+                const int requester_tab = find_tab_id_for_browser(browser);
+                CFW_LOG_INFO("[CEF/Tab] closeThisTab requested by tab={} url={} panel_id={}",
+                             requester_tab,
+                             frame ? frame->GetURL().ToString() : std::string("<no-frame>"),
+                             panel_id);
+            }
             send_dock_callback(frame, request_id, nullptr, result);
 
             nlohmann::json payload;
@@ -2224,6 +2279,8 @@ bool handle_dock_command(CefRefPtr<CefBrowser> browser,
         if (cmd == "closePanelTab") {
             int tab_id = command.value("tabId", -1);
             std::string panel_id = command.value("panelId", "");
+            CFW_LOG_INFO("[CEF/Tab] closePanelTab requested by tab={} target={} panel_id={}",
+                         find_tab_id_for_browser(browser), tab_id, panel_id);
             if (tab_id >= 0) {
                 bm.enqueue_main_thread_task([tab_id] {
                     if (auto* tab = BrowserManager::instance().get_tab(tab_id)) {

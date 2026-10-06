@@ -14,8 +14,10 @@ ReSTIRDI::ReSTIRDI(IntegratorPtr integrator, const ParameterSet &desc)
       M_bsdf_(desc["M_bsdf"].as_uint(1)),
       debias_(desc["debias"].as_bool(false)),
       reweight_(desc["reweight"].as_bool(false)),
-      pairwise_(desc["pairwise"].as_bool(false)),
-      max_recursion_(desc["max_recursion"].as_uint(5)) {}
+      pairwise_(desc["pairwise"].as_bool(true)),
+      max_recursion_(desc["max_recursion"].as_uint(5)) {
+    temporal_.mis = desc["temporal"]["mis"].as_bool(true);
+}
 
 bool ReSTIRDI::render_UI(Widgets *widgets) noexcept {
     bool open = widgets->use_tree("ReSTIR DI", [&] {
@@ -160,7 +162,7 @@ SampledSpectrum ReSTIRDI::Li(const Interaction &it, MaterialEvaluator *bsdf, con
 }
 
 DIReservoirVar ReSTIRDI::RIS(const Bool &hit, const Interaction &it, const Var<DIParam> &param,
-                             const Float3 &throughput, Uint *flag) const noexcept {
+                             const Float3 &, Uint *flag) const noexcept {
     TLightSampler &light_sampler = renderer().light_sampler();
     TSampler &sampler = renderer().sampler();
     TSpectrum &spectrum = renderer().spectrum();
@@ -168,6 +170,7 @@ DIReservoirVar ReSTIRDI::RIS(const Bool &hit, const Interaction &it, const Var<D
     Uint M_light = param.M_light;
     Uint M_bsdf = param.M_bsdf;
     DIReservoirVar ret;
+    Float selected_occluded_correction = 1.f;
     const SampledWavelengths &swl = sampled_wavelengths();
     auto sample_light = [&](MaterialEvaluator *bsdf) {
         DISampleVar sample;
@@ -180,12 +183,19 @@ DIReservoirVar ReSTIRDI::RIS(const Bool &hit, const Interaction &it, const Var<D
         sample->set_pos(ls.p_light);
         Bool is_delta_light = ls.eval.pdf < 0.f;
         Float light_pdf = ocarina::select(is_delta_light, -ls.eval.pdf, ls.eval.pdf);
+        Float light_mass = M_light * light_pdf;
+        Float bsdf_mass = M_bsdf * bsdf_light_point;
         Float mis_weight = ocarina::select(is_delta_light, 1.f / M_light,
-                                           light_pdf / (M_light * light_pdf + M_bsdf * bsdf_light_point));
+                                           light_pdf / (light_mass + bsdf_mass));
         Float weight = DIReservoir::safe_weight(mis_weight,
-                                                sample.p_hat, 1.f / light_pdf) *
-                       luminance(throughput);
-        ret->update(sampler->next_1d(), sample, weight);
+                                                sample.p_hat, 1.f / light_pdf);
+        Bool selected = ret->update(sampler->next_1d(), sample, weight);
+        Float occluded_correction = 1.f;
+        $if(!is_delta_light && light_mass > 0.f) {
+            occluded_correction = (light_mass + bsdf_mass) / light_mass;
+        };
+        selected_occluded_correction = ocarina::select(selected, occluded_correction,
+                                                       selected_occluded_correction);
     };
 
     HitBSDFVar hit_bsdf;
@@ -197,9 +207,11 @@ DIReservoirVar ReSTIRDI::RIS(const Bool &hit, const Interaction &it, const Var<D
         Float p_hat = compute_p_hat(it, bsdf, &sample, &bs, &light_pdf_point, &hit_bsdf, flag);
         sample.p_hat = p_hat;
         Float weight = DIReservoir::safe_weight(bs.eval.pdf() / (M_light * light_pdf_point + M_bsdf * bs.eval.pdf()),
-                                                sample.p_hat, 1.f / bs.eval.pdf()) *
-                       luminance(throughput);
-        ret->update(sampler->next_1d(), sample, weight);
+                                                sample.p_hat, 1.f / bs.eval.pdf());
+        Bool selected = ret->update(sampler->next_1d(), sample, weight);
+        // A BSDF candidate has already reached its light without a blocker.
+        selected_occluded_correction = ocarina::select(selected, 1.f,
+                                                       selected_occluded_correction);
     };
 
     $if(hit) {
@@ -235,6 +247,15 @@ DIReservoirVar ReSTIRDI::RIS(const Bool &hit, const Interaction &it, const Var<D
     };
 
     frame_buffer().hit_bsdfs().write(dispatch_id(), hit_bsdf);
+    $if(hit && ret->valid()) {
+        Bool occluded = pipeline()->geometry().occluded(it, ret.sample->p_light());
+        // Keep an unoccluded reservoir for reuse. The actual BSDF proposal is
+        // q_bsdf * visibility, whereas candidate MIS uses the geometric PDF.
+        // For an occluded light candidate only the light proposal has support;
+        // the selected-sample correction restores that missing MIS weight.
+        // This does not correct differing BSDF supports between receivers.
+        ret.weight_sum *= ocarina::select(occluded, selected_occluded_correction, 1.f);
+    };
     ret->update_W(ret.sample.p_hat);
     ret->truncation(1);
     comment("RIS end");
@@ -246,17 +267,20 @@ Float ReSTIRDI::neighbor_pairwise_MIS(const DIReservoirVar &canonical_rsv, const
                                       Uint M, DIReservoirVar *output_rsv) const noexcept {
     TSampler &sampler = renderer().sampler();
     const SampledWavelengths &swl = sampled_wavelengths();
-    Float p_hat_c_at_c = compute_p_hat(canonical_it, nullptr, canonical_rsv.sample);
+    Float p_hat_c_at_c = canonical_rsv.sample.p_hat;
     Float p_hat_c_at_n = compute_p_hat(other_it, nullptr, canonical_rsv.sample);
     Float p_hat_n_at_n = compute_p_hat(other_it, nullptr, other_rsv.sample);
     Float p_hat_n_at_c = compute_p_hat(canonical_it, nullptr, other_rsv.sample);
 
     Float num = M - 1;
 
-    Float mi = MIS_weight_n(1, p_hat_n_at_n, num, p_hat_n_at_c);
+    // Generalized pairwise MIS: p_n / (p_c + (M - 1) * p_n).
+    Float mi = zero_if_nan(MIS_weight_n(num, p_hat_n_at_n, 1, p_hat_n_at_c) / num);
 
-    Float weight = DIReservoir::safe_weight(mi, other_rsv.sample.p_hat, other_rsv.W);
-    (*output_rsv)->update(sampler->next_1d(), other_rsv.sample, weight, other_rsv.C);
+    auto other_sample = other_rsv.sample;
+    other_sample.p_hat = p_hat_n_at_c;
+    Float weight = DIReservoir::safe_weight(mi, other_sample.p_hat, other_rsv.W);
+    (*output_rsv)->update(sampler->next_1d(), other_sample, weight, other_rsv.C);
 
     Float canonical_weight = MIS_weight_n(1, p_hat_c_at_c, num, p_hat_c_at_n) / num;
     canonical_weight = zero_if_nan(canonical_weight);
@@ -276,6 +300,8 @@ DIReservoirVar ReSTIRDI::pairwise_combine(const DIReservoirVar &canonical_rsv, F
     TSensor &camera = scene().sensor();
     SurfaceDataVar cur_surf = cur_surfaces().read(dispatch_id());
     Interaction canonical_it = pipeline()->geometry().compute_surface_interaction(cur_surf.hit, view_pos);
+    DIReservoirVar canonical_at_c = canonical_rsv;
+    canonical_at_c.sample.p_hat = compute_p_hat(canonical_it, nullptr, canonical_at_c.sample);
 
     DIReservoirVar ret;
     Float canonical_weight = 0.f;
@@ -284,10 +310,10 @@ DIReservoirVar ReSTIRDI::pairwise_combine(const DIReservoirVar &canonical_rsv, F
         DIReservoirVar neighbor_rsv = passthrough_reservoirs().read(idx);
         SurfaceDataVar surf = cur_surfaces().read(idx);
         Interaction neighbor_it = pipeline()->geometry().compute_surface_interaction(surf.hit, view_pos);
-        canonical_weight += neighbor_pairwise_MIS(canonical_rsv, canonical_it, neighbor_rsv, neighbor_it, M, &ret);
+        canonical_weight += neighbor_pairwise_MIS(canonical_at_c, canonical_it, neighbor_rsv, neighbor_it, M, &ret);
     });
-    canonical_weight = ocarina::select(canonical_weight == 0.f, 1.f, canonical_weight);
-    canonical_pairwise_MIS(canonical_rsv, canonical_weight, &ret);
+    canonical_weight = ocarina::select(M == 1u, 1.f, canonical_weight);
+    canonical_pairwise_MIS(canonical_at_c, canonical_weight, &ret);
 
     ret->update_W(ret.sample.p_hat);
     return ret;
@@ -336,6 +362,7 @@ DIReservoirVar ReSTIRDI::combine_spatial(DIReservoirVar cur_rsv, Float3 view_pos
 DIReservoirVar ReSTIRDI::combine_temporal(const DIReservoirVar &cur_rsv,
                                           const SurfaceDataVar &cur_surf,
                                           DIReservoirVar &other_rsv,
+                                          const SurfaceDataVar &other_surf,
                                           Float3 view_pos,
                                           Float3 prev_view_pos) const noexcept {
     other_rsv.sample.age += 1;
@@ -348,38 +375,39 @@ DIReservoirVar ReSTIRDI::combine_temporal(const DIReservoirVar &cur_rsv,
     Float p_hat_c_at_n;
     Float p_hat_n_at_n;
 
-    Float p_hat_c_at_c;
+    Float p_hat_c_at_c = cur_rsv.sample.p_hat;
     Float p_hat_n_at_c;
 
     Float mis_cur;
     Float mis_prev;
 
     if (temporal_.mis) {
-        it.update_wo(prev_view_pos);
-        p_hat_c_at_n = compute_p_hat(it, nullptr, cur_rsv.sample);
-        p_hat_n_at_n = compute_p_hat(it, nullptr, other_rsv.sample);
+        // The previous receiver can differ in position, normal and material;
+        // changing only wo at the current receiver is not its source target.
+        Interaction prev_it = geom.compute_surface_interaction(other_surf.hit, prev_view_pos);
+        p_hat_c_at_n = compute_p_hat(prev_it, nullptr, cur_rsv.sample);
+        p_hat_n_at_n = compute_p_hat(prev_it, nullptr, other_rsv.sample);
 
-        it.update_wo(view_pos);
         p_hat_c_at_c = compute_p_hat(it, nullptr, cur_rsv.sample);
         p_hat_n_at_c = compute_p_hat(it, nullptr, other_rsv.sample);
 
         mis_cur = MIS_weight_n(cur_rsv.C, p_hat_c_at_c, other_rsv.C, p_hat_c_at_n);
         mis_prev = MIS_weight_n(other_rsv.C, p_hat_n_at_n, cur_rsv.C, p_hat_n_at_c);
     } else {
-        it.update_wo(prev_view_pos);
-        p_hat_n_at_n = compute_p_hat(it, nullptr, other_rsv.sample);
+        p_hat_n_at_c = compute_p_hat(it, nullptr, other_rsv.sample);
         mis_cur = MIS_weight(cur_rsv.C, other_rsv.C);
         mis_prev = MIS_weight(other_rsv.C, cur_rsv.C);
-        it.update_wo(view_pos);
     }
 
     DIReservoirVar ret;
+    auto cur_sample = cur_rsv.sample;
+    cur_sample.p_hat = p_hat_c_at_c;
     Float cur_weight = DIReservoir::safe_weight(mis_cur,
-                                                cur_rsv.sample.p_hat, cur_rsv.W);
-    ret->update(0.5f, cur_rsv.sample, cur_weight, cur_rsv.C);
+                                                cur_sample.p_hat, cur_rsv.W);
+    ret->update(0.5f, cur_sample, cur_weight, cur_rsv.C);
 
     auto other_sample = other_rsv.sample;
-    other_sample.p_hat = p_hat_n_at_n;
+    other_sample.p_hat = p_hat_n_at_c;
     Float other_weight = DIReservoir::safe_weight(mis_prev,
                                                   other_sample.p_hat, other_rsv.W);
 
@@ -392,8 +420,8 @@ DIReservoirVar ReSTIRDI::temporal_reuse(DIReservoirVar rsv, const SurfaceDataVar
                                         const Float2 &motion_vec,
                                         const SensorSample &ss,
                                         const Var<DIParam> &param) const noexcept {
-    Float2 prev_p_film = ss.p_film - motion_vec;
-    Uint2 prev_p = ocarina::clamp(make_uint2(prev_p_film), make_uint2(0), dispatch_dim().xy() - 1u);
+    Float2 prev_p_film = previous_reservoir_coord(ss.p_film, motion_vec, previous_film_offset(param.camera_jitter));
+    Int2 prev_p = reservoir_pixel(prev_p_film);
     Float limit = rsv.C * param.history_limit;
     Int2 res = make_int2(dispatch_dim().xy());
     TSensor &camera = scene().sensor();
@@ -406,6 +434,7 @@ DIReservoirVar ReSTIRDI::temporal_reuse(DIReservoirVar rsv, const SurfaceDataVar
         DIReservoirVar prev_rsv = prev_reservoirs().read(index);
         prev_rsv->truncation(limit);
         SurfaceDataVar surf = prev_surfaces().read(index);
+        view_pos = scene().sensor()->prev_device_position();
         $if(surf.is_replaced) {
             view_pos = prev_surface_extends().read(index).view_pos;
         };
@@ -413,25 +442,25 @@ DIReservoirVar ReSTIRDI::temporal_reuse(DIReservoirVar rsv, const SurfaceDataVar
     };
 
     view_pos = cur_view_pos(cur_surf.is_replaced);
-    $if(in_screen(make_int2(prev_p_film), res) && param.temporal) {
-        auto data = get_prev_data(prev_p, prev_view_pos);
+    $if(in_screen(prev_p, res) && param.temporal) {
+        auto data = get_prev_data(make_uint2(prev_p), prev_view_pos);
         auto prev_surf = data.first;
         auto prev_rsv = data.second;
 
         $if(is_temporal_valid(cur_surf, prev_surf, param,
                               addressof(prev_rsv.sample))) {
-            rsv = combine_temporal(rsv, cur_surf, prev_rsv, view_pos, prev_view_pos);
+            rsv = combine_temporal(rsv, cur_surf, prev_rsv, prev_surf, view_pos, prev_view_pos);
         }
         $else {
             $for(i, temporal_.N) {
-                Uint2 p =  make_uint2(square_to_disk(sampler()->next_2d()) * param.t_radius + prev_p_film);
-                Uint2 p_clamped = ocarina::clamp(make_uint2(p), make_uint2(0), dispatch_dim().xy() - 1u);
-                auto data = get_prev_data(p_clamped, prev_view_pos);
+                Int2 p = reservoir_pixel(square_to_disk(sampler()->next_2d()) * param.t_radius + prev_p_film);
+                $if(!in_screen(p, res)) { $continue; };
+                auto data = get_prev_data(make_uint2(p), prev_view_pos);
                 auto another_surf = data.first;
                 auto another_rsv = data.second;
                 $if(is_temporal_valid(cur_surf, another_surf, param,
                                       addressof(another_rsv.sample))) {
-                    rsv = combine_temporal(rsv, cur_surf, another_rsv, view_pos, prev_view_pos);
+                    rsv = combine_temporal(rsv, cur_surf, another_rsv, another_surf, view_pos, prev_view_pos);
                     $break;
                 };
             };
@@ -526,6 +555,7 @@ SurfaceDataVar ReSTIRDI::compute_hit(RayState rs, TriangleHitVar &hit, Interacti
 }
 
 void ReSTIRDI::compile_shader0() noexcept {
+    switch_profile::Scope profile{"DI.initial_temporal.compile", "compile"};
     Pipeline *rp = pipeline();
     const Geometry &geometry = rp->geometry();
     TSensor &camera = scene().sensor();
@@ -535,10 +565,17 @@ void ReSTIRDI::compile_shader0() noexcept {
         Uint2 pixel = dispatch_idx().xy();
         camera->load_data();
         sampler()->load_data();
-        sampler()->set_seed(pixel, frame_index, 0);
         initial(sampler(), frame_index, spectrum);
-        SensorSample ss = sampler()->sensor_sample(pixel, camera->filter());
-        RayState rs = camera->generate_ray(ss);
+        // Match the GBuffer's frame-wide film jitter. Lighting remains
+        // independently seeded per pixel after reconstructing the film sample.
+        sampler()->set_seed(make_uint2(0u), frame_index, 0);
+        SensorSample ss = sampler()->sensor_sample(pixel, camera->filter(), param.camera_jitter != 0u);
+        sampler()->set_seed(pixel, frame_index, Dimension::ReSTIR_RIS);
+        // The GBuffer owns the camera sample (including lens/custom rays).
+        // A second per-pixel ray can hit another surface at a silhouette, making
+        // SVGF filter radiance with an unrelated normal, albedo and history.
+        RayDataVar ray_data = frame_buffer().rays().read(dispatch_id());
+        RayState rs = ray_data->to_ray_state();
         TriangleHitVar hit;
         Interaction it{false};
         SurfaceExtendVar surf_ext;
@@ -550,15 +587,8 @@ void ReSTIRDI::compile_shader0() noexcept {
         };
 
         DIReservoirVar rsv = RIS(hit->is_hit(), it, param, surf_ext.throughput, nullptr);
-        Float2 motion_vec = FrameBuffer::compute_motion_vec(scene().sensor(), ss.p_film,
-                                                            rs.ray->at(surf_ext.t_max), hit->is_hit());
+        Float2 motion_vec = frame_buffer().motion_vectors().read(dispatch_id());
 
-        frame_buffer().motion_vectors().write(dispatch_id(), motion_vec);
-
-        $if(hit->is_hit()) {
-            Bool occluded = geometry.occluded(it, rsv.sample->p_light());
-            rsv->process_occluded(occluded);
-        };
         rsv = temporal_reuse(rsv, cur_surf, motion_vec, ss, param);
         passthrough_reservoirs().write(dispatch_id(), rsv);
     };
@@ -610,41 +640,27 @@ Float3 ReSTIRDI::shading(vision::DIReservoirVar rsv, const SurfaceDataVar &surf)
         light_sampler->dispatch_light(it.light_id(), [&](const Light *light) {
             if (!light->match(LightType::Area)) { return; }
             LightSampleContext p_ref;
-            p_ref.pos = camera->device_position();
+            p_ref.pos = view_pos;
             LightEval le = light->evaluate_wi(p_ref, it, swl, LightEvalMode::L);
-            Le = le.L;
+            Le = le.L * SampledSpectrum(throughput);
         });
     }
     $else {
-        Interaction next_it{false};
-        BSDFSample bs{swl.dimension(), 1};
-        scene().materials().dispatch(it.material_id(), [&](const Material *material) {
-            auto bsdf = material->create_evaluator(it, swl);
-            bs = bsdf.sample(it.wo, sampler());
-        });
-        RayVar ray = it.spawn_ray(bs.wi);
-        TriangleHitVar hit = geometry.trace_closest(ray);
-        $if(hit->is_hit()) {
-            next_it = geometry.compute_surface_interaction(hit, ray, true);
-            $if(next_it.has_emission()) {
-                LightSampleContext p_ref;
-                p_ref.pos = ray->origin();
-                p_ref.ng = it.ng;
-                LightEval eval = light_sampler->evaluate_hit_wi(p_ref, next_it, swl, LightEvalMode::L);
-                value = eval.L * bs.eval.f / bs.eval.pdf();
-            };
+        $if(rsv->valid()) {
+            LightSample ls{swl.dimension()};
+            value = Li(it, nullptr, rsv.sample, std::addressof(ls)) * SampledSpectrum(throughput);
+            // Environment endpoints depend on the receiver position; rebuild
+            // the shadow endpoint with the same light evaluation used above.
+            Bool occluded = geometry.occluded(it, ls.p_light);
+            value = value * ocarina::select(occluded, 0.f, rsv.W);
         };
-
-        value = Li(it, nullptr, rsv.sample) * SampledSpectrum(throughput) / luminance(throughput);
-        Bool occluded = geometry.occluded(it, rsv.sample->p_light());
-        rsv->process_occluded(occluded);
-        value = value * rsv.W;
     };
 
     return spectrum->linear_srgb(value + Le, swl);
 }
 
 void ReSTIRDI::compile_shader1() noexcept {
+    switch_profile::Scope profile{"DI.spatial.compile", "compile"};
     TSensor &camera = scene().sensor();
     TLightSampler &light_sampler = renderer().light_sampler();
     TSpectrum &spectrum = pipeline()->spectrum();
@@ -653,11 +669,10 @@ void ReSTIRDI::compile_shader1() noexcept {
         initial(sampler(), frame_index, spectrum);
         Uint2 pixel = dispatch_idx().xy();
         camera->load_data();
-        sampler()->set_seed(pixel, frame_index, 0);
         const SampledWavelengths &swl = sampled_wavelengths();
-        SensorSample ss = sampler()->sensor_sample(pixel, camera->filter());
-        RayState rs = camera->generate_ray(ss);
-        sampler()->set_seed(pixel, frame_index, 1);
+        RayDataVar ray_data = frame_buffer().rays().read(dispatch_id());
+        RayState rs = ray_data->to_ray_state();
+        sampler()->set_seed(pixel, frame_index, Dimension::ReSTIR_combine);
         SurfaceDataVar cur_surf = cur_surfaces().read(dispatch_id());
         DIReservoirVar temporal_rsv = passthrough_reservoirs().read(dispatch_id());
         DIReservoirVar st_rsv = spatial_reuse(temporal_rsv, cur_surf, make_int2(pixel), param);
@@ -682,6 +697,7 @@ void ReSTIRDI::compile_shader1() noexcept {
 }
 
 void ReSTIRDI::prepare() noexcept {
+    switch_profile::Scope profile{"ReSTIRDI::prepare", "buffers"};
     Pipeline *rp = pipeline();
     frame_buffer().prepare_screen_buffer(radiance_);
     reservoirs_.super() = device().create_buffer<DIReservoir>(rp->pixel_num() * 3,
@@ -706,6 +722,7 @@ void ReSTIRDI::update_resolution(ocarina::uint2 res) noexcept {
 
 DIParam ReSTIRDI::construct_param() const noexcept {
     DIParam param;
+    param.camera_jitter = integrator()->jitter_primary_samples();
     param.M_light = M_light_;
     param.M_bsdf = M_bsdf_;
     param.max_age = max_age_;
@@ -729,6 +746,9 @@ CommandBatch ReSTIRDI::dispatch(uint frame_index) const noexcept {
     CommandBatch ret;
     const Pipeline *rp = pipeline();
     auto param = construct_param();
+    // Invalidation restarts the frame sequence without reallocating reservoirs.
+    bool history_valid = history_.begin_frame(frame_index, param.camera_jitter);
+    param.temporal = param.temporal && history_valid;
     ret << shader0_(frame_index, param).dispatch(rp->resolution());
     if (open_) {
         ret << shader1_(frame_index, param).dispatch(rp->resolution());

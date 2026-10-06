@@ -136,10 +136,15 @@ void VulkanBackend::shutdown() {
     // Release every surface's image handle and GPU resources.
     for (auto& [surface, render] : surfaces_) {
         if (render && render->image_handle != 0) {
+            render->published_image.retire().wait();
             if (auto image = SharedDataHub::instance().image_storage().acquire_write(render->image_handle)) {
                 if (image->consumed_receipt.serial != 0) {
                     render->resources.executor.wait_idle(image->consumed_receipt);
                 }
+                if (image->submit_receipt.serial != 0) {
+                    render->resources.executor.wait_idle(image->submit_receipt);
+                }
+                *image = ImageDevice{};
             }
             if (render->resources.last_receipt.serial != 0) {
                 render->resources.executor.wait_idle(render->resources.last_receipt);
@@ -169,9 +174,10 @@ bool VulkanBackend::register_surface(void* surface, SDL_Window* window) {
 
     auto render = std::make_unique<PerSurfaceRender>();
     render->image_handle = SharedDataHub::instance().image_storage().allocate();
+    render->published_image = Detail::PublishedImage(render->image_handle);
     if (auto image_device =
             SharedDataHub::instance().image_storage().acquire_write(render->image_handle)) {
-        // Keep storage entry alive; per-frame values updated in present_surface().
+        *image_device = ImageDevice{};
     } else {
         CFW_LOG_ERROR("VulkanBackend: failed to acquire image storage handle for surface {}", surface);
         SharedDataHub::instance().image_storage().deallocate(render->image_handle);
@@ -202,11 +208,16 @@ void VulkanBackend::unregister_surface(void* surface) {
     // Drain both Display's consumed receipt and our producer executor before releasing the
     // image handle. This is the same producer/consumer ordering used by resize/rebuild.
     auto& render = *it->second;
+    render.published_image.retire().wait();
     if (render.image_handle != 0) {
         if (auto image = SharedDataHub::instance().image_storage().acquire_write(render.image_handle)) {
             if (image->consumed_receipt.serial != 0) {
                 render.resources.executor.wait_idle(image->consumed_receipt);
             }
+            if (image->submit_receipt.serial != 0) {
+                render.resources.executor.wait_idle(image->submit_receipt);
+            }
+            *image = ImageDevice{};
         }
     }
     if (render.resources.last_receipt.serial != 0) {
@@ -311,6 +322,9 @@ void VulkanBackend::present_surface(void* surface) {
         }
         image_device->image = render->resources.render_target;
         image_device->submit_receipt = submit_receipt;
+        image_device->metadata = {++render->frame_index,
+                                  render->resources.width,
+                                  render->resources.height};
     } else {
         return;
     }
@@ -321,7 +335,6 @@ void VulkanBackend::present_surface(void* surface) {
     }
 
     if (auto* event_bus = Kernel::KernelContext::instance().event_bus()) {
-        ++render->frame_index;
         Events::UIFrameReadyEvent frame{surface,
                                         render->image_handle,
                                         render->frame_index,
@@ -331,6 +344,7 @@ void VulkanBackend::present_surface(void* surface) {
             frame.first_present_ticket = render->first_present_ticket;
             render->first_present_published = true;
         }
+        frame.published_image = render->published_image;
         event_bus->publish<Events::UIFrameReadyEvent>(frame);
     }
 

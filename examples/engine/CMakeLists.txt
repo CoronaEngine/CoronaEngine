@@ -6,14 +6,25 @@
 
 corona_add_example(
     NAME corona_engine
-    SOURCES main.cpp
+    SOURCES main.cpp startup_config.cpp
     COPY_ASSETS
 )
 
 # 链接 CoronaEngine 核心库（已包含所有系统）
 target_link_libraries(corona_engine PRIVATE
     corona::engine
+    nlohmann_json::nlohmann_json
 )
+
+add_custom_target(corona_engine_startup_config
+    COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:corona_engine>"
+    COMMAND ${CMAKE_COMMAND}
+        "-DSTARTUP_CONFIG_SOURCE=${PROJECT_SOURCE_DIR}/CoronaEngine.default.json"
+        "-DSTARTUP_CONFIG_DESTINATION=$<TARGET_FILE_DIR:corona_engine>/CoronaEngine.json"
+        -P "${PROJECT_SOURCE_DIR}/cmake/corona_seed_startup_config.cmake"
+    VERBATIM
+)
+add_dependencies(corona_engine corona_engine_startup_config)
 
 if(CORONA_BUILD_VISION)
     # Dynamically loaded MODULE libraries are absent from TARGET_RUNTIME_DLLS

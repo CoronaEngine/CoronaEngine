@@ -16,13 +16,15 @@ struct PrefilterParam {
     BufferDesc<SVGFDataDual> svgf_buffer;
     BufferDesc<TriangleHit> visibility_buffer;
     array_float3 camera_pos{};
+    uint channel_kind{};
+    uint use_shading_normal{};
 };
 
 }// namespace vision::svgf
 
 OC_PARAM_STRUCT(vision::svgf, PrefilterParam,
     radiance_direct, radiance_indirect, svgf_buffer,
-    visibility_buffer, camera_pos){};
+    visibility_buffer, camera_pos, channel_kind, use_shading_normal){};
 
 namespace vision::svgf {
 class SVGF;
@@ -40,7 +42,7 @@ public:
 
     void prepare() noexcept;
     void compile() noexcept;
-    [[nodiscard]] CommandBatch dispatch(RealTimeDenoiseInput &input) noexcept;
+    [[nodiscard]] CommandBatch dispatch(RealTimeDenoiseInput &input, bool use_shading_normal = true) noexcept;
 };
 
 }// namespace vision::svgf

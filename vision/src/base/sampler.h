@@ -62,13 +62,15 @@ public:
         Float y = next_1d();
         return make_float2(x, y);
     }
-    [[nodiscard]] SensorSample sensor_sample(const Uint2 &pixel, const TFilter &filter) {
+    [[nodiscard]] SensorSample sensor_sample(const Uint2 &pixel, const TFilter &filter,
+                                              const Bool &jitter = true) {
         SensorSample ss;
         FilterSample fs = filter->sample(next_2d());
-        ss.p_film = make_float2(pixel) + make_float2(0.5f) + fs.p;
+        ss.p_film = make_float2(pixel) + make_float2(0.5f) +
+                    select(jitter, fs.p, make_float2(0.f));
         ss.p_lens = next_2d();
         ss.time = next_1d();
-        ss.filter_weight = fs.weight;
+        ss.filter_weight = select(jitter, fs.weight, 1.f);
         return ss;
     }
 };

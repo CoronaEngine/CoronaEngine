@@ -58,15 +58,9 @@ class DisplaySystem : public Kernel::SystemBase {
    private:
     using CallbackGate = Detail::OwnerCallbackGate<DisplaySystem>;
 
-    struct PendingLayer {
+    struct PendingLayer : Detail::ImageFrameMetadata {
         std::uintptr_t image_handle = 0;
-        uint64_t frame_index = 0;
-        uint32_t width = 0;
-        uint32_t height = 0;
-        uint32_t viewport_x = 0;
-        uint32_t viewport_y = 0;
-        uint32_t viewport_width = 0;
-        uint32_t viewport_height = 0;
+        Detail::PublishedImage published_image;
         Detail::SurfaceLifecycleAcks::FirstPresentBoundary
             first_present_boundary = 0;
     };
@@ -81,9 +75,9 @@ class DisplaySystem : public Kernel::SystemBase {
         Horizon::HardwareImage output;
         uint32_t width = 0;
         uint32_t height = 0;
-        // Horizon 移除了 HardwareExecutor::last_receipt()，Display 自己记住最后一次
-        // composite+present 提交：它就是回写给生产者的 consumed_receipt，
-        // 生产者据此判断何时可以安全复用自己的图像。
+        // Horizon no longer exposes HardwareExecutor::last_receipt(). Display
+        // tracks its final composite/present submission and writes it back as
+        // consumed_receipt so producers know when their images are safe to reuse.
         Horizon::SubmitReceipt last_receipt;
     };
 

@@ -4,6 +4,7 @@
 
 #include "frame_buffer.h"
 #include "base/mgr/pipeline.h"
+#include "base/mgr/switch_profile.h"
 
 namespace vision {
 using namespace ocarina;
@@ -126,11 +127,13 @@ void FrameBuffer::init_screen_buffer(const SP<ScreenBuffer> &buffer) noexcept {
 }
 
 void FrameBuffer::prepare_screen_buffer(const SP<vision::ScreenBuffer> &buffer) noexcept {
+    switch_profile::Scope profile{"FrameBuffer::prepare_screen_buffer", "buffers"};
     init_screen_buffer(buffer);
     register_(buffer);
 }
 
 void FrameBuffer::compile_accumulation() noexcept {
+    switch_profile::Scope profile{"RGBFilm-accumulation.compile", "compile"};
     Kernel kernel = [&](BufferVar<float4> input, BufferVar<float4> output, Uint frame_index) {
         Float4 accum_prev = output.read(dispatch_id());
         Float4 val = input.read(dispatch_id());
@@ -149,7 +152,7 @@ void FrameBuffer::update_device_data() noexcept {
 }
 
 void FrameBuffer::compile_tone_mapping() noexcept {
-
+    switch_profile::Scope profile{"RGBFilm-tone_mapping-tex.compile", "compile"};
     Kernel kernel_tex = [&](BufferVar<float4> input, Texture2DVar output, Float exposure) {
         Float4 val = input.read(dispatch_id());
         val = apply_exposure(exposure, val);
@@ -161,6 +164,7 @@ void FrameBuffer::compile_tone_mapping() noexcept {
 }
 
 void FrameBuffer::compile_gamma() noexcept {
+    switch_profile::Scope profile{"FrameBuffer-gamma_correction-tex.compile", "compile"};
     Kernel kernel_tex = [&](Texture2DVar input, Texture2DVar output) {
         Float4 val = input.read<float4>(dispatch_idx().xy());
         val = linear_to_srgb(val);
@@ -186,7 +190,7 @@ void FrameBuffer::compile_compute_geom() noexcept {
         sampler->set_seed(make_uint2(0, 0), frame_index, 0);
         camera->load_data();
 
-        SensorSample ss = sampler->sensor_sample(pixel, camera->filter());
+        SensorSample ss = sampler->sensor_sample(pixel, camera->filter(), param.camera_jitter != 0u);
 
         sampler->set_seed(pixel, frame_index, 0);
 
@@ -225,7 +229,7 @@ void FrameBuffer::compile_compute_hit() noexcept {
         TriangleHitVar hit = pipeline()->geometry().trace_closest(rs.ray);
         hit_buffer.write(0, hit);
     };
-    compute_hit_ = device().compile(kernel, "FrameBuffer::compute_hit_");
+    compute_hit_ = device().compile(kernel, "FrameBuffer_compute_hit_");
 }
 
 void FrameBuffer::compile() noexcept {
@@ -260,6 +264,7 @@ CommandBatch FrameBuffer::compute_GBuffer(uint frame_index) const noexcept {
     auto vbuffer = cur_visibility_buffer_view(frame_index).descriptor();
 
     param.frame_index = frame_index;
+    param.camera_jitter = renderer().integrator()->jitter_primary_samples();
     param.visibility_buffer = vbuffer;
     param.motion_vectors = motion_vectors().descriptor();
     param.rays = rays().descriptor();
@@ -309,7 +314,7 @@ CommandBatch FrameBuffer::clear_accumulation_history() const noexcept {
     CommandBatch ret;
     if (accumulation_buffer_.device_buffer().size() != 0) {
         ret << pipeline()->reset_buffer(accumulation_buffer_.view(), make_float4(0.f),
-                                        "FrameBuffer::clear_accumulation_history");
+                                        "FrameBuffer_clear_accumulation_history");
     }
     return ret;
 }

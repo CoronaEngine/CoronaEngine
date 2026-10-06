@@ -16,6 +16,20 @@
 #include "base/using.h"
 
 namespace vision {
+class ReservoirHistory {
+private:
+    uint previous_camera_jitter_{InvalidUI32};
+
+public:
+    [[nodiscard]] bool begin_frame(uint frame, uint camera_jitter) noexcept {
+        // A mode switch changes the sample lattice, even when a caller uses a
+        // live setter without explicitly invalidating the whole integrator.
+        bool valid = frame != 0u && previous_camera_jitter_ == camera_jitter;
+        previous_camera_jitter_ = camera_jitter;
+        return valid;
+    }
+};
+
 struct SpatialResamplingParam {
 public:
     float theta{};
@@ -69,14 +83,39 @@ public:
 }// namespace vision
 
 namespace vision {
+// Film samples are at pixel + 0.5 + jitter. Motion excludes camera jitter,
+// so subtract the previous offset before choosing a previous reservoir.
+[[nodiscard]] inline Float2 previous_reservoir_coord(const Float2 &film, const Float2 &motion,
+                                                      const Float2 &previous_offset) noexcept {
+    return film - motion - previous_offset;
+}
+
+[[nodiscard]] inline Int2 reservoir_pixel(const Float2 &coord) noexcept {
+    // Keep negatives signed until the caller has checked in_screen().
+    return make_int2(floor(coord));
+}
+
+[[nodiscard]] inline Bool is_valid_neighbor(const SurfaceDataVar &cur_surface, const SurfaceDataVar &another_surface,
+                                            const Float &dot_threshold, const Float &depth_threshold,
+                                            const Float &diff_threshold, const Float &another_depth) noexcept {
+    Bool cond0 = dot(cur_surface->normal(), another_surface->normal()) > dot_threshold;
+    Bool cond1 = abs(cur_surface->depth() - another_depth) /
+                     max(abs(cur_surface->depth()), 1e-6f) < depth_threshold;
+    Bool cond2 = abs(cur_surface->diffuse_factor() - another_surface->diffuse_factor()) /
+                     max(abs(cur_surface->diffuse_factor()), 1e-6f) < diff_threshold;
+    // Replaced hits describe a specular-chain endpoint, while these guides
+    // still describe the primary surface. They cannot validate that endpoint.
+    return cond0 && cond1 &&
+           cond2 && cur_surface.hit->is_hit() && another_surface.hit->is_hit() &&
+           !cur_surface.is_replaced && !another_surface.is_replaced;
+}
+
 [[nodiscard]] inline Bool is_valid_neighbor(const SurfaceDataVar &cur_surface, const SurfaceDataVar &another_surface,
                                             const Float &dot_threshold, const Float &depth_threshold,
                                             const Float &diff_threshold) noexcept {
-    Bool cond0 = abs_dot(cur_surface->normal(), another_surface->normal()) > dot_threshold;
-    Bool cond1 = (abs(cur_surface->depth() - another_surface->depth()) / cur_surface->depth()) < depth_threshold;
-    Bool cond2 = (abs(cur_surface->diffuse_factor() - another_surface->diffuse_factor())) / cur_surface->diffuse_factor() < diff_threshold;
-    return cond0 && cond1 &&
-           cond2 && cur_surface.hit->is_hit() && another_surface.hit->is_hit();
+    // Spatial guides already store depth in the same camera space.
+    return is_valid_neighbor(cur_surface, another_surface, dot_threshold, depth_threshold,
+                             diff_threshold, another_surface->depth());
 }
 
 class ReSTIR : public Toolkit, public RenderEnv, public GUI, public RuntimeObject {
@@ -85,6 +124,7 @@ protected:
     TemporalResamplingParam temporal_{};
     bool open_{true};
     uint max_age_{};
+    mutable ReservoirHistory history_{};
     float diff_factor_{0.3f};
     using IntegratorPtr = weak_ptr<IlluminationIntegrator>;
     IntegratorPtr integrator_{};
@@ -98,12 +138,21 @@ public:
           open_(desc["open"].as_bool(true)),
           diff_factor_(desc["diffuse_factor"].as_float(0.3f)),
           max_age_(desc["max_age"].as_uint(30)) {}
-    VS_HOTFIX_MAKE_RESTORE(RuntimeObject, spatial_, temporal_, open_,
+    VS_HOTFIX_MAKE_RESTORE(RuntimeObject, spatial_, temporal_, open_, history_,
                            max_age_, diff_factor_, integrator_)
     OC_MAKE_MEMBER_GETTER(open, )
     OC_MAKE_MEMBER_SETTER(integrator)
     [[nodiscard]] IlluminationIntegrator *integrator() noexcept { return integrator_.lock().get(); }
     [[nodiscard]] const IlluminationIntegrator *integrator() const noexcept { return integrator_.lock().get(); }
+    [[nodiscard]] Float2 previous_film_offset(const Uint &camera_jitter) const noexcept {
+        Float2 offset = make_float2(0.f);
+        auto &sampler = renderer().sampler();
+        sampler->temporary([&](Sampler *local_sampler) {
+            local_sampler->set_seed(make_uint2(0u), max(frame_index(), 1u) - 1u, 0u);
+            offset = scene().sensor()->filter()->sample(local_sampler->next_2d()).p;
+        });
+        return select(camera_jitter != 0u, offset, make_float2(0.f));
+    }
     virtual void update_resolution(uint2 res) noexcept {}
     [[nodiscard]] Uint checkerboard_value() const noexcept {
         return frame_buffer().checkerboard_value(dispatch_idx().xy());

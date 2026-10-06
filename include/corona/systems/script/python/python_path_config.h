@@ -5,6 +5,41 @@
 
 namespace Corona::Script::Python::PathCfg {
 
+enum class PackagedRuntimeIssue {
+    None,
+    MissingLib,
+    MissingDlls,
+    MissingSiteModule,
+    MissingEncodings,
+};
+
+struct PackagedRuntimeInspection {
+    PackagedRuntimeIssue issue = PackagedRuntimeIssue::MissingLib;
+    std::filesystem::path root;
+
+    [[nodiscard]] bool available() const noexcept { return issue == PackagedRuntimeIssue::None; }
+    [[nodiscard]] std::string describe() const;
+};
+
+PackagedRuntimeInspection inspect_packaged_runtime(const std::filesystem::path& root);
+
+PackagedRuntimeInspection inspect_deployed_runtime();
+
+std::string configured_python_home_dir();
+
+bool packaged_runtime_required();
+
+enum class PackagedRuntimeDecision {
+    UsePackaged,
+    UseFallback,
+    RejectNoPackaged,
+    RejectNoFallback,
+};
+
+PackagedRuntimeDecision decide_packaged_runtime_usage(const PackagedRuntimeInspection& inspection,
+                                                      bool packaged_required,
+                                                      bool fallback_available);
+
 // All runtime paths are resolved relative to the running executable. This is
 // intentional: the executable may be started from any working directory and
 // the whole build output directory may be moved after it is packaged.

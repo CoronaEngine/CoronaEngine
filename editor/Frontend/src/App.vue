@@ -187,6 +187,12 @@ function consumeNativeGameplayDomEvent(event) {
 }
 
 function onGlobalKeyDown(event) {
+  // F11 toggles borderless fullscreen regardless of world/editor state.
+  if ((event.key === 'F11' || event.code === 'F11') && !event.repeat) {
+    event.preventDefault();
+    appService.toggleMainWindowBorderless().catch(() => {});
+    return;
+  }
   // The route may not be mounted yet while native mode/window preparation waits.
   if (isEscapeKey(event) && !isStandalonePanel.value
     && (worldModeService.opening || (!isLauncherRoute.value && !worldReady.value))) {
