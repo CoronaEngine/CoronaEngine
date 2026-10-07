@@ -1,4 +1,6 @@
-﻿#include <horizon/core/logging.h>
+#include <corona/kernel/core/kernel_context.h>
+#include <corona/kernel/system/i_system_manager.h>
+#include <horizon/core/logging.h>
 #include <corona/shared_data_hub.h>
 #include <corona/systems/script/script_system.h>
 #include <corona/systems/ui/camera_viewport_manager.h>
@@ -195,6 +197,24 @@ void UiSystem::update() {
         &window_size_changed_};
 
     frame_runner.run_frame(context);
+
+    // Periodic per-system frame times. The engine already samples these (SystemBase::get_average_frame_time
+    // / get_max_frame_time -> SystemStats) but nothing ever consumed them, so a report like "the editor
+    // feels laggy" had no way to be attributed to a layer. One line per system per 600 frames (~10 s at
+    // 60 fps) is cheap and answers "which system is eating the frame?" without a profiler.
+    static std::uint64_t ui_frame_counter = 0;
+    if (++ui_frame_counter % 600 == 0) {
+        if (auto* manager = Kernel::KernelContext::instance().system_manager()) {
+            for (const auto& stats : manager->get_all_stats()) {
+                CFW_LOG_INFO("[UI/Frame] system={} avg={:.2f}ms max={:.2f}ms target_fps={} actual_fps={:.1f}",
+                             stats.name,
+                             stats.average_frame_time_ms,
+                             stats.max_frame_time_ms,
+                             stats.target_fps,
+                             stats.actual_fps);
+            }
+        }
+    }
 }
 
 void UiSystem::shutdown() {
