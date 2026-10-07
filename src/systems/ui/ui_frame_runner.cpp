@@ -692,9 +692,16 @@ void UiFrameRunner::run_frame(UiFrameContext& context) {
         render_window(context, managed);
     }
 
-    // Upload CEF paint buffers after all windows have routed this frame's input. The upload
-    // executor may wait on the previous receipt; doing that before route_mouse_to_panels makes
-    // Vue drag/click latency scale with the number of secondary surfaces.
+    // Upload CEF paint buffers after all windows have routed this frame's input, then once more
+    // so paints that arrived while routing input are picked up in the same frame.
+    //
+    // Note: BrowserManager::update_texture() calls HardwareExecutor::wait() before re-submitting,
+    // and that call does NOT block the host - it only registers the previous receipt's tokens so
+    // the *next* upload on that executor is ordered after them on the GPU (see
+    // Horizon execution.cpp: wait() appends to pending_waits_ and returns; wait_idle() is the
+    // host-blocking variant). So the upload path adds no per-surface CPU synchronisation point;
+    // an earlier comment here claimed it made drag/click latency scale with the number of
+    // secondary surfaces, which was wrong.
     for (const auto& [tab_id, tab] : BrowserManager::instance().get_tabs()) {
         if (!tab || !tab->open || tab->minimized) {
             continue;
