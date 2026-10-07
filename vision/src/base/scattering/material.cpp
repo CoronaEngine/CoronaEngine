@@ -187,6 +187,11 @@ void MaterialEvaluator::albedo_split(const Float3 &world_wo, SampledSpectrum &di
     specular = s;
 }
 
+void MaterialEvaluator::reuse_material(SampledSpectrum &diffuse, SampledSpectrum &specular,
+                                       Float2 &roughness) const noexcept {
+    dispatch([&](const Lobe *root) { root->reuse_material(diffuse, specular, roughness); });
+}
+
 Bool MaterialEvaluator::splittable() const noexcept {
     Bool ret = false;
     dispatch([&](const Lobe *lobe_set) {

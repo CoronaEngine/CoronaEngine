@@ -83,6 +83,9 @@ public:
     virtual Lobe &operator=(const Lobe &other) noexcept = default;
     virtual void regularize() noexcept {}
     [[nodiscard]] virtual Float diffuse_factor() const noexcept { return 1; }
+    // View-independent material features for reservoir reuse, not denoiser albedos.
+    virtual void reuse_material(SampledSpectrum &diffuse, SampledSpectrum &specular,
+                                Float2 &roughness) const noexcept;
     virtual void mollify() noexcept {}
     [[nodiscard]] virtual const SampledWavelengths *swl() const = 0;
     [[nodiscard]] virtual Uint flag() const noexcept = 0;
@@ -129,6 +132,8 @@ public:
     void from_ratio_x(const ocarina::Float &roughness) noexcept override;
     [[nodiscard]] Float to_ratio_x() const noexcept override;
     [[nodiscard]] Float diffuse_factor() const noexcept override;
+    void reuse_material(SampledSpectrum &diffuse, SampledSpectrum &specular,
+                        Float2 &roughness) const noexcept override;
     VS_MAKE_LOBE_ASSIGNMENT(MicrofacetLobe)
     [[nodiscard]] SampledSpectrum albedo(const Float &cos_theta) const noexcept override;
     [[nodiscard]] const SampledWavelengths *swl() const override;
@@ -231,6 +236,8 @@ public:
         : Lobe(std::move(shading_frame)), fresnel_(fresnel), microfacet_(microfacet),
           kt_(std::move(color)), dispersive_(ocarina::move(dispersive)),
           flag_(std::move(flag)) {}
+    void reuse_material(SampledSpectrum &diffuse, SampledSpectrum &specular,
+                        Float2 &roughness) const noexcept override;
     VS_MAKE_LOBE_ASSIGNMENT(DielectricLobe)
     [[nodiscard]] virtual bool compensate() const noexcept { return true; }
     static void prepare() noexcept;
@@ -316,6 +323,8 @@ public:
     void normalize_sampled_weight() noexcept;
     void flatten() noexcept;
     [[nodiscard]] bool is_multi() const noexcept override { return true; }
+    void reuse_material(SampledSpectrum &diffuse, SampledSpectrum &specular,
+                        Float2 &roughness) const noexcept override;
     VS_MAKE_LOBE_ASSIGNMENT(LobeSet)
     [[nodiscard]] SampledSpectrum albedo(const Float &cos_theta) const noexcept override;
     [[nodiscard]] uint lobe_num() const noexcept { return lobes_.size(); }

@@ -493,10 +493,32 @@ SurfaceDataVar ReSTIRDI::compute_hit(RayState rs, TriangleHitVar &hit, Interacti
         Float3 v_pos = camera_ray->at(surf_ext.t_max);
         Float3 w;
         scene().materials().dispatch(it.material_id(), [&](const Material *material) {
+            // Evaluator construction can apply a normal map to it.shading.
+            // Preserve the original interaction for the canonical material guide.
+            Interaction guide_it = it;
+            guide_it.wo = guide_it.ng;
             auto bsdf = material->create_evaluator(it, sampled_wavelengths());
             cur_surf.flag = bsdf.flag();
             Float diff_factor = bsdf.diffuse_factor();
             cur_surf->set_diffuse_factor(diff_factor);
+            $if(counter == 0u) {
+                // Material guides must not follow the path's stochastic wavelengths
+                // or view-dependent layer weights. Keep the lighting RNG untouched.
+                SampledWavelengths guide_swl{renderer().spectrum()->dimension()};
+                sampler()->temporary([&](Sampler *guide_sampler) {
+                    guide_sampler->set_seed(make_uint2(0u), 0u, Dimension::Camera);
+                    guide_swl = renderer().spectrum()->sample_wavelength(renderer().sampler());
+                });
+                auto guide_bsdf = material->create_evaluator(guide_it, guide_swl);
+                SampledSpectrum diffuse{guide_swl.dimension()};
+                SampledSpectrum specular{guide_swl.dimension()};
+                Float2 roughness;
+                guide_bsdf.reuse_material(diffuse, specular, roughness);
+                cur_surf.diffuse_roughness = make_float4(
+                    renderer().spectrum()->linear_srgb(diffuse, guide_swl), roughness.x);
+                cur_surf.specular_roughness = make_float4(
+                    renderer().spectrum()->linear_srgb(specular, guide_swl), roughness.y);
+            };
             if (material->enable_delta()) {
                 $if(cur_surf->near_specular()) {
                     BSDFSample bsdf_sample = bsdf.sample_delta(it.wo, renderer().sampler());

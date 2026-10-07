@@ -103,10 +103,18 @@ namespace vision {
                      max(abs(cur_surface->depth()), 1e-6f) < depth_threshold;
     Bool cond2 = abs(cur_surface->diffuse_factor() - another_surface->diffuse_factor()) /
                      max(abs(cur_surface->diffuse_factor()), 1e-6f) < diff_threshold;
+    // Compare cached material features symmetrically, independent of view angle.
+    // Per-channel reflectance also rejects different hues with equal luminance.
+    Bool diffuse_match = all(abs(cur_surface.diffuse_roughness.xyz() - another_surface.diffuse_roughness.xyz()) <= 0.25f);
+    Bool specular_match = all(abs(cur_surface.specular_roughness.xyz() - another_surface.specular_roughness.xyz()) <= 0.25f);
+    Float2 cur_roughness = make_float2(cur_surface.diffuse_roughness.w, cur_surface.specular_roughness.w);
+    Float2 other_roughness = make_float2(another_surface.diffuse_roughness.w, another_surface.specular_roughness.w);
+    Bool roughness_match = all(abs(cur_roughness - other_roughness) <=
+        0.5f * max(max(cur_roughness, other_roughness), make_float2(1e-6f)));
     // Replaced hits describe a specular-chain endpoint, while these guides
     // still describe the primary surface. They cannot validate that endpoint.
     return cond0 && cond1 &&
-           cond2 && cur_surface.hit->is_hit() && another_surface.hit->is_hit() &&
+           cond2 && diffuse_match && specular_match && roughness_match && cur_surface.hit->is_hit() && another_surface.hit->is_hit() &&
            !cur_surface.is_replaced && !another_surface.is_replaced;
 }
 

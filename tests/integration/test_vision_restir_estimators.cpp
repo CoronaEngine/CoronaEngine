@@ -25,6 +25,7 @@
 #endif
 
 void check_restir_reprojection(vision::Pipeline& pipeline);
+void check_restir_material_reuse(vision::Pipeline& pipeline, const std::vector<vision::SurfaceData>& surfaces);
 void check_restir_gi_depth_one_continuation(vision::Pipeline& pipeline);
 void check_restir_gi_receiver_support(vision::Pipeline& pipeline);
 
@@ -299,6 +300,70 @@ int main() {
         const auto support_pipeline = vision::Importer::import_scene(fixture / "support.json");
         expect(bool(support_pipeline), "could not import the tilted receiver support fixture");
         check(check_restir_gi_receiver_support, *support_pipeline);
+        // Capture real ReSTIR surface guides, including material/texture evaluation.
+        // Equal geometry must not hide a material boundary; similar separately
+        // imported materials must remain reusable regardless of their identities.
+        const char* materials[]{
+            R"({"type":"diffuse","param":{"color":[0.8,0.1,0.1]}})",
+            R"({"type":"diffuse","param":{"color":[0.1,0.8,0.1]}})",
+            R"({"type":"diffuse","param":{"color":[0.75,0.12,0.1]}})",
+            R"({"type":"substrate","param":{"color":[0.5,0.5,0.5],"spec":[0.04,0.04,0.04],"roughness":0.2}})",
+            R"({"type":"substrate","param":{"color":[0.5,0.5,0.5],"spec":[0.8,0.8,0.8],"roughness":0.2}})",
+            R"({"type":"plastic","param":{"color":[0.5,0.5,0.5],"roughness":0.1}})",
+            R"({"type":"plastic","param":{"color":[0.5,0.5,0.5],"roughness":0.8}})",
+            R"({"type":"diffuse","param":{"color":[0,0,0]}})",
+            R"({"type":"glass","param":{"color":[1,1,1],"ior":1.1,"roughness":0.5}})",
+            R"({"type":"glass","param":{"color":[1,1,1],"ior":5.0,"roughness":0.5}})",
+            R"({"type":"principled_bsdf","param":{"color":[0.8,0.2,0.1],"coat_weight":1,"coat_ior":2.5,"roughness":0.4}})",
+            R"({"type":"principled_bsdf","param":{"color":[0.8,0.2,0.1],"coat_weight":1,"coat_ior":2.5,"roughness":0.4}})",
+            R"({"type":"diffuse","param":{"color":[0.8,0.2,0.1]}})",
+            R"({"type":"diffuse","param":{"color":[0.8,0.2,0.1]}})",
+            R"({"type":"principled_bsdf","param":{"color":[0.8,0.2,0.1],"coat_weight":1,"coat_ior":2.5,"roughness":0.4,"normal":{"node":"test_normal","channels":"xyz"}},"node_tab":{"test_normal":{"type":"number","param":{"value":[0.6,0,0.8]}}}})",
+            R"({"type":"principled_bsdf","param":{"color":[0.8,0.2,0.1],"coat_weight":1,"coat_ior":2.5,"roughness":0.4,"normal":{"node":"test_normal","channels":"xyz"}},"node_tab":{"test_normal":{"type":"number","param":{"value":[0.6,0,0.8]}}}})",
+        };
+        std::vector<vision::SurfaceData> material_surfaces;
+        vision::SP<vision::Pipeline> material_pipeline;
+        for (const char* material_json : materials) {
+            auto description = scene_description(true);
+            const auto material_index = material_surfaces.size();
+            if (material_index == 11u || material_index == 15u)
+                description["scene"]["camera"]["param"]["transform"]["param"]["position"] = vision::DataWrap::parse("[3,0,0]");
+            if (material_index == 12u || material_index == 13u)
+                description["render"]["spectrum"] = vision::DataWrap::parse(R"({"type":"hero","param":{"dimension":3}})");
+            auto material = vision::DataWrap::parse(material_json);
+            material["name"] = "receiver";
+            description["scene"]["materials"][0] = material;
+            write_file(fixture / "material.json", description.dump(2));
+            material_pipeline = vision::Importer::import_scene(fixture / "material.json");
+            material_pipeline->frame_buffer()->set_enable_accumulation(false);
+            material_pipeline->prepare();
+            material_pipeline->frame_buffer()->prepare_view_texture();
+            for (unsigned frame = 0; frame < (material_index == 13u ? 7u : 1u); ++frame) {
+                material_pipeline->upload_data();
+                material_pipeline->display(1.0 / 60.0);
+            }
+            std::vector<vision::SurfaceData> data(material_pipeline->pixel_num());
+            material_pipeline->stream() << material_pipeline->frame_buffer()->cur_surfaces_view(material_pipeline->frame_index() - 1u).download(data.data())
+                << vision::synchronize() << vision::commit();
+            expect(data[8u * 16u + 8u].hit.inst_id != vision::InvalidUI32, "material fixture must hit receiver");
+            material_surfaces.push_back(data[8u * 16u + 8u]);
+            if (material_index == 11u || material_index == 13u || material_index == 15u) {
+                const auto& a = material_surfaces[material_index - 1u];
+                const auto& b = material_surfaces[material_index];
+                float delta = 0.f;
+                for (unsigned c = 0; c < 4u; ++c) {
+                    delta = std::max(delta, std::abs(a.diffuse_roughness[c] - b.diffuse_roughness[c]));
+                    delta = std::max(delta, std::abs(a.specular_roughness[c] - b.specular_roughness[c]));
+                }
+                std::cout << "Material guide stable index=" << material_index << " max_delta=" << delta << '\n';
+                if (delta > 1e-5f) {
+                    std::cerr << "FAIL: material guide must not vary with view or sampled wavelengths\n";
+                    regression_failed = true;
+                }
+            }
+        }
+        check_restir_material_reuse(*material_pipeline, material_surfaces);
+        fs::remove(fixture / "material.json");
         expect(!regression_failed, "ReSTIR regression checks failed");
         // Remove only the files this test created; preserve the fixture on failure.
         fs::remove(fixture / "direct.json");

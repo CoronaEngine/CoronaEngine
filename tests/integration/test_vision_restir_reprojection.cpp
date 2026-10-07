@@ -167,3 +167,65 @@ void check_restir_reprojection(vision::Pipeline& pipeline) {
     std::cout << "PASS: ReSTIR maps jittered history and rejects offscreen reservoir pixels ("
               << pixel_cases.size() << " cases)\n";
 }
+
+void check_restir_material_reuse(vision::Pipeline& pipeline, const std::vector<vision::SurfaceData>& surfaces) {
+    using namespace vision;
+    pipeline.activate_global_context();
+    Global::SceneGpuContextScope scope{pipeline.geometry().bindless_array(), pipeline.device()};
+    struct Case { const char* name; uint a, b, expected; };
+    const Case cases[]{
+        {"same_diffuse", 0, 0, 1}, {"different_color", 0, 1, 0},
+        {"similar_color", 0, 2, 1}, {"different_reflectivity", 3, 4, 0},
+        {"different_plastic_roughness", 5, 6, 0}, {"same_black", 7, 7, 1},
+        {"same_glossy", 3, 3, 1}, {"glass_reflectivity", 8, 9, 0},
+        {"same_normal_mapped_material_different_view", 14, 15, 1},
+        {"same_layered_material_different_view", 10, 11, 1}, {"same_hero_material_different_frame", 12, 13, 1},
+    };
+    DIParam di{}; GIParam gi{};
+    auto thresholds = [](auto& p) {
+        p.max_age = 30u; p.diff_factor = 0.3f;
+        p.s_dot = p.t_dot = 0.8f; p.s_depth = p.t_depth = 0.1f;
+    };
+    thresholds(di); thresholds(gi);
+    auto& camera = pipeline.scene().sensor();
+    Kernel kernel = [&](BufferVar<SurfaceData> data, BufferVar<uint> out, Var<DIParam> dp, Var<GIParam> gp) {
+        camera->load_data();
+        for (uint i = 0; i < std::size(cases); ++i) {
+            for (uint reverse = 0; reverse < 2u; ++reverse) {
+                auto a = data.read(reverse ? cases[i].b : cases[i].a);
+                auto b = data.read(reverse ? cases[i].a : cases[i].b);
+                const uint base = i * 8u + reverse * 4u;
+                out.write(base, cast<uint>(ReSTIRDI::is_valid_neighbor(a, b, dp)));
+                out.write(base + 1u, cast<uint>(ReSTIRGI::is_valid_neighbor(a, b, gp)));
+                out.write(base + 2u, cast<uint>(ReSTIRDI::is_temporal_valid(a, b, dp, nullptr)));
+                out.write(base + 3u, cast<uint>(ReSTIRGI::is_temporal_valid(a, b, gp, nullptr)));
+            }
+        }
+    };
+    auto shader = pipeline.device().compile(kernel, "restir_material_reuse_regression");
+    auto data = pipeline.device().create_buffer<SurfaceData>(surfaces.size(), "material_surfaces");
+    std::vector<uint> results(std::size(cases) * 8u);
+    auto output = pipeline.device().create_buffer<uint>(results.size(), "material_reuse_results");
+    auto material_only = surfaces;
+    for (auto& surface : material_only) {
+        // Isolate material acceptance from the deliberately changed camera pose.
+        surface.normal_depth = surfaces.back().normal_depth;
+        surface.pos_diff.x = surfaces.back().pos_diff.x;
+        surface.pos_diff.y = surfaces.back().pos_diff.y;
+        surface.pos_diff.z = surfaces.back().pos_diff.z;
+    }
+    pipeline.stream() << data.upload(material_only.data()) << shader(data, output, di, gi).dispatch(1u)
+        << output.download(results.data()) << synchronize() << commit();
+    uint failures = 0;
+    for (uint i = 0; i < std::size(cases); ++i) {
+        for (uint j = 0; j < 8u; ++j) {
+            if (results[i * 8u + j] != cases[i].expected) {
+                ++failures;
+                std::cerr << "FAIL: material reuse " << cases[i].name << " check=" << j
+                          << " expected=" << cases[i].expected << " actual=" << results[i * 8u + j] << '\n';
+            }
+        }
+    }
+    if (failures) throw std::runtime_error("ReSTIR material boundary checks failed: " + std::to_string(failures));
+    std::cout << "PASS: real material guides preserve similar surfaces and reject different colors, reflectivity and roughness\n";
+}

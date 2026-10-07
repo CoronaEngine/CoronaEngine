@@ -23,13 +23,16 @@ public:
     TriangleHit hit{};
     float4 normal_depth{};
     float4 pos_diff{};
+    // Body color (diffuse/transmission), specular reflectivity and two roughness axes.
+    float4 diffuse_roughness{};
+    float4 specular_roughness{};
     uint is_replaced{false};
     uint is_split{false};
     uint flag{Miss};
 };
 }// namespace vision
 // clang-format off
-OC_STRUCT(vision, SurfaceData, hit, normal_depth, pos_diff, is_replaced, is_split, flag) {
+OC_STRUCT(vision, SurfaceData, hit, normal_depth, pos_diff, diffuse_roughness, specular_roughness, is_replaced, is_split, flag) {
     void set_normal(const Float3 &n) {
         normal_depth = make_float4(n, normal_depth.w);
     }

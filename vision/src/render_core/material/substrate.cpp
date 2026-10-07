@@ -24,6 +24,11 @@ public:
         // clang-format on
         [[nodiscard]] SampledSpectrum albedo(const Float &cos_theta) const noexcept override { return Rd_; }
 
+    void reuse_albedos(SampledSpectrum &diffuse, SampledSpectrum &specular) const noexcept {
+        diffuse = Rd_;
+        specular = Rs_;
+    }
+
     [[nodiscard]] SampledSpectrum f_diffuse(const Float3 &wo, const Float3 &wi) const noexcept {
         SampledSpectrum diffuse = (28.f / (23.f * Pi)) * Rd_ * (SampledSpectrum(swl().dimension(), 1.f) - Rs_) *
                                   (1 - Pow<5>(1 - .5f * abs_cos_theta(wi))) *
@@ -77,6 +82,11 @@ public:
     using MicrofacetLobe::MicrofacetLobe;
 
 public:
+    void reuse_material(SampledSpectrum &diffuse, SampledSpectrum &specular,
+                        Float2 &roughness) const noexcept override {
+        static_cast<const FresnelBlend *>(bxdf())->reuse_albedos(diffuse, specular);
+        roughness = sqrt(make_float2(bxdf()->alpha_x(), bxdf()->alpha_y()));
+    }
     [[nodiscard]] Float diffuse_factor() const noexcept override {
         return sqrt(MicrofacetLobe::diffuse_factor());
     }
