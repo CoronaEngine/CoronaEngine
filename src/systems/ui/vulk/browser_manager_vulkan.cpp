@@ -1,4 +1,4 @@
-﻿#include <corona/systems/ui/vulkan_backend.h>
+#include <corona/systems/ui/vulkan_backend.h>
 #include <horizon/core/logging.h>
 
 #include <algorithm>
@@ -21,21 +21,28 @@ UiTextureId descriptor_to_texture_id(uint32_t descriptor) {
 }
 
 // Horizon 移除了 HardwareImage::upload()。上传改为 staging buffer + copy_from()；
-// 这里的提交是异步的（receipt 存在 OwnedImage 上），staging 必须活到 GPU 用完，
-// 故用 shared_ptr + stream 的 keep_alive 移交生命周期。
-Horizon::SubmitReceipt upload_image_async(Horizon::HardwareExecutor& executor,
-                                         Horizon::HardwareImage& image,
-                                         std::span<const std::byte> bytes) {
-    Horizon::HardwareBufferDesc staging_desc;
-    staging_desc.element_count = bytes.size_bytes();
-    staging_desc.element_size = 1;
-    staging_desc.usage = Horizon::BufferUsage_TransferSrc;
-    staging_desc.cpu_access = Horizon::CpuAccessMode::Write;
-    auto staging = std::make_shared<Horizon::HardwareBuffer>(staging_desc, bytes);
+// 这里的提交是异步的（receipt 存在 OwnedImage 上），staging 必须活到 GPU 用完 —— 因此它由
+// OwnedImage 持有（见 browser_manager.h），而不是每次分配一个临时缓冲：后者既带来每次绘制
+// 多兆字节的分配开销，也可能在异步拷贝仍在读取它时就被释放（Horizon 已移除 keep_alive）。
+Horizon::SubmitReceipt upload_owned_image_async(
+    Horizon::HardwareExecutor& executor,
+    Horizon::HardwareImage& image,
+    std::shared_ptr<Horizon::HardwareBuffer>& staging,
+    std::span<const std::byte> bytes) {
+    const auto required = static_cast<std::uint64_t>(bytes.size_bytes());
+    if (!staging || staging->get_element_count() < required) {
+        Horizon::HardwareBufferDesc staging_desc;
+        staging_desc.element_count = required;
+        staging_desc.element_size = 1;
+        staging_desc.usage = Horizon::BufferUsage_TransferSrc;
+        staging_desc.cpu_access = Horizon::CpuAccessMode::Write;
+        staging = std::make_shared<Horizon::HardwareBuffer>(staging_desc, bytes);
+    } else if (!staging->write_bytes(bytes)) {
+        CFW_LOG_WARNING("BrowserManager: staging write failed ({} bytes)", required);
+    }
 
     return executor.stream()
         << image.copy_from(*staging)
-        // keep_alive removed
         << Horizon::commit();
 }
 }  // namespace
@@ -94,9 +101,10 @@ UiTextureId BrowserManager::create_browser_texture(int width, int height) {
     const std::vector<uint8_t> transparent_pixels(
         static_cast<size_t>(safe_width) * static_cast<size_t>(safe_height) * 4u,
         0u);
-    owned.upload_receipt = upload_image_async(
+    owned.upload_receipt = upload_owned_image_async(
         browser_upload_executor_,
         owned.image,
+        owned.staging,
         std::as_bytes(std::span<const uint8_t>(transparent_pixels.data(),
                                                transparent_pixels.size())));
 
@@ -151,10 +159,13 @@ void BrowserManager::update_texture(int tab_id) {
 
     if (pixels.size() >= expected_size) {
         auto& owned = image_it->second;
+        // The staging buffer is rewritten in place below, so the previous copy must have finished
+        // reading it before this frame touches it again.
         browser_upload_executor_.wait(owned.upload_receipt);
-        owned.upload_receipt = upload_image_async(
+        owned.upload_receipt = upload_owned_image_async(
             browser_upload_executor_,
             owned.image,
+            owned.staging,
             std::as_bytes(std::span<const uint8_t>(pixels.data(), expected_size)));
     }
 }
