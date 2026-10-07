@@ -1,4 +1,4 @@
-﻿#include <corona/systems/ui/vulkan_backend.h>
+#include <corona/systems/ui/vulkan_backend.h>
 
 #include <corona/events/display_system_events.h>
 #include <horizon/core/logging.h>
@@ -371,6 +371,19 @@ void VulkanBackend::rebuild(void* surface, uint32_t pixel_w, uint32_t pixel_h) {
                               render->resources.width != pixel_w ||
                               render->resources.height != pixel_h;
     if (size_changed) {
+        // One INFO line per render-target recreation. Resizes are rare (one per size change, not per
+        // frame) and this is the path where engine shutdowns reporting "Vulkan device lost during
+        // compose/present" have been observed, so the log right before a loss should say whether
+        // recreations were happening. Note the drains below cover the *UI* executor only; the loss is
+        // detected in display_system's compose/present, which may sit on a different queue.
+        CFW_LOG_INFO("VulkanBackend: rebuilding surface={} {}x{} -> {}x{} image_handle={} last_receipt={}",
+                     surface,
+                     render->resources.width,
+                     render->resources.height,
+                     pixel_w,
+                     pixel_h,
+                     render->image_handle,
+                     render->resources.last_receipt.serial);
         if (render->image_handle != 0) {
             if (auto image_device =
                     SharedDataHub::instance().image_storage().acquire_write(render->image_handle)) {
