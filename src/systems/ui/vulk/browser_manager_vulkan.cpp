@@ -20,26 +20,31 @@ UiTextureId descriptor_to_texture_id(uint32_t descriptor) {
     return static_cast<UiTextureId>(static_cast<std::uint64_t>(descriptor) + 1u);
 }
 
-// Horizon 移除了 HardwareImage::upload()。上传改为 staging buffer + copy_from()；
-// 这里的提交是异步的（receipt 存在 OwnedImage 上），staging 必须活到 GPU 用完 —— 因此它由
-// OwnedImage 持有（见 browser_manager.h），而不是每次分配一个临时缓冲：后者既带来每次绘制
-// 多兆字节的分配开销，也可能在异步拷贝仍在读取它时就被释放（Horizon 已移除 keep_alive）。
-Horizon::SubmitReceipt upload_owned_image_async(
-    Horizon::HardwareExecutor& executor,
-    Horizon::HardwareImage& image,
-    std::shared_ptr<Horizon::HardwareBuffer>& staging,
-    std::span<const std::byte> bytes) {
-    const auto required = static_cast<std::uint64_t>(bytes.size_bytes());
-    if (!staging || staging->get_element_count() < required) {
-        Horizon::HardwareBufferDesc staging_desc;
-        staging_desc.element_count = required;
-        staging_desc.element_size = 1;
-        staging_desc.usage = Horizon::BufferUsage_TransferSrc;
-        staging_desc.cpu_access = Horizon::CpuAccessMode::Write;
-        staging = std::make_shared<Horizon::HardwareBuffer>(staging_desc, bytes);
-    } else if (!staging->write_bytes(bytes)) {
-        CFW_LOG_WARNING("BrowserManager: staging write failed ({} bytes)", required);
-    }
+// Horizon 移除了 HardwareImage::upload()。上传改为 staging buffer + copy_from()，
+// 每帧新建一块 staging —— 这一点是刻意的，原因都写在这里，改动前请先读：
+//
+// 1) 生命周期不需要 App 操心。copy_from() 会把源 buffer 按值存进
+//    CopyBufferToImageCommand（hardware_image.cpp 里的 `{ src, *this, ... }`），
+//    而 HardwareBuffer 是 ResourceHandle，内部持有 shared_ptr<IResourceRef>。
+//    因此提交之后命令自己就持有这块 buffer，这里的局部 shared_ptr 析构并不会让它
+//    提前消失。Horizon 已无 keep_alive 之类的 API，也不需要。
+//
+// 2) 反过来，复用同一块常驻 staging 是不安全的。HardwareExecutor::wait() 并不等待：
+//    它只把 receipt 的 token 登记为「下一次 commit 要在 GPU 侧等待」
+//    （execution.cpp: wait() 只往 pending_waits_ 里 push，随即返回），
+//    真正阻塞主机的只有 wait_idle()（queue->wait_idle()，会等整条队列空闲）。
+//    所以「wait 一下再重写同一块 buffer」并不能阻止 CPU 在 GPU 仍读它时写入
+//    （write_bytes() 就是裸 memcpy），结果是画面撕裂 —— 这正是一次实测回归的成因。
+//    要安全复用，必须做 K 深 ring + wait_idle（见 P1-2/P1-3 的设计）。
+Horizon::SubmitReceipt upload_image_async(Horizon::HardwareExecutor& executor,
+                                         Horizon::HardwareImage& image,
+                                         std::span<const std::byte> bytes) {
+    Horizon::HardwareBufferDesc staging_desc;
+    staging_desc.element_count = bytes.size_bytes();
+    staging_desc.element_size = 1;
+    staging_desc.usage = Horizon::BufferUsage_TransferSrc;
+    staging_desc.cpu_access = Horizon::CpuAccessMode::Write;
+    auto staging = std::make_shared<Horizon::HardwareBuffer>(staging_desc, bytes);
 
     return executor.stream()
         << image.copy_from(*staging)
@@ -101,10 +106,9 @@ UiTextureId BrowserManager::create_browser_texture(int width, int height) {
     const std::vector<uint8_t> transparent_pixels(
         static_cast<size_t>(safe_width) * static_cast<size_t>(safe_height) * 4u,
         0u);
-    owned.upload_receipt = upload_owned_image_async(
+    owned.upload_receipt = upload_image_async(
         browser_upload_executor_,
         owned.image,
-        owned.staging,
         std::as_bytes(std::span<const uint8_t>(transparent_pixels.data(),
                                                transparent_pixels.size())));
 
@@ -159,13 +163,10 @@ void BrowserManager::update_texture(int tab_id) {
 
     if (pixels.size() >= expected_size) {
         auto& owned = image_it->second;
-        // The staging buffer is rewritten in place below, so the previous copy must have finished
-        // reading it before this frame touches it again.
         browser_upload_executor_.wait(owned.upload_receipt);
-        owned.upload_receipt = upload_owned_image_async(
+        owned.upload_receipt = upload_image_async(
             browser_upload_executor_,
             owned.image,
-            owned.staging,
             std::as_bytes(std::span<const uint8_t>(pixels.data(), expected_size)));
     }
 }

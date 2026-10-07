@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "horizon.h"
 #include <SDL3/SDL.h>
@@ -173,11 +173,6 @@ class BrowserManager {
     struct OwnedImage {
         Horizon::HardwareImage image;
         Horizon::SubmitReceipt upload_receipt;
-        // Staging buffer for the CPU -> GPU copy, reused across paints and owned here for the
-        // whole life of the image. Two reasons: a fresh multi-megabyte allocation on every CEF
-        // paint showed up as churn, and Horizon no longer offers keep_alive, so a transient
-        // buffer could be destroyed while the asynchronous copy was still reading it.
-        std::shared_ptr<Horizon::HardwareBuffer> staging;
         uint32_t width = 0;
         uint32_t height = 0;
     };
