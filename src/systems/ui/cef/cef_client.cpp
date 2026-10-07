@@ -1,4 +1,4 @@
-﻿#include "cef_client.h"
+#include "cef_client.h"
 
 #include <windows.h>
 
@@ -18,6 +18,7 @@
 #include "cef_app.h"
 #include "cef_bridge_helpers.h"
 #include "cef_editor_api.h"
+#include "cef_osr_mode.h"
 #include "cef_shared_texture_probe.h"
 #include "request_response_broker.h"
 
@@ -58,6 +59,10 @@ bool should_preserve_alpha(BrowserTab* tab, CefRefPtr<CefBrowser> browser) {
 }
 
 }  // namespace
+
+void apply_remote_debugging_port(CefSettings& settings) {
+    settings.remote_debugging_port = cef_remote_debugging_port();
+}
 
 // ============================================================================
 // OffscreenRenderHandler 实现
@@ -564,7 +569,7 @@ bool initialize_cef() {
     settings.multi_threaded_message_loop = true;
     settings.windowless_rendering_enabled = true;
     settings.no_sandbox = true;
-    settings.remote_debugging_port = 9222;
+    apply_remote_debugging_port(settings);
     settings.log_severity = LOGSEVERITY_FATAL;
     settings.uncaught_exception_stack_size = 10;
 
