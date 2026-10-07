@@ -8,6 +8,7 @@
 #include <ktm/ktm.h>
 
 #include <array>
+#include <chrono>
 #include <cstdint>
 #include <mutex>
 #include <unordered_map>
@@ -280,6 +281,15 @@ enum class CameraVisionRenderMode : uint8_t {
     ReSTIR,
 };
 
+// Runtime telemetry only; never serialized into scene settings.
+struct CameraFrameTiming {
+    double render_ms{};
+    // Wall-clock cadence between completed frames of this camera, including waits.
+    double frame_ms{};
+    CameraVisionRenderMode mode{CameraVisionRenderMode::PathTracing};
+    std::chrono::steady_clock::time_point recorded_at{};
+};
+
 struct CameraDevice {
     void* surface{};
     bool follows_default_surface{true};
@@ -298,6 +308,7 @@ struct CameraDevice {
     CameraVisionRenderMode vision_render_mode{CameraVisionRenderMode::PathTracing};
     bool vision_denoise{false};
     bool vision_accumulation{false};
+    bool vision_stable_planes{true};
     bool shadow_cascade_debug{false};
     bool ssao_enabled{true};
     bool view_open{false};
@@ -407,6 +418,7 @@ enum class CameraStateUpdateField : std::uint32_t {
     SsaoEnabled = 1u << 7,
     VisionDenoise = 1u << 8,
     VisionAccumulation = 1u << 9,
+    VisionStablePlanes = 1u << 10,
 };
 
 constexpr CameraStateUpdateField operator|(CameraStateUpdateField lhs,
@@ -432,6 +444,7 @@ struct CameraStateUpdateCommand {
     CameraVisionRenderMode vision_render_mode{CameraVisionRenderMode::PathTracing};
     bool vision_denoise{false};
     bool vision_accumulation{false};
+    bool vision_stable_planes{true};
     bool shadow_cascade_debug{false};
     bool ssao_enabled{true};
     bool view_open{false};
@@ -662,6 +675,12 @@ class SharedDataHub {
     ImageStorage& image_storage();
     const ImageStorage& image_storage() const;
 
+    void publish_camera_frame_timing(std::uintptr_t camera_handle, double render_ms,
+                                     CameraVisionRenderMode mode,
+                                     std::chrono::steady_clock::time_point completed_at =
+                                         std::chrono::steady_clock::now());
+    [[nodiscard]] std::optional<CameraFrameTiming> camera_frame_timing(
+        std::uintptr_t camera_handle) const;
     void enqueue_camera_move(CameraMoveCommand command);
     std::vector<CameraMoveCommand> drain_camera_moves();
     void enqueue_camera_viewport_update(CameraViewportUpdateCommand command);
@@ -675,6 +694,10 @@ class SharedDataHub {
     [[nodiscard]] std::optional<bool> requested_camera_vision_accumulation(
         std::uintptr_t camera_handle) const;
     void acknowledge_camera_vision_accumulation(std::uintptr_t camera_handle,
+                                               std::uint64_t applied_sequence);
+    [[nodiscard]] std::optional<bool> requested_camera_vision_stable_planes(
+        std::uintptr_t camera_handle) const;
+    void acknowledge_camera_vision_stable_planes(std::uintptr_t camera_handle,
                                                std::uint64_t applied_sequence);
     void clear_camera_state_updates(std::uintptr_t camera_handle);
     void enqueue_camera_release(CameraReleaseCommand command);
@@ -709,6 +732,8 @@ class SharedDataHub {
     std::unordered_map<std::uintptr_t, ExternalVisionBindingDevice> external_vision_bindings_;
     EnvironmentStorage environment_storage_;
     CameraStorage camera_storage_;
+    mutable std::mutex camera_timing_mutex_;
+    std::unordered_map<std::uintptr_t, CameraFrameTiming> camera_timings_;
     ActorPickStorage actor_pick_storage_;
     mutable std::mutex actor_pick_queue_mutex_;
     std::vector<ActorPickRequestCommand> pending_actor_pick_requests_;
@@ -734,6 +759,8 @@ class SharedDataHub {
         requested_camera_vision_denoise_;
     std::unordered_map<std::uintptr_t, RequestedCameraBool>
         requested_camera_vision_accumulation_;
+    std::unordered_map<std::uintptr_t, RequestedCameraBool>
+        requested_camera_vision_stable_planes_;
     std::uint64_t camera_state_update_sequence_{0};
     std::mutex camera_release_mutex_;
     std::vector<CameraReleaseCommand> pending_camera_releases_;

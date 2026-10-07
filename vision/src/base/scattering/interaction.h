@@ -26,13 +26,20 @@ public:
     // Body color (diffuse/transmission), specular reflectivity and two roughness axes.
     float4 diffuse_roughness{};
     float4 specular_roughness{};
+    // A single deterministic reflection branch. Zero is the primary surface;
+    // InvalidUI32 keeps unsupported replacement paths out of stable reuse.
+    float3 virtual_position{};
+    float3 virtual_normal{};
+    float3 virtual_geometric_normal{};
+    float3 denoiser_albedo{};
+    uint stable_branch{0u};
     uint is_replaced{false};
     uint is_split{false};
     uint flag{Miss};
 };
 }// namespace vision
 // clang-format off
-OC_STRUCT(vision, SurfaceData, hit, normal_depth, pos_diff, diffuse_roughness, specular_roughness, is_replaced, is_split, flag) {
+OC_STRUCT(vision, SurfaceData, hit, normal_depth, pos_diff, diffuse_roughness, specular_roughness, virtual_position, virtual_normal, virtual_geometric_normal, denoiser_albedo, stable_branch, is_replaced, is_split, flag) {
     void set_normal(const Float3 &n) {
         normal_depth = make_float4(n, normal_depth.w);
     }
@@ -52,10 +59,11 @@ struct SurfaceExtend {
     float3 throughput{make_float3(1.f)};
     float3 view_pos{};
     float t_max{};
+    float3 final_direction{};
 };
 }// namespace vision
 // clang-format off
-OC_STRUCT(vision, SurfaceExtend, throughput, view_pos, t_max) {};
+OC_STRUCT(vision, SurfaceExtend, throughput, view_pos, t_max, final_direction) {};
 // clang-format om
 
 namespace vision {

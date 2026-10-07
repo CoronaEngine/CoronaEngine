@@ -307,7 +307,15 @@
       @pointerleave="handleViewportPointerLeave"
       @click="handleViewportClick"
       @wheel.prevent="handleWheel"
-    ></div>
+    >
+      <FrameTimingOverlay
+        class="main-frame-timing"
+        :scene-id="currentMainSceneId()"
+        :camera-id="currentMainCameraId() || ''"
+        :enabled="mainRenderBackend === 'vision'"
+        :render-mode="mainVisionRenderMode"
+      />
+    </div>
 
     <aside
       class="scene-quick-controls"
@@ -375,9 +383,19 @@
             />
             <span>SVGF</span>
           </label>
+          <label title="ReSTIR Stable Plane">
+            <input
+              type="checkbox"
+              aria-label="Stable Plane"
+              :checked="mainVisionStablePlanes"
+              :disabled="mainRenderBackend !== 'vision' || mainVisionRenderMode !== 'restir' || mainVisionStablePlanesBusy || !currentMainCameraId()"
+              @change="toggleMainVisionStablePlanes"
+            />
+            <span>Stable Plane</span>
+          </label>
         </div>
-        <p v-if="mainVisionAccumulationError || mainVisionDenoiseError" role="alert" class="text-red-300 text-xs">
-          {{ mainVisionAccumulationError || mainVisionDenoiseError }}
+        <p v-if="mainVisionAccumulationError || mainVisionDenoiseError || mainVisionStablePlanesError" role="alert" class="text-red-300 text-xs">
+          {{ mainVisionAccumulationError || mainVisionDenoiseError || mainVisionStablePlanesError }}
         </p>
       </section>
       <section
@@ -590,12 +608,13 @@
 </template>
 
 <script setup>
+import FrameTimingOverlay from '@/components/ui/FrameTimingOverlay.vue';
 import { computed, ref, onMounted, onUnmounted, reactive, watch, nextTick } from 'vue';
 import { useRouter } from 'vue-router';
 import { useI18n } from 'vue-i18n';
 import { DEFAULT_SCENE_NAME } from '@/utils/constants.js';
 import {
-  normalizeVisionRenderMode, visionAccumulationFromCamera, visionDenoiseFromCamera, visionRenderModes,
+  normalizeVisionRenderMode, visionAccumulationFromCamera, visionDenoiseFromCamera, visionStablePlanesFromCamera, visionRenderModes,
 } from '@/utils/visionRenderModes.js';
 import {
   Bridge,
@@ -1175,6 +1194,9 @@ const mainVisionAccumulationError = ref('');
 const mainVisionDenoise = ref(false);
 const mainVisionDenoiseBusy = ref(false);
 const mainVisionDenoiseError = ref('');
+const mainVisionStablePlanes = ref(true);
+const mainVisionStablePlanesBusy = ref(false);
+const mainVisionStablePlanesError = ref('');
 const currentMainCamera = ref(null);
 let previewPollTimer = null;
 window.__coronaEditorInputLocks = window.__coronaEditorInputLocks instanceof Set
@@ -1222,6 +1244,7 @@ const mainRenderModeLabel = computed(() => {
 let pendingMainRenderSelection = null;
 let pendingMainAccumulationSelection = null;
 let pendingMainDenoiseSelection = null;
+let pendingMainStablePlanesSelection = null;
 const currentMainCameraId = () =>
   cameraBindingState.value.cameraId || cameraBindingState.value.cameraName || null;
 const currentMainSceneId = () =>
@@ -1563,6 +1586,44 @@ const toggleMainVisionDenoise = async () => {
   }
 };
 
+const toggleMainVisionStablePlanes = async () => {
+  const sceneId = currentMainSceneId();
+  const cameraId = currentMainCameraId();
+  if (mainRenderBackend.value !== 'vision' || mainVisionRenderMode.value !== 'restir'
+    || mainVisionStablePlanesBusy.value || !cameraId) return false;
+  const previous = mainVisionStablePlanes.value;
+  const previousSelection = pendingMainStablePlanesSelection;
+  const selection = { sceneId, cameraId, enabled: !previous };
+  const isCurrent = () => currentMainSceneId() === sceneId && currentMainCameraId() === cameraId;
+  pendingMainStablePlanesSelection = selection;
+  mainVisionStablePlanesBusy.value = true;
+  mainVisionStablePlanes.value = selection.enabled;
+  mainVisionStablePlanesError.value = '';
+  try {
+    const result = unwrapBridgeData(
+      await editorApi.sceneTools.setVisionStablePlanes(sceneId, cameraId, selection.enabled),
+    );
+    if (isCurrent()) {
+      selection.enabled = result?.pending || typeof result?.enabled !== 'boolean'
+        ? selection.enabled : result.enabled;
+      mainVisionStablePlanes.value = selection.enabled;
+      if (currentMainCamera.value) currentMainCamera.value.vision_stable_planes = selection.enabled;
+    }
+    return true;
+  } catch (error) {
+    if (isCurrent()) {
+      pendingMainStablePlanesSelection = previousSelection;
+      mainVisionStablePlanes.value = previous;
+      if (currentMainCamera.value) currentMainCamera.value.vision_stable_planes = previous;
+      mainVisionStablePlanesError.value = error.message;
+    }
+    logError('Failed to set main viewport stable planes', error);
+    return false;
+  } finally {
+    mainVisionStablePlanesBusy.value = false;
+  }
+};
+
 // 新增：点击其他地方关闭菜单
 const handleClickOutside = (event) => {
   if (activeMenu.value === 'render') {
@@ -1615,6 +1676,8 @@ const applySceneSnapshot = (sceneId, payload, { preservePose = false } = {}) => 
     pendingMainAccumulationSelection = null;
     mainVisionDenoise.value = false;
     pendingMainDenoiseSelection = null;
+    mainVisionStablePlanes.value = true;
+    pendingMainStablePlanesSelection = null;
     cameraBindingState.value = {
       sceneId: sceneId ?? cameraBindingState.value.sceneId,
       cameraId: null,
@@ -1655,6 +1718,7 @@ const applySceneSnapshot = (sceneId, payload, { preservePose = false } = {}) => 
   if (bindingChanged) {
     mainVisionAccumulationError.value = '';
     mainVisionDenoiseError.value = '';
+    mainVisionStablePlanesError.value = '';
   }
   lastCameraViewportSignature = '';
   scheduleCameraViewportSync();
@@ -1690,10 +1754,20 @@ const applySceneSnapshot = (sceneId, payload, { preservePose = false } = {}) => 
     pendingMainDenoiseSelection = null;
     mainVisionDenoise.value = snapshotDenoise;
   }
+  const snapshotStablePlanes = visionStablePlanesFromCamera(activeCamera);
+  if (pendingMainStablePlanesSelection?.sceneId === normalizedSceneId
+    && pendingMainStablePlanesSelection.cameraId === currentMainCameraId()) {
+    mainVisionStablePlanes.value = pendingMainStablePlanesSelection.enabled;
+    if (snapshotStablePlanes === pendingMainStablePlanesSelection.enabled) pendingMainStablePlanesSelection = null;
+  } else {
+    pendingMainStablePlanesSelection = null;
+    mainVisionStablePlanes.value = snapshotStablePlanes;
+  }
   if (currentMainCamera.value) {
     currentMainCamera.value.vision_render_mode = mainVisionRenderMode.value;
     currentMainCamera.value.vision_accumulation = mainVisionAccumulation.value;
     currentMainCamera.value.vision_denoise = mainVisionDenoise.value;
+    currentMainCamera.value.vision_stable_planes = mainVisionStablePlanes.value;
   }
 
   if (
@@ -3259,6 +3333,7 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
+.main-frame-timing { bottom: 70px; right: 16px; }
 [data-viewport-pick-surface] {
   touch-action: none;
 }

@@ -111,11 +111,13 @@ namespace vision {
     Float2 other_roughness = make_float2(another_surface.diffuse_roughness.w, another_surface.specular_roughness.w);
     Bool roughness_match = all(abs(cur_roughness - other_roughness) <=
         0.5f * max(max(cur_roughness, other_roughness), make_float2(1e-6f)));
-    // Replaced hits describe a specular-chain endpoint, while these guides
-    // still describe the primary surface. They cannot validate that endpoint.
+    // Only explicitly identified stable branches can reuse replacement hits;
+    // their endpoint material and virtual depth guides describe the same path.
     return cond0 && cond1 &&
            cond2 && diffuse_match && specular_match && roughness_match && cur_surface.hit->is_hit() && another_surface.hit->is_hit() &&
-           !cur_surface.is_replaced && !another_surface.is_replaced;
+           (!cur_surface.is_replaced || (cur_surface.stable_branch != 0u && cur_surface.stable_branch != InvalidUI32)) &&
+           (!another_surface.is_replaced || (another_surface.stable_branch != 0u && another_surface.stable_branch != InvalidUI32)) &&
+           cur_surface.stable_branch == another_surface.stable_branch;
 }
 
 [[nodiscard]] inline Bool is_valid_neighbor(const SurfaceDataVar &cur_surface, const SurfaceDataVar &another_surface,
@@ -168,10 +170,10 @@ public:
     [[nodiscard]] auto cur_surface_extends() const noexcept {
         return pipeline()->bindless_array().buffer_var<SurfaceExtend>(frame_buffer().cur_surface_exts_index(frame_index()));
     }
-    [[nodiscard]] Float3 cur_view_pos(const Bool &is_replace) const noexcept {
+    [[nodiscard]] Float3 cur_view_pos(const Bool &is_replace, const Uint &index = dispatch_id()) const noexcept {
         Float3 view_pos;
         $if(is_replace) {
-            view_pos = cur_surface_extends().read(dispatch_id()).view_pos;
+            view_pos = cur_surface_extends().read(index).view_pos;
         }
         $else {
             view_pos = scene().sensor()->device_position();

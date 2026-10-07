@@ -27,15 +27,17 @@ async function renderMain(settings = {}) {
       handleViewportClick: noop, handleWheel: noop, updateSceneLight: noop,
       mainRenderBackend: 'vision', mainVisionRenderMode: 'restir', visionAvailable: true,
       mainRenderModeLabel: 'Vision ReSTIR', activeMenu: null, toggleMenu: noop,
-      currentMainCameraId: () => 'camera-1', mainVisionAccumulation: true, mainVisionDenoise: false,
+      currentMainSceneId: () => 'scene.ini', currentMainCameraId: () => 'camera-1', mainVisionAccumulation: true, mainVisionDenoise: false,
       mainVisionAccumulationBusy: false, mainVisionDenoiseBusy: false,
       mainVisionAccumulationError: '', mainVisionDenoiseError: '',
+      mainVisionStablePlanes: true, mainVisionStablePlanesBusy: false, mainVisionStablePlanesError: '',
+      toggleMainVisionStablePlanes: noop,
       mainRenderModeOptions: [{ value: 'native', backend: 'native', label: 'Native' }, ...visionRenderModes],
       selectMainRenderMode: noop, toggleMainVisionAccumulation: noop, toggleMainVisionDenoise: noop,
       ...settings,
     }),
   });
-  for (const name of ['CabbageReviewAssistant', 'CabbageChatPanel', 'CabbageGuidanceOverlay']) {
+  for (const name of ['FrameTimingOverlay', 'CabbageReviewAssistant', 'CabbageChatPanel', 'CabbageGuidanceOverlay']) {
     app.component(name, { render: () => null });
   }
   return renderToString(app);
@@ -64,4 +66,17 @@ test('expanded render options are painted in the page without a native CEF popup
   assert.match(html, /role="menu"/);
   assert.match(html, /<button[^>]*role="menuitemradio"[^>]*aria-checked="true"[^>]*>\s*Vision ReSTIR/);
   assert.match(html, /<button[^>]*role="menuitemradio"[^>]*aria-checked="false"[^>]*>\s*Vision PT/);
+});
+
+test('Stable Plane is visible and checked, and only enabled for an available ReSTIR camera', async () => {
+  const enabled = await renderMain();
+  assert.match(enabled, /<input[^>]*aria-label="Stable Plane"[^>]*checked/);
+  assert.doesNotMatch(enabled, /<input[^>]*aria-label="Stable Plane"[^>]*disabled/);
+  for (const settings of [
+    { mainRenderBackend: 'native' }, { mainVisionRenderMode: 'path_tracing' },
+    { mainVisionRenderMode: 'ssat' }, { currentMainCameraId: () => null },
+    { mainVisionStablePlanesBusy: true },
+  ]) {
+    assert.match(await renderMain(settings), /<input[^>]*aria-label="Stable Plane"[^>]*checked[^>]*disabled/);
+  }
 });

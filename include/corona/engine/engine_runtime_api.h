@@ -316,6 +316,9 @@ class Camera {
     void set_vision_accumulation(bool enabled);
     [[nodiscard]] bool get_vision_accumulation() const;
     [[nodiscard]] bool get_requested_vision_accumulation() const;
+    void set_vision_stable_planes(bool enabled);
+    [[nodiscard]] bool get_vision_stable_planes() const;
+    [[nodiscard]] bool get_requested_vision_stable_planes() const;
     void set_shadow_cascade_debug(bool enabled);
     [[nodiscard]] bool get_shadow_cascade_debug() const;
     void set_ssao_enabled(bool enabled);
@@ -483,6 +486,16 @@ void set_vision_accumulation(bool enabled, std::uintptr_t camera_handle = 0);
 /// Return the latest uncommitted preference, or committed state when none is pending.
 /// Persistence uses this while a render update is in flight.
 [[nodiscard]] bool get_requested_vision_accumulation(std::uintptr_t camera_handle = 0);
+
+/// Queue an independent stable-plane preference for this camera (enabled by default).
+void set_vision_stable_planes(bool enabled, std::uintptr_t camera_handle = 0);
+
+/// Return the camera's committed stable-plane preference.
+[[nodiscard]] bool get_vision_stable_planes(std::uintptr_t camera_handle = 0);
+
+/// Return the latest uncommitted preference, or committed state when none is pending.
+/// Persistence uses this while a render update is in flight.
+[[nodiscard]] bool get_requested_vision_stable_planes(std::uintptr_t camera_handle = 0);
 
 /// 请求加载一个外部 Vision 场景文件（.json）。仅当 Vision 后端可用且处于激活
 /// 状态时生效；实际导入在光学系统渲染线程执行。

@@ -874,6 +874,18 @@ class _SceneToolsApi(_DynamicApiNamespace):
         )
 
     @staticmethod
+    def set_vision_stable_planes(scene_name, camera_name=None, enabled=True):
+        return _invoke_manifest_cpp_api(
+            "scene_tools.set_vision_stable_planes", [scene_name, camera_name, enabled]
+        )
+
+    @staticmethod
+    def get_vision_stable_planes(scene_name=None, camera_name=None):
+        return _invoke_manifest_cpp_api(
+            "scene_tools.get_vision_stable_planes", [scene_name, camera_name]
+        )
+
+    @staticmethod
     def set_shadow_cascade_debug(scene_name, camera_name=None, enabled=False):
         return _invoke_manifest_cpp_api(
             "scene_tools.set_shadow_cascade_debug", [scene_name, camera_name, enabled]

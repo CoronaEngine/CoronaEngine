@@ -330,6 +330,21 @@ class SceneTools(PluginBase):
             return {"status": "error", "message": str(exc)}
 
     @staticmethod
+    def set_vision_stable_planes(scene_name: str, camera_name: str = None,
+                                enabled: bool = True) -> dict:
+        try:
+            return CoronaEditorApi.scene_tools.set_vision_stable_planes(scene_name, camera_name, enabled)
+        except Exception as exc:
+            return {"status": "error", "message": str(exc)}
+
+    @staticmethod
+    def get_vision_stable_planes(scene_name: str = None, camera_name: str = None) -> dict:
+        try:
+            return CoronaEditorApi.scene_tools.get_vision_stable_planes(scene_name, camera_name)
+        except Exception as exc:
+            return {"status": "error", "message": str(exc)}
+
+    @staticmethod
     def prepare_external_live_vision_scene(scene) -> str:
         return prepare_external_live_vision_scene(scene)
 

@@ -243,6 +243,113 @@ struct VisionEmbeddedModeSwitchTest {
         hub.drain_camera_releases();
         hub.camera_storage().deallocate(handle);
     }
+    static void check_frame_timing() {
+        auto& hub = SharedDataHub::instance();
+        const auto first = hub.camera_storage().allocate();
+        const auto second = hub.camera_storage().allocate();
+        expect(!hub.camera_frame_timing(first), "new camera must not have stale frame timing");
+        const auto start = std::chrono::steady_clock::now();
+        hub.publish_camera_frame_timing(first, 24.9, CameraVisionRenderMode::ReSTIR, start);
+        hub.publish_camera_frame_timing(second, 10.5, CameraVisionRenderMode::PathTracing, start);
+        expect(hub.camera_frame_timing(first)->frame_ms == 0.0,
+               "first frame must not invent a total frame interval");
+        auto timing = hub.camera_frame_timing(first);
+        expect(timing && timing->render_ms == 24.9 && timing->mode == CameraVisionRenderMode::ReSTIR,
+               "frame timing must retain per-camera render duration and mode");
+        hub.publish_camera_frame_timing(first, 12.3, CameraVisionRenderMode::ReSTIR,
+                                       start + std::chrono::milliseconds(33));
+        expect(hub.camera_frame_timing(first)->frame_ms == 33.0 &&
+                   hub.camera_frame_timing(second)->frame_ms == 0.0,
+               "total frame interval must include waits and remain camera-local");
+        expect(hub.camera_frame_timing(first)->render_ms == 12.3 &&
+                   hub.camera_frame_timing(second)->render_ms == 10.5,
+               "publishing a frame must replace only that camera's latest timing");
+        hub.publish_camera_frame_timing(first, 8.0, CameraVisionRenderMode::PathTracing,
+                                       start + std::chrono::milliseconds(70));
+        expect(hub.camera_frame_timing(first)->frame_ms == 0.0,
+               "render mode change must reset the frame interval baseline");
+        hub.publish_camera_frame_timing(first, 7.0, CameraVisionRenderMode::PathTracing,
+                                       start + std::chrono::milliseconds(90));
+        expect(hub.camera_frame_timing(first)->frame_ms == 20.0,
+               "second frame after mode change must measure the new cadence");
+        hub.enqueue_camera_release({first});
+        hub.enqueue_camera_release({second});
+        hub.drain_camera_releases();
+        expect(!hub.camera_frame_timing(first) && !hub.camera_frame_timing(second),
+               "released camera timings must be discarded");
+        hub.camera_storage().deallocate(first);
+        hub.camera_storage().deallocate(second);
+    }
+    static void check_stable_planes_api() {
+        auto& hub = SharedDataHub::instance();
+        const auto handle = hub.camera_storage().allocate();
+        const auto other = hub.camera_storage().allocate();
+        expect(Corona::API::get_vision_stable_planes(handle) &&
+                   Corona::API::get_requested_vision_stable_planes(handle) &&
+                   !hub.requested_camera_vision_stable_planes(handle).has_value(),
+               "new cameras must enable stable planes without a pending request");
+        Corona::API::set_vision_stable_planes(false, handle);
+        expect(Corona::API::get_vision_stable_planes(handle) &&
+                   !Corona::API::get_requested_vision_stable_planes(handle) &&
+                   Corona::API::get_requested_vision_stable_planes(other),
+               "queued stable-plane preferences must remain camera-local and immediately persistable");
+        auto updates = hub.drain_camera_state_updates();
+        expect(updates.size() == 1 && updates[0].camera_handle == handle &&
+                   updates[0].fields == CameraStateUpdateField::VisionStablePlanes &&
+                   !updates[0].vision_stable_planes &&
+                   !Corona::API::get_requested_vision_stable_planes(handle),
+               "stable-plane false must remain requested while the render update is in flight");
+        const auto in_flight = updates[0];
+        Corona::API::set_vision_stable_planes(true, handle);
+        {
+            auto camera = hub.camera_storage().acquire_write(handle);
+            camera->vision_stable_planes = in_flight.vision_stable_planes;
+        }
+        hub.acknowledge_camera_vision_stable_planes(handle, in_flight.sequence);
+        expect(!Corona::API::get_vision_stable_planes(handle) &&
+                   Corona::API::get_requested_vision_stable_planes(handle) &&
+                   hub.requested_camera_vision_stable_planes(handle).has_value(),
+               "an old stable-plane acknowledgement must preserve the newer request");
+        for (const auto* mode : {"path_tracing", "restir", "ssat"}) {
+            Corona::API::set_vision_stable_planes(false, handle);
+            Corona::API::set_vision_accumulation(true, handle);
+            Corona::API::set_vision_denoise(true, handle);
+            Corona::API::set_vision_render_mode(mode, handle);
+            updates = hub.drain_camera_state_updates();
+            expect(updates.size() == 1 && !updates[0].vision_stable_planes &&
+                       updates[0].vision_accumulation && updates[0].vision_denoise &&
+                       updates[0].fields == (CameraStateUpdateField::VisionStablePlanes |
+                                             CameraStateUpdateField::VisionAccumulation |
+                                             CameraStateUpdateField::VisionDenoise |
+                                             CameraStateUpdateField::VisionRenderMode),
+                   "stable planes must merge independently with mode, accumulation and denoise");
+            {
+                auto camera = hub.camera_storage().acquire_write(handle);
+                camera->vision_stable_planes = updates[0].vision_stable_planes;
+                camera->vision_render_mode = updates[0].vision_render_mode;
+            }
+            hub.acknowledge_camera_vision_stable_planes(handle, updates[0].sequence);
+            expect(!hub.requested_camera_vision_stable_planes(handle).has_value() &&
+                       !Corona::API::get_requested_vision_stable_planes(handle) &&
+                       Corona::API::get_vision_stable_planes(other),
+                   "stable-plane acknowledgement must expose committed state without changing other cameras");
+            Corona::API::set_vision_render_mode(mode, handle);
+            updates = hub.drain_camera_state_updates();
+            expect(updates.size() == 1 && updates[0].fields == CameraStateUpdateField::VisionRenderMode &&
+                       !Corona::API::get_requested_vision_stable_planes(handle),
+                   "algorithm changes must preserve the stable-plane preference");
+        }
+        Corona::API::set_vision_stable_planes(true, handle);
+        hub.drain_camera_state_updates();
+        Corona::API::set_vision_stable_planes(false, handle);
+        hub.enqueue_camera_release({handle});
+        expect(!hub.requested_camera_vision_stable_planes(handle).has_value() &&
+                   hub.drain_camera_state_updates().empty(),
+               "camera release must clear queued and in-flight stable-plane requests");
+        hub.drain_camera_releases();
+        hub.camera_storage().deallocate(handle);
+        hub.camera_storage().deallocate(other);
+    }
     static void render(vision::Pipeline& pipeline, const char* label, bool lit = true) {
         const auto before = pipeline.frame_index();
         for (int i = 0; i < 3; ++i) {
@@ -320,6 +427,44 @@ struct VisionEmbeddedModeSwitchTest {
         render(pipeline, "camera-101-SVGF-after-disabled-resize");
         pipeline.activate_view_context(0);
         pipeline.set_output_denoise(false);
+    }
+    static void check_independent_stable_planes(OpticsSystem& system, vision::Pipeline& pipeline) {
+        auto prepare = [&](std::uintptr_t handle, bool enabled) {
+            expect(system.prepare_vision_camera_view(system.active_vision_runtime(), handle,
+                       16, 16, false, false, enabled), "stable-plane view must prepare");
+            expect(pipeline.renderer().integrator()->stable_planes_enabled() == enabled &&
+                       pipeline.renderer().integrator()->impl_type() == "rt" &&
+                       !pipeline.output_desc().denoise && !pipeline.frame_buffer()->enable_accumulation(),
+                   "stable-plane toggles must preserve ReSTIR, denoise and accumulation settings");
+        };
+        prepare(301, true);
+        render(pipeline, "stable-planes-camera-301-on");
+        const auto first_history = pipeline.frame_index();
+        const auto first_integrator = pipeline.renderer().integrator();
+        const auto first_framebuffer = pipeline.renderer().frame_buffer_sp();
+        prepare(302, false);
+        render(pipeline, "stable-planes-camera-302-off");
+        const auto other_history = pipeline.frame_index();
+        prepare(301, true);
+        expect(pipeline.frame_index() == first_history,
+               "another camera's stable-plane preference must preserve this camera's history");
+        prepare(301, false);
+        expect(pipeline.frame_index() == 0 && pipeline.renderer().integrator() == first_integrator &&
+                   pipeline.frame_buffer() == first_framebuffer.get(),
+               "stable-plane toggle must reset history while retaining the renderer");
+        render(pipeline, "stable-planes-camera-301-off");
+        const auto disabled_history = pipeline.frame_index();
+        prepare(301, false);
+        expect(pipeline.frame_index() == disabled_history,
+               "reapplying the same stable-plane preference must retain history");
+        prepare(302, false);
+        expect(pipeline.frame_index() == other_history,
+               "toggling one camera must preserve another camera's ReSTIR history");
+        prepare(301, true);
+        expect(pipeline.frame_index() == 0 && pipeline.renderer().integrator() == first_integrator,
+               "re-enabling stable planes must reuse the renderer and clear stale history");
+        render(pipeline, "stable-planes-camera-301-reenabled");
+        pipeline.activate_view_context(0);
     }
     static void check_independent_accumulation(OpticsSystem& system, vision::Pipeline& pipeline,
                                               const char* algorithm) {
@@ -867,6 +1012,7 @@ struct VisionEmbeddedModeSwitchTest {
         check_stationary_history_reset(*restir);
         check_independent_denoise(system, *restir, "rt", false);
         check_independent_accumulation(system, *restir, "rt");
+        check_independent_stable_planes(system, *restir);
         expect(restir->create_view_context(99, vision::make_uint2(16, 16)),
                "ReSTIR camera view context must initialize");
         expect(restir->renderer().integrator()->impl_type() == "rt", "detached view must also use rt");
@@ -1095,6 +1241,8 @@ int main(int argc, char** argv) {
     try {
         Corona::Systems::VisionEmbeddedModeSwitchTest::check_mode_api();
         Corona::Systems::VisionEmbeddedModeSwitchTest::check_accumulation_api();
+        Corona::Systems::VisionEmbeddedModeSwitchTest::check_stable_planes_api();
+        Corona::Systems::VisionEmbeddedModeSwitchTest::check_frame_timing();
         if (argc == 2 && std::string(argv[1]) == "--scene-asset-reuse") {
             Corona::Systems::VisionEmbeddedModeSwitchTest::check_scene_asset_reuse();
         } else if ((argc == 3 || (argc == 4 && std::string(argv[3]) == "--denoise")) &&

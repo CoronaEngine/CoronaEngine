@@ -317,7 +317,7 @@ GIReservoirVar ReSTIRGI::constant_combine(const GIReservoirVar &canonical_rsv,
         Float weight = 0.f;
         $if(rsv.W > 0.f && rsv.sample.sp->valid()) {
             SurfaceDataVar neighbor_surf = cur_surfaces().read(idx);
-            Interaction neighbor_it = pipeline()->geometry().compute_surface_interaction(neighbor_surf.hit, view_pos);
+            Interaction neighbor_it = pipeline()->geometry().compute_surface_interaction(neighbor_surf.hit, cur_view_pos(neighbor_surf.is_replaced, idx));
             Float p_hat = compute_p_hat(canonical_it, rsv.sample);
             p_hat = p_hat * Jacobian_det(canonical_it.pos, neighbor_it.pos, rsv.sample.sp);
             $if(p_hat > 0.f) {
@@ -339,7 +339,7 @@ GIReservoirVar ReSTIRGI::constant_combine(const GIReservoirVar &canonical_rsv,
                 Float count = ocarina::max(ocarina::zero_if_nan_inf(source_rsv.C), 0.f);
                 $if(count > 0.f) {
                     SurfaceDataVar source_surf = cur_surfaces().read(idx);
-                    Interaction source_it = pipeline()->geometry().compute_surface_interaction(source_surf.hit, view_pos);
+                    Interaction source_it = pipeline()->geometry().compute_surface_interaction(source_surf.hit, cur_view_pos(source_surf.is_replaced, idx));
                     // Zero Lo/W in this source's realization does not remove its support.
                     normalization += count * selected_sample_support(canonical_it, source_it, ret.sample);
                 };

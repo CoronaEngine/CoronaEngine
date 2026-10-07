@@ -15,8 +15,18 @@ ReSTIRDI::ReSTIRDI(IntegratorPtr integrator, const ParameterSet &desc)
       debias_(desc["debias"].as_bool(false)),
       reweight_(desc["reweight"].as_bool(false)),
       pairwise_(desc["pairwise"].as_bool(true)),
-      max_recursion_(desc["max_recursion"].as_uint(5)) {
+      max_recursion_(desc["max_recursion"].as_uint(5)),
+      stable_planes_enabled_(desc["stable_planes"].as_bool(true)) {
     temporal_.mis = desc["temporal"]["mis"].as_bool(true);
+}
+
+bool ReSTIRDI::uses_stable_planes() const noexcept {
+    if (!stable_planes_enabled_) { return false; }
+    // Do not run reflection-guide filtering in scenes without mirror branches.
+    for (const auto &material : scene().materials()) {
+        if (material->impl_type() == "mirror") { return true; }
+    }
+    return false;
 }
 
 bool ReSTIRDI::render_UI(Widgets *widgets) noexcept {
@@ -309,7 +319,7 @@ DIReservoirVar ReSTIRDI::pairwise_combine(const DIReservoirVar &canonical_rsv, F
     rsv_idx.for_each([&](const Uint &idx) {
         DIReservoirVar neighbor_rsv = passthrough_reservoirs().read(idx);
         SurfaceDataVar surf = cur_surfaces().read(idx);
-        Interaction neighbor_it = pipeline()->geometry().compute_surface_interaction(surf.hit, view_pos);
+        Interaction neighbor_it = pipeline()->geometry().compute_surface_interaction(surf.hit, cur_view_pos(surf.is_replaced, idx));
         canonical_weight += neighbor_pairwise_MIS(canonical_at_c, canonical_it, neighbor_rsv, neighbor_it, M, &ret);
     });
     canonical_weight = ocarina::select(M == 1u, 1.f, canonical_weight);
@@ -470,7 +480,7 @@ DIReservoirVar ReSTIRDI::temporal_reuse(DIReservoirVar rsv, const SurfaceDataVar
 }
 
 SurfaceDataVar ReSTIRDI::compute_hit(RayState rs, TriangleHitVar &hit, Interaction &it,
-                                     SurfaceExtendVar &surf_ext) const noexcept {
+                                     SurfaceExtendVar &surf_ext, const Bool &stable_planes) const noexcept {
     TSensor &camera = scene().sensor();
     const Geometry &geometry = pipeline()->geometry();
     RayVar camera_ray = rs.ray;
@@ -480,11 +490,21 @@ SurfaceDataVar ReSTIRDI::compute_hit(RayState rs, TriangleHitVar &hit, Interacti
 
     SurfaceDataVar cur_surf;
     Uint counter = 0;
+    Bool stable_chain = stable_planes;
+    Uint branch = 0u;
+    Float3 image_x = make_float3(1, 0, 0);
+    Float3 image_y = make_float3(0, 1, 0);
+    Float3 image_z = make_float3(0, 0, 1);
+    Float3 image_offset = make_float3(0.f);
+    auto image_vector = [&](const Float3 &v) {
+        return image_x * v.x + image_y * v.y + image_z * v.z;
+    };
 
     cur_surf.hit = hit;
 
     $loop {
         cur_surf.hit = hit;
+        surf_ext.final_direction = rs.direction();
         $if(!hit->is_hit()) {
             $break;
         };
@@ -501,7 +521,7 @@ SurfaceDataVar ReSTIRDI::compute_hit(RayState rs, TriangleHitVar &hit, Interacti
             cur_surf.flag = bsdf.flag();
             Float diff_factor = bsdf.diffuse_factor();
             cur_surf->set_diffuse_factor(diff_factor);
-            $if(counter == 0u) {
+            $if(counter == 0u || stable_chain) {
                 // Material guides must not follow the path's stochastic wavelengths
                 // or view-dependent layer weights. Keep the lighting RNG untouched.
                 SampledWavelengths guide_swl{renderer().spectrum()->dimension()};
@@ -519,6 +539,24 @@ SurfaceDataVar ReSTIRDI::compute_hit(RayState rs, TriangleHitVar &hit, Interacti
                 cur_surf.specular_roughness = make_float4(
                     renderer().spectrum()->linear_srgb(specular, guide_swl), roughness.y);
             };
+            // Pure, flat mirror reflection is deterministic. Transmission and
+            // normal-mapped/curved reflection keep the conservative fallback.
+            $if(cur_surf->near_specular()) {
+                stable_chain = stable_chain && Bool(material->impl_type() == "mirror") &&
+                    dot(bsdf.shading_frame().normal(), it.ng) > 0.99999f && !it.has_emission();
+            };
+            $if(stable_chain && counter > 0u) {
+                cur_surf->set_position(it.pos);
+                cur_surf->set_normal(bsdf.shading_frame().normal());
+                cur_surf.virtual_position = image_vector(it.pos) + image_offset;
+                cur_surf.virtual_normal = image_vector(bsdf.shading_frame().normal());
+                cur_surf.virtual_geometric_normal = image_vector(it.ng);
+                cur_surf->set_depth(camera->linear_depth(cur_surf.virtual_position));
+                Float3 albedo_wo = ocarina::select(
+                    dot(bsdf.shading_frame().normal(), it.wo) < 0.f, -it.wo, it.wo);
+                cur_surf.denoiser_albedo = renderer().spectrum()->linear_srgb(
+                    bsdf.albedo(albedo_wo) * SampledSpectrum(surf_ext.throughput), sampled_wavelengths());
+            };
             if (material->enable_delta()) {
                 $if(cur_surf->near_specular()) {
                     BSDFSample bsdf_sample = bsdf.sample_delta(it.wo, renderer().sampler());
@@ -534,9 +572,29 @@ SurfaceDataVar ReSTIRDI::compute_hit(RayState rs, TriangleHitVar &hit, Interacti
         };
         counter += 1;
         $if(counter >= max_recursion_) {
+            stable_chain = stable_chain && !cur_surf->near_specular();
             $break;
         };
         $if(cur_surf->near_specular()) {
+            $if(stable_chain) {
+                Float3 n = it.ng;
+                Float3 transformed_n = image_vector(n);
+                image_offset += 2.f * dot(n, it.pos) * transformed_n;
+                image_x -= 2.f * n.x * transformed_n;
+                image_y -= 2.f * n.y * transformed_n;
+                image_z -= 2.f * n.z * transformed_n;
+                // Include the reflecting plane, not the triangle: coplanar
+                // triangles share, while different facets in one mesh do not.
+                // Quantization tolerates barycentric roundoff on a static plane.
+                Int3 plane_n = make_int3(round(n * 4096.f));
+                Int plane_d = cast<int>(round(dot(n, it.pos) * 4096.f));
+                branch = (branch * 16777619u) ^ (hit.inst_id + 1u);
+                branch = (branch * 16777619u) ^ cast<uint>(plane_n.x);
+                branch = (branch * 16777619u) ^ cast<uint>(plane_n.y);
+                branch = (branch * 16777619u) ^ cast<uint>(plane_n.z);
+                branch = (branch * 16777619u) ^ cast<uint>(plane_d);
+                branch = (branch % (InvalidUI32 - 1u)) + 1u;
+            };
             surf_ext.view_pos = it.pos;
             rs = it.spawn_ray_state(w);
             hit = pipeline()->geometry().trace_closest(rs.ray);
@@ -573,6 +631,8 @@ SurfaceDataVar ReSTIRDI::compute_hit(RayState rs, TriangleHitVar &hit, Interacti
     //        };
     //        counter += 1;
     //    };
+    cur_surf.stable_branch = ocarina::select(!cur_surf.is_replaced, 0u,
+        ocarina::select(stable_chain, branch, InvalidUI32));
     return cur_surf;
 }
 
@@ -601,7 +661,7 @@ void ReSTIRDI::compile_shader0() noexcept {
         TriangleHitVar hit;
         Interaction it{false};
         SurfaceExtendVar surf_ext;
-        SurfaceDataVar cur_surf = compute_hit(rs, hit, it, surf_ext);
+        SurfaceDataVar cur_surf = compute_hit(rs, hit, it, surf_ext, param.stable_planes != 0u);
         cur_surfaces().write(dispatch_id(), cur_surf);
 
         $if(cur_surf.is_replaced) {
@@ -610,6 +670,10 @@ void ReSTIRDI::compile_shader0() noexcept {
 
         DIReservoirVar rsv = RIS(hit->is_hit(), it, param, surf_ext.throughput, nullptr);
         Float2 motion_vec = frame_buffer().motion_vectors().read(dispatch_id());
+        $if(cur_surf.is_replaced && cur_surf.stable_branch != InvalidUI32 && hit->is_hit()) {
+            motion_vec = frame_buffer().compute_motion_vec(camera, ss.p_film, cur_surf.virtual_position, true);
+            frame_buffer().motion_vectors().write(dispatch_id(), motion_vec);
+        };
 
         rsv = temporal_reuse(rsv, cur_surf, motion_vec, ss, param);
         passthrough_reservoirs().write(dispatch_id(), rsv);
@@ -706,10 +770,18 @@ void ReSTIRDI::compile_shader1() noexcept {
         $else {
             if (light_sampler->env_light()) {
                 LightSampleContext p_ref;
+                Float3 direction = rs.direction();
+                Float3 throughput = make_float3(1.f);
                 p_ref.pos = rs.origin();
-                p_ref.ng = rs.direction();
-                LightEval eval = light_sampler->evaluate_miss_wi(p_ref, rs.direction(), swl, LightEvalMode::L);
-                L = spectrum->linear_srgb(eval.L, swl);
+                $if(cur_surf.is_replaced) {
+                    auto ext = cur_surface_extends().read(dispatch_id());
+                    direction = ext.final_direction;
+                    throughput = ext.throughput;
+                    p_ref.pos = ext.view_pos;
+                };
+                p_ref.ng = direction;
+                LightEval eval = light_sampler->evaluate_miss_wi(p_ref, direction, swl, LightEvalMode::L);
+                L = spectrum->linear_srgb(eval.L * SampledSpectrum(throughput), swl);
             }
         };
         radiance_->write(dispatch_id(), make_float4(L, 1.f));
@@ -745,6 +817,7 @@ void ReSTIRDI::update_resolution(ocarina::uint2 res) noexcept {
 DIParam ReSTIRDI::construct_param() const noexcept {
     DIParam param;
     param.camera_jitter = integrator()->jitter_primary_samples();
+    param.stable_planes = uses_stable_planes();
     param.M_light = M_light_;
     param.M_bsdf = M_bsdf_;
     param.max_age = max_age_;

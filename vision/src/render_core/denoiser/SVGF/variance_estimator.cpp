@@ -19,7 +19,8 @@ Kernel variance_kernel = [&, pipeline_ref](Var<VarianceEstimatorParam> param) {
     Int2 screen_size = make_int2(dispatch_dim().xy());
     Uint index = dispatch_id();
         
-    TriangleHitVar cur_hit = param.visibility_buffer.read(index);
+    StableGeometryGuide cur_guide(param, index, param.visibility_buffer.read(index));
+    TriangleHitVar cur_hit = cur_guide.hit;
         
     $if(!PixelStateUtils::is_sky(cur_hit)) {
         RadType4Var cur_direct = param.radiance_direct.read(index);
@@ -33,8 +34,10 @@ Kernel variance_kernel = [&, pipeline_ref](Var<VarianceEstimatorParam> param) {
         Float lum_indirect = luminance(cur_indirect.xyz());
             
         Interaction cur_it = pipeline_ref->geometry().compute_surface_interaction(cur_hit, false);
+        cur_guide.apply(cur_it);
         Float3 shading_normal = PixelStateUtils::query_shading_normal(
             pipeline_ref, cur_hit, param.camera_pos.as_vec3());
+        shading_normal = stable_normal(param, index, shading_normal);
         // Reprojection tests the current surface against the previous view.
         // Both distances must use that same eye position: comparing current-eye
         // and previous-eye distances rejects a stationary surface on dolly moves.
@@ -70,11 +73,13 @@ Kernel variance_kernel = [&, pipeline_ref](Var<VarianceEstimatorParam> param) {
                 all(tap_pixel >= 0) && all(tap_pixel < screen_size)) {
                 
                 Uint tap_idx = cast<uint>(tap_pixel.y) * cast<uint>(screen_size.x) + cast<uint>(tap_pixel.x);
-                TriangleHitVar tap_hit = param.visibility_buffer_prev.read(tap_idx);
+                StableGeometryGuide tap_guide(param, tap_idx, param.visibility_buffer_prev.read(tap_idx), true);
+                TriangleHitVar tap_hit = tap_guide.hit;
                 Bool tap_is_sky = PixelStateUtils::is_sky(tap_hit);
                 
                 $if(!tap_is_sky) {
                     Interaction tap_it = pipeline_ref->geometry().compute_surface_interaction(tap_hit, false);
+                    tap_guide.apply(tap_it);
                     Float tap_depth = length(tap_it.pos - param.prev_camera_pos.as_vec3());
                     Bool tap_is_emissive = PixelStateUtils::is_emissive(pipeline_ref, tap_hit);
                     
@@ -90,7 +95,7 @@ Kernel variance_kernel = [&, pipeline_ref](Var<VarianceEstimatorParam> param) {
                     Bool emission_match = (cur_it.has_emission() == tap_is_emissive) &&
                         (!cur_it.has_emission() || cur_it.light_id() == tap_it.light_id());
                     
-                    Bool tap_consistent = same_instance &&
+                    Bool tap_consistent = (cur_guide.branch == tap_guide.branch) && same_instance &&
                         (depth_diff < Cfg::Temporal::kDepthThreshold) &&
                         (normal_sim > Cfg::Temporal::kNormalThreshold) &&
                         emission_match;
@@ -312,6 +317,7 @@ Kernel variance_kernel = [&, pipeline_ref](Var<VarianceEstimatorParam> param) {
 
 CommandBatch VarianceEstimator::dispatch_variance(RealTimeDenoiseInput &input) noexcept {
     VarianceEstimatorParam param;
+    bind_stable_planes(param, input);
     param.radiance_direct = input.direct.descriptor();
     param.radiance_indirect = input.indirect.descriptor();
     param.svgf_buffer_prev = svgf_->svgf_buffer_prev(input.frame_index).descriptor();

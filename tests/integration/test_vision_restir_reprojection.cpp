@@ -5,6 +5,7 @@
 #include "render_core/integrator/ReSTIR/direct.h"
 #include "render_core/integrator/ReSTIR/indirect.h"
 #include "base/sensor/sensor.h"
+#include "render_core/denoiser/SVGF/svgf.h"
 
 #include <iostream>
 #include <stdexcept>
@@ -228,4 +229,102 @@ void check_restir_material_reuse(vision::Pipeline& pipeline, const std::vector<v
     }
     if (failures) throw std::runtime_error("ReSTIR material boundary checks failed: " + std::to_string(failures));
     std::cout << "PASS: real material guides preserve similar surfaces and reject different colors, reflectivity and roughness\n";
+}
+
+// Exercise producer, ReSTIR validation, virtual reprojection and SVGF history
+// together on the real mirror scene prepared by the host-side test.
+void check_stable_plane(vision::Pipeline& pipeline) {
+    using namespace vision;
+    pipeline.activate_global_context();
+    Global::SceneGpuContextScope scope{pipeline.geometry().bindless_array(), pipeline.device()};
+    auto fail = [](bool okay, const char* message) { if (!okay) throw std::runtime_error(message); };
+    auto* illumination = dynamic_cast<IlluminationIntegrator*>(pipeline.renderer().integrator().get());
+    auto* denoiser = illumination ? dynamic_cast<svgf::SVGF*>(illumination->denoiser()) : nullptr;
+    fail(denoiser && denoiser->enabled(), "stable plane fixture must run the actual SVGF pipeline");
+    std::vector<SurfaceData> surfaces(pipeline.pixel_num());
+    std::vector<TriangleHit> primary(pipeline.pixel_num());
+    std::vector<svgf::SVGFDataDual> history(pipeline.pixel_num());
+    const uint center = 8u * 16u + 8u;
+    auto read = [&] {
+        const uint frame = pipeline.frame_index() - 1u;
+        pipeline.stream() << pipeline.frame_buffer()->cur_surfaces_view(frame).download(surfaces.data())
+            << pipeline.frame_buffer()->cur_visibility_buffer_view(frame).download(primary.data())
+            << ((frame & 1u) == 0u ? denoiser->svgf_data : denoiser->svgf_data2).view().download(history.data()) << synchronize() << commit();
+    };
+    for (int i = 0; i < 6; ++i) { pipeline.upload_data(); pipeline.display(1.0 / 60.0); }
+    read();
+    const auto a = surfaces[center];
+    fail(a.stable_branch != 0u && a.stable_branch != InvalidUI32, "mirror must produce a valid stable branch");
+    fail(a.hit.inst_id != primary[center].inst_id, "stable endpoint must not overwrite primary visibility");
+    fail(std::abs(a.virtual_position.z + 3.f) < 1e-4f && a.virtual_geometric_normal.z > 0.999f,
+         "mirror virtual position and normal must be reflected into camera space");
+    fail(std::abs(a.denoiser_albedo.x - 0.48f) < 0.01f && std::abs(a.denoiser_albedo.y - 0.16f) < 0.01f,
+         "mirror demodulation guide must contain receiver albedo times prefix throughput");
+    fail(float(history[center].moments_direct.z) > 2.f, "stable mirror must accumulate SVGF history");
+    auto& camera = pipeline.scene().sensor();
+    camera->set_position(make_float3(0.15f, 0.f, 0.f));
+    camera->update_device_data();
+    pipeline.upload_data(); pipeline.display(1.0 / 60.0);
+    read();
+    fail(float(history[center].moments_direct.z) > 1.5f, "camera translation must preserve matching reflected SVGF history");
+    std::cout << "stable mirror moving_history=" << float(history[center].moments_direct.z) << '\n';
+
+    DIParam di{}; GIParam gi{};
+    auto thresholds = [](auto& p) { p.max_age=30u; p.diff_factor=0.3f; p.s_dot=p.t_dot=0.8f; p.s_depth=p.t_depth=0.1f; };
+    thresholds(di); thresholds(gi);
+    Kernel kernel = [&](BufferVar<SurfaceData> data, BufferVar<float4> output, Var<DIParam> dp, Var<GIParam> gp) {
+        camera->load_data();
+        auto current = data.read(center);
+        auto other = current;
+        output.write(0u, make_float4(cast<float>(ReSTIRDI::is_valid_neighbor(current, other, dp)),
+            cast<float>(ReSTIRGI::is_valid_neighbor(current, other, gp)),
+            cast<float>(ReSTIRDI::is_temporal_valid(current, other, dp, nullptr)),
+            cast<float>(ReSTIRGI::is_temporal_valid(current, other, gp, nullptr))));
+        other.stable_branch = current.stable_branch ^ 1u;
+        output.write(1u, make_float4(cast<float>(ReSTIRDI::is_valid_neighbor(current, other, dp))));
+        other.stable_branch = InvalidUI32;
+        output.write(2u, make_float4(cast<float>(ReSTIRGI::is_valid_neighbor(current, other, gp))));
+        // Analytical virtual point projection and the actual produced motion
+        // must agree; using the primary mirror depth would differ by 3x.
+        Float2 expected_prev = camera->prev_raster_coord(current.virtual_position).xy();
+        Float2 expected_cur = camera->raster_coord(current.virtual_position).xy();
+        Float2 actual = pipeline.frame_buffer()->motion_vectors().read(center);
+        output.write(3u, make_float4(actual, expected_cur - expected_prev));
+    };
+    auto shader = pipeline.device().compile(kernel, "stable_plane_reuse_and_motion");
+    auto result = pipeline.device().create_buffer<float4>(4u, "stable_plane_checks");
+    float4 values[4]{};
+    pipeline.stream() << shader(pipeline.frame_buffer()->cur_surfaces_view(pipeline.frame_index()-1u), result, di, gi).dispatch(1u)
+        << result.download(values) << synchronize() << commit();
+    fail(values[0].x == 1.f && values[0].y == 1.f && values[0].z == 1.f && values[0].w == 1.f,
+         "matching stable endpoints must allow DI/GI temporal and spatial reuse");
+    fail(values[1].x == 0.f && values[2].x == 0.f, "different or unsupported reflection branches must be rejected");
+    fail(std::abs(values[3].x-values[3].z) < 1e-3f && std::abs(values[3].y-values[3].w) < 1e-3f,
+         "reflection motion must project the virtual image rather than the mirror");
+    // Toggle the actual retained renderer without rebuilding it. Both guide
+    // generation and SVGF history must switch on the very next frame.
+    auto& integrator = pipeline.renderer().integrator();
+    for (bool enabled : {false, true, false, true}) {
+        integrator->set_stable_planes_enabled(enabled);
+        fail(integrator->stable_planes_enabled() == enabled && pipeline.frame_index() == 0u,
+             "stable plane toggle must reset the active renderer history");
+        pipeline.upload_data(); pipeline.display(1.0 / 60.0);
+        read();
+        const auto& surface = surfaces[center];
+        fail(surface.is_replaced && (enabled ? surface.stable_branch != 0u && surface.stable_branch != InvalidUI32
+                                            : surface.stable_branch == InvalidUI32),
+             "runtime toggle must select the requested stable branch path");
+        fail(std::abs(surface.pos_diff.z - (enabled ? 1.f : -1.f)) < 1e-4f &&
+             std::abs(surface.normal_depth.w - (enabled ? 3.f : 1.f)) < 1e-4f,
+             "runtime toggle must select virtual endpoint or primary mirror guides");
+        fail(float(history[center].moments_direct.z) <= 1.f,
+             "stable plane toggle must not inherit previous SVGF history");
+        const auto frame_before_noop = pipeline.frame_index();
+        integrator->set_stable_planes_enabled(enabled);
+        fail(pipeline.frame_index() == frame_before_noop,
+             "reapplying the same stable plane preference must preserve history");
+        for (int i = 0; i < 3; ++i) { pipeline.upload_data(); pipeline.display(1.0 / 60.0); }
+    }
+    std::cout << "PASS: stable plane runtime on/off toggles and history reset\n";
+    std::cout << "PASS: stable plane endpoint, branch rejection, virtual motion and SVGF history\n";
 }

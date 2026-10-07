@@ -33,7 +33,8 @@ auto compute_spatial_weight = [](Float history) -> Float {
         Int2 pixel = make_int2(dispatch_idx().xy());
         Uint idx = dispatch_id();
 
-        TriangleHitVar center_hit = param.visibility_buffer.read(idx);
+        StableGeometryGuide center_guide(param, idx, param.visibility_buffer.read(idx));
+        TriangleHitVar center_hit = center_guide.hit;
 
         $if(!PixelStateUtils::is_sky(center_hit)) {
             SVGFDataDualVar svgf_data = param.svgf_buffer.read(idx);
@@ -53,6 +54,7 @@ auto compute_spatial_weight = [](Float history) -> Float {
 
             $if(!PixelStateUtils::is_emissive(pipeline_ref, center_hit)) {
                 Interaction it = pipeline_ref->geometry().compute_surface_interaction(center_hit, false);
+                center_guide.apply(it);
                 // Clamp center luminance for half precision safety
                 Float center_lum_direct = HalfSafeUtils::clamp_luminance(luminance(center_direct));
                 Float center_lum_indirect = HalfSafeUtils::clamp_luminance(luminance(center_indirect));
@@ -84,7 +86,8 @@ auto compute_spatial_weight = [](Float history) -> Float {
                             RadType3Var n_direct = n_svgf->illumination_direct();
                             RadType3Var n_indirect = n_svgf->illumination_indirect();
 
-                            TriangleHitVar n_hit = param.visibility_buffer.read(p_idx);
+                            StableGeometryGuide neighbor_guide(param, p_idx, param.visibility_buffer.read(p_idx));
+                            TriangleHitVar n_hit = neighbor_guide.hit;
                             Bool n_is_sky = PixelStateUtils::is_sky(n_hit);
                             
                             Float boundary_weight = BoundaryUtils::compute_boundary_weight(
@@ -96,6 +99,7 @@ auto compute_spatial_weight = [](Float history) -> Float {
                             Float w_geo = 1.f;
                             $if(!n_is_sky) {
                                 Interaction n_it = pipeline_ref->geometry().compute_surface_interaction(n_hit, false);
+                                neighbor_guide.apply(n_it);
                                 // Keep the geometric plane test, but stop blur at
                                 // shading-normal details rather than mesh facets.
                                 w_geo = GeometryWeightUtils::compute_depth_weight(
@@ -109,7 +113,7 @@ auto compute_spatial_weight = [](Float history) -> Float {
                             };
                             w_geo = GeometryWeightUtils::handle_sky_weight(false, n_is_sky, w_geo);
                             
-                            w_geo *= boundary_weight;
+                            w_geo *= boundary_weight * cast<float>(center_guide.branch == neighbor_guide.branch);
                             
                             $if((dx != 0 || dy != 0) && w_geo > 0.1f) {
                                 spatial_sum_direct += n_direct * w_geo;
@@ -276,6 +280,7 @@ auto compute_spatial_weight = [](Float history) -> Float {
 
 CommandBatch Prefilter::dispatch(RealTimeDenoiseInput &input, bool use_shading_normal) noexcept {
     PrefilterParam param;
+    bind_stable_planes(param, input);
     param.use_shading_normal = use_shading_normal;
     param.radiance_direct = input.direct.descriptor();
     param.radiance_indirect = input.indirect.descriptor();

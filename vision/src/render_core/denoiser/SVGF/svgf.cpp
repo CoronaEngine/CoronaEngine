@@ -51,13 +51,15 @@ void SVGF::compile_resolve() {
         Uint idx = dispatch_id();
         Int2 pixel = make_int2(dispatch_idx().xy());
         Int2 size = make_int2(dispatch_dim().xy());
-        TriangleHitVar hit = param.visibility.read(idx);
+        StableGeometryGuide center_guide(param, idx, param.visibility.read(idx));
+        TriangleHitVar hit = center_guide.hit;
         Bool sky = PixelStateUtils::is_sky(hit);
         Float3 center_pos = make_float3(0.f);
         Float3 center_normal = make_float3(0.f);
         Float depth = 0.1f;
         $if(!sky) {
             Interaction center = pipeline_ref->geometry().compute_surface_interaction(hit, false);
+            center_guide.apply(center);
             center_pos = center.pos;
             center_normal = center.ng;
             depth = max(length(center_pos - param.camera_pos.as_vec3()), 0.1f);
@@ -77,11 +79,13 @@ void SVGF::compile_resolve() {
                     Int2 tap_pixel = pixel + make_int2(x, y);
                     $if(!edge && all(tap_pixel >= 0) && all(tap_pixel < size)) {
                         Uint tap_idx = cast<uint>(tap_pixel.y * size.x + tap_pixel.x);
-                        TriangleHitVar tap = param.visibility.read(tap_idx);
+                        StableGeometryGuide tap_guide(param, tap_idx, param.visibility.read(tap_idx));
+                        TriangleHitVar tap = tap_guide.hit;
                         Bool tap_sky = PixelStateUtils::is_sky(tap);
-                        edge = (hit.inst_id != tap.inst_id) || (sky != tap_sky);
+                        edge = (center_guide.branch != tap_guide.branch) || (hit.inst_id != tap.inst_id) || (sky != tap_sky);
                         $if(!edge && !sky && !tap_sky) {
                             Interaction neighbor = pipeline_ref->geometry().compute_surface_interaction(tap, false);
+                            tap_guide.apply(neighbor);
                             edge = dot(center_normal, neighbor.ng) < Cfg::Resolve::kNormalThreshold ||
                                    abs(dot(neighbor.pos - center_pos, center_normal)) >
                                        Cfg::Resolve::kPlaneThreshold * depth;
@@ -127,9 +131,11 @@ void SVGF::compile_resolve() {
                         guide_weight_sum += guide_weight;
                         $if(guide_weight > 0.f) {
                             Uint tap_idx = cast<uint>(guide_p.y * size.x + guide_p.x);
-                            TriangleHitVar tap = param.prev_visibility.read(tap_idx);
+                            StableGeometryGuide tap_guide(param, tap_idx, param.prev_visibility.read(tap_idx), true);
+                            TriangleHitVar tap = tap_guide.hit;
                             $if(!PixelStateUtils::is_sky(tap)) {
                                 Interaction previous = pipeline_ref->geometry().compute_surface_interaction(tap, false);
+                                tap_guide.apply(previous);
                                 Float previous_depth = length(previous.pos - param.prev_camera_pos.as_vec3());
                                 // Coverage may cross adjacent facets of the same
                                 // object (e.g. a cabinet bevel). Requiring matching
@@ -137,7 +143,7 @@ void SVGF::compile_resolve() {
                                 // Reject opposite-facing sides of a thin shell.
                                 // Depth/plane support and the current colour box
                                 // still bound reuse; illumination uses its own normals.
-                                Bool consistent = tap.inst_id == hit.inst_id &&
+                                Bool consistent = (center_guide.branch == tap_guide.branch) && tap.inst_id == hit.inst_id &&
                                     dot(center_normal, previous.ng) >= -0.1f &&
                                     abs(previous_depth - expected_depth) < Cfg::Temporal::kDepthThreshold * expected_depth &&
                                     abs(dot(previous.pos - center_pos, center_normal)) < Cfg::Resolve::kPlaneThreshold * expected_depth;
@@ -153,12 +159,14 @@ void SVGF::compile_resolve() {
                                         $for(cx, -1, 2) {
                                             Int2 q = pixel + make_int2(cx, cy);
                                             $if(!consistent && all(q >= 0) && all(q < size)) {
-                                                TriangleHitVar neighbor_hit = param.visibility.read(
-                                                    cast<uint>(q.y * size.x + q.x));
+                                                Uint neighbor_idx = cast<uint>(q.y * size.x + q.x);
+                                                StableGeometryGuide neighbor_guide(param, neighbor_idx, param.visibility.read(neighbor_idx));
+                                                TriangleHitVar neighbor_hit = neighbor_guide.hit;
                                                 $if(neighbor_hit.inst_id == tap.inst_id) {
                                                     Interaction neighbor = pipeline_ref->geometry().compute_surface_interaction(neighbor_hit, false);
+                                                    neighbor_guide.apply(neighbor);
                                                     Float neighbor_depth = max(length(neighbor.pos - param.prev_camera_pos.as_vec3()), 0.1f);
-                                                    consistent = dot(neighbor.ng, previous.ng) >= -0.1f &&
+                                                    consistent = (center_guide.branch == neighbor_guide.branch) && (neighbor_guide.branch == tap_guide.branch) && dot(neighbor.ng, previous.ng) >= -0.1f &&
                                                         abs(previous_depth - neighbor_depth) < Cfg::Temporal::kDepthThreshold * neighbor_depth &&
                                                         abs(dot(previous.pos - neighbor.pos, neighbor.ng)) < Cfg::Resolve::kPlaneThreshold * neighbor_depth;
                                                 };
@@ -278,6 +286,7 @@ CommandBatch SVGF::resolve(RealTimeDenoiseInput &input) {
     resolve_frame_ = input.frame_index;
 
     ResolveParam param;
+    bind_stable_planes(param, input);
     param.direct = input.direct.descriptor();
     param.indirect = input.indirect.descriptor();
     const bool even = (input.frame_index & 1u) == 0u;
