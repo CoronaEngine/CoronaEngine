@@ -233,7 +233,7 @@ void check_restir_material_reuse(vision::Pipeline& pipeline, const std::vector<v
 
 // Exercise producer, ReSTIR validation, virtual reprojection and SVGF history
 // together on the real mirror scene prepared by the host-side test.
-void check_stable_plane(vision::Pipeline& pipeline) {
+void check_stable_plane(vision::Pipeline& pipeline, bool tinted_mirror) {
     using namespace vision;
     pipeline.activate_global_context();
     Global::SceneGpuContextScope scope{pipeline.geometry().bindless_array(), pipeline.device()};
@@ -258,7 +258,7 @@ void check_stable_plane(vision::Pipeline& pipeline) {
     fail(a.hit.inst_id != primary[center].inst_id, "stable endpoint must not overwrite primary visibility");
     fail(std::abs(a.virtual_position.z + 3.f) < 1e-4f && a.virtual_geometric_normal.z > 0.999f,
          "mirror virtual position and normal must be reflected into camera space");
-    fail(std::abs(a.denoiser_albedo.x - 0.48f) < 0.01f && std::abs(a.denoiser_albedo.y - 0.16f) < 0.01f,
+    if (tinted_mirror) fail(std::abs(a.denoiser_albedo.x - 0.48f) < 0.01f && std::abs(a.denoiser_albedo.y - 0.16f) < 0.01f,
          "mirror demodulation guide must contain receiver albedo times prefix throughput");
     fail(float(history[center].moments_direct.z) > 2.f, "stable mirror must accumulate SVGF history");
     auto& camera = pipeline.scene().sensor();

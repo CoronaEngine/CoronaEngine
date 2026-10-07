@@ -25,7 +25,7 @@
 #endif
 
 void check_restir_reprojection(vision::Pipeline& pipeline);
-void check_stable_plane(vision::Pipeline& pipeline);
+void check_stable_plane(vision::Pipeline& pipeline, bool tinted_mirror = true);
 void check_restir_material_reuse(vision::Pipeline& pipeline, const std::vector<vision::SurfaceData>& surfaces);
 void check_restir_gi_depth_one_continuation(vision::Pipeline& pipeline);
 void check_restir_gi_receiver_support(vision::Pipeline& pipeline);
@@ -452,6 +452,53 @@ int main() {
         expect(disabled.is_replaced && disabled.stable_branch == vision::InvalidUI32 &&
                    std::abs(disabled.pos_diff.z + 1.f) < 1e-4f && std::abs(disabled.normal_depth.w - 1.f) < 1e-4f,
                "stable_planes=false must disable stable reuse and restore the primary mirror guides");
+        // No material named/type mirror exists in this scene. The same planar
+        // continuation must work for Kitchen's low-roughness conductor.
+        auto metal_scene = mirror_scene;
+        metal_scene["render"]["integrator"]["param"]["direct"]["stable_planes"] = true;
+        metal_scene["scene"]["materials"][0]["type"] = "metal";
+        metal_scene["scene"]["materials"][0]["param"] = vision::DataWrap::parse(
+            R"({"material_name":"Cr","roughness":0.002,"remapping_roughness":false})");
+        write_file(fixture / "stable-metal.json", metal_scene.dump(2));
+        auto metal_pipeline = vision::Importer::import_scene(fixture / "stable-metal.json");
+        metal_pipeline->frame_buffer()->set_enable_accumulation(false);
+        metal_pipeline->prepare(); metal_pipeline->frame_buffer()->prepare_view_texture();
+        metal_pipeline->upload_data(); metal_pipeline->display(1.0 / 60.0);
+        std::vector<vision::SurfaceData> metal_surfaces(metal_pipeline->pixel_num());
+        metal_pipeline->stream() << metal_pipeline->frame_buffer()->cur_surfaces_view(0u).download(metal_surfaces.data())
+            << vision::synchronize() << vision::commit();
+        const auto& metal = metal_surfaces[8u * 16u + 8u];
+        expect(metal.is_replaced && metal.stable_branch != 0u && metal.stable_branch != vision::InvalidUI32 &&
+                   std::abs(metal.pos_diff.z - 1.f) < 1e-4f && std::abs(metal.normal_depth.w - 3.f) < 1e-4f,
+               "low-roughness metal must use stable endpoint guides without any mirror material in the scene");
+        check_stable_plane(*metal_pipeline, false);
+        const char* rejected_materials[] = {
+            R"({"type":"metal","param":{"material_name":"Cr","roughness":0.3,"remapping_roughness":false}})",
+            R"({"type":"glass","param":{"material_name":"BK7","roughness":0.001,"remapping_roughness":false}})",
+            R"({"type":"metal","param":{"material_name":"Cr","roughness":0.002,"remapping_roughness":false,"normal":{"node":"tilted","channels":"xyz"}},"node_tab":{"tilted":{"type":"number","param":{"value":[0.6,0,0.8]}}}})",
+            R"({"type":"mix","param":{"frac":0.5,"mat0":{"type":"mirror","param":{"color":[1,1,1],"roughness":0.001}},"mat1":{"type":"diffuse","param":{"color":[0.5,0.5,0.5]}}}})",
+        };
+        for (const char* material_json : rejected_materials) {
+            auto rejected = metal_scene;
+            auto material = vision::DataWrap::parse(material_json);
+            material["name"] = rejected["scene"]["materials"][0]["name"];
+            rejected["scene"]["materials"][0] = material;
+            write_file(fixture / "stable-rejected.json", rejected.dump(2));
+            auto rejected_pipeline = vision::Importer::import_scene(fixture / "stable-rejected.json");
+            material_fixtures.push_back(rejected_pipeline);
+            rejected_pipeline->frame_buffer()->set_enable_accumulation(false);
+            rejected_pipeline->prepare(); rejected_pipeline->frame_buffer()->prepare_view_texture();
+            rejected_pipeline->upload_data(); rejected_pipeline->display(1.0 / 60.0);
+            std::vector<vision::SurfaceData> data(rejected_pipeline->pixel_num());
+            rejected_pipeline->stream() << rejected_pipeline->frame_buffer()->cur_surfaces_view(0u).download(data.data())
+                << vision::synchronize() << vision::commit();
+            const auto& center = data[8u * 16u + 8u];
+            expect(center.stable_branch == 0u || center.stable_branch == vision::InvalidUI32,
+                   "rough, transmitting, perturbed or mixed scattering must not form a stable reflection branch");
+        }
+        std::cout << "PASS: BSDF stable capability for metal and conservative scattering rejection\n";
+        fs::remove(fixture / "stable-rejected.json");
+        fs::remove(fixture / "stable-metal.json");
         fs::remove(fixture / "mirror-off.json");
         fs::remove(fixture / "faceted-mirror.obj");
         fs::remove(fixture / "mirror.json");

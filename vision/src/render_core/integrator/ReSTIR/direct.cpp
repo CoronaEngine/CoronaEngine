@@ -21,12 +21,9 @@ ReSTIRDI::ReSTIRDI(IntegratorPtr integrator, const ParameterSet &desc)
 }
 
 bool ReSTIRDI::uses_stable_planes() const noexcept {
-    if (!stable_planes_enabled_) { return false; }
-    // Do not run reflection-guide filtering in scenes without mirror branches.
-    for (const auto &material : scene().materials()) {
-        if (material->impl_type() == "mirror") { return true; }
-    }
-    return false;
+    // Eligibility is evaluated at each hit by the BSDF. A scene may contain
+    // stable conductor reflections without any material of type "mirror".
+    return stable_planes_enabled_;
 }
 
 bool ReSTIRDI::render_UI(Widgets *widgets) noexcept {
@@ -539,11 +536,15 @@ SurfaceDataVar ReSTIRDI::compute_hit(RayState rs, TriangleHitVar &hit, Interacti
                 cur_surf.specular_roughness = make_float4(
                     renderer().spectrum()->linear_srgb(specular, guide_swl), roughness.y);
             };
-            // Pure, flat mirror reflection is deterministic. Transmission and
-            // normal-mapped/curved reflection keep the conservative fallback.
+            // Ask the evaluated scattering model whether the existing delta
+            // sampler has one deterministic reflection branch. Geometry remains
+            // a separate restriction of the planar virtual-image transform.
             $if(cur_surf->near_specular()) {
-                stable_chain = stable_chain && Bool(material->impl_type() == "mirror") &&
-                    dot(bsdf.shading_frame().normal(), it.ng) > 0.99999f && !it.has_emission();
+                stable_chain = stable_chain && Bool(material->enable_delta()) &&
+                    bsdf.supports_stable_reflection(it.wo) &&
+                    dot(bsdf.shading_frame().normal(), it.ng) > 0.99999f &&
+                    dot(material->shading_normal(it, sampled_wavelengths()), it.ng) > 0.99999f &&
+                    !it.has_emission();
             };
             $if(stable_chain && counter > 0u) {
                 cur_surf->set_position(it.pos);

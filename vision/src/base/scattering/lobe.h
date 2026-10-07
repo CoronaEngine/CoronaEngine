@@ -79,6 +79,11 @@ public:
                                                         TSampler &sampler) const noexcept {
         return BSDFSample{1u, 1u};
     }
+    // Capability of the existing delta sampler, not a material-name test.
+    // Returning true promises a single deterministic reflection direction.
+    // LobeSet keeps the default until it implements matching delta sampling
+    // (including child frames and weights); OR-ing child capabilities is unsafe.
+    [[nodiscard]] virtual Bool supports_stable_reflection(const Float3 &wo) const noexcept { return false; }
     [[nodiscard]] virtual Bool splittable() const noexcept { return false; }
     virtual Lobe &operator=(const Lobe &other) noexcept = default;
     virtual void regularize() noexcept {}
@@ -345,6 +350,12 @@ protected:
 
 public:
     using MicrofacetLobe::MicrofacetLobe;
+    [[nodiscard]] Bool supports_stable_reflection(const Float3 &wo) const noexcept override {
+        // sample_delta_local reflects about the local normal without sampling
+        // a direction or choosing a lobe. Only the existing NearSpec policy
+        // selects that sampler; ordinary glossy reflection stays stochastic.
+        return flag() == SurfaceData::NearSpec;
+    }
     static constexpr const char *lut_name = "PureReflectionLobe::lut";
     static constexpr uint lut_res = 32;
     [[nodiscard]] virtual Float compensate_factor(const Float3 &wo) const noexcept;
