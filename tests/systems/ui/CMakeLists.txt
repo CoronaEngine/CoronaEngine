@@ -96,6 +96,13 @@ target_include_directories(corona_cef_popup_overlay_tests
 )
 add_test(NAME CefPopupOverlayTests COMMAND corona_cef_popup_overlay_tests)
 
+# 源码级棘轮：CEF 位图的通道序必须在「纹理格式声明 / view 侧转换 / popup 侧转换」三处保持一致，
+# 否则只改一边（例如换 SBGRA8_UNORM 却忘了 popup 也会转换）会让浮层颜色错乱而无测试变红。
+# 本仓环境没有 pytest，因此该文件带 __main__ 入口，可直接被 ctest 执行。
+add_test(NAME CefTextureChannelOrderTests
+    COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_cef_texture_channel_order.py
+)
+
 add_executable(corona_ui_surface_lifecycle_tests
     test_ui_surface_lifecycle.cpp
     ${PROJECT_SOURCE_DIR}/src/systems/ui/ui_surface_lifecycle.cpp
