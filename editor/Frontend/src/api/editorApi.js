@@ -4,8 +4,10 @@
  */
 
 let editorApiMethodSpecs = null;
+let editorApiMethodSpecsByWrapper = null;
 let editorApiManifestPromise = null;
 let editorApiEventSpecs = null;
+let editorApiEventSpecsByWrapper = null;
 let editorApiEventManifestPromise = null;
 const EDITOR_API_CALLER_CEF = 1;
 // Default caller for the manifest-backed resource-search namespace.
@@ -13,6 +15,13 @@ const CURRENT_CALLER = 'SceneBar';
 const dockChannels = new WeakMap();
 let dockRequestSequence = 0;
 const DOCK_RESPONSE_TIMEOUT_MS = 30_000;
+
+// How long a manifest-backed request waits for a native reply before failing. Exposed so an
+// embedding host can tune it without reaching into module internals; native CEF calls have no
+// built-in deadline, so without this a request that is never answered hangs the caller forever.
+export const editorApiTransportLimits = {
+  responseTimeoutMs: 30_000,
+};
 
 // One callback per browser surface. Replies never replace another request's handler.
 function getDockChannel(surface) {
@@ -32,6 +41,19 @@ function getDockChannel(surface) {
 }
 
 export class Bridge {
+  // Wrapper-path lookup used to be a linear scan over every manifest entry on each call.
+  // Index it once per manifest load instead. First entry wins, matching the scan's order.
+  static indexWrappersByName(specs, key) {
+    const byWrapper = new Map();
+    for (const spec of specs.values()) {
+      const wrapperPath = spec?.[key];
+      if (typeof wrapperPath === 'string' && !byWrapper.has(wrapperPath)) {
+        byWrapper.set(wrapperPath, spec);
+      }
+    }
+    return byWrapper;
+  }
+
   static async ensureEditorApiManifest() {
     if (!editorApiMethodSpecs) {
       if (!editorApiManifestPromise) {
@@ -42,6 +64,10 @@ export class Bridge {
               methods
                 .filter((method) => typeof method?.api === 'string')
                 .map((method) => [method.api, method]),
+            );
+            editorApiMethodSpecsByWrapper = Bridge.indexWrappersByName(
+              editorApiMethodSpecs,
+              'js_wrapper',
             );
             Bridge.validateEditorApiWrapperMethods();
             return editorApiMethodSpecs;
@@ -173,6 +199,10 @@ export class Bridge {
                 .filter((event) => typeof event?.event === 'string')
                 .map((event) => [event.event, event]),
             );
+            editorApiEventSpecsByWrapper = Bridge.indexWrappersByName(
+              editorApiEventSpecs,
+              'js_wrapper',
+            );
             Bridge.validateEditorApiEventWrapperMethods();
             return editorApiEventSpecs;
           })
@@ -254,6 +284,32 @@ const call_editor_api = async (apiName, args) => {
   };
 
   return new Promise((resolve, reject) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      const error = new Error(
+        `Editor API request timed out after ${editorApiTransportLimits.responseTimeoutMs} ms: ` +
+          `${apiName} (native execution may still be in progress)`,
+      );
+      error.code = 'EDITOR_API_TIMEOUT';
+      reject(error);
+    }, editorApiTransportLimits.responseTimeoutMs);
+
+    // A late native reply must neither throw nor settle an already-timed-out request.
+    const succeed = (value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(value);
+    };
+    const fail = (error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      reject(error);
+    };
+
     try {
       window.cefQuery({
         request: JSON.stringify(request),
@@ -268,21 +324,21 @@ const call_editor_api = async (apiName, args) => {
                 jsonResponse.type === 'error' ||
                 jsonResponse.error)
             ) {
-              reject(new Error(jsonResponse.error || jsonResponse.message || 'Editor API error'));
+              fail(new Error(jsonResponse.error || jsonResponse.message || 'Editor API error'));
             } else {
               Bridge.validateEditorApiReturn(apiName, jsonResponse?.data, spec);
-              resolve(jsonResponse);
+              succeed(jsonResponse);
             }
           } catch (e) {
-            reject(e);
+            fail(e);
           }
         },
         onFailure: (error_code, error_message) => {
-          reject(new Error(`Editor API Error (${error_code}): ${error_message}`));
+          fail(new Error(`Editor API Error (${error_code}): ${error_message}`));
         },
       });
     } catch (error) {
-      reject(error);
+      fail(error);
     }
   });
 };
@@ -330,31 +386,24 @@ const register_typed_editor_api_callback = async (eventName, wrapperName, callba
 };
 
 const unregister_callback = async (callbackToken) => {
-  return call_editor_api('EditorApi.unregister_callback', [callbackToken])
-    .then((response) => {
-      editorApiCallbacks.delete(callbackToken);
-      return response;
-    });
+  // The local registration must be dropped even when native refuses or never answers the
+  // unregister call; otherwise the handler stays reachable (and leaks its closure) for the
+  // lifetime of the page. Hence try/finally rather than .then().
+  try {
+    return await call_editor_api('EditorApi.unregister_callback', [callbackToken]);
+  } finally {
+    editorApiCallbacks.delete(callbackToken);
+  }
 };
 
 const find_editor_api_method_by_js_wrapper = async (wrapperPath) => {
-  const specs = await Bridge.ensureEditorApiManifest();
-  for (const spec of specs.values()) {
-    if (spec?.js_wrapper === wrapperPath) {
-      return spec;
-    }
-  }
-  return null;
+  await Bridge.ensureEditorApiManifest();
+  return editorApiMethodSpecsByWrapper?.get(wrapperPath) ?? null;
 };
 
 const find_editor_api_event_by_js_wrapper = async (wrapperPath) => {
-  const specs = await Bridge.ensureEditorApiEventManifest();
-  for (const spec of specs.values()) {
-    if (spec?.js_wrapper === wrapperPath) {
-      return spec;
-    }
-  }
-  return null;
+  await Bridge.ensureEditorApiEventManifest();
+  return editorApiEventSpecsByWrapper?.get(wrapperPath) ?? null;
 };
 
 const register_manifest_editor_api_callback = async (wrapperPath, callback) => {
