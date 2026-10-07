@@ -44,7 +44,10 @@ void SVGF::prepare_resolve(uint pixel_num) {
 void SVGF::compile_resolve() {
     Pipeline *pipeline_ref = pipeline();
     Kernel kernel = [pipeline_ref](Var<ResolveParam> param) {
-        Float4 film_offsets = frame_filter_offsets(pipeline_ref, param.frame_index);
+        pipeline_ref->scene().sensor()->load_data();
+        pipeline_ref->renderer().sampler()->load_data();
+        Float2 film_offset = pixel_filter_offset(pipeline_ref, dispatch_idx().xy(), param.frame_index);
+        Int2 filter_radius = make_int2(ceil(pipeline_ref->scene().sensor()->filter()->radius()));
         Uint idx = dispatch_id();
         Int2 pixel = make_int2(dispatch_idx().xy());
         Int2 size = make_int2(dispatch_dim().xy());
@@ -108,38 +111,73 @@ void SVGF::compile_resolve() {
             Float2 previous_pixel = make_float2(pixel) - motion;
             Int2 base = make_int2(floor(previous_pixel));
             Float2 fraction = previous_pixel - floor(previous_pixel);
-            // The resolved colour is on the pixel-centre grid. Raw visibility
-            // support lives on the previous jittered grid, so validate it using
-            // a separate footprint instead of misaligning either history.
-            Float2 guide_pixel = previous_pixel + film_offsets.xy() - film_offsets.zw();
+            // Resolved colour stays on the pixel-centre grid. Each raw guide
+            // has its own jitter; validate the actual previous sample positions.
+            Float2 guide_pixel = previous_pixel + film_offset;
             Int2 guide_base = make_int2(floor(guide_pixel));
-            Float2 guide_fraction = guide_pixel - floor(guide_pixel);
+            Float guide_weight_sum = 0.f;
             Float expected_depth = max(length(center_pos - param.prev_camera_pos.as_vec3()), 0.1f);
+            $for(y, -filter_radius.y, filter_radius.y + 2) {
+                $for(x, -filter_radius.x, filter_radius.x + 2) {
+                    Int2 guide_p = guide_base + make_int2(x, y);
+                    $if(all(guide_p >= 0) && all(guide_p < size)) {
+                        Float2 guide_offset = pixel_filter_offset(pipeline_ref, make_uint2(guide_p),
+                                                                  max(param.frame_index, 1u) - 1u);
+                        Float guide_weight = film_tent_weight(make_float2(guide_p) + guide_offset - guide_pixel);
+                        guide_weight_sum += guide_weight;
+                        $if(guide_weight > 0.f) {
+                            Uint tap_idx = cast<uint>(guide_p.y * size.x + guide_p.x);
+                            TriangleHitVar tap = param.prev_visibility.read(tap_idx);
+                            $if(!PixelStateUtils::is_sky(tap)) {
+                                Interaction previous = pipeline_ref->geometry().compute_surface_interaction(tap, false);
+                                Float previous_depth = length(previous.pos - param.prev_camera_pos.as_vec3());
+                                // Coverage may cross adjacent facets of the same
+                                // object (e.g. a cabinet bevel). Requiring matching
+                                // normals here would preserve its aliased black edge.
+                                // Reject opposite-facing sides of a thin shell.
+                                // Depth/plane support and the current colour box
+                                // still bound reuse; illumination uses its own normals.
+                                Bool consistent = tap.inst_id == hit.inst_id &&
+                                    dot(center_normal, previous.ng) >= -0.1f &&
+                                    abs(previous_depth - expected_depth) < Cfg::Temporal::kDepthThreshold * expected_depth &&
+                                    abs(dot(previous.pos - center_pos, center_normal)) < Cfg::Resolve::kPlaneThreshold * expected_depth;
+                                // Resolved history represents a pixel footprint, not
+                                // just its current jittered hit. A subpixel grille
+                                // alternates between shell and holes; either surface
+                                // can support coverage when it is still present in
+                                // the current reconstruction neighbourhood. Validate
+                                // that surface's geometry instead of accepting an
+                                // unrelated previous hit or opposite-facing shell.
+                                $if(!consistent) {
+                                    $for(cy, -1, 2) {
+                                        $for(cx, -1, 2) {
+                                            Int2 q = pixel + make_int2(cx, cy);
+                                            $if(!consistent && all(q >= 0) && all(q < size)) {
+                                                TriangleHitVar neighbor_hit = param.visibility.read(
+                                                    cast<uint>(q.y * size.x + q.x));
+                                                $if(neighbor_hit.inst_id == tap.inst_id) {
+                                                    Interaction neighbor = pipeline_ref->geometry().compute_surface_interaction(neighbor_hit, false);
+                                                    Float neighbor_depth = max(length(neighbor.pos - param.prev_camera_pos.as_vec3()), 0.1f);
+                                                    consistent = dot(neighbor.ng, previous.ng) >= -0.1f &&
+                                                        abs(previous_depth - neighbor_depth) < Cfg::Temporal::kDepthThreshold * neighbor_depth &&
+                                                        abs(dot(previous.pos - neighbor.pos, neighbor.ng)) < Cfg::Resolve::kPlaneThreshold * neighbor_depth;
+                                                };
+                                            };
+                                        };
+                                    };
+                                };
+                                supported_weight += ocarina::select(consistent, guide_weight, 0.f);
+                            };
+                        };
+                    };
+                };
+            };
+            // Irregular samples do not have a partition-of-unity weight sum.
+            supported_weight /= max(guide_weight_sum, 1e-6f);
             for (int y = 0; y < 2; ++y) {
                 for (int x = 0; x < 2; ++x) {
                     Float weight = (x ? fraction.x : 1.f - fraction.x) *
                                    (y ? fraction.y : 1.f - fraction.y);
-                    Float guide_weight = (x ? guide_fraction.x : 1.f - guide_fraction.x) *
-                                         (y ? guide_fraction.y : 1.f - guide_fraction.y);
-                    Int2 guide_p = guide_base + make_int2(x, y);
-                    $if(guide_weight > 0.f && all(guide_p >= 0) && all(guide_p < size)) {
-                        Uint tap_idx = cast<uint>(guide_p.y * size.x + guide_p.x);
-                        TriangleHitVar tap = param.prev_visibility.read(tap_idx);
-                        $if(!PixelStateUtils::is_sky(tap) && tap.inst_id == hit.inst_id) {
-                            Interaction previous = pipeline_ref->geometry().compute_surface_interaction(tap, false);
-                            Float previous_depth = length(previous.pos - param.prev_camera_pos.as_vec3());
-                            // Coverage may cross adjacent facets of the same
-                            // object (e.g. a cabinet bevel). Requiring matching
-                            // normals here would preserve its aliased black edge.
-                            // Reject opposite-facing sides of a thin shell.
-                            // Depth/plane support and the current colour box
-                            // still bound reuse; illumination uses its own normals.
-                            Bool consistent = dot(center_normal, previous.ng) >= -0.1f &&
-                                abs(previous_depth - expected_depth) < Cfg::Temporal::kDepthThreshold * expected_depth &&
-                                abs(dot(previous.pos - center_pos, center_normal)) < Cfg::Resolve::kPlaneThreshold * expected_depth;
-                            supported_weight += ocarina::select(consistent, guide_weight, 0.f);
-                        };
-                    };
                     Int2 p = base + make_int2(x, y);
                     $if(weight > 0.f && all(p >= 0) && all(p < size)) {
                         Uint tap_idx = cast<uint>(p.y * size.x + p.x);
@@ -169,19 +207,18 @@ void SVGF::compile_resolve() {
                 // dark/bright edges; it does not feed illumination history.
                 Float3 sum = make_float3(0.f);
                 Float weight_sum = 0.f;
-                for (int y = -1; y <= 1; ++y) {
-                    for (int x = -1; x <= 1; ++x) {
-                        Float2 delta = make_float2(float(x), float(y)) + film_offsets.xy();
-                        Float2 axes = max(make_float2(1.f) - abs(delta), make_float2(0.f));
-                        Float weight = axes.x * axes.y;
+                $for(y, -filter_radius.y, filter_radius.y + 1) {
+                    $for(x, -filter_radius.x, filter_radius.x + 1) {
                         Int2 p = pixel + make_int2(x, y);
-                        $if(weight > 0.f && all(p >= 0) && all(p < size)) {
+                        $if(all(p >= 0) && all(p < size)) {
+                            Float2 offset = pixel_filter_offset(pipeline_ref, make_uint2(p), param.frame_index);
+                            Float weight = film_tent_weight(make_float2(x, y) + offset);
                             Uint tap_idx = cast<uint>(p.y * size.x + p.x);
                             sum += ocarina::zero_if_nan_inf(make_float3(radiance.read(tap_idx).xyz())) * weight;
                             weight_sum += weight;
                         };
-                    }
-                }
+                    };
+                };
                 color = ocarina::select(weight_sum > 0.f, sum / max(weight_sum, 1e-6f), color);
             };
             $if(alpha < 1.f) {

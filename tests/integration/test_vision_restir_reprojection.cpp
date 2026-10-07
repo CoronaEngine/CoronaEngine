@@ -125,28 +125,28 @@ void check_restir_reprojection(vision::Pipeline& pipeline) {
 
     struct PixelCase {
         const char* name;
-        float2 film, motion, previous_offset;
+        float2 film, motion;
         int2 expected;
         int valid;
     };
     // Independent raster examples, including subpixel excursions off all sides.
     const std::vector<PixelCase> pixel_cases{
-        {"same_jitter", {10.9f,20.1f}, {0,0}, {.4f,-.4f}, {10,20}, 1},
-        {"opposite_jitter", {11.1f,19.8f}, {0,0}, {-.6f,.7f}, {11,19}, 1},
-        {"camera_motion", {10.9f,20.1f}, {2,-3}, {.4f,-.4f}, {8,23}, 1},
-        {"raw_pixel_centre", {10.5f,20.5f}, {0,0}, {0,0}, {10,20}, 1},
-        {"left_offscreen", {.5f,10.5f}, {.7f,0}, {0,0}, {-1,10}, 0},
-        {"top_offscreen", {10.5f,.5f}, {0,.7f}, {0,0}, {10,-1}, 0},
-        {"right_offscreen", {31.5f,10.5f}, {-.7f,0}, {0,0}, {32,10}, 0},
-        {"bottom_offscreen", {10.5f,31.5f}, {0,-.7f}, {0,0}, {10,32}, 0},
-        {"jittered_first_pixel", {-.2f,10.5f}, {0,0}, {-.8f,0}, {0,10}, 1},
-        {"fallback_negative_pixel", {-2.2f,10.5f}, {0,0}, {0,0}, {-3,10}, 0},
+        {"inside_cell", {10.9f,20.1f}, {0,0}, {10,20}, 1},
+        {"crossed_cell", {11.1f,19.8f}, {0,0}, {11,19}, 1},
+        {"camera_motion", {10.9f,20.1f}, {2,-3}, {8,23}, 1},
+        {"raw_pixel_centre", {10.5f,20.5f}, {0,0}, {10,20}, 1},
+        {"left_offscreen", {.5f,10.5f}, {.7f,0}, {-1,10}, 0},
+        {"top_offscreen", {10.5f,.5f}, {0,.7f}, {10,-1}, 0},
+        {"right_offscreen", {31.5f,10.5f}, {-.7f,0}, {32,10}, 0},
+        {"bottom_offscreen", {10.5f,31.5f}, {0,-.7f}, {10,32}, 0},
+        {"jittered_first_pixel", {-.2f,10.5f}, {0,0}, {-1,10}, 0},
+        {"fallback_negative_pixel", {-2.2f,10.5f}, {0,0}, {-3,10}, 0},
     };
     Kernel pixel_kernel = [&](BufferVar<int> output) {
         for (uint i = 0; i < pixel_cases.size(); ++i) {
             const auto& test = pixel_cases[i];
             Int2 pixel = reservoir_pixel(previous_reservoir_coord(
-                Float2{test.film}, Float2{test.motion}, Float2{test.previous_offset}));
+                Float2{test.film}, Float2{test.motion}));
             output.write(i * 3u, pixel.x);
             output.write(i * 3u + 1u, pixel.y);
             output.write(i * 3u + 2u, cast<int>(in_screen(pixel, make_int2(32))));

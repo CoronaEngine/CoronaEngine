@@ -62,7 +62,10 @@ struct Epsilon {
         static constexpr uint kInteriorHistory = 32u;
         static constexpr float kNormalThreshold = 0.99f;
         static constexpr float kPlaneThreshold = 0.005f;
-        static constexpr float kMovingAlpha = 0.25f;
+        // Integrate subpixel coverage noise during slow motion without feeding
+        // it back into illumination. Geometry validation and the motion term
+        // still reject stale history; illumination keeps its separate weights.
+        static constexpr float kMovingAlpha = 1.f / 16.f;
         static constexpr float kMotionRejectPixels = 32.f;
         static constexpr float kMinReprojectionSupport = 0.1f;
     };

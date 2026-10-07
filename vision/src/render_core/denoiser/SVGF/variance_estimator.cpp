@@ -12,7 +12,10 @@ void VarianceEstimator::prepare() noexcept {}
 void VarianceEstimator::compile() noexcept {
 Pipeline *pipeline_ref = pipeline();
 Kernel variance_kernel = [&, pipeline_ref](Var<VarianceEstimatorParam> param) {
-    Float4 film_offsets = frame_filter_offsets(pipeline_ref, param.frame_index);
+    pipeline_ref->scene().sensor()->load_data();
+    pipeline_ref->renderer().sampler()->load_data();
+    Float2 film_offset = pixel_filter_offset(pipeline_ref, dispatch_idx().xy(), param.frame_index);
+    Int2 filter_radius = make_int2(ceil(pipeline_ref->scene().sensor()->filter()->radius()));
     Int2 screen_size = make_int2(dispatch_dim().xy());
     Uint index = dispatch_id();
         
@@ -43,14 +46,13 @@ Kernel variance_kernel = [&, pipeline_ref](Var<VarianceEstimatorParam> param) {
         Float2 cur_pos_float = make_float2(dispatch_idx().xy()) + 0.5f;
         Float2 prev_pos_float = cur_pos_float - motion_vec;
         
-        Float2 prev_texel = prev_pos_float - 0.5f + film_offsets.xy() - film_offsets.zw();
+        Float2 prev_texel = prev_pos_float - 0.5f + film_offset;
         Float2 floor_pos = floor(prev_texel);
-        Float2 frac_pos = prev_texel - floor_pos;
-        
-        Float w00 = (1.f - frac_pos.x) * (1.f - frac_pos.y);
-        Float w10 = frac_pos.x * (1.f - frac_pos.y);
-        Float w01 = (1.f - frac_pos.x) * frac_pos.y;
-        Float w11 = frac_pos.x * frac_pos.y;
+        auto history_sample_delta = [&](Int2 tap_pixel) {
+            Float2 offset = pixel_filter_offset(pipeline_ref, make_uint2(tap_pixel),
+                                                max(param.frame_index, 1u) - 1u);
+            return make_float2(tap_pixel) + offset - prev_texel;
+        };
         
         // Use Float3 accumulators for precision (avoid half precision accumulation errors)
         Float3 acc_direct = make_float3(0.f);
@@ -124,10 +126,16 @@ Kernel variance_kernel = [&, pipeline_ref](Var<VarianceEstimatorParam> param) {
         };
         
         Int2 base_pixel = make_int2(floor_pos);
-        check_tap_consistency(base_pixel + make_int2(0, 0), w00);
-        check_tap_consistency(base_pixel + make_int2(1, 0), w10);
-        check_tap_consistency(base_pixel + make_int2(0, 1), w01);
-        check_tap_consistency(base_pixel + make_int2(1, 1), w11);
+        // A previous sample can move by the filter radius from its own pixel.
+        // Gather its actual position, not four taps of a translated grid.
+        $for(y, -filter_radius.y, filter_radius.y + 2) {
+            $for(x, -filter_radius.x, filter_radius.x + 2) {
+                Int2 tap_pixel = base_pixel + make_int2(x, y);
+                $if(all(tap_pixel >= 0) && all(tap_pixel < screen_size)) {
+                    check_tap_consistency(tap_pixel, film_tent_weight(history_sample_delta(tap_pixel)));
+                };
+            };
+        };
 
         // Jitter and camera motion can move a thin surface outside the bilinear
         // footprint. Recover nearby history on the same instance and plane
@@ -147,7 +155,7 @@ Kernel variance_kernel = [&, pipeline_ref](Var<VarianceEstimatorParam> param) {
             for (int y = -1; y <= 1; ++y) {
                 for (int x = -1; x <= 1; ++x) {
                     Int2 tap_pixel = nearest_pixel + make_int2(x, y);
-                    Float2 delta = make_float2(tap_pixel) - prev_texel;
+                    Float2 delta = history_sample_delta(tap_pixel);
                     check_tap_consistency(tap_pixel, 1.f / (1.f + dot(delta, delta)), true);
                 }
             }

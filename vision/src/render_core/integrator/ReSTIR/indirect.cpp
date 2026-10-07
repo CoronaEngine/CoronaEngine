@@ -217,7 +217,7 @@ GIReservoirVar ReSTIRGI::combine_temporal(const GIReservoirVar &cur_rsv, Surface
 GIReservoirVar ReSTIRGI::temporal_reuse(GIReservoirVar rsv, const SurfaceDataVar &cur_surf,
                                         const Float2 &motion_vec, const SensorSample &ss,
                                         const Var<GIParam> &param) const noexcept {
-    Float2 prev_p_film = previous_reservoir_coord(ss.p_film, motion_vec, previous_film_offset(param.camera_jitter));
+    Float2 prev_p_film = previous_reservoir_coord(ss.p_film, motion_vec);
     Int2 prev_p = reservoir_pixel(prev_p_film);
     Float limit = rsv.C * param.history_limit;
     Int2 res = make_int2(dispatch_dim().xy());
@@ -285,7 +285,7 @@ void ReSTIRGI::compile_temporal_reuse() noexcept {
         sampler()->temporary([&](Sampler *sampler) {
             // Film coordinates must agree with the GBuffer motion vector used
             // below; the GI reservoir RNG is separately seeded afterwards.
-            sampler->set_seed(make_uint2(0u), frame_index, 0);
+            sampler->set_seed(pixel, frame_index, Dimension::Camera);
             ss = sampler->sensor_sample(pixel, camera->filter(), param.camera_jitter != 0u);
         });
         sampler()->set_seed(pixel, frame_index, 4);

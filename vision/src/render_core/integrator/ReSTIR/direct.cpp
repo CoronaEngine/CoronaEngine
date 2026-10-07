@@ -420,7 +420,7 @@ DIReservoirVar ReSTIRDI::temporal_reuse(DIReservoirVar rsv, const SurfaceDataVar
                                         const Float2 &motion_vec,
                                         const SensorSample &ss,
                                         const Var<DIParam> &param) const noexcept {
-    Float2 prev_p_film = previous_reservoir_coord(ss.p_film, motion_vec, previous_film_offset(param.camera_jitter));
+    Float2 prev_p_film = previous_reservoir_coord(ss.p_film, motion_vec);
     Int2 prev_p = reservoir_pixel(prev_p_film);
     Float limit = rsv.C * param.history_limit;
     Int2 res = make_int2(dispatch_dim().xy());
@@ -566,9 +566,9 @@ void ReSTIRDI::compile_shader0() noexcept {
         camera->load_data();
         sampler()->load_data();
         initial(sampler(), frame_index, spectrum);
-        // Match the GBuffer's frame-wide film jitter. Lighting remains
-        // independently seeded per pixel after reconstructing the film sample.
-        sampler()->set_seed(make_uint2(0u), frame_index, 0);
+        // Reconstruct the GBuffer's exact per-pixel film sample. Lighting uses
+        // its own dimension after this; shading still consumes the owned ray.
+        sampler()->set_seed(pixel, frame_index, Dimension::Camera);
         SensorSample ss = sampler()->sensor_sample(pixel, camera->filter(), param.camera_jitter != 0u);
         sampler()->set_seed(pixel, frame_index, Dimension::ReSTIR_RIS);
         // The GBuffer owns the camera sample (including lens/custom rays).

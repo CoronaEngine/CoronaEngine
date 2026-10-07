@@ -12,19 +12,23 @@
 #include "base/using.h"
 
 namespace vision::svgf {
-// Normal GBuffer rays use a shared frame-wide film sample. Point-sampled
-// illumination/visibility histories live on that jittered grid, whereas the
-// final coverage history lives on the pixel-centre grid.
-[[nodiscard]] inline Float4 frame_filter_offsets(Pipeline *pipeline, Uint frame) {
+// Raw guides/illumination live at independent per-pixel film samples; resolved
+// colour lives at pixel centres. Call after loading the camera and sampler.
+// Preserve the caller's RNG when querying a neighbour's sample position.
+[[nodiscard]] inline Float2 pixel_filter_offset(Pipeline *pipeline, Uint2 pixel, Uint frame) {
     auto &camera = pipeline->scene().sensor();
     auto &sampler = pipeline->renderer().sampler();
-    camera->load_data();
-    sampler->load_data();
-    sampler->set_seed(make_uint2(0u), frame, 0u);
-    Float2 current = camera->filter()->sample(sampler->next_2d()).p;
-    sampler->set_seed(make_uint2(0u), max(frame, 1u) - 1u, 0u);
-    Float2 previous = camera->filter()->sample(sampler->next_2d()).p;
-    return make_float4(current, previous);
+    Float2 offset = make_float2(0.f);
+    sampler->temporary([&](Sampler *local_sampler) {
+        local_sampler->set_seed(pixel, frame, Dimension::Camera);
+        offset = camera->filter()->sample(local_sampler->next_2d()).p;
+    });
+    return offset;
+}
+
+[[nodiscard]] inline Float film_tent_weight(Float2 delta) {
+    Float2 axes = max(make_float2(1.f) - abs(delta), make_float2(0.f));
+    return axes.x * axes.y;
 }
 
 template<typename T>

@@ -83,11 +83,11 @@ public:
 }// namespace vision
 
 namespace vision {
-// Film samples are at pixel + 0.5 + jitter. Motion excludes camera jitter,
-// so subtract the previous offset before choosing a previous reservoir.
-[[nodiscard]] inline Float2 previous_reservoir_coord(const Float2 &film, const Float2 &motion,
-                                                      const Float2 &previous_offset) noexcept {
-    return film - motion - previous_offset;
+// Reproject the actual film sample into a previous pixel cell. Each reservoir
+// owns an independently jittered sample, so there is no global previous offset
+// to subtract. Surface validation below decides whether that sample is reusable.
+[[nodiscard]] inline Float2 previous_reservoir_coord(const Float2 &film, const Float2 &motion) noexcept {
+    return film - motion;
 }
 
 [[nodiscard]] inline Int2 reservoir_pixel(const Float2 &coord) noexcept {
@@ -144,15 +144,6 @@ public:
     OC_MAKE_MEMBER_SETTER(integrator)
     [[nodiscard]] IlluminationIntegrator *integrator() noexcept { return integrator_.lock().get(); }
     [[nodiscard]] const IlluminationIntegrator *integrator() const noexcept { return integrator_.lock().get(); }
-    [[nodiscard]] Float2 previous_film_offset(const Uint &camera_jitter) const noexcept {
-        Float2 offset = make_float2(0.f);
-        auto &sampler = renderer().sampler();
-        sampler->temporary([&](Sampler *local_sampler) {
-            local_sampler->set_seed(make_uint2(0u), max(frame_index(), 1u) - 1u, 0u);
-            offset = scene().sensor()->filter()->sample(local_sampler->next_2d()).p;
-        });
-        return select(camera_jitter != 0u, offset, make_float2(0.f));
-    }
     virtual void update_resolution(uint2 res) noexcept {}
     [[nodiscard]] Uint checkerboard_value() const noexcept {
         return frame_buffer().checkerboard_value(dispatch_idx().xy());
