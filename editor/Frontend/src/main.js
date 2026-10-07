@@ -5,7 +5,14 @@ import Router from './router/index.js';
 import { i18n, setupLocaleSync } from './i18n/index.js';
 import { setupDomTranslation } from './i18n/domTranslator.js';
 import './style.css';
-import 'blockly/blocks';
+
+// NOTE: Blockly is deliberately NOT imported here. `import 'blockly/blocks'` used to live on
+// this line, which pulled the whole Blockly runtime (~1 MB) into the entry chunk of EVERY
+// editor window -- including each detached `?standalone=1` panel, none of which shows a
+// Blockly workspace at boot. Each workspace registers the blocks it needs itself; see
+// `blockly/components/BlocklyWorkspace.vue::loadBlocklyModules`.
+// `tests/python/test_frontend_panel_lazy_loading.py` pins this.
+
 const app = createApp(App);
 app.use(createPinia());
 app.use(Router);
