@@ -104,12 +104,16 @@ void OffscreenRenderHandler::OnPaint(CefRefPtr<CefBrowser> browser, PaintElement
         t->pixel_buffer.resize(bufferSize);
         std::memcpy(t->pixel_buffer.data(), buffer, bufferSize);
 
-        // CEF outputs BGRA on Windows; convert to RGBA for Vulkan RGBA8 textures.
-        auto* pixels = t->pixel_buffer.data();
-        for (size_t i = 0; i < bufferSize; i += 4) {
-            std::swap(pixels[i], pixels[i + 2]);
-            if (!preserve_alpha) {
-                pixels[i + 3] = 255;
+        // CEF outputs BGRA on Windows and the browser texture is declared SBGRA8_UNORM
+        // (VK_FORMAT_B8G8R8A8_SRGB), so the bytes reach the GPU untouched - no channel
+        // reordering here. That also keeps this buffer in the same byte order as the popup
+        // overlay, which composites its pixels straight into it.
+        // Alpha convention: should_preserve_alpha() decides per tab; when alpha is not part
+        // of the design, force it opaque rather than letting CEF's alpha through.
+        if (!preserve_alpha) {
+            auto* pixels = t->pixel_buffer.data();
+            for (size_t i = 3; i < bufferSize; i += 4) {
+                pixels[i] = 255;
             }
         }
 

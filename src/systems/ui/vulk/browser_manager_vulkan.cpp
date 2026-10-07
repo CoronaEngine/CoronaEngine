@@ -90,10 +90,14 @@ UiTextureId BrowserManager::create_browser_texture(int width, int height) {
     const uint32_t safe_height = static_cast<uint32_t>(std::max(height, 1));
 
     OwnedImage owned{};
+    // CEF hands over BGRA; keep that byte order end to end and let the sampler read it as
+    // B8G8R8A8_SRGB (resource_manager.cpp) instead of paying a per-pixel swap on the CPU.
+    // Changing this format without changing cef_client.cpp / popup_overlay.cpp swaps colours:
+    // tests/systems/ui/test_cef_texture_channel_order.py pins all three together.
     owned.image = Horizon::HardwareImage(Horizon::HardwareImageDesc::texture_2d(
         safe_width,
         safe_height,
-        Horizon::Format::SRGBA8_UNORM,
+        Horizon::Format::SBGRA8_UNORM,
         Horizon::ImageUsage_Sampled | Horizon::ImageUsage_TransferDst | Horizon::ImageUsage_TransferSrc,
         "cef.browser_texture"));
     if (!owned.image) {
