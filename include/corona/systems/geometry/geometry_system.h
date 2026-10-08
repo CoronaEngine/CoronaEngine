@@ -355,6 +355,9 @@ class GeometrySystem : public Kernel::SystemBase {
     /// geo.vertex / geo.index 一定非空。
     struct MeshSlot {
         uint32_t               mesh_index    = 0;
+        uint32_t               instance_index = 0;
+        uint32_t               object_id = 0;
+        ktm::fmat4x4           instance_transform{ktm::fmat4x4::from_eye()};
         RenderMeshBuffers      geo;              ///< LOD 解析后的几何缓冲
         Horizon::HardwareImage texture;          ///< 贴图句柄（null = 无贴图）
         std::array<float, 4>   material_color = {1.f, 1.f, 1.f, 1.f}; ///< 材质颜色 RGBA
@@ -375,6 +378,9 @@ class GeometrySystem : public Kernel::SystemBase {
     /// four cascades worth of unnecessary ref-counted copies.
     struct ShadowMeshSlot {
         uint32_t          mesh_index = 0;
+        uint32_t          instance_index = 0;
+        uint32_t          object_id = 0;
+        ktm::fmat4x4      instance_transform{ktm::fmat4x4::from_eye()};
         RenderMeshBuffers geo;
         bool              valid = false;
         std::uint32_t     vertex_count = 0;
@@ -399,7 +405,20 @@ class GeometrySystem : public Kernel::SystemBase {
         const ktm::fvec3& camera_pos,
         float             camera_fov_deg,
         const ktm::fvec3& world_center,
-        float             bounding_radius) const;
+        float             bounding_radius,
+        const ktm::fmat4x4* actor_transform = nullptr) const;
+
+    /// Per-instance LOD selection: uses actor × instance transform to derive the
+    /// instance world AABB and chooses the coarsest ready level within the
+    /// screen-space error budget.
+    [[nodiscard]] RenderMeshBuffers select_render_buffers_for_instance(
+        std::uintptr_t geometry_handle,
+        uint32_t mesh_index,
+        const ktm::fvec3& camera_pos,
+        float camera_fov_deg,
+        const ktm::fmat4x4& actor_transform,
+        const ktm::fmat4x4& instance_transform,
+        const RenderMeshBuffers& fallback) const;
 
     /// Shadow-pass routing: selects the coarsest ready level whose geometric
     /// error fits within one shadow texel, never falling back to a coarser

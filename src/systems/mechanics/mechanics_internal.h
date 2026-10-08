@@ -46,6 +46,16 @@ constexpr ktm::fvec4 make_fvec4(float x, float y, float z, float w) {
     return result2;  // 按值传出
 }
 
+inline ktm::fmat4x4 make_fmat4x4_colmajor(const std::array<float, 16>& src) {
+    ktm::fmat4x4 result = ktm::fmat4x4::from_eye();
+    for (int col = 0; col < 4; ++col) {
+        for (int row = 0; row < 4; ++row) {
+            result[col][row] = src[static_cast<std::size_t>(col * 4 + row)];
+        }
+    }
+    return result;
+}
+
 inline ktm::fvec3 vec3_add(const ktm::fvec3& a, const ktm::fvec3& b) {
     return make_fvec3(a.x + b.x, a.y + b.y, a.z + b.z);  // 逐分量加
 }
@@ -369,7 +379,27 @@ inline bool ensure_collision_mesh(
     std::vector<std::array<std::uint16_t, 3>> static_tris;
     std::vector<int> static_bone_ids;
 
-    for (std::uint32_t mi = 0; mi < static_cast<std::uint32_t>(scene->data.meshes.size()); ++mi) {
+    struct CollisionDrawItem {
+        std::uint32_t mesh_index = 0;
+        ktm::fmat4x4 transform{ktm::fmat4x4::from_eye()};
+    };
+    std::vector<CollisionDrawItem> draw_items;
+    if (!scene->data.mesh_instances.empty()) {
+        draw_items.reserve(scene->data.mesh_instances.size());
+        for (const auto& instance : scene->data.mesh_instances) {
+            if (instance.mesh_index >= scene->data.meshes.size()) continue;
+            draw_items.push_back({instance.mesh_index,
+                                  make_fmat4x4_colmajor(instance.transform)});
+        }
+    } else {
+        draw_items.reserve(scene->data.meshes.size());
+        for (std::uint32_t mi = 0; mi < static_cast<std::uint32_t>(scene->data.meshes.size()); ++mi) {
+            draw_items.push_back({mi, ktm::fmat4x4::from_eye()});
+        }
+    }
+
+    for (const auto& draw_item : draw_items) {
+        const std::uint32_t mi = draw_item.mesh_index;
         // 始终取 LOD0（get_mesh_vertices/get_mesh_indices），不用 get_mesh_lod
         // 注意：get_mesh_lod(mi, 0) 返回的是 LOD1，scene.h:327 注释有误；LOD0 只通过此接口取得。
         const std::vector<Corona::Resource::Vertex>&   src_verts   = scene->get_mesh_vertices(mi);
@@ -391,8 +421,13 @@ inline bool ensure_collision_mesh(
 
         // 复制顶点（绑定姿态；蒙皮物体运行期会覆盖为蒙皮后坐标）
         for (const auto& v : src_verts) {
+            const ktm::fvec4 local{
+                v.position[0], v.position[1], v.position[2], 1.0f};
+            const ktm::fvec4 transformed = draw_item.transform * local;
             ktm::fvec3 pos;
-            pos.x = v.position[0]; pos.y = v.position[1]; pos.z = v.position[2];
+            pos[0] = transformed[0];
+            pos[1] = transformed[1];
+            pos[2] = transformed[2];
             mesh.vertices.push_back(pos);
         }
 

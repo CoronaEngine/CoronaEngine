@@ -568,7 +568,8 @@ inline void process_assimp_mesh(aiMesh* ai_mesh, Scene& scene, std::uint32_t nod
                                 const aiMatrix4x4& accumulated_transform,
                                 const AssimpImportOptions& options = AssimpImportOptions{},
                                 std::unordered_map<std::string, BoneInfo>* bone_map = nullptr,
-                                int* bone_counter = nullptr) {
+                                int* bone_counter = nullptr,
+                                std::unordered_map<const aiMesh*, MeshOptimizeResult>* optimization_cache = nullptr) {
     if (ai_mesh->mNumVertices == 0 || ai_mesh->mNumFaces == 0) {
         CFW_LOG_WARNING("[Assimp] Mesh '{}' is empty, skipping", ai_mesh->mName.C_Str());
         return;
@@ -587,18 +588,19 @@ inline void process_assimp_mesh(aiMesh* ai_mesh, Scene& scene, std::uint32_t nod
     aiMatrix4x4 vertex_transform = is_skinned_mesh ? aiMatrix4x4() : accumulated_transform;
     aiMatrix3x3 normal_matrix(vertex_transform);
     normal_matrix.Inverse().Transpose();
+    const bool has_normals = ai_mesh->HasNormals();
 
-    // 提取顶点数据
+    // 提取网格本地空间顶点数据。节点变换在共享优化结果生成后再应用，
+    // 这样同一个 aiMesh 的多个节点实例可以复用同一份简化/拆分结果。
     std::vector<Vertex> unindexed_vertices(ai_mesh->mNumVertices);
     for (unsigned int i = 0; i < ai_mesh->mNumVertices; ++i) {
-        // 静态网格变换到世界空间；蒙皮网格保持绑定空间（vertex_transform=单位）
-        aiVector3D world_pos = vertex_transform * ai_mesh->mVertices[i];
-        unindexed_vertices[i].position = {world_pos.x, world_pos.y, world_pos.z};
+        const aiVector3D& local_pos = ai_mesh->mVertices[i];
+        unindexed_vertices[i].position = {local_pos.x, local_pos.y, local_pos.z};
 
-        if (ai_mesh->HasNormals()) {
-            aiVector3D world_normal = normal_matrix * ai_mesh->mNormals[i];
-            world_normal.Normalize();
-            unindexed_vertices[i].normal = {world_normal.x, world_normal.y, world_normal.z};
+        if (has_normals) {
+            aiVector3D normal = ai_mesh->mNormals[i];
+            normal.Normalize();
+            unindexed_vertices[i].normal = {normal.x, normal.y, normal.z};
         }
         if (ai_mesh->mTextureCoords[0]) {
             unindexed_vertices[i].tex_coords = {ai_mesh->mTextureCoords[0][i].x, ai_mesh->mTextureCoords[0][i].y};
@@ -623,13 +625,29 @@ inline void process_assimp_mesh(aiMesh* ai_mesh, Scene& scene, std::uint32_t nod
         }
     }
 
-    MeshOptimizeResult opt_result = optimize_mesh_pipeline(
-        unindexed_vertices,
-        indices,
-        options.simplify_mesh,
-        options.simplification_error,
-        mesh_name,
-        has_bones ? &unindexed_weights : nullptr);
+    MeshOptimizeResult opt_result;
+    bool cache_hit = false;
+    if (optimization_cache != nullptr) {
+        auto it = optimization_cache->find(ai_mesh);
+        if (it != optimization_cache->end()) {
+            opt_result = it->second;
+            cache_hit = true;
+        }
+    }
+
+    if (!cache_hit) {
+        opt_result = optimize_mesh_pipeline(
+            unindexed_vertices,
+            indices,
+            options.simplify_mesh,
+            options.simplification_error,
+            mesh_name,
+            has_bones ? &unindexed_weights : nullptr);
+
+        if (optimization_cache != nullptr && opt_result.success) {
+            optimization_cache->emplace(ai_mesh, opt_result);
+        }
+    }
 
     if (!opt_result.success) {
         CFW_LOG_WARNING("[Assimp] Mesh '{}' optimization failed, skipping", mesh_name);
@@ -648,12 +666,29 @@ inline void process_assimp_mesh(aiMesh* ai_mesh, Scene& scene, std::uint32_t nod
 
     // 处理拆分或非拆分的情况。
     // sub_weights：与 vertices 等长并行的骨骼权重（蒙皮网格非空，已随 opt 同步 remap）。
-    auto process_single_mesh = [&](std::vector<Vertex>& vertices,
+        auto process_single_mesh = [&](std::vector<Vertex>& vertices,
                                    std::vector<std::uint32_t>& mesh_indices,
                                    const std::string& sub_mesh_name,
-                                   std::vector<BoneWeights>& sub_weights) {
+                                   std::vector<BoneWeights>& sub_weights,
+                                   bool is_split_submesh) {
         if (vertices.empty()) return;
         const bool mesh_has_bones = !sub_weights.empty();
+
+        // 优化在网格本地空间进行；这里再把实例节点的累积变换应用到顶点和法线。
+        if (!mesh_has_bones) {
+            for (auto& vertex : vertices) {
+                aiVector3D position = vertex_transform * aiVector3D(
+                    vertex.position[0], vertex.position[1], vertex.position[2]);
+                vertex.position = {position.x, position.y, position.z};
+
+                if (has_normals) {
+                    aiVector3D normal = normal_matrix * aiVector3D(
+                        vertex.normal[0], vertex.normal[1], vertex.normal[2]);
+                    normal.Normalize();
+                    vertex.normal = {normal.x, normal.y, normal.z};
+                }
+            }
+        }
 
         // 计算 AABB
         std::array<float, 3> aabb_min, aabb_max;
@@ -688,11 +723,17 @@ inline void process_assimp_mesh(aiMesh* ai_mesh, Scene& scene, std::uint32_t nod
         }
 
         // 生成 LOD（蒙皮网格同步携带 bone_weights）
-        if (options.lod_options.enabled) {
+        auto lod_options = options.lod_options;
+        if (is_split_submesh) {
+            // 大网格拆分后会产生大量子 mesh；为每个子 mesh 生成 LOD 会显著放大
+            // 导入、CPU 驻留和磁盘缓存开销，这里只保留 LOD0。
+            lod_options.enabled = false;
+        }
+        if (lod_options.enabled) {
             mesh_data.lod_levels = generate_lod_levels(
                 mesh_data.vertices,
                 mesh_data.indices,
-                options.lod_options,
+                lod_options,
                 sub_mesh_name,
                 mesh_data.aabb_min,
                 mesh_data.aabb_max,
@@ -719,7 +760,7 @@ inline void process_assimp_mesh(aiMesh* ai_mesh, Scene& scene, std::uint32_t nod
             auto& sub_mesh = opt_result.sub_meshes[i];
             std::string sub_mesh_name = mesh_name + "_split" + std::to_string(i);
             process_single_mesh(sub_mesh.vertices, sub_mesh.indices, sub_mesh_name,
-                                sub_mesh.bone_weights);
+                                sub_mesh.bone_weights, /*is_split_submesh=*/true);
         }
     } else {
         // 处理单个网格（检查顶点数量）
@@ -729,7 +770,7 @@ inline void process_assimp_mesh(aiMesh* ai_mesh, Scene& scene, std::uint32_t nod
             return;
         }
         process_single_mesh(opt_result.vertices, opt_result.indices, mesh_name,
-                            opt_result.bone_weights);
+                            opt_result.bone_weights, /*is_split_submesh=*/false);
     }
 }
 
@@ -758,6 +799,178 @@ inline Transform extract_assimp_transform(const aiMatrix4x4& m) {
     return transform;
 }
 
+using SharedStaticMeshAssetCache =
+    std::unordered_map<const aiMesh*, std::vector<std::uint32_t>>;
+
+/// 列主序矩阵乘法：result = lhs * rhs，下标约定 m[col * 4 + row]。
+inline std::array<float, 16> multiply_mat4_colmajor(const std::array<float, 16>& lhs,
+                                                    const std::array<float, 16>& rhs) {
+    std::array<float, 16> result{};
+    for (int col = 0; col < 4; ++col) {
+        for (int row = 0; row < 4; ++row) {
+            float value = 0.0f;
+            for (int k = 0; k < 4; ++k) {
+                value += lhs[k * 4 + row] * rhs[col * 4 + k];
+            }
+            result[col * 4 + row] = value;
+        }
+    }
+    return result;
+}
+
+/// 将静态网格导入期的全局单位化并进实例矩阵：
+/// normalized = scale * (accumulated * local - center)
+inline std::array<float, 16> make_static_instance_matrix(
+    const aiMatrix4x4& accumulated_transform,
+    const GlobalNormalizationParams& global_params) {
+    const std::array<float, 16> node_matrix = ai_to_mat4_colmajor(accumulated_transform);
+    const float s = global_params.scale_factor;
+    const std::array<float, 16> normalization{
+        s, 0.0f, 0.0f, 0.0f,
+        0.0f, s, 0.0f, 0.0f,
+        0.0f, 0.0f, s, 0.0f,
+        -s * global_params.center[0], -s * global_params.center[1], -s * global_params.center[2], 1.0f};
+    return multiply_mat4_colmajor(normalization, node_matrix);
+}
+
+/// 静态网格共享资产构建：同一个 aiMesh 只优化、拆分、生成 LOD 一次。
+/// 顶点保持在网格本地空间，实例矩阵负责应用节点层级与全局单位化。
+inline const std::vector<std::uint32_t>& get_or_create_static_mesh_assets(
+    aiMesh* ai_mesh,
+    Scene& scene,
+    const std::vector<std::uint32_t>& material_map,
+    const GlobalNormalizationParams& global_params,
+    const AssimpImportOptions& options,
+    std::unordered_map<const aiMesh*, MeshOptimizeResult>* optimization_cache,
+    SharedStaticMeshAssetCache& asset_cache) {
+    auto cached = asset_cache.find(ai_mesh);
+    if (cached != asset_cache.end()) {
+        return cached->second;
+    }
+
+    std::vector<std::uint32_t> asset_indices;
+    if (ai_mesh->mNumVertices == 0 || ai_mesh->mNumFaces == 0) {
+        asset_cache.emplace(ai_mesh, asset_indices);
+        return asset_cache[ai_mesh];
+    }
+
+    const std::string mesh_name = ai_mesh->mName.C_Str();
+    std::vector<Vertex> unindexed_vertices(ai_mesh->mNumVertices);
+    for (unsigned int i = 0; i < ai_mesh->mNumVertices; ++i) {
+        const aiVector3D& local_pos = ai_mesh->mVertices[i];
+        unindexed_vertices[i].position = {local_pos.x, local_pos.y, local_pos.z};
+        if (ai_mesh->HasNormals()) {
+            aiVector3D normal = ai_mesh->mNormals[i];
+            normal.Normalize();
+            unindexed_vertices[i].normal = {normal.x, normal.y, normal.z};
+        }
+        if (ai_mesh->mTextureCoords[0]) {
+            unindexed_vertices[i].tex_coords = {
+                ai_mesh->mTextureCoords[0][i].x,
+                ai_mesh->mTextureCoords[0][i].y};
+        }
+    }
+
+    std::vector<std::uint32_t> indices;
+    indices.reserve(ai_mesh->mNumFaces * 3);
+    for (unsigned int i = 0; i < ai_mesh->mNumFaces; ++i) {
+        aiFace& face = ai_mesh->mFaces[i];
+        for (unsigned int j = 0; j < face.mNumIndices; ++j) {
+            indices.push_back(face.mIndices[j]);
+        }
+    }
+
+    MeshOptimizeResult opt_result;
+    bool cache_hit = false;
+    if (optimization_cache != nullptr) {
+        auto it = optimization_cache->find(ai_mesh);
+        if (it != optimization_cache->end()) {
+            opt_result = it->second;
+            cache_hit = true;
+        }
+    }
+    if (!cache_hit) {
+        opt_result = optimize_mesh_pipeline(
+            unindexed_vertices,
+            indices,
+            options.simplify_mesh,
+            options.simplification_error,
+            mesh_name,
+            nullptr);
+        if (optimization_cache != nullptr && opt_result.success) {
+            optimization_cache->emplace(ai_mesh, opt_result);
+        }
+    }
+    if (!opt_result.success) {
+        CFW_LOG_WARNING("[Assimp] Mesh '{}' optimization failed, skipping", mesh_name);
+        asset_cache.emplace(ai_mesh, asset_indices);
+        return asset_cache[ai_mesh];
+    }
+
+    std::uint32_t material_index = InvalidIndex;
+    if (ai_mesh->mMaterialIndex < material_map.size()) {
+        material_index = material_map[ai_mesh->mMaterialIndex];
+    }
+
+    auto append_asset = [&](std::vector<Vertex>& vertices,
+                            std::vector<std::uint32_t>& mesh_indices,
+                            const std::string& sub_mesh_name,
+                            bool is_split_submesh) {
+        if (vertices.empty() || mesh_indices.empty()) return;
+
+        std::array<float, 3> aabb_min{};
+        std::array<float, 3> aabb_max{};
+        compute_aabb(vertices, aabb_min, aabb_max);
+
+        std::vector<std::uint16_t> final_indices =
+            convert_indices_to_uint16(mesh_indices, vertices.size(), sub_mesh_name);
+
+        MeshData mesh_data = build_mesh_data(
+            std::move(vertices),
+            std::move(final_indices),
+            material_index,
+            aabb_min,
+            aabb_max,
+            global_params.center,
+            global_params.scale_factor);
+
+        auto lod_options = options.lod_options;
+        (void)is_split_submesh;
+        if (lod_options.enabled) {
+            mesh_data.lod_levels = generate_lod_levels(
+                mesh_data.vertices,
+                mesh_data.indices,
+                lod_options,
+                sub_mesh_name,
+                mesh_data.aabb_min,
+                mesh_data.aabb_max,
+                nullptr);
+        }
+
+        asset_indices.push_back(scene.add_mesh(std::move(mesh_data)));
+    };
+
+    if (opt_result.was_split) {
+        for (std::size_t i = 0; i < opt_result.sub_meshes.size(); ++i) {
+            auto& sub_mesh = opt_result.sub_meshes[i];
+            append_asset(sub_mesh.vertices,
+                         sub_mesh.indices,
+                         mesh_name + "_split" + std::to_string(i),
+                         true);
+        }
+    } else {
+        if (opt_result.vertices.size() <= 65535) {
+            append_asset(opt_result.vertices, opt_result.indices, mesh_name, false);
+        } else {
+            CFW_LOG_ERROR("[Assimp] Mesh '{}' has {} vertices, which exceeds the uint16 limit. Skipping to prevent device loss.",
+                          mesh_name, opt_result.vertices.size());
+        }
+    }
+
+    asset_cache.emplace(ai_mesh, asset_indices);
+    return asset_cache[ai_mesh];
+}
+
 inline void process_assimp_node(aiNode* ai_node, const aiScene* ai_scene, Scene& scene,
                                 std::uint32_t parent_index,
                                 const std::vector<std::uint32_t>& material_map,
@@ -765,7 +978,10 @@ inline void process_assimp_node(aiNode* ai_node, const aiScene* ai_scene, Scene&
                                 const aiMatrix4x4& parent_accumulated_transform = aiMatrix4x4(),
                                 const AssimpImportOptions& options = AssimpImportOptions{},
                                 std::unordered_map<std::string, BoneInfo>* bone_map = nullptr,
-                                int* bone_counter = nullptr) {
+                                int* bone_counter = nullptr,
+                                std::unordered_map<const aiMesh*, MeshOptimizeResult>* optimization_cache = nullptr,
+                                bool share_static_instances = false,
+                                SharedStaticMeshAssetCache* shared_asset_cache = nullptr) {
     std::uint32_t node_index = scene.add_node(ai_node->mName.C_Str(), parent_index);
     scene.data.nodes[node_index].transform = extract_assimp_transform(ai_node->mTransformation);
 
@@ -776,18 +992,44 @@ inline void process_assimp_node(aiNode* ai_node, const aiScene* ai_scene, Scene&
         unsigned int mesh_index = ai_node->mMeshes[i];
         aiMesh* ai_mesh = ai_scene->mMeshes[mesh_index];
 
-        if (i == 0) {
-            process_assimp_mesh(ai_mesh, scene, node_index, material_map, global_params, current_accumulated, options, bone_map, bone_counter);
+        if (share_static_instances && shared_asset_cache != nullptr &&
+            !ai_mesh->HasBones()) {
+            const auto& asset_indices = get_or_create_static_mesh_assets(
+                ai_mesh, scene, material_map, global_params, options,
+                optimization_cache, *shared_asset_cache);
+            const auto instance_matrix =
+                make_static_instance_matrix(current_accumulated, global_params);
+            for (std::uint32_t asset_index : asset_indices) {
+                MeshInstanceData instance;
+                instance.mesh_index = asset_index;
+                instance.node_index = node_index;
+                instance.transform = instance_matrix;
+                const std::uint32_t instance_index =
+                    scene.add_mesh_instance(std::move(instance));
+                scene.data.nodes[node_index].mesh_instance_indices.push_back(instance_index);
+                if (scene.data.nodes[node_index].mesh_index == InvalidIndex) {
+                    scene.data.nodes[node_index].mesh_index = asset_index;
+                }
+            }
+        } else if (i == 0) {
+            process_assimp_mesh(ai_mesh, scene, node_index, material_map, global_params,
+                                current_accumulated, options, bone_map, bone_counter,
+                                optimization_cache);
         } else {
             std::string child_name = std::string(ai_node->mName.C_Str()) + "_mesh_" + std::to_string(i);
             std::uint32_t child_index = scene.add_node(child_name, node_index);
             scene.data.nodes[child_index].transform = scene.data.nodes[node_index].transform;
-            process_assimp_mesh(ai_mesh, scene, child_index, material_map, global_params, current_accumulated, options, bone_map, bone_counter);
+            process_assimp_mesh(ai_mesh, scene, child_index, material_map, global_params,
+                                current_accumulated, options, bone_map, bone_counter,
+                                optimization_cache);
         }
     }
 
     for (unsigned int i = 0; i < ai_node->mNumChildren; ++i) {
-        process_assimp_node(ai_node->mChildren[i], ai_scene, scene, node_index, material_map, global_params, current_accumulated, options, bone_map, bone_counter);
+        process_assimp_node(ai_node->mChildren[i], ai_scene, scene, node_index,
+                            material_map, global_params, current_accumulated, options,
+                            bone_map, bone_counter, optimization_cache,
+                            share_static_instances, shared_asset_cache);
     }
 }
 

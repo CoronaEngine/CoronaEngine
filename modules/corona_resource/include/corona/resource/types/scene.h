@@ -101,6 +101,22 @@ struct MeshData {
     [[nodiscard]] bool is_skinned() const { return !bone_weights.empty(); }
 };
 
+/// 共享网格实例：mesh_index 指向 SceneData::meshes 中的唯一网格资产，
+/// transform 为该资产本地空间到场景空间的列主序矩阵（col*4 + row）。
+///
+/// 同一个 MeshData 可以被多个 MeshInstanceData 引用；节点只拥有实例变换，
+/// 不再为每个引用复制顶点/索引数据。
+struct MeshInstanceData {
+    std::uint32_t mesh_index = InvalidIndex;
+    std::uint32_t node_index = InvalidIndex;
+    std::array<float, 16> transform{
+        1.0f, 0.0f, 0.0f, 0.0f,
+        0.0f, 1.0f, 0.0f, 0.0f,
+        0.0f, 0.0f, 1.0f, 0.0f,
+        0.0f, 0.0f, 0.0f, 1.0f};
+    std::uint32_t object_id = InvalidIndex;
+};
+
 /// LOD 生成配置
 struct LODGenerationOptions {
     bool enabled = false;  // 是否生成 LOD
@@ -131,6 +147,8 @@ struct LODGenerationOptions {
 struct AssimpImportOptions {
     bool simplify_mesh = true;           // 是否启用网格简化
     float simplification_error = 0.01f;  // 简化误差阈值
+    // 静态网格使用共享 MeshData + 每节点 MeshInstanceData；蒙皮网格仍走旧路径。
+    bool share_static_mesh_instances = true;
     LODGenerationOptions lod_options;    // LOD 生成配置
     ImageImportOptions image_options;    // 纹理导入选项
 };
@@ -192,6 +210,7 @@ struct NodeData {
     std::vector<NodeData*> children;
 
     std::uint32_t mesh_index = InvalidIndex;
+    std::vector<std::uint32_t> mesh_instance_indices;
     std::uint32_t light_index = InvalidIndex;
     std::uint32_t camera_index = InvalidIndex;
 
@@ -293,7 +312,9 @@ struct IkChain {
 };
 
 struct SceneData {
+    // 唯一网格资产。共享实例通过 MeshInstanceData::mesh_index 引用这里的数据。
     std::vector<MeshData> meshes;
+    std::vector<MeshInstanceData> mesh_instances;
     std::vector<MaterialData> materials;
     std::vector<LightData> lights;
     std::vector<CameraData> cameras;
@@ -332,6 +353,7 @@ class Scene : public IResource {
         }
     }
     std::uint32_t add_mesh(MeshData&& mesh);
+    std::uint32_t add_mesh_instance(MeshInstanceData instance);
 
     // 修改：返回底层容器的常量引用（零拷贝）
     [[nodiscard]] const std::vector<Vertex>& get_mesh_vertices(std::uint32_t mesh_idx) const;

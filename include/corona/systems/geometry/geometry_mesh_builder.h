@@ -43,6 +43,18 @@ namespace Corona::Systems {
 [[nodiscard]] std::vector<MeshDevice> build_mesh_devices_from_scene(
     const Resource::Scene& scene);
 
+/// 共享网格 GPU 数据：mesh_devices 只包含唯一 MeshData，
+/// mesh_instances 保存每个节点的实例矩阵与 mesh 索引。
+struct SceneGpuMeshData {
+    std::vector<MeshDevice> mesh_devices;
+    std::vector<MeshInstanceDevice> mesh_instances;
+};
+
+/// 构建共享 mesh GPU 数据。无 mesh_instances 的旧场景（含蒙皮）会为每个
+/// mesh 自动生成单位实例，保持旧行为可用。
+[[nodiscard]] SceneGpuMeshData build_gpu_mesh_data_from_scene(
+    const Resource::Scene& scene);
+
 /// 释放进程级共享占位纹理。必须在 GPU device 仍存活时调用
 /// （由 GeometrySystem::shutdown() 负责）。可重复调用，已释放时为 no-op。
 void release_geometry_placeholder_texture();

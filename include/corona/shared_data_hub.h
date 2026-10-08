@@ -55,6 +55,14 @@ struct MeshDevice {
     std::shared_ptr<Corona::Memory::GpuMemToken> tex_mem;
 };
 
+/// 一个共享 MeshDevice 的场景实例。transform 为网格本地空间到 actor 本地空间
+/// 的列主序矩阵；同一个 MeshDevice 可被多个实例引用。
+struct MeshInstanceDevice {
+    std::uint32_t mesh_index = 0;
+    std::uint32_t object_id = 0;
+    ktm::fmat4x4 transform{ktm::fmat4x4::from_eye()};
+};
+
 struct ModelTransform {
     ktm::fvec3 position;
     ktm::fvec3 euler_rotation;
@@ -100,6 +108,7 @@ struct GeometryDevice {
     std::uintptr_t transform_handle{};
     std::uintptr_t model_resource_handle{};
     std::vector<MeshDevice> mesh_handles;
+    std::vector<MeshInstanceDevice> mesh_instances;
     ktm::fvec3 native_local_correction_offset{0.0f, 0.0f, 0.0f};
     float native_local_correction_scale{1.0f};
     GpuBuildState gpu_build_state{GpuBuildState::Ready};
