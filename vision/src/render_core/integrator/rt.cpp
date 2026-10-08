@@ -6,6 +6,7 @@
 #include "base/integral/radiance_cache.h"
 #include "base/mgr/pipeline.h"
 #include "base/mgr/switch_profile.h"
+#include "base/mgr/evaluation_debug.h"
 #include "math/warp.h"
 #include "base/color/spectrum.h"
 #include "ReSTIR/direct.h"
@@ -234,9 +235,8 @@ public:
         submit(indirect_->dispatch(frame_index_), &cur_stage_profile_.restir_gi_ms);
         cur_stage_profile_.path_tracing_ms = cur_stage_profile_.restir_di_ms + cur_stage_profile_.restir_gi_ms;
         auto debug_readback = [&](const char *stage) {
-            const char *frame = std::getenv("VISION_EVAL_DEBUG_FRAME");
-            const char *directory = std::getenv("VISION_EVAL_DEBUG_DIR");
-            if (!frame || !directory || frame_index_ != std::strtoul(frame, nullptr, 10)) return;
+            const auto directory = evaluation_debug::directory(frame_index_);
+            if (directory.empty()) return;
             fs::create_directories(directory);
             vector<float4> direct(rp->pixel_num()), indirect(rp->pixel_num());
             stream << direct_->radiance()->view().download(direct.data())
@@ -247,6 +247,16 @@ public:
                 if (!out) throw std::runtime_error("ReSTIR diagnostic write failed");
             };
             write("_direct", direct); write("_indirect", indirect);
+            if (stable_planes_enabled()) {
+                for (uint layer = 0u; layer < StablePlaneCount; ++layer) {
+                    stream << frame_buffer().stable_direct_view(layer).download(direct.data())
+                           << frame_buffer().stable_indirect_view(layer).download(indirect.data())
+                           << synchronize() << commit();
+                    const auto prefix = "_layer_" + std::to_string(layer);
+                    write((prefix + "_direct").c_str(), direct);
+                    write((prefix + "_indirect").c_str(), indirect);
+                }
+            }
         };
         if (stable_planes_enabled()) {
             submit(merge_dominant_().dispatch(pipeline()->resolution()), &cur_stage_profile_.combine_ms);

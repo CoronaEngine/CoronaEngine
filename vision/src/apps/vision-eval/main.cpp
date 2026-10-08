@@ -17,6 +17,7 @@
 #include "base/integral/integrator.h"
 #include "base/mgr/global.h"
 #include "base/mgr/pipeline.h"
+#include "base/mgr/evaluation_debug.h"
 #include "core/image/image.h"
 #include "core/util/logging.h"
 #include "rhi/context.h"
@@ -177,6 +178,10 @@ struct EvalStats {
     double average_gbuffer_ms{0.0};
     double average_sampling_mask_ms{0.0};
     double average_path_tracing_ms{0.0};
+    double average_stable_build_ms{0.0};
+    double average_stable_fill_ms{0.0};
+    double average_restir_di_ms{0.0};
+    double average_restir_gi_ms{0.0};
     double average_spatial_angular_ms{0.0};
     double average_temporal_ms{0.0};
     double average_combine_ms{0.0};
@@ -234,6 +239,10 @@ void write_metrics(const fs::path &path, const EvalStats &stats) {
     out << "  \"average_gbuffer_ms\": " << stats.average_gbuffer_ms << ",\n";
     out << "  \"average_sampling_mask_ms\": " << stats.average_sampling_mask_ms << ",\n";
     out << "  \"average_path_tracing_ms\": " << stats.average_path_tracing_ms << ",\n";
+    out << "  \"average_stable_build_ms\": " << stats.average_stable_build_ms << ",\n";
+    out << "  \"average_stable_fill_ms\": " << stats.average_stable_fill_ms << ",\n";
+    out << "  \"average_restir_di_ms\": " << stats.average_restir_di_ms << ",\n";
+    out << "  \"average_restir_gi_ms\": " << stats.average_restir_gi_ms << ",\n";
     out << "  \"average_spatial_angular_ms\": " << stats.average_spatial_angular_ms << ",\n";
     out << "  \"average_temporal_ms\": " << stats.average_temporal_ms << ",\n";
     out << "  \"average_combine_ms\": " << stats.average_combine_ms << ",\n";
@@ -424,15 +433,22 @@ public:
         if (!out) throw std::runtime_error("Failed to write linear evaluation image: " + path.string());
         const auto *sensor = pipeline_->scene().sensor().get();
         const auto position = sensor->position();
+        auto *integrator = pipeline_->renderer().integrator().get();
+        auto *illumination = dynamic_cast<IlluminationIntegrator *>(integrator);
+        auto *denoiser = illumination ? illumination->denoiser() : nullptr;
+        const bool denoise = denoiser && denoiser->enabled() && !evaluation_debug::denoiser_disabled();
         njson pose = {{"position", {position.x, position.y, position.z}},
                       {"pitch", sensor->pitch()}, {"yaw", sensor->yaw()},
                       {"frame_index", pipeline_->frame_index()},
-                      {"denoise", pipeline_->output_desc().denoise},
+                      {"denoise", denoise},
+                      {"denoise_preference", pipeline_->output_desc().denoise},
+                      {"stable_planes", integrator->stable_planes_enabled()},
+                      {"integrator", std::string(integrator->impl_type())},
                       {"accumulation", pipeline_->frame_buffer()->enable_accumulation()}};
         path.replace_extension(".pose.json");
         std::ofstream metadata(path);
         metadata << pose.dump(2);
-          if (!metadata) throw std::runtime_error("Failed to write evaluation pose: " + path.string());
+        if (!metadata) throw std::runtime_error("Failed to write evaluation pose: " + path.string());
     }
 
     [[nodiscard]] EvalStats run() {
@@ -515,6 +531,10 @@ public:
             stats.average_gbuffer_ms = average_stage([](const IntegratorStageProfile &profile) { return profile.gbuffer_ms; });
             stats.average_sampling_mask_ms = average_stage([](const IntegratorStageProfile &profile) { return profile.sampling_mask_ms; });
             stats.average_path_tracing_ms = average_stage([](const IntegratorStageProfile &profile) { return profile.path_tracing_ms; });
+            stats.average_stable_build_ms = average_stage([](const IntegratorStageProfile &profile) { return profile.stable_build_ms; });
+            stats.average_stable_fill_ms = average_stage([](const IntegratorStageProfile &profile) { return profile.stable_fill_ms; });
+            stats.average_restir_di_ms = average_stage([](const IntegratorStageProfile &profile) { return profile.restir_di_ms; });
+            stats.average_restir_gi_ms = average_stage([](const IntegratorStageProfile &profile) { return profile.restir_gi_ms; });
             stats.average_spatial_angular_ms = average_stage([](const IntegratorStageProfile &profile) { return profile.spatial_angular_ms; });
             stats.average_temporal_ms = average_stage([](const IntegratorStageProfile &profile) { return profile.temporal_ms; });
             stats.average_combine_ms = average_stage([](const IntegratorStageProfile &profile) { return profile.combine_ms; });
@@ -589,6 +609,10 @@ int main(int argc, char **argv) {
         std::cout << "average_gbuffer_ms=" << stats.average_gbuffer_ms << "\n";
         std::cout << "average_sampling_mask_ms=" << stats.average_sampling_mask_ms << "\n";
         std::cout << "average_path_tracing_ms=" << stats.average_path_tracing_ms << "\n";
+        std::cout << "average_stable_build_ms=" << stats.average_stable_build_ms << "\n";
+        std::cout << "average_stable_fill_ms=" << stats.average_stable_fill_ms << "\n";
+        std::cout << "average_restir_di_ms=" << stats.average_restir_di_ms << "\n";
+        std::cout << "average_restir_gi_ms=" << stats.average_restir_gi_ms << "\n";
         std::cout << "average_spatial_angular_ms=" << stats.average_spatial_angular_ms << "\n";
         std::cout << "average_temporal_ms=" << stats.average_temporal_ms << "\n";
         std::cout << "average_combine_ms=" << stats.average_combine_ms << "\n";

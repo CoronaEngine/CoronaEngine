@@ -4,6 +4,7 @@
 #include "render_core/denoiser/SVGF/svgf.h"
 #include "base/integral/integrator.h"
 #include "base/mgr/global.h"
+#include "base/mgr/evaluation_debug.h"
 #include "ext/nlohmann/json.hpp"
 #include <cstdlib>
 #include <fstream>
@@ -13,11 +14,9 @@ using namespace vision;
 using namespace ocarina;
 
 void save_pixel_diagnostics(Pipeline &pipeline) {
-    const char *frame = std::getenv("VISION_EVAL_DEBUG_FRAME");
-    const char *directory = std::getenv("VISION_EVAL_DEBUG_DIR");
-    if (!frame || !directory || pipeline.frame_index() == 0u ||
-        pipeline.frame_index() - 1u != std::strtoul(frame, nullptr, 10)) return;
-    const fs::path root(directory);
+    if (pipeline.frame_index() == 0u) return;
+    const auto root = evaluation_debug::directory(pipeline.frame_index() - 1u);
+    if (root.empty()) return;
     fs::create_directories(root);
     const auto count = pipeline.pixel_num();
     const auto rendered = pipeline.frame_index() - 1u;
@@ -28,7 +27,7 @@ void save_pixel_diagnostics(Pipeline &pipeline) {
     pipeline.stream() << fb.cur_visibility_buffer_view(rendered).download(hits.data())
         << fb.cur_surfaces_view(rendered).download(surfaces.data())
         << fb.motion_vectors().view().download(motion.data()) << synchronize() << commit();
-    auto write = [&](const char *name, const auto &data) {
+    auto write = [&](const std::string &name, const auto &data) {
         std::ofstream out(root / name, std::ios::binary);
         out.write(reinterpret_cast<const char *>(data.data()), data.size() * sizeof(data[0]));
         if (!out) throw std::runtime_error("pixel diagnostic write failed");
@@ -48,10 +47,45 @@ void save_pixel_diagnostics(Pipeline &pipeline) {
     write("normal_depth.f32", normals); write("position.f32", positions); write("motion.f32", motion);
     auto *illumination = dynamic_cast<IlluminationIntegrator *>(pipeline.renderer().integrator().get());
     auto *denoiser = illumination ? dynamic_cast<svgf::SVGF *>(illumination->denoiser()) : nullptr;
-    if (denoiser && denoiser->enabled()) {
+    const bool layered = illumination && illumination->stable_planes_enabled();
+    const bool denoise = denoiser && denoiser->enabled() && !evaluation_debug::denoiser_disabled();
+    if (layered) {
+        vector<uint> dominant(count);
+        vector<float4> emission(count);
+        pipeline.stream() << fb.stable_dominant().view().download(dominant.data())
+            << fb.stable_radiance().view().download(emission.data()) << synchronize() << commit();
+        write("dominant.u32", dominant);
+        write("stable_radiance.f32", emission);
+        for (uint layer = 0u; layer < StablePlaneCount; ++layer) {
+            vector<StablePlaneData> planes(count);
+            pipeline.stream() << fb.cur_stable_planes_view(rendered, layer).download(planes.data())
+                << synchronize() << commit();
+            const auto prefix = "layer_" + std::to_string(layer) + "_";
+            auto export_field = [&](const char *name, auto extract) {
+                vector<decltype(extract(planes[0]))> packed(count);
+                for (uint i = 0u; i < count; ++i) packed[i] = extract(planes[i]);
+                write(prefix + name, packed);
+            };
+            export_field("identity.u32", [](const auto &p) { return make_uint4(p.branch_sequence, p.instance_hash, p.depth, p.material_id); });
+            export_field("state.u32", [](const auto &p) { return make_uint4(p.valid, p.reservoir_eligible, p.surface.approximate, p.surface.stable_branch); });
+            export_field("hit.u32", [](const auto &p) { return make_uint2(p.surface.hit.inst_id, p.surface.hit.prim_id); });
+            export_field("motion.f32", [](const auto &p) { return p.motion; });
+            export_field("physical_normal_depth.f32", [](const auto &p) { return p.surface.normal_depth; });
+            export_field("physical_position.f32", [](const auto &p) { return p.surface.pos_diff; });
+            export_field("virtual_position.f32", [](const auto &p) { return make_float4(p.surface.virtual_position, 0.f); });
+            export_field("virtual_normal.f32", [](const auto &p) { return make_float4(p.surface.virtual_normal, 0.f); });
+            export_field("virtual_geometric_normal.f32", [](const auto &p) { return make_float4(p.surface.virtual_geometric_normal, 0.f); });
+            export_field("depth_position.f32", [](const auto &p) { return make_float4(p.depth_position, 0.f); });
+            export_field("diffuse_roughness.f32", [](const auto &p) { return p.surface.diffuse_roughness; });
+            export_field("specular_roughness.f32", [](const auto &p) { return p.surface.specular_roughness; });
+            export_field("albedo.f32", [](const auto &p) { return make_float4(p.surface.denoiser_albedo, 0.f); });
+            export_field("throughput.f32", [](const auto &p) { return make_float4(p.extension.throughput, 0.f); });
+        }
+    }
+    if (denoise && denoiser->has_prepared_resources()) {
+      for (uint layer = 0u; layer < (layered ? StablePlaneCount : 1u); ++layer) {
         vector<svgf::SVGFDataDual> history(count);
-        auto &buffer = (rendered & 1u) == 0u ? denoiser->svgf_data : denoiser->svgf_data2;
-        pipeline.stream() << buffer.view().download(history.data()) << synchronize() << commit();
+        pipeline.stream() << denoiser->svgf_buffer_cur(rendered, layer).download(history.data()) << synchronize() << commit();
         auto pack = [&](auto member) {
             vector<float4> result(count);
             for (uint i = 0; i < count; ++i) {
@@ -60,15 +94,30 @@ void save_pixel_diagnostics(Pipeline &pipeline) {
             }
             return result;
         };
-        write("history_direct.f32", pack(&svgf::SVGFDataDual::illumi_direct));
-        write("history_indirect.f32", pack(&svgf::SVGFDataDual::illumi_indirect));
-        write("moments_direct.f32", pack(&svgf::SVGFDataDual::moments_direct));
-        write("moments_indirect.f32", pack(&svgf::SVGFDataDual::moments_indirect));
-        write("shading_normal.f32", pack(&svgf::SVGFDataDual::surface_normal));
+        const auto prefix = layered ? "layer_" + std::to_string(layer) + "_" : std::string{};
+        write(prefix + "history_direct.f32", pack(&svgf::SVGFDataDual::illumi_direct));
+        write(prefix + "history_indirect.f32", pack(&svgf::SVGFDataDual::illumi_indirect));
+        write(prefix + "moments_direct.f32", pack(&svgf::SVGFDataDual::moments_direct));
+        write(prefix + "moments_indirect.f32", pack(&svgf::SVGFDataDual::moments_indirect));
+        write(prefix + "shading_normal.f32", pack(&svgf::SVGFDataDual::surface_normal));
+        vector<float2> ages(count);
+        for (uint i = 0u; i < count; ++i) ages[i] = make_float2(float(history[i].moments_direct.z), float(history[i].moments_direct.w));
+        write(prefix + "history_count.f32", ages);
+      }
     }
     nlohmann::json metadata;
     metadata["resolution"] = {pipeline.resolution().x, pipeline.resolution().y};
     metadata["frame"] = rendered;
+    metadata["schema"] = 2;
+    metadata["denoise"] = denoise;
+    metadata["stable_planes"] = layered;
+    metadata["layer_count"] = layered ? StablePlaneCount : 1u;
+    metadata["layout"] = {{"identity.u32", {"branch_sequence", "instance_hash", "depth", "material_id"}},
+        {"state.u32", {"valid", "reservoir_eligible", "approximate", "stable_branch"}},
+        {"hit.u32", {"instance", "primitive"}}, {"history_count.f32", {"direct", "indirect"}},
+        {"motion.f32", {"x", "y"}}};
+    metadata["float4_note"] = "Other f32 outputs are tightly packed float4; normal_depth.w is linear guide depth; position.w is diffuse factor; radiance rgb is linear.";
+    metadata["legacy_radiance_note"] = "raw/filtered_direct/indirect without layer suffix are legacy dominant reservoir buffers; layered results use raw/filtered_layer_N_direct/indirect.";
     uint instance_index = 0u;
     for (const auto &instance : pipeline.scene().instances()) {
         metadata["instances"].push_back({{"index", instance_index++}, {"name", instance->name()},
