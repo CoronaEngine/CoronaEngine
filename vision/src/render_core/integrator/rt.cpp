@@ -38,6 +38,7 @@ private:
     SP<ScreenBuffer> specular_buffer_{make_shared<ScreenBuffer>("RealTimeIntegrator::specular_buffer_")};
     Shader<void(uint, float, float, uint)> combine_;
     Shader<void()> merge_dominant_;
+    Shader<void()> compose_layers_;
     Shader<void(uint, Buffer<SurfaceData>)> path_tracing_;
     SP<RadianceCache> cache_;
 
@@ -61,7 +62,7 @@ public:
     void restore(vision::RuntimeObject *old_obj) noexcept override {
         IlluminationIntegrator::restore(old_obj);
         VS_HOTFIX_MOVE_ATTRS(direct_, indirect_, stable_planes_, specular_buffer_,
-                             combine_, merge_dominant_, path_tracing_, denoiser_)
+                             combine_, merge_dominant_, compose_layers_, path_tracing_, denoiser_)
         direct_->set_integrator(shared_from_this());
         indirect_->set_integrator(shared_from_this());
         stable_planes_->set_integrator(shared_from_this());
@@ -170,6 +171,20 @@ public:
             };
         };
         merge_dominant_ = device().compile(merge, "StablePlanes-MergeDominant");
+        Kernel compose = [&] {
+            Float3 direct = frame_buffer().stable_radiance().read(dispatch_id()).xyz();
+            Float3 indirect = make_float3(0.f);
+            for (uint layer = 0u; layer < StablePlaneCount; ++layer) {
+                Uint address = layer * (dispatch_dim().x * dispatch_dim().y) + dispatch_id();
+                direct += frame_buffer().stable_direct().read(address).xyz();
+                indirect += frame_buffer().stable_indirect().read(address).xyz();
+            }
+            // Estimator buffers are no longer needed after the dominant merge.
+            // Reuse them for the unscaled complete DirectIndirect pixel signal.
+            direct_->radiance()->write(dispatch_id(), make_float4(direct, 1.f));
+            indirect_->radiance()->write(dispatch_id(), make_float4(indirect, 1.f));
+        };
+        compose_layers_ = device().compile(compose, "StablePlanes-ComposeCoverage");
         {
             switch_profile::Scope combine_profile{"combine.compile", "compile"};
             combine_ = device().compile(kernel, "combine");
@@ -234,7 +249,7 @@ public:
         submit(direct_->dispatch(frame_index_), &cur_stage_profile_.restir_di_ms);
         submit(indirect_->dispatch(frame_index_), &cur_stage_profile_.restir_gi_ms);
         cur_stage_profile_.path_tracing_ms = cur_stage_profile_.restir_di_ms + cur_stage_profile_.restir_gi_ms;
-        auto debug_readback = [&](const char *stage) {
+        auto debug_readback = [&](const char *stage, bool layers = true) {
             const auto directory = evaluation_debug::directory(frame_index_);
             if (directory.empty()) return;
             fs::create_directories(directory);
@@ -247,7 +262,7 @@ public:
                 if (!out) throw std::runtime_error("ReSTIR diagnostic write failed");
             };
             write("_direct", direct); write("_indirect", indirect);
-            if (stable_planes_enabled()) {
+            if (layers && stable_planes_enabled()) {
                 for (uint layer = 0u; layer < StablePlaneCount; ++layer) {
                     stream << frame_buffer().stable_direct_view(layer).download(direct.data())
                            << frame_buffer().stable_indirect_view(layer).download(indirect.data())
@@ -271,9 +286,24 @@ public:
                 submit(denoiser_->dispatch(dn_input), &cur_stage_profile_.spatial_angular_ms);
             }
             debug_readback("filtered");
+            if (stable_planes_enabled()) {
+                submit(compose_layers_().dispatch(pipeline()->resolution()), &cur_stage_profile_.combine_ms);
+                debug_readback("composite_pre", false);
+                auto coverage = denoise_input();
+                coverage.layer_count = 1u;
+                coverage.composed_coverage = true;
+                coverage.direct = direct_->radiance()->view();
+                coverage.indirect = indirect_->radiance()->view();
+                coverage.coverage_planes = frame_buffer().cur_stable_planes_view(frame_index_);
+                coverage.prev_coverage_planes = frame_buffer().prev_stable_planes_view(frame_index_);
+                submit(denoiser_->dispatch(coverage), &cur_stage_profile_.spatial_angular_ms);
+                debug_readback("composite_post", false);
+            }
         }
-        // Raw and filtered paths use exactly the same single layer sum.
-        submit(combine_(frame_index_, direct_->factor(), indirect_->factor(), uint(stable_planes_enabled()))
+        const bool resolved = !denoiser_runtime_disabled() && denoiser_ && denoiser_->enabled();
+        // Raw ownership is unchanged. Filtered output resolves that same sum
+        // before channel factors are applied exactly once in presentation.
+        submit(combine_(frame_index_, direct_->factor(), indirect_->factor(), uint(stable_planes_enabled() && !resolved))
                    .dispatch(pipeline()->resolution()), &cur_stage_profile_.combine_ms);
         submit(frame_buffer().post_path_tracing(frame_index_), &cur_stage_profile_.postprocess_ms);
         submit(frame_buffer().render_final(frame_index_), &cur_stage_profile_.render_final_ms);

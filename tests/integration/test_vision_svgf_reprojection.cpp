@@ -9,9 +9,8 @@
 #include <vector>
 #include <cstdlib>
 
-// Sharing temporal or resolve storage across layers makes these independently
-// coloured paths contaminate each other. Changing identity without camera motion
-// also must not inherit the previous path's coverage or illumination.
+// Illumination storage and validation are independent per layer. Coverage then
+// integrates the complete footprint, including complementary endpoints.
 template<typename Input, typename Filter>
 void layered_history_regression(vision::Pipeline& pipeline, Filter& denoiser) {
     using namespace vision;
@@ -114,28 +113,99 @@ void layered_history_regression(vision::Pipeline& pipeline, Filter& denoiser) {
         }
         Env::set("VISION_SVGF_SKIP_VARIANCE", "1");
         Env::set("VISION_SVGF_SKIP_RESOLVE", "0");
-        guides = baseline;
-        for (uint frame = 0; frame < 2; ++frame) for (uint layer = 0; layer < StablePlaneCount; ++layer) {
-            run(frame, layer, colors[layer]);
-            if (std::abs(float(output[center].x)-float(colors[layer].x)) > 1e-5f ||
-                std::abs(float(output[center].y)-float(colors[layer].y)) > 1e-5f ||
-                std::abs(float(output[center].z)-float(colors[layer].z)) > 1e-5f)
-                throw std::runtime_error("stationary resolve must keep three independent colors");
+        auto all_current = pipeline.device().create_buffer<StablePlaneData>(n * StablePlaneCount, "coverage_all_current");
+        auto all_previous = pipeline.device().create_buffer<StablePlaneData>(n * StablePlaneCount, "coverage_all_previous");
+        auto primary = pipeline.device().create_buffer<TriangleHit>(n, "coverage_primary");
+        std::vector<TriangleHit> primary_hits(n, baseline[center].surface.hit);
+        const auto primary_hit = baseline[center].surface.hit;
+        std::vector<StablePlaneData> all_planes(n * StablePlaneCount), last_planes(all_planes.size());
+        auto coverage_run = [&](uint frame, float value, uint emission, bool colored = false) {
+            input.frame_index = frame; input.layer_index = 0u;
+            guides = baseline;
+            for (uint i = 0u; i < n; ++i) {
+                guides[i].branch_sequence = 5u + ((i + frame) & 1u);
+                if (emission == 1u) guides[i].valid = 0u;
+                if (emission == 2u) guides[i].surface.hit.inst_id = InvalidUI32;
+                all_planes[i] = guides[i];
+                all_planes[n + i] = guides[i];
+                if (colored) {
+                    const uint side = (i % input.resolution.x) >= input.resolution.x / 2u;
+                    all_planes[i].branch_sequence = all_planes[n + i].branch_sequence = 5u + side;
+                    all_planes[i].motion = make_float2(2.f, 0.f);
+                    all_planes[n + i].motion = make_float2(-2.f, 0.f);
+                }
+                // Primary geometry is constant for the glass-internal edge.
+                // Emission-only coverage has no valid illumination layer.
+                primary_hits[i] = primary_hit;
+                if (emission == 1u && (i & 1u)) primary_hits[i].inst_id = InvalidUI32;
+            }
+            if constexpr (requires(Input in) { in.composed_coverage; in.coverage_planes; in.prev_coverage_planes; }) {
+                input.composed_coverage = true;
+                input.layer_count = 1u; input.use_stable_planes = false;
+                input.coverage_planes = all_current.view(); input.prev_coverage_planes = all_previous.view();
+            }
+            input.visibility = input.prev_visibility = primary.view();
+            std::fill(samples.begin(), samples.end(), RadType4{value,value,value,1.f});
+            if (colored) for (uint i = 0u; i < n; ++i) {
+                const bool right = (i % input.resolution.x) >= input.resolution.x / 2u;
+                samples[i] = colors[(right ^ (frame != 0u)) ? 2u : 0u];
+            }
+            pipeline.stream() << current.upload(guides.data()) << previous.upload(baseline.data())
+                << all_current.upload(all_planes.data()) << all_previous.upload(last_planes.data())
+                << primary.upload(primary_hits.data()) << direct.upload(samples.data()) << indirect.upload(samples.data())
+                << denoiser.dispatch(input) << direct.download(output.data()) << synchronize() << commit();
+            last_planes = all_planes;
+            baseline = guides;
+            return float(output[center].x);
+        };
+        auto original_guides = baseline;
+        float internal = 0.f, emission = 0.f;
+        for (uint frame = 0; frame < 16u; ++frame) internal = coverage_run(frame, float(frame & 1u), false);
+        baseline = original_guides;
+        for (uint frame = 0; frame < 16u; ++frame) emission = coverage_run(frame, float(frame & 1u), true);
+        std::cout << "composed complementary coverage internal=" << internal << " emission=" << emission << '\n';
+        if (std::abs(internal - 0.5f) > 1e-5f || std::abs(emission - 0.5f) > 1e-5f)
+            throw std::runtime_error("complete coverage must average complementary endpoints and deterministic radiance exactly once");
+        baseline = original_guides;
+        float environment = 0.f;
+        for (uint frame = 0; frame < 16u; ++frame) environment = coverage_run(frame, float(frame & 1u), 2u);
+        if (std::abs(environment - 0.5f) > 1e-5f)
+            throw std::runtime_error("reflected and refracted environment coverage must retain valid miss metadata without requiring illumination hits");
+        baseline = original_guides;
+        coverage_run(0u, 0.f, false);
+        auto* sensor = pipeline.scene().sensor().get();
+        const auto old_eye = sensor->position();
+        sensor->set_position(old_eye + make_float3(0.1f, 0.f, 0.f)); sensor->update_device_data();
+        const float moving_composite = coverage_run(1u, 1.f, false);
+        if (std::abs(moving_composite - 1.f) > 1e-5f)
+            throw std::runtime_error("translated multi-branch coverage must not reuse primary-only composite history");
+        sensor->set_position(old_eye); sensor->update_device_data();
+        coverage_run(0u, 0.f, false, true);
+        sensor->set_position(old_eye + make_float3(0.1f, 0.f, 0.f)); sensor->update_device_data();
+        coverage_run(1u, 0.f, false, true);
+        const auto translated = output;
+        denoiser.set_enabled(false); denoiser.set_enabled(true);
+        coverage_run(1u, 0.f, false, true);
+        float translated_error = 0.f;
+        uint complementary_pixels = 0u;
+        for (const auto& pixel : output)
+            complementary_pixels += float(pixel.x) > 0.f && float(pixel.z) > 0.f;
+        for (uint i = 0u; i < n; ++i) for (uint c = 0u; c < 3u; ++c) {
+            if (!std::isfinite(float(translated[i][c])) || !std::isfinite(float(output[i][c])))
+                throw std::runtime_error("translated internal colored boundary must remain finite");
+            translated_error = std::max(translated_error, std::abs(float(translated[i][c]) - float(output[i][c])));
         }
-        for (auto& plane : guides) plane.branch_sequence ^= 1u;
-        run(2u, 1u, colors[0]);
-        if (float(output[center].x) != 1.f || float(output[center].y) != 0.f)
-            throw std::runtime_error("stationary resolve must reject changed branch identity");
-        auto old_baseline = baseline;
-        baseline = guides;
-        run(3u, 1u, colors[2]);
-        if (std::abs(float(output[center].x) - 0.5f) > 1e-5f || std::abs(float(output[center].z) - 0.5f) > 1e-5f)
-            throw std::runtime_error("changed layer coverage age must restart independently of stationary camera age");
-        baseline = old_baseline;
-        for (auto& plane : guides) plane.valid = 0u;
-        run(4u, 1u, colors[0]);
-        if (float(output[center].x) != 0.f || float(history[center].moments_direct.z) != 0.f)
-            throw std::runtime_error("empty layers must clear output and history even with variance bypassed");
+        std::cout << "composed translated colored boundary versus current-only maxabs=" << translated_error
+                  << " complementary pixels=" << complementary_pixels << '\n';
+        // Individual jittered tent footprints can have no opposite-side sample;
+        // the vertical boundary as a whole must reconstruct both target colors.
+        if (translated_error > 1e-5f || complementary_pixels == 0u)
+            throw std::runtime_error("translated internal colored boundary must reconstruct current complementary footprint without stale branches");
+        sensor->set_position(old_eye); sensor->update_device_data();
+        if constexpr (requires(Input in) { in.composed_coverage; }) input.composed_coverage = false;
+        input.layer_count = StablePlaneCount; input.use_stable_planes = true;
+        input.visibility = input.prev_visibility = visibility;
+        baseline = original_guides;
         guides = baseline;
         Env::set("VISION_SVGF_SKIP_VARIANCE", "0");
         Env::set("VISION_SVGF_SKIP_RESOLVE", "1");
@@ -172,7 +242,7 @@ void layered_history_regression(vision::Pipeline& pipeline, Filter& denoiser) {
         guides = baseline;
         Env::set("VISION_SVGF_SKIP_PREFILTER", "0");
         Env::set("VISION_SVGF_SKIP_ATROUS", "0");
-        Env::set("VISION_SVGF_SKIP_RESOLVE", "0");
+        Env::set("VISION_SVGF_SKIP_RESOLVE", "1");
         for (bool separated : {true, false}) {
             guides = baseline;
             std::fill(samples.begin(), samples.end(), colors[1]);

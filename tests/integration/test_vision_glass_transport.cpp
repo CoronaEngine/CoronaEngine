@@ -165,3 +165,48 @@ void check_glass_depth_guides(vision::Pipeline &pipeline) {
             throw std::runtime_error("glass static motion must vanish and rightward camera translation must move image left");
     }
 }
+
+// A pointer to the inherited protected data member edits the same host encoded
+// value as the GUI, without casting the actual renderer to a test subclass.
+struct RuntimeDepthAccess : vision::IlluminationIntegrator {
+    static void edit(vision::IlluminationIntegrator& integrator, unsigned depth) {
+        auto member = &RuntimeDepthAccess::max_depth_;
+        (integrator.*member).hv() = depth;
+        integrator.update_data();
+        integrator.upload_immediately();
+    }
+};
+
+void check_glass_runtime_depth(vision::Pipeline& edited, vision::Pipeline& fresh, unsigned depth) {
+    using namespace vision;
+    edited.activate_global_context();
+    auto* integrator = dynamic_cast<IlluminationIntegrator*>(edited.renderer().integrator().get());
+    RuntimeDepthAccess::edit(*integrator, depth);
+    std::vector<float4> a(edited.pixel_num()), b(a.size());
+    for (bool layered : {false, true}) {
+        edited.renderer().integrator()->set_stable_planes_enabled(layered);
+        fresh.renderer().integrator()->set_stable_planes_enabled(layered);
+        edited.invalidate(); fresh.invalidate();
+        float maximum = 0.f;
+        for (uint frame = 0; frame < 4; ++frame) {
+            edited.upload_data(); edited.display(1.0 / 60.0);
+            edited.stream() << edited.frame_buffer()->rt_buffer().view().download(a.data()) << synchronize() << commit();
+            fresh.upload_data(); fresh.display(1.0 / 60.0);
+            fresh.stream() << fresh.frame_buffer()->rt_buffer().view().download(b.data()) << synchronize() << commit();
+            for (uint i = 0; i < a.size(); ++i) for (uint c = 0; c < 3; ++c) {
+                if (!std::isfinite(a[i][c]) || !std::isfinite(b[i][c]))
+                    throw std::runtime_error("runtime depth comparison requires finite current and fresh radiance");
+                maximum = std::max(maximum, std::abs(a[i][c] - b[i][c]));
+            }
+        }
+        std::cout << "runtime depth=" << depth << " stable=" << layered << " versus fresh maxabs=" << maximum << '\n';
+        if (!std::isfinite(maximum) || maximum > 1e-5f)
+            throw std::runtime_error("runtime encoded depth must match a fresh integrator without shader recompilation");
+        if (layered) {
+            std::vector<StablePlaneData> layers(a.size());
+            edited.stream() << edited.frame_buffer()->cur_stable_planes_view(3u, 1u).download(layers.data()) << synchronize() << commit();
+            if (layers[136].valid && layers[136].depth > std::min(depth, 15u))
+                throw std::runtime_error("runtime stable exploration must honor current encoded depth and bounded prefix length");
+        }
+    }
+}

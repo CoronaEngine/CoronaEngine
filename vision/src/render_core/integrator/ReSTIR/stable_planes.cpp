@@ -82,9 +82,10 @@ void StablePlanes::compile() noexcept {
     auto &spectrum = renderer().spectrum();
     auto &lights = renderer().light_sampler();
     const auto &geometry = pipeline()->geometry();
-    const uint exploration_limit = std::min({15u, max_recursion_ > 0u ? max_recursion_ - 1u : 0u, integrator()->suffix_depth()});
+    const uint recursion_limit = std::min(15u, max_recursion_ > 0u ? max_recursion_ - 1u : 0u);
     Kernel build_kernel = [&](Uint frame, Uint jitter) {
-        camera->load_data(); sampler->load_data();
+        camera->load_data(); sampler->load_data(); integrator()->load_data();
+        Uint exploration_limit = min(recursion_limit, integrator()->runtime_suffix_depth());
         initial(sampler, frame, spectrum);
         sampler->set_seed(dispatch_idx().xy(), frame, Dimension::Camera);
         SensorSample ss = sampler->sensor_sample(dispatch_idx().xy(), camera->filter(), jitter != 0u);
@@ -236,7 +237,7 @@ void StablePlanes::compile() noexcept {
         RayState ray = fb.rays().read(dispatch_id())->to_ray_state();
         SampledSpectrum throughput = spectrum->one();
         Uint sequence = 1u, depth = 0u, owner = 0u;
-        const uint total_depth = integrator()->suffix_depth() + 1u;
+        Uint total_depth = integrator()->runtime_suffix_depth() + 1u;
         $loop {
             Bool covered = false, claimed = false;
             for (uint layer = 0; layer < StablePlaneCount; ++layer) {
@@ -307,7 +308,7 @@ void StablePlanes::compile() noexcept {
                 // Li owns its traversal and must see that receiver again.
                 ray.ray.dir_max.w = ray_t_max;
                 Float3 total = integrator()->Li(ray, Float{1e16f}, total_depth - depth, throughput,
-                    total_depth - 1u < 2u, context, *this);
+                    false, context, *this);
                 Uint address = owner * (dispatch_dim().x * dispatch_dim().y) + dispatch_id();
                 fb.stable_direct().write(address, fb.stable_direct().read(address) + make_float4(direct, 0.f));
                 fb.stable_indirect().write(address, make_float4(total - direct, 1.f));

@@ -29,6 +29,7 @@
 void check_restir_reprojection(vision::Pipeline& pipeline);
 void check_stable_plane(vision::Pipeline& pipeline, bool tinted_mirror = true);
 void check_glass_svgf(vision::Pipeline& pipeline);
+void check_glass_runtime_depth(vision::Pipeline&, vision::Pipeline&, unsigned);
 void check_restir_material_reuse(vision::Pipeline& pipeline, const std::vector<vision::SurfaceData>& surfaces);
 void check_restir_gi_depth_one_continuation(vision::Pipeline& pipeline);
 void check_restir_gi_receiver_support(vision::Pipeline& pipeline);
@@ -605,6 +606,29 @@ int main() {
         expect(thick_planes[136].depth == 2u && thick_planes[136].surface.pos_diff.z < -2.f,
                "preferred transmission must reach the target through the rear interface despite full layer capacity");
         check_glass_depth_guides(*thick_pipeline);
+        auto long_prefix = thick;
+        long_prefix["render"]["integrator"]["param"]["direct"]["max_recursion"] = 16u;
+        write_file(fixture / "glass-third.obj", "v -4 -4 -1.4\nv 4 -4 -1.4\nv 0 4 -1.4\nvn 0 0 1\nf 1//1 2//1 3//1\n");
+        write_file(fixture / "glass-fourth.obj", "v -4 -4 -1.6\nv 0 4 -1.6\nv 4 -4 -1.6\nvn 0 0 -1\nf 1//1 2//1 3//1\n");
+        for (const char* file : {"glass-third.obj", "glass-fourth.obj"}) {
+            auto shape = long_prefix["scene"]["shapes"][0]; shape["param"]["fn"] = file;
+            long_prefix["scene"]["shapes"].push_back(shape);
+        }
+        write_file(fixture / "glass-runtime.json", long_prefix.dump(2));
+        auto runtime_pipeline = vision::Importer::import_scene(fixture / "glass-runtime.json");
+        glass_fixtures.push_back(runtime_pipeline);
+        runtime_pipeline->frame_buffer()->set_enable_accumulation(false);
+        runtime_pipeline->prepare(); runtime_pipeline->frame_buffer()->prepare_view_texture();
+        for (unsigned budget : {0u, 1u, 3u, 5u}) {
+            auto fresh_scene = long_prefix;
+            fresh_scene["render"]["integrator"]["param"]["max_depth"] = budget + 1u;
+            write_file(fixture / "glass-runtime-fresh.json", fresh_scene.dump(2));
+            auto fresh = vision::Importer::import_scene(fixture / "glass-runtime-fresh.json");
+            glass_fixtures.push_back(fresh);
+            fresh->frame_buffer()->set_enable_accumulation(false);
+            fresh->prepare(); fresh->frame_buffer()->prepare_view_texture();
+            check_glass_runtime_depth(*runtime_pipeline, *fresh, budget);
+        }
         auto one_suffix = thick;
         one_suffix["render"]["integrator"]["param"]["max_depth"] = 4u;
         run_glass_variant(one_suffix, 16u, "dominant-prefix-two-one-suffix");
@@ -797,7 +821,7 @@ int main() {
         fs::remove(fixture / "receiver-tilted.obj");
         fs::remove(fixture / "support.json");
         for (const char* name : {"glass-front.obj", "glass-back-target.obj", "glass-front-target.obj",
-                                "glass-rear.obj", "glass-tir.obj", "glass-occluder.obj", "glass.json", "glass-variant.json"}) {
+                                "glass-rear.obj", "glass-third.obj", "glass-fourth.obj", "glass-runtime.json", "glass-runtime-fresh.json", "glass-tir.obj", "glass-occluder.obj", "glass.json", "glass-variant.json"}) {
             fs::remove(fixture / name);
         }
         // Importers may have left their own cache files in this directory.

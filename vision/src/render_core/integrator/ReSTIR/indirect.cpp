@@ -93,9 +93,11 @@ GISampleVar ReSTIRGI::init_sample(const Interaction &it, const SensorSample &ss,
         auto surface = cur_surfaces().read(dispatch_id());
         Uint prefix_depth = 0u;
         $if(surface.is_replaced) { prefix_depth = cur_surface_extends().read(dispatch_id()).prefix_depth; };
-        Uint remaining = integrator()->suffix_depth() - min(prefix_depth, integrator()->suffix_depth());
+        Uint suffix_depth = integrator()->runtime_suffix_depth();
+        Uint remaining = suffix_depth - min(prefix_depth, suffix_depth);
+        // complete_terminal_direct handles the runtime terminal budget itself.
         Float3 L = integrator()->Li(ray_state, hit_bsdf.pdf, remaining, spectrum()->one(),
-            integrator()->suffix_depth() < 2u, hit_context, *this);
+            false, hit_context, *this);
         sample.sp->set(sp_it);
         sample.Lo.set(ocarina::zero_if_nan_inf(L));
     };

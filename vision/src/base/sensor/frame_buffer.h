@@ -243,6 +243,12 @@ public:                                                                     \
     VS_MAKE_BUFFER(RegistrableBuffer<float4>, stable_indirect, 3)
     VS_MAKE_BUFFER(RegistrableBuffer<float4>, stable_radiance, 1)
     VS_MAKE_BUFFER(RegistrableBuffer<uint>, stable_dominant, 1)
+    [[nodiscard]] auto stable_planes_view(uint frame) const noexcept {
+        auto view = stable_planes_.view().subview(frame * StablePlaneCount * frame_buffer_size(), StablePlaneCount * frame_buffer_size());
+        return decltype(view)(view.handle() + view.offset_in_byte(), view.size());
+    }
+    [[nodiscard]] auto cur_stable_planes_view(uint frame) const noexcept { return stable_planes_view(cur_index(frame)); }
+    [[nodiscard]] auto prev_stable_planes_view(uint frame) const noexcept { return stable_planes_view(prev_index(frame)); }
     [[nodiscard]] auto stable_planes_view(uint frame, uint layer) const noexcept {
         auto view = stable_planes_.view().subview((frame * StablePlaneCount + layer) * frame_buffer_size(), frame_buffer_size());
         return decltype(view)(view.handle() + view.offset_in_byte(), view.size());

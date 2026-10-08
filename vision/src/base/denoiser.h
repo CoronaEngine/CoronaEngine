@@ -49,6 +49,12 @@ struct RealTimeDenoiseInput {
     BufferView<StablePlaneData> stable_planes;
     BufferView<StablePlaneData> prev_stable_planes;
 
+    // Complete DirectIndirect pixel signal, after layer illumination filtering.
+    // Coverage includes deterministic emission/sky and all complementary paths.
+    bool composed_coverage{false};
+    BufferView<StablePlaneData> coverage_planes;
+    BufferView<StablePlaneData> prev_coverage_planes;
+
     /// Camera positions for depth calculation from visibility buffer
     array_float3 camera_pos{};
     array_float3 prev_camera_pos{};

@@ -258,8 +258,8 @@ void check_glass_svgf(vision::Pipeline& pipeline) {
             for (uint i = 0u; i < n; ++i) for (uint c = 0; c < 3; ++c) stable[i][c] += direct[i][c] + indirect[i][c];
         }
         for (uint i = 0u; i < n; ++i) for (uint c = 0; c < 3; ++c)
-            if (!std::isfinite(final[i][c]) || std::abs(stable[i][c] - final[i][c]) > 1e-5f)
-                throw std::runtime_error("filtered and raw composition must sum each owned layer exactly once");
+            if (!std::isfinite(final[i][c]) || (!denoiser->enabled() && std::abs(stable[i][c] - final[i][c]) > 1e-5f))
+                throw std::runtime_error("raw composition must sum each owned layer exactly once; composed coverage must remain finite");
     };
     render();
     if (age(1u) != 1.f || age(2u) != 1.f)

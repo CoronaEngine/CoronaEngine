@@ -171,6 +171,7 @@ public:
     VS_MAKE_GUI_STATUS_FUNC(Integrator, denoiser_)
     OC_MAKE_MEMBER_GETTER(separate, )
     [[nodiscard]] uint suffix_depth() const noexcept { return max_depth_.hv(); }
+    [[nodiscard]] Uint runtime_suffix_depth() const noexcept { return *max_depth_; }
     [[nodiscard]] Denoiser *denoiser() noexcept { return denoiser_.get(); }
     [[nodiscard]] const Denoiser *denoiser() const noexcept { return denoiser_.get(); }
     bool render_UI(Widgets *widgets) noexcept override;

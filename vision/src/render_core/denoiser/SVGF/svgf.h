@@ -13,6 +13,9 @@
 namespace vision::svgf {
 
 struct ResolveParam {
+    uint composed_coverage{0u};
+    BufferDesc<StablePlaneData> coverage_planes;
+    BufferDesc<StablePlaneData> prev_coverage_planes;
     uint use_stable_planes{0u};
     uint layered{0u};
     BufferDesc<StablePlaneData> stable_planes;
@@ -39,7 +42,7 @@ struct ResolveParam {
 
 }// namespace vision::svgf
 
-OC_PARAM_STRUCT(vision::svgf, ResolveParam, use_stable_planes, layered, stable_planes, prev_stable_planes, stable_surfaces, prev_stable_surfaces, direct, indirect,
+OC_PARAM_STRUCT(vision::svgf, ResolveParam, composed_coverage, coverage_planes, prev_coverage_planes, use_stable_planes, layered, stable_planes, prev_stable_planes, stable_surfaces, prev_stable_surfaces, direct, indirect,
                 history_direct, history_indirect, output_direct, output_indirect,
                 visibility, prev_visibility, motion_vectors, camera_pos, prev_camera_pos,
                 history_valid, channel_kind, frame_index, alpha, interior_alpha){};

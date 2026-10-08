@@ -116,6 +116,53 @@ template<typename Param>
     return albedo;
 }
 
+// Coverage estimates a complete pixel footprint, unlike path-space illumination.
+// A single exact mirror may keep its virtual guide. Multiple branches or an
+// approximate refraction cannot share one motion vector: use primary silhouettes
+// for reconstruction and reject moving composite temporal reuse conservatively.
+struct CoverageGeometryGuide : StableGeometryGuide {
+    Bool ambiguous{false};
+    template<typename Param>
+    CoverageGeometryGuide(const Param &param, Uint index, TriangleHitVar primary, bool previous = false)
+        : StableGeometryGuide(param, index, primary, previous) {
+        $if(param.composed_coverage != 0u) {
+            Uint count = dispatch_dim().x * dispatch_dim().y;
+            for (uint layer = 0u; layer < StablePlaneCount; ++layer) {
+                auto plane = previous ? param.prev_coverage_planes.read(layer * count + index)
+                                      : param.coverage_planes.read(layer * count + index);
+                ambiguous |= plane.valid != 0u && (Bool(layer > 0u) || plane.surface.approximate != 0u);
+            }
+            $if(ambiguous) {
+                hit = primary; branch = 0u; replaced = false; approximate = false; valid = true;
+            };
+        };
+    }
+};
+
+template<typename Param>
+[[nodiscard]] inline Bool coverage_layer_edge(const Param &param, Uint center, Uint neighbor) {
+    Bool edge = false;
+    $if(param.composed_coverage != 0u) {
+        Uint count = dispatch_dim().x * dispatch_dim().y;
+        for (uint layer = 0u; layer < StablePlaneCount; ++layer) {
+            auto a = param.coverage_planes.read(layer * count + center);
+            auto b = param.coverage_planes.read(layer * count + neighbor);
+            edge |= a.valid != b.valid;
+            $if(a.valid != 0u && b.valid != 0u) {
+                edge |= a.branch_sequence != b.branch_sequence || a.instance_hash != b.instance_hash ||
+                    a.depth != b.depth || a.material_id != b.material_id || a.surface.hit.inst_id != b.surface.hit.inst_id;
+                $if(a.surface.hit->is_hit() && b.surface.hit->is_hit()) {
+                    Float depth = max(length(a.depth_position - param.camera_pos.as_vec3()), 0.1f);
+                    edge |= dot(a.surface.virtual_geometric_normal, b.surface.virtual_geometric_normal) < SVGFConfig::Resolve::kNormalThreshold ||
+                        abs(dot(b.surface.virtual_position - a.surface.virtual_position, a.surface.virtual_geometric_normal)) > SVGFConfig::Resolve::kPlaneThreshold * depth ||
+                        abs(length(b.depth_position - param.camera_pos.as_vec3()) - depth) > SVGFConfig::Temporal::kDepthThreshold * depth;
+                };
+            };
+        }
+    };
+    return edge;
+}
+
 // Raw guides/illumination live at independent per-pixel film samples; resolved
 // colour lives at pixel centres. Call after loading the camera and sampler.
 // Preserve the caller's RNG when querying a neighbour's sample position.
