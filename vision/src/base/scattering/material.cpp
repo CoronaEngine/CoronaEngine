@@ -118,6 +118,18 @@ Bool MaterialEvaluator::supports_stable_reflection(const Float3 &world_wo) const
     return supported;
 }
 
+StableLobes MaterialEvaluator::eval_stable_lobes(const Float3 &world_wo) const noexcept {
+    // Delta sampling uses this frame even when ordinary scattering enables
+    // individual lobe normals. Enumeration must follow the same convention.
+    const Float3 wo = shading_frame_.to_local(world_wo);
+    StableLobes ret{*swl_};
+    dispatch([&](const Lobe *lobe) { ret = lobe->eval_stable_lobes(wo); });
+    for (auto &branch : ret.lobes) {
+        branch.wi = shading_frame_.to_world(branch.wi);
+    }
+    return ret;
+}
+
 void MaterialEvaluator::regularize() noexcept {
     dispatch([&](Lobe *lobe_set) {
         lobe_set->regularize();

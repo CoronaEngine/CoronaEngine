@@ -223,10 +223,44 @@ ScatterEval MicrofacetLobe::evaluate_local_impl(const Float3 &wo, const Float3 &
 
 BSDFSample MicrofacetLobe::sample_delta_local(const Float3 &wo,
                                               TSampler &sampler) const noexcept {
+    return eval_delta_reflection(wo);
+}
+
+BSDFSample MicrofacetLobe::eval_delta_reflection(const Float3 &wo) const noexcept {
     Float3 wi = make_float3(-wo.xy(), wo.z);
     BSDFSample ret{bxdf_->swl()};
     ret.wi = wi;
     ret.eval = bxdf_->evaluate(wo, wi, fresnel_.ptr(), All, Radiance);
+    return ret;
+}
+
+namespace {
+void set_stable_branch(StableLobe &branch, const BSDFSample &sample, const Float &probability) noexcept {
+    // Never divide by a zero branch PDF, including at TIR or zero transmission.
+    $if(probability > 0.f && sample.valid()) {
+        branch.wi = sample.wi;
+        branch.probability = probability;
+        branch.weight = sample.eval.throughput() * abs_cos_theta(sample.wi) * probability;
+        branch.eta = sample.eta;
+        branch.valid = true;
+    };
+}
+}// namespace
+
+StableLobes PureReflectionLobe::eval_stable_lobes(const Float3 &wo) const noexcept {
+    StableLobes ret{*swl()};
+    $if(supports_stable_reflection(wo)) {
+        ret.has_stochastic_remainder = false;
+        set_stable_branch(ret.lobes[StableLobes::reflection_index], eval_delta_reflection(wo), Float{1.f});
+    };
+    return ret;
+}
+
+BSDFSample PureReflectionLobe::sample_delta_local(const Float3 &wo, TSampler &sampler) const noexcept {
+    BSDFSample ret = eval_delta_reflection(wo);
+    $if(supports_stable_reflection(wo) && ret.valid()) {
+        ret.stable_lobe_index = StableLobes::reflection_index;
+    };
     return ret;
 }
 
@@ -408,19 +442,56 @@ BSDFSample DielectricLobe::sample_delta_local(const Float3 &wo, TSampler &sample
     SampledSpectrum F = fresnel->evaluate(abs_cos_theta(wo));
     SampledSpectrum eta = fresnel->eta();
     Float uc = sampler->next_1d();
-    float3 wh = make_float3(0, 0, 1);
     $if(uc < refl_prob(F)) {
-        Float3 wi = wo;
-        wi.xy() = -wi.xy();
-        ret.eval = evaluate_reflection(wo, wh, wi, F, eta, MaterialEvalMode::All);
-        ret.wi = wi;
+        ret = eval_delta_branch(wo, false, F, eta);
     }
     $else{
-        Float3 wi;
-        Float3 n = face_forward(wh, wo);
-        refract(wo, n, fresnel->eta()[0], &wi);
-        ret.eval = evaluate_transmission(wo, wh, wi, F, eta, MaterialEvalMode::All, TransportMode::Radiance);
-        ret.wi = wi;
+        ret = eval_delta_branch(wo, true, F, eta);
+    };
+    return ret;
+}
+
+BSDFSample DielectricLobe::eval_delta_branch(const Float3 &wo, bool transmission,
+                                            const SampledSpectrum &F, const SampledSpectrum &eta) const noexcept {
+    BSDFSample ret{*swl()};
+    float3 wh = make_float3(0, 0, 1);
+    if (transmission) {
+        // refract does not assign wi on failure. Do not evaluate that direction.
+        Float3 wi = make_float3(0.f);
+        $if(trans_prob(F) > 0.f) {
+            Bool valid = refract(wo, face_forward(wh, wo), eta[0], &wi);
+            $if(valid) {
+                ret.wi = wi;
+                ret.eta = eta[0];
+                ret.eval = evaluate_transmission(wo, wh, wi, F, eta, All, Radiance);
+            };
+        };
+    } else {
+        ret.wi = make_float3(-wo.xy(), wo.z);
+        ret.eval = evaluate_reflection(wo, wh, ret.wi, F, eta, All);
+    }
+    $if(flag() == SurfaceData::NearSpec && !dispersive_ && ret.valid()) {
+        ret.stable_lobe_index = transmission ? StableLobes::transmission_index : StableLobes::reflection_index;
+    };
+    return ret;
+}
+
+StableLobes DielectricLobe::eval_stable_lobes(const Float3 &wo) const noexcept {
+    StableLobes ret{*swl()};
+    $if(flag() == SurfaceData::NearSpec && !dispersive_) {
+        ret.has_stochastic_remainder = false;
+        auto fresnel = fresnel_.ptr();
+        SampledSpectrum F = fresnel->evaluate(abs_cos_theta(wo));
+        SampledSpectrum eta = fresnel->eta();
+        Float reflection_probability = refl_prob(F);
+        $if(reflection_probability > 0.f) {
+            set_stable_branch(ret.lobes[StableLobes::reflection_index],
+                              eval_delta_branch(wo, false, F, eta), reflection_probability);
+        };
+        $if(reflection_probability < 1.f) {
+            set_stable_branch(ret.lobes[StableLobes::transmission_index],
+                              eval_delta_branch(wo, true, F, eta), 1.f - reflection_probability);
+        };
     };
     return ret;
 }

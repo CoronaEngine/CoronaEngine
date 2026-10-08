@@ -84,6 +84,10 @@ public:
     // LobeSet keeps the default until it implements matching delta sampling
     // (including child frames and weights); OR-ing child capabilities is unsafe.
     [[nodiscard]] virtual Bool supports_stable_reflection(const Float3 &wo) const noexcept { return false; }
+    // Local directions; transport weights already include the local cosine.
+    [[nodiscard]] virtual StableLobes eval_stable_lobes(const Float3 &wo) const noexcept {
+        return StableLobes{*swl()};
+    }
     [[nodiscard]] virtual Bool splittable() const noexcept { return false; }
     virtual Lobe &operator=(const Lobe &other) noexcept = default;
     virtual void regularize() noexcept {}
@@ -122,6 +126,7 @@ protected:
 
 protected:
     [[nodiscard]] uint64_t compute_topology_hash() const noexcept override;
+    [[nodiscard]] BSDFSample eval_delta_reflection(const Float3 &wo) const noexcept;
 
 public:
     MicrofacetLobe(const SP<Fresnel> &fresnel, UP<MicrofacetBxDF> refl,
@@ -227,6 +232,8 @@ protected:
                                             TransportMode tm) const noexcept;
     [[nodiscard]] Float refl_prob(const SampledSpectrum &F) const noexcept;
     [[nodiscard]] Float trans_prob(const SampledSpectrum &F) const noexcept;
+    [[nodiscard]] BSDFSample eval_delta_branch(const Float3 &wo, bool transmission,
+                                               const SampledSpectrum &F, const SampledSpectrum &eta) const noexcept;
     [[nodiscard]] ScatterEval evaluate_local_impl(const Float3 &wo, const Float3 &wi, MaterialEvalMode mode,
                                                   const Uint &flag, TransportMode tm) const noexcept override;
     [[nodiscard]] ScatterEval evaluate_local_impl(const Float3 &wo, const Float3 &wi, MaterialEvalMode mode,
@@ -252,6 +259,7 @@ public:
     [[nodiscard]] SampledSpectrum albedo(const Float &cos_theta) const noexcept override;
     [[nodiscard]] optional<Bool> is_dispersive() const noexcept override { return dispersive_; }
     [[nodiscard]] Bool splittable() const noexcept override { return true; }
+    [[nodiscard]] StableLobes eval_stable_lobes(const Float3 &wo) const noexcept override;
     [[nodiscard]] BSDFSample sample_delta_local(const Float3 &wo,
                                                 TSampler &sampler) const noexcept override;
     [[nodiscard]] Float diffuse_factor() const noexcept override;
@@ -350,6 +358,8 @@ protected:
 
 public:
     using MicrofacetLobe::MicrofacetLobe;
+    [[nodiscard]] StableLobes eval_stable_lobes(const Float3 &wo) const noexcept override;
+    [[nodiscard]] BSDFSample sample_delta_local(const Float3 &wo, TSampler &sampler) const noexcept override;
     [[nodiscard]] Bool supports_stable_reflection(const Float3 &wo) const noexcept override {
         // sample_delta_local reflects about the local normal without sampling
         // a direction or choosing a lobe. Only the existing NearSpec policy

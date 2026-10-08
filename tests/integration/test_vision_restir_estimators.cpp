@@ -6,6 +6,8 @@
 #include "base/mgr/global.h"
 #include "base/mgr/pipeline.h"
 #include "rhi/context.h"
+#include "base/scattering/material.h"
+#include "base/sampler.h"
 
 #include <algorithm>
 #include <chrono>
@@ -37,6 +39,159 @@ constexpr unsigned kFrames = 8;
 
 void expect(bool condition, const char* message) {
     if (!condition) throw std::runtime_error(message);
+}
+
+// Removing deterministic enumeration, swapping branch IDs, using f instead of
+// p*f*cos/pdf, or consuming RNG in the query must fail this GPU contract.
+template<typename Glass = vision::DielectricLobe, typename Mirror = vision::PureReflectionLobe,
+         typename Evaluator = vision::MaterialEvaluator, typename Mix = vision::LobeSet>
+void check_stable_lobes(vision::Pipeline& pipeline) {
+    using namespace vision;
+    if constexpr (!requires(const Glass& glass, const Float3& wo) { glass.eval_stable_lobes(wo); }) {
+        expect(false, "missing deterministic stable lobe contract");
+    } else {
+        pipeline.activate_global_context();
+        Global::SceneGpuContextScope scope{pipeline.geometry().bindless_array(), pipeline.device()};
+        DielectricLobe::prepare();
+        // These LUTs are added after the diffuse fixture was prepared. No scene
+        // material changed, so upload_data alone does not refresh these handles.
+        pipeline.geometry().upload_bindless_array(pipeline.stream());
+        pipeline.upload_data();
+        auto& sampler = pipeline.renderer().sampler();
+        constexpr uint samples = 4096u;
+        Kernel kernel = [&](BufferVar<float4> output) {
+            Env::instance().clear_global_vars();
+            sampler->load_data();
+            Uint id = dispatch_id();
+            Uint scenario = id % 8u;
+            SampledWavelengths swl{3u};
+            Float eta = select(scenario == 2u || scenario == 3u, 1.f / 1.5f, 1.5f);
+            Float x = select(scenario == 0u || scenario == 4u, 0.f, 0.5f);
+            x = select(scenario == 3u, 0.9f, x);
+            Float z = sqrt(1.f - x * x) * select(scenario == 2u || scenario == 3u, -1.f, 1.f);
+            Float3 wo = make_float3(x, Float{0.f}, z);
+            SampledSpectrum color{Float3{make_float3(0.25f, 0.f, 0.8f)}};
+            color = select(scenario == 4u, SampledSpectrum::zero(swl), color);
+            auto fresnel = make_shared<FresnelDielectric>(SampledSpectrum{swl, eta}, swl);
+            auto microfacet = make_shared<GGXMicrofacet>(make_float2(0.001f), true);
+            Glass glass{fresnel, microfacet, color, scenario == 6u,
+                        select(scenario == 5u, SurfaceData::Glossy, SurfaceData::NearSpec)};
+            sampler->set_seed(dispatch_idx().xy(), Uint{17u}, Dimension::PathTracing);
+            Float expected_rng = sampler->next_1d();
+            sampler->set_seed(dispatch_idx().xy(), Uint{17u}, Dimension::PathTracing);
+            auto branches = glass.eval_stable_lobes(wo);
+            auto repeated = glass.eval_stable_lobes(wo);
+            Float actual_rng = sampler->next_1d();
+            Bool ok = expected_rng == actual_rng;
+            Float failed_stage = select(ok, 0.f, 1.f);
+            Bool supported = scenario != 5u && scenario != 6u;
+            ok &= branches.has_stochastic_remainder == !supported;
+            for (uint branch = 0u; branch < 2u; ++branch) {
+                auto& b = branches.lobes[branch];
+                auto& repeat = repeated.lobes[branch];
+                ok &= all(b.wi == repeat.wi) && b.probability == repeat.probability &&
+                      all(b.weight.vec3() == repeat.weight.vec3()) && b.valid == repeat.valid;
+                ok &= b.transmission == (branch == 0u);
+                $if(!supported) { ok &= !b.valid; };
+            }
+            failed_stage = select(failed_stage == 0.f && !ok, 2.f, failed_stage);
+            auto bs = glass.sample_delta_local(wo, sampler);
+            $if(supported) {
+                ok &= bs.stable_lobe_index < 2u;
+                for (uint branch = 0u; branch < 2u; ++branch) {
+                    auto& b = branches.lobes[branch];
+                    $if(bs.stable_lobe_index == branch) {
+                        Float3 expected = bs.eval.throughput().vec3() * abs_cos_theta(bs.wi) * b.probability;
+                        ok &= b.valid && length(b.wi - bs.wi) < 1e-6f &&
+                              all(abs(b.weight.vec3() - expected) <= 2e-5f * max(abs(expected), make_float3(1.f)));
+                    };
+                }
+                failed_stage = select(failed_stage == 0.f && !ok, 3.f, failed_stage);
+                ok &= abs(branches.lobes[0].probability + branches.lobes[1].probability - 1.f) < 1e-6f;
+                ok &= length(branches.lobes[1].wi - make_float3(-wo.xy(), wo.z)) < 1e-6f;
+                failed_stage = select(failed_stage == 0.f && !ok, 4.f, failed_stage);
+                $if(scenario == 0u) {
+                    // At normal incidence Fresnel=0.04; selection is tint weighted.
+                    ok &= abs(branches.lobes[1].probability - (0.04f / (0.04f + 0.96f * 0.35f))) < 1e-5f;
+                    ok &= length(branches.lobes[0].wi - make_float3(0.f, 0.f, -1.f)) < 1e-6f;
+                };
+                $if(scenario == 1u) {
+                    ok &= length(branches.lobes[0].wi - make_float3(-1.f / 3.f, 0.f, -0.94280904f)) < 1e-5f;
+                };
+                $if(scenario == 2u) {
+                    ok &= length(branches.lobes[0].wi - make_float3(-0.75f, 0.f, 0.66143783f)) < 1e-5f;
+                };
+                $if(scenario == 3u || scenario == 4u) {
+                    ok &= !branches.lobes[0].valid && branches.lobes[0].probability == 0.f &&
+                          all(branches.lobes[0].weight.vec3() == make_float3(0.f)) && bs.stable_lobe_index == 1u;
+                };
+                $if(branches.lobes[0].valid) { ok &= branches.lobes[0].weight[1] == 0.f; };
+                failed_stage = select(failed_stage == 0.f && !ok, 5.f, failed_stage);
+            }
+            $else { ok &= bs.stable_lobe_index == InvalidUI32; };
+            output.write(id, make_float4(select(ok, 1.f, -failed_stage), cast<float>(bs.stable_lobe_index),
+                                         branches.lobes[0].weight[0], branches.lobes[1].weight[0]));
+        };
+        auto shader = pipeline.device().compile(kernel, "stable_lobe_contract");
+        auto buffer = pipeline.device().create_buffer<float4>(samples, "stable_lobe_contract_results");
+        std::vector<float4> data(samples);
+        pipeline.stream() << shader(buffer).dispatch(samples) << buffer.download(data.data()) << synchronize() << commit();
+        uint reflected = 0u, transmitted = 0u;
+        for (uint i = 0; i < samples; ++i) {
+            const auto& value = data[i];
+            if (value.x != 1.f) std::cerr << "stable_lobe_failed_sample=" << i << " stage=" << value.x << " branch=" << value.y << " weights=" << value.z << ',' << value.w << '\n';
+            expect(value.x == 1.f && std::isfinite(value.z) && std::isfinite(value.w),
+                   "stable lobe enumeration must preserve RNG, branch IDs, directions and unconditioned transport");
+            if (i % 8u == 0u) { reflected += value.y == 1.f; transmitted += value.y == 0.f; }
+        }
+        expect(reflected > 20u && transmitted > 100u, "contract fixture must sample both glass branches");
+        Kernel adapter_kernel = [&](BufferVar<float4> output) {
+            Env::instance().clear_global_vars();
+            sampler->load_data();
+            sampler->set_seed(dispatch_idx().xy(), Uint{19u}, Dimension::PathTracing);
+            SampledWavelengths swl{3u};
+            Float3 wo = normalize(Float3{make_float3(0.3f, 0.1f, 1.f)});
+            auto fresnel = make_shared<FresnelConstant>(swl);
+            auto microfacet = make_shared<GGXMicrofacet>(make_float2(0.001f), true);
+            auto reflection = make_shared<Mirror>(fresnel,
+                make_unique<MicrofacetReflection>(SampledSpectrum{swl, 0.7f}, swl, microfacet), SurfaceData::NearSpec);
+            auto branches = reflection->eval_stable_lobes(wo);
+            auto sample = reflection->sample_delta_local(wo, sampler);
+            Bool ok = !branches.has_stochastic_remainder && !branches.lobes[0].valid &&
+                      branches.lobes[1].valid && branches.lobes[1].probability == 1.f &&
+                      sample.stable_lobe_index == 1u &&
+                      all(abs(branches.lobes[1].weight.vec3() - sample.eval.throughput().vec3() * abs_cos_theta(sample.wi)) < 1e-5f);
+            auto mix = Mix::create_mix(Float{0.5f}, reflection, make_shared<DiffuseLobe>(SampledSpectrum{swl, 0.4f}, swl));
+            auto mixed = mix->eval_stable_lobes(wo);
+            ok &= mixed.has_stochastic_remainder && !mixed.lobes[0].valid && !mixed.lobes[1].valid;
+            Interaction it{false};
+            it.shading.x = make_float3(0.f, 1.f, 0.f);
+            it.shading.y = make_float3(0.f, 0.f, 1.f);
+            it.shading.z = make_float3(1.f, 0.f, 0.f);
+            it.ng = it.shading.z;
+            Evaluator evaluator{it, swl};
+            // No per-lobe frame: the adapter must use the existing delta frame,
+            // including when individual_ns is enabled in the material registry.
+            evaluator.link(make_unique<Glass>(make_shared<FresnelDielectric>(SampledSpectrum{swl, 1.5f}, swl),
+                                              microfacet, SampledSpectrum{swl, 0.7f}, false, SurfaceData::NearSpec));
+            auto world_wo = it.shading.to_world(wo);
+            auto world = evaluator.eval_stable_lobes(world_wo);
+            auto world_sample = evaluator.sample_delta(world_wo, sampler);
+            for (uint branch = 0u; branch < 2u; ++branch) {
+                $if(world_sample.stable_lobe_index == branch) {
+                    ok &= world.lobes[branch].valid && length(world.lobes[branch].wi - world_sample.wi) < 1e-6f &&
+                          all(abs(world.lobes[branch].weight.vec3() - world_sample.eval.throughput().vec3() * world.lobes[branch].probability) < 1e-5f);
+                };
+            }
+            output.write(dispatch_id(), make_float4(cast<float>(ok)));
+        };
+        auto adapter = pipeline.device().compile(adapter_kernel, "stable_lobe_adapter_contract");
+        pipeline.stream() << adapter(buffer).dispatch(samples) << buffer.download(data.data()) << synchronize() << commit();
+        for (const auto& value : data) {
+            expect(value.x == 1.f, "mirror, mixed-lobe rejection and world-frame stable lobe contracts must agree with sampling");
+        }
+        std::cout << "PASS: stable lobe contract, 4096 GPU samples including TIR and zero-colour transmission\n";
+    }
 }
 
 void configure_headless_process() {
@@ -265,6 +420,7 @@ int main() {
         const auto direct_pipeline = vision::Importer::import_scene(fixture / "direct.json");
         expect(bool(direct_pipeline), "could not import direct-channel fixture");
         const auto direct = render_channel(*direct_pipeline);
+        check_stable_lobes(*direct_pipeline);
         std::cout << "direct_mean=" << direct.mean() << " direct_max=" << direct.max_abs << '\n';
         std::cout << "raw_static_primary_bary_delta=" << direct.max_primary_bary_delta << '\n';
         expect(direct.max_primary_bary_delta <= 1e-6f,

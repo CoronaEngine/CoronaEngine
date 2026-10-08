@@ -5,6 +5,7 @@
 #pragma once
 
 #include <utility>
+#include <array>
 #include "base/using.h"
 
 #include "dsl/dsl.h"
@@ -139,9 +140,33 @@ struct PhaseSample : public ScatterSample {
 struct BSDFSample : public ScatterSample {
 public:
     Float eta{1.f};
+    Uint stable_lobe_index{InvalidUI32};
 
 public:
     using ScatterSample::ScatterSample;
+};
+
+struct StableLobe {
+    Float3 wi{make_float3(0.f)};
+    Float probability{0.f};
+    // Unconditioned transport T = p * W, including the local cosine.
+    SampledSpectrum weight;
+    Float eta{1.f};
+    Bool transmission;
+    Bool valid{false};
+
+    StableLobe(const SampledWavelengths &swl, bool trans)
+        : weight(SampledSpectrum::zero(swl)), transmission(trans) {}
+};
+
+struct StableLobes {
+    static constexpr uint transmission_index = 0u;
+    static constexpr uint reflection_index = 1u;
+    std::array<StableLobe, 2> lobes;
+    Bool has_stochastic_remainder{true};
+
+    explicit StableLobes(const SampledWavelengths &swl)
+        : lobes{StableLobe{swl, true}, StableLobe{swl, false}} {}
 };
 
 struct LightSample {
