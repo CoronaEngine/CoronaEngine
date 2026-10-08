@@ -393,3 +393,135 @@ void check_stable_plane(vision::Pipeline& pipeline, bool tinted_mirror) {
     std::cout << "PASS: stable plane runtime on/off toggles and history reset\n";
     std::cout << "PASS: stable plane endpoint, branch rejection, virtual motion and SVGF history\n";
 }
+
+// Deterministic mirror emission has no eligible reservoir endpoint. Coverage
+// must consume the stable plane's geometry/motion even when legacy exports clear.
+void check_stable_emitter_coverage(vision::Pipeline& pipeline) {
+    using namespace vision;
+    pipeline.activate_global_context();
+    Global::SceneGpuContextScope scope{pipeline.geometry().bindless_array(), pipeline.device()};
+    auto& fb = *pipeline.frame_buffer();
+    auto& camera = pipeline.scene().sensor();
+    auto* illumination = dynamic_cast<IlluminationIntegrator*>(pipeline.renderer().integrator().get());
+    auto* denoiser = dynamic_cast<svgf::SVGF*>(illumination->denoiser());
+    const uint n = pipeline.pixel_num(), center = 136u;
+    auto result = pipeline.device().create_buffer<float4>(n, "mirror_emitter_coverage_checks");
+    Kernel kernel = [&](Var<svgf::ResolveParam> param, BufferVar<float4> out) {
+        camera->load_data();
+        Uint idx = dispatch_id();
+        svgf::CoverageGeometryGuide guide(param, idx, param.visibility.read(idx));
+        svgf::CoverageGeometryGuide previous(param, idx, param.prev_visibility.read(idx), true);
+        auto plane = param.coverage_planes.read(idx);
+        auto old = param.prev_coverage_planes.read(idx);
+        auto motion_of = [&]<typename Guide>(const Guide& value) {
+            if constexpr (requires { value.motion; }) return value.motion;
+            else return svgf::stable_motion(param, idx);
+        };
+        Float2 expected = camera->raster_coord(plane.surface.virtual_position).xy() -
+                          camera->prev_raster_coord(plane.surface.virtual_position).xy();
+        Bool current_ok = guide.valid && !guide.ambiguous && guide.replaced &&
+            guide.hit.inst_id == plane.surface.hit.inst_id &&
+            length(guide.position - plane.surface.virtual_position) < 1e-5f &&
+            length(guide.normal - plane.surface.virtual_geometric_normal) < 1e-5f;
+        Bool previous_ok = previous.valid && !previous.ambiguous && previous.replaced &&
+            previous.hit.inst_id == old.surface.hit.inst_id &&
+            length(previous.position - old.surface.virtual_position) < 1e-5f &&
+            length(previous.normal - old.surface.virtual_geometric_normal) < 1e-5f;
+        out.write(idx, make_float4(cast<float>(current_ok), cast<float>(previous_ok),
+            length(motion_of(guide) - plane.motion), length(motion_of(guide) - expected)));
+    };
+    auto shader = pipeline.device().compile(kernel, "mirror_emitter_composed_guide");
+    std::vector<float4> values(n);
+    std::vector<StablePlaneData> current(n * StablePlaneCount), previous(current.size());
+    std::vector<SurfaceData> exported(n);
+    std::vector<uint> dominant(n);
+    bool guides_ok = true;
+    for (uint pose = 0u; pose < 3u; ++pose) {
+        if (pose == 1u) camera->set_position(make_float3(0.03f, 0.f, 0.f));
+        if (pose == 2u) camera->set_yaw(1.f);
+        camera->update_device_data();
+        pipeline.upload_data(); pipeline.display(1.0 / 60.0);
+        if (pose == 0u) { pipeline.upload_data(); pipeline.display(1.0 / 60.0); }
+        uint frame = pipeline.frame_index() - 1u;
+        svgf::ResolveParam param;
+        param.composed_coverage = param.use_stable_planes = 1u;
+        param.coverage_planes = fb.cur_stable_planes_view(frame).descriptor();
+        param.prev_coverage_planes = fb.prev_stable_planes_view(frame).descriptor();
+        param.stable_surfaces = fb.cur_surfaces_view(frame).descriptor();
+        param.prev_stable_surfaces = fb.prev_surfaces_view(frame).descriptor();
+        param.visibility = fb.cur_visibility_buffer_view(frame).descriptor();
+        param.prev_visibility = fb.prev_visibility_buffer_view(frame).descriptor();
+        param.motion_vectors = fb.motion_vectors().descriptor();
+        pipeline.stream() << shader(param, result).dispatch(pipeline.resolution())
+            << result.download(values.data()) << fb.cur_stable_planes_view(frame).download(current.data())
+            << fb.prev_stable_planes_view(frame).download(previous.data())
+            << fb.cur_surfaces_view(frame).download(exported.data()) << fb.stable_dominant().download(dominant.data())
+            << synchronize() << commit();
+        auto p = current[center];
+        if (!p.valid || p.reservoir_eligible || dominant[center] != InvalidUI32 || exported[center].is_replaced ||
+            std::abs(p.surface.virtual_position.z + 3.f) > 1e-4f || p.surface.hit.inst_id == InvalidUI32)
+            throw std::runtime_error("mirror emitter fixture must have a valid exact virtual endpoint and no reservoir export");
+        auto v = values[center];
+        std::cout << "mirror emitter pose=" << pose << " current/previous=" << v.x << '/' << v.y
+                  << " motion plane/analytic error=" << v.z << '/' << v.w << '\n';
+        guides_ok &= v.x == 1.f && v.y == 1.f && std::isfinite(v.z) && std::isfinite(v.w) && v.z < 1e-4f && v.w < 1e-3f;
+    }
+    // Real produced endpoint guides feed the actual coverage shader. Two runs
+    // differ only in legacy reservoir exports and primary motion; their complete
+    // pixel history must agree and must differ from cold current reconstruction.
+    auto planes = pipeline.device().create_buffer<StablePlaneData>(current.size(), "emitter_coverage_planes");
+    auto old_planes = pipeline.device().create_buffer<StablePlaneData>(previous.size(), "emitter_coverage_old_planes");
+    auto surfaces = pipeline.device().create_buffer<SurfaceData>(n, "emitter_coverage_export");
+    auto old_surfaces = pipeline.device().create_buffer<SurfaceData>(n, "emitter_coverage_old_export");
+    auto motions = pipeline.device().create_buffer<float2>(n, "emitter_coverage_primary_motion");
+    auto direct = pipeline.device().create_buffer<RadType4>(n, "emitter_coverage_signal");
+    auto indirect = pipeline.device().create_buffer<RadType4>(n, "emitter_coverage_indirect");
+    std::vector<SurfaceData> virtual_surfaces(n), old_virtual_surfaces(n), empty(n);
+    std::vector<float2> virtual_motion(n), primary_motion(n, make_float2(1000.f));
+    std::vector<RadType4> signal(n), black(n, RadType4{0,0,0,1}), actual(n), reference(n), cold(n);
+    for (uint i = 0u; i < n; ++i) {
+        current[i].branch_sequence = previous[i].branch_sequence = 5u + (i & 1u);
+        virtual_surfaces[i] = current[i].surface; old_virtual_surfaces[i] = previous[i].surface;
+        virtual_motion[i] = current[i].motion;
+    }
+    const uint frame = pipeline.frame_index() - 1u;
+    RealTimeDenoiseInput input;
+    input.composed_coverage = input.use_stable_planes = true;
+    input.channel_kind = RealTimeDenoiseInput::ChannelKind::DirectIndirect;
+    input.resolution = pipeline.resolution();
+    input.direct = direct.view(); input.indirect = indirect.view();
+    input.stable_surfaces = surfaces.view(); input.prev_stable_surfaces = old_surfaces.view();
+    input.coverage_planes = planes.view(); input.prev_coverage_planes = old_planes.view();
+    input.visibility = fb.cur_visibility_buffer_view(frame); input.prev_visibility = fb.prev_visibility_buffer_view(frame);
+    input.motion_vec = motions.view();
+    input.camera_pos = input.prev_camera_pos = {0.03f, 0.f, 0.f};
+    auto render = [&](bool legacy_virtual, bool history, auto& output) {
+        denoiser->set_enabled(false); denoiser->set_enabled(true);
+        pipeline.stream() << surfaces.upload(legacy_virtual ? virtual_surfaces.data() : empty.data())
+            << old_surfaces.upload(legacy_virtual ? old_virtual_surfaces.data() : empty.data())
+            << motions.upload(legacy_virtual ? virtual_motion.data() : primary_motion.data())
+            << planes.upload(current.data()) << old_planes.upload(previous.data());
+        if (history) {
+            camera->set_yaw(0.f); camera->update_device_data();
+            input.frame_index = 0u;
+            std::fill(signal.begin(), signal.end(), RadType4{0.25f,0.25f,0.25f,1.f});
+            pipeline.stream() << direct.upload(signal.data()) << indirect.upload(black.data()) << denoiser->dispatch(input)
+                << synchronize() << commit();
+        }
+        camera->set_yaw(1.f); camera->update_device_data(); input.frame_index = 1u;
+        for (uint i = 0u; i < n; ++i) { float v = float(i & 1u); signal[i] = RadType4{v,v,v,1.f}; }
+        pipeline.stream() << direct.upload(signal.data()) << indirect.upload(black.data()) << denoiser->dispatch(input)
+            << direct.download(output.data()) << synchronize() << commit();
+    };
+    render(false, true, actual); render(true, true, reference); render(true, false, cold);
+    float error = 0.f, history_effect = 0.f;
+    for (uint i = 0u; i < n; ++i) {
+        if (!std::isfinite(float(actual[i].x)) || !std::isfinite(float(reference[i].x)) || !std::isfinite(float(cold[i].x)))
+            throw std::runtime_error("mirror emitter coverage output must stay finite");
+        error = std::max(error, std::abs(float(actual[i].x) - float(reference[i].x)));
+        history_effect = std::max(history_effect, std::abs(float(reference[i].x) - float(cold[i].x)));
+    }
+    std::cout << "mirror emitter rendered export independence=" << error << " history effect=" << history_effect << '\n';
+    if (!guides_ok || error > 1e-5f || history_effect < 1e-3f)
+        throw std::runtime_error("exact mirror emitter coverage must use current/previous virtual endpoint and motion without reservoir eligibility");
+}

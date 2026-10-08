@@ -122,18 +122,31 @@ template<typename Param>
 // for reconstruction and reject moving composite temporal reuse conservatively.
 struct CoverageGeometryGuide : StableGeometryGuide {
     Bool ambiguous{false};
+    Float2 motion;
     template<typename Param>
     CoverageGeometryGuide(const Param &param, Uint index, TriangleHitVar primary, bool previous = false)
         : StableGeometryGuide(param, index, primary, previous) {
+        motion = stable_motion(param, index);
         $if(param.composed_coverage != 0u) {
             Uint count = dispatch_dim().x * dispatch_dim().y;
             for (uint layer = 0u; layer < StablePlaneCount; ++layer) {
                 auto plane = previous ? param.prev_coverage_planes.read(layer * count + index)
                                       : param.coverage_planes.read(layer * count + index);
-                ambiguous |= plane.valid != 0u && (Bool(layer > 0u) || plane.surface.approximate != 0u);
+                ambiguous |= plane.valid != 0u && (Bool(layer > 0u) || plane.surface.approximate != 0u ||
+                    plane.surface.hit->is_miss() || plane.surface.hit.inst_id == InvalidUI32);
             }
-            $if(ambiguous) {
-                hit = primary; branch = 0u; replaced = false; approximate = false; valid = true;
+            // Reservoir exports can be empty for deterministic emitters. The
+            // complete coverage guide belongs to the path, not its eligibility.
+            hit = primary; branch = 0u; replaced = false; approximate = false; valid = true;
+            auto plane = previous ? param.prev_coverage_planes.read(index) : param.coverage_planes.read(index);
+            $if(!ambiguous && plane.valid != 0u) {
+                hit = plane.surface.hit;
+                branch = plane.surface.stable_branch;
+                position = plane.surface.virtual_position;
+                normal = plane.surface.virtual_geometric_normal;
+                depth_position = plane.depth_position;
+                replaced = true;
+                motion = plane.motion;
             };
         };
     }

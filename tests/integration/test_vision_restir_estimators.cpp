@@ -28,6 +28,7 @@
 
 void check_restir_reprojection(vision::Pipeline& pipeline);
 void check_stable_plane(vision::Pipeline& pipeline, bool tinted_mirror = true);
+void check_stable_emitter_coverage(vision::Pipeline& pipeline);
 void check_glass_svgf(vision::Pipeline& pipeline);
 void check_glass_runtime_depth(vision::Pipeline&, vision::Pipeline&, unsigned);
 void check_restir_material_reuse(vision::Pipeline& pipeline, const std::vector<vision::SurfaceData>& surfaces);
@@ -702,6 +703,15 @@ int main() {
         expect(std::abs(reflected.normal_depth.w - 3.f) < 1e-4f,
                "stable plane depth must describe the virtual image behind the mirror");
         check_stable_plane(*mirror_pipeline);
+        auto mirror_emitter_scene = mirror_scene;
+        mirror_emitter_scene["scene"]["shapes"].back()["param"]["emission"] = vision::DataWrap::parse(
+            R"({"type":"area","param":{"color":[1,0.5,0.25],"scale":2}})");
+        write_file(fixture / "mirror-emitter.json", mirror_emitter_scene.dump(2));
+        auto mirror_emitter = vision::Importer::import_scene(fixture / "mirror-emitter.json");
+        material_fixtures.push_back(mirror_emitter);
+        mirror_emitter->frame_buffer()->set_enable_accumulation(false);
+        mirror_emitter->prepare(); mirror_emitter->frame_buffer()->prepare_view_texture();
+        check_stable_emitter_coverage(*mirror_emitter);
         auto filtered_glass = glass_scene;
         filtered_glass["output"]["denoise"] = true;
         filtered_glass["render"]["denoiser"] = mirror_scene["render"]["denoiser"];
@@ -810,6 +820,7 @@ int main() {
         fs::remove(fixture / "mirror-off.json");
         fs::remove(fixture / "faceted-mirror.obj");
         fs::remove(fixture / "mirror.json");
+        fs::remove(fixture / "mirror-emitter.json");
         fs::remove(fixture / "mirror-receiver.obj");
         fs::remove(fixture / "material.json");
         expect(!regression_failed, "ReSTIR regression checks failed");

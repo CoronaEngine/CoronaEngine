@@ -128,7 +128,7 @@ void SVGF::compile_resolve() {
         Bool moving_edge = edge && !sky && !center_guide.ambiguous && param.alpha == 1.f && param.history_valid != 0u &&
                            param.channel_kind == uint(RealTimeDenoiseInput::ChannelKind::DirectIndirect);
         $if(moving_edge) {
-            Float2 motion = stable_motion(param, idx);
+            Float2 motion = center_guide.motion;
             moving_alpha = max(Cfg::Resolve::kMovingAlpha,
                                saturate(length(motion) / Cfg::Resolve::kMotionRejectPixels));
             Float2 previous_pixel = make_float2(pixel) - motion;
