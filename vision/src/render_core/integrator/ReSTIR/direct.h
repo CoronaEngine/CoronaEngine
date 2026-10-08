@@ -76,6 +76,7 @@ public:
     ReSTIRDI() = default;
     ReSTIRDI(IntegratorPtr integrator, const ParameterSet &desc);
     [[nodiscard]] bool uses_stable_planes() const noexcept;
+    [[nodiscard]] uint max_recursion() const noexcept { return max_recursion_; }
     [[nodiscard]] bool stable_planes_enabled() const noexcept { return stable_planes_enabled_; }
     void set_stable_planes_enabled(bool enabled) noexcept { stable_planes_enabled_ = enabled; }
     VS_HOTFIX_MAKE_RESTORE(ReSTIR, M_light_, M_bsdf_, debias_, pairwise_, reweight_, max_recursion_, stable_planes_enabled_,
@@ -104,7 +105,9 @@ public:
                                                 DISampleVar *sample) noexcept {
         Bool cond = sample ? sample->age < param.max_age : true;
         // Compare both primary-surface depths in the current camera space.
-        Float prev_depth = scene().sensor()->linear_depth(ocarina::select(prev_surface.is_replaced && prev_surface.stable_branch != InvalidUI32, prev_surface.virtual_position, prev_surface->position()));
+        Float3 prev_position = ocarina::select(prev_surface.is_replaced && prev_surface.stable_branch != InvalidUI32, prev_surface.virtual_position, prev_surface->position());
+        prev_position = ocarina::select(prev_surface.approximate != 0u, prev_surface.depth_position, prev_position);
+        Float prev_depth = scene().sensor()->linear_depth(prev_position);
         return vision::is_valid_neighbor(cur_surface, prev_surface,
                                          param.t_dot,
                                          param.t_depth, param.diff_factor, prev_depth) &&

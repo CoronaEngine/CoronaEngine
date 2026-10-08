@@ -117,6 +117,8 @@ namespace vision {
            cond2 && diffuse_match && specular_match && roughness_match && cur_surface.hit->is_hit() && another_surface.hit->is_hit() &&
            (!cur_surface.is_replaced || (cur_surface.stable_branch != 0u && cur_surface.stable_branch != InvalidUI32)) &&
            (!another_surface.is_replaced || (another_surface.stable_branch != 0u && another_surface.stable_branch != InvalidUI32)) &&
+           (!(cur_surface.is_replaced || another_surface.is_replaced) ||
+            cur_surface.hit.inst_id == another_surface.hit.inst_id) &&
            cur_surface.stable_branch == another_surface.stable_branch;
 }
 

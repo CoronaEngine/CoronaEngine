@@ -31,6 +31,8 @@ void check_stable_plane(vision::Pipeline& pipeline, bool tinted_mirror = true);
 void check_restir_material_reuse(vision::Pipeline& pipeline, const std::vector<vision::SurfaceData>& surfaces);
 void check_restir_gi_depth_one_continuation(vision::Pipeline& pipeline);
 void check_restir_gi_receiver_support(vision::Pipeline& pipeline);
+void check_glass_transport_energy(vision::Pipeline& pipeline, unsigned recursion, const char* label);
+void check_glass_depth_guides(vision::Pipeline& pipeline);
 
 namespace {
 namespace fs = std::filesystem;
@@ -194,6 +196,32 @@ void check_stable_lobes(vision::Pipeline& pipeline) {
     }
 }
 
+template<typename FrameBuffer>
+void check_glass_planes(vision::Pipeline& pipeline, FrameBuffer& fb) {
+    if constexpr (!requires { fb.cur_stable_planes_view(0u, 0u); }) {
+        expect(false, "missing layered stable-plane storage for glass reflection and transmission");
+    } else {
+        using Plane = typename std::remove_reference_t<decltype(fb.stable_planes())>::element_type;
+        std::vector<Plane> base(pipeline.pixel_num()), transmitted(base.size()), reflected(base.size());
+        std::vector<vision::TriangleHit> primary(base.size());
+        pipeline.stream() << fb.cur_stable_planes_view(0u, 0u).download(base.data())
+            << fb.cur_stable_planes_view(0u, 1u).download(transmitted.data())
+            << fb.cur_stable_planes_view(0u, 2u).download(reflected.data())
+            << fb.cur_visibility_buffer_view(0u).download(primary.data())
+            << vision::synchronize() << vision::commit();
+        const unsigned i = 8u * 16u + 8u;
+        expect(primary[i].inst_id == base[i].surface.hit.inst_id && base[i].depth == 0u,
+               "glass base must preserve the original camera visibility");
+        expect(transmitted[i].valid && reflected[i].valid &&
+               transmitted[i].surface.hit.inst_id != reflected[i].surface.hit.inst_id,
+               "glass must produce distinct valid reflection and transmission endpoint guides");
+        expect(transmitted[i].surface.pos_diff.z < -2.f && reflected[i].surface.pos_diff.z > 0.f,
+               "glass branches must reach the separately coloured targets");
+        expect(transmitted[i].branch_sequence != reflected[i].branch_sequence,
+               "glass reflection and transmission must retain fixed distinct branch identities");
+        std::cout << "PASS: glass layered endpoint guides and primary visibility\n";
+    }
+}
 void configure_headless_process() {
 #ifdef _WIN32
     SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX);
@@ -524,6 +552,92 @@ int main() {
             }
         }
         check_restir_material_reuse(*material_pipeline, material_surfaces);
+        write_file(fixture / "glass-front.obj", "v -4 -4 -1\nv 4 -4 -1\nv 0 4 -1\nvn 0 0 1\nf 1//1 2//1 3//1\n");
+        write_file(fixture / "glass-back-target.obj", "v -4 -4 -3\nv 4 -4 -3\nv 0 4 -3\nvn 0 0 1\nf 1//1 2//1 3//1\n");
+        write_file(fixture / "glass-front-target.obj", "v -4 -4 1\nv 0 4 1\nv 4 -4 1\nvn 0 0 -1\nf 1//1 2//1 3//1\n");
+        auto glass_scene = scene_description(true);
+        glass_scene["render"]["integrator"]["param"]["indirect"]["open"] = true;
+        glass_scene["scene"]["materials"] = vision::DataWrap::parse(R"([
+            {"name":"glass","type":"glass","param":{"material_name":"BK7","roughness":0.001,"remapping_roughness":false}},
+            {"name":"red","type":"diffuse","param":{"color":[0.8,0.1,0.1]}},
+            {"name":"blue","type":"diffuse","param":{"color":[0.1,0.1,0.8]}}])");
+        glass_scene["scene"]["shapes"] = vision::DataWrap::parse(R"([
+            {"type":"model","param":{"fn":"glass-front.obj","material":"glass","normalize_to_unit_bounds":false}},
+            {"type":"model","param":{"fn":"glass-back-target.obj","material":"red","normalize_to_unit_bounds":false}},
+            {"type":"model","param":{"fn":"glass-front-target.obj","material":"blue","normalize_to_unit_bounds":false}}])");
+        write_file(fixture / "glass.json", glass_scene.dump(2));
+        auto glass_pipeline = vision::Importer::import_scene(fixture / "glass.json");
+        glass_pipeline->frame_buffer()->set_enable_accumulation(false);
+        glass_pipeline->prepare(); glass_pipeline->frame_buffer()->prepare_view_texture();
+        glass_pipeline->upload_data(); glass_pipeline->display(1.0 / 60.0);
+        check_glass_planes(*glass_pipeline, *glass_pipeline->frame_buffer());
+        check_glass_transport_energy(*glass_pipeline, 5u, "two-sided");
+        check_glass_depth_guides(*glass_pipeline);
+        write_file(fixture / "glass-rear.obj", "v -4 -4 -1.2\nv 0 4 -1.2\nv 4 -4 -1.2\nvn 0 0 -1\nf 1//1 2//1 3//1\n");
+        std::vector<vision::SP<vision::Pipeline>> glass_fixtures;
+        auto run_glass_variant = [&](vision::DataWrap description, unsigned recursion, const char* label) {
+            std::cerr << "Running glass fixture: " << label << '\n';
+            description["render"]["integrator"]["param"]["direct"]["max_recursion"] = recursion;
+            write_file(fixture / "glass-variant.json", description.dump(2));
+            auto p = vision::Importer::import_scene(fixture / "glass-variant.json");
+            glass_fixtures.push_back(p);
+            p->frame_buffer()->set_enable_accumulation(false);
+            p->prepare(); p->frame_buffer()->prepare_view_texture(); p->upload_data(); p->display(1.0 / 60.0);
+            check_glass_transport_energy(*p, recursion, label);
+            return p;
+        };
+        auto thick = glass_scene;
+        write_file(fixture / "glass-occluder.obj", "v -4 -4 0.8\nv 0 4 0.8\nv 4 -4 0.8\nvn 0 0 -1\nf 1//1 2//1 3//1\n");
+        auto occluded = glass_scene;
+        occluded["scene"]["materials"].push_back(vision::DataWrap::parse(
+            R"({"name":"black","type":"diffuse","param":{"color":[0,0,0]}})"));
+        occluded["scene"]["shapes"].push_back(vision::DataWrap::parse(
+            R"({"type":"model","param":{"fn":"glass-occluder.obj","material":"black","normalize_to_unit_bounds":false}})"));
+        run_glass_variant(occluded, 5u, "occluded-reflection");
+        thick["render"]["integrator"]["param"]["max_depth"] = 8;
+        thick["scene"]["shapes"].push_back(vision::DataWrap::parse(
+            R"({"type":"model","param":{"fn":"glass-rear.obj","material":"glass","normalize_to_unit_bounds":false}})"));
+        auto thick_pipeline = run_glass_variant(thick, 16u, "thick-overflow");
+        std::vector<vision::StablePlaneData> thick_planes(thick_pipeline->pixel_num());
+        thick_pipeline->stream() << thick_pipeline->frame_buffer()->cur_stable_planes_view(64u, 1u).download(thick_planes.data())
+            << vision::synchronize() << vision::commit();
+        expect(thick_planes[136].depth == 2u && thick_planes[136].surface.pos_diff.z < -2.f,
+               "preferred transmission must reach the target through the rear interface despite full layer capacity");
+        check_glass_depth_guides(*thick_pipeline);
+        auto one_suffix = thick;
+        one_suffix["render"]["integrator"]["param"]["max_depth"] = 4u;
+        run_glass_variant(one_suffix, 16u, "dominant-prefix-two-one-suffix");
+        auto oblique = thick;
+        oblique["scene"]["camera"]["param"]["transform"]["param"]["target_pos"] = vision::DataWrap::parse("[0.5,0,-1]");
+        auto oblique_pipeline = run_glass_variant(oblique, 16u, "oblique-thick");
+        check_glass_depth_guides(*oblique_pipeline);
+        run_glass_variant(thick, 2u, "depth-exhaustion");
+        auto zero_color = thick;
+        zero_color["scene"]["materials"][0]["param"]["color"] = vision::DataWrap::parse("[0.25,0,0.8]");
+        run_glass_variant(zero_color, 16u, "zero-prefix-channel");
+        auto sky = glass_scene;
+        sky["scene"]["shapes"] = vision::DataWrap::parse(R"([
+            {"type":"model","param":{"fn":"glass-front.obj","material":"glass","normalize_to_unit_bounds":false}}])");
+        run_glass_variant(sky, 5u, "glass-sky");
+        auto emitting = sky;
+        emitting["scene"]["shapes"][0]["param"]["emission"] = vision::DataWrap::parse(
+            R"({"type":"area","param":{"color":[0.2,0.4,0.8],"scale":1}})");
+        run_glass_variant(emitting, 5u, "prefix-emission");
+        for (unsigned depth : {1u, 2u}) {
+            auto shallow = emitting;
+            shallow["render"]["integrator"]["param"]["max_depth"] = depth;
+            run_glass_variant(shallow, 5u, depth == 1u ? "depth-one-emission" : "depth-two-emission");
+        }
+        write_file(fixture / "glass-tir.obj",
+            "v -2 -4 -4.464101615\nv 0 4 -1\nv 2 -4 2.464101615\nvn 0.866025404 0 -0.5\nf 1//1 2//1 3//1\n");
+        auto tir = sky;
+        tir["scene"]["shapes"][0]["param"]["fn"] = "glass-tir.obj";
+        auto tir_pipeline = run_glass_variant(tir, 5u, "tir-sky");
+        std::vector<vision::StablePlaneData> tir_planes(tir_pipeline->pixel_num());
+        tir_pipeline->stream() << tir_pipeline->frame_buffer()->cur_stable_planes_view(64u, 0u).download(tir_planes.data())
+            << vision::synchronize() << vision::commit();
+        expect(tir_planes[136].depth == 1u && tir_planes[136].branch_sequence == 6u,
+               "total internal reflection must continue the valid reflection slot without an invalid transmission direction");
         // A planar mirror at z=-1 reflects the receiver at z=+1. Its virtual
         // image is z=-3: endpoint guides and primary mirror guides must differ.
         write_file(fixture / "mirror-receiver.obj",
@@ -630,7 +744,6 @@ int main() {
         check_stable_plane(*metal_pipeline, false);
         const char* rejected_materials[] = {
             R"({"type":"metal","param":{"material_name":"Cr","roughness":0.3,"remapping_roughness":false}})",
-            R"({"type":"glass","param":{"material_name":"BK7","roughness":0.001,"remapping_roughness":false}})",
             R"({"type":"metal","param":{"material_name":"Cr","roughness":0.002,"remapping_roughness":false,"normal":{"node":"tilted","channels":"xyz"}},"node_tab":{"tilted":{"type":"number","param":{"value":[0.6,0,0.8]}}}})",
             R"({"type":"mix","param":{"frac":0.5,"mat0":{"type":"mirror","param":{"color":[1,1,1],"roughness":0.001}},"mat1":{"type":"diffuse","param":{"color":[0.5,0.5,0.5]}}}})",
         };
@@ -650,7 +763,7 @@ int main() {
                 << vision::synchronize() << vision::commit();
             const auto& center = data[8u * 16u + 8u];
             expect(center.stable_branch == 0u || center.stable_branch == vision::InvalidUI32,
-                   "rough, transmitting, perturbed or mixed scattering must not form a stable reflection branch");
+                   "rough, perturbed or mixed scattering must not form a stable reflection branch");
         }
         std::cout << "PASS: BSDF stable capability for metal and conservative scattering rejection\n";
         fs::remove(fixture / "stable-rejected.json");
@@ -668,6 +781,10 @@ int main() {
         fs::remove(fixture / "receiver.obj");
         fs::remove(fixture / "receiver-tilted.obj");
         fs::remove(fixture / "support.json");
+        for (const char* name : {"glass-front.obj", "glass-back-target.obj", "glass-front-target.obj",
+                                "glass-rear.obj", "glass-tir.obj", "glass-occluder.obj", "glass.json", "glass-variant.json"}) {
+            fs::remove(fixture / name);
+        }
         // Importers may have left their own cache files in this directory.
         std::error_code cleanup_error;
         fs::remove(fixture, cleanup_error);

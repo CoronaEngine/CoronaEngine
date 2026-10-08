@@ -238,6 +238,31 @@ public:                                                                     \
     /// save two frames of data , use for ReSTIR
     VS_MAKE_DOUBLE_BUFFER(RegistrableBuffer<SurfaceData>, surfaces)
     VS_MAKE_DOUBLE_BUFFER(RegistrableBuffer<SurfaceExtend>, surface_exts)
+    VS_MAKE_BUFFER(RegistrableBuffer<StablePlaneData>, stable_planes, 6)
+    VS_MAKE_BUFFER(RegistrableBuffer<float4>, stable_direct, 3)
+    VS_MAKE_BUFFER(RegistrableBuffer<float4>, stable_indirect, 3)
+    VS_MAKE_BUFFER(RegistrableBuffer<float4>, stable_radiance, 1)
+    VS_MAKE_BUFFER(RegistrableBuffer<uint>, stable_dominant, 1)
+    [[nodiscard]] auto stable_planes_view(uint frame, uint layer) const noexcept {
+        auto view = stable_planes_.view().subview((frame * StablePlaneCount + layer) * frame_buffer_size(), frame_buffer_size());
+        return decltype(view)(view.handle() + view.offset_in_byte(), view.size());
+    }
+    [[nodiscard]] auto cur_stable_planes_view(uint frame, uint layer) const noexcept { return stable_planes_view(cur_index(frame), layer); }
+    [[nodiscard]] auto prev_stable_planes_view(uint frame, uint layer) const noexcept { return stable_planes_view(prev_index(frame), layer); }
+    [[nodiscard]] auto cur_stable_planes_var(const Uint &frame) const noexcept {
+        return bindless_array().buffer_var<StablePlaneData>(stable_planes_.index_var() + cur_index(frame));
+    }
+    [[nodiscard]] auto prev_stable_planes_var(const Uint &frame) const noexcept {
+        return bindless_array().buffer_var<StablePlaneData>(stable_planes_.index_var() + prev_index(frame));
+    }
+    [[nodiscard]] auto stable_direct_view(uint layer) const noexcept {
+        auto view = stable_direct_.view().subview(layer * frame_buffer_size(), frame_buffer_size());
+        return decltype(view)(view.handle() + view.offset_in_byte(), view.size());
+    }
+    [[nodiscard]] auto stable_indirect_view(uint layer) const noexcept {
+        auto view = stable_indirect_.view().subview(layer * frame_buffer_size(), frame_buffer_size());
+        return decltype(view)(view.handle() + view.offset_in_byte(), view.size());
+    }
     VS_MAKE_BUFFER(RegistrableBuffer<float2>, motion_vectors, 1)
     VS_MAKE_BUFFER(RegistrableBuffer<HitBSDF>, hit_bsdfs, 1)
     VS_MAKE_BUFFER(RegistrableManaged<float4>, rt_buffer, 1)
@@ -265,6 +290,7 @@ public:
     FrameBuffer() = default;
     explicit FrameBuffer(const FrameBufferDesc &desc);
     VS_HOTFIX_MAKE_RESTORE(Node, cur_view_, surfaces_, surface_exts_, hit_bsdfs_,
+                           stable_planes_, stable_direct_, stable_indirect_, stable_radiance_, stable_dominant_,
                            motion_vectors_, hit_buffer_, screen_buffers_,
                            view_texture_, visualizer_, window_buffer_, rt_buffer_,
                            tone_mapper_, upsampler_,
@@ -375,6 +401,13 @@ public:
         vec.assign(element_num, T{});
         buffer.upload_immediately(vec.data());
         buffer.set_bindless_array(bindless_array());
+        if constexpr (std::is_same_v<T, StablePlaneData>) {
+            uint frame_size = StablePlaneCount * frame_buffer_size();
+            buffer.register_self(0, frame_size);
+            if (has_register) { buffer.register_view_index(1, frame_size, frame_size); }
+            else { buffer.register_view(frame_size, frame_size); }
+            return;
+        }
         buffer.register_self();
         for (int i = 1; i < count; ++i) {
             if (has_register) {

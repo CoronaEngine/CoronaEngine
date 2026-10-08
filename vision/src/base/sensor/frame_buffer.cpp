@@ -381,6 +381,11 @@ void FrameBuffer::update_resolution(ocarina::uint2 res) noexcept {
     resize(res);
     reset_surfaces();
     reset_surface_exts();
+    reset_stable_planes();
+    reset_stable_direct();
+    reset_stable_indirect();
+    reset_stable_radiance();
+    reset_stable_dominant();
     reset_motion_vectors();
     reset_hit_bsdfs();
     reset_rt_buffer();

@@ -206,6 +206,8 @@ Float3 IlluminationIntegrator::Li(RayState rs, Float scatter_pdf, const Uint &ma
     };
 
     Float3 primary_dir = rs.direction();
+    Bool continuation_ready = false;
+    Uint continuation_depth = 0u;
     auto mis_bsdf = [&](auto &bounces, bool inner) {
         hit = geometry.trace_closest(rs.ray);
         Bool include_emission = true;
@@ -214,9 +216,12 @@ Float3 IlluminationIntegrator::Li(RayState rs, Float scatter_pdf, const Uint &ma
         if (hc.suppress_initial_emission && inner) {
             include_emission = bounces != 0u;
         }
+        if (hc.suppress_initial_emission_if && inner) {
+            include_emission = bounces != 0u || !*hc.suppress_initial_emission_if;
+        }
         comment("miss");
         if (!inner) {
-            Bool primary_miss = all(rs.direction() == primary_dir);
+            Bool primary_miss = hc.complete_terminal_direct ? !continuation_ready : all(rs.direction() == primary_dir);
             $if(primary_miss) {
                 $super_break;
             };
@@ -227,6 +232,9 @@ Float3 IlluminationIntegrator::Li(RayState rs, Float scatter_pdf, const Uint &ma
                 SampledSpectrum d = evaluate_miss(rs, prev_surface_ng, scatter_pdf, bounces, swl) * throughput;
                 Float3 lin = spectrum()->linear_srgb(d, swl);
                 ret += lin;
+                if (hc.restir_direct_split && hc.Ld) {
+                    $if(bounces <= 1u) { *hc.Ld += make_RadType3(lin); };
+                }
                 route_spec(lin, bounces, 0.f);
             };
             $super_break;
@@ -272,6 +280,9 @@ Float3 IlluminationIntegrator::Li(RayState rs, Float scatter_pdf, const Uint &ma
             SampledSpectrum d = eval.L * throughput * weight * tr;
             Float3 lin = spectrum()->linear_srgb(d, swl);
             ret += lin;
+            if (hc.restir_direct_split && hc.Ld) {
+                $if(bounces <= 1u) { *hc.Ld += make_RadType3(lin); };
+            }
             route_spec(lin, bounces, 0.f);
         };
         prev_surface_ng = it.ng;
@@ -279,6 +290,7 @@ Float3 IlluminationIntegrator::Li(RayState rs, Float scatter_pdf, const Uint &ma
 
     Float eta_scale = 1.f;
     $for(&bounces, 0, max_depth) {
+        continuation_ready = false;
         mis_bsdf(bounces, true);
         Env::instance().set("bounces", bounces);
         comment("estimate direct lighting");
@@ -367,13 +379,23 @@ Float3 IlluminationIntegrator::Li(RayState rs, Float scatter_pdf, const Uint &ma
         };
         scatter_pdf = bsdf_sample.eval.pdf();
         rs = it.spawn_ray_state(bsdf_sample.wi);
+        continuation_ready = true;
+        continuation_depth = bounces + 1u;
     };
 
-    if (only_direct && mis_mode_ == MISMode::EBoth) {
+    if ((only_direct || hc.complete_terminal_direct) && mis_mode_ == MISMode::EBoth) {
         /// Supplement only direct light BSDF sampling
-        $for(&bounce, 1u) {
-            mis_bsdf(bounce, false);
-        };
+        if (hc.complete_terminal_direct) {
+            $if(continuation_ready && continuation_depth == max_depth && max_depth > 0u) {
+                $for(&bounce, 1u) {
+                    mis_bsdf(continuation_depth, false);
+                };
+            };
+        } else {
+            $for(&bounce, 1u) {
+                mis_bsdf(bounce, false);
+            };
+        }
     }
     if (hc.Ld_specular) {
         *hc.Ld_specular = make_RadType3(ret_specular);

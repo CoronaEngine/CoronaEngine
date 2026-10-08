@@ -77,6 +77,7 @@ if(CORONA_BUILD_VISION)
         test_vision_restir_estimators.cpp
         test_vision_restir_reprojection.cpp
         test_vision_restir_continuation.cpp
+        test_vision_glass_transport.cpp
         test_vision_restir_support.cpp)
     target_include_directories(corona_vision_restir_estimator_tests PRIVATE
         ${CMAKE_SOURCE_DIR}/vision/src)

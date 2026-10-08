@@ -662,7 +662,14 @@ void ReSTIRDI::compile_shader0() noexcept {
         TriangleHitVar hit;
         Interaction it{false};
         SurfaceExtendVar surf_ext;
-        SurfaceDataVar cur_surf = compute_hit(rs, hit, it, surf_ext, param.stable_planes != 0u);
+        SurfaceDataVar cur_surf;
+        $if(param.stable_planes != 0u) {
+            cur_surf = cur_surfaces().read(dispatch_id());
+            surf_ext = cur_surface_extends().read(dispatch_id());
+            hit = cur_surf.hit;
+            $if(hit->is_hit()) { it = geometry.compute_surface_interaction(hit, surf_ext.view_pos); };
+        }
+        $else { cur_surf = compute_hit(rs, hit, it, surf_ext, false); };
         cur_surfaces().write(dispatch_id(), cur_surf);
 
         $if(cur_surf.is_replaced) {
@@ -671,7 +678,7 @@ void ReSTIRDI::compile_shader0() noexcept {
 
         DIReservoirVar rsv = RIS(hit->is_hit(), it, param, surf_ext.throughput, nullptr);
         Float2 motion_vec = frame_buffer().motion_vectors().read(dispatch_id());
-        $if(cur_surf.is_replaced && cur_surf.stable_branch != InvalidUI32 && hit->is_hit()) {
+        $if(param.stable_planes == 0u && cur_surf.is_replaced && cur_surf.stable_branch != InvalidUI32 && hit->is_hit()) {
             motion_vec = frame_buffer().compute_motion_vec(camera, ss.p_film, cur_surf.virtual_position, true);
             frame_buffer().motion_vectors().write(dispatch_id(), motion_vec);
         };
@@ -761,6 +768,11 @@ void ReSTIRDI::compile_shader1() noexcept {
         RayState rs = ray_data->to_ray_state();
         sampler()->set_seed(pixel, frame_index, Dimension::ReSTIR_combine);
         SurfaceDataVar cur_surf = cur_surfaces().read(dispatch_id());
+        $if(param.stable_planes != 0u && frame_buffer().stable_dominant().read(dispatch_id()) == InvalidUI32) {
+            radiance_->write(dispatch_id(), make_float4(0.f));
+            cur_reservoirs().write(dispatch_id(), DIReservoirVar{});
+            $return();
+        };
         DIReservoirVar temporal_rsv = passthrough_reservoirs().read(dispatch_id());
         DIReservoirVar st_rsv = spatial_reuse(temporal_rsv, cur_surf, make_int2(pixel), param);
         Var hit = cur_surf.hit;

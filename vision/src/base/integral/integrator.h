@@ -28,6 +28,10 @@ struct IntegratorStageProfile {
     double gbuffer_ms{0.0};
     double sampling_mask_ms{0.0};
     double path_tracing_ms{0.0};
+    double stable_build_ms{0.0};
+    double stable_fill_ms{0.0};
+    double restir_di_ms{0.0};
+    double restir_gi_ms{0.0};
     double spatial_angular_ms{0.0};
     double temporal_ms{0.0};
     double combine_ms{0.0};
@@ -166,6 +170,7 @@ public:
     OC_ENCODABLE_FUNC(Integrator, max_depth_, min_depth_, rr_threshold_)
     VS_MAKE_GUI_STATUS_FUNC(Integrator, denoiser_)
     OC_MAKE_MEMBER_GETTER(separate, )
+    [[nodiscard]] uint suffix_depth() const noexcept { return max_depth_.hv(); }
     [[nodiscard]] Denoiser *denoiser() noexcept { return denoiser_.get(); }
     [[nodiscard]] const Denoiser *denoiser() const noexcept { return denoiser_.get(); }
     bool render_UI(Widgets *widgets) noexcept override;

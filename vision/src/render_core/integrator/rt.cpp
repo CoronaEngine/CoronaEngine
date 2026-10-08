@@ -10,6 +10,7 @@
 #include "base/color/spectrum.h"
 #include "ReSTIR/direct.h"
 #include "ReSTIR/indirect.h"
+#include "ReSTIR/stable_planes.h"
 #include <cstdlib>
 #include <fstream>
 
@@ -32,8 +33,9 @@ class RealTimeIntegrator : public IlluminationIntegrator,
 private:
     SP<ReSTIRDI> direct_;
     SP<ReSTIRGI> indirect_;
+    SP<StablePlanes> stable_planes_;
     SP<ScreenBuffer> specular_buffer_{make_shared<ScreenBuffer>("RealTimeIntegrator::specular_buffer_")};
-    Shader<void(uint, float, float)> combine_;
+    Shader<void(uint, float, float, uint)> combine_;
     Shader<void(uint, Buffer<SurfaceData>)> path_tracing_;
     SP<RadianceCache> cache_;
 
@@ -48,6 +50,7 @@ public:
         const Desc &desc = static_cast<const Desc &>(node_desc);
         direct_ = make_shared<ReSTIRDI>(shared_from_this(), desc["direct"]);
         indirect_ = make_shared<ReSTIRGI>(shared_from_this(), desc["indirect"]);
+        stable_planes_ = make_shared<StablePlanes>(shared_from_this(), direct_->max_recursion());
         cache_->set_integrator(shared_from_this());
     }
 
@@ -55,10 +58,11 @@ public:
 
     void restore(vision::RuntimeObject *old_obj) noexcept override {
         IlluminationIntegrator::restore(old_obj);
-        VS_HOTFIX_MOVE_ATTRS(direct_, indirect_, specular_buffer_,
+        VS_HOTFIX_MOVE_ATTRS(direct_, indirect_, stable_planes_, specular_buffer_,
                              combine_, path_tracing_, denoiser_)
         direct_->set_integrator(shared_from_this());
         indirect_->set_integrator(shared_from_this());
+        stable_planes_->set_integrator(shared_from_this());
         cache_->set_integrator(shared_from_this());
     }
 
@@ -72,7 +76,7 @@ public:
     }
 
     void update_runtime_object(const vision::IObjectConstructor *constructor) noexcept override {
-        std::tuple tp = {addressof(direct_), addressof(indirect_), addressof(cache_)};
+        std::tuple tp = {addressof(direct_), addressof(indirect_), addressof(stable_planes_), addressof(cache_)};
         HotfixSystem::replace_objects(constructor, tp);
     }
 
@@ -101,6 +105,7 @@ public:
         frame_buffer().prepare_surface_exts();
         frame_buffer().prepare_visibility_buffer();
         frame_buffer().prepare_motion_vectors();
+        stable_planes_->prepare();
     }
 
     [[nodiscard]] bool stable_planes_enabled() const noexcept override {
@@ -129,16 +134,31 @@ public:
         switch_profile::Scope profile{"integrator.compile", "compile"};
         direct_->compile();
         indirect_->compile();
+        stable_planes_->set_max_recursion(direct_->max_recursion());
+        stable_planes_->compile();
         if (!denoiser_runtime_disabled() && denoiser_ &&
             (denoiser_->enabled() || denoiser_->has_prepared_resources())) {
             denoiser_->compile();
         }
         TSensor &camera = scene().sensor();
-        Kernel kernel = [&](Uint frame_index, Float di, Float ii) {
+        Kernel kernel = [&](Uint frame_index, Float di, Float ii, Uint layered) {
             camera->load_data();
-            Float3 direct = direct_->radiance()->read(dispatch_id()).xyz() * di;
-            Float3 indirect = indirect_->radiance()->read(dispatch_id()).xyz() * ii;
-            Float3 L = direct + indirect;
+            Float3 direct = direct_->radiance()->read(dispatch_id()).xyz();
+            Float3 indirect = indirect_->radiance()->read(dispatch_id()).xyz();
+            Float3 L = direct * di + indirect * ii;
+            $if(layered != 0u) {
+                L = frame_buffer().stable_radiance().read(dispatch_id()).xyz() * di;
+                Uint dominant = frame_buffer().stable_dominant().read(dispatch_id());
+                for (uint layer = 0; layer < StablePlaneCount; ++layer) {
+                    Uint address = layer * (dispatch_dim().x * dispatch_dim().y) + dispatch_id();
+                    Float3 ld = frame_buffer().stable_direct().read(address).xyz();
+                    Float3 li = frame_buffer().stable_indirect().read(address).xyz();
+                    $if(dominant == layer) { ld += direct; li += indirect; };
+                    frame_buffer().stable_direct().write(address, make_float4(ld, 1.f));
+                    frame_buffer().stable_indirect().write(address, make_float4(li, 1.f));
+                    L += ld * di + li * ii;
+                }
+            };
             frame_buffer().add_sample(dispatch_idx().xy(), L, frame_index);
         };
         {
@@ -189,8 +209,13 @@ public:
         };
 
         submit(frame_buffer().compute_GBuffer(frame_index_), &cur_stage_profile_.gbuffer_ms);
-        submit(direct_->dispatch(frame_index_), &cur_stage_profile_.path_tracing_ms);
-        submit(indirect_->dispatch(frame_index_), &cur_stage_profile_.path_tracing_ms);
+        if (stable_planes_enabled()) {
+            submit(stable_planes_->build(frame_index_, jitter_primary_samples()), &cur_stage_profile_.stable_build_ms);
+            submit(stable_planes_->fill(frame_index_), &cur_stage_profile_.stable_fill_ms);
+        }
+        submit(direct_->dispatch(frame_index_), &cur_stage_profile_.restir_di_ms);
+        submit(indirect_->dispatch(frame_index_), &cur_stage_profile_.restir_gi_ms);
+        cur_stage_profile_.path_tracing_ms = cur_stage_profile_.restir_di_ms + cur_stage_profile_.restir_gi_ms;
         auto debug_readback = [&](const char *stage) {
             const char *frame = std::getenv("VISION_EVAL_DEBUG_FRAME");
             const char *directory = std::getenv("VISION_EVAL_DEBUG_DIR");
@@ -212,12 +237,12 @@ public:
             submit(denoiser_->dispatch(dn_input), &cur_stage_profile_.spatial_angular_ms);
             debug_readback("filtered");
             submit(combine_(frame_index_, direct_->factor(),
-                            indirect_->factor())
+                            indirect_->factor(), uint(stable_planes_enabled()))
                        .dispatch(pipeline()->resolution()),
                    &cur_stage_profile_.combine_ms);
         } else {
             submit(combine_(frame_index_, direct_->factor(),
-                            indirect_->factor())
+                            indirect_->factor(), uint(stable_planes_enabled()))
                        .dispatch(pipeline()->resolution()),
                    &cur_stage_profile_.combine_ms);
         }
