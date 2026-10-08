@@ -272,6 +272,8 @@ def _parse_camera(
         if accumulation_value in configparser.ConfigParser.BOOLEAN_STATES
         else legacy_progressive
     )
+    stable_planes_value = str(get("vision_stable_planes", "true")).strip().lower()
+    vision_stable_planes = configparser.ConfigParser.BOOLEAN_STATES.get(stable_planes_value, True)
     denoise_value = str(get("vision_denoise", "")).strip().lower()
     vision_denoise = (
         configparser.ConfigParser.BOOLEAN_STATES[denoise_value]
@@ -303,6 +305,7 @@ def _parse_camera(
         "vision_max_depth": get("vision_max_depth", ""),
         "vision_denoise": vision_denoise,
         "vision_accumulation": vision_accumulation,
+        "vision_stable_planes": vision_stable_planes,
     }
 
 

@@ -83,11 +83,11 @@ public:
 }// namespace vision
 
 namespace vision {
-// Film samples are at pixel + 0.5 + jitter. Motion excludes camera jitter,
-// so subtract the previous offset before choosing a previous reservoir.
-[[nodiscard]] inline Float2 previous_reservoir_coord(const Float2 &film, const Float2 &motion,
-                                                      const Float2 &previous_offset) noexcept {
-    return film - motion - previous_offset;
+// Reproject the actual film sample into a previous pixel cell. Each reservoir
+// owns an independently jittered sample, so there is no global previous offset
+// to subtract. Surface validation below decides whether that sample is reusable.
+[[nodiscard]] inline Float2 previous_reservoir_coord(const Float2 &film, const Float2 &motion) noexcept {
+    return film - motion;
 }
 
 [[nodiscard]] inline Int2 reservoir_pixel(const Float2 &coord) noexcept {
@@ -103,11 +103,21 @@ namespace vision {
                      max(abs(cur_surface->depth()), 1e-6f) < depth_threshold;
     Bool cond2 = abs(cur_surface->diffuse_factor() - another_surface->diffuse_factor()) /
                      max(abs(cur_surface->diffuse_factor()), 1e-6f) < diff_threshold;
-    // Replaced hits describe a specular-chain endpoint, while these guides
-    // still describe the primary surface. They cannot validate that endpoint.
+    // Compare cached material features symmetrically, independent of view angle.
+    // Per-channel reflectance also rejects different hues with equal luminance.
+    Bool diffuse_match = all(abs(cur_surface.diffuse_roughness.xyz() - another_surface.diffuse_roughness.xyz()) <= 0.25f);
+    Bool specular_match = all(abs(cur_surface.specular_roughness.xyz() - another_surface.specular_roughness.xyz()) <= 0.25f);
+    Float2 cur_roughness = make_float2(cur_surface.diffuse_roughness.w, cur_surface.specular_roughness.w);
+    Float2 other_roughness = make_float2(another_surface.diffuse_roughness.w, another_surface.specular_roughness.w);
+    Bool roughness_match = all(abs(cur_roughness - other_roughness) <=
+        0.5f * max(max(cur_roughness, other_roughness), make_float2(1e-6f)));
+    // Only explicitly identified stable branches can reuse replacement hits;
+    // their endpoint material and virtual depth guides describe the same path.
     return cond0 && cond1 &&
-           cond2 && cur_surface.hit->is_hit() && another_surface.hit->is_hit() &&
-           !cur_surface.is_replaced && !another_surface.is_replaced;
+           cond2 && diffuse_match && specular_match && roughness_match && cur_surface.hit->is_hit() && another_surface.hit->is_hit() &&
+           (!cur_surface.is_replaced || (cur_surface.stable_branch != 0u && cur_surface.stable_branch != InvalidUI32)) &&
+           (!another_surface.is_replaced || (another_surface.stable_branch != 0u && another_surface.stable_branch != InvalidUI32)) &&
+           cur_surface.stable_branch == another_surface.stable_branch;
 }
 
 [[nodiscard]] inline Bool is_valid_neighbor(const SurfaceDataVar &cur_surface, const SurfaceDataVar &another_surface,
@@ -144,15 +154,6 @@ public:
     OC_MAKE_MEMBER_SETTER(integrator)
     [[nodiscard]] IlluminationIntegrator *integrator() noexcept { return integrator_.lock().get(); }
     [[nodiscard]] const IlluminationIntegrator *integrator() const noexcept { return integrator_.lock().get(); }
-    [[nodiscard]] Float2 previous_film_offset(const Uint &camera_jitter) const noexcept {
-        Float2 offset = make_float2(0.f);
-        auto &sampler = renderer().sampler();
-        sampler->temporary([&](Sampler *local_sampler) {
-            local_sampler->set_seed(make_uint2(0u), max(frame_index(), 1u) - 1u, 0u);
-            offset = scene().sensor()->filter()->sample(local_sampler->next_2d()).p;
-        });
-        return select(camera_jitter != 0u, offset, make_float2(0.f));
-    }
     virtual void update_resolution(uint2 res) noexcept {}
     [[nodiscard]] Uint checkerboard_value() const noexcept {
         return frame_buffer().checkerboard_value(dispatch_idx().xy());
@@ -169,10 +170,10 @@ public:
     [[nodiscard]] auto cur_surface_extends() const noexcept {
         return pipeline()->bindless_array().buffer_var<SurfaceExtend>(frame_buffer().cur_surface_exts_index(frame_index()));
     }
-    [[nodiscard]] Float3 cur_view_pos(const Bool &is_replace) const noexcept {
+    [[nodiscard]] Float3 cur_view_pos(const Bool &is_replace, const Uint &index = dispatch_id()) const noexcept {
         Float3 view_pos;
         $if(is_replace) {
-            view_pos = cur_surface_extends().read(dispatch_id()).view_pos;
+            view_pos = cur_surface_extends().read(index).view_pos;
         }
         $else {
             view_pos = scene().sensor()->device_position();

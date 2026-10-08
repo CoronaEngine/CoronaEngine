@@ -121,7 +121,7 @@ public:
                                                 GISampleVar *sample) noexcept {
         Bool cond = sample ? sample->age < param.max_age : true;
         // Compare both primary-surface depths in the current camera space.
-        Float prev_depth = scene().sensor()->linear_depth(prev_surface->position());
+        Float prev_depth = scene().sensor()->linear_depth(ocarina::select(prev_surface.is_replaced && prev_surface.stable_branch != InvalidUI32, prev_surface.virtual_position, prev_surface->position()));
         return cond && vision::is_valid_neighbor(cur_surface, prev_surface,
                                                  param.t_dot, param.t_depth,
                                                  param.diff_factor, prev_depth);

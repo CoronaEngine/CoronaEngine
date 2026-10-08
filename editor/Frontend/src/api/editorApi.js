@@ -702,6 +702,12 @@ const editorApiStatic = {
       call_manifest_editor_api('sceneTools.setVisionDenoise', [sceneName, cameraId, !!enabled]),
     getVisionDenoise: (sceneName, cameraId = null) =>
       call_manifest_editor_api('sceneTools.getVisionDenoise', [sceneName, cameraId]),
+    setVisionStablePlanes: (sceneName, cameraId = null, enabled = true) =>
+      call_manifest_editor_api('sceneTools.setVisionStablePlanes', [sceneName, cameraId, !!enabled]),
+    getFrameTiming: (sceneName, cameraId = null) =>
+      call_manifest_editor_api('sceneTools.getFrameTiming', [sceneName, cameraId]),
+    getVisionStablePlanes: (sceneName, cameraId = null) =>
+      call_manifest_editor_api('sceneTools.getVisionStablePlanes', [sceneName, cameraId]),
     createCameraView: (sceneName, name = null) =>
       call_manifest_editor_api('sceneTools.createCameraView', [sceneName, name]),
     openCameraView: (sceneName, cameraId) =>

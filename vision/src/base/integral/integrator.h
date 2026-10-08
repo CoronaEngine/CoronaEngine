@@ -75,6 +75,9 @@ public:
     // Subpixel film samples need accumulation or reconstruction before display.
     [[nodiscard]] virtual bool jitter_primary_samples() const noexcept { return true; }
     virtual void set_denoise_enabled(bool enabled) noexcept {}
+    // Optional ReSTIR capability; other integrators ignore the camera preference.
+    virtual void set_stable_planes_enabled(bool enabled) noexcept {}
+    [[nodiscard]] virtual bool stable_planes_enabled() const noexcept { return false; }
     void upload_immediately() noexcept override {
         EncodedObject::upload_immediately();
     }

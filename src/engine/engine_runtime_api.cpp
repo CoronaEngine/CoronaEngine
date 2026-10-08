@@ -2333,6 +2333,18 @@ bool Corona::API::Camera::get_requested_vision_accumulation() const {
     return Corona::API::get_requested_vision_accumulation(handle_);
 }
 
+void Corona::API::Camera::set_vision_stable_planes(bool enabled) {
+    Corona::API::set_vision_stable_planes(enabled, handle_);
+}
+
+bool Corona::API::Camera::get_vision_stable_planes() const {
+    return Corona::API::get_vision_stable_planes(handle_);
+}
+
+bool Corona::API::Camera::get_requested_vision_stable_planes() const {
+    return Corona::API::get_requested_vision_stable_planes(handle_);
+}
+
 void Corona::API::Camera::set_shadow_cascade_debug(bool enabled) {
     if (handle_ == 0) {
         CFW_LOG_WARNING("[Camera::set_shadow_cascade_debug] Invalid camera handle");
@@ -2703,6 +2715,41 @@ bool get_requested_vision_accumulation(std::uintptr_t camera_handle) {
         return *requested;
     }
     return get_vision_accumulation(resolved_handle);
+}
+
+void set_vision_stable_planes(bool enabled, std::uintptr_t camera_handle) {
+    const auto resolved_handle = resolve_camera_handle(camera_handle);
+    if (resolved_handle == 0) {
+        CFW_LOG_WARNING("[set_vision_stable_planes] No camera is available");
+        return;
+    }
+
+    CameraStateUpdateCommand command{};
+    command.camera_handle = resolved_handle;
+    command.fields = CameraStateUpdateField::VisionStablePlanes;
+    command.vision_stable_planes = enabled;
+    SharedDataHub::instance().enqueue_camera_state_update(command);
+}
+
+bool get_vision_stable_planes(std::uintptr_t camera_handle) {
+    const auto resolved_handle = resolve_camera_handle(camera_handle);
+    if (resolved_handle != 0) {
+        if (auto camera = SharedDataHub::instance().camera_storage().acquire_read(resolved_handle)) {
+            return camera->vision_stable_planes;
+        }
+    }
+    return false;
+}
+
+bool get_requested_vision_stable_planes(std::uintptr_t camera_handle) {
+    const auto resolved_handle = resolve_camera_handle(camera_handle);
+    if (resolved_handle == 0) {
+        return false;
+    }
+    if (const auto requested = SharedDataHub::instance().requested_camera_vision_stable_planes(resolved_handle)) {
+        return *requested;
+    }
+    return get_vision_stable_planes(resolved_handle);
 }
 
 void load_vision_scene(const std::string& path) {

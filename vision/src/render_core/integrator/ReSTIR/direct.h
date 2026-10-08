@@ -10,6 +10,7 @@
 namespace vision {
 struct DIParam {
     uint camera_jitter{1u};
+    uint stable_planes{1u};
     uint M_light{};
     uint M_bsdf{};
     uint max_age{};
@@ -31,7 +32,7 @@ struct DIParam {
 };
 }// namespace vision
 
-OC_PARAM_STRUCT(vision, DIParam, camera_jitter, M_light, M_bsdf, max_age, diff_factor, spatial, N,
+OC_PARAM_STRUCT(vision, DIParam, camera_jitter, stable_planes, M_light, M_bsdf, max_age, diff_factor, spatial, N,
                 s_dot, s_depth, s_radius, temporal, history_limit,
                 t_dot, t_depth, t_radius){};
 
@@ -53,6 +54,7 @@ private:
     bool pairwise_{true};
     bool reweight_{false};
     uint max_recursion_{};
+    bool stable_planes_enabled_{true};
     SP<ScreenBuffer> radiance_{make_shared<ScreenBuffer>("ReSTIRDI::radiance_")};
     mutable RegistrableBuffer<DIReservoir> reservoirs_{pipeline()->bindless_array()};
 
@@ -73,7 +75,10 @@ protected:
 public:
     ReSTIRDI() = default;
     ReSTIRDI(IntegratorPtr integrator, const ParameterSet &desc);
-    VS_HOTFIX_MAKE_RESTORE(ReSTIR, M_light_, M_bsdf_, debias_, pairwise_, reweight_, max_recursion_,
+    [[nodiscard]] bool uses_stable_planes() const noexcept;
+    [[nodiscard]] bool stable_planes_enabled() const noexcept { return stable_planes_enabled_; }
+    void set_stable_planes_enabled(bool enabled) noexcept { stable_planes_enabled_ = enabled; }
+    VS_HOTFIX_MAKE_RESTORE(ReSTIR, M_light_, M_bsdf_, debias_, pairwise_, reweight_, max_recursion_, stable_planes_enabled_,
                            radiance_, reservoirs_, shader0_, shader1_)
     OC_MAKE_MEMBER_GETTER(open, )
     OC_MAKE_MEMBER_GETTER(radiance, &)
@@ -99,7 +104,7 @@ public:
                                                 DISampleVar *sample) noexcept {
         Bool cond = sample ? sample->age < param.max_age : true;
         // Compare both primary-surface depths in the current camera space.
-        Float prev_depth = scene().sensor()->linear_depth(prev_surface->position());
+        Float prev_depth = scene().sensor()->linear_depth(ocarina::select(prev_surface.is_replaced && prev_surface.stable_branch != InvalidUI32, prev_surface.virtual_position, prev_surface->position()));
         return vision::is_valid_neighbor(cur_surface, prev_surface,
                                          param.t_dot,
                                          param.t_depth, param.diff_factor, prev_depth) &&
@@ -119,7 +124,7 @@ public:
                                                     const Float3 &throughput, Uint *flag) const noexcept;
 
     [[nodiscard]] HOTFIX_VIRTUAL SurfaceDataVar compute_hit(RayState rs, TriangleHitVar &hit, Interaction &it,
-                                                            SurfaceExtendVar &surf_ext) const noexcept;
+                                                            SurfaceExtendVar &surf_ext, const Bool &stable_planes) const noexcept;
 
     /// evaluate Li from light
     [[nodiscard]] HOTFIX_VIRTUAL SampledSpectrum Li(const Interaction &it, MaterialEvaluator *bsdf,

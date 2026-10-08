@@ -15,8 +15,15 @@ ReSTIRDI::ReSTIRDI(IntegratorPtr integrator, const ParameterSet &desc)
       debias_(desc["debias"].as_bool(false)),
       reweight_(desc["reweight"].as_bool(false)),
       pairwise_(desc["pairwise"].as_bool(true)),
-      max_recursion_(desc["max_recursion"].as_uint(5)) {
+      max_recursion_(desc["max_recursion"].as_uint(5)),
+      stable_planes_enabled_(desc["stable_planes"].as_bool(true)) {
     temporal_.mis = desc["temporal"]["mis"].as_bool(true);
+}
+
+bool ReSTIRDI::uses_stable_planes() const noexcept {
+    // Eligibility is evaluated at each hit by the BSDF. A scene may contain
+    // stable conductor reflections without any material of type "mirror".
+    return stable_planes_enabled_;
 }
 
 bool ReSTIRDI::render_UI(Widgets *widgets) noexcept {
@@ -309,7 +316,7 @@ DIReservoirVar ReSTIRDI::pairwise_combine(const DIReservoirVar &canonical_rsv, F
     rsv_idx.for_each([&](const Uint &idx) {
         DIReservoirVar neighbor_rsv = passthrough_reservoirs().read(idx);
         SurfaceDataVar surf = cur_surfaces().read(idx);
-        Interaction neighbor_it = pipeline()->geometry().compute_surface_interaction(surf.hit, view_pos);
+        Interaction neighbor_it = pipeline()->geometry().compute_surface_interaction(surf.hit, cur_view_pos(surf.is_replaced, idx));
         canonical_weight += neighbor_pairwise_MIS(canonical_at_c, canonical_it, neighbor_rsv, neighbor_it, M, &ret);
     });
     canonical_weight = ocarina::select(M == 1u, 1.f, canonical_weight);
@@ -420,7 +427,7 @@ DIReservoirVar ReSTIRDI::temporal_reuse(DIReservoirVar rsv, const SurfaceDataVar
                                         const Float2 &motion_vec,
                                         const SensorSample &ss,
                                         const Var<DIParam> &param) const noexcept {
-    Float2 prev_p_film = previous_reservoir_coord(ss.p_film, motion_vec, previous_film_offset(param.camera_jitter));
+    Float2 prev_p_film = previous_reservoir_coord(ss.p_film, motion_vec);
     Int2 prev_p = reservoir_pixel(prev_p_film);
     Float limit = rsv.C * param.history_limit;
     Int2 res = make_int2(dispatch_dim().xy());
@@ -470,7 +477,7 @@ DIReservoirVar ReSTIRDI::temporal_reuse(DIReservoirVar rsv, const SurfaceDataVar
 }
 
 SurfaceDataVar ReSTIRDI::compute_hit(RayState rs, TriangleHitVar &hit, Interaction &it,
-                                     SurfaceExtendVar &surf_ext) const noexcept {
+                                     SurfaceExtendVar &surf_ext, const Bool &stable_planes) const noexcept {
     TSensor &camera = scene().sensor();
     const Geometry &geometry = pipeline()->geometry();
     RayVar camera_ray = rs.ray;
@@ -480,11 +487,21 @@ SurfaceDataVar ReSTIRDI::compute_hit(RayState rs, TriangleHitVar &hit, Interacti
 
     SurfaceDataVar cur_surf;
     Uint counter = 0;
+    Bool stable_chain = stable_planes;
+    Uint branch = 0u;
+    Float3 image_x = make_float3(1, 0, 0);
+    Float3 image_y = make_float3(0, 1, 0);
+    Float3 image_z = make_float3(0, 0, 1);
+    Float3 image_offset = make_float3(0.f);
+    auto image_vector = [&](const Float3 &v) {
+        return image_x * v.x + image_y * v.y + image_z * v.z;
+    };
 
     cur_surf.hit = hit;
 
     $loop {
         cur_surf.hit = hit;
+        surf_ext.final_direction = rs.direction();
         $if(!hit->is_hit()) {
             $break;
         };
@@ -493,10 +510,54 @@ SurfaceDataVar ReSTIRDI::compute_hit(RayState rs, TriangleHitVar &hit, Interacti
         Float3 v_pos = camera_ray->at(surf_ext.t_max);
         Float3 w;
         scene().materials().dispatch(it.material_id(), [&](const Material *material) {
+            // Evaluator construction can apply a normal map to it.shading.
+            // Preserve the original interaction for the canonical material guide.
+            Interaction guide_it = it;
+            guide_it.wo = guide_it.ng;
             auto bsdf = material->create_evaluator(it, sampled_wavelengths());
             cur_surf.flag = bsdf.flag();
             Float diff_factor = bsdf.diffuse_factor();
             cur_surf->set_diffuse_factor(diff_factor);
+            $if(counter == 0u || stable_chain) {
+                // Material guides must not follow the path's stochastic wavelengths
+                // or view-dependent layer weights. Keep the lighting RNG untouched.
+                SampledWavelengths guide_swl{renderer().spectrum()->dimension()};
+                sampler()->temporary([&](Sampler *guide_sampler) {
+                    guide_sampler->set_seed(make_uint2(0u), 0u, Dimension::Camera);
+                    guide_swl = renderer().spectrum()->sample_wavelength(renderer().sampler());
+                });
+                auto guide_bsdf = material->create_evaluator(guide_it, guide_swl);
+                SampledSpectrum diffuse{guide_swl.dimension()};
+                SampledSpectrum specular{guide_swl.dimension()};
+                Float2 roughness;
+                guide_bsdf.reuse_material(diffuse, specular, roughness);
+                cur_surf.diffuse_roughness = make_float4(
+                    renderer().spectrum()->linear_srgb(diffuse, guide_swl), roughness.x);
+                cur_surf.specular_roughness = make_float4(
+                    renderer().spectrum()->linear_srgb(specular, guide_swl), roughness.y);
+            };
+            // Ask the evaluated scattering model whether the existing delta
+            // sampler has one deterministic reflection branch. Geometry remains
+            // a separate restriction of the planar virtual-image transform.
+            $if(cur_surf->near_specular()) {
+                stable_chain = stable_chain && Bool(material->enable_delta()) &&
+                    bsdf.supports_stable_reflection(it.wo) &&
+                    dot(bsdf.shading_frame().normal(), it.ng) > 0.99999f &&
+                    dot(material->shading_normal(it, sampled_wavelengths()), it.ng) > 0.99999f &&
+                    !it.has_emission();
+            };
+            $if(stable_chain && counter > 0u) {
+                cur_surf->set_position(it.pos);
+                cur_surf->set_normal(bsdf.shading_frame().normal());
+                cur_surf.virtual_position = image_vector(it.pos) + image_offset;
+                cur_surf.virtual_normal = image_vector(bsdf.shading_frame().normal());
+                cur_surf.virtual_geometric_normal = image_vector(it.ng);
+                cur_surf->set_depth(camera->linear_depth(cur_surf.virtual_position));
+                Float3 albedo_wo = ocarina::select(
+                    dot(bsdf.shading_frame().normal(), it.wo) < 0.f, -it.wo, it.wo);
+                cur_surf.denoiser_albedo = renderer().spectrum()->linear_srgb(
+                    bsdf.albedo(albedo_wo) * SampledSpectrum(surf_ext.throughput), sampled_wavelengths());
+            };
             if (material->enable_delta()) {
                 $if(cur_surf->near_specular()) {
                     BSDFSample bsdf_sample = bsdf.sample_delta(it.wo, renderer().sampler());
@@ -512,9 +573,29 @@ SurfaceDataVar ReSTIRDI::compute_hit(RayState rs, TriangleHitVar &hit, Interacti
         };
         counter += 1;
         $if(counter >= max_recursion_) {
+            stable_chain = stable_chain && !cur_surf->near_specular();
             $break;
         };
         $if(cur_surf->near_specular()) {
+            $if(stable_chain) {
+                Float3 n = it.ng;
+                Float3 transformed_n = image_vector(n);
+                image_offset += 2.f * dot(n, it.pos) * transformed_n;
+                image_x -= 2.f * n.x * transformed_n;
+                image_y -= 2.f * n.y * transformed_n;
+                image_z -= 2.f * n.z * transformed_n;
+                // Include the reflecting plane, not the triangle: coplanar
+                // triangles share, while different facets in one mesh do not.
+                // Quantization tolerates barycentric roundoff on a static plane.
+                Int3 plane_n = make_int3(round(n * 4096.f));
+                Int plane_d = cast<int>(round(dot(n, it.pos) * 4096.f));
+                branch = (branch * 16777619u) ^ (hit.inst_id + 1u);
+                branch = (branch * 16777619u) ^ cast<uint>(plane_n.x);
+                branch = (branch * 16777619u) ^ cast<uint>(plane_n.y);
+                branch = (branch * 16777619u) ^ cast<uint>(plane_n.z);
+                branch = (branch * 16777619u) ^ cast<uint>(plane_d);
+                branch = (branch % (InvalidUI32 - 1u)) + 1u;
+            };
             surf_ext.view_pos = it.pos;
             rs = it.spawn_ray_state(w);
             hit = pipeline()->geometry().trace_closest(rs.ray);
@@ -551,6 +632,8 @@ SurfaceDataVar ReSTIRDI::compute_hit(RayState rs, TriangleHitVar &hit, Interacti
     //        };
     //        counter += 1;
     //    };
+    cur_surf.stable_branch = ocarina::select(!cur_surf.is_replaced, 0u,
+        ocarina::select(stable_chain, branch, InvalidUI32));
     return cur_surf;
 }
 
@@ -566,9 +649,9 @@ void ReSTIRDI::compile_shader0() noexcept {
         camera->load_data();
         sampler()->load_data();
         initial(sampler(), frame_index, spectrum);
-        // Match the GBuffer's frame-wide film jitter. Lighting remains
-        // independently seeded per pixel after reconstructing the film sample.
-        sampler()->set_seed(make_uint2(0u), frame_index, 0);
+        // Reconstruct the GBuffer's exact per-pixel film sample. Lighting uses
+        // its own dimension after this; shading still consumes the owned ray.
+        sampler()->set_seed(pixel, frame_index, Dimension::Camera);
         SensorSample ss = sampler()->sensor_sample(pixel, camera->filter(), param.camera_jitter != 0u);
         sampler()->set_seed(pixel, frame_index, Dimension::ReSTIR_RIS);
         // The GBuffer owns the camera sample (including lens/custom rays).
@@ -579,7 +662,7 @@ void ReSTIRDI::compile_shader0() noexcept {
         TriangleHitVar hit;
         Interaction it{false};
         SurfaceExtendVar surf_ext;
-        SurfaceDataVar cur_surf = compute_hit(rs, hit, it, surf_ext);
+        SurfaceDataVar cur_surf = compute_hit(rs, hit, it, surf_ext, param.stable_planes != 0u);
         cur_surfaces().write(dispatch_id(), cur_surf);
 
         $if(cur_surf.is_replaced) {
@@ -588,6 +671,10 @@ void ReSTIRDI::compile_shader0() noexcept {
 
         DIReservoirVar rsv = RIS(hit->is_hit(), it, param, surf_ext.throughput, nullptr);
         Float2 motion_vec = frame_buffer().motion_vectors().read(dispatch_id());
+        $if(cur_surf.is_replaced && cur_surf.stable_branch != InvalidUI32 && hit->is_hit()) {
+            motion_vec = frame_buffer().compute_motion_vec(camera, ss.p_film, cur_surf.virtual_position, true);
+            frame_buffer().motion_vectors().write(dispatch_id(), motion_vec);
+        };
 
         rsv = temporal_reuse(rsv, cur_surf, motion_vec, ss, param);
         passthrough_reservoirs().write(dispatch_id(), rsv);
@@ -684,10 +771,18 @@ void ReSTIRDI::compile_shader1() noexcept {
         $else {
             if (light_sampler->env_light()) {
                 LightSampleContext p_ref;
+                Float3 direction = rs.direction();
+                Float3 throughput = make_float3(1.f);
                 p_ref.pos = rs.origin();
-                p_ref.ng = rs.direction();
-                LightEval eval = light_sampler->evaluate_miss_wi(p_ref, rs.direction(), swl, LightEvalMode::L);
-                L = spectrum->linear_srgb(eval.L, swl);
+                $if(cur_surf.is_replaced) {
+                    auto ext = cur_surface_extends().read(dispatch_id());
+                    direction = ext.final_direction;
+                    throughput = ext.throughput;
+                    p_ref.pos = ext.view_pos;
+                };
+                p_ref.ng = direction;
+                LightEval eval = light_sampler->evaluate_miss_wi(p_ref, direction, swl, LightEvalMode::L);
+                L = spectrum->linear_srgb(eval.L * SampledSpectrum(throughput), swl);
             }
         };
         radiance_->write(dispatch_id(), make_float4(L, 1.f));
@@ -723,6 +818,7 @@ void ReSTIRDI::update_resolution(ocarina::uint2 res) noexcept {
 DIParam ReSTIRDI::construct_param() const noexcept {
     DIParam param;
     param.camera_jitter = integrator()->jitter_primary_samples();
+    param.stable_planes = uses_stable_planes();
     param.M_light = M_light_;
     param.M_bsdf = M_bsdf_;
     param.max_age = max_age_;

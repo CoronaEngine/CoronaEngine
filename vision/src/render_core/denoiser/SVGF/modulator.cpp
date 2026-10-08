@@ -39,7 +39,7 @@ auto linear_modulate = [&](RadType3Var value, Float3 albedo,
     Kernel demodulate_kernel = [&, pipeline_ref](Var<ModulatorParam> param) noexcept {
         Uint idx = dispatch_id();
 
-        TriangleHitVar cur_hit = param.visibility_buffer.read(idx);
+        TriangleHitVar cur_hit = stable_hit(param, idx, param.visibility_buffer.read(idx));
 
         $if(!PixelStateUtils::is_sky(cur_hit) &&
             !PixelStateUtils::is_emissive(pipeline_ref, cur_hit)) {
@@ -63,7 +63,7 @@ auto linear_modulate = [&](RadType3Var value, Float3 albedo,
                                                            luminance(safe_albedo(spec_albedo, Cfg::Modulator::kSoftEpsilon))));
                 }
             } $else {
-                Float3 albedo = PixelStateUtils::query_albedo(pipeline_ref, cur_hit, param.camera_pos.as_vec3());
+                Float3 albedo = stable_albedo(param, idx, PixelStateUtils::query_albedo(pipeline_ref, cur_hit, param.camera_pos.as_vec3()));
                 param.radiance_direct.write(idx, make_RadType4(
                                                      linear_demodulate(radiance_direct.xyz(), albedo,
                                                                      Cfg::Modulator::kSoftEpsilon),
@@ -80,7 +80,7 @@ auto linear_modulate = [&](RadType3Var value, Float3 albedo,
     Kernel modulate_kernel = [&, pipeline_ref](Var<ModulatorParam> param) noexcept {
         Uint idx = dispatch_id();
 
-        TriangleHitVar cur_hit = param.visibility_buffer.read(idx);
+        TriangleHitVar cur_hit = stable_hit(param, idx, param.visibility_buffer.read(idx));
 
         $if(!PixelStateUtils::is_sky(cur_hit) &&
             !PixelStateUtils::is_emissive(pipeline_ref, cur_hit)) {
@@ -100,7 +100,7 @@ auto linear_modulate = [&](RadType3Var value, Float3 albedo,
                                                            indirect_filtered.w));
                 }
             } $else {
-                Float3 albedo = PixelStateUtils::query_albedo(pipeline_ref, cur_hit, param.camera_pos.as_vec3());
+                Float3 albedo = stable_albedo(param, idx, PixelStateUtils::query_albedo(pipeline_ref, cur_hit, param.camera_pos.as_vec3()));
                 param.radiance_direct.write(idx, make_RadType4(
                                                      linear_modulate(direct_filtered.xyz(), albedo,
                                                                    Cfg::Modulator::kSoftEpsilon),
@@ -117,6 +117,7 @@ auto linear_modulate = [&](RadType3Var value, Float3 albedo,
 
 CommandBatch Modulator::demodulate(vision::RealTimeDenoiseInput &input) noexcept {
     ModulatorParam param;
+    bind_stable_planes(param, input);
     param.radiance_direct = input.direct.descriptor();
     param.radiance_indirect = input.indirect.descriptor();
     param.visibility_buffer = input.visibility.descriptor();
@@ -130,6 +131,7 @@ CommandBatch Modulator::demodulate(vision::RealTimeDenoiseInput &input) noexcept
 
 CommandBatch Modulator::modulate(vision::RealTimeDenoiseInput &input) noexcept {
     ModulatorParam param;
+    bind_stable_planes(param, input);
     param.radiance_direct = input.direct.descriptor();
     param.radiance_indirect = input.indirect.descriptor();
     param.visibility_buffer = input.visibility.descriptor();

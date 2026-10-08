@@ -12,11 +12,15 @@ void VarianceEstimator::prepare() noexcept {}
 void VarianceEstimator::compile() noexcept {
 Pipeline *pipeline_ref = pipeline();
 Kernel variance_kernel = [&, pipeline_ref](Var<VarianceEstimatorParam> param) {
-    Float4 film_offsets = frame_filter_offsets(pipeline_ref, param.frame_index);
+    pipeline_ref->scene().sensor()->load_data();
+    pipeline_ref->renderer().sampler()->load_data();
+    Float2 film_offset = pixel_filter_offset(pipeline_ref, dispatch_idx().xy(), param.frame_index);
+    Int2 filter_radius = make_int2(ceil(pipeline_ref->scene().sensor()->filter()->radius()));
     Int2 screen_size = make_int2(dispatch_dim().xy());
     Uint index = dispatch_id();
         
-    TriangleHitVar cur_hit = param.visibility_buffer.read(index);
+    StableGeometryGuide cur_guide(param, index, param.visibility_buffer.read(index));
+    TriangleHitVar cur_hit = cur_guide.hit;
         
     $if(!PixelStateUtils::is_sky(cur_hit)) {
         RadType4Var cur_direct = param.radiance_direct.read(index);
@@ -30,8 +34,10 @@ Kernel variance_kernel = [&, pipeline_ref](Var<VarianceEstimatorParam> param) {
         Float lum_indirect = luminance(cur_indirect.xyz());
             
         Interaction cur_it = pipeline_ref->geometry().compute_surface_interaction(cur_hit, false);
+        cur_guide.apply(cur_it);
         Float3 shading_normal = PixelStateUtils::query_shading_normal(
             pipeline_ref, cur_hit, param.camera_pos.as_vec3());
+        shading_normal = stable_normal(param, index, shading_normal);
         // Reprojection tests the current surface against the previous view.
         // Both distances must use that same eye position: comparing current-eye
         // and previous-eye distances rejects a stationary surface on dolly moves.
@@ -43,14 +49,13 @@ Kernel variance_kernel = [&, pipeline_ref](Var<VarianceEstimatorParam> param) {
         Float2 cur_pos_float = make_float2(dispatch_idx().xy()) + 0.5f;
         Float2 prev_pos_float = cur_pos_float - motion_vec;
         
-        Float2 prev_texel = prev_pos_float - 0.5f + film_offsets.xy() - film_offsets.zw();
+        Float2 prev_texel = prev_pos_float - 0.5f + film_offset;
         Float2 floor_pos = floor(prev_texel);
-        Float2 frac_pos = prev_texel - floor_pos;
-        
-        Float w00 = (1.f - frac_pos.x) * (1.f - frac_pos.y);
-        Float w10 = frac_pos.x * (1.f - frac_pos.y);
-        Float w01 = (1.f - frac_pos.x) * frac_pos.y;
-        Float w11 = frac_pos.x * frac_pos.y;
+        auto history_sample_delta = [&](Int2 tap_pixel) {
+            Float2 offset = pixel_filter_offset(pipeline_ref, make_uint2(tap_pixel),
+                                                max(param.frame_index, 1u) - 1u);
+            return make_float2(tap_pixel) + offset - prev_texel;
+        };
         
         // Use Float3 accumulators for precision (avoid half precision accumulation errors)
         Float3 acc_direct = make_float3(0.f);
@@ -68,11 +73,13 @@ Kernel variance_kernel = [&, pipeline_ref](Var<VarianceEstimatorParam> param) {
                 all(tap_pixel >= 0) && all(tap_pixel < screen_size)) {
                 
                 Uint tap_idx = cast<uint>(tap_pixel.y) * cast<uint>(screen_size.x) + cast<uint>(tap_pixel.x);
-                TriangleHitVar tap_hit = param.visibility_buffer_prev.read(tap_idx);
+                StableGeometryGuide tap_guide(param, tap_idx, param.visibility_buffer_prev.read(tap_idx), true);
+                TriangleHitVar tap_hit = tap_guide.hit;
                 Bool tap_is_sky = PixelStateUtils::is_sky(tap_hit);
                 
                 $if(!tap_is_sky) {
                     Interaction tap_it = pipeline_ref->geometry().compute_surface_interaction(tap_hit, false);
+                    tap_guide.apply(tap_it);
                     Float tap_depth = length(tap_it.pos - param.prev_camera_pos.as_vec3());
                     Bool tap_is_emissive = PixelStateUtils::is_emissive(pipeline_ref, tap_hit);
                     
@@ -88,7 +95,7 @@ Kernel variance_kernel = [&, pipeline_ref](Var<VarianceEstimatorParam> param) {
                     Bool emission_match = (cur_it.has_emission() == tap_is_emissive) &&
                         (!cur_it.has_emission() || cur_it.light_id() == tap_it.light_id());
                     
-                    Bool tap_consistent = same_instance &&
+                    Bool tap_consistent = (cur_guide.branch == tap_guide.branch) && same_instance &&
                         (depth_diff < Cfg::Temporal::kDepthThreshold) &&
                         (normal_sim > Cfg::Temporal::kNormalThreshold) &&
                         emission_match;
@@ -124,10 +131,16 @@ Kernel variance_kernel = [&, pipeline_ref](Var<VarianceEstimatorParam> param) {
         };
         
         Int2 base_pixel = make_int2(floor_pos);
-        check_tap_consistency(base_pixel + make_int2(0, 0), w00);
-        check_tap_consistency(base_pixel + make_int2(1, 0), w10);
-        check_tap_consistency(base_pixel + make_int2(0, 1), w01);
-        check_tap_consistency(base_pixel + make_int2(1, 1), w11);
+        // A previous sample can move by the filter radius from its own pixel.
+        // Gather its actual position, not four taps of a translated grid.
+        $for(y, -filter_radius.y, filter_radius.y + 2) {
+            $for(x, -filter_radius.x, filter_radius.x + 2) {
+                Int2 tap_pixel = base_pixel + make_int2(x, y);
+                $if(all(tap_pixel >= 0) && all(tap_pixel < screen_size)) {
+                    check_tap_consistency(tap_pixel, film_tent_weight(history_sample_delta(tap_pixel)));
+                };
+            };
+        };
 
         // Jitter and camera motion can move a thin surface outside the bilinear
         // footprint. Recover nearby history on the same instance and plane
@@ -147,7 +160,7 @@ Kernel variance_kernel = [&, pipeline_ref](Var<VarianceEstimatorParam> param) {
             for (int y = -1; y <= 1; ++y) {
                 for (int x = -1; x <= 1; ++x) {
                     Int2 tap_pixel = nearest_pixel + make_int2(x, y);
-                    Float2 delta = make_float2(tap_pixel) - prev_texel;
+                    Float2 delta = history_sample_delta(tap_pixel);
                     check_tap_consistency(tap_pixel, 1.f / (1.f + dot(delta, delta)), true);
                 }
             }
@@ -304,6 +317,7 @@ Kernel variance_kernel = [&, pipeline_ref](Var<VarianceEstimatorParam> param) {
 
 CommandBatch VarianceEstimator::dispatch_variance(RealTimeDenoiseInput &input) noexcept {
     VarianceEstimatorParam param;
+    bind_stable_planes(param, input);
     param.radiance_direct = input.direct.descriptor();
     param.radiance_indirect = input.indirect.descriptor();
     param.svgf_buffer_prev = svgf_->svgf_buffer_prev(input.frame_index).descriptor();

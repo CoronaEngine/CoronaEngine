@@ -89,6 +89,9 @@ public:
     // albedo_split: diffuse vs specular hemispherical reflectance, used as demod guides.
     [[nodiscard]] Float specular_fraction(const Float3 &world_wo, const Float3 &world_wi) const noexcept;
     void albedo_split(const Float3 &world_wo, SampledSpectrum &diffuse, SampledSpectrum &specular) const noexcept;
+    void reuse_material(SampledSpectrum &diffuse, SampledSpectrum &specular,
+                        Float2 &roughness) const noexcept;
+    [[nodiscard]] Bool supports_stable_reflection(const Float3 &world_wo) const noexcept;
     [[nodiscard]] Bool splittable() const noexcept;
     [[nodiscard]] optional<Bool> is_dispersive() const noexcept;
     [[nodiscard]] ScatterEval evaluate(const Float3 &world_wo, const Float3 &world_wi,

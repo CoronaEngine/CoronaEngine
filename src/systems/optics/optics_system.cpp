@@ -1008,6 +1008,10 @@ void apply_pending_camera_state_updates() {
                 camera->vision_accumulation = update.vision_accumulation;
             }
             if (Corona::has_camera_state_field(
+                    update.fields, Corona::CameraStateUpdateField::VisionStablePlanes)) {
+                camera->vision_stable_planes = update.vision_stable_planes;
+            }
+            if (Corona::has_camera_state_field(
                     update.fields, Corona::CameraStateUpdateField::ShadowCascadeDebug)) {
                 camera->shadow_cascade_debug = update.shadow_cascade_debug;
             }
@@ -1034,6 +1038,10 @@ void apply_pending_camera_state_updates() {
         if (Corona::has_camera_state_field(
                 update.fields, Corona::CameraStateUpdateField::VisionAccumulation)) {
             hub.acknowledge_camera_vision_accumulation(update.camera_handle, update.sequence);
+        }
+        if (Corona::has_camera_state_field(
+                update.fields, Corona::CameraStateUpdateField::VisionStablePlanes)) {
+            hub.acknowledge_camera_vision_stable_planes(update.camera_handle, update.sequence);
         }
     }
 }
@@ -2612,7 +2620,7 @@ struct OpticsSystem::VisionPipelineRuntime {
 bool OpticsSystem::prepare_vision_camera_view(VisionPipelineRuntime& runtime,
                                             std::uintptr_t camera_handle,
                                             uint32_t width, uint32_t height,
-                                            bool denoise, bool accumulation) {
+                                            bool denoise, bool accumulation, bool stable_planes) {
     vision::switch_profile::Scope profile{"view.prepare", "view"};
     auto& pipeline = runtime.pipeline;
     if (!pipeline || camera_handle == 0) return false;
@@ -2657,6 +2665,7 @@ bool OpticsSystem::prepare_vision_camera_view(VisionPipelineRuntime& runtime,
         runtime.view_denoise_states[camera_handle] = denoise;
     }
     if (!pipeline->activate_view_context(camera_handle)) return false;
+    pipeline->renderer().integrator()->set_stable_planes_enabled(stable_planes);
     // Output settings are shared by the pipeline, while renderers and histories
     // belong to cameras. Restore the active camera's preference on every visit.
     pipeline->set_output_denoise(denoise);
@@ -7040,13 +7049,17 @@ void OpticsSystem::run_vision_frame(float frame_count, uint64_t frame_index) {
                     Vision::vision_render_mode_uses_denoise(runtime.mode);
                 if (!prepare_vision_camera_view(runtime, cam_handle,
                                                camera.width, camera.height, denoise,
-                                               camera.vision_accumulation)) {
+                                               camera.vision_accumulation, camera.vision_stable_planes)) {
                     return;
                 }
 
                 Vision::sync_vision_camera(*pipeline, camera);
                 pipeline->upload_data();
                 pipeline->display(1.0 / 60.0);
+                // display() already waits for GPU completion. Reuse its timing without
+                // adding a synchronization or including cross-API presentation work.
+                SharedDataHub::instance().publish_camera_frame_timing(
+                    cam_handle, pipeline->cur_render_time(), runtime.mode);
 
                 auto* fb = pipeline->frame_buffer();
                 const auto res = fb->resolution();
