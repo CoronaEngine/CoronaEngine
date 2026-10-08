@@ -35,15 +35,17 @@ Kernel variance_kernel = [&, pipeline_ref](Var<VarianceEstimatorParam> param) {
             
         Interaction cur_it = pipeline_ref->geometry().compute_surface_interaction(cur_hit, false);
         cur_guide.apply(cur_it);
-        Float3 shading_normal = PixelStateUtils::query_shading_normal(
-            pipeline_ref, cur_hit, param.camera_pos.as_vec3());
+        Float3 shading_normal = cur_it.ng;
+        $if(param.layered == 0u) {
+            shading_normal = PixelStateUtils::query_shading_normal(pipeline_ref, cur_hit, param.camera_pos.as_vec3());
+        };
         shading_normal = stable_normal(param, index, shading_normal);
         // Reprojection tests the current surface against the previous view.
         // Both distances must use that same eye position: comparing current-eye
         // and previous-eye distances rejects a stationary surface on dolly moves.
-        Float expected_prev_depth = length(cur_it.pos - param.prev_camera_pos.as_vec3());
+        Float expected_prev_depth = length(cur_guide.depth_point(cur_it.pos) - param.prev_camera_pos.as_vec3());
             
-        Float2 motion_vec = param.motion_vectors.read(index);
+        Float2 motion_vec = stable_motion(param, index);
         Float motion_length = length(motion_vec);
         
         Float2 cur_pos_float = make_float2(dispatch_idx().xy()) + 0.5f;
@@ -80,7 +82,7 @@ Kernel variance_kernel = [&, pipeline_ref](Var<VarianceEstimatorParam> param) {
                 $if(!tap_is_sky) {
                     Interaction tap_it = pipeline_ref->geometry().compute_surface_interaction(tap_hit, false);
                     tap_guide.apply(tap_it);
-                    Float tap_depth = length(tap_it.pos - param.prev_camera_pos.as_vec3());
+                    Float tap_depth = length(tap_guide.depth_point(tap_it.pos) - param.prev_camera_pos.as_vec3());
                     Bool tap_is_emissive = PixelStateUtils::is_emissive(pipeline_ref, tap_hit);
                     
                     Float depth_diff = abs(expected_prev_depth - tap_depth) / max(expected_prev_depth, 0.1f);
@@ -95,7 +97,7 @@ Kernel variance_kernel = [&, pipeline_ref](Var<VarianceEstimatorParam> param) {
                     Bool emission_match = (cur_it.has_emission() == tap_is_emissive) &&
                         (!cur_it.has_emission() || cur_it.light_id() == tap_it.light_id());
                     
-                    Bool tap_consistent = (cur_guide.branch == tap_guide.branch) && same_instance &&
+                    Bool tap_consistent = (cur_guide.compatible(tap_guide)) && same_instance &&
                         (depth_diff < Cfg::Temporal::kDepthThreshold) &&
                         (normal_sim > Cfg::Temporal::kNormalThreshold) &&
                         emission_match;
@@ -168,7 +170,7 @@ Kernel variance_kernel = [&, pipeline_ref](Var<VarianceEstimatorParam> param) {
         
         // Explicit integrator invalidation (including lighting edits) starts a
         // new history even when the camera and surface geometry are unchanged.
-        Bool valid_history = param.frame_index > 0u && total_weight > 0.01f;
+        Bool valid_history = param.history_valid != 0u && total_weight > 0.01f;
         Float inv_weight = 1.f / max(total_weight, 0.001f);
         
         // Keep as Float3 for precision during blending
@@ -320,8 +322,8 @@ CommandBatch VarianceEstimator::dispatch_variance(RealTimeDenoiseInput &input) n
     bind_stable_planes(param, input);
     param.radiance_direct = input.direct.descriptor();
     param.radiance_indirect = input.indirect.descriptor();
-    param.svgf_buffer_prev = svgf_->svgf_buffer_prev(input.frame_index).descriptor();
-    param.svgf_buffer_cur = svgf_->svgf_buffer_cur(input.frame_index).descriptor();
+    param.svgf_buffer_prev = svgf_->svgf_buffer_prev(input.frame_index, input.layer_index).descriptor();
+    param.svgf_buffer_cur = svgf_->svgf_buffer_cur(input.frame_index, input.layer_index).descriptor();
     param.visibility_buffer = input.visibility.descriptor();
     param.visibility_buffer_prev = input.prev_visibility.descriptor();
     param.motion_vectors = input.motion_vec.descriptor();
@@ -331,6 +333,7 @@ CommandBatch VarianceEstimator::dispatch_variance(RealTimeDenoiseInput &input) n
     param.pixels_per_radian = 0.5f * compute_screen_short_edge(input.resolution) /
         tan(radians(pipeline()->scene().sensor()->fov_y()) * 0.5f);
     param.frame_index = input.frame_index;
+    param.history_valid = svgf_->history_valid(input);
     param.channel_kind = static_cast<uint>(input.channel_kind);
     CommandBatch ret;
     ret << variance_shader_(param).dispatch(input.resolution);

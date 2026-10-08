@@ -22,6 +22,7 @@ void check_substrate_sample_classification(vision::Pipeline& pipeline);
 void check_svgf_shading_guide(vision::Pipeline& pipeline);
 void check_svgf_total_albedo(vision::Pipeline& pipeline);
 void check_svgf_spatial_bypass(vision::Pipeline& pipeline);
+void check_svgf_layered_history(vision::Pipeline& pipeline);
 
 namespace Corona::Systems {
 struct VisionEmbeddedModeSwitchTest {
@@ -1114,6 +1115,7 @@ struct VisionEmbeddedModeSwitchTest {
         check_motion_visibility_history(*svgf);
         check_realtime_camera_history(*svgf);
         check_camera_dolly_reprojection(*svgf);
+        check_svgf_layered_history(*svgf);
         check_svgf_restir_motion_history(*svgf);
         check_svgf_spatial_bypass(*svgf);
         // Restore the PT view through the same production group helper. The

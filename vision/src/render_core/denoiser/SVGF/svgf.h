@@ -14,6 +14,9 @@ namespace vision::svgf {
 
 struct ResolveParam {
     uint use_stable_planes{0u};
+    uint layered{0u};
+    BufferDesc<StablePlaneData> stable_planes;
+    BufferDesc<StablePlaneData> prev_stable_planes;
     BufferDesc<SurfaceData> stable_surfaces;
     BufferDesc<SurfaceData> prev_stable_surfaces;
     BufferDesc<RadType4> direct;
@@ -36,7 +39,7 @@ struct ResolveParam {
 
 }// namespace vision::svgf
 
-OC_PARAM_STRUCT(vision::svgf, ResolveParam, use_stable_planes, stable_surfaces, prev_stable_surfaces, direct, indirect,
+OC_PARAM_STRUCT(vision::svgf, ResolveParam, use_stable_planes, layered, stable_planes, prev_stable_planes, stable_surfaces, prev_stable_surfaces, direct, indirect,
                 history_direct, history_indirect, output_direct, output_indirect,
                 visibility, prev_visibility, motion_vectors, camera_pos, prev_camera_pos,
                 history_valid, channel_kind, frame_index, alpha, interior_alpha){};
@@ -58,17 +61,21 @@ private:
     HotfixSlot<SP<Modulator>> modulator_{};
     HotfixSlot<SP<VarianceEstimator>> variance_estimator_{};
     HotfixSlot<SP<Prefilter>> prefilter_{};
-    // Reprojected coverage reads require separate previous/current storage.
-    RegistrableBuffer<float4> resolve_direct_;
-    RegistrableBuffer<float4> resolve_indirect_;
-    RegistrableBuffer<float4> resolve_direct2_;
-    RegistrableBuffer<float4> resolve_indirect2_;
+    // Layer zero retains the public N-sized buffers used by diagnostics.
+    std::array<Buffer<SVGFDataDual>, StablePlaneCount - 1u> layer_data_, layer_data2_;
+    std::array<Buffer<float4>, StablePlaneCount> resolve_direct_, resolve_indirect_;
+    std::array<Buffer<float4>, StablePlaneCount> resolve_direct2_, resolve_indirect2_;
+    struct LayerState {
+        float4x4 camera{};
+        float fov{};
+        uint frame{InvalidUI32};
+        uint history{};
+        uint temporal_frame{InvalidUI32};
+    };
+    std::array<LayerState, StablePlaneCount> layer_state_{};
     Shader<void(ResolveParam)> resolve_shader_;
     Shader<void(ResolveParam)> publish_resolve_shader_;
-    float4x4 resolve_camera_{};
-    float resolve_fov_{};
-    uint resolve_frame_{InvalidUI32};
-    uint resolve_history_{0u};
+    Shader<void(VarianceEstimatorParam)> clear_invalid_shader_;
 
     void prepare_resolve(uint pixel_num);
     void compile_resolve();
@@ -99,10 +106,6 @@ public:
         : Denoiser(desc),
           svgf_data(pipeline()->bindless_array()),
           svgf_data2(pipeline()->bindless_array()),
-          resolve_direct_(pipeline()->bindless_array()),
-          resolve_indirect_(pipeline()->bindless_array()),
-          resolve_direct2_(pipeline()->bindless_array()),
-          resolve_indirect2_(pipeline()->bindless_array()),
           params_(desc) {}
 
     void initialize_(const vision::NodeDesc &node_desc) noexcept override;
@@ -111,8 +114,8 @@ public:
     VS_HOTFIX_MAKE_RESTORE(Denoiser, svgf_data, svgf_data2,
                            atrous_, modulator_, variance_estimator_, prefilter_, params_,
                            resolve_direct_, resolve_indirect_, resolve_direct2_, resolve_indirect2_,
-                           resolve_shader_, publish_resolve_shader_, resolve_camera_,
-                           resolve_fov_, resolve_frame_, resolve_history_)
+                           resolve_shader_, publish_resolve_shader_, clear_invalid_shader_,
+                           layer_data_, layer_data2_, layer_state_)
     VS_MAKE_PLUGIN_NAME_FUNC
 
 #define VS_MAKE_MEMBER_GETTER(member, modifier)                                             \
@@ -132,9 +135,16 @@ public:
     void prepare_buffers();
     void render_sub_UI(Widgets *widgets) noexcept override;
     /// Current-frame history half (written this frame). Selected by frame parity.
-    [[nodiscard]] BufferView<SVGFDataDual> svgf_buffer_cur(uint frame_index) const noexcept;
+    [[nodiscard]] BufferView<SVGFDataDual> svgf_buffer_cur(uint frame_index, uint layer = 0u) const noexcept {
+        if (layer > 0u) return ((frame_index & 1u) == 0u) ? layer_data_[layer - 1u].view() : layer_data2_[layer - 1u].view();
+        return ((frame_index & 1u) == 0u) ? svgf_data.view() : svgf_data2.view();
+    }
     /// Previous-frame history half (read-only this frame).
-    [[nodiscard]] BufferView<SVGFDataDual> svgf_buffer_prev(uint frame_index) const noexcept;
+    [[nodiscard]] BufferView<SVGFDataDual> svgf_buffer_prev(uint frame_index, uint layer = 0u) const noexcept {
+        if (layer > 0u) return ((frame_index & 1u) == 0u) ? layer_data2_[layer - 1u].view() : layer_data_[layer - 1u].view();
+        return ((frame_index & 1u) == 0u) ? svgf_data2.view() : svgf_data.view();
+    }
+    [[nodiscard]] bool history_valid(const RealTimeDenoiseInput &input) const noexcept;
     void prepare() noexcept override;
     void compile() noexcept override;
     [[nodiscard]] bool has_prepared_resources() const noexcept override {

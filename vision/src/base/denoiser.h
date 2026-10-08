@@ -43,6 +43,12 @@ struct RealTimeDenoiseInput {
     BufferView<SurfaceData> stable_surfaces;
     BufferView<SurfaceData> prev_stable_surfaces;
 
+    // Bounded layer views already include their storage offset.
+    uint layer_index{0u};
+    uint layer_count{1u};
+    BufferView<StablePlaneData> stable_planes;
+    BufferView<StablePlaneData> prev_stable_planes;
+
     /// Camera positions for depth calculation from visibility buffer
     array_float3 camera_pos{};
     array_float3 prev_camera_pos{};

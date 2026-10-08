@@ -9,6 +9,205 @@
 #include <vector>
 #include <cstdlib>
 
+// Sharing temporal or resolve storage across layers makes these independently
+// coloured paths contaminate each other. Changing identity without camera motion
+// also must not inherit the previous path's coverage or illumination.
+template<typename Input, typename Filter>
+void layered_history_regression(vision::Pipeline& pipeline, Filter& denoiser) {
+    using namespace vision;
+    if constexpr (!requires(Input input, Filter& filter) {
+        input.layer_index; input.layer_count; input.stable_planes; input.prev_stable_planes;
+        filter.svgf_buffer_cur(0u, 1u);
+    }) {
+        throw std::runtime_error("missing layered SVGF history contract");
+    } else {
+        struct Env {
+            const char* name; std::string old;
+            static void set(const char* name, const char* value) {
+#ifdef _WIN32
+                _putenv_s(name, value);
+#else
+                if (value[0]) setenv(name, value, 1); else unsetenv(name);
+#endif
+            }
+            Env(const char* n, const char* v) : name(n), old(std::getenv(n) ? std::getenv(n) : "") { set(n, v); }
+            ~Env() { set(name, old.c_str()); }
+        } domain{"VISION_SVGF_RADIANCE_DOMAIN", "1"}, prefilter{"VISION_SVGF_SKIP_PREFILTER", "1"},
+          atrous{"VISION_SVGF_SKIP_ATROUS", "1"}, resolve{"VISION_SVGF_SKIP_RESOLVE", "1"},
+          variance{"VISION_SVGF_SKIP_VARIANCE", "0"};
+        const uint n = pipeline.pixel_num();
+        const uint center = n / 2u + pipeline.resolution().x / 2u;
+        auto visibility = pipeline.frame_buffer()->cur_visibility_buffer_view(pipeline.frame_index() - 1u);
+        auto current = pipeline.device().create_buffer<StablePlaneData>(n, "layered_test_current");
+        auto previous = pipeline.device().create_buffer<StablePlaneData>(n, "layered_test_previous");
+        auto direct = pipeline.device().create_buffer<RadType4>(n, "layered_test_direct");
+        auto indirect = pipeline.device().create_buffer<RadType4>(n, "layered_test_indirect");
+        Kernel make_guides = [&](BufferVar<TriangleHit> visible, BufferVar<StablePlaneData> out) {
+            auto hit = visible.read(center);
+            auto it = pipeline.geometry().compute_surface_interaction(hit, false);
+            StablePlaneDataVar plane;
+            plane.valid = 1u; plane.branch_sequence = 5u; plane.instance_hash = 37u;
+            plane.depth = 1u; plane.material_id = it.material_id();
+            plane.surface.hit = hit; plane.surface.is_replaced = true;
+            plane.surface.stable_branch = 37u;
+            plane.surface.virtual_position = it.pos;
+            plane.surface.virtual_normal = it.ng;
+            plane.surface.virtual_geometric_normal = it.ng;
+            plane.surface.denoiser_albedo = make_float3(1.f);
+            plane.depth_position = it.pos;
+            out.write(dispatch_id(), plane);
+        };
+        auto guide_shader = pipeline.device().compile(make_guides, "layered_history_fixture");
+        std::vector<StablePlaneData> guides(n);
+        pipeline.stream() << guide_shader(visibility, current).dispatch(n) << current.download(guides.data())
+            << synchronize() << commit();
+        if (guides[center].surface.hit.inst_id == InvalidUI32) throw std::runtime_error("layer fixture needs geometry");
+        auto baseline = guides;
+        std::vector<RadType4> samples(n), output(n);
+        std::vector<svgf::SVGFDataDual> history(n);
+        Input input;
+        input.resolution = pipeline.resolution(); input.layer_count = StablePlaneCount;
+        input.use_stable_planes = true;
+        input.stable_planes = current.view(); input.prev_stable_planes = previous.view();
+        input.direct = direct.view(); input.indirect = indirect.view();
+        input.visibility = input.prev_visibility = visibility;
+        input.motion_vec = pipeline.frame_buffer()->motion_vectors();
+        auto eye = pipeline.scene().sensor()->position();
+        input.camera_pos = input.prev_camera_pos = {eye.x, eye.y, eye.z};
+        input.channel_kind = Input::ChannelKind::DirectIndirect;
+        auto run = [&](uint frame, uint layer, RadType4 color) {
+            input.frame_index = frame; input.layer_index = layer;
+            std::fill(samples.begin(), samples.end(), color);
+            pipeline.stream() << current.upload(guides.data()) << previous.upload(baseline.data())
+                << direct.upload(samples.data()) << indirect.upload(samples.data())
+                << denoiser.dispatch(input) << direct.download(output.data())
+                << denoiser.svgf_buffer_cur(frame, layer).download(history.data()) << synchronize() << commit();
+        };
+        const RadType4 colors[]{RadType4{1,0,0,1}, RadType4{0,1,0,1}, RadType4{0,0,1,1}};
+        for (uint frame = 0; frame < 2; ++frame) for (uint layer = 0; layer < StablePlaneCount; ++layer) {
+            run(frame, layer, colors[layer]);
+            auto value = history[center].illumi_direct;
+            if (std::abs(float(value.x)-float(colors[layer].x)) > 1e-5f ||
+                std::abs(float(value.y)-float(colors[layer].y)) > 1e-5f ||
+                std::abs(float(value.z)-float(colors[layer].z)) > 1e-5f ||
+                float(history[center].moments_direct.z) < float(frame+1u)-0.01f)
+                throw std::runtime_error("layer illumination and moments must retain independent colors and ages");
+        }
+        run(2u, 1u, RadType4{0,0,0,1});
+        if (float(history[center].illumi_direct.y) < 0.5f || float(history[center].moments_direct.z) < 2.5f)
+            throw std::runtime_error("valid zero samples must retain unbiased layer history");
+        for (uint change = 0; change < 6; ++change) {
+            guides = baseline; run(0u, 2u, colors[2]);
+            for (auto& plane : guides) {
+                if (change == 0) plane.branch_sequence ^= 1u;
+                if (change == 1) plane.instance_hash ^= 1u;
+                if (change == 2) plane.depth += 1u;
+                if (change == 3) plane.material_id ^= 1u;
+                if (change == 4) plane.valid = 0u;
+                if (change == 5) plane.surface.hit.inst_id = InvalidUI32;
+            }
+            run(1u, 2u, colors[0]);
+            const float age = float(history[center].moments_direct.z);
+            if ((change < 4 && (age != 1.f || float(history[center].illumi_direct.z) != 0.f)) ||
+                (change >= 4 && (age != 0.f || float(output[center].x) != 0.f)))
+                throw std::runtime_error("changed or absent layer must reject and clear incompatible history");
+        }
+        Env::set("VISION_SVGF_SKIP_VARIANCE", "1");
+        Env::set("VISION_SVGF_SKIP_RESOLVE", "0");
+        guides = baseline;
+        for (uint frame = 0; frame < 2; ++frame) for (uint layer = 0; layer < StablePlaneCount; ++layer) {
+            run(frame, layer, colors[layer]);
+            if (std::abs(float(output[center].x)-float(colors[layer].x)) > 1e-5f ||
+                std::abs(float(output[center].y)-float(colors[layer].y)) > 1e-5f ||
+                std::abs(float(output[center].z)-float(colors[layer].z)) > 1e-5f)
+                throw std::runtime_error("stationary resolve must keep three independent colors");
+        }
+        for (auto& plane : guides) plane.branch_sequence ^= 1u;
+        run(2u, 1u, colors[0]);
+        if (float(output[center].x) != 1.f || float(output[center].y) != 0.f)
+            throw std::runtime_error("stationary resolve must reject changed branch identity");
+        auto old_baseline = baseline;
+        baseline = guides;
+        run(3u, 1u, colors[2]);
+        if (std::abs(float(output[center].x) - 0.5f) > 1e-5f || std::abs(float(output[center].z) - 0.5f) > 1e-5f)
+            throw std::runtime_error("changed layer coverage age must restart independently of stationary camera age");
+        baseline = old_baseline;
+        for (auto& plane : guides) plane.valid = 0u;
+        run(4u, 1u, colors[0]);
+        if (float(output[center].x) != 0.f || float(history[center].moments_direct.z) != 0.f)
+            throw std::runtime_error("empty layers must clear output and history even with variance bypassed");
+        guides = baseline;
+        Env::set("VISION_SVGF_SKIP_VARIANCE", "0");
+        Env::set("VISION_SVGF_SKIP_RESOLVE", "1");
+        run(0u, 1u, colors[1]); run(1u, 1u, colors[1]);
+        run(4u, 1u, colors[0]);
+        if (float(history[center].moments_direct.z) != 1.f || float(history[center].illumi_direct.y) != 0.f)
+            throw std::runtime_error("resuming a skipped layer must not revive stale temporal history");
+        for (uint toggle = 0; toggle < 4; ++toggle) {
+            run(0u, 2u, colors[2]); run(1u, 2u, colors[2]);
+            denoiser.set_enabled(false); denoiser.set_enabled(true);
+            run(2u, 2u, colors[0]);
+            if (float(history[center].moments_direct.z) != 1.f || float(history[center].illumi_direct.z) != 0.f)
+                throw std::runtime_error("denoiser toggles must reset every layer's temporal validity");
+        }
+        // Different virtual projection geometry can still have matching optical
+        // depth. Motion must come from the layer, not the primary-surface buffer.
+        auto original = baseline;
+        for (auto& plane : baseline) plane.surface.approximate = 1u;
+        guides = baseline; run(0u, 1u, colors[1]);
+        for (auto& plane : guides) plane.surface.virtual_position.z += 10.f;
+        run(1u, 1u, colors[1]);
+        if (float(history[center].moments_direct.z) < 1.9f)
+            throw std::runtime_error("approximate temporal depth must use optical depth independently of projection position");
+        for (auto& plane : guides) plane.depth_position.z += 20.f;
+        run(2u, 1u, colors[0]);
+        if (float(history[center].moments_direct.z) != 1.f)
+            throw std::runtime_error("optical depth disocclusion must reject layer history");
+        baseline = original; guides = baseline;
+        run(0u, 1u, colors[1]);
+        for (auto& plane : guides) plane.motion = make_float2(1000.f);
+        run(1u, 1u, colors[0]);
+        if (float(history[center].moments_direct.z) != 1.f)
+            throw std::runtime_error("layer motion must override primary surface motion");
+        guides = baseline;
+        Env::set("VISION_SVGF_SKIP_PREFILTER", "0");
+        Env::set("VISION_SVGF_SKIP_ATROUS", "0");
+        Env::set("VISION_SVGF_SKIP_RESOLVE", "0");
+        for (bool separated : {true, false}) {
+            guides = baseline;
+            std::fill(samples.begin(), samples.end(), colors[1]);
+            samples[center] = colors[0];
+            if (separated) for (uint i = 0u; i < n; ++i) if (i != center) guides[i].branch_sequence ^= 1u;
+            input.frame_index = 0u; input.layer_index = 1u;
+            pipeline.stream() << current.upload(guides.data()) << previous.upload(baseline.data())
+                << direct.upload(samples.data()) << indirect.upload(samples.data())
+                << denoiser.dispatch(input) << direct.download(output.data()) << synchronize() << commit();
+            if (separated ? (std::abs(float(output[center].x) - 1.f) > 1e-5f || float(output[center].y) != 0.f)
+                          : float(output[center].x) > 0.99f)
+                throw std::runtime_error("spatial and coverage taps must filter matching paths while excluding neighboring branch colors");
+        }
+        Env::set("VISION_SVGF_SKIP_PREFILTER", "1");
+        Env::set("VISION_SVGF_SKIP_ATROUS", "1");
+        Env::set("VISION_SVGF_SKIP_RESOLVE", "1");
+        guides = baseline;
+        run(0u, 1u, colors[1]); run(1u, 1u, colors[1]);
+        denoiser.update_resolution(input.resolution);
+        run(2u, 1u, colors[0]);
+        if (float(history[center].moments_direct.z) != 1.f || float(history[center].illumi_direct.y) != 0.f)
+            throw std::runtime_error("resized buffers must not retain layer history or stale descriptors");
+        pipeline.invalidate();
+        std::cout << "PASS: layered SVGF colors, moments, zero samples, identity and stationary resolve isolation\n";
+    }
+}
+
+void check_svgf_layered_history(vision::Pipeline& pipeline) {
+    pipeline.activate_global_context();
+    auto* illumination = dynamic_cast<vision::IlluminationIntegrator*>(pipeline.renderer().integrator().get());
+    auto* denoiser = illumination ? dynamic_cast<vision::svgf::SVGF*>(illumination->denoiser()) : nullptr;
+    if (!denoiser) throw std::runtime_error("layered history regression requires SVGF");
+    layered_history_regression<vision::RealTimeDenoiseInput>(pipeline, *denoiser);
+}
+
 void check_svgf_shading_guide(vision::Pipeline& pipeline) {
     using namespace vision;
     pipeline.activate_global_context();

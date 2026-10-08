@@ -11,6 +11,9 @@
 namespace vision::svgf {
 struct VarianceEstimatorParam {
     uint use_stable_planes{0u};
+    uint layered{0u};
+    BufferDesc<StablePlaneData> stable_planes;
+    BufferDesc<StablePlaneData> prev_stable_planes;
     BufferDesc<SurfaceData> stable_surfaces;
     BufferDesc<SurfaceData> prev_stable_surfaces;
     BufferDesc<RadType4> radiance_direct;
@@ -24,14 +27,15 @@ struct VarianceEstimatorParam {
     array_float3 prev_camera_pos{};
     float pixels_per_radian{};
     uint frame_index{};
+    uint history_valid{};
     uint channel_kind{};
 };
 
 }// namespace vision::svgf
 
-OC_PARAM_STRUCT(vision::svgf, VarianceEstimatorParam, use_stable_planes, stable_surfaces, prev_stable_surfaces,
+OC_PARAM_STRUCT(vision::svgf, VarianceEstimatorParam, use_stable_planes, layered, stable_planes, prev_stable_planes, stable_surfaces, prev_stable_surfaces,
 radiance_direct, radiance_indirect, svgf_buffer_prev, svgf_buffer_cur,
-visibility_buffer, visibility_buffer_prev, motion_vectors, camera_pos, prev_camera_pos, pixels_per_radian, frame_index, channel_kind){};
+visibility_buffer, visibility_buffer_prev, motion_vectors, camera_pos, prev_camera_pos, pixels_per_radian, frame_index, history_valid, channel_kind){};
 
 namespace vision::svgf {
 class SVGF;

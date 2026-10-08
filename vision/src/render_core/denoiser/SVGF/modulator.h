@@ -11,6 +11,9 @@ namespace vision::svgf {
 
 struct ModulatorParam {
     uint use_stable_planes{0u};
+    uint layered{0u};
+    BufferDesc<StablePlaneData> stable_planes;
+    BufferDesc<StablePlaneData> prev_stable_planes;
     BufferDesc<SurfaceData> stable_surfaces;
     BufferDesc<SurfaceData> prev_stable_surfaces;
     BufferDesc<RadType4> radiance_direct;
@@ -23,7 +26,7 @@ struct ModulatorParam {
 
 }// namespace vision::svgf
 
-OC_PARAM_STRUCT(vision::svgf, ModulatorParam, use_stable_planes, stable_surfaces, prev_stable_surfaces, radiance_direct, radiance_indirect,
+OC_PARAM_STRUCT(vision::svgf, ModulatorParam, use_stable_planes, layered, stable_planes, prev_stable_planes, stable_surfaces, prev_stable_surfaces, radiance_direct, radiance_indirect,
                 visibility_buffer, motion_vectors, camera_pos, channel_kind){};
 
 namespace vision::svgf {

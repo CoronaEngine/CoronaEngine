@@ -233,6 +233,71 @@ void check_restir_material_reuse(vision::Pipeline& pipeline, const std::vector<v
 
 // Exercise producer, ReSTIR validation, virtual reprojection and SVGF history
 // together on the real mirror scene prepared by the host-side test.
+void check_glass_svgf(vision::Pipeline& pipeline) {
+    using namespace vision;
+    pipeline.activate_global_context();
+    auto* illumination = dynamic_cast<IlluminationIntegrator*>(pipeline.renderer().integrator().get());
+    auto* denoiser = illumination ? dynamic_cast<svgf::SVGF*>(illumination->denoiser()) : nullptr;
+    if (!denoiser || !denoiser->enabled()) throw std::runtime_error("glass SVGF fixture requires enabled denoiser");
+    const uint n = pipeline.pixel_num(), center = 136u;
+    std::vector<svgf::SVGFDataDual> history(n);
+    std::vector<float4> stable(n), final(n), direct(n), indirect(n);
+    auto render = [&] { pipeline.upload_data(); pipeline.display(1.0 / 60.0); };
+    auto age = [&](uint layer) {
+        pipeline.stream() << denoiser->svgf_buffer_cur(pipeline.frame_index() - 1u, layer).download(history.data())
+            << synchronize() << commit();
+        return float(history[center].moments_direct.z);
+    };
+    auto sum = [&] {
+        auto& fb = *pipeline.frame_buffer();
+        pipeline.stream() << fb.stable_radiance().download(stable.data()) << fb.rt_buffer().view().download(final.data())
+            << synchronize() << commit();
+        for (uint layer = 0u; layer < StablePlaneCount; ++layer) {
+            pipeline.stream() << fb.stable_direct_view(layer).download(direct.data())
+                << fb.stable_indirect_view(layer).download(indirect.data()) << synchronize() << commit();
+            for (uint i = 0u; i < n; ++i) for (uint c = 0; c < 3; ++c) stable[i][c] += direct[i][c] + indirect[i][c];
+        }
+        for (uint i = 0u; i < n; ++i) for (uint c = 0; c < 3; ++c)
+            if (!std::isfinite(final[i][c]) || std::abs(stable[i][c] - final[i][c]) > 1e-5f)
+                throw std::runtime_error("filtered and raw composition must sum each owned layer exactly once");
+    };
+    render();
+    if (age(1u) != 1.f || age(2u) != 1.f)
+        throw std::runtime_error("new camera pipeline must start independent reflection/transmission histories");
+    for (uint frame = 0; frame < 24; ++frame) render();
+    if (age(1u) < 2.f || age(2u) < 2.f)
+        throw std::runtime_error("real glass reflection and transmission must both accumulate SVGF history");
+    for (uint layer : {1u, 2u}) {
+        pipeline.stream() << pipeline.frame_buffer()->stable_direct_view(layer).download(direct.data())
+            << synchronize() << commit();
+        double red = 0, blue = 0;
+        for (const auto& pixel : direct) { red += pixel.x; blue += pixel.z; }
+        if ((layer == 1u && red <= 2 * blue) || (layer == 2u && blue <= 2 * red))
+            throw std::runtime_error("filtered glass layers must preserve independent red transmission and blue reflection");
+    }
+    sum();
+    auto& camera = pipeline.scene().sensor();
+    camera->set_position(make_float3(0.1f, 0.f, 0.f)); camera->update_device_data();
+    render();
+    if (age(1u) <= 1.f || age(2u) <= 1.f)
+        throw std::runtime_error("translated glass must retain compatible independent layer histories");
+    sum();
+    pipeline.set_output_denoise(false); render(); sum();
+    pipeline.set_output_denoise(true); render(); sum();
+    const float resumed_t = age(1u), resumed_r = age(2u);
+    std::cout << "glass reenabled frame=" << pipeline.frame_index() << " enabled=" << denoiser->enabled()
+        << " history=" << resumed_t << ',' << resumed_r << '\n';
+    if (resumed_t != 1.f || resumed_r != 1.f)
+        throw std::runtime_error("reenabled glass denoiser must cold-start all layer histories");
+    for (bool enabled : {false, true, false, true}) {
+        illumination->set_stable_planes_enabled(enabled); render();
+        if (enabled && (age(1u) != 1.f || age(2u) != 1.f))
+            throw std::runtime_error("glass stable-plane toggle must reset both child histories");
+        if (enabled) sum();
+    }
+    std::cout << "PASS: real glass SVGF layer colors/history/motion, exact raw+filtered composition, toggles and camera isolation\n";
+}
+
 void check_stable_plane(vision::Pipeline& pipeline, bool tinted_mirror) {
     using namespace vision;
     pipeline.activate_global_context();

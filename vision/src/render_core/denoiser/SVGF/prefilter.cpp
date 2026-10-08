@@ -113,7 +113,7 @@ auto compute_spatial_weight = [](Float history) -> Float {
                             };
                             w_geo = GeometryWeightUtils::handle_sky_weight(false, n_is_sky, w_geo);
                             
-                            w_geo *= boundary_weight * cast<float>(center_guide.branch == neighbor_guide.branch);
+                            w_geo *= boundary_weight * cast<float>(center_guide.compatible(neighbor_guide));
                             
                             $if((dx != 0 || dy != 0) && w_geo > 0.1f) {
                                 spatial_sum_direct += n_direct * w_geo;
@@ -284,7 +284,7 @@ CommandBatch Prefilter::dispatch(RealTimeDenoiseInput &input, bool use_shading_n
     param.use_shading_normal = use_shading_normal;
     param.radiance_direct = input.direct.descriptor();
     param.radiance_indirect = input.indirect.descriptor();
-    param.svgf_buffer = svgf_->svgf_buffer_cur(input.frame_index).descriptor();
+    param.svgf_buffer = svgf_->svgf_buffer_cur(input.frame_index, input.layer_index).descriptor();
     param.visibility_buffer = input.visibility.descriptor();
     param.camera_pos = input.camera_pos;
     param.channel_kind = static_cast<uint>(input.channel_kind);

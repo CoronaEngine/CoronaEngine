@@ -63,7 +63,9 @@ auto linear_modulate = [&](RadType3Var value, Float3 albedo,
                                                            luminance(safe_albedo(spec_albedo, Cfg::Modulator::kSoftEpsilon))));
                 }
             } $else {
-                Float3 albedo = stable_albedo(param, idx, PixelStateUtils::query_albedo(pipeline_ref, cur_hit, param.camera_pos.as_vec3()));
+                Float3 albedo{make_float3(1.f)};
+                $if(param.layered == 0u) { albedo = PixelStateUtils::query_albedo(pipeline_ref, cur_hit, param.camera_pos.as_vec3()); };
+                albedo = stable_albedo(param, idx, albedo);
                 param.radiance_direct.write(idx, make_RadType4(
                                                      linear_demodulate(radiance_direct.xyz(), albedo,
                                                                      Cfg::Modulator::kSoftEpsilon),
@@ -100,7 +102,9 @@ auto linear_modulate = [&](RadType3Var value, Float3 albedo,
                                                            indirect_filtered.w));
                 }
             } $else {
-                Float3 albedo = stable_albedo(param, idx, PixelStateUtils::query_albedo(pipeline_ref, cur_hit, param.camera_pos.as_vec3()));
+                Float3 albedo{make_float3(1.f)};
+                $if(param.layered == 0u) { albedo = PixelStateUtils::query_albedo(pipeline_ref, cur_hit, param.camera_pos.as_vec3()); };
+                albedo = stable_albedo(param, idx, albedo);
                 param.radiance_direct.write(idx, make_RadType4(
                                                      linear_modulate(direct_filtered.xyz(), albedo,
                                                                    Cfg::Modulator::kSoftEpsilon),

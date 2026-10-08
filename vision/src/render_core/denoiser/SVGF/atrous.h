@@ -13,6 +13,9 @@ namespace vision::svgf {
 
 struct CombinedAtrousParam {
     uint use_stable_planes{0u};
+    uint layered{0u};
+    BufferDesc<StablePlaneData> stable_planes;
+    BufferDesc<StablePlaneData> prev_stable_planes;
     BufferDesc<SurfaceData> stable_surfaces;
     BufferDesc<SurfaceData> prev_stable_surfaces;
     BufferDesc<RadType4> direct_src;
@@ -35,7 +38,7 @@ struct CombinedAtrousParam {
 
 }// namespace vision::svgf
 
-OC_PARAM_STRUCT(vision::svgf, CombinedAtrousParam, use_stable_planes, stable_surfaces, prev_stable_surfaces, direct_src, direct_dst, indirect_src, indirect_dst,
+OC_PARAM_STRUCT(vision::svgf, CombinedAtrousParam, use_stable_planes, layered, stable_planes, prev_stable_planes, stable_surfaces, prev_stable_surfaces, direct_src, direct_dst, indirect_src, indirect_dst,
 visibility_buffer, svgf_buffer, camera_pos, l_phi, n_phi, z_phi, step_size, iteration, frame_index, write_history, channel_kind, use_shading_normal){};
 
 namespace vision::svgf {

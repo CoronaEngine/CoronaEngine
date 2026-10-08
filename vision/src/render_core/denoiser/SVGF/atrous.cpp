@@ -74,9 +74,12 @@ Kernel kernel = [&, pipeline_ref](Var<CombinedAtrousParam> param) {
                 Int2 gp = cur_pixel + make_int2(gx, gy);
                 $if(all(gp >= 0) && all(gp < screen_size)) {
                     Uint gidx = cast<uint>(gp.y) * cast<uint>(screen_size.x) + cast<uint>(gp.x);
+                    StableGeometryGuide variance_guide(param, gidx, param.visibility_buffer.read(gidx));
+                    $if(param.layered == 0u || center_guide.compatible(variance_guide)) {
                     var_sum_direct += max(Float(param.direct_src.read(gidx).w), variance_epsilon) * gw;
                     var_sum_indirect += max(Float(param.indirect_src.read(gidx).w), variance_epsilon) * gw;
                     var_gw_sum += gw;
+                    };
                 };
             }
         }
@@ -142,7 +145,7 @@ Kernel kernel = [&, pipeline_ref](Var<CombinedAtrousParam> param) {
                             ocarina::select(param.use_shading_normal != 0u,
                                 make_float3(param.svgf_buffer.read(idx).surface_normal.xyz()), neighbor_it.ng), param.n_phi);
                 };
-                w_geo *= boundary_weight * cast<float>(center_guide.branch == neighbor_guide.branch);
+                w_geo *= boundary_weight * cast<float>(center_guide.compatible(neighbor_guide));
 
                 Float lum_neighbor_direct = HalfSafeUtils::clamp_luminance(luminance(direct_neighbor.xyz()));
                 Float lum_neighbor_indirect = HalfSafeUtils::clamp_luminance(luminance(indirect_neighbor.xyz()));
@@ -246,7 +249,7 @@ CommandBatch AtrousFilter::dispatch_combined(vision::RealTimeDenoiseInput &input
     }
     
     param.visibility_buffer = input.visibility.descriptor();
-    param.svgf_buffer = svgf_->svgf_buffer_cur(input.frame_index).descriptor();
+    param.svgf_buffer = svgf_->svgf_buffer_cur(input.frame_index, input.layer_index).descriptor();
     param.camera_pos = input.camera_pos;
 
     float l_phi = svgf_->sigma_rt();

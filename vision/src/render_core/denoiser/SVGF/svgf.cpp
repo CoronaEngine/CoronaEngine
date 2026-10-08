@@ -29,20 +29,32 @@ void SVGF::prepare_buffers() {
 }
 
 void SVGF::prepare_resolve(uint pixel_num) {
-    init_buffer_zero(device(), resolve_direct_, pixel_num, "SVGF::resolve_direct");
-    resolve_direct_.register_self(0, pixel_num);
-    init_buffer_zero(device(), resolve_indirect_, pixel_num, "SVGF::resolve_indirect");
-    resolve_indirect_.register_self(0, pixel_num);
-    init_buffer_zero(device(), resolve_direct2_, pixel_num, "SVGF::resolve_direct2");
-    resolve_direct2_.register_self(0, pixel_num);
-    init_buffer_zero(device(), resolve_indirect2_, pixel_num, "SVGF::resolve_indirect2");
-    resolve_indirect2_.register_self(0, pixel_num);
-    resolve_history_ = 0u;
-    resolve_frame_ = InvalidUI32;
+    for (uint layer = 0u; layer < StablePlaneCount; ++layer) {
+        init_buffer_zero(device(), resolve_direct_[layer], pixel_num, "SVGF::resolve_direct");
+        init_buffer_zero(device(), resolve_indirect_[layer], pixel_num, "SVGF::resolve_indirect");
+        init_buffer_zero(device(), resolve_direct2_[layer], pixel_num, "SVGF::resolve_direct2");
+        init_buffer_zero(device(), resolve_indirect2_[layer], pixel_num, "SVGF::resolve_indirect2");
+        if (layer > 0u) {
+            init_buffer_zero(device(), layer_data_[layer - 1u], pixel_num, "SVGF::layer_data");
+            init_buffer_zero(device(), layer_data2_[layer - 1u], pixel_num, "SVGF::layer_data2");
+        }
+    }
+    layer_state_ = {};
 }
 
 void SVGF::compile_resolve() {
     Pipeline *pipeline_ref = pipeline();
+    Kernel clear_invalid = [](Var<VarianceEstimatorParam> param) {
+        Uint idx = dispatch_id();
+        auto plane = param.stable_planes.read(idx);
+        $if(plane.valid == 0u || plane.surface.hit->is_miss() || plane.surface.hit.inst_id == InvalidUI32) {
+            SVGFDataDualVar empty;
+            param.svgf_buffer_cur.write(idx, empty);
+            param.radiance_direct.write(idx, make_RadType4(0.f));
+            param.radiance_indirect.write(idx, make_RadType4(0.f));
+        };
+    };
+    clear_invalid_shader_ = device().compile(clear_invalid, "SVGF-ClearInvalidLayer");
     Kernel kernel = [pipeline_ref](Var<ResolveParam> param) {
         pipeline_ref->scene().sensor()->load_data();
         pipeline_ref->renderer().sampler()->load_data();
@@ -52,6 +64,10 @@ void SVGF::compile_resolve() {
         Int2 pixel = make_int2(dispatch_idx().xy());
         Int2 size = make_int2(dispatch_dim().xy());
         StableGeometryGuide center_guide(param, idx, param.visibility.read(idx));
+        $if(!center_guide.valid) {
+            param.output_direct.write(idx, make_float4(0.f));
+            param.output_indirect.write(idx, make_float4(0.f));
+        } $else {
         TriangleHitVar hit = center_guide.hit;
         Bool sky = PixelStateUtils::is_sky(hit);
         Float3 center_pos = make_float3(0.f);
@@ -62,10 +78,36 @@ void SVGF::compile_resolve() {
             center_guide.apply(center);
             center_pos = center.pos;
             center_normal = center.ng;
-            depth = max(length(center_pos - param.camera_pos.as_vec3()), 0.1f);
+            depth = max(length(center_guide.depth_point(center_pos) - param.camera_pos.as_vec3()), 0.1f);
+        };
+        Bool stationary_valid = true;
+        $if(param.layered != 0u) {
+            stationary_valid = false;
+            $if(param.history_valid != 0u && center_guide.valid) {
+                StableGeometryGuide previous(param, idx, param.prev_visibility.read(idx), true);
+                stationary_valid = center_guide.compatible(previous);
+                $if(stationary_valid) {
+                    Float expected = max(length(center_guide.depth_point(center_pos) - param.prev_camera_pos.as_vec3()), 0.1f);
+                    Float previous_depth = length(previous.depth_point(previous.position) - param.prev_camera_pos.as_vec3());
+                    stationary_valid = dot(center_normal, previous.normal) >= Cfg::Resolve::kNormalThreshold &&
+                        abs(previous_depth - expected) < Cfg::Temporal::kDepthThreshold * expected &&
+                        abs(dot(previous.position - center_pos, center_normal)) < Cfg::Resolve::kPlaneThreshold * expected;
+                };
+            };
+        };
+        // Layered coverage age belongs to the path at this pixel, not merely
+        // to the stationary camera. The indirect metadata channel stores age;
+        // the direct channel retains the existing edge-classification metadata.
+        Float pixel_history = 1.f;
+        Float interior_alpha = param.interior_alpha;
+        $if(param.layered != 0u) {
+            $if(stationary_valid) {
+                pixel_history = min(param.history_indirect.read(idx).w + 1.f, float(Cfg::Resolve::kHistoryPrecisionLimit));
+            };
+            interior_alpha = 1.f / min(pixel_history, float(Cfg::Resolve::kInteriorHistory));
         };
         Float edge_history = 0.f;
-        $if(param.alpha < 1.f) {
+        $if(param.alpha < 1.f && stationary_valid) {
             // The footprint itself jitters. Retain coverage classification until
             // invalidation so it cannot toggle the temporal weight every frame.
             edge_history = param.history_direct.read(idx).w;
@@ -82,7 +124,7 @@ void SVGF::compile_resolve() {
                         StableGeometryGuide tap_guide(param, tap_idx, param.visibility.read(tap_idx));
                         TriangleHitVar tap = tap_guide.hit;
                         Bool tap_sky = PixelStateUtils::is_sky(tap);
-                        edge = (center_guide.branch != tap_guide.branch) || (hit.inst_id != tap.inst_id) || (sky != tap_sky);
+                        edge = (!center_guide.compatible(tap_guide)) || (hit.inst_id != tap.inst_id) || (sky != tap_sky);
                         $if(!edge && !sky && !tap_sky) {
                             Interaction neighbor = pipeline_ref->geometry().compute_surface_interaction(tap, false);
                             tap_guide.apply(neighbor);
@@ -99,8 +141,8 @@ void SVGF::compile_resolve() {
         // count real local observations. Zero metadata means surface interior.
         Float edge_count = ocarina::select(edge_history > 0.f,
             min(edge_history + 1.f, float(Cfg::Resolve::kHistoryPrecisionLimit)),
-            1.f / param.interior_alpha);
-        Float alpha = ocarina::select(edge, 1.f / edge_count, param.interior_alpha);
+            1.f / interior_alpha);
+        Float alpha = ocarina::select(stationary_valid, ocarina::select(edge, 1.f / edge_count, interior_alpha), 1.f);
         Float3 reprojected_direct = make_float3(0.f);
         Float3 reprojected_indirect = make_float3(0.f);
         Float reprojection_weight = 0.f;
@@ -109,7 +151,7 @@ void SVGF::compile_resolve() {
         Bool moving_edge = edge && !sky && param.alpha == 1.f && param.history_valid != 0u &&
                            param.channel_kind == uint(RealTimeDenoiseInput::ChannelKind::DirectIndirect);
         $if(moving_edge) {
-            Float2 motion = param.motion_vectors.read(idx);
+            Float2 motion = stable_motion(param, idx);
             moving_alpha = max(Cfg::Resolve::kMovingAlpha,
                                saturate(length(motion) / Cfg::Resolve::kMotionRejectPixels));
             Float2 previous_pixel = make_float2(pixel) - motion;
@@ -120,7 +162,7 @@ void SVGF::compile_resolve() {
             Float2 guide_pixel = previous_pixel + film_offset;
             Int2 guide_base = make_int2(floor(guide_pixel));
             Float guide_weight_sum = 0.f;
-            Float expected_depth = max(length(center_pos - param.prev_camera_pos.as_vec3()), 0.1f);
+            Float expected_depth = max(length(center_guide.depth_point(center_pos) - param.prev_camera_pos.as_vec3()), 0.1f);
             $for(y, -filter_radius.y, filter_radius.y + 2) {
                 $for(x, -filter_radius.x, filter_radius.x + 2) {
                     Int2 guide_p = guide_base + make_int2(x, y);
@@ -136,14 +178,14 @@ void SVGF::compile_resolve() {
                             $if(!PixelStateUtils::is_sky(tap)) {
                                 Interaction previous = pipeline_ref->geometry().compute_surface_interaction(tap, false);
                                 tap_guide.apply(previous);
-                                Float previous_depth = length(previous.pos - param.prev_camera_pos.as_vec3());
+                                Float previous_depth = length(tap_guide.depth_point(previous.pos) - param.prev_camera_pos.as_vec3());
                                 // Coverage may cross adjacent facets of the same
                                 // object (e.g. a cabinet bevel). Requiring matching
                                 // normals here would preserve its aliased black edge.
                                 // Reject opposite-facing sides of a thin shell.
                                 // Depth/plane support and the current colour box
                                 // still bound reuse; illumination uses its own normals.
-                                Bool consistent = (center_guide.branch == tap_guide.branch) && tap.inst_id == hit.inst_id &&
+                                Bool consistent = center_guide.compatible(tap_guide) && tap.inst_id == hit.inst_id &&
                                     dot(center_normal, previous.ng) >= -0.1f &&
                                     abs(previous_depth - expected_depth) < Cfg::Temporal::kDepthThreshold * expected_depth &&
                                     abs(dot(previous.pos - center_pos, center_normal)) < Cfg::Resolve::kPlaneThreshold * expected_depth;
@@ -165,8 +207,8 @@ void SVGF::compile_resolve() {
                                                 $if(neighbor_hit.inst_id == tap.inst_id) {
                                                     Interaction neighbor = pipeline_ref->geometry().compute_surface_interaction(neighbor_hit, false);
                                                     neighbor_guide.apply(neighbor);
-                                                    Float neighbor_depth = max(length(neighbor.pos - param.prev_camera_pos.as_vec3()), 0.1f);
-                                                    consistent = (center_guide.branch == neighbor_guide.branch) && (neighbor_guide.branch == tap_guide.branch) && dot(neighbor.ng, previous.ng) >= -0.1f &&
+                                                    Float neighbor_depth = max(length(neighbor_guide.depth_point(neighbor.pos) - param.prev_camera_pos.as_vec3()), 0.1f);
+                                                    consistent = center_guide.compatible(neighbor_guide) && neighbor_guide.compatible(tap_guide) && dot(neighbor.ng, previous.ng) >= -0.1f &&
                                                         abs(previous_depth - neighbor_depth) < Cfg::Temporal::kDepthThreshold * neighbor_depth &&
                                                         abs(dot(previous.pos - neighbor.pos, neighbor.ng)) < Cfg::Resolve::kPlaneThreshold * neighbor_depth;
                                                 };
@@ -192,16 +234,19 @@ void SVGF::compile_resolve() {
                         // Reconstruct coverage with the full bilinear footprint,
                         // only when it includes this surface. Renormalizing just
                         // same-surface taps would preserve the aliased silhouette.
+                        StableGeometryGuide history_guide(param, tap_idx, param.prev_visibility.read(tap_idx), true);
+                        $if(param.layered == 0u || center_guide.compatible(history_guide)) {
                         reprojected_direct += param.history_direct.read(tap_idx).xyz() * weight;
                         reprojected_indirect += param.history_indirect.read(tap_idx).xyz() * weight;
                         reprojection_weight += weight;
+                        };
                     };
                 }
             }
         };
         Bool reuse_coverage = moving_edge && moving_alpha < 1.f && reprojection_weight > 0.99f &&
                               supported_weight > Cfg::Resolve::kMinReprojectionSupport;
-        auto resolve_channel = [&](auto &radiance, auto &history, auto &output, Float3 reprojected) {
+        auto resolve_channel = [&](auto &radiance, auto &history, auto &output, Float3 reprojected, bool indirect) {
             RadType4Var current = radiance.read(idx);
             // Never persist non-finite samples. The presentation/debug checks
             // are too late for history and may be disabled in release builds.
@@ -222,8 +267,11 @@ void SVGF::compile_resolve() {
                             Float2 offset = pixel_filter_offset(pipeline_ref, make_uint2(p), param.frame_index);
                             Float weight = film_tent_weight(make_float2(x, y) + offset);
                             Uint tap_idx = cast<uint>(p.y * size.x + p.x);
+                            StableGeometryGuide tap_guide(param, tap_idx, param.visibility.read(tap_idx));
+                            $if(param.layered == 0u || center_guide.compatible(tap_guide)) {
                             sum += ocarina::zero_if_nan_inf(make_float3(radiance.read(tap_idx).xyz())) * weight;
                             weight_sum += weight;
+                            };
                         };
                     };
                 };
@@ -242,18 +290,25 @@ void SVGF::compile_resolve() {
                     for (int x = -1; x <= 1; ++x) {
                         Int2 p = clamp(pixel + make_int2(x, y), make_int2(0), size - 1);
                         Float3 neighbor = ocarina::zero_if_nan_inf(make_float3(radiance.read(cast<uint>(p.y * size.x + p.x)).xyz()));
-                        lower = min(lower, neighbor);
-                        upper = max(upper, neighbor);
+                        Uint neighbor_idx = cast<uint>(p.y * size.x + p.x);
+                        StableGeometryGuide neighbor_guide(param, neighbor_idx, param.visibility.read(neighbor_idx));
+                        $if(param.layered == 0u || center_guide.compatible(neighbor_guide)) {
+                            lower = min(lower, neighbor); upper = max(upper, neighbor);
+                        };
                     }
                 }
                 Float3 previous = clamp(ocarina::zero_if_nan_inf(reprojected), lower, upper);
                 color = previous + moving_alpha * (color - previous);
             };
             // FP32 history avoids stagnation at small alpha on dark FP16 colours.
-            output.write(idx, make_float4(color, ocarina::select(edge, edge_count, 0.f)));
+            Float count = ocarina::select(edge, edge_count, 0.f);
+            if (indirect) { $if(param.layered != 0u) { count = pixel_history; }; }
+            $if(!center_guide.valid) { color = make_float3(0.f); count = 0.f; };
+            output.write(idx, make_float4(color, count));
         };
-        resolve_channel(param.direct, param.history_direct, param.output_direct, reprojected_direct);
-        resolve_channel(param.indirect, param.history_indirect, param.output_indirect, reprojected_indirect);
+        resolve_channel(param.direct, param.history_direct, param.output_direct, reprojected_direct, false);
+        resolve_channel(param.indirect, param.history_indirect, param.output_indirect, reprojected_indirect, true);
+        };
     };
     resolve_shader_ = device().compile(kernel, "SVGF-CoverageResolve");
     // Neighbourhood reads above must see one immutable current image. Publish
@@ -264,36 +319,36 @@ void SVGF::compile_resolve() {
         param.indirect.write(idx, make_RadType4(param.output_indirect.read(idx).xyz(), param.indirect.read(idx).w));
     };
     publish_resolve_shader_ = device().compile(publish, "SVGF-PublishResolve");
-    resolve_history_ = 0u;
-    resolve_frame_ = InvalidUI32;
+    layer_state_ = {};
 }
 
 CommandBatch SVGF::resolve(RealTimeDenoiseInput &input) {
+    auto &state = layer_state_[input.layer_index];
     const auto &camera = scene().sensor();
     const float4x4 transform = camera->host_c2w();
-    bool history_valid = resolve_history_ > 0u && input.frame_index > 0u &&
-                      resolve_frame_ != InvalidUI32 && resolve_frame_ + 1u == input.frame_index &&
-                      camera->fov_y() == resolve_fov_;
+    bool history_valid = state.history > 0u && input.frame_index > 0u &&
+                      state.frame != InvalidUI32 && state.frame + 1u == input.frame_index &&
+                      camera->fov_y() == state.fov;
     bool stationary = history_valid;
     for (uint i = 0u; i < 4u; ++i) {
-        stationary = stationary && all(transform[i] == resolve_camera_[i]);
+        stationary = stationary && all(transform[i] == state.camera[i]);
     }
-    resolve_history_ = stationary
-                           ? std::min(resolve_history_ + 1u, Cfg::Resolve::kHistoryPrecisionLimit)
+    state.history = stationary
+                           ? std::min(state.history + 1u, Cfg::Resolve::kHistoryPrecisionLimit)
                            : 1u;
-    resolve_camera_ = transform;
-    resolve_fov_ = camera->fov_y();
-    resolve_frame_ = input.frame_index;
+    state.camera = transform;
+    state.fov = camera->fov_y();
+    state.frame = input.frame_index;
 
     ResolveParam param;
     bind_stable_planes(param, input);
     param.direct = input.direct.descriptor();
     param.indirect = input.indirect.descriptor();
     const bool even = (input.frame_index & 1u) == 0u;
-    param.history_direct = (even ? resolve_direct_ : resolve_direct2_).descriptor();
-    param.history_indirect = (even ? resolve_indirect_ : resolve_indirect2_).descriptor();
-    param.output_direct = (even ? resolve_direct2_ : resolve_direct_).descriptor();
-    param.output_indirect = (even ? resolve_indirect2_ : resolve_indirect_).descriptor();
+    param.history_direct = (even ? resolve_direct_[input.layer_index] : resolve_direct2_[input.layer_index]).view().descriptor();
+    param.history_indirect = (even ? resolve_indirect_[input.layer_index] : resolve_indirect2_[input.layer_index]).view().descriptor();
+    param.output_direct = (even ? resolve_direct2_[input.layer_index] : resolve_direct_[input.layer_index]).view().descriptor();
+    param.output_indirect = (even ? resolve_indirect2_[input.layer_index] : resolve_indirect_[input.layer_index]).view().descriptor();
     param.visibility = input.visibility.descriptor();
     param.prev_visibility = input.prev_visibility.descriptor();
     param.motion_vectors = input.motion_vec.descriptor();
@@ -302,8 +357,8 @@ CommandBatch SVGF::resolve(RealTimeDenoiseInput &input) {
     param.history_valid = history_valid;
     param.channel_kind = static_cast<uint>(input.channel_kind);
     param.frame_index = input.frame_index;
-    param.alpha = 1.f / static_cast<float>(resolve_history_);
-    param.interior_alpha = 1.f / static_cast<float>(std::min(resolve_history_, Cfg::Resolve::kInteriorHistory));
+    param.alpha = 1.f / static_cast<float>(state.history);
+    param.interior_alpha = 1.f / static_cast<float>(std::min(state.history, Cfg::Resolve::kInteriorHistory));
     CommandBatch ret;
     ret << resolve_shader_(param).dispatch(input.resolution);
     ret << publish_resolve_shader_(param).dispatch(input.resolution);
@@ -334,12 +389,10 @@ void SVGF::render_sub_UI(Widgets *widgets) noexcept {
                                            0.01, 10.0, 0.1, 0.5);
 }
 
-BufferView<SVGFDataDual> SVGF::svgf_buffer_cur(uint frame_index) const noexcept {
-    return ((frame_index & 1u) == 0u) ? svgf_data.view() : svgf_data2.view();
-}
-
-BufferView<SVGFDataDual> SVGF::svgf_buffer_prev(uint frame_index) const noexcept {
-    return ((frame_index & 1u) == 0u) ? svgf_data2.view() : svgf_data.view();
+bool SVGF::history_valid(const RealTimeDenoiseInput &input) const noexcept {
+    return input.frame_index > 0u && (input.layer_count == 1u ||
+        (layer_state_[input.layer_index].temporal_frame != InvalidUI32 &&
+         layer_state_[input.layer_index].temporal_frame + 1u == input.frame_index));
 }
 
 void SVGF::prepare() noexcept {
@@ -362,6 +415,14 @@ void SVGF::compile() noexcept {
 CommandBatch SVGF::dispatch(vision::RealTimeDenoiseInput &input) noexcept {
     CommandBatch ret;
     if (params_.switch_) {
+        if (input.use_stable_planes && input.layer_count > 1u) {
+            VarianceEstimatorParam clear;
+            bind_stable_planes(clear, input);
+            clear.radiance_direct = input.direct.descriptor();
+            clear.radiance_indirect = input.indirect.descriptor();
+            clear.svgf_buffer_cur = svgf_buffer_cur(input.frame_index, input.layer_index).descriptor();
+            ret << clear_invalid_shader_(clear).dispatch(input.resolution);
+        }
         const bool radiance_domain = env_flag("VISION_SVGF_RADIANCE_DOMAIN");
         const bool skip_variance = env_flag("VISION_SVGF_SKIP_VARIANCE");
         const bool skip_prefilter = env_flag("VISION_SVGF_SKIP_PREFILTER") || !params_.spatial_filter_;
@@ -396,15 +457,16 @@ CommandBatch SVGF::dispatch(vision::RealTimeDenoiseInput &input) noexcept {
         if (!env_flag("VISION_SVGF_SKIP_RESOLVE")) {
             ret << resolve(input);
         } else {
-            resolve_history_ = 0u;
+            layer_state_[input.layer_index].history = 0u;
         }
     }
+    layer_state_[input.layer_index].temporal_frame = params_.switch_ ? input.frame_index : InvalidUI32;
     return ret;
 }
 
 void SVGF::set_enabled(bool enabled) noexcept {
     if (params_.switch_ != enabled) {
-        resolve_history_ = 0u;
+        layer_state_ = {};
     }
     params_.switch_ = enabled;
 }

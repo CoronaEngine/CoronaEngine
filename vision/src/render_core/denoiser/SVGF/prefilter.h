@@ -12,6 +12,9 @@ namespace vision::svgf {
 
 struct PrefilterParam {
     uint use_stable_planes{0u};
+    uint layered{0u};
+    BufferDesc<StablePlaneData> stable_planes;
+    BufferDesc<StablePlaneData> prev_stable_planes;
     BufferDesc<SurfaceData> stable_surfaces;
     BufferDesc<SurfaceData> prev_stable_surfaces;
     BufferDesc<RadType4> radiance_direct;
@@ -25,7 +28,7 @@ struct PrefilterParam {
 
 }// namespace vision::svgf
 
-OC_PARAM_STRUCT(vision::svgf, PrefilterParam, use_stable_planes, stable_surfaces, prev_stable_surfaces,
+OC_PARAM_STRUCT(vision::svgf, PrefilterParam, use_stable_planes, layered, stable_planes, prev_stable_planes, stable_surfaces, prev_stable_surfaces,
     radiance_direct, radiance_indirect, svgf_buffer,
     visibility_buffer, camera_pos, channel_kind, use_shading_normal){};
 

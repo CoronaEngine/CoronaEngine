@@ -28,6 +28,7 @@
 
 void check_restir_reprojection(vision::Pipeline& pipeline);
 void check_stable_plane(vision::Pipeline& pipeline, bool tinted_mirror = true);
+void check_glass_svgf(vision::Pipeline& pipeline);
 void check_restir_material_reuse(vision::Pipeline& pipeline, const std::vector<vision::SurfaceData>& surfaces);
 void check_restir_gi_depth_one_continuation(vision::Pipeline& pipeline);
 void check_restir_gi_receiver_support(vision::Pipeline& pipeline);
@@ -677,6 +678,20 @@ int main() {
         expect(std::abs(reflected.normal_depth.w - 3.f) < 1e-4f,
                "stable plane depth must describe the virtual image behind the mirror");
         check_stable_plane(*mirror_pipeline);
+        auto filtered_glass = glass_scene;
+        filtered_glass["output"]["denoise"] = true;
+        filtered_glass["render"]["denoiser"] = mirror_scene["render"]["denoiser"];
+        filtered_glass["render"]["integrator"]["param"]["denoiser"] = mirror_scene["render"]["integrator"]["param"]["denoiser"];
+        write_file(fixture / "glass-filtered.json", filtered_glass.dump(2));
+        // Two retained runtimes must begin with independent layer histories.
+        for (unsigned camera = 0u; camera < 2u; ++camera) {
+            auto filtered_pipeline = vision::Importer::import_scene(fixture / "glass-filtered.json");
+            material_fixtures.push_back(filtered_pipeline);
+            filtered_pipeline->frame_buffer()->set_enable_accumulation(false);
+            filtered_pipeline->prepare(); filtered_pipeline->frame_buffer()->prepare_view_texture();
+            check_glass_svgf(*filtered_pipeline);
+        }
+        fs::remove(fixture / "glass-filtered.json");
         // One mesh contains a coplanar two-triangle mirror on the left and
         // another plane on the right. Branch identity must describe the plane,
         // not just the instance and not the individual triangle.

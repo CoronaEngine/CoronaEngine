@@ -36,6 +36,7 @@ private:
     SP<StablePlanes> stable_planes_;
     SP<ScreenBuffer> specular_buffer_{make_shared<ScreenBuffer>("RealTimeIntegrator::specular_buffer_")};
     Shader<void(uint, float, float, uint)> combine_;
+    Shader<void()> merge_dominant_;
     Shader<void(uint, Buffer<SurfaceData>)> path_tracing_;
     SP<RadianceCache> cache_;
 
@@ -59,7 +60,7 @@ public:
     void restore(vision::RuntimeObject *old_obj) noexcept override {
         IlluminationIntegrator::restore(old_obj);
         VS_HOTFIX_MOVE_ATTRS(direct_, indirect_, stable_planes_, specular_buffer_,
-                             combine_, path_tracing_, denoiser_)
+                             combine_, merge_dominant_, path_tracing_, denoiser_)
         direct_->set_integrator(shared_from_this());
         indirect_->set_integrator(shared_from_this());
         stable_planes_->set_integrator(shared_from_this());
@@ -148,26 +149,33 @@ public:
             Float3 L = direct * di + indirect * ii;
             $if(layered != 0u) {
                 L = frame_buffer().stable_radiance().read(dispatch_id()).xyz() * di;
-                Uint dominant = frame_buffer().stable_dominant().read(dispatch_id());
                 for (uint layer = 0; layer < StablePlaneCount; ++layer) {
                     Uint address = layer * (dispatch_dim().x * dispatch_dim().y) + dispatch_id();
                     Float3 ld = frame_buffer().stable_direct().read(address).xyz();
                     Float3 li = frame_buffer().stable_indirect().read(address).xyz();
-                    $if(dominant == layer) { ld += direct; li += indirect; };
-                    frame_buffer().stable_direct().write(address, make_float4(ld, 1.f));
-                    frame_buffer().stable_indirect().write(address, make_float4(li, 1.f));
                     L += ld * di + li * ii;
                 }
             };
             frame_buffer().add_sample(dispatch_idx().xy(), L, frame_index);
         };
+        Kernel merge = [&] {
+            Uint dominant = frame_buffer().stable_dominant().read(dispatch_id());
+            $if(dominant < StablePlaneCount) {
+                Uint address = dominant * (dispatch_dim().x * dispatch_dim().y) + dispatch_id();
+                Float3 direct = frame_buffer().stable_direct().read(address).xyz() + direct_->radiance()->read(dispatch_id()).xyz();
+                Float3 indirect = frame_buffer().stable_indirect().read(address).xyz() + indirect_->radiance()->read(dispatch_id()).xyz();
+                frame_buffer().stable_direct().write(address, make_float4(direct, 1.f));
+                frame_buffer().stable_indirect().write(address, make_float4(indirect, 1.f));
+            };
+        };
+        merge_dominant_ = device().compile(merge, "StablePlanes-MergeDominant");
         {
             switch_profile::Scope combine_profile{"combine.compile", "compile"};
             combine_ = device().compile(kernel, "combine");
         }
     }
 
-    RealTimeDenoiseInput denoise_input() const noexcept {
+    RealTimeDenoiseInput denoise_input(uint layer = 0u) const noexcept {
         RealTimeDenoiseInput ret;
         TSensor &camera = scene().sensor();
         ret.frame_index = frame_index_;
@@ -180,6 +188,15 @@ public:
         ret.prev_stable_surfaces = frame_buffer().prev_surfaces_view(frame_index_);
         ret.direct = direct_->radiance()->view();
         ret.indirect = indirect_->radiance()->view();
+        if (stable_planes_enabled()) {
+            ret.use_stable_planes = true;
+            ret.layer_count = StablePlaneCount;
+            ret.layer_index = layer;
+            ret.stable_planes = frame_buffer().cur_stable_planes_view(frame_index_, layer);
+            ret.prev_stable_planes = frame_buffer().prev_stable_planes_view(frame_index_, layer);
+            ret.direct = frame_buffer().stable_direct_view(layer);
+            ret.indirect = frame_buffer().stable_indirect_view(layer);
+        }
         // Camera positions for depth calculation from visibility buffer
         float3 cam_pos = camera->position();
         float3 prev_cam_pos = camera->prev_host_position();
@@ -231,21 +248,23 @@ public:
             };
             write("_direct", direct); write("_indirect", indirect);
         };
+        if (stable_planes_enabled()) {
+            submit(merge_dominant_().dispatch(pipeline()->resolution()), &cur_stage_profile_.combine_ms);
+        }
+        // Opt-in raw layer diagnostics belong here, after merging ownership and
+        // before any per-layer denoising. No permanent copy buffers are needed.
         debug_readback("raw");
         if (!denoiser_runtime_disabled() && denoiser_ && denoiser_->enabled()) {
-            auto dn_input = denoise_input();
-            submit(denoiser_->dispatch(dn_input), &cur_stage_profile_.spatial_angular_ms);
+            const uint count = stable_planes_enabled() ? StablePlaneCount : 1u;
+            for (uint layer = 0u; layer < count; ++layer) {
+                auto dn_input = denoise_input(layer);
+                submit(denoiser_->dispatch(dn_input), &cur_stage_profile_.spatial_angular_ms);
+            }
             debug_readback("filtered");
-            submit(combine_(frame_index_, direct_->factor(),
-                            indirect_->factor(), uint(stable_planes_enabled()))
-                       .dispatch(pipeline()->resolution()),
-                   &cur_stage_profile_.combine_ms);
-        } else {
-            submit(combine_(frame_index_, direct_->factor(),
-                            indirect_->factor(), uint(stable_planes_enabled()))
-                       .dispatch(pipeline()->resolution()),
-                   &cur_stage_profile_.combine_ms);
         }
+        // Raw and filtered paths use exactly the same single layer sum.
+        submit(combine_(frame_index_, direct_->factor(), indirect_->factor(), uint(stable_planes_enabled()))
+                   .dispatch(pipeline()->resolution()), &cur_stage_profile_.combine_ms);
         submit(frame_buffer().post_path_tracing(frame_index_), &cur_stage_profile_.postprocess_ms);
         submit(frame_buffer().render_final(frame_index_), &cur_stage_profile_.render_final_ms);
         increase_frame_index();
