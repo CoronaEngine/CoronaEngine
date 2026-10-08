@@ -7,10 +7,17 @@ namespace vision::svgf {
 
 using Cfg = SVGFConfig;
 
+
+
+
 void AtrousFilter::prepare() noexcept {
-    uint pixel_num = pipeline()->pixel_num();
-    init_buffer_zero(device(), temp_buffer_direct_, pixel_num, "AtrousFilter::temp_buffer_direct");
-    init_buffer_zero(device(), temp_buffer_indirect_, pixel_num, "AtrousFilter::temp_buffer_indirect");
+    uint num = pipeline()->pixel_num();
+    init_buffer_zero(device(), guide_position_, num, "AtrousFilter::guide_position");
+    init_buffer_zero(device(), guide_normal_, num, "AtrousFilter::guide_normal");
+    init_buffer_zero(device(), guide_identity_, num, "AtrousFilter::guide_identity");
+    init_buffer_zero(device(), guide_surface_, num, "AtrousFilter::guide_surface");
+    init_buffer_zero(device(), temp_buffer_direct_, num, "AtrousFilter::temp_buffer_direct");
+    init_buffer_zero(device(), temp_buffer_indirect_, num, "AtrousFilter::temp_buffer_indirect");
 }
 
 void AtrousFilter::compile() noexcept {
@@ -20,6 +27,26 @@ void AtrousFilter::compile() noexcept {
 
 void AtrousFilter::compile_combined() noexcept {
 Pipeline *pipeline_ref = pipeline();
+// Extract the immutable spatial guide once, rather than decoding path records
+// and querying scene geometry at every tap in every wavelet iteration.
+Kernel prepare_guide = [pipeline_ref](Var<CombinedAtrousParam> param) {
+    Uint idx = dispatch_id();
+    StableGeometryGuide guide(param, idx, param.visibility_buffer.read(idx));
+    Bool sky = PixelStateUtils::is_sky(guide.hit);
+    Float3 position = make_float3(0.f), normal = make_float3(0.f);
+    Bool emissive = false;
+    $if(!sky) {
+        Interaction it = pipeline_ref->geometry().compute_surface_interaction(guide.hit, false);
+        guide.apply(it);
+        position = it.pos; normal = it.ng;
+        emissive = PixelStateUtils::is_emissive(pipeline_ref, guide.hit);
+    };
+    param.guide_position.write(idx, make_float4(position, cast<float>(sky)));
+    param.guide_normal.write(idx, make_float4(normal, cast<float>(emissive)));
+    param.guide_identity.write(idx, make_uint4(cast<uint>(guide.valid), guide.branch, guide.sequence, guide.identity));
+    param.guide_surface.write(idx, make_uint4(guide.depth, guide.material, guide.hit.inst_id, cast<uint>(guide.layered)));
+};
+guide_shader_ = device().compile(prepare_guide, "SVGF-AtrousGuide");
 // Canonical SVGF a-trous wavelet pass (Schied et al. 2017): a deterministic
 // 5x5 cross-bilateral B-spline kernel with depth/normal/luminance edge stopping.
 //
@@ -32,18 +59,21 @@ Pipeline *pipeline_ref = pipeline();
 // variance-driven adaptive radius were removed for the same reason (they made
 // every pixel's footprint frame/varying-dependent); they can be re-added later
 // on top of a stable base if needed.
+// Retain the inexpensive original path when Stable Planes are disabled.
+auto compile_filter = [&]<bool cached>() {
 Kernel kernel = [&, pipeline_ref](Var<CombinedAtrousParam> param) {
     Int2 screen_size = make_int2(dispatch_dim().xy());
     Int2 cur_pixel = make_int2(dispatch_idx().xy());
     Uint cur_idx = dispatch_id();
 
-    StableGeometryGuide center_guide(param, cur_idx, param.visibility_buffer.read(cur_idx));
+    auto center_guide = load_spatial_guide<cached>(param, cur_idx);
     TriangleHitVar center_hit = center_guide.hit;
     RadType4Var direct_center = param.direct_src.read(cur_idx);
     RadType4Var indirect_center = param.indirect_src.read(cur_idx);
 
     $if(!PixelStateUtils::is_sky(center_hit)) {
-        Interaction center_it = pipeline_ref->geometry().compute_surface_interaction(center_hit, false);
+        Interaction center_it{false};
+        if constexpr (!cached) center_it = pipeline_ref->geometry().compute_surface_interaction(center_hit, false);
         center_guide.apply(center_it);
 
         Float lum_center_direct = HalfSafeUtils::clamp_luminance(luminance(direct_center.xyz()));
@@ -74,7 +104,7 @@ Kernel kernel = [&, pipeline_ref](Var<CombinedAtrousParam> param) {
                 Int2 gp = cur_pixel + make_int2(gx, gy);
                 $if(all(gp >= 0) && all(gp < screen_size)) {
                     Uint gidx = cast<uint>(gp.y) * cast<uint>(screen_size.x) + cast<uint>(gp.x);
-                    StableGeometryGuide variance_guide(param, gidx, param.visibility_buffer.read(gidx));
+                    auto variance_guide = load_spatial_guide<cached>(param, gidx);
                     $if(param.layered == 0u || center_guide.compatible(variance_guide)) {
                     var_sum_direct += max(Float(param.direct_src.read(gidx).w), variance_epsilon) * gw;
                     var_sum_indirect += max(Float(param.indirect_src.read(gidx).w), variance_epsilon) * gw;
@@ -126,16 +156,21 @@ Kernel kernel = [&, pipeline_ref](Var<CombinedAtrousParam> param) {
                 RadType4Var direct_neighbor = param.direct_src.read(idx);
                 RadType4Var indirect_neighbor = param.indirect_src.read(idx);
 
-                StableGeometryGuide neighbor_guide(param, idx, param.visibility_buffer.read(idx));
+                auto neighbor_guide = load_spatial_guide<cached>(param, idx);
                 TriangleHitVar neighbor_hit = neighbor_guide.hit;
                 Bool neighbor_is_sky = PixelStateUtils::is_sky(neighbor_hit);
 
-                Float boundary_weight = BoundaryUtils::compute_boundary_weight(
-                    pipeline_ref, center_hit, neighbor_hit);
+                Float boundary_weight;
+                if constexpr (cached) {
+                    boundary_weight = ocarina::select(neighbor_is_sky || center_guide.emissive != neighbor_guide.emissive, 0.f, 1.f);
+                } else {
+                    boundary_weight = BoundaryUtils::compute_boundary_weight(pipeline_ref, center_hit, neighbor_hit);
+                }
 
                 Float w_geo = 0.f;
                 $if(!neighbor_is_sky && boundary_weight > 0.f) {
-                    Interaction neighbor_it = pipeline_ref->geometry().compute_surface_interaction(neighbor_hit, false);
+                    Interaction neighbor_it{false};
+                    if constexpr (!cached) neighbor_it = pipeline_ref->geometry().compute_surface_interaction(neighbor_hit, false);
                     neighbor_guide.apply(neighbor_it);
                     w_geo = GeometryWeightUtils::compute_depth_weight(
                         center_it.pos, neighbor_it.pos, center_it.ng, param.z_phi) *
@@ -223,17 +258,31 @@ Kernel kernel = [&, pipeline_ref](Var<CombinedAtrousParam> param) {
     };
 };
 
-    combined_shader_ = device().compile(kernel, "SVGF-AtrousFilter-BSpline");
+    return device().compile(kernel, cached ? "SVGF-AtrousFilter-Cached" : "SVGF-AtrousFilter-BSpline");
+    };
+    combined_shader_ = compile_filter.operator()<true>();
+    legacy_combined_shader_ = compile_filter.operator()<false>();
 }
 
 
 
+
+CommandBatch AtrousFilter::dispatch_guide(RealTimeDenoiseInput &input) noexcept {
+    CombinedAtrousParam param;
+    bind_stable_planes(param, input);
+    bind_guides(param);
+    param.visibility_buffer = input.visibility.descriptor();
+    CommandBatch ret;
+    ret << guide_shader_(param).dispatch(input.resolution);
+    return ret;
+}
 
 CommandBatch AtrousFilter::dispatch_combined(vision::RealTimeDenoiseInput &input,
                                          uint step_width, uint iteration, bool use_shading_normal) noexcept {
     CombinedAtrousParam param;
     bind_stable_planes(param, input);
     param.use_shading_normal = use_shading_normal;
+    bind_guides(param);
     
     bool read_from_temp = (iteration % 2 == 1);
     if (!read_from_temp) {
@@ -275,13 +324,21 @@ CommandBatch AtrousFilter::dispatch_combined(vision::RealTimeDenoiseInput &input
     param.channel_kind = static_cast<uint>(input.channel_kind);
     
     CommandBatch ret;
-    ret << combined_shader_(param).dispatch(input.resolution);
+    if (input.use_stable_planes) {
+        ret << combined_shader_(param).dispatch(input.resolution);
+    } else {
+        ret << legacy_combined_shader_(param).dispatch(input.resolution);
+    }
     return ret;
 }
 
 
 void AtrousFilter::update_resolution(uint2 resolution) noexcept {
     uint num = resolution.x * resolution.y;
+    init_buffer_zero(device(), guide_position_, num, "AtrousFilter::guide_position");
+    init_buffer_zero(device(), guide_normal_, num, "AtrousFilter::guide_normal");
+    init_buffer_zero(device(), guide_identity_, num, "AtrousFilter::guide_identity");
+    init_buffer_zero(device(), guide_surface_, num, "AtrousFilter::guide_surface");
     init_buffer_zero(device(), temp_buffer_direct_, num, "AtrousFilter::temp_buffer_direct");
     init_buffer_zero(device(), temp_buffer_indirect_, num, "AtrousFilter::temp_buffer_indirect");
 }

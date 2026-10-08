@@ -11,6 +11,8 @@
 namespace vision::svgf {
 
 struct PrefilterParam {
+    BufferDesc<float4> guide_position, guide_normal;
+    BufferDesc<uint4> guide_identity, guide_surface;
     uint use_stable_planes{0u};
     uint layered{0u};
     BufferDesc<StablePlaneData> stable_planes;
@@ -28,7 +30,7 @@ struct PrefilterParam {
 
 }// namespace vision::svgf
 
-OC_PARAM_STRUCT(vision::svgf, PrefilterParam, use_stable_planes, layered, stable_planes, prev_stable_planes, stable_surfaces, prev_stable_surfaces,
+OC_PARAM_STRUCT(vision::svgf, PrefilterParam, guide_position, guide_normal, guide_identity, guide_surface, use_stable_planes, layered, stable_planes, prev_stable_planes, stable_surfaces, prev_stable_surfaces,
     radiance_direct, radiance_indirect, svgf_buffer,
     visibility_buffer, camera_pos, channel_kind, use_shading_normal){};
 
@@ -38,13 +40,13 @@ class SVGF;
 class Prefilter : public Toolkit, public RuntimeObject {
 private:
     SVGF *svgf_{nullptr};
-    Shader<void(PrefilterParam)> prefilter_shader_;
+    Shader<void(PrefilterParam)> prefilter_shader_, cached_prefilter_shader_;
 
 public:
     explicit Prefilter(SVGF *svgf)
         : svgf_(svgf) {}
 
-    VS_HOTFIX_MAKE_RESTORE(RuntimeObject, svgf_, prefilter_shader_)
+    VS_HOTFIX_MAKE_RESTORE(RuntimeObject, svgf_, prefilter_shader_, cached_prefilter_shader_)
 
     void prepare() noexcept;
     void compile() noexcept;

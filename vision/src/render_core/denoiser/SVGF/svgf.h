@@ -13,6 +13,17 @@
 namespace vision::svgf {
 
 struct ResolveParam {
+    // Current guides borrow the spatial-filter scratch after edge classification.
+    // Previous guides have separate storage for reprojection reads.
+    BufferDesc<float4> guide_position, guide_normal, guide_depth;
+    BufferDesc<uint4> guide_meta;
+    BufferDesc<float4> prev_guide_position, prev_guide_normal, prev_guide_depth;
+    BufferDesc<uint4> prev_guide_meta;
+    BufferDesc<float4> edge_position, edge_normal;
+    BufferDesc<uint4> edge_identity, edge_surface;
+    BufferDesc<uint> edge_flags;
+    uint edge_layer{0u};
+
     uint composed_coverage{0u};
     BufferDesc<StablePlaneData> coverage_planes;
     BufferDesc<StablePlaneData> prev_coverage_planes;
@@ -42,7 +53,7 @@ struct ResolveParam {
 
 }// namespace vision::svgf
 
-OC_PARAM_STRUCT(vision::svgf, ResolveParam, composed_coverage, coverage_planes, prev_coverage_planes, use_stable_planes, layered, stable_planes, prev_stable_planes, stable_surfaces, prev_stable_surfaces, direct, indirect,
+OC_PARAM_STRUCT(vision::svgf, ResolveParam, guide_position, guide_normal, guide_depth, guide_meta, prev_guide_position, prev_guide_normal, prev_guide_depth, prev_guide_meta, edge_position, edge_normal, edge_identity, edge_surface, edge_flags, edge_layer, composed_coverage, coverage_planes, prev_coverage_planes, use_stable_planes, layered, stable_planes, prev_stable_planes, stable_surfaces, prev_stable_surfaces, direct, indirect,
                 history_direct, history_indirect, output_direct, output_indirect,
                 visibility, prev_visibility, motion_vectors, camera_pos, prev_camera_pos,
                 history_valid, channel_kind, frame_index, alpha, interior_alpha){};
@@ -77,6 +88,11 @@ private:
     };
     std::array<LayerState, StablePlaneCount> layer_state_{};
     Shader<void(ResolveParam)> resolve_shader_;
+    Shader<void(ResolveParam)> coverage_guide_shader_, legacy_resolve_shader_;
+    Buffer<float4> coverage_position_, coverage_normal_, coverage_depth_;
+    Buffer<uint4> coverage_meta_;
+    Buffer<uint> edge_flags_;
+    Shader<void(ResolveParam)> edge_guide_shader_, edge_classify_shader_;
     Shader<void(ResolveParam)> publish_resolve_shader_;
     Shader<void(VarianceEstimatorParam)> clear_invalid_shader_;
 
@@ -117,7 +133,9 @@ public:
     VS_HOTFIX_MAKE_RESTORE(Denoiser, svgf_data, svgf_data2,
                            atrous_, modulator_, variance_estimator_, prefilter_, params_,
                            resolve_direct_, resolve_indirect_, resolve_direct2_, resolve_indirect2_,
-                           resolve_shader_, publish_resolve_shader_, clear_invalid_shader_,
+                           resolve_shader_, publish_resolve_shader_, clear_invalid_shader_, coverage_guide_shader_, legacy_resolve_shader_,
+                           coverage_position_, coverage_normal_, coverage_depth_, coverage_meta_,
+                           edge_flags_, edge_guide_shader_, edge_classify_shader_,
                            layer_data_, layer_data2_, layer_state_)
     VS_MAKE_PLUGIN_NAME_FUNC
 

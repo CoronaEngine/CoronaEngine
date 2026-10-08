@@ -1,5 +1,6 @@
 #include "stable_planes.h"
 #include "base/integral/integrator.h"
+#include "core/dynamic_buffer/dynamic_buffer_layout_codec.h"
 
 namespace vision {
 using namespace ocarina;
@@ -83,6 +84,30 @@ void StablePlanes::compile() noexcept {
     auto &lights = renderer().light_sampler();
     const auto &geometry = pipeline()->geometry();
     const uint recursion_limit = std::min(15u, max_recursion_ > 0u ? max_recursion_ - 1u : 0u);
+    // Adjacent threads clear adjacent words, rather than scattering an entire
+    // large empty record per pixel. Preserve every field's default value.
+    static_assert(sizeof(StablePlaneData) % sizeof(uint4) == 0u);
+    constexpr uint chunks = sizeof(StablePlaneData) / sizeof(uint4);
+    StablePlaneData defaults{};
+    HostByteBuffer bytes;
+    // The codec copies members and zeros padding; native struct padding must
+    // not become shader constants through a whole-object bit cast.
+    DynamicBufferLayoutCodec<StablePlaneData>::encode(&defaults, 1u, bytes,
+        StoragePrecisionPolicy{}, DynamicBufferLayout::AOS);
+    OC_ASSERT(bytes.size() == sizeof(StablePlaneData));
+    std::array<uint4, chunks> empty;
+    for (uint i = 0u; i < chunks; ++i) { empty[i] = bytes.load<uint4>(i * sizeof(uint4)); }
+    Kernel clear_children = [&](BufferVar<uint4> buffer) {
+        Uint chunk = dispatch_id() % chunks;
+        Uint4 value = make_uint4(0u);
+        for (uint i = 0u; i < chunks; ++i) {
+            if (any(empty[i] != make_uint4(0u))) {
+                $if(chunk == i) { value = empty[i]; };
+            }
+        }
+        buffer.write(dispatch_id(), value);
+    };
+    clear_children_ = device().compile(clear_children, "Stable planes clear children");
     Kernel build_kernel = [&](Uint frame, Uint jitter) {
         camera->load_data(); sampler->load_data(); integrator()->load_data();
         Uint exploration_limit = min(recursion_limit, integrator()->runtime_suffix_depth());
@@ -207,8 +232,8 @@ void StablePlanes::compile() noexcept {
                     });
                     $if(!continued) { $break; };
                 };
+                planes.write(layer * (dispatch_dim().x * dispatch_dim().y) + dispatch_id(), plane);
             };
-            planes.write(layer * (dispatch_dim().x * dispatch_dim().y) + dispatch_id(), plane);
             // The transmission child wins, followed by reflection and base.
             $if(plane.valid != 0u && plane.reservoir_eligible != 0u && (dominant == InvalidUI32 || Uint{layer} == 1u)) {
                 dominant = layer;
@@ -234,6 +259,11 @@ void StablePlanes::compile() noexcept {
         sampler->set_seed(dispatch_idx().xy(), frame, Dimension::PathTracing);
         auto planes = fb.cur_stable_planes_var(frame);
         Uint dominant = fb.stable_dominant().read(dispatch_id());
+        // A dominant primary receiver consumes the entire path.
+        $if(dominant == 0u) {
+            auto base = planes.read(dispatch_id());
+            $if(base.depth == 0u) { $return(); };
+        };
         RayState ray = fb.rays().read(dispatch_id())->to_ray_state();
         SampledSpectrum throughput = spectrum->one();
         Uint sequence = 1u, depth = 0u, owner = 0u;
@@ -320,7 +350,15 @@ void StablePlanes::compile() noexcept {
 }
 
 CommandBatch StablePlanes::build(uint frame, bool jitter) const noexcept {
-    CommandBatch ret; ret << build_(frame, uint(jitter)).dispatch(pipeline()->resolution()); return ret;
+    auto planes = frame_buffer().cur_stable_planes_view(frame);
+    uint2 resolution = pipeline()->resolution();
+    uint pixels = resolution.x * resolution.y;
+    BufferView<uint4> children{planes.handle() + pixels * sizeof(StablePlaneData),
+        (StablePlaneCount - 1u) * pixels * sizeof(StablePlaneData) / sizeof(uint4)};
+    CommandBatch ret;
+    ret << clear_children_(children).dispatch(children.size());
+    ret << build_(frame, uint(jitter)).dispatch(resolution);
+    return ret;
 }
 CommandBatch StablePlanes::fill(uint frame) const noexcept {
     CommandBatch ret; ret << fill_(frame).dispatch(pipeline()->resolution()); return ret;

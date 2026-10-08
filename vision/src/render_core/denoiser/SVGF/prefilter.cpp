@@ -28,12 +28,13 @@ auto compute_spatial_weight = [](Float history) -> Float {
     return 1.f - t * t * (3.f - 2.f * t);
 };
     
+    auto compile_filter = [&]<bool cached>() {
     Kernel kernel = [&, pipeline_ref, soft_clamp_asinh, compute_spatial_weight](Var<PrefilterParam> param) {
         Int2 screen_size = make_int2(dispatch_dim().xy());
         Int2 pixel = make_int2(dispatch_idx().xy());
         Uint idx = dispatch_id();
 
-        StableGeometryGuide center_guide(param, idx, param.visibility_buffer.read(idx));
+        auto center_guide = load_spatial_guide<cached>(param, idx);
         TriangleHitVar center_hit = center_guide.hit;
 
         $if(!PixelStateUtils::is_sky(center_hit)) {
@@ -52,8 +53,12 @@ auto compute_spatial_weight = [](Float history) -> Float {
             Float output_variance_direct = temporal_var_direct;
             Float output_variance_indirect = temporal_var_indirect;
 
-            $if(!PixelStateUtils::is_emissive(pipeline_ref, center_hit)) {
-                Interaction it = pipeline_ref->geometry().compute_surface_interaction(center_hit, false);
+            Bool emissive;
+            if constexpr (cached) emissive = center_guide.emissive;
+            else emissive = PixelStateUtils::is_emissive(pipeline_ref, center_hit);
+            $if(!emissive) {
+                Interaction it{false};
+                if constexpr (!cached) it = pipeline_ref->geometry().compute_surface_interaction(center_hit, false);
                 center_guide.apply(it);
                 // Clamp center luminance for half precision safety
                 Float center_lum_direct = HalfSafeUtils::clamp_luminance(luminance(center_direct));
@@ -86,19 +91,21 @@ auto compute_spatial_weight = [](Float history) -> Float {
                             RadType3Var n_direct = n_svgf->illumination_direct();
                             RadType3Var n_indirect = n_svgf->illumination_indirect();
 
-                            StableGeometryGuide neighbor_guide(param, p_idx, param.visibility_buffer.read(p_idx));
+                            auto neighbor_guide = load_spatial_guide<cached>(param, p_idx);
                             TriangleHitVar n_hit = neighbor_guide.hit;
                             Bool n_is_sky = PixelStateUtils::is_sky(n_hit);
                             
-                            Float boundary_weight = BoundaryUtils::compute_boundary_weight(
-                                pipeline_ref, center_hit, n_hit);
+                            Float boundary_weight;
+                            if constexpr (cached) boundary_weight = ocarina::select(n_is_sky || center_guide.emissive != neighbor_guide.emissive, 0.f, 1.f);
+                            else boundary_weight = BoundaryUtils::compute_boundary_weight(pipeline_ref, center_hit, n_hit);
 
                             Float kernel_w = ocarina::select(dx == 0 && dy == 0, 0.25f,
                                              ocarina::select(dx == 0 || dy == 0, 0.125f, 0.0625f));
 
                             Float w_geo = 1.f;
                             $if(!n_is_sky) {
-                                Interaction n_it = pipeline_ref->geometry().compute_surface_interaction(n_hit, false);
+                                Interaction n_it{false};
+                                if constexpr (!cached) n_it = pipeline_ref->geometry().compute_surface_interaction(n_hit, false);
                                 neighbor_guide.apply(n_it);
                                 // Keep the geometric plane test, but stop blur at
                                 // shading-normal details rather than mesh facets.
@@ -275,12 +282,16 @@ auto compute_spatial_weight = [](Float history) -> Float {
         };
     };
 
-    prefilter_shader_ = device().compile(kernel, "SVGF-Prefilter-SpatioTemporalFirefly");
+    return device().compile(kernel, cached ? "SVGF-Prefilter-Cached" : "SVGF-Prefilter-SpatioTemporalFirefly");
+    };
+    prefilter_shader_ = compile_filter.operator()<false>();
+    cached_prefilter_shader_ = compile_filter.operator()<true>();
 }
 
 CommandBatch Prefilter::dispatch(RealTimeDenoiseInput &input, bool use_shading_normal) noexcept {
     PrefilterParam param;
     bind_stable_planes(param, input);
+    svgf_->atrous()->bind_guides(param);
     param.use_shading_normal = use_shading_normal;
     param.radiance_direct = input.direct.descriptor();
     param.radiance_indirect = input.indirect.descriptor();
@@ -290,7 +301,8 @@ CommandBatch Prefilter::dispatch(RealTimeDenoiseInput &input, bool use_shading_n
     param.channel_kind = static_cast<uint>(input.channel_kind);
 
     CommandBatch ret;
-    ret << prefilter_shader_(param).dispatch(input.resolution);
+    if (input.use_stable_planes) ret << cached_prefilter_shader_(param).dispatch(input.resolution);
+    else ret << prefilter_shader_(param).dispatch(input.resolution);
     return ret;
 }
 

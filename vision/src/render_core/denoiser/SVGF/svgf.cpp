@@ -12,6 +12,58 @@ namespace {
     const char *value = std::getenv(name);
     return value != nullptr && value[0] != '\0' && value[0] != '0';
 }
+
+// Extract geometry once before the repeated neighbourhood/history queries.
+// Hit barycentrics are deliberately absent: cached consumers use only inst_id.
+struct CachedCoverageGuide {
+    TriangleHitVar hit;
+    Float3 position, normal, depth_position;
+    Float2 motion;
+    Uint branch;
+    Bool valid, ambiguous;
+    CachedCoverageGuide(const Var<ResolveParam> &param, Uint index, bool previous = false) {
+        auto p = previous ? param.prev_guide_position.read(index) : param.guide_position.read(index);
+        auto n = previous ? param.prev_guide_normal.read(index) : param.guide_normal.read(index);
+        auto m = previous ? param.prev_guide_meta.read(index) : param.guide_meta.read(index);
+        position = p.xyz(); normal = n.xyz(); motion = make_float2(p.w, n.w);
+        depth_position = (previous ? param.prev_guide_depth.read(index) : param.guide_depth.read(index)).xyz();
+        branch = m.x; ambiguous = m.y != 0u; hit.inst_id = m.z; valid = m.w != 0u;
+    }
+    void apply(Interaction &it) const { it.pos = position; it.ng = normal; }
+    [[nodiscard]] Float3 depth_point(const Float3 &) const { return depth_position; }
+};
+
+// One compact plane at a time. Its storage aliases the finished a-trous
+// scratch, and only the per-pixel OR of all layer edges survives this pass.
+[[nodiscard]] Bool cached_coverage_plane_edge(const Var<ResolveParam> &param, Uint center, Uint neighbor) {
+    auto a = param.edge_identity.read(center), b = param.edge_identity.read(neighbor);
+    auto sa = param.edge_surface.read(center), sb = param.edge_surface.read(neighbor);
+    Bool edge = a.x != b.x;
+    $if(a.x != 0u && b.x != 0u) {
+        edge |= a.y != b.y || a.z != b.z || a.w != b.w || sa.x != sb.x || sa.y != sb.y;
+        $if(sa.y != InvalidUI32 && sb.y != InvalidUI32) {
+            auto pa = param.edge_position.read(center), pb = param.edge_position.read(neighbor);
+            auto na = param.edge_normal.read(center), nb = param.edge_normal.read(neighbor);
+            Float depth = max(pa.w, 0.1f);
+            edge |= dot(na.xyz(), nb.xyz()) < Cfg::Resolve::kNormalThreshold ||
+                abs(dot(pb.xyz() - pa.xyz(), na.xyz())) > Cfg::Resolve::kPlaneThreshold * depth ||
+                abs(pb.w - depth) > Cfg::Temporal::kDepthThreshold * depth;
+        };
+    };
+    return edge;
+}
+
+template<bool cached>
+[[nodiscard]] auto load_coverage_guide(const Var<ResolveParam> &param, Uint idx, bool previous = false) {
+    if constexpr (cached) return CachedCoverageGuide(param, idx, previous);
+    else return CoverageGeometryGuide(param, idx, previous ? param.prev_visibility.read(idx) : param.visibility.read(idx), previous);
+}
+template<bool cached>
+[[nodiscard]] Bool load_coverage_edge(const Var<ResolveParam> &param, Uint center, Uint neighbor) {
+    if constexpr (cached) return param.composed_coverage != 0u && param.edge_flags.read(center) != 0u;
+    else return coverage_layer_edge(param, center, neighbor);
+}
+
 }
 
 void SVGF::prepare_buffers() {
@@ -29,6 +81,12 @@ void SVGF::prepare_buffers() {
 }
 
 void SVGF::prepare_resolve(uint pixel_num) {
+    init_buffer_zero(device(), edge_flags_, pixel_num, "SVGF::edge_flags");
+    init_buffer_zero(device(), coverage_position_, pixel_num, "SVGF::coverage_position");
+    init_buffer_zero(device(), coverage_normal_, pixel_num, "SVGF::coverage_normal");
+    init_buffer_zero(device(), coverage_depth_, pixel_num, "SVGF::coverage_depth");
+    init_buffer_zero(device(), coverage_meta_, pixel_num, "SVGF::coverage_meta");
+
     for (uint layer = 0u; layer < StablePlaneCount; ++layer) {
         if (layer == 0u) {
             init_buffer_zero(device(), resolve_direct_[layer], pixel_num, "SVGF::resolve_direct");
@@ -57,6 +115,52 @@ void SVGF::compile_resolve() {
         };
     };
     clear_invalid_shader_ = device().compile(clear_invalid, "SVGF-ClearInvalidLayer");
+    Kernel prepare_guide = [pipeline_ref](Var<ResolveParam> param) {
+        Uint idx = dispatch_id();
+        for (bool previous : {false, true}) {
+            $if(!previous || (param.history_valid != 0u && param.alpha == 1.f)) {
+                auto primary = previous ? param.prev_visibility.read(idx) : param.visibility.read(idx);
+                CoverageGeometryGuide guide(param, idx, primary, previous);
+                Float3 position = make_float3(0.f), normal = make_float3(0.f);
+                $if(!PixelStateUtils::is_sky(guide.hit)) {
+                    Interaction it = pipeline_ref->geometry().compute_surface_interaction(guide.hit, false);
+                    guide.apply(it); position = it.pos; normal = it.ng;
+                };
+                (previous ? param.prev_guide_position : param.guide_position).write(idx, make_float4(position, guide.motion.x));
+                (previous ? param.prev_guide_normal : param.guide_normal).write(idx, make_float4(normal, guide.motion.y));
+                (previous ? param.prev_guide_depth : param.guide_depth).write(idx, make_float4(guide.depth_point(position), 0.f));
+                (previous ? param.prev_guide_meta : param.guide_meta).write(idx, make_uint4(guide.branch, cast<uint>(guide.ambiguous), guide.hit.inst_id, cast<uint>(guide.valid)));
+            };
+        }
+    };
+    coverage_guide_shader_ = device().compile(prepare_guide, "SVGF-CoverageGuide");
+    Kernel prepare_edge = [](Var<ResolveParam> param) {
+        Uint idx = dispatch_id();
+        auto plane = param.coverage_planes.read(param.edge_layer * dispatch_dim().x * dispatch_dim().y + idx);
+        param.edge_identity.write(idx, make_uint4(plane.valid, plane.branch_sequence, plane.instance_hash, plane.depth));
+        param.edge_surface.write(idx, make_uint4(plane.material_id, plane.surface.hit.inst_id, 0u, 0u));
+        param.edge_position.write(idx, make_float4(plane.surface.virtual_position, length(plane.depth_position - param.camera_pos.as_vec3())));
+        param.edge_normal.write(idx, make_float4(plane.surface.virtual_geometric_normal, 0.f));
+    };
+    edge_guide_shader_ = device().compile(prepare_edge, "SVGF-CoverageEdgeGuide");
+    Kernel classify_edge = [](Var<ResolveParam> param) {
+        Uint idx = dispatch_id();
+        Int2 pixel = make_int2(dispatch_idx().xy()), size = make_int2(dispatch_dim().xy());
+        Bool edge = false;
+        $if(param.edge_layer != 0u) { edge = param.edge_flags.read(idx) != 0u; };
+        $for(y, -1, 2) {
+            $for(x, -1, 2) {
+                Int2 tap = pixel + make_int2(x, y);
+                $if(!edge && (x != 0 || y != 0) && all(tap >= 0) && all(tap < size)) {
+                    edge = cached_coverage_plane_edge(param, idx, cast<uint>(tap.y * size.x + tap.x));
+                };
+            };
+        };
+        param.edge_flags.write(idx, cast<uint>(edge));
+    };
+    edge_classify_shader_ = device().compile(classify_edge, "SVGF-CoverageClassifyEdge");
+    // Specialize on the host so the ordinary path retains its original work.
+    auto compile_filter = [&]<bool cached>() {
     Kernel kernel = [pipeline_ref](Var<ResolveParam> param) {
         pipeline_ref->scene().sensor()->load_data();
         pipeline_ref->renderer().sampler()->load_data();
@@ -65,7 +169,7 @@ void SVGF::compile_resolve() {
         Uint idx = dispatch_id();
         Int2 pixel = make_int2(dispatch_idx().xy());
         Int2 size = make_int2(dispatch_dim().xy());
-        CoverageGeometryGuide center_guide(param, idx, param.visibility.read(idx));
+        auto center_guide = load_coverage_guide<cached>(param, idx);
         $if(!center_guide.valid) {
             param.output_direct.write(idx, make_float4(0.f));
             param.output_indirect.write(idx, make_float4(0.f));
@@ -76,7 +180,8 @@ void SVGF::compile_resolve() {
         Float3 center_normal = make_float3(0.f);
         Float depth = 0.1f;
         $if(!sky) {
-            Interaction center = pipeline_ref->geometry().compute_surface_interaction(hit, false);
+            Interaction center{false};
+            if constexpr (!cached) center = pipeline_ref->geometry().compute_surface_interaction(hit, false);
             center_guide.apply(center);
             center_pos = center.pos;
             center_normal = center.ng;
@@ -97,13 +202,14 @@ void SVGF::compile_resolve() {
                     Int2 tap_pixel = pixel + make_int2(x, y);
                     $if(!edge && all(tap_pixel >= 0) && all(tap_pixel < size)) {
                         Uint tap_idx = cast<uint>(tap_pixel.y * size.x + tap_pixel.x);
-                        CoverageGeometryGuide tap_guide(param, tap_idx, param.visibility.read(tap_idx));
+                        auto tap_guide = load_coverage_guide<cached>(param, tap_idx);
                         TriangleHitVar tap = tap_guide.hit;
                         Bool tap_sky = PixelStateUtils::is_sky(tap);
                         edge = (center_guide.branch != tap_guide.branch) || (hit.inst_id != tap.inst_id) || (sky != tap_sky) ||
-                               coverage_layer_edge(param, idx, tap_idx);
+                               load_coverage_edge<cached>(param, idx, tap_idx);
                         $if(!edge && !sky && !tap_sky) {
-                            Interaction neighbor = pipeline_ref->geometry().compute_surface_interaction(tap, false);
+                            Interaction neighbor{false};
+                            if constexpr (!cached) neighbor = pipeline_ref->geometry().compute_surface_interaction(tap, false);
                             tap_guide.apply(neighbor);
                             edge = dot(center_normal, neighbor.ng) < Cfg::Resolve::kNormalThreshold ||
                                    abs(dot(neighbor.pos - center_pos, center_normal)) >
@@ -150,10 +256,11 @@ void SVGF::compile_resolve() {
                         guide_weight_sum += guide_weight;
                         $if(guide_weight > 0.f) {
                             Uint tap_idx = cast<uint>(guide_p.y * size.x + guide_p.x);
-                            CoverageGeometryGuide tap_guide(param, tap_idx, param.prev_visibility.read(tap_idx), true);
+                            auto tap_guide = load_coverage_guide<cached>(param, tap_idx, true);
                             TriangleHitVar tap = tap_guide.hit;
                             $if(!PixelStateUtils::is_sky(tap)) {
-                                Interaction previous = pipeline_ref->geometry().compute_surface_interaction(tap, false);
+                                Interaction previous{false};
+                                if constexpr (!cached) previous = pipeline_ref->geometry().compute_surface_interaction(tap, false);
                                 tap_guide.apply(previous);
                                 Float previous_depth = length(tap_guide.depth_point(previous.pos) - param.prev_camera_pos.as_vec3());
                                 // Coverage may cross adjacent facets of the same
@@ -179,10 +286,11 @@ void SVGF::compile_resolve() {
                                             Int2 q = pixel + make_int2(cx, cy);
                                             $if(!consistent && all(q >= 0) && all(q < size)) {
                                                 Uint neighbor_idx = cast<uint>(q.y * size.x + q.x);
-                                                CoverageGeometryGuide neighbor_guide(param, neighbor_idx, param.visibility.read(neighbor_idx));
+                                                auto neighbor_guide = load_coverage_guide<cached>(param, neighbor_idx);
                                                 TriangleHitVar neighbor_hit = neighbor_guide.hit;
                                                 $if(neighbor_hit.inst_id == tap.inst_id) {
-                                                    Interaction neighbor = pipeline_ref->geometry().compute_surface_interaction(neighbor_hit, false);
+                                                    Interaction neighbor{false};
+                                                    if constexpr (!cached) neighbor = pipeline_ref->geometry().compute_surface_interaction(neighbor_hit, false);
                                                     neighbor_guide.apply(neighbor);
                                                     Float neighbor_depth = max(length(neighbor_guide.depth_point(neighbor.pos) - param.prev_camera_pos.as_vec3()), 0.1f);
                                                     consistent = !tap_guide.ambiguous && !neighbor_guide.ambiguous &&
@@ -212,7 +320,7 @@ void SVGF::compile_resolve() {
                         // Reconstruct coverage with the full bilinear footprint,
                         // only when it includes this surface. Renormalizing just
                         // same-surface taps would preserve the aliased silhouette.
-                        CoverageGeometryGuide history_guide(param, tap_idx, param.prev_visibility.read(tap_idx), true);
+                        auto history_guide = load_coverage_guide<cached>(param, tap_idx, true);
                         $if(!history_guide.ambiguous) {
                         reprojected_direct += param.history_direct.read(tap_idx).xyz() * weight;
                         reprojected_indirect += param.history_indirect.read(tap_idx).xyz() * weight;
@@ -280,7 +388,10 @@ void SVGF::compile_resolve() {
         resolve_channel(param.indirect, param.history_indirect, param.output_indirect, reprojected_indirect);
         };
     };
-    resolve_shader_ = device().compile(kernel, "SVGF-CoverageResolve");
+    return device().compile(kernel, cached ? "SVGF-CoverageResolve-Cached" : "SVGF-CoverageResolve");
+    };
+    resolve_shader_ = compile_filter.operator()<true>();
+    legacy_resolve_shader_ = compile_filter.operator()<false>();
     // Neighbourhood reads above must see one immutable current image. Publish
     // in a separate dispatch, avoiding an in-place read/write race at edges.
     Kernel publish = [](Var<ResolveParam> param) {
@@ -311,7 +422,24 @@ CommandBatch SVGF::resolve(RealTimeDenoiseInput &input) {
     state.frame = input.frame_index;
 
     ResolveParam param;
+    param.prev_guide_position = coverage_position_.descriptor();
+    param.prev_guide_normal = coverage_normal_.descriptor();
+    param.prev_guide_depth = coverage_depth_.descriptor();
+    param.prev_guide_meta = coverage_meta_.descriptor();
+    param.edge_position = atrous_->guide_position().descriptor();
+    param.edge_normal = atrous_->guide_normal().descriptor();
+    param.edge_identity = atrous_->guide_identity().descriptor();
+    param.edge_surface = atrous_->guide_surface().descriptor();
+
     bind_stable_planes(param, input);
+    // The compact edge pass finishes before these same images become the
+    // current coverage guide. Float4 and uint4 have identical storage extents.
+    param.guide_position = atrous_->guide_position().descriptor();
+    param.guide_normal = atrous_->guide_normal().descriptor();
+    param.guide_meta = atrous_->guide_identity().descriptor();
+    auto scratch_surface = atrous_->guide_surface();
+    param.guide_depth = BufferView<float4>{scratch_surface.handle(), scratch_surface.size()}.descriptor();
+    param.edge_flags = edge_flags_.descriptor();
     param.composed_coverage = input.composed_coverage;
     if (input.composed_coverage) {
         param.coverage_planes = input.coverage_planes.descriptor();
@@ -335,7 +463,19 @@ CommandBatch SVGF::resolve(RealTimeDenoiseInput &input) {
     param.alpha = 1.f / static_cast<float>(state.history);
     param.interior_alpha = 1.f / static_cast<float>(std::min(state.history, Cfg::Resolve::kInteriorHistory));
     CommandBatch ret;
-    ret << resolve_shader_(param).dispatch(input.resolution);
+    if (input.use_stable_planes || input.composed_coverage) {
+        if (input.composed_coverage) {
+            for (uint layer = 0u; layer < StablePlaneCount; ++layer) {
+                param.edge_layer = layer;
+                ret << edge_guide_shader_(param).dispatch(input.resolution);
+                ret << edge_classify_shader_(param).dispatch(input.resolution);
+            }
+        }
+        ret << coverage_guide_shader_(param).dispatch(input.resolution);
+        ret << resolve_shader_(param).dispatch(input.resolution);
+    } else {
+        ret << legacy_resolve_shader_(param).dispatch(input.resolution);
+    }
     ret << publish_resolve_shader_(param).dispatch(input.resolution);
     return ret;
 }
@@ -413,6 +553,9 @@ CommandBatch SVGF::dispatch(vision::RealTimeDenoiseInput &input) noexcept {
         }
         if (!skip_variance) {
             ret << variance_estimator_->dispatch_variance(input);
+        }
+        if (input.use_stable_planes && (!skip_prefilter || !skip_atrous)) {
+            ret << atrous_->dispatch_guide(input);
         }
         if (!skip_prefilter) {
             // The temporal bypass does not produce current shading guides.

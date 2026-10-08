@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "math/basic_types.h"
 #include "dsl/dsl.h"
@@ -92,6 +92,33 @@ struct StableGeometryGuide {
         $if(replaced) { it.pos = position; it.ng = normal; };
     }
 };
+
+// Shared full-precision spatial guide, prepared once per layer.
+
+struct CachedSpatialGuide {
+    TriangleHitVar hit;
+    Float3 position, normal;
+    Uint4 identity, surface;
+    Bool emissive;
+    template<typename Param>
+    CachedSpatialGuide(const Param &param, Uint idx) {
+        auto p = param.guide_position.read(idx), n = param.guide_normal.read(idx);
+        position = p.xyz(); normal = n.xyz(); emissive = n.w != 0.f;
+        identity = param.guide_identity.read(idx); surface = param.guide_surface.read(idx);
+        hit.inst_id = surface.z;
+    }
+    [[nodiscard]] Bool compatible(const CachedSpatialGuide &other) const {
+        return identity.x != 0u && other.identity.x != 0u && identity.y == other.identity.y &&
+            (surface.w == 0u || (identity.z == other.identity.z && identity.w == other.identity.w &&
+             surface.x == other.surface.x && surface.y == other.surface.y && surface.z == other.surface.z));
+    }
+    void apply(Interaction &it) const { it.pos = position; it.ng = normal; }
+};
+template<bool cached, typename Param>
+[[nodiscard]] auto load_spatial_guide(const Param &param, Uint idx) {
+    if constexpr (cached) return CachedSpatialGuide(param, idx);
+    else return StableGeometryGuide(param, idx, param.visibility_buffer.read(idx));
+}
 
 template<typename Param>
 [[nodiscard]] inline TriangleHitVar stable_hit(const Param &param, Uint index, TriangleHitVar hit, bool previous = false) {
