@@ -17,6 +17,8 @@
 
 #include <SDL3/SDL.h>
 
+#include <cstdint>
+
 #include <corona/systems/ui/panel_layout.h>
 #include <corona/systems/ui/sdl_input_router.h>
 
@@ -78,6 +80,13 @@ class UiFrameRunner {
 
     void set_system_cursor(SDL_SystemCursor cursor);
 
+    // Diagnostics for a lag report about dragging a panel border. Floating panels are drawn as
+    // quads on the main window's surface, and their border drag is handled natively (never in the
+    // page), so nothing in the frontend can report where a panel is or whether a drag is active.
+    // Logs each floating panel's rectangle plus the active drag/resize ids: immediately whenever
+    // those ids change, otherwise at most once per second.
+    void log_floating_layout();
+
     int url_input_active_tab_ = -1;
 
     // Phase 10: title-bar drag of an in-main-window floating panel rectangle. While a drag is
@@ -102,6 +111,10 @@ class UiFrameRunner {
     float resize_rect_start_w_ = 0.0f;
     float resize_rect_start_h_ = 0.0f;
     SDL_SystemCursor active_system_cursor_ = SDL_SYSTEM_CURSOR_DEFAULT;
+
+    std::uint64_t diag_frame_counter_ = 0;
+    int diag_last_dragging_tab_id_ = -1;
+    int diag_last_resizing_tab_id_ = -1;
 
     SdlInputRouter input_router_{};
     BrowserInputHandler input_handler_{};

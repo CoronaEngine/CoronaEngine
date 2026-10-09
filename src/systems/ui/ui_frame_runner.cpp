@@ -734,6 +734,39 @@ void UiFrameRunner::run_frame(UiFrameContext& context) {
             url_input_active_tab_ = -1;
         }
     }
+
+    log_floating_layout();
+}
+
+void UiFrameRunner::log_floating_layout() {
+    // Rectangles are in the engine's pixel space (the same space the panel CEF buffers and the
+    // hit-test use), not in window-client pixels: on a 125% display the main window's client is
+    // 1638x883 while its surface - and therefore this space - is 2048x1104.
+    constexpr std::uint64_t kDiagIntervalFrames = 60;
+    const bool ids_changed = dragging_tab_id_ != diag_last_dragging_tab_id_ ||
+                             resizing_tab_id_ != diag_last_resizing_tab_id_;
+    if (!ids_changed && (++diag_frame_counter_ % kDiagIntervalFrames) != 0) {
+        return;
+    }
+    diag_last_dragging_tab_id_ = dragging_tab_id_;
+    diag_last_resizing_tab_id_ = resizing_tab_id_;
+
+    for (const auto& [tab_id, tab] : BrowserManager::instance().get_tabs()) {
+        if (!tab || !tab->floating) {
+            continue;
+        }
+        CFW_LOG_INFO("[UI/Float] tab={} rect={}x{}+{},{} buffer={}x{} dragging={} resizing={} edges={}",
+                     tab_id,
+                     std::max(tab->dock_width, tab->width),
+                     std::max(tab->dock_height, tab->height),
+                     tab->initial_x,
+                     tab->initial_y,
+                     tab->width,
+                     tab->height,
+                     dragging_tab_id_,
+                     resizing_tab_id_,
+                     resize_edges_);
+    }
 }
 
 void UiFrameRunner::reconcile_detach_states(UiFrameContext& context) {
