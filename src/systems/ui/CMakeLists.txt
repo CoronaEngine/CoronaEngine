@@ -1,4 +1,4 @@
-﻿# UI System 配置 (ImGui removed — Phase 6 of the ImGui-removal plan).
+# UI System 配置 (ImGui removed — Phase 6 of the ImGui-removal plan).
 # The frame loop is now ui_frame_runner.cpp (raw SDL + quad compositor); there is no
 # longer an imgui or imgui_backends (imgui_impl_sdl3) target. The imgui.vert/frag GLSL
 # shaders are still used by the quad compositor and remain compiled below.
@@ -8,6 +8,7 @@ set(UI_SYSTEM_SOURCES
     ui_surface_lifecycle.cpp
     camera_viewport_manager.cpp
     panel_layout.cpp
+    panel_resize_policy.cpp
     collaborative_editor_runtime.cpp
     collaborative_editor_runtime.h
 

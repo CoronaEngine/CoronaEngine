@@ -17,6 +17,7 @@
 
 #include <SDL3/SDL.h>
 
+#include <chrono>
 #include <cstdint>
 
 #include <corona/systems/ui/panel_layout.h>
@@ -102,6 +103,13 @@ class UiFrameRunner {
     // Edge/corner resize for in-main-window floating panels. This mirrors the title-bar
     // drag path above: while active, mouse input is consumed by native so resizing continues
     // even after the cursor leaves the panel's previous CEF rectangle.
+    //
+    // While a gesture owns a tab, the panel rectangle is updated every frame but the CEF
+    // texture + renderer relayout are **coalesced** through the gate below: an edge drag used to
+    // rebuild a 4.4MB texture and relayout the whole page once per frame (~60/s, 1.90-7.36ms
+    // each). The quad keeps following the cursor in the meantime by sampling the last applied
+    // texture over the new destination rect (QuadDraw defaults to uv 0..1), so the content is
+    // stretched by at most step_px / panel width (~4%) until the next apply or the release.
     int resizing_tab_id_ = -1;
     int resize_edges_ = 0;
     float resize_mouse_start_x_ = 0.0f;
@@ -110,6 +118,16 @@ class UiFrameRunner {
     float resize_rect_start_y_ = 0.0f;
     float resize_rect_start_w_ = 0.0f;
     float resize_rect_start_h_ = 0.0f;
+
+    // Time of the last resize the gesture was allowed to apply; a default-constructed value means
+    // "no apply yet in this gesture", which the gate reads as "long ago" so the first real
+    // movement applies immediately. Reset when a gesture starts and when one ends.
+    std::chrono::steady_clock::time_point resize_gate_last_apply_{};
+
+    // The one place that decides whether a deferred resize owned by the active gesture may be
+    // applied now (see panel_resize_policy.h). Stamps resize_gate_last_apply_ when it says yes.
+    // Never consulted for tabs that no gesture owns: those keep the unconditional behaviour.
+    bool take_resize_apply_slot(int applied_w, int applied_h, int wanted_w, int wanted_h);
     SDL_SystemCursor active_system_cursor_ = SDL_SYSTEM_CURSOR_DEFAULT;
 
     std::uint64_t diag_frame_counter_ = 0;

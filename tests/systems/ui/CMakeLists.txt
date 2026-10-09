@@ -171,3 +171,14 @@ target_include_directories(corona_viewport_gizmo_state_tests
 target_link_libraries(corona_viewport_gizmo_state_tests PRIVATE Horizon corona::resource::manager)
 add_test(NAME ViewportGizmoStateTests
          COMMAND corona_viewport_gizmo_state_tests)
+
+# 面板缩放「合并应用」策略：纯函数（无 SDL/CEF 依赖），因此不需要注入任何运行时。
+add_executable(corona_panel_resize_policy_tests
+    test_panel_resize_policy.cpp
+    ${PROJECT_SOURCE_DIR}/src/systems/ui/panel_resize_policy.cpp
+)
+target_include_directories(corona_panel_resize_policy_tests
+    PRIVATE ${PROJECT_SOURCE_DIR}/include
+)
+add_test(NAME PanelResizePolicyTests
+         COMMAND corona_panel_resize_policy_tests)
