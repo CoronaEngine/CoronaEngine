@@ -34,6 +34,7 @@ set(UI_SYSTEM_SOURCES
     cef/cef_runtime.cpp
     cef/cef_py_bind.cpp
     cef/cef_osr_mode.cpp
+    cef/cef_paint_upload.cpp
     cef/cef_shared_texture_probe.cpp
     cef/popup_overlay.cpp
 

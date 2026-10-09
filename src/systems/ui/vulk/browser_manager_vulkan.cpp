@@ -1,3 +1,4 @@
+#include <corona/systems/ui/cef_paint_upload.h>
 #include <corona/systems/ui/vulkan_backend.h>
 #include <horizon/core/logging.h>
 
@@ -137,6 +138,8 @@ void BrowserManager::update_texture(int tab_id) {
     UiTextureId texture_id = k_invalid_texture_id;
     int paint_width = 0;
     int paint_height = 0;
+    int requested_width = 0;
+    int requested_height = 0;
 
     {
         std::unique_lock<std::mutex> lock(tab->mutex);
@@ -148,6 +151,8 @@ void BrowserManager::update_texture(int tab_id) {
         pixels.swap(tab->pixel_buffer);
         paint_width = tab->paint_width;
         paint_height = tab->paint_height;
+        requested_width = tab->width;
+        requested_height = tab->height;
         tab->buffer_dirty = false;
 
         if (tab->popup.visible()) {
@@ -165,26 +170,24 @@ void BrowserManager::update_texture(int tab_id) {
         return;
     }
 
-    constexpr size_t kRgbaBytesPerPixel = 4;
-    const size_t expected_size =
-        static_cast<size_t>(image_it->second.width) *
-        static_cast<size_t>(image_it->second.height) *
-        kRgbaBytesPerPixel;
+    const PaintUploadAction action =
+        decide_paint_upload(paint_width, paint_height,
+                            static_cast<int>(image_it->second.width),
+                            static_cast<int>(image_it->second.height),
+                            requested_width, requested_height);
 
-    // A buffer whose dimensions differ from the texture cannot be uploaded correctly: the copy
-    // is linear (Horizon's copy_from takes no row pitch), so it would consume the source as if
-    // its row length were the texture's width and shear every row by
-    // (paint_width - texture_width) pixels. Measured on a panel edge drag: the resize landed
-    // while a paint for the previous size was still in flight and the panel came out visibly
-    // slanted. Refuse the mismatch and ask CEF for a paint at the current size instead.
-    if (paint_width != image_it->second.width || paint_height != image_it->second.height) {
+    if (action == PaintUploadAction::RefuseStalePaint) {
+        // Uploading this buffer would consume it at the texture's row length and shear every row
+        // by (paint_width - texture_width) pixels (measured: +32 / -22 / -81 px during a panel
+        // edge drag). Drop it and ask CEF for a paint at the size we requested.
         static std::atomic<std::uint64_t> mismatch_frames{0};
         const std::uint64_t mismatch = mismatch_frames.fetch_add(1, std::memory_order_relaxed) + 1;
         if (mismatch == 1 || mismatch % 60 == 0) {
             CFW_LOG_WARNING(
-                "[CEF/Upload] refused mismatched paint: buffer={}x{} texture={}x{} "
+                "[CEF/Upload] refused stale paint: buffer={}x{} texture={}x{} requested={}x{} "
                 "(row shift would be {} px); requesting a repaint (count={})",
                 paint_width, paint_height, image_it->second.width, image_it->second.height,
+                requested_width, requested_height,
                 paint_width - static_cast<int>(image_it->second.width), mismatch);
         }
         if (tab->client && tab->client->GetBrowser() && tab->client->GetBrowser()->GetHost()) {
@@ -192,6 +195,38 @@ void BrowserManager::update_texture(int tab_id) {
         }
         return;
     }
+
+    if (action == PaintUploadAction::RecreateThenUpload) {
+        // First paint at the requested size: build the texture at exactly that size now, so the
+        // content arrives in the same update instead of leaving a transparent texture on screen.
+        // (create_browser_texture seeds it transparent; the paint upload below replaces that
+        // before anything is presented, which is the point of deferring the rebuild.)
+        const auto recreate_started = std::chrono::steady_clock::now();
+        const uint32_t previous_texture_width = image_it->second.width;
+        const uint32_t previous_texture_height = image_it->second.height;
+        {
+            std::lock_guard<std::mutex> lock(tab->mutex);
+            destroy_tab_texture(tab);
+            tab->texture_id = create_browser_texture(paint_width, paint_height);
+            texture_id = tab->texture_id;
+        }
+        image_it = owned_images_.find(texture_id);
+        if (image_it == owned_images_.end()) {
+            return;
+        }
+        const double recreate_ms = std::chrono::duration<double, std::milli>(
+                                       std::chrono::steady_clock::now() - recreate_started)
+                                       .count();
+        CFW_LOG_INFO("[CEF/Upload] recreated texture for tab={} {}x{} -> {}x{} cost={:.2f}ms",
+                     tab_id, previous_texture_width, previous_texture_height, paint_width,
+                     paint_height, recreate_ms);
+    }
+
+    constexpr size_t kRgbaBytesPerPixel = 4;
+    const size_t expected_size =
+        static_cast<size_t>(image_it->second.width) *
+        static_cast<size_t>(image_it->second.height) *
+        kRgbaBytesPerPixel;
 
     if (pixels.size() == expected_size) {
         auto& owned = image_it->second;
@@ -256,9 +291,12 @@ void BrowserManager::resize_tab(int tab_id, int width, int height) {
         tab->buffer_dirty = false;
     }
 
-    destroy_tab_texture(tab);
-    tab->texture_id = create_browser_texture(tab->width, tab->height);
-
+    // The texture is NOT rebuilt here any more. CEF still has to relayout the page at the new
+    // view size and will answer with a paint of that size; creating a fresh (empty) texture now
+    // would show a blank panel for however many frames that takes. Keep the current texture and
+    // let update_texture() rebuild it when the matching paint actually arrives - see
+    // corona/systems/ui/cef_paint_upload.h. The quad keeps drawing the old texture over the new
+    // destination rect in the meantime, which stretches it by at most one coalescing step.
     if (tab->client) {
         tab->client->Resize(tab->width, tab->height);
     }
@@ -271,7 +309,8 @@ void BrowserManager::resize_tab(int tab_id, int width, int height) {
     const double resize_ms = std::chrono::duration<double, std::milli>(
                                  std::chrono::steady_clock::now() - resize_started)
                                  .count();
-    CFW_LOG_INFO("[CEF/Resize] tab={} {}x{} -> {}x{} floating={} camera_view={} cost={:.2f}ms",
+    CFW_LOG_INFO("[CEF/Resize] tab={} {}x{} -> {}x{} floating={} camera_view={} cost={:.2f}ms "
+                 "(texture rebuild deferred to the matching paint)",
                  tab_id, previous_width, previous_height, tab->width, tab->height, was_floating,
                  was_camera_view, resize_ms);
 }

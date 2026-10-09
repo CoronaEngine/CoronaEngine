@@ -182,3 +182,14 @@ target_include_directories(corona_panel_resize_policy_tests
 )
 add_test(NAME PanelResizePolicyTests
          COMMAND corona_panel_resize_policy_tests)
+
+# CEF 绘制缓冲上传决策：同样是纯函数，钉住"推迟纹理重建"的语义（避免行错位斜切与空纹理帧）。
+add_executable(corona_cef_paint_upload_tests
+    test_cef_paint_upload.cpp
+    ${PROJECT_SOURCE_DIR}/src/systems/ui/cef/cef_paint_upload.cpp
+)
+target_include_directories(corona_cef_paint_upload_tests
+    PRIVATE ${PROJECT_SOURCE_DIR}/include
+)
+add_test(NAME CefPaintUploadTests
+         COMMAND corona_cef_paint_upload_tests)
