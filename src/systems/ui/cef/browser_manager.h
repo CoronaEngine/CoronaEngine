@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include "horizon.h"
 #include <SDL3/SDL.h>
@@ -78,6 +78,13 @@ struct BrowserTab {
     bool needs_resize = false;
     bool needs_reposition = false;
     bool buffer_dirty = false;
+    // Dimensions of the buffer currently sitting in `pixel_buffer`, as delivered by CEF's
+    // OnPaint. They are NOT always width/height: a paint issued before a resize can still arrive
+    // after it. Uploading such a buffer into the resized texture copies it as if its row length
+    // were the texture's width, which shifts every row and shears the panel content, so the
+    // upload path compares these against the texture and refuses the mismatch.
+    int paint_width = 0;
+    int paint_height = 0;
     bool has_focus = false;
     bool camera_view = false;
     bool cef_creation_failed = false;

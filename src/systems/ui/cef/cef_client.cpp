@@ -118,6 +118,10 @@ void OffscreenRenderHandler::OnPaint(CefRefPtr<CefBrowser> browser, PaintElement
         }
 
         t->buffer_dirty = true;
+        // Remember what size this buffer actually is, so the upload path can tell whether it
+        // still matches the tab's texture (see BrowserTab::paint_width).
+        t->paint_width = width;
+        t->paint_height = height;
     }
 }
 

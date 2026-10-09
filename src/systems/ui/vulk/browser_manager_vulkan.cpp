@@ -2,6 +2,7 @@
 #include <horizon/core/logging.h>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -134,6 +135,8 @@ void BrowserManager::update_texture(int tab_id) {
 
     std::vector<uint8_t> pixels;
     UiTextureId texture_id = k_invalid_texture_id;
+    int paint_width = 0;
+    int paint_height = 0;
 
     {
         std::unique_lock<std::mutex> lock(tab->mutex);
@@ -143,6 +146,8 @@ void BrowserManager::update_texture(int tab_id) {
 
         texture_id = tab->texture_id;
         pixels.swap(tab->pixel_buffer);
+        paint_width = tab->paint_width;
+        paint_height = tab->paint_height;
         tab->buffer_dirty = false;
 
         if (tab->popup.visible()) {
@@ -166,7 +171,29 @@ void BrowserManager::update_texture(int tab_id) {
         static_cast<size_t>(image_it->second.height) *
         kRgbaBytesPerPixel;
 
-    if (pixels.size() >= expected_size) {
+    // A buffer whose dimensions differ from the texture cannot be uploaded correctly: the copy
+    // is linear (Horizon's copy_from takes no row pitch), so it would consume the source as if
+    // its row length were the texture's width and shear every row by
+    // (paint_width - texture_width) pixels. Measured on a panel edge drag: the resize landed
+    // while a paint for the previous size was still in flight and the panel came out visibly
+    // slanted. Refuse the mismatch and ask CEF for a paint at the current size instead.
+    if (paint_width != image_it->second.width || paint_height != image_it->second.height) {
+        static std::atomic<std::uint64_t> mismatch_frames{0};
+        const std::uint64_t mismatch = mismatch_frames.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (mismatch == 1 || mismatch % 60 == 0) {
+            CFW_LOG_WARNING(
+                "[CEF/Upload] refused mismatched paint: buffer={}x{} texture={}x{} "
+                "(row shift would be {} px); requesting a repaint (count={})",
+                paint_width, paint_height, image_it->second.width, image_it->second.height,
+                paint_width - static_cast<int>(image_it->second.width), mismatch);
+        }
+        if (tab->client && tab->client->GetBrowser() && tab->client->GetBrowser()->GetHost()) {
+            tab->client->GetBrowser()->GetHost()->Invalidate(PET_VIEW);
+        }
+        return;
+    }
+
+    if (pixels.size() == expected_size) {
         auto& owned = image_it->second;
         browser_upload_executor_.wait(owned.upload_receipt);
         owned.upload_receipt = upload_image_async(
