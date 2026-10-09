@@ -2,6 +2,7 @@
 #include <horizon/core/logging.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <mutex>
@@ -213,6 +214,12 @@ void BrowserManager::resize_tab(int tab_id, int width, int height) {
         return;
     }
 
+    const int previous_width = tab->width;
+    const int previous_height = tab->height;
+    const bool was_floating = tab->floating;
+    const bool was_camera_view = tab->camera_view;
+    const auto resize_started = std::chrono::steady_clock::now();
+
     tab->width = width;
     tab->height = height;
 
@@ -228,5 +235,17 @@ void BrowserManager::resize_tab(int tab_id, int width, int height) {
     if (tab->client) {
         tab->client->Resize(tab->width, tab->height);
     }
+
+    // This path used to be completely silent, which is why a lag report about dragging a panel
+    // border had no measurable evidence: a floating panel's edge drag reaches here once per
+    // changed pixel (ui_frame_runner.cpp apply_floating_resize), and each call throws away the
+    // whole CEF texture, clears the popup and forces a full renderer relayout. Log the cost so
+    // the churn rate and per-call price can be read straight out of a session log.
+    const double resize_ms = std::chrono::duration<double, std::milli>(
+                                 std::chrono::steady_clock::now() - resize_started)
+                                 .count();
+    CFW_LOG_INFO("[CEF/Resize] tab={} {}x{} -> {}x{} floating={} camera_view={} cost={:.2f}ms",
+                 tab_id, previous_width, previous_height, tab->width, tab->height, was_floating,
+                 was_camera_view, resize_ms);
 }
 }  // namespace Corona::Systems::UI
