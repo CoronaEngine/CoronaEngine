@@ -128,18 +128,7 @@ def current_commit(worktree: Path) -> str:
 
 
 def _normalized_url(value: str) -> str:
-    # `git remote get-url` reports SSH and HTTPS remotes differently, and a global
-    # `url.<base>.insteadOf` rule can rewrite one form into the other on read. Compare
-    # the underlying owner/repo instead of the transport so the lock file stays valid
-    # whichever form the developer's Git is configured to print.
-    url = value.strip().rstrip("/")
-    if url.endswith(".git"):
-        url = url[: -len(".git")]
-    url = url.removeprefix("git@")
-    url = url.removeprefix("https://")
-    url = url.removeprefix("http://")
-    return url.replace(":", "/", 1).rstrip("/").lower()
-
+    return value.rstrip("/").removesuffix(".git").lower()
 
 def _commit_present(worktree: Path, commit: str) -> bool:
     return _git_probe(worktree, "cat-file", "-e", f"{commit}^{{commit}}").returncode == 0

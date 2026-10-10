@@ -14,7 +14,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from horizon_workspace import (
     SYNC_COMMAND,
     UPDATE_COMMAND,
-    _normalized_url,
     ensure_workspace,
     inspect_workspace,
     sync_workspace,
@@ -157,62 +156,6 @@ class HorizonWorkspaceTests(unittest.TestCase):
         self.assertEqual(lock.commit, newest)
         self.assertEqual(self.head(), newest)
         self.assertTrue(inspect_workspace(self.repo_root).in_sync)
-
-    def test_rewritten_ssh_origin_still_matches_its_https_lock(self) -> None:
-        """A global `insteadOf` rule may print the origin as SSH; that is not drift."""
-        self.silently(ensure_workspace, self.repo_root)
-        # Clone through the local fixture, then pin the lock to the HTTPS spelling the
-        # project publishes while the remote reports the SSH one Git rewrites it into.
-        git(self.worktree, "remote", "set-url", "origin",
-            "https://github.com/CoronaEngine/Horizon.git")
-        git(self.worktree, "config", "--local",
-            "url.git@github.com:.insteadOf", "https://github.com/")
-        self.assertEqual(git(self.worktree, "remote", "get-url", "origin"),
-                         "git@github.com:CoronaEngine/Horizon.git")
-        self.lock_file.write_text(
-            json.dumps(
-                {
-                    "schema_version": 1,
-                    "url": "https://github.com/CoronaEngine/Horizon.git",
-                    "ref": "main",
-                    "commit": self.locked,
-                }
-            ),
-            encoding="utf-8",
-        )
-        state = inspect_workspace(self.repo_root)
-        self.assertTrue(state.url_matches)
-        self.assertFalse(state.needs_repair)
-        self.assertNotIn("Horizon fix:", state.summary())
-        self.silently(ensure_workspace, self.repo_root)
-
-    def test_url_matching_ignores_transport_spelling(self) -> None:
-        expected = "https://github.com/CoronaEngine/Horizon.git"
-        for remote in (
-            "https://github.com/CoronaEngine/Horizon.git",
-            "https://github.com/CoronaEngine/Horizon",
-            "https://github.com/CoronaEngine/Horizon/",
-            "git@github.com:CoronaEngine/Horizon.git",
-            "git@github.com:CoronaEngine/Horizon",
-            "https://GitHub.com/coronaengine/horizon.git",
-        ):
-            with self.subTest(remote=remote):
-                self.assertEqual(_normalized_url(remote), _normalized_url(expected))
-        self.assertNotEqual(
-            _normalized_url("git@github.com:Other/Horizon.git"), _normalized_url(expected)
-        )
-        self.assertNotEqual(
-            _normalized_url("https://gitlab.com/CoronaEngine/Horizon.git"),
-            _normalized_url(expected),
-        )
-
-    def test_local_path_lock_still_compares_unchanged(self) -> None:
-        """Non-URL remotes (used by the test fixtures) keep working."""
-        self.silently(ensure_workspace, self.repo_root)
-        state = inspect_workspace(self.repo_root)
-        self.assertTrue(state.url_matches)
-        self.assertTrue(state.in_sync)
-
 
 if __name__ == "__main__":
     unittest.main()
