@@ -262,8 +262,8 @@ void DielectricLobe::prepare() noexcept {
 }
 
 Uint DielectricLobe::select_lut(const vision::SampledSpectrum &eta) noexcept {
-    Uint idx = MaterialLut::instance().get_index(lut_name).hv();
-    Uint inv_idx = MaterialLut::instance().get_index(lut_inv_name).hv();
+    Uint idx = MaterialLut::instance().get_index(lut_name).as_parameter();
+    Uint inv_idx = MaterialLut::instance().get_index(lut_inv_name).as_parameter();
     Uint index = ocarina::select(eta[0] > 1, idx, inv_idx);
     return index;
 }
@@ -736,4 +736,47 @@ void PureReflectionLobe::prepare() {
 }
 ///#endregion
 
+void Lobe::reuse_material(SampledSpectrum &diffuse, SampledSpectrum &specular,
+                          Float2 &roughness) const noexcept {
+    const auto reflectance = albedo(1.f);
+    Bool glossy = BxDFFlag::is_glossy(flag()) | BxDFFlag::is_specular(flag());
+    specular = reflectance * ocarina::select(glossy, 1.f, 0.f);
+    diffuse = reflectance * ocarina::select(glossy, 0.f, 1.f);
+    roughness = make_float2(1.f);
+}
+
+void MicrofacetLobe::reuse_material(SampledSpectrum &diffuse, SampledSpectrum &specular,
+                                    Float2 &roughness) const noexcept {
+    diffuse = SampledSpectrum::zero(swl()->dimension());
+    specular = albedo(1.f);
+    roughness = sqrt(make_float2(bxdf()->alpha_x(), bxdf()->alpha_y()));
+}
+
+void DielectricLobe::reuse_material(SampledSpectrum &diffuse, SampledSpectrum &specular,
+                                    Float2 &roughness) const noexcept {
+    // Keep transmission/body color separate from F0. Their sum is always one
+    // for white glass and would hide different interface reflectivities.
+    specular = fresnel_->evaluate(1.f);
+    diffuse = kt_ * (1.f - specular);
+    roughness = sqrt(make_float2(microfacet_->alpha_x(), microfacet_->alpha_y()));
+}
+
+void LobeSet::reuse_material(SampledSpectrum &diffuse, SampledSpectrum &specular,
+                             Float2 &roughness) const noexcept {
+    diffuse = specular = SampledSpectrum::zero(swl()->dimension());
+    Float2 weighted_roughness = make_float2(0.f);
+    Float weight_sum = 0.f;
+    for_each([&](const WeightedLobe &lobe) {
+        SampledSpectrum d{swl()->dimension()}, s{swl()->dimension()};
+        Float2 r;
+        lobe->reuse_material(d, s, r);
+        diffuse += d * lobe.weight();
+        specular += s * lobe.weight();
+        Float weight = max(s.average() * lobe.weight(), 0.f);
+        weighted_roughness += r * weight;
+        weight_sum += weight;
+    });
+    roughness = ocarina::select(weight_sum > 0.f,
+        weighted_roughness / max(weight_sum, 1e-6f), make_float2(1.f));
+}
 }// namespace vision

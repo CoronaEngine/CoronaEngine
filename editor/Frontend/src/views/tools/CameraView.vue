@@ -58,6 +58,16 @@
         />
         <span>SVGF</span>
       </label>
+      <label class="vision-setting no-drag" title="ReSTIR Stable Plane">
+        <input
+          type="checkbox"
+          aria-label="Stable Plane"
+          :checked="visionStablePlanes"
+          :disabled="backend !== 'vision' || visionRenderMode !== 'restir' || visionStablePlanesBusy || !camera || !cameraId"
+          @change="toggleVisionStablePlanes"
+        />
+        <span>Stable Plane</span>
+      </label>
       <div class="dropdown no-drag">
         <button
           class="control dropdown-trigger"
@@ -108,6 +118,12 @@
       <button class="window-action maximize no-drag" aria-label="Toggle camera window fullscreen" @click="cycleWindowMode">[]</button>
       <button class="window-action close no-drag" aria-label="Close camera view" @click="closeView">x</button>
     </header>
+    <FrameTimingOverlay
+      :scene-id="sceneId"
+      :camera-id="cameraId"
+      :enabled="backend === 'vision'"
+      :render-mode="visionRenderMode"
+    />
     <div class="ui-mode-switch no-drag" @mousedown.stop @pointerdown.stop>
       <button
         v-for="item in viewportUiModeItems"
@@ -161,6 +177,7 @@
 </template>
 
 <script setup>
+import FrameTimingOverlay from '@/components/ui/FrameTimingOverlay.vue';
 import { nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
 import { useRoute } from 'vue-router';
 import { editorApi } from '@/api/editorApi.js';
@@ -168,7 +185,7 @@ import { appService } from '@/services/appService.js';
 import { buildDragRegions, dragRegionsSignature } from '@/utils/cameraDragRegions.js';
 import { coronaEventBus } from '@/utils/eventBus.js';
 import {
-  normalizeVisionRenderMode, visionAccumulationFromCamera, visionDenoiseFromCamera, visionRenderModes,
+  normalizeVisionRenderMode, visionAccumulationFromCamera, visionDenoiseFromCamera, visionStablePlanesFromCamera, visionRenderModes,
 } from '@/utils/visionRenderModes.js';
 import { createViewportPickController, indexActorsByHandle } from '@/utils/viewportPick.js';
 import {
@@ -194,6 +211,9 @@ const visionAccumulation = ref(false);
 const visionAccumulationBusy = ref(false);
 const visionDenoise = ref(false);
 const visionDenoiseBusy = ref(false);
+const visionStablePlanes = ref(true);
+const visionStablePlanesBusy = ref(false);
+let pendingStablePlanesSelection = null;
 const outputMode = ref('final_color');
 const shadowCascadeDebug = ref(false);
 const ssaoEnabled = ref(true);
@@ -264,10 +284,18 @@ const loadCamera = async () => {
   backend.value = camera.value.render_backend || 'native';
   visionAccumulation.value = visionAccumulationFromCamera(camera.value);
   visionDenoise.value = visionDenoiseFromCamera(camera.value);
+  const snapshotStablePlanes = visionStablePlanesFromCamera(camera.value);
+  if (pendingStablePlanesSelection) {
+    visionStablePlanes.value = pendingStablePlanesSelection.enabled;
+    if (snapshotStablePlanes === pendingStablePlanesSelection.enabled) pendingStablePlanesSelection = null;
+  } else {
+    visionStablePlanes.value = snapshotStablePlanes;
+  }
   visionRenderMode.value = normalizeVisionRenderMode(camera.value.vision_render_mode);
   camera.value.vision_render_mode = visionRenderMode.value;
   camera.value.vision_accumulation = visionAccumulation.value;
   camera.value.vision_denoise = visionDenoise.value;
+  camera.value.vision_stable_planes = visionStablePlanes.value;
   outputMode.value = backend.value === 'vision'
     ? 'final_color'
     : camera.value.output_mode || 'final_color';
@@ -379,6 +407,39 @@ const toggleVisionDenoise = async () => {
     return false;
   } finally {
     visionDenoiseBusy.value = false;
+  }
+};
+
+const toggleVisionStablePlanes = async () => {
+  if (backend.value !== 'vision' || visionRenderMode.value !== 'restir'
+    || visionStablePlanesBusy.value || !camera.value || !cameraId) return false;
+  const previous = visionStablePlanes.value;
+  const previousSelection = pendingStablePlanesSelection;
+  const selection = { enabled: !previous };
+  const isCurrent = () => String(camera.value?.camera_id || camera.value?.id || '') === cameraId;
+  pendingStablePlanesSelection = selection;
+  visionStablePlanesBusy.value = true;
+  visionStablePlanes.value = selection.enabled;
+  errorText.value = '';
+  try {
+    const result = unwrap(await editorApi.sceneTools.setVisionStablePlanes(sceneId, cameraId, selection.enabled));
+    if (isCurrent()) {
+      selection.enabled = result?.pending || typeof result?.enabled !== 'boolean'
+        ? selection.enabled : result.enabled;
+      visionStablePlanes.value = selection.enabled;
+      camera.value.vision_stable_planes = selection.enabled;
+    }
+    return true;
+  } catch (error) {
+    if (isCurrent()) {
+      pendingStablePlanesSelection = previousSelection;
+      visionStablePlanes.value = previous;
+      camera.value.vision_stable_planes = previous;
+      errorText.value = error.message;
+    }
+    return false;
+  } finally {
+    visionStablePlanesBusy.value = false;
   }
 };
 

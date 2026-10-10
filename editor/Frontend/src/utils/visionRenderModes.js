@@ -21,3 +21,10 @@ export const visionDenoiseFromCamera = (camera) => {
   if (enabled === 'false') return false;
   return camera?.vision_render_mode === 'svgf';
 };
+
+export const visionStablePlanesFromCamera = (camera) => {
+  const enabled = camera?.vision_stable_planes;
+  if (typeof enabled === 'boolean') return enabled;
+  if (enabled === 'false') return false;
+  return true;
+};

@@ -38,6 +38,11 @@ struct RealTimeDenoiseInput {
     BufferView<TriangleHit> visibility;
     BufferView<TriangleHit> prev_visibility;
 
+    // Optional single-plane reflection guides. Primary visibility remains intact.
+    bool use_stable_planes{false};
+    BufferView<SurfaceData> stable_surfaces;
+    BufferView<SurfaceData> prev_stable_surfaces;
+
     /// Camera positions for depth calculation from visibility buffer
     array_float3 camera_pos{};
     array_float3 prev_camera_pos{};

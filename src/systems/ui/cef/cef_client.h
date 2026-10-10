@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 // CEF headers
 #include <include/cef_app.h>
@@ -19,6 +19,10 @@
 namespace Corona::Systems::UI {
 
 struct BrowserTab;  // 前向声明
+
+// Applies the DevTools port policy (see cef_osr_mode.h) to CEF settings. Split out of
+// initialize_cef() so the policy-to-settings wiring stays unit-testable.
+void apply_remote_debugging_port(CefSettings& settings);
 
 // ============================================================================
 // 离屏渲染处理器

@@ -1,0 +1,12 @@
+{
+  "description": "Kitchen default camera, ReSTIR + SVGF without framebuffer accumulation. Warm up, rotate both ways, then stop. At 1280x720, frame 80 radio ROI is 520,394,550,418. For residual bands excluding dial and silhouette, measure band_rmse in 523,405,534,414; at 1920x1080 use 785,608,801,621. Compare with independently accumulated PT at the saved camera pose using check_svgf_dark_edges.py. Also inspect reversal and stopping frames for history trails.",
+  "keyframes": [
+    {"frame": 0, "delta_yaw": 0},
+    {"frame": 64, "delta_yaw": 0},
+    {"frame": 96, "delta_yaw": 4},
+    {"frame": 128, "delta_yaw": -4},
+    {"frame": 160, "delta_yaw": 0},
+    {"frame": 192, "delta_yaw": 0}
+  ],
+  "save_frames": [63, 70, 80, 90, 96, 106, 116, 126, 138, 150, 160, 192]
+}

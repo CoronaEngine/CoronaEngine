@@ -73,6 +73,13 @@ public:
         return &specular_->swl();
     }
 
+    void reuse_material(SampledSpectrum &diffuse, SampledSpectrum &specular,
+                        Float2 &roughness) const noexcept override {
+        diffuse = diffuse_albedo_ * avg_transmittance_;
+        specular = fresnel_->evaluate(1.f);
+        roughness = sqrt(make_float2(specular_->alpha_x(), specular_->alpha_y()));
+    }
+
     [[nodiscard]] Float diffuse_factor() const noexcept override {
         return 1.f - fresnel_->evaluate(1.f).average();
     }

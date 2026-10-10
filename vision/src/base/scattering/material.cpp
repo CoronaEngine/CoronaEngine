@@ -111,6 +111,13 @@ BSDFSample MaterialEvaluator::sample_delta_local(const Float3 &wo,
     return ret;
 }
 
+Bool MaterialEvaluator::supports_stable_reflection(const Float3 &world_wo) const noexcept {
+    const Float3 wo = shading_frame_.to_local(world_wo);
+    Bool supported = false;
+    dispatch([&](const Lobe *lobe) { supported = lobe->supports_stable_reflection(wo); });
+    return supported;
+}
+
 void MaterialEvaluator::regularize() noexcept {
     dispatch([&](Lobe *lobe_set) {
         lobe_set->regularize();
@@ -185,6 +192,11 @@ void MaterialEvaluator::albedo_split(const Float3 &world_wo, SampledSpectrum &di
     });
     diffuse = d;
     specular = s;
+}
+
+void MaterialEvaluator::reuse_material(SampledSpectrum &diffuse, SampledSpectrum &specular,
+                                       Float2 &roughness) const noexcept {
+    dispatch([&](const Lobe *root) { root->reuse_material(diffuse, specular, roughness); });
 }
 
 Bool MaterialEvaluator::splittable() const noexcept {

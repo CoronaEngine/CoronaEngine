@@ -18,7 +18,8 @@ enum Dimension {
     ReSTIR_combine,
     ReSTIRGI_init,
     ReSTIRGI_temporal,
-    ReSTIRGI_spatial
+    ReSTIRGI_spatial,
+    Camera
 };
 
 class Sampler : public Node, public GUIRenderable {

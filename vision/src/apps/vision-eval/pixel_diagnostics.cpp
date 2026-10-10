@@ -34,13 +34,16 @@ void save_pixel_diagnostics(Pipeline &pipeline) {
         if (!out) throw std::runtime_error("pixel diagnostic write failed");
     };
     vector<float4> visibility(count), shaded(count), normals(count), positions(count);
+    vector<uint> stable_branches(count);
     for (uint i = 0; i < count; ++i) {
         visibility[i] = make_float4(float(hits[i].inst_id), float(hits[i].prim_id), hits[i].bary.x, hits[i].bary.y);
         const auto &s = surfaces[i];
         shaded[i] = make_float4(float(s.hit.inst_id), float(s.hit.prim_id), float(s.is_replaced), float(s.flag));
         normals[i] = s.normal_depth;
         positions[i] = s.pos_diff;
+        stable_branches[i] = s.stable_branch;
     }
+    write("stable_branch.u32", stable_branches);
     write("visibility.f32", visibility); write("shaded.f32", shaded);
     write("normal_depth.f32", normals); write("position.f32", positions); write("motion.f32", motion);
     auto *illumination = dynamic_cast<IlluminationIntegrator *>(pipeline.renderer().integrator().get());

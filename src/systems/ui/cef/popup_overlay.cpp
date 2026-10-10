@@ -32,12 +32,9 @@ void PopupOverlay::update_pixels(const void* bgra, int width, int height) {
     const std::size_t pixel_count = static_cast<std::size_t>(width) * static_cast<std::size_t>(height);
     pixels_.resize(pixel_count * kChannels);
 
-    for (std::size_t i = 0; i < pixel_count; ++i) {
-        pixels_[i * kChannels + 0] = src[i * kChannels + 2];
-        pixels_[i * kChannels + 1] = src[i * kChannels + 1];
-        pixels_[i * kChannels + 2] = src[i * kChannels + 0];
-        pixels_[i * kChannels + 3] = src[i * kChannels + 3];
-    }
+    // 管线全程 BGRA（浏览器纹理声明为 SBGRA8_UNORM）：这里只做搬运，**不要**转成 RGBA，
+    // 否则 composite_over() 把这些像素 memcpy 进同为 BGRA 的 view 缓冲后颜色会对调。
+    std::memcpy(pixels_.data(), src, pixel_count * kChannels);
 
     width_ = width;
     height_ = height;

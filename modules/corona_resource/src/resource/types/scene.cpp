@@ -273,6 +273,12 @@ std::uint32_t Scene::add_mesh(MeshData&& mesh) {
     return mesh_index;
 }
 
+std::uint32_t Scene::add_mesh_instance(MeshInstanceData instance) {
+    auto instance_index = static_cast<std::uint32_t>(data.mesh_instances.size());
+    data.mesh_instances.push_back(std::move(instance));
+    return instance_index;
+}
+
 SceneParser::SceneParser() {
     register_extension(".usd", [this](const auto& path, ResourceCache& cache) { return parse_assimp(path); });
     register_extension(".usda", [this](const auto& path, ResourceCache& cache) { return parse_assimp(path); });
@@ -312,10 +318,12 @@ std::shared_ptr<IResource> SceneParser::parse_assimp(const std::filesystem::path
     // 注意：u8string() 返回的类型在 C++17 是 std::string，在 C++20 是 std::u8string
     auto path_u8 = path.u8string();
     std::string path_str(reinterpret_cast<const char*>(path_u8.data()), path_u8.size());
+    // Assimp 5.4.3 的 ValidateDataStructure 会误判合法的 KHR_materials_specular：
+    // 只有 specularColorTexture（slot 1）而没有 specularTexture（slot 0）时会拒绝模型。
+    // 该槽位不参与本引擎的实际材质解析，因此不要启用结构校验。
     const aiScene* ai_scene = importer.ReadFile(
         path_str,
         aiProcess_Triangulate |
-            aiProcess_ValidateDataStructure |
             aiProcess_FindDegenerates |
             aiProcess_FindInvalidData |
             aiProcess_RemoveComponent |
@@ -382,10 +390,17 @@ std::shared_ptr<IResource> SceneParser::parse_assimp(const std::filesystem::path
         scene->data.skeleton = std::move(skeleton);
     }
 
+    std::unordered_map<const aiMesh*, MeshOptimizeResult> mesh_optimization_cache;
+    SharedStaticMeshAssetCache shared_static_asset_cache;
+    const bool share_static_instances =
+        !has_skinning && assimp_options.share_static_mesh_instances;
     process_assimp_node(ai_scene->mRootNode, ai_scene, *scene, InvalidIndex, material_map,
                         global_params, initial_transform, assimp_options,
                         has_skinning ? &bone_map : nullptr,
-                        has_skinning ? &bone_counter : nullptr);
+                        has_skinning ? &bone_counter : nullptr,
+                        &mesh_optimization_cache,
+                        share_static_instances,
+                        &shared_static_asset_cache);
 
     // 回填 bone_map / bone_count（节点遍历期间由 extract_bone_weights 填充）
     if (has_skinning && scene->data.skeleton.has_value()) {
@@ -548,14 +563,42 @@ AABB Scene::get_scene_aabb() const {
     std::array<float, 3> scene_min = {FLT_MAX, FLT_MAX, FLT_MAX};
     std::array<float, 3> scene_max = {-FLT_MAX, -FLT_MAX, -FLT_MAX};
 
-    for (const auto& mesh : data.meshes) {
-        scene_min[0] = std::min(scene_min[0], mesh.aabb_min[0]);
-        scene_min[1] = std::min(scene_min[1], mesh.aabb_min[1]);
-        scene_min[2] = std::min(scene_min[2], mesh.aabb_min[2]);
+    auto include_transformed_mesh = [&](const MeshData& mesh,
+                                        const std::array<float, 16>& matrix) {
+        const float xs[2] = {mesh.aabb_min[0], mesh.aabb_max[0]};
+        const float ys[2] = {mesh.aabb_min[1], mesh.aabb_max[1]};
+        const float zs[2] = {mesh.aabb_min[2], mesh.aabb_max[2]};
+        for (float x : xs) {
+            for (float y : ys) {
+                for (float z : zs) {
+                    const float tx = matrix[0] * x + matrix[4] * y + matrix[8] * z + matrix[12];
+                    const float ty = matrix[1] * x + matrix[5] * y + matrix[9] * z + matrix[13];
+                    const float tz = matrix[2] * x + matrix[6] * y + matrix[10] * z + matrix[14];
+                    scene_min[0] = std::min(scene_min[0], tx);
+                    scene_min[1] = std::min(scene_min[1], ty);
+                    scene_min[2] = std::min(scene_min[2], tz);
+                    scene_max[0] = std::max(scene_max[0], tx);
+                    scene_max[1] = std::max(scene_max[1], ty);
+                    scene_max[2] = std::max(scene_max[2], tz);
+                }
+            }
+        }
+    };
 
-        scene_max[0] = std::max(scene_max[0], mesh.aabb_max[0]);
-        scene_max[1] = std::max(scene_max[1], mesh.aabb_max[1]);
-        scene_max[2] = std::max(scene_max[2], mesh.aabb_max[2]);
+    if (!data.mesh_instances.empty()) {
+        for (const auto& instance : data.mesh_instances) {
+            if (instance.mesh_index >= data.meshes.size()) continue;
+            include_transformed_mesh(data.meshes[instance.mesh_index], instance.transform);
+        }
+    } else {
+        const std::array<float, 16> identity{
+            1.0f, 0.0f, 0.0f, 0.0f,
+            0.0f, 1.0f, 0.0f, 0.0f,
+            0.0f, 0.0f, 1.0f, 0.0f,
+            0.0f, 0.0f, 0.0f, 1.0f};
+        for (const auto& mesh : data.meshes) {
+            include_transformed_mesh(mesh, identity);
+        }
     }
 
     return AABB{scene_min, scene_max};

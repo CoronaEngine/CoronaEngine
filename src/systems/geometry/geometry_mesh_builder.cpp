@@ -24,6 +24,16 @@ namespace Corona::Systems {
 
 namespace {
 
+[[nodiscard]] ktm::fmat4x4 to_ktm_matrix(const std::array<float, 16>& src) {
+    ktm::fmat4x4 dst = ktm::fmat4x4::from_eye();
+    for (int col = 0; col < 4; ++col) {
+        for (int row = 0; row < 4; ++row) {
+            dst[col][row] = src[static_cast<std::size_t>(col * 4 + row)];
+        }
+    }
+    return dst;
+}
+
 template <typename T>
 Horizon::HardwareBuffer make_geometry_buffer(const std::vector<T>& data,
                                              Horizon::BufferUsageFlags usage,
@@ -362,6 +372,37 @@ std::vector<MeshDevice> build_mesh_devices_from_scene(
     }
 
     return mesh_devices;
+}
+
+SceneGpuMeshData build_gpu_mesh_data_from_scene(
+    const Resource::Scene& scene) {
+    SceneGpuMeshData result;
+    result.mesh_devices = build_mesh_devices_from_scene(scene);
+
+    if (!scene.data.mesh_instances.empty()) {
+        result.mesh_instances.reserve(scene.data.mesh_instances.size());
+        for (const auto& instance : scene.data.mesh_instances) {
+            if (instance.mesh_index >= result.mesh_devices.size()) {
+                continue;
+            }
+            MeshInstanceDevice gpu_instance;
+            gpu_instance.mesh_index = instance.mesh_index;
+            gpu_instance.object_id = instance.object_id;
+            gpu_instance.transform = to_ktm_matrix(instance.transform);
+            result.mesh_instances.push_back(gpu_instance);
+        }
+    }
+
+    if (result.mesh_instances.empty()) {
+        result.mesh_instances.reserve(result.mesh_devices.size());
+        for (std::uint32_t i = 0; i < static_cast<std::uint32_t>(result.mesh_devices.size()); ++i) {
+            MeshInstanceDevice gpu_instance;
+            gpu_instance.mesh_index = i;
+            result.mesh_instances.push_back(gpu_instance);
+        }
+    }
+
+    return result;
 }
 
 }  // namespace Corona::Systems

@@ -187,7 +187,9 @@ void FrameBuffer::compile_compute_geom() noexcept {
         render_env.initial(sampler, frame_index, spectrum());
         Uint2 pixel = dispatch_idx().xy();
         sampler->load_data();
-        sampler->set_seed(make_uint2(0, 0), frame_index, 0);
+        // Independent subpixel phases break the regular lattice that aliases
+        // fine geometry into coherent bands. This ray also owns the guides.
+        sampler->set_seed(pixel, frame_index, Dimension::Camera);
         camera->load_data();
 
         SensorSample ss = sampler->sensor_sample(pixel, camera->filter(), param.camera_jitter != 0u);

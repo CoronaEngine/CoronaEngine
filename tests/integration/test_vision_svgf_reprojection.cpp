@@ -1,4 +1,4 @@
-// Keep the renderer DSL headers separate from Corona's host math headers.
+﻿// Keep the renderer DSL headers separate from Corona's host math headers.
 #define VISION_PLUGIN_NAME "SVGF"
 #define VISION_CATEGORY "denoiser"
 #include "render_core/denoiser/SVGF/svgf.h"
@@ -175,6 +175,35 @@ void check_svgf_spatial_bypass(vision::Pipeline& pipeline) {
     for (auto& hit : geometry) hit.inst_id = InvalidUI32;
     geometry[edge_pixel] = receiver_hit;
     pipeline.stream() << current_visibility.upload(geometry.data()) << synchronize() << commit();
+    // Irregular samples preserve constants after normalization; a single
+    // sample no longer represents exactly one pixel of integrated area.
+    // Read actual film positions and independently reconstruct its footprint.
+    auto* camera = pipeline.scene().sensor().get();
+    auto* film_sampler = pipeline.renderer().sampler().get();
+    Kernel film_positions = [&](BufferVar<float2> output) {
+        camera->load_data();
+        film_sampler->load_data();
+        Uint2 pixel = dispatch_idx().xy();
+        film_sampler->set_seed(pixel, 0u, Dimension::Camera);
+        Float2 offset = camera->filter()->sample(film_sampler->next_2d()).p;
+        output.write(pixel.y * 16u + pixel.x, make_float2(pixel) + offset);
+    };
+    auto positions_shader = pipeline.device().compile(film_positions, "coverage_film_positions");
+    auto positions_buffer = pipeline.device().create_buffer<float2>(count, "coverage_film_positions");
+    std::vector<float2> positions(count);
+    pipeline.stream() << positions_shader(positions_buffer).dispatch(input.resolution)
+        << positions_buffer.download(positions.data()) << synchronize() << commit();
+    std::vector<float> expected_coverage(count, 0.f);
+    for (uint i = 0; i < count; ++i) {
+        float weight_sum = 0.f, feature_weight = 0.f;
+        for (uint j = 0; j < count; ++j) {
+            const float weight = std::max(0.f, 1.f - std::abs(positions[j].x - float(i % 16u))) *
+                                 std::max(0.f, 1.f - std::abs(positions[j].y - float(i / 16u)));
+            weight_sum += weight;
+            if (j == edge_pixel) feature_weight = weight;
+        }
+        expected_coverage[i] = feature_weight / std::max(weight_sum, 1e-6f);
+    }
     auto isolated_coverage = [&](bool invert) {
         for (uint i = 0; i < count; ++i) {
             float value = i == edge_pixel ? 0.f : 1.f;
@@ -184,18 +213,16 @@ void check_svgf_spatial_bypass(vision::Pipeline& pipeline) {
         input.frame_index = 0u; // no temporal information is available
         pipeline.stream() << direct.upload(samples.data()) << indirect.upload(samples.data())
             << denoiser->dispatch(input) << direct.download(samples.data()) << synchronize() << commit();
-        double impulse_energy = 0.0;
         for (uint i = 0; i < count; ++i) {
             const float contribution = invert ? float(samples[i].x) : 1.f - float(samples[i].x);
             if (!std::isfinite(contribution))
                 throw std::runtime_error("coverage reconstruction must remain finite");
-            impulse_energy += contribution;
+            if (std::abs(contribution - expected_coverage[i]) > 1e-4f)
+                throw std::runtime_error("coverage must match normalized reconstruction at actual film positions");
             if ((std::abs(int(i % 16u) - 8) > 1 || std::abs(int(i / 16u) - 8) > 1) &&
                 std::abs(contribution) > 1e-6f)
                 throw std::runtime_error("coverage reconstruction must not spread a subpixel feature beyond its one-pixel footprint");
         }
-        if (std::abs(impulse_energy - 1.0) > 1e-4)
-            throw std::runtime_error("coverage reconstruction must conserve the isolated feature's integrated energy");
         return float(samples[edge_pixel].x);
     };
     const float dark_coverage = isolated_coverage(false);
@@ -458,11 +485,13 @@ void check_camera_dolly_reprojection(vision::Pipeline& pipeline) {
 
     // The sensor's FOV spans the shorter dimension. Swapping width/height
     // must not change the angular response at the same surface point.
+    // Center the 0.4-unit translation about the triangle so the entire
+    // independently jittered center-pixel footprint stays inside its edges.
     float landscape_history = 0.f;
     for (bool portrait : {false, true}) {
         pipeline.change_resolution(portrait ? vision::make_uint2(16u, 24u)
                                             : vision::make_uint2(24u, 16u));
-        sensor->set_position(vision::make_float3(0.f, 0.f, 3.f));
+        sensor->set_position(vision::make_float3(-0.2f, 0.f, 3.f));
         sensor->set_yaw(0.f);
         sensor->update_device_data();
         pipeline.invalidate();
@@ -470,7 +499,7 @@ void check_camera_dolly_reprojection(vision::Pipeline& pipeline) {
             pipeline.upload_data();
             pipeline.display(1.0 / 60.0);
         }
-        sensor->set_position(vision::make_float3(0.4f, 0.f, 3.f));
+        sensor->set_position(vision::make_float3(0.2f, 0.f, 3.f));
         sensor->update_device_data();
         pipeline.upload_data();
         pipeline.display(1.0 / 60.0);
@@ -580,9 +609,10 @@ void check_svgf_restir_motion_history(vision::Pipeline& pipeline) {
         throw std::runtime_error("moving thin surfaces must recover consistent nearby history when bilinear taps miss");
     std::cout << "PASS: ReSTIR SVGF preserves rotation history and rejects parallax/disocclusion\n";
 
-    // A linear world-space signal has an exact bilinear reconstruction on this
-    // planar fixture. Even with a stationary camera, the two visibility grids
-    // have different film jitter; treating them as the same grid shifts history.
+    // Raw histories live at irregular film samples. Use projected GPU hit
+    // positions as an independent CPU interpolation oracle; unlike a regular
+    // bilinear grid, normalized irregular tent weights need not reproduce a
+    // linear signal exactly. They must still preserve a constant signal.
     sensor->set_position(make_float3(0.f, 0.f, 3.f));
     sensor->set_yaw(0.f);
     sensor->update_device_data();
@@ -602,13 +632,16 @@ void check_svgf_restir_motion_history(vision::Pipeline& pipeline) {
     input.camera_pos = input.prev_camera_pos = {0.f, 0.f, 3.f};
     Global::SceneGpuContextScope scope{pipeline.geometry().bindless_array(), pipeline.device()};
     Kernel linear_signal = [&](BufferVar<TriangleHit> visible, BufferVar<float4> output) {
+        sensor->load_data();
         auto hit = visible.read(dispatch_id());
         Float value = 0.f;
+        Float2 film = make_float2(0.f);
         $if(hit->is_hit()) {
             auto it = pipeline.geometry().compute_surface_interaction(hit, false);
             value = 2.f + 0.1f * it.pos.x + 0.07f * it.pos.y;
+            film = sensor->raster_coord(it.pos).xy();
         };
-        output.write(dispatch_id(), make_float4(value));
+        output.write(dispatch_id(), make_float4(value, film, ocarina::select(hit->is_hit(), 1.f, 0.f)));
     };
     auto signal_shader = pipeline.device().compile(linear_signal, "svgf_jitter_linear_signal");
     auto signal_output = pipeline.device().create_buffer<float4>(count, "svgf_jitter_signal");
@@ -617,23 +650,32 @@ void check_svgf_restir_motion_history(vision::Pipeline& pipeline) {
         << signal_output.download(previous_signal.data()) << synchronize() << commit();
     pipeline.stream() << signal_shader(input.visibility, signal_output).dispatch(input.resolution)
         << signal_output.download(current_signal.data()) << synchronize() << commit();
-    for (uint i = 0; i < count; ++i) {
-        const float value = previous_signal[i].x;
-        history[i].illumi_direct = history[i].illumi_indirect = RadType4{value, value, value, 0.f};
-        history[i].moments_direct = RadType4{value, value * value, 16.f, 16.f};
-        history[i].moments_indirect = RadType4{value, value * value, 1.f, 1.f};
-        signal[i] = RadType4{0.f, 0.f, 0.f, 1.f};
-    }
     auto &previous_history = (input.frame_index & 1u) ? denoiser->svgf_data : denoiser->svgf_data2;
     auto &current_history = (input.frame_index & 1u) ? denoiser->svgf_data2 : denoiser->svgf_data;
-    pipeline.stream() << previous_history.view().upload(history.data())
-        << direct.upload(signal.data()) << indirect.upload(signal.data())
-        << denoiser->dispatch(input) << current_history.view().download(history.data())
-        << synchronize() << commit();
-    const float expected = current_signal[center].x * (16.f / 17.f);
-    const float actual = float(history[center].illumi_direct.x);
-    std::cout << "Jittered planar history expected=" << expected << " actual=" << actual << '\n';
-    if (!std::isfinite(actual) || std::abs(actual - expected) > 1e-4f)
-        throw std::runtime_error("SVGF point-sampled history must compensate both frames' film jitter");
-    std::cout << "PASS: SVGF reconstructs linear surface history across film jitter\n";
+    for (bool constant : {false, true}) {
+        float weighted = 0.f, weights = 0.f;
+        for (uint i = 0; i < count; ++i) {
+            const float value = constant ? 3.25f : previous_signal[i].x;
+            history[i].illumi_direct = history[i].illumi_indirect = RadType4{value, value, value, 0.f};
+            history[i].moments_direct = RadType4{value, value * value, 16.f, 16.f};
+            history[i].moments_indirect = RadType4{value, value * value, 1.f, 1.f};
+            signal[i] = RadType4{0.f, 0.f, 0.f, 1.f};
+            const float wx = std::max(0.f, 1.f - std::abs(previous_signal[i].y - current_signal[center].y));
+            const float wy = std::max(0.f, 1.f - std::abs(previous_signal[i].z - current_signal[center].z));
+            const float weight = wx * wy * previous_signal[i].w;
+            // Match the production tap acceptance, not its coordinate/RNG code.
+            if (weight > 0.001f) { weighted += value * weight; weights += weight; }
+        }
+        if (weights <= 0.01f) throw std::runtime_error("irregular history fixture has no supported samples");
+        pipeline.stream() << previous_history.view().upload(history.data())
+            << direct.upload(signal.data()) << indirect.upload(signal.data())
+            << denoiser->dispatch(input) << current_history.view().download(history.data())
+            << synchronize() << commit();
+        const float expected = (constant ? 3.25f : weighted / weights) * (16.f / 17.f);
+        const float actual = float(history[center].illumi_direct.x);
+        std::cout << "Irregular planar history constant=" << constant << " expected=" << expected << " actual=" << actual << '\n';
+        if (!std::isfinite(actual) || std::abs(actual - expected) > 1e-4f)
+            throw std::runtime_error("SVGF must interpolate at actual film positions and preserve constants");
+    }
+    std::cout << "PASS: SVGF reconstructs irregular surface history and preserves constants\n";
 }

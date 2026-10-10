@@ -37,12 +37,14 @@ Kernel kernel = [&, pipeline_ref](Var<CombinedAtrousParam> param) {
     Int2 cur_pixel = make_int2(dispatch_idx().xy());
     Uint cur_idx = dispatch_id();
 
-    TriangleHitVar center_hit = param.visibility_buffer.read(cur_idx);
+    StableGeometryGuide center_guide(param, cur_idx, param.visibility_buffer.read(cur_idx));
+    TriangleHitVar center_hit = center_guide.hit;
     RadType4Var direct_center = param.direct_src.read(cur_idx);
     RadType4Var indirect_center = param.indirect_src.read(cur_idx);
 
     $if(!PixelStateUtils::is_sky(center_hit)) {
         Interaction center_it = pipeline_ref->geometry().compute_surface_interaction(center_hit, false);
+        center_guide.apply(center_it);
 
         Float lum_center_direct = HalfSafeUtils::clamp_luminance(luminance(direct_center.xyz()));
         Float lum_center_indirect = HalfSafeUtils::clamp_luminance(luminance(indirect_center.xyz()));
@@ -121,7 +123,8 @@ Kernel kernel = [&, pipeline_ref](Var<CombinedAtrousParam> param) {
                 RadType4Var direct_neighbor = param.direct_src.read(idx);
                 RadType4Var indirect_neighbor = param.indirect_src.read(idx);
 
-                TriangleHitVar neighbor_hit = param.visibility_buffer.read(idx);
+                StableGeometryGuide neighbor_guide(param, idx, param.visibility_buffer.read(idx));
+                TriangleHitVar neighbor_hit = neighbor_guide.hit;
                 Bool neighbor_is_sky = PixelStateUtils::is_sky(neighbor_hit);
 
                 Float boundary_weight = BoundaryUtils::compute_boundary_weight(
@@ -130,6 +133,7 @@ Kernel kernel = [&, pipeline_ref](Var<CombinedAtrousParam> param) {
                 Float w_geo = 0.f;
                 $if(!neighbor_is_sky && boundary_weight > 0.f) {
                     Interaction neighbor_it = pipeline_ref->geometry().compute_surface_interaction(neighbor_hit, false);
+                    neighbor_guide.apply(neighbor_it);
                     w_geo = GeometryWeightUtils::compute_depth_weight(
                         center_it.pos, neighbor_it.pos, center_it.ng, param.z_phi) *
                         GeometryWeightUtils::compute_normal_weight(
@@ -138,7 +142,7 @@ Kernel kernel = [&, pipeline_ref](Var<CombinedAtrousParam> param) {
                             ocarina::select(param.use_shading_normal != 0u,
                                 make_float3(param.svgf_buffer.read(idx).surface_normal.xyz()), neighbor_it.ng), param.n_phi);
                 };
-                w_geo *= boundary_weight;
+                w_geo *= boundary_weight * cast<float>(center_guide.branch == neighbor_guide.branch);
 
                 Float lum_neighbor_direct = HalfSafeUtils::clamp_luminance(luminance(direct_neighbor.xyz()));
                 Float lum_neighbor_indirect = HalfSafeUtils::clamp_luminance(luminance(indirect_neighbor.xyz()));
@@ -225,6 +229,7 @@ Kernel kernel = [&, pipeline_ref](Var<CombinedAtrousParam> param) {
 CommandBatch AtrousFilter::dispatch_combined(vision::RealTimeDenoiseInput &input,
                                          uint step_width, uint iteration, bool use_shading_normal) noexcept {
     CombinedAtrousParam param;
+    bind_stable_planes(param, input);
     param.use_shading_normal = use_shading_normal;
     
     bool read_from_temp = (iteration % 2 == 1);
