@@ -259,23 +259,22 @@ struct IkChain {
     // WeaponAim ：武器挥向，与 LookAt 逻辑相同，末端骨骼为手腕。
     enum class Mode : uint8_t { Contact, FootPlant, LookAt, WeaponAim };
 
+    std::string id;                           // Stable per-instance configuration identity (editor/API).
+    std::string end_bone_name;                // Persisted name; resolved after asynchronous model import.
     int end_node = -1;                        // 末端骨骼节点下标（SkeletonData::nodes）
     int chain_length = 2;                     // 参与求解的关节数（含末端，沿 parent 上溯）
     std::array<float, 3> target{0, 0, 0};     // 目标点（模型空间，与蒙皮网格同空间；solve_ccd 内部会
                                               // 用 inverse(global_inverse) 变换到节点空间求解）
-    float weight = 1.0f;                      // [0,1]：IK 结果与原动画姿态的混合权重
+    float weight = 1.0f;                      // User-controlled maximum influence; never changed by contact/probe.
     int max_iterations = 10;                  // CCD 最大迭代轮数
-    float tolerance = 1e-3f;                  // 末端-目标距离收敛阈值
+    float tolerance = 1e-3f;                  // End-target convergence distance in output model space.
     float damping = 1.0f;                     // [0,1]：每步旋转的衰减系数，<1 压抖动
-    bool enabled = false;                     // 是否参与求解
+    bool enabled = false;                     // User permission; automatic activation lives in runtime.
     Mode mode = Mode::Contact;                // 链语义类型
 
-    // Phase 3 — 碰撞驱动 IK：
-    // contact_driven=true 表示本链的 target/weight 由碰撞系统写入（而非脚本/编辑器固定）。
-    // 每帧 update_skinned_geometry 对 contact_driven=true 且 enabled=true 的链把
-    // weight 按 contact_weight_decay 递减，降到 0 时 enabled=false，
-    // 使碰撞结束后手臂/肢体平滑归回原动画，不会冻住。
-    // contact_driven=false（默认）时 weight 和 enabled 由外部完全控制，行为与旧版相同。
+    // Contact uses collision feedback when true. FootPlant always uses ground queries.
+    // Automatic drivers update runtime only, once per animation frame; configuration
+    // target/weight/enabled remain owned by the caller.
     bool contact_driven = false;              // true=碰撞系统驱动；false=脚本/编辑器控制
     float contact_weight_decay = 2.0f;        // 碰撞结束后 weight 每秒衰减速率（默认 0.5s 归零）
 
@@ -287,6 +286,21 @@ struct IkChain {
     // weight 激活时的上升速率（每秒增量）。0 表示与 contact_weight_decay 相同。
     // FootPlant 建议 8.0f（约 0.13s 升满）；Contact 链通常与衰减速率一致即可。
     float contact_weight_rise = 0.0f;
+
+    float probe_max_drop = 0.5f;               // World-space ground search depth.
+    float foot_height = 0.0f;                  // End-node height above the support surface.
+    float plant_threshold = 0.08f;            // Begin support only near the surface, not during a high swing.
+
+    struct RuntimeState {
+        bool has_target = false;
+        bool grounded = false;
+        bool releasing = false; // Finish fading the old support before acquiring another anchor.
+        float weight = 0.0f;                  // Activation [0,1], multiplied by configuration weight.
+        std::array<float, 3> target{0, 0, 0};  // Valid output-model-space target.
+        std::array<float, 3> normal{0, 1, 0};
+        std::uintptr_t ground_handle = 0;     // 0 denotes the scene's infinite floor.
+        std::array<float, 3> anchor_local{0, 0, 0};
+    } runtime;
 
     // 预留：每关节角度约束（首版不实现，需要时再启用）。
     // std::vector<std::array<float,2>> angle_limits;  // 每关节 [min,max]

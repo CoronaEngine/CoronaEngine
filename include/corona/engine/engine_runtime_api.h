@@ -74,6 +74,8 @@ class Geometry {
     [[nodiscard]] std::size_t get_mesh_count() const;
     [[nodiscard]] std::uint64_t get_model_id() const;
     [[nodiscard]] GeometryRenderStatus get_render_status() const;
+    /// Instance geometry storage handle, also used by editor configuration APIs.
+    [[nodiscard]] std::uintptr_t get_handle() const;
 
    private:
     friend class Mechanics;
@@ -84,7 +86,6 @@ class Geometry {
     Geometry() = default;
 
    protected:
-    [[nodiscard]] std::uintptr_t get_handle() const;
     [[nodiscard]] std::uintptr_t get_transform_handle() const;
     [[nodiscard]] std::uintptr_t get_model_resource_handle() const;
 

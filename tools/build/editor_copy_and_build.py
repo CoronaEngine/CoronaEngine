@@ -182,26 +182,30 @@ def stream_run(cmd: list[str], cwd: Optional[Path] = None, env: Optional[dict] =
 
 
 def maybe_run_npm(frontend_dir: Path, node_dir: Path) -> int:
-    if not frontend_dir.exists():
-        echo(f"[npm-build] Frontend directory not found: {frontend_dir}; skip build")
-        return 0
+    if not frontend_dir.is_dir():
+        echo(f"[npm-build] ERROR: Frontend directory not found: {frontend_dir}")
+        return 1
     npm_cmd = node_dir / ("npm.cmd" if os.name == "nt" else "npm")
-    if not npm_cmd.exists():
-        echo(f"[npm-build] npm not found at: {npm_cmd}; skip build")
-        return 0
+    if not npm_cmd.is_file():
+        echo(f"[npm-build] ERROR: npm executable not found: {npm_cmd}")
+        return 127
     env = os.environ.copy()
     env["PATH"] = str(node_dir) + os.pathsep + env.get("PATH", "")
     # Keep environment unchanged
     echo("[npm-build] Installing dependencies...")
     rc = stream_run([str(npm_cmd), "install"], cwd=frontend_dir, env=env)
     if rc != 0:
-        print(f"CMake Warning: [npm-build] 'npm install' failed (exit code {rc}); continuing without frontend build.", flush=True)
-        return 0
+        print(f"[npm-build] ERROR: 'npm install' failed (exit code {rc}).", flush=True)
+        return rc
     echo("[npm-build] Building frontend...")
     rc = stream_run([str(npm_cmd), "run", "build"], cwd=frontend_dir, env=env)
     if rc != 0:
-        print(f"CMake Warning: [npm-build] 'npm run build' failed (exit code {rc}); continuing without frontend build.", flush=True)
-        return 0
+        print(f"[npm-build] ERROR: 'npm run build' failed (exit code {rc}).", flush=True)
+        return rc
+    frontend_index = frontend_dir / "dist" / "index.html"
+    if not frontend_index.is_file():
+        echo(f"[npm-build] ERROR: Build output is missing or not a file: {frontend_index}")
+        return 1
     echo("[npm-build] Frontend build completed successfully.")
     return 0
 

@@ -1,4 +1,5 @@
 import configparser
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -10,6 +11,35 @@ from runtime.archive.parser import parse_archive
 
 
 class ArchiveParserTests(unittest.TestCase):
+    def test_named_ik_configuration_survives_scene_archive(self):
+        chains = [{"id": "left-foot", "bone_name": "Foot_L", "mode": "foot_plant",
+                   "enabled": False, "weight": 0, "damping": 0, "chain_length": 3,
+                   "probe_max_drop": 0.75, "foot_height": 0.03}]
+        with tempfile.TemporaryDirectory() as temp_dir:
+            scene = Path(temp_dir) / "scene.ini"
+            scene.write_text(
+                "[format]\ntype = corona_scene_folder\nversion = 1\n"
+                "[scene]\nname = IK roundtrip\n[actors]\nhero.name = Hero\n"
+                "hero.actor_guid = hero-guid\nhero.ik.chains = " + json.dumps(chains),
+                encoding="utf-8",
+            )
+            actor = parse_archive(str(scene))["scene"]["actors"][0]
+            self.assertEqual(actor["ik_chains"], chains)
+
+    def test_malformed_ik_configuration_is_rejected(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            scene = Path(temp_dir) / "scene.ini"
+            for invalid in ("{", "{}", "[1]"):
+                scene.write_text(
+                    "[format]\ntype = corona_scene_folder\nversion = 1\n"
+                    "[scene]\nname = IK invalid\n[actors]\nhero.name = Hero\n"
+                    "hero.actor_guid = hero-guid\nhero.ik.chains = " + invalid,
+                    encoding="utf-8",
+                )
+                with self.assertRaises(ArchiveParseError) as raised:
+                    parse_archive(str(scene))
+                self.assertEqual(raised.exception.code, "INVALID_IK_CHAINS")
+
     def test_accumulation_migrates_legacy_mode_with_explicit_flag_priority(self):
         cases = [
             ("path_tracing", None, "true", "path_tracing", False, True),

@@ -18,6 +18,7 @@
 #include <functional>     // std::function（回调）
 #include <limits>         // numeric_limits（SAT）
 #include <memory>         // unique_ptr,make_unique
+#include <set>
 #include <span>           // std::span（蒙皮 write_bytes）
 #include <unordered_map>  // 各 handle→数据 映射
 #include <unordered_set>  // alive_handles
@@ -36,6 +37,7 @@
 
 
 #include "mechanics_internal.h"
+#include "ik_runtime.h"
 
 namespace Corona::Systems {
 
@@ -102,6 +104,11 @@ void MechanicsSystem::update_physics(float fixed_dt) {
     if (impl_->shutdown_requested.load(std::memory_order_acquire)) {
         return;
     }
+
+    // Replace the complete contact sample once per fixed step, including a step
+    // with no contacts or disabled simulation. Animation may read this sample
+    // multiple times between steps; an empty render-frame queue is not separation.
+    impl_->deferred_ik_target_updates.clear();
 
     // 首次调用时懒缓存 GeometrySystem 指针（不在 initialize() 中做，
     // 因为 initialize() 在 SystemManager::initialize_all() 的锁内执行，
@@ -471,14 +478,7 @@ void MechanicsSystem::update_physics(float fixed_dt) {
             tree.build(cit->second.vertices, cit->second);
             impl_->triangle_octree_cache[entry.model_id] = std::move(tree);
 
-            // FootPlant probe 需要世界空间顶点（静态体不移动，只建一次）
-            auto tx_r = transform_storage.try_acquire_read(entry.transform_handle);
-            if (tx_r) {
-                std::vector<ktm::fvec3> wv;
-                wv.reserve(cit->second.vertices.size());
-                transform_vertices_to_world(cit->second.vertices, *tx_r, wv);
-                impl_->static_world_verts_cache[entry.model_id] = std::move(wv);
-            }
+
         }
     }
 
@@ -585,7 +585,9 @@ void MechanicsSystem::update_physics(float fixed_dt) {
         // 冲量迭代内直接读取，不再重复执行相同的几何计算。
         {
             // IK 入队去重集合（同帧各对共用，防止多对接触重复覆盖同一骨骼）
-            std::unordered_set<int> ik_queued_a_global, ik_queued_b_global;
+            std::set<std::pair<std::uintptr_t, int>> ik_queued_nodes;
+            // Model octrees are immutable templates; world refits belong to each instance.
+            std::unordered_map<std::uintptr_t, TriangleOctree> instance_octrees;
             for (std::size_t pair_idx = 0; pair_idx < collision_pairs.size(); ++pair_idx) {
                 if (impl_->shutdown_requested.load(std::memory_order_acquire)) return;
                 const auto& pair = collision_pairs[pair_idx];
@@ -668,8 +670,11 @@ void MechanicsSystem::update_physics(float fixed_dt) {
                 TriangleContactResult tri;
                 if (oa && ob) {
                     auto get_oct_ref = [&](const MechanicsWorldAABB& body) -> TriangleOctree& {
-                        if (!body.is_skinned) return impl_->triangle_octree_cache.at(body.model_id);
-                        return impl_->skinned_octree_cache.at(body.geom_handle);
+                        auto [it, inserted] = instance_octrees.try_emplace(body.handle);
+                        if (inserted) it->second = body.is_skinned
+                            ? impl_->skinned_octree_cache.at(body.geom_handle)
+                            : impl_->triangle_octree_cache.at(body.model_id);
+                        return it->second;
                     };
                     auto get_prev_verts = [&](const MechanicsWorldAABB& body, const CollisionMesh* mesh)
                         -> const std::vector<ktm::fvec3>* {
@@ -709,51 +714,39 @@ void MechanicsSystem::update_physics(float fixed_dt) {
                 rec.penetration  = tri.penetration > 0.0f ? tri.penetration : 0.0f;
                 rec.contact_pt   = tri.contact_point;
 
-                // Phase 3 IK 入队（窄相确认后立即处理，每子步一次）
-                // contact_normal_offset 从对应链的配置中读取（FootPlant=0.0, Contact=0.03）。
-                auto enqueue_ik = [&](bool skinned, std::uintptr_t mh, int tri_idx,
-                                      const MechanicsWorldAABB& body, const ktm::fvec3& contact_normal,
-                                      std::unordered_set<int>& queued_nodes) {
-                    if (!skinned || tri_idx < 0) return;
+                // Keep raw world contacts; each matching chain applies its own offset before CCD.
+                auto enqueue_ik = [&](int tri_idx, const MechanicsWorldAABB& body,
+                                      const ktm::fvec3& contact_normal) {
+                    if (!body.is_skinned || tri_idx < 0) return;
                     auto sit = impl_->skinned_collision_cache.find(body.geom_handle);
                     if (sit == impl_->skinned_collision_cache.end()) return;
                     const auto& sc = sit->second;
                     if (tri_idx >= static_cast<int>(sc.triangle_bone_ids.size())) return;
                     int node = sc.triangle_bone_ids[static_cast<std::size_t>(tri_idx)];
                     if (node < 0) return;
-                    if (!queued_nodes.insert(node).second) return;
-                    std::uintptr_t gh = 0;
-                    { auto m = mechanics_storage.try_acquire_read(mh); if (m) gh = m->geometry_handle; }
+                    const auto gh = body.geom_handle;
                     if (!gh) return;
-                    // 读该骨骼对应链的 contact_normal_offset；无匹配链时用保守默认值 0.03f
-                    // FootPlant 链由地面 probe 驱动，不走碰撞入队，跳过。
-                    float normal_offset = 0.03f;
-                    bool is_foot_plant_node = false;
+                    bool needs_contact = false;
+                    std::uint64_t revision = 0;
                     {
                         auto gr = geometry_storage.try_acquire_read(gh);
                         if (gr) {
+                            revision = gr->ik_chains_revision;
                             for (const auto& ch : gr->ik_chains) {
-                                if (ch.contact_driven && ch.end_node == node) {
-                                    if (ch.mode == Resource::IkChain::Mode::FootPlant) {
-                                        is_foot_plant_node = true;
-                                    } else {
-                                        normal_offset = ch.contact_normal_offset;
-                                    }
+                                if (ch.enabled && ch.weight > 0 && ch.contact_driven &&
+                                    ch.mode != Resource::IkChain::Mode::FootPlant) {
+                                    needs_contact = true;
                                     break;
                                 }
                             }
                         }
                     }
-                    if (is_foot_plant_node) return;  // FootPlant 由 probe 驱动，不入碰撞队
-                    const ktm::fvec3 offset_contact = make_fvec3(
-                        tri.contact_point.x + contact_normal.x * normal_offset,
-                        tri.contact_point.y + contact_normal.y * normal_offset,
-                        tri.contact_point.z + contact_normal.z * normal_offset);
-                    impl_->deferred_ik_target_updates.push_back({gh, body.transform_handle, node, offset_contact});
+                    if (!needs_contact || !ik_queued_nodes.emplace(gh, node).second) return;
+                    impl_->deferred_ik_target_updates.push_back(
+                        {gh, body.transform_handle, node, tri.contact_point, contact_normal, revision});
                 };
-                enqueue_ik(a.is_skinned, ha, tri.best_tri_a, a, tri.normal, ik_queued_a_global);
-                enqueue_ik(b.is_skinned, hb, tri.best_tri_b, b,
-                           make_fvec3(-tri.normal.x, -tri.normal.y, -tri.normal.z), ik_queued_b_global);
+                enqueue_ik(tri.best_tri_a, a, tri.normal);
+                enqueue_ik(tri.best_tri_b, b, make_fvec3(-tri.normal.x, -tri.normal.y, -tri.normal.z));
             }
         }
 
@@ -1612,9 +1605,15 @@ void MechanicsSystem::update_physics(float fixed_dt) {
                             }
                         }
                     }
-                    if (best_bone >= 0)
-                        impl_->deferred_ik_target_updates.push_back(
-                            {data.geom_handle, data.transform_handle, best_bone, contact_world});
+                    if (best_bone >= 0) {
+                        auto geometry = geometry_storage.try_acquire_read(data.geom_handle);
+                        if (geometry && std::any_of(geometry->ik_chains.begin(), geometry->ik_chains.end(),
+                            [](const auto& chain) { return chain.enabled && chain.weight > 0 && chain.contact_driven &&
+                                chain.mode != Resource::IkChain::Mode::FootPlant; })) {
+                            impl_->deferred_ik_target_updates.push_back({data.geom_handle, data.transform_handle,
+                                best_bone, contact_world, make_fvec3(0, 1, 0), geometry->ik_chains_revision});
+                        }
+                    }
                 }
             }
         }
@@ -1726,10 +1725,8 @@ void MechanicsSystem::update_physics(float fixed_dt) {
     }
     impl_->deferred_collision_callbacks.clear();
 
-    // S5：IK target 更新已移到 update_skinned_geometry 末尾执行，
-    // 使本帧物理产生的接触能在同帧蒙皮时被 CCD 消费，消除一帧延迟。
-    // deferred_ik_target_updates 由此处入队，由 update_skinned_geometry 在
-    // 下一次蒙皮开始前（同帧或下帧首）统一 flush。
+    // Contact feedback is consumed before CCD in the next animation update.
+    // Multiple physics substeps are aggregated into one activation update per chain.
 
     // 清理无效句柄的缓存
     std::unordered_set<std::uintptr_t> alive_handles(mechanics_handles.begin(), mechanics_handles.end());
@@ -1740,6 +1737,14 @@ void MechanicsSystem::update_physics(float fixed_dt) {
     for (const auto& data : mechanics_data) {
         if (data.geom_handle) alive_geom_handles.insert(data.geom_handle);
         if (data.transform_handle) alive_transform_handles.insert(data.transform_handle);
+    }
+    // Skin poses also support Foot queries in scenes with simulation disabled.
+    // Their lifetime follows live render geometry, not the physics participant list.
+    for (const auto& geometry : geometry_storage) {
+        if (geometry.is_skinned && geometry.model_resource_handle && !geometry.mesh_handles.empty() &&
+            geometry.gpu_build_state == GeometryDevice::GpuBuildState::Ready) {
+            alive_geom_handles.insert(reinterpret_cast<std::uintptr_t>(&geometry));
+        }
     }
 
     for (auto it = impl_->bodies.begin(); it != impl_->bodies.end();) {
@@ -1754,6 +1759,8 @@ void MechanicsSystem::update_physics(float fixed_dt) {
         if (!alive_geom_handles.count(it->first)) it = impl_->skinned_collision_cache.erase(it);
         else ++it;
     }
+    std::erase_if(impl_->skinned_collision_model_ids,
+                  [&](const auto& item) { return !alive_geom_handles.count(item.first); });
     for (auto it = impl_->prev_skinned_verts_cache.begin(); it != impl_->prev_skinned_verts_cache.end();) {
         if (!alive_geom_handles.count(it->first)) it = impl_->prev_skinned_verts_cache.erase(it);
         else ++it;
@@ -1780,11 +1787,6 @@ void MechanicsSystem::update_physics(float fixed_dt) {
         }
         for (auto it = impl_->triangle_octree_cache.begin(); it != impl_->triangle_octree_cache.end();) {
             if (!alive_model_ids.count(it->first)) it = impl_->triangle_octree_cache.erase(it);
-            else ++it;
-        }
-        // static_world_verts_cache 与 triangle_octree_cache 同步清理
-        for (auto it = impl_->static_world_verts_cache.begin(); it != impl_->static_world_verts_cache.end();) {
-            if (!alive_model_ids.count(it->first)) it = impl_->static_world_verts_cache.erase(it);
             else ++it;
         }
         // collision_mesh_cache 和 static_triangle_index_cache 同样按 model_id 缓存，一并清理
@@ -1858,34 +1860,20 @@ void MechanicsSystem::update_skinned_geometry(float dt) {
     // last_skin_update_time 保留但不再用于计算 dt，仅供外部诊断查询。
     impl_->last_skin_update_time = std::chrono::steady_clock::now();
 
-    // Phase 3：IK target 衰减（contact_driven 链每帧把 weight 减小，碰撞结束后平滑归零）
-    // 在收集 geom_handles 之前处理，避免在遍历 storage 时持锁写 ik_chains。
-    {
-        auto& geom_st = hub.geometry_storage();
-        std::vector<std::uintptr_t> all_geom_handles;
-        for (auto it = geom_st.cbegin(); it != geom_st.cend(); ++it) {
-            all_geom_handles.push_back(reinterpret_cast<std::uintptr_t>(&*it));
-        }
-        for (auto gh : all_geom_handles) {
-            auto gw = geom_st.try_acquire_write(gh);
-            if (!gw) continue;
-            for (auto& chain : gw->ik_chains) {
-                if (!chain.contact_driven || !chain.enabled) continue;
-                chain.weight -= chain.contact_weight_decay * dt;
-                if (chain.weight <= 0.0f) {
-                    chain.weight = 0.0f;
-                    chain.enabled = false;
-                }
-            }
-        }
-    }
-
     // 先收集所有 geometry handle，避免在迭代 storage 期间持锁做重计算
     std::vector<std::uintptr_t> geom_handles;
+    bool needs_ground_queries = false;
     for (auto it = geom_storage.cbegin(); it != geom_storage.cend(); ++it) {
         const GeometryDevice& geom_dev = *it;
         geom_handles.push_back(reinterpret_cast<std::uintptr_t>(&geom_dev));
+        for (const auto& chain : geom_dev.ik_chains)
+            needs_ground_queries |= chain.mode == Resource::IkChain::Mode::FootPlant && chain.enabled && chain.weight > 0;
     }
+    if (needs_ground_queries) refresh_foot_ground_cache();
+    // Retain the latest physics sample across animation frames with zero fixed
+    // steps. Reproject its world targets using the current actor transform below.
+    // The next physics step replaces it (also discarding earlier catch-up samples).
+    const auto& pending_ik_updates = impl_->deferred_ik_target_updates;
 
     for (auto geom_handle : geom_handles) {
         // ---- 第 1 步：读取 model_resource_handle（brief 读锁）----
@@ -1908,10 +1896,11 @@ void MechanicsSystem::update_skinned_geometry(float dt) {
         auto scene_read = resource_manager.acquire_read<Resource::Scene>(model_id);
         if (!scene_read.valid()) continue;
         const Resource::Scene& scene = *scene_read;
-        if (!scene.data.skeleton.has_value() || scene.data.animations.empty()) continue;
+        if (!scene.data.skeleton.has_value()) continue;
 
         const Resource::SkeletonData& skeleton = *scene.data.skeleton;
-        const Resource::AnimationClip& clip = scene.data.animations[0];  // 自动循环第 0 个
+        const Resource::AnimationClip empty_clip;
+        const Resource::AnimationClip& clip = scene.data.animations.empty() ? empty_clip : scene.data.animations[0];
 
         // ---- 第 4 步：brief 写锁推进 anim_time + 拷出 buffer 句柄 ----
         // HardwareBuffer 为引用计数句柄，可拷贝；拷出后锁外做蒙皮+write_bytes。
@@ -1920,7 +1909,8 @@ void MechanicsSystem::update_skinned_geometry(float dt) {
         std::vector<Horizon::HardwareBuffer> vstoragebufs;
         std::size_t mesh_count = 0;
         std::vector<Resource::IkChain> ik_chains;  // 锁外跑 CCD 用（拷出避免持锁）
-        std::uintptr_t fp_transform_handle = 0;   // FootPlant probe 用：model→world 矩阵来源
+        std::uintptr_t ik_transform_handle = 0;
+        std::uint64_t ik_revision = 0;
         {
             auto geom_write = geom_storage.try_acquire_write(geom_handle);
             if (!geom_write) continue;
@@ -1928,8 +1918,14 @@ void MechanicsSystem::update_skinned_geometry(float dt) {
             geom_write->anim_time = Resource::advance_anim_time(geom_write->anim_time, dt, clip);
             anim_time = geom_write->anim_time;
 
-            // ---- 首帧：建立骨骼名→node_idx 缓存（仅一次，后续 register_*_chain 快速查询）----
-            if (geom_write->bone_name_to_node_idx.empty()) {
+            // Build the named-bone cache initially and invalidate it when the model changes.
+            if (geom_write->bone_name_to_node_idx.empty() || geom_write->skeleton_cache_model_id != model_id) {
+                if (geom_write->skeleton_cache_model_id != model_id) {
+                    for (auto& chain : geom_write->ik_chains) chain.runtime = {};
+                    if (geom_write->skeleton_cache_model_id != 0) ++geom_write->ik_chains_revision;
+                }
+                geom_write->bone_name_to_node_idx.clear();
+                geom_write->skeleton_cache_model_id = model_id;
                 for (std::size_t ni = 0; ni < skeleton.nodes.size(); ++ni) {
                     geom_write->bone_name_to_node_idx[skeleton.nodes[ni].name] = static_cast<int>(ni);
                 }
@@ -1942,7 +1938,16 @@ void MechanicsSystem::update_skinned_geometry(float dt) {
                 }
             }
 
-            fp_transform_handle = geom_write->transform_handle;  // FootPlant probe 用
+            for (auto& chain : geom_write->ik_chains) {
+                if (!chain.end_bone_name.empty()) {
+                    const auto node = geom_write->bone_name_to_node_idx.find(chain.end_bone_name);
+                    const int resolved = node == geom_write->bone_name_to_node_idx.end() ? -1 : node->second;
+                    if (chain.end_node != resolved) chain.runtime = {};
+                    chain.end_node = resolved;
+                }
+            }
+            ik_transform_handle = geom_write->transform_handle;
+            ik_revision = geom_write->ik_chains_revision;
             ik_chains = geom_write->ik_chains;  // 拷贝一份 IK 链定义（锁外跑 CCD）
             mesh_count = geom_write->mesh_handles.size();
             vbufs.reserve(mesh_count);
@@ -1970,174 +1975,59 @@ void MechanicsSystem::update_skinned_geometry(float dt) {
             }
         }
 
-        // ---- 第 5 步：锁外计算骨骼最终矩阵（每 geom 一次）----
-        // FootPlant 链（Mode::FootPlant）在 CCD 求解之前先做地面 probe，直接写入 chain.target
-        // 和 chain.weight，然后再走普通的 has_active_ik 路径——同帧 CCD 立即消费 probe 结果。
-        // 其他 contact_driven 链（Contact 模式）靠 deferred_ik_target_updates flush 驱动，不在此处处理。
-        //
-        // FootPlant probe 流程：
-        //   1. 从 working_locals FK 计算末端骨骼世界位置 P（pre-IK 姿态）
-        //   2. 对所有 Static 物体的 triangle_octree_cache 做 query_ground_height
-        //   3. 找到地面高度 → 世界坐标 → 模型空间，写 chain.target / chain.weight
-        //   4. 未找到地面（脚在空中超 max_drop）→ 降 weight，降到 0 则 disabled
-        //
-        // 读取 model→world 矩阵（FootPlant probe 需要把骨骼位置转世界，再把地面高度转模型空间）
-        bool has_foot_plant_chains = false;
-        for (const auto& ch : ik_chains) {
-            if (ch.mode == Resource::IkChain::Mode::FootPlant) { has_foot_plant_chains = true; break; }
-        }
+        // Sample once, then apply automatic drivers before CCD in this same update.
+        std::vector<std::array<float, 16>> working_locals;
+        Resource::sample_pose_locals(skeleton, clip, anim_time, working_locals);
+        update_foot_targets(geom_handle, skeleton, working_locals, ik_chains, dt);
 
-        // working_locals 无论是否有活跃 IK 都提前采样一次，供 FootPlant probe 读取 pre-IK 骨骼位置。
-        // 若没有 FootPlant 链则按原路径懒采样，避免多余开销。
-        std::vector<std::array<float, 16>> working_locals_for_probe;
-        if (has_foot_plant_chains && fp_transform_handle != 0) {
-            Resource::sample_pose_locals(skeleton, clip, anim_time, working_locals_for_probe);
-
-            // 读 model→world 矩阵（brief 读锁）
-            ktm::fmat4x4 model_to_world{};
-            ktm::fmat4x4 world_to_model{};
-            bool have_transform = false;
-            {
-                auto tx_r = hub.model_transform_storage().try_acquire_read(fp_transform_handle);
-                if (tx_r) {
-                    model_to_world = tx_r->compute_matrix();
-                    world_to_model = ktm::inverse(model_to_world);
-                    have_transform = true;
-                }
-            }
-
-            if (have_transform) {
-                constexpr float k_fp_max_drop = 0.5f;  // 向下探测最大距离（米）
-
-                for (auto& ch : ik_chains) {
-                    if (ch.mode != Resource::IkChain::Mode::FootPlant) continue;
-                    if (ch.end_node < 0 || ch.end_node >= static_cast<int>(skeleton.nodes.size())) continue;
-                    if (working_locals_for_probe.size() != skeleton.nodes.size()) continue;
-
-                    // 从 root 到 end_node 累乘 local 得 global（模型空间）
-                    // 复用 compute_global_of 的逻辑（沿 parent 链从根往下累乘）
-                    std::vector<int> path_to_root;
-                    {
-                        int cur = ch.end_node;
-                        const int max_depth = static_cast<int>(skeleton.nodes.size()) + 1;
-                        int guard = 0;
-                        while (cur >= 0 && cur < static_cast<int>(skeleton.nodes.size()) && guard++ < max_depth) {
-                            path_to_root.push_back(cur);
-                            cur = skeleton.nodes[static_cast<std::size_t>(cur)].parent;
-                        }
-                    }
-                    // 从根往下累乘
-                    std::array<float, 16> g{1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1};
-                    for (auto it = path_to_root.rbegin(); it != path_to_root.rend(); ++it) {
-                        const auto& lm = working_locals_for_probe[static_cast<std::size_t>(*it)];
-                        // 列主序 mat4 乘法：g = g * lm
-                        std::array<float, 16> tmp{};
-                        for (int col = 0; col < 4; ++col)
-                            for (int row = 0; row < 4; ++row)
-                                for (int k = 0; k < 4; ++k)
-                                    tmp[col*4+row] += g[k*4+row] * lm[col*4+k];
-                        g = tmp;
-                    }
-                    // g[12..14] = 末端骨骼模型空间位置
-                    const float bone_mx = g[12], bone_my = g[13], bone_mz = g[14];
-
-                    // 模型空间 → 世界空间（bone_world = model_to_world * (bone_m, 1)）
-                    const float bwx = model_to_world[0][0]*bone_mx + model_to_world[1][0]*bone_my
-                                    + model_to_world[2][0]*bone_mz + model_to_world[3][0];
-                    const float bwy = model_to_world[0][1]*bone_mx + model_to_world[1][1]*bone_my
-                                    + model_to_world[2][1]*bone_mz + model_to_world[3][1];
-                    const float bwz = model_to_world[0][2]*bone_mx + model_to_world[1][2]*bone_my
-                                    + model_to_world[2][2]*bone_mz + model_to_world[3][2];
-
-                    const ktm::fvec3 probe = make_fvec3(bwx, bwy, bwz);
-
-                    // 遍历所有 Static 物体的 octree 做地面 probe
-                    float best_ground_y = probe.y - k_fp_max_drop - 1.0f;
-                    bool ground_found = false;
-                    for (const auto& [mid, oct] : impl_->triangle_octree_cache) {
-                        auto wvit = impl_->static_world_verts_cache.find(mid);
-                        if (wvit == impl_->static_world_verts_cache.end()) continue;
-                        auto cmit = impl_->collision_mesh_cache.find(mid);
-                        if (cmit == impl_->collision_mesh_cache.end()) continue;
-                        float gy = 0.0f;
-                        if (oct.query_ground_height(wvit->second, cmit->second, probe, k_fp_max_drop, gy)) {
-                            if (!ground_found || gy > best_ground_y) {
-                                best_ground_y = gy;
-                                ground_found = true;
-                            }
-                        }
-                    }
-
-                    if (ground_found) {
-                        // 地面世界坐标 → 模型空间
-                        const float gx = probe.x, gz = probe.z;
-                        const float tmx = world_to_model[0][0]*gx + world_to_model[1][0]*best_ground_y
-                                        + world_to_model[2][0]*gz + world_to_model[3][0];
-                        const float tmy = world_to_model[0][1]*gx + world_to_model[1][1]*best_ground_y
-                                        + world_to_model[2][1]*gz + world_to_model[3][1];
-                        const float tmz = world_to_model[0][2]*gx + world_to_model[1][2]*best_ground_y
-                                        + world_to_model[2][2]*gz + world_to_model[3][2];
-                        ch.target  = {tmx, tmy, tmz};
-                        ch.enabled = true;
-                        const float rise_rate = (ch.contact_weight_rise > 0.0f)
-                            ? ch.contact_weight_rise : ch.contact_weight_decay;
-                        ch.weight = std::min(ch.weight + rise_rate * dt, 1.0f);
-                    } else {
-                        // 脚在空中：降 weight，降到 0 则关闭
-                        ch.weight -= ch.contact_weight_decay * dt;
-                        if (ch.weight <= 0.0f) { ch.weight = 0.0f; ch.enabled = false; }
-                    }
-                }
+        ktm::fmat4x4 world_to_model{};
+        bool have_transform = false;
+        {
+            auto tx = hub.model_transform_storage().try_acquire_read(ik_transform_handle);
+            if (tx && std::abs(tx->scale.x) > 1e-8f && std::abs(tx->scale.y) > 1e-8f && std::abs(tx->scale.z) > 1e-8f) {
+                world_to_model = ktm::inverse(tx->compute_matrix());
+                have_transform = true;
             }
         }
-
-        // FootPlant 链的 target/weight 已就绪，写回 GeometryDevice（brief 写锁）
-        // 同时把更新后的 ik_chains 拷贝一份供下方 CCD 使用。
-        if (has_foot_plant_chains) {
-            auto gw = geom_storage.try_acquire_write(geom_handle);
-            if (gw) {
-                for (std::size_t ci = 0; ci < ik_chains.size() && ci < gw->ik_chains.size(); ++ci) {
-                    if (ik_chains[ci].mode == Resource::IkChain::Mode::FootPlant) {
-                        gw->ik_chains[ci].target  = ik_chains[ci].target;
-                        gw->ik_chains[ci].weight  = ik_chains[ci].weight;
-                        gw->ik_chains[ci].enabled = ik_chains[ci].enabled;
+        for (auto& chain : ik_chains) {
+            if (chain.mode == Resource::IkChain::Mode::FootPlant || !chain.contact_driven) continue;
+            std::optional<std::array<float, 3>> target;
+            if (have_transform && chain.enabled) {
+                for (const auto& update : pending_ik_updates) {
+                    if (update.geom_handle != geom_handle || update.configuration_revision != ik_revision) continue;
+                    // A contact on any participating joint can drive this chain; leaf
+                    // effectors often have no skin weights of their own.
+                    bool belongs = false;
+                    int node = chain.end_node;
+                    for (int depth = 0; depth < std::min(chain.chain_length, static_cast<int>(skeleton.nodes.size())) &&
+                         node >= 0 && node < static_cast<int>(skeleton.nodes.size()); ++depth) {
+                        if (node == update.node_idx) { belongs = true; break; }
+                        node = skeleton.nodes[static_cast<std::size_t>(node)].parent;
                     }
+                    if (!belongs) continue;
+                    const auto wp = vec3_add(update.contact_world, vec3_mul(update.normal, chain.contact_normal_offset));
+                    target = std::array<float, 3>{
+                        world_to_model[0][0]*wp.x + world_to_model[1][0]*wp.y + world_to_model[2][0]*wp.z + world_to_model[3][0],
+                        world_to_model[0][1]*wp.x + world_to_model[1][1]*wp.y + world_to_model[2][1]*wp.z + world_to_model[3][1],
+                        world_to_model[0][2]*wp.x + world_to_model[1][2]*wp.y + world_to_model[2][2]*wp.z + world_to_model[3][2]};
                 }
-                ik_chains = gw->ik_chains;  // 刷新拷贝（同步非 FootPlant 链可能在别处变化）
             }
+            advance_ik_activation(chain, target, dt);
         }
-
+        {
+            auto geometry = geom_storage.try_acquire_write(geom_handle);
+            if (!geometry || !commit_ik_runtime(geometry->ik_chains, geometry->ik_chains_revision, ik_chains, ik_revision))
+                continue; // UI replaced configuration while we were probing. Retry its new version next frame.
+        }
+        for (const auto& chain : ik_chains) {
+            const auto solver_chain = ik_solver_parameters(chain);
+            if (!solver_chain) continue;
+            std::unordered_map<int, std::array<float, 16>> overrides;
+            Resource::solve_ccd(skeleton, *solver_chain, working_locals, overrides);
+            for (const auto& [node, local] : overrides) working_locals[static_cast<std::size_t>(node)] = local;
+        }
         std::vector<std::array<float, 16>> finals;
-        bool has_active_ik = false;
-        for (const auto& ch : ik_chains) {
-            if (ch.enabled) { has_active_ik = true; break; }
-        }
-        if (has_active_ik) {
-            // working_locals：每条链解完后把结果写回，供下一条链感知前链修改（Bug-2 修复）。
-            // 解完所有链后直接作为 precomputed_locals 传给 compute_pose，避免重复采样（Perf-1 修复）。
-            // FootPlant 链已经在上方通过 working_locals_for_probe 采样过，若存在 FootPlant 链直接复用；
-            // 否则才重新采样（避免二次采样）。
-            std::vector<std::array<float, 16>> working_locals;
-            if (has_foot_plant_chains && !working_locals_for_probe.empty()) {
-                working_locals = std::move(working_locals_for_probe);
-            } else {
-                Resource::sample_pose_locals(skeleton, clip, anim_time, working_locals);
-            }
-
-            for (const auto& ch : ik_chains) {
-                if (!ch.enabled) continue;
-                std::unordered_map<int, std::array<float, 16>> chain_ov;
-                Resource::solve_ccd(skeleton, ch, working_locals, chain_ov);
-                // 把本链改写的关节写回 working_locals，下一条链从更新后的状态出发。
-                for (const auto& kv : chain_ov) {
-                    working_locals[static_cast<std::size_t>(kv.first)] = kv.second;
-                }
-            }
-            // working_locals 已含所有链的 IK 结果，直接传入跳过 compute_pose 内部的重复采样。
-            Resource::compute_pose(skeleton, clip, anim_time, finals, nullptr, &working_locals);
-        } else {
-            Resource::compute_pose(skeleton, clip, anim_time, finals);
-        }
+        Resource::compute_pose(skeleton, clip, anim_time, finals, nullptr, &working_locals);
 
         // ---- 第 6 步：锁外 CPU 蒙皮每个 mesh + 重传 GPU ----
         // skinned_cpu_vertices：每 mesh 一份原始字节（布局即 Resource::Vertex 数组），
@@ -2264,6 +2154,12 @@ void MechanicsSystem::update_skinned_geometry(float dt) {
                                                 : std::vector<int>{};
 
                     MechanicsInternal::CollisionMesh& sc = impl_->skinned_collision_cache[geom_handle];
+                    if (impl_->skinned_collision_model_ids[geom_handle] != model_id) {
+                        sc = {};
+                        impl_->skinned_octree_cache.erase(geom_handle);
+                        impl_->prev_skinned_verts_cache.erase(geom_handle);
+                        impl_->skinned_collision_model_ids[geom_handle] = model_id;
+                    }
                     sc.triangles         = static_tris;
                     sc.triangle_bone_ids = static_bones;
 
@@ -2351,51 +2247,6 @@ void MechanicsSystem::update_skinned_geometry(float dt) {
         }
     }
 
-    // S5：在蒙皮结束后立即 flush 上一物理步产生的 IK target 更新，
-    // 使同帧物理接触能在本帧 CCD 求解中被消费，消除一帧延迟。
-    // 注意调用顺序：update_skinned_geometry 在 update_physics 之前执行，
-    // 所以此处 flush 的是上一个物理步的 deferred 队列（上帧接触），
-    // 比原先在 update_physics 末尾 flush（要等下下帧蒙皮）早一整帧。
-    if (!impl_->deferred_ik_target_updates.empty()) {
-        auto& geom_st2    = SharedDataHub::instance().geometry_storage();
-        auto& transform_st = SharedDataHub::instance().model_transform_storage();
-
-        for (const auto& upd : impl_->deferred_ik_target_updates) {
-            if (impl_->shutdown_requested.load(std::memory_order_acquire)) break;
-
-            ktm::fmat4x4 inv_m{};
-            bool have_inv = false;
-            {
-                auto tx = transform_st.try_acquire_read(upd.transform_handle);
-                if (tx) {
-                    inv_m    = ktm::inverse(tx->compute_matrix());
-                    have_inv = true;
-                }
-            }
-            if (!have_inv) continue;
-
-            const auto& wp = upd.contact_world;
-            const float mx = inv_m[0][0]*wp.x + inv_m[1][0]*wp.y + inv_m[2][0]*wp.z + inv_m[3][0];
-            const float my = inv_m[0][1]*wp.x + inv_m[1][1]*wp.y + inv_m[2][1]*wp.z + inv_m[3][1];
-            const float mz = inv_m[0][2]*wp.x + inv_m[1][2]*wp.y + inv_m[2][2]*wp.z + inv_m[3][2];
-
-            auto geom_w = geom_st2.try_acquire_write(upd.geom_handle);
-            if (!geom_w) continue;
-            for (auto& chain : geom_w->ik_chains) {
-                if (!chain.contact_driven) continue;
-                if (chain.end_node != upd.node_idx) continue;
-                chain.target = {mx, my, mz};
-                // 上升速率：contact_weight_rise>0 时用之，否则与衰减速率一致（向后兼容）
-                const float rise_rate = (chain.contact_weight_rise > 0.0f)
-                    ? chain.contact_weight_rise
-                    : chain.contact_weight_decay;
-                chain.weight = std::min(chain.weight + rise_rate * dt, 1.0f);
-                chain.enabled = true;
-                break;
-            }
-        }
-        impl_->deferred_ik_target_updates.clear();
-    }
 }
 
 // ============================================================================
@@ -2405,25 +2256,31 @@ void MechanicsSystem::update_skinned_geometry(float dt) {
 namespace {
 
 // 内部辅助：向 GeometryDevice 写入或更新一条 FootPlant 链。调用方必须已持有写锁。
-bool apply_foot_plant_chain(Corona::GeometryDevice& gw, int node_idx,
+bool apply_foot_plant_chain(Corona::GeometryDevice& gw, int node_idx, std::string_view bone_name,
                             int chain_length, float damping, float weight_decay) {
     using namespace Corona::Resource;
     for (auto& chain : gw.ik_chains) {
-        if (chain.end_node == node_idx &&
+        if ((chain.end_bone_name == bone_name || (chain.end_bone_name.empty() && chain.end_node == node_idx)) &&
             chain.mode == IkChain::Mode::FootPlant) {
+            if (chain.end_node != node_idx) chain.runtime = {};
+            chain.end_node             = node_idx;
             chain.chain_length         = chain_length;
             chain.damping              = damping;
             chain.contact_weight_decay = weight_decay;
+            chain.end_bone_name         = bone_name;
+            ++gw.ik_chains_revision;
             return true;
         }
     }
     IkChain chain;
+    chain.id                    = "native-foot:" + std::string(bone_name);
+    chain.end_bone_name          = bone_name;
     chain.end_node              = node_idx;
     chain.chain_length          = chain_length;
     chain.mode                  = IkChain::Mode::FootPlant;
-    chain.contact_driven        = true;
-    chain.enabled               = false;
-    chain.weight                = 0.0f;
+    chain.contact_driven        = false;
+    chain.enabled               = true;
+    chain.weight                = 1.0f;
     chain.damping               = damping;
     chain.max_iterations        = 10;
     chain.tolerance             = 1e-3f;
@@ -2431,6 +2288,7 @@ bool apply_foot_plant_chain(Corona::GeometryDevice& gw, int node_idx,
     chain.contact_weight_rise   = 8.0f;  // 约 0.13s（8 帧）升满，落地立即贴地
     chain.contact_weight_decay  = weight_decay;
     gw.ik_chains.push_back(chain);
+    ++gw.ik_chains_revision;
     return true;
 }
 
@@ -2443,23 +2301,13 @@ bool MechanicsSystem::register_foot_plant_chain(
     float damping,
     float weight_decay) {
 
+    if (bone_name.empty() || chain_length < 2 || chain_length > 64 ||
+        !std::isfinite(damping) || damping < 0 || damping > 1 ||
+        !std::isfinite(weight_decay) || weight_decay < 0 || weight_decay > 100) return false;
     auto& hub     = SharedDataHub::instance();
     auto& geom_st = hub.geometry_storage();
 
-    // 快速路径：bone_name_to_node_idx 缓存已由首帧 update_skinned_geometry 建立
-    {
-        auto gr = geom_st.try_acquire_read(geom_handle);
-        if (!gr) return false;
-        auto cache_it = gr->bone_name_to_node_idx.find(std::string(bone_name));
-        if (cache_it != gr->bone_name_to_node_idx.end()) {
-            const int node_idx = cache_it->second;
-            auto gw = geom_st.try_acquire_write(geom_handle);
-            if (!gw) return false;
-            return apply_foot_plant_chain(*gw, node_idx, chain_length, damping, weight_decay);
-        }
-    }
-
-    // 慢速路径：首帧蒙皮尚未跑过，直接查 Scene（持 ResourceManager 读锁）
+    // Resolve against the current model, without attempting a read-to-write lock upgrade.
     std::uintptr_t mrh = 0;
     {
         auto gr = geom_st.try_acquire_read(geom_handle);
@@ -2485,17 +2333,15 @@ bool MechanicsSystem::register_foot_plant_chain(
     int node_idx = -1;
     for (std::size_t ni = 0; ni < skel.nodes.size(); ++ni) {
         if (skel.nodes[ni].name == bone_name) {
+            if (node_idx >= 0) return false; // ambiguous name
             node_idx = static_cast<int>(ni);
-            break;
         }
     }
-    if (node_idx < 0) return false;
+    if (node_idx < 0 || skel.nodes[node_idx].parent < 0) return false;
 
     auto gw = geom_st.try_acquire_write(geom_handle);
-    if (!gw) return false;
-    // 顺便回填缓存，避免下次再走慢速路径
-    gw->bone_name_to_node_idx[std::string(bone_name)] = node_idx;
-    return apply_foot_plant_chain(*gw, node_idx, chain_length, damping, weight_decay);
+    if (!gw || gw->model_resource_handle != mrh) return false;
+    return apply_foot_plant_chain(*gw, node_idx, bone_name, chain_length, damping, weight_decay);
 }
 
 void MechanicsSystem::unregister_foot_plant_chain(
@@ -2507,17 +2353,18 @@ void MechanicsSystem::unregister_foot_plant_chain(
     if (!gw) return;
 
     auto cache_it = gw->bone_name_to_node_idx.find(std::string(bone_name));
-    if (cache_it == gw->bone_name_to_node_idx.end()) return;
-    const int node_idx = cache_it->second;
+    const int node_idx = cache_it == gw->bone_name_to_node_idx.end() ? -1 : cache_it->second;
 
     auto& chains = gw->ik_chains;
+    const auto previous_size = chains.size();
     chains.erase(
         std::remove_if(chains.begin(), chains.end(),
-            [node_idx](const Resource::IkChain& c) {
-                return c.end_node == node_idx &&
+            [node_idx, bone_name](const Resource::IkChain& c) {
+                return (c.end_bone_name == bone_name || (c.end_bone_name.empty() && node_idx >= 0 && c.end_node == node_idx)) &&
                        c.mode == Resource::IkChain::Mode::FootPlant;
             }),
         chains.end());
+    if (chains.size() != previous_size) ++gw->ik_chains_revision;
 }
 
 }  // namespace Corona::Systems

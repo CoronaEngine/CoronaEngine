@@ -82,6 +82,10 @@ void sample_pose_locals(const SkeletonData& skeleton,
 [[nodiscard]] std::array<float, 3> mat4_translation(const std::array<float, 16>& m);
 
 /// CCD 求解一条 IK 链。
+/// 只修改局部旋转，保留输入 local 的平移和缩放；weight 使用四元数混合，避免骨段缩短。
+/// tolerance 是输出模型空间的距离，与 global_inverse 的导入缩放无关。
+/// 对完全伸直且目标向内共线的链给出确定性弯曲初值（不替代关节约束/pole vector）。
+/// 非有限参数、奇异坐标变换及循环/越界父链不会产生覆盖；迭代次数最多 256。
 /// @param skeleton     骨架（提供 parent 链、bone local）。
 /// @param chain        链定义 + 目标点 + 迭代参数（见 IkChain）。
 /// @param base_locals  每节点的「当前」local（动画采样后），下标对齐 skeleton.nodes。

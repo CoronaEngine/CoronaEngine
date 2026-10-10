@@ -1,6 +1,11 @@
 add_executable(corona_vision_camera_direction_tests
     test_vision_camera_direction.cpp
 )
+
+add_executable(corona_ik_chain_config_tests test_ik_chain_config.cpp)
+target_include_directories(corona_ik_chain_config_tests PRIVATE ${PROJECT_SOURCE_DIR}/src/systems/ui)
+target_link_libraries(corona_ik_chain_config_tests PRIVATE nlohmann_json::nlohmann_json corona::resource::manager)
+add_test(NAME IkChainConfigTests COMMAND corona_ik_chain_config_tests)
 target_include_directories(corona_vision_camera_direction_tests
     PRIVATE ${PROJECT_SOURCE_DIR}/src/systems/ui
 )
