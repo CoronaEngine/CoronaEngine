@@ -157,6 +157,5 @@ class HorizonWorkspaceTests(unittest.TestCase):
         self.assertEqual(self.head(), newest)
         self.assertTrue(inspect_workspace(self.repo_root).in_sync)
 
-
 if __name__ == "__main__":
     unittest.main()

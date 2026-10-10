@@ -130,7 +130,6 @@ def current_commit(worktree: Path) -> str:
 def _normalized_url(value: str) -> str:
     return value.rstrip("/").removesuffix(".git").lower()
 
-
 def _commit_present(worktree: Path, commit: str) -> bool:
     return _git_probe(worktree, "cat-file", "-e", f"{commit}^{{commit}}").returncode == 0
 
