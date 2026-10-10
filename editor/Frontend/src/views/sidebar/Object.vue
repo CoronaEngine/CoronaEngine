@@ -123,7 +123,7 @@
           <span>IK 测试</span>
           <span class="section-chevron" :class="{ expanded: !collapsedSections.ik }">&#8964;</span>
         </button>
-        <div v-show="!collapsedSections.ik" class="section-collapsible-body ik-body">
+        <div v-if="!collapsedSections.ik" class="section-collapsible-body ik-body">
 
           <button type="button" class="ik-refresh-btn" :disabled="ikState.loading || ikState.saving" @click="refreshSkeletonLeaves">刷新配置与状态</button>
           <p v-if="ikState.loading" class="ik-hint">正在读取骨骼和 IK 配置…</p>
@@ -135,7 +135,7 @@
           </template>
 
           <template v-else>
-            <p class="ik-hint">建议选择踝骨作为末端，链长包含末端节点、膝和髋。贴地模式自动查询地面，混合上限与运行时权重独立。</p>
+            <p class="ik-hint">FootPlant 只能选择骨架叶子节点。链长包含末端，沿父节点层级向上计算；请按模型骨架设置。贴地目标由系统自动查询。</p>
             <p class="ik-hint">{{ ikState.saving ? '正在应用配置…' : '状态为上次读取结果，可刷新查看。' }}</p>
 
             <div
@@ -154,14 +154,16 @@
                 </div>
               </div>
 
-              <div class="property-row ik-row">
+              <div class="property-row ik-row ik-bone-row">
                 <label>末端骨骼</label>
-                <select v-model="foot.boneName" @change="applyIkChains">
-                  <option value="">— 选择末端骨骼 —</option>
-                  <option v-if="foot.boneName && !ikState.boneNames.includes(foot.boneName)" :value="foot.boneName">{{ foot.boneName }}</option>
-                  <option v-for="name in ikState.boneNames" :key="name" :value="name">{{ name }}</option>
-                </select>
+                <IkBoneSelect
+                  v-model="foot.boneName"
+                  :options="ikBoneOptions(foot, ikState)"
+                  :invalid="Boolean(ikBoneError(foot, ikState))"
+                  @change="applyIkChains"
+                />
               </div>
+              <p v-if="ikBoneError(foot, ikState)" class="property-error">{{ ikBoneError(foot, ikState) }}</p>
 
               <div class="property-row ik-row">
                 <label>IK 模式</label>
@@ -280,13 +282,14 @@
 <script setup>
 import { computed, onMounted, onUnmounted, reactive, ref } from 'vue';
 import DockTitleBar from '@/components/ui/DockTitleBar.vue';
+import IkBoneSelect from '@/components/ui/IkBoneSelect.vue';
 import { useDockPanel } from '@/composables/useDockPanel.js';
 import { useErrorHandler } from '@/composables/useErrorHandler.js';
 import { editorApi } from '@/api/editorApi.js';
 import { DEFAULT_SCENE_NAME } from '@/utils/constants.js';
 import { getActorContext } from '@/blockly/composables/useActorContext.js';
 import { cabbageContextService } from '@/services/cabbageAssistantContextService.js';
-import { createIkEditorController, createIkEditorState, makeIkFoot, isAutomaticIkFoot, ikFootStatus } from '@/utils/ikEditorController.js';
+import { createIkEditorController, createIkEditorState, makeIkFoot, isAutomaticIkFoot, ikFootStatus, ikBoneOptions, ikBoneError } from '@/utils/ikEditorController.js';
 
 const { closePanel, isDocked } = useDockPanel();
 const { error: logError } = useErrorHandler('Object');
@@ -991,6 +994,8 @@ input:focus,select:focus { border-color:#D8B86C; box-shadow:0 0 0 1px rgba(216,1
 .ik-remove-btn:hover:not(:disabled) { color:#f87171; border-color:#f87171; }
 .ik-remove-btn:disabled { opacity:.35; cursor:not-allowed; }
 .ik-row { margin-top:6px; grid-template-columns:72px minmax(0,1fr); }
+.ik-bone-row { align-items: start; }
+.ik-bone-row > label { padding-top: 5px; }
 .ik-row label { color:#b9ad8f; font-size:10px; }
 .ik-row select { min-width:0; width:100%; border:1px solid rgba(216,184,108,.22); border-radius:4px; background:#0f0e0a; color:#f2ead5; padding:5px 6px; font-size:11px; outline:none; }
 .ik-row select:focus { border-color:#D8B86C; box-shadow:0 0 0 1px rgba(216,184,108,.18); }

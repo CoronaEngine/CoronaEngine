@@ -1,6 +1,6 @@
 #pragma once
 
-#include <corona/resource/types/scene.h>
+#include <corona/resource/types/animation_pose.h>
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
@@ -97,6 +97,10 @@ inline std::vector<Resource::IkChain> parse(
                 }
                 if (skeleton->nodes[chain.end_node].parent < 0) {
                     throw std::invalid_argument("IK end bone requires a parent joint");
+                }
+                if (chain.mode == Resource::IkChain::Mode::FootPlant &&
+                    !Resource::is_valid_foot_ik_end_node(*skeleton, chain.end_node)) {
+                    throw std::invalid_argument("Foot IK end bone must be a skeleton leaf node: " + chain.end_bone_name);
                 }
             }
             chain.chain_length = integer(value, "chain_length", 3, 2, 64);

@@ -120,6 +120,7 @@ void MechanicsSystem::update_foot_targets(std::uintptr_t geom_handle,
     const auto actor_it = impl_->ik_geometry_actors.find(geom_handle);
     for (auto& chain : chains) {
         if (chain.mode != Resource::IkChain::Mode::FootPlant) continue;
+        if (!sanitize_foot_ik_endpoint(chain, skeleton)) continue;
         std::optional<std::array<float, 3>> target;
         const auto bone = ik_bone_model_position(skeleton, locals, chain.end_node);
         if (!chain.enabled || chain.weight <= 0 || !bone || !have_transform || scene_it == impl_->ik_geometry_scenes.end()) {

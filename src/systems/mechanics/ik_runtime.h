@@ -44,6 +44,17 @@ inline bool is_automatic_ik(const Resource::IkChain& chain) {
     return chain.mode == Resource::IkChain::Mode::FootPlant || chain.contact_driven;
 }
 
+// Saved names are resolved after model import. Keep an invalid name editable,
+// but never let its old support or a direct native write bypass the Foot rule.
+inline bool sanitize_foot_ik_endpoint(Resource::IkChain& chain,
+                                      const Resource::SkeletonData& skeleton) {
+    if (chain.mode != Resource::IkChain::Mode::FootPlant ||
+        Resource::is_valid_foot_ik_end_node(skeleton, chain.end_node)) return true;
+    chain.end_node = -1;
+    chain.runtime = {};
+    return false;
+}
+
 // Replacing a fully weighted anchor in one frame would teleport the foot. Loss of
 // support, excessive drift, or a lifted animation foot first releases the old IK.
 inline bool foot_can_plant(Resource::IkChain& chain, bool found, bool keep_anchor, float gap) {

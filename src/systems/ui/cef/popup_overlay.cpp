@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <limits>
 
 namespace Corona::Systems::UI {
 namespace {
@@ -18,6 +19,9 @@ void PopupOverlay::set_rect(int x, int y, int width, int height) {
     x_ = x;
     y_ = y;
     if (width > 0 && height > 0) {
+        // OnPopupSize may arrive before the matching PET_POPUP paint. Old
+        // pixels cannot be read with the new row stride or buffer height.
+        if (width_ != width || height_ != height) pixels_.clear();
         width_ = width;
         height_ = height;
     }
@@ -86,6 +90,25 @@ void PopupOverlay::clear() {
     width_ = 0;
     height_ = 0;
     pixels_.clear();
+}
+
+bool compose_pending_popup_frame(
+    const std::vector<std::uint8_t>& view_pixels, int view_width, int view_height,
+    const PopupOverlay& popup, bool& dirty, std::vector<std::uint8_t>& frame) {
+    if (!dirty || view_width <= 0 || view_height <= 0 || &view_pixels == &frame) {
+        return false;
+    }
+    const auto width = static_cast<std::size_t>(view_width);
+    const auto height = static_cast<std::size_t>(view_height);
+    if (width > std::numeric_limits<std::size_t>::max() / kChannels / height ||
+        view_pixels.size() != width * height * kChannels) {
+        return false;
+    }
+
+    frame = view_pixels;
+    (void)popup.composite_over(frame, view_width, view_height);
+    dirty = false;
+    return true;
 }
 
 }  // namespace Corona::Systems::UI

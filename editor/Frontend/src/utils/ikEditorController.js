@@ -42,6 +42,34 @@ export function isAutomaticIkFoot(foot) {
   return foot.mode === 'foot_plant' || foot.mode === 'contact';
 }
 
+export function ikBoneOptions(foot, state) {
+  return foot.mode === 'foot_plant' ? state.footBoneNames : state.boneNames;
+}
+
+export function ikBoneError(foot, state) {
+  if (foot.mode !== 'foot_plant' || !foot.boneName || state.footBoneNames.includes(foot.boneName)) return '';
+  return `当前末端“${foot.boneName}”不是可用的叶子节点，请重新选择。原配置已保留。`;
+}
+
+function skeletonOptions(skeleton) {
+  const nodes = Array.isArray(skeleton.nodes) ? skeleton.nodes : null;
+  const names = nodes ? nodes.map((node) => node?.name) : skeleton.leaves;
+  const counts = new Map();
+  for (const name of Array.isArray(names) ? names : []) {
+    if (typeof name === 'string' && name.trim()) counts.set(name, (counts.get(name) ?? 0) + 1);
+  }
+  const unique = (name) => counts.get(name) === 1;
+  if (!nodes) {
+    const leaves = [...counts.keys()].filter(unique);
+    return { boneNames: leaves, footBoneNames: leaves };
+  }
+  const selectable = nodes.filter((node) => node && Number.isInteger(node.parent) && node.parent >= 0 && unique(node.name));
+  return {
+    boneNames: selectable.map((node) => node.name),
+    footBoneNames: selectable.filter((node) => node.leaf === true).map((node) => node.name),
+  };
+}
+
 export function ikFootStatus(foot) {
   if (!foot.enabled) return '已禁用';
   if (Number(foot.weight) === 0) return '无影响（混合上限为 0）';
@@ -83,6 +111,7 @@ export function createIkEditorState() {
     saving: false,
     revision: 0,
     boneNames: [],
+    footBoneNames: [],
     feet: [],
     error: '',
   };
@@ -125,11 +154,7 @@ export function createIkEditorController(api, state) {
         throw new Error('IK 配置版本无效，请刷新后重试');
       }
       state.isSkinned = Boolean(config.is_skinned);
-      state.boneNames = Array.isArray(skeleton.nodes)
-        ? skeleton.nodes.filter((node) => node.parent >= 0).map((node) => node.name)
-        : Array.isArray(skeleton.leaves)
-          ? skeleton.leaves
-          : [];
+      Object.assign(state, skeletonOptions(skeleton));
       state.feet = (config.chains ?? []).map(makeIkFoot);
       state.revision = session.revision = config.revision;
       state.ready = true;
@@ -176,6 +201,12 @@ export function createIkEditorController(api, state) {
 
   function apply() {
     if (!active || !state.ready || !state.isSkinned) return Promise.resolve();
+    const invalidFoot = state.feet.find((foot) => ikBoneError(foot, state));
+    if (invalidFoot) {
+      active.pending = null;
+      state.error = ikBoneError(invalidFoot, state);
+      return active.flushing ?? Promise.resolve();
+    }
     state.error = '';
     active.pending = serializeIkFeet(state.feet);
     if (!active.flushing) active.flushing = drain(active);
