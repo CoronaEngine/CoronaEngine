@@ -18,6 +18,7 @@
 #include "cef_editor_native_api_registry.h"
 #include "cef_editor_native_api_test_support.h"
 #include "scene_folder.h"
+#include "ik_chain_config.h"
 #include "vision_actor_material_bridge.h"
 #include "vision_actor_transform_bridge.h"
 #include "vision_camera_direction.h"
@@ -557,6 +558,7 @@ struct NativeEditorActor {
     bool persisted_visible{true};
     std::string persisted_body_type{"dynamic"};
     nlohmann::json persisted_snapshot = nlohmann::json::object();
+    nlohmann::json persisted_ik_chains = nlohmann::json::array();
     NativeEditorActorOpticsState persisted_optics;
     std::unique_ptr<Corona::API::Geometry> geometry;
     std::unique_ptr<Corona::API::Optics> optics;
@@ -564,6 +566,27 @@ struct NativeEditorActor {
     std::unique_ptr<Corona::API::Acoustics> acoustics;
     std::unique_ptr<Corona::API::Actor> engine_actor;
 };
+
+nlohmann::json native_actor_ik_configuration(const NativeEditorActor& actor) {
+    if (!actor.geometry) return actor.persisted_ik_chains;
+    std::vector<Corona::Resource::IkChain> chains;
+    {
+        auto geometry = Corona::SharedDataHub::instance().geometry_storage().try_acquire_read(
+            actor.geometry->get_handle());
+        if (!geometry) return actor.persisted_ik_chains;
+        chains = geometry->ik_chains;
+    }
+    if (chains.empty()) return nlohmann::json::array();
+    const auto model_id = actor.geometry->get_model_id();
+    if (model_id != 0) {
+        auto resource = Corona::Resource::ResourceManager::get_instance()
+                            .acquire_read<Corona::Resource::Scene>(model_id);
+        if (resource.valid() && resource->data.skeleton) {
+            return IkChainConfig::serialize(chains, &*resource->data.skeleton);
+        }
+    }
+    return IkChainConfig::serialize(chains);
+}
 
 std::string body_type_name(const Corona::API::Mechanics& mechanics) {
     return mechanics.get_body_type();
@@ -926,6 +949,7 @@ std::vector<std::string> build_actors_section_lines(const NativeEditorScene& sce
         lines.push_back(key + ".geometry.position = " + format_float3(actor.geometry ? actor.geometry->get_position() : actor.position));
         lines.push_back(key + ".geometry.rotation = " + format_float3(actor.geometry ? actor.geometry->get_rotation() : actor.rotation));
         lines.push_back(key + ".geometry.scale = " + format_float3(actor.geometry ? actor.geometry->get_scale() : actor.scale));
+        lines.push_back(key + ".ik.chains = " + IkChainConfig::dump_ini(native_actor_ik_configuration(actor)));
         if (actor.load_status != ActorLoadStatus::Loaded) {
             lines.push_back(key + ".optics.visible = " +
                             std::string(actor.persisted_visible ? "true" : "false"));
@@ -959,7 +983,7 @@ std::vector<std::string> build_actors_section_lines(const NativeEditorScene& sce
         static const std::set<std::string> normalized_fields{
             "actor_guid", "actor_type", "audio_resource_id", "follow_camera", "name", "route",
             "camera_lock.enabled", "camera_lock.position_offset", "camera_lock.rotation_offset",
-            "geometry.position", "geometry.rotation", "geometry.scale",
+            "geometry.position", "geometry.rotation", "geometry.scale", "ik.chains",
             "material.texture", "mechanics.body_type", "optics.diffuse", "optics.emission", "optics.metallic",
             "optics.roughness", "optics.shininess", "optics.specular", "optics.visible",
             "runtime.entity_id", "runtime.asset_id", "runtime.model_ref", "runtime.entity_type",
@@ -1651,6 +1675,14 @@ NativeEditorActor& add_native_actor_to_scene(NativeEditorScene& scene,
     item.geometry->set_position(item.position);
     item.geometry->set_rotation(item.rotation);
     item.geometry->set_scale(item.scale);
+    if (!item.persisted_ik_chains.empty()) {
+        auto chains = IkChainConfig::parse(item.persisted_ik_chains);
+        auto geometry = Corona::SharedDataHub::instance().geometry_storage().try_acquire_write(
+            item.geometry->get_handle());
+        if (!geometry) throw std::runtime_error("Actor IK geometry storage is unavailable");
+        geometry->ik_chains = std::move(chains);
+        ++geometry->ik_chains_revision;
+    }
 
     item.optics = std::make_unique<Corona::API::Optics>(*item.geometry);
     item.mechanics = std::make_unique<Corona::API::Mechanics>(*item.geometry);
@@ -1748,6 +1780,10 @@ void load_native_actor(NativeEditorScene& scene,
             : "1.0, 1.0, 1.0",
         {1.0f, 1.0f, 1.0f});
     item.persisted_optics = load_native_actor_optics_state(actors_section, actor_key);
+    if (const auto ik = actors_section.find(actor_key + ".ik.chains"); ik != actors_section.end()) {
+        item.persisted_ik_chains = IkChainConfig::serialize(
+            IkChainConfig::parse(nlohmann::json::parse(ik->second)));
+    }
 
     if (item.route.empty()) {
         CFW_LOG_WARNING("[LoadNativeActor] Skipping actor '{}' (key='{}') — route is empty",
@@ -2036,6 +2072,7 @@ void validate_archive_snapshot(const nlohmann::json& snapshot) {
         if (!actor_guids.insert(actor["actor_guid"].get<std::string>()).second) {
             throw std::runtime_error("Duplicate actor_guid in ArchiveSnapshot");
         }
+        IkChainConfig::parse(actor.value("ik_chains", nlohmann::json::array()));
         if (!actor.contains("route") || !actor["route"].is_string() ||
             !actor.contains("asset_path") || !actor["asset_path"].is_string() ||
             !actor.contains("transform") || !actor["transform"].is_object()) {
@@ -2120,6 +2157,8 @@ void validate_archive_snapshot(const nlohmann::json& snapshot) {
 NativeEditorActor native_actor_from_snapshot(const nlohmann::json& actor_data) {
     NativeEditorActor item;
     item.persisted_snapshot = actor_data;
+    item.persisted_ik_chains = IkChainConfig::serialize(
+        IkChainConfig::parse(actor_data.value("ik_chains", nlohmann::json::array())));
     item.name = actor_data.value("name", std::string{"Actor"});
     item.actor_guid = actor_data.value("actor_guid", std::string{});
     item.route = normalize_route(actor_data.value("route", std::string{}));
@@ -2710,6 +2749,7 @@ nlohmann::json actor_to_json(const NativeEditorScene& scene, const NativeEditorA
     item["model"] = actor.route;
     item["model_dependencies"] = nlohmann::json::array();
     item["actor_type"] = actor.actor_type;
+    item["ik_chains"] = native_actor_ik_configuration(actor);
     item["load_status"] = actor_load_status_name(actor.load_status);
     if (actor.load_status != ActorLoadStatus::Loaded) {
         item["load_error"] = {
@@ -3819,6 +3859,14 @@ PendingNetworkActorApplyOutcome apply_pending_network_actor_state(
         }
 
         const auto requested_name = trim_ascii(actor_data.value("name", actor->name));
+        std::optional<std::vector<Corona::Resource::IkChain>> incoming_ik_chains;
+        if (actor_data.contains("ik_chains")) {
+            try {
+                incoming_ik_chains = IkChainConfig::parse(actor_data.at("ik_chains"));
+            } catch (const std::invalid_argument& error) {
+                return pending_actor_outcome(PendingNetworkActorApplyResult::Discard, error.what());
+            }
+        }
         if (requested_name.empty()) {
             return pending_actor_outcome(PendingNetworkActorApplyResult::Discard,
                                          "Remote actor state contains an empty name");
@@ -3905,7 +3953,44 @@ PendingNetworkActorApplyOutcome apply_pending_network_actor_state(
         merged_actor_data["actor_guid"] = actor_guid;
         auto desired = native_actor_from_snapshot(merged_actor_data);
         const auto desired_route = normalize_route(desired.route);
-        if (!desired_route.empty() && desired_route != normalize_route(actor->route)) {
+        const bool replacing_resource = !desired_route.empty() && desired_route != normalize_route(actor->route);
+        if (!replacing_resource && incoming_ik_chains) {
+            if (!actor->geometry) {
+                return pending_actor_outcome(PendingNetworkActorApplyResult::Retry,
+                                             "Remote IK geometry is not materialized yet");
+            }
+            const auto apply_ik = [&](const Corona::Resource::SkeletonData* skeleton) {
+                if (skeleton) incoming_ik_chains = IkChainConfig::parse(actor_data.at("ik_chains"), skeleton);
+                auto storage = Corona::SharedDataHub::instance().geometry_storage().try_acquire_write(
+                    actor->geometry->get_handle());
+                if (!storage) throw std::runtime_error("Remote IK geometry storage is unavailable");
+                auto saved = IkChainConfig::serialize(*incoming_ik_chains, skeleton);
+                IkChainConfig::apply_snapshot(storage->ik_chains, storage->ik_chains_revision,
+                                              std::move(*incoming_ik_chains), skeleton);
+                actor->persisted_ik_chains = std::move(saved);
+            };
+            try {
+                const auto model_id = actor->geometry->get_model_id();
+                if (model_id != 0) {
+                    auto resource = Corona::Resource::ResourceManager::get_instance()
+                                        .acquire_read<Corona::Resource::Scene>(model_id);
+                    if (!resource.valid()) {
+                        return pending_actor_outcome(PendingNetworkActorApplyResult::Retry,
+                                                     "Remote IK model resource is unavailable");
+                    }
+                    if (!resource->data.skeleton && !incoming_ik_chains->empty()) {
+                        return pending_actor_outcome(PendingNetworkActorApplyResult::Discard,
+                                                     "Remote IK model has no skeleton");
+                    }
+                    apply_ik(resource->data.skeleton ? &*resource->data.skeleton : nullptr);
+                } else {
+                    apply_ik(nullptr); // Resolve saved names after asynchronous import.
+                }
+            } catch (const std::invalid_argument& error) {
+                return pending_actor_outcome(PendingNetworkActorApplyResult::Discard, error.what());
+            }
+        }
+        if (replacing_resource) {
             const auto replacement_path = resolve_native_actor_asset_path(*scene, desired);
             std::error_code resource_ec;
             if (!std::filesystem::is_regular_file(replacement_path, resource_ec) || resource_ec) {
@@ -9619,7 +9704,7 @@ void register_scene_tools_api_handlers(NativeApiRegistry& registry) {
             payload["ok"] = true;
             return native_success(payload);
         }},
-        // ---- 骨骼 IK 测试 API（编辑器专用）----
+        // ---- Per-instance IK configuration and runtime inspection ----
         {"get_actor_skeleton_leaves", [](const NativeRequest& request, const NativeContext&) {
             try {
                 auto* scene = scene_for_request_route(request);
@@ -9660,8 +9745,12 @@ void register_scene_tools_api_handlers(NativeApiRegistry& registry) {
                 }
 
                 nlohmann::json leaves = nlohmann::json::array();
+                nlohmann::json nodes = nlohmann::json::array();
                 const auto& skel = *sdata.skeleton;
-                for (const auto& node : skel.nodes) {
+                for (std::size_t index = 0; index < skel.nodes.size(); ++index) {
+                    const auto& node = skel.nodes[index];
+                    nodes.push_back({{"name", node.name}, {"index", index},
+                                     {"parent", node.parent}, {"leaf", node.children.empty()}});
                     if (node.children.empty()) {
                         leaves.push_back(node.name);
                     }
@@ -9669,6 +9758,7 @@ void register_scene_tools_api_handlers(NativeApiRegistry& registry) {
                 return native_success({
                     {"is_skinned", true},
                     {"leaves", leaves},
+                    {"nodes", nodes},
                     {"node_count", static_cast<int>(skel.nodes.size())},
                     {"bone_count", skel.bone_count},
                 });
@@ -9676,71 +9766,86 @@ void register_scene_tools_api_handlers(NativeApiRegistry& registry) {
                 return native_failure(std::string("get_actor_skeleton_leaves exception: ") + e.what(), 2);
             }
         }},
-        {"set_actor_ik_chains", [](const NativeRequest& request, const NativeContext&) {
+        {"get_actor_ik_chains", [](const NativeRequest& request, const NativeContext&) {
             try {
                 auto* scene = scene_for_request_route(request);
                 const auto actor_name = arg_string(request.args, 1);
-                const auto& chains_json =
-                    request.args.is_array() && request.args.size() > 2 &&
-                            request.args[2].is_array()
-                        ? request.args[2]
-                        : nlohmann::json::array();
-
                 auto* actor = find_native_actor(*scene, actor_name);
-                if (!actor || !actor->engine_actor) {
+                if (!actor || !actor->geometry) {
                     return native_failure("actor not found: " + actor_name, 2);
                 }
-                const auto actor_handle = actor->engine_actor->get_handle();
-                const auto geom_handles =
-                    Corona::SharedDataHub::instance().resolve_actor_geometry_handles(actor_handle);
-
-                for (auto geom_handle : geom_handles) {
-                    auto geom_write = Corona::SharedDataHub::instance()
-                                          .geometry_storage()
-                                          .try_acquire_write(geom_handle);
-                    if (!geom_write || !geom_write->is_skinned) continue;
-
-                    std::vector<Corona::Resource::IkChain> new_chains;
-                    new_chains.reserve(chains_json.size());
-                    for (const auto& cj : chains_json) {
-                        const auto bone_name = cj.value("bone_name", std::string{});
-                        auto it = geom_write->bone_name_to_node_idx.find(bone_name);
-                        if (it == geom_write->bone_name_to_node_idx.end()) continue;
-
-                        Corona::Resource::IkChain ch;
-                        ch.end_node       = it->second;
-                        ch.chain_length   = cj.value("chain_length", 2);
-                        ch.weight         = static_cast<float>(cj.value("weight", 1.0));
-                        ch.max_iterations = cj.value("max_iterations", 10);
-                        ch.tolerance      = static_cast<float>(cj.value("tolerance", 1e-3));
-                        ch.damping        = static_cast<float>(cj.value("damping", 1.0));
-                        ch.enabled        = cj.value("enabled", false);
-                        ch.contact_driven = false;
-
-                        const auto mode_str = cj.value("mode", std::string{"contact"});
-                        if (mode_str == "foot_plant") {
-                            ch.mode = Corona::Resource::IkChain::Mode::FootPlant;
-                            ch.contact_normal_offset = 0.0f;
-                        } else if (mode_str == "look_at") {
-                            ch.mode = Corona::Resource::IkChain::Mode::LookAt;
-                        } else if (mode_str == "weapon_aim") {
-                            ch.mode = Corona::Resource::IkChain::Mode::WeaponAim;
-                        } else {
-                            ch.mode = Corona::Resource::IkChain::Mode::Contact;
-                        }
-
-                        if (cj.contains("target") && cj["target"].is_array() &&
-                            cj["target"].size() >= 3) {
-                            ch.target[0] = static_cast<float>(cj["target"][0].get<double>());
-                            ch.target[1] = static_cast<float>(cj["target"][1].get<double>());
-                            ch.target[2] = static_cast<float>(cj["target"][2].get<double>());
-                        }
-                        new_chains.push_back(std::move(ch));
-                    }
-                    geom_write->ik_chains = std::move(new_chains);
-                    break;  // 单骨架
+                const auto model_id = actor->geometry->get_model_id();
+                if (model_id == 0) return native_failure("IK model import is not ready: " + actor_name, 2);
+                auto resource = Corona::Resource::ResourceManager::get_instance()
+                                    .acquire_read<Corona::Resource::Scene>(model_id);
+                if (!resource.valid()) return native_failure("IK model resource is unavailable", 2);
+                auto geometry = Corona::SharedDataHub::instance().geometry_storage().try_acquire_read(
+                    actor->geometry->get_handle());
+                if (!geometry) return native_failure("IK geometry storage is unavailable", 2);
+                const auto* skeleton = resource->data.skeleton ? &*resource->data.skeleton : nullptr;
+                return native_success({
+                    {"ready", true}, {"is_skinned", skeleton != nullptr},
+                    {"revision", geometry->ik_chains_revision},
+                    {"chains", IkChainConfig::serialize(geometry->ik_chains, skeleton, true)},
+                });
+            } catch (const std::exception& e) {
+                return native_failure(e.what(), 2);
+            }
+        }},
+        {"set_actor_ik_chains", [](const NativeRequest& request, const NativeContext& context) {
+            try {
+                auto* scene = scene_for_request_route(request);
+                const auto actor_name = arg_string(request.args, 1);
+                auto* actor = find_native_actor(*scene, actor_name);
+                if (!actor || !actor->geometry) return native_failure("actor has no geometry: " + actor_name, 2);
+                if (!request.args.is_array() || request.args.size() < 3) {
+                    return native_failure("IK chains array is required", 2);
                 }
-                return native_success({{"ok", true}});
+                const auto model_id = actor->geometry->get_model_id();
+                if (model_id == 0) return native_failure("IK model import is not ready: " + actor_name, 2);
+                nlohmann::json payload;
+                nlohmann::json saved_config;
+                {
+                    auto resource = Corona::Resource::ResourceManager::get_instance()
+                                        .acquire_read<Corona::Resource::Scene>(model_id);
+                    if (!resource.valid() || !resource->data.skeleton) {
+                        return native_failure("Actor model has no skeleton: " + actor_name, 2);
+                    }
+                    const auto& skeleton = *resource->data.skeleton;
+                    auto chains = IkChainConfig::parse(request.args[2], &skeleton);
+                    std::optional<std::uint64_t> expected_revision;
+                    if (request.args.size() > 3 && !request.args[3].is_null()) {
+                        const auto& value = request.args[3];
+                        if (!value.is_number()) return native_failure("expected_revision must be an integer", 2);
+                        const auto number = value.get<double>();
+                        if (!std::isfinite(number) || number < 0 || number > 9007199254740991.0 || std::floor(number) != number) {
+                            return native_failure("expected_revision must be a non-negative safe integer", 2);
+                        }
+                        expected_revision = static_cast<std::uint64_t>(number);
+                    }
+                    auto geometry = Corona::SharedDataHub::instance().geometry_storage().try_acquire_write(
+                        actor->geometry->get_handle());
+                    if (!geometry) return native_failure("IK geometry storage is unavailable", 2);
+                    if (expected_revision && *expected_revision != geometry->ik_chains_revision) {
+                        return native_failure("IK configuration changed; reload before applying (revision " +
+                                              std::to_string(geometry->ik_chains_revision) + ")", 409);
+                    }
+                    IkChainConfig::preserve_runtime(chains, geometry->ik_chains);
+                    saved_config = IkChainConfig::serialize(chains, &skeleton);
+                    // Build the response before the atomic replacement so allocation
+                    // or validation failure cannot silently clear a running chain.
+                    payload = {{"ok", true}, {"ready", true}, {"is_skinned", true},
+                               {"applied_count", chains.size()},
+                               {"revision", geometry->ik_chains_revision + 1},
+                               {"chains", IkChainConfig::serialize(chains, &skeleton, true)}};
+                    geometry->ik_chains = std::move(chains);
+                    ++geometry->ik_chains_revision;
+                }
+                actor->persisted_ik_chains = std::move(saved_config);
+                actor->actor_version = std::max(actor->actor_version + 1, 1);
+                persist_native_scene_actors(*scene);
+                emit_actor_change(context, *scene, *actor);
+                return native_success(payload);
             } catch (const std::exception& e) {
                 return native_failure(e.what(), 2);
             }

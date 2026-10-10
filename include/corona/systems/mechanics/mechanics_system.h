@@ -7,6 +7,10 @@
 #include <corona/kernel/system/system_base.h>
 
 #include <memory>
+#include <array>
+#include <vector>
+
+namespace Corona::Resource { struct IkChain; struct SkeletonData; }
 
 namespace Corona::Systems {
 
@@ -64,14 +68,13 @@ class MechanicsSystem : public Kernel::SystemBase {
     // IK 链管理
     // ========================================
 
-    /// 注册一条脚踩地 IK 链（contact_driven=true，FootPlant 模式）。
+    /// 注册一条由地面探测驱动的 FootPlant 链；运行权重从零开始，命中地面后渐入。
     ///
     /// @param geom_handle   蒙皮角色的 GeometryDevice 句柄。
     /// @param bone_name     末端骨骼名称，须与 SkeletonData::nodes[x].name 完全匹配（大小写敏感）。
-    ///                      Mixamo 惯例："LeftToe_End" / "RightToe_End"；
-    ///                      UE Mannequin："ball_l" / "ball_r"。
+    ///                      踝骨作为末端时，配合 foot_height 保留踝骨到脚底的距离。
     /// @param chain_length  参与 CCD 求解的关节数（含末端，沿 parent 上溯）。
-    ///                      3 = 脚趾→踝→膝；2 = 脚趾→踝。
+    ///                      3 = 踝→膝→髋；合法范围 [2,64]。
     /// @param damping       CCD 每步旋转压制系数 [0,1]，建议 0.85~0.92，防落地时抖动。
     /// @param weight_decay  脚离地后 weight 每秒衰减量，0.8 ≈ 1.25s 平滑归零。
     /// @return 成功返回 true；bone_name 在骨架中不存在，或模型尚未完成 import，返回 false。
@@ -101,6 +104,11 @@ class MechanicsSystem : public Kernel::SystemBase {
     /// 使物理帧消费同帧蒙皮 AABB，而非上一帧数据。
     /// @param dt 本真实帧经过时间（秒），由 update() 测量并传入；首帧传 0。
     void update_skinned_geometry(float dt);
+    void refresh_foot_ground_cache();
+    void update_foot_targets(std::uintptr_t geom_handle,
+                             const Resource::SkeletonData& skeleton,
+                             const std::vector<std::array<float, 16>>& locals,
+                             std::vector<Resource::IkChain>& chains, float dt);
 
     struct Impl;
     std::unique_ptr<Impl> impl_;

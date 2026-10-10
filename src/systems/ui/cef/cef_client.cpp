@@ -1,4 +1,4 @@
-﻿#include "cef_client.h"
+#include "cef_client.h"
 
 #include <windows.h>
 
@@ -18,6 +18,7 @@
 #include "cef_app.h"
 #include "cef_bridge_helpers.h"
 #include "cef_editor_api.h"
+#include "cef_osr_mode.h"
 #include "cef_shared_texture_probe.h"
 #include "request_response_broker.h"
 
@@ -59,6 +60,10 @@ bool should_preserve_alpha(BrowserTab* tab, CefRefPtr<CefBrowser> browser) {
 
 }  // namespace
 
+void apply_remote_debugging_port(CefSettings& settings) {
+    settings.remote_debugging_port = cef_remote_debugging_port();
+}
+
 // ============================================================================
 // OffscreenRenderHandler 实现
 // ============================================================================
@@ -99,16 +104,24 @@ void OffscreenRenderHandler::OnPaint(CefRefPtr<CefBrowser> browser, PaintElement
         t->pixel_buffer.resize(bufferSize);
         std::memcpy(t->pixel_buffer.data(), buffer, bufferSize);
 
-        // CEF outputs BGRA on Windows; convert to RGBA for Vulkan RGBA8 textures.
-        auto* pixels = t->pixel_buffer.data();
-        for (size_t i = 0; i < bufferSize; i += 4) {
-            std::swap(pixels[i], pixels[i + 2]);
-            if (!preserve_alpha) {
-                pixels[i + 3] = 255;
+        // CEF outputs BGRA on Windows and the browser texture is declared SBGRA8_UNORM
+        // (VK_FORMAT_B8G8R8A8_SRGB), so the bytes reach the GPU untouched - no channel
+        // reordering here. That also keeps this buffer in the same byte order as the popup
+        // overlay, which composites its pixels straight into it.
+        // Alpha convention: should_preserve_alpha() decides per tab; when alpha is not part
+        // of the design, force it opaque rather than letting CEF's alpha through.
+        if (!preserve_alpha) {
+            auto* pixels = t->pixel_buffer.data();
+            for (size_t i = 3; i < bufferSize; i += 4) {
+                pixels[i] = 255;
             }
         }
 
         t->buffer_dirty = true;
+        // Remember what size this buffer actually is, so the upload path can tell whether it
+        // still matches the tab's texture (see BrowserTab::paint_width).
+        t->paint_width = width;
+        t->paint_height = height;
     }
 }
 
@@ -564,7 +577,7 @@ bool initialize_cef() {
     settings.multi_threaded_message_loop = true;
     settings.windowless_rendering_enabled = true;
     settings.no_sandbox = true;
-    settings.remote_debugging_port = 9222;
+    apply_remote_debugging_port(settings);
     settings.log_severity = LOGSEVERITY_FATAL;
     settings.uncaught_exception_stack_size = 10;
 

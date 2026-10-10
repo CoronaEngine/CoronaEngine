@@ -253,6 +253,8 @@ struct DeferredIkTargetUpdate {
     std::uintptr_t transform_handle;  // 用于 world→model 坐标变换
     int node_idx;                     // 接触骨骼的 SkeletonData::nodes 下标
     ktm::fvec3 contact_world;         // 世界空间接触点（从 tri_result.contact_point 拷贝）
+    ktm::fvec3 normal{0.0f, 1.0f, 0.0f};
+    std::uint64_t configuration_revision = 0;
 };
 
 // 注意：八叉树实现已迁移到 include/corona/spatial/octree.h，由 GeometrySystem 持有并维护。
@@ -867,6 +869,19 @@ inline void triangle_narrowphase(
 // 否则 Impl 里的 triangle_octree_cache 字段无法看到 TriangleOctree 类型。
 #include "mechanics_narrowphase2.h"
 
+namespace Corona::Systems::MechanicsInternal {
+struct FootGroundInstance {
+    std::uintptr_t scene = 0;
+    std::uintptr_t actor = 0;
+    std::uint64_t model_id = 0;
+    bool uses_skin = false;
+    ktm::fmat4x4 model_to_world{};
+    ktm::fmat4x4 world_to_model{};
+    CollisionMesh mesh;
+    std::vector<ktm::fvec3> world_vertices;
+    TriangleOctree octree;
+};
+} // namespace Corona::Systems::MechanicsInternal
 
 namespace Corona::Systems {
 
@@ -893,6 +908,7 @@ struct MechanicsSystem::Impl {
 
     // 蒙皮物体的每帧碰撞网格（键：geom_handle，每帧顶点刷新，索引/bone_ids 不变）
     std::unordered_map<std::uintptr_t, MechanicsInternal::CollisionMesh> skinned_collision_cache;
+    std::unordered_map<std::uintptr_t, std::uint64_t> skinned_collision_model_ids;
 
     // E3：上一帧蒙皮世界顶点（模型空间，键：geom_handle）；用于接触点表面速度插值
     std::unordered_map<std::uintptr_t, std::vector<ktm::fvec3>> prev_skinned_verts_cache;
@@ -900,10 +916,11 @@ struct MechanicsSystem::Impl {
     // 阶段 2：TriangleOctree 缓存（键：model_id，绑定姿态建一次）
     std::unordered_map<std::uint64_t, MechanicsInternal::TriangleOctree> triangle_octree_cache;
 
-    // FootPlant IK 地面 probe：静态物体世界空间顶点缓存（键：model_id）。
-    // 与 triangle_octree_cache 同步建立和清理。update_physics 在首次建 octree 时填充，
-    // 静态体不移动，只建一次。update_skinned_geometry 的地面 probe 直接消费。
-    std::unordered_map<std::uint64_t, std::vector<ktm::fvec3>> static_world_verts_cache;
+    // Instance-space ground queries are refreshed independently of simulation_enabled.
+    std::unordered_map<std::uintptr_t, MechanicsInternal::FootGroundInstance> foot_ground_cache;
+    std::unordered_map<std::uintptr_t, std::uintptr_t> ik_geometry_scenes;
+    std::unordered_map<std::uintptr_t, std::uintptr_t> ik_geometry_actors;
+    std::unordered_map<std::uintptr_t, float> ik_scene_floors;
 
     // 阶段 4：蒙皮物体 TriangleOctree（键：geom_handle，拓扑固定，每子步 refit）
     std::unordered_map<std::uintptr_t, MechanicsInternal::TriangleOctree> skinned_octree_cache;
@@ -924,7 +941,8 @@ struct MechanicsSystem::Impl {
     std::unordered_map<std::uint64_t, std::vector<std::array<std::uint16_t, 3>>> static_triangle_index_cache;
     std::unordered_map<std::uint64_t, std::vector<int>>                          static_triangle_bone_cache;
 
-    // Phase 3：碰撞→IK target 延迟更新队列（帧末在 geometry_storage 锁外执行）
+    // Latest complete fixed-step contact sample. Animation reads without consuming;
+    // update_physics clears it before each new step, including an empty/paused step.
     std::vector<MechanicsInternal::DeferredIkTargetUpdate> deferred_ik_target_updates;
 
     std::unordered_set<std::pair<std::uintptr_t, std::uintptr_t>, MechanicsInternal::PairHash> prev_active_collisions;
@@ -942,8 +960,13 @@ struct MechanicsSystem::Impl {
         bodies.clear();
         collision_mesh_cache.clear();
         skinned_collision_cache.clear();
+        skinned_collision_model_ids.clear();
         prev_skinned_verts_cache.clear();
         triangle_octree_cache.clear();
+        foot_ground_cache.clear();
+        ik_geometry_scenes.clear();
+        ik_geometry_actors.clear();
+        ik_scene_floors.clear();
         skinned_octree_cache.clear();
         prev_transform_cache.clear();
         prev_world_verts_cache.clear();

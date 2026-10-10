@@ -209,6 +209,17 @@ def _parse_actor(
                 details={"actor_name": section.get(f"{key}.name", key)},
             )
         optics["texture_asset_path"] = str(texture_asset_path)
+    try:
+        ik_chains = json.loads(section.get(f"{key}.ik.chains", fallback="[]"))
+        if not isinstance(ik_chains, list) or len(ik_chains) > 64 or any(
+            not isinstance(chain, dict) for chain in ik_chains
+        ):
+            raise ValueError("expected up to 64 IK chain objects")
+    except (ValueError, TypeError) as exc:
+        raise ArchiveParseError(
+            "INVALID_IK_CHAINS", f"Invalid IK configuration for {key}: {exc}",
+            details={"actor_name": section.get(f"{key}.name", key)},
+        ) from exc
     return {
         "name": section.get(f"{key}.name", key),
         "actor_guid": section.get(f"{key}.actor_guid", ""),
@@ -249,6 +260,7 @@ def _parse_actor(
         },
         "optics": optics,
         "audio_resource_id": section.get(f"{key}.audio_resource_id", ""),
+        "ik_chains": ik_chains,
         "persisted_fields": persisted_fields,
     }
 

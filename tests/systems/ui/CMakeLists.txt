@@ -1,6 +1,11 @@
 add_executable(corona_vision_camera_direction_tests
     test_vision_camera_direction.cpp
 )
+
+add_executable(corona_ik_chain_config_tests test_ik_chain_config.cpp)
+target_include_directories(corona_ik_chain_config_tests PRIVATE ${PROJECT_SOURCE_DIR}/src/systems/ui)
+target_link_libraries(corona_ik_chain_config_tests PRIVATE nlohmann_json::nlohmann_json corona::resource::manager)
+add_test(NAME IkChainConfigTests COMMAND corona_ik_chain_config_tests)
 target_include_directories(corona_vision_camera_direction_tests
     PRIVATE ${PROJECT_SOURCE_DIR}/src/systems/ui
 )
@@ -96,6 +101,13 @@ target_include_directories(corona_cef_popup_overlay_tests
 )
 add_test(NAME CefPopupOverlayTests COMMAND corona_cef_popup_overlay_tests)
 
+# 源码级棘轮：CEF 位图的通道序必须在「纹理格式声明 / view 侧转换 / popup 侧转换」三处保持一致，
+# 否则只改一边（例如换 SBGRA8_UNORM 却忘了 popup 也会转换）会让浮层颜色错乱而无测试变红。
+# 本仓环境没有 pytest，因此该文件带 __main__ 入口，可直接被 ctest 执行。
+add_test(NAME CefTextureChannelOrderTests
+    COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_cef_texture_channel_order.py
+)
+
 add_executable(corona_ui_surface_lifecycle_tests
     test_ui_surface_lifecycle.cpp
     ${PROJECT_SOURCE_DIR}/src/systems/ui/ui_surface_lifecycle.cpp
@@ -164,3 +176,25 @@ target_include_directories(corona_viewport_gizmo_state_tests
 target_link_libraries(corona_viewport_gizmo_state_tests PRIVATE Horizon corona::resource::manager)
 add_test(NAME ViewportGizmoStateTests
          COMMAND corona_viewport_gizmo_state_tests)
+
+# 面板缩放「合并应用」策略：纯函数（无 SDL/CEF 依赖），因此不需要注入任何运行时。
+add_executable(corona_panel_resize_policy_tests
+    test_panel_resize_policy.cpp
+    ${PROJECT_SOURCE_DIR}/src/systems/ui/panel_resize_policy.cpp
+)
+target_include_directories(corona_panel_resize_policy_tests
+    PRIVATE ${PROJECT_SOURCE_DIR}/include
+)
+add_test(NAME PanelResizePolicyTests
+         COMMAND corona_panel_resize_policy_tests)
+
+# CEF 绘制缓冲上传决策：同样是纯函数，钉住"推迟纹理重建"的语义（避免行错位斜切与空纹理帧）。
+add_executable(corona_cef_paint_upload_tests
+    test_cef_paint_upload.cpp
+    ${PROJECT_SOURCE_DIR}/src/systems/ui/cef/cef_paint_upload.cpp
+)
+target_include_directories(corona_cef_paint_upload_tests
+    PRIVATE ${PROJECT_SOURCE_DIR}/include
+)
+add_test(NAME CefPaintUploadTests
+         COMMAND corona_cef_paint_upload_tests)

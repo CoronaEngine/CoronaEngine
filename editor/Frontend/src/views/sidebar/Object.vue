@@ -109,7 +109,7 @@
         </div>
       </section>
 
-      <!-- IK 测试面板：已加载的模型均显示；蒙皮检测在引擎首帧后完成 -->
+      <!-- IK 配置与运行状态从当前对象读取。 -->
       <section
         v-if="actor.loadStatus === 'loaded'"
         class="property-section property-section-collapsible"
@@ -125,18 +125,22 @@
         </button>
         <div v-show="!collapsedSections.ik" class="section-collapsible-body ik-body">
 
-          <!-- 非蒙皮/缓存未就绪时的占位提示 -->
-          <template v-if="!ikState.isSkinned">
-            <p class="ik-hint ik-hint-warning">此模型不是蒙皮模型，或引擎尚未运行（骨骼缓存在首帧建立）。</p>
-            <button type="button" class="ik-refresh-btn" @click="refreshSkeletonLeaves">刷新骨骼列表</button>
+          <button type="button" class="ik-refresh-btn" :disabled="ikState.loading || ikState.saving" @click="refreshSkeletonLeaves">刷新配置与状态</button>
+          <p v-if="ikState.loading" class="ik-hint">正在读取骨骼和 IK 配置…</p>
+          <template v-else-if="!ikState.ready">
+            <p class="ik-hint ik-hint-warning">IK 数据尚未就绪，请刷新后重试。</p>
+          </template>
+          <template v-else-if="!ikState.isSkinned">
+            <p class="ik-hint ik-hint-warning">此模型没有可用骨架。</p>
           </template>
 
           <template v-else>
-            <p class="ik-hint">叶子节点为末端效应骨骼，链长决定参与求解的关节数。目标点为模型空间坐标。</p>
+            <p class="ik-hint">建议选择踝骨作为末端，链长包含末端节点、膝和髋。贴地模式自动查询地面，混合上限与运行时权重独立。</p>
+            <p class="ik-hint">{{ ikState.saving ? '正在应用配置…' : '状态为上次读取结果，可刷新查看。' }}</p>
 
             <div
               v-for="(foot, index) in ikState.feet"
-              :key="index"
+              :key="foot.id"
               class="ik-foot-card"
             >
               <div class="ik-foot-header">
@@ -146,15 +150,16 @@
                     <input v-model="foot.enabled" type="checkbox" @change="applyIkChains" />
                     <span>{{ foot.enabled ? '启用' : '禁用' }}</span>
                   </label>
-                  <button type="button" class="ik-remove-btn" :disabled="ikState.feet.length <= 1" @click="removeFoot(index)">✕</button>
+                  <button type="button" class="ik-remove-btn" @click="removeFoot(index)">✕</button>
                 </div>
               </div>
 
               <div class="property-row ik-row">
                 <label>末端骨骼</label>
                 <select v-model="foot.boneName" @change="applyIkChains">
-                  <option value="">— 选择叶子骨骼 —</option>
-                  <option v-for="name in ikState.leafBones" :key="name" :value="name">{{ name }}</option>
+                  <option value="">— 选择末端骨骼 —</option>
+                  <option v-if="foot.boneName && !ikState.boneNames.includes(foot.boneName)" :value="foot.boneName">{{ foot.boneName }}</option>
+                  <option v-for="name in ikState.boneNames" :key="name" :value="name">{{ name }}</option>
                 </select>
               </div>
 
@@ -163,22 +168,33 @@
                 <select v-model="foot.mode" @change="applyIkChains">
                   <option value="contact">Contact（通用碰撞）</option>
                   <option value="foot_plant">FootPlant（贴地）</option>
-                  <option value="look_at">LookAt（朝向）</option>
-                  <option value="weapon_aim">WeaponAim（武器指向）</option>
+                  <option value="look_at">LookAt（位置追踪）</option>
+                  <option value="weapon_aim">WeaponAim（位置追踪）</option>
                 </select>
               </div>
 
               <div class="property-row ik-row">
                 <label>链长</label>
-                <input v-model.number="foot.chainLength" type="number" min="1" max="16" step="1" @change="applyIkChains" />
+                <input v-model.number="foot.chainLength" type="number" min="2" max="64" step="1" @change="applyIkChains" />
               </div>
 
               <div class="property-row ik-row">
-                <label>权重</label>
+                <label>混合上限</label>
                 <input v-model.number="foot.weight" type="number" min="0" max="1" step="0.05" @change="applyIkChains" />
               </div>
 
-              <div class="ik-target-group">
+              <template v-if="foot.mode === 'foot_plant'">
+                <div class="property-row ik-row">
+                  <label>向下探测距离</label>
+                  <input v-model.number="foot.probeMaxDrop" type="number" min="0" max="100" step="0.05" @change="applyIkChains" />
+                </div>
+                <div class="property-row ik-row">
+                  <label>足底离地高度</label>
+                  <input v-model.number="foot.footHeight" type="number" min="0" max="10" step="0.01" @change="applyIkChains" />
+                </div>
+              </template>
+
+              <div v-if="!isAutomaticIkFoot(foot)" class="ik-target-group">
                 <span class="ik-target-label">目标点（模型空间）</span>
                 <div class="ik-target-inputs">
                   <label class="axis-x"><b>X</b><input v-model.number="foot.targetX" type="number" step="0.01" @change="applyIkChains" /></label>
@@ -187,9 +203,12 @@
                 </div>
               </div>
 
+              <p class="ik-hint">运行状态：{{ ikFootStatus(foot) }}<template v-if="isAutomaticIkFoot(foot)"> · 激活权重 {{ Number(foot.runtime?.weight ?? 0).toFixed(3) }}</template></p>
+              <p v-if="isAutomaticIkFoot(foot) && foot.runtime?.has_target" class="ik-hint">模型空间目标：{{ (foot.runtime.target ?? []).map(value => Number(value).toFixed(3)).join(', ') }}</p>
+
               <div class="property-row ik-row">
                 <label>最大迭代</label>
-                <input v-model.number="foot.maxIterations" type="number" min="1" max="64" step="1" @change="applyIkChains" />
+                <input v-model.number="foot.maxIterations" type="number" min="1" max="128" step="1" @change="applyIkChains" />
               </div>
 
               <div class="property-row ik-row">
@@ -267,6 +286,7 @@ import { editorApi } from '@/api/editorApi.js';
 import { DEFAULT_SCENE_NAME } from '@/utils/constants.js';
 import { getActorContext } from '@/blockly/composables/useActorContext.js';
 import { cabbageContextService } from '@/services/cabbageAssistantContextService.js';
+import { createIkEditorController, createIkEditorState, makeIkFoot, isAutomaticIkFoot, ikFootStatus } from '@/utils/ikEditorController.js';
 
 const { closePanel, isDocked } = useDockPanel();
 const { error: logError } = useErrorHandler('Object');
@@ -308,92 +328,25 @@ const selectedActorName = ref('');
 const loading = ref(false);
 const saving = ref(false);
 
-// ---- IK 测试状态 ----
-const ikState = reactive({
-  isSkinned: false,
-  leafBones: [],
-  /** @type {Array<{boneName:string,mode:string,chainLength:number,weight:number,targetX:number,targetY:number,targetZ:number,maxIterations:number,damping:number,enabled:boolean}>} */
-  feet: [],
-  error: '',
-});
-
-function makeFoot() {
-  return {
-    boneName: '',
-    mode: 'foot_plant',
-    chainLength: 2,
-    weight: 1.0,
-    targetX: 0,
-    targetY: 0,
-    targetZ: 0,
-    maxIterations: 10,
-    damping: 1.0,
-    enabled: true,
-  };
-}
+// The controller binds reads and serialized writes to one actor selection.
+const ikState = reactive(createIkEditorState());
+const ikController = createIkEditorController(editorApi.sceneTools, ikState);
 
 function addFoot() {
-  ikState.feet.push(makeFoot());
+  ikState.feet.push(makeIkFoot());
 }
 
 function removeFoot(index) {
-  if (ikState.feet.length <= 1) return;
   ikState.feet.splice(index, 1);
-  applyIkChains();
-}
-
-async function loadSkeletonLeaves(sceneName, actorName) {
-  ikState.isSkinned = false;
-  ikState.leafBones = [];
-  ikState.error = '';
-  try {
-    const raw = await editorApi.sceneTools.getActorSkeletonLeaves(sceneName, actorName);
-    const data = raw?.data ?? raw ?? {};
-    if (data.status === 'error') {
-      ikState.error = `骨骼查询失败: ${data.message || data.error || 'unknown'}`;
-      return;
-    }
-    ikState.isSkinned = Boolean(data.is_skinned);
-    if (ikState.isSkinned) {
-      ikState.leafBones = Array.isArray(data.leaves) ? data.leaves : [];
-      if (ikState.feet.length === 0) ikState.feet.push(makeFoot());
-    }
-  } catch (err) {
-    // 显示具体错误而非静默，方便诊断
-    ikState.error = `骨骼查询异常: ${err?.message || String(err)}`;
-  }
+  void applyIkChains();
 }
 
 async function refreshSkeletonLeaves() {
-  if (!selectedActorName.value) return;
-  await loadSkeletonLeaves(selectedSceneName.value, selectedActorName.value);
+  await ikController.refresh();
 }
 
 async function applyIkChains() {
-  if (!selectedActorName.value || !ikState.isSkinned) return;
-  ikState.error = '';
-  try {
-    const chains = ikState.feet
-      .filter((f) => f.boneName)
-      .map((f) => ({
-        bone_name: f.boneName,
-        mode: f.mode,
-        chain_length: Number(f.chainLength) || 2,
-        weight: Number(f.weight) || 1.0,
-        target: [Number(f.targetX) || 0, Number(f.targetY) || 0, Number(f.targetZ) || 0],
-        max_iterations: Number(f.maxIterations) || 10,
-        damping: Number(f.damping) || 1.0,
-        enabled: Boolean(f.enabled),
-      }));
-    await editorApi.sceneTools.setActorIkChains(
-      selectedSceneName.value,
-      selectedActorName.value,
-      chains,
-    );
-  } catch (err) {
-    ikState.error = err?.message || 'IK 链更新失败';
-    logError('更新 IK 链失败', err);
-  }
+  await ikController.apply();
 }
 const aliasDraft = ref('');
 const aliasSaving = ref(false);
@@ -492,6 +445,7 @@ async function loadActor(sceneName, actorName) {
   loading.value = true;
   selectedSceneName.value = sceneName;
   selectedActorName.value = actorName;
+  ikController.clear();
   try {
     const data = unwrap(await editorApi.scene.getActor(sceneName, actorName));
     if (sequence !== loadSequence || selectedActorName.value !== actorName) return;
@@ -524,8 +478,7 @@ async function loadActor(sceneName, actorName) {
     aliasDraft.value = actor.name;
     aliasError.value = '';
     syncViewportTransformBaseline();
-    // 异步加载叶子骨骼缓存（蒙皮模型）；非蒙皮模型静默跳过。
-    void loadSkeletonLeaves(sceneName, actorName);
+    void ikController.select(sceneName, actorName);
   } catch (error) {
     if (sequence === loadSequence) logError('加载对象数据失败', error);
   } finally {
@@ -541,6 +494,7 @@ function resetAlias() {
 async function commitAlias() {
   const nextName = aliasDraft.value.trim();
   const currentName = selectedActorName.value;
+  const currentScene = selectedSceneName.value;
   if (!nextName || !currentName || aliasSaving.value) {
     if (!nextName) aliasError.value = '名称不能为空';
     return;
@@ -549,12 +503,14 @@ async function commitAlias() {
   aliasSaving.value = true;
   aliasError.value = '';
   try {
-    const result = unwrap(await editorApi.sceneTools.renameActor(selectedSceneName.value, currentName, nextName));
+    const result = unwrap(await editorApi.sceneTools.renameActor(currentScene, currentName, nextName));
+    if (selectedActorName.value !== currentName || selectedSceneName.value !== currentScene) return;
     if (result?.status === 'error') throw new Error(result.message || '修改名称失败');
     const savedName = String(result?.actor?.name || result?.new_name || nextName);
     selectedActorName.value = savedName;
     actor.name = savedName;
     aliasDraft.value = savedName;
+    void ikController.select(currentScene, savedName);
   } catch (error) {
     aliasError.value = error?.message || '修改名称失败';
     aliasDraft.value = actor.name;
@@ -855,6 +811,9 @@ function handleSelection(payload = {}) {
   const sceneName = String(payload.scene || selectedSceneName.value || DEFAULT_SCENE_NAME);
   const actorName = String(payload.actor || '');
   if (type === 'scene' || !actorName) {
+    loadSequence += 1;
+    loading.value = false;
+    ikController.clear();
     selectedSceneName.value = sceneName;
     selectedActorName.value = '';
     actor.name = '';
@@ -932,6 +891,7 @@ onMounted(async () => {
 
 onUnmounted(() => {
   loadSequence += 1;
+  ikController.clear();
   for (const timer of updateTimers.values()) clearTimeout(timer);
   updateTimers.clear();
   pendingTransformUpdates.clear();

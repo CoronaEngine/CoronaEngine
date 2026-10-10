@@ -249,13 +249,25 @@ def assert_cache_matches_repo(
 def cmake_build(
     repo_root: Path,
     configuration: str,
-    target: str,
+    targets: str | Sequence[str],
     target_family: str = DEFAULT_TARGET_FAMILY,
 ) -> None:
+    """Build one or more targets in a single cmake invocation.
+
+    `cmake --build --target` accepts several targets, and building them together is what
+    callers expect from `dev.py build A B C`. Passing only the first one used to silently
+    drop the rest, which made "did my test targets get rebuilt?" impossible to answer.
+    """
+    if isinstance(targets, str):
+        targets = (targets,)
+    requested = [target for target in targets if target]
+    if not requested:
+        raise ValueError("cmake_build requires at least one target")
+
     assert_cache_matches_repo(repo_root, configuration, target_family)
     environment = load_conan_build_environment(repo_root, configuration, target_family)
     run_command(
-        ("cmake", "--build", "--preset", preset_name(target_family, configuration), "--target", target),
+        ("cmake", "--build", "--preset", preset_name(target_family, configuration), "--target", *requested),
         cwd=repo_root,
         env=environment,
     )

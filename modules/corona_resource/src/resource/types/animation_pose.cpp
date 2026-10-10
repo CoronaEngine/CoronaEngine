@@ -96,13 +96,14 @@ std::array<float, 3> v3_normalize(const std::array<float, 3>& v) {
     return {v[0] * inv, v[1] * inv, v[2] * inv};
 }
 
-/// 平移矩阵 T(t)（列主序）。
-std::array<float, 16> mat4_translate(const std::array<float, 3>& t) {
-    return {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, t[0], t[1], t[2], 1};
+template <std::size_t N>
+bool all_finite(const std::array<float, N>& values) {
+    return std::all_of(values.begin(), values.end(), [](float value) { return std::isfinite(value); });
 }
 
-/// 一般 4x4 逆矩阵（列主序）。奇异时返回单位阵。
-std::array<float, 16> mat4_inverse(const std::array<float, 16>& m) {
+/// 一般 4x4 逆矩阵（列主序）。拒绝奇异/非有限输入，不能用单位阵掩盖无效空间变换。
+bool mat4_inverse(const std::array<float, 16>& m, std::array<float, 16>& result) {
+    if (!all_finite(m)) return false;
     std::array<float, 16> inv{};
     inv[0] = m[5] * m[10] * m[15] - m[5] * m[11] * m[14] - m[9] * m[6] * m[15] +
              m[9] * m[7] * m[14] + m[13] * m[6] * m[11] - m[13] * m[7] * m[10];
@@ -138,20 +139,18 @@ std::array<float, 16> mat4_inverse(const std::array<float, 16>& m) {
               m[4] * m[2] * m[9] + m[8] * m[1] * m[6] - m[8] * m[2] * m[5];
 
     float det = m[0] * inv[0] + m[1] * inv[4] + m[2] * inv[8] + m[3] * inv[12];
-    if (std::fabs(det) < 1e-12f) {
-        return kIdentity;  // 奇异，退化返回单位阵
-    }
+    if (!std::isfinite(det) || det == 0.0f) return false;
     float inv_det = 1.0f / det;
     for (int i = 0; i < 16; ++i) inv[i] *= inv_det;
-    return inv;
+    if (!all_finite(inv)) return false;
+    result = inv;
+    return true;
 }
 
-/// 逐元素线性插值两个 mat4（用于 IK 结果按 weight 混合回原姿态；
-/// 近似做法，权重接近 0/1 时无失真，中间值可能有轻微剪切，够 demo/首版用）。
-std::array<float, 16> mat4_lerp(const std::array<float, 16>& a, const std::array<float, 16>& b, float t) {
-    std::array<float, 16> r{};
-    for (int i = 0; i < 16; ++i) r[i] = a[i] + (b[i] - a[i]) * t;
-    return r;
+std::array<float, 3> transform_point(const std::array<float, 16>& m, const std::array<float, 3>& p) {
+    return {m[0] * p[0] + m[4] * p[1] + m[8] * p[2] + m[12],
+            m[1] * p[0] + m[5] * p[1] + m[9] * p[2] + m[13],
+            m[2] * p[0] + m[6] * p[1] + m[10] * p[2] + m[14]};
 }
 
 }  // namespace
@@ -357,18 +356,20 @@ std::array<float, 4> rotation_between(const std::array<float, 3>& from,
     if (v3_len(f) < 0.5f || v3_len(t) < 0.5f) return {0.0f, 0.0f, 0.0f, 1.0f};
 
     float d = std::clamp(v3_dot(f, t), -1.0f, 1.0f);
-    if (d > 0.999999f) {
-        return {0.0f, 0.0f, 0.0f, 1.0f};  // 近共线同向：无需旋转
+    const auto cross = v3_cross(f, t);
+    const float cross_length = v3_len(cross);
+    if (cross_length < 1e-7f && d >= 0.0f) {
+        return {0.0f, 0.0f, 0.0f, 1.0f};
     }
-    if (d < -0.999999f) {
+    if (cross_length < 1e-7f) {
         // 近反向（≈180°）：绕任意垂直轴转 π。先试与 X 轴叉乘，退化再用 Y 轴。
         std::array<float, 3> axis = v3_cross({1.0f, 0.0f, 0.0f}, f);
         if (v3_len(axis) < 1e-4f) axis = v3_cross({0.0f, 1.0f, 0.0f}, f);
         axis = v3_normalize(axis);
         return quat_from_axis_angle(axis, 3.14159265358979f);
     }
-    std::array<float, 3> axis = v3_normalize(v3_cross(f, t));
-    float angle = std::acos(d);
+    std::array<float, 3> axis = v3_normalize(cross);
+    float angle = std::atan2(cross_length, d);
     return quat_from_axis_angle(axis, angle);
 }
 
@@ -382,27 +383,13 @@ std::array<float, 16> quat_to_mat4(const std::array<float, 4>& q) {
     return compose_trs({0.0f, 0.0f, 0.0f}, q, {1.0f, 1.0f, 1.0f});
 }
 
-/// 累积计算 node_index 的 global（模型空间），沿 parent 链用 base_locals。
-/// node_index<0 返回单位阵。用于取链根之上（IK 不改）的固定父 global。
-std::array<float, 16> compute_global_of(const SkeletonData& skeleton,
-                                        const std::vector<std::array<float, 16>>& base_locals,
-                                        int node_index) {
-    if (node_index < 0) return kIdentity;
-    // 收集从 node_index 到根的路径
-    std::vector<int> path;
-    int cur = node_index;
-    int guard = 0;
-    const int max_depth = static_cast<int>(skeleton.nodes.size()) + 1;
-    while (cur >= 0 && cur < static_cast<int>(skeleton.nodes.size()) && guard++ < max_depth) {
-        path.push_back(cur);
-        cur = skeleton.nodes[static_cast<std::size_t>(cur)].parent;
-    }
-    // 从根往下累乘：global = local(root) * ... * local(node)
-    std::array<float, 16> g = kIdentity;
-    for (auto it = path.rbegin(); it != path.rend(); ++it) {
-        g = mat4_mul(g, base_locals[static_cast<std::size_t>(*it)]);
-    }
-    return g;
+// Only rotate the linear part. Keeping the input translation and its complete
+// scale/shear factor avoids changing bone offsets, including mirrored rigs.
+std::array<float, 16> rotate_local(const std::array<float, 16>& base,
+                                  const std::array<float, 4>& rotation) {
+    auto result = mat4_mul(quat_to_mat4(rotation), base);
+    for (int i = 12; i < 16; ++i) result[i] = base[i];
+    return result;
 }
 }  // namespace
 
@@ -416,38 +403,46 @@ void solve_ccd(const SkeletonData& skeleton,
     if (!chain.enabled || node_count == 0) return;
     if (chain.end_node < 0 || chain.end_node >= node_count) return;
     if (base_locals.size() != skeleton.nodes.size()) return;
-    if (chain.chain_length < 2) return;  // 至少 1 个可转关节 + 末端
+    if (chain.chain_length < 2 || chain.max_iterations <= 0) return;
+    if (!all_finite(chain.target) || !std::isfinite(chain.weight) ||
+        !std::isfinite(chain.damping) || !std::isfinite(chain.tolerance)) return;
+    const float weight = std::clamp(chain.weight, 0.0f, 1.0f);
+    const float damping = std::clamp(chain.damping, 0.0f, 1.0f);
+    if (weight == 0.0f || damping == 0.0f) return;
+    const float tolerance = std::max(chain.tolerance, 0.0f);
+    const int max_iterations = std::min(chain.max_iterations, 256);
 
     // target 以模型空间给出（与 compute_pose 输出的蒙皮网格同空间）。但 CCD 内部所有 global
     // 都在「节点层级 global 空间」（parent·local 累积，未乘 global_inverse）。二者相差一个
     // global_inverse，故先用 inverse(global_inverse)=root_global 把 target 变换回节点空间，
     // 使末端 E 与 target 在同一空间比较。global_inverse=单位阵时此步为恒等，无副作用。
-    const std::array<float, 16> root_global = mat4_inverse(skeleton.global_inverse);
-    const std::array<float, 3>& tm = chain.target;
-    const std::array<float, 3> target_node = {
-        root_global[0] * tm[0] + root_global[4] * tm[1] + root_global[8] * tm[2] + root_global[12],
-        root_global[1] * tm[0] + root_global[5] * tm[1] + root_global[9] * tm[2] + root_global[13],
-        root_global[2] * tm[0] + root_global[6] * tm[1] + root_global[10] * tm[2] + root_global[14]};
+    std::array<float, 16> root_global;
+    if (!mat4_inverse(skeleton.global_inverse, root_global)) return;
+    const auto target_node = transform_point(root_global, chain.target);
+    if (!all_finite(target_node)) return;
 
-    // 沿 parent 从末端上溯，建链 joints（末端在前），最多 chain_length 个，遇根停止。
-    // 上界检查 cur < node_count：防 parent 被写入越界正整数导致后续越界读（与 compute_global_of 一致）。
-    // 链长天然 ≤ 节点数，reserve 按 node_count 钳制，防 chain_length 被误设为巨大值导致 bad_alloc。
-    std::vector<int> joints_end_first;
-    joints_end_first.reserve(static_cast<std::size_t>(std::min(chain.chain_length, node_count)));
+    // Validate the complete ancestry, including ancestors above the IK root.
+    // A cycle must not grow a vector up to an untrusted chain_length.
+    std::vector<int> ancestry;
+    std::vector<bool> visited(skeleton.nodes.size(), false);
     int cur = chain.end_node;
-    for (int i = 0; i < chain.chain_length && cur >= 0 && cur < node_count; ++i) {
-        joints_end_first.push_back(cur);
+    while (cur >= 0) {
+        if (cur >= node_count || visited[static_cast<std::size_t>(cur)] ||
+            !all_finite(base_locals[static_cast<std::size_t>(cur)])) return;
+        visited[static_cast<std::size_t>(cur)] = true;
+        ancestry.push_back(cur);
         cur = skeleton.nodes[static_cast<std::size_t>(cur)].parent;
     }
-    // 反转为 根→末端 顺序
-    std::vector<int> joints(joints_end_first.rbegin(), joints_end_first.rend());
-    const int L = static_cast<int>(joints.size());
+    const int L = std::min(chain.chain_length, static_cast<int>(ancestry.size()));
     if (L < 2) return;  // 链太短（末端已是根附近），无可转关节
+    std::vector<int> joints(ancestry.begin(), ancestry.begin() + L);
+    std::reverse(joints.begin(), joints.end());
 
     // 链根之上（IK 不改）的固定父 global
-    const int chain_root_parent = skeleton.nodes[static_cast<std::size_t>(joints[0])].parent;
-    const std::array<float, 16> root_parent_global =
-        compute_global_of(skeleton, base_locals, chain_root_parent);
+    auto root_parent_global = kIdentity;
+    for (int k = static_cast<int>(ancestry.size()) - 1; k >= L; --k) {
+        root_parent_global = mat4_mul(root_parent_global, base_locals[static_cast<std::size_t>(ancestry[k])]);
+    }
 
     // 链上每关节的可写 local（起点 = base_locals），以及当前 global
     std::vector<std::array<float, 16>> local_work(static_cast<std::size_t>(L));
@@ -465,52 +460,113 @@ void solve_ccd(const SkeletonData& skeleton,
     rebuild_from(0);
 
     const std::array<float, 4> q_identity{0.0f, 0.0f, 0.0f, 1.0f};
-    const float damping = std::clamp(chain.damping, 0.0f, 1.0f);
+    std::vector<std::array<float, 4>> rotations(static_cast<std::size_t>(L), q_identity);
+    auto apply_rotation = [&](int j, const std::array<float, 4>& dq) {
+        auto& rotation = rotations[static_cast<std::size_t>(j)];
+        // slerp normalizes the product as well as choosing a consistent unit quaternion.
+        rotation = slerp_quat(q_identity, quat_mul(dq, rotation), 1.0f);
+        local_work[static_cast<std::size_t>(j)] =
+            rotate_local(base_locals[static_cast<std::size_t>(joints[j])], rotation);
+        rebuild_from(j);
+    };
+    auto model_error = [&]() {
+        const auto end_model = transform_point(skeleton.global_inverse, mat4_translation(gchain.back()));
+        return v3_len(v3_sub(end_model, chain.target));
+    };
+    float best_error = model_error();
+    if (!std::isfinite(best_error) || best_error <= tolerance) return;
+    auto best_rotations = rotations;
+
+    // A straight chain and an inward collinear target give every CCD joint an
+    // identity rotation. Seed one bend in a deterministic plane; subsequent CCD
+    // still decides the final pose. Do not bend an already satisfied/outward chain.
+    if (L >= 3) {
+        const auto root = mat4_translation(gchain.front());
+        const auto root_to_end = v3_sub(mat4_translation(gchain.back()), root);
+        const auto root_to_target = v3_sub(target_node, root);
+        const float end_distance = v3_len(root_to_end);
+        const float target_distance = v3_len(root_to_target);
+        const auto direction = v3_normalize(root_to_end);
+        bool straight = end_distance > 1e-8f && target_distance < end_distance &&
+                        v3_dot(direction, v3_normalize(root_to_target)) > 0.999999f;
+        for (int k = 1; k < L && straight; ++k) {
+            const auto segment = v3_sub(mat4_translation(gchain[k]), mat4_translation(gchain[k - 1]));
+            straight = v3_len(segment) <= 1e-8f || v3_dot(v3_normalize(segment), direction) > 0.999999f;
+        }
+        if (straight) {
+            for (int j = L - 2; j >= 1; --j) {
+                const auto joint = mat4_translation(gchain[j]);
+                const float a = v3_len(v3_sub(joint, root));
+                const float b = v3_len(v3_sub(mat4_translation(gchain.back()), joint));
+                if (a <= 1e-8f || b <= 1e-8f) continue;
+                std::array<float, 16> inverse_parent;
+                if (!mat4_inverse(gchain[j - 1], inverse_parent)) return;
+                const auto local_direction = v3_normalize(v3_sub(
+                    transform_point(inverse_parent, mat4_translation(gchain.back())),
+                    mat4_translation(local_work[j])));
+                auto axis = v3_cross({0.0f, 0.0f, 1.0f}, local_direction);
+                if (v3_len(axis) < 1e-4f) axis = v3_cross({0.0f, 1.0f, 0.0f}, local_direction);
+                const float angle = std::acos(std::clamp(
+                    (target_distance * target_distance - a * a - b * b) / (2.0f * a * b), -1.0f, 1.0f));
+                apply_rotation(j, quat_from_axis_angle(v3_normalize(axis), angle * damping));
+                // Align the newly bent chain before another distal CCD step can
+                // undo the seed. For a rigid two-segment chain this also reaches
+                // the target directly (subject to damping).
+                if (!mat4_inverse(root_parent_global, inverse_parent)) return;
+                const auto root_local = mat4_translation(local_work.front());
+                const auto align = rotation_between(
+                    v3_sub(transform_point(inverse_parent, mat4_translation(gchain.back())), root_local),
+                    v3_sub(transform_point(inverse_parent, target_node), root_local));
+                apply_rotation(0, slerp_quat(q_identity, align, damping));
+                const float error = model_error();
+                if (std::isfinite(error) && error < best_error) {
+                    best_error = error;
+                    best_rotations = rotations;
+                }
+                break;
+            }
+        }
+    }
 
     // CCD 迭代：每轮从最靠近末端的关节（L-2）扫到链根（0）。
     // 末端关节 joints[L-1] 绕自身原点转不改变末端位置，故不旋转它。
-    for (int iter = 0; iter < chain.max_iterations; ++iter) {
+    for (int iter = 0; iter < max_iterations; ++iter) {
+        if (best_error <= tolerance) break;
         std::array<float, 3> E = mat4_translation(gchain[static_cast<std::size_t>(L - 1)]);
-        if (v3_len(v3_sub(E, target_node)) < chain.tolerance) break;
 
         for (int j = L - 2; j >= 0; --j) {
-            std::array<float, 3> J = mat4_translation(gchain[static_cast<std::size_t>(j)]);
-            std::array<float, 3> to_eff = v3_normalize(v3_sub(E, J));
-            std::array<float, 3> to_tgt = v3_normalize(v3_sub(target_node, J));
+            // Work in the joint's parent space and only update a local rotation.
+            // Conjugating a world rotation through nonuniform parent scale would
+            // instead inject shear/scale into the joint's local matrix.
+            const auto& parent_global = (j == 0) ? root_parent_global : gchain[j - 1];
+            std::array<float, 16> inverse_parent;
+            if (!mat4_inverse(parent_global, inverse_parent)) return;
+            const auto J = mat4_translation(local_work[j]);
+            const auto to_eff = v3_normalize(v3_sub(transform_point(inverse_parent, E), J));
+            const auto to_tgt = v3_normalize(v3_sub(transform_point(inverse_parent, target_node), J));
             if (v3_len(to_eff) < 0.5f || v3_len(to_tgt) < 0.5f) continue;  // 关节与末端/目标重合
 
             std::array<float, 4> dq = rotation_between(to_eff, to_tgt);
             if (damping < 1.0f) dq = slerp_quat(q_identity, dq, damping);  // 压步长防抖
 
-            // 绕关节位置 J 施加世界系旋转：newGlobal = T(J)·R(dq)·T(-J)·oldGlobal
-            std::array<float, 16> delta =
-                mat4_mul(mat4_translate(J), mat4_mul(quat_to_mat4(dq), mat4_translate({-J[0], -J[1], -J[2]})));
-            std::array<float, 16> new_global_j = mat4_mul(delta, gchain[static_cast<std::size_t>(j)]);
-
-            // 反解新 local：local_j = inv(parent_global_j) · newGlobal_j
-            const std::array<float, 16>& parent_global_j =
-                (j == 0) ? root_parent_global : gchain[static_cast<std::size_t>(j - 1)];
-            local_work[static_cast<std::size_t>(j)] = mat4_mul(mat4_inverse(parent_global_j), new_global_j);
-
-            // 重算 j..末端 的 global，刷新末端位置供本轮后续关节使用
-            gchain[static_cast<std::size_t>(j)] = new_global_j;
-            for (int k = j + 1; k < L; ++k) {
-                gchain[static_cast<std::size_t>(k)] =
-                    mat4_mul(gchain[static_cast<std::size_t>(k - 1)], local_work[static_cast<std::size_t>(k)]);
-            }
+            apply_rotation(j, dq);
             E = mat4_translation(gchain[static_cast<std::size_t>(L - 1)]);
         }
+        const float error = model_error();
+        if (!std::isfinite(error)) return;
+        if (error < best_error) {
+            best_error = error;
+            best_rotations = rotations;
+        }
+        if (error <= tolerance) break;
     }
 
-    // 输出被改写关节（joints[0..L-2]，末端不动）的新 local；weight<1 时与原姿态混合
-    const float weight = std::clamp(chain.weight, 0.0f, 1.0f);
+    // Blend rotations, never matrices: intermediate weights must not shrink a
+    // rigid bone or make a half-weight 180-degree correction singular.
     for (int j = 0; j <= L - 2; ++j) {
         int node_idx = joints[static_cast<std::size_t>(j)];
-        std::array<float, 16> result = local_work[static_cast<std::size_t>(j)];
-        if (weight < 1.0f) {
-            result = mat4_lerp(base_locals[static_cast<std::size_t>(node_idx)], result, weight);
-        }
-        out_overrides[node_idx] = result;
+        out_overrides[node_idx] = rotate_local(base_locals[static_cast<std::size_t>(node_idx)],
+                                               slerp_quat(q_identity, best_rotations[j], weight));
     }
 }
 

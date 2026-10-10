@@ -506,7 +506,8 @@ struct TriangleOctree {
         const CollisionMesh& mesh,
         const ktm::fvec3& probe,
         float max_drop,
-        float& out_ground_y) const {
+        float& out_ground_y,
+        ktm::fvec3* out_normal = nullptr) const {
 
         constexpr float kSlop = 0.05f;
         if (nodes.empty()) return false;
@@ -574,6 +575,7 @@ struct TriangleOctree {
 
                     if (!found || ground_y > out_ground_y) {
                         out_ground_y = ground_y;
+                        if (out_normal) *out_normal = n;
                         found = true;
                     }
                 }
