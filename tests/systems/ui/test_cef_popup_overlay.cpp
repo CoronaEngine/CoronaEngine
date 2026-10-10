@@ -27,12 +27,14 @@ std::uint8_t pixel_channel(const std::vector<std::uint8_t>& buffer, int width, i
     return buffer[(static_cast<std::size_t>(y) * width + x) * 4u + channel];
 }
 
+// 参数是**字节序**（c0..c3），不是 RGBA 语义：CEF 位图在整条管线里都是 BGRA，
+// 第 0 字节是蓝、第 2 字节是红。按字节断言可以避免"语义顺序"被悄悄改掉。
 bool pixel_equals(const std::vector<std::uint8_t>& buffer, int width, int x, int y,
-                  std::uint8_t r, std::uint8_t g, std::uint8_t b, std::uint8_t a) {
-    return pixel_channel(buffer, width, x, y, 0) == r &&
-           pixel_channel(buffer, width, x, y, 1) == g &&
-           pixel_channel(buffer, width, x, y, 2) == b &&
-           pixel_channel(buffer, width, x, y, 3) == a;
+                  std::uint8_t c0, std::uint8_t c1, std::uint8_t c2, std::uint8_t c3) {
+    return pixel_channel(buffer, width, x, y, 0) == c0 &&
+           pixel_channel(buffer, width, x, y, 1) == c1 &&
+           pixel_channel(buffer, width, x, y, 2) == c2 &&
+           pixel_channel(buffer, width, x, y, 3) == c3;
 }
 
 bool pixel_is_sentinel(const std::vector<std::uint8_t>& buffer, int width, int x, int y) {
@@ -57,7 +59,7 @@ void test_default_overlay_is_hidden() {
     require(pixel_is_sentinel(view, 4, 0, 0), "hidden overlay must not touch pixels");
 }
 
-void test_update_pixels_converts_bgra_to_rgba_and_keeps_alpha() {
+void test_update_pixels_keeps_bgra_bytes_and_alpha() {
     PopupOverlay overlay;
     overlay.set_rect(0, 0, 2, 2);
     overlay.set_visible(true);
@@ -66,9 +68,10 @@ void test_update_pixels_converts_bgra_to_rgba_and_keeps_alpha() {
 
     require(!overlay.empty(), "overlay with pixels must not be empty");
     const auto& pixels = overlay.pixels();
-    require(pixels.size() == 16, "overlay must store RGBA bytes for every pixel");
-    require(pixels[0] == 30 && pixels[1] == 20 && pixels[2] == 10 && pixels[3] == 255,
-            "first pixel must be RGBA(30,20,10,255)");
+    require(pixels.size() == 16, "overlay must store 4 bytes for every pixel");
+    // 管线全程 BGRA：popup 像素必须原样保留，不能就地转成 RGBA，
+    // 否则 composite_over() 把它们 memcpy 进同为 BGRA 的 view 缓冲后颜色会对调。
+    require(pixels == bgra, "popup pixels must be stored byte-for-byte as delivered (BGRA)");
     require(pixels[7] == 128, "alpha must be preserved, not forced opaque");
 }
 
@@ -82,10 +85,11 @@ void test_composite_writes_at_rect_offset() {
     auto view = make_view(4, 4);
     require(overlay.composite_over(view, 4, 4), "visible overlay must composite");
 
-    require(pixel_equals(view, 4, 1, 1, 30, 20, 10, 255), "popup origin pixel misplaced");
-    require(pixel_equals(view, 4, 2, 1, 60, 50, 40, 128), "popup top-right pixel misplaced");
-    require(pixel_equals(view, 4, 1, 2, 90, 80, 70, 255), "popup bottom-left pixel misplaced");
-    require(pixel_equals(view, 4, 2, 2, 120, 110, 100, 255), "popup bottom-right pixel misplaced");
+    // 断言的是字节序：popup 的 BGRA 像素现在原样落进同为 BGRA 的 view 缓冲。
+    require(pixel_equals(view, 4, 1, 1, 10, 20, 30, 255), "popup origin pixel misplaced");
+    require(pixel_equals(view, 4, 2, 1, 40, 50, 60, 128), "popup top-right pixel misplaced");
+    require(pixel_equals(view, 4, 1, 2, 70, 80, 90, 255), "popup bottom-left pixel misplaced");
+    require(pixel_equals(view, 4, 2, 2, 100, 110, 120, 255), "popup bottom-right pixel misplaced");
 
     require(pixel_is_sentinel(view, 4, 0, 0), "pixel left of popup must be untouched");
     require(pixel_is_sentinel(view, 4, 3, 3), "pixel below-right of popup must be untouched");
@@ -100,7 +104,7 @@ void test_composite_clips_at_bottom_right_edge() {
 
     auto view = make_view(4, 4);
     require(overlay.composite_over(view, 4, 4), "partially visible overlay must composite");
-    require(pixel_equals(view, 4, 3, 3, 30, 20, 10, 255), "clipped origin pixel must be written");
+    require(pixel_equals(view, 4, 3, 3, 10, 20, 30, 255), "clipped origin pixel must be written");
     require(pixel_is_sentinel(view, 4, 0, 0), "clipping must not spill into other pixels");
 }
 
@@ -113,7 +117,7 @@ void test_composite_clips_at_top_left_edge() {
 
     auto view = make_view(4, 4);
     require(overlay.composite_over(view, 4, 4), "overlay overlapping top-left must composite");
-    require(pixel_equals(view, 4, 0, 0, 120, 110, 100, 255), "bottom-right popup pixel must land at 0,0");
+    require(pixel_equals(view, 4, 0, 0, 100, 110, 120, 255), "bottom-right popup pixel must land at 0,0");
     require(pixel_is_sentinel(view, 4, 1, 0), "no spill to the right");
     require(pixel_is_sentinel(view, 4, 0, 1), "no spill below");
 }
@@ -202,7 +206,7 @@ void test_pixel_source_overrides_declared_size() {
 
     auto view = make_view(4, 4);
     require(overlay.composite_over(view, 4, 4), "overlay must composite");
-    require(pixel_equals(view, 4, 1, 1, 120, 110, 100, 255), "delivered 2x2 pixels must be used");
+    require(pixel_equals(view, 4, 1, 1, 100, 110, 120, 255), "delivered 2x2 pixels must be used");
     require(pixel_is_sentinel(view, 4, 2, 2), "declared 4x4 must not be trusted");
 }
 
@@ -210,7 +214,7 @@ void test_pixel_source_overrides_declared_size() {
 
 int main() {
     test_default_overlay_is_hidden();
-    test_update_pixels_converts_bgra_to_rgba_and_keeps_alpha();
+    test_update_pixels_keeps_bgra_bytes_and_alpha();
     test_composite_writes_at_rect_offset();
     test_composite_clips_at_bottom_right_edge();
     test_composite_clips_at_top_left_edge();
