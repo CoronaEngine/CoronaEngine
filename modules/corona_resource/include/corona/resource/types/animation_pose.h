@@ -22,6 +22,14 @@
 
 namespace Corona::Resource {
 
+/// FootPlant endpoints must be non-root leaves of the imported skeleton hierarchy.
+/// Other IK modes may target internal joints.
+[[nodiscard]] inline bool is_valid_foot_ik_end_node(const SkeletonData& skeleton, int node) {
+    if (node < 0 || static_cast<std::size_t>(node) >= skeleton.nodes.size()) return false;
+    const auto& endpoint = skeleton.nodes[static_cast<std::size_t>(node)];
+    return endpoint.parent >= 0 && endpoint.children.empty();
+}
+
 /// 列主序 4x4 矩阵乘法 C = A * B（下标 col*4+row）。
 [[nodiscard]] std::array<float, 16> mat4_mul(const std::array<float, 16>& a,
                                              const std::array<float, 16>& b);

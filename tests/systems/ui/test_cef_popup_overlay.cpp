@@ -18,6 +18,7 @@ void require(bool condition, std::string_view message) {
 }
 
 using Corona::Systems::UI::PopupOverlay;
+using Corona::Systems::UI::compose_pending_popup_frame;
 
 std::vector<std::uint8_t> make_view(int width, int height) {
     return std::vector<std::uint8_t>(static_cast<std::size_t>(width) * height * 4u, 0xAB);
@@ -210,6 +211,116 @@ void test_pixel_source_overrides_declared_size() {
     require(pixel_is_sentinel(view, 4, 2, 2), "declared 4x4 must not be trusted");
 }
 
+void test_popup_scroll_and_hide_publish_without_another_view_paint() {
+    const auto base = make_view(4, 4);
+    PopupOverlay overlay;
+    std::vector<std::uint8_t> frame;
+    bool dirty = true;
+    require(compose_pending_popup_frame(base, 4, 4, overlay, dirty, frame),
+            "initial view must publish");
+    require(!dirty && frame == base, "initial publication must consume only the dirty flag");
+
+    overlay.set_rect(1, 1, 2, 2);
+    overlay.set_visible(true);
+    auto popup = make_bgra_2x2();
+    overlay.update_pixels(popup.data(), 2, 2);
+    dirty = true;
+    require(compose_pending_popup_frame(base, 4, 4, overlay, dirty, frame),
+            "opening a popup must publish without a new view paint");
+    require(pixel_equals(frame, 4, 1, 1, 10, 20, 30, 255), "opened popup must be visible");
+
+    popup[0] = 200;
+    overlay.update_pixels(popup.data(), 2, 2);
+    dirty = true;
+    require(compose_pending_popup_frame(base, 4, 4, overlay, dirty, frame),
+            "popup-only scrolling must publish each updated frame");
+    require(pixel_equals(frame, 4, 1, 1, 200, 20, 30, 255), "scrolled popup must replace old pixels");
+
+    overlay.set_visible(false);
+    dirty = true;
+    require(compose_pending_popup_frame(base, 4, 4, overlay, dirty, frame),
+            "hiding a popup must publish without a new view paint");
+    require(frame == base, "popup dismissal must restore the clean view without a ghost");
+    require(pixel_is_sentinel(base, 4, 1, 1), "publication must never contaminate the view base");
+    require(!compose_pending_popup_frame(base, 4, 4, overlay, dirty, frame),
+            "an unchanged frame must not be uploaded again");
+}
+
+void test_popup_move_and_resize_clear_previous_pixels() {
+    const auto base = make_view(4, 3);
+    PopupOverlay overlay;
+    auto popup = make_bgra_2x2();
+    overlay.set_rect(0, 0, 2, 2);
+    overlay.set_visible(true);
+    overlay.update_pixels(popup.data(), 2, 2);
+    std::vector<std::uint8_t> frame;
+    bool dirty = true;
+    require(compose_pending_popup_frame(base, 4, 3, overlay, dirty, frame), "first popup must publish");
+
+    overlay.set_rect(2, 1, 2, 2);
+    dirty = true;
+    require(compose_pending_popup_frame(base, 4, 3, overlay, dirty, frame),
+            "moving a cached popup must publish independently");
+    require(pixel_is_sentinel(frame, 4, 0, 0), "moving the popup must erase its previous position");
+    require(pixel_equals(frame, 4, 2, 1, 10, 20, 30, 255), "paint width must define the row stride");
+    require(pixel_equals(frame, 4, 3, 2, 100, 110, 120, 255), "paint height must define clipping");
+
+    overlay.clear();
+    dirty = true;
+    require(compose_pending_popup_frame(base, 4, 3, overlay, dirty, frame) && frame == base,
+            "clearing a popup during resize must restore the old view until the new paint arrives");
+    const auto resized = make_view(2, 5);
+    dirty = true;
+    require(compose_pending_popup_frame(resized, 2, 5, overlay, dirty, frame) && frame == resized,
+            "a new view size must replace the frame with its own row layout");
+}
+
+void test_missing_view_does_not_consume_popup_update() {
+    PopupOverlay overlay;
+    auto popup = make_bgra_2x2();
+    overlay.set_visible(true);
+    overlay.update_pixels(popup.data(), 2, 2);
+    std::vector<std::uint8_t> frame;
+    bool dirty = true;
+    require(!compose_pending_popup_frame({}, 0, 0, overlay, dirty, frame) && dirty,
+            "a popup before the first view must remain pending");
+    const auto base = make_view(4, 3);
+    require(!compose_pending_popup_frame(base, 3, 5, overlay, dirty, frame) && dirty,
+            "mismatched paint dimensions must not consume pending pixels");
+    require(compose_pending_popup_frame(base, 4, 3, overlay, dirty, frame),
+            "the first valid view must publish the pending popup");
+    require(pixel_equals(frame, 4, 0, 0, 10, 20, 30, 255), "pending popup pixels must be preserved");
+}
+
+void test_popup_resize_waits_for_matching_pixels() {
+    const auto base = make_view(5, 5);
+    const auto popup = make_bgra_2x2();
+    for (const auto size : {3, 1}) {
+        PopupOverlay overlay;
+        overlay.set_rect(1, 1, 2, 2);
+        overlay.set_visible(true);
+        overlay.update_pixels(popup.data(), 2, 2);
+        std::vector<std::uint8_t> frame;
+        bool dirty = true;
+        require(compose_pending_popup_frame(base, 5, 5, overlay, dirty, frame), "old popup must publish");
+
+        // Both a larger buffer (3x4) and equal bytes with a different stride
+        // (1x4) must discard the old 2x2 paint when the size callback arrives.
+        overlay.set_rect(1, 1, size, 4);
+        dirty = true;
+        require(overlay.empty(), "resizing must invalidate popup pixels with the old dimensions");
+        require(compose_pending_popup_frame(base, 5, 5, overlay, dirty, frame) && frame == base,
+                "size-only publication must erase the old popup and wait for fresh pixels");
+
+        const std::vector<std::uint8_t> resized(static_cast<std::size_t>(size) * 4u * 4u, 0xCD);
+        overlay.update_pixels(resized.data(), size, 4);
+        dirty = true;
+        require(compose_pending_popup_frame(base, 5, 5, overlay, dirty, frame), "new popup paint must publish");
+        require(pixel_equals(frame, 5, size, 4, 0xCD, 0xCD, 0xCD, 0xCD),
+                "the resized popup must use the newly delivered row stride and height");
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -224,6 +335,10 @@ int main() {
     test_invalid_inputs_are_ignored();
     test_undersized_view_buffer_is_rejected();
     test_pixel_source_overrides_declared_size();
+    test_popup_scroll_and_hide_publish_without_another_view_paint();
+    test_popup_move_and_resize_clear_previous_pixels();
+    test_missing_view_does_not_consume_popup_update();
+    test_popup_resize_waits_for_matching_pixels();
     std::cout << "PopupOverlayTests passed\n";
     return 0;
 }

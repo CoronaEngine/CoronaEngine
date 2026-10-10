@@ -116,6 +116,8 @@ struct BrowserTab {
     bool detach_maximized = false;
 
     char url_buffer[1024] = "";
+    // Last uncomposited PET_VIEW. Retained after upload so popup-only updates
+    // and dismissal can publish immediately without waiting for a new view paint.
     std::vector<uint8_t> pixel_buffer;
     PopupOverlay popup;
     std::mutex mutex;

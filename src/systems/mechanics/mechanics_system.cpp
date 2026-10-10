@@ -1945,6 +1945,7 @@ void MechanicsSystem::update_skinned_geometry(float dt) {
                     if (chain.end_node != resolved) chain.runtime = {};
                     chain.end_node = resolved;
                 }
+                sanitize_foot_ik_endpoint(chain, skeleton);
             }
             ik_transform_handle = geom_write->transform_handle;
             ik_revision = geom_write->ik_chains_revision;
@@ -2337,7 +2338,7 @@ bool MechanicsSystem::register_foot_plant_chain(
             node_idx = static_cast<int>(ni);
         }
     }
-    if (node_idx < 0 || skel.nodes[node_idx].parent < 0) return false;
+    if (!Resource::is_valid_foot_ik_end_node(skel, node_idx)) return false;
 
     auto gw = geom_st.try_acquire_write(geom_handle);
     if (!gw || gw->model_resource_handle != mrh) return false;

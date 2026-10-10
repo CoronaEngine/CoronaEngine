@@ -28,6 +28,69 @@ IkChain foot() {
     return chain;
 }
 
+void test_foot_endpoint_contract() {
+    SkeletonData skeleton;
+    skeleton.nodes.resize(4);
+    skeleton.nodes[0].name = "Root";
+    skeleton.nodes[0].children = {1};
+    skeleton.nodes[1].name = "Knee";
+    skeleton.nodes[1].parent = 0;
+    skeleton.nodes[1].children = {2, 3};
+    skeleton.nodes[2].name = "Foot_End";
+    skeleton.nodes[2].parent = 1;
+    skeleton.nodes[3].name = "Other_End";
+    skeleton.nodes[3].parent = 1;
+    expect(is_valid_foot_ik_end_node(skeleton, 2) && is_valid_foot_ik_end_node(skeleton, 3),
+           "Foot accepts non-root leaves without requiring skinning weights or name conventions");
+    expect(!is_valid_foot_ik_end_node(skeleton, 1) && !is_valid_foot_ik_end_node(skeleton, 0) &&
+               !is_valid_foot_ik_end_node(skeleton, -1) && !is_valid_foot_ik_end_node(skeleton, 4),
+           "Foot rejects internal joints, the root, unresolved names and out-of-range indices");
+    SkeletonData single_root;
+    single_root.nodes.resize(1);
+    expect(!is_valid_foot_ik_end_node(single_root, 0), "a childless root is not a valid Foot endpoint");
+
+    auto chain = foot();
+    chain.end_bone_name = "Foot_End";
+    const std::array<float, 3> ground{2, 0, 3};
+    advance_ik_activation(chain, ground, 0.1f);
+    const auto active_weight = chain.runtime.weight;
+    expect(sanitize_foot_ik_endpoint(chain, skeleton) && chain.runtime.target == ground &&
+               chain.runtime.weight == active_weight && ik_solver_parameters(chain),
+           "valid Foot endpoints retain their active support");
+
+    // This is the same guard used after resolving an archived name and before probing.
+    chain.end_bone_name = "Knee";
+    chain.end_node = 1;
+    chain.runtime.releasing = true;
+    chain.runtime.ground_handle = 123;
+    chain.runtime.anchor_local = {4, 5, 6};
+    expect(!sanitize_foot_ik_endpoint(chain, skeleton) && chain.end_node == -1 &&
+               !chain.runtime.has_target && chain.runtime.weight == 0 && !chain.runtime.grounded &&
+               !chain.runtime.releasing && chain.runtime.ground_handle == 0 &&
+               chain.runtime.anchor_local == std::array<float, 3>{0, 0, 0} && !ik_solver_parameters(chain),
+           "a saved or native non-leaf Foot cannot retain support or enter the solver");
+    expect(chain.end_bone_name == "Knee" && chain.id == "left-foot" && chain.enabled && chain.weight == 1,
+           "invalid Foot runtime is cleared while its user configuration remains editable");
+
+    for (const auto mode : {IkChain::Mode::Contact, IkChain::Mode::LookAt, IkChain::Mode::WeaponAim}) {
+        auto other = foot();
+        other.mode = mode;
+        other.end_node = 1;
+        advance_ik_activation(other, ground, 0.1f);
+        expect(sanitize_foot_ik_endpoint(other, skeleton) && other.end_node == 1 &&
+                   other.runtime.has_target && other.runtime.weight == active_weight,
+               "the Foot guard leaves internal-joint Contact and manual modes unchanged");
+    }
+
+    auto replaced_model = foot();
+    advance_ik_activation(replaced_model, ground, 0.1f);
+    skeleton.nodes.emplace_back();
+    skeleton.nodes[4].parent = 2;
+    skeleton.nodes[2].children = {4};
+    expect(!sanitize_foot_ik_endpoint(replaced_model, skeleton) && !ik_solver_parameters(replaced_model),
+           "a model change that makes the previous endpoint internal immediately removes Foot influence");
+}
+
 void test_activation_contract() {
     auto chain = foot();
     advance_ik_activation(chain, std::nullopt, 1.0f / 60.0f);
@@ -178,6 +241,7 @@ void test_bone_position_space() {
     skeleton.global_inverse = compose_trs({-2, 3, -1}, {0, 0, 0, 1}, {0.5f, 0.5f, 0.5f});
     skeleton.nodes.resize(2);
     skeleton.nodes[0].parent = -1;
+    skeleton.nodes[0].children = {1};
     skeleton.nodes[1].parent = 0;
     std::vector<std::array<float, 16>> locals{
         compose_trs({4, 0, 0}, {0, 0, 0, 1}, {1, 1, 1}),
@@ -193,6 +257,7 @@ void test_bone_position_space() {
 } // namespace
 
 int main() {
+    test_foot_endpoint_contract();
     test_activation_contract();
     test_contact_time_integration();
     test_foot_plant_release_lifecycle();

@@ -29,8 +29,10 @@ Resource::SkeletonData skeleton() {
     result.nodes.resize(4);
     result.nodes[0].name = "Root";
     result.nodes[0].parent = -1;
+    result.nodes[0].children = {1};
     result.nodes[1].name = "Knee";
     result.nodes[1].parent = 0;
+    result.nodes[1].children = {2, 3};
     result.nodes[2].name = "Foot_L";
     result.nodes[2].parent = 1;
     result.nodes[3].name = "Foot_R";
@@ -51,6 +53,21 @@ int main() {
     auto contact = left;
     contact["mode"] = "contact";
     check(IkChainConfig::parse(json::array({contact}), &skel)[0].contact_driven, "Contact requests collision feedback");
+    auto internal = left;
+    internal["bone_name"] = "Knee";
+    rejects([&] { IkChainConfig::parse(json::array({internal}), &skel); },
+            "Foot rejects a non-root internal joint");
+    for (const char* mode : {"contact", "look_at", "weapon_aim"}) {
+        internal["mode"] = mode;
+        check(IkChainConfig::parse(json::array({internal}), &skel)[0].end_node == 1,
+              "non-Foot IK still accepts an internal joint");
+    }
+    internal["mode"] = "foot_plant";
+    auto pending_internal = IkChainConfig::parse(json::array({internal}));
+    check(pending_internal[0].end_node == -1 && pending_internal[0].end_bone_name == "Knee",
+          "saved Foot names remain available for deferred validation and correction");
+    check(IkChainConfig::serialize(pending_internal)[0]["bone_name"] == "Knee",
+          "an unresolved saved Foot retains its configured bone name");
 
     for (const json bad : {json{{"bone_name", "missing"}}, json{{"bone_name", "Root"}},
                            json{{"bone_name", "Foot_L"}, {"mode", "unknown"}},

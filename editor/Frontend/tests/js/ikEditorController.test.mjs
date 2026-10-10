@@ -7,6 +7,8 @@ import {
   ikFootStatus,
   isAutomaticIkFoot,
   serializeIkFeet,
+  ikBoneOptions,
+  ikBoneError,
 } from '../../src/utils/ikEditorController.js';
 
 test('runtime labels distinguish support, release and fading from a retained target', () => {
@@ -169,6 +171,7 @@ test('switching actor discards queued writes and ignores the in-flight old respo
   const oldReply = deferred();
   const requests = [];
   const { controller, state } = setup({
+    getActorSkeletonLeaves: async () => ({ leaves: ['A', 'B'] }),
     getActorIkChains: async (_scene, actor) => config([chain(actor)], actor === 'B' ? 20 : 4),
     setActorIkChains: (...args) => {
       requests.push(args);
@@ -242,7 +245,7 @@ test('a resource readiness failure cannot expose a writable empty draft', async 
   assert.match(state.error, /尚未就绪/);
 });
 
-test('non-leaf ankle joints remain selectable, while an unrotatable skeleton root is omitted', async () => {
+test('FootPlant only offers leaf children; other modes retain non-root joints', async () => {
   const { controller, state } = setup({
     getActorSkeletonLeaves: async () => ({
       leaves: ['Toe_End'],
@@ -255,4 +258,68 @@ test('non-leaf ankle joints remain selectable, while an unrotatable skeleton roo
   });
   await controller.select('Scene', 'Actor');
   assert.deepEqual(state.boneNames, ['Ankle', 'Toe_End']);
+  assert.deepEqual(state.footBoneNames, ['Toe_End']);
+  assert.deepEqual(ikBoneOptions(makeIkFoot(), state), ['Toe_End']);
+  for (const mode of ['contact', 'look_at', 'weapon_aim']) {
+    assert.deepEqual(ikBoneOptions(makeIkFoot({ mode }), state), ['Ankle', 'Toe_End']);
+  }
+});
+
+test('legacy non-leaf Foot configuration stays visible and editable until explicitly corrected', async () => {
+  const writes = [];
+  const { controller, state } = setup({
+    getActorSkeletonLeaves: async () => ({ nodes: [
+      { name: 'Root', parent: -1, leaf: false },
+      { name: 'Ankle', parent: 0, leaf: false },
+      { name: 'Toe', parent: 1, leaf: true },
+    ] }),
+    getActorIkChains: async () => config([chain('Ankle')]),
+    setActorIkChains: async (_scene, _actor, chains, revision) => {
+      writes.push(chains);
+      return config(chains, revision + 1);
+    },
+  });
+  await controller.select('Scene', 'Actor');
+  assert.equal(state.feet[0].boneName, 'Ankle');
+  assert.match(ikBoneError(state.feet[0], state), /叶子节点/);
+  await controller.apply();
+  assert.equal(writes.length, 0);
+  assert.equal(state.ready, true);
+  assert.equal(state.feet[0].boneName, 'Ankle');
+  state.feet[0].boneName = 'Toe';
+  await controller.apply();
+  assert.equal(writes[0][0].bone_name, 'Toe');
+  assert.equal(state.error, '');
+  state.feet[0].mode = 'contact';
+  state.feet[0].boneName = 'Ankle';
+  await controller.apply();
+  assert.equal(writes[1][0].bone_name, 'Ankle');
+});
+
+test('node metadata excludes roots, ambiguous names and unproven leaves', async () => {
+  const { controller, state } = setup({
+    getActorSkeletonLeaves: async () => ({ leaves: ['Unknown'], nodes: [
+      { name: 'Root', parent: -1, leaf: true },
+      { name: 'Ambiguous', parent: -1, leaf: false },
+      { name: 'Ambiguous', parent: 0, leaf: true },
+      { name: 'Unknown', parent: 0 },
+      { name: 'Leaf', parent: 0, leaf: true },
+      { name: '', parent: 0, leaf: true },
+      null,
+    ] }),
+  });
+  await controller.select('Scene', 'Actor');
+  assert.deepEqual(state.boneNames, ['Unknown', 'Leaf']);
+  assert.deepEqual(state.footBoneNames, ['Leaf']);
+});
+
+test('legacy leaves fallback excludes malformed and ambiguous names without inventing a selection', async () => {
+  const { controller, state } = setup({
+    getActorSkeletonLeaves: async () => ({ leaves: ['Leaf', '', null, 1, 'Duplicate', 'Duplicate', '  '] }),
+    getActorIkChains: async () => config([]),
+  });
+  await controller.select('Scene', 'Actor');
+  assert.deepEqual(state.boneNames, ['Leaf']);
+  assert.deepEqual(state.footBoneNames, ['Leaf']);
+  assert.deepEqual(state.feet, []);
 });

@@ -258,6 +258,7 @@ void OffscreenRenderHandler::OnPopupSize(CefRefPtr<CefBrowser> browser, const Ce
     }
     std::lock_guard<std::mutex> lock(t->mutex);
     t->popup.set_rect(rect.x, rect.y, rect.width, rect.height);
+    t->buffer_dirty = true;
 }
 
 bool OffscreenRenderHandler::GetScreenPoint(CefRefPtr<CefBrowser> browser, int viewX, int viewY, int& screenX, int& screenY) {
