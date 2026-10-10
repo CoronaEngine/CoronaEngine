@@ -109,6 +109,102 @@
         </div>
       </section>
 
+      <!-- IK 测试面板：已加载的模型均显示；蒙皮检测在引擎首帧后完成 -->
+      <section
+        v-if="actor.loadStatus === 'loaded'"
+        class="property-section property-section-collapsible"
+      >
+        <button
+          type="button"
+          class="section-toggle"
+          :aria-expanded="!collapsedSections.ik"
+          @click="togglePropertySection('ik')"
+        >
+          <span>IK 测试</span>
+          <span class="section-chevron" :class="{ expanded: !collapsedSections.ik }">&#8964;</span>
+        </button>
+        <div v-show="!collapsedSections.ik" class="section-collapsible-body ik-body">
+
+          <!-- 非蒙皮/缓存未就绪时的占位提示 -->
+          <template v-if="!ikState.isSkinned">
+            <p class="ik-hint ik-hint-warning">此模型不是蒙皮模型，或引擎尚未运行（骨骼缓存在首帧建立）。</p>
+            <button type="button" class="ik-refresh-btn" @click="refreshSkeletonLeaves">刷新骨骼列表</button>
+          </template>
+
+          <template v-else>
+            <p class="ik-hint">叶子节点为末端效应骨骼，链长决定参与求解的关节数。目标点为模型空间坐标。</p>
+
+            <div
+              v-for="(foot, index) in ikState.feet"
+              :key="index"
+              class="ik-foot-card"
+            >
+              <div class="ik-foot-header">
+                <span class="ik-foot-label">Foot {{ index + 1 }}</span>
+                <div class="ik-foot-header-right">
+                  <label class="ik-switch">
+                    <input v-model="foot.enabled" type="checkbox" @change="applyIkChains" />
+                    <span>{{ foot.enabled ? '启用' : '禁用' }}</span>
+                  </label>
+                  <button type="button" class="ik-remove-btn" :disabled="ikState.feet.length <= 1" @click="removeFoot(index)">✕</button>
+                </div>
+              </div>
+
+              <div class="property-row ik-row">
+                <label>末端骨骼</label>
+                <select v-model="foot.boneName" @change="applyIkChains">
+                  <option value="">— 选择叶子骨骼 —</option>
+                  <option v-for="name in ikState.leafBones" :key="name" :value="name">{{ name }}</option>
+                </select>
+              </div>
+
+              <div class="property-row ik-row">
+                <label>IK 模式</label>
+                <select v-model="foot.mode" @change="applyIkChains">
+                  <option value="contact">Contact（通用碰撞）</option>
+                  <option value="foot_plant">FootPlant（贴地）</option>
+                  <option value="look_at">LookAt（朝向）</option>
+                  <option value="weapon_aim">WeaponAim（武器指向）</option>
+                </select>
+              </div>
+
+              <div class="property-row ik-row">
+                <label>链长</label>
+                <input v-model.number="foot.chainLength" type="number" min="1" max="16" step="1" @change="applyIkChains" />
+              </div>
+
+              <div class="property-row ik-row">
+                <label>权重</label>
+                <input v-model.number="foot.weight" type="number" min="0" max="1" step="0.05" @change="applyIkChains" />
+              </div>
+
+              <div class="ik-target-group">
+                <span class="ik-target-label">目标点（模型空间）</span>
+                <div class="ik-target-inputs">
+                  <label class="axis-x"><b>X</b><input v-model.number="foot.targetX" type="number" step="0.01" @change="applyIkChains" /></label>
+                  <label class="axis-y"><b>Y</b><input v-model.number="foot.targetY" type="number" step="0.01" @change="applyIkChains" /></label>
+                  <label class="axis-z"><b>Z</b><input v-model.number="foot.targetZ" type="number" step="0.01" @change="applyIkChains" /></label>
+                </div>
+              </div>
+
+              <div class="property-row ik-row">
+                <label>最大迭代</label>
+                <input v-model.number="foot.maxIterations" type="number" min="1" max="64" step="1" @change="applyIkChains" />
+              </div>
+
+              <div class="property-row ik-row">
+                <label>阻尼</label>
+                <input v-model.number="foot.damping" type="number" min="0" max="1" step="0.05" @change="applyIkChains" />
+              </div>
+            </div>
+
+            <button type="button" class="ik-add-btn" @click="addFoot">+ 添加 Foot</button>
+          </template>
+
+          <p v-if="ikState.error" class="property-error">{{ ikState.error }}</p>
+        </div>
+      </section>
+
       <section
         v-if="actor.loadStatus === 'loaded'"
         class="property-section property-section-collapsible"
@@ -178,6 +274,7 @@ const axes = ['x', 'y', 'z'];
 const collapsedSections = reactive({
   transform: true,
   physics: true,
+  ik: true,
 });
 
 function togglePropertySection(section) {
@@ -210,6 +307,94 @@ const selectedSceneName = ref(DEFAULT_SCENE_NAME);
 const selectedActorName = ref('');
 const loading = ref(false);
 const saving = ref(false);
+
+// ---- IK 测试状态 ----
+const ikState = reactive({
+  isSkinned: false,
+  leafBones: [],
+  /** @type {Array<{boneName:string,mode:string,chainLength:number,weight:number,targetX:number,targetY:number,targetZ:number,maxIterations:number,damping:number,enabled:boolean}>} */
+  feet: [],
+  error: '',
+});
+
+function makeFoot() {
+  return {
+    boneName: '',
+    mode: 'foot_plant',
+    chainLength: 2,
+    weight: 1.0,
+    targetX: 0,
+    targetY: 0,
+    targetZ: 0,
+    maxIterations: 10,
+    damping: 1.0,
+    enabled: true,
+  };
+}
+
+function addFoot() {
+  ikState.feet.push(makeFoot());
+}
+
+function removeFoot(index) {
+  if (ikState.feet.length <= 1) return;
+  ikState.feet.splice(index, 1);
+  applyIkChains();
+}
+
+async function loadSkeletonLeaves(sceneName, actorName) {
+  ikState.isSkinned = false;
+  ikState.leafBones = [];
+  ikState.error = '';
+  try {
+    const raw = await editorApi.sceneTools.getActorSkeletonLeaves(sceneName, actorName);
+    const data = raw?.data ?? raw ?? {};
+    if (data.status === 'error') {
+      ikState.error = `骨骼查询失败: ${data.message || data.error || 'unknown'}`;
+      return;
+    }
+    ikState.isSkinned = Boolean(data.is_skinned);
+    if (ikState.isSkinned) {
+      ikState.leafBones = Array.isArray(data.leaves) ? data.leaves : [];
+      if (ikState.feet.length === 0) ikState.feet.push(makeFoot());
+    }
+  } catch (err) {
+    // 显示具体错误而非静默，方便诊断
+    ikState.error = `骨骼查询异常: ${err?.message || String(err)}`;
+  }
+}
+
+async function refreshSkeletonLeaves() {
+  if (!selectedActorName.value) return;
+  await loadSkeletonLeaves(selectedSceneName.value, selectedActorName.value);
+}
+
+async function applyIkChains() {
+  if (!selectedActorName.value || !ikState.isSkinned) return;
+  ikState.error = '';
+  try {
+    const chains = ikState.feet
+      .filter((f) => f.boneName)
+      .map((f) => ({
+        bone_name: f.boneName,
+        mode: f.mode,
+        chain_length: Number(f.chainLength) || 2,
+        weight: Number(f.weight) || 1.0,
+        target: [Number(f.targetX) || 0, Number(f.targetY) || 0, Number(f.targetZ) || 0],
+        max_iterations: Number(f.maxIterations) || 10,
+        damping: Number(f.damping) || 1.0,
+        enabled: Boolean(f.enabled),
+      }));
+    await editorApi.sceneTools.setActorIkChains(
+      selectedSceneName.value,
+      selectedActorName.value,
+      chains,
+    );
+  } catch (err) {
+    ikState.error = err?.message || 'IK 链更新失败';
+    logError('更新 IK 链失败', err);
+  }
+}
 const aliasDraft = ref('');
 const aliasSaving = ref(false);
 const aliasError = ref('');
@@ -263,8 +448,8 @@ const normalizeBodyType = (value) => {
   const candidate = String(value ?? '').trim().toLowerCase();
   if (['kinematic'].includes(candidate)) return 'kinematic';
   if (['static'].includes(candidate)) return 'static';
-  if (['phantom'].includes(candidate)) return 'phantom';
-  return 'dynamic';
+  if (['dynamic'].includes(candidate)) return 'dynamic';
+  return 'phantom';
 };
 const readFollowCamera = (data) => data?.render_space === 'ui' || data?.follow_camera === true || data?.follow_camera === 1 || data?.follow_camera === 'true' || data?.follow_camera === '1';
 
@@ -339,6 +524,8 @@ async function loadActor(sceneName, actorName) {
     aliasDraft.value = actor.name;
     aliasError.value = '';
     syncViewportTransformBaseline();
+    // 异步加载叶子骨骼缓存（蒙皮模型）；非蒙皮模型静默跳过。
+    void loadSkeletonLeaves(sceneName, actorName);
   } catch (error) {
     if (sequence === loadSequence) logError('加载对象数据失败', error);
   } finally {
@@ -830,4 +1017,31 @@ input:focus,select:focus { border-color:#D8B86C; box-shadow:0 0 0 1px rgba(216,1
 .lock-row { display:flex; align-items:center; gap:10px; margin-top:9px; color:#b9ad8f; font-size:10px; }
 .lock-row>span { min-width:64px; }
 .lock-row label { display:flex; align-items:center; gap:3px; }
+
+/* ---- IK 测试面板 ---- */
+.ik-body { padding:0 10px 10px; }
+.ik-hint { margin:8px 0 6px; color:#8a8270; font-size:10px; line-height:1.5; }
+.ik-foot-card { margin-bottom:8px; padding:8px 9px; border:1px solid rgba(216,184,108,.18); border-radius:6px; background:#0f0e0a; }
+.ik-foot-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:6px; }
+.ik-foot-label { color:#d6b66b; font-size:10px; font-weight:700; text-transform:uppercase; }
+.ik-foot-header-right { display:flex; align-items:center; gap:6px; }
+.ik-switch { display:flex; align-items:center; gap:4px; color:#b9ad8f; font-size:10px; cursor:pointer; }
+.ik-switch input { accent-color:#d8b86c; }
+.ik-remove-btn { border:1px solid rgba(216,184,108,.22); border-radius:4px; background:transparent; color:#9ca3af; padding:2px 6px; font-size:10px; cursor:pointer; transition:color .15s,border-color .15s; }
+.ik-remove-btn:hover:not(:disabled) { color:#f87171; border-color:#f87171; }
+.ik-remove-btn:disabled { opacity:.35; cursor:not-allowed; }
+.ik-row { margin-top:6px; grid-template-columns:72px minmax(0,1fr); }
+.ik-row label { color:#b9ad8f; font-size:10px; }
+.ik-row select { min-width:0; width:100%; border:1px solid rgba(216,184,108,.22); border-radius:4px; background:#0f0e0a; color:#f2ead5; padding:5px 6px; font-size:11px; outline:none; }
+.ik-row select:focus { border-color:#D8B86C; box-shadow:0 0 0 1px rgba(216,184,108,.18); }
+.ik-target-group { margin-top:7px; }
+.ik-target-label { display:block; color:#b9ad8f; font-size:10px; margin-bottom:4px; }
+.ik-target-inputs { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:5px; }
+.ik-target-inputs label { display:grid; grid-template-columns:12px minmax(0,1fr); align-items:center; gap:3px; }
+.ik-target-inputs b { font-size:9px; }
+.ik-add-btn { margin-top:8px; width:100%; border:1px dashed rgba(216,184,108,.35); border-radius:5px; background:transparent; color:#d6b66b; padding:6px 0; font-size:11px; cursor:pointer; transition:background .15s,border-color .15s; }
+.ik-add-btn:hover { background:rgba(216,184,108,.08); border-color:#d8b86c; }
+.ik-hint-warning { color:#f6c90e; }
+.ik-refresh-btn { margin-top:4px; width:100%; border:1px solid rgba(216,184,108,.35); border-radius:5px; background:rgba(216,184,108,.08); color:#d6b66b; padding:5px 0; font-size:11px; cursor:pointer; transition:background .15s; }
+.ik-refresh-btn:hover { background:rgba(216,184,108,.18); }
 </style>

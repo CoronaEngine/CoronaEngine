@@ -33,6 +33,14 @@ add_test(NAME UiSurfaceRemovalRaceTests
 set_tests_properties(UiSurfaceRemovalRaceTests PROPERTIES TIMEOUT 15)
 
 if(CORONA_BUILD_VISION)
+    add_executable(corona_vision_shader_binding_tests
+        test_vision_shader_bindings.cpp test_vision_shader_comments.cpp)
+    target_link_libraries(corona_vision_shader_binding_tests PRIVATE ocarina-native ocarina-include)
+    add_test(NAME VisionShaderBindingTests COMMAND corona_vision_shader_binding_tests)
+    set_tests_properties(VisionShaderBindingTests PROPERTIES
+        WORKING_DIRECTORY "$<TARGET_FILE_DIR:ocarina-backend-cuda>"
+        RUN_SERIAL TRUE TIMEOUT 120)
+
     add_executable(corona_vision_runtime_geometry_sync_tests test_vision_runtime_geometry_sync.cpp)
     target_include_directories(corona_vision_runtime_geometry_sync_tests PRIVATE
         ${PROJECT_SOURCE_DIR}/include
@@ -75,10 +83,11 @@ if(CORONA_BUILD_VISION)
     target_link_libraries(corona_vision_restir_estimator_tests PRIVATE
         corona::engine vision-all_libs vision-integrator-ReSTIR)
     add_test(NAME VisionReSTIREstimatorTests COMMAND corona_vision_restir_estimator_tests)
+    # Real material variants and stable-plane SVGF compile GPU shaders on a cold cache.
     set_tests_properties(VisionReSTIREstimatorTests PROPERTIES
         WORKING_DIRECTORY "$<TARGET_FILE_DIR:vision-material-principled_bsdf>"
         RUN_SERIAL TRUE
-        TIMEOUT 120)
+        TIMEOUT 300)
     add_test(NAME VisionReSTIRVisibilityMIS
         COMMAND ${Python_EXECUTABLE} ${CMAKE_SOURCE_DIR}/vision/src/tests/test_restir_visibility_mis.py)
     set_tests_properties(VisionReSTIRVisibilityMIS PROPERTIES TIMEOUT 30)

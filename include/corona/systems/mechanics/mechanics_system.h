@@ -60,6 +60,34 @@ class MechanicsSystem : public Kernel::SystemBase {
 
     void shutdown() override;
 
+    // ========================================
+    // IK 链管理
+    // ========================================
+
+    /// 注册一条脚踩地 IK 链（contact_driven=true，FootPlant 模式）。
+    ///
+    /// @param geom_handle   蒙皮角色的 GeometryDevice 句柄。
+    /// @param bone_name     末端骨骼名称，须与 SkeletonData::nodes[x].name 完全匹配（大小写敏感）。
+    ///                      Mixamo 惯例："LeftToe_End" / "RightToe_End"；
+    ///                      UE Mannequin："ball_l" / "ball_r"。
+    /// @param chain_length  参与 CCD 求解的关节数（含末端，沿 parent 上溯）。
+    ///                      3 = 脚趾→踝→膝；2 = 脚趾→踝。
+    /// @param damping       CCD 每步旋转压制系数 [0,1]，建议 0.85~0.92，防落地时抖动。
+    /// @param weight_decay  脚离地后 weight 每秒衰减量，0.8 ≈ 1.25s 平滑归零。
+    /// @return 成功返回 true；bone_name 在骨架中不存在，或模型尚未完成 import，返回 false。
+    ///
+    /// 若该骨骼已有 FootPlant 链则更新参数。
+    /// 必须在对应模型 gpu_build_state == Ready 之后调用。
+    bool register_foot_plant_chain(std::uintptr_t geom_handle,
+                                   std::string_view bone_name,
+                                   int chain_length = 3,
+                                   float damping = 0.88f,
+                                   float weight_decay = 0.8f);
+
+    /// 注销脚踩地 IK 链。链正在激活中时立即移除，当帧蒙皮使用原动画姿态。
+    void unregister_foot_plant_chain(std::uintptr_t geom_handle,
+                                     std::string_view bone_name);
+
    private:
     // 力学系统私有成员
     void update_physics(float fixed_dt);

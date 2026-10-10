@@ -16,7 +16,7 @@ function declarations(path, names) {
 }
 
 function mainHost({ fail = false, pending = false, denoiseFail = false, denoiseReply,
-  accumulationFail = false, accumulationReply } = {}) {
+  accumulationFail = false, accumulationReply, stablePlanesFail = false, stablePlanesReply } = {}) {
   const calls = [];
   const source = declarations('../../src/views/layout/MainPage.vue', [
     'mainRenderModeOptions', 'mainRenderModeLabel', 'pendingMainRenderSelection',
@@ -25,9 +25,16 @@ function mainHost({ fail = false, pending = false, denoiseFail = false, denoiseR
     'mainVisionDenoiseError', 'pendingMainDenoiseSelection', 'toggleMainVisionDenoise',
     'mainVisionAccumulation', 'mainVisionAccumulationBusy', 'mainVisionAccumulationError',
     'pendingMainAccumulationSelection', 'toggleMainVisionAccumulation',
+    'mainVisionStablePlanes', 'mainVisionStablePlanesBusy', 'mainVisionStablePlanesError',
+    'pendingMainStablePlanesSelection', 'toggleMainVisionStablePlanes',
     'isVector3', 'sceneGridEnabledFromSnapshot', 'applySceneSnapshot',
   ]);
   const api = {
+    setVisionStablePlanes: async (...args) => {
+      calls.push(['stablePlanes', ...args]);
+      if (stablePlanesFail) throw new Error('stable planes unavailable');
+      return stablePlanesReply ? stablePlanesReply(args) : { enabled: pending ? !args[2] : args[2], pending };
+    },
     setVisionRenderMode: async (...args) => {
       calls.push(['mode', ...args]);
       if (fail) throw new Error('mode unavailable');
@@ -47,7 +54,7 @@ function mainHost({ fail = false, pending = false, denoiseFail = false, denoiseR
     },
   };
   const host = new Function('ref', 'computed', 'visionModes', 'editorApi', `
-    const { visionRenderModes, normalizeVisionRenderMode, visionDenoiseFromCamera, visionAccumulationFromCamera } = visionModes;
+    const { visionRenderModes, normalizeVisionRenderMode, visionDenoiseFromCamera, visionAccumulationFromCamera, visionStablePlanesFromCamera } = visionModes;
     const tabs = ref([{ id: 'test.scene' }]), activeTab = ref(0), activeMenu = ref(null);
     const cameraBindingState = ref({ sceneId: 'test.scene', cameraId: 'camera-2' });
     const mainRenderBackend = ref('native'), mainVisionRenderMode = ref('path_tracing');
@@ -63,6 +70,9 @@ function mainHost({ fail = false, pending = false, denoiseFail = false, denoiseR
     ${source}
     return { selectMainRenderMode, mainRenderModeOptions, mainRenderModeLabel,
       mainRenderBackend, mainVisionRenderMode, cameraBindingState, tabs, applySceneSnapshot,
+      mainVisionStablePlanes: typeof mainVisionStablePlanes === 'undefined' ? undefined : mainVisionStablePlanes,
+      mainVisionStablePlanesError: typeof mainVisionStablePlanesError === 'undefined' ? undefined : mainVisionStablePlanesError,
+      toggleMainVisionStablePlanes: typeof toggleMainVisionStablePlanes === 'undefined' ? undefined : toggleMainVisionStablePlanes,
       mainVisionDenoise, mainVisionDenoiseError, currentMainCamera, toggleMainVisionDenoise,
       mainVisionAccumulation: typeof mainVisionAccumulation === 'undefined' ? undefined : mainVisionAccumulation,
       mainVisionAccumulationError: typeof mainVisionAccumulationError === 'undefined' ? undefined : mainVisionAccumulationError,
@@ -130,7 +140,7 @@ const cameraSnapshot = (fields = {}, cameraId = 'camera-2') => ({
     render_backend: 'vision', vision_render_mode: 'path_tracing', ...fields }],
 });
 
-function detachedHost({ fields = {}, fail = false, pending = false, accumulationFail = false } = {}) {
+function detachedHost({ fields = {}, fail = false, pending = false, accumulationFail = false, stablePlanesFail = false, stablePlanesReply } = {}) {
   const calls = [];
   const source = declarations('../../src/views/tools/CameraView.vue', [
     'camera', 'cameraName', 'backend', 'visionRenderMode', 'visionDenoise', 'visionDenoiseBusy',
@@ -138,16 +148,24 @@ function detachedHost({ fields = {}, fail = false, pending = false, accumulation
     'visionAvailable', 'errorText', 'visionModeMenuOpen', 'loadCamera', 'selectVisionRenderMode',
     'toggleVisionDenoise',
     'visionAccumulation', 'visionAccumulationBusy', 'toggleVisionAccumulation',
+    'visionStablePlanes', 'visionStablePlanesBusy', 'pendingStablePlanesSelection', 'toggleVisionStablePlanes',
   ]);
   const host = new Function('ref', 'visionModes', 'editorApi', `
-    const { normalizeVisionRenderMode, visionDenoiseFromCamera, visionAccumulationFromCamera } = visionModes;
+    const { normalizeVisionRenderMode, visionDenoiseFromCamera, visionAccumulationFromCamera, visionStablePlanesFromCamera } = visionModes;
     const sceneId = 'test.scene', cameraId = 'camera-3', unwrap = value => value?.data ?? value;
     ${source}
     return { loadCamera, selectVisionRenderMode, camera, backend, visionRenderMode, errorText,
+      visionStablePlanes: typeof visionStablePlanes === 'undefined' ? undefined : visionStablePlanes,
+      toggleVisionStablePlanes: typeof toggleVisionStablePlanes === 'undefined' ? undefined : toggleVisionStablePlanes,
       visionDenoise, toggleVisionDenoise,
       visionAccumulation: typeof visionAccumulation === 'undefined' ? undefined : visionAccumulation,
       toggleVisionAccumulation: typeof toggleVisionAccumulation === 'undefined' ? undefined : toggleVisionAccumulation };
   `)(ref, visionModes, { sceneTools: {
+    setVisionStablePlanes: async (...args) => {
+      calls.push(['stablePlanes', ...args]);
+      if (stablePlanesFail) throw new Error('stable planes unavailable');
+      return stablePlanesReply ? stablePlanesReply(args) : { enabled: pending ? !args[2] : args[2], pending };
+    },
     listCameraViews: async () => ({ data: { cameras: cameraSnapshot(fields, 'camera-3').cameras } }),
     isVisionAvailable: async () => ({ available: true }),
     setVisionRenderMode: async (...args) => { calls.push(['mode', ...args]); return { mode: args[2] }; },
@@ -432,3 +450,104 @@ test('a late accumulation response cannot modify the newly bound camera', async 
   assert.equal(host.currentMainCamera.value.camera_id, 'camera-3');
   assert.equal(host.currentMainCamera.value.vision_accumulation, false);
 });
+
+for (const [fields, enabled] of [
+  [{}, true], [{ vision_stable_planes: false }, false], [{ vision_stable_planes: true }, true],
+  [{ vision_stable_planes: 'false' }, false], [{ vision_stable_planes: 'true' }, true],
+]) {
+  test(`both views load stable planes ${JSON.stringify(fields)}`, async () => {
+    const main = mainHost();
+    main.applySceneSnapshot('test.scene', cameraSnapshot(fields));
+    const detached = detachedHost({ fields });
+    await detached.loadCamera();
+    assert.equal(main.mainVisionStablePlanes?.value, enabled);
+    assert.equal(detached.visionStablePlanes?.value, enabled);
+    assert.equal(main.currentMainCamera.value.vision_stable_planes, enabled);
+    assert.equal(detached.camera.value.vision_stable_planes, enabled);
+  });
+}
+
+test('stable planes toggle per camera and retain pending selections over stale snapshots', async () => {
+  const fields = { vision_render_mode: 'restir' };
+  const main = mainHost({ pending: true });
+  main.applySceneSnapshot('test.scene', cameraSnapshot(fields));
+  main.tabs.value = [{ id: 'stale-tab.scene' }];
+  const detached = detachedHost({ fields, pending: true });
+  await detached.loadCamera();
+  assert.equal(typeof main.toggleMainVisionStablePlanes, 'function');
+  assert.equal(typeof detached.toggleVisionStablePlanes, 'function');
+  assert.equal(await main.toggleMainVisionStablePlanes(), true);
+  assert.equal(await detached.toggleVisionStablePlanes(), true);
+  assert.deepEqual(main.calls, [['stablePlanes', 'test.scene', 'camera-2', false]]);
+  assert.deepEqual(detached.calls, [['stablePlanes', 'test.scene', 'camera-3', false]]);
+  main.applySceneSnapshot('test.scene', cameraSnapshot(fields));
+  await detached.loadCamera();
+  assert.equal(main.mainVisionStablePlanes.value, false);
+  assert.equal(detached.visionStablePlanes.value, false);
+  assert.equal(main.currentMainCamera.value.vision_stable_planes, false);
+  assert.equal(detached.camera.value.vision_stable_planes, false);
+  assert.equal(main.mainVisionAccumulation.value, false);
+  assert.equal(main.mainVisionDenoise.value, false);
+  main.applySceneSnapshot('test.scene', cameraSnapshot({ ...fields, vision_stable_planes: false }));
+  main.applySceneSnapshot('test.scene', cameraSnapshot({ ...fields, vision_stable_planes: true }));
+  assert.equal(main.mainVisionStablePlanes.value, true);
+});
+
+for (const fields of [{ render_backend: 'native', vision_render_mode: 'restir' },
+  { vision_render_mode: 'path_tracing' }, { vision_render_mode: 'ssat' }]) {
+  test(`stable planes stay disabled in ${JSON.stringify(fields)}`, async () => {
+    const main = mainHost();
+    main.applySceneSnapshot('test.scene', cameraSnapshot(fields));
+    const detached = detachedHost({ fields });
+    await detached.loadCamera();
+    assert.equal(typeof main.toggleMainVisionStablePlanes, 'function');
+    assert.equal(typeof detached.toggleVisionStablePlanes, 'function');
+    assert.equal(await main.toggleMainVisionStablePlanes(), false);
+    assert.equal(await detached.toggleVisionStablePlanes(), false);
+    assert.deepEqual(main.calls, []);
+    assert.deepEqual(detached.calls, []);
+    assert.equal(main.mainVisionStablePlanes.value, true);
+    assert.equal(detached.visionStablePlanes.value, true);
+  });
+}
+
+test('stable planes reject missing cameras and restore failed changes with visible errors', async () => {
+  const fields = { vision_render_mode: 'restir' };
+  const main = mainHost({ stablePlanesFail: true });
+  main.applySceneSnapshot('test.scene', cameraSnapshot(fields));
+  const detached = detachedHost({ fields, stablePlanesFail: true });
+  await detached.loadCamera();
+  assert.equal(typeof main.toggleMainVisionStablePlanes, 'function');
+  assert.equal(typeof detached.toggleVisionStablePlanes, 'function');
+  assert.equal(await main.toggleMainVisionStablePlanes(), false);
+  assert.equal(await detached.toggleVisionStablePlanes(), false);
+  assert.equal(main.currentMainCamera.value.vision_stable_planes, true);
+  assert.equal(detached.camera.value.vision_stable_planes, true);
+  assert.match(main.mainVisionStablePlanesError.value, /stable planes unavailable/);
+  assert.match(detached.errorText.value, /stable planes unavailable/);
+  main.applySceneSnapshot('test.scene', null);
+  detached.camera.value = null;
+  assert.equal(await main.toggleMainVisionStablePlanes(), false);
+  assert.equal(await detached.toggleVisionStablePlanes(), false);
+  assert.equal(main.calls.length, 1);
+  assert.equal(detached.calls.length, 1);
+});
+
+for (const fail of [false, true]) {
+  test(`late stable planes ${fail ? 'error' : 'response'} cannot overwrite a different camera`, async () => {
+    let resolve, reject;
+    const main = mainHost({ stablePlanesReply: () => new Promise((yes, no) => { resolve = yes; reject = no; }) });
+    main.applySceneSnapshot('test.scene', cameraSnapshot({ vision_render_mode: 'restir' }));
+    assert.equal(typeof main.toggleMainVisionStablePlanes, 'function');
+    const request = main.toggleMainVisionStablePlanes();
+    assert.equal(main.mainVisionStablePlanes.value, false);
+    assert.equal(await main.toggleMainVisionStablePlanes(), false);
+    main.applySceneSnapshot('test.scene', cameraSnapshot({ vision_render_mode: 'restir' }, 'camera-3'));
+    if (fail) reject(new Error('old camera error'));
+    else resolve({ enabled: false, pending: true });
+    assert.equal(await request, !fail);
+    assert.equal(main.mainVisionStablePlanes.value, true);
+    assert.equal(main.currentMainCamera.value.vision_stable_planes, true);
+    assert.equal(main.mainVisionStablePlanesError.value, '');
+  });
+}

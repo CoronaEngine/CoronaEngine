@@ -7,24 +7,99 @@
 #include "base/scattering/interaction.h"
 #include "base/scattering/material.h"
 #include "base/sampler.h"
+#include "base/denoiser.h"
 #include "base/color/spectrum.h"
 #include "svgf_config.h"
 #include "base/using.h"
 
 namespace vision::svgf {
-// Normal GBuffer rays use a shared frame-wide film sample. Point-sampled
-// illumination/visibility histories live on that jittered grid, whereas the
-// final coverage history lives on the pixel-centre grid.
-[[nodiscard]] inline Float4 frame_filter_offsets(Pipeline *pipeline, Uint frame) {
+// Stable-plane guides are optional: other producers retain primary-surface behavior.
+template<typename Param>
+inline void bind_stable_planes(Param &param, const RealTimeDenoiseInput &input) {
+    param.use_stable_planes = input.use_stable_planes;
+    if (input.use_stable_planes) {
+        param.stable_surfaces = input.stable_surfaces.descriptor();
+        param.prev_stable_surfaces = input.prev_stable_surfaces.descriptor();
+    }
+}
+
+template<typename Param>
+[[nodiscard]] inline SurfaceDataVar load_stable_surface(const Param &param, Uint index, bool previous = false) {
+    return previous ? param.prev_stable_surfaces.read(index) : param.stable_surfaces.read(index);
+}
+
+template<typename Param>
+[[nodiscard]] inline TriangleHitVar stable_hit(const Param &param, Uint index, TriangleHitVar hit, bool previous = false) {
+    $if(param.use_stable_planes != 0u) {
+        auto surface = load_stable_surface(param, index, previous);
+        $if(surface.is_replaced && surface.stable_branch != InvalidUI32) { hit = surface.hit; };
+    };
+    return hit;
+}
+
+template<typename Param>
+[[nodiscard]] inline Float3 stable_normal(const Param &param, Uint index, Float3 normal) {
+    $if(param.use_stable_planes != 0u) {
+        auto surface = load_stable_surface(param, index);
+        $if(surface.is_replaced && surface.stable_branch != InvalidUI32) { normal = surface.virtual_normal; };
+    };
+    return normal;
+}
+
+template<typename Param>
+[[nodiscard]] inline Float3 stable_albedo(const Param &param, Uint index, Float3 albedo) {
+    $if(param.use_stable_planes != 0u) {
+        auto surface = load_stable_surface(param, index);
+        $if(surface.is_replaced && surface.stable_branch != InvalidUI32) { albedo = surface.denoiser_albedo; };
+    };
+    return albedo;
+}
+
+// Cache one geometry/branch lookup per tap in the repeated spatial passes.
+// Keeping only these fields avoids carrying the full SurfaceData through a kernel.
+struct StableGeometryGuide {
+    TriangleHitVar hit;
+    Float3 position;
+    Float3 normal;
+    Uint branch{0u};
+    Bool replaced{false};
+
+    template<typename Param>
+    StableGeometryGuide(const Param &param, Uint index, TriangleHitVar primary, bool previous = false) : hit(primary) {
+        $if(param.use_stable_planes != 0u) {
+            auto surface = load_stable_surface(param, index, previous);
+            branch = ocarina::select(surface.stable_branch == InvalidUI32, 0u, surface.stable_branch);
+            replaced = surface.is_replaced && surface.stable_branch != InvalidUI32;
+            $if(replaced) {
+                hit = surface.hit;
+                position = surface.virtual_position;
+                normal = surface.virtual_geometric_normal;
+            };
+        };
+    }
+
+    void apply(Interaction &it) const {
+        $if(replaced) { it.pos = position; it.ng = normal; };
+    }
+};
+
+// Raw guides/illumination live at independent per-pixel film samples; resolved
+// colour lives at pixel centres. Call after loading the camera and sampler.
+// Preserve the caller's RNG when querying a neighbour's sample position.
+[[nodiscard]] inline Float2 pixel_filter_offset(Pipeline *pipeline, Uint2 pixel, Uint frame) {
     auto &camera = pipeline->scene().sensor();
     auto &sampler = pipeline->renderer().sampler();
-    camera->load_data();
-    sampler->load_data();
-    sampler->set_seed(make_uint2(0u), frame, 0u);
-    Float2 current = camera->filter()->sample(sampler->next_2d()).p;
-    sampler->set_seed(make_uint2(0u), max(frame, 1u) - 1u, 0u);
-    Float2 previous = camera->filter()->sample(sampler->next_2d()).p;
-    return make_float4(current, previous);
+    Float2 offset = make_float2(0.f);
+    sampler->temporary([&](Sampler *local_sampler) {
+        local_sampler->set_seed(pixel, frame, Dimension::Camera);
+        offset = camera->filter()->sample(local_sampler->next_2d()).p;
+    });
+    return offset;
+}
+
+[[nodiscard]] inline Float film_tent_weight(Float2 delta) {
+    Float2 axes = max(make_float2(1.f) - abs(delta), make_float2(0.f));
+    return axes.x * axes.y;
 }
 
 template<typename T>

@@ -2,6 +2,7 @@
 
 #include <corona/spatial/octree.h>
 #include <corona/systems/geometry/actor_cache.h>
+#include <corona/systems/geometry/geometry_mesh_builder.h>
 #include <corona/systems/geometry/geometry_system.h>
 #include <corona/resource/types/scene.h>
 #include "shadow_lod_state.h"
@@ -121,6 +122,35 @@ struct LodDiskWriteTask {
     int            retry_count = 0; // 写盘失败重试计数（>0 表示已重试）
 };
 
+/// 可移动的 LOD 需求位图（按级号置位）。
+/// 渲染线程在 select_* 里 set()，几何线程 reconcile 每帧 take() 取走并清空。
+/// LODCacheEntry 需要随 lod_cache insert_or_assign 移动，而 std::atomic 本身不可
+/// 拷贝/移动，故包一层：拷贝/移动只搬运当前位值，不搬运原子对象身份。
+struct AtomicLodMask {
+    std::atomic<std::uint64_t> bits{0};
+
+    AtomicLodMask() = default;
+    AtomicLodMask(const AtomicLodMask&) : bits(0) {}
+    AtomicLodMask& operator=(const AtomicLodMask&) {
+        bits.store(0, std::memory_order_relaxed);
+        return *this;
+    }
+    AtomicLodMask(AtomicLodMask&& other) noexcept
+        : bits(other.bits.load(std::memory_order_relaxed)) {}
+    AtomicLodMask& operator=(AtomicLodMask&& other) noexcept {
+        bits.store(other.bits.load(std::memory_order_relaxed), std::memory_order_relaxed);
+        return *this;
+    }
+
+    void set(std::uint32_t level) {
+        if (level >= 64u) return;
+        bits.fetch_or(std::uint64_t{1} << level, std::memory_order_relaxed);
+    }
+    [[nodiscard]] std::uint64_t take() {
+        return bits.exchange(0, std::memory_order_relaxed);
+    }
+};
+
 struct GeometrySystem::Impl {
     using Payload = std::uintptr_t;
     using OctreeEntry = Spatial::Octree<Payload>::Entry;
@@ -195,6 +225,17 @@ struct GeometrySystem::Impl {
         ktm::fvec3 local_aabb_max{0.0f, 0.0f, 0.0f};
 
         bool lod_spatially_evicted = false;  // 被空间淘汰强制 LOD0
+
+        // ---- 共享实例资产的集合式驻留（GPU 只保留被需求的 LOD）----
+        // 多实例资产（同一 MeshData 被多个 MeshInstanceData 引用）不能再按单个
+        // committed_demand 选级：不同实例距离不同，各自需要的 LOD 也不同。
+        // 渲染线程在 select_render_buffers_for_instance / select_shadow_render_buffers
+        // 里把每个实例实际选中的级写进 frame_demand_mask；reconcile 每帧 take() 取走，
+        // 于是驻留集合 = 需求集合 = 各实例选中级的并集：
+        //   只构建并集里的级，只释放并集外的级（带逐级宽限帧，防边界抖动）。
+        AtomicLodMask frame_demand_mask;                       // render 写，reconcile 取走
+        std::uint64_t demanded_mask = 0;                       // 本帧并集快照（诊断）
+        bool          shared_instances = false;                // true = 走集合式驻留
     };
 
     mutable std::shared_mutex          lod_cache_mutex;
@@ -287,6 +328,14 @@ struct GeometrySystem::Impl {
     // 默认 1.5px：显存充裕时误差小于约 1.5 像素即视觉无感，可安全切粗级。
     // 显存承压时由 compute_pixel_budget_from_pressure() 动态放宽，趋粗 LOD 自然降显存。
     static constexpr float kLodDefaultPixelBudget = 1.5f;
+
+    // 共享实例资产：某级最后一次被需求后，再保留这么多帧才允许释放。
+    // 吸收"某帧实例被剔除/选级抖动"造成的短暂零需求，避免建-删-建。
+    static constexpr std::uint64_t kSharedLodFreeGraceFrames = 5;
+
+    // reconcile 每帧按显存压力算出的像素误差预算，供渲染端按实例选级复用，
+    // 让显存压力同时作用于标量路径与共享实例集合路径（压力 → 选更粗 → 并集收窄）。
+    std::atomic<float> last_lod_pixel_budget{ 1.5f };
 
     // ========================================
     // LRU ActorCache（M3 生产化）
@@ -398,7 +447,7 @@ struct GeometrySystem::Impl {
     struct PendingGeometryBuild {
         std::uint64_t model_id = 0;
         std::uint64_t epoch = 0;
-        std::future<std::vector<MeshDevice>> future;
+        std::future<SceneGpuMeshData> future;
     };
     std::unordered_map<Payload, PendingGeometryBuild> pending_geometry_builds;
     tbb::task_group geometry_build_tasks;

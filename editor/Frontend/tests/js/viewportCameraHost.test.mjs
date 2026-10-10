@@ -21,6 +21,7 @@ import { ensureStoryCharacters, syncPlacementActors } from '../../../../game/fro
 import { sceneFixture } from '../../../../game/tests/frontend/fixtures.mjs';
 import { registerWorldSessionSave, flushWorldSessionSaves, trackWorldSessionWork } from '../../src/services/worldSessionLifecycle.js';
 import { normalizeVisionRenderMode, visionAccumulationFromCamera, visionDenoiseFromCamera } from '../../src/utils/visionRenderModes.js';
+import { normalizeVisionRenderMode, visionAccumulationFromCamera, visionDenoiseFromCamera, visionStablePlanesFromCamera } from '../../src/utils/visionRenderModes.js';
 
 const source = fs.readFileSync(new URL('../../src/views/layout/MainPage.vue', import.meta.url), 'utf8');
 const { descriptor } = parse(source);
@@ -39,6 +40,7 @@ const names = new Set([
   'coerceNumber', 'setCameraSpeedFromPanel', 'isVector3', 'sceneGridEnabledFromSnapshot', 'applySceneSnapshot',
   'currentMainCamera', 'currentMainCameraId', 'mainVisionDenoise', 'mainVisionDenoiseError',
   'pendingMainDenoiseSelection',
+  'mainVisionStablePlanes', 'mainVisionStablePlanesError', 'pendingMainStablePlanesSelection',
   'mainVisionAccumulation', 'mainVisionAccumulationError', 'pendingMainAccumulationSelection',
 ]);
 const hostSource = declarations.filter(node => node.type === 'VariableDeclaration'
@@ -48,7 +50,7 @@ const makeHost = new Function('deps', `
   const { ref, reactive, cameraMovementKey, createViewportCameraController, window, document,
     editorApi, cabbageContextService, viewCurrent, viewportGizmoController,
     refreshSceneCameraBinding, syncSceneCameraBinding, broadcastViewportControlsState,
-    getEditorControlsState, normalizeVisionRenderMode, visionAccumulationFromCamera, visionDenoiseFromCamera } = deps;
+    getEditorControlsState, normalizeVisionRenderMode, visionAccumulationFromCamera, visionDenoiseFromCamera, visionStablePlanesFromCamera } = deps;
   const DEFAULT_SCENE_NAME = 'scene.ini';
   const tabs = ref([{id: DEFAULT_SCENE_NAME}]), activeTab = ref(0);
   const getViewportRenderRect = () => ({ left: 0, top: 0, width: 800, height: 600 });
@@ -75,7 +77,7 @@ function mountCreative(t, { native = true } = {}) {
   };
   let refreshes = 0;
   const page = makeHost({
-    ref, reactive, cameraMovementKey, normalizeVisionRenderMode, visionAccumulationFromCamera, visionDenoiseFromCamera,
+    ref, reactive, cameraMovementKey, normalizeVisionRenderMode, visionAccumulationFromCamera, visionDenoiseFromCamera, visionStablePlanesFromCamera,
     createViewportCameraController: options => createViewportCameraController({ ...options, ...clock }),
     window, document, viewCurrent: () => current,
     editorApi: { scratch: Object.fromEntries(['sendKeyEvent', 'sendKeyUpEvent', 'sendMouseEvent']

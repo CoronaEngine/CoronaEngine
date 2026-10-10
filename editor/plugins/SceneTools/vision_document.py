@@ -174,6 +174,15 @@ def infer_vision_accumulation(document: dict) -> bool:
     return bool(current) if isinstance(current, (bool, int)) else False
 
 
+def infer_vision_stable_planes(document: dict) -> bool:
+    current = document
+    for key in ("render", "integrator", "param", "direct", "stable_planes"):
+        current = current.get(key) if isinstance(current, dict) else None
+    if isinstance(current, str):
+        return current.strip().lower() not in {"0", "false", "no", "off"}
+    return bool(current) if isinstance(current, (bool, int)) else True
+
+
 def infer_vision_render_mode(document: dict) -> str:
     if not isinstance(document, dict):
         return "path_tracing"

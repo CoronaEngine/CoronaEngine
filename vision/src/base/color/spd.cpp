@@ -80,8 +80,8 @@ Float SPD::eval(const Float &lambda) const noexcept {
     Float t = (clamp(lambda, visible_wavelength_min, visible_wavelength_max) - visible_wavelength_min) / sample_interval_.hv();
     uint sample_count = static_cast<uint>((visible_wavelength_max - visible_wavelength_min) / sample_interval_.hv()) + 1u;
     Uint i = cast<uint>(min(t, static_cast<float>(sample_count - 2u)));
-    Float l = rp_->bindless_array().buffer_var<float>(*func_.index()).read(i);
-    Float r = rp_->bindless_array().buffer_var<float>(*func_.index()).read(i + 1);
+    Float l = rp_->bindless_array().buffer_var<float>(func_.index_var()).read(i);
+    Float r = rp_->bindless_array().buffer_var<float>(func_.index_var()).read(i + 1);
     return lerp(fract(t), l, r);
 }
 

@@ -56,7 +56,7 @@ public:
 private:
     const coefficient_table_type *coefficients_{};
     Pipeline *rp_{};
-    uint base_index_{InvalidUI32};
+    EncodedData<uint> base_index_{InvalidUI32};
     Texture3D coefficient0_;
     Texture3D coefficient1_;
     Texture3D coefficient2_;
@@ -162,7 +162,7 @@ public:
             return c;
         };
         decode.function()->set_description("RGBToSpectrumTable::decode");
-        return make_float4(decode(rp_->bindless_array().var(), base_index_, rgb),
+        return make_float4(decode(rp_->bindless_array().var(), base_index_.as_parameter(), rgb),
                            cie::linear_srgb_to_y(rgb));
     }
 

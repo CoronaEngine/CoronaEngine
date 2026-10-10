@@ -10,6 +10,9 @@
 
 namespace vision::svgf {
 struct VarianceEstimatorParam {
+    uint use_stable_planes{0u};
+    BufferDesc<SurfaceData> stable_surfaces;
+    BufferDesc<SurfaceData> prev_stable_surfaces;
     BufferDesc<RadType4> radiance_direct;
     BufferDesc<RadType4> radiance_indirect;
     BufferDesc<SVGFDataDual> svgf_buffer_prev;
@@ -26,7 +29,7 @@ struct VarianceEstimatorParam {
 
 }// namespace vision::svgf
 
-OC_PARAM_STRUCT(vision::svgf, VarianceEstimatorParam,
+OC_PARAM_STRUCT(vision::svgf, VarianceEstimatorParam, use_stable_planes, stable_surfaces, prev_stable_surfaces,
 radiance_direct, radiance_indirect, svgf_buffer_prev, svgf_buffer_cur,
 visibility_buffer, visibility_buffer_prev, motion_vectors, camera_pos, prev_camera_pos, pixels_per_radian, frame_index, channel_kind){};
 

@@ -7,6 +7,7 @@
 #include <corona/resource/types/scene.h>
 #include <corona/shared_data_hub.h>
 
+#include <cmath>
 #include <cstddef>
 #include <cstring>
 #include <span>
@@ -213,7 +214,21 @@ struct CpuMeshData {
             o2w = model_transform_to_vision_o2w(*transform);
         }
 
-        for (std::size_t mesh_index = 0; mesh_index < geom->mesh_handles.size(); ++mesh_index) {
+        const std::size_t draw_instance_count = geom->mesh_instances.empty()
+            ? geom->mesh_handles.size()
+            : geom->mesh_instances.size();
+        for (std::size_t draw_instance_index = 0;
+             draw_instance_index < draw_instance_count;
+             ++draw_instance_index) {
+            const MeshInstanceDevice* mesh_instance = geom->mesh_instances.empty()
+                ? nullptr
+                : &geom->mesh_instances[draw_instance_index];
+            const std::size_t mesh_index = mesh_instance != nullptr
+                ? static_cast<std::size_t>(mesh_instance->mesh_index)
+                : draw_instance_index;
+            if (mesh_index >= geom->mesh_handles.size()) {
+                continue;
+            }
             auto& mesh_dev = geom->mesh_handles[mesh_index];
             CpuMeshData cpu_mesh;
             if (!load_cpu_mesh_from_resource(*geom, mesh_index, cpu_mesh) &&
@@ -229,10 +244,28 @@ struct CpuMeshData {
 
             std::vector<::vision::Vertex> vertices;
             vertices.reserve(cpu_mesh.vertices.size());
+            const ktm::fmat4x4 instance_matrix = mesh_instance != nullptr
+                ? mesh_instance->transform
+                : ktm::fmat4x4::from_eye();
             for (const auto& src_vertex : cpu_mesh.vertices) {
+                const ktm::fvec4 local_pos = ktm::fvec4{
+                    src_vertex.position[0], src_vertex.position[1],
+                    src_vertex.position[2], 1.0f};
+                const ktm::fvec4 local_normal = ktm::fvec4{
+                    src_vertex.normal[0], src_vertex.normal[1],
+                    src_vertex.normal[2], 0.0f};
+                const ktm::fvec4 pos = instance_matrix * local_pos;
+                ktm::fvec4 normal = instance_matrix * local_normal;
+                const float normal_len = std::sqrt(
+                    normal[0] * normal[0] + normal[1] * normal[1] + normal[2] * normal[2]);
+                if (normal_len > 1e-6f) {
+                    normal[0] /= normal_len;
+                    normal[1] /= normal_len;
+                    normal[2] /= normal_len;
+                }
                 ::vision::Vertex v;
-                v.pos = {src_vertex.position[0], src_vertex.position[1], -src_vertex.position[2]};
-                v.n   = {src_vertex.normal[0], src_vertex.normal[1], -src_vertex.normal[2]};
+                v.pos = {pos[0], pos[1], -pos[2]};
+                v.n   = {normal[0], normal[1], -normal[2]};
                 v.uv  = {src_vertex.tex_coords[0], src_vertex.tex_coords[1]};
                 v.uv2 = {0.f, 0.f};
                 vertices.push_back(v);

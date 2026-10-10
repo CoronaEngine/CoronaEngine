@@ -79,10 +79,18 @@ public:
                                                         TSampler &sampler) const noexcept {
         return BSDFSample{1u, 1u};
     }
+    // Capability of the existing delta sampler, not a material-name test.
+    // Returning true promises a single deterministic reflection direction.
+    // LobeSet keeps the default until it implements matching delta sampling
+    // (including child frames and weights); OR-ing child capabilities is unsafe.
+    [[nodiscard]] virtual Bool supports_stable_reflection(const Float3 &wo) const noexcept { return false; }
     [[nodiscard]] virtual Bool splittable() const noexcept { return false; }
     virtual Lobe &operator=(const Lobe &other) noexcept = default;
     virtual void regularize() noexcept {}
     [[nodiscard]] virtual Float diffuse_factor() const noexcept { return 1; }
+    // View-independent material features for reservoir reuse, not denoiser albedos.
+    virtual void reuse_material(SampledSpectrum &diffuse, SampledSpectrum &specular,
+                                Float2 &roughness) const noexcept;
     virtual void mollify() noexcept {}
     [[nodiscard]] virtual const SampledWavelengths *swl() const = 0;
     [[nodiscard]] virtual Uint flag() const noexcept = 0;
@@ -129,6 +137,8 @@ public:
     void from_ratio_x(const ocarina::Float &roughness) noexcept override;
     [[nodiscard]] Float to_ratio_x() const noexcept override;
     [[nodiscard]] Float diffuse_factor() const noexcept override;
+    void reuse_material(SampledSpectrum &diffuse, SampledSpectrum &specular,
+                        Float2 &roughness) const noexcept override;
     VS_MAKE_LOBE_ASSIGNMENT(MicrofacetLobe)
     [[nodiscard]] SampledSpectrum albedo(const Float &cos_theta) const noexcept override;
     [[nodiscard]] const SampledWavelengths *swl() const override;
@@ -231,6 +241,8 @@ public:
         : Lobe(std::move(shading_frame)), fresnel_(fresnel), microfacet_(microfacet),
           kt_(std::move(color)), dispersive_(ocarina::move(dispersive)),
           flag_(std::move(flag)) {}
+    void reuse_material(SampledSpectrum &diffuse, SampledSpectrum &specular,
+                        Float2 &roughness) const noexcept override;
     VS_MAKE_LOBE_ASSIGNMENT(DielectricLobe)
     [[nodiscard]] virtual bool compensate() const noexcept { return true; }
     static void prepare() noexcept;
@@ -316,6 +328,8 @@ public:
     void normalize_sampled_weight() noexcept;
     void flatten() noexcept;
     [[nodiscard]] bool is_multi() const noexcept override { return true; }
+    void reuse_material(SampledSpectrum &diffuse, SampledSpectrum &specular,
+                        Float2 &roughness) const noexcept override;
     VS_MAKE_LOBE_ASSIGNMENT(LobeSet)
     [[nodiscard]] SampledSpectrum albedo(const Float &cos_theta) const noexcept override;
     [[nodiscard]] uint lobe_num() const noexcept { return lobes_.size(); }
@@ -336,6 +350,12 @@ protected:
 
 public:
     using MicrofacetLobe::MicrofacetLobe;
+    [[nodiscard]] Bool supports_stable_reflection(const Float3 &wo) const noexcept override {
+        // sample_delta_local reflects about the local normal without sampling
+        // a direction or choosing a lobe. Only the existing NearSpec policy
+        // selects that sampler; ordinary glossy reflection stays stochastic.
+        return flag() == SurfaceData::NearSpec;
+    }
     static constexpr const char *lut_name = "PureReflectionLobe::lut";
     static constexpr uint lut_res = 32;
     [[nodiscard]] virtual Float compensate_factor(const Float3 &wo) const noexcept;

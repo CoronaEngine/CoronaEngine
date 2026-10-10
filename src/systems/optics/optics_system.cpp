@@ -1008,6 +1008,10 @@ void apply_pending_camera_state_updates() {
                 camera->vision_accumulation = update.vision_accumulation;
             }
             if (Corona::has_camera_state_field(
+                    update.fields, Corona::CameraStateUpdateField::VisionStablePlanes)) {
+                camera->vision_stable_planes = update.vision_stable_planes;
+            }
+            if (Corona::has_camera_state_field(
                     update.fields, Corona::CameraStateUpdateField::ShadowCascadeDebug)) {
                 camera->shadow_cascade_debug = update.shadow_cascade_debug;
             }
@@ -1034,6 +1038,10 @@ void apply_pending_camera_state_updates() {
         if (Corona::has_camera_state_field(
                 update.fields, Corona::CameraStateUpdateField::VisionAccumulation)) {
             hub.acknowledge_camera_vision_accumulation(update.camera_handle, update.sequence);
+        }
+        if (Corona::has_camera_state_field(
+                update.fields, Corona::CameraStateUpdateField::VisionStablePlanes)) {
+            hub.acknowledge_camera_vision_stable_planes(update.camera_handle, update.sequence);
         }
     }
 }
@@ -1649,6 +1657,8 @@ bool collect_actor_instances_for_visibility(
                     continue;
                 }
 
+                const ktm::fmat4x4 mesh_model_matrix =
+                    multiply_ktm_mat4(model_matrix, ms.instance_transform);
                 auto material_id = static_cast<uint32_t>(batch.materials.size());
                 {
                     Hardware::MaterialInfo mat_info{};
@@ -1701,7 +1711,7 @@ bool collect_actor_instances_for_visibility(
                 auto instance_id = static_cast<uint32_t>(batch.instances.size());
                 {
                     Hardware::InstanceInfo inst{};
-                    inst.modelMatrix = model_matrix;
+                    inst.modelMatrix = mesh_model_matrix;
                     inst.vertexBufferIndex = vertex_descriptor;
                     inst.indexBufferIndex = index_descriptor;
                     inst.materialID = material_id;
@@ -1717,7 +1727,7 @@ bool collect_actor_instances_for_visibility(
 
                 using Pipeline = Corona::Horizon::RasterizerPipeline<visibility_vert_glsl_t, visibility_frag_glsl_t>;
                 auto& pc = static_cast<Pipeline::VertexResourceBindings&>(target_visibility).pushConsts;
-                pc.modelMatrix = upload_value(model_matrix);
+                pc.modelMatrix = upload_value(mesh_model_matrix);
                 pc.uniformBufferIndex = target_vp_descriptor;
                 pc.instanceID = instance_id + 1;
                 pc.textureIndex = texture_descriptor;
@@ -2612,7 +2622,7 @@ struct OpticsSystem::VisionPipelineRuntime {
 bool OpticsSystem::prepare_vision_camera_view(VisionPipelineRuntime& runtime,
                                             std::uintptr_t camera_handle,
                                             uint32_t width, uint32_t height,
-                                            bool denoise, bool accumulation) {
+                                            bool denoise, bool accumulation, bool stable_planes) {
     vision::switch_profile::Scope profile{"view.prepare", "view"};
     auto& pipeline = runtime.pipeline;
     if (!pipeline || camera_handle == 0) return false;
@@ -2657,6 +2667,7 @@ bool OpticsSystem::prepare_vision_camera_view(VisionPipelineRuntime& runtime,
         runtime.view_denoise_states[camera_handle] = denoise;
     }
     if (!pipeline->activate_view_context(camera_handle)) return false;
+    pipeline->renderer().integrator()->set_stable_planes_enabled(stable_planes);
     // Output settings are shared by the pipeline, while renderers and histories
     // belong to cameras. Restore the active camera's preference on every visit.
     pipeline->set_output_denoise(denoise);
@@ -3942,7 +3953,8 @@ void OpticsSystem::optics_pipeline(float frame_count, uint64_t frame_index) {
                                 ? geometry_system_->query_mesh_slots(
                                       optics.geometry_handle,
                                       camera->position, camera->fov,
-                                      world_center, bounding_radius)
+                                      world_center, bounding_radius,
+                                      &model_matrix)
                                 : (geometry_system_
                                       ? geometry_system_->query_mesh_slots(optics.geometry_handle)
                                       : std::vector<GeometrySystem::MeshSlot>{});
@@ -3950,6 +3962,22 @@ void OpticsSystem::optics_pipeline(float frame_count, uint64_t frame_index) {
                             // CRITICAL FIX: Reserve space in outer scope's buffer vector
                             // Buffers must stay alive until after commit() (line 4633)
                             scene_indirect_buffers.reserve(scene_indirect_buffers.size() + mesh_slots_b.size());
+
+                            struct PendingVisibilityDraw {
+                                Horizon::HardwareBuffer index_buffer;
+                                Horizon::HardwareBuffer vertex_buffer;
+                                Horizon::DrawIndexedIndirectCommand command{};
+                                ktm::fmat4x4 clip_matrix{ktm::fmat4x4::from_eye()};
+                                uint32_t instance_id = 0;
+                                uint32_t material_id = 0;
+                                uint32_t texture_descriptor = 0;
+                                uint32_t mesh_index = 0;
+                                uint32_t vertex_count = 0;
+                                uint32_t index_count = 0;
+                                uint32_t max_index = 0;
+                            };
+                            std::vector<PendingVisibilityDraw> pending_visibility_draws;
+                            pending_visibility_draws.reserve(mesh_slots_b.size());
 
                             for (const auto& ms : mesh_slots_b) {
                                 if (!diag_mesh_allowed(ms.mesh_index)) continue;
@@ -3973,17 +4001,6 @@ void OpticsSystem::optics_pipeline(float frame_count, uint64_t frame_index) {
                                 if (!ms.valid ||
                                     !vertex_valid || !index_valid ||
                                     vertex_descriptor == 0u || index_descriptor == 0u) {
-                                    // [TEMP DIAG] 网格被守卫拒掉的那条路，同样是静默的。
-                                    {
-                                        static std::atomic<int> diag_n{0};
-                                        if (diag_n.fetch_add(1) < 20) {
-                                            std::fprintf(stderr,
-                                                "[TEMPDIAG SKIP] mesh=%u valid=%d vtx=%d idx=%d vtx_desc=%u idx_desc=%u\n",
-                                                ms.mesh_index, ms.valid ? 1 : 0, vertex_valid ? 1 : 0,
-                                                index_valid ? 1 : 0, vertex_descriptor, index_descriptor);
-                                            std::fflush(stderr);
-                                        }
-                                    }
                                     log_invalid_optics_mesh_once(
                                         actor_handle,
                                         optics.geometry_handle,
@@ -3999,6 +4016,8 @@ void OpticsSystem::optics_pipeline(float frame_count, uint64_t frame_index) {
                                     continue;
                                 }
 
+                                const ktm::fmat4x4 mesh_model_matrix =
+                                    multiply_ktm_mat4(model_matrix, ms.instance_transform);
                                 auto materialID = static_cast<uint32_t>(batch.materials.size());
                                 {
                                     Hardware::MaterialInfo mat_info{};
@@ -4043,7 +4062,7 @@ void OpticsSystem::optics_pipeline(float frame_count, uint64_t frame_index) {
                                 auto instanceID = static_cast<uint32_t>(batch.instances.size());
                                 {
                                     Hardware::InstanceInfo inst{};
-                                    inst.modelMatrix = model_matrix;
+                                    inst.modelMatrix = mesh_model_matrix;
                                     inst.vertexBufferIndex = vertex_descriptor;
                                     inst.indexBufferIndex = index_descriptor;
                                     inst.materialID = materialID;
@@ -4058,7 +4077,7 @@ void OpticsSystem::optics_pipeline(float frame_count, uint64_t frame_index) {
                                 }
 
                                 const ktm::fmat4x4 clip_matrix =
-                                    multiply_ktm_mat4(view_proj_matrix, model_matrix);
+                                    multiply_ktm_mat4(view_proj_matrix, mesh_model_matrix);
 
                                 using Pipeline = Corona::Horizon::RasterizerPipeline<visibility_vert_glsl_t, visibility_frag_glsl_t>;
                                 auto& pc = static_cast<Pipeline::VertexResourceBindings&>(target_visibility).pushConsts;
@@ -4075,47 +4094,62 @@ void OpticsSystem::optics_pipeline(float frame_count, uint64_t frame_index) {
                                 draw_cmd.instance_count = 1;
                                 draw_cmd.first_instance = 0;
 
+                                PendingVisibilityDraw pending{};
+                                pending.index_buffer = ms.geo.index;
+                                pending.vertex_buffer = ms.geo.vertex;
+                                pending.command = draw_cmd;
+                                pending.clip_matrix = clip_matrix;
+                                pending.instance_id = instanceID + 1;
+                                pending.material_id = materialID;
+                                pending.texture_descriptor = texture_descriptor;
+                                pending.mesh_index = ms.mesh_index;
+                                pending.vertex_count = ms.vertex_count;
+                                pending.index_count = ms.index_count;
+                                pending.max_index = ms.max_index;
+                                pending_visibility_draws.push_back(std::move(pending));
+                                ++recorded_draws;
+                            }
+
+                            if (!pending_visibility_draws.empty()) {
+                                std::vector<Horizon::DrawIndexedIndirectCommand> commands;
+                                commands.reserve(pending_visibility_draws.size());
+                                for (const auto& pending : pending_visibility_draws) {
+                                    commands.push_back(pending.command);
+                                }
+
                                 auto indirect_buffer =
                                     Horizon::HardwareBuffer::from_bytes(
-                                        std::as_bytes(std::span(&draw_cmd, 1)),
-                                        sizeof(draw_cmd),
+                                        std::as_bytes(std::span<const Horizon::DrawIndexedIndirectCommand>(
+                                            commands.data(), commands.size())),
+                                        commands.size() * sizeof(Horizon::DrawIndexedIndirectCommand),
                                         Horizon::BufferUsage_Indirect,
-                                        make_optics_draw_label(
-                                            follow_camera_pass ? "follow_visibility" : "scene_visibility",
-                                            actor_handle,
-                                            optics.geometry_handle,
-                                            ms.mesh_index,
-                                            static_cast<std::uint32_t>(frame_index),
-                                            instanceID + 1,
-                                            materialID,
-                                            texture_descriptor,
-                                            vertex_descriptor,
-                                            index_descriptor,
-                                            ms.vertex_count,
-                                            ms.index_count,
-                                            ms.max_index));
+                                        follow_camera_pass ? "follow_visibility.batch"
+                                                           : "scene_visibility.batch");
 
-                                Horizon::DrawIndexedIndirectParams draw_params;
-                                draw_params.draw_count = 1;
-                                draw_params.indirect_offset = 0;
-                                draw_params.stride = sizeof(Horizon::DrawIndexedIndirectCommand);
+                                using Pipeline = Corona::Horizon::RasterizerPipeline<visibility_vert_glsl_t, visibility_frag_glsl_t>;
+                                auto& pc = static_cast<Pipeline::VertexResourceBindings&>(target_visibility).pushConsts;
+                                for (std::size_t draw_index = 0;
+                                     draw_index < pending_visibility_draws.size();
+                                     ++draw_index) {
+                                    const auto& pending = pending_visibility_draws[draw_index];
+                                    pc.modelMatrix = upload_value(pending.clip_matrix);
+                                    pc.uniformBufferIndex = 0u;
+                                    pc.instanceID = pending.instance_id;
+                                    pc.textureIndex = pending.texture_descriptor;
 
-                                target_visibility.record_indirect(ms.geo.index, ms.geo.vertex, indirect_buffer, draw_params);
-                                scene_indirect_buffers.push_back(std::move(indirect_buffer));
-                                ++recorded_draws;
-                                // [TEMP DIAG] 定位三角网格不可见：确认 draw 真的被录进去了，
-                                // 并打印 clip 矩阵首/末行判断 modelMatrix 是否为零/退化。
-                                {
-                                    static std::atomic<int> diag_n{0};
-                                    if (diag_n.fetch_add(1) < 20) {
-                                        std::fprintf(stderr,
-                                            "[TEMPDIAG rec] mesh=%u idx=%u vtx=%u tex=%u clip_r0=(%.3f,%.3f,%.3f,%.3f) clip_r3=(%.3f,%.3f,%.3f,%.3f)\n",
-                                            ms.mesh_index, ms.index_count, ms.vertex_count, texture_descriptor,
-                                            clip_matrix[0][0], clip_matrix[0][1], clip_matrix[0][2], clip_matrix[0][3],
-                                            clip_matrix[3][0], clip_matrix[3][1], clip_matrix[3][2], clip_matrix[3][3]);
-                                        std::fflush(stderr);
-                                    }
+                                    Horizon::DrawIndexedIndirectParams draw_params;
+                                    draw_params.draw_count = 1;
+                                    draw_params.indirect_offset =
+                                        draw_index * sizeof(Horizon::DrawIndexedIndirectCommand);
+                                    draw_params.stride = sizeof(Horizon::DrawIndexedIndirectCommand);
+
+                                    target_visibility.record_indirect(
+                                        pending.index_buffer,
+                                        pending.vertex_buffer,
+                                        indirect_buffer,
+                                        draw_params);
                                 }
+                                scene_indirect_buffers.push_back(std::move(indirect_buffer));
                             }
                             ++object_id;
                         }
@@ -4273,6 +4307,14 @@ void OpticsSystem::optics_pipeline(float frame_count, uint64_t frame_index) {
                     shadow.bind_depth_target(shadow_depth);
                     uint32_t shadow_draws = 0;
 
+                    struct PendingShadowDraw {
+                        Horizon::HardwareBuffer index_buffer;
+                        Horizon::HardwareBuffer vertex_buffer;
+                        Horizon::DrawIndexedIndirectCommand command{};
+                        ktm::fmat4x4 clip_matrix{ktm::fmat4x4::from_eye()};
+                    };
+                    std::vector<PendingShadowDraw> pending_shadow_draws;
+
                     for (const auto& caster : shadow_casters) {
                         if ((caster.cascade_visibility_mask & (1u << cascade_index)) == 0u) {
                             continue;
@@ -4282,8 +4324,10 @@ void OpticsSystem::optics_pipeline(float frame_count, uint64_t frame_index) {
                             if (shadow_draws >= diag.draw_limit) return;
                             if (!slot.valid) continue;
 
+                            const ktm::fmat4x4 shadow_model_matrix =
+                                multiply_ktm_mat4(caster.model_matrix, slot.instance_transform);
                             const ktm::fmat4x4 clip_matrix = multiply_ktm_mat4(
-                                light_view_proj, caster.model_matrix);
+                                light_view_proj, shadow_model_matrix);
                             shadow.pushConsts.lightViewProjModel =
                                 upload_value(clip_matrix);
 
@@ -4295,42 +4339,55 @@ void OpticsSystem::optics_pipeline(float frame_count, uint64_t frame_index) {
                             draw_cmd.instance_count = 1;
                             draw_cmd.first_instance = 0;
 
-                            auto indirect_buffer =
-                                Horizon::HardwareBuffer::from_bytes(
-                                    std::as_bytes(std::span(&draw_cmd, 1)),
-                                    sizeof(draw_cmd),
-                                    Horizon::BufferUsage_Indirect,
-                                    make_optics_draw_label(
-                                        "shadow",
-                                        caster.actor_handle,
-                                        caster.geometry_handle,
-                                        slot.mesh_index,
-                                        static_cast<std::uint32_t>(frame_index),
-                                        0u,
-                                        0u,
-                                        0u,
-                                        0u,
-                                        0u,
-                                        slot.vertex_count,
-                                        slot.index_count,
-                                        slot.max_index));
-
-                            Horizon::DrawIndexedIndirectParams draw_params;
-                            draw_params.draw_count = 1;
-                            draw_params.indirect_offset = 0;
-                            draw_params.stride = sizeof(Horizon::DrawIndexedIndirectCommand);
-
-                            shadow.record_indirect(slot.geo.index, slot.geo.vertex, indirect_buffer, draw_params);
-
-                            // Thread-safe push (shadow cascades may be recorded in parallel)
-                            {
-                                std::lock_guard<std::mutex> lock(shadow_indirect_buffers_mutex);
-                                shadow_indirect_buffers.push_back(std::move(indirect_buffer));
-                            }
+                            PendingShadowDraw pending{};
+                            pending.index_buffer = slot.geo.index;
+                            pending.vertex_buffer = slot.geo.vertex;
+                            pending.command = draw_cmd;
+                            pending.clip_matrix = clip_matrix;
+                            pending_shadow_draws.push_back(std::move(pending));
                             ++shadow_draws;
                             ++native_cascade_draws[cascade_index];
                             native_cascade_indices[cascade_index] += slot.index_count;
                         }
+                    }
+
+                    if (!pending_shadow_draws.empty()) {
+                        std::vector<Horizon::DrawIndexedIndirectCommand> commands;
+                        commands.reserve(pending_shadow_draws.size());
+                        for (const auto& pending : pending_shadow_draws) {
+                            commands.push_back(pending.command);
+                        }
+
+                        auto indirect_buffer =
+                            Horizon::HardwareBuffer::from_bytes(
+                                std::as_bytes(std::span<const Horizon::DrawIndexedIndirectCommand>(
+                                    commands.data(), commands.size())),
+                                commands.size() * sizeof(Horizon::DrawIndexedIndirectCommand),
+                                Horizon::BufferUsage_Indirect,
+                                "shadow.batch");
+
+                        for (std::size_t draw_index = 0;
+                             draw_index < pending_shadow_draws.size();
+                             ++draw_index) {
+                            const auto& pending = pending_shadow_draws[draw_index];
+                            shadow.pushConsts.lightViewProjModel =
+                                upload_value(pending.clip_matrix);
+
+                            Horizon::DrawIndexedIndirectParams draw_params;
+                            draw_params.draw_count = 1;
+                            draw_params.indirect_offset =
+                                draw_index * sizeof(Horizon::DrawIndexedIndirectCommand);
+                            draw_params.stride = sizeof(Horizon::DrawIndexedIndirectCommand);
+
+                            shadow.record_indirect(
+                                pending.index_buffer,
+                                pending.vertex_buffer,
+                                indirect_buffer,
+                                draw_params);
+                        }
+
+                        std::lock_guard<std::mutex> lock(shadow_indirect_buffers_mutex);
+                        shadow_indirect_buffers.push_back(std::move(indirect_buffer));
                     }
                 };
 
@@ -4347,20 +4404,6 @@ void OpticsSystem::optics_pipeline(float frame_count, uint64_t frame_index) {
                                                          sceneBatch);
                     } else {
                         sceneBatch.clear();
-                    }
-                    // [TEMP DIAG] 收集阶段产出：instances/materials 为 0 说明根本没走到录制；
-                    // 非 0 但屏幕空白说明问题在 raster/compute 下游。走 stderr，和
-                    // Horizon 侧的探针汇到同一个流里，方便对齐顺序。
-                    {
-                        static std::atomic<int> diag_n{0};
-                        if (diag_n.fetch_add(1) < 20) {
-                            std::fprintf(stderr,
-                                         "[TEMPDIAG collect] instances=%zu materials=%zu skip=%d gbuffer=%ux%u\n",
-                                         sceneBatch.instances.size(), sceneBatch.materials.size(),
-                                         diag.skip_scene_visibility ? 1 : 0,
-                                         hardware_->gbufferSize.x, hardware_->gbufferSize.y);
-                            std::fflush(stderr);
-                        }
                     }
                     const auto scene_instance_capacity = grow_table_capacity(
                         kInitialInstanceTableCapacity,
@@ -7040,13 +7083,17 @@ void OpticsSystem::run_vision_frame(float frame_count, uint64_t frame_index) {
                     Vision::vision_render_mode_uses_denoise(runtime.mode);
                 if (!prepare_vision_camera_view(runtime, cam_handle,
                                                camera.width, camera.height, denoise,
-                                               camera.vision_accumulation)) {
+                                               camera.vision_accumulation, camera.vision_stable_planes)) {
                     return;
                 }
 
                 Vision::sync_vision_camera(*pipeline, camera);
                 pipeline->upload_data();
                 pipeline->display(1.0 / 60.0);
+                // display() already waits for GPU completion. Reuse its timing without
+                // adding a synchronization or including cross-API presentation work.
+                SharedDataHub::instance().publish_camera_frame_timing(
+                    cam_handle, pipeline->cur_render_time(), runtime.mode);
 
                 auto* fb = pipeline->frame_buffer();
                 const auto res = fb->resolution();

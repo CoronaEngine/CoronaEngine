@@ -491,6 +491,103 @@ struct TriangleOctree {
         descend(oa, 0, ob, 0, out_pairs);
     }
 
+    /// 垂直柱地面高度查询（FootPlant IK 专用）。
+    /// 给定一个探测点 probe（脚部末端骨骼世界位置），在三角网格中找到 XZ 投影
+    /// 覆盖该位置的最高朝上三角面，返回其 Y 高度。
+    ///
+    /// @param world_verts  碰撞网格的世界空间顶点。
+    /// @param mesh         碰撞网格（三角形下标）。
+    /// @param probe        探测点世界坐标（pre-IK 骨骼位置）。
+    /// @param max_drop     向下探测最大距离（建议 0.5m）。
+    /// @param out_ground_y 输出：找到的地面世界 Y 高度。
+    /// @return 找到有效地面返回 true；无覆盖三角形或超出 max_drop 返回 false。
+    bool query_ground_height(
+        const std::vector<ktm::fvec3>& world_verts,
+        const CollisionMesh& mesh,
+        const ktm::fvec3& probe,
+        float max_drop,
+        float& out_ground_y) const {
+
+        constexpr float kSlop = 0.05f;
+        if (nodes.empty()) return false;
+
+        out_ground_y = probe.y - max_drop - 1.0f;
+        bool found = false;
+
+        const float xz_margin = delta + 0.01f;
+        const ktm::fvec3 col_min = make_fvec3(probe.x - xz_margin, probe.y - max_drop, probe.z - xz_margin);
+        const ktm::fvec3 col_max = make_fvec3(probe.x + xz_margin, probe.y + kSlop,    probe.z + xz_margin);
+
+        std::vector<std::uint32_t> stack;
+        stack.reserve(16);
+        stack.push_back(0);
+
+        while (!stack.empty()) {
+            const std::uint32_t ni = stack.back();
+            stack.pop_back();
+            const Node& nd = nodes[ni];
+
+            if (!aabb_overlap(nd.fitted_min, nd.fitted_max, col_min, col_max)) continue;
+
+            if (nd.child_count == 0) {
+                for (std::uint32_t k = nd.tri_begin; k < nd.tri_begin + nd.tri_count; ++k) {
+                    const std::uint32_t ti = leaf_tris[k];
+                    const std::uint32_t vi0 = resolve_vertex(mesh, ti, 0);
+                    const std::uint32_t vi1 = resolve_vertex(mesh, ti, 1);
+                    const std::uint32_t vi2 = resolve_vertex(mesh, ti, 2);
+                    if (vi0 >= world_verts.size() || vi1 >= world_verts.size() || vi2 >= world_verts.size()) continue;
+
+                    const ktm::fvec3& v0 = world_verts[vi0];
+                    const ktm::fvec3& v1 = world_verts[vi1];
+                    const ktm::fvec3& v2 = world_verts[vi2];
+
+                    const ktm::fvec3 e1 = sub(v1, v0);
+                    const ktm::fvec3 e2 = sub(v2, v0);
+                    const ktm::fvec3 n_raw = cross(e1, e2);
+                    const float n_len = std::sqrt(n_raw.x*n_raw.x + n_raw.y*n_raw.y + n_raw.z*n_raw.z);
+                    if (n_len < 1e-8f || n_raw.y < 0.1f * n_len) continue;  // 退化或非朝上面
+
+                    const ktm::fvec3 n = vec3_mul(n_raw, 1.0f / n_len);
+                    if (std::abs(n.y) < 1e-6f) continue;
+
+                    const float plane_d  = n.x*v0.x + n.y*v0.y + n.z*v0.z;
+                    const float ground_y = (plane_d - n.x*probe.x - n.z*probe.z) / n.y;
+
+                    if (ground_y > probe.y + kSlop || ground_y < probe.y - max_drop) continue;
+
+                    // XZ 重心坐标包含检测（2D 俯视投影）
+                    const ktm::fvec3 q   = make_fvec3(probe.x, ground_y, probe.z);
+                    const ktm::fvec3 cv0 = sub(v2, v0);
+                    const ktm::fvec3 cv1 = sub(v1, v0);
+                    const ktm::fvec3 cv2 = sub(q, v0);
+                    const float d00 = cv0.x*cv0.x + cv0.z*cv0.z;
+                    const float d01 = cv0.x*cv1.x + cv0.z*cv1.z;
+                    const float d02 = cv0.x*cv2.x + cv0.z*cv2.z;
+                    const float d11 = cv1.x*cv1.x + cv1.z*cv1.z;
+                    const float d12 = cv1.x*cv2.x + cv1.z*cv2.z;
+                    const float inv  = d00*d11 - d01*d01;
+                    if (std::abs(inv) < 1e-10f) continue;
+                    const float inv_d = 1.0f / inv;
+                    const float u = (d11*d02 - d01*d12) * inv_d;
+                    const float v = (d00*d12 - d01*d02) * inv_d;
+                    if (u < -1e-4f || v < -1e-4f || u + v > 1.0f + 1e-4f) continue;
+
+                    if (!found || ground_y > out_ground_y) {
+                        out_ground_y = ground_y;
+                        found = true;
+                    }
+                }
+            } else {
+                std::uint32_t cur = nd.child_begin;
+                for (std::uint8_t ci = 0; ci < nd.child_count; ++ci) {
+                    stack.push_back(cur);
+                    cur += subtree_size(cur);
+                }
+            }
+        }
+        return found;
+    }
+
 private:
     // 递归建树（DFS，返回当前节点在 nodes[] 中的下标）
     std::uint32_t build_recursive(

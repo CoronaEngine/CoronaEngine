@@ -199,12 +199,20 @@ public:                                                                     \
     template<typename T>                                                                                                      \
     requires is_integral_expr_v<T>                                                                                            \
     [[nodiscard]] T prev_##buffer_name##_index(const T &frame_index) const noexcept {                                         \
-        return prev_index(frame_index) + buffer_name##_base();                                                                \
+        if constexpr (is_dsl_v<T>) {                                                                                         \
+            return prev_index(frame_index) + buffer_name##_.index_var();                                                    \
+        } else {                                                                                                            \
+            return prev_index(frame_index) + buffer_name##_base();                                                          \
+        }                                                                                                                   \
     }                                                                                                                         \
     template<typename T>                                                                                                      \
     requires is_integral_expr_v<T>                                                                                            \
     [[nodiscard]] T cur_##buffer_name##_index(const T &frame_index) const noexcept {                                          \
-        return cur_index(frame_index) + buffer_name##_base();                                                                 \
+        if constexpr (is_dsl_v<T>) {                                                                                         \
+            return cur_index(frame_index) + buffer_name##_.index_var();                                                     \
+        } else {                                                                                                            \
+            return cur_index(frame_index) + buffer_name##_base();                                                           \
+        }                                                                                                                   \
     }                                                                                                                         \
     [[nodiscard]] auto prev_##buffer_name##_view(uint frame_index) const noexcept {                                           \
         auto view = buffer_name##_.view().subview(prev_index(frame_index) * frame_buffer_size(), frame_buffer_size());        \

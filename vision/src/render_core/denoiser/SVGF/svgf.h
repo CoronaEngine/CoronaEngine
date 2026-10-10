@@ -13,6 +13,9 @@
 namespace vision::svgf {
 
 struct ResolveParam {
+    uint use_stable_planes{0u};
+    BufferDesc<SurfaceData> stable_surfaces;
+    BufferDesc<SurfaceData> prev_stable_surfaces;
     BufferDesc<RadType4> direct;
     BufferDesc<RadType4> indirect;
     BufferDesc<float4> history_direct;
@@ -33,7 +36,7 @@ struct ResolveParam {
 
 }// namespace vision::svgf
 
-OC_PARAM_STRUCT(vision::svgf, ResolveParam, direct, indirect,
+OC_PARAM_STRUCT(vision::svgf, ResolveParam, use_stable_planes, stable_surfaces, prev_stable_surfaces, direct, indirect,
                 history_direct, history_indirect, output_direct, output_indirect,
                 visibility, prev_visibility, motion_vectors, camera_pos, prev_camera_pos,
                 history_valid, channel_kind, frame_index, alpha, interior_alpha){};

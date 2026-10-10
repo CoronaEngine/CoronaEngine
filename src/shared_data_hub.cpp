@@ -248,6 +248,26 @@ const SharedDataHub::SceneStorage& SharedDataHub::scene_storage() const { return
 SharedDataHub::ImageStorage& SharedDataHub::image_storage() { return image_storage_; }
 const SharedDataHub::ImageStorage& SharedDataHub::image_storage() const { return image_storage_; }
 
+void SharedDataHub::publish_camera_frame_timing(std::uintptr_t camera_handle, double render_ms,
+                                                CameraVisionRenderMode mode,
+                                                std::chrono::steady_clock::time_point completed_at) {
+    std::lock_guard<std::mutex> lock(camera_timing_mutex_);
+    double frame_ms = 0.0;
+    const auto previous = camera_timings_.find(camera_handle);
+    if (previous != camera_timings_.end() && previous->second.mode == mode) {
+        frame_ms = std::chrono::duration<double, std::milli>(
+            completed_at - previous->second.recorded_at).count();
+    }
+    camera_timings_[camera_handle] = {render_ms, frame_ms, mode, completed_at};
+}
+
+std::optional<CameraFrameTiming> SharedDataHub::camera_frame_timing(
+    std::uintptr_t camera_handle) const {
+    std::lock_guard<std::mutex> lock(camera_timing_mutex_);
+    const auto it = camera_timings_.find(camera_handle);
+    return it == camera_timings_.end() ? std::nullopt : std::optional{it->second};
+}
+
 void SharedDataHub::enqueue_camera_move(CameraMoveCommand command) {
     if (command.camera_handle == 0) {
         return;
@@ -342,6 +362,11 @@ void SharedDataHub::enqueue_camera_state_update(CameraStateUpdateCommand command
         requested_camera_vision_accumulation_[command.camera_handle] = {
             command.vision_accumulation, pending.sequence};
     }
+    if (has_camera_state_field(command.fields, CameraStateUpdateField::VisionStablePlanes)) {
+        pending.vision_stable_planes = command.vision_stable_planes;
+        requested_camera_vision_stable_planes_[command.camera_handle] = {
+            command.vision_stable_planes, pending.sequence};
+    }
     if (has_camera_state_field(command.fields, CameraStateUpdateField::ShadowCascadeDebug)) {
         pending.shadow_cascade_debug = command.shadow_cascade_debug;
     }
@@ -415,11 +440,32 @@ void SharedDataHub::acknowledge_camera_vision_accumulation(
     }
 }
 
+std::optional<bool> SharedDataHub::requested_camera_vision_stable_planes(
+    std::uintptr_t camera_handle) const {
+    std::lock_guard<std::mutex> lock(camera_state_update_mutex_);
+    const auto it = requested_camera_vision_stable_planes_.find(camera_handle);
+    if (it != requested_camera_vision_stable_planes_.end()) {
+        return it->second.enabled;
+    }
+    return std::nullopt;
+}
+
+void SharedDataHub::acknowledge_camera_vision_stable_planes(
+    std::uintptr_t camera_handle, std::uint64_t applied_sequence) {
+    std::lock_guard<std::mutex> lock(camera_state_update_mutex_);
+    const auto it = requested_camera_vision_stable_planes_.find(camera_handle);
+    if (it != requested_camera_vision_stable_planes_.end() &&
+        it->second.sequence <= applied_sequence) {
+        requested_camera_vision_stable_planes_.erase(it);
+    }
+}
+
 void SharedDataHub::clear_camera_state_updates(std::uintptr_t camera_handle) {
     std::lock_guard<std::mutex> lock(camera_state_update_mutex_);
     pending_camera_state_updates_.erase(camera_handle);
     requested_camera_vision_denoise_.erase(camera_handle);
     requested_camera_vision_accumulation_.erase(camera_handle);
+    requested_camera_vision_stable_planes_.erase(camera_handle);
 }
 
 void SharedDataHub::enqueue_camera_release(CameraReleaseCommand command) {
@@ -437,6 +483,10 @@ std::vector<CameraReleaseCommand> SharedDataHub::drain_camera_releases() {
     {
         std::lock_guard<std::mutex> lock(camera_release_mutex_);
         releases.swap(pending_camera_releases_);
+    }
+    {
+        std::lock_guard<std::mutex> lock(camera_timing_mutex_);
+        for (const auto& release : releases) camera_timings_.erase(release.camera_handle);
     }
     return releases;
 }

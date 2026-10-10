@@ -103,7 +103,23 @@ public:
         frame_buffer().prepare_motion_vectors();
     }
 
+    [[nodiscard]] bool stable_planes_enabled() const noexcept override {
+        return direct_->stable_planes_enabled();
+    }
+
+    void set_stable_planes_enabled(bool enabled) noexcept override {
+        if (stable_planes_enabled() == enabled) { return; }
+        direct_->set_stable_planes_enabled(enabled);
+        // All producers and consumers switch together. Restart reservoirs,
+        // SVGF and frame accumulation so primary and virtual guides never mix.
+        pipeline()->invalidate();
+    }
+
     void render_sub_UI(Widgets *widgets) noexcept override {
+        bool stable_planes = stable_planes_enabled();
+        if (widgets->check_box("Stable Plane", &stable_planes)) {
+            set_stable_planes_enabled(stable_planes);
+        }
         direct_->render_UI(widgets);
         indirect_->render_UI(widgets);
         cache_->render_UI(widgets);
@@ -139,6 +155,9 @@ public:
         ret.visibility = frame_buffer().cur_visibility_buffer_view(frame_index_);
         ret.prev_visibility = frame_buffer().prev_visibility_buffer_view(frame_index_);
         ret.motion_vec = frame_buffer().motion_vectors();
+        ret.use_stable_planes = direct_->uses_stable_planes();
+        ret.stable_surfaces = frame_buffer().cur_surfaces_view(frame_index_);
+        ret.prev_stable_surfaces = frame_buffer().prev_surfaces_view(frame_index_);
         ret.direct = direct_->radiance()->view();
         ret.indirect = indirect_->radiance()->view();
         // Camera positions for depth calculation from visibility buffer

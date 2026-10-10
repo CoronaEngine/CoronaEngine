@@ -101,6 +101,22 @@ struct MeshData {
     [[nodiscard]] bool is_skinned() const { return !bone_weights.empty(); }
 };
 
+/// 共享网格实例：mesh_index 指向 SceneData::meshes 中的唯一网格资产，
+/// transform 为该资产本地空间到场景空间的列主序矩阵（col*4 + row）。
+///
+/// 同一个 MeshData 可以被多个 MeshInstanceData 引用；节点只拥有实例变换，
+/// 不再为每个引用复制顶点/索引数据。
+struct MeshInstanceData {
+    std::uint32_t mesh_index = InvalidIndex;
+    std::uint32_t node_index = InvalidIndex;
+    std::array<float, 16> transform{
+        1.0f, 0.0f, 0.0f, 0.0f,
+        0.0f, 1.0f, 0.0f, 0.0f,
+        0.0f, 0.0f, 1.0f, 0.0f,
+        0.0f, 0.0f, 0.0f, 1.0f};
+    std::uint32_t object_id = InvalidIndex;
+};
+
 /// LOD 生成配置
 struct LODGenerationOptions {
     bool enabled = false;  // 是否生成 LOD
@@ -131,6 +147,8 @@ struct LODGenerationOptions {
 struct AssimpImportOptions {
     bool simplify_mesh = true;           // 是否启用网格简化
     float simplification_error = 0.01f;  // 简化误差阈值
+    // 静态网格使用共享 MeshData + 每节点 MeshInstanceData；蒙皮网格仍走旧路径。
+    bool share_static_mesh_instances = true;
     LODGenerationOptions lod_options;    // LOD 生成配置
     ImageImportOptions image_options;    // 纹理导入选项
 };
@@ -192,6 +210,7 @@ struct NodeData {
     std::vector<NodeData*> children;
 
     std::uint32_t mesh_index = InvalidIndex;
+    std::vector<std::uint32_t> mesh_instance_indices;
     std::uint32_t light_index = InvalidIndex;
     std::uint32_t camera_index = InvalidIndex;
 
@@ -252,6 +271,13 @@ struct SkeletonData {
 /// 其末端尽量够到 target（模型空间）。求解产出被改写关节的新 local，
 /// 经 compute_pose 的 local_overrides 注入 FK，叠加在原动画姿态之上。
 struct IkChain {
+    // 链的语义类型，影响 contact_normal_offset 默认值与碰撞入队行为。
+    // Contact   ：通用碰撞反馈（手臂/肢体碰墙），目标推离表面。
+    // FootPlant ：脚踩地，目标贴地面（offset=0），快速激活慢速衰减。
+    // LookAt    ：头/眼朝向跟随，由外部 API 直接写入 target，不走碰撞通路。
+    // WeaponAim ：武器挥向，与 LookAt 逻辑相同，末端骨骼为手腕。
+    enum class Mode : uint8_t { Contact, FootPlant, LookAt, WeaponAim };
+
     int end_node = -1;                        // 末端骨骼节点下标（SkeletonData::nodes）
     int chain_length = 2;                     // 参与求解的关节数（含末端，沿 parent 上溯）
     std::array<float, 3> target{0, 0, 0};     // 目标点（模型空间，与蒙皮网格同空间；solve_ccd 内部会
@@ -261,22 +287,34 @@ struct IkChain {
     float tolerance = 1e-3f;                  // 末端-目标距离收敛阈值
     float damping = 1.0f;                     // [0,1]：每步旋转的衰减系数，<1 压抖动
     bool enabled = false;                     // 是否参与求解
+    Mode mode = Mode::Contact;                // 链语义类型
 
     // Phase 3 — 碰撞驱动 IK：
     // contact_driven=true 表示本链的 target/weight 由碰撞系统写入（而非脚本/编辑器固定）。
     // 每帧 update_skinned_geometry 对 contact_driven=true 且 enabled=true 的链把
-    // weight 乘以 (1 - contact_weight_decay * dt)，降到 0 时 enabled=false，
+    // weight 按 contact_weight_decay 递减，降到 0 时 enabled=false，
     // 使碰撞结束后手臂/肢体平滑归回原动画，不会冻住。
     // contact_driven=false（默认）时 weight 和 enabled 由外部完全控制，行为与旧版相同。
     bool contact_driven = false;              // true=碰撞系统驱动；false=脚本/编辑器控制
-    float contact_weight_decay = 2.0f;        // 碰撞结束后 weight 每秒衰减速率（默认 2s 归零）
+    float contact_weight_decay = 2.0f;        // 碰撞结束后 weight 每秒衰减速率（默认 0.5s 归零）
+
+    // 碰撞接触点沿法线方向的偏移量（米）。
+    // 正值把目标推离接触面（通用碰撞反弹）；0 = 目标贴面（FootPlant）；负值嵌入表面。
+    // register_foot_plant_chain 自动设为 0.0f；通用 Contact 链默认 +0.03f。
+    float contact_normal_offset = 0.03f;
+
+    // weight 激活时的上升速率（每秒增量）。0 表示与 contact_weight_decay 相同。
+    // FootPlant 建议 8.0f（约 0.13s 升满）；Contact 链通常与衰减速率一致即可。
+    float contact_weight_rise = 0.0f;
 
     // 预留：每关节角度约束（首版不实现，需要时再启用）。
     // std::vector<std::array<float,2>> angle_limits;  // 每关节 [min,max]
 };
 
 struct SceneData {
+    // 唯一网格资产。共享实例通过 MeshInstanceData::mesh_index 引用这里的数据。
     std::vector<MeshData> meshes;
+    std::vector<MeshInstanceData> mesh_instances;
     std::vector<MaterialData> materials;
     std::vector<LightData> lights;
     std::vector<CameraData> cameras;
@@ -315,6 +353,7 @@ class Scene : public IResource {
         }
     }
     std::uint32_t add_mesh(MeshData&& mesh);
+    std::uint32_t add_mesh_instance(MeshInstanceData instance);
 
     // 修改：返回底层容器的常量引用（零拷贝）
     [[nodiscard]] const std::vector<Vertex>& get_mesh_vertices(std::uint32_t mesh_idx) const;
