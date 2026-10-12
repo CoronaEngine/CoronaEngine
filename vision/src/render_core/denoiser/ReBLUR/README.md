@@ -4,6 +4,12 @@ This plugin implements full-resolution RGB diffuse/specular REBLUR in the same
 `Kernel`, `OC_PARAM_STRUCT`, `device.compile` and `CommandBatch` shader API as PT
 and SVGF. Select it explicitly; the existing SVGF and SSAT defaults are unchanged.
 
+In the editor, select **Vision PT** or **Vision ReSTIR**, choose **REBLUR** in
+the **降噪类型** menu, and check **降噪**. The main viewport and detached camera
+windows both expose these controls. The type is saved per camera; **场景设置**
+inherits the scene's denoiser and parameters. Changing type rebuilds that camera's
+view and clears its history. SSAT retains its own fixed denoiser.
+
 ```json
 {
   "render": {

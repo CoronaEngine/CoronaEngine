@@ -5,6 +5,17 @@ export const visionRenderModes = [
   { value: 'ssat', backend: 'vision', label: 'Vision SSAT' },
 ];
 
+export const visionDenoisers = [
+  { value: 'scene', label: '场景设置' },
+  { value: 'svgf', label: 'SVGF' },
+  { value: 'reblur', label: 'REBLUR' },
+];
+
+export const visionDenoiserFromCamera = (camera) => {
+  const type = String(camera?.vision_denoiser || 'scene').toLowerCase();
+  return type === 'svgf' || type === 'reblur' ? type : 'scene';
+};
+
 export const normalizeVisionRenderMode = (mode) =>
   mode === 'svgf' || mode === 'progressive_path_tracing' ? 'path_tracing' : mode || 'path_tracing';
 

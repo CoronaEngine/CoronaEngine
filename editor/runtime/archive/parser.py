@@ -306,6 +306,7 @@ def _parse_camera(
         "vision_denoise": vision_denoise,
         "vision_accumulation": vision_accumulation,
         "vision_stable_planes": vision_stable_planes,
+        "vision_denoiser": str(get("vision_denoiser", "scene")).strip().lower(),
     }
 
 

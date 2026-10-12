@@ -15,7 +15,7 @@ function declarations(path, names) {
     .map(node => source.slice(node.start, node.end)).join('\n');
 }
 
-function mainHost({ fail = false, pending = false, denoiseFail = false, denoiseReply,
+function mainHost({ fail = false, pending = false, denoiseFail = false, denoiseReply, denoiserFail = false, denoiserReply,
   accumulationFail = false, accumulationReply, stablePlanesFail = false, stablePlanesReply } = {}) {
   const calls = [];
   const source = declarations('../../src/views/layout/MainPage.vue', [
@@ -23,6 +23,8 @@ function mainHost({ fail = false, pending = false, denoiseFail = false, denoiseR
     'currentMainCameraId', 'selectMainRenderMode',
     'currentMainSceneId', 'currentMainCamera', 'mainVisionDenoise', 'mainVisionDenoiseBusy',
     'mainVisionDenoiseError', 'pendingMainDenoiseSelection', 'toggleMainVisionDenoise',
+    'mainVisionDenoiser', 'mainVisionDenoiserBusy', 'mainVisionDenoiserError',
+    'pendingMainDenoiserSelection', 'selectMainVisionDenoiser',
     'mainVisionAccumulation', 'mainVisionAccumulationBusy', 'mainVisionAccumulationError',
     'pendingMainAccumulationSelection', 'toggleMainVisionAccumulation',
     'mainVisionStablePlanes', 'mainVisionStablePlanesBusy', 'mainVisionStablePlanesError',
@@ -30,6 +32,11 @@ function mainHost({ fail = false, pending = false, denoiseFail = false, denoiseR
     'isVector3', 'sceneGridEnabledFromSnapshot', 'applySceneSnapshot',
   ]);
   const api = {
+    setVisionDenoiser: async (...args) => {
+      calls.push(['denoiser', ...args]);
+      if (denoiserFail) throw new Error('denoiser type unavailable');
+      return denoiserReply ? denoiserReply(args) : { type: pending ? 'scene' : args[2], pending };
+    },
     setVisionStablePlanes: async (...args) => {
       calls.push(['stablePlanes', ...args]);
       if (stablePlanesFail) throw new Error('stable planes unavailable');
@@ -54,7 +61,7 @@ function mainHost({ fail = false, pending = false, denoiseFail = false, denoiseR
     },
   };
   const host = new Function('ref', 'computed', 'visionModes', 'editorApi', `
-    const { visionRenderModes, normalizeVisionRenderMode, visionDenoiseFromCamera, visionAccumulationFromCamera, visionStablePlanesFromCamera } = visionModes;
+    const { visionRenderModes, normalizeVisionRenderMode, visionDenoiseFromCamera, visionAccumulationFromCamera, visionStablePlanesFromCamera, visionDenoiserFromCamera } = visionModes;
     const tabs = ref([{ id: 'test.scene' }]), activeTab = ref(0), activeMenu = ref(null);
     const cameraBindingState = ref({ sceneId: 'test.scene', cameraId: 'camera-2' });
     const mainRenderBackend = ref('native'), mainVisionRenderMode = ref('path_tracing');
@@ -74,6 +81,7 @@ function mainHost({ fail = false, pending = false, denoiseFail = false, denoiseR
       mainVisionStablePlanesError: typeof mainVisionStablePlanesError === 'undefined' ? undefined : mainVisionStablePlanesError,
       toggleMainVisionStablePlanes: typeof toggleMainVisionStablePlanes === 'undefined' ? undefined : toggleMainVisionStablePlanes,
       mainVisionDenoise, mainVisionDenoiseError, currentMainCamera, toggleMainVisionDenoise,
+      mainVisionDenoiser, mainVisionDenoiserError, selectMainVisionDenoiser,
       mainVisionAccumulation: typeof mainVisionAccumulation === 'undefined' ? undefined : mainVisionAccumulation,
       mainVisionAccumulationError: typeof mainVisionAccumulationError === 'undefined' ? undefined : mainVisionAccumulationError,
       toggleMainVisionAccumulation: typeof toggleMainVisionAccumulation === 'undefined' ? undefined : toggleMainVisionAccumulation };
@@ -118,7 +126,7 @@ test('detached camera selects ReSTIR and stores the returned camera mode', async
   const calls = [];
   const host = new Function('ref', 'editorApi', `
     const sceneId = 'test.scene', cameraId = 'camera-3';
-    const visionModeMenuOpen = ref(true), visionRenderMode = ref('path_tracing');
+    const visionModeMenuOpen = ref(true), denoiserMenuOpen = ref(false), visionRenderMode = ref('path_tracing');
     const backend = ref('vision'), outputMode = ref('final_color'), errorText = ref('');
     const camera = ref({ vision_render_mode: 'path_tracing' });
     const unwrap = value => value?.data ?? value;
@@ -140,27 +148,34 @@ const cameraSnapshot = (fields = {}, cameraId = 'camera-2') => ({
     render_backend: 'vision', vision_render_mode: 'path_tracing', ...fields }],
 });
 
-function detachedHost({ fields = {}, fail = false, pending = false, accumulationFail = false, stablePlanesFail = false, stablePlanesReply } = {}) {
+function detachedHost({ fields = {}, fail = false, pending = false, accumulationFail = false, stablePlanesFail = false, stablePlanesReply, denoiserFail = false, denoiserReply } = {}) {
   const calls = [];
   const source = declarations('../../src/views/tools/CameraView.vue', [
     'camera', 'cameraName', 'backend', 'visionRenderMode', 'visionDenoise', 'visionDenoiseBusy',
     'outputMode', 'shadowCascadeDebug', 'ssaoEnabled', 'moveSpeed', 'renderWidth', 'renderHeight',
     'visionAvailable', 'errorText', 'visionModeMenuOpen', 'loadCamera', 'selectVisionRenderMode',
     'toggleVisionDenoise',
+    'visionDenoiser', 'visionDenoiserBusy', 'pendingDenoiserSelection', 'selectVisionDenoiser', 'denoiserMenuOpen',
     'visionAccumulation', 'visionAccumulationBusy', 'toggleVisionAccumulation',
     'visionStablePlanes', 'visionStablePlanesBusy', 'pendingStablePlanesSelection', 'toggleVisionStablePlanes',
   ]);
   const host = new Function('ref', 'visionModes', 'editorApi', `
-    const { normalizeVisionRenderMode, visionDenoiseFromCamera, visionAccumulationFromCamera, visionStablePlanesFromCamera } = visionModes;
+    const { normalizeVisionRenderMode, visionDenoiseFromCamera, visionAccumulationFromCamera, visionStablePlanesFromCamera, visionDenoiserFromCamera } = visionModes;
     const sceneId = 'test.scene', cameraId = 'camera-3', unwrap = value => value?.data ?? value;
     ${source}
     return { loadCamera, selectVisionRenderMode, camera, backend, visionRenderMode, errorText,
       visionStablePlanes: typeof visionStablePlanes === 'undefined' ? undefined : visionStablePlanes,
       toggleVisionStablePlanes: typeof toggleVisionStablePlanes === 'undefined' ? undefined : toggleVisionStablePlanes,
       visionDenoise, toggleVisionDenoise,
+      visionDenoiser, selectVisionDenoiser,
       visionAccumulation: typeof visionAccumulation === 'undefined' ? undefined : visionAccumulation,
       toggleVisionAccumulation: typeof toggleVisionAccumulation === 'undefined' ? undefined : toggleVisionAccumulation };
   `)(ref, visionModes, { sceneTools: {
+    setVisionDenoiser: async (...args) => {
+      calls.push(['denoiser', ...args]);
+      if (denoiserFail) throw new Error('denoiser type unavailable');
+      return denoiserReply ? denoiserReply(args) : { type: pending ? 'scene' : args[2], pending };
+    },
     setVisionStablePlanes: async (...args) => {
       calls.push(['stablePlanes', ...args]);
       if (stablePlanesFail) throw new Error('stable planes unavailable');
@@ -181,6 +196,91 @@ function detachedHost({ fields = {}, fail = false, pending = false, accumulation
     },
   } });
   return { ...host, calls };
+}
+
+for (const [fields, type] of [[{}, 'scene'], [{ vision_denoiser: 'SVGF' }, 'svgf'], [{ vision_denoiser: 'ReBLUR' }, 'reblur']]) {
+  test(`both views load denoiser ${type}`, async () => {
+    const main = mainHost();
+    main.applySceneSnapshot('test.scene', cameraSnapshot(fields));
+    const detached = detachedHost({ fields });
+    await detached.loadCamera();
+    assert.equal(main.mainVisionDenoiser.value, type);
+    assert.equal(detached.visionDenoiser.value, type);
+  });
+}
+
+test('denoiser selection persists over stale snapshots without enabling denoising', async () => {
+  const fields = { vision_denoise: false, vision_denoiser: 'svgf' };
+  const main = mainHost({ pending: true });
+  main.applySceneSnapshot('test.scene', cameraSnapshot(fields));
+  const detached = detachedHost({ fields, pending: true });
+  await detached.loadCamera();
+  assert.equal(await main.selectMainVisionDenoiser('reblur'), true);
+  assert.equal(await detached.selectVisionDenoiser('reblur'), true);
+  assert.deepEqual(main.calls, [['denoiser', 'test.scene', 'camera-2', 'reblur']]);
+  assert.deepEqual(detached.calls, [['denoiser', 'test.scene', 'camera-3', 'reblur']]);
+  main.applySceneSnapshot('test.scene', cameraSnapshot(fields));
+  await detached.loadCamera();
+  assert.equal(main.mainVisionDenoiser.value, 'reblur');
+  assert.equal(detached.visionDenoiser.value, 'reblur');
+  assert.equal(main.currentMainCamera.value.vision_denoiser, 'reblur');
+  assert.equal(detached.camera.value.vision_denoiser, 'reblur');
+  assert.equal(main.mainVisionDenoise.value, false);
+  assert.equal(detached.visionDenoise.value, false);
+  fields.vision_denoiser = 'reblur';
+  main.applySceneSnapshot('test.scene', cameraSnapshot(fields));
+  await detached.loadCamera();
+  fields.vision_denoiser = 'scene';
+  main.applySceneSnapshot('test.scene', cameraSnapshot(fields));
+  await detached.loadCamera();
+  assert.equal(main.mainVisionDenoiser.value, 'scene');
+  assert.equal(detached.visionDenoiser.value, 'scene');
+});
+
+test('failed denoiser changes restore both views and report the error', async () => {
+  const fields = { vision_denoiser: 'svgf', vision_denoise: true };
+  const main = mainHost({ denoiserFail: true });
+  main.applySceneSnapshot('test.scene', cameraSnapshot(fields));
+  const detached = detachedHost({ fields, denoiserFail: true });
+  await detached.loadCamera();
+  assert.equal(await main.selectMainVisionDenoiser('reblur'), false);
+  assert.equal(await detached.selectVisionDenoiser('reblur'), false);
+  assert.equal(main.currentMainCamera.value.vision_denoiser, 'svgf');
+  assert.equal(detached.camera.value.vision_denoiser, 'svgf');
+  assert.equal(main.mainVisionDenoise.value, true);
+  assert.equal(detached.visionDenoise.value, true);
+  assert.match(main.mainVisionDenoiserError.value, /denoiser type unavailable/);
+  assert.match(detached.errorText.value, /denoiser type unavailable/);
+});
+
+for (const fields of [{ render_backend: 'native' }, { vision_render_mode: 'ssat' }]) {
+  test(`denoiser changes are disabled for ${JSON.stringify(fields)}`, async () => {
+    const main = mainHost();
+    main.applySceneSnapshot('test.scene', cameraSnapshot(fields));
+    const detached = detachedHost({ fields });
+    await detached.loadCamera();
+    assert.equal(await main.selectMainVisionDenoiser('reblur'), false);
+    assert.equal(await detached.selectVisionDenoiser('reblur'), false);
+    assert.deepEqual(main.calls, []);
+    assert.deepEqual(detached.calls, []);
+  });
+}
+
+for (const fail of [false, true]) {
+  test(`late denoiser ${fail ? 'error' : 'response'} preserves the newly bound camera`, async () => {
+    let resolve, reject;
+    const main = mainHost({ denoiserReply: () => new Promise((yes, no) => { resolve = yes; reject = no; }) });
+    main.applySceneSnapshot('test.scene', cameraSnapshot());
+    const request = main.selectMainVisionDenoiser('reblur');
+    assert.equal(await main.selectMainVisionDenoiser('svgf'), false);
+    main.applySceneSnapshot('test.scene', cameraSnapshot({ vision_denoiser: 'svgf' }, 'camera-3'));
+    if (fail) reject(new Error('old camera error'));
+    else resolve({ type: 'reblur', pending: true });
+    assert.equal(await request, !fail);
+    assert.equal(main.mainVisionDenoiser.value, 'svgf');
+    assert.equal(main.currentMainCamera.value.vision_denoiser, 'svgf');
+    assert.equal(main.mainVisionDenoiserError.value, '');
+  });
 }
 
 test('algorithm menus keep accumulation and SVGF as separate settings', () => {

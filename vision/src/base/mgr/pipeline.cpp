@@ -49,7 +49,7 @@ void Pipeline::activate_global_context() noexcept {
     }
 }
 
-bool Pipeline::create_view_context(uint64_t view_id, uint2 resolution) noexcept {
+bool Pipeline::create_view_context(uint64_t view_id, uint2 resolution, string_view denoiser_type) noexcept {
     switch_profile::Scope profile{"view.create_context", "view"};
     activate_global_context();
     if (view_id == 0u || view_contexts_.contains(view_id)) {
@@ -64,8 +64,12 @@ bool Pipeline::create_view_context(uint64_t view_id, uint2 resolution) noexcept 
             return false;
         }
 
-        renderer().pre_init(renderer_desc_);
-        renderer().init(renderer_desc_, scene_view_);
+        auto view_desc = renderer_desc_;
+        if (!denoiser_type.empty()) {
+            view_desc.integrator_desc.denoiser_desc = DenoiserDesc{string(denoiser_type)};
+        }
+        renderer().pre_init(view_desc);
+        renderer().init(view_desc, scene_view_);
         scene_view_.sensor().init(sensor_desc_);
         frame_buffer()->update_resolution(resolution);
         frame_buffer()->prepare();

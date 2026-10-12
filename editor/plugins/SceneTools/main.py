@@ -300,6 +300,14 @@ class SceneTools(PluginBase):
             return {"status": "error", "message": str(exc)}
 
     @staticmethod
+    def set_vision_denoiser(scene_name: str, camera_name: str = None,
+                            type: str = "scene") -> dict:
+        try:
+            return CoronaEditorApi.scene_tools.set_vision_denoiser(scene_name, camera_name, type)
+        except Exception as exc:
+            return {"status": "error", "message": str(exc)}
+
+    @staticmethod
     def set_vision_denoise(scene_name: str, camera_name: str = None,
                            enabled: bool = False) -> dict:
         try:

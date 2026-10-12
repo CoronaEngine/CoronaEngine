@@ -31,6 +31,9 @@ async function renderMain(settings = {}) {
       mainVisionAccumulationBusy: false, mainVisionDenoiseBusy: false,
       mainVisionAccumulationError: '', mainVisionDenoiseError: '',
       mainVisionStablePlanes: true, mainVisionStablePlanesBusy: false, mainVisionStablePlanesError: '',
+      mainVisionDenoiser: 'reblur', mainVisionDenoiserBusy: false, mainVisionDenoiserError: '',
+      visionDenoisers: [{ value: 'scene', label: '场景设置' }, { value: 'svgf', label: 'SVGF' }, { value: 'reblur', label: 'REBLUR' }],
+      selectMainVisionDenoiser: noop,
       toggleMainVisionStablePlanes: noop,
       mainRenderModeOptions: [{ value: 'native', backend: 'native', label: 'Native' }, ...visionRenderModes],
       selectMainRenderMode: noop, toggleMainVisionAccumulation: noop, toggleMainVisionDenoise: noop,
@@ -48,8 +51,19 @@ test('main viewport actually renders a reachable mode selector and both independ
   assert.match(html, /<button[^>]*aria-label="渲染模式"[^>]*aria-expanded="false"/);
   assert.match(html, /Vision ReSTIR/);
   assert.match(html, /<input[^>]*aria-label="累积样本"[^>]*checked/);
-  assert.match(html, /<input[^>]*aria-label="SVGF"/);
-  assert.doesNotMatch(html, /<input[^>]*aria-label="SVGF"[^>]*checked/);
+  assert.match(html, /<input[^>]*aria-label="降噪"/);
+  assert.doesNotMatch(html, /<input[^>]*aria-label="降噪"[^>]*checked/);
+});
+
+test('denoiser selector exposes REBLUR independently of the denoise switch', async () => {
+  const html = await renderMain({ activeMenu: 'denoiser' });
+  assert.match(html, /<button[^>]*aria-label="降噪类型"/);
+  assert.match(html, /<button[^>]*role="menuitemradio"[^>]*aria-checked="true"[^>]*>\s*REBLUR/);
+  assert.match(html, /<button[^>]*role="menuitemradio"[^>]*aria-checked="false"[^>]*>\s*SVGF/);
+  assert.doesNotMatch(html, /<input[^>]*aria-label="降噪"[^>]*checked/);
+  for (const settings of [{ mainRenderBackend: 'native' }, { mainVisionRenderMode: 'ssat' }]) {
+    assert.match(await renderMain(settings), /<button[^>]*aria-label="降噪类型"[^>]*disabled/);
+  }
 });
 
 test('mode selector stays visible on Native while both checkbox preferences are disabled and retained', async () => {
@@ -57,7 +71,7 @@ test('mode selector stays visible on Native while both checkbox preferences are 
   assert.match(html, /<button[^>]*aria-label="渲染模式"/);
   assert.match(html, /Native/);
   assert.match(html, /<input[^>]*aria-label="累积样本"[^>]*checked[^>]*disabled/);
-  assert.match(html, /<input[^>]*aria-label="SVGF"[^>]*checked[^>]*disabled/);
+  assert.match(html, /<input[^>]*aria-label="降噪"[^>]*checked[^>]*disabled/);
 });
 
 test('expanded render options are painted in the page without a native CEF popup', async () => {

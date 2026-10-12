@@ -698,6 +698,8 @@ const editorApiStatic = {
       call_manifest_editor_api('sceneTools.setVisionAccumulation', [sceneName, cameraId, !!enabled]),
     getVisionAccumulation: (sceneName, cameraId = null) =>
       call_manifest_editor_api('sceneTools.getVisionAccumulation', [sceneName, cameraId]),
+    setVisionDenoiser: (sceneName, cameraId = null, type = 'scene') =>
+      call_manifest_editor_api('sceneTools.setVisionDenoiser', [sceneName, cameraId, type]),
     setVisionDenoise: (sceneName, cameraId = null, enabled = false) =>
       call_manifest_editor_api('sceneTools.setVisionDenoise', [sceneName, cameraId, !!enabled]),
     getVisionDenoise: (sceneName, cameraId = null) =>

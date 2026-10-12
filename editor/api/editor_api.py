@@ -850,6 +850,10 @@ class _SceneToolsApi(_DynamicApiNamespace):
         )
 
     @staticmethod
+    def set_vision_denoiser(scene_name, camera_name=None, type="scene"):
+        return _invoke_manifest_cpp_api("scene_tools.set_vision_denoiser", [scene_name, camera_name, type])
+
+    @staticmethod
     def set_vision_denoise(scene_name, camera_name=None, enabled=False):
         return _invoke_manifest_cpp_api(
             "scene_tools.set_vision_denoise", [scene_name, camera_name, enabled]

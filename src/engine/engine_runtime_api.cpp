@@ -2321,6 +2321,18 @@ bool Corona::API::Camera::get_requested_vision_denoise() const {
     return Corona::API::get_requested_vision_denoise(handle_);
 }
 
+void Corona::API::Camera::set_vision_denoiser(const std::string& type) {
+    Corona::API::set_vision_denoiser(type, handle_);
+}
+
+std::string Corona::API::Camera::get_vision_denoiser() const {
+    return Corona::API::get_vision_denoiser(handle_);
+}
+
+std::string Corona::API::Camera::get_requested_vision_denoiser() const {
+    return Corona::API::get_requested_vision_denoiser(handle_);
+}
+
 void Corona::API::Camera::set_vision_accumulation(bool enabled) {
     Corona::API::set_vision_accumulation(enabled, handle_);
 }
@@ -2659,6 +2671,44 @@ void set_vision_denoise(bool enabled, std::uintptr_t camera_handle) {
     command.fields = CameraStateUpdateField::VisionDenoise;
     command.vision_denoise = enabled;
     SharedDataHub::instance().enqueue_camera_state_update(command);
+}
+
+static std::string vision_denoiser_name(CameraVisionDenoiser type) {
+    switch (type) {
+        case CameraVisionDenoiser::SVGF: return "svgf";
+        case CameraVisionDenoiser::ReBLUR: return "reblur";
+        default: return "scene";
+    }
+}
+
+void set_vision_denoiser(const std::string& type, std::uintptr_t camera_handle) {
+    const auto resolved_handle = resolve_camera_handle(camera_handle);
+    if (resolved_handle == 0) return;
+    CameraStateUpdateCommand command{};
+    command.camera_handle = resolved_handle;
+    command.fields = CameraStateUpdateField::VisionDenoiser;
+    if (type == "svgf" || type == "SVGF") command.vision_denoiser = CameraVisionDenoiser::SVGF;
+    else if (type == "reblur" || type == "ReBLUR" || type == "REBLUR") command.vision_denoiser = CameraVisionDenoiser::ReBLUR;
+    else if (type != "scene") return;
+    SharedDataHub::instance().enqueue_camera_state_update(command);
+}
+
+std::string get_vision_denoiser(std::uintptr_t camera_handle) {
+    const auto resolved_handle = resolve_camera_handle(camera_handle);
+    if (resolved_handle != 0) {
+        if (auto camera = SharedDataHub::instance().camera_storage().acquire_read(resolved_handle)) {
+            return vision_denoiser_name(camera->vision_denoiser);
+        }
+    }
+    return "scene";
+}
+
+std::string get_requested_vision_denoiser(std::uintptr_t camera_handle) {
+    const auto resolved_handle = resolve_camera_handle(camera_handle);
+    if (const auto requested = SharedDataHub::instance().requested_camera_vision_denoiser(resolved_handle)) {
+        return vision_denoiser_name(*requested);
+    }
+    return get_vision_denoiser(resolved_handle);
 }
 
 bool get_vision_denoise(std::uintptr_t camera_handle) {

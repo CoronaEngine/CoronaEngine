@@ -351,6 +351,60 @@ struct VisionEmbeddedModeSwitchTest {
         hub.camera_storage().deallocate(handle);
         hub.camera_storage().deallocate(other);
     }
+    static void check_denoiser_api() {
+        auto& hub = SharedDataHub::instance();
+        const auto handle = hub.camera_storage().allocate();
+        const auto other = hub.camera_storage().allocate();
+        expect(Corona::API::get_vision_denoiser(handle) == "scene" &&
+                   !hub.requested_camera_vision_denoiser(handle).has_value(),
+               "new cameras must inherit the scene denoiser without a pending override");
+        Corona::API::set_vision_denoiser("ReBLUR", handle);
+        Corona::API::set_vision_denoise(true, handle);
+        expect(Corona::API::get_vision_denoiser(handle) == "scene" &&
+                   Corona::API::get_requested_vision_denoiser(handle) == "reblur" &&
+                   Corona::API::get_requested_vision_denoiser(other) == "scene",
+               "denoiser requests must be camera-local and immediately persistable");
+        auto updates = hub.drain_camera_state_updates();
+        expect(updates.size() == 1 && updates[0].vision_denoiser == CameraVisionDenoiser::ReBLUR &&
+                   updates[0].vision_denoise && updates[0].fields ==
+                       (CameraStateUpdateField::VisionDenoiser | CameraStateUpdateField::VisionDenoise) &&
+                   Corona::API::get_requested_vision_denoiser(handle) == "reblur",
+               "coalescing and draining must retain the denoiser request while it is in flight");
+        const auto in_flight = updates[0];
+        Corona::API::set_vision_denoiser("svgf", handle);
+        {
+            auto camera = hub.camera_storage().acquire_write(handle);
+            camera->vision_denoiser = in_flight.vision_denoiser;
+            camera->vision_denoise = in_flight.vision_denoise;
+        }
+        hub.acknowledge_camera_vision_denoiser(handle, in_flight.sequence);
+        hub.acknowledge_camera_vision_denoise(handle, in_flight.sequence);
+        expect(Corona::API::get_vision_denoiser(handle) == "reblur" &&
+                   Corona::API::get_requested_vision_denoiser(handle) == "svgf",
+               "an older acknowledgement must not discard a newer denoiser request");
+        updates = hub.drain_camera_state_updates();
+        expect(updates.size() == 1 && updates[0].fields == CameraStateUpdateField::VisionDenoiser,
+               "denoiser type changes must not change the enable switch");
+        {
+            auto camera = hub.camera_storage().acquire_write(handle);
+            camera->vision_denoiser = updates[0].vision_denoiser;
+        }
+        hub.acknowledge_camera_vision_denoiser(handle, updates[0].sequence);
+        expect(!hub.requested_camera_vision_denoiser(handle).has_value() &&
+                   Corona::API::get_requested_vision_denoiser(handle) == "svgf" &&
+                   Corona::API::get_vision_denoise(handle),
+               "acknowledged denoiser preferences must fall back to committed state");
+        Corona::API::set_vision_denoiser("invalid", handle);
+        expect(hub.drain_camera_state_updates().empty(), "unknown denoisers must be ignored");
+        Corona::API::set_vision_denoiser("scene", handle);
+        hub.enqueue_camera_release({handle});
+        expect(!hub.requested_camera_vision_denoiser(handle).has_value() &&
+                   hub.drain_camera_state_updates().empty(),
+               "camera release must clear pending denoiser preferences");
+        hub.drain_camera_releases();
+        hub.camera_storage().deallocate(handle);
+        hub.camera_storage().deallocate(other);
+    }
     static void render(vision::Pipeline& pipeline, const char* label, bool lit = true) {
         const auto before = pipeline.frame_index();
         for (int i = 0; i < 3; ++i) {
@@ -426,6 +480,51 @@ struct VisionEmbeddedModeSwitchTest {
         expect(system.prepare_vision_camera_view(system.active_vision_runtime(), 101,
                    32, 16, true, accumulation), "disabled SVGF resources must follow an in-place resize");
         render(pipeline, "camera-101-SVGF-after-disabled-resize");
+        pipeline.activate_view_context(0);
+        pipeline.set_output_denoise(false);
+    }
+    static void check_independent_denoiser(OpticsSystem& system, vision::Pipeline& pipeline,
+                                          const char* algorithm) {
+        auto prepare = [&](std::uintptr_t camera, CameraVisionDenoiser type, bool enabled = true) {
+            expect(system.prepare_vision_camera_view(system.active_vision_runtime(), camera,
+                       16, 16, enabled, false, true, type), "denoiser selection must prepare a usable view");
+            auto* integrator = dynamic_cast<vision::IlluminationIntegrator*>(pipeline.renderer().integrator().get());
+            expect(integrator && integrator->impl_type() == algorithm &&
+                       integrator->denoiser()->enabled() == enabled &&
+                       integrator->denoiser()->requires_lobe_signals() == (type == CameraVisionDenoiser::ReBLUR),
+                   "camera selection must control the actual plugin while preserving the integrator");
+        };
+        prepare(401, CameraVisionDenoiser::SVGF);
+        render(pipeline, "denoiser-camera-401-SVGF");
+        const auto first_framebuffer = pipeline.renderer().frame_buffer_sp();
+        prepare(402, CameraVisionDenoiser::SVGF);
+        render(pipeline, "denoiser-camera-402-SVGF");
+        const auto other_history = pipeline.frame_index();
+        const auto other_framebuffer = pipeline.renderer().frame_buffer_sp();
+        prepare(401, CameraVisionDenoiser::ReBLUR);
+        expect(pipeline.frame_buffer() != first_framebuffer.get() && pipeline.frame_index() == 0,
+               "changing denoiser type must rebuild only that camera with fresh history");
+        render(pipeline, "denoiser-camera-401-REBLUR");
+        const auto reblur_history = pipeline.frame_index();
+        const auto reblur_framebuffer = pipeline.renderer().frame_buffer_sp();
+        prepare(401, CameraVisionDenoiser::ReBLUR);
+        expect(pipeline.frame_buffer() == reblur_framebuffer.get() && pipeline.frame_index() == reblur_history,
+               "reapplying the same denoiser must preserve compiled kernels and history");
+        prepare(402, CameraVisionDenoiser::SVGF);
+        expect(pipeline.frame_buffer() == other_framebuffer.get() && pipeline.frame_index() == other_history,
+               "switching one camera's denoiser must preserve the other camera's history");
+        prepare(401, CameraVisionDenoiser::SVGF, false);
+        expect(pipeline.frame_index() == 0, "switching back to SVGF must reset REBLUR history");
+        render(pipeline, "denoiser-camera-401-raw-SVGF");
+        prepare(401, CameraVisionDenoiser::ReBLUR, false);
+        render(pipeline, "denoiser-camera-401-raw-REBLUR");
+        const auto disabled_framebuffer = pipeline.renderer().frame_buffer_sp();
+        prepare(401, CameraVisionDenoiser::ReBLUR);
+        expect(pipeline.frame_buffer() == disabled_framebuffer.get() && pipeline.frame_index() == 0,
+               "enabling a REBLUR view created while disabled must reuse its lobe kernels with fresh history");
+        render(pipeline, "denoiser-camera-401-REBLUR-enabled");
+        prepare(401, CameraVisionDenoiser::Scene);
+        render(pipeline, "denoiser-camera-401-scene-default");
         pipeline.activate_view_context(0);
         pipeline.set_output_denoise(false);
     }
@@ -952,6 +1051,7 @@ struct VisionEmbeddedModeSwitchTest {
         pt->commit_command();
         render(*pt, "PT");
         check_independent_accumulation(system, *pt, "pt");
+        check_independent_denoiser(system, *pt, "pt");
         expect(!pt->frame_buffer()->enable_accumulation(), "realtime PT must not accumulate SVGF output");
         expect(system.load_external_vision_scene(request.scene_key,
             CameraVisionRenderMode::ProgressivePathTracing, Vision::VisionPipelineSource::ExternalLive),
@@ -1033,6 +1133,7 @@ struct VisionEmbeddedModeSwitchTest {
         base_framebuffer.reset();
         check_stationary_history_reset(*restir);
         check_independent_denoise(system, *restir, "rt", false);
+        check_independent_denoiser(system, *restir, "rt");
         check_independent_accumulation(system, *restir, "rt");
         check_independent_stable_planes(system, *restir);
         expect(restir->create_view_context(99, vision::make_uint2(16, 16)),
@@ -1265,6 +1366,7 @@ int main(int argc, char** argv) {
         Corona::Systems::VisionEmbeddedModeSwitchTest::check_mode_api();
         Corona::Systems::VisionEmbeddedModeSwitchTest::check_accumulation_api();
         Corona::Systems::VisionEmbeddedModeSwitchTest::check_stable_planes_api();
+        Corona::Systems::VisionEmbeddedModeSwitchTest::check_denoiser_api();
         Corona::Systems::VisionEmbeddedModeSwitchTest::check_frame_timing();
         if (argc == 2 && std::string(argv[1]) == "--scene-asset-reuse") {
             Corona::Systems::VisionEmbeddedModeSwitchTest::check_scene_asset_reuse();

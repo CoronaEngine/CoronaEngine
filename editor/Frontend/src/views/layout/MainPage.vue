@@ -362,6 +362,40 @@
             </div>
           </div>
         </div>
+        <div class="scene-quick-render-mode">
+          <span>降噪类型</span>
+          <div
+            class="scene-quick-render-menu"
+            @keydown.esc.stop="activeMenu = null; $refs.mainDenoiserButton?.focus()"
+          >
+            <button
+              ref="mainDenoiserButton"
+              type="button"
+              class="scene-quick-render-trigger"
+              aria-label="降噪类型"
+              aria-haspopup="menu"
+              :aria-expanded="activeMenu === 'denoiser'"
+              :disabled="mainRenderBackend !== 'vision' || mainVisionRenderMode === 'ssat' || mainVisionDenoiserBusy || !currentMainCameraId()"
+              @click="toggleMenu('denoiser')"
+              @keydown.down.prevent="activeMenu = 'denoiser'"
+            >
+              <span>{{ mainVisionRenderMode === 'ssat' ? 'SSAT' : visionDenoisers.find(item => item.value === mainVisionDenoiser)?.label }}</span>
+              <span aria-hidden="true">▾</span>
+            </button>
+            <div v-if="activeMenu === 'denoiser'" class="scene-quick-render-dropdown" role="menu" aria-label="降噪类型选项">
+              <button
+                v-for="denoiser in visionDenoisers"
+                :key="denoiser.value"
+                type="button"
+                role="menuitemradio"
+                :aria-checked="denoiser.value === mainVisionDenoiser"
+                @click="selectMainVisionDenoiser(denoiser.value)"
+              >
+                {{ denoiser.label }}
+              </button>
+            </div>
+          </div>
+        </div>
         <div class="scene-quick-render-options">
           <label title="累积 PT / ReSTIR 样本">
             <input
@@ -373,15 +407,15 @@
             />
             <span>累积样本</span>
           </label>
-          <label title="SVGF 降噪">
+          <label title="启用所选降噪算法">
             <input
               type="checkbox"
-              aria-label="SVGF"
+              aria-label="降噪"
               :checked="mainVisionDenoise"
               :disabled="mainRenderBackend !== 'vision' || mainVisionRenderMode === 'ssat' || mainVisionDenoiseBusy || !currentMainCameraId()"
               @change="toggleMainVisionDenoise"
             />
-            <span>SVGF</span>
+            <span>降噪</span>
           </label>
           <label title="ReSTIR Stable Plane">
             <input
@@ -394,8 +428,8 @@
             <span>Stable Plane</span>
           </label>
         </div>
-        <p v-if="mainVisionAccumulationError || mainVisionDenoiseError || mainVisionStablePlanesError" role="alert" class="text-red-300 text-xs">
-          {{ mainVisionAccumulationError || mainVisionDenoiseError || mainVisionStablePlanesError }}
+        <p v-if="mainVisionAccumulationError || mainVisionDenoiseError || mainVisionDenoiserError || mainVisionStablePlanesError" role="alert" class="text-red-300 text-xs">
+          {{ mainVisionAccumulationError || mainVisionDenoiseError || mainVisionDenoiserError || mainVisionStablePlanesError }}
         </p>
       </section>
       <section
@@ -615,6 +649,7 @@ import { useI18n } from 'vue-i18n';
 import { DEFAULT_SCENE_NAME } from '@/utils/constants.js';
 import {
   normalizeVisionRenderMode, visionAccumulationFromCamera, visionDenoiseFromCamera, visionStablePlanesFromCamera, visionRenderModes,
+  visionDenoisers, visionDenoiserFromCamera,
 } from '@/utils/visionRenderModes.js';
 import {
   Bridge,
@@ -1194,6 +1229,9 @@ const mainVisionAccumulationError = ref('');
 const mainVisionDenoise = ref(false);
 const mainVisionDenoiseBusy = ref(false);
 const mainVisionDenoiseError = ref('');
+const mainVisionDenoiser = ref('scene');
+const mainVisionDenoiserBusy = ref(false);
+const mainVisionDenoiserError = ref('');
 const mainVisionStablePlanes = ref(true);
 const mainVisionStablePlanesBusy = ref(false);
 const mainVisionStablePlanesError = ref('');
@@ -1244,6 +1282,7 @@ const mainRenderModeLabel = computed(() => {
 let pendingMainRenderSelection = null;
 let pendingMainAccumulationSelection = null;
 let pendingMainDenoiseSelection = null;
+let pendingMainDenoiserSelection = null;
 let pendingMainStablePlanesSelection = null;
 const currentMainCameraId = () =>
   cameraBindingState.value.cameraId || cameraBindingState.value.cameraName || null;
@@ -1579,10 +1618,48 @@ const toggleMainVisionDenoise = async () => {
       if (currentMainCamera.value) currentMainCamera.value.vision_denoise = previous;
       mainVisionDenoiseError.value = error.message;
     }
-    logError('Failed to set main viewport SVGF denoising', error);
+    logError('Failed to set main viewport denoising', error);
     return false;
   } finally {
     mainVisionDenoiseBusy.value = false;
+  }
+};
+
+const selectMainVisionDenoiser = async (type) => {
+  activeMenu.value = null;
+  const sceneId = currentMainSceneId();
+  const cameraId = currentMainCameraId();
+  if (mainRenderBackend.value !== 'vision' || mainVisionRenderMode.value === 'ssat'
+    || mainVisionDenoiserBusy.value || !cameraId) return false;
+  const previous = mainVisionDenoiser.value;
+  const previousSelection = pendingMainDenoiserSelection;
+  const selection = { sceneId, cameraId, type };
+  const isCurrent = () => currentMainSceneId() === sceneId && currentMainCameraId() === cameraId;
+  pendingMainDenoiserSelection = selection;
+  mainVisionDenoiserBusy.value = true;
+  mainVisionDenoiser.value = type;
+  mainVisionDenoiserError.value = '';
+  try {
+    const result = unwrapBridgeData(
+      await editorApi.sceneTools.setVisionDenoiser(sceneId, cameraId, type),
+    );
+    if (isCurrent()) {
+      if (!result?.pending && result?.type) selection.type = result.type;
+      mainVisionDenoiser.value = selection.type;
+      if (currentMainCamera.value) currentMainCamera.value.vision_denoiser = selection.type;
+    }
+    return true;
+  } catch (error) {
+    if (isCurrent()) {
+      pendingMainDenoiserSelection = previousSelection;
+      mainVisionDenoiser.value = previous;
+      if (currentMainCamera.value) currentMainCamera.value.vision_denoiser = previous;
+      mainVisionDenoiserError.value = error.message;
+    }
+    logError('Failed to set main viewport denoiser type', error);
+    return false;
+  } finally {
+    mainVisionDenoiserBusy.value = false;
   }
 };
 
@@ -1626,7 +1703,7 @@ const toggleMainVisionStablePlanes = async () => {
 
 // 新增：点击其他地方关闭菜单
 const handleClickOutside = (event) => {
-  if (activeMenu.value === 'render') {
+  if (activeMenu.value === 'render' || activeMenu.value === 'denoiser') {
     if (!event.target.closest('.scene-quick-render-menu')) activeMenu.value = null;
     return;
   }
@@ -1676,6 +1753,8 @@ const applySceneSnapshot = (sceneId, payload, { preservePose = false } = {}) => 
     pendingMainAccumulationSelection = null;
     mainVisionDenoise.value = false;
     pendingMainDenoiseSelection = null;
+    mainVisionDenoiser.value = 'scene';
+    pendingMainDenoiserSelection = null;
     mainVisionStablePlanes.value = true;
     pendingMainStablePlanesSelection = null;
     cameraBindingState.value = {
@@ -1718,6 +1797,7 @@ const applySceneSnapshot = (sceneId, payload, { preservePose = false } = {}) => 
   if (bindingChanged) {
     mainVisionAccumulationError.value = '';
     mainVisionDenoiseError.value = '';
+    mainVisionDenoiserError.value = '';
     mainVisionStablePlanesError.value = '';
   }
   lastCameraViewportSignature = '';
@@ -1754,6 +1834,15 @@ const applySceneSnapshot = (sceneId, payload, { preservePose = false } = {}) => 
     pendingMainDenoiseSelection = null;
     mainVisionDenoise.value = snapshotDenoise;
   }
+  const snapshotDenoiser = visionDenoiserFromCamera(activeCamera);
+  if (pendingMainDenoiserSelection?.sceneId === normalizedSceneId
+    && pendingMainDenoiserSelection.cameraId === currentMainCameraId()) {
+    mainVisionDenoiser.value = pendingMainDenoiserSelection.type;
+    if (snapshotDenoiser === pendingMainDenoiserSelection.type) pendingMainDenoiserSelection = null;
+  } else {
+    pendingMainDenoiserSelection = null;
+    mainVisionDenoiser.value = snapshotDenoiser;
+  }
   const snapshotStablePlanes = visionStablePlanesFromCamera(activeCamera);
   if (pendingMainStablePlanesSelection?.sceneId === normalizedSceneId
     && pendingMainStablePlanesSelection.cameraId === currentMainCameraId()) {
@@ -1767,6 +1856,7 @@ const applySceneSnapshot = (sceneId, payload, { preservePose = false } = {}) => 
     currentMainCamera.value.vision_render_mode = mainVisionRenderMode.value;
     currentMainCamera.value.vision_accumulation = mainVisionAccumulation.value;
     currentMainCamera.value.vision_denoise = mainVisionDenoise.value;
+    currentMainCamera.value.vision_denoiser = mainVisionDenoiser.value;
     currentMainCamera.value.vision_stable_planes = mainVisionStablePlanes.value;
   }
 

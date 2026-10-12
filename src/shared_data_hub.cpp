@@ -357,6 +357,11 @@ void SharedDataHub::enqueue_camera_state_update(CameraStateUpdateCommand command
         requested_camera_vision_denoise_[command.camera_handle] = {
             command.vision_denoise, pending.sequence};
     }
+    if (has_camera_state_field(command.fields, CameraStateUpdateField::VisionDenoiser)) {
+        pending.vision_denoiser = command.vision_denoiser;
+        requested_camera_vision_denoiser_[command.camera_handle] = {
+            command.vision_denoiser, pending.sequence};
+    }
     if (has_camera_state_field(command.fields, CameraStateUpdateField::VisionAccumulation)) {
         pending.vision_accumulation = command.vision_accumulation;
         requested_camera_vision_accumulation_[command.camera_handle] = {
@@ -408,6 +413,23 @@ std::optional<bool> SharedDataHub::requested_camera_vision_denoise(
         return it->second.enabled;
     }
     return std::nullopt;
+}
+
+std::optional<CameraVisionDenoiser> SharedDataHub::requested_camera_vision_denoiser(
+    std::uintptr_t camera_handle) const {
+    std::lock_guard<std::mutex> lock(camera_state_update_mutex_);
+    const auto it = requested_camera_vision_denoiser_.find(camera_handle);
+    if (it != requested_camera_vision_denoiser_.end()) return it->second.type;
+    return std::nullopt;
+}
+
+void SharedDataHub::acknowledge_camera_vision_denoiser(
+    std::uintptr_t camera_handle, std::uint64_t applied_sequence) {
+    std::lock_guard<std::mutex> lock(camera_state_update_mutex_);
+    const auto it = requested_camera_vision_denoiser_.find(camera_handle);
+    if (it != requested_camera_vision_denoiser_.end() && it->second.sequence <= applied_sequence) {
+        requested_camera_vision_denoiser_.erase(it);
+    }
 }
 
 void SharedDataHub::acknowledge_camera_vision_denoise(
@@ -464,6 +486,7 @@ void SharedDataHub::clear_camera_state_updates(std::uintptr_t camera_handle) {
     std::lock_guard<std::mutex> lock(camera_state_update_mutex_);
     pending_camera_state_updates_.erase(camera_handle);
     requested_camera_vision_denoise_.erase(camera_handle);
+    requested_camera_vision_denoiser_.erase(camera_handle);
     requested_camera_vision_accumulation_.erase(camera_handle);
     requested_camera_vision_stable_planes_.erase(camera_handle);
 }

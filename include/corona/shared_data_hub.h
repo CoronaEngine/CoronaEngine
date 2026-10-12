@@ -281,6 +281,8 @@ enum class CameraVisionRenderMode : uint8_t {
     ReSTIR,
 };
 
+enum class CameraVisionDenoiser : uint8_t { Scene, SVGF, ReBLUR };
+
 // Runtime telemetry only; never serialized into scene settings.
 struct CameraFrameTiming {
     double render_ms{};
@@ -307,6 +309,7 @@ struct CameraDevice {
     CameraRenderBackend render_backend{CameraRenderBackend::Native};
     CameraVisionRenderMode vision_render_mode{CameraVisionRenderMode::PathTracing};
     bool vision_denoise{false};
+    CameraVisionDenoiser vision_denoiser{CameraVisionDenoiser::Scene};
     bool vision_accumulation{false};
     bool vision_stable_planes{true};
     bool shadow_cascade_debug{false};
@@ -419,6 +422,7 @@ enum class CameraStateUpdateField : std::uint32_t {
     VisionDenoise = 1u << 8,
     VisionAccumulation = 1u << 9,
     VisionStablePlanes = 1u << 10,
+    VisionDenoiser = 1u << 11,
 };
 
 constexpr CameraStateUpdateField operator|(CameraStateUpdateField lhs,
@@ -443,6 +447,7 @@ struct CameraStateUpdateCommand {
     CameraRenderBackend render_backend{CameraRenderBackend::Native};
     CameraVisionRenderMode vision_render_mode{CameraVisionRenderMode::PathTracing};
     bool vision_denoise{false};
+    CameraVisionDenoiser vision_denoiser{CameraVisionDenoiser::Scene};
     bool vision_accumulation{false};
     bool vision_stable_planes{true};
     bool shadow_cascade_debug{false};
@@ -691,6 +696,10 @@ class SharedDataHub {
         std::uintptr_t camera_handle) const;
     void acknowledge_camera_vision_denoise(std::uintptr_t camera_handle,
                                           std::uint64_t applied_sequence);
+    [[nodiscard]] std::optional<CameraVisionDenoiser> requested_camera_vision_denoiser(
+        std::uintptr_t camera_handle) const;
+    void acknowledge_camera_vision_denoiser(std::uintptr_t camera_handle,
+                                           std::uint64_t applied_sequence);
     [[nodiscard]] std::optional<bool> requested_camera_vision_accumulation(
         std::uintptr_t camera_handle) const;
     void acknowledge_camera_vision_accumulation(std::uintptr_t camera_handle,
@@ -754,6 +763,11 @@ class SharedDataHub {
         bool enabled{false};
         std::uint64_t sequence{};
     };
+    struct RequestedCameraDenoiser {
+        CameraVisionDenoiser type{CameraVisionDenoiser::Scene};
+        std::uint64_t sequence{};
+    };
+    std::unordered_map<std::uintptr_t, RequestedCameraDenoiser> requested_camera_vision_denoiser_;
     // Retained after drain until the render thread commits or discards the request.
     std::unordered_map<std::uintptr_t, RequestedCameraBool>
         requested_camera_vision_denoise_;

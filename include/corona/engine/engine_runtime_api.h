@@ -313,6 +313,9 @@ class Camera {
     void set_vision_denoise(bool enabled);
     [[nodiscard]] bool get_vision_denoise() const;
     [[nodiscard]] bool get_requested_vision_denoise() const;
+    void set_vision_denoiser(const std::string& type);
+    [[nodiscard]] std::string get_vision_denoiser() const;
+    [[nodiscard]] std::string get_requested_vision_denoiser() const;
     void set_vision_accumulation(bool enabled);
     [[nodiscard]] bool get_vision_accumulation() const;
     [[nodiscard]] bool get_requested_vision_accumulation() const;
@@ -476,6 +479,11 @@ void set_vision_denoise(bool enabled, std::uintptr_t camera_handle = 0);
 /// Return the latest uncommitted preference, or committed state when none is pending.
 /// Persistence uses this to preserve setter requests even while a render update is in flight.
 [[nodiscard]] bool get_requested_vision_denoise(std::uintptr_t camera_handle = 0);
+
+/// Select "scene", "svgf" or "reblur", independently of the enable switch.
+void set_vision_denoiser(const std::string& type, std::uintptr_t camera_handle = 0);
+[[nodiscard]] std::string get_vision_denoiser(std::uintptr_t camera_handle = 0);
+[[nodiscard]] std::string get_requested_vision_denoiser(std::uintptr_t camera_handle = 0);
 
 /// Queue an independent accumulation preference for this camera (disabled by default).
 void set_vision_accumulation(bool enabled, std::uintptr_t camera_handle = 0);
