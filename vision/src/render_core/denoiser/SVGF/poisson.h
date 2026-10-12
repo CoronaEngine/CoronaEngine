@@ -81,8 +81,9 @@ public:
     // these full-precision scratch images, but never retain them across passes.
     [[nodiscard]] auto guide_position() const noexcept { return guide_position_.view(); }
     [[nodiscard]] auto guide_normal() const noexcept { return guide_normal_.view(); }
-    [[nodiscard]] bool guides_ready(uint count) const noexcept {
-        return guide_position_.size() == count && guide_shading_normal_.size() == count && guide_albedo_.size() == count;
+    [[nodiscard]] bool guides_ready(uint count, bool coverage_only = false) const noexcept {
+        uint shading_count = coverage_only ? 0u : count;
+        return guide_position_.size() == count && guide_shading_normal_.size() == shading_count && guide_albedo_.size() == shading_count;
     }
     [[nodiscard]] auto guide_identity() const noexcept { return guide_identity_.view(); }
     [[nodiscard]] auto guide_surface() const noexcept { return guide_surface_.view(); }
@@ -102,7 +103,7 @@ public:
     }
     [[nodiscard]] CommandBatch dispatch_guide(RealTimeDenoiseInput &input, bool fused_modulation = false) noexcept;
     void prepare() noexcept;
-    void prepare_guides(uint pixel_num) noexcept;
+    void prepare_guides(uint pixel_num, bool coverage_only = false) noexcept;
     void compile() noexcept;
     
     void compile_combined() noexcept;

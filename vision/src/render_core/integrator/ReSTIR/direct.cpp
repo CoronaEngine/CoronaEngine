@@ -713,7 +713,8 @@ DIReservoirVar ReSTIRDI::spatial_reuse(DIReservoirVar rsv, const SurfaceDataVar 
     return rsv;
 }
 
-Float3 ReSTIRDI::shading(vision::DIReservoirVar rsv, const SurfaceDataVar &surf) const noexcept {
+Float3 ReSTIRDI::shading(vision::DIReservoirVar rsv, const SurfaceDataVar &surf,
+                       Float3 *specular, Float3 *bypass, Float *hit_distance) const noexcept {
     TLightSampler &light_sampler = renderer().light_sampler();
     TSpectrum &spectrum = pipeline()->spectrum();
     const TSensor &camera = scene().sensor();
@@ -747,9 +748,19 @@ Float3 ReSTIRDI::shading(vision::DIReservoirVar rsv, const SurfaceDataVar &surf)
             // the shadow endpoint with the same light evaluation used above.
             Bool occluded = geometry.occluded(it, ls.p_light);
             value = value * ocarina::select(occluded, 0.f, rsv.W);
+            if (specular) {
+                Float3 wi = normalize(ls.p_light - it.pos);
+                scene().materials().dispatch(it.material_id(), [&](const Material *material) {
+                    auto bsdf = material->create_evaluator(it, swl);
+                    *specular = spectrum->linear_srgb(value, swl) * bsdf.specular_fraction_rgb(it.wo, wi);
+                });
+                // This endpoint is evaluated through this receiver's BSDF, not a donor reservoir distance.
+                *hit_distance = max(length(ls.p_light - it.pos), 1e-5f);
+            }
         };
     };
 
+    if (bypass) *bypass = spectrum->linear_srgb(Le, swl);
     return spectrum->linear_srgb(value + Le, swl);
 }
 
@@ -758,6 +769,7 @@ void ReSTIRDI::compile_shader1() noexcept {
     TSensor &camera = scene().sensor();
     TLightSampler &light_sampler = renderer().light_sampler();
     TSpectrum &spectrum = pipeline()->spectrum();
+    const bool lobes = integrator()->denoiser() && integrator()->denoiser()->requires_lobe_signals();
     Kernel kernel = [&](Uint frame_index, Var<DIParam> param) {
         sampler()->load_data();
         initial(sampler(), frame_index, spectrum);
@@ -768,6 +780,10 @@ void ReSTIRDI::compile_shader1() noexcept {
         RayState rs = ray_data->to_ray_state();
         sampler()->set_seed(pixel, frame_index, Dimension::ReSTIR_combine);
         SurfaceDataVar cur_surf = cur_surfaces().read(dispatch_id());
+        if (lobes) {
+            frame_buffer().reblur_di_specular().write(dispatch_id(), make_float4(0.f));
+            frame_buffer().reblur_di_bypass().write(dispatch_id(), make_float4(0.f));
+        }
         $if(param.stable_planes != 0u) {
             $if(frame_buffer().stable_dominant().read(dispatch_id()) == InvalidUI32) {
                 radiance_->write(dispatch_id(), make_float4(0.f));
@@ -779,8 +795,11 @@ void ReSTIRDI::compile_shader1() noexcept {
         DIReservoirVar st_rsv = spatial_reuse(temporal_rsv, cur_surf, make_int2(pixel), param);
         Var hit = cur_surf.hit;
         Float3 L = make_float3(0.f);
+        Float3 specular = make_float3(0.f), bypass = make_float3(0.f);
+        Float distance = 0.f;
         $if(hit->is_hit()) {
-            L = shading(st_rsv, cur_surf);
+            L = shading(st_rsv, cur_surf, lobes ? &specular : nullptr,
+                        lobes ? &bypass : nullptr, lobes ? &distance : nullptr);
         }
         $else {
             if (light_sampler->env_light()) {
@@ -797,9 +816,14 @@ void ReSTIRDI::compile_shader1() noexcept {
                 p_ref.ng = direction;
                 LightEval eval = light_sampler->evaluate_miss_wi(p_ref, direction, swl, LightEvalMode::L);
                 L = spectrum->linear_srgb(eval.L * SampledSpectrum(throughput), swl);
+                bypass = L;
             }
         };
         radiance_->write(dispatch_id(), make_float4(L, 1.f));
+        if (lobes) {
+            frame_buffer().reblur_di_specular().write(dispatch_id(), make_float4(specular, distance));
+            frame_buffer().reblur_di_bypass().write(dispatch_id(), make_float4(bypass, 0.f));
+        }
         cur_reservoirs().write(dispatch_id(), st_rsv);
     };
     shader1_ = device().compile(kernel, "ReSTIR direct spatial reuse and shading");

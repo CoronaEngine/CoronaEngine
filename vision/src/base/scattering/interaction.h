@@ -379,6 +379,9 @@ public:
     // derived as total - specular. Other callers leave it null -> split() == false ->
     // the split code is host-gated out (zero behavior change).
     mutable RadType3Var *Ld_specular{};
+    mutable Float3 *direct_specular{};
+    mutable Float3 *bypass{};
+    mutable Float2 *lobe_hitdist{};
     // ReSTIR GI starts at the secondary vertex; DI already owns emission
     // reached by that first continuation ray. Later emission remains indirect.
     bool suppress_initial_emission{false};

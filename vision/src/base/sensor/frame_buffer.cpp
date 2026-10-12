@@ -402,6 +402,8 @@ void FrameBuffer::update_resolution(ocarina::uint2 res) noexcept {
     reset_rt_buffer();
     reset_direct_lighting();
     reset_indirect_lighting();
+    reset_reblur_diffuse(); reset_reblur_specular(); reset_reblur_bypass();
+    reset_reblur_di_specular(); reset_reblur_gi_specular(); reset_reblur_di_bypass();
     reset_accumulation_buffer();
     reset_rays();
     reset_visibility_buffer();

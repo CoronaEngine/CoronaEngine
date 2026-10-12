@@ -97,11 +97,11 @@ void SVGF::prepare_resolve(uint pixel_num) {
 
 void SVGF::prepare_stable_resources(uint2 resolution, bool layered, bool guided) {
     uint pixel_num = resolution.x * resolution.y;
-    uint tile_num = layered ? ((resolution.x + 15u) / 16u) * ((resolution.y + 15u) / 16u) : 0u;
-    uint layer_pixels = layered ? pixel_num : 0u;
+    uint tile_num = layered && !params_.coverage_only_ ? ((resolution.x + 15u) / 16u) * ((resolution.y + 15u) / 16u) : 0u;
+    uint layer_pixels = layered && !params_.coverage_only_ ? pixel_num : 0u;
     uint guide_pixels = guided ? pixel_num : 0u;
     if (active_tiles_.size() == tile_num && layer_data_[0].size() == layer_pixels && coverage_position_.size() == guide_pixels &&
-        poisson_->guides_ready(guide_pixels)) { return; }
+        poisson_->guides_ready(guide_pixels, params_.coverage_only_)) { return; }
     // Callers may already have queued work using the old descriptors.
     pipeline()->stream() << synchronize() << commit();
     auto resize = [&]<typename T>(Buffer<T> &buffer, uint size, const char *name) {
@@ -115,7 +115,7 @@ void SVGF::prepare_stable_resources(uint2 resolution, bool layered, bool guided)
     resize(coverage_normal_, guide_pixels, "SVGF::coverage_normal");
     resize(coverage_depth_, guide_pixels, "SVGF::coverage_depth");
     resize(coverage_meta_, guide_pixels, "SVGF::coverage_meta");
-    poisson_->prepare_guides(guide_pixels);
+    poisson_->prepare_guides(guide_pixels, params_.coverage_only_);
     for (uint layer = 0u; layer < StablePlaneCount - 1u; ++layer) {
         resize(layer_data_[layer], layer_pixels, "SVGF::layer_data");
         resize(layer_data2_[layer], layer_pixels, "SVGF::layer_data2");
@@ -579,6 +579,11 @@ bool SVGF::history_valid(const RealTimeDenoiseInput &input) const noexcept {
 }
 
 void SVGF::prepare() noexcept {
+    if (params_.coverage_only_) {
+        prepare_resolve(pipeline()->pixel_num());
+        set_stable_planes_enabled(pipeline()->renderer().integrator()->stable_planes_enabled());
+        return;
+    }
     prepare_buffers();
     frame_buffer().register_callback(shared_from_this());
     poisson_->prepare();
@@ -589,6 +594,7 @@ void SVGF::prepare() noexcept {
 }
 
 void SVGF::compile() noexcept {
+    if (params_.coverage_only_) { compile_resolve(); return; }
     poisson_->compile();
     modulator_->compile();
     variance_estimator_->compile();
@@ -601,7 +607,7 @@ CommandBatch SVGF::dispatch(vision::RealTimeDenoiseInput &input) noexcept {
     if (params_.switch_) {
         prepare_stable_resources(input.resolution,
             input.layer_count > 1u || input.composed_coverage, input.use_stable_planes || input.composed_coverage);
-        if (input.composed_coverage) {
+        if (input.composed_coverage || params_.coverage_only_) {
             if (!env_flag("VISION_SVGF_SKIP_RESOLVE")) ret << resolve(input);
             else layer_state_[0].history = 0u;
             return ret;
@@ -697,6 +703,11 @@ bool SVGF::enabled() noexcept {
 }
 
 void SVGF::update_resolution(uint2 resolution) noexcept {
+    if (params_.coverage_only_) {
+        prepare_resolve(resolution.x * resolution.y);
+        set_stable_planes_enabled(pipeline()->renderer().integrator()->stable_planes_enabled());
+        return;
+    }
     uint pixel_num = resolution.x * resolution.y;
     OC_INFO_FORMAT("SVGF::update_resolution input=({}, {}), pixel_num={}, framebuffer=({}, {}), pipeline_pixel_num={}, raytracing=({}, {})",
                    resolution.x, resolution.y, pixel_num,

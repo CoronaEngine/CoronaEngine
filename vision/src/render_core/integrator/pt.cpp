@@ -69,6 +69,7 @@ public:
         frame_buffer().prepare_direct_lighting();
         frame_buffer().prepare_indirect_lighting();
         frame_buffer().prepare_motion_vectors();
+        if (denoiser_ && denoiser_->requires_lobe_signals()) frame_buffer().prepare_reblur_signals();
 //        frame_buffer().prepare_screen_buffer(taa_history_);
     }
     VS_HOTFIX_MAKE_RESTORE(IlluminationIntegrator, inspector_)
@@ -333,6 +334,13 @@ public:
             dn_input.prev_camera_pos = {prev_cam_pos.x, prev_cam_pos.y, prev_cam_pos.z};
             // PT path splits the signal into diffuse (direct buffer) / specular (indirect buffer).
             dn_input.channel_kind = RealTimeDenoiseInput::ChannelKind::DiffuseSpecular;
+            if (denoiser_ && denoiser_->requires_lobe_signals()) {
+                dn_input.has_lobe_signals = true;
+                auto &fb = frame_buffer();
+                dn_input.lobe_signals = {fb.reblur_layer_view(fb.reblur_diffuse(), 0u),
+                    fb.reblur_layer_view(fb.reblur_specular(), 0u),
+                    fb.reblur_layer_view(fb.reblur_diffuse(), 0u), fb.reblur_layer_view(fb.reblur_specular(), 0u)};
+            }
             param.enable_sparse_sampling = 0u;
 
             if (denoiser_enabled && !bypass_incompatible_lightfield_denoiser) {

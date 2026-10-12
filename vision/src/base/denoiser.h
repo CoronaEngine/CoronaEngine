@@ -13,6 +13,12 @@
 
 namespace vision {
 
+struct DenoiseLobeInput {
+    // Linear radiance, with a world-space scattering distance in w (0 = unsampled).
+    BufferView<float4> diffuse_radiance_hitdist, specular_radiance_hitdist;
+    BufferView<float4> output_diffuse, output_specular;
+};
+
 struct RealTimeDenoiseInput {
     /// Semantics of the two radiance channels (direct/indirect buffers). The denoiser
     /// (e.g. SVGF modulator) demodulates differently per kind, so the producer MUST set
@@ -25,6 +31,9 @@ struct RealTimeDenoiseInput {
 
     uint2 resolution{};
     uint frame_index{};
+
+    bool has_lobe_signals{false};
+    DenoiseLobeInput lobe_signals;
 
 //    BufferView<float4> output;
 //    BufferView<float4> radiance;
@@ -115,6 +124,8 @@ public:
           backend_(to_upper(desc["backend"].as_string()) == "CPU" ? CPU : GPU) {}
 
     virtual void compile() noexcept {}
+
+    [[nodiscard]] virtual bool requires_lobe_signals() const noexcept { return false; }
 
     /// Cached resources still need resize/scene recompilation while disabled.
     [[nodiscard]] virtual bool has_prepared_resources() const noexcept { return false; }

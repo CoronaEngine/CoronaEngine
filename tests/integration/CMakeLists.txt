@@ -33,6 +33,15 @@ add_test(NAME UiSurfaceRemovalRaceTests
 set_tests_properties(UiSurfaceRemovalRaceTests PROPERTIES TIMEOUT 15)
 
 if(CORONA_BUILD_VISION)
+    add_executable(corona_vision_reblur_tests test_vision_reblur.cpp)
+    target_include_directories(corona_vision_reblur_tests PRIVATE ${CMAKE_SOURCE_DIR}/vision/src)
+    target_link_libraries(corona_vision_reblur_tests PRIVATE
+        corona::engine vision-all_libs vision-reblur-kernels)
+    add_test(NAME VisionReblurTests COMMAND corona_vision_reblur_tests)
+    set_tests_properties(VisionReblurTests PROPERTIES
+        WORKING_DIRECTORY "$<TARGET_FILE_DIR:vision-material-principled_bsdf>"
+        RUN_SERIAL TRUE TIMEOUT 300)
+
     add_executable(corona_vision_shader_binding_tests
         test_vision_shader_bindings.cpp test_vision_shader_comments.cpp)
     target_link_libraries(corona_vision_shader_binding_tests PRIVATE ocarina-native ocarina-include)

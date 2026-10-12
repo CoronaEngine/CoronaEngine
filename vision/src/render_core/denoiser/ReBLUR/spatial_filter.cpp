@@ -1,0 +1,117 @@
+#include "utils.h"
+
+namespace vision::reblur {
+Shader<void(FilterParam)> Filter::compile_spatial_pass(Device &device, uint stage) {
+    Kernel kernel = [stage](Var<FilterParam> p) {
+        Uint i = dispatch_id(); Int2 pixel = make_int2(dispatch_idx().xy());
+        Uint2 tile = dispatch_idx().xy() / 16u;
+        $if(p.tiles.read(tile.y * ((p.size.x + 15u) / 16u) + tile.x) == 0u) {
+            p.dst_diffuse.write(i, make_float4(0.f)); p.dst_specular.write(i, make_float4(0.f));
+            if (stage == 0u) p.tracking.write(i, 0.f);
+            if (stage == 2u) {
+                Var<PersistentHistory> empty{};
+                empty.diffuse = make_float4(0.f); empty.specular = make_float4(0.f); empty.fast_count = make_float4(0.f);
+                empty.stabilized = make_float2(0.f); empty.hit_distance = 0.f;
+                p.prev_history.write(i, empty);
+            }
+            $return();
+        };
+        auto g = p.guide.read(i);
+        Float4 d = p.src_diffuse.read(i), s = p.src_specular.read(i);
+        Float tracking = s.w * hit_scale(g.position.w, g.normal_roughness.w);
+        $if(valid_guide(g)) {
+            Float2 counts = make_float2(0.f);
+            if (stage != 0u) counts = p.history.read(i).fast_count.zw();
+            Float3 N = g.normal_roughness.xyz();
+            Float3 V = normalize(p.camera.as_vec3() - g.position.xyz());
+            Float NoV = abs(dot(N, V));
+            Float r = g.normal_roughness.w;
+            Float Dfactor = dominant_factor(NoV, r);
+            Float3 D = normalize(lerp(Dfactor, N, 2.f * dot(N, V) * N - V));
+            Float NoD = abs(dot(N, D));
+            Float frustum = frustum_size(p, g);
+            Float angle = (p.frame % 32u).cast<float>() * 2.39996323f + static_cast<float>(stage) * 1.04719755f;
+            Float cs = cos(angle), sn = sin(angle);
+            constexpr std::array<float2, 8> taps{{{-1.f, 0.f}, {0.f, 1.f}, {1.f, 0.f}, {0.f, -1.f},
+                {-.35355339f, .35355339f}, {.35355339f, .35355339f}, {.35355339f, -.35355339f}, {-.35355339f, -.35355339f}}};
+            for (bool spec : {false, true}) {
+                Float4 center = spec ? s : d;
+                Float rough = spec ? r : Float{1.f};
+                Float count = spec ? counts.y : counts.x;
+                Float smc = spec_magic(rough);
+                Float h = center.w * hit_scale(g.position.w, rough);
+                Float hfactor = saturate(h / frustum);
+                Float alpha = 1.f / 11.f;
+                Float radius = spec ? p.specular_prepass : p.diffuse_prepass;
+                Float fraction_scale = 2.f;
+                if (stage != 0u) {
+                    Float fade = linear_step(p.fix_frames * 2.f / 3.f + 1e-6f, p.fix_frames * 4.f / 3.f + 2e-6f, count);
+                    Float boost = (1.f - fade) * (1.f - pow(NoV, 5.f)) * smc;
+                    alpha = 1.f / (1.f + (1.f - boost) * count);
+                    radius = p.max_radius;
+                    fraction_scale = stage == 1u ? 1.f : .5f;
+                }
+                Float area = rough * hfactor * (stage == 0u ? Float{1.f} : alpha);
+                radius *= sqrt(area);
+                if (stage == 0u && spec) {
+                    Float lobe_radius = h * NoD * lobe_tan(r, .3f);
+                    radius = min(radius, lobe_radius / max(p.unproject * (g.position.w + h * Dfactor), 1e-6f));
+                }
+                if (stage == 2u) radius *= 2.f;
+                radius = max(radius, p.min_radius * smc);
+                // A zero radius setting is an exact spatial bypass for evaluation.
+                if (stage == 0u) radius *= (spec ? p.specular_prepass : p.diffuse_prepass) != 0.f;
+                else radius *= p.max_radius != 0.f;
+                Float4 sum = center;
+                Float weight_sum = 1.f;
+                Float min_hit_weight = p.min_hit_weight * fraction_scale * smc;
+                if (stage != 0u) min_hit_weight *= sqrt(alpha);
+                Float hit_norm = lerp(min(alpha, smc), .0005f, 1.f);
+                for (uint k = 0; k < taps.size(); ++k) {
+                    Float2 tap = make_float2(taps[k]);
+                    Float2 offset = make_float2(cs * tap.x - sn * tap.y, sn * tap.x + cs * tap.y) * radius;
+                    Int2 q = make_int2(floor(make_float2(pixel) + .5f + offset));
+                    $if(in_screen(q, p.size)) {
+                        Uint j = pixel_index(q, p.size); auto ng = p.guide.read(j);
+                        Float4 value = spec ? p.src_specular.read(j) : p.src_diffuse.read(j);
+                        Float w = spatial_weight(p, g, ng, alpha, fraction_scale, spec);
+                        if (stage == 0u && spec) {
+                            Float hs = value.w * hit_scale(ng.position.w, ng.normal_roughness.w);
+                            Float dist = length(ng.position.xyz() - g.position.xyz()) + 1e-6f;
+                            // Stable integer hash; min tracking distance accepts geometry-consistent samples.
+                            Uint hash = (i * 747796405u + p.frame * 2891336453u + k * 277803737u);
+                            hash = ((hash >> ((hash >> 28u) + 4u)) ^ hash) * 277803737u;
+                            Float random = (hash & 0xffffu).cast<float>() / 65536.f;
+                            $if(hs > 0.f && random < w * saturate(hs / dist)) {
+                                tracking = select(tracking > 0.f, min(tracking, hs), hs);
+                            };
+                        }
+                        Float hw = exponential_weight((value.w - center.w) / hit_norm);
+                        w *= lerp(hw, min_hit_weight, 1.f);
+                        w *= exp(-.66f * dot(tap, tap));
+                        sum += value * w; weight_sum += w;
+                    };
+                }
+                if (spec) s = sum / weight_sum;
+                else d = sum / weight_sum;
+            }
+        };
+        p.dst_diffuse.write(i, d); p.dst_specular.write(i, s);
+        if (stage == 0u) p.tracking.write(i, tracking);
+        if (stage == 2u) {
+            auto h = p.history.read(i);
+            h.fast_count = make_float4(p.fast.read(i), h.fast_count.zw());
+            p.history.write(i, h);
+            Var<PersistentHistory> saved;
+            saved.diffuse = d; saved.specular = s; saved.fast_count = h.fast_count;
+            saved.stabilized = h.stabilized.xy(); saved.hit_distance = h.tracking.w;
+            p.prev_history.write(i, saved);
+        }
+    };
+    return device.compile(kernel, stage == 0u ? "REBLUR-PrePass" : stage == 1u ? "REBLUR-Blur" : "REBLUR-PostBlur");
+}
+void Filter::compile_spatial(Device &device) {
+    blur_ = compile_spatial_pass(device, 1u);
+    post_blur_ = compile_spatial_pass(device, 2u);
+}
+}

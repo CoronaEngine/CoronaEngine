@@ -106,7 +106,8 @@ public:
     [[nodiscard]] HOTFIX_VIRTUAL GIReservoirVar combine_spatial(GIReservoirVar cur_rsv, const Container<uint> &rsv_idx) const noexcept;
     [[nodiscard]] HOTFIX_VIRTUAL GIReservoirVar spatial_reuse(GIReservoirVar rsv, const SurfaceDataVar &cur_surf,
                                                               const Int2 &pixel, const Var<GIParam> &param) const noexcept;
-    [[nodiscard]] HOTFIX_VIRTUAL Float3 shading(GIReservoirVar rsv, const SurfaceDataVar &cur_surf) const noexcept;
+    [[nodiscard]] HOTFIX_VIRTUAL Float3 shading(GIReservoirVar rsv, const SurfaceDataVar &cur_surf,
+                                               Float3 *specular = nullptr, Float *hit_distance = nullptr) const noexcept;
 
     [[nodiscard]] static Bool is_valid_neighbor(const SurfaceDataVar &cur_surface,
                                                 const SurfaceDataVar &another_surface,

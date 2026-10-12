@@ -123,6 +123,7 @@ private:
         float sigma_depth_{SVGFConfig::GeometryWeight::kPoissonDepthScaleDefault};
         bool spatial_filter_{true};
         bool switch_{true};
+        bool coverage_only_{false};
 
         Params() = default;
         explicit Params(const DenoiserDesc &desc)
@@ -131,7 +132,7 @@ private:
               sigma_depth_(desc["sigma_depth"].as_float(SVGFConfig::GeometryWeight::kPoissonDepthScaleDefault)),
               spatial_filter_(desc["spatial_filter"].as_bool(true)),
         //
-        switch_(false) {}
+        switch_(false), coverage_only_(desc["coverage_only"].as_bool(false)) {}
     };
     Params params_;
 
@@ -188,7 +189,7 @@ public:
     void prepare() noexcept override;
     void compile() noexcept override;
     [[nodiscard]] bool has_prepared_resources() const noexcept override {
-        return svgf_data.has_registered();
+        return svgf_data.has_registered() || resolve_direct_[0].size() != 0u;
     }
     void update_resolution(uint2 resolution) noexcept override;
     [[nodiscard]] CommandBatch dispatch(vision::RealTimeDenoiseInput &input) noexcept override;
