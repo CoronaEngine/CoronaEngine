@@ -7,11 +7,10 @@
 namespace vision::reblur {
 struct Guide {
     float4 position{}; // world position, positive viewZ; w=0 for sky/invalid
+    uint4 identity{};
     float4 normal_roughness{};
-    float4 diffuse_factor{1.f, 1.f, 1.f, 0.f};
-    float4 specular_factor{1.f, 1.f, 1.f, 0.f};
-    float2 motion{}; // current minus previous raster coordinates
-    uint4 identity{}; // instance, material, stable branch, valid
+    float4 diffuse_factor{1.f, 1.f, 1.f, 0.f}; // RGB demodulation, motion.x in w
+    float4 specular_factor{1.f, 1.f, 1.f, 0.f}; // RGB demodulation, motion.y in w
 };
 
 struct History {
@@ -28,12 +27,14 @@ struct GeometryHistory {
     uint4 identity{};
 };
 struct PersistentHistory {
-    float4 diffuse{}, specular{}, fast_count{};
-    float2 stabilized{};
-    float hit_distance{};
+    // FP16 storage only: shaders promote these values before arithmetic.
+    half4 diffuse{}, specular{}, fast_count{};
+    half2 stabilized{};
+    float hit_distance{}; // world units, not limited to the FP16 range
 };
 struct TemporalData {
-    float4 fast_count{}, stabilized{}, tracking{};
+    half4 fast_count{}, stabilized{};
+    float4 tracking{};
 };
 
 struct Settings {
@@ -49,13 +50,13 @@ struct Settings {
 };
 
 struct FilterParam {
-    BufferDesc<Guide> guide;
-    BufferDesc<GeometryHistory> prev_guide;
-    BufferDesc<TemporalData> history;
-    BufferDesc<PersistentHistory> prev_history;
+    BufferDesc<> guide; // Guide fields stored contiguously through Ocarina's SOA view
+    BufferDesc<> prev_guide;
+    BufferDesc<> history;
+    BufferDesc<> prev_history;
     BufferDesc<float4> raw_diffuse, raw_specular, output_diffuse, output_specular;
-    BufferDesc<float4> src_diffuse, src_specular, dst_diffuse, dst_specular;
-    BufferDesc<float2> fast;
+    BufferDesc<half4> src_diffuse, src_specular, dst_diffuse, dst_specular;
+    BufferDesc<half2> fast;
     BufferDesc<float> tracking;
     BufferDesc<uint> tiles;
     uint2 size{};
@@ -70,7 +71,7 @@ struct FilterParam {
 };
 }
 
-OC_STRUCT(vision::reblur, Guide, position, normal_roughness, diffuse_factor, specular_factor, motion, identity) {};
+OC_STRUCT(vision::reblur, Guide, position, identity, normal_roughness, diffuse_factor, specular_factor) {};
 OC_STRUCT(vision::reblur, History, diffuse, specular, fast_count, stabilized, tracking) {};
 OC_STRUCT(vision::reblur, GeometryHistory, position, normal_roughness, identity) {};
 OC_STRUCT(vision::reblur, PersistentHistory, diffuse, specular, fast_count, stabilized, hit_distance) {};
@@ -87,23 +88,23 @@ OC_PARAM_STRUCT(vision::reblur, FilterParam, guide, prev_guide, history, prev_hi
 namespace vision::reblur {
 // The scene-independent shader stages are shared with the GPU integration tests.
 // Previous-frame data is immutable through temporal reprojection, then updated
-// by pointwise post-blur/stabilization/unpack writes. Current data is shared.
+// by pointwise stabilization/output writes. Current data is shared.
 class Filter {
     uint2 size_{};
     struct Layer {
-        Buffer<GeometryHistory> guide;
-        Buffer<PersistentHistory> history;
+        ocarina::ByteBuffer guide;
+        ocarina::ByteBuffer history;
         uint frame{InvalidUI32};
     };
     std::array<Layer, 3> layers_;
-    Buffer<Guide> guide_;
-    Buffer<TemporalData> history_;
-    std::array<Buffer<float4>, 2> diffuse_, specular_;
-    Buffer<float2> fast_;
+    ocarina::ByteBuffer guide_;
+    ocarina::ByteBuffer history_;
+    std::array<Buffer<half4>, 2> diffuse_, specular_;
+    Buffer<half2> fast_;
     Buffer<float> tracking_;
     Buffer<uint> tiles_;
-    Shader<void(FilterParam)> pack_, classify_, reconstruct_, prepass_, temporal_;
-    Shader<void(FilterParam)> fix_, blur_, post_blur_, stabilize_, unpack_;
+    Shader<void(FilterParam)> pack_, reconstruct_, prepass_, temporal_;
+    Shader<void(FilterParam)> fix_, blur_, post_blur_, stabilize_;
     void compile_modulation(Device &device);
     void compile_prepass(Device &device);
     void compile_temporal(Device &device);
@@ -118,8 +119,8 @@ public:
     void compile(Device &device);
     void reset() noexcept;
     [[nodiscard]] uint2 resolution() const noexcept { return size_; }
-    [[nodiscard]] BufferView<Guide> guides() const { return guide_.view(); }
-    [[nodiscard]] BufferView<TemporalData> history() const { return history_.view(); }
+    [[nodiscard]] ByteBufferView guides() const { return guide_.view(); }
+    [[nodiscard]] ByteBufferView history() const { return history_.view(); }
     [[nodiscard]] CommandBatch dispatch(FilterParam param, uint layer = 0u);
 };
 }

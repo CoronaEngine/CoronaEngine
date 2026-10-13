@@ -18,7 +18,7 @@ struct GuideParam {
     BufferDesc<SurfaceData> surfaces;
     BufferDesc<SurfaceExtend> extensions;
     BufferDesc<float2> motion;
-    BufferDesc<Guide> output;
+    BufferDesc<> output;
     BufferDesc<float4> diffuse, specular;
     uint layered{}, stable{}, frame{};
 };

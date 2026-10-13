@@ -58,15 +58,17 @@ OC_STRUCT(vision, SurfaceData, hit, normal_depth, pos_diff, diffuse_roughness, s
 
 namespace vision {
 struct SurfaceExtend {
+    // Keep aligned vectors together; interleaved scalars added 16 bytes per
+    // record, multiplied by both dominant frames and all three stable planes.
     float3 throughput{make_float3(1.f)};
     float3 view_pos{};
-    float t_max{};
     float3 final_direction{};
+    float t_max{};
     uint prefix_depth{};
 };
 }// namespace vision
 // clang-format off
-OC_STRUCT(vision, SurfaceExtend, throughput, view_pos, t_max, final_direction, prefix_depth) {};
+OC_STRUCT(vision, SurfaceExtend, throughput, view_pos, final_direction, t_max, prefix_depth) {};
 // clang-format om
 
 namespace vision {
@@ -82,8 +84,8 @@ struct StablePlaneHistorySurface {
 };
 struct StablePlaneHistory {
     StablePlaneHistorySurface surface{};
-    float2 motion{};
     float3 depth_position{};
+    float2 motion{};
     uint branch_sequence{1u};
     uint instance_hash{};
     uint depth{};
@@ -94,8 +96,8 @@ static_assert(sizeof(StablePlaneHistory) <= 128u);
 struct StablePlaneData {
     SurfaceData surface{};
     SurfaceExtend extension{};
-    float2 motion{};
     float3 depth_position{};
+    float2 motion{};
     uint branch_sequence{1u};
     uint instance_hash{};
     uint depth{};
@@ -106,9 +108,9 @@ struct StablePlaneData {
 }// namespace vision
 OC_STRUCT(vision, StablePlaneHistorySurface, hit, virtual_position, virtual_geometric_normal,
           approximate, stable_branch) {};
-OC_STRUCT(vision, StablePlaneHistory, surface, motion, depth_position,
+OC_STRUCT(vision, StablePlaneHistory, surface, depth_position, motion,
           branch_sequence, instance_hash, depth, material_id, valid) {};
-OC_STRUCT(vision, StablePlaneData, surface, extension, motion, depth_position,
+OC_STRUCT(vision, StablePlaneData, surface, extension, depth_position, motion,
           branch_sequence, instance_hash, depth, material_id, valid, reservoir_eligible) {
     [[nodiscard]] Var<vision::StablePlaneHistory> history() const noexcept {
         Var<vision::StablePlaneHistory> ret;

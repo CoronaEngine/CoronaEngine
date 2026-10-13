@@ -1,6 +1,7 @@
 #include "render_core/denoiser/ReBLUR/reblur.h"
 #include "render_core/denoiser/ReBLUR/utils.h"
 #include "rhi/context.h"
+#include "rhi/stats.h"
 #include "base/import/importer.h"
 #include "base/integral/integrator.h"
 #include "base/mgr/pipeline.h"
@@ -20,6 +21,31 @@ void expect(bool condition, const char *message) {
     if (!condition) throw std::runtime_error(message);
 }
 
+ocarina::HostByteBuffer pack_guides(const reblur::Guide *guides, size_t count) {
+    ocarina::HostByteBuffer bytes;
+    ocarina::DynamicBufferLayoutCodec<reblur::Guide>::encode(guides, count, bytes,
+        {}, ocarina::DynamicBufferLayout::SOA);
+    return bytes;
+}
+
+void unpack_history(const ocarina::HostByteBuffer &bytes, reblur::TemporalData *history, size_t count) {
+    ocarina::DynamicBufferLayoutCodec<reblur::TemporalData>::decode(bytes, count, history,
+        {}, ocarina::DynamicBufferLayout::SOA);
+}
+
+void check_storage_budget(Device &device) {
+    const size_t before = ocarina::MemoryStats::instance().buffer_size();
+    reblur::Filter filter;
+    const uint2 size = make_uint2(640u, 360u);
+    filter.prepare(device, size, 3u);
+    const size_t bytes = ocarina::MemoryStats::instance().buffer_size() - before;
+    std::cout << "REBLUR three-layer allocation: " << bytes << " bytes\n";
+    // Budget includes full-precision geometry/tracking, three independent
+    // histories and all scratch buffers. The FP32 layout uses 556 B/pixel.
+    expect(bytes <= size_t(size.x) * size.y * 394u,
+           "three-layer REBLUR storage must stay within 394 bytes per pixel");
+}
+
 void check_helpers(Device &device, Stream &stream) {
     auto result = device.create_buffer<float4>(8, "reblur helper results");
     Kernel kernel = [&](BufferVar<float4> output) {
@@ -37,6 +63,7 @@ void check_helpers(Device &device, Stream &stream) {
                                             make_float4(4.f, 0.f, 0.f, 0.f), .25f, 0.f, 30.f));
         output.write(6u, make_float4(select(reblur::guide_instance(1u, 0u) != reblur::guide_instance(2u, 0u), 1.f, 0.f),
             select(reblur::guide_instance(1u, 0u) != reblur::guide_instance(1u, 7u), 1.f, 0.f), 0.f, 0.f));
+        output.write(7u, make_float4(reblur::store_half(make_float4(70000.f, -70000.f, .125f, -.125f))));
     };
     auto shader = device.compile(kernel, "reblur_reference_helpers");
     std::array<float4, 8> actual{};
@@ -60,7 +87,56 @@ void check_helpers(Device &device, Stream &stream) {
     expect_near(actual[5].w, 0.f, "mirror tracking must react immediately");
     expect(actual[6].x == 1.f && actual[6].y == 1.f,
            "layered identity must reject a changed receiver or stable prefix independently");
+    expect(actual[7].x == 65504.f && actual[7].y == -65504.f &&
+           actual[7].z == .125f && actual[7].w == -.125f,
+           "FP16 storage must saturate reprojection overshoot without discarding signed chroma");
     std::cout << "PASS: reference packing, distance, motion and accumulation helpers\n";
+}
+
+void check_storage_precision(Device &device, Stream &stream) {
+    reblur::Filter filter;
+    filter.prepare(device, make_uint2(1u));
+    filter.compile(device);
+    auto input = device.create_buffer<float4>(1u);
+    auto output_d = device.create_buffer<float4>(1u), output_s = device.create_buffer<float4>(1u);
+    reblur::Guide guide;
+    guide.position = make_float4(0.f, 0.f, 1000000.f, 1000000.f);
+    guide.normal_roughness = make_float4(0.f, 0.f, -1.f, .4f);
+    guide.identity = make_uint4(1u);
+    reblur::FilterParam p;
+    p.raw_diffuse = p.raw_specular = input.descriptor();
+    p.output_diffuse = output_d.descriptor(); p.output_specular = output_s.descriptor();
+    p.unproject = .05f; p.history_valid = 1u;
+    for (auto signal : {make_float4(.2f, .6f, 1.f, 100000.f),
+                        make_float4(50000.f, 10000.f, 30000.f, 100000.f),
+                        make_float4(0.f, 1000.f, 40000.f, 100000.f),
+                        make_float4(65504.f, 65504.f, 65504.f, 100000.f)}) {
+        filter.reset();
+        for (uint frame = 0; frame < 16u; ++frame) {
+            p.frame = frame;
+            float4 d, s;
+            reblur::TemporalData history;
+            ocarina::HostByteBuffer history_bytes(sizeof(history));
+            const auto packed = pack_guides(&guide, 1u);
+            stream << filter.guides().upload(packed.data()) << input.upload(&signal)
+                   << filter.dispatch(p) << output_d.download(&d) << output_s.download(&s)
+                   << filter.history().download(history_bytes.data()) << synchronize() << commit();
+            unpack_history(history_bytes, &history, 1u);
+            // Bound RGB error relative to the signal peak: FP16 YCoCg may
+            // round a dim channel in the presence of a much brighter channel.
+            const float tolerance = .003f * std::max({signal.x, signal.y, signal.z});
+            for (auto value : {d, s}) {
+                for (uint c = 0; c < 3u; ++c) expect(std::isfinite(value[c]) &&
+                    std::abs(value[c] - signal[c]) <= tolerance,
+                    "FP16 histories must preserve HDR and signed chroma within the quantization budget");
+                expect(std::isfinite(value.w) && std::abs(value.w - signal.w) < 100.f,
+                    "world-space hit distance must survive FP16 signal normalization");
+            }
+            expect(std::isfinite(history.tracking.w) && history.tracking.w > 99900.f,
+                "world-space tracking must retain distances above the FP16 range");
+        }
+    }
+    std::cout << "PASS: HDR, signed chroma and large-world tracking through all REBLUR stages\n";
 }
 
 void check_filter(Device &device, Stream &stream) {
@@ -77,6 +153,7 @@ void check_filter(Device &device, Stream &stream) {
     std::vector<float4> d(n, make_float4(.2f, .6f, 1.f, 4.f));
     std::vector<float4> s(n, make_float4(1.f, .3f, .1f, 3.f)), got_d(n), got_s(n);
     std::vector<reblur::TemporalData> history(n);
+    ocarina::HostByteBuffer history_bytes(n * sizeof(reblur::TemporalData));
     for (uint y = 0; y < size.y; ++y) for (uint x = 0; x < size.x; ++x) {
         auto &g = guides[y * size.x + x];
         g.position = make_float4((float(x) + .5f - 16.f) * .1f, (float(y) + .5f - 16.f) * .1f, 2.f, 2.f);
@@ -94,9 +171,11 @@ void check_filter(Device &device, Stream &stream) {
     p.prev_world_to_raster = p.world_to_raster;
     auto run = [&](uint frame, uint layer = 0u) {
         p.frame = frame;
-        stream << filter.guides().upload(guides.data()) << diffuse.upload(d.data()) << specular.upload(s.data());
+        const auto packed = pack_guides(guides.data(), n);
+        stream << filter.guides().upload(packed.data()) << diffuse.upload(d.data()) << specular.upload(s.data());
         stream << filter.dispatch(p, layer) << output_d.download(got_d.data()) << output_s.download(got_s.data())
-               << filter.history().download(history.data()) << synchronize() << commit();
+               << filter.history().download(history_bytes.data()) << synchronize() << commit();
+        unpack_history(history_bytes, history.data(), n);
     };
     for (uint frame = 0; frame < 64u; ++frame) {
         run(frame);
@@ -107,15 +186,18 @@ void check_filter(Device &device, Stream &stream) {
         }
     }
     expect(history[n / 2].fast_count.z > 25.f, "static diffuse history must grow to the configured limit");
-    const auto saved_motion = guides[n / 2].motion;
+    const auto saved_motion = make_float2(guides[n / 2].diffuse_factor.w, guides[n / 2].specular_factor.w);
     for (auto &g : guides) g.identity.z = 9u;
     std::fill(d.begin(), d.end(), make_float4(4.f, 0.f, 0.f, 4.f));
     run(64u);
     expect(history[n / 2].fast_count.z <= 1.01f && got_d[n / 2].x > 3.99f,
            "branch changes must reject stale lighting history");
     std::vector<reblur::Guide> downloaded(n);
-    stream << filter.guides().download(downloaded.data()) << synchronize() << commit();
-    expect(downloaded[n / 2].motion.x == saved_motion.x && downloaded[n / 2].motion.y == saved_motion.y,
+    ocarina::HostByteBuffer downloaded_bytes(n * sizeof(reblur::Guide));
+    stream << filter.guides().download(downloaded_bytes.data()) << synchronize() << commit();
+    ocarina::DynamicBufferLayoutCodec<reblur::Guide>::decode(downloaded_bytes, n, downloaded.data(),
+        {}, ocarina::DynamicBufferLayout::SOA);
+    expect(downloaded[n / 2].diffuse_factor.w == saved_motion.x && downloaded[n / 2].specular_factor.w == saved_motion.y,
            "denoising must not mutate producer motion");
     run(64u, 1u);
     expect(history[n / 2].fast_count.z <= 1.01f, "new layers must not inherit another layer's history");
@@ -177,7 +259,7 @@ void check_filter(Device &device, Stream &stream) {
     for (uint frame = 76u; frame < 96u; ++frame) for (uint layer = 0u; layer < 3u; ++layer) {
         std::fill(d.begin(), d.end(), make_float4(float(layer + 1u), .5f, .25f, 2.f));
         run(frame, layer);
-        expect(std::abs(got_d[center].x - float(layer + 1u)) < 1e-4f,
+        expect(std::abs(got_d[center].x - float(layer + 1u)) < .003f * float(layer + 1u),
             "shared current buffers must not mix stable-layer illumination");
         if (frame == 95u) expect(history[center].fast_count.z > 15.f,
             "each layer must retain its own history across sequential dispatches");
@@ -194,13 +276,122 @@ void check_filter(Device &device, Stream &stream) {
         std::vector<float4> constant(count, make_float4(.5f, .5f, .5f, 2.f)), actual(count);
         p.raw_diffuse = small_d.descriptor(); p.raw_specular = small_s.descriptor();
         p.output_diffuse = small_o.descriptor(); p.output_specular = small_q.descriptor(); p.frame = 74u;
-        stream << filter.guides().upload(small_g.data()) << small_d.upload(constant.data())
+        const auto packed = pack_guides(small_g.data(), count);
+        stream << filter.guides().upload(packed.data()) << small_d.upload(constant.data())
                << small_s.upload(constant.data()) << filter.dispatch(p) << small_o.download(actual.data())
                << synchronize() << commit();
-        for (const auto &pixel : actual) expect(std::isfinite(pixel.x) && std::abs(pixel.x - .5f) < 1e-4f,
+        for (const auto &pixel : actual) expect(std::isfinite(pixel.x) && std::abs(pixel.x - .5f) < .0015f,
             "resize and partial tiles must preserve a constant signal");
     }
     std::cout << "PASS: actual REBLUR passes, 64-frame history, layers, empty tiles, reset and gaps\n";
+}
+
+void check_sparse_tiles(Device &device, Stream &stream) {
+    reblur::Filter filter;
+    const uint2 size = make_uint2(49u, 33u);
+    const uint n = size.x * size.y;
+    filter.prepare(device, size);
+    filter.compile(device);
+    auto input_d = device.create_buffer<float4>(n), input_s = device.create_buffer<float4>(n);
+    auto output_d = device.create_buffer<float4>(n), output_s = device.create_buffer<float4>(n);
+    std::vector<reblur::Guide> guides(n);
+    std::vector<float4> signal_d(n, make_float4(.5f, .25f, 1.f, 2.f));
+    std::vector<float4> signal_s(n, make_float4(1.5f, .75f, .125f, 4.f));
+    std::array<std::vector<float4>, 2> actual{std::vector<float4>(n), std::vector<float4>(n)};
+    std::vector<reblur::TemporalData> history(n);
+    ocarina::HostByteBuffer history_bytes(n * sizeof(reblur::TemporalData));
+    reblur::FilterParam p;
+    p.raw_diffuse = input_d.descriptor(); p.raw_specular = input_s.descriptor();
+    p.output_diffuse = output_d.descriptor(); p.output_specular = output_s.descriptor();
+    p.unproject = .05f; p.history_valid = 1u;
+    for (auto mode : {HitDistanceReconstructionMode::OFF, HitDistanceReconstructionMode::AREA_3X3,
+                      HitDistanceReconstructionMode::AREA_5X5}) {
+        filter.settings.reconstruction = mode;
+        filter.reset();
+        for (uint frame = 0; frame < 3u; ++frame) {
+            for (uint i = 0; i < n; ++i) {
+                auto &g = guides[i];
+                const uint x = i % size.x, y = i / size.x;
+                // Last pixel of each checkerboard tile: lane 31 / iteration 7
+                // for a full tile, with different lanes in the partial tiles.
+                const bool last_x = x % 16u == 15u || x + 1u == size.x;
+                const bool last_y = y % 16u == 15u || y + 1u == size.y;
+                const bool sparse = ((x / 16u + y / 16u) % 2u == 0u) && last_x && last_y;
+                g.position = make_float4(float(x) * .1f, float(y) * .1f, 2.f, frame != 1u || sparse ? 2.f : 0.f);
+                g.normal_roughness = make_float4(0.f, 0.f, -1.f, .4f);
+                // Isolate receivers by tile: virtual specular reprojection must not
+                // legitimately borrow a live neighbor's history after reappearance.
+                const uint receiver = 3u + (y / 16u) * ((size.x + 15u) / 16u) + x / 16u;
+                g.identity = make_uint4(1u, 2u, receiver, frame != 1u || sparse ? 1u : 0u);
+            }
+            p.frame = frame;
+            const auto packed = pack_guides(guides.data(), n);
+            stream << filter.guides().upload(packed.data()) << input_d.upload(signal_d.data()) << input_s.upload(signal_s.data())
+                   << filter.dispatch(p) << output_d.download(actual[0].data()) << output_s.download(actual[1].data())
+                   << filter.history().download(history_bytes.data()) << synchronize() << commit();
+            unpack_history(history_bytes, history.data(), n);
+            for (uint i = 0; i < n; ++i) {
+                for (uint lobe = 0; lobe < 2u; ++lobe) {
+                    const auto &color = actual[lobe][i];
+                    const auto &raw = lobe == 0u ? signal_d[i] : signal_s[i];
+                    const float count = lobe == 0u ? float(history[i].fast_count.z) : float(history[i].fast_count.w);
+                    expect(std::isfinite(color.x) && std::isfinite(color.y) && std::isfinite(color.z) && std::isfinite(color.w),
+                           "sparse and partial tiles must produce finite colors");
+                    if (guides[i].identity.w != 0u)
+                        expect(count >= 1.f,
+                               "a lone live pixel must activate its tile and accumulate history");
+                    if (frame == 1u && guides[i].identity.w == 0u) {
+                        expect(color.x == raw.x && color.y == raw.y && color.z == raw.z && color.w == raw.w,
+                               "invalid pixels must pass through their raw signal");
+                        expect(count == 0.f,
+                               "invalid pixels must clear temporal state even inside a partially active tile");
+                    }
+                    if (frame == 2u && (i % size.x / 16u + i / size.x / 16u) % 2u != 0u)
+                        expect(count <= 1.01f,
+                               "a reappearing empty tile must not inherit its earlier lighting history");
+                }
+            }
+        }
+    }
+    std::cout << "PASS: sparse partial tiles, both lobes and all reconstruction modes\n";
+}
+
+void check_packed_motion(Device &device, Stream &stream) {
+    reblur::Filter filter;
+    const uint2 size = make_uint2(17u, 19u);
+    const uint n = size.x * size.y, center = 9u * size.x + 8u;
+    filter.prepare(device, size);
+    filter.compile(device);
+    auto input = device.create_buffer<float4>(n);
+    auto output_d = device.create_buffer<float4>(n), output_s = device.create_buffer<float4>(n);
+    std::vector<reblur::Guide> guides(n);
+    for (uint i = 0; i < n; ++i) {
+        auto &g = guides[i];
+        g.position = make_float4(float(i % size.x) * .1f, float(i / size.x) * .1f, 2.f, 2.f);
+        g.normal_roughness = make_float4(0.f, 0.f, -1.f, .4f);
+        g.identity = make_uint4(1u);
+        g.diffuse_factor.w = 2.f; g.specular_factor.w = -3.f;
+    }
+    // Zero hit distance makes virtual motion equal to surface motion.
+    std::vector<float4> signal(n, make_float4(.5f, .25f, 1.f, 0.f));
+    const auto packed = pack_guides(guides.data(), n);
+    ocarina::HostByteBuffer history_bytes(n * sizeof(reblur::TemporalData)), guide_bytes(packed.size());
+    std::vector<reblur::TemporalData> history(n);
+    reblur::FilterParam p;
+    p.raw_diffuse = p.raw_specular = input.descriptor();
+    p.output_diffuse = output_d.descriptor(); p.output_specular = output_s.descriptor();
+    p.unproject = .05f; p.history_valid = 1u;
+    stream << filter.guides().upload(packed.data()) << input.upload(signal.data());
+    for (uint frame = 0; frame < 2u; ++frame) { p.frame = frame; stream << filter.dispatch(p); }
+    stream << filter.history().download(history_bytes.data()) << filter.guides().download(guide_bytes.data())
+           << synchronize() << commit();
+    unpack_history(history_bytes, history.data(), n);
+    expect(std::abs(history[center].tracking.x - 6.5f) < 1e-4f &&
+           std::abs(history[center].tracking.y - 12.5f) < 1e-4f,
+           "temporal reprojection must preserve packed motion component order and sign");
+    expect(std::equal(packed.data(), packed.data() + packed.size(), guide_bytes.data()),
+           "filtering must preserve every guide field, including signed packed motion");
+    std::cout << "PASS: signed packed motion and temporal reprojection\n";
 }
 
 void check_material(Pipeline &pipeline) {
@@ -432,8 +623,12 @@ int main() {
         device.init_rtx();
         Global::instance().set_device(&device);
         auto stream = device.create_stream();
+        check_storage_budget(device);
         check_helpers(device, stream);
+        check_storage_precision(device, stream);
         check_filter(device, stream);
+        check_sparse_tiles(device, stream);
+        check_packed_motion(device, stream);
         check_scene_signals();
         std::cout << "PASS: REBLUR input contract\n";
         return 0;

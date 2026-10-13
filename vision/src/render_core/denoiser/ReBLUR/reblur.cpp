@@ -44,13 +44,26 @@ void ReBLUR::render_sub_UI(Widgets *widgets) noexcept {
 void ReBLUR::compile() noexcept {
     auto &camera = scene().sensor(); auto &sampler = renderer().sampler();
     Kernel guides = [&](Var<GuideParam> p) {
+        auto output = p.output.soa_view_var<Guide>();
+        Uint i = dispatch_id();
+        $if(p.layered != 0u) {
+            // Test the small validity field before loading the surface, camera
+            // and sampler state for mostly empty secondary stable planes.
+            $if(p.planes.read(i).valid == 0u) {
+                Var<Guide> empty;
+                empty.position = make_float4(0.f); empty.normal_roughness = make_float4(0.f, 0.f, 1.f, 1.f);
+                empty.diffuse_factor = make_float4(1.f, 1.f, 1.f, 0.f); empty.specular_factor = empty.diffuse_factor;
+                empty.identity = make_uint4(0u);
+                output.write(i, empty);
+                $return();
+            };
+        };
         camera->load_data(); sampler->load_data();
         sampler->set_seed(dispatch_idx().xy(), p.frame, 1024u);
-        Uint i = dispatch_id();
         Var<Guide> g;
         g.position = make_float4(0.f); g.normal_roughness = make_float4(0.f, 0.f, 1.f, 1.f);
-        g.diffuse_factor = make_float4(1.f); g.specular_factor = make_float4(1.f);
-        g.identity = make_uint4(0u); g.motion = p.motion.read(i);
+        g.diffuse_factor = make_float4(1.f, 1.f, 1.f, 0.f); g.specular_factor = g.diffuse_factor;
+        g.identity = make_uint4(0u); Float2 motion = p.motion.read(i);
         TriangleHitVar hit = p.visibility.read(i);
         Float3 eye = camera->device_position(), prefix = make_float3(1.f);
         Bool valid = hit->is_hit();
@@ -62,7 +75,7 @@ void ReBLUR::compile() noexcept {
             eye = plane.extension.view_pos; prefix = plane.extension.throughput;
             valid = plane.valid != 0u && hit->is_hit();
             branch = plane.branch_sequence; instance_hash = guide_instance(hit.inst_id, plane.instance_hash);
-            g.motion = plane.motion;
+            motion = plane.motion;
         } $else {
             $if(p.stable != 0u) {
                 surface = p.surfaces.read(i); hit = surface.hit;
@@ -88,8 +101,9 @@ void ReBLUR::compile() noexcept {
                     bsdf.reuse_material(unused_d, unused_s, roughness);
                     Float r = sqrt(saturate(roughness.x * roughness.y));
                     g.normal_roughness = make_float4(bsdf.shading_frame().normal(), r);
-                    g.diffuse_factor = make_float4(safe_rgb(spectrum()->linear_srgb(d, swl) * prefix), 0.f);
-                    g.specular_factor = make_float4(safe_rgb(spectrum()->linear_srgb(s, swl) * prefix), 0.f);
+                    Float3 diffuse_factor = safe_rgb(spectrum()->linear_srgb(d, swl) * prefix);
+                    Float3 specular_factor = safe_rgb(spectrum()->linear_srgb(s, swl) * prefix);
+                    for (uint c = 0; c < 3u; ++c) { g.diffuse_factor[c] = diffuse_factor[c]; g.specular_factor[c] = specular_factor[c]; }
                     // Independent lobe guide rays preserve valid black samples without changing estimator RNG.
                     for (bool spec : {false, true}) {
                         Float4 signal = spec ? p.specular.read(i) : p.diffuse.read(i);
@@ -119,7 +133,8 @@ void ReBLUR::compile() noexcept {
             // same film sample. Keep it unchanged: a static camera has zero
             // motion even when the subpixel sample moves within the pixel.
         };
-        p.output.write(i, g);
+        g.diffuse_factor.w = motion.x; g.specular_factor.w = motion.y;
+        output.write(i, g);
     };
     prepare_guides_ = device().compile(guides, "REBLUR-PrepareGuides");
     Kernel publish = [](Var<PublishParam> p) {

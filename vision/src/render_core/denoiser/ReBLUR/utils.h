@@ -2,6 +2,15 @@
 #include "filter.h"
 
 namespace vision::reblur {
+// Match NRD's FP16 signal/history storage, keeping all filtering in Float.
+// Signed YCoCg chroma must survive conversion; reprojection can overshoot
+// the packed input range, so saturate only at the storage boundary.
+inline Half4 store_half(Float4 value) {
+    return make_half4(clamp(value, make_float4(-65504.f), make_float4(65504.f)));
+}
+inline Half2 store_half(Float2 value) {
+    return make_half2(clamp(value, make_float2(-65504.f), make_float2(65504.f)));
+}
 inline Uint guide_instance(Uint receiver, Uint prefix) {
     // A stable prefix identifies the path to the plane, not its final receiver.
     return (prefix * 1664525u) ^ (receiver + 1013904223u);
@@ -57,6 +66,10 @@ inline Uint pixel_index(Int2 p, Uint2 size) {
     return q.y * size.x + q.x;
 }
 inline Bool in_screen(Int2 p, Uint2 size) { return all(p >= 0) && all(p < make_int2(size)); }
+inline Bool active_tile(const Var<FilterParam> &p) {
+    Uint2 tile = dispatch_idx().xy() / 16u;
+    return p.tiles.read(tile.y * ((p.size.x + 15u) / 16u) + tile.x) != 0u;
+}
 template<typename T>
 inline Bool valid_guide(const Var<T> &g) { return g.identity.w != 0u && g.position.w > 0.f; }
 template<typename T>

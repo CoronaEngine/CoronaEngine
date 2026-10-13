@@ -16,6 +16,8 @@ Float catrom(Float x) {
 }
 
 Reprojected reproject(const Var<FilterParam> &p, const Var<Guide> &g, Float2 raster) {
+    auto previous_geometry = p.prev_guide.soa_view_var<GeometryHistory>();
+    auto previous_history = p.prev_history.soa_view_var<PersistentHistory>();
     Reprojected result;
     result.h.diffuse = make_float4(0.f); result.h.specular = make_float4(0.f);
     result.h.fast_count = make_float4(0.f); result.h.stabilized = make_float4(0.f);
@@ -26,21 +28,24 @@ Reprojected reproject(const Var<FilterParam> &p, const Var<Guide> &g, Float2 ras
                                 (1.f - f.x) * f.y, f.x * f.y);
     $for(k, 4u) {
         Int2 q = base + make_int2(k % 2u, k / 2u);
-        $if(in_screen(q, p.size)) {
-            Uint j = pixel_index(q, p.size); auto old_g = p.prev_guide.read(j);
+        $if(in_screen(q, p.size) && weights[k] > 0.f) {
+            Uint j = pixel_index(q, p.size); auto old_g = previous_geometry.read(j);
             Float delta = abs(dot(g.normal_roughness.xyz(), old_g.position.xyz() - g.position.xyz()));
             // Plane distance is measured in world units, scaled by the current frustum.
             Bool accepts = same_surface(g, old_g) && delta < .01f * frustum_size(p, g) &&
                            dot(g.normal_roughness.xyz(), old_g.normal_roughness.xyz()) > .5f;
-            Float w = weights[k] * accepts.cast<float>();
-            auto h = p.prev_history.read(j);
-            result.h.diffuse += h.diffuse * w; result.h.specular += h.specular * w;
-            result.h.fast_count += h.fast_count * w;
-            result.h.stabilized += make_float4(h.stabilized, 0.f, 0.f) * w;
-            result.h.tracking.w += h.hit_distance * w;
-            result.normal += old_g.normal_roughness.xyz() * w;
-            result.roughness += old_g.normal_roughness.w * w;
-            result.quality += w;
+            // Invalid tiles only invalidate geometry; their history need not be read or cleared.
+            $if(accepts) {
+                Float w = weights[k];
+                auto h = previous_history.read(j);
+                result.h.diffuse += make_float4(h.diffuse) * w; result.h.specular += make_float4(h.specular) * w;
+                result.h.fast_count += make_float4(h.fast_count) * w;
+                result.h.stabilized += make_float4(make_float2(h.stabilized), 0.f, 0.f) * w;
+                result.h.tracking.w += h.hit_distance * w;
+                result.normal += old_g.normal_roughness.xyz() * w;
+                result.roughness += old_g.normal_roughness.w * w;
+                result.quality += w;
+            };
         };
     };
     Float inv = 1.f / max(result.quality, 1e-6f);
@@ -55,13 +60,16 @@ Reprojected reproject(const Var<FilterParam> &p, const Var<Guide> &g, Float2 ras
         $for(y, -1, 3) {
             $for(x, -1, 3) {
                 Int2 q = base + make_int2(x, y);
-                Uint j = pixel_index(q, p.size); auto ng = p.prev_guide.read(j);
+                Uint j = pixel_index(q, p.size); auto ng = previous_geometry.read(j);
                 Float plane = abs(dot(g.normal_roughness.xyz(), ng.position.xyz() - g.position.xyz()));
-                all_valid &= in_screen(q, p.size) && same_surface(g, ng) &&
-                             plane < .01f * frustum_size(p, g) && dot(g.normal_roughness.xyz(), ng.normal_roughness.xyz()) > .9f;
+                Bool accepts = in_screen(q, p.size) && same_surface(g, ng) &&
+                               plane < .01f * frustum_size(p, g) && dot(g.normal_roughness.xyz(), ng.normal_roughness.xyz()) > .9f;
+                all_valid &= accepts;
                 Float w = catrom(x.cast<float>() - f.x) * catrom(y.cast<float>() - f.y);
-                auto h = p.prev_history.read(j);
-                d += h.diffuse * w; s += h.specular * w;
+                $if(accepts && w != 0.f) {
+                    auto h = previous_history.read(j);
+                    d += make_float4(h.diffuse) * w; s += make_float4(h.specular) * w;
+                };
             };
         };
         $if(all_valid) {
@@ -75,17 +83,29 @@ Reprojected reproject(const Var<FilterParam> &p, const Var<Guide> &g, Float2 ras
 
 void Filter::compile_temporal(Device &device) {
     Kernel temporal = [](Var<FilterParam> p) {
+        ocarina::configure_block(32u, 4u);
+        auto guides = p.guide.soa_view_var<Guide>();
+        auto current_history = p.history.soa_view_var<TemporalData>();
         Uint i = dispatch_id(); Int2 pixel = make_int2(dispatch_idx().xy());
-        auto g = p.guide.read(i);
-        Float4 d = p.src_diffuse.read(i), s = p.src_specular.read(i);
+        $if(!active_tile(p)) {
+            Var<TemporalData> empty;
+            empty.fast_count = make_half4(0.f); empty.stabilized = make_half4(0.f);
+            empty.tracking = make_float4(0.f);
+            current_history.write(i, empty);
+            // Pack and PrePass already zeroed both ping-pong signals here.
+            $return();
+        };
+        auto g = guides.read(i);
+        Float4 d = make_float4(p.src_diffuse.read(i)), s = make_float4(p.src_specular.read(i));
         Var<History> out{};
         out.diffuse = d; out.specular = s;
         out.fast_count = make_float4(d.x, s.x, 0.f, 0.f);
         out.stabilized = make_float4(d.x, s.x, 0.f, 0.f);
         out.tracking = make_float4(make_float2(pixel) + .5f, 0.f, p.tracking.read(i));
         $if(valid_guide(g) && p.history_valid != 0u) {
+            Float2 motion = make_float2(g.diffuse_factor.w, g.specular_factor.w);
             Float2 current = make_float2(pixel) + .5f;
-            Float2 surface_raster = current - g.motion;
+            Float2 surface_raster = current - motion;
             auto surface = reproject(p, g, surface_raster);
             Float diff_count = min(surface.h.fast_count.z * surface.quality, p.max_history);
             Float3 X = g.position.xyz(), N = g.normal_roughness.xyz();
@@ -97,9 +117,9 @@ void Filter::compile_temporal(Device &device) {
 
             // Curvature along the direction of camera motion (zero for a static view).
             Float curvature = 0.f;
-            $if(length(g.motion) > .01f) {
-                Int2 q = pixel + make_int2(round(g.motion / max(length(g.motion), 1e-6f) * 2.f));
-                auto ng = p.guide.read(pixel_index(q, p.size));
+            $if(length(motion) > .01f) {
+                Int2 q = pixel + make_int2(round(motion / max(length(motion), 1e-6f) * 2.f));
+                auto ng = guides.read(pixel_index(q, p.size));
                 Float3 edge = ng.position.xyz() - X;
                 $if(in_screen(q, p.size) && same_surface(g, ng) && dot(edge, edge) > 1e-10f) {
                     curvature = dot(ng.normal_roughness.xyz() - N, edge) / dot(edge, edge);
@@ -116,7 +136,7 @@ void Filter::compile_temporal(Device &device) {
             Float2 virtual_raster = project_raster(p.prev_world_to_raster, X - V * focused * Dfactor) + reprojection_offset;
             // Reject unstable concave-curvature acceleration before sampling history.
             Float2 flat_raster = project_raster(p.prev_world_to_raster, X - V * hit * Dfactor) + reprojection_offset;
-            $if(length(virtual_raster - flat_raster) > 4.f * length(g.motion) + 1.f) {
+            $if(length(virtual_raster - flat_raster) > 4.f * length(motion) + 1.f) {
                 curvature = 0.f; virtual_raster = flat_raster;
             };
             auto virtual_h = reproject(p, g, virtual_raster);
@@ -165,9 +185,10 @@ void Filter::compile_temporal(Device &device) {
             d = make_float4(0.f); s = make_float4(0.f);
         };
         Var<TemporalData> current;
-        current.fast_count = out.fast_count; current.stabilized = out.stabilized; current.tracking = out.tracking;
-        p.history.write(i, current);
-        p.dst_diffuse.write(i, d); p.dst_specular.write(i, s);
+        current.fast_count = store_half(out.fast_count); current.stabilized = store_half(out.stabilized);
+        current.tracking = out.tracking;
+        current_history.write(i, current);
+        p.dst_diffuse.write(i, store_half(d)); p.dst_specular.write(i, store_half(s));
     };
     temporal_ = device.compile(temporal, "REBLUR-TemporalAccumulation");
 }

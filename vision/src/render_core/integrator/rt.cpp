@@ -103,7 +103,8 @@ public:
         if (!denoiser_runtime_disabled() && denoiser_ && denoiser_->enabled()) {
             denoiser_->prepare();
         }
-        cache_->prepare();
+        // This integrator does not query/update a radiance cache yet. Preparing
+        // the SHARC placeholder reserves 176 MiB without affecting transport.
         Pipeline *rp = pipeline();
 
         frame_buffer().prepare_screen_buffer(specular_buffer_);
