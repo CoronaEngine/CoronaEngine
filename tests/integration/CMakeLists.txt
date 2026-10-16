@@ -38,7 +38,8 @@ if(CORONA_BUILD_VISION)
     target_link_libraries(corona_vision_relax_tests PRIVATE vision-relax-filter)
     add_test(NAME VisionRelaxHelpers COMMAND corona_vision_relax_tests helpers)
     add_test(NAME VisionRelaxPrepass COMMAND corona_vision_relax_tests prepass)
-    set_tests_properties(VisionRelaxHelpers VisionRelaxPrepass PROPERTIES
+    add_test(NAME VisionRelaxTemporal COMMAND corona_vision_relax_tests temporal)
+    set_tests_properties(VisionRelaxHelpers VisionRelaxPrepass VisionRelaxTemporal PROPERTIES
         WORKING_DIRECTORY "$<TARGET_FILE_DIR:ocarina-backend-cuda>"
         RUN_SERIAL TRUE TIMEOUT 120)
 

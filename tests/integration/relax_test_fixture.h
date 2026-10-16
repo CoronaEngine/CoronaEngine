@@ -41,6 +41,7 @@ struct Fixture {
         param.raw_diffuse = diffuse.descriptor(); param.raw_specular = specular.descriptor();
         param.output_diffuse = output_d.descriptor(); param.output_specular = output_s.descriptor();
         param.unproject = .025f;
+        param.history_valid = 1u;
         param.world_to_raster = make_float4x4(make_float4(20.f, 0.f, 0.f, 0.f), make_float4(0.f, 20.f, 0.f, 0.f),
             make_float4(0.f, 0.f, 1.f, 0.f), make_float4(size.x * .5f, size.y * .5f, 0.f, 1.f));
         param.prev_world_to_raster = param.world_to_raster;
@@ -56,3 +57,4 @@ struct Fixture {
 }
 
 void check_relax_prepass(ocarina::Device &, ocarina::Stream &);
+void check_relax_temporal(ocarina::Device &, ocarina::Stream &);

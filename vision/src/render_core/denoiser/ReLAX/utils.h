@@ -35,6 +35,22 @@ inline Float plane_weight(const Var<Guide> &a, const Var<Guide> &b, const Float 
     return select(d < threshold * a.position.w, 1.f, 0.f);
 }
 
+inline Float2 project_pixel(const Float4x4 &matrix, const Float3 &position) {
+    Float4 clip = matrix * make_float4(position, 1.f);
+    Float w = select(abs(clip.w) > 1e-8f, clip.w, 1e-8f);
+    return clip.xy() / w;
+}
+inline Float encoding_normal_weight(const Float3 &a, const Float3 &b, const Float &angle,
+                                    const Float &curvature_angle, float threshold, bool remap) {
+    Float w = smooth01(1.f - (acos_approx(dot(a, b)) - curvature_angle - threshold) / max(angle, 1e-6f));
+    return remap ? smooth01((w - .05f) / .9f) : w;
+}
+inline Float thin_lens(const Float &distance, const Float &curvature) {
+    Float denominator = 2.f * curvature * distance + 1.f;
+    denominator = select(abs(denominator) < 1e-6f, select(denominator < 0.f, -1e-6f, 1e-6f), denominator);
+    return distance / denominator;
+}
+
 inline Float4 pack_signal(const Float4 &signal, const Float3 &factor) {
     Float3 rgb = signal.xyz() / max(factor, make_float3(.01f));
     Bool invalid = any(ocarina::isnan(rgb)) || any(ocarina::isinf(rgb));

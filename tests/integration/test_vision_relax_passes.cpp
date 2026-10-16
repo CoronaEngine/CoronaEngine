@@ -1,5 +1,74 @@
 #include "relax_test_fixture.h"
 #include <iostream>
+#include <limits>
+
+void check_relax_temporal(ocarina::Device &device, ocarina::Stream &stream) {
+    using namespace relax_test;
+    Fixture f(device, stream, make_uint2(32u), 3u);
+    f.filter.settings.diffuse_prepass = f.filter.settings.specular_prepass = 0.f;
+    std::vector<vision::relax::TemporalData> history(f.n);
+    stream << f.filter.history().upload(history.data()) << synchronize() << commit();
+    auto download = [&] { stream << f.filter.history().download(history.data()) << synchronize() << commit(); };
+    f.run(0u); download();
+    expect(history[528].meta.x == 1.f, "first frame must publish one frame of RELAX history");
+    for (uint frame = 1; frame < 64u; ++frame) {
+        for (auto &g : f.guides) g.motion = make_float2((frame & 1u) ? .25f : -.25f, 0.f);
+        f.run(frame);
+    }
+    download();
+    expect(history[528].meta.x > 29.f && history[528].meta.x <= 31.f,
+           "stationary history must grow to the NRD maximum plus current frame");
+    expect(std::abs(f.got_d[528].x - .2f) < 1e-4f && std::abs(f.got_s[528].z - .1f) < 1e-4f,
+           "temporal moments and both histories must preserve constant RGB");
+    for (auto &g : f.guides) g.identity.z = 91u;
+    for (auto &d : f.d) d = make_float4(4.f, 0.f, 0.f, 7.f);
+    f.run(64u); download();
+    expect(history[528].meta.x == 1.f && std::abs(f.got_d[528].x - 4.f) < 1e-4f,
+           "changed branch must discard incompatible previous illumination");
+    f.run(65u, 1u); download();
+    expect(history[528].meta.x == 1.f, "a new layer must not consume another layer's history");
+    f.run(68u); download();
+    expect(history[528].meta.x == 1.f, "frame gaps must invalidate history");
+    f.filter.reset(); f.run(69u); download();
+    expect(history[528].meta.x == 1.f, "explicit camera or scene reset must discard history");
+    for (auto &g : f.guides) { g.identity.w = 0u; g.position.w = 0.f; }
+    f.run(70u); download();
+    expect(history[528].meta.x == 0.f && f.got_d[528].x == 0.f, "empty layers must clear temporal history");
+
+    Fixture mirror(device, stream, make_uint2(32u));
+    mirror.filter.settings.diffuse_prepass = mirror.filter.settings.specular_prepass = 0.f;
+    for (uint i = 0; i < mirror.n; ++i) {
+        mirror.guides[i].normal_roughness.w = 0.f;
+        mirror.s[i] = make_float4(float(i % 32u), 0.f, 0.f, 5.f);
+    }
+    mirror.run(0u);
+    for (auto &s : mirror.s) s = make_float4(0.f, 0.f, 0.f, 5.f);
+    mirror.run(1u);
+    expect(mirror.got_s[528].x > 10.9f && std::isfinite(mirror.got_s[528].x),
+           "mirror history must use virtual reprojection instead of only the surface pixel");
+
+    Fixture motion(device, stream, make_uint2(32u));
+    motion.filter.settings.diffuse_prepass = motion.filter.settings.specular_prepass = 0.f;
+    motion.filter.settings.diffuse_fast_history = 30.f;
+    motion.filter.settings.history_fix_frames = 0.f;
+    motion.filter.settings.antilag_acceleration = motion.filter.settings.antilag_reset = 0.f;
+    for (uint i = 0; i < motion.n; ++i) motion.d[i] = make_float4(float(i % 32u), 0.f, 0.f, 7.f);
+    motion.run(0u);
+    for (auto &g : motion.guides) g.motion = make_float2(1.f, 0.f);
+    for (auto &d : motion.d) d = make_float4(0.f, 0.f, 0.f, 7.f);
+    motion.run(1u);
+    std::vector<vision::relax::PersistentHistory> persistent(motion.n);
+    stream << motion.filter.persistent_history().download(persistent.data()) << synchronize() << commit();
+    expect(std::abs(persistent[264].diffuse.x - 3.5f) < 1e-4f,
+           "positive one-pixel motion must reproject x=8 to previous x=7 with alpha one half");
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    for (auto &h : persistent) { h.diffuse = h.specular = h.diffuse_fast = h.specular_fast = make_float4(nan); h.length_hit = make_float2(nan); }
+    motion.filter.reset();
+    stream << motion.filter.persistent_history().upload(persistent.data()) << synchronize() << commit();
+    motion.run(2u);
+    for (auto c : motion.got_s) expect(std::isfinite(c.x), "reset must not read poisoned previous illumination");
+    std::cout << "PASS: RELAX slow/fast histories, virtual motion, layer identity and invalidation\n";
+}
 
 void check_relax_prepass(ocarina::Device &device, ocarina::Stream &stream) {
     using namespace relax_test;

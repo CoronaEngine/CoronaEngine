@@ -37,12 +37,14 @@ void Filter::prepare(Device &device, uint2 size, uint layer_count) {
 void Filter::compile(Device &device) {
     compile_modulation(device);
     compile_prepass(device);
+    compile_temporal(device);
     reset();
 }
 
 CommandBatch Filter::dispatch(FilterParam p, uint layer) {
     auto &state = layers_[layer];
     p.size = size_; p.settings = settings;
+    p.disocclusion_threshold += (1.f + p.jitter_delta) / float(size_.y);
     p.history_valid &= state.frame != ~0u && state.frame + 1u == p.frame;
     p.guide = guide_.descriptor(); p.prev_guide = state.geometry.descriptor();
     p.prev_history = state.history.descriptor(); p.history = temporal_data_.descriptor();
@@ -62,6 +64,10 @@ CommandBatch Filter::dispatch(FilterParam p, uint layer) {
     bind(src, src ^ 1u);
     commands << prepass_(p).dispatch(size_);
     p.src_diffuse = prepass_diffuse_.descriptor(); p.src_specular = prepass_specular_.descriptor();
+    p.dst_diffuse = diffuse_[0].descriptor(); p.dst_specular = specular_[0].descriptor();
+    commands << temporal_(p).dispatch(size_);
+    bind(0u, 1u);
+    commands << publish_(p).dispatch(size_);
     commands << unpack_(p).dispatch(size_);
     state.frame = p.frame;
     return commands;

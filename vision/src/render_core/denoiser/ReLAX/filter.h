@@ -38,8 +38,9 @@ struct FilterParam {
     uint2 size{};
     uint frame{}, history_valid{}, step{1u}, first{}, last{};
     float4x4 world_to_raster{make_float4x4(1.f)}, prev_world_to_raster{make_float4x4(1.f)};
+    float4x4 prev_world_to_view{make_float4x4(1.f)};
     array_float3 camera{}, prev_camera{};
-    float unproject{1.f}, framerate_scale{1.f}, disocclusion_threshold{.01f};
+    float unproject{1.f}, framerate_scale{1.f}, disocclusion_threshold{.01f}, jitter_delta{};
     float4 rotator{1.f, 0.f, 0.f, 1.f};
 };
 }
@@ -51,8 +52,8 @@ OC_STRUCT(vision::relax, TemporalData, diffuse_fast, specular_fast, meta) {};
 OC_PARAM_STRUCT(vision::relax, FilterParam, settings, guide, prev_guide, prev_history, history,
                 raw_diffuse, raw_specular, output_diffuse, output_specular, prepass_diffuse, prepass_specular,
                 src_diffuse, src_specular, dst_diffuse, dst_specular, tiles, size, frame, history_valid, step, first, last,
-                world_to_raster, prev_world_to_raster, camera, prev_camera, unproject, framerate_scale,
-                disocclusion_threshold, rotator) {};
+                world_to_raster, prev_world_to_raster, prev_world_to_view, camera, prev_camera, unproject, framerate_scale,
+                disocclusion_threshold, jitter_delta, rotator) {};
 
 namespace vision::relax {
 // The scene adapter and GPU tests execute the same kernels and resource graph.
@@ -70,8 +71,10 @@ class Filter {
     Buffer<float4> prepass_diffuse_, prepass_specular_;
     Buffer<uint> tiles_;
     Shader<void(FilterParam)> pack_, unpack_, classify_, reconstruct_, prepass_;
+    Shader<void(FilterParam)> temporal_, publish_;
     void compile_modulation(Device &device);
     void compile_prepass(Device &device);
+    void compile_temporal(Device &device);
 
 public:
     Settings settings;
@@ -81,6 +84,7 @@ public:
     [[nodiscard]] uint2 resolution() const noexcept { return size_; }
     [[nodiscard]] BufferView<Guide> guides() const { return guide_.view(); }
     [[nodiscard]] BufferView<TemporalData> history() const { return temporal_data_.view(); }
+    [[nodiscard]] BufferView<PersistentHistory> persistent_history(uint layer = 0u) const { return layers_[layer].history.view(); }
     [[nodiscard]] BufferView<float4> prepass_diffuse() const { return prepass_diffuse_.view(); }
     [[nodiscard]] BufferView<float4> prepass_specular() const { return prepass_specular_.view(); }
     [[nodiscard]] CommandBatch dispatch(FilterParam param, uint layer = 0u);
