@@ -1,4 +1,5 @@
 #include "render_core/denoiser/ReLAX/utils.h"
+#include "render_core/integrator/ReSTIR/denoiser_signals.h"
 #include "rhi/context.h"
 #include <array>
 #include <cmath>
@@ -24,6 +25,37 @@ void expect_near(float actual, float expected, const char *message) {
 }
 
 void check_helpers(Device &device, Stream &stream) {
+    Kernel distances = [](BufferVar<float4> out) {
+        const std::array<float, 5> scales{1.f, 1e-4f, 1e-6f, 1e-8f, 0.f};
+        for (uint i = 0; i < scales.size(); ++i) {
+            // Both lobe distances are actual receiver endpoints, including black samples.
+            Float2 merged = vision::denoiser_signals::merge_hit_distances(make_float2(scales[i], 3.f * scales[i]), Float{10.f},
+                make_float2(0.f, scales[i]), Float{30.f});
+            Float4 accumulated = vision::denoiser_signals::accumulate_lobe(make_float4(scales[i], scales[i], scales[i], 10.f),
+                make_float3(3.f * scales[i]), Float{30.f});
+            out.write(i, make_float4(merged, accumulated.w, 0.f));
+        }
+        out.write(5u, make_float4(
+            vision::denoiser_signals::merge_hit_distances(make_float2(1.f), Float{0.f}, make_float2(1e-8f), Float{30.f}),
+            vision::denoiser_signals::merge_hit_distances(make_float2(0.f), Float{10.f}, make_float2(0.f), Float{0.f})));
+    };
+    auto distance_shader = device.compile(distances, "RELAX-ReSTIR-distance-validity");
+    auto distance_output = device.create_buffer<float4>(6u);
+    std::array<float4, 6> actual_distances{};
+    stream << distance_shader(distance_output).dispatch(1u) << distance_output.download(actual_distances.data()) << synchronize() << commit();
+    for (uint i = 0; i < actual_distances.size(); ++i) {
+        std::cout << "distance scale " << i << ": " << actual_distances[i].x << ',' << actual_distances[i].y << ',' << actual_distances[i].z << '\n';
+    }
+    for (uint i = 0; i < 4u; ++i) {
+        expect_near(actual_distances[i].x, 10.f, "dim/fractionally weighted single endpoint must retain distance");
+        expect_near(actual_distances[i].y, 15.f, "distance mixing must be independent of the common brightness/factor scale");
+        expect_near(actual_distances[i].z, 25.f, "layer accumulation must normalize any positive brightness sum");
+    }
+    expect_near(actual_distances[4].x, 30.f, "black producer samples must retain a valid endpoint");
+    expect_near(actual_distances[4].y, 30.f, "black specular samples must retain a valid endpoint");
+    expect_near(actual_distances[4].z, 30.f, "black layer accumulation must retain a valid endpoint");
+    expect_near(actual_distances[5].x, 30.f, "an invalid/disabled endpoint must not dilute a valid endpoint");
+    expect_near(actual_distances[5].z, 10.f, "a black valid endpoint must survive an invalid/disabled peer");
     const float nan = std::numeric_limits<float>::quiet_NaN();
     const float inf = std::numeric_limits<float>::infinity();
     std::array<float4, 8> signals{

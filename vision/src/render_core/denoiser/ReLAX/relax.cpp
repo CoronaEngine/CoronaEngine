@@ -97,6 +97,7 @@ void ReLAX::compile() noexcept {
         $if(valid) {
             auto it = pipeline()->geometry().compute_surface_interaction(hit, eye);
             g.position = make_float4(it.pos, camera->linear_depth(it.pos));
+            g.depth_position = make_float4(it.pos, 1.f);
             g.identity = make_uint4(instance_hash, it.material_id(), branch, 1u);
             $if(it.has_material()) {
                 SampledWavelengths swl{spectrum()->dimension()};
@@ -134,6 +135,7 @@ void ReLAX::compile() noexcept {
             };
             $if(p.stable != 0u) {
                 g.position = make_float4(surface.virtual_position, camera->linear_depth(surface.depth_position));
+                g.depth_position = make_float4(surface.depth_position, 1.f);
                 g.normal_roughness = make_float4(normalize(surface.virtual_normal), g.normal_roughness.w);
             };
             // Producer motion is a displacement between projections of the

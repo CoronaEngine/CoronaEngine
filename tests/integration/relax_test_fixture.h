@@ -34,6 +34,7 @@ struct Fixture {
             auto &g = guides[y * size.x + x];
             g.position = make_float4((float(x) + .5f - size.x * .5f) * .05f,
                                     (float(y) + .5f - size.y * .5f) * .05f, 2.f, 2.f);
+            g.depth_position = g.position;
             g.normal_roughness = make_float4(0.f, 0.f, -1.f, .4f);
             g.diffuse_factor = g.specular_factor = make_float4(1.f);
             g.identity = make_uint4(1u, 2u, 3u, 1u);

@@ -124,7 +124,7 @@ void Filter::compile_temporal(Device &device) {
             Float pixel_size = p.unproject * g.position.w;
             Float slope = 1.f / lerp(saturate(parallax / 30.f), lerp(nov, .05f, 1.f), 1.f);
             Float threshold = saturate(p.disocclusion_threshold * slope) * pixel_size * cast<float>(min(p.size.x, p.size.y));
-            Float expected_z = abs((p.prev_world_to_view * make_float4(g.position.xyz(), 1.f)).z);
+            Float expected_z = abs((p.prev_world_to_view * make_float4(g.depth_position.xyz(), 1.f)).z);
             auto surface = reproject(p, g, previous_pixel, expected_z, max(threshold - 1e-6f, 0.f), false);
 
             Float3 averaged_normal = make_float3(0.f);

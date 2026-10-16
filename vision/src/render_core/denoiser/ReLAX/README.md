@@ -43,7 +43,8 @@ resize、投影改变、场景重编译和层开关均处理资源准备及历�
 ## 信号与管线
 
 输入是线性 RGB 和 **世界空间 hit distance**，w=0 表示未采样，不做距离归一化。
-有效黑色样本保留正距离；miss 使用场景尺度的有效距离。材质按 RGB BSDF 拆分，
+有效黑色样本保留正距离；miss 使用场景尺度的有效距离。ReSTIR 距离合并按实际
+正权重归一化，全黑时保留有效端点，关闭的 DI/GI 不提供端点。材质按 RGB BSDF 拆分，
 方向相关的 diffuse/specular factor 用于解调与重调制。缺失 lobe 的 guide ray
 使用独立维度 1024，不向原 estimator 再贡献能量。primary sky/emission 走 bypass。
 
@@ -56,7 +57,8 @@ buffer 跨层顺序复用。发布历史发生在空间滤波之前，coverage �
 像素，均不回流 RELAX illumination history。FrameBuffer 的中性 `denoiser_*`
 原始 lobe buffer 在 Pack 冻结输入后复用为输出，避免另分配输出副本。
 
-`position.w` 为正的轴向 viewZ，stable plane 的 viewZ 来自 `depth_position`，
+`position.w` 为正的轴向 viewZ；`depth_position` 单独保存世界空间 depth anchor，
+当前和上一相机的深度均由该 anchor 计算，避免折射后与 virtual position 混用。
 virtual position/normal 用于虚拟运动。motion 为 current−previous raster pixels。
 Ocarina 插值顺序是 `lerp(t,a,b)`；同类型 swizzle 赋值可能覆盖 w，因此保留矩的
 RGB 写入使用显式 float4。12-tap Catmull-Rom 按 NRD 省略四角并重新归一化。
@@ -64,7 +66,8 @@ RGB 写入使用显式 float4。12-tap Catmull-Rom 按 NRD 省略四角并重新
 ## 验证与复现
 
 CUDA 后端验证覆盖 sanitization、黑色距离、解调、采样、prepass/reconstruction、
-surface/virtual reprojection、短历史修复、亮灭突变、firefly、二阶矩及方差传播、
+surface/virtual reprojection、折射 anchor 与虚拟位置分离、极暗/黑色端点有效性、
+短历史修复、亮灭突变、firefly、二阶矩及方差传播、
 2/5/8 轮 À-trous、三层归属/交换/消失、重复/跳帧和真实 PT/ReSTIR 生命周期。
 真实 producer 用例要求未过滤 `diffuse+specular+bypass` 与原 estimator 在 1e-4
 相对/绝对容差内一致。场景测试断言实际启用且准备 ReLAX，防止误测 raw。

@@ -12,6 +12,7 @@
 #include "ReSTIR/direct.h"
 #include "ReSTIR/indirect.h"
 #include "ReSTIR/stable_planes.h"
+#include "ReSTIR/denoiser_signals.h"
 #include <cstdlib>
 #include <fstream>
 
@@ -209,20 +210,16 @@ public:
                 Float3 diff = (d - sd.xyz()) * di + (g - sg.xyz()) * gi;
                 Float2 wd = make_float2(max(luminance(d - sd.xyz()), 0.f) * di, max(luminance(sd.xyz()), 0.f) * di);
                 Float2 wg = make_float2(max(luminance(g - sg.xyz()), 0.f) * gi, max(luminance(sg.xyz()), 0.f) * gi);
-                Float2 dist = (wd * sd.w + wg * sg.w) / max(wd + wg, make_float2(1e-6f));
+                Float2 dist = denoiser_signals::merge_hit_distances(wd, select(di > 0.f, sd.w, 0.f),
+                                                                  wg, select(gi > 0.f, sg.w, 0.f));
                 Float4 old_d = make_float4(0.f), old_s = make_float4(0.f), old_b = make_float4(0.f);
                 $if(layered != 0u) {
                     old_d = frame_buffer().denoiser_diffuse().read(address);
                     old_s = frame_buffer().denoiser_specular().read(address);
                     old_b = frame_buffer().denoiser_bypass().read(address);
                 };
-                auto combine_hit = [](Float4 old, Float3 value, Float hit) {
-                    Float a = max(luminance(old.xyz()), 0.f), b = max(luminance(value), 0.f);
-                    Float h = select(a + b > 1e-5f, (a * old.w + b * hit) / max(a + b, 1e-5f), max(old.w, hit));
-                    return make_float4(old.xyz() + value, h);
-                };
-                frame_buffer().denoiser_diffuse().write(address, combine_hit(old_d, diff, dist.x));
-                frame_buffer().denoiser_specular().write(address, combine_hit(old_s, spec, dist.y));
+                frame_buffer().denoiser_diffuse().write(address, denoiser_signals::accumulate_lobe(old_d, diff, dist.x));
+                frame_buffer().denoiser_specular().write(address, denoiser_signals::accumulate_lobe(old_s, spec, dist.y));
                 frame_buffer().denoiser_bypass().write(address, old_b + make_float4(bypass * di, 0.f));
             };
             prepare_denoiser_ = device().compile(pack_lobes, "Denoiser-MergeReSTIRLobes");

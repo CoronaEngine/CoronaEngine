@@ -7,7 +7,8 @@
 
 namespace vision::relax {
 struct Guide {
-    float4 position{}; // World position, positive axial viewZ; w=0 for invalid.
+    float4 position{}; // Virtual world position, positive anchor axial viewZ; w=0 for invalid.
+    float4 depth_position{}; // Actual depth anchor in world space; distinct after refraction.
     float4 normal_roughness{};
     float4 diffuse_factor{1.f, 1.f, 1.f, 0.f}, specular_factor{1.f, 1.f, 1.f, 0.f};
     float2 motion{}; // Current minus previous raster coordinates, in pixels.
@@ -46,7 +47,7 @@ struct FilterParam {
 };
 }
 
-OC_STRUCT(vision::relax, Guide, position, normal_roughness, diffuse_factor, specular_factor, motion, identity) {};
+OC_STRUCT(vision::relax, Guide, position, depth_position, normal_roughness, diffuse_factor, specular_factor, motion, identity) {};
 OC_STRUCT(vision::relax, GeometryHistory, position, normal_roughness, identity) {};
 OC_STRUCT(vision::relax, PersistentHistory, diffuse, specular, diffuse_fast, specular_fast, length_hit) {};
 OC_STRUCT(vision::relax, TemporalData, diffuse_fast, specular_fast, meta) {};

@@ -187,6 +187,18 @@ void check_relax_temporal(ocarina::Device &device, ocarina::Stream &stream) {
     f.run(70u); download();
     expect(history[528].meta.x == 0.f && f.got_d[528].x == 0.f, "empty layers must clear temporal history");
 
+    Fixture refracted(device, stream, make_uint2(32u));
+    refracted.filter.settings.diffuse_prepass = refracted.filter.settings.specular_prepass = 0.f;
+    // Stable-plane virtual geometry and the depth anchor differ after refraction.
+    // The stationary anchor remains at z=2 while virtual geometry is at z=4.
+    for (auto &g : refracted.guides) g.position.z = 4.f;
+    for (uint frame = 0; frame < 6u; ++frame) refracted.run(frame);
+    std::vector<vision::relax::PersistentHistory> refracted_history(refracted.n);
+    stream << refracted.filter.persistent_history().download(refracted_history.data()) << synchronize() << commit();
+    std::cout << "refracted stationary history age: " << refracted_history[528].length_hit.x << '\n';
+    expect(std::abs(refracted_history[528].length_hit.x - 6.f) < 1e-4f,
+           "stationary refracted receivers must compare previous depth using their depth anchor");
+
     Fixture mirror(device, stream, make_uint2(32u));
     mirror.filter.settings.diffuse_prepass = mirror.filter.settings.specular_prepass = 0.f;
     mirror.filter.settings.history_fix_frames = 0.f;
@@ -263,6 +275,7 @@ void check_relax_prepass(ocarina::Device &device, ocarina::Stream &stream) {
     for (uint i = 0; i < edge.n; ++i) {
         bool right = i % 32u >= 16u;
         edge.guides[i].position.z = edge.guides[i].position.w = right ? 8.f : 2.f;
+        edge.guides[i].depth_position = edge.guides[i].position;
         edge.guides[i].normal_roughness.w = right ? 1.f : 0.f;
         edge.d[i] = right ? make_float4(0.f, 0.f, 8.f, 7.f) : make_float4(2.f, 0.f, 0.f, 7.f);
     }
