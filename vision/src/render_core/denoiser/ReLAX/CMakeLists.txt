@@ -2,3 +2,4 @@ add_library(vision-relax-filter STATIC filter.cpp modulator.cpp prepass.cpp temp
     history_fix.cpp history_clamping.cpp atrous.cpp)
 target_include_directories(vision-relax-filter PUBLIC ${CMAKE_SOURCE_DIR}/vision/src)
 target_link_libraries(vision-relax-filter PUBLIC ocarina-native ocarina-include)
+vision_add_plugin(ReLAX CATEGORY denoiser DEPENDENCE vision-relax-filter SOURCES relax.cpp)

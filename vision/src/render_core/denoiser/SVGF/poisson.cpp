@@ -16,8 +16,8 @@ void PoissonFilter::prepare() noexcept {
     init_buffer_zero(device(), temp_buffer_indirect_, num, "PoissonFilter::temp_buffer_indirect");
 }
 
-void PoissonFilter::prepare_guides(uint num) noexcept {
-    if (guides_ready(num)) { return; }
+void PoissonFilter::prepare_guides(uint num, bool coverage_only) noexcept {
+    if (guides_ready(num, coverage_only)) { return; }
     if (num == 0u) {
         guide_position_ = {}; guide_normal_ = {}; guide_shading_normal_ = {}; guide_albedo_ = {};
         guide_identity_ = {}; guide_surface_ = {};
@@ -25,8 +25,12 @@ void PoissonFilter::prepare_guides(uint num) noexcept {
     }
     init_buffer_zero(device(), guide_position_, num, "PoissonFilter::guide_position");
     init_buffer_zero(device(), guide_normal_, num, "PoissonFilter::guide_normal");
-    init_buffer_zero(device(), guide_shading_normal_, num, "PoissonFilter::guide_shading_normal");
-    init_buffer_zero(device(), guide_albedo_, num, "PoissonFilter::guide_albedo");
+    if (coverage_only) {
+        guide_shading_normal_ = {}; guide_albedo_ = {};
+    } else {
+        init_buffer_zero(device(), guide_shading_normal_, num, "PoissonFilter::guide_shading_normal");
+        init_buffer_zero(device(), guide_albedo_, num, "PoissonFilter::guide_albedo");
+    }
     init_buffer_zero(device(), guide_identity_, num, "PoissonFilter::guide_identity");
     init_buffer_zero(device(), guide_surface_, num, "PoissonFilter::guide_surface");
 }

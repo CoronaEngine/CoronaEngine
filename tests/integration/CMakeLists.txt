@@ -33,6 +33,14 @@ add_test(NAME UiSurfaceRemovalRaceTests
 set_tests_properties(UiSurfaceRemovalRaceTests PROPERTIES TIMEOUT 15)
 
 if(CORONA_BUILD_VISION)
+    add_executable(corona_vision_relax_scene_tests test_vision_relax_producers.cpp)
+    target_include_directories(corona_vision_relax_scene_tests PRIVATE ${CMAKE_SOURCE_DIR}/vision/src)
+    target_link_libraries(corona_vision_relax_scene_tests PRIVATE corona::engine vision-all_libs vision-relax-filter)
+    add_test(NAME VisionRelaxPT COMMAND corona_vision_relax_scene_tests pt)
+    set_tests_properties(VisionRelaxPT PROPERTIES
+        WORKING_DIRECTORY "$<TARGET_FILE_DIR:vision-material-principled_bsdf>"
+        RUN_SERIAL TRUE TIMEOUT 300)
+
     add_executable(corona_vision_relax_tests test_vision_relax.cpp test_vision_relax_passes.cpp)
     target_include_directories(corona_vision_relax_tests PRIVATE ${CMAKE_SOURCE_DIR}/vision/src)
     target_link_libraries(corona_vision_relax_tests PRIVATE vision-relax-filter)

@@ -107,7 +107,11 @@ void configure_vision_scene_for_mode(::vision::DataWrap& data,
         }
     }
     auto& denoiser = ensure_vision_json_object(integrator_param, "denoiser");
-    denoiser["type"] = mode == CameraVisionRenderMode::SSAT ? "SSAT" : "svgf";
+    if (mode == CameraVisionRenderMode::SSAT) {
+        denoiser["type"] = "SSAT";
+    } else if (!denoiser.contains("type") || denoiser["type"] != "ReLAX") {
+        denoiser["type"] = "svgf";
+    }
     auto& denoiser_param = ensure_vision_json_object(denoiser, "param");
     denoiser_param["enabled"] = vision_render_mode_uses_denoise(mode);
     if (mode == CameraVisionRenderMode::SSAT) {

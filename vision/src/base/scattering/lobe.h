@@ -95,6 +95,11 @@ public:
     // View-independent material features for reservoir reuse, not denoiser albedos.
     virtual void reuse_material(SampledSpectrum &diffuse, SampledSpectrum &specular,
                                 Float2 &roughness) const noexcept;
+    // Denoiser-only decomposition. Combined BSDFs override these without
+    // changing the radiance estimator's evaluation or sampling distribution.
+    [[nodiscard]] virtual Float3 denoiser_specular_fraction_local(const Float3 &wo, const Float3 &wi) const noexcept;
+    virtual void denoiser_albedos(const Float &cos_theta, SampledSpectrum &diffuse, SampledSpectrum &specular) const noexcept;
+    [[nodiscard]] virtual SampledDirection sample_denoiser_wi_local(const Float3 &wo, TSampler &sampler, bool specular) const noexcept;
     virtual void mollify() noexcept {}
     [[nodiscard]] virtual const SampledWavelengths *swl() const = 0;
     [[nodiscard]] virtual Uint flag() const noexcept = 0;

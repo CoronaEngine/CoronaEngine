@@ -108,7 +108,12 @@ void IlluminationIntegrator::compile_path_tracing() noexcept {
         Float scatter_pdf = 1e16f;
         RadType3Var Ld;
         RadType3Var Ld_specular;
-        Float3 L = Integrator::Li(rs, scatter_pdf, {Ld, Ld_specular}, render_env);
+        Float3 bypass = make_float3(0.f);
+        Float2 hit_distance = make_float2(0.f);
+        HitContext context{Ld, Ld_specular};
+        const bool lobe_signals = denoiser_ && denoiser_->requires_lobe_signals();
+        if (lobe_signals) { context.bypass = &bypass; context.lobe_hitdist = &hit_distance; }
+        Float3 L = Integrator::Li(rs, scatter_pdf, context, render_env);
         // Repurposed channels for the SVGF denoiser: param.direct = DIFFUSE, param.indirect = SPECULAR.
         // diffuse = total - specular keeps diffuse + specular == L exactly (energy conserved);
         // `colors` stays the untouched total (ground truth).
@@ -116,6 +121,11 @@ void IlluminationIntegrator::compile_path_tracing() noexcept {
         param.colors.write(dispatch_id(), make_float4(L, 1.f));
         param.indirect.write(dispatch_id(), make_RadType4(Ld_specular, RadType(1.f)));
         param.direct.write(dispatch_id(), make_RadType4(make_float4(L_diffuse, RadType(1.f))));
+        if (lobe_signals) {
+            frame_buffer().denoiser_diffuse().write(dispatch_id(), make_float4(L_diffuse - bypass, hit_distance.x));
+            frame_buffer().denoiser_specular().write(dispatch_id(), make_float4(Ld_specular, hit_distance.y));
+            frame_buffer().denoiser_bypass().write(dispatch_id(), make_float4(bypass, 0.f));
+        }
     };
     path_tracing_ = device().compile(kernel, "path_tracing");
 }
@@ -196,20 +206,48 @@ Float3 IlluminationIntegrator::Li(RayState rs, Float scatter_pdf, const Uint &ma
     // We accumulate ONLY the specular channel; the diffuse channel is derived downstream as
     // (total - specular), which keeps diffuse + specular == ret exactly (energy conserving).
     Float3 ret_specular = make_float3(0.f);
-    Float spec_route = 0.f;   // 1 once the primary BSDF sample picked a glossy/specular lobe
-    Float spec_frac_b0 = 0.f; // specular fraction of the primary-hit direct lighting
-    auto route_spec = [&](const Float3 &lin, const Uint &b, const Float &frac_b0) {
+    Float3 spec_route = make_float3(0.f); // RGB ownership of the primary BSDF sample
+    Float3 spec_frac_b0 = make_float3(0.f);
+    Float3 ret_direct_specular = make_float3(0.f);
+    Float2 distance_sum = make_float2(0.f), distance_weight = make_float2(0.f), sampled_distance = make_float2(0.f);
+    Float first_distance = 0.f;
+    auto route_spec = [&](const Float3 &lin, const Uint &b, const Float3 &frac_b0, const Float &distance, bool emission) {
         if (!hc.split()) { return; }
         // bounce 0: proportional (emission/miss pass frac_b0=0 -> diffuse; direct passes the
         // BRDF specular fraction). bounce >=1: whole contribution follows the primary lobe.
-        ret_specular += lin * ocarina::select(b == 0u, frac_b0, spec_route);
+        Float3 spec = lin * ocarina::select(b == 0u, frac_b0, spec_route);
+        ret_specular += spec;
+        if (hc.direct_specular) {
+            $if(b == 0u || (Bool(hc.restir_direct_split && emission) && b == 1u)) { ret_direct_specular += spec; };
+        }
+        if (hc.lobe_hitdist) {
+            Float2 weight = make_float2(max(luminance(lin - spec), 0.f), max(luminance(spec), 0.f));
+            Float hit_t = ocarina::select(b == 0u, distance, first_distance);
+            weight *= (hit_t > 0.f).cast<float>();
+            distance_sum += weight * hit_t; distance_weight += weight;
+        }
     };
 
     Float3 primary_dir = rs.direction();
+    Bool delta_only = true;
     Bool continuation_ready = false;
     Uint continuation_depth = 0u;
     auto mis_bsdf = [&](auto &bounces, bool inner) {
         hit = geometry.trace_closest(rs.ray);
+        if (hc.lobe_hitdist) {
+            // RTXPT StablePlaneAccumulateSampleHitT: start after the primary
+            // scatter, then allow a delta-only entry/exit pair (at most 3 segments).
+            $if(bounces == 1u || (bounces > 1u && bounces <= 3u && delta_only)) {
+                Float segment_distance = scene().world_diameter();
+                $if(hit->is_hit()) {
+                    auto endpoint = geometry.compute_surface_interaction(hit, rs.ray);
+                    segment_distance = length(endpoint.pos - rs.origin());
+                };
+                first_distance = select(bounces == 1u, 0.f, first_distance) + max(segment_distance, 1e-5f);
+                sampled_distance = make_float2(select(any(spec_route < 1.f), first_distance, 0.f),
+                                               select(any(spec_route > 0.f), first_distance, 0.f));
+            };
+        }
         Bool include_emission = true;
         // The only-direct supplement is already a post-scattering segment,
         // even though its own loop counter starts at zero.
@@ -235,7 +273,8 @@ Float3 IlluminationIntegrator::Li(RayState rs, Float scatter_pdf, const Uint &ma
                 if (hc.restir_direct_split && hc.Ld) {
                     $if(bounces <= 1u) { *hc.Ld += make_RadType3(lin); };
                 }
-                route_spec(lin, bounces, 0.f);
+                route_spec(lin, bounces, make_float3(0.f), 0.f, true);
+                if (hc.bypass) { $if(bounces == 0u) { *hc.bypass += lin; }; }
             };
             $super_break;
         };
@@ -283,7 +322,8 @@ Float3 IlluminationIntegrator::Li(RayState rs, Float scatter_pdf, const Uint &ma
             if (hc.restir_direct_split && hc.Ld) {
                 $if(bounces <= 1u) { *hc.Ld += make_RadType3(lin); };
             }
-            route_spec(lin, bounces, 0.f);
+            route_spec(lin, bounces, make_float3(0.f), 0.f, true);
+            if (hc.bypass) { $if(bounces == 0u) { *hc.bypass += lin; }; }
         };
         prev_surface_ng = it.ng;
     };
@@ -301,6 +341,7 @@ Float3 IlluminationIntegrator::Li(RayState rs, Float scatter_pdf, const Uint &ma
         SampledSpectrum tr = geometry.Tr(scene(), renderer().sampler(), swl, shadow_ray);
         comment("sample bsdf");
         BSDFSample bsdf_sample{swl};
+        Bool delta_scatter = false;
         SampledSpectrum Ld = {swl.dimension(), 0.f};
 
         Float3 albedo = make_float3(0.f);
@@ -314,9 +355,13 @@ Float3 IlluminationIntegrator::Li(RayState rs, Float scatter_pdf, const Uint &ma
                 });
                 Ld = direct_light_mis(it, evaluator, light_sample, occluded,
                                       sampler, swl, bsdf_sample);
+                if (hc.lobe_hitdist) delta_scatter = evaluator.flag() == SurfaceData::NearSpec || BxDFFlag::is_specular(evaluator.flag());
                 if (hc.split()) {
                     $if(bounces == 0u) {
-                        spec_frac_b0 = evaluator.specular_fraction(it.wo, normalize(light_sample.p_light - it.pos));
+                        spec_frac_b0 = hc.lobe_hitdist
+                            ? evaluator.specular_fraction_rgb(it.wo, normalize(light_sample.p_light - it.pos))
+                            : make_float3(evaluator.specular_fraction(it.wo, normalize(light_sample.p_light - it.pos)));
+                        if (hc.lobe_hitdist) spec_route = evaluator.specular_fraction_rgb(it.wo, bsdf_sample.wi);
                     };
                 }
                 return;
@@ -326,10 +371,14 @@ Float3 IlluminationIntegrator::Li(RayState rs, Float scatter_pdf, const Uint &ma
                 swl.check_dispersive(spectrum(), evaluator);
                 Ld = direct_light_mis(it, evaluator, light_sample, occluded,
                                       sampler, swl, bsdf_sample);
+                if (hc.lobe_hitdist) delta_scatter = evaluator.flag() == SurfaceData::NearSpec || BxDFFlag::is_specular(evaluator.flag());
                 albedo = spectrum()->linear_srgb(evaluator.albedo(it.wo), swl);
                 if (hc.split()) {
                     $if(bounces == 0u) {
-                        spec_frac_b0 = evaluator.specular_fraction(it.wo, normalize(light_sample.p_light - it.pos));
+                        spec_frac_b0 = hc.lobe_hitdist
+                            ? evaluator.specular_fraction_rgb(it.wo, normalize(light_sample.p_light - it.pos))
+                            : make_float3(evaluator.specular_fraction(it.wo, normalize(light_sample.p_light - it.pos)));
+                        if (hc.lobe_hitdist) spec_route = evaluator.specular_fraction_rgb(it.wo, bsdf_sample.wi);
                     };
                 }
             });
@@ -351,19 +400,20 @@ Float3 IlluminationIntegrator::Li(RayState rs, Float scatter_pdf, const Uint &ma
         SampledSpectrum d = throughput * Ld * tr;
         Float3 lin = spectrum()->linear_srgb(d, swl);
         ret += lin;
-        route_spec(lin, bounces, spec_frac_b0);
+        route_spec(lin, bounces, spec_frac_b0, length(light_sample.p_light - it.pos), false);
         if (hc.Ld) {
             $if (bounces == 0u) {
                 *hc.Ld = make_RadType3(ret);
             };
         }
-        if (hc.split()) {
+        if (hc.split() && !hc.lobe_hitdist) {
             $if(bounces == 0u) {
                 Uint sflags = bsdf_sample.eval.flags;
-                spec_route = ocarina::select(BxDFFlag::is_glossy(sflags) | BxDFFlag::is_specular(sflags), 1.f, 0.f);
+                spec_route = make_float3(ocarina::select(BxDFFlag::is_glossy(sflags) | BxDFFlag::is_specular(sflags), 1.f, 0.f));
             };
         }
         eta_scale *= sqr(bsdf_sample.eta);
+        if (hc.lobe_hitdist) delta_only &= delta_scatter;
         Float lum = throughput.max();
         $if(!bsdf_sample.valid() || lum == 0.f) {
             $break;
@@ -393,12 +443,20 @@ Float3 IlluminationIntegrator::Li(RayState rs, Float scatter_pdf, const Uint &ma
             };
         } else {
             $for(&bounce, 1u) {
-                mis_bsdf(bounce, false);
+                // This ray already scattered at the primary surface. The explicit denoiser input's
+                // lobe ownership and hit distance must use that first segment.
+                if (hc.lobe_hitdist) mis_bsdf(continuation_depth, false);
+                else mis_bsdf(bounce, false);
             };
         }
     }
     if (hc.Ld_specular) {
         *hc.Ld_specular = make_RadType3(ret_specular);
+    }
+    if (hc.direct_specular) { *hc.direct_specular = ret_direct_specular; }
+    if (hc.lobe_hitdist) {
+        *hc.lobe_hitdist = ocarina::select(distance_weight > 1e-5f,
+            distance_sum / max(distance_weight, make_float2(1e-5f)), sampled_distance);
     }
     return ret;
 }
