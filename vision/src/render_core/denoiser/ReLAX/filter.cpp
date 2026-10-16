@@ -38,6 +38,8 @@ void Filter::compile(Device &device) {
     compile_modulation(device);
     compile_prepass(device);
     compile_temporal(device);
+    compile_history_fix(device);
+    compile_history_clamping(device);
     reset();
 }
 
@@ -67,6 +69,12 @@ CommandBatch Filter::dispatch(FilterParam p, uint layer) {
     p.dst_diffuse = diffuse_[0].descriptor(); p.dst_specular = specular_[0].descriptor();
     commands << temporal_(p).dispatch(size_);
     bind(0u, 1u);
+    commands << fix_(p).dispatch(size_) << clamp_(p).dispatch(size_);
+    src = 0u;
+    if (settings.anti_firefly != 0u) {
+        commands << firefly_(p).dispatch(size_); src = 1u;
+    }
+    bind(src, src ^ 1u);
     commands << publish_(p).dispatch(size_);
     commands << unpack_(p).dispatch(size_);
     state.frame = p.frame;

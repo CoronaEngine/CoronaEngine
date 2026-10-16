@@ -39,7 +39,8 @@ if(CORONA_BUILD_VISION)
     add_test(NAME VisionRelaxHelpers COMMAND corona_vision_relax_tests helpers)
     add_test(NAME VisionRelaxPrepass COMMAND corona_vision_relax_tests prepass)
     add_test(NAME VisionRelaxTemporal COMMAND corona_vision_relax_tests temporal)
-    set_tests_properties(VisionRelaxHelpers VisionRelaxPrepass VisionRelaxTemporal PROPERTIES
+    add_test(NAME VisionRelaxHistory COMMAND corona_vision_relax_tests history)
+    set_tests_properties(VisionRelaxHelpers VisionRelaxPrepass VisionRelaxTemporal VisionRelaxHistory PROPERTIES
         WORKING_DIRECTORY "$<TARGET_FILE_DIR:ocarina-backend-cuda>"
         RUN_SERIAL TRUE TIMEOUT 120)
 

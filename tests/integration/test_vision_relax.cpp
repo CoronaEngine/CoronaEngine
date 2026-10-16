@@ -10,6 +10,7 @@
 
 void check_relax_prepass(ocarina::Device &, ocarina::Stream &);
 void check_relax_temporal(ocarina::Device &, ocarina::Stream &);
+void check_relax_history(ocarina::Device &, ocarina::Stream &);
 
 namespace {
 using namespace ocarina;
@@ -79,6 +80,7 @@ int main(int argc, char **argv) {
         if (group == "helpers") check_helpers(device, stream);
         else if (group == "prepass") check_relax_prepass(device, stream);
         else if (group == "temporal") check_relax_temporal(device, stream);
+        else if (group == "history") check_relax_history(device, stream);
         else throw std::runtime_error("Unknown RELAX test group");
         return 0;
     } catch (const std::exception &error) {

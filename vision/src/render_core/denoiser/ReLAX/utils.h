@@ -50,6 +50,22 @@ inline Float thin_lens(const Float &distance, const Float &curvature) {
     denominator = select(abs(denominator) < 1e-6f, select(denominator < 0.f, -1e-6f, 1e-6f), denominator);
     return distance / denominator;
 }
+inline Float3 to_ycocg(const Float3 &c) {
+    return make_float3(dot(c, make_float3(.25f, .5f, .25f)), (c.x - c.z) * .5f,
+                       dot(c, make_float3(-.25f, .5f, -.25f)));
+}
+inline Float3 to_rgb(const Float3 &c) { return make_float3(c.x + c.y - c.z, c.x + c.z, c.x - c.y - c.z); }
+inline Float2 atrous_normal_params(const Float &r, const Float &frames, const Float &confidence,
+                                   const Float &relaxation, const Float &fraction, const Float &slack) {
+    Float relax = saturate(frames / 5.f) * lerp(relaxation, 1.f, confidence);
+    Float angle = atan(legacy_lobe_tan(r, fraction)) * (10.f - 9.f * relax) + slack * .01745329252f;
+    return make_float2(min(1.57079632679f, angle), .9f + .1f * relax);
+}
+inline Float atrous_specular_normal(const Float2 &params, const Float3 &n, const Float3 &sample_n,
+                                    const Float3 &v, const Float3 &sample_v) {
+    Float angle = acos_approx(min(dot(n, sample_n), dot(v, sample_v)));
+    return saturate(1.f - smooth01(angle / max(params.x, 1e-6f)) * params.y);
+}
 
 inline Float4 pack_signal(const Float4 &signal, const Float3 &factor) {
     Float3 rgb = signal.xyz() / max(factor, make_float3(.01f));

@@ -2,6 +2,61 @@
 #include <iostream>
 #include <limits>
 
+void check_relax_history(ocarina::Device &device, ocarina::Stream &stream) {
+    using namespace relax_test;
+    Fixture fix(device, stream, make_uint2(32u));
+    fix.filter.settings.diffuse_prepass = fix.filter.settings.specular_prepass = 0.f;
+    fix.filter.settings.antilag_reset = 0.f;
+    for (auto &d : fix.d) d = make_float4(0.f, 0.f, 0.f, 7.f);
+    fix.d[528] = make_float4(100.f, 0.f, 0.f, 7.f);
+    fix.run(0u);
+    std::vector<vision::relax::PersistentHistory> stored(fix.n);
+    stream << fix.filter.persistent_history().download(stored.data()) << synchronize() << commit();
+    expect(std::abs(stored[528].diffuse.x - 4.f) < 1e-4f,
+           "short-history repair must use 25 compatible taps at the reference stride");
+
+    Fixture light(device, stream, make_uint2(32u));
+    light.filter.settings.diffuse_prepass = light.filter.settings.specular_prepass = 0.f;
+    for (auto &d : light.d) d = make_float4(1.f, 1.f, 1.f, 7.f);
+    for (uint frame = 0; frame < 32; ++frame) light.run(frame);
+    for (auto &d : light.d) d = make_float4(5.f, 5.f, 5.f, 7.f);
+    light.run(32u);
+    stream << light.filter.persistent_history().download(stored.data()) << synchronize() << commit();
+    // Slow=35/31, fast=11/7, acceleration=288/217, reset=12/31.
+    // The independently reduced reference result is 24971/6727.
+    expect(std::abs(stored[528].diffuse.x - 3.71205589416f) < 1e-4f,
+           "clamping and antilag must accelerate the reference uniform lighting transition");
+    for (uint frame = 33; frame < 65; ++frame) light.run(frame);
+    for (auto &d : light.d) d = make_float4(0.f, 0.f, 0.f, 7.f);
+    light.run(65u);
+    stream << light.filter.persistent_history().download(stored.data()) << synchronize() << commit();
+    expect(stored[528].diffuse.x < 3.f && std::isfinite(stored[528].diffuse.w),
+           "turning a light off must rapidly remove the old bright history");
+
+    Fixture firefly(device, stream, make_uint2(16u));
+    auto &settings = firefly.filter.settings;
+    settings.diffuse_prepass = settings.specular_prepass = 0.f;
+    settings.history_fix_frames = 0.f;
+    settings.diffuse_fast_history = settings.diffuse_history;
+    settings.specular_fast_history = settings.specular_history;
+    settings.antilag_acceleration = settings.antilag_reset = 0.f;
+    for (auto &d : firefly.d) d = make_float4(1.f, 1.f, 1.f, 7.f);
+    firefly.d[136] = make_float4(100.f, 100.f, 100.f, 7.f);
+    std::vector<vision::relax::PersistentHistory> bright(firefly.n);
+    firefly.run(0u);
+    stream << firefly.filter.persistent_history().download(bright.data()) << synchronize() << commit();
+    expect(bright[136].diffuse.x == 100.f, "AntiFirefly disabled must preserve the illumination history");
+    settings.anti_firefly = 1u; firefly.filter.reset(); firefly.run(1u);
+    stream << firefly.filter.persistent_history().download(bright.data()) << synchronize() << commit();
+    expect(bright[136].diffuse.x == 1.f, "AntiFirefly must replace an isolated high outlier from a read-only neighborhood");
+    for (uint y = 7; y <= 8; ++y) for (uint x = 7; x <= 8; ++x)
+        firefly.d[y * 16 + x] = make_float4(5.f, 5.f, 5.f, 7.f);
+    firefly.filter.reset(); firefly.run(2u);
+    stream << firefly.filter.persistent_history().download(bright.data()) << synchronize() << commit();
+    expect(bright[136].diffuse.x == 5.f, "AntiFirefly must retain a supported small bright feature");
+    std::cout << "PASS: RELAX short-history repair, color clamping, antilag and safe firefly suppression\n";
+}
+
 void check_relax_temporal(ocarina::Device &device, ocarina::Stream &stream) {
     using namespace relax_test;
     Fixture f(device, stream, make_uint2(32u), 3u);
@@ -37,6 +92,8 @@ void check_relax_temporal(ocarina::Device &device, ocarina::Stream &stream) {
 
     Fixture mirror(device, stream, make_uint2(32u));
     mirror.filter.settings.diffuse_prepass = mirror.filter.settings.specular_prepass = 0.f;
+    mirror.filter.settings.history_fix_frames = 0.f;
+    mirror.filter.settings.antilag_acceleration = mirror.filter.settings.antilag_reset = 0.f;
     for (uint i = 0; i < mirror.n; ++i) {
         mirror.guides[i].normal_roughness.w = 0.f;
         mirror.s[i] = make_float4(float(i % 32u), 0.f, 0.f, 5.f);

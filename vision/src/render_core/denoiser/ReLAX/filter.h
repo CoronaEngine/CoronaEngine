@@ -72,9 +72,12 @@ class Filter {
     Buffer<uint> tiles_;
     Shader<void(FilterParam)> pack_, unpack_, classify_, reconstruct_, prepass_;
     Shader<void(FilterParam)> temporal_, publish_;
+    Shader<void(FilterParam)> fix_, clamp_, firefly_;
     void compile_modulation(Device &device);
     void compile_prepass(Device &device);
     void compile_temporal(Device &device);
+    void compile_history_fix(Device &device);
+    void compile_history_clamping(Device &device);
 
 public:
     Settings settings;
