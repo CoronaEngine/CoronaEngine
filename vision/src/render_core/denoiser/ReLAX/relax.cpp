@@ -69,6 +69,7 @@ void ReLAX::compile() noexcept {
         sampler->set_seed(dispatch_idx().xy(), p.frame, 1024u);
         Uint i = dispatch_id();
         Var<Guide> g;
+        Float4 raw_diffuse = make_float4(0.f), raw_specular = make_float4(0.f);
         g.position = make_float4(0.f); g.normal_roughness = make_float4(0.f, 0.f, 1.f, 1.f);
         g.diffuse_factor = make_float4(1.f); g.specular_factor = make_float4(1.f);
         g.identity = make_uint4(0u); g.motion = p.motion.read(i);
@@ -78,12 +79,17 @@ void ReLAX::compile() noexcept {
         SurfaceDataVar surface;
         Uint branch = 1u, instance_hash = hit.inst_id;
         $if(p.layered != 0u) {
-            auto plane = p.planes.read(i);
-            surface = plane.surface; hit = surface.hit;
-            eye = plane.extension.view_pos.as_vec3(); prefix = plane.extension.throughput.as_vec3();
+            // Inspect ownership first. Empty secondary layers need only hit,
+            // validity and motion, not the complete stable-plane payload.
+            auto &plane = p.planes.at(i);
+            hit = plane.surface.hit;
             valid = plane.valid != 0u && hit->is_hit();
-            branch = plane.branch_sequence; instance_hash = guide_instance(hit.inst_id, plane.instance_hash);
             g.motion = plane.motion;
+            $if(valid) {
+                surface = plane.surface;
+                eye = plane.extension.view_pos.as_vec3(); prefix = plane.extension.throughput.as_vec3();
+                branch = plane.branch_sequence; instance_hash = guide_instance(hit.inst_id, plane.instance_hash);
+            };
         } $else {
             $if(p.stable != 0u) {
                 surface = p.surfaces.read(i); hit = surface.hit;
@@ -95,6 +101,7 @@ void ReLAX::compile() noexcept {
             };
         };
         $if(valid) {
+            raw_diffuse = p.diffuse.read(i); raw_specular = p.specular.read(i);
             auto it = pipeline()->geometry().compute_surface_interaction(hit, eye);
             g.position = make_float4(it.pos, camera->linear_depth(it.pos));
             g.depth_position = make_float4(it.pos, 1.f);
@@ -114,7 +121,7 @@ void ReLAX::compile() noexcept {
                     g.specular_factor = make_float4(safe_rgb(spectrum()->linear_srgb(s, swl) * prefix), 0.f);
                     // Independent lobe guide rays preserve valid black samples without changing estimator RNG.
                     for (bool spec : {false, true}) {
-                        Float4 signal = spec ? p.specular.read(i) : p.diffuse.read(i);
+                        Float4 signal = spec ? raw_specular : raw_diffuse;
                         Float3 factor = spec ? g.specular_factor.xyz() : g.diffuse_factor.xyz();
                         $if(signal.w == 0.f && any(factor > 0.f)) {
                             auto sample = bsdf.sample_lobe(it.wo, sampler, spec);
@@ -130,6 +137,7 @@ void ReLAX::compile() noexcept {
                             };
                             if (spec) p.specular.write(i, signal); else p.diffuse.write(i, signal);
                         };
+                        if (spec) raw_specular = signal; else raw_diffuse = signal;
                     }
                 });
             };
@@ -142,7 +150,13 @@ void ReLAX::compile() noexcept {
             // same film sample. Keep it unchanged: a static camera has zero
             // motion even when the subpixel sample moves within the pixel.
         };
-        p.output.write(i, g);
+        store_guide(p.output, dispatch_dim().x * dispatch_dim().y, i, g);
+        Float4 packed_d = make_float4(0.f), packed_s = make_float4(0.f);
+        $if(valid_guide(g)) {
+            packed_d = pack_signal(raw_diffuse, g.diffuse_factor.xyz());
+            packed_s = pack_signal(raw_specular, g.specular_factor.xyz());
+        };
+        p.packed_diffuse.write(i, packed_d); p.packed_specular.write(i, packed_s);
     };
     prepare_guides_ = device().compile(guides, "RELAX-PrepareGuides");
     Kernel publish = [](Var<PublishParam> p) {
@@ -210,11 +224,12 @@ CommandBatch ReLAX::dispatch(RealTimeDenoiseInput &input) noexcept {
     gp.planes = input.stable_planes.descriptor(); gp.surfaces = input.stable_surfaces.descriptor();
     gp.extensions = frame_buffer().cur_surface_exts_view(input.frame_index).descriptor();
     gp.layered = input.layer_count > 1u; gp.stable = input.use_stable_planes; gp.frame = input.frame_index;
-    gp.output = filter_->guides().descriptor();
+    gp.output = filter_->guide_storage().descriptor();
+    gp.packed_diffuse = filter_->packed_diffuse().descriptor(); gp.packed_specular = filter_->packed_specular().descriptor();
     gp.diffuse = input.lobe_signals.diffuse_radiance_hitdist.descriptor();
     gp.specular = input.lobe_signals.specular_radiance_hitdist.descriptor();
     ret << prepare_guides_(gp).dispatch(input.resolution);
-    if (submit) { submit(ret, "PrepareGuidesIncludingRays"); ret.clear(); }
+    if (submit) { submit(ret, "PrepareGuidesAndPack"); ret.clear(); }
     FilterParam p;
     p.frame = input.frame_index; p.history_valid = input.frame_index != 0u;
     p.raw_diffuse = gp.diffuse; p.raw_specular = gp.specular;
@@ -231,7 +246,7 @@ CommandBatch ReLAX::dispatch(RealTimeDenoiseInput &input) noexcept {
     float angle = (phase - std::floor(phase)) * 1.57079632679f;
     p.rotator = make_float4(std::cos(angle), std::sin(angle), -std::sin(angle), std::cos(angle));
     p.unproject = 2.f * std::tan(radians(camera->fov_y()) * .5f) / static_cast<float>(input.resolution.y);
-    ret << filter_->dispatch(p, input.layer_index, submit);
+    ret << filter_->dispatch(p, input.layer_index, submit, true);
     if (input.channel_kind == RealTimeDenoiseInput::ChannelKind::DiffuseSpecular) {
         PublishParam pp;
         pp.diffuse = p.output_diffuse; pp.specular = p.output_specular;

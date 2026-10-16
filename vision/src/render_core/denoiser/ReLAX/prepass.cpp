@@ -3,23 +3,9 @@
 
 namespace vision::relax {
 void Filter::compile_prepass(Device &device) {
-    Kernel classify = [](Var<FilterParam> p) {
-        Uint tile = dispatch_id(), width = (p.size.x + 15u) / 16u;
-        Uint2 origin = make_uint2(tile % width, tile / width) * 16u;
-        Bool active = false;
-        $for(y, 0u, 16u) {
-            $for(x, 0u, 16u) {
-                Uint2 pixel = origin + make_uint2(x, y);
-                $if(all(pixel < p.size)) { active |= valid_guide(p.guide.read(pixel.y * p.size.x + pixel.x)); };
-            };
-        };
-        p.tiles.write(tile, cast<uint>(active));
-    };
-    classify_ = device.compile(classify, "RELAX-ClassifyTiles");
-
     Kernel reconstruct = [](Var<FilterParam> p) {
         Uint idx = dispatch_id(); Int2 pos = make_int2(dispatch_idx().xy());
-        auto center = p.guide.read(idx);
+        auto center = load_guide(p, idx);
         Float4 d = p.src_diffuse.read(idx), s = p.src_specular.read(idx);
         $if(valid_guide(center)) {
             Float wd = select(d.w != 0.f, 1000.f, 0.f), ws = select(s.w != 0.f, 1000.f, 0.f);
@@ -31,7 +17,7 @@ void Filter::compile_prepass(Device &device) {
                 $for(x, -2, 3) {
                     $if((x != 0 || y != 0) && abs(x) <= radius && abs(y) <= radius && inside(pos + make_int2(x, y), p.size)) {
                         Uint tap = pixel_index(pos + make_int2(x, y), p.size);
-                        auto g = p.guide.read(tap);
+                        auto g = load_guide(p, tap);
                         $if(valid_guide(g)) {
                             Float angle = acos_approx(dot(center.normal_roughness.xyz(), g.normal_roughness.xyz()));
                             Float depth = abs(g.position.w - center.position.w) / max(g.position.w, center.position.w);
@@ -52,7 +38,7 @@ void Filter::compile_prepass(Device &device) {
 
     Kernel prepass = [](Var<FilterParam> p) {
         Uint idx = dispatch_id(); Int2 pos = make_int2(dispatch_idx().xy());
-        auto center = p.guide.read(idx);
+        auto center = load_guide(p, idx);
         $if(!valid_guide(center)) {
             p.prepass_diffuse.write(idx, make_float4(0.f)); p.prepass_specular.write(idx, make_float4(0.f));
             $return();
@@ -96,7 +82,7 @@ void Filter::compile_prepass(Device &device) {
                                                  p.rotator.z * offset.x + p.rotator.w * offset.y);
                     Int2 sample_pos = make_int2(floor(make_float2(pos) + .5f + rotated * radius));
                     $if(inside(sample_pos, p.size)) {
-                        Uint tap = pixel_index(sample_pos, p.size); auto g = p.guide.read(tap);
+                        Uint tap = pixel_index(sample_pos, p.size); auto g = load_guide(p, tap);
                         $if(spatial_compatible(center, g)) {
                             Float angle = acos_approx(dot(n, g.normal_roughness.xyz()));
                             Float w = plane_weight(center, g, p.settings.depth_threshold) * nonexp_weight(angle * normal_param);

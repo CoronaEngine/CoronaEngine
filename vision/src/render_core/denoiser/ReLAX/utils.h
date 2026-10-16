@@ -5,6 +5,30 @@
 namespace vision::relax {
 using namespace ocarina;
 
+inline Var<Guide> load_guide(Var<FilterParam> &p, const Uint &index) {
+    Uint n = p.size.x * p.size.y;
+    Var<Guide> g;
+    g.position = p.guide.read(index);
+    g.depth_position = p.guide.read(n + index);
+    g.normal_roughness = p.guide.read(2u * n + index);
+    g.diffuse_factor = p.guide.read(3u * n + index);
+    g.specular_factor = p.guide.read(4u * n + index);
+    g.motion = p.guide.read(5u * n + index).xy();
+    g.identity = as<uint4>(p.guide.read(6u * n + index));
+    return g;
+}
+
+template<typename B>
+inline void store_guide(B &buffer, const Uint &n, const Uint &index, const Var<Guide> &g) {
+    buffer.write(index, g.position);
+    buffer.write(n + index, g.depth_position);
+    buffer.write(2u * n + index, g.normal_roughness);
+    buffer.write(3u * n + index, g.diffuse_factor);
+    buffer.write(4u * n + index, g.specular_factor);
+    buffer.write(5u * n + index, make_float4(g.motion, 0.f, 0.f));
+    buffer.write(6u * n + index, as<float4>(g.identity));
+}
+
 inline Float luminance(const Float3 &c) { return dot(c, make_float3(.2126f, .7152f, .0722f)); }
 inline Float3 safe_normalize(const Float3 &v) { return v * rsqrt(max(dot(v, v), 1e-20f)); }
 inline Float smooth01(const Float &v) { Float x = saturate(v); return x * x * (3.f - 2.f * x); }

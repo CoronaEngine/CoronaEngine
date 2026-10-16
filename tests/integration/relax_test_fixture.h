@@ -1,6 +1,7 @@
 #pragma once
 #include "render_core/denoiser/ReLAX/filter.h"
 #include <cmath>
+#include <bit>
 #include <stdexcept>
 #include <vector>
 
@@ -17,6 +18,7 @@ struct Fixture {
     uint n;
     Buffer<float4> diffuse, specular, output_d, output_s;
     std::vector<vision::relax::Guide> guides;
+    std::vector<float4> guide_columns;
     std::vector<float4> d, s, got_d, got_s, prepass_d, prepass_s;
     vision::relax::FilterParam param;
 
@@ -26,7 +28,8 @@ struct Fixture {
           specular(dev.create_buffer<float4>(n, "RELAX fixture specular")),
           output_d(dev.create_buffer<float4>(n, "RELAX fixture filtered diffuse")),
           output_s(dev.create_buffer<float4>(n, "RELAX fixture filtered specular")),
-          guides(n), d(n, make_float4(.2f, .6f, 1.f, 7.f)), s(n, make_float4(1.f, .3f, .1f, 5.f)),
+          guides(n), guide_columns(n * vision::relax::GuideColumnCount),
+          d(n, make_float4(.2f, .6f, 1.f, 7.f)), s(n, make_float4(1.f, .3f, .1f, 5.f)),
           got_d(n), got_s(n), prepass_d(n), prepass_s(n) {
         filter.prepare(device, size, layers);
         filter.compile(device);
@@ -49,7 +52,17 @@ struct Fixture {
     }
     void run(uint frame, uint layer = 0u) {
         param.frame = frame;
-        stream << filter.guides().upload(guides.data()) << diffuse.upload(d.data()) << specular.upload(s.data());
+        for (uint i = 0; i < n; ++i) {
+            const auto &g = guides[i];
+            guide_columns[i] = g.position;
+            guide_columns[n + i] = g.depth_position;
+            guide_columns[2u * n + i] = g.normal_roughness;
+            guide_columns[3u * n + i] = g.diffuse_factor;
+            guide_columns[4u * n + i] = g.specular_factor;
+            guide_columns[5u * n + i] = make_float4(g.motion, 0.f, 0.f);
+            guide_columns[6u * n + i] = std::bit_cast<float4>(g.identity);
+        }
+        stream << filter.guide_storage().upload(guide_columns.data()) << diffuse.upload(d.data()) << specular.upload(s.data());
         stream << filter.dispatch(param, layer) << output_d.download(got_d.data()) << output_s.download(got_s.data())
                << filter.prepass_diffuse().download(prepass_d.data()) << filter.prepass_specular().download(prepass_s.data())
                << synchronize() << commit();

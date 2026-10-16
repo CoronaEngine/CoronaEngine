@@ -5,7 +5,7 @@
 void check_relax_layers(ocarina::Device &device, ocarina::Stream &stream) {
     using namespace relax_test;
     Fixture f(device, stream, make_uint2(8u), 3u);
-    const size_t scratch_bytes = f.n * (sizeof(vision::relax::Guide) + sizeof(vision::relax::TemporalData) + 6u * sizeof(float4)) + sizeof(uint);
+    const size_t scratch_bytes = f.n * (sizeof(vision::relax::Guide) + sizeof(vision::relax::TemporalData) + 6u * sizeof(float4));
     const size_t layer_bytes = f.n * (sizeof(vision::relax::GeometryHistory) + sizeof(vision::relax::PersistentHistory));
     expect(f.filter.allocated_bytes() == scratch_bytes + 3u * layer_bytes,
            "RELAX allocation accounting must include each owned buffer exactly once");
@@ -48,7 +48,7 @@ void check_relax_layers(ocarina::Device &device, ocarina::Stream &stream) {
         ++passes; stream << commands << synchronize() << commit();
     });
     stream << f.output_d.download(f.got_d.data()) << synchronize() << commit();
-    expect(remaining.empty() && passes == 13u && std::abs(f.got_d[0].x - 4.f) < 1e-4f,
+    expect(remaining.empty() && passes == 10u && std::abs(f.got_d[0].x - 4.f) < 1e-4f,
            "synchronized profiling must execute the identical RELAX pass graph");
     std::cout << "PASS: RELAX layer isolation, slot exchange, disappearance and frame invalidation\n";
 }
@@ -57,6 +57,10 @@ void check_relax_atrous(ocarina::Device &device, ocarina::Stream &stream) {
     using namespace relax_test;
     for (auto size : {make_uint2(1u), make_uint2(127u, 73u)}) {
         Fixture constant(device, stream, size);
+        for (auto &g : constant.guides) {
+            g.diffuse_factor = make_float4(.25f, .5f, 2.f, 0.f);
+            g.specular_factor = make_float4(.1f, .01f, 4.f, 0.f);
+        }
         constant.filter.settings.diffuse_prepass = constant.filter.settings.specular_prepass = 0.f;
         for (uint iterations : {2u, 5u, 8u}) {
             constant.filter.settings.atrous_iterations = iterations;

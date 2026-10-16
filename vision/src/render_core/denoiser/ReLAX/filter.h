@@ -14,6 +14,9 @@ struct Guide {
     float2 motion{}; // Current minus previous raster coordinates, in pixels.
     uint4 identity{}; // Receiver/prefix hash, material, branch sequence, valid.
 };
+// Seven dense float4 columns, like NRD's separate guide textures. Identity is
+// bit-cast, never converted; motion occupies xy of its column. No FP16 storage.
+inline constexpr uint GuideColumnCount = 7u;
 struct GeometryHistory {
     float4 position{}, normal_roughness{};
     uint4 identity{};
@@ -29,14 +32,13 @@ struct TemporalData {
 };
 struct FilterParam {
     Settings settings;
-    BufferDesc<Guide> guide;
+    BufferDesc<float4> guide;
     BufferDesc<GeometryHistory> prev_guide;
     BufferDesc<PersistentHistory> prev_history;
     BufferDesc<TemporalData> history;
     BufferDesc<float4> raw_diffuse, raw_specular, output_diffuse, output_specular;
     BufferDesc<float4> prepass_diffuse, prepass_specular;
     BufferDesc<float4> src_diffuse, src_specular, dst_diffuse, dst_specular;
-    BufferDesc<uint> tiles;
     uint2 size{};
     uint frame{}, history_valid{}, step{1u}, first{}, last{};
     float4x4 world_to_raster{make_float4x4(1.f)}, prev_world_to_raster{make_float4x4(1.f)};
@@ -53,7 +55,7 @@ OC_STRUCT(vision::relax, PersistentHistory, diffuse, specular, diffuse_fast, spe
 OC_STRUCT(vision::relax, TemporalData, diffuse_fast, specular_fast, meta) {};
 OC_PARAM_STRUCT(vision::relax, FilterParam, settings, guide, prev_guide, prev_history, history,
                 raw_diffuse, raw_specular, output_diffuse, output_specular, prepass_diffuse, prepass_specular,
-                src_diffuse, src_specular, dst_diffuse, dst_specular, tiles, size, frame, history_valid, step, first, last,
+                src_diffuse, src_specular, dst_diffuse, dst_specular, size, frame, history_valid, step, first, last,
                 world_to_raster, prev_world_to_raster, prev_world_to_view, camera, prev_camera, unproject, framerate_scale,
                 disocclusion_threshold, jitter_delta, rotator) {};
 
@@ -67,15 +69,14 @@ class Filter {
         uint frame{~0u};
     };
     std::array<Layer, 3> layers_;
-    Buffer<Guide> guide_;
+    Buffer<float4> guide_;
     Buffer<TemporalData> temporal_data_;
     std::array<Buffer<float4>, 2> diffuse_, specular_;
     Buffer<float4> prepass_diffuse_, prepass_specular_;
-    Buffer<uint> tiles_;
-    Shader<void(FilterParam)> pack_, unpack_, classify_, reconstruct_, prepass_;
-    Shader<void(FilterParam)> temporal_, publish_;
+    Shader<void(FilterParam)> pack_, reconstruct_, prepass_;
+    Shader<void(FilterParam)> temporal_;
     Shader<void(FilterParam)> fix_, clamp_, firefly_;
-    Shader<void(FilterParam)> atrous_first_, atrous_;
+    Shader<void(FilterParam)> atrous_first_, atrous_, atrous_last_;
     void compile_modulation(Device &device);
     void compile_prepass(Device &device);
     void compile_temporal(Device &device);
@@ -89,7 +90,9 @@ public:
     void compile(Device &device);
     void reset() noexcept;
     [[nodiscard]] uint2 resolution() const noexcept { return size_; }
-    [[nodiscard]] BufferView<Guide> guides() const { return guide_.view(); }
+    [[nodiscard]] BufferView<float4> guide_storage() const { return guide_.view(); }
+    [[nodiscard]] BufferView<float4> packed_diffuse() const { return diffuse_[0].view(); }
+    [[nodiscard]] BufferView<float4> packed_specular() const { return specular_[0].view(); }
     [[nodiscard]] BufferView<TemporalData> history() const { return temporal_data_.view(); }
     [[nodiscard]] BufferView<PersistentHistory> persistent_history(uint layer = 0u) const { return layers_[layer].history.view(); }
     [[nodiscard]] BufferView<float4> prepass_diffuse() const { return prepass_diffuse_.view(); }
@@ -97,6 +100,6 @@ public:
     [[nodiscard]] size_t allocated_bytes() const noexcept;
     // Evaluation may execute/timestamp each batch in order; normal rendering queues them together.
     using PassSubmit = std::function<void(CommandBatch, string_view)>;
-    [[nodiscard]] CommandBatch dispatch(FilterParam param, uint layer = 0u, PassSubmit submit = {});
+    [[nodiscard]] CommandBatch dispatch(FilterParam param, uint layer = 0u, PassSubmit submit = {}, bool input_packed = false);
 };
 }

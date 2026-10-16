@@ -5,9 +5,11 @@ namespace vision::relax {
 void Filter::compile_history_clamping(Device &device) {
     Kernel clamp_history = [](Var<FilterParam> p) {
         Uint idx = dispatch_id(); Int2 pixel = make_int2(dispatch_idx().xy());
-        auto center = p.guide.read(idx); auto data = p.history.read(idx);
+        auto center = load_guide(p, idx); auto data = p.history.read(idx);
+        Var<PersistentHistory> persistent;
         $if(!valid_guide(center)) {
             p.src_diffuse.write(idx, make_float4(0.f)); p.src_specular.write(idx, make_float4(0.f));
+            p.prev_history.write(idx, persistent);
             $return();
         };
         for (uint lobe = 0; lobe < 2; ++lobe) {
@@ -21,7 +23,7 @@ void Filter::compile_history_clamping(Device &device) {
             $for(y, -2, 3) {
                 $for(x, -2, 3) {
                     Uint tap = pixel_index(pixel + make_int2(x, y), p.size);
-                    $if(valid_guide(p.guide.read(tap))) {
+                    $if(valid_guide(load_guide(p, tap))) {
                         Float3 c = to_ycocg(fast_buffer.read(tap).xyz());
                         Float3 noisy = noisy_buffer.read(tap).xyz();
                         mean += c; second += c * c; noisy_mean += noisy;
@@ -71,10 +73,19 @@ void Filter::compile_history_clamping(Device &device) {
             Float output_l = luminance(output.xyz());
             output.w = max(0.f, output.w + output_l * output_l - original_l * original_l);
             slow_buffer.write(idx, output);
-            if (spec) data.specular_fast = fast;
-            else data.diffuse_fast = make_float4(fast.xyz(), 0.f);
+            if (spec) {
+                data.specular_fast = fast;
+                persistent.specular = output; persistent.specular_fast = fast;
+            } else {
+                data.diffuse_fast = make_float4(fast.xyz(), 0.f);
+                persistent.diffuse = output; persistent.diffuse_fast = data.diffuse_fast;
+            }
         }
         p.history.write(idx, data);
+        // Like NRD, publish the slow/fast histories while they are in registers.
+        // The optional firefly pass replaces slow illumination before publishing.
+        persistent.length_hit = make_float2(data.meta.x, data.meta.z);
+        $if(p.settings.anti_firefly == 0u) { p.prev_history.write(idx, persistent); };
     };
     clamp_ = device.compile(clamp_history, "RELAX-HistoryClamping");
 
@@ -82,7 +93,8 @@ void Filter::compile_history_clamping(Device &device) {
     // RCRS. Fast-history scratch is no longer consumed after clamping.
     Kernel firefly = [](Var<FilterParam> p) {
         Uint idx = dispatch_id(); Int2 pixel = make_int2(dispatch_idx().xy());
-        auto center = p.guide.read(idx);
+        auto center = load_guide(p, idx);
+        Var<PersistentHistory> persistent;
         for (uint lobe = 0; lobe < 2; ++lobe) {
             const auto &input = lobe == 0 ? p.src_diffuse : p.src_specular;
             auto &output = lobe == 0 ? p.dst_diffuse : p.dst_specular;
@@ -94,7 +106,7 @@ void Filter::compile_history_clamping(Device &device) {
                     if (x == 0 && y == 0) continue;
                     Int2 pos = pixel + make_int2(x, y);
                     $if(inside(pos, p.size)) {
-                        Uint tap = pixel_index(pos, p.size); auto g = p.guide.read(tap);
+                        Uint tap = pixel_index(pos, p.size); auto g = load_guide(p, tap);
                         $if(spatial_compatible(center, g)) {
                             Float3 c = input.read(tap).xyz(); Float l = luminance(c);
                             $if(l > maximum) { maximum = l; max_color = c; };
@@ -107,7 +119,13 @@ void Filter::compile_history_clamping(Device &device) {
                 $if(l < minimum) { color.xyz() = min_color; };
             };
             output.write(idx, color);
+            if (lobe == 0u) persistent.diffuse = color;
+            else persistent.specular = color;
         }
+        auto data = p.history.read(idx);
+        persistent.diffuse_fast = data.diffuse_fast; persistent.specular_fast = data.specular_fast;
+        persistent.length_hit = make_float2(data.meta.x, data.meta.z);
+        p.prev_history.write(idx, persistent);
     };
     firefly_ = device.compile(firefly, "RELAX-AntiFirefly");
 }

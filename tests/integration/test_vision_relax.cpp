@@ -2,6 +2,7 @@
 #include "render_core/integrator/ReSTIR/denoiser_signals.h"
 #include "rhi/context.h"
 #include <array>
+#include <bit>
 #include <cmath>
 #include <filesystem>
 #include <iostream>
@@ -24,7 +25,55 @@ void expect_near(float actual, float expected, const char *message) {
     }
 }
 
+void check_guide_columns(Device &device, Stream &stream) {
+    using namespace vision::relax;
+    constexpr uint n = 2u;
+    std::array<Guide, n> expected{};
+    std::array<float4, n * GuideColumnCount> columns{}, copied{};
+    for (uint i = 0u; i < n; ++i) {
+        auto &g = expected[i];
+        g.position = make_float4(float(i), -0.f, 1e-30f, 100000.f);
+        g.depth_position = make_float4(3.f, -7.f, float(i), 2.f);
+        g.normal_roughness = make_float4(.25f, -.5f, .75f, .125f);
+        g.diffuse_factor = make_float4(1e-20f, 2.f, 3.f, float(i));
+        g.specular_factor = make_float4(4.f, 5.f, -0.f, float(i));
+        g.motion = make_float2(-.375f, .625f);
+        g.identity = make_uint4(0xffffffffu, 0x7fc12345u, i, 1u);
+        columns[i] = g.position; columns[n + i] = g.depth_position;
+        columns[2u * n + i] = g.normal_roughness; columns[3u * n + i] = g.diffuse_factor;
+        columns[4u * n + i] = g.specular_factor; columns[5u * n + i] = make_float4(g.motion, 0.f, 0.f);
+        columns[6u * n + i] = std::bit_cast<float4>(g.identity);
+    }
+    auto input = device.create_buffer<float4>(columns.size());
+    auto output = device.create_buffer<float4>(columns.size());
+    auto typed = device.create_buffer<Guide>(n);
+    Kernel transfer = [](Var<FilterParam> p, BufferVar<Guide> values, BufferVar<float4> copy) {
+        auto g = load_guide(p, dispatch_id());
+        values.write(dispatch_id(), g);
+        store_guide(copy, p.size.x * p.size.y, dispatch_id(), g);
+    };
+    auto shader = device.compile(transfer, "RELAX-guide-columns-FP32-bits");
+    FilterParam p; p.guide = input.descriptor(); p.size = make_uint2(n, 1u);
+    std::array<Guide, n> actual{};
+    stream << input.upload(columns.data()) << shader(p, typed, output).dispatch(n)
+           << typed.download(actual.data()) << output.download(copied.data()) << synchronize() << commit();
+    auto bits_equal = [](const auto &a, const auto &b) {
+        return std::bit_cast<std::array<uint, sizeof(a) / sizeof(uint)>>(a) ==
+               std::bit_cast<std::array<uint, sizeof(b) / sizeof(uint)>>(b);
+    };
+    for (uint i = 0; i < n; ++i) {
+        const auto &a = actual[i], &b = expected[i];
+        if (!bits_equal(a.position, b.position) || !bits_equal(a.depth_position, b.depth_position) ||
+            !bits_equal(a.normal_roughness, b.normal_roughness) || !bits_equal(a.diffuse_factor, b.diffuse_factor) ||
+            !bits_equal(a.specular_factor, b.specular_factor) || !bits_equal(a.motion, b.motion) || !bits_equal(a.identity, b.identity))
+            throw std::runtime_error("dense guide columns must preserve all FP32/identity bits and column offsets");
+    }
+    for (uint i = 0; i < columns.size(); ++i) if (!bits_equal(copied[i], columns[i]))
+        throw std::runtime_error("guide writes must preserve column storage, including identity NaN bit patterns");
+}
+
 void check_helpers(Device &device, Stream &stream) {
+    check_guide_columns(device, stream);
     Kernel distances = [](BufferVar<float4> out) {
         const std::array<float, 5> scales{1.f, 1e-4f, 1e-6f, 1e-8f, 0.f};
         for (uint i = 0; i < scales.size(); ++i) {

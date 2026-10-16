@@ -5,7 +5,7 @@ namespace vision::relax {
 void Filter::compile_history_fix(Device &device) {
     Kernel fix = [](Var<FilterParam> p) {
         Uint idx = dispatch_id(); Int2 pixel = make_int2(dispatch_idx().xy());
-        auto center = p.guide.read(idx); auto data = p.history.read(idx);
+        auto center = load_guide(p, idx); auto data = p.history.read(idx);
         Float4 d = data.diffuse_fast, s = data.specular_fast;
         $if(valid_guide(center) && p.settings.history_fix_frames > 0.f && data.meta.x <= p.settings.history_fix_frames + 1.f) {
             d = p.src_diffuse.read(idx); s = p.src_specular.read(idx);
@@ -18,7 +18,7 @@ void Filter::compile_history_fix(Device &device) {
                 $for(x, -2, 3) {
                     Int2 pixel_tap = pixel + make_int2(x, y) * stride;
                     $if((x != 0 || y != 0) && inside(pixel_tap, p.size)) {
-                        Uint tap = pixel_index(pixel_tap, p.size); auto g = p.guide.read(tap);
+                        Uint tap = pixel_index(pixel_tap, p.size); auto g = load_guide(p, tap);
                         $if(spatial_compatible(center, g)) {
                             Float geometry = plane_weight(center, g, p.settings.depth_threshold);
                             Float w = geometry * pow(max(.01f, dot(center.normal_roughness.xyz(), g.normal_roughness.xyz())),

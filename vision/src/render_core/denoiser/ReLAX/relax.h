@@ -17,8 +17,9 @@ struct GuideParam {
     BufferDesc<SurfaceData> surfaces;
     BufferDesc<SurfaceExtend> extensions;
     BufferDesc<float2> motion;
-    BufferDesc<Guide> output;
+    BufferDesc<float4> output;
     BufferDesc<float4> diffuse, specular;
+    BufferDesc<float4> packed_diffuse, packed_specular;
     uint layered{}, stable{}, frame{};
 };
 struct PublishParam {
@@ -26,7 +27,7 @@ struct PublishParam {
     BufferDesc<RadType4> direct, indirect;
 };
 }
-OC_PARAM_STRUCT(vision::relax, GuideParam, visibility, planes, surfaces, extensions, motion, output, diffuse, specular, layered, stable, frame) {};
+OC_PARAM_STRUCT(vision::relax, GuideParam, visibility, planes, surfaces, extensions, motion, output, diffuse, specular, packed_diffuse, packed_specular, layered, stable, frame) {};
 OC_PARAM_STRUCT(vision::relax, PublishParam, diffuse, specular, bypass, direct, indirect) {};
 
 namespace vision::relax {

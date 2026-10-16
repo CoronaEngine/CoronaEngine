@@ -105,7 +105,7 @@ Float3 virtual_position_v2(const Var<Guide> &g, const Float &hit, const Float &c
 void Filter::compile_temporal(Device &device) {
     Kernel temporal = [](Var<FilterParam> p) {
         Uint idx = dispatch_id(); Int2 pixel = make_int2(dispatch_idx().xy());
-        auto g = p.guide.read(idx);
+        auto g = load_guide(p, idx);
         Var<TemporalData> data;
         Float4 out_d = make_float4(0.f), out_s = make_float4(0.f);
         $if(valid_guide(g)) {
@@ -131,7 +131,7 @@ void Filter::compile_temporal(Device &device) {
             Float min_hit = 1e10f;
             for (int y = -1; y <= 1; ++y) for (int x = -1; x <= 1; ++x) {
                 Uint tap = pixel_index(pixel + make_int2(x, y), p.size);
-                averaged_normal += p.guide.read(tap).normal_roughness.xyz() / 9.f;
+                averaged_normal += load_guide(p, tap).normal_roughness.xyz() / 9.f;
                 Float h = p.prepass_specular.read(tap).w;
                 min_hit = min(min_hit, select(h > 0.f, h, 1e10f));
             }
@@ -166,7 +166,7 @@ void Filter::compile_temporal(Device &device) {
             axis_weights /= axis_weights.x + axis_weights.y;
             Float3 x_edge = make_float3(0.f), n_edge = make_float3(0.f);
             for (int axis = 0; axis < 2; ++axis) {
-                auto neighbor = p.guide.read(pixel_index(pixel + (axis == 0 ? make_int2(1, 0) : make_int2(0, 1)), p.size));
+                auto neighbor = load_guide(p, pixel_index(pixel + (axis == 0 ? make_int2(1, 0) : make_int2(0, 1)), p.size));
                 Float3 ray = safe_normalize(neighbor.position.xyz() - camera);
                 Float denominator = dot(normal, ray);
                 Float3 tangent = g.position.xyz();
@@ -186,7 +186,7 @@ void Filter::compile_temporal(Device &device) {
             Float high_length = min_parallax * (1.f + p.framerate_scale * cast<float>(bayer) / 16.f);
             Int2 high_pixel = make_int2(floor(current_pixel + high_length * motion_direction));
             $if(high_length > 1.f && inside(high_pixel, p.size)) {
-                auto high = p.guide.read(pixel_index(high_pixel, p.size));
+                auto high = load_guide(p, pixel_index(high_pixel, p.size));
                 $if(spatial_compatible(g, high) && abs(high.position.w - g.position.w) / max(high.position.w, g.position.w) < .1f) {
                     n_edge = high.normal_roughness.xyz(); x_edge = high.position.xyz();
                 };
@@ -268,20 +268,5 @@ void Filter::compile_temporal(Device &device) {
         p.history.write(idx, data);
     };
     temporal_ = device.compile(temporal, "RELAX-TemporalAccumulation");
-
-    // Publishing is a separate dispatch: no thread can overwrite a neighbor's
-    // previous geometry or illumination while reprojection is still reading it.
-    Kernel publish = [](Var<FilterParam> p) {
-        Uint idx = dispatch_id(); auto g = p.guide.read(idx); auto data = p.history.read(idx);
-        Var<PersistentHistory> h;
-        h.diffuse = p.src_diffuse.read(idx); h.specular = p.src_specular.read(idx);
-        h.diffuse_fast = data.diffuse_fast; h.specular_fast = data.specular_fast;
-        h.length_hit = make_float2(data.meta.x, data.meta.z);
-        p.prev_history.write(idx, h);
-        Var<GeometryHistory> geometry;
-        geometry.position = g.position; geometry.normal_roughness = g.normal_roughness; geometry.identity = g.identity;
-        p.prev_guide.write(idx, geometry);
-    };
-    publish_ = device.compile(publish, "RELAX-PublishHistory");
 }
 }
