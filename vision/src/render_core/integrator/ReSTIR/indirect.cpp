@@ -392,7 +392,7 @@ GIReservoirVar ReSTIRGI::spatial_reuse(GIReservoirVar rsv, const SurfaceDataVar 
 }
 
 Float3 ReSTIRGI::shading(GIReservoirVar rsv,
-                         const SurfaceDataVar &cur_surf) const noexcept {
+                         const SurfaceDataVar &cur_surf, Float3 *specular, Float *hit_distance) const noexcept {
     TSensor &camera = scene().sensor();
     Float3 view_pos = cur_view_pos(cur_surf.is_replaced);
     Float3 throughput = make_float3(1.f);
@@ -408,6 +408,14 @@ Float3 ReSTIRGI::shading(GIReservoirVar rsv,
         ScatterEval scatter_eval = eval_bsdf(it, rsv.sample, MaterialEvalMode::All);
         $if(scatter_eval.valid() && !ocarina::isinf(scatter_eval.pdf())) {
             ret = ocarina::zero_if_nan_inf(throughput * rsv.sample.Lo.as_vec3() * scatter_eval.f.vec3() * rsv.W);
+            if (specular) {
+                Float3 delta = rsv.sample.sp->position() - it.pos;
+                scene().materials().dispatch(it.material_id(), [&](const Material *material) {
+                    auto bsdf = material->create_evaluator(it, sampled_wavelengths());
+                    *specular = ret * bsdf.specular_fraction_rgb(it.wo, normalize(delta));
+                });
+                *hit_distance = max(length(delta), 1e-5f);
+            }
         };
     };
     return ret;
@@ -418,10 +426,12 @@ void ReSTIRGI::compile_spatial_shading() noexcept {
     TSensor &camera = scene().sensor();
     TLightSampler &light_sampler = renderer().light_sampler();
     TSpectrum &spectrum = pipeline()->spectrum();
+    const bool lobes = integrator()->denoiser() && integrator()->denoiser()->requires_lobe_signals();
 
     Kernel kernel = [&](Var<GIParam> param, Uint frame_index) {
         initial(sampler(), frame_index, spectrum);
         SurfaceDataVar surf = cur_surfaces().read(dispatch_id());
+        if (lobes) frame_buffer().denoiser_gi_specular().write(dispatch_id(), make_float4(0.f));
         $if(surf.hit->is_miss()) {
             $return();
         };
@@ -430,8 +440,10 @@ void ReSTIRGI::compile_spatial_shading() noexcept {
         camera->load_data();
         GIReservoirVar rsv = passthrough_reservoirs().read(dispatch_id());
         rsv = spatial_reuse(rsv, surf, make_int2(dispatch_idx().xy()), param);
-        Float3 L = shading(rsv, surf);
+        Float3 specular = make_float3(0.f); Float distance = 0.f;
+        Float3 L = shading(rsv, surf, lobes ? &specular : nullptr, lobes ? &distance : nullptr);
         radiance_->write(dispatch_id(), make_float4(L, 1.f));
+        if (lobes) frame_buffer().denoiser_gi_specular().write(dispatch_id(), make_float4(specular, distance));
         cur_reservoirs().write(dispatch_id(), rsv);
     };
     spatial_shading_ = device().compile(kernel, "ReSTIR indirect spatial reuse and shading");

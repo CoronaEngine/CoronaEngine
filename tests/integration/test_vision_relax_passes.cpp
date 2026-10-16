@@ -2,6 +2,46 @@
 #include <iostream>
 #include <limits>
 
+void check_relax_layers(ocarina::Device &device, ocarina::Stream &stream) {
+    using namespace relax_test;
+    Fixture f(device, stream, make_uint2(8u), 3u);
+    f.filter.settings.diffuse_prepass = f.filter.settings.specular_prepass = 0.f;
+    f.filter.settings.history_fix_frames = 0.f;
+    auto select_layer = [&](uint identity, float value) {
+        for (auto &g : f.guides) g.identity = make_uint4(identity, 2u, identity + 10u, 1u);
+        for (auto &d : f.d) d = make_float4(value, 0.f, 0.f, 2.f);
+        for (auto &s : f.s) s = make_float4(0.f, value, 0.f, 2.f);
+    };
+    auto stored = [&](uint layer) {
+        std::vector<vision::relax::PersistentHistory> h(f.n);
+        stream << f.filter.persistent_history(layer).download(h.data()) << synchronize() << commit();
+        return h.front();
+    };
+    for (uint frame = 0; frame < 6u; ++frame) for (uint layer = 0; layer < 3u; ++layer) {
+        select_layer(layer + 1u, float(1u << layer)); f.run(frame, layer);
+        auto h = stored(layer);
+        expect(std::abs(h.diffuse.x - float(1u << layer)) < 1e-4f && std::abs(h.length_hit.x - float(frame + 1u)) < 1e-4f,
+               "each RELAX layer must retain independent color and history age");
+    }
+    select_layer(2u, 2.f); f.run(6u, 0u);
+    expect(stored(0u).length_hit.x == 1.f, "exchanging layer slots must reject the previous branch");
+    select_layer(1u, 1.f); f.run(6u, 1u);
+    expect(stored(1u).length_hit.x == 1.f, "layer-slot exchange must reject both previous owners");
+    for (auto &g : f.guides) g.identity.w = 0u;
+    f.run(6u, 2u); f.run(7u, 2u);
+    expect(f.got_d[0].x == 0.f && stored(2u).length_hit.x == 0.f, "empty layers must clear output and age");
+    select_layer(3u, 4.f); f.run(8u, 2u);
+    expect(stored(2u).length_hit.x == 1.f, "reappearing layers must begin a fresh history");
+    f.run(9u, 2u); expect(stored(2u).length_hit.x == 2.f, "consecutive frames must reuse history");
+    f.run(9u, 2u); expect(stored(2u).length_hit.x == 1.f, "repeated frame indices must not reuse history");
+    f.run(12u, 2u); expect(stored(2u).length_hit.x == 1.f, "skipped frames must reject history");
+    f.filter.reset(); f.run(13u, 2u);
+    expect(stored(2u).length_hit.x == 1.f, "explicit invalidation must reject history");
+    f.filter.prepare(device, f.size, 1u); f.filter.prepare(device, f.size, 3u); f.run(14u, 2u);
+    expect(stored(2u).length_hit.x == 1.f, "turning layers off and on must discard retired histories");
+    std::cout << "PASS: RELAX layer isolation, slot exchange, disappearance and frame invalidation\n";
+}
+
 void check_relax_atrous(ocarina::Device &device, ocarina::Stream &stream) {
     using namespace relax_test;
     for (auto size : {make_uint2(1u), make_uint2(127u, 73u)}) {

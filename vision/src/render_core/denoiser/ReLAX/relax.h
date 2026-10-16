@@ -35,6 +35,7 @@ class ReLAX : public Denoiser {
     SP<Filter> filter_{make_shared<Filter>()};
     SP<Denoiser> coverage_;
     bool enabled_{};
+    bool compiled_{};
     uint frame_{InvalidUI32};
     float fov_{};
     float4x4 current_raster_{make_float4x4(1.f)}, previous_raster_{make_float4x4(1.f)};
@@ -54,7 +55,7 @@ public:
     [[nodiscard]] bool has_prepared_resources() const noexcept override { return filter_->resolution().x != 0u; }
     [[nodiscard]] CommandBatch dispatch(RealTimeDenoiseInput &input) noexcept override;
     void render_sub_UI(Widgets *widgets) noexcept override;
-    VS_HOTFIX_MAKE_RESTORE(Denoiser, filter_, coverage_, enabled_, frame_, fov_, current_raster_, previous_raster_, current_view_, previous_view_, prepare_guides_, publish_)
+    VS_HOTFIX_MAKE_RESTORE(Denoiser, filter_, coverage_, enabled_, compiled_, frame_, fov_, current_raster_, previous_raster_, current_view_, previous_view_, prepare_guides_, publish_)
     [[nodiscard]] string_view impl_type() const noexcept override { return "ReLAX"; }
     [[nodiscard]] string_view category() const noexcept override { return "denoiser"; }
     [[nodiscard]] bool requires_lobe_signals() const noexcept override { return true; }

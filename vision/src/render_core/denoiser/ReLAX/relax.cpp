@@ -140,12 +140,16 @@ void ReLAX::compile() noexcept {
     };
     publish_ = device().compile(publish, "RELAX-PublishPT");
     filter_->compile(device()); coverage_->compile();
+    compiled_ = true;
     frame_ = InvalidUI32;
 }
 
 CommandBatch ReLAX::dispatch(RealTimeDenoiseInput &input) noexcept {
     CommandBatch ret;
     if (!enabled_) return ret;
+    // A pipeline may start in raw mode and enable its selected denoiser later.
+    // At dispatch the producer resources and scene context are already ready.
+    if (!has_prepared_resources() || !compiled_) { prepare(); compile(); }
     if (input.composed_coverage) {
         auto coverage_input = input;
         coverage_input.composed_coverage = input.coverage_planes.size() != 0u;

@@ -4,6 +4,7 @@
 #include <cmath>
 #include <filesystem>
 #include <iostream>
+void check_relax_layers(ocarina::Device &, ocarina::Stream &);
 #include <limits>
 #include <stdexcept>
 #include <string_view>
@@ -83,6 +84,7 @@ int main(int argc, char **argv) {
         else if (group == "temporal") check_relax_temporal(device, stream);
         else if (group == "history") check_relax_history(device, stream);
         else if (group == "atrous") check_relax_atrous(device, stream);
+        else if (group == "layers") check_relax_layers(device, stream);
         else throw std::runtime_error("Unknown RELAX test group");
         return 0;
     } catch (const std::exception &error) {

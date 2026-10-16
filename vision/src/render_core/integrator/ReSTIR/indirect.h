@@ -72,7 +72,7 @@ public:
                            initial_samples_, temporal_pass_, spatial_shading_)
     OC_MAKE_MEMBER_GETTER(open, )
     OC_MAKE_MEMBER_GETTER(radiance, &)
-    [[nodiscard]] float factor() const noexcept { return static_cast<float>(open()); }
+    [[nodiscard]] float factor() const noexcept { return open() ? factor_ : 0.f; }
     void prepare() noexcept;
     bool render_UI(Widgets *widgets) noexcept override;
     void render_sub_UI(Widgets *widgets) noexcept override;
@@ -106,7 +106,8 @@ public:
     [[nodiscard]] HOTFIX_VIRTUAL GIReservoirVar combine_spatial(GIReservoirVar cur_rsv, const Container<uint> &rsv_idx) const noexcept;
     [[nodiscard]] HOTFIX_VIRTUAL GIReservoirVar spatial_reuse(GIReservoirVar rsv, const SurfaceDataVar &cur_surf,
                                                               const Int2 &pixel, const Var<GIParam> &param) const noexcept;
-    [[nodiscard]] HOTFIX_VIRTUAL Float3 shading(GIReservoirVar rsv, const SurfaceDataVar &cur_surf) const noexcept;
+    [[nodiscard]] HOTFIX_VIRTUAL Float3 shading(GIReservoirVar rsv, const SurfaceDataVar &cur_surf,
+                                               Float3 *specular = nullptr, Float *hit_distance = nullptr) const noexcept;
 
     [[nodiscard]] static Bool is_valid_neighbor(const SurfaceDataVar &cur_surface,
                                                 const SurfaceDataVar &another_surface,

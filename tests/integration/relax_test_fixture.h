@@ -58,3 +58,4 @@ struct Fixture {
 
 void check_relax_prepass(ocarina::Device &, ocarina::Stream &);
 void check_relax_temporal(ocarina::Device &, ocarina::Stream &);
+void check_relax_layers(ocarina::Device &, ocarina::Stream &);

@@ -37,7 +37,9 @@ if(CORONA_BUILD_VISION)
     target_include_directories(corona_vision_relax_scene_tests PRIVATE ${CMAKE_SOURCE_DIR}/vision/src)
     target_link_libraries(corona_vision_relax_scene_tests PRIVATE corona::engine vision-all_libs vision-relax-filter)
     add_test(NAME VisionRelaxPT COMMAND corona_vision_relax_scene_tests pt)
-    set_tests_properties(VisionRelaxPT PROPERTIES
+    add_test(NAME VisionRelaxReSTIR COMMAND corona_vision_relax_scene_tests restir)
+    add_test(NAME VisionRelaxLifecycle COMMAND corona_vision_relax_scene_tests lifecycle)
+    set_tests_properties(VisionRelaxPT VisionRelaxReSTIR VisionRelaxLifecycle PROPERTIES
         WORKING_DIRECTORY "$<TARGET_FILE_DIR:vision-material-principled_bsdf>"
         RUN_SERIAL TRUE TIMEOUT 300)
 
@@ -49,7 +51,8 @@ if(CORONA_BUILD_VISION)
     add_test(NAME VisionRelaxTemporal COMMAND corona_vision_relax_tests temporal)
     add_test(NAME VisionRelaxHistory COMMAND corona_vision_relax_tests history)
     add_test(NAME VisionRelaxAtrous COMMAND corona_vision_relax_tests atrous)
-    set_tests_properties(VisionRelaxHelpers VisionRelaxPrepass VisionRelaxTemporal VisionRelaxHistory VisionRelaxAtrous PROPERTIES
+    add_test(NAME VisionRelaxLayerHistory COMMAND corona_vision_relax_tests layers)
+    set_tests_properties(VisionRelaxHelpers VisionRelaxPrepass VisionRelaxTemporal VisionRelaxHistory VisionRelaxAtrous VisionRelaxLayerHistory PROPERTIES
         WORKING_DIRECTORY "$<TARGET_FILE_DIR:ocarina-backend-cuda>"
         RUN_SERIAL TRUE TIMEOUT 120)
 

@@ -115,7 +115,7 @@ void check_compound_material(Pipeline &pipeline) {
     std::cout << "PASS: smooth compound guide support and directional material factors\n";
 }
 
-void check_scene_signals(bool restir) {
+void check_scene_signals(bool restir, bool lifecycle = false) {
     namespace fs = std::filesystem;
     const auto fixture = fs::temp_directory_path() / ("corona_denoiser_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
     fs::create_directories(fixture);
@@ -143,6 +143,7 @@ void check_scene_signals(bool restir) {
     for (uint scenario = 0; scenario < 12u; ++scenario) {
         const bool pt = scenario == 0u || scenario >= 7u, stable = scenario >= 3u && !pt;
         if (pt == restir) continue;
+        if (lifecycle && scenario != 5u) continue;
         scene["scene"]["materials"] = receiver_materials;
         scene["scene"]["shapes"] = receiver_shapes;
         if (scenario >= 10u) {
@@ -169,6 +170,10 @@ void check_scene_signals(bool restir) {
         integrator["type"] = pt ? "pt" : "rt";
         integrator["param"]["direct"]["stable_planes"] = stable;
         const bool direct_on = scenario != 2u && scenario != 6u;
+        const float di_factor = !pt && (scenario == 3u || scenario == 4u) ? .25f : 1.f;
+        const float gi_factor = !pt && scenario >= 2u ? .75f : 1.f;
+        integrator["param"]["direct"]["factor"] = di_factor;
+        integrator["param"]["indirect"]["factor"] = gi_factor;
         integrator["param"]["max_depth"] = scenario == 7u ? 1u : 4u;
         integrator["param"]["mis_mode"] = scenario >= 8u ? 2u : 0u;
         integrator["param"]["direct"]["open"] = direct_on;
@@ -185,6 +190,8 @@ void check_scene_signals(bool restir) {
         if (pt) check_material(*pipeline);
         if (scenario >= 10u) check_compound_material(*pipeline);
         auto &fb = *pipeline->frame_buffer();
+        expect(fb.denoiser_diffuse().size() >= pipeline->pixel_num(),
+               "selected RELAX requires the producer to allocate explicit lobe signals");
         const uint count = pipeline->pixel_num(), layers = stable ? 3u : 1u;
         std::vector<float4> pixels(count), d(count * 3u), s(d.size()), b(d.size()), emission(count);
         for (uint frame = 0; frame < 4u; ++frame) {
@@ -209,7 +216,7 @@ void check_scene_signals(bool restir) {
                 expect(continued > 45u, "glass hit distance must continue through the rear interface to the distant target");
             }
             for (uint i = 0; i < count; ++i) for (uint c = 0; c < 3u; ++c) {
-                float sum = stable && direct_on ? emission[i][c] : 0.f;
+                float sum = stable && direct_on ? emission[i][c] * di_factor : 0.f;
                 for (uint layer = 0; layer < layers; ++layer) {
                     const uint j = layer * count + i;
                     sum += d[j][c] + s[j][c] + b[j][c];
@@ -219,12 +226,36 @@ void check_scene_signals(bool restir) {
             }
         }
         illumination->set_denoise_enabled(true);
+        pipeline->output_desc().denoise = true;
         for (uint frame = 0; frame < 8u; ++frame) {
             pipeline->upload_data(); pipeline->display(1.0 / 60.0);
         }
         pipeline->stream() << fb.rt_buffer().device_buffer().download(pixels.data()) << synchronize() << commit();
         for (auto pixel : pixels) expect(std::isfinite(pixel.x) && std::isfinite(pixel.y) && std::isfinite(pixel.z),
             "enabling the actual RELAX plugin after raw frames must produce finite colors");
+        expect(illumination->denoiser()->enabled() && illumination->denoiser()->has_prepared_resources(),
+            "scene evaluation must execute the selected RELAX filter after runtime enable");
+        if (lifecycle) {
+            auto draw = [&] {
+                pipeline->upload_data(); pipeline->display(1.0 / 60.0);
+                std::vector<float4> result(pipeline->pixel_num());
+                pipeline->stream() << fb.rt_buffer().device_buffer().download(result.data()) << synchronize() << commit();
+                for (auto p : result) expect(std::isfinite(p.x) && std::isfinite(p.y) && std::isfinite(p.z),
+                    "RELAX lifecycle transition must preserve finite output");
+            };
+            for (auto resolution : {make_uint2(127u, 73u), make_uint2(1u), make_uint2(16u)}) {
+                illumination->set_denoise_enabled(false);
+                pipeline->output_desc().denoise = false;
+                pipeline->change_resolution(resolution); draw();
+                illumination->set_denoise_enabled(true); pipeline->output_desc().denoise = true; draw(); draw();
+                for (bool layered : {false, true}) { illumination->set_stable_planes_enabled(layered); draw(); draw(); }
+            }
+            auto &camera = pipeline->scene().sensor();
+            camera->set_position(camera->position() + make_float3(.1f, 0.f, 0.f));
+            camera->set_fov_y(50.f); camera->update_device_data(); draw();
+            pipeline->invalidate(); draw(); pipeline->compile(); draw();
+            expect(illumination->denoiser()->has_prepared_resources(), "RELAX must keep reusable resources after lifecycle transitions");
+        }
         std::cout << "PASS: producer energy, runtime enable, scenario=" << scenario << '\n';
     }
     fs::remove_all(fixture);
@@ -241,7 +272,8 @@ int main(int argc, char **argv) {
         static auto device = RHIContext::instance().create_device("cuda");
         device.init_rtx();
         Global::instance().set_device(&device);
-        check_scene_signals(argc > 1 && std::string_view(argv[1]) == "restir");
+        const std::string_view group = argc > 1 ? argv[1] : "pt";
+        check_scene_signals(group != "pt", group == "lifecycle");
         return 0;
     } catch (const std::exception &error) {
         std::cerr << "FAIL: " << error.what() << '\n';
