@@ -138,4 +138,4 @@ flowchart TD
 
 完成需要：完整 RGB 链路 + PT/ReSTIR/三层集成 + 相关 CTest 回归 + CLion 同环境 `corona_engine` 构建 + 真实场景图像/指标 + 性能/显存表 + 来源及支持边界说明。只构建成功或只出现降噪图像不算完成。
 
-完整 RGB 管线、PT/ReSTIR/三层接入与评估已实现于 `feat/relax`。详细配置、实测退化、逐阶段耗时和 8 GiB 容量限制见 [ReLAX README](../../../vision/src/render_core/denoiser/ReLAX/README.md)。64 个评估任务已完成，包含两组独立 2048 spp 参考；CLion 同环境引擎构建通过。17 项相关回归通过；待独立整分支审查。
+完整 RGB 管线、PT/ReSTIR/三层接入与评估已实现于 `feat/relax`。详细配置、实测退化、逐阶段耗时和 8 GiB 容量限制见 [ReLAX README](../../../vision/src/render_core/denoiser/ReLAX/README.md)。独立整分支审查已完成，两项 Important 问题（折射 depth anchor 混用、极暗/黑色 ReSTIR 端点丢失）均经 GPU RED→GREEN 修复于 `12dcaa2f`。修复后 17 项相关回归通过（75.50 s），64 个评估任务重新通过，包含两组独立 2048 spp 参考；CLion 同环境引擎构建通过。最终证据校验包含 renderer 指纹、实际 buffer 字节、逐层历史 pass 和每帧一次 coverage。8 GiB 三层 1080p 平均约 636 ms、device-wide 峰值 7883 MiB，容量余量/无换页未获认证。分支及独立 worktree 保留。

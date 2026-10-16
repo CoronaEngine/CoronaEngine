@@ -116,42 +116,42 @@ shader generator 未清理路径里的 `-`，在含连字符的 worktree 中首�
 
 ## 实测结果（2026-10-16）
 
-设备：NVIDIA GeForce RTX 3070 Ti, 8192 MiB, 610.88。17 项相关 CTest 回归通过；64 个渲染任务均完成；8 组静态/停止尾段时间噪声均低于 raw。
+设备：NVIDIA GeForce RTX 3070 Ti, 8192 MiB, 610.88。17 项相关 CTest 回归通过；64 个渲染任务均完成；8 组静态/停止尾段时间噪声均低于 raw。结果已在最终审查修复后重新测量。
 
 第 63 帧全图线性 RMSE（两组独立 2048 spp PT 参考的平均）：
 
 | 场景 | raw | SVGF | ReLAX | 两参考差异 RMSE |
 |---|---:|---:|---:|---:|
 | kitchen-pt | 1.287444 | 0.714600 | 0.495288 | 0.040920 |
-| kitchen-restir | 2.480845 | 0.359443 | 0.335028 | 0.040920 |
+| kitchen-restir | 2.480845 | 0.359443 | 0.335041 | 0.040920 |
 | materials-pt | 0.452840 | 0.034600 | 0.041681 | 0.017229 |
-| materials-rt | 0.548848 | 0.059684 | 0.085181 | 0.017229 |
+| materials-rt | 0.548848 | 0.059684 | 0.085252 | 0.017229 |
 | glass-pt | 0.471450 | 0.031970 | 0.040018 | 0.017589 |
-| glass-rt | 0.325003 | 0.043455 | 0.058431 | 0.017589 |
+| glass-rt | 0.325003 | 0.043455 | 0.058856 | 0.017589 |
 
 静态第 48–63 帧的逐像素 RGB 时间标准差，再对全图取平均：
 
 | 场景 | raw | SVGF | ReLAX |
 |---|---:|---:|---:|
 | kitchen-pt | 0.587565 | 0.004901 | 0.005921 |
-| kitchen-restir | 0.157906 | 0.005428 | 0.005303 |
+| kitchen-restir | 0.157906 | 0.005428 | 0.005293 |
 | materials-pt | 0.225043 | 0.000495 | 0.000920 |
-| materials-rt | 0.197549 | 0.001251 | 0.001748 |
+| materials-rt | 0.197549 | 0.001251 | 0.001747 |
 | glass-pt | 0.247120 | 0.000576 | 0.000974 |
-| glass-rt | 0.222532 | 0.001106 | 0.001634 |
+| glass-rt | 0.222532 | 0.001106 | 0.001605 |
 
 移动/停止的同姿态全图线性 RMSE；第 47 帧停止，第 63/95 帧观察恢复：
 
 | 场景/帧 | raw | SVGF | ReLAX |
 |---|---:|---:|---:|
-| glass-motion/31 | 0.614812 | 0.046802 | 0.081756 |
-| glass-motion/47 | 0.521737 | 0.045384 | 0.073404 |
-| glass-motion/63 | 0.303397 | 0.048177 | 0.057485 |
-| glass-motion/95 | 0.448547 | 0.049224 | 0.061751 |
-| kitchen-motion/31 | 1.016102 | 0.432686 | 0.435141 |
-| kitchen-motion/47 | 1.612223 | 0.477759 | 0.438490 |
-| kitchen-motion/63 | 0.936661 | 0.324559 | 0.279734 |
-| kitchen-motion/95 | 1.191564 | 0.268791 | 0.224801 |
+| glass-motion/31 | 0.614812 | 0.046802 | 0.075946 |
+| glass-motion/47 | 0.521737 | 0.045384 | 0.072536 |
+| glass-motion/63 | 0.303397 | 0.048177 | 0.057068 |
+| glass-motion/95 | 0.448547 | 0.049224 | 0.061838 |
+| kitchen-motion/31 | 1.016102 | 0.432686 | 0.434516 |
+| kitchen-motion/47 | 1.612223 | 0.477759 | 0.453483 |
+| kitchen-motion/63 | 0.936661 | 0.324559 | 0.280943 |
+| kitchen-motion/95 | 1.191564 | 0.268791 | 0.224769 |
 
 退化项：materials/glass 的静态全图及 compound/glossy/mirror-edge ROI 多数高于 SVGF；玻璃运动序列也高于 SVGF。Kitchen PT 的时间噪声略高于 SVGF，但全图误差更低。线性 RMSE 将偏差、模糊和残余噪声混合计量，不能将差值全部解释为噪声；镜面细节、轮廓模糊和停止后残影需同时看 PNG/PFM。完整逐 ROI 数据、对应姿态及不利结果均保留在 `relax-evidence/report.json`。两参考差异非零，小于此量级的画质差异不作确定性优劣结论。
 
@@ -161,34 +161,34 @@ shader generator 未清理路径里的 `-`，在含连字符的 worktree 中首�
 
 | 路径/分辨率 | 总帧 ms | RELAX+guide+coverage ms | buffer 逻辑 MiB | device-wide 峰值 MiB | RELAX CPU 编译 ms（PTX cache 已热） |
 |---|---:|---:|---:|---:|---:|
-| pt-1280x720 | 20.440 | 9.661 | 548.451 | 1318 | 529.323 |
-| rt-1280x720 | 57.994 | 20.126 | 889.467 | 4044 | 519.809 |
-| pt-1920x1080 | 41.975 | 22.349 | 1234.016 | 2120 | 530.233 |
-| rt-1920x1080 | 523.504 | 45.471 | 2001.301 | 7890 | 526.277 |
+| pt-1280x720 | 21.901 | 11.165 | 562.514 | 1673 | 555.187 |
+| rt-1280x720 | 59.892 | 21.492 | 903.529 | 4399 | 591.689 |
+| pt-1920x1080 | 46.841 | 26.933 | 1265.656 | 2493 | 608.238 |
+| rt-1920x1080 | 636.019 | 54.643 | 2032.941 | 7883 | 608.752 |
 
 逐 pass 同步耗时（ms，ReSTIR 对所有层求和）：
 
 | 阶段 | PT 720p | 三层 720p | PT 1080p | 三层 1080p |
 |---|---:|---:|---:|---:|
-| PrepareGuidesIncludingRays | 0.418 | 2.610 | 0.842 | 5.082 |
-| Pack | 0.307 | 0.691 | 0.628 | 1.496 |
-| ClassifyTiles | 0.237 | 0.727 | 0.607 | 1.892 |
-| PrePass | 1.660 | 2.071 | 4.245 | 5.325 |
-| TemporalAccumulation | 0.990 | 1.536 | 2.396 | 3.587 |
-| HistoryFix | 0.354 | 0.964 | 0.684 | 2.032 |
-| HistoryClamping | 0.921 | 1.314 | 1.980 | 2.889 |
-| PublishHistory | 0.522 | 1.539 | 1.114 | 3.376 |
-| AtrousFirst | 0.534 | 0.991 | 1.110 | 2.009 |
-| Atrous2 | 0.392 | 0.788 | 0.856 | 1.685 |
-| Atrous4 | 0.512 | 0.885 | 1.074 | 1.886 |
-| Atrous8 | 0.740 | 1.124 | 1.890 | 2.760 |
-| Atrous16 | 1.081 | 1.479 | 2.848 | 3.792 |
-| Unpack | 0.302 | 0.693 | 0.637 | 1.450 |
-| PublishPT | 0.172 | — | 0.339 | — |
-| Coverage | 0.520 | 2.714 | 1.100 | 6.210 |
+| PrepareGuidesIncludingRays | 0.447 | 2.759 | 0.932 | 5.584 |
+| Pack | 0.295 | 0.634 | 0.640 | 2.156 |
+| ClassifyTiles | 0.194 | 0.597 | 0.453 | 1.306 |
+| PrePass | 2.223 | 2.803 | 5.569 | 7.224 |
+| TemporalAccumulation | 1.064 | 1.580 | 2.566 | 3.683 |
+| HistoryFix | 0.371 | 0.994 | 0.718 | 1.927 |
+| HistoryClamping | 0.902 | 1.241 | 1.966 | 2.701 |
+| PublishHistory | 0.530 | 1.631 | 1.162 | 3.839 |
+| AtrousFirst | 0.676 | 1.070 | 1.414 | 2.222 |
+| Atrous2 | 0.519 | 0.877 | 1.144 | 1.810 |
+| Atrous4 | 0.580 | 0.922 | 1.252 | 1.973 |
+| Atrous8 | 0.988 | 1.315 | 2.614 | 3.298 |
+| Atrous16 | 1.394 | 1.740 | 4.402 | 5.121 |
+| Unpack | 0.292 | 0.641 | 0.648 | 5.452 |
+| PublishPT | 0.166 | — | 0.346 | — |
+| Coverage | 0.524 | 2.688 | 1.106 | 6.347 |
 
-buffer 账本：Filter 为共享 scratch 240 bytes/pixel + 每层 history/geometry 128 bytes/pixel，另加每 16×16 tile 的 uint。producer 当前固定分配 192 bytes/pixel；coverage-only 为 PT 64、guided ReSTIR 196 bytes/pixel。输出与输入 alias 不重复计数。Filter 和 producer 字节从实际 buffer 大小求和；coverage 数字按已分配的字段/分辨率计算，不包含 allocator、driver、shader、基础 framebuffer 或 reservoir。
+buffer 账本：Filter 为共享 scratch 256 bytes/pixel + 每层 history/geometry 128 bytes/pixel，另加每 16×16 tile 的 uint。独立 depth anchor 增加 16 bytes/pixel 共享 scratch。producer 当前固定分配 192 bytes/pixel；coverage-only 为 PT 64、guided ReSTIR 196 bytes/pixel。输出与输入 alias 不重复计数。Filter 和 producer 字节从实际 buffer 大小求和；coverage 数字按已分配的字段/分辨率计算，不包含 allocator、driver、shader、基础 framebuffer 或 reservoir。
 
-**8 GiB 三层 1080p：容量余量未获认证。** 虽然三次均完成且未报 OOM，峰值达到 7890/8192 MiB，总帧约 523.5 ms，明显慢于 720p。这个现象提示容量压力；没有采集 WDDM paging 事件，不能据此宣称无换页或适合实时使用。此项是明确的交付限制。
+**8 GiB 三层 1080p：容量余量未获认证。** 虽然三次均完成且未报 OOM，峰值达到 7883/8192 MiB，总帧约 636.0 ms，明显慢于 720p。这个现象提示容量压力；没有采集 WDDM paging 事件，不能据此宣称无换页或适合实时使用。此项是明确的交付限制。
 
 本次 `corona_engine` 使用仓库规定的 CLion RelWithDebInfo/MSVC 14.44.35207 配置构建成功，可执行文件存在。Horizon 固定在 `2607a3b380e526fb3c319168493119d9b93285d3`，共享 checkout 无源码改动。场景资产、随机流、分辨率、配置、命令、源码状态摘要、renderer 二进制指纹和显存时间序列均保存在本 worktree 的 `cmake-build-relwithdebinfo/relax-evidence`。

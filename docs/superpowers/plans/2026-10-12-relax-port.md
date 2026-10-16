@@ -8,7 +8,7 @@
 
 **Tech Stack:** C++20、Ocarina 嵌入式 DSL、现有 CUDA backend、CLion RelWithDebInfo、CMake/CTest、vision-eval、Python 数值/图像评估。
 
-**Spec:** [移植设计](../specs/2026-10-12-relax-port-design.md)。状态：用户于 2026-10-16 授权顺序施工；产品实现、17 项相关回归、64 个场景/性能任务及引擎构建已完成；待独立整分支审查。
+**Spec:** [移植设计](../specs/2026-10-12-relax-port-design.md)。状态：用户于 2026-10-16 授权顺序施工；产品实现及独立整分支审查已完成。审查的两项 Important 问题已用 GPU RED→GREEN 修复；修复后 17 项相关回归、64 个场景/性能任务及引擎构建通过。
 
 ## Global Constraints
 
@@ -193,4 +193,11 @@ python vision/tools/relax_eval.py --build-dir cmake-build-relwithdebinfo --manif
 - [x] 用户于 2026-10-16 通过“开始施工吧”授权当前会话顺序实现。
 - [x] Task 1–8 的实现及证据已完成：17 项相关回归、64 个场景/性能任务与 CLion 同环境引擎构建通过。8 GiB 三层 1080p 容量余量未获认证，限制见 ReLAX README。
 
-独立整分支审查：待完成。
+独立整分支审查已完成：无 Critical/Minor，两项 Important 均已在 `12dcaa2f` 修复。
+静态折射历史使用独立 depth anchor，6 帧年龄由 1 恢复至 6；ReSTIR 的极暗/黑色
+距离合并不再依赖 epsilon 亮度阈值。两项均观察到 GPU 回归先失败后通过，完整
+17 项相关回归再次通过（75.50 s），64 个场景/性能任务全部重新测量。
+最终二进制指纹、逐层 pass、每帧一次 coverage 和实际 buffer 字节均核对通过。
+RTX 3070 Ti 8 GiB 三层 1080p 平均约 636 ms、device-wide 峰值 7883 MiB；
+未认证容量余量或无换页。完整日志与评审处理保留在本 worktree 的
+`cmake-build-relwithdebinfo/relax-evidence`。按用户要求保留分支及独立工作区。
