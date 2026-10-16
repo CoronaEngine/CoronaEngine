@@ -114,7 +114,9 @@ shader generator 未清理路径里的 `-`，在含连字符的 worktree 中首�
 - ReLAX 并非在所有场景优于 SVGF。材质、玻璃和镜面边缘的退化与参考噪声均须
   同时查看；不能仅凭全图平均或单张降噪图判断质量。
 
-## 实测结果（2026-10-16）
+## 初版移植实测（优化前，2026-10-16）
+
+本节保留初版数据作为基线；当前性能与显存结论见下方“636 ms 的根因与优化”。
 
 设备：NVIDIA GeForce RTX 3070 Ti, 8192 MiB, 610.88。17 项相关 CTest 回归通过；64 个渲染任务均完成；8 组静态/停止尾段时间噪声均低于 raw。结果已在最终审查修复后重新测量。
 
@@ -192,3 +194,53 @@ buffer 账本：Filter 为共享 scratch 256 bytes/pixel + 每层 history/geomet
 **8 GiB 三层 1080p：容量余量未获认证。** 虽然三次均完成且未报 OOM，峰值达到 7883/8192 MiB，总帧约 636.0 ms，明显慢于 720p。这个现象提示容量压力；没有采集 WDDM paging 事件，不能据此宣称无换页或适合实时使用。此项是明确的交付限制。
 
 本次 `corona_engine` 使用仓库规定的 CLion RelWithDebInfo/MSVC 14.44.35207 配置构建成功，可执行文件存在。Horizon 固定在 `2607a3b380e526fb3c319168493119d9b93285d3`，共享 checkout 无源码改动。场景资产、随机流、分辨率、配置、命令、源码状态摘要、renderer 二进制指纹和显存时间序列均保存在本 worktree 的 `cmake-build-relwithdebinfo/relax-evidence`。
+
+## 636 ms 的根因与优化（2026-10-16）
+
+这次性能修复位于 `da798309`。保持 1920×1080、三层、相同随机流、材质、RELAX 默认参数和 FP32 精度。
+
+根因是总工作集超过这张 8 GiB 卡的可用本地显存，导致多个渲染阶段访问非本地内存；不能把 stable build 或 DI/GI 变慢直接解释为它们的计算量增加。逐 pass 同步也不是主因：优化前取消阶段同步仍为 674.444 ms。
+
+| 同一 Kitchen 对照 | 总帧 ms | 进程提交 MiB | 进程共享/非本地峰值 MiB |
+|---|---:|---:|---:|
+| baseline1080 | 675.834 | 7864.7 | 842.0 |
+| raw1080 | 57.212 | 6193.3 | 106.0 |
+| relax900 | 86.070 | 5653.3 | 106.0 |
+| batched1080 | 674.444 | 7864.7 | 810.0 |
+| noPlanes1080 | 73.743 | 4095.3 | 106.0 |
+| 优化后 1080p（三次平均） | 112.291 | 6929.3 | 106.0 |
+| 优化后 1080p（批量提交） | 101.754 | 6929.3 | 106.0 |
+
+`baseline1080` 为本次优化前复现；`raw1080` 关闭降噪，`relax900` 为 1600×900，`batched1080` 关闭阶段同步，`noPlanes1080` 关闭 stable planes。关闭降噪还会改变 film jitter/coverage history，所以 raw 是辅助对照；保持相同设置且图像逐位一致的优化前后对照是主要依据。106 MiB 是该运行时在这些对照中已有的共享/非本地基线，不能称为零共享内存。
+
+原移植报告的 636.019 ms 是三次平均；本次同配置复现为 675.834 ms。以下按本次复现与优化后三次平均拆分，避免把 DI/GI 的合计再次叠加：
+
+| 阶段 | 优化前 ms | 优化后 ms |
+|---|---:|---:|
+| Stable build | 280.968 | 13.193 |
+| Stable fill | 45.739 | 2.344 |
+| ReSTIR DI | 93.863 | 11.089 |
+| ReSTIR GI | 152.092 | 26.147 |
+| Combine | 24.852 | 2.042 |
+| RELAX + guides + coverage | 61.157 | 47.393 |
+
+实现参考 RTXPT 固定版本的紧凑 stable-plane 记录，以及 NRD 4.14.3 的紧凑永久池/临时池原则。首先移除我们记录中的 float3 padding：Ocarina 的 float3 占 16 字节，三元素 FP32 array 占 12 字节；读取后用 `.as_vec3()` 恢复向量运算，写入用 `.set()`。没有删除字段或改成 FP16。
+
+| 记录 | 原字节 | 当前字节 | 每像素份数 |
+|---|---:|---:|---:|
+| SurfaceData | 192 | 160 | 2 |
+| SurfaceExtend | 80 | 44 | 2 |
+| StablePlaneData | 336 | 256 | 3 |
+| StablePlaneHistory | 128 | 96 | 3 |
+
+合计减少 472 bytes/pixel，即 1080p **933.398 MiB** 的逻辑 buffer；进程提交量实测下降约 935.4 MiB。RELAX 自身 Filter/producer/coverage 的逻辑账本不变，减少的是上游几何/transport 记录。
+
+验证：尺寸回归先失败后通过；GPU roundtrip 对所有紧凑字段及历史检查 signed zero、1e-30 和超过 FP16 范围的 100000，逐位保留。18/18 相关回归通过；引擎按 CLion 配置构建成功；独立审查无待处理问题。64/64 评估任务重新通过，8/8 时间噪声检查低于 raw。
+
+图像对照共 520 个 PFM，其中 377 个逐位相同，包含 Kitchen 1080p 全部性能图像。部分 ReSTIR 图像存在微小数值差异：filtered 图像最大整图 RMSE 5.61e-08，所有逐 ROI 质量 RMSE 指标变化最大 1.65e-08；raw 图像最大整图 RMSE 1.11e-05（最高亮差异像素约 112.95145→112.94916）。没有将这些图像宣称为逐位相同。同一新二进制重跑 glass-motion/raw、materials-rt/ReLAX 全部 PFM 逐位一致；原始差异和重复性记录均保留。对照门槛为 filtered RMSE/质量指标变化 <1e-6、raw RMSE <1e-4，并同时保留未通过全图逐位一致检查的记录。
+
+计时为含提交/同步的 host wall time；Windows GPU Process Memory 的 Dedicated/Shared/Non Local/Total Committed 按渲染 PID 采样。106 MiB 基线的成因未细分，也没有采集换页事件次数。结论限本机、本场景与记录的工作负载；其他进程占用改变仍可能重新触发显存压力。
+
+**升级需要重启渲染进程**，使用重建后的二进制重新分配 buffer；不支持把旧布局的 GPU buffer 跨二进制版本热恢复。
+
+本次原始命令、配置、逐阶段日志、PID 内存时间序列、对照脚本及 `performance-summary.json`/`image-comparison.json` 保存在本 worktree 的 `cmake-build-relwithdebinfo/relax-performance`；新完整评估位于其 `evidence-after`，旧 `relax-evidence` 保留为基线。
