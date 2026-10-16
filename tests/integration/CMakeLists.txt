@@ -33,6 +33,14 @@ add_test(NAME UiSurfaceRemovalRaceTests
 set_tests_properties(UiSurfaceRemovalRaceTests PROPERTIES TIMEOUT 15)
 
 if(CORONA_BUILD_VISION)
+    add_executable(corona_vision_relax_tests test_vision_relax.cpp)
+    target_include_directories(corona_vision_relax_tests PRIVATE ${CMAKE_SOURCE_DIR}/vision/src)
+    target_link_libraries(corona_vision_relax_tests PRIVATE ocarina-native ocarina-include)
+    add_test(NAME VisionRelaxHelpers COMMAND corona_vision_relax_tests helpers)
+    set_tests_properties(VisionRelaxHelpers PROPERTIES
+        WORKING_DIRECTORY "$<TARGET_FILE_DIR:ocarina-backend-cuda>"
+        RUN_SERIAL TRUE TIMEOUT 120)
+
     add_executable(corona_vision_shader_binding_tests
         test_vision_shader_bindings.cpp test_vision_shader_comments.cpp)
     target_link_libraries(corona_vision_shader_binding_tests PRIVATE ocarina-native ocarina-include)
