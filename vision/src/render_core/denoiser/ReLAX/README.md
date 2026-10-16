@@ -48,12 +48,13 @@ resize、投影改变、场景重编译和层开关均处理资源准备及历�
 方向相关的 diffuse/specular factor 用于解调与重调制。缺失 lobe 的 guide ray
 使用独立维度 1024，不向原 estimator 再贡献能量。primary sky/emission 走 bypass。
 
-执行顺序：Pack → ClassifyTiles → 可选 HitDistReconstruction → PrePass →
-TemporalAccumulation → HistoryFix → HistoryClamping → 可选 AntiFirefly →
-PublishHistory → AtrousFirst → À-trous → Unpack。
+执行顺序：PrepareGuidesAndPack → 可选 HitDistReconstruction → PrePass →
+TemporalAccumulation → HistoryFix → HistoryClamping（发布 illumination history）→
+可选 AntiFirefly（替换发布结果）→ AtrousFirstAndGeometry → À-trous →
+末轮 AtrousAndUnpack。独立 Filter 测试从原始信号运行独立 Pack。
 
 各层保留私有几何、slow/fast RGB、二阶矩、年龄和 reflection tracking；临时
-buffer 跨层顺序复用。发布历史发生在空间滤波之前，coverage 只作用于最终完整
+buffer 跨层顺序复用。illumination history 发布发生在空间滤波之前，geometry 在首轮 Atrous 写回；coverage 只作用于最终完整
 像素，均不回流 RELAX illumination history。FrameBuffer 的中性 `denoiser_*`
 原始 lobe buffer 在 Pack 冻结输入后复用为输出，避免另分配输出副本。
 
@@ -116,7 +117,7 @@ shader generator 未清理路径里的 `-`，在含连字符的 worktree 中首�
 
 ## 初版移植实测（优化前，2026-10-16）
 
-本节保留初版数据作为基线；当前性能与显存结论见下方“636 ms 的根因与优化”。
+本节保留初版数据作为基线；容量修复见下方“636 ms 的根因与优化”，最新性能见“RELAX 逐 pass 优化”。
 
 设备：NVIDIA GeForce RTX 3070 Ti, 8192 MiB, 610.88。17 项相关 CTest 回归通过；64 个渲染任务均完成；8 组静态/停止尾段时间噪声均低于 raw。结果已在最终审查修复后重新测量。
 
@@ -189,7 +190,7 @@ shader generator 未清理路径里的 `-`，在含连字符的 worktree 中首�
 | PublishPT | 0.166 | — | 0.346 | — |
 | Coverage | 0.524 | 2.688 | 1.106 | 6.347 |
 
-buffer 账本：Filter 为共享 scratch 256 bytes/pixel + 每层 history/geometry 128 bytes/pixel，另加每 16×16 tile 的 uint。独立 depth anchor 增加 16 bytes/pixel 共享 scratch。producer 当前固定分配 192 bytes/pixel；coverage-only 为 PT 64、guided ReSTIR 196 bytes/pixel。输出与输入 alias 不重复计数。Filter 和 producer 字节从实际 buffer 大小求和；coverage 数字按已分配的字段/分辨率计算，不包含 allocator、driver、shader、基础 framebuffer 或 reservoir。
+buffer 账本：Filter 为共享 scratch 256 bytes/pixel + 每层 history/geometry 128 bytes/pixel，另加每 16×16 tile 的 uint。独立 depth anchor 的 16 bytes/pixel 已计入上述共享 scratch。producer 当前固定分配 192 bytes/pixel；coverage-only 为 PT 64、guided ReSTIR 196 bytes/pixel。输出与输入 alias 不重复计数。Filter 和 producer 字节从实际 buffer 大小求和；coverage 数字按已分配的字段/分辨率计算，不包含 allocator、driver、shader、基础 framebuffer 或 reservoir。
 
 **8 GiB 三层 1080p：容量余量未获认证。** 虽然三次均完成且未报 OOM，峰值达到 7883/8192 MiB，总帧约 636.0 ms，明显慢于 720p。这个现象提示容量压力；没有采集 WDDM paging 事件，不能据此宣称无换页或适合实时使用。此项是明确的交付限制。
 
@@ -197,7 +198,7 @@ buffer 账本：Filter 为共享 scratch 256 bytes/pixel + 每层 history/geomet
 
 ## 636 ms 的根因与优化（2026-10-16）
 
-这次性能修复位于 `da798309`。保持 1920×1080、三层、相同随机流、材质、RELAX 默认参数和 FP32 精度。
+这次容量修复位于 `da798309`；本节性能为后续逐 pass 优化之前的基线。保持 1920×1080、三层、相同随机流、材质、RELAX 默认参数和 FP32 精度。
 
 根因是总工作集超过这张 8 GiB 卡的可用本地显存，导致多个渲染阶段访问非本地内存；不能把 stable build 或 DI/GI 变慢直接解释为它们的计算量增加。逐 pass 同步也不是主因：优化前取消阶段同步仍为 674.444 ms。
 
@@ -244,3 +245,52 @@ buffer 账本：Filter 为共享 scratch 256 bytes/pixel + 每层 history/geomet
 **升级需要重启渲染进程**，使用重建后的二进制重新分配 buffer；不支持把旧布局的 GPU buffer 跨二进制版本热恢复。
 
 本次原始命令、配置、逐阶段日志、PID 内存时间序列、对照脚本及 `performance-summary.json`/`image-comparison.json` 保存在本 worktree 的 `cmake-build-relwithdebinfo/relax-performance`；新完整评估位于其 `evidence-after`，旧 `relax-evidence` 保留为基线。
+
+## RELAX 逐 pass 优化（2026-10-17）
+
+代码提交 `5d4d76f8`。同一 Kitchen、1920×1080、三层 stable planes，RTX 3070 Ti 8 GiB。保持默认五轮 À-trous、所有滤波参数、随机流、材质、FP32 信号和历史。
+
+**最终无并发负载的三次性能复测待完成。** 原 HUD 版本三次平均 102.842 ms（9.72 FPS）。Pack 合并候选在外部负载出现前单次批量提交为 **85.979 ms（11.63 FPS）**，关闭两种 profiler，Kitchen PFM 逐字节一致。该候选早于最后的 stable-plane 有效性读取优化和首轮 dead-code 清理，不能将它当作最终提交的三次平均 FPS。
+
+每次预热 8 帧、测量 16 帧。下表是原版三次平均与 Pack 合并候选单次逐 pass profile 的实验对照，均对三层求和，含提交/同步的 host wall time。候选该次整帧为 403.647 ms 的上游异常值，但下列降噪区间为 31.512 ms；其后的正常批量提交单次为 85.979 ms。表格不代表最终提交的三次复测，也不是 GPU timestamp。
+
+| 阶段 | 原版三次平均 ms | 候选单次 ms |
+|---|---:|---:|
+| Guide rays + Pack | 6.146 | 5.419 |
+| ClassifyTiles | 1.349 | 0.000 |
+| PrePass | 7.157 | 3.202 |
+| TemporalAccumulation | 3.658 | 3.310 |
+| HistoryFix | 1.986 | 1.681 |
+| HistoryClamping（优化后含永久 illumination history） | 2.672 | 3.196 |
+| PublishHistory（已并入 Clamping/首轮 Atrous） | 3.558 | 0.000 |
+| AtrousFirst（优化后含 geometry history） | 2.226 | 2.424 |
+| Atrous2 | 1.825 | 1.424 |
+| Atrous4 | 2.010 | 1.626 |
+| Atrous8 | 3.310 | 1.660 |
+| Atrous16（优化后含 Unpack） | 5.027 | 2.239 |
+| Unpack（已并入末轮 Atrous） | 1.354 | 0.000 |
+| Coverage | 5.288 | 5.332 |
+| 合计 | 47.569 | 31.512 |
+
+合并后的行包含额外写回，不能仅把该行的增加解释为算法变慢。JSON 同时保留原始 pass 名、每层数据和每次重复，便于重新求和。
+
+实现依据固定 RTXPT/NRD 4.14.3 的分离 guide 资源和永久/临时池调度：
+
+- 当前 Guide 改为七列连续 float4：同样 112 bytes/pixel，identity 位转换，motion 保留 FP32。相邻线程读取相邻同类字段；不使用 FP16 或删除 guide 字段。
+- 后续 Atrous 的 diffuse/specular 共用八个邻域 tap 的 geometry/ownership 读取，保留各通道原来的算术、tap 顺序与平方权重方差传播。
+- HistoryClamping 写永久 slow/fast history；启用 AntiFirefly 时由它写最终 slow 和已夹紧 fast/meta。首轮 Atrous 写 geometry，末轮直接重调制输出，省去单独 PublishHistory/Unpack。
+- Guide 生成直接解调到既有 scratch，并在读取完整 stable-plane payload 前判断有效性。删除没有消费者的 ClassifyTiles。重建模式、反萤火虫和 2–8 轮路径保留。
+
+固定 16×16 和 16×8 launch 的试验没有稳定收益，均已撤回。NCU 硬件计数器返回 ERR_NVGPUCTRPERM；没有修改系统权限，也没有据此声称实际占用率、DRAM 带宽或迁移事件。
+
+当前 Filter 是共享 scratch 256 bytes/pixel（已含独立 depth anchor）+ 每层 geometry/history 128 bytes/pixel。1080p 三层 Filter 1265.625 MiB，连同 producer/coverage 逻辑 buffer 共 2032.910 MiB；比此前只减少未使用的 32640-byte tile buffer，主要收益来自访问和调度。
+
+验证：CLion 配置的引擎构建成功，18/18 回归通过；独立源码审查无待处理问题。64/64 评估任务通过，8/8 时间噪声检查低于 raw。对照上一版容量优化后的 520 个 PFM，520 个文件逐字节一致，filtered 最大整图 RMSE 0，全部质量 ROI 指标变化最大 0，全部图像最大 RMSE 0。另有 5 次 Kitchen 1080p 诊断的图像比较。52 个质量任务包含 320×240 静态/运动序列，12 个渲染任务覆盖 720p/1080p PT/三层 ReSTIR；后者在 AccuRC 并发期间运行，耗时不用于正常负载的性能结论。
+
+原有 materials/glass 相对 SVGF 的误差、镜面边缘和运动恢复限制仍保留在上方报告；本轮只验证当前画质保持，不声称消除了原有质量缺点。
+
+异常结果同样保留：中间候选一次 profile 整帧 403.647 ms，但 RELAX+guide+coverage 为 31.512 ms，主要拖慢发生在上游；缺乏迁移事件证据，原因未定。最终首次复测时 AccuRC 2 于 01:28:37 启动，占用约 639 MiB dedicated，渲染进程 Shared/Non Local 升至 392 MiB，得到 1363.810 / 1359.600 / 673.817 ms，第四次未完成即停止。它们作为并发负载结果单列，不纳入相同显卡占用条件的三次对照。没有关闭或修改用户程序。
+
+完整记录位于本 worktree 的 `cmake-build-relwithdebinfo/relax-performance`：`relax-passes-summary.json`（原始逐层/逐 pass、全部重复和异常）、`relax-passes-image-comparison.json`、`relax-passes-evidence/report.json`（64 个任务）、`relax-passes-diagnostics`（构建/测试/审查/计数器日志和复现脚本）。前一版 `evidence-after` 和全部中间实验保留。
+
+**需重启渲染进程加载新二进制与 Guide 布局。** 当前仍约 7 GiB 进程工作集，其他程序占用显卡可能重新引入容量压力；本轮没有降低分辨率或层数来回避该限制。
