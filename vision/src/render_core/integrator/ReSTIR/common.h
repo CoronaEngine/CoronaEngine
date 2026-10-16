@@ -177,7 +177,7 @@ public:
     [[nodiscard]] Float3 cur_view_pos(const Bool &is_replace, const Uint &index = dispatch_id()) const noexcept {
         Float3 view_pos;
         $if(is_replace) {
-            view_pos = cur_surface_extends().read(index).view_pos;
+            view_pos = cur_surface_extends().read(index).view_pos.as_vec3();
         }
         $else {
             view_pos = scene().sensor()->device_position();

@@ -13,6 +13,7 @@
 #include <stdexcept>
 #include <fstream>
 #include <chrono>
+#include <cstring>
 
 namespace {
 using namespace vision;
@@ -21,7 +22,53 @@ void expect(bool condition, const char *message) {
 }
 
 void check_material(Pipeline &pipeline) {
+    std::cout << "surface/extension/plane/history bytes: " << sizeof(SurfaceData) << '/' << sizeof(SurfaceExtend)
+              << '/' << sizeof(StablePlaneData) << '/' << sizeof(StablePlaneHistory) << '\n';
+    expect(sizeof(SurfaceData) <= 160u && sizeof(SurfaceExtend) <= 48u &&
+           sizeof(StablePlaneData) <= 256u && sizeof(StablePlaneHistory) <= 96u,
+           "full-precision stable-plane storage must not retain padded float3 payloads");
     pipeline.activate_global_context();
+    StablePlaneData original{};
+    original.surface.virtual_position = {16777216.f, -0.f, 1e-30f};
+    original.surface.virtual_normal = {.123456791f, -.765432119f, 1.f};
+    original.surface.virtual_geometric_normal = {-.25f, .5f, .75f};
+    original.surface.denoiser_albedo = {65504.f, 100000.f, .0000001f};
+    original.surface.depth_position = {-123456.75f, .03125f, 19.75f};
+    original.extension.throughput = {.123456791f, 1e-30f, 100000.f};
+    original.extension.view_pos = {-0.f, -100000.f, 3.1415927f};
+    original.extension.final_direction = {.3f, -.7f, .1f};
+    original.depth_position = {17.25f, -.123456791f, 65504.f};
+    auto packed_input = pipeline.device().create_buffer<StablePlaneData>(1u, "compact FP32 input");
+    auto packed_output = pipeline.device().create_buffer<StablePlaneData>(1u, "compact FP32 output");
+    auto packed_history = pipeline.device().create_buffer<StablePlaneHistory>(1u, "compact FP32 history");
+    Kernel roundtrip = [](BufferVar<StablePlaneData> in, BufferVar<StablePlaneData> out, BufferVar<StablePlaneHistory> history) {
+        auto p = in.read(0u);
+        for (auto *v : {&p.surface.virtual_position, &p.surface.virtual_normal, &p.surface.virtual_geometric_normal,
+                       &p.surface.denoiser_albedo, &p.surface.depth_position, &p.extension.throughput,
+                       &p.extension.view_pos, &p.extension.final_direction, &p.depth_position}) {
+            v->set(v->as_vec3());
+        }
+        out.write(0u, p); history.write(0u, p->history());
+    };
+    auto packed_shader = pipeline.device().compile(roundtrip, "stable-plane-lossless-FP32-storage");
+    StablePlaneData restored{}; StablePlaneHistory previous{};
+    pipeline.stream() << packed_input.upload(&original) << packed_shader(packed_input, packed_output, packed_history).dispatch(1u)
+        << packed_output.download(&restored) << packed_history.download(&previous) << synchronize() << commit();
+    auto same_bits = [&](const auto &a, const auto &b) {
+        expect(std::memcmp(a.data(), b.data(), sizeof(a)) == 0, "compact FP32 GPU storage must preserve every scalar bit");
+    };
+    same_bits(restored.surface.virtual_position, original.surface.virtual_position);
+    same_bits(restored.surface.virtual_normal, original.surface.virtual_normal);
+    same_bits(restored.surface.virtual_geometric_normal, original.surface.virtual_geometric_normal);
+    same_bits(restored.surface.denoiser_albedo, original.surface.denoiser_albedo);
+    same_bits(restored.surface.depth_position, original.surface.depth_position);
+    same_bits(restored.extension.throughput, original.extension.throughput);
+    same_bits(restored.extension.view_pos, original.extension.view_pos);
+    same_bits(restored.extension.final_direction, original.extension.final_direction);
+    same_bits(restored.depth_position, original.depth_position);
+    same_bits(previous.surface.virtual_position, original.surface.virtual_position);
+    same_bits(previous.surface.virtual_geometric_normal, original.surface.virtual_geometric_normal);
+    same_bits(previous.depth_position, original.depth_position);
     auto &sampler = pipeline.renderer().sampler();
     SamplerDesc seed_desc{"independent"}; seed_desc.set_value("seed", 104729u);
     auto independent = Node::create_shared<Sampler>(seed_desc);

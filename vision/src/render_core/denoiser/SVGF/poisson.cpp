@@ -98,11 +98,11 @@ Kernel prepare_layer_guide = [pipeline_ref](Var<CombinedPoissonParam> param) {
             $if(valid) {
                 // This entry point only handles full stable-plane records.
                 // Decode once before any radiance/scratch writes can alias them.
-                Float3 position = plane.surface.virtual_position;
-                Float3 normal = plane.surface.virtual_geometric_normal;
-                Float3 shading_normal = plane.surface.virtual_normal;
-                Float view_depth = length(plane.depth_position - param.camera_pos.as_vec3());
-                Float3 albedo = modulation_albedo(plane.surface.denoiser_albedo, Cfg::Modulator::kSoftEpsilon);
+                Float3 position = plane.surface.virtual_position.as_vec3();
+                Float3 normal = plane.surface.virtual_geometric_normal.as_vec3();
+                Float3 shading_normal = plane.surface.virtual_normal.as_vec3();
+                Float view_depth = length(plane.depth_position.as_vec3() - param.camera_pos.as_vec3());
+                Float3 albedo = modulation_albedo(plane.surface.denoiser_albedo.as_vec3(), Cfg::Modulator::kSoftEpsilon);
                 Uint branch = ocarina::select(plane.surface.stable_branch == InvalidUI32, 0u, plane.surface.stable_branch);
                 Uint4 identity = make_uint4(1u, branch, plane.branch_sequence, plane.instance_hash);
                 Uint4 surface = make_uint4(plane.depth, plane.material_id, plane.surface.hit.inst_id, 1u);
@@ -122,9 +122,9 @@ Kernel prepare_layer_guide = [pipeline_ref](Var<CombinedPoissonParam> param) {
                 // Sky endpoints retain coverage identity without a filterable signal.
                 param.guide_identity.write(idx, make_uint4(2u, 0u, plane.branch_sequence, plane.instance_hash));
                 param.guide_surface.write(idx, make_uint4(plane.depth, plane.material_id, plane.surface.hit.inst_id, 1u));
-                param.guide_position.write(idx, make_float4(plane.surface.virtual_position,
-                    length(plane.depth_position - param.camera_pos.as_vec3())));
-                param.guide_normal.write(idx, make_float4(plane.surface.virtual_geometric_normal, 0.f));
+                param.guide_position.write(idx, make_float4(plane.surface.virtual_position.as_vec3(),
+                    length(plane.depth_position.as_vec3() - param.camera_pos.as_vec3())));
+                param.guide_normal.write(idx, make_float4(plane.surface.virtual_geometric_normal.as_vec3(), 0.f));
             };
         };
         active |= valid;

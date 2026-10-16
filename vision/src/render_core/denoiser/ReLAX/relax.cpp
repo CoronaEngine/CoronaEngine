@@ -80,7 +80,7 @@ void ReLAX::compile() noexcept {
         $if(p.layered != 0u) {
             auto plane = p.planes.read(i);
             surface = plane.surface; hit = surface.hit;
-            eye = plane.extension.view_pos; prefix = plane.extension.throughput;
+            eye = plane.extension.view_pos.as_vec3(); prefix = plane.extension.throughput.as_vec3();
             valid = plane.valid != 0u && hit->is_hit();
             branch = plane.branch_sequence; instance_hash = guide_instance(hit.inst_id, plane.instance_hash);
             g.motion = plane.motion;
@@ -90,7 +90,7 @@ void ReLAX::compile() noexcept {
                 valid = hit->is_hit(); branch = surface.stable_branch;
                 $if(surface.is_replaced != 0u) {
                     auto extension = p.extensions.read(i);
-                    eye = extension.view_pos; prefix = extension.throughput;
+                    eye = extension.view_pos.as_vec3(); prefix = extension.throughput.as_vec3();
                 };
             };
         };
@@ -134,9 +134,9 @@ void ReLAX::compile() noexcept {
                 });
             };
             $if(p.stable != 0u) {
-                g.position = make_float4(surface.virtual_position, camera->linear_depth(surface.depth_position));
-                g.depth_position = make_float4(surface.depth_position, 1.f);
-                g.normal_roughness = make_float4(normalize(surface.virtual_normal), g.normal_roughness.w);
+                g.position = make_float4(surface.virtual_position.as_vec3(), camera->linear_depth(surface.depth_position.as_vec3()));
+                g.depth_position = make_float4(surface.depth_position.as_vec3(), 1.f);
+                g.normal_roughness = make_float4(normalize(surface.virtual_normal.as_vec3()), g.normal_roughness.w);
             };
             // Producer motion is a displacement between projections of the
             // same film sample. Keep it unchanged: a static camera has zero

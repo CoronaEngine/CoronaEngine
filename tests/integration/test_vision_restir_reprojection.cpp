@@ -321,9 +321,9 @@ void check_stable_plane(vision::Pipeline& pipeline, bool tinted_mirror) {
     const auto a = surfaces[center];
     fail(a.stable_branch != 0u && a.stable_branch != InvalidUI32, "mirror must produce a valid stable branch");
     fail(a.hit.inst_id != primary[center].inst_id, "stable endpoint must not overwrite primary visibility");
-    fail(std::abs(a.virtual_position.z + 3.f) < 1e-4f && a.virtual_geometric_normal.z > 0.999f,
+    fail(std::abs(a.virtual_position[2] + 3.f) < 1e-4f && a.virtual_geometric_normal[2] > 0.999f,
          "mirror virtual position and normal must be reflected into camera space");
-    if (tinted_mirror) fail(std::abs(a.denoiser_albedo.x - 0.48f) < 0.01f && std::abs(a.denoiser_albedo.y - 0.16f) < 0.01f,
+    if (tinted_mirror) fail(std::abs(a.denoiser_albedo[0] - 0.48f) < 0.01f && std::abs(a.denoiser_albedo[1] - 0.16f) < 0.01f,
          "mirror demodulation guide must contain receiver albedo times prefix throughput");
     fail(float(history[center].moments_direct.z) > 2.f, "stable mirror must accumulate SVGF history");
     auto& camera = pipeline.scene().sensor();
@@ -351,8 +351,8 @@ void check_stable_plane(vision::Pipeline& pipeline, bool tinted_mirror) {
         output.write(2u, make_float4(cast<float>(ReSTIRGI::is_valid_neighbor(current, other, gp))));
         // Analytical virtual point projection and the actual produced motion
         // must agree; using the primary mirror depth would differ by 3x.
-        Float2 expected_prev = camera->prev_raster_coord(current.virtual_position).xy();
-        Float2 expected_cur = camera->raster_coord(current.virtual_position).xy();
+        Float2 expected_prev = camera->prev_raster_coord(current.virtual_position.as_vec3()).xy();
+        Float2 expected_cur = camera->raster_coord(current.virtual_position.as_vec3()).xy();
         Float2 actual = pipeline.frame_buffer()->motion_vectors().read(center);
         output.write(3u, make_float4(actual, expected_cur - expected_prev));
     };
@@ -430,16 +430,16 @@ void check_stable_emitter_coverage(vision::Pipeline& pipeline) {
             if constexpr (requires { value.motion; }) return value.motion;
             else return svgf::stable_motion(param, idx);
         };
-        Float2 expected = camera->raster_coord(plane.surface.virtual_position).xy() -
-                          camera->prev_raster_coord(plane.surface.virtual_position).xy();
+        Float2 expected = camera->raster_coord(plane.surface.virtual_position.as_vec3()).xy() -
+                          camera->prev_raster_coord(plane.surface.virtual_position.as_vec3()).xy();
         Bool current_ok = guide.valid && !guide.ambiguous && guide.replaced &&
             guide.hit.inst_id == plane.surface.hit.inst_id &&
-            length(guide.position - plane.surface.virtual_position) < 1e-5f &&
-            length(guide.normal - plane.surface.virtual_geometric_normal) < 1e-5f;
+            length(guide.position - plane.surface.virtual_position.as_vec3()) < 1e-5f &&
+            length(guide.normal - plane.surface.virtual_geometric_normal.as_vec3()) < 1e-5f;
         Bool previous_ok = previous.valid && !previous.ambiguous && previous.replaced &&
             previous.hit.inst_id == old.surface.hit.inst_id &&
-            length(previous.position - old.surface.virtual_position) < 1e-5f &&
-            length(previous.normal - old.surface.virtual_geometric_normal) < 1e-5f;
+            length(previous.position - old.surface.virtual_position.as_vec3()) < 1e-5f &&
+            length(previous.normal - old.surface.virtual_geometric_normal.as_vec3()) < 1e-5f;
         out.write(idx, make_float4(cast<float>(current_ok), cast<float>(previous_ok),
             length(motion_of(guide) - plane.motion), length(motion_of(guide) - expected)));
     };
@@ -473,7 +473,7 @@ void check_stable_emitter_coverage(vision::Pipeline& pipeline) {
             << synchronize() << commit();
         auto p = current[center];
         if (!p.valid || p.reservoir_eligible || dominant[center] != InvalidUI32 || exported[center].is_replaced ||
-            std::abs(p.surface.virtual_position.z + 3.f) > 1e-4f || p.surface.hit.inst_id == InvalidUI32)
+            std::abs(p.surface.virtual_position[2] + 3.f) > 1e-4f || p.surface.hit.inst_id == InvalidUI32)
             throw std::runtime_error("mirror emitter fixture must have a valid exact virtual endpoint and no reservoir export");
         auto v = values[center];
         std::cout << "mirror emitter pose=" << pose << " current/previous=" << v.x << '/' << v.y

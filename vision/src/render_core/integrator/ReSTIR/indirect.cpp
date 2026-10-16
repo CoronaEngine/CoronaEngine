@@ -241,7 +241,7 @@ GIReservoirVar ReSTIRGI::temporal_reuse(GIReservoirVar rsv, const SurfaceDataVar
         SurfaceDataVar surf = prev_surfaces().read(index);
         view_pos = scene().sensor()->prev_device_position();
         $if(surf.is_replaced) {
-            view_pos = prev_surface_extends().read(index).view_pos;
+            view_pos = prev_surface_extends().read(index).view_pos.as_vec3();
         };
         return make_pair(surf, prev_rsv);
     };
@@ -398,8 +398,8 @@ Float3 ReSTIRGI::shading(GIReservoirVar rsv,
     Float3 throughput = make_float3(1.f);
     $if(cur_surf.is_replaced) {
         SurfaceExtendVar surf_ext = cur_surface_extends().read(dispatch_id());
-        throughput = surf_ext.throughput;
-        view_pos = surf_ext.view_pos;
+        throughput = surf_ext.throughput.as_vec3();
+        view_pos = surf_ext.view_pos.as_vec3();
     };
     Interaction it = pipeline()->geometry().compute_surface_interaction(cur_surf.hit, view_pos);
     Float3 ret = make_float3(0.f);

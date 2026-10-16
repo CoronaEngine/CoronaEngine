@@ -28,11 +28,12 @@ public:
     float4 specular_roughness{};
     // A single deterministic reflection branch. Zero is the primary surface;
     // InvalidUI32 keeps unsupported replacement paths out of stable reuse.
-    float3 virtual_position{};
-    float3 virtual_normal{};
-    float3 virtual_geometric_normal{};
-    float3 denoiser_albedo{};
-    float3 depth_position{};
+    // Three FP32 scalars avoid float3's 16-byte size in dense current/history records.
+    array_float3 virtual_position{};
+    array_float3 virtual_normal{};
+    array_float3 virtual_geometric_normal{};
+    array_float3 denoiser_albedo{};
+    array_float3 depth_position{};
     uint approximate{false};
     uint stable_branch{0u};
     uint is_replaced{false};
@@ -58,10 +59,10 @@ OC_STRUCT(vision, SurfaceData, hit, normal_depth, pos_diff, diffuse_roughness, s
 
 namespace vision {
 struct SurfaceExtend {
-    float3 throughput{make_float3(1.f)};
-    float3 view_pos{};
+    array_float3 throughput{1.f, 1.f, 1.f};
+    array_float3 view_pos{};
     float t_max{};
-    float3 final_direction{};
+    array_float3 final_direction{};
     uint prefix_depth{};
 };
 }// namespace vision
@@ -75,15 +76,15 @@ inline constexpr uint StablePlaneCount = 3u;
 // Keep full precision; transport state and material evaluation stay current-only.
 struct StablePlaneHistorySurface {
     TriangleHit hit{};
-    float3 virtual_position{};
-    float3 virtual_geometric_normal{};
+    array_float3 virtual_position{};
+    array_float3 virtual_geometric_normal{};
     uint approximate{};
     uint stable_branch{};
 };
 struct StablePlaneHistory {
     StablePlaneHistorySurface surface{};
     float2 motion{};
-    float3 depth_position{};
+    array_float3 depth_position{};
     uint branch_sequence{1u};
     uint instance_hash{};
     uint depth{};
@@ -95,7 +96,7 @@ struct StablePlaneData {
     SurfaceData surface{};
     SurfaceExtend extension{};
     float2 motion{};
-    float3 depth_position{};
+    array_float3 depth_position{};
     uint branch_sequence{1u};
     uint instance_hash{};
     uint depth{};

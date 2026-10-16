@@ -201,8 +201,8 @@ void SVGF::compile_resolve() {
         auto plane = param.coverage_planes.read(plane_idx);
         param.edge_identity.write(idx, make_uint4(plane.valid, plane.branch_sequence, plane.instance_hash, plane.depth));
         param.edge_surface.write(idx, make_uint4(plane.material_id, plane.surface.hit.inst_id, 0u, 0u));
-        param.edge_position.write(idx, make_float4(plane.surface.virtual_position, length(plane.depth_position - param.camera_pos.as_vec3())));
-        param.edge_normal.write(idx, make_float4(plane.surface.virtual_geometric_normal, 0.f));
+        param.edge_position.write(idx, make_float4(plane.surface.virtual_position.as_vec3(), length(plane.depth_position.as_vec3() - param.camera_pos.as_vec3())));
+        param.edge_normal.write(idx, make_float4(plane.surface.virtual_geometric_normal.as_vec3(), 0.f));
     };
     edge_guide_shader_ = device().compile(prepare_edge, "SVGF-CoverageEdgeGuide");
     auto compile_edges = [&]<bool spatial>() {
