@@ -250,27 +250,32 @@ buffer 账本：Filter 为共享 scratch 256 bytes/pixel + 每层 history/geomet
 
 代码提交 `5d4d76f8`。同一 Kitchen、1920×1080、三层 stable planes，RTX 3070 Ti 8 GiB。保持默认五轮 À-trous、所有滤波参数、随机流、材质、FP32 信号和历史。
 
-**最终无并发负载的三次性能复测待完成。** 原 HUD 版本三次平均 102.842 ms（9.72 FPS）。Pack 合并候选在外部负载出现前单次批量提交为 **85.979 ms（11.63 FPS）**，关闭两种 profiler，Kitchen PFM 逐字节一致。该候选早于最后的 stable-plane 有效性读取优化和首轮 dead-code 清理，不能将它当作最终提交的三次平均 FPS。
+正常批量提交关闭两种 profiler，三次整帧平均 **102.842 → 85.303 ms**，即 **9.72 → 11.72 FPS**；帧时减少 17.1%，帧率提高 20.6%。
 
-每次预热 8 帧、测量 16 帧。下表是原版三次平均与 Pack 合并候选单次逐 pass profile 的实验对照，均对三层求和，含提交/同步的 host wall time。候选该次整帧为 403.647 ms 的上游异常值，但下列降噪区间为 31.512 ms；其后的正常批量提交单次为 85.979 ms。表格不代表最终提交的三次复测，也不是 GPU timestamp。
+每次预热 8 帧、测量 16 帧。以下为三次逐 pass 同步测量的平均，对三层求和，含提交/同步的 host wall time；不是 GPU timestamp，也不能直接从它推算正常提交的 FPS。
 
-| 阶段 | 原版三次平均 ms | 候选单次 ms |
+| 阶段 | 优化前 ms | 优化后 ms |
 |---|---:|---:|
-| Guide rays + Pack | 6.146 | 5.419 |
+| Guide rays + Pack | 6.146 | 4.104 |
 | ClassifyTiles | 1.349 | 0.000 |
-| PrePass | 7.157 | 3.202 |
-| TemporalAccumulation | 3.658 | 3.310 |
-| HistoryFix | 1.986 | 1.681 |
-| HistoryClamping（优化后含永久 illumination history） | 2.672 | 3.196 |
+| PrePass | 7.157 | 3.329 |
+| TemporalAccumulation | 3.658 | 3.163 |
+| HistoryFix | 1.986 | 1.598 |
+| HistoryClamping（优化后含永久 illumination history） | 2.672 | 2.987 |
 | PublishHistory（已并入 Clamping/首轮 Atrous） | 3.558 | 0.000 |
-| AtrousFirst（优化后含 geometry history） | 2.226 | 2.424 |
-| Atrous2 | 1.825 | 1.424 |
-| Atrous4 | 2.010 | 1.626 |
-| Atrous8 | 3.310 | 1.660 |
-| Atrous16（优化后含 Unpack） | 5.027 | 2.239 |
+| AtrousFirst（优化后含 geometry history） | 2.226 | 2.615 |
+| Atrous2 | 1.825 | 1.323 |
+| Atrous4 | 2.010 | 1.395 |
+| Atrous8 | 3.310 | 1.618 |
+| Atrous16（优化后含 Unpack） | 5.027 | 2.196 |
 | Unpack（已并入末轮 Atrous） | 1.354 | 0.000 |
-| Coverage | 5.288 | 5.332 |
-| 合计 | 47.569 | 31.512 |
+| Coverage | 5.288 | 5.131 |
+| 合计 | 47.569 | 29.460 |
+
+最终正常提交三次整帧：85.416 / 85.014 / 85.477 ms；逐 pass 同步模式三次整帧：90.930 / 90.557 / 91.002 ms。六次进程 Shared/Non Local 峰值 106.0 MiB，提交峰值 6977.3 MiB。
+用户关闭并发负载后重新测量，开始前显卡占用 838 MiB，此前基线约 1067 MiB；两组渲染进程的 Shared/Non Local 基线均为 106 MiB。原有并发结果保留，不与本组混合求均值。
+
+RELAX+guide+coverage 合计减少 38.1%。当前其余同步阶段为 Stable build 13.171、fill 2.401、ReSTIR DI 11.129、GI 26.217、Combine 2.015 ms；DI/GI 已包含 PathTracing 总项，不能重复相加。
 
 合并后的行包含额外写回，不能仅把该行的增加解释为算法变慢。JSON 同时保留原始 pass 名、每层数据和每次重复，便于重新求和。
 
@@ -285,7 +290,7 @@ buffer 账本：Filter 为共享 scratch 256 bytes/pixel + 每层 history/geomet
 
 当前 Filter 是共享 scratch 256 bytes/pixel（已含独立 depth anchor）+ 每层 geometry/history 128 bytes/pixel。1080p 三层 Filter 1265.625 MiB，连同 producer/coverage 逻辑 buffer 共 2032.910 MiB；比此前只减少未使用的 32640-byte tile buffer，主要收益来自访问和调度。
 
-验证：CLion 配置的引擎构建成功，18/18 回归通过；独立源码审查无待处理问题。64/64 评估任务通过，8/8 时间噪声检查低于 raw。对照上一版容量优化后的 520 个 PFM，520 个文件逐字节一致，filtered 最大整图 RMSE 0，全部质量 ROI 指标变化最大 0，全部图像最大 RMSE 0。另有 5 次 Kitchen 1080p 诊断的图像比较。52 个质量任务包含 320×240 静态/运动序列，12 个渲染任务覆盖 720p/1080p PT/三层 ReSTIR；后者在 AccuRC 并发期间运行，耗时不用于正常负载的性能结论。
+验证：CLion 配置的引擎构建成功，18/18 回归通过；独立源码审查无待处理问题。64/64 评估任务通过，8/8 时间噪声检查低于 raw。对照上一版容量优化后的 520 个 PFM，520 个文件逐字节一致，filtered 最大整图 RMSE 0，全部质量 ROI 指标变化最大 0，全部图像最大 RMSE 0。另有 6 次 Kitchen 1080p 诊断的图像比较。52 个质量任务包含 320×240 静态/运动序列，12 个渲染任务覆盖 720p/1080p PT/三层 ReSTIR；后者在 AccuRC 并发期间运行，耗时不用于正常负载的性能结论。
 
 原有 materials/glass 相对 SVGF 的误差、镜面边缘和运动恢复限制仍保留在上方报告；本轮只验证当前画质保持，不声称消除了原有质量缺点。
 
