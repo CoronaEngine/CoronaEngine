@@ -33,6 +33,9 @@ add_test(NAME UiSurfaceRemovalRaceTests
 set_tests_properties(UiSurfaceRemovalRaceTests PROPERTIES TIMEOUT 15)
 
 if(CORONA_BUILD_VISION)
+    add_test(NAME VisionRelaxEvaluationTools
+        COMMAND ${Python_EXECUTABLE} ${CMAKE_SOURCE_DIR}/vision/src/tests/test_relax_eval.py)
+    set_tests_properties(VisionRelaxEvaluationTools PROPERTIES TIMEOUT 30)
     add_executable(corona_vision_relax_scene_tests test_vision_relax_producers.cpp)
     target_include_directories(corona_vision_relax_scene_tests PRIVATE ${CMAKE_SOURCE_DIR}/vision/src)
     target_link_libraries(corona_vision_relax_scene_tests PRIVATE corona::engine vision-all_libs vision-relax-filter)

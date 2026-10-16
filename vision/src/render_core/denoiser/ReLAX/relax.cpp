@@ -2,6 +2,8 @@
 #include "base/mgr/pipeline.h"
 #include "base/integral/integrator.h"
 #include "utils.h"
+#include <cstdlib>
+#include <fstream>
 
 namespace vision::relax {
 namespace {
@@ -11,6 +13,13 @@ Uint guide_instance(Uint receiver, Uint prefix) {
 Float3 safe_rgb(Float3 rgb) {
     return select(all(rgb == rgb) && all(abs(rgb) < 3.402823466e38f),
                   clamp(rgb, make_float3(0.f), make_float3(65504.f)), make_float3(0.f));
+}
+const char *profile_file() { return std::getenv("VISION_RELAX_PROFILE"); }
+void record_time(string_view stage, uint frame, uint layer, double ms) {
+    if (const auto *path = profile_file()) {
+        std::ofstream out(path, std::ios::app);
+        out << "{\"stage\":\"" << stage << "\",\"frame\":" << frame << ",\"layer\":" << layer << ",\"ms\":" << ms << "}\n";
+    }
 }
 }
 ReLAX::ReLAX(const DenoiserDesc &desc) : Denoiser(desc) {
@@ -53,6 +62,7 @@ void ReLAX::render_sub_UI(Widgets *widgets) noexcept {
     if (widgets->check_box("turn on", &on)) { set_enabled(on); changed_ = true; }
 }
 void ReLAX::compile() noexcept {
+    Clock compile_clock;
     auto &camera = scene().sensor(); auto &sampler = renderer().sampler();
     Kernel guides = [&](Var<GuideParam> p) {
         camera->load_data(); sampler->load_data();
@@ -141,6 +151,7 @@ void ReLAX::compile() noexcept {
     publish_ = device().compile(publish, "RELAX-PublishPT");
     filter_->compile(device()); coverage_->compile();
     compiled_ = true;
+    record_time("CompileCPU", 0u, 0u, compile_clock.elapse_ms());
     frame_ = InvalidUI32;
 }
 
@@ -150,10 +161,35 @@ CommandBatch ReLAX::dispatch(RealTimeDenoiseInput &input) noexcept {
     // A pipeline may start in raw mode and enable its selected denoiser later.
     // At dispatch the producer resources and scene context are already ready.
     if (!has_prepared_resources() || !compiled_) { prepare(); compile(); }
+    Filter::PassSubmit submit;
+    if (profile_file()) submit = [&](CommandBatch commands, string_view stage) {
+        Clock clock;
+        pipeline()->stream() << commands << synchronize() << commit();
+        record_time(stage, input.frame_index, input.layer_index, clock.elapse_ms());
+    };
+    auto coverage = [&](RealTimeDenoiseInput &value) {
+        auto commands = coverage_->dispatch(value);
+        if (submit) {
+            submit(commands, "Coverage");
+            auto &fb = frame_buffer();
+            size_t producer = fb.denoiser_diffuse().view().size_in_byte() + fb.denoiser_specular().view().size_in_byte() +
+                fb.denoiser_bypass().view().size_in_byte() + fb.denoiser_di_specular().view().size_in_byte() +
+                fb.denoiser_gi_specular().view().size_in_byte() + fb.denoiser_di_bypass().view().size_in_byte();
+            // Coverage-only owns four float4 resolve images, plus four cached guides,
+            // one edge mask and four Poisson scratch guides when geometry is guided.
+            const size_t coverage_bytes = size_t(input.resolution.x) * input.resolution.y *
+                (4u * sizeof(float4) + ((value.use_stable_planes || value.composed_coverage) ? 8u * sizeof(float4) + sizeof(uint) : 0u));
+            std::ofstream out(profile_file(), std::ios::app);
+            out << "{\"resources\":true,\"frame\":" << input.frame_index << ",\"filter_bytes\":" << filter_->allocated_bytes()
+                << ",\"producer_bytes\":" << producer << ",\"coverage_logical_bytes\":" << coverage_bytes << "}\n";
+            commands.clear();
+        }
+        return commands;
+    };
     if (input.composed_coverage) {
         auto coverage_input = input;
         coverage_input.composed_coverage = input.coverage_planes.size() != 0u;
-        return coverage_->dispatch(coverage_input);
+        return coverage(coverage_input);
     }
     if (!input.has_lobe_signals) {
         OC_ERROR("RELAX requires explicit diffuse/specular radiance and world-space hit distances");
@@ -176,6 +212,7 @@ CommandBatch ReLAX::dispatch(RealTimeDenoiseInput &input) noexcept {
     gp.diffuse = input.lobe_signals.diffuse_radiance_hitdist.descriptor();
     gp.specular = input.lobe_signals.specular_radiance_hitdist.descriptor();
     ret << prepare_guides_(gp).dispatch(input.resolution);
+    if (submit) { submit(ret, "PrepareGuidesIncludingRays"); ret.clear(); }
     FilterParam p;
     p.frame = input.frame_index; p.history_valid = input.frame_index != 0u;
     p.raw_diffuse = gp.diffuse; p.raw_specular = gp.specular;
@@ -192,14 +229,15 @@ CommandBatch ReLAX::dispatch(RealTimeDenoiseInput &input) noexcept {
     float angle = (phase - std::floor(phase)) * 1.57079632679f;
     p.rotator = make_float4(std::cos(angle), std::sin(angle), -std::sin(angle), std::cos(angle));
     p.unproject = 2.f * std::tan(radians(camera->fov_y()) * .5f) / static_cast<float>(input.resolution.y);
-    ret << filter_->dispatch(p, input.layer_index);
+    ret << filter_->dispatch(p, input.layer_index, submit);
     if (input.channel_kind == RealTimeDenoiseInput::ChannelKind::DiffuseSpecular) {
         PublishParam pp;
         pp.diffuse = p.output_diffuse; pp.specular = p.output_specular;
         pp.bypass = frame_buffer().denoiser_layer_view(frame_buffer().denoiser_bypass(), input.layer_index).descriptor();
         pp.direct = input.direct.descriptor(); pp.indirect = input.indirect.descriptor();
         ret << publish_(pp).dispatch(input.resolution);
-        if (input.layer_count == 1u) ret << coverage_->dispatch(input);
+        if (submit) { submit(ret, "PublishPT"); ret.clear(); }
+        if (input.layer_count == 1u) ret << coverage(input);
     }
     return ret;
 }

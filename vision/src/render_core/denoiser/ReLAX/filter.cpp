@@ -44,7 +44,15 @@ void Filter::compile(Device &device) {
     reset();
 }
 
-CommandBatch Filter::dispatch(FilterParam p, uint layer) {
+size_t Filter::allocated_bytes() const noexcept {
+    size_t bytes = guide_.size_in_byte() + temporal_data_.size_in_byte() + tiles_.size_in_byte() +
+        prepass_diffuse_.size_in_byte() + prepass_specular_.size_in_byte();
+    for (uint i = 0; i < 2u; ++i) bytes += diffuse_[i].size_in_byte() + specular_[i].size_in_byte();
+    for (const auto &layer : layers_) bytes += layer.geometry.size_in_byte() + layer.history.size_in_byte();
+    return bytes;
+}
+
+CommandBatch Filter::dispatch(FilterParam p, uint layer, PassSubmit submit) {
     auto &state = layers_[layer];
     p.size = size_; p.settings = settings;
     p.disocclusion_threshold += (1.f + p.jitter_delta) / float(size_.y);
@@ -58,33 +66,38 @@ CommandBatch Filter::dispatch(FilterParam p, uint layer) {
         p.dst_diffuse = diffuse_[dst].descriptor(); p.dst_specular = specular_[dst].descriptor();
     };
     CommandBatch commands;
+    auto emit = [&](Command *command, string_view name) {
+        if (submit) { CommandBatch batch; batch << command; submit(batch, name); }
+        else commands << command;
+    };
     bind(1u, 0u);
-    commands << pack_(p).dispatch(size_) << classify_(p).dispatch(tiles_.size());
+    emit(pack_(p).dispatch(size_), "Pack"); emit(classify_(p).dispatch(tiles_.size()), "ClassifyTiles");
     uint src = 0u;
     if (settings.reconstruction != 0u) {
-        bind(src, src ^ 1u); commands << reconstruct_(p).dispatch(size_); src ^= 1u;
+        bind(src, src ^ 1u); emit(reconstruct_(p).dispatch(size_), "HitDistReconstruction"); src ^= 1u;
     }
     bind(src, src ^ 1u);
-    commands << prepass_(p).dispatch(size_);
+    emit(prepass_(p).dispatch(size_), "PrePass");
     p.src_diffuse = prepass_diffuse_.descriptor(); p.src_specular = prepass_specular_.descriptor();
     p.dst_diffuse = diffuse_[0].descriptor(); p.dst_specular = specular_[0].descriptor();
-    commands << temporal_(p).dispatch(size_);
+    emit(temporal_(p).dispatch(size_), "TemporalAccumulation");
     bind(0u, 1u);
-    commands << fix_(p).dispatch(size_) << clamp_(p).dispatch(size_);
+    emit(fix_(p).dispatch(size_), "HistoryFix"); emit(clamp_(p).dispatch(size_), "HistoryClamping");
     src = 0u;
     if (settings.anti_firefly != 0u) {
-        commands << firefly_(p).dispatch(size_); src = 1u;
+        emit(firefly_(p).dispatch(size_), "AntiFirefly"); src = 1u;
     }
     bind(src, src ^ 1u);
-    commands << publish_(p).dispatch(size_);
+    emit(publish_(p).dispatch(size_), "PublishHistory");
     const uint iterations = std::clamp(settings.atrous_iterations, 2u, 8u);
     for (uint i = 0u; i < iterations; ++i) {
         bind(src, src ^ 1u); p.step = 1u << i; p.first = i == 0u; p.last = i + 1u == iterations;
-        commands << (i == 0u ? atrous_first_ : atrous_)(p).dispatch(size_);
+        const string name = i == 0u ? "AtrousFirst" : "Atrous" + std::to_string(p.step);
+        emit((i == 0u ? atrous_first_ : atrous_)(p).dispatch(size_), name);
         src ^= 1u;
     }
     bind(src, src ^ 1u);
-    commands << unpack_(p).dispatch(size_);
+    emit(unpack_(p).dispatch(size_), "Unpack");
     state.frame = p.frame;
     return commands;
 }

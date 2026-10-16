@@ -1,12 +1,12 @@
 # RELAX → Ocarina 嵌入式 DSL 移植设计
 
-日期：2026-10-12。状态：可评审草案，尚未实施算法。实现分支：`feat/relax`；直接基线：`svgf_magic@f8a5ceb33f201e748ad69bcdfc7ab3afebc24371`。
+设计日期：2026-10-12；开工/评估：2026-10-16。状态：完整实现和场景证据已落地，17 项相关回归通过；待独立整分支审查。实现分支：`feat/relax`；直接基线：`svgf_magic@f8a5ceb33f201e748ad69bcdfc7ab3afebc24371`。
 
 ## 1. 目标与边界
 
 用户要求参照 RTXPT 和 NRD，把 RELAX 算法用 Ocarina 嵌入式 DSL 实现，并从 `svgf_magic` 建立新分支。成功条件是能在现有渲染管线选择 ReLAX，运行完整降噪链路，并有真实 GPU 测试、图像对照、性能和显存证据。
 
-建议首版覆盖 `RELAX_DIFFUSE_SPECULAR` 的全分辨率 RGB 路径：普通 PT、ReSTIR，以及最多三层 stable planes。实现顺序先 PT 后 ReSTIR，但仅 PT 通过不代表完整范围完成。此范围已向用户征询，暂按推荐项规划。
+建议首版覆盖 `RELAX_DIFFUSE_SPECULAR` 的全分辨率 RGB 路径：普通 PT、ReSTIR，以及最多三层 stable planes。实现顺序先 PT 后 ReSTIR，但仅 PT 通过不代表完整范围完成。用户于 2026-10-16 授权按此范围施工。
 
 - 沿用 `Kernel`、`Float/Float3/Uint`、`$if/$for`、`OC_PARAM_STRUCT`、`BufferDesc`、`Shader<void(Param)>`、`device().compile()`、`CommandBatch`。
 - 完整保留镜面虚拟重投影、快慢历史、History Fix、History Clamping/antilag、可选 AntiFirefly、方差估计和 À-trous。
@@ -138,4 +138,4 @@ flowchart TD
 
 完成需要：完整 RGB 链路 + PT/ReSTIR/三层集成 + 相关 CTest 回归 + CLion 同环境 `corona_engine` 构建 + 真实场景图像/指标 + 性能/显存表 + 来源及支持边界说明。只构建成功或只出现降噪图像不算完成。
 
-本轮已核实源码、基线和 DSL 接口，已建立 `feat/relax`。当前交付是本设计及[实施计划](../plans/2026-10-12-relax-port.md)，未编写 RELAX 产品代码，未声称 RELAX 编译、测试或画质已通过。
+完整 RGB 管线、PT/ReSTIR/三层接入与评估已实现于 `feat/relax`。详细配置、实测退化、逐阶段耗时和 8 GiB 容量限制见 [ReLAX README](../../../vision/src/render_core/denoiser/ReLAX/README.md)。64 个评估任务已完成，包含两组独立 2048 spp 参考；CLion 同环境引擎构建通过。17 项相关回归通过；待独立整分支审查。

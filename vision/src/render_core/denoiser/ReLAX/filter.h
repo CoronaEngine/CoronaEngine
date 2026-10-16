@@ -3,6 +3,7 @@
 #include "math/geometry.h"
 #include "rhi/context.h"
 #include <array>
+#include <functional>
 
 namespace vision::relax {
 struct Guide {
@@ -92,6 +93,9 @@ public:
     [[nodiscard]] BufferView<PersistentHistory> persistent_history(uint layer = 0u) const { return layers_[layer].history.view(); }
     [[nodiscard]] BufferView<float4> prepass_diffuse() const { return prepass_diffuse_.view(); }
     [[nodiscard]] BufferView<float4> prepass_specular() const { return prepass_specular_.view(); }
-    [[nodiscard]] CommandBatch dispatch(FilterParam param, uint layer = 0u);
+    [[nodiscard]] size_t allocated_bytes() const noexcept;
+    // Evaluation may execute/timestamp each batch in order; normal rendering queues them together.
+    using PassSubmit = std::function<void(CommandBatch, string_view)>;
+    [[nodiscard]] CommandBatch dispatch(FilterParam param, uint layer = 0u, PassSubmit submit = {});
 };
 }

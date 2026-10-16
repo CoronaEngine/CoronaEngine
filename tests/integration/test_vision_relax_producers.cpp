@@ -23,6 +23,21 @@ void expect(bool condition, const char *message) {
 void check_material(Pipeline &pipeline) {
     pipeline.activate_global_context();
     auto &sampler = pipeline.renderer().sampler();
+    SamplerDesc seed_desc{"independent"}; seed_desc.set_value("seed", 104729u);
+    auto independent = Node::create_shared<Sampler>(seed_desc);
+    Kernel seed_test = [&](BufferVar<float2> result) {
+        sampler->load_data(); independent->load_data();
+        sampler->set_seed(dispatch_idx().xy(), Uint{17u}, Dimension::PathTracing);
+        independent->set_seed(dispatch_idx().xy(), Uint{17u}, Dimension::PathTracing);
+        result.write(dispatch_id(), make_float2(sampler->next_1d(), independent->next_1d()));
+    };
+    auto seed_shader = pipeline.device().compile(seed_test, "RELAX-independent-reference-seed");
+    auto seeds = pipeline.device().create_buffer<float2>(16u);
+    std::array<float2, 16> samples{};
+    pipeline.stream() << seed_shader(seeds).dispatch(16u) << seeds.download(samples.data()) << synchronize() << commit();
+    uint different = 0u;
+    for (auto value : samples) different += std::abs(value.x - value.y) > 1e-6f;
+    expect(different > 12u, "independent PT reference seeds must generate different sample streams");
     for (bool individual : {false, true}) {
         MaterialRegistry::instance().individual_ns() = individual;
         Kernel kernel = [&](BufferVar<float4> output) {

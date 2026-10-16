@@ -5,6 +5,10 @@
 void check_relax_layers(ocarina::Device &device, ocarina::Stream &stream) {
     using namespace relax_test;
     Fixture f(device, stream, make_uint2(8u), 3u);
+    const size_t scratch_bytes = f.n * (sizeof(vision::relax::Guide) + sizeof(vision::relax::TemporalData) + 6u * sizeof(float4)) + sizeof(uint);
+    const size_t layer_bytes = f.n * (sizeof(vision::relax::GeometryHistory) + sizeof(vision::relax::PersistentHistory));
+    expect(f.filter.allocated_bytes() == scratch_bytes + 3u * layer_bytes,
+           "RELAX allocation accounting must include each owned buffer exactly once");
     f.filter.settings.diffuse_prepass = f.filter.settings.specular_prepass = 0.f;
     f.filter.settings.history_fix_frames = 0.f;
     auto select_layer = [&](uint identity, float value) {
@@ -39,6 +43,13 @@ void check_relax_layers(ocarina::Device &device, ocarina::Stream &stream) {
     expect(stored(2u).length_hit.x == 1.f, "explicit invalidation must reject history");
     f.filter.prepare(device, f.size, 1u); f.filter.prepare(device, f.size, 3u); f.run(14u, 2u);
     expect(stored(2u).length_hit.x == 1.f, "turning layers off and on must discard retired histories");
+    uint passes = 0u; f.param.frame = 15u;
+    auto remaining = f.filter.dispatch(f.param, 2u, [&](CommandBatch commands, string_view) {
+        ++passes; stream << commands << synchronize() << commit();
+    });
+    stream << f.output_d.download(f.got_d.data()) << synchronize() << commit();
+    expect(remaining.empty() && passes == 13u && std::abs(f.got_d[0].x - 4.f) < 1e-4f,
+           "synchronized profiling must execute the identical RELAX pass graph");
     std::cout << "PASS: RELAX layer isolation, slot exchange, disappearance and frame invalidation\n";
 }
 
