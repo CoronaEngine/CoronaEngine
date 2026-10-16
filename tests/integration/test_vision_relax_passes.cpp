@@ -2,6 +2,52 @@
 #include <iostream>
 #include <limits>
 
+void check_relax_atrous(ocarina::Device &device, ocarina::Stream &stream) {
+    using namespace relax_test;
+    for (auto size : {make_uint2(1u), make_uint2(127u, 73u)}) {
+        Fixture constant(device, stream, size);
+        constant.filter.settings.diffuse_prepass = constant.filter.settings.specular_prepass = 0.f;
+        for (uint iterations : {2u, 5u, 8u}) {
+            constant.filter.settings.atrous_iterations = iterations;
+            constant.filter.reset(); constant.run(iterations);
+            for (uint i = 0; i < constant.n; ++i) {
+                expect(std::abs(constant.got_d[i].x - .2f) < 1e-4f && std::abs(constant.got_s[i].z - .1f) < 1e-4f,
+                       "every Atrous iteration count must preserve a constant signal and partial tiles");
+                expect(constant.got_d[i].w >= 0.f && constant.got_d[i].w < 1e-4f,
+                       "Atrous must convert the constant signal's second moment to zero variance");
+            }
+        }
+    }
+    Fixture impulse(device, stream, make_uint2(32u));
+    auto &settings = impulse.filter.settings;
+    settings.diffuse_prepass = settings.specular_prepass = 0.f;
+    settings.history_fix_frames = 0.f; settings.diffuse_fast_history = settings.diffuse_history;
+    settings.antilag_acceleration = settings.antilag_reset = 0.f;
+    for (auto &d : impulse.d) d = make_float4(0.f, 0.f, 0.f, 7.f);
+    impulse.d[528] = make_float4(.2f, .2f, .2f, 7.f);
+    std::vector<vision::relax::PersistentHistory> stored(impulse.n);
+    float two_pass = 0.f;
+    for (uint iterations : {2u, 5u, 8u}) {
+        settings.atrous_iterations = iterations;
+        impulse.filter.reset(); impulse.run(iterations);
+        stream << impulse.filter.persistent_history().download(stored.data()) << synchronize() << commit();
+        std::cout << "Atrous " << iterations << ": history=" << stored[528].diffuse.x << ',' << stored[528].diffuse.w
+                  << ", output=" << impulse.got_d[528].x << ',' << impulse.got_d[528].w << '\n';
+        expect(std::abs(stored[528].diffuse.x - .2f) < 1e-5f && std::abs(stored[528].diffuse.w - .04f) < 1e-5f,
+               "spatially filtered output must not feed back into slow illumination or moment history");
+        for (auto c : impulse.got_d) expect(std::isfinite(c.x) && std::isfinite(c.w) && c.w >= 0.f,
+                                         "Atrous RGB and propagated variance must remain finite");
+        if (iterations == 2u) {
+            two_pass = impulse.got_d[528].x;
+            expect(std::abs(two_pass - .008f) < 1e-5f,
+                   "short-history spatial estimation must average the 5x5 impulse before step-two filtering");
+            expect(std::abs(impulse.got_d[528].w - .000378558618439f) < 1e-7f,
+                   "Atrous variance must propagate with squared normalized filter weights");
+        } else expect(impulse.got_d[528].x < two_pass - 1e-4f, "larger Atrous steps must execute additional spatial reuse");
+    }
+    std::cout << "PASS: RELAX 2/5/8 Atrous iterations, variance propagation and independent display output\n";
+}
+
 void check_relax_history(ocarina::Device &device, ocarina::Stream &stream) {
     using namespace relax_test;
     Fixture fix(device, stream, make_uint2(32u));

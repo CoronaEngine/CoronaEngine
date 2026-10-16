@@ -41,8 +41,10 @@ void Filter::compile_history_clamping(Device &device) {
             Float4 output = make_float4(to_rgb(clamped), slow.w);
             Bool short_history = data.meta.x <= p.settings.history_fix_frames + 1.f;
             $if(short_history) {
-                output.xyz() = fast.xyz();
-                if (spec) output.w = fast.w;
+                // Same-type xyz proxy assignment copies the parent float4 in
+                // Ocarina. Construct explicitly to retain diffuse's slow M2.
+                if (spec) output = fast;
+                else output = make_float4(fast.xyz(), slow.w);
             };
             Float factor = 0.f;
             $if(clamped.x != slow_ycocg.x) {

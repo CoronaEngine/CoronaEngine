@@ -40,6 +40,7 @@ void Filter::compile(Device &device) {
     compile_temporal(device);
     compile_history_fix(device);
     compile_history_clamping(device);
+    compile_atrous(device);
     reset();
 }
 
@@ -76,6 +77,13 @@ CommandBatch Filter::dispatch(FilterParam p, uint layer) {
     }
     bind(src, src ^ 1u);
     commands << publish_(p).dispatch(size_);
+    const uint iterations = std::clamp(settings.atrous_iterations, 2u, 8u);
+    for (uint i = 0u; i < iterations; ++i) {
+        bind(src, src ^ 1u); p.step = 1u << i; p.first = i == 0u; p.last = i + 1u == iterations;
+        commands << (i == 0u ? atrous_first_ : atrous_)(p).dispatch(size_);
+        src ^= 1u;
+    }
+    bind(src, src ^ 1u);
     commands << unpack_(p).dispatch(size_);
     state.frame = p.frame;
     return commands;
