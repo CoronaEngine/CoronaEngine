@@ -8,6 +8,8 @@
 #include <stdexcept>
 #include <string_view>
 
+void check_relax_prepass(ocarina::Device &, ocarina::Stream &);
+
 namespace {
 using namespace ocarina;
 void expect_near(float actual, float expected, const char *message) {
@@ -74,6 +76,7 @@ int main(int argc, char **argv) {
         auto stream = device.create_stream();
         const std::string_view group = argc > 1 ? argv[1] : "helpers";
         if (group == "helpers") check_helpers(device, stream);
+        else if (group == "prepass") check_relax_prepass(device, stream);
         else throw std::runtime_error("Unknown RELAX test group");
         return 0;
     } catch (const std::exception &error) {
