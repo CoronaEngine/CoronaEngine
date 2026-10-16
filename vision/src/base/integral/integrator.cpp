@@ -12,7 +12,28 @@
 namespace vision {
 using namespace ocarina;
 
+double Integrator::cur_denoise_time() const noexcept { return denoise_timing_->elapsed_ms; }
+
+void Integrator::reset_denoise_timing() const noexcept {
+    // Queued callbacks own their sample even if this integrator is invalidated.
+    denoise_timing_ = make_shared<DenoiseTiming>();
+}
+
+void Integrator::begin_denoise_timing(Stream &stream) const noexcept {
+    stream << [timing = denoise_timing_] {
+        timing->started_at = std::chrono::steady_clock::now();
+    };
+}
+
+void Integrator::end_denoise_timing(Stream &stream) const noexcept {
+    stream << [timing = denoise_timing_] {
+        timing->elapsed_ms += std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - timing->started_at).count();
+    };
+}
+
 void Integrator::invalidation() const noexcept {
+    reset_denoise_timing();
     cur_stage_profile_ = {};
     frame_index_ = 0u;
     render_time_ = 0;

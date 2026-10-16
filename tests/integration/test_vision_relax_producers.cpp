@@ -258,6 +258,7 @@ void check_scene_signals(bool restir, bool lifecycle = false) {
         std::vector<float4> pixels(count), d(count * 3u), s(d.size()), b(d.size()), emission(count);
         for (uint frame = 0; frame < 4u; ++frame) {
             pipeline->upload_data(); pipeline->display(1.0 / 60.0);
+            expect(illumination->cur_denoise_time() == 0.0, "disabled denoising must report zero time");
             pipeline->stream() << fb.rt_buffer().device_buffer().download(pixels.data())
                 << fb.denoiser_diffuse().view().download(d.data()) << fb.denoiser_specular().view().download(s.data())
                 << fb.denoiser_bypass().view().download(b.data());
@@ -291,7 +292,12 @@ void check_scene_signals(bool restir, bool lifecycle = false) {
         pipeline->output_desc().denoise = true;
         for (uint frame = 0; frame < 8u; ++frame) {
             pipeline->upload_data(); pipeline->display(1.0 / 60.0);
+            const double denoise_ms = illumination->cur_denoise_time();
+            expect(std::isfinite(denoise_ms) && denoise_ms > 0.0 && denoise_ms <= pipeline->cur_render_time(),
+                "completed denoising must report a finite elapsed time within the rendered frame");
         }
+        std::cout << "denoise ms=" << illumination->cur_denoise_time() << ", render ms=" << pipeline->cur_render_time()
+                  << ", synchronized stage profile=" << illumination->cur_stage_profile().enabled << '\n';
         pipeline->stream() << fb.rt_buffer().device_buffer().download(pixels.data()) << synchronize() << commit();
         for (auto pixel : pixels) expect(std::isfinite(pixel.x) && std::isfinite(pixel.y) && std::isfinite(pixel.z),
             "enabling the actual RELAX plugin after raw frames must produce finite colors");
@@ -300,6 +306,9 @@ void check_scene_signals(bool restir, bool lifecycle = false) {
         if (lifecycle) {
             auto draw = [&] {
                 pipeline->upload_data(); pipeline->display(1.0 / 60.0);
+                expect(illumination->denoiser()->enabled() ? illumination->cur_denoise_time() > 0.0
+                                                        : illumination->cur_denoise_time() == 0.0,
+                    "denoise time must follow runtime enable, resize and layer transitions without stale values");
                 std::vector<float4> result(pipeline->pixel_num());
                 pipeline->stream() << fb.rt_buffer().device_buffer().download(result.data()) << synchronize() << commit();
                 for (auto p : result) expect(std::isfinite(p.x) && std::isfinite(p.y) && std::isfinite(p.z),

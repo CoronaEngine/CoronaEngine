@@ -284,6 +284,7 @@ public:
     void render() const noexcept override {
         const Pipeline *rp = pipeline();
         Stream &stream = rp->stream();
+        reset_denoise_timing();
         if (stable_resources_dirty_) {
             stream << synchronize() << commit();
             frame_buffer().manage_stable_plane_buffers(stable_planes_enabled());
@@ -358,6 +359,7 @@ public:
                    &cur_stage_profile_.combine_ms);
         }
         if (!denoiser_runtime_disabled() && denoiser_ && denoiser_->enabled()) {
+            begin_denoise_timing(stream);
             const uint count = stable_planes_enabled() ? StablePlaneCount : 1u;
             for (uint layer = 0u; layer < count; ++layer) {
                 auto dn_input = denoise_input(layer);
@@ -380,6 +382,7 @@ public:
                 submit(denoiser_->dispatch(coverage), &cur_stage_profile_.spatial_angular_ms);
                 debug_readback("composite_post", false);
             }
+            end_denoise_timing(stream);
         }
         const bool resolved = !denoiser_runtime_disabled() && denoiser_ && denoiser_->enabled();
         // Raw ownership is unchanged. Filtered output resolves that same sum

@@ -7059,7 +7059,8 @@ void OpticsSystem::run_vision_frame(float frame_count, uint64_t frame_index) {
                 // display() already waits for GPU completion. Reuse its timing without
                 // adding a synchronization or including cross-API presentation work.
                 SharedDataHub::instance().publish_camera_frame_timing(
-                    cam_handle, pipeline->cur_render_time(), runtime.mode);
+                    cam_handle, pipeline->cur_render_time(),
+                    pipeline->renderer().integrator()->cur_denoise_time(), runtime.mode);
 
                 auto* fb = pipeline->frame_buffer();
                 const auto res = fb->resolution();

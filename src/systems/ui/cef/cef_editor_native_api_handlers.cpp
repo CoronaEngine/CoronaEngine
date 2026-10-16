@@ -9243,11 +9243,12 @@ void register_scene_tools_api_handlers(NativeApiRegistry& registry) {
             const auto device = hub.camera_storage().try_acquire_read(handle);
             if (!timing || !device || device->render_backend != CameraRenderBackend::Vision ||
                 device->vision_render_mode != timing->mode) {
-                return native_success({{"render_ms", nullptr}, {"frame_ms", nullptr}, {"age_ms", nullptr}});
+                return native_success({{"render_ms", nullptr}, {"denoise_ms", nullptr}, {"frame_ms", nullptr}, {"age_ms", nullptr}});
             }
             const double age_ms = std::chrono::duration<double, std::milli>(
                 std::chrono::steady_clock::now() - timing->recorded_at).count();
-            return native_success({{"render_ms", timing->render_ms}, {"frame_ms", timing->frame_ms}, {"age_ms", age_ms}});
+            return native_success({{"render_ms", timing->render_ms}, {"denoise_ms", timing->denoise_ms},
+                                   {"frame_ms", timing->frame_ms}, {"age_ms", age_ms}});
         }},
         {"get_vision_denoise", [](const NativeRequest& request, const NativeContext&) {
             auto* scene = ensure_native_editor_scene();

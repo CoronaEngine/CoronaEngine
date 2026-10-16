@@ -284,6 +284,7 @@ enum class CameraVisionRenderMode : uint8_t {
 // Runtime telemetry only; never serialized into scene settings.
 struct CameraFrameTiming {
     double render_ms{};
+    double denoise_ms{};
     // Wall-clock cadence between completed frames of this camera, including waits.
     double frame_ms{};
     CameraVisionRenderMode mode{CameraVisionRenderMode::PathTracing};
@@ -675,7 +676,7 @@ class SharedDataHub {
     ImageStorage& image_storage();
     const ImageStorage& image_storage() const;
 
-    void publish_camera_frame_timing(std::uintptr_t camera_handle, double render_ms,
+    void publish_camera_frame_timing(std::uintptr_t camera_handle, double render_ms, double denoise_ms,
                                      CameraVisionRenderMode mode,
                                      std::chrono::steady_clock::time_point completed_at =
                                          std::chrono::steady_clock::now());

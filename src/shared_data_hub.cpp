@@ -248,7 +248,7 @@ const SharedDataHub::SceneStorage& SharedDataHub::scene_storage() const { return
 SharedDataHub::ImageStorage& SharedDataHub::image_storage() { return image_storage_; }
 const SharedDataHub::ImageStorage& SharedDataHub::image_storage() const { return image_storage_; }
 
-void SharedDataHub::publish_camera_frame_timing(std::uintptr_t camera_handle, double render_ms,
+void SharedDataHub::publish_camera_frame_timing(std::uintptr_t camera_handle, double render_ms, double denoise_ms,
                                                 CameraVisionRenderMode mode,
                                                 std::chrono::steady_clock::time_point completed_at) {
     std::lock_guard<std::mutex> lock(camera_timing_mutex_);
@@ -258,7 +258,7 @@ void SharedDataHub::publish_camera_frame_timing(std::uintptr_t camera_handle, do
         frame_ms = std::chrono::duration<double, std::milli>(
             completed_at - previous->second.recorded_at).count();
     }
-    camera_timings_[camera_handle] = {render_ms, frame_ms, mode, completed_at};
+    camera_timings_[camera_handle] = {render_ms, denoise_ms, frame_ms, mode, completed_at};
 }
 
 std::optional<CameraFrameTiming> SharedDataHub::camera_frame_timing(

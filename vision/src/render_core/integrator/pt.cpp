@@ -210,6 +210,7 @@ public:
     void render() const noexcept override {
         const Pipeline *rp = pipeline();
         Stream &stream = rp->stream();
+        reset_denoise_timing();
         cur_stage_profile_ = {};
         cur_stage_profile_.enabled = stage_profile_runtime_enabled();
         auto submit = [&](auto &&command, double *stage_ms) {
@@ -283,6 +284,7 @@ public:
 
             if (denoiser_enabled) {
                 submit(path_tracing(param, frame_buffer().raytracing_resolution()), &cur_stage_profile_.path_tracing_ms);
+                begin_denoise_timing(stream);
                 if (ssat_denoiser != nullptr) {
                     // Merge indirect into direct (always needed)
                     submit(merge_indirect_into_direct_().dispatch(frame_buffer().raytracing_resolution()), nullptr);
@@ -312,6 +314,7 @@ public:
                 } else {
                     submit(denoiser_->dispatch_lightfield(lf_input), &cur_stage_profile_.spatial_angular_ms);
                 }
+                end_denoise_timing(stream);
                 submit(combine_(frame_index_).dispatch(frame_buffer().raytracing_resolution()),
                        &cur_stage_profile_.combine_ms);
             } else {
@@ -345,7 +348,9 @@ public:
 
             if (denoiser_enabled && !bypass_incompatible_lightfield_denoiser) {
                 submit(path_tracing(param, frame_buffer().raytracing_resolution()), &cur_stage_profile_.path_tracing_ms);
+                begin_denoise_timing(stream);
                 submit(denoiser_->dispatch(dn_input), &cur_stage_profile_.spatial_angular_ms);
+                end_denoise_timing(stream);
                 submit(combine_(frame_index_).dispatch(frame_buffer().raytracing_resolution()),
                        &cur_stage_profile_.combine_ms);
             } else {
