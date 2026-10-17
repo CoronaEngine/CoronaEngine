@@ -10,6 +10,28 @@ windows both expose these controls. The type is saved per camera; **场景设置
 inherits the scene's denoiser and parameters. Changing type rebuilds that camera's
 view and clears its history. SSAT retains its own fixed denoiser.
 
+When REBLUR is selected, click **REBLUR 参数** beside the denoiser selector in
+either viewport. The panel exposes all 17 filter settings: temporal history and
+repair, diffuse/specular prepass and blur radii, geometry/roughness tolerances,
+stabilization, anti-lag, firefly suppression and hit-distance reconstruction.
+**应用** updates that camera on its next render and resets its temporal history
+without rebuilding the view. **恢复默认值** only resets the panel draft; click
+**应用** to use it. Enabling denoising remains a separate checkbox.
+
+Settings are saved per camera in `vision_reblur_settings` and restored with the
+scene. Unspecified fields inherit the source scene's REBLUR descriptor. The panel
+loads effective renderer values plus pending camera overrides; changes in one
+camera do not affect other cameras. Invalid ranges and inconsistent history or
+radius bounds are rejected before a change is queued.
+
+Parameter UI validation (2026-10-13): the canonical CLion engine/frontend build,
+four related CTest entries (including live PT/ReSTIR parameter updates), 74
+focused frontend tests and 15 Vision preference/archive tests passed. Browser
+interaction with the actual component and a CEF-shaped mock verified loading,
+editing and applying all 17 values. The full frontend suite has one pre-existing
+`dockCommand` timeout, reproduced on pristine HEAD. Evidence is stored under
+`cmake-build-relwithdebinfo/reblur-evidence/reblur-ui-*`.
+
 ```json
 {
   "render": {
@@ -369,3 +391,118 @@ Evidence is in `cmake-build-relwithdebinfo/reblur-evidence/2026-10-13-reblur-onl
 raw timestamps and commands, and cleanup/build logs. All four profiled Corona
 PFMs are byte-identical to the preceding memory-optimized runs. No filter or
 quality settings were changed for this comparison.
+
+### Glossy history confidence: 2026-10-14
+
+The spatial normal angle and temporal view angle now use the unit-direction
+half-angle expression `2 * atan2(length(a-b), length(a+b))`. Unlike
+`acos(dot(a,b))`, it returns exactly zero for identical FP32 directions. A CUDA
+probe found false static angles in 1656/4096 normalized directions; the narrow
+lobe's surface confidence fell as low as 0.233. The actual filter helper test
+failed on identical glossy normals before this change and now passes, including
+real 0.0001-radian motion and opposite directions.
+
+Virtual reflection-history confidence now includes the pixel footprint:
+`footprint = sqrt(lobe_pixels*lobe_pixels + 0.25)` and
+`confidence = footprint / (footprint + displacement_pixels)`. This soft weight
+avoids over-rejecting stochastic subpixel hit-distance changes. It does not
+replace geometry/identity rejection or guarantee zero history at a reflected
+disocclusion. No storage, scene parameters, history limits or sampling budgets
+changed.
+
+Frozen-parameter evaluation covered Kitchen, Staircase, Staircase2, Coffee,
+Spaceship and Bathroom2 at 960x540, 1 spp/frame without accumulation. Each scene
+has a 128-frame static run and a 244-frame run containing 64 preroll frames and
+180 frames from its existing smooth camera path. PT references use 2048 spp at
+the matched static/mid-motion and end-motion poses. Average display-RMSE changes
+over the two moving glass views are -1.60% (Staircase2), -3.74% (Coffee) and
+-7.41% (Spaceship); their linear-RMSE changes are -0.55%, -1.28% and -3.02%.
+The other three scenes' selected glossy regions are essentially unchanged.
+All six static full-frame display-RMSE changes are within 0.08%. Residual glass
+noise remains visible; these results do not establish PT-equivalent quality.
+
+A fast/slow-history-driven radius experiment was rejected: it reduced Coffee
+highlight fluctuations but increased Staircase2's static glossy-wood linear
+RMSE by 6.62%. The retained change only modifies the two confidence formulas.
+The canonical CLion engine build and rebuilt `VisionReblurTests` pass. Evidence,
+commands, frozen scenes, raw renders, PT references and ablations are in
+`build/recordings/glossy-denoiser-20261014/`; `before`, `after-angle`, `after` and
+`after-adaptive` denote the original, angle-only, retained and rejected variants.
+
+Native 1920x1080 static checks reuse the previously captured, parameter-matched
+Coffee/Spaceship baselines and PT references (eight frames, 120–127). Full-frame
+display/linear RMSE changes are +0.24/+0.36% for Coffee and +0.03/+0.05% for
+Spaceship. Coffee glass changes are +0.61/+0.72%, while its highlight region
+improves -0.36/-0.19%. Thus the benefit is predominantly in moving reflections,
+with a small static Coffee-glass regression. The final rebuilt Coffee motion
+output is byte-identical to the retained candidate; the tested and deployed
+REBLUR DLL hashes also match. `report.html` and `validation.json` collect the
+results and source/binary hashes.
+
+### Residual glossy pixel footprint: 2026-10-14
+
+Layer readback of Coffee and Spaceship found mature specular histories but
+almost no spatial support on curved glass with roughness 0.01. In the sampled
+Spaceship glass layers, more than 99% of immediate normal neighbours exceeded
+the narrow-lobe angular cutoff. The post-blur correction combines the optical
+lobe with a pixel footprint instead of increasing global radius or history.
+
+For roughness r, support is `1-smooth01(linear_step(0.02,0.1,r))`. The radius
+floor is `min(min_radius,1)*support` pixels. The angular footprint is twice the
+length of the minimum opposing one-pixel normal slopes, capped at 0.2 radians
+and scaled by support. Identity and plane-distance rejection still apply.
+Secondary hit-distance rejection is relaxed only for offsets within one pixel;
+wider taps retain the original hit test.
+
+Added weights are protected separately from the original filter. Let A/B be
+fast demodulated luminance and R_A/R_B their raw samples. The edge factor is
+`E = 1/(1+3*d^2+9*d^4)`, where
+`d = (A-B)/(0.2*(A+B)+abs(R_A-A)+abs(R_B-B)+1e-6)`.
+The raw-to-fast differences are a noise heuristic, not a calibrated variance.
+Final weight is `base + max(expanded-base,0)*E`; base is zero if the radius
+floor moved the integer tap. This prevents the roughness taper from leaking
+unguarded colour across a narrow highlight. No new buffers, settings, samples,
+history frames, or temporal reprojection formulas were added. Saved scene
+parameter files remain unchanged.
+
+GPU regression reproduces missing support (first-frame MSE 0.0625) and reduces
+it to 0.0424627. After 64 frames, curved one-pixel highlight peaks are
+3.99219/3.98828/3.98633 for roughness 0.01/0.03/0.04 (target 4); the planar
+case is 3.73242. Neighbours stay within 0.00977 of background 1. The translated
+planar reflection has peak 3.73828 and old-location luminance 1.00879 with the
+same surface identity. Branch disocclusion discards the mature bright history.
+Existing storage, HDR, invalid-tile, zero-radius and layer-isolation checks pass.
+
+All six frozen scenes use 960x540, 1 spp/frame, no framebuffer accumulation,
+128 static frames and the same 244-frame smooth paths as the previous section.
+Coffee glass display/linear RMSE changes are -12.25/-1.43% static,
+-5.80/-4.89% at the middle moving view, and -10.05/-7.14% at the end.
+Spaceship changes are -5.50/-1.99%, -4.20/-0.61%, and -7.61/-2.38% respectively.
+Static temporal standard deviation falls 25.09%/12.82%. Selected highlight
+ROIs are essentially unchanged. Staircase2 static glass improves 3.59% in
+display RMSE; Kitchen, Staircase and Bathroom2 are essentially unchanged.
+Coffee/Spaceship 540p motion frame times are 17.19/22.05 ms versus 16.85/21.80 ms
+in the frozen baselines; these are individual runs, not isolated benchmarks.
+
+Native 1920x1080 static validation uses parameter- and pose-matched baselines
+and 2048-spp PT references. Coffee glass display/linear RMSE decreases
+16.13/11.31%, with temporal standard deviation down 30.56%. Spaceship decreases
+6.82/3.54%, with temporal standard deviation down 17.21%. Highlight-region errors
+are essentially unchanged. Coffee's native glass edge-contrast projection
+decreases 0.069; fine-edge softness remains despite improved overall error.
+
+Stopping and cutting the camera improves glass RMSE at all seven sampled
+frames, but Coffee glass edge contrast drops roughly 0.02-0.05 in the gradient
+projection metric. Old-view correlation also increases by up to 0.024; that
+metric includes spatial/brightness bias and is not a pure ghosting measure.
+Residual noise remains: this is not PT-equivalent quality or a guarantee of
+zero ghosting for arbitrary motion.
+
+Canonical CLion engine build and GPU tests are recorded in
+`build/recordings/glass-residual-20261014/`. The retained variant is `guarded`;
+`pixel-local` was rejected despite lower noise because Coffee static linear
+error increased 16%. A read-only review caught and verified the fix for
+taper-related highlight leakage. `report.html`, `validation.json`,
+`scores-guarded.json`, `native-scores.json`, and `temporal-scores-guarded.json`
+contain native-resolution comparisons, exact jobs, limitations and hashes.
+Temporary layer readback has been removed from production code.

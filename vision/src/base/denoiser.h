@@ -155,6 +155,9 @@ public:
     /// Runtime override hook for headless evaluation and experiments.
     virtual void set_enabled(bool enabled) noexcept {}
     virtual void set_stable_planes_enabled(bool enabled) noexcept {}
+    // Camera-local REBLUR overrides; other denoisers leave them untouched.
+    virtual bool set_reblur_settings(string_view json) noexcept { return false; }
+    [[nodiscard]] virtual string reblur_settings_json() const { return "{}"; }
     
     [[nodiscard]] Backend backend() const noexcept { return backend_; }
 

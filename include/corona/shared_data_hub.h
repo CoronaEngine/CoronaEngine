@@ -310,6 +310,8 @@ struct CameraDevice {
     CameraVisionRenderMode vision_render_mode{CameraVisionRenderMode::PathTracing};
     bool vision_denoise{false};
     CameraVisionDenoiser vision_denoiser{CameraVisionDenoiser::Scene};
+    std::string vision_reblur_settings{"{}"};
+    std::string vision_reblur_effective_settings{"{}"}; // Runtime feedback, not serialized.
     bool vision_accumulation{false};
     bool vision_stable_planes{true};
     bool shadow_cascade_debug{false};
@@ -423,6 +425,7 @@ enum class CameraStateUpdateField : std::uint32_t {
     VisionAccumulation = 1u << 9,
     VisionStablePlanes = 1u << 10,
     VisionDenoiser = 1u << 11,
+    VisionReblurSettings = 1u << 12,
 };
 
 constexpr CameraStateUpdateField operator|(CameraStateUpdateField lhs,
@@ -448,6 +451,7 @@ struct CameraStateUpdateCommand {
     CameraVisionRenderMode vision_render_mode{CameraVisionRenderMode::PathTracing};
     bool vision_denoise{false};
     CameraVisionDenoiser vision_denoiser{CameraVisionDenoiser::Scene};
+    std::string vision_reblur_settings{"{}"};
     bool vision_accumulation{false};
     bool vision_stable_planes{true};
     bool shadow_cascade_debug{false};
@@ -700,6 +704,10 @@ class SharedDataHub {
         std::uintptr_t camera_handle) const;
     void acknowledge_camera_vision_denoiser(std::uintptr_t camera_handle,
                                            std::uint64_t applied_sequence);
+    [[nodiscard]] std::optional<std::string> requested_camera_vision_reblur_settings(
+        std::uintptr_t camera_handle) const;
+    void acknowledge_camera_vision_reblur_settings(std::uintptr_t camera_handle,
+                                                   std::uint64_t applied_sequence);
     [[nodiscard]] std::optional<bool> requested_camera_vision_accumulation(
         std::uintptr_t camera_handle) const;
     void acknowledge_camera_vision_accumulation(std::uintptr_t camera_handle,
@@ -768,6 +776,11 @@ class SharedDataHub {
         std::uint64_t sequence{};
     };
     std::unordered_map<std::uintptr_t, RequestedCameraDenoiser> requested_camera_vision_denoiser_;
+    struct RequestedReblurSettings {
+        std::string json;
+        std::uint64_t sequence{};
+    };
+    std::unordered_map<std::uintptr_t, RequestedReblurSettings> requested_camera_vision_reblur_settings_;
     // Retained after drain until the render thread commits or discards the request.
     std::unordered_map<std::uintptr_t, RequestedCameraBool>
         requested_camera_vision_denoise_;

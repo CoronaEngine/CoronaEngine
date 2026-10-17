@@ -362,6 +362,11 @@ void SharedDataHub::enqueue_camera_state_update(CameraStateUpdateCommand command
         requested_camera_vision_denoiser_[command.camera_handle] = {
             command.vision_denoiser, pending.sequence};
     }
+    if (has_camera_state_field(command.fields, CameraStateUpdateField::VisionReblurSettings)) {
+        pending.vision_reblur_settings = command.vision_reblur_settings;
+        requested_camera_vision_reblur_settings_[command.camera_handle] = {
+            command.vision_reblur_settings, pending.sequence};
+    }
     if (has_camera_state_field(command.fields, CameraStateUpdateField::VisionAccumulation)) {
         pending.vision_accumulation = command.vision_accumulation;
         requested_camera_vision_accumulation_[command.camera_handle] = {
@@ -432,6 +437,23 @@ void SharedDataHub::acknowledge_camera_vision_denoiser(
     }
 }
 
+std::optional<std::string> SharedDataHub::requested_camera_vision_reblur_settings(
+    std::uintptr_t camera_handle) const {
+    std::lock_guard<std::mutex> lock(camera_state_update_mutex_);
+    const auto it = requested_camera_vision_reblur_settings_.find(camera_handle);
+    if (it != requested_camera_vision_reblur_settings_.end()) return it->second.json;
+    return std::nullopt;
+}
+
+void SharedDataHub::acknowledge_camera_vision_reblur_settings(
+    std::uintptr_t camera_handle, std::uint64_t applied_sequence) {
+    std::lock_guard<std::mutex> lock(camera_state_update_mutex_);
+    const auto it = requested_camera_vision_reblur_settings_.find(camera_handle);
+    if (it != requested_camera_vision_reblur_settings_.end() && it->second.sequence <= applied_sequence) {
+        requested_camera_vision_reblur_settings_.erase(it);
+    }
+}
+
 void SharedDataHub::acknowledge_camera_vision_denoise(
     std::uintptr_t camera_handle, std::uint64_t applied_sequence) {
     std::lock_guard<std::mutex> lock(camera_state_update_mutex_);
@@ -487,6 +509,7 @@ void SharedDataHub::clear_camera_state_updates(std::uintptr_t camera_handle) {
     pending_camera_state_updates_.erase(camera_handle);
     requested_camera_vision_denoise_.erase(camera_handle);
     requested_camera_vision_denoiser_.erase(camera_handle);
+    requested_camera_vision_reblur_settings_.erase(camera_handle);
     requested_camera_vision_accumulation_.erase(camera_handle);
     requested_camera_vision_stable_planes_.erase(camera_handle);
 }

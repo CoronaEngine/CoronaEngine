@@ -147,11 +147,11 @@ void Filter::compile_temporal(Device &device) {
             Float2 previous_virtual = project_raster(p.prev_world_to_raster, X - V * previous_hit * Dfactor) + reprojection_offset;
             Float lobe_pixels = lobe_tan(r, .75f) * min(hit, previous_hit) /
                                 max(p.unproject * (g.position.w + hit * Dfactor), 1e-6f);
-            Float parallax_conf = 1.f / (1.f + length(previous_virtual - virtual_raster) / max(lobe_pixels, .1f));
+            Float parallax_conf = parallax_confidence(length(previous_virtual - virtual_raster), lobe_pixels);
             Float virtual_conf = virtual_h.quality * normal_conf * rough_conf * parallax_conf;
 
             // Surface history becomes less reliable than virtual history for narrow lobes under translation.
-            Float view_angle = acos(clamp(dot(V, Vprev), -1.f, 1.f));
+            Float view_angle = direction_angle(V, Vprev);
             Float surface_count = min(surface.h.fast_count.w, p.max_history) * surface.quality;
             Float tana = lobe_tan(r, .75f) * lerp(r, NoV, 1.f) / (1.f + surface_count);
             tana /= saturate(hit / frustum_size(p, g)) + 1e-6f;

@@ -25,6 +25,7 @@ async function renderMain(settings = {}) {
       cabbageChatDetached: true, handleViewportFocus: noop, handleViewportPointer: noop,
       handleViewportPointerDown: noop, handleViewportPointerCancel: noop, handleViewportPointerLeave: noop,
       handleViewportClick: noop, handleWheel: noop, updateSceneLight: noop,
+      cameraSpeed: 0.2, setCameraSpeedFromPanel: noop,
       mainRenderBackend: 'vision', mainVisionRenderMode: 'restir', visionAvailable: true,
       mainRenderModeLabel: 'Vision ReSTIR', activeMenu: null, toggleMenu: noop,
       currentMainSceneId: () => 'scene.ini', currentMainCameraId: () => 'camera-1', mainVisionAccumulation: true, mainVisionDenoise: false,
@@ -40,7 +41,7 @@ async function renderMain(settings = {}) {
       ...settings,
     }),
   });
-  for (const name of ['FrameTimingOverlay', 'CabbageReviewAssistant', 'CabbageChatPanel', 'CabbageGuidanceOverlay']) {
+  for (const name of ['FrameTimingOverlay', 'CabbageReviewAssistant', 'CabbageChatPanel', 'CabbageGuidanceOverlay', 'ReblurSettings']) {
     app.component(name, { render: () => null });
   }
   return renderToString(app);

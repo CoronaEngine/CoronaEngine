@@ -4,15 +4,61 @@
 #include "utils.h"
 
 namespace vision::reblur {
+namespace {
+Settings read_settings(const DataWrap &data, Settings s) {
+    auto read = [&](const char *key, float current, float low, float high) {
+        const auto it = data.find(key);
+        if (it == data.end() || !it->is_number()) return current;
+        const auto value = it->get<float>();
+        return std::isfinite(value) ? std::clamp(value, low, high) : current;
+    };
+    s.max_history = read("max_history", s.max_history, 1.f, 63.f);
+    s.fast_history = std::min(read("fast_history", s.fast_history, 0.f, 63.f), s.max_history);
+    s.history_fix_frames = read("history_fix_frames", s.history_fix_frames, 0.f, 63.f);
+    s.history_fix_stride = read("history_fix_stride", s.history_fix_stride, 0.f, 100.f);
+    s.diffuse_prepass = read("diffuse_prepass", s.diffuse_prepass, 0.f, 100.f);
+    s.specular_prepass = read("specular_prepass", s.specular_prepass, 0.f, 100.f);
+    s.max_radius = read("max_radius", s.max_radius, 0.f, 100.f);
+    s.min_radius = std::min(read("min_radius", s.min_radius, 0.f, 100.f), s.max_radius);
+    s.lobe_fraction = read("lobe_fraction", s.lobe_fraction, 0.f, 1.f);
+    s.roughness_fraction = read("roughness_fraction", s.roughness_fraction, 0.f, 1.f);
+    s.plane_sensitivity = read("plane_sensitivity", s.plane_sensitivity, 0.f, 1.f);
+    s.min_hit_weight = read("min_hit_weight", s.min_hit_weight, 0.f, 1.f);
+    s.stabilization = read("stabilization", s.stabilization, 0.f, 1.f);
+    s.antilag_sigma = read("antilag_sigma", s.antilag_sigma, 0.f, 10.f);
+    s.antilag_sensitivity = read("antilag_sensitivity", s.antilag_sensitivity, 0.f, 10.f);
+    if (data.contains("anti_firefly") && data["anti_firefly"].is_boolean())
+        s.anti_firefly = data["anti_firefly"].get<bool>();
+    s.reconstruction = static_cast<HitDistanceReconstructionMode>(
+        static_cast<uint>(read("reconstruction", static_cast<float>(s.reconstruction), 0.f, 2.f)));
+    return s;
+}
+}
 ReBLUR::ReBLUR(const DenoiserDesc &desc) : Denoiser(desc) {
-    auto &s = filter_->settings;
-    s.max_history = std::clamp(desc["max_history"].as_float(30.f), 1.f, 63.f);
-    s.fast_history = std::clamp(desc["fast_history"].as_float(6.f), 0.f, s.max_history);
-    s.diffuse_prepass = std::max(desc["diffuse_prepass"].as_float(30.f), 0.f);
-    s.specular_prepass = std::max(desc["specular_prepass"].as_float(50.f), 0.f);
-    s.max_radius = std::max(desc["max_radius"].as_float(30.f), 0.f);
-    s.stabilization = std::clamp(desc["stabilization"].as_float(1.f), 0.f, 1.f);
-    s.anti_firefly = desc["anti_firefly"].as_bool(true);
+    scene_settings_ = read_settings(desc.parameter_set().data(), Settings{});
+    filter_->settings = scene_settings_;
+}
+bool ReBLUR::set_reblur_settings(string_view json) noexcept {
+    if (settings_override_ == json) return false;
+    const auto data = DataWrap::parse(json.begin(), json.end(), nullptr, false);
+    if (!data.is_object()) return false;
+    filter_->settings = read_settings(data, scene_settings_);
+    settings_override_ = json;
+    filter_->reset();
+    frame_ = InvalidUI32;
+    return true;
+}
+string ReBLUR::reblur_settings_json() const {
+    const auto &s = filter_->settings;
+    return DataWrap{{"max_history", s.max_history}, {"fast_history", s.fast_history},
+        {"history_fix_frames", s.history_fix_frames}, {"history_fix_stride", s.history_fix_stride},
+        {"diffuse_prepass", s.diffuse_prepass}, {"specular_prepass", s.specular_prepass},
+        {"min_radius", s.min_radius}, {"max_radius", s.max_radius},
+        {"lobe_fraction", s.lobe_fraction}, {"roughness_fraction", s.roughness_fraction},
+        {"plane_sensitivity", s.plane_sensitivity}, {"min_hit_weight", s.min_hit_weight},
+        {"stabilization", s.stabilization}, {"antilag_sigma", s.antilag_sigma},
+        {"antilag_sensitivity", s.antilag_sensitivity}, {"anti_firefly", bool(s.anti_firefly)},
+        {"reconstruction", static_cast<uint>(s.reconstruction)}}.dump();
 }
 void ReBLUR::initialize_(const NodeDesc &) noexcept {
     DenoiserDesc desc{"svgf"}; desc.set_value("coverage_only", true);

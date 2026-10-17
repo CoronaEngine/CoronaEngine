@@ -68,6 +68,8 @@
           </button>
         </div>
       </div>
+      <ReblurSettings :scene-id="sceneId" :camera-id="cameraId"
+        :enabled="backend === 'vision' && visionRenderMode !== 'ssat' && visionDenoiser === 'reblur' && !visionDenoiserBusy" />
       <label class="vision-setting no-drag" title="累积 PT / ReSTIR 样本">
         <input
           type="checkbox"
@@ -207,7 +209,8 @@
 
 <script setup>
 import FrameTimingOverlay from '@/components/ui/FrameTimingOverlay.vue';
-import { nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
+import ReblurSettings from '@/components/ui/ReblurSettings.vue';
+import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import { editorApi } from '@/api/editorApi.js';
 import { appService } from '@/services/appService.js';
@@ -1313,6 +1316,10 @@ const scheduleDragRegionSync = () => {
     syncDragRegions().catch(() => {});
   });
 };
+
+watch(() => backend.value === 'vision' && visionRenderMode.value !== 'ssat' &&
+  visionDenoiser.value === 'reblur' && !visionDenoiserBusy.value,
+scheduleDragRegionSync, { flush: 'post' });
 
 const objectEntries = (value) => Object.entries(value || {});
 const formatHudValue = (value) => {

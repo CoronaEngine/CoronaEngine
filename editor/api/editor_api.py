@@ -854,6 +854,14 @@ class _SceneToolsApi(_DynamicApiNamespace):
         return _invoke_manifest_cpp_api("scene_tools.set_vision_denoiser", [scene_name, camera_name, type])
 
     @staticmethod
+    def get_reblur_settings(scene_name, camera_name):
+        return _invoke_manifest_cpp_api("scene_tools.get_reblur_settings", [scene_name, camera_name])
+
+    @staticmethod
+    def set_reblur_settings(scene_name, camera_name, settings):
+        return _invoke_manifest_cpp_api("scene_tools.set_reblur_settings", [scene_name, camera_name, settings])
+
+    @staticmethod
     def set_vision_denoise(scene_name, camera_name=None, enabled=False):
         return _invoke_manifest_cpp_api(
             "scene_tools.set_vision_denoise", [scene_name, camera_name, enabled]

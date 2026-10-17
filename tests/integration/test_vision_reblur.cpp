@@ -47,8 +47,8 @@ void check_storage_budget(Device &device) {
 }
 
 void check_helpers(Device &device, Stream &stream) {
-    auto result = device.create_buffer<float4>(8, "reblur helper results");
-    Kernel kernel = [&](BufferVar<float4> output) {
+    auto result = device.create_buffer<float4>(11, "reblur helper results");
+    Kernel kernel = [&](BufferVar<float4> output, Var<reblur::FilterParam> p) {
         Float3 rgb = make_float3(.2f, 4.f, 1.f);
         output.write(0u, make_float4(reblur::to_rgb(reblur::to_ycocg(rgb)), 1.f));
         output.write(1u, make_float4(reblur::hit_scale(10.f, 1.f), reblur::hit_scale(10.f, 0.f),
@@ -64,10 +64,34 @@ void check_helpers(Device &device, Stream &stream) {
         output.write(6u, make_float4(select(reblur::guide_instance(1u, 0u) != reblur::guide_instance(2u, 0u), 1.f, 0.f),
             select(reblur::guide_instance(1u, 0u) != reblur::guide_instance(1u, 7u), 1.f, 0.f), 0.f, 0.f));
         output.write(7u, make_float4(reblur::store_half(make_float4(70000.f, -70000.f, .125f, -.125f))));
+        // Read a rounded unit normal from the GPU buffer to avoid folding the
+        // normalization on the host. A surface must give itself unit weight,
+        // even when its FP32 squared length rounds below one.
+        Float3 normal = output.read(8u).xyz();
+        Var<reblur::Guide> g;
+        g.position = make_float4(0.f, 0.f, 2.f, 2.f);
+        g.identity = make_uint4(1u);
+        g.normal_roughness = make_float4(normal, .001f);
+        p.size = make_uint2(32u); p.unproject = .05f;
+        p.plane_sensitivity = .02f; p.lobe_fraction = .15f; p.roughness_fraction = .15f;
+        Float self_weight = reblur::spatial_weight(p, g, g, 1.f, 1.f, true);
+        Var<reblur::Guide> opposite = g;
+        opposite.normal_roughness = make_float4(-normal, .001f);
+        Float opposite_weight = reblur::spatial_weight(p, g, opposite, 1.f, 1.f, true);
+        output.write(8u, make_float4(self_weight, opposite_weight, 0.f, 0.f));
+        Float3 tangent = normalize(make_float3(-normal.y, normal.x, 0.f));
+        Float3 rotated = cos(.0001f) * normal + sin(.0001f) * tangent;
+        output.write(9u, make_float4(reblur::direction_angle(normal, normal),
+            reblur::direction_angle(normal, rotated), reblur::direction_angle(normal, -normal), 0.f));
+        output.write(10u, make_float4(reblur::parallax_confidence(0.f, 0.f),
+            reblur::parallax_confidence(.5f, 0.f), reblur::parallax_confidence(16.f, 0.f),
+            reblur::parallax_confidence(.5f, 8.f)));
     };
     auto shader = device.compile(kernel, "reblur_reference_helpers");
-    std::array<float4, 8> actual{};
-    stream << shader(result).dispatch(1u) << result.download(actual.data()) << synchronize() << commit();
+    std::array<float4, 11> actual{};
+    actual[8] = make_float4(.5773502588f, .5773502588f, .5773502588f, 0.f);
+    stream << result.upload(actual.data()) << shader(result, reblur::FilterParam{}).dispatch(1u)
+           << result.download(actual.data()) << synchronize() << commit();
     auto expect_near = [&](float got, float ref, const char *name) {
         expect(std::isfinite(got) && std::abs(got - ref) <= 1e-5f + 1e-4f * std::abs(ref), name);
     };
@@ -90,6 +114,16 @@ void check_helpers(Device &device, Stream &stream) {
     expect(actual[7].x == 65504.f && actual[7].y == -65504.f &&
            actual[7].z == .125f && actual[7].w == -.125f,
            "FP16 storage must saturate reprojection overshoot without discarding signed chroma");
+    expect_near(actual[8].x, 1.f, "identical glossy normals must have unit spatial weight");
+    expect_near(actual[8].y, 0.f, "opposite glossy normals must reject spatial history");
+    expect(actual[9].x == 0.f, "static directions must have exactly zero angular change");
+    expect(std::abs(actual[9].y - .0001f) < 1e-7f,
+           "real subpixel angular motion must not be rounded away");
+    expect_near(actual[9].z, 3.14159265359f, "opposite directions must retain a pi angle");
+    expect(actual[10].x == 1.f, "zero parallax must retain full confidence");
+    expect(actual[10].y >= .5f, "half-pixel tracking variation must retain the pixel footprint");
+    expect(actual[10].z < .04f, "large mirror parallax must strongly reduce confidence");
+    expect(actual[10].w > actual[10].y, "a broad reflection lobe must tolerate more parallax");
     std::cout << "PASS: reference packing, distance, motion and accumulation helpers\n";
 }
 
@@ -284,6 +318,102 @@ void check_filter(Device &device, Stream &stream) {
             "resize and partial tiles must preserve a constant signal");
     }
     std::cout << "PASS: actual REBLUR passes, 64-frame history, layers, empty tiles, reset and gaps\n";
+}
+
+void check_curved_glossy_footprint(Device &device, Stream &stream) {
+    reblur::Filter filter;
+    const uint2 size = make_uint2(32u);
+    const uint n = size.x * size.y;
+    filter.prepare(device, size); filter.compile(device);
+    filter.settings.max_radius = 10.f;
+    filter.settings.specular_prepass = 15.f;
+    filter.settings.anti_firefly = 0u;
+    auto input = device.create_buffer<float4>(n), output = device.create_buffer<float4>(n);
+    std::vector<reblur::Guide> guides(n);
+    std::vector<float4> signal(n), actual(n);
+    for (uint i = 0u; i < n; ++i) {
+        float x = float(i % size.x) - 15.5f, y = float(i / size.x) - 15.5f;
+        auto &g = guides[i];
+        g.position = make_float4(x * .01f, y * .01f, 2.f + .00005f * (x*x + y*y), 2.f);
+        auto normal = normalize(make_float3(.01f * x, .01f * y, -1.f));
+        g.normal_roughness = make_float4(normal, .01f);
+        g.identity = make_uint4(1u);
+        float value = ((i % size.x + i / size.x) & 1u) ? .75f : 1.25f;
+        signal[i] = make_float4(value, value, value, 2.f);
+    }
+    reblur::FilterParam p;
+    p.raw_diffuse = p.raw_specular = input.descriptor();
+    p.output_diffuse = p.output_specular = output.descriptor();
+    p.unproject = .005f;
+    const auto packed = pack_guides(guides.data(), n);
+    stream << filter.guides().upload(packed.data()) << input.upload(signal.data())
+           << filter.dispatch(p) << output.download(actual.data()) << synchronize() << commit();
+    double mse = 0.;
+    for (uint y = 4u; y < 28u; ++y) for (uint x = 4u; x < 28u; ++x) {
+        float error = actual[y * size.x + x].x - 1.f;
+        mse += error * error / (24. * 24.);
+    }
+    std::cout << "Curved glossy first-frame MSE: " << mse << " (input 0.0625)\n";
+    expect(mse < .045, "curved low-roughness surfaces need a nonzero pixel reconstruction footprint");
+    // A narrow, noise-free reflected highlight must survive repeated spatial
+    // feedback. A material/branch change must discard the mature history.
+    for (uint variant = 0u; variant < 4u; ++variant) {
+        const float roughness = variant == 1u ? .03f : variant == 2u ? .04f : .01f;
+        for (uint i = 0u; i < n; ++i) {
+            guides[i].normal_roughness.w = roughness;
+            guides[i].identity = make_uint4(1u);
+            if (variant == 3u) {
+                guides[i].normal_roughness = make_float4(0.f, 0.f, -1.f, roughness);
+                guides[i].position.z = 2.f;
+            }
+        }
+        const auto detail_guides = pack_guides(guides.data(), n);
+        stream << filter.guides().upload(detail_guides.data()) << synchronize() << commit();
+        filter.settings.stabilization = 0.f;
+        filter.reset();
+        for (uint i = 0u; i < n; ++i) {
+            float value = i % size.x == 16u ? 4.f : 1.f;
+            signal[i] = make_float4(value, value, value, 2.f);
+        }
+        p.history_valid = 1u;
+        p.world_to_raster = make_float4x4(make_float4(200.f, 0.f, 0.f, 0.f), make_float4(0.f, 200.f, 0.f, 0.f),
+            make_float4(16.f, 16.f, 1.f, 1.f), make_float4(0.f));
+        p.prev_world_to_raster = p.world_to_raster;
+        for (uint frame = 0u; frame < 64u; ++frame) {
+            p.frame = frame;
+            stream << input.upload(signal.data()) << filter.dispatch(p) << synchronize() << commit();
+        }
+        stream << output.download(actual.data()) << synchronize() << commit();
+        float peak = actual[16u * size.x + 16u].x, side = actual[16u * size.x + 15u].x;
+        std::cout << "Glossy narrow highlight variant " << variant << ": " << peak << ", neighbor " << side << "\n";
+        expect(peak > 3.7f && side < 1.1f,
+            "mature glossy history must preserve a one-pixel reflected highlight without bleeding");
+        if (variant == 3u) {
+            // Camera translation moves a planar reflected stripe by one pixel
+            // while the surface motion stays zero. Virtual history must follow
+            // the reflection instead of leaving the mature bright stripe behind.
+            for (uint i = 0u; i < n; ++i) {
+                float value = i % size.x == 17u ? 4.f : 1.f;
+                signal[i] = make_float4(value, value, value, 2.f);
+            }
+            p.camera = {.02f, 0.f, 0.f}; p.frame = 64u;
+            stream << input.upload(signal.data()) << filter.dispatch(p)
+                   << output.download(actual.data()) << synchronize() << commit();
+            std::cout << "Moving reflection: peak " << actual[16u * size.x + 17u].x
+                      << ", old location " << actual[16u * size.x + 16u].x << "\n";
+            expect(actual[16u * size.x + 17u].x > 3.7f && actual[16u * size.x + 16u].x < 1.1f,
+                "same-surface reflected highlights must follow virtual motion without a bright trail");
+        }
+        for (auto &g : guides) g.identity.z = 2u;
+        const auto changed = pack_guides(guides.data(), n);
+        std::fill(signal.begin(), signal.end(), make_float4(.25f, .25f, .25f, 2.f));
+        p.frame = variant == 3u ? 65u : 64u;
+        stream << filter.guides().upload(changed.data()) << input.upload(signal.data())
+               << filter.dispatch(p) << output.download(actual.data()) << synchronize() << commit();
+        for (const auto &v : actual) expect(std::abs(v.x - .25f) < .001f,
+            "disoccluded glossy surfaces must not retain the old bright highlight");
+    }
+
 }
 
 void check_sparse_tiles(Device &device, Stream &stream) {
@@ -627,6 +757,7 @@ int main() {
         check_helpers(device, stream);
         check_storage_precision(device, stream);
         check_filter(device, stream);
+        check_curved_glossy_footprint(device, stream);
         check_sparse_tiles(device, stream);
         check_packed_motion(device, stream);
         check_scene_signals();

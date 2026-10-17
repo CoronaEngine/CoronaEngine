@@ -396,6 +396,8 @@
             </div>
           </div>
         </div>
+        <ReblurSettings :scene-id="currentMainSceneId()" :camera-id="currentMainCameraId() || ''"
+          :enabled="mainRenderBackend === 'vision' && mainVisionRenderMode !== 'ssat' && mainVisionDenoiser === 'reblur' && !mainVisionDenoiserBusy" />
         <div class="scene-quick-render-options">
           <label title="累积 PT / ReSTIR 样本">
             <input
@@ -432,6 +434,20 @@
           {{ mainVisionAccumulationError || mainVisionDenoiseError || mainVisionDenoiserError || mainVisionStablePlanesError }}
         </p>
       </section>
+      <label class="scene-quick-camera-speed" data-guidance="camera-speed">
+        <span>{{ translate('editorSettings.cameraSpeed') }}</span>
+        <input
+          type="range"
+          min="0.01"
+          max="2"
+          step="0.01"
+          :value="cameraSpeed"
+          :aria-label="translate('editorSettings.cameraSpeed')"
+          :title="translate('editorSettings.cameraSpeed')"
+          @input="setCameraSpeedFromPanel($event.target.value)"
+        />
+        <strong>{{ cameraSpeed.toFixed(2) }}</strong>
+      </label>
       <section
         class="scene-quick-lighting"
         data-guidance="scene-lighting"
@@ -643,6 +659,7 @@
 
 <script setup>
 import FrameTimingOverlay from '@/components/ui/FrameTimingOverlay.vue';
+import ReblurSettings from '@/components/ui/ReblurSettings.vue';
 import { computed, ref, onMounted, onUnmounted, reactive, watch, nextTick } from 'vue';
 import { useRouter } from 'vue-router';
 import { useI18n } from 'vue-i18n';
@@ -3532,6 +3549,38 @@ onUnmounted(() => {
 .scene-quick-render button:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+.scene-quick-camera-speed {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding-bottom: 9px;
+  margin-bottom: 9px;
+  border-bottom: 1px solid #55431f;
+  font-size: 11px;
+}
+
+.scene-quick-camera-speed span {
+  white-space: nowrap;
+}
+
+.scene-quick-camera-speed input {
+  flex: 1;
+  min-width: 0;
+  accent-color: #d8b86c;
+  cursor: pointer;
+}
+
+.scene-quick-camera-speed input:focus-visible {
+  outline: 2px solid #d8b86c;
+  outline-offset: 3px;
+}
+
+.scene-quick-camera-speed strong {
+  min-width: 32px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
 }
 
 .scene-quick-lighting-header,

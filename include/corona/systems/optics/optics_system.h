@@ -147,7 +147,8 @@ class OpticsSystem : public Kernel::SystemBase {
                                    std::uintptr_t camera_handle,
                                    uint32_t width, uint32_t height,
                                    bool denoise, bool accumulation, bool stable_planes = true,
-                                   CameraVisionDenoiser denoiser = CameraVisionDenoiser::Scene);
+                                   CameraVisionDenoiser denoiser = CameraVisionDenoiser::Scene,
+                                   const std::string& reblur_settings = "{}");
     VisionPipelineKey make_vision_pipeline_key(std::string scene_path,
                                                Corona::CameraVisionRenderMode mode,
                                                VisionPipelineSource source) const;

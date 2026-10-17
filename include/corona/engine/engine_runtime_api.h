@@ -316,6 +316,9 @@ class Camera {
     void set_vision_denoiser(const std::string& type);
     [[nodiscard]] std::string get_vision_denoiser() const;
     [[nodiscard]] std::string get_requested_vision_denoiser() const;
+    void set_vision_reblur_settings(const std::string& json);
+    [[nodiscard]] std::string get_requested_vision_reblur_settings() const;
+    [[nodiscard]] std::string get_effective_vision_reblur_settings() const;
     void set_vision_accumulation(bool enabled);
     [[nodiscard]] bool get_vision_accumulation() const;
     [[nodiscard]] bool get_requested_vision_accumulation() const;
@@ -484,6 +487,9 @@ void set_vision_denoise(bool enabled, std::uintptr_t camera_handle = 0);
 void set_vision_denoiser(const std::string& type, std::uintptr_t camera_handle = 0);
 [[nodiscard]] std::string get_vision_denoiser(std::uintptr_t camera_handle = 0);
 [[nodiscard]] std::string get_requested_vision_denoiser(std::uintptr_t camera_handle = 0);
+void set_vision_reblur_settings(const std::string& json, std::uintptr_t camera_handle = 0);
+[[nodiscard]] std::string get_requested_vision_reblur_settings(std::uintptr_t camera_handle = 0);
+[[nodiscard]] std::string get_effective_vision_reblur_settings(std::uintptr_t camera_handle = 0);
 
 /// Queue an independent accumulation preference for this camera (disabled by default).
 void set_vision_accumulation(bool enabled, std::uintptr_t camera_handle = 0);

@@ -1006,6 +1006,9 @@ void apply_pending_camera_state_updates() {
             if (Corona::has_camera_state_field(update.fields, Corona::CameraStateUpdateField::VisionDenoiser)) {
                 camera->vision_denoiser = update.vision_denoiser;
             }
+            if (Corona::has_camera_state_field(update.fields, Corona::CameraStateUpdateField::VisionReblurSettings)) {
+                camera->vision_reblur_settings = update.vision_reblur_settings;
+            }
             if (Corona::has_camera_state_field(
                     update.fields, Corona::CameraStateUpdateField::VisionAccumulation)) {
                 camera->vision_accumulation = update.vision_accumulation;
@@ -1040,6 +1043,9 @@ void apply_pending_camera_state_updates() {
         }
         if (Corona::has_camera_state_field(update.fields, Corona::CameraStateUpdateField::VisionDenoiser)) {
             hub.acknowledge_camera_vision_denoiser(update.camera_handle, update.sequence);
+        }
+        if (Corona::has_camera_state_field(update.fields, Corona::CameraStateUpdateField::VisionReblurSettings)) {
+            hub.acknowledge_camera_vision_reblur_settings(update.camera_handle, update.sequence);
         }
         if (Corona::has_camera_state_field(
                 update.fields, Corona::CameraStateUpdateField::VisionAccumulation)) {
@@ -2629,7 +2635,8 @@ bool OpticsSystem::prepare_vision_camera_view(VisionPipelineRuntime& runtime,
                                             std::uintptr_t camera_handle,
                                             uint32_t width, uint32_t height,
                                             bool denoise, bool accumulation, bool stable_planes,
-                                            CameraVisionDenoiser denoiser) {
+                                            CameraVisionDenoiser denoiser,
+                                            const std::string& reblur_settings) {
     vision::switch_profile::Scope profile{"view.prepare", "view"};
     auto& pipeline = runtime.pipeline;
     if (!pipeline || camera_handle == 0) return false;
@@ -2681,6 +2688,13 @@ bool OpticsSystem::prepare_vision_camera_view(VisionPipelineRuntime& runtime,
     }
     if (!pipeline->activate_view_context(camera_handle)) return false;
     pipeline->renderer().integrator()->set_stable_planes_enabled(stable_planes);
+    if (auto* illumination = dynamic_cast<vision::IlluminationIntegrator*>(pipeline->renderer().integrator().get())) {
+        if (auto* filter = illumination->denoiser(); filter && filter->set_reblur_settings(reblur_settings)) {
+            pipeline->invalidate();
+            if (auto camera = SharedDataHub::instance().camera_storage().acquire_write(camera_handle))
+                camera->vision_reblur_effective_settings = filter->reblur_settings_json();
+        }
+    }
     // Output settings are shared by the pipeline, while renderers and histories
     // belong to cameras. Restore the active camera's preference on every visit.
     pipeline->set_output_denoise(denoise);
@@ -7067,7 +7081,8 @@ void OpticsSystem::run_vision_frame(float frame_count, uint64_t frame_index) {
                     Vision::vision_render_mode_uses_denoise(runtime.mode);
                 if (!prepare_vision_camera_view(runtime, cam_handle,
                                                camera.width, camera.height, denoise,
-                                               camera.vision_accumulation, camera.vision_stable_planes, camera.vision_denoiser)) {
+                                               camera.vision_accumulation, camera.vision_stable_planes, camera.vision_denoiser,
+                                               camera.vision_reblur_settings)) {
                     return;
                 }
 
@@ -7416,18 +7431,22 @@ void OpticsSystem::run_vision_frame(float frame_count, uint64_t frame_index) {
         if (!scene.enabled) continue;
 
         for (auto cam_handle : scene.camera_handles) {
-            auto camera = SharedDataHub::instance().camera_storage().try_acquire_read(cam_handle);
-            if (!camera || camera->render_backend != CameraRenderBackend::Vision) {
-                continue;
+            CameraDevice camera;
+            {
+                auto read = SharedDataHub::instance().camera_storage().try_acquire_read(cam_handle);
+                if (!read || read->render_backend != CameraRenderBackend::Vision) continue;
+                camera = *read;
             }
-            if (camera->surface == nullptr) {
+            // View preparation publishes effective settings back to the camera.
+            // Release the read lock before entering the renderer, as in the grouped path.
+            if (camera.surface == nullptr) {
                 if (has_pending_screenshot(cam_handle)) {
                     fail_pending_screenshots(cam_handle);
                 }
                 continue;
             }
 
-            render_vision_camera(runtime, cam_handle, *camera, scene, active_contexts);
+            render_vision_camera(runtime, cam_handle, camera, scene, active_contexts);
         }
     }
 

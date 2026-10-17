@@ -405,6 +405,38 @@ struct VisionEmbeddedModeSwitchTest {
         hub.camera_storage().deallocate(handle);
         hub.camera_storage().deallocate(other);
     }
+    static void check_reblur_settings_api() {
+        auto& hub = SharedDataHub::instance();
+        const auto camera = hub.camera_storage().allocate();
+        const auto other = hub.camera_storage().allocate();
+        Corona::API::set_vision_reblur_settings(R"({"max_history":12})", camera);
+        Corona::API::set_vision_denoise(false, camera);
+        auto updates = hub.drain_camera_state_updates();
+        expect(updates.size() == 1 && updates[0].vision_reblur_settings == R"({"max_history":12})" &&
+                   Corona::API::get_requested_vision_reblur_settings(camera) == R"({"max_history":12})" &&
+                   Corona::API::get_requested_vision_reblur_settings(other) == "{}",
+               "REBLUR preferences must remain camera-local and persistable while in flight");
+        Corona::API::set_vision_reblur_settings(R"({"max_history":20})", camera);
+        hub.acknowledge_camera_vision_reblur_settings(camera, updates[0].sequence);
+        expect(Corona::API::get_requested_vision_reblur_settings(camera) == R"({"max_history":20})",
+               "older acknowledgements must preserve newer REBLUR settings");
+        updates = hub.drain_camera_state_updates();
+        {
+            auto state = hub.camera_storage().acquire_write(camera);
+            state->vision_reblur_settings = updates[0].vision_reblur_settings;
+        }
+        hub.acknowledge_camera_vision_reblur_settings(camera, updates[0].sequence);
+        expect(!hub.requested_camera_vision_reblur_settings(camera).has_value() &&
+                   Corona::API::get_requested_vision_reblur_settings(camera) == R"({"max_history":20})",
+               "saving after acknowledgement must use the committed camera values");
+        Corona::API::set_vision_reblur_settings("{}", camera);
+        hub.enqueue_camera_release({camera});
+        expect(!hub.requested_camera_vision_reblur_settings(camera) && hub.drain_camera_state_updates().empty(),
+               "camera release must discard REBLUR requests");
+        hub.drain_camera_releases();
+        hub.camera_storage().deallocate(camera);
+        hub.camera_storage().deallocate(other);
+    }
     static void render(vision::Pipeline& pipeline, const char* label, bool lit = true) {
         const auto before = pipeline.frame_index();
         for (int i = 0; i < 3; ++i) {
@@ -485,6 +517,9 @@ struct VisionEmbeddedModeSwitchTest {
     }
     static void check_independent_denoiser(OpticsSystem& system, vision::Pipeline& pipeline,
                                           const char* algorithm) {
+        auto& camera_storage = SharedDataHub::instance().camera_storage();
+        const auto first_camera = camera_storage.allocate();
+        const auto second_camera = camera_storage.allocate();
         auto prepare = [&](std::uintptr_t camera, CameraVisionDenoiser type, bool enabled = true) {
             expect(system.prepare_vision_camera_view(system.active_vision_runtime(), camera,
                        16, 16, enabled, false, true, type), "denoiser selection must prepare a usable view");
@@ -494,39 +529,71 @@ struct VisionEmbeddedModeSwitchTest {
                        integrator->denoiser()->requires_lobe_signals() == (type == CameraVisionDenoiser::ReBLUR),
                    "camera selection must control the actual plugin while preserving the integrator");
         };
-        prepare(401, CameraVisionDenoiser::SVGF);
+        prepare(first_camera, CameraVisionDenoiser::SVGF);
         render(pipeline, "denoiser-camera-401-SVGF");
         const auto first_framebuffer = pipeline.renderer().frame_buffer_sp();
-        prepare(402, CameraVisionDenoiser::SVGF);
+        prepare(second_camera, CameraVisionDenoiser::SVGF);
         render(pipeline, "denoiser-camera-402-SVGF");
         const auto other_history = pipeline.frame_index();
         const auto other_framebuffer = pipeline.renderer().frame_buffer_sp();
-        prepare(401, CameraVisionDenoiser::ReBLUR);
+        prepare(first_camera, CameraVisionDenoiser::ReBLUR);
         expect(pipeline.frame_buffer() != first_framebuffer.get() && pipeline.frame_index() == 0,
                "changing denoiser type must rebuild only that camera with fresh history");
         render(pipeline, "denoiser-camera-401-REBLUR");
         const auto reblur_history = pipeline.frame_index();
         const auto reblur_framebuffer = pipeline.renderer().frame_buffer_sp();
-        prepare(401, CameraVisionDenoiser::ReBLUR);
+        prepare(first_camera, CameraVisionDenoiser::ReBLUR);
         expect(pipeline.frame_buffer() == reblur_framebuffer.get() && pipeline.frame_index() == reblur_history,
                "reapplying the same denoiser must preserve compiled kernels and history");
-        prepare(402, CameraVisionDenoiser::SVGF);
+        const std::string parameters = R"({"max_history":12,"fast_history":4,"history_fix_frames":2,"history_fix_stride":8,"diffuse_prepass":0,"specular_prepass":25,"min_radius":2,"max_radius":20,"lobe_fraction":0.25,"roughness_fraction":0.5,"plane_sensitivity":0.125,"min_hit_weight":0.5,"stabilization":0.5,"reconstruction":2,"anti_firefly":false,"antilag_sigma":2,"antilag_sensitivity":1})";
+        expect(system.prepare_vision_camera_view(system.active_vision_runtime(), first_camera,
+                   16, 16, true, false, true, CameraVisionDenoiser::ReBLUR, parameters),
+               "REBLUR parameters must update a live view");
+        expect(pipeline.frame_buffer() == reblur_framebuffer.get() && pipeline.frame_index() == 0,
+               "parameter edits must reset history without recreating the framebuffer");
+        auto* filter = dynamic_cast<vision::IlluminationIntegrator*>(pipeline.renderer().integrator().get())->denoiser();
+        const auto applied = vision::DataWrap::parse(filter->reblur_settings_json());
+        expect(applied == vision::DataWrap::parse(parameters),
+               "all seventeen editor values must reach the actual REBLUR filter");
+        vision::DenoiserDesc source_desc{"ReBLUR"};
+        for (const auto& [key, value] : applied.items()) source_desc.set_value(key, value);
+        const auto source_filter = vision::Node::create_shared<vision::Denoiser>(source_desc);
+        expect(vision::DataWrap::parse(source_filter->reblur_settings_json()) == applied,
+               "scene descriptors must load all exposed parameters");
+        source_filter->set_reblur_settings(R"({"max_history":7})");
+        const auto overridden = vision::DataWrap::parse(source_filter->reblur_settings_json());
+        expect(overridden["max_history"] == 7 && overridden["reconstruction"] == 2 && overridden["antilag_sigma"] == 2,
+               "partial camera overrides must retain scene values");
+        source_filter->set_reblur_settings("{}");
+        expect(vision::DataWrap::parse(source_filter->reblur_settings_json()) == applied,
+               "clearing overrides must restore source settings");
+        render(pipeline, "REBLUR-edited-parameters");
+        const auto edited_history = pipeline.frame_index();
+        system.prepare_vision_camera_view(system.active_vision_runtime(), first_camera,
+            16, 16, true, false, true, CameraVisionDenoiser::ReBLUR, parameters);
+        expect(pipeline.frame_index() == edited_history, "unchanged parameters must preserve temporal history");
+        prepare(second_camera, CameraVisionDenoiser::SVGF);
         expect(pipeline.frame_buffer() == other_framebuffer.get() && pipeline.frame_index() == other_history,
                "switching one camera's denoiser must preserve the other camera's history");
-        prepare(401, CameraVisionDenoiser::SVGF, false);
+        prepare(first_camera, CameraVisionDenoiser::SVGF, false);
         expect(pipeline.frame_index() == 0, "switching back to SVGF must reset REBLUR history");
         render(pipeline, "denoiser-camera-401-raw-SVGF");
-        prepare(401, CameraVisionDenoiser::ReBLUR, false);
+        prepare(first_camera, CameraVisionDenoiser::ReBLUR, false);
         render(pipeline, "denoiser-camera-401-raw-REBLUR");
         const auto disabled_framebuffer = pipeline.renderer().frame_buffer_sp();
-        prepare(401, CameraVisionDenoiser::ReBLUR);
+        prepare(first_camera, CameraVisionDenoiser::ReBLUR);
         expect(pipeline.frame_buffer() == disabled_framebuffer.get() && pipeline.frame_index() == 0,
                "enabling a REBLUR view created while disabled must reuse its lobe kernels with fresh history");
         render(pipeline, "denoiser-camera-401-REBLUR-enabled");
-        prepare(401, CameraVisionDenoiser::Scene);
+        prepare(first_camera, CameraVisionDenoiser::Scene);
         render(pipeline, "denoiser-camera-401-scene-default");
         pipeline.activate_view_context(0);
         pipeline.set_output_denoise(false);
+        pipeline.commit_command();
+        pipeline.remove_view_context(first_camera);
+        pipeline.remove_view_context(second_camera);
+        camera_storage.deallocate(first_camera);
+        camera_storage.deallocate(second_camera);
     }
     static void check_independent_stable_planes(OpticsSystem& system, vision::Pipeline& pipeline) {
         auto prepare = [&](std::uintptr_t handle, bool enabled) {
@@ -1367,6 +1434,7 @@ int main(int argc, char** argv) {
         Corona::Systems::VisionEmbeddedModeSwitchTest::check_accumulation_api();
         Corona::Systems::VisionEmbeddedModeSwitchTest::check_stable_planes_api();
         Corona::Systems::VisionEmbeddedModeSwitchTest::check_denoiser_api();
+        Corona::Systems::VisionEmbeddedModeSwitchTest::check_reblur_settings_api();
         Corona::Systems::VisionEmbeddedModeSwitchTest::check_frame_timing();
         if (argc == 2 && std::string(argv[1]) == "--scene-asset-reuse") {
             Corona::Systems::VisionEmbeddedModeSwitchTest::check_scene_asset_reuse();

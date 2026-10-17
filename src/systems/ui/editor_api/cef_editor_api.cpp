@@ -343,6 +343,12 @@ constexpr std::array<EditorApiParamSpec, 3> kSceneToolsSetVisionDenoiserParams =
     param("type", EditorApiValueType::String, true),
 }};
 
+constexpr std::array<EditorApiParamSpec, 3> kSceneToolsSetReblurSettingsParams = {{
+    param("scene_name", EditorApiValueType::String),
+    param("camera_name", EditorApiValueType::String),
+    param("settings", EditorApiValueType::Object),
+}};
+
 constexpr std::array<EditorApiParamSpec, 2> kSceneToolsReloadSceneParams = {{
     param("scene_name", EditorApiValueType::String),
     param("project_path", EditorApiValueType::String, true),
@@ -645,6 +651,8 @@ constexpr auto kEditorApiMethods = std::to_array<EditorApiMethodSpec>({
     EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, set_vision_render_mode, kSceneToolsSetVisionRenderModeParams, "sceneTools.setVisionRenderMode", "scene_tools.set_vision_render_mode", EditorApiValueType::Object),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, set_vision_denoise, kSceneToolsSetCameraBoolParams, "sceneTools.setVisionDenoise", "scene_tools.set_vision_denoise", EditorApiValueType::Object),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, set_vision_denoiser, kSceneToolsSetVisionDenoiserParams, "sceneTools.setVisionDenoiser", "scene_tools.set_vision_denoiser", EditorApiValueType::Object),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, set_reblur_settings, kSceneToolsSetReblurSettingsParams, "sceneTools.setReblurSettings", "scene_tools.set_reblur_settings", EditorApiValueType::Object),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, get_reblur_settings, kSceneCameraParams, "sceneTools.getReblurSettings", "scene_tools.get_reblur_settings", EditorApiValueType::Object),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, set_vision_accumulation, kSceneToolsSetCameraBoolParams, "sceneTools.setVisionAccumulation", "scene_tools.set_vision_accumulation", EditorApiValueType::Object),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, set_vision_stable_planes, kSceneToolsSetCameraBoolParams, "sceneTools.setVisionStablePlanes", "scene_tools.set_vision_stable_planes", EditorApiValueType::Object),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, stop_audio, kResourceIdParam, "sceneTools.stopAudio", "scene_tools.stop_audio", EditorApiValueType::Object),

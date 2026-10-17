@@ -34,6 +34,8 @@ namespace vision::reblur {
 
 class ReBLUR : public Denoiser {
     SP<Filter> filter_{make_shared<Filter>()};
+    Settings scene_settings_;
+    string settings_override_;
     SP<Denoiser> coverage_;
     bool enabled_{};
     uint frame_{InvalidUI32};
@@ -50,11 +52,13 @@ public:
     void update_resolution(uint2 resolution) noexcept override;
     void set_enabled(bool enabled) noexcept override;
     void set_stable_planes_enabled(bool enabled) noexcept override;
+    bool set_reblur_settings(string_view json) noexcept override;
+    [[nodiscard]] string reblur_settings_json() const override;
     [[nodiscard]] bool enabled() noexcept override { return enabled_; }
     [[nodiscard]] bool has_prepared_resources() const noexcept override { return filter_->resolution().x != 0u; }
     [[nodiscard]] CommandBatch dispatch(RealTimeDenoiseInput &input) noexcept override;
     void render_sub_UI(Widgets *widgets) noexcept override;
-    VS_HOTFIX_MAKE_RESTORE(Denoiser, filter_, coverage_, enabled_, frame_, fov_, current_raster_, previous_raster_, prepare_guides_, publish_)
+    VS_HOTFIX_MAKE_RESTORE(Denoiser, filter_, scene_settings_, settings_override_, coverage_, enabled_, frame_, fov_, current_raster_, previous_raster_, prepare_guides_, publish_)
     [[nodiscard]] string_view impl_type() const noexcept override { return "ReBLUR"; }
     [[nodiscard]] string_view category() const noexcept override { return "denoiser"; }
     [[nodiscard]] bool requires_lobe_signals() const noexcept override { return true; }

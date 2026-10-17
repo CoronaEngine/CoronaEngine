@@ -8,6 +8,20 @@ from runtime.archive.parser import parse_archive
 
 
 class VisionDenoiserPreferencesTests(unittest.TestCase):
+    def test_archive_retains_camera_local_reblur_parameters(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            scene = Path(temp_dir) / "scene.ini"
+            scene.write_text(
+                '[format]\ntype = corona_scene_folder\nversion = 1\n'
+                '[scene]\nname = Reblur\n[camera]\ncount = 2\n'
+                'camera0.vision_reblur_settings = {"max_history":12,"reconstruction":2,"anti_firefly":false}\n',
+                encoding="utf-8",
+            )
+            cameras = parse_archive(str(scene))["scene"]["cameras"]
+            self.assertEqual(cameras[0].get("vision_reblur_settings"),
+                             {"max_history": 12, "reconstruction": 2, "anti_firefly": False})
+            self.assertEqual(cameras[1].get("vision_reblur_settings"), {})
+
     def test_archive_preserves_camera_types_and_inherits_legacy_scene(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             scene = Path(temp_dir) / "scene.ini"

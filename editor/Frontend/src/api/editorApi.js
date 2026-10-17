@@ -700,6 +700,10 @@ const editorApiStatic = {
       call_manifest_editor_api('sceneTools.getVisionAccumulation', [sceneName, cameraId]),
     setVisionDenoiser: (sceneName, cameraId = null, type = 'scene') =>
       call_manifest_editor_api('sceneTools.setVisionDenoiser', [sceneName, cameraId, type]),
+    getReblurSettings: (sceneName, cameraId) =>
+      call_manifest_editor_api('sceneTools.getReblurSettings', [sceneName, cameraId]),
+    setReblurSettings: (sceneName, cameraId, settings) =>
+      call_manifest_editor_api('sceneTools.setReblurSettings', [sceneName, cameraId, settings]),
     setVisionDenoise: (sceneName, cameraId = null, enabled = false) =>
       call_manifest_editor_api('sceneTools.setVisionDenoise', [sceneName, cameraId, !!enabled]),
     getVisionDenoise: (sceneName, cameraId = null) =>

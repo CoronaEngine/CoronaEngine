@@ -2333,6 +2333,18 @@ std::string Corona::API::Camera::get_requested_vision_denoiser() const {
     return Corona::API::get_requested_vision_denoiser(handle_);
 }
 
+void Corona::API::Camera::set_vision_reblur_settings(const std::string& json) {
+    Corona::API::set_vision_reblur_settings(json, handle_);
+}
+
+std::string Corona::API::Camera::get_requested_vision_reblur_settings() const {
+    return Corona::API::get_requested_vision_reblur_settings(handle_);
+}
+
+std::string Corona::API::Camera::get_effective_vision_reblur_settings() const {
+    return Corona::API::get_effective_vision_reblur_settings(handle_);
+}
+
 void Corona::API::Camera::set_vision_accumulation(bool enabled) {
     Corona::API::set_vision_accumulation(enabled, handle_);
 }
@@ -2719,6 +2731,31 @@ bool get_vision_denoise(std::uintptr_t camera_handle) {
         }
     }
     return false;
+}
+
+void set_vision_reblur_settings(const std::string& json, std::uintptr_t camera_handle) {
+    const auto handle = resolve_camera_handle(camera_handle);
+    if (handle == 0) return;
+    CameraStateUpdateCommand command{};
+    command.camera_handle = handle;
+    command.fields = CameraStateUpdateField::VisionReblurSettings;
+    command.vision_reblur_settings = json;
+    SharedDataHub::instance().enqueue_camera_state_update(std::move(command));
+}
+
+std::string get_requested_vision_reblur_settings(std::uintptr_t camera_handle) {
+    const auto handle = resolve_camera_handle(camera_handle);
+    auto& hub = SharedDataHub::instance();
+    if (const auto requested = hub.requested_camera_vision_reblur_settings(handle)) return *requested;
+    if (auto camera = hub.camera_storage().acquire_read(handle)) return camera->vision_reblur_settings;
+    return "{}";
+}
+
+std::string get_effective_vision_reblur_settings(std::uintptr_t camera_handle) {
+    const auto handle = resolve_camera_handle(camera_handle);
+    if (auto camera = SharedDataHub::instance().camera_storage().acquire_read(handle))
+        return camera->vision_reblur_effective_settings;
+    return "{}";
 }
 
 bool get_requested_vision_denoise(std::uintptr_t camera_handle) {

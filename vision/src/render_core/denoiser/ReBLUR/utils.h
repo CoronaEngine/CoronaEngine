@@ -30,6 +30,19 @@ inline Float hit_scale(Float z, Float roughness) {
 }
 inline Float spec_magic(Float r) { return (1.f - exp2(-200.f * r * r)) * pow(saturate(r), .25f); }
 inline Float lobe_tan(Float r, Float volume) { return r * r * volume / max(1.f - volume, 1e-6f); }
+inline Float direction_angle(Float3 a, Float3 b) {
+    // Unit directions retain FP32 normalization error. acos(dot(a, a)) can
+    // report motion for a stationary view and reject narrow glossy lobes.
+    // The half-angle form preserves zero and resolves small real rotations.
+    return 2.f * atan2(length(a - b), length(a + b));
+}
+inline Float parallax_confidence(Float displacement, Float lobe_pixels) {
+    // Reflection tracking has a pixel footprint even for a vanishing GGX
+    // lobe. Combine its half-pixel support with the projected lobe rather
+    // than interpreting stochastic subpixel hit changes as disocclusions.
+    Float footprint = sqrt(lobe_pixels * lobe_pixels + .25f);
+    return footprint / (footprint + displacement);
+}
 inline Float dominant_factor(Float NoV, Float r) {
     Float a = .298475f * log(39.4115f - 39.0029f * r);
     return saturate(pow(saturate(1.f - NoV), 10.8649f) * (1.f - a) + a);
@@ -85,11 +98,12 @@ inline Float geometry_weight(const Var<FilterParam> &p, const Var<Guide> &a, con
     return select(same_surface(a, b), w, 0.f);
 }
 inline Float spatial_weight(const Var<FilterParam> &p, const Var<Guide> &a, const Var<Guide> &b,
-                            Float alpha, Float fraction_scale, bool specular) {
+                            Float alpha, Float fraction_scale, bool specular, Float normal_footprint = 0.f) {
     Float r = specular ? a.normal_roughness.w : Float{1.f};
-    Float angle = acos(clamp(dot(a.normal_roughness.xyz(), b.normal_roughness.xyz()), -1.f, 1.f));
+    Float angle = direction_angle(a.normal_roughness.xyz(), b.normal_roughness.xyz());
     Float w = geometry_weight(p, a, b);
-    w *= 1.f - smooth01(angle * normal_param(alpha, p.lobe_fraction, r) / fraction_scale);
+    Float normal_width = max(fraction_scale / normal_param(alpha, p.lobe_fraction, r), normal_footprint);
+    w *= 1.f - smooth01(angle / normal_width);
     if (specular) {
         Float norm = lerp(saturate(r * p.roughness_fraction * fraction_scale), .01f, 1.f);
         w *= 1.f - smooth01(abs(b.normal_roughness.w - r) / norm);

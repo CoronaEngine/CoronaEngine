@@ -26,6 +26,24 @@ Shader<void(FilterParam)> Filter::compile_spatial_pass(Device &device, uint stag
             Float3 V = normalize(p.camera.as_vec3() - g.position.xyz());
             Float NoV = abs(dot(N, V));
             Float r = g.normal_roughness.w;
+            Float pixel_support = 0.f, normal_footprint = 0.f;
+            if (stage == 2u) {
+                // A narrow lobe still covers a pixel. Estimate its normal
+                // footprint from continuous curvature, taking the smaller
+                // one-sided slope so a crease cannot widen the filter.
+                pixel_support = 1.f - smooth01(linear_step(.02f, .1f, r));
+                $if(pixel_support > 0.f) {
+                    Float2 slope = make_float2(0.f);
+                    for (uint axis = 0u; axis < 2u; ++axis) {
+                        Int2 step = axis == 0u ? make_int2(1, 0) : make_int2(0, 1);
+                        auto a = guides.read(pixel_index(pixel - step, p.size));
+                        auto b = guides.read(pixel_index(pixel + step, p.size));
+                        slope[axis] = select(same_surface(g, a) && same_surface(g, b),
+                            min(direction_angle(N, a.normal_roughness.xyz()), direction_angle(N, b.normal_roughness.xyz())), 0.f);
+                    }
+                    normal_footprint = 2.f * min(length(slope), .1f) * pixel_support;
+                };
+            }
             Float Dfactor = dominant_factor(NoV, r);
             Float3 D = normalize(lerp(Dfactor, N, 2.f * dot(N, V) * N - V));
             Float NoD = abs(dot(N, D));
@@ -59,9 +77,11 @@ Shader<void(FilterParam)> Filter::compile_spatial_pass(Device &device, uint stag
                 }
                 if (stage == 2u) radius *= 2.f;
                 radius = max(radius, p.min_radius * smc);
+                Float base_radius = radius;
+                if (stage == 2u && spec) radius = max(radius, min(p.min_radius, 1.f) * pixel_support);
                 // A zero radius setting is an exact spatial bypass for evaluation.
                 if (stage == 0u) radius *= (spec ? p.specular_prepass : p.diffuse_prepass) != 0.f;
-                else radius *= p.max_radius != 0.f;
+                else { radius *= p.max_radius != 0.f; base_radius *= p.max_radius != 0.f; }
                 Float4 sum = center;
                 Float weight_sum = 1.f;
                 Float min_hit_weight = p.min_hit_weight * fraction_scale * smc;
@@ -69,7 +89,8 @@ Shader<void(FilterParam)> Filter::compile_spatial_pass(Device &device, uint stag
                 Float hit_norm = lerp(min(alpha, smc), .0005f, 1.f);
                 for (uint k = 0; k < taps.size(); ++k) {
                     Float2 tap = make_float2(taps[k]);
-                    Float2 offset = make_float2(cs * tap.x - sn * tap.y, sn * tap.x + cs * tap.y) * radius;
+                    Float2 direction = make_float2(cs * tap.x - sn * tap.y, sn * tap.x + cs * tap.y);
+                    Float2 offset = direction * radius;
                     Int2 q = make_int2(floor(make_float2(pixel) + .5f + offset));
                     $if(in_screen(q, p.size)) {
                         Uint j = pixel_index(q, p.size); auto ng = guides.read(j);
@@ -88,6 +109,33 @@ Shader<void(FilterParam)> Filter::compile_spatial_pass(Device &device, uint stag
                         }
                         Float hw = exponential_weight((value.w - center.w) / hit_norm);
                         w *= lerp(hw, min_hit_weight, 1.f);
+                        if (stage == 2u && spec) {
+                            $if(pixel_support > 0.f) {
+                                Float expanded = spatial_weight(p, g, ng, alpha, fraction_scale, true, normal_footprint);
+                                // Secondary-hit variation cannot remove pixel
+                                // support; wider taps keep the original test.
+                                Float local_hit = max(hw, pixel_support * (dot(offset, offset) <= 1.f).cast<float>());
+                                expanded *= lerp(local_hit, min_hit_weight, 1.f);
+                                Int2 original_q = make_int2(floor(make_float2(pixel) + .5f + direction * base_radius));
+                                // A tap moved by the radius floor is a new
+                                // contribution, not an old weight to preserve.
+                                Float base = select(all(q == original_q), w, 0.f);
+                                $if(expanded > base) {
+                                    // Raw-to-fast innovation distinguishes noise
+                                    // from a stable, narrow luminance edge.
+                                    Float a = make_float2(p.fast.read(i)).y, b = make_float2(p.fast.read(j)).y;
+                                    Float raw_a = pack_signal(p.raw_specular.read(i), g.specular_factor.xyz(), g.position.w, r).x;
+                                    Float raw_b = pack_signal(p.raw_specular.read(j), ng.specular_factor.xyz(), ng.position.w, ng.normal_roughness.w).x;
+                                    Float noise = abs(raw_a - a) + abs(raw_b - b);
+                                    Float difference = (a - b) / (.2f * (a + b) + noise + 1e-6f);
+                                    Float edge = exponential_weight(difference * difference);
+                                    // Guard all added support, including the
+                                    // roughness taper, without weakening the
+                                    // original normal/depth/hit rejection.
+                                    w = base + (expanded - base) * edge;
+                                };
+                            };
+                        }
                         w *= exp(-.66f * dot(tap, tap));
                         sum += value * w; weight_sum += w;
                     };
