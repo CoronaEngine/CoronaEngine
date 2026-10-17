@@ -147,6 +147,15 @@ void AnimationPlayer::request_switch(std::string_view animation, double seconds)
     command_ = Switch{selected->info.id, seconds};
 }
 
+void AnimationPlayer::set_paused(bool paused) {
+    std::lock_guard lock(mutex_);
+    if (current_.empty() && target_.empty())
+        throw std::invalid_argument(status_ == "loading" ? "ANIMATION_NOT_READY" : "ACTOR_HAS_NO_ANIMATION");
+    if (paused_ == paused) return;
+    paused_ = paused;
+    ++revision_;
+}
+
 void AnimationPlayer::reset_model() {
     std::lock_guard lock(mutex_);
     if (!pending_.valid()) {
@@ -157,6 +166,7 @@ void AnimationPlayer::reset_model() {
     model_ = 0; clips_.clear(); embedded_.clear(); reference_.clear(); last_pose_.clear(); frozen_from_.clear();
     current_.clear(); target_.clear(); command_.reset(); sources_.clear(); paths_.clear();
     time_ = target_time_ = elapsed_ = duration_ = 0;
+    paused_ = false;
     status_ = "loading"; error_.clear(); ++revision_;
 }
 
@@ -184,6 +194,7 @@ void AnimationPlayer::initialize(std::uint64_t model, const SkeletonData& skelet
     embedded_ = bindings; clips_ = std::move(bindings);
     current_ = clips_.empty() ? "" : clips_.front().info.id;
     target_.clear(); command_.reset(); time_ = target_time_ = elapsed_ = duration_ = 0;
+    paused_ = false;
     last_pose_ = sample(current_, 0); frozen_from_.clear();
     sources_.clear(); paths_.clear(); model_ = model;
     status_ = pending_.valid() ? "loading" : "ready"; error_.clear(); ++revision_;
@@ -214,6 +225,9 @@ bool AnimationPlayer::evaluate(std::uint64_t model, const SkeletonData& skeleton
         } catch (const std::exception& error) { status_ = "error"; error_ = error.what(); }
         pending_ = {}; ++revision_;
     }
+    // Imports and explicit clip selection still work while paused. Only animation
+    // time is frozen; physics, actor transforms and IK remain independent.
+    if (paused_) dt = 0;
     bool discontinuity = false;
     if (command_) {
         const auto command = std::move(*command_); command_.reset();
@@ -262,6 +276,7 @@ AnimationSnapshot AnimationPlayer::snapshot() const {
     for (const auto& clip : clips_) result.clips.push_back(clip.info);
     result.current = current_; result.target = target_; result.load_status = status_; result.load_error = error_;
     result.time_seconds = time_; result.transition_weight = duration_ > 0 ? elapsed_ / duration_ : 0;
+    result.paused = paused_;
     result.revision = revision_;
     return result;
 }

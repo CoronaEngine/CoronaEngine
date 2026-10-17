@@ -775,6 +775,20 @@ class _SceneToolsApi(_DynamicApiNamespace):
         )
 
     @staticmethod
+    def pause_actor_animation(scene_name, actor_name):
+        """Freeze skeletal animation time and blending without affecting scripts."""
+        return _invoke_manifest_cpp_api(
+            "scene_tools.pause_actor_animation", [scene_name, actor_name]
+        )
+
+    @staticmethod
+    def resume_actor_animation(scene_name, actor_name):
+        """Continue skeletal animation from its paused time and blend progress."""
+        return _invoke_manifest_cpp_api(
+            "scene_tools.resume_actor_animation", [scene_name, actor_name]
+        )
+
+    @staticmethod
     def save_actor(scene_name, actor_name):
         return _invoke_manifest_cpp_api(
             "scene_tools.save_actor", [scene_name, actor_name]

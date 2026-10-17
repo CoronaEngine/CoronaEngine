@@ -729,6 +729,10 @@ const editorApiStatic = {
       call_manifest_editor_api('sceneTools.setActorState', [sceneName, actorName, state]),
     setActorAnimation: (sceneName, actorName, animation, blendSeconds = 0.2) =>
       call_manifest_editor_api('sceneTools.setActorAnimation', [sceneName, actorName, animation, blendSeconds]),
+    pauseActorAnimation: (sceneName, actorName) =>
+      call_manifest_editor_api('sceneTools.pauseActorAnimation', [sceneName, actorName]),
+    resumeActorAnimation: (sceneName, actorName) =>
+      call_manifest_editor_api('sceneTools.resumeActorAnimation', [sceneName, actorName]),
     saveActor: (sceneName, actorName) =>
       call_manifest_editor_api('sceneTools.saveActor', [sceneName, actorName]),
     selectModelFile: (sceneName, actorName, fileType = 'model') =>

@@ -701,6 +701,8 @@ constexpr auto kEditorApiMethods = std::to_array<EditorApiMethodSpec>({
     EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, sun_direction, kSceneToolsSunDirectionParams, "sceneTools.sunDirection", "scene_tools.sun_direction", EditorApiValueType::Object),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, get_actor_skeleton_leaves, kSceneActorParams, "sceneTools.getActorSkeletonLeaves", "scene_tools.get_actor_skeleton_leaves", EditorApiValueType::Object),
     EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, set_actor_animation, kSceneToolsSetAnimationParams, "sceneTools.setActorAnimation", "scene_tools.set_actor_animation", EditorApiValueType::Object, animation_callers()),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, pause_actor_animation, kSceneActorParams, "sceneTools.pauseActorAnimation", "scene_tools.pause_actor_animation", EditorApiValueType::Object, animation_callers()),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, resume_actor_animation, kSceneActorParams, "sceneTools.resumeActorAnimation", "scene_tools.resume_actor_animation", EditorApiValueType::Object, animation_callers()),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, get_model_nodes, kModelNodePageParams, "sceneTools.getModelNodes", "scene_tools.get_model_nodes", EditorApiValueType::Object),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, set_model_node_state, kModelNodeStateParams, "sceneTools.setModelNodeState", "scene_tools.set_model_node_state", EditorApiValueType::Object),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, get_actor_ik_chains, kSceneActorParams, "sceneTools.getActorIkChains", "scene_tools.get_actor_ik_chains", EditorApiValueType::Object),

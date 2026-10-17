@@ -3544,6 +3544,19 @@ void request_actor_animation_sources(const NativeEditorScene& scene, const Nativ
     player->set_sources(std::move(sources), std::move(paths));
 }
 
+NativeResult set_native_actor_animation_paused(const NativeRequest& request, bool paused) {
+    try {
+        auto* scene = scene_for_request_route(request);
+        auto* actor = find_native_actor(*scene, arg_string(request.args, 1));
+        if (!actor) return native_failure("Actor not found", 2);
+        auto player = actor_animation_player(*actor);
+        if (!player) return native_failure("Actor has no geometry", 2);
+        player->set_paused(paused);
+        return native_success({{"status", "success"}, {"scene", scene->route},
+                               {"actor", actor_to_json(*scene, *actor)}});
+    } catch (const std::exception& error) { return native_failure(error.what(), 2); }
+}
+
 NativeResult create_native_editor_actor(const std::string& scene_route_arg,
                                         const std::string& source_path,
                                         std::string actor_type,
@@ -9026,6 +9039,12 @@ void register_scene_tools_api_handlers(NativeApiRegistry& registry) {
                 return native_success({{"status", "accepted"}, {"scene", scene->route},
                                        {"actor", actor_to_json(*scene, *actor)}});
             } catch (const std::exception& error) { return native_failure(error.what(), 2); }
+        }},
+        {"pause_actor_animation", [](const NativeRequest& request, const NativeContext&) {
+            return set_native_actor_animation_paused(request, true);
+        }},
+        {"resume_actor_animation", [](const NativeRequest& request, const NativeContext&) {
+            return set_native_actor_animation_paused(request, false);
         }},
         {"set_actor_camera_lock", [](const NativeRequest& request, const NativeContext& context) {
             try {
