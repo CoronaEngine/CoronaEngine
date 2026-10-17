@@ -1,4 +1,4 @@
-﻿# ============================================================================== 
+# ============================================================================== 
 # corona_runtime_deps.cmake
 #
 # Purpose:
@@ -117,17 +117,44 @@ function(corona_install_runtime_deps target_name)
         set(_CORONA_CEF_BIN_DIR "${CEF_ROOT}/$<IF:$<CONFIG:Debug>,Debug,Release>")
         set(_CORONA_CEF_RES_DIR "${CEF_ROOT}/Resources")
 
+        # CEF expects locales/, .pak and .dat files next to the exe. The distribution ships 220
+        # locale packs (~48 MB) while the engine pins a single locale
+        # (settings.locale = "zh-CN" in src/systems/ui/cef/cef_client.cpp), so copy the resource
+        # files without locales/ and then only the packs that can actually be selected. en-US is
+        # kept because it is CEF's own documented fallback locale.
+        file(GLOB _CORONA_CEF_RES_ENTRIES "${_CORONA_CEF_RES_DIR}/*")
+        set(_CORONA_CEF_RES_KEPT)
+        foreach(_entry IN LISTS _CORONA_CEF_RES_ENTRIES)
+            get_filename_component(_entry_name "${_entry}" NAME)
+            if(NOT _entry_name STREQUAL "locales")
+                list(APPEND _CORONA_CEF_RES_KEPT "${_entry}")
+            endif()
+        endforeach()
+
+        set(_CORONA_CEF_KEPT_LOCALES zh-CN en-US)
+        set(_CORONA_CEF_LOCALE_PAKS)
+        foreach(_locale IN LISTS _CORONA_CEF_KEPT_LOCALES)
+            if(EXISTS "${_CORONA_CEF_RES_DIR}/locales/${_locale}.pak")
+                list(APPEND _CORONA_CEF_LOCALE_PAKS "${_CORONA_CEF_RES_DIR}/locales/${_locale}.pak")
+            else()
+                message(WARNING "[Corona:RuntimeDeps] CEF locale pack missing: ${_locale}.pak")
+            endif()
+        endforeach()
+
         # Copy CEF runtime files next to the exe. Debug uses CEF Debug binaries;
         # Release, RelWithDebInfo, and MinSizeRel use the Release runtime.
         add_custom_command(TARGET ${target_name} POST_BUILD
                 COMMAND ${CMAKE_COMMAND} -E copy_directory
                 "${_CORONA_CEF_BIN_DIR}"
                 "${_CORONA_DESTINATION_DIR}"
-
-                # CEF expects locales/, .pak, and .dat files next to the exe.
-                COMMAND ${CMAKE_COMMAND} -E copy_directory
-                "${_CORONA_CEF_RES_DIR}"
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                ${_CORONA_CEF_RES_KEPT}
                 "${_CORONA_DESTINATION_DIR}"
+                COMMAND ${CMAKE_COMMAND} -E make_directory
+                "${_CORONA_DESTINATION_DIR}/locales"
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                ${_CORONA_CEF_LOCALE_PAKS}
+                "${_CORONA_DESTINATION_DIR}/locales"
         )
     endif()
 

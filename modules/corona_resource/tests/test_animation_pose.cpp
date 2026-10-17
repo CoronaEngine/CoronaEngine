@@ -1,5 +1,5 @@
 // ============================================================================
-// P1 验证：骨骼动画运行时求值（animation_pose）数学自洽性单测
+// 骨骼动画运行时求值（animation_pose）：FK 数学自洽性和 CCD 回归测试
 //
 // 不依赖引擎/GPU/磁盘。验证：
 //   1. mat4_mul 单位元 / 结合律
@@ -7,10 +7,12 @@
 //   3. slerp 端点 + 中点
 //   4. compute_pose 绑定姿态 → final ≈ 单位阵（核心验证闸）
 //   5. compute_pose 无动画通道时回退 local；层级累乘正确
+//   6. CCD 旋转混合保长、直链退化恢复、模型空间容差与无效输入
 // ============================================================================
 #include <array>
 #include <cmath>
 #include <cstdio>
+#include <limits>
 #include <vector>
 
 #include "corona/resource/types/animation_pose.h"
@@ -192,16 +194,201 @@ void test_bind_pose_identity_hierarchy() {
           "bind-pose: hierarchical bone final ~= identity (parent accum)");
 }
 
+SkeletonData make_ik_skeleton(int count) {
+    SkeletonData skeleton;
+    skeleton.root = 0;
+    skeleton.bone_count = count;
+    skeleton.global_inverse = kIdentity;
+    for (int i = 0; i < count; ++i) {
+        BoneNode node;
+        node.name = "joint_" + std::to_string(i);
+        node.parent = i - 1;
+        node.local = compose_trs({i == 0 ? 0.0f : 1.0f, 0, 0}, {0, 0, 0, 1}, {1, 1, 1});
+        if (i + 1 < count) node.children.push_back(i + 1);
+        BoneInfo bone;
+        bone.id = i;
+        bone.offset = kIdentity;
+        skeleton.bone_map[node.name] = bone;
+        skeleton.nodes.push_back(node);
+    }
+    return skeleton;
+}
+
+std::vector<std::array<float, 16>> ik_locals(const SkeletonData& skeleton) {
+    std::vector<std::array<float, 16>> locals;
+    sample_pose_locals(skeleton, AnimationClip{}, 0.0f, locals);
+    return locals;
+}
+
+IkChain make_ik_chain(int end_node, int length, std::array<float, 3> target) {
+    IkChain chain;
+    chain.enabled = true;
+    chain.end_node = end_node;
+    chain.chain_length = length;
+    chain.target = target;
+    chain.tolerance = 1e-4f;
+    chain.max_iterations = 100;
+    return chain;
+}
+
+std::vector<std::array<float, 16>> solve_ik_pose(const SkeletonData& skeleton, const IkChain& chain) {
+    const auto locals = ik_locals(skeleton);
+    std::unordered_map<int, std::array<float, 16>> overrides;
+    solve_ccd(skeleton, chain, locals, overrides);
+    std::vector<std::array<float, 16>> finals;
+    compute_pose(skeleton, AnimationClip{}, 0.0f, finals, &overrides, &locals);
+    return finals;
+}
+
+float point_distance(const std::array<float, 3>& a, const std::array<float, 3>& b) {
+    float square = 0.0f;
+    for (int i = 0; i < 3; ++i) square += (a[i] - b[i]) * (a[i] - b[i]);
+    return std::sqrt(square);
+}
+
+// L^T*L is invariant under a left rotation, so this verifies lengths, relative
+// axis angles, nonuniform scale, and pre-existing shear without decomposing TRS.
+bool same_linear_metric(const std::array<float, 16>& a, const std::array<float, 16>& b) {
+    for (int c = 0; c < 3; ++c) {
+        for (int d = 0; d < 3; ++d) {
+            float dot_a = 0.0f, dot_b = 0.0f;
+            for (int r = 0; r < 3; ++r) {
+                dot_a += a[c * 4 + r] * a[d * 4 + r];
+                dot_b += b[c * 4 + r] * b[d * 4 + r];
+            }
+            if (!near_eq(dot_a, dot_b, 2e-4f)) return false;
+        }
+    }
+    return true;
+}
+
+void test_ik_weight_preserves_bone_length() {
+    auto skeleton = make_ik_skeleton(2);
+    auto chain = make_ik_chain(1, 2, {0, 1, 0});
+    chain.weight = 0.5f;
+    auto pose = solve_ik_pose(skeleton, chain);
+    const auto end = mat4_translation(pose.back());
+    check(near_eq(end[0], std::sqrt(0.5f)) && near_eq(end[1], std::sqrt(0.5f)) && near_eq(end[2], 0),
+          "IK: half-weight 90deg correction is a length-preserving 45deg rotation");
+    chain.target = {-1, 0, 0};
+    pose = solve_ik_pose(skeleton, chain);
+    check(near_eq(point_distance(mat4_translation(pose.front()), mat4_translation(pose.back())), 1.0f) &&
+              same_linear_metric(pose.front(), kIdentity),
+          "IK: half-weight 180deg correction remains nonsingular and preserves length");
+
+    skeleton.nodes[0].local = compose_trs({3, 4, 5}, quat_from_axis_angle({0, 0, 1}, 0.3f), {-2, 3, 0.5f});
+    chain.target = {3, 6, 5};
+    const auto locals = ik_locals(skeleton);
+    std::unordered_map<int, std::array<float, 16>> overrides;
+    solve_ccd(skeleton, chain, locals, overrides);
+    check(overrides.contains(0) && same_linear_metric(locals[0], overrides.at(0)) &&
+              mat4_translation(locals[0]) == mat4_translation(overrides.at(0)),
+          "IK: blending preserves input translation and mirrored nonuniform scale");
+
+    skeleton = make_ik_skeleton(3);
+    skeleton.nodes[0].local = compose_trs({0, 0, 0}, {0, 0, 0, 1}, {2, 3, 1});
+    skeleton.nodes[1].local = compose_trs({1, 0, 0}, {0, 0, 0, 1}, {1, 2, 0.5f});
+    chain = make_ik_chain(2, 2, {2, 3, 0});
+    solve_ccd(skeleton, chain, ik_locals(skeleton), overrides);
+    check(overrides.contains(1) && same_linear_metric(skeleton.nodes[1].local, overrides.at(1)) &&
+              mat4_translation(skeleton.nodes[1].local) == mat4_translation(overrides.at(1)),
+          "IK: nonuniform parent scale does not inject local scale or shear");
+}
+
+void test_ik_straight_chain() {
+    auto skeleton = make_ik_skeleton(3);
+    auto chain = make_ik_chain(2, 3, {1.5f, 0, 0});
+    chain.max_iterations = 10;
+    auto pose = solve_ik_pose(skeleton, chain);
+    check(point_distance(mat4_translation(pose.back()), chain.target) <= chain.tolerance,
+          "IK: straight two-segment chain bends toward a reachable collinear target");
+    check(near_eq(point_distance(mat4_translation(pose[0]), mat4_translation(pose[1])), 1.0f) &&
+              near_eq(point_distance(mat4_translation(pose[1]), mat4_translation(pose[2])), 1.0f),
+          "IK: straight-chain recovery preserves both segment lengths");
+    const auto repeated = solve_ik_pose(skeleton, chain);
+    check(mat_near(pose[0], repeated[0]) && mat_near(pose[1], repeated[1]),
+          "IK: straight-chain bend direction is deterministic");
+
+    chain.target = {4, 0, 0};
+    pose = solve_ik_pose(skeleton, chain);
+    check(near_eq(mat4_translation(pose.back())[0], 2.0f) && same_linear_metric(pose[0], kIdentity),
+          "IK: unreachable outward target leaves a straight chain extended");
+    chain.target = {0.75f, 1.25f, 0.5f};
+    chain.max_iterations = 100;
+    pose = solve_ik_pose(skeleton, chain);
+    check(point_distance(mat4_translation(pose.back()), chain.target) <= chain.tolerance,
+          "IK: ordinary non-collinear 3D target still converges");
+}
+
+void test_ik_model_space_tolerance() {
+    auto skeleton = make_ik_skeleton(2);
+    skeleton.global_inverse = compose_trs({3, -4, 2}, {0, 0, 0, 1}, {100, 100, 100});
+    auto chain = make_ik_chain(1, 2, {103, -3.99f, 2});
+    chain.tolerance = 0.005f;
+    auto pose = solve_ik_pose(skeleton, chain);
+    check(point_distance(mat4_translation(pose.back()), chain.target) <= chain.tolerance,
+          "IK: tolerance is checked after global_inverse in output model space");
+
+    skeleton.global_inverse = compose_trs({0, 0, 0}, {0, 0, 0, 1}, {1e-5f, 1e-5f, 1e-5f});
+    chain.target = {0, 1e-5f, 0};
+    chain.tolerance = 1e-7f;
+    pose = solve_ik_pose(skeleton, chain);
+    check(point_distance(mat4_translation(pose.back()), chain.target) <= chain.tolerance,
+          "IK: small but invertible import normalization is accepted");
+}
+
+void test_ik_input_guards() {
+    auto skeleton = make_ik_skeleton(3);
+    auto chain = make_ik_chain(2, 3, {1, 1, 0});
+    std::unordered_map<int, std::array<float, 16>> overrides;
+    auto reject = [&](const char* name) {
+        overrides[42] = kIdentity;
+        solve_ccd(skeleton, chain, ik_locals(skeleton), overrides);
+        check(overrides.empty(), name);
+    };
+    chain.weight = 0;
+    reject("IK: zero weight produces no overrides");
+    chain.weight = 1;
+    chain.damping = 0;
+    reject("IK: zero damping produces no overrides");
+    chain.damping = 1;
+    chain.max_iterations = 0;
+    reject("IK: zero iterations produces no overrides");
+    chain.max_iterations = 100;
+    chain.target[0] = std::numeric_limits<float>::quiet_NaN();
+    reject("IK: non-finite target is rejected");
+    chain.target = {1, 1, 0};
+    chain.weight = std::numeric_limits<float>::infinity();
+    reject("IK: non-finite weight is rejected");
+    chain.weight = 1;
+    skeleton.global_inverse[0] = 0;
+    reject("IK: singular model-space conversion is rejected");
+    skeleton.global_inverse = kIdentity;
+    skeleton.nodes[0].parent = 2;
+    chain.chain_length = std::numeric_limits<int>::max();
+    reject("IK: cyclic ancestry with huge chain length terminates and is rejected");
+    skeleton.nodes[0].parent = 999;
+    chain.chain_length = 2;
+    reject("IK: invalid ancestor above the chain root is rejected");
+    skeleton.nodes[0].parent = -1;
+    skeleton.nodes[0].local[0] = 0;
+    reject("IK: singular fixed parent transform is rejected");
+}
+
 }  // namespace
 
 int main() {
-    std::printf("=== Animation Pose (P1) Unit Tests ===\n");
+    std::printf("=== Animation Pose / CCD Unit Tests ===\n");
     test_mat4_mul();
     test_compose_trs();
     test_slerp_endpoints();
     test_advance_time_loops();
     test_bind_pose_identity_single();
     test_bind_pose_identity_hierarchy();
+    test_ik_weight_preserves_bone_length();
+    test_ik_straight_chain();
+    test_ik_model_space_tolerance();
+    test_ik_input_guards();
 
     std::printf("\n=== Results: %d passed, %d failed ===\n", g_passed, g_failed);
     return g_failed == 0 ? 0 : 1;

@@ -7,10 +7,12 @@
 #include <corona/resource/types/scene.h>
 #include <corona/shared_data_hub.h>
 
+#include <cmath>
 #include <cstddef>
 #include <cstring>
 #include <span>
 #include <vector>
+#include <unordered_map>
 
 #include "base/mgr/geometry.h"
 #include "base/mgr/scene.h"
@@ -50,9 +52,9 @@ struct CpuMeshData {
         return false;
     }
 
-    // ---- 蒙皮几何（P3）：顶点改用 GeometryDevice 每帧 CPU 蒙皮的输出 ----
-    // skinned_cpu_vertices 是 GeometrySystem::update_skinned_geometry 每帧写入的
-    // 单一数据源（per-mesh 原始字节，布局严格等同 Resource::Vertex 数组）。
+    // ---- 蒙皮几何：读取 GeometryDevice 每帧 GPU 蒙皮的 LOD0 回读 ----
+    // skinned_cpu_vertices 由 MechanicsSystem::update_skinned_geometry 写入，
+    // 为 per-mesh 原始字节，布局严格等同 Resource::Vertex 数组。
     // 蒙皮只改顶点位置/法线、不改拓扑，故索引仍来自 Scene。
     // 若该 mesh 有蒙皮字节且数量与绑定顶点一致 → reinterpret 直接用；
     // 否则回退到 Scene 的绑定姿态顶点（静态网格 / 蒙皮数据尚未就绪）。
@@ -213,8 +215,32 @@ struct CpuMeshData {
             o2w = model_transform_to_vision_o2w(*transform);
         }
 
-        for (std::size_t mesh_index = 0; mesh_index < geom->mesh_handles.size(); ++mesh_index) {
+        std::unordered_map<std::size_t, std::shared_ptr<::vision::Mesh>> shared_meshes;
+        // A glTF mesh can be instanced thousands of times. MeshInstanceDevice has no
+        // per-instance material override, so material state must follow the source
+        // mesh rather than the expanded draw instance. Registering a material for
+        // every node multiplied the Vision material table (and its GPU state) by the
+        // instance count.
+        std::unordered_map<std::size_t, std::shared_ptr<::vision::Material>> shared_materials;
+        const std::size_t draw_instance_count = geom->mesh_instances.empty()
+            ? geom->mesh_handles.size()
+            : geom->mesh_instances.size();
+        for (std::size_t draw_instance_index = 0;
+             draw_instance_index < draw_instance_count;
+             ++draw_instance_index) {
+            const MeshInstanceDevice* mesh_instance = geom->mesh_instances.empty()
+                ? nullptr
+                : &geom->mesh_instances[draw_instance_index];
+            if (mesh_instance && !mesh_instance->visible) continue;
+            const std::size_t mesh_index = mesh_instance != nullptr
+                ? static_cast<std::size_t>(mesh_instance->mesh_index)
+                : draw_instance_index;
+            if (mesh_index >= geom->mesh_handles.size()) {
+                continue;
+            }
             auto& mesh_dev = geom->mesh_handles[mesh_index];
+            std::shared_ptr<::vision::Mesh> mesh;
+            if(auto existing=shared_meshes.find(mesh_index);existing!=shared_meshes.end()){mesh=existing->second;}else {
             CpuMeshData cpu_mesh;
             if (!load_cpu_mesh_from_resource(*geom, mesh_index, cpu_mesh) &&
                 !load_cpu_mesh_from_buffers(mesh_dev, cpu_mesh)) {
@@ -230,9 +256,11 @@ struct CpuMeshData {
             std::vector<::vision::Vertex> vertices;
             vertices.reserve(cpu_mesh.vertices.size());
             for (const auto& src_vertex : cpu_mesh.vertices) {
+                const auto& pos=src_vertex.position;
+                const auto& normal=src_vertex.normal;
                 ::vision::Vertex v;
-                v.pos = {src_vertex.position[0], src_vertex.position[1], -src_vertex.position[2]};
-                v.n   = {src_vertex.normal[0], src_vertex.normal[1], -src_vertex.normal[2]};
+                v.pos = {pos[0], pos[1], -pos[2]};
+                v.n   = {normal[0], normal[1], -normal[2]};
                 v.uv  = {src_vertex.tex_coords[0], src_vertex.tex_coords[1]};
                 v.uv2 = {0.f, 0.f};
                 vertices.push_back(v);
@@ -251,18 +279,31 @@ struct CpuMeshData {
                                        cpu_mesh.indices[triangle_index + 1]);
             }
 
-            auto mesh = std::make_shared<::vision::Mesh>(
+            mesh = std::make_shared<::vision::Mesh>(
                 std::move(vertices), std::move(triangles));
             mesh = scene.geometry().data()->register_mesh(mesh);
 
-            auto material = create_vision_material(*optics, mesh_dev);
-            if (!material) {
-                material = scene.obtain_black_body();
+            shared_meshes.emplace(mesh_index,mesh);
+            }
+            std::shared_ptr<::vision::Material> material;
+            if (auto existing = shared_materials.find(mesh_index);
+                existing != shared_materials.end()) {
+                material = existing->second;
+            } else {
+                material = create_vision_material(*optics, mesh_dev);
+                if (!material) {
+                    material = scene.obtain_black_body();
+                }
+                shared_materials.emplace(mesh_index, material);
+                scene.add_material(material);
             }
             auto instance = std::make_shared<::vision::ShapeInstance>(mesh);
-            instance->set_o2w(o2w);
+            auto local=::vision::make_float4x4(1.f);
+            if(mesh_instance)for(int col=0;col<4;++col)for(int row=0;row<4;++row){float value=mesh_instance->transform[col][row];if(row==2)value=-value;if(col==2)value=-value;local[col][row]=value;}
+            instance->set_o2w(o2w*local);
+            // Stable mapping used by runtime instance transform updates, independent of duplicate node names.
+            instance->set_name("corona-node:"+std::to_string(optics->geometry_handle)+":"+std::to_string(draw_instance_index));
             instance->set_material(material);
-            scene.add_material(material);
             instance->init_aabb();
 
             group.aabb.extend(instance->aabb);

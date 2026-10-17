@@ -218,6 +218,7 @@ import { useRoute } from 'vue-router';
 import { editorApi } from '@/api/editorApi.js';
 import { appService } from '@/services/appService.js';
 import { buildDragRegions, dragRegionsSignature } from '@/utils/cameraDragRegions.js';
+import { pickedNodeIdentity } from '@/utils/modelHierarchy.js';
 import { coronaEventBus } from '@/utils/eventBus.js';
 import {
   normalizeVisionRenderMode, visionAccumulationFromCamera, visionDenoiseFromCamera, visionStablePlanesFromCamera, visionRenderModes,
@@ -619,8 +620,8 @@ const cameraViewPickController = createViewportPickController({
   getHitRect: getCameraViewHitRect,
   getRenderRect: getCameraRenderRect,
   getActorIndex: () => actorPickIndex,
-  emitActorChange: (type, scene, actorName) =>
-    editorApi.sceneTools.selectActor(scene, type, actorName, cameraViewSelectionContext()),
+  emitActorChange: (type, scene, actorName, nodeContext) =>
+    editorApi.sceneTools.selectActor(scene, type, actorName, { ...cameraViewSelectionContext(), ...nodeContext }),
 });
 
 const viewportGizmoController = createViewportGizmoController({
@@ -652,7 +653,11 @@ const findActorPickEntryByName = (actorName) => {
   return null;
 };
 
+const handleModelNodeGizmoSelection = (identity) => { if (identity) viewportGizmoController.clearTarget(); };
 const syncViewportGizmoSelection = async (payload = {}) => {
+  coronaEventBus.modelNodeSelection = pickedNodeIdentity(payload);
+  coronaEventBus.emit('model-node-selection', coronaEventBus.modelNodeSelection);
+  if (coronaEventBus.modelNodeSelection) { viewportGizmoController.clearTarget(); return; }
   const ownsGizmo = isViewportGizmoSelectionOwner({
     viewportScope: 'cameraView',
     cameraHandle: camera.value?.handle,
@@ -674,7 +679,7 @@ const syncViewportGizmoSelection = async (payload = {}) => {
     await refreshCameraViewActorPickIndex().catch(() => false);
     entry = findActorPickEntryByName(actorName);
   }
-  if (entry?.handle) {
+  if (entry?.handle && !coronaEventBus.modelNodeSelection) {
     viewportGizmoController.setTarget({ handle: entry.handle, name: actorName });
   } else {
     viewportGizmoController.clearTarget();
@@ -849,6 +854,9 @@ let previousTime = 0;
 let looking = false;
 let lastMouseX = 0;
 let lastMouseY = 0;
+let posePublishTimer = 0;
+let lastPosePublishTime = -Infinity;
+const kPosePublishIntervalMs = 50;
 
 const normalize = (value) => {
   const length = Math.hypot(value[0], value[1], value[2]) || 1;
@@ -860,7 +868,8 @@ const cross = (a, b) => [
   a[0] * b[1] - a[1] * b[0],
 ];
 
-const publishPose = () => {
+const flushPose = () => {
+  posePublishTimer = 0;
   // Keep Scratch input active, but never publish an editor-controlled camera
   // pose while a node graph/game preview owns keyboard and mouse input.
   if (isEditorInputLocked()) return;
@@ -874,6 +883,22 @@ const publishPose = () => {
     Array.from(item.world_up),
     item.fov,
   );
+  lastPosePublishTime = performance.now();
+};
+
+const publishPose = () => {
+  if (isEditorInputLocked()) return;
+  const elapsed = performance.now() - lastPosePublishTime;
+  if (elapsed >= kPosePublishIntervalMs && !posePublishTimer) {
+    flushPose();
+    return;
+  }
+  if (!posePublishTimer) {
+    posePublishTimer = window.setTimeout(
+      flushPose,
+      Math.max(0, kPosePublishIntervalMs - elapsed),
+    );
+  }
 };
 
 const moveCamera = (dt) => {
@@ -929,6 +954,8 @@ const isEditorInputLocked = () => {
 const resetCameraInput = () => {
   keys.clear();
   looking = false;
+  if (posePublishTimer) window.clearTimeout(posePublishTimer);
+  posePublishTimer = 0;
 };
 const movementFrame = (time) => {
   const dt = previousTime ? Math.min((time - previousTime) / 1000, 0.05) : 0;
@@ -983,7 +1010,11 @@ const onKeyDown = (event) => {
     return;
   }
   if (isTextInputEvent(event)) return;
-  if (!event.__coronaScratchKeyForwarded) {
+  // The native editor already delivers SDL keyboard events to CEF. Sending the
+  // same movement key through the manifest API re-enters the Scratch runtime on
+  // its slow path; with a loaded large scene that duplicate Q event can block the
+  // UI while the native input path is still active.
+  if (!window.coronaBridge && !event.__coronaScratchKeyForwarded) {
     event.__coronaScratchKeyForwarded = true;
     editorApi.scratch.sendKeyEvent(
       event.code || event.key || '',
@@ -1012,8 +1043,12 @@ const onKeyDown = (event) => {
 };
 const onKeyUp = (event) => {
   if (isTextInputEvent(event)) return;
-  keys.delete(movementCode(event));
-  if (!event.__coronaScratchKeyForwarded) {
+  const releasedMovementKey = keys.delete(movementCode(event));
+  if (releasedMovementKey && !keys.size) {
+    if (posePublishTimer) window.clearTimeout(posePublishTimer);
+    flushPose();
+  }
+  if (!window.coronaBridge && !event.__coronaScratchKeyForwarded) {
     event.__coronaScratchKeyForwarded = true;
     editorApi.scratch.sendKeyUpEvent(
       event.code || event.key || '',
@@ -1124,6 +1159,8 @@ const finishCameraViewClickFromPick = (payload, result) => {
 
 const handleCameraViewActorPickResult = (payload) => {
   const result = cameraViewPickController.handlePickResult(payload);
+  if (result.status === 'selected') coronaEventBus.emit('model-node-picked', { ...payload, actor_name: payload?.actor_name || result.actor?.name });
+  if (result.status === 'miss') coronaEventBus.emit('model-node-picked', payload);
   if (result.status === 'miss') {
     editorApi.sceneTools.selectActor(
       sceneId,
@@ -1378,6 +1415,7 @@ onMounted(async () => {
   window.addEventListener('keyup', onKeyUp);
   window.addEventListener('storage', handleViewportUiCalibrationStorage);
   window.addEventListener('blur', handleCameraViewBlur);
+  coronaEventBus.on('model-node-selection', handleModelNodeGizmoSelection);
   coronaEventBus.on('viewport-ui-calibration-changed', handleViewportUiCalibrationChanged);
   animationFrame = requestAnimationFrame(movementFrame);
   await pollPreviewHud();
@@ -1386,6 +1424,8 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   cancelAnimationFrame(animationFrame);
+  if (posePublishTimer) window.clearTimeout(posePublishTimer);
+  posePublishTimer = 0;
   if (dragRegionFrame) window.cancelAnimationFrame(dragRegionFrame);
   if (scratchMouseMoveFrame) window.cancelAnimationFrame(scratchMouseMoveFrame);
   scratchMouseMoveFrame = 0;
@@ -1416,6 +1456,7 @@ onBeforeUnmount(() => {
   window.removeEventListener('keyup', onKeyUp);
   window.removeEventListener('storage', handleViewportUiCalibrationStorage);
   window.removeEventListener('blur', handleCameraViewBlur);
+  coronaEventBus.off('model-node-selection', handleModelNodeGizmoSelection);
   coronaEventBus.off('viewport-ui-calibration-changed', handleViewportUiCalibrationChanged);
   viewportUiPointerController.dispose();
 });

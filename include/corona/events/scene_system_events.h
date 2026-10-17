@@ -103,17 +103,11 @@ struct ActorResidencyChangedEvent {
 };
 
 /**
- * @brief 八叉树粗筛碰撞候选对事件（SceneSystem → MechanicsSystem）
+ * @brief 旧版八叉树粗筛碰撞候选对事件，保留类型兼容。
  *
- * SceneSystem 在每帧重建八叉树后，通过 collect_pairs() 收集所有
- * AABB 重叠的 actor 对，打包为本事件通过 IEventBus 同步发布。
- * 订阅方（如 MechanicsSystem）被动接收候选对列表，进行窄相检测。
- *
- * 设计意图：
- * - SceneSystem 只负责空间划分与粗筛，不直接依赖任何物理系统
- * - 物理系统通过事件订阅解耦，可独立替换或禁用
- * - 使用 EventBus 同步发布：SceneSystem(priority=88) 早于
- *   MechanicsSystem(priority=75)，同帧内保证数据就绪
+ * GeometrySystem 不再逐帧生成 CPU 候选对或自动发布本事件。
+ * MechanicsSystem 直接批量提交 GPU 粗筛，使用结果进行三角窄相检测。
+ * 需要 CPU 八叉树候选对的调用方仍可显式调用 GeometrySystem::query_pairs()。
  */
 struct BroadphasePairsEvent {
     std::uintptr_t scene{};

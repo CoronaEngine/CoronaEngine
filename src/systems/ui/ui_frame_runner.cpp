@@ -3,6 +3,7 @@
 #include <horizon/core/logging.h>
 #include <corona/memory/gpu_mem_ledger.h>
 #include <corona/systems/ui/camera_viewport_manager.h>
+#include <corona/systems/ui/panel_resize_policy.h>
 #include <corona/systems/ui/quad_compositor.h>
 #include <corona/systems/ui/sdl_window_manager.h>
 #include <corona/systems/ui/vulkan_backend.h>
@@ -153,7 +154,10 @@ namespace {
 //     rewritten to docking_pos "main" so it fills the window.
 std::vector<PanelLayoutInput> collect_layout_inputs(void* host_filter) {
     std::vector<PanelLayoutInput> inputs;
-    for (const auto& [tab_id, tab] : BrowserManager::instance().get_tabs()) {
+    for (const auto& tab_entry : BrowserManager::instance().tabs_snapshot()) {
+        const int tab_id = tab_entry.tab_id;
+        auto* tab = tab_entry.tab;
+        if (tab == nullptr) continue;
         if (!tab || !tab->open || tab->minimized) {
             continue;
         }
@@ -284,7 +288,6 @@ SDL_Cursor* cached_system_cursor(SDL_SystemCursor cursor) {
 }
 
 void apply_floating_resize(BrowserTab& tab,
-                           int tab_id,
                            int edges,
                            float start_x,
                            float start_y,
@@ -353,7 +356,11 @@ void apply_floating_resize(BrowserTab& tab,
     tab.dock_height = static_cast<int>(std::lround(std::max(kMinHeight, h)));
     tab.needs_reposition = true;
     tab.needs_resize = true;
-    BrowserManager::instance().resize_tab(tab_id, tab.dock_width, tab.dock_height);
+
+    // Deliberately does NOT resize here. This runs once per frame during an edge drag, and
+    // resize_tab() throws away the whole CEF texture + forces a renderer relayout (measured
+    // 1.90-7.36ms). The caller applies the new size through the gate in panel_resize_policy.h,
+    // and forces an exact apply when the gesture ends.
 }
 
 }  // namespace
@@ -434,6 +441,14 @@ void UiFrameRunner::route_mouse_to_panels(SDL_WindowID window_id,
 
         if (!be.pressed) {
             if (resizing_tab_id_ != -1) {
+                // The gate may have deferred the last few pixels of the drag. Nothing after this
+                // point would finish the job (the id is cleared here and every later frame only
+                // reacts to new input), so force one exact apply before dropping the gesture.
+                if (auto* finished_tab = BrowserManager::instance().get_tab(resizing_tab_id_)) {
+                    BrowserManager::instance().resize_tab(resizing_tab_id_, finished_tab->dock_width,
+                                                          finished_tab->dock_height);
+                }
+                resize_gate_last_apply_ = std::chrono::steady_clock::time_point{};
                 resizing_tab_id_ = -1;
                 resize_edges_ = 0;
                 ended_resize_this_frame = true;
@@ -463,6 +478,7 @@ void UiFrameRunner::route_mouse_to_panels(SDL_WindowID window_id,
             focus_browser_tab_exclusively(hit.tab_id);
             resizing_tab_id_ = hit.tab_id;
             resize_edges_ = resize_edges;
+            resize_gate_last_apply_ = std::chrono::steady_clock::time_point{};
             resize_mouse_start_x_ = be.mouse_x;
             resize_mouse_start_y_ = be.mouse_y;
             resize_rect_start_x_ = static_cast<float>(dtab->initial_x);
@@ -513,7 +529,6 @@ void UiFrameRunner::route_mouse_to_panels(SDL_WindowID window_id,
             resize_edges_ = 0;
         } else {
             apply_floating_resize(*dtab,
-                                  resizing_tab_id_,
                                   resize_edges_,
                                   resize_rect_start_x_,
                                   resize_rect_start_y_,
@@ -522,6 +537,13 @@ void UiFrameRunner::route_mouse_to_panels(SDL_WindowID window_id,
                                   st.mouse_x - resize_mouse_start_x_,
                                   st.mouse_y - resize_mouse_start_y_,
                                   window_id);
+            // The panel rectangle above already followed the cursor this frame; the texture only
+            // when the gate opens.
+            if (take_resize_apply_slot(dtab->width, dtab->height, dtab->dock_width,
+                                       dtab->dock_height)) {
+                BrowserManager::instance().resize_tab(resizing_tab_id_, dtab->dock_width,
+                                                      dtab->dock_height);
+            }
             return;
         }
     }
@@ -639,7 +661,10 @@ void UiFrameRunner::run_frame(UiFrameContext& context) {
         if (mw == nullptr || mw->surface == nullptr) {
             continue;
         }
-        for (auto& [tab_id, tab] : BrowserManager::instance().get_tabs()) {
+        for (const auto& tab_entry : BrowserManager::instance().tabs_snapshot()) {
+        const int tab_id = tab_entry.tab_id;
+        auto* tab = tab_entry.tab;
+        if (tab == nullptr) continue;
             if (tab && tab->host_surface == mw->surface &&
                 tab->detach_state == BrowserTab::DetachState::Detached) {
                 if (detached_window_close_action(tab->camera_view) ==
@@ -670,7 +695,10 @@ void UiFrameRunner::run_frame(UiFrameContext& context) {
 
     // printf("[FRAME_DEBUG] Before BrowserManager tabs loop\n"); fflush(stdout);
     std::vector<int> tabs_to_close;
-    for (auto& [tab_id, tab] : BrowserManager::instance().get_tabs()) {
+    for (const auto& tab_entry : BrowserManager::instance().tabs_snapshot()) {
+        const int tab_id = tab_entry.tab_id;
+        auto* tab = tab_entry.tab;
+        if (tab == nullptr) continue;
         if (!tab || !tab->open) {
             tabs_to_close.push_back(tab_id);
             continue;
@@ -692,10 +720,20 @@ void UiFrameRunner::run_frame(UiFrameContext& context) {
         render_window(context, managed);
     }
 
-    // Upload CEF paint buffers after all windows have routed this frame's input. The upload
-    // executor may wait on the previous receipt; doing that before route_mouse_to_panels makes
-    // Vue drag/click latency scale with the number of secondary surfaces.
-    for (const auto& [tab_id, tab] : BrowserManager::instance().get_tabs()) {
+    // Upload CEF paint buffers after all windows have routed this frame's input, then once more
+    // so paints that arrived while routing input are picked up in the same frame.
+    //
+    // Note: BrowserManager::update_texture() calls HardwareExecutor::wait() before re-submitting,
+    // and that call does NOT block the host - it only registers the previous receipt's tokens so
+    // the *next* upload on that executor is ordered after them on the GPU (see
+    // Horizon execution.cpp: wait() appends to pending_waits_ and returns; wait_idle() is the
+    // host-blocking variant). So the upload path adds no per-surface CPU synchronisation point;
+    // an earlier comment here claimed it made drag/click latency scale with the number of
+    // secondary surfaces, which was wrong.
+    for (const auto& tab_entry : BrowserManager::instance().tabs_snapshot()) {
+        const int tab_id = tab_entry.tab_id;
+        auto* tab = tab_entry.tab;
+        if (tab == nullptr) continue;
         if (!tab || !tab->open || tab->minimized) {
             continue;
         }
@@ -727,6 +765,59 @@ void UiFrameRunner::run_frame(UiFrameContext& context) {
             url_input_active_tab_ = -1;
         }
     }
+
+    log_floating_layout();
+}
+
+bool UiFrameRunner::take_resize_apply_slot(int applied_w, int applied_h, int wanted_w,
+                                           int wanted_h) {
+    const auto now = std::chrono::steady_clock::now();
+    // A default-constructed stamp means "this gesture has not applied anything yet"; report that
+    // as an unbounded age so the first real movement is applied immediately and only the
+    // following ones get coalesced.
+    const auto since_last = (resize_gate_last_apply_ == std::chrono::steady_clock::time_point{})
+                                ? std::chrono::milliseconds::max()
+                                : std::chrono::duration_cast<std::chrono::milliseconds>(
+                                      now - resize_gate_last_apply_);
+    if (!should_apply_deferred_resize(applied_w, applied_h, wanted_w, wanted_h, since_last,
+                                      kPanelResizeGate)) {
+        return false;
+    }
+    resize_gate_last_apply_ = now;
+    return true;
+}
+
+void UiFrameRunner::log_floating_layout() {    // Rectangles are in the engine's pixel space (the same space the panel CEF buffers and the
+    // hit-test use), not in window-client pixels: on a 125% display the main window's client is
+    // 1638x883 while its surface - and therefore this space - is 2048x1104.
+    constexpr std::uint64_t kDiagIntervalFrames = 60;
+    const bool ids_changed = dragging_tab_id_ != diag_last_dragging_tab_id_ ||
+                             resizing_tab_id_ != diag_last_resizing_tab_id_;
+    if (!ids_changed && (++diag_frame_counter_ % kDiagIntervalFrames) != 0) {
+        return;
+    }
+    diag_last_dragging_tab_id_ = dragging_tab_id_;
+    diag_last_resizing_tab_id_ = resizing_tab_id_;
+
+    for (const auto& tab_entry : BrowserManager::instance().tabs_snapshot()) {
+        const int tab_id = tab_entry.tab_id;
+        auto* tab = tab_entry.tab;
+        if (tab == nullptr) continue;
+        if (!tab || !tab->floating) {
+            continue;
+        }
+        CFW_LOG_INFO("[UI/Float] tab={} rect={}x{}+{},{} buffer={}x{} dragging={} resizing={} edges={}",
+                     tab_id,
+                     std::max(tab->dock_width, tab->width),
+                     std::max(tab->dock_height, tab->height),
+                     tab->initial_x,
+                     tab->initial_y,
+                     tab->width,
+                     tab->height,
+                     dragging_tab_id_,
+                     resizing_tab_id_,
+                     resize_edges_);
+    }
 }
 
 void UiFrameRunner::reconcile_detach_states(UiFrameContext& context) {
@@ -738,7 +829,10 @@ void UiFrameRunner::reconcile_detach_states(UiFrameContext& context) {
     // indirectly (resize_tab) and the window set, so we avoid iterating the map while acting.
     std::vector<int> detaching;
     std::vector<int> redocking;
-    for (const auto& [tab_id, tab] : BrowserManager::instance().get_tabs()) {
+    for (const auto& tab_entry : BrowserManager::instance().tabs_snapshot()) {
+        const int tab_id = tab_entry.tab_id;
+        auto* tab = tab_entry.tab;
+        if (tab == nullptr) continue;
         if (!tab) {
             continue;
         }
@@ -912,7 +1006,10 @@ void UiFrameRunner::render_window(UiFrameContext& context, const ManagedWindow& 
         placements = compute_panel_layout(work, inputs);
     } else {
         // Secondary window: the single tab hosted here fills the whole client area.
-        for (const auto& [tab_id, tab] : BrowserManager::instance().get_tabs()) {
+        for (const auto& tab_entry : BrowserManager::instance().tabs_snapshot()) {
+        const int tab_id = tab_entry.tab_id;
+        auto* tab = tab_entry.tab;
+        if (tab == nullptr) continue;
             if (!tab || !tab->open || tab->minimized || tab->host_surface != surface ||
                 tab->detach_state != BrowserTab::DetachState::Detached) {
                 continue;
@@ -937,7 +1034,16 @@ void UiFrameRunner::render_window(UiFrameContext& context, const ManagedWindow& 
         const int lw = std::max(1, static_cast<int>(std::lround(placement.rect.w)));
         const int lh = std::max(1, static_cast<int>(std::lround(placement.rect.h)));
         if (lw != tab->width || lh != tab->height) {
-            BrowserManager::instance().resize_tab(placement.tab_id, lw, lh);
+            if (resizing_tab_id_ == placement.tab_id) {
+                // This frame runs before the resize gesture's own apply, so it must respect the
+                // same gate: applying here unconditionally would re-apply the size every frame
+                // and defeat the coalescing entirely.
+                if (take_resize_apply_slot(tab->width, tab->height, lw, lh)) {
+                    BrowserManager::instance().resize_tab(placement.tab_id, lw, lh);
+                }
+            } else {
+                BrowserManager::instance().resize_tab(placement.tab_id, lw, lh);
+            }
         }
 
         if (!tab->camera_view) {

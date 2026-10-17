@@ -163,7 +163,7 @@ export const createViewportPickController = ({
 
       const actorHandle = Number(payload.actorHandle || 0);
       const actor = getActorIndex?.().get(actorHandle);
-      const payloadActorName = payload.actorName || payload.name || payload.actor?.name;
+      const payloadActorName = payload.actor_name || payload.actorName || payload.name || payload.actor?.name;
       const payloadActorType = payload.actorType || payload.type || payload.actor?.actor_type || payload.actor?.type;
       const resolvedActor = actor?.name
         ? actor
@@ -174,7 +174,7 @@ export const createViewportPickController = ({
         return { status: 'unknown', payload };
       }
 
-      emitActorChange?.(resolvedActor.type || 'actor', payload.sceneId, resolvedActor.name);
+      emitActorChange?.(resolvedActor.type || 'actor', payload.sceneId, resolvedActor.name, { node_index: Number.isInteger(payload.node_index) && payload.node_index >= 0 ? payload.node_index : null });
       return {
         status: 'selected',
         payload,

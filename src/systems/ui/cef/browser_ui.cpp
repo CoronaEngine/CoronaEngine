@@ -381,7 +381,10 @@ void BrowserInputHandler::send_key_events_to_browser(const CefRefPtr<CefBrowser>
 //  ImGui-free UiFrameRunner can call it. The ImGui-based BrowserRenderer is gone.)
 // ============================================================================
 void focus_browser_tab_exclusively(int focused_tab_id) {
-    for (const auto& [tab_id, tab] : BrowserManager::instance().get_tabs()) {
+    for (const auto& tab_entry : BrowserManager::instance().tabs_snapshot()) {
+        const int tab_id = tab_entry.tab_id;
+        auto* tab = tab_entry.tab;
+        if (tab == nullptr) continue;
         if (!tab || !tab->client) {
             continue;
         }

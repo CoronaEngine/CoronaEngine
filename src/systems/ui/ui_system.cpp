@@ -1,4 +1,7 @@
-﻿#include <horizon/core/logging.h>
+#include <corona/diagnostics/thread_phase.h>
+#include <corona/kernel/core/kernel_context.h>
+#include <corona/kernel/system/i_system_manager.h>
+#include <horizon/core/logging.h>
 #include <corona/shared_data_hub.h>
 #include <corona/systems/script/script_system.h>
 #include <corona/systems/ui/camera_viewport_manager.h>
@@ -6,6 +9,7 @@
 #include <corona/systems/ui/ui_system.h>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <filesystem>
 #include <system_error>
@@ -16,6 +20,7 @@
 
 #include "cef/browser_manager.h"
 #include "cef/cef_client.h"
+#include "cef/cef_editor_native_api_registry.h"
 #include "collaborative_editor_runtime.h"
 
 namespace Corona::Systems {
@@ -149,7 +154,10 @@ void UiSystem::stop() {
 
     auto& browser_manager = UI::BrowserManager::instance();
     std::vector<std::uintptr_t> camera_handles;
-    for (const auto& [tab_id, tab] : browser_manager.get_tabs()) {
+    for (const auto& tab_entry : browser_manager.tabs_snapshot()) {
+        const int tab_id = tab_entry.tab_id;
+        auto* tab = tab_entry.tab;
+        if (tab == nullptr) continue;
         if (tab->camera_view) {
             if (auto record = UI::CameraViewportManager::instance().find_by_tab(tab_id)) {
                 camera_handles.push_back(record->camera_handle);
@@ -182,6 +190,19 @@ void UiSystem::update() {
         return;
     }
 
+    const auto frame_start = std::chrono::steady_clock::now();
+
+    // The CEF UI thread runs every editor API request and paints the editor. If one
+    // of those requests never returns, that thread stops reporting anything at all,
+    // while this main loop keeps running - so the watchdog is driven from here.
+    UI::report_stuck_native_api_request();
+
+    // System threads have the same failure mode one level down: a blocking storage
+    // or resource lock inside update() freezes that system with no log line at all.
+    // This main loop is the only thread guaranteed to keep ticking, so it is also
+    // the watchdog for "which system is stuck in which stage".
+    Corona::Diagnostics::report_stuck_thread_phases();
+
     // Collaborative scene mutations must run on the UI/engine main thread and
     // must not depend on the lifetime of a particular Vue network page.
     UI::tick_collaborative_editor_runtime();
@@ -195,6 +216,70 @@ void UiSystem::update() {
         &window_size_changed_};
 
     frame_runner.run_frame(context);
+
+    // Frame accounting. UiSystem runs on the main thread, so SystemBase's thread loop never
+    // times it; without this the UI row of the [UI/Frame] diagnostics reads avg=0.00ms, which
+    // looks like "the UI layer is free" when it actually means "the UI layer was never measured".
+    const double frame_ms = std::chrono::duration<double, std::milli>(
+                                std::chrono::steady_clock::now() - frame_start)
+                                .count();
+    frame_count_.fetch_add(1, std::memory_order_relaxed);
+    total_frame_ms_.store(total_frame_ms_.load(std::memory_order_relaxed) + frame_ms,
+                          std::memory_order_relaxed);
+    float previous_max = max_frame_ms_.load(std::memory_order_relaxed);
+    while (static_cast<float>(frame_ms) > previous_max &&
+           !max_frame_ms_.compare_exchange_weak(previous_max, static_cast<float>(frame_ms),
+                                                std::memory_order_relaxed)) {
+    }
+
+    // Periodic per-system frame times. The engine already samples these (SystemBase::get_average_frame_time
+    // / get_max_frame_time -> SystemStats) but nothing ever consumed them, so a report like "the editor
+    // feels laggy" had no way to be attributed to a layer. One line per system per 600 frames (~10 s at
+    // 60 fps) is cheap and answers "which system is eating the frame?" without a profiler.
+    if (frame_count_.load(std::memory_order_relaxed) % 600 == 0) {
+        if (auto* manager = Kernel::KernelContext::instance().system_manager()) {
+            for (const auto& stats : manager->get_all_stats()) {
+                CFW_LOG_INFO("[UI/Frame] system={} avg={:.2f}ms max={:.2f}ms target_fps={} actual_fps={:.1f}",
+                             stats.name,
+                             stats.average_frame_time_ms,
+                             stats.max_frame_time_ms,
+                             stats.target_fps,
+                             stats.actual_fps);
+            }
+        }
+    }
+}
+
+float UiSystem::get_actual_fps() const {
+    const double total_ms = total_frame_ms_.load(std::memory_order_relaxed);
+    const std::uint64_t frames = frame_count_.load(std::memory_order_relaxed);
+    if (frames == 0 || total_ms <= 0.0) {
+        return 0.0f;
+    }
+    return static_cast<float>(static_cast<double>(frames) * 1000.0 / total_ms);
+}
+
+float UiSystem::get_average_frame_time() const {
+    const std::uint64_t frames = frame_count_.load(std::memory_order_relaxed);
+    if (frames == 0) {
+        return 0.0f;
+    }
+    return static_cast<float>(total_frame_ms_.load(std::memory_order_relaxed) /
+                              static_cast<double>(frames));
+}
+
+float UiSystem::get_max_frame_time() const {
+    return max_frame_ms_.load(std::memory_order_relaxed);
+}
+
+std::uint64_t UiSystem::get_total_frames() const {
+    return frame_count_.load(std::memory_order_relaxed);
+}
+
+void UiSystem::reset_stats() {
+    frame_count_.store(0, std::memory_order_relaxed);
+    total_frame_ms_.store(0.0, std::memory_order_relaxed);
+    max_frame_ms_.store(0.0f, std::memory_order_relaxed);
 }
 
 void UiSystem::shutdown() {

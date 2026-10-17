@@ -40,13 +40,22 @@ namespace Corona::Systems::UI {
         source_viewport = "main";
     }
 
-    return {
+    nlohmann::json payload = {
         {"actor_type", actor_type},
         {"scene", scene},
         {"actor", actor},
         {"source_viewport", source_viewport},
         {"source_camera_handle", source_camera_handle},
     };
+    if (context.is_object()) {
+        const auto node = context.find("node_index");
+        if (node != context.end() && node->is_number_integer() &&
+            (node->is_number_unsigned() || node->get<std::int64_t>() >= 0) &&
+            node->get<std::uint64_t>() < UINT32_MAX) {
+            payload["node_index"] = node->get<std::uint32_t>();
+        }
+    }
+    return payload;
 }
 
 }  // namespace Corona::Systems::UI

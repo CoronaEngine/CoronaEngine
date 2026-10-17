@@ -1,0 +1,911 @@
+/* ==============================================================================
+   剧情模式 · HUD —— 完全复刻 ui2.html《自然荒野 · 战术协同系统 HUD》
+
+   结构与声明逐条对应原型，未做设计上的改动。为嵌入编辑器所做的仅有的三处
+   形式转换，均不改变任何样式值：
+
+     1. 原型的 :root 令牌改为落在 .story-world-viewport 上（组件作用域）；
+     2. 原型的 body 底色/光标改为落在 .story-world-viewport（视口容器本身）；
+     3. 原型顶部 #hud 的规则改名 .story-hud；#fxLayer 的规则对应 .fx-layer
+        （该容器已在 StoryWorld.vue 里带 fx-layer 类）。
+
+   原型里未使用的 .pause-modal / .pbtn 一并照搬，以保证还原度。
+   ============================================================================== */
+
+/* =========================================================
+   0. 设计规范（自然荒野风格：森林绿、松木褐、古黄铜、藤蔓绿）
+   ========================================================= */
+.story-world-viewport {
+  --c-bg: #0c120e;
+  --c-panel-bg: rgba(18, 26, 20, 0.88);
+  --c-panel-border: rgba(163, 143, 96, 0.4);
+  --c-panel-glow: rgba(110, 140, 90, 0.15);
+
+  --c-gold: #b3995d;
+  --c-gold-bright: #e6d5a7;
+  --c-gold-dark: #4d4024;
+
+  --c-blue: #4a808f;
+  --c-blue-bright: #9ecbd6;
+
+  --c-red: #c24133;
+  --c-green: #689f38; /* 藤蔓绿生命槽 */
+  --c-yellow: #d4a373; /* 琥珀黄耐力槽 */
+
+  --c-text-main: #e8ede3;
+  --c-text-muted: #8d9e85;
+
+  --slot-size: clamp(48px, 5vw, 64px);
+  --gap-edge: clamp(16px, 3vw, 40px);
+  /* 贴在底边的左右两个角块（.action-tips / .action-cluster）从视口底往上占多高：
+     战技群 = 气刃槽 18px + gap 12px + 战技键 max(68px, --slot-size)，再加 .spell-item
+     的名字行，量出来约 126.8px（960 宽）～138px（1600 宽以上）。下限 128px 兜住窄窗，
+     上限 160px 兜住宽窗；这一条只是「要抬多高才不撞」的量，它不改变任何角块自己的位置。 */
+  --hud-corner-block-height: clamp(128px, 3 * var(--slot-size), 160px);
+
+  --font-serif: 'Cinzel', 'Noto Serif SC', 'Songti SC', serif;
+  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-mono: 'DIN Alternate', 'Cascadia Code', Consolas, monospace;
+
+  /* 原型 body：底色与环境光 */
+  background: var(--c-bg);
+  color: var(--c-text-main);
+  font-family: var(--font-sans);
+  cursor: crosshair;
+  user-select: none;
+  -webkit-user-select: none;
+  background-image:
+    radial-gradient(ellipse at 50% 50%, transparent 30%, rgba(5, 10, 8, 0.9) 100%),
+    radial-gradient(ellipse at 50% 0%, rgba(35, 55, 40, 0.3) 0%, rgba(12, 18, 14, 0.98) 80%);
+}
+
+.story-world-viewport * {
+  box-sizing: border-box;
+}
+
+.story-world-viewport .bg-ambient {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 1;
+  background: radial-gradient(circle at 50% 50%, rgba(104, 159, 56, 0.02), transparent 70%);
+}
+
+/* =========================================================
+   1. HUD 主层
+   ========================================================= */
+.story-hud {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 10;
+  transition: filter 0.4s ease, opacity 0.4s ease;
+}
+.story-hud.is-dim {
+  filter: blur(8px) brightness(0.5);
+  opacity: 0.6;
+}
+
+/* ------------------ 2.1 顶部中央：首领血条 ------------------ */
+.boss-wrap {
+  position: absolute;
+  top: clamp(20px, 4vh, 40px);
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(720px, 80vw);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  pointer-events: none;
+  filter: drop-shadow(0 8px 12px rgba(0, 0, 0, 0.6));
+}
+.boss-header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  padding: 0 8px;
+  border-bottom: 1px solid rgba(163, 143, 96, 0.3);
+  padding-bottom: 6px;
+  background: linear-gradient(90deg, transparent, rgba(163, 143, 96, 0.08) 50%, transparent);
+}
+.boss-title {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.boss-badge {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: #fff;
+  background: linear-gradient(135deg, #c24133, #7a221a);
+  padding: 2px 8px;
+  clip-path: polygon(8px 0, 100% 0, calc(100% - 8px) 100%, 0 100%);
+  letter-spacing: 1px;
+  font-weight: bold;
+  border-top: 1px solid rgba(255, 255, 255, 0.3);
+}
+.boss-name {
+  font-family: var(--font-serif);
+  font-size: clamp(18px, 2vw, 22px);
+  color: var(--c-text-main);
+  letter-spacing: 2px;
+  font-weight: bold;
+  text-shadow: 0 0 10px rgba(104, 159, 56, 0.4), 0 2px 4px rgba(0, 0, 0, 0.8);
+}
+.boss-val {
+  font-size: 13px;
+  color: var(--c-text-muted);
+  font-family: var(--font-mono);
+  text-shadow: 0 2px 2px #000;
+}
+.boss-val b {
+  color: var(--c-gold-bright);
+  font-weight: 600;
+  font-size: 15px;
+}
+
+.boss-bar-box {
+  position: relative;
+  height: 14px;
+  background: rgba(8, 12, 10, 0.95);
+  border: 1px solid rgba(104, 159, 56, 0.25);
+  border-top: 1px solid rgba(104, 159, 56, 0.5);
+  clip-path: polygon(10px 0, 100% 0, calc(100% - 10px) 100%, 0 100%);
+  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.9);
+  overflow: hidden;
+}
+.boss-bar-fill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 100%;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.3) 0%, rgba(255, 255, 255, 0) 30%, transparent 60%, rgba(0, 0, 0, 0.6) 100%),
+    linear-gradient(90deg, #4d241c, #c24133);
+  box-shadow: inset 0 0 6px rgba(255, 255, 255, 0.2);
+  transition: width 0.12s linear;
+}
+.boss-bar-lag {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 100%;
+  background: #d4a373;
+  opacity: 0.8;
+  transition: width 0.6s cubic-bezier(0.2, 0.8, 0.25, 1) 0.3s;
+}
+
+/* ------------------ 2.2 左上角：自然风格复合结构 ------------------ */
+.vitals-container {
+  position: absolute;
+  top: clamp(20px, 3vh, 35px);
+  left: clamp(20px, 3vw, 40px);
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  pointer-events: auto;
+  filter: drop-shadow(0 10px 16px rgba(0, 0, 0, 0.7));
+}
+
+/* 八边形复古头像框 */
+.soul-frame-group {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+.gourd-hub {
+  position: relative;
+  width: 72px;
+  height: 72px;
+  background: linear-gradient(135deg, rgba(22, 32, 25, 0.95), rgba(8, 12, 10, 0.98));
+  clip-path: polygon(22px 0, calc(100% - 22px) 0, 100% 22px, 100% calc(100% - 22px), calc(100% - 22px) 100%, 22px 100%, 0 calc(100% - 22px), 0 22px);
+  border: 2px solid var(--c-gold);
+  box-shadow: inset 0 2px 4px rgba(255, 255, 255, 0.15), inset 0 -4px 8px rgba(0, 0, 0, 0.9), 0 4px 12px rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.gourd-hub:hover {
+  border-color: var(--c-gold-bright);
+  transform: scale(1.03);
+  box-shadow: inset 0 2px 4px rgba(255, 255, 255, 0.25), 0 0 16px var(--c-panel-glow);
+}
+.gourd-hub:active {
+  transform: scale(0.97);
+}
+.gourd-icon {
+  width: 32px;
+  height: 32px;
+  stroke: var(--c-gold-bright);
+  fill: none;
+  stroke-width: 1.5;
+  filter: drop-shadow(0 0 4px var(--c-gold-dark));
+}
+
+.gourd-count {
+  position: absolute;
+  bottom: 2px;
+  right: 4px;
+  min-width: 20px;
+  height: 20px;
+  line-height: 18px;
+  background: #0c120e;
+  border: 1px solid var(--c-gold);
+  color: var(--c-gold-bright);
+  font-size: 11px;
+  font-family: var(--font-mono);
+  text-align: center;
+  font-weight: bold;
+  border-radius: 2px;
+}
+.gourd-key {
+  position: absolute;
+  top: 2px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 9px;
+  color: #000;
+  background: var(--c-gold-bright);
+  padding: 0 4px;
+  font-family: var(--font-mono);
+  font-weight: bold;
+  border-radius: 2px;
+}
+
+.sub-slot-mini {
+  width: 36px;
+  height: 36px;
+  background: rgba(18, 26, 20, 0.9);
+  border: 1px solid var(--c-panel-border);
+  border-radius: 3px;
+  display: grid;
+  place-items: center;
+  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.8);
+}
+.sub-slot-mini svg {
+  width: 18px;
+  height: 18px;
+  stroke: var(--c-text-muted);
+  fill: none;
+  stroke-width: 1.5;
+}
+
+/* 阶梯式自然血槽（HP绿、SP黄、EP青蓝） */
+.vitals-bars {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: clamp(240px, 24vw, 340px);
+  margin-top: 2px;
+}
+.meter-row {
+  display: flex;
+  align-items: center;
+  position: relative;
+}
+
+.meter-track {
+  position: relative;
+  height: 12px;
+  width: 100%;
+  background: rgba(10, 15, 12, 0.9);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-top: 1px solid rgba(255, 255, 255, 0.2);
+  box-shadow: inset 0 2px 5px rgba(0, 0, 0, 0.9);
+  padding-left: 24px;
+}
+.meter-hp {
+  height: 16px;
+  width: 100%;
+  clip-path: polygon(0 0, calc(100% - 12px) 0, 100% 50%, calc(100% - 12px) 100%, 0 100%);
+  border-color: rgba(104, 159, 56, 0.3);
+}
+.meter-sp {
+  height: 12px;
+  width: 85%;
+  clip-path: polygon(0 0, calc(100% - 10px) 0, 100% 50%, calc(100% - 10px) 100%, 0 100%);
+}
+.meter-mp {
+  height: 12px;
+  width: 92%;
+  clip-path: polygon(0 0, calc(100% - 10px) 0, 100% 50%, calc(100% - 10px) 100%, 0 100%);
+}
+
+.meter-fill,
+.meter-lag {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 100%;
+}
+.meter-lag {
+  background: rgba(255, 255, 255, 0.3);
+  transition: width 0.5s ease 0.2s;
+}
+.meter-fill {
+  transition: width 0.1s linear;
+  background-image: linear-gradient(180deg, rgba(255, 255, 255, 0.4) 0%, rgba(255, 255, 255, 0) 40%, rgba(0, 0, 0, 0.6) 100%);
+}
+
+/* 自然光谱条 */
+.meter-hp .meter-fill {
+  background-color: var(--c-green);
+  background-image:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.4) 0%, rgba(255, 255, 255, 0) 40%, rgba(0, 0, 0, 0.6) 100%),
+    linear-gradient(90deg, #33691e, #689f38);
+  box-shadow: inset 0 0 4px #fff;
+}
+.meter-sp .meter-fill {
+  background-color: var(--c-yellow);
+  background-image:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.4) 0%, rgba(255, 255, 255, 0) 40%, rgba(0, 0, 0, 0.6) 100%),
+    linear-gradient(90deg, #a36b39, #d4a373);
+}
+.meter-mp .meter-fill {
+  background-color: var(--c-blue);
+  background-image:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.4) 0%, rgba(255, 255, 255, 0) 40%, rgba(0, 0, 0, 0.6) 100%),
+    linear-gradient(90deg, #264d59, #4a808f);
+}
+
+.meter-label {
+  position: absolute;
+  left: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-family: var(--font-sans);
+  font-size: 9px;
+  color: rgba(255, 255, 255, 0.8);
+  font-weight: bold;
+  z-index: 10;
+}
+.meter-val {
+  position: absolute;
+  right: 18px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: #fff;
+  font-weight: bold;
+  text-shadow: 0 1px 3px #000;
+  z-index: 10;
+}
+
+/* ------------------ 2.3 左下角：操作提示 ------------------ */
+.action-tips {
+  position: absolute;
+  bottom: var(--gap-edge);
+  left: var(--gap-edge);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  background: var(--c-panel-bg);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-left: 3px solid var(--c-green);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6), inset 0 1px 1px rgba(255, 255, 255, 0.1);
+  backdrop-filter: blur(12px);
+  border-radius: 2px;
+  pointer-events: auto;
+}
+.action-tips p {
+  font-size: 12px;
+  color: var(--c-text-muted);
+  font-weight: 500;
+}
+.action-tips kbd {
+  display: inline-block;
+  padding: 2px 6px;
+  font-family: var(--font-mono);
+  background: rgba(0, 0, 0, 0.4);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.3);
+  color: #fff;
+  font-size: 11px;
+  margin: 0 3px;
+  border-radius: 3px;
+}
+
+/* ------------------ 2.4 右下角：物理按键与充能舱 ------------------ */
+.action-cluster {
+  position: absolute;
+  right: var(--gap-edge);
+  bottom: var(--gap-edge);
+  display: flex;
+  align-items: flex-end;
+  gap: clamp(16px, 2.5vw, 32px);
+  pointer-events: auto;
+  filter: drop-shadow(0 10px 20px rgba(0, 0, 0, 0.5));
+}
+
+.focus-system {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+.focus-blade {
+  display: flex;
+  width: 140px;
+  height: 18px;
+  background: rgba(8, 12, 10, 0.9);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-top: 1px solid rgba(255, 255, 255, 0.3);
+  clip-path: polygon(0 0, calc(100% - 20px) 0, 100% 50%, calc(100% - 20px) 100%, 0 100%);
+  box-shadow: inset 0 2px 6px rgba(0, 0, 0, 0.9);
+  padding: 3px;
+  gap: 2px;
+}
+.focus-orb {
+  flex: 1;
+  background: rgba(255, 255, 255, 0.05);
+  transition: all 0.3s ease;
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.5);
+}
+.focus-orb.is-lit {
+  background: linear-gradient(180deg, #fff 0%, var(--c-gold) 40%, var(--c-gold-dark) 100%);
+  box-shadow: 0 0 12px var(--c-gold-bright);
+}
+.focus-orb:first-child {
+  clip-path: polygon(0 0, 100% 0, 100% 100%, 0 100%);
+}
+.focus-orb:last-child {
+  clip-path: polygon(0 0, calc(100% - 15px) 0, 100% 50%, calc(100% - 15px) 100%, 0 100%);
+}
+
+.focus-heavy-btn {
+  position: relative;
+  width: 68px;
+  height: 68px;
+  background: var(--c-panel-bg);
+  border: 1px solid rgba(163, 143, 96, 0.3);
+  border-top: 1px solid rgba(230, 213, 167, 0.6);
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  box-shadow: inset 0 4px 10px rgba(255, 255, 255, 0.05), inset 0 -4px 10px rgba(0, 0, 0, 0.8);
+  transition: all 0.2s cubic-bezier(0.2, 0.8, 0.25, 1);
+  outline: none;
+  clip-path: polygon(50% 0%, 100% 25%, 100% 75%, 50% 100%, 0% 75%, 0% 25%);
+  backdrop-filter: blur(12px);
+}
+.focus-heavy-btn:hover {
+  border-color: var(--c-gold-bright);
+  transform: translateY(-2px) scale(1.02);
+}
+.focus-heavy-btn:active {
+  transform: scale(0.96);
+}
+.focus-heavy-btn svg {
+  width: 30px;
+  height: 30px;
+  stroke: var(--c-text-muted);
+  fill: none;
+  stroke-width: 1.5;
+}
+.focus-heavy-btn .key-tag {
+  position: absolute;
+  bottom: 6px;
+  font-size: 10px;
+  color: rgba(255, 255, 255, 0.6);
+  font-family: var(--font-mono);
+  font-weight: bold;
+}
+.focus-heavy-btn.is-active {
+  border-color: var(--c-gold-bright);
+  background: linear-gradient(135deg, rgba(163, 143, 96, 0.2), rgba(12, 18, 14, 0.9));
+}
+.focus-heavy-btn.is-active svg {
+  stroke: var(--c-gold-bright);
+  filter: drop-shadow(0 0 6px var(--c-gold-bright));
+}
+.focus-heavy-btn.is-active .key-tag {
+  color: var(--c-gold-bright);
+}
+
+.spells-group {
+  display: flex;
+  align-items: flex-end;
+  gap: clamp(12px, 1.5vw, 20px);
+}
+.spell-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+.spell-btn {
+  position: relative;
+  width: var(--slot-size);
+  height: var(--slot-size);
+  background: var(--c-panel-bg);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-top: 1px solid rgba(255, 255, 255, 0.2);
+  cursor: pointer;
+  outline: none;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  transition: all 0.2s cubic-bezier(0.2, 0.8, 0.25, 1);
+  box-shadow: inset 0 2px 6px rgba(255, 255, 255, 0.05), inset 0 -4px 8px rgba(0, 0, 0, 0.8);
+  clip-path: polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%);
+  backdrop-filter: blur(8px);
+}
+.spell-btn:hover {
+  border-color: var(--c-blue-bright);
+  transform: translateY(-3px) scale(1.02);
+}
+.spell-btn:active {
+  transform: scale(0.95);
+}
+
+.spell-icon {
+  width: 42%;
+  height: 42%;
+  stroke: var(--c-text-main);
+  fill: none;
+  stroke-width: 1.5;
+  transition: opacity 0.2s;
+}
+.spell-cost {
+  position: absolute;
+  top: 12%;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--c-blue-bright);
+  font-weight: bold;
+  text-shadow: 0 2px 4px #000;
+}
+.spell-key {
+  position: absolute;
+  bottom: 10%;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  font-weight: bold;
+  color: var(--c-gold-bright);
+  text-shadow: 0 2px 4px #000;
+}
+.spell-name {
+  font-family: var(--font-sans);
+  font-size: 12px;
+  color: var(--c-text-muted);
+  letter-spacing: 1px;
+  font-weight: 500;
+  text-shadow: 0 2px 4px #000;
+}
+
+.spell-cd-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.2s;
+  background: conic-gradient(from -90deg, rgba(8, 12, 10, 0.9) var(--cd-deg, 0deg), transparent var(--cd-deg, 0deg));
+}
+.spell-cd-num {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: grid;
+  place-items: center;
+  font-size: 18px;
+  font-family: var(--font-mono);
+  font-weight: bold;
+  color: #fff;
+  text-shadow: 0 0 10px #000;
+  pointer-events: none;
+}
+.spell-btn.is-cd .spell-cd-overlay {
+  opacity: 1;
+}
+.spell-btn.is-cd .spell-icon {
+  opacity: 0.3;
+}
+
+/* =========================================================
+   3. 特效与系统菜单
+   ========================================================= */
+.fx-layer {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 30;
+}
+
+.hit-dmg {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  font-family: var(--font-mono);
+  font-weight: 900;
+  color: #fff;
+  text-shadow: 0 0 10px rgba(104, 159, 56, 0.6), 0 4px 8px #000;
+  font-size: 24px;
+  animation: dmgFly 0.8s cubic-bezier(0.18, 0.89, 0.32, 1.28) forwards;
+}
+.hit-dmg.is-crit {
+  font-size: clamp(34px, 3.5vw, 52px);
+  color: var(--c-gold-bright);
+  text-shadow: 0 0 20px rgba(163, 143, 96, 0.5), 0 4px 10px rgba(0, 0, 0, 0.9);
+}
+@keyframes dmgFly {
+  0% { opacity: 0; transform: translate(-50%, -30%) scale(0.5); }
+  20% { opacity: 1; transform: translate(-50%, -60%) scale(1.1); }
+  60% { opacity: 0.9; transform: translate(-50%, -80%) scale(1); }
+  100% { opacity: 0; transform: translate(calc(-50% + var(--dx, 0px)), -130%) scale(0.85); }
+}
+
+.slash-wave {
+  position: absolute;
+  pointer-events: none;
+  width: 200px;
+  height: 4px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 0 10px 4px #fff, 0 0 30px 10px var(--c-green);
+  transform: translate(-50%, -50%) rotate(var(--rot, 0deg));
+  animation: slashPop 0.25s ease-out forwards;
+  mix-blend-mode: screen;
+}
+@keyframes slashPop {
+  0% { opacity: 1; transform: translate(-50%, -50%) rotate(var(--rot)) scaleX(0.2) scaleY(3); }
+  100% { opacity: 0; transform: translate(-50%, -50%) rotate(var(--rot)) scaleX(1.8) scaleY(0); }
+}
+
+.shake-screen {
+  animation: screenTremor 0.3s ease-in-out;
+}
+@keyframes screenTremor {
+  0%, 100% { transform: translate(0, 0); }
+  20% { transform: translate(-4px, 5px); }
+  40% { transform: translate(5px, -3px); }
+  60% { transform: translate(-3px, -2px); }
+  80% { transform: translate(3px, 2px); }
+}
+
+.banner-toast {
+  position: fixed;
+  left: 50%;
+  top: 25%;
+  transform: translate(-50%, -50%) scale(0.9);
+  padding: 12px 40px;
+  opacity: 0;
+  pointer-events: none;
+  z-index: 40;
+  font-family: var(--font-sans);
+  font-weight: bold;
+  font-size: 20px;
+  letter-spacing: 4px;
+  color: #fff;
+  background: linear-gradient(90deg, transparent, rgba(163, 143, 96, 0.4), transparent);
+  border-top: 1px solid rgba(230, 213, 167, 0.8);
+  border-bottom: 1px solid rgba(230, 213, 167, 0.8);
+  text-shadow: 0 0 10px var(--c-gold), 0 2px 4px #000;
+  backdrop-filter: blur(8px);
+  transition: all 0.3s cubic-bezier(0.2, 0.8, 0.25, 1);
+}
+.banner-toast.is-show {
+  opacity: 1;
+  transform: translate(-50%, -50%) scale(1);
+}
+
+.pause-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  place-items: center;
+  background: rgba(8, 12, 10, 0.85);
+  backdrop-filter: blur(20px);
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.3s ease, visibility 0.3s ease;
+}
+.pause-modal.is-active {
+  opacity: 1;
+  visibility: visible;
+}
+.pause-card {
+  width: min(420px, 90vw);
+  padding: 40px 30px;
+  text-align: center;
+  background: var(--c-panel-bg);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-top: 1px solid rgba(163, 143, 96, 0.4);
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.8), inset 0 2px 10px rgba(255, 255, 255, 0.05);
+  clip-path: polygon(20px 0, calc(100% - 20px) 0, 100% 20px, 100% calc(100% - 20px), calc(100% - 20px) 100%, 20px 100%, 0 calc(100% - 20px), 0 20px);
+}
+.pause-seal {
+  font-family: var(--font-serif);
+  font-size: 32px;
+  font-weight: bold;
+  letter-spacing: 6px;
+  color: var(--c-gold-bright);
+  text-shadow: 0 0 20px rgba(163, 143, 96, 0.4), 0 4px 8px #000;
+  margin-bottom: 8px;
+}
+.pause-line {
+  width: 100%;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(163, 143, 96, 0.6), transparent);
+  margin-bottom: 24px;
+}
+.pause-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+}
+.pbtn {
+  background: rgba(0, 0, 0, 0.4);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+  cursor: pointer;
+  font-family: var(--font-sans);
+  font-size: 16px;
+  font-weight: bold;
+  letter-spacing: 4px;
+  color: var(--c-text-muted);
+  padding: 14px 0;
+  transition: all 0.2s ease;
+  clip-path: polygon(10px 0, calc(100% - 10px) 0, 100% 50%, calc(100% - 10px) 100%, 10px 100%, 0 50%);
+}
+.pbtn:hover {
+  background: rgba(163, 143, 96, 0.15);
+  border-color: rgba(230, 213, 167, 0.6);
+  color: #fff;
+  box-shadow: inset 0 0 10px rgba(163, 143, 96, 0.2);
+  text-shadow: 0 0 8px var(--c-gold);
+}
+
+/* =========================================================
+   4. 剧情模式仍需的少量状态层
+   （ui2 原型没有存档错误与加载态；沿用同一套令牌，不引入新风格）
+   ========================================================= */
+.gameplay-error {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 16px;
+  font-family: var(--font-sans);
+  font-size: 12px;
+  color: #f3d9d3;
+  background: rgba(60, 20, 16, 0.9);
+  border: 1px solid var(--c-red);
+  border-left: 3px solid var(--c-red);
+  border-radius: 2px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(12px);
+}
+.gameplay-error button {
+  padding: 4px 12px;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 12px;
+  color: #fff;
+  background: rgba(194, 65, 51, 0.35);
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: 2px;
+}
+.gameplay-error button:hover:not(:disabled) {
+  background: rgba(194, 65, 51, 0.6);
+}
+.gameplay-error button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.story-feedback {
+  padding: 6px 20px;
+  font-family: var(--font-serif);
+  font-size: 15px;
+  letter-spacing: 3px;
+  color: #fff;
+  background: linear-gradient(90deg, transparent, rgba(163, 143, 96, 0.4), transparent);
+  border-top: 1px solid rgba(230, 213, 167, 0.8);
+  border-bottom: 1px solid rgba(230, 213, 167, 0.8);
+  text-shadow: 0 0 10px var(--c-gold), 0 2px 4px #000;
+  backdrop-filter: blur(8px);
+}
+
+/* 底部中央的唯一定位点：物品栏（小世界）与存档状态条都挂在这一列里，
+   由布局上下排开（column-reverse：先写在 DOM 里的状态条在上、物品栏贴底），
+   而不是各写一份贴底偏移——两份偏移只会在某些视口上撞车。
+   这一层不参与命中测试，两个子项各自取回指针（物品栏与错误条仍需可点）。
+   锚点 = --gap-edge（角块自己的贴边距）+ --hud-corner-block-height（角块从底边往上占的高度）：
+   角块的最上沿是 (--gap-edge + 角块高)，列底必须高过它，物品栏才不会和左右两块叠在一起。
+   --gap-edge 随视口夹在 16~40px，所以窄窗不会贴太紧、宽窗不会留太大缝。 */
+.story-bottom-column {
+  position: absolute;
+  left: 50%;
+  bottom: calc(var(--gap-edge) + var(--hud-corner-block-height));
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column-reverse;
+  align-items: center;
+  gap: 8px;
+  z-index: 11;
+  pointer-events: none;
+}
+.story-bottom-column > * {
+  pointer-events: auto;
+}
+
+.story-bottom-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  width: max-content;
+  max-width: min(560px, 84vw);
+}
+
+.story-loading {
+  position: absolute;
+  inset: 0;
+  z-index: 45;
+  display: grid;
+  place-items: center;
+  font-family: var(--font-serif);
+  font-size: 16px;
+  letter-spacing: 4px;
+  color: var(--c-gold-bright);
+  background: rgba(8, 12, 10, 0.85);
+  backdrop-filter: blur(6px);
+  text-shadow: 0 0 12px rgba(179, 153, 93, 0.4);
+}
+
+/* 世界指示器：ui2 没有这一项，沿用同一套面板语言 */
+.world-indicator {
+  position: absolute;
+  top: clamp(20px, 3vh, 35px);
+  right: clamp(20px, 3vw, 40px);
+  z-index: 12;
+  padding: 5px 14px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 2px;
+  color: var(--c-gold-bright);
+  background: var(--c-panel-bg);
+  border: 1px solid var(--c-panel-border);
+  border-radius: 2px;
+  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.6);
+}
+
+/* 小世界状态条：位置与外观在 StoryWorld.vue 的 scoped 样式里（顶部中央）。
+   这里此前还留着一份贴底居中的旧副本，它会被后者覆盖，却让「谁占了底部中央」
+   在源码里读起来自相矛盾；行囊恢复后重新核对锚点时它足以误导判断，故删除。 */
+
+/* 技能悬浮说明（原型没有 tooltip；沿用同一套面板语言） */
+.ui-tooltip {
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 10px);
+  transform: translateX(-50%);
+  z-index: 20;
+  padding: 5px 11px;
+  font-family: var(--font-sans);
+  font-size: 11px;
+  letter-spacing: 1px;
+  color: var(--c-text-main);
+  white-space: nowrap;
+  background: rgba(8, 12, 10, 0.94);
+  border: 1px solid var(--c-panel-border);
+  border-radius: 2px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.16s ease;
+}
+.spell-btn:hover .ui-tooltip,
+.spell-btn:focus-visible .ui-tooltip {
+  opacity: 1;
+}

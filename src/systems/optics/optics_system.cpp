@@ -1,4 +1,5 @@
-﻿#include <corona/utils/scene_path_key.h>
+#include <corona/utils/scene_path_key.h>
+#include <corona/diagnostics/thread_phase.h>
 #include <corona/events/display_system_events.h>
 #include <corona/events/optics_system_events.h>
 #include <horizon/core/logging.h>
@@ -9,6 +10,7 @@
 #include <corona/resource/types/image.h>
 #include <corona/shared_data_hub.h>
 #include <corona/systems/geometry/geometry_system.h>
+#include <corona/systems/geometry/native_render_load_guard.h>
 #include <corona/systems/optics/optics_system.h>
 
 #include "shadow_culling.h"
@@ -84,6 +86,10 @@ namespace {
 
 constexpr uint32_t kShadowCascadeCount = 4;
 constexpr uint32_t kShadowMapSize = 1024;
+// Cascaded shadows duplicate every visible mesh submission once per cascade.  Imported
+// scenes can contain thousands of editable glTF nodes, so keep editor interaction
+// responsive by falling back to unshadowed direct lighting above this budget.
+constexpr uint32_t kRealtimeShadowInstanceBudget = 1024;
 constexpr float kShadowMaxDistance = 100.0f;
 constexpr float kShadowSplitLambda = 0.95f;
 constexpr float kShadowBias = 0.0015f;
@@ -342,12 +348,14 @@ struct RenderInstanceBatch {
     std::vector<Hardware::InstanceInfo> instances;
     std::vector<Hardware::MaterialInfo> materials;
     std::vector<std::uintptr_t> actorHandles;
+    std::vector<std::uint32_t> nodeIndices;
     std::shared_ptr<ResourceKeepAlive> resource_keep_alive = std::make_shared<ResourceKeepAlive>();
 
     void clear() {
         instances.clear();
         materials.clear();
         actorHandles.clear();
+        nodeIndices.clear();
         resource_keep_alive = std::make_shared<ResourceKeepAlive>();
     }
 
@@ -1440,14 +1448,20 @@ void include_shadow_bounds(
 }
 
 template <typename T>
-[[nodiscard]] Corona::Horizon::HardwareBuffer make_storage_buffer(uint64_t count,
-                                                                  std::string_view name) {
+[[nodiscard]] Corona::Horizon::HardwareBuffer make_storage_buffer(
+    uint64_t count,
+    std::string_view name,
+    Corona::Horizon::CpuAccessMode cpu_access = Corona::Horizon::CpuAccessMode::Write) {
     Corona::Horizon::HardwareBufferDesc desc;
     desc.element_count = count;
     desc.element_size = static_cast<uint32_t>(sizeof(T));
     desc.usage = Corona::Horizon::BufferUsage_TransferSrc |
                  Corona::Horizon::BufferUsage_TransferDst |
                  Corona::Horizon::BufferUsage_Storage;
+    // Read-back buffers must declare host read access: HardwareBuffer::read_bytes
+    // refuses a buffer that is host-write-only, and it is the call that invalidates
+    // non-coherent host memory before the CPU reads GPU results.
+    desc.cpu_access = cpu_access;
     desc.debug_name = std::string(name);
     (void)desc.byte_size();
     return Corona::Horizon::HardwareBuffer(desc);
@@ -1675,6 +1689,8 @@ bool collect_actor_instances_for_visibility(
                     continue;
                 }
 
+                const ktm::fmat4x4 mesh_model_matrix =
+                    multiply_ktm_mat4(model_matrix, ms.instance_transform);
                 auto material_id = static_cast<uint32_t>(batch.materials.size());
                 {
                     Hardware::MaterialInfo mat_info{};
@@ -1727,7 +1743,7 @@ bool collect_actor_instances_for_visibility(
                 auto instance_id = static_cast<uint32_t>(batch.instances.size());
                 {
                     Hardware::InstanceInfo inst{};
-                    inst.modelMatrix = model_matrix;
+                    inst.modelMatrix = mesh_model_matrix;
                     inst.vertexBufferIndex = vertex_descriptor;
                     inst.indexBufferIndex = index_descriptor;
                     inst.materialID = material_id;
@@ -1738,12 +1754,13 @@ bool collect_actor_instances_for_visibility(
                     inst.flags = 0u;
                     batch.instances.push_back(inst);
                     batch.actorHandles.push_back(actor_handle);
+                    batch.nodeIndices.push_back(ms.node_index);
                     has_instances = true;
                 }
 
                 using Pipeline = Corona::Horizon::RasterizerPipeline<visibility_vert_glsl_t, visibility_frag_glsl_t>;
                 auto& pc = static_cast<Pipeline::VertexResourceBindings&>(target_visibility).pushConsts;
-                pc.modelMatrix = upload_value(model_matrix);
+                pc.modelMatrix = upload_value(mesh_model_matrix);
                 pc.uniformBufferIndex = target_vp_descriptor;
                 pc.instanceID = instance_id + 1;
                 pc.textureIndex = texture_descriptor;
@@ -1948,12 +1965,60 @@ struct VisionModeSelection {
     std::string conflict_summary;
 };
 
+// The Vision path tracer keeps an acceleration structure and material/device state
+// in addition to the native renderer's resources.  It is intended for previewing
+// modest scenes; expanding a highly-instanced glTF scene here can exhaust memory
+// and starve the editor frame loop.  Native rendering still supports picking and
+// model-node editing, so it is the safe interactive fallback above this limit.
+constexpr std::size_t kVisionInteractiveInstanceLimit = 1024;
+
+void fallback_large_scenes_to_native_renderer() {
+    auto& hub = Corona::SharedDataHub::instance();
+    auto& actor_storage = hub.actor_storage();
+    auto& profile_storage = hub.profile_storage();
+    auto& optics_storage = hub.optics_storage();
+    auto& geometry_storage = hub.geometry_storage();
+    auto& camera_storage = hub.camera_storage();
+
+    for (const auto& scene : std::as_const(hub.scene_storage())) {
+        if (!scene.enabled) continue;
+
+        std::size_t instance_count = 0;
+        for (const auto actor_handle : scene.actor_handles) {
+            const auto actor = actor_storage.try_acquire_read(actor_handle);
+            if (!actor) continue;
+            for (const auto profile_handle : actor->profile_handles) {
+                const auto profile = profile_storage.try_acquire_read(profile_handle);
+                if (!profile || profile->optics_handle == 0 || profile->geometry_handle == 0) continue;
+                const auto optics = optics_storage.try_acquire_read(profile->optics_handle);
+                const auto geometry = geometry_storage.try_acquire_read(profile->geometry_handle);
+                if (!optics || !optics->visible || !geometry) continue;
+                instance_count += geometry->mesh_instances.empty()
+                    ? geometry->mesh_handles.size()
+                    : geometry->mesh_instances.size();
+                if (instance_count > kVisionInteractiveInstanceLimit) break;
+            }
+            if (instance_count > kVisionInteractiveInstanceLimit) break;
+        }
+        if (instance_count <= kVisionInteractiveInstanceLimit) continue;
+
+        for (const auto camera_handle : scene.camera_handles) {
+            const auto camera = camera_storage.try_acquire_write(camera_handle);
+            if (!camera || camera->render_backend != Corona::CameraRenderBackend::Vision) continue;
+            camera->render_backend = Corona::CameraRenderBackend::Native;
+            CFW_LOG_WARNING(
+                "OpticsSystem: switched camera {} to Native rendering because scene has more than {} instances (observed={})",
+                camera_handle, kVisionInteractiveInstanceLimit, instance_count);
+        }
+    }
+}
+
 [[nodiscard]] VisionModeSelection select_visible_vision_render_mode() {
     VisionModeSelection selection;
     std::hash<std::string> hash_string;
     std::string signature_source;
 
-    for (const auto& scene : Corona::SharedDataHub::instance().scene_storage()) {
+    for (const auto& scene : std::as_const(Corona::SharedDataHub::instance().scene_storage())) {
         if (!scene.enabled) continue;
         for (const auto camera_handle : scene.camera_handles) {
             auto camera =
@@ -3633,20 +3698,87 @@ bool OpticsSystem::initialize(Kernel::ISystemContext* ctx) {
     return true;
 }
 
+bool OpticsSystem::ensure_native_frame_slot() {
+    // A saturated throttle is normal: Optics records faster than the display
+    // presents, so the throttle is what keeps it from running ahead. In that case
+    // the right answer is still "skip this frame" (the display acknowledges within
+    // a frame or two, and its acknowledgement releases every older entry too).
+    //
+    // What must never happen is a throttle that stays full because *nothing*
+    // acknowledges it: Display only publishes OpticsFrameConsumedEvent for surfaces
+    // it actually presented with an optics layer, so a removed/failed/lost surface
+    // drops its acknowledgement. Two dropped acknowledgements then stopped native
+    // rendering for every camera, silently, until the engine was restarted. Past
+    // this grace period Optics therefore takes over and retires the oldest
+    // submission by waiting for its own GPU completion.
+    constexpr std::uint64_t kNativeThrottleStuckMs = 500;
+    // Retiring a submission that the display never consumed should be immediate;
+    // anything slower is reported.
+    constexpr double kNativeThrottleSlowRetireMs = 100.0;
+
+    if (!hardware_) {
+        return true;
+    }
+    auto& throttle = hardware_->native_frame_throttle;
+    if (throttle.try_acquire_slot()) {
+        return true;
+    }
+
+    throttle.note_saturated_frame();
+    const auto now = PerfClock::now();
+    const auto oldest_age_ms = throttle.oldest_age_ms(now);
+    if (oldest_age_ms < kNativeThrottleStuckMs) {
+        // Display is simply behind: drop this frame, as the throttle intends.
+        return false;
+    }
+
+    const bool report_due = last_native_throttle_report_.time_since_epoch().count() == 0 ||
+                            now - last_native_throttle_report_ >= std::chrono::seconds(1);
+    if (report_due) {
+        last_native_throttle_report_ = now;
+        CFW_LOG_WARNING(
+            "[OpticsThrottle] stuck for {}ms: in_flight={} oldest_serial={} "
+            "saturated_frames={} retired_without_ack={} forgotten={} — no consumer "
+            "acknowledged these frames; retiring the oldest by GPU completion",
+            oldest_age_ms, throttle.in_flight_count(), throttle.oldest_serial(),
+            throttle.saturated_frames(), throttle.released_without_ack(),
+            throttle.forgotten_for_capacity());
+    }
+
+    const auto wait_start = PerfClock::now();
+    const auto retired_serial = throttle.oldest_serial();
+    const bool retired = throttle.retire_oldest([this](const Horizon::SubmitReceipt& receipt) {
+        hardware_->executor.wait_completed(receipt);
+    });
+    const auto wait_ms = elapsed_ms(wait_start, PerfClock::now());
+    pending_native_throttle_wait_ms_ += wait_ms;
+    if (retired && wait_ms >= kNativeThrottleSlowRetireMs) {
+        CFW_LOG_WARNING(
+            "[OpticsThrottle] retiring serial={} cost {:.1f}ms (nothing acknowledged it; "
+            "the GPU queue is behind)",
+            retired_serial, wait_ms);
+    }
+    return throttle.try_acquire_slot();
+}
+
 void OpticsSystem::update() {
+    // This thread owns the GPU submit path; when it blocks everything that waits
+    // on it (Scene/geometry holders included) blocks too, silently.
+    Corona::Diagnostics::PhaseScope update_phase{"Optics", "update"};
     if (hardware_) {
         const auto consumed_serial =
             pending_native_consumed_serial_.exchange(0, std::memory_order_acq_rel);
         if (consumed_serial != 0) {
             hardware_->native_frame_throttle.acknowledge_consumed(consumed_serial);
         }
-        // Never block the Optics update thread on an in-flight native receipt.
-        // The display/driver may retire it later; skipping this frame keeps the
-        // UI and event loop responsive when the GPU queue is stalled.
-        if (!hardware_->native_frame_throttle.try_acquire_slot()) {
+        // Capacity must always be available before recording: returning here
+        // without it would stop native rendering for every camera until restart
+        // (see ensure_native_frame_slot).
+        if (!ensure_native_frame_slot()) {
             return;
         }
     }
+    update_phase.set("camera_commands");
     apply_pending_camera_moves();
     apply_pending_camera_viewport_updates();
     apply_pending_camera_state_updates();
@@ -3666,7 +3798,7 @@ void OpticsSystem::update() {
 #ifdef CORONA_ENABLE_VISION
     std::vector<std::uintptr_t> requested_vision_cameras;
     bool camera_views_ready = true;
-    for (const auto& scene : SharedDataHub::instance().scene_storage()) {
+    for (const auto& scene : std::as_const(SharedDataHub::instance().scene_storage())) {
         if (!scene.enabled) {
             continue;
         }
@@ -3760,10 +3892,8 @@ void OpticsSystem::optics_pipeline(float frame_count, uint64_t frame_index) {
                 if (offscreen_screenshot && !has_pending_screenshot(cam_handle)) {
                     continue;
                 }
-                if (hardware_) {
-                    if (!hardware_->native_frame_throttle.try_acquire_slot()) {
-                        continue;
-                    }
+                if (!ensure_native_frame_slot()) {
+                    continue;
                 }
                 const double native_throttle_wait_ms =
                     std::exchange(pending_native_throttle_wait_ms_, 0.0);
@@ -3775,6 +3905,7 @@ void OpticsSystem::optics_pipeline(float frame_count, uint64_t frame_index) {
                 uint32_t native_instance_count = 0;
                 uint32_t native_visibility_draws = 0;
                 uint64_t native_visibility_indices = 0;
+                bool native_scene_exceeds_realtime_shadow_budget = false;
                 std::array<uint32_t, kShadowCascadeCount> native_cascade_draws{};
                 std::array<uint64_t, kShadowCascadeCount> native_cascade_indices{};
                 bool native_shadows_enabled = false;
@@ -3998,7 +4129,8 @@ void OpticsSystem::optics_pipeline(float frame_count, uint64_t frame_index) {
                                 ? geometry_system_->query_mesh_slots(
                                       optics.geometry_handle,
                                       camera->position, camera->fov,
-                                      world_center, bounding_radius)
+                                      world_center, bounding_radius,
+                                      &model_matrix)
                                 : (geometry_system_
                                       ? geometry_system_->query_mesh_slots(optics.geometry_handle)
                                       : std::vector<GeometrySystem::MeshSlot>{});
@@ -4006,6 +4138,22 @@ void OpticsSystem::optics_pipeline(float frame_count, uint64_t frame_index) {
                             // CRITICAL FIX: Reserve space in outer scope's buffer vector
                             // Buffers must stay alive until after commit() (line 4633)
                             scene_indirect_buffers.reserve(scene_indirect_buffers.size() + mesh_slots_b.size());
+
+                            struct PendingVisibilityDraw {
+                                Horizon::HardwareBuffer index_buffer;
+                                Horizon::HardwareBuffer vertex_buffer;
+                                Horizon::DrawIndexedIndirectCommand command{};
+                                ktm::fmat4x4 clip_matrix{ktm::fmat4x4::from_eye()};
+                                uint32_t instance_id = 0;
+                                uint32_t material_id = 0;
+                                uint32_t texture_descriptor = 0;
+                                uint32_t mesh_index = 0;
+                                uint32_t vertex_count = 0;
+                                uint32_t index_count = 0;
+                                uint32_t max_index = 0;
+                            };
+                            std::vector<PendingVisibilityDraw> pending_visibility_draws;
+                            pending_visibility_draws.reserve(mesh_slots_b.size());
 
                             for (const auto& ms : mesh_slots_b) {
                                 if (!diag_mesh_allowed(ms.mesh_index)) continue;
@@ -4029,17 +4177,6 @@ void OpticsSystem::optics_pipeline(float frame_count, uint64_t frame_index) {
                                 if (!ms.valid ||
                                     !vertex_valid || !index_valid ||
                                     vertex_descriptor == 0u || index_descriptor == 0u) {
-                                    // [TEMP DIAG] 网格被守卫拒掉的那条路，同样是静默的。
-                                    {
-                                        static std::atomic<int> diag_n{0};
-                                        if (diag_n.fetch_add(1) < 20) {
-                                            std::fprintf(stderr,
-                                                "[TEMPDIAG SKIP] mesh=%u valid=%d vtx=%d idx=%d vtx_desc=%u idx_desc=%u\n",
-                                                ms.mesh_index, ms.valid ? 1 : 0, vertex_valid ? 1 : 0,
-                                                index_valid ? 1 : 0, vertex_descriptor, index_descriptor);
-                                            std::fflush(stderr);
-                                        }
-                                    }
                                     log_invalid_optics_mesh_once(
                                         actor_handle,
                                         optics.geometry_handle,
@@ -4055,6 +4192,8 @@ void OpticsSystem::optics_pipeline(float frame_count, uint64_t frame_index) {
                                     continue;
                                 }
 
+                                const ktm::fmat4x4 mesh_model_matrix =
+                                    multiply_ktm_mat4(model_matrix, ms.instance_transform);
                                 auto materialID = static_cast<uint32_t>(batch.materials.size());
                                 {
                                     Hardware::MaterialInfo mat_info{};
@@ -4099,7 +4238,7 @@ void OpticsSystem::optics_pipeline(float frame_count, uint64_t frame_index) {
                                 auto instanceID = static_cast<uint32_t>(batch.instances.size());
                                 {
                                     Hardware::InstanceInfo inst{};
-                                    inst.modelMatrix = model_matrix;
+                                    inst.modelMatrix = mesh_model_matrix;
                                     inst.vertexBufferIndex = vertex_descriptor;
                                     inst.indexBufferIndex = index_descriptor;
                                     inst.materialID = materialID;
@@ -4110,11 +4249,12 @@ void OpticsSystem::optics_pipeline(float frame_count, uint64_t frame_index) {
                                     inst.flags = 0u;
                                     batch.instances.push_back(inst);
                                     batch.actorHandles.push_back(actor_handle);
+                    batch.nodeIndices.push_back(ms.node_index);
                                     has_instances = true;
                                 }
 
                                 const ktm::fmat4x4 clip_matrix =
-                                    multiply_ktm_mat4(view_proj_matrix, model_matrix);
+                                    multiply_ktm_mat4(view_proj_matrix, mesh_model_matrix);
 
                                 using Pipeline = Corona::Horizon::RasterizerPipeline<visibility_vert_glsl_t, visibility_frag_glsl_t>;
                                 auto& pc = static_cast<Pipeline::VertexResourceBindings&>(target_visibility).pushConsts;
@@ -4131,47 +4271,62 @@ void OpticsSystem::optics_pipeline(float frame_count, uint64_t frame_index) {
                                 draw_cmd.instance_count = 1;
                                 draw_cmd.first_instance = 0;
 
+                                PendingVisibilityDraw pending{};
+                                pending.index_buffer = ms.geo.index;
+                                pending.vertex_buffer = ms.geo.vertex;
+                                pending.command = draw_cmd;
+                                pending.clip_matrix = clip_matrix;
+                                pending.instance_id = instanceID + 1;
+                                pending.material_id = materialID;
+                                pending.texture_descriptor = texture_descriptor;
+                                pending.mesh_index = ms.mesh_index;
+                                pending.vertex_count = ms.vertex_count;
+                                pending.index_count = ms.index_count;
+                                pending.max_index = ms.max_index;
+                                pending_visibility_draws.push_back(std::move(pending));
+                                ++recorded_draws;
+                            }
+
+                            if (!pending_visibility_draws.empty()) {
+                                std::vector<Horizon::DrawIndexedIndirectCommand> commands;
+                                commands.reserve(pending_visibility_draws.size());
+                                for (const auto& pending : pending_visibility_draws) {
+                                    commands.push_back(pending.command);
+                                }
+
                                 auto indirect_buffer =
                                     Horizon::HardwareBuffer::from_bytes(
-                                        std::as_bytes(std::span(&draw_cmd, 1)),
-                                        sizeof(draw_cmd),
+                                        std::as_bytes(std::span<const Horizon::DrawIndexedIndirectCommand>(
+                                            commands.data(), commands.size())),
+                                        commands.size() * sizeof(Horizon::DrawIndexedIndirectCommand),
                                         Horizon::BufferUsage_Indirect,
-                                        make_optics_draw_label(
-                                            follow_camera_pass ? "follow_visibility" : "scene_visibility",
-                                            actor_handle,
-                                            optics.geometry_handle,
-                                            ms.mesh_index,
-                                            static_cast<std::uint32_t>(frame_index),
-                                            instanceID + 1,
-                                            materialID,
-                                            texture_descriptor,
-                                            vertex_descriptor,
-                                            index_descriptor,
-                                            ms.vertex_count,
-                                            ms.index_count,
-                                            ms.max_index));
+                                        follow_camera_pass ? "follow_visibility.batch"
+                                                           : "scene_visibility.batch");
 
-                                Horizon::DrawIndexedIndirectParams draw_params;
-                                draw_params.draw_count = 1;
-                                draw_params.indirect_offset = 0;
-                                draw_params.stride = sizeof(Horizon::DrawIndexedIndirectCommand);
+                                using Pipeline = Corona::Horizon::RasterizerPipeline<visibility_vert_glsl_t, visibility_frag_glsl_t>;
+                                auto& pc = static_cast<Pipeline::VertexResourceBindings&>(target_visibility).pushConsts;
+                                for (std::size_t draw_index = 0;
+                                     draw_index < pending_visibility_draws.size();
+                                     ++draw_index) {
+                                    const auto& pending = pending_visibility_draws[draw_index];
+                                    pc.modelMatrix = upload_value(pending.clip_matrix);
+                                    pc.uniformBufferIndex = 0u;
+                                    pc.instanceID = pending.instance_id;
+                                    pc.textureIndex = pending.texture_descriptor;
 
-                                target_visibility.record_indirect(ms.geo.index, ms.geo.vertex, indirect_buffer, draw_params);
-                                scene_indirect_buffers.push_back(std::move(indirect_buffer));
-                                ++recorded_draws;
-                                // [TEMP DIAG] 定位三角网格不可见：确认 draw 真的被录进去了，
-                                // 并打印 clip 矩阵首/末行判断 modelMatrix 是否为零/退化。
-                                {
-                                    static std::atomic<int> diag_n{0};
-                                    if (diag_n.fetch_add(1) < 20) {
-                                        std::fprintf(stderr,
-                                            "[TEMPDIAG rec] mesh=%u idx=%u vtx=%u tex=%u clip_r0=(%.3f,%.3f,%.3f,%.3f) clip_r3=(%.3f,%.3f,%.3f,%.3f)\n",
-                                            ms.mesh_index, ms.index_count, ms.vertex_count, texture_descriptor,
-                                            clip_matrix[0][0], clip_matrix[0][1], clip_matrix[0][2], clip_matrix[0][3],
-                                            clip_matrix[3][0], clip_matrix[3][1], clip_matrix[3][2], clip_matrix[3][3]);
-                                        std::fflush(stderr);
-                                    }
+                                    Horizon::DrawIndexedIndirectParams draw_params;
+                                    draw_params.draw_count = 1;
+                                    draw_params.indirect_offset =
+                                        draw_index * sizeof(Horizon::DrawIndexedIndirectCommand);
+                                    draw_params.stride = sizeof(Horizon::DrawIndexedIndirectCommand);
+
+                                    target_visibility.record_indirect(
+                                        pending.index_buffer,
+                                        pending.vertex_buffer,
+                                        indirect_buffer,
+                                        draw_params);
                                 }
+                                scene_indirect_buffers.push_back(std::move(indirect_buffer));
                             }
                             ++object_id;
                         }
@@ -4329,6 +4484,14 @@ void OpticsSystem::optics_pipeline(float frame_count, uint64_t frame_index) {
                     shadow.bind_depth_target(shadow_depth);
                     uint32_t shadow_draws = 0;
 
+                    struct PendingShadowDraw {
+                        Horizon::HardwareBuffer index_buffer;
+                        Horizon::HardwareBuffer vertex_buffer;
+                        Horizon::DrawIndexedIndirectCommand command{};
+                        ktm::fmat4x4 clip_matrix{ktm::fmat4x4::from_eye()};
+                    };
+                    std::vector<PendingShadowDraw> pending_shadow_draws;
+
                     for (const auto& caster : shadow_casters) {
                         if ((caster.cascade_visibility_mask & (1u << cascade_index)) == 0u) {
                             continue;
@@ -4338,8 +4501,10 @@ void OpticsSystem::optics_pipeline(float frame_count, uint64_t frame_index) {
                             if (shadow_draws >= diag.draw_limit) return;
                             if (!slot.valid) continue;
 
+                            const ktm::fmat4x4 shadow_model_matrix =
+                                multiply_ktm_mat4(caster.model_matrix, slot.instance_transform);
                             const ktm::fmat4x4 clip_matrix = multiply_ktm_mat4(
-                                light_view_proj, caster.model_matrix);
+                                light_view_proj, shadow_model_matrix);
                             shadow.pushConsts.lightViewProjModel =
                                 upload_value(clip_matrix);
 
@@ -4351,42 +4516,55 @@ void OpticsSystem::optics_pipeline(float frame_count, uint64_t frame_index) {
                             draw_cmd.instance_count = 1;
                             draw_cmd.first_instance = 0;
 
-                            auto indirect_buffer =
-                                Horizon::HardwareBuffer::from_bytes(
-                                    std::as_bytes(std::span(&draw_cmd, 1)),
-                                    sizeof(draw_cmd),
-                                    Horizon::BufferUsage_Indirect,
-                                    make_optics_draw_label(
-                                        "shadow",
-                                        caster.actor_handle,
-                                        caster.geometry_handle,
-                                        slot.mesh_index,
-                                        static_cast<std::uint32_t>(frame_index),
-                                        0u,
-                                        0u,
-                                        0u,
-                                        0u,
-                                        0u,
-                                        slot.vertex_count,
-                                        slot.index_count,
-                                        slot.max_index));
-
-                            Horizon::DrawIndexedIndirectParams draw_params;
-                            draw_params.draw_count = 1;
-                            draw_params.indirect_offset = 0;
-                            draw_params.stride = sizeof(Horizon::DrawIndexedIndirectCommand);
-
-                            shadow.record_indirect(slot.geo.index, slot.geo.vertex, indirect_buffer, draw_params);
-
-                            // Thread-safe push (shadow cascades may be recorded in parallel)
-                            {
-                                std::lock_guard<std::mutex> lock(shadow_indirect_buffers_mutex);
-                                shadow_indirect_buffers.push_back(std::move(indirect_buffer));
-                            }
+                            PendingShadowDraw pending{};
+                            pending.index_buffer = slot.geo.index;
+                            pending.vertex_buffer = slot.geo.vertex;
+                            pending.command = draw_cmd;
+                            pending.clip_matrix = clip_matrix;
+                            pending_shadow_draws.push_back(std::move(pending));
                             ++shadow_draws;
                             ++native_cascade_draws[cascade_index];
                             native_cascade_indices[cascade_index] += slot.index_count;
                         }
+                    }
+
+                    if (!pending_shadow_draws.empty()) {
+                        std::vector<Horizon::DrawIndexedIndirectCommand> commands;
+                        commands.reserve(pending_shadow_draws.size());
+                        for (const auto& pending : pending_shadow_draws) {
+                            commands.push_back(pending.command);
+                        }
+
+                        auto indirect_buffer =
+                            Horizon::HardwareBuffer::from_bytes(
+                                std::as_bytes(std::span<const Horizon::DrawIndexedIndirectCommand>(
+                                    commands.data(), commands.size())),
+                                commands.size() * sizeof(Horizon::DrawIndexedIndirectCommand),
+                                Horizon::BufferUsage_Indirect,
+                                "shadow.batch");
+
+                        for (std::size_t draw_index = 0;
+                             draw_index < pending_shadow_draws.size();
+                             ++draw_index) {
+                            const auto& pending = pending_shadow_draws[draw_index];
+                            shadow.pushConsts.lightViewProjModel =
+                                upload_value(pending.clip_matrix);
+
+                            Horizon::DrawIndexedIndirectParams draw_params;
+                            draw_params.draw_count = 1;
+                            draw_params.indirect_offset =
+                                draw_index * sizeof(Horizon::DrawIndexedIndirectCommand);
+                            draw_params.stride = sizeof(Horizon::DrawIndexedIndirectCommand);
+
+                            shadow.record_indirect(
+                                pending.index_buffer,
+                                pending.vertex_buffer,
+                                indirect_buffer,
+                                draw_params);
+                        }
+
+                        std::lock_guard<std::mutex> lock(shadow_indirect_buffers_mutex);
+                        shadow_indirect_buffers.push_back(std::move(indirect_buffer));
                     }
                 };
 
@@ -4403,20 +4581,6 @@ void OpticsSystem::optics_pipeline(float frame_count, uint64_t frame_index) {
                                                          sceneBatch);
                     } else {
                         sceneBatch.clear();
-                    }
-                    // [TEMP DIAG] 收集阶段产出：instances/materials 为 0 说明根本没走到录制；
-                    // 非 0 但屏幕空白说明问题在 raster/compute 下游。走 stderr，和
-                    // Horizon 侧的探针汇到同一个流里，方便对齐顺序。
-                    {
-                        static std::atomic<int> diag_n{0};
-                        if (diag_n.fetch_add(1) < 20) {
-                            std::fprintf(stderr,
-                                         "[TEMPDIAG collect] instances=%zu materials=%zu skip=%d gbuffer=%ux%u\n",
-                                         sceneBatch.instances.size(), sceneBatch.materials.size(),
-                                         diag.skip_scene_visibility ? 1 : 0,
-                                         hardware_->gbufferSize.x, hardware_->gbufferSize.y);
-                            std::fflush(stderr);
-                        }
                     }
                     const auto scene_instance_capacity = grow_table_capacity(
                         kInitialInstanceTableCapacity,
@@ -4450,6 +4614,8 @@ void OpticsSystem::optics_pipeline(float frame_count, uint64_t frame_index) {
                     }
                     native_collect_ms = elapsed_ms(native_collect_start, PerfClock::now());
                     native_instance_count = static_cast<uint32_t>(sceneBatch.instances.size());
+                    native_scene_exceeds_realtime_shadow_budget =
+                        native_instance_count > kRealtimeShadowInstanceBudget;
                     native_visibility_draws = native_instance_count;
                     for (const auto& instance : sceneBatch.instances) {
                         native_visibility_indices += instance.indexCount;
@@ -4514,7 +4680,8 @@ void OpticsSystem::optics_pipeline(float frame_count, uint64_t frame_index) {
                     static_cast<float>(kShadowMapSize);
                 hardware_->shadowInfoBufferObjects.shadowBias = kShadowBias;
                 hardware_->shadowInfoBufferObjects.shadowEnabled =
-                    (!diag.skip_shadows && diag.shadow_cascade_mask != 0u &&
+                    (!native_scene_exceeds_realtime_shadow_budget &&
+                     !diag.skip_shadows && diag.shadow_cascade_mask != 0u &&
                      sun_intensity > 0.0f) ? 1u : 0u;
                 native_shadows_enabled = hardware_->shadowInfoBufferObjects.shadowEnabled != 0u;
                 prepare_shadow_caster_meshes();
@@ -4566,9 +4733,36 @@ void OpticsSystem::optics_pipeline(float frame_count, uint64_t frame_index) {
                 const bool is_shadow_mask_debug_mode =
                     camera->output_mode == CameraOutputMode::ShadowMaskRaw ||
                     camera->output_mode == CameraOutputMode::ShadowMask;
-                const bool should_run_ssao = camera->ssao_enabled || is_ssao_debug_mode;
+                bool geometry_loading = false;
+                auto& shared_hub = SharedDataHub::instance();
+                // During async import the actor may not yet have a visible
+                // scene-batch instance. Inspect the storage globally so the
+                // loading guard is active from the first import frame.
+                for (auto it = shared_hub.geometry_storage().cbegin();
+                     it != shared_hub.geometry_storage().cend(); ++it) {
+                    if (it->gpu_build_state == GeometryDevice::GpuBuildState::PendingImport ||
+                        it->gpu_build_state == GeometryDevice::GpuBuildState::PendingBuild) {
+                        geometry_loading = true;
+                        break;
+                    }
+                }
+                for (const auto actor_handle : sceneBatch.actorHandles) {
+                    for (const auto geometry_handle : shared_hub.resolve_actor_geometry_handles(actor_handle)) {
+                        if (auto geometry = shared_hub.geometry_storage().try_acquire_read(geometry_handle)) {
+                            geometry_loading = geometry_loading ||
+                                geometry->gpu_build_state == GeometryDevice::GpuBuildState::PendingImport ||
+                                geometry->gpu_build_state == GeometryDevice::GpuBuildState::PendingBuild;
+                        }
+                        if (geometry_loading) break;
+                    }
+                    if (geometry_loading) break;
+                }
+                const bool loading_guard = Corona::Geometry::NativeRenderLoadGuard::is_loading(
+                    geometry_loading, false);
+                const bool should_run_ssao = Corona::Geometry::NativeRenderLoadGuard::effective_ssao(
+                    loading_guard, camera->ssao_enabled, is_ssao_debug_mode);
                 const bool should_run_shadow_mask =
-                    hardware_->shadowInfoBufferObjects.shadowEnabled != 0u ||
+                    (!loading_guard && hardware_->shadowInfoBufferObjects.shadowEnabled != 0u) ||
                     is_shadow_mask_debug_mode;
                 const uint32_t sceneMaterialCount =
                     static_cast<uint32_t>(sceneBatch.materials.size());
@@ -4739,7 +4933,9 @@ void OpticsSystem::optics_pipeline(float frame_count, uint64_t frame_index) {
                     } else {
                         try {
                             actor_pick_result_buffer.emplace(
-                                make_storage_buffer<std::uint32_t>(1, "optics.actor_pick.request"));
+                                make_storage_buffer<std::uint32_t>(
+                                    1, "optics.actor_pick.request",
+                                    Horizon::CpuAccessMode::ReadWrite));
                             auto& actorPick = *hardware_->actorPickPipeline;
                             actorPick.pushConsts.pixel = upload_value(
                                 ktm::uvec2{actor_pick_request->x, actor_pick_request->y});
@@ -5061,6 +5257,7 @@ void OpticsSystem::optics_pipeline(float frame_count, uint64_t frame_index) {
                                                 std::move(*actor_pick_result_buffer),
                                                 latest_submit_receipt,
                                                 sceneBatch.actorHandles,
+                                                sceneBatch.nodeIndices,
                                                 std::move(*actor_pick_reservation));
                 }
 
@@ -5572,14 +5769,16 @@ std::optional<OpticsSystem::ActorPickRequest> OpticsSystem::take_pending_actor_p
 
 void OpticsSystem::complete_actor_pick(const ActorPickRequest& request,
                                        const std::vector<std::uintptr_t>& scene_actor_handles,
+                                       const std::vector<std::uint32_t>& node_indices,
                                        bool read_ok,
                                        std::uint32_t instance_id) {
     const auto resolved =
-        OpticsDetail::resolve_actor_pick_result(read_ok, instance_id, scene_actor_handles);
+        OpticsDetail::resolve_actor_pick_result(read_ok, instance_id, scene_actor_handles, node_indices);
 
     auto& hub = SharedDataHub::instance();
     if (auto pick = hub.actor_pick_storage().try_acquire_write(request.pick_handle)) {
         pick->actor_handle = resolved.actor_handle;
+        pick->node_index = resolved.node_index;
         pick->result_x = request.x;
         pick->result_y = request.y;
         pick->result_request_id = request.request_id;
@@ -5587,11 +5786,11 @@ void OpticsSystem::complete_actor_pick(const ActorPickRequest& request,
     }
     hub.enqueue_actor_pick_completion({request.camera_handle, request.scene_id, request.request_id,
                                        std::string(resolved.status), resolved.actor_handle,
-                                       request.x, request.y});
+                                       request.x, request.y, resolved.node_index});
 }
 
 void OpticsSystem::fail_actor_pick(const ActorPickRequest& request) {
-    complete_actor_pick(request, {}, false, 0);
+    complete_actor_pick(request, {}, {}, false, 0);
 }
 
 void OpticsSystem::enqueue_actor_pick_readback(
@@ -5599,6 +5798,7 @@ void OpticsSystem::enqueue_actor_pick_readback(
     Horizon::HardwareBuffer result_buffer,
     Horizon::SubmitReceipt receipt,
     std::vector<std::uintptr_t> scene_actor_handles,
+    std::vector<std::uint32_t> node_indices,
     OpticsDetail::ActorPickReadbackWorker::Reservation reservation) {
     if (!actor_pick_readback_worker_ || receipt.serial == 0) {
         fail_actor_pick(request);
@@ -5608,15 +5808,21 @@ void OpticsSystem::enqueue_actor_pick_readback(
     const auto fallback_buffer = result_buffer;
     const bool enqueued = actor_pick_readback_worker_->submit(
         std::move(reservation),
-        [this, request, result_buffer, receipt, scene_actor_handles]() mutable {
+        [this, request, result_buffer, receipt, scene_actor_handles, node_indices]() mutable {
             std::uint32_t instance_id = 0;
             bool read_ok = false;
             try {
-                hardware_->executor.wait(receipt);
-                // 新版 Horizon: 使用 get_mapped_data() 读取 buffer
-                void* mapped = result_buffer.get_mapped_data();
-                if (mapped) {
-                    instance_id = *static_cast<std::uint32_t*>(mapped);
+                // executor.wait() only queues the receipt's tokens for the *next*
+                // commit on the render thread; the host must instead wait for this
+                // submission's own timeline value, otherwise the read below can
+                // observe the previous frame's instance id (wrong actor picked) and
+                // the worker mutates the render thread's executor from a foreign
+                // thread for no reason.
+                hardware_->executor.wait_completed(receipt);
+                std::uint32_t value = 0;
+                if (result_buffer.read_bytes(std::span<std::byte>(
+                        reinterpret_cast<std::byte*>(&value), sizeof(value)))) {
+                    instance_id = value;
                     read_ok = true;
                 } else {
                     CFW_LOG_ERROR("OpticsSystem: Failed to read actor pick result from GPU");
@@ -5627,14 +5833,14 @@ void OpticsSystem::enqueue_actor_pick_readback(
             } catch (...) {
                 CFW_LOG_ERROR("OpticsSystem: Actor pick receipt wait/read failed");
             }
-            complete_actor_pick(request, scene_actor_handles, read_ok, instance_id);
+            complete_actor_pick(request, scene_actor_handles, node_indices, read_ok, instance_id);
         });
 
     if (!enqueued) {
         // This is only expected during an abnormal lifecycle race. Preserve the
         // GPU buffer until its receipt completes before reporting the failure.
         try {
-            hardware_->executor.wait(receipt);
+            hardware_->executor.wait_completed(receipt);
             (void)fallback_buffer;
         } catch (...) {
         }
@@ -5666,7 +5872,9 @@ void OpticsSystem::process_vision_actor_pick(std::uintptr_t camera_handle,
     std::optional<Horizon::HardwareBuffer> actor_pick_result_buffer;
     try {
         actor_pick_result_buffer.emplace(
-            make_storage_buffer<std::uint32_t>(1, "optics.actor_pick.vision_request"));
+            make_storage_buffer<std::uint32_t>(
+                1, "optics.actor_pick.vision_request",
+                Horizon::CpuAccessMode::ReadWrite));
     } catch (const std::exception& error) {
         CFW_LOG_ERROR("OpticsSystem: Failed to create Vision actor pick result buffer: {}",
                       error.what());
@@ -5721,6 +5929,7 @@ void OpticsSystem::process_vision_actor_pick(std::uintptr_t camera_handle,
                                 std::move(*actor_pick_result_buffer),
                                 actor_pick_receipt,
                                 scene_batch.actorHandles,
+                                scene_batch.nodeIndices,
                                 std::move(*actor_pick_reservation));
 }
 #endif
@@ -5799,7 +6008,7 @@ void OpticsSystem::fail_unrenderable_pending_screenshots() {
 
         bool in_enabled_scene = false;
         bool in_any_scene = false;
-        for (const auto& scene : SharedDataHub::instance().scene_storage()) {
+        for (const auto& scene : std::as_const(SharedDataHub::instance().scene_storage())) {
             if (std::find(scene.camera_handles.begin(), scene.camera_handles.end(), camera_handle) ==
                 scene.camera_handles.end()) {
                 continue;
@@ -5901,6 +6110,11 @@ void OpticsSystem::shutdown() {
     }
 
     if (hardware_) {
+        // Note: executor.wait() enqueues the receipt's tokens for the *next*
+        // commit, so this drain does not block on the GPU. That is intentional
+        // here: Horizon resources are reference counted and the device retires
+        // in-flight work on its own, while a blocking wait_idle() during shutdown
+        // would hang the engine whenever the queue is wedged (device lost).
         hardware_->native_frame_throttle.drain([this](const Horizon::SubmitReceipt& receipt) {
             hardware_->executor.wait(receipt);
         });
@@ -5980,6 +6194,7 @@ std::size_t OpticsSystem::compute_vision_scene_signature() const {
                 mix(static_cast<std::size_t>(optics->geometry_handle));
                 mix(static_cast<std::size_t>(geom->model_resource_handle));
                 mix(geom->mesh_handles.size());
+                mix(geom->model_node_revision);
 
                 // Per-mesh material color (texture-color replacement detection).
                 for (const auto& mesh_dev : geom->mesh_handles) {
@@ -6589,6 +6804,7 @@ void OpticsSystem::sync_engine_native_mixed_shapes(VisionPipelineRuntime& runtim
             actors_to_remove.push_back(actor_handle);
         }
     }
+    const auto node_revision = [&](std::uintptr_t actor_handle){std::uint64_t revision=0;for(auto h:hub.resolve_actor_geometry_handles(actor_handle)){if(auto g=hub.geometry_storage().try_acquire_read(h))revision^=g->model_node_revision+0x9e3779b9u+(revision<<6)+(revision>>2);}return revision;};
     for (auto actor_handle : active_native_actors) {
         const auto* record = scene_resource->find_engine_mixed_shape(actor_handle);
         const auto resolved = resolve_engine_native_transform(
@@ -6599,6 +6815,9 @@ void OpticsSystem::sync_engine_native_mixed_shapes(VisionPipelineRuntime& runtim
             if (resolved) {
                 actors_to_add.push_back(actor_handle);
             }
+        } else if (record->model_node_revision != node_revision(actor_handle)) {
+            actors_to_remove.push_back(actor_handle);
+            if(resolved)actors_to_add.push_back(actor_handle);
         } else if (!resolved) {
             // Tracked but no longer renderable -> remove from the mix.
             actors_to_remove.push_back(actor_handle);
@@ -6659,6 +6878,7 @@ void OpticsSystem::sync_engine_native_mixed_shapes(VisionPipelineRuntime& runtim
                 .actor_handle = actor_handle,
                 .shape_index = result.shape_index,
                 .transform_signature = 0,
+                .model_node_revision = node_revision(actor_handle),
             };
         just_added_actors.insert(actor_handle);
         geometry_changed = true;
@@ -6701,7 +6921,21 @@ void OpticsSystem::sync_engine_native_mixed_shapes(VisionPipelineRuntime& runtim
                 .transform_signature = resolved->signature,
                 .object_to_world = object_to_world,
             });
-            instance->set_o2w(resolved->o2w);
+            auto matrix=resolved->o2w;
+            const std::string name(instance->name());
+            if(name.starts_with("corona-node:")){
+                const auto colon=name.find(':',12);
+                if(colon!=std::string::npos){
+                    const auto handle=static_cast<std::uintptr_t>(std::stoull(name.substr(12,colon-12)));
+                    const auto index=static_cast<std::size_t>(std::stoull(name.substr(colon+1)));
+                    if(auto geom=hub.geometry_storage().try_acquire_read(handle);geom&&index<geom->mesh_instances.size()){
+                        auto local=::vision::make_float4x4(1.f);
+                        for(int c=0;c<4;++c)for(int r=0;r<4;++r){float value=geom->mesh_instances[index].transform[c][r];if(r==2)value=-value;if(c==2)value=-value;local[c][r]=value;}
+                        matrix=matrix*local;
+                    }
+                }
+            }
+            instance->set_o2w(matrix);
             instance->init_aabb();
             group->aabb.extend(instance->aabb);
         });
@@ -7408,7 +7642,15 @@ void OpticsSystem::run_vision_frame(float frame_count, uint64_t frame_index) {
     last_vision_runtime_group_signature_ = 0;
 
 #ifndef CORONA_VISION_IMPORT_DEMO
+    fallback_large_scenes_to_native_renderer();
     const auto mode_selection = select_visible_vision_render_mode();
+    if (!mode_selection.has_visible_camera) {
+        // A large scene may have just switched its interactive camera back to
+        // Native. Release the unused path-tracing runtime immediately instead of
+        // retaining its acceleration structures and scene buffers in memory.
+        clear_vision_runtimes();
+        return;
+    }
     if (mode_selection.has_visible_camera) {
         if (mode_selection.conflict &&
             mode_selection.conflict_signature != last_vision_mode_conflict_signature_) {

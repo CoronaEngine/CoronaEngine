@@ -1,6 +1,7 @@
 ﻿#include "corona/engine.h"
 
 #include <corona/events/engine_events.h>
+#include <corona/kernel/event/i_event_stream.h>
 #include <horizon/core/logging.h>
 #include <corona/resource/resource_manager.h>
 #include <corona/resource/types/audio.h>
@@ -117,6 +118,12 @@ void Engine::run() {
     CFW_LOG_NOTICE("CoronaEngine Starting Main Loop");
     CFW_LOG_NOTICE("====================================");
 
+    // Subscribe before workers start so a first-update failure cannot be lost.
+    // Multiple failing workers must never block while the main thread exits.
+    auto shutdown_requests = kernel_.event_stream()
+        ->get_stream<Events::EngineShutdownEvent>()
+        ->subscribe({.max_queue_size = 1, .policy = Kernel::BackpressurePolicy::DropOldest});
+
     // 启动所有系统线程
     auto* sys_mgr = kernel_.system_manager();
     if (sys_mgr) {
@@ -128,6 +135,11 @@ void Engine::run() {
     constexpr auto target_frame_duration = std::chrono::microseconds(16666);  // 60 FPS
 
     while (!exit_requested_.load()) {
+        if (shutdown_requests.try_pop()) {
+            CFW_LOG_WARNING("A system requested engine shutdown; leaving the main loop");
+            request_exit();
+            break;
+        }
         auto frame_start_time = std::chrono::high_resolution_clock::now();
 
         // 计算帧时间

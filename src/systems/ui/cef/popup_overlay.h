@@ -39,4 +39,11 @@ class PopupOverlay {
     std::vector<std::uint8_t> pixels_;
 };
 
+// A popup can repaint without a new PET_VIEW. Keep the uncomposited view as the
+// base for every frame, including popup scrolling, movement and dismissal.
+// Returns false without consuming dirty when a complete base is not available.
+[[nodiscard]] bool compose_pending_popup_frame(
+    const std::vector<std::uint8_t>& view_pixels, int view_width, int view_height,
+    const PopupOverlay& popup, bool& dirty, std::vector<std::uint8_t>& frame);
+
 }  // namespace Corona::Systems::UI

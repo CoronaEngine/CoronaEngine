@@ -4,6 +4,7 @@
 #include <corona/systems/network/protocol.h>
 
 #include <cstdint>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -31,6 +32,20 @@ struct ActorNetworkIdentity {
     std::int64_t acoustics_seq = -1;
 };
 
+/**
+ * @brief GUID ↔ 存储句柄的映射表
+ *
+ * 线程安全：这张表同时被三类线程访问 ——
+ *   - CEF UI 线程 / 引擎主线程：注册与所有权变更（编辑器创建/删除 actor、
+ *     协作同步应用远端变更）；
+ *   - 网络系统线程：每 tick 用 (storage_id, storage_seq) 反查 guid（sync engine），
+ *     以及会话停止时的 clear()。
+ * 因此 actors_ / ownership_overrides_ 的每一次访问都必须在 mutex_ 之下。此前没有任何
+ * 同步：插入与全表扫描并发会在迭代中 rehash，clear() 与扫描并发更是直接的 UB。
+ *
+ * 锁序：mutex_ 之下**不得**再取 SharedDataHub 的槽位锁（build_identity() 在加锁前
+ * 完成），所以本锁永远是最内层。
+ */
 class NetworkIdentityRegistry {
 public:
     explicit NetworkIdentityRegistry(SharedDataHub& hub) : hub_(hub) {}
@@ -39,8 +54,10 @@ public:
                         std::uintptr_t actor_handle,
                         bool locally_owned = true) {
         if (actor_guid.empty() || actor_handle == 0) return false;
+        // 句柄快照在锁外采集：build_identity 会取若干槽位锁。
         auto identity = build_identity(actor_guid, actor_handle);
         if (!identity) return false;
+        std::lock_guard<std::mutex> lock(mutex_);
         auto override_it = ownership_overrides_.find(actor_guid);
         identity->locally_owned = override_it != ownership_overrides_.end()
             ? override_it->second
@@ -51,6 +68,7 @@ public:
 
     std::optional<ActorNetworkIdentity> resolve_actor(
         const std::string& actor_guid) const {
+        std::lock_guard<std::mutex> lock(mutex_);
         auto it = actors_.find(actor_guid);
         if (it == actors_.end()) return std::nullopt;
         return it->second;
@@ -58,6 +76,7 @@ public:
 
     std::string actor_guid_for_storage_seq(StorageID storage_id,
                                            std::uint64_t storage_seq) const {
+        std::lock_guard<std::mutex> lock(mutex_);
         for (const auto& [guid, identity] : actors_) {
             if (identity_seq(identity, storage_id) == static_cast<std::int64_t>(storage_seq)) {
                 return guid;
@@ -69,6 +88,7 @@ public:
     std::optional<bool> local_ownership_for_storage_seq(
         StorageID storage_id,
         std::uint64_t storage_seq) const {
+        std::lock_guard<std::mutex> lock(mutex_);
         for (const auto& [guid, identity] : actors_) {
             if (identity_seq(identity, storage_id) == static_cast<std::int64_t>(storage_seq)) {
                 return identity.locally_owned;
@@ -80,6 +100,7 @@ public:
     std::optional<std::uint64_t> storage_seq_for_actor_guid(
         StorageID storage_id,
         const std::string& actor_guid) const {
+        std::lock_guard<std::mutex> lock(mutex_);
         auto it = actors_.find(actor_guid);
         if (it == actors_.end()) return std::nullopt;
         auto seq = identity_seq(it->second, storage_id);
@@ -88,11 +109,13 @@ public:
     }
 
     void unregister_actor(const std::string& actor_guid) {
+        std::lock_guard<std::mutex> lock(mutex_);
         actors_.erase(actor_guid);
     }
 
     void set_actor_ownership(const std::string& actor_guid, bool locally_owned) {
         if (actor_guid.empty()) return;
+        std::lock_guard<std::mutex> lock(mutex_);
         ownership_overrides_[actor_guid] = locally_owned;
         auto it = actors_.find(actor_guid);
         if (it != actors_.end()) {
@@ -101,6 +124,7 @@ public:
     }
 
     void clear() {
+        std::lock_guard<std::mutex> lock(mutex_);
         actors_.clear();
         ownership_overrides_.clear();
     }
@@ -206,6 +230,8 @@ private:
     }
 
     SharedDataHub& hub_;
+    /// 保护 actors_ 与 ownership_overrides_（见类注释的线程模型与锁序）。
+    mutable std::mutex mutex_;
     std::unordered_map<std::string, ActorNetworkIdentity> actors_;
     std::unordered_map<std::string, bool> ownership_overrides_;
 };

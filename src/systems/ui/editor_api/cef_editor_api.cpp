@@ -1,11 +1,17 @@
-﻿#include "cef_editor_api.h"
+#include "cef_editor_api.h"
+
+#include "editor_dispatch.h"
 
 #include <horizon/core/logging.h>
 #include <corona/systems/script/python_runtime_coordinator.h>
 
+#include <include/cef_task.h>
+
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <functional>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <string_view>
@@ -283,6 +289,13 @@ constexpr std::array<EditorApiParamSpec, 2> kSceneActorParams = {{
     param("actor_name", EditorApiValueType::String),
 }};
 
+constexpr std::array<EditorApiParamSpec, 4> kSceneToolsSetIkChainsParams = {{
+    param("scene_name", EditorApiValueType::String),
+    param("actor_name", EditorApiValueType::String),
+    param("chains", EditorApiValueType::Array),
+    param("expected_revision", EditorApiValueType::Number, true),
+}};
+
 constexpr std::array<EditorApiParamSpec, 3> kSceneToolsSelectModelFileParams = {{
     param("scene_name", EditorApiValueType::String),
     param("actor_name", EditorApiValueType::String),
@@ -420,6 +433,20 @@ constexpr std::array<EditorApiParamSpec, 5> kSceneToolsPickActorParams = {{
     param("y", EditorApiValueType::Number),
     param("viewport_width", EditorApiValueType::Number),
     param("viewport_height", EditorApiValueType::Number),
+}};
+
+constexpr std::array<EditorApiParamSpec, 4> kModelNodeStateParams = {{
+    param("scene_name", EditorApiValueType::String),
+    param("actor_name", EditorApiValueType::String),
+    param("node_index", EditorApiValueType::Integer),
+    param("state", EditorApiValueType::Object),
+}};
+constexpr std::array<EditorApiParamSpec, 5> kModelNodePageParams = {{
+    param("scene_name", EditorApiValueType::String),
+    param("actor_name", EditorApiValueType::String),
+    param("parent_index", EditorApiValueType::Integer, true),
+    param("offset", EditorApiValueType::Integer, true),
+    param("limit", EditorApiValueType::Integer, true),
 }};
 
 constexpr std::array<EditorApiParamSpec, 2> kSceneToolsPlayAudioParams = {{
@@ -659,6 +686,11 @@ constexpr auto kEditorApiMethods = std::to_array<EditorApiMethodSpec>({
     EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, set_vision_stable_planes, kSceneToolsSetCameraBoolParams, "sceneTools.setVisionStablePlanes", "scene_tools.set_vision_stable_planes", EditorApiValueType::Object),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, stop_audio, kResourceIdParam, "sceneTools.stopAudio", "scene_tools.stop_audio", EditorApiValueType::Object),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, sun_direction, kSceneToolsSunDirectionParams, "sceneTools.sunDirection", "scene_tools.sun_direction", EditorApiValueType::Object),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, get_actor_skeleton_leaves, kSceneActorParams, "sceneTools.getActorSkeletonLeaves", "scene_tools.get_actor_skeleton_leaves", EditorApiValueType::Object),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, get_model_nodes, kModelNodePageParams, "sceneTools.getModelNodes", "scene_tools.get_model_nodes", EditorApiValueType::Object),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, set_model_node_state, kModelNodeStateParams, "sceneTools.setModelNodeState", "scene_tools.set_model_node_state", EditorApiValueType::Object),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, get_actor_ik_chains, kSceneActorParams, "sceneTools.getActorIkChains", "scene_tools.get_actor_ik_chains", EditorApiValueType::Object),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, set_actor_ik_chains, kSceneToolsSetIkChainsParams, "sceneTools.setActorIkChains", "scene_tools.set_actor_ik_chains", EditorApiValueType::Object),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, update_camera_view, kSceneToolsUpdateCameraViewParams, "sceneTools.updateCameraView", "scene_tools.update_camera_view", EditorApiValueType::Object),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, capture_viewport, kViewportCaptureParams, "viewport.capture", "viewport.capture", EditorApiValueType::Object),
     EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, set_camera_pose, kViewportSetCameraPoseParams, "viewport.setCameraPose", "viewport.set_camera_pose", EditorApiValueType::Object, cef_and_script_runtime_callers()),
@@ -840,9 +872,44 @@ bool validate_editor_api_event_payload(const EditorApiEventSpec& spec,
     return false;
 }
 
-NativeResult invoke_native_api_method(const EditorApiMethodSpec& spec,
-                                      const nlohmann::json& args,
-                                      const NativeContext& context) {
+namespace {
+
+/// 把执行投递到 CEF UI 线程（编辑器状态的唯一 owner）。
+class EditorOwnerTask final : public CefTask {
+   public:
+    explicit EditorOwnerTask(std::function<void()> fn) : fn_(std::move(fn)) {}
+    void Execute() override {
+        if (fn_) fn_();
+    }
+
+   private:
+    std::function<void()> fn_;
+    IMPLEMENT_REFCOUNTING(EditorOwnerTask);
+};
+
+/// 安装 CEF 实现的派发钩子（只装一次）。装不上时所有跨线程调用都会落到
+/// `EditorOwnerRun::PostFailed`，而不是悄悄跑在错误的线程上。
+void ensure_editor_dispatch_hooks() {
+    static std::once_flag once;
+    std::call_once(once, [] {
+        Detail::EditorDispatchHooks hooks;
+        hooks.is_owner_thread = [] { return CefCurrentlyOn(TID_UI); };
+        hooks.post_to_owner = [](std::function<void()> task) {
+            auto cef_task = CefRefPtr<CefTask>(new EditorOwnerTask(std::move(task)));
+            return CefPostTask(TID_UI, cef_task);
+        };
+        Detail::set_editor_dispatch_hooks(std::move(hooks));
+    });
+}
+
+/// 派发的等待上限。超出后返回"编辑器忙"，绝不无限等待：调用方（Python/脚本）可以
+/// 重试，而 owner 线程不会因为某个卡住的任务被永久堵死。
+constexpr std::chrono::milliseconds kEditorDispatchTimeout{5000};
+
+/// 真正执行 handler（必须在 owner 线程上，或在 `editor_state_mutex` 保护下）。
+NativeResult dispatch_native_api_method(const EditorApiMethodSpec& spec,
+                                        const nlohmann::json& args,
+                                        const NativeContext& context) {
     NativeRequest native_request;
     native_request.module = spec.native_module;
     native_request.function = spec.native_function;
@@ -856,6 +923,71 @@ NativeResult invoke_native_api_method(const EditorApiMethodSpec& spec,
     }
     result->route = "editor-api";
     return *result;
+}
+
+/// 按 route 把整个 handler 交给 owner 线程（或按交接协议就地）执行。
+///
+/// 参数与返回值都走 `call_editor_dispatch`：它保证"返回空 ⇒ handler 绝不会再被执行"，
+/// 因此按值捕获之后不会出现"超时返回了、任务稍后又跑到已退栈的栈帧上"。
+NativeResult run_native_api_method(const EditorApiMethodSpec& spec,
+                                   const nlohmann::json& args,
+                                   const NativeContext& context,
+                                   Detail::EditorDispatchRoute route) {
+    ensure_editor_dispatch_hooks();
+
+    Detail::EditorDispatchReport report;
+    auto result = Detail::call_editor_dispatch(
+        [spec, args, context] { return dispatch_native_api_method(spec, args, context); },
+        route,
+        kEditorDispatchTimeout,
+        &report);
+
+    if (report.ran_inline_on_caller && route == Detail::EditorDispatchRoute::InlineBusy) {
+        // owner 线程正阻塞等 Python：此刻再从 Python 线程等 owner 线程就是互等，所以
+        // 就地执行。仍然串行（持 editor_state_mutex），记一条 WARN 便于观察频率。
+        static std::atomic<std::uint64_t> busy_dispatch_count{0};
+        const auto count = busy_dispatch_count.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (count == 1 || count % 100 == 0) {
+            CFW_LOG_WARNING(
+                "Editor API '{}' ran on the calling thread (#{}) because the editor thread "
+                "is waiting on the Python runtime; the call is still serialized",
+                spec.api_name, count);
+        }
+    }
+
+    if (result) {
+        return std::move(*result);
+    }
+
+    const bool timed_out = report.run == Detail::EditorOwnerRun::Timeout;
+    CFW_LOG_WARNING("Editor API '{}' could not run on the editor thread ({} after {}ms)",
+                    spec.api_name,
+                    timed_out ? "timeout" : "post failed",
+                    static_cast<long long>(kEditorDispatchTimeout.count()));
+    return native_failure(std::string(spec.api_name) +
+                              (timed_out ? " timed out waiting for the editor thread"
+                                         : " could not be posted to the editor thread"),
+                          timed_out ? 504 : 503,
+                          "editor-api");
+}
+
+}  // namespace
+
+NativeResult invoke_native_api_method(const EditorApiMethodSpec& spec,
+                                      const nlohmann::json& args,
+                                      const NativeContext& context) {
+    ensure_editor_dispatch_hooks();
+    // 编辑器场景状态只有一个 owner 线程：绘制并派发输入的那个 CEF UI 线程。handler
+    // 因此可以安全地对状态做"单线程"假设（缓存、表、unique_ptr 成员），前提是它们
+    // 全部在那个线程执行——这正是这里把每一次 handler 调用都收口到 owner 线程的原因。
+    // 注意顺序：`on_editor_owner_thread()` 会记录"见过 owner 线程"，所以必须先于
+    // `editor_owner_thread_seen()` 求值（函数实参的求值顺序是不指定的）。
+    const bool on_owner_thread = Detail::on_editor_owner_thread();
+    const auto route = Detail::decide_editor_dispatch_route(
+        on_owner_thread,
+        Detail::editor_thread_waiting_for_python(),
+        Detail::editor_owner_thread_seen());
+    return run_native_api_method(spec, args, context, route);
 }
 
 std::optional<int> browser_identifier(const NativeContext& context) {
@@ -1341,6 +1473,9 @@ NativeResult invoke_python_script_service(const NativeRequest& request, const ch
     runtime_request.module = request.module;
     runtime_request.function = request.function;
     runtime_request.payload_json = python_script_request_json(request);
+    // 从这里到 submit_and_wait 返回为止，owner 线程不在碰编辑器状态：于是 Python 消费
+    // 线程此刻若回调编辑器 API，可以就地执行（见 editor_dispatch.h 的三段交接协议）。
+    Detail::EditorWaitingForPythonScope waiting_for_python;
     const auto response = coordinator->submit_and_wait(std::move(runtime_request),
                                                        std::chrono::seconds(2));
     if (response.status != Script::Python::PythonRuntimeResponseStatus::Success) {

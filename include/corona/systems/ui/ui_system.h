@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include <SDL3/SDL.h>
 #include <corona/events/script_system_events.h>
@@ -7,6 +7,8 @@
 #include <corona/kernel/system/i_system.h>
 #include <corona/systems/ui/vulkan_backend.h>
 
+#include <atomic>
+#include <cstdint>
 #include <memory>
 
 namespace Corona::Systems {
@@ -49,12 +51,16 @@ class UiSystem : public Kernel::ISystem {
     [[nodiscard]] Kernel::SystemState get_state() const override { return state_; }
     [[nodiscard]] int get_target_fps() const override { return 60; }
 
-    // 性能统计（主线程系统不单独统计）
-    [[nodiscard]] float get_actual_fps() const override { return 0.0f; }
-    [[nodiscard]] float get_average_frame_time() const override { return 0.0f; }
-    [[nodiscard]] float get_max_frame_time() const override { return 0.0f; }
-    [[nodiscard]] std::uint64_t get_total_frames() const override { return 0; }
-    void reset_stats() override {}
+    // 性能统计：UiSystem 运行在主线程，没有 SystemBase 的线程循环为它计时，所以这里
+    // 如实测量 update() 自身的耗时（与 SystemBase::thread_loop 的口径一致：帧时间 =
+    // 一次 update() 的墙钟耗时，fps = 帧数 / 帧耗时之和）。
+    // 原先这三个 getter 硬编码返回 0，会让 [UI/Frame] 诊断里的 UI 行读起来像"UI 不耗时"，
+    // 而它其实是"未测量"——两者必须区分开。
+    [[nodiscard]] float get_actual_fps() const override;
+    [[nodiscard]] float get_average_frame_time() const override;
+    [[nodiscard]] float get_max_frame_time() const override;
+    [[nodiscard]] std::uint64_t get_total_frames() const override;
+    void reset_stats() override;
 
     /**
      * @brief 检查 UI 系统是否仍在运行
@@ -78,6 +84,11 @@ class UiSystem : public Kernel::ISystem {
     int active_tab_id_ = -1;
 
     Kernel::EventId sdl_start_id_ = 0;
+
+    // 帧统计（由 update() 在 UI 主线程写入，可能被其它线程读取，故用原子量）。
+    std::atomic<std::uint64_t> frame_count_{0};
+    std::atomic<double> total_frame_ms_{0.0};  ///< update() 耗时累加（毫秒）
+    std::atomic<float> max_frame_ms_{0.0f};    ///< 单次 update() 最大耗时（毫秒）
 };
 
 }  // namespace Corona::Systems

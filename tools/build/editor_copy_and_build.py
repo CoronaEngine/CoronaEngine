@@ -24,7 +24,7 @@ def echo(msg: str) -> None:
     print(msg)
 
 
-_STALE_EXTENSIONS = {".py", ".vue", ".js", ".ts", ".jsx", ".tsx", ".css", ".scss"}
+_STALE_EXTENSIONS = {".py", ".vue", ".js", ".ts", ".jsx", ".tsx", ".css", ".scss", ".mjs"}
 _PROTECTED_DEPLOYED_ROOTS = (Path("data"), Path("runtime") / "generated")
 
 
@@ -182,28 +182,89 @@ def stream_run(cmd: list[str], cwd: Optional[Path] = None, env: Optional[dict] =
 
 
 def maybe_run_npm(frontend_dir: Path, node_dir: Path) -> int:
-    if not frontend_dir.exists():
-        echo(f"[npm-build] Frontend directory not found: {frontend_dir}; skip build")
-        return 0
+    if not frontend_dir.is_dir():
+        echo(f"[npm-build] ERROR: Frontend directory not found: {frontend_dir}")
+        return 1
     npm_cmd = node_dir / ("npm.cmd" if os.name == "nt" else "npm")
-    if not npm_cmd.exists():
-        echo(f"[npm-build] npm not found at: {npm_cmd}; skip build")
-        return 0
+    if not npm_cmd.is_file():
+        echo(f"[npm-build] ERROR: npm executable not found: {npm_cmd}")
+        return 127
     env = os.environ.copy()
     env["PATH"] = str(node_dir) + os.pathsep + env.get("PATH", "")
     # Keep environment unchanged
     echo("[npm-build] Installing dependencies...")
     rc = stream_run([str(npm_cmd), "install"], cwd=frontend_dir, env=env)
     if rc != 0:
-        print(f"CMake Warning: [npm-build] 'npm install' failed (exit code {rc}); continuing without frontend build.", flush=True)
-        return 0
+        print(f"[npm-build] ERROR: 'npm install' failed (exit code {rc}).", flush=True)
+        return rc
     echo("[npm-build] Building frontend...")
     rc = stream_run([str(npm_cmd), "run", "build"], cwd=frontend_dir, env=env)
     if rc != 0:
-        print(f"CMake Warning: [npm-build] 'npm run build' failed (exit code {rc}); continuing without frontend build.", flush=True)
-        return 0
+        print(f"[npm-build] ERROR: 'npm run build' failed (exit code {rc}).", flush=True)
+        return rc
+    frontend_index = frontend_dir / "dist" / "index.html"
+    if not frontend_index.is_file():
+        echo(f"[npm-build] ERROR: Build output is missing or not a file: {frontend_index}")
+        return 1
     echo("[npm-build] Frontend build completed successfully.")
     return 0
+
+
+def copy_game_frontend(dest_root: Path, repository_root: Path | None = None) -> None:
+    """Keep the story modules inside CabbageEditor/game, mirroring editor/game."""
+    root = repository_root or Path(__file__).resolve().parents[2]
+    source = root / "editor" / "game" / "frontend"
+    destination = dest_root / "game"
+    if not source.is_dir():
+        raise FileNotFoundError(f"Story frontend modules not found: {source}")
+    if source.resolve() == (destination / "frontend").resolve():
+        return
+    copy_tree(source, destination)
+
+
+def copy_game_art(dest_root: Path, repository_root: Path | None = None) -> None:
+    """Deploy game-owned models/textures without modifying the shared engine assets."""
+    root = repository_root or Path(__file__).resolve().parents[2]
+    source = root / "editor" / "game" / "art"
+    destination = dest_root / "game" / "art"
+    if not source.is_dir():
+        raise FileNotFoundError(f"Game art resources not found: {source}")
+    if source.resolve() == destination.resolve():
+        return
+    echo(f"[editor-copy] Copying game art: {source} -> {destination}")
+    # Preserve model-relative texture paths and attribution, and propagate copy failures.
+    shutil.copytree(source, destination, dirs_exist_ok=True)
+
+
+def copy_game_runtime(dest_root: Path, repository_root: Path | None = None) -> None:
+    """Deploy Python gameplay inside CabbageEditor/game, on the editor import path."""
+    root = repository_root or Path(__file__).resolve().parents[2]
+    source = root / "editor" / "game"
+    destination = dest_root / "game"
+    if source.resolve() == destination.resolve():
+        return
+    destination.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source / "__init__.py", destination / "__init__.py")
+    for package in ("core", "systems", "world", "runtime"):
+        copy_tree(source / package, destination)
+
+
+def copy_game_data(dest_root: Path, repository_root: Path | None = None) -> None:
+    """Deploy the read-only story content (prophet script, placement, contract).
+
+    game/data is not a Python package and holds no runtime state, so it is copied as
+    plain JSON: the shipped program must carry the same authoritative content the
+    repository validates against.
+    """
+    root = repository_root or Path(__file__).resolve().parents[2]
+    source = root / "editor" / "game" / "data"
+    destination = dest_root / "game" / "data"
+    if not source.is_dir():
+        raise FileNotFoundError(f"Story content data not found: {source}")
+    if source.resolve() == destination.resolve():
+        return
+    echo(f"[editor-copy] Copying game data: {source} -> {destination}")
+    shutil.copytree(source, destination, dirs_exist_ok=True)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -226,6 +287,11 @@ def main(argv: list[str] | None = None) -> int:
 
     for s in src_dirs:
         copy_tree(s, dest_root, merge_content=args.merge_content)
+
+    copy_game_runtime(dest_root)
+    copy_game_art(dest_root)
+    copy_game_data(dest_root)
+    copy_game_frontend(dest_root)
 
     # Run npm build last
     return maybe_run_npm(frontend_dir, node_dir)

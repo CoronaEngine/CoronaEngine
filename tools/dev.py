@@ -4,7 +4,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from horizon_workspace import ensure_workspace, inspect_workspace, sync_workspace, update_workspace
+from horizon_workspace import LOCK_HINT, ensure_workspace, inspect_workspace, sync_workspace
 from workflow import (
     CONFIGURATIONS,
     DEFAULT_CONFIGURATION,
@@ -121,15 +121,18 @@ def install(configuration: str, target_family: str, *, update: bool = False) -> 
 
 def execute(args: argparse.Namespace) -> None:
     targets = args.targets or [DEFAULT_TARGET]
-    target = targets[0]
     configuration = args.configuration
     target_family = args.target_family or target_family_for_targets(targets)
     if args.command == "status":
         run_command(("git", "status", "--short", "--branch"), cwd=REPO_ROOT)
         try:
-            print(inspect_workspace(REPO_ROOT).summary())
+            horizon = inspect_workspace(REPO_ROOT)
         except RuntimeError as error:
             print(f"[WARN] Horizon workspace could not be inspected: {error}")
+        else:
+            print(horizon.summary())
+            for note in horizon.advice():
+                print(f"[WARN] {note}")
         run_command(("conan", "--version"), cwd=REPO_ROOT)
         run_command(("cmake", "--list-presets"), cwd=REPO_ROOT)
     elif args.command in {"install", "_bootstrap"}:
@@ -140,22 +143,20 @@ def execute(args: argparse.Namespace) -> None:
     elif args.command == "build":
         install(configuration, target_family)
         cmake_configure(REPO_ROOT, configuration, target_family)
-        cmake_build(REPO_ROOT, configuration, target, target_family)
+        cmake_build(REPO_ROOT, configuration, targets, target_family)
     elif args.command == "build-fast":
         ensure_workspace(REPO_ROOT)
-        cmake_build(REPO_ROOT, configuration, target, target_family)
+        cmake_build(REPO_ROOT, configuration, targets, target_family)
     elif args.command == "rebuild":
         safe_remove(REPO_ROOT, build_dir(REPO_ROOT, configuration, target_family))
         install(configuration, target_family)
         cmake_configure(REPO_ROOT, configuration, target_family)
-        cmake_build(REPO_ROOT, configuration, target, target_family)
+        cmake_build(REPO_ROOT, configuration, targets, target_family)
     elif args.command == "update":
-        update_workspace(REPO_ROOT)
         install(configuration, target_family, update=True)
         cmake_configure(REPO_ROOT, configuration, target_family)
     elif args.command == "horizon-sync":
         sync_workspace(REPO_ROOT)
-        print(inspect_workspace(REPO_ROOT).summary())
     elif args.command == "clean":
         clean_repo(REPO_ROOT)
     else:
@@ -166,8 +167,10 @@ def create_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="CoronaEngine developer workflow",
         epilog=(
-            "Horizon lock drift: 'horizon-sync' restores the commit pinned by the lock file "
-            "(refused when the workspace is dirty); 'update' moves the lock to the ref tip."
+            "Horizon (.workspace/Horizon) is an ordinary Git clone. Builds only report its state "
+            "and always proceed, including with uncommitted edits; nothing here changes the clone "
+            "unless you ask. The lock file is read once when the clone is created and is otherwise "
+            f"edited by hand: {LOCK_HINT}"
         ),
     )
     parser.add_argument(

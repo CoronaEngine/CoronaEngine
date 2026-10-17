@@ -4,7 +4,7 @@
 //
 // FK —— 纯函数：给定 SkeletonData + AnimationClip + 时间，算出每根骨骼的最终矩阵
 //   final[id] = global_inverse * global(node) * offset
-// 供 P2 的 CPU 蒙皮使用：skinned[v] = Σ wᵢ · (final[idᵢ] · bind[v])。
+// 供 GPU 蒙皮使用：skinned[v] = Σ wᵢ · (final[idᵢ] · bind[v])。
 //
 // IK —— CCD（循环坐标下降）：给定一条链和目标点，反解出链上关节的新 local 旋转，
 //   经 compute_pose 的 local_overrides 注入 FK，叠加在原动画姿态之上。
@@ -21,6 +21,14 @@
 #include "corona/resource/types/scene.h"
 
 namespace Corona::Resource {
+
+/// FootPlant endpoints must be non-root leaves of the imported skeleton hierarchy.
+/// Other IK modes may target internal joints.
+[[nodiscard]] inline bool is_valid_foot_ik_end_node(const SkeletonData& skeleton, int node) {
+    if (node < 0 || static_cast<std::size_t>(node) >= skeleton.nodes.size()) return false;
+    const auto& endpoint = skeleton.nodes[static_cast<std::size_t>(node)];
+    return endpoint.parent >= 0 && endpoint.children.empty();
+}
 
 /// 列主序 4x4 矩阵乘法 C = A * B（下标 col*4+row）。
 [[nodiscard]] std::array<float, 16> mat4_mul(const std::array<float, 16>& a,
@@ -82,6 +90,10 @@ void sample_pose_locals(const SkeletonData& skeleton,
 [[nodiscard]] std::array<float, 3> mat4_translation(const std::array<float, 16>& m);
 
 /// CCD 求解一条 IK 链。
+/// 只修改局部旋转，保留输入 local 的平移和缩放；weight 使用四元数混合，避免骨段缩短。
+/// tolerance 是输出模型空间的距离，与 global_inverse 的导入缩放无关。
+/// 对完全伸直且目标向内共线的链给出确定性弯曲初值（不替代关节约束/pole vector）。
+/// 非有限参数、奇异坐标变换及循环/越界父链不会产生覆盖；迭代次数最多 256。
 /// @param skeleton     骨架（提供 parent 链、bone local）。
 /// @param chain        链定义 + 目标点 + 迭代参数（见 IkChain）。
 /// @param base_locals  每节点的「当前」local（动画采样后），下标对齐 skeleton.nodes。

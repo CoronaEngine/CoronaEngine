@@ -6,6 +6,7 @@
 #include <corona/systems/optics/viewport_gizmo_math.h>
 
 #include <ktm/ktm.h>
+#include <corona/systems/geometry/model_node_state.h>
 
 #include <array>
 #include <chrono>
@@ -55,6 +56,18 @@ struct MeshDevice {
     std::shared_ptr<Corona::Memory::GpuMemToken> tex_mem;
 };
 
+/// 一个共享 MeshDevice 的场景实例。transform 为网格本地空间到 actor 本地空间
+/// 的列主序矩阵；同一个 MeshDevice 可被多个实例引用。
+struct MeshInstanceDevice {
+    std::uint32_t mesh_index = 0;
+    std::uint32_t object_id = 0;
+    std::uint32_t node_index = UINT32_MAX;
+    bool visible = true;
+    std::array<float,3> local_bounds_min{}, local_bounds_max{};
+    ktm::fmat4x4 original_transform{ktm::fmat4x4::from_eye()};
+    ktm::fmat4x4 transform{ktm::fmat4x4::from_eye()};
+};
+
 struct ModelTransform {
     ktm::fvec3 position;
     ktm::fvec3 euler_rotation;
@@ -100,6 +113,14 @@ struct GeometryDevice {
     std::uintptr_t transform_handle{};
     std::uintptr_t model_resource_handle{};
     std::vector<MeshDevice> mesh_handles;
+    std::vector<MeshInstanceDevice> mesh_instances;
+    std::vector<ModelNodes::Node> model_nodes;
+    std::vector<API::ModelNodeOverride> model_node_overrides;
+    std::uint64_t model_node_revision = 0;
+    ModelNodes::Matrix node_instance_prefix=ModelNodes::identity();
+    bool has_node_instance_prefix=false;
+    bool model_node_instances_mapped=false;
+    std::optional<std::array<float,6>> model_node_bounds;
     ktm::fvec3 native_local_correction_offset{0.0f, 0.0f, 0.0f};
     float native_local_correction_scale{1.0f};
     GpuBuildState gpu_build_state{GpuBuildState::Ready};
@@ -116,16 +137,16 @@ struct GeometryDevice {
     // is_skinned：对应 Scene 带骨架（model_id 解析的 Scene::data.skeleton 有值）。
     //   GeometrySystem 在 mesh 构建/上传时探测并置位；非蒙皮几何此字段恒 false，零开销。
     // anim_time：当前播放时间（tick）。每帧由 advance_anim_time 推进并 fmod 自动循环。
-    // skinned_cpu_vertices：每帧 CPU 蒙皮的输出，每个 mesh 一份原始字节，
+    // skinned_cpu_vertices：仅活跃 Vision 相机请求 GPU 蒙皮 LOD0 回读，每个 mesh 一份原始字节，
     //   布局严格等同 Resource::Vertex 数组（pos[3]+normal[3]+uv[2]，32B）。
-    //   这是「单一数据源」：Native 每帧 write_bytes 到 GPU 缓冲；P3 Vision / P4 物理
-    //   后续直接 reinterpret 读取，无需各自重新蒙皮。非蒙皮几何此容器为空。
+    //   Vision 读取该副本；碰撞和光栅顶点缓冲直接使用 GPU 结果，
+    //   不依赖该回读副本重新上传。光栅模式及非蒙皮几何此容器为空。
     bool is_skinned{false};
     float anim_time{0.0f};
     std::vector<std::vector<std::byte>> skinned_cpu_vertices;
 
-    // 蒙皮动态 local AABB（P4）：每帧由 update_skinned_geometry 在蒙皮循环中
-    // 顺手累积所有 mesh 蒙皮顶点的包围盒（模型空间，已含首帧归一化）。
+    // 蒙皮动态 local AABB：每帧合并 GPU 蒙皮包围盒；混合静态子网格时根据完整
+    // 碰撞网格补全包围盒（模型空间，已含首帧归一化）。
     // 物理系统每帧读取它覆盖静态 min_xyz/max_xyz，使碰撞 AABB 跟随当前动画姿态。
     // skinned_aabb_valid=false 表示尚未蒙皮过（首帧前），物理回退静态 AABB。
     bool skinned_aabb_valid{false};
@@ -133,10 +154,20 @@ struct GeometryDevice {
     ktm::fvec3 skinned_aabb_max{0.0f, 0.0f, 0.0f};
 
     // ---- IK（CCD）----
-    // 该蒙皮实例上的 IK 链集合。update_skinned_geometry 每帧在 compute_pose 之后、
-    // 蒙皮之前对 enabled 的链跑 solve_ccd，产出的 local override 注入下一次 compute_pose，
-    // 叠加在动画姿态之上。非蒙皮 / 无 IK 需求时为空，零开销。
+    // 每帧采样动画 local，更新自动目标，然后按顺序求解启用的链。
+    // 最终 local 只做一次 FK 和蒙皮；配置与自动驱动的 runtime 独立保存。
     std::vector<Resource::IkChain> ik_chains;
+    // Increment on configuration replacement; mechanics discards stale snapshot results.
+    std::uint64_t ik_chains_revision{0};
+
+    // 骨骼名 → SkeletonData::nodes 下标缓存。
+    // 首次求值及模型替换时重建，用于解析持久化链的骨骼名称。
+    std::unordered_map<std::string, int> bone_name_to_node_idx;
+    std::uint64_t skeleton_cache_model_id{0};
+
+    // 叶子骨骼名列表（BoneNode::children 为空的节点）。构建 bone_name_to_node_idx
+    // 时同步填充。编辑器也可直接通过资源骨架查询，不依赖首帧动画。
+    std::vector<std::string> leaf_bone_names;
 };
 
 // 物体参与物理模拟的方式。
@@ -367,6 +398,7 @@ struct ActorPickDevice {
     std::uint32_t result_x{0};
     std::uint32_t result_y{0};
     std::uintptr_t actor_handle{0};
+    std::uint32_t node_index{UINT32_MAX};
     bool pending{false};
     bool result_ready{false};
 };
@@ -390,6 +422,7 @@ struct ActorPickCompletion {
     std::uintptr_t actor_handle{};
     std::uint32_t x{0};
     std::uint32_t y{0};
+    std::uint32_t node_index{UINT32_MAX};
 };
 
 struct CameraMoveCommand {

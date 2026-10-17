@@ -1,5 +1,6 @@
 #pragma once
 
+#include <corona/systems/geometry/model_node_state.h>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -16,6 +17,8 @@ namespace Corona {
 class Model;
 
 namespace API {
+struct ModelNodePickResult { std::uintptr_t actor_handle{0}; std::uint32_t node_index{UINT32_MAX}; };
+
 struct GeometryRenderStatus {
     bool observed{false};
     bool ready{false};
@@ -55,6 +58,16 @@ class Geometry {
     /// albedo texture 上传。失败时返回一个所有 handle 为 0 的空 Geometry。
     [[nodiscard]] static Geometry from_image(const std::string& image_path);
 
+    [[nodiscard]] std::vector<ModelNodeState> get_model_nodes() const;
+    /// Node totals of the same model without materializing the node list.  The
+    /// editor scene tree refreshes on the CEF UI thread, where copying thousands
+    /// of node states per actor is not affordable.
+    [[nodiscard]] ModelNodes::Counts get_model_node_counts() const;
+    [[nodiscard]] std::optional<std::array<float,6>> get_model_node_aabb(uint32_t node_index) const;
+    bool set_model_node_state(uint32_t node_index, const ModelNodeState& state);
+    [[nodiscard]] std::vector<ModelNodeOverride> get_model_node_overrides() const;
+    bool set_model_node_overrides(const std::vector<ModelNodeOverride>& overrides);
+
     void set_position(const std::array<float, 3>& pos);
     void set_rotation(const std::array<float, 3>& euler);
     void set_scale(const std::array<float, 3>& size);
@@ -67,6 +80,10 @@ class Geometry {
     /// 获取模型 AABB，返回 {min_x, min_y, min_z, max_x, max_y, max_z}
     [[nodiscard]] std::array<float, 6> get_aabb() const;
 
+    /// 尽力而为的 AABB：不等待被占用的锁，拿不到就返回 nullopt。
+    /// 绘制编辑器、派发输入的线程必须用它——那里的无界等待会冻住整个 UI。
+    [[nodiscard]] std::optional<std::array<float, 6>> try_get_aabb() const;
+
     /// 获取构造时传入的模型文件路径，用于 Actor 身份标识和资源加载/卸载
     [[nodiscard]] const std::filesystem::path& get_model_path() const;
     [[nodiscard]] bool is_valid() const;
@@ -74,6 +91,8 @@ class Geometry {
     [[nodiscard]] std::size_t get_mesh_count() const;
     [[nodiscard]] std::uint64_t get_model_id() const;
     [[nodiscard]] GeometryRenderStatus get_render_status() const;
+    /// Instance geometry storage handle, also used by editor configuration APIs.
+    [[nodiscard]] std::uintptr_t get_handle() const;
 
    private:
     friend class Mechanics;
@@ -84,7 +103,6 @@ class Geometry {
     Geometry() = default;
 
    protected:
-    [[nodiscard]] std::uintptr_t get_handle() const;
     [[nodiscard]] std::uintptr_t get_transform_handle() const;
     [[nodiscard]] std::uintptr_t get_model_resource_handle() const;
 
@@ -350,6 +368,7 @@ class Camera {
     [[nodiscard]] std::array<int, 2> get_size() const;
     void set_viewport_rect(int x, int y, int width, int height);
     [[nodiscard]] std::uintptr_t pick_actor_at_pixel(int x, int y) const;
+    [[nodiscard]] ModelNodePickResult pick_model_node_at_pixel(int x, int y) const;
 
    private:
     friend class Scene;

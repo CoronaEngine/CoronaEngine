@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -140,7 +141,10 @@ private:
     void handle_connect(_ENetPeer* peer, const std::string& remote_id,
                         const std::string& name);
     void handle_disconnect(const PeerInfo& info);
-    void handle_hello(_ENetPeer* peer, const uint8_t* data, size_t len);
+    /// `enet_lock` is poll()'s lock on Impl::enet_mutex: the handler needs it held for
+    /// its own ENet calls, and releases it around the on_connected callback.
+    void handle_hello(_ENetPeer* peer, const uint8_t* data, size_t len,
+                      std::unique_lock<std::recursive_mutex>& enet_lock);
 
     struct Impl;
     std::unique_ptr<Impl> impl_;

@@ -14,18 +14,78 @@
 #include <cmath>
 #include <cstdint>
 #include <functional>
+#include <future>
 #include <limits>
 #include <optional>
 #include <shared_mutex>
+#include <string>
 #include <unordered_map>
 #include <map>
 #include <unordered_set>
 #include <utility>
 #include <vector>
+#include <tuple>
+#include <thread>
+#include <horizon/core/logging.h>
+
+#include "gpu_skinning.h"
+#include "gpu_collision.h"
+#include "gpu_broadphase.h"
+#include "gpu_rigid_integration.h"
+#include "gpu_contact_solver.h"
+#include "gpu_floor_sleep.h"
 
 #include <ktm/ktm.h>
 
 namespace Corona::Systems::MechanicsInternal {
+
+// Preparation owns its pipelines and private warmup buffers. Workers never
+// touch scene data or the slot; the future transfers ownership after all
+// warmup submissions complete and before the first scene dispatch.
+template <class T>
+class PreparedGpuPipeline {
+public:
+    std::packaged_task<void()> prepare(std::string name, void (*warmup)(T&) = nullptr) {
+        if (value_ || pending_.valid() || failure_) return {};
+        std::packaged_task<std::unique_ptr<T>()> task([name = std::move(name), warmup] {
+            const auto start = std::chrono::steady_clock::now();
+            auto value = std::make_unique<T>();
+            if (warmup) warmup(*value);
+            const auto elapsed = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+            CFW_LOG_INFO("Mechanics GPU pipeline '{}' prepared in {:.1f} ms", name, elapsed);
+            return value;
+        });
+        pending_ = task.get_future();
+        return std::packaged_task<void()>([task = std::move(task)]() mutable { task(); });
+    }
+    T& ensure() {
+        if (failure_) std::rethrow_exception(failure_);
+        if (!value_) {
+            GpuPerformance::Scope timing{"pipeline.acquire"};
+            try {
+                value_ = pending_.valid() ? pending_.get() : std::make_unique<T>();
+            } catch (...) {
+                failure_ = std::current_exception();
+                throw;
+            }
+        }
+        return *value_;
+    }
+    bool ready() const {
+        return value_ || (pending_.valid() && pending_.wait_for(std::chrono::seconds(0)) == std::future_status::ready);
+    }
+    explicit operator bool() const noexcept { return bool(value_); }
+    T* operator->() { return &ensure(); }
+    void reset() {
+        pending_ = {};
+        value_.reset();
+        failure_ = {};
+    }
+private:
+    std::unique_ptr<T> value_;
+    std::future<std::unique_ptr<T>> pending_;
+    std::exception_ptr failure_;
+};
 
 // 按分量构造 fvec3（result：输出向量）
 constexpr ktm::fvec3 make_fvec3(float x, float y, float z) {
@@ -44,6 +104,23 @@ constexpr ktm::fvec4 make_fvec4(float x, float y, float z, float w) {
     result2.z = z;       // Z
     result2.w = w;
     return result2;  // 按值传出
+}
+
+inline ktm::fmat4x4 make_fmat4x4_colmajor(const std::array<float, 16>& src) {
+    ktm::fmat4x4 result = ktm::fmat4x4::from_eye();
+    for (int col = 0; col < 4; ++col) {
+        for (int row = 0; row < 4; ++row) {
+            result[col][row] = src[static_cast<std::size_t>(col * 4 + row)];
+        }
+    }
+    return result;
+}
+
+inline GpuCollisionPipeline::Matrix gpu_matrix(const ktm::fmat4x4& matrix) {
+    GpuCollisionPipeline::Matrix result;
+    for (int col = 0; col < 4; ++col)
+        for (int row = 0; row < 4; ++row) result[col * 4 + row] = matrix[col][row];
+    return result;
 }
 
 inline ktm::fvec3 vec3_add(const ktm::fvec3& a, const ktm::fvec3& b) {
@@ -150,17 +227,6 @@ inline void sync_euler_from_orientation_quat(ktm::fquat& q, ktm::fvec3& euler) {
     euler_xyz_from_rot_mat(q.matrix3x3(), euler);  // 由旋转矩阵反解欧拉
 }
 
-// 显式积分四元数导数 dq/dt = 0.5*(0,ω)*q
-inline void integrate_orientation_quat(ktm::fquat& q, const ktm::fvec3& omega_world, float dt) {
-    const ktm::fquat wq = ktm::fquat::real_imag(0.0f, omega_world);  // 纯虚四元数装角速度
-    const ktm::fquat dq = wq * q;                                    // 与 q 相乘得导出
-    q.i += 0.5f * dt * dq.i;                                         // 累加 i 分量变化
-    q.j += 0.5f * dt * dq.j;
-    q.k += 0.5f * dt * dq.k;
-    q.r += 0.5f * dt * dq.r;
-    q = ktm::normalize(q);  // 保持单位四元数
-}
-
 // AABB 在方向 dir 上的极值点（近似接触用）
 inline ktm::fvec3 aabb_support_world(const ktm::fvec3& center, const ktm::fvec3& half,
                                      const ktm::fvec3& dir) {
@@ -203,7 +269,7 @@ struct MechanicsWorldAABB {
     ktm::fmat3x3 rot_body_to_world{};    // 由预测四元数得到的旋转矩阵
     ktm::fvec3 inertia_inv_body{};       // 体坐标 (1/Ix,1/Iy,1/Iz)
     std::uint64_t model_id = 0;          // 对应的模型资源ID（用于碰撞网格查找）
-    bool is_skinned = false;             // 蒙皮物体：碰撞网格由 skinned_collision_cache 提供（每帧刷新顶点）
+    bool is_skinned = false;             // 蒙皮物体：碰撞网格由 skinned_collision_cache 提供（仅拓扑元数据，顶点驻留 GPU）
 };
 
 // 碰撞对哈希（用于 unordered_set 去重）
@@ -243,24 +309,55 @@ struct DeferredIkTargetUpdate {
     std::uintptr_t transform_handle;  // 用于 world→model 坐标变换
     int node_idx;                     // 接触骨骼的 SkeletonData::nodes 下标
     ktm::fvec3 contact_world;         // 世界空间接触点（从 tri_result.contact_point 拷贝）
+    ktm::fvec3 normal{0.0f, 1.0f, 0.0f};
+    std::uint64_t configuration_revision = 0;
 };
 
 // 注意：八叉树实现已迁移到 include/corona/spatial/octree.h，由 GeometrySystem 持有并维护。
 // MechanicsSystem 仅作为消费者使用（宽相候选对生成仍可复用该通用实现）。
 
+inline bool same_transform(const ModelTransform& a, const ModelTransform& b) {
+    for (int axis = 0; axis < 3; ++axis) {
+        if (a.position[axis] != b.position[axis] ||
+            a.euler_rotation[axis] != b.euler_rotation[axis] || a.scale[axis] != b.scale[axis]) return false;
+    }
+    return true;
+}
+
 struct BodyRuntimeState {
-    ktm::fvec3 velocity = make_fvec3(0.0f, 0.0f, 0.0f);          // 线速度 m/s
-    ktm::fvec3 angular_velocity = make_fvec3(0.0f, 0.0f, 0.0f);  // 角速度 rad/s 世界系
     ktm::fquat orientation_quat{};
     bool orientation_initialized = false;
+    // Last accepted input or physics write, never a fresh end-of-step read.
+    // This detects edits through every Transform writer, including scripts/UI.
+    ModelTransform last_transform;
+    std::uintptr_t last_transform_handle = 0;
+    // Velocities and sleep timers are authoritative on GPU across fixed steps.
+    // CPU retains only routing state and explicit timer-reset commands.
     bool sleeping = false;
-    float sleep_timer = 0.0f;
+    bool reset_sleep_timer = false;
+    BodyType body_type = BodyType::Dynamic;
     uint8_t linear_lock = 0;
     uint8_t angular_lock = 0;
     float last_move_callback_time = -kMoveCallbackMinInterval;
     ktm::fvec3 last_move_callback_pos = make_fvec3(1e9f, 1e9f, 1e9f);
-    // E3：上一帧蒙皮世界顶点（供表面速度插值）。仅蒙皮物体填充，非蒙皮物体为空。
-    std::vector<ktm::fvec3> prev_skinned_world_verts;
+
+    bool observe_transform(std::uintptr_t handle, const ModelTransform& transform) {
+        const bool changed = !orientation_initialized || last_transform_handle != handle ||
+                             !same_transform(last_transform, transform);
+        if (!changed) return false;
+        if (!orientation_initialized || last_transform_handle != handle ||
+            last_transform.euler_rotation.x != transform.euler_rotation.x ||
+            last_transform.euler_rotation.y != transform.euler_rotation.y ||
+            last_transform.euler_rotation.z != transform.euler_rotation.z) {
+            orientation_quat = quat_from_model_euler(transform.euler_rotation);
+            orientation_initialized = true;
+        }
+        last_transform = transform;
+        last_transform_handle = handle;
+        sleeping = false;
+        reset_sleep_timer = true;
+        return true;
+    }
 };
 
 struct BodyFrameParams {
@@ -269,6 +366,12 @@ struct BodyFrameParams {
     float restitution = 0.8f;
     BodyType body_type = BodyType::Dynamic;
     std::uintptr_t actor = 0;
+};
+
+struct CachedContactImpulse {
+    ktm::fvec3 normal{}, point{};
+    float normal_impulse{};
+    int triangle_a{-1}, triangle_b{-1};
 };
 
 // ============================================================================
@@ -281,11 +384,15 @@ struct CollisionSubmesh {
     std::uint32_t vertex_count   = 0;  // ≤ 65536，导入期保证
     std::uint32_t triangle_base  = 0;  // 该段首三角形在 triangles 中的下标
     std::uint32_t triangle_count = 0;
+    // Source mesh identity survives skipped/duplicated mesh instances.
+    std::uint32_t source_mesh_index = 0;
+    std::array<float, 16> source_transform{1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1};
+    ktm::fvec3 bind_min{}, bind_max{};
 };
 
 /// 碰撞网格：存储局部空间顶点和三角形索引
 struct CollisionMesh {
-    std::vector<ktm::fvec3> vertices;                     // 局部/世界空间顶点（蒙皮网格每帧刷新）
+    std::vector<ktm::fvec3> vertices;                     // 绑定局部顶点（GPU 持有运行期变形坐标）
     std::vector<std::array<std::uint16_t, 3>> triangles;  // 段内局部 uint16 索引（不跨子网格）
     float min_local_y = 0.0f;                             // 最低点Y（精确地板碰撞）
 
@@ -293,10 +400,12 @@ struct CollisionMesh {
     // 导入期一次性计算：取三个顶点 BoneWeights 中权重最大的 bone_id，
     // 再经 bone_id → node_idx 反查表映射。非蒙皮网格此数组为空。
     // Phase 3（碰撞→IK）靠此字段确定接触三角形归属哪条 IK 链。
+    std::vector<int> vertex_bone_ids; // first incident triangle bone, immutable topology lookup
     std::vector<int> triangle_bone_ids;  // 下标对齐 triangles，-1=无归属骨骼
 
-    std::vector<CollisionSubmesh> submeshes;  // 每个子网格一段（与 Scene meshes 一一对应）
+    std::vector<CollisionSubmesh> submeshes;  // 每个有效 mesh instance 一段，保留 source_mesh_index
     std::uint32_t total_vertex_count = 0;     // 校验用：等于所有段 vertex_count 之和
+    bool requires_skinning = false; // bind geometry alone cannot represent an animated pose
 };
 
 /// 将三角形下标 + 角下标解析为扁平顶点数组下标（uint32，不回绕）
@@ -309,7 +418,7 @@ inline std::uint32_t resolve_vertex(const CollisionMesh& mesh,
     for (const auto& sm : mesh.submeshes) {
         if (tri_idx >= sm.triangle_base && tri_idx < sm.triangle_base + sm.triangle_count) {
             const std::uint16_t local = mesh.triangles[tri_idx][corner];
-            assert(local < static_cast<std::uint16_t>(sm.vertex_count));  // 段内越界检查
+            assert(static_cast<std::uint32_t>(local) < sm.vertex_count);  // 65536 vertices is a valid uint16-indexed segment
             return sm.vertex_base + local;
         }
     }
@@ -333,10 +442,10 @@ struct TriangleContactResult {
 // 碰撞网格加载
 // ============================================================================
 
-/// 从 Resource 层加载最低级 LOD 碰撞网格（静态非蒙皮物体专用）。
+/// 从 Resource 层加载 LOD0 绑定碰撞几何和分段拓扑。
 /// 返回 true 表示成功加载（或已在缓存中）。
 /// 同时把三角索引和骨骼映射写入 static_triangle_index_cache / static_triangle_bone_cache
-/// （供蒙皮物体的每帧实例化路径复用，避免重复解析 Scene）。
+/// （供静态及蒙皮 GPU 碰撞实例复用，避免重复解析 Scene）。
 ///
 /// 此重载**不加任何 ResourceManager 锁**，调用方必须已持有该 model_id 的 Scene 读锁并传入 *handle。
 /// 已持锁的调用方（如 update_skinned_geometry 的 scene_read）必须用此重载：对同一 ResourceEntry 的
@@ -366,10 +475,31 @@ inline bool ensure_collision_mesh(
     }
 
     CollisionMesh mesh;
+    mesh.requires_skinning = scene->data.skeleton.has_value();
     std::vector<std::array<std::uint16_t, 3>> static_tris;
     std::vector<int> static_bone_ids;
 
-    for (std::uint32_t mi = 0; mi < static_cast<std::uint32_t>(scene->data.meshes.size()); ++mi) {
+    struct CollisionDrawItem {
+        std::uint32_t mesh_index = 0;
+        ktm::fmat4x4 transform{ktm::fmat4x4::from_eye()};
+    };
+    std::vector<CollisionDrawItem> draw_items;
+    if (!scene->data.mesh_instances.empty()) {
+        draw_items.reserve(scene->data.mesh_instances.size());
+        for (const auto& instance : scene->data.mesh_instances) {
+            if (instance.mesh_index >= scene->data.meshes.size()) continue;
+            draw_items.push_back({instance.mesh_index,
+                                  make_fmat4x4_colmajor(instance.transform)});
+        }
+    } else {
+        draw_items.reserve(scene->data.meshes.size());
+        for (std::uint32_t mi = 0; mi < static_cast<std::uint32_t>(scene->data.meshes.size()); ++mi) {
+            draw_items.push_back({mi, ktm::fmat4x4::from_eye()});
+        }
+    }
+
+    for (const auto& draw_item : draw_items) {
+        const std::uint32_t mi = draw_item.mesh_index;
         // 始终取 LOD0（get_mesh_vertices/get_mesh_indices），不用 get_mesh_lod
         // 注意：get_mesh_lod(mi, 0) 返回的是 LOD1，scene.h:327 注释有误；LOD0 只通过此接口取得。
         const std::vector<Corona::Resource::Vertex>&   src_verts   = scene->get_mesh_vertices(mi);
@@ -384,15 +514,24 @@ inline bool ensure_collision_mesh(
 
         // 记录分段元数据（段内局部 uint16 索引 + uint32 基址）
         CollisionSubmesh sm;
+        sm.source_mesh_index = mi;
+        for (int col = 0; col < 4; ++col)
+            for (int row = 0; row < 4; ++row)
+                sm.source_transform[col * 4 + row] = draw_item.transform[col][row];
         sm.vertex_base    = static_cast<std::uint32_t>(mesh.vertices.size());
         sm.vertex_count   = static_cast<std::uint32_t>(src_verts.size());
         sm.triangle_base  = static_cast<std::uint32_t>(mesh.triangles.size());
         sm.triangle_count = static_cast<std::uint32_t>(src_indices.size() / 3);
 
-        // 复制顶点（绑定姿态；蒙皮物体运行期会覆盖为蒙皮后坐标）
+        // 复制绑定姿态顶点；运行期变形坐标仅覆盖 GPU buffer。
         for (const auto& v : src_verts) {
+            const ktm::fvec4 local{
+                v.position[0], v.position[1], v.position[2], 1.0f};
+            const ktm::fvec4 transformed = draw_item.transform * local;
             ktm::fvec3 pos;
-            pos.x = v.position[0]; pos.y = v.position[1]; pos.z = v.position[2];
+            pos[0] = transformed[0];
+            pos[1] = transformed[1];
+            pos[2] = transformed[2];
             mesh.vertices.push_back(pos);
         }
 
@@ -426,12 +565,31 @@ inline bool ensure_collision_mesh(
             static_bone_ids.push_back(dominant_node);
         }
 
+        sm.bind_min = sm.bind_max = mesh.vertices[sm.vertex_base];
+        for (std::uint32_t vi = 0; vi < sm.vertex_count; ++vi) {
+            const auto& v = mesh.vertices[sm.vertex_base + vi];
+            for (int axis = 0; axis < 3; ++axis) {
+                sm.bind_min[axis] = std::min(sm.bind_min[axis], v[axis]);
+                sm.bind_max[axis] = std::max(sm.bind_max[axis], v[axis]);
+            }
+        }
         mesh.submeshes.push_back(sm);
     }
 
     if (mesh.vertices.empty() || mesh.triangles.empty()) return false;
 
     mesh.total_vertex_count = static_cast<std::uint32_t>(mesh.vertices.size());
+
+    mesh.vertex_bone_ids.assign(mesh.vertices.size(), -1);
+    for (const auto& sm : mesh.submeshes) {
+        for (std::uint32_t ti = sm.triangle_base; ti < sm.triangle_base + sm.triangle_count; ++ti) {
+            for (int corner = 0; corner < 3; ++corner) {
+                const auto vi = sm.vertex_base + mesh.triangles[ti][corner];
+                if (vi < mesh.vertex_bone_ids.size() && mesh.vertex_bone_ids[vi] < 0)
+                    mesh.vertex_bone_ids[vi] = mesh.triangle_bone_ids[ti];
+            }
+        }
+    }
 
     // 预计算最低点 Y
     mesh.min_local_y = mesh.vertices[0].y;
@@ -832,6 +990,18 @@ inline void triangle_narrowphase(
 // 否则 Impl 里的 triangle_octree_cache 字段无法看到 TriangleOctree 类型。
 #include "mechanics_narrowphase2.h"
 
+namespace Corona::Systems::MechanicsInternal {
+struct FootGroundInstance {
+    std::uintptr_t scene = 0;
+    std::uintptr_t actor = 0;
+    std::uint64_t model_id = 0;
+    bool uses_skin = false;
+    ktm::fmat4x4 model_to_world{};
+    ktm::fmat4x4 world_to_model{};
+    CollisionMesh mesh;
+    TriangleOctree octree;
+};
+} // namespace Corona::Systems::MechanicsInternal
 
 namespace Corona::Systems {
 
@@ -850,41 +1020,59 @@ struct MechanicsSystem::Impl {
     /// 骨骼动画上一次蒙皮的时间戳（诊断用；dt 已由 update() 测量并传入，不再用于计算）。
     std::optional<std::chrono::steady_clock::time_point> last_skin_update_time;
 
+    // Shader compilation and native GPU warmup start at initialization; the
+    // mechanics thread acquires each completed pipeline only when needed.
+    std::unique_ptr<GpuSubmissionBatch> gpu_submission_batch;
+    MechanicsInternal::PreparedGpuPipeline<GpuSkinningPipeline> gpu_skinning;
+    MechanicsInternal::PreparedGpuPipeline<GpuCollisionPipeline> gpu_collision;
+    MechanicsInternal::PreparedGpuPipeline<GpuBroadphasePipeline> gpu_broadphase;
+    MechanicsInternal::PreparedGpuPipeline<GpuRigidIntegrationPipeline> gpu_rigid_integration;
+    MechanicsInternal::PreparedGpuPipeline<GpuContactSolverPipeline> gpu_contact_solver;
+    MechanicsInternal::PreparedGpuPipeline<GpuFloorSleepPipeline> gpu_floor_sleep;
+    // Declared after slots so workers join before those slots are destroyed.
+    std::vector<std::jthread> gpu_preparation_workers;
+    void start_gpu_preparation();
+    std::size_t collision_preparation_cursor{};
+    using GpuMeshIdentity = std::tuple<std::uintptr_t, std::uint64_t, std::size_t, std::size_t>;
+    std::map<GpuMeshIdentity, std::uint64_t> gpu_skinning_keys;
+    std::uint64_t next_gpu_skinning_key = 1;
+
     std::atomic<bool> shutdown_requested{false};
     float global_simulation_time = 0.0f;
 
     std::unordered_map<std::uintptr_t, MechanicsInternal::BodyRuntimeState> bodies;
     std::unordered_map<std::uint64_t, MechanicsInternal::CollisionMesh> collision_mesh_cache;
 
-    // 蒙皮物体的每帧碰撞网格（键：geom_handle，每帧顶点刷新，索引/bone_ids 不变）
+    // Per-instance immutable bind geometry/topology; deformed positions remain on GPU.
     std::unordered_map<std::uintptr_t, MechanicsInternal::CollisionMesh> skinned_collision_cache;
+    std::unordered_map<std::uintptr_t, std::uint64_t> skinned_collision_model_ids;
 
-    // E3：上一帧蒙皮世界顶点（模型空间，键：geom_handle）；用于接触点表面速度插值
-    std::unordered_map<std::uintptr_t, std::vector<ktm::fvec3>> prev_skinned_verts_cache;
 
     // 阶段 2：TriangleOctree 缓存（键：model_id，绑定姿态建一次）
     std::unordered_map<std::uint64_t, MechanicsInternal::TriangleOctree> triangle_octree_cache;
 
-    // 阶段 4：蒙皮物体 TriangleOctree（键：geom_handle，拓扑固定，每子步 refit）
+    // Instance-space ground queries are refreshed independently of simulation_enabled.
+    std::unordered_map<std::uintptr_t, MechanicsInternal::FootGroundInstance> foot_ground_cache;
+    std::unordered_map<std::uintptr_t, std::uintptr_t> ik_geometry_scenes;
+    std::unordered_map<std::uintptr_t, std::uintptr_t> ik_geometry_actors;
+    std::unordered_map<std::uintptr_t, float> ik_scene_floors;
+
+    // 阶段 4：蒙皮物体 TriangleOctree（键：geom_handle，拓扑固定，GPU 每子步 refit）
     std::unordered_map<std::uintptr_t, MechanicsInternal::TriangleOctree> skinned_octree_cache;
 
-    // 阶段 4 F1：上一帧世界变换矩阵（键：transform_handle），供 CCD 的静态物体上帧顶点重建
-    std::unordered_map<std::uintptr_t, ktm::fmat4x4> prev_transform_cache;
 
-    // E2：跨子步累积冲量缓存（warm start 用）
-    // 键：{min(ha,hb), max(ha,hb)} → {accumulated_j, accumulated_jt}
+    // Reuse an impulse only while the contact feature/normal/point still match.
     // std::map 用 std::pair 的默认 operator< 排序，无需自定义 hasher，避免跨命名空间的模板参数解析问题
     std::map<std::pair<std::uintptr_t, std::uintptr_t>,
-             std::pair<float, float>> warm_start_cache;
+             MechanicsInternal::CachedContactImpulse> warm_start_cache;
 
-    // 阶段 4 B2：上一帧世界顶点（键：mechanics handle，供扫掠 refit 使用，不与正向 handle 键冲突）
-    std::unordered_map<std::uintptr_t, std::vector<ktm::fvec3>> prev_world_verts_cache;
 
     // 按 model_id 缓存的静态三角索引和骨骼映射（同一模型所有实例共享，只在首次导入时算一次）
     std::unordered_map<std::uint64_t, std::vector<std::array<std::uint16_t, 3>>> static_triangle_index_cache;
     std::unordered_map<std::uint64_t, std::vector<int>>                          static_triangle_bone_cache;
 
-    // Phase 3：碰撞→IK target 延迟更新队列（帧末在 geometry_storage 锁外执行）
+    // Latest complete fixed-step contact sample. Animation reads without consuming;
+    // update_physics clears it before each new step, including an empty/paused step.
     std::vector<MechanicsInternal::DeferredIkTargetUpdate> deferred_ik_target_updates;
 
     std::unordered_set<std::pair<std::uintptr_t, std::uintptr_t>, MechanicsInternal::PairHash> prev_active_collisions;
@@ -895,6 +1083,18 @@ struct MechanicsSystem::Impl {
     }
 
     void clear_runtime_state() {
+        for (auto& worker : gpu_preparation_workers) worker.request_stop();
+        gpu_preparation_workers.clear();
+        collision_preparation_cursor = 0;
+        gpu_submission_batch.reset();
+        gpu_floor_sleep.reset();
+        gpu_contact_solver.reset();
+        gpu_rigid_integration.reset();
+        gpu_broadphase.reset();
+        gpu_collision.reset();
+        gpu_skinning.reset();
+        gpu_skinning_keys.clear();
+        next_gpu_skinning_key = 1;
         deferred_move_callbacks.clear();
         deferred_collision_callbacks.clear();
         deferred_ik_target_updates.clear();
@@ -902,11 +1102,13 @@ struct MechanicsSystem::Impl {
         bodies.clear();
         collision_mesh_cache.clear();
         skinned_collision_cache.clear();
-        prev_skinned_verts_cache.clear();
+        skinned_collision_model_ids.clear();
         triangle_octree_cache.clear();
+        foot_ground_cache.clear();
+        ik_geometry_scenes.clear();
+        ik_geometry_actors.clear();
+        ik_scene_floors.clear();
         skinned_octree_cache.clear();
-        prev_transform_cache.clear();
-        prev_world_verts_cache.clear();
         warm_start_cache.clear();          // E2 跨子步 warm start
         global_simulation_time = 0.0f;
         time_accumulator = 0.0f;

@@ -39,9 +39,9 @@ struct Vertex {
 /// 每顶点骨骼影响上限（与着色/教程一致）
 constexpr int MAX_BONE_INFLUENCE = 4;
 
-/// 单顶点的骨骼权重（仅 CPU 端，不上传 GPU）。
-/// 与 MeshData::vertices 等长并行存储；CPU 蒙皮时读取，
-/// 蒙皮输出仍是标准 32 字节 Vertex，故 GPU 布局不变。
+/// 单顶点的骨骼权重，与 MeshData::vertices 等长并行存储。
+/// GPU 蒙皮将其打包为骨骼索引和权重缓冲，输入缓存失效时重新上传。
+/// 蒙皮输出仍是标准 32 字节 Vertex，渲染顶点布局不变。
 struct BoneWeights {
     std::array<std::int32_t, MAX_BONE_INFLUENCE> ids{-1, -1, -1, -1};
     std::array<float, MAX_BONE_INFLUENCE> weights{0.0f, 0.0f, 0.0f, 0.0f};
@@ -101,6 +101,22 @@ struct MeshData {
     [[nodiscard]] bool is_skinned() const { return !bone_weights.empty(); }
 };
 
+/// 共享网格实例：mesh_index 指向 SceneData::meshes 中的唯一网格资产，
+/// transform 为该资产本地空间到场景空间的列主序矩阵（col*4 + row）。
+///
+/// 同一个 MeshData 可以被多个 MeshInstanceData 引用；节点只拥有实例变换，
+/// 不再为每个引用复制顶点/索引数据。
+struct MeshInstanceData {
+    std::uint32_t mesh_index = InvalidIndex;
+    std::uint32_t node_index = InvalidIndex;
+    std::array<float, 16> transform{
+        1.0f, 0.0f, 0.0f, 0.0f,
+        0.0f, 1.0f, 0.0f, 0.0f,
+        0.0f, 0.0f, 1.0f, 0.0f,
+        0.0f, 0.0f, 0.0f, 1.0f};
+    std::uint32_t object_id = InvalidIndex;
+};
+
 /// LOD 生成配置
 struct LODGenerationOptions {
     bool enabled = false;  // 是否生成 LOD
@@ -131,6 +147,8 @@ struct LODGenerationOptions {
 struct AssimpImportOptions {
     bool simplify_mesh = true;           // 是否启用网格简化
     float simplification_error = 0.01f;  // 简化误差阈值
+    // 静态网格使用共享 MeshData + 每节点 MeshInstanceData；蒙皮网格仍走旧路径。
+    bool share_static_mesh_instances = true;
     LODGenerationOptions lod_options;    // LOD 生成配置
     ImageImportOptions image_options;    // 纹理导入选项
 };
@@ -187,11 +205,15 @@ struct CameraData {
 
 struct NodeData {
     Transform transform;
+    std::int32_t parent_index = -1;
+    std::array<float,16> local_matrix{1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1};
+    bool has_local_matrix = false;
 
     NodeData* parent = nullptr;
     std::vector<NodeData*> children;
 
     std::uint32_t mesh_index = InvalidIndex;
+    std::vector<std::uint32_t> mesh_instance_indices;
     std::uint32_t light_index = InvalidIndex;
     std::uint32_t camera_index = InvalidIndex;
 
@@ -252,31 +274,66 @@ struct SkeletonData {
 /// 其末端尽量够到 target（模型空间）。求解产出被改写关节的新 local，
 /// 经 compute_pose 的 local_overrides 注入 FK，叠加在原动画姿态之上。
 struct IkChain {
+    // 链的语义类型，影响 contact_normal_offset 默认值与碰撞入队行为。
+    // Contact   ：通用碰撞反馈（手臂/肢体碰墙），目标推离表面。
+    // FootPlant ：脚踩地，目标贴地面（offset=0），快速激活慢速衰减。
+    // LookAt    ：头/眼朝向跟随，由外部 API 直接写入 target，不走碰撞通路。
+    // WeaponAim ：武器挥向，与 LookAt 逻辑相同，末端骨骼为手腕。
+    enum class Mode : uint8_t { Contact, FootPlant, LookAt, WeaponAim };
+
+    std::string id;                           // Stable per-instance configuration identity (editor/API).
+    std::string end_bone_name;                // Persisted name; resolved after asynchronous model import.
     int end_node = -1;                        // 末端骨骼节点下标（SkeletonData::nodes）
     int chain_length = 2;                     // 参与求解的关节数（含末端，沿 parent 上溯）
     std::array<float, 3> target{0, 0, 0};     // 目标点（模型空间，与蒙皮网格同空间；solve_ccd 内部会
                                               // 用 inverse(global_inverse) 变换到节点空间求解）
-    float weight = 1.0f;                      // [0,1]：IK 结果与原动画姿态的混合权重
+    float weight = 1.0f;                      // User-controlled maximum influence; never changed by contact/probe.
     int max_iterations = 10;                  // CCD 最大迭代轮数
-    float tolerance = 1e-3f;                  // 末端-目标距离收敛阈值
+    float tolerance = 1e-3f;                  // End-target convergence distance in output model space.
     float damping = 1.0f;                     // [0,1]：每步旋转的衰减系数，<1 压抖动
-    bool enabled = false;                     // 是否参与求解
+    bool enabled = false;                     // User permission; automatic activation lives in runtime.
+    Mode mode = Mode::Contact;                // 链语义类型
 
-    // Phase 3 — 碰撞驱动 IK：
-    // contact_driven=true 表示本链的 target/weight 由碰撞系统写入（而非脚本/编辑器固定）。
-    // 每帧 update_skinned_geometry 对 contact_driven=true 且 enabled=true 的链把
-    // weight 乘以 (1 - contact_weight_decay * dt)，降到 0 时 enabled=false，
-    // 使碰撞结束后手臂/肢体平滑归回原动画，不会冻住。
-    // contact_driven=false（默认）时 weight 和 enabled 由外部完全控制，行为与旧版相同。
+    // Contact uses collision feedback when true. FootPlant always uses ground queries.
+    // Automatic drivers update runtime only, once per animation frame; configuration
+    // target/weight/enabled remain owned by the caller.
     bool contact_driven = false;              // true=碰撞系统驱动；false=脚本/编辑器控制
-    float contact_weight_decay = 2.0f;        // 碰撞结束后 weight 每秒衰减速率（默认 2s 归零）
+    float contact_weight_decay = 2.0f;        // 碰撞结束后 weight 每秒衰减速率（默认 0.5s 归零）
+
+    // 碰撞接触点沿法线方向的偏移量（米）。
+    // 正值把目标推离接触面（通用碰撞反弹）；0 = 目标贴面（FootPlant）；负值嵌入表面。
+    // register_foot_plant_chain 自动设为 0.0f；通用 Contact 链默认 +0.03f。
+    float contact_normal_offset = 0.03f;
+
+    // weight 激活时的上升速率（每秒增量）。0 表示与 contact_weight_decay 相同。
+    // FootPlant 建议 8.0f（约 0.13s 升满）；Contact 链通常与衰减速率一致即可。
+    float contact_weight_rise = 0.0f;
+
+    float probe_max_drop = 0.5f;               // World-space ground search depth.
+    float foot_height = 0.0f;                  // End-node height above the support surface.
+    float plant_threshold = 0.08f;            // Begin support only near the surface, not during a high swing.
+
+    struct RuntimeState {
+        bool has_target = false;
+        bool grounded = false;
+        bool releasing = false; // Finish fading the old support before acquiring another anchor.
+        float weight = 0.0f;                  // Activation [0,1], multiplied by configuration weight.
+        std::array<float, 3> target{0, 0, 0};  // Valid output-model-space target.
+        std::array<float, 3> normal{0, 1, 0};
+        std::uintptr_t ground_handle = 0;     // 0 denotes the scene's infinite floor.
+        std::array<float, 3> anchor_local{0, 0, 0};
+    } runtime;
 
     // 预留：每关节角度约束（首版不实现，需要时再启用）。
     // std::vector<std::array<float,2>> angle_limits;  // 每关节 [min,max]
 };
 
 struct SceneData {
+    std::array<float,16> node_instance_prefix{1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1};
+    bool has_node_instance_prefix=false;
+    // 唯一网格资产。共享实例通过 MeshInstanceData::mesh_index 引用这里的数据。
     std::vector<MeshData> meshes;
+    std::vector<MeshInstanceData> mesh_instances;
     std::vector<MaterialData> materials;
     std::vector<LightData> lights;
     std::vector<CameraData> cameras;
@@ -315,6 +372,7 @@ class Scene : public IResource {
         }
     }
     std::uint32_t add_mesh(MeshData&& mesh);
+    std::uint32_t add_mesh_instance(MeshInstanceData instance);
 
     // 修改：返回底层容器的常量引用（零拷贝）
     [[nodiscard]] const std::vector<Vertex>& get_mesh_vertices(std::uint32_t mesh_idx) const;
@@ -330,7 +388,7 @@ class Scene : public IResource {
     /// 计算整个场景所有 mesh 合并后的 AABB 包围盒
     [[nodiscard]] AABB get_scene_aabb() const;
 
-    /// 是否为蒙皮场景（已导入骨架数据）。运行时据此决定是否走 CPU 蒙皮路径。
+    /// 是否为蒙皮场景（已导入骨架数据）。运行时据此调度 GPU 蒙皮。
     [[nodiscard]] bool is_skinned() const { return data.skeleton.has_value(); }
 };
 

@@ -8,7 +8,8 @@
       @close="closeFloat"
     />
 
-    <div v-if="loading" class="object-empty">正在读取对象属性…</div>
+    <div v-if="modelNodeSelection" class="object-empty"><strong>已选择模型内部节点</strong><span>{{ modelNodeSelection.actorName }} · 节点 {{ modelNodeSelection.nodeIndex }}。请在场景管理中的局部变换面板编辑节点。</span></div>
+    <div v-else-if="loading" class="object-empty">正在读取对象属性…</div>
     <div v-else-if="!selectedActorName" class="object-empty">
       <strong>还没有选中对象</strong>
       <span>在 3D 视口或场景管理中选择一个模型后，这里会显示可调整的属性。</span>
@@ -109,6 +110,123 @@
         </div>
       </section>
 
+      <!-- IK 配置与运行状态从当前对象读取。 -->
+      <section
+        v-if="actor.loadStatus === 'loaded'"
+        class="property-section property-section-collapsible"
+      >
+        <button
+          type="button"
+          class="section-toggle"
+          :aria-expanded="!collapsedSections.ik"
+          @click="togglePropertySection('ik')"
+        >
+          <span>IK 测试</span>
+          <span class="section-chevron" :class="{ expanded: !collapsedSections.ik }">&#8964;</span>
+        </button>
+        <div v-if="!collapsedSections.ik" class="section-collapsible-body ik-body">
+
+          <button type="button" class="ik-refresh-btn" :disabled="ikState.loading || ikState.saving" @click="refreshSkeletonLeaves">刷新配置与状态</button>
+          <p v-if="ikState.loading" class="ik-hint">正在读取骨骼和 IK 配置…</p>
+          <template v-else-if="!ikState.ready">
+            <p class="ik-hint ik-hint-warning">IK 数据尚未就绪，请刷新后重试。</p>
+          </template>
+          <template v-else-if="!ikState.isSkinned">
+            <p class="ik-hint ik-hint-warning">此模型没有可用骨架。</p>
+          </template>
+
+          <template v-else>
+            <p class="ik-hint">FootPlant 只能选择骨架叶子节点。链长包含末端，沿父节点层级向上计算；请按模型骨架设置。贴地目标由系统自动查询。</p>
+            <p class="ik-hint">{{ ikState.saving ? '正在应用配置…' : '状态为上次读取结果，可刷新查看。' }}</p>
+
+            <div
+              v-for="(foot, index) in ikState.feet"
+              :key="foot.id"
+              class="ik-foot-card"
+            >
+              <div class="ik-foot-header">
+                <span class="ik-foot-label">Foot {{ index + 1 }}</span>
+                <div class="ik-foot-header-right">
+                  <label class="ik-switch">
+                    <input v-model="foot.enabled" type="checkbox" @change="applyIkChains" />
+                    <span>{{ foot.enabled ? '启用' : '禁用' }}</span>
+                  </label>
+                  <button type="button" class="ik-remove-btn" @click="removeFoot(index)">✕</button>
+                </div>
+              </div>
+
+              <div class="property-row ik-row ik-bone-row">
+                <label>末端骨骼</label>
+                <IkBoneSelect
+                  v-model="foot.boneName"
+                  :options="ikBoneOptions(foot, ikState)"
+                  :invalid="Boolean(ikBoneError(foot, ikState))"
+                  @change="applyIkChains"
+                />
+              </div>
+              <p v-if="ikBoneError(foot, ikState)" class="property-error">{{ ikBoneError(foot, ikState) }}</p>
+
+              <div class="property-row ik-row">
+                <label>IK 模式</label>
+                <select v-model="foot.mode" @change="applyIkChains">
+                  <option value="contact">Contact（通用碰撞）</option>
+                  <option value="foot_plant">FootPlant（贴地）</option>
+                  <option value="look_at">LookAt（位置追踪）</option>
+                  <option value="weapon_aim">WeaponAim（位置追踪）</option>
+                </select>
+              </div>
+
+              <div class="property-row ik-row">
+                <label>链长</label>
+                <input v-model.number="foot.chainLength" type="number" min="2" max="64" step="1" @change="applyIkChains" />
+              </div>
+
+              <div class="property-row ik-row">
+                <label>混合上限</label>
+                <input v-model.number="foot.weight" type="number" min="0" max="1" step="0.05" @change="applyIkChains" />
+              </div>
+
+              <template v-if="foot.mode === 'foot_plant'">
+                <div class="property-row ik-row">
+                  <label>向下探测距离</label>
+                  <input v-model.number="foot.probeMaxDrop" type="number" min="0" max="100" step="0.05" @change="applyIkChains" />
+                </div>
+                <div class="property-row ik-row">
+                  <label>足底离地高度</label>
+                  <input v-model.number="foot.footHeight" type="number" min="0" max="10" step="0.01" @change="applyIkChains" />
+                </div>
+              </template>
+
+              <div v-if="!isAutomaticIkFoot(foot)" class="ik-target-group">
+                <span class="ik-target-label">目标点（模型空间）</span>
+                <div class="ik-target-inputs">
+                  <label class="axis-x"><b>X</b><input v-model.number="foot.targetX" type="number" step="0.01" @change="applyIkChains" /></label>
+                  <label class="axis-y"><b>Y</b><input v-model.number="foot.targetY" type="number" step="0.01" @change="applyIkChains" /></label>
+                  <label class="axis-z"><b>Z</b><input v-model.number="foot.targetZ" type="number" step="0.01" @change="applyIkChains" /></label>
+                </div>
+              </div>
+
+              <p class="ik-hint">运行状态：{{ ikFootStatus(foot) }}<template v-if="isAutomaticIkFoot(foot)"> · 激活权重 {{ Number(foot.runtime?.weight ?? 0).toFixed(3) }}</template></p>
+              <p v-if="isAutomaticIkFoot(foot) && foot.runtime?.has_target" class="ik-hint">模型空间目标：{{ (foot.runtime.target ?? []).map(value => Number(value).toFixed(3)).join(', ') }}</p>
+
+              <div class="property-row ik-row">
+                <label>最大迭代</label>
+                <input v-model.number="foot.maxIterations" type="number" min="1" max="128" step="1" @change="applyIkChains" />
+              </div>
+
+              <div class="property-row ik-row">
+                <label>阻尼</label>
+                <input v-model.number="foot.damping" type="number" min="0" max="1" step="0.05" @change="applyIkChains" />
+              </div>
+            </div>
+
+            <button type="button" class="ik-add-btn" @click="addFoot">+ 添加 Foot</button>
+          </template>
+
+          <p v-if="ikState.error" class="property-error">{{ ikState.error }}</p>
+        </div>
+      </section>
+
       <section
         v-if="actor.loadStatus === 'loaded'"
         class="property-section property-section-collapsible"
@@ -164,13 +282,17 @@
 
 <script setup>
 import { computed, onMounted, onUnmounted, reactive, ref } from 'vue';
+import { pickedNodeIdentity } from '@/utils/modelHierarchy.js';
+import { coronaEventBus } from '@/utils/eventBus.js';
 import DockTitleBar from '@/components/ui/DockTitleBar.vue';
+import IkBoneSelect from '@/components/ui/IkBoneSelect.vue';
 import { useDockPanel } from '@/composables/useDockPanel.js';
 import { useErrorHandler } from '@/composables/useErrorHandler.js';
 import { editorApi } from '@/api/editorApi.js';
 import { DEFAULT_SCENE_NAME } from '@/utils/constants.js';
 import { getActorContext } from '@/blockly/composables/useActorContext.js';
 import { cabbageContextService } from '@/services/cabbageAssistantContextService.js';
+import { createIkEditorController, createIkEditorState, makeIkFoot, isAutomaticIkFoot, ikFootStatus, ikBoneOptions, ikBoneError } from '@/utils/ikEditorController.js';
 
 const { closePanel, isDocked } = useDockPanel();
 const { error: logError } = useErrorHandler('Object');
@@ -178,6 +300,7 @@ const axes = ['x', 'y', 'z'];
 const collapsedSections = reactive({
   transform: true,
   physics: true,
+  ik: true,
 });
 
 function togglePropertySection(section) {
@@ -208,8 +331,31 @@ function guidanceKeyForTransform(groupKey, axis) {
 
 const selectedSceneName = ref(DEFAULT_SCENE_NAME);
 const selectedActorName = ref('');
+const modelNodeSelection = ref(coronaEventBus.modelNodeSelection || null);
+const handleModelNodeSelection = (identity) => { modelNodeSelection.value = identity; };
 const loading = ref(false);
 const saving = ref(false);
+
+// The controller binds reads and serialized writes to one actor selection.
+const ikState = reactive(createIkEditorState());
+const ikController = createIkEditorController(editorApi.sceneTools, ikState);
+
+function addFoot() {
+  ikState.feet.push(makeIkFoot());
+}
+
+function removeFoot(index) {
+  ikState.feet.splice(index, 1);
+  void applyIkChains();
+}
+
+async function refreshSkeletonLeaves() {
+  await ikController.refresh();
+}
+
+async function applyIkChains() {
+  await ikController.apply();
+}
 const aliasDraft = ref('');
 const aliasSaving = ref(false);
 const aliasError = ref('');
@@ -263,8 +409,8 @@ const normalizeBodyType = (value) => {
   const candidate = String(value ?? '').trim().toLowerCase();
   if (['kinematic'].includes(candidate)) return 'kinematic';
   if (['static'].includes(candidate)) return 'static';
-  if (['phantom'].includes(candidate)) return 'phantom';
-  return 'dynamic';
+  if (['dynamic'].includes(candidate)) return 'dynamic';
+  return 'phantom';
 };
 const readFollowCamera = (data) => data?.render_space === 'ui' || data?.follow_camera === true || data?.follow_camera === 1 || data?.follow_camera === 'true' || data?.follow_camera === '1';
 
@@ -307,6 +453,7 @@ async function loadActor(sceneName, actorName) {
   loading.value = true;
   selectedSceneName.value = sceneName;
   selectedActorName.value = actorName;
+  ikController.clear();
   try {
     const data = unwrap(await editorApi.scene.getActor(sceneName, actorName));
     if (sequence !== loadSequence || selectedActorName.value !== actorName) return;
@@ -339,6 +486,7 @@ async function loadActor(sceneName, actorName) {
     aliasDraft.value = actor.name;
     aliasError.value = '';
     syncViewportTransformBaseline();
+    void ikController.select(sceneName, actorName);
   } catch (error) {
     if (sequence === loadSequence) logError('加载对象数据失败', error);
   } finally {
@@ -354,6 +502,7 @@ function resetAlias() {
 async function commitAlias() {
   const nextName = aliasDraft.value.trim();
   const currentName = selectedActorName.value;
+  const currentScene = selectedSceneName.value;
   if (!nextName || !currentName || aliasSaving.value) {
     if (!nextName) aliasError.value = '名称不能为空';
     return;
@@ -362,12 +511,14 @@ async function commitAlias() {
   aliasSaving.value = true;
   aliasError.value = '';
   try {
-    const result = unwrap(await editorApi.sceneTools.renameActor(selectedSceneName.value, currentName, nextName));
+    const result = unwrap(await editorApi.sceneTools.renameActor(currentScene, currentName, nextName));
+    if (selectedActorName.value !== currentName || selectedSceneName.value !== currentScene) return;
     if (result?.status === 'error') throw new Error(result.message || '修改名称失败');
     const savedName = String(result?.actor?.name || result?.new_name || nextName);
     selectedActorName.value = savedName;
     actor.name = savedName;
     aliasDraft.value = savedName;
+    void ikController.select(currentScene, savedName);
   } catch (error) {
     aliasError.value = error?.message || '修改名称失败';
     aliasDraft.value = actor.name;
@@ -664,10 +815,17 @@ async function saveActor() {
 }
 
 function handleSelection(payload = {}) {
+  modelNodeSelection.value = pickedNodeIdentity(payload);
+  coronaEventBus.modelNodeSelection = modelNodeSelection.value;
+  coronaEventBus.emit('model-node-selection', modelNodeSelection.value);
   const type = String(payload.actor_type || payload.type || '');
   const sceneName = String(payload.scene || selectedSceneName.value || DEFAULT_SCENE_NAME);
   const actorName = String(payload.actor || '');
+  if (modelNodeSelection.value && modelNodeSelection.value.actorName !== actorName) { modelNodeSelection.value = null; coronaEventBus.modelNodeSelection = null; }
   if (type === 'scene' || !actorName) {
+    loadSequence += 1;
+    loading.value = false;
+    ikController.clear();
     selectedSceneName.value = sceneName;
     selectedActorName.value = '';
     actor.name = '';
@@ -731,6 +889,7 @@ function closeFloat() {
 }
 
 onMounted(async () => {
+  coronaEventBus.on('model-node-selection', handleModelNodeSelection);
   // Actor selection is stored before this panel opens. Read it without invoking
   // MainView.on_init, which would reinitialize the scene and main camera.
   const actorContext = getActorContext();
@@ -744,7 +903,9 @@ onMounted(async () => {
 });
 
 onUnmounted(() => {
+  coronaEventBus.off('model-node-selection', handleModelNodeSelection);
   loadSequence += 1;
+  ikController.clear();
   for (const timer of updateTimers.values()) clearTimeout(timer);
   updateTimers.clear();
   pendingTransformUpdates.clear();
@@ -830,4 +991,33 @@ input:focus,select:focus { border-color:#D8B86C; box-shadow:0 0 0 1px rgba(216,1
 .lock-row { display:flex; align-items:center; gap:10px; margin-top:9px; color:#b9ad8f; font-size:10px; }
 .lock-row>span { min-width:64px; }
 .lock-row label { display:flex; align-items:center; gap:3px; }
+
+/* ---- IK 测试面板 ---- */
+.ik-body { padding:0 10px 10px; }
+.ik-hint { margin:8px 0 6px; color:#8a8270; font-size:10px; line-height:1.5; }
+.ik-foot-card { margin-bottom:8px; padding:8px 9px; border:1px solid rgba(216,184,108,.18); border-radius:6px; background:#0f0e0a; }
+.ik-foot-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:6px; }
+.ik-foot-label { color:#d6b66b; font-size:10px; font-weight:700; text-transform:uppercase; }
+.ik-foot-header-right { display:flex; align-items:center; gap:6px; }
+.ik-switch { display:flex; align-items:center; gap:4px; color:#b9ad8f; font-size:10px; cursor:pointer; }
+.ik-switch input { accent-color:#d8b86c; }
+.ik-remove-btn { border:1px solid rgba(216,184,108,.22); border-radius:4px; background:transparent; color:#9ca3af; padding:2px 6px; font-size:10px; cursor:pointer; transition:color .15s,border-color .15s; }
+.ik-remove-btn:hover:not(:disabled) { color:#f87171; border-color:#f87171; }
+.ik-remove-btn:disabled { opacity:.35; cursor:not-allowed; }
+.ik-row { margin-top:6px; grid-template-columns:72px minmax(0,1fr); }
+.ik-bone-row { align-items: start; }
+.ik-bone-row > label { padding-top: 5px; }
+.ik-row label { color:#b9ad8f; font-size:10px; }
+.ik-row select { min-width:0; width:100%; border:1px solid rgba(216,184,108,.22); border-radius:4px; background:#0f0e0a; color:#f2ead5; padding:5px 6px; font-size:11px; outline:none; }
+.ik-row select:focus { border-color:#D8B86C; box-shadow:0 0 0 1px rgba(216,184,108,.18); }
+.ik-target-group { margin-top:7px; }
+.ik-target-label { display:block; color:#b9ad8f; font-size:10px; margin-bottom:4px; }
+.ik-target-inputs { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:5px; }
+.ik-target-inputs label { display:grid; grid-template-columns:12px minmax(0,1fr); align-items:center; gap:3px; }
+.ik-target-inputs b { font-size:9px; }
+.ik-add-btn { margin-top:8px; width:100%; border:1px dashed rgba(216,184,108,.35); border-radius:5px; background:transparent; color:#d6b66b; padding:6px 0; font-size:11px; cursor:pointer; transition:background .15s,border-color .15s; }
+.ik-add-btn:hover { background:rgba(216,184,108,.08); border-color:#d8b86c; }
+.ik-hint-warning { color:#f6c90e; }
+.ik-refresh-btn { margin-top:4px; width:100%; border:1px solid rgba(216,184,108,.35); border-radius:5px; background:rgba(216,184,108,.08); color:#d6b66b; padding:5px 0; font-size:11px; cursor:pointer; transition:background .15s; }
+.ik-refresh-btn:hover { background:rgba(216,184,108,.18); }
 </style>

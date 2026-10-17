@@ -322,7 +322,9 @@ void collect_assimp_textures(const fs::path& source,
     // 直接打不开文件。引擎真正的加载器（SceneParser::parse_assimp）传的是 UTF-8，
     // 这里必须保持一致，否则"引擎能加载但打包器说文件无效"。
     const auto source_utf8 = path_utf8(source);
-    const auto* scene = importer.ReadFile(source_utf8, aiProcess_ValidateDataStructure);
+    // 依赖扫描只读取材质引用，不做结构校验；否则合法 KHR_materials_specular
+    // 组合会被 Assimp 5.4.3 的校验误报，导致外部贴图依赖漏收集。
+    const auto* scene = importer.ReadFile(source_utf8, 0);
     if (!scene) {
         // 这里只负责"收集贴图依赖"，不是权威的模型校验。引擎加载器用的是自定义
         // UnicodeIOSystem + 完整 postprocess 流程，能读它读不了的文件；把解析失败

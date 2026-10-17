@@ -71,8 +71,12 @@ export const appService = {
     openEditorWindow({ cmd: 'toggleMaximizeThisCameraView', sceneId, cameraId }),
   cycleThisCameraViewWindowMode: (sceneId = '', cameraId = '') =>
     openEditorWindow({ cmd: 'cycleThisCameraViewWindowMode', sceneId, cameraId }),
+  // Routes through the window session like its sibling camera-view toggles
+  // (toggleMaximizeThisCameraView / cycleThisCameraViewWindowMode). Sending it straight to
+  // Bridge.callDockCommand let a retired surface queue window commands against the next
+  // creative world, which the surface could never answer -> a 30s UI stall.
   toggleBorderlessThisCameraView: (sceneId = '', cameraId = '') =>
-    Bridge.callDockCommand({ cmd: 'toggleBorderlessThisCameraView', sceneId, cameraId }),
+    openEditorWindow({ cmd: 'toggleBorderlessThisCameraView', sceneId, cameraId }),
   toggleMainWindowBorderless: () =>
     Bridge.callDockCommand({ cmd: 'toggleMainWindowBorderless' }),
   resizeThisCameraView: (width, height, sceneId = '', cameraId = '') =>

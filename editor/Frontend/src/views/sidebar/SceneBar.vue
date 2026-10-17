@@ -1,5 +1,7 @@
 <template>
-  <div class="scene-tools-panel rounded-lg overflow-hidden flex flex-col flex-1 min-h-0 h-full w-full relative">
+  <div
+    class="scene-tools-panel rounded-lg overflow-hidden flex flex-col flex-1 min-h-0 h-full w-full relative"
+  >
     <DockTitleBar
       v-if="!isDocked"
       title="场景管理"
@@ -86,7 +88,9 @@
         <div v-else class="px-2 py-1 text-[10px] text-[#909090] border-b border-[#1a1a1a]/30">
           <span v-if="searchIndexing" class="text-[#d8b86c]">正在准备资源索引...</span>
           <template v-else>
-            找到 <span class="text-[#d8b86c] font-bold">{{ searchResults.length }}</span> 项
+            找到
+            <span class="text-[#d8b86c] font-bold">{{ searchResults.length }}</span>
+            项
             <span v-if="searchLastQuery" class="ml-2">query=“{{ searchLastQuery }}”</span>
             <span v-if="searchElapsedMs" class="ml-2 text-[#666]">{{ searchElapsedMs }}ms</span>
           </template>
@@ -110,11 +114,7 @@
           <span class="text-[10px] text-[#666] mr-1">
             {{ item.type_label }}
           </span>
-          <span
-            v-if="item.score != null"
-            class="text-[10px] text-[#d8b86c] mr-1"
-            :title="'相似度'"
-          >
+          <span v-if="item.score != null" class="text-[10px] text-[#d8b86c] mr-1" :title="'相似度'">
             {{ Math.round(item.score * 100) }}%
           </span>
           <button
@@ -137,403 +137,420 @@
       <div v-show="!RESOURCE_SEARCH_ENABLED || !searchActive" class="flex flex-col flex-1 min-h-0">
         <div class="flex items-center gap-2 p-2 bg-[#1a1a1a]/50 border-b border-[#333]"></div>
 
-      <!-- 工具栏 -->
-      <div class="flex items-center gap-1 px-2 py-1.5 bg-[#3c3c3c]/60 border-b border-[#1a1a1a]/30">
-        <!-- 导入下拉 -->
-        <div class="relative" data-guidance="scene-import-model">
+        <!-- 工具栏 -->
+        <div
+          class="flex items-center gap-1 px-2 py-1.5 bg-[#3c3c3c]/60 border-b border-[#1a1a1a]/30"
+        >
+          <!-- 导入下拉 -->
+          <div class="relative" data-guidance="scene-import-model">
+            <button
+              class="p-1.5 hover:bg-[#545454] rounded text-[#e0e0e0] text-xs flex items-center gap-1"
+              title="导入"
+              @click.stop="ToggleModelDropdown"
+            >
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="2"
+                  d="M12 4v16m8-8H4"
+                ></path>
+              </svg>
+              <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="2"
+                  d="M19 9l-7 7-7-7"
+                ></path>
+              </svg>
+            </button>
+            <div
+              v-if="ShowModelDropdown"
+              v-click-outside="CloseModelDropdown"
+              class="absolute z-20 mt-1 w-32 bg-[#3c3c3c] rounded shadow-lg border border-[#1a1a1a]"
+            >
+              <button
+                class="block w-full px-3 py-1.5 text-xs text-[#e0e0e0] hover:bg-[#545454] text-left"
+                @click.stop="HandleFileImport"
+              >
+                📦 模型
+              </button>
+              <button
+                class="block w-full px-3 py-1.5 text-xs text-[#e0e0e0] hover:bg-[#545454] text-left"
+                @click.stop="HandleActorImport"
+              >
+                👤 单位
+              </button>
+              <button
+                class="block w-full px-3 py-1.5 text-xs text-[#e0e0e0] hover:bg-[#545454] text-left"
+                @click.stop="HandleSceneImport"
+              >
+                🎬 场景
+              </button>
+              <button
+                class="block w-full px-3 py-1.5 text-xs text-[#e0e0e0] hover:bg-[#545454] text-left"
+                @click.stop="HandleMultimediaImport"
+              >
+                🎵 音频
+              </button>
+              <button
+                class="block w-full px-3 py-1.5 text-xs text-[#e0e0e0] hover:bg-[#545454] text-left"
+                @click.stop="HandleUiImageImport"
+              >
+                🖼 UI图片
+              </button>
+            </div>
+          </div>
           <button
-            class="p-1.5 hover:bg-[#545454] rounded text-[#e0e0e0] text-xs flex items-center gap-1"
-            title="导入"
-            @click.stop="ToggleModelDropdown"
+            class="p-1.5 hover:bg-[#545454] rounded text-[#e0e0e0]"
+            title="添加摄像头"
+            @click.stop="ImportCamera"
+          >
+            <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+              <path
+                d="M17 10.5V7c0-.55-.45-1-1-1H4c-.55 0-1 .45-1 1v10c0 .55.45 1 1 1h12c.55 0 1-.45 1-1v-3.5l4 4v-11l-4 4z"
+              />
+            </svg>
+          </button>
+          <div class="w-px h-4 bg-[#1a1a1a] mx-1"></div>
+          <button
+            class="p-1.5 hover:bg-[#545454] rounded text-[#e0e0e0]"
+            title="保存场景"
+            @click.stop="SaveScene"
           >
             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path
                 stroke-linecap="round"
                 stroke-linejoin="round"
                 stroke-width="2"
-                d="M12 4v16m8-8H4"
+                d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4"
               ></path>
             </svg>
-            <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          </button>
+          <button
+            class="p-1.5 hover:bg-[#545454] rounded text-[#e0e0e0]"
+            title="截图"
+            @click.stop="TakeScreenshot"
+          >
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path
                 stroke-linecap="round"
                 stroke-linejoin="round"
                 stroke-width="2"
-                d="M19 9l-7 7-7-7"
-              ></path>
-            </svg>
-          </button>
-          <div
-            v-if="ShowModelDropdown"
-            v-click-outside="CloseModelDropdown"
-            class="absolute z-20 mt-1 w-32 bg-[#3c3c3c] rounded shadow-lg border border-[#1a1a1a]"
-          >
-            <button
-              class="block w-full px-3 py-1.5 text-xs text-[#e0e0e0] hover:bg-[#545454] text-left"
-              @click.stop="HandleFileImport"
-            >
-              📦 模型
-            </button>
-            <button
-              class="block w-full px-3 py-1.5 text-xs text-[#e0e0e0] hover:bg-[#545454] text-left"
-              @click.stop="HandleActorImport"
-            >
-              👤 单位
-            </button>
-            <button
-              class="block w-full px-3 py-1.5 text-xs text-[#e0e0e0] hover:bg-[#545454] text-left"
-              @click.stop="HandleSceneImport"
-            >
-              🎬 场景
-            </button>
-            <button
-              class="block w-full px-3 py-1.5 text-xs text-[#e0e0e0] hover:bg-[#545454] text-left"
-              @click.stop="HandleMultimediaImport"
-            >
-              🎵 音频
-            </button>
-            <button
-              class="block w-full px-3 py-1.5 text-xs text-[#e0e0e0] hover:bg-[#545454] text-left"
-              @click.stop="HandleUiImageImport"
-            >
-              🖼 UI图片
-            </button>
-          </div>
-        </div>
-        <button
-          class="p-1.5 hover:bg-[#545454] rounded text-[#e0e0e0]"
-          title="添加摄像头"
-          @click.stop="ImportCamera"
-        >
-          <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
-            <path
-              d="M17 10.5V7c0-.55-.45-1-1-1H4c-.55 0-1 .45-1 1v10c0 .55.45 1 1 1h12c.55 0 1-.45 1-1v-3.5l4 4v-11l-4 4z"
-            />
-          </svg>
-        </button>
-        <div class="w-px h-4 bg-[#1a1a1a] mx-1"></div>
-        <button
-          class="p-1.5 hover:bg-[#545454] rounded text-[#e0e0e0]"
-          title="保存场景"
-          @click.stop="SaveScene"
-        >
-          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              stroke-width="2"
-              d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4"
-            ></path>
-          </svg>
-        </button>
-        <button
-          class="p-1.5 hover:bg-[#545454] rounded text-[#e0e0e0]"
-          title="截图"
-          @click.stop="TakeScreenshot"
-        >
-          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              stroke-width="2"
-              d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z"
-            />
-            <path
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              stroke-width="2"
-              d="M15 13a3 3 0 11-6 0 3 3 0 016 0z"
-            />
-          </svg>
-        </button>
-        <!-- Vision / Native 渲染后端切换（仅 Vision 可用时显示） -->
-        <button
-          v-if="visionAvailable"
-          class="p-1.5 hover:bg-[#545454] rounded flex items-center gap-0.5"
-          :class="activeRenderBackend === 'vision' ? 'text-[#d8b86c]' : 'text-[#e0e0e0]'"
-          :title="activeRenderBackend === 'vision' ? '当前: Vision (路径追踪)，点击切换到 Native' : '当前: Native (光栅化)，点击切换到 Vision'"
-          @click.stop="ToggleRenderBackend"
-        >
-          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              stroke-width="2"
-              d="M3 12a9 9 0 1018 0 9 9 0 00-18 0zm9-9v18m-9-9h18"
-            />
-          </svg>
-        </button>
-        <!-- GBuffer 输出模式切换 -->
-      </div>
-
-      <!-- 场景树 -->
-      <div class="scene-list-surface flex-1 overflow-y-auto">
-        <div class="select-none">
-          <!-- Cameras 分组 -->
-          <div
-            class="flex items-center px-2 py-1 bg-[#3c3c3c]/50 border-b border-[#1a1a1a]/30 cursor-pointer"
-            @click="camerasExpanded = !camerasExpanded"
-          >
-            <svg
-              class="w-3 h-3 text-[#909090] mr-1 transition-transform"
-              :class="{ 'rotate-90': camerasExpanded }"
-              fill="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path d="M10 6l6 6-6 6z" />
-            </svg>
-            <svg class="w-3.5 h-3.5 text-[#d8b86c] mr-1" fill="currentColor" viewBox="0 0 24 24">
+                d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z"
+              />
               <path
-                d="M17 10.5V7c0-.55-.45-1-1-1H4c-.55 0-1 .45-1 1v10c0 .55.45 1 1 1h12c.55 0 1-.45 1-1v-3.5l4 4v-11l-4 4z"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                d="M15 13a3 3 0 11-6 0 3 3 0 016 0z"
               />
             </svg>
-            <span class="text-xs text-[#e0e0e0] font-medium">Cameras</span>
-            <button
-              class="ml-auto mr-2 text-sm leading-none text-[#d8b86c] hover:text-white"
-              title="Create camera view"
-              aria-label="Create camera view"
-              @click.stop="ImportCamera"
-            >+</button>
-            <span class="text-xs text-[#666]">{{ sceneCameras.length }}</span>
-          </div>
-          <div v-show="camerasExpanded" class="pl-2">
-            <div v-for="cam in sceneCameras" :key="'cam-' + (cam.camera_id || cam.name)">
-              <!-- Camera 行 -->
-              <div
-                class="group flex items-center px-2 py-0.5 hover:bg-[#3c3c3c]/50 cursor-pointer border-l-2 border-transparent hover:border-[#d8b86c]"
-                :class="{ 'bg-[#4b391c]/60': selectedItem === 'cam:' + cam.name }"
-                @mouseenter="RefreshCameraListOnHover"
-                @click="SelectCamera(cam)"
-                @dblclick="isCameraDeletable(cam) && OpenCameraView(cam)"
+          </button>
+          <!-- Vision / Native 渲染后端切换（仅 Vision 可用时显示） -->
+          <button
+            v-if="visionAvailable"
+            class="p-1.5 hover:bg-[#545454] rounded flex items-center gap-0.5"
+            :class="activeRenderBackend === 'vision' ? 'text-[#d8b86c]' : 'text-[#e0e0e0]'"
+            :title="
+              activeRenderBackend === 'vision'
+                ? '当前: Vision (路径追踪)，点击切换到 Native'
+                : '当前: Native (光栅化)，点击切换到 Vision'
+            "
+            @click.stop="ToggleRenderBackend"
+          >
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                d="M3 12a9 9 0 1018 0 9 9 0 00-18 0zm9-9v18m-9-9h18"
+              />
+            </svg>
+          </button>
+          <!-- GBuffer 输出模式切换 -->
+        </div>
+
+        <!-- 场景树 -->
+        <div class="scene-list-surface flex-1 overflow-y-auto">
+          <div class="select-none">
+            <!-- Cameras 分组 -->
+            <div
+              class="flex items-center px-2 py-1 bg-[#3c3c3c]/50 border-b border-[#1a1a1a]/30 cursor-pointer"
+              @click="camerasExpanded = !camerasExpanded"
+            >
+              <svg
+                class="w-3 h-3 text-[#909090] mr-1 transition-transform"
+                :class="{ 'rotate-90': camerasExpanded }"
+                fill="currentColor"
+                viewBox="0 0 24 24"
               >
-                <span class="w-5 flex-shrink-0">
-                  <svg class="w-4 h-4 text-[#d8b86c]" fill="currentColor" viewBox="0 0 24 24">
-                    <path
-                      d="M17 10.5V7c0-.55-.45-1-1-1H4c-.55 0-1 .45-1 1v10c0 .55.45 1 1 1h12c.55 0 1-.45 1-1v-3.5l4 4v-11l-4 4z"
-                    />
-                  </svg>
-                </span>
-                <span class="text-xs text-[#e0e0e0] truncate flex-1" :title="cam.name">
-                  {{ cam.name }}
-                </span>
-                <span
-                  class="text-[10px] text-[#666] mr-1 hidden group-hover:inline"
-                  :title="'fov: ' + (cam.fov != null ? cam.fov.toFixed(1) : '-')"
+                <path d="M10 6l6 6-6 6z" />
+              </svg>
+              <svg class="w-3.5 h-3.5 text-[#d8b86c] mr-1" fill="currentColor" viewBox="0 0 24 24">
+                <path
+                  d="M17 10.5V7c0-.55-.45-1-1-1H4c-.55 0-1 .45-1 1v10c0 .55.45 1 1 1h12c.55 0 1-.45 1-1v-3.5l4 4v-11l-4 4z"
+                />
+              </svg>
+              <span class="text-xs text-[#e0e0e0] font-medium">Cameras</span>
+              <button
+                class="ml-auto mr-2 text-sm leading-none text-[#d8b86c] hover:text-white"
+                title="Create camera view"
+                aria-label="Create camera view"
+                @click.stop="ImportCamera"
+              >
+                +
+              </button>
+              <span class="text-xs text-[#666]">{{ sceneCameras.length }}</span>
+            </div>
+            <div v-show="camerasExpanded" class="pl-2">
+              <div v-for="cam in sceneCameras" :key="'cam-' + (cam.camera_id || cam.name)">
+                <!-- Camera 行 -->
+                <div
+                  class="group flex items-center px-2 py-0.5 hover:bg-[#3c3c3c]/50 cursor-pointer border-l-2 border-transparent hover:border-[#d8b86c]"
+                  :class="{ 'bg-[#4b391c]/60': selectedItem === 'cam:' + cam.name }"
+                  @mouseenter="RefreshCameraListOnHover"
+                  @click="SelectCamera(cam)"
+                  @dblclick="isCameraDeletable(cam) && OpenCameraView(cam)"
                 >
-                  {{ cam.width }}x{{ cam.height }}
-                </span>
-                <button
-                  v-if="isCameraDeletable(cam)"
-                  class="hidden group-hover:inline text-xs leading-none text-[#888] hover:text-[#ef5350] disabled:opacity-30 disabled:hover:text-[#888]"
-                  :disabled="sceneCameras.length <= 1"
-                  title="Delete camera"
-                  aria-label="Delete camera"
-                  @click.stop="DeleteCamera(cam)"
-                >x</button>
+                  <span class="w-5 flex-shrink-0">
+                    <svg class="w-4 h-4 text-[#d8b86c]" fill="currentColor" viewBox="0 0 24 24">
+                      <path
+                        d="M17 10.5V7c0-.55-.45-1-1-1H4c-.55 0-1 .45-1 1v10c0 .55.45 1 1 1h12c.55 0 1-.45 1-1v-3.5l4 4v-11l-4 4z"
+                      />
+                    </svg>
+                  </span>
+                  <span class="text-xs text-[#e0e0e0] truncate flex-1" :title="cam.name">
+                    {{ cam.name }}
+                  </span>
+                  <span
+                    class="text-[10px] text-[#666] mr-1 hidden group-hover:inline"
+                    :title="'fov: ' + (cam.fov != null ? cam.fov.toFixed(1) : '-')"
+                  >
+                    {{ cam.width }}x{{ cam.height }}
+                  </span>
+                  <button
+                    v-if="isCameraDeletable(cam)"
+                    class="hidden group-hover:inline text-xs leading-none text-[#888] hover:text-[#ef5350] disabled:opacity-30 disabled:hover:text-[#888]"
+                    :disabled="sceneCameras.length <= 1"
+                    title="Delete camera"
+                    aria-label="Delete camera"
+                    @click.stop="DeleteCamera(cam)"
+                  >
+                    x
+                  </button>
+                </div>
+              </div>
+              <div v-if="sceneCameras.length === 0" class="px-4 py-2 text-center">
+                <span class="text-[10px] text-[#666]">无相机</span>
               </div>
             </div>
-            <div v-if="sceneCameras.length === 0" class="px-4 py-2 text-center">
-              <span class="text-[10px] text-[#666]">无相机</span>
-            </div>
-          </div>
 
-          <!-- Scene Collection 分组 -->
-          <div
-            class="flex items-center px-2 py-1 bg-[#3c3c3c]/50 border-b border-[#1a1a1a]/30 cursor-pointer"
-            @click="actorsExpanded = !actorsExpanded"
-          >
-            <svg
-              class="w-3 h-3 text-[#909090] mr-1 transition-transform"
-              :class="{ 'rotate-90': actorsExpanded }"
-              fill="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path d="M10 6l6 6-6 6z" />
-            </svg>
-            <span class="text-xs text-[#e0e0e0] font-medium">Scene Collection</span>
-            <span class="ml-auto text-xs text-[#666]">{{ sceneImages.length }}</span>
-          </div>
-
-          <!-- 对象列表 -->
-          <div v-show="actorsExpanded" class="pl-2 pb-8" data-guidance="scene-actor-list">
+            <!-- Scene Collection 分组 -->
             <div
-              v-for="scene in sceneImages"
-              :key="scene.name"
-              :data-actor-name="scene.name"
-              class="group flex items-center px-2 py-0.5 hover:bg-[#3c3c3c]/50 cursor-pointer border-l-2 border-transparent hover:border-[#d8b86c]"
-              :class="{ 'bg-[#4b391c]/60': selectedItem === scene.name }"
-              @click="onActorRowClick(scene, $event)"
-              @dblclick="onActorRowDoubleClick(scene, $event)"
+              class="flex items-center px-2 py-1 bg-[#3c3c3c]/50 border-b border-[#1a1a1a]/30 cursor-pointer"
+              @click="actorsExpanded = !actorsExpanded"
             >
-              <!-- 图标 -->
-              <span class="w-5 flex-shrink-0">
-                <template v-if="scene.type === 'light'">
-                  <svg class="w-4 h-4 text-[#ffd54f]" fill="currentColor" viewBox="0 0 24 24">
-                    <path
-                      d="M12 2a7 7 0 0 1 7 7c0 2.38-1.19 4.47-3 5.74V17a1 1 0 0 1-1 1H9a1 1 0 0 1-1-1v-2.26C6.19 13.47 5 11.38 5 9a7 7 0 0 1 7-7z"
-                    />
-                  </svg>
-                </template>
-                <template v-else-if="scene.type === 'camera'">
-                  <svg class="w-4 h-4 text-[#d8b86c]" fill="currentColor" viewBox="0 0 24 24">
-                    <path
-                      d="M17 10.5V7c0-.55-.45-1-1-1H4c-.55 0-1 .45-1 1v10c0 .55.45 1 1 1h12c.55 0 1-.45 1-1v-3.5l4 4v-11l-4 4z"
-                    />
-                  </svg>
-                </template>
-                <template v-else-if="scene.type === 'video'">
-                  <!-- 视频：胶片/播放图标 -->
-                  <svg class="w-4 h-4 text-[#c586c0]" fill="currentColor" viewBox="0 0 24 24">
-                    <path
-                      d="M4 4h16a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2zm6 4v8l6-4-6-4z"
-                    />
-                  </svg>
-                </template>
-                <template v-else-if="scene.type === 'audio'">
-                  <!-- 音频：音符图标 -->
-                  <svg class="w-4 h-4 text-[#dcdcaa]" fill="currentColor" viewBox="0 0 24 24">
-                    <path
-                      d="M12 3v10.55A4 4 0 1 0 14 17V7h4V3h-6z"
-                    />
-                  </svg>
-                </template>
-                <template v-else>
-                  <svg class="w-4 h-4 text-[#e0e0e0]" fill="currentColor" viewBox="0 0 24 24">
-                    <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" />
-                  </svg>
-                </template>
-              </span>
-              <!-- 名称 -->
-              <span class="text-xs text-[#e0e0e0] truncate flex-1" :title="scene.name">
-                {{ scene.name }}
-              </span>
-              <button
-                v-if="scene.load_status && scene.load_status !== 'loaded'"
-                class="text-[10px] text-[#f0c674] mr-1"
-                :title="scene.load_error?.message || '资源加载失败，点击重新绑定'"
-                data-testid="actor-load-warning"
-                @click.stop="RebindActorResource(scene)"
+              <svg
+                class="w-3 h-3 text-[#909090] mr-1 transition-transform"
+                :class="{ 'rotate-90': actorsExpanded }"
+                fill="currentColor"
+                viewBox="0 0 24 24"
               >
-                ⚠ 重新绑定
-              </button>
-              <span
-                v-if="scene.vision_proxy"
-                class="text-[10px] text-[#e5c77f] mr-1 hidden group-hover:inline"
-                :title="scene.vision_binding?.shape_guid || 'Vision proxy actor'"
-                data-testid="actor-vision-proxy"
-              >
-                Vision
-              </span>
-              <!-- 类型标签 -->
-              <span class="text-[10px] text-[#666] mr-2 hidden group-hover:inline">
-                {{ getTypeShort(scene.type) }}
-              </span>
-              <!-- 显隐切换按钮 -->
-              <button
-                class="w-5 h-5 flex items-center justify-center rounded transition-all mr-0.5"
-                :class="
-                  scene.visible === false
-                    ? 'text-[#555] hover:text-[#999]'
-                    : 'text-[#e0e0e0] hover:text-[#ffd54f]'
-                "
-                :title="scene.visible === false ? '显示' : '隐藏'"
-                @click.stop="ToggleVisible(scene)"
-                @dblclick.stop
-              >
-                <svg
-                  v-if="scene.visible !== false"
-                  class="w-3.5 h-3.5"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                    stroke-width="2"
-                    d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"
-                  />
-                  <path
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                    stroke-width="2"
-                    d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"
-                  />
-                </svg>
-                <svg
-                  v-else
-                  class="w-3.5 h-3.5"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                    stroke-width="2"
-                    d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.878 9.878L3 3m6.878 6.878L21 21"
-                  />
-                </svg>
-              </button>
-              <!-- 音频播放 / 停止按钮 -->
-              <button
-                v-if="scene.type === 'audio'"
-                class="w-5 h-5 flex items-center justify-center rounded transition-all mr-0.5"
-                :class="
-                  (playingStates[scene.name] ?? scene._playing)
-                    ? 'text-[#f48771] hover:text-[#f48771] hover:bg-red-400/20'
-                    : 'text-[#dcdcaa] hover:text-[#dcdcaa] hover:bg-yellow-400/20'
-                "
-                :title="
-                  (playingStates[scene.name] ?? scene._playing) ? '停止' : '播放'
-                "
-                @click.stop="handlePlayToggle(scene)"
-                @dblclick.stop
-              >
-                <!-- 播放 ▶ -->
-                <svg
-                  v-if="!(playingStates[scene.name] ?? scene._playing)"
-                  class="w-3.5 h-3.5"
-                  fill="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path d="M8 5v14l11-7z" />
-                </svg>
-                <!-- 停止 ■ -->
-                <svg
-                  v-else
-                  class="w-3.5 h-3.5"
-                  fill="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path d="M6 6h12v12H6z" />
-                </svg>
-              </button>
-              <!-- 删除按钮 -->
-              <button
-                class="w-5 h-5 flex items-center justify-center text-[#666] hover:text-red-400 hover:bg-red-400/20 rounded transition-all"
-                title="删除"
-                @click.stop="DeleteActor(scene)"
-                @dblclick.stop
-              >
-                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                    stroke-width="2"
-                    d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
-                  />
-                </svg>
-              </button>
+                <path d="M10 6l6 6-6 6z" />
+              </svg>
+              <span class="text-xs text-[#e0e0e0] font-medium">Scene Collection</span>
+              <span class="ml-auto text-xs text-[#666]">{{ sceneImages.length }}</span>
             </div>
 
-            <!-- 空状态 -->
-            <div v-if="sceneImages.length === 0" class="px-4 py-8 text-center">
-              <span class="text-xs text-[#666]">场景为空，点击 + 添加对象</span>
+            <!-- 对象列表 -->
+            <div v-show="actorsExpanded" class="pl-2 pb-8" data-guidance="scene-actor-list">
+              <template v-for="scene in sceneImages" :key="scene.name">
+                <div
+                  :data-actor-name="scene.name"
+                  class="group flex items-center px-2 py-0.5 hover:bg-[#3c3c3c]/50 cursor-pointer border-l-2 border-transparent hover:border-[#d8b86c]"
+                  :class="{ 'bg-[#4b391c]/60': selectedItem === scene.name }"
+                  @click="onActorRowClick(scene, $event)"
+                  @dblclick="onActorRowDoubleClick(scene, $event)"
+                >
+                  <!-- 图标 -->
+                  <span class="w-5 flex-shrink-0">
+                    <template v-if="scene.type === 'light'">
+                      <svg class="w-4 h-4 text-[#ffd54f]" fill="currentColor" viewBox="0 0 24 24">
+                        <path
+                          d="M12 2a7 7 0 0 1 7 7c0 2.38-1.19 4.47-3 5.74V17a1 1 0 0 1-1 1H9a1 1 0 0 1-1-1v-2.26C6.19 13.47 5 11.38 5 9a7 7 0 0 1 7-7z"
+                        />
+                      </svg>
+                    </template>
+                    <template v-else-if="scene.type === 'camera'">
+                      <svg class="w-4 h-4 text-[#d8b86c]" fill="currentColor" viewBox="0 0 24 24">
+                        <path
+                          d="M17 10.5V7c0-.55-.45-1-1-1H4c-.55 0-1 .45-1 1v10c0 .55.45 1 1 1h12c.55 0 1-.45 1-1v-3.5l4 4v-11l-4 4z"
+                        />
+                      </svg>
+                    </template>
+                    <template v-else-if="scene.type === 'video'">
+                      <!-- 视频：胶片/播放图标 -->
+                      <svg class="w-4 h-4 text-[#c586c0]" fill="currentColor" viewBox="0 0 24 24">
+                        <path
+                          d="M4 4h16a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2zm6 4v8l6-4-6-4z"
+                        />
+                      </svg>
+                    </template>
+                    <template v-else-if="scene.type === 'audio'">
+                      <!-- 音频：音符图标 -->
+                      <svg class="w-4 h-4 text-[#dcdcaa]" fill="currentColor" viewBox="0 0 24 24">
+                        <path d="M12 3v10.55A4 4 0 1 0 14 17V7h4V3h-6z" />
+                      </svg>
+                    </template>
+                    <template v-else>
+                      <svg class="w-4 h-4 text-[#e0e0e0]" fill="currentColor" viewBox="0 0 24 24">
+                        <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" />
+                      </svg>
+                    </template>
+                  </span>
+                  <!-- 名称 -->
+                  <span class="text-xs text-[#e0e0e0] truncate flex-1" :title="scene.name">
+                    {{ scene.name }}
+                  </span>
+                  <span
+                    v-if="scene.load_status === 'gpu_uploading'"
+                    class="text-[10px] text-[#8ab4f8] mr-1"
+                    title="GPU 资源正在分批上传"
+                    data-testid="actor-gpu-uploading"
+                  >
+                    上传中
+                  </span>
+                  <button
+                    v-else-if="scene.load_status && scene.load_status !== 'loaded'"
+                    class="text-[10px] text-[#f0c674] mr-1"
+                    :title="scene.load_error?.message || '资源加载失败，点击重新绑定'"
+                    data-testid="actor-load-warning"
+                    @click.stop="RebindActorResource(scene)"
+                  >
+                    ⚠ 重新绑定
+                  </button>
+                  <span
+                    v-if="scene.vision_proxy"
+                    class="text-[10px] text-[#e5c77f] mr-1 hidden group-hover:inline"
+                    :title="scene.vision_binding?.shape_guid || 'Vision proxy actor'"
+                    data-testid="actor-vision-proxy"
+                  >
+                    Vision
+                  </span>
+                  <!-- 类型标签 -->
+                  <span class="text-[10px] text-[#666] mr-2 hidden group-hover:inline">
+                    {{ getTypeShort(scene.type) }}
+                  </span>
+                  <!-- 显隐切换按钮 -->
+                  <button
+                    class="w-5 h-5 flex items-center justify-center rounded transition-all mr-0.5"
+                    :class="
+                      scene.visible === false
+                        ? 'text-[#555] hover:text-[#999]'
+                        : 'text-[#e0e0e0] hover:text-[#ffd54f]'
+                    "
+                    :title="scene.visible === false ? '显示' : '隐藏'"
+                    @click.stop="ToggleVisible(scene)"
+                    @dblclick.stop
+                  >
+                    <svg
+                      v-if="scene.visible !== false"
+                      class="w-3.5 h-3.5"
+                      fill="none"
+                      stroke="currentColor"
+                      viewBox="0 0 24 24"
+                    >
+                      <path
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                        stroke-width="2"
+                        d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"
+                      />
+                      <path
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                        stroke-width="2"
+                        d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"
+                      />
+                    </svg>
+                    <svg
+                      v-else
+                      class="w-3.5 h-3.5"
+                      fill="none"
+                      stroke="currentColor"
+                      viewBox="0 0 24 24"
+                    >
+                      <path
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                        stroke-width="2"
+                        d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.878 9.878L3 3m6.878 6.878L21 21"
+                      />
+                    </svg>
+                  </button>
+                  <!-- 音频播放 / 停止按钮 -->
+                  <button
+                    v-if="scene.type === 'audio'"
+                    class="w-5 h-5 flex items-center justify-center rounded transition-all mr-0.5"
+                    :class="
+                      (playingStates[scene.name] ?? scene._playing)
+                        ? 'text-[#f48771] hover:text-[#f48771] hover:bg-red-400/20'
+                        : 'text-[#dcdcaa] hover:text-[#dcdcaa] hover:bg-yellow-400/20'
+                    "
+                    :title="(playingStates[scene.name] ?? scene._playing) ? '停止' : '播放'"
+                    @click.stop="handlePlayToggle(scene)"
+                    @dblclick.stop
+                  >
+                    <!-- 播放 ▶ -->
+                    <svg
+                      v-if="!(playingStates[scene.name] ?? scene._playing)"
+                      class="w-3.5 h-3.5"
+                      fill="currentColor"
+                      viewBox="0 0 24 24"
+                    >
+                      <path d="M8 5v14l11-7z" />
+                    </svg>
+                    <!-- 停止 ■ -->
+                    <svg v-else class="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24">
+                      <path d="M6 6h12v12H6z" />
+                    </svg>
+                  </button>
+                  <!-- 删除按钮 -->
+                  <button
+                    class="w-5 h-5 flex items-center justify-center text-[#666] hover:text-red-400 hover:bg-red-400/20 rounded transition-all"
+                    title="删除"
+                    @click.stop="DeleteActor(scene)"
+                    @dblclick.stop
+                  >
+                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                        stroke-width="2"
+                        d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
+                      />
+                    </svg>
+                  </button>
+                </div>
+
+                <ModelNodeHierarchy
+                  v-if="Number(scene.model_node_count || 0) > 0"
+                  :active="actorsExpanded"
+                  :scene-name="currentSceneName"
+                  :actor="scene"
+                  :selection="modelNodeSelection"
+                  @select="selectModelNode"
+                />
+              </template>
+              <!-- 空状态 -->
+              <div v-if="sceneImages.length === 0" class="px-4 py-8 text-center">
+                <span class="text-xs text-[#666]">场景为空，点击 + 添加对象</span>
+              </div>
             </div>
           </div>
         </div>
-      </div>
       </div>
 
       <!-- 底部状态栏 -->
@@ -549,11 +566,15 @@
 <script setup>
 import { ref, reactive, onMounted, onUnmounted, computed } from 'vue';
 import { useRoute } from 'vue-router';
+import ModelNodeHierarchy from '@/components/ui/ModelNodeHierarchy.vue';
+import { pickedNodeIdentity } from '@/utils/modelHierarchy.js';
 import DockTitleBar from '@/components/ui/DockTitleBar.vue';
 import { editorApi } from '@/api/editorApi.js';
 import { appService } from '@/services/appService.js';
 import { resourceService } from '@/services/resourceService.js';
 import { DEFAULT_SCENE_NAME } from '@/utils/constants.js';
+import { resolveOpenedProjectScene } from '@/utils/projectSceneLifecycle.js';
+import { emptySceneTreeSettlement, resolveSceneTreeSnapshot } from '@/utils/sceneTreeSnapshot.js';
 import { useErrorHandler } from '@/composables/useErrorHandler.js';
 import { setActorContext } from '@/blockly/composables/useActorContext.js';
 import { coronaEventBus } from '@/utils/eventBus.js';
@@ -567,6 +588,35 @@ const { error: logError, warn: logWarn } = useErrorHandler('SceneBar');
 const currentSceneName = ref('');
 let actorChangedCallbackToken = null;
 let sceneTreeChangedCallbackToken = null;
+let projectOpenedCallbackToken = null;
+let nodeSelectionCallbackToken = null;
+let sceneTreeRequestSeq = 0;
+let sceneTreeSettleTimer = null;
+let sceneTreeSettleTimerScene = '';
+const sceneTreeSettlement = ref(emptySceneTreeSettlement());
+
+const clearSceneTreeSettleRetry = () => {
+  if (sceneTreeSettleTimer) window.clearTimeout(sceneTreeSettleTimer);
+  sceneTreeSettleTimer = null;
+  sceneTreeSettleTimerScene = '';
+};
+
+// A project or scene opened by the native editor materializes asynchronously, so
+// an empty snapshot can mean "the actors are not created yet" rather than "the
+// scene is empty".  Keep asking inside the settle window instead of leaving the
+// dock blank.
+const scheduleSceneTreeSettleRetry = (delayMs, sceneName) => {
+  if (!delayMs) return;
+  if (sceneTreeSettleTimer && sceneTreeSettleTimerScene === sceneName) return;
+  clearSceneTreeSettleRetry();
+  sceneTreeSettleTimerScene = sceneName;
+  sceneTreeSettleTimer = window.setTimeout(() => {
+    sceneTreeSettleTimer = null;
+    sceneTreeSettleTimerScene = '';
+    if (sceneName !== currentSceneName.value) return;
+    void OnInitObjTree();
+  }, delayMs);
+};
 
 const showLoading = (title, message, progress = 0) => {
   coronaEventBus.emit('loading-show', { title, message, progress });
@@ -617,6 +667,34 @@ const getTypeShort = (type) => {
 };
 
 const selectedItem = ref(null);
+const modelNodeSelection = ref(null);
+const publishModelNodeSelection = (identity) => {
+  modelNodeSelection.value = identity;
+  coronaEventBus.modelNodeSelection = identity;
+  coronaEventBus.emit('model-node-selection', identity);
+};
+const selectModelNode = (identity) => {
+  const previous = modelNodeSelection.value;
+  publishModelNodeSelection(identity);
+  selectedItem.value = null;
+  const actorName = identity?.actorName || previous?.actorName;
+  if (!actorName) return;
+  const actor = sceneImages.value.find((item) => item.name === actorName);
+  editorApi.sceneTools
+    .selectActor(currentSceneName.value, actor?.type || 'model', actorName, {
+      node_index: identity?.nodeIndex ?? null,
+    })
+    .catch((error) => logError('Failed to publish model node selection', error));
+};
+const handleModelNodePick = (payload) => {
+  const scene = payload.sceneId || payload.scene || payload.scene_id;
+  if (scene && scene !== currentSceneName.value) return;
+  publishModelNodeSelection(pickedNodeIdentity(payload));
+  if (modelNodeSelection.value) {
+    selectedItem.value = null;
+    actorsExpanded.value = true;
+  }
+};
 const selectedCameraName = ref(null);
 const sceneCameras = ref([]);
 const camerasExpanded = ref(true);
@@ -624,7 +702,7 @@ const actorsExpanded = ref(true);
 
 const sceneImages = ref([]);
 const sceneVision = ref({});
-const playingStates = reactive({});  // { name: true/false } — 音频播放状态
+const playingStates = reactive({}); // { name: true/false } — 音频播放状态
 const route = useRoute();
 const px = ref('1.0'),
   py = ref('1.0'),
@@ -649,7 +727,7 @@ const searchError = ref('');
 const searchResults = ref([]);
 const searchLastQuery = ref('');
 const searchElapsedMs = ref(0);
-const searchSeq = ref(0);        // B-2 竞态保护
+const searchSeq = ref(0); // B-2 竞态保护
 const imageInputRef = ref(null);
 const SEARCH_DEBOUNCE_MS = 600;
 const SEARCH_INDEX_RETRY_MS = 250;
@@ -659,25 +737,36 @@ let searchIndexRetry = null;
 
 const searchActive = computed(() => {
   if (!RESOURCE_SEARCH_ENABLED) return false;
-  return searchLoading.value || searchIndexing.value || searchResults.value.length > 0
-    || !!searchError.value || !!searchLastQuery.value;
+  return (
+    searchLoading.value ||
+    searchIndexing.value ||
+    searchResults.value.length > 0 ||
+    !!searchError.value ||
+    !!searchLastQuery.value
+  );
 });
 
+const typeIcon = (type) =>
+  ({
+    model: '📦',
+    actor: '👤',
+    scene: '🎬',
+    multimedia: '🎵',
+    terrain: '🏔',
+    script: '📜',
+    other: '📄',
+  })[type] || '📄';
 
-const typeIcon = (type) => ({
-  model: '📦', actor: '👤', scene: '🎬',
-  multimedia: '🎵', terrain: '🏔', script: '📜', other: '📄',
-})[type] || '📄';
-
-const typeColorClass = (type) => ({
-  model: 'text-[#e5c77f]',
-  actor: 'text-[#ce9178]',
-  scene: 'text-[#c586c0]',
-  multimedia: 'text-[#dcdcaa]',
-  terrain: 'text-[#c9a958]',
-  script: 'text-[#c9bea0]',
-  other: 'text-[#808080]',
-})[type] || 'text-[#808080]';
+const typeColorClass = (type) =>
+  ({
+    model: 'text-[#e5c77f]',
+    actor: 'text-[#ce9178]',
+    scene: 'text-[#c586c0]',
+    multimedia: 'text-[#dcdcaa]',
+    terrain: 'text-[#c9a958]',
+    script: 'text-[#c9bea0]',
+    other: 'text-[#808080]',
+  })[type] || 'text-[#808080]';
 
 const onSearchInput = () => {
   if (!RESOURCE_SEARCH_ENABLED) return;
@@ -751,7 +840,7 @@ const doFuzzySearch = async (query, retryCount = 0) => {
   searchError.value = '';
   try {
     const resp = await resourceService.fuzzySearch(query.trim(), 30);
-    if (mySeq !== searchSeq.value) return;  // 已被新请求覆盖
+    if (mySeq !== searchSeq.value) return; // 已被新请求覆盖
     if (resp && resp.success !== false && resp.data) {
       const data = resp.data;
       if (data.status === 'success' || data.status === 'ok') {
@@ -880,7 +969,8 @@ const OnLocateSearchItem = async (item) => {
 const isMediaItem = (scene) => scene && (scene.type === 'video' || scene.type === 'audio');
 // audio Actor：type 为 audio 且有真实 handle（来自场景树），按 Actor 处理（可选中、可编辑变换）。
 // 区别于扁平音频媒体资源（仅 resourceId，无 handle）。
-const isAudioActor = (scene) => scene && scene.type === 'audio' && normalizeHandle(scene.handle) > 0;
+const isAudioActor = (scene) =>
+  scene && scene.type === 'audio' && normalizeHandle(scene.handle) > 0;
 
 const normalizeHandle = (value) => {
   const handle = Number(value);
@@ -905,6 +995,7 @@ const ControlObject = async (scene) => {
 };
 
 const SelectActor = (scene) => {
+  publishModelNodeSelection(null);
   selectedItem.value = scene.name;
   // 扁平音视频资源仅作选中；audio Actor 走正常 Actor 选中（打开物体栏变换编辑器）。
   if (isMediaItem(scene) && !isAudioActor(scene)) return;
@@ -922,12 +1013,15 @@ const SelectActor = (scene) => {
       source: 'scene_tree',
     },
   });
-  editorApi.sceneTools.selectActor(currentSceneName.value, scene.type || 'actor', scene.name).catch((error) => {
-    logError('Failed to publish actor selection', error);
-  });
+  editorApi.sceneTools
+    .selectActor(currentSceneName.value, scene.type || 'actor', scene.name)
+    .catch((error) => {
+      logError('Failed to publish actor selection', error);
+    });
 };
 
 const SelectCamera = (cam) => {
+  publishModelNodeSelection(null);
   selectedItem.value = 'cam:' + cam.name;
   selectedCameraName.value = cam.name;
   RefreshRenderBackendState();
@@ -986,7 +1080,7 @@ const focusActorFromList = async (scene) => {
     const result = await editorApi.sceneTools.focusActor(
       currentSceneName.value,
       scene.name,
-      cameraName,
+      cameraName
     );
     if (focusSeq !== actorFocusSeq) return;
     const payload = result?.data ?? result;
@@ -1019,8 +1113,11 @@ const onActorRowClick = (scene, event) => {
   clearActorSingleClickTimer();
   SelectActor(scene);
 
-  if (isActorRowActionEvent(event) || Number(event?.detail) > 1 ||
-      (isMediaItem(scene) && !isAudioActor(scene))) {
+  if (
+    isActorRowActionEvent(event) ||
+    Number(event?.detail) > 1 ||
+    (isMediaItem(scene) && !isAudioActor(scene))
+  ) {
     return;
   }
 
@@ -1078,9 +1175,9 @@ const handlePlayToggle = async (scene) => {
     // 播放（单次，不循环）
     try {
       if (isAudioActor) {
-      await editorApi.sceneTools.actorPlayAudio(scene.name, false);
+        await editorApi.sceneTools.actorPlayAudio(scene.name, false);
       } else {
-      await editorApi.sceneTools.playAudio(rid, false);
+        await editorApi.sceneTools.playAudio(rid, false);
       }
     } catch (e) {
       logError('[audio] play failed', e);
@@ -1096,11 +1193,9 @@ const ToggleVisible = async (scene) => {
   // 音视频资源没有对应 Actor，仅在前端切换可见标记
   if (isMediaItem(scene)) return;
   try {
-    await editorApi.sceneTools.setActorState(
-      currentSceneName.value,
-      scene.name,
-      { visible: newVisible },
-    );
+    await editorApi.sceneTools.setActorState(currentSceneName.value, scene.name, {
+      visible: newVisible,
+    });
   } catch (e) {
     scene.visible = !newVisible;
     logError('Failed to toggle visibility', e);
@@ -1110,11 +1205,15 @@ const ToggleVisible = async (scene) => {
 const SaveScene = async () => {
   try {
     const unresolvedCount = sceneImages.value.filter(
-      (item) => item.load_status && item.load_status !== 'loaded',
+      (item) => item.load_status && item.load_status !== 'loaded'
     ).length;
-    if (unresolvedCount > 0 && !window.confirm(
-      `当前场景仍有 ${unresolvedCount} 个资源未解决。存档会保留原资源引用和对象数据，是否仍然保存？`,
-    )) return;
+    if (
+      unresolvedCount > 0 &&
+      !window.confirm(
+        `当前场景仍有 ${unresolvedCount} 个资源未解决。存档会保留原资源引用和对象数据，是否仍然保存？`
+      )
+    )
+      return;
     const result = await editorApi.main.sceneSave(currentSceneName.value);
     const saved = result?.data ?? result;
     if (saved?.unresolved_actor_count > 0) {
@@ -1130,14 +1229,14 @@ const RebindActorResource = async (scene) => {
     const selected = await editorApi.sceneTools.selectModelFile(
       currentSceneName.value,
       scene.name,
-      'model',
+      'model'
     );
     const path = selected?.data ?? selected;
     if (!path) return;
     const result = await editorApi.sceneTools.rebindActorResource(
       currentSceneName.value,
       scene.actor_guid,
-      path,
+      path
     );
     const rebound = result?.data ?? result;
     if (!rebound?.ok) {
@@ -1211,7 +1310,7 @@ const RefreshRenderBackendState = async () => {
     const target = getTargetCamera();
     const modeResult = await editorApi.sceneTools.getRenderBackend(
       currentSceneName.value,
-      target?.camera_id || target?.name || null,
+      target?.camera_id || target?.name || null
     );
     const modePayload = modeResult?.data ?? modeResult;
     if (modePayload?.mode) {
@@ -1229,11 +1328,14 @@ const ToggleRenderBackend = async () => {
     const result = await editorApi.sceneTools.setRenderBackend(
       next,
       currentSceneName.value,
-      target?.camera_id || target?.name || null,
+      target?.camera_id || target?.name || null
     );
     const payload = result?.data ?? result;
     if (result?.success === false || payload?.status === 'error') {
-      logError('Switch render backend failed', payload?.message || result?.error || 'unknown error');
+      logError(
+        'Switch render backend failed',
+        payload?.message || result?.error || 'unknown error'
+      );
     } else {
       activeRenderBackend.value = next;
     }
@@ -1291,10 +1393,16 @@ const createActorFromSelectedFile = async (payload, actorType, logLabel) => {
   }
 
   updateLoading('创建对象', 55);
-  const createResult = await editorApi.sceneTools.createActor(currentSceneName.value, selectedPath, actorType);
+  const createResult = await editorApi.sceneTools.createActor(
+    currentSceneName.value,
+    selectedPath,
+    actorType
+  );
   const createPayload = unwrapBridgePayload(createResult);
   if (createResult?.success === false || createPayload?.status === 'error') {
-    throw new Error(createPayload?.message || createResult?.error || `${logLabel} native create failed`);
+    throw new Error(
+      createPayload?.message || createResult?.error || `${logLabel} native create failed`
+    );
   }
 
   await OnInitObjTree();
@@ -1404,10 +1512,7 @@ const HandleMultimediaImport = async () => {
   ShowModelDropdown.value = false;
   showLoading('加载中', '请稍候...', 0);
   try {
-    const result = await editorApi.main.importResourceFile(
-      currentSceneName.value,
-      'multimedia'
-    );
+    const result = await editorApi.main.importResourceFile(currentSceneName.value, 'multimedia');
     // 兼容包装型 { success, data } 与直返型两种形态
     const payload = result?.data ?? result;
     const status = payload?.status;
@@ -1485,7 +1590,10 @@ const HandleSceneImport = async () => {
     }
 
     // 功能未实现时也要告诉用户，否则选完文件毫无反应。
-    logWarn('Scene JSON import is selected but native scene import is not implemented yet', payload);
+    logWarn(
+      'Scene JSON import is selected but native scene import is not implemented yet',
+      payload
+    );
     reportImportError('场景导入', '场景 JSON 导入尚未实现');
     await OnInitObjTree();
   } catch (e) {
@@ -1508,25 +1616,32 @@ const DeleteActor = async (scene) => {
 };
 
 const CloseFloat = async () => {
-  if (closeDockPanel) { closeDockPanel(); return; }
+  if (closeDockPanel) {
+    closeDockPanel();
+    return;
+  }
 };
 
 const OnInitObjTree = async () => {
+  const sceneName = currentSceneName.value;
+  const requestSeq = ++sceneTreeRequestSeq;
+  if (!sceneName) return;
   try {
-    const result = await editorApi.sceneTools.listSceneTree(currentSceneName.value);
-    sceneImages.value = [];
-    sceneCameras.value = [];
-    sceneVision.value = {};
+    const result = await editorApi.sceneTools.listSceneTree(sceneName);
+    // Scene switches and native tree notifications can overlap.  Only the most
+    // recent request for the still-active route may replace the displayed tree.
+    if (requestSeq !== sceneTreeRequestSeq || sceneName !== currentSceneName.value) return;
 
-    if (result.success && result.data) {
-      const data = result.data;
-      sceneVision.value = data.vision || {};
-
-      if (Array.isArray(data.actors)) {
-        data.actors.forEach((item) => {
-          sceneImages.value.push({
+    // Both transports return the native payload in `data`, but keeping the
+    // direct-payload fallback means a valid snapshot is never discarded when a
+    // CEF bridge has already unwrapped it.
+    const data = result?.data ?? result;
+    if (result?.success !== false && data && typeof data === 'object') {
+      const nextActors = Array.isArray(data.actors)
+        ? data.actors.map((item) => ({
             name: item.name,
             actor_guid: item.actor_guid || '',
+            model_node_count: Number(item.model_node_count || 0),
             path: item.path,
             type: item.type || 'obj',
             visible: item.visible !== false,
@@ -1536,20 +1651,31 @@ const OnInitObjTree = async () => {
             vision_binding: item.vision_binding || null,
             load_status: item.load_status || 'loaded',
             load_error: item.load_error || null,
-          });
-        });
-      }
-
-      if (Array.isArray(data.cameras)) {
-        applyCameraList(data.cameras);
-      }
+          }))
+        : [];
+      // Commit the full snapshot atomically.  A failed or stale refresh keeps
+      // the last known tree visible instead of presenting an empty panel.
+      const decision = resolveSceneTreeSnapshot({
+        sceneName,
+        actors: nextActors,
+        settlement: sceneTreeSettlement.value,
+      });
+      sceneTreeSettlement.value = decision.settlement;
+      // Cameras and vision metadata do not depend on actor materialization.
+      sceneVision.value = data.vision || {};
+      if (Array.isArray(data.cameras)) applyCameraList(data.cameras);
+      // An empty snapshot taken while a freshly opened scene is still building its
+      // actors is provisional; committing it left the dock empty for good.
+      if (decision.commit) sceneImages.value = decision.rows;
+      scheduleSceneTreeSettleRetry(decision.retryInMs, sceneName);
     }
   } catch (e) {
-    logError('Failed to load scene tree', e);
+    if (requestSeq === sceneTreeRequestSeq) logError('Failed to load scene tree', e);
   }
 };
 
 onMounted(async () => {
+  coronaEventBus.on('model-node-picked', handleModelNodePick);
   const result = await editorApi.main.onInit();
   if (RESOURCE_SEARCH_ENABLED) {
     resourceService.prepareIndex().catch((error) => {
@@ -1568,7 +1694,10 @@ onMounted(async () => {
   await RefreshRenderBackendState();
   // 后端对象变化：场景切换/物体变化时重新加载场景树
   actorChangedCallbackToken = await editorApi.events.onActorChanged(onActorChangeEvent);
-  sceneTreeChangedCallbackToken = await editorApi.events.onSceneTreeChanged(onSceneTreeChangedEvent);
+  sceneTreeChangedCallbackToken =
+    await editorApi.events.onSceneTreeChanged(onSceneTreeChangedEvent);
+  projectOpenedCallbackToken = await editorApi.events.onProjectOpened(onProjectOpenedEvent);
+  nodeSelectionCallbackToken = await editorApi.events.onActorSelectionChanged(handleModelNodePick);
 });
 
 // 场景切换时刷新当前场景树；actor 选择只更新详情面板，不重建树，避免点击闪烁。
@@ -1576,6 +1705,7 @@ const onActorChangeEvent = (payload, maybeSceneId /*, actorId, oldPath */) => {
   const type = payload?.actor_type ?? payload?.type ?? payload;
   const sceneId = payload?.scene ?? maybeSceneId;
   if (type !== 'scene' || !sceneId) return;
+  publishModelNodeSelection(null);
   currentSceneName.value = sceneId;
   OnInitObjTree();
 };
@@ -1585,6 +1715,15 @@ const onSceneTreeChangedEvent = (payload) => {
   if (!sceneName || sceneName === currentSceneName.value) {
     OnInitObjTree();
   }
+};
+
+const onProjectOpenedEvent = (payload = {}) => {
+  const sceneRoute = resolveOpenedProjectScene(payload);
+  if (!sceneRoute) return;
+  publishModelNodeSelection(null);
+  currentSceneName.value = sceneRoute;
+  void OnInitObjTree();
+  void RefreshRenderBackendState();
 };
 
 const normalizeCameraPayload = (cam) => ({
@@ -1643,6 +1782,13 @@ const RefreshCameraListOnHover = () => {
 };
 
 onUnmounted(() => {
+  clearSceneTreeSettleRetry();
+  coronaEventBus.off('model-node-picked', handleModelNodePick);
+  if (nodeSelectionCallbackToken)
+    editorApi
+      .off(nodeSelectionCallbackToken)
+      .catch((error) => logError('Failed to unregister node selection callback', error));
+  nodeSelectionCallbackToken = null;
   if (searchDebounce) {
     clearTimeout(searchDebounce);
     searchDebounce = null;
@@ -1666,20 +1812,50 @@ onUnmounted(() => {
     });
     sceneTreeChangedCallbackToken = null;
   }
+  if (projectOpenedCallbackToken) {
+    editorApi.off(projectOpenedCallbackToken).catch((error) => {
+      logError('Failed to unregister project opened callback', error);
+    });
+    projectOpenedCallbackToken = null;
+  }
 });
 </script>
 
 <style scoped>
-
-
 .scene-tools-panel {
-  background: linear-gradient(180deg, rgba(33, 29, 18, 0.66), rgba(17, 16, 13, 0.58));
+  /* Opaque on purpose: the dock floats over the 3D viewport, and a translucent panel
+     made the tree backgrounds and object names unreadable. */
+  background: linear-gradient(180deg, #211d12, #11100d);
   border: 1px solid rgba(255, 255, 255, 0.08);
   box-shadow: 0 18px 42px rgba(0, 0, 0, 0.34);
 }
 
 .scene-list-surface {
-  background: rgba(40, 40, 40, 0.24);
+  /* Same tone the previous 24% overlay produced over the panel, now opaque. */
+  background: #1d1a15;
+  /* Match the editor's dark scrollbars instead of the bright CEF default. */
+  scrollbar-width: thin;
+  scrollbar-color: #8c6f36 #14120c;
 }
 
+.scene-list-surface::-webkit-scrollbar {
+  width: 8px;
+}
+
+.scene-list-surface::-webkit-scrollbar-track {
+  background: #14120c;
+}
+
+.scene-list-surface::-webkit-scrollbar-thumb {
+  background: #8c6f36;
+  border-radius: 999px;
+}
+
+.scene-list-surface::-webkit-scrollbar-thumb:hover {
+  background: #a8843f;
+}
+
+.scene-list-surface::-webkit-scrollbar-corner {
+  background: #14120c;
+}
 </style>

@@ -1,4 +1,5 @@
-﻿#include <corona/events/engine_events.h>
+#include <corona/events/engine_events.h>
+#include <corona/diagnostics/thread_phase.h>
 #include <horizon/core/logging.h>
 #include <horizon/core/storage.h>
 #include <corona/resource/resource.h>
@@ -7,6 +8,7 @@
 #include <corona/resource/types/animation_pose.h>
 #include <corona/resource/types/image.h>
 #include <corona/shared_data_hub.h>
+#include <corona/systems/geometry/model_node_geometry.h>
 #include <corona/spatial/octree.h>
 #include <corona/systems/geometry/geometry_system.h>
 #include <corona/utils/path_utils.h>
@@ -48,6 +50,15 @@ std::unordered_set<std::string> g_invalid_mesh_slot_logs;
     static const bool enabled = Diagnostics::parse_env_flag(
         std::getenv("CORONA_GEOMETRY_DIAG_PROFILE"));
     return enabled;
+}
+
+/// 单调时间戳（毫秒）。用于 LOD 级的"真实时间"释放宽限：帧计数在几何线程与渲染线程
+/// 节拍不一致时表达不了真实时长（见 Impl::kSharedLodFreeGraceMs）。
+[[nodiscard]] std::uint64_t steady_now_ms() {
+    return static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch())
+            .count());
 }
 
 template <typename T>
@@ -252,6 +263,10 @@ bool GeometrySystem::initialize(Kernel::ISystemContext* ctx) {
 }
 
 void GeometrySystem::update() {
+    // Every stage of this loop can block on a lock with no timeout (storage slot
+    // locks, Vulkan queue acquires, TBB arenas).  Naming the stage on entry makes
+    // such a stall visible as "Geometry stuck in phase X" instead of silence.
+    Corona::Diagnostics::PhaseScope update_phase{"Geometry", "update"};
     auto& hub = SharedDataHub::instance();
     auto& scene_storage = hub.scene_storage();
     auto& camera_storage = hub.camera_storage();
@@ -265,6 +280,7 @@ void GeometrySystem::update() {
         }
     }
 
+    update_phase.set("async_tasks");
     process_async_tasks();
 
     // ---- 延迟 GPU 释放（LRU evict 路径） ----
@@ -272,6 +288,7 @@ void GeometrySystem::update() {
     // 延迟到此处（下一帧 update 头部）释放 GPU 资源，避免与
     // OpticsSystem 渲染线程产生 data race。
     if (!impl_->pending_gpu_releases.empty()) {
+        update_phase.set("gpu_releases");
         std::unordered_set<Impl::Payload> to_release;
         {
             std::unique_lock lock(impl_->mtx);
@@ -287,19 +304,23 @@ void GeometrySystem::update() {
     // 填 model_id 后转 PendingBuild，并回填 MechanicsDevice AABB。
     // 磁盘 IO / assimp 解析全部在本（引擎）线程之外的 ResourceManager 线程池完成，
     // 不阻塞前端 CEF UI 线程。
+    update_phase.set("pending_imports");
     process_pending_geometry_imports();
 
     // ---- 初始构建（异步加载承接点）----
     // 为标记 PendingBuild 的 GeometryDevice 构建 GPU 资源（mesh_handles）。
     // 放在 LOD 上传之前，使本帧新建的 mesh 同帧即可上传其 LOD 数据。
+    update_phase.set("pending_builds");
     process_pending_geometry_builds();
 
     // ---- 动态减面管线 ----
     // LOD 由 GeometrySystem 内部自动管理，无外部开关。
     // upload：为新模型登记 LOD 缓存条目（LOD0 就绪 + LOD1..N 仅元数据，不建 GPU 缓冲）。
+    update_phase.set("lod_upload");
     upload_lod_from_scene_data();
     // 轮询回写已完成的异步 LOD 构建（方案 C）：放在 reconcile 之前，让本帧完成的级
     // 即刻参与本帧的驻留决策（计入 ready，避免对同级重复发起任务）。
+    update_phase.set("lod_build_poll");
     process_pending_lod_builds();
     // reconcile（Step 3a 按需驻留）和 reconcile_cpu_residency 已移到场景循环之后。
     // 这样 evict_lods_for_actor（场景循环内，按距离淘汰 LOD1..N）先于 reconcile 执行：
@@ -308,11 +329,11 @@ void GeometrySystem::update() {
     //
     // 必须在 upload 之后（缓存条目已建）、skin 之前（蒙皮需写本帧新建级）。
 
-    // ---- 骨骼动画 CPU 蒙皮 ----
-    // 已迁移到 MechanicsSystem::update_skinned_geometry()（物理线程帧尾执行）。
-    // Geometry 仅负责创建/驻留 GPU 缓冲；蒙皮计算 + write_bytes 由 Mechanics 通过
-    // get_skinning_targets() 借出句柄完成。蒙皮结果仍写回 GeometryDevice
-    // （skinned_cpu_vertices / skinned_aabb），供 Vision / 物理消费。
+    // ---- 骨骼动画 GPU 蒙皮 ----
+    // MechanicsSystem::update_skinned_geometry() 在物理步进前执行。
+    // Geometry 创建/驻留渲染缓冲，Mechanics 借出句柄提交 GPU 蒙皮与拷贝。
+    // LOD0 回读和 AABB 写回 GeometryDevice，供 Vision / CPU 物理消费。
+    update_phase.set("scene_loop");
 
     for (std::uintptr_t scene_handle : scene_handles) {
         const auto scene_begin = std::chrono::steady_clock::now();
@@ -360,7 +381,15 @@ void GeometrySystem::update() {
 
                 const MechanicsDevice& mechanics_dev = *mechanics_read;
                 Spatial::AABB aabb;
-                world_aabb_from_local_bounds(*transform_read, mechanics_dev.min_xyz, mechanics_dev.max_xyz, aabb);
+                if (geometry_read->model_node_bounds) {
+                    const auto& bounds = *geometry_read->model_node_bounds;
+                    world_aabb_from_local_bounds(*transform_read,
+                        make_fvec3(bounds[0], bounds[1], bounds[2]),
+                        make_fvec3(bounds[3], bounds[4], bounds[5]), aabb);
+                } else {
+                    world_aabb_from_local_bounds(*transform_read,
+                        mechanics_dev.min_xyz, mechanics_dev.max_xyz, aabb);
+                }
                 octree_entries.push_back({actor_handle,aabb});
                 added_actors.insert(actor_handle);
                 // B1：不 break，让同一 actor 的所有 mechanics profile 都插入八叉树，
@@ -454,15 +483,6 @@ void GeometrySystem::update() {
             std::lock_guard stats_lock(scene_state.stats_mutex);
             scene_state.stats.last_rebuild_ms = rebuild_ms;
         }
-        // 发布粗筛碰撞候选对：SceneSystem 仅负责空间划分，不依赖物理系统
-        {
-            auto pairs = query_pairs(scene_handle);
-            if (impl_->ctx && impl_->ctx->event_bus()) {
-                impl_->ctx->event_bus()->publish(
-                    Events::BroadphasePairsEvent{scene_handle, std::move(pairs)});
-            }
-        }
-
         std::vector<std::pair<ktm::fvec3,Math::Frustum>> cameras;
         std::unordered_set<Impl::Payload> visible_actors;
         double visible_query_ms_total = 0.0;
@@ -769,6 +789,7 @@ void GeometrySystem::update() {
     // 包括对已淘汰 mesh 保持 LOD0、对回到恢复区的 mesh 清除标记并重建需求级。
     // 若在场景循环之前调用，reconcile 先恢复 mesh，随后 evict_lods_for_actor
     // 同帧重新淘汰，造成"恢复→淘汰→恢复"的每帧 ping-pong。
+    update_phase.set("lod_residency");
     reconcile_lod_residency();
 
     // ---- CPU LOD 驻留协调（RAM 3层窗口管理）----
@@ -778,6 +799,7 @@ void GeometrySystem::update() {
     // 窗口内数据缺失的级从磁盘缓存回读，供 GPU 侧按需重建该级缓冲。
     if (++impl_->cpu_window_eval_counter >= Impl::kCpuWindowEvalInterval) {
         impl_->cpu_window_eval_counter = 0;
+        update_phase.set("cpu_residency");
         reconcile_cpu_residency();
     }
 
@@ -906,6 +928,7 @@ void GeometrySystem::update() {
     // 每隔 pressure_eval_interval 帧评估一次；不持 impl_->mtx（内部自管锁 + 锁外发事件）。
     if (++impl_->pressure_eval_counter >= impl_->pressure_eval_interval) {
         impl_->pressure_eval_counter = 0;
+        update_phase.set("memory_pressure_evict");
         evict_under_memory_pressure();
     }
 }
@@ -1345,6 +1368,7 @@ void GeometrySystem::release_actor_gpu_resources(std::uintptr_t actor) {
             // 注意：model_resource_handle 保留不删，以便 reload 时能找到模型资源条目
             if (auto geom_write = hub.geometry_storage().try_acquire_write(geom_handle)) {
                 geom_write->mesh_handles.clear();
+                geom_write->mesh_instances.clear();
             }  // geom_write 析构时自动释放写锁
 
             // ---- 第 5.4 步：日志 ----
@@ -1366,7 +1390,9 @@ void GeometrySystem::release_actor_gpu_resources(std::uintptr_t actor) {
 //   rid   — 资源 UID（ResourceManager 分配的唯一标识，由 import_async 返回）
 // 说明：这个函数是 unload → reload 生命周期中"重建"环节的核心
 // ============================================================================
-void GeometrySystem::rebuild_actor_gpu_resources(std::uintptr_t actor, std::uint64_t rid) {
+bool GeometrySystem::rebuild_actor_gpu_resources(std::uintptr_t actor,
+                                                  std::uint64_t rid,
+                                                  std::uintptr_t scene_handle) {
     // ---- 第 0 步：获取两个全局单例 ----
     // SharedDataHub：管理所有系统共享的设备数据（actor/profile/geometry 等）
     auto& hub = SharedDataHub::instance();
@@ -1375,7 +1401,8 @@ void GeometrySystem::rebuild_actor_gpu_resources(std::uintptr_t actor, std::uint
 
     // ---- 第 1 步：读取 actor 数据 ----
     auto actor_read = hub.actor_storage().try_acquire_read(actor);
-    if (!actor_read.valid()) return;  // actor 句柄无效
+    if (!actor_read.valid()) return false;  // actor 句柄无效
+    bool queued_staged_upload = false;
 
     // ---- 第 2 步：去重集合（与 release 函数逻辑相同）----
     // 多个 profile 可能引用同一 geometry，用 set 防止重复重建
@@ -1458,53 +1485,38 @@ void GeometrySystem::rebuild_actor_gpu_resources(std::uintptr_t actor, std::uint
                 continue;  // 无需重建，直接处理下一个 geometry
             }
 
-            // ---- 第 5.4 步：从 ResourceManager 获取导入的 Scene 数据 ----
-            // rid 是 import_async 完成后返回的资源唯一标识
-            // Scene 资源包含完整的模型数据：顶点/索引/材质/纹理/LOD 等
-            auto scene_read = resource_manager.acquire_read<Resource::Scene>(rid);
-            if (!scene_read.valid()) {
-                CFW_LOG_ERROR("[GeometrySystem] Failed to acquire Scene resource for rid={}", rid);
-                continue;  // 资源无效，跳过
-            }
-            auto& scene = *scene_read;  // 解引用读锁守卫，获得 Scene 数据引用
-
-            // ================================================================
-            // 阶段 A：创建 MeshDevice 数组（GPU 缓冲 + 纹理）
-            // 构建逻辑收敛到 build_mesh_devices_from_scene（单一来源），
-            // 与 Python API 层 Geometry 构造函数共用同一份实现。
-            // 占位纹理由 builder 模块持有（进程级单例），无需在此创建。
-            // ================================================================
-            std::vector<MeshDevice> mesh_devices = build_mesh_devices_from_scene(scene);
-
-            // ================================================================
-            // 阶段 C：写回 GeometryDevice
-            // 将重建好的 mesh_handles 写回 SharedDataHub
-            // ================================================================
-
-            // ---- 先清理旧 LOD 缓存 ----
-            // mesh_handles 已经重建（新的 GPU 缓冲句柄），旧 LOD 条目指向已销毁的缓冲
-            // 必须清除，否则下一帧 upload_lod_from_scene_data() 会检测到 mismatched handles 并重建
+            // ---- 第 5.4 步：清理旧 LOD 缓存并转入分批 GPU 上传队列 ----
+            // 以前这里会一次性为整个场景创建所有 GPU 缓冲和纹理。Horizon 的资源
+            // 管理器会串行化这些调用，大 GLB 会长期占住渲染提交。复用 PendingBuild
+            // 管线后，每帧最多创建 kGeometryUploadMeshesPerBatch 个 mesh。
             {
                 std::unique_lock lod_lock(impl_->lod_cache_mutex);  // 独占锁
-                for (uint32_t i = 0; i < static_cast<uint32_t>(mesh_devices.size()); ++i) {
-                    impl_->lod_cache.erase(Impl::make_lod_key(geom_handle, i));
+                // 不依赖 Scene 的 mesh 数量：该 geometry 的所有历史条目都属于旧资源。
+                for (auto it = impl_->lod_cache.begin(); it != impl_->lod_cache.end();) {
+                    const auto key_geometry = static_cast<std::uint32_t>(it->first >> 32u);
+                    if (key_geometry == static_cast<std::uint32_t>(geom_handle)) {
+                        it = impl_->lod_cache.erase(it);
+                    }
+                    else ++it;
                 }
             }  // lod_lock 析构
 
-            // ---- 将新 mesh_handles 写入 GeometryDevice ----
             if (auto geom_write = hub.geometry_storage().try_acquire_write(geom_handle)) {
-                geom_write->mesh_handles = std::move(mesh_devices);  // move 语义，避免拷贝
+                if (geom_write->model_resource_handle == model_res_handle &&
+                    geom_write->mesh_handles.empty()) {
+                    geom_write->gpu_build_state = GeometryDevice::GpuBuildState::PendingBuild;
+                    if (scene_handle != 0) {
+                        impl_->pending_geometry_load_events[geom_handle] = {scene_handle, actor};
+                    }
+                    queued_staged_upload = true;
+                }
             }  // geom_write 析构，释放写锁
 
-            // ---- 日志：记录重建完成 ----
-            CFW_LOG_NOTICE("[GeometrySystem] Rebuilt GPU resources for geometry {}, "
-                           "{} mesh(es), actor {}, rid={}",
-                           geom_handle,                // geometry 句柄
-                           scene.data.meshes.size(),   // 重建的 mesh 数量
-                           actor,                      // 所属 actor
-                           rid);                       // 资源 UID
+            CFW_LOG_NOTICE("[GeometryUpload] queued rebuilt geometry={} actor={} rid={} for staged upload",
+                           geom_handle, actor, rid);
         }
     }
+    return queued_staged_upload;
 }
 
 // ============================================================================
@@ -1588,12 +1600,12 @@ void GeometrySystem::process_async_tasks() {
         }
 
         if (task.rid != Resource::IResource::INVALID_UID) {
-            // 重建 GPU 资源（mesh_handles + 纹理），恢复 model_resource_handle
-            // 必须在发布 ActorLoadFinishedEvent 之前完成，
-            // 以保证事件订阅者（渲染线程等）能读到有效的 GPU 缓冲
-            rebuild_actor_gpu_resources(task.actor, task.rid);
-
-            impl_->ctx->event_bus()->publish(Events::ActorLoadFinishedEvent{task.scene_handle,task.actor});
+            // 分批重建时，ActorLoadFinishedEvent 延后到最后一个 GPU 批次发布。
+            // 否则场景管理会在 mesh_handles 仍为空时建立树，造成 UI 空白。
+            if (!rebuild_actor_gpu_resources(task.actor, task.rid, task.scene_handle)) {
+                impl_->ctx->event_bus()->publish(
+                    Events::ActorLoadFinishedEvent{task.scene_handle, task.actor});
+            }
         }else {
             CFW_LOG_ERROR("[SceneSystem] Failed to load actor {}", task.actor);
             // 加载失败，回滚到Unloaded状态
@@ -1865,6 +1877,19 @@ void GeometrySystem::Impl::ensure_lod_disk_cache() {
         CFW_LOG_NOTICE("[LOD-Disk] 缓存已初始化: dir={} 内存=128MB 磁盘=512MB",
                        dir.string());
     });
+}
+
+void GeometrySystem::Impl::report_cpu_residency_scene_busy(std::uint64_t model_id) {
+    ++cpu_residency_busy_skips;
+    const auto now = std::chrono::steady_clock::now();
+    const bool due = last_cpu_residency_busy_log.time_since_epoch().count() == 0 ||
+                     now - last_cpu_residency_busy_log >= kCpuResidencyBusyLogInterval;
+    if (!due) return;
+    CFW_LOG_WARNING(
+        "[LOD-CPU] Scene 写锁被占用，跳过本轮 CPU 驻留窗口整理 model={:#x} "
+        "(skips={}，说明有读者长时间持有该 Scene 的读锁，例如蒙皮线程卡在 GPU 提交上)",
+        model_id, cpu_residency_busy_skips);
+    last_cpu_residency_busy_log = now;
 }
 
 void GeometrySystem::Impl::lod_disk_writer_loop() {
@@ -2342,6 +2367,123 @@ GeometrySystem::RenderMeshBuffers GeometrySystem::select_render_buffers(
     return out;
 }
 
+GeometrySystem::RenderMeshBuffers GeometrySystem::select_render_buffers_for_instance(
+    std::uintptr_t geometry_handle,
+    uint32_t mesh_index,
+    const ktm::fvec3& camera_pos,
+    float camera_fov_deg,
+    const ktm::fmat4x4& actor_transform,
+    const ktm::fmat4x4& instance_transform,
+    const RenderMeshBuffers& fallback) const {
+    std::shared_lock lock(impl_->lod_cache_mutex);
+    auto it = impl_->lod_cache.find(Impl::make_lod_key(geometry_handle, mesh_index));
+    if (it == impl_->lod_cache.end() || it->second.levels.size() <= 1) {
+        return fallback;
+    }
+    auto& entry = it->second;
+    const auto& levels = entry.levels;
+
+    const auto multiply = [](const ktm::fmat4x4& lhs, const ktm::fmat4x4& rhs) {
+        ktm::fmat4x4 out{};
+        for (int col = 0; col < 4; ++col) {
+            for (int row = 0; row < 4; ++row) {
+                out[col][row] =
+                    lhs[0][row] * rhs[col][0] +
+                    lhs[1][row] * rhs[col][1] +
+                    lhs[2][row] * rhs[col][2] +
+                    lhs[3][row] * rhs[col][3];
+            }
+        }
+        return out;
+    };
+    const ktm::fmat4x4 world = multiply(actor_transform, instance_transform);
+
+    auto transform_point = [&](float x, float y, float z) {
+        ktm::fvec3 out;
+        out[0] = world[0][0] * x + world[1][0] * y + world[2][0] * z + world[3][0];
+        out[1] = world[0][1] * x + world[1][1] * y + world[2][1] * z + world[3][1];
+        out[2] = world[0][2] * x + world[1][2] * y + world[2][2] * z + world[3][2];
+        return out;
+    };
+
+    const float xs[2] = {entry.local_aabb_min[0], entry.local_aabb_max[0]};
+    const float ys[2] = {entry.local_aabb_min[1], entry.local_aabb_max[1]};
+    const float zs[2] = {entry.local_aabb_min[2], entry.local_aabb_max[2]};
+    ktm::fvec3 world_min = transform_point(xs[0], ys[0], zs[0]);
+    ktm::fvec3 world_max = world_min;
+    for (float x : xs) {
+        for (float y : ys) {
+            for (float z : zs) {
+                const ktm::fvec3 p = transform_point(x, y, z);
+                for (int axis = 0; axis < 3; ++axis) {
+                    world_min[axis] = std::min(world_min[axis], p[axis]);
+                    world_max[axis] = std::max(world_max[axis], p[axis]);
+                }
+            }
+        }
+    }
+
+    const auto column_length = [&](int col) {
+        return std::sqrt(world[col][0] * world[col][0] +
+                         world[col][1] * world[col][1] +
+                         world[col][2] * world[col][2]);
+    };
+    const float instance_scale = std::max({column_length(0), column_length(1), column_length(2)});
+    // 像素预算由 reconcile 按显存压力写入；压力越大预算越宽 → 实例选级越粗 → 需求并集越小。
+    const float pixel_budget =
+        impl_->last_lod_pixel_budget.load(std::memory_order_relaxed);
+    const float epsilon = compute_angular_epsilon(pixel_budget, camera_fov_deg, 1080.0f);
+    const float distance = distance_point_to_aabb(camera_pos, world_min, world_max);
+    const float allowed = epsilon * std::max(distance, 0.0f);
+
+    int selected = 0;
+    for (int level = static_cast<int>(levels.size()) - 1; level >= 1; --level) {
+        const float world_error = levels[static_cast<std::size_t>(level)].geometric_error * instance_scale;
+        if (world_error <= allowed) {
+            selected = level;
+            break;
+        }
+    }
+
+    // 把该实例的"理想级"登记进本帧需求并集。注意登记的是理想级而不是下面的回退级：
+    // 该级若尚未驻留，本次会回退到更细的已驻留级渲染，但必须登记，否则 reconcile
+    // 永远不会去构建它。
+    if (entry.shared_instances && selected >= 0) {
+        entry.frame_demand_mask.set(static_cast<std::uint32_t>(selected));
+    }
+
+    auto make_buffers = [&](const LODMeshBuffers& candidate) {
+        return RenderMeshBuffers{
+            candidate.vertex_buffer,
+            candidate.index_buffer,
+            candidate.vertex_storage ? candidate.vertex_storage : fallback.vertex_storage,
+            candidate.index_storage ? candidate.index_storage : fallback.index_storage,
+            candidate.vertex_count,
+            candidate.index_count,
+            candidate.max_index};
+    };
+
+    // 1) 先向更细方向找：视觉安全，绝不做比需求更粗的降级。
+    for (int level = selected; level >= 0; --level) {
+        const auto& candidate = levels[static_cast<std::size_t>(level)];
+        if (!candidate.ready || !candidate.vertex_buffer || !candidate.index_buffer) {
+            continue;
+        }
+        return make_buffers(candidate);
+    }
+    // 2) 更细方向一级都没有（共享资产下 LOD0 可能已被卸载，需求级还在异步构建）
+    //    → 退一步向更粗方向找最近的已驻留级。宁可这一帧画粗一级，也不返回空缓冲
+    //    让整个 mesh 从画面里消失。
+    for (int level = selected + 1; level < static_cast<int>(levels.size()); ++level) {
+        const auto& candidate = levels[static_cast<std::size_t>(level)];
+        if (!candidate.ready || !candidate.vertex_buffer || !candidate.index_buffer) {
+            continue;
+        }
+        return make_buffers(candidate);
+    }
+    return fallback;
+}
+
 GeometrySystem::RenderMeshBuffers GeometrySystem::select_shadow_render_buffers(
     std::uintptr_t geometry_handle, uint32_t mesh_index,
     float world_units_per_texel, float max_abs_scale,
@@ -2360,6 +2502,10 @@ GeometrySystem::RenderMeshBuffers GeometrySystem::select_shadow_render_buffers(
         }
     }
     target = std::clamp(target, 0, static_cast<int>(levels.size()) - 1);
+    // 阴影用的级同样是"需求"：并进共享实例资产的需求集合，避免阴影读到已卸载级。
+    if (it->second.shared_instances) {
+        it->second.frame_demand_mask.set(static_cast<std::uint32_t>(target));
+    }
     for (int level = target; level >= 0; --level) {
         const auto& candidate = levels[static_cast<size_t>(level)];
         if (!candidate.ready || !candidate.vertex_buffer || !candidate.index_buffer) continue;
@@ -2514,7 +2660,7 @@ const LODMeshBuffers* GeometrySystem::resolve_lod_buffers(
 std::vector<std::pair<Horizon::HardwareBuffer, Horizon::HardwareBuffer>>
 GeometrySystem::get_skinning_targets(std::uintptr_t geometry_handle, uint32_t mesh_index) const {
     // 单次 shared_lock 拷出该 mesh 所有 LOD 级别的 (vertex, vertex_storage) 句柄对。
-    // 句柄为引用计数拷贝，拷出后保活底层 buffer，供 MechanicsSystem 锁外 write_bytes。
+    // 句柄为引用计数拷贝，拷出后保活底层 buffer，供调用方锁外使用。
     std::vector<std::pair<Horizon::HardwareBuffer, Horizon::HardwareBuffer>> out;
     std::shared_lock lock(impl_->lod_cache_mutex);
     auto it = impl_->lod_cache.find(Impl::make_lod_key(geometry_handle, mesh_index));
@@ -2522,6 +2668,20 @@ GeometrySystem::get_skinning_targets(std::uintptr_t geometry_handle, uint32_t me
     out.reserve(it->second.levels.size());
     for (auto& lvl : it->second.levels) {
         out.emplace_back(lvl.vertex_buffer, lvl.vertex_storage);
+    }
+    return out;
+}
+
+std::vector<GeometrySystem::SkinningLodTarget>
+GeometrySystem::get_skinning_lod_targets(std::uintptr_t geometry_handle, uint32_t mesh_index) const {
+    std::vector<SkinningLodTarget> out;
+    std::shared_lock lock(impl_->lod_cache_mutex);
+    const auto it = impl_->lod_cache.find(Impl::make_lod_key(geometry_handle, mesh_index));
+    if (it == impl_->lod_cache.end() || it->second.levels.size() <= 1) return out;
+    out.reserve(it->second.levels.size() - 1);
+    for (std::size_t index = 1; index < it->second.levels.size(); ++index) {
+        const auto& level = it->second.levels[index];
+        out.push_back({level.source_lod_index, level.vertex_buffer, level.vertex_storage});
     }
     return out;
 }
@@ -2565,6 +2725,71 @@ void GeometrySystem::process_pending_geometry_imports() {
     auto& hub = SharedDataHub::instance();
     auto& resource_manager = Resource::ResourceManager::get_instance();
     auto& geom_storage = hub.geometry_storage();
+
+    // ---- 心跳：证明扫描仍在运行，并给出未就绪库存 / 在途任务年龄 ----
+    // "运行期加载的模型永远显示上传中" 有两种完全不同的成因：
+    //   ① 几何线程本身卡住 → 心跳消失；
+    //   ② 几何线程在跑但跳过了这个 geometry → 心跳在、库存里却仍是 PendingImport。
+    // 没有这行日志时两者在日志里无从区分（扫描起点/跳过点原本都不打日志）。
+    {
+        const auto heartbeat_now = std::chrono::steady_clock::now();
+        const bool heartbeat_due =
+            impl_->last_import_scan_heartbeat.time_since_epoch().count() == 0 ||
+            heartbeat_now - impl_->last_import_scan_heartbeat >= Impl::kImportScanHeartbeatInterval;
+        if (heartbeat_due) {
+            impl_->last_import_scan_heartbeat = heartbeat_now;
+            const auto state_name = [](GeometryDevice::GpuBuildState state) {
+                switch (state) {
+                    case GeometryDevice::GpuBuildState::Ready: return "Ready";
+                    case GeometryDevice::GpuBuildState::PendingImport: return "PendingImport";
+                    case GeometryDevice::GpuBuildState::PendingBuild: return "PendingBuild";
+                    case GeometryDevice::GpuBuildState::Failed: return "Failed";
+                }
+                return "Unknown";
+            };
+            std::size_t geometry_count = 0;
+            std::size_t not_ready_count = 0;
+            std::string not_ready_detail;
+            for (auto it = geom_storage.cbegin(); it != geom_storage.cend(); ++it) {
+                ++geometry_count;
+                const GeometryDevice& geom_dev = *it;
+                if (geom_dev.gpu_build_state == GeometryDevice::GpuBuildState::Ready) continue;
+                ++not_ready_count;
+                if (not_ready_count > 4) continue;
+                std::uint64_t model_id = 0;
+                if (geom_dev.model_resource_handle != 0) {
+                    if (auto model = hub.model_resource_storage().try_acquire_read(
+                            geom_dev.model_resource_handle)) {
+                        model_id = model->model_id;
+                    }
+                }
+                not_ready_detail += " [";
+                not_ready_detail += std::to_string(
+                    static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(&geom_dev)));
+                not_ready_detail += "]" + std::string(state_name(geom_dev.gpu_build_state));
+                not_ready_detail += " meshes=" + std::to_string(geom_dev.mesh_handles.size());
+                not_ready_detail += " model=" + std::to_string(model_id);
+                not_ready_detail += " import_epoch=" + std::to_string(geom_dev.import_epoch);
+                not_ready_detail += " path='" + geom_dev.model_path_utf8 + "'";
+            }
+            std::string inflight_detail;
+            for (const auto& [task_handle, task] : impl_->pending_import_tasks) {
+                const auto age_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                        heartbeat_now - task.started).count();
+                inflight_detail += " [";
+                inflight_detail += std::to_string(
+                    static_cast<unsigned long long>(static_cast<std::uintptr_t>(task_handle)));
+                inflight_detail += "]epoch=" + std::to_string(task.epoch) +
+                                   " age_ms=" + std::to_string(age_ms);
+            }
+            CFW_LOG_NOTICE(
+                "[GeometryScan] geometries={} not_ready={} import_tasks={}{} pending_builds={} "
+                "not_ready_detail:{}",
+                geometry_count, not_ready_count, impl_->pending_import_tasks.size(),
+                inflight_detail, impl_->pending_geometry_builds.size(),
+                not_ready_detail.empty() ? std::string{" none"} : not_ready_detail);
+        }
+    }
 
     // ---- 阶段 1：轮询已完成的 import 任务 ----
     // future 就绪 → 取 model_id → 写入 ModelResource 槽 → 转 PendingBuild。
@@ -2661,7 +2886,11 @@ void GeometrySystem::process_pending_geometry_imports() {
         const GeometryDevice& geom_dev = *it;
         if (geom_dev.gpu_build_state != GeometryDevice::GpuBuildState::PendingImport) continue;
         auto geom_handle = reinterpret_cast<std::uintptr_t>(&geom_dev);
-        if (impl_->pending_import_tasks.count(geom_handle)) continue;  // 已在途
+        if (impl_->pending_import_tasks.count(geom_handle)) {
+            // 正常只是一帧的窗口（任务已发起、结果未回）。若长期如此，心跳里的
+            // import_tasks age_ms 会持续增长 —— 那说明在途任务本身没跑完。
+            continue;  // 已在途
+        }
         if (geom_dev.model_path_utf8.empty()) {
             CFW_LOG_WARNING("[GeometrySystem] Skipping PendingImport geometry {:#x} — model_path is empty",
                             geom_handle);
@@ -2702,14 +2931,20 @@ void GeometrySystem::process_pending_geometry_imports() {
             if (!geom_write.valid()) continue;  // 已销毁
             if (geom_write->gpu_build_state != GeometryDevice::GpuBuildState::PendingImport ||
                 geom_write->import_epoch != 0) {
+                CFW_LOG_WARNING("[GeometryImport] launch aborted geometry={} state={} import_epoch={}",
+                                item.geom_handle,
+                                static_cast<int>(geom_write->gpu_build_state),
+                                geom_write->import_epoch);
                 continue;  // 状态已变 / 已有在途任务，跳过
             }
             geom_write->import_epoch = epoch;
         }
 
         impl_->pending_import_tasks[item.geom_handle] =
-            Impl::PendingImportTask{epoch,
+            Impl::PendingImportTask{epoch, std::chrono::steady_clock::now(),
                                     resource_manager.import_async(Utils::utf8_to_path(item.path))};
+        CFW_LOG_NOTICE("[GeometryImport] launched geometry={} epoch={} path='{}'",
+                       item.geom_handle, epoch, item.path);
         ++launched;
     }
 }
@@ -2733,17 +2968,65 @@ void GeometrySystem::process_pending_geometry_builds() {
         if (task_it == impl_->pending_geometry_builds.end()) continue;
         auto task = std::move(task_it->second);
         impl_->pending_geometry_builds.erase(task_it);
-        std::vector<MeshDevice> mesh_devices;
+        std::vector<MeshDevice> completed_meshes;
         try {
-            mesh_devices = task.future.get();
+            completed_meshes = task.future.get();
         } catch (...) {
-            mesh_devices.clear();
+            completed_meshes.clear();
         }
-        if (mesh_devices.empty()) {
+        if (completed_meshes.empty()) {
             ++impl_->diag_geometry_upload_discarded;
-            CFW_LOG_WARNING("[GeometryUpload] build failed geometry={} model={}", handle, task.model_id);
+            CFW_LOG_WARNING("[GeometryUpload] batch failed geometry={} model={} first_mesh={}",
+                            handle, task.model_id, task.next_mesh);
             continue;
         }
+        task.mesh_devices.insert(task.mesh_devices.end(),
+                                 std::make_move_iterator(completed_meshes.begin()),
+                                 std::make_move_iterator(completed_meshes.end()));
+        task.next_mesh += task.inflight_mesh_count;
+
+        // Submit one bounded batch at a time.  Returning to update() between
+        // batches gives the render thread a chance to acquire Horizon's
+        // resource mutex and present a frame.
+        if (task.next_mesh < task.mesh_count) {
+            const std::size_t first_mesh = task.next_mesh;
+            const std::size_t batch_count = std::min(
+                Impl::kGeometryUploadMeshesPerBatch, task.mesh_count - first_mesh);
+            task.inflight_mesh_count = batch_count;
+            auto promise = std::make_shared<std::promise<std::vector<MeshDevice>>>();
+            task.future = promise->get_future();
+            const auto model_id = task.model_id;
+            const auto texture_cache = task.texture_cache;
+            impl_->pending_geometry_builds.emplace(handle, std::move(task));
+            impl_->geometry_build_tasks.run(
+                [model_id, first_mesh, batch_count, texture_cache, promise, &resource_manager]() {
+                    Corona::Diagnostics::PhaseScope build_phase{"GeometryWorker", "build_batch"};
+                    std::vector<MeshDevice> result;
+                    try {
+                        build_phase.set("build_batch:acquire_scene");
+                        auto scene = resource_manager.acquire_read<Resource::Scene>(model_id);
+                        if (scene.valid()) {
+                            build_phase.set("build_batch:build_meshes");
+                            result = build_mesh_devices_from_scene_range(
+                                *scene, first_mesh, batch_count, *texture_cache);
+                        }
+                    } catch (...) {}
+                    promise->set_value(std::move(result));
+                });
+            continue;
+        }
+
+        SceneGpuMeshData gpu_data;
+        if (auto scene = resource_manager.acquire_read<Resource::Scene>(task.model_id); scene.valid()) {
+            gpu_data = make_scene_gpu_mesh_data(*scene, std::move(task.mesh_devices));
+        }
+        if (gpu_data.mesh_devices.empty()) {
+            ++impl_->diag_geometry_upload_discarded;
+            CFW_LOG_WARNING("[GeometryUpload] finalization failed geometry={} model={}",
+                            handle, task.model_id);
+            continue;
+        }
+        std::optional<std::pair<Impl::Payload, Impl::Payload>> load_finished_event;
         if (auto geom_write = geom_storage.try_acquire_write(handle)) {
             if (geom_write->gpu_build_state == GeometryDevice::GpuBuildState::PendingBuild &&
                 geom_write->mesh_handles.empty() && geom_write->model_resource_handle != 0) {
@@ -2752,15 +3035,31 @@ void GeometrySystem::process_pending_geometry_builds() {
                     current_model = model->model_id;
                 }
                 if (current_model == task.model_id) {
-                    geom_write->mesh_handles = std::move(mesh_devices);
+                    geom_write->mesh_handles = std::move(gpu_data.mesh_devices);
+                    geom_write->mesh_instances = std::move(gpu_data.mesh_instances);
+                geom_write->model_nodes = std::move(gpu_data.model_nodes);
+                geom_write->node_instance_prefix = gpu_data.node_instance_prefix;
+                geom_write->has_node_instance_prefix = gpu_data.has_node_instance_prefix;
+                geom_write->model_node_instances_mapped = false;
+                ModelNodes::apply_overrides(*geom_write);
                     geom_write->gpu_build_state = GeometryDevice::GpuBuildState::Ready;
-                    CFW_LOG_NOTICE("[GeometryUpload] published geometry={} meshes={} model={}",
-                                   handle, geom_write->mesh_handles.size(), task.model_id);
+                    CFW_LOG_NOTICE("[GeometryUpload] published geometry={} meshes={} instances={} model={}",
+                                   handle, geom_write->mesh_handles.size(),
+                                   geom_write->mesh_instances.size(), task.model_id);
+                    if (auto event_it = impl_->pending_geometry_load_events.find(handle);
+                        event_it != impl_->pending_geometry_load_events.end()) {
+                        load_finished_event = event_it->second;
+                        impl_->pending_geometry_load_events.erase(event_it);
+                    }
                     ++impl_->diag_geometry_upload_published;
                 } else {
                     ++impl_->diag_geometry_upload_discarded;
                 }
             }
+        }
+        if (load_finished_event) {
+            impl_->ctx->event_bus()->publish(Events::ActorLoadFinishedEvent{
+                load_finished_event->first, load_finished_event->second});
         }
     }
 
@@ -2827,28 +3126,53 @@ void GeometrySystem::process_pending_geometry_builds() {
     // ---- 阶段 2：异步启动 GPU 构建 ----
     // 每个 geometry 最多一个在途任务，整个系统最多一个大型模型上传，
     // 避免多个 GLB 同时争用 Vulkan 设备；当前帧只排队，不等待结果。
+    const auto now = std::chrono::steady_clock::now();
+    if (impl_->last_geometry_build_submit_time.time_since_epoch().count() != 0 &&
+        now - impl_->last_geometry_build_submit_time < Impl::kGeometryUploadMinInterval) {
+        return;
+    }
     for (const auto& item : pending) {
         if (impl_->pending_geometry_builds.size() >= Impl::kMaxInflightGeometryBuilds) break;
         if (impl_->pending_geometry_builds.find(item.geom_handle) != impl_->pending_geometry_builds.end()) continue;
 
+        auto scene = resource_manager.acquire_read<Resource::Scene>(item.model_id);
+        if (!scene.valid() || scene->data.meshes.empty()) {
+            CFW_LOG_WARNING("[GeometryUpload] scene unavailable or empty geometry={} model={}",
+                            item.geom_handle, item.model_id);
+            continue;
+        }
+
         const auto epoch = impl_->next_geometry_build_epoch++;
+        const std::size_t mesh_count = scene->data.meshes.size();
+        const std::size_t batch_count = std::min(
+            Impl::kGeometryUploadMeshesPerBatch, mesh_count);
+        auto texture_cache = std::make_shared<SceneGpuTextureCache>();
         auto promise = std::make_shared<std::promise<std::vector<MeshDevice>>>();
         impl_->pending_geometry_builds.emplace(
             item.geom_handle,
-            Impl::PendingGeometryBuild{item.model_id, epoch, promise->get_future()});
+            Impl::PendingGeometryBuild{item.model_id, epoch, 0, mesh_count, batch_count, {},
+                                       texture_cache, promise->get_future()});
         impl_->geometry_build_tasks.run(
-            [model_id = item.model_id, promise, &resource_manager]() {
+            [model_id = item.model_id, batch_count, texture_cache, promise, &resource_manager]() {
+                Corona::Diagnostics::PhaseScope build_phase{"GeometryWorker", "build_first_batch"};
                 std::vector<MeshDevice> result;
                 try {
+                    build_phase.set("build_first_batch:acquire_scene");
                     auto scene = resource_manager.acquire_read<Resource::Scene>(model_id);
-                    if (scene.valid()) result = build_mesh_devices_from_scene(*scene);
+                    if (scene.valid()) {
+                        build_phase.set("build_first_batch:build_meshes");
+                        result = build_mesh_devices_from_scene_range(
+                            *scene, 0, batch_count, *texture_cache);
+                    }
                 } catch (...) {
                     result.clear();
                 }
                 promise->set_value(std::move(result));
             });
-        CFW_LOG_DEBUG("[GeometryUpload] queued geometry={} model={} epoch={}",
-                      item.geom_handle, item.model_id, epoch);
+        impl_->last_geometry_build_submit_time = now;
+        CFW_LOG_NOTICE("[GeometryUpload] queued staged geometry={} model={} meshes={} batch_size={} epoch={}",
+                       item.geom_handle, item.model_id, mesh_count,
+                       Impl::kGeometryUploadMeshesPerBatch, epoch);
         ++impl_->diag_geometry_upload_queued;
         break;
     }
@@ -2876,6 +3200,12 @@ void GeometrySystem::upload_lod_from_scene_data() {
             model_id = model_res->model_id;
         }
         if (model_id == 0) continue;
+
+        std::unordered_set<std::uint32_t> shared_mesh_indices;
+        shared_mesh_indices.reserve(geom_dev.mesh_instances.size());
+        for (const auto& instance : geom_dev.mesh_instances) {
+            shared_mesh_indices.insert(instance.mesh_index);
+        }
 
         for (uint32_t mesh_idx = 0; mesh_idx < static_cast<uint32_t>(geom_dev.mesh_handles.size()); ++mesh_idx) {
             uint64_t lod_key = Impl::make_lod_key(geom_handle, mesh_idx);
@@ -2949,6 +3279,7 @@ void GeometrySystem::upload_lod_from_scene_data() {
             Impl::LODCacheEntry entry;
             entry.model_id = model_id;
             entry.residency_epoch = impl_->next_residency_epoch++;  // 身份版本（方案 C ABA 守卫）
+            entry.shared_instances = shared_mesh_indices.contains(mesh_idx);
 
             // per-mesh 局部 AABB（屏幕空间误差选级用）：缓存本 mesh 自身的局部包围盒，
             // 而非整场景 AABB——旧逻辑用 scene.get_scene_aabb()（所有 mesh 合并）会让大场景里的
@@ -2979,6 +3310,11 @@ void GeometrySystem::upload_lod_from_scene_data() {
             lod0.vertex_count     = static_cast<std::uint32_t>(mesh.vertices.size());
             lod0.index_count      = static_cast<std::uint32_t>(mesh.indices.size());
             lod0.max_index        = mesh_dev.max_index;
+            // 宽限期从"创建这一帧"起算：last_demand_frame 默认 0，而全局帧号早已很大，
+            // 若不在上传时写入当前帧号，新建条目会在第一次 reconcile 就被判定"超期未需求"
+            // 而立即释放（实测导入完成 1ms 内 131 个 mesh 的 LOD0 被整批驱逐）。
+            lod0.last_demand_frame = impl_->lod_frame_counter;
+            lod0.last_demand_ms    = steady_now_ms();
             entry.levels.push_back(std::move(lod0));
 
             // LOD 1..N：仅登记元数据，**不**在此创建 GPU 缓冲 / BVH（Step 3a 按需驻留）。
@@ -3007,6 +3343,10 @@ void GeometrySystem::upload_lod_from_scene_data() {
                 lod_buf.index_count      = static_cast<std::uint32_t>(lod_data.indices.size());
                 lod_buf.max_index        = lod_buf.vertex_count > 0 ? lod_buf.vertex_count - 1u : 0u;
                 lod_buf.source_lod_index = static_cast<std::uint32_t>(lod_idx);
+                // 同上：宽限期从创建帧起算，避免新建级刚登记就被判超期。
+                lod_buf.last_demand_frame = impl_->lod_frame_counter;
+                lod_buf.last_demand_ms    = steady_now_ms();
+
                 entry.levels.push_back(std::move(lod_buf));
             }
 
@@ -3066,6 +3406,8 @@ void GeometrySystem::reconcile_lod_residency() {
                           / static_cast<float>(mr.vram.budget_bytes);
         return compute_pixel_budget_from_pressure(ratio);
     }();
+    // 缓存给渲染端按实例选级复用：压力越大 → 预算越宽 → 实例选级越粗 → 需求并集越小。
+    impl_->last_lod_pixel_budget.store(lod_pixel_budget, std::memory_order_relaxed);
 
     struct Viewer { ktm::fvec3 pos; float epsilon; };
     std::vector<Viewer> viewers;
@@ -3094,13 +3436,304 @@ void GeometrySystem::reconcile_lod_residency() {
     // 仅在确有相机（会真正评估需求级）时推进，避免无相机帧空转计数。
     const std::uint64_t this_frame = ++impl_->lod_frame_counter;
 
+    // LOD 预算 entries 收集器（标量路径与共享实例路径都往里写）。
+    // 每个 (geometry, mesh) 产出一条，供 enforce_lod_budget 按距离施加降级 cap。
+    std::vector<GeometrySystem::LodBudgetEntry> lod_budget_entries;
+
+    // ---- 共享实例资产：集合式 LOD 驻留 ----
+    // 需求集合 = 本帧各实例（主视图 / 跟随相机 / 阴影）实际选中的 LOD 并集，由渲染
+    // 线程在 select_render_buffers_for_instance / select_shadow_render_buffers 中写入
+    // frame_demand_mask。这里只做两件事：
+    //   1) 为并集里尚未驻留的级发起异步构建；
+    //   2) 释放并集外、且已超过宽限帧的已驻留级（LOD0 也照常参与释放）。
+    // 这样 GPU 上留下的，就是"当前这一帧真正被某个实例用到的级"。
+    const auto reconcile_shared_asset = [&](std::uintptr_t geom_handle,
+                                            std::uint32_t mesh_idx,
+                                            std::uint64_t lod_key,
+                                            std::uint64_t model_id,
+                                            std::uintptr_t model_resource_handle,
+                                            const ktm::fvec3& world_center) {
+        std::uint64_t demand_mask = 0;
+        std::size_t   level_count = 0;
+        bool          spatially_evicted = false;
+        int           finest_demand = 0;
+        {
+            std::unique_lock lock(impl_->lod_cache_mutex);
+            auto cit = impl_->lod_cache.find(lod_key);
+            if (cit == impl_->lod_cache.end() || cit->second.model_id != model_id) return;
+            auto& entry = cit->second;
+            const std::uint64_t fresh_mask = entry.frame_demand_mask.take();
+            // ---- 空快照 ≠ 无需求 ----
+            // 渲染线程的登记是稀疏且突发式的（只在真正走选级查询时才写，节拍低于几何
+            // 线程的 60Hz，卡顿时还有数百毫秒空档），而本函数每帧都 take()。若把空快照
+            // 当"没有任何实例需要任何级"，下面按几何帧计数的释放宽限会在每次渲染卡顿时
+            // 到期，把整场 mesh 的级——含 LOD0 基础几何——成批释放，渲染端只能回退到最粗级
+            // 或整帧丢失该 mesh。故：
+            //   · 非空快照 = 新消息 → 写入 sticky 并刷新时间戳；
+            //   · 空快照   = 没有新消息 → 沿用上一次 sticky；
+            //   · 连续 kSharedLodDemandStaleMs 没有非空快照 → 才认定真的无需求。
+            if (fresh_mask != 0) {
+                entry.sticky_demand_mask  = fresh_mask;
+                entry.sticky_demand_stamp = std::chrono::steady_clock::now();
+                entry.sticky_demand_valid = true;
+            }
+            const bool demand_stale = !entry.sticky_demand_valid ||
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now() - entry.sticky_demand_stamp).count()
+                    >= Impl::kSharedLodDemandStaleMs;
+            demand_mask = demand_stale ? 0 : entry.sticky_demand_mask;
+            // 注意：demanded_mask 保持原有语义——"本拍原始快照"，仅供
+            // reconcile_cpu_residency 决定 CPU 驻留窗口（demanded_src）使用。
+            // 不能写入上面的 demand_mask（粘性并集）：粘性并集几乎每拍都非空且常常是
+            // 宽并集（实测 0xff），会让 CPU 窗口退化成"保留全部级"→ 再也没有任何级
+            // 落在窗口外 → reconcile_cpu_residency 永不把 LOD 级移交写盘 →
+            // LOD 磁盘缓存形同虚设、CPU 侧 LOD 内存永不回收（实测 [LOD-CPU] 与
+            // [LOD-Disk] 已写入 从此类帧起全部为 0）。
+            entry.demanded_mask = fresh_mask;
+            spatially_evicted = entry.lod_spatially_evicted;
+            level_count = entry.levels.size();
+        }
+        if (level_count <= 1) return;
+
+        // 空间淘汰恢复：用与标量路径完全相同的距离判据，而不是"mask 非空就解除"。
+        // 否则在 enable_lod_spatial_eviction=true 时，被判为远、但仍在绘制范围内的
+        // actor 会每帧在 evict_lods_for_actor 与本处重建之间来回抖动。
+        // 共享资产不再走标量路径，若不在这里解除，一旦被距离淘汰就再也回不来。
+        if (spatially_evicted) {
+            float min_d = std::numeric_limits<float>::max();
+            for (const auto& cp : camera_positions) {
+                min_d = std::min(min_d, ktm::distance(world_center, cp));
+            }
+            if (min_d <= impl_->lod_evict_distance &&
+                spatial_restored_this_frame < Impl::kMaxLodSpatialRestorePerFrame) {
+                std::unique_lock lock(impl_->lod_cache_mutex);
+                auto cit = impl_->lod_cache.find(lod_key);
+                if (cit != impl_->lod_cache.end() && cit->second.model_id == model_id) {
+                    cit->second.lod_spatially_evicted = false;
+                }
+                spatially_evicted = false;
+                ++spatial_restored_this_frame;
+            }
+        }
+        // 仍在淘汰区 → 这一帧不需要任何级。
+        if (spatially_evicted) demand_mask = 0;
+        // 显存压力下限：cap 之下（更精细）的级不允许驻留，从并集里剔除。
+        {
+            auto cap_it = impl_->lod_budget_caps.find(lod_key);
+            if (cap_it != impl_->lod_budget_caps.end() && cap_it->second > 0) {
+                const int cap = cap_it->second;
+                if (cap >= 64) demand_mask = 0;
+                else demand_mask &= ~((std::uint64_t{1} << cap) - 1u);
+            }
+        }
+        if (level_count < 64) {
+            demand_mask &= (std::uint64_t{1} << level_count) - 1u;
+        }
+
+        // 收集"被需求但尚未驻留"的级；LOD0 单独记，因为它的源数据是 mesh 本体。
+        std::vector<int> build_levels;
+        bool need_lod0_rebuild = false;
+        {
+            std::shared_lock lock(impl_->lod_cache_mutex);
+            auto cit = impl_->lod_cache.find(lod_key);
+            if (cit == impl_->lod_cache.end() || cit->second.model_id != model_id) return;
+            const auto& levels = cit->second.levels;
+            for (std::size_t i = 1; i < levels.size(); ++i) {
+                if (((demand_mask >> i) & 1u) != 0u && !levels[i].ready) {
+                    build_levels.push_back(static_cast<int>(i));
+                }
+            }
+            need_lod0_rebuild = ((demand_mask & 1u) != 0u) && !levels[0].ready;
+        }
+
+        // 复用主 LOD 构建通道发起异步构建；超过在途上限则本帧跳过，下帧再驱动。
+        if (!build_levels.empty() || need_lod0_rebuild) {
+            auto scene_read = resource_manager.acquire_read<Resource::Scene>(model_id);
+            ++impl_->diag_scene_acquires;
+            if (scene_read.valid()) {
+                const auto& scene = *scene_read;
+                if (mesh_idx < scene.data.meshes.size()) {
+                    const auto& mesh = scene.data.meshes[mesh_idx];
+                    auto enqueue_build = [&](int level,
+                                             const std::vector<Resource::Vertex>& verts,
+                                             const std::vector<std::uint16_t>& inds,
+                                             const char* label_vertex,
+                                             const char* label_index) {
+                        if (verts.empty() || inds.empty()) return;
+                        // ---- LOD0 重建优先：独立在途额度 ----
+                        // LOD0 是渲染端在其它级都没就绪时唯一的兜底。若与简化级共享同一个
+                        // 在途上限，成批的粗级构建会把 LOD0 重建一直挤在队尾，该 mesh 长期
+                        // 只剩最粗级，表现为"叶子一块块慢慢回来"。给 LOD0 独立额度，两类互不阻塞。
+                        if (level == 0) {
+                            if (impl_->inflight_lod0_builds() >= Impl::kMaxInflightLod0Builds) return;
+                        } else if (impl_->pending_lod_builds.size() >= Impl::kMaxInflightLodBuilds) {
+                            return;
+                        }
+                        std::uint64_t epoch = 0;
+                        {
+                            std::shared_lock lk(impl_->lod_cache_mutex);
+                            auto eit = impl_->lod_cache.find(lod_key);
+                            if (eit == impl_->lod_cache.end() || eit->second.model_id != model_id) return;
+                            epoch = eit->second.residency_epoch;
+                        }
+                        auto pit = impl_->pending_lod_builds.find(lod_key);
+                        if (pit != impl_->pending_lod_builds.end()) {
+                            // 同一 mesh 只保留一个在途构建。集合式驻留下同一 mesh 可能同时
+                            // 缺多个级，这里不能再"换级重建"：erase 会把先前已发起、正在跑的
+                            // 那个级的任务连同 future 一起丢掉（白构建，且该级一直排不上）。
+                            // 等它在 process_pending_lod_builds 回写后，下一帧再构建仍缺的级。
+                            return;
+                        }
+                        auto verts_copy = verts;
+                        auto inds_copy  = inds;
+                        const std::size_t gpu_bytes =
+                            2u * verts_copy.size() * sizeof(Resource::Vertex) +
+                            2u * inds_copy.size() * sizeof(std::uint16_t);
+                        auto promise = std::make_shared<std::promise<Impl::LODBuildResult>>();
+                        impl_->pending_lod_builds[lod_key] = Impl::PendingLodBuild{
+                            model_id, epoch, level, promise->get_future()};
+                        impl_->lod_build_tasks.run(
+                            [verts = std::move(verts_copy), inds = std::move(inds_copy),
+                             gpu_bytes, promise, label_vertex, label_index]() {
+                                Impl::LODBuildResult r;
+                                try {
+                                    r.vertex_buffer = make_geometry_buffer(
+                                        verts,
+                                        Horizon::BufferUsage_TransferDst | Horizon::BufferUsage_Vertex,
+                                        label_vertex);
+                                    r.index_buffer = make_geometry_buffer(
+                                        inds,
+                                        Horizon::BufferUsage_TransferDst | Horizon::BufferUsage_Index,
+                                        label_index);
+                                    r.vertex_storage = make_geometry_buffer(
+                                        verts,
+                                        Horizon::BufferUsage_TransferSrc | Horizon::BufferUsage_TransferDst |
+                                            Horizon::BufferUsage_Storage,
+                                        "geometry.shared_lod_vertex_storage");
+                                    r.index_storage = make_geometry_buffer(
+                                        inds,
+                                        Horizon::BufferUsage_TransferSrc | Horizon::BufferUsage_TransferDst |
+                                            Horizon::BufferUsage_Storage,
+                                        "geometry.shared_lod_index_storage");
+                                    r.gpu_bytes = gpu_bytes;
+                                    r.ok = static_cast<bool>(r.vertex_buffer) &&
+                                           static_cast<bool>(r.index_buffer);
+                                } catch (...) { r.ok = false; }
+                                promise->set_value(std::move(r));
+                            });
+                        ++impl_->diag_lod_build_launches;
+                    };
+
+                    for (int level : build_levels) {
+                        std::uint32_t src = 0;
+                        {
+                            std::shared_lock lk(impl_->lod_cache_mutex);
+                            auto eit = impl_->lod_cache.find(lod_key);
+                            if (eit == impl_->lod_cache.end() || eit->second.model_id != model_id) continue;
+                            if (static_cast<std::size_t>(level) >= eit->second.levels.size()) continue;
+                            src = eit->second.levels[static_cast<std::size_t>(level)].source_lod_index;
+                        }
+                        if (src >= mesh.lod_levels.size()) continue;
+                        enqueue_build(level,
+                                      mesh.lod_levels[src].vertices,
+                                      mesh.lod_levels[src].indices,
+                                      "geometry.shared_lod_vertex",
+                                      "geometry.shared_lod_index");
+                    }
+                    if (need_lod0_rebuild) {
+                        enqueue_build(0, mesh.vertices, mesh.indices,
+                                      "geometry.shared_lod0_vertex",
+                                      "geometry.shared_lod0_index");
+                    }
+                }
+            }
+        }
+
+        // 释放并集外、且已超过宽限帧的简化级。LOD0 是首帧和异步切换的
+        // 永久兜底，只有 actor 整体卸载时才释放，不能因一帧零需求而驱逐。
+        bool freed_lod0 = false;
+        {
+            std::unique_lock lock(impl_->lod_cache_mutex);
+            auto cit = impl_->lod_cache.find(lod_key);
+            if (cit == impl_->lod_cache.end() || cit->second.model_id != model_id) return;
+            auto& entry = cit->second;
+            // 保底：至少保留一个已驻留级。否则在"LOD0 已被卸载、需求级还在异步构建"
+            // 的窗口里，渲染端一个 ready 级都找不到，整个 mesh 会整帧从画面消失。
+            std::size_t ready_count = 0;
+            for (const auto& lvl : entry.levels) {
+                if (lvl.ready) ++ready_count;
+            }
+            const std::uint64_t now_ms = steady_now_ms();
+            for (std::size_t i = 0; i < entry.levels.size(); ++i) {
+                if (i == 0) continue;
+                auto& lvl = entry.levels[i];
+                const bool demanded = ((demand_mask >> i) & 1u) != 0u;
+                if (demanded) {
+                    lvl.last_demand_frame = this_frame;
+                    lvl.last_demand_ms    = now_ms;
+                    continue;
+                }
+                if (!lvl.ready) continue;
+                if (ready_count <= 1) continue;  // 最后一个 ready 级不释放
+                // LOD0 是 mesh_dev 基础几何的引用副本（upload 时 lod0.* = mesh_dev.*），
+                // 释放它会让渲染端在其它级都没就绪时整帧丢掉该 mesh（叶子整片消失）。
+                // 因此只有"确实收到过非空需求快照、且该快照不含 LOD0"时才允许释放它；
+                // 需求信息陈旧（demand_mask==0，说明这一拍没拿到渲染侧消息）时只回收
+                // 简化级，保住基础几何。
+                if (i == 0 && demand_mask == 0) continue;
+                // 双重宽限：帧数（防抖）+ 真实时间（跨节拍）。
+                // 只按帧计时是不够的——几何线程 60Hz、渲染侧发表只有约 15Hz，5 帧 = 83ms
+                // 短于一个发表周期，一次跨阈值的选级变化就会把该级拆掉，而重建代价
+                // （CPU→GPU 上传 + 排队）远高于多留 kSharedLodFreeGraceMs。两者都过期才释放。
+                if (this_frame < lvl.last_demand_frame + Impl::kSharedLodFreeGraceFrames) continue;
+                if (now_ms < lvl.last_demand_ms + Impl::kSharedLodFreeGraceMs) continue;
+                lvl.ready          = false;
+                lvl.vertex_buffer  = Horizon::HardwareBuffer{};
+                lvl.index_buffer   = Horizon::HardwareBuffer{};
+                lvl.vertex_storage = Horizon::HardwareBuffer{};
+                lvl.index_storage  = Horizon::HardwareBuffer{};
+                lvl.mesh_mem       = Corona::Memory::GpuMemToken{};
+                ++impl_->diag_lod_frees;
+                --ready_count;
+                if (i == 0) freed_lod0 = true;
+            }
+            // committed_demand 仍被阴影回退与内存账本读取：取并集里最细的一级。
+            int finest = -1;
+            for (std::size_t i = 0; i < entry.levels.size(); ++i) {
+                if (((demand_mask >> i) & 1u) != 0u) {
+                    finest = static_cast<int>(i);
+                    break;
+                }
+            }
+            finest_demand = (finest >= 0) ? finest : 0;
+            entry.committed_demand = finest_demand;
+        }
+
+        // 共享资产也进 LOD 级 LRU：enforce_lod_budget 会按距相机距离给远处 mesh 施加
+        // 更粗的降级 cap（写入 lod_budget_caps），下一帧由本函数把需求并集裁到 cap 之上。
+        lod_budget_entries.push_back({lod_key, world_center, finest_demand,
+                                      static_cast<int>(level_count)});
+
+        if (freed_lod0 && model_resource_handle != 0) {
+            auto eviction = std::find_if(
+                pending_lod0_evictions.begin(), pending_lod0_evictions.end(),
+                [geom_handle](const Lod0DeviceEviction& candidate) {
+                    return candidate.geometry_handle == geom_handle;
+                });
+            if (eviction == pending_lod0_evictions.end()) {
+                pending_lod0_evictions.push_back(
+                    Lod0DeviceEviction{geom_handle, model_resource_handle, {mesh_idx}});
+            } else {
+                eviction->mesh_indices.push_back(mesh_idx);
+            }
+        }
+    };
+
     // 先结束 Geometry storage 的只读迭代，再执行下面可能需要的 Geometry 写锁。
     // ConstIterator 持有 storage 读锁；禁止在其作用域内升级同一 storage 的写锁。
     const auto geometry_handles = GeometryInternal::snapshot_storage_handles(geom_storage);
 
-    // LOD 预算 entries 收集器。每个 (geometry, mesh) 产出 1 条，预分配为
-    // geometry 数 × 8（覆盖多数多 mesh geometry 场景，减少 vector reallocation）。
-    std::vector<GeometrySystem::LodBudgetEntry> lod_budget_entries;
+    // 预分配为 geometry 数 × 8（覆盖多数多 mesh geometry 场景，减少 vector reallocation）。
     lod_budget_entries.reserve(geometry_handles.size() * 8);
     for (const auto geom_handle : geometry_handles) {
         std::uintptr_t model_resource_handle = 0;
@@ -3154,10 +3787,12 @@ void GeometrySystem::reconcile_lod_residency() {
             size_t level_count = 0;
             bool   have_error_data = false;
             bool   lod_spatially_evicted = false;
+            bool   shared_asset = false;
             {
                 std::shared_lock lock(impl_->lod_cache_mutex);
                 auto cit = impl_->lod_cache.find(lod_key);
                 if (cit == impl_->lod_cache.end() || cit->second.model_id != model_id) continue;
+                shared_asset = cit->second.shared_instances;
                 level_count = cit->second.levels.size();
                 lod_spatially_evicted = cit->second.lod_spatially_evicted;
                 local_min = make_fvec3(cit->second.local_aabb_min[0],
@@ -3175,11 +3810,9 @@ void GeometrySystem::reconcile_lod_residency() {
             }
             if (level_count <= 1) continue;  // 无简化级，无需 reconcile
 
-            // ---- 需求级 D：屏幕空间误差选级，所有观察者取最高精度（最小级号）----
-            // mesh 局部 AABB 经完整 transform（含 R/S/T）映到世界 → 对每个观察者求其到
-            // 世界 AABB 最近点距离 d → select_lod_by_error 返回「角误差 world_error/d ≤
-            // epsilon 的最粗一级」。多观察者取 min（任一视角的最高精度需求都要满足）。
-            // 无几何误差数据（旧资源未含 geometric_error）→ 回退旧屏占比阈值路径。
+            // ---- mesh 局部 AABB → 世界 AABB / 世界中心 ----
+            // 标量路径用它算"到相机的最近点距离"来选级；共享实例路径用它做空间淘汰
+            // 恢复判据（必须是同一套规则，否则两条路径对"是否回到使用区"判断不一致）。
             ktm::fvec3 world_min{0.0f, 0.0f, 0.0f};
             ktm::fvec3 world_max{0.0f, 0.0f, 0.0f};
             if (have_transform) {
@@ -3191,14 +3824,25 @@ void GeometrySystem::reconcile_lod_residency() {
                 world_min = local_min;
                 world_max = local_max;
             }
-
-            // 计算 mesh 世界 AABB 中心，供 enforce_lod_budget 按距相机距离排序。
-            // 使用 world_min/max 的算术平均——与 AABB::center() 语义一致，
-            // 对细长/扁平物体也能给出合理的位置估计（不会被外接球高估距离）。
+            // world_center：与 AABB::center() 语义一致，供 enforce_lod_budget 按距相机
+            // 距离排序，也供共享实例路径判断是否已回到空间淘汰恢复区。
             const ktm::fvec3 world_center = GeometryInternal::make_fvec3(
                 (world_min[0] + world_max[0]) * 0.5f,
                 (world_min[1] + world_max[1]) * 0.5f,
                 (world_min[2] + world_max[2]) * 0.5f);
+
+            if (shared_asset) {
+                // 集合式驻留：需求 = 各实例实际选中的 LOD 并集（见上方 lambda）。
+                reconcile_shared_asset(geom_handle, mesh_idx, lod_key, model_id,
+                                       model_resource_handle, world_center);
+                continue;
+            }
+
+            // ---- 需求级 D：屏幕空间误差选级，所有观察者取最高精度（最小级号）----
+            // 局部 AABB 已映到世界；对每个观察者求到世界 AABB 最近点距离 d →
+            // select_lod_by_error 返回「角误差 world_error/d ≤ epsilon 的最粗一级」。
+            // 多观察者取 min（任一视角的最高精度需求都要满足）。
+            // 无几何误差数据（旧资源未含 geometric_error）→ 回退旧屏占比阈值路径。
 
             // 滞回带（替代旧 select_lod_with_hysteresis）：用收紧/放宽的 epsilon 各算一次
             // 聚合需求，构成死区。eps·(1+h) 偏粗（抗"变精细"），eps·(1-h) 偏精细（抗"变粗"）。
@@ -3390,7 +4034,8 @@ void GeometrySystem::reconcile_lod_residency() {
                     shadow_need_build = true;
                     shadow_src_idx = levels[shadow_demand].source_lod_index;
                 }
-                for (size_t i = 0; i < levels.size(); ++i) {  // i=0：LOD0 也参与 free 判断
+                for (size_t i = 0; i < levels.size(); ++i) {
+                    if (i == 0) continue;  // LOD0 remains the resident fallback.
                     if (static_cast<int>(i) == demand) {
                         if (!levels[i].ready) {
                             need_build     = true;
@@ -3530,9 +4175,13 @@ void GeometrySystem::reconcile_lod_residency() {
                                        && pit->second.model_id == model_id
                                        && pit->second.residency_epoch == entry_epoch
                                        && pit->second.future.valid());
-                            if (!already) impl_->pending_lod_builds.erase(pit);
                         }
-                        if (!already && impl_->pending_lod_builds.size() < Impl::kMaxInflightLodBuilds) {
+                        // LOD0 重建优先：走独立在途额度，不被简化级构建挤掉（与共享实例
+                        // 路径的 enqueue_build 同一策略）。
+                        // 注意：额度判定必须在 erase 之前——否则额度不足时会先把在途任务
+                        // 丢掉（连同 future，那一级的 GPU 缓冲白建且永远不就绪）却又不补发。
+                        if (!already && impl_->inflight_lod0_builds() < Impl::kMaxInflightLod0Builds) {
+                            impl_->pending_lod_builds.erase(lod_key);  // 丢弃该 key 上的非 LOD0 在途任务
                             auto verts = mesh.vertices;  // 从 mesh 本体，非 lod_levels
                             auto inds  = mesh.indices;
                             const std::size_t gpu_bytes =
@@ -3567,14 +4216,14 @@ void GeometrySystem::reconcile_lod_residency() {
             }
 
             // ---- 释放多余的已就绪级（持锁；refcount 保证渲染端副本存活）----
-            // 注：LOD0（lvl_idx=0）现在也参与释放判断。释放 lod_cache 引用后，
-            // 延迟到整个 Geometry 只读扫描结束后再清空 mesh_dev 的独立句柄。
+            // LOD0 永远保留为回退级；仅释放不再需要的简化级。
             bool freed_lod0 = false;
             if (!to_free.empty()) {
                 std::unique_lock lock(impl_->lod_cache_mutex);
                 auto cit = impl_->lod_cache.find(lod_key);
                 if (cit != impl_->lod_cache.end() && cit->second.model_id == model_id) {
                     for (int lvl_idx : to_free) {
+                        if (lvl_idx == 0) continue;
                         if (static_cast<size_t>(lvl_idx) >= cit->second.levels.size()) continue;
                         if (lvl_idx == demand) continue;  // 期间 demand 可能已变
                         auto& lvl = cit->second.levels[lvl_idx];
@@ -3886,6 +4535,7 @@ void GeometrySystem::process_pending_lod_builds() {
         lvl.mesh_mem       = std::move(tok);
         lvl.ready          = true;
         lvl.last_demand_frame = impl_->lod_frame_counter;
+        lvl.last_demand_ms    = steady_now_ms();
         ++impl_->diag_lod_builds;
 
         // ---- 变更 H：swap 完成检测 ----
@@ -3959,11 +4609,19 @@ namespace Corona::Systems {
 void GeometrySystem::reconcile_cpu_residency() {
     auto& resource_manager = Resource::ResourceManager::get_instance();
 
+    // Scene 写锁的最长等待时间。本函数每 kCpuWindowEvalInterval(120 帧 ≈ 2.2s) 才跑一次，
+    // 属于**可延后**的后台任务；拿不到写锁就应该把这一轮留给下一个周期，绝不能把
+    // 几何线程的帧循环冻住。详见下面取锁处的说明。
+    constexpr int kSceneWriteLockWaitMs = 100;
+
     // 1. 按 model_id 收集所有实例的 committed_demand + LOD元数据
     struct ModelInfo {
         std::vector<int> demands;   // 各实例 committed_demand
         int coarsest_src = -1;      // lod_cache 中最粗级的 source_lod_index
         int level_count  = 0;       // lod_cache 中的级数（含LOD0）
+        // 共享实例资产：本帧 GPU 需求并集对应的 CPU 源下标。这些级必须留在
+        // lod_levels 里，否则 reconcile_shared_asset 取不到顶点数据、无法构建该级。
+        std::unordered_set<int> demanded_src;
     };
     std::unordered_map<uint64_t, ModelInfo> model_info;
     {
@@ -3972,9 +4630,17 @@ void GeometrySystem::reconcile_cpu_residency() {
             if (entry.model_id == 0 || entry.levels.size() <= 1) continue;
             auto& mi = model_info[entry.model_id];
             mi.demands.push_back(entry.committed_demand);
-            if (mi.level_count == 0) {
-                mi.level_count  = static_cast<int>(entry.levels.size());
-                mi.coarsest_src = entry.levels.back().source_lod_index;
+            // 跨所有 mesh 取最大值，而不是只认第一个 entry。旧写法只取首个 entry：
+            // 若该 entry 恰好只有一个简化级（coarsest_src=0），整个模型的 CPU 窗口会
+            // 退化成 {0,0,0}，把大量级错误移交写盘（实测 window={0,0,0}、每轮 32 级落盘）。
+            mi.level_count = std::max(mi.level_count, static_cast<int>(entry.levels.size()));
+            mi.coarsest_src = std::max(mi.coarsest_src, entry.levels.back().source_lod_index);
+            if (entry.shared_instances && entry.demanded_mask != 0) {
+                for (std::size_t i = 0; i < entry.levels.size() && i < 64; ++i) {
+                    if (((entry.demanded_mask >> i) & 1ull) == 0ull) continue;
+                    const int src = entry.levels[i].source_lod_index;
+                    if (src >= 0) mi.demanded_src.insert(src);
+                }
             }
         }
     }
@@ -4001,6 +4667,9 @@ void GeometrySystem::reconcile_cpu_residency() {
         cpu_window.insert(0);                // 最精细简化级，始终保留
         cpu_window.insert(demand_lod_src);   // 中位数需求级
         cpu_window.insert(mi.coarsest_src);  // 最粗级，始终保留
+        // 共享实例：窗口必须覆盖 GPU 当前需求并集，否则被移出窗口的级在 GPU 侧
+        // 需要重建时会因 lod_levels 为空而静默失败（该级永远 !ready）。
+        for (int src : mi.demanded_src) cpu_window.insert(src);
 
         // 更新诊断信息
         {
@@ -4008,14 +4677,32 @@ void GeometrySystem::reconcile_cpu_residency() {
             impl_->model_cpu_windows[model_id] = {0, demand_lod_src, mi.coarsest_src};
         }
 
-        // 4. acquire_write<Scene>，对每个 mesh 的每个 lod_level 做双向处理：
+        // 4. 有界等待地取 Scene 写锁，对每个 mesh 的每个 lod_level 做双向处理：
         //    窗口内 + 数据缺失 → 查磁盘缓存恢复（反序列化回填，供 GPU 侧重建该级）
         //    窗口外 + 数据仍在 → std::move 移交异步写盘队列（几何线程不做序列化/IO）
         // 写锁持有期间的开销：evict 侧仅移动指针 + 入队（微秒级）；restore 侧
         // 命中内存级缓存为一次 memcpy，仅在数据已被内存级 LRU 刷盘时才同步读盘
         // （小概率路径，128MB 内存级容量足以覆盖正常的换出→换入时间窗口）。
-        auto scene_write = resource_manager.acquire_write<Resource::Scene>(model_id);
-        if (!scene_write.valid()) continue;
+        //
+        // 绝不能用裸 acquire_write：全引擎唯一的 Scene 写者就是这里，而 Scene 读者
+        // 有 15 处（Mechanics 每帧、CEF/Python/Vision 线程，以及本文件的 rebuild/
+        // 构建路径）。per-resource 的 shared_mutex 不保证公平，实测存在某个读者连续
+        // 持有同一 Scene 读锁十几秒的情形：
+        //   MechanicsInternal::ensure_collision_mesh（mechanics_internal.h:496）曾持锁
+        //   17054ms，同期 [UI/Frame] system=Geometry max=15839.72ms——裸 acquire_write
+        //   把整个几何帧冻了 15.8 秒（"运行期新加的模型永远显示上传中"）。拿不到锁就
+        //   跳过本周期（回收延后 2.2s 无副作用），下一次评估周期再试。
+        //
+        // 这里是 CPU 窗口整理，跳过一轮完全无害；因此用有界等待（给刚释放锁的读者
+        // 留一点机会），超时就记一次 busy 并跳过，绝不把 GeometrySystem 线程钉死。
+        Corona::Diagnostics::mark_thread_phase("Geometry", "cpu_residency:acquire_scene_write");
+        auto scene_write = resource_manager.try_acquire_write_for<Resource::Scene>(
+            model_id, std::chrono::milliseconds(kSceneWriteLockWaitMs));
+        if (!scene_write.valid()) {
+            impl_->report_cpu_residency_scene_busy(model_id);
+            continue;
+        }
+        Corona::Diagnostics::mark_thread_phase("Geometry", "cpu_residency:window_apply");
 
         int freed_count    = 0;  // 本周期移交写盘队列的级数1
         int restored_count = 0;  // 本周期从磁盘恢复的级数
@@ -4194,12 +4881,24 @@ build_mesh_slots(const GeometrySystem*        gs,
                  float                        bounding_radius,
                  bool                         use_shadow_lod = false,
                  float                        shadow_texel = 0.0f,
-                 float                        shadow_scale = 1.0f) {
+                 float                        shadow_scale = 1.0f,
+                 const ktm::fmat4x4*          actor_transform = nullptr) {
     std::vector<GeometrySystem::MeshSlot> result;
-    result.reserve(geom.mesh_handles.size());
+    const bool has_instances = !geom.mesh_instances.empty();
+    const std::size_t slot_count = has_instances
+        ? geom.mesh_instances.size()
+        : geom.mesh_handles.size();
+    result.reserve(slot_count);
 
-    for (uint32_t i = 0; i < static_cast<uint32_t>(geom.mesh_handles.size()); ++i) {
-        const auto& m = geom.mesh_handles[i];
+    for (std::size_t instance_index = 0; instance_index < slot_count; ++instance_index) {
+        if (has_instances && !geom.mesh_instances[instance_index].visible) continue;
+        const uint32_t mesh_index = has_instances
+            ? geom.mesh_instances[instance_index].mesh_index
+            : static_cast<uint32_t>(instance_index);
+        if (mesh_index >= geom.mesh_handles.size()) {
+            continue;
+        }
+        const auto& m = geom.mesh_handles[mesh_index];
 
         // LOD 路由：构建 fallback，然后经 GeometrySystem 解析当前常驻级
         GeometrySystem::RenderMeshBuffers fallback{
@@ -4207,18 +4906,31 @@ build_mesh_slots(const GeometrySystem*        gs,
             m.vertexStorageBuffer, m.indexStorageBuffer,
             m.vertex_count, m.index_count, m.max_index};
 
-        GeometrySystem::RenderMeshBuffers geo = use_shadow_lod
-            ? gs->select_shadow_render_buffers(geometry_handle, i, shadow_texel,
-                                                shadow_scale, fallback)
-            : use_camera
-            ? gs->select_render_buffers(
-                  geometry_handle, i,
-                  camera_pos, camera_fov_deg, world_center, bounding_radius,
-                  fallback)
-            : gs->resident_render_buffers(geometry_handle, i, fallback);
+        GeometrySystem::RenderMeshBuffers geo = fallback;
+        if (use_shadow_lod) {
+            geo = gs->select_shadow_render_buffers(
+                geometry_handle, mesh_index, shadow_texel, shadow_scale, fallback);
+        } else if (use_camera) {
+            geo = (has_instances && actor_transform != nullptr)
+                ? gs->select_render_buffers_for_instance(
+                      geometry_handle, mesh_index, camera_pos, camera_fov_deg,
+                      *actor_transform, geom.mesh_instances[instance_index].transform,
+                      fallback)
+                : gs->select_render_buffers(
+                      geometry_handle, mesh_index, camera_pos, camera_fov_deg,
+                      world_center, bounding_radius, fallback);
+        } else {
+            geo = gs->resident_render_buffers(geometry_handle, mesh_index, fallback);
+        }
 
         GeometrySystem::MeshSlot slot;
-        slot.mesh_index     = i;
+        slot.mesh_index     = mesh_index;
+        slot.instance_index = static_cast<uint32_t>(instance_index);
+        if (has_instances) {
+            slot.object_id = geom.mesh_instances[instance_index].object_id;
+            slot.node_index = geom.mesh_instances[instance_index].node_index;
+            slot.instance_transform = geom.mesh_instances[instance_index].transform;
+        }
         slot.geo            = geo;
         slot.texture        = m.textureBuffer;        // 引用计数值拷贝
         slot.material_color = m.materialColor;
@@ -4229,7 +4941,7 @@ build_mesh_slots(const GeometrySystem*        gs,
         slot.valid          = render_mesh_buffers_valid(slot.geo) &&
                               static_cast<bool>(slot.texture);
         if (!slot.valid) {
-            log_invalid_mesh_slot_once(geometry_handle, i, slot.geo, slot.texture);
+            log_invalid_mesh_slot_once(geometry_handle, mesh_index, slot.geo, slot.texture);
         }
         result.push_back(std::move(slot));
     }
@@ -4256,14 +4968,16 @@ GeometrySystem::query_mesh_slots(std::uintptr_t    geometry_handle,
                                  const ktm::fvec3& camera_pos,
                                  float             camera_fov_deg,
                                  const ktm::fvec3& world_center,
-                                 float             bounding_radius) const {
+                                 float             bounding_radius,
+                                 const ktm::fmat4x4* actor_transform) const {
     auto& geom_storage = SharedDataHub::instance().geometry_storage();
     auto geom = geom_storage.try_acquire_read(geometry_handle);
     if (!geom || geom->mesh_handles.empty()) return {};
 
     return build_mesh_slots(this, geometry_handle, *geom,
                             true, camera_pos, camera_fov_deg,
-                            world_center, bounding_radius);
+                            world_center, bounding_radius,
+                            false, 0.0f, 1.0f, actor_transform);
 }
 
 void GeometrySystem::request_shadow_lod(std::uintptr_t geometry_handle,
@@ -4407,14 +5121,34 @@ GeometrySystem::query_shadow_mesh_slots_batch(
                 }
             }
 
-            ShadowMeshSlot slot;
-            slot.mesh_index = mesh_index;
-            slot.geo = std::move(selected);
-            slot.vertex_count = slot.geo.vertex_count;
-            slot.index_count = slot.geo.index_count;
-            slot.max_index = slot.geo.max_index;
-            slot.valid = render_mesh_buffers_valid(slot.geo);
-            result[cascade].push_back(std::move(slot));
+            auto append_shadow_slot = [&](uint32_t instance_index,
+                                          const MeshInstanceDevice* instance) {
+                ShadowMeshSlot slot;
+                slot.mesh_index = mesh_index;
+                slot.instance_index = instance_index;
+                if (instance != nullptr) {
+                    slot.object_id = instance->object_id;
+                    slot.instance_transform = instance->transform;
+                }
+                slot.geo = selected;
+                slot.vertex_count = slot.geo.vertex_count;
+                slot.index_count = slot.geo.index_count;
+                slot.max_index = slot.geo.max_index;
+                slot.valid = render_mesh_buffers_valid(slot.geo);
+                result[cascade].push_back(std::move(slot));
+            };
+
+            if (geom->mesh_instances.empty()) {
+                append_shadow_slot(0, nullptr);
+            } else {
+                for (uint32_t instance_index = 0;
+                     instance_index < static_cast<uint32_t>(geom->mesh_instances.size());
+                     ++instance_index) {
+                    const auto& instance = geom->mesh_instances[instance_index];
+                    if (!instance.visible || instance.mesh_index != mesh_index) continue;
+                    append_shadow_slot(instance_index, &instance);
+                }
+            }
         }
     }
     return result;

@@ -503,6 +503,11 @@ function startPollTimer() {
 const loadBlocklyModules = async () => {
   try {
     BlocklyLib = await import('blockly/core');
+    // Built-in block definitions (logic/math/text/lists/variables/procedures) are referenced
+    // by `@/blockly/configs/toolboxConfig.js`, so this workspace must register them here.
+    // They must NOT be imported from the app entry (`main.js`): that would ship the whole
+    // Blockly runtime to every editor window, including panels with no workspace at all.
+    await import('blockly/blocks');
     const { installCustomBlockLocalization } = await import('@/blockly/i18n/customBlockLocalization.js');
     installCustomBlockLocalization(BlocklyLib);
     blocklyCN = await import('blockly/msg/zh-hans');

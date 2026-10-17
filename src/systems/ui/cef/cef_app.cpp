@@ -42,10 +42,22 @@ CefRefPtr<CefApp> create_cef_app() {
 
 void append_cef_command_line_switches(CefRefPtr<CefCommandLine> command_line,
                                       bool gpu_enabled) {
-    command_line->AppendSwitch("disable-web-security");
+    // Load-bearing. Do not drop either without an equivalent replacement:
+    //  * the Vue bundle is an ES-module graph served from file://, and Chromium refuses to load
+    //    that without this switch;
+    //  * the CEF package ships no cef_sandbox.lib (cmake/corona_cef.cmake:63 sets the path but
+    //    nothing links it), so no sandbox is compiled in and CEF must be told not to use one.
     command_line->AppendSwitch("allow-file-access-from-files");
-    command_line->AppendSwitch("allow-file-access");
     command_line->AppendSwitch("no-sandbox");
+
+    // Removed 2026-10-06 (P0-2 in docs/development/cef-ui-risk-optimization-tasks.md):
+    //  * "disable-web-security" - disabled the same-origin policy outright. Not needed: every
+    //    native call goes through the cefQuery manifest contract, and the UI was verified to
+    //    load, resolve resources and drive a real project with the switch gone.
+    //  * "allow-file-access"    - not a Chromium switch: its only occurrence in libcef.dll is
+    //    the prefix of "allow-file-access-from-files", so it never did anything.
+    // `expect_exact_switch_set` in tests/systems/ui/test_cef_app.cpp pins this list.
+
     if (gpu_enabled) {
         command_line->AppendSwitch("enable-gpu-rasterization");
         command_line->AppendSwitch("enable-zero-copy");

@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include "horizon.h"
 #include <corona/events/optics_system_events.h>
@@ -99,6 +99,20 @@ class OpticsSystem : public Kernel::SystemBase {
     bool initialize_render_pipelines();
     bool ensure_cursor_icon_texture();
     bool ensure_gizmo_axis_textures();
+
+    /// Make capacity available in the native frame throttle before recording a view.
+    ///
+    /// Display's `OpticsFrameConsumedEvent` is the fast path, but it is only
+    /// published when a surface is presented *with an optics layer*; surfaces that
+    /// were removed, presented as skipped/failed, or lost with the device drop
+    /// their acknowledgement.  Because the throttle is engine-global while the
+    /// acknowledgement is per-surface, two dropped acknowledgements used to stop
+    /// native rendering for every camera, silently and permanently.  When the
+    /// throttle is full the oldest submission is retired by waiting for its own
+    /// GPU completion, and the stall is reported (throttled) instead of invisible.
+    ///
+    /// @return true when a slot is available for a new submission
+    [[nodiscard]] bool ensure_native_frame_slot();
 
     void bind_native_view_resources(std::uintptr_t camera_handle,
                                     uint32_t width,
@@ -240,6 +254,7 @@ class OpticsSystem : public Kernel::SystemBase {
     std::optional<ActorPickRequest> take_pending_actor_pick(std::uintptr_t camera_handle);
     void complete_actor_pick(const ActorPickRequest& request,
                              const std::vector<std::uintptr_t>& scene_actor_handles,
+                             const std::vector<std::uint32_t>& node_indices,
                              bool read_ok,
                              std::uint32_t instance_id);
     void fail_actor_pick(const ActorPickRequest& request);
@@ -248,6 +263,7 @@ class OpticsSystem : public Kernel::SystemBase {
         Horizon::HardwareBuffer result_buffer,
         Horizon::SubmitReceipt receipt,
         std::vector<std::uintptr_t> scene_actor_handles,
+        std::vector<std::uint32_t> node_indices,
         OpticsDetail::ActorPickReadbackWorker::Reservation reservation);
 
     struct ViewportCursorState {
@@ -345,6 +361,8 @@ class OpticsSystem : public Kernel::SystemBase {
     std::unique_ptr<OpticsDetail::ActorPickReadbackWorker> actor_pick_readback_worker_;
     double pending_native_throttle_wait_ms_{0.0};
     std::atomic<std::uint64_t> pending_native_consumed_serial_{0};
+    /// Rate limit for the "native frame throttle saturated" report.
+    std::chrono::steady_clock::time_point last_native_throttle_report_{};
 
     // LOD 系统引用（渲染时查询 LOD 缓冲）
     GeometrySystem* geometry_system_ = nullptr;

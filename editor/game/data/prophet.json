@@ -1,0 +1,103 @@
+{
+  "$comment": "「先知」NPC 的内容权威源。只读数据，不是存档：不要写入运行时状态。contract 是给占祈健 Z-1 的接口契约，placement 是 L-1 的美术摆位参数，script 是 L-2 的剧本碎片。此文件由 game/tests/test_story_assets.py 与 game/frontend/storyDialogue.mjs 的投影逐字段比对，任何一边单独改动都会让测试变红。",
+  "contract": {
+    "version": 1,
+    "kind": "prophet-interaction",
+    "owner": "李淳珺",
+    "consumer": "占祈健 Z-1 / editor/Frontend/src/views/layout/StoryWorld.vue",
+    "worlds": [
+      "child"
+    ],
+    "interaction": {
+      "key": "F",
+      "range": 12,
+      "rangeUnit": "meter",
+      "measure": "player-point-to-xz-bounds",
+      "recomputeBoundsEveryCheck": true,
+      "advanceKeys": [
+        "Enter",
+        "Space"
+      ],
+      "closeKey": "Escape",
+      "prompt": "F 与先知交谈",
+      "priority": [
+        "prophet-dialogue",
+        "fragment-pickup"
+      ],
+      "rangeRationale": "先知先被摆到玩家前方 4 米、之后才按身高归一化缩放，所以玩家到先知身体的距离取决于模型原始尺寸（原始 1 米高约在 4 米处，2 米高约在 8 米处）。12 米覆盖该波动，同时仍是有限范围。不复用 GameConfig.interaction_distance（=3.0），它是商人领赠品的 Python 侧常量，前端从未读取，复用会把两件事耦合。"
+    },
+    "bumpVersionWhen": [
+      "range-or-worlds-or-measure-changes",
+      "script-shape-changes-from-linear-to-branching",
+      "prophet-identity-becomes-world-scoped"
+    ]
+  },
+  "placement": {
+    "model": "dancing_vampire.dae",
+    "asset": "prophet/dancing_vampire.dae",
+    "aheadDistance": 4.0,
+    "height": 1.8,
+    "yawOffset": 3.141592653589793,
+    "rotationPolicy": "face-player",
+    "notes": "aheadDistance 是缩放前的摆放距离；height 是归一化目视高度（缩放 = height / 旋转后包围盒高度）；yawOffset 让先知转向玩家。三个值在本次改动前硬编码于 storyActors.mjs 与 storyCharacters.mjs，取值未变。"
+  },
+  "cube": {
+    "$comment": "先知旁边的正方体：与先知交互后可缩放或移动它。摆放与调节全部由这里驱动，改数值不需要改代码。",
+    "asset": "cube/cube.obj",
+    "guid": "story.prophet.cube",
+    "modelRef": "story.prophet.cube.v1",
+    "sideDistance": 1.4,
+    "forwardDistance": 0.6,
+    "scale": 0.8,
+    "scaleFactor": 1.35,
+    "minScale": 0.15,
+    "maxScale": 6.0,
+    "moveStep": 1.2,
+    "moveRange": 10.0
+  },
+  "map": {
+    "$comment": "剧情世界的地图（山门神殿，平地版）。与 cube 一样，摆位全部由这里驱动；它是世界自带的静态地面，客户端每次进入世界都会确认它在位（storyMap.mjs），因此新世界与已有世界走的是同一条路。scale 是这张图在世界里的最大轴（米），故意不是真实尺寸：模型本身 z 向深 1680.0027 米，缩到 90 米才是一个看得清的关卡。引擎把每个静态模型归一化成单位立方体（包围盒中心移到原点、最大轴缩到 1），create_actor 的 position 因此是归一化后的坐标而不是米：geometry.scale 要写 scale 才显示世界尺寸。courtyardY 是可行走庭院在模型文件里的绝对高度，这张图的地面是一整块 y = 0 的平面，所以它是 0；centreY 是模型世界包围盒的中高 124.091286 米。庭院在中心之下 centreY − courtyardY = 124.091286 米，乘上 scale / max_axis = 90 / 1680.0027 = 0.05357134，所以 position.y 要写 6.6477 才能让庭院落在引擎地面 y = 0，也就是剧情放脚的地方（公式在 storyMap.mjs）。注意 centreY 既不是 max_axis/2 = 840.0 也不是 scale/2 = 45.0：这张图 z 向深 1680 米、y 向只有 274 米高，写成前者会把地图抬到八百米高空，写成后者会把它埋进地里。三个数都能由资产本身重算，game/tests/test_story_assets.py 会逐字段比对这份数据与前端投影，并对模型重新测量。modelRef 是这张图的『资产代次』（迁移键），不是 actor 身份：guid 保持 corona.story.world-map.v1 不变，否则已有世界会认不出自己那张图而再叠一张；引擎只在『创建』actor 时导入模型（create_actor 的 skip_if_exists 修复分支只写 position/rotation/scale/follow_camera/body_type，从不改写 actor.route，见 src/systems/ui/cef/cef_editor_native_api_handlers.cpp:3410-3424），所以换一次地图资产就必须把 modelRef 升一版：storyMap.mjs 看到已有 actor 的代次不是当前值（或 actor.route 仍指向旧文件）时会先删除它、再按当前数据重建，让引擎真正导入新模型。忘了升版，已有世界就会永远渲染上一版地图——这正是 v1 → v2 修掉的问题。",
+    "asset": "scene/01_山门神殿_平地版.glb",
+    "guid": "corona.story.world-map.v1",
+    "modelRef": "corona.story.world-map.v2",
+    "scale": 90,
+    "courtyardY": 0,
+    "centreY": 124.091286
+  },
+  "script": {
+    "id": "prophet",
+    "name": "先知",
+    "title": "小世界的守望者",
+    "hint": "F 交谈 · Enter 继续 · Esc 离开",
+    "closing": "去想放什么，就去放吧。",
+    "fragments": [
+      {
+        "id": "return",
+        "text": "你从小世界之外回来了。"
+      },
+      {
+        "id": "dragon",
+        "text": "外面的巨龙倒下了，它的碎片留在你手里。"
+      },
+      {
+        "id": "exhibit",
+        "text": "把碎片放在这里——小世界会记住你走过的路。"
+      },
+      {
+        "id": "build",
+        "text": "V 键可以换一双眼睛：降临，或者俯瞰。"
+      },
+      {
+        "id": "leave",
+        "text": "想回去的时候，按 P。我一直在这里。"
+      }
+    ],
+    "lines": [
+      "你从小世界之外回来了。",
+      "外面的巨龙倒下了，它的碎片留在你手里。",
+      "把碎片放在这里——小世界会记住你走过的路。",
+      "V 键可以换一双眼睛：降临，或者俯瞰。",
+      "想回去的时候，按 P。我一直在这里。"
+    ]
+  }
+}

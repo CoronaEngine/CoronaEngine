@@ -4,6 +4,10 @@
 
 #include <corona/shared_data_hub.h>  // MeshDevice
 
+#include <cstddef>
+#include <cstdint>
+#include <memory>
+#include <unordered_map>
 #include <vector>
 
 namespace Corona {
@@ -13,6 +17,20 @@ class Scene;
 }  // namespace Corona
 
 namespace Corona::Systems {
+
+/// Keeps material textures shared while a scene is uploaded in several batches.
+/// The cache owns a reference in addition to the MeshDevice references, so a
+/// texture created for an early batch remains reusable by later batches.
+struct SceneGpuTextureCache {
+    struct Entry {
+        Horizon::HardwareImage image;
+        std::shared_ptr<Corona::Memory::GpuMemToken> mem;
+        std::size_t gpu_bytes = 0;
+        bool valid = false;
+    };
+
+    std::unordered_map<std::uint64_t, Entry> entries;
+};
 
 // ============================================================================
 // 几何 GPU 资源构建器（单一来源）
@@ -41,6 +59,36 @@ namespace Corona::Systems {
 /// @param scene 已导入的场景资源（含 meshes / materials）
 /// @return 与 scene.data.meshes 一一对应的 MeshDevice 数组
 [[nodiscard]] std::vector<MeshDevice> build_mesh_devices_from_scene(
+    const Resource::Scene& scene);
+
+/// Builds one contiguous mesh range.  Callers that spread a large scene over
+/// several frames must reuse @p texture_cache so identical textures remain a
+/// single GPU allocation across the whole scene.
+[[nodiscard]] std::vector<MeshDevice> build_mesh_devices_from_scene_range(
+    const Resource::Scene& scene,
+    std::size_t first_mesh,
+    std::size_t mesh_count,
+    SceneGpuTextureCache& texture_cache);
+
+/// 共享网格 GPU 数据：mesh_devices 只包含唯一 MeshData，
+/// mesh_instances 保存每个节点的实例矩阵与 mesh 索引。
+struct SceneGpuMeshData {
+    std::vector<MeshDevice> mesh_devices;
+    std::vector<MeshInstanceDevice> mesh_instances;
+    std::vector<ModelNodes::Node> model_nodes;
+    ModelNodes::Matrix node_instance_prefix=ModelNodes::identity();
+    bool has_node_instance_prefix=false;
+};
+
+/// Adds scene-instance and node metadata to already-created mesh devices.
+/// Used by the staged uploader after its final GPU batch completes.
+[[nodiscard]] SceneGpuMeshData make_scene_gpu_mesh_data(
+    const Resource::Scene& scene,
+    std::vector<MeshDevice> mesh_devices);
+
+/// 构建共享 mesh GPU 数据。无 mesh_instances 的旧场景（含蒙皮）会为每个
+/// mesh 自动生成单位实例，保持旧行为可用。
+[[nodiscard]] SceneGpuMeshData build_gpu_mesh_data_from_scene(
     const Resource::Scene& scene);
 
 /// 释放进程级共享占位纹理。必须在 GPU device 仍存活时调用

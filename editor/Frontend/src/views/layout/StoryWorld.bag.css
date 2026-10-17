@@ -1,0 +1,1489 @@
+/* ==============================================================================
+   剧情模式 · 行囊（Tab 背包）
+   完全复刻 bag2.html《自然荒野 · 战术编成与收纳库》。
+
+   与原型逐条对应，仅做两处形式转换（不改变任何样式值）：
+     1. 原型的 :root 令牌 / body 底色改为落在 .story-bag 上（组件作用域）；
+     2. 原型顶部 #hud.is-dim 的规则改名 .story-hud.is-dim（HUD 在另一文件里）。
+
+   所有选择器收在 .story-bag 之下，避免 .grid / .tab / .bar 之类的通用类名
+   影响编辑器其它页面。
+   ============================================================================== */
+
+/* =========================================================
+   0. 自然荒野设计规范（森林绿、松木褐、古黄铜）
+   ========================================================= */
+.story-bag {
+  --c-bg-void: #0c120e;
+  --c-bg-panel: rgba(18, 26, 20, 0.92);
+  --c-bg-card: rgba(24, 34, 26, 0.75);
+
+  --c-gold: #b3995d;
+  --c-gold-bright: #e6d5a7;
+  --c-gold-dim: #4d4024;
+  --c-gold-line: rgba(179, 153, 93, 0.4);
+
+  --c-blue-accent: #4a808f;
+  --c-blue-light: #9ecbd6;
+  --c-blue-glow: rgba(74, 128, 143, 0.25);
+
+  --c-text-main: #e8ede3;
+  --c-text-muted: #8d9e85;
+
+  --c-up: #689f38;
+  --c-down: #c24133;
+
+  --s: clamp(48px, 3.6vw, 56px);
+  --sg: clamp(8px, 0.7vw, 10px);
+  --p: clamp(14px, 1.8vw, 20px);
+
+  --font-display: 'Cinzel', 'Noto Serif SC', 'Songti SC', serif;
+  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-mono: 'DIN Alternate', 'Cascadia Code', Consolas, monospace;
+
+  /* 原型 body 的字体/光标继承过来；整页底色**不要**：
+     那是网页背景，搬进编辑器会变成盖满全屏的遮罩。
+     面板自身的不透明背景由 .symphony-panel 提供。 */
+  color: var(--c-text-main);
+  font-family: var(--font-sans);
+  user-select: none;
+  -webkit-user-select: none;
+
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  /* 行囊整块参与命中测试：它会盖住 3D 视口，
+     但只有 .bag 窗口本身接收指针事件，舞台保持穿透。 */
+  pointer-events: auto;
+  overflow: visible;
+  background: none;
+}
+
+.story-bag * {
+  box-sizing: border-box;
+}
+.story-bag button {
+  font-family: inherit;
+}
+.story-bag .svgdefs {
+  position: absolute;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+/* 荒野面板质感（这层才是「窗口」：不透明聚光底色 + 金线边框） */
+.story-bag .symphony-panel {
+  position: relative;
+  background-color: var(--c-bg-panel);
+  /* 原型 body 的聚光渐变收进窗口内部，只照亮面板自己 */
+  background-image:
+    radial-gradient(ellipse at 50% 0%, rgba(104, 159, 56, 0.12) 0%, transparent 70%),
+    radial-gradient(circle at 10% 90%, rgba(179, 153, 93, 0.08) 0%, transparent 50%),
+    linear-gradient(180deg, #121a14 0%, #0c120e 100%);
+  border: 1px solid var(--c-gold-line);
+  border-radius: 4px;
+  box-shadow:
+    inset 0 0 24px rgba(0, 0, 0, 0.8),
+    0 16px 40px rgba(0, 0, 0, 0.9),
+    0 0 20px rgba(104, 159, 56, 0.06);
+  backdrop-filter: blur(18px);
+}
+.story-bag .symphony-panel::before,
+.story-bag .symphony-panel::after {
+  content: '';
+  position: absolute;
+  width: 6px;
+  height: 6px;
+  background: var(--c-gold-bright);
+  pointer-events: none;
+  transform: rotate(45deg);
+}
+.story-bag .symphony-panel::before {
+  top: -3px;
+  left: -3px;
+  box-shadow: 0 0 8px var(--c-gold);
+}
+.story-bag .symphony-panel::after {
+  bottom: -3px;
+  right: -3px;
+  box-shadow: 0 0 8px var(--c-gold);
+}
+
+/* =========================================================
+   1. HUD 基础层（原型在此处压暗背景；HUD 已独立成文，这里只保留
+      .story-hud.is-dim，以便行囊打开时能压暗 HUD）
+   ========================================================= */
+.story-hud.is-dim {
+  filter: blur(6px) brightness(0.6);
+  opacity: 0.5;
+}
+
+/* =========================================================
+   2. 收纳库舞台
+   ========================================================= */
+.story-bag .bagStage {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  padding: clamp(12px, 2.5vh, 28px);
+  /* 舞台只负责居中窗口，本身完全透明且不拦截指针：
+     窗口之外的视口仍可正常操作，背景不会被盖住。 */
+  pointer-events: none;
+  transition: opacity 0.35s ease, visibility 0.35s ease, filter 0.35s ease;
+}
+.story-bag .bagStage.is-hidden {
+  opacity: 0;
+  visibility: hidden;
+  filter: blur(10px);
+  transform: scale(1.02);
+}
+
+.story-bag .bag {
+  width: min(1240px, 96vw);
+  max-height: 90vh;
+  /* 只有窗口本身接收指针事件 */
+  pointer-events: auto;
+  animation: bagIn 0.4s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+.story-bag .bag__body {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  max-height: calc(90vh - 4px);
+  padding: 20px 28px;
+}
+
+/* ------------------ 2.1 顶部标题栏 ------------------ */
+.story-bag .bag__head {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 20px;
+  border-bottom: 1px solid rgba(179, 153, 93, 0.25);
+  padding-bottom: 14px;
+}
+.story-bag .bag__seal {
+  width: 38px;
+  height: 38px;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(179, 153, 93, 0.6);
+  background: rgba(179, 153, 93, 0.1);
+  transform: rotate(45deg);
+  box-shadow: 0 0 12px rgba(179, 153, 93, 0.2);
+}
+.story-bag .bag__seal svg {
+  width: 20px;
+  height: 20px;
+  fill: none;
+  stroke: var(--c-gold-bright);
+  stroke-width: 2;
+  transform: rotate(-45deg);
+}
+.story-bag .bag__title-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.story-bag .bag__title {
+  font-family: var(--font-display);
+  font-size: clamp(20px, 2.2vw, 26px);
+  letter-spacing: 4px;
+  color: var(--c-gold-bright);
+  text-shadow: 0 0 12px rgba(179, 153, 93, 0.4);
+}
+.story-bag .bag__sub {
+  font-size: 10px;
+  font-family: var(--font-mono);
+  letter-spacing: 2px;
+  color: var(--c-text-muted);
+  text-transform: uppercase;
+}
+.story-bag .bag__headline {
+  flex: 1;
+}
+
+.story-bag .purse {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 18px;
+  border: 1px solid var(--c-gold-line);
+  background: rgba(0, 0, 0, 0.45);
+  border-radius: 20px;
+  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.6);
+}
+.story-bag .purse__coin {
+  width: 12px;
+  height: 12px;
+  transform: rotate(45deg);
+  background: var(--c-gold-bright);
+  box-shadow: 0 0 8px var(--c-gold);
+}
+.story-bag .purse__num {
+  font-family: var(--font-mono);
+  font-size: 14px;
+  font-weight: bold;
+  color: var(--c-text-main);
+}
+
+.story-bag .closeBtn {
+  width: 38px;
+  height: 38px;
+  cursor: pointer;
+  color: var(--c-text-muted);
+  border: 1px solid var(--c-gold-line);
+  background: rgba(255, 255, 255, 0.04);
+  display: grid;
+  place-items: center;
+  border-radius: 4px;
+  transition: all 0.2s;
+}
+.story-bag .closeBtn:hover {
+  color: var(--c-gold-bright);
+  border-color: var(--c-gold-bright);
+  box-shadow: 0 0 16px rgba(179, 153, 93, 0.3);
+  background: rgba(179, 153, 93, 0.1);
+}
+
+/* ------------------ 2.2 优化后的主体非对称布局 ------------------ */
+.story-bag .bag__cols {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  column-gap: 28px;
+  row-gap: 18px;
+  grid-template-columns: 360px minmax(0, 1fr);
+  grid-template-rows: auto 1fr;
+}
+.story-bag .colL {
+  grid-column: 1;
+  grid-row: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.story-bag .colR {
+  grid-column: 2;
+  grid-row: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+}
+.story-bag .sector-wrap {
+  grid-column: 1;
+  grid-row: 2;
+  align-self: stretch;
+}
+.story-bag .detailWrap {
+  grid-column: 2;
+  grid-row: 2;
+  align-self: stretch;
+}
+
+.story-bag .secHead {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 2px;
+}
+.story-bag .secHead__dot {
+  width: 6px;
+  height: 6px;
+  background: var(--c-blue-light);
+  transform: rotate(45deg);
+  box-shadow: 0 0 8px var(--c-blue-light);
+}
+.story-bag .secHead__txt {
+  font-family: var(--font-display);
+  font-size: 15px;
+  letter-spacing: 2px;
+  color: var(--c-text-main);
+  font-weight: bold;
+}
+.story-bag .secHead__line {
+  flex: 1;
+  height: 1px;
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0.12), transparent);
+}
+.story-bag .secHead__meta {
+  font-size: 11px;
+  color: var(--c-text-muted);
+  font-family: var(--font-mono);
+}
+
+/* ------------------ 2.3 左侧：武装人偶与呼吸感布局 ------------------ */
+.story-bag .dollWrap {
+  position: relative;
+  padding: var(--p);
+  border: 1px solid var(--c-gold-line);
+  border-radius: 4px;
+  background: radial-gradient(circle at 50% 25%, rgba(104, 159, 56, 0.1), transparent 75%), rgba(12, 18, 14, 0.7);
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  flex: 1;
+  box-shadow: inset 0 2px 8px rgba(0, 0, 0, 0.5);
+}
+/* 披挂位排布：左四（头盔 / 胸甲 / 腿甲 / 战靴）＋ 右一（武器），
+   中央是放大的人形投影（跨 2 列 × 2 行）。 */
+.story-bag .doll {
+  display: grid;
+  grid-template-columns: repeat(4, var(--s));
+  grid-template-rows: repeat(4, var(--s));
+  justify-content: center;
+  gap: var(--sg);
+  padding: 4px 0;
+}
+
+.story-bag .eslot[data-slot='helm'] {
+  grid-area: 1 / 1;
+}
+.story-bag .eslot[data-slot='chest'] {
+  grid-area: 2 / 1;
+}
+.story-bag .eslot[data-slot='legs'] {
+  grid-area: 3 / 1;
+}
+.story-bag .eslot[data-slot='boots'] {
+  grid-area: 4 / 1;
+}
+.story-bag .eslot[data-slot='weapon'] {
+  grid-area: 1 / 4;
+}
+
+/* 中央人形：真实人物图。投影仓是 1 : 1.52，图片也是 1 : 1.52，
+   所以 object-fit: contain 会刚好铺满且不裁切，多余留白不可见。
+   底部用渐变把脚部与仓底融为一体，顶部叠一层绿光让它像被投影出来。 */
+.story-bag .figure {
+  grid-column: 2 / 4;
+  grid-row: 1 / 5;
+  position: relative;
+  display: grid;
+  place-items: center;
+  align-self: stretch;
+  justify-self: stretch;
+  border: 1px dashed rgba(104, 159, 56, 0.35);
+  border-radius: 6px;
+  background: linear-gradient(180deg, rgba(104, 159, 56, 0.08), rgba(0, 0, 0, 0.3));
+  margin: 2px;
+}
+.story-bag .figure svg {
+  width: 100%;
+  height: 100%;
+  padding: 6%;
+  opacity: 0.82;
+  stroke: var(--c-blue-light);
+  filter: drop-shadow(0 0 12px rgba(104, 159, 56, 0.45));
+  transition: all 0.3s;
+}
+/* 真实人物图。
+   图是 1:1.52，投影仓是 1:2.17，所以「contain」会上下留大片空档并把图自带的
+   浅色背景露成一块亮斑。人物居中，因此改为铺满并裁掉左右空档（cover），
+   四周再羽化，让人物浮在仓里而不是贴一张照片。 */
+.story-bag .figure img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center 18%;
+  opacity: 0.96;
+  user-select: none;
+  -webkit-user-drag: none;
+  -webkit-mask-image:
+    linear-gradient(180deg, transparent 0, #000 9%, #000 88%, transparent 100%),
+    linear-gradient(90deg, transparent 0, #000 7%, #000 93%, transparent 100%);
+  -webkit-mask-composite: source-in;
+  mask-image:
+    linear-gradient(180deg, transparent 0, #000 9%, #000 88%, transparent 100%),
+    linear-gradient(90deg, transparent 0, #000 7%, #000 93%, transparent 100%);
+  mask-composite: intersect;
+  transition: opacity 0.3s;
+}
+/* 顶部绿光：像投影出来的轮廓 */
+.story-bag .figure::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border-radius: 5px;
+  background:
+    linear-gradient(180deg, rgba(104, 159, 56, 0.16), transparent 38%),
+    radial-gradient(70% 40% at 50% 100%, rgba(104, 159, 56, 0.12), transparent 70%);
+  mix-blend-mode: screen;
+}
+.story-bag .figure:hover img {
+  opacity: 1;
+  transform: scale(1.02);
+}
+
+.story-bag .eslot {
+  position: relative;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  cursor: pointer;
+  color: var(--c-text-muted);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 4px;
+  background: rgba(16, 24, 18, 0.85);
+  box-shadow: inset 0 0 12px rgba(0, 0, 0, 0.6);
+  transition: all 0.2s ease;
+}
+.story-bag .eslot:hover {
+  border-color: var(--c-gold-bright);
+  box-shadow: 0 0 14px var(--c-gold-glow);
+  transform: translateY(-2px);
+  z-index: 2;
+}
+.story-bag .eslot__ph {
+  position: absolute;
+  bottom: 3px;
+  font-size: 9px;
+  font-family: var(--font-mono);
+  color: rgba(255, 255, 255, 0.35);
+  pointer-events: none;
+  letter-spacing: 1px;
+}
+.story-bag .eslot.has {
+  background: linear-gradient(180deg, rgba(32, 48, 34, 0.85), rgba(12, 18, 14, 0.95));
+  border-color: rgba(255, 255, 255, 0.25);
+}
+.story-bag .eslot.is-sel {
+  border-color: var(--c-gold-bright);
+  box-shadow: 0 0 0 1px var(--c-gold-bright), 0 0 18px var(--c-gold-glow);
+}
+
+.story-bag .hero-stats {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px 18px;
+  padding: 14px;
+  background: rgba(0, 0, 0, 0.5);
+  border-radius: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  box-shadow: inset 0 2px 6px rgba(0, 0, 0, 0.8);
+}
+.story-bag .hstat {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 12px;
+}
+.story-bag .hstat-name {
+  color: var(--c-text-muted);
+  letter-spacing: 1px;
+}
+.story-bag .hstat-val {
+  color: var(--c-gold-bright);
+  font-family: var(--font-mono);
+  font-weight: bold;
+  font-size: 13px;
+}
+
+/* ------------------ 2.4 右侧：分类标签与收纳阵列 ------------------ */
+.story-bag .tabs {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 2px;
+}
+.story-bag .tab {
+  padding: 6px 18px;
+  cursor: pointer;
+  font-size: 12px;
+  letter-spacing: 1.5px;
+  color: var(--c-text-muted);
+  border-radius: 4px;
+  border: 1px solid transparent;
+  background: transparent;
+  transition: all 0.2s ease;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+.story-bag .tab__count {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: bold;
+  min-width: 18px;
+  padding: 1px 5px;
+  text-align: center;
+  border-radius: 9px;
+  color: var(--c-text-muted);
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  transition: all 0.2s ease;
+}
+.story-bag .tab:hover .tab__count {
+  color: var(--c-text-main);
+  border-color: rgba(255, 255, 255, 0.2);
+}
+.story-bag .tab[aria-selected='true'] .tab__count {
+  color: var(--c-gold-bright);
+  background: rgba(12, 18, 14, 0.55);
+  border-color: rgba(12, 18, 14, 0.7);
+}
+.story-bag .tab:hover {
+  color: var(--c-text-main);
+  background: rgba(255, 255, 255, 0.06);
+}
+.story-bag .tab[aria-selected='true'] {
+  color: var(--c-bg-void);
+  background: var(--c-gold-bright);
+  box-shadow: 0 0 14px var(--c-gold-glow);
+}
+
+.story-bag .gridWrap {
+  padding: var(--p);
+  border: 1px solid var(--c-gold-line);
+  border-radius: 4px;
+  background: rgba(12, 18, 14, 0.65);
+  flex: 1;
+  overflow-y: auto;
+  box-shadow: inset 0 2px 8px rgba(0, 0, 0, 0.6);
+}
+.story-bag .gridWrap::-webkit-scrollbar {
+  width: 6px;
+}
+.story-bag .gridWrap::-webkit-scrollbar-thumb {
+  background: rgba(179, 153, 93, 0.35);
+  border-radius: 3px;
+}
+.story-bag .grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(var(--s), 1fr));
+  gap: var(--sg);
+  justify-content: start;
+}
+
+.story-bag .cell {
+  position: relative;
+  padding: 0;
+  cursor: pointer;
+  aspect-ratio: 1 / 1;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
+  background: var(--c-bg-card);
+  transition: all 0.18s ease;
+  box-shadow: inset 0 0 6px rgba(0, 0, 0, 0.4);
+}
+.story-bag .cell:hover {
+  border-color: var(--c-gold-bright);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.6), 0 0 14px var(--c-gold-glow);
+  transform: translateY(-2px);
+  z-index: 2;
+}
+.story-bag .cell.is-sel {
+  border-color: var(--c-gold-bright);
+  box-shadow: 0 0 0 1px var(--c-gold-bright), 0 0 18px var(--c-gold-glow);
+}
+.story-bag .cell:disabled {
+  cursor: default;
+}
+/* 不属于当前分类的格子：渲染成空的填充格（不显示器物、不可交互）。
+   这样点「兵甲」时，所有兵甲都顶格排列，中间不会被丹药/材料隔开；
+   格子数量不变，因此键盘游走的索引依然稳定。 */
+.story-bag .cell.is-flow {
+  cursor: default;
+  border-color: rgba(255, 255, 255, 0.05);
+  background: rgba(0, 0, 0, 0.28);
+  background-image:
+    repeating-linear-gradient(90deg, rgba(233, 224, 204, 0.012) 0 1px, transparent 1px 6px);
+  box-shadow: inset 0 0 0 1px rgba(179, 153, 93, 0.04);
+}
+.story-bag .cell.is-flow .icon,
+.story-bag .cell.is-flow .qty {
+  display: none;
+}
+.story-bag .cell.is-equipped::after {
+  content: 'EQ';
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  font-size: 9px;
+  font-family: var(--font-mono);
+  font-weight: bold;
+  color: var(--c-bg-void);
+  background: var(--c-blue-light);
+  padding: 1px 4px;
+  border-radius: 2px;
+}
+
+/* 品质色彩体系（沿用项目既有的四档稀有度） */
+.story-bag .r-common {
+  color: #cbd5e1;
+}
+.story-bag .r-fine {
+  color: #9ecbd6;
+}
+.story-bag .r-rare {
+  color: #b794f4;
+}
+.story-bag .r-epic {
+  color: #e6d5a7;
+}
+
+.story-bag .cell.has.r-epic,
+.story-bag .eslot.has.r-epic {
+  border-color: rgba(230, 213, 167, 0.65);
+  background-image: radial-gradient(circle at 50% 100%, rgba(230, 213, 167, 0.18), transparent 75%);
+}
+.story-bag .cell.has.r-rare,
+.story-bag .eslot.has.r-rare {
+  border-color: rgba(183, 148, 244, 0.55);
+  background-image: radial-gradient(circle at 50% 100%, rgba(183, 148, 244, 0.18), transparent 75%);
+}
+.story-bag .cell.has.r-fine,
+.story-bag .eslot.has.r-fine {
+  border-color: rgba(158, 203, 214, 0.45);
+  background-image: radial-gradient(circle at 50% 100%, rgba(158, 203, 214, 0.12), transparent 75%);
+}
+
+.story-bag .qty {
+  position: absolute;
+  right: 3px;
+  bottom: 3px;
+  z-index: 3;
+  padding: 0 5px;
+  font-size: 10px;
+  font-family: var(--font-mono);
+  color: #fff;
+  background: rgba(0, 0, 0, 0.85);
+  border-radius: 2px;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+}
+
+/* 器物图标：几何是**内联 SVG**（见 GEAR_ICONS），填充/明暗写在 <path> 的行内属性上，
+   这里只负责定位。因此 .icon svg 只设描边，**不设 fill**，
+   否则会覆盖行内 fill 而让图标重新变成空心轮廓。 */
+.story-bag .icon {
+  position: absolute;
+  inset: 9%;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+}
+.story-bag .icon svg {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+.story-bag .icon svg * {
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+/* ------------------ 2.5 左下：战区坐标 ------------------ */
+.story-bag .sector-wrap {
+  padding: var(--p);
+  border: 1px solid var(--c-gold-line);
+  border-radius: 4px;
+  background: rgba(12, 18, 14, 0.7);
+  box-shadow: inset 0 2px 6px rgba(0, 0, 0, 0.5);
+}
+.story-bag .sector__body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  height: 100%;
+}
+.story-bag .sector__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  padding-bottom: 8px;
+}
+.story-bag .sector__title {
+  font-family: var(--font-display);
+  font-size: 13px;
+  color: var(--c-gold-bright);
+  letter-spacing: 1px;
+  font-weight: bold;
+}
+.story-bag .sector__manage {
+  margin-left: auto;
+  cursor: pointer;
+  font-size: 11px;
+  color: var(--c-text-muted);
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  padding: 3px 8px;
+  border-radius: 3px;
+  transition: all 0.2s;
+}
+.story-bag .sector__manage:hover {
+  color: var(--c-text-main);
+  border-color: var(--c-gold-bright);
+  background: rgba(179, 153, 93, 0.1);
+}
+.story-bag .sector__row {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  flex: 1;
+}
+.story-bag .sector__art {
+  width: 60px;
+  height: 60px;
+  flex: none;
+  border: 1px solid var(--c-gold-line);
+  border-radius: 4px;
+  background: radial-gradient(circle, rgba(104, 159, 56, 0.25), #0c120e);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  box-shadow: inset 0 0 10px rgba(0, 0, 0, 0.6);
+}
+.story-bag .sector__art svg {
+  width: 70%;
+  height: 70%;
+  stroke: var(--c-gold-bright);
+  fill: none;
+  stroke-width: 1.5;
+}
+/* 小世界图象的线稿：worldThumbHTML 产出的 ws-* 分组，
+   按原型 sector__art 的金色描边风格上色。 */
+.story-bag .sector__art .ws-moon,
+.story-bag .sector__art .ws-far,
+.story-bag .sector__art .ws-near,
+.story-bag .sector__art .ws-cloud,
+.story-bag .sector__art .ws-snow,
+.story-bag .sector__art .ws-fall,
+.story-bag .sector__art .ws-pine,
+.story-bag .sector__art .ws-water {
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.story-bag .sector__art .ws-moon {
+  color: rgba(230, 213, 167, 0.85);
+}
+/* 月相缺口：用面板底色挖出弯月 */
+.story-bag .sector__art .ws-moon__cut {
+  fill: #0c120e;
+  stroke: none;
+}
+.story-bag .sector__art .ws-far {
+  color: rgba(179, 153, 93, 0.72);
+}
+.story-bag .sector__art .ws-near {
+  color: rgba(159, 124, 58, 0.9);
+}
+.story-bag .sector__list {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  overflow-y: auto;
+  max-height: 86px;
+}
+/* 世界一格：名称 + 状态（所在 / 前往 / 未辟） */
+.story-bag .snode {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 30px;
+  padding: 5px 10px;
+  cursor: pointer;
+  font-size: 11px;
+  color: var(--c-text-muted);
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 3px;
+  transition: all 0.15s;
+}
+.story-bag .snode__name {
+  font-family: var(--font-display);
+  font-size: 12px;
+  font-weight: bold;
+  letter-spacing: 1px;
+}
+.story-bag .snode__meta {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  opacity: 0.75;
+}
+.story-bag .snode:hover:not(:disabled) {
+  color: var(--c-text-main);
+  border-color: rgba(255, 255, 255, 0.2);
+}
+/* 当前所在：金底深字 */
+.story-bag .snode.is-cur {
+  color: var(--c-bg-void);
+  background: var(--c-gold-bright);
+  border-color: var(--c-gold-bright);
+  box-shadow: 0 0 10px var(--c-gold-glow);
+}
+.story-bag .snode.is-cur .snode__meta {
+  opacity: 0.7;
+}
+/* 可前往：绿边提示这是个可点的目的地 */
+.story-bag .snode.is-dest {
+  color: var(--c-text-main);
+  border-color: rgba(104, 159, 56, 0.45);
+  background: rgba(104, 159, 56, 0.08);
+}
+.story-bag .snode.is-dest .snode__meta {
+  color: var(--c-green);
+  opacity: 1;
+}
+.story-bag .snode.is-dest:hover {
+  border-color: var(--c-green);
+  background: rgba(104, 159, 56, 0.18);
+}
+.story-bag .snode:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+/* ------------------ 2.6 右下：装备详情与属性浮动对比 ------------------ */
+.story-bag .detailWrap {
+  padding: 18px;
+  border: 1px solid var(--c-gold-line);
+  border-radius: 4px;
+  background: linear-gradient(180deg, rgba(22, 36, 26, 0.85), rgba(12, 18, 14, 0.96));
+  display: flex;
+  align-items: stretch;
+  box-shadow: inset 0 2px 10px rgba(0, 0, 0, 0.7);
+}
+.story-bag .detail {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 94px minmax(0, 1fr);
+  gap: 18px;
+}
+.story-bag .detail__preview {
+  width: 94px;
+  height: 94px;
+  position: relative;
+  border-radius: 4px;
+  border: 1px solid var(--c-gold-bright);
+  background: rgba(0, 0, 0, 0.6);
+  box-shadow: inset 0 0 16px rgba(0, 0, 0, 0.9), 0 4px 12px rgba(0, 0, 0, 0.5);
+}
+.story-bag .detail__info {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+.story-bag .detail__title-row {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.story-bag .detail__name {
+  font-family: var(--font-display);
+  font-size: 18px;
+  color: var(--c-text-main);
+  font-weight: bold;
+  letter-spacing: 1px;
+}
+.story-bag .detail__rarity {
+  font-size: 10px;
+  font-family: var(--font-mono);
+  padding: 2px 8px;
+  border-radius: 2px;
+  border: 1px solid currentColor;
+  font-weight: bold;
+}
+.story-bag .detail__type {
+  font-size: 11px;
+  color: var(--c-text-muted);
+}
+
+.story-bag .detail__stats {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin: 4px 0;
+  padding: 10px;
+  background: rgba(0, 0, 0, 0.35);
+  border-radius: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.04);
+}
+.story-bag .dstat-item {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  font-family: var(--font-mono);
+  align-items: center;
+}
+.story-bag .dstat-name {
+  color: var(--c-text-muted);
+  font-family: var(--font-sans);
+}
+.story-bag .dstat-val-group {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.story-bag .dstat-curr {
+  color: var(--c-text-main);
+  font-weight: bold;
+}
+.story-bag .dstat-diff {
+  font-weight: bold;
+  font-size: 11px;
+}
+.story-bag .dstat-diff.is-up {
+  color: var(--c-up);
+}
+.story-bag .dstat-diff.is-down {
+  color: var(--c-down);
+}
+
+.story-bag .detail__set {
+  font-size: 11px;
+  color: var(--c-gold-bright);
+  border-left: 2px solid var(--c-gold-bright);
+  padding-left: 10px;
+  line-height: 1.5;
+  background: linear-gradient(90deg, rgba(179, 153, 93, 0.12), transparent);
+}
+.story-bag .detail__flavor {
+  font-size: 11px;
+  line-height: 1.6;
+  color: rgba(255, 255, 255, 0.45);
+  font-style: italic;
+}
+.story-bag .detail__empty {
+  margin: 0;
+  width: 100%;
+  align-self: center;
+  text-align: center;
+  letter-spacing: 2px;
+  font-size: 12px;
+  color: var(--c-text-muted);
+}
+
+.story-bag .detail__acts {
+  margin-top: auto;
+  display: flex;
+  gap: 12px;
+}
+.story-bag .dbtn {
+  padding: 9px 0;
+  flex: 1;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: bold;
+  letter-spacing: 2px;
+  border-radius: 4px;
+  transition: all 0.2s ease;
+  border: 1px solid transparent;
+}
+.story-bag .dbtn:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+.story-bag .dbtn--primary {
+  background: var(--c-gold-bright);
+  color: var(--c-bg-void);
+  border-color: var(--c-gold-bright);
+  box-shadow: 0 0 14px rgba(230, 213, 167, 0.35);
+}
+.story-bag .dbtn--primary:hover:not(:disabled) {
+  background: #fff;
+  box-shadow: 0 0 22px rgba(255, 255, 255, 0.7);
+}
+.story-bag .dbtn--ghost {
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--c-text-muted);
+  border-color: rgba(255, 255, 255, 0.2);
+}
+.story-bag .dbtn--ghost:hover:not(:disabled) {
+  color: var(--c-text-main);
+  border-color: var(--c-text-main);
+  background: rgba(255, 255, 255, 0.1);
+}
+
+/* ------------------ 3. 底栏与反馈 ------------------ */
+.story-bag .bag__foot {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  margin-top: auto;
+  padding-top: 18px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  font-size: 12px;
+  color: var(--c-text-muted);
+}
+.story-bag .bag__foot b {
+  color: var(--c-gold-bright);
+  font-family: var(--font-mono);
+}
+.story-bag .hints {
+  margin-left: auto;
+  display: flex;
+  gap: 16px;
+}
+.story-bag .hints kbd {
+  color: var(--c-bg-void);
+  background: var(--c-text-muted);
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-family: var(--font-mono);
+  font-weight: bold;
+}
+
+.story-bag .toast {
+  position: fixed;
+  left: 50%;
+  bottom: 10%;
+  transform: translate(-50%, 10px);
+  padding: 9px 26px;
+  font-family: var(--font-sans);
+  font-size: 14px;
+  letter-spacing: 2px;
+  font-weight: bold;
+  color: var(--c-bg-void);
+  background: var(--c-gold-bright);
+  border-radius: 4px;
+  box-shadow: 0 4px 22px rgba(179, 153, 93, 0.6);
+  opacity: 0;
+  pointer-events: none;
+  z-index: 100;
+  transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.story-bag .toast.is-on {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+
+.story-bag .dust {
+  position: absolute;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  pointer-events: none;
+  background: var(--c-blue-light);
+  box-shadow: 0 0 10px var(--c-blue-accent);
+  animation: dustPop 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  z-index: 50;
+}
+@keyframes dustPop {
+  0% { opacity: 1; transform: translate(0, 0) scale(1); }
+  100% { opacity: 0; transform: translate(var(--dx), var(--dy)) scale(0.1); }
+}
+@keyframes bagIn {
+  0% { opacity: 0; transform: scale(0.97) translateY(10px); }
+  100% { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+/* ------------------ 4. 跟随光标的浮签（原型没有；沿用本套面板语言） ------------------ */
+.story-bag .tip {
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: 60;
+  width: min(300px, 76vw);
+  padding: 12px 14px;
+  pointer-events: none;
+  background: var(--c-bg-panel);
+  border: 1px solid var(--c-gold-line);
+  border-radius: 4px;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.9);
+  backdrop-filter: blur(18px);
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.16s ease, visibility 0.16s ease;
+}
+.story-bag .tip.is-on {
+  opacity: 1;
+  visibility: visible;
+}
+.story-bag .tip__name {
+  margin: 0 0 6px;
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  flex-wrap: wrap;
+  font-family: var(--font-display);
+  font-size: 14px;
+  letter-spacing: 1px;
+  color: var(--c-text-main);
+}
+.story-bag .tip__rarity {
+  font-size: 10px;
+  font-family: var(--font-mono);
+}
+.story-bag .tip__type {
+  margin: 0 0 7px;
+  font-size: 11px;
+  color: var(--c-text-muted);
+}
+.story-bag .tip__stats {
+  display: grid;
+  gap: 4px;
+  margin: 0 0 7px;
+}
+.story-bag .tip__stats div {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 11px;
+  color: var(--c-text-muted);
+}
+.story-bag .tip__stats div b {
+  color: var(--c-gold-bright);
+  font-family: var(--font-mono);
+  font-weight: bold;
+}
+.story-bag .tip__flavor {
+  margin: 0;
+  padding-left: 8px;
+  border-left: 2px solid var(--c-gold-line);
+  font-size: 11px;
+  line-height: 1.7;
+  font-style: italic;
+  color: rgba(255, 255, 255, 0.45);
+}
+.story-bag .tip__foot {
+  margin: 7px 0 0;
+  padding-top: 6px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  font-size: 10px;
+  letter-spacing: 1px;
+  color: var(--c-text-muted);
+}
+
+/* 键盘游走锚点 */
+.story-bag .hint-anchor {
+  position: relative;
+}
+.story-bag .is-deny {
+  animation: nudge 0.38s ease;
+}
+@keyframes nudge {
+  0%, 100% { transform: translateX(0); }
+  20% { transform: translateX(-4px); }
+  45% { transform: translateX(4px); }
+  70% { transform: translateX(-2px); }
+}
+
+/* ------------------ 5. 响应式 ------------------ */
+@media (max-width: 1100px) {
+  .story-bag .bag__cols {
+    grid-template-columns: 300px minmax(0, 1fr);
+  }
+}
+@media (max-width: 900px) {
+  .story-bag .bag__cols {
+    grid-template-columns: 1fr;
+    grid-template-rows: repeat(4, auto);
+  }
+  .story-bag .colL,
+  .story-bag .colR,
+  .story-bag .sector-wrap,
+  .story-bag .detailWrap {
+    grid-column: 1;
+    grid-row: auto;
+  }
+  .story-bag .bag__body {
+    overflow: auto;
+  }
+}
+@media (max-width: 640px) {
+  .story-bag {
+    /* 四列披挂位要能收进窄屏 */
+    --s: 46px;
+    --sg: 6px;
+  }
+  .story-bag .bag__sub,
+  .story-bag .hints {
+    display: none;
+  }
+  .story-bag .detail {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* =========================================================
+   6. 纹路与细节
+   只覆盖视觉属性（背景、阴影、伪元素），
+   不改任何 grid 坐标、尺寸或间距，因此不影响既有版式。
+   ========================================================= */
+
+/* 主窗口：松木褐织纹 + 四角切边光 + 外圈金线 */
+.story-bag .symphony-panel {
+  background-image:
+    repeating-linear-gradient(90deg, rgba(233, 224, 204, 0.028) 0 1px, transparent 1px 7px),
+    repeating-linear-gradient(0deg, rgba(233, 224, 204, 0.02) 0 1px, transparent 1px 7px),
+    repeating-linear-gradient(58deg, rgba(255, 242, 210, 0.035) 0 1px, transparent 1px 5px),
+    repeating-linear-gradient(-58deg, rgba(0, 0, 0, 0.16) 0 1px, transparent 1px 11px),
+    radial-gradient(140% 100% at 50% -12%, rgba(104, 159, 56, 0.10), transparent 62%),
+    radial-gradient(circle at 10% 92%, rgba(179, 153, 93, 0.07), transparent 52%),
+    linear-gradient(180deg, #141d16 0%, #0d1410 52%, #0a0f0c 100%);
+  border-color: rgba(179, 153, 93, 0.5);
+  box-shadow:
+    inset 0 0 30px rgba(0, 0, 0, 0.82),
+    inset 0 1px 0 rgba(233, 224, 204, 0.06),
+    inset 0 0 0 1px rgba(104, 159, 56, 0.05),
+    0 18px 46px rgba(0, 0, 0, 0.92),
+    0 0 26px rgba(104, 159, 56, 0.07);
+}
+.story-bag .bag__body {
+  position: relative;
+}
+/* 四角斜切装饰（贴在芯层四角，不占布局） */
+.story-bag .bag__body::after {
+  content: '';
+  position: absolute;
+  inset: 10px;
+  pointer-events: none;
+  z-index: 0;
+  background:
+    linear-gradient(rgba(230, 213, 167, 0.5), rgba(230, 213, 167, 0.5)) left top / 16px 2px no-repeat,
+    linear-gradient(rgba(230, 213, 167, 0.5), rgba(230, 213, 167, 0.5)) left top / 2px 16px no-repeat,
+    linear-gradient(rgba(230, 213, 167, 0.5), rgba(230, 213, 167, 0.5)) right top / 16px 2px no-repeat,
+    linear-gradient(rgba(230, 213, 167, 0.5), rgba(230, 213, 167, 0.5)) right top / 2px 16px no-repeat,
+    linear-gradient(rgba(230, 213, 167, 0.5), rgba(230, 213, 167, 0.5)) left bottom / 16px 2px no-repeat,
+    linear-gradient(rgba(230, 213, 167, 0.5), rgba(230, 213, 167, 0.5)) left bottom / 2px 16px no-repeat,
+    linear-gradient(rgba(230, 213, 167, 0.5), rgba(230, 213, 167, 0.5)) right bottom / 16px 2px no-repeat,
+    linear-gradient(rgba(230, 213, 167, 0.5), rgba(230, 213, 167, 0.5)) right bottom / 2px 16px no-repeat;
+  opacity: 0.55;
+}
+
+/* 顶栏下沿：一段暗金双线 */
+.story-bag .bag__head {
+  border-bottom: 1px solid rgba(179, 153, 93, 0.28);
+  position: relative;
+}
+.story-bag .bag__head::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -4px;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(230, 213, 167, 0.28) 20%, rgba(230, 213, 167, 0.28) 80%, transparent);
+}
+/* 原标题栏的空白处本来只是一条线，换成蚀刻横线 */
+.story-bag .bag__headline {
+  height: 1px;
+  background:
+    repeating-linear-gradient(90deg, rgba(179, 153, 93, 0.42) 0 5px, transparent 5px 10px);
+}
+
+/* 分节标题下的机刻双线 */
+.story-bag .secHead {
+  position: relative;
+  padding-bottom: 7px;
+}
+.story-bag .secHead::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 3px;
+  background:
+    linear-gradient(90deg, rgba(179, 153, 93, 0.5) 0 46%, transparent 46%),
+    linear-gradient(90deg, transparent 0 54%, rgba(179, 153, 93, 0.26) 54%);
+  background-size: 100% 1px, 100% 1px;
+  background-position: 0 0, 0 2px;
+  background-repeat: no-repeat;
+}
+
+/* 武装编成面板：织纹 + 四角角铁 + 中心呼吸光 */
+.story-bag .dollWrap {
+  background-image:
+    repeating-linear-gradient(0deg, rgba(233, 224, 204, 0.022) 0 1px, transparent 1px 6px),
+    repeating-linear-gradient(90deg, rgba(0, 0, 0, 0.18) 0 1px, transparent 1px 9px),
+    radial-gradient(circle at 50% 22%, rgba(104, 159, 56, 0.14), transparent 68%),
+    linear-gradient(180deg, rgba(16, 24, 18, 0.86), rgba(9, 13, 11, 0.92));
+  box-shadow:
+    inset 0 2px 10px rgba(0, 0, 0, 0.7),
+    inset 0 0 0 1px rgba(179, 153, 93, 0.10),
+    inset 0 0 34px rgba(0, 0, 0, 0.55);
+}
+/* 四角角铁 */
+.story-bag .dollWrap::before {
+  content: '';
+  position: absolute;
+  inset: 5px;
+  pointer-events: none;
+  background:
+    linear-gradient(rgba(230, 213, 167, 0.42), rgba(230, 213, 167, 0.42)) left top / 12px 1px no-repeat,
+    linear-gradient(rgba(230, 213, 167, 0.42), rgba(230, 213, 167, 0.42)) left top / 1px 12px no-repeat,
+    linear-gradient(rgba(230, 213, 167, 0.42), rgba(230, 213, 167, 0.42)) right top / 12px 1px no-repeat,
+    linear-gradient(rgba(230, 213, 167, 0.42), rgba(230, 213, 167, 0.42)) right top / 1px 12px no-repeat,
+    linear-gradient(rgba(230, 213, 167, 0.42), rgba(230, 213, 167, 0.42)) left bottom / 12px 1px no-repeat,
+    linear-gradient(rgba(230, 213, 167, 0.42), rgba(230, 213, 167, 0.42)) left bottom / 1px 12px no-repeat,
+    linear-gradient(rgba(230, 213, 167, 0.42), rgba(230, 213, 167, 0.42)) right bottom / 12px 1px no-repeat,
+    linear-gradient(rgba(230, 213, 167, 0.42), rgba(230, 213, 167, 0.42)) right bottom / 1px 12px no-repeat;
+  z-index: 2;
+}
+
+/* 装备格：内衬织纹 + 顶部高光 + 底部暗影 + 外圈细金线 */
+.story-bag .eslot {
+  background-image:
+    repeating-linear-gradient(90deg, rgba(233, 224, 204, 0.03) 0 1px, transparent 1px 5px),
+    repeating-linear-gradient(0deg, rgba(0, 0, 0, 0.20) 0 1px, transparent 1px 6px),
+    linear-gradient(180deg, rgba(34, 48, 36, 0.9) 0%, rgba(16, 24, 18, 0.95) 55%, rgba(10, 15, 12, 0.98) 100%);
+  box-shadow:
+    inset 0 0 0 1px rgba(179, 153, 93, 0.14),
+    inset 0 1px 0 rgba(233, 224, 204, 0.07),
+    inset 0 -2px 6px rgba(0, 0, 0, 0.7),
+    inset 0 0 12px rgba(0, 0, 0, 0.6);
+}
+/* 格内左上角小切角 */
+.story-bag .eslot::after {
+  content: '';
+  position: absolute;
+  left: 3px;
+  top: 3px;
+  width: 8px;
+  height: 8px;
+  pointer-events: none;
+  border-left: 1px solid rgba(230, 213, 167, 0.35);
+  border-top: 1px solid rgba(230, 213, 167, 0.35);
+}
+.story-bag .eslot.has::after {
+  border-color: rgba(230, 213, 167, 0.6);
+}
+.story-bag .eslot:hover {
+  box-shadow:
+    inset 0 0 0 1px rgba(230, 213, 167, 0.4),
+    inset 0 1px 0 rgba(233, 224, 204, 0.12),
+    0 0 16px var(--c-gold-glow);
+}
+
+/* 中央人形外框：内嵌金线 + 内部扫描纹，强化"投影仓"质感 */
+.story-bag .figure {
+  background-image:
+    repeating-linear-gradient(0deg, rgba(104, 159, 56, 0.07) 0 1px, transparent 1px 5px),
+    radial-gradient(60% 45% at 50% 26%, rgba(158, 203, 214, 0.14), transparent 70%),
+    linear-gradient(180deg, rgba(20, 32, 26, 0.72), rgba(8, 12, 10, 0.88));
+  box-shadow:
+    inset 0 0 0 1px rgba(104, 159, 56, 0.14),
+    inset 0 0 26px rgba(0, 0, 0, 0.72);
+}
+
+/* 属性总览：行间刻线 */
+.story-bag .hero-stats {
+  background-image:
+    repeating-linear-gradient(90deg, rgba(233, 224, 204, 0.02) 0 1px, transparent 1px 8px),
+    linear-gradient(180deg, rgba(0, 0, 0, 0.55), rgba(0, 0, 0, 0.38));
+  box-shadow:
+    inset 0 2px 6px rgba(0, 0, 0, 0.8),
+    inset 0 0 0 1px rgba(179, 153, 93, 0.10);
+}
+.story-bag .hstat + .hstat {
+  border-top: none;
+}
+
+/* 收纳阵列：四边暗角 + 织纹底板 + 内嵌金线 */
+.story-bag .gridWrap {
+  background-image:
+    repeating-linear-gradient(90deg, rgba(233, 224, 204, 0.018) 0 1px, transparent 1px 6px),
+    repeating-linear-gradient(0deg, rgba(0, 0, 0, 0.16) 0 1px, transparent 1px 6px),
+    radial-gradient(120% 90% at 50% 0%, rgba(104, 159, 56, 0.07), transparent 65%),
+    linear-gradient(180deg, rgba(14, 21, 16, 0.82), rgba(8, 12, 10, 0.9));
+  box-shadow:
+    inset 0 2px 10px rgba(0, 0, 0, 0.7),
+    inset 0 0 0 1px rgba(179, 153, 93, 0.10),
+    inset 0 0 40px rgba(0, 0, 0, 0.45);
+}
+.story-bag .cell {
+  background-image:
+    repeating-linear-gradient(90deg, rgba(233, 224, 204, 0.022) 0 1px, transparent 1px 5px),
+    linear-gradient(180deg, rgba(28, 40, 31, 0.85) 0%, rgba(16, 24, 18, 0.9) 60%, rgba(10, 15, 12, 0.95) 100%);
+  box-shadow:
+    inset 0 0 0 1px rgba(179, 153, 93, 0.10),
+    inset 0 1px 0 rgba(233, 224, 204, 0.05),
+    inset 0 -2px 5px rgba(0, 0, 0, 0.6);
+}
+
+/* 战区坐标：与左上面板同一套织纹，避免两块面板观感脱节 */
+.story-bag .sector-wrap {
+  background-image:
+    repeating-linear-gradient(0deg, rgba(233, 224, 204, 0.02) 0 1px, transparent 1px 6px),
+    repeating-linear-gradient(90deg, rgba(0, 0, 0, 0.16) 0 1px, transparent 1px 9px),
+    radial-gradient(circle at 12% 20%, rgba(104, 159, 56, 0.10), transparent 62%),
+    linear-gradient(180deg, rgba(15, 22, 17, 0.82), rgba(9, 13, 11, 0.9));
+  box-shadow:
+    inset 0 2px 8px rgba(0, 0, 0, 0.65),
+    inset 0 0 0 1px rgba(179, 153, 93, 0.10);
+}
+
+/* 详情面板：对角铜绿晕 + 左缘金线 */
+.story-bag .detailWrap {
+  background-image:
+    repeating-linear-gradient(58deg, rgba(233, 224, 204, 0.016) 0 1px, transparent 1px 9px),
+    radial-gradient(80% 120% at 100% 0%, rgba(179, 153, 93, 0.10), transparent 62%),
+    radial-gradient(70% 100% at 0% 100%, rgba(104, 159, 56, 0.10), transparent 60%),
+    linear-gradient(135deg, rgba(20, 32, 24, 0.9), rgba(10, 15, 12, 0.95));
+  box-shadow:
+    inset 0 2px 12px rgba(0, 0, 0, 0.72),
+    inset 0 0 0 1px rgba(179, 153, 93, 0.12),
+    inset 3px 0 0 -1px rgba(230, 213, 167, 0.22);
+}
+
+/* 详情预览：双线框 + 内层扫描纹 */
+.story-bag .detail__preview {
+  background-image:
+    repeating-linear-gradient(0deg, rgba(233, 224, 204, 0.03) 0 1px, transparent 1px 5px),
+    radial-gradient(70% 60% at 50% 32%, rgba(230, 213, 167, 0.10), transparent 72%),
+    linear-gradient(180deg, rgba(22, 32, 26, 0.9), rgba(9, 12, 10, 0.95));
+  box-shadow:
+    inset 0 0 18px rgba(0, 0, 0, 0.9),
+    inset 0 0 0 1px rgba(230, 213, 167, 0.22),
+    0 4px 14px rgba(0, 0, 0, 0.55);
+}
+
+/* 底栏：上沿双线 + 织纹底 */
+.story-bag .bag__foot {
+  position: relative;
+  border-top: 1px solid rgba(179, 153, 93, 0.24);
+  /* 窗口高度受限时，下方内容不应压到底栏文字上 */
+  background-color: rgba(10, 15, 12, 0.92);
+  background-image:
+    repeating-linear-gradient(90deg, rgba(233, 224, 204, 0.018) 0 1px, transparent 1px 6px);
+}
+.story-bag .bag__foot::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 3px;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(179, 153, 93, 0.22) 25%, rgba(179, 153, 93, 0.22) 75%, transparent);
+}
+
+/* 分类页签：选中态加内嵌金线，未选加蚀刻底纹 */
+.story-bag .tab {
+  background-image: repeating-linear-gradient(90deg, rgba(233, 224, 204, 0.03) 0 1px, transparent 1px 5px);
+  box-shadow: inset 0 0 0 1px rgba(179, 153, 93, 0.08);
+}
+.story-bag .tab[aria-selected='true'] {
+  box-shadow:
+    0 0 16px var(--c-gold-glow),
+    inset 0 1px 0 rgba(255, 255, 255, 0.28),
+    inset 0 -2px 5px rgba(0, 0, 0, 0.35);
+}
+
+/* 页脚提示键位：铜牌质感 */
+.story-bag .hints kbd {
+  background-image: linear-gradient(180deg, #a9b3a1, #6f7a68);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.45), inset 0 -2px 4px rgba(0, 0, 0, 0.4);
+}

@@ -147,6 +147,15 @@ struct LODMeshBuffers {
     // D 在相邻级反复横跳不会每帧重建/释放 GPU 缓冲（消除 GPU churn）。
     // 0 = 从未被需求（LOD0 恒驻，不参与冷却释放）。
     std::uint64_t last_demand_frame = 0;
+
+    // 该级最后一次被判定为"需求级"的单调时间戳（毫秒，steady_clock，由几何线程写入）。
+    // 与 last_demand_frame 并存、缺一不可：帧计数在"消费端节拍 ≠ 生产端节拍"时表达不了
+    // 真实时间——几何线程稳定 60Hz，而渲染侧的选级发表只有约 15Hz（≈67ms/次）且会卡顿，
+    // 于是 5 帧只有 83ms，一次跨阈值的选级变化就足以把该级拆掉，而重建要走
+    // CPU→GPU 上传 4 个 buffer 并在队列里排队。释放判定现在同时要求"帧数"和"真实时间"
+    // 两个宽限都过期（见 Impl::kSharedLodFreeGraceMs）。
+    // 0 = 从未被需求。
+    std::uint64_t last_demand_ms = 0;
 };
 
 // LOD（动态减面）现由 GeometrySystem 内部自行决策，无外部配置面：
@@ -355,6 +364,10 @@ class GeometrySystem : public Kernel::SystemBase {
     /// geo.vertex / geo.index 一定非空。
     struct MeshSlot {
         uint32_t               mesh_index    = 0;
+        uint32_t               instance_index = 0;
+        uint32_t               node_index = UINT32_MAX;
+        uint32_t               object_id = 0;
+        ktm::fmat4x4           instance_transform{ktm::fmat4x4::from_eye()};
         RenderMeshBuffers      geo;              ///< LOD 解析后的几何缓冲
         Horizon::HardwareImage texture;          ///< 贴图句柄（null = 无贴图）
         std::array<float, 4>   material_color = {1.f, 1.f, 1.f, 1.f}; ///< 材质颜色 RGBA
@@ -375,6 +388,9 @@ class GeometrySystem : public Kernel::SystemBase {
     /// four cascades worth of unnecessary ref-counted copies.
     struct ShadowMeshSlot {
         uint32_t          mesh_index = 0;
+        uint32_t          instance_index = 0;
+        uint32_t          object_id = 0;
+        ktm::fmat4x4      instance_transform{ktm::fmat4x4::from_eye()};
         RenderMeshBuffers geo;
         bool              valid = false;
         std::uint32_t     vertex_count = 0;
@@ -399,7 +415,20 @@ class GeometrySystem : public Kernel::SystemBase {
         const ktm::fvec3& camera_pos,
         float             camera_fov_deg,
         const ktm::fvec3& world_center,
-        float             bounding_radius) const;
+        float             bounding_radius,
+        const ktm::fmat4x4* actor_transform = nullptr) const;
+
+    /// Per-instance LOD selection: uses actor × instance transform to derive the
+    /// instance world AABB and chooses the coarsest ready level within the
+    /// screen-space error budget.
+    [[nodiscard]] RenderMeshBuffers select_render_buffers_for_instance(
+        std::uintptr_t geometry_handle,
+        uint32_t mesh_index,
+        const ktm::fvec3& camera_pos,
+        float camera_fov_deg,
+        const ktm::fmat4x4& actor_transform,
+        const ktm::fmat4x4& instance_transform,
+        const RenderMeshBuffers& fallback) const;
 
     /// Shadow-pass routing: selects the coarsest ready level whose geometric
     /// error fits within one shadow texel, never falling back to a coarser
@@ -529,8 +558,8 @@ class GeometrySystem : public Kernel::SystemBase {
 
     /// 蒙皮专用：一次性拷出某 mesh 所有 LOD 级别的 (vertex, vertex_storage) 句柄对。
     ///
-    /// 供 MechanicsSystem 在物理线程把蒙皮后顶点 write_bytes 回所有 LOD 级别的 GPU
-    /// 缓冲。下标 0 = LOD0（= MeshDevice 缓冲），1..N = 各级简化。单次 shared_lock
+    /// 借出所有 LOD 级别的 GPU 顶点缓冲。下标 0 = LOD0（= MeshDevice 缓冲），
+    /// 1..N = 各级简化；需要匹配源网格时使用 get_skinning_lod_targets。单次 shared_lock
     /// 拷贝；HardwareBuffer 为引用计数句柄，拷出后即便 Geometry 线程后续 evict 缓存，
     /// 调用方持有的拷贝仍保活底层 buffer。无 LOD 缓存条目时返回空 vector（调用方回退
     /// 到只写 LOD0，即 GeometryDevice.mesh_handles 里的缓冲）。
@@ -540,6 +569,20 @@ class GeometrySystem : public Kernel::SystemBase {
     /// @return 各 LOD 级别的 (vertexBuffer, vertexStorageBuffer) 句柄对，含 LOD0
     [[nodiscard]] std::vector<std::pair<Horizon::HardwareBuffer, Horizon::HardwareBuffer>>
     get_skinning_targets(std::uintptr_t geometry_handle, uint32_t mesh_index) const;
+
+    struct SkinningLodTarget {
+        // Stable index in MeshData::lod_levels, independent of CPU residency.
+        int source_lod_index = -1;
+        Horizon::HardwareBuffer vertex_buffer;
+        Horizon::HardwareBuffer storage_buffer;
+    };
+
+    /// Simplified LODs only (LOD1..N), with their original MeshData::lod_levels
+    /// index. CPU eviction may empty intermediate source levels, so consumers
+    /// must use this index instead of matching the current nonempty levels.
+    /// Nonresident GPU levels retain their index and have empty buffer handles.
+    [[nodiscard]] std::vector<SkinningLodTarget>
+    get_skinning_lod_targets(std::uintptr_t geometry_handle, uint32_t mesh_index) const;
 
     // ========================================
     // 统计
@@ -577,7 +620,11 @@ class GeometrySystem : public Kernel::SystemBase {
     /// 重新加载完成时重建 actor 关联的 GPU 资源（HardwareBuffer / HardwareImage），
     /// 从已导入的 Scene 资源中重新创建 mesh_handles 并恢复 model_resource_handle。
     /// 同时清理 LOD 缓存以保证下一帧 update() 重新上传 LOD 数据。
-    void rebuild_actor_gpu_resources(std::uintptr_t actor, std::uint64_t rid);
+    /// @returns true when the actor's GPU resources were queued for staged
+    /// upload.  In that case ActorLoadFinishedEvent is emitted on publication.
+    bool rebuild_actor_gpu_resources(std::uintptr_t actor,
+                                     std::uint64_t rid,
+                                     std::uintptr_t scene_handle = 0);
 
     // ========================================
     // 动态减面内部管线（在 update() 中每帧调用，外部不可见）

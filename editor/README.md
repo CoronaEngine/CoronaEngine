@@ -22,6 +22,7 @@ C++ manifest 聚合契约，Vue/Python 只做薄适配，不直接暴露 `camera
 | 目录 | 职责 |
 |---|---|
 | `Frontend` | Vue 页面、输入交互、JS manifest adapter |
+| `game` | 剧情玩法、地图与角色资源、前端模块和测试，见 [game/README.md](game/README.md) |
 | `api` | Python 对 C++ manifest 的唯一公共契约 adapter |
 | `config` | 路径、活动项目和应用配置 |
 | `runtime` | 嵌入式 Python host、服务注册和生命周期 |

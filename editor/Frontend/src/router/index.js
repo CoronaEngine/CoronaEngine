@@ -5,7 +5,6 @@ import { createRouter, createWebHashHistory } from 'vue-router';
 import { createWorldModeRouteGuard, worldModeService } from '../services/worldModeService.js';
 import { appService } from '../services/appService.js';
 
-import BlocklyWorkspace from '../blockly/components/BlocklyWorkspace.vue';
 import { getPluginComponent } from '../views/panelRegistry.js';
 
 const routes = [
@@ -82,7 +81,9 @@ const routes = [
   {
     path: '/ScratchTool',
     name: 'ScratchTool',
-    component: BlocklyWorkspace,
+    // Lazy: the router is in every editor window's entry graph, and Blockly is the single
+    // largest dependency in the bundle.
+    component: () => import('../blockly/components/BlocklyWorkspace.vue'),
   },
   {
     path: '/CameraView',
