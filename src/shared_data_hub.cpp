@@ -248,7 +248,7 @@ const SharedDataHub::SceneStorage& SharedDataHub::scene_storage() const { return
 SharedDataHub::ImageStorage& SharedDataHub::image_storage() { return image_storage_; }
 const SharedDataHub::ImageStorage& SharedDataHub::image_storage() const { return image_storage_; }
 
-void SharedDataHub::publish_camera_frame_timing(std::uintptr_t camera_handle, double render_ms,
+void SharedDataHub::publish_camera_frame_timing(std::uintptr_t camera_handle, double render_ms, double denoise_ms,
                                                 CameraVisionRenderMode mode,
                                                 std::chrono::steady_clock::time_point completed_at) {
     std::lock_guard<std::mutex> lock(camera_timing_mutex_);
@@ -258,7 +258,7 @@ void SharedDataHub::publish_camera_frame_timing(std::uintptr_t camera_handle, do
         frame_ms = std::chrono::duration<double, std::milli>(
             completed_at - previous->second.recorded_at).count();
     }
-    camera_timings_[camera_handle] = {render_ms, frame_ms, mode, completed_at};
+    camera_timings_[camera_handle] = {render_ms, denoise_ms, frame_ms, mode, completed_at};
 }
 
 std::optional<CameraFrameTiming> SharedDataHub::camera_frame_timing(
@@ -357,6 +357,21 @@ void SharedDataHub::enqueue_camera_state_update(CameraStateUpdateCommand command
         requested_camera_vision_denoise_[command.camera_handle] = {
             command.vision_denoise, pending.sequence};
     }
+    if (has_camera_state_field(command.fields, CameraStateUpdateField::VisionDenoiser)) {
+        pending.vision_denoiser = command.vision_denoiser;
+        requested_camera_vision_denoiser_[command.camera_handle] = {
+            command.vision_denoiser, pending.sequence};
+    }
+    if (has_camera_state_field(command.fields, CameraStateUpdateField::VisionReblurSettings)) {
+        pending.vision_reblur_settings = command.vision_reblur_settings;
+        requested_camera_vision_reblur_settings_[command.camera_handle] = {
+            command.vision_reblur_settings, pending.sequence};
+    }
+    if (has_camera_state_field(command.fields, CameraStateUpdateField::VisionRelaxSettings)) {
+        pending.vision_relax_settings = command.vision_relax_settings;
+        requested_camera_vision_relax_settings_[command.camera_handle] = {
+            command.vision_relax_settings, pending.sequence};
+    }
     if (has_camera_state_field(command.fields, CameraStateUpdateField::VisionAccumulation)) {
         pending.vision_accumulation = command.vision_accumulation;
         requested_camera_vision_accumulation_[command.camera_handle] = {
@@ -408,6 +423,57 @@ std::optional<bool> SharedDataHub::requested_camera_vision_denoise(
         return it->second.enabled;
     }
     return std::nullopt;
+}
+
+std::optional<CameraVisionDenoiser> SharedDataHub::requested_camera_vision_denoiser(
+    std::uintptr_t camera_handle) const {
+    std::lock_guard<std::mutex> lock(camera_state_update_mutex_);
+    const auto it = requested_camera_vision_denoiser_.find(camera_handle);
+    if (it != requested_camera_vision_denoiser_.end()) return it->second.type;
+    return std::nullopt;
+}
+
+void SharedDataHub::acknowledge_camera_vision_denoiser(
+    std::uintptr_t camera_handle, std::uint64_t applied_sequence) {
+    std::lock_guard<std::mutex> lock(camera_state_update_mutex_);
+    const auto it = requested_camera_vision_denoiser_.find(camera_handle);
+    if (it != requested_camera_vision_denoiser_.end() && it->second.sequence <= applied_sequence) {
+        requested_camera_vision_denoiser_.erase(it);
+    }
+}
+
+std::optional<std::string> SharedDataHub::requested_camera_vision_reblur_settings(
+    std::uintptr_t camera_handle) const {
+    std::lock_guard<std::mutex> lock(camera_state_update_mutex_);
+    const auto it = requested_camera_vision_reblur_settings_.find(camera_handle);
+    if (it != requested_camera_vision_reblur_settings_.end()) return it->second.json;
+    return std::nullopt;
+}
+
+std::optional<std::string> SharedDataHub::requested_camera_vision_relax_settings(
+    std::uintptr_t camera_handle) const {
+    std::lock_guard<std::mutex> lock(camera_state_update_mutex_);
+    const auto it = requested_camera_vision_relax_settings_.find(camera_handle);
+    if (it != requested_camera_vision_relax_settings_.end()) return it->second.json;
+    return std::nullopt;
+}
+
+void SharedDataHub::acknowledge_camera_vision_reblur_settings(
+    std::uintptr_t camera_handle, std::uint64_t applied_sequence) {
+    std::lock_guard<std::mutex> lock(camera_state_update_mutex_);
+    const auto it = requested_camera_vision_reblur_settings_.find(camera_handle);
+    if (it != requested_camera_vision_reblur_settings_.end() && it->second.sequence <= applied_sequence) {
+        requested_camera_vision_reblur_settings_.erase(it);
+    }
+}
+
+void SharedDataHub::acknowledge_camera_vision_relax_settings(
+    std::uintptr_t camera_handle, std::uint64_t applied_sequence) {
+    std::lock_guard<std::mutex> lock(camera_state_update_mutex_);
+    const auto it = requested_camera_vision_relax_settings_.find(camera_handle);
+    if (it != requested_camera_vision_relax_settings_.end() && it->second.sequence <= applied_sequence) {
+        requested_camera_vision_relax_settings_.erase(it);
+    }
 }
 
 void SharedDataHub::acknowledge_camera_vision_denoise(
@@ -464,6 +530,9 @@ void SharedDataHub::clear_camera_state_updates(std::uintptr_t camera_handle) {
     std::lock_guard<std::mutex> lock(camera_state_update_mutex_);
     pending_camera_state_updates_.erase(camera_handle);
     requested_camera_vision_denoise_.erase(camera_handle);
+    requested_camera_vision_denoiser_.erase(camera_handle);
+    requested_camera_vision_reblur_settings_.erase(camera_handle);
+    requested_camera_vision_relax_settings_.erase(camera_handle);
     requested_camera_vision_accumulation_.erase(camera_handle);
     requested_camera_vision_stable_planes_.erase(camera_handle);
 }

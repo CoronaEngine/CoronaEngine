@@ -13,16 +13,19 @@ using namespace ocarina;
 class IndependentSampler : public Sampler {
 private:
     optional<Uint> state_{};
+    uint seed_{};
 
 public:
     IndependentSampler() = default;
-    explicit IndependentSampler(const SamplerDesc &desc) : Sampler(desc) {}
-    VS_HOTFIX_MAKE_RESTORE(Sampler, state_)
+    explicit IndependentSampler(const SamplerDesc &desc) : Sampler(desc), seed_(desc["seed"].as_uint(0u)) {}
+    VS_HOTFIX_MAKE_RESTORE(Sampler, state_, seed_)
     void load_data() noexcept override {
         state_.emplace(Uint{0u});
     }
     void set_seed(const Uint2 &pixel, const Uint &sample_index, const Uint &dim) noexcept override {
-        Uint state = tea<D>(tea<D>(pixel.x, pixel.y), tea<D>(sample_index, dim));
+        Uint index = sample_index;
+        if (seed_ != 0u) index += seed_;
+        Uint state = tea<D>(tea<D>(pixel.x, pixel.y), tea<D>(index, dim));
         try_load_data();
         state_ = state;
     }

@@ -95,7 +95,7 @@ public:
     [[nodiscard]] const Renderer &renderer() const noexcept { return *active_renderer_; }
     [[nodiscard]] auto frame_buffer() const noexcept { return active_renderer_->frame_buffer(); }
     [[nodiscard]] auto frame_buffer() noexcept { return active_renderer_->frame_buffer(); }
-    bool create_view_context(uint64_t view_id, uint2 resolution) noexcept;
+    bool create_view_context(uint64_t view_id, uint2 resolution, string_view denoiser_type = {}) noexcept;
     bool activate_view_context(uint64_t view_id) noexcept;
     void remove_view_context(uint64_t view_id) noexcept;
     void clear_view_contexts() noexcept;

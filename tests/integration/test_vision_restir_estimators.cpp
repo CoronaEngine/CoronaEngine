@@ -6,6 +6,7 @@
 #include "base/mgr/global.h"
 #include "base/mgr/pipeline.h"
 #include "rhi/context.h"
+#include "rhi/stats.h"
 #include "base/scattering/material.h"
 #include "base/sampler.h"
 
@@ -315,6 +316,10 @@ ChannelStats render_channel(vision::Pipeline& pipeline) {
     illumination->set_denoise_enabled(false);
     pipeline.frame_buffer()->set_enable_accumulation(false);
     pipeline.prepare();
+    ocarina::MemoryStats::instance().foreach_buffer_info([](auto data) {
+        expect(data.name.rfind("Sharc::", 0) != 0 || data.size == 0u,
+               "ReSTIR must not allocate the unused SHARC transport cache");
+    });
     pipeline.frame_buffer()->prepare_view_texture();
     pipeline.upload_data();
     expect(!pipeline.frame_buffer()->enable_accumulation(), "raw estimator test must not accumulate frames");
@@ -421,6 +426,12 @@ int main() {
     configure_headless_process();
     fs::path fixture;
     try {
+        // Three full-resolution planes and their history amplify alignment
+        // gaps into hundreds of MiB. Keep all attributes at full precision.
+        constexpr size_t surface_bytes = 2u * (sizeof(vision::SurfaceData) + sizeof(vision::SurfaceExtend)) +
+            vision::StablePlaneCount * (sizeof(vision::StablePlaneData) + sizeof(vision::StablePlaneHistory));
+        std::cout << "ReSTIR surface storage bytes/pixel=" << surface_bytes << '\n';
+        expect(surface_bytes <= 1760u, "ReSTIR surface storage exceeds its full-precision budget");
         const auto runtime_directory = fs::current_path();
         const auto suffix = std::chrono::steady_clock::now().time_since_epoch().count();
         fixture = fs::temp_directory_path() / ("corona_restir_estimators_" + std::to_string(suffix));

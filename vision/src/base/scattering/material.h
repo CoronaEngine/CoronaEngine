@@ -88,7 +88,11 @@ public:
     // glossy/specular lobes, in [0,1]; used to proportionally route direct lighting.
     // albedo_split: diffuse vs specular hemispherical reflectance, used as demod guides.
     [[nodiscard]] Float specular_fraction(const Float3 &world_wo, const Float3 &world_wi) const noexcept;
+    [[nodiscard]] Float3 specular_fraction_rgb(const Float3 &world_wo, const Float3 &world_wi) const noexcept;
+    // Guide-only sampling: select from the requested class without changing the estimator's sampling path.
+    [[nodiscard]] BSDFSample sample_lobe(const Float3 &world_wo, TSampler &sampler, bool specular) const noexcept;
     void albedo_split(const Float3 &world_wo, SampledSpectrum &diffuse, SampledSpectrum &specular) const noexcept;
+    void denoiser_factors(const Float3 &world_wo, SampledSpectrum &diffuse, SampledSpectrum &specular) const noexcept;
     void reuse_material(SampledSpectrum &diffuse, SampledSpectrum &specular,
                         Float2 &roughness) const noexcept;
     [[nodiscard]] Bool supports_stable_reflection(const Float3 &world_wo) const noexcept;

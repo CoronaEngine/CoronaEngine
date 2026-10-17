@@ -69,6 +69,7 @@ public:
         frame_buffer().prepare_direct_lighting();
         frame_buffer().prepare_indirect_lighting();
         frame_buffer().prepare_motion_vectors();
+        if (denoiser_ && denoiser_->requires_lobe_signals()) frame_buffer().prepare_denoiser_signals();
 //        frame_buffer().prepare_screen_buffer(taa_history_);
     }
     VS_HOTFIX_MAKE_RESTORE(IlluminationIntegrator, inspector_)
@@ -209,6 +210,7 @@ public:
     void render() const noexcept override {
         const Pipeline *rp = pipeline();
         Stream &stream = rp->stream();
+        reset_denoise_timing();
         cur_stage_profile_ = {};
         cur_stage_profile_.enabled = stage_profile_runtime_enabled();
         auto submit = [&](auto &&command, double *stage_ms) {
@@ -282,6 +284,7 @@ public:
 
             if (denoiser_enabled) {
                 submit(path_tracing(param, frame_buffer().raytracing_resolution()), &cur_stage_profile_.path_tracing_ms);
+                begin_denoise_timing(stream);
                 if (ssat_denoiser != nullptr) {
                     // Merge indirect into direct (always needed)
                     submit(merge_indirect_into_direct_().dispatch(frame_buffer().raytracing_resolution()), nullptr);
@@ -311,6 +314,7 @@ public:
                 } else {
                     submit(denoiser_->dispatch_lightfield(lf_input), &cur_stage_profile_.spatial_angular_ms);
                 }
+                end_denoise_timing(stream);
                 submit(combine_(frame_index_).dispatch(frame_buffer().raytracing_resolution()),
                        &cur_stage_profile_.combine_ms);
             } else {
@@ -333,11 +337,20 @@ public:
             dn_input.prev_camera_pos = {prev_cam_pos.x, prev_cam_pos.y, prev_cam_pos.z};
             // PT path splits the signal into diffuse (direct buffer) / specular (indirect buffer).
             dn_input.channel_kind = RealTimeDenoiseInput::ChannelKind::DiffuseSpecular;
+            if (denoiser_ && denoiser_->requires_lobe_signals()) {
+                dn_input.has_lobe_signals = true;
+                auto &fb = frame_buffer();
+                dn_input.lobe_signals = {fb.denoiser_layer_view(fb.denoiser_diffuse(), 0u),
+                    fb.denoiser_layer_view(fb.denoiser_specular(), 0u),
+                    fb.denoiser_layer_view(fb.denoiser_diffuse(), 0u), fb.denoiser_layer_view(fb.denoiser_specular(), 0u)};
+            }
             param.enable_sparse_sampling = 0u;
 
             if (denoiser_enabled && !bypass_incompatible_lightfield_denoiser) {
                 submit(path_tracing(param, frame_buffer().raytracing_resolution()), &cur_stage_profile_.path_tracing_ms);
+                begin_denoise_timing(stream);
                 submit(denoiser_->dispatch(dn_input), &cur_stage_profile_.spatial_angular_ms);
+                end_denoise_timing(stream);
                 submit(combine_(frame_index_).dispatch(frame_buffer().raytracing_resolution()),
                        &cur_stage_profile_.combine_ms);
             } else {

@@ -180,6 +180,76 @@ Float MaterialEvaluator::specular_fraction(const Float3 &world_wo, const Float3 
     return spec_l / max(spec_l + diff_l, 1e-6f);
 }
 
+BSDFSample MaterialEvaluator::sample_lobe(const Float3 &world_wo, TSampler &sampler, bool specular) const noexcept {
+    BSDFSample result{*swl_};
+    result.wi = world_wo;
+    Float total = 0.f;
+    auto local_wo = [&](const Lobe *lobe) {
+        return MaterialRegistry::instance().individual_ns() ? lobe->shading_frame().to_local(world_wo) : shading_frame_.to_local(world_wo);
+    };
+    auto matches = [&](const Lobe *lobe) {
+        auto wo = local_wo(lobe);
+        SampledSpectrum diffuse{swl_->dimension()}, reflection{swl_->dimension()};
+        lobe->denoiser_albedos(abs_cos_theta(wo), diffuse, reflection);
+        // A sharp specular peak can round f_spec / f_total to one even when
+        // the diffuse component exists. Integrated factors preserve support.
+        return specular ? reflection.max() > 0.f : diffuse.max() > 0.f;
+    };
+    auto each = [&](auto &&visit) {
+        dispatch([&](const Lobe *root) {
+            if (root->is_multi()) static_cast<const LobeSet *>(root)->for_each([&](const WeightedLobe &l) { visit(l.get(), l.sample_weight()); });
+            else visit(root, Float{1.f});
+        });
+    };
+    each([&](const Lobe *lobe, Float w) { total += select(matches(lobe), w, 0.f); });
+    Float selector = sampler->next_1d() * total;
+    Bool selected = false;
+    each([&](const Lobe *lobe, Float w) {
+        $if(matches(lobe) && w > 0.f && !selected) {
+            $if(selector < w) {
+                auto wo = local_wo(lobe);
+                auto direction = lobe->sample_denoiser_wi_local(wo, sampler, specular);
+                result.wi = MaterialRegistry::instance().individual_ns()
+                    ? lobe->shading_frame().to_world(direction.wi) : shading_frame_.to_world(direction.wi);
+                result.eval.pdfs = select(direction.valid, 1.f, 0.f);
+                result.eval.flags = select(same_hemisphere(wo, direction.wi), BxDFFlag::Reflection, BxDFFlag::Transmission) |
+                    (specular ? BxDFFlag::Glossy : BxDFFlag::Diffuse);
+                selected = true;
+            };
+            selector -= w;
+        };
+    });
+    Bool discard = same_hemisphere(world_wo, result.wi, ng_) == BxDFFlag::is_transmission(result.eval.flags);
+    result.eval.pdfs = select(discard || !selected, 0.f, result.eval.pdfs);
+    return result;
+}
+
+Float3 MaterialEvaluator::specular_fraction_rgb(const Float3 &world_wo, const Float3 &world_wi) const noexcept {
+    Float3 diffuse = make_float3(0.f), specular = make_float3(0.f);
+    auto accum = [&](const Lobe *lobe, const Float &weight, bool composite) {
+        ScatterEval e{*swl_};
+        Float factor = 1.f;
+        Float3 wo = shading_frame_.to_local(world_wo), wi = shading_frame_.to_local(world_wi);
+        if (MaterialRegistry::instance().individual_ns()) {
+            wo = lobe->shading_frame().to_local(world_wo); wi = lobe->shading_frame().to_local(world_wi);
+            e = lobe->evaluate(world_wo, world_wi, MaterialEvalMode::All, BxDFFlag::All, TransportMode::Radiance);
+            if (composite) factor = lobe->valid_world_factor(world_wo, world_wi);
+        } else {
+            e = lobe->evaluate_local(shading_frame_.to_local(world_wo), shading_frame_.to_local(world_wi),
+                                    MaterialEvalMode::All, BxDFFlag::All, TransportMode::Radiance);
+            if (composite) factor = lobe->valid_factor(shading_frame_.to_local(world_wo), shading_frame_.to_local(world_wi));
+        }
+        Float3 f = max(e.f.vec3() * weight * factor, make_float3(0.f));
+        Float3 spec = lobe->denoiser_specular_fraction_local(wo, wi);
+        specular += f * spec; diffuse += f * (1.f - spec);
+    };
+    dispatch([&](const Lobe *root) {
+        if (root->is_multi()) static_cast<const LobeSet *>(root)->for_each([&](const WeightedLobe &l) { accum(l.get(), l.weight(), true); });
+        else accum(root, 1.f, false);
+    });
+    return specular / max(diffuse + specular, make_float3(1e-20f));
+}
+
 void MaterialEvaluator::albedo_split(const Float3 &world_wo, SampledSpectrum &diffuse,
                                      SampledSpectrum &specular) const noexcept {
     Float cos_theta = dot(shading_frame_.normal(), world_wo);
@@ -204,6 +274,22 @@ void MaterialEvaluator::albedo_split(const Float3 &world_wo, SampledSpectrum &di
     });
     diffuse = d;
     specular = s;
+}
+
+void MaterialEvaluator::denoiser_factors(const Float3 &world_wo, SampledSpectrum &diffuse,
+                                         SampledSpectrum &specular) const noexcept {
+    diffuse = SampledSpectrum::zero(*swl_); specular = SampledSpectrum::zero(*swl_);
+    auto accum = [&](const Lobe *lobe, Float weight) {
+        SampledSpectrum d{swl_->dimension()}, s{swl_->dimension()};
+        Float cos_theta = abs(dot(MaterialRegistry::instance().individual_ns()
+            ? lobe->shading_frame().normal() : shading_frame_.normal(), world_wo));
+        lobe->denoiser_albedos(cos_theta, d, s);
+        diffuse += d * weight; specular += s * weight;
+    };
+    dispatch([&](const Lobe *root) {
+        if (root->is_multi()) static_cast<const LobeSet *>(root)->for_each([&](const WeightedLobe &l) { accum(l.get(), l.weight()); });
+        else accum(root, 1.f);
+    });
 }
 
 void MaterialEvaluator::reuse_material(SampledSpectrum &diffuse, SampledSpectrum &specular,

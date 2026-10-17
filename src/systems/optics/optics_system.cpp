@@ -1011,6 +1011,15 @@ void apply_pending_camera_state_updates() {
                     update.fields, Corona::CameraStateUpdateField::VisionDenoise)) {
                 camera->vision_denoise = update.vision_denoise;
             }
+            if (Corona::has_camera_state_field(update.fields, Corona::CameraStateUpdateField::VisionDenoiser)) {
+                camera->vision_denoiser = update.vision_denoiser;
+            }
+            if (Corona::has_camera_state_field(update.fields, Corona::CameraStateUpdateField::VisionReblurSettings)) {
+                camera->vision_reblur_settings = update.vision_reblur_settings;
+            }
+            if (Corona::has_camera_state_field(update.fields, Corona::CameraStateUpdateField::VisionRelaxSettings)) {
+                camera->vision_relax_settings = update.vision_relax_settings;
+            }
             if (Corona::has_camera_state_field(
                     update.fields, Corona::CameraStateUpdateField::VisionAccumulation)) {
                 camera->vision_accumulation = update.vision_accumulation;
@@ -1042,6 +1051,15 @@ void apply_pending_camera_state_updates() {
         if (Corona::has_camera_state_field(
                 update.fields, Corona::CameraStateUpdateField::VisionDenoise)) {
             hub.acknowledge_camera_vision_denoise(update.camera_handle, update.sequence);
+        }
+        if (Corona::has_camera_state_field(update.fields, Corona::CameraStateUpdateField::VisionDenoiser)) {
+            hub.acknowledge_camera_vision_denoiser(update.camera_handle, update.sequence);
+        }
+        if (Corona::has_camera_state_field(update.fields, Corona::CameraStateUpdateField::VisionReblurSettings)) {
+            hub.acknowledge_camera_vision_reblur_settings(update.camera_handle, update.sequence);
+        }
+        if (Corona::has_camera_state_field(update.fields, Corona::CameraStateUpdateField::VisionRelaxSettings)) {
+            hub.acknowledge_camera_vision_relax_settings(update.camera_handle, update.sequence);
         }
         if (Corona::has_camera_state_field(
                 update.fields, Corona::CameraStateUpdateField::VisionAccumulation)) {
@@ -2506,6 +2524,7 @@ struct OpticsSystem::VisionPipelineRuntime {
     std::unordered_map<std::uintptr_t, std::vector<ocarina::float4>> readback_pixels;
     std::unordered_set<std::uintptr_t> retained_contexts;
     std::unordered_map<std::uintptr_t, bool> view_denoise_states;
+    std::unordered_map<std::uintptr_t, CameraVisionDenoiser> view_denoiser_types;
     std::unordered_map<std::uintptr_t, Horizon::SubmitReceipt> interop_submissions;
     Horizon::HardwareExecutor* interop_executor{nullptr};
 
@@ -2610,6 +2629,7 @@ struct OpticsSystem::VisionPipelineRuntime {
         readback_pixels.clear();
         retained_contexts.clear();
         view_denoise_states.clear();
+        view_denoiser_types.clear();
     }
 
     void bind_shared_scene_gpu_resource() {
@@ -2685,21 +2705,27 @@ struct OpticsSystem::VisionPipelineRuntime {
 bool OpticsSystem::prepare_vision_camera_view(VisionPipelineRuntime& runtime,
                                             std::uintptr_t camera_handle,
                                             uint32_t width, uint32_t height,
-                                            bool denoise, bool accumulation, bool stable_planes) {
+                                            bool denoise, bool accumulation, bool stable_planes,
+                                            CameraVisionDenoiser denoiser,
+                                            const std::string& reblur_settings,
+                                            const std::string& relax_settings) {
     vision::switch_profile::Scope profile{"view.prepare", "view"};
     auto& pipeline = runtime.pipeline;
     if (!pipeline || camera_handle == 0) return false;
     const auto resolution = ocarina::make_uint2(std::max(width, 1u), std::max(height, 1u));
+    bool view_created = false;
+    if (runtime.mode == CameraVisionRenderMode::SSAT) denoiser = CameraVisionDenoiser::Scene;
     if (pipeline->has_view_context(camera_handle)) {
         if (!pipeline->activate_view_context(camera_handle)) return false;
         const auto* fb = pipeline->frame_buffer();
         const auto state = runtime.view_denoise_states.find(camera_handle);
-        // SVGF reads the integrator's existing visibility/radiance buffers. Its
-        // switch must not recreate the renderer or recompile PT/ReSTIR kernels.
-        // Keep the existing recreation path for SSAT's GBuffer callbacks.
+        // Enable toggles reuse PT/ReSTIR kernels. Changing the denoiser type
+        // rebuilds this view so REBLUR's lobe producers and history agree.
+        // SSAT also needs recreation for its GBuffer callbacks.
         const bool recreate = !fb || fb->resolution().x != resolution.x ||
                               fb->resolution().y != resolution.y ||
                               state == runtime.view_denoise_states.end() ||
+                              runtime.view_denoiser_types.at(camera_handle) != denoiser ||
                               (runtime.mode == CameraVisionRenderMode::SSAT &&
                                state->second != denoise);
         if (recreate) {
@@ -2711,6 +2737,7 @@ bool OpticsSystem::prepare_vision_camera_view(VisionPipelineRuntime& runtime,
             runtime.readback_pixels.erase(camera_handle);
             runtime.retained_contexts.erase(camera_handle);
             runtime.view_denoise_states.erase(camera_handle);
+            runtime.view_denoiser_types.erase(camera_handle);
             pipeline->remove_view_context(camera_handle);
         }
     }
@@ -2719,7 +2746,10 @@ bool OpticsSystem::prepare_vision_camera_view(VisionPipelineRuntime& runtime,
         // buffers and registers the GBuffer callback before compiling kernels.
         pipeline->activate_view_context(0u);
         pipeline->set_output_denoise(denoise);
-        const bool created = pipeline->create_view_context(camera_handle, resolution);
+        const auto type = denoiser == CameraVisionDenoiser::ReBLUR ? "ReBLUR" :
+                          denoiser == CameraVisionDenoiser::ReLAX ? "ReLAX" :
+                          denoiser == CameraVisionDenoiser::SVGF ? "svgf" : "";
+        const bool created = pipeline->create_view_context(camera_handle, resolution, type);
         pipeline->activate_view_context(0u);
         pipeline->set_output_denoise(Vision::vision_render_mode_uses_denoise(runtime.mode));
         if (!created) {
@@ -2728,9 +2758,26 @@ bool OpticsSystem::prepare_vision_camera_view(VisionPipelineRuntime& runtime,
             return false;
         }
         runtime.view_denoise_states[camera_handle] = denoise;
+        runtime.view_denoiser_types[camera_handle] = denoiser;
+        view_created = true;
     }
     if (!pipeline->activate_view_context(camera_handle)) return false;
     pipeline->renderer().integrator()->set_stable_planes_enabled(stable_planes);
+    if (auto* illumination = dynamic_cast<vision::IlluminationIntegrator*>(pipeline->renderer().integrator().get())) {
+        if (auto* filter = illumination->denoiser(); filter && filter->set_reblur_settings(reblur_settings)) {
+            pipeline->invalidate();
+            if (auto camera = SharedDataHub::instance().camera_storage().acquire_write(camera_handle))
+                camera->vision_reblur_effective_settings = filter->reblur_settings_json();
+        }
+        if (auto* filter = illumination->denoiser(); filter && filter->impl_type() == "ReLAX") {
+            const bool changed = filter->set_relax_settings(relax_settings);
+            if (changed) pipeline->invalidate();
+            if (view_created || changed) {
+                if (auto camera = SharedDataHub::instance().camera_storage().acquire_write(camera_handle))
+                    camera->vision_relax_effective_settings = filter->relax_settings_json();
+            }
+        }
+    }
     // Output settings are shared by the pipeline, while renderers and histories
     // belong to cameras. Restore the active camera's preference on every visit.
     pipeline->set_output_denoise(denoise);
@@ -7212,6 +7259,7 @@ void OpticsSystem::run_vision_frame(float frame_count, uint64_t frame_index) {
                 } else {
                     pipeline->remove_view_context(camera_handle);
                     runtime.view_denoise_states.erase(camera_handle);
+                    runtime.view_denoiser_types.erase(camera_handle);
                 }
             }
             for (auto it = runtime.readback_buffers.begin();
@@ -7249,6 +7297,7 @@ void OpticsSystem::run_vision_frame(float frame_count, uint64_t frame_index) {
                 } else {
                     pipeline->remove_view_context(camera_handle);
                     runtime.view_denoise_states.erase(camera_handle);
+                    runtime.view_denoiser_types.erase(camera_handle);
                 }
             }
             for (auto it = runtime.retained_contexts.begin();
@@ -7259,6 +7308,7 @@ void OpticsSystem::run_vision_frame(float frame_count, uint64_t frame_index) {
                 }
                 pipeline->remove_view_context(*it);
                 runtime.view_denoise_states.erase(*it);
+                runtime.view_denoiser_types.erase(*it);
                 it = runtime.retained_contexts.erase(it);
             }
             pipeline->activate_view_context(0u);
@@ -7283,7 +7333,8 @@ void OpticsSystem::run_vision_frame(float frame_count, uint64_t frame_index) {
                     Vision::vision_render_mode_uses_denoise(runtime.mode);
                 if (!prepare_vision_camera_view(runtime, cam_handle,
                                                camera.width, camera.height, denoise,
-                                               camera.vision_accumulation, camera.vision_stable_planes)) {
+                                               camera.vision_accumulation, camera.vision_stable_planes, camera.vision_denoiser,
+                                               camera.vision_reblur_settings, camera.vision_relax_settings)) {
                     return;
                 }
 
@@ -7293,7 +7344,8 @@ void OpticsSystem::run_vision_frame(float frame_count, uint64_t frame_index) {
                 // display() already waits for GPU completion. Reuse its timing without
                 // adding a synchronization or including cross-API presentation work.
                 SharedDataHub::instance().publish_camera_frame_timing(
-                    cam_handle, pipeline->cur_render_time(), runtime.mode);
+                    cam_handle, pipeline->cur_render_time(),
+                    pipeline->renderer().integrator()->cur_denoise_time(), runtime.mode);
 
                 auto* fb = pipeline->frame_buffer();
                 const auto res = fb->resolution();
@@ -7640,18 +7692,22 @@ void OpticsSystem::run_vision_frame(float frame_count, uint64_t frame_index) {
         if (!scene.enabled) continue;
 
         for (auto cam_handle : scene.camera_handles) {
-            auto camera = SharedDataHub::instance().camera_storage().try_acquire_read(cam_handle);
-            if (!camera || camera->render_backend != CameraRenderBackend::Vision) {
-                continue;
+            CameraDevice camera;
+            {
+                auto read = SharedDataHub::instance().camera_storage().try_acquire_read(cam_handle);
+                if (!read || read->render_backend != CameraRenderBackend::Vision) continue;
+                camera = *read;
             }
-            if (camera->surface == nullptr) {
+            // View preparation publishes effective settings back to the camera.
+            // Release the read lock before entering the renderer, as in the grouped path.
+            if (camera.surface == nullptr) {
                 if (has_pending_screenshot(cam_handle)) {
                     fail_pending_screenshots(cam_handle);
                 }
                 continue;
             }
 
-            render_vision_camera(runtime, cam_handle, *camera, scene, active_contexts);
+            render_vision_camera(runtime, cam_handle, camera, scene, active_contexts);
         }
     }
 

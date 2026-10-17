@@ -40,6 +40,38 @@
           </button>
         </div>
       </div>
+      <div class="dropdown no-drag" @keydown.esc.stop="denoiserMenuOpen = false; $refs.denoiserButton?.focus()">
+        <button
+          ref="denoiserButton"
+          type="button"
+          class="control dropdown-trigger"
+          aria-label="降噪类型"
+          title="降噪类型"
+          aria-haspopup="menu"
+          :aria-expanded="denoiserMenuOpen"
+          :disabled="backend !== 'vision' || visionRenderMode === 'ssat' || visionDenoiserBusy || !camera || !cameraId"
+          @click.stop="denoiserMenuOpen = !denoiserMenuOpen"
+          @keydown.down.prevent="denoiserMenuOpen = true"
+        >
+          {{ visionRenderMode === 'ssat' ? 'SSAT' : visionDenoisers.find(item => item.value === visionDenoiser)?.label }}
+        </button>
+        <div v-if="denoiserMenuOpen" class="dropdown-menu" role="menu" aria-label="降噪类型选项">
+          <button
+            v-for="denoiser in visionDenoisers"
+            :key="denoiser.value"
+            type="button"
+            role="menuitemradio"
+            :aria-checked="denoiser.value === visionDenoiser"
+            @click="selectVisionDenoiser(denoiser.value)"
+          >
+            {{ denoiser.label }}
+          </button>
+        </div>
+      </div>
+      <ReblurSettings :scene-id="sceneId" :camera-id="cameraId"
+        :enabled="backend === 'vision' && visionRenderMode !== 'ssat' && visionDenoiser === 'reblur' && !visionDenoiserBusy" />
+      <RelaxSettings :scene-id="sceneId" :camera-id="cameraId"
+        :enabled="backend === 'vision' && visionRenderMode !== 'ssat' && visionDenoiser === 'relax' && !visionDenoiserBusy" />
       <label class="vision-setting no-drag" title="累积 PT / ReSTIR 样本">
         <input
           type="checkbox"
@@ -49,14 +81,15 @@
         />
         <span>累积样本</span>
       </label>
-      <label class="vision-setting no-drag" title="SVGF 降噪">
+      <label class="vision-setting no-drag" title="启用所选降噪算法">
         <input
           type="checkbox"
+          aria-label="降噪"
           :checked="visionDenoise"
           :disabled="backend !== 'vision' || visionRenderMode === 'ssat' || visionDenoiseBusy"
           @change="toggleVisionDenoise"
         />
-        <span>SVGF</span>
+        <span>降噪</span>
       </label>
       <label class="vision-setting no-drag" title="ReSTIR Stable Plane">
         <input
@@ -178,7 +211,9 @@
 
 <script setup>
 import FrameTimingOverlay from '@/components/ui/FrameTimingOverlay.vue';
-import { nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
+import ReblurSettings from '@/components/ui/ReblurSettings.vue';
+import RelaxSettings from '@/components/ui/RelaxSettings.vue';
+import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import { editorApi } from '@/api/editorApi.js';
 import { appService } from '@/services/appService.js';
@@ -187,6 +222,7 @@ import { pickedNodeIdentity } from '@/utils/modelHierarchy.js';
 import { coronaEventBus } from '@/utils/eventBus.js';
 import {
   normalizeVisionRenderMode, visionAccumulationFromCamera, visionDenoiseFromCamera, visionStablePlanesFromCamera, visionRenderModes,
+  visionDenoisers, visionDenoiserFromCamera,
 } from '@/utils/visionRenderModes.js';
 import { createViewportPickController, indexActorsByHandle } from '@/utils/viewportPick.js';
 import {
@@ -212,6 +248,9 @@ const visionAccumulation = ref(false);
 const visionAccumulationBusy = ref(false);
 const visionDenoise = ref(false);
 const visionDenoiseBusy = ref(false);
+const visionDenoiser = ref('scene');
+const visionDenoiserBusy = ref(false);
+let pendingDenoiserSelection = null;
 const visionStablePlanes = ref(true);
 const visionStablePlanesBusy = ref(false);
 let pendingStablePlanesSelection = null;
@@ -231,6 +270,7 @@ const toolbarRef = ref(null);
 const inputLayerRef = ref(null);
 const backendMenuOpen = ref(false);
 const visionModeMenuOpen = ref(false);
+const denoiserMenuOpen = ref(false);
 const outputMenuOpen = ref(false);
 const borderlessFullscreen = ref(false);
 let borderlessTogglePending = false;
@@ -285,6 +325,13 @@ const loadCamera = async () => {
   backend.value = camera.value.render_backend || 'native';
   visionAccumulation.value = visionAccumulationFromCamera(camera.value);
   visionDenoise.value = visionDenoiseFromCamera(camera.value);
+  const snapshotDenoiser = visionDenoiserFromCamera(camera.value);
+  if (pendingDenoiserSelection) {
+    visionDenoiser.value = pendingDenoiserSelection.type;
+    if (snapshotDenoiser === pendingDenoiserSelection.type) pendingDenoiserSelection = null;
+  } else {
+    visionDenoiser.value = snapshotDenoiser;
+  }
   const snapshotStablePlanes = visionStablePlanesFromCamera(camera.value);
   if (pendingStablePlanesSelection) {
     visionStablePlanes.value = pendingStablePlanesSelection.enabled;
@@ -296,6 +343,7 @@ const loadCamera = async () => {
   camera.value.vision_render_mode = visionRenderMode.value;
   camera.value.vision_accumulation = visionAccumulation.value;
   camera.value.vision_denoise = visionDenoise.value;
+  camera.value.vision_denoiser = visionDenoiser.value;
   camera.value.vision_stable_planes = visionStablePlanes.value;
   outputMode.value = backend.value === 'vision'
     ? 'final_color'
@@ -336,12 +384,14 @@ const changeBackend = async () => {
 const selectBackend = async (mode) => {
   backendMenuOpen.value = false;
   visionModeMenuOpen.value = false;
+  denoiserMenuOpen.value = false;
   if (backend.value === mode) return;
   backend.value = mode;
   await changeBackend();
 };
 
 const selectVisionRenderMode = async (mode) => {
+  denoiserMenuOpen.value = false;
   visionModeMenuOpen.value = false;
   if (visionRenderMode.value === mode && backend.value === 'vision') return;
   try {
@@ -408,6 +458,39 @@ const toggleVisionDenoise = async () => {
     return false;
   } finally {
     visionDenoiseBusy.value = false;
+  }
+};
+
+const selectVisionDenoiser = async (type) => {
+  denoiserMenuOpen.value = false;
+  if (backend.value !== 'vision' || visionRenderMode.value === 'ssat'
+    || visionDenoiserBusy.value || !camera.value || !cameraId) return false;
+  const previous = visionDenoiser.value;
+  const previousSelection = pendingDenoiserSelection;
+  const selection = { type };
+  const isCurrent = () => String(camera.value?.camera_id || camera.value?.id || '') === cameraId;
+  pendingDenoiserSelection = selection;
+  visionDenoiserBusy.value = true;
+  visionDenoiser.value = type;
+  errorText.value = '';
+  try {
+    const result = unwrap(await editorApi.sceneTools.setVisionDenoiser(sceneId, cameraId, type));
+    if (isCurrent()) {
+      if (!result?.pending && result?.type) selection.type = result.type;
+      visionDenoiser.value = selection.type;
+      camera.value.vision_denoiser = selection.type;
+    }
+    return true;
+  } catch (error) {
+    if (isCurrent()) {
+      pendingDenoiserSelection = previousSelection;
+      visionDenoiser.value = previous;
+      camera.value.vision_denoiser = previous;
+      errorText.value = error.message;
+    }
+    return false;
+  } finally {
+    visionDenoiserBusy.value = false;
   }
 };
 
@@ -1273,6 +1356,10 @@ const scheduleDragRegionSync = () => {
     syncDragRegions().catch(() => {});
   });
 };
+
+watch(() => backend.value === 'vision' && visionRenderMode.value !== 'ssat' &&
+  visionDenoiser.value === 'reblur' && !visionDenoiserBusy.value,
+scheduleDragRegionSync, { flush: 'post' });
 
 const objectEntries = (value) => Object.entries(value || {});
 const formatHudValue = (value) => {

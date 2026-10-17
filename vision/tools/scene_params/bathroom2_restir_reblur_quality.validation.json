@@ -1,0 +1,494 @@
+{
+  "date": "2026-10-14",
+  "scene": "bathroom2",
+  "reference_spp": 2048,
+  "realtime_spp_per_frame": 1,
+  "realtime_accumulation": false,
+  "parameters": {
+    "type": "rt",
+    "param": {
+      "direct": {
+        "spatial": {
+          "theta": 5,
+          "depth": 0.3,
+          "radius": 1,
+          "sample_num": 1,
+          "open": false
+        },
+        "temporal": {
+          "theta": 5,
+          "depth": 0.1,
+          "radius": 0,
+          "history_limit": 1,
+          "open": true,
+          "mis": true,
+          "N": 9
+        },
+        "stable_planes": true,
+        "M_light": 32,
+        "M_bsdf": 16,
+        "max_age": 30,
+        "max_recursion": 3,
+        "diffuse_factor": 0.3,
+        "pairwise": true
+      },
+      "min_depth": 5,
+      "max_depth": 64,
+      "rr_threshold": 1,
+      "indirect": {
+        "temporal": {
+          "open": true,
+          "history_limit": 1,
+          "radius": 8,
+          "theta": 35,
+          "depth": 0.3,
+          "N": 9
+        },
+        "spatial": {
+          "open": true,
+          "radius": 1,
+          "sample_num": 4,
+          "theta": 35,
+          "depth": 0.3
+        },
+        "debias": true,
+        "max_age": 4,
+        "diffuse_factor": 0.3
+      },
+      "denoiser": {
+        "type": "ReBLUR",
+        "param": {
+          "max_history": 30,
+          "fast_history": 6,
+          "history_fix_frames": 3,
+          "history_fix_stride": 14,
+          "diffuse_prepass": 8,
+          "specular_prepass": 15,
+          "min_radius": 1,
+          "max_radius": 10,
+          "lobe_fraction": 0.15,
+          "roughness_fraction": 0.15,
+          "plane_sensitivity": 0.02,
+          "min_hit_weight": 0.1,
+          "stabilization": 1,
+          "antilag_sigma": 4,
+          "antilag_sensitivity": 3,
+          "anti_firefly": true,
+          "reconstruction": 2
+        }
+      }
+    }
+  },
+  "motion_comparison_resolution": [
+    960,
+    540
+  ],
+  "native_comparison_resolution": [
+    1920,
+    1080
+  ],
+  "native_static_frames": 8,
+  "motion_frames": 900,
+  "motion": {
+    "baseline": {
+      "poses": {
+        "start": {
+          "full": {
+            "display_rmse": 0.037089804991742845,
+            "linear_rmse": 0.14176242413564405,
+            "high_frequency_residual_rms": 0.01675963907622067,
+            "display_bias": 0.00031235374808359493
+          }
+        },
+        "mid": {
+          "full": {
+            "display_rmse": 0.04880556614504541,
+            "linear_rmse": 0.2932300658912724,
+            "high_frequency_residual_rms": 0.02900368208499434,
+            "display_bias": -0.004140023602033405
+          },
+          "mirror": {
+            "display_rmse": 0.06856064016686178,
+            "linear_rmse": 0.4742744218972938,
+            "high_frequency_residual_rms": 0.02889458707004162,
+            "display_bias": 0.007973469913898147
+          },
+          "basin": {
+            "display_rmse": 0.05569200184588741,
+            "linear_rmse": 0.10133262136303929,
+            "high_frequency_residual_rms": 0.02474780104251385,
+            "display_bias": -0.0006531054489531991
+          },
+          "wood_highlights": {
+            "display_rmse": 0.05908562585993759,
+            "linear_rmse": 0.061694584714039546,
+            "high_frequency_residual_rms": 0.03252315221776677,
+            "display_bias": -0.025747918584377957
+          },
+          "glass_bottles": {
+            "display_rmse": 0.09400218294903229,
+            "linear_rmse": 0.07420527895301256,
+            "high_frequency_residual_rms": 0.05970389538703627,
+            "display_bias": -0.017381113364886184
+          }
+        },
+        "end": {
+          "full": {
+            "display_rmse": 0.03752533056996303,
+            "linear_rmse": 0.15124151127698415,
+            "high_frequency_residual_rms": 0.021174838435363087,
+            "display_bias": -0.00011973493100944147
+          }
+        }
+      },
+      "mean_full": {
+        "display_rmse": 0.041140233902250425,
+        "linear_rmse": 0.19541133376796685,
+        "high_frequency_residual_rms": 0.02231271986552603,
+        "display_bias": -0.0013158015949864172
+      },
+      "adjacent_frame_mad_includes_motion": 0.005281173091664649,
+      "average_frame_ms": 19.7329
+    },
+    "candidate": {
+      "poses": {
+        "start": {
+          "full": {
+            "display_rmse": 0.02592236287252135,
+            "linear_rmse": 0.09695396358141065,
+            "high_frequency_residual_rms": 0.01587782114142906,
+            "display_bias": 0.0016581235374808362
+          }
+        },
+        "mid": {
+          "full": {
+            "display_rmse": 0.04128424137492626,
+            "linear_rmse": 0.2914401533665624,
+            "high_frequency_residual_rms": 0.027360788621060807,
+            "display_bias": -0.0003011528685548306
+          },
+          "mirror": {
+            "display_rmse": 0.051971476446147344,
+            "linear_rmse": 0.46860063304937555,
+            "high_frequency_residual_rms": 0.027712861309073328,
+            "display_bias": 0.007603746168189032
+          },
+          "basin": {
+            "display_rmse": 0.04270837668118343,
+            "linear_rmse": 0.09666178595533019,
+            "high_frequency_residual_rms": 0.023891807652128977,
+            "display_bias": -0.0015454195938624997
+          },
+          "wood_highlights": {
+            "display_rmse": 0.04973202193808487,
+            "linear_rmse": 0.056449680651852026,
+            "high_frequency_residual_rms": 0.03159682244779422,
+            "display_bias": -0.014844196114810112
+          },
+          "glass_bottles": {
+            "display_rmse": 0.07647887474389967,
+            "linear_rmse": 0.07040059085590795,
+            "high_frequency_residual_rms": 0.057387155649118914,
+            "display_bias": 0.0020247915258057234
+          }
+        },
+        "end": {
+          "full": {
+            "display_rmse": 0.02946279295394028,
+            "linear_rmse": 0.13549776641088385,
+            "high_frequency_residual_rms": 0.01995892058888718,
+            "display_bias": 0.0012333373678689568
+          }
+        }
+      },
+      "mean_full": {
+        "display_rmse": 0.03222313240046263,
+        "linear_rmse": 0.17463062778628566,
+        "high_frequency_residual_rms": 0.021065843450459015,
+        "display_bias": 0.0008634360122649875
+      },
+      "adjacent_frame_mad_includes_motion": 0.005270945228657307,
+      "average_frame_ms": 25.8032
+    },
+    "mean_full_reduction_percent": {
+      "display_rmse": 21.67489257104107,
+      "linear_rmse": 10.634340179242818,
+      "high_frequency_residual_rms": 5.5881865706273075
+    }
+  },
+  "native": {
+    "baseline": {
+      "mean_metrics": {
+        "full": {
+          "display_rmse": 0.02975178425189841,
+          "linear_rmse": 0.06238299372856283,
+          "high_frequency_residual_rms": 0.015523789851235256,
+          "display_bias": -0.0004662838112997259
+        },
+        "mirror": {
+          "display_rmse": 0.04450860951702899,
+          "linear_rmse": 0.11105174896591322,
+          "high_frequency_residual_rms": 0.015217715422994552,
+          "display_bias": 0.006055279361259211
+        },
+        "basin": {
+          "display_rmse": 0.04422931047077281,
+          "linear_rmse": 0.0484036108015003,
+          "high_frequency_residual_rms": 0.01789408781723696,
+          "display_bias": -0.0034550151165635592
+        },
+        "wood_highlights": {
+          "display_rmse": 0.03995664083459186,
+          "linear_rmse": 0.04034335521604684,
+          "high_frequency_residual_rms": 0.020835692685209642,
+          "display_bias": -0.016723348920439574
+        },
+        "glass_bottles": {
+          "display_rmse": 0.040864111026945114,
+          "linear_rmse": 0.02186409918425438,
+          "high_frequency_residual_rms": 0.02392046073010152,
+          "display_bias": -0.003260085643452784
+        }
+      },
+      "temporal_std_rms_8frames": {
+        "full": 0.0008317919971771581,
+        "mirror": 0.0005065739977133096,
+        "basin": 0.0010868084429704941,
+        "wood_highlights": 0.00104189060530307,
+        "glass_bottles": 0.0011904907499635255
+      },
+      "average_frame_ms": 1827.37
+    },
+    "candidate": {
+      "mean_metrics": {
+        "full": {
+          "display_rmse": 0.023823173033136264,
+          "linear_rmse": 0.04670852118196267,
+          "high_frequency_residual_rms": 0.014991431770530843,
+          "display_bias": 0.00030935715978778263
+        },
+        "mirror": {
+          "display_rmse": 0.02596510797441129,
+          "linear_rmse": 0.06944031806827099,
+          "high_frequency_residual_rms": 0.013546363023215944,
+          "display_bias": 0.004133426801610097
+        },
+        "basin": {
+          "display_rmse": 0.028373343057416643,
+          "linear_rmse": 0.0322076879528007,
+          "high_frequency_residual_rms": 0.016509252640735935,
+          "display_bias": -0.00414481318374052
+        },
+        "wood_highlights": {
+          "display_rmse": 0.03178916243063227,
+          "linear_rmse": 0.033780852922077914,
+          "high_frequency_residual_rms": 0.020249860356339744,
+          "display_bias": -0.010398432564719506
+        },
+        "glass_bottles": {
+          "display_rmse": 0.03346040672964813,
+          "linear_rmse": 0.020665794004571962,
+          "high_frequency_residual_rms": 0.021666893037320577,
+          "display_bias": -0.006068007662835249
+        }
+      },
+      "temporal_std_rms_8frames": {
+        "full": 0.0008015700314028263,
+        "mirror": 0.00056496651884088,
+        "basin": 0.0008603195654651024,
+        "wood_highlights": 0.000997876372835888,
+        "glass_bottles": 0.0009945208276733472
+      },
+      "average_frame_ms": 980.869
+    },
+    "reductions_percent": {
+      "full": {
+        "display_rmse": 19.926909823513704,
+        "linear_rmse": 25.126194832524384,
+        "temporal_std": 3.633356160782464
+      },
+      "mirror": {
+        "display_rmse": 41.66272939962988,
+        "linear_rmse": 37.4703066679433,
+        "temporal_std": -11.526947966369372
+      },
+      "basin": {
+        "display_rmse": 35.84945649069966,
+        "linear_rmse": 33.460154274683994,
+        "temporal_std": 20.83981579001597
+      },
+      "wood_highlights": {
+        "display_rmse": 20.440853468564658,
+        "linear_rmse": 16.26662497163509,
+        "temporal_std": 4.224458138230258
+      },
+      "glass_bottles": {
+        "display_rmse": 18.117864579055944,
+        "linear_rmse": 5.480697693437964,
+        "temporal_std": 16.461272151520912
+      }
+    }
+  },
+  "preset_file": "D:\\work\\corona\\CoronaEngine\\vision\\tools\\scene_params\\bathroom2_restir_reblur_quality.json",
+  "ready_scene": "D:\\work\\corona\\CoronaExample\\test_vision\\render_scene\\bathroom2\\vision_restir_reblur.json",
+  "evidence_directory": "D:\\work\\corona\\CoronaEngine\\build\\recordings\\bathroom2-tuning-20261014\\bathroom2",
+  "recording_directory": "D:\\work\\corona\\CoronaEngine\\build\\recordings\\bathroom2-tuned-walkthrough-15s-20261014",
+  "engine_source_changed": [
+    "vision/src/base/illumination/lightsampler.cpp"
+  ],
+  "source_fix": "Dispatch environment evaluation in evaluate_miss_point to decode/reset image-node caches before evaluation; fixes invalid branch-local CUDA variables with textured environment and mixed ReSTIR candidates.",
+  "build": "CLion corona_engine target succeeded; reproduced Bathroom ReSTIR shader failure before fix, raw and ReBLUR renders pass after fix.",
+  "ctest": {
+    "passed": 9,
+    "not_run_missing_executable": 49,
+    "failed": [
+      "VisionSwitchProfileScopeTests (missing executable)",
+      "VisionReSTIREstimatorTests (stable plane fixture must run the actual SVGF pipeline)"
+    ],
+    "log": "D:\\work\\corona\\CoronaEngine\\build\\recordings\\bathroom2-tuning-20261014\\ctest.log",
+    "details": {
+      "passed": 9,
+      "not_run": [
+        "SystemStopTimeoutTests",
+        "SystemManagerLifecycleTests",
+        "PublishedImageTests",
+        "GeometryStorageSnapshotTests",
+        "GeometryShadowLodStateTests",
+        "ActorEditorSyncTests",
+        "PeerLivenessTests",
+        "NetworkProtocolTests",
+        "DiscoveryTests",
+        "VisionModelNormalizationTests",
+        "LightFieldGeometryTests",
+        "VisionMaterialAdapterTests",
+        "VisionPipelineKeyTests",
+        "VisionSceneResourceTests",
+        "VisionInteropLifetimeTests",
+        "VisionGeometryGpuResourceTests",
+        "VisionWorldBoundsGpuTests",
+        "OpticsActorPickReadbackWorkerTests",
+        "OpticsNativeFrameThrottleTests",
+        "OpticsStorageSnapshotTests",
+        "OpticsDebugLabelTests",
+        "NativeDiagnosticsTests",
+        "ShadowCullingTests",
+        "ViewportGizmoMathTests",
+        "PythonLifecycleTests",
+        "PythonRuntimeCoordinatorTests",
+        "PythonPathConfigTests",
+        "VisionCameraDirectionTests",
+        "ActorSelectionRoutingTests",
+        "SceneFolderTests",
+        "CefAppTests",
+        "CefPopupOverlayTests",
+        "UiSurfaceLifecycleTests",
+        "CameraViewportManagerTests",
+        "VisionActorMaterialBridgeTests",
+        "VisionActorTransformBridgeTests",
+        "RequestResponseBrokerTests",
+        "ViewportGizmoStateTests",
+        "EngineStartupConfigTests",
+        "UiSurfaceRemovalRaceTests",
+        "VisionRuntimeGeometrySyncTests",
+        "VisionRuntimeGeometry_fresh",
+        "VisionRuntimeGeometry_material",
+        "VisionRuntimeGeometry_topology",
+        "VisionRuntimeGeometry_lights",
+        "VisionRuntimeGeometry_stale",
+        "VisionRuntimeGeometry_eviction",
+        "CollaborativeEditorLoopbackTests",
+        "UiMultiSurfaceSmoke"
+      ],
+      "failed": [
+        "VisionSwitchProfileScopeTests",
+        "VisionReSTIREstimatorTests"
+      ],
+      "reason": {
+        "VisionSwitchProfileScopeTests": "Executable missing",
+        "VisionReSTIREstimatorTests": "stable plane fixture must run the actual SVGF pipeline"
+      },
+      "log": "D:\\work\\corona\\CoronaEngine\\build\\recordings\\bathroom2-tuning-20261014\\ctest.log"
+    }
+  },
+  "limitations": [
+    "Residual noise and bias remain versus PT2048.",
+    "Motion comparison numerical gains at 960x540 are separate from native 1080p static measurements.",
+    "Adjacent-frame differences include camera motion and are not pure noise measurements.",
+    "Native render timings can include 8 GB GPU memory pressure.",
+    "Output video 60 FPS is playback cadence, not realtime renderer throughput.",
+    "Native 8-frame static temporal standard deviation is 11.53% higher in the mirror, despite lower errors against PT."
+  ],
+  "original_scene_preserved": true,
+  "preexisting_tracked_changes_preserved": true,
+  "preset_sha256": "8b8ddd8b6fb8b3a343aaba9c36bebc7f31b55530055486951a3c10fa42827edc",
+  "roi_normalized": {
+    "mirror": [
+      0.295,
+      0.09,
+      0.43,
+      0.425
+    ],
+    "basin": [
+      0.32,
+      0.455,
+      0.515,
+      0.64
+    ],
+    "wood_highlights": [
+      0.15,
+      0.62,
+      0.58,
+      0.9
+    ],
+    "glass_bottles": [
+      0.552,
+      0.537,
+      0.578,
+      0.59
+    ]
+  },
+  "roi_notes": "Glass ROI is the actual RoughGlass bottle by the bathtub, confirmed by world-space bounds; an initial niche-ornament ROI was corrected before final reporting.",
+  "video_verification": {
+    "video": "D:\\work\\corona\\CoronaEngine\\build\\recordings\\bathroom2-tuned-walkthrough-15s-20261014\\bathroom2_1080p60_15s.mp4",
+    "codec": "H.264",
+    "width": 1920,
+    "height": 1080,
+    "fps": 60.0,
+    "decoded_frames": 900,
+    "duration_seconds": 15.0,
+    "size_bytes": 34611733,
+    "full_decode_errors": "",
+    "all_900_rendered_frames_in_order": true,
+    "max_rendered_camera_step_scene_units": 0.05227699937831282,
+    "max_rendered_camera_rotation_step_degrees": 0.05854868828590331,
+    "adjacent_frame_mean_absolute_difference_8bit": {
+      "median": 0.8133449074074074,
+      "maximum": 1.5691493055555557,
+      "maximum_at_video_frame": 439
+    },
+    "camera_motion": {
+      "duration_seconds": 15,
+      "fps": 60,
+      "output_frames": 900,
+      "warmup_frames": 64,
+      "fixed_fov_y": 60,
+      "start_camera": [
+        4,
+        16,
+        38,
+        -8,
+        -12
+      ],
+      "easing": "quintic",
+      "max_position_step": 0.05225994459470059,
+      "max_rotation_step_degrees": 0.05848176099884762,
+      "max_position_acceleration": 0.00017879855267801897,
+      "max_rotation_acceleration": 0.0002000854441293165
+    },
+    "rendering": "ReSTIR + ReBLUR, latest saved preset with reconstruction=2, 1 spp per frame, no accumulation; playback FPS is not native rendering FPS",
+    "render_average_frame_ms": 401.247,
+    "validation": "Passed: 900 frames decode in order; 15 seconds at 1080p60; continuous camera position and rotation with fixed FOV."
+  },
+  "video_sha256": "43053d9d7688e1a20eb2ac2745519e213230ae09d9b6c5e2e79a675372c3d4fd",
+  "verification_note": "Initial recording wrapper hit an overly strict acceleration check on six-significant-digit camera metrics. Full independent video verification passed using the exact planned smooth trajectory and a 0.000051 scene-unit metric serialization tolerance; frames/video were not changed."
+}
