@@ -198,7 +198,7 @@ function detachedHost({ fields = {}, fail = false, pending = false, accumulation
   return { ...host, calls };
 }
 
-for (const [fields, type] of [[{}, 'scene'], [{ vision_denoiser: 'SVGF' }, 'svgf'], [{ vision_denoiser: 'ReBLUR' }, 'reblur']]) {
+for (const [fields, type] of [[{}, 'scene'], [{ vision_denoiser: 'SVGF' }, 'svgf'], [{ vision_denoiser: 'ReBLUR' }, 'reblur'], [{ vision_denoiser: 'ReLAX' }, 'relax']]) {
   test(`both views load denoiser ${type}`, async () => {
     const main = mainHost();
     main.applySceneSnapshot('test.scene', cameraSnapshot(fields));

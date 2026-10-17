@@ -14,12 +14,16 @@ namespace {
 void render_perf_stats(Widgets *widgets, const Pipeline &pipeline) noexcept {
     double render_time_avg = pipeline.frame_index() == 0 ? 0.0 : pipeline.render_time() / static_cast<double>(pipeline.frame_index());
     widgets->text("pipeline type: %s", pipeline.impl_type().data());
-    widgets->text("render time: %.3f"
+    widgets->text("FPS: %.1f"
+                  "\nrender time: %.3f ms"
+                  "\ndenoise time: %.3f ms"
                   "\nrender time average: %.3f"
                   "\ntotal time: %.3f"
                   "\ntotal time average: %.3f"
                   "\nframe index: %u",
+                  pipeline.frame_delta_ms() > 0.0 ? 1000.0 / pipeline.frame_delta_ms() : 0.0,
                   pipeline.cur_render_time(),
+                  pipeline.renderer().integrator()->cur_denoise_time(),
                   render_time_avg,
                   pipeline.frame_delta_ms(),
                   pipeline.avg_frame_delta_ms(),

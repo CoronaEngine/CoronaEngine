@@ -126,9 +126,9 @@ void StablePlanes::compile() noexcept {
             fb.stable_indirect().write(layer * (dispatch_dim().x * dispatch_dim().y) + dispatch_id(), make_float4(0.f));
             if (lobes) {
                 Uint address = layer * (dispatch_dim().x * dispatch_dim().y) + dispatch_id();
-                fb.reblur_diffuse().write(address, make_float4(0.f));
-                fb.reblur_specular().write(address, make_float4(0.f));
-                fb.reblur_bypass().write(address, make_float4(0.f));
+                fb.denoiser_diffuse().write(address, make_float4(0.f));
+                fb.denoiser_specular().write(address, make_float4(0.f));
+                fb.denoiser_bypass().write(address, make_float4(0.f));
             }
             $if(path.active) {
                 $loop {
@@ -143,9 +143,9 @@ void StablePlanes::compile() noexcept {
                     plane.surface.hit = hit;
                     plane.valid = 1u;
                     plane.depth = path.depth; plane.branch_sequence = path.sequence; plane.instance_hash = path.identity;
-                    plane.extension.view_pos = path.ray.origin();
-                    plane.extension.final_direction = path.ray.direction();
-                    plane.extension.throughput = path.weight;
+                    plane.extension.view_pos.set(path.ray.origin());
+                    plane.extension.final_direction.set(path.ray.direction());
+                    plane.extension.throughput.set(path.weight);
                     plane.extension.prefix_depth = path.depth;
                     plane.surface.is_replaced = path.depth > 0u;
                     plane.surface.stable_branch = select(path.depth == 0u, 0u, (path.identity % (InvalidUI32 - 1u)) + 1u);
@@ -162,8 +162,8 @@ void StablePlanes::compile() noexcept {
                     path.distance += path.ray.ray->t_max();
                     $if(path.depth == 0u) { path.anchor = it.pos; };
                     plane.extension.t_max = path.distance;
-                    plane.depth_position = camera_ray.ray->at(path.distance);
-                    plane.surface.depth_position = plane.depth_position;
+                    plane.depth_position.set(camera_ray.ray->at(path.distance));
+                    plane.surface.depth_position.set(plane.depth_position.as_vec3());
                     plane.surface.approximate = !path.planar;
                     plane.material_id = it.material_id();
                     $if(it.has_emission()) {
@@ -186,16 +186,16 @@ void StablePlanes::compile() noexcept {
                         plane.surface->set_position(it.pos);
                         plane.surface->set_normal(bsdf.shading_frame().normal());
                         plane.surface->set_diffuse_factor(bsdf.diffuse_factor());
-                        plane.surface.virtual_position = select(path.planar, path.vector(it.pos) + path.offset,
-                            path.vector(it.pos - path.anchor) + path.anchor);
-                        plane.surface.virtual_normal = path.vector(bsdf.shading_frame().normal());
-                        plane.surface.virtual_geometric_normal = path.vector(it.ng);
+                        plane.surface.virtual_position.set(select(path.planar, path.vector(it.pos) + path.offset,
+                            path.vector(it.pos - path.anchor) + path.anchor));
+                        plane.surface.virtual_normal.set(path.vector(bsdf.shading_frame().normal()));
+                        plane.surface.virtual_geometric_normal.set(path.vector(it.ng));
                         plane.surface->set_depth(camera->linear_depth(select(path.planar,
-                            plane.surface.virtual_position, plane.depth_position)));
-                        plane.motion = fb.compute_motion_vec(camera, ss.p_film, plane.surface.virtual_position, true);
+                            plane.surface.virtual_position.as_vec3(), plane.depth_position.as_vec3())));
+                        plane.motion = fb.compute_motion_vec(camera, ss.p_film, plane.surface.virtual_position.as_vec3(), true);
                         $if(!path.planar) {
-                            plane.motion = camera->raster_coord(plane.surface.virtual_position).xy() -
-                                camera->prev_raster_coord(plane.surface.virtual_position).xy();
+                            plane.motion = camera->raster_coord(plane.surface.virtual_position.as_vec3()).xy() -
+                                camera->prev_raster_coord(plane.surface.virtual_position.as_vec3()).xy();
                         };
                         guide_it.wo = guide_it.ng;
                         SampledWavelengths guide_swl{spectrum->dimension()};
@@ -210,7 +210,7 @@ void StablePlanes::compile() noexcept {
                         plane.surface.diffuse_roughness = make_float4(spectrum->linear_srgb(diffuse, guide_swl), roughness.x);
                         plane.surface.specular_roughness = make_float4(spectrum->linear_srgb(specular, guide_swl), roughness.y);
                         Float3 albedo_wo = select(dot(bsdf.shading_frame().normal(), it.wo) < 0.f, -it.wo, it.wo);
-                        plane.surface.denoiser_albedo = spectrum->linear_srgb(bsdf.albedo(albedo_wo) * SampledSpectrum(path.weight), sampled_wavelengths());
+                        plane.surface.denoiser_albedo.set(spectrum->linear_srgb(bsdf.albedo(albedo_wo) * SampledSpectrum(path.weight), sampled_wavelengths()));
                         plane.reservoir_eligible = !plane.surface->near_specular() && !it.has_emission();
                         $if(supported && path.depth < exploration_limit) {
                             if (layer == 0u) {
@@ -304,7 +304,7 @@ void StablePlanes::compile() noexcept {
                 Uint address = owner * (dispatch_dim().x * dispatch_dim().y) + dispatch_id();
                 auto old = fb.stable_direct().read(address);
                 fb.stable_direct().write(address, old + make_float4(emission, 0.f));
-                if (lobes) fb.reblur_bypass().write(address, fb.reblur_bypass().read(address) + make_float4(emission * di, 0.f));
+                if (lobes) fb.denoiser_bypass().write(address, fb.denoiser_bypass().read(address) + make_float4(emission * di, 0.f));
                 $break;
             };
             Interaction it = geometry.compute_surface_interaction(hit, ray.ray);
@@ -316,7 +316,7 @@ void StablePlanes::compile() noexcept {
                 };
                 Uint address = owner * (dispatch_dim().x * dispatch_dim().y) + dispatch_id();
                 fb.stable_direct().write(address, fb.stable_direct().read(address) + make_float4(emission, 0.f));
-                if (lobes) fb.reblur_bypass().write(address, fb.reblur_bypass().read(address) + make_float4(emission * di, 0.f));
+                if (lobes) fb.denoiser_bypass().write(address, fb.denoiser_bypass().read(address) + make_float4(emission * di, 0.f));
                 $break;
             };
             Bool near_specular = false;
@@ -334,7 +334,7 @@ void StablePlanes::compile() noexcept {
                 };
                 Uint address = owner * (dispatch_dim().x * dispatch_dim().y) + dispatch_id();
                 fb.stable_direct().write(address, fb.stable_direct().read(address) + make_float4(emission, 0.f));
-                if (lobes) fb.reblur_bypass().write(address, fb.reblur_bypass().read(address) + make_float4(emission * di, 0.f));
+                if (lobes) fb.denoiser_bypass().write(address, fb.denoiser_bypass().read(address) + make_float4(emission * di, 0.f));
                 $if(!sample.valid()) { $break; };
                 throughput *= sample.eval.throughput();
                 sequence = select(sample.stable_lobe_index < 2u && depth < 15u,
@@ -365,9 +365,9 @@ void StablePlanes::compile() noexcept {
                 if (lobes) {
                     Float3 weighted_specular = direct_specular * di + (specular - direct_specular) * gi;
                     Float3 weighted_total = direct * di + (total - direct) * gi;
-                    fb.reblur_diffuse().write(address, make_float4(weighted_total - weighted_specular - bypass * di, distance.x));
-                    fb.reblur_specular().write(address, make_float4(weighted_specular, distance.y));
-                    fb.reblur_bypass().write(address, fb.reblur_bypass().read(address) + make_float4(bypass * di, 0.f));
+                    fb.denoiser_diffuse().write(address, make_float4(weighted_total - weighted_specular - bypass * di, distance.x));
+                    fb.denoiser_specular().write(address, make_float4(weighted_specular, distance.y));
+                    fb.denoiser_bypass().write(address, fb.denoiser_bypass().read(address) + make_float4(bypass * di, 0.f));
                 }
                 $break;
             };

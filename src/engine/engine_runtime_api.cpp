@@ -2337,12 +2337,24 @@ void Corona::API::Camera::set_vision_reblur_settings(const std::string& json) {
     Corona::API::set_vision_reblur_settings(json, handle_);
 }
 
+void Corona::API::Camera::set_vision_relax_settings(const std::string& json) {
+    Corona::API::set_vision_relax_settings(json, handle_);
+}
+
 std::string Corona::API::Camera::get_requested_vision_reblur_settings() const {
     return Corona::API::get_requested_vision_reblur_settings(handle_);
 }
 
+std::string Corona::API::Camera::get_requested_vision_relax_settings() const {
+    return Corona::API::get_requested_vision_relax_settings(handle_);
+}
+
 std::string Corona::API::Camera::get_effective_vision_reblur_settings() const {
     return Corona::API::get_effective_vision_reblur_settings(handle_);
+}
+
+std::string Corona::API::Camera::get_effective_vision_relax_settings() const {
+    return Corona::API::get_effective_vision_relax_settings(handle_);
 }
 
 void Corona::API::Camera::set_vision_accumulation(bool enabled) {
@@ -2689,6 +2701,7 @@ static std::string vision_denoiser_name(CameraVisionDenoiser type) {
     switch (type) {
         case CameraVisionDenoiser::SVGF: return "svgf";
         case CameraVisionDenoiser::ReBLUR: return "reblur";
+        case CameraVisionDenoiser::ReLAX: return "relax";
         default: return "scene";
     }
 }
@@ -2701,6 +2714,7 @@ void set_vision_denoiser(const std::string& type, std::uintptr_t camera_handle) 
     command.fields = CameraStateUpdateField::VisionDenoiser;
     if (type == "svgf" || type == "SVGF") command.vision_denoiser = CameraVisionDenoiser::SVGF;
     else if (type == "reblur" || type == "ReBLUR" || type == "REBLUR") command.vision_denoiser = CameraVisionDenoiser::ReBLUR;
+    else if (type == "relax" || type == "ReLAX" || type == "RELAX") command.vision_denoiser = CameraVisionDenoiser::ReLAX;
     else if (type != "scene") return;
     SharedDataHub::instance().enqueue_camera_state_update(command);
 }
@@ -2743,6 +2757,16 @@ void set_vision_reblur_settings(const std::string& json, std::uintptr_t camera_h
     SharedDataHub::instance().enqueue_camera_state_update(std::move(command));
 }
 
+void set_vision_relax_settings(const std::string& json, std::uintptr_t camera_handle) {
+    const auto handle = resolve_camera_handle(camera_handle);
+    if (handle == 0) return;
+    CameraStateUpdateCommand command{};
+    command.camera_handle = handle;
+    command.fields = CameraStateUpdateField::VisionRelaxSettings;
+    command.vision_relax_settings = json;
+    SharedDataHub::instance().enqueue_camera_state_update(std::move(command));
+}
+
 std::string get_requested_vision_reblur_settings(std::uintptr_t camera_handle) {
     const auto handle = resolve_camera_handle(camera_handle);
     auto& hub = SharedDataHub::instance();
@@ -2751,10 +2775,25 @@ std::string get_requested_vision_reblur_settings(std::uintptr_t camera_handle) {
     return "{}";
 }
 
+std::string get_requested_vision_relax_settings(std::uintptr_t camera_handle) {
+    const auto handle = resolve_camera_handle(camera_handle);
+    auto& hub = SharedDataHub::instance();
+    if (const auto requested = hub.requested_camera_vision_relax_settings(handle)) return *requested;
+    if (auto camera = hub.camera_storage().acquire_read(handle)) return camera->vision_relax_settings;
+    return "{}";
+}
+
 std::string get_effective_vision_reblur_settings(std::uintptr_t camera_handle) {
     const auto handle = resolve_camera_handle(camera_handle);
     if (auto camera = SharedDataHub::instance().camera_storage().acquire_read(handle))
         return camera->vision_reblur_effective_settings;
+    return "{}";
+}
+
+std::string get_effective_vision_relax_settings(std::uintptr_t camera_handle) {
+    const auto handle = resolve_camera_handle(camera_handle);
+    if (auto camera = SharedDataHub::instance().camera_storage().acquire_read(handle))
+        return camera->vision_relax_effective_settings;
     return "{}";
 }
 

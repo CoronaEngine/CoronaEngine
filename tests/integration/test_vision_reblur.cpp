@@ -693,8 +693,8 @@ void check_scene_signals() {
         for (uint frame = 0; frame < 4u; ++frame) {
             pipeline->upload_data(); pipeline->display(1.0 / 60.0);
             pipeline->stream() << fb.rt_buffer().device_buffer().download(pixels.data())
-                << fb.reblur_diffuse().view().download(d.data()) << fb.reblur_specular().view().download(s.data())
-                << fb.reblur_bypass().view().download(b.data());
+                << fb.denoiser_diffuse().view().download(d.data()) << fb.denoiser_specular().view().download(s.data())
+                << fb.denoiser_bypass().view().download(b.data());
             if (stable) pipeline->stream() << fb.stable_radiance().view().download(emission.data());
             pipeline->stream() << synchronize() << commit();
             if (scenario == 8u) {

@@ -65,11 +65,11 @@ void layered_history_regression(vision::Pipeline& pipeline, Filter& denoiser) {
             plane.depth = 1u; plane.material_id = it.material_id();
             plane.surface.hit = hit; plane.surface.is_replaced = true;
             plane.surface.stable_branch = 37u;
-            plane.surface.virtual_position = it.pos;
-            plane.surface.virtual_normal = it.ng;
-            plane.surface.virtual_geometric_normal = it.ng;
-            plane.surface.denoiser_albedo = make_float3(1.f);
-            plane.depth_position = it.pos;
+            plane.surface.virtual_position.set(it.pos);
+            plane.surface.virtual_normal.set(it.ng);
+            plane.surface.virtual_geometric_normal.set(it.ng);
+            plane.surface.denoiser_albedo.set(array_float3{1.f, 1.f, 1.f});
+            plane.depth_position.set(it.pos);
             out.write(dispatch_id(), plane);
         };
         auto guide_shader = pipeline.device().compile(make_guides, "layered_history_fixture");
@@ -176,7 +176,7 @@ void layered_history_regression(vision::Pipeline& pipeline, Filter& denoiser) {
                     guides[i].valid = mode == 0 || (mode >= 2 && i == single_pixel);
                     // If classification drops a live tile, fused preparation's
                     // demodulated green remains > 1 instead of being restored.
-                    guides[i].surface.denoiser_albedo = make_float3(0.2f, 0.35f, 0.7f);
+                    guides[i].surface.denoiser_albedo = {.2f, .35f, .7f};
                 }
                 const float nan = std::numeric_limits<float>::quiet_NaN();
                 std::vector<RadType4> poison(n, RadType4{nan, nan, nan, nan});
@@ -203,7 +203,7 @@ void layered_history_regression(vision::Pipeline& pipeline, Filter& denoiser) {
         guides = baseline;
         Env::set("VISION_SVGF_RADIANCE_DOMAIN", "0");
         for (const float3 albedo : {make_float3(0.f, 0.03f, 0.8f), make_float3(0.7f, 0.2f, 0.05f)}) {
-            for (auto &guide : guides) guide.surface.denoiser_albedo = albedo;
+            for (auto &guide : guides) guide.surface.denoiser_albedo = {albedo.x, albedo.y, albedo.z};
             run(0u, 2u, RadType4{0.2f, 0.4f, 0.7f, 1.f});
             for (const auto &pixel : output) {
                 if (!std::isfinite(float(pixel.x)) || std::abs(float(pixel.x) - 0.2f) > 1e-5f ||
@@ -387,11 +387,11 @@ void layered_history_regression(vision::Pipeline& pipeline, Filter& denoiser) {
         auto original = baseline;
         for (auto& plane : baseline) plane.surface.approximate = 1u;
         guides = baseline; run(0u, 1u, colors[1]);
-        for (auto& plane : guides) plane.surface.virtual_position.z += 10.f;
+        for (auto& plane : guides) plane.surface.virtual_position[2] += 10.f;
         run(1u, 1u, colors[1]);
         if (float(history[center].moments_direct.z) < 1.9f)
             throw std::runtime_error("approximate temporal depth must use optical depth independently of projection position");
-        for (auto& plane : guides) plane.depth_position.z += 20.f;
+        for (auto& plane : guides) plane.depth_position[2] += 20.f;
         run(2u, 1u, colors[0]);
         if (float(history[center].moments_direct.z) != 1.f)
             throw std::runtime_error("optical depth disocclusion must reject layer history");

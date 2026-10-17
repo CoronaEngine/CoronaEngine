@@ -14,6 +14,7 @@
 #include "base/sampler.h"
 #include "math/warp.h"
 #include "base/using.h"
+#include <chrono>
 
 namespace vision {
 
@@ -53,17 +54,26 @@ public:
     using signature = void(uint);
 
 protected:
+    struct DenoiseTiming {
+        std::chrono::steady_clock::time_point started_at{};
+        double elapsed_ms{};
+    };
+    mutable SP<DenoiseTiming> denoise_timing_{make_shared<DenoiseTiming>()};
     mutable uint frame_index_{};
     mutable double render_time_{};
     mutable double cur_render_time_{};
     mutable IntegratorStageProfile cur_stage_profile_{};
     ocarina::Shader<signature> shader_;
 
+    void reset_denoise_timing() const noexcept;
+    void begin_denoise_timing(ocarina::Stream &stream) const noexcept;
+    void end_denoise_timing(ocarina::Stream &stream) const noexcept;
+
 public:
     Integrator() = default;
     explicit Integrator(const IntegratorDesc &desc)
         : Node(desc) {}
-    VS_HOTFIX_MAKE_RESTORE(Node, frame_index_, render_time_, cur_render_time_, cur_stage_profile_, shader_, datas_)
+    VS_HOTFIX_MAKE_RESTORE(Node, frame_index_, render_time_, cur_render_time_, cur_stage_profile_, denoise_timing_, shader_, datas_)
     virtual void compile() noexcept = 0;
     virtual Float3 Li(RayState rs, Float scatter_pdf, const HitContext &hc, const RenderEnv &render_env) const noexcept {
         return Li(rs, scatter_pdf, spectrum()->one(), hc, render_env);
@@ -88,6 +98,8 @@ public:
     virtual void update_resolution(uint2 res) noexcept {}
     [[nodiscard]] uint frame_index() const noexcept { return frame_index_; }
     [[nodiscard]] double render_time() const noexcept { return render_time_; }
+    // Stream-ordered host elapsed time, available after the frame's existing sync.
+    [[nodiscard]] double cur_denoise_time() const noexcept;
     OC_MAKE_MEMBER_GETTER(cur_render_time, )
     [[nodiscard]] const IntegratorStageProfile &cur_stage_profile() const noexcept { return cur_stage_profile_; }
     void increase_frame_index() const noexcept { frame_index_++; }

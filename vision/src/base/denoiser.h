@@ -14,7 +14,7 @@
 namespace vision {
 
 struct DenoiseLobeInput {
-    // Linear radiance, with a world-space scattering distance in w (0 = unsampled).
+    // Linear RGB with world-space hit distance in w; zero distance is unsampled.
     BufferView<float4> diffuse_radiance_hitdist, specular_radiance_hitdist;
     BufferView<float4> output_diffuse, output_specular;
 };
@@ -158,6 +158,8 @@ public:
     // Camera-local REBLUR overrides; other denoisers leave them untouched.
     virtual bool set_reblur_settings(string_view json) noexcept { return false; }
     [[nodiscard]] virtual string reblur_settings_json() const { return "{}"; }
+    virtual bool set_relax_settings(string_view json) noexcept { return false; }
+    [[nodiscard]] virtual string relax_settings_json() const { return "{}"; }
     
     [[nodiscard]] Backend backend() const noexcept { return backend_; }
 

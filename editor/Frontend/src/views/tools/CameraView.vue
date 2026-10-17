@@ -70,6 +70,8 @@
       </div>
       <ReblurSettings :scene-id="sceneId" :camera-id="cameraId"
         :enabled="backend === 'vision' && visionRenderMode !== 'ssat' && visionDenoiser === 'reblur' && !visionDenoiserBusy" />
+      <RelaxSettings :scene-id="sceneId" :camera-id="cameraId"
+        :enabled="backend === 'vision' && visionRenderMode !== 'ssat' && visionDenoiser === 'relax' && !visionDenoiserBusy" />
       <label class="vision-setting no-drag" title="累积 PT / ReSTIR 样本">
         <input
           type="checkbox"
@@ -210,6 +212,7 @@
 <script setup>
 import FrameTimingOverlay from '@/components/ui/FrameTimingOverlay.vue';
 import ReblurSettings from '@/components/ui/ReblurSettings.vue';
+import RelaxSettings from '@/components/ui/RelaxSettings.vue';
 import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import { editorApi } from '@/api/editorApi.js';

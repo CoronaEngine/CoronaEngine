@@ -83,7 +83,7 @@ public:
                            radiance_, reservoirs_, shader0_, shader1_)
     OC_MAKE_MEMBER_GETTER(open, )
     OC_MAKE_MEMBER_GETTER(radiance, &)
-    [[nodiscard]] float factor() const noexcept { return static_cast<float>(open()); }
+    [[nodiscard]] float factor() const noexcept { return open() ? factor_ : 0.f; }
     void prepare() noexcept;
     void compile() noexcept {
         switch_profile::Scope profile{"ReSTIR.DI.compile", "compile"};
@@ -105,8 +105,8 @@ public:
                                                 DISampleVar *sample) noexcept {
         Bool cond = sample ? sample->age < param.max_age : true;
         // Compare both primary-surface depths in the current camera space.
-        Float3 prev_position = ocarina::select(prev_surface.is_replaced && prev_surface.stable_branch != InvalidUI32, prev_surface.virtual_position, prev_surface->position());
-        prev_position = ocarina::select(prev_surface.approximate != 0u, prev_surface.depth_position, prev_position);
+        Float3 prev_position = ocarina::select(prev_surface.is_replaced && prev_surface.stable_branch != InvalidUI32, prev_surface.virtual_position.as_vec3(), prev_surface->position());
+        prev_position = ocarina::select(prev_surface.approximate != 0u, prev_surface.depth_position.as_vec3(), prev_position);
         Float prev_depth = scene().sensor()->linear_depth(prev_position);
         return vision::is_valid_neighbor(cur_surface, prev_surface,
                                          param.t_dot,

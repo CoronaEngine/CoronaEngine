@@ -12,6 +12,7 @@
 #include "ReSTIR/direct.h"
 #include "ReSTIR/indirect.h"
 #include "ReSTIR/stable_planes.h"
+#include "ReSTIR/denoiser_signals.h"
 #include <cstdlib>
 #include <fstream>
 
@@ -40,9 +41,9 @@ private:
     Shader<void(uint, float, float, uint)> combine_;
     Shader<void()> merge_dominant_;
     Shader<void()> compose_layers_;
-    Shader<void(uint, float, float)> prepare_reblur_;
-    Shader<void(uint, float)> compose_reblur_;
-    mutable float2 reblur_factors_{make_float2(-1.f)};
+    Shader<void(uint, float, float)> prepare_denoiser_;
+    Shader<void(uint, float)> compose_denoiser_;
+    mutable float2 denoiser_factors_{make_float2(-1.f)};
     Shader<void(uint, Buffer<SurfaceData>)> path_tracing_;
     SP<RadianceCache> cache_;
 
@@ -66,7 +67,7 @@ public:
     void restore(vision::RuntimeObject *old_obj) noexcept override {
         IlluminationIntegrator::restore(old_obj);
         VS_HOTFIX_MOVE_ATTRS(direct_, indirect_, stable_planes_, stable_resources_dirty_, specular_buffer_,
-                             combine_, merge_dominant_, compose_layers_, prepare_reblur_, compose_reblur_, reblur_factors_, path_tracing_, denoiser_)
+                             combine_, merge_dominant_, compose_layers_, prepare_denoiser_, compose_denoiser_, denoiser_factors_, path_tracing_, denoiser_)
         direct_->set_integrator(shared_from_this());
         indirect_->set_integrator(shared_from_this());
         stable_planes_->set_integrator(shared_from_this());
@@ -114,7 +115,7 @@ public:
         frame_buffer().prepare_visibility_buffer();
         frame_buffer().prepare_motion_vectors();
         stable_planes_->prepare();
-        if (denoiser_ && denoiser_->requires_lobe_signals()) frame_buffer().prepare_reblur_signals();
+        if (denoiser_ && denoiser_->requires_lobe_signals()) frame_buffer().prepare_denoiser_signals();
         stable_resources_dirty_ = false;
     }
 
@@ -201,44 +202,40 @@ public:
                     $if(layer >= StablePlaneCount) { $return(); };
                 };
                 Uint address = layer * (dispatch_dim().x * dispatch_dim().y) + i;
-                Float4 sd = frame_buffer().reblur_di_specular().read(i);
-                Float4 sg = frame_buffer().reblur_gi_specular().read(i);
-                Float3 bypass = frame_buffer().reblur_di_bypass().read(i).xyz();
+                Float4 sd = frame_buffer().denoiser_di_specular().read(i);
+                Float4 sg = frame_buffer().denoiser_gi_specular().read(i);
+                Float3 bypass = frame_buffer().denoiser_di_bypass().read(i).xyz();
                 Float3 d = direct_->radiance()->read(i).xyz() - bypass;
                 Float3 g = indirect_->radiance()->read(i).xyz();
                 Float3 spec = sd.xyz() * di + sg.xyz() * gi;
                 Float3 diff = (d - sd.xyz()) * di + (g - sg.xyz()) * gi;
                 Float2 wd = make_float2(max(luminance(d - sd.xyz()), 0.f) * di, max(luminance(sd.xyz()), 0.f) * di);
                 Float2 wg = make_float2(max(luminance(g - sg.xyz()), 0.f) * gi, max(luminance(sg.xyz()), 0.f) * gi);
-                Float2 dist = (wd * sd.w + wg * sg.w) / max(wd + wg, make_float2(1e-6f));
+                Float2 dist = denoiser_signals::merge_hit_distances(wd, select(di > 0.f, sd.w, 0.f),
+                                                                  wg, select(gi > 0.f, sg.w, 0.f));
                 Float4 old_d = make_float4(0.f), old_s = make_float4(0.f), old_b = make_float4(0.f);
                 $if(layered != 0u) {
-                    old_d = frame_buffer().reblur_diffuse().read(address);
-                    old_s = frame_buffer().reblur_specular().read(address);
-                    old_b = frame_buffer().reblur_bypass().read(address);
+                    old_d = frame_buffer().denoiser_diffuse().read(address);
+                    old_s = frame_buffer().denoiser_specular().read(address);
+                    old_b = frame_buffer().denoiser_bypass().read(address);
                 };
-                auto combine_hit = [](Float4 old, Float3 value, Float hit) {
-                    Float a = max(luminance(old.xyz()), 0.f), b = max(luminance(value), 0.f);
-                    Float h = select(a + b > 1e-5f, (a * old.w + b * hit) / max(a + b, 1e-5f), max(old.w, hit));
-                    return make_float4(old.xyz() + value, h);
-                };
-                frame_buffer().reblur_diffuse().write(address, combine_hit(old_d, diff, dist.x));
-                frame_buffer().reblur_specular().write(address, combine_hit(old_s, spec, dist.y));
-                frame_buffer().reblur_bypass().write(address, old_b + make_float4(bypass * di, 0.f));
+                frame_buffer().denoiser_diffuse().write(address, denoiser_signals::accumulate_lobe(old_d, diff, dist.x));
+                frame_buffer().denoiser_specular().write(address, denoiser_signals::accumulate_lobe(old_s, spec, dist.y));
+                frame_buffer().denoiser_bypass().write(address, old_b + make_float4(bypass * di, 0.f));
             };
-            prepare_reblur_ = device().compile(pack_lobes, "REBLUR-MergeReSTIRLobes");
+            prepare_denoiser_ = device().compile(pack_lobes, "Denoiser-MergeReSTIRLobes");
             Kernel compose_lobes = [&](Uint layered, Float di) {
                 Uint i = dispatch_id(); Float3 total = make_float3(0.f);
                 $if(layered != 0u) { total = frame_buffer().stable_radiance().read(i).xyz() * di; };
                 $for(layer, select(layered != 0u, StablePlaneCount, 1u)) {
                     Uint j = layer * (dispatch_dim().x * dispatch_dim().y) + i;
-                    total += frame_buffer().reblur_diffuse().read(j).xyz() + frame_buffer().reblur_specular().read(j).xyz() +
-                             frame_buffer().reblur_bypass().read(j).xyz();
+                    total += frame_buffer().denoiser_diffuse().read(j).xyz() + frame_buffer().denoiser_specular().read(j).xyz() +
+                             frame_buffer().denoiser_bypass().read(j).xyz();
                 };
                 direct_->radiance()->write(i, make_float4(total, 1.f));
                 indirect_->radiance()->write(i, make_float4(0.f));
             };
-            compose_reblur_ = device().compile(compose_lobes, "REBLUR-ComposeReSTIR");
+            compose_denoiser_ = device().compile(compose_lobes, "Denoiser-ComposeReSTIR");
         }
         {
             switch_profile::Scope combine_profile{"combine.compile", "compile"};
@@ -278,8 +275,8 @@ public:
         if (denoiser_ && denoiser_->requires_lobe_signals()) {
             ret.has_lobe_signals = true;
             auto &fb = frame_buffer();
-            auto d = fb.reblur_layer_view(fb.reblur_diffuse(), layer);
-            auto s = fb.reblur_layer_view(fb.reblur_specular(), layer);
+            auto d = fb.denoiser_layer_view(fb.denoiser_diffuse(), layer);
+            auto s = fb.denoiser_layer_view(fb.denoiser_specular(), layer);
             ret.lobe_signals = {d, s, d, s};
         }
         return ret;
@@ -288,6 +285,7 @@ public:
     void render() const noexcept override {
         const Pipeline *rp = pipeline();
         Stream &stream = rp->stream();
+        reset_denoise_timing();
         if (stable_resources_dirty_) {
             stream << synchronize() << commit();
             frame_buffer().manage_stable_plane_buffers(stable_planes_enabled());
@@ -350,26 +348,27 @@ public:
         // Opt-in raw layer diagnostics belong here, after merging ownership and
         // before any per-layer denoising. No permanent copy buffers are needed.
         debug_readback("raw");
-        const bool reblur = !denoiser_runtime_disabled() && denoiser_ && denoiser_->enabled() && denoiser_->requires_lobe_signals();
+        const bool denoiser = !denoiser_runtime_disabled() && denoiser_ && denoiser_->enabled() && denoiser_->requires_lobe_signals();
         // Keep the explicit raw lobe contract observable with denoising off,
-        // just as PT does. This path exists only when REBLUR was selected.
+        // just as PT does. This path exists only when Denoiser was selected.
         if (denoiser_ && denoiser_->requires_lobe_signals()) {
             const float2 factors = make_float2(direct_->factor(), indirect_->factor());
-            if (reblur && any(factors != reblur_factors_)) {
-                denoiser_->set_enabled(false); denoiser_->set_enabled(true); reblur_factors_ = factors;
+            if (denoiser && any(factors != denoiser_factors_)) {
+                denoiser_->set_enabled(false); denoiser_->set_enabled(true); denoiser_factors_ = factors;
             }
-            submit(prepare_reblur_(uint(stable_planes_enabled()), factors.x, factors.y).dispatch(pipeline()->resolution()),
+            submit(prepare_denoiser_(uint(stable_planes_enabled()), factors.x, factors.y).dispatch(pipeline()->resolution()),
                    &cur_stage_profile_.combine_ms);
         }
         if (!denoiser_runtime_disabled() && denoiser_ && denoiser_->enabled()) {
+            begin_denoise_timing(stream);
             const uint count = stable_planes_enabled() ? StablePlaneCount : 1u;
             for (uint layer = 0u; layer < count; ++layer) {
                 auto dn_input = denoise_input(layer);
                 submit(denoiser_->dispatch(dn_input), &cur_stage_profile_.spatial_angular_ms);
             }
             debug_readback("filtered");
-            if (stable_planes_enabled() || reblur) {
-                if (reblur) submit(compose_reblur_(uint(stable_planes_enabled()), direct_->factor()).dispatch(pipeline()->resolution()), &cur_stage_profile_.combine_ms);
+            if (stable_planes_enabled() || denoiser) {
+                if (denoiser) submit(compose_denoiser_(uint(stable_planes_enabled()), direct_->factor()).dispatch(pipeline()->resolution()), &cur_stage_profile_.combine_ms);
                 else submit(compose_layers_().dispatch(pipeline()->resolution()), &cur_stage_profile_.combine_ms);
                 debug_readback("composite_pre", false);
                 auto coverage = denoise_input();
@@ -384,11 +383,12 @@ public:
                 submit(denoiser_->dispatch(coverage), &cur_stage_profile_.spatial_angular_ms);
                 debug_readback("composite_post", false);
             }
+            end_denoise_timing(stream);
         }
         const bool resolved = !denoiser_runtime_disabled() && denoiser_ && denoiser_->enabled();
         // Raw ownership is unchanged. Filtered output resolves that same sum
         // before channel factors are applied exactly once in presentation.
-        submit(combine_(frame_index_, reblur ? 1.f : direct_->factor(), reblur ? 1.f : indirect_->factor(), uint(stable_planes_enabled() && !resolved))
+        submit(combine_(frame_index_, denoiser ? 1.f : direct_->factor(), denoiser ? 1.f : indirect_->factor(), uint(stable_planes_enabled() && !resolved))
                    .dispatch(pipeline()->resolution()), &cur_stage_profile_.combine_ms);
         submit(frame_buffer().post_path_tracing(frame_index_), &cur_stage_profile_.postprocess_ms);
         submit(frame_buffer().render_final(frame_index_), &cur_stage_profile_.render_final_ms);

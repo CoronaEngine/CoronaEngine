@@ -308,6 +308,7 @@ def _parse_camera(
         "vision_stable_planes": vision_stable_planes,
         "vision_denoiser": str(get("vision_denoiser", "scene")).strip().lower(),
         "vision_reblur_settings": json.loads(get("vision_reblur_settings", "{}")),
+        "vision_relax_settings": json.loads(get("vision_relax_settings", "{}")),
     }
 
 

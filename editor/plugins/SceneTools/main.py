@@ -312,8 +312,16 @@ class SceneTools(PluginBase):
         return CoronaEditorApi.scene_tools.get_reblur_settings(scene_name, camera_name)
 
     @staticmethod
+    def get_relax_settings(scene_name: str, camera_name: str) -> dict:
+        return CoronaEditorApi.scene_tools.get_relax_settings(scene_name, camera_name)
+
+    @staticmethod
     def set_reblur_settings(scene_name: str, camera_name: str, settings: dict) -> dict:
         return CoronaEditorApi.scene_tools.set_reblur_settings(scene_name, camera_name, settings)
+
+    @staticmethod
+    def set_relax_settings(scene_name: str, camera_name: str, settings: dict) -> dict:
+        return CoronaEditorApi.scene_tools.set_relax_settings(scene_name, camera_name, settings)
 
     @staticmethod
     def set_vision_denoise(scene_name: str, camera_name: str = None,

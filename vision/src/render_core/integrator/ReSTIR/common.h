@@ -135,6 +135,7 @@ protected:
     SpatialResamplingParam spatial_{};
     TemporalResamplingParam temporal_{};
     bool open_{true};
+    float factor_{1.f};
     uint max_age_{};
     mutable ReservoirHistory history_{};
     float diff_factor_{0.3f};
@@ -148,9 +149,10 @@ public:
           spatial_(desc["spatial"]),
           temporal_(desc["temporal"]),
           open_(desc["open"].as_bool(true)),
+          factor_(std::max(desc["factor"].as_float(1.f), 0.f)),
           diff_factor_(desc["diffuse_factor"].as_float(0.3f)),
           max_age_(desc["max_age"].as_uint(30)) {}
-    VS_HOTFIX_MAKE_RESTORE(RuntimeObject, spatial_, temporal_, open_, history_,
+    VS_HOTFIX_MAKE_RESTORE(RuntimeObject, spatial_, temporal_, open_, factor_, history_,
                            max_age_, diff_factor_, integrator_)
     OC_MAKE_MEMBER_GETTER(open, )
     OC_MAKE_MEMBER_SETTER(integrator)
@@ -175,7 +177,7 @@ public:
     [[nodiscard]] Float3 cur_view_pos(const Bool &is_replace, const Uint &index = dispatch_id()) const noexcept {
         Float3 view_pos;
         $if(is_replace) {
-            view_pos = cur_surface_extends().read(index).view_pos;
+            view_pos = cur_surface_extends().read(index).view_pos.as_vec3();
         }
         $else {
             view_pos = scene().sensor()->device_position();

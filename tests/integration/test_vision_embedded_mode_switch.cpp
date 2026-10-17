@@ -250,26 +250,29 @@ struct VisionEmbeddedModeSwitchTest {
         const auto second = hub.camera_storage().allocate();
         expect(!hub.camera_frame_timing(first), "new camera must not have stale frame timing");
         const auto start = std::chrono::steady_clock::now();
-        hub.publish_camera_frame_timing(first, 24.9, CameraVisionRenderMode::ReSTIR, start);
-        hub.publish_camera_frame_timing(second, 10.5, CameraVisionRenderMode::PathTracing, start);
+        hub.publish_camera_frame_timing(first, 24.9, 6.5, CameraVisionRenderMode::ReSTIR, start);
+        hub.publish_camera_frame_timing(second, 10.5, 0.0, CameraVisionRenderMode::PathTracing, start);
         expect(hub.camera_frame_timing(first)->frame_ms == 0.0,
                "first frame must not invent a total frame interval");
         auto timing = hub.camera_frame_timing(first);
-        expect(timing && timing->render_ms == 24.9 && timing->mode == CameraVisionRenderMode::ReSTIR,
-               "frame timing must retain per-camera render duration and mode");
-        hub.publish_camera_frame_timing(first, 12.3, CameraVisionRenderMode::ReSTIR,
+        expect(timing && timing->render_ms == 24.9 && timing->denoise_ms == 6.5 &&
+                   timing->mode == CameraVisionRenderMode::ReSTIR,
+               "frame timing must retain per-camera render/denoise duration and mode");
+        hub.publish_camera_frame_timing(first, 12.3, 3.1, CameraVisionRenderMode::ReSTIR,
                                        start + std::chrono::milliseconds(33));
         expect(hub.camera_frame_timing(first)->frame_ms == 33.0 &&
                    hub.camera_frame_timing(second)->frame_ms == 0.0,
                "total frame interval must include waits and remain camera-local");
         expect(hub.camera_frame_timing(first)->render_ms == 12.3 &&
-                   hub.camera_frame_timing(second)->render_ms == 10.5,
+                   hub.camera_frame_timing(first)->denoise_ms == 3.1 &&
+                   hub.camera_frame_timing(second)->render_ms == 10.5 &&
+                   hub.camera_frame_timing(second)->denoise_ms == 0.0,
                "publishing a frame must replace only that camera's latest timing");
-        hub.publish_camera_frame_timing(first, 8.0, CameraVisionRenderMode::PathTracing,
+        hub.publish_camera_frame_timing(first, 8.0, 0.0, CameraVisionRenderMode::PathTracing,
                                        start + std::chrono::milliseconds(70));
-        expect(hub.camera_frame_timing(first)->frame_ms == 0.0,
+        expect(hub.camera_frame_timing(first)->frame_ms == 0.0 && hub.camera_frame_timing(first)->denoise_ms == 0.0,
                "render mode change must reset the frame interval baseline");
-        hub.publish_camera_frame_timing(first, 7.0, CameraVisionRenderMode::PathTracing,
+        hub.publish_camera_frame_timing(first, 7.0, 0.0, CameraVisionRenderMode::PathTracing,
                                        start + std::chrono::milliseconds(90));
         expect(hub.camera_frame_timing(first)->frame_ms == 20.0,
                "second frame after mode change must measure the new cadence");
@@ -437,6 +440,41 @@ struct VisionEmbeddedModeSwitchTest {
         hub.camera_storage().deallocate(camera);
         hub.camera_storage().deallocate(other);
     }
+    static void check_relax_settings_api() {
+        auto& hub = SharedDataHub::instance();
+        const auto camera = hub.camera_storage().allocate();
+        const auto other = hub.camera_storage().allocate();
+        Corona::API::set_vision_denoiser("RELAX", camera);
+        Corona::API::set_vision_relax_settings(R"({"diffuse_history":12})", camera);
+        Corona::API::set_vision_denoise(false, camera);
+        auto updates = hub.drain_camera_state_updates();
+        expect(updates.size() == 1 && updates[0].vision_denoiser == CameraVisionDenoiser::ReLAX &&
+                   Corona::API::get_requested_vision_denoiser(camera) == "relax" &&
+                   updates[0].vision_relax_settings == R"({"diffuse_history":12})" &&
+                   Corona::API::get_requested_vision_relax_settings(camera) == R"({"diffuse_history":12})" &&
+                   Corona::API::get_requested_vision_relax_settings(other) == "{}",
+               "RELAX preferences must remain camera-local and persistable while in flight");
+        Corona::API::set_vision_relax_settings(R"({"diffuse_history":20})", camera);
+        hub.acknowledge_camera_vision_relax_settings(camera, updates[0].sequence);
+        expect(Corona::API::get_requested_vision_relax_settings(camera) == R"({"diffuse_history":20})",
+               "older acknowledgements must preserve newer RELAX settings");
+        updates = hub.drain_camera_state_updates();
+        {
+            auto state = hub.camera_storage().acquire_write(camera);
+            state->vision_relax_settings = updates[0].vision_relax_settings;
+        }
+        hub.acknowledge_camera_vision_relax_settings(camera, updates[0].sequence);
+        expect(!hub.requested_camera_vision_relax_settings(camera).has_value() &&
+                   Corona::API::get_requested_vision_relax_settings(camera) == R"({"diffuse_history":20})",
+               "saving after acknowledgement must use the committed camera values");
+        Corona::API::set_vision_relax_settings("{}", camera);
+        hub.enqueue_camera_release({camera});
+        expect(!hub.requested_camera_vision_relax_settings(camera) && hub.drain_camera_state_updates().empty(),
+               "camera release must discard RELAX requests");
+        hub.drain_camera_releases();
+        hub.camera_storage().deallocate(camera);
+        hub.camera_storage().deallocate(other);
+    }
     static void render(vision::Pipeline& pipeline, const char* label, bool lit = true) {
         const auto before = pipeline.frame_index();
         for (int i = 0; i < 3; ++i) {
@@ -526,7 +564,8 @@ struct VisionEmbeddedModeSwitchTest {
             auto* integrator = dynamic_cast<vision::IlluminationIntegrator*>(pipeline.renderer().integrator().get());
             expect(integrator && integrator->impl_type() == algorithm &&
                        integrator->denoiser()->enabled() == enabled &&
-                       integrator->denoiser()->requires_lobe_signals() == (type == CameraVisionDenoiser::ReBLUR),
+                       integrator->denoiser()->requires_lobe_signals() ==
+                           (type == CameraVisionDenoiser::ReBLUR || type == CameraVisionDenoiser::ReLAX),
                    "camera selection must control the actual plugin while preserving the integrator");
         };
         prepare(first_camera, CameraVisionDenoiser::SVGF);
@@ -585,6 +624,48 @@ struct VisionEmbeddedModeSwitchTest {
         expect(pipeline.frame_buffer() == disabled_framebuffer.get() && pipeline.frame_index() == 0,
                "enabling a REBLUR view created while disabled must reuse its lobe kernels with fresh history");
         render(pipeline, "denoiser-camera-401-REBLUR-enabled");
+        prepare(first_camera, CameraVisionDenoiser::ReLAX);
+        render(pipeline, "denoiser-camera-401-RELAX");
+        const auto relax_framebuffer = pipeline.renderer().frame_buffer_sp();
+        const auto default_relax_history = pipeline.frame_index();
+        auto* default_relax = dynamic_cast<vision::IlluminationIntegrator*>(pipeline.renderer().integrator().get())->denoiser();
+        system.prepare_vision_camera_view(system.active_vision_runtime(), first_camera,
+            16, 16, true, false, true, CameraVisionDenoiser::ReLAX, "{}", default_relax->relax_settings_json());
+        expect(pipeline.frame_index() == default_relax_history,
+               "applying unchanged effective RELAX defaults must preserve history even when JSON changes");
+        const std::string relax_parameters = R"({"diffuse_history":12,"specular_history":16,"diffuse_fast_history":4,"specular_fast_history":5,"history_fix_frames":2,"history_fix_stride":8,"history_fix_normal_power":4,"variance_history_threshold":2,"diffuse_prepass":0,"specular_prepass":25,"min_hit_weight":0.5,"atrous_iterations":3,"diffuse_phi":4,"specular_phi":2,"lobe_fraction":0.25,"roughness_fraction":0.5,"specular_variance_boost":1,"specular_lobe_slack":0.125,"color_box_sigma":3,"depth_threshold":0.03125,"luminance_relaxation":0.75,"normal_relaxation":0.5,"roughness_relaxation":0.25,"antilag_acceleration":0.5,"antilag_spatial_sigma":2,"antilag_temporal_sigma":1,"antilag_reset":0.75,"anti_firefly":true,"roughness_stopping":false,"reconstruction":1})";
+        expect(system.prepare_vision_camera_view(system.active_vision_runtime(), first_camera,
+                   16, 16, true, false, true, CameraVisionDenoiser::ReLAX, parameters, relax_parameters),
+               "RELAX parameters must update a live view");
+        expect(pipeline.frame_buffer() == relax_framebuffer.get() && pipeline.frame_index() == 0,
+               "RELAX parameter edits must reset history without recreating the framebuffer");
+        filter = dynamic_cast<vision::IlluminationIntegrator*>(pipeline.renderer().integrator().get())->denoiser();
+        const auto relax_applied = vision::DataWrap::parse(filter->relax_settings_json());
+        expect(filter->impl_type() == "ReLAX" && relax_applied == vision::DataWrap::parse(relax_parameters),
+               "all thirty editor values must reach the actual RELAX filter independently of REBLUR");
+        vision::DenoiserDesc relax_desc{"ReLAX"};
+        for (const auto& [key, value] : relax_applied.items()) relax_desc.set_value(key, value);
+        const auto relax_source = vision::Node::create_shared<vision::Denoiser>(relax_desc);
+        expect(vision::DataWrap::parse(relax_source->relax_settings_json()) == relax_applied,
+               "RELAX scene descriptors must load all exposed parameters");
+        relax_source->set_relax_settings(R"({"diffuse_history":7})");
+        const auto relax_partial = vision::DataWrap::parse(relax_source->relax_settings_json());
+        expect(relax_partial["diffuse_history"] == 7 && relax_partial["specular_history"] == 16 &&
+                   relax_partial["reconstruction"] == 1 && relax_partial["roughness_stopping"] == false,
+               "partial RELAX camera overrides must retain scene values");
+        relax_source->set_relax_settings("{}");
+        expect(vision::DataWrap::parse(relax_source->relax_settings_json()) == relax_applied,
+               "clearing RELAX overrides must restore source settings");
+        render(pipeline, "RELAX-edited-parameters");
+        const auto relax_history = pipeline.frame_index();
+        system.prepare_vision_camera_view(system.active_vision_runtime(), first_camera,
+            16, 16, true, false, true, CameraVisionDenoiser::ReLAX, parameters,
+            vision::DataWrap::parse(relax_parameters).dump(2));
+        expect(pipeline.frame_index() == relax_history,
+               "unchanged RELAX parameters must preserve temporal history");
+        prepare(second_camera, CameraVisionDenoiser::SVGF);
+        expect(pipeline.frame_buffer() == other_framebuffer.get() && pipeline.frame_index() == other_history,
+               "RELAX edits must preserve the other camera's history");
         prepare(first_camera, CameraVisionDenoiser::Scene);
         render(pipeline, "denoiser-camera-401-scene-default");
         pipeline.activate_view_context(0);
@@ -1435,6 +1516,7 @@ int main(int argc, char** argv) {
         Corona::Systems::VisionEmbeddedModeSwitchTest::check_stable_planes_api();
         Corona::Systems::VisionEmbeddedModeSwitchTest::check_denoiser_api();
         Corona::Systems::VisionEmbeddedModeSwitchTest::check_reblur_settings_api();
+        Corona::Systems::VisionEmbeddedModeSwitchTest::check_relax_settings_api();
         Corona::Systems::VisionEmbeddedModeSwitchTest::check_frame_timing();
         if (argc == 2 && std::string(argv[1]) == "--scene-asset-reuse") {
             Corona::Systems::VisionEmbeddedModeSwitchTest::check_scene_asset_reuse();

@@ -12,7 +12,28 @@
 namespace vision {
 using namespace ocarina;
 
+double Integrator::cur_denoise_time() const noexcept { return denoise_timing_->elapsed_ms; }
+
+void Integrator::reset_denoise_timing() const noexcept {
+    // Queued callbacks own their sample even if this integrator is invalidated.
+    denoise_timing_ = make_shared<DenoiseTiming>();
+}
+
+void Integrator::begin_denoise_timing(Stream &stream) const noexcept {
+    stream << [timing = denoise_timing_] {
+        timing->started_at = std::chrono::steady_clock::now();
+    };
+}
+
+void Integrator::end_denoise_timing(Stream &stream) const noexcept {
+    stream << [timing = denoise_timing_] {
+        timing->elapsed_ms += std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - timing->started_at).count();
+    };
+}
+
 void Integrator::invalidation() const noexcept {
+    reset_denoise_timing();
     cur_stage_profile_ = {};
     frame_index_ = 0u;
     render_time_ = 0;
@@ -122,9 +143,9 @@ void IlluminationIntegrator::compile_path_tracing() noexcept {
         param.indirect.write(dispatch_id(), make_RadType4(Ld_specular, RadType(1.f)));
         param.direct.write(dispatch_id(), make_RadType4(make_float4(L_diffuse, RadType(1.f))));
         if (lobe_signals) {
-            frame_buffer().reblur_diffuse().write(dispatch_id(), make_float4(L_diffuse - bypass, hit_distance.x));
-            frame_buffer().reblur_specular().write(dispatch_id(), make_float4(Ld_specular, hit_distance.y));
-            frame_buffer().reblur_bypass().write(dispatch_id(), make_float4(bypass, 0.f));
+            frame_buffer().denoiser_diffuse().write(dispatch_id(), make_float4(L_diffuse - bypass, hit_distance.x));
+            frame_buffer().denoiser_specular().write(dispatch_id(), make_float4(Ld_specular, hit_distance.y));
+            frame_buffer().denoiser_bypass().write(dispatch_id(), make_float4(bypass, 0.f));
         }
     };
     path_tracing_ = device().compile(kernel, "path_tracing");
@@ -443,7 +464,7 @@ Float3 IlluminationIntegrator::Li(RayState rs, Float scatter_pdf, const Uint &ma
             };
         } else {
             $for(&bounce, 1u) {
-                // This ray already scattered at the primary surface. REBLUR's
+                // This ray already scattered at the primary surface. The explicit denoiser input's
                 // lobe ownership and hit distance must use that first segment.
                 if (hc.lobe_hitdist) mis_bsdf(continuation_depth, false);
                 else mis_bsdf(bounce, false);

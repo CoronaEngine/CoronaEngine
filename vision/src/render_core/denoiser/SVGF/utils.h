@@ -52,9 +52,9 @@ template<typename Param>
         if (previous) {
             auto old = param.prev_stable_planes.read(index);
             surface.hit = old.surface.hit;
-            surface.virtual_position = old.surface.virtual_position;
-            surface.virtual_geometric_normal = old.surface.virtual_geometric_normal;
-            surface.depth_position = old.depth_position;
+            surface.virtual_position.set(old.surface.virtual_position.as_vec3());
+            surface.virtual_geometric_normal.set(old.surface.virtual_geometric_normal.as_vec3());
+            surface.depth_position.set(old.depth_position.as_vec3());
             surface.approximate = old.surface.approximate;
             surface.stable_branch = old.surface.stable_branch;
             surface.is_replaced = true;
@@ -88,14 +88,14 @@ struct StableGeometryGuide {
             branch = ocarina::select(surface.stable_branch == InvalidUI32, 0u, surface.stable_branch);
             replaced = surface.is_replaced && surface.stable_branch != InvalidUI32;
             approximate = surface.approximate != 0u;
-            depth_position = surface.depth_position;
+            depth_position = surface.depth_position.as_vec3();
             $if(param.layered != 0u) {
                 auto read_identity = [&](const auto &plane) {
                     layered = true;
                     valid = plane.valid != 0u && plane.surface.hit->is_hit() && plane.surface.hit.inst_id != InvalidUI32;
                     sequence = plane.branch_sequence; identity = plane.instance_hash;
                     depth = plane.depth; material = plane.material_id;
-                    depth_position = plane.depth_position;
+                    depth_position = plane.depth_position.as_vec3();
                     replaced = true;
                 };
                 if (previous) read_identity(param.prev_stable_planes.read(index));
@@ -103,8 +103,8 @@ struct StableGeometryGuide {
             };
             $if(replaced) {
                 hit = surface.hit;
-                position = surface.virtual_position;
-                normal = surface.virtual_geometric_normal;
+                position = surface.virtual_position.as_vec3();
+                normal = surface.virtual_geometric_normal.as_vec3();
             };
             $if(!valid) { hit.inst_id = InvalidUI32; };
         };
@@ -161,7 +161,7 @@ template<typename Param>
 [[nodiscard]] inline Float3 stable_normal(const Param &param, Uint index, Float3 normal) {
     $if(param.use_stable_planes != 0u) {
         auto surface = load_stable_surface(param, index);
-        $if(param.layered != 0u || (surface.is_replaced && surface.stable_branch != InvalidUI32)) { normal = surface.virtual_normal; };
+        $if(param.layered != 0u || (surface.is_replaced && surface.stable_branch != InvalidUI32)) { normal = surface.virtual_normal.as_vec3(); };
     };
     return normal;
 }
@@ -170,7 +170,7 @@ template<typename Param>
 [[nodiscard]] inline Float3 stable_albedo(const Param &param, Uint index, Float3 albedo) {
     $if(param.use_stable_planes != 0u) {
         auto surface = load_stable_surface(param, index);
-        $if(param.layered != 0u || (surface.is_replaced && surface.stable_branch != InvalidUI32)) { albedo = surface.denoiser_albedo; };
+        $if(param.layered != 0u || (surface.is_replaced && surface.stable_branch != InvalidUI32)) { albedo = surface.denoiser_albedo.as_vec3(); };
     };
     return albedo;
 }
@@ -201,9 +201,9 @@ struct CoverageGeometryGuide : StableGeometryGuide {
                 $if(!ambiguous && plane.valid != 0u) {
                     hit = plane.surface.hit;
                     branch = plane.surface.stable_branch;
-                    position = plane.surface.virtual_position;
-                    normal = plane.surface.virtual_geometric_normal;
-                    depth_position = plane.depth_position;
+                    position = plane.surface.virtual_position.as_vec3();
+                    normal = plane.surface.virtual_geometric_normal.as_vec3();
+                    depth_position = plane.depth_position.as_vec3();
                     replaced = true;
                     motion = plane.motion;
                 };
@@ -227,10 +227,10 @@ template<typename Param>
                 edge |= a.branch_sequence != b.branch_sequence || a.instance_hash != b.instance_hash ||
                     a.depth != b.depth || a.material_id != b.material_id || a.surface.hit.inst_id != b.surface.hit.inst_id;
                 $if(a.surface.hit->is_hit() && b.surface.hit->is_hit()) {
-                    Float depth = max(length(a.depth_position - param.camera_pos.as_vec3()), 0.1f);
-                    edge |= dot(a.surface.virtual_geometric_normal, b.surface.virtual_geometric_normal) < SVGFConfig::Resolve::kNormalThreshold ||
-                        abs(dot(b.surface.virtual_position - a.surface.virtual_position, a.surface.virtual_geometric_normal)) > SVGFConfig::Resolve::kPlaneThreshold * depth ||
-                        abs(length(b.depth_position - param.camera_pos.as_vec3()) - depth) > SVGFConfig::Temporal::kDepthThreshold * depth;
+                    Float depth = max(length(a.depth_position.as_vec3() - param.camera_pos.as_vec3()), 0.1f);
+                    edge |= dot(a.surface.virtual_geometric_normal.as_vec3(), b.surface.virtual_geometric_normal.as_vec3()) < SVGFConfig::Resolve::kNormalThreshold ||
+                        abs(dot(b.surface.virtual_position.as_vec3() - a.surface.virtual_position.as_vec3(), a.surface.virtual_geometric_normal.as_vec3())) > SVGFConfig::Resolve::kPlaneThreshold * depth ||
+                        abs(length(b.depth_position.as_vec3() - param.camera_pos.as_vec3()) - depth) > SVGFConfig::Temporal::kDepthThreshold * depth;
                 };
             };
         }

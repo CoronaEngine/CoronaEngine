@@ -22,6 +22,22 @@ class VisionDenoiserPreferencesTests(unittest.TestCase):
                              {"max_history": 12, "reconstruction": 2, "anti_firefly": False})
             self.assertEqual(cameras[1].get("vision_reblur_settings"), {})
 
+    def test_archive_retains_independent_relax_parameters(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            scene = Path(temp_dir) / "scene.ini"
+            scene.write_text(
+                '[format]\ntype = corona_scene_folder\nversion = 1\n'
+                '[scene]\nname = Relax\n[camera]\ncount = 2\n'
+                'camera0.vision_denoiser = ReLAX\n'
+                'camera0.vision_relax_settings = {"diffuse_history":12,"atrous_iterations":3,"anti_firefly":true}\n'
+                'camera0.vision_reblur_settings = {"max_history":20}\n', encoding="utf-8")
+            cameras = parse_archive(str(scene))["scene"]["cameras"]
+            self.assertEqual(cameras[0]["vision_denoiser"], "relax")
+            self.assertEqual(cameras[0].get("vision_relax_settings"),
+                             {"diffuse_history":12,"atrous_iterations":3,"anti_firefly":True})
+            self.assertEqual(cameras[0]["vision_reblur_settings"], {"max_history":20})
+            self.assertEqual(cameras[1].get("vision_relax_settings"), {})
+
     def test_archive_preserves_camera_types_and_inherits_legacy_scene(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             scene = Path(temp_dir) / "scene.ini"
@@ -38,7 +54,7 @@ class VisionDenoiserPreferencesTests(unittest.TestCase):
             self.assertIs(cameras[1]["vision_denoise"], False)
 
     def test_facade_forwards_each_type_and_pending_response(self):
-        for denoiser in ("scene", "svgf", "reblur"):
+        for denoiser in ("scene", "svgf", "reblur", "relax"):
             with self.subTest(denoiser=denoiser):
                 accepted = {"status": "success", "type": denoiser, "pending": True}
                 with patch("api.editor_api._invoke_manifest_cpp_api", return_value=accepted) as invoke:

@@ -6,7 +6,7 @@ import { createSSRApp } from 'vue';
 import { parse } from 'vue/compiler-sfc';
 import { compile } from '@vue/compiler-ssr';
 import { renderToString } from '@vue/server-renderer';
-import { visionRenderModes } from '../../src/utils/visionRenderModes.js';
+import { visionRenderModes, visionDenoisers } from '../../src/utils/visionRenderModes.js';
 
 const source = fs.readFileSync(new URL('../../src/views/layout/MainPage.vue', import.meta.url), 'utf8');
 const { descriptor } = parse(source);
@@ -33,7 +33,7 @@ async function renderMain(settings = {}) {
       mainVisionAccumulationError: '', mainVisionDenoiseError: '',
       mainVisionStablePlanes: true, mainVisionStablePlanesBusy: false, mainVisionStablePlanesError: '',
       mainVisionDenoiser: 'reblur', mainVisionDenoiserBusy: false, mainVisionDenoiserError: '',
-      visionDenoisers: [{ value: 'scene', label: '场景设置' }, { value: 'svgf', label: 'SVGF' }, { value: 'reblur', label: 'REBLUR' }],
+      visionDenoisers,
       selectMainVisionDenoiser: noop,
       toggleMainVisionStablePlanes: noop,
       mainRenderModeOptions: [{ value: 'native', backend: 'native', label: 'Native' }, ...visionRenderModes],
@@ -41,7 +41,7 @@ async function renderMain(settings = {}) {
       ...settings,
     }),
   });
-  for (const name of ['FrameTimingOverlay', 'CabbageReviewAssistant', 'CabbageChatPanel', 'CabbageGuidanceOverlay', 'ReblurSettings']) {
+  for (const name of ['FrameTimingOverlay', 'CabbageReviewAssistant', 'CabbageChatPanel', 'CabbageGuidanceOverlay', 'ReblurSettings', 'RelaxSettings']) {
     app.component(name, { render: () => null });
   }
   return renderToString(app);
@@ -94,4 +94,10 @@ test('Stable Plane is visible and checked, and only enabled for an available ReS
   ]) {
     assert.match(await renderMain(settings), /<input[^>]*aria-label="Stable Plane"[^>]*checked[^>]*disabled/);
   }
+});
+
+test('RELAX appears as an independent denoiser in the viewport menu', async () => {
+  const html = await renderMain({ activeMenu: 'denoiser', mainVisionDenoiser: 'relax' });
+  assert.match(html, /<button[^>]*role="menuitemradio"[^>]*aria-checked="true"[^>]*>\s*RELAX/);
+  assert.doesNotMatch(html, /<input[^>]*aria-label="降噪"[^>]*checked/);
 });

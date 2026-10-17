@@ -344,12 +344,13 @@ void cbox_lf_scene_supports_pt_and_ssat_mode_import() {
 }  // namespace
 
 int main() {
-    for (auto mode : {CameraVisionRenderMode::PathTracing, CameraVisionRenderMode::ReSTIR}) {
+    for (const auto type : {"ReBLUR", "ReLAX"})
+    for (auto mode : {CameraVisionRenderMode::PathTracing, CameraVisionRenderMode::ReSTIR, CameraVisionRenderMode::SVGF}) {
         auto data = make_base_scene();
-        data["render"]["integrator"]["param"]["denoiser"]["type"] = "ReBLUR";
+        data["render"]["integrator"]["param"]["denoiser"]["type"] = type;
         Corona::Systems::Vision::configure_vision_scene_for_mode(data, mode);
-        expect(data["render"]["integrator"]["param"]["denoiser"]["type"] == "ReBLUR",
-               "explicit REBLUR selection must survive integrator mode configuration");
+        expect(data["render"]["integrator"]["param"]["denoiser"]["type"] == type,
+               "explicit denoiser selection must survive render-mode configuration");
     }
     for (const auto mode : {CameraVisionRenderMode::PathTracing,
                             CameraVisionRenderMode::ReSTIR,

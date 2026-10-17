@@ -398,6 +398,8 @@
         </div>
         <ReblurSettings :scene-id="currentMainSceneId()" :camera-id="currentMainCameraId() || ''"
           :enabled="mainRenderBackend === 'vision' && mainVisionRenderMode !== 'ssat' && mainVisionDenoiser === 'reblur' && !mainVisionDenoiserBusy" />
+        <RelaxSettings :scene-id="currentMainSceneId()" :camera-id="currentMainCameraId() || ''"
+          :enabled="mainRenderBackend === 'vision' && mainVisionRenderMode !== 'ssat' && mainVisionDenoiser === 'relax' && !mainVisionDenoiserBusy" />
         <div class="scene-quick-render-options">
           <label title="累积 PT / ReSTIR 样本">
             <input
@@ -660,6 +662,7 @@
 <script setup>
 import FrameTimingOverlay from '@/components/ui/FrameTimingOverlay.vue';
 import ReblurSettings from '@/components/ui/ReblurSettings.vue';
+import RelaxSettings from '@/components/ui/RelaxSettings.vue';
 import { computed, ref, onMounted, onUnmounted, reactive, watch, nextTick } from 'vue';
 import { useRouter } from 'vue-router';
 import { useI18n } from 'vue-i18n';

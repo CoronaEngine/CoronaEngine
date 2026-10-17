@@ -135,13 +135,13 @@ void check_glass_depth_guides(vision::Pipeline &pipeline) {
         camera->load_data();
         auto c = current.read(136u);
         auto p = previous.read(136u);
-        Float expected = camera->linear_depth(c.depth_position);
+        Float expected = camera->linear_depth(c.depth_position.as_vec3());
         Bool depth = c.surface.approximate != 0u && abs(expected - c.surface->depth()) < 1e-5f &&
-            length(c.surface.depth_position - c.depth_position) < 1e-6f;
+            length(c.surface.depth_position.as_vec3() - c.depth_position.as_vec3()) < 1e-6f;
         Bool di_valid = ReSTIRDI::is_temporal_valid(c.surface, p, di, nullptr);
         Bool gi_valid = ReSTIRGI::is_temporal_valid(c.surface, p, gi, nullptr);
-        Float2 expected_motion = camera->raster_coord(c.surface.virtual_position).xy() -
-            camera->prev_raster_coord(c.surface.virtual_position).xy();
+        Float2 expected_motion = camera->raster_coord(c.surface.virtual_position.as_vec3()).xy() -
+            camera->prev_raster_coord(c.surface.virtual_position.as_vec3()).xy();
         Bool motion = length(c.motion - expected_motion) < 1e-5f &&
             length(fb.motion_vectors().read(136u) - c.motion) < 1e-5f;
         output.write(0u, make_float4(cast<float>(depth), cast<float>(di_valid), cast<float>(gi_valid), cast<float>(motion)));
@@ -195,7 +195,7 @@ void check_glass_children_disappear(vision::Pipeline& pipeline) {
             const auto &p = planes[i];
             if (p.branch_sequence != 1u || p.depth != 0u || p.instance_hash != 0u ||
                 p.material_id != InvalidUI32 || p.reservoir_eligible != 0u ||
-                p.surface.hit.inst_id != InvalidUI32 || any(p.extension.throughput != make_float3(1.f)))
+                p.surface.hit.inst_id != InvalidUI32 || p.extension.throughput != array_float3{1.f, 1.f, 1.f})
                 throw std::runtime_error("inactive children must retain complete default records, not stale transport state");
         }
     }

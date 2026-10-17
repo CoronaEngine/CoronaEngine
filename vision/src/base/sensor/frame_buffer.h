@@ -275,17 +275,17 @@ public:                                                                     \
     VS_MAKE_BUFFER(RegistrableManaged<RadType4>, direct_lighting, 1)
     VS_MAKE_BUFFER(RegistrableManaged<RadType4>, indirect_lighting, 1)
     // Allocated only for a denoiser that explicitly requests lobe signals.
-    VS_MAKE_BUFFER(RegistrableBuffer<float4>, reblur_diffuse, 3)
-    VS_MAKE_BUFFER(RegistrableBuffer<float4>, reblur_specular, 3)
-    VS_MAKE_BUFFER(RegistrableBuffer<float4>, reblur_bypass, 3)
-    VS_MAKE_BUFFER(RegistrableBuffer<float4>, reblur_di_specular, 1)
-    VS_MAKE_BUFFER(RegistrableBuffer<float4>, reblur_gi_specular, 1)
-    VS_MAKE_BUFFER(RegistrableBuffer<float4>, reblur_di_bypass, 1)
-    void prepare_reblur_signals() noexcept {
-        prepare_reblur_diffuse(); prepare_reblur_specular(); prepare_reblur_bypass();
-        prepare_reblur_di_specular(); prepare_reblur_gi_specular(); prepare_reblur_di_bypass();
+    VS_MAKE_BUFFER(RegistrableBuffer<float4>, denoiser_diffuse, 3)
+    VS_MAKE_BUFFER(RegistrableBuffer<float4>, denoiser_specular, 3)
+    VS_MAKE_BUFFER(RegistrableBuffer<float4>, denoiser_bypass, 3)
+    VS_MAKE_BUFFER(RegistrableBuffer<float4>, denoiser_di_specular, 1)
+    VS_MAKE_BUFFER(RegistrableBuffer<float4>, denoiser_gi_specular, 1)
+    VS_MAKE_BUFFER(RegistrableBuffer<float4>, denoiser_di_bypass, 1)
+    void prepare_denoiser_signals() noexcept {
+        prepare_denoiser_diffuse(); prepare_denoiser_specular(); prepare_denoiser_bypass();
+        prepare_denoiser_di_specular(); prepare_denoiser_gi_specular(); prepare_denoiser_di_bypass();
     }
-    [[nodiscard]] BufferView<float4> reblur_layer_view(const RegistrableBuffer<float4> &buffer, uint layer) const noexcept {
+    [[nodiscard]] BufferView<float4> denoiser_layer_view(const RegistrableBuffer<float4> &buffer, uint layer) const noexcept {
         auto view = buffer.view().subview(layer * frame_buffer_size(), frame_buffer_size());
         return {view.handle() + view.offset_in_byte(), view.size()};
     }
@@ -313,7 +313,7 @@ public:
     VS_HOTFIX_MAKE_RESTORE(Node, cur_view_, surfaces_, surface_exts_, hit_bsdfs_,
                            stable_planes_, stable_plane_history_, stable_plane_buffers_enabled_, stable_direct_, stable_indirect_, stable_radiance_, stable_dominant_,
                            motion_vectors_, hit_buffer_, screen_buffers_,
-                           reblur_diffuse_, reblur_specular_, reblur_bypass_, reblur_di_specular_, reblur_gi_specular_, reblur_di_bypass_,
+                           denoiser_diffuse_, denoiser_specular_, denoiser_bypass_, denoiser_di_specular_, denoiser_gi_specular_, denoiser_di_bypass_,
                            view_texture_, visualizer_, window_buffer_, rt_buffer_,
                            tone_mapper_, upsampler_,
                            /// shaders

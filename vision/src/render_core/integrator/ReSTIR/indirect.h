@@ -72,7 +72,7 @@ public:
                            initial_samples_, temporal_pass_, spatial_shading_)
     OC_MAKE_MEMBER_GETTER(open, )
     OC_MAKE_MEMBER_GETTER(radiance, &)
-    [[nodiscard]] float factor() const noexcept { return static_cast<float>(open()); }
+    [[nodiscard]] float factor() const noexcept { return open() ? factor_ : 0.f; }
     void prepare() noexcept;
     bool render_UI(Widgets *widgets) noexcept override;
     void render_sub_UI(Widgets *widgets) noexcept override;
@@ -122,8 +122,8 @@ public:
                                                 GISampleVar *sample) noexcept {
         Bool cond = sample ? sample->age < param.max_age : true;
         // Compare both primary-surface depths in the current camera space.
-        Float3 prev_position = ocarina::select(prev_surface.is_replaced && prev_surface.stable_branch != InvalidUI32, prev_surface.virtual_position, prev_surface->position());
-        prev_position = ocarina::select(prev_surface.approximate != 0u, prev_surface.depth_position, prev_position);
+        Float3 prev_position = ocarina::select(prev_surface.is_replaced && prev_surface.stable_branch != InvalidUI32, prev_surface.virtual_position.as_vec3(), prev_surface->position());
+        prev_position = ocarina::select(prev_surface.approximate != 0u, prev_surface.depth_position.as_vec3(), prev_position);
         Float prev_depth = scene().sensor()->linear_depth(prev_position);
         return cond && vision::is_valid_neighbor(cur_surface, prev_surface,
                                                  param.t_dot, param.t_depth,

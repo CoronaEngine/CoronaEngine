@@ -42,6 +42,32 @@ if(CORONA_BUILD_VISION)
         WORKING_DIRECTORY "$<TARGET_FILE_DIR:vision-material-principled_bsdf>"
         RUN_SERIAL TRUE TIMEOUT 300)
 
+    add_test(NAME VisionRelaxEvaluationTools
+        COMMAND ${Python_EXECUTABLE} ${CMAKE_SOURCE_DIR}/vision/src/tests/test_relax_eval.py)
+    set_tests_properties(VisionRelaxEvaluationTools PROPERTIES TIMEOUT 30)
+    add_executable(corona_vision_relax_scene_tests test_vision_relax_producers.cpp)
+    target_include_directories(corona_vision_relax_scene_tests PRIVATE ${CMAKE_SOURCE_DIR}/vision/src)
+    target_link_libraries(corona_vision_relax_scene_tests PRIVATE corona::engine vision-all_libs vision-relax-filter)
+    add_test(NAME VisionRelaxPT COMMAND corona_vision_relax_scene_tests pt)
+    add_test(NAME VisionRelaxReSTIR COMMAND corona_vision_relax_scene_tests restir)
+    add_test(NAME VisionRelaxLifecycle COMMAND corona_vision_relax_scene_tests lifecycle)
+    set_tests_properties(VisionRelaxPT VisionRelaxReSTIR VisionRelaxLifecycle PROPERTIES
+        WORKING_DIRECTORY "$<TARGET_FILE_DIR:vision-material-principled_bsdf>"
+        RUN_SERIAL TRUE TIMEOUT 300)
+
+    add_executable(corona_vision_relax_tests test_vision_relax.cpp test_vision_relax_passes.cpp)
+    target_include_directories(corona_vision_relax_tests PRIVATE ${CMAKE_SOURCE_DIR}/vision/src)
+    target_link_libraries(corona_vision_relax_tests PRIVATE vision-relax-filter)
+    add_test(NAME VisionRelaxHelpers COMMAND corona_vision_relax_tests helpers)
+    add_test(NAME VisionRelaxPrepass COMMAND corona_vision_relax_tests prepass)
+    add_test(NAME VisionRelaxTemporal COMMAND corona_vision_relax_tests temporal)
+    add_test(NAME VisionRelaxHistory COMMAND corona_vision_relax_tests history)
+    add_test(NAME VisionRelaxAtrous COMMAND corona_vision_relax_tests atrous)
+    add_test(NAME VisionRelaxLayerHistory COMMAND corona_vision_relax_tests layers)
+    set_tests_properties(VisionRelaxHelpers VisionRelaxPrepass VisionRelaxTemporal VisionRelaxHistory VisionRelaxAtrous VisionRelaxLayerHistory PROPERTIES
+        WORKING_DIRECTORY "$<TARGET_FILE_DIR:ocarina-backend-cuda>"
+        RUN_SERIAL TRUE TIMEOUT 120)
+
     add_executable(corona_vision_shader_binding_tests
         test_vision_shader_bindings.cpp test_vision_shader_comments.cpp)
     target_link_libraries(corona_vision_shader_binding_tests PRIVATE ocarina-native ocarina-include)

@@ -1037,6 +1037,7 @@ std::vector<std::string> build_camera_section_lines(const NativeEditorScene& sce
             lines.push_back(prefix + ".vision_denoise = " + format_bool(camera.engine_camera->get_requested_vision_denoise()));
             lines.push_back(prefix + ".vision_denoiser = " + camera.engine_camera->get_requested_vision_denoiser());
             lines.push_back(prefix + ".vision_reblur_settings = " + camera.engine_camera->get_requested_vision_reblur_settings());
+            lines.push_back(prefix + ".vision_relax_settings = " + camera.engine_camera->get_requested_vision_relax_settings());
             lines.push_back(prefix + ".vision_accumulation = " + format_bool(camera.engine_camera->get_requested_vision_accumulation()));
             lines.push_back(prefix + ".vision_stable_planes = " + format_bool(camera.engine_camera->get_requested_vision_stable_planes()));
         }
@@ -1821,6 +1822,7 @@ NativeEditorCamera make_native_camera(NativeEditorScene& scene,
     item.engine_camera->set_vision_render_mode(vision_mode);
     item.engine_camera->set_vision_denoiser(section_value("vision_denoiser", "scene"));
     item.engine_camera->set_vision_reblur_settings(section_value("vision_reblur_settings", "{}"));
+    item.engine_camera->set_vision_relax_settings(section_value("vision_relax_settings", "{}"));
     item.engine_camera->set_vision_denoise(
         parse_bool(section_value("vision_denoise", ""), legacy_svgf_mode(vision_mode)));
     item.engine_camera->set_vision_accumulation(
@@ -2337,6 +2339,7 @@ NativeEditorCamera materialize_camera_snapshot(NativeEditorScene& scene,
     item.engine_camera->set_vision_render_mode(vision_mode);
     item.engine_camera->set_vision_denoiser(camera_data.value("vision_denoiser", std::string{"scene"}));
     item.engine_camera->set_vision_reblur_settings(camera_data.value("vision_reblur_settings", nlohmann::json::object()).dump());
+    item.engine_camera->set_vision_relax_settings(camera_data.value("vision_relax_settings", nlohmann::json::object()).dump());
     item.engine_camera->set_vision_denoise(
         json_bool_value(camera_data, "vision_denoise", legacy_svgf_mode(vision_mode)));
     item.engine_camera->set_vision_accumulation(
@@ -2687,6 +2690,9 @@ nlohmann::json camera_to_json(const NativeEditorCamera& camera) {
     item["vision_denoiser"] = camera.engine_camera ? camera.engine_camera->get_vision_denoiser() : "scene";
     item["vision_reblur_settings"] = camera.engine_camera
         ? nlohmann::json::parse(camera.engine_camera->get_requested_vision_reblur_settings(), nullptr, false)
+        : nlohmann::json::object();
+    item["vision_relax_settings"] = camera.engine_camera
+        ? nlohmann::json::parse(camera.engine_camera->get_requested_vision_relax_settings(), nullptr, false)
         : nlohmann::json::object();
     item["vision_accumulation"] = camera.engine_camera ? camera.engine_camera->get_vision_accumulation() : false;
     item["vision_stable_planes"] = camera.engine_camera ? camera.engine_camera->get_vision_stable_planes() : true;
@@ -3223,6 +3229,7 @@ NativeEditorCamera* ensure_native_editor_camera(NativeEditorScene& scene,
     item.engine_camera->set_vision_render_mode(vision_mode.empty() ? "path_tracing" : vision_mode);
     item.engine_camera->set_vision_denoiser(camera_data.value("vision_denoiser", std::string{"scene"}));
     item.engine_camera->set_vision_reblur_settings(camera_data.value("vision_reblur_settings", nlohmann::json::object()).dump());
+    item.engine_camera->set_vision_relax_settings(camera_data.value("vision_relax_settings", nlohmann::json::object()).dump());
     item.engine_camera->set_vision_denoise(
         json_bool_value(camera_data, "vision_denoise", legacy_svgf_mode(vision_mode)));
     item.engine_camera->set_vision_accumulation(
@@ -9228,7 +9235,7 @@ void register_scene_tools_api_handlers(NativeApiRegistry& registry) {
             auto* camera = find_native_camera(*scene, arg_string(request.args, 1));
             if (!camera || !camera->engine_camera) return native_failure("Camera not found", 2);
             const auto type = to_lower_ascii(arg_string(request.args, 2, "scene"));
-            if (type != "scene" && type != "svgf" && type != "reblur") {
+            if (type != "scene" && type != "svgf" && type != "reblur" && type != "relax") {
                 return native_failure("Unsupported denoiser: " + type, 2);
             }
             camera->engine_camera->set_vision_denoiser(type);
@@ -9279,6 +9286,72 @@ void register_scene_tools_api_handlers(NativeApiRegistry& registry) {
             camera->engine_camera->set_vision_reblur_settings(settings.dump());
             return native_success({{"status", "success"}, {"pending", true}, {"settings", settings}});
         }},
+        {"get_relax_settings", [](const NativeRequest& request, const NativeContext&) {
+            auto* scene = resolve_native_editor_scene_request(ensure_native_editor_scene(), normalize_route(arg_string(request.args, 0)));
+            auto* camera = find_native_camera(*scene, arg_string(request.args, 1));
+            if (!camera || !camera->engine_camera) return native_failure("Camera not found", 2);
+            auto settings = nlohmann::json::parse(camera->engine_camera->get_effective_vision_relax_settings(), nullptr, false);
+            if (!settings.is_object()) settings = nlohmann::json::object();
+            const auto overrides = nlohmann::json::parse(camera->engine_camera->get_requested_vision_relax_settings(), nullptr, false);
+            if (overrides.is_object()) settings.update(overrides);
+            return native_success({{"settings", std::move(settings)}});
+        }},
+        {"set_relax_settings", [](const NativeRequest& request, const NativeContext&) {
+            auto* scene = resolve_native_editor_scene_request(ensure_native_editor_scene(), normalize_route(arg_string(request.args, 0)));
+            auto* camera = find_native_camera(*scene, arg_string(request.args, 1));
+            if (!camera || !camera->engine_camera) return native_failure("Camera not found", 2);
+            if (request.args.size() < 3 || !request.args[2].is_object()) return native_failure("Expected RELAX settings object", 2);
+            const auto& settings = request.args[2];
+            static const std::map<std::string, std::pair<double, double>> ranges{
+                {"diffuse_history", {1, 255}},
+                {"specular_history", {1, 255}},
+                {"diffuse_fast_history", {0, 255}},
+                {"specular_fast_history", {0, 255}},
+                {"history_fix_frames", {0, 255}},
+                {"history_fix_stride", {0, 100}},
+                {"history_fix_normal_power", {0, 128}},
+                {"variance_history_threshold", {0, 255}},
+                {"diffuse_prepass", {0, 100}},
+                {"specular_prepass", {0, 100}},
+                {"min_hit_weight", {0, 1}},
+                {"atrous_iterations", {2, 8}},
+                {"diffuse_phi", {0.01, 100}},
+                {"specular_phi", {0.01, 100}},
+                {"lobe_fraction", {0, 1}},
+                {"roughness_fraction", {0, 1}},
+                {"specular_variance_boost", {0, 10}},
+                {"specular_lobe_slack", {0, 1}},
+                {"color_box_sigma", {0, 10}},
+                {"depth_threshold", {0, 0.1}},
+                {"luminance_relaxation", {0, 1}},
+                {"normal_relaxation", {0, 1}},
+                {"roughness_relaxation", {0, 1}},
+                {"antilag_acceleration", {0, 1}},
+                {"antilag_spatial_sigma", {0, 10}},
+                {"antilag_temporal_sigma", {0, 10}},
+                {"antilag_reset", {0, 1}},
+                {"reconstruction", {0, 2}}};
+            for (auto it = settings.begin(); it != settings.end(); ++it) {
+                if (it.key() == "anti_firefly" || it.key() == "roughness_stopping") {
+                    if (!it->is_boolean()) return native_failure("RELAX flags must be boolean", 2);
+                    continue;
+                }
+                const auto range = ranges.find(it.key());
+                if (range == ranges.end() || !it->is_number()) return native_failure("Invalid RELAX parameter: " + it.key(), 2);
+                const double value = it->get<double>();
+                if (!std::isfinite(value) || value < range->second.first || value > range->second.second ||
+                    ((it.key() == "reconstruction" || it.key() == "atrous_iterations") && value != std::floor(value)))
+                    return native_failure("RELAX parameter out of range: " + it.key(), 2);
+            }
+            for (const auto channel : {"diffuse", "specular"}) {
+                const auto history = std::string(channel) + "_history";
+                const auto fast = std::string(channel) + "_fast_history";
+                if (settings.contains(history) && settings.contains(fast) && settings[fast] > settings[history])
+                    return native_failure("Fast history must not exceed maximum history", 2);
+            }
+            camera->engine_camera->set_vision_relax_settings(settings.dump());
+            return native_success({{"status", "success"}, {"pending", true}, {"settings", settings}});
+        }},
         {"set_vision_denoise", [](const NativeRequest& request, const NativeContext&) {
             auto* scene = ensure_native_editor_scene();
             const auto scene_route = normalize_route(arg_string(request.args, 0));
@@ -9312,11 +9385,12 @@ void register_scene_tools_api_handlers(NativeApiRegistry& registry) {
             const auto device = hub.camera_storage().try_acquire_read(handle);
             if (!timing || !device || device->render_backend != CameraRenderBackend::Vision ||
                 device->vision_render_mode != timing->mode) {
-                return native_success({{"render_ms", nullptr}, {"frame_ms", nullptr}, {"age_ms", nullptr}});
+                return native_success({{"render_ms", nullptr}, {"denoise_ms", nullptr}, {"frame_ms", nullptr}, {"age_ms", nullptr}});
             }
             const double age_ms = std::chrono::duration<double, std::milli>(
                 std::chrono::steady_clock::now() - timing->recorded_at).count();
-            return native_success({{"render_ms", timing->render_ms}, {"frame_ms", timing->frame_ms}, {"age_ms", age_ms}});
+            return native_success({{"render_ms", timing->render_ms}, {"denoise_ms", timing->denoise_ms},
+                                   {"frame_ms", timing->frame_ms}, {"age_ms", age_ms}});
         }},
         {"get_vision_denoise", [](const NativeRequest& request, const NativeContext&) {
             auto* scene = ensure_native_editor_scene();
