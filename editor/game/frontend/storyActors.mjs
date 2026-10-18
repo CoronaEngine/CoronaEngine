@@ -2,7 +2,6 @@ import { FRAGMENT, FRAGMENT_GUID } from './storyGameplay.mjs';
 import { PLACEMENT_PREFIX, placementScene } from './storyProps.mjs';
 import { STORY_CHARACTERS, PLAYER_GUID, BOSS_MODEL_REF, PLAYER_MODEL_REF, PROPHET_MODEL_REF, PLAYER_MODEL_YAW_OFFSET, unwrap, sceneSnapshot, resolveStoryAssetPath,
   characterTransform, rotatedBounds, hasUsableBounds } from './storyCharacters.mjs';
-import { heightAt } from './storyMapHeight.mjs';
 import { PROPHET_PLACEMENT } from './storyDialogue.mjs';
 
 const canceled = () => Object.assign(new Error('剧情世界初始化已取消'), { name: 'AbortError' });
@@ -176,10 +175,7 @@ async function initializeStoryCharacters({ api, sceneId, frontendUrl, isCurrent 
         savedGeometry = { ...savedGeometry, rotation: [...savedGeometry.rotation] };
         savedGeometry.rotation[1] += PLAYER_MODEL_YAW_OFFSET;
       }
-      // The map's ground line, not the engine floor: `heightAt` answers with the baked grid's
-      // world y at the character's (x, z) and `null` when no grid is loaded, in which case the
-      // feet stay on the flat engine floor exactly as before.
-      const transform = characterTransform(character, actor.local_aabb, savedGeometry, heightAt);
+      const transform = characterTransform(character, actor.local_aabb, savedGeometry);
       if (legacyPlayer || legacyProphet) {
         const modelRef = legacyPlayer ? PLAYER_MODEL_REF : PROPHET_MODEL_REF;
         // Commit placement and its marker together, not while the new actor is still unscaled.

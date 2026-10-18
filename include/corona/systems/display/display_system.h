@@ -14,6 +14,7 @@
 // clang-format on
 
 #include <atomic>
+#include <array>
 #include <cstdint>
 #include <memory>
 #include <mutex>
@@ -32,9 +33,7 @@ namespace Corona::Systems {
  */
 class DisplaySystem : public Kernel::SystemBase {
    public:
-    DisplaySystem() {
-        set_target_fps(120);
-    }
+    DisplaySystem();
 
     ~DisplaySystem() override;
 
@@ -79,6 +78,9 @@ class DisplaySystem : public Kernel::SystemBase {
         // tracks its final composite/present submission and writes it back as
         // consumed_receipt so producers know when their images are safe to reuse.
         Horizon::SubmitReceipt last_receipt;
+        std::array<std::uint64_t, 24> last_signature{};
+        bool content_valid = false;
+        std::uint64_t skipped_frames = 0;
     };
 
     Detail::PresentOutcome compose_and_present(

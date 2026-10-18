@@ -95,21 +95,9 @@ export function rotatedBounds(bounds, rotation) {
   return [...[0, 1, 2].map(axis => Math.min(...points.map(p => p[axis]))),
     ...[0, 1, 2].map(axis => Math.max(...points.map(p => p[axis])))];
 }
-/**
- * Where one character stands, in world metres.
- *
- * The y is "feet on the ground at (x, z)": `-bounds[1] * scale` is the AABB min height of the
- * model in its own normalised frame scaled back to metres, so the actor's origin (the AABB
- * centre the engine places) sits that far above the surface. `groundYAt` is the story map's
- * baked height grid (`storyMapHeight.heightAt`) — the real terrain line — and returning `null`
- * (no grid loaded, or outside it) means the engine floor y = 0, which is exactly the flat-floor
- * behaviour that shipped before the grid existed.
- *
- * The saved pose keeps the player's and the prophet's authored x/z and rotation, but its y is
- * recomputed: a pose saved under the flat floor (or under a differently placed map) must not
- * survive as a stale height now that the terrain answers for it.
- */
-export function characterTransform(character, localBounds, savedGeometry = null, groundYAt = null) {
+/** Initial authored placement. Preserve the accepted saved Y, including stairs
+ * and airborne saves; runtime ground contacts are resolved by native triangles. */
+export function characterTransform(character, localBounds, savedGeometry = null) {
   const rotation = ['player', 'prophet'].includes(character.role) && vector3(savedGeometry?.rotation)
     ? [...savedGeometry.rotation] : [...character.rotation];
   const bounds = rotatedBounds(localBounds, rotation);
@@ -119,7 +107,6 @@ export function characterTransform(character, localBounds, savedGeometry = null,
     ? savedGeometry.position : null;
   const x = saved ? saved[0] : character.x;
   const z = saved ? saved[2] : character.z;
-  const ground = typeof groundYAt === 'function' ? groundYAt(x, z) : null;
-  const position = [x, (Number.isFinite(ground) ? ground : 0) - bounds[1] * scale, z];
+  const position = [x, saved ? saved[1] : -bounds[1] * scale, z];
   return { position, rotation, scale: [scale, scale, scale] };
 }

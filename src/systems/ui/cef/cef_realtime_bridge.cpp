@@ -9,6 +9,9 @@
 #include <corona/shared_data_hub.h>
 #include <corona/engine/engine_runtime_api.h>
 #include <corona/systems/ui/camera_viewport_manager.h>
+#include <corona/systems/mechanics/mechanics_system.h>
+#include <corona/kernel/core/kernel_context.h>
+#include <include/cef_task.h>
 #include <include/cef_values.h>
 #include <nlohmann/json.hpp>
 #include <SDL3/SDL.h>
@@ -672,6 +675,45 @@ bool handle_compute_actor_focus_pose_fast(const CefRefPtr<CefFrame>& frame,
     payload["center"] = {center[0], center[1], center[2]};
     payload["distance"] = distance;
     send_focus_pose_result(frame, request_id, payload);
+    return true;
+}
+
+class MeshMoveCallbackTask final : public CefTask {
+ public:
+    MeshMoveCallbackTask(CefRefPtr<CefFrame> frame, nlohmann::json payload):frame_(frame),payload_(std::move(payload)) {}
+    void Execute() override { if(frame_ && frame_->IsValid()) emit_editor_api_event_to_frame("SceneTools.meshMoveResult",payload_,frame_); }
+ private:
+    CefRefPtr<CefFrame> frame_;
+    nlohmann::json payload_;
+    IMPLEMENT_REFCOUNTING(MeshMoveCallbackTask);
+};
+
+bool handle_mesh_move(const CefRefPtr<CefFrame>& frame, const CefRefPtr<CefProcessMessage>& message) {
+    const auto args=message->GetArgumentList();
+    if((args->GetSize()!=6 && args->GetSize()!=7) || args->GetType(2)!=VTYPE_STRING || args->GetType(3)!=VTYPE_LIST) return true;
+    const double actor_value=args->GetDouble(0), camera_value=args->GetDouble(1);
+    const auto id=args->GetString(2).ToString();
+    if(!std::isfinite(actor_value) || actor_value<=0 || actor_value>9007199254740991.0 ||
+       !std::isfinite(camera_value) || camera_value<=0 || camera_value>9007199254740991.0 || id.empty() || id.size()>128) return true;
+    MechanicsSystem::MeshMoveCommand command;
+    command.actor=static_cast<std::uintptr_t>(actor_value); command.camera=static_cast<std::uintptr_t>(camera_value);
+    const auto values=args->GetList(3);
+    if(!values || values->GetSize()!=3) return true;
+    for(int i=0;i<3;++i) command.velocity[i]=static_cast<float>(values->GetDouble(i));
+    command.dt=static_cast<float>(args->GetDouble(4)); command.jump=args->GetBool(5);
+    command.turn=args->GetSize()==7;
+    if(command.turn) command.facing=static_cast<float>(args->GetDouble(6));
+    auto callback=[frame,id,actor=command.actor](MechanicsSystem::MeshMoveEvent result) {
+        nlohmann::json payload={{"requestId",id},{"actorHandle",actor},{"status",result.status},
+            {"position",result.position},{"grounded",result.grounded},{"ceiling",result.ceiling},
+            {"collided",result.collided},{"normal",result.normal},{"otherActor",result.other_actor},
+            {"triangle",result.triangle},{"otherTriangle",result.other_triangle},{"rotation",result.rotation}};
+        CefPostTask(TID_UI,new MeshMoveCallbackTask(frame,std::move(payload)));
+    };
+    auto manager=Kernel::KernelContext::instance().system_manager();
+    auto mechanics=manager ? std::dynamic_pointer_cast<MechanicsSystem>(manager->get_system("Mechanics")) : nullptr;
+    if(mechanics) mechanics->submit_mesh_move(command,std::move(callback));
+    else callback({});
     return true;
 }
 
@@ -2478,6 +2520,8 @@ bool handle_realtime_process_message(CefRefPtr<CefBrowser> browser,
     if (message->GetName() == "ComputeActorFocusPoseFast") {
         return handle_compute_actor_focus_pose_fast(frame, message);
     }
+
+    if (message->GetName() == "ActorMeshMove") return handle_mesh_move(frame,message);
 
     if (message->GetName() == "ActorTransformFast") {
         return handle_actor_transform_fast(message);

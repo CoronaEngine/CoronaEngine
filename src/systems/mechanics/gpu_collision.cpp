@@ -635,7 +635,9 @@ struct GroundKernel {
     }
 };
 
-enum class Reduction { Contact,
+#include "gpu_mesh_motion.h"
+
+enum class Reduction { Sweep, Contact,
                        Vertex,
                        Ground };
 struct ReduceKernel {
@@ -655,7 +657,11 @@ struct ReduceKernel {
                     $IF(first + Uint(child) < count) {
                         std::array<Float, record_size> s;
                         for (std::uint32_t i = 0; i < record_size; ++i) s[i] = input.values[(first + Uint(child)) * Uint(record_size) + Uint(i)];
-                        if (kind == Reduction::Contact) {
+                        if (kind == Reduction::Sweep) {
+                            $IF(s[0] < r[0]) {
+                                for (int i=0;i<record_size;++i) r[i]=s[i];
+                            }
+                        } else if (kind == Reduction::Contact) {
                             // Average only one coherent contact patch. Points
                             // with another normal/depth cannot share its impulse.
                             $IF((s[7] > Float(0.0f)) && (r[7] > Float(0.0f)) &&
@@ -744,6 +750,11 @@ struct GpuCollisionPipeline::Impl {
     SurfaceContactKernel surface_contact;
     VertexKernel vertex;
     GroundKernel ground_query;
+    std::unique_ptr<MeshSweepKernel> mesh_sweep;
+    std::unique_ptr<MeshSweepKernel> mesh_turn;
+    std::unique_ptr<MeshSlideKernel> mesh_slide;
+    std::unique_ptr<ReduceKernel> reduce_sweep;
+    H::HardwareBuffer motion_state, motion_contact, motion_callback;
     ReduceKernel reduce_contact{Reduction::Contact}, reduce_vertex{Reduction::Vertex}, reduce_ground{Reduction::Ground};
     std::unordered_map<std::uint64_t, std::unique_ptr<Mesh>> meshes;
     std::vector<std::unique_ptr<Scratch>> scratch;
@@ -953,22 +964,31 @@ void GpuCollisionPipeline::set_mesh(std::uint64_t key, std::uint64_t revision,
         positions[i * 8 + 2] = input.vertices[i].z;
     }
     std::vector<std::uint32_t> indices(std::size_t(m->triangles) * 3u);
+    if (!std::is_sorted(input.submeshes.begin(), input.submeshes.end(),
+        [](const auto& a, const auto& b) { return a.triangle_base < b.triangle_base; }))
+        throw std::invalid_argument("Collision segments are not in triangle order");
+    std::size_t segment = 0;
     // Resolve every uint16 corner through its segment without the legacy
     // uint16(vertex_count) assertion (65536 is a valid segment size).
-    for (std::uint32_t t = 0; t < m->triangles; ++t)
+    for (std::uint32_t t = 0; t < m->triangles; ++t) {
+        while (segment < input.submeshes.size() &&
+               t >= std::uint64_t(input.submeshes[segment].triangle_base) + input.submeshes[segment].triangle_count)
+            ++segment;
         for (int c = 0; c < 3; ++c) {
             std::uint32_t v = input.triangles[t][c];
             bool found = input.submeshes.empty();
-            for (const auto& s : input.submeshes)
+            if (segment < input.submeshes.size()) {
+                const auto& s = input.submeshes[segment];
                 if (t >= s.triangle_base && t - s.triangle_base < s.triangle_count) {
                     if (v >= s.vertex_count) throw std::invalid_argument("GPU collision segment index out of range");
                     v += s.vertex_base;
                     found = true;
-                    break;
                 }
+            }
             if (!found || v >= m->vertices) throw std::invalid_argument("GPU collision vertex index out of range");
             indices[t * 3u + c] = v;
         }
+    }
     // Import seams duplicate vertices. Weld positions only for the topology
     // check; rendering/skinning indices and deformation buffers stay intact.
     std::map<std::array<float, 3>, std::uint32_t> welded;
@@ -1340,6 +1360,87 @@ std::vector<GpuCollisionPipeline::GroundResult> GpuCollisionPipeline::ground(std
     }
     return result;
 }
+GpuCollisionPipeline::MeshMotionResult GpuCollisionPipeline::move_mesh(
+    const Instance& moving, std::span<const Instance> obstacles, Point displacement, bool snap_to_ground,
+    float turn, Point pivot, Point turn_axis) {
+    GpuPerformance::Scope performance{"collision.mesh_motion"};
+    impl_->usable(); validate_instance(moving); validate_point(displacement);
+    validate_point(pivot); validate_point(turn_axis);
+    const float axis_length=std::sqrt(turn_axis[0]*turn_axis[0]+turn_axis[1]*turn_axis[1]+turn_axis[2]*turn_axis[2]);
+    if(!std::isfinite(turn) || std::abs(turn)>3.142f || std::abs(axis_length-1.f)>.0001f)
+        throw std::invalid_argument("Invalid mesh turn");
+    auto& a=impl_->mesh(moving.key);
+    if(!a.triangles) throw std::invalid_argument("Moving mesh has no triangles");
+    if(obstacles.empty()) { MeshMotionResult result{displacement}; result.turn=turn; return result; }
+    for(const auto& obstacle:obstacles) {
+        validate_instance(obstacle); (void)impl_->mesh(obstacle.key);
+        if(obstacle.key==moving.key) throw std::invalid_argument("Mesh motion self collision");
+    }
+    if(!impl_->mesh_sweep) impl_->mesh_sweep=std::make_unique<MeshSweepKernel>();
+    if(turn!=0 && !impl_->mesh_turn) impl_->mesh_turn=std::make_unique<MeshSweepKernel>(true);
+    if(!impl_->mesh_slide) impl_->mesh_slide=std::make_unique<MeshSlideKernel>();
+    if(!impl_->reduce_sweep) impl_->reduce_sweep=std::make_unique<ReduceKernel>(Reduction::Sweep);
+    if(!impl_->motion_state) {
+        impl_->motion_state=buffer(48,device_usage);
+        impl_->motion_contact=buffer(record_size,device_usage);
+        impl_->motion_callback=buffer(24,H::BufferUsage_TransferDst,H::CpuAccessMode::Read);
+    }
+    const auto pages=(a.triangles+contact_page_size-1)/contact_page_size;
+    if(obstacles.size()>4096 || std::uint64_t(pages)*obstacles.size()>max_items)
+        throw std::invalid_argument("Too many mesh motion candidates");
+    impl_->reserve_outputs(1,std::min(a.triangles,contact_page_size));
+    impl_->contact_pages.ensure(static_cast<std::uint32_t>(pages*obstacles.size()));
+    std::array<float,48> initial{};
+    std::copy(displacement.begin(),displacement.end(),initial.begin()+3);
+    std::copy(turn_axis.begin(),turn_axis.end(),initial.begin()+6);
+    initial[19]=turn;
+    std::copy(pivot.begin(),pivot.end(),initial.begin()+20);
+    initial[15]=initial[16]=initial[17]=-1;
+    initial[18]=displacement[1]<=0 ? (snap_to_ground ? -.12f : -.006f) : 0.f;
+    auto staging=upload(std::span<const float>(initial));
+    Impl::Recording recording{*impl_};
+    auto stream=impl_->executor.stream();
+    stream << H::CopyBufferCommand{staging,impl_->motion_state,0,0,sizeof(initial)};
+    impl_->prepare(stream,moving,true);
+    for(const auto& obstacle:obstacles) impl_->prepare(stream,obstacle,true);
+    for(int pass=turn!=0 ? -1 : 0;pass<7;++pass) {
+        const bool turning=pass<0;
+        const auto iteration=static_cast<std::uint32_t>(std::max(0,pass));
+        auto& s=impl_->output(0,std::min(a.triangles,contact_page_size));
+        std::uint32_t page=0;
+        for(std::size_t oi=0;oi<obstacles.size();++oi) {
+            auto& b=impl_->mesh(obstacles[oi].key);
+            auto& k=turning ? *impl_->mesh_turn : *impl_->mesh_sweep;
+            k.va.bind(a.world); k.ia.bind(a.indices); k.vb.bind(b.world); k.ib.bind(b.indices);
+            k.bounds.bind(b.bounds); k.nodes.bind(b.nodes); k.leaves.bind(b.leaves);
+            k.state.bind(impl_->motion_state); k.output.bind(s.data[0]);
+            k.node_count=b.node_count; k.obstacle=static_cast<std::uint32_t>(oi);
+            for(std::uint32_t first=0;first<a.triangles;first+=contact_page_size) {
+                const auto count=std::min(contact_page_size,a.triangles-first);
+                k.first=first; k.count=count;
+                launch(stream,k.pipeline,count);
+                impl_->reduce(stream,s,count,*impl_->reduce_sweep,&impl_->contact_pages.data[0],page++);
+            }
+        }
+        impl_->reduce(stream,impl_->contact_pages,page,*impl_->reduce_sweep,&impl_->motion_contact);
+        auto& slide=*impl_->mesh_slide;
+        slide.state.bind(impl_->motion_state); slide.contact.bind(impl_->motion_contact);
+        slide.iteration=iteration; slide.snap=turning ? 2u : iteration==6 ? 1u : 0u;
+        launch(stream,slide.pipeline,1);
+    }
+    // No per-contact, per-iteration, vertex, depth or image readbacks. This is
+    // the single compact completion record used for the frontend callback.
+    GpuPerformance::record_readback(24*sizeof(float));
+    stream << H::CopyBufferCommand{impl_->motion_state,impl_->motion_callback,0,0,24*sizeof(float)};
+    impl_->in_flight_uploads.push_back(staging);
+    impl_->finish(stream); impl_->in_flight_uploads.clear();
+    std::array<float,24> r{};
+    if(!impl_->motion_callback.read_bytes(std::as_writable_bytes(std::span(r))))
+        throw std::runtime_error("Mesh motion callback transfer failed");
+    return {{r[0],r[1],r[2]},{r[12],r[13],r[14]},r[9]>0,r[10]>0,r[11]>0,
+        static_cast<int>(r[15]),static_cast<int>(r[16]),static_cast<int>(r[17]),r[23]};
+}
+
 void GpuCollisionPipeline::retain(std::span<const std::uint64_t> keys) {
     impl_->usable();
     const std::unordered_set<std::uint64_t> active(keys.begin(), keys.end());

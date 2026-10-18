@@ -477,6 +477,7 @@ const editorApiStatic = {
     onActorChanged: (callback) => register_manifest_editor_api_callback('events.onActorChanged', callback),
     onActorSelectionChanged: (callback) => register_manifest_editor_api_callback('events.onActorSelectionChanged', callback),
     onActorTransformUpdated: (callback) => register_manifest_editor_api_callback('events.onActorTransformUpdated', callback),
+    onMeshMoveResult: (callback) => register_manifest_editor_api_callback('events.onMeshMoveResult', callback),
     onActorPickResult: (callback) => register_manifest_editor_api_callback('events.onActorPickResult', callback),
     onViewportGizmoPointerResult: (callback) => register_manifest_editor_api_callback('events.onViewportGizmoPointerResult', callback),
     onFocusPoseResult: (callback) => register_manifest_editor_api_callback('events.onFocusPoseResult', callback),

@@ -5,6 +5,7 @@
 corona_add_system(mechanics
     SOURCES
         mechanics_system.cpp
+        mesh_motion.cpp
         mechanics_lifecycle.cpp
         mechanics_ik.cpp
         gpu_skinning.cpp

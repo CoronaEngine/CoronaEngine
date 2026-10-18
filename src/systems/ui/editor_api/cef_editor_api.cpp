@@ -735,7 +735,7 @@ constexpr auto kEditorApiMethods = std::to_array<EditorApiMethodSpec>({
 #undef EDITOR_API_METHOD0
 #undef EDITOR_API_METHOD0_WRAPPED
 
-constexpr std::array<EditorApiEventSpec, 21> kEditorApiEvents = {{
+constexpr std::array<EditorApiEventSpec, 22> kEditorApiEvents = {{
     {"AI.chunk", EditorApiValueType::String, all_callers(), "events.onAiChunk", "events.on_ai_chunk"},
     {"Editor.logBatch", EditorApiValueType::Array, all_callers(), "events.onLogBatch", "events.on_log_batch"},
     {"LANChat.event", EditorApiValueType::Object, all_callers(), "events.onLanChatEvent", "events.on_lan_chat_event"},
@@ -747,6 +747,7 @@ constexpr std::array<EditorApiEventSpec, 21> kEditorApiEvents = {{
     {"Network.assetImportCompleted", EditorApiValueType::Object, all_callers(), "events.onNetworkAssetImportCompleted", "events.on_network_asset_import_completed"},
     {"Network.fileSyncStatusChanged", EditorApiValueType::Object, all_callers(), "events.onNetworkFileSyncStatusChanged", "events.on_network_file_sync_status_changed"},
     {"Network.syncPauseRequested", EditorApiValueType::Object, all_callers(), "events.onNetworkSyncPauseRequested", "events.on_network_sync_pause_requested"},
+    {"SceneTools.meshMoveResult", EditorApiValueType::Object, all_callers(), "events.onMeshMoveResult", "events.on_mesh_move_result"},
     {"SceneTools.actorPickResult", EditorApiValueType::Object, all_callers(), "events.onActorPickResult", "events.on_actor_pick_result"},
     {"SceneTools.actorChanged", EditorApiValueType::Object, all_callers(), "events.onActorChanged", "events.on_actor_changed"},
     {"SceneTools.actorSelectionChanged", EditorApiValueType::Object, all_callers(), "events.onActorSelectionChanged", "events.on_actor_selection_changed"},

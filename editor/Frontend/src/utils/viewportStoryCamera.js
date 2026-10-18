@@ -8,15 +8,11 @@ export function createStoryCameraController({
   getBridge, getRect, getPixelRatio = () => 1,
   isCurrent = () => true, isInputLocked = () => false,
   requestFrame, cancelFrame, now, onPlayerChanged, createControls = createViewportCameraController, onError,
-  // The story map's terrain line (`game/frontend/storyMapHeight.mjs` `heightAt`), forwarded to
-  // the controls: without it the player controller accepts the option, never receives it, and
-  // the characters keep standing on the constant engine floor while the map varies by metres.
-  getGroundY = null,
 }) {
   let camera = null, disposed = false;
   const current = () => !disposed && isCurrent();
   const controls = createControls({
-    getBridge, onError, getGroundY,
+    getBridge, onError,
     getPose: () => camera,
     setPose: (pose) => { camera = pose; },
     submitPose: (pose) => {

@@ -343,17 +343,20 @@ vec3 evalSkySH(vec3 n, uint shBuf)
 float sampleShadowMap(uint shadowMap, vec2 uv, float receiverDepth, float bias)
 {
     float shadowMapSize = readFloat(pushConsts.shadowInfoBufferIndex, 72u);
-    vec2 texelSize = vec2(1.0 / max(shadowMapSize, 1.0));
+    // Compare individual texels before filtering. Interpolating depth first
+    // invents occluders between surfaces and makes subtexel motion shimmer.
+    ivec2 size = textureSize(textures[nonuniformEXT(shadowMap)], 0);
+    vec2 texel = uv * vec2(size) - 0.5;
+    ivec2 base = ivec2(floor(texel));
+    vec2 fraction = fract(texel);
     float lit = 0.0;
-    for (int y = -1; y <= 1; ++y)
-    {
-        for (int x = -1; x <= 1; ++x)
-        {
-            float casterDepth = textureLod(
-                textures[nonuniformEXT(shadowMap)],
-                uv + vec2(float(x), float(y)) * texelSize,
-                0.0).r;
-            lit += (receiverDepth - bias) <= casterDepth ? 1.0 : 0.0;
+    for (int y = -1; y <= 2; ++y) {
+        float wy = y == -1 ? 1.0-fraction.y : y == 2 ? fraction.y : 1.0;
+        for (int x = -1; x <= 2; ++x) {
+            float wx = x == -1 ? 1.0-fraction.x : x == 2 ? fraction.x : 1.0;
+            ivec2 samplePixel = clamp(base + ivec2(x,y), ivec2(0), size-1);
+            float caster = texelFetch(textures[nonuniformEXT(shadowMap)], samplePixel, 0).r;
+            lit += wx * wy * float(receiverDepth-bias <= caster);
         }
     }
     return lit / 9.0;
@@ -658,8 +661,10 @@ bool decodeSurface(ivec2 pixel, out Surface surface)
     if (abs(determinant) < 1e-12) return false;
     // Cofactors give inverse-transpose direction without a matrix division.
     mat3 normalMatrix = mat3(c0, cross(model[2], model[0]), cross(model[0], model[1])) * sign(determinant);
-    vec3 interpNormal = normalize(normalMatrix *
-        (bary.x * v0.normal + bary.y * v1.normal + bary.z * v2.normal));
+    vec3 rawNormal = normalMatrix * (bary.x*v0.normal + bary.y*v1.normal + bary.z*v2.normal);
+    float normalLength = length(rawNormal);
+    if (normalLength < 1e-12) return false;
+    vec3 interpNormal = rawNormal / normalLength;
 
     vec2 interpUV = bary.x * v0.texCoord + bary.y * v1.texCoord + bary.z * v2.texCoord;
     vec3 dbdx = vec3(s2.y-s1.y, s0.y-s2.y, s1.y-s0.y) / area;
@@ -711,7 +716,15 @@ bool decodeSurface(ivec2 pixel, out Surface surface)
     }
 
     matl.metallic = clamp(matl.metallic, 0.0, 1.0);
-    matl.roughness = clamp(matl.roughness, 0.045, 1.0);
+    // Analytic normal derivatives from the same VBuffer triangle. Bound the
+    // specular lobe by its pixel footprint without a normal/history image.
+    vec3 normalDx = (normalMatrix*(v0.normal*qx.x + v1.normal*qx.y + v2.normal*qx.z) - rawNormal*dot(qx,vec3(1))) / inv_w_sum;
+    vec3 normalDy = (normalMatrix*(v0.normal*qy.x + v1.normal*qy.y + v2.normal*qy.z) - rawNormal*dot(qy,vec3(1))) / inv_w_sum;
+    normalDx = (normalDx-interpNormal*dot(interpNormal,normalDx))/normalLength;
+    normalDy = (normalDy-interpNormal*dot(interpNormal,normalDy))/normalLength;
+    float variance = finiteVec3(normalDx) && finiteVec3(normalDy)
+        ? min(0.18, 0.5*(dot(normalDx,normalDx)+dot(normalDy,normalDy))) : 0.0;
+    matl.roughness = sqrt(clamp(matl.roughness*matl.roughness + variance, 0.045*0.045, 1.0));
     matl.anisotropic = clamp(matl.anisotropic, 0.0, 0.99);
     surface.position = interpPos;
     surface.normal = interpNormal;

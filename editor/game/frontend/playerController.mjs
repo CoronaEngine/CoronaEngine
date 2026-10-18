@@ -1,5 +1,5 @@
 /** Kinematic player control with three camera modes. Native animation continues independently. */
-import { PLAYER_GUID, PLAYER_MODEL_YAW_OFFSET, vector3 } from './storyCharacters.mjs';
+import { PLAYER_GUID, PLAYER_MODEL_YAW_OFFSET, vector3, rotatedBounds } from './storyCharacters.mjs';
 
 export const PLAYER_CONTROLS = Object.freeze({ speed: 3, maxDelta: 0.05, sprintMultiplier: 1.5, sprintThresholdMs: 200,
   dodgeDistance: 3, dodgeDuration: 0.25, dodgeCooldownMs: 600,
@@ -25,28 +25,26 @@ const jumpKey = event => event.code === 'Space' || event.key === ' ' || event.ke
 const editing = event => (event.composedPath?.() || [event.target]).some(target => target?.isContentEditable
   || target?.closest?.('input, textarea, select, [contenteditable]:not([contenteditable="false"]), [role="textbox"]'));
 
+let controllerSequence = 0;
+
 export function createPlayerController({ getPose, setPose, submitPose, getBridge,
   isCurrent = () => true, isInputLocked = () => false, onError = () => {},
-  getRect = () => null, onPlayerChanged = () => {}, getGroundY = null,
+  getRect = () => null, onPlayerChanged = () => {},
   requestFrame = callback => requestAnimationFrame(callback), cancelFrame = id => cancelAnimationFrame(id),
   now = () => globalThis.performance.now(), config = PLAYER_CONTROLS }) {
   let player = null, targetOffset = 0, yaw = 0, pitch = config.pitch, distance = config.distance;
   let frame = null, epoch = 0, lastTime = null, pointer = null, disposed = false;
-  let jump = null, spaceHeld = false, landingPending = false;
-  // The story map's height field (`game/frontend/storyMapHeight.mjs`), when the page supplies
-  // one: the player then walks on the terrain instead of the constant engine floor. `null`
-  // everywhere means "no grid", and every path below keeps the flat-floor behaviour exactly.
-  // The actor origin is not the feet, so the ground is followed by the *change* in height —
-  // `groundOffset` is the origin-minus-ground distance captured where the player was placed.
-  let groundY = null, groundOffset = 0;
+  let jump = null, spaceHeld = false, feetOffset = 0;
+  let pendingMove = null, moveSequence = 0, binding = 0;
+  const controllerId = ++controllerSequence;
   let view = PLAYER_VIEWS.includes(config.view) ? config.view : 'third';
   let hiddenPlayer = false;
   const keys = new Set(), shifts = new Set();
   let shiftSince = null, dodge = null, lastDodge = -Infinity;
-  const ready = () => !disposed && isCurrent() && !isInputLocked() && !landingPending && player && getPose();
+  const ready = () => !disposed && isCurrent() && !isInputLocked() && player && getPose();
   // First person ignores edge turning, so an edge pointer must not keep the frame loop
   // alive doing nothing.
-  const hasWork = () => jump || dodge || shifts.size || keys.size
+  const hasWork = () => (player && !player.grounded) || jump || dodge || shifts.size || keys.size
     || (view !== 'first' && Boolean(pointer?.edgeX || pointer?.edgeY));
   // A steep building view needs more headroom than the third-person orbit, so the
   // pitch and distance ceilings follow the active mode instead of one global cap.
@@ -59,55 +57,22 @@ export function createPlayerController({ getPose, setPose, submitPose, getBridge
   function setPlayerHidden(hidden) {
     if (!player || hidden === hiddenPlayer) return;
     const bridge = getBridge();
-    if (typeof bridge?.setActorState !== 'function') return;
+    if (typeof bridge?.setProperty !== 'function') return;
     try {
-      if (bridge.setActorState(player.handle, { visible: !hidden }) !== true) return;
+      // PropertyFast's Visible property is the native realtime channel. The
+      // sceneTools.setActorState API is asynchronous and is not a bridge method.
+      if (bridge.setProperty(player.handle, 3, !hidden) !== true) return;
       hiddenPlayer = hidden;
     } catch (error) { onError(error); }
-  }
-  // One terrain sample, or `null` when the page has no height field (or the sample is not a
-  // number): a grid-less world must behave exactly as it did on the flat floor.
-  const groundYAt = (x, z) => {
-    if (typeof getGroundY !== 'function') return null;
-    const value = getGroundY(x, z);
-    return Number.isFinite(value) ? value : null;
-  };
-  // Remember the ground the player is currently standing on, so horizontal movement can carry
-  // the origin's own offset (feet are below the origin) along with the terrain.
-  function bindGround(x, z) {
-    groundY = groundYAt(x, z);
-    groundOffset = groundY === null || !player ? 0 : player.position[1] - groundY;
-  }
-  // The origin y for standing at (x, z): the ground line plus that offset. `fallback` is
-  // returned untouched when there is no grid, which is what keeps the constant floor intact.
-  function groundLine(x, z, fallback) {
-    const next = groundYAt(x, z);
-    if (next === null) { groundY = null; return fallback; }
-    if (groundY === null) groundOffset = fallback - next;
-    groundY = next;
-    return next + groundOffset;
   }
   function resetInput() {
     epoch++;
     if (frame !== null) cancelFrame(frame);
-    frame = null; lastTime = null; pointer = null; keys.clear(); shifts.clear(); shiftSince = null; dodge = null; spaceHeld = false;
-    if (!jump) return;
-    // This is a desired *ground* pose, even if the old world's handles have
-    // already expired. Its dirty version must survive until the save barrier.
-    player = { ...player, position: [player.position[0], groundLine(player.position[0], player.position[2], jump.groundY), player.position[2]],
-      grounded: false, version: player.version + 1 };
-    jump = null; landingPending = true;
-    if (!landingPending || disposed || !isCurrent()) return;
-    try {
-      const bridge = getBridge();
-      if (bridge?.actorTransform?.(player.handle, 0, player.position) !== true) {
-        throw new Error('玩家落地接口不可用，请重试保存');
-      }
-      landingPending = false;
-      player = { ...player, grounded: true };
-      poseCamera();
-    } catch (error) { onError(error); }
-    onPlayerChanged();
+    frame = null; lastTime = null; pointer = null; keys.clear(); shifts.clear();
+    shiftSince = null; dodge = null; spaceHeld = false; jump = null;
+    // Preserve the last accepted pose. A save must wait for an already submitted
+    // native move's callback, not manufacture a landing or poll the transform.
+    return pendingMove?.settled ?? Promise.resolve();
   }
   function movementDirection() {
     const x = Number(keys.has('d')) - Number(keys.has('a'));
@@ -116,27 +81,15 @@ export function createPlayerController({ getPose, setPose, submitPose, getBridge
     return length > 0 ? [(x * Math.cos(yaw) + z * Math.sin(yaw)) / length,
       (z * Math.cos(yaw) - x * Math.sin(yaw)) / length] : null;
   }
-  function movePlayer(position) {
-    if (getBridge()?.actorTransform?.(player.handle, 0, position) !== true) throw new Error('玩家实时移动接口不可用');
-    // Keep accepted native changes even if the next operation fails.
-    player = { ...player, position, version: player.version + 1 };
-  }
-  function facePlayer(facingYaw, markDirty = false) {
-    const rotation = [player.rotation[0], facingYaw + PLAYER_MODEL_YAW_OFFSET, player.rotation[2]];
-    if (getBridge()?.actorTransform?.(player.handle, 1, rotation) !== true) throw new Error('玩家实时朝向接口不可用');
-    player = { ...player, rotation, facingYaw, version: player.version + Number(markDirty) };
-  }
   function beginJump() {
+    if (!player.grounded || pendingMove) return;
     const [dx, dz] = movementDirection() || [Math.sin(player.facingYaw), Math.cos(player.facingYaw)];
-    facePlayer(Math.atan2(dx, dz), true);
-    jump = { x: player.position[0], z: player.position[2], groundY: player.position[1], dx, dz, elapsed: 0 };
-    player = { ...player, grounded: false };
+    jump = { dx, dz, elapsed: 0, requested: true };
     lastTime = now();
-    onPlayerChanged();
     schedule();
   }
   function beginDodge() {
-    if (!ready() || jump || dodge || now() - lastDodge < config.dodgeCooldownMs) return;
+    if (!ready() || !player.grounded || pendingMove || jump || dodge || now() - lastDodge < config.dodgeCooldownMs) return;
     const [dx, dz] = movementDirection() || [-Math.sin(player.facingYaw), -Math.cos(player.facingYaw)];
     dodge = { x: player.position[0], z: player.position[2], y: player.position[1], dx, dz, elapsed: 0 };
     lastDodge = now(); lastTime = now();
@@ -151,7 +104,7 @@ export function createPlayerController({ getPose, setPose, submitPose, getBridge
     // body must be hidden or the camera renders from inside the head. 'top' only pulls
     // the existing orbit further back and steeper.
     const eye = view === 'first'
-      ? [player.position[0], player.position[1] + config.firstPersonEyeHeight, player.position[2]]
+      ? [player.position[0], player.position[1] + feetOffset + config.firstPersonEyeHeight, player.position[2]]
       : target;
     const travel = view === 'first' ? 0 : distance;
     const next = { ...pose, position: eye.map((value, i) => value - forward[i] * travel),
@@ -180,66 +133,96 @@ export function createPlayerController({ getPose, setPose, submitPose, getBridge
     }
     return view;
   }
+  function acceptMeshMove(event) {
+    const pending = pendingMove;
+    if (!pending || event?.requestId !== pending.id || Number(event.actorHandle) !== pending.handle) return false;
+    pendingMove = null;
+    clearTimeout(pending.timer);
+    try {
+      if (event.status === 'success') {
+        if (!vector3(event.position) || !vector3(event.rotation)) throw new Error('三角形碰撞回调姿态无效');
+        if (pending.binding === binding && player?.handle === pending.handle) {
+          const changed = event.position.some((value, i) => Math.abs(value - player.position[i]) > 1e-7)
+            || event.rotation.some((value, i) => Math.abs(value - player.rotation[i]) > 1e-7);
+          player = { ...player, position: [...event.position], grounded: event.grounded === true,
+            rotation: [...event.rotation], facingYaw: event.rotation[1] - PLAYER_MODEL_YAW_OFFSET,
+            version: player.version + Number(changed) };
+          if (jump && jump === pending.jump) {
+            jump.elapsed += pending.delta; jump.requested = false;
+            if (player.grounded) jump = null;
+          }
+          if (dodge === pending.dodge && dodge) {
+            dodge.elapsed = pending.dodgeElapsed;
+            if (dodge.elapsed >= config.dodgeDuration || event.collided && Math.hypot(event.normal?.[0] ?? 0, event.normal?.[2] ?? 0) > .5) dodge = null;
+          }
+          if (ready()) {
+            poseCamera();
+          }
+          onPlayerChanged();
+        }
+      } else if (!['unavailable', 'expired', 'superseded'].includes(event.status)) {
+        throw new Error(`原生三角形碰撞失败：${event.status}`);
+      }
+      pending.resolve();
+      if (ready() && hasWork()) schedule();
+    } catch (error) { pending.reject(error); resetInput(); onError(error); }
+    return true;
+  }
   function tick(time, token) {
     if (token !== epoch) return;
     frame = null;
     if (!ready()) { resetInput(); return; }
+    if (pendingMove) return;
     const delta = clamp((time - (lastTime ?? time)) / 1000, 0, config.maxDelta);
     lastTime = time;
     try {
       if (pointer && view !== 'first') {
-        // Edge turning exists to orbit around the player. In first person it would
-        // rotate the view the player is looking through, so look is drag/delta only.
         yaw += pointer.edgeX * config.edgeYawSpeed * delta;
         const [lo, hi] = pitchLimits();
         pitch = clamp(pitch + pointer.edgeY * config.edgePitchSpeed * delta, lo, hi);
       }
-      if (dodge && delta > 0) {
-        dodge.elapsed = Math.min(config.dodgeDuration, dodge.elapsed + delta);
-        if (config.dodgeDuration - dodge.elapsed < 1e-9) dodge.elapsed = config.dodgeDuration;
-        const progress = dodge.elapsed / config.dodgeDuration;
-        const distance = config.dodgeDistance * (1 - (1 - progress) ** 2);
-        const nextX = dodge.x + dodge.dx * distance, nextZ = dodge.z + dodge.dz * distance;
-        movePlayer([nextX, groundLine(nextX, nextZ, dodge.y), nextZ]);
-        if (progress === 1) dodge = null;
-        onPlayerChanged();
-      } else if (jump && delta > 0) {
-        let elapsed = Math.min(jump.elapsed + delta, config.jumpDuration);
-        if (config.jumpDuration - elapsed < 1e-9) elapsed = config.jumpDuration;
-        const t = elapsed / config.jumpDuration;
-        const nextX = jump.x + jump.dx * config.jumpDistance * t;
-        const nextZ = jump.z + jump.dz * config.jumpDistance * t;
-        // The arc is measured from the take-off ground line; landing hands the player back to
-        // the terrain, so a jump over rising ground still ends with the feet on the surface.
-        const arc = jump.groundY + 4 * config.jumpHeight * t * (1 - t);
-        movePlayer([nextX, t === 1 ? groundLine(nextX, nextZ, jump.groundY) : arc, nextZ]);
-        jump.elapsed = elapsed;
-        if (t === 1) { jump = null; player = { ...player, grounded: true }; }
-        onPlayerChanged();
-      } else if (!jump && delta > 0) {
+      poseCamera();
+      if (delta <= 0) { schedule(); return; }
+      let vx = 0, vz = 0, facing = null, dodgeElapsed = dodge?.elapsed ?? 0;
+      if (dodge) {
+        dodgeElapsed = Math.min(config.dodgeDuration, dodge.elapsed + delta);
+        const curve = t => config.dodgeDistance * (1 - (1 - t / config.dodgeDuration) ** 2);
+        const speed = (curve(dodgeElapsed) - curve(dodge.elapsed)) / delta;
+        vx = dodge.dx * speed; vz = dodge.dz * speed;
+      } else if (jump && jump.elapsed < config.jumpDuration) {
+        vx = jump.dx * config.jumpDistance / config.jumpDuration;
+        vz = jump.dz * config.jumpDistance / config.jumpDuration;
+        facing = Math.atan2(jump.dx, jump.dz);
+      } else {
         const direction = movementDirection();
         if (direction) {
-          const [dx, dz] = direction;
-          const sprintSeconds = shiftSince === null ? 0
-            : Math.max(0, time - Math.max(time - delta * 1000, shiftSince + config.sprintThresholdMs)) / 1000;
-          const travel = config.speed * (delta + (config.sprintMultiplier - 1) * sprintSeconds);
-          const nextX = player.position[0] + dx * travel;
-          const nextZ = player.position[2] + dz * travel;
-          // Walking follows the map's surface when the page has one: `player.position[1]` is
-          // the ground line here, otherwise it is carried over unchanged as before.
-          movePlayer([nextX, groundLine(nextX, nextZ, player.position[1]), nextZ]);
-          facePlayer(Math.atan2(dx, dz));
-          onPlayerChanged();
+          const sprint = shiftSince !== null && time - shiftSince >= config.sprintThresholdMs;
+          const speed = config.speed * (sprint ? config.sprintMultiplier : 1);
+          vx = direction[0] * speed; vz = direction[1] * speed;
+          facing = Math.atan2(direction[0], direction[1]);
         }
       }
-      poseCamera();
-      if (hasWork()) schedule();
-      else lastTime = null;
+      const id = `${controllerId}:${binding}:${++moveSequence}`;
+      const pending = { id, handle: player.handle, binding, jump, dodge, delta, dodgeElapsed, facing };
+      pending.settled = new Promise((resolve, reject) => { pending.resolve = resolve; pending.reject = reject; });
+      // Keep late callbacks authoritative after timeout; never retry an unknown
+      // native move or allow saving a guessed pose.
+      pending.settled.catch(() => {});
+      pending.timer = setTimeout(() => {
+        const error = new Error('等待原生碰撞回调超时，移动已暂停');
+        pending.reject(error); resetInput(); onError(error);
+      }, 15000);
+      pendingMove = pending;
+      if (getBridge()?.moveActorMesh?.(player.handle, getPose().handle, id, [vx, 0, vz], delta, jump?.requested === true,
+        facing === null ? null : facing + PLAYER_MODEL_YAW_OFFSET) !== true) {
+        pendingMove = null; clearTimeout(pending.timer); pending.resolve();
+        throw new Error('原生三角形移动接口不可用');
+      }
     } catch (error) { resetInput(); onError(error); }
   }
   function schedule() {
     if (!ready()) { resetInput(); return; }
-    if (frame !== null) return;
+    if (frame !== null || pendingMove) return;
     if (lastTime === null) lastTime = now();
     const token = epoch;
     frame = requestFrame(time => tick(time, token));
@@ -250,16 +233,15 @@ export function createPlayerController({ getPose, setPose, submitPose, getBridge
       if (!Number.isFinite(Number(actor?.handle)) || Number(actor.handle) <= 0
         || actor.actor_guid !== PLAYER_GUID || !vector3(actor.geometry?.position)
         || !vector3(actor.geometry?.rotation) || !Number.isFinite(offset)) throw new Error('玩家模型尚未就绪');
-      if (typeof getBridge()?.actorTransform !== 'function' || typeof getBridge()?.cameraMove !== 'function') {
+      if (typeof getBridge()?.moveActorMesh !== 'function' || typeof getBridge()?.cameraMove !== 'function') {
         throw new Error('当前引擎缺少玩家实时控制接口');
       }
       player = { handle: Number(actor.handle), actorGuid: actor.actor_guid,
         position: [...actor.geometry.position], rotation: [...actor.geometry.rotation], facingYaw: actor.geometry.rotation[1] - PLAYER_MODEL_YAW_OFFSET,
-        grounded: true, version: 0 };
-      landingPending = false;
-      // The actor was placed on the map's surface by `storyActors` before this bind; capture the
-      // ground under it so walking carries the feet offset along with the terrain.
-      bindGround(player.position[0], player.position[2]);
+        grounded: false, version: 0 };
+      binding++;
+      if (!Array.isArray(actor.local_aabb) || actor.local_aabb.length !== 6 || !vector3(actor.geometry.scale)) throw new Error('玩家三角形几何边界未就绪');
+      feetOffset = rotatedBounds(actor.local_aabb, actor.geometry.rotation)[1] * actor.geometry.scale[1];
       targetOffset = offset; yaw = player.facingYaw; pitch = config.pitch; distance = config.distance;
       // Every bind starts in third person: a first-person eye or a top-down orbit must
       // never be written into the scene camera that the next world restores.
@@ -297,18 +279,9 @@ export function createPlayerController({ getPose, setPose, submitPose, getBridge
         version: player.version, movementState: jump ? 'jumping' : dodge ? 'dodging'
           : movementDirection() ? (shiftSince !== null && now() - shiftSince >= config.sprintThresholdMs ? 'sprinting' : 'walking') : 'idle' } : null;
     },
-    // A deferred landing can be accepted by the persistent API after the real-
-    // time bridge failed or the source component was invalidated. Never use an
-    // old acknowledgement to overwrite a newer pose or start a new jump.
-    acknowledgePlayerSave(pose) {
-      if (!player || pose.version !== player.version || !landingPending) return;
-      landingPending = false;
-      player = { ...player, grounded: true };
-      if (!disposed && isCurrent()) {
-        try { poseCamera(); } catch (error) { onError(error); }
-        onPlayerChanged();
-      }
-    },
+    acceptMeshMove,
+    resume() { if (ready()) schedule(); },
+    acknowledgePlayerSave() {},
     keyDown(event) {
       const key = movementKey(event), space = jumpKey(event), shift = shiftKey(event);
       if ((!key && !space && !shift) || event.defaultPrevented || event.ctrlKey || event.altKey || event.metaKey
@@ -322,7 +295,7 @@ export function createPlayerController({ getPose, setPose, submitPose, getBridge
       } else if (space) {
         if (event.repeat || spaceHeld) return true;
         spaceHeld = true;
-        if (!jump && !dodge) {
+        if (!jump && !dodge && player.grounded) {
           try { beginJump(); } catch (error) { resetInput(); onError(error); }
         }
       } else { keys.add(key); schedule(); }

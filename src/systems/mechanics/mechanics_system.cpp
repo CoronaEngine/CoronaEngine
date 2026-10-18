@@ -84,6 +84,7 @@ void MechanicsSystem::update_physics(float fixed_dt) {
 
     // 本帧临时表：质量/阻尼/恢复系数/碰撞开关
     std::unordered_map<std::uintptr_t, BodyFrameParams> frame_params;
+    std::unordered_set<std::uintptr_t> contact_observers;
 
     // --- 从 SharedDataHub 取各存储的引用（几何、变换、场景、环境等）---
     auto& mechanics_storage = SharedDataHub::instance().mechanics_storage();            // mechanics 组件数据
@@ -182,6 +183,7 @@ void MechanicsSystem::update_physics(float fixed_dt) {
                                 params.damping = m_acc->damping;
                                 params.restitution = m_acc->restitution;
                                 params.body_type = m_acc->body_type;
+                                if (m_acc->collision_callback) contact_observers.insert(h);
                                 new_linear = m_acc->linear_lock_mask;
                                 new_angular = m_acc->angular_lock_mask;
                                 body.linear_lock = new_linear;
@@ -320,6 +322,7 @@ void MechanicsSystem::update_physics(float fixed_dt) {
         if (snapshot == step_transforms.end() ||
             impl_->body(h).last_transform_handle != geom_acc->transform_handle) continue;
         const auto& t = snapshot->second;
+        if (!geom_acc->ik_chains.empty()) contact_observers.insert(h);
 
         ktm::fvec3 e_local = make_fvec3(  // mechanics 局部半棱长
             (m.max_xyz.x - m.min_xyz.x) * 0.5f,
@@ -570,6 +573,14 @@ void MechanicsSystem::update_physics(float fixed_dt) {
             for (std::size_t pair_idx = 0; pair_idx < collision_pairs.size(); ++pair_idx) {
                 if (impl_->shutdown_requested.load(std::memory_order_acquire)) return;
                 const auto [ha, hb] = collision_pairs[pair_idx];
+                // Static/kinematic bodies cannot receive solver impulses. The
+                // story controller already sweeps its real mesh on demand and
+                // emits its completion callback. Do not repeat million-triangle
+                // contacts for two immovable bodies on every rigid substep.
+                // Explicit contact listeners and IK retain their event queries.
+                if (frame_params.at(ha).body_type != BodyType::Dynamic &&
+                    frame_params.at(hb).body_type != BodyType::Dynamic &&
+                    !contact_observers.contains(ha) && !contact_observers.contains(hb)) continue;
                 auto it_a = handle_to_index.find(ha), it_b = handle_to_index.find(hb);
                 if (it_a == handle_to_index.end() || it_b == handle_to_index.end()) continue;
                 const auto& a = mechanics_data[it_a->second];

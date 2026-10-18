@@ -247,12 +247,12 @@ export function isMapReady(actor, placement = MAP_PLACEMENT) {
   if (!(Number(actor?.handle) > 0) || actor?.load_status !== 'loaded') return false;
   if (!isMapGenerationCurrent(actor, placement)) return false;
   const transform = mapOriginTransform(placement);
-  return sameVector(actor?.geometry?.scale, transform.scale)
+  return isMapStatic(actor) && sameVector(actor?.geometry?.scale, transform.scale)
     && sameVector(actor?.geometry?.position, transform.position)
     && sameVector(actor?.geometry?.rotation, transform.rotation);
 }
 
-/** `static` is what builds the collision mesh; anything else can be walked through. */
+/** Scenery stays fixed while its real triangles participate in native movement. */
 export const isMapStatic = actor => actor?.mechanics?.body_type === 'static';
 
 const unwrap = value => value?.data ?? value;
@@ -296,11 +296,8 @@ async function removeMapActor(api, sceneId, actor) {
  * Bring the world in line with the map table: create it when the world does not have it,
  * repair the transform in place when it carries an older one, and otherwise touch nothing.
  *
- * The map is **scenery with no collision** (`body_type: 'phantom'`): the ground line comes from
- * the baked height grid (`game/data/story-map-height.json`, read by `storyMapHeight.heightAt`),
- * which is mapped through this same placement, while a solid body would make the engine build a
- * triangle octree over ~1.64M triangles on every world. Wall collision, if it is wanted, belongs
- * in a few cheap collision boxes.
+ * The map is static triangle geometry. Native movement shares its resident
+ * LOD0 topology and octree with all other mesh collision.
  *
  * `follow_camera: false` is the other half of "world object": the engine derives
  * `render_space = follow_camera ? "ui" : "scene"`
@@ -326,14 +323,7 @@ export const MAP_ACTOR_DATA = Object.freeze({
   entity_id: MAP_ENTITY_ID,
   entity_type: MAP_ENTITY_TYPE,
   follow_camera: false,
-  // Phantom on purpose. `static` makes the engine build a full triangle mesh + triangle
-  // octree over every triangle of the map (~1.64M for this model,
-  // `src/systems/mechanics/mechanics_system.cpp`), which is by far the largest cost of having
-  // the map in a world, and it is rebuilt per world. Characters still walk on the terrain: the
-  // page follows the baked height grid (`storyMapHeight.heightAt`) instead of asking the engine
-  // to collide with 1.64M render triangles. What is given up is wall collision — that is better
-  // restored by a handful of simple collision boxes than by making the whole map solid.
-  body_type: 'phantom',
+  body_type: 'static',
 });
 
 export async function ensureStoryMap({ api, sceneId, frontendUrl, resolveAsset = null,
@@ -385,9 +375,6 @@ export async function ensureStoryMap({ api, sceneId, frontendUrl, resolveAsset =
   // single write: this is the path every ordinary entry takes.
 
   if (!map) throw new Error('引擎未返回地图');
-  // No collision is requested and none is forced: the map is scenery the characters stand on
-  // through the aligned courtyard plus the world floor. See `MAP_ACTOR_DATA` for the cost of
-  // making it solid instead.
   // Confirm on read-back that the engine really accepted the map, instead of trusting the
   // create call's reply: a world whose map never landed must say so rather than drop the
   // player onto nothing. The handle is acknowledged before the asynchronous import fills

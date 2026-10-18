@@ -9,6 +9,8 @@
 
 #include <algorithm>
 #include <array>
+#include <charconv>
+#include <cstdlib>
 #include <exception>
 #include <ranges>
 #include <span>
@@ -73,6 +75,17 @@ struct PixelExtent {
 }  // namespace
 
 namespace Corona::Systems {
+DisplaySystem::DisplaySystem() {
+    int fps = 120;
+    if (const char* setting = std::getenv("CORONA_DISPLAY_MAX_FPS")) {
+        const std::string_view text(setting);
+        int parsed{};
+        const auto result = std::from_chars(text.data(), text.data() + text.size(), parsed);
+        if (result.ec == std::errc{} && result.ptr == text.data() + text.size())
+            fps = std::clamp(parsed, 1, 240);
+    }
+    set_target_fps(fps);
+}
 DisplaySystem::~DisplaySystem() {
     stop();
     shutdown();
@@ -890,6 +903,7 @@ bool DisplaySystem::ensure_composite_resources(CompositeResources& resources,
     }
 
     if (resources.width != width || resources.height != height || !resources.output) {
+        resources.content_valid = false;
         if (resources.last_receipt.serial != 0) {
             resources.executor.wait_idle(resources.last_receipt);
         }
@@ -949,6 +963,32 @@ Detail::PresentOutcome DisplaySystem::compose_and_present(
 
     if (!ensure_composite_resources(resources, output_width, output_height)) {
         return Detail::PresentOutcome::Failed;
+    }
+
+    // A producer publishes a new receipt/frame whenever it writes its image.
+    // Keep the existing composite when neither layer nor its placement changed;
+    // do not spend full-screen bandwidth at Display's independent tick rate.
+    const auto receipt_serial = [](const Horizon::SubmitReceipt* receipt) {
+        return receipt ? receipt->serial : 0;
+    };
+    const std::array<std::uint64_t, 24> signature{
+        state.optics.image_handle, state.optics.frame_index, receipt_serial(optics_receipt),
+        state.ui.image_handle, state.ui.frame_index, receipt_serial(ui_receipt),
+        output_width, output_height, optics_extent.width, optics_extent.height,
+        ui_extent.width, ui_extent.height,
+        state.optics.viewport_x, state.optics.viewport_y,
+        state.optics.viewport_width, state.optics.viewport_height,
+        state.ui.viewport_x, state.ui.viewport_y, state.ui.viewport_width, state.ui.viewport_height,
+        state.ui.first_present_boundary,
+        static_cast<std::uint64_t>(optics_receipt != nullptr),
+        static_cast<std::uint64_t>(ui_receipt != nullptr), 0};
+    if (resources.content_valid && resources.last_signature == signature) {
+        ++resources.skipped_frames;
+        if (std::getenv("CORONA_DISPLAY_PROFILE") &&
+            (resources.skipped_frames == 1 || resources.skipped_frames % 32 == 0))
+            CFW_LOG_INFO("Display: reused unchanged composite, skipped={} extent={}x{}",
+                         resources.skipped_frames, output_width, output_height);
+        return Detail::PresentOutcome::Skipped;
     }
 
     auto& composite_pipeline = *composite_pipeline_;
@@ -1015,6 +1055,8 @@ Detail::PresentOutcome DisplaySystem::compose_and_present(
         << composite_pipeline.dispatch_extent(output_width, output_height)
         << Horizon::present(displayer, resources.output)
         << Horizon::commit();
+    resources.last_signature = signature;
+    resources.content_valid = true;
     return Detail::PresentOutcome::Presented;
 }
 

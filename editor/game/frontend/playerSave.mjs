@@ -5,7 +5,7 @@ export function createPlayerSave({ api, sceneId, readPlayer, stopInput,
   assertSource = async () => {}, onSaved = () => {} }) {
   let savedVersion = 0, inFlight = null;
   async function save() {
-    stopInput();
+    await stopInput();
     if (inFlight) await inFlight;
     const pose = readPlayer();
     if (!pose || pose.version === savedVersion) return;
