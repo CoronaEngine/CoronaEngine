@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
   "url": "https://github.com/CoronaEngine/Horizon.git",
-  "ref": "codex/native-vbuffer-ssr",
-  "commit": "6f1ce43cd181d3001719675031d70da84b59efa0"
+  "ref": "main",
+  "commit": "075f004d5e2caf109af89937c6692e37c0879897"
 }
