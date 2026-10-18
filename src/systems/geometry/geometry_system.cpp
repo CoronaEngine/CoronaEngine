@@ -5077,7 +5077,19 @@ GeometrySystem::query_shadow_mesh_slots_batch(
                     entry.levels[static_cast<std::size_t>(level)].geometric_error;
             }
             decision = GeometryDetail::choose_shadow_targets(
-                errors, level_count, max_abs_scale, query_inputs, targets, main_target);
+                errors, level_count, [&] {
+                    if (geom->mesh_instances.empty()) return max_abs_scale;
+                    float instance_scale = 0.0f;
+                    for (const auto& instance : geom->mesh_instances) {
+                        if (!instance.visible || instance.mesh_index != mesh_index) continue;
+                        const float scale = GeometryDetail::shadow_transform_scale(instance.transform);
+                        if (!std::isfinite(scale)) return scale;
+                        instance_scale = std::max(instance_scale, scale);
+                    }
+                    // Errors are measured in mesh-local units. The largest
+                    // visible instance determines the shared shadow LOD budget.
+                    return max_abs_scale * instance_scale;
+                }(), query_inputs, targets, main_target);
             if (entry.levels.size() > 1 && decision.aggregated_demand >= 0) {
                 if (entry.shadow_last_request_frame != frame ||
                     entry.shadow_committed_demand < 0) {

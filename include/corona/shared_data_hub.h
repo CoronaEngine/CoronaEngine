@@ -67,6 +67,8 @@ struct MeshInstanceDevice {
     std::array<float,3> local_bounds_min{}, local_bounds_max{};
     ktm::fmat4x4 original_transform{ktm::fmat4x4::from_eye()};
     ktm::fmat4x4 transform{ktm::fmat4x4::from_eye()};
+    // Authored node world space -> the normalized space of baked/skinned vertices.
+    ModelNodes::Matrix node_delta_prefix{ModelNodes::identity()};
 };
 
 struct ModelTransform {

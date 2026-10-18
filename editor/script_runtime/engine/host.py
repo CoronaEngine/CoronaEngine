@@ -33,11 +33,13 @@ def _native_scene_target():
         if isinstance(route_payload, dict)
         else ""
     )
-    route = active_route if active_route in routes else routes[0]
-    switched = scene_api.switch(route)
-    if isinstance(switched, dict) and switched.get("status") in ("error", "failed"):
+    # Startup observes the scene already opened by the editor. Switching here
+    # reloads its archive through Python while the Python runtime is waiting for
+    # this native call, creating a Python -> editor -> Python wait cycle. It also
+    # discards live scene edits. Wait for an active scene instead of changing it.
+    if active_route not in routes:
         return None
-    return scene_target_from_snapshot(scene_api.get_snapshot(route))
+    return scene_target_from_snapshot(scene_api.get_snapshot(active_route))
 
 
 def initialize_scripts(host: Any, project_path: str) -> None:
