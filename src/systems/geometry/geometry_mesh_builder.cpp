@@ -413,6 +413,9 @@ SceneGpuMeshData make_scene_gpu_mesh_data(
             gpu_instance.mesh_index = i;
             gpu_instance.local_bounds_min = scene.data.meshes[i].aabb_min;
             gpu_instance.local_bounds_max = scene.data.meshes[i].aabb_max;
+            gpu_instance.node_delta_prefix =
+                !scene.data.meshes[i].bone_weights.empty() && scene.data.skeleton
+                    ? scene.data.skeleton->global_inverse : scene.data.node_instance_prefix;
             for(uint32_t n=0;n<scene.data.nodes.size();++n)if(scene.data.nodes[n].mesh_index==i){gpu_instance.node_index=n;break;}
             result.mesh_instances.push_back(gpu_instance);
         }

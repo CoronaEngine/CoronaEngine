@@ -5,6 +5,7 @@
 corona_add_system(optics
     SOURCES
         optics_system.cpp
+        retain_submission.cpp
         actor_pick_readback_worker.cpp
         ${PROJECT_SOURCE_DIR}/include/corona/systems/optics/actor_pick_readback_worker.h
         actor_pick_result.h
@@ -30,6 +31,12 @@ corona_add_system(optics
     INCLUDE_DIRS
     	$<$<BOOL:${CORONA_BUILD_VISION}>:${CMAKE_SOURCE_DIR}/vision/src>
 )
+
+# Only the compatibility bridge sees Horizon's private command recorder. Do not
+# expose this include root to Vision: both projects have headers named core/*.
+set_source_files_properties(retain_submission.cpp PROPERTIES
+    INCLUDE_DIRECTORIES "${CMAKE_SOURCE_DIR}/.workspace/Horizon/src")
+target_link_libraries(corona_optics_system PRIVATE horizon::volk)
 
 # vision-all_libs is linked PRIVATEly here on purpose: vision bundles its own
 # copy of Dear ImGui v1.80 under vision/src/ext/window/imgui and exposes it via
@@ -88,3 +95,7 @@ endif()
 helicon_compile_shaders(corona_optics_system
     OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated_shaders"
 )
+
+# Native shader changes must invalidate the translation unit and hardcoded cache.
+file(GLOB OPTICS_SHADER_SOURCES CONFIGURE_DEPENDS "${PROJECT_SOURCE_DIR}/assets/shaders/*.glsl")
+set_property(SOURCE optics_system.cpp APPEND PROPERTY OBJECT_DEPENDS "${OPTICS_SHADER_SOURCES}")

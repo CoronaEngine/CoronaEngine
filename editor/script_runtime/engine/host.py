@@ -35,8 +35,8 @@ def _native_scene_target():
     )
     route = active_route if active_route in routes else routes[0]
     if route != active_route:
-        # Reloading the active scene would synchronously call back into this
-        # Python runtime while it is waiting for the native switch to return.
+        # Reuse the live active scene to preserve edits and avoid reloading it
+        # through the Python callback queue. Only select a scene on first startup.
         switched = scene_api.switch(route)
         if isinstance(switched, dict) and switched.get("status") in ("error", "failed"):
             return None

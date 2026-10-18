@@ -13,10 +13,12 @@ inline std::vector<Node> from_scene(const Resource::SceneData& scene) {
         dst.base.position=dst.state.position=src.transform.position; dst.base.rotation=dst.state.rotation=src.transform.rotation; dst.base.scale=dst.state.scale=src.transform.scale;
         dst.base.visible=dst.state.visible=dst.base.effective_visible=dst.state.effective_visible=true;
         dst.base.editable=dst.state.editable=!src.has_local_matrix || finite(trs(src.transform.position,src.transform.rotation,src.transform.scale));
-        dst.local_base=trs(dst.base.position,dst.base.rotation,dst.base.scale);
+        // Preserve the imported matrix (including shear) until its TRS is edited.
+        dst.local_base=src.has_local_matrix ? src.local_matrix : trs(dst.base.position,dst.base.rotation,dst.base.scale);
         if(src.parent_index>=0 && static_cast<std::size_t>(src.parent_index)<out.size()) out[static_cast<std::size_t>(src.parent_index)].children.push_back(i);
     }
     for(std::uint32_t i=0;i<out.size();++i) if(out[i].state.parent_index<0) update(out,i);
+    for(auto& node:out) node.world_base=node.world;
     return out;
 }
 }

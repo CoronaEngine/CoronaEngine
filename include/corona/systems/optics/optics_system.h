@@ -292,7 +292,6 @@ class OpticsSystem : public Kernel::SystemBase {
         Horizon::HardwareImage final_output;        ///< RGBA16F final output owned by this surface.
         Horizon::HardwareImage ui_overlay;          ///< Pass 2 camera-follow actor overlay
         Horizon::HardwareImage ui_warped_overlay;   ///< LFD-warped UI overlay for Stereo3D mode
-        Horizon::HardwareImage composite_output;    ///< Optics-internal scene+overlay result
         std::uintptr_t image_handle = 0;   ///< ImageStorage handle owned by this surface.
         uint32_t width = 0;                ///< Current output image width in pixels.
         uint32_t height = 0;
@@ -316,7 +315,7 @@ class OpticsSystem : public Kernel::SystemBase {
 
     /// 在 background 上渲染 follow-camera UI actor + 可选柱镜 warp + composite。
     /// 仅在 hardware_->executor 上“记录”pass，不 commit。有 follow-camera 实例时
-    /// 返回 &target.composite_output，否则返回 &background；调用方负责 commit + publish。
+    /// 就地合成至 background；调用方负责 commit + publish。
     /// 前置条件：调用方已设 hardware_->gbufferSize={w,h}、已 ensure_ui_view_resources
     /// 绑定 uiVisibility/uiDepth，且 background 的生产 pass 已在同一 executor 上记录。
     Horizon::HardwareImage* compose_surface_ui_overlay(Horizon::HardwareStream& stream,

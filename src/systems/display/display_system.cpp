@@ -1,4 +1,5 @@
-﻿#include <corona/events/display_system_events.h>
+#include "../common/render_resource_bindings.h"
+#include <corona/events/display_system_events.h>
 #include <corona/events/engine_events.h>
 #include <horizon/core/logging.h>
 #include <corona/kernel/event/i_event_bus.h>
@@ -956,9 +957,9 @@ Detail::PresentOutcome DisplaySystem::compose_and_present(
     const uint32_t bg_descriptor = optics_image.store_descriptor();
     const uint32_t fg_descriptor = ui_image.store_descriptor();
     const uint32_t output_descriptor = resources.output.store_descriptor();
-    composite_pipeline.pushConsts.bgImage = bg_descriptor;
-    composite_pipeline.pushConsts.fgImage = fg_descriptor;
-    composite_pipeline.pushConsts.outputImage = output_descriptor;
+    RenderDetail::bind_storage_image(composite_pipeline, composite_pipeline.pushConsts.bgImage, optics_image);
+    RenderDetail::bind_storage_image(composite_pipeline, composite_pipeline.pushConsts.fgImage, ui_image);
+    RenderDetail::bind_storage_image(composite_pipeline, composite_pipeline.pushConsts.outputImage, resources.output);
     composite_pipeline.pushConsts.outputWidth = output_width;
     composite_pipeline.pushConsts.outputHeight = output_height;
     composite_pipeline.pushConsts.bgWidth = std::max(bg_extent.width, 1u);
@@ -973,17 +974,7 @@ Detail::PresentOutcome DisplaySystem::compose_and_present(
         state.optics.viewport_height != 0 ? state.optics.viewport_height : output_height;
     composite_pipeline.pushConsts.fgOpaque =
         (state.ui.image_handle != 0 && state.optics.image_handle == 0) ? 1u : 0u;
-    // bind_storage_image() 已移除。Horizon 现在从 dispatch.bindings（通过 set_resource_direct
-    // 注册 bound_images_）自动转换为 GENERAL 布局（execution.cpp:2044-2062 遍历 StorageImage
-    // 类型的 binding）。这里 pushConsts.xxxImage 的 bindType 是 0（标量），不触发
-    // is_direct_resource_bind()，故必须显式注册 images[] 这个 bindType=8 的 binding。
-    // 但 composite.comp.glsl 的 images 是单个 (set=2, binding=0) 槽，三个图像共享，
-    // 只能注册一次。实际上三个图像的索引已写入 push constant，shader 从 images[xxxImage]
-    // 索引读写，不需要单独的 bind 声明——Horizon 的 example 也是纯 pushConsts 传索引，
-    // 从未调用 bind_storage_image。布局转换由 images[] 这个 binding 的任一注册触发，
-    // 或者由图像用作 ColorAttachment 时的 begin_rendering 自动处理（这些图像确实是
-    // ColorAttachment）。这里删除三个 bind 调用，依赖 images 数组自身的注册（如果有），
-    // 或 rendering attachment 的自动转换。
+    // Resource bindings above track all three images and their transitions.
 
     // 新版 Horizon: 使用 dispatch_extent 替代 dispatch_groups
     // composite_pipeline 使用 8x8 local size，extent 会自动计算 group 数量

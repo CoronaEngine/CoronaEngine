@@ -60,6 +60,7 @@ struct Node {
     Matrix local_base{identity()};
     Matrix local_current{identity()};
     Matrix world{identity()};
+    Matrix world_base{identity()};
     std::vector<std::uint32_t> children;
     std::vector<std::uint32_t> instance_indices;
     bool dirty{true};
@@ -85,7 +86,9 @@ struct Counts {
 inline void update(std::vector<Node>& nodes, std::uint32_t index) {
     if (index >= nodes.size()) return;
     auto& n=nodes[index];
-    n.local_current=trs(n.state.position,n.state.rotation,n.state.scale);
+    const bool unchanged = n.state.position == n.base.position &&
+        n.state.rotation == n.base.rotation && n.state.scale == n.base.scale;
+    n.local_current = unchanged ? n.local_base : trs(n.state.position,n.state.rotation,n.state.scale);
     n.world = n.state.parent_index >= 0 && static_cast<std::size_t>(n.state.parent_index)<nodes.size()
         ? multiply(nodes[static_cast<std::size_t>(n.state.parent_index)].world,n.local_current) : n.local_current;
     n.state.effective_visible=n.state.visible && (n.state.parent_index<0 || nodes[static_cast<std::size_t>(n.state.parent_index)].state.effective_visible);
