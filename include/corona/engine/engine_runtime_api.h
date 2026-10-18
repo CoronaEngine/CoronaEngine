@@ -335,10 +335,13 @@ class Camera {
     [[nodiscard]] std::string get_vision_denoiser() const;
     [[nodiscard]] std::string get_requested_vision_denoiser() const;
     void set_vision_reblur_settings(const std::string& json);
+    void set_vision_pt_settings(const std::string& json);
     void set_vision_relax_settings(const std::string& json);
     [[nodiscard]] std::string get_requested_vision_reblur_settings() const;
+    [[nodiscard]] std::string get_requested_vision_pt_settings() const;
     [[nodiscard]] std::string get_requested_vision_relax_settings() const;
     [[nodiscard]] std::string get_effective_vision_reblur_settings() const;
+    [[nodiscard]] std::string get_effective_vision_pt_settings() const;
     [[nodiscard]] std::string get_effective_vision_relax_settings() const;
     void set_vision_accumulation(bool enabled);
     [[nodiscard]] bool get_vision_accumulation() const;
@@ -510,10 +513,13 @@ void set_vision_denoiser(const std::string& type, std::uintptr_t camera_handle =
 [[nodiscard]] std::string get_vision_denoiser(std::uintptr_t camera_handle = 0);
 [[nodiscard]] std::string get_requested_vision_denoiser(std::uintptr_t camera_handle = 0);
 void set_vision_reblur_settings(const std::string& json, std::uintptr_t camera_handle = 0);
+void set_vision_pt_settings(const std::string& json, std::uintptr_t camera_handle = 0);
 void set_vision_relax_settings(const std::string& json, std::uintptr_t camera_handle = 0);
 [[nodiscard]] std::string get_requested_vision_reblur_settings(std::uintptr_t camera_handle = 0);
+[[nodiscard]] std::string get_requested_vision_pt_settings(std::uintptr_t camera_handle = 0);
 [[nodiscard]] std::string get_requested_vision_relax_settings(std::uintptr_t camera_handle = 0);
 [[nodiscard]] std::string get_effective_vision_reblur_settings(std::uintptr_t camera_handle = 0);
+[[nodiscard]] std::string get_effective_vision_pt_settings(std::uintptr_t camera_handle = 0);
 [[nodiscard]] std::string get_effective_vision_relax_settings(std::uintptr_t camera_handle = 0);
 
 /// Queue an independent accumulation preference for this camera (disabled by default).

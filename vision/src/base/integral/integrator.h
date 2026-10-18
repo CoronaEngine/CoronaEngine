@@ -92,6 +92,8 @@ public:
     // Optional ReSTIR capability; other integrators ignore the camera preference.
     virtual void set_stable_planes_enabled(bool enabled) noexcept {}
     [[nodiscard]] virtual bool stable_planes_enabled() const noexcept { return false; }
+    virtual bool set_pt_settings(std::string_view json) noexcept { return false; }
+    [[nodiscard]] virtual std::string pt_settings_json() const { return "{}"; }
     void upload_immediately() noexcept override {
         EncodedObject::upload_immediately();
     }

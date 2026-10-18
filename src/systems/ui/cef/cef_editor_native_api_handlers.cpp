@@ -1150,6 +1150,7 @@ std::vector<std::string> build_camera_section_lines(const NativeEditorScene& sce
             lines.push_back(prefix + ".vision_denoise = " + format_bool(camera.engine_camera->get_requested_vision_denoise()));
             lines.push_back(prefix + ".vision_denoiser = " + camera.engine_camera->get_requested_vision_denoiser());
             lines.push_back(prefix + ".vision_reblur_settings = " + camera.engine_camera->get_requested_vision_reblur_settings());
+            lines.push_back(prefix + ".vision_pt_settings = " + camera.engine_camera->get_requested_vision_pt_settings());
             lines.push_back(prefix + ".vision_relax_settings = " + camera.engine_camera->get_requested_vision_relax_settings());
             lines.push_back(prefix + ".vision_accumulation = " + format_bool(camera.engine_camera->get_requested_vision_accumulation()));
             lines.push_back(prefix + ".vision_stable_planes = " + format_bool(camera.engine_camera->get_requested_vision_stable_planes()));
@@ -1977,6 +1978,7 @@ NativeEditorCamera make_native_camera(NativeEditorScene& scene,
     item.engine_camera->set_vision_render_mode(vision_mode);
     item.engine_camera->set_vision_denoiser(section_value("vision_denoiser", "scene"));
     item.engine_camera->set_vision_reblur_settings(section_value("vision_reblur_settings", "{}"));
+    item.engine_camera->set_vision_pt_settings(section_value("vision_pt_settings", "{}"));
     item.engine_camera->set_vision_relax_settings(section_value("vision_relax_settings", "{}"));
     item.engine_camera->set_vision_denoise(
         parse_bool(section_value("vision_denoise", ""), legacy_svgf_mode(vision_mode)));
@@ -2511,6 +2513,7 @@ NativeEditorCamera materialize_camera_snapshot(NativeEditorScene& scene,
     item.engine_camera->set_vision_render_mode(vision_mode);
     item.engine_camera->set_vision_denoiser(camera_data.value("vision_denoiser", std::string{"scene"}));
     item.engine_camera->set_vision_reblur_settings(camera_data.value("vision_reblur_settings", nlohmann::json::object()).dump());
+    item.engine_camera->set_vision_pt_settings(camera_data.value("vision_pt_settings", nlohmann::json::object()).dump());
     item.engine_camera->set_vision_relax_settings(camera_data.value("vision_relax_settings", nlohmann::json::object()).dump());
     item.engine_camera->set_vision_denoise(
         json_bool_value(camera_data, "vision_denoise", legacy_svgf_mode(vision_mode)));
@@ -2862,6 +2865,9 @@ nlohmann::json camera_to_json(const NativeEditorCamera& camera) {
     item["vision_denoiser"] = camera.engine_camera ? camera.engine_camera->get_vision_denoiser() : "scene";
     item["vision_reblur_settings"] = camera.engine_camera
         ? nlohmann::json::parse(camera.engine_camera->get_requested_vision_reblur_settings(), nullptr, false)
+        : nlohmann::json::object();
+    item["vision_pt_settings"] = camera.engine_camera
+        ? nlohmann::json::parse(camera.engine_camera->get_requested_vision_pt_settings(), nullptr, false)
         : nlohmann::json::object();
     item["vision_relax_settings"] = camera.engine_camera
         ? nlohmann::json::parse(camera.engine_camera->get_requested_vision_relax_settings(), nullptr, false)
@@ -3436,6 +3442,7 @@ NativeEditorCamera* ensure_native_editor_camera(NativeEditorScene& scene,
     item.engine_camera->set_vision_render_mode(vision_mode.empty() ? "path_tracing" : vision_mode);
     item.engine_camera->set_vision_denoiser(camera_data.value("vision_denoiser", std::string{"scene"}));
     item.engine_camera->set_vision_reblur_settings(camera_data.value("vision_reblur_settings", nlohmann::json::object()).dump());
+    item.engine_camera->set_vision_pt_settings(camera_data.value("vision_pt_settings", nlohmann::json::object()).dump());
     item.engine_camera->set_vision_relax_settings(camera_data.value("vision_relax_settings", nlohmann::json::object()).dump());
     item.engine_camera->set_vision_denoise(
         json_bool_value(camera_data, "vision_denoise", legacy_svgf_mode(vision_mode)));
@@ -9821,6 +9828,37 @@ void register_scene_tools_api_handlers(NativeApiRegistry& registry) {
             snapshot["vision_denoiser"] = type;
             return native_success({{"status", "success"}, {"pending", true},
                 {"type", type}, {"camera", std::move(snapshot)}});
+        }},
+        {"get_pt_settings", [](const NativeRequest& request, const NativeContext&) {
+            auto* scene = resolve_native_editor_scene_request(ensure_native_editor_scene(), normalize_route(arg_string(request.args, 0)));
+            auto* camera = find_native_camera(*scene, arg_string(request.args, 1));
+            if (!camera || !camera->engine_camera) return native_failure("Camera not found", 2);
+            auto settings = nlohmann::json::parse(camera->engine_camera->get_effective_vision_pt_settings(), nullptr, false);
+            if (!settings.is_object()) settings = nlohmann::json::object();
+            const bool ready = settings.contains("max_depth") && settings.contains("min_depth") && settings.contains("rr_threshold");
+            auto adaptive = settings.value("adaptive", nlohmann::json::object());
+            settings.erase("adaptive");
+            const auto overrides = nlohmann::json::parse(camera->engine_camera->get_requested_vision_pt_settings(), nullptr, false);
+            if (overrides.is_object()) settings.update(overrides);
+            return native_success({{"settings", std::move(settings)}, {"adaptive", std::move(adaptive)}, {"ready", ready}});
+        }},
+        {"set_pt_settings", [](const NativeRequest& request, const NativeContext&) {
+            auto* scene = resolve_native_editor_scene_request(ensure_native_editor_scene(), normalize_route(arg_string(request.args, 0)));
+            auto* camera = find_native_camera(*scene, arg_string(request.args, 1));
+            if (!camera || !camera->engine_camera) return native_failure("Camera not found", 2);
+            if (request.args.size() < 3 || !request.args[2].is_object()) return native_failure("Expected PT settings object", 2);
+            const auto& settings = request.args[2];
+            for (auto it = settings.begin(); it != settings.end(); ++it) {
+                const double maximum = it.key() == "max_depth" ? 128 : it.key() == "min_depth" ? 20 : 1;
+                if ((it.key() != "max_depth" && it.key() != "min_depth" && it.key() != "rr_threshold") || !it->is_number())
+                    return native_failure("Invalid PT parameter: " + it.key(), 2);
+                const double value = it->get<double>();
+                if (!std::isfinite(value) || value < 0 || value > maximum ||
+                    (it.key() != "rr_threshold" && value != std::floor(value)))
+                    return native_failure("PT parameter out of range: " + it.key(), 2);
+            }
+            camera->engine_camera->set_vision_pt_settings(settings.dump());
+            return native_success({{"status", "success"}, {"pending", true}, {"settings", settings}});
         }},
         {"get_reblur_settings", [](const NativeRequest& request, const NativeContext&) {
             auto* scene = resolve_native_editor_scene_request(ensure_native_editor_scene(), normalize_route(arg_string(request.args, 0)));

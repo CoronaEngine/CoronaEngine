@@ -553,6 +553,95 @@ struct VisionEmbeddedModeSwitchTest {
         pipeline.activate_view_context(0);
         pipeline.set_output_denoise(false);
     }
+    static void check_pt_settings(OpticsSystem& system, vision::Pipeline& pipeline,
+                                  vision::Pipeline* previous_pipeline = nullptr) {
+        auto& hub = SharedDataHub::instance();
+        const auto first = hub.camera_storage().allocate();
+        const auto second = hub.camera_storage().allocate();
+        const std::string settings = R"({"max_depth":0,"min_depth":2,"rr_threshold":0.5})";
+        Corona::API::set_vision_pt_settings(settings, first);
+        auto updates = hub.drain_camera_state_updates();
+        expect(updates.size() == 1 && Corona::API::get_requested_vision_pt_settings(first) == settings &&
+                   Corona::API::get_requested_vision_pt_settings(second) == "{}",
+               "PT preferences must be persistable while in flight and independent per camera");
+        Corona::API::set_vision_pt_settings(R"({"max_depth":8})", first);
+        hub.acknowledge_camera_vision_pt_settings(first, updates[0].sequence);
+        expect(Corona::API::get_requested_vision_pt_settings(first) == R"({"max_depth":8})",
+               "an older acknowledgement must not discard a newer PT preference");
+        hub.clear_camera_state_updates(first);
+        auto prepare = [&](std::uintptr_t handle, const std::string& json) {
+            if (previous_pipeline) previous_pipeline->activate_global_context();
+            expect(system.prepare_vision_camera_view(system.active_vision_runtime(), handle,
+                       16, 16, false, true, true, CameraVisionDenoiser::Scene, "{}", "{}", json),
+                   "PT camera settings must prepare a usable view");
+        };
+        prepare(second, "{}");
+        render(pipeline, "PT-settings-second-camera");
+        const auto other_history = pipeline.frame_index();
+        prepare(first, "{}");
+        render(pipeline, "PT-settings-before-edit");
+        const auto framebuffer = pipeline.renderer().frame_buffer_sp();
+        prepare(first, settings);
+        expect(pipeline.frame_buffer() == framebuffer.get() && pipeline.frame_index() == 0,
+               "PT edits must reset accumulated samples without recreating the view");
+        auto effective = vision::DataWrap::parse(Corona::API::get_effective_vision_pt_settings(first));
+        expect(effective["max_depth"] == 0 && effective["min_depth"] == 2 && effective["rr_threshold"] == 0.5,
+               "all three PT parameters must reach the active integrator and runtime feedback");
+        expect(effective["adaptive"]["available"] == false,
+               "the inactive adaptive sampler must be reported as unavailable");
+        render(pipeline, "PT-settings-zero-depth", false);
+        const auto history = pipeline.frame_index();
+        prepare(first, settings);
+        expect(pipeline.frame_index() == history, "unchanged PT settings must preserve history");
+        prepare(second, "{}");
+        expect(pipeline.frame_index() == other_history, "editing PT must preserve another camera's history");
+        render(pipeline, "PT-settings-second-camera-return");
+        prepare(first, R"({"max_depth":1})");
+        render(pipeline, "PT-settings-one-depth");
+        prepare(first, "{}");
+        render(pipeline, "PT-settings-restored-scene-depth");
+        if (previous_pipeline) {
+            std::vector<vision::float4> pixels(pipeline.pixel_num());
+            pipeline.final_picture(pipeline.output_desc(), pixels.data());
+            float red = 0.f, green = 0.f, blue = 0.f;
+            for (const auto& pixel : pixels) {
+                red += pixel.x; green += pixel.y; blue += pixel.z;
+            }
+            expect(red > 2.f * green && red > 2.f * blue,
+                   "runtime PT recompilation must use the target scene's red light, not the previous scene's white light");
+        }
+        effective = vision::DataWrap::parse(Corona::API::get_effective_vision_pt_settings(first));
+        expect(effective["max_depth"] == 2 && effective["min_depth"] == 5 && effective["rr_threshold"] == 1,
+               "clearing camera overrides must restore source scene values");
+        pipeline.activate_view_context(0);
+        pipeline.remove_view_context(first);
+        pipeline.remove_view_context(second);
+        for (auto handle : {first, second}) {
+            hub.clear_camera_state_updates(handle);
+            hub.camera_storage().deallocate(handle);
+        }
+        std::cout << "PASS: camera-local PT parameters, history reset, GPU depth and scene defaults\n";
+    }
+    static void check_pt_settings_with_material_lut(
+        OpticsSystem& system, const OpticsSystem::VisionSceneLoadRequest& source) {
+        auto previous_pipeline = vision::Global::instance().pipeline_shared();
+        auto request = source;
+        request.scene_key += ".principled";
+        auto data = vision::DataWrap::parse(request.scene_json);
+        data["scene"]["materials"][0] = {
+            {"type", "principled_bsdf"}, {"name", "mat"},
+            {"param", {{"color", {0.8f, 0.8f, 0.8f}}, {"roughness", 0.4f}}}};
+        data["scene"]["lights"][0]["param"]["color"] = {1.f, 0.f, 0.f};
+        request.scene_json = data.dump();
+        expect(system.load_external_vision_scene_from_json(request, CameraVisionRenderMode::PathTracing),
+               "PT material-LUT scene must initialize");
+        expect(vision::Global::instance().scene_bindless_array() == nullptr,
+               "runtime PT edits must be tested outside pipeline compilation's scene scope");
+        check_pt_settings(system, *vision::Global::instance().pipeline_shared(), previous_pipeline.get());
+        expect(system.load_external_vision_scene_from_json(source, CameraVisionRenderMode::PathTracing),
+               "PT material-LUT test must restore the original scene");
+        std::cout << "PASS: runtime PT edits with a material lookup table\n";
+    }
     static void check_independent_denoiser(OpticsSystem& system, vision::Pipeline& pipeline,
                                           const char* algorithm) {
         auto& camera_storage = SharedDataHub::instance().camera_storage();
@@ -1198,6 +1287,8 @@ struct VisionEmbeddedModeSwitchTest {
         pt->activate_view_context(0);
         pt->commit_command();
         render(*pt, "PT");
+        check_pt_settings(system, *pt);
+        check_pt_settings_with_material_lut(system, request);
         check_independent_accumulation(system, *pt, "pt");
         check_independent_denoiser(system, *pt, "pt");
         expect(!pt->frame_buffer()->enable_accumulation(), "realtime PT must not accumulate SVGF output");

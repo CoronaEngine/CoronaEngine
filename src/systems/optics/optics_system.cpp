@@ -1017,6 +1017,9 @@ void apply_pending_camera_state_updates() {
             if (Corona::has_camera_state_field(update.fields, Corona::CameraStateUpdateField::VisionReblurSettings)) {
                 camera->vision_reblur_settings = update.vision_reblur_settings;
             }
+            if (Corona::has_camera_state_field(update.fields, Corona::CameraStateUpdateField::VisionPtSettings)) {
+                camera->vision_pt_settings = update.vision_pt_settings;
+            }
             if (Corona::has_camera_state_field(update.fields, Corona::CameraStateUpdateField::VisionRelaxSettings)) {
                 camera->vision_relax_settings = update.vision_relax_settings;
             }
@@ -1057,6 +1060,9 @@ void apply_pending_camera_state_updates() {
         }
         if (Corona::has_camera_state_field(update.fields, Corona::CameraStateUpdateField::VisionReblurSettings)) {
             hub.acknowledge_camera_vision_reblur_settings(update.camera_handle, update.sequence);
+        }
+        if (Corona::has_camera_state_field(update.fields, Corona::CameraStateUpdateField::VisionPtSettings)) {
+            hub.acknowledge_camera_vision_pt_settings(update.camera_handle, update.sequence);
         }
         if (Corona::has_camera_state_field(update.fields, Corona::CameraStateUpdateField::VisionRelaxSettings)) {
             hub.acknowledge_camera_vision_relax_settings(update.camera_handle, update.sequence);
@@ -2708,10 +2714,12 @@ bool OpticsSystem::prepare_vision_camera_view(VisionPipelineRuntime& runtime,
                                             bool denoise, bool accumulation, bool stable_planes,
                                             CameraVisionDenoiser denoiser,
                                             const std::string& reblur_settings,
-                                            const std::string& relax_settings) {
+                                            const std::string& relax_settings,
+                                            const std::string& pt_settings) {
     vision::switch_profile::Scope profile{"view.prepare", "view"};
     auto& pipeline = runtime.pipeline;
     if (!pipeline || camera_handle == 0) return false;
+    pipeline->activate_global_context();
     const auto resolution = ocarina::make_uint2(std::max(width, 1u), std::max(height, 1u));
     bool view_created = false;
     if (runtime.mode == CameraVisionRenderMode::SSAT) denoiser = CameraVisionDenoiser::Scene;
@@ -2763,6 +2771,16 @@ bool OpticsSystem::prepare_vision_camera_view(VisionPipelineRuntime& runtime,
     }
     if (!pipeline->activate_view_context(camera_handle)) return false;
     pipeline->renderer().integrator()->set_stable_planes_enabled(stable_planes);
+    if (runtime.mode == CameraVisionRenderMode::PathTracing ||
+        runtime.mode == CameraVisionRenderMode::ProgressivePathTracing) {
+        auto* integrator = pipeline->renderer().integrator().get();
+        const bool changed = integrator->set_pt_settings(pt_settings);
+        if (changed) pipeline->invalidate();
+        if (view_created || changed) {
+            if (auto camera = SharedDataHub::instance().camera_storage().try_acquire_write(camera_handle))
+                camera->vision_pt_effective_settings = integrator->pt_settings_json();
+        }
+    }
     if (auto* illumination = dynamic_cast<vision::IlluminationIntegrator*>(pipeline->renderer().integrator().get())) {
         if (auto* filter = illumination->denoiser(); filter && filter->set_reblur_settings(reblur_settings)) {
             pipeline->invalidate();
@@ -7334,7 +7352,7 @@ void OpticsSystem::run_vision_frame(float frame_count, uint64_t frame_index) {
                 if (!prepare_vision_camera_view(runtime, cam_handle,
                                                camera.width, camera.height, denoise,
                                                camera.vision_accumulation, camera.vision_stable_planes, camera.vision_denoiser,
-                                               camera.vision_reblur_settings, camera.vision_relax_settings)) {
+                                               camera.vision_reblur_settings, camera.vision_relax_settings, camera.vision_pt_settings)) {
                     return;
                 }
 
