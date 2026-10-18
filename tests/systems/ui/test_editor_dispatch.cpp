@@ -440,6 +440,50 @@ void test_scope_is_ignored_off_the_owner_thread() {
     clear_editor_dispatch_hooks();
 }
 
+void test_queued_python_callback_is_handed_off_when_owner_starts_waiting() {
+    const auto owner_id = std::this_thread::get_id();
+    std::function<void()> queued;
+    std::promise<void> posted;
+    auto posted_future = posted.get_future();
+    EditorDispatchHooks hooks;
+    hooks.is_owner_thread = [owner_id] { return std::this_thread::get_id() == owner_id; };
+    hooks.post_to_owner = [&](std::function<void()> task) {
+        queued = std::move(task);
+        posted.set_value();
+        return true;
+    };
+    set_editor_dispatch_hooks(hooks);
+
+    // Kitchen import occupies the owner while Python queues list_routes. The
+    // owner then asks Python to parse the imported scene before pumping CEF.
+    std::atomic<int> writes{0};
+    EditorDispatchReport report;
+    std::promise<int> returned;
+    auto result = returned.get_future();
+    std::thread python([&] {
+        auto value = call_editor_dispatch([&] { ++writes; return 42; },
+                                          EditorDispatchRoute::Marshal, 2s, &report);
+        returned.set_value(value.value_or(-1));
+    });
+    CHECK(posted_future.wait_for(1s) == std::future_status::ready);
+    bool completed_while_owner_waited = false;
+    {
+        EditorWaitingForPythonScope waiting;
+        CHECK(waiting.engaged());
+        completed_while_owner_waited = result.wait_for(200ms) == std::future_status::ready;
+    }
+    // CEF eventually receives the original posted task. It must not repeat a
+    // callback that the Python thread already executed during the handoff.
+    queued();
+    python.join();
+    CHECK(completed_while_owner_waited);
+    CHECK(result.get() == 42);
+    CHECK(writes == 1);
+    CHECK(report.run == EditorOwnerRun::Ran);
+    CHECK(report.ran_inline_on_caller);
+    clear_editor_dispatch_hooks();
+}
+
 }  // namespace
 
 int main() {
@@ -458,6 +502,7 @@ int main() {
     test_inline_busy_rechecks_marker_after_locking();
     test_owner_waits_for_in_flight_inline_handler();
     test_scope_is_ignored_off_the_owner_thread();
+    test_queued_python_callback_is_handed_off_when_owner_starts_waiting();
     std::puts("editor dispatch tests passed");
     return 0;
 }
