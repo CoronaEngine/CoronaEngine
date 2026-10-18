@@ -170,6 +170,15 @@ def _parse_actor(
             f"Unsupported collision type for {key}: {collision}",
             details={"actor_name": section.get(f"{key}.name", key)},
         )
+    body_type = section.get(f"{key}.mechanics.body_type", fallback=None)
+    if body_type is not None:
+        body_type = body_type.strip().lower()
+        if body_type not in {"dynamic", "kinematic", "static", "phantom"}:
+            raise ArchiveParseError(
+                "INVALID_BODY_TYPE",
+                f"Unsupported body type for {key}: {body_type}",
+                details={"actor_name": section.get(f"{key}.name", key)},
+            )
     optics: dict[str, Any] = {}
     diffuse = section.get(f"{key}.optics.diffuse", fallback="").strip()
     if diffuse:
@@ -299,6 +308,7 @@ def _parse_actor(
         },
         "visible": section.getboolean(f"{key}.optics.visible", fallback=True),
         "mechanics": {
+            **({"body_type": body_type} if body_type is not None else {}),
             "physics_enabled": section.getboolean(
                 f"{key}.mechanics.physics_enabled", fallback=True
             ),
