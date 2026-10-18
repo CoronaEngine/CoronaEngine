@@ -36,6 +36,7 @@
 ///
 /// 本头不依赖 CEF，便于单元测试；CEF 的实现（`CefCurrentlyOn`／`CefPostTask`）由
 /// `cef_editor_api.cpp` 在首次使用时安装。
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -225,9 +226,11 @@ struct EditorOwnerCallCell {
 template <typename Fn>
 [[nodiscard]] auto call_on_editor_owner_thread(Fn fn,
                                                std::chrono::milliseconds timeout,
-                                               EditorOwnerRun* executed_as = nullptr)
+                                               EditorOwnerRun* executed_as = nullptr,
+                                               bool* ran_inline_on_caller = nullptr)
     -> std::optional<std::invoke_result_t<Fn&>> {
     using R = std::invoke_result_t<Fn&>;
+    if (ran_inline_on_caller) *ran_inline_on_caller = false;
 
     auto hooks = copy_editor_dispatch_hooks();
     if (!hooks.post_to_owner) {
@@ -238,37 +241,55 @@ template <typename Fn>
     auto cell = std::make_shared<EditorOwnerCallCell<R>>();
     auto done = std::make_shared<std::promise<void>>();
     auto future = done->get_future();
-    if (!hooks.post_to_owner([fn = std::move(fn), cell, done]() mutable {
-            {
-                std::lock_guard<std::mutex> lock(cell->mutex);
-                if (cell->claimed) return;  // 调用方已经放弃：什么都不做
-                cell->running = true;
-            }
-            std::optional<R> value;
-            std::exception_ptr error;
-            try {
-                value.emplace(fn());
-            } catch (...) {
-                error = std::current_exception();
-            }
-            {
-                std::lock_guard<std::mutex> lock(cell->mutex);
-                cell->result = std::move(value);
-                cell->error = error;
-                cell->finished = true;
-            }
-            cell->cv.notify_all();
-            try {
-                done->set_value();
-            } catch (...) {
-                // promise 被重复/异常设置：忽略，调用方靠超时收尾。
-            }
-        })) {
+    auto body = std::make_shared<Fn>(std::move(fn));
+    auto execute = [body, cell, done]() {
+        {
+            std::lock_guard<std::mutex> lock(cell->mutex);
+            if (cell->claimed || cell->running) return false;
+            cell->running = true;
+        }
+        std::optional<R> value;
+        std::exception_ptr error;
+        try {
+            value.emplace((*body)());
+        } catch (...) {
+            error = std::current_exception();
+        }
+        {
+            std::lock_guard<std::mutex> lock(cell->mutex);
+            cell->result = std::move(value);
+            cell->error = error;
+            cell->finished = true;
+        }
+        cell->cv.notify_all();
+        try {
+            done->set_value();
+        } catch (...) {
+            // promise 被重复/异常设置：忽略，调用方靠超时收尾。
+        }
+        return true;
+    };
+    if (!hooks.post_to_owner([execute] { (void)execute(); })) {
         if (executed_as) *executed_as = EditorOwnerRun::PostFailed;
         return std::nullopt;
     }
 
-    if (future.wait_for(timeout) == std::future_status::ready) {
+    // A callback can already be queued when an import starts waiting for Python.
+    // Hand that pending callback back to its caller under the same lock/marker
+    // protocol as InlineBusy, so Python can service the owner's archive request.
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    while (future.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready &&
+           std::chrono::steady_clock::now() < deadline) {
+        if (editor_thread_waiting_for_python()) {
+            std::unique_lock<std::recursive_mutex> state_lock(editor_state_mutex(), std::try_to_lock);
+            if (state_lock.owns_lock() && editor_thread_waiting_for_python() && execute()) {
+                if (ran_inline_on_caller) *ran_inline_on_caller = true;
+            }
+        }
+        (void)future.wait_until(std::min(deadline,
+            std::chrono::steady_clock::now() + std::chrono::milliseconds(5)));
+    }
+    if (future.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready) {
         if (executed_as) *executed_as = EditorOwnerRun::Ran;
         if (cell->error) std::rethrow_exception(cell->error);
         return std::move(cell->result);
@@ -307,7 +328,7 @@ template <typename Fn>
             if (!editor_thread_waiting_for_python()) {
                 // owner 已经恢复（或即将恢复）：改走 owner 线程，避免与它并发。
                 state_lock.unlock();
-                return call_on_editor_owner_thread(std::move(fn), timeout, &out.run);
+                return call_on_editor_owner_thread(std::move(fn), timeout, &out.run, &out.ran_inline_on_caller);
             }
             out.ran_inline_on_caller = true;
             return std::optional{fn()};
@@ -318,7 +339,7 @@ template <typename Fn>
             if (editor_owner_thread_seen()) {
                 // owner 线程刚刚出现（CEF 起来了）：交回给它，别在这里和它并发。
                 state_lock.unlock();
-                return call_on_editor_owner_thread(std::move(fn), timeout, &out.run);
+                return call_on_editor_owner_thread(std::move(fn), timeout, &out.run, &out.ran_inline_on_caller);
             }
             out.ran_inline_on_caller = true;
             return std::optional{fn()};
@@ -326,7 +347,7 @@ template <typename Fn>
 
         case EditorDispatchRoute::Marshal:
         default:
-            return call_on_editor_owner_thread(std::move(fn), timeout, &out.run);
+            return call_on_editor_owner_thread(std::move(fn), timeout, &out.run, &out.ran_inline_on_caller);
     }
 }
 

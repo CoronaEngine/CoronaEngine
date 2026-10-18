@@ -346,8 +346,13 @@ struct CameraDevice {
     bool vision_denoise{false};
     CameraVisionDenoiser vision_denoiser{CameraVisionDenoiser::Scene};
     std::string vision_reblur_settings{"{}"};
+    std::string vision_pt_settings{"{}"};
+    std::string vision_restir_settings{"{}"};
     std::string vision_relax_settings{"{}"};
     std::string vision_reblur_effective_settings{"{}"}; // Runtime feedback, not serialized.
+    std::string vision_pt_effective_settings{"{}"}; // Runtime feedback, not serialized.
+    std::string vision_restir_effective_settings{"{}"}; // Runtime feedback, not serialized.
+    std::string vision_restir_applied_settings; // Overrides matching runtime feedback, not serialized.
     std::string vision_relax_effective_settings{"{}"}; // Runtime feedback, not serialized.
     bool vision_accumulation{false};
     bool vision_stable_planes{true};
@@ -466,6 +471,8 @@ enum class CameraStateUpdateField : std::uint32_t {
     VisionDenoiser = 1u << 11,
     VisionReblurSettings = 1u << 12,
     VisionRelaxSettings = 1u << 13,
+    VisionPtSettings = 1u << 14,
+    VisionRestirSettings = 1u << 15,
 };
 
 constexpr CameraStateUpdateField operator|(CameraStateUpdateField lhs,
@@ -492,6 +499,8 @@ struct CameraStateUpdateCommand {
     bool vision_denoise{false};
     CameraVisionDenoiser vision_denoiser{CameraVisionDenoiser::Scene};
     std::string vision_reblur_settings{"{}"};
+    std::string vision_pt_settings{"{}"};
+    std::string vision_restir_settings{"{}"};
     std::string vision_relax_settings{"{}"};
     bool vision_accumulation{false};
     bool vision_stable_planes{true};
@@ -749,6 +758,14 @@ class SharedDataHub {
         std::uintptr_t camera_handle) const;
     void acknowledge_camera_vision_reblur_settings(std::uintptr_t camera_handle,
                                                    std::uint64_t applied_sequence);
+    [[nodiscard]] std::optional<std::string> requested_camera_vision_pt_settings(
+        std::uintptr_t camera_handle) const;
+    void acknowledge_camera_vision_pt_settings(std::uintptr_t camera_handle,
+                                                   std::uint64_t applied_sequence);
+    [[nodiscard]] std::optional<std::string> requested_camera_vision_restir_settings(
+        std::uintptr_t camera_handle) const;
+    void acknowledge_camera_vision_restir_settings(std::uintptr_t camera_handle,
+                                                   std::uint64_t applied_sequence);
     [[nodiscard]] std::optional<std::string> requested_camera_vision_relax_settings(
         std::uintptr_t camera_handle) const;
     void acknowledge_camera_vision_relax_settings(std::uintptr_t camera_handle,
@@ -826,6 +843,16 @@ class SharedDataHub {
         std::uint64_t sequence{};
     };
     std::unordered_map<std::uintptr_t, RequestedReblurSettings> requested_camera_vision_reblur_settings_;
+    struct RequestedPtSettings {
+        std::string json;
+        std::uint64_t sequence{};
+    };
+    struct RequestedRestirSettings {
+        std::string json;
+        std::uint64_t sequence{};
+    };
+    std::unordered_map<std::uintptr_t, RequestedPtSettings> requested_camera_vision_pt_settings_;
+    std::unordered_map<std::uintptr_t, RequestedRestirSettings> requested_camera_vision_restir_settings_;
     struct RequestedRelaxSettings {
         std::string json;
         std::uint64_t sequence{};

@@ -13,6 +13,16 @@ const CALLER_CEF = 1;
 
 const MANIFEST_METHODS = [
   {
+    api: 'SceneTools.get_restir_settings', js_wrapper: 'sceneTools.getRestirSettings',
+    params: [{ name: 'scene_name', type: 'string' }, { name: 'camera_id', type: 'string' }],
+    return: 'object', allowed_callers: CALLER_CEF,
+  },
+  {
+    api: 'SceneTools.set_restir_settings', js_wrapper: 'sceneTools.setRestirSettings',
+    params: [{ name: 'scene_name', type: 'string' }, { name: 'camera_id', type: 'string' }, { name: 'settings', type: 'object' }],
+    return: 'object', allowed_callers: CALLER_CEF,
+  },
+  {
     api: 'SceneTools.get_model_nodes',
     js_wrapper: 'sceneTools.getModelNodes',
     params: [{ name: 'scene_name', type: 'string' }, { name: 'actor_name', type: 'string' },
@@ -226,6 +236,18 @@ test('a wrapper path resolves through the manifest to its native api name', asyn
     `wrapper must resolve to the manifest api, saw: ${host.requests.map((r) => r.api).join(', ')}`
   );
   assert.deepEqual(sent.args, ['SceneA']);
+});
+
+test('ReSTIR wrappers preserve the camera binding and nested settings through the manifest', async () => {
+  const { editorApi, host } = await loadEditorApi();
+  const settings = { direct: { temporal: { open: false, radius: 8 } }, indirect: { open: true } };
+  await editorApi.sceneTools.getRestirSettings('SceneA', 'camera-b');
+  await editorApi.sceneTools.setRestirSettings('SceneA', 'camera-b', settings);
+  const calls = host.requests.filter(entry => entry.api.includes('restir_settings'));
+  assert.deepEqual(calls.map(({ api, args }) => ({ api, args })), [
+    { api: 'SceneTools.get_restir_settings', args: ['SceneA', 'camera-b'] },
+    { api: 'SceneTools.set_restir_settings', args: ['SceneA', 'camera-b', settings] },
+  ]);
 });
 
 test('an unknown wrapper path is rejected instead of being sent to native', async () => {

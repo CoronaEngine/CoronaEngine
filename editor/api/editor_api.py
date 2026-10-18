@@ -878,12 +878,28 @@ class _SceneToolsApi(_DynamicApiNamespace):
         return _invoke_manifest_cpp_api("scene_tools.get_reblur_settings", [scene_name, camera_name])
 
     @staticmethod
+    def get_pt_settings(scene_name, camera_name):
+        return _invoke_manifest_cpp_api("scene_tools.get_pt_settings", [scene_name, camera_name])
+
+    @staticmethod
+    def get_restir_settings(scene_name, camera_name):
+        return _invoke_manifest_cpp_api("scene_tools.get_restir_settings", [scene_name, camera_name])
+
+    @staticmethod
     def get_relax_settings(scene_name, camera_name):
         return _invoke_manifest_cpp_api("scene_tools.get_relax_settings", [scene_name, camera_name])
 
     @staticmethod
     def set_reblur_settings(scene_name, camera_name, settings):
         return _invoke_manifest_cpp_api("scene_tools.set_reblur_settings", [scene_name, camera_name, settings])
+
+    @staticmethod
+    def set_pt_settings(scene_name, camera_name, settings):
+        return _invoke_manifest_cpp_api("scene_tools.set_pt_settings", [scene_name, camera_name, settings])
+
+    @staticmethod
+    def set_restir_settings(scene_name, camera_name, settings):
+        return _invoke_manifest_cpp_api("scene_tools.set_restir_settings", [scene_name, camera_name, settings])
 
     @staticmethod
     def set_relax_settings(scene_name, camera_name, settings):

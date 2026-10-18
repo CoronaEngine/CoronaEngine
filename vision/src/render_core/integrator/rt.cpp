@@ -15,6 +15,7 @@
 #include "ReSTIR/denoiser_signals.h"
 #include <cstdlib>
 #include <fstream>
+#include <map>
 
 namespace vision {
 namespace {
@@ -33,8 +34,42 @@ class RealTimeIntegrator : public IlluminationIntegrator,
                            public enable_shared_from_this<RealTimeIntegrator>,
                            public Observer {
 private:
+    // Validate the complete candidate before applying any live state. Common
+    // transport fields use the same validation and float32 normalization as PT.
+    [[nodiscard]] static bool merge_restir_settings(DataWrap &settings, const DataWrap &overrides) {
+        if (!overrides.is_object()) return false;
+        static const std::map<std::string, std::pair<double, double>> ranges{
+            {"M_light", {0, 100}}, {"M_bsdf", {0, 100}}, {"max_age", {0, 100}},
+            {"max_recursion", {1, 100}}, {"diffuse_factor", {0, 1}},
+            {"history_limit", {0, 50}}, {"theta", {0, 90}}, {"depth", {0, 1}}, {"radius", {0, 50}}};
+        for (const auto &[key, value] : overrides.items()) {
+            if (!settings.contains(key)) return false;
+            auto &target = settings[key];
+            if (target.is_object()) {
+                if (!merge_restir_settings(target, value)) return false;
+            } else if (target.is_boolean()) {
+                if (!value.is_boolean()) return false;
+                target = value;
+            } else {
+                if (!value.is_number()) return false;
+                const bool integer = target.is_number_integer() || target.is_number_unsigned();
+                if (integer && !value.is_number_integer() && !value.is_number_unsigned()) return false;
+                if (merge_illumination_setting(settings, key, value)) continue;
+                const auto range = ranges.find(key);
+                if (range == ranges.end()) return false;
+                const double number = value.get<double>();
+                if (!std::isfinite(number) || number < range->second.first || number > range->second.second)
+                    return false;
+                if (integer) target = value.get<uint>();
+                else target = value.get<float>();
+            }
+        }
+        return true;
+    }
+
     SP<ReSTIRDI> direct_;
     SP<ReSTIRGI> indirect_;
+    DataWrap scene_restir_settings_;
     SP<StablePlanes> stable_planes_;
     mutable bool stable_resources_dirty_{};
     SP<ScreenBuffer> specular_buffer_{make_shared<ScreenBuffer>("RealTimeIntegrator::specular_buffer_")};
@@ -60,13 +95,14 @@ public:
         indirect_ = make_shared<ReSTIRGI>(shared_from_this(), desc["indirect"]);
         stable_planes_ = make_shared<StablePlanes>(shared_from_this(), direct_->max_recursion());
         cache_->set_integrator(shared_from_this());
+        scene_restir_settings_ = settings();
     }
 
     VS_MAKE_GUI_STATUS_FUNC(IlluminationIntegrator, direct_, indirect_)
 
     void restore(vision::RuntimeObject *old_obj) noexcept override {
         IlluminationIntegrator::restore(old_obj);
-        VS_HOTFIX_MOVE_ATTRS(direct_, indirect_, stable_planes_, stable_resources_dirty_, specular_buffer_,
+        VS_HOTFIX_MOVE_ATTRS(direct_, indirect_, scene_restir_settings_, stable_planes_, stable_resources_dirty_, specular_buffer_,
                              combine_, merge_dominant_, compose_layers_, prepare_denoiser_, compose_denoiser_, denoiser_factors_, path_tracing_, denoiser_)
         direct_->set_integrator(shared_from_this());
         indirect_->set_integrator(shared_from_this());
@@ -140,6 +176,34 @@ public:
         direct_->render_UI(widgets);
         indirect_->render_UI(widgets);
         cache_->render_UI(widgets);
+    }
+
+    [[nodiscard]] DataWrap settings() const override {
+        auto result = illumination_settings();
+        result.update(DataWrap{{"direct", direct_->settings()}, {"indirect", indirect_->settings()}});
+        return result;
+    }
+
+    bool set_settings(const DataWrap &overrides) noexcept override {
+        auto candidate = scene_restir_settings_;
+        if (!merge_restir_settings(candidate, overrides) || candidate == settings()) return false;
+        const uint previous_recursion = direct_->max_recursion();
+        // A camera's view and scene GPU context must be active before applying.
+        // Finish readers before replacing a shader captured by an earlier frame.
+        pipeline()->stream() << synchronize() << commit();
+        const bool recompile_direct = direct_->set_settings(candidate["direct"]);
+        indirect_->set_settings(candidate["indirect"]);
+        apply_illumination_settings(candidate);
+        if (recompile_direct) {
+            Global::SceneGpuContextScope scene_gpu_context{
+                scene().geometry().bindless_array(), scene().geometry().gpu_resource()->device()};
+            direct_->compile();
+            if (previous_recursion != direct_->max_recursion()) {
+                stable_planes_->set_max_recursion(direct_->max_recursion());
+                stable_planes_->compile();
+            }
+        }
+        return true;
     }
 
     void compile() noexcept override {

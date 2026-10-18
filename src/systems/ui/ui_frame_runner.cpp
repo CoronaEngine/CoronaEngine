@@ -586,6 +586,7 @@ void UiFrameRunner::route_mouse_to_panels(SDL_WindowID window_id,
     auto* tab = (hit.hit && hit.tab_id != -1) ? BrowserManager::instance().get_tab(hit.tab_id) : nullptr;
     auto browser = (tab && tab->client) ? tab->client->GetBrowser() : nullptr;
     if (!browser) {
+        mouse_move_dispatch_.erase(window_id);
         return;
     }
 
@@ -614,10 +615,13 @@ void UiFrameRunner::route_mouse_to_panels(SDL_WindowID window_id,
                                         be.click_count, st.shift, st.ctrl, st.alt);
     }
 
-    // Mouse move (always treated as hovering the hit panel here).
-    MouseUtils::send_mouse_move_ex(browser, st.mouse_x, st.mouse_y, item_x, item_y,
-                                   st.left_down, st.right_down, st.shift, st.ctrl, st.alt,
-                                   /*mouse_leave=*/false);
+    // Idle frames must not manufacture mousemove events: the viewport forwards
+    // them to Python, where the resulting RPC backlog delays parameter changes.
+    const auto modifiers = MouseUtils::make_modifiers(st.left_down, st.right_down, st.shift, st.ctrl, st.alt);
+    const auto mouse_event = MouseUtils::create_mouse_event_ex(st.mouse_x, st.mouse_y, item_x, item_y, modifiers);
+    if (mouse_move_dispatch_[window_id].take(browser->GetIdentifier(), mouse_event.x, mouse_event.y, modifiers)) {
+        browser->GetHost()->SendMouseMoveEvent(mouse_event, /*mouse_leave=*/false);
+    }
 
     // Wheel.
     if (wheel != 0.0f) {

@@ -27,6 +27,7 @@ namespace {
 class PathTracingIntegrator : public IlluminationIntegrator, public Observer{
 private:
     SP<ConvergenceInspector> inspector_;
+    DataWrap scene_pt_settings_;
     Shader<void(uint)> combine_;
     Shader<void()> merge_indirect_into_direct_;
 
@@ -38,11 +39,38 @@ public:
     explicit PathTracingIntegrator(const IntegratorDesc &desc)
         : IlluminationIntegrator(desc),
           inspector_(make_shared<ConvergenceInspector>(desc.value("adaptive"))),
+          scene_pt_settings_(illumination_settings()),
           taa_history_(make_shared<ScreenBuffer>("taa_history")) {}
 
     VS_MAKE_PLUGIN_NAME_FUNC
     void render_sub_UI(Widgets *widgets) noexcept override {
         inspector_->render_UI(widgets);
+    }
+
+    [[nodiscard]] DataWrap settings() const override {
+        auto result = illumination_settings();
+        result["adaptive"] = inspector_->settings();
+        return result;
+    }
+
+    bool set_settings(const DataWrap &overrides) noexcept override {
+        if (!overrides.is_object()) return false;
+        auto candidate = scene_pt_settings_;
+        for (const auto &[key, value] : overrides.items()) {
+            if (!merge_illumination_setting(candidate, key, value)) return false;
+        }
+        if (candidate == illumination_settings()) return false;
+        // Li specializes the direct-only branch when the kernel is compiled.
+        const bool recompile = (max_depth_.hv() < 2u) != (candidate["max_depth"].get<uint>() < 2u);
+        apply_illumination_settings(candidate);
+        if (recompile) {
+            // Material DSL evaluation needs the same scene LUT bindings as a
+            // normal pipeline compile, including during live parameter edits.
+            Global::SceneGpuContextScope scene_gpu_context{
+                scene().geometry().bindless_array(), scene().geometry().gpu_resource()->device()};
+            compile_path_tracing();
+        }
+        return true;
     }
     
     void update_resolution(ocarina::uint2 res) noexcept override {
@@ -72,7 +100,7 @@ public:
         if (denoiser_ && denoiser_->requires_lobe_signals()) frame_buffer().prepare_denoiser_signals();
 //        frame_buffer().prepare_screen_buffer(taa_history_);
     }
-    VS_HOTFIX_MAKE_RESTORE(IlluminationIntegrator, inspector_)
+    VS_HOTFIX_MAKE_RESTORE(IlluminationIntegrator, inspector_, scene_pt_settings_)
     OC_ENCODABLE_FUNC(IlluminationIntegrator, inspector_)
     VS_MAKE_GUI_STATUS_FUNC(IlluminationIntegrator, inspector_)
     void update_runtime_object(const vision::IObjectConstructor *constructor) noexcept override {
