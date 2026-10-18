@@ -398,6 +398,8 @@
         </div>
         <PtSettings :scene-id="currentMainSceneId()" :camera-id="currentMainCameraId() || ''"
           :enabled="mainRenderBackend === 'vision' && mainVisionRenderMode === 'path_tracing'" />
+        <RestirSettings :scene-id="currentMainSceneId()" :camera-id="currentMainCameraId() || ''"
+          :enabled="mainRenderBackend === 'vision' && mainVisionRenderMode === 'restir'" />
         <ReblurSettings :scene-id="currentMainSceneId()" :camera-id="currentMainCameraId() || ''"
           :enabled="mainRenderBackend === 'vision' && mainVisionRenderMode !== 'ssat' && mainVisionDenoiser === 'reblur' && !mainVisionDenoiserBusy" />
         <RelaxSettings :scene-id="currentMainSceneId()" :camera-id="currentMainCameraId() || ''"
@@ -664,6 +666,7 @@
 <script setup>
 import FrameTimingOverlay from '@/components/ui/FrameTimingOverlay.vue';
 import PtSettings from '@/components/ui/PtSettings.vue';
+import RestirSettings from '@/components/ui/RestirSettings.vue';
 import ReblurSettings from '@/components/ui/ReblurSettings.vue';
 import RelaxSettings from '@/components/ui/RelaxSettings.vue';
 import { computed, ref, onMounted, onUnmounted, reactive, watch, nextTick } from 'vue';

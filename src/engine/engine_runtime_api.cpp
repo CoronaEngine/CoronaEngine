@@ -2371,6 +2371,10 @@ void Corona::API::Camera::set_vision_pt_settings(const std::string& json) {
     Corona::API::set_vision_pt_settings(json, handle_);
 }
 
+void Corona::API::Camera::set_vision_restir_settings(const std::string& json) {
+    Corona::API::set_vision_restir_settings(json, handle_);
+}
+
 void Corona::API::Camera::set_vision_relax_settings(const std::string& json) {
     Corona::API::set_vision_relax_settings(json, handle_);
 }
@@ -2383,6 +2387,10 @@ std::string Corona::API::Camera::get_requested_vision_pt_settings() const {
     return Corona::API::get_requested_vision_pt_settings(handle_);
 }
 
+std::string Corona::API::Camera::get_requested_vision_restir_settings() const {
+    return Corona::API::get_requested_vision_restir_settings(handle_);
+}
+
 std::string Corona::API::Camera::get_requested_vision_relax_settings() const {
     return Corona::API::get_requested_vision_relax_settings(handle_);
 }
@@ -2393,6 +2401,10 @@ std::string Corona::API::Camera::get_effective_vision_reblur_settings() const {
 
 std::string Corona::API::Camera::get_effective_vision_pt_settings() const {
     return Corona::API::get_effective_vision_pt_settings(handle_);
+}
+
+std::string Corona::API::Camera::get_effective_vision_restir_settings() const {
+    return Corona::API::get_effective_vision_restir_settings(handle_);
 }
 
 std::string Corona::API::Camera::get_effective_vision_relax_settings() const {
@@ -2813,6 +2825,16 @@ void set_vision_pt_settings(const std::string& json, std::uintptr_t camera_handl
     SharedDataHub::instance().enqueue_camera_state_update(std::move(command));
 }
 
+void set_vision_restir_settings(const std::string& json, std::uintptr_t camera_handle) {
+    const auto handle = resolve_camera_handle(camera_handle);
+    if (handle == 0) return;
+    CameraStateUpdateCommand command{};
+    command.camera_handle = handle;
+    command.fields = CameraStateUpdateField::VisionRestirSettings;
+    command.vision_restir_settings = json;
+    SharedDataHub::instance().enqueue_camera_state_update(std::move(command));
+}
+
 void set_vision_relax_settings(const std::string& json, std::uintptr_t camera_handle) {
     const auto handle = resolve_camera_handle(camera_handle);
     if (handle == 0) return;
@@ -2839,6 +2861,14 @@ std::string get_requested_vision_pt_settings(std::uintptr_t camera_handle) {
     return "{}";
 }
 
+std::string get_requested_vision_restir_settings(std::uintptr_t camera_handle) {
+    const auto handle = resolve_camera_handle(camera_handle);
+    auto& hub = SharedDataHub::instance();
+    if (const auto requested = hub.requested_camera_vision_restir_settings(handle)) return *requested;
+    if (auto camera = hub.camera_storage().acquire_read(handle)) return camera->vision_restir_settings;
+    return "{}";
+}
+
 std::string get_requested_vision_relax_settings(std::uintptr_t camera_handle) {
     const auto handle = resolve_camera_handle(camera_handle);
     auto& hub = SharedDataHub::instance();
@@ -2858,6 +2888,13 @@ std::string get_effective_vision_pt_settings(std::uintptr_t camera_handle) {
     const auto handle = resolve_camera_handle(camera_handle);
     if (auto camera = SharedDataHub::instance().camera_storage().acquire_read(handle))
         return camera->vision_pt_effective_settings;
+    return "{}";
+}
+
+std::string get_effective_vision_restir_settings(std::uintptr_t camera_handle) {
+    const auto handle = resolve_camera_handle(camera_handle);
+    if (auto camera = SharedDataHub::instance().camera_storage().acquire_read(handle))
+        return camera->vision_restir_effective_settings;
     return "{}";
 }
 

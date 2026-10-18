@@ -87,6 +87,33 @@ IlluminationIntegrator::IlluminationIntegrator(const vision::IntegratorDesc &des
       separate_(desc["separate"].as_bool(false)),
       denoiser_(Node::create_shared<Denoiser>(desc.denoiser_desc)) {}
 
+DataWrap IlluminationIntegrator::illumination_settings() const {
+    return {{"max_depth", max_depth_.hv()}, {"min_depth", min_depth_.hv()},
+            {"rr_threshold", rr_threshold_.hv()}};
+}
+
+bool IlluminationIntegrator::merge_illumination_setting(DataWrap &candidate, const std::string &key,
+                                                       const DataWrap &value) noexcept {
+    const bool depth = key == "max_depth" || key == "min_depth";
+    if ((!depth && key != "rr_threshold") || !value.is_number()) return false;
+    const double maximum = key == "max_depth" ? 128 : key == "min_depth" ? 20 : 1;
+    const double number = value.get<double>();
+    if (!std::isfinite(number) || number < 0 || number > maximum ||
+        (depth && number != std::floor(number))) return false;
+    if (depth) candidate[key] = static_cast<uint>(number);
+    else candidate[key] = static_cast<float>(number);
+    return true;
+}
+
+void IlluminationIntegrator::apply_illumination_settings(const DataWrap &candidate) noexcept {
+    // The complete request must be validated before mutating live GPU state.
+    max_depth_ = candidate["max_depth"].get<uint>();
+    min_depth_ = candidate["min_depth"].get<uint>();
+    rr_threshold_ = candidate["rr_threshold"].get<float>();
+    update_data();
+    upload_immediately();
+}
+
 void IlluminationIntegrator::prepare() noexcept {
     switch_profile::Scope profile{"IlluminationIntegrator::prepare", "buffers"};
     encode_data();

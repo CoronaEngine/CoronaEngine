@@ -39,8 +39,7 @@ public:
     explicit PathTracingIntegrator(const IntegratorDesc &desc)
         : IlluminationIntegrator(desc),
           inspector_(make_shared<ConvergenceInspector>(desc.value("adaptive"))),
-          scene_pt_settings_{{"max_depth", max_depth_.hv()}, {"min_depth", min_depth_.hv()},
-                             {"rr_threshold", rr_threshold_.hv()}},
+          scene_pt_settings_(illumination_settings()),
           taa_history_(make_shared<ScreenBuffer>("taa_history")) {}
 
     VS_MAKE_PLUGIN_NAME_FUNC
@@ -48,36 +47,22 @@ public:
         inspector_->render_UI(widgets);
     }
 
-    [[nodiscard]] std::string pt_settings_json() const override {
-        return DataWrap{{"max_depth", max_depth_.hv()}, {"min_depth", min_depth_.hv()},
-                        {"rr_threshold", rr_threshold_.hv()}, {"adaptive", inspector_->settings()}}.dump();
+    [[nodiscard]] DataWrap settings() const override {
+        auto result = illumination_settings();
+        result["adaptive"] = inspector_->settings();
+        return result;
     }
 
-    bool set_pt_settings(std::string_view json) noexcept override {
-        const auto overrides = DataWrap::parse(json.begin(), json.end(), nullptr, false);
+    bool set_settings(const DataWrap &overrides) noexcept override {
         if (!overrides.is_object()) return false;
-        auto settings = scene_pt_settings_;
+        auto candidate = scene_pt_settings_;
         for (const auto &[key, value] : overrides.items()) {
-            const double maximum = key == "max_depth" ? 128 : key == "min_depth" ? 20 : 1;
-            if ((key != "max_depth" && key != "min_depth" && key != "rr_threshold") || !value.is_number())
-                return false;
-            const double number = value.get<double>();
-            if (!std::isfinite(number) || number < 0 || number > maximum ||
-                (key != "rr_threshold" && number != std::floor(number))) return false;
-            settings[key] = value;
+            if (!merge_illumination_setting(candidate, key, value)) return false;
         }
-        const auto depth = settings["max_depth"].get<uint>();
-        const auto rr_depth = settings["min_depth"].get<uint>();
-        const auto threshold = settings["rr_threshold"].get<float>();
-        if (max_depth_.hv() == depth && min_depth_.hv() == rr_depth && rr_threshold_.hv() == threshold)
-            return false;
+        if (candidate == illumination_settings()) return false;
         // Li specializes the direct-only branch when the kernel is compiled.
-        const bool recompile = (max_depth_.hv() < 2u) != (depth < 2u);
-        max_depth_ = depth;
-        min_depth_ = rr_depth;
-        rr_threshold_ = threshold;
-        update_data();
-        upload_immediately();
+        const bool recompile = (max_depth_.hv() < 2u) != (candidate["max_depth"].get<uint>() < 2u);
+        apply_illumination_settings(candidate);
         if (recompile) {
             // Material DSL evaluation needs the same scene LUT bindings as a
             // normal pipeline compile, including during live parameter edits.

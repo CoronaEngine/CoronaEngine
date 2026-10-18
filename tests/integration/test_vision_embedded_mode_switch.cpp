@@ -14,6 +14,7 @@
 #include <iomanip>
 #include <sstream>
 #include <chrono>
+#include <limits>
 
 void check_camera_dolly_reprojection(vision::Pipeline& pipeline);
 void check_svgf_restir_motion_history(vision::Pipeline& pipeline);
@@ -553,6 +554,40 @@ struct VisionEmbeddedModeSwitchTest {
         pipeline.activate_view_context(0);
         pipeline.set_output_denoise(false);
     }
+    static void check_common_path_settings(vision::Pipeline& pipeline, bool integer_type_required) {
+        auto* integrator = pipeline.renderer().integrator().get();
+        const auto original = integrator->settings();
+        for (const auto& invalid : {
+                vision::DataWrap{{"max_depth", -1}}, vision::DataWrap{{"max_depth", 129}},
+                vision::DataWrap{{"max_depth", 1.5}}, vision::DataWrap{{"min_depth", 21}},
+                vision::DataWrap{{"min_depth", false}}, vision::DataWrap{{"rr_threshold", 1.01}},
+                vision::DataWrap{{"rr_threshold", "0.5"}},
+                vision::DataWrap{{"rr_threshold", std::numeric_limits<double>::infinity()}},
+                vision::DataWrap{{"rr_threshold", std::numeric_limits<double>::quiet_NaN()}},
+                vision::DataWrap{{"max_depth", 4}, {"unknown", 1}}}) {
+            expect(!integrator->set_settings(invalid) && integrator->settings() == original,
+                   "common path settings must reject invalid inputs without partially applying them");
+        }
+        const bool changed = integrator->set_settings(vision::DataWrap{{"min_depth", 3.0}});
+        if (integer_type_required) {
+            expect(!changed && integrator->settings() == original,
+                   "ReSTIR must retain its strict integer JSON input contract");
+        } else {
+            expect(changed && integrator->settings()["min_depth"] == 3,
+                   "PT must retain support for mathematically integral numeric inputs");
+            expect(!integrator->set_settings(vision::DataWrap{{"min_depth", 3}}),
+                   "normalizing integral numeric input must preserve unchanged-value detection");
+            expect(integrator->set_settings(vision::DataWrap::object()) && integrator->settings() == original,
+                   "clearing common path overrides must restore the source scene defaults");
+        }
+        expect(integrator->set_settings(vision::DataWrap{{"rr_threshold", 0.2}}),
+               "common RR settings must accept a non-exact float32 value");
+        expect(!integrator->set_settings(vision::DataWrap{{"rr_threshold", 0.2}}) &&
+                   !integrator->set_settings(vision::DataWrap{{"rr_threshold", integrator->settings()["rr_threshold"]}}),
+               "reapplying normalized common RR settings must remain a no-op");
+        expect(integrator->set_settings(vision::DataWrap::object()) && integrator->settings() == original,
+               "clearing RR overrides must restore the original scene values");
+    }
     static void check_pt_settings(OpticsSystem& system, vision::Pipeline& pipeline,
                                   vision::Pipeline* previous_pipeline = nullptr) {
         auto& hub = SharedDataHub::instance();
@@ -580,6 +615,7 @@ struct VisionEmbeddedModeSwitchTest {
         const auto other_history = pipeline.frame_index();
         prepare(first, "{}");
         render(pipeline, "PT-settings-before-edit");
+        check_common_path_settings(pipeline, false);
         const auto framebuffer = pipeline.renderer().frame_buffer_sp();
         prepare(first, settings);
         expect(pipeline.frame_buffer() == framebuffer.get() && pipeline.frame_index() == 0,
@@ -621,6 +657,129 @@ struct VisionEmbeddedModeSwitchTest {
             hub.camera_storage().deallocate(handle);
         }
         std::cout << "PASS: camera-local PT parameters, history reset, GPU depth and scene defaults\n";
+    }
+    static void check_restir_settings(OpticsSystem& system, vision::Pipeline& pipeline) {
+        auto& hub = SharedDataHub::instance();
+        const auto first = hub.camera_storage().allocate();
+        const auto second = hub.camera_storage().allocate();
+        const std::string settings = R"({"max_depth":3,"min_depth":2,"rr_threshold":0.5,
+          "direct":{"M_light":7,"M_bsdf":2,"max_age":12,"diffuse_factor":0.2,
+            "temporal":{"open":false,"history_limit":4,"theta":25,"depth":0.2,"radius":6},
+            "spatial":{"open":false,"theta":30,"depth":0.4,"radius":20}},
+          "indirect":{"max_age":15,"diffuse_factor":0.4,
+            "temporal":{"open":false,"history_limit":3,"theta":20,"depth":0.1,"radius":5},
+            "spatial":{"open":false,"theta":40,"depth":0.5,"radius":10}}})";
+        Corona::API::set_vision_restir_settings(settings, first);
+        auto updates = hub.drain_camera_state_updates();
+        expect(updates.size() == 1 && updates[0].fields == CameraStateUpdateField::VisionRestirSettings &&
+                   Corona::API::get_requested_vision_restir_settings(first) == settings &&
+                   Corona::API::get_requested_vision_restir_settings(second) == "{}",
+               "ReSTIR settings must be queued independently per camera and persist while in flight");
+        Corona::API::set_vision_restir_settings(R"({"direct":{"max_age":8}})", first);
+        hub.acknowledge_camera_vision_restir_settings(first, updates[0].sequence);
+        expect(Corona::API::get_requested_vision_restir_settings(first) == R"({"direct":{"max_age":8}})",
+               "an old acknowledgement must retain a newer ReSTIR request");
+        hub.clear_camera_state_updates(first);
+        auto prepare = [&](std::uintptr_t camera, const std::string& json) {
+            expect(system.prepare_vision_camera_view(system.active_vision_runtime(), camera,
+                       16, 16, false, true, true, CameraVisionDenoiser::Scene, "{}", "{}", "{}", json),
+                   "ReSTIR camera settings must prepare a usable view");
+        };
+        prepare(second, "{}");
+        render(pipeline, "ReSTIR-settings-second-camera");
+        const auto other_history = pipeline.frame_index();
+        const auto defaults = pipeline.renderer().integrator()->settings();
+        expect(defaults["direct"]["M_light"] == 10 && defaults["direct"]["pairwise"] == true &&
+                   defaults["indirect"]["spatial"]["radius"] == 12,
+               "ReSTIR UI feedback must include actual estimator defaults");
+        prepare(first, "{}");
+        render(pipeline, "ReSTIR-settings-before-edit");
+        check_common_path_settings(pipeline, true);
+        const auto framebuffer = pipeline.renderer().frame_buffer_sp();
+        const auto initial_history = pipeline.frame_index();
+        prepare(first, defaults.dump());
+        {
+            auto camera = hub.camera_storage().acquire_read(first);
+            expect(camera->vision_restir_applied_settings == defaults.dump() &&
+                       pipeline.frame_index() == initial_history,
+                   "equivalent override inputs must publish readiness without resetting history");
+        }
+        prepare(first, R"({"direct.M_light":7})");
+        {
+            auto camera = hub.camera_storage().acquire_read(first);
+            expect(camera->vision_restir_applied_settings == defaults.dump() &&
+                       pipeline.frame_index() == initial_history,
+                   "invalid direct engine inputs must not advance the applied marker or reset history");
+        }
+        prepare(first, settings);
+        expect(pipeline.frame_buffer() == framebuffer.get() && pipeline.frame_index() == 0,
+               "ReSTIR settings must reset only the target history without recreating the view");
+        auto effective = vision::DataWrap::parse(Corona::API::get_effective_vision_restir_settings(first));
+        expect(effective["max_depth"] == 3 && effective["min_depth"] == 2 && effective["rr_threshold"] == 0.5 &&
+                   effective["direct"]["M_light"] == 7 && effective["direct"]["M_bsdf"] == 2 &&
+                   effective["direct"]["temporal"]["open"] == false &&
+                   effective["direct"]["temporal"]["history_limit"] == 4 &&
+                   effective["direct"]["spatial"]["radius"] == 20 &&
+                   effective["indirect"]["max_age"] == 15 &&
+                   effective["indirect"]["temporal"]["theta"] == 20 &&
+                   effective["indirect"]["spatial"]["radius"] == 10,
+               "nested DI/GI settings must reach the active estimator and feedback");
+        render(pipeline, "ReSTIR-settings-after-edit");
+        const auto history = pipeline.frame_index();
+        prepare(first, settings);
+        expect(pipeline.frame_index() == history,
+               "reapplying the same ReSTIR float32 values must preserve history");
+        auto* integrator = pipeline.renderer().integrator().get();
+        const auto before_invalid = integrator->settings();
+        for (const char* invalid : {R"({"direct":{"max_age":101}})",
+                R"({"direct":{"max_recursion":0}})", R"({"direct":{"M_light":1.5}})",
+                R"({"indirect":{"temporal":{"open":1}}})", R"({"indirect":{"ratio":2}})",
+                R"({"indirect":{"spatial":{"theta":91}}})", R"({"direct":{"diffuse_factor":-0.1}})",
+                R"({"max_depth":4,"direct":{"unknown":true}})", R"({"direct":null})"}) {
+            expect(!integrator->set_settings(vision::DataWrap::parse(invalid, nullptr, false)) &&
+                       integrator->settings() == before_invalid,
+                   "invalid nested ReSTIR requests must be rejected atomically");
+        }
+        prepare(second, "{}");
+        expect(pipeline.frame_index() == other_history &&
+                   pipeline.renderer().integrator()->settings() == defaults,
+               "editing ReSTIR must preserve another camera's values and history");
+        prepare(first, R"({"max_depth":0,"min_depth":20,"rr_threshold":0,
+          "direct":{"pairwise":false,"max_recursion":1},"indirect":{"open":false}})");
+        render(pipeline, "ReSTIR-settings-compiled-pairwise-and-recursion");
+        effective = vision::DataWrap::parse(Corona::API::get_effective_vision_restir_settings(first));
+        expect(effective["max_depth"] == 0 && effective["direct"]["pairwise"] == false &&
+                   effective["direct"]["max_recursion"] == 1,
+               "compiled ReSTIR settings and zero-depth boundary must apply");
+        prepare(first, R"({"max_depth":0,"direct":{"M_light":0,"M_bsdf":0,"pairwise":false,
+          "max_recursion":1},"indirect":{"open":false}})");
+        render(pipeline, "ReSTIR-settings-zero-candidates", false);
+        // Keep every other compiled setting unchanged so it cannot hide a
+        // missing zero-to-positive candidate-generator specialization update.
+        prepare(first, R"({"max_depth":0,"direct":{"M_light":7,"M_bsdf":2,"pairwise":false,
+          "max_recursion":1},"indirect":{"open":false}})");
+        render(pipeline, "ReSTIR-settings-restored-candidates");
+        prepare(first, R"({"direct":{"open":false},"indirect":{"open":false}})");
+        render(pipeline, "ReSTIR-settings-disabled-contributions", false);
+        std::vector<vision::float4> pixels(pipeline.pixel_num());
+        pipeline.final_picture(pipeline.output_desc(), pixels.data());
+        for (const auto& pixel : pixels) {
+            expect(std::isfinite(pixel.x) && std::abs(pixel.x) < 1e-6f &&
+                       std::abs(pixel.y) < 1e-6f && std::abs(pixel.z) < 1e-6f,
+                   "disabling DI and GI must remove their actual GPU output");
+        }
+        prepare(first, "{}");
+        expect(vision::DataWrap::parse(Corona::API::get_effective_vision_restir_settings(first)) == defaults,
+               "clearing ReSTIR overrides must restore source scene defaults");
+        render(pipeline, "ReSTIR-settings-restored-defaults");
+        pipeline.activate_view_context(0);
+        pipeline.remove_view_context(first);
+        pipeline.remove_view_context(second);
+        for (auto camera : {first, second}) {
+            hub.clear_camera_state_updates(camera);
+            hub.camera_storage().deallocate(camera);
+        }
+        std::cout << "PASS: camera-local ReSTIR settings, GPU contributions, recompilation and history\n";
     }
     static void check_pt_settings_with_material_lut(
         OpticsSystem& system, const OpticsSystem::VisionSceneLoadRequest& source) {
@@ -1375,6 +1534,7 @@ struct VisionEmbeddedModeSwitchTest {
         check_independent_denoiser(system, *restir, "rt");
         check_independent_accumulation(system, *restir, "rt");
         check_independent_stable_planes(system, *restir);
+        check_restir_settings(system, *restir);
         expect(restir->create_view_context(99, vision::make_uint2(16, 16)),
                "ReSTIR camera view context must initialize");
         expect(restir->renderer().integrator()->impl_type() == "rt", "detached view must also use rt");

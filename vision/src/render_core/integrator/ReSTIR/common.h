@@ -156,6 +156,31 @@ public:
                            max_age_, diff_factor_, integrator_)
     OC_MAKE_MEMBER_GETTER(open, )
     OC_MAKE_MEMBER_SETTER(integrator)
+    [[nodiscard]] DataWrap settings() const {
+        return {{"open", open_}, {"max_age", max_age_}, {"diffuse_factor", diff_factor_},
+                {"temporal", {{"open", temporal_.open}, {"history_limit", temporal_.limit},
+                              {"theta", temporal_.theta}, {"depth", temporal_.depth_threshold},
+                              {"radius", temporal_.sampling_radius}}},
+                {"spatial", {{"open", spatial_.open}, {"theta", spatial_.theta},
+                             {"depth", spatial_.depth_threshold}, {"radius", spatial_.sampling_radius}}}};
+    }
+    // Called only after the complete request has been validated by the integrator.
+    void set_settings(const DataWrap &settings) {
+        open_ = settings["open"].get<bool>();
+        max_age_ = settings["max_age"].get<uint>();
+        diff_factor_ = settings["diffuse_factor"].get<float>();
+        const auto &temporal = settings["temporal"];
+        temporal_.open = temporal["open"].get<bool>();
+        temporal_.limit = temporal["history_limit"].get<uint>();
+        temporal_.theta = temporal["theta"].get<float>();
+        temporal_.depth_threshold = temporal["depth"].get<float>();
+        temporal_.sampling_radius = temporal["radius"].get<float>();
+        const auto &spatial = settings["spatial"];
+        spatial_.open = spatial["open"].get<bool>();
+        spatial_.theta = spatial["theta"].get<float>();
+        spatial_.depth_threshold = spatial["depth"].get<float>();
+        spatial_.sampling_radius = spatial["radius"].get<float>();
+    }
     [[nodiscard]] IlluminationIntegrator *integrator() noexcept { return integrator_.lock().get(); }
     [[nodiscard]] const IlluminationIntegrator *integrator() const noexcept { return integrator_.lock().get(); }
     virtual void update_resolution(uint2 res) noexcept {}

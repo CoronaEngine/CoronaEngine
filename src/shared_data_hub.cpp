@@ -372,6 +372,11 @@ void SharedDataHub::enqueue_camera_state_update(CameraStateUpdateCommand command
         requested_camera_vision_pt_settings_[command.camera_handle] = {
             command.vision_pt_settings, pending.sequence};
     }
+    if (has_camera_state_field(command.fields, CameraStateUpdateField::VisionRestirSettings)) {
+        pending.vision_restir_settings = command.vision_restir_settings;
+        requested_camera_vision_restir_settings_[command.camera_handle] = {
+            command.vision_restir_settings, pending.sequence};
+    }
     if (has_camera_state_field(command.fields, CameraStateUpdateField::VisionRelaxSettings)) {
         pending.vision_relax_settings = command.vision_relax_settings;
         requested_camera_vision_relax_settings_[command.camera_handle] = {
@@ -463,6 +468,14 @@ std::optional<std::string> SharedDataHub::requested_camera_vision_pt_settings(
     return std::nullopt;
 }
 
+std::optional<std::string> SharedDataHub::requested_camera_vision_restir_settings(
+    std::uintptr_t camera_handle) const {
+    std::lock_guard<std::mutex> lock(camera_state_update_mutex_);
+    const auto it = requested_camera_vision_restir_settings_.find(camera_handle);
+    if (it != requested_camera_vision_restir_settings_.end()) return it->second.json;
+    return std::nullopt;
+}
+
 std::optional<std::string> SharedDataHub::requested_camera_vision_relax_settings(
     std::uintptr_t camera_handle) const {
     std::lock_guard<std::mutex> lock(camera_state_update_mutex_);
@@ -486,6 +499,15 @@ void SharedDataHub::acknowledge_camera_vision_pt_settings(
     const auto it = requested_camera_vision_pt_settings_.find(camera_handle);
     if (it != requested_camera_vision_pt_settings_.end() && it->second.sequence <= applied_sequence) {
         requested_camera_vision_pt_settings_.erase(it);
+    }
+}
+
+void SharedDataHub::acknowledge_camera_vision_restir_settings(
+    std::uintptr_t camera_handle, std::uint64_t applied_sequence) {
+    std::lock_guard<std::mutex> lock(camera_state_update_mutex_);
+    const auto it = requested_camera_vision_restir_settings_.find(camera_handle);
+    if (it != requested_camera_vision_restir_settings_.end() && it->second.sequence <= applied_sequence) {
+        requested_camera_vision_restir_settings_.erase(it);
     }
 }
 
@@ -555,6 +577,7 @@ void SharedDataHub::clear_camera_state_updates(std::uintptr_t camera_handle) {
     requested_camera_vision_denoiser_.erase(camera_handle);
     requested_camera_vision_reblur_settings_.erase(camera_handle);
     requested_camera_vision_pt_settings_.erase(camera_handle);
+    requested_camera_vision_restir_settings_.erase(camera_handle);
     requested_camera_vision_relax_settings_.erase(camera_handle);
     requested_camera_vision_accumulation_.erase(camera_handle);
     requested_camera_vision_stable_planes_.erase(camera_handle);

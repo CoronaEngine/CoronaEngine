@@ -70,6 +70,8 @@
       </div>
       <PtSettings :scene-id="sceneId" :camera-id="cameraId"
         :enabled="backend === 'vision' && visionRenderMode === 'path_tracing'" />
+      <RestirSettings :scene-id="sceneId" :camera-id="cameraId"
+        :enabled="backend === 'vision' && visionRenderMode === 'restir'" />
       <ReblurSettings :scene-id="sceneId" :camera-id="cameraId"
         :enabled="backend === 'vision' && visionRenderMode !== 'ssat' && visionDenoiser === 'reblur' && !visionDenoiserBusy" />
       <RelaxSettings :scene-id="sceneId" :camera-id="cameraId"
@@ -214,6 +216,7 @@
 <script setup>
 import FrameTimingOverlay from '@/components/ui/FrameTimingOverlay.vue';
 import PtSettings from '@/components/ui/PtSettings.vue';
+import RestirSettings from '@/components/ui/RestirSettings.vue';
 import ReblurSettings from '@/components/ui/ReblurSettings.vue';
 import RelaxSettings from '@/components/ui/RelaxSettings.vue';
 import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';

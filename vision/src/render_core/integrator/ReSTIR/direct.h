@@ -77,6 +77,28 @@ public:
     ReSTIRDI(IntegratorPtr integrator, const ParameterSet &desc);
     [[nodiscard]] bool uses_stable_planes() const noexcept;
     [[nodiscard]] uint max_recursion() const noexcept { return max_recursion_; }
+    [[nodiscard]] DataWrap settings() const {
+        auto result = ReSTIR::settings();
+        result.update(DataWrap{{"M_light", M_light_}, {"M_bsdf", M_bsdf_},
+                               {"max_recursion", max_recursion_}, {"pairwise", pairwise_}});
+        return result;
+    }
+    // Returns whether DI kernels capture a changed host-side setting.
+    bool set_settings(const DataWrap &settings) {
+        const uint recursion = settings["max_recursion"].get<uint>();
+        const bool pairwise = settings["pairwise"].get<bool>();
+        const uint light = settings["M_light"].get<uint>();
+        const uint bsdf = settings["M_bsdf"].get<uint>();
+        // RIS omits zero-count candidate generators when compiling its kernel.
+        const bool recompile = max_recursion_ != recursion || pairwise_ != pairwise ||
+                               (M_light_ == 0u) != (light == 0u) || (M_bsdf_ == 0u) != (bsdf == 0u);
+        ReSTIR::set_settings(settings);
+        M_light_ = light;
+        M_bsdf_ = bsdf;
+        max_recursion_ = recursion;
+        pairwise_ = pairwise;
+        return recompile;
+    }
     [[nodiscard]] bool stable_planes_enabled() const noexcept { return stable_planes_enabled_; }
     void set_stable_planes_enabled(bool enabled) noexcept { stable_planes_enabled_ = enabled; }
     VS_HOTFIX_MAKE_RESTORE(ReSTIR, M_light_, M_bsdf_, debias_, pairwise_, reweight_, max_recursion_, stable_planes_enabled_,

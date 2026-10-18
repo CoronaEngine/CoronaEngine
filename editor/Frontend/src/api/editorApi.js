@@ -759,6 +759,10 @@ const editorApiStatic = {
       call_manifest_editor_api('sceneTools.getPtSettings', [sceneName, cameraId]),
     setPtSettings: (sceneName, cameraId, settings) =>
       call_manifest_editor_api('sceneTools.setPtSettings', [sceneName, cameraId, settings]),
+    getRestirSettings: (sceneName, cameraId) =>
+      call_manifest_editor_api('sceneTools.getRestirSettings', [sceneName, cameraId]),
+    setRestirSettings: (sceneName, cameraId, settings) =>
+      call_manifest_editor_api('sceneTools.setRestirSettings', [sceneName, cameraId, settings]),
     getReblurSettings: (sceneName, cameraId) =>
       call_manifest_editor_api('sceneTools.getReblurSettings', [sceneName, cameraId]),
     setReblurSettings: (sceneName, cameraId, settings) =>
