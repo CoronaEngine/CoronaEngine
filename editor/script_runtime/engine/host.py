@@ -34,9 +34,12 @@ def _native_scene_target():
         else ""
     )
     route = active_route if active_route in routes else routes[0]
-    switched = scene_api.switch(route)
-    if isinstance(switched, dict) and switched.get("status") in ("error", "failed"):
-        return None
+    if route != active_route:
+        # Reloading the active scene would synchronously call back into this
+        # Python runtime while it is waiting for the native switch to return.
+        switched = scene_api.switch(route)
+        if isinstance(switched, dict) and switched.get("status") in ("error", "failed"):
+            return None
     return scene_target_from_snapshot(scene_api.get_snapshot(route))
 
 
