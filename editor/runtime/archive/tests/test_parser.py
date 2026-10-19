@@ -11,6 +11,118 @@ from runtime.archive.parser import parse_archive
 
 
 class ArchiveParserTests(unittest.TestCase):
+    def test_explicit_actor_body_type_survives_archive(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            scene = Path(temp_dir) / "scene.ini"
+            for body_type in ("static", "dynamic", "kinematic", "phantom", " STATIC "):
+                with self.subTest(body_type=body_type):
+                    scene.write_text(
+                        "[format]\ntype = corona_scene_folder\nversion = 1\n"
+                        "[scene]\nname = Body types\n[actors]\nprop.name = Prop\n"
+                        f"prop.mechanics.body_type = {body_type}\n"
+                        "prop.mechanics.physics_enabled = true\n"
+                        "prop.mechanics.collision_type = box\n",
+                        encoding="utf-8",
+                    )
+                    mechanics = parse_archive(str(scene))["scene"]["actors"][0]["mechanics"]
+                    self.assertEqual(mechanics.get("body_type"), body_type.strip().lower())
+                    self.assertIs(mechanics["physics_enabled"], True)
+                    self.assertEqual(mechanics["collision_type"], "box")
+
+    def test_invalid_explicit_actor_body_type_is_an_archive_error(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            scene = Path(temp_dir) / "scene.ini"
+            for body_type in ("", "rigid", "box", "mesh", "none"):
+                with self.subTest(body_type=body_type):
+                    scene.write_text(
+                        "[format]\ntype = corona_scene_folder\nversion = 1\n"
+                        "[scene]\nname = Invalid body type\n[actors]\nprop.name = Prop\n"
+                        f"prop.mechanics.body_type = {body_type}\n",
+                        encoding="utf-8",
+                    )
+                    with self.assertRaises(ArchiveParseError) as raised:
+                        parse_archive(str(scene))
+                    self.assertEqual(raised.exception.code, "INVALID_BODY_TYPE")
+                    self.assertEqual(raised.exception.details, {"actor_name": "Prop"})
+                    self.assertEqual(raised.exception.to_diagnostic()["stage"], "archive_parse")
+                    self.assertFalse(raised.exception.recoverable)
+
+    def test_missing_actor_body_type_preserves_legacy_mechanics_fields(self):
+        cases = (
+            ("", {"physics_enabled": True, "collision_type": "box"}),
+            ("prop.mechanics.collision_type = mesh\n",
+             {"physics_enabled": True, "collision_type": "mesh"}),
+            ("prop.mechanics.collision_type = none\n",
+             {"physics_enabled": True, "collision_type": "none"}),
+            ("prop.mechanics.physics_enabled = false\n",
+             {"physics_enabled": False, "collision_type": "box"}),
+            ("prop.mechanics.physics_enabled = false\nprop.mechanics.collision_type = mesh\n",
+             {"physics_enabled": False, "collision_type": "mesh"}),
+            ("prop.mechanics.collision_enabled = false\n",
+             {"physics_enabled": True, "collision_type": "none"}),
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            scene = Path(temp_dir) / "scene.ini"
+            for fields, expected in cases:
+                with self.subTest(fields=fields):
+                    scene.write_text(
+                        "[format]\ntype = corona_scene_folder\nversion = 1\n"
+                        "[scene]\nname = Legacy body type\n[actors]\nprop.name = Prop\n" + fields,
+                        encoding="utf-8",
+                    )
+                    mechanics = parse_archive(str(scene))["scene"]["actors"][0]["mechanics"]
+                    self.assertEqual(mechanics, expected)
+
+    def test_model_node_overrides_and_resource_survive_archive(self):
+        overrides = [{"node_index": 2, "node_path": "/0/2", "visible": False,
+                      "position": [1, 2, 3]}]
+        with tempfile.TemporaryDirectory() as temp_dir:
+            scene = Path(temp_dir) / "scene.ini"
+            scene.write_text(
+                "[format]\ntype = corona_scene_folder\nversion = 1\n"
+                "[scene]\nname = Nodes\n[actors]\nhero.name = Hero\n"
+                "hero.model.node_resource = Assets/model.glb\nhero.model.node_overrides = " + json.dumps(overrides),
+                encoding="utf-8")
+            actor = parse_archive(str(scene))["scene"]["actors"][0]
+            self.assertEqual(actor["model_node_overrides"], overrides)
+            self.assertEqual(actor["model_node_resource"], "Assets/model.glb")
+            scene.write_text("[format]\ntype = corona_scene_folder\nversion = 1\n"
+                             "[scene]\nname = Old\n[actors]\nhero.name = Hero\n", encoding="utf-8")
+            actor = parse_archive(str(scene))["scene"]["actors"][0]
+            self.assertEqual(actor["model_node_overrides"], [])
+            self.assertEqual(actor["model_node_resource"], "")
+
+    def test_malformed_model_node_overrides_are_rejected(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            scene = Path(temp_dir) / "scene.ini"
+            for invalid in ("{", "{}", "[1]", "null"):
+                scene.write_text(
+                    "[format]\ntype = corona_scene_folder\nversion = 1\n"
+                    "[scene]\nname = Nodes\n[actors]\nhero.name = Hero\n"
+                    "hero.model.node_overrides = " + invalid, encoding="utf-8")
+                with self.assertRaises(ArchiveParseError) as raised:
+                    parse_archive(str(scene))
+                self.assertEqual(raised.exception.code, "INVALID_MODEL_NODE_OVERRIDES")
+
+    def test_model_node_unmatched_history_survives_archive(self):
+        history = [{"resource": "old.glb", "overrides": [
+            {"node_index": 1, "node_path": "/old", "visible": False}]}]
+        with tempfile.TemporaryDirectory() as temp_dir:
+            scene = Path(temp_dir) / "scene.ini"
+            scene.write_text("[format]\ntype = corona_scene_folder\nversion = 1\n"
+                             "[scene]\nname = Nodes\n[actors]\nhero.name = Hero\n"
+                             "hero.model.node_unmatched = " + json.dumps(history), encoding="utf-8")
+            self.assertEqual(parse_archive(str(scene))["scene"]["actors"][0]["model_node_unmatched"], history)
+            for invalid in ("{", "{}", "[1]", '[{"resource":1,"overrides":[]}]',
+                            '[{"resource":"old.glb","overrides":{}}]',
+                            '[{"resource":"old.glb","overrides":[1]}]'):
+                scene.write_text("[format]\ntype = corona_scene_folder\nversion = 1\n"
+                                 "[scene]\nname = Nodes\n[actors]\nhero.name = Hero\n"
+                                 "hero.model.node_unmatched = " + invalid, encoding="utf-8")
+                with self.assertRaises(ArchiveParseError) as raised:
+                    parse_archive(str(scene))
+                self.assertEqual(raised.exception.code, "INVALID_MODEL_NODE_UNMATCHED")
+
     def test_named_ik_configuration_survives_scene_archive(self):
         chains = [{"id": "left-foot", "bone_name": "Foot_L", "mode": "foot_plant",
                    "enabled": False, "weight": 0, "damping": 0, "chain_length": 3,

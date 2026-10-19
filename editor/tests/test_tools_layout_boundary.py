@@ -17,9 +17,6 @@ def test_cmake_python_helpers_have_a_tools_build_owner():
     tools_build = repo_root / "tools" / "build"
     misc_pytools = repo_root / "misc" / "pytools"
 
-    for name in ("check_pip_modules.py", "copy_files.py"):
+    for name in ("check_pip_modules.py", "copy_files.py", "editor_copy_and_build.py"):
         assert (tools_build / name).is_file()
         assert not (misc_pytools / name).exists()
-    # The editor copy/build helper now lives with the game package it deploys.
-    assert (repo_root / "game" / "editor_copy_and_build.py").is_file()
-    assert not (tools_build / "editor_copy_and_build.py").exists()

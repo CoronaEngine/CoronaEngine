@@ -10,7 +10,7 @@ import { createStoryWorldControls, SMALL_WORLD_VIEW_LABELS } from '@/utils/viewp
 import { routeStoryKeydown } from '@/utils/storyKeyRouter.js';
 import { projectLauncherService, cancelPendingProjectOpen, getProjectSelectionVersion } from '@/services/projectLauncherService.js';
 import { trackWorldSessionWork, notifyWorldError, registerWorldSessionSave } from '@/services/worldSessionLifecycle.js';
-import { createStoryNavigationController, NAVIGATION_KEY } from '../../../../../game/frontend/storyNavigation.mjs';
+import { createStoryNavigationController, NAVIGATION_KEY } from '../../../../game/frontend/storyNavigation.mjs';
 // 剧情 HUD 样式：复刻 ui2.html《自然荒野 · 战术协同系统 HUD》
 import './StoryWorld.hud.css';
 // 中央「机体投影」用的人物图（537×817，比例与投影仓一致，不会裁切）
@@ -18,29 +18,27 @@ import HERO_FIGURE from '@/assets/hero-figure.png';
 // 行囊（Tab 背包）样式：复刻 bag2.html《自然荒野 · 战术编成与收纳库》，收在 .story-bag 之下
 import './StoryWorld.bag.css';
 
-import { ensureStoryCharacters, syncPlacementActors } from '../../../../../game/frontend/storyActors.mjs';
-import { createPlayerController, VIEW_LABELS } from '../../../../../game/frontend/playerController.mjs';
-import { createPlayerSave } from '../../../../../game/frontend/playerSave.mjs';
+import { ensureStoryCharacters, syncPlacementActors } from '../../../../game/frontend/storyActors.mjs';
+import { createPlayerController, VIEW_LABELS } from '../../../../game/frontend/playerController.mjs';
+import { createPlayerSave } from '../../../../game/frontend/playerSave.mjs';
 import { createStoryGameplay, worldBounds, distanceToBounds,
-  contextualInteraction } from '../../../../../game/frontend/storyGameplay.mjs';
+  contextualInteraction } from '../../../../game/frontend/storyGameplay.mjs';
 import { STORY_CHARACTERS, PROPHET_GUID, PLAYER_MODEL_YAW_OFFSET, isMonsterRole, resolveStoryAssetPath,
-  sceneSnapshot } from '../../../../../game/frontend/storyCharacters.mjs';
+  sceneSnapshot } from '../../../../game/frontend/storyCharacters.mjs';
 import { MAX_PLACEMENTS, PLACED_BLOCK_REACH, PLACEMENT_DISTANCE, blockSpawnTransform, cycleSlot, findProp,
   hotbarSlots as hotbarSlotsFor, nearestPlacedBlock, nextPlacementIndex, placementGuid,
-  removePlacement, sanitizePlacements } from '../../../../../game/frontend/storyProps.mjs';
+  removePlacement, sanitizePlacements } from '../../../../game/frontend/storyProps.mjs';
 import { PROPHET_INTERACTION, prophetAvailable, prophetDistance,
-  normalizeDialogue } from '../../../../../game/frontend/prophetDialogue.mjs';
-import { MONSTER_EQUIPMENT } from '../../../../../game/frontend/storyLoot.mjs';
-import { ensureStoryCube, cubeTransformOf, playerFacingYaw } from '../../../../../game/frontend/storyCube.mjs';
-import { ensureStoryMap } from '../../../../../game/frontend/storyMap.mjs';
-import { heightAt } from '../../../../../game/frontend/storyMapHeight.mjs';
-import { loadStoryMapHeight, mapHeightUrl } from '../../../../../game/frontend/storyMapHeightLoader.mjs';
+  normalizeDialogue } from '../../../../game/frontend/prophetDialogue.mjs';
+import { MONSTER_EQUIPMENT } from '../../../../game/frontend/storyLoot.mjs';
+import { ensureStoryCube, cubeTransformOf, playerFacingYaw } from '../../../../game/frontend/storyCube.mjs';
+import { ensureStoryMap } from '../../../../game/frontend/storyMap.mjs';
 import { collectSwayTargets, createWorldRuleRunner,
-  findFragment } from '../../../../../game/frontend/storyWorldRules.mjs';
+  findFragment } from '../../../../game/frontend/storyWorldRules.mjs';
 import { ADJUST_ACTIONS, FRAGMENT_ADJUST_ACTIONS, PROPHET_SCREENS, adjustFeedback,
   adjustFragmentRule, fragmentAdjustPanel, fragmentPanel,
   nextObjectTransform, objectLabel, prophetKeyAction, selectableObjects,
-  toggleFragment } from '../../../../../game/frontend/storyProphetActions.mjs';
+  toggleFragment } from '../../../../game/frontend/storyProphetActions.mjs';
 
 const router = useRouter();
 const surface = ref(null);
@@ -109,23 +107,14 @@ let dpiQuery = null;
 let focused = document.hasFocus();
 const current = () => !disposed && !leaving && worldModeState.status === 'ready'
   && worldModeState.mode === 'story' && worldModeState.revision === revision;
-/**
- * 物体的地面线：与角色、玩家控制器同一个来源——烘好的地图高度网格。
- * 摆放、掉落和先知方块都读这一个函数（`heightAt` 在没有网格时返回 null，各调用点便退回
- * 它们原来的常量高度），因此世界上所有东西站的是同一条地面，而不是三套各自算的 y。
- */
-const groundYAt = (x, z) => heightAt(x, z);
+// Spawn placement is authored; runtime support and motion use native triangles.
+const groundYAt = () => null;
+let motionCallbackToken = null;
 const camera = createStoryCameraController({
-  // 主世界：第三人称跟随（原样）。小世界：自由视角 / 俯视视角，见 viewportStoryWorldCamera.js。
   createControls: options => createStoryWorldControls({ ...options,
     createThirdPerson: createPlayerController,
     role: () => (roleRef.value === 'child' ? 'child' : 'main'),
-    // 内部主角的朝向偏移：俯视/自由相机写回玩家存档时要把逻辑朝向换成模型 rotation.y。
     modelYawOffset: PLAYER_MODEL_YAW_OFFSET }),
-  // 玩家的地面线：地图是 phantom（引擎不为它建碰撞体），脚下多高只能由烘好的高度网格回答。
-  // `heightAt` 在没有网格时返回 null，控制器便退回原来的固定地板——这条绑定必须在
-  // createStoryCameraController 里继续往下传，否则控制器收不到它（这正是之前的原因）。
-  getGroundY: groundYAt,
   onError: error => {
     if (current()) gameplayError.value = error.message;
     notifyWorldError(error);
@@ -1807,10 +1796,10 @@ function onKeyDown(event) {
   }
 }
 function onBlur() { focused = false; camera.resetInput(); }
-function onFocus() { focused = !document.hidden; }
+function onFocus() { focused = !document.hidden; camera.resume(); }
 function onVisibilityChange() {
   if (document.hidden) onBlur();
-  else focused = document.hasFocus();
+  else { focused = document.hasFocus(); camera.resume(); }
 }
 function watchDpi() {
   dpiQuery?.removeEventListener('change', onDpiChanged);
@@ -1875,15 +1864,8 @@ onMounted(async () => {
     const index = Math.min(Math.max(Number(init?.active_index) || 0, 0), Math.max(0, scenes.length - 1));
     sceneId = scenes[index]?.path || init?.path;
     if (!sceneId) throw new Error('当前世界没有可用场景');
-    // 地图高度网格是这张地图真正的地面线，而角色的脚 y 由它给出：必须在
-    // ensureStoryCharacters 之前读入，否则角色先按固定地板落地，之后才补网格也来不及。
-    // 读不到只报告、不阻断进入世界（`heightAt` 返回 null，摆位与控制器都退回固定地板）。
-    try {
-      await loadStoryMapHeight(mapHeightUrl(window.location.href));
-    } catch (error) {
-      actionFeedback.value = `地图高度网格未能读取：${error.message}`;
-    }
-    if (!current()) return;
+    motionCallbackToken = await editorApi.events.onMeshMoveResult(camera.acceptMeshMove);
+    if (!current()) { await editorApi.off(motionCallbackToken); motionCallbackToken = null; return; }
     const loadedGameplay = await gameplay.load();
     if (!current()) return;
     lastHitHp = loadedGameplay.state.boss.hp;
@@ -1900,14 +1882,9 @@ onMounted(async () => {
     // 地图是这条故事线的地面：与角色、方块一样在进入世界时由前端确认在位。
     // 不按角色分叉——主世界要有它，小世界是主场景的副本因此自动继承同一份；
     // 没有它角色只会站在空气里，所以这里不设 role 门槛。
-    // 与方块同样的处理方式：失败只报告，不阻断进入世界。
-    try {
-      await ensureStoryMap({
-        api: editorApi, sceneId, frontendUrl: window.location.href, resolveAsset: resolveStoryAssetPath,
-      });
-    } catch (error) {
-      actionFeedback.value = `地图未能就位：${error.message}`;
-    }
+    await ensureStoryMap({
+      api: editorApi, sceneId, frontendUrl: window.location.href, resolveAsset: resolveStoryAssetPath,
+    });
     if (!current() || worldModeState.projectPath !== projectPath) return;
     // Look the boss up by role: array position is not an identity, and inserting a
     // character would otherwise silently point this at whoever slid into slot 1.
@@ -1931,7 +1908,7 @@ onMounted(async () => {
       rememberCube(prophetActor && playerActor ? await ensureStoryCube({
         api: editorApi, sceneId, frontendUrl: window.location.href,
         role: loadedGameplay?.role, prophetActor, playerActor, resolveAsset: resolveStoryAssetPath,
-        // 方块与角色同一个地面来源：地图的烘好高度网格（没有网格时退回原来的高度）。
+        // 初始摆放沿用先知的位置。
         groundYAt,
       }) : null);
     } catch (error) {
@@ -1966,6 +1943,7 @@ onMounted(async () => {
     window.addEventListener('pointercancel', camera.resetInput);
     document.addEventListener('keyup', camera.keyUp);
     initializing.value = false;
+    camera.resume();
     if (focused) surface.value?.focus();
   })());
   try { await initialization; } catch (error) {
@@ -1986,7 +1964,11 @@ onUnmounted(() => {
   // 离开世界不能把俯瞰视角留下来：否则存进场景的就是这个非常规机位。
   exitAdjustMode({ reopenDialogue: false });
   worldRuleRunner.dispose();
+  const motionSettled = camera.resetInput();
   camera.dispose();
+  Promise.resolve(motionSettled).finally(() => {
+    if (motionCallbackToken !== null) { editorApi.off(motionCallbackToken).catch(notifyWorldError); motionCallbackToken = null; }
+  }).catch(notifyWorldError);
   saveRegistration.retire();
   resizeObserver?.disconnect();
   window.removeEventListener('resize', camera.syncViewport);

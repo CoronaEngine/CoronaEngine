@@ -769,6 +769,26 @@ class _SceneToolsApi(_DynamicApiNamespace):
         )
 
     @staticmethod
+    def set_actor_animation(scene_name, actor_name, animation, blend_seconds=0.2):
+        return _invoke_manifest_cpp_api(
+            "scene_tools.set_actor_animation", [scene_name, actor_name, animation, blend_seconds]
+        )
+
+    @staticmethod
+    def pause_actor_animation(scene_name, actor_name):
+        """Freeze skeletal animation time and blending without affecting scripts."""
+        return _invoke_manifest_cpp_api(
+            "scene_tools.pause_actor_animation", [scene_name, actor_name]
+        )
+
+    @staticmethod
+    def resume_actor_animation(scene_name, actor_name):
+        """Continue skeletal animation from its paused time and blend progress."""
+        return _invoke_manifest_cpp_api(
+            "scene_tools.resume_actor_animation", [scene_name, actor_name]
+        )
+
+    @staticmethod
     def save_actor(scene_name, actor_name):
         return _invoke_manifest_cpp_api(
             "scene_tools.save_actor", [scene_name, actor_name]
@@ -848,6 +868,42 @@ class _SceneToolsApi(_DynamicApiNamespace):
         return _invoke_manifest_cpp_api(
             "scene_tools.get_vision_render_mode", [scene_name, camera_name]
         )
+
+    @staticmethod
+    def set_vision_denoiser(scene_name, camera_name=None, type="scene"):
+        return _invoke_manifest_cpp_api("scene_tools.set_vision_denoiser", [scene_name, camera_name, type])
+
+    @staticmethod
+    def get_reblur_settings(scene_name, camera_name):
+        return _invoke_manifest_cpp_api("scene_tools.get_reblur_settings", [scene_name, camera_name])
+
+    @staticmethod
+    def get_pt_settings(scene_name, camera_name):
+        return _invoke_manifest_cpp_api("scene_tools.get_pt_settings", [scene_name, camera_name])
+
+    @staticmethod
+    def get_restir_settings(scene_name, camera_name):
+        return _invoke_manifest_cpp_api("scene_tools.get_restir_settings", [scene_name, camera_name])
+
+    @staticmethod
+    def get_relax_settings(scene_name, camera_name):
+        return _invoke_manifest_cpp_api("scene_tools.get_relax_settings", [scene_name, camera_name])
+
+    @staticmethod
+    def set_reblur_settings(scene_name, camera_name, settings):
+        return _invoke_manifest_cpp_api("scene_tools.set_reblur_settings", [scene_name, camera_name, settings])
+
+    @staticmethod
+    def set_pt_settings(scene_name, camera_name, settings):
+        return _invoke_manifest_cpp_api("scene_tools.set_pt_settings", [scene_name, camera_name, settings])
+
+    @staticmethod
+    def set_restir_settings(scene_name, camera_name, settings):
+        return _invoke_manifest_cpp_api("scene_tools.set_restir_settings", [scene_name, camera_name, settings])
+
+    @staticmethod
+    def set_relax_settings(scene_name, camera_name, settings):
+        return _invoke_manifest_cpp_api("scene_tools.set_relax_settings", [scene_name, camera_name, settings])
 
     @staticmethod
     def set_vision_denoise(scene_name, camera_name=None, enabled=False):

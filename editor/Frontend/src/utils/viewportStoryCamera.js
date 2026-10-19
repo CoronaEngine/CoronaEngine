@@ -8,18 +8,13 @@ export function createStoryCameraController({
   getBridge, getRect, getPixelRatio = () => 1,
   isCurrent = () => true, isInputLocked = () => false,
   requestFrame, cancelFrame, now, onPlayerChanged, createControls = createViewportCameraController, onError,
-  // 小世界自由视角的裸鼠标转向要用它判断「视口是否被指针锁定」（锁定后 clientX/Y 不再有意义）。
-  // 创造模式视口没有这个选项，传进来也不会改变它的行为。
+  // The small world's pointer lock needs the host's answer; plain viewports never pass it.
   isPointerLocked = () => false,
-  // The story map's terrain line (`game/frontend/storyMapHeight.mjs` `heightAt`), forwarded to
-  // the controls: without it the player controller accepts the option, never receives it, and
-  // the characters keep standing on the constant engine floor while the map varies by metres.
-  getGroundY = null,
 }) {
   let camera = null, disposed = false;
   const current = () => !disposed && isCurrent();
   const controls = createControls({
-    getBridge, onError, getGroundY,
+    getBridge, onError,
     getPose: () => camera,
     setPose: (pose) => { camera = pose; },
     submitPose: (pose) => {

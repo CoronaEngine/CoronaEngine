@@ -652,6 +652,51 @@ class _NativeEditorActorProxy:
         except Exception as exc:
             raise RuntimeError(f"native actor operation {operation} failed: {exc}") from exc
 
+    def _animation_snapshot(self):
+        payload, errors = _native_scene_snapshot(self.scene_route)
+        if payload is None:
+            raise RuntimeError("Unable to read actor animations: " + "; ".join(errors))
+        for actor in payload.get("actors", []):
+            if (actor.get("actor_guid") == self.actor_guid if self.actor_guid else actor.get("name") == self.name):
+                self._data.update(actor)
+                return actor
+        raise RuntimeError(f"Animation actor no longer exists: {self.name}")
+
+    def set_animation(self, index, blend_seconds=0.2):
+        actor = self._animation_snapshot()
+        clips = actor.get("animations", [])
+        if isinstance(index, str):
+            selector = index
+        else:
+            if isinstance(index, bool) or not isinstance(index, int) or not 0 <= index < len(clips):
+                raise ValueError(f"Animation index {index!r} is outside [0, {len(clips)})")
+            selector = clips[index]["id"]
+        from api.editor_api import get_script_runtime_editor_api
+        return get_script_runtime_editor_api().scene_tools.set_actor_animation(
+            self.scene_route, self.actor_guid or self.name, selector, blend_seconds
+        )
+
+    def next_animation(self):
+        actor = self._animation_snapshot()
+        clips = actor.get("animations", [])
+        if not clips:
+            raise RuntimeError("Actor animations are not ready or the model has no animations")
+        state = actor.get("animation", {})
+        selected = state.get("target") or state.get("current")
+        current = next((i for i, clip in enumerate(clips) if clip["id"] == selected), -1)
+        index = (current + 1) % len(clips)
+        self.set_animation(clips[index]["id"])
+        return index
+
+    def play_animation(self):
+        actor = self._animation_snapshot()
+        state = actor.get("animation", {})
+        selected = state.get("target") or state.get("current")
+        return self.set_animation(selected if selected else 0)
+
+    def stop_animation(self):
+        raise NotImplementedError("The skeletal animation API currently supports switching looping clips; stopping is not supported")
+
     def to_dict(self): return dict(self._data)
     def get_position(self): return list(self._position)
     def set_position(self, value, *_): return self._set_transform("position", value)
@@ -2196,12 +2241,11 @@ def cartoonSet(index):
         return
     _init_engine()
     ctx = _current_context()
+    if ctx.kinematics is None:
+        raise RuntimeError("Actor animation target is unavailable")
+    result = ctx.kinematics.set_animation(int(index))
     ctx.cartoon_index = int(index)
-    if ctx.kinematics is not None:
-        try:
-            ctx.kinematics.set_animation(ctx.cartoon_index)
-        except Exception:
-            pass
+    return result
 
 
 def nextCartoon():
@@ -2209,12 +2253,9 @@ def nextCartoon():
         return
     _init_engine()
     ctx = _current_context()
-    ctx.cartoon_index += 1
-    if ctx.kinematics is not None:
-        try:
-            ctx.kinematics.set_animation(ctx.cartoon_index)
-        except Exception:
-            pass
+    if ctx.kinematics is None:
+        raise RuntimeError("Actor animation target is unavailable")
+    ctx.cartoon_index = ctx.kinematics.next_animation()
 
 
 def playCartoon():
@@ -2223,10 +2264,8 @@ def playCartoon():
     _init_engine()
     ctx = _current_context()
     if ctx.kinematics is not None:
-        try:
-            ctx.kinematics.play_animation()
-        except Exception:
-            pass
+        return ctx.kinematics.play_animation()
+    raise RuntimeError("Actor animation target is unavailable")
 
 
 def stopCartoon():
@@ -2235,10 +2274,8 @@ def stopCartoon():
     _init_engine()
     ctx = _current_context()
     if ctx.kinematics is not None:
-        try:
-            ctx.kinematics.stop_animation()
-        except Exception:
-            pass
+        return ctx.kinematics.stop_animation()
+    raise RuntimeError("Actor animation target is unavailable")
 
 
 def resetCartoon():
@@ -2246,12 +2283,11 @@ def resetCartoon():
         return
     _init_engine()
     ctx = _current_context()
+    if ctx.kinematics is None:
+        raise RuntimeError("Actor animation target is unavailable")
+    result = ctx.kinematics.set_animation(0, 0)
     ctx.cartoon_index = 0
-    if ctx.kinematics is not None:
-        try:
-            ctx.kinematics.set_animation(0)
-        except Exception:
-            pass
+    return result
 
 
 def sizeAdd(ds):

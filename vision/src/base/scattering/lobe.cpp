@@ -816,6 +816,21 @@ void Lobe::reuse_material(SampledSpectrum &diffuse, SampledSpectrum &specular,
     roughness = make_float2(1.f);
 }
 
+Float3 Lobe::denoiser_specular_fraction_local(const Float3 &, const Float3 &) const noexcept {
+    Bool spec = BxDFFlag::is_glossy(flag()) | BxDFFlag::is_specular(flag()) | ((flag() & BxDFFlag::NearSpec) != 0u);
+    return make_float3(select(spec, 1.f, 0.f));
+}
+
+void Lobe::denoiser_albedos(const Float &cos_theta, SampledSpectrum &diffuse, SampledSpectrum &specular) const noexcept {
+    auto a = albedo(cos_theta);
+    Bool spec = BxDFFlag::is_glossy(flag()) | BxDFFlag::is_specular(flag()) | ((flag() & BxDFFlag::NearSpec) != 0u);
+    diffuse = a * select(spec, 0.f, 1.f); specular = a * select(spec, 1.f, 0.f);
+}
+
+SampledDirection Lobe::sample_denoiser_wi_local(const Float3 &wo, TSampler &sampler, bool) const noexcept {
+    return sample_wi_local(wo, BxDFFlag::All, sampler);
+}
+
 void MicrofacetLobe::reuse_material(SampledSpectrum &diffuse, SampledSpectrum &specular,
                                     Float2 &roughness) const noexcept {
     diffuse = SampledSpectrum::zero(swl()->dimension());

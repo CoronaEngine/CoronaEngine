@@ -26,6 +26,27 @@ option(BUILD_CORONA_EXAMPLES "Build example programs" ${PROJECT_IS_TOP_LEVEL})
 option(CORONA_BUILD_HARDWARE "Build Corona Hardware features" ON)
 
 # ------------------------------------------------------------------------------
+# Lock timeout diagnostics
+#
+# Horizon's Storage can report a slot lock held longer than CFW_LOCK_TIMEOUT_MS
+# with a CRITICAL log, a captured stack and a thrown exception instead of waiting
+# forever. That code is compiled out by default, which is why a stuck engine lock
+# is indistinguishable from an idle system in the logs: both the holder and the
+# waiter just stop reporting.
+#
+# Turn this on for development/soak builds so a hang becomes a loud failure with a
+# stack instead of a silent freeze. It is a diagnostics switch, not a shipping
+# configuration: a legitimately long hold (large parse, GPU upload, disk read under
+# a Scene lock) beyond the threshold aborts the holder's update(), and SystemBase
+# treats an update() exception as fatal (it requests engine shutdown). The default
+# threshold is deliberately generous.
+# ------------------------------------------------------------------------------
+option(CORONA_ENABLE_LOCK_TIMEOUT_DIAGNOSTICS
+       "Report Storage lock waits longer than CFW_LOCK_TIMEOUT_MS with a stack (development only)" OFF)
+set(CORONA_LOCK_TIMEOUT_MS "5000"
+    CACHE STRING "Lock wait threshold in ms used when CORONA_ENABLE_LOCK_TIMEOUT_DIAGNOSTICS is ON")
+
+# ------------------------------------------------------------------------------
 # Vision feature gate
 #
 # Vision requires the CUDA SDK. Mirror Horizon's behaviour (cmake/HorizonOcarina.cmake)

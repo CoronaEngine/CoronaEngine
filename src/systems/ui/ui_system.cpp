@@ -1,3 +1,4 @@
+#include <corona/diagnostics/thread_phase.h>
 #include <corona/kernel/core/kernel_context.h>
 #include <corona/kernel/system/i_system_manager.h>
 #include <horizon/core/logging.h>
@@ -19,6 +20,7 @@
 
 #include "cef/browser_manager.h"
 #include "cef/cef_client.h"
+#include "cef/cef_editor_native_api_registry.h"
 #include "collaborative_editor_runtime.h"
 
 namespace Corona::Systems {
@@ -152,7 +154,10 @@ void UiSystem::stop() {
 
     auto& browser_manager = UI::BrowserManager::instance();
     std::vector<std::uintptr_t> camera_handles;
-    for (const auto& [tab_id, tab] : browser_manager.get_tabs()) {
+    for (const auto& tab_entry : browser_manager.tabs_snapshot()) {
+        const int tab_id = tab_entry.tab_id;
+        auto* tab = tab_entry.tab;
+        if (tab == nullptr) continue;
         if (tab->camera_view) {
             if (auto record = UI::CameraViewportManager::instance().find_by_tab(tab_id)) {
                 camera_handles.push_back(record->camera_handle);
@@ -187,9 +192,21 @@ void UiSystem::update() {
 
     const auto frame_start = std::chrono::steady_clock::now();
 
+    // The CEF UI thread runs every editor API request and paints the editor. If one
+    // of those requests never returns, that thread stops reporting anything at all,
+    // while this main loop keeps running - so the watchdog is driven from here.
+    UI::report_stuck_native_api_request();
+
+    // System threads have the same failure mode one level down: a blocking storage
+    // or resource lock inside update() freezes that system with no log line at all.
+    // This main loop is the only thread guaranteed to keep ticking, so it is also
+    // the watchdog for "which system is stuck in which stage".
+    Corona::Diagnostics::report_stuck_thread_phases();
+
     // Collaborative scene mutations must run on the UI/engine main thread and
     // must not depend on the lifetime of a particular Vue network page.
     UI::tick_collaborative_editor_runtime();
+    UI::tick_native_animation_updates();
 
     static UI::UiFrameRunner frame_runner;
     UI::UiFrameContext context{

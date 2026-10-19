@@ -45,3 +45,17 @@ target_link_libraries(corona_discovery_tests
     PRIVATE corona::system::network
 )
 add_test(NAME DiscoveryTests COMMAND corona_discovery_tests)
+
+# The identity registry is written by the editor/collaboration threads while the
+# network thread scans it every tick, so it must synchronize its own map.
+add_executable(corona_network_identity_registry_tests
+    test_network_identity_registry.cpp
+    ${PROJECT_SOURCE_DIR}/src/shared_data_hub.cpp
+)
+target_link_libraries(corona_network_identity_registry_tests
+    PRIVATE
+        corona::system::network
+        corona::resource::manager
+)
+add_test(NAME NetworkIdentityRegistryTests
+         COMMAND corona_network_identity_registry_tests)

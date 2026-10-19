@@ -82,6 +82,30 @@ public:
     using MicrofacetLobe::MicrofacetLobe;
 
 public:
+    [[nodiscard]] Float3 denoiser_specular_fraction_local(const Float3 &wo, const Float3 &wi) const noexcept override {
+        auto *blend = static_cast<const FresnelBlend *>(bxdf());
+        Float3 d = max(blend->f_diffuse(wo, wi).vec3(), make_float3(0.f));
+        Float3 s = max(blend->f_specular(wo, wi).vec3(), make_float3(0.f));
+        return s / max(d + s, make_float3(1e-20f));
+    }
+    void denoiser_albedos(const Float &cos_theta, SampledSpectrum &diffuse, SampledSpectrum &specular) const noexcept override {
+        static_cast<const FresnelBlend *>(bxdf())->reuse_albedos(diffuse, specular);
+        Float mu = saturate(abs(cos_theta));
+        // The cosine-weighted integral of the incoming diffuse factor exactly
+        // cancels 28/23. Keep outgoing attenuation and directional Fresnel.
+        diffuse *= (1.f - specular) * (1.f - Pow<5>(1.f - .5f * mu));
+        specular = fresnel_schlick(specular, mu);
+    }
+    [[nodiscard]] SampledDirection sample_denoiser_wi_local(const Float3 &wo, TSampler &sampler, bool specular) const noexcept override {
+        SampledDirection result;
+        if (specular) result.wi = reflect(wo, bxdf()->microfacet()->sample_wh(wo, sampler->next_2d()));
+        else {
+            result.wi = square_to_cosine_hemisphere(sampler->next_2d());
+            result.wi.z *= select(wo.z < 0.f, -1.f, 1.f);
+        }
+        result.valid = same_hemisphere(wo, result.wi);
+        return result;
+    }
     void reuse_material(SampledSpectrum &diffuse, SampledSpectrum &specular,
                         Float2 &roughness) const noexcept override {
         static_cast<const FresnelBlend *>(bxdf())->reuse_albedos(diffuse, specular);

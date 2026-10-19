@@ -1,6 +1,8 @@
 <template>
-  <div v-if="enabled && cameraId" class="frame-timing-overlay" aria-label="当前相机每帧渲染耗时与总帧间隔">
+  <div v-if="enabled && cameraId" class="frame-timing-overlay" aria-label="当前相机帧率、渲染与降噪耗时、总帧间隔">
+    <span>帧率</span> <b>{{ formatFrameRate(sample) }}</b>
     <span>渲染</span> <b>{{ formatFrameTiming(sample) }}</b>
+    <span>降噪</span> <b>{{ formatFrameTiming(sample, 'denoise_ms') }}</b>
     <span aria-label="总帧间隔，包含等待和限帧">总帧</span>
     <b>{{ formatFrameTiming(sample, 'frame_ms') }}</b>
   </div>
@@ -9,7 +11,7 @@
 <script setup>
 import { ref, watch } from 'vue';
 import { editorApi } from '@/api/editorApi.js';
-import { formatFrameTiming, startFrameTimingPolling } from '@/utils/frameTiming.js';
+import { formatFrameRate, formatFrameTiming, startFrameTimingPolling } from '@/utils/frameTiming.js';
 
 const props = defineProps({
   sceneId: { type: String, default: '' },

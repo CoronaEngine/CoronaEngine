@@ -22,6 +22,18 @@
 
 namespace Corona::Resource {
 
+struct LocalTransform {
+    std::array<float, 3> translation{0, 0, 0};
+    std::array<float, 4> rotation{0, 0, 0, 1};
+    std::array<float, 3> scale{1, 1, 1};
+};
+
+// Reject non-finite/singular/sheared matrices instead of silently changing the rig.
+[[nodiscard]] LocalTransform decompose_local(const std::array<float, 16>& matrix);
+[[nodiscard]] LocalTransform sample_channel_trs(const AnimChannel& channel, float time_ticks,
+                                               const LocalTransform& reference = {});
+[[nodiscard]] LocalTransform blend_local(const LocalTransform& a, const LocalTransform& b, float weight);
+
 /// FootPlant endpoints must be non-root leaves of the imported skeleton hierarchy.
 /// Other IK modes may target internal joints.
 [[nodiscard]] inline bool is_valid_foot_ik_end_node(const SkeletonData& skeleton, int node) {

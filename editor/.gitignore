@@ -43,6 +43,11 @@ backend/**/*.py[cod]
 autosave/
 media/
 models/
+# Game content is versioned source content, not generated editor data.
+!/game/data/
+!/game/data/**
+!/game/art/models/
+!/game/art/models/**
 screenshots/
 
 # Environment files

@@ -107,7 +107,13 @@ void configure_vision_scene_for_mode(::vision::DataWrap& data,
         }
     }
     auto& denoiser = ensure_vision_json_object(integrator_param, "denoiser");
-    denoiser["type"] = mode == CameraVisionRenderMode::SSAT ? "SSAT" : "svgf";
+    const auto selected_denoiser = denoiser.value("type", std::string{});
+    if (mode == CameraVisionRenderMode::SSAT) denoiser["type"] = "SSAT";
+    else if (selected_denoiser == "ReBLUR" || selected_denoiser == "reblur" || selected_denoiser == "REBLUR")
+        denoiser["type"] = "ReBLUR";
+    else if (selected_denoiser == "ReLAX" || selected_denoiser == "relax" || selected_denoiser == "RELAX")
+        denoiser["type"] = "ReLAX";
+    else denoiser["type"] = "svgf";
     auto& denoiser_param = ensure_vision_json_object(denoiser, "param");
     denoiser_param["enabled"] = vision_render_mode_uses_denoise(mode);
     if (mode == CameraVisionRenderMode::SSAT) {

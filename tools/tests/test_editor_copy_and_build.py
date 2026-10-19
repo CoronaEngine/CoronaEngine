@@ -6,7 +6,7 @@ import pytest
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-COPY_SCRIPT = REPO_ROOT / "game" / "editor_copy_and_build.py"
+COPY_SCRIPT = REPO_ROOT / "tools" / "build" / "editor_copy_and_build.py"
 
 
 def _load_copy_module():

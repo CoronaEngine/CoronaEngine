@@ -6,6 +6,7 @@
 #include <assimp/GltfMaterial.h>
 #include <assimp/postprocess.h>
 #include <assimp/scene.h>
+#include <cmath>
 
 #include "corona/resource/resource_manager.h"
 #include "corona/resource/types/image.h"
@@ -26,6 +27,50 @@ inline void build_mesh_transform_map(aiNode* node, const aiMatrix4x4& parent_tra
     for (unsigned int i = 0; i < node->mNumChildren; ++i) {
         build_mesh_transform_map(node->mChildren[i], current_transform, mesh_transforms);
     }
+}
+
+// Assimp 5.4.3 FBXConverter::ConvertNodes passes only parent->mTransformation
+// to ConvertCluster, omitting the model chain and earlier ancestors. Its bone
+// offset is inverse(bindBoneGlobal) * parentLocal instead of * meshGlobal.
+// Reconstruct that missing right factor, including generated FBX pivot nodes.
+// The caller must version-gate this workaround; fixed importers already include it.
+// https://github.com/assimp/assimp/blob/v5.4.3/code/AssetLib/FBX/FBXConverter.cpp
+inline void repair_fbx_543_bind_offsets(const aiScene* scene) {
+    std::vector<bool> visited(scene->mNumMeshes, false);
+    const std::string pivot_tag = "_$AssimpFbx$";
+    const auto visit = [&](auto&& self, const aiNode* node, const aiMatrix4x4& parent_global) -> void {
+        // FBX's coordinate/unit correction is applied to RootNode after mesh
+        // conversion. It was not part of the importer's offset calculation.
+        const auto global = node == scene->mRootNode ? aiMatrix4x4() : parent_global * node->mTransformation;
+        bool has_skin = false;
+        for (unsigned int i = 0; i < node->mNumMeshes; ++i)
+            if (!visited.at(node->mMeshes[i]) && scene->mMeshes[node->mMeshes[i]]->HasBones()) has_skin = true;
+        if (has_skin) {
+            const std::string name = node->mName.C_Str();
+            const auto base = name.substr(0, name.find(pivot_tag));
+            const aiNode* chain_root = node;
+            while (chain_root->mParent &&
+                   std::string(chain_root->mParent->mName.C_Str()).starts_with(base + pivot_tag))
+                chain_root = chain_root->mParent;
+            const auto* original_parent = chain_root->mParent;
+            auto previous = original_parent && original_parent != scene->mRootNode
+                                ? original_parent->mTransformation : aiMatrix4x4();
+            if (!std::isfinite(previous.Determinant()) || std::abs(previous.Determinant()) < 1e-20f)
+                throw std::invalid_argument("Singular FBX mesh parent transform");
+            previous.Inverse();
+            const auto correction = previous * global;
+            for (unsigned int i = 0; i < node->mNumMeshes; ++i) {
+                const auto index = node->mMeshes[i];
+                if (visited.at(index) || !scene->mMeshes[index]->HasBones()) continue;
+                visited[index] = true;
+                auto* mesh = scene->mMeshes[index];
+                for (unsigned int b = 0; b < mesh->mNumBones; ++b)
+                    mesh->mBones[b]->mOffsetMatrix *= correction;
+            }
+        }
+        for (unsigned int i = 0; i < node->mNumChildren; ++i) self(self, node->mChildren[i], global);
+    };
+    visit(visit, scene->mRootNode, aiMatrix4x4());
 }
 
 // 计算场景中所有网格的全局 AABB（在世界空间，应用节点变换）
@@ -489,6 +534,22 @@ inline void extract_bone_weights(const aiMesh* ai_mesh,
             if (vw.mVertexId < vertex_count) {
                 out_weights[vw.mVertexId].add_influence(bone_id, vw.mWeight);
             }
+        }
+    }
+    // Some FBX files retain unnormalized weights even after Assimp's
+    // LimitBoneWeights pass. Both GPU skinning and bind-pose bounds expect
+    // affine weights; normalize the retained influences before either uses them.
+    for (auto& vertex : out_weights) {
+        double total = 0.0;
+        for (int i = 0; i < MAX_BONE_INFLUENCE; ++i) {
+            if (!std::isfinite(vertex.weights[i]) || vertex.weights[i] <= 0.0f) {
+                vertex.weights[i] = 0.0f;
+                vertex.ids[i] = -1;
+            }
+            total += vertex.weights[i];
+        }
+        if (total > 0.0) {
+            for (auto& weight : vertex.weights) weight = static_cast<float>(weight / total);
         }
     }
 }
@@ -984,6 +1045,8 @@ inline void process_assimp_node(aiNode* ai_node, const aiScene* ai_scene, Scene&
                                 SharedStaticMeshAssetCache* shared_asset_cache = nullptr) {
     std::uint32_t node_index = scene.add_node(ai_node->mName.C_Str(), parent_index);
     scene.data.nodes[node_index].transform = extract_assimp_transform(ai_node->mTransformation);
+    scene.data.nodes[node_index].local_matrix = ai_to_mat4_colmajor(ai_node->mTransformation);
+    scene.data.nodes[node_index].has_local_matrix = true;
 
     // 计算此节点的累积变换（父累积变换 * 当前节点局部变换）
     aiMatrix4x4 current_accumulated = parent_accumulated_transform * ai_node->mTransformation;

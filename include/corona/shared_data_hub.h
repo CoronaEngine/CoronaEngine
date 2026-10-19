@@ -2,10 +2,12 @@
 #include <horizon/core/storage.h>
 #include <corona/memory/gpu_mem_ledger.h>
 #include <corona/resource/types/scene.h>  // Resource::IkChain（GeometryDevice::ik_chains）
+#include <corona/resource/types/animation_player.h>
 #include <corona/systems/display/image_frame_metadata.h>
 #include <corona/systems/optics/viewport_gizmo_math.h>
 
 #include <ktm/ktm.h>
+#include <corona/systems/geometry/model_node_state.h>
 
 #include <array>
 #include <chrono>
@@ -60,7 +62,13 @@ struct MeshDevice {
 struct MeshInstanceDevice {
     std::uint32_t mesh_index = 0;
     std::uint32_t object_id = 0;
+    std::uint32_t node_index = UINT32_MAX;
+    bool visible = true;
+    std::array<float,3> local_bounds_min{}, local_bounds_max{};
+    ktm::fmat4x4 original_transform{ktm::fmat4x4::from_eye()};
     ktm::fmat4x4 transform{ktm::fmat4x4::from_eye()};
+    // Authored node world space -> the normalized space of baked/skinned vertices.
+    ModelNodes::Matrix node_delta_prefix{ModelNodes::identity()};
 };
 
 struct ModelTransform {
@@ -109,6 +117,13 @@ struct GeometryDevice {
     std::uintptr_t model_resource_handle{};
     std::vector<MeshDevice> mesh_handles;
     std::vector<MeshInstanceDevice> mesh_instances;
+    std::vector<ModelNodes::Node> model_nodes;
+    std::vector<API::ModelNodeOverride> model_node_overrides;
+    std::uint64_t model_node_revision = 0;
+    ModelNodes::Matrix node_instance_prefix=ModelNodes::identity();
+    bool has_node_instance_prefix=false;
+    bool model_node_instances_mapped=false;
+    std::optional<std::array<float,6>> model_node_bounds;
     ktm::fvec3 native_local_correction_offset{0.0f, 0.0f, 0.0f};
     float native_local_correction_scale{1.0f};
     GpuBuildState gpu_build_state{GpuBuildState::Ready};
@@ -124,13 +139,13 @@ struct GeometryDevice {
     // ---- 骨骼动画（per-instance，P2）----
     // is_skinned：对应 Scene 带骨架（model_id 解析的 Scene::data.skeleton 有值）。
     //   GeometrySystem 在 mesh 构建/上传时探测并置位；非蒙皮几何此字段恒 false，零开销。
-    // anim_time：当前播放时间（tick）。每帧由 advance_anim_time 推进并 fmod 自动循环。
+    // Player owns per-instance clip selection, asynchronous sources and local-TRS transitions.
     // skinned_cpu_vertices：仅活跃 Vision 相机请求 GPU 蒙皮 LOD0 回读，每个 mesh 一份原始字节，
     //   布局严格等同 Resource::Vertex 数组（pos[3]+normal[3]+uv[2]，32B）。
     //   Vision 读取该副本；碰撞和光栅顶点缓冲直接使用 GPU 结果，
     //   不依赖该回读副本重新上传。光栅模式及非蒙皮几何此容器为空。
     bool is_skinned{false};
-    float anim_time{0.0f};
+    std::shared_ptr<Resource::AnimationPlayer> animation_player{std::make_shared<Resource::AnimationPlayer>()};
     std::vector<std::vector<std::byte>> skinned_cpu_vertices;
 
     // 蒙皮动态 local AABB：每帧合并 GPU 蒙皮包围盒；混合静态子网格时根据完整
@@ -300,9 +315,12 @@ enum class CameraVisionRenderMode : uint8_t {
     ReSTIR,
 };
 
+enum class CameraVisionDenoiser : uint8_t { Scene, SVGF, ReBLUR, ReLAX };
+
 // Runtime telemetry only; never serialized into scene settings.
 struct CameraFrameTiming {
     double render_ms{};
+    double denoise_ms{};
     // Wall-clock cadence between completed frames of this camera, including waits.
     double frame_ms{};
     CameraVisionRenderMode mode{CameraVisionRenderMode::PathTracing};
@@ -326,6 +344,16 @@ struct CameraDevice {
     CameraRenderBackend render_backend{CameraRenderBackend::Native};
     CameraVisionRenderMode vision_render_mode{CameraVisionRenderMode::PathTracing};
     bool vision_denoise{false};
+    CameraVisionDenoiser vision_denoiser{CameraVisionDenoiser::Scene};
+    std::string vision_reblur_settings{"{}"};
+    std::string vision_pt_settings{"{}"};
+    std::string vision_restir_settings{"{}"};
+    std::string vision_relax_settings{"{}"};
+    std::string vision_reblur_effective_settings{"{}"}; // Runtime feedback, not serialized.
+    std::string vision_pt_effective_settings{"{}"}; // Runtime feedback, not serialized.
+    std::string vision_restir_effective_settings{"{}"}; // Runtime feedback, not serialized.
+    std::string vision_restir_applied_settings; // Overrides matching runtime feedback, not serialized.
+    std::string vision_relax_effective_settings{"{}"}; // Runtime feedback, not serialized.
     bool vision_accumulation{false};
     bool vision_stable_planes{true};
     bool shadow_cascade_debug{false};
@@ -378,6 +406,7 @@ struct ActorPickDevice {
     std::uint32_t result_x{0};
     std::uint32_t result_y{0};
     std::uintptr_t actor_handle{0};
+    std::uint32_t node_index{UINT32_MAX};
     bool pending{false};
     bool result_ready{false};
 };
@@ -401,6 +430,7 @@ struct ActorPickCompletion {
     std::uintptr_t actor_handle{};
     std::uint32_t x{0};
     std::uint32_t y{0};
+    std::uint32_t node_index{UINT32_MAX};
 };
 
 struct CameraMoveCommand {
@@ -438,6 +468,11 @@ enum class CameraStateUpdateField : std::uint32_t {
     VisionDenoise = 1u << 8,
     VisionAccumulation = 1u << 9,
     VisionStablePlanes = 1u << 10,
+    VisionDenoiser = 1u << 11,
+    VisionReblurSettings = 1u << 12,
+    VisionRelaxSettings = 1u << 13,
+    VisionPtSettings = 1u << 14,
+    VisionRestirSettings = 1u << 15,
 };
 
 constexpr CameraStateUpdateField operator|(CameraStateUpdateField lhs,
@@ -462,6 +497,11 @@ struct CameraStateUpdateCommand {
     CameraRenderBackend render_backend{CameraRenderBackend::Native};
     CameraVisionRenderMode vision_render_mode{CameraVisionRenderMode::PathTracing};
     bool vision_denoise{false};
+    CameraVisionDenoiser vision_denoiser{CameraVisionDenoiser::Scene};
+    std::string vision_reblur_settings{"{}"};
+    std::string vision_pt_settings{"{}"};
+    std::string vision_restir_settings{"{}"};
+    std::string vision_relax_settings{"{}"};
     bool vision_accumulation{false};
     bool vision_stable_planes{true};
     bool shadow_cascade_debug{false};
@@ -694,7 +734,7 @@ class SharedDataHub {
     ImageStorage& image_storage();
     const ImageStorage& image_storage() const;
 
-    void publish_camera_frame_timing(std::uintptr_t camera_handle, double render_ms,
+    void publish_camera_frame_timing(std::uintptr_t camera_handle, double render_ms, double denoise_ms,
                                      CameraVisionRenderMode mode,
                                      std::chrono::steady_clock::time_point completed_at =
                                          std::chrono::steady_clock::now());
@@ -710,6 +750,26 @@ class SharedDataHub {
         std::uintptr_t camera_handle) const;
     void acknowledge_camera_vision_denoise(std::uintptr_t camera_handle,
                                           std::uint64_t applied_sequence);
+    [[nodiscard]] std::optional<CameraVisionDenoiser> requested_camera_vision_denoiser(
+        std::uintptr_t camera_handle) const;
+    void acknowledge_camera_vision_denoiser(std::uintptr_t camera_handle,
+                                           std::uint64_t applied_sequence);
+    [[nodiscard]] std::optional<std::string> requested_camera_vision_reblur_settings(
+        std::uintptr_t camera_handle) const;
+    void acknowledge_camera_vision_reblur_settings(std::uintptr_t camera_handle,
+                                                   std::uint64_t applied_sequence);
+    [[nodiscard]] std::optional<std::string> requested_camera_vision_pt_settings(
+        std::uintptr_t camera_handle) const;
+    void acknowledge_camera_vision_pt_settings(std::uintptr_t camera_handle,
+                                                   std::uint64_t applied_sequence);
+    [[nodiscard]] std::optional<std::string> requested_camera_vision_restir_settings(
+        std::uintptr_t camera_handle) const;
+    void acknowledge_camera_vision_restir_settings(std::uintptr_t camera_handle,
+                                                   std::uint64_t applied_sequence);
+    [[nodiscard]] std::optional<std::string> requested_camera_vision_relax_settings(
+        std::uintptr_t camera_handle) const;
+    void acknowledge_camera_vision_relax_settings(std::uintptr_t camera_handle,
+                                                   std::uint64_t applied_sequence);
     [[nodiscard]] std::optional<bool> requested_camera_vision_accumulation(
         std::uintptr_t camera_handle) const;
     void acknowledge_camera_vision_accumulation(std::uintptr_t camera_handle,
@@ -773,6 +833,31 @@ class SharedDataHub {
         bool enabled{false};
         std::uint64_t sequence{};
     };
+    struct RequestedCameraDenoiser {
+        CameraVisionDenoiser type{CameraVisionDenoiser::Scene};
+        std::uint64_t sequence{};
+    };
+    std::unordered_map<std::uintptr_t, RequestedCameraDenoiser> requested_camera_vision_denoiser_;
+    struct RequestedReblurSettings {
+        std::string json;
+        std::uint64_t sequence{};
+    };
+    std::unordered_map<std::uintptr_t, RequestedReblurSettings> requested_camera_vision_reblur_settings_;
+    struct RequestedPtSettings {
+        std::string json;
+        std::uint64_t sequence{};
+    };
+    struct RequestedRestirSettings {
+        std::string json;
+        std::uint64_t sequence{};
+    };
+    std::unordered_map<std::uintptr_t, RequestedPtSettings> requested_camera_vision_pt_settings_;
+    std::unordered_map<std::uintptr_t, RequestedRestirSettings> requested_camera_vision_restir_settings_;
+    struct RequestedRelaxSettings {
+        std::string json;
+        std::uint64_t sequence{};
+    };
+    std::unordered_map<std::uintptr_t, RequestedRelaxSettings> requested_camera_vision_relax_settings_;
     // Retained after drain until the render thread commits or discards the request.
     std::unordered_map<std::uintptr_t, RequestedCameraBool>
         requested_camera_vision_denoise_;

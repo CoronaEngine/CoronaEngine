@@ -5,6 +5,7 @@
 #include <assimp/IOStream.hpp>
 #include <assimp/IOSystem.hpp>
 #include <assimp/Importer.hpp>
+#include <assimp/version.h>
 #include <cfloat>
 #include <fstream>
 #include <iostream>
@@ -14,6 +15,8 @@
 
 #include "corona/resource/types/image.h"
 #include "corona/resource/types/animation_pose.h"
+#include "corona/resource/types/animation.h"
+#include <stdexcept>
 #include "parse_assimp.h"
 
 #ifdef _WIN32
@@ -262,6 +265,7 @@ std::uint32_t Scene::add_node(std::string_view name, std::uint32_t parent) {
     if (parent != InvalidIndex) {
         NodeData& p = data.nodes[parent];
         node.parent = &p;
+        node.parent_index = static_cast<std::int32_t>(parent);
         p.children.push_back(&node);
     }
     return new_index;
@@ -294,6 +298,20 @@ SceneParser::SceneParser() {
     register_extension(".3ds", [this](const auto& path, ResourceCache& cache) { return parse_assimp(path); });
     // register_extension(".ply", [this](const auto& path, ResourceCache& cache) { return parse_assimp(path); });
     register_extension(".stl", [this](const auto& path, ResourceCache& cache) { return parse_assimp(path); });
+}
+
+std::shared_ptr<const AnimationSource> read_animation_source(const std::filesystem::path& path) {
+    Assimp::Importer importer;
+    importer.SetIOHandler(new UnicodeIOSystem(path.parent_path()));
+    // Match the model import's coordinate convention. INCOMPLETE is allowed:
+    // an animation source is not required to contain any meshes/materials.
+    const aiScene* scene = importer.ReadFile(path_to_utf8(path), aiProcess_MakeLeftHanded);
+    if (!scene || !scene->mRootNode || scene->mNumAnimations == 0)
+        throw std::runtime_error("ANIMATION_IMPORT_FAILED: " + path_to_utf8(path) + ": " + importer.GetErrorString());
+    auto result = std::make_shared<AnimationSource>();
+    result->skeleton.root = read_skeleton_hierarchy(scene->mRootNode, result->skeleton);
+    read_animations(scene, result->clips);
+    return result;
 }
 
 std::shared_ptr<IResource> SceneParser::parse_assimp(const std::filesystem::path& path) {
@@ -341,6 +359,11 @@ std::shared_ptr<IResource> SceneParser::parse_assimp(const std::filesystem::path
         CFW_LOG_ERROR("[Assimp] Error: {}", importer.GetErrorString());
         return nullptr;
     }
+
+    std::transform(extension.begin(), extension.end(), extension.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    if (extension == ".fbx" && aiGetVersionMajor() == 5 && aiGetVersionMinor() == 4 && aiGetVersionPatch() == 3)
+        repair_fbx_543_bind_offsets(ai_scene);
 
     auto scene = std::make_shared<Scene>(path);
     std::vector<std::uint32_t> material_map;
@@ -394,6 +417,8 @@ std::shared_ptr<IResource> SceneParser::parse_assimp(const std::filesystem::path
     SharedStaticMeshAssetCache shared_static_asset_cache;
     const bool share_static_instances =
         !has_skinning && assimp_options.share_static_mesh_instances;
+    scene->data.node_instance_prefix = make_static_instance_matrix(initial_transform,global_params);
+    scene->data.has_node_instance_prefix = share_static_instances;
     process_assimp_node(ai_scene->mRootNode, ai_scene, *scene, InvalidIndex, material_map,
                         global_params, initial_transform, assimp_options,
                         has_skinning ? &bone_map : nullptr,
@@ -416,7 +441,7 @@ std::shared_ptr<IResource> SceneParser::parse_assimp(const std::filesystem::path
         }
 
         // 权重健全性抽检：统计每个蒙皮 mesh 的权重和分布，确认 ≈ 1.0
-        // （aiProcess_LimitBoneWeights 已归一化；偏离 1 说明抽取/remap 出错）。
+        // （抽取阶段显式归一化；Assimp 对部分 FBX 不保证权重和为 1）。
         for (std::uint32_t mi = 0; mi < scene->data.meshes.size(); ++mi) {
             const auto& mesh = scene->data.meshes[mi];
             if (mesh.bone_weights.empty()) continue;

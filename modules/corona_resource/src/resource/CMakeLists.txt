@@ -14,6 +14,7 @@ set(CORONA_RESOURCE_MANAGER_SOURCE_FILES
     types/animation.cpp
     # skeletal animation runtime pose evaluation (P1)
     types/animation_pose.cpp
+    types/animation_player.cpp
     # audio
     types/audio.cpp
     # miniaudio implementation TU (single MA_IMPLEMENTATION site)

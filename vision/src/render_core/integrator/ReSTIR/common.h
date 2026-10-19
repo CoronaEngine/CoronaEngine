@@ -135,6 +135,7 @@ protected:
     SpatialResamplingParam spatial_{};
     TemporalResamplingParam temporal_{};
     bool open_{true};
+    float factor_{1.f};
     uint max_age_{};
     mutable ReservoirHistory history_{};
     float diff_factor_{0.3f};
@@ -148,12 +149,38 @@ public:
           spatial_(desc["spatial"]),
           temporal_(desc["temporal"]),
           open_(desc["open"].as_bool(true)),
+          factor_(std::max(desc["factor"].as_float(1.f), 0.f)),
           diff_factor_(desc["diffuse_factor"].as_float(0.3f)),
           max_age_(desc["max_age"].as_uint(30)) {}
-    VS_HOTFIX_MAKE_RESTORE(RuntimeObject, spatial_, temporal_, open_, history_,
+    VS_HOTFIX_MAKE_RESTORE(RuntimeObject, spatial_, temporal_, open_, factor_, history_,
                            max_age_, diff_factor_, integrator_)
     OC_MAKE_MEMBER_GETTER(open, )
     OC_MAKE_MEMBER_SETTER(integrator)
+    [[nodiscard]] DataWrap settings() const {
+        return {{"open", open_}, {"max_age", max_age_}, {"diffuse_factor", diff_factor_},
+                {"temporal", {{"open", temporal_.open}, {"history_limit", temporal_.limit},
+                              {"theta", temporal_.theta}, {"depth", temporal_.depth_threshold},
+                              {"radius", temporal_.sampling_radius}}},
+                {"spatial", {{"open", spatial_.open}, {"theta", spatial_.theta},
+                             {"depth", spatial_.depth_threshold}, {"radius", spatial_.sampling_radius}}}};
+    }
+    // Called only after the complete request has been validated by the integrator.
+    void set_settings(const DataWrap &settings) {
+        open_ = settings["open"].get<bool>();
+        max_age_ = settings["max_age"].get<uint>();
+        diff_factor_ = settings["diffuse_factor"].get<float>();
+        const auto &temporal = settings["temporal"];
+        temporal_.open = temporal["open"].get<bool>();
+        temporal_.limit = temporal["history_limit"].get<uint>();
+        temporal_.theta = temporal["theta"].get<float>();
+        temporal_.depth_threshold = temporal["depth"].get<float>();
+        temporal_.sampling_radius = temporal["radius"].get<float>();
+        const auto &spatial = settings["spatial"];
+        spatial_.open = spatial["open"].get<bool>();
+        spatial_.theta = spatial["theta"].get<float>();
+        spatial_.depth_threshold = spatial["depth"].get<float>();
+        spatial_.sampling_radius = spatial["radius"].get<float>();
+    }
     [[nodiscard]] IlluminationIntegrator *integrator() noexcept { return integrator_.lock().get(); }
     [[nodiscard]] const IlluminationIntegrator *integrator() const noexcept { return integrator_.lock().get(); }
     virtual void update_resolution(uint2 res) noexcept {}
@@ -175,7 +202,7 @@ public:
     [[nodiscard]] Float3 cur_view_pos(const Bool &is_replace, const Uint &index = dispatch_id()) const noexcept {
         Float3 view_pos;
         $if(is_replace) {
-            view_pos = cur_surface_extends().read(index).view_pos;
+            view_pos = cur_surface_extends().read(index).view_pos.as_vec3();
         }
         $else {
             view_pos = scene().sensor()->device_position();

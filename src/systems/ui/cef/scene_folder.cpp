@@ -1514,6 +1514,21 @@ LegacyMigrationResult migrate_legacy_scene(const LegacyMigrationRequest& request
                     actors->second[route_key] = imported.main_route;
                 }
             }
+            for (auto& [key, value] : actors->second) {
+                if (!key.ends_with(".animation.sources")) continue;
+                auto sources = nlohmann::json::parse(value);
+                if (!sources.is_array()) throw std::invalid_argument("Invalid animation.sources array");
+                for (auto& source : sources) {
+                    const auto imported = store.import_model(resolve_legacy_route(legacy->project_root, source.get<std::string>()));
+                    if (!imported.ok()) {
+                        for (auto diagnostic : imported.diagnostics) {
+                            diagnostic.actor = key.substr(0, key.size() - std::string(".animation.sources").size());
+                            result.diagnostics.push_back(std::move(diagnostic));
+                        }
+                    } else source = imported.main_route;
+                }
+                value = sources.dump(-1, ' ', true);
+            }
             std::vector<std::string> texture_keys;
             for (const auto& [key, value] : actors->second) {
                 if (key.ends_with(".material.texture") && !trim(value).empty()) texture_keys.push_back(key);

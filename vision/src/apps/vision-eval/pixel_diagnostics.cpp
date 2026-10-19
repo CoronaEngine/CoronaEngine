@@ -72,14 +72,15 @@ void save_pixel_diagnostics(Pipeline &pipeline) {
             export_field("motion.f32", [](const auto &p) { return p.motion; });
             export_field("physical_normal_depth.f32", [](const auto &p) { return p.surface.normal_depth; });
             export_field("physical_position.f32", [](const auto &p) { return p.surface.pos_diff; });
-            export_field("virtual_position.f32", [](const auto &p) { return make_float4(p.surface.virtual_position, 0.f); });
-            export_field("virtual_normal.f32", [](const auto &p) { return make_float4(p.surface.virtual_normal, 0.f); });
-            export_field("virtual_geometric_normal.f32", [](const auto &p) { return make_float4(p.surface.virtual_geometric_normal, 0.f); });
-            export_field("depth_position.f32", [](const auto &p) { return make_float4(p.depth_position, 0.f); });
+            auto vector4 = [](const array_float3 &v) { return make_float4(v[0], v[1], v[2], 0.f); };
+            export_field("virtual_position.f32", [&](const auto &p) { return vector4(p.surface.virtual_position); });
+            export_field("virtual_normal.f32", [&](const auto &p) { return vector4(p.surface.virtual_normal); });
+            export_field("virtual_geometric_normal.f32", [&](const auto &p) { return vector4(p.surface.virtual_geometric_normal); });
+            export_field("depth_position.f32", [&](const auto &p) { return vector4(p.depth_position); });
             export_field("diffuse_roughness.f32", [](const auto &p) { return p.surface.diffuse_roughness; });
             export_field("specular_roughness.f32", [](const auto &p) { return p.surface.specular_roughness; });
-            export_field("albedo.f32", [](const auto &p) { return make_float4(p.surface.denoiser_albedo, 0.f); });
-            export_field("throughput.f32", [](const auto &p) { return make_float4(p.extension.throughput, 0.f); });
+            export_field("albedo.f32", [&](const auto &p) { return vector4(p.surface.denoiser_albedo); });
+            export_field("throughput.f32", [&](const auto &p) { return vector4(p.extension.throughput); });
         }
     }
     if (denoise && denoiser->has_prepared_resources()) {

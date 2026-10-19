@@ -96,6 +96,21 @@ class ScriptRuntimeSceneToolsAdapter:
             "scene_tools.set_actor_state", [scene_name, actor_name, state]
         )
 
+    def set_actor_animation(self, scene_name, actor_name, animation, blend_seconds=0.2):
+        return self._invoke_manifest(
+            "scene_tools.set_actor_animation", [scene_name, actor_name, animation, blend_seconds]
+        )
+
+    def pause_actor_animation(self, scene_name, actor_name):
+        return self._invoke_manifest(
+            "scene_tools.pause_actor_animation", [scene_name, actor_name]
+        )
+
+    def resume_actor_animation(self, scene_name, actor_name):
+        return self._invoke_manifest(
+            "scene_tools.resume_actor_animation", [scene_name, actor_name]
+        )
+
     def set_actor_physics(self, scene_name, actor_name, physics):
         return self._invoke_manifest(
             "scene_tools.set_actor_physics", [scene_name, actor_name, physics]

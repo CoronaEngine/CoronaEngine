@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <stdexcept>
 #include <string>
 #include <unordered_map>
 
@@ -40,6 +41,16 @@ std::array<float, 3> lerp_vec3(const std::array<float, 3>& a, const std::array<f
 
 /// 四元数 (x,y,z,w) 球面插值，自动选短弧。接近共线时退化为归一化线性插值。
 std::array<float, 4> slerp_quat(std::array<float, 4> a, std::array<float, 4> b, float t) {
+    const auto normalize = [](std::array<float, 4> q) {
+        double length = 0;
+        for (float value : q) length += double(value) * value;
+        if (!std::isfinite(length) || length < 1e-16)
+            throw std::invalid_argument("Invalid animation quaternion");
+        for (float& value : q) value = static_cast<float>(value / std::sqrt(length));
+        return q;
+    };
+    a = normalize(a);
+    b = normalize(b);
     float cos_theta = a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3];
     // 选短弧
     if (cos_theta < 0.0f) {
@@ -55,7 +66,7 @@ std::array<float, 4> slerp_quat(std::array<float, 4> a, std::array<float, 4> b, 
                   a[2] + (b[2] - a[2]) * t,
                   a[3] + (b[3] - a[3]) * t};
     } else {
-        float theta = std::acos(cos_theta);
+        float theta = std::acos(std::clamp(cos_theta, -1.0f, 1.0f));
         float sin_theta = std::sin(theta);
         float wa = std::sin((1.0f - t) * theta) / sin_theta;
         float wb = std::sin(t * theta) / sin_theta;
@@ -198,9 +209,50 @@ std::array<float, 16> compose_trs(const std::array<float, 3>& t,
     return m;
 }
 
-std::array<float, 16> sample_channel(const AnimChannel& channel, float time_ticks) {
+LocalTransform decompose_local(const std::array<float, 16>& m) {
+    if (!all_finite(m)) throw std::invalid_argument("Non-finite reference pose");
+    LocalTransform result;
+    result.translation = {m[12], m[13], m[14]};
+    std::array<float, 3> x{m[0], m[1], m[2]}, y{m[4], m[5], m[6]}, z{m[8], m[9], m[10]};
+    result.scale = {v3_len(x), v3_len(y), v3_len(z)};
+    if (v3_dot(v3_cross(x, y), z) < 0) result.scale[0] = -result.scale[0];
+    for (const float scale : result.scale)
+        if (!std::isfinite(scale) || std::abs(scale) < 1e-8f) throw std::invalid_argument("Singular reference pose");
+    for (int i = 0; i < 3; ++i) {
+        x[i] /= result.scale[0]; y[i] /= result.scale[1]; z[i] /= result.scale[2];
+    }
+    const float trace = x[0] + y[1] + z[2];
+    auto& q = result.rotation;
+    if (trace > 0) {
+        const float s = 2 * std::sqrt(trace + 1);
+        q = {(y[2] - z[1]) / s, (z[0] - x[2]) / s, (x[1] - y[0]) / s, s / 4};
+    } else if (x[0] > y[1] && x[0] > z[2]) {
+        const float s = 2 * std::sqrt(std::max(0.0f, 1 + x[0] - y[1] - z[2]));
+        q = {s / 4, (y[0] + x[1]) / s, (z[0] + x[2]) / s, (y[2] - z[1]) / s};
+    } else if (y[1] > z[2]) {
+        const float s = 2 * std::sqrt(std::max(0.0f, 1 + y[1] - x[0] - z[2]));
+        q = {(y[0] + x[1]) / s, s / 4, (z[1] + y[2]) / s, (z[0] - x[2]) / s};
+    } else {
+        const float s = 2 * std::sqrt(std::max(0.0f, 1 + z[2] - x[0] - y[1]));
+        q = {(z[0] + x[2]) / s, (z[1] + y[2]) / s, s / 4, (x[1] - y[0]) / s};
+    }
+    q = slerp_quat(q, q, 0);
+    const auto reconstructed = compose_trs(result.translation, q, result.scale);
+    for (std::size_t i = 0; i < m.size(); ++i)
+        if (std::abs(m[i] - reconstructed[i]) > 1e-4f * std::max(1.0f, std::abs(m[i])))
+            throw std::invalid_argument("Reference pose contains shear or a non-affine transform");
+    return result;
+}
+
+LocalTransform blend_local(const LocalTransform& a, const LocalTransform& b, float weight) {
+    const float t = std::clamp(weight, 0.0f, 1.0f);
+    return {lerp_vec3(a.translation, b.translation, t), slerp_quat(a.rotation, b.rotation, t),
+            lerp_vec3(a.scale, b.scale, t)};
+}
+
+LocalTransform sample_channel_trs(const AnimChannel& channel, float time_ticks, const LocalTransform& reference) {
     // 位置
-    std::array<float, 3> pos{0.0f, 0.0f, 0.0f};
+    auto pos = reference.translation;
     if (channel.positions.size() == 1) {
         pos = channel.positions[0].second;
     } else if (channel.positions.size() >= 2) {
@@ -210,9 +262,9 @@ std::array<float, 16> sample_channel(const AnimChannel& channel, float time_tick
     }
 
     // 旋转（四元数 Slerp）
-    std::array<float, 4> rot{0.0f, 0.0f, 0.0f, 1.0f};
+    auto rot = reference.rotation;
     if (channel.rotations.size() == 1) {
-        rot = channel.rotations[0].second;
+        rot = slerp_quat(channel.rotations[0].second, channel.rotations[0].second, 0);
     } else if (channel.rotations.size() >= 2) {
         std::size_t i = find_key_index(channel.rotations, time_ticks);
         float f = blend_factor(time_ticks, channel.rotations[i].first, channel.rotations[i + 1].first);
@@ -220,7 +272,7 @@ std::array<float, 16> sample_channel(const AnimChannel& channel, float time_tick
     }
 
     // 缩放
-    std::array<float, 3> scale{1.0f, 1.0f, 1.0f};
+    auto scale = reference.scale;
     if (channel.scales.size() == 1) {
         scale = channel.scales[0].second;
     } else if (channel.scales.size() >= 2) {
@@ -229,7 +281,12 @@ std::array<float, 16> sample_channel(const AnimChannel& channel, float time_tick
         scale = lerp_vec3(channel.scales[i].second, channel.scales[i + 1].second, f);
     }
 
-    return compose_trs(pos, rot, scale);
+    return {pos, rot, scale};
+}
+
+std::array<float, 16> sample_channel(const AnimChannel& channel, float time_ticks) {
+    const auto sampled = sample_channel_trs(channel, time_ticks);
+    return compose_trs(sampled.translation, sampled.rotation, sampled.scale);
 }
 
 float advance_anim_time(float current_ticks, float dt_seconds, const AnimationClip& clip) {
@@ -258,9 +315,11 @@ void sample_pose_locals(const SkeletonData& skeleton,
         const BoneNode& node = skeleton.nodes[i];
         auto ch_it = channel_map.find(node.name);
         // 有动画通道则采样，否则回退绑定姿态 local
-        out_locals[i] = (ch_it != channel_map.end())
-                            ? sample_channel(*ch_it->second, time_ticks)
-                            : node.local;
+        if (ch_it == channel_map.end()) out_locals[i] = node.local;
+        else {
+            const auto value = sample_channel_trs(*ch_it->second, time_ticks, decompose_local(node.local));
+            out_locals[i] = compose_trs(value.translation, value.rotation, value.scale);
+        }
     }
 }
 
