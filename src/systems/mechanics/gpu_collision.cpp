@@ -27,6 +27,7 @@ using namespace EmbeddedShader;
 constexpr std::uint32_t threads = 64, fan = 8, record_size = 12, node_size = 14, bounds_size = 7;
 constexpr std::uint32_t max_items = threads * 65535u;
 constexpr std::uint32_t contact_page_size = 65536;
+constexpr std::uint32_t surface_walkers = 1024;
 // Slang diagnoses the rounded decimal spelling of FLT_MAX as overflow. Half
 // that value is a finite sentinel with ample range for engine coordinates.
 constexpr float huge = std::numeric_limits<float>::max() * 0.5f;
@@ -236,13 +237,14 @@ struct RefitKernel {
 struct ContactKernel {
     Floats va, vb, bounds, output;
     UInts ia, ib, nodes, leaves;
-    Uint count, first, node_count;
+    Uint count, first, node_count, reverse;
     Float threshold;
     H::ComputePipeline<> pipeline;
     ContactKernel() {
         count.as_push_constant();
         first.as_push_constant();
         node_count.as_push_constant();
+        reverse.as_push_constant();
         threshold.as_push_constant();
         pipeline = make_compute_pipeline([&] {
             Uint lane, ta;
@@ -289,19 +291,29 @@ struct ContactKernel {
                                 tb = leaves.values[k];
                                 std::array<M::Vec3, 3> b;
                                 for (std::uint32_t c = 0; c < 3; ++c) b[c] = load3(vb.values, ib.values[tb * Uint(3u) + Uint(c)] * Uint(3u));
-                                M::Contact contact;
-                                M::triangle_contact(a, b, threshold, contact);
-                                Float contact_count, tbf;
-                                contact_count = Float(contact.count);
-                                tbf = Float(tb);
-                                $IF((contact.count > Uint(0u)) && (contact.depth > Float(0.0f) - threshold) && ((best_b < Float(0.0f)) || (contact.depth > depth) || ((contact.depth == depth) && (tbf < best_b)))) {
-                                    hits = contact_count;
-                                    sx = contact.sx; sy = contact.sy; sz = contact.sz;
-                                    depth = contact.depth;
-                                    nx = contact.nx;
-                                    ny = contact.ny;
-                                    nz = contact.nz;
-                                    best_b = tbf;
+                                Bool triangle_overlap;
+                                triangle_overlap =
+                                    (min(min(b[0].x,b[1].x),b[2].x) <= hi[0]+threshold) &&
+                                    (max(max(b[0].x,b[1].x),b[2].x) >= lo[0]-threshold) &&
+                                    (min(min(b[0].y,b[1].y),b[2].y) <= hi[1]+threshold) &&
+                                    (max(max(b[0].y,b[1].y),b[2].y) >= lo[1]-threshold) &&
+                                    (min(min(b[0].z,b[1].z),b[2].z) <= hi[2]+threshold) &&
+                                    (max(max(b[0].z,b[1].z),b[2].z) >= lo[2]-threshold);
+                                $IF(triangle_overlap) {
+                                    M::Contact contact;
+                                    M::triangle_contact(a, b, threshold, contact);
+                                    Float contact_count, tbf;
+                                    contact_count = Float(contact.count);
+                                    tbf = Float(tb);
+                                    $IF((contact.count > Uint(0u)) && (contact.depth > Float(0.0f) - threshold) && ((best_b < Float(0.0f)) || (contact.depth > depth) || ((contact.depth == depth) && (tbf < best_b)))) {
+                                        hits = contact_count;
+                                        sx = contact.sx; sy = contact.sy; sz = contact.sz;
+                                        depth = contact.depth;
+                                        nx = contact.nx;
+                                        ny = contact.ny;
+                                        nz = contact.nz;
+                                        best_b = tbf;
+                                    }
                                 }
                                 k = k + Uint(1u);
                             }
@@ -311,6 +323,7 @@ struct ContactKernel {
                     }
                     $ELSE { node = nodes.values[meta + Uint(2u)]; }
                 }
+                $IF(reverse != Uint(0u)) { nx = -nx; ny = -ny; nz = -nz; }
                 Uint o;
                 o = lane * Uint(record_size);
                 output.values[o] = depth;
@@ -325,6 +338,10 @@ struct ContactKernel {
                 taf = Float(ta);
                 output.values[o + Uint(8u)] = taf;
                 output.values[o + Uint(9u)] = best_b;
+                $IF(reverse != Uint(0u)) {
+                    output.values[o + Uint(8u)] = best_b;
+                    output.values[o + Uint(9u)] = taf;
+                }
                 output.values[o + Uint(10u)] = 0.0f;
                 output.values[o + Uint(11u)] = 0.0f;
             }
@@ -333,126 +350,189 @@ struct ContactKernel {
     }
 };
 
+void merge_contact_record(std::array<Float, record_size>& r, std::array<Float, record_size>& s) {
+    // Average only one coherent contact patch. Points
+    // with another normal/depth cannot share its impulse.
+    $IF((s[7] > Float(0.0f)) && (r[7] > Float(0.0f)) &&
+        (s[11] == r[11]) &&
+        (abs(s[0] - r[0]) < Float(1e-5f)) &&
+        (s[1] * r[1] + s[2] * r[2] + s[3] * r[3] > Float(0.999f))) {
+        for (int i = 4; i < 8; ++i) r[i] = r[i] + s[i];
+    } $ELSE {
+        // Equal-depth face interiors take precedence
+        // over duplicated edge/vertex samples and the
+        // intersection witness. Their area-weighted
+        // centroid avoids artificial torque on flat supports.
+        $IF((s[7] > Float(0.0f)) && ((r[7] == Float(0.0f)) || (s[0] > r[0] + Float(1e-5f)) ||
+            ((abs(s[0] - r[0]) < Float(1e-5f)) && ((s[11] > r[11]) || ((s[11] == r[11]) &&
+            ((s[10] > r[10]) || ((s[10] == r[10]) && ((s[8] < r[8]) || ((s[8] == r[8]) && (s[9] < r[9])))))))))) {
+            for (int i = 0; i < record_size; ++i) r[i] = s[i];
+        }
+    }
+}
+
 // Signed distances are evaluated against the current deformed triangles, not
 // a bind-pose SDF or an AABB proxy. The exact triangle intersection pass remains
 // active for edge crossings which do not contain a sampled surface feature.
 struct SurfaceContactKernel {
     Floats source, target, bounds, source_bounds, output;
-    UInts source_indices, target_indices, nodes, leaves;
-    Uint count, node_count, first, closed, source_closed, reverse;
+    UInts source_indices, target_indices, source_nodes, source_leaves, nodes, leaves;
+    Uint count, node_count, source_node_count, closed, source_closed, reverse;
     Float threshold, winding, source_winding;
     H::ComputePipeline<> pipeline;
     SurfaceContactKernel() {
-        count.as_push_constant(); node_count.as_push_constant(); first.as_push_constant();
+        count.as_push_constant(); node_count.as_push_constant(); source_node_count.as_push_constant();
         closed.as_push_constant(); reverse.as_push_constant(); threshold.as_push_constant(); winding.as_push_constant();
         source_closed.as_push_constant(); source_winding.as_push_constant();
         pipeline = make_compute_pipeline([&] {
             Uint lane;
             lane = dispatchThreadID()->x;
             $IF(lane < count) {
-                Uint tri, feature;
-                tri = (first + lane) / Uint(7u); feature = (first + lane) % Uint(7u);
-                std::array<M::Vec3, 3> a;
-                for (std::uint32_t i = 0; i < 3; ++i)
-                    a[i] = load3(source.values, source_indices.values[tri * Uint(3u) + Uint(i)] * Uint(3u));
-                M::Vec3 p;
-                p = M::mul(M::add(M::add(a[0], a[1]), a[2]), Float(1.0f / 3.0f));
-                for (std::uint32_t i = 0; i < 3; ++i) {
-                    $IF(feature == Uint(i)) { p = a[i]; }
-                    $IF(feature == Uint(i + 3u)) { p = M::mul(M::add(a[i], a[(i + 1u) % 3u]), Float(0.5f)); }
-                }
-                M::Vec3 center_delta;
-                center_delta.x = (bounds.values[Uint(0u)] + bounds.values[Uint(3u)] - source_bounds.values[Uint(0u)] - source_bounds.values[Uint(3u)]) * Float(0.5f);
-                center_delta.y = (bounds.values[Uint(1u)] + bounds.values[Uint(4u)] - source_bounds.values[Uint(1u)] - source_bounds.values[Uint(4u)]) * Float(0.5f);
-                center_delta.z = (bounds.values[Uint(2u)] + bounds.values[Uint(5u)] - source_bounds.values[Uint(2u)] - source_bounds.values[Uint(5u)]) * Float(0.5f);
-                Float best, best_tri, best_preference;
-                best = huge; best_tri = -1.0f; best_preference = -huge;
-                M::Vec3 closest, face;
-                closest = p; face.x = 0.0f; face.y = 1.0f; face.z = 0.0f;
-                Uint node, crossings;
-                node = 0u; crossings = 0u;
-                $WHILE(node < node_count) {
-                    std::array<Float, 3> pos;
-                    pos[0] = p.x; pos[1] = p.y; pos[2] = p.z;
-                    Float box_distance, enter, leave;
-                    box_distance = 0.0f; enter = 0.0f; leave = huge;
-                    constexpr std::array<float, 3> direction{1.0f, 0.37139067f, 0.52917331f};
-                    for (std::uint32_t i = 0; i < 3; ++i) {
-                        Float low, high, delta;
-                        low = bounds.values[node * Uint(bounds_size) + Uint(i)];
-                        high = bounds.values[node * Uint(bounds_size) + Uint(i + 3u)];
-                        delta = max(Float(0.0f), max(low - pos[i], pos[i] - high));
-                        box_distance = box_distance + delta * delta;
-                        enter = max(enter, (low - pos[i]) / Float(direction[i]));
-                        leave = min(leave, (high - pos[i]) / Float(direction[i]));
+                // Traverse only source leaves overlapping the target root. Each
+                // walker processes a disjoint stride of actual triangle features;
+                // there is no candidate cap and no full-map feature scratch.
+                std::array<Float, record_size> accumulated;
+                for (auto& value : accumulated) value = 0.0f;
+                accumulated[0] = Float(0.0f)-threshold;
+                accumulated[8] = -1.0f; accumulated[9] = -1.0f;
+                Uint source_node;
+                source_node = 0u;
+                $WHILE(source_node < source_node_count) {
+                    Bool overlap;
+                    overlap = true;
+                    for (std::uint32_t axis=0;axis<3;++axis) {
+                        $IF((source_bounds.values[source_node*Uint(bounds_size)+Uint(axis)] > bounds.values[Uint(axis+3u)]+threshold) ||
+                            (source_bounds.values[source_node*Uint(bounds_size)+Uint(axis+3u)] < bounds.values[Uint(axis)]-threshold)) { overlap = false; }
                     }
-                    Uint meta;
-                    meta = node * Uint(node_size);
-                    $IF((box_distance <= best) || ((closed != Uint(0u)) && (leave >= enter))) {
-                        $IF(nodes.values[meta + Uint(4u)] == Uint(1u)) {
-                            Uint k, end;
-                            k = nodes.values[meta]; end = k + nodes.values[meta + Uint(1u)];
-                            $WHILE(k < end) {
-                                Uint other;
-                                other = leaves.values[k];
-                                std::array<M::Vec3, 3> b;
+                    Uint source_meta;
+                    source_meta = source_node*Uint(node_size);
+                    $IF(overlap) {
+                        $IF(source_nodes.values[source_meta+Uint(4u)] == Uint(1u)) {
+                            Uint sample, sample_end, sample_begin;
+                            sample_begin = source_nodes.values[source_meta]*Uint(7u);
+                            // Keep a global lane assignment across leaves. A
+                            // leaf-local stride concentrates all work in the
+                            // first few warps when most leaves are small.
+                            sample = sample_begin + (lane + count - sample_begin % count) % count;
+                            sample_end = (source_nodes.values[source_meta]+source_nodes.values[source_meta+Uint(1u)])*Uint(7u);
+                            $WHILE(sample < sample_end) {
+                                Uint tri, feature;
+                                tri = source_leaves.values[sample/Uint(7u)]; feature = sample%Uint(7u);
+                                std::array<M::Vec3, 3> a;
                                 for (std::uint32_t i = 0; i < 3; ++i)
-                                    b[i] = load3(target.values, target_indices.values[other * Uint(3u) + Uint(i)] * Uint(3u));
-                                const auto q = M::closest_triangle_point(p, b);
-                                const auto normal = M::mul(M::normalize_safe(M::cross(M::sub(b[1], b[0]), M::sub(b[2], b[0]))), winding);
-                                Float distance, other_float, preference;
-                                distance = M::dot(M::sub(p, q), M::sub(p, q)); other_float = Float(other);
-                                preference = Float(0.0f) - M::dot(normal, center_delta);
-                                $IF((distance < best) || ((distance == best) && ((preference > best_preference) ||
-                                    ((preference == best_preference) && (other_float < best_tri))))) {
-                                    best = distance; closest = q; best_tri = other_float;
-                                    face = normal; best_preference = preference;
+                                    a[i] = load3(source.values, source_indices.values[tri * Uint(3u) + Uint(i)] * Uint(3u));
+                                M::Vec3 p;
+                                p = M::mul(M::add(M::add(a[0], a[1]), a[2]), Float(1.0f / 3.0f));
+                                for (std::uint32_t i = 0; i < 3; ++i) {
+                                    $IF(feature == Uint(i)) { p = a[i]; }
+                                    $IF(feature == Uint(i + 3u)) { p = M::mul(M::add(a[i], a[(i + 1u) % 3u]), Float(0.5f)); }
                                 }
-                                $IF(closed != Uint(0u)) { crossings = crossings + M::ray_crossing(p, b); }
-                                k = k + Uint(1u);
+                                M::Vec3 center_delta;
+                                center_delta.x = (bounds.values[Uint(0u)] + bounds.values[Uint(3u)] - source_bounds.values[Uint(0u)] - source_bounds.values[Uint(3u)]) * Float(0.5f);
+                                center_delta.y = (bounds.values[Uint(1u)] + bounds.values[Uint(4u)] - source_bounds.values[Uint(1u)] - source_bounds.values[Uint(4u)]) * Float(0.5f);
+                                center_delta.z = (bounds.values[Uint(2u)] + bounds.values[Uint(5u)] - source_bounds.values[Uint(2u)] - source_bounds.values[Uint(5u)]) * Float(0.5f);
+                                Float best, best_tri, best_preference;
+                                Bool can_be_inside;
+                                can_be_inside = closed != Uint(0u) &&
+                                    (p.x >= bounds.values[Uint(0u)]) && (p.x <= bounds.values[Uint(3u)]) &&
+                                    (p.y >= bounds.values[Uint(1u)]) && (p.y <= bounds.values[Uint(4u)]) &&
+                                    (p.z >= bounds.values[Uint(2u)]) && (p.z <= bounds.values[Uint(5u)]);
+                                best = threshold*threshold; best_tri = -1.0f; best_preference = -huge;
+                                $IF(can_be_inside) { best = huge; }
+                                M::Vec3 closest, face;
+                                closest = p; face.x = 0.0f; face.y = 1.0f; face.z = 0.0f;
+                                Uint node, crossings;
+                                node = 0u; crossings = 0u;
+                                $WHILE(node < node_count) {
+                                    std::array<Float, 3> pos;
+                                    pos[0] = p.x; pos[1] = p.y; pos[2] = p.z;
+                                    Float box_distance, enter, leave;
+                                    box_distance = 0.0f; enter = 0.0f; leave = huge;
+                                    constexpr std::array<float, 3> direction{1.0f, 0.37139067f, 0.52917331f};
+                                    for (std::uint32_t i = 0; i < 3; ++i) {
+                                        Float low, high, delta;
+                                        low = bounds.values[node * Uint(bounds_size) + Uint(i)];
+                                        high = bounds.values[node * Uint(bounds_size) + Uint(i + 3u)];
+                                        delta = max(Float(0.0f), max(low - pos[i], pos[i] - high));
+                                        box_distance = box_distance + delta * delta;
+                                        enter = max(enter, (low - pos[i]) / Float(direction[i]));
+                                        leave = min(leave, (high - pos[i]) / Float(direction[i]));
+                                    }
+                                    Uint meta;
+                                    meta = node * Uint(node_size);
+                                    $IF((box_distance <= best) || (can_be_inside && (leave >= enter))) {
+                                        $IF(nodes.values[meta + Uint(4u)] == Uint(1u)) {
+                                            Uint k, end;
+                                            k = nodes.values[meta]; end = k + nodes.values[meta + Uint(1u)];
+                                            $WHILE(k < end) {
+                                                Uint other;
+                                                other = leaves.values[k];
+                                                std::array<M::Vec3, 3> b;
+                                                for (std::uint32_t i = 0; i < 3; ++i)
+                                                    b[i] = load3(target.values, target_indices.values[other * Uint(3u) + Uint(i)] * Uint(3u));
+                                                const auto q = M::closest_triangle_point(p, b);
+                                                const auto normal = M::mul(M::normalize_safe(M::cross(M::sub(b[1], b[0]), M::sub(b[2], b[0]))), winding);
+                                                Float distance, other_float, preference;
+                                                distance = M::dot(M::sub(p, q), M::sub(p, q)); other_float = Float(other);
+                                                preference = Float(0.0f) - M::dot(normal, center_delta);
+                                                $IF((distance < best) || ((distance == best) && ((preference > best_preference) ||
+                                                    ((preference == best_preference) && (other_float < best_tri))))) {
+                                                    best = distance; closest = q; best_tri = other_float;
+                                                    face = normal; best_preference = preference;
+                                                }
+                                                $IF(can_be_inside) { crossings = crossings + M::ray_crossing(p, b); }
+                                                k = k + Uint(1u);
+                                            }
+                                            node = nodes.values[meta + Uint(2u)];
+                                        } $ELSE { node = nodes.values[meta + Uint(3u)]; }
+                                    } $ELSE { node = nodes.values[meta + Uint(2u)]; }
+                                }
+                                Float distance, depth, hit;
+                                distance = sqrt(best); depth = Float(0.0f) - distance; hit = 0.0f;
+                                M::Vec3 normal, point;
+                                normal = M::mul(face, Float(-1.0f));
+                                point = M::mul(M::add(p, closest), Float(0.5f));
+                                $IF(distance > Float(1e-7f)) {
+                                    normal = M::mul(M::sub(closest, p), Float(1.0f) / distance);
+                                    $IF((crossings & Uint(1u)) != Uint(0u)) {
+                                        depth = distance; normal = M::mul(normal, Float(-1.0f));
+                                    }
+                                }
+                                // Coincident closed surfaces have zero distance everywhere.
+                                // Matching outward faces at a face-interior sample indicate
+                                // overlapping interiors; give recovery a bounded initial step.
+                                const auto source_normal = M::mul(M::normalize_safe(M::cross(M::sub(a[1], a[0]), M::sub(a[2], a[0]))), source_winding);
+                                $IF((closed != Uint(0u)) && (source_closed != Uint(0u)) && (feature == Uint(6u)) &&
+                                    (distance <= Float(1e-7f)) && (M::dot(source_normal, face) > Float(0.999f))) { depth = threshold; }
+                                Float preference;
+                                preference = M::dot(normal, center_delta);
+                                $IF((best_tri >= Float(0.0f)) && (depth >= Float(0.0f) - threshold)) { hit = 1.0f; }
+                                $IF(reverse != Uint(0u)) { normal = M::mul(normal, Float(-1.0f)); }
+                                Float priority, weight;
+                                priority = 1.0f; weight = hit;
+                                $IF(feature == Uint(6u)) {
+                                    priority = 2.0f;
+                                    weight = hit * M::length(M::cross(M::sub(a[1], a[0]), M::sub(a[2], a[0]))) * Float(0.5f);
+                                }
+                                std::array<Float, record_size> candidate;
+                                candidate[0] = depth;
+                                candidate[1] = normal.x; candidate[2] = normal.y; candidate[3] = normal.z;
+                                candidate[4] = point.x * weight; candidate[5] = point.y * weight; candidate[6] = point.z * weight;
+                                candidate[7] = weight;
+                                Float ta, tb;
+                                ta = Float(tri); tb = best_tri;
+                                $IF(reverse != Uint(0u)) { ta = best_tri; tb = Float(tri); }
+                                candidate[8] = ta; candidate[9] = tb;
+                                candidate[10] = preference; candidate[11] = priority;
+                                merge_contact_record(accumulated, candidate);
+                                sample = sample + count;
                             }
-                            node = nodes.values[meta + Uint(2u)];
-                        } $ELSE { node = nodes.values[meta + Uint(3u)]; }
-                    } $ELSE { node = nodes.values[meta + Uint(2u)]; }
+                            source_node = source_nodes.values[source_meta+Uint(2u)];
+                        } $ELSE { source_node = source_nodes.values[source_meta+Uint(3u)]; }
+                    } $ELSE { source_node = source_nodes.values[source_meta+Uint(2u)]; }
                 }
-                Float distance, depth, hit;
-                distance = sqrt(best); depth = Float(0.0f) - distance; hit = 0.0f;
-                M::Vec3 normal, point;
-                normal = M::mul(face, Float(-1.0f));
-                point = M::mul(M::add(p, closest), Float(0.5f));
-                $IF(distance > Float(1e-7f)) {
-                    normal = M::mul(M::sub(closest, p), Float(1.0f) / distance);
-                    $IF((crossings & Uint(1u)) != Uint(0u)) {
-                        depth = distance; normal = M::mul(normal, Float(-1.0f));
-                    }
-                }
-                // Coincident closed surfaces have zero distance everywhere.
-                // Matching outward faces at a face-interior sample indicate
-                // overlapping interiors; give recovery a bounded initial step.
-                const auto source_normal = M::mul(M::normalize_safe(M::cross(M::sub(a[1], a[0]), M::sub(a[2], a[0]))), source_winding);
-                $IF((closed != Uint(0u)) && (source_closed != Uint(0u)) && (feature == Uint(6u)) &&
-                    (distance <= Float(1e-7f)) && (M::dot(source_normal, face) > Float(0.999f))) { depth = threshold; }
-                Float preference;
-                preference = M::dot(normal, center_delta);
-                $IF((best_tri >= Float(0.0f)) && (depth >= Float(0.0f) - threshold)) { hit = 1.0f; }
-                $IF(reverse != Uint(0u)) { normal = M::mul(normal, Float(-1.0f)); }
-                Float priority, weight;
-                priority = 1.0f; weight = hit;
-                $IF(feature == Uint(6u)) {
-                    priority = 2.0f;
-                    weight = hit * M::length(M::cross(M::sub(a[1], a[0]), M::sub(a[2], a[0]))) * Float(0.5f);
-                }
-                Uint o;
-                o = lane * Uint(record_size);
-                output.values[o] = depth;
-                output.values[o + Uint(1u)] = normal.x; output.values[o + Uint(2u)] = normal.y; output.values[o + Uint(3u)] = normal.z;
-                output.values[o + Uint(4u)] = point.x * weight; output.values[o + Uint(5u)] = point.y * weight; output.values[o + Uint(6u)] = point.z * weight;
-                output.values[o + Uint(7u)] = weight;
-                Float ta, tb;
-                ta = Float(tri); tb = best_tri;
-                $IF(reverse != Uint(0u)) { ta = best_tri; tb = Float(tri); }
-                output.values[o + Uint(8u)] = ta; output.values[o + Uint(9u)] = tb;
-                output.values[o + Uint(10u)] = preference; output.values[o + Uint(11u)] = priority;
+                for (std::uint32_t i=0;i<record_size;++i)
+                    output.values[lane*Uint(record_size)+Uint(i)] = accumulated[i];
             }
         }, ktm::uvec3(threads, 1, 1));
     }
@@ -662,24 +742,7 @@ struct ReduceKernel {
                                 for (int i=0;i<record_size;++i) r[i]=s[i];
                             }
                         } else if (kind == Reduction::Contact) {
-                            // Average only one coherent contact patch. Points
-                            // with another normal/depth cannot share its impulse.
-                            $IF((s[7] > Float(0.0f)) && (r[7] > Float(0.0f)) &&
-                                (s[11] == r[11]) &&
-                                (abs(s[0] - r[0]) < Float(1e-5f)) &&
-                                (s[1] * r[1] + s[2] * r[2] + s[3] * r[3] > Float(0.999f))) {
-                                for (int i = 4; i < 8; ++i) r[i] = r[i] + s[i];
-                            } $ELSE {
-                                // Equal-depth face interiors take precedence
-                                // over duplicated edge/vertex samples and the
-                                // intersection witness. Their area-weighted
-                                // centroid avoids artificial torque on flat supports.
-                                $IF((s[7] > Float(0.0f)) && ((r[7] == Float(0.0f)) || (s[0] > r[0] + Float(1e-5f)) ||
-                                    ((abs(s[0] - r[0]) < Float(1e-5f)) && ((s[11] > r[11]) || ((s[11] == r[11]) &&
-                                    ((s[10] > r[10]) || ((s[10] == r[10]) && ((s[8] < r[8]) || ((s[8] == r[8]) && (s[9] < r[9])))))))))) {
-                                    for (int i = 0; i < record_size; ++i) r[i] = s[i];
-                                }
-                            }
+                            merge_contact_record(r, s);
                         } else if (kind == Reduction::Vertex) {
                             $IF((s[0] < r[0]) || ((s[0] == r[0]) && (s[3] < r[3]))) {
                                 for (int i = 0; i < 4; ++i) r[i] = s[i];
@@ -706,13 +769,14 @@ struct ReduceKernel {
 
 struct Mesh {
     std::uint64_t revision{};
+    std::uint64_t shape_version{};
     std::uint32_t vertices{}, triangles{}, node_count{};
     std::uint32_t ground_walkers{1};
     H::HardwareBuffer local, previous, world, indices, nodes, leaves, order, bounds;
     H::HardwareBuffer ground_snapshot, ground_world, ground_bounds;
     std::vector<std::pair<H::HardwareBuffer, H::HardwareBuffer>> uploads;
     std::vector<std::pair<std::uint32_t, std::uint32_t>> levels;
-    std::vector<GpuCollisionPipeline::VertexSource> sources;
+    std::vector<GpuCollisionPipeline::VertexSource> sources, completed_sources;
     GpuCollisionPipeline::Matrix prepared_matrix{}, ground_prepared_matrix{};
     bool world_valid{}, tree_valid{}, pose_initialized{}, pending_pose{};
     bool snapshot_valid{}, ground_world_valid{}, ground_tree_valid{};
@@ -757,6 +821,15 @@ struct GpuCollisionPipeline::Impl {
     H::HardwareBuffer motion_state, motion_contact, motion_callback;
     ReduceKernel reduce_contact{Reduction::Contact}, reduce_vertex{Reduction::Vertex}, reduce_ground{Reduction::Ground};
     std::unordered_map<std::uint64_t, std::unique_ptr<Mesh>> meshes;
+    struct CachedContact {
+        Pair pair;
+        std::uint64_t shape_a{}, shape_b{};
+        Contact contact;
+    };
+    // Only the immediately preceding query batch is retained, bounding memory
+    // by active pairs rather than every pair ever seen in a moving scene.
+    std::map<std::pair<std::uint64_t,std::uint64_t>, CachedContact> contact_cache;
+    std::uint64_t next_shape_version{};
     std::vector<std::unique_ptr<Scratch>> scratch;
     Scratch working, ground_working, contact_pages;
     bool poisoned{};
@@ -831,7 +904,7 @@ struct GpuCollisionPipeline::Impl {
             s->data[1] = {};
         }
     }
-    void prepare(H::HardwareStream& stream, const Instance& instance, bool tree) {
+    void prepare(H::HardwareStream& stream, const Instance& instance, bool tree, bool world = true) {
         auto& m = mesh(instance.key);
         for (const auto& [src, dst] : m.uploads) {
             GpuPerformance::record_upload(dst.get_byte_size());
@@ -843,6 +916,7 @@ struct GpuCollisionPipeline::Impl {
         m.uploads.clear();
         for (auto& pair : staged) in_flight_uploads.push_back(std::move(pair.first));
         if (m.pending_pose) {
+            m.shape_version = ++next_shape_version;
             GpuPerformance::record_device_copy(m.local.get_byte_size());
             if (m.pose_initialized) stream << H::CopyBufferCommand{m.local, m.previous, 0, 0, m.local.get_byte_size()};
             for (const auto& s : m.sources) {
@@ -861,6 +935,7 @@ struct GpuCollisionPipeline::Impl {
             m.world_valid = false;
             m.tree_valid = false;
         }
+        if (!world) return;
         if (!m.world_valid || m.prepared_matrix != instance.transform) {
             transform.source.bind(m.local);
             transform.destination.bind(m.world);
@@ -952,6 +1027,7 @@ void GpuCollisionPipeline::set_mesh(std::uint64_t key, std::uint64_t revision,
         throw std::invalid_argument("GPU collision mesh exceeds supported dispatch size or has no vertices");
     auto m = std::make_unique<Mesh>();
     m->revision = revision;
+    m->shape_version = ++impl_->next_shape_version;
     m->vertices = static_cast<std::uint32_t>(input.vertices.size());
     m->triangles = static_cast<std::uint32_t>(input.triangles.size());
     m->node_count = static_cast<std::uint32_t>(tree.nodes.size());
@@ -1102,6 +1178,7 @@ void GpuCollisionPipeline::update_vertices(std::span<const VertexUpdate> updates
     if (updates.empty()) return;
     std::unordered_set<std::uint64_t> keys;
     keys.reserve(updates.size());
+    std::vector<const VertexUpdate*> changed;
     // Reject the entire batch before changing source lists, pose history, or
     // cache flags. In particular, an invalid later entry must not advance an
     // earlier mesh's history or consume its pending bind uploads.
@@ -1116,23 +1193,38 @@ void GpuCollisionPipeline::update_vertices(std::span<const VertexUpdate> updates
             for (float v : s.transform)
                 if (!std::isfinite(v)) throw std::invalid_argument("Invalid GPU collision source transform");
         }
+        const bool reuse = m.pose_initialized && std::equal(update.sources.begin(), update.sources.end(),
+            m.completed_sources.begin(), m.completed_sources.end(), [](const auto& a, const auto& b) {
+                return a.revision != 0 && a.revision == b.revision && a.buffer.same_resource(b.buffer) &&
+                    a.vertex_base == b.vertex_base && a.vertex_count == b.vertex_count && a.transform == b.transform;
+            });
+        if (!reuse) changed.push_back(&update);
     }
+    // A stationary pose has zero surface velocity even if its previous pose
+    // differs. No history copy, world transform, or refit is needed to express it.
+    for (const auto& update : updates) impl_->mesh(update.key).pose_dt = 0.0f;
+    if (changed.empty()) return;
     // Capture source contents now: skin outputs are reused on the next animation
     // tick, including when physics is paused. This is a device-only transfer.
     Impl::Recording recording{*impl_};
     auto stream = impl_->executor.stream();
     Instance instance{};
     instance.transform[0] = instance.transform[5] = instance.transform[10] = instance.transform[15] = 1.0f;
-    for (const auto& update : updates) {
+    for (const auto* entry : changed) {
+        const auto& update = *entry;
         auto& m = impl_->mesh(update.key);
         m.sources.assign(update.sources.begin(), update.sources.end());
         m.pose_dt = update.pose_dt;
         m.pending_pose = true;
         instance.key = update.key;
-        impl_->prepare(stream, instance, false);
+        // The consumer will transform directly to the actual instance pose.
+        // Transforming to identity here only invalidates a useful world cache.
+        impl_->prepare(stream, instance, false, false);
     }
     impl_->finish(stream);
     impl_->in_flight_uploads.clear();
+    for (const auto* update : changed)
+        impl_->mesh(update->key).completed_sources.assign(update->sources.begin(), update->sources.end());
 }
 std::uint64_t GpuCollisionPipeline::submission_count() const noexcept { return impl_->submissions; }
 
@@ -1169,7 +1261,8 @@ std::vector<GpuCollisionPipeline::Contact> GpuCollisionPipeline::contacts(std::s
     GpuPerformance::record_work_items(pairs.size());
     impl_->usable();
     std::vector<Contact> result(pairs.size());
-    if (pairs.empty()) return result;
+    if (pairs.empty()) { impl_->contact_cache.clear(); return result; }
+    std::vector<bool> cached(pairs.size(), false);
     std::uint32_t max_count = 0, max_pages = 0;
     const auto pages = [](std::uint32_t n) { return (n + contact_page_size - 1u) / contact_page_size; };
     for (const auto& p : pairs) {
@@ -1180,8 +1273,32 @@ std::vector<GpuCollisionPipeline::Contact> GpuCollisionPipeline::contacts(std::s
         if (p.a.key == p.b.key) throw std::invalid_argument("GPU collision self pair");
         if (!std::isfinite(p.threshold) || p.threshold < 0.0f) throw std::invalid_argument("Invalid GPU collision contact threshold");
         const auto a = impl_->mesh(p.a.key).triangles, b = impl_->mesh(p.b.key).triangles;
-        max_pages = std::max(max_pages, pages(a) + pages(a * 7u) + pages(b * 7u));
-        max_count = std::max(max_count, std::min(contact_page_size, std::max(a, b) * 7u));
+        max_pages = std::max(max_pages, pages(std::min(a,b)) + 2u);
+        max_count = std::max(max_count, std::max(surface_walkers, std::min(contact_page_size, std::min(a,b))));
+    }
+    for (std::size_t i=0;i<pairs.size();++i) {
+        const auto& p = pairs[i];
+        const auto entry = impl_->contact_cache.find({p.a.key,p.b.key});
+        if (entry == impl_->contact_cache.end()) continue;
+        const auto& old = entry->second;
+        if (old.shape_a == impl_->mesh(p.a.key).shape_version && old.shape_b == impl_->mesh(p.b.key).shape_version &&
+            old.pair.a.transform == p.a.transform && old.pair.b.transform == p.b.transform && old.pair.threshold == p.threshold) {
+            result[i] = old.contact;
+            cached[i] = true;
+        }
+    }
+    const auto remember_results = [&] {
+        decltype(impl_->contact_cache) next_cache;
+        for (std::size_t i=0;i<pairs.size();++i) {
+            const auto& p = pairs[i];
+            next_cache.insert_or_assign({p.a.key,p.b.key}, Impl::CachedContact{
+                p, impl_->mesh(p.a.key).shape_version, impl_->mesh(p.b.key).shape_version, result[i]});
+        }
+        impl_->contact_cache = std::move(next_cache);
+    };
+    if (std::all_of(cached.begin(),cached.end(),[](bool value){return value;})) {
+        remember_results();
+        return result;
     }
     impl_->reserve_outputs(pairs.size(), max_count);
     impl_->contact_pages.ensure(max_pages);
@@ -1189,6 +1306,7 @@ std::vector<GpuCollisionPipeline::Contact> GpuCollisionPipeline::contacts(std::s
     auto stream = impl_->executor.stream();
     bool work = false;
     for (std::size_t i = 0; i < pairs.size(); ++i) {
+        if (cached[i]) continue;
         const auto& p = pairs[i];
         auto& a = impl_->mesh(p.a.key);
         auto& b = impl_->mesh(p.b.key);
@@ -1198,19 +1316,23 @@ std::vector<GpuCollisionPipeline::Contact> GpuCollisionPipeline::contacts(std::s
         impl_->prepare(stream, p.b, true);
         auto& s = impl_->output(i, max_count);
         std::uint32_t page_index = 0;
+        const bool reverse = a.triangles > b.triangles;
+        auto& from = reverse ? b : a;
+        auto& to = reverse ? a : b;
         auto& k = impl_->contact;
-        k.va.bind(a.world);
-        k.vb.bind(b.world);
-        k.ia.bind(a.indices);
-        k.ib.bind(b.indices);
-        k.bounds.bind(b.bounds);
-        k.nodes.bind(b.nodes);
-        k.leaves.bind(b.leaves);
+        k.va.bind(from.world);
+        k.vb.bind(to.world);
+        k.ia.bind(from.indices);
+        k.ib.bind(to.indices);
+        k.bounds.bind(to.bounds);
+        k.nodes.bind(to.nodes);
+        k.leaves.bind(to.leaves);
         k.output.bind(s.data[0]);
-        k.node_count = b.node_count;
+        k.node_count = to.node_count;
         k.threshold = p.threshold;
-        for (std::uint32_t first = 0; first < a.triangles; first += contact_page_size) {
-            const auto count = std::min(contact_page_size, a.triangles - first);
+        k.reverse = reverse ? 1u : 0u;
+        for (std::uint32_t first = 0; first < from.triangles; first += contact_page_size) {
+            const auto count = std::min(contact_page_size, from.triangles - first);
             k.first = first; k.count = count;
             launch(stream, k.pipeline, count);
             impl_->reduce(stream, s, count, impl_->reduce_contact, &impl_->contact_pages.data[0], page_index++);
@@ -1224,6 +1346,8 @@ std::vector<GpuCollisionPipeline::Contact> GpuCollisionPipeline::contacts(std::s
             kernel.source_indices.bind(from.indices); kernel.target_indices.bind(to.indices);
             kernel.bounds.bind(to.bounds); kernel.nodes.bind(to.nodes); kernel.leaves.bind(to.leaves);
             kernel.source_bounds.bind(from.bounds);
+            kernel.source_nodes.bind(from.nodes); kernel.source_leaves.bind(from.leaves);
+            kernel.source_node_count = from.node_count;
             kernel.output.bind(s.data[0]);
             kernel.node_count = to.node_count; kernel.reverse = reverse ? 1u : 0u;
             kernel.closed = to.closed && std::abs(to_det) > 1e-12f ? 1u : 0u;
@@ -1231,12 +1355,10 @@ std::vector<GpuCollisionPipeline::Contact> GpuCollisionPipeline::contacts(std::s
             kernel.source_closed = from.closed && std::abs(from_det) > 1e-12f ? 1u : 0u;
             kernel.source_winding = from_det < 0 ? -from.winding : from.winding;
             kernel.threshold = p.threshold;
-            for (std::uint32_t first = 0; first < from.triangles * 7u; first += contact_page_size) {
-                const auto count = std::min(contact_page_size, from.triangles * 7u - first);
-                kernel.first = first; kernel.count = count;
-                launch(stream, kernel.pipeline, count);
-                impl_->reduce(stream, s, count, impl_->reduce_contact, &impl_->contact_pages.data[0], page_index++);
-            }
+            const auto count = std::min(surface_walkers, from.triangles * 7u);
+            kernel.count = count;
+            launch(stream, kernel.pipeline, count);
+            impl_->reduce(stream, s, count, impl_->reduce_contact, &impl_->contact_pages.data[0], page_index++);
         };
         surface_pass(a, b, determinant(p.a.transform), determinant(p.b.transform), false);
         surface_pass(b, a, determinant(p.b.transform), determinant(p.a.transform), true);
@@ -1248,6 +1370,7 @@ std::vector<GpuCollisionPipeline::Contact> GpuCollisionPipeline::contacts(std::s
         impl_->in_flight_uploads.clear();
     }
     for (std::size_t i = 0; i < pairs.size(); ++i) {
+        if (cached[i]) continue;
         if (!impl_->mesh(pairs[i].a.key).triangles || !impl_->mesh(pairs[i].b.key).triangles) continue;
         const auto r = impl_->read(i);
         auto& out = result[i];
@@ -1262,6 +1385,7 @@ std::vector<GpuCollisionPipeline::Contact> GpuCollisionPipeline::contacts(std::s
             }
         }
     }
+    remember_results();
     return result;
 }
 std::vector<GpuCollisionPipeline::VertexResult> GpuCollisionPipeline::sample_vertices(std::span<const VertexQuery> queries) {
@@ -1445,6 +1569,9 @@ void GpuCollisionPipeline::retain(std::span<const std::uint64_t> keys) {
     impl_->usable();
     const std::unordered_set<std::uint64_t> active(keys.begin(), keys.end());
     std::erase_if(impl_->meshes, [&](const auto& entry) { return !active.contains(entry.first); });
+    std::erase_if(impl_->contact_cache, [&](const auto& entry) {
+        return !active.contains(entry.first.first) || !active.contains(entry.first.second);
+    });
     if (impl_->meshes.empty()) {
         impl_->scratch.clear();
         impl_->working = {};

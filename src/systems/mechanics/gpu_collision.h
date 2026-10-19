@@ -27,6 +27,9 @@ class GpuCollisionPipeline {
         std::uint32_t vertex_base{};
         std::uint32_t vertex_count{};
         Matrix transform{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+        // Nonzero completed-pose version permits exact reuse. Zero means that
+        // the source may have changed in place and must always be imported.
+        std::uint64_t revision{};
     };
     struct VertexUpdate {
         std::uint64_t key{};
