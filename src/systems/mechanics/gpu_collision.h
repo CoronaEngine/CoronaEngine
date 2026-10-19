@@ -91,9 +91,7 @@ class GpuCollisionPipeline {
     void update_vertices(std::uint64_t key, std::span<const VertexSource> sources, float pose_dt);
     // Validate the complete batch before changing any pose. Source buffers are
     // captured by one device submission, including when physics is paused.
-    // With wait_for_completion=false, subsequent queries depend on this GPU
-    // submission and wait only when their callback/readback is needed.
-    void update_vertices(std::span<const VertexUpdate> updates, bool wait_for_completion = true);
+    void update_vertices(std::span<const VertexUpdate> updates);
     // Cumulative successful submissions, useful for checking batch boundaries.
     [[nodiscard]] std::uint64_t submission_count() const noexcept;
     // Capture animated supports before any character updates this animation

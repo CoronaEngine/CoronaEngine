@@ -124,23 +124,21 @@ struct MatrixUniform {
 // the original skin output.
 struct TransformKernel {
     Floats source, destination;
-    Uint count, base, source_stride;
+    Uint count, base, stride;
     MatrixUniform matrix;
     H::ComputePipeline<> pipeline;
     TransformKernel() {
         count.as_push_constant();
         base.as_push_constant();
-        source_stride.as_push_constant();
+        stride.as_push_constant();
         pipeline = make_compute_pipeline([&] {
             Uint v;
             v = dispatchThreadID()->x;
             $IF(v < count) {
-                auto p = load3(source.values, v * source_stride);
+                auto p = load3(source.values, v * Uint(8u));
                 auto w = matrix.transform(p);
                 Uint o;
-                // Skin input has position/normal/UV, but every collision pose
-                // stores only positions (including history and IK snapshots).
-                o = (v + base) * Uint(3u);
+                o = (v + base) * stride;
                 destination.values[o] = w.x;
                 destination.values[o + Uint(1u)] = w.y;
                 destination.values[o + Uint(2u)] = w.z;
@@ -559,8 +557,8 @@ struct VertexKernel {
             Uint v;
             v = dispatchThreadID()->x;
             $IF(v < count) {
-                auto p = load3(local.values, v * Uint(3u));
-                auto old = load3(previous.values, v * Uint(3u));
+                auto p = load3(local.values, v * Uint(8u));
+                auto old = load3(previous.values, v * Uint(8u));
                 auto w = load3(world.values, v * Uint(3u));
                 auto delta = subtract3(p, old);
                 auto velocity = matrix.transform(delta, true);
@@ -772,7 +770,6 @@ struct ReduceKernel {
 struct Mesh {
     std::uint64_t revision{};
     std::uint64_t shape_version{};
-    std::uint64_t snapshot_shape_version{};
     std::uint32_t vertices{}, triangles{}, node_count{};
     std::uint32_t ground_walkers{1};
     H::HardwareBuffer local, previous, world, indices, nodes, leaves, order, bounds;
@@ -850,7 +847,7 @@ struct GpuCollisionPipeline::Impl {
     };
 
     ~Impl() {
-        if (last_receipt.data) {
+        if (poisoned && last_receipt.data) {
             try {
                 executor.wait_completed(last_receipt);
             } catch (...) {
@@ -888,22 +885,19 @@ struct GpuCollisionPipeline::Impl {
         s.data[1] = workspace.data[1];
         return s;
     }
-    void finish(H::HardwareStream& stream, bool wait_for_completion = true) {
+    void finish(H::HardwareStream& stream) {
         poisoned = true;
-        // Chain device work, including disjoint meshes, without a CPU fence
-        // between pose capture and its consumer. Queue submissions retain the
-        // recorded buffers until completion; staging is never rewritten.
-        if (last_receipt.data) executor.wait(last_receipt);
+        last_receipt = {};
         {
             GpuPerformance::OperationScope timing{GpuPerformance::Operation::Commit};
             last_receipt = stream << H::commit();
         }
         ++submissions;
-        if (wait_for_completion) {
+        {
             GpuPerformance::OperationScope timing{GpuPerformance::Operation::Wait};
             executor.wait_completed(last_receipt);
-            last_receipt = {};
         }
+        last_receipt = {};
         poisoned = false;
         for (auto& s : scratch) {
             s->data[0] = {};
@@ -930,7 +924,7 @@ struct GpuCollisionPipeline::Impl {
                 transform.destination.bind(m.local);
                 transform.count = s.vertex_count;
                 transform.base = s.vertex_base;
-                transform.source_stride = 8u;
+                transform.stride = 8u;
                 transform.matrix.bind(s.transform);
                 launch(stream, transform.pipeline, s.vertex_count);
             }
@@ -947,7 +941,7 @@ struct GpuCollisionPipeline::Impl {
             transform.destination.bind(m.world);
             transform.count = m.vertices;
             transform.base = 0u;
-            transform.source_stride = 3u;
+            transform.stride = 3u;
             transform.matrix.bind(instance.transform);
             launch(stream, transform.pipeline, m.vertices);
             m.prepared_matrix = instance.transform;
@@ -981,7 +975,7 @@ struct GpuCollisionPipeline::Impl {
             transform.destination.bind(m.ground_world);
             transform.count = m.vertices;
             transform.base = 0u;
-            transform.source_stride = 3u;
+            transform.stride = 3u;
             transform.matrix.bind(instance.transform);
             launch(stream, transform.pipeline, m.vertices);
             m.ground_prepared_matrix = instance.transform;
@@ -1038,12 +1032,12 @@ void GpuCollisionPipeline::set_mesh(std::uint64_t key, std::uint64_t revision,
     m->triangles = static_cast<std::uint32_t>(input.triangles.size());
     m->node_count = static_cast<std::uint32_t>(tree.nodes.size());
     if (m->triangles && !m->node_count) throw std::invalid_argument("GPU collision triangle mesh has no octree");
-    std::vector<float> positions(std::size_t(m->vertices) * 3u);
+    std::vector<float> positions(std::size_t(m->vertices) * 8u);
     for (std::size_t i = 0; i < input.vertices.size(); ++i) {
         validate_point({input.vertices[i].x, input.vertices[i].y, input.vertices[i].z});
-        positions[i * 3] = input.vertices[i].x;
-        positions[i * 3 + 1] = input.vertices[i].y;
-        positions[i * 3 + 2] = input.vertices[i].z;
+        positions[i * 8] = input.vertices[i].x;
+        positions[i * 8 + 1] = input.vertices[i].y;
+        positions[i * 8 + 2] = input.vertices[i].z;
     }
     std::vector<std::uint32_t> indices(std::size_t(m->triangles) * 3u);
     if (!std::is_sorted(input.submeshes.begin(), input.submeshes.end(),
@@ -1162,15 +1156,11 @@ void GpuCollisionPipeline::prepare_instances(std::span<const Instance> instances
     GpuPerformance::record_work_items(instances.size());
     impl_->usable();
     if (instances.empty()) return;
-    bool needs_prepare = false;
     for (const auto& instance : instances) {
-        const auto& m = impl_->mesh(instance.key);
+        impl_->mesh(instance.key);
         for (float value : instance.transform)
             if (!std::isfinite(value)) throw std::invalid_argument("Invalid GPU collision transform");
-        needs_prepare |= !m.uploads.empty() || m.pending_pose || !m.world_valid ||
-            !m.tree_valid || m.prepared_matrix != instance.transform;
     }
-    if (!needs_prepare) return;
     Impl::Recording recording{*impl_};
     auto stream = impl_->executor.stream();
     for (const auto& instance : instances) impl_->prepare(stream, instance, true);
@@ -1181,7 +1171,7 @@ void GpuCollisionPipeline::update_vertices(std::uint64_t key, std::span<const Ve
     const VertexUpdate update{key, sources, pose_dt};
     update_vertices(std::span(&update, 1));
 }
-void GpuCollisionPipeline::update_vertices(std::span<const VertexUpdate> updates, bool wait_for_completion) {
+void GpuCollisionPipeline::update_vertices(std::span<const VertexUpdate> updates) {
     GpuPerformance::Scope performance{"collision.update"};
     GpuPerformance::record_work_items(updates.size());
     impl_->usable();
@@ -1213,16 +1203,7 @@ void GpuCollisionPipeline::update_vertices(std::span<const VertexUpdate> updates
     // A stationary pose has zero surface velocity even if its previous pose
     // differs. No history copy, world transform, or refit is needed to express it.
     for (const auto& update : updates) impl_->mesh(update.key).pose_dt = 0.0f;
-    if (changed.empty()) {
-        if (wait_for_completion && impl_->last_receipt.data) {
-            impl_->poisoned = true;
-            GpuPerformance::OperationScope timing{GpuPerformance::Operation::Wait};
-            impl_->executor.wait_completed(impl_->last_receipt);
-            impl_->last_receipt = {};
-            impl_->poisoned = false;
-        }
-        return;
-    }
+    if (changed.empty()) return;
     // Capture source contents now: skin outputs are reused on the next animation
     // tick, including when physics is paused. This is a device-only transfer.
     Impl::Recording recording{*impl_};
@@ -1240,7 +1221,7 @@ void GpuCollisionPipeline::update_vertices(std::span<const VertexUpdate> updates
         // Transforming to identity here only invalidates a useful world cache.
         impl_->prepare(stream, instance, false, false);
     }
-    impl_->finish(stream, wait_for_completion);
+    impl_->finish(stream);
     impl_->in_flight_uploads.clear();
     for (const auto* update : changed)
         impl_->mesh(update->key).completed_sources.assign(update->sources.begin(), update->sources.end());
@@ -1252,32 +1233,22 @@ void GpuCollisionPipeline::snapshot_ground(std::span<const std::uint64_t> keys) 
     GpuPerformance::record_work_items(keys.size());
     impl_->usable();
     if (keys.empty()) return;
-    std::vector<std::uint64_t> changed;
-    std::unordered_set<std::uint64_t> seen;
-    for (auto key : keys) {
-        const auto& m = impl_->mesh(key);
-        if (seen.insert(key).second &&
-            (!m.snapshot_valid || m.pending_pose || m.snapshot_shape_version != m.shape_version))
-            changed.push_back(key);
-    }
-    if (changed.empty()) return;
+    for (auto key : keys) impl_->mesh(key);
     Impl::Recording recording{*impl_};
     auto stream = impl_->executor.stream();
     Matrix identity{};
     identity[0] = identity[5] = identity[10] = identity[15] = 1;
-    for (auto key : changed) {
+    for (auto key : keys) {
         auto& m = impl_->mesh(key);
-        // A local snapshot must not overwrite the live world transform cache.
-        impl_->prepare(stream, {key, identity}, false, false);
+        impl_->prepare(stream, {key, identity}, false);
         if (!m.ground_snapshot) {
-            m.ground_snapshot = buffer(std::size_t(m.vertices) * 3u, device_usage);
+            m.ground_snapshot = buffer(std::size_t(m.vertices) * 8u, device_usage);
             m.ground_world = buffer(std::size_t(m.vertices) * 3u, device_usage);
             m.ground_bounds = buffer(std::size_t(m.node_count) * bounds_size, device_usage);
         }
         GpuPerformance::record_device_copy(m.local.get_byte_size());
         stream << H::CopyBufferCommand{m.local, m.ground_snapshot, 0, 0, m.local.get_byte_size()};
         m.snapshot_valid = true;
-        m.snapshot_shape_version = m.shape_version;
         m.ground_world_valid = false;
         m.ground_tree_valid = false;
     }

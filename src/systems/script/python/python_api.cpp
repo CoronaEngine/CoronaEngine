@@ -565,18 +565,7 @@ PythonRuntimeResponse PythonAPI::execute_runtime_request(const PythonRuntimeRequ
             if (request.cancelled()) {
                 return PythonRuntimeResponse::timeout();
             }
-            // The bridge contract is a JSON string. Use CPython's length-aware
-            // conversion and diagnose a protocol mismatch explicitly instead
-            // of surfacing an opaque type-caster "bad cast" to the launcher.
-            if (!PyUnicode_Check(result.ptr())) {
-                return PythonRuntimeResponse::failure(
-                    std::string("Python script dispatcher must return JSON text, got ") +
-                    Py_TYPE(result.ptr())->tp_name);
-            }
-            Py_ssize_t result_size = 0;
-            const char* result_utf8 = PyUnicode_AsUTF8AndSize(result.ptr(), &result_size);
-            if (!result_utf8) throw nanobind::python_error();
-            return PythonRuntimeResponse::success(std::string(result_utf8, static_cast<std::size_t>(result_size)));
+            return PythonRuntimeResponse::success(nanobind::cast<std::string>(result));
         }
         if (request.kind == PythonRuntimeRequestKind::Callback && request.handler) {
             if (request.cancelled()) {

@@ -18,7 +18,6 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
-#include <thread>
 #include <utility>
 
 #ifdef _WIN32
@@ -185,11 +184,12 @@ void DisplaySystem::handle_optics_frame(
     }
 
     const auto surface_id = reinterpret_cast<uint64_t>(event.surface);
-    {
-        std::lock_guard<std::mutex> lock(frame_mutex_);
-        if (removed_surfaces_.contains(surface_id)) return;
-        auto& layer = surface_states_[surface_id].optics;
-        if (event.frame_index < layer.frame_index) return;
+    std::lock_guard<std::mutex> lock(frame_mutex_);
+    if (removed_surfaces_.contains(surface_id)) {
+        return;
+    }
+    auto& layer = surface_states_[surface_id].optics;
+    if (event.frame_index >= layer.frame_index) {
         layer.image_handle = event.image_handle;
         layer.published_image = event.published_image;
         layer.frame_index = event.frame_index;
@@ -200,9 +200,6 @@ void DisplaySystem::handle_optics_frame(
         layer.viewport_width = event.viewport_width;
         layer.viewport_height = event.viewport_height;
     }
-    // Scene production owns the cadence. Polling at an unrelated 120 Hz added
-    // an alternating 8 ms delay when a 60 Hz frame just missed the snapshot.
-    request_update();
 }
 
 void DisplaySystem::handle_ui_frame(const Events::UIFrameReadyEvent& event) {
@@ -265,8 +262,6 @@ bool DisplaySystem::initialize(Kernel::ISystemContext* ctx) {
         shutdown();
     }
     device_lost_.store(false, std::memory_order_release);
-    optics_system_ = nullptr;
-    optics_system_queried_ = false;
     forward_completion_fence_ =
         std::make_shared<Detail::ForwardCompletionFence>();
     const auto forward_completion_fence = forward_completion_fence_;
@@ -494,12 +489,6 @@ void DisplaySystem::on_thread_stopped() {
 void DisplaySystem::update() {
     if (!frame_submission_enabled_.load(std::memory_order_acquire)) {
         return;
-    }
-    // Query after initialize_all releases the system-manager lock. Registered
-    // systems outlive the display thread; target FPS itself is an atomic read.
-    if (!optics_system_queried_ && context()) {
-        optics_system_ = context()->get_system("Optics");
-        optics_system_queried_ = true;
     }
     // Snapshot shared state and process pending displayer creation under lock,
     // then release before GPU work. displayers_ is only modified here, so
@@ -769,12 +758,6 @@ void DisplaySystem::update() {
 
         auto& composite_resources = composite_resources_[surface_id];
         auto present_outcome = Detail::PresentOutcome::Skipped;
-        // Preserve receipt metadata after releasing the producer image handles.
-        // The surface generation lease stays alive through presentation.
-        const Horizon::SubmitReceipt optics_producer = use_optics_layer ? *optics_receipt_ptr : Horizon::SubmitReceipt{};
-        const Horizon::SubmitReceipt ui_producer = use_ui_layer ? *ui_receipt_ptr : Horizon::SubmitReceipt{};
-        optics_receipt_ptr = use_optics_layer ? &optics_producer : nullptr;
-        ui_receipt_ptr = use_ui_layer ? &ui_producer : nullptr;
         try {
             present_outcome = compose_and_present(
                 displayer,
@@ -784,18 +767,7 @@ void DisplaySystem::update() {
                 bg_image,
                 use_optics_layer ? optics_receipt_ptr : nullptr,
                 fg_image,
-                use_ui_layer ? ui_receipt_ptr : nullptr,
-                [&](const Horizon::SubmitReceipt& consumed) {
-                    // Only composition reads these images. Publish its device
-                    // dependency before producers can reuse them, then stop
-                    // holding their CPU locks across swapchain/gate waits.
-                    if (use_optics_layer && optics_frame) optics_frame->consumed_receipt = consumed;
-                    if (use_ui_layer && ui_frame) ui_frame->consumed_receipt = consumed;
-                    optics_access.reset();
-                    ui_access.reset();
-                    optics_frame = nullptr;
-                    ui_frame = nullptr;
-                });
+                use_ui_layer ? ui_receipt_ptr : nullptr);
         } catch (const std::exception& error) {
             if (is_vulkan_device_lost_message(error.what())) {
                 const std::string failure_message =
@@ -895,43 +867,10 @@ void DisplaySystem::update() {
             continue;
         }
 
-        composite_resources.scene_cadence.presented(
-            {use_optics_layer ? state.optics.image_handle : 0,
-             optics_receipt_ptr ? optics_receipt_ptr->serial : 0},
-            std::chrono::steady_clock::now());
-
-        static const bool profile_scene_presents = [] {
-            const char* value = std::getenv("CORONA_DISPLAY_PROFILE");
-            return value && value[0] != '\0' && value[0] != '0';
-        }();
-        if (profile_scene_presents && use_optics_layer && optics_receipt_ptr) {
-            const std::array<std::uint64_t, 2> key{state.optics.image_handle, optics_receipt_ptr->serial};
-            auto& stats = composite_resources;
-            if (stats.presented_optics_key != key) {
-                const auto now = std::chrono::steady_clock::now();
-                if (stats.previous_optics_present.time_since_epoch().count() != 0) {
-                    const double ms = std::chrono::duration<double, std::milli>(now - stats.previous_optics_present).count();
-                    stats.optics_present_intervals.push_back(ms);
-                    stats.optics_present_elapsed_ms += ms;
-                    if (stats.optics_present_elapsed_ms >= 1000.0) {
-                        auto& samples = stats.optics_present_intervals;
-                        std::sort(samples.begin(), samples.end());
-                        CFW_LOG_INFO("DisplayScenePerf surface={} frames={} presented_fps={:.2f} p95_ms={:.2f} max_ms={:.2f} optics={}x{}",
-                            surface, samples.size(), samples.size() * 1000.0 / stats.optics_present_elapsed_ms,
-                            samples[static_cast<std::size_t>(0.95 * (samples.size() - 1))], samples.back(),
-                            state.optics.width, state.optics.height);
-                        samples.clear();
-                        stats.optics_present_elapsed_ms = 0.0;
-                    }
-                }
-                stats.previous_optics_present = now;
-                stats.presented_optics_key = key;
-            }
-        }
-
-        // Backpressure is acknowledged after present; the input read dependency
-        // was already published before releasing its image handle above.
-        if (use_optics_layer) {
+        // Write back the consumed signal so producers know when to safely reuse their image.
+        const Horizon::SubmitReceipt consumed_receipt = composite_resources.last_receipt;
+        if (use_optics_layer && optics_frame) {
+            optics_frame->consumed_receipt = consumed_receipt;
             if (optics_receipt_ptr != nullptr && optics_receipt_ptr->serial != 0) {
                 if (auto* event_bus = context()->event_bus()) {
                     event_bus->publish(Events::OpticsFrameConsumedEvent{
@@ -941,6 +880,9 @@ void DisplaySystem::update() {
                     });
                 }
             }
+        }
+        if (use_ui_layer && ui_frame) {
+            ui_frame->consumed_receipt = consumed_receipt;
         }
     }
 }
@@ -992,8 +934,7 @@ Detail::PresentOutcome DisplaySystem::compose_and_present(
     Horizon::HardwareImage& optics_image,
     const Horizon::SubmitReceipt* optics_receipt,
     Horizon::HardwareImage& ui_image,
-    const Horizon::SubmitReceipt* ui_receipt,
-    const std::function<void(const Horizon::SubmitReceipt&)>& release_inputs) {
+    const Horizon::SubmitReceipt* ui_receipt) {
     // if (state.optics.image_handle != 0 &&
     //     (state.optics.frame_index <= 3 || state.optics.frame_index % 120 == 0)) {
     //     CFW_LOG_INFO("Display: compose camera surface={} optics_handle={} optics_frame={} optics_extent={}x{} ui_handle={} ui_frame={}",
@@ -1047,19 +988,6 @@ Detail::PresentOutcome DisplaySystem::compose_and_present(
             (resources.skipped_frames == 1 || resources.skipped_frames % 32 == 0))
             CFW_LOG_INFO("Display: reused unchanged composite, skipped={} extent={}x{}",
                          resources.skipped_frames, output_width, output_height);
-        return Detail::PresentOutcome::Skipped;
-    }
-
-    // UI and Optics publish on independent threads. While the scene advances,
-    // coalesce UI-only changes with its next frame instead of submitting a
-    // second full-screen composite/present between consecutive scene frames.
-    // Resizes must proceed immediately; a paused scene releases UI after the
-    // bounded grace interval, and every new scene receipt bypasses this gate.
-    if (resources.content_valid &&
-        resources.last_signature[6] == output_width && resources.last_signature[7] == output_height &&
-        resources.scene_cadence.defer_ui(
-            {state.optics.image_handle, receipt_serial(optics_receipt)},
-            std::chrono::steady_clock::now())) {
         return Detail::PresentOutcome::Skipped;
     }
 
@@ -1122,23 +1050,9 @@ Detail::PresentOutcome DisplaySystem::compose_and_present(
         resources.executor.wait(*ui_receipt);
     }
 
-    // The producers may resume as soon as their last reader is submitted. A
-    // separate present submission keeps swapchain waits outside their CPU locks
-    // and reuses the same composite image with an explicit device dependency.
+    // 记住这次提交，供调用方回写 consumed_receipt（executor.last_receipt() 已移除）。
     resources.last_receipt = resources.executor.stream()
         << composite_pipeline.dispatch_extent(output_width, output_height)
-        << Horizon::commit();
-    release_inputs(resources.last_receipt);
-    resources.executor.wait(resources.last_receipt);
-    const auto present_deadline = resources.scene_cadence.present_deadline(
-        {state.optics.image_handle, receipt_serial(optics_receipt)},
-        optics_system_ ? optics_system_->get_target_fps() : 0,
-        std::chrono::steady_clock::now());
-    // No producer image locks are held here. Composition is already on the
-    // GPU, and the surface lease protects the same output until present ends.
-    // The bounded sleep also bounds shutdown latency; no busy spin is used.
-    std::this_thread::sleep_until(present_deadline);
-    resources.last_receipt = resources.executor.stream()
         << Horizon::present(displayer, resources.output)
         << Horizon::commit();
     resources.last_signature = signature;

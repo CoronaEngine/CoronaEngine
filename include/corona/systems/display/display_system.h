@@ -4,7 +4,6 @@
 #include "corona/systems/display/display_callback_gate.h"
 #include "corona/systems/display/surface_frame_coordinator.h"
 #include "corona/systems/display/surface_lifecycle_acks.h"
-#include "corona/systems/display/scene_present_cadence.h"
 #include <corona/events/display_system_events.h>
 #include <corona/kernel/event/i_event_bus.h>
 #include <corona/kernel/event/i_event_stream.h>
@@ -16,9 +15,7 @@
 
 #include <atomic>
 #include <array>
-#include <chrono>
 #include <cstdint>
-#include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -31,8 +28,7 @@ namespace Corona::Systems {
  * @brief Display system
  *
  * Manages windows, input events, and display devices.
- * New scene frames wake its dedicated thread immediately; a periodic fallback
- * services UI-only updates and surface lifecycle requests.
+ * Runs on a dedicated thread at 120 FPS for responsive input handling.
  * Receives Optics and UI layers, composites them before presenting.
  */
 class DisplaySystem : public Kernel::SystemBase {
@@ -78,20 +74,13 @@ class DisplaySystem : public Kernel::SystemBase {
         Horizon::HardwareImage output;
         uint32_t width = 0;
         uint32_t height = 0;
-        // Retain the final output submission through resource replacement.
-        // Producer consumed_receipts instead receive the earlier composite
-        // submission, so their images can be reused while presentation waits.
+        // Horizon no longer exposes HardwareExecutor::last_receipt(). Display
+        // tracks its final composite/present submission and writes it back as
+        // consumed_receipt so producers know when their images are safe to reuse.
         Horizon::SubmitReceipt last_receipt;
         std::array<std::uint64_t, 24> last_signature{};
         bool content_valid = false;
         std::uint64_t skipped_frames = 0;
-        Detail::ScenePresentCadence scene_cadence;
-        // Opt-in diagnostics count distinct scene frames accepted by present,
-        // excluding UI-only refreshes and repeated presentations of old optics.
-        std::array<std::uint64_t, 2> presented_optics_key{};
-        std::chrono::steady_clock::time_point previous_optics_present{};
-        std::vector<double> optics_present_intervals;
-        double optics_present_elapsed_ms = 0.0;
     };
 
     Detail::PresentOutcome compose_and_present(
@@ -102,8 +91,7 @@ class DisplaySystem : public Kernel::SystemBase {
         Horizon::HardwareImage& optics_image,
         const Horizon::SubmitReceipt* optics_receipt,
         Horizon::HardwareImage& ui_image,
-        const Horizon::SubmitReceipt* ui_receipt,
-        const std::function<void(const Horizon::SubmitReceipt&)>& release_inputs);
+        const Horizon::SubmitReceipt* ui_receipt);
     bool ensure_composite_resources(CompositeResources& resources,
                                     uint32_t width,
                                     uint32_t height);
@@ -153,7 +141,5 @@ class DisplaySystem : public Kernel::SystemBase {
     bool composite_pipeline_ready_ = false;
     std::atomic<bool> device_lost_ = false;
     std::atomic<bool> frame_submission_enabled_ = false;
-    Kernel::ISystem* optics_system_ = nullptr;
-    bool optics_system_queried_ = false;
 };
 }  // namespace Corona::Systems

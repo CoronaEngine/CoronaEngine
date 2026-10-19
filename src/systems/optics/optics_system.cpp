@@ -88,6 +88,10 @@ namespace {
 
 constexpr uint32_t kShadowCascadeCount = 4;
 constexpr uint32_t kShadowMapSize = 1024;
+// Cascaded shadows duplicate every visible mesh submission once per cascade.  Imported
+// scenes can contain thousands of editable glTF nodes, so keep editor interaction
+// responsive by falling back to unshadowed direct lighting above this budget.
+constexpr uint32_t kRealtimeShadowInstanceBudget = 1024;
 constexpr float kShadowMaxDistance = 100.0f;
 constexpr float kShadowSplitLambda = 0.95f;
 constexpr float kShadowBias = 0.0015f;
@@ -3127,6 +3131,9 @@ bool OpticsSystem::initialize_hardware_resources() {
         hardware_->gbufferSize.x = 1920;
         hardware_->gbufferSize.y = 1080;
 
+        hardware_->shadowColorImage =
+            make_storage_image(kShadowMapSize, kShadowMapSize,
+                               Horizon::Format::R32_UINT, "optics.shadow_dummy_color");
         for (uint32_t i = 0; i < kShadowCascadeCount; ++i) {
             hardware_->shadowCascadeImages[i] =
                 make_depth_image(kShadowMapSize, kShadowMapSize,
@@ -3865,6 +3872,7 @@ void OpticsSystem::optics_pipeline(float frame_count, uint64_t frame_index) {
                 uint32_t native_instance_count = 0;
                 uint32_t native_visibility_draws = 0;
                 uint64_t native_visibility_indices = 0;
+                bool native_scene_exceeds_realtime_shadow_budget = false;
                 std::array<uint32_t, kShadowCascadeCount> native_cascade_draws{};
                 std::array<uint64_t, kShadowCascadeCount> native_cascade_indices{};
                 bool native_shadows_enabled = false;
@@ -4433,17 +4441,22 @@ void OpticsSystem::optics_pipeline(float frame_count, uint64_t frame_index) {
                         uint32_t cascade_index) {
                     auto& shadow = *shadow_pipelines[cascade_index];
                     shadow.clear_records();
+                    // 新版 Horizon 用生成的 OutputBindings 字段代替 bind_render_target()。
+                    // shadow.frag 的输出名是 shadowDummyColor（location 0）；这个 dummy
+                    // 附件必须绑定，否则 build_draw_plan() 的 color_outputs 为空，
+                    // has_rendering_scope 为 false，begin_rendering() 不发射，
+                    // 所有 cascade 的 draw 会被 encode_indexed_indirect_draw 静默丢弃。
+                    shadow.shadowDummyColor = hardware_->shadowColorImage;
                     shadow.bind_depth_target(shadow_depth);
                     uint32_t shadow_draws = 0;
 
                     struct PendingShadowDraw {
                         Horizon::HardwareBuffer index_buffer;
                         Horizon::HardwareBuffer vertex_buffer;
-                        std::uint32_t first_command{}, command_count{};
+                        Horizon::DrawIndexedIndirectCommand command{};
                         ktm::fmat4x4 clip_matrix{ktm::fmat4x4::from_eye()};
                     };
                     std::vector<PendingShadowDraw> pending_shadow_draws;
-                    std::vector<Horizon::DrawIndexedIndirectCommand> commands;
 
                     for (const auto& caster : shadow_casters) {
                         if ((caster.cascade_visibility_mask & (1u << cascade_index)) == 0u) {
@@ -4458,8 +4471,6 @@ void OpticsSystem::optics_pipeline(float frame_count, uint64_t frame_index) {
                                 multiply_ktm_mat4(caster.model_matrix, slot.instance_transform);
                             const ktm::fmat4x4 clip_matrix = multiply_ktm_mat4(
                                 light_view_proj, shadow_model_matrix);
-                            const Corona::Systems::OpticsDetail::ShadowMeshFrustum mesh_frustum(clip_matrix);
-                            if (!mesh_frustum.visible(slot.bounds_min, slot.bounds_max, slot.bounds_valid)) continue;
                             shadow.pushConsts.lightViewProjModel =
                                 upload_value(clip_matrix);
 
@@ -4474,34 +4485,22 @@ void OpticsSystem::optics_pipeline(float frame_count, uint64_t frame_index) {
                             PendingShadowDraw pending{};
                             pending.index_buffer = slot.geo.index;
                             pending.vertex_buffer = slot.geo.vertex;
+                            pending.command = draw_cmd;
                             pending.clip_matrix = clip_matrix;
-                            pending.first_command = static_cast<std::uint32_t>(commands.size());
-                            if (slot.draw_clusters && !slot.draw_clusters->empty()) {
-                                for (const auto& cluster : *slot.draw_clusters) {
-                                    if (!mesh_frustum.visible(cluster.minimum, cluster.maximum, cluster.valid)) continue;
-                                    if (commands.size() > pending.first_command &&
-                                        commands.back().first_index + commands.back().index_count == cluster.first_index) {
-                                        commands.back().index_count += cluster.index_count;
-                                    } else {
-                                        draw_cmd.first_index = cluster.first_index;
-                                        draw_cmd.index_count = cluster.index_count;
-                                        commands.push_back(draw_cmd);
-                                    }
-                                    native_cascade_indices[cascade_index] += cluster.index_count;
-                                }
-                            } else {
-                                commands.push_back(draw_cmd);
-                                native_cascade_indices[cascade_index] += slot.index_count;
-                            }
-                            pending.command_count = static_cast<std::uint32_t>(commands.size()) - pending.first_command;
-                            if (pending.command_count == 0) continue;
                             pending_shadow_draws.push_back(std::move(pending));
                             ++shadow_draws;
                             ++native_cascade_draws[cascade_index];
+                            native_cascade_indices[cascade_index] += slot.index_count;
                         }
                     }
 
                     if (!pending_shadow_draws.empty()) {
+                        std::vector<Horizon::DrawIndexedIndirectCommand> commands;
+                        commands.reserve(pending_shadow_draws.size());
+                        for (const auto& pending : pending_shadow_draws) {
+                            commands.push_back(pending.command);
+                        }
+
                         auto indirect_buffer =
                             Horizon::HardwareBuffer::from_bytes(
                                 std::as_bytes(std::span<const Horizon::DrawIndexedIndirectCommand>(
@@ -4518,17 +4517,16 @@ void OpticsSystem::optics_pipeline(float frame_count, uint64_t frame_index) {
                                 upload_value(pending.clip_matrix);
 
                             Horizon::DrawIndexedIndirectParams draw_params;
+                            draw_params.draw_count = 1;
+                            draw_params.indirect_offset =
+                                draw_index * sizeof(Horizon::DrawIndexedIndirectCommand);
                             draw_params.stride = sizeof(Horizon::DrawIndexedIndirectCommand);
-                            // Horizon requires multiDrawIndirect. Stay within
-                            // Vulkan's required 65535-command minimum limit.
-                            for (std::uint32_t first = 0; first < pending.command_count;) {
-                                draw_params.draw_count = std::min(65535u, pending.command_count - first);
-                                draw_params.indirect_offset =
-                                    (std::uint64_t(pending.first_command) + first) * sizeof(Horizon::DrawIndexedIndirectCommand);
-                                shadow.record_indirect(pending.index_buffer, pending.vertex_buffer,
-                                                       indirect_buffer, draw_params);
-                                first += draw_params.draw_count;
-                            }
+
+                            shadow.record_indirect(
+                                pending.index_buffer,
+                                pending.vertex_buffer,
+                                indirect_buffer,
+                                draw_params);
                         }
 
                         std::lock_guard<std::mutex> lock(shadow_indirect_buffers_mutex);
@@ -4580,6 +4578,8 @@ void OpticsSystem::optics_pipeline(float frame_count, uint64_t frame_index) {
                     }
                     native_collect_ms = elapsed_ms(native_collect_start, PerfClock::now());
                     native_instance_count = static_cast<uint32_t>(sceneBatch.instances.size());
+                    native_scene_exceeds_realtime_shadow_budget =
+                        native_instance_count > kRealtimeShadowInstanceBudget;
                     native_visibility_draws = native_instance_count;
                     for (const auto& instance : sceneBatch.instances) {
                         native_visibility_indices += instance.indexCount;
@@ -4619,7 +4619,7 @@ void OpticsSystem::optics_pipeline(float frame_count, uint64_t frame_index) {
                 const bool needs_shadow = !is_debug_mode ||
                     camera->output_mode == CameraOutputMode::ShadowMask ||
                     camera->output_mode == CameraOutputMode::ShadowMaskRaw;
-                if (needs_shadow &&
+                if (needs_shadow && !native_scene_exceeds_realtime_shadow_budget &&
                     !diag.skip_shadows && sun_intensity > 0.0f) {
                     build_shadow_caster_snapshots();
                 }
@@ -4651,7 +4651,7 @@ void OpticsSystem::optics_pipeline(float frame_count, uint64_t frame_index) {
                     static_cast<float>(kShadowMapSize);
                 hardware_->shadowInfoBufferObjects.shadowBias = kShadowBias;
                 hardware_->shadowInfoBufferObjects.shadowEnabled =
-                    (needs_shadow &&
+                    (needs_shadow && !native_scene_exceeds_realtime_shadow_budget &&
                      !diag.skip_shadows && diag.shadow_cascade_mask != 0u &&
                      sun_intensity > 0.0f) ? 1u : 0u;
                 native_shadows_enabled = hardware_->shadowInfoBufferObjects.shadowEnabled != 0u;

@@ -1019,8 +1019,7 @@ struct MechanicsSystem::Impl {
     Kernel::EventId residency_sub_id_ = 0;
     mutable std::shared_mutex residency_mtx_;
     std::unordered_set<std::uintptr_t> resident_actors_;
-    double time_accumulator = 0.0;
-    bool simulation_was_active = false;
+    float time_accumulator = 0.0f;
     std::chrono::steady_clock::time_point last_update_time{};
     bool first_update = true;
 
@@ -1119,7 +1118,6 @@ struct MechanicsSystem::Impl {
         warm_start_cache.clear();          // E2 跨子步 warm start
         global_simulation_time = 0.0f;
         time_accumulator = 0.0f;
-        simulation_was_active = false;
         first_update = true;
         geometry_sys = nullptr;
     }

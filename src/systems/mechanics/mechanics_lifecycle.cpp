@@ -164,13 +164,6 @@ float resolve_fixed_dt() {
     }
     return kDefaultFixedDt;
 }
-
-bool simulation_active() {
-    const auto& scenes = SharedDataHub::instance().scene_storage();
-    for (const auto& scene : scenes)
-        if (scene.enabled && scene.simulation_enabled) return true;
-    return false;
-}
 }  // namespace
 
 MechanicsSystem::MechanicsSystem() : impl_(std::make_unique<Impl>()) {
@@ -260,14 +253,16 @@ void MechanicsSystem::update() {
         update_skinned_geometry(0.0f);
         process_mesh_moves();
         update_phase.set("physics(first)");
-        impl_->simulation_was_active = simulation_active();
-        if (impl_->simulation_was_active) update_physics(resolve_fixed_dt());
+        update_physics(resolve_fixed_dt());
         return;
     }
 
-    const double elapsed = std::chrono::duration<double>(now - impl_->last_update_time).count();
-    const float actual_dt = static_cast<float>(elapsed);
+    float actual_dt = std::chrono::duration<float>(now - impl_->last_update_time).count();
     impl_->last_update_time = now;
+
+    // 钳制防止巨幅跳帧
+    const float max_frame_time = 0.1f;
+    actual_dt = std::min(actual_dt, max_frame_time);
 
     // ---- 骨骼动画蒙皮（Vulkan EDSL，物理步进前完成）----
     // 先蒙皮生成本帧正确 AABB 和蒙皮顶点，物理帧随后消费同帧数据，
@@ -279,13 +274,7 @@ void MechanicsSystem::update() {
         process_mesh_moves();
     }
 
-    const bool active = simulation_active();
-    // Paused scenes must not accrue simulation debt. On resume the previous
-    // interval belongs to the paused state; keep normal fixed steps unchanged.
-    if (!active || !impl_->simulation_was_active) impl_->time_accumulator = 0.0;
-    if (active && impl_->simulation_was_active) impl_->time_accumulator += elapsed;
-    impl_->simulation_was_active = active;
-    if (!active) return;
+    impl_->time_accumulator += actual_dt;
 
     const float fixed_dt = resolve_fixed_dt();
     int catch_up_steps = 0;

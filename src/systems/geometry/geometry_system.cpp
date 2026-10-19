@@ -1,4 +1,3 @@
-#include "geometry_draw_buffers.h"
 #include <corona/events/engine_events.h>
 #include <corona/diagnostics/thread_phase.h>
 #include <horizon/core/logging.h>
@@ -981,8 +980,7 @@ void GeometrySystem::evict_lods_for_actor(std::uintptr_t actor) {
                         auto& buf = cit->second.levels[lvl];
                         if (!buf.ready) continue;
                         buf.vertex_buffer  = Horizon::HardwareBuffer{};
-                        buf.index_buffer = Horizon::HardwareBuffer{};
-                        buf.shadow_index_buffer = Horizon::HardwareBuffer{};
+                        buf.index_buffer   = Horizon::HardwareBuffer{};
                         buf.vertex_storage = Horizon::HardwareBuffer{};
                         buf.index_storage  = Horizon::HardwareBuffer{};
                         buf.mesh_mem       = Corona::Memory::GpuMemToken{};
@@ -3312,8 +3310,6 @@ void GeometrySystem::upload_lod_from_scene_data() {
             lod0.vertex_count     = static_cast<std::uint32_t>(mesh.vertices.size());
             lod0.index_count      = static_cast<std::uint32_t>(mesh.indices.size());
             lod0.max_index        = mesh_dev.max_index;
-            lod0.draw_clusters    = mesh_dev.draw_clusters;
-            lod0.shadow_index_buffer = mesh_dev.shadowIndexBuffer;
             // 宽限期从"创建这一帧"起算：last_demand_frame 默认 0，而全局帧号早已很大，
             // 若不在上传时写入当前帧号，新建条目会在第一次 reconcile 就被判定"超期未需求"
             // 而立即释放（实测导入完成 1ms 内 131 个 mesh 的 LOD0 被整批驱逐）。
@@ -3346,9 +3342,6 @@ void GeometrySystem::upload_lod_from_scene_data() {
                 lod_buf.vertex_count     = static_cast<std::uint32_t>(lod_data.vertices.size());
                 lod_buf.index_count      = static_cast<std::uint32_t>(lod_data.indices.size());
                 lod_buf.max_index        = lod_buf.vertex_count > 0 ? lod_buf.vertex_count - 1u : 0u;
-                lod_buf.draw_clusters = Geometry::make_draw_clusters(
-                    std::span<const Resource::Vertex>(lod_data.vertices),
-                    std::span<const std::uint16_t>(lod_data.indices));
                 lod_buf.source_lod_index = static_cast<std::uint32_t>(lod_idx);
                 // 同上：宽限期从创建帧起算，避免新建级刚登记就被判超期。
                 lod_buf.last_demand_frame = impl_->lod_frame_counter;
@@ -3593,20 +3586,36 @@ void GeometrySystem::reconcile_lod_residency() {
                         }
                         auto verts_copy = verts;
                         auto inds_copy  = inds;
+                        const std::size_t gpu_bytes =
+                            2u * verts_copy.size() * sizeof(Resource::Vertex) +
+                            2u * inds_copy.size() * sizeof(std::uint16_t);
                         auto promise = std::make_shared<std::promise<Impl::LODBuildResult>>();
                         impl_->pending_lod_builds[lod_key] = Impl::PendingLodBuild{
                             model_id, epoch, level, promise->get_future()};
                         impl_->lod_build_tasks.run(
                             [verts = std::move(verts_copy), inds = std::move(inds_copy),
-                             promise]() {
+                             gpu_bytes, promise, label_vertex, label_index]() {
                                 Impl::LODBuildResult r;
                                 try {
-                                    auto buffers = GeometryDetail::make_draw_buffers(verts, inds);
-                                    r.vertex_buffer = r.vertex_storage = std::move(buffers.vertices);
-                                    r.index_buffer = r.index_storage = std::move(buffers.indices);
-                                    r.shadow_index_buffer = std::move(buffers.shadow_indices);
-                                    r.draw_clusters = std::move(buffers.clusters);
-                                    r.gpu_bytes = buffers.byte_size;
+                                    r.vertex_buffer = make_geometry_buffer(
+                                        verts,
+                                        Horizon::BufferUsage_TransferDst | Horizon::BufferUsage_Vertex,
+                                        label_vertex);
+                                    r.index_buffer = make_geometry_buffer(
+                                        inds,
+                                        Horizon::BufferUsage_TransferDst | Horizon::BufferUsage_Index,
+                                        label_index);
+                                    r.vertex_storage = make_geometry_buffer(
+                                        verts,
+                                        Horizon::BufferUsage_TransferSrc | Horizon::BufferUsage_TransferDst |
+                                            Horizon::BufferUsage_Storage,
+                                        "geometry.shared_lod_vertex_storage");
+                                    r.index_storage = make_geometry_buffer(
+                                        inds,
+                                        Horizon::BufferUsage_TransferSrc | Horizon::BufferUsage_TransferDst |
+                                            Horizon::BufferUsage_Storage,
+                                        "geometry.shared_lod_index_storage");
+                                    r.gpu_bytes = gpu_bytes;
                                     r.ok = static_cast<bool>(r.vertex_buffer) &&
                                            static_cast<bool>(r.index_buffer);
                                 } catch (...) { r.ok = false; }
@@ -3680,8 +3689,7 @@ void GeometrySystem::reconcile_lod_residency() {
                 if (now_ms < lvl.last_demand_ms + Impl::kSharedLodFreeGraceMs) continue;
                 lvl.ready          = false;
                 lvl.vertex_buffer  = Horizon::HardwareBuffer{};
-                lvl.index_buffer = Horizon::HardwareBuffer{};
-                lvl.shadow_index_buffer = Horizon::HardwareBuffer{};
+                lvl.index_buffer   = Horizon::HardwareBuffer{};
                 lvl.vertex_storage = Horizon::HardwareBuffer{};
                 lvl.index_storage  = Horizon::HardwareBuffer{};
                 lvl.mesh_mem       = Corona::Memory::GpuMemToken{};
@@ -4074,19 +4082,25 @@ void GeometrySystem::reconcile_lod_residency() {
                         if (!already && impl_->pending_lod_builds.size() < Impl::kMaxInflightLodBuilds) {
                             auto verts = lod_data.vertices;
                             auto inds  = lod_data.indices;
+                            const std::size_t gpu_bytes =
+                                2u * verts.size() * sizeof(Resource::Vertex) +
+                                2u * inds.size() * sizeof(std::uint16_t);
                             auto promise = std::make_shared<std::promise<Impl::LODBuildResult>>();
                             impl_->pending_lod_builds[lod_key] =
                                 Impl::PendingLodBuild{model_id, entry_epoch, demand, promise->get_future()};
                             impl_->lod_build_tasks.run(
-                                [verts = std::move(verts), inds = std::move(inds), promise]() {
+                                [verts = std::move(verts), inds = std::move(inds), gpu_bytes, promise]() {
                                     Impl::LODBuildResult r;
                                     try {
-                                        auto buffers = GeometryDetail::make_draw_buffers(verts, inds);
-                                        r.vertex_buffer = r.vertex_storage = std::move(buffers.vertices);
-                                        r.index_buffer = r.index_storage = std::move(buffers.indices);
-                                        r.shadow_index_buffer = std::move(buffers.shadow_indices);
-                                        r.draw_clusters = std::move(buffers.clusters);
-                                        r.gpu_bytes = buffers.byte_size;
+                                        r.vertex_buffer = make_geometry_buffer(
+                                            verts, Horizon::BufferUsage_TransferDst | Horizon::BufferUsage_Vertex, "geometry.lod_vertex");
+                                        r.index_buffer = make_geometry_buffer(
+                                            inds, Horizon::BufferUsage_TransferDst | Horizon::BufferUsage_Index, "geometry.lod_index");
+                                        r.vertex_storage = make_geometry_buffer(
+                                            verts, Horizon::BufferUsage_TransferSrc | Horizon::BufferUsage_TransferDst | Horizon::BufferUsage_Storage, "geometry.lod_vertex_storage");
+                                        r.index_storage = make_geometry_buffer(
+                                            inds, Horizon::BufferUsage_TransferSrc | Horizon::BufferUsage_TransferDst | Horizon::BufferUsage_Storage, "geometry.lod_index_storage");
+                                        r.gpu_bytes = gpu_bytes;
                                         r.ok = static_cast<bool>(r.vertex_buffer)
                                                && static_cast<bool>(r.index_buffer);
                                     } catch (...) { r.ok = false; }
@@ -4117,17 +4131,18 @@ void GeometrySystem::reconcile_lod_residency() {
                         if (!already && pit != impl_->pending_shadow_lod_builds.end()) impl_->pending_shadow_lod_builds.erase(pit);
                         if (!already && impl_->pending_shadow_lod_builds.size() < Impl::kMaxInflightLodBuilds) {
                             auto verts = lod_data.vertices; auto inds = lod_data.indices;
+                            const std::size_t bytes = 2u * verts.size() * sizeof(Resource::Vertex) +
+                                                      2u * inds.size() * sizeof(std::uint16_t);
                             auto promise = std::make_shared<std::promise<Impl::LODBuildResult>>();
                             impl_->pending_shadow_lod_builds[lod_key] =
                                 Impl::PendingLodBuild{model_id, epoch, shadow_demand, promise->get_future(), Impl::LodBuildPurpose::Shadow};
-                            impl_->lod_build_tasks.run([verts=std::move(verts), inds=std::move(inds), promise]() {
+                            impl_->lod_build_tasks.run([verts=std::move(verts), inds=std::move(inds), bytes, promise]() {
                                 Impl::LODBuildResult r; try {
-                                    auto buffers = GeometryDetail::make_draw_buffers(verts, inds);
-                                    r.vertex_buffer = r.vertex_storage = std::move(buffers.vertices);
-                                    r.index_buffer = r.index_storage = std::move(buffers.indices);
-                                    r.shadow_index_buffer = std::move(buffers.shadow_indices);
-                                    r.draw_clusters = std::move(buffers.clusters);
-                                    r.gpu_bytes=buffers.byte_size; r.ok=static_cast<bool>(r.vertex_buffer)&&static_cast<bool>(r.index_buffer);
+                                    r.vertex_buffer=make_geometry_buffer(verts,Horizon::BufferUsage_TransferDst|Horizon::BufferUsage_Vertex,"geometry.shadow_lod_vertex");
+                                    r.index_buffer=make_geometry_buffer(inds,Horizon::BufferUsage_TransferDst|Horizon::BufferUsage_Index,"geometry.shadow_lod_index");
+                                    r.vertex_storage=make_geometry_buffer(verts,Horizon::BufferUsage_TransferSrc|Horizon::BufferUsage_TransferDst|Horizon::BufferUsage_Storage,"geometry.shadow_lod_vertex_storage");
+                                    r.index_storage=make_geometry_buffer(inds,Horizon::BufferUsage_TransferSrc|Horizon::BufferUsage_TransferDst|Horizon::BufferUsage_Storage,"geometry.shadow_lod_index_storage");
+                                    r.gpu_bytes=bytes; r.ok=static_cast<bool>(r.vertex_buffer)&&static_cast<bool>(r.index_buffer);
                                 } catch (...) { r.ok=false; } promise->set_value(std::move(r));
                             });
                             ++impl_->diag_lod_build_launches;
@@ -4169,19 +4184,25 @@ void GeometrySystem::reconcile_lod_residency() {
                             impl_->pending_lod_builds.erase(lod_key);  // 丢弃该 key 上的非 LOD0 在途任务
                             auto verts = mesh.vertices;  // 从 mesh 本体，非 lod_levels
                             auto inds  = mesh.indices;
+                            const std::size_t gpu_bytes =
+                                2u * verts.size() * sizeof(Resource::Vertex) +
+                                2u * inds.size() * sizeof(std::uint16_t);
                             auto promise = std::make_shared<std::promise<Impl::LODBuildResult>>();
                             impl_->pending_lod_builds[lod_key] =
                                 Impl::PendingLodBuild{model_id, entry_epoch, 0, promise->get_future()};
                             impl_->lod_build_tasks.run(
-                                [verts = std::move(verts), inds = std::move(inds), promise]() {
+                                [verts = std::move(verts), inds = std::move(inds), gpu_bytes, promise]() {
                                     Impl::LODBuildResult r;
                                     try {
-                                        auto buffers = GeometryDetail::make_draw_buffers(verts, inds);
-                                        r.vertex_buffer = r.vertex_storage = std::move(buffers.vertices);
-                                        r.index_buffer = r.index_storage = std::move(buffers.indices);
-                                        r.shadow_index_buffer = std::move(buffers.shadow_indices);
-                                        r.draw_clusters = std::move(buffers.clusters);
-                                        r.gpu_bytes = buffers.byte_size;
+                                        r.vertex_buffer = make_geometry_buffer(
+                                            verts, Horizon::BufferUsage_TransferDst | Horizon::BufferUsage_Vertex, "geometry.lod0_vertex");
+                                        r.index_buffer = make_geometry_buffer(
+                                            inds, Horizon::BufferUsage_TransferDst | Horizon::BufferUsage_Index, "geometry.lod0_index");
+                                        r.vertex_storage = make_geometry_buffer(
+                                            verts, Horizon::BufferUsage_TransferSrc | Horizon::BufferUsage_TransferDst | Horizon::BufferUsage_Storage, "geometry.lod0_vertex_storage");
+                                        r.index_storage = make_geometry_buffer(
+                                            inds, Horizon::BufferUsage_TransferSrc | Horizon::BufferUsage_TransferDst | Horizon::BufferUsage_Storage, "geometry.lod0_index_storage");
+                                        r.gpu_bytes = gpu_bytes;
                                         r.ok = static_cast<bool>(r.vertex_buffer)
                                                && static_cast<bool>(r.index_buffer);
                                     } catch (...) { r.ok = false; }
@@ -4209,8 +4230,7 @@ void GeometrySystem::reconcile_lod_residency() {
                         lvl.ready          = false;
                         ++impl_->diag_lod_frees;
                         lvl.vertex_buffer  = Horizon::HardwareBuffer{};
-                        lvl.index_buffer = Horizon::HardwareBuffer{};
-                        lvl.shadow_index_buffer = Horizon::HardwareBuffer{};
+                        lvl.index_buffer   = Horizon::HardwareBuffer{};
                         lvl.vertex_storage = Horizon::HardwareBuffer{};
                         lvl.index_storage  = Horizon::HardwareBuffer{};
                         lvl.mesh_mem       = Corona::Memory::GpuMemToken{};
@@ -4353,9 +4373,9 @@ void GeometrySystem::enforce_lod_budget(
                     lvl_bytes.push_back(levels[lvl].mesh_mem.bytes());
                 } else {
                     // 未构建级：根据顶点/索引数估算
-                    // Shared vertices, original indices and spatial shadow indices.
+                    // 公式：2 套缓冲（buffer + storage）×（顶点 + 索引）字节
                     const std::size_t est =
-                        levels[lvl].vertex_count * sizeof(Resource::Vertex)
+                        2u * levels[lvl].vertex_count * sizeof(Resource::Vertex)
                         + 2u * levels[lvl].index_count * sizeof(std::uint16_t);
                     lvl_bytes.push_back(est);
                 }
@@ -4512,8 +4532,6 @@ void GeometrySystem::process_pending_lod_builds() {
         lvl.index_buffer   = std::move(r.index_buffer);
         lvl.vertex_storage = std::move(r.vertex_storage);
         lvl.index_storage  = std::move(r.index_storage);
-        lvl.draw_clusters = std::move(r.draw_clusters);
-        lvl.shadow_index_buffer = std::move(r.shadow_index_buffer);
         lvl.mesh_mem       = std::move(tok);
         lvl.ready          = true;
         lvl.last_demand_frame = impl_->lod_frame_counter;
@@ -4545,8 +4563,7 @@ void GeometrySystem::process_pending_lod_builds() {
                     auto& old = cit->second.levels[old_lvl];
                     old.ready          = false;
                     old.vertex_buffer  = Horizon::HardwareBuffer{};
-                    old.index_buffer = Horizon::HardwareBuffer{};
-                    old.shadow_index_buffer = Horizon::HardwareBuffer{};
+                    old.index_buffer   = Horizon::HardwareBuffer{};
                     old.vertex_storage = Horizon::HardwareBuffer{};
                     old.index_storage  = Horizon::HardwareBuffer{};
                     old.mesh_mem       = Corona::Memory::GpuMemToken{};
@@ -5092,9 +5109,6 @@ GeometrySystem::query_shadow_mesh_slots_batch(
         for (std::size_t cascade = 0; cascade < cascades.size(); ++cascade) {
             if (!cascades[cascade].enabled) continue;
             RenderMeshBuffers selected = fallback;
-            float bounds_padding = 0.0f;
-            auto draw_clusters = mesh.draw_clusters;
-            auto shadow_index_buffer = mesh.shadowIndexBuffer;
             if (has_levels) {
                 const auto& levels = cache_it->second.levels;
                 const int target = std::clamp(targets[cascade], 0,
@@ -5115,9 +5129,6 @@ GeometrySystem::query_shadow_mesh_slots_batch(
                         candidate.vertex_count,
                         candidate.index_count,
                         candidate.max_index};
-                    bounds_padding = candidate.geometric_error;
-                    draw_clusters = candidate.draw_clusters;
-                    shadow_index_buffer = candidate.shadow_index_buffer;
                     break;
                 }
             }
@@ -5125,25 +5136,13 @@ GeometrySystem::query_shadow_mesh_slots_batch(
             auto append_shadow_slot = [&](uint32_t instance_index,
                                           const MeshInstanceDevice* instance) {
                 ShadowMeshSlot slot;
-                if (!geom->is_skinned) slot.draw_clusters = draw_clusters;
                 slot.mesh_index = mesh_index;
                 slot.instance_index = instance_index;
                 if (instance != nullptr) {
                     slot.object_id = instance->object_id;
                     slot.instance_transform = instance->transform;
-                    if (!geom->is_skinned && std::isfinite(bounds_padding) && bounds_padding >= 0.0f) {
-                        slot.bounds_valid = true;
-                        for (std::size_t axis = 0; axis < 3; ++axis) {
-                            slot.bounds_min[axis] = instance->local_bounds_min[axis] - bounds_padding;
-                            slot.bounds_max[axis] = instance->local_bounds_max[axis] + bounds_padding;
-                            slot.bounds_valid = slot.bounds_valid &&
-                                std::isfinite(slot.bounds_min[axis]) && std::isfinite(slot.bounds_max[axis]) &&
-                                slot.bounds_min[axis] <= slot.bounds_max[axis];
-                        }
-                    }
                 }
                 slot.geo = selected;
-                if (!geom->is_skinned && shadow_index_buffer) slot.geo.index = shadow_index_buffer;
                 slot.vertex_count = slot.geo.vertex_count;
                 slot.index_count = slot.geo.index_count;
                 slot.max_index = slot.geo.max_index;

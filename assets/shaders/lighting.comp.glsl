@@ -230,6 +230,19 @@ Vertex loadVertex(uint vertexBufferIndex, uint vertexID)
 // Screen-space utilities
 // ============================================================================
 
+float edgeFunction(vec2 a, vec2 b, vec2 p)
+{
+    return (p.x - a.x) * (b.y - a.y) - (p.y - a.y) * (b.x - a.x);
+}
+
+vec2 worldToScreen(vec3 worldPos, mat4 viewProjMatrix, vec2 resolution, out float clipW)
+{
+    vec4 clip = viewProjMatrix * vec4(worldPos, 1.0);
+    clipW = clip.w;
+    vec2 ndc = clip.xy / clip.w;
+    return (ndc * 0.5 + 0.5) * resolution;
+}
+
 // ============================================================================
 // Disney Principled BRDF
 // Reference: Brent Burley, "Physically Based Shading at Disney", SIGGRAPH 2012
@@ -586,28 +599,57 @@ bool decodeSurface(ivec2 pixel, out Surface surface)
         return false;
     }
 
-    // Homogeneous edge equations recover perspective barycentrics without
-    // dividing each vertex by W. A clipped triangle remains shadeable when a
-    // vertex lies on or behind the eye plane; rasterization already clips it.
+    // --- Compute screen-space positions for barycentric ---
     mat4 viewProjMatrix = readMat4(pushConsts.vpBufferIndex, 0u);
     vec2 resolution = vec2(pushConsts.gbufferSize);
-    vec4 clip0 = viewProjMatrix * vec4(worldPos0, 1.0);
-    vec4 clip1 = viewProjMatrix * vec4(worldPos1, 1.0);
-    vec4 clip2 = viewProjMatrix * vec4(worldPos2, 1.0);
-    if (!finiteMat4(viewProjMatrix) || !finiteVec4(clip0) || !finiteVec4(clip1) || !finiteVec4(clip2)) return false;
-    vec2 ndc = (vec2(pixel) + 0.5) * (2.0 / resolution) - 1.0;
-    vec3 clipW = vec3(clip0.w, clip1.w, clip2.w);
-    vec3 edgeX = vec3(clip0.x, clip1.x, clip2.x) - ndc.x * clipW;
-    vec3 edgeY = vec3(clip0.y, clip1.y, clip2.y) - ndc.y * clipW;
-    vec3 weights = cross(edgeX, edgeY);
-    float weightSum = dot(weights, vec3(1));
-    if (!finiteFloat(weightSum) || abs(weightSum) < 1e-20) return false;
-    vec3 bary = weights / weightSum;
-    if (!finiteVec3(bary)) return false;
-    vec3 weightDx = cross(-clipW, edgeY) * (2.0 / resolution.x);
-    vec3 weightDy = cross(edgeX, -clipW) * (2.0 / resolution.y);
-    vec3 baryDx = (weightDx - bary * dot(weightDx, vec3(1))) / weightSum;
-    vec3 baryDy = (weightDy - bary * dot(weightDy, vec3(1))) / weightSum;
+
+    float w0, w1, w2;
+    vec2 s0 = worldToScreen(worldPos0, viewProjMatrix, resolution, w0);
+    vec2 s1 = worldToScreen(worldPos1, viewProjMatrix, resolution, w1);
+    vec2 s2 = worldToScreen(worldPos2, viewProjMatrix, resolution, w2);
+    if (!finiteMat4(viewProjMatrix) ||
+        !finiteVec2(s0) || !finiteVec2(s1) || !finiteVec2(s2) ||
+        !finiteFloat(w0) || !finiteFloat(w1) || !finiteFloat(w2) ||
+        abs(w0) < 1e-6 || abs(w1) < 1e-6 || abs(w2) < 1e-6)
+    {
+        return false;
+    }
+
+    vec2 pixelPos = vec2(pixel) + vec2(0.5);
+
+    float area = edgeFunction(s0, s1, s2);
+    if (!finiteFloat(area) || abs(area) < 1e-6)
+    {
+        return false;
+    }
+
+    float b0 = edgeFunction(s1, s2, pixelPos) / area;
+    float b1 = edgeFunction(s2, s0, pixelPos) / area;
+    float b2 = edgeFunction(s0, s1, pixelPos) / area;
+    if (!finiteFloat(b0) || !finiteFloat(b1) || !finiteFloat(b2))
+    {
+        return false;
+    }
+
+    // Perspective-correct interpolation
+    float inv_w0 = 1.0 / w0;
+    float inv_w1 = 1.0 / w1;
+    float inv_w2 = 1.0 / w2;
+    float inv_w_sum = b0 * inv_w0 + b1 * inv_w1 + b2 * inv_w2;
+    if (!finiteFloat(inv_w0) || !finiteFloat(inv_w1) || !finiteFloat(inv_w2) ||
+        !finiteFloat(inv_w_sum) || abs(inv_w_sum) < 1e-6)
+    {
+        return false;
+    }
+
+    vec3 bary;
+    bary.x = (b0 * inv_w0) / inv_w_sum;
+    bary.y = (b1 * inv_w1) / inv_w_sum;
+    bary.z = (b2 * inv_w2) / inv_w_sum;
+    if (!finiteVec3(bary))
+    {
+        return false;
+    }
 
     // --- Interpolate vertex attributes ---
     vec3 interpPos = bary.x * worldPos0 + bary.y * worldPos1 + bary.z * worldPos2;
@@ -624,8 +666,12 @@ bool decodeSurface(ivec2 pixel, out Surface surface)
     vec3 interpNormal = rawNormal / normalLength;
 
     vec2 interpUV = bary.x * v0.texCoord + bary.y * v1.texCoord + bary.z * v2.texCoord;
-    vec2 uvDx = v0.texCoord*baryDx.x + v1.texCoord*baryDx.y + v2.texCoord*baryDx.z;
-    vec2 uvDy = v0.texCoord*baryDy.x + v1.texCoord*baryDy.y + v2.texCoord*baryDy.z;
+    vec3 dbdx = vec3(s2.y-s1.y, s0.y-s2.y, s1.y-s0.y) / area;
+    vec3 dbdy = vec3(s1.x-s2.x, s2.x-s0.x, s0.x-s1.x) / area;
+    vec3 invW = vec3(inv_w0, inv_w1, inv_w2);
+    vec3 qx = dbdx * invW, qy = dbdy * invW;
+    vec2 uvDx = (v0.texCoord*qx.x + v1.texCoord*qx.y + v2.texCoord*qx.z - interpUV*dot(qx,vec3(1))) / inv_w_sum;
+    vec2 uvDy = (v0.texCoord*qy.x + v1.texCoord*qy.y + v2.texCoord*qy.z - interpUV*dot(qy,vec3(1))) / inv_w_sum;
     if (!finiteVec2(uvDx) || !finiteVec2(uvDy)) return false;
     if (!finiteVec3(interpPos) || !finiteVec3(interpNormal) || !finiteVec2(interpUV))
     {
@@ -671,8 +717,8 @@ bool decodeSurface(ivec2 pixel, out Surface surface)
     matl.metallic = clamp(matl.metallic, 0.0, 1.0);
     // Analytic normal derivatives from the same VBuffer triangle. Bound the
     // specular lobe by its pixel footprint without a normal/history image.
-    vec3 normalDx = normalMatrix*(v0.normal*baryDx.x + v1.normal*baryDx.y + v2.normal*baryDx.z);
-    vec3 normalDy = normalMatrix*(v0.normal*baryDy.x + v1.normal*baryDy.y + v2.normal*baryDy.z);
+    vec3 normalDx = (normalMatrix*(v0.normal*qx.x + v1.normal*qx.y + v2.normal*qx.z) - rawNormal*dot(qx,vec3(1))) / inv_w_sum;
+    vec3 normalDy = (normalMatrix*(v0.normal*qy.x + v1.normal*qy.y + v2.normal*qy.z) - rawNormal*dot(qy,vec3(1))) / inv_w_sum;
     normalDx = (normalDx-interpNormal*dot(interpNormal,normalDx))/normalLength;
     normalDy = (normalDy-interpNormal*dot(interpNormal,normalDy))/normalLength;
     float variance = finiteVec3(normalDx) && finiteVec3(normalDy)

@@ -157,8 +157,8 @@ struct SolveKernel {
         $IF((bits_b & Uint(3u)) == Uint(1u)) { add_in_place(wb, constrained_inertia(bodies, bb, cross3(rb, neg(impulse)), bits_b)); }
     }
     void clamp_pair(Vec& va, Vec& vb, Vec& wa, Vec& wb, const Uint& bits_a, const Uint& bits_b) {
-        $IF((bits_a & Uint(3u)) == Uint(1u)) { clamp_speed(va, max_linear); clamp_speed(wa, max_angular); }
-        $IF((bits_b & Uint(3u)) == Uint(1u)) { clamp_speed(vb, max_linear); clamp_speed(wb, max_angular); }
+        $IF((bits_a & Uint(2u)) == Uint(0u)) { clamp_speed(va, max_linear); clamp_speed(wa, max_angular); }
+        $IF((bits_b & Uint(2u)) == Uint(0u)) { clamp_speed(vb, max_linear); clamp_speed(wb, max_angular); }
     }
     void solve_contact(const Uint& index, Float& max_delta) {
         Uint a, b, ba, bb, ca, out, bits_a, bits_b;
@@ -185,10 +185,6 @@ struct SolveKernel {
             auto wb = load3(velocities, b * Uint(6u) + Uint(3u));
             va = project_axes(va, bits_a, 2); vb = project_axes(vb, bits_b, 2);
             wa = project_axes(wa, bits_a, 5); wb = project_axes(wb, bits_b, 5);
-            Vec before_wa, before_wb;
-            for (std::uint32_t axis = 0; axis < 3; ++axis) {
-                before_wa[axis] = wa[axis]; before_wb[axis] = wb[axis];
-            }
             Float accumulated, accumulated_t, initial;
             accumulated = results.values[out + Uint(3u)];
             accumulated_t = results.values[out + Uint(4u)];
@@ -283,22 +279,12 @@ struct SolveKernel {
                     }
                 }
             }
-            // Angular impulses can move the contact substantially even when
-            // inverse mass is tiny. Use contact-speed units for convergence.
-            auto angular_delta_a = cross3(sub(wa, before_wa), ra);
-            auto angular_delta_b = cross3(sub(wb, before_wb), rb);
-            max_delta = max(max_delta, max(dot3(angular_delta_a, angular_delta_a), dot3(angular_delta_b, angular_delta_b)));
-            // Fixed/kinematic/sleeping endpoints are read-only and may be shared
-            // by independent islands. Never race on their velocity records.
+            // Store the converged velocity and the impulse actually applied.
             for (std::uint32_t axis = 0; axis < 3; ++axis) {
-                $IF((bits_a & Uint(3u)) == Uint(1u)) {
-                    velocities.values[a * Uint(6u) + Uint(axis)] = va[axis];
-                    velocities.values[a * Uint(6u) + Uint(axis + 3u)] = wa[axis];
-                }
-                $IF((bits_b & Uint(3u)) == Uint(1u)) {
-                    velocities.values[b * Uint(6u) + Uint(axis)] = vb[axis];
-                    velocities.values[b * Uint(6u) + Uint(axis + 3u)] = wb[axis];
-                }
+                velocities.values[a * Uint(6u) + Uint(axis)] = va[axis];
+                velocities.values[a * Uint(6u) + Uint(axis + 3u)] = wa[axis];
+                velocities.values[b * Uint(6u) + Uint(axis)] = vb[axis];
+                velocities.values[b * Uint(6u) + Uint(axis + 3u)] = wb[axis];
             }
             results.values[out + Uint(3u)] = accumulated;
             results.values[out + Uint(4u)] = accumulated_t;
@@ -416,9 +402,7 @@ void validate(std::span<const GpuContactSolverPipeline::Body> bodies,
 
 struct Islands {
     std::vector<std::uint32_t> order, offsets;
-    Islands(std::span<const GpuContactSolverPipeline::Body> bodies, std::span<const GpuContactSolverPipeline::Contact> contacts) {
-        const auto body_count = bodies.size();
-        const auto writable = [&](std::uint32_t i) { return bodies[i].dynamic && !bodies[i].sleeping; };
+    Islands(std::size_t body_count, std::span<const GpuContactSolverPipeline::Contact> contacts) {
         std::vector<std::uint32_t> parent(body_count), sizes(body_count, 1);
         std::iota(parent.begin(), parent.end(), 0u);
         const auto find = [&](std::uint32_t index) {
@@ -426,9 +410,6 @@ struct Islands {
             return index;
         };
         for (const auto& contact : contacts) {
-            // Sharing an immutable ground/platform is not a dependency between
-            // dynamic bodies. Only writable endpoints join an island.
-            if (!writable(contact.a) || !writable(contact.b)) continue;
             auto a = find(contact.a), b = find(contact.b);
             if (a != b) {
                 if (sizes[a] < sizes[b]) std::swap(a, b);
@@ -439,13 +420,7 @@ struct Islands {
         std::vector<std::uint32_t> root_to_island(body_count, missing), contact_islands(contacts.size());
         std::vector<std::uint32_t> counts;
         for (std::size_t i = 0; i < contacts.size(); ++i) {
-            const auto& contact = contacts[i];
-            if (!writable(contact.a) && !writable(contact.b)) {
-                contact_islands[i] = static_cast<std::uint32_t>(counts.size());
-                counts.push_back(1);
-                continue;
-            }
-            auto& island = root_to_island[find(writable(contact.a) ? contact.a : contact.b)];
+            auto& island = root_to_island[find(contacts[i].a)];
             if (island == missing) { island = static_cast<std::uint32_t>(counts.size()); counts.push_back(0); }
             contact_islands[i] = island; ++counts[island];
         }
@@ -548,7 +523,7 @@ struct GpuContactSolverPipeline::Impl {
         for (const auto& contact : input_contacts) {
             float_upload.insert(float_upload.end(), {0, 0, 0, contact.accumulated_j, contact.accumulated_jt, 0});
         }
-        Islands islands(input_bodies, input_contacts);
+        Islands islands(input_bodies.size(), input_contacts);
         const auto island_count = static_cast<std::uint32_t>(islands.offsets.size() - 1u);
         std::vector<std::uint32_t> uint_upload;
         uint_upload.reserve(input_bodies.size() + input_contacts.size() * 3u + islands.offsets.size() + 2u + indices.size());
