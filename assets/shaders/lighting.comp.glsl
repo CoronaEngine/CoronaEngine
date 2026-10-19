@@ -439,16 +439,15 @@ vec3 shadowCascadeDebugColor(uint cascadeIndex)
     return vec3(0.08, 0.08, 0.08);
 }
 
-vec3 DisneyBRDF(vec3 WorldPos, vec3 Normal, vec3 Tangent, vec3 Bitangent,
+vec3 DisneyBRDF(vec3 V, vec3 Normal, vec3 Tangent, vec3 Bitangent,
     vec3 lightColor, vec3 albedo, MaterialInfo matl, float shadowFactor, float ambientOcclusion)
 {
     vec3 N = normalize(Normal);
     vec3 X = normalize(Tangent);
     vec3 Y = normalize(Bitangent);
-    vec3 eyePos = readVec3(pushConsts.uniformBufferIndex, 36u);
-    vec3 V = normalize(eyePos - WorldPos);
     vec3 L = normalize(pushConsts.sun_dir);
-    vec3 H = normalize(V + L);
+    vec3 H = V + L;
+    H *= inversesqrt(max(dot(H,H), 1e-12));
 
     float ndotl = max(dot(N, L), 0.0);
     float ndotv = max(dot(N, V), 0.0);
@@ -755,10 +754,22 @@ float ambientOcclusion(ivec2 pixel, Surface surface) {
     float radiusPixels = clamp(abs(projection[1][1]) * radius * float(pushConsts.gbufferSize.y) / (2.0 * max(abs(p.z), 0.01)), 1.0, 192.0);
     float occlusion = 0.0;
     // Fixed low-discrepancy disk avoids frame-to-frame noise without a history.
+    const vec2 disk[12] = vec2[12](
+        vec2(0.204124145,0.000000000),
+        vec2(-0.260699267,0.238821884),
+        vec2(0.039904202,-0.454687792),
+        vec2(0.328594540,0.428593391),
+        vec2(-0.603011395,-0.106664226),
+        vec2(0.571225035,-0.363366609),
+        vec2(-0.191063596,0.710747050),
+        vec2(-0.364378996,-0.701589586),
+        vec2(0.790556672,0.288710031),
+        vec2(-0.822442487,0.339492301),
+        vec2(0.396471627,-0.847236832),
+        vec2(0.292982443,0.934074206)
+    );
     for (int i = 0; i < 12; ++i) {
-        float angle = float(i) * 2.39996323;
-        float r = sqrt((float(i) + 0.5) / 12.0);
-        ivec2 q = pixel + ivec2(round(vec2(cos(angle),sin(angle)) * r * radiusPixels));
+        ivec2 q = pixel + ivec2(round(disk[i] * radiusPixels));
         if (any(lessThan(q,ivec2(0))) || any(greaterThanEqual(q,ivec2(pushConsts.gbufferSize))) || all(equal(q,pixel))) continue;
         float d = texelFetch(textures[nonuniformEXT(pushConsts.depthImageIndex)], q, 0).r;
         if (d >= 1.0) continue;
@@ -772,10 +783,10 @@ float ambientOcclusion(ivec2 pixel, Surface surface) {
     return clamp(1.0 - pushConsts.ssaoStrength * occlusion * (2.0/12.0), 0.0, 1.0);
 }
 
-vec3 shadeDirect(Surface s, float ao) {
+vec3 shadeDirect(Surface s, float ao, vec3 viewDirection) {
     if (s.material.lightingEnabled <= 0.5) return s.baseColor;
     float shadow = computeSunShadow(s.position, s.normal);
-    return DisneyBRDF(s.position,s.normal,s.tangent,s.bitangent,
+    return DisneyBRDF(viewDirection,s.normal,s.tangent,s.bitangent,
         pushConsts.lightColor,s.baseColor,s.material,shadow,ao);
 }
 
@@ -822,6 +833,10 @@ bool traceReflection(Surface source, vec3 direction, out Surface hit, out float 
     uint steps = uint(clamp(ceil(pixels / 4.0), 1.0, float(pushConsts.ssrMaxSteps)));
     float previousT = 0.0;
     float previousZ = a.z;
+    ivec2 firstPixel = ivec2(pa);
+    float firstDepth = texelFetch(textures[nonuniformEXT(pushConsts.depthImageIndex)],firstPixel,0).r;
+    bool previousValid = firstDepth < 1.0;
+    float previousGap = a.z - viewPosition(firstPixel,firstDepth,inverseProjection).z;
     for (uint i = 1u; i <= steps; ++i) {
         float t = float(i) / float(steps);
         vec2 pixel = mix(pa,pb,t);
@@ -832,8 +847,11 @@ bool traceReflection(Surface source, vec3 direction, out Surface hit, out float 
         if (depth < 1.0) {
             float sceneZ = viewPosition(ip,depth,inverseProjection).z;
             float thickness = max(pushConsts.ssrThickness, abs(sceneZ) * 0.001);
-            if (max(z,previousZ) >= sceneZ && min(z,previousZ) <= sceneZ + thickness) {
+            float gap = z-sceneZ;
+            bool bracketed = previousValid && ((previousGap < 0.0) != (gap < 0.0));
+            if (bracketed || (max(z,previousZ) >= sceneZ && min(z,previousZ) <= sceneZ + thickness)) {
                 float lo = previousT, hi = t;
+                bool startsBehind = previousValid && previousGap >= 0.0;
                 // Refine the first crossing, then reject silhouettes and backfaces.
                 for (int j = 0; j < 5; ++j) {
                     float mid = (lo+hi)*0.5;
@@ -841,13 +859,19 @@ bool traceReflection(Surface source, vec3 direction, out Surface hit, out float 
                     float md = texelFetch(textures[nonuniformEXT(pushConsts.depthImageIndex)],mp,0).r;
                     float mz = mix(qa,qb,mid).z / mix(ka,kb,mid);
                     float sz = viewPosition(mp,md,inverseProjection).z;
-                    if (md < 1.0 && mz >= sz) hi=mid; else lo=mid;
+                    // Bracket the signed ray/scene depth gap. Scene depth can
+                    // change faster than ray Z on a slope, including rays toward
+                    // the eye; ray direction alone cannot select the half interval.
+                    bool crossed = (mz >= sz) != startsBehind;
+                    if (md < 1.0 && crossed) hi=mid; else lo=mid;
                 }
                 vec2 hp = mix(pa,pb,hi);
                 ivec2 hitPixel = ivec2(hp);
                 float hd = texelFetch(textures[nonuniformEXT(pushConsts.depthImageIndex)],hitPixel,0).r;
                 float hz = mix(qa,qb,hi).z / mix(ka,kb,hi);
-                float gap = hz - viewPosition(hitPixel,hd,inverseProjection).z;
+                float hitZ = viewPosition(hitPixel,hd,inverseProjection).z;
+                float gap = hz - hitZ;
+                thickness = max(pushConsts.ssrThickness, abs(hitZ)*0.001);
                 if (hd < 1.0 && gap >= -thickness*0.25 && gap <= thickness &&
                     decodeSurface(hitPixel,hit) && dot(hit.normal,direction) < -0.05 &&
                     length(hit.position-source.position) > 0.05) {
@@ -857,7 +881,9 @@ bool traceReflection(Surface source, vec3 direction, out Surface hit, out float 
                     return confidence > 0.0;
                 }
             }
+            previousGap = gap;
         }
+        previousValid = depth < 1.0;
         previousT = t;
         previousZ = z;
     }
@@ -878,7 +904,9 @@ vec3 reflection(Surface s, float ao) {
         float confidence;
         if (traceReflection(s,r,hit,confidence)) {
             confidence *= 1.0-smoothstep(pushConsts.ssrMaxRoughness*0.6,pushConsts.ssrMaxRoughness,roughness);
-            radiance = mix(radiance,shadeDirect(hit,1.0),confidence);
+            // The hit sends radiance back along the reflected ray, not toward
+            // the main camera. This matters for specular/metallic hit materials.
+            radiance = mix(radiance,shadeDirect(hit,1.0,-r),confidence);
         }
     }
     return radiance * fresnel * (1.0-0.65*roughness) * mix(1.0,ao,roughness);
@@ -906,7 +934,8 @@ void main() {
     else if (mode == 6u || mode == 7u) color = vec3(ao);
     else if (mode == 8u || mode == 9u) color = vec3(computeSunShadow(surface.position,surface.normal));
     else {
-        color = shadeDirect(surface,ao);
+        vec3 eye = readVec3(pushConsts.uniformBufferIndex,36u);
+        color = shadeDirect(surface,ao,normalize(eye-surface.position));
         if (surface.material.lightingEnabled > 0.5) color += reflection(surface,ao);
         if ((pushConsts.featureFlags & 8u) != 0u) color = shadowCascadeDebugColor(computeShadowCascadeIndex(surface.position));
     }
