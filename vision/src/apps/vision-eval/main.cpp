@@ -8,6 +8,8 @@
 #include <fstream>
 #include <numeric>
 #include <sstream>
+#include <chrono>
+#include <thread>
 #ifdef _WIN32
 #include <crtdbg.h>
 #include <windows.h>
@@ -20,6 +22,7 @@
 #include "base/mgr/evaluation_debug.h"
 #include "core/image/image.h"
 #include "core/util/logging.h"
+#include "core/runtime/dynamic_module.h"
 #include "rhi/context.h"
 #include "ext/nlohmann/json.hpp"
 
@@ -173,6 +176,9 @@ struct EvalStats {
     uint profile_frames{0u};
     double average_frame_ms{0.0};
     double average_fps{0.0};
+    double average_denoise_ms{0.0};
+    uint frame_interval_ms{0};
+    vector<double> frame_times_ms;
     double rmse{0.0};
     bool stage_profile_enabled{false};
     double average_gbuffer_ms{0.0};
@@ -234,6 +240,14 @@ void write_metrics(const fs::path &path, const EvalStats &stats) {
     out << "  \"profile_frames\": " << stats.profile_frames << ",\n";
     out << "  \"average_frame_ms\": " << stats.average_frame_ms << ",\n";
     out << "  \"average_fps\": " << stats.average_fps << ",\n";
+    out << "  \"average_denoise_ms\": " << stats.average_denoise_ms << ",\n";
+    out << "  \"frame_interval_ms\": " << stats.frame_interval_ms << ",\n";
+    out << "  \"frame_times_ms\": [";
+    for (size_t i = 0; i < stats.frame_times_ms.size(); ++i) {
+        if (i) out << ",";
+        out << stats.frame_times_ms[i];
+    }
+    out << "],\n";
     out << "  \"rmse\": " << stats.rmse << ",\n";
     out << "  \"stage_profile_enabled\": " << (stats.stage_profile_enabled ? "true" : "false") << ",\n";
     out << "  \"average_gbuffer_ms\": " << stats.average_gbuffer_ms << ",\n";
@@ -454,6 +468,12 @@ public:
     [[nodiscard]] EvalStats run() {
         constexpr double dt = 1.0 / 60.0;
         vector<double> profiled_ms;
+        double denoise_total_ms = 0;
+        // Idle between completed frames for thermally constrained evaluation.
+        // Render timers exclude this delay; the metric explicitly records it.
+        const char* interval_env = std::getenv("VISION_EVAL_FRAME_INTERVAL_MS");
+        const uint interval_ms = interval_env ? uint(std::clamp(std::atoi(interval_env), 0, 60000)) : 0u;
+        const bool trace_frames = std::getenv("VISION_EVAL_TRACE_FRAMES") != nullptr;
         vector<IntegratorStageProfile> stage_profiles;
         profiled_ms.reserve(profile_frames_);
         stage_profiles.reserve(profile_frames_);
@@ -479,6 +499,7 @@ public:
         fs::path frame_output_base = Global::instance().scene_path() / pipeline_->output_desc().fn;
 
         for (uint frame = 0u; frame < total_frames; ++frame) {
+            const auto frame_start = std::chrono::steady_clock::now();
             // Camera trajectory update
             if (trajectory_.active()) {
                 auto pose = interpolate_pose(trajectory_, frame);
@@ -492,6 +513,10 @@ public:
             pipeline_->display(dt);
             pipeline_->check_and_save();
             pipeline_->reset_status();
+            if (trace_frames) {
+                std::cout << "eval_frame=" << frame << " render_ms=" << pipeline_->cur_render_time()
+                          << " denoise_ms=" << pipeline_->renderer().integrator()->cur_denoise_time() << std::endl;
+            }
 
             // Per-frame save at trajectory save points
             if (trajectory_.active() && save_frame_set.count(frame)) {
@@ -500,8 +525,10 @@ public:
 
             if (frame >= warmup_frames_ && profiled_ms.size() < profile_frames_) {
                 profiled_ms.push_back(pipeline_->cur_render_time());
+                denoise_total_ms += pipeline_->renderer().integrator()->cur_denoise_time();
                 stage_profiles.push_back(pipeline_->renderer().integrator()->cur_stage_profile());
             }
+            if (interval_ms) std::this_thread::sleep_until(frame_start + std::chrono::milliseconds(interval_ms));
         }
 
         // Headless evaluation should measure and save the same final realtime state.
@@ -514,10 +541,13 @@ public:
         EvalStats stats;
         stats.warmup_frames = warmup_frames_;
         stats.profile_frames = static_cast<uint>(profiled_ms.size());
+        stats.frame_interval_ms = interval_ms;
+        stats.frame_times_ms = profiled_ms;
         if (!profiled_ms.empty()) {
             double sum = std::accumulate(profiled_ms.begin(), profiled_ms.end(), 0.0);
             stats.average_frame_ms = sum / static_cast<double>(profiled_ms.size());
             stats.average_fps = stats.average_frame_ms > 0.0 ? 1000.0 / stats.average_frame_ms : 0.0;
+            stats.average_denoise_ms = denoise_total_ms / static_cast<double>(profiled_ms.size());
         }
         if (!stage_profiles.empty() && stage_profiles.front().enabled) {
             auto average_stage = [&](auto accessor) {
@@ -597,6 +627,9 @@ int main(int argc, char **argv) {
     CLIParser bootstrap_parser(argc, argv);
     fs::path runtime_dir = bootstrap_parser.runtime_dir();
     fs::current_path(runtime_dir);
+    // Hotfix initialization can register ../bin before the deployed runtime.
+    // A missing module there aborts loading before later paths are considered.
+    ocarina::DynamicModule::clear_search_path();
     RHIContext::instance().init(runtime_dir);
     EvalApp app(argc, argv);
     EvalStats stats = app.run();

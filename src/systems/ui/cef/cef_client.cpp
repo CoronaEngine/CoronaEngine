@@ -587,7 +587,9 @@ bool initialize_cef() {
 
 #ifdef _WIN32
     std::filesystem::path root_cache_path;
-    if (const char* local_app_data = std::getenv("LOCALAPPDATA")) {
+    if (const char* test_cache = std::getenv("CORONA_CEF_ROOT_CACHE"); test_cache && *test_cache) {
+        root_cache_path = std::filesystem::absolute(test_cache);
+    } else if (const char* local_app_data = std::getenv("LOCALAPPDATA")) {
         root_cache_path = std::filesystem::path(local_app_data) / "CoronaEngine" / "CEFRoot";
     } else {
         root_cache_path = std::filesystem::current_path() / "cef_root";

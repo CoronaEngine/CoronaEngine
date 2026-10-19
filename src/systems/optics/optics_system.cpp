@@ -6661,7 +6661,14 @@ bool OpticsSystem::init_vision_lazy() {
             auto& context = ocarina::RHIContext::instance();
             ocarina::DynamicModule::clear_search_path();
             context.init(runtime_directory);
-            return context.create_device("cuda");
+            const char* configured_backend = std::getenv("CORONA_VISION_BACKEND");
+            std::string backend = configured_backend ? configured_backend : "vulkan-compute";
+            if (backend == "vulkan") backend = "vulkan-compute";
+            if (backend != "cuda" && backend != "vulkan-compute") {
+                throw std::runtime_error("CORONA_VISION_BACKEND must be cuda or vulkan-compute");
+            }
+            CFW_LOG_INFO("OpticsSystem: Vision compute backend = {}", backend);
+            return context.create_device(backend.c_str());
         }();
         visionDevicePtr = &s_device;
         visionDevicePtr->init_rtx();
@@ -6978,7 +6985,8 @@ void OpticsSystem::run_vision_frame(float frame_count, uint64_t frame_index) {
                 const uint64_t pixel_count = static_cast<uint64_t>(w) * static_cast<uint64_t>(h);
                 std::optional<uint32_t> vision_src_descriptor;
                 bool used_zero_copy = false;
-                if (!vision_zero_copy_forced_disabled() &&
+                if (visionDevicePtr->supports_buffer_export() &&
+                    !vision_zero_copy_forced_disabled() &&
                     !runtime.zero_copy_disabled.contains(cam_handle)) {
                     // CUDA is about to write the shared allocation. The preceding Vulkan
                     // resolve must finish first until external timeline semaphores replace

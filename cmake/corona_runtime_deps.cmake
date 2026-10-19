@@ -144,7 +144,7 @@ function(corona_install_runtime_deps target_name)
         # Copy CEF runtime files next to the exe. Debug uses CEF Debug binaries;
         # Release, RelWithDebInfo, and MinSizeRel use the Release runtime.
         add_custom_command(TARGET ${target_name} POST_BUILD
-                COMMAND ${CMAKE_COMMAND} -E copy_directory
+                COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different
                 "${_CORONA_CEF_BIN_DIR}"
                 "${_CORONA_DESTINATION_DIR}"
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different

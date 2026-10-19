@@ -1,18 +1,18 @@
 #pragma once
 
 // Vision zero-copy bridge — shares Vision's pre-tonemap linear float4 color
-// buffer with the Vulkan engine via CUDA<->Vulkan external memory, eliminating
+// buffer with the Vulkan engine via CUDA/Vulkan external memory, eliminating
 // the per-frame GPU->CPU->GPU readback used by the [MANUAL-READBACK] path.
 //
-// Direction: Vision (CUDA) renders into the framebuffer-selected display source
-// (linear HDR, pre-tonemap). We copy that on-device into a CUDA *exportable*
+// Direction: Vision renders into the framebuffer-selected display source
+// (linear HDR, pre-tonemap). We copy that on-device into an Ocarina exportable
 // buffer, export its Win32 handle, and import it as a Vulkan HardwareBuffer. A
 // Vulkan compute pass (vision_resolve.comp) then applies exposure + ACES and
 // writes the engine's RGBA16F finalOutputImage. The final-color view_texture_ is
-// a cuArray and is intentionally NOT used (cuArray memory is not exportable).
+// display texture and is intentionally not used, avoiding double tone mapping.
 //
 // NOTE: no external CUDA/Vulkan timeline semaphore yet. Optics currently waits
-// for the preceding Vulkan submit receipt before allowing CUDA to reuse or
+// for the preceding Vulkan submit receipt before allowing Vision to reuse or
 // release this allocation. This is correct but CPU-serialized; a shared timeline
 // semaphore is the performance follow-up.
 //
@@ -58,8 +58,8 @@ public:
     [[nodiscard]] uint32_t height() const noexcept { return height_; }
 
 private:
-    // Releases the imported Vulkan buffer first, then the CUDA-side exportable
-    // buffer (Vulkan-before-CUDA ordering avoids the consumer outliving the
+    // Releases the imported Vulkan buffer first, then the Ocarina exportable
+    // buffer (consumer-before-producer ordering avoids the consumer outliving the
     // backing allocation). pimpl holds the ocarina Buffer<float4> to keep
     // ocarina types out of this engine-facing header.
     void release();

@@ -30,6 +30,15 @@ int main(int argc, char* argv[]) {
         fs::remove(path);
         const auto missing = read_startup_config(path, nullptr);
         expect(!missing.file_loaded && !missing.switch_profile, "Missing file must default to off");
+        expect(missing.vision_backend == "vulkan-compute", "Vision must default to Vulkan");
+
+        write_config(path, R"({"vision":{"backend":"cuda"}})");
+        expect(read_startup_config(path, nullptr).vision_backend == "cuda", "CUDA baseline must remain selectable");
+        auto vulkan = read_startup_config(path, nullptr, "vulkan");
+        expect(vulkan.vision_backend == "vulkan-compute", "Environment must override the file and normalize Vulkan");
+        apply_startup_config(vulkan);
+        expect(std::string(std::getenv("CORONA_VISION_BACKEND")) == "vulkan-compute",
+               "Backend setting must reach the embedded engine");
 
         write_config(path, R"({"profiling":{"switch_profile":true}})");
         auto config = read_startup_config(path, nullptr);
@@ -53,7 +62,10 @@ int main(int argc, char* argv[]) {
         }
         for (const auto* invalid : {"broken json", "[]", R"({"profiling":true})",
                                    R"({"profiling":{"switch_profile":"true"}})",
-                                   R"({"profiling":{"switch_profiler":true}})"}) {
+                                   R"({"profiling":{"switch_profiler":true}})",
+                                   R"({"vision":{"backend":"metal"}})",
+                                   R"({"vision":{"backend":true}})", R"({"vision":[]})",
+                                   R"({"vision":{"backed":"cuda"}})"}) {
             write_config(path, invalid);
             bool rejected = false;
             try { (void)read_startup_config(path, nullptr); }

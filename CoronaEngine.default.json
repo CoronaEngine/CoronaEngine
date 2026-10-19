@@ -1,4 +1,7 @@
 {
+  "vision": {
+    "backend": "vulkan-compute"
+  },
   "profiling": {
     "switch_profile": false
   }
