@@ -9,6 +9,7 @@ corona_add_system(geometry
         geometry_lod.cpp
         geometry_internal.h
         geometry_mesh_builder.cpp
+        geometry_draw_buffers.cpp
         frustum.cpp
         actor_cache.cpp
     DEPENDENCIES

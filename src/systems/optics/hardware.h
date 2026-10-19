@@ -114,7 +114,6 @@ struct Hardware {
     Corona::Horizon::HardwareImage depthImage;       // D32_FLOAT: depth (kept from GBuffer)
     Corona::Horizon::HardwareImage uiVisibilityImage;  // Pass 2 visibility, isolated from scene pass
     Corona::Horizon::HardwareImage uiDepthImage;        // Pass 2 depth, isolated from scene pass
-    Corona::Horizon::HardwareImage shadowColorImage;
     std::array<Corona::Horizon::HardwareImage, 4> shadowCascadeImages;
 
     // === Final composited output ===

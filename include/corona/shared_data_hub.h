@@ -8,6 +8,7 @@
 
 #include <ktm/ktm.h>
 #include <corona/systems/geometry/model_node_state.h>
+#include <corona/systems/geometry/mesh_draw_bounds.h>
 
 #include <array>
 #include <chrono>
@@ -29,11 +30,12 @@ namespace Corona {
 class Model;
 
 struct MeshDevice {
+    Geometry::MeshDrawClusters draw_clusters;
+    Horizon::HardwareBuffer shadowIndexBuffer;
     Horizon::HardwareBuffer indexBuffer;
     Horizon::HardwareBuffer vertexBuffer;
 
-    // StorageBuffer mirrors for compute shader (VBuffer resolve) access.
-    // Horizon BufferUsage is non-combinable, so we keep separate copies.
+    // Rasterization and VBuffer resolve share the same backing allocation.
     Horizon::HardwareBuffer indexStorageBuffer;
     Horizon::HardwareBuffer vertexStorageBuffer;
 
