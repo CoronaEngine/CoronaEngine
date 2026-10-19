@@ -1,6 +1,7 @@
 #include "corona/kernel/system/system_base.h"
 
 #include <chrono>
+#include <algorithm>
 #include <exception>
 #include <thread>
 
@@ -42,7 +43,11 @@ int SystemBase::get_target_fps() const {
 }
 
 void SystemBase::set_target_fps(int fps) {
-    target_fps_ = fps;
+    {
+        std::lock_guard lock(pause_mutex_);
+        target_fps_.store(fps, std::memory_order_release);
+    }
+    pause_cv_.notify_all();
 }
 
 void SystemBase::start() {
@@ -72,8 +77,12 @@ void SystemBase::pause() {
         return;
     }
 
-    is_paused_.store(true, std::memory_order_release);
-    state_.store(SystemState::paused, std::memory_order_release);
+    {
+        std::lock_guard lock(pause_mutex_);
+        is_paused_.store(true, std::memory_order_release);
+        state_.store(SystemState::paused, std::memory_order_release);
+    }
+    pause_cv_.notify_all();
 }
 
 void SystemBase::resume() {
@@ -152,14 +161,14 @@ bool SystemBase::stop_for(std::chrono::milliseconds timeout) {
 
 float SystemBase::get_actual_fps() const {
     std::lock_guard<std::mutex> lock(stats_mutex_);
-    if (total_frames_ == 0) return 0.0f;
-    return static_cast<float>(total_frames_) / total_frame_time_;
+    if (frame_samples_.empty() || stats_elapsed_time_ <= 0.0) return 0.0f;
+    return static_cast<float>(frame_samples_.size() / stats_elapsed_time_);
 }
 
 float SystemBase::get_average_frame_time() const {
     std::lock_guard<std::mutex> lock(stats_mutex_);
-    if (total_frames_ == 0) return 0.0f;
-    return static_cast<float>((total_frame_time_ / total_frames_) * 1000.0);  // 转换为毫秒
+    if (frame_samples_.empty()) return 0.0f;
+    return static_cast<float>((total_frame_time_ / frame_samples_.size()) * 1000.0);
 }
 
 float SystemBase::get_max_frame_time() const {
@@ -175,6 +184,8 @@ void SystemBase::reset_stats() {
     std::lock_guard<std::mutex> lock(stats_mutex_);
     total_frames_.store(0, std::memory_order_relaxed);
     total_frame_time_ = 0.0;
+    stats_elapsed_time_ = 0.0;
+    frame_samples_.clear();
     max_frame_time_ = 0.0f;
 }
 
@@ -198,19 +209,25 @@ float SystemBase::delta_time() const {
     return last_delta_time_;
 }
 
+void SystemBase::request_update() {
+    {
+        std::lock_guard lock(pause_mutex_);
+        update_requested_ = true;
+    }
+    pause_cv_.notify_one();
+}
+
 void SystemBase::thread_loop() {
     this->on_thread_started();
 
-    auto last_time = std::chrono::high_resolution_clock::now();
-
-    // 计算帧时间间隔
-    std::chrono::microseconds frame_duration(0);
-    if (target_fps_ > 0) {
-        frame_duration = std::chrono::microseconds(1000000 / target_fps_);
-    }
+    using Clock = std::chrono::steady_clock;
+    auto last_time = Clock::now();
+    auto last_completion = last_time;
+    auto next_deadline = last_time;
+    int previous_target = target_fps_.load(std::memory_order_acquire);
 
     while (should_run_.load(std::memory_order_acquire)) {
-        auto frame_start = std::chrono::high_resolution_clock::now();
+        auto frame_start = Clock::now();
 
         // 检查暂停状态
         if (is_paused_.load(std::memory_order_acquire)) {
@@ -220,12 +237,18 @@ void SystemBase::thread_loop() {
                        !should_run_.load(std::memory_order_acquire);
             });
             // 恢复后重置时间，避免大的 delta_time 跳变
-            last_time = std::chrono::high_resolution_clock::now();
+            last_time = last_completion = next_deadline = Clock::now();
             continue;
         }
 
         // 计算 delta_time
-        auto current_time = std::chrono::high_resolution_clock::now();
+        {
+            std::lock_guard lock(pause_mutex_);
+            // Consume before update(), so a publication concurrent with that
+            // update remains pending and cannot be lost at the wait boundary.
+            update_requested_ = false;
+        }
+        auto current_time = Clock::now();
         last_delta_time_ = std::chrono::duration<float>(current_time - last_time).count();
         last_time = current_time;
 
@@ -258,26 +281,50 @@ void SystemBase::thread_loop() {
         ++frame_number_;
 
         // 收集性能统计
-        auto frame_end = std::chrono::high_resolution_clock::now();
+        auto frame_end = Clock::now();
         float frame_time = std::chrono::duration<float>(frame_end - frame_start).count();
         float frame_time_ms = frame_time * 1000.0f;
+
+        // Absolute deadlines avoid accumulating sleep overshoot. Stop, pause,
+        // and a changed frame limit interrupt the wait without spinning.
+        const int target = target_fps_.load(std::memory_order_acquire);
+        if (target != previous_target) next_deadline = frame_start;
+        previous_target = target;
+        if (target > 0) {
+            const auto period = std::chrono::duration_cast<Clock::duration>(std::chrono::duration<double>(1.0 / target));
+            next_deadline += period;
+            if (next_deadline < frame_end) next_deadline = frame_end;
+            std::unique_lock lock(pause_mutex_);
+            pause_cv_.wait_until(lock, next_deadline, [&] {
+                return !should_run_.load(std::memory_order_acquire) ||
+                       is_paused_.load(std::memory_order_acquire) ||
+                       update_requested_ ||
+                       target_fps_.load(std::memory_order_acquire) != target;
+            });
+            // Rebase the periodic fallback after event-driven work rather than
+            // accumulating future deadlines on every early wakeup.
+            if (update_requested_) next_deadline = Clock::now();
+        } else {
+            next_deadline = frame_end;
+        }
+        const auto completed = Clock::now();
+        const double elapsed = std::chrono::duration<double>(completed - last_completion).count();
+        last_completion = completed;
 
         {
             std::lock_guard<std::mutex> lock(stats_mutex_);
             total_frames_.fetch_add(1, std::memory_order_relaxed);
+            frame_samples_.emplace_back(frame_time, elapsed);
             total_frame_time_ += frame_time;
-            if (frame_time_ms > max_frame_time_) {
-                max_frame_time_ = frame_time_ms;
+            stats_elapsed_time_ += elapsed;
+            if (frame_samples_.size() > static_cast<std::size_t>(stats_window_size_)) {
+                total_frame_time_ -= frame_samples_.front().first;
+                stats_elapsed_time_ -= frame_samples_.front().second;
+                frame_samples_.pop_front();
             }
-        }
-
-        // 帧率限制（如果目标 FPS > 0）
-        if (target_fps_ > 0) {
-            auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(frame_end - frame_start);
-
-            if (elapsed < frame_duration) {
-                std::this_thread::sleep_for(frame_duration - elapsed);
-            }
+            max_frame_time_ = frame_time_ms;
+            for (const auto& sample : frame_samples_)
+                max_frame_time_ = std::max(max_frame_time_, sample.first * 1000.0f);
         }
     }
 
