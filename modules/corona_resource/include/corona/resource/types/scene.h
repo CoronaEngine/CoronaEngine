@@ -160,11 +160,28 @@ enum class AlphaMode : std::uint32_t {
     Blend = 2    // Alpha 混合
 };
 
-struct MaterialData {
+// Linear material factors. Texture colour spaces/channels are handled by the
+// native material uploader, never inferred from the pixel values.
+struct MaterialParameters {
     std::array<float, 4> base_color{1.0f, 1.0f, 1.0f, 1.0f};
     float metallic = 0.0f;
     float roughness = 0.5f;
     float ior = 1.5f;
+    float specular_factor = 1.0f;
+    std::array<float, 3> specular_color{1.0f, 1.0f, 1.0f};
+    std::array<float, 3> emissive{0.0f, 0.0f, 0.0f};
+    float normal_scale = 1.0f;
+    float occlusion_strength = 1.0f;
+    float clearcoat = 0.0f;
+    float clearcoat_roughness = 0.0f;
+    bool unlit = false;
+    bool double_sided = false;
+};
+
+struct MaterialData : MaterialParameters {
+    // glTF packs roughness in G and metalness in B; standalone maps use R.
+    std::uint32_t metallic_channel = 0;
+    std::uint32_t roughness_channel = 0;
 
     // 透明度相关属性
     AlphaMode alpha_mode = AlphaMode::Opaque;
@@ -175,6 +192,10 @@ struct MaterialData {
     std::uint64_t metallic_texture = InvalidTextureId;
     std::uint64_t roughness_texture = InvalidTextureId;
     std::uint64_t opacity_texture = InvalidTextureId;  // 独立的透明度纹理
+    std::uint64_t occlusion_texture = InvalidTextureId;
+    std::uint64_t emissive_texture = InvalidTextureId;
+    std::uint64_t specular_texture = InvalidTextureId; // glTF specular weight in A
+    std::uint64_t specular_color_texture = InvalidTextureId;
     std::string name;
 };
 

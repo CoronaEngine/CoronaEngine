@@ -4916,6 +4916,8 @@ build_mesh_slots(const GeometrySystem*        gs,
         }
         slot.geo            = geo;
         slot.texture        = m.textureBuffer;        // 引用计数值拷贝
+        slot.material       = m.material;
+        slot.material_index = m.materialIndex;
         slot.material_color = m.materialColor;
         slot.texture_ready  = static_cast<bool>(slot.texture);
         slot.vertex_count   = slot.geo.vertex_count;
@@ -5322,6 +5324,7 @@ void GeometrySystem::estimate_actor_memory(std::uintptr_t actor,
 
     std::unordered_set<std::uintptr_t> visited_geoms;
     std::unordered_set<std::uint64_t>  visited_models;
+    std::unordered_set<const Memory::GpuMemToken*> visited_textures;
 
     for (auto profile_handle : actor_read->profile_handles) {
         auto profile = hub.profile_storage().try_acquire_read(profile_handle);
@@ -5353,7 +5356,12 @@ void GeometrySystem::estimate_actor_memory(std::uintptr_t actor,
                 mesh_count = static_cast<uint32_t>(geom->mesh_handles.size());
                 for (const auto& md : geom->mesh_handles) {
                     out_gpu_bytes += md.mesh_mem.bytes();
-                    if (md.tex_mem) out_gpu_bytes += md.tex_mem->bytes();
+                    if (md.material) {
+                        for (const auto& token : md.material->memory)
+                            if (token && visited_textures.insert(token.get()).second) out_gpu_bytes += token->bytes();
+                    } else if (md.tex_mem && visited_textures.insert(md.tex_mem.get()).second) {
+                        out_gpu_bytes += md.tex_mem->bytes();
+                    }
                 }
                 if (geom->model_resource_handle) {
                     if (auto mr = hub.model_resource_storage().try_acquire_read(geom->model_resource_handle))

@@ -29,7 +29,11 @@ struct SceneGpuTextureCache {
         bool valid = false;
     };
 
+    // A source image can be used as both colour and data. Separate views are
+    // required so the data binding never gets the sRGB transfer function.
     std::unordered_map<std::uint64_t, Entry> entries;
+    std::unordered_map<std::uint64_t, Entry> linear_entries;
+    std::unordered_map<std::uint32_t, std::shared_ptr<const MeshMaterialDevice>> materials;
 };
 
 // ============================================================================

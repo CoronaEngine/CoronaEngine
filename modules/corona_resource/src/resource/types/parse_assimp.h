@@ -192,12 +192,18 @@ inline std::uint64_t load_assimp_texture(aiMaterial* ai_mat, aiTextureType type,
                                          TextureCache& texture_cache,
                                          const std::filesystem::path& scene_path,
                                          const aiScene* ai_scene = nullptr,
-                                         const ImageImportOptions& options = {}) {
-    if (ai_mat->GetTextureCount(type) == 0) {
+                                         const ImageImportOptions& options = {},
+                                         unsigned int slot = 0) {
+    aiString tex_path;
+    // SpecularColor may occupy slot 1 without slot 0. GetTextureCount is not a
+    // valid upper bound for this sparse semantic layout.
+    if (ai_mat->GetTexture(type, slot, &tex_path) != AI_SUCCESS) {
         return InvalidTextureId;
     }
-    aiString tex_path;
-    if (ai_mat->GetTexture(type, 0, &tex_path) != AI_SUCCESS) {
+    unsigned int uv_set = 0;
+    ai_mat->Get(AI_MATKEY_UVWSRC(type, slot), uv_set);
+    if (uv_set != 0) {
+        CFW_LOG_WARNING("[Assimp] Native material texture '{}' uses unsupported UV set {}; retaining factor without sampling the wrong UV set", tex_path.C_Str(), uv_set);
         return InvalidTextureId;
     }
 
@@ -329,157 +335,81 @@ inline void process_assimp_materials(const aiScene* ai_scene, Scene& scene,
                             mat_data.name);
         }
 
-        // 确保 alpha 值有效（某些格式可能不设置 alpha）
-        if (mat_data.base_color[3] <= 0.0f) {
-            // 尝试从 opacity 属性读取
-            float opacity = 1.0f;
-            if (ai_mat->Get(AI_MATKEY_OPACITY, opacity) == AI_SUCCESS) {
-                mat_data.base_color[3] = opacity;
-            } else {
-                mat_data.base_color[3] = 1.0f;
-            }
-        }
-
-        float metallic = 0.0f;
-        if (ai_mat->Get(AI_MATKEY_METALLIC_FACTOR, metallic) == AI_SUCCESS) {
-            mat_data.metallic = metallic;
-        }
-        float roughness = 0.5f;
-        if (ai_mat->Get(AI_MATKEY_ROUGHNESS_FACTOR, roughness) == AI_SUCCESS) {
-            mat_data.roughness = roughness;
-        } else {
-            // 对于传统材质，尝试从 shininess 转换为 roughness
-            float shininess = 0.0f;
-            if (ai_mat->Get(AI_MATKEY_SHININESS, shininess) == AI_SUCCESS && shininess > 0.0f) {
-                // 将 shininess (通常 0-1000) 转换为 roughness (0-1)
-                // 使用简单的经验公式：roughness = 1 - sqrt(shininess / 1000)
-                mat_data.roughness = 1.0f - std::sqrt(std::min(shininess, 1000.0f) / 1000.0f);
-            }
-        }
-
-        // === 诊断日志：打印材质中所有纹理类型的数量 ===
-        static const std::pair<aiTextureType, const char*> all_texture_types[] = {
-            {aiTextureType_DIFFUSE, "DIFFUSE"},
-            {aiTextureType_SPECULAR, "SPECULAR"},
-            {aiTextureType_AMBIENT, "AMBIENT"},
-            {aiTextureType_EMISSIVE, "EMISSIVE"},
-            {aiTextureType_HEIGHT, "HEIGHT"},
-            {aiTextureType_NORMALS, "NORMALS"},
-            {aiTextureType_SHININESS, "SHININESS"},
-            {aiTextureType_OPACITY, "OPACITY"},
-            {aiTextureType_DISPLACEMENT, "DISPLACEMENT"},
-            {aiTextureType_LIGHTMAP, "LIGHTMAP"},
-            {aiTextureType_REFLECTION, "REFLECTION"},
-            {aiTextureType_BASE_COLOR, "BASE_COLOR"},
-            {aiTextureType_NORMAL_CAMERA, "NORMAL_CAMERA"},
-            {aiTextureType_EMISSION_COLOR, "EMISSION_COLOR"},
-            {aiTextureType_METALNESS, "METALNESS"},
-            {aiTextureType_DIFFUSE_ROUGHNESS, "DIFFUSE_ROUGHNESS"},
-            {aiTextureType_AMBIENT_OCCLUSION, "AMBIENT_OCCLUSION"},
-            {aiTextureType_UNKNOWN, "UNKNOWN"},
+        // glTF supplies format defaults through Assimp. Preserve zero alpha,
+        // black colour and missing texture slots exactly as authored.
+        aiString gltf_alpha;
+        const bool gltf = ai_mat->Get(AI_MATKEY_GLTF_ALPHAMODE, gltf_alpha) == AI_SUCCESS;
+        auto scalar = [&](const char* key, unsigned int type, unsigned int index,
+                          float fallback, float low, float high) {
+            float value = fallback;
+            if (ai_mat->Get(key, type, index, value) != AI_SUCCESS || !std::isfinite(value)) return fallback;
+            return std::clamp(value, low, high);
         };
-        for (const auto& [type, type_name] : all_texture_types) {
-            unsigned int count = ai_mat->GetTextureCount(type);
-            if (count > 0) {
-                aiString path;
-                ai_mat->GetTexture(type, 0, &path);
+        if (!gltf) mat_data.base_color[3] = scalar(AI_MATKEY_OPACITY, mat_data.base_color[3], 0.0f, 1.0f);
+        mat_data.metallic = scalar(AI_MATKEY_METALLIC_FACTOR, gltf ? 1.0f : 0.0f, 0.0f, 1.0f);
+        float roughness = gltf ? 1.0f : 0.5f;
+        if (ai_mat->Get(AI_MATKEY_ROUGHNESS_FACTOR, roughness) != AI_SUCCESS && !gltf) {
+            float shininess = 0.0f;
+            if (ai_mat->Get(AI_MATKEY_SHININESS, shininess) == AI_SUCCESS && std::isfinite(shininess))
+                roughness = 1.0f - std::sqrt(std::clamp(shininess, 0.0f, 1000.0f) / 1000.0f);
+        }
+        mat_data.roughness = std::isfinite(roughness) ? std::clamp(roughness, 0.0f, 1.0f) : 0.5f;
+        mat_data.ior = scalar(AI_MATKEY_REFRACTI, 1.5f, 0.0f, 10000.0f);
+        mat_data.specular_factor = scalar(AI_MATKEY_SPECULAR_FACTOR, 1.0f, 0.0f, 1.0f);
+        mat_data.clearcoat = scalar(AI_MATKEY_CLEARCOAT_FACTOR, 0.0f, 0.0f, 1.0f);
+        mat_data.clearcoat_roughness = scalar(AI_MATKEY_CLEARCOAT_ROUGHNESS_FACTOR, 0.0f, 0.0f, 1.0f);
+        aiColor3D specular{1.0f, 1.0f, 1.0f}, emissive{0.0f, 0.0f, 0.0f};
+        ai_mat->Get(AI_MATKEY_COLOR_SPECULAR, specular);
+        ai_mat->Get(AI_MATKEY_COLOR_EMISSIVE, emissive);
+        const float emission_strength = scalar(AI_MATKEY_EMISSIVE_INTENSITY, 1.0f, 0.0f, 65504.0f);
+        for (int c = 0; c < 3; ++c) {
+            mat_data.specular_color[c] = std::isfinite(specular[c]) ? std::clamp(specular[c], 0.0f, 65504.0f) : 1.0f;
+            mat_data.emissive[c] = std::isfinite(emissive[c]) ? std::clamp(emissive[c] * emission_strength, 0.0f, 65504.0f) : 0.0f;
+            if (!std::isfinite(mat_data.base_color[c])) mat_data.base_color[c] = 1.0f;
+        }
+        mat_data.normal_scale = scalar("$tex.file.scale", aiTextureType_NORMALS, 0, 1.0f, -65504.0f, 65504.0f);
+        mat_data.normal_scale = scalar(AI_MATKEY_GLTF_TEXTURE_SCALE(aiTextureType_NORMALS, 0), mat_data.normal_scale, -65504.0f, 65504.0f);
+        mat_data.occlusion_strength = scalar("$tex.file.strength", aiTextureType_LIGHTMAP, 0, 1.0f, 0.0f, 1.0f);
+        mat_data.occlusion_strength = scalar(AI_MATKEY_GLTF_TEXTURE_STRENGTH(aiTextureType_LIGHTMAP, 0), mat_data.occlusion_strength, 0.0f, 1.0f);
+        int two_sided = 0, shading = 0;
+        ai_mat->Get(AI_MATKEY_TWOSIDED, two_sided);
+        ai_mat->Get(AI_MATKEY_SHADING_MODEL, shading);
+        mat_data.double_sided = two_sided != 0;
+        mat_data.unlit = shading == aiShadingMode_Unlit;
+        auto texture = [&](aiTextureType type, unsigned int slot = 0) {
+            return load_assimp_texture(ai_mat, type, scene_dir, texture_cache, scene_path, ai_scene, options, slot);
+        };
+        mat_data.albedo_texture = texture(aiTextureType_BASE_COLOR);
+        if (mat_data.albedo_texture == InvalidTextureId) mat_data.albedo_texture = texture(aiTextureType_DIFFUSE);
+        // Never substitute emissive/MR/first embedded images for absent albedo.
+        mat_data.normal_texture = texture(aiTextureType_NORMALS);
+        if (mat_data.normal_texture == InvalidTextureId) mat_data.normal_texture = texture(aiTextureType_NORMAL_CAMERA);
+        // Height maps are not tangent-space normal maps.
+        mat_data.metallic_texture = texture(aiTextureType_METALNESS);
+        mat_data.roughness_texture = texture(aiTextureType_DIFFUSE_ROUGHNESS);
+        if (gltf) {
+            mat_data.metallic_channel = 2;
+            mat_data.roughness_channel = 1;
+            if (mat_data.metallic_texture == InvalidTextureId && mat_data.roughness_texture == InvalidTextureId) {
+                const auto packed = texture(aiTextureType_UNKNOWN);
+                mat_data.metallic_texture = mat_data.roughness_texture = packed;
             }
+            mat_data.specular_texture = texture(aiTextureType_SPECULAR, 0);
+            mat_data.specular_color_texture = texture(aiTextureType_SPECULAR, 1);
         }
-
-        // 加载纹理：优先使用 PBR 纹理类型，然后回退到传统类型
-        // glTF/PBR 使用 aiTextureType_BASE_COLOR，传统格式使用 aiTextureType_DIFFUSE
-        mat_data.albedo_texture = load_assimp_texture(ai_mat, aiTextureType_BASE_COLOR, scene_dir, texture_cache, scene_path, ai_scene, options);
-        if (mat_data.albedo_texture == InvalidTextureId) {
-            mat_data.albedo_texture = load_assimp_texture(ai_mat, aiTextureType_DIFFUSE, scene_dir, texture_cache, scene_path, ai_scene, options);
-        }
-        // 扩展回退：尝试 AMBIENT 类型（某些 FBX 导出器可能将 diffuse 纹理存储在这里）
-        if (mat_data.albedo_texture == InvalidTextureId) {
-            mat_data.albedo_texture = load_assimp_texture(ai_mat, aiTextureType_AMBIENT, scene_dir, texture_cache, scene_path, ai_scene, options);
-        }
-        // 扩展回退：尝试 EMISSIVE 类型（某些工具可能错误地将纹理存储在这里）
-        if (mat_data.albedo_texture == InvalidTextureId) {
-            mat_data.albedo_texture = load_assimp_texture(ai_mat, aiTextureType_EMISSIVE, scene_dir, texture_cache, scene_path, ai_scene, options);
-        }
-        // 扩展回退：尝试 UNKNOWN 类型（通用/未分类的纹理）
-        if (mat_data.albedo_texture == InvalidTextureId) {
-            mat_data.albedo_texture = load_assimp_texture(ai_mat, aiTextureType_UNKNOWN, scene_dir, texture_cache, scene_path, ai_scene, options);
-        }
-        // 最后手段：如果所有类型都失败，但场景有嵌入纹理，直接使用第一个嵌入纹理
-        if (mat_data.albedo_texture == InvalidTextureId && ai_scene->mNumTextures > 0) {
-            CFW_LOG_WARNING("[Assimp] Material '{}': all texture types failed, using first embedded texture as fallback",
-                            mat_data.name);
-            mat_data.albedo_texture = load_embedded_texture(ai_scene->mTextures[0], "__fallback_embedded_0", texture_cache, scene_path, options);
-        }
-
-        mat_data.normal_texture = load_assimp_texture(ai_mat, aiTextureType_NORMALS, scene_dir, texture_cache, scene_path, ai_scene, options);
-        if (mat_data.normal_texture == InvalidTextureId) {
-            mat_data.normal_texture = load_assimp_texture(ai_mat, aiTextureType_NORMAL_CAMERA, scene_dir, texture_cache, scene_path, ai_scene, options);
-        }
-        if (mat_data.normal_texture == InvalidTextureId) {
-            mat_data.normal_texture = load_assimp_texture(ai_mat, aiTextureType_HEIGHT, scene_dir, texture_cache, scene_path, ai_scene, options);
-        }
-
-        mat_data.metallic_texture = load_assimp_texture(ai_mat, aiTextureType_METALNESS, scene_dir, texture_cache, scene_path, ai_scene, options);
-
-        // glTF 通常将 metallic 和 roughness 存储在同一张纹理中 (unknown texture type)
-        mat_data.roughness_texture = load_assimp_texture(ai_mat, aiTextureType_DIFFUSE_ROUGHNESS, scene_dir, texture_cache, scene_path, ai_scene, options);
-        if (mat_data.roughness_texture == InvalidTextureId) {
-            mat_data.roughness_texture = load_assimp_texture(ai_mat, aiTextureType_SHININESS, scene_dir, texture_cache, scene_path, ai_scene, options);
-        }
-        // 如果有 metallic 纹理但没有 roughness 纹理，尝试使用 unknown 类型 (glTF metallicRoughness)
-        if (mat_data.roughness_texture == InvalidTextureId && mat_data.metallic_texture == InvalidTextureId) {
-            std::uint64_t mr_texture = load_assimp_texture(ai_mat, aiTextureType_UNKNOWN, scene_dir, texture_cache, scene_path, ai_scene, options);
-            if (mr_texture != InvalidTextureId) {
-                // glTF 的 metallicRoughness 纹理同时包含两个通道
-                mat_data.metallic_texture = mr_texture;
-                mat_data.roughness_texture = mr_texture;
-            }
-        }
-
-        // ========== 透明度处理 ==========
-        // 加载 opacity 纹理
-        mat_data.opacity_texture = load_assimp_texture(ai_mat, aiTextureType_OPACITY, scene_dir, texture_cache, scene_path, ai_scene, options);
-
-        // 读取 glTF alphaMode (通过 Assimp 的字符串属性)
-        aiString alpha_mode_str;
-        if (ai_mat->Get(AI_MATKEY_GLTF_ALPHAMODE, alpha_mode_str) == AI_SUCCESS) {
-            std::string mode = alpha_mode_str.C_Str();
-            if (mode == "MASK") {
-                mat_data.alpha_mode = AlphaMode::Mask;
-            } else if (mode == "BLEND") {
-                mat_data.alpha_mode = AlphaMode::Blend;
-            }
-            // "OPAQUE" 是默认值，无需处理
-        }
-
-        // 读取 glTF alphaCutoff
-        float alpha_cutoff = 0.5f;
-        if (ai_mat->Get(AI_MATKEY_GLTF_ALPHACUTOFF, alpha_cutoff) == AI_SUCCESS) {
-            mat_data.alpha_cutoff = alpha_cutoff;
-            // 如果设置了 cutoff 但没有明确的 alphaMode，推断为 Mask 模式
-            if (mat_data.alpha_mode == AlphaMode::Opaque && alpha_cutoff > 0.0f) {
-                mat_data.alpha_mode = AlphaMode::Mask;
-            }
-            (void)mat_data.name;
-        }
-
-        // 如果没有明确的 alphaMode，根据其他属性推断
-        if (mat_data.alpha_mode == AlphaMode::Opaque) {
-            // 如果有 opacity 纹理，使用 Blend 模式
-            if (mat_data.opacity_texture != InvalidTextureId) {
-                mat_data.alpha_mode = AlphaMode::Blend;
-            }
-            // 如果 base_color alpha < 1，使用 Blend 模式
-            else if (mat_data.base_color[3] < 1.0f) {
-                mat_data.alpha_mode = AlphaMode::Blend;
-            }
-        }
-
-        // 修复：如果有纹理但颜色为黑色/接近黑色，将base_color设为白色
-        fix_black_material_with_texture(mat_data, "Assimp");
-
-        if (mat_data.albedo_texture == InvalidTextureId) {
-            mat_data.albedo_texture = get_or_create_default_white_texture();
+        mat_data.occlusion_texture = texture(aiTextureType_AMBIENT_OCCLUSION);
+        if (gltf && mat_data.occlusion_texture == InvalidTextureId) mat_data.occlusion_texture = texture(aiTextureType_LIGHTMAP);
+        mat_data.emissive_texture = texture(aiTextureType_EMISSION_COLOR);
+        if (mat_data.emissive_texture == InvalidTextureId) mat_data.emissive_texture = texture(aiTextureType_EMISSIVE);
+        mat_data.opacity_texture = texture(aiTextureType_OPACITY);
+        if (gltf) {
+            const std::string mode = gltf_alpha.C_Str();
+            if (mode == "MASK") mat_data.alpha_mode = AlphaMode::Mask;
+            else if (mode == "BLEND") mat_data.alpha_mode = AlphaMode::Blend;
+            mat_data.alpha_cutoff = scalar(AI_MATKEY_GLTF_ALPHACUTOFF, 0.5f, 0.0f, 1.0f);
+            // Assimp writes alphaCutoff even for OPAQUE; it does not imply MASK.
+        } else if (mat_data.opacity_texture != InvalidTextureId || mat_data.base_color[3] < 1.0f) {
+            mat_data.alpha_mode = AlphaMode::Blend;
         }
 
         material_map[i] = static_cast<std::uint32_t>(scene.data.materials.size());

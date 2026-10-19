@@ -71,7 +71,9 @@ Horizon::HardwareImage make_geometry_texture(uint32_t width,
     const std::size_t blocks_w = (static_cast<std::size_t>(width) + 3) / 4;
     const std::size_t blocks_h = (static_cast<std::size_t>(height) + 3) / 4;
     switch (format) {
+        case Horizon::Format::BC1_UNORM:
         case Horizon::Format::BC1_UNORM_SRGB: return blocks_w * blocks_h * 8;   // 8B / 4x4 块
+        case Horizon::Format::BC3_UNORM:
         case Horizon::Format::BC3_UNORM_SRGB: return blocks_w * blocks_h * 16;  // 16B / 4x4 块
         default:                              return static_cast<std::size_t>(width) * height * 4;  // RGBA8
     }
@@ -106,6 +108,79 @@ bool upload_geometry_texture(Horizon::HardwareImage& texture,
                         label, exc.what());
         return false;
     }
+}
+
+// Cache colour/data views separately, but share MR/AO and repeated materials.
+const SceneGpuTextureCache::Entry& load_material_image(
+    SceneGpuTextureCache& cache, std::uint64_t id, bool srgb) {
+    auto& entries = srgb ? cache.entries : cache.linear_entries;
+    if (auto found = entries.find(id); found != entries.end()) return found->second;
+    SceneGpuTextureCache::Entry entry;
+    auto image = Resource::ResourceManager::get_instance().acquire_read<Resource::Image>(id);
+    if (image && image->get_width() > 0 && image->get_height() > 0) {
+        const auto width = static_cast<std::uint32_t>(image->get_width());
+        const auto height = static_cast<std::uint32_t>(image->get_height());
+        auto format = srgb ? Horizon::Format::SRGBA8_UNORM : Horizon::Format::RGBA8_UNORM;
+        std::vector<unsigned char> rgba;
+        std::span<const std::byte> bytes;
+        if (image->is_compressed()) {
+            const auto& compressed = image->get_compressed_data();
+            if (compressed.format == Resource::CompressedData::Format::BC1) {
+                format = srgb ? Horizon::Format::BC1_UNORM_SRGB : Horizon::Format::BC1_UNORM;
+                bytes = std::as_bytes(std::span(compressed.data));
+            } else if (compressed.format == Resource::CompressedData::Format::BC3) {
+                format = srgb ? Horizon::Format::BC3_UNORM_SRGB : Horizon::Format::BC3_UNORM;
+                bytes = std::as_bytes(std::span(compressed.data));
+            }
+        } else if (const auto* src = image->get_data()) {
+            const int channels = image->get_channels();
+            const auto pixels = std::size_t(width) * height;
+            if (channels == 4) bytes = std::as_bytes(std::span(src, pixels * 4));
+            else if (channels >= 1 && channels <= 3) {
+                rgba.resize(pixels * 4);
+                for (std::size_t i = 0; i < pixels; ++i) {
+                    for (int c = 0; c < 3; ++c) rgba[4*i+c] = src[channels*i + (channels < 3 ? 0 : c)];
+                    rgba[4*i+3] = channels == 2 ? src[channels*i+1] : 255;
+                }
+                bytes = std::as_bytes(std::span(rgba));
+            }
+        }
+        if (!bytes.empty()) {
+            entry.image = make_geometry_texture(width, height, format,
+                srgb ? "geometry.material.srgb" : "geometry.material.linear");
+            if (upload_geometry_texture(entry.image, bytes, "material")) {
+                entry.valid = true;
+                entry.gpu_bytes = gpu_texture_bytes(format, width, height);
+                entry.mem = std::make_shared<Memory::GpuMemToken>(Memory::ResKind::Texture, entry.gpu_bytes);
+            }
+        }
+    }
+    if (!entry.valid) {
+        entry.image = {};
+        CFW_LOG_WARNING("[GeometryMeshBuilder] Material texture unavailable (id={}, srgb={}); using authored factor", id, srgb);
+    }
+    return entries.emplace(id, std::move(entry)).first->second;
+}
+
+std::shared_ptr<const MeshMaterialDevice> make_material(
+    const Resource::Scene& scene, std::uint32_t index, SceneGpuTextureCache& cache) {
+    if (auto found = cache.materials.find(index); found != cache.materials.end()) return found->second;
+    auto material = std::make_shared<MeshMaterialDevice>();
+    if (index < scene.data.materials.size()) material->source = scene.data.materials[index];
+    const auto& source = material->source;
+    const std::array ids{source.albedo_texture, source.normal_texture,
+        source.metallic_texture, source.roughness_texture, source.occlusion_texture,
+        source.emissive_texture, source.specular_texture, source.specular_color_texture};
+    for (std::size_t slot = 0; slot < ids.size(); ++slot) {
+        if (ids[slot] == Resource::InvalidTextureId) continue;
+        const bool colour = slot == MeshMaterialDevice::BaseColor ||
+            slot == MeshMaterialDevice::Emissive || slot == MeshMaterialDevice::SpecularColor;
+        const auto& image = load_material_image(cache, ids[slot], colour);
+        material->textures[slot] = image.image;
+        material->memory[slot] = image.mem;
+    }
+    cache.materials.emplace(index, material);
+    return material;
 }
 
 // ----------------------------------------------------------------------------
@@ -151,8 +226,6 @@ std::vector<MeshDevice> build_mesh_devices_from_scene_range(
 
     Horizon::HardwareImage& placeholder_texture = get_placeholder_texture();
 
-    auto& resource_manager = Resource::ResourceManager::get_instance();
-
     const std::size_t end_mesh = std::min(first_mesh + mesh_count, scene.data.meshes.size());
     std::vector<MeshDevice> mesh_devices;
     mesh_devices.reserve(end_mesh - first_mesh);
@@ -193,136 +266,13 @@ std::vector<MeshDevice> build_mesh_devices_from_scene_range(
         dev.mesh_mem = Corona::Memory::GpuMemToken(Corona::Memory::ResKind::Mesh,
             buffers.byte_size);
 
-        // ---- 材质索引 ----
-        // material_index 指向 scene.data.materials 数组
-        // InvalidIndex（最大值）表示无材质 → 降级为 0（使用默认材质）
-        dev.materialIndex = (mesh.material_index != Resource::InvalidIndex)
-                                ? mesh.material_index                    // 有效材质索引
-                                : 0;                                    // 降级为默认材质
-
-        // ---- 读取材质颜色（base_color：RGBA 漫反射颜色）----
-        if (mesh.material_index != Resource::InvalidIndex &&
-            mesh.material_index < scene.data.materials.size()) {
-            dev.materialColor = scene.data.materials[mesh.material_index].base_color;
-        }
-
-        // ---- 纹理处理：按唯一 texture_id 共享 GPU 纹理 ----
-        // 同一个 albedo texture_id 在第一处遇到时创建并立即上传；后续 mesh 只复用
-        // 同一个 HardwareImage 句柄。
-        bool texture_created = false;
-        uint32_t texture_width = 0;
-        uint32_t texture_height = 0;
-        Horizon::Format texture_format = Horizon::Format::SRGBA8_UNORM;
-
-        if (mesh.material_index != Resource::InvalidIndex &&
-            mesh.material_index < scene.data.materials.size()) {
-            const auto texture_id = scene.data.materials[mesh.material_index].albedo_texture;
-            if (texture_id != Resource::InvalidTextureId) {
-                const auto cache_it = texture_cache.entries.find(texture_id);
-                if (cache_it != texture_cache.entries.end()) {
-                    dev.textureBuffer = cache_it->second.image;
-                    dev.tex_mem = cache_it->second.mem;
-                    texture_created = cache_it->second.valid;
-                } else {
-                    SceneGpuTextureCache::Entry entry;
-                    auto texture_data = resource_manager.acquire_read<Resource::Image>(texture_id);
-                    if (texture_data && texture_data->get_data() != nullptr) {
-                        const int tex_width    = texture_data->get_width();
-                        const int tex_height   = texture_data->get_height();
-                        const int tex_channels = texture_data->get_channels();
-                        if (tex_width > 0 && tex_height > 0 && tex_channels > 0) {
-                            texture_width = static_cast<uint32_t>(tex_width);
-                            texture_height = static_cast<uint32_t>(tex_height);
-
-                            std::vector<unsigned char> converted_rgba;
-                            std::span<const std::byte> upload_bytes;
-                            bool supported_format = true;
-
-                            if (texture_data->is_compressed()) {
-                                const auto& compressed = texture_data->get_compressed_data();
-                                if (compressed.format == Resource::CompressedData::Format::BC1) {
-                                    texture_format = Horizon::Format::BC1_UNORM_SRGB;
-                                } else if (compressed.format == Resource::CompressedData::Format::BC3) {
-                                    texture_format = Horizon::Format::BC3_UNORM_SRGB;
-                                } else if (compressed.format == Resource::CompressedData::Format::ASTC_4x4) {
-                                    CFW_LOG_WARNING("[GeometryMeshBuilder] ASTC_4x4 texture is not "
-                                                    "supported by current Horizon format enum; "
-                                                    "using placeholder texture");
-                                    supported_format = false;
-                                }
-                                if (supported_format && !compressed.data.empty()) {
-                                    upload_bytes = std::span<const std::byte>(
-                                        reinterpret_cast<const std::byte*>(compressed.data.data()),
-                                        compressed.data.size());
-                                }
-                            } else {
-                                texture_format = Horizon::Format::SRGBA8_UNORM;
-                                unsigned char* src_data = texture_data->get_data();
-                                const std::size_t pixel_count =
-                                    static_cast<std::size_t>(tex_width) * tex_height;
-                                if (tex_channels == 4) {
-                                    upload_bytes = std::span<const std::byte>(
-                                        reinterpret_cast<const std::byte*>(src_data),
-                                        pixel_count * 4);
-                                } else if (tex_channels == 3) {
-                                    converted_rgba.resize(pixel_count * 4);
-                                    for (std::size_t i = 0; i < pixel_count; ++i) {
-                                        converted_rgba[i * 4 + 0] = src_data[i * 3 + 0];
-                                        converted_rgba[i * 4 + 1] = src_data[i * 3 + 1];
-                                        converted_rgba[i * 4 + 2] = src_data[i * 3 + 2];
-                                        converted_rgba[i * 4 + 3] = 255;
-                                    }
-                                    upload_bytes = std::span<const std::byte>(
-                                        reinterpret_cast<const std::byte*>(converted_rgba.data()),
-                                        converted_rgba.size());
-                                } else if (tex_channels == 1) {
-                                    converted_rgba.resize(pixel_count * 4);
-                                    for (std::size_t i = 0; i < pixel_count; ++i) {
-                                        converted_rgba[i * 4 + 0] = src_data[i];
-                                        converted_rgba[i * 4 + 1] = src_data[i];
-                                        converted_rgba[i * 4 + 2] = src_data[i];
-                                        converted_rgba[i * 4 + 3] = 255;
-                                    }
-                                    upload_bytes = std::span<const std::byte>(
-                                        reinterpret_cast<const std::byte*>(converted_rgba.data()),
-                                        converted_rgba.size());
-                                }
-                            }
-
-                            if (supported_format && !upload_bytes.empty()) {
-                                entry.image = make_geometry_texture(
-                                    texture_width, texture_height, texture_format,
-                                    "geometry.material_texture");
-                                if (upload_geometry_texture(entry.image, upload_bytes, "material")) {
-                                    entry.gpu_bytes = gpu_texture_bytes(
-                                        texture_format, texture_width, texture_height);
-                                    entry.mem = std::make_shared<Corona::Memory::GpuMemToken>(
-                                        Corona::Memory::ResKind::Texture, entry.gpu_bytes);
-                                    entry.valid = true;
-                                    texture_created = true;
-                                    dev.textureBuffer = entry.image;
-                                    dev.tex_mem = entry.mem;
-                                } else {
-                                    CFW_LOG_WARNING("[GeometryMeshBuilder] Failed to upload material "
-                                                    "texture (mesh={}, texture_id={}); using placeholder",
-                                                    mesh_idx, texture_id);
-                                }
-                            }
-                        }
-                    }
-                    if (!entry.valid) {
-                        entry.image = placeholder_texture;
-                    }
-                    texture_cache.entries.emplace(texture_id, std::move(entry));
-                }
-            }
-        }
-
-        // ---- 无纹理/纹理失败：使用共享白色占位纹理 ----
-        if (!texture_created) {
-            dev.textureBuffer = placeholder_texture;
-            dev.tex_mem.reset();
-        }
+        dev.materialIndex = mesh.material_index;
+        dev.material = make_material(scene, mesh.material_index, texture_cache);
+        dev.materialColor = dev.material->source.base_color;
+        dev.textureBuffer = dev.material->textures[MeshMaterialDevice::BaseColor];
+        dev.tex_mem = dev.material->memory[MeshMaterialDevice::BaseColor];
+        const bool texture_created = static_cast<bool>(dev.textureBuffer);
+        if (!dev.textureBuffer) dev.textureBuffer = placeholder_texture;
 
         if (!dev.vertexBuffer || !dev.indexBuffer ||
             !dev.vertexStorageBuffer || !dev.indexStorageBuffer ||
