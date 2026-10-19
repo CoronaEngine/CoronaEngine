@@ -29,6 +29,12 @@
 // 前向声明 Hardware 结构体
 struct Hardware;
 
+#ifdef CORONA_ENABLE_VISION
+namespace ocarina {
+class Device;
+}
+#endif
+
 namespace Corona::Systems {
 
 class GeometrySystem;  // 前向声明，用于 LOD 查询
@@ -94,6 +100,7 @@ class OpticsSystem : public Kernel::SystemBase {
    private:
     friend struct VisionEmbeddedModeSwitchTest;
     friend struct VisionRuntimeGeometrySyncTest;
+    friend struct VisionDeviceLifetimeTest;
     bool initialize_vision_backend_if_enabled();
     bool initialize_hardware_resources();
     bool initialize_render_pipelines();
@@ -185,6 +192,7 @@ class OpticsSystem : public Kernel::SystemBase {
     void evict_idle_vision_runtimes(uint64_t frame_index);
     void activate_single_vision_runtime_key(const VisionPipelineKey& key);
     void clear_vision_runtimes();
+    void shutdown_vision_backend();
 
     /// 渲染线程起始处消费：若存在 pending 加载请求则切换 Vision 场景。
     /// 仅在 Vision 已初始化后执行；空路径表示卸载外部场景、回到引擎构建场景。
@@ -235,6 +243,9 @@ class OpticsSystem : public Kernel::SystemBase {
     std::size_t last_vision_mode_conflict_signature_{0};
     std::size_t last_vision_runtime_group_signature_{0};
     std::optional<VisionPipelineKey> active_vision_runtime_key_;
+    // Declared before the dependents so they are also destroyed first during
+    // ordinary C++ destruction. Normal engine shutdown releases this explicitly.
+    std::unique_ptr<ocarina::Device> vision_device_;
     std::unordered_map<VisionPipelineKey,
                        std::unique_ptr<VisionPipelineRuntime>,
                        VisionPipelineKeyHash>

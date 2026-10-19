@@ -61,6 +61,8 @@ Vision 的计算后端默认是 Horizon/Ocarina 的 `vulkan-compute`。可在同
 `"vision": { "backend": "cuda" }` 切回 CUDA，或设为 `"vulkan-compute"` 使用 Vulkan。
 `CORONA_VISION_BACKEND` 环境变量优先于配置文件；`vulkan` 是 `vulkan-compute` 的别名。
 切换后须重启引擎。相机的渲染后端仍选择 `vision`，再独立选择 ReSTIR、降噪器和降噪开关。
+计算设备由 OpticsSystem 持有，场景切换时复用；关闭时先释放共享输出、管线与场景资源，
+再显式销毁设备，避免依赖进程终止时不会执行的静态析构。
 Vulkan 运行文件（后端 DLL、Slang DLL 和 `slang/` 内建着色器）由 `corona_engine_vision_runtime` 自动部署。
 
 两种计算后端均通过可导出的缓冲区向引擎传递线性 HDR 颜色，显示端共用曝光、ACES 和 sRGB 转换。
@@ -71,6 +73,10 @@ Vulkan 共享内存校验 GPU/驱动 UUID 并执行跨实例资源所有权交�
 默认到 54°C 提前终止本次测试的进程树，遥测失败也会停止测试；这不能代替硬件自身的温度保护。
 可用 `--limit 60` 将停止阈值明确设为 60°C，程序不接受更高值；温度约每 100 ms 采样一次。
 运行记录同时保存实际可执行文件和后端 DLL 的 SHA-256，便于确认测试所用构建。
+启动前若 NVIDIA 仍报告 `corona_engine.exe` 或 `vision-eval.exe` 的 GPU 上下文，测试会拒绝启动。
+退出后同时检查进程树和驱动上下文是否回收，记录各 GPU 的显存初值、峰值、结束值与差值；
+显存差值是整张 GPU 的读数，也可能受其它桌面应用影响，不能单独作为内存泄漏证据。
+温度中止、异常退出、遥测失败或回收不完整都会返回非零退出码，阻止批量测试继续运行。
 静态前端验证可设置 `CORONA_OPTICS_MAX_FPS=2`。独立 `vision-eval` 可设置
 `VISION_EVAL_FRAME_INTERVAL_MS=500` 在帧间休息；输出的渲染计时不包含休息时间，
 `frame_interval_ms` 会写入指标，因此该场景下的 `average_fps` 表示渲染耗时的倒数，而非实际显示帧率。

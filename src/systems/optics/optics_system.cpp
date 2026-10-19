@@ -1811,8 +1811,6 @@ bool upload_instance_tables(const RenderInstanceBatch& batch,
 }
 
 #ifdef CORONA_ENABLE_VISION
-vision::Device* visionDevicePtr = nullptr;
-
 [[nodiscard]] auto make_default_vision_project_desc() -> vision::ProjectDesc {
     // Each *Desc has in-class default initializers; the overridden
     // init(const ParameterSet&) is only used for JSON-driven configuration.
@@ -2533,9 +2531,9 @@ struct OpticsSystem::VisionPipelineRuntime {
             interop_submissions.size(),
             retained_contexts.size());
         if (pipeline) {
-            CFW_LOG_INFO("OpticsSystem: Vision runtime teardown committing CUDA work");
+            CFW_LOG_INFO("OpticsSystem: Vision runtime teardown committing compute work");
             pipeline->commit_command();
-            CFW_LOG_INFO("OpticsSystem: Vision runtime teardown CUDA work committed");
+            CFW_LOG_INFO("OpticsSystem: Vision runtime teardown compute work committed");
         }
         Vision::drain_vision_interop_submissions(
             interop_submissions,
@@ -3074,6 +3072,24 @@ void OpticsSystem::clear_vision_runtimes() {
     vision_scene_resources_.clear();
     active_vision_runtime_key_.reset();
     last_vision_runtime_group_signature_ = 0;
+}
+
+void OpticsSystem::shutdown_vision_backend() {
+    // Join stream workers and release shared imports, pipelines and scene GPU
+    // resources before invoking the backend's Device deleter. The executable
+    // ultimately calls TerminateProcess, so a function-static Device would
+    // never run its cleanup callbacks or release its Vulkan/CUDA context.
+    clear_vision_runtimes();
+    if (vision_device_) {
+        CFW_LOG_INFO("OpticsSystem: destroying Vision compute device");
+        auto& global = vision::Global::instance();
+        global.set_pipeline(nullptr);
+        vision::ImagePool::destroy_instance();
+        vision_device_.reset();
+        global.set_device(nullptr);
+        CFW_LOG_INFO("OpticsSystem: Vision compute device destroyed");
+    }
+    vision_initialized_ = false;
 }
 #endif
 
@@ -5751,7 +5767,7 @@ void OpticsSystem::shutdown() {
     native_view_resources_.clear();
     ui_view_resources_.clear();
 #ifdef CORONA_ENABLE_VISION
-    clear_vision_runtimes();
+    shutdown_vision_backend();
 #endif
     hardware_.reset();
 
@@ -6641,38 +6657,39 @@ void OpticsSystem::sync_engine_native_mixed_shapes(VisionPipelineRuntime& runtim
 bool OpticsSystem::init_vision_lazy() {
     if (vision_initialized_) return true;
     try {
-        // ocarina::Device is non-default-constructible; use auto so the type is
-        // deduced from create_device(). Function-local static ensures single init.
-        static auto s_device = [] {
-            // Engine deployment puts Vision plugins beside the executable. The
-            // standalone hotfix setup may have registered ../bin first; its
-            // missing DLL aborts loading before the runtime directory is tried.
-            auto runtime_directory = std::filesystem::current_path();
+        // Keep the device across scene changes, but release it explicitly in
+        // shutdown instead of relying on static destruction after process exit.
+        if (!vision_device_) {
+            vision_device_ = std::make_unique<ocarina::Device>([] {
+                // Engine deployment puts Vision plugins beside the executable. The
+                // standalone hotfix setup may have registered ../bin first; its
+                // missing DLL aborts loading before the runtime directory is tried.
+                auto runtime_directory = std::filesystem::current_path();
 #ifdef _WIN32
-            std::vector<wchar_t> executable_path(32768);
-            const auto length = GetModuleFileNameW(
-                nullptr, executable_path.data(), static_cast<DWORD>(executable_path.size()));
-            if (length == 0 || length >= executable_path.size()) {
-                throw std::runtime_error("Cannot resolve the Vision runtime directory");
-            }
-            runtime_directory = std::filesystem::path(
-                std::wstring(executable_path.data(), length)).parent_path();
+                std::vector<wchar_t> executable_path(32768);
+                const auto length = GetModuleFileNameW(
+                    nullptr, executable_path.data(), static_cast<DWORD>(executable_path.size()));
+                if (length == 0 || length >= executable_path.size()) {
+                    throw std::runtime_error("Cannot resolve the Vision runtime directory");
+                }
+                runtime_directory = std::filesystem::path(
+                    std::wstring(executable_path.data(), length)).parent_path();
 #endif
-            auto& context = ocarina::RHIContext::instance();
-            ocarina::DynamicModule::clear_search_path();
-            context.init(runtime_directory);
-            const char* configured_backend = std::getenv("CORONA_VISION_BACKEND");
-            std::string backend = configured_backend ? configured_backend : "vulkan-compute";
-            if (backend == "vulkan") backend = "vulkan-compute";
-            if (backend != "cuda" && backend != "vulkan-compute") {
-                throw std::runtime_error("CORONA_VISION_BACKEND must be cuda or vulkan-compute");
-            }
-            CFW_LOG_INFO("OpticsSystem: Vision compute backend = {}", backend);
-            return context.create_device(backend.c_str());
-        }();
-        visionDevicePtr = &s_device;
-        visionDevicePtr->init_rtx();
-        vision::Global::instance().set_device(visionDevicePtr);
+                auto& context = ocarina::RHIContext::instance();
+                ocarina::DynamicModule::clear_search_path();
+                context.init(runtime_directory);
+                const char* configured_backend = std::getenv("CORONA_VISION_BACKEND");
+                std::string backend = configured_backend ? configured_backend : "vulkan-compute";
+                if (backend == "vulkan") backend = "vulkan-compute";
+                if (backend != "cuda" && backend != "vulkan-compute") {
+                    throw std::runtime_error("CORONA_VISION_BACKEND must be cuda or vulkan-compute");
+                }
+                CFW_LOG_INFO("OpticsSystem: Vision compute backend = {}", backend);
+                return context.create_device(backend.c_str());
+            }());
+        }
+        vision_device_->init_rtx();
+        vision::Global::instance().set_device(vision_device_.get());
         vision::Global::instance().set_scene_path(std::filesystem::current_path());
 
 #ifdef CORONA_VISION_IMPORT_DEMO
@@ -6985,7 +7002,7 @@ void OpticsSystem::run_vision_frame(float frame_count, uint64_t frame_index) {
                 const uint64_t pixel_count = static_cast<uint64_t>(w) * static_cast<uint64_t>(h);
                 std::optional<uint32_t> vision_src_descriptor;
                 bool used_zero_copy = false;
-                if (visionDevicePtr->supports_buffer_export() &&
+                if (vision_device_->supports_buffer_export() &&
                     !vision_zero_copy_forced_disabled() &&
                     !runtime.zero_copy_disabled.contains(cam_handle)) {
                     // CUDA is about to write the shared allocation. The preceding Vulkan

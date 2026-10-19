@@ -11,7 +11,7 @@ import ctypes
 import hashlib
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 import subprocess
 import queue
 import threading
@@ -105,6 +105,44 @@ def temperatures():
     return value
 
 
+def renderer_gpu_processes(watched_pids=()):
+    """Include exited processes still retained by the NVIDIA driver on WDDM."""
+    result = subprocess.run(
+        ["nvidia-smi", "--query-compute-apps=pid,process_name", "--format=csv,noheader,nounits"],
+        capture_output=True, text=True, check=True, timeout=3,
+        creationflags=subprocess.CREATE_NO_WINDOW,
+    )
+    processes = {}
+    for row in csv.reader(result.stdout.strip().splitlines()):
+        if not row:
+            continue
+        if len(row) != 2 or not row[0].strip().isdigit():
+            raise RuntimeError("GPU process telemetry unavailable: " + repr(row))
+        pid, name = int(row[0]), row[1].strip()
+        if pid in watched_pids or PureWindowsPath(name).name.lower() in ("corona_engine.exe", "vision-eval.exe"):
+            processes[pid] = dict(pid=pid, executable=name)
+    return list(processes.values())
+
+
+def wait_for_gpu_release(pid, timeout=15):
+    """A signaled process handle alone does not prove GPU resource reclamation."""
+    deadline = time.monotonic() + timeout
+    while True:
+        remaining = [item for item in renderer_gpu_processes([pid]) if item["pid"] == pid]
+        if not remaining or time.monotonic() >= deadline:
+            return remaining
+        time.sleep(.5)
+
+
+def memory_by_gpu(rows):
+    return {str(row[0]): float(row[6]) for row in rows}
+
+
+def successful_run(summary):
+    return (summary["reason"] == "completed" and summary["returncode"] == 0
+            and summary["cleanup_ok"] and summary["gpu_cleanup_ok"])
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
@@ -119,10 +157,23 @@ def main():
     command = args.command[1:] if args.command[:1] == ["--"] else args.command
     if not command:
         parser.error("Missing command")
-    initial = temperatures()
-    if max(row[1] for row in initial) >= args.limit - 3:
-        raise RuntimeError("GPU needs cooling before launch")
     args.output.mkdir(parents=True, exist_ok=True)
+    # Never overwrite a result or accidentally consume a previous run's stop file.
+    if (args.output / "run.json").exists() or (args.output / "stop").exists():
+        parser.error("Use a fresh output directory")
+    try:
+        initial = temperatures()
+        existing = renderer_gpu_processes()
+        if existing:
+            raise RuntimeError("Renderer GPU contexts already exist: " + json.dumps(existing))
+        if max(row[1] for row in initial) >= args.limit:
+            raise RuntimeError("GPU is at the temperature limit before launch")
+    except Exception as error:
+        summary = dict(backend=args.backend, command=command, reason="preflight_blocked",
+                       error=str(error), returncode=None, cleanup_ok=True, gpu_cleanup_ok=False)
+        (args.output / "run.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
+        print(json.dumps(summary), flush=True)
+        return 1
     environment = dict(os.environ, CORONA_VISION_BACKEND=args.backend)
     # Preserve the identity of the actual deployed binaries with every result.
     # Source state alone cannot establish which incremental-build DLL was tested.
@@ -139,6 +190,9 @@ def main():
     process = None
     job = _Job()
     maximum = max(row[1] for row in initial)
+    memory_before = memory_by_gpu(initial)
+    memory_peak = dict(memory_before)
+    watchdog_error = None
     try:
         with (args.output / "stdout.log").open("w", encoding="utf-8") as out, \
              (args.output / "stderr.log").open("w", encoding="utf-8") as err, \
@@ -157,6 +211,8 @@ def main():
                     writer.writerow([round(elapsed, 3), *row])
                 samples.flush()
                 maximum = max(maximum, max(row[1] for row in rows))
+                for gpu, used in memory_by_gpu(rows).items():
+                    memory_peak[gpu] = max(memory_peak.get(gpu, used), used)
                 if maximum >= args.limit:
                     reason = "thermal_cutoff"
                     break
@@ -169,9 +225,9 @@ def main():
                 time.sleep(0.1)
             if reason == "completed" and process.poll() not in (None, 0):
                 reason = "nonzero_exit"
-    except BaseException:
+    except BaseException as error:
         reason = "watchdog_error"
-        raise
+        watchdog_error = repr(error)
     finally:
         cleanup_ok = job.cleanup()
         job.close()
@@ -184,16 +240,40 @@ def main():
         except (OSError, subprocess.TimeoutExpired) as error:
             cleanup_ok = False
             cleanup_error = str(error)
+        remaining = []
+        gpu_cleanup_ok = process is None
+        memory_after = {}
+        try:
+            if process is not None:
+                remaining = wait_for_gpu_release(process.pid)
+                gpu_cleanup_ok = not remaining
+            final_rows = temperatures()
+            maximum = max(maximum, max(row[1] for row in final_rows))
+            memory_after = memory_by_gpu(final_rows)
+        except Exception as error:
+            gpu_cleanup_ok = False
+            cleanup_error = str(error)
+        if not cleanup_ok or not gpu_cleanup_ok:
+            if reason == "completed":
+                reason = "cleanup_failed"
+        if maximum >= args.limit and reason == "completed":
+            reason = "thermal_cutoff"
         summary = dict(backend=args.backend, command=command, reason=reason,
                        binary_fingerprints=binary_fingerprints,
                        telemetry="nvml" if _monitor else "nvidia-smi",
                        max_temperature_c=maximum, cutoff_temperature_c=args.limit,
                        elapsed_s=time.monotonic() - start,
                        returncode=process.returncode if process else None, cleanup_ok=cleanup_ok,
-                       cleanup_error=cleanup_error)
+                       gpu_cleanup_ok=gpu_cleanup_ok, remaining_gpu_processes=remaining,
+                       memory_before_mib=memory_before, memory_peak_mib=memory_peak,
+                       memory_after_mib=memory_after,
+                       memory_delta_mib={gpu: round(used-memory_before[gpu], 1)
+                                         for gpu, used in memory_after.items() if gpu in memory_before},
+                       watchdog_error=watchdog_error, cleanup_error=cleanup_error)
         (args.output / "run.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
         print(json.dumps(summary), flush=True)
+    return 0 if successful_run(summary) else 1
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

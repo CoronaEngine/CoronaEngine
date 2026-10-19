@@ -197,7 +197,8 @@ int main(int argc, char* argv[]) {
     // 使用 TerminateProcess 强杀自身，跳过 DLL_PROCESS_DETACH / atexit。
     // ExitProcess / return 0 在执行 DLL detach 时会被 torch_python.dll、
     // python313.dll 或 libcef.dll 的全局析构/DllMain 阻塞，导致僵尸进程。
-    // TerminateProcess 直接通知内核终止，OS 回收所有资源。
+    // GPU 设备须已在 engine.shutdown() 中显式释放；若驱动 I/O 已阻塞，
+    // 终止请求本身不能保证 GPU 上下文立即回收。
     TerminateProcess(GetCurrentProcess(), 0);
 
     // 永远不会执行到这里，但保留以消除编译器警告

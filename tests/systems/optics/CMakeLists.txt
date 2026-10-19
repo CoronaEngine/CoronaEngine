@@ -122,6 +122,16 @@ if(CORONA_BUILD_VISION)
     set_tests_properties(VisionInteropLifetimeTests PROPERTIES
         WORKING_DIRECTORY "$<TARGET_FILE_DIR:vision-material-principled_bsdf>")
 
+    add_executable(corona_vision_device_lifetime_tests test_vision_device_lifetime.cpp)
+    target_include_directories(corona_vision_device_lifetime_tests PRIVATE
+        ${PROJECT_SOURCE_DIR}/include ${CMAKE_SOURCE_DIR}/vision/src)
+    target_link_libraries(corona_vision_device_lifetime_tests PRIVATE
+        corona::engine vision-all_libs)
+    add_test(NAME VisionDeviceLifetimeTests COMMAND corona_vision_device_lifetime_tests)
+    set_tests_properties(VisionDeviceLifetimeTests PROPERTIES
+        WORKING_DIRECTORY "$<TARGET_FILE_DIR:vision-material-principled_bsdf>"
+        LABELS "cpu;vision;lifetime" TIMEOUT 30)
+
     add_executable(corona_vision_geometry_gpu_resource_tests
         test_vision_geometry_gpu_resource.cpp
     )

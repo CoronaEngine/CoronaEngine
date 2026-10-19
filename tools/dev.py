@@ -67,6 +67,7 @@ VISION_TEST_TARGETS = {
     "corona_vision_pipeline_key_tests",
     "corona_vision_scene_resource_tests",
     "corona_vision_interop_lifetime_tests",
+    "corona_vision_device_lifetime_tests",
     "corona_vision_geometry_gpu_resource_tests",
 }
 
