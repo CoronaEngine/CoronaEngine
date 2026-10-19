@@ -138,7 +138,7 @@ struct MaterialInfo
 
 MaterialInfo loadMaterialInfo(uint materialID)
 {
-    uint base = materialID * 16u;
+    uint base = materialID * 32u;
     MaterialInfo mat;
     mat.textureDescriptor = readUint(pushConsts.materialTableBufferIndex, base);
     mat.materialColor = readVec4(pushConsts.materialTableBufferIndex, base + 12u);

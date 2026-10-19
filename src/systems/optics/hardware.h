@@ -233,7 +233,8 @@ struct Hardware {
                   "InstanceInfo flags offset must match shaders");
 
     // === GPU-side material table (matches GLSL MaterialInfo layout) ===
-    // 64 bytes = 16 uints per entry:
+    // 128 bytes = 32 uints per entry. The first 16 retain the legacy layout;
+    // the remaining words carry model texture bindings and linear factors.
     //   [0]      textureDescriptor
     //   [1]      metallic  (as float bits)
     //   [2]      roughness (as float bits)
@@ -256,16 +257,30 @@ struct Hardware {
         float specularTint;
         float anisotropic;
         float sheen;
-        float sheenTint;
+        float sheenTint; // MR material (flags bit 5): specular weight; sheen is disabled
         float clearcoat;
         float clearcoatGloss;
         float lightingEnabled;  // 光照开关：1.0=接收光照, 0.0=不受光（始终使用基础颜色）
         ktm::fvec4 materialColor;
+        uint32_t normalDescriptor{};
+        uint32_t metallicDescriptor{};
+        uint32_t roughnessDescriptor{};
+        uint32_t occlusionDescriptor{};
+        uint32_t emissiveDescriptor{};
+        uint32_t specularDescriptor{};
+        uint32_t specularColorDescriptor{};
+        uint32_t flags{}; // metal channel[1:0], rough channel[3:2], double-sided[4], imported MR[5]
+        std::array<float, 3> emissive{0.0f, 0.0f, 0.0f};
+        float normalScale{1.0f};
+        std::array<float, 3> specularColor{1.0f, 1.0f, 1.0f};
+        float occlusionStrength{1.0f};
     };
-    static_assert(sizeof(MaterialInfo) == 16u * sizeof(uint32_t),
-                  "MaterialInfo must match the 16-uint shader layout");
+    static_assert(sizeof(MaterialInfo) == 32u * sizeof(uint32_t),
+                  "MaterialInfo must match the 32-uint shader layout");
     static_assert(offsetof(MaterialInfo, materialColor) == 12u * sizeof(uint32_t),
                   "MaterialInfo materialColor offset must match shaders");
+    static_assert(offsetof(MaterialInfo, emissive) == 24u * sizeof(uint32_t));
+    static_assert(offsetof(MaterialInfo, specularColor) == 28u * sizeof(uint32_t));
 
     // === Render dimensions ===
     ktm::uvec2 gbufferSize{};
