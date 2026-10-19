@@ -204,6 +204,20 @@ def _parse_actor(
                     details={"actor_name": section.get(f"{key}.name", key), "field": field},
                 )
             optics[field] = number
+    material_source = section.get(f"{key}.material.source", fallback="legacy").strip()
+    try:
+        if material_source not in {"legacy", "model", "scene"}:
+            raise ValueError("source must be legacy, model, or scene")
+        material_overrides = json.loads(section.get(f"{key}.material.overrides", fallback="[]"))
+        if not isinstance(material_overrides, list) or len(material_overrides) > 4096 or any(
+            not isinstance(row, dict) for row in material_overrides
+        ):
+            raise ValueError("overrides must contain at most 4096 objects")
+    except (ValueError, TypeError) as exc:
+        raise ArchiveParseError(
+            "INVALID_MATERIAL_CONFIG", f"Invalid material configuration for {key}: {exc}",
+            details={"actor_name": section.get(f"{key}.name", key)},
+        ) from exc
     texture = section.get(f"{key}.material.texture", fallback="").strip().replace("\\", "/")
     if texture:
         optics["texture"] = texture
@@ -315,6 +329,7 @@ def _parse_actor(
             "collision_type": collision,
         },
         "optics": optics,
+        "material": {"source": material_source, "overrides": material_overrides},
         "audio_resource_id": section.get(f"{key}.audio_resource_id", ""),
         "ik_chains": ik_chains,
         "animation_sources": animation_sources,

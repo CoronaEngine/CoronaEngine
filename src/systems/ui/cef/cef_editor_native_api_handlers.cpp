@@ -23,6 +23,7 @@
 #include "ik_chain_config.h"
 #include "animation_config.h"
 #include "model_node_config.h"
+#include "native_material_config.h"
 #include "model_node_page.h"
 #include "scene_tree_actor.h"
 #include "ui_resource_read.h"
@@ -520,6 +521,7 @@ struct NativeEditorActorOpticsState {
     std::optional<float> shininess;
     std::optional<std::array<float, 3>> emission;
     std::string texture;
+    nlohmann::json material = nlohmann::json::object();
 };
 
 enum class ActorLoadStatus {
@@ -1038,25 +1040,16 @@ std::vector<std::string> build_actors_section_lines(const NativeEditorScene& sce
         lines.push_back(key + ".model.node_overrides = " + actor.persisted_model_node_overrides.dump());
         lines.push_back(key + ".model.node_resource = " + actor.model_node_resource);
         lines.push_back(key + ".model.node_unmatched = " + actor.model_node_unmatched.dump());
-        if (actor.load_status != ActorLoadStatus::Loaded) {
-            lines.push_back(key + ".optics.visible = " +
-                            std::string(actor.persisted_visible ? "true" : "false"));
-            if (actor.persisted_optics.diffuse) {
-                lines.push_back(key + ".optics.diffuse = " + format_float3(*actor.persisted_optics.diffuse));
-            }
-            if (actor.persisted_optics.metallic) lines.push_back(key + ".optics.metallic = " + std::to_string(*actor.persisted_optics.metallic));
-            if (actor.persisted_optics.roughness) lines.push_back(key + ".optics.roughness = " + std::to_string(*actor.persisted_optics.roughness));
-            if (actor.persisted_optics.specular) lines.push_back(key + ".optics.specular = " + std::to_string(*actor.persisted_optics.specular));
-            if (actor.persisted_optics.shininess) lines.push_back(key + ".optics.shininess = " + std::to_string(*actor.persisted_optics.shininess));
-        } else if (actor.optics) {
-            lines.push_back(key + ".optics.visible = " +
-                            std::string(actor.optics->get_visible() ? "true" : "false"));
-            lines.push_back(key + ".optics.diffuse = " + format_float3(actor.optics->get_diffuse()));
-            lines.push_back(key + ".optics.metallic = " + std::to_string(actor.optics->get_metallic()));
-            lines.push_back(key + ".optics.roughness = " + std::to_string(actor.optics->get_roughness()));
-            lines.push_back(key + ".optics.specular = " + std::to_string(actor.optics->get_specular()));
-            lines.push_back(key + ".optics.shininess = " + std::to_string(actor.optics->get_shininess()));
-        }
+        lines.push_back(key + ".optics.visible = " + std::string(
+            (actor.optics ? actor.optics->get_visible() : actor.persisted_visible) ? "true" : "false"));
+        if (actor.persisted_optics.diffuse)
+            lines.push_back(key + ".optics.diffuse = " + format_float3(*actor.persisted_optics.diffuse));
+        if (actor.persisted_optics.metallic) lines.push_back(key + ".optics.metallic = " + std::to_string(*actor.persisted_optics.metallic));
+        if (actor.persisted_optics.roughness) lines.push_back(key + ".optics.roughness = " + std::to_string(*actor.persisted_optics.roughness));
+        if (actor.persisted_optics.specular) lines.push_back(key + ".optics.specular = " + std::to_string(*actor.persisted_optics.specular));
+        if (actor.persisted_optics.shininess) lines.push_back(key + ".optics.shininess = " + std::to_string(*actor.persisted_optics.shininess));
+        lines.push_back(key + ".material.source = model");
+        lines.push_back(key + ".material.overrides = " + NativeMaterialConfig::resolve(actor.persisted_optics).dump(-1, ' ', true));
         if (actor.persisted_optics.emission) {
             lines.push_back(key + ".optics.emission = " + format_float3(*actor.persisted_optics.emission));
         }
@@ -1073,7 +1066,7 @@ std::vector<std::string> build_actors_section_lines(const NativeEditorScene& sce
             "camera_lock.enabled", "camera_lock.position_offset", "camera_lock.rotation_offset",
             "geometry.position", "geometry.rotation", "geometry.scale", "ik.chains", "animation.sources",
             "model.node_overrides", "model.node_resource", "model.node_unmatched",
-            "material.texture", "mechanics.body_type", "optics.diffuse", "optics.emission", "optics.metallic",
+            "material.texture", "material.source", "material.overrides", "mechanics.body_type", "optics.diffuse", "optics.emission", "optics.metallic",
             "optics.roughness", "optics.shininess", "optics.specular", "optics.visible",
             "runtime.entity_id", "runtime.asset_id", "runtime.model_ref", "runtime.entity_type",
             "runtime.semantic_role", "runtime.source_plan_id", "runtime.source_batch_id",
@@ -1730,6 +1723,10 @@ NativeEditorActorOpticsState load_native_actor_optics_state(const IniSection& ac
     if (auto texture = optional_ini_string(actors_section, actor_key + ".material.texture")) {
         state.texture = *texture;
     }
+    state.material["source"] = optional_ini_string(actors_section, actor_key + ".material.source").value_or("legacy");
+    state.material["overrides"] = nlohmann::json::parse(
+        optional_ini_string(actors_section, actor_key + ".material.overrides").value_or("[]"));
+    (void)NativeMaterialConfig::resolve(state);
     return state;
 }
 
@@ -1752,6 +1749,20 @@ void apply_native_actor_optics_state(NativeEditorActor& item) {
     if (item.persisted_optics.shininess) {
         item.optics->set_shininess(*item.persisted_optics.shininess);
     }
+    auto overrides = std::make_shared<const Corona::Materials::Overrides>(
+        NativeMaterialConfig::parse(NativeMaterialConfig::resolve(item.persisted_optics)));
+    auto& hub = Corona::SharedDataHub::instance();
+    if (item.engine_actor) {
+        if (auto actor = hub.actor_storage().acquire_read(item.engine_actor->get_handle())) {
+            for (const auto handle : actor->profile_handles) {
+                auto profile = hub.profile_storage().acquire_read(handle);
+                if (!profile || profile->geometry_handle != item.geometry->get_handle()) continue;
+                if (auto write = hub.optics_storage().acquire_write(profile->optics_handle))
+                    write->material_overrides = overrides;
+            }
+        }
+    }
+
 }
 
 NativeEditorActor& add_native_actor_to_scene(NativeEditorScene& scene,
@@ -1802,7 +1813,6 @@ NativeEditorActor& add_native_actor_to_scene(NativeEditorScene& scene,
     item.optics = std::make_unique<Corona::API::Optics>(*item.geometry);
     item.mechanics = std::make_unique<Corona::API::Mechanics>(*item.geometry);
     item.acoustics = std::make_unique<Corona::API::Acoustics>(*item.geometry);
-    apply_native_actor_optics_state(item);
     if (item.actor_type == "ui_image") {
         item.optics->set_lighting_enabled(false);
         item.mechanics->set_body_type("phantom");
@@ -1824,6 +1834,7 @@ NativeEditorActor& add_native_actor_to_scene(NativeEditorScene& scene,
     profile.acoustics = item.acoustics.get();
     auto* profile_ref = item.engine_actor->add_profile(profile);
     item.engine_actor->set_active_profile(profile_ref);
+    apply_native_actor_optics_state(item);
     item.engine_actor->set_actor_guid(item.actor_guid);
     item.engine_actor->set_follow_camera(item.follow_camera);
     scene.engine_scene->add_actor(item.engine_actor.get());
@@ -2360,6 +2371,8 @@ NativeEditorActor native_actor_from_snapshot(const nlohmann::json& actor_data) {
         item.persisted_optics.emission = snapshot_float3(optics["emission"], {0.0f, 0.0f, 0.0f});
     }
     item.persisted_optics.texture = optics.value("texture", std::string{});
+    item.persisted_optics.material = actor_data.value("material", nlohmann::json::object());
+    (void)NativeMaterialConfig::resolve(item.persisted_optics);
     const auto audio_id = actor_data.value("audio_resource_id", std::string{});
     if (!audio_id.empty()) {
         try { item.audio_resource_id = std::stoull(audio_id); } catch (...) { item.audio_resource_id = 0; }
@@ -3018,9 +3031,8 @@ nlohmann::json actor_to_json(const NativeEditorScene& scene, const NativeEditorA
             item["optics"]["emission"] = *actor.persisted_optics.emission;
         }
     }
-    if (!actor.persisted_optics.texture.empty()) {
-        item["material"] = {{"texture", actor.persisted_optics.texture}};
-    }
+    item["material"] = {{"source", "model"}, {"overrides", NativeMaterialConfig::resolve(actor.persisted_optics)}};
+    if (!actor.persisted_optics.texture.empty()) item["material"]["texture"] = actor.persisted_optics.texture;
     item["camera_lock"] = {
         {"enabled", actor.camera_lock_enabled},
         {"lock_to_camera", actor.camera_lock_enabled},
@@ -4336,6 +4348,10 @@ PendingNetworkActorApplyOutcome apply_pending_network_actor_state(
             !apply_optics_float("shininess", actor->persisted_optics.shininess)) {
             return pending_actor_outcome(PendingNetworkActorApplyResult::Discard,
                                          "Remote actor optics contains a non-finite value");
+        }
+        if (actor_data.contains("material")) {
+            NativeMaterialConfig::validate(actor_data["material"]);
+            actor->persisted_optics.material = actor_data["material"];
         }
         apply_native_actor_optics_state(*actor);
 
@@ -6577,6 +6593,7 @@ void persist_vision_proxy_actors_from_document(const std::filesystem::path& proj
         actors[key + ".geometry.scale"] = format_float3(scale);
         actors[key + ".optics.visible"] = vision_shape_visible(shape) ? "true" : "false";
         const auto& material = json_object_or_empty(params, "material");
+        if (!material.empty()) actors[key + ".material.source"] = "scene";
         if (!material.empty()) {
             if (material.contains("base_color")) actors[key + ".optics.diffuse"] = format_float3(json_float3_or(material["base_color"], {0.8f, 0.8f, 0.8f}));
             if (material.contains("metallic")) actors[key + ".optics.metallic"] = material["metallic"].dump();
