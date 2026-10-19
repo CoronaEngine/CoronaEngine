@@ -84,6 +84,34 @@ public:
         return 1.f - fresnel_->evaluate(1.f).average();
     }
 
+    [[nodiscard]] Float3 denoiser_specular_fraction_local(const Float3 &wo, const Float3 &wi) const noexcept override {
+        auto all = evaluate_local_impl(wo, wi, MaterialEvalMode::F, BxDFFlag::All, TransportMode::Radiance).f.vec3();
+        auto spec = specular_->f(wo, wi, fresnel_.ptr(), TransportMode::Radiance).vec3();
+        return saturate(spec / max(all, make_float3(1e-20f)));
+    }
+    void denoiser_albedos(const Float &cos_theta, SampledSpectrum &diffuse, SampledSpectrum &specular) const noexcept override {
+        Float mu = max(abs(cos_theta), 1e-5f);
+        specular = fresnel_->evaluate(mu);
+        // Four-point Gauss integration of incoming transmission/absorption.
+        // The outgoing factors and substrate compensation match evaluate_local_impl.
+        constexpr float nodes[]{.0694318442f, .3300094782f, .6699905218f, .9305681558f};
+        constexpr float weights[]{.1739274226f, .3260725774f, .3260725774f, .1739274226f};
+        auto incoming = SampledSpectrum::zero(*swl());
+        for (uint i = 0; i < 4u; ++i) {
+            auto absorption = scaled_sigma_a_.map([&](const Float &sigma) { return ocarina::exp(-sigma / nodes[i]); });
+            incoming += (1.f - fresnel_->evaluate(nodes[i])) * absorption * (2.f * nodes[i] * weights[i]);
+        }
+        auto outgoing_absorption = scaled_sigma_a_.map([&](const Float &sigma) { return ocarina::exp(-sigma / mu); });
+        diffuse = diffuse_->albedo(mu) * safe_div(diffuse_albedo_, 1.f - diffuse_albedo_ * diffuse_fresnel_) *
+                  (1.f - specular) * incoming * outgoing_absorption * eta_inv_sq_;
+    }
+    [[nodiscard]] SampledDirection sample_denoiser_wi_local(const Float3 &wo, TSampler &sampler, bool specular) const noexcept override {
+        auto result = specular ? specular_->sample_wi(wo, sampler->next_2d(), fresnel_.ptr())
+                               : diffuse_->sample_wi(wo, sampler->next_2d(), nullptr);
+        result.valid &= wo.z > 0.f && result.wi.z > 0.f;
+        return result;
+    }
+
     [[nodiscard]] ScatterEval evaluate_local_impl(const Float3 &wo, const Float3 &wi, MaterialEvalMode mode,
                                                   const Uint &flag, TransportMode tm) const noexcept override {
         ScatterEval ret{*swl()};

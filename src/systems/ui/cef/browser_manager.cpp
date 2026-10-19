@@ -1,4 +1,4 @@
-﻿#include "browser_manager.h"
+#include "browser_manager.h"
 
 #include <chrono>
 #include <cstring>
@@ -96,7 +96,11 @@ int BrowserManager::create_tab(const std::string& url, const std::string& path,
                                int initial_x, int initial_y) {
     auto tab = std::make_unique<BrowserTab>();
 
-    int id = ++tab_counter_;
+    int id = 0;
+    {
+        std::lock_guard lock(tabs_mutex_);
+        id = ++tab_counter_;
+    }
     const auto thread_id = std::hash<std::thread::id>{}(std::this_thread::get_id());
 
     // 设置 docking 属性
@@ -191,8 +195,13 @@ int BrowserManager::create_tab(const std::string& url, const std::string& path,
         CefColorSetARGB(transparent_overlay ? 0 : 255, 16, 19, 16);
 
     // Publish before invoking CEF: lifecycle callbacks may arrive before CreateBrowser returns.
-    tabs_[id] = std::move(tab);
-    BrowserTab* registered_tab = tabs_[id].get();
+    BrowserTab* registered_tab = nullptr;
+    {
+        std::lock_guard lock(tabs_mutex_);
+        tabs_[id] = std::move(tab);
+        registered_tab = tabs_[id].get();
+    }
+    // CreateBrowser runs unlocked: callbacks it triggers may look tabs up again.
     const bool browser_created = CefBrowserHost::CreateBrowser(
         window_info, CefRefPtr<CefClient>(registered_tab->client), full_url, browser_settings,
         nullptr, nullptr);
@@ -207,14 +216,36 @@ int BrowserManager::create_tab(const std::string& url, const std::string& path,
 }
 
 BrowserTab* BrowserManager::get_tab(int tab_id) {
+    std::lock_guard lock(tabs_mutex_);
     auto it = tabs_.find(tab_id);
     return it != tabs_.end() ? it->second.get() : nullptr;
 }
 
-void BrowserManager::remove_tab(int tab_id) {
-    if (!tabs_.contains(tab_id)) return;
+std::vector<BrowserManager::TabSnapshotEntry> BrowserManager::tabs_snapshot() const {
+    std::lock_guard lock(tabs_mutex_);
+    std::vector<TabSnapshotEntry> snapshot;
+    snapshot.reserve(tabs_.size());
+    for (const auto& [tab_id, tab] : tabs_) {
+        snapshot.push_back({tab_id, tab.get()});
+    }
+    return snapshot;
+}
 
-    BrowserTab* tab = tabs_[tab_id].get();
+void BrowserManager::remove_tab(int tab_id) {
+    // Take ownership out of the map first: after this no other thread can reach the
+    // tab through tabs_, and the GPU texture teardown / CEF close below run without
+    // holding the map lock.
+    std::unique_ptr<BrowserTab> removed;
+    {
+        std::lock_guard lock(tabs_mutex_);
+        auto it = tabs_.find(tab_id);
+        if (it == tabs_.end()) return;
+        removed = std::move(it->second);
+        tabs_.erase(it);
+    }
+    BrowserTab* tab = removed.get();
+    if (!tab) return;
+
     CFW_LOG_INFO("[CEF/Tab] remove_tab id={} camera_view={} floating={} open={}", tab_id,
                  tab->camera_view, tab->floating, tab->open);
     if (tab->camera_view) {
@@ -229,16 +260,19 @@ void BrowserManager::remove_tab(int tab_id) {
     }
 
     destroy_tab_texture(tab);
-
-    tabs_.erase(tab_id);
+    // `removed` releases the tab here, once every reference above is dropped.
 }
 
-const std::unordered_map<int, std::unique_ptr<BrowserTab>>& BrowserManager::get_tabs() const {
-    return tabs_;
-}
-
-std::unordered_map<int, std::unique_ptr<BrowserTab>>& BrowserManager::get_tabs() {
-    return tabs_;
+void BrowserManager::set_tab_drag_regions(int tab_id, const std::vector<DragRegion>& regions) {
+    BrowserTab* tab = nullptr;
+    {
+        std::lock_guard lock(tabs_mutex_);
+        auto it = tabs_.find(tab_id);
+        if (it == tabs_.end()) return;
+        tab = it->second.get();
+    }
+    std::lock_guard<std::mutex> lock(tab->drag_mutex);
+    tab->drag_regions = regions;
 }
 
 void BrowserManager::update() {
@@ -280,10 +314,11 @@ void BrowserManager::enqueue_main_thread_task(std::function<void()> task) {
 void BrowserManager::close_all_tabs() {
     std::vector<int> ids;
     std::vector<CefRefPtr<OffscreenCefClient>> clients;
-    ids.reserve(tabs_.size());
-    clients.reserve(tabs_.size());
-    for (const auto& id : tabs_ | std::views::keys) {
-        ids.push_back(id);
+    const auto snapshot = tabs_snapshot();
+    ids.reserve(snapshot.size());
+    clients.reserve(snapshot.size());
+    for (const auto& entry : snapshot) {
+        ids.push_back(entry.tab_id);
     }
 
     for (int id : ids) {
@@ -299,14 +334,6 @@ void BrowserManager::close_all_tabs() {
         }
     }
     retire_deferred_tab_textures(true);
-}
-
-void BrowserManager::set_tab_drag_regions(int tab_id, const std::vector<DragRegion>& regions) {
-    auto it = tabs_.find(tab_id);
-    if (it != tabs_.end()) {
-        std::lock_guard<std::mutex> lock(it->second->drag_mutex);
-        it->second->drag_regions = regions;
-    }
 }
 
 }  // namespace Corona::Systems::UI

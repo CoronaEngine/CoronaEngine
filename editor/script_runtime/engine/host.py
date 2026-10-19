@@ -34,9 +34,12 @@ def _native_scene_target():
         else ""
     )
     route = active_route if active_route in routes else routes[0]
-    switched = scene_api.switch(route)
-    if isinstance(switched, dict) and switched.get("status") in ("error", "failed"):
-        return None
+    if route != active_route:
+        # Reuse the live active scene to preserve edits and avoid reloading it
+        # through the Python callback queue. Only select a scene on first startup.
+        switched = scene_api.switch(route)
+        if isinstance(switched, dict) and switched.get("status") in ("error", "failed"):
+            return None
     return scene_target_from_snapshot(scene_api.get_snapshot(route))
 
 

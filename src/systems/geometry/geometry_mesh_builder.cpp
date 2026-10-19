@@ -1,4 +1,6 @@
-﻿/// @file geometry_mesh_builder.cpp
+#include "geometry_draw_buffers.h"
+#include <corona/systems/geometry/model_node_import.h>
+/// @file geometry_mesh_builder.cpp
 /// @brief 从 Resource::Scene 构建 GPU MeshDevice 数组的单一实现。
 ///
 /// 详见 geometry_mesh_builder.h。本文件是初始加载 / 距离重载 / LRU 恢复
@@ -141,27 +143,24 @@ void release_geometry_placeholder_texture() {
     g_placeholder_texture.reset();
 }
 
-std::vector<MeshDevice> build_mesh_devices_from_scene(
-    const Resource::Scene& scene) {
+std::vector<MeshDevice> build_mesh_devices_from_scene_range(
+    const Resource::Scene& scene,
+    std::size_t first_mesh,
+    std::size_t mesh_count,
+    SceneGpuTextureCache& texture_cache) {
 
     Horizon::HardwareImage& placeholder_texture = get_placeholder_texture();
 
     auto& resource_manager = Resource::ResourceManager::get_instance();
 
+    const std::size_t end_mesh = std::min(first_mesh + mesh_count, scene.data.meshes.size());
     std::vector<MeshDevice> mesh_devices;
-    mesh_devices.reserve(scene.data.meshes.size());
+    mesh_devices.reserve(end_mesh - first_mesh);
+    texture_cache.entries.reserve(std::max(texture_cache.entries.size(), scene.data.materials.size()));
 
-    struct SharedTextureEntry {
-        Horizon::HardwareImage image;
-        std::shared_ptr<Corona::Memory::GpuMemToken> mem;
-        std::size_t gpu_bytes = 0;
-        bool valid = false;
-    };
-    std::unordered_map<std::uint64_t, SharedTextureEntry> shared_textures;
-    shared_textures.reserve(scene.data.materials.size());
-
-    // ---- 遍历所有 mesh，创建 GPU 缓冲 ----
-    for (std::uint32_t mesh_idx = 0; mesh_idx < scene.data.meshes.size(); ++mesh_idx) {
+    // ---- 遍历本批 mesh，创建 GPU 缓冲 ----
+    for (std::uint32_t mesh_idx = static_cast<std::uint32_t>(first_mesh);
+         mesh_idx < end_mesh; ++mesh_idx) {
         const auto& mesh = scene.data.meshes[mesh_idx];  // 当前 mesh 的 CPU 端数据
         const auto& vertices = scene.get_mesh_vertices(mesh_idx);
         const auto& indices = scene.get_mesh_indices(mesh_idx);
@@ -185,37 +184,14 @@ std::vector<MeshDevice> build_mesh_devices_from_scene(
         dev.vertex_count = static_cast<std::uint32_t>(vertices.size());
         dev.index_count = static_cast<std::uint32_t>(indices.size());
         dev.max_index = max_index;
-
-        // ---- 创建顶点/索引缓冲（4 个）----
-        // vertexBuffer / indexBuffer：渲染管线使用（Vertex Shader 读取）
-        // vertexStorageBuffer / indexStorageBuffer：Compute Shader 使用（可读写）
-        dev.vertexBuffer = make_geometry_buffer(
-            vertices,
-            Horizon::BufferUsage_TransferDst | Horizon::BufferUsage_Vertex,
-            "geometry.vertex");
-        dev.indexBuffer = make_geometry_buffer(
-            indices,
-            Horizon::BufferUsage_TransferDst | Horizon::BufferUsage_Index,
-            "geometry.index");
-        dev.vertexStorageBuffer = make_geometry_buffer(
-            vertices,
-            Horizon::BufferUsage_TransferSrc | Horizon::BufferUsage_TransferDst |
-                Horizon::BufferUsage_Storage,
-            "geometry.vertex_storage");
-        dev.indexStorageBuffer = make_geometry_buffer(
-            indices,
-            Horizon::BufferUsage_TransferSrc | Horizon::BufferUsage_TransferDst |
-                Horizon::BufferUsage_Storage,
-            "geometry.index_storage");
-
-        // ---- GPU mesh 显存记账（P0）----
-        // 顶点/索引各上传两份（普通 + storage），故 ×2。
-        {
-            const std::size_t mesh_gpu_bytes =
-                2u * vertices.size() * sizeof(Resource::Vertex) +
-                2u * indices.size()  * sizeof(std::uint16_t);
-            dev.mesh_mem = Corona::Memory::GpuMemToken(Corona::Memory::ResKind::Mesh, mesh_gpu_bytes);
-        }
+        auto buffers = GeometryDetail::make_draw_buffers(vertices, indices);
+        dev.draw_clusters = std::move(buffers.clusters);
+        dev.vertexBuffer = dev.vertexStorageBuffer = std::move(buffers.vertices);
+        dev.indexBuffer = dev.indexStorageBuffer = std::move(buffers.indices);
+        dev.shadowIndexBuffer = std::move(buffers.shadow_indices);
+        // One shared vertex allocation, original indices, spatial shadow indices.
+        dev.mesh_mem = Corona::Memory::GpuMemToken(Corona::Memory::ResKind::Mesh,
+            buffers.byte_size);
 
         // ---- 材质索引 ----
         // material_index 指向 scene.data.materials 数组
@@ -242,13 +218,13 @@ std::vector<MeshDevice> build_mesh_devices_from_scene(
             mesh.material_index < scene.data.materials.size()) {
             const auto texture_id = scene.data.materials[mesh.material_index].albedo_texture;
             if (texture_id != Resource::InvalidTextureId) {
-                const auto cache_it = shared_textures.find(texture_id);
-                if (cache_it != shared_textures.end()) {
+                const auto cache_it = texture_cache.entries.find(texture_id);
+                if (cache_it != texture_cache.entries.end()) {
                     dev.textureBuffer = cache_it->second.image;
                     dev.tex_mem = cache_it->second.mem;
                     texture_created = cache_it->second.valid;
                 } else {
-                    SharedTextureEntry entry;
+                    SceneGpuTextureCache::Entry entry;
                     auto texture_data = resource_manager.acquire_read<Resource::Image>(texture_id);
                     if (texture_data && texture_data->get_data() != nullptr) {
                         const int tex_width    = texture_data->get_width();
@@ -337,7 +313,7 @@ std::vector<MeshDevice> build_mesh_devices_from_scene(
                     if (!entry.valid) {
                         entry.image = placeholder_texture;
                     }
-                    shared_textures.emplace(texture_id, std::move(entry));
+                    texture_cache.entries.emplace(texture_id, std::move(entry));
                 }
             }
         }
@@ -374,10 +350,21 @@ std::vector<MeshDevice> build_mesh_devices_from_scene(
     return mesh_devices;
 }
 
-SceneGpuMeshData build_gpu_mesh_data_from_scene(
+std::vector<MeshDevice> build_mesh_devices_from_scene(
     const Resource::Scene& scene) {
+    SceneGpuTextureCache texture_cache;
+    return build_mesh_devices_from_scene_range(
+        scene, 0, scene.data.meshes.size(), texture_cache);
+}
+
+SceneGpuMeshData make_scene_gpu_mesh_data(
+    const Resource::Scene& scene,
+    std::vector<MeshDevice> mesh_devices) {
     SceneGpuMeshData result;
-    result.mesh_devices = build_mesh_devices_from_scene(scene);
+    result.mesh_devices = std::move(mesh_devices);
+    result.model_nodes = ModelNodes::from_scene(scene.data);
+    result.node_instance_prefix=scene.data.node_instance_prefix;
+    result.has_node_instance_prefix=scene.data.has_node_instance_prefix;
 
     if (!scene.data.mesh_instances.empty()) {
         result.mesh_instances.reserve(scene.data.mesh_instances.size());
@@ -388,7 +375,11 @@ SceneGpuMeshData build_gpu_mesh_data_from_scene(
             MeshInstanceDevice gpu_instance;
             gpu_instance.mesh_index = instance.mesh_index;
             gpu_instance.object_id = instance.object_id;
+            gpu_instance.node_index = instance.node_index;
+            gpu_instance.local_bounds_min = scene.data.meshes[instance.mesh_index].aabb_min;
+            gpu_instance.local_bounds_max = scene.data.meshes[instance.mesh_index].aabb_max;
             gpu_instance.transform = to_ktm_matrix(instance.transform);
+            gpu_instance.original_transform = gpu_instance.transform;
             result.mesh_instances.push_back(gpu_instance);
         }
     }
@@ -398,11 +389,22 @@ SceneGpuMeshData build_gpu_mesh_data_from_scene(
         for (std::uint32_t i = 0; i < static_cast<std::uint32_t>(result.mesh_devices.size()); ++i) {
             MeshInstanceDevice gpu_instance;
             gpu_instance.mesh_index = i;
+            gpu_instance.local_bounds_min = scene.data.meshes[i].aabb_min;
+            gpu_instance.local_bounds_max = scene.data.meshes[i].aabb_max;
+            gpu_instance.node_delta_prefix =
+                !scene.data.meshes[i].bone_weights.empty() && scene.data.skeleton
+                    ? scene.data.skeleton->global_inverse : scene.data.node_instance_prefix;
+            for(uint32_t n=0;n<scene.data.nodes.size();++n)if(scene.data.nodes[n].mesh_index==i){gpu_instance.node_index=n;break;}
             result.mesh_instances.push_back(gpu_instance);
         }
     }
 
     return result;
+}
+
+SceneGpuMeshData build_gpu_mesh_data_from_scene(
+    const Resource::Scene& scene) {
+    return make_scene_gpu_mesh_data(scene, build_mesh_devices_from_scene(scene));
 }
 
 }  // namespace Corona::Systems

@@ -41,6 +41,21 @@ struct PeerManager::Impl {
     std::string instance_name;
     uint16_t listen_port = 0;
 
+    // Guards the host lifetime, every ENet call and both outgoing queues.
+    //
+    // Why recursive: poll() must keep it held while it dispatches events, otherwise
+    // a concurrent stop() could destroy the host and leave the `peer` pointers held
+    // by the event dangling; the event handlers themselves re-enter this class
+    // (broadcast/send_to/disconnect) on the same thread. Threads other than the
+    // polling one are still excluded, which is what serializes the CEF/editor thread
+    // broadcasting against the network thread servicing the host.
+    //
+    // Lock order: enet_mutex -> peer_mutex (poll and the handlers take peer_mutex
+    // inside it); never the other way round. User callbacks (on_connected /
+    // on_disconnected / on_data) are invoked with this mutex *released*, so external
+    // code never runs under it.
+    std::recursive_mutex enet_mutex;
+
     // Peer tracking
     std::vector<PeerInfo> peer_list;
     mutable std::mutex peer_mutex;
@@ -107,6 +122,7 @@ PeerManager::~PeerManager() { stop(); }
 
 // ============================================================================
 bool PeerManager::start(uint16_t port, const std::string& instance_name) {
+    std::lock_guard<std::recursive_mutex> enet_lock(impl_->enet_mutex);
     if (impl_->host) {
         CFW_LOG_WARNING("PeerManager: Already started");
         return true;
@@ -152,6 +168,11 @@ bool PeerManager::start(uint16_t port, const std::string& instance_name) {
 }
 
 void PeerManager::stop() {
+    // Serialized against poll(): destroying the host while another thread is inside
+    // enet_host_service (or while an event handler still holds a peer pointer) is a
+    // use-after-free, and two concurrent stop() calls used to destroy the same host
+    // twice.
+    std::lock_guard<std::recursive_mutex> enet_lock(impl_->enet_mutex);
     if (!impl_->host) {
         impl_->bulk_queue.clear();
         impl_->transform_queue.clear();
@@ -195,6 +216,7 @@ void PeerManager::stop() {
 // ============================================================================
 void PeerManager::connect_to_peer(const std::string& ip, uint16_t port,
                                   const std::string& peer_name, bool force) {
+    std::lock_guard<std::recursive_mutex> enet_lock(impl_->enet_mutex);
     if (!impl_->host) {
         CFW_LOG_WARNING("PeerManager: Cannot connect — host not started");
         return;
@@ -258,6 +280,9 @@ void PeerManager::connect_to_peer(const std::string& ip, uint16_t port,
 }
 
 void PeerManager::disconnect_peer(const std::string& peer_id) {
+    // enet_mutex first (lock order), so the peer cannot be torn down by a concurrent
+    // poll()/stop() while we call into ENet with it.
+    std::lock_guard<std::recursive_mutex> enet_lock(impl_->enet_mutex);
     std::lock_guard lock(impl_->peer_mutex);
     auto* p = impl_->find_peer_by_id_unsafe(peer_id);
     if (p && p->peer) {
@@ -297,6 +322,7 @@ const std::string& PeerManager::local_peer_id() const {
 }
 
 uint16_t PeerManager::listen_port() const {
+    std::lock_guard<std::recursive_mutex> enet_lock(impl_->enet_mutex);
     return impl_->host ? impl_->host->address.port : 0;
 }
 
@@ -307,6 +333,7 @@ uint32_t PeerManager::next_seq() {
 // ============================================================================
 void PeerManager::broadcast(int channel, const void* data, size_t len,
                             bool reliable) {
+    std::lock_guard<std::recursive_mutex> enet_lock(impl_->enet_mutex);
     if (!impl_->host || len == 0) return;
 
     channel = Impl::route_channel(data, len, channel);
@@ -349,6 +376,7 @@ void PeerManager::broadcast(int channel, const void* data, size_t len,
 
 void PeerManager::send_to(_ENetPeer* peer, int channel,
                           const void* data, size_t len, bool reliable) {
+    std::lock_guard<std::recursive_mutex> enet_lock(impl_->enet_mutex);
     if (!peer || len == 0) return;
 
     channel = Impl::route_channel(data, len, channel);
@@ -390,6 +418,9 @@ void PeerManager::send_to(_ENetPeer* peer, int channel,
 
 bool PeerManager::send_to_peer_id(const std::string& peer_id, int channel,
                                   const void* data, size_t len, bool reliable) {
+    // Hold enet_mutex across lookup + send: the peer entry (and the ENet peer behind
+    // it) may otherwise be removed by a concurrent poll()/disconnect between the two.
+    std::lock_guard<std::recursive_mutex> enet_lock(impl_->enet_mutex);
     if (peer_id.empty() || !data || len == 0 || !impl_->host) return false;
     _ENetPeer* peer = nullptr;
     {
@@ -405,6 +436,12 @@ bool PeerManager::send_to_peer_id(const std::string& peer_id, int channel,
 
 // ============================================================================
 void PeerManager::poll() {
+    // Held for the whole service/dispatch pass: the events reference `host` and
+    // `peer` objects that a concurrent stop()/disconnect would otherwise free while
+    // this thread is still using them. It is recursive, so the handlers below can
+    // call back into broadcast()/send_to()/disconnect_peer(); it is released around
+    // the user callbacks so external code never runs under it.
+    std::unique_lock<std::recursive_mutex> enet_lock(impl_->enet_mutex);
     if (!impl_->host) return;
 
     const auto now = peer_now_ms();
@@ -472,7 +509,12 @@ void PeerManager::poll() {
                                          packet.peer == event.peer;
                               });
             }
-            if (found) handle_disconnect(disconnected);
+            if (found) {
+                // User callback: never under enet_mutex.
+                enet_lock.unlock();
+                handle_disconnect(disconnected);
+                enet_lock.lock();
+            }
             break;
         }
 
@@ -482,7 +524,10 @@ void PeerManager::poll() {
                 static_cast<MessageType>(event.packet->data[0]) == MessageType::HELLO;
 
             if (is_hello) {
-                handle_hello(event.peer, event.packet->data, event.packet->dataLength);
+                // handle_hello() uses the host and the peer internally (protected),
+                // and releases the lock itself around the on_connected callback.
+                handle_hello(event.peer, event.packet->data, event.packet->dataLength,
+                             enet_lock);
             } else {
                 std::string peer_id;
                 bool ready = false;
@@ -502,8 +547,11 @@ void PeerManager::poll() {
                 }
                 // Drop data from peers that haven't completed HELLO yet
                 if (ready && !peer_id.empty() && impl_->on_data) {
+                    // User callback: never under enet_mutex.
+                    enet_lock.unlock();
                     impl_->on_data(peer_id, event.packet->data,
                                    event.packet->dataLength);
+                    enet_lock.lock();
                 }
             }
             enet_packet_destroy(event.packet);
@@ -582,7 +630,8 @@ void PeerManager::poll() {
 }
 
 // ============================================================================
-void PeerManager::handle_hello(ENetPeer* peer, const uint8_t* data, size_t len) {
+void PeerManager::handle_hello(ENetPeer* peer, const uint8_t* data, size_t len,
+                               std::unique_lock<std::recursive_mutex>& enet_lock) {
     BufferReader r(data + 1, len - 1);
     if (!r.has_remaining(2)) return;
     uint16_t name_len = r.read_u16();
@@ -672,7 +721,11 @@ void PeerManager::handle_hello(ENetPeer* peer, const uint8_t* data, size_t len) 
 
     if (should_notify) {
         CFW_LOG_DEBUG("PeerManager: HELLO from {} — peer rekeyed and ready", stable_id);
+        // The peer list is fully updated by now; only the user callback follows, and
+        // it must not run while holding enet_mutex (external code, may block).
+        enet_lock.unlock();
         handle_connect(peer, notify_info.id, notify_info.name);
+        enet_lock.lock();
     }
 }
 

@@ -11,7 +11,8 @@
 namespace vision::svgf {
 
 struct PrefilterParam {
-    BufferDesc<float4> guide_position, guide_normal;
+    BufferDesc<uint> active_tiles;
+    BufferDesc<float4> guide_position, guide_normal, guide_shading_normal;
     BufferDesc<uint4> guide_identity, guide_surface;
     uint use_stable_planes{0u};
     uint layered{0u};
@@ -30,7 +31,7 @@ struct PrefilterParam {
 
 }// namespace vision::svgf
 
-OC_PARAM_STRUCT(vision::svgf, PrefilterParam, guide_position, guide_normal, guide_identity, guide_surface, use_stable_planes, layered, stable_planes, prev_stable_planes, stable_surfaces, prev_stable_surfaces,
+OC_PARAM_STRUCT(vision::svgf, PrefilterParam, active_tiles, guide_position, guide_normal, guide_shading_normal, guide_identity, guide_surface, use_stable_planes, layered, stable_planes, prev_stable_planes, stable_surfaces, prev_stable_surfaces,
     radiance_direct, radiance_indirect, svgf_buffer,
     visibility_buffer, camera_pos, channel_kind, use_shading_normal){};
 

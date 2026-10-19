@@ -8,6 +8,7 @@
 #include <Codegen/TypeAlias.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <limits>
 #include <string>
@@ -52,13 +53,12 @@ void write_buffer(const H::HardwareBuffer& buffer, std::span<const std::byte> by
 // stable address, and keep its HardwareBuffer members alive through recording.
 struct SkinKernel {
     H::HardwareBuffer bind_buffer, id_buffer, weight_buffer, palette_buffer;
-    H::HardwareBuffer output_buffer, bounds_buffer;
+    H::HardwareBuffer output_buffer;
     EmbeddedShader::Array<float> bind_vertices;
     EmbeddedShader::Array<std::uint32_t> bone_ids;
     EmbeddedShader::Array<float> bone_weights;
     EmbeddedShader::Array<float> palette;
     EmbeddedShader::Array<float> output;
-    EmbeddedShader::Array<float> bounds;
     Uint vertex_count;
     Uint bone_count;
     Uint palette_base;
@@ -81,9 +81,11 @@ struct SkinKernel {
                 bnx = bind_vertices[vbase + Uint(3u)];
                 bny = bind_vertices[vbase + Uint(4u)];
                 bnz = bind_vertices[vbase + Uint(5u)];
-                Float px, py, pz, nx, ny, nz, total;
+                Float px, py, pz, total;
                 px = 0.0f; py = 0.0f; pz = 0.0f;
-                nx = 0.0f; ny = 0.0f; nz = 0.0f; total = 0.0f;
+                total = 0.0f;
+                std::array<Float, 9> linear;
+                for (auto& component : linear) component = 0.0f;
 
                 // A C++ loop intentionally emits four independent AST blocks.
                 // Helicon's unfinished runtime-loop macros are not used.
@@ -95,7 +97,7 @@ struct SkinKernel {
                     weight = bone_weights[wi];
                     // Negative CPU IDs are stored as UINT_MAX (or another
                     // out-of-range uint), so this also rejects negative IDs.
-                    $IF((id < bone_count) && !(weight <= Float(0.0f))) {
+                    $IF((id < bone_count) && (weight > Float(0.0f))) {
                         Uint m;
                         m = (palette_base + id) * Uint(16u);
                         Float m0, m1, m2, m4, m5, m6, m8, m9, m10;
@@ -108,12 +110,18 @@ struct SkinKernel {
                         m12 = palette[m + Uint(12u)];
                         m13 = palette[m + Uint(13u)];
                         m14 = palette[m + Uint(14u)];
-                        px = px + weight * (m0 * bx + m4 * by + m8 * bz + m12);
-                        py = py + weight * (m1 * bx + m5 * by + m9 * bz + m13);
-                        pz = pz + weight * (m2 * bx + m6 * by + m10 * bz + m14);
-                        nx = nx + weight * (m0 * bnx + m4 * bny + m8 * bnz);
-                        ny = ny + weight * (m1 * bnx + m5 * bny + m9 * bnz);
-                        nz = nz + weight * (m2 * bnx + m6 * bny + m10 * bnz);
+                        px = px + weight * m12;
+                        py = py + weight * m13;
+                        pz = pz + weight * m14;
+                        linear[0] = linear[0] + weight * m0;
+                        linear[1] = linear[1] + weight * m1;
+                        linear[2] = linear[2] + weight * m2;
+                        linear[3] = linear[3] + weight * m4;
+                        linear[4] = linear[4] + weight * m5;
+                        linear[5] = linear[5] + weight * m6;
+                        linear[6] = linear[6] + weight * m8;
+                        linear[7] = linear[7] + weight * m9;
+                        linear[8] = linear[8] + weight * m10;
                         total = total + weight;
                     }
                 }
@@ -121,7 +129,30 @@ struct SkinKernel {
                 ox = bx; oy = by; oz = bz;
                 onx = bnx; ony = bny; onz = bnz;
                 $IF(total > Float(0.0f)) {
-                    ox = px; oy = py; oz = pz;
+                    // Reuse the blended linear transform already needed by
+                    // normals instead of transforming the position four times.
+                    ox = (linear[0]*bx + linear[3]*by + linear[6]*bz + px) / total;
+                    oy = (linear[1]*bx + linear[4]*by + linear[7]*bz + py) / total;
+                    oz = (linear[2]*bx + linear[5]*by + linear[8]*bz + pz) / total;
+                    // The inverse transpose of the blended affine transform
+                    // preserves perpendicular normals under nonuniform scaling
+                    // and shear. Normalization cancels the determinant magnitude.
+                    Float c0, c1, c2, c3, c4, c5, c6, c7, c8, determinant;
+                    c0 = linear[4]*linear[8]-linear[5]*linear[7];
+                    c1 = linear[5]*linear[6]-linear[3]*linear[8];
+                    c2 = linear[3]*linear[7]-linear[4]*linear[6];
+                    c3 = linear[7]*linear[2]-linear[8]*linear[1];
+                    c4 = linear[8]*linear[0]-linear[6]*linear[2];
+                    c5 = linear[6]*linear[1]-linear[7]*linear[0];
+                    c6 = linear[1]*linear[5]-linear[2]*linear[4];
+                    c7 = linear[2]*linear[3]-linear[0]*linear[5];
+                    c8 = linear[0]*linear[4]-linear[1]*linear[3];
+                    determinant = linear[0]*c0 + linear[1]*c1 + linear[2]*c2;
+                    Float nx, ny, nz;
+                    nx = c0*bnx+c3*bny+c6*bnz;
+                    ny = c1*bnx+c4*bny+c7*bnz;
+                    nz = c2*bnx+c5*bny+c8*bnz;
+                    $IF(determinant < Float(0.0f)) { nx = -nx; ny = -ny; nz = -nz; }
                     Float length;
                     length = sqrt(nx * nx + ny * ny + nz * nz);
                     $IF(length > Float(1.0e-8f)) {
@@ -138,11 +169,6 @@ struct SkinKernel {
                 output[vbase + Uint(5u)] = onz;
                 output[vbase + Uint(6u)] = bind_vertices[vbase + Uint(6u)];
                 output[vbase + Uint(7u)] = bind_vertices[vbase + Uint(7u)];
-                Uint bb;
-                bb = vertex * Uint(kBoundsFloats);
-                bounds[bb] = ox; bounds[bb + Uint(1u)] = oy;
-                bounds[bb + Uint(2u)] = oz; bounds[bb + Uint(3u)] = ox;
-                bounds[bb + Uint(4u)] = oy; bounds[bb + Uint(5u)] = oz;
             }
         };
         pipeline = make_compute_pipeline(shader, ktm::uvec3(kThreads, 1, 1));
@@ -150,13 +176,13 @@ struct SkinKernel {
 
     void bind(const H::HardwareBuffer& vertices, const H::HardwareBuffer& ids,
               const H::HardwareBuffer& weights, const H::HardwareBuffer& matrices,
-              const H::HardwareBuffer& destination, const H::HardwareBuffer& aabbs,
+              const H::HardwareBuffer& destination,
               std::uint32_t vertices_size, std::uint32_t matrices_size,
               std::uint32_t matrices_base) {
         bind_buffer = vertices; id_buffer = ids; weight_buffer = weights;
-        palette_buffer = matrices; output_buffer = destination; bounds_buffer = aabbs;
+        palette_buffer = matrices; output_buffer = destination;
         bind_vertices = bind_buffer; bone_ids = id_buffer; bone_weights = weight_buffer;
-        palette = palette_buffer; output = output_buffer; bounds = bounds_buffer;
+        palette = palette_buffer; output = output_buffer;
         vertex_count = vertices_size; bone_count = matrices_size;
         palette_base = matrices_base;
     }
@@ -172,7 +198,7 @@ struct BoundsKernel {
     Uint count;
     H::ComputePipeline<> pipeline;
 
-    BoundsKernel() {
+    explicit BoundsKernel(bool vertices = false) {
         count.as_push_constant();
         auto shader = [&] {
             Uint index;
@@ -181,19 +207,20 @@ struct BoundsKernel {
             first = index * Uint(kBoundsFanIn);
             $IF(first < count) {
                 Uint a, out;
-                a = first * Uint(kBoundsFloats);
+                const auto stride = vertices ? 8u : kBoundsFloats;
+                a = first * Uint(stride);
                 out = index * Uint(kBoundsFloats);
                 for (std::uint32_t axis = 0; axis < 3; ++axis) {
                     Float low, high;
                     low = source[a + Uint(axis)];
-                    high = source[a + Uint(axis + 3u)];
+                    high = source[a + Uint(axis + (vertices ? 0u : 3u))];
                     for (std::uint32_t lane = 1; lane < kBoundsFanIn; ++lane) {
                         $IF(first + Uint(lane) < count) {
                             Uint b;
-                            b = a + Uint(lane * kBoundsFloats);
+                            b = a + Uint(lane * stride);
                             Float other_low, other_high;
                             other_low = source[b + Uint(axis)];
-                            other_high = source[b + Uint(axis + 3u)];
+                            other_high = source[b + Uint(axis + (vertices ? 0u : 3u))];
                             low = min(low, other_low);
                             high = max(high, other_high);
                         }
@@ -222,6 +249,11 @@ struct MeshCache {
     H::HardwareBuffer upload_bind, upload_ids, upload_weights;
     H::HardwareBuffer readback, bounds_readback;
     bool pending_upload{true};
+    bool pose_valid{}, readback_valid{};
+    std::uint64_t pose_revision{};
+    std::vector<GpuSkinningPipeline::Matrix> finals;
+    std::array<float, kBoundsFloats> reduced_bounds{};
+    H::HardwareBuffer vertex_target, storage_target;
 
     explicit MeshCache(const GpuSkinningPipeline::Request& request)
         : revision(request.revision), source_vertices(request.vertices.data()),
@@ -229,17 +261,18 @@ struct MeshCache {
           vertex_count(static_cast<std::uint32_t>(request.vertices.size())) {
         const auto vertex_bytes = request.vertices.size_bytes();
         const auto influence_bytes = request.vertices.size() * 4u * sizeof(float);
-        const auto bounds_bytes = request.vertices.size() * kBoundsFloats * sizeof(float);
         constexpr auto input_usage = H::BufferUsage_Storage | H::BufferUsage_TransferDst;
         bind = make_buffer(vertex_bytes, input_usage, H::CpuAccessMode::None, "mechanics.skin.bind");
         ids = make_buffer(influence_bytes, input_usage, H::CpuAccessMode::None, "mechanics.skin.ids");
         weights = make_buffer(influence_bytes, input_usage, H::CpuAccessMode::None, "mechanics.skin.weights");
         output = make_buffer(vertex_bytes, H::BufferUsage_Storage | H::BufferUsage_TransferSrc,
                              H::CpuAccessMode::None, "mechanics.skin.output");
-        bounds[0] = make_buffer(bounds_bytes, H::BufferUsage_Storage | H::BufferUsage_TransferSrc,
-                                H::CpuAccessMode::None, "mechanics.skin.bounds");
+        // First reduction reads positions directly from the skin output. No
+        // duplicated per-vertex min/max image of the pose is necessary.
         const auto reduced_count = (request.vertices.size() + kBoundsFanIn - 1u) / kBoundsFanIn;
-        bounds[1] = make_buffer(reduced_count * kBoundsFloats * sizeof(float),
+        bounds[0] = make_buffer(reduced_count * kBoundsFloats * sizeof(float), H::BufferUsage_Storage | H::BufferUsage_TransferSrc,
+                                H::CpuAccessMode::None, "mechanics.skin.bounds");
+        bounds[1] = make_buffer(((reduced_count + kBoundsFanIn - 1u) / kBoundsFanIn) * kBoundsFloats * sizeof(float),
                                 H::BufferUsage_Storage | H::BufferUsage_TransferSrc,
                                 H::CpuAccessMode::None, "mechanics.skin.bounds.scratch");
         bounds_readback = make_buffer(kBoundsFloats * sizeof(float), H::BufferUsage_TransferDst,
@@ -253,9 +286,16 @@ struct MeshCache {
         std::vector<std::uint32_t> packed_ids(request.vertices.size() * 4u);
         std::vector<float> packed_weights(packed_ids.size());
         for (std::size_t v = 0; v < request.weights.size(); ++v) {
+            float largest = 0.0f;
+            for (float weight : request.weights[v].weights)
+                if (std::isfinite(weight)) largest = std::max(largest, weight);
             for (std::size_t influence = 0; influence < 4; ++influence) {
                 packed_ids[v * 4u + influence] = static_cast<std::uint32_t>(request.weights[v].ids[influence]);
-                packed_weights[v * 4u + influence] = request.weights[v].weights[influence];
+                const auto weight = request.weights[v].weights[influence];
+                // Scale before summation to avoid overflow, then normalize the
+                // valid influences in the kernel (out-of-range IDs are ignored).
+                packed_weights[v * 4u + influence] = std::isfinite(weight) && weight > 0.0f
+                    ? weight / largest : 0.0f;
             }
         }
         write_buffer(upload_bind, std::as_bytes(request.vertices));
@@ -274,6 +314,7 @@ struct MeshCache {
 struct GpuSkinningPipeline::Impl {
     H::HardwareExecutor executor;
     SkinKernel skin;
+    BoundsKernel vertex_bounds{true};
     BoundsKernel reduce;
     H::HardwareBuffer palette, palette_upload;
     std::size_t palette_capacity{};
@@ -324,12 +365,14 @@ std::vector<GpuSkinningPipeline::Result> GpuSkinningPipeline::update(
 }
 
 std::vector<GpuSkinningPipeline::Result> GpuSkinningPipeline::update_batch(
-    std::span<const Batch> batches) {
+    std::span<const Batch> batches, const std::function<void()>& release_mesh_inputs) {
     GpuPerformance::Scope performance{"skinning"};
     impl_->ensure_usable();
     struct Work {
         const Request* request;
         std::uint32_t palette_base, bone_count;
+        std::span<const Matrix> finals;
+        bool skin{}, copy_vertex{}, copy_storage{}, copy_readback{};
     };
     std::vector<Work> work;
     std::unordered_set<std::uint64_t> batch_keys;
@@ -341,6 +384,9 @@ std::vector<GpuSkinningPipeline::Result> GpuSkinningPipeline::update_batch(
         if (batch.finals.size() > max_palette_size - palette_size) {
             throw std::invalid_argument("GPU skinning combined palette exceeds uint32 indexing");
         }
+        for (const auto& matrix : batch.finals)
+            for (float value : matrix)
+                if (!std::isfinite(value)) throw std::invalid_argument("GPU skinning palette is not finite");
         for (const auto& request : batch.requests) {
             if (!batch_keys.insert(request.key).second) {
                 throw std::invalid_argument("GPU skinning batch contains duplicate keys");
@@ -358,100 +404,126 @@ std::vector<GpuSkinningPipeline::Result> GpuSkinningPipeline::update_batch(
             }
             has_work |= !request.vertices.empty();
             work.push_back({&request, static_cast<std::uint32_t>(palette_size),
-                            static_cast<std::uint32_t>(batch.finals.size())});
+                            static_cast<std::uint32_t>(batch.finals.size()), batch.finals});
         }
         palette_size += batch.finals.size();
     }
     std::vector<Result> results(work.size());
     for (std::size_t i = 0; i < work.size(); ++i) results[i].key = work[i].request->key;
-    if (!has_work) return results;
+    if (!has_work) {
+        if (release_mesh_inputs) release_mesh_inputs();
+        return results;
+    }
 
-    std::vector<Matrix> finals;
-    finals.reserve(palette_size);
-    for (const auto& batch : batches) finals.insert(finals.end(), batch.finals.begin(), batch.finals.end());
-    impl_->upload_palette(finals);
-    for (const auto& item : work) {
+    bool has_skin = false, has_commands = false;
+    for (auto& item : work) {
         const auto& request = *item.request;
         if (request.vertices.empty()) continue;
         auto& cached = impl_->meshes[request.key];
         if (!cached || !cached->matches(request)) cached = std::make_unique<MeshCache>(request);
+        item.skin = !request.reuse_unchanged || !cached->pose_valid ||
+            !std::equal(item.finals.begin(), item.finals.end(), cached->finals.begin(), cached->finals.end());
+        item.copy_vertex = request.vertex_buffer &&
+            (item.skin || !request.vertex_buffer.same_resource(cached->vertex_target));
+        item.copy_storage = request.storage_buffer &&
+            (item.skin || !request.storage_buffer.same_resource(cached->storage_target)) &&
+            !(item.copy_vertex && request.storage_buffer.same_resource(request.vertex_buffer));
+        item.copy_readback = request.readback && (item.skin || !cached->readback_valid);
+        has_skin |= item.skin;
+        has_commands |= item.skin || item.copy_vertex || item.copy_storage || item.copy_readback;
         if (request.readback && !cached->readback) {
             cached->readback = make_buffer(request.vertices.size_bytes(), H::BufferUsage_TransferDst,
                                           H::CpuAccessMode::Read, "mechanics.skin.vertices.readback");
         }
     }
 
-    auto stream = impl_->executor.stream();
-    const auto palette_bytes = std::max<std::size_t>(finals.size(), 1u) * 16u * sizeof(float);
-    GpuPerformance::record_upload(palette_bytes);
-    stream << H::CopyBufferCommand{impl_->palette_upload, impl_->palette, 0, 0, palette_bytes};
-    for (const auto& item : work) {
-        const auto& request = *item.request;
-        if (request.vertices.empty()) continue;
-        auto& cached = *impl_->meshes.at(request.key);
-        const auto bytes = request.vertices.size_bytes();
-        GpuPerformance::record_work_items(cached.vertex_count);
-        if (cached.pending_upload) {
-            GpuPerformance::record_upload(bytes + cached.ids.get_byte_size() + cached.weights.get_byte_size());
-            stream << H::CopyBufferCommand{cached.upload_bind, cached.bind, 0, 0, bytes};
-            stream << H::CopyBufferCommand{cached.upload_ids, cached.ids, 0, 0, cached.ids.get_byte_size()};
-            stream << H::CopyBufferCommand{cached.upload_weights, cached.weights, 0, 0, cached.weights.get_byte_size()};
+    if (release_mesh_inputs) release_mesh_inputs();
+    if (has_commands) {
+        auto stream = impl_->executor.stream();
+        if (has_skin) {
+            std::vector<Matrix> finals;
+            finals.reserve(palette_size);
+            for (const auto& batch : batches) finals.insert(finals.end(), batch.finals.begin(), batch.finals.end());
+            impl_->upload_palette(finals);
+            const auto palette_bytes = std::max<std::size_t>(finals.size(), 1u) * 16u * sizeof(float);
+            GpuPerformance::record_upload(palette_bytes);
+            stream << H::CopyBufferCommand{impl_->palette_upload, impl_->palette, 0, 0, palette_bytes};
         }
-        impl_->skin.bind(cached.bind, cached.ids, cached.weights, impl_->palette,
-                         cached.output, cached.bounds[0], cached.vertex_count,
-                         item.bone_count, item.palette_base);
-        GpuPerformance::record_dispatch();
-        stream << impl_->skin.pipeline.groups((cached.vertex_count + kThreads - 1u) / kThreads, 1);
+        for (const auto& item : work) {
+            const auto& request = *item.request;
+            if (request.vertices.empty()) continue;
+            auto& cached = *impl_->meshes.at(request.key);
+            const auto bytes = request.vertices.size_bytes();
+            if (item.skin) {
+                cached.pose_valid = false;
+                cached.readback_valid = false;
+                GpuPerformance::record_work_items(cached.vertex_count);
+                if (cached.pending_upload) {
+                    GpuPerformance::record_upload(bytes + cached.ids.get_byte_size() + cached.weights.get_byte_size());
+                    stream << H::CopyBufferCommand{cached.upload_bind, cached.bind, 0, 0, bytes};
+                    stream << H::CopyBufferCommand{cached.upload_ids, cached.ids, 0, 0, cached.ids.get_byte_size()};
+                    stream << H::CopyBufferCommand{cached.upload_weights, cached.weights, 0, 0, cached.weights.get_byte_size()};
+                }
+                impl_->skin.bind(cached.bind, cached.ids, cached.weights, impl_->palette,
+                                 cached.output, cached.vertex_count,
+                                 item.bone_count, item.palette_base);
+                GpuPerformance::record_dispatch();
+                stream << impl_->skin.pipeline.groups((cached.vertex_count + kThreads - 1u) / kThreads, 1);
 
-        std::uint32_t count = cached.vertex_count;
-        unsigned source = 0;
-        while (count > 1u) {
-            impl_->reduce.bind(cached.bounds[source], cached.bounds[1u - source], count);
-            const std::uint32_t output_count = (count + kBoundsFanIn - 1u) / kBoundsFanIn;
-            GpuPerformance::record_dispatch();
-            stream << impl_->reduce.pipeline.groups((output_count + kThreads - 1u) / kThreads, 1);
-            source = 1u - source;
-            count = output_count;
+                impl_->vertex_bounds.bind(cached.output, cached.bounds[0], cached.vertex_count);
+                std::uint32_t count = (cached.vertex_count + kBoundsFanIn - 1u) / kBoundsFanIn;
+                GpuPerformance::record_dispatch();
+                stream << impl_->vertex_bounds.pipeline.groups((count + kThreads - 1u) / kThreads, 1);
+                unsigned source = 0;
+                while (count > 1u) {
+                    impl_->reduce.bind(cached.bounds[source], cached.bounds[1u - source], count);
+                    const std::uint32_t output_count = (count + kBoundsFanIn - 1u) / kBoundsFanIn;
+                    GpuPerformance::record_dispatch();
+                    stream << impl_->reduce.pipeline.groups((output_count + kThreads - 1u) / kThreads, 1);
+                    source = 1u - source;
+                    count = output_count;
+                }
+                GpuPerformance::record_readback(kBoundsFloats * sizeof(float));
+                stream << H::CopyBufferCommand{cached.bounds[source], cached.bounds_readback, 0, 0,
+                                              kBoundsFloats * sizeof(float)};
+            }
+            if (item.copy_vertex) {
+                GpuPerformance::record_device_copy(bytes);
+                stream << H::CopyBufferCommand{cached.output, request.vertex_buffer, 0, 0, bytes};
+            }
+            if (item.copy_storage) {
+                GpuPerformance::record_device_copy(bytes);
+                stream << H::CopyBufferCommand{cached.output, request.storage_buffer, 0, 0, bytes};
+            }
+            if (item.copy_readback) {
+                GpuPerformance::record_readback(bytes);
+                stream << H::CopyBufferCommand{cached.output, cached.readback, 0, 0, bytes};
+            }
         }
-        GpuPerformance::record_readback(kBoundsFloats * sizeof(float));
-        stream << H::CopyBufferCommand{cached.bounds[source], cached.bounds_readback, 0, 0,
-                                      kBoundsFloats * sizeof(float)};
-        if (request.vertex_buffer) {
-            GpuPerformance::record_device_copy(bytes);
-            stream << H::CopyBufferCommand{cached.output, request.vertex_buffer, 0, 0, bytes};
-        }
-        if (request.storage_buffer) {
-            GpuPerformance::record_device_copy(bytes);
-            stream << H::CopyBufferCommand{cached.output, request.storage_buffer, 0, 0, bytes};
-        }
-        if (request.readback) {
-            GpuPerformance::record_readback(bytes);
-            stream << H::CopyBufferCommand{cached.output, cached.readback, 0, 0, bytes};
-        }
-    }
 
-    // A throwing commit can have submitted a prefix of the command graph. From
-    // this point a failure must propagate without reusing the same targets.
-    impl_->last_receipt = {};
-    impl_->completion_unknown = true;
-    try {
-        {
-            GpuPerformance::OperationScope timing{GpuPerformance::Operation::Commit};
-            impl_->last_receipt = stream << H::commit();
-        }
-        ++impl_->submissions;
-        {
-            GpuPerformance::OperationScope timing{GpuPerformance::Operation::Wait};
-            impl_->executor.wait_completed(impl_->last_receipt);
-        }
-        impl_->completion_unknown = false;
-        // The receipt can retain command/submission resource references. Once
-        // its fence has completed, retain() should be able to retire this batch.
+        // A throwing commit can have submitted a prefix of the command graph. From
+        // this point a failure must propagate without reusing the same targets.
         impl_->last_receipt = {};
-    } catch (const std::exception& error) {
-        throw GpuSkinningCompletionError(std::string("GPU skinning completion could not be confirmed: ") + error.what());
-    } catch (...) {
-        throw GpuSkinningCompletionError("GPU skinning completion could not be confirmed");
+        impl_->completion_unknown = true;
+        try {
+            {
+                GpuPerformance::OperationScope timing{GpuPerformance::Operation::Commit};
+                impl_->last_receipt = stream << H::commit();
+            }
+            ++impl_->submissions;
+            {
+                GpuPerformance::OperationScope timing{GpuPerformance::Operation::Wait};
+                impl_->executor.wait_completed(impl_->last_receipt);
+            }
+            impl_->completion_unknown = false;
+            // The receipt can retain command/submission resource references. Once
+            // its fence has completed, retain() should be able to retire this batch.
+            impl_->last_receipt = {};
+        } catch (const std::exception& error) {
+            throw GpuSkinningCompletionError(std::string("GPU skinning completion could not be confirmed: ") + error.what());
+        } catch (...) {
+            throw GpuSkinningCompletionError("GPU skinning completion could not be confirmed");
+        }
     }
 
     for (std::size_t i = 0; i < work.size(); ++i) {
@@ -461,19 +533,26 @@ std::vector<GpuSkinningPipeline::Result> GpuSkinningPipeline::update_batch(
         cached.pending_upload = false;
         // Static staging is no longer needed once its first transfer completed.
         cached.upload_bind = {}; cached.upload_ids = {}; cached.upload_weights = {};
-        std::array<float, kBoundsFloats> bounds{};
-        if (!cached.bounds_readback.read_bytes(std::as_writable_bytes(std::span(bounds)))) {
+        if (work[i].skin && !cached.bounds_readback.read_bytes(std::as_writable_bytes(std::span(cached.reduced_bounds)))) {
             throw std::runtime_error("GPU skinning bounds readback failed");
         }
         results[i].output = cached.output;
-        std::copy_n(bounds.begin(), 3, results[i].min_xyz.begin());
-        std::copy_n(bounds.begin() + 3, 3, results[i].max_xyz.begin());
+        results[i].pose_changed = work[i].skin;
+        if (work[i].skin) ++cached.pose_revision;
+        results[i].pose_revision = cached.pose_revision;
+        std::copy_n(cached.reduced_bounds.begin(), 3, results[i].min_xyz.begin());
+        std::copy_n(cached.reduced_bounds.begin() + 3, 3, results[i].max_xyz.begin());
         if (request.readback) {
             results[i].vertices.resize(request.vertices.size_bytes());
             if (!cached.readback.read_bytes(results[i].vertices)) {
                 throw std::runtime_error("GPU skinning vertex readback failed");
             }
+            cached.readback_valid = true;
         }
+        if (work[i].skin) cached.finals.assign(work[i].finals.begin(), work[i].finals.end());
+        cached.vertex_target = request.vertex_buffer;
+        cached.storage_target = request.storage_buffer;
+        cached.pose_valid = true;
     }
     return results;
 }

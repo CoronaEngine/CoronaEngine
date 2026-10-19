@@ -289,9 +289,9 @@ std::shared_ptr<IResource> ImageParser::parse_exr(const std::filesystem::path& p
 
 bool ImageParser::export_png(const IResource& resource, const std::filesystem::path& path) {
     CFW_LOG_DEBUG("Path : {}", path.string());
-    auto handle = ResourceManager::get_instance().acquire_read<Image>(resource.get_uid());
+    const auto* handle = dynamic_cast<const Image*>(&resource);
     if (!handle) {
-        CFW_LOG_ERROR("[ImageParser::export_png] Failed to acquire read access to resource: {}", resource.get_uid());
+        CFW_LOG_ERROR("[ImageParser::export_png] Resource is not an image: {}", resource.get_uid());
         return false;
     }
 
@@ -310,9 +310,9 @@ bool ImageParser::export_png(const IResource& resource, const std::filesystem::p
 }
 bool ImageParser::export_jpg(const IResource& resource, const std::filesystem::path& path) {
     CFW_LOG_DEBUG("Path : {}", path.string());
-    auto handle = ResourceManager::get_instance().acquire_read<Image>(resource.get_uid());
+    const auto* handle = dynamic_cast<const Image*>(&resource);
     if (!handle) {
-        CFW_LOG_ERROR("[ImageParser::export_jpg] Failed to acquire read access to resource: {}", resource.get_uid());
+        CFW_LOG_ERROR("[ImageParser::export_jpg] Resource is not an image: {}", resource.get_uid());
         return false;
     }
 
@@ -331,9 +331,9 @@ bool ImageParser::export_jpg(const IResource& resource, const std::filesystem::p
 }
 bool ImageParser::export_bmp(const IResource& resource, const std::filesystem::path& path) {
     CFW_LOG_DEBUG("Path : {}", path.string());
-    auto handle = ResourceManager::get_instance().acquire_read<Image>(resource.get_uid());
+    const auto* handle = dynamic_cast<const Image*>(&resource);
     if (!handle) {
-        CFW_LOG_ERROR("[ImageParser::export_bmp] Failed to acquire read access to resource: {}", resource.get_uid());
+        CFW_LOG_ERROR("[ImageParser::export_bmp] Resource is not an image: {}", resource.get_uid());
         return false;
     }
 
@@ -352,9 +352,9 @@ bool ImageParser::export_bmp(const IResource& resource, const std::filesystem::p
 }
 bool ImageParser::export_tga(const IResource& resource, const std::filesystem::path& path) {
     CFW_LOG_DEBUG("Path : {}", path.string());
-    auto handle = ResourceManager::get_instance().acquire_read<Image>(resource.get_uid());
+    const auto* handle = dynamic_cast<const Image*>(&resource);
     if (!handle) {
-        CFW_LOG_ERROR("[ImageParser::export_tga] Failed to acquire read access to resource: {}", resource.get_uid());
+        CFW_LOG_ERROR("[ImageParser::export_tga] Resource is not an image: {}", resource.get_uid());
         return false;
     }
 
@@ -374,9 +374,9 @@ bool ImageParser::export_tga(const IResource& resource, const std::filesystem::p
 
 bool ImageParser::export_exr(const IResource& resource, const std::filesystem::path& path) {
     CFW_LOG_DEBUG("Path : {}", path.string());
-    auto handle = ResourceManager::get_instance().acquire_read<Image>(resource.get_uid());
+    const auto* handle = dynamic_cast<const Image*>(&resource);
     if (!handle) {
-        CFW_LOG_ERROR("[ImageParser::export_exr] Failed to acquire read access to resource: {}", resource.get_uid());
+        CFW_LOG_ERROR("[ImageParser::export_exr] Resource is not an image: {}", resource.get_uid());
         return false;
     }
 

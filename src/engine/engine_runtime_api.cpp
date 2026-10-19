@@ -1,4 +1,5 @@
-﻿#include "horizon.h"
+#include <corona/systems/geometry/model_node_geometry.h>
+#include "horizon.h"
 #include <corona/events/acoustics_system_events.h>
 #include <corona/events/display_system_events.h>
 #include <corona/events/optics_system_events.h>
@@ -147,7 +148,7 @@ std::uintptr_t resolve_camera_handle(std::uintptr_t camera_handle) {
     }
 
     std::uintptr_t fallback = 0;
-    for (const auto& scene : Corona::SharedDataHub::instance().scene_storage()) {
+    for (const auto& scene : std::as_const(Corona::SharedDataHub::instance().scene_storage())) {
         if (scene.active_camera_handle != 0) {
             if (scene.enabled) {
                 return scene.active_camera_handle;
@@ -1148,11 +1149,21 @@ Corona::API::GeometryRenderStatus Corona::API::Geometry::get_render_status() con
                    status.mesh_count > 0 &&
                    slots.size() == status.mesh_count &&
                    status.invalid_mesh_count == 0;
+    if (status.ready) {
+        if (auto geometry = SharedDataHub::instance().geometry_storage().try_acquire_read(handle_)) {
+            if (auto resource = SharedDataHub::instance().model_resource_storage().try_acquire_read(geometry->model_resource_handle)) {
+                status.collision_ready = resource->model_id != 0 &&
+                    geometry->collision_model_id == resource->model_id &&
+                    (!geometry->is_skinned || geometry->skinned_aabb_valid);
+            }
+        }
+    }
     return status;
 }
 
 std::array<float, 6> Corona::API::Geometry::get_aabb() const {
     if (auto geom = SharedDataHub::instance().geometry_storage().try_acquire_read(handle_)) {
+        if(geom->model_node_bounds)return *geom->model_node_bounds;
         if (auto res = SharedDataHub::instance().model_resource_storage().try_acquire_read(geom->model_resource_handle)) {
             if (res->model_id) {
                 if (auto scene = Resource::ResourceManager::get_instance().acquire_read<Resource::Scene>(res->model_id)) {
@@ -1164,6 +1175,34 @@ std::array<float, 6> Corona::API::Geometry::get_aabb() const {
         }
     }
     return {0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
+}
+
+std::optional<std::array<float, 6>> Corona::API::Geometry::try_get_aabb() const {
+    // Same chain as get_aabb(), but every acquire is best effort.  A loader holds a
+    // resource entry lock across its whole import (seconds for a large model), and
+    // the thread that paints the editor and dispatches its input must never wait for
+    // it: no AABB for this refresh is acceptable, a frozen editor is not.
+    auto geom = SharedDataHub::instance().geometry_storage().try_acquire_read_nowait(handle_);
+    if (!geom) {
+        return std::nullopt;
+    }
+    if (geom->model_node_bounds) {
+        return *geom->model_node_bounds;
+    }
+    auto res = SharedDataHub::instance().model_resource_storage().try_acquire_read_nowait(
+        geom->model_resource_handle);
+    if (!res || res->model_id == 0) {
+        return std::nullopt;
+    }
+    auto scene = Resource::ResourceManager::get_instance()
+                     .try_acquire_read_nowait<Resource::Scene>(res->model_id);
+    if (!scene) {
+        return std::nullopt;
+    }
+    const auto aabb_min = scene->get_scene_aabb().min;
+    const auto aabb_max = scene->get_scene_aabb().max;
+    return std::array<float, 6>{aabb_min[0], aabb_min[1], aabb_min[2],
+                                aabb_max[0], aabb_max[1], aabb_max[2]};
 }
 
 std::uintptr_t Corona::API::Geometry::get_transform_handle() const {
@@ -2321,6 +2360,66 @@ bool Corona::API::Camera::get_requested_vision_denoise() const {
     return Corona::API::get_requested_vision_denoise(handle_);
 }
 
+void Corona::API::Camera::set_vision_denoiser(const std::string& type) {
+    Corona::API::set_vision_denoiser(type, handle_);
+}
+
+std::string Corona::API::Camera::get_vision_denoiser() const {
+    return Corona::API::get_vision_denoiser(handle_);
+}
+
+std::string Corona::API::Camera::get_requested_vision_denoiser() const {
+    return Corona::API::get_requested_vision_denoiser(handle_);
+}
+
+void Corona::API::Camera::set_vision_reblur_settings(const std::string& json) {
+    Corona::API::set_vision_reblur_settings(json, handle_);
+}
+
+void Corona::API::Camera::set_vision_pt_settings(const std::string& json) {
+    Corona::API::set_vision_pt_settings(json, handle_);
+}
+
+void Corona::API::Camera::set_vision_restir_settings(const std::string& json) {
+    Corona::API::set_vision_restir_settings(json, handle_);
+}
+
+void Corona::API::Camera::set_vision_relax_settings(const std::string& json) {
+    Corona::API::set_vision_relax_settings(json, handle_);
+}
+
+std::string Corona::API::Camera::get_requested_vision_reblur_settings() const {
+    return Corona::API::get_requested_vision_reblur_settings(handle_);
+}
+
+std::string Corona::API::Camera::get_requested_vision_pt_settings() const {
+    return Corona::API::get_requested_vision_pt_settings(handle_);
+}
+
+std::string Corona::API::Camera::get_requested_vision_restir_settings() const {
+    return Corona::API::get_requested_vision_restir_settings(handle_);
+}
+
+std::string Corona::API::Camera::get_requested_vision_relax_settings() const {
+    return Corona::API::get_requested_vision_relax_settings(handle_);
+}
+
+std::string Corona::API::Camera::get_effective_vision_reblur_settings() const {
+    return Corona::API::get_effective_vision_reblur_settings(handle_);
+}
+
+std::string Corona::API::Camera::get_effective_vision_pt_settings() const {
+    return Corona::API::get_effective_vision_pt_settings(handle_);
+}
+
+std::string Corona::API::Camera::get_effective_vision_restir_settings() const {
+    return Corona::API::get_effective_vision_restir_settings(handle_);
+}
+
+std::string Corona::API::Camera::get_effective_vision_relax_settings() const {
+    return Corona::API::get_effective_vision_relax_settings(handle_);
+}
+
 void Corona::API::Camera::set_vision_accumulation(bool enabled) {
     Corona::API::set_vision_accumulation(enabled, handle_);
 }
@@ -2509,13 +2608,17 @@ void Corona::API::Camera::set_viewport_rect(int x, int y, int width, int height)
 }
 
 std::uintptr_t Corona::API::Camera::pick_actor_at_pixel(int x, int y) const {
+    return pick_model_node_at_pixel(x,y).actor_handle;
+}
+
+Corona::API::ModelNodePickResult Corona::API::Camera::pick_model_node_at_pixel(int x, int y) const {
     if (handle_ == 0) {
         CFW_LOG_WARNING("[Camera::pick_actor_at_pixel] Invalid camera handle");
-        return 0;
+        return {};
     }
 
     if (x < 0 || y < 0) {
-        return 0;
+        return {};
     }
 
     std::uintptr_t actor_pick_handle = 0;
@@ -2523,20 +2626,20 @@ std::uintptr_t Corona::API::Camera::pick_actor_at_pixel(int x, int y) const {
         actor_pick_handle = camera->actor_pick_handle;
     }
     if (actor_pick_handle == 0) {
-        return 0;
+        return {};
     }
 
     auto pick = SharedDataHub::instance().actor_pick_storage().try_acquire_write(actor_pick_handle);
     if (!pick) {
-        return 0;
+        return {};
     }
 
     const auto ux = static_cast<std::uint32_t>(x);
     const auto uy = static_cast<std::uint32_t>(y);
-    const std::uintptr_t completed_actor =
+    const ModelNodePickResult completed_actor =
         (pick->result_ready && pick->result_x == ux && pick->result_y == uy)
-            ? pick->actor_handle
-            : 0;
+            ? ModelNodePickResult{pick->actor_handle, pick->node_index}
+            : ModelNodePickResult{};
 
     pick->x = ux;
     pick->y = uy;
@@ -2661,6 +2764,46 @@ void set_vision_denoise(bool enabled, std::uintptr_t camera_handle) {
     SharedDataHub::instance().enqueue_camera_state_update(command);
 }
 
+static std::string vision_denoiser_name(CameraVisionDenoiser type) {
+    switch (type) {
+        case CameraVisionDenoiser::SVGF: return "svgf";
+        case CameraVisionDenoiser::ReBLUR: return "reblur";
+        case CameraVisionDenoiser::ReLAX: return "relax";
+        default: return "scene";
+    }
+}
+
+void set_vision_denoiser(const std::string& type, std::uintptr_t camera_handle) {
+    const auto resolved_handle = resolve_camera_handle(camera_handle);
+    if (resolved_handle == 0) return;
+    CameraStateUpdateCommand command{};
+    command.camera_handle = resolved_handle;
+    command.fields = CameraStateUpdateField::VisionDenoiser;
+    if (type == "svgf" || type == "SVGF") command.vision_denoiser = CameraVisionDenoiser::SVGF;
+    else if (type == "reblur" || type == "ReBLUR" || type == "REBLUR") command.vision_denoiser = CameraVisionDenoiser::ReBLUR;
+    else if (type == "relax" || type == "ReLAX" || type == "RELAX") command.vision_denoiser = CameraVisionDenoiser::ReLAX;
+    else if (type != "scene") return;
+    SharedDataHub::instance().enqueue_camera_state_update(command);
+}
+
+std::string get_vision_denoiser(std::uintptr_t camera_handle) {
+    const auto resolved_handle = resolve_camera_handle(camera_handle);
+    if (resolved_handle != 0) {
+        if (auto camera = SharedDataHub::instance().camera_storage().acquire_read(resolved_handle)) {
+            return vision_denoiser_name(camera->vision_denoiser);
+        }
+    }
+    return "scene";
+}
+
+std::string get_requested_vision_denoiser(std::uintptr_t camera_handle) {
+    const auto resolved_handle = resolve_camera_handle(camera_handle);
+    if (const auto requested = SharedDataHub::instance().requested_camera_vision_denoiser(resolved_handle)) {
+        return vision_denoiser_name(*requested);
+    }
+    return get_vision_denoiser(resolved_handle);
+}
+
 bool get_vision_denoise(std::uintptr_t camera_handle) {
     const auto resolved_handle = resolve_camera_handle(camera_handle);
     if (resolved_handle != 0) {
@@ -2669,6 +2812,106 @@ bool get_vision_denoise(std::uintptr_t camera_handle) {
         }
     }
     return false;
+}
+
+void set_vision_reblur_settings(const std::string& json, std::uintptr_t camera_handle) {
+    const auto handle = resolve_camera_handle(camera_handle);
+    if (handle == 0) return;
+    CameraStateUpdateCommand command{};
+    command.camera_handle = handle;
+    command.fields = CameraStateUpdateField::VisionReblurSettings;
+    command.vision_reblur_settings = json;
+    SharedDataHub::instance().enqueue_camera_state_update(std::move(command));
+}
+
+void set_vision_pt_settings(const std::string& json, std::uintptr_t camera_handle) {
+    const auto handle = resolve_camera_handle(camera_handle);
+    if (handle == 0) return;
+    CameraStateUpdateCommand command{};
+    command.camera_handle = handle;
+    command.fields = CameraStateUpdateField::VisionPtSettings;
+    command.vision_pt_settings = json;
+    SharedDataHub::instance().enqueue_camera_state_update(std::move(command));
+}
+
+void set_vision_restir_settings(const std::string& json, std::uintptr_t camera_handle) {
+    const auto handle = resolve_camera_handle(camera_handle);
+    if (handle == 0) return;
+    CameraStateUpdateCommand command{};
+    command.camera_handle = handle;
+    command.fields = CameraStateUpdateField::VisionRestirSettings;
+    command.vision_restir_settings = json;
+    SharedDataHub::instance().enqueue_camera_state_update(std::move(command));
+}
+
+void set_vision_relax_settings(const std::string& json, std::uintptr_t camera_handle) {
+    const auto handle = resolve_camera_handle(camera_handle);
+    if (handle == 0) return;
+    CameraStateUpdateCommand command{};
+    command.camera_handle = handle;
+    command.fields = CameraStateUpdateField::VisionRelaxSettings;
+    command.vision_relax_settings = json;
+    SharedDataHub::instance().enqueue_camera_state_update(std::move(command));
+}
+
+std::string get_requested_vision_reblur_settings(std::uintptr_t camera_handle) {
+    const auto handle = resolve_camera_handle(camera_handle);
+    auto& hub = SharedDataHub::instance();
+    if (const auto requested = hub.requested_camera_vision_reblur_settings(handle)) return *requested;
+    if (auto camera = hub.camera_storage().acquire_read(handle)) return camera->vision_reblur_settings;
+    return "{}";
+}
+
+std::string get_requested_vision_pt_settings(std::uintptr_t camera_handle) {
+    const auto handle = resolve_camera_handle(camera_handle);
+    auto& hub = SharedDataHub::instance();
+    if (const auto requested = hub.requested_camera_vision_pt_settings(handle)) return *requested;
+    if (auto camera = hub.camera_storage().acquire_read(handle)) return camera->vision_pt_settings;
+    return "{}";
+}
+
+std::string get_requested_vision_restir_settings(std::uintptr_t camera_handle) {
+    const auto handle = resolve_camera_handle(camera_handle);
+    auto& hub = SharedDataHub::instance();
+    if (const auto requested = hub.requested_camera_vision_restir_settings(handle)) return *requested;
+    if (auto camera = hub.camera_storage().acquire_read(handle)) return camera->vision_restir_settings;
+    return "{}";
+}
+
+std::string get_requested_vision_relax_settings(std::uintptr_t camera_handle) {
+    const auto handle = resolve_camera_handle(camera_handle);
+    auto& hub = SharedDataHub::instance();
+    if (const auto requested = hub.requested_camera_vision_relax_settings(handle)) return *requested;
+    if (auto camera = hub.camera_storage().acquire_read(handle)) return camera->vision_relax_settings;
+    return "{}";
+}
+
+std::string get_effective_vision_reblur_settings(std::uintptr_t camera_handle) {
+    const auto handle = resolve_camera_handle(camera_handle);
+    if (auto camera = SharedDataHub::instance().camera_storage().acquire_read(handle))
+        return camera->vision_reblur_effective_settings;
+    return "{}";
+}
+
+std::string get_effective_vision_pt_settings(std::uintptr_t camera_handle) {
+    const auto handle = resolve_camera_handle(camera_handle);
+    if (auto camera = SharedDataHub::instance().camera_storage().acquire_read(handle))
+        return camera->vision_pt_effective_settings;
+    return "{}";
+}
+
+std::string get_effective_vision_restir_settings(std::uintptr_t camera_handle) {
+    const auto handle = resolve_camera_handle(camera_handle);
+    if (auto camera = SharedDataHub::instance().camera_storage().acquire_read(handle))
+        return camera->vision_restir_effective_settings;
+    return "{}";
+}
+
+std::string get_effective_vision_relax_settings(std::uintptr_t camera_handle) {
+    const auto handle = resolve_camera_handle(camera_handle);
+    if (auto camera = SharedDataHub::instance().camera_storage().acquire_read(handle))
+        return camera->vision_relax_effective_settings;
+    return "{}";
 }
 
 bool get_requested_vision_denoise(std::uintptr_t camera_handle) {
@@ -2863,3 +3106,85 @@ void stop_audio(std::uint64_t resource_id) {
 }
 
 }  // namespace Corona::API
+
+std::vector<Corona::API::ModelNodeState> Corona::API::Geometry::get_model_nodes() const {
+    std::vector<ModelNodeState> result;
+    if (auto g = SharedDataHub::instance().geometry_storage().try_acquire_read(handle_)) {
+        result.reserve(g->model_nodes.size());
+        for (const auto& n : g->model_nodes) result.push_back(n.state);
+    }
+    return result;
+}
+Corona::ModelNodes::Counts Corona::API::Geometry::get_model_node_counts() const {
+    if (auto g = SharedDataHub::instance().geometry_storage().try_acquire_read(handle_)) {
+        return ModelNodes::counts(g->model_nodes);
+    }
+    return {};
+}
+std::vector<Corona::API::ModelNodeOverride> Corona::API::Geometry::get_model_node_overrides() const {
+    if (auto g = SharedDataHub::instance().geometry_storage().try_acquire_read(handle_)) return g->model_node_overrides;
+    return {};
+}
+bool Corona::API::Geometry::set_model_node_state(uint32_t index, const ModelNodeState& state) {
+    auto g = SharedDataHub::instance().geometry_storage().try_acquire_write(handle_);
+    if (!g || index >= g->model_nodes.size()) return false;
+    const auto previous = g->model_nodes[index].state;
+    if (!ModelNodes::set(g->model_nodes, index, state)) return false;
+    if (!ModelNodes::update_instances(*g)) {
+        ModelNodes::set(g->model_nodes, index, previous);
+        ModelNodes::update_instances(*g);
+        return false;
+    }
+    const auto& n = g->model_nodes[index];
+    ModelNodeOverride o;
+    o.node_index = index;
+    o.node_path = n.state.node_path;
+    if (n.state.position != n.base.position) o.position = n.state.position;
+    if (n.state.rotation != n.base.rotation) o.rotation = n.state.rotation;
+    if (n.state.scale != n.base.scale) o.scale = n.state.scale;
+    if (!n.state.visible) o.visible = false;
+    auto& v = g->model_node_overrides;
+    v.erase(std::remove_if(v.begin(), v.end(), [index](const auto& o) { return o.node_index == index; }), v.end());
+    if (o.position || o.rotation || o.scale || o.visible) v.push_back(std::move(o));
+    return true;
+}
+bool Corona::API::Geometry::set_model_node_overrides(const std::vector<ModelNodeOverride>& overrides) {
+    for (const auto& o : overrides)
+        for (const auto* v : {&o.position, &o.rotation, &o.scale})
+            if (*v)
+                for (float f : **v)
+                    if (!std::isfinite(f)) return false;
+    auto g = SharedDataHub::instance().geometry_storage().try_acquire_write(handle_);
+    if (!g) return false;
+    // Import and remote restoration can carry a stale index/path.  Treat the
+    // whole list as one update: callers retain their previous persisted data
+    // when this returns false, so the renderer must retain it too.
+    const auto previous_nodes = g->model_nodes;
+    const auto previous_overrides = g->model_node_overrides;
+    const auto previous_instances = g->mesh_instances;
+    const auto previous_bounds = g->model_node_bounds;
+    const auto previous_revision = g->model_node_revision;
+    g->model_node_overrides = overrides;
+    for (auto& n : g->model_nodes) {
+        n.state.position = n.base.position;
+        n.state.rotation = n.base.rotation;
+        n.state.scale = n.base.scale;
+        n.state.visible = true;
+        n.dirty = true;
+    }
+    for (uint32_t i = 0; i < g->model_nodes.size(); ++i) ModelNodes::update(g->model_nodes, i);
+    if (g->model_nodes.empty() || ModelNodes::apply_overrides(*g)) return true;
+    g->model_nodes = previous_nodes;
+    g->model_node_overrides = previous_overrides;
+    g->mesh_instances = previous_instances;
+    g->model_node_bounds = previous_bounds;
+    g->model_node_revision = previous_revision;
+    return false;
+}
+
+std::optional<std::array<float, 6>> Corona::API::Geometry::get_model_node_aabb(uint32_t index) const {
+    if (auto g = SharedDataHub::instance().geometry_storage().try_acquire_read(handle_)) {
+        if (index < g->model_nodes.size()) return ModelNodes::bounds(*g, index);
+    }
+    return std::nullopt;
+}

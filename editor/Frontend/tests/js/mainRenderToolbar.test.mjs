@@ -6,7 +6,7 @@ import { createSSRApp } from 'vue';
 import { parse } from 'vue/compiler-sfc';
 import { compile } from '@vue/compiler-ssr';
 import { renderToString } from '@vue/server-renderer';
-import { visionRenderModes } from '../../src/utils/visionRenderModes.js';
+import { visionRenderModes, visionDenoisers } from '../../src/utils/visionRenderModes.js';
 
 const source = fs.readFileSync(new URL('../../src/views/layout/MainPage.vue', import.meta.url), 'utf8');
 const { descriptor } = parse(source);
@@ -25,19 +25,23 @@ async function renderMain(settings = {}) {
       cabbageChatDetached: true, handleViewportFocus: noop, handleViewportPointer: noop,
       handleViewportPointerDown: noop, handleViewportPointerCancel: noop, handleViewportPointerLeave: noop,
       handleViewportClick: noop, handleWheel: noop, updateSceneLight: noop,
+      cameraSpeed: 0.2, setCameraSpeedFromPanel: noop,
       mainRenderBackend: 'vision', mainVisionRenderMode: 'restir', visionAvailable: true,
       mainRenderModeLabel: 'Vision ReSTIR', activeMenu: null, toggleMenu: noop,
       currentMainSceneId: () => 'scene.ini', currentMainCameraId: () => 'camera-1', mainVisionAccumulation: true, mainVisionDenoise: false,
       mainVisionAccumulationBusy: false, mainVisionDenoiseBusy: false,
       mainVisionAccumulationError: '', mainVisionDenoiseError: '',
       mainVisionStablePlanes: true, mainVisionStablePlanesBusy: false, mainVisionStablePlanesError: '',
+      mainVisionDenoiser: 'reblur', mainVisionDenoiserBusy: false, mainVisionDenoiserError: '',
+      visionDenoisers,
+      selectMainVisionDenoiser: noop,
       toggleMainVisionStablePlanes: noop,
       mainRenderModeOptions: [{ value: 'native', backend: 'native', label: 'Native' }, ...visionRenderModes],
       selectMainRenderMode: noop, toggleMainVisionAccumulation: noop, toggleMainVisionDenoise: noop,
       ...settings,
     }),
   });
-  for (const name of ['FrameTimingOverlay', 'CabbageReviewAssistant', 'CabbageChatPanel', 'CabbageGuidanceOverlay']) {
+  for (const name of ['FrameTimingOverlay', 'CabbageReviewAssistant', 'CabbageChatPanel', 'CabbageGuidanceOverlay', 'PtSettings', 'ReblurSettings', 'RelaxSettings']) {
     app.component(name, { render: () => null });
   }
   return renderToString(app);
@@ -48,8 +52,19 @@ test('main viewport actually renders a reachable mode selector and both independ
   assert.match(html, /<button[^>]*aria-label="渲染模式"[^>]*aria-expanded="false"/);
   assert.match(html, /Vision ReSTIR/);
   assert.match(html, /<input[^>]*aria-label="累积样本"[^>]*checked/);
-  assert.match(html, /<input[^>]*aria-label="SVGF"/);
-  assert.doesNotMatch(html, /<input[^>]*aria-label="SVGF"[^>]*checked/);
+  assert.match(html, /<input[^>]*aria-label="降噪"/);
+  assert.doesNotMatch(html, /<input[^>]*aria-label="降噪"[^>]*checked/);
+});
+
+test('denoiser selector exposes REBLUR independently of the denoise switch', async () => {
+  const html = await renderMain({ activeMenu: 'denoiser' });
+  assert.match(html, /<button[^>]*aria-label="降噪类型"/);
+  assert.match(html, /<button[^>]*role="menuitemradio"[^>]*aria-checked="true"[^>]*>\s*REBLUR/);
+  assert.match(html, /<button[^>]*role="menuitemradio"[^>]*aria-checked="false"[^>]*>\s*SVGF/);
+  assert.doesNotMatch(html, /<input[^>]*aria-label="降噪"[^>]*checked/);
+  for (const settings of [{ mainRenderBackend: 'native' }, { mainVisionRenderMode: 'ssat' }]) {
+    assert.match(await renderMain(settings), /<button[^>]*aria-label="降噪类型"[^>]*disabled/);
+  }
 });
 
 test('mode selector stays visible on Native while both checkbox preferences are disabled and retained', async () => {
@@ -57,7 +72,7 @@ test('mode selector stays visible on Native while both checkbox preferences are 
   assert.match(html, /<button[^>]*aria-label="渲染模式"/);
   assert.match(html, /Native/);
   assert.match(html, /<input[^>]*aria-label="累积样本"[^>]*checked[^>]*disabled/);
-  assert.match(html, /<input[^>]*aria-label="SVGF"[^>]*checked[^>]*disabled/);
+  assert.match(html, /<input[^>]*aria-label="降噪"[^>]*checked[^>]*disabled/);
 });
 
 test('expanded render options are painted in the page without a native CEF popup', async () => {
@@ -79,4 +94,10 @@ test('Stable Plane is visible and checked, and only enabled for an available ReS
   ]) {
     assert.match(await renderMain(settings), /<input[^>]*aria-label="Stable Plane"[^>]*checked[^>]*disabled/);
   }
+});
+
+test('RELAX appears as an independent denoiser in the viewport menu', async () => {
+  const html = await renderMain({ activeMenu: 'denoiser', mainVisionDenoiser: 'relax' });
+  assert.match(html, /<button[^>]*role="menuitemradio"[^>]*aria-checked="true"[^>]*>\s*RELAX/);
+  assert.doesNotMatch(html, /<input[^>]*aria-label="降噪"[^>]*checked/);
 });

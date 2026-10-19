@@ -398,6 +398,8 @@ void BindAll(nanobind::module_& m) {
         .def("get_vision_render_mode", &Camera::get_vision_render_mode)
         .def("set_vision_denoise", &Camera::set_vision_denoise, nb::arg("enabled"))
         .def("get_vision_denoise", &Camera::get_vision_denoise)
+        .def("set_vision_denoiser", &Camera::set_vision_denoiser, nb::arg("type"))
+        .def("get_vision_denoiser", &Camera::get_vision_denoiser)
         .def("set_vision_accumulation", &Camera::set_vision_accumulation, nb::arg("enabled"))
         .def("get_vision_accumulation", &Camera::get_vision_accumulation)
         .def("get_requested_vision_accumulation", &Camera::get_requested_vision_accumulation)

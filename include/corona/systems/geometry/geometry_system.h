@@ -8,6 +8,7 @@
 #include <corona/kernel/event/i_event_stream.h>
 #include <corona/kernel/system/system_base.h>
 #include <corona/math/frustum.h>
+#include <corona/systems/geometry/mesh_draw_bounds.h>
 #include <corona/memory/gpu_mem_ledger.h>
 #include <corona/spatial/aabb.h>
 
@@ -117,6 +118,8 @@ struct MemoryReport {
  *
  */
 struct LODMeshBuffers {
+    Horizon::HardwareBuffer shadow_index_buffer;
+    Geometry::MeshDrawClusters draw_clusters;
     Horizon::HardwareBuffer vertex_buffer;    // GPU 顶点缓冲（Vertex Shader 读取）
     Horizon::HardwareBuffer index_buffer;     // GPU 索引缓冲（组装三角形）
     Horizon::HardwareBuffer vertex_storage;   // GPU 顶点 StorageBuffer（Compute Shader 用）
@@ -365,6 +368,7 @@ class GeometrySystem : public Kernel::SystemBase {
     struct MeshSlot {
         uint32_t               mesh_index    = 0;
         uint32_t               instance_index = 0;
+        uint32_t               node_index = UINT32_MAX;
         uint32_t               object_id = 0;
         ktm::fmat4x4           instance_transform{ktm::fmat4x4::from_eye()};
         RenderMeshBuffers      geo;              ///< LOD 解析后的几何缓冲
@@ -386,6 +390,7 @@ class GeometrySystem : public Kernel::SystemBase {
     /// the material texture, so keeping those handles out of the hot path avoids
     /// four cascades worth of unnecessary ref-counted copies.
     struct ShadowMeshSlot {
+        Geometry::MeshDrawClusters draw_clusters;
         uint32_t          mesh_index = 0;
         uint32_t          instance_index = 0;
         uint32_t          object_id = 0;
@@ -395,6 +400,10 @@ class GeometrySystem : public Kernel::SystemBase {
         std::uint32_t     vertex_count = 0;
         std::uint32_t     index_count = 0;
         std::uint32_t     max_index = 0;
+        // Mesh-local conservative bounds. Deforming meshes remain uncullable
+        // until a bound for the same pose is available.
+        std::array<float, 3> bounds_min{}, bounds_max{};
+        bool bounds_valid = false;
     };
 
     /// 查询一个 geometry 的所有 MeshSlot（常驻路由，无相机上下文）。
@@ -619,7 +628,11 @@ class GeometrySystem : public Kernel::SystemBase {
     /// 重新加载完成时重建 actor 关联的 GPU 资源（HardwareBuffer / HardwareImage），
     /// 从已导入的 Scene 资源中重新创建 mesh_handles 并恢复 model_resource_handle。
     /// 同时清理 LOD 缓存以保证下一帧 update() 重新上传 LOD 数据。
-    void rebuild_actor_gpu_resources(std::uintptr_t actor, std::uint64_t rid);
+    /// @returns true when the actor's GPU resources were queued for staged
+    /// upload.  In that case ActorLoadFinishedEvent is emitted on publication.
+    bool rebuild_actor_gpu_resources(std::uintptr_t actor,
+                                     std::uint64_t rid,
+                                     std::uintptr_t scene_handle = 0);
 
     // ========================================
     // 动态减面内部管线（在 update() 中每帧调用，外部不可见）

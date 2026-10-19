@@ -16,15 +16,21 @@ void PoissonFilter::prepare() noexcept {
     init_buffer_zero(device(), temp_buffer_indirect_, num, "PoissonFilter::temp_buffer_indirect");
 }
 
-void PoissonFilter::prepare_guides(uint num) noexcept {
-    if (guide_position_.size() == num) { return; }
+void PoissonFilter::prepare_guides(uint num, bool coverage_only) noexcept {
+    if (guides_ready(num, coverage_only)) { return; }
     if (num == 0u) {
-        guide_position_ = {}; guide_normal_ = {};
+        guide_position_ = {}; guide_normal_ = {}; guide_shading_normal_ = {}; guide_albedo_ = {};
         guide_identity_ = {}; guide_surface_ = {};
         return;
     }
     init_buffer_zero(device(), guide_position_, num, "PoissonFilter::guide_position");
     init_buffer_zero(device(), guide_normal_, num, "PoissonFilter::guide_normal");
+    if (coverage_only) {
+        guide_shading_normal_ = {}; guide_albedo_ = {};
+    } else {
+        init_buffer_zero(device(), guide_shading_normal_, num, "PoissonFilter::guide_shading_normal");
+        init_buffer_zero(device(), guide_albedo_, num, "PoissonFilter::guide_albedo");
+    }
     init_buffer_zero(device(), guide_identity_, num, "PoissonFilter::guide_identity");
     init_buffer_zero(device(), guide_surface_, num, "PoissonFilter::guide_surface");
 }
@@ -38,41 +44,120 @@ void PoissonFilter::compile_combined() noexcept {
 Pipeline *pipeline_ref = pipeline();
 // Extract the immutable spatial guide once, rather than decoding path records
 // and querying scene geometry at every tap in every spatial iteration.
-Kernel prepare_guide = [pipeline_ref](Var<CombinedPoissonParam> param) {
-    Uint idx = dispatch_id();
-    // Test the sparse layer mask before gathering the strided path attributes.
-    // Keep this nested: single-surface producers have no plane descriptor.
-    $if(param.layered != 0u) {
-        $if(param.stable_planes.read(idx).valid == 0u) {
-            param.guide_position.write(idx, make_float4(0.f, 0.f, 0.f, 1.f));
-            param.guide_normal.write(idx, make_float4(0.f));
-            param.guide_identity.write(idx, make_uint4(0u));
-            param.guide_surface.write(idx, make_uint4(0u, InvalidUI32, InvalidUI32, 1u));
-            $return();
-        };
-    };
+auto write_guide = [pipeline_ref](Var<CombinedPoissonParam> &param, Uint idx) {
     StableGeometryGuide guide(param, idx, param.visibility_buffer.read(idx));
     Bool sky = PixelStateUtils::is_sky(guide.hit);
     Float3 position = make_float3(0.f), normal = make_float3(0.f);
     Bool emissive = false;
     $if(!sky) {
-        Interaction it = pipeline_ref->geometry().compute_surface_interaction(guide.hit, false);
-        guide.apply(it);
-        position = it.pos; normal = it.ng;
+        $if(param.layered != 0u) {
+            position = guide.position; normal = guide.normal;
+        } $else {
+            Interaction it = pipeline_ref->geometry().compute_surface_interaction(guide.hit, false);
+            guide.apply(it);
+            position = it.pos; normal = it.ng;
+        };
         emissive = PixelStateUtils::is_emissive(pipeline_ref, guide.hit);
     };
+    param.guide_shading_normal.write(idx, make_float4(param.svgf_buffer.read(idx).surface_normal));
     param.guide_position.write(idx, make_float4(position, cast<float>(sky)));
     param.guide_normal.write(idx, make_float4(normal, cast<float>(emissive)));
     param.guide_identity.write(idx, make_uint4(cast<uint>(guide.valid), guide.branch, guide.sequence, guide.identity));
     param.guide_surface.write(idx, make_uint4(guide.depth, guide.material, guide.hit.inst_id, cast<uint>(guide.layered)));
 };
+Kernel prepare_guide = [write_guide](Var<CombinedPoissonParam> param) {
+    skip_empty_tile(param);
+    Uint idx = dispatch_id();
+    $if(param.layered != 0u) {
+        $if(param.stable_planes.read(idx).valid == 0u) { $return(); };
+    };
+    write_guide(param, idx);
+};
 guide_shader_ = device().compile(prepare_guide, "SVGF-PoissonGuide");
+// One block prepares one 16x16 tile, one pixel per thread. All 256 lanes
+// participate in the barrier/vote, including pixels outside a partial tile.
+Kernel prepare_layer_guide = [pipeline_ref](Var<CombinedPoissonParam> param) {
+    configure_block(256u);
+    Uint tile = dispatch_id() / 256u, local = dispatch_id() % 256u;
+    Uint tiles_x = (param.width + 15u) / 16u;
+    Uint x = (tile % tiles_x) * 16u + local % 16u;
+    Uint y = (tile / tiles_x) * 16u + local / 16u;
+    Bool active = false;
+    $if(local == 0u) { param.active_tiles.write(tile, 0u); };
+    // Only this block owns the tile. Its reset must precede every warp's vote.
+    synchronize_block();
+    $if(x < param.width && y < param.height) {
+        Uint idx = y * param.width + x;
+        // Read validity before geometry: sparse layers must not fetch the
+        // full stable-plane payload for pixels without an endpoint.
+        Bool has_plane = param.stable_planes.read(idx).valid != 0u;
+        Bool valid = false;
+        $if(has_plane) {
+            auto plane = param.stable_planes.read(idx);
+            valid = plane.surface.hit->is_hit() && plane.surface.hit.inst_id != InvalidUI32;
+            $if(valid) {
+                // This entry point only handles full stable-plane records.
+                // Decode once before any radiance/scratch writes can alias them.
+                Float3 position = plane.surface.virtual_position.as_vec3();
+                Float3 normal = plane.surface.virtual_geometric_normal.as_vec3();
+                Float3 shading_normal = plane.surface.virtual_normal.as_vec3();
+                Float view_depth = length(plane.depth_position.as_vec3() - param.camera_pos.as_vec3());
+                Float3 albedo = modulation_albedo(plane.surface.denoiser_albedo.as_vec3(), Cfg::Modulator::kSoftEpsilon);
+                Uint branch = ocarina::select(plane.surface.stable_branch == InvalidUI32, 0u, plane.surface.stable_branch);
+                Uint4 identity = make_uint4(1u, branch, plane.branch_sequence, plane.instance_hash);
+                Uint4 surface = make_uint4(plane.depth, plane.material_id, plane.surface.hit.inst_id, 1u);
+                Bool emissive = PixelStateUtils::is_emissive(pipeline_ref, plane.surface.hit);
+                $if(!emissive) {
+                    auto direct = param.direct_src.read(idx), indirect = param.indirect_src.read(idx);
+                    param.direct_src.write(idx, make_RadType4(make_RadType3(direct.xyz() / albedo), luminance(albedo)));
+                    param.indirect_src.write(idx, make_RadType4(make_RadType3(indirect.xyz() / albedo), luminance(albedo)));
+                    param.guide_albedo.write(idx, make_float4(albedo, 0.f));
+                };
+                param.guide_position.write(idx, make_float4(position, view_depth));
+                param.guide_normal.write(idx, make_float4(normal, cast<float>(emissive)));
+                param.guide_shading_normal.write(idx, make_float4(shading_normal, 1.f));
+                param.guide_identity.write(idx, identity);
+                param.guide_surface.write(idx, surface);
+            } $else {
+                // Sky endpoints retain coverage identity without a filterable signal.
+                param.guide_identity.write(idx, make_uint4(2u, 0u, plane.branch_sequence, plane.instance_hash));
+                param.guide_surface.write(idx, make_uint4(plane.depth, plane.material_id, plane.surface.hit.inst_id, 1u));
+                param.guide_position.write(idx, make_float4(plane.surface.virtual_position.as_vec3(),
+                    length(plane.depth_position.as_vec3() - param.camera_pos.as_vec3())));
+                param.guide_normal.write(idx, make_float4(plane.surface.virtual_geometric_normal.as_vec3(), 0.f));
+            };
+        };
+        active |= valid;
+        $if(!valid) {
+            // History starts at zero; every valid temporal write has age >= 1.
+            // Clear a used slot once, including both frame parities as they
+            // become current, instead of rewriting empty histories every frame.
+            $if(param.svgf_buffer.read(idx).moments_direct.z != 0.f) {
+                SVGFDataDualVar empty;
+                param.svgf_buffer.write(idx, empty);
+            };
+            param.direct_src.write(idx, make_RadType4(0.f));
+            param.indirect_src.write(idx, make_RadType4(0.f));
+            // Spatial consumers mask invalid taps. Empty-tile scratch may stay
+            // untouched; iteration zero overwrites all pixels of active tiles.
+            // Invalid guide geometry is ignored by spatial and coverage
+            // consumers. Keep only the validity marker; preserve sky metadata.
+            $if(!has_plane) { param.guide_identity.write(idx, make_uint4(0u)); };
+        };
+    };
+    Uint valid_lanes = warp_active_count_bits(active);
+    $if(local % 32u == 0u && valid_lanes != 0u) {
+        param.active_tiles.atomic(tile).fetch_add(valid_lanes);
+    };
+};
+layer_guide_shader_ = device().compile(prepare_layer_guide, "SVGF-PrepareLayerGuide");
 // Multiscale Poisson disk pass with depth/normal/luminance edge stopping.
 // Keep the disk fixed across frames: spatial output is not fed back into
 // temporal history, so frame-varying rotations would introduce unaveraged flicker.
 // Retain the inexpensive original path when Stable Planes are disabled.
 auto compile_filter = [&]<bool cached>() {
 Kernel kernel = [&, pipeline_ref](Var<CombinedPoissonParam> param) {
+    skip_empty_tile(param);
     Int2 screen_size = make_int2(dispatch_dim().xy());
     Int2 cur_pixel = make_int2(dispatch_idx().xy());
     Uint cur_idx = dispatch_id();
@@ -170,6 +255,14 @@ Kernel kernel = [&, pipeline_ref](Var<CombinedPoissonParam> param) {
                 auto neighbor_guide = load_spatial_guide<cached>(param, idx);
                 TriangleHitVar neighbor_hit = neighbor_guide.hit;
                 Bool neighbor_is_sky = PixelStateUtils::is_sky(neighbor_hit);
+                if constexpr (cached) {
+                    // Sparse fused preparation leaves empty-tile scratch stale.
+                    // Zero the complete value before luminance/variance math:
+                    // multiplying a stale NaN by a zero weight is insufficient.
+                    Bool unused = param.fused_modulation != 0u && neighbor_is_sky;
+                    direct_neighbor = ocarina::select(unused, make_RadType4(0.f), direct_neighbor);
+                    indirect_neighbor = ocarina::select(unused, make_RadType4(0.f), indirect_neighbor);
+                }
 
                 Float boundary_weight;
                 if constexpr (cached) {
@@ -183,13 +276,19 @@ Kernel kernel = [&, pipeline_ref](Var<CombinedPoissonParam> param) {
                     Interaction neighbor_it{false};
                     if constexpr (!cached) neighbor_it = pipeline_ref->geometry().compute_surface_interaction(neighbor_hit, false);
                     neighbor_guide.apply(neighbor_it);
+                    Float3 center_normal, neighbor_normal;
+                    if constexpr (cached) {
+                        center_normal = center_guide.shading_normal;
+                        neighbor_normal = neighbor_guide.shading_normal;
+                    } else {
+                        center_normal = make_float3(param.svgf_buffer.read(cur_idx).surface_normal.xyz());
+                        neighbor_normal = make_float3(param.svgf_buffer.read(idx).surface_normal.xyz());
+                    }
                     w_geo = GeometryWeightUtils::compute_depth_weight(
                         center_it.pos, neighbor_it.pos, center_it.ng, param.z_phi) *
                         GeometryWeightUtils::compute_normal_weight(
-                            ocarina::select(param.use_shading_normal != 0u,
-                                make_float3(param.svgf_buffer.read(cur_idx).surface_normal.xyz()), center_it.ng),
-                            ocarina::select(param.use_shading_normal != 0u,
-                                make_float3(param.svgf_buffer.read(idx).surface_normal.xyz()), neighbor_it.ng), param.n_phi);
+                            ocarina::select(param.use_shading_normal != 0u, center_normal, center_it.ng),
+                            ocarina::select(param.use_shading_normal != 0u, neighbor_normal, neighbor_it.ng), param.n_phi);
                 };
                 w_geo *= boundary_weight * cast<float>(center_guide.compatible(neighbor_guide));
 
@@ -229,8 +328,17 @@ Kernel kernel = [&, pipeline_ref](Var<CombinedPoissonParam> param) {
         Float out_var_direct = VarianceUtils::propagate_filtered_variance(variance_sum_direct, weight_sum_direct * weight_sum_direct);
         Float out_var_indirect = VarianceUtils::propagate_filtered_variance(variance_sum_indirect, weight_sum_indirect * weight_sum_indirect);
 
-        param.direct_dst.write(cur_idx, make_RadType4(make_float4(filtered_direct, out_var_direct)));
-        param.indirect_dst.write(cur_idx, make_RadType4(make_float4(filtered_indirect, out_var_indirect)));
+        Float3 output_direct = filtered_direct, output_indirect = filtered_indirect;
+        if constexpr (cached) {
+            $if(param.fused_modulation != 0u && param.iteration == Cfg::Poisson::kIterationCount - 1u && !center_guide.emissive) {
+                Float3 albedo = param.guide_albedo.read(cur_idx).xyz();
+                // Preserve the intermediate storage rounding in half builds.
+                output_direct = make_float3(make_RadType3(filtered_direct)) * albedo;
+                output_indirect = make_float3(make_RadType3(filtered_indirect)) * albedo;
+            };
+        }
+        param.direct_dst.write(cur_idx, make_RadType4(make_float4(output_direct, out_var_direct)));
+        param.indirect_dst.write(cur_idx, make_RadType4(make_float4(output_indirect, out_var_indirect)));
 
         // === SVGF colour-history feedback (Schied et al. 2017) ===
         // Feed the FIRST spatial iteration's output back as the colour history so
@@ -274,21 +382,35 @@ Kernel kernel = [&, pipeline_ref](Var<CombinedPoissonParam> param) {
 
 
 
-CommandBatch PoissonFilter::dispatch_guide(RealTimeDenoiseInput &input) noexcept {
+CommandBatch PoissonFilter::dispatch_guide(RealTimeDenoiseInput &input, bool fused_modulation) noexcept {
     CombinedPoissonParam param;
     bind_stable_planes(param, input);
+    svgf_->bind_tiles(param);
     bind_guides(param);
     param.visibility_buffer = input.visibility.descriptor();
+    param.svgf_buffer = svgf_->svgf_buffer_cur(input.frame_index, input.layer_index).descriptor();
+    param.direct_src = input.direct.descriptor();
+    param.indirect_src = input.indirect.descriptor();
+    param.fused_modulation = fused_modulation;
+    param.camera_pos = input.camera_pos;
+    param.width = input.resolution.x; param.height = input.resolution.y;
     CommandBatch ret;
-    ret << guide_shader_(param).dispatch(input.resolution);
+    if (fused_modulation) {
+        const uint tiles = ((param.width + 15u) / 16u) * ((param.height + 15u) / 16u);
+        ret << layer_guide_shader_(param).dispatch(tiles * 256u);
+    } else {
+        ret << guide_shader_(param).dispatch(input.resolution);
+    }
     return ret;
 }
 
 CommandBatch PoissonFilter::dispatch_combined(vision::RealTimeDenoiseInput &input,
-                                         uint step_width, uint iteration, bool use_shading_normal) noexcept {
+                                         uint step_width, uint iteration, bool use_shading_normal, bool fused_modulation) noexcept {
     CombinedPoissonParam param;
     bind_stable_planes(param, input);
+    svgf_->bind_tiles(param);
     param.use_shading_normal = use_shading_normal;
+    param.fused_modulation = fused_modulation;
     bind_guides(param);
     
     bool read_from_temp = (iteration % 2 == 1);

@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <span>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -43,7 +44,7 @@ void sync_default_surface_camera_size(void* surface, uint32_t width, uint32_t he
     }
 
     auto& hub = Corona::SharedDataHub::instance();
-    for (const auto& scene : hub.scene_storage()) {
+    for (const auto& scene : std::as_const(hub.scene_storage())) {
         if (!scene.enabled) {
             continue;
         }

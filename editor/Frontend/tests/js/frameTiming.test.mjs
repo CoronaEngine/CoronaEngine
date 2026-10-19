@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { formatFrameTiming, startFrameTimingPolling } from '../../src/utils/frameTiming.js';
+import { formatFrameRate, formatFrameTiming, startFrameTimingPolling } from '../../src/utils/frameTiming.js';
 
 test('frame timing displays only fresh finite positive measurements in milliseconds', () => {
   assert.equal(formatFrameTiming({ render_ms: 24.9035, age_ms: 50 }), '24.90 ms');
@@ -17,6 +17,24 @@ test('total frame interval is formatted independently from render time', () => {
   assert.equal(formatFrameTiming(sample, 'frame_ms'), '33.33 ms');
   assert.equal(formatFrameTiming({render_ms: 12.3, frame_ms: 0, age_ms: 10}, 'frame_ms'), '— ms');
   assert.equal(formatFrameTiming({render_ms: 12.3, frame_ms: 33.3, age_ms: 2500}, 'frame_ms'), '— ms');
+});
+
+test('denoise time accepts zero for disabled filters and rejects stale or invalid samples', () => {
+  assert.equal(formatFrameTiming({data: {denoise_ms: 47.393, age_ms: 5}}, 'denoise_ms'), '47.39 ms');
+  assert.equal(formatFrameTiming({denoise_ms: 0, age_ms: 5}, 'denoise_ms'), '0.00 ms');
+  for (const denoise_ms of [undefined, null, -1, NaN, Infinity, '25']) {
+    assert.equal(formatFrameTiming({denoise_ms, age_ms: 5}, 'denoise_ms'), '— ms');
+  }
+  assert.equal(formatFrameTiming({denoise_ms: 47, age_ms: 2500}, 'denoise_ms'), '— ms');
+});
+
+test('frame rate uses camera cadence rather than just renderer time', () => {
+  assert.equal(formatFrameRate({data: {render_ms: 12.3, frame_ms: 100, age_ms: 10}}), '10.0 FPS');
+  for (const frame_ms of [undefined, null, 0, -1, NaN, Infinity, '100']) {
+    assert.equal(formatFrameRate({frame_ms, age_ms: 10}), '— FPS');
+  }
+  assert.equal(formatFrameRate({frame_ms: 100, age_ms: 2000}), '— FPS');
+  assert.equal(formatFrameRate(null), '— FPS');
 });
 
 test('stopping or switching cameras discards an in-flight result', async () => {

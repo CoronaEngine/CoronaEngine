@@ -1,4 +1,5 @@
 #include <corona/kernel/core/kernel_context.h>
+#include <corona/shared_data_hub.h>
 #include <corona/systems/network/network_system.h>
 
 #include "cef/cef_editor_native_api_registry.h"
@@ -14,6 +15,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <string>
 #include <thread>
@@ -155,6 +157,214 @@ uint16_t start_host_on_available_port(NetworkSystem& host) {
     return 0;
 }
 
+void check_restir_camera_preferences(const std::filesystem::path& root) {
+    const auto dispatch_settings = [](const nlohmann::json& settings) {
+        return Corona::Systems::UI::NativeApiRegistry::instance().dispatch(
+            NativeRequest{"SceneTools", "set_restir_settings", {"scene.ini", "Main Camera", settings}},
+            NativeContext{});
+    };
+    const auto snapshot = scene_snapshot();
+    const auto handle = snapshot.at("cameras").at(0).at("handle").get<std::uintptr_t>();
+    auto& hub = Corona::SharedDataHub::instance();
+    const auto commit_restir_requests = [&] {
+        for (const auto& update : hub.drain_camera_state_updates()) {
+            if (!Corona::has_camera_state_field(update.fields, Corona::CameraStateUpdateField::VisionRestirSettings)) continue;
+            {
+                auto camera = hub.camera_storage().acquire_write(update.camera_handle);
+                camera->vision_restir_settings = update.vision_restir_settings;
+            }
+            hub.acknowledge_camera_vision_restir_settings(update.camera_handle, update.sequence);
+        }
+    };
+    const auto accepted = dispatch_settings({{"direct", {{"temporal", {{"open", false}}}}}});
+    require(accepted && accepted->success && accepted->data.value("pending", false),
+            "ReSTIR native API must acknowledge nested settings before the render thread applies them");
+    require(hub.requested_camera_vision_restir_settings(handle) ==
+                std::optional<std::string>{R"({"direct":{"temporal":{"open":false}}})"},
+            "ReSTIR pending preference must remain available after native acceptance");
+
+    const auto defaults = nlohmann::json::parse(R"({
+        "max_depth":15,"min_depth":5,"rr_threshold":1,
+        "direct":{"open":true,"M_light":10,"M_bsdf":1,"max_age":30,"max_recursion":5,
+            "diffuse_factor":0.3,"pairwise":true,
+            "temporal":{"open":true,"history_limit":5,"theta":35,"depth":0.3,"radius":8},
+            "spatial":{"open":true,"theta":35,"depth":0.3,"radius":30}},
+        "indirect":{"open":true,"max_age":30,"diffuse_factor":0.3,
+            "temporal":{"open":true,"history_limit":5,"theta":35,"depth":0.3,"radius":8},
+            "spatial":{"open":true,"theta":35,"depth":0.3,"radius":12}}})");
+    {
+        auto camera = hub.camera_storage().acquire_write(handle);
+        require(static_cast<bool>(camera), "native fixture camera must exist in storage");
+        camera->vision_restir_effective_settings = defaults.dump();
+    }
+    auto feedback = invoke("SceneTools", "get_restir_settings", {"scene.ini", "Main Camera"}).data;
+    require(!feedback.value("ready", true) && feedback["settings"] == defaults,
+            "pending ReSTIR overrides must not be merged into old effective feedback");
+    commit_restir_requests();
+    require(!hub.requested_camera_vision_restir_settings(handle).has_value() &&
+                !invoke("SceneTools", "get_restir_settings", {"scene.ini", "Main Camera"}).data.value("ready", true),
+            "committing camera preferences must not mark unapplied renderer feedback ready");
+    auto effective = defaults;
+    effective["direct"]["temporal"]["open"] = false;
+    {
+        auto camera = hub.camera_storage().acquire_write(handle);
+        camera->vision_restir_effective_settings = effective.dump();
+        camera->vision_restir_applied_settings = R"( { "direct": { "temporal": { "open": false } } } )";
+    }
+    feedback = invoke("SceneTools", "get_restir_settings", {"scene.ini", "Main Camera"}).data;
+    require(feedback.value("ready", false) && feedback["settings"] == effective,
+            "applied ReSTIR feedback must match overrides by JSON structure rather than formatting");
+
+    const nlohmann::json previous = {{"direct", {{"M_light", 50}, {"M_bsdf", 20}}}};
+    invoke("SceneTools", "set_restir_settings", {"scene.ini", "Main Camera", previous});
+    commit_restir_requests();
+    effective = defaults;
+    effective["direct"]["M_light"] = 50;
+    effective["direct"]["M_bsdf"] = 20;
+    {
+        auto camera = hub.camera_storage().acquire_write(handle);
+        camera->vision_restir_effective_settings = effective.dump();
+        camera->vision_restir_applied_settings = previous.dump();
+    }
+    const nlohmann::json replacement = {{"direct", {{"M_light", 12}}}};
+    invoke("SceneTools", "set_restir_settings", {"scene.ini", "Main Camera", replacement});
+    feedback = invoke("SceneTools", "get_restir_settings", {"scene.ini", "Main Camera"}).data;
+    require(!feedback.value("ready", true) && feedback["settings"] == effective,
+            "replacement overrides must not falsely combine new M_light with old M_bsdf feedback");
+    commit_restir_requests();
+    require(!invoke("SceneTools", "get_restir_settings", {"scene.ini", "Main Camera"}).data.value("ready", true),
+            "replacement overrides remain unready until the renderer applies them");
+    effective = defaults;
+    effective["direct"]["M_light"] = 12;
+    {
+        auto camera = hub.camera_storage().acquire_write(handle);
+        camera->vision_restir_effective_settings = effective.dump();
+        camera->vision_restir_applied_settings = replacement.dump();
+    }
+    feedback = invoke("SceneTools", "get_restir_settings", {"scene.ini", "Main Camera"}).data;
+    require(feedback.value("ready", false) && feedback["settings"]["direct"]["M_bsdf"] == 1,
+            "applying replacement overrides must restore omitted sibling values to scene defaults");
+    invoke("SceneTools", "set_restir_settings", {"scene.ini", "Main Camera", nlohmann::json::object()});
+    feedback = invoke("SceneTools", "get_restir_settings", {"scene.ini", "Main Camera"}).data;
+    require(!feedback.value("ready", true) && feedback["settings"] == effective,
+            "empty reset overrides must not mark the previous effective feedback ready");
+    commit_restir_requests();
+    require(!invoke("SceneTools", "get_restir_settings", {"scene.ini", "Main Camera"}).data.value("ready", true),
+            "committed reset overrides remain unready until the renderer restores scene defaults");
+    {
+        auto camera = hub.camera_storage().acquire_write(handle);
+        camera->vision_restir_effective_settings = defaults.dump();
+        camera->vision_restir_applied_settings = "{}";
+    }
+    feedback = invoke("SceneTools", "get_restir_settings", {"scene.ini", "Main Camera"}).data;
+    require(feedback.value("ready", false) && feedback["settings"] == defaults,
+            "applied empty reset overrides must publish only scene default feedback");
+
+    struct Range {
+        const char* path;
+        double minimum;
+        double maximum;
+        bool integer{false};
+    };
+    const Range ranges[] = {
+        {"/max_depth", 0, 128, true}, {"/min_depth", 0, 20, true}, {"/rr_threshold", 0, 1},
+        {"/direct/M_light", 0, 100, true}, {"/direct/M_bsdf", 0, 100, true},
+        {"/direct/max_age", 0, 100, true}, {"/direct/max_recursion", 1, 100, true},
+        {"/direct/diffuse_factor", 0, 1}, {"/indirect/max_age", 0, 100, true},
+        {"/indirect/diffuse_factor", 0, 1},
+        {"/direct/temporal/history_limit", 0, 50, true},
+        {"/direct/temporal/theta", 0, 90}, {"/direct/temporal/depth", 0, 1},
+        {"/direct/temporal/radius", 0, 50}, {"/direct/spatial/theta", 0, 90},
+        {"/direct/spatial/depth", 0, 1}, {"/direct/spatial/radius", 0, 50},
+        {"/indirect/temporal/history_limit", 0, 50, true},
+        {"/indirect/temporal/theta", 0, 90}, {"/indirect/temporal/depth", 0, 1},
+        {"/indirect/temporal/radius", 0, 50}, {"/indirect/spatial/theta", 0, 90},
+        {"/indirect/spatial/depth", 0, 1}, {"/indirect/spatial/radius", 0, 50},
+    };
+    for (const auto& range : ranges) {
+        for (const double endpoint : {range.minimum, range.maximum}) {
+            nlohmann::json settings = nlohmann::json::object();
+            settings[nlohmann::json::json_pointer(range.path)] = range.integer
+                ? nlohmann::json(static_cast<int>(endpoint)) : nlohmann::json(endpoint);
+            const auto result = dispatch_settings(settings);
+            require(result && result->success, std::string("ReSTIR endpoint rejected: ") + range.path);
+        }
+        for (const auto& value : {nlohmann::json(range.minimum - 1), nlohmann::json(range.maximum + 1),
+                                 nlohmann::json(true), nlohmann::json("1"), nlohmann::json(nullptr),
+                                 nlohmann::json(std::numeric_limits<double>::infinity()),
+                                 nlohmann::json(std::numeric_limits<double>::quiet_NaN())}) {
+            nlohmann::json settings = nlohmann::json::object();
+            settings[nlohmann::json::json_pointer(range.path)] = value;
+            const auto result = dispatch_settings(settings);
+            require(result && !result->success, std::string("invalid ReSTIR value accepted: ") + range.path);
+        }
+        if (range.integer) {
+            nlohmann::json settings = nlohmann::json::object();
+            settings[nlohmann::json::json_pointer(range.path)] = range.minimum + 0.5;
+            const auto result = dispatch_settings(settings);
+            require(result && !result->success, std::string("fractional ReSTIR integer accepted: ") + range.path);
+        }
+    }
+    for (const auto* path : {"/direct/open", "/direct/pairwise", "/direct/temporal/open", "/direct/spatial/open",
+                             "/indirect/open", "/indirect/temporal/open", "/indirect/spatial/open"}) {
+        for (const auto& value : {nlohmann::json(true), nlohmann::json(false), nlohmann::json(1),
+                                 nlohmann::json("false"), nlohmann::json(nullptr)}) {
+            nlohmann::json settings = nlohmann::json::object();
+            settings[nlohmann::json::json_pointer(path)] = value;
+            const auto result = dispatch_settings(settings);
+            require(result && result->success == value.is_boolean(),
+                    std::string("ReSTIR boolean validation mismatch: ") + path);
+        }
+    }
+    for (const auto& invalid : {
+             nlohmann::json::array(), nlohmann::json(nullptr),
+             nlohmann::json{{"direct", false}}, nlohmann::json{{"indirect", {{"temporal", 1}}}},
+             nlohmann::json{{"unknown", 1}}, nlohmann::json{{"direct", {{"unknown", 1}}}},
+             nlohmann::json{{"direct.M_light", 7}}, nlohmann::json{{"direct", {{"temporal.radius", 4}}}},
+             nlohmann::json{{"indirect.temporal", {{"open", false}}}},
+             nlohmann::json{{"indirect", {{"ratio", 1}}}}, nlohmann::json{{"stable_planes", false}}}) {
+        const auto result = dispatch_settings(invalid);
+        require(result && !result->success, "ReSTIR must reject unknown fields and malformed settings objects");
+    }
+
+    const nlohmann::json requested = {{"max_depth", 8}, {"direct", {{"M_light", 12},
+        {"temporal", {{"open", false}}}}}, {"indirect", {{"spatial", {{"radius", 12.5}}}}}};
+    invoke("SceneTools", "set_pt_settings", {"scene.ini", "Main Camera", {{"max_depth", 6}}});
+    invoke("SceneTools", "set_restir_settings", {"scene.ini", "Main Camera", requested});
+    require(scene_snapshot()["cameras"][0]["vision_restir_settings"] == requested &&
+                scene_snapshot()["cameras"][0]["vision_pt_settings"] == nlohmann::json{{"max_depth", 6}},
+            "native snapshots must preserve independent pending PT and ReSTIR overrides");
+    require(invoke("MainView", "scene_save", {"scene.ini"}).data.value("ok", false),
+            "native scene save failed while ReSTIR settings were pending");
+    std::ifstream saved(root / "scene.ini");
+    std::string line;
+    bool found = false;
+    const std::string prefix = "camera0.vision_restir_settings = ";
+    while (std::getline(saved, line)) {
+        require(line.find("vision_restir_effective_settings") == std::string::npos &&
+                    line.find("vision_restir_applied_settings") == std::string::npos,
+                "effective ReSTIR feedback and applied markers must not be serialized");
+        if (line.starts_with(prefix)) {
+            require(nlohmann::json::parse(line.substr(prefix.size())) == requested,
+                    "native scene save must serialize pending nested ReSTIR overrides");
+            found = true;
+        }
+    }
+    require(found, "native scene save omitted ReSTIR camera preferences");
+
+    auto restored = empty_archive_snapshot(root);
+    restored["scene"]["cameras"][0]["vision_restir_settings"] = requested;
+    Corona::Systems::UI::load_native_editor_scene_for_test(restored);
+    require(scene_snapshot()["cameras"][0]["vision_restir_settings"] == requested,
+            "camera snapshot materialization must restore nested ReSTIR overrides");
+    invoke("SceneTools", "set_restir_settings", {"scene.ini", "Main Camera", nlohmann::json::object()});
+    require(scene_snapshot()["cameras"][0]["vision_restir_settings"].empty(),
+            "empty ReSTIR overrides must queue a reset to scene defaults");
+    Corona::Systems::UI::load_native_editor_scene_for_test(empty_archive_snapshot(root));
+    require(scene_snapshot()["cameras"][0]["vision_restir_settings"].empty(),
+            "legacy camera snapshots must default to empty ReSTIR overrides");
+}
+
 void run_loopback_test() {
     TempProject project;
     auto& kernel = Corona::Kernel::KernelContext::instance();
@@ -171,6 +381,7 @@ void run_loopback_test() {
 
     Corona::Systems::UI::register_builtin_native_api_handlers();
     Corona::Systems::UI::load_native_editor_scene_for_test(empty_archive_snapshot(project.root));
+    check_restir_camera_preferences(project.root);
 
     const auto port = start_host_on_available_port(host);
     require(receiver->start_session("loopback-client", 1, 0,

@@ -415,8 +415,14 @@ inline std::uint32_t resolve_vertex(const CollisionMesh& mesh,
     if (mesh.submeshes.empty()) {
         return mesh.triangles[tri_idx][corner];  // 无子网格信息：兼容旧路径
     }
-    for (const auto& sm : mesh.submeshes) {
-        if (tri_idx >= sm.triangle_base && tri_idx < sm.triangle_base + sm.triangle_count) {
+    // Import appends segments in triangle order. This lookup is used for every
+    // corner at every octree level; a linear mesh-instance scan dominated large
+    // scenery initialization.
+    auto segment = std::upper_bound(mesh.submeshes.begin(), mesh.submeshes.end(), tri_idx,
+        [](std::uint32_t triangle, const CollisionSubmesh& sm) { return triangle < sm.triangle_base; });
+    if (segment != mesh.submeshes.begin()) {
+        const auto& sm = *std::prev(segment);
+        if (tri_idx - sm.triangle_base < sm.triangle_count) {
             const std::uint16_t local = mesh.triangles[tri_idx][corner];
             assert(static_cast<std::uint32_t>(local) < sm.vertex_count);  // 65536 vertices is a valid uint16-indexed segment
             return sm.vertex_base + local;
@@ -1013,7 +1019,8 @@ struct MechanicsSystem::Impl {
     Kernel::EventId residency_sub_id_ = 0;
     mutable std::shared_mutex residency_mtx_;
     std::unordered_set<std::uintptr_t> resident_actors_;
-    float time_accumulator = 0.0f;
+    double time_accumulator = 0.0;
+    bool simulation_was_active = false;
     std::chrono::steady_clock::time_point last_update_time{};
     bool first_update = true;
 
@@ -1112,6 +1119,7 @@ struct MechanicsSystem::Impl {
         warm_start_cache.clear();          // E2 跨子步 warm start
         global_simulation_time = 0.0f;
         time_accumulator = 0.0f;
+        simulation_was_active = false;
         first_update = true;
         geometry_sys = nullptr;
     }

@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include "horizon.h"
 #include <corona/events/optics_system_events.h>
@@ -100,6 +100,20 @@ class OpticsSystem : public Kernel::SystemBase {
     bool ensure_cursor_icon_texture();
     bool ensure_gizmo_axis_textures();
 
+    /// Make capacity available in the native frame throttle before recording a view.
+    ///
+    /// Display's `OpticsFrameConsumedEvent` is the fast path, but it is only
+    /// published when a surface is presented *with an optics layer*; surfaces that
+    /// were removed, presented as skipped/failed, or lost with the device drop
+    /// their acknowledgement.  Because the throttle is engine-global while the
+    /// acknowledgement is per-surface, two dropped acknowledgements used to stop
+    /// native rendering for every camera, silently and permanently.  When the
+    /// throttle is full the oldest submission is retired by waiting for its own
+    /// GPU completion, and the stall is reported (throttled) instead of invisible.
+    ///
+    /// @return true when a slot is available for a new submission
+    [[nodiscard]] bool ensure_native_frame_slot();
+
     void bind_native_view_resources(std::uintptr_t camera_handle,
                                     uint32_t width,
                                     uint32_t height,
@@ -146,7 +160,12 @@ class OpticsSystem : public Kernel::SystemBase {
     bool prepare_vision_camera_view(VisionPipelineRuntime& runtime,
                                    std::uintptr_t camera_handle,
                                    uint32_t width, uint32_t height,
-                                   bool denoise, bool accumulation, bool stable_planes = true);
+                                   bool denoise, bool accumulation, bool stable_planes = true,
+                                   CameraVisionDenoiser denoiser = CameraVisionDenoiser::Scene,
+                                   const std::string& reblur_settings = "{}",
+                                   const std::string& relax_settings = "{}",
+                                   const std::string& pt_settings = "{}",
+                                   const std::string& restir_settings = "{}");
     VisionPipelineKey make_vision_pipeline_key(std::string scene_path,
                                                Corona::CameraVisionRenderMode mode,
                                                VisionPipelineSource source) const;
@@ -237,6 +256,7 @@ class OpticsSystem : public Kernel::SystemBase {
     std::optional<ActorPickRequest> take_pending_actor_pick(std::uintptr_t camera_handle);
     void complete_actor_pick(const ActorPickRequest& request,
                              const std::vector<std::uintptr_t>& scene_actor_handles,
+                             const std::vector<std::uint32_t>& node_indices,
                              bool read_ok,
                              std::uint32_t instance_id);
     void fail_actor_pick(const ActorPickRequest& request);
@@ -245,6 +265,7 @@ class OpticsSystem : public Kernel::SystemBase {
         Horizon::HardwareBuffer result_buffer,
         Horizon::SubmitReceipt receipt,
         std::vector<std::uintptr_t> scene_actor_handles,
+        std::vector<std::uint32_t> node_indices,
         OpticsDetail::ActorPickReadbackWorker::Reservation reservation);
 
     struct ViewportCursorState {
@@ -271,7 +292,6 @@ class OpticsSystem : public Kernel::SystemBase {
         Horizon::HardwareImage final_output;        ///< RGBA16F final output owned by this surface.
         Horizon::HardwareImage ui_overlay;          ///< Pass 2 camera-follow actor overlay
         Horizon::HardwareImage ui_warped_overlay;   ///< LFD-warped UI overlay for Stereo3D mode
-        Horizon::HardwareImage composite_output;    ///< Optics-internal scene+overlay result
         std::uintptr_t image_handle = 0;   ///< ImageStorage handle owned by this surface.
         uint32_t width = 0;                ///< Current output image width in pixels.
         uint32_t height = 0;
@@ -295,7 +315,7 @@ class OpticsSystem : public Kernel::SystemBase {
 
     /// 在 background 上渲染 follow-camera UI actor + 可选柱镜 warp + composite。
     /// 仅在 hardware_->executor 上“记录”pass，不 commit。有 follow-camera 实例时
-    /// 返回 &target.composite_output，否则返回 &background；调用方负责 commit + publish。
+    /// 就地合成至 background；调用方负责 commit + publish。
     /// 前置条件：调用方已设 hardware_->gbufferSize={w,h}、已 ensure_ui_view_resources
     /// 绑定 uiVisibility/uiDepth，且 background 的生产 pass 已在同一 executor 上记录。
     Horizon::HardwareImage* compose_surface_ui_overlay(Horizon::HardwareStream& stream,
@@ -342,6 +362,8 @@ class OpticsSystem : public Kernel::SystemBase {
     std::unique_ptr<OpticsDetail::ActorPickReadbackWorker> actor_pick_readback_worker_;
     double pending_native_throttle_wait_ms_{0.0};
     std::atomic<std::uint64_t> pending_native_consumed_serial_{0};
+    /// Rate limit for the "native frame throttle saturated" report.
+    std::chrono::steady_clock::time_point last_native_throttle_report_{};
 
     // LOD 系统引用（渲染时查询 LOD 缓冲）
     GeometrySystem* geometry_system_ = nullptr;

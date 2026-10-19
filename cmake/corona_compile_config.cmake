@@ -1,4 +1,4 @@
-﻿# ==============================================================================
+# ==============================================================================
 # corona_compile_config.cmake
 #
 # Purpose:
@@ -80,6 +80,18 @@ endif()
 # Enable Python API macros only when building the editor
 if(BUILD_CORONA_EDITOR)
     add_compile_definitions(CORONA_ENABLE_PYTHON_API)
+endif()
+
+# Lock timeout diagnostics (see corona_options.cmake). Applied here — before the
+# project and the Horizon workspace are added — so every translation unit that
+# inlines horizon/core/storage.h agrees on the definition; mixing the two settings
+# across targets would be an ODR violation of the same inline functions.
+if(CORONA_ENABLE_LOCK_TIMEOUT_DIAGNOSTICS)
+    add_compile_definitions(
+        CFW_ENABLE_LOCK_TIMEOUT=1
+        CFW_LOCK_TIMEOUT_MS=${CORONA_LOCK_TIMEOUT_MS}
+    )
+    message(STATUS "[Compile] Lock timeout diagnostics enabled (CFW_LOCK_TIMEOUT_MS=${CORONA_LOCK_TIMEOUT_MS})")
 endif()
 
 # ------------------------------------------------------------------------------

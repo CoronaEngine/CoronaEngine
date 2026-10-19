@@ -21,6 +21,33 @@ class CoronaRenderProcessHandler : public CefRenderProcessHandler {
                      const CefV8ValueList& arguments,
                      CefRefPtr<CefV8Value>& retval,
                      CefString& exception) override {
+            if (name == "moveActorMesh") {
+                if((arguments.size()!=6 && arguments.size()!=7) || !arguments[0]->IsDouble() && !arguments[0]->IsInt() ||
+                   !arguments[1]->IsDouble() && !arguments[1]->IsInt() || !arguments[2]->IsString() ||
+                   !arguments[3]->IsArray() || arguments[3]->GetArrayLength()!=3 ||
+                   !arguments[4]->IsDouble() && !arguments[4]->IsInt() || !arguments[5]->IsBool() ||
+                   arguments.size()==7 && !arguments[6]->IsNull() && !arguments[6]->IsDouble() && !arguments[6]->IsInt()) {
+                    exception="moveActorMesh(actor, camera, requestId, velocity, dt, jump, facing) requires valid arguments";
+                    retval=CefV8Value::CreateBool(false); return true;
+                }
+                auto context=CefV8Context::GetCurrentContext();
+                if(!context || !context->GetFrame()) { retval=CefV8Value::CreateBool(false); return true; }
+                auto message=CefProcessMessage::Create("ActorMeshMove");
+                auto args=message->GetArgumentList();
+                args->SetDouble(0,arguments[0]->GetDoubleValue()); args->SetDouble(1,arguments[1]->GetDoubleValue());
+                args->SetString(2,arguments[2]->GetStringValue());
+                auto velocity=CefListValue::Create();
+                for(int i=0;i<3;++i) {
+                    const auto v=arguments[3]->GetValue(i);
+                    if(!v || !v->IsDouble() && !v->IsInt()) { exception="velocity must be number[3]"; retval=CefV8Value::CreateBool(false); return true; }
+                    velocity->SetDouble(i,v->GetDoubleValue());
+                }
+                args->SetList(3,velocity); args->SetDouble(4,arguments[4]->GetDoubleValue()); args->SetBool(5,arguments[5]->GetBoolValue());
+                if(arguments.size()==7 && !arguments[6]->IsNull()) args->SetDouble(6,arguments[6]->GetDoubleValue());
+                context->GetFrame()->SendProcessMessage(PID_BROWSER,message);
+                retval=CefV8Value::CreateBool(true); return true;
+            }
+
             if (name == "actorTransform") {
                 if (arguments.size() < 3) {
                     exception = "actorTransform(handle, operation, vector) requires 3 arguments";
@@ -604,6 +631,7 @@ class CoronaRenderProcessHandler : public CefRenderProcessHandler {
             CefV8Value::CreateFunction("computeActorFocusPose", handler);
         bridge->SetValue("cameraMove", camera_move, V8_PROPERTY_ATTRIBUTE_NONE);
         bridge->SetValue("actorTransform", actor_transform, V8_PROPERTY_ATTRIBUTE_NONE);
+        bridge->SetValue("moveActorMesh", CefV8Value::CreateFunction("moveActorMesh", handler), V8_PROPERTY_ATTRIBUTE_NONE);
         bridge->SetValue("setProperty", set_property, V8_PROPERTY_ATTRIBUTE_NONE);
         bridge->SetValue("pickActor", pick_actor, V8_PROPERTY_ATTRIBUTE_NONE);
         bridge->SetValue("setViewportGizmoTarget", set_viewport_gizmo_target,

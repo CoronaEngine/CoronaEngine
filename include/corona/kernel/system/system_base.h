@@ -3,8 +3,10 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
+#include <deque>
 #include <mutex>
 #include <thread>
+#include <utility>
 
 #include "i_system.h"
 #include "i_system_context.h"
@@ -143,6 +145,11 @@ class SystemBase : public ISystem {
      */
     float delta_time() const;
 
+    // Coalesce asynchronous work and interrupt the pacing wait. Only callers
+    // opting into this may run an extra update before the periodic deadline;
+    // simulation systems keep their fixed cadence. Safe during update/pause.
+    void request_update();
+
     /**
      * @brief 线程循环函数
      *
@@ -189,21 +196,24 @@ class SystemBase : public ISystem {
     std::mutex control_mutex_;          ///< 保护 start/stop 操作
     std::mutex pause_mutex_;            ///< 保护暂停状态
     std::condition_variable pause_cv_;  ///< 暂停条件变量
+    bool update_requested_ = false;      ///< Protected by pause_mutex_
     std::mutex thread_exit_mutex_;
     std::condition_variable thread_exit_cv_;
     bool thread_finished_ = true;
 
     ISystemContext* context_;  ///< 系统上下文
-    int target_fps_;           ///< 目标帧率
+    std::atomic<int> target_fps_; ///< 目标帧率，可在运行时修改
     uint64_t frame_number_;    ///< 当前帧号
     float last_delta_time_;    ///< 上一帧时间间隔（秒）
 
     // 性能统计
     mutable std::mutex stats_mutex_;           ///< 保护统计数据
     std::atomic<std::uint64_t> total_frames_;  ///< 总帧数
-    double total_frame_time_;                  ///< 总运行时间（秒）
+    double total_frame_time_;                  ///< 窗口内更新耗时（秒）
+    double stats_elapsed_time_ = 0.0;
+    std::deque<std::pair<float, double>> frame_samples_; // update time, complete cycle time
     float max_frame_time_;                     ///< 最大帧时间（毫秒）
-    int stats_window_size_;                    ///< 滑动窗口大小（保留用于未来）
+    int stats_window_size_;                    ///< 滑动窗口大小
 };
 
 }  // namespace Corona::Kernel

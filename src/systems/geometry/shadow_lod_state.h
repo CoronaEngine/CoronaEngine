@@ -5,10 +5,29 @@
 #include <cmath>
 #include <cstdint>
 #include <span>
+#include <limits>
 
 namespace Corona::Systems::GeometryDetail {
 
 constexpr std::uint64_t kShadowLodRequestTtlFrames = 120;
+
+// Upper bound of the linear transform's largest singular value. Includes
+// normalization, reflections and shear, without allocating or taking an SVD.
+template <typename Matrix>
+[[nodiscard]] inline float shadow_transform_scale(const Matrix& matrix) noexcept {
+    float one_norm = 0.0f, infinity_norm = 0.0f;
+    for (int i = 0; i < 3; ++i) {
+        float column = 0.0f, row = 0.0f;
+        for (int j = 0; j < 3; ++j) {
+            if (!std::isfinite(matrix[i][j])) return std::numeric_limits<float>::quiet_NaN();
+            column += std::abs(matrix[i][j]);
+            row += std::abs(matrix[j][i]);
+        }
+        one_norm = std::max(one_norm, column);
+        infinity_norm = std::max(infinity_norm, row);
+    }
+    return std::sqrt(one_norm * infinity_norm);
+}
 
 struct ShadowLodState {
     int committed = -1;

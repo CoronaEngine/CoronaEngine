@@ -27,6 +27,7 @@ namespace {
 class PathTracingIntegrator : public IlluminationIntegrator, public Observer{
 private:
     SP<ConvergenceInspector> inspector_;
+    DataWrap scene_pt_settings_;
     Shader<void(uint)> combine_;
     Shader<void()> merge_indirect_into_direct_;
 
@@ -38,11 +39,38 @@ public:
     explicit PathTracingIntegrator(const IntegratorDesc &desc)
         : IlluminationIntegrator(desc),
           inspector_(make_shared<ConvergenceInspector>(desc.value("adaptive"))),
+          scene_pt_settings_(illumination_settings()),
           taa_history_(make_shared<ScreenBuffer>("taa_history")) {}
 
     VS_MAKE_PLUGIN_NAME_FUNC
     void render_sub_UI(Widgets *widgets) noexcept override {
         inspector_->render_UI(widgets);
+    }
+
+    [[nodiscard]] DataWrap settings() const override {
+        auto result = illumination_settings();
+        result["adaptive"] = inspector_->settings();
+        return result;
+    }
+
+    bool set_settings(const DataWrap &overrides) noexcept override {
+        if (!overrides.is_object()) return false;
+        auto candidate = scene_pt_settings_;
+        for (const auto &[key, value] : overrides.items()) {
+            if (!merge_illumination_setting(candidate, key, value)) return false;
+        }
+        if (candidate == illumination_settings()) return false;
+        // Li specializes the direct-only branch when the kernel is compiled.
+        const bool recompile = (max_depth_.hv() < 2u) != (candidate["max_depth"].get<uint>() < 2u);
+        apply_illumination_settings(candidate);
+        if (recompile) {
+            // Material DSL evaluation needs the same scene LUT bindings as a
+            // normal pipeline compile, including during live parameter edits.
+            Global::SceneGpuContextScope scene_gpu_context{
+                scene().geometry().bindless_array(), scene().geometry().gpu_resource()->device()};
+            compile_path_tracing();
+        }
+        return true;
     }
     
     void update_resolution(ocarina::uint2 res) noexcept override {
@@ -69,9 +97,10 @@ public:
         frame_buffer().prepare_direct_lighting();
         frame_buffer().prepare_indirect_lighting();
         frame_buffer().prepare_motion_vectors();
+        if (denoiser_ && denoiser_->requires_lobe_signals()) frame_buffer().prepare_denoiser_signals();
 //        frame_buffer().prepare_screen_buffer(taa_history_);
     }
-    VS_HOTFIX_MAKE_RESTORE(IlluminationIntegrator, inspector_)
+    VS_HOTFIX_MAKE_RESTORE(IlluminationIntegrator, inspector_, scene_pt_settings_)
     OC_ENCODABLE_FUNC(IlluminationIntegrator, inspector_)
     VS_MAKE_GUI_STATUS_FUNC(IlluminationIntegrator, inspector_)
     void update_runtime_object(const vision::IObjectConstructor *constructor) noexcept override {
@@ -209,6 +238,7 @@ public:
     void render() const noexcept override {
         const Pipeline *rp = pipeline();
         Stream &stream = rp->stream();
+        reset_denoise_timing();
         cur_stage_profile_ = {};
         cur_stage_profile_.enabled = stage_profile_runtime_enabled();
         auto submit = [&](auto &&command, double *stage_ms) {
@@ -282,6 +312,7 @@ public:
 
             if (denoiser_enabled) {
                 submit(path_tracing(param, frame_buffer().raytracing_resolution()), &cur_stage_profile_.path_tracing_ms);
+                begin_denoise_timing(stream);
                 if (ssat_denoiser != nullptr) {
                     // Merge indirect into direct (always needed)
                     submit(merge_indirect_into_direct_().dispatch(frame_buffer().raytracing_resolution()), nullptr);
@@ -311,6 +342,7 @@ public:
                 } else {
                     submit(denoiser_->dispatch_lightfield(lf_input), &cur_stage_profile_.spatial_angular_ms);
                 }
+                end_denoise_timing(stream);
                 submit(combine_(frame_index_).dispatch(frame_buffer().raytracing_resolution()),
                        &cur_stage_profile_.combine_ms);
             } else {
@@ -333,11 +365,20 @@ public:
             dn_input.prev_camera_pos = {prev_cam_pos.x, prev_cam_pos.y, prev_cam_pos.z};
             // PT path splits the signal into diffuse (direct buffer) / specular (indirect buffer).
             dn_input.channel_kind = RealTimeDenoiseInput::ChannelKind::DiffuseSpecular;
+            if (denoiser_ && denoiser_->requires_lobe_signals()) {
+                dn_input.has_lobe_signals = true;
+                auto &fb = frame_buffer();
+                dn_input.lobe_signals = {fb.denoiser_layer_view(fb.denoiser_diffuse(), 0u),
+                    fb.denoiser_layer_view(fb.denoiser_specular(), 0u),
+                    fb.denoiser_layer_view(fb.denoiser_diffuse(), 0u), fb.denoiser_layer_view(fb.denoiser_specular(), 0u)};
+            }
             param.enable_sparse_sampling = 0u;
 
             if (denoiser_enabled && !bypass_incompatible_lightfield_denoiser) {
                 submit(path_tracing(param, frame_buffer().raytracing_resolution()), &cur_stage_profile_.path_tracing_ms);
+                begin_denoise_timing(stream);
                 submit(denoiser_->dispatch(dn_input), &cur_stage_profile_.spatial_angular_ms);
+                end_denoise_timing(stream);
                 submit(combine_(frame_index_).dispatch(frame_buffer().raytracing_resolution()),
                        &cur_stage_profile_.combine_ms);
             } else {

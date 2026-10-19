@@ -8,6 +8,7 @@
 #include <stdexcept>
 #include <vector>
 #include <cstdlib>
+#include <limits>
 
 static std::vector<vision::StablePlaneHistory> compact_history(const std::vector<vision::StablePlaneData> &planes) {
     std::vector<vision::StablePlaneHistory> ret(planes.size());
@@ -64,11 +65,11 @@ void layered_history_regression(vision::Pipeline& pipeline, Filter& denoiser) {
             plane.depth = 1u; plane.material_id = it.material_id();
             plane.surface.hit = hit; plane.surface.is_replaced = true;
             plane.surface.stable_branch = 37u;
-            plane.surface.virtual_position = it.pos;
-            plane.surface.virtual_normal = it.ng;
-            plane.surface.virtual_geometric_normal = it.ng;
-            plane.surface.denoiser_albedo = make_float3(1.f);
-            plane.depth_position = it.pos;
+            plane.surface.virtual_position.set(it.pos);
+            plane.surface.virtual_normal.set(it.ng);
+            plane.surface.virtual_geometric_normal.set(it.ng);
+            plane.surface.denoiser_albedo.set(array_float3{1.f, 1.f, 1.f});
+            plane.depth_position.set(it.pos);
             out.write(dispatch_id(), plane);
         };
         auto guide_shader = pipeline.device().compile(make_guides, "layered_history_fixture");
@@ -89,10 +90,11 @@ void layered_history_regression(vision::Pipeline& pipeline, Filter& denoiser) {
         auto eye = pipeline.scene().sensor()->position();
         input.camera_pos = input.prev_camera_pos = {eye.x, eye.y, eye.z};
         input.channel_kind = Input::ChannelKind::DirectIndirect;
-        auto run = [&](uint frame, uint layer, RadType4 color) {
+        auto run = [&](uint frame, uint layer, RadType4 color,
+                       const std::vector<StablePlaneData> *previous_planes = nullptr) {
             input.frame_index = frame; input.layer_index = layer;
             std::fill(samples.begin(), samples.end(), color);
-            auto old_guides = compact_history(baseline);
+            auto old_guides = compact_history(previous_planes ? *previous_planes : baseline);
             pipeline.stream() << current.upload(guides.data()) << previous.upload(old_guides.data())
                 << direct.upload(samples.data()) << indirect.upload(samples.data())
                 << denoiser.dispatch(input) << direct.download(output.data())
@@ -127,7 +129,98 @@ void layered_history_regression(vision::Pipeline& pipeline, Filter& denoiser) {
                 (change >= 4 && (age != 0.f || float(output[center].x) != 0.f)))
                 throw std::runtime_error("changed or absent layer must reject and clear incompatible history");
         }
+        // Exercise both preparation entry points with real temporal writes.
+        // In fused mode these histories must only be cleared when previously used.
+        Env::set("VISION_SVGF_SKIP_POISSON", "0");
+        for (const char *radiance_domain : {"1", "0"}) {
+            Env::set("VISION_SVGF_RADIANCE_DOMAIN", radiance_domain);
+            for (bool sky_endpoint : {false, true}) {
+                guides = baseline; run(0u, 2u, colors[2]);
+                for (auto &plane : guides) {
+                    if (sky_endpoint) plane.surface.hit.inst_id = InvalidUI32;
+                    else plane.valid = 0u;
+                }
+                // Both ping-pong slots must become empty and stay empty through
+                // consecutive absent frames, then restart at age one on return.
+                for (uint frame : {1u, 2u, 3u, 4u}) {
+                    run(frame, 2u, colors[0]);
+                    if (float(history[center].moments_direct.z) != 0.f ||
+                        float(history[center].illumi_direct.z) != 0.f || float(output[center].x) != 0.f)
+                        throw std::runtime_error("absent layer must clear both history parities without reviving stale color");
+                }
+                const auto absent = guides;
+                guides = baseline;
+                run(5u, 2u, colors[0], &absent);
+                if (float(history[center].moments_direct.z) != 1.f ||
+                    std::abs(float(output[center].x) - 1.f) > 1e-5f || float(history[center].illumi_direct.z) != 0.f)
+                    throw std::runtime_error("returning layer must restart after an empty history");
+            }
+        }
+        // Sparse spatial passes reuse scratch across layers. An empty tile,
+        // a single valid corner and a partial tile must not expose old colors.
         Env::set("VISION_SVGF_SKIP_VARIANCE", "1");
+        Env::set("VISION_SVGF_SKIP_POISSON", "0");
+        for (const char *radiance_domain : {"1", "0"}) {
+        Env::set("VISION_SVGF_RADIANCE_DOMAIN", radiance_domain);
+        for (const uint2 extent : {make_uint2(16u, 16u), make_uint2(15u, 13u),
+                                  make_uint2(32u, 8u), make_uint2(17u, 13u)}) {
+            input.resolution = extent;
+            const uint pixels = extent.x * extent.y;
+            // A lone surface in any warp must keep its tile active. Include the
+            // last pixel of partial tiles and repeated full/empty transitions.
+            for (uint mode = 0; mode < 11; ++mode) {
+                guides = baseline;
+                const uint single_pixel = mode < 3u ? pixels - 1u :
+                    std::min((mode - 3u) * 2u, extent.y - 1u) * extent.x;
+                for (uint i = 0; i < n; ++i) {
+                    guides[i].valid = mode == 0 || (mode >= 2 && i == single_pixel);
+                    // If classification drops a live tile, fused preparation's
+                    // demodulated green remains > 1 instead of being restored.
+                    guides[i].surface.denoiser_albedo = {.2f, .35f, .7f};
+                }
+                const float nan = std::numeric_limits<float>::quiet_NaN();
+                std::vector<RadType4> poison(n, RadType4{nan, nan, nan, nan});
+                // Invalid guide geometry may retain any bits from another layer.
+                // Reject it before use, including neighbours across empty tiles.
+                const uint guide_pixels = denoiser.poisson()->guide_position().size();
+                std::vector<float4> poison_guides(guide_pixels, make_float4(nan));
+                pipeline.stream() << denoiser.poisson()->guide_position().upload(poison_guides.data())
+                    << denoiser.poisson()->guide_normal().upload(poison_guides.data())
+                    << denoiser.poisson()->temp_buffer_direct().view().upload(poison.data())
+                    << denoiser.poisson()->temp_buffer_indirect().view().upload(poison.data()) << synchronize() << commit();
+                run(0u, 2u, colors[1]);
+                for (uint i = 0; i < pixels; ++i) {
+                    const float green = guides[i].valid ? 1.f : 0.f;
+                    if (!std::isfinite(float(output[i].x)) || !std::isfinite(float(output[i].y)) ||
+                        std::abs(float(output[i].x)) > 1e-5f || std::abs(float(output[i].y) - green) > 1e-5f ||
+                        std::abs(float(output[i].z)) > 1e-5f)
+                        throw std::runtime_error("sparse SVGF tiles must preserve valid corners and clear reused layer scratch");
+                }
+            }
+        }
+        }
+        input.resolution = pipeline.resolution();
+        guides = baseline;
+        Env::set("VISION_SVGF_RADIANCE_DOMAIN", "0");
+        for (const float3 albedo : {make_float3(0.f, 0.03f, 0.8f), make_float3(0.7f, 0.2f, 0.05f)}) {
+            for (auto &guide : guides) guide.surface.denoiser_albedo = {albedo.x, albedo.y, albedo.z};
+            run(0u, 2u, RadType4{0.2f, 0.4f, 0.7f, 1.f});
+            for (const auto &pixel : output) {
+                if (!std::isfinite(float(pixel.x)) || std::abs(float(pixel.x) - 0.2f) > 1e-5f ||
+                    std::abs(float(pixel.y) - 0.4f) > 1e-5f || std::abs(float(pixel.z) - 0.7f) > 1e-5f)
+                    throw std::runtime_error("layered modulation must preserve constant radiance through colored and zero reflectance");
+            }
+            pipeline.stream() << indirect.download(output.data()) << synchronize() << commit();
+            for (const auto &pixel : output) {
+                if (!std::isfinite(float(pixel.x)) || std::abs(float(pixel.x) - 0.2f) > 1e-5f ||
+                    std::abs(float(pixel.y) - 0.4f) > 1e-5f || std::abs(float(pixel.z) - 0.7f) > 1e-5f)
+                    throw std::runtime_error("fused modulation must also restore the indirect channel");
+            }
+        }
+        guides = baseline;
+        Env::set("VISION_SVGF_RADIANCE_DOMAIN", "1");
+        Env::set("VISION_SVGF_SKIP_POISSON", "1");
+        std::cout << "PASS: sparse spatial layers clear empty and partial tiles without losing valid corners\n";
         Env::set("VISION_SVGF_SKIP_RESOLVE", "0");
         auto all_current = pipeline.device().create_buffer<StablePlaneData>(n * StablePlaneCount, "coverage_all_current");
         auto all_previous = pipeline.device().create_buffer<StablePlaneHistory>(n * StablePlaneCount, "coverage_all_previous");
@@ -135,6 +228,7 @@ void layered_history_regression(vision::Pipeline& pipeline, Filter& denoiser) {
         std::vector<TriangleHit> primary_hits(n, baseline[center].surface.hit);
         const auto primary_hit = baseline[center].surface.hit;
         std::vector<StablePlaneData> all_planes(n * StablePlaneCount), last_planes(all_planes.size());
+        uint prepared_edge_layers = 0u;
         auto coverage_run = [&](uint frame, float value, uint emission, bool colored = false) {
             input.frame_index = frame; input.layer_index = 0u;
             guides = baseline;
@@ -144,9 +238,14 @@ void layered_history_regression(vision::Pipeline& pipeline, Filter& denoiser) {
                 if (emission == 2u) guides[i].surface.hit.inst_id = InvalidUI32;
                 all_planes[i] = guides[i];
                 all_planes[n + i] = guides[i];
+                all_planes[2u * n + i] = guides[i];
                 if (colored) {
                     const uint side = (i % input.resolution.x) >= input.resolution.x / 2u;
                     all_planes[i].branch_sequence = all_planes[n + i].branch_sequence = 5u + side;
+                    // The omitted third layer has a distinct horizontal edge;
+                    // incorrectly accepting a partial cache must change output.
+                    all_planes[2u * n + i].branch_sequence = 11u +
+                        ((i / input.resolution.x) >= input.resolution.y / 2u);
                     all_planes[i].motion = make_float2(2.f, 0.f);
                     all_planes[n + i].motion = make_float2(-2.f, 0.f);
                 }
@@ -170,13 +269,58 @@ void layered_history_regression(vision::Pipeline& pipeline, Filter& denoiser) {
             auto old_planes = compact_history(last_planes);
             pipeline.stream() << current.upload(guides.data()) << previous.upload(old_guides.data())
                 << all_current.upload(all_planes.data()) << all_previous.upload(old_planes.data())
-                << primary.upload(primary_hits.data()) << direct.upload(samples.data()) << indirect.upload(samples.data())
+                << primary.upload(primary_hits.data());
+            if (prepared_edge_layers != 0u) {
+                Env::set("VISION_SVGF_RADIANCE_DOMAIN", "0");
+                Env::set("VISION_SVGF_SKIP_POISSON", "0");
+                for (uint layer = 0u; layer < prepared_edge_layers; ++layer) {
+                    Input layer_input = input;
+                    layer_input.composed_coverage = false; layer_input.use_stable_planes = true;
+                    layer_input.layer_count = StablePlaneCount; layer_input.layer_index = layer;
+                    // Match FrameBuffer's canonical per-layer descriptors;
+                    // BufferDesc reads use the handle rather than view offsets.
+                    auto cur_view = all_current.view().subview(layer * n, n);
+                    auto prev_view = all_previous.view().subview(layer * n, n);
+                    layer_input.stable_planes = decltype(cur_view)(cur_view.handle() + cur_view.offset_in_byte(), n);
+                    layer_input.prev_stable_planes = decltype(prev_view)(prev_view.handle() + prev_view.offset_in_byte(), n);
+                    pipeline.stream() << direct.upload(samples.data()) << indirect.upload(samples.data())
+                        << denoiser.dispatch(layer_input);
+                }
+                Env::set("VISION_SVGF_RADIANCE_DOMAIN", "1");
+                Env::set("VISION_SVGF_SKIP_POISSON", "1");
+            }
+            // Coverage receives the same composed samples in every variant.
+            pipeline.stream() << direct.upload(samples.data()) << indirect.upload(samples.data())
                 << denoiser.dispatch(input) << direct.download(output.data()) << synchronize() << commit();
             last_planes = all_planes;
             baseline = guides;
             return float(output[center].x);
         };
         auto original_guides = baseline;
+        // Compare cached layer edges with independent coverage preparation,
+        // including valid miss endpoints and the partially prepared fallback.
+        for (uint endpoint = 0u; endpoint < 3u; ++endpoint) {
+            std::vector<std::vector<RadType4>> expected;
+            for (uint prepared : {0u, StablePlaneCount, StablePlaneCount - 1u}) {
+                prepared_edge_layers = prepared;
+                baseline = original_guides;
+                denoiser.set_enabled(false); denoiser.set_enabled(true);
+                for (uint frame = 0u; frame < 40u; ++frame) {
+                    coverage_run(frame, float(frame & 1u), endpoint, true);
+                    if (prepared == 0u) expected.push_back(output);
+                    else for (uint i = 0u; i < n; ++i) for (uint c = 0u; c < 3u; ++c)
+                        if (!std::isfinite(float(output[i][c])) ||
+                            std::abs(float(output[i][c]) - float(expected[frame][i][c])) > 1e-5f)
+                            throw std::runtime_error("prepared layer edges and fallback must preserve coverage: endpoint=" +
+                                std::to_string(endpoint) + " prepared=" + std::to_string(prepared) + " frame=" + std::to_string(frame) +
+                                " pixel=" + std::to_string(i) + " channel=" + std::to_string(c) +
+                                " actual=" + std::to_string(float(output[i][c])) + " expected=" + std::to_string(float(expected[frame][i][c])));
+                }
+            }
+        }
+        prepared_edge_layers = 0u;
+        baseline = original_guides;
+        std::cout << "PASS: fused and partial layer coverage matches independent edge preparation\n";
         float internal = 0.f, emission = 0.f;
         for (uint frame = 0; frame < 16u; ++frame) internal = coverage_run(frame, float(frame & 1u), false);
         baseline = original_guides;
@@ -243,11 +387,11 @@ void layered_history_regression(vision::Pipeline& pipeline, Filter& denoiser) {
         auto original = baseline;
         for (auto& plane : baseline) plane.surface.approximate = 1u;
         guides = baseline; run(0u, 1u, colors[1]);
-        for (auto& plane : guides) plane.surface.virtual_position.z += 10.f;
+        for (auto& plane : guides) plane.surface.virtual_position[2] += 10.f;
         run(1u, 1u, colors[1]);
         if (float(history[center].moments_direct.z) < 1.9f)
             throw std::runtime_error("approximate temporal depth must use optical depth independently of projection position");
-        for (auto& plane : guides) plane.depth_position.z += 20.f;
+        for (auto& plane : guides) plane.depth_position[2] += 20.f;
         run(2u, 1u, colors[0]);
         if (float(history[center].moments_direct.z) != 1.f)
             throw std::runtime_error("optical depth disocclusion must reject layer history");
@@ -563,6 +707,33 @@ void check_svgf_spatial_bypass(vision::Pipeline& pipeline) {
         std::abs(variance_direct - 6.f) > 1e-4f || std::abs(variance_indirect - 105.f) > 1e-4f)
         throw std::runtime_error("prefilter must preserve mature high variance instead of classifying it as noise-free");
     std::cout << "PASS: mature prefilter preserves measured high variance\n";
+
+    // A newly exposed, flat surface has no trustworthy luminance edge yet.
+    // Alternating zero/one samples have mean 0.5; rejecting the opposite
+    // luminance preserves Monte Carlo noise instead of reconstructing it.
+    for (uint i = 0; i < count; ++i) {
+        const float value = ((i % 16u + i / 16u) & 1u) ? 1.f : 0.f;
+        auto &h = noisy_history[i];
+        h.illumi_direct = RadType4{value, value, value, 0.5f};
+        h.illumi_indirect = RadType4{0.4f, 0.4f, 0.4f, 0.25f};
+        h.moments_direct = RadType4{value, value, 1.f, 32.f};
+        h.moments_indirect = RadType4{0.4f, 0.16f, 1.f, 1.f};
+    }
+    pipeline.stream() << variance_history.view().upload(noisy_history.data())
+        << denoiser->dispatch(input) << direct.download(samples.data()) << synchronize() << commit();
+    double noise = 0.0, mean = 0.0;
+    for (uint y = 2u; y < 14u; ++y) for (uint x = 2u; x < 14u; ++x) {
+        const double value = float(samples[y * 16u + x].x);
+        noise += (value - 0.5) * (value - 0.5); mean += value;
+    }
+    noise = std::sqrt(noise / 144.0); mean /= 144.0;
+    std::cout << "Fresh-history noise RMS=" << noise << " mean=" << mean << '\n';
+    if (!std::isfinite(noise) || noise > 0.42 || std::abs(mean - 0.5) > 0.01)
+        throw std::runtime_error("fresh-history reconstruction must reduce flat-surface noise without losing its mean");
+    pipeline.stream() << indirect.download(samples.data()) << synchronize() << commit();
+    if (std::abs(float(samples[edge_pixel].x) - 0.4f) > 1e-5f ||
+        std::abs(float(samples[edge_pixel].w) - 0.25f) > 1e-5f)
+        throw std::runtime_error("fresh direct history must not alter the mature indirect channel");
 
     // The Gaussian variance prefilter widens the edge-stopping guide only.
     // Rejected sky taps cannot add uncertainty to the filtered surface signal.

@@ -300,6 +300,46 @@ class SceneTools(PluginBase):
             return {"status": "error", "message": str(exc)}
 
     @staticmethod
+    def set_vision_denoiser(scene_name: str, camera_name: str = None,
+                            type: str = "scene") -> dict:
+        try:
+            return CoronaEditorApi.scene_tools.set_vision_denoiser(scene_name, camera_name, type)
+        except Exception as exc:
+            return {"status": "error", "message": str(exc)}
+
+    @staticmethod
+    def get_reblur_settings(scene_name: str, camera_name: str) -> dict:
+        return CoronaEditorApi.scene_tools.get_reblur_settings(scene_name, camera_name)
+
+    @staticmethod
+    def get_pt_settings(scene_name: str, camera_name: str) -> dict:
+        return CoronaEditorApi.scene_tools.get_pt_settings(scene_name, camera_name)
+
+    @staticmethod
+    def get_restir_settings(scene_name: str, camera_name: str) -> dict:
+        return CoronaEditorApi.scene_tools.get_restir_settings(scene_name, camera_name)
+
+    @staticmethod
+    def get_relax_settings(scene_name: str, camera_name: str) -> dict:
+        return CoronaEditorApi.scene_tools.get_relax_settings(scene_name, camera_name)
+
+    @staticmethod
+    def set_reblur_settings(scene_name: str, camera_name: str, settings: dict) -> dict:
+        return CoronaEditorApi.scene_tools.set_reblur_settings(scene_name, camera_name, settings)
+
+    @staticmethod
+    def set_pt_settings(scene_name: str, camera_name: str, settings: dict) -> dict:
+        return CoronaEditorApi.scene_tools.set_pt_settings(scene_name, camera_name, settings)
+
+    @staticmethod
+    def set_restir_settings(scene_name: str, camera_name: str, settings: dict) -> dict:
+        return CoronaEditorApi.scene_tools.set_restir_settings(scene_name, camera_name, settings)
+
+    @staticmethod
+    def set_relax_settings(scene_name: str, camera_name: str, settings: dict) -> dict:
+        return CoronaEditorApi.scene_tools.set_relax_settings(scene_name, camera_name, settings)
+
+    @staticmethod
     def set_vision_denoise(scene_name: str, camera_name: str = None,
                            enabled: bool = False) -> dict:
         try:

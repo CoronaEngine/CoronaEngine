@@ -10,6 +10,10 @@
 #include <array>
 #include <span>
 #include <vector>
+#include <functional>
+#include <mutex>
+#include <chrono>
+#include <unordered_map>
 
 namespace Corona::Resource { struct IkChain; struct SkeletonData; }
 
@@ -65,6 +69,26 @@ class MechanicsSystem : public Kernel::SystemBase {
 
     void shutdown() override;
 
+    struct MeshMoveCommand {
+        std::uintptr_t actor{}, camera{};
+        std::array<float, 3> velocity{};
+        float dt{};
+        bool jump{};
+        float facing{};
+        bool turn{};
+    };
+    struct MeshMoveEvent {
+        std::string status{"unavailable"};
+        std::array<float,3> position{}, normal{};
+        bool grounded{}, ceiling{}, collided{};
+        std::uintptr_t other_actor{};
+        int triangle{-1}, other_triangle{-1};
+        std::array<float,3> rotation{};
+    };
+    // Nonblocking input. Completion runs after releasing scene/storage locks;
+    // callers marshal it onto their UI/event thread. No synchronous query API.
+    void submit_mesh_move(MeshMoveCommand command, std::function<void(MeshMoveEvent)> completion);
+
     // ========================================
     // IK 链管理
     // ========================================
@@ -95,6 +119,21 @@ class MechanicsSystem : public Kernel::SystemBase {
    private:
     // 力学系统私有成员
     void update_physics(float fixed_dt);
+    void process_mesh_moves();
+    struct PendingMeshMove {
+        MeshMoveCommand command;
+        std::function<void(MeshMoveEvent)> completion;
+        std::chrono::steady_clock::time_point submitted;
+    };
+    struct MeshMoverState {
+        float vertical_velocity{};
+        bool grounded{};
+        std::array<float,3> last_position{};
+        std::uintptr_t geometry{}, scene{};
+    };
+    std::mutex mesh_move_mutex_;
+    std::vector<PendingMeshMove> mesh_moves_;
+    std::unordered_map<std::uintptr_t,MeshMoverState> mesh_movers_;
 
     /// 骨骼动画 GPU 蒙皮。CPU 推进 anim_time、求解 FK/IK 并生成 final 骨骼矩阵；
     /// Vulkan/Helicon EDSL 蒙皮并归约 AABB，通过 GPU 拷贝更新所有已驻留 LOD 的

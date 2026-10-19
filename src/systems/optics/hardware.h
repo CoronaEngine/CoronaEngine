@@ -10,6 +10,7 @@
 
 #include <array>
 #include <cstdint>
+#include <deque>
 #include <memory>
 #include <optional>
 #include <utility>
@@ -20,17 +21,12 @@
 #include GLSL(../../../assets/shaders/visibility.frag.glsl)
 #include GLSL(../../../assets/shaders/shadow.vert.glsl)
 #include GLSL(../../../assets/shaders/shadow.frag.glsl)
-#include GLSL(../../../assets/shaders/ssao.comp.glsl)
-#include GLSL(../../../assets/shaders/surface_guide.comp.glsl)
-#include GLSL(../../../assets/shaders/shadow_mask.comp.glsl)
-#include GLSL(../../../assets/shaders/atrous_scalar_filter.comp.glsl)
 #include GLSL(../../../assets/shaders/lighting.comp.glsl)
 #include GLSL(../../../assets/shaders/sky.comp.glsl)
 #include GLSL(../../../assets/shaders/sky_sh_project.comp.glsl)
 #include GLSL(../../../assets/shaders/tonemap.comp.glsl)
-#include GLSL(../../../assets/shaders/debug_resolve.comp.glsl)
-#include GLSL(../../../assets/shaders/visibility_debug_resolve.comp.glsl)
 #include GLSL(../../../assets/shaders/actor_pick.comp.glsl)
+#include GLSL(../../../assets/shaders/image_readback.comp.glsl)
 #include GLSL(../../../assets/shaders/optics_overlay.comp.glsl)
 #include GLSL(../../../assets/shaders/optics_gizmo.comp.glsl)
 #include GLSL(../../../assets/shaders/optics_cursor.comp.glsl)
@@ -108,17 +104,16 @@ private:
         std::uint64_t capacity{0};
         std::shared_ptr<int> busy;  // nullptr=从未用；use_count()>1=GPU 在飞
     };
-    std::vector<Slot> slots_;
+    std::deque<Slot> slots_;
 };
 
 struct Hardware {
     Corona::Systems::OpticsDetail::NativeFrameThrottle native_frame_throttle;
     // === Visibility Buffer (replaces GBuffer rasterization output) ===
-    Corona::Horizon::HardwareImage visibilityImage;  // RGBA32_UINT: R=instanceID, G=primitiveID
+    Corona::Horizon::HardwareImage visibilityImage;  // RG32_UINT: R=instanceID, G=primitiveID
     Corona::Horizon::HardwareImage depthImage;       // D32_FLOAT: depth (kept from GBuffer)
     Corona::Horizon::HardwareImage uiVisibilityImage;  // Pass 2 visibility, isolated from scene pass
     Corona::Horizon::HardwareImage uiDepthImage;        // Pass 2 depth, isolated from scene pass
-    Corona::Horizon::HardwareImage shadowColorImage;
     std::array<Corona::Horizon::HardwareImage, 4> shadowCascadeImages;
 
     // === Final composited output ===
@@ -165,16 +160,10 @@ struct Hardware {
     std::optional<Corona::Horizon::RasterizerPipeline<visibility_vert_glsl_t, visibility_frag_glsl_t>> visibilityPipeline;
     std::optional<Corona::Horizon::RasterizerPipeline<visibility_vert_glsl_t, visibility_frag_glsl_t>> uiVisibilityPipeline;
     std::array<std::optional<Corona::Horizon::RasterizerPipeline<shadow_vert_glsl_t, shadow_frag_glsl_t>>, 4> shadowPipelines;
-    std::optional<Corona::Horizon::ComputePipeline<ssao_comp_glsl_t>> ssaoPipeline;
-    std::optional<Corona::Horizon::ComputePipeline<surface_guide_comp_glsl_t>> surfaceGuidePipeline;
-    std::optional<Corona::Horizon::ComputePipeline<shadow_mask_comp_glsl_t>> shadowMaskPipeline;
-    std::optional<Corona::Horizon::ComputePipeline<atrous_scalar_filter_comp_glsl_t>> atrousScalarPipeline;
     std::optional<Corona::Horizon::ComputePipeline<lighting_comp_glsl_t>> lightingPipeline;
     std::optional<Corona::Horizon::ComputePipeline<sky_comp_glsl_t>> skyPipeline;
     std::optional<Corona::Horizon::ComputePipeline<sky_sh_project_comp_glsl_t>> skySHProjectPipeline;
     std::optional<Corona::Horizon::ComputePipeline<tonemap_comp_glsl_t>> tonemapPipeline;
-    std::optional<Corona::Horizon::ComputePipeline<debug_resolve_comp_glsl_t>> debugResolvePipeline;
-    std::optional<Corona::Horizon::ComputePipeline<visibility_debug_resolve_comp_glsl_t>> visibilityDebugResolvePipeline;
     std::optional<Corona::Horizon::ComputePipeline<actor_pick_comp_glsl_t>> actorPickPipeline;
     std::optional<Corona::Horizon::ComputePipeline<optics_overlay_comp_glsl_t>> opticsOverlayPipeline;
     std::optional<Corona::Horizon::ComputePipeline<optics_gizmo_comp_glsl_t>> opticsGizmoPipeline;

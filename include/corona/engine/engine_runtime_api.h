@@ -1,5 +1,6 @@
 #pragma once
 
+#include <corona/systems/geometry/model_node_state.h>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -16,10 +17,13 @@ namespace Corona {
 class Model;
 
 namespace API {
+struct ModelNodePickResult { std::uintptr_t actor_handle{0}; std::uint32_t node_index{UINT32_MAX}; };
+
 struct GeometryRenderStatus {
     bool observed{false};
     bool ready{false};
     bool failed{false};
+    bool collision_ready{false};
     std::string gpu_build_state{"Unavailable"};
     std::size_t mesh_count{0};
     std::size_t renderable_mesh_count{0};
@@ -55,6 +59,16 @@ class Geometry {
     /// albedo texture 上传。失败时返回一个所有 handle 为 0 的空 Geometry。
     [[nodiscard]] static Geometry from_image(const std::string& image_path);
 
+    [[nodiscard]] std::vector<ModelNodeState> get_model_nodes() const;
+    /// Node totals of the same model without materializing the node list.  The
+    /// editor scene tree refreshes on the CEF UI thread, where copying thousands
+    /// of node states per actor is not affordable.
+    [[nodiscard]] ModelNodes::Counts get_model_node_counts() const;
+    [[nodiscard]] std::optional<std::array<float,6>> get_model_node_aabb(uint32_t node_index) const;
+    bool set_model_node_state(uint32_t node_index, const ModelNodeState& state);
+    [[nodiscard]] std::vector<ModelNodeOverride> get_model_node_overrides() const;
+    bool set_model_node_overrides(const std::vector<ModelNodeOverride>& overrides);
+
     void set_position(const std::array<float, 3>& pos);
     void set_rotation(const std::array<float, 3>& euler);
     void set_scale(const std::array<float, 3>& size);
@@ -66,6 +80,10 @@ class Geometry {
 
     /// 获取模型 AABB，返回 {min_x, min_y, min_z, max_x, max_y, max_z}
     [[nodiscard]] std::array<float, 6> get_aabb() const;
+
+    /// 尽力而为的 AABB：不等待被占用的锁，拿不到就返回 nullopt。
+    /// 绘制编辑器、派发输入的线程必须用它——那里的无界等待会冻住整个 UI。
+    [[nodiscard]] std::optional<std::array<float, 6>> try_get_aabb() const;
 
     /// 获取构造时传入的模型文件路径，用于 Actor 身份标识和资源加载/卸载
     [[nodiscard]] const std::filesystem::path& get_model_path() const;
@@ -314,6 +332,21 @@ class Camera {
     void set_vision_denoise(bool enabled);
     [[nodiscard]] bool get_vision_denoise() const;
     [[nodiscard]] bool get_requested_vision_denoise() const;
+    void set_vision_denoiser(const std::string& type);
+    [[nodiscard]] std::string get_vision_denoiser() const;
+    [[nodiscard]] std::string get_requested_vision_denoiser() const;
+    void set_vision_reblur_settings(const std::string& json);
+    void set_vision_pt_settings(const std::string& json);
+    void set_vision_restir_settings(const std::string& json);
+    void set_vision_relax_settings(const std::string& json);
+    [[nodiscard]] std::string get_requested_vision_reblur_settings() const;
+    [[nodiscard]] std::string get_requested_vision_pt_settings() const;
+    [[nodiscard]] std::string get_requested_vision_restir_settings() const;
+    [[nodiscard]] std::string get_requested_vision_relax_settings() const;
+    [[nodiscard]] std::string get_effective_vision_reblur_settings() const;
+    [[nodiscard]] std::string get_effective_vision_pt_settings() const;
+    [[nodiscard]] std::string get_effective_vision_restir_settings() const;
+    [[nodiscard]] std::string get_effective_vision_relax_settings() const;
     void set_vision_accumulation(bool enabled);
     [[nodiscard]] bool get_vision_accumulation() const;
     [[nodiscard]] bool get_requested_vision_accumulation() const;
@@ -342,6 +375,7 @@ class Camera {
     [[nodiscard]] std::array<int, 2> get_size() const;
     void set_viewport_rect(int x, int y, int width, int height);
     [[nodiscard]] std::uintptr_t pick_actor_at_pixel(int x, int y) const;
+    [[nodiscard]] ModelNodePickResult pick_model_node_at_pixel(int x, int y) const;
 
    private:
     friend class Scene;
@@ -477,6 +511,23 @@ void set_vision_denoise(bool enabled, std::uintptr_t camera_handle = 0);
 /// Return the latest uncommitted preference, or committed state when none is pending.
 /// Persistence uses this to preserve setter requests even while a render update is in flight.
 [[nodiscard]] bool get_requested_vision_denoise(std::uintptr_t camera_handle = 0);
+
+/// Select "scene", "svgf", "reblur" or "relax", independently of the enable switch.
+void set_vision_denoiser(const std::string& type, std::uintptr_t camera_handle = 0);
+[[nodiscard]] std::string get_vision_denoiser(std::uintptr_t camera_handle = 0);
+[[nodiscard]] std::string get_requested_vision_denoiser(std::uintptr_t camera_handle = 0);
+void set_vision_reblur_settings(const std::string& json, std::uintptr_t camera_handle = 0);
+void set_vision_pt_settings(const std::string& json, std::uintptr_t camera_handle = 0);
+void set_vision_restir_settings(const std::string& json, std::uintptr_t camera_handle = 0);
+void set_vision_relax_settings(const std::string& json, std::uintptr_t camera_handle = 0);
+[[nodiscard]] std::string get_requested_vision_reblur_settings(std::uintptr_t camera_handle = 0);
+[[nodiscard]] std::string get_requested_vision_pt_settings(std::uintptr_t camera_handle = 0);
+[[nodiscard]] std::string get_requested_vision_restir_settings(std::uintptr_t camera_handle = 0);
+[[nodiscard]] std::string get_requested_vision_relax_settings(std::uintptr_t camera_handle = 0);
+[[nodiscard]] std::string get_effective_vision_reblur_settings(std::uintptr_t camera_handle = 0);
+[[nodiscard]] std::string get_effective_vision_pt_settings(std::uintptr_t camera_handle = 0);
+[[nodiscard]] std::string get_effective_vision_restir_settings(std::uintptr_t camera_handle = 0);
+[[nodiscard]] std::string get_effective_vision_relax_settings(std::uintptr_t camera_handle = 0);
 
 /// Queue an independent accumulation preference for this camera (disabled by default).
 void set_vision_accumulation(bool enabled, std::uintptr_t camera_handle = 0);

@@ -1045,6 +1045,8 @@ inline void process_assimp_node(aiNode* ai_node, const aiScene* ai_scene, Scene&
                                 SharedStaticMeshAssetCache* shared_asset_cache = nullptr) {
     std::uint32_t node_index = scene.add_node(ai_node->mName.C_Str(), parent_index);
     scene.data.nodes[node_index].transform = extract_assimp_transform(ai_node->mTransformation);
+    scene.data.nodes[node_index].local_matrix = ai_to_mat4_colmajor(ai_node->mTransformation);
+    scene.data.nodes[node_index].has_local_matrix = true;
 
     // 计算此节点的累积变换（父累积变换 * 当前节点局部变换）
     aiMatrix4x4 current_accumulated = parent_accumulated_transform * ai_node->mTransformation;
