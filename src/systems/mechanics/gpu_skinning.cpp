@@ -53,13 +53,12 @@ void write_buffer(const H::HardwareBuffer& buffer, std::span<const std::byte> by
 // stable address, and keep its HardwareBuffer members alive through recording.
 struct SkinKernel {
     H::HardwareBuffer bind_buffer, id_buffer, weight_buffer, palette_buffer;
-    H::HardwareBuffer output_buffer, bounds_buffer;
+    H::HardwareBuffer output_buffer;
     EmbeddedShader::Array<float> bind_vertices;
     EmbeddedShader::Array<std::uint32_t> bone_ids;
     EmbeddedShader::Array<float> bone_weights;
     EmbeddedShader::Array<float> palette;
     EmbeddedShader::Array<float> output;
-    EmbeddedShader::Array<float> bounds;
     Uint vertex_count;
     Uint bone_count;
     Uint palette_base;
@@ -111,9 +110,9 @@ struct SkinKernel {
                         m12 = palette[m + Uint(12u)];
                         m13 = palette[m + Uint(13u)];
                         m14 = palette[m + Uint(14u)];
-                        px = px + weight * (m0 * bx + m4 * by + m8 * bz + m12);
-                        py = py + weight * (m1 * bx + m5 * by + m9 * bz + m13);
-                        pz = pz + weight * (m2 * bx + m6 * by + m10 * bz + m14);
+                        px = px + weight * m12;
+                        py = py + weight * m13;
+                        pz = pz + weight * m14;
                         linear[0] = linear[0] + weight * m0;
                         linear[1] = linear[1] + weight * m1;
                         linear[2] = linear[2] + weight * m2;
@@ -130,7 +129,11 @@ struct SkinKernel {
                 ox = bx; oy = by; oz = bz;
                 onx = bnx; ony = bny; onz = bnz;
                 $IF(total > Float(0.0f)) {
-                    ox = px / total; oy = py / total; oz = pz / total;
+                    // Reuse the blended linear transform already needed by
+                    // normals instead of transforming the position four times.
+                    ox = (linear[0]*bx + linear[3]*by + linear[6]*bz + px) / total;
+                    oy = (linear[1]*bx + linear[4]*by + linear[7]*bz + py) / total;
+                    oz = (linear[2]*bx + linear[5]*by + linear[8]*bz + pz) / total;
                     // The inverse transpose of the blended affine transform
                     // preserves perpendicular normals under nonuniform scaling
                     // and shear. Normalization cancels the determinant magnitude.
@@ -166,11 +169,6 @@ struct SkinKernel {
                 output[vbase + Uint(5u)] = onz;
                 output[vbase + Uint(6u)] = bind_vertices[vbase + Uint(6u)];
                 output[vbase + Uint(7u)] = bind_vertices[vbase + Uint(7u)];
-                Uint bb;
-                bb = vertex * Uint(kBoundsFloats);
-                bounds[bb] = ox; bounds[bb + Uint(1u)] = oy;
-                bounds[bb + Uint(2u)] = oz; bounds[bb + Uint(3u)] = ox;
-                bounds[bb + Uint(4u)] = oy; bounds[bb + Uint(5u)] = oz;
             }
         };
         pipeline = make_compute_pipeline(shader, ktm::uvec3(kThreads, 1, 1));
@@ -178,13 +176,13 @@ struct SkinKernel {
 
     void bind(const H::HardwareBuffer& vertices, const H::HardwareBuffer& ids,
               const H::HardwareBuffer& weights, const H::HardwareBuffer& matrices,
-              const H::HardwareBuffer& destination, const H::HardwareBuffer& aabbs,
+              const H::HardwareBuffer& destination,
               std::uint32_t vertices_size, std::uint32_t matrices_size,
               std::uint32_t matrices_base) {
         bind_buffer = vertices; id_buffer = ids; weight_buffer = weights;
-        palette_buffer = matrices; output_buffer = destination; bounds_buffer = aabbs;
+        palette_buffer = matrices; output_buffer = destination;
         bind_vertices = bind_buffer; bone_ids = id_buffer; bone_weights = weight_buffer;
-        palette = palette_buffer; output = output_buffer; bounds = bounds_buffer;
+        palette = palette_buffer; output = output_buffer;
         vertex_count = vertices_size; bone_count = matrices_size;
         palette_base = matrices_base;
     }
@@ -200,7 +198,7 @@ struct BoundsKernel {
     Uint count;
     H::ComputePipeline<> pipeline;
 
-    BoundsKernel() {
+    explicit BoundsKernel(bool vertices = false) {
         count.as_push_constant();
         auto shader = [&] {
             Uint index;
@@ -209,19 +207,20 @@ struct BoundsKernel {
             first = index * Uint(kBoundsFanIn);
             $IF(first < count) {
                 Uint a, out;
-                a = first * Uint(kBoundsFloats);
+                const auto stride = vertices ? 8u : kBoundsFloats;
+                a = first * Uint(stride);
                 out = index * Uint(kBoundsFloats);
                 for (std::uint32_t axis = 0; axis < 3; ++axis) {
                     Float low, high;
                     low = source[a + Uint(axis)];
-                    high = source[a + Uint(axis + 3u)];
+                    high = source[a + Uint(axis + (vertices ? 0u : 3u))];
                     for (std::uint32_t lane = 1; lane < kBoundsFanIn; ++lane) {
                         $IF(first + Uint(lane) < count) {
                             Uint b;
-                            b = a + Uint(lane * kBoundsFloats);
+                            b = a + Uint(lane * stride);
                             Float other_low, other_high;
                             other_low = source[b + Uint(axis)];
-                            other_high = source[b + Uint(axis + 3u)];
+                            other_high = source[b + Uint(axis + (vertices ? 0u : 3u))];
                             low = min(low, other_low);
                             high = max(high, other_high);
                         }
@@ -262,17 +261,18 @@ struct MeshCache {
           vertex_count(static_cast<std::uint32_t>(request.vertices.size())) {
         const auto vertex_bytes = request.vertices.size_bytes();
         const auto influence_bytes = request.vertices.size() * 4u * sizeof(float);
-        const auto bounds_bytes = request.vertices.size() * kBoundsFloats * sizeof(float);
         constexpr auto input_usage = H::BufferUsage_Storage | H::BufferUsage_TransferDst;
         bind = make_buffer(vertex_bytes, input_usage, H::CpuAccessMode::None, "mechanics.skin.bind");
         ids = make_buffer(influence_bytes, input_usage, H::CpuAccessMode::None, "mechanics.skin.ids");
         weights = make_buffer(influence_bytes, input_usage, H::CpuAccessMode::None, "mechanics.skin.weights");
         output = make_buffer(vertex_bytes, H::BufferUsage_Storage | H::BufferUsage_TransferSrc,
                              H::CpuAccessMode::None, "mechanics.skin.output");
-        bounds[0] = make_buffer(bounds_bytes, H::BufferUsage_Storage | H::BufferUsage_TransferSrc,
-                                H::CpuAccessMode::None, "mechanics.skin.bounds");
+        // First reduction reads positions directly from the skin output. No
+        // duplicated per-vertex min/max image of the pose is necessary.
         const auto reduced_count = (request.vertices.size() + kBoundsFanIn - 1u) / kBoundsFanIn;
-        bounds[1] = make_buffer(reduced_count * kBoundsFloats * sizeof(float),
+        bounds[0] = make_buffer(reduced_count * kBoundsFloats * sizeof(float), H::BufferUsage_Storage | H::BufferUsage_TransferSrc,
+                                H::CpuAccessMode::None, "mechanics.skin.bounds");
+        bounds[1] = make_buffer(((reduced_count + kBoundsFanIn - 1u) / kBoundsFanIn) * kBoundsFloats * sizeof(float),
                                 H::BufferUsage_Storage | H::BufferUsage_TransferSrc,
                                 H::CpuAccessMode::None, "mechanics.skin.bounds.scratch");
         bounds_readback = make_buffer(kBoundsFloats * sizeof(float), H::BufferUsage_TransferDst,
@@ -314,6 +314,7 @@ struct MeshCache {
 struct GpuSkinningPipeline::Impl {
     H::HardwareExecutor executor;
     SkinKernel skin;
+    BoundsKernel vertex_bounds{true};
     BoundsKernel reduce;
     H::HardwareBuffer palette, palette_upload;
     std::size_t palette_capacity{};
@@ -460,12 +461,15 @@ std::vector<GpuSkinningPipeline::Result> GpuSkinningPipeline::update_batch(
                     stream << H::CopyBufferCommand{cached.upload_weights, cached.weights, 0, 0, cached.weights.get_byte_size()};
                 }
                 impl_->skin.bind(cached.bind, cached.ids, cached.weights, impl_->palette,
-                                 cached.output, cached.bounds[0], cached.vertex_count,
+                                 cached.output, cached.vertex_count,
                                  item.bone_count, item.palette_base);
                 GpuPerformance::record_dispatch();
                 stream << impl_->skin.pipeline.groups((cached.vertex_count + kThreads - 1u) / kThreads, 1);
 
-                std::uint32_t count = cached.vertex_count;
+                impl_->vertex_bounds.bind(cached.output, cached.bounds[0], cached.vertex_count);
+                std::uint32_t count = (cached.vertex_count + kBoundsFanIn - 1u) / kBoundsFanIn;
+                GpuPerformance::record_dispatch();
+                stream << impl_->vertex_bounds.pipeline.groups((count + kThreads - 1u) / kThreads, 1);
                 unsigned source = 0;
                 while (count > 1u) {
                     impl_->reduce.bind(cached.bounds[source], cached.bounds[1u - source], count);
