@@ -8,6 +8,7 @@
 
 #include <ktm/ktm.h>
 #include <corona/systems/geometry/model_node_state.h>
+#include <corona/systems/geometry/mesh_draw_bounds.h>
 
 #include <array>
 #include <chrono>
@@ -29,11 +30,12 @@ namespace Corona {
 class Model;
 
 struct MeshDevice {
+    Geometry::MeshDrawClusters draw_clusters;
+    Horizon::HardwareBuffer shadowIndexBuffer;
     Horizon::HardwareBuffer indexBuffer;
     Horizon::HardwareBuffer vertexBuffer;
 
-    // StorageBuffer mirrors for compute shader (VBuffer resolve) access.
-    // Horizon BufferUsage is non-combinable, so we keep separate copies.
+    // Rasterization and VBuffer resolve share the same backing allocation.
     Horizon::HardwareBuffer indexStorageBuffer;
     Horizon::HardwareBuffer vertexStorageBuffer;
 
@@ -153,6 +155,9 @@ struct GeometryDevice {
     // 物理系统每帧读取它覆盖静态 min_xyz/max_xyz，使碰撞 AABB 跟随当前动画姿态。
     // skinned_aabb_valid=false 表示尚未蒙皮过（首帧前），物理回退静态 AABB。
     bool skinned_aabb_valid{false};
+    // Published by Mechanics only after the exact triangle data has been
+    // prepared. Consumers compare against the currently loaded model identity.
+    std::uint64_t collision_model_id{};
     ktm::fvec3 skinned_aabb_min{0.0f, 0.0f, 0.0f};
     ktm::fvec3 skinned_aabb_max{0.0f, 0.0f, 0.0f};
 

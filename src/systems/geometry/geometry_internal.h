@@ -271,6 +271,8 @@ struct GeometrySystem::Impl {
     // GpuMemToken 不在 worker 构建（回避 ledger 线程安全问题）：worker 只产出缓冲 +
     // 字节数，令牌在回写时于几何线程构建。
     struct LODBuildResult {
+        Horizon::HardwareBuffer shadow_index_buffer;
+        Geometry::MeshDrawClusters draw_clusters;
         Horizon::HardwareBuffer vertex_buffer;
         Horizon::HardwareBuffer index_buffer;
         Horizon::HardwareBuffer vertex_storage;

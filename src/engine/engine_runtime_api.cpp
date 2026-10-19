@@ -1149,6 +1149,15 @@ Corona::API::GeometryRenderStatus Corona::API::Geometry::get_render_status() con
                    status.mesh_count > 0 &&
                    slots.size() == status.mesh_count &&
                    status.invalid_mesh_count == 0;
+    if (status.ready) {
+        if (auto geometry = SharedDataHub::instance().geometry_storage().try_acquire_read(handle_)) {
+            if (auto resource = SharedDataHub::instance().model_resource_storage().try_acquire_read(geometry->model_resource_handle)) {
+                status.collision_ready = resource->model_id != 0 &&
+                    geometry->collision_model_id == resource->model_id &&
+                    (!geometry->is_skinned || geometry->skinned_aabb_valid);
+            }
+        }
+    }
     return status;
 }
 
