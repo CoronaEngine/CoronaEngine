@@ -1,4 +1,5 @@
 #include <horizon/core/logging.h>
+#include <corona/diagnostics/thread_phase.h>
 #include <corona/systems/geometry/geometry_system.h>
 #include <corona/systems/mechanics/mechanics_system.h>
 
@@ -60,6 +61,10 @@ void warmup_pipeline(GpuCollisionPipeline& pipeline) {
     (void)pipeline.sample_vertices(std::span(&vertex, 1));
     const GpuCollisionPipeline::GroundQuery ground{{1, identity}, {0.1f, 2, 0.1f}, 3};
     (void)pipeline.ground(std::span(&ground, 1));
+    // Compile movement kernels on the preparation worker too. The first WASD
+    // callback must not wait for native shader compilation on the scene thread.
+    const GpuCollisionPipeline::Instance obstacle{2, identity};
+    (void)pipeline.move_mesh({1, identity}, std::span(&obstacle, 1), {0, -.01f, 0}, false, .1f);
     pipeline.retain({});
 }
 
@@ -162,7 +167,15 @@ float resolve_fixed_dt() {
 }  // namespace
 
 MechanicsSystem::MechanicsSystem() : impl_(std::make_unique<Impl>()) {
-    set_target_fps(60);
+    int fps = 60;
+    if (const char* setting = std::getenv("CORONA_MECHANICS_MAX_FPS")) {
+        const std::string_view text(setting);
+        int parsed{};
+        const auto result = std::from_chars(text.data(), text.data() + text.size(), parsed);
+        if (result.ec == std::errc{} && result.ptr == text.data() + text.size())
+            fps = std::clamp(parsed, 1, 240);
+    }
+    set_target_fps(fps);
 }
 
 MechanicsSystem::~MechanicsSystem() = default;
@@ -223,6 +236,10 @@ void MechanicsSystem::update() {
     if (impl_->shutdown_requested.load(std::memory_order_acquire)) {
         return;
     }
+    // Stage marker: this loop holds Scene read handles for the whole skinning pass
+    // (frame_scenes) and blocks on scene/geometry slot locks, so a stall here also
+    // stalls every writer that wants the same Scene entry.
+    Corona::Diagnostics::PhaseScope update_phase{"Mechanics", "update"};
     PerformanceReport performance_report;
     GpuPerformance::Scope frame_performance{"mechanics.frame"};
 
@@ -232,7 +249,10 @@ void MechanicsSystem::update() {
         impl_->last_update_time = now;
         impl_->first_update = false;
         // 首帧：先蒙皮（dt=0，建立初始姿态 AABB），再跑一步物理
+        update_phase.set("skinned_geometry(first)");
         update_skinned_geometry(0.0f);
+        process_mesh_moves();
+        update_phase.set("physics(first)");
         update_physics(resolve_fixed_dt());
         return;
     }
@@ -249,7 +269,9 @@ void MechanicsSystem::update() {
     // 消除之前 update_physics 使用上一帧 AABB 的一帧延迟。
     // 蒙皮模型即使未开物理（simulation_enabled=false）也照常播放。
     if (!impl_->shutdown_requested.load(std::memory_order_acquire)) {
+        update_phase.set("skinned_geometry");
         update_skinned_geometry(actual_dt);
+        process_mesh_moves();
     }
 
     impl_->time_accumulator += actual_dt;
@@ -259,6 +281,7 @@ void MechanicsSystem::update() {
     while (impl_->time_accumulator >= fixed_dt &&
            catch_up_steps < kMaxCatchUpSteps &&
            !impl_->shutdown_requested.load(std::memory_order_acquire)) {
+        update_phase.set("physics");
         update_physics(fixed_dt);
         impl_->time_accumulator -= fixed_dt;
         ++catch_up_steps;
@@ -279,6 +302,12 @@ void MechanicsSystem::shutdown() {
     }
 
     impl_->clear_runtime_state();
+    std::vector<PendingMeshMove> cancelled;
+    { std::lock_guard lock(mesh_move_mutex_); cancelled.swap(mesh_moves_); }
+    mesh_movers_.clear();
+    for (auto& request : cancelled) {
+        if (request.completion) request.completion({"stopped"});
+    }
     CFW_LOG_INFO("MechanicsSystem shutdown, all caches cleared");
 }
 

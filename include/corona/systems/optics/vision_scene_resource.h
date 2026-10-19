@@ -185,6 +185,7 @@ struct EngineMixedShapeRecord {
     std::uintptr_t actor_handle{0};
     int shape_index{-1};
     std::size_t transform_signature{0};
+    std::uint64_t model_node_revision{0};
 };
 
 enum class VisionSceneSourceKind { File, Embedded };

@@ -1,5 +1,7 @@
 #include "sdl_utils.h"
 
+#include <horizon/core/logging.h>
+
 #include <cmath>
 
 namespace Corona::Systems::UI {
@@ -307,10 +309,14 @@ EventProcessResult SDLEventHandler::process_events(
 
         switch (event.type) {
             case SDL_EVENT_QUIT:
+                CFW_LOG_INFO("[SDL] quit event received");
                 result.should_quit = true;
                 break;
 
             case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
+                CFW_LOG_INFO("[SDL] close requested window={} main={}",
+                             event.window.windowID,
+                             window ? SDL_GetWindowID(window) : 0);
                 if (event.window.windowID == SDL_GetWindowID(window)) {
                     result.should_quit = true;
                 } else {

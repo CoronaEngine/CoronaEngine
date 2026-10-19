@@ -8,7 +8,8 @@
       @close="closeFloat"
     />
 
-    <div v-if="loading" class="object-empty">正在读取对象属性…</div>
+    <div v-if="modelNodeSelection" class="object-empty"><strong>已选择模型内部节点</strong><span>{{ modelNodeSelection.actorName }} · 节点 {{ modelNodeSelection.nodeIndex }}。请在场景管理中的局部变换面板编辑节点。</span></div>
+    <div v-else-if="loading" class="object-empty">正在读取对象属性…</div>
     <div v-else-if="!selectedActorName" class="object-empty">
       <strong>还没有选中对象</strong>
       <span>在 3D 视口或场景管理中选择一个模型后，这里会显示可调整的属性。</span>
@@ -281,6 +282,8 @@
 
 <script setup>
 import { computed, onMounted, onUnmounted, reactive, ref } from 'vue';
+import { pickedNodeIdentity } from '@/utils/modelHierarchy.js';
+import { coronaEventBus } from '@/utils/eventBus.js';
 import DockTitleBar from '@/components/ui/DockTitleBar.vue';
 import IkBoneSelect from '@/components/ui/IkBoneSelect.vue';
 import { useDockPanel } from '@/composables/useDockPanel.js';
@@ -328,6 +331,8 @@ function guidanceKeyForTransform(groupKey, axis) {
 
 const selectedSceneName = ref(DEFAULT_SCENE_NAME);
 const selectedActorName = ref('');
+const modelNodeSelection = ref(coronaEventBus.modelNodeSelection || null);
+const handleModelNodeSelection = (identity) => { modelNodeSelection.value = identity; };
 const loading = ref(false);
 const saving = ref(false);
 
@@ -810,9 +815,13 @@ async function saveActor() {
 }
 
 function handleSelection(payload = {}) {
+  modelNodeSelection.value = pickedNodeIdentity(payload);
+  coronaEventBus.modelNodeSelection = modelNodeSelection.value;
+  coronaEventBus.emit('model-node-selection', modelNodeSelection.value);
   const type = String(payload.actor_type || payload.type || '');
   const sceneName = String(payload.scene || selectedSceneName.value || DEFAULT_SCENE_NAME);
   const actorName = String(payload.actor || '');
+  if (modelNodeSelection.value && modelNodeSelection.value.actorName !== actorName) { modelNodeSelection.value = null; coronaEventBus.modelNodeSelection = null; }
   if (type === 'scene' || !actorName) {
     loadSequence += 1;
     loading.value = false;
@@ -880,6 +889,7 @@ function closeFloat() {
 }
 
 onMounted(async () => {
+  coronaEventBus.on('model-node-selection', handleModelNodeSelection);
   // Actor selection is stored before this panel opens. Read it without invoking
   // MainView.on_init, which would reinitialize the scene and main camera.
   const actorContext = getActorContext();
@@ -893,6 +903,7 @@ onMounted(async () => {
 });
 
 onUnmounted(() => {
+  coronaEventBus.off('model-node-selection', handleModelNodeSelection);
   loadSequence += 1;
   ikController.clear();
   for (const timer of updateTimers.values()) clearTimeout(timer);

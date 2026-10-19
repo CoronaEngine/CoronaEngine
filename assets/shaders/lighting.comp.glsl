@@ -7,7 +7,7 @@ layout (local_size_x = 8, local_size_y = 8) in;
 layout (set = 0, binding = 0) uniform sampler2D textures[];
 layout (set = 1, binding = 0) readonly buffer SSBOPool { uint data[]; } ssbos[];
 layout (set = 2, binding = 0, rgba16f) uniform image2D imagesRGBA16[];
-layout (set = 2, binding = 0, rgba32ui) uniform uimage2D imagesRGBA32UI[];
+layout (set = 2, binding = 0, rg32ui) uniform uimage2D imagesRG32UI[];
 
 layout(push_constant) uniform PushConsts
 {
@@ -23,17 +23,21 @@ layout(push_constant) uniform PushConsts
     uint uniformBufferIndex;
     uint skyIrradianceSHBufferIndex;  // 9 vec3 SH coeffs of sky radiance (sky-driven ambient)
     vec3 lightColor;
-    float ambientIntensity;
+    uint featureFlags; // AO=1, SSR=2, sky ambient=4, cascade debug=8
     vec3 sun_dir;
     uint shadowEnabled;
     uint shadowInfoBufferIndex;
-    uint shadowCascadeDebug;
-    uint shadowMaskImageIndex;
-    uint ssaoImageIndex;
-    uint ssaoEnabled;
+    uint shadowMap0;
+    uint outputMode;
+    uint shadowMap1;
+    uint shadowMap2;
     float ssaoStrength;
-    uint skyAmbientEnabled;  // 0 = skip SH sky-driven ambient (perf toggle)
+    uint shadowMap3;
     uint disableAlbedoSample;
+    float ssrMaxDistance;
+    float ssrThickness;
+    float ssrMaxRoughness;
+    uint ssrMaxSteps;
 } pushConsts;
 
 // ============================================================================
@@ -120,18 +124,11 @@ vec2 safeMaterialUV(vec2 uv)
     return fract(uv);
 }
 
-vec4 fetchMaterialTexture(uint descriptor, vec2 uv)
+vec4 fetchMaterialTexture(uint descriptor, vec2 uv, vec2 dx, vec2 dy)
 {
-    ivec2 texSize = textureSize(textures[nonuniformEXT(descriptor)], 0);
-    if (texSize.x <= 0 || texSize.y <= 0) {
-        return vec4(1.0);
-    }
-
-    vec2 wrapped = safeMaterialUV(uv);
-    ivec2 coord = ivec2(clamp(floor(wrapped * vec2(texSize)),
-                              vec2(0.0),
-                              vec2(texSize) - vec2(1.0)));
-    return texelFetch(textures[nonuniformEXT(descriptor)], coord, 0);
+    // Explicit analytic gradients are required in compute. Sampling LOD 0 with
+    // texelFetch caused nearest-neighbour shimmer and ignored texture mipmaps.
+    return textureGrad(textures[nonuniformEXT(descriptor)], uv, dx, dy);
 }
 
 // ============================================================================
@@ -346,17 +343,20 @@ vec3 evalSkySH(vec3 n, uint shBuf)
 float sampleShadowMap(uint shadowMap, vec2 uv, float receiverDepth, float bias)
 {
     float shadowMapSize = readFloat(pushConsts.shadowInfoBufferIndex, 72u);
-    vec2 texelSize = vec2(1.0 / max(shadowMapSize, 1.0));
+    // Compare individual texels before filtering. Interpolating depth first
+    // invents occluders between surfaces and makes subtexel motion shimmer.
+    ivec2 size = textureSize(textures[nonuniformEXT(shadowMap)], 0);
+    vec2 texel = uv * vec2(size) - 0.5;
+    ivec2 base = ivec2(floor(texel));
+    vec2 fraction = fract(texel);
     float lit = 0.0;
-    for (int y = -1; y <= 1; ++y)
-    {
-        for (int x = -1; x <= 1; ++x)
-        {
-            float casterDepth = textureLod(
-                textures[nonuniformEXT(shadowMap)],
-                uv + vec2(float(x), float(y)) * texelSize,
-                0.0).r;
-            lit += (receiverDepth - bias) <= casterDepth ? 1.0 : 0.0;
+    for (int y = -1; y <= 2; ++y) {
+        float wy = y == -1 ? 1.0-fraction.y : y == 2 ? fraction.y : 1.0;
+        for (int x = -1; x <= 2; ++x) {
+            float wx = x == -1 ? 1.0-fraction.x : x == 2 ? fraction.x : 1.0;
+            ivec2 samplePixel = clamp(base + ivec2(x,y), ivec2(0), size-1);
+            float caster = texelFetch(textures[nonuniformEXT(shadowMap)], samplePixel, 0).r;
+            lit += wx * wy * float(receiverDepth-bias <= caster);
         }
     }
     return lit / 9.0;
@@ -386,7 +386,9 @@ float computeSunShadow(vec3 worldPos, vec3 normal)
     }
 
     mat4 lightViewProj = readMat4(pushConsts.shadowInfoBufferIndex, cascadeIndex * 16u);
-    uint shadowMap = readUint(pushConsts.shadowInfoBufferIndex, 68u + cascadeIndex);
+    uint shadowMap = cascadeIndex == 0u ? pushConsts.shadowMap0 :
+        cascadeIndex == 1u ? pushConsts.shadowMap1 :
+        cascadeIndex == 2u ? pushConsts.shadowMap2 : pushConsts.shadowMap3;
 
     vec4 lightClip = lightViewProj * vec4(worldPos, 1.0);
     if (abs(lightClip.w) < 1e-5) {
@@ -437,35 +439,15 @@ vec3 shadowCascadeDebugColor(uint cascadeIndex)
     return vec3(0.08, 0.08, 0.08);
 }
 
-float sampleAmbientOcclusion(ivec2 pixel)
-{
-    if (pushConsts.ssaoEnabled == 0u || pushConsts.ssaoImageIndex == 0u) {
-        return 1.0;
-    }
-    float ao = texelFetch(textures[nonuniformEXT(pushConsts.ssaoImageIndex)], pixel, 0).r;
-    float strength = max(pushConsts.ssaoStrength, 0.0);
-    return clamp(1.0 - (1.0 - ao) * strength, 0.0, 1.0);
-}
-
-float sampleSunShadowMask(ivec2 pixel)
-{
-    if (pushConsts.shadowEnabled == 0u || pushConsts.shadowMaskImageIndex == 0u) {
-        return 1.0;
-    }
-    return clamp(texelFetch(textures[nonuniformEXT(pushConsts.shadowMaskImageIndex)], pixel, 0).r,
-                 0.0, 1.0);
-}
-
-vec3 DisneyBRDF(vec3 WorldPos, vec3 Normal, vec3 Tangent, vec3 Bitangent,
+vec3 DisneyBRDF(vec3 V, vec3 Normal, vec3 Tangent, vec3 Bitangent,
     vec3 lightColor, vec3 albedo, MaterialInfo matl, float shadowFactor, float ambientOcclusion)
 {
     vec3 N = normalize(Normal);
     vec3 X = normalize(Tangent);
     vec3 Y = normalize(Bitangent);
-    vec3 eyePos = readVec3(pushConsts.uniformBufferIndex, 36u);
-    vec3 V = normalize(eyePos - WorldPos);
     vec3 L = normalize(pushConsts.sun_dir);
-    vec3 H = normalize(V + L);
+    vec3 H = V + L;
+    H *= inversesqrt(max(dot(H,H), 1e-12));
 
     float ndotl = max(dot(N, L), 0.0);
     float ndotv = max(dot(N, V), 0.0);
@@ -478,7 +460,7 @@ vec3 DisneyBRDF(vec3 WorldPos, vec3 Normal, vec3 Tangent, vec3 Bitangent,
     // both the per-pixel evaluation and the DC fill — so its cost is measurable
     // in isolation. The C++ side also skips the projection dispatch.
     vec3 irradiance = vec3(0.0);
-    if (pushConsts.skyAmbientEnabled != 0u) {
+    if ((pushConsts.featureFlags & 4u) != 0u) {
         vec3 skyE = evalSkySH(N, pushConsts.skyIrradianceSHBufferIndex);
         // Average-sky (DC) fill. Without GI, surfaces the sky cannot reach
         // directly — down-facing, indoor, occluded — get near-zero directional
@@ -488,7 +470,7 @@ vec3 DisneyBRDF(vec3 WorldPos, vec3 Normal, vec3 Tangent, vec3 Bitangent,
         vec3 skyDC = vec3(0.886227) * readVec3(pushConsts.skyIrradianceSHBufferIndex, 0u);
         irradiance = max(skyE, skyDC * 0.5);
     }
-    vec3 ambient = albedo * irradiance * (1.0 / PI);
+    vec3 ambient = albedo * (1.0 - matl.metallic) * irradiance * (1.0 / PI);
     ambient *= clamp(ambientOcclusion, 0.0, 1.0);
 
     if (ndotl <= 0.0) return ambient;
@@ -544,63 +526,48 @@ vec3 DisneyBRDF(vec3 WorldPos, vec3 Normal, vec3 Tangent, vec3 Bitangent,
     return ambient + (diffuse + specular + clearcoat) * lightColor * ndotl * shadowFactor;
 }
 
-// ============================================================================
-// Main — VBuffer decode + PBR in a single pass
-// ============================================================================
+struct Surface {
+    vec3 position;
+    vec3 normal;
+    vec3 tangent;
+    vec3 bitangent;
+    vec3 baseColor;
+    MaterialInfo material;
+    uint objectID;
+};
 
-void main()
+bool decodeSurface(ivec2 pixel, out Surface surface)
 {
-    if (gl_GlobalInvocationID.x >= pushConsts.gbufferSize.x ||
-        gl_GlobalInvocationID.y >= pushConsts.gbufferSize.y) {
-        return;
-    }
-
-    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
-
-    // --- Read depth: skip background pixels ---
-    vec2 screenUV = vec2(float(pixel.x) / float(pushConsts.gbufferSize.x),
-                         float(pixel.y) / float(pushConsts.gbufferSize.y));
-    float depth = textureLod(textures[nonuniformEXT(pushConsts.depthImageIndex)], screenUV, 0.0).r;
-
-    if (depth >= (1.0 - 1e-3))
-    {
-        imageStore(imagesRGBA16[pushConsts.finalOutputImage], pixel, vec4(0.0));
-        return;
-    }
-
     // --- Read visibility buffer ---
-    uvec4 vis = imageLoad(imagesRGBA32UI[pushConsts.visibilityImageIndex], pixel);
+    uvec4 vis = imageLoad(imagesRG32UI[pushConsts.visibilityImageIndex], pixel);
     uint instanceID_1based = vis.r;
     uint primitiveID = vis.g;
 
     if (instanceID_1based == 0u)
     {
-        imageStore(imagesRGBA16[pushConsts.finalOutputImage], pixel, vec4(0.0));
-        return;
+        return false;
     }
 
     uint instanceID = instanceID_1based - 1u;
     if (instanceID >= pushConsts.instanceCount)
     {
-        imageStore(imagesRGBA16[pushConsts.finalOutputImage], pixel, vec4(0.0));
-        return;
+        return false;
     }
 
     // --- Load instance and material info ---
     InstanceInfo inst = loadInstanceInfo(instanceID);
     if (inst.materialID >= pushConsts.materialCount)
     {
-        imageStore(imagesRGBA16[pushConsts.finalOutputImage], pixel, vec4(0.0));
-        return;
+        return false;
     }
     MaterialInfo matl = loadMaterialInfo(inst.materialID);
 
     // --- Load triangle indices (uint16 packed in uint32 SSBO) ---
+    if (inst.indexCount < 3u || primitiveID >= inst.indexCount / 3u) return false;
     uint indexBase = primitiveID * 3u;
     if (inst.indexCount == 0u || inst.vertexCount == 0u || indexBase + 2u >= inst.indexCount)
     {
-        imageStore(imagesRGBA16[pushConsts.finalOutputImage], pixel, vec4(0.0));
-        return;
+        return false;
     }
     uint i0 = readIndex16(inst.indexBufferIndex, primitiveID * 3u + 0u);
     uint i1 = readIndex16(inst.indexBufferIndex, primitiveID * 3u + 1u);
@@ -608,8 +575,7 @@ void main()
     if (i0 >= inst.vertexCount || i1 >= inst.vertexCount || i2 >= inst.vertexCount ||
         i0 > inst.maxIndex || i1 > inst.maxIndex || i2 > inst.maxIndex)
     {
-        imageStore(imagesRGBA16[pushConsts.finalOutputImage], pixel, vec4(0.0));
-        return;
+        return false;
     }
 
     // --- Load triangle vertices ---
@@ -620,8 +586,7 @@ void main()
         !finiteVec3(v0.normal) || !finiteVec3(v1.normal) || !finiteVec3(v2.normal) ||
         !finiteVec2(v0.texCoord) || !finiteVec2(v1.texCoord) || !finiteVec2(v2.texCoord))
     {
-        imageStore(imagesRGBA16[pushConsts.finalOutputImage], pixel, vec4(0.0));
-        return;
+        return false;
     }
 
     // --- Transform to world space ---
@@ -631,8 +596,7 @@ void main()
     if (!finiteMat4(inst.modelMatrix) ||
         !finiteVec3(worldPos0) || !finiteVec3(worldPos1) || !finiteVec3(worldPos2))
     {
-        imageStore(imagesRGBA16[pushConsts.finalOutputImage], pixel, vec4(0.0));
-        return;
+        return false;
     }
 
     // --- Compute screen-space positions for barycentric ---
@@ -648,8 +612,7 @@ void main()
         !finiteFloat(w0) || !finiteFloat(w1) || !finiteFloat(w2) ||
         abs(w0) < 1e-6 || abs(w1) < 1e-6 || abs(w2) < 1e-6)
     {
-        imageStore(imagesRGBA16[pushConsts.finalOutputImage], pixel, vec4(0.0));
-        return;
+        return false;
     }
 
     vec2 pixelPos = vec2(pixel) + vec2(0.5);
@@ -657,8 +620,7 @@ void main()
     float area = edgeFunction(s0, s1, s2);
     if (!finiteFloat(area) || abs(area) < 1e-6)
     {
-        imageStore(imagesRGBA16[pushConsts.finalOutputImage], pixel, vec4(0.0));
-        return;
+        return false;
     }
 
     float b0 = edgeFunction(s1, s2, pixelPos) / area;
@@ -666,8 +628,7 @@ void main()
     float b2 = edgeFunction(s0, s1, pixelPos) / area;
     if (!finiteFloat(b0) || !finiteFloat(b1) || !finiteFloat(b2))
     {
-        imageStore(imagesRGBA16[pushConsts.finalOutputImage], pixel, vec4(0.0));
-        return;
+        return false;
     }
 
     // Perspective-correct interpolation
@@ -678,8 +639,7 @@ void main()
     if (!finiteFloat(inv_w0) || !finiteFloat(inv_w1) || !finiteFloat(inv_w2) ||
         !finiteFloat(inv_w_sum) || abs(inv_w_sum) < 1e-6)
     {
-        imageStore(imagesRGBA16[pushConsts.finalOutputImage], pixel, vec4(0.0));
-        return;
+        return false;
     }
 
     vec3 bary;
@@ -688,22 +648,34 @@ void main()
     bary.z = (b2 * inv_w2) / inv_w_sum;
     if (!finiteVec3(bary))
     {
-        imageStore(imagesRGBA16[pushConsts.finalOutputImage], pixel, vec4(0.0));
-        return;
+        return false;
     }
 
     // --- Interpolate vertex attributes ---
     vec3 interpPos = bary.x * worldPos0 + bary.y * worldPos1 + bary.z * worldPos2;
 
-    mat3 normalMatrix = transpose(inverse(mat3(inst.modelMatrix)));
-    vec3 interpNormal = normalize(normalMatrix *
-        (bary.x * v0.normal + bary.y * v1.normal + bary.z * v2.normal));
+    mat3 model = mat3(inst.modelMatrix);
+    vec3 c0 = cross(model[1], model[2]);
+    float determinant = dot(model[0], c0);
+    if (abs(determinant) < 1e-12) return false;
+    // Cofactors give inverse-transpose direction without a matrix division.
+    mat3 normalMatrix = mat3(c0, cross(model[2], model[0]), cross(model[0], model[1])) * sign(determinant);
+    vec3 rawNormal = normalMatrix * (bary.x*v0.normal + bary.y*v1.normal + bary.z*v2.normal);
+    float normalLength = length(rawNormal);
+    if (normalLength < 1e-12) return false;
+    vec3 interpNormal = rawNormal / normalLength;
 
     vec2 interpUV = bary.x * v0.texCoord + bary.y * v1.texCoord + bary.z * v2.texCoord;
+    vec3 dbdx = vec3(s2.y-s1.y, s0.y-s2.y, s1.y-s0.y) / area;
+    vec3 dbdy = vec3(s1.x-s2.x, s2.x-s0.x, s0.x-s1.x) / area;
+    vec3 invW = vec3(inv_w0, inv_w1, inv_w2);
+    vec3 qx = dbdx * invW, qy = dbdy * invW;
+    vec2 uvDx = (v0.texCoord*qx.x + v1.texCoord*qx.y + v2.texCoord*qx.z - interpUV*dot(qx,vec3(1))) / inv_w_sum;
+    vec2 uvDy = (v0.texCoord*qy.x + v1.texCoord*qy.y + v2.texCoord*qy.z - interpUV*dot(qy,vec3(1))) / inv_w_sum;
+    if (!finiteVec2(uvDx) || !finiteVec2(uvDy)) return false;
     if (!finiteVec3(interpPos) || !finiteVec3(interpNormal) || !finiteVec2(interpUV))
     {
-        imageStore(imagesRGBA16[pushConsts.finalOutputImage], pixel, vec4(0.0));
-        return;
+        return false;
     }
 
     // --- Compute tangent frame from triangle edges and UVs ---
@@ -723,38 +695,250 @@ void main()
     else
     {
         // Fallback: construct arbitrary tangent frame from normal
-        T = normalize(edge1);
+        T = normalize(cross(abs(interpNormal.z) < 0.9 ? vec3(0,0,1) : vec3(0,1,0), interpNormal));
         B = normalize(cross(interpNormal, T));
     }
     // Re-orthogonalize
-    T = normalize(T - dot(T, interpNormal) * interpNormal);
+    T -= dot(T, interpNormal) * interpNormal;
+    if (dot(T,T) < 1e-10) T = cross(abs(interpNormal.z) < 0.9 ? vec3(0,0,1) : vec3(0,1,0), interpNormal);
+    T = normalize(T);
     B = normalize(cross(interpNormal, T));
 
     // --- Sample material ---
     vec4 baseColor = matl.materialColor;
     if (matl.textureDescriptor != 0u && pushConsts.disableAlbedoSample == 0u)
     {
-        vec4 texSample = fetchMaterialTexture(matl.textureDescriptor, interpUV);
+        vec4 texSample = fetchMaterialTexture(matl.textureDescriptor, interpUV, uvDx, uvDy);
         if (finiteVec4(texSample)) {
             baseColor.rgb *= texSample.rgb;
         }
     }
 
-    if (matl.lightingEnabled <= 0.5)
-    {
-        imageStore(imagesRGBA16[pushConsts.finalOutputImage], pixel, vec4(baseColor.rgb, baseColor.a));
+    matl.metallic = clamp(matl.metallic, 0.0, 1.0);
+    // Analytic normal derivatives from the same VBuffer triangle. Bound the
+    // specular lobe by its pixel footprint without a normal/history image.
+    vec3 normalDx = (normalMatrix*(v0.normal*qx.x + v1.normal*qx.y + v2.normal*qx.z) - rawNormal*dot(qx,vec3(1))) / inv_w_sum;
+    vec3 normalDy = (normalMatrix*(v0.normal*qy.x + v1.normal*qy.y + v2.normal*qy.z) - rawNormal*dot(qy,vec3(1))) / inv_w_sum;
+    normalDx = (normalDx-interpNormal*dot(interpNormal,normalDx))/normalLength;
+    normalDy = (normalDy-interpNormal*dot(interpNormal,normalDy))/normalLength;
+    float variance = finiteVec3(normalDx) && finiteVec3(normalDy)
+        ? min(0.18, 0.5*(dot(normalDx,normalDx)+dot(normalDy,normalDy))) : 0.0;
+    matl.roughness = sqrt(clamp(matl.roughness*matl.roughness + variance, 0.045*0.045, 1.0));
+    matl.anisotropic = clamp(matl.anisotropic, 0.0, 0.99);
+    surface.position = interpPos;
+    surface.normal = interpNormal;
+    surface.tangent = T;
+    surface.bitangent = B;
+    surface.baseColor = max(baseColor.rgb, vec3(0));
+    surface.material = matl;
+    surface.objectID = inst.objectID;
+    return finiteVec3(surface.baseColor);
+}
+
+vec3 viewPosition(ivec2 pixel, float depth, mat4 inverseProjection) {
+    vec2 uv = (vec2(pixel) + 0.5) / vec2(pushConsts.gbufferSize);
+    vec4 p = inverseProjection * vec4(uv * 2.0 - 1.0, depth, 1.0);
+    return p.xyz / p.w;
+}
+
+// Stateless, bounded screen-space obscurance. Only depth is read for neighbours;
+// no full-resolution normal, AO, filter, or temporal-history image is needed.
+float ambientOcclusion(ivec2 pixel, Surface surface) {
+    if ((pushConsts.featureFlags & 1u) == 0u) return 1.0;
+    mat4 view = readMat4(pushConsts.uniformBufferIndex, 44u);
+    mat4 projection = readMat4(pushConsts.uniformBufferIndex, 60u);
+    mat4 inverseProjection = readMat4(pushConsts.uniformBufferIndex, 76u);
+    vec3 p = (view * vec4(surface.position, 1)).xyz;
+    vec3 n = normalize(mat3(view) * surface.normal);
+    const float radius = 0.6;
+    float radiusPixels = clamp(abs(projection[1][1]) * radius * float(pushConsts.gbufferSize.y) / (2.0 * max(abs(p.z), 0.01)), 1.0, 192.0);
+    float occlusion = 0.0;
+    // Fixed low-discrepancy disk avoids frame-to-frame noise without a history.
+    const vec2 disk[12] = vec2[12](
+        vec2(0.204124145,0.000000000),
+        vec2(-0.260699267,0.238821884),
+        vec2(0.039904202,-0.454687792),
+        vec2(0.328594540,0.428593391),
+        vec2(-0.603011395,-0.106664226),
+        vec2(0.571225035,-0.363366609),
+        vec2(-0.191063596,0.710747050),
+        vec2(-0.364378996,-0.701589586),
+        vec2(0.790556672,0.288710031),
+        vec2(-0.822442487,0.339492301),
+        vec2(0.396471627,-0.847236832),
+        vec2(0.292982443,0.934074206)
+    );
+    for (int i = 0; i < 12; ++i) {
+        ivec2 q = pixel + ivec2(round(disk[i] * radiusPixels));
+        if (any(lessThan(q,ivec2(0))) || any(greaterThanEqual(q,ivec2(pushConsts.gbufferSize))) || all(equal(q,pixel))) continue;
+        float d = texelFetch(textures[nonuniformEXT(pushConsts.depthImageIndex)], q, 0).r;
+        if (d >= 1.0) continue;
+        vec3 delta = viewPosition(q,d,inverseProjection) - p;
+        float distance2 = dot(delta,delta);
+        if (distance2 < 1e-8 || distance2 >= radius*radius) continue;
+        float distance = sqrt(distance2);
+        float horizon = max(dot(n,delta) / distance - 0.05, 0.0);
+        occlusion += horizon * (1.0 - distance2/(radius*radius));
+    }
+    return clamp(1.0 - pushConsts.ssaoStrength * occlusion * (2.0/12.0), 0.0, 1.0);
+}
+
+vec3 shadeDirect(Surface s, float ao, vec3 viewDirection) {
+    if (s.material.lightingEnabled <= 0.5) return s.baseColor;
+    float shadow = computeSunShadow(s.position, s.normal);
+    return DisneyBRDF(viewDirection,s.normal,s.tangent,s.bitangent,
+        pushConsts.lightColor,s.baseColor,s.material,shadow,ao);
+}
+
+// Screen-space reflection using perspective-correct ray segments and depth
+// crossings. Re-shade the hit from VBuffer: never read the output being written.
+// This avoids colour ping-pong, a GBuffer, a Hi-Z pyramid and reflection history.
+bool traceReflection(Surface source, vec3 direction, out Surface hit, out float confidence) {
+    confidence = 0.0;
+    mat4 view = readMat4(pushConsts.uniformBufferIndex, 44u);
+    mat4 projection = readMat4(pushConsts.uniformBufferIndex, 60u);
+    mat4 inverseProjection = readMat4(pushConsts.uniformBufferIndex, 76u);
+    vec3 origin = source.position + source.normal * max(0.015, pushConsts.ssrThickness * 0.25);
+    vec3 a = (view * vec4(origin,1)).xyz;
+    vec3 ray = mat3(view) * direction;
+    float distance = pushConsts.ssrMaxDistance;
+    // Clip rays before the camera near plane, avoiding negative/zero clip W.
+    float nearPlane = abs(viewPosition(ivec2(pushConsts.gbufferSize / 2u), 0.0, inverseProjection).z);
+    if (ray.z < 0.0) distance = min(distance, (a.z - nearPlane * 1.01) / -ray.z);
+    if (distance <= 0.02) return false;
+    vec3 b = a + ray * distance;
+    vec4 ca = projection * vec4(a,1), cb = projection * vec4(b,1);
+    if (ca.w <= 1e-5 || cb.w <= 1e-5) return false;
+    vec2 pa = (ca.xy / ca.w * 0.5 + 0.5) * vec2(pushConsts.gbufferSize);
+    vec2 pb = (cb.xy / cb.w * 0.5 + 0.5) * vec2(pushConsts.gbufferSize);
+    vec2 delta = pb - pa;
+    // Clip to the viewport before budgeting steps. A ray ending near the camera
+    // can project thousands of pixels outside it; sampling that invisible span
+    // would skip all useful intersections in the first step.
+    if (any(lessThan(pa,vec2(0))) || any(greaterThanEqual(pa,vec2(pushConsts.gbufferSize)))) return false;
+    float screenEnd = 1.0;
+    for (int axis=0; axis<2; ++axis) {
+        if (delta[axis] > 1e-6) screenEnd = min(screenEnd,(float(pushConsts.gbufferSize[axis])-0.5-pa[axis])/delta[axis]);
+        else if (delta[axis] < -1e-6) screenEnd = min(screenEnd,(0.5-pa[axis])/delta[axis]);
+    }
+    screenEnd = clamp(screenEnd,0.0,1.0);
+    float ka = 1.0 / ca.w, kb = 1.0 / cb.w;
+    vec3 qa = a * ka, qb = b * kb;
+    pb = mix(pa,pb,screenEnd);
+    qb = mix(qa,qb,screenEnd);
+    kb = mix(ka,kb,screenEnd);
+    delta = pb-pa;
+    float pixels = max(abs(delta.x), abs(delta.y));
+    if (pixels < 1.0) return false;
+    uint steps = uint(clamp(ceil(pixels / 4.0), 1.0, float(pushConsts.ssrMaxSteps)));
+    float previousT = 0.0;
+    float previousZ = a.z;
+    ivec2 firstPixel = ivec2(pa);
+    float firstDepth = texelFetch(textures[nonuniformEXT(pushConsts.depthImageIndex)],firstPixel,0).r;
+    bool previousValid = firstDepth < 1.0;
+    float previousGap = a.z - viewPosition(firstPixel,firstDepth,inverseProjection).z;
+    for (uint i = 1u; i <= steps; ++i) {
+        float t = float(i) / float(steps);
+        vec2 pixel = mix(pa,pb,t);
+        if (any(lessThan(pixel,vec2(0))) || any(greaterThanEqual(pixel,vec2(pushConsts.gbufferSize)))) return false;
+        ivec2 ip = ivec2(pixel);
+        float z = mix(qa,qb,t).z / mix(ka,kb,t);
+        float depth = texelFetch(textures[nonuniformEXT(pushConsts.depthImageIndex)],ip,0).r;
+        if (depth < 1.0) {
+            float sceneZ = viewPosition(ip,depth,inverseProjection).z;
+            float thickness = max(pushConsts.ssrThickness, abs(sceneZ) * 0.001);
+            float gap = z-sceneZ;
+            bool bracketed = previousValid && ((previousGap < 0.0) != (gap < 0.0));
+            if (bracketed || (max(z,previousZ) >= sceneZ && min(z,previousZ) <= sceneZ + thickness)) {
+                float lo = previousT, hi = t;
+                bool startsBehind = previousValid && previousGap >= 0.0;
+                // Refine the first crossing, then reject silhouettes and backfaces.
+                for (int j = 0; j < 5; ++j) {
+                    float mid = (lo+hi)*0.5;
+                    ivec2 mp = ivec2(clamp(mix(pa,pb,mid),vec2(0),vec2(pushConsts.gbufferSize)-1.0));
+                    float md = texelFetch(textures[nonuniformEXT(pushConsts.depthImageIndex)],mp,0).r;
+                    float mz = mix(qa,qb,mid).z / mix(ka,kb,mid);
+                    float sz = viewPosition(mp,md,inverseProjection).z;
+                    // Bracket the signed ray/scene depth gap. Scene depth can
+                    // change faster than ray Z on a slope, including rays toward
+                    // the eye; ray direction alone cannot select the half interval.
+                    bool crossed = (mz >= sz) != startsBehind;
+                    if (md < 1.0 && crossed) hi=mid; else lo=mid;
+                }
+                vec2 hp = mix(pa,pb,hi);
+                ivec2 hitPixel = ivec2(hp);
+                float hd = texelFetch(textures[nonuniformEXT(pushConsts.depthImageIndex)],hitPixel,0).r;
+                float hz = mix(qa,qb,hi).z / mix(ka,kb,hi);
+                float hitZ = viewPosition(hitPixel,hd,inverseProjection).z;
+                float gap = hz - hitZ;
+                thickness = max(pushConsts.ssrThickness, abs(hitZ)*0.001);
+                if (hd < 1.0 && gap >= -thickness*0.25 && gap <= thickness &&
+                    decodeSurface(hitPixel,hit) && dot(hit.normal,direction) < -0.05 &&
+                    length(hit.position-source.position) > 0.05) {
+                    vec2 uv = hp / vec2(pushConsts.gbufferSize);
+                    float edge = min(min(uv.x,uv.y),min(1.0-uv.x,1.0-uv.y));
+                    confidence = smoothstep(0.0,0.06,edge) * (1.0-smoothstep(0.75,1.0,hi));
+                    return confidence > 0.0;
+                }
+            }
+            previousGap = gap;
+        }
+        previousValid = depth < 1.0;
+        previousT = t;
+        previousZ = z;
+    }
+    return false;
+}
+
+vec3 reflection(Surface s, float ao) {
+    vec3 eye = readVec3(pushConsts.uniformBufferIndex,36u);
+    vec3 v = normalize(eye-s.position);
+    vec3 r = reflect(-v,s.normal);
+    float roughness = s.material.roughness;
+    vec3 f0 = mix(vec3(0.08 * clamp(s.material.specular,0.0,1.0)),s.baseColor,s.material.metallic);
+    vec3 fresnel = f0 + (vec3(1)-f0) * pow(1.0-max(dot(s.normal,v),0.0),5.0);
+    // SH provides a bounded low-frequency fallback at screen edges and misses.
+    vec3 radiance = (pushConsts.featureFlags & 4u) != 0u ? max(evalSkySH(r,pushConsts.skyIrradianceSHBufferIndex),vec3(0)) / PI : vec3(0);
+    if ((pushConsts.featureFlags & 2u) != 0u && roughness < pushConsts.ssrMaxRoughness && max(fresnel.x,max(fresnel.y,fresnel.z)) > 0.02) {
+        Surface hit;
+        float confidence;
+        if (traceReflection(s,r,hit,confidence)) {
+            confidence *= 1.0-smoothstep(pushConsts.ssrMaxRoughness*0.6,pushConsts.ssrMaxRoughness,roughness);
+            // The hit sends radiance back along the reflected ray, not toward
+            // the main camera. This matters for specular/metallic hit materials.
+            radiance = mix(radiance,shadeDirect(hit,1.0,-r),confidence);
+        }
+    }
+    return radiance * fresnel * (1.0-0.65*roughness) * mix(1.0,ao,roughness);
+}
+
+void main() {
+    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(pixel,ivec2(pushConsts.gbufferSize)))) return;
+    Surface surface;
+    if (!decodeSurface(pixel,surface)) {
+        imageStore(imagesRGBA16[pushConsts.finalOutputImage],pixel,vec4(0));
         return;
     }
-
-    // --- Disney Principled BRDF lighting ---
-    float shadowFactor = sampleSunShadowMask(pixel);
-    float ambientOcclusion = sampleAmbientOcclusion(pixel);
-    vec3 renderResult = DisneyBRDF(interpPos, interpNormal, T, B,
-        pushConsts.lightColor, baseColor.rgb, matl, shadowFactor, ambientOcclusion);
-    if (pushConsts.shadowCascadeDebug != 0u) {
-        renderResult = shadowCascadeDebugColor(computeShadowCascadeIndex(interpPos));
+    uint mode = pushConsts.outputMode;
+    float ao = (mode == 0u || mode == 6u || mode == 7u) ? ambientOcclusion(pixel,surface) : 1.0;
+    vec3 color;
+    if (mode == 1u) color = surface.baseColor;
+    else if (mode == 2u) color = surface.normal*0.5+0.5;
+    else if (mode == 3u) color = fract(abs(surface.position)*0.1);
+    else if (mode == 4u || mode == 5u) {
+        uvec4 vis = imageLoad(imagesRG32UI[pushConsts.visibilityImageIndex],pixel);
+        uint id = mode == 4u ? surface.objectID : (vis.x * 1664525u + vis.y);
+        color = fract(vec3(0.1031,0.11369,0.13787)*float(id % 65521u));
     }
-    renderResult = max(renderResult, vec3(0.01, 0.01, 0.01));
-
-    imageStore(imagesRGBA16[pushConsts.finalOutputImage], pixel, vec4(renderResult, 1.0));
+    else if (mode == 6u || mode == 7u) color = vec3(ao);
+    else if (mode == 8u || mode == 9u) color = vec3(computeSunShadow(surface.position,surface.normal));
+    else {
+        vec3 eye = readVec3(pushConsts.uniformBufferIndex,36u);
+        color = shadeDirect(surface,ao,normalize(eye-surface.position));
+        if (surface.material.lightingEnabled > 0.5) color += reflection(surface,ao);
+        if ((pushConsts.featureFlags & 8u) != 0u) color = shadowCascadeDebugColor(computeShadowCascadeIndex(surface.position));
+    }
+    if (!finiteVec3(color)) color=vec3(0);
+    imageStore(imagesRGBA16[pushConsts.finalOutputImage],pixel,vec4(clamp(color,vec3(0),vec3(65504)),1));
 }

@@ -12,6 +12,7 @@
 #include <cstring>
 #include <span>
 #include <vector>
+#include <unordered_map>
 
 #include "base/mgr/geometry.h"
 #include "base/mgr/scene.h"
@@ -214,6 +215,13 @@ struct CpuMeshData {
             o2w = model_transform_to_vision_o2w(*transform);
         }
 
+        std::unordered_map<std::size_t, std::shared_ptr<::vision::Mesh>> shared_meshes;
+        // A glTF mesh can be instanced thousands of times. MeshInstanceDevice has no
+        // per-instance material override, so material state must follow the source
+        // mesh rather than the expanded draw instance. Registering a material for
+        // every node multiplied the Vision material table (and its GPU state) by the
+        // instance count.
+        std::unordered_map<std::size_t, std::shared_ptr<::vision::Material>> shared_materials;
         const std::size_t draw_instance_count = geom->mesh_instances.empty()
             ? geom->mesh_handles.size()
             : geom->mesh_instances.size();
@@ -223,6 +231,7 @@ struct CpuMeshData {
             const MeshInstanceDevice* mesh_instance = geom->mesh_instances.empty()
                 ? nullptr
                 : &geom->mesh_instances[draw_instance_index];
+            if (mesh_instance && !mesh_instance->visible) continue;
             const std::size_t mesh_index = mesh_instance != nullptr
                 ? static_cast<std::size_t>(mesh_instance->mesh_index)
                 : draw_instance_index;
@@ -230,6 +239,8 @@ struct CpuMeshData {
                 continue;
             }
             auto& mesh_dev = geom->mesh_handles[mesh_index];
+            std::shared_ptr<::vision::Mesh> mesh;
+            if(auto existing=shared_meshes.find(mesh_index);existing!=shared_meshes.end()){mesh=existing->second;}else {
             CpuMeshData cpu_mesh;
             if (!load_cpu_mesh_from_resource(*geom, mesh_index, cpu_mesh) &&
                 !load_cpu_mesh_from_buffers(mesh_dev, cpu_mesh)) {
@@ -244,25 +255,9 @@ struct CpuMeshData {
 
             std::vector<::vision::Vertex> vertices;
             vertices.reserve(cpu_mesh.vertices.size());
-            const ktm::fmat4x4 instance_matrix = mesh_instance != nullptr
-                ? mesh_instance->transform
-                : ktm::fmat4x4::from_eye();
             for (const auto& src_vertex : cpu_mesh.vertices) {
-                const ktm::fvec4 local_pos = ktm::fvec4{
-                    src_vertex.position[0], src_vertex.position[1],
-                    src_vertex.position[2], 1.0f};
-                const ktm::fvec4 local_normal = ktm::fvec4{
-                    src_vertex.normal[0], src_vertex.normal[1],
-                    src_vertex.normal[2], 0.0f};
-                const ktm::fvec4 pos = instance_matrix * local_pos;
-                ktm::fvec4 normal = instance_matrix * local_normal;
-                const float normal_len = std::sqrt(
-                    normal[0] * normal[0] + normal[1] * normal[1] + normal[2] * normal[2]);
-                if (normal_len > 1e-6f) {
-                    normal[0] /= normal_len;
-                    normal[1] /= normal_len;
-                    normal[2] /= normal_len;
-                }
+                const auto& pos=src_vertex.position;
+                const auto& normal=src_vertex.normal;
                 ::vision::Vertex v;
                 v.pos = {pos[0], pos[1], -pos[2]};
                 v.n   = {normal[0], normal[1], -normal[2]};
@@ -284,18 +279,31 @@ struct CpuMeshData {
                                        cpu_mesh.indices[triangle_index + 1]);
             }
 
-            auto mesh = std::make_shared<::vision::Mesh>(
+            mesh = std::make_shared<::vision::Mesh>(
                 std::move(vertices), std::move(triangles));
             mesh = scene.geometry().data()->register_mesh(mesh);
 
-            auto material = create_vision_material(*optics, mesh_dev);
-            if (!material) {
-                material = scene.obtain_black_body();
+            shared_meshes.emplace(mesh_index,mesh);
+            }
+            std::shared_ptr<::vision::Material> material;
+            if (auto existing = shared_materials.find(mesh_index);
+                existing != shared_materials.end()) {
+                material = existing->second;
+            } else {
+                material = create_vision_material(*optics, mesh_dev);
+                if (!material) {
+                    material = scene.obtain_black_body();
+                }
+                shared_materials.emplace(mesh_index, material);
+                scene.add_material(material);
             }
             auto instance = std::make_shared<::vision::ShapeInstance>(mesh);
-            instance->set_o2w(o2w);
+            auto local=::vision::make_float4x4(1.f);
+            if(mesh_instance)for(int col=0;col<4;++col)for(int row=0;row<4;++row){float value=mesh_instance->transform[col][row];if(row==2)value=-value;if(col==2)value=-value;local[col][row]=value;}
+            instance->set_o2w(o2w*local);
+            // Stable mapping used by runtime instance transform updates, independent of duplicate node names.
+            instance->set_name("corona-node:"+std::to_string(optics->geometry_handle)+":"+std::to_string(draw_instance_index));
             instance->set_material(material);
-            scene.add_material(material);
             instance->init_aabb();
 
             group.aabb.extend(instance->aabb);

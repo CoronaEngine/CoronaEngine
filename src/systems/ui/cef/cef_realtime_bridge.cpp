@@ -1,5 +1,6 @@
 #include "cef_bridge_helpers.h"
 #include "cef_editor_api.h"
+#include "ui_resource_read.h"
 
 #include <horizon/core/logging.h>
 #include <corona/resource/resource_manager.h>
@@ -8,6 +9,9 @@
 #include <corona/shared_data_hub.h>
 #include <corona/engine/engine_runtime_api.h>
 #include <corona/systems/ui/camera_viewport_manager.h>
+#include <corona/systems/mechanics/mechanics_system.h>
+#include <corona/kernel/core/kernel_context.h>
+#include <include/cef_task.h>
 #include <include/cef_values.h>
 #include <nlohmann/json.hpp>
 #include <SDL3/SDL.h>
@@ -111,8 +115,7 @@ const ViewportGizmoCpuMasks& viewport_gizmo_cpu_masks() {
                 return;
             }
             auto image =
-                Corona::Resource::ResourceManager::get_instance()
-                    .acquire_read<Corona::Resource::Image>(image_id);
+                read_resource_for_ui<Corona::Resource::Image>(image_id);
             if (!image || image->get_width() <= 0 || image->get_height() <= 0 ||
                 image->get_data() == nullptr) {
                 CFW_LOG_WARNING("Viewport gizmo alpha mask is invalid: {}", path.string());
@@ -153,7 +156,10 @@ bool set_browser_tab_system_cursor_state(CefRefPtr<CefBrowser> browser, bool hid
     }
 
     const int browser_id = browser->GetIdentifier();
-    for (const auto& [tab_id, tab] : BrowserManager::instance().get_tabs()) {
+    for (const auto& tab_entry : BrowserManager::instance().tabs_snapshot()) {
+        const int tab_id = tab_entry.tab_id;
+        auto* tab = tab_entry.tab;
+        if (tab == nullptr) continue;
         if (!tab || !tab->client) {
             continue;
         }
@@ -535,8 +541,7 @@ bool append_geometry_focus_bounds(const FocusGeometrySource& source, FocusBounds
         }
 
         auto scene_resource =
-            Corona::Resource::ResourceManager::get_instance()
-                .acquire_read<Corona::Resource::Scene>(model_id);
+            read_resource_for_ui<Corona::Resource::Scene>(model_id);
         if (!scene_resource) {
             return false;
         }
@@ -673,6 +678,45 @@ bool handle_compute_actor_focus_pose_fast(const CefRefPtr<CefFrame>& frame,
     return true;
 }
 
+class MeshMoveCallbackTask final : public CefTask {
+ public:
+    MeshMoveCallbackTask(CefRefPtr<CefFrame> frame, nlohmann::json payload):frame_(frame),payload_(std::move(payload)) {}
+    void Execute() override { if(frame_ && frame_->IsValid()) emit_editor_api_event_to_frame("SceneTools.meshMoveResult",payload_,frame_); }
+ private:
+    CefRefPtr<CefFrame> frame_;
+    nlohmann::json payload_;
+    IMPLEMENT_REFCOUNTING(MeshMoveCallbackTask);
+};
+
+bool handle_mesh_move(const CefRefPtr<CefFrame>& frame, const CefRefPtr<CefProcessMessage>& message) {
+    const auto args=message->GetArgumentList();
+    if((args->GetSize()!=6 && args->GetSize()!=7) || args->GetType(2)!=VTYPE_STRING || args->GetType(3)!=VTYPE_LIST) return true;
+    const double actor_value=args->GetDouble(0), camera_value=args->GetDouble(1);
+    const auto id=args->GetString(2).ToString();
+    if(!std::isfinite(actor_value) || actor_value<=0 || actor_value>9007199254740991.0 ||
+       !std::isfinite(camera_value) || camera_value<=0 || camera_value>9007199254740991.0 || id.empty() || id.size()>128) return true;
+    MechanicsSystem::MeshMoveCommand command;
+    command.actor=static_cast<std::uintptr_t>(actor_value); command.camera=static_cast<std::uintptr_t>(camera_value);
+    const auto values=args->GetList(3);
+    if(!values || values->GetSize()!=3) return true;
+    for(int i=0;i<3;++i) command.velocity[i]=static_cast<float>(values->GetDouble(i));
+    command.dt=static_cast<float>(args->GetDouble(4)); command.jump=args->GetBool(5);
+    command.turn=args->GetSize()==7;
+    if(command.turn) command.facing=static_cast<float>(args->GetDouble(6));
+    auto callback=[frame,id,actor=command.actor](MechanicsSystem::MeshMoveEvent result) {
+        nlohmann::json payload={{"requestId",id},{"actorHandle",actor},{"status",result.status},
+            {"position",result.position},{"grounded",result.grounded},{"ceiling",result.ceiling},
+            {"collided",result.collided},{"normal",result.normal},{"otherActor",result.other_actor},
+            {"triangle",result.triangle},{"otherTriangle",result.other_triangle},{"rotation",result.rotation}};
+        CefPostTask(TID_UI,new MeshMoveCallbackTask(frame,std::move(payload)));
+    };
+    auto manager=Kernel::KernelContext::instance().system_manager();
+    auto mechanics=manager ? std::dynamic_pointer_cast<MechanicsSystem>(manager->get_system("Mechanics")) : nullptr;
+    if(mechanics) mechanics->submit_mesh_move(command,std::move(callback));
+    else callback({});
+    return true;
+}
+
 bool handle_actor_transform_fast(const CefRefPtr<CefProcessMessage>& message) {
     auto args = message->GetArgumentList();
     if (!args || args->GetSize() < 3) {
@@ -749,6 +793,7 @@ void drain_actor_pick_completion_events_impl() {
             {"cameraHandle", static_cast<std::uint64_t>(completion.camera_handle)},
             {"requestId", completion.request_id},
             {"actorHandle", static_cast<std::uint64_t>(completion.actor_handle)},
+            {"node_index", completion.node_index == UINT32_MAX ? nlohmann::json(nullptr) : nlohmann::json(completion.node_index)},
             {"x", completion.x},
             {"y", completion.y},
         };
@@ -1549,7 +1594,10 @@ int find_tab_id_for_browser(const CefRefPtr<CefBrowser>& browser) {
     }
 
     const int browser_id = browser->GetIdentifier();
-    for (auto& [tab_id, tab] : BrowserManager::instance().get_tabs()) {
+    for (const auto& tab_entry : BrowserManager::instance().tabs_snapshot()) {
+        const int tab_id = tab_entry.tab_id;
+        auto* tab = tab_entry.tab;
+        if (tab == nullptr) continue;
         if (tab->client && tab->client->GetBrowser() &&
             tab->client->GetBrowser()->GetIdentifier() == browser_id) {
             return tab_id;
@@ -1569,7 +1617,10 @@ int resolve_camera_tab_id(const nlohmann::json& command,
         }
     }
     if (!camera_id.empty()) {
-        for (auto& [tab_id, tab] : BrowserManager::instance().get_tabs()) {
+        for (const auto& tab_entry : BrowserManager::instance().tabs_snapshot()) {
+        const int tab_id = tab_entry.tab_id;
+        auto* tab = tab_entry.tab;
+        if (tab == nullptr) continue;
             if (tab && tab->camera_view && tab->url.find(camera_id) != std::string::npos) {
                 return tab_id;
             }
@@ -1633,9 +1684,12 @@ void broadcast_dock_event(const std::string& event, const nlohmann::json& payloa
     std::string js = "if(window.__coronaEmit)window.__coronaEmit(" +
                      nlohmann::json(event).dump() + "," + args_js + ")";
 
-    for (auto& [tab_id, tab] : BrowserManager::instance().get_tabs()) {
+    for (const auto& tab_entry : BrowserManager::instance().tabs_snapshot()) {
+        const int tab_id = tab_entry.tab_id;
+        auto* tab = tab_entry.tab;
+        if (tab == nullptr) continue;
         if (!tab->minimized) {
-            execute_tab_javascript(tab.get(), js);
+            execute_tab_javascript(tab, js);
         }
     }
 }
@@ -2167,32 +2221,41 @@ bool handle_dock_command(CefRefPtr<CefBrowser> browser,
             std::string standalone_route = route;
             standalone_route += (standalone_route.find('?') == std::string::npos) ? "?standalone=1" : "&standalone=1";
 
-            int tab_id = bm.create_tab(source_base_url(browser), standalone_route,
-                                       docking_pos, width, height, false);
-            // Phase 10: a popped-out panel is an in-main-window floating, draggable rectangle.
-            // Seed an initial position from its anchor so multiple pop-outs don't stack at 0,0;
-            // the user can then drag it by its title bar. Done on the UI thread.
-            bm.enqueue_main_thread_task([tab_id, docking_pos, width, height, z_priority] {
-                auto* tab = BrowserManager::instance().get_tab(tab_id);
-                if (!tab) {
-                    return;
-                }
-                tab->floating = true;
-                tab->z_priority = z_priority;
-                // Spread anchors a bit so default panels are visible and not overlapping.
-                int ix = 80;
-                int iy = 80;
-                if (docking_pos == "right_top") { ix = 1100; iy = 80; }
-                else if (docking_pos == "right_bottom") { ix = 1100; iy = 560; }
-                else if (docking_pos == "left_bottom") { ix = 80; iy = 560; }
-                else if (docking_pos == "center") { ix = 600; iy = 300; }
-                tab->initial_x = ix;
-                tab->initial_y = iy;
-            });
-            nlohmann::json result;
-            result["tab_id"] = tab_id;
-            result["panel_id"] = panel_id;
-            send_dock_callback(frame, request_id, nullptr, result);
+            // Create the tab on the main thread, like createDetachedPanel: create_tab
+            // allocates a GPU texture (Horizon) and calls CefBrowserHost::CreateBrowser,
+            // and this command arrives on the CEF UI thread. The tab id is therefore
+            // reported from inside the task instead of synchronously.
+            const std::string base_url = source_base_url(browser);
+            bm.enqueue_main_thread_task(
+                [base_url, standalone_route, panel_id, docking_pos, width, height, z_priority,
+                 frame, request_id] {
+                    auto& bmgr = BrowserManager::instance();
+                    const int tab_id = bmgr.create_tab(base_url, standalone_route, docking_pos,
+                                                       width, height, false);
+                    // Phase 10: a popped-out panel is an in-main-window floating, draggable
+                    // rectangle. Seed an initial position from its anchor so multiple
+                    // pop-outs don't stack at 0,0; the user can then drag it by its title bar.
+                    if (auto* tab = bmgr.get_tab(tab_id)) {
+                        tab->floating = true;
+                        tab->z_priority = z_priority;
+                        // Spread anchors a bit so default panels are visible and not overlapping.
+                        int ix = 80;
+                        int iy = 80;
+                        if (docking_pos == "right_top") { ix = 1100; iy = 80; }
+                        else if (docking_pos == "right_bottom") { ix = 1100; iy = 560; }
+                        else if (docking_pos == "left_bottom") { ix = 80; iy = 560; }
+                        else if (docking_pos == "center") { ix = 600; iy = 300; }
+                        tab->initial_x = ix;
+                        tab->initial_y = iy;
+                    } else {
+                        CFW_LOG_ERROR("createPanelTab: tab {} was not found after create_tab "
+                                      "(panel_id={})", tab_id, panel_id);
+                    }
+                    nlohmann::json result;
+                    result["tab_id"] = tab_id;
+                    result["panel_id"] = panel_id;
+                    send_dock_callback(frame, request_id, nullptr, result);
+                });
             return true;
         }
 
@@ -2457,6 +2520,8 @@ bool handle_realtime_process_message(CefRefPtr<CefBrowser> browser,
     if (message->GetName() == "ComputeActorFocusPoseFast") {
         return handle_compute_actor_focus_pose_fast(frame, message);
     }
+
+    if (message->GetName() == "ActorMeshMove") return handle_mesh_move(frame,message);
 
     if (message->GetName() == "ActorTransformFast") {
         return handle_actor_transform_fast(message);

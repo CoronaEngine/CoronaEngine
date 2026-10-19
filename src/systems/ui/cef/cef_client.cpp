@@ -477,7 +477,8 @@ bool OffscreenCefClient::OnConsoleMessage(CefRefPtr<CefBrowser> browser,
     }
 
     const auto msg = message.ToString();
-    if (msg.find("ActorTransformFast") != std::string::npos || msg.find("coronaBridge") != std::string::npos) {
+    if (level == LOGSEVERITY_ERROR || msg.find("ActorTransformFast") != std::string::npos ||
+        msg.find("coronaBridge") != std::string::npos) {
         VUE_LOG_INFO("[{}] {}", levelStr, msg.c_str());
     }
     return true;

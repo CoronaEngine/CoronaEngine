@@ -1,5 +1,6 @@
 #include "corona/resource/resource_manager.h"
 
+#include "corona/diagnostics/thread_phase.h"
 #include "horizon/core/logging.h"
 
 #include <unordered_set>
@@ -59,9 +60,15 @@ std::future<TResourceID> ResourceManager::import_async(const std::filesystem::pa
     auto promise = std::make_shared<std::promise<TResourceID>>();
     auto future = promise->get_future();
 
+    // 阶段标记：import_arena_.execute() 会阻塞调用线程直到 arena 腾出槽位，
+    // 任务本身则可能在解析或等条目锁。二者都会让"加载中"永远不结束，
+    // 但没有任何日志能区分，故这里把阶段暴露给线程阶段看门狗。
+    Corona::Diagnostics::PhaseScope import_phase{"Resource", "import_async:arena_wait"};
+
     // 将加载任务提交到任务组
     import_arena_.execute([this, path, promise]() {
         async_tasks_.run([this, path, promise]() {
+            Corona::Diagnostics::PhaseScope task_phase{"Resource", "import_async:load_internal"};
             try {
                 promise->set_value(load_internal(path));
             } catch (...) {

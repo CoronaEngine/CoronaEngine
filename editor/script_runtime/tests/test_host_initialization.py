@@ -27,8 +27,7 @@ def test_script_runtime_host_initializes_scripts_through_active_owner(monkeypatc
             }
 
         def switch(self, route):
-            assert route == scene.route
-            return {"status": "success", "scene": route}
+            raise RuntimeError("script startup must not reload the active scene")
 
         def get_snapshot(self, route):
             assert route == scene.route
@@ -56,6 +55,36 @@ def test_script_runtime_host_initializes_scripts_through_active_owner(monkeypatc
         scene,
     )
     assert runtime_host._scripts_initialized is True
+
+
+def test_script_runtime_host_selects_first_scene_when_no_route_is_active(monkeypatch):
+    import script_runtime.engine.host as host_module
+
+    calls = []
+    snapshot = {"scene": "Scene/main.scene", "actors": []}
+
+    class SceneApi:
+        def list_routes(self):
+            return {"scenes": [{"path": snapshot["scene"]}], "active_scene": ""}
+
+        def switch(self, route):
+            calls.append(("switch", route))
+            return {"status": "success", "scene": route}
+
+        def get_snapshot(self, route):
+            calls.append(("snapshot", route))
+            return snapshot
+
+    monkeypatch.setattr(
+        host_module,
+        "get_script_runtime_editor_api",
+        lambda: SimpleNamespace(scene=SceneApi()),
+    )
+
+    target = host_module._native_scene_target()
+
+    assert target.route == snapshot["scene"]
+    assert calls == [("switch", snapshot["scene"]), ("snapshot", snapshot["scene"])]
 
 
 def test_script_runtime_host_skips_initialization_when_native_scene_is_unavailable(

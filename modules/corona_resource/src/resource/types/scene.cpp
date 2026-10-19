@@ -265,6 +265,7 @@ std::uint32_t Scene::add_node(std::string_view name, std::uint32_t parent) {
     if (parent != InvalidIndex) {
         NodeData& p = data.nodes[parent];
         node.parent = &p;
+        node.parent_index = static_cast<std::int32_t>(parent);
         p.children.push_back(&node);
     }
     return new_index;
@@ -416,6 +417,8 @@ std::shared_ptr<IResource> SceneParser::parse_assimp(const std::filesystem::path
     SharedStaticMeshAssetCache shared_static_asset_cache;
     const bool share_static_instances =
         !has_skinning && assimp_options.share_static_mesh_instances;
+    scene->data.node_instance_prefix = make_static_instance_matrix(initial_transform,global_params);
+    scene->data.has_node_instance_prefix = share_static_instances;
     process_assimp_node(ai_scene->mRootNode, ai_scene, *scene, InvalidIndex, material_map,
                         global_params, initial_transform, assimp_options,
                         has_skinning ? &bone_map : nullptr,

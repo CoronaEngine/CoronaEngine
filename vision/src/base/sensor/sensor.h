@@ -73,6 +73,9 @@ public:
     [[nodiscard]] Float4x4 device_c2w() const noexcept;
     [[nodiscard]] Float4x4 device_w2c() const noexcept;
     [[nodiscard]] float4x4 host_c2w() const noexcept;
+    [[nodiscard]] float4x4 host_world_to_raster() const noexcept {
+        return inverse(raster_to_sensor_.hv()) * inverse(c2w_.hv());
+    }
     /// set device c2w GPU only
     void set_device_c2w(const Float4x4 &mat) noexcept;
     [[nodiscard]] Float linear_depth(const Float3 &world_pos) const noexcept;

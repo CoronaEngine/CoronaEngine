@@ -170,6 +170,15 @@ def _parse_actor(
             f"Unsupported collision type for {key}: {collision}",
             details={"actor_name": section.get(f"{key}.name", key)},
         )
+    body_type = section.get(f"{key}.mechanics.body_type", fallback=None)
+    if body_type is not None:
+        body_type = body_type.strip().lower()
+        if body_type not in {"dynamic", "kinematic", "static", "phantom"}:
+            raise ArchiveParseError(
+                "INVALID_BODY_TYPE",
+                f"Unsupported body type for {key}: {body_type}",
+                details={"actor_name": section.get(f"{key}.name", key)},
+            )
     optics: dict[str, Any] = {}
     diffuse = section.get(f"{key}.optics.diffuse", fallback="").strip()
     if diffuse:
@@ -241,6 +250,31 @@ def _parse_actor(
                     "RESOURCE_PATH_OUTSIDE_PROJECT", f"Animation source escapes the portable scene root: {source}",
                     details={"actor_name": section.get(f"{key}.name", key)},
                 )
+    try:
+        model_node_overrides = json.loads(section.get(f"{key}.model.node_overrides", fallback="[]"))
+        if not isinstance(model_node_overrides, list) or any(
+            not isinstance(override, dict) for override in model_node_overrides
+        ):
+            raise ValueError("expected model node override objects")
+    except (ValueError, TypeError) as exc:
+        raise ArchiveParseError(
+            "INVALID_MODEL_NODE_OVERRIDES", f"Invalid model node configuration for {key}: {exc}",
+            details={"actor_name": section.get(f"{key}.name", key)},
+        ) from exc
+    try:
+        model_node_unmatched = json.loads(section.get(f"{key}.model.node_unmatched", fallback="[]"))
+        if not isinstance(model_node_unmatched, list) or any(
+            not isinstance(group, dict) or not isinstance(group.get("resource"), str)
+            or not isinstance(group.get("overrides"), list)
+            or any(not isinstance(override, dict) for override in group["overrides"])
+            for group in model_node_unmatched
+        ):
+            raise ValueError("expected resource strings and model node override arrays")
+    except (ValueError, TypeError) as exc:
+        raise ArchiveParseError(
+            "INVALID_MODEL_NODE_UNMATCHED", f"Invalid unmatched model node configuration for {key}: {exc}",
+            details={"actor_name": section.get(f"{key}.name", key)},
+        ) from exc
     return {
         "name": section.get(f"{key}.name", key),
         "actor_guid": section.get(f"{key}.actor_guid", ""),
@@ -274,6 +308,7 @@ def _parse_actor(
         },
         "visible": section.getboolean(f"{key}.optics.visible", fallback=True),
         "mechanics": {
+            **({"body_type": body_type} if body_type is not None else {}),
             "physics_enabled": section.getboolean(
                 f"{key}.mechanics.physics_enabled", fallback=True
             ),
@@ -283,6 +318,9 @@ def _parse_actor(
         "audio_resource_id": section.get(f"{key}.audio_resource_id", ""),
         "ik_chains": ik_chains,
         "animation_sources": animation_sources,
+        "model_node_overrides": model_node_overrides,
+        "model_node_resource": section.get(f"{key}.model.node_resource", fallback=""),
+        "model_node_unmatched": model_node_unmatched,
         "persisted_fields": persisted_fields,
     }
 
@@ -340,6 +378,11 @@ def _parse_camera(
         "vision_denoise": vision_denoise,
         "vision_accumulation": vision_accumulation,
         "vision_stable_planes": vision_stable_planes,
+        "vision_denoiser": str(get("vision_denoiser", "scene")).strip().lower(),
+        "vision_reblur_settings": json.loads(get("vision_reblur_settings", "{}")),
+        "vision_pt_settings": json.loads(get("vision_pt_settings", "{}")),
+        "vision_restir_settings": json.loads(get("vision_restir_settings", "{}")),
+        "vision_relax_settings": json.loads(get("vision_relax_settings", "{}")),
     }
 
 

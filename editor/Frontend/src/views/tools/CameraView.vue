@@ -40,6 +40,42 @@
           </button>
         </div>
       </div>
+      <div class="dropdown no-drag" @keydown.esc.stop="denoiserMenuOpen = false; $refs.denoiserButton?.focus()">
+        <button
+          ref="denoiserButton"
+          type="button"
+          class="control dropdown-trigger"
+          aria-label="降噪类型"
+          title="降噪类型"
+          aria-haspopup="menu"
+          :aria-expanded="denoiserMenuOpen"
+          :disabled="backend !== 'vision' || visionRenderMode === 'ssat' || visionDenoiserBusy || !camera || !cameraId"
+          @click.stop="denoiserMenuOpen = !denoiserMenuOpen"
+          @keydown.down.prevent="denoiserMenuOpen = true"
+        >
+          {{ visionRenderMode === 'ssat' ? 'SSAT' : visionDenoisers.find(item => item.value === visionDenoiser)?.label }}
+        </button>
+        <div v-if="denoiserMenuOpen" class="dropdown-menu" role="menu" aria-label="降噪类型选项">
+          <button
+            v-for="denoiser in visionDenoisers"
+            :key="denoiser.value"
+            type="button"
+            role="menuitemradio"
+            :aria-checked="denoiser.value === visionDenoiser"
+            @click="selectVisionDenoiser(denoiser.value)"
+          >
+            {{ denoiser.label }}
+          </button>
+        </div>
+      </div>
+      <PtSettings :scene-id="sceneId" :camera-id="cameraId"
+        :enabled="backend === 'vision' && visionRenderMode === 'path_tracing'" />
+      <RestirSettings :scene-id="sceneId" :camera-id="cameraId"
+        :enabled="backend === 'vision' && visionRenderMode === 'restir'" />
+      <ReblurSettings :scene-id="sceneId" :camera-id="cameraId"
+        :enabled="backend === 'vision' && visionRenderMode !== 'ssat' && visionDenoiser === 'reblur' && !visionDenoiserBusy" />
+      <RelaxSettings :scene-id="sceneId" :camera-id="cameraId"
+        :enabled="backend === 'vision' && visionRenderMode !== 'ssat' && visionDenoiser === 'relax' && !visionDenoiserBusy" />
       <label class="vision-setting no-drag" title="累积 PT / ReSTIR 样本">
         <input
           type="checkbox"
@@ -49,14 +85,15 @@
         />
         <span>累积样本</span>
       </label>
-      <label class="vision-setting no-drag" title="SVGF 降噪">
+      <label class="vision-setting no-drag" title="启用所选降噪算法">
         <input
           type="checkbox"
+          aria-label="降噪"
           :checked="visionDenoise"
           :disabled="backend !== 'vision' || visionRenderMode === 'ssat' || visionDenoiseBusy"
           @change="toggleVisionDenoise"
         />
-        <span>SVGF</span>
+        <span>降噪</span>
       </label>
       <label class="vision-setting no-drag" title="ReSTIR Stable Plane">
         <input
@@ -178,14 +215,20 @@
 
 <script setup>
 import FrameTimingOverlay from '@/components/ui/FrameTimingOverlay.vue';
-import { nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
+import PtSettings from '@/components/ui/PtSettings.vue';
+import RestirSettings from '@/components/ui/RestirSettings.vue';
+import ReblurSettings from '@/components/ui/ReblurSettings.vue';
+import RelaxSettings from '@/components/ui/RelaxSettings.vue';
+import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import { editorApi } from '@/api/editorApi.js';
 import { appService } from '@/services/appService.js';
 import { buildDragRegions, dragRegionsSignature } from '@/utils/cameraDragRegions.js';
+import { pickedNodeIdentity } from '@/utils/modelHierarchy.js';
 import { coronaEventBus } from '@/utils/eventBus.js';
 import {
   normalizeVisionRenderMode, visionAccumulationFromCamera, visionDenoiseFromCamera, visionStablePlanesFromCamera, visionRenderModes,
+  visionDenoisers, visionDenoiserFromCamera,
 } from '@/utils/visionRenderModes.js';
 import { createViewportPickController, indexActorsByHandle } from '@/utils/viewportPick.js';
 import {
@@ -211,6 +254,9 @@ const visionAccumulation = ref(false);
 const visionAccumulationBusy = ref(false);
 const visionDenoise = ref(false);
 const visionDenoiseBusy = ref(false);
+const visionDenoiser = ref('scene');
+const visionDenoiserBusy = ref(false);
+let pendingDenoiserSelection = null;
 const visionStablePlanes = ref(true);
 const visionStablePlanesBusy = ref(false);
 let pendingStablePlanesSelection = null;
@@ -230,6 +276,7 @@ const toolbarRef = ref(null);
 const inputLayerRef = ref(null);
 const backendMenuOpen = ref(false);
 const visionModeMenuOpen = ref(false);
+const denoiserMenuOpen = ref(false);
 const outputMenuOpen = ref(false);
 const borderlessFullscreen = ref(false);
 let borderlessTogglePending = false;
@@ -284,6 +331,13 @@ const loadCamera = async () => {
   backend.value = camera.value.render_backend || 'native';
   visionAccumulation.value = visionAccumulationFromCamera(camera.value);
   visionDenoise.value = visionDenoiseFromCamera(camera.value);
+  const snapshotDenoiser = visionDenoiserFromCamera(camera.value);
+  if (pendingDenoiserSelection) {
+    visionDenoiser.value = pendingDenoiserSelection.type;
+    if (snapshotDenoiser === pendingDenoiserSelection.type) pendingDenoiserSelection = null;
+  } else {
+    visionDenoiser.value = snapshotDenoiser;
+  }
   const snapshotStablePlanes = visionStablePlanesFromCamera(camera.value);
   if (pendingStablePlanesSelection) {
     visionStablePlanes.value = pendingStablePlanesSelection.enabled;
@@ -295,6 +349,7 @@ const loadCamera = async () => {
   camera.value.vision_render_mode = visionRenderMode.value;
   camera.value.vision_accumulation = visionAccumulation.value;
   camera.value.vision_denoise = visionDenoise.value;
+  camera.value.vision_denoiser = visionDenoiser.value;
   camera.value.vision_stable_planes = visionStablePlanes.value;
   outputMode.value = backend.value === 'vision'
     ? 'final_color'
@@ -335,12 +390,14 @@ const changeBackend = async () => {
 const selectBackend = async (mode) => {
   backendMenuOpen.value = false;
   visionModeMenuOpen.value = false;
+  denoiserMenuOpen.value = false;
   if (backend.value === mode) return;
   backend.value = mode;
   await changeBackend();
 };
 
 const selectVisionRenderMode = async (mode) => {
+  denoiserMenuOpen.value = false;
   visionModeMenuOpen.value = false;
   if (visionRenderMode.value === mode && backend.value === 'vision') return;
   try {
@@ -407,6 +464,39 @@ const toggleVisionDenoise = async () => {
     return false;
   } finally {
     visionDenoiseBusy.value = false;
+  }
+};
+
+const selectVisionDenoiser = async (type) => {
+  denoiserMenuOpen.value = false;
+  if (backend.value !== 'vision' || visionRenderMode.value === 'ssat'
+    || visionDenoiserBusy.value || !camera.value || !cameraId) return false;
+  const previous = visionDenoiser.value;
+  const previousSelection = pendingDenoiserSelection;
+  const selection = { type };
+  const isCurrent = () => String(camera.value?.camera_id || camera.value?.id || '') === cameraId;
+  pendingDenoiserSelection = selection;
+  visionDenoiserBusy.value = true;
+  visionDenoiser.value = type;
+  errorText.value = '';
+  try {
+    const result = unwrap(await editorApi.sceneTools.setVisionDenoiser(sceneId, cameraId, type));
+    if (isCurrent()) {
+      if (!result?.pending && result?.type) selection.type = result.type;
+      visionDenoiser.value = selection.type;
+      camera.value.vision_denoiser = selection.type;
+    }
+    return true;
+  } catch (error) {
+    if (isCurrent()) {
+      pendingDenoiserSelection = previousSelection;
+      visionDenoiser.value = previous;
+      camera.value.vision_denoiser = previous;
+      errorText.value = error.message;
+    }
+    return false;
+  } finally {
+    visionDenoiserBusy.value = false;
   }
 };
 
@@ -536,8 +626,8 @@ const cameraViewPickController = createViewportPickController({
   getHitRect: getCameraViewHitRect,
   getRenderRect: getCameraRenderRect,
   getActorIndex: () => actorPickIndex,
-  emitActorChange: (type, scene, actorName) =>
-    editorApi.sceneTools.selectActor(scene, type, actorName, cameraViewSelectionContext()),
+  emitActorChange: (type, scene, actorName, nodeContext) =>
+    editorApi.sceneTools.selectActor(scene, type, actorName, { ...cameraViewSelectionContext(), ...nodeContext }),
 });
 
 const viewportGizmoController = createViewportGizmoController({
@@ -569,7 +659,11 @@ const findActorPickEntryByName = (actorName) => {
   return null;
 };
 
+const handleModelNodeGizmoSelection = (identity) => { if (identity) viewportGizmoController.clearTarget(); };
 const syncViewportGizmoSelection = async (payload = {}) => {
+  coronaEventBus.modelNodeSelection = pickedNodeIdentity(payload);
+  coronaEventBus.emit('model-node-selection', coronaEventBus.modelNodeSelection);
+  if (coronaEventBus.modelNodeSelection) { viewportGizmoController.clearTarget(); return; }
   const ownsGizmo = isViewportGizmoSelectionOwner({
     viewportScope: 'cameraView',
     cameraHandle: camera.value?.handle,
@@ -591,7 +685,7 @@ const syncViewportGizmoSelection = async (payload = {}) => {
     await refreshCameraViewActorPickIndex().catch(() => false);
     entry = findActorPickEntryByName(actorName);
   }
-  if (entry?.handle) {
+  if (entry?.handle && !coronaEventBus.modelNodeSelection) {
     viewportGizmoController.setTarget({ handle: entry.handle, name: actorName });
   } else {
     viewportGizmoController.clearTarget();
@@ -766,6 +860,9 @@ let previousTime = 0;
 let looking = false;
 let lastMouseX = 0;
 let lastMouseY = 0;
+let posePublishTimer = 0;
+let lastPosePublishTime = -Infinity;
+const kPosePublishIntervalMs = 50;
 
 const normalize = (value) => {
   const length = Math.hypot(value[0], value[1], value[2]) || 1;
@@ -777,7 +874,8 @@ const cross = (a, b) => [
   a[0] * b[1] - a[1] * b[0],
 ];
 
-const publishPose = () => {
+const flushPose = () => {
+  posePublishTimer = 0;
   // Keep Scratch input active, but never publish an editor-controlled camera
   // pose while a node graph/game preview owns keyboard and mouse input.
   if (isEditorInputLocked()) return;
@@ -791,6 +889,22 @@ const publishPose = () => {
     Array.from(item.world_up),
     item.fov,
   );
+  lastPosePublishTime = performance.now();
+};
+
+const publishPose = () => {
+  if (isEditorInputLocked()) return;
+  const elapsed = performance.now() - lastPosePublishTime;
+  if (elapsed >= kPosePublishIntervalMs && !posePublishTimer) {
+    flushPose();
+    return;
+  }
+  if (!posePublishTimer) {
+    posePublishTimer = window.setTimeout(
+      flushPose,
+      Math.max(0, kPosePublishIntervalMs - elapsed),
+    );
+  }
 };
 
 const moveCamera = (dt) => {
@@ -846,6 +960,8 @@ const isEditorInputLocked = () => {
 const resetCameraInput = () => {
   keys.clear();
   looking = false;
+  if (posePublishTimer) window.clearTimeout(posePublishTimer);
+  posePublishTimer = 0;
 };
 const movementFrame = (time) => {
   const dt = previousTime ? Math.min((time - previousTime) / 1000, 0.05) : 0;
@@ -900,7 +1016,11 @@ const onKeyDown = (event) => {
     return;
   }
   if (isTextInputEvent(event)) return;
-  if (!event.__coronaScratchKeyForwarded) {
+  // The native editor already delivers SDL keyboard events to CEF. Sending the
+  // same movement key through the manifest API re-enters the Scratch runtime on
+  // its slow path; with a loaded large scene that duplicate Q event can block the
+  // UI while the native input path is still active.
+  if (!window.coronaBridge && !event.__coronaScratchKeyForwarded) {
     event.__coronaScratchKeyForwarded = true;
     editorApi.scratch.sendKeyEvent(
       event.code || event.key || '',
@@ -929,8 +1049,12 @@ const onKeyDown = (event) => {
 };
 const onKeyUp = (event) => {
   if (isTextInputEvent(event)) return;
-  keys.delete(movementCode(event));
-  if (!event.__coronaScratchKeyForwarded) {
+  const releasedMovementKey = keys.delete(movementCode(event));
+  if (releasedMovementKey && !keys.size) {
+    if (posePublishTimer) window.clearTimeout(posePublishTimer);
+    flushPose();
+  }
+  if (!window.coronaBridge && !event.__coronaScratchKeyForwarded) {
     event.__coronaScratchKeyForwarded = true;
     editorApi.scratch.sendKeyUpEvent(
       event.code || event.key || '',
@@ -1041,6 +1165,8 @@ const finishCameraViewClickFromPick = (payload, result) => {
 
 const handleCameraViewActorPickResult = (payload) => {
   const result = cameraViewPickController.handlePickResult(payload);
+  if (result.status === 'selected') coronaEventBus.emit('model-node-picked', { ...payload, actor_name: payload?.actor_name || result.actor?.name });
+  if (result.status === 'miss') coronaEventBus.emit('model-node-picked', payload);
   if (result.status === 'miss') {
     editorApi.sceneTools.selectActor(
       sceneId,
@@ -1237,6 +1363,10 @@ const scheduleDragRegionSync = () => {
   });
 };
 
+watch(() => backend.value === 'vision' && visionRenderMode.value !== 'ssat' &&
+  visionDenoiser.value === 'reblur' && !visionDenoiserBusy.value,
+scheduleDragRegionSync, { flush: 'post' });
+
 const objectEntries = (value) => Object.entries(value || {});
 const formatHudValue = (value) => {
   if (Array.isArray(value)) return `[${value.join(', ')}]`;
@@ -1291,6 +1421,7 @@ onMounted(async () => {
   window.addEventListener('keyup', onKeyUp);
   window.addEventListener('storage', handleViewportUiCalibrationStorage);
   window.addEventListener('blur', handleCameraViewBlur);
+  coronaEventBus.on('model-node-selection', handleModelNodeGizmoSelection);
   coronaEventBus.on('viewport-ui-calibration-changed', handleViewportUiCalibrationChanged);
   animationFrame = requestAnimationFrame(movementFrame);
   await pollPreviewHud();
@@ -1299,6 +1430,8 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   cancelAnimationFrame(animationFrame);
+  if (posePublishTimer) window.clearTimeout(posePublishTimer);
+  posePublishTimer = 0;
   if (dragRegionFrame) window.cancelAnimationFrame(dragRegionFrame);
   if (scratchMouseMoveFrame) window.cancelAnimationFrame(scratchMouseMoveFrame);
   scratchMouseMoveFrame = 0;
@@ -1329,6 +1462,7 @@ onBeforeUnmount(() => {
   window.removeEventListener('keyup', onKeyUp);
   window.removeEventListener('storage', handleViewportUiCalibrationStorage);
   window.removeEventListener('blur', handleCameraViewBlur);
+  coronaEventBus.off('model-node-selection', handleModelNodeGizmoSelection);
   coronaEventBus.off('viewport-ui-calibration-changed', handleViewportUiCalibrationChanged);
   viewportUiPointerController.dispose();
 });

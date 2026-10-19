@@ -1,4 +1,5 @@
 #include <corona/events/engine_events.h>
+#include <corona/diagnostics/thread_phase.h>
 #include <corona/events/mechanics_system_events.h>
 #include <horizon/core/logging.h>
 #include <corona/kernel/event/i_event_bus.h>
@@ -66,9 +67,6 @@ void MechanicsSystem::update_physics(float fixed_dt) {
     }
 
     // 常量：时间步、摩擦、休眠、惯量下限等（可按手感调参）
-    const float floor_eps = 0.01f;                                       // 地板碰撞容差
-    const float low_vel_threshold = 0.05f;                               // 低速衰减阈值
-    const float zero_vel_threshold = 0.01f;                              // 速度归零阈值
     const float friction_coeff = 0.35f;                                  // 动态（滑动）摩擦系数
     const float static_friction_coeff = 0.55f;                           // 静摩擦系数（坡面防微滑）
     const float sleep_threshold = 0.05f;                                 // 休眠速度阈值
@@ -83,6 +81,7 @@ void MechanicsSystem::update_physics(float fixed_dt) {
 
     // 本帧临时表：质量/阻尼/恢复系数/碰撞开关
     std::unordered_map<std::uintptr_t, BodyFrameParams> frame_params;
+    std::unordered_set<std::uintptr_t> contact_observers;
 
     // --- 从 SharedDataHub 取各存储的引用（几何、变换、场景、环境等）---
     auto& mechanics_storage = SharedDataHub::instance().mechanics_storage();            // mechanics 组件数据
@@ -95,8 +94,6 @@ void MechanicsSystem::update_physics(float fixed_dt) {
     auto& environment_storage = SharedDataHub::instance().environment_storage();  // 全局 dt/重力等
 
     ktm::fvec3 gravity = make_fvec3(0.0f, -9.8f, 0.0f);  // m/s²
-    float floor_restitution = 0.6f;                      // 地板法向弹性系数 0..1
-    float floor_y = 0.0f;                                // 无穷大水平面高度
 
     std::vector<std::uintptr_t> mechanics_handles;  // 本帧参与物理的 mechanics 去重列表
     mechanics_handles.reserve(64);
@@ -118,12 +115,10 @@ void MechanicsSystem::update_physics(float fixed_dt) {
         const auto scene_handle = reinterpret_cast<std::uintptr_t>(&scene);
         auto& scene_bodies = scene_mechanics.emplace_back();
 
-        // 若绑定了 environment：覆盖重力、地板参数，并钳制 fixed_dt
+        // 若绑定了 environment：覆盖重力；接触只来自场景三角形。
         if (scene.environment != 0) {
             if (auto env = environment_storage.try_acquire_read(scene.environment)) {
                 gravity = env->gravity;
-                floor_y = env->floor_y;
-                floor_restitution = env->floor_restitution;
             }
         }
 
@@ -181,6 +176,7 @@ void MechanicsSystem::update_physics(float fixed_dt) {
                                 params.damping = m_acc->damping;
                                 params.restitution = m_acc->restitution;
                                 params.body_type = m_acc->body_type;
+                                if (m_acc->collision_callback) contact_observers.insert(h);
                                 new_linear = m_acc->linear_lock_mask;
                                 new_angular = m_acc->angular_lock_mask;
                                 body.linear_lock = new_linear;
@@ -229,9 +225,11 @@ void MechanicsSystem::update_physics(float fixed_dt) {
     // previous placement and must not survive it.
     std::unordered_map<std::uintptr_t, ModelTransform> step_transforms;
     std::unordered_set<std::uintptr_t> edited_bodies;
+    bool needs_solver = !contact_observers.empty() || !impl_->prev_active_collisions.empty();
     for (auto h : mechanics_handles) {
         auto& body = impl_->body(h);
         const auto type = frame_params.at(h).body_type;
+        needs_solver |= type == BodyType::Dynamic;
         if (body.body_type != type) {
             body.body_type = type;
             body.sleeping = false;
@@ -240,8 +238,10 @@ void MechanicsSystem::update_physics(float fixed_dt) {
         }
         auto mechanics = mechanics_storage.try_acquire_read(h);
         if (!mechanics) continue;
+        needs_solver |= static_cast<bool>(mechanics->on_move_callback);
         auto geometry = geometry_storage.try_acquire_read(mechanics->geometry_handle);
         if (!geometry) continue;
+        needs_solver |= !geometry->ik_chains.empty();
         const auto transform_handle = geometry->transform_handle;
         if (!step_transforms.contains(transform_handle)) {
             auto transform = transform_storage.try_acquire_read(transform_handle);
@@ -254,6 +254,18 @@ void MechanicsSystem::update_physics(float fixed_dt) {
     std::erase_if(impl_->warm_start_cache, [&](const auto& item) {
         return edited_bodies.contains(item.first.first) || edited_bodies.contains(item.first.second);
     });
+
+    // Authored static/kinematic poses need no force, prediction, broadphase, or
+    // sleep submission in the absence of observers. Mesh movement continues in
+    // its independent triangle sweep path. Forget old device velocities so a
+    // later Static -> Dynamic transition starts at rest, not at an old impulse.
+    if (!needs_solver) {
+        if (impl_->gpu_floor_sleep) impl_->gpu_floor_sleep->begin_resident({});
+        impl_->warm_start_cache.clear();
+        const std::unordered_set<std::uintptr_t> alive(mechanics_handles.begin(), mechanics_handles.end());
+        std::erase_if(impl_->bodies, [&](const auto& item) { return !alive.contains(item.first); });
+        return;
+    }
 
     phase.emplace("physics.prepare_forces");
     // Stage 2/2b: one GPU batch preserves damping -> gravity -> speed limits ->
@@ -319,6 +331,7 @@ void MechanicsSystem::update_physics(float fixed_dt) {
         if (snapshot == step_transforms.end() ||
             impl_->body(h).last_transform_handle != geom_acc->transform_handle) continue;
         const auto& t = snapshot->second;
+        if (!geom_acc->ik_chains.empty()) contact_observers.insert(h);
 
         ktm::fvec3 e_local = make_fvec3(  // mechanics 局部半棱长
             (m.max_xyz.x - m.min_xyz.x) * 0.5f,
@@ -569,6 +582,14 @@ void MechanicsSystem::update_physics(float fixed_dt) {
             for (std::size_t pair_idx = 0; pair_idx < collision_pairs.size(); ++pair_idx) {
                 if (impl_->shutdown_requested.load(std::memory_order_acquire)) return;
                 const auto [ha, hb] = collision_pairs[pair_idx];
+                // Static/kinematic bodies cannot receive solver impulses. The
+                // story controller already sweeps its real mesh on demand and
+                // emits its completion callback. Do not repeat million-triangle
+                // contacts for two immovable bodies on every rigid substep.
+                // Explicit contact listeners and IK retain their event queries.
+                if (frame_params.at(ha).body_type != BodyType::Dynamic &&
+                    frame_params.at(hb).body_type != BodyType::Dynamic &&
+                    !contact_observers.contains(ha) && !contact_observers.contains(hb)) continue;
                 auto it_a = handle_to_index.find(ha), it_b = handle_to_index.find(hb);
                 if (it_a == handle_to_index.end() || it_b == handle_to_index.end()) continue;
                 const auto& a = mechanics_data[it_a->second];
@@ -997,7 +1018,7 @@ void MechanicsSystem::update_physics(float fixed_dt) {
     const auto pose_velocity_source = resident_velocities ? solved_velocities : integrated_velocities;
     const auto pose_velocity_target = impl_->gpu_floor_sleep->velocity_target();
 
-    // --- 阶段 6：半隐式位姿积分（用冲量后的 v,ω）+ 无穷地板 + 休眠累计 + 缓存淘汰 ---
+    // --- 阶段 6：半隐式位姿积分（用冲量后的 v,ω）+ 休眠累计 + 缓存淘汰 ---
     std::vector<GpuRigidIntegrationPipeline::PoseInput> final_pose_inputs;
     std::vector<std::size_t> final_pose_targets;
     std::vector<bool> final_velocity_locks;
@@ -1059,12 +1080,12 @@ void MechanicsSystem::update_physics(float fixed_dt) {
         }
         const auto& data = mechanics_data[i];  // 与阶段 3 同一套 per-body 缓存
         std::uintptr_t h = data.handle;
-        // Stage 5b projection uses sleep state before a lowered floor wakes the
-        // body below. Pose integration itself uses the updated state.
+        // Stage 5b projection uses the previous sleep state. Losing an actual
+        // triangle support below wakes the body for pose integration.
         const bool apply_velocity_locks = !impl_->body(h).sleeping;
 
-        // 唤醒因地板降低而悬空的休眠体（物体搁在地板上休眠后，地板调低应自由落体）
-        if (impl_->body(h).sleeping && !supported_bodies.contains(h) && data.min_world.y > floor_y + floor_eps + 1e-4f) {
+        // No implicit floor: absent triangle support means free fall at any height.
+        if (impl_->body(h).sleeping && !supported_bodies.contains(h)) {
             impl_->body(h).sleeping = false;
             impl_->body(h).reset_sleep_timer = true;
         }
@@ -1098,117 +1119,8 @@ void MechanicsSystem::update_physics(float fixed_dt) {
     if (!flush_final_poses()) return;
     (void)gpu_batch.flush();  // An empty pose set still installs the integrated state.
 
-    phase.emplace("physics.floor");
-    // Query exact skinned world-space minima after integration and positional
-    // correction, once per body. The result also identifies the contact bone.
-    std::unordered_map<std::uintptr_t, GpuCollisionPipeline::VertexResult> floor_samples;
-    if (impl_->gpu_collision) {
-        std::vector<GpuCollisionPipeline::VertexQuery> queries;
-        std::vector<std::uintptr_t> targets;
-        for (const auto& data : mechanics_data) {
-            if (!data.is_skinned || !ready_collision_keys.contains(data.geom_handle)) continue;
-            const auto params = frame_params.find(data.handle);
-            if (params == frame_params.end() || params->second.body_type != BodyType::Dynamic) continue;
-            const auto& transform = step_transforms.at(data.transform_handle);
-            queries.push_back({{data.geom_handle, gpu_matrix(transform.compute_matrix())}, {}});
-            targets.push_back(data.handle);
-        }
-        if (!queries.empty()) {
-            const auto samples = impl_->gpu_collision->sample_vertices(queries);
-            for (std::size_t i = 0; i < samples.size(); ++i) floor_samples.emplace(targets[i], samples[i]);
-        }
-    }
-
-    // Evaluate floor candidates without changing the working velocity state.
-    // A transform invalidated before writeback must cancel the entire response.
-    std::vector<GpuFloorSleepPipeline::FloorInput> floor_inputs;
-    std::vector<std::size_t> floor_targets;
-    for (std::size_t i = 0; i < mechanics_data.size(); ++i) {
-        if (impl_->shutdown_requested.load(std::memory_order_acquire)) return;
-        const auto& data = mechanics_data[i];
-        const auto h = data.handle;
-        const auto fp_it = frame_params.find(h);
-        if (fp_it == frame_params.end()) continue;
-        const auto btype = fp_it->second.body_type;
-        if (btype != BodyType::Dynamic) continue;
-        const auto& transform = step_transforms.at(data.transform_handle);
-        ktm::fvec3 floor_min, floor_max, floor_center;
-        world_aabb_from_local_bounds(transform, data.local_min, data.local_max, floor_min, floor_max, floor_center);
-        auto& body = impl_->body(h);
-        if (btype == BodyType::Dynamic && body.sleeping) {
-            if ((!supported_bodies.contains(h) && floor_min.y > floor_y + floor_eps + 1e-4f) || floor_min.y < floor_y - floor_eps) {
-                body.sleeping = false;
-                body.reset_sleep_timer = true;
-            } else {
-                continue;
-            }
-        }
-        GpuFloorSleepPipeline::FloorInput input;
-        input.body = body_state_indices.at(h);
-        input.center = {floor_center.x, floor_center.y, floor_center.z};
-        input.inertia_inv = {data.inertia_inv_body.x, data.inertia_inv_body.y, data.inertia_inv_body.z};
-        const auto floor_rotation = quat_from_model_euler(transform.euler_rotation).matrix3x3();
-        for (std::size_t col = 0; col < 3; ++col)
-            for (std::size_t row = 0; row < 3; ++row)
-                input.rotation[col * 3 + row] = floor_rotation[col][row];
-        input.mass = fp_it->second.mass;
-        input.bottom = floor_min.y;
-        input.linear_lock = body.linear_lock;
-        input.angular_lock = body.angular_lock;
-        input.skinned = data.is_skinned;
-        if (data.is_skinned) {
-            const auto sample = floor_samples.find(h);
-            if (sample == floor_samples.end()) continue;
-            input.lowest = sample->second.lowest_world;
-            input.bottom = input.lowest[1];
-        }
-        floor_inputs.push_back(input);
-        floor_targets.push_back(i);
-    }
-    const auto floor_contacts = impl_->gpu_floor_sleep->evaluate_floor(floor_inputs,
-        {floor_y, floor_eps, floor_restitution, gravity.y, fixed_dt, low_vel_threshold,
-         zero_vel_threshold, friction_coeff, static_friction_coeff});
-    std::vector<std::uint8_t> accepted_floor(floor_inputs.size(), 0);
-    for (std::size_t i = 0; i < floor_contacts.size(); ++i) {
-        if (impl_->shutdown_requested.load(std::memory_order_acquire)) return;
-        if (!floor_contacts[i].contact) continue;
-        const auto& data = mechanics_data[floor_targets[i]];
-        const auto h = data.handle;
-        auto tx_w = transform_storage.try_acquire_write(data.transform_handle);
-        if (!tx_w) continue;
-        auto& expected = step_transforms.at(data.transform_handle);
-        if (!same_transform(*tx_w, expected)) continue;
-        if (!(impl_->body(h).linear_lock & kLockAxisY)) tx_w->position.y += floor_contacts[i].delta_y;
-        expected = *tx_w;
-        accepted_floor[i] = 1;
-        // 蒙皮额外：IK target 入队（最低顶点所在骨骼）
-        if (data.is_skinned) {
-            auto sc_it = impl_->skinned_collision_cache.find(data.geom_handle);
-            if (sc_it != impl_->skinned_collision_cache.end() && !sc_it->second.triangles.empty()) {
-                const auto& sc = sc_it->second;
-                const auto sample = floor_samples.find(h);
-                if (sample != floor_samples.end() && data.geom_handle != 0) {
-                    const auto& lowest = sample->second;
-                    const ktm::fvec3 contact_world = make_fvec3(
-                        lowest.lowest_world[0], floor_y, lowest.lowest_world[2]);
-                    const int best_bone = lowest.lowest_vertex < sc.vertex_bone_ids.size()
-                        ? sc.vertex_bone_ids[lowest.lowest_vertex] : -1;
-                    if (best_bone >= 0) {
-                        auto geometry = geometry_storage.try_acquire_read(data.geom_handle);
-                        if (geometry && std::any_of(geometry->ik_chains.begin(), geometry->ik_chains.end(),
-                            [](const auto& chain) { return chain.enabled && chain.weight > 0 && chain.contact_driven &&
-                                chain.mode != Resource::IkChain::Mode::FootPlant; })) {
-                            impl_->deferred_ik_target_updates.push_back({data.geom_handle, data.transform_handle,
-                                best_bone, contact_world, make_fvec3(0, 1, 0), geometry->ik_chains_revision});
-                        }
-                    }
-                }
-            }
-        }
-    }
-
     // Measure residual overlap on the predicted contact plane after the final
-    // translation/floor correction. Testing predicted depth alone continually
+    // translation correction. Testing predicted depth alone continually
     // resets quiet stacks because that pose still contains the gravity step.
     // Angular motion is independently covered by the GPU sleep speed test.
     for (const auto& contact : penetration_constraints) {
@@ -1232,7 +1144,6 @@ void MechanicsSystem::update_physics(float fixed_dt) {
     }
 
     phase.emplace("physics.sleep");
-    impl_->gpu_floor_sleep->commit_floor(accepted_floor, &gpu_batch);
     std::vector<GpuFloorSleepPipeline::ResidentSleepInput> sleep_inputs;
     sleep_inputs.reserve(mechanics_handles.size());
     for (auto h : mechanics_handles) {
@@ -1349,7 +1260,12 @@ void MechanicsSystem::update_physics(float fixed_dt) {
     }
     // Skin poses also support Foot queries in scenes with simulation disabled.
     // Their lifetime follows live render geometry, not the physics participant list.
-    for (const auto& geometry : geometry_storage) {
+    // 只读遍历：用几何存储的 const 视图（cbegin/cend → 槽位共享锁）。此前这里直接
+    // 遍历非 const 引用，Storage::begin() 取的是**独占**槽锁，等于每帧把整张几何表
+    // 锁成写级别，与 CEF 线程的 IK 写锁、几何系统的读取互相排队。
+    for (auto geometry_it = geometry_storage.cbegin(); geometry_it != geometry_storage.cend();
+         ++geometry_it) {
+        const GeometryDevice& geometry = *geometry_it;
         if (geometry.is_skinned && geometry.model_resource_handle && !geometry.mesh_handles.empty() &&
             geometry.gpu_build_state == GeometryDevice::GpuBuildState::Ready) {
             alive_geom_handles.insert(reinterpret_cast<std::uintptr_t>(&geometry));
@@ -1431,7 +1347,7 @@ void MechanicsSystem::update_skinned_geometry(float dt) {
     // last_skin_update_time 保留但不再用于计算 dt，仅供外部诊断查询。
     impl_->last_skin_update_time = std::chrono::steady_clock::now();
 
-    // 先收集所有 geometry handle，避免在迭代 storage 期间持锁做重计算
+    Corona::Diagnostics::mark_thread_phase("Mechanics", "skinned:collect_handles");
     std::vector<std::uintptr_t> geom_handles;
     bool needs_ground_queries = false;
     for (auto it = geom_storage.cbegin(); it != geom_storage.cend(); ++it) {
@@ -1440,7 +1356,7 @@ void MechanicsSystem::update_skinned_geometry(float dt) {
         for (const auto& chain : geom_dev.ik_chains)
             needs_ground_queries |= chain.mode == Resource::IkChain::Mode::FootPlant && chain.enabled && chain.weight > 0;
     }
-    if (needs_ground_queries) refresh_foot_ground_cache();
+    Corona::Diagnostics::mark_thread_phase("Mechanics", "skinned:ground_cache");
     // Retain the latest physics sample across animation frames with zero fixed
     // steps. Reproject its world targets using the current actor transform below.
     // The next physics step replaces it (also discarding earlier catch-up samples).
@@ -1448,7 +1364,7 @@ void MechanicsSystem::update_skinned_geometry(float dt) {
 
     // Vision still imports CPU geometry; rasterization and mechanics consume GPU buffers.
     bool vision_readback = false;
-    for (const auto& enabled_scene : hub.scene_storage()) {
+    for (const auto& enabled_scene : std::as_const(hub.scene_storage())) {
         if (!enabled_scene.enabled) continue;
         for (auto camera_handle : enabled_scene.camera_handles) {
             auto camera = hub.camera_storage().try_acquire_read(camera_handle);
@@ -1552,6 +1468,7 @@ void MechanicsSystem::update_skinned_geometry(float dt) {
         }
 
         // ---- 第 3 步：取 Scene，判断是否蒙皮（非蒙皮直接跳过）----
+        Corona::Diagnostics::PhaseScope loop_phase{"Mechanics", "skinned:scene_lookup"};
         auto scene_entry = frame_scenes.find(model_id);
         if (scene_entry == frame_scenes.end()) {
             auto scene_read = resource_manager.acquire_read<Resource::Scene>(model_id);
@@ -1673,7 +1590,7 @@ void MechanicsSystem::update_skinned_geometry(float dt) {
             auto [entry, inserted] = impl_->gpu_skinning_keys.try_emplace(identity, 0);
             if (inserted) entry->second = impl_->next_gpu_skinning_key++;
             const auto key = entry->second;
-            job.requests.push_back({key, model_id, vertices, weights, vb, sb, readback});
+            job.requests.push_back({key, model_id, vertices, weights, vb, sb, readback, true});
             if (lod_index == 0) job.lod0_meshes.emplace(key, mi);
         };
         for (std::size_t mi = 0; mi < mesh_count && mi < scene.data.meshes.size(); ++mi) {
@@ -1700,7 +1617,8 @@ void MechanicsSystem::update_skinned_geometry(float dt) {
         const auto& skeleton = *frame_scenes.at(job.model)->data.skeleton;
         foot_poses.push_back({job.geometry, &skeleton, &job.locals, &job.chains});
     }
-    update_foot_targets(foot_poses, dt);
+    Corona::Diagnostics::mark_thread_phase("Mechanics", "skinned:foot_targets");
+    Corona::Diagnostics::mark_thread_phase("Mechanics", "skinned:ccd_pose");
     for (auto& job : frame_jobs) {
         const auto geom_handle = job.geometry;
         const auto ik_transform_handle = job.transform;
@@ -1777,6 +1695,14 @@ void MechanicsSystem::update_skinned_geometry(float dt) {
     for (const auto& job : frame_jobs)
         for (const auto& request : job.requests) active_gpu_keys.push_back(request.key);
 
+    // Release the per-model Scene read handles before any GPU submission.
+    // The collision topology built below is the only later consumer of Scene data
+    // and it goes through the self-locking overload, so no Scene read lock is held
+    // across skinning/collision waits.  Holding them across a stalled GPU wait
+    // blocked GeometrySystem's periodic *exclusive* RAM residency pass forever,
+    // which froze the whole geometry pipeline (imports included) until restart.
+    frame_scenes.clear();
+
     // Spans are created only after frame_jobs stops growing. All palettes and
     // source scene locks survive both GPU stages; no geometry storage lock is
     // held while recording, submitting or waiting.
@@ -1785,11 +1711,15 @@ void MechanicsSystem::update_skinned_geometry(float dt) {
     for (const auto& job : frame_jobs) skin_batches.push_back({job.requests, job.finals});
     std::vector<GpuSkinningPipeline::Result> skin_results;
     if (!skin_batches.empty()) {
+        Corona::Diagnostics::PhaseScope skin_phase{"Mechanics", "skinned:gpu_skinning"};
         impl_->gpu_skinning.ensure();
+        skin_phase.set("skinned:gpu_skinning_submit");
         skin_results = impl_->gpu_skinning->update_batch(skin_batches);
     }
+    Corona::Diagnostics::mark_thread_phase("Mechanics", "skinned:publish_and_collision");
     std::size_t result_offset = 0;
     for (auto& job : frame_jobs) {
+        Corona::Diagnostics::PhaseScope job_phase{"Mechanics", "skinned:collision_refresh"};
         std::unordered_map<std::size_t, GpuSkinningPipeline::Result> lod0_results;
         job.blobs.resize(job.mesh_count);
         for (std::size_t i = 0; i < job.requests.size(); ++i) {
@@ -1805,7 +1735,6 @@ void MechanicsSystem::update_skinned_geometry(float dt) {
           if (!resource || resource->model_id != job.model) continue; }
         const auto geom_handle = job.geometry;
         const auto model_id = job.model;
-        const auto& scene = *frame_scenes.at(model_id);
         job.bounds_min = make_fvec3(std::numeric_limits<float>::max(), std::numeric_limits<float>::max(),
                                     std::numeric_limits<float>::max());
         job.bounds_max = make_fvec3(std::numeric_limits<float>::lowest(), std::numeric_limits<float>::lowest(),
@@ -1813,7 +1742,9 @@ void MechanicsSystem::update_skinned_geometry(float dt) {
 
         // Reuse the immutable segmented topology, including skipped and duplicated
         // mesh instances. Each source applies the same instance matrix as rendering.
-        ensure_collision_mesh(model_id, scene, impl_->collision_mesh_cache,
+        // Scene read lock is taken (and released) inside the call, not across the
+        // GPU stages below.
+        ensure_collision_mesh(model_id, impl_->collision_mesh_cache,
                               &impl_->static_triangle_index_cache, &impl_->static_triangle_bone_cache);
         auto bind = impl_->collision_mesh_cache.find(model_id);
         if (bind != impl_->collision_mesh_cache.end()) {
@@ -1844,7 +1775,7 @@ void MechanicsSystem::update_skinned_geometry(float dt) {
                     continue;
                 }
                 job.collision_sources.push_back({output->second.output, segment.vertex_base,
-                                                segment.vertex_count, segment.source_transform});
+                                                segment.vertex_count, segment.source_transform, output->second.pose_revision});
                 const auto matrix = make_fmat4x4_colmajor(segment.source_transform);
                 // Transform the GPU-reduced source box, never scan skinned CPU positions.
                 for (int corner = 0; corner < 8; ++corner) {
@@ -1861,7 +1792,10 @@ void MechanicsSystem::update_skinned_geometry(float dt) {
     std::vector<GpuCollisionPipeline::VertexUpdate> collision_updates;
     for (const auto& job : frame_jobs)
         if (job.collision_ready) collision_updates.push_back({job.geometry, job.collision_sources, dt});
-    if (!collision_updates.empty()) impl_->gpu_collision->update_vertices(collision_updates);
+    if (!collision_updates.empty()) {
+        Corona::Diagnostics::PhaseScope collision_phase{"Mechanics", "skinned:gpu_collision"};
+        impl_->gpu_collision->update_vertices(collision_updates);
+    }
 
     // Publish only after both batches succeed. Revalidate identity because scene
     // collection and execution can overlap editor/model changes.
@@ -1885,7 +1819,7 @@ void MechanicsSystem::update_skinned_geometry(float dt) {
     // Prepare one new resident mesh per animation update, including Phantom and
     // paused scenes. Never wait for background compilation just to do optional
     // preparation. Active physics still waits for every required pipeline.
-    GpuPerformance::Scope preparation{"animation.collision_prepare"};
+    Corona::Diagnostics::mark_thread_phase("Mechanics", "skinned:collision_prepare");
     std::unordered_set<std::uint64_t> live_models;
     std::vector<std::uint64_t> collision_keys;
     bool prepared_mesh = false;
@@ -1919,18 +1853,14 @@ void MechanicsSystem::update_skinned_geometry(float dt) {
             transform = *current;
         }
         // Count a topology build against this frame's budget even if it yields
-        // no triangles. Reuse the scene read lock already held by animation.
+        // no triangles.  The Scene read lock is acquired inside the call: the
+        // per-frame Scene handles were released before the GPU stages above.
         auto mesh = impl_->collision_mesh_cache.find(model_id);
         if (mesh == impl_->collision_mesh_cache.end()) {
             prepared_mesh = true;
             impl_->collision_preparation_cursor = index + 1;
-            const auto scene = frame_scenes.find(model_id);
-            if (scene != frame_scenes.end())
-                ensure_collision_mesh(model_id, *scene->second, impl_->collision_mesh_cache,
-                                      &impl_->static_triangle_index_cache, &impl_->static_triangle_bone_cache);
-            else
-                ensure_collision_mesh(model_id, impl_->collision_mesh_cache,
-                                      &impl_->static_triangle_index_cache, &impl_->static_triangle_bone_cache);
+            ensure_collision_mesh(model_id, impl_->collision_mesh_cache,
+                                  &impl_->static_triangle_index_cache, &impl_->static_triangle_bone_cache);
             mesh = impl_->collision_mesh_cache.find(model_id);
         }
         // Animated geometry must come from the completed skinning batch above;
@@ -1948,6 +1878,10 @@ void MechanicsSystem::update_skinned_geometry(float dt) {
         collision_keys.push_back(key);
     }
     if (impl_->gpu_collision) impl_->gpu_collision->retain(collision_keys);
+    const std::unordered_set<std::uint64_t> live_collision_keys(collision_keys.begin(), collision_keys.end());
+    std::erase_if(impl_->skinned_collision_cache, [&](const auto& item) { return !live_collision_keys.contains(item.first); });
+    std::erase_if(impl_->skinned_collision_model_ids, [&](const auto& item) { return !live_collision_keys.contains(item.first); });
+    std::erase_if(impl_->skinned_octree_cache, [&](const auto& item) { return !live_collision_keys.contains(item.first); });
     // Keep immutable topology for all resident models, including Phantom bodies
     // alongside an active simulation. Cleanup must also run while fully paused.
     std::erase_if(impl_->triangle_octree_cache, [&](const auto& item) { return !live_models.contains(item.first); });

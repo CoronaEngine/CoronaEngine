@@ -160,8 +160,22 @@ class BrowserManager {
     // void set_vulkan_backend(VulkanBackend* backend);
     // VulkanBackend* get_vulkan_backend() const;
 
-    [[nodiscard]] const std::unordered_map<int, std::unique_ptr<BrowserTab>>& get_tabs() const;
-    std::unordered_map<int, std::unique_ptr<BrowserTab>>& get_tabs();
+    /**
+     * @brief 标签页快照（id + 裸指针），供调用方在锁外遍历
+     *
+     * tabs_ 同时被引擎主线程（create_tab / remove_tab / update）与 CEF UI 线程
+     * （输入与事件派发里的多处 range-for）访问。此前直接返回 map 的**引用**，等于让
+     * CEF 线程拿着迭代器/元素指针去撞主线程的 erase —— 迭代器失效、悬垂的
+     * BrowserTab* / OffscreenCefClient*。
+     *
+     * @note 返回的 BrowserTab* 只在对应标签页未被 remove_tab 期间有效；访问其内容仍
+     *       需该 tab 自己的锁（paint 用 tab->mutex，drag 用 tab->drag_mutex）。
+     */
+    struct TabSnapshotEntry {
+        int tab_id = 0;
+        BrowserTab* tab = nullptr;
+    };
+    [[nodiscard]] std::vector<TabSnapshotEntry> tabs_snapshot() const;
 
     void update();
     void close_all_tabs();
@@ -192,6 +206,9 @@ class BrowserManager {
     };
 
     std::unordered_map<int, std::unique_ptr<BrowserTab>> tabs_;
+    /// 保护 tabs_ 与 tab_counter_（见 tabs_snapshot 的说明）。
+    /// 锁序：tabs_mutex_ → tab->mutex / tab->drag_mutex；绝不反向。
+    mutable std::mutex tabs_mutex_;
     std::mutex pending_tasks_mutex_;
     std::vector<std::function<void()>> pending_tasks_;
     std::unordered_map<UiTextureId, OwnedImage> owned_images_;

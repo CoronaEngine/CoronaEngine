@@ -12,6 +12,7 @@ void VarianceEstimator::prepare() noexcept {}
 void VarianceEstimator::compile() noexcept {
 Pipeline *pipeline_ref = pipeline();
 Kernel variance_kernel = [&, pipeline_ref](Var<VarianceEstimatorParam> param) {
+    skip_empty_tile(param);
     pipeline_ref->scene().sensor()->load_data();
     pipeline_ref->renderer().sampler()->load_data();
     Float2 film_offset = pixel_filter_offset(pipeline_ref, dispatch_idx().xy(), param.frame_index);
@@ -33,7 +34,14 @@ Kernel variance_kernel = [&, pipeline_ref](Var<VarianceEstimatorParam> param) {
         Float lum_direct = luminance(cur_direct.xyz());
         Float lum_indirect = luminance(cur_indirect.xyz());
             
-        Interaction cur_it = pipeline_ref->geometry().compute_surface_interaction(cur_hit, false);
+        Interaction cur_it{false};
+        $if(param.layered != 0u) {
+            // Stable planes already contain the geometry used for reprojection.
+            // Only the emitter identity comes from the physical instance.
+            cur_it.set_light(pipeline_ref->geometry().data()->instances().read(cur_hit.inst_id).light_id);
+        } $else {
+            cur_it = pipeline_ref->geometry().compute_surface_interaction(cur_hit, false);
+        };
         cur_guide.apply(cur_it);
         Float3 shading_normal = cur_it.ng;
         $if(param.layered == 0u) {
@@ -80,7 +88,12 @@ Kernel variance_kernel = [&, pipeline_ref](Var<VarianceEstimatorParam> param) {
                 Bool tap_is_sky = PixelStateUtils::is_sky(tap_hit);
                 
                 $if(!tap_is_sky) {
-                    Interaction tap_it = pipeline_ref->geometry().compute_surface_interaction(tap_hit, false);
+                    Interaction tap_it{false};
+                    $if(param.layered != 0u) {
+                        tap_it.set_light(pipeline_ref->geometry().data()->instances().read(tap_hit.inst_id).light_id);
+                    } $else {
+                        tap_it = pipeline_ref->geometry().compute_surface_interaction(tap_hit, false);
+                    };
                     tap_guide.apply(tap_it);
                     Float tap_depth = length(tap_guide.depth_point(tap_it.pos) - param.prev_camera_pos.as_vec3());
                     Bool tap_is_emissive = PixelStateUtils::is_emissive(pipeline_ref, tap_hit);
@@ -320,6 +333,7 @@ Kernel variance_kernel = [&, pipeline_ref](Var<VarianceEstimatorParam> param) {
 CommandBatch VarianceEstimator::dispatch_variance(RealTimeDenoiseInput &input) noexcept {
     VarianceEstimatorParam param;
     bind_stable_planes(param, input);
+    svgf_->bind_tiles(param);
     param.radiance_direct = input.direct.descriptor();
     param.radiance_indirect = input.indirect.descriptor();
     param.svgf_buffer_prev = svgf_->svgf_buffer_prev(input.frame_index, input.layer_index).descriptor();

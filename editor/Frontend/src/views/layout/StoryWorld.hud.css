@@ -1,5 +1,5 @@
 /* ==============================================================================
-   剧情模式 · HUD —— 完全复刻 ui2.html《自然荒野 · 战术协同系统 HUD》
+   剧情模式 · HUD —— 按 hud (1).html《自然荒野 · 战术协同系统 HUD》对齐
 
    结构与声明逐条对应原型，未做设计上的改动。为嵌入编辑器所做的仅有的三处
    形式转换，均不改变任何样式值：
@@ -89,15 +89,17 @@
 /* ------------------ 2.1 顶部中央：首领血条 ------------------ */
 .boss-wrap {
   position: absolute;
-  top: clamp(20px, 4vh, 40px);
+  top: clamp(14px, 2.5vh, 28px);
   left: 50%;
   transform: translateX(-50%);
-  width: min(720px, 80vw);
+  width: min(640px, calc(100vw - 440px));
+  min-width: 300px;
   display: flex;
   flex-direction: column;
   gap: 8px;
   pointer-events: none;
   filter: drop-shadow(0 8px 12px rgba(0, 0, 0, 0.6));
+  z-index: 15;
 }
 .boss-header {
   display: flex;
@@ -177,16 +179,91 @@
   transition: width 0.6s cubic-bezier(0.2, 0.8, 0.25, 1) 0.3s;
 }
 
+/* ------------------ 2.1b 中上部：附近怪物血条 ------------------ */
+/* 单条血条与 Boss 血条共用同一条中心线；Boss 血条可见时落在它正下方，
+   不抢 Boss 的顶部位置，也不用在屏幕两侧来回跳。 */
+.monster-bars {
+  position: absolute;
+  top: calc(clamp(14px, 2.5vh, 28px) + 64px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 12;
+  width: min(520px, 70vw);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  pointer-events: none;
+  filter: drop-shadow(0 8px 12px rgba(0, 0, 0, 0.55));
+}
+.monster-bar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 2px 8px;
+  padding: 6px 9px;
+  background: var(--c-panel-bg);
+  border: 1px solid var(--c-panel-border);
+  border-radius: 2px;
+  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.6);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--c-text-main);
+  transition: opacity 0.2s linear;
+}
+.monster-bar.is-dead {
+  opacity: 0.42;
+}
+.monster-bar__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  letter-spacing: 1px;
+}
+.monster-bar__hp {
+  color: var(--c-text-muted);
+  font-size: 10px;
+  text-shadow: 0 2px 2px #000;
+}
+.monster-bar__track {
+  grid-column: 1 / -1;
+  position: relative;
+  height: 5px;
+  margin-top: 3px;
+  background: rgba(8, 12, 10, 0.95);
+  border: 1px solid rgba(104, 159, 56, 0.25);
+  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.9);
+  overflow: hidden;
+}
+.monster-bar__fill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  background: linear-gradient(90deg, #3d4f24, #7c9b4a);
+  box-shadow: inset 0 0 4px rgba(255, 255, 255, 0.18);
+  transition: width 0.12s linear;
+}
+.monster-bar__lag {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  background: #c8d69a;
+  opacity: 0.75;
+  transition: width 0.6s cubic-bezier(0.2, 0.8, 0.25, 1) 0.3s;
+}
+
 /* ------------------ 2.2 左上角：自然风格复合结构 ------------------ */
 .vitals-container {
   position: absolute;
-  top: clamp(20px, 3vh, 35px);
-  left: clamp(20px, 3vw, 40px);
+  top: clamp(14px, 2.5vh, 28px);
+  left: clamp(16px, 2.5vw, 36px);
   display: flex;
   align-items: flex-start;
   gap: 12px;
   pointer-events: auto;
   filter: drop-shadow(0 10px 16px rgba(0, 0, 0, 0.7));
+  z-index: 20;
 }
 
 /* 八边形复古头像框 */
@@ -243,20 +320,6 @@
   font-weight: bold;
   border-radius: 2px;
 }
-.gourd-key {
-  position: absolute;
-  top: 2px;
-  left: 50%;
-  transform: translateX(-50%);
-  font-size: 9px;
-  color: #000;
-  background: var(--c-gold-bright);
-  padding: 0 4px;
-  font-family: var(--font-mono);
-  font-weight: bold;
-  border-radius: 2px;
-}
-
 .sub-slot-mini {
   width: 36px;
   height: 36px;
@@ -280,7 +343,7 @@
   display: flex;
   flex-direction: column;
   gap: 6px;
-  width: clamp(240px, 24vw, 340px);
+  width: clamp(200px, 18vw, 260px);
   margin-top: 2px;
 }
 .meter-row {
@@ -486,19 +549,11 @@
   transform: scale(0.96);
 }
 .focus-heavy-btn svg {
-  width: 30px;
-  height: 30px;
+  width: 32px;
+  height: 32px;
   stroke: var(--c-text-muted);
   fill: none;
   stroke-width: 1.5;
-}
-.focus-heavy-btn .key-tag {
-  position: absolute;
-  bottom: 6px;
-  font-size: 10px;
-  color: rgba(255, 255, 255, 0.6);
-  font-family: var(--font-mono);
-  font-weight: bold;
 }
 .focus-heavy-btn.is-active {
   border-color: var(--c-gold-bright);
@@ -508,10 +563,6 @@
   stroke: var(--c-gold-bright);
   filter: drop-shadow(0 0 6px var(--c-gold-bright));
 }
-.focus-heavy-btn.is-active .key-tag {
-  color: var(--c-gold-bright);
-}
-
 .spells-group {
   display: flex;
   align-items: flex-end;
@@ -563,15 +614,6 @@
   font-size: 11px;
   color: var(--c-blue-bright);
   font-weight: bold;
-  text-shadow: 0 2px 4px #000;
-}
-.spell-key {
-  position: absolute;
-  bottom: 10%;
-  font-size: 11px;
-  font-family: var(--font-mono);
-  font-weight: bold;
-  color: var(--c-gold-bright);
   text-shadow: 0 2px 4px #000;
 }
 .spell-name {

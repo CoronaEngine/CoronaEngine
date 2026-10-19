@@ -365,6 +365,7 @@ class GeometrySystem : public Kernel::SystemBase {
     struct MeshSlot {
         uint32_t               mesh_index    = 0;
         uint32_t               instance_index = 0;
+        uint32_t               node_index = UINT32_MAX;
         uint32_t               object_id = 0;
         ktm::fmat4x4           instance_transform{ktm::fmat4x4::from_eye()};
         RenderMeshBuffers      geo;              ///< LOD 解析后的几何缓冲
@@ -619,7 +620,11 @@ class GeometrySystem : public Kernel::SystemBase {
     /// 重新加载完成时重建 actor 关联的 GPU 资源（HardwareBuffer / HardwareImage），
     /// 从已导入的 Scene 资源中重新创建 mesh_handles 并恢复 model_resource_handle。
     /// 同时清理 LOD 缓存以保证下一帧 update() 重新上传 LOD 数据。
-    void rebuild_actor_gpu_resources(std::uintptr_t actor, std::uint64_t rid);
+    /// @returns true when the actor's GPU resources were queued for staged
+    /// upload.  In that case ActorLoadFinishedEvent is emitted on publication.
+    bool rebuild_actor_gpu_resources(std::uintptr_t actor,
+                                     std::uint64_t rid,
+                                     std::uintptr_t scene_handle = 0);
 
     // ========================================
     // 动态减面内部管线（在 update() 中每帧调用，外部不可见）

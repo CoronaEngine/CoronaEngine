@@ -8,15 +8,13 @@ export function createStoryCameraController({
   getBridge, getRect, getPixelRatio = () => 1,
   isCurrent = () => true, isInputLocked = () => false,
   requestFrame, cancelFrame, now, onPlayerChanged, createControls = createViewportCameraController, onError,
-  // The story map's terrain line (`game/frontend/storyMapHeight.mjs` `heightAt`), forwarded to
-  // the controls: without it the player controller accepts the option, never receives it, and
-  // the characters keep standing on the constant engine floor while the map varies by metres.
-  getGroundY = null,
+  // The small world's pointer lock needs the host's answer; plain viewports never pass it.
+  isPointerLocked = () => false,
 }) {
   let camera = null, disposed = false;
   const current = () => !disposed && isCurrent();
   const controls = createControls({
-    getBridge, onError, getGroundY,
+    getBridge, onError,
     getPose: () => camera,
     setPose: (pose) => { camera = pose; },
     submitPose: (pose) => {
@@ -24,6 +22,7 @@ export function createStoryCameraController({
       return getBridge()?.cameraMove?.(pose.handle, [...pose.position], [...pose.forward], [...pose.up], pose.fov) ?? false;
     },
     isCurrent: current, isInputLocked, requestFrame, cancelFrame, now, getRect, onPlayerChanged,
+    isPointerLocked,
   });
   function syncViewport() {
     const rect = getRect();

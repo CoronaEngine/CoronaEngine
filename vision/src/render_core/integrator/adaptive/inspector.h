@@ -61,6 +61,10 @@ public:
     OC_ENCODABLE_FUNC(Encodable, threshold_, min_sample_num_)
     VS_HOTFIX_MAKE_RESTORE(RuntimeObject, threshold_, min_sample_num_, variance_stats_)
     OC_MAKE_MEMBER_GETTER(on,)
+    [[nodiscard]] DataWrap settings() const {
+        return {{"available", false}, {"enabled", on_},
+                {"threshold", threshold_.hv()}, {"start_index", min_sample_num_.hv()}};
+    }
     bool render_UI(Widgets *widgets) noexcept override;
     void prepare() noexcept;
     [[nodiscard]] CommandBatch reset() noexcept;

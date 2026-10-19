@@ -205,6 +205,9 @@ struct CameraData {
 
 struct NodeData {
     Transform transform;
+    std::int32_t parent_index = -1;
+    std::array<float,16> local_matrix{1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1};
+    bool has_local_matrix = false;
 
     NodeData* parent = nullptr;
     std::vector<NodeData*> children;
@@ -326,6 +329,8 @@ struct IkChain {
 };
 
 struct SceneData {
+    std::array<float,16> node_instance_prefix{1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1};
+    bool has_node_instance_prefix=false;
     // 唯一网格资产。共享实例通过 MeshInstanceData::mesh_index 引用这里的数据。
     std::vector<MeshData> meshes;
     std::vector<MeshInstanceData> mesh_instances;

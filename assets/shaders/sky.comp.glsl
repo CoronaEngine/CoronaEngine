@@ -188,12 +188,12 @@ void main()
         return;
     }
 
-    vec2 screenUV = vec2(float(gl_GlobalInvocationID.x) / float(pushConsts.gbufferSize.x),
-                         float(gl_GlobalInvocationID.y) / float(pushConsts.gbufferSize.y));
-    float gbufferDepth = textureLod(textures[nonuniformEXT(pushConsts.gbufferDepthImage)], screenUV, 0.0).r;
+    vec2 screenUV = (vec2(gl_GlobalInvocationID.xy) + 0.5) / vec2(pushConsts.gbufferSize);
+    float gbufferDepth = texelFetch(textures[nonuniformEXT(pushConsts.gbufferDepthImage)],
+                                   ivec2(gl_GlobalInvocationID.xy), 0).r;
 
     // Only render sky for pixels without geometry
-    if (gbufferDepth < (1.0 - 1e-3)) {
+    if (gbufferDepth < 1.0) {
         return;
     }
 
@@ -207,10 +207,12 @@ void main()
 
     vec3 cam_origin = vec3(0, 6371e3 + 1., 0) + uniformBufferObjects[pushConsts.uniformBufferIndex].eyePosition;
 
-    vec3 fwd = normalize(uniformBufferObjects[pushConsts.uniformBufferIndex].eyeDir);
-    vec3 up = vec3(0, 1, 0);
-    vec3 right = normalize(cross(up, fwd));
-    up = normalize(cross(fwd, right));
+    // The view basis also handles camera roll and top-down views. Rebuilding
+    // right from cross(worldUp,forward) becomes singular at the poles.
+    mat3 cameraBasis = transpose(mat3(uniformBufferObjects[pushConsts.uniformBufferIndex].eyeViewMatrix));
+    vec3 right = cameraBasis[0];
+    vec3 up = cameraBasis[1];
+    vec3 fwd = cameraBasis[2];
 
     vec3 rayOrigin = cam_origin;
     vec3 rayDir = normalize(fwd + up * cam_local_point.y + right * cam_local_point.x);

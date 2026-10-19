@@ -35,5 +35,14 @@ int main() {
         {{"sourceViewport", "unknown"}, {"sourceCameraHandle", -1}});
     expect(invalid_source.at("source_viewport") == "main");
     expect(invalid_source.at("source_camera_handle") == 0);
+    const auto node = make_actor_selection_event_payload(
+        "scene.ini", "model", "Temple", {{"node_index", 12}});
+    expect(node.contains("node_index") && node.at("node_index") == 12);
+    const auto root = make_actor_selection_event_payload(
+        "scene.ini", "model", "Temple", {{"node_index", nullptr}});
+    expect(!root.contains("node_index"));
+    const auto invalid_node = make_actor_selection_event_payload(
+        "scene.ini", "model", "Temple", {{"node_index", -1}});
+    expect(!invalid_node.contains("node_index"));
     return 0;
 }

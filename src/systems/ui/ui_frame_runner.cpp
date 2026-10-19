@@ -154,7 +154,10 @@ namespace {
 //     rewritten to docking_pos "main" so it fills the window.
 std::vector<PanelLayoutInput> collect_layout_inputs(void* host_filter) {
     std::vector<PanelLayoutInput> inputs;
-    for (const auto& [tab_id, tab] : BrowserManager::instance().get_tabs()) {
+    for (const auto& tab_entry : BrowserManager::instance().tabs_snapshot()) {
+        const int tab_id = tab_entry.tab_id;
+        auto* tab = tab_entry.tab;
+        if (tab == nullptr) continue;
         if (!tab || !tab->open || tab->minimized) {
             continue;
         }
@@ -583,6 +586,7 @@ void UiFrameRunner::route_mouse_to_panels(SDL_WindowID window_id,
     auto* tab = (hit.hit && hit.tab_id != -1) ? BrowserManager::instance().get_tab(hit.tab_id) : nullptr;
     auto browser = (tab && tab->client) ? tab->client->GetBrowser() : nullptr;
     if (!browser) {
+        mouse_move_dispatch_.erase(window_id);
         return;
     }
 
@@ -611,10 +615,13 @@ void UiFrameRunner::route_mouse_to_panels(SDL_WindowID window_id,
                                         be.click_count, st.shift, st.ctrl, st.alt);
     }
 
-    // Mouse move (always treated as hovering the hit panel here).
-    MouseUtils::send_mouse_move_ex(browser, st.mouse_x, st.mouse_y, item_x, item_y,
-                                   st.left_down, st.right_down, st.shift, st.ctrl, st.alt,
-                                   /*mouse_leave=*/false);
+    // Idle frames must not manufacture mousemove events: the viewport forwards
+    // them to Python, where the resulting RPC backlog delays parameter changes.
+    const auto modifiers = MouseUtils::make_modifiers(st.left_down, st.right_down, st.shift, st.ctrl, st.alt);
+    const auto mouse_event = MouseUtils::create_mouse_event_ex(st.mouse_x, st.mouse_y, item_x, item_y, modifiers);
+    if (mouse_move_dispatch_[window_id].take(browser->GetIdentifier(), mouse_event.x, mouse_event.y, modifiers)) {
+        browser->GetHost()->SendMouseMoveEvent(mouse_event, /*mouse_leave=*/false);
+    }
 
     // Wheel.
     if (wheel != 0.0f) {
@@ -658,7 +665,10 @@ void UiFrameRunner::run_frame(UiFrameContext& context) {
         if (mw == nullptr || mw->surface == nullptr) {
             continue;
         }
-        for (auto& [tab_id, tab] : BrowserManager::instance().get_tabs()) {
+        for (const auto& tab_entry : BrowserManager::instance().tabs_snapshot()) {
+        const int tab_id = tab_entry.tab_id;
+        auto* tab = tab_entry.tab;
+        if (tab == nullptr) continue;
             if (tab && tab->host_surface == mw->surface &&
                 tab->detach_state == BrowserTab::DetachState::Detached) {
                 if (detached_window_close_action(tab->camera_view) ==
@@ -689,7 +699,10 @@ void UiFrameRunner::run_frame(UiFrameContext& context) {
 
     // printf("[FRAME_DEBUG] Before BrowserManager tabs loop\n"); fflush(stdout);
     std::vector<int> tabs_to_close;
-    for (auto& [tab_id, tab] : BrowserManager::instance().get_tabs()) {
+    for (const auto& tab_entry : BrowserManager::instance().tabs_snapshot()) {
+        const int tab_id = tab_entry.tab_id;
+        auto* tab = tab_entry.tab;
+        if (tab == nullptr) continue;
         if (!tab || !tab->open) {
             tabs_to_close.push_back(tab_id);
             continue;
@@ -721,7 +734,10 @@ void UiFrameRunner::run_frame(UiFrameContext& context) {
     // host-blocking variant). So the upload path adds no per-surface CPU synchronisation point;
     // an earlier comment here claimed it made drag/click latency scale with the number of
     // secondary surfaces, which was wrong.
-    for (const auto& [tab_id, tab] : BrowserManager::instance().get_tabs()) {
+    for (const auto& tab_entry : BrowserManager::instance().tabs_snapshot()) {
+        const int tab_id = tab_entry.tab_id;
+        auto* tab = tab_entry.tab;
+        if (tab == nullptr) continue;
         if (!tab || !tab->open || tab->minimized) {
             continue;
         }
@@ -787,7 +803,10 @@ void UiFrameRunner::log_floating_layout() {    // Rectangles are in the engine's
     diag_last_dragging_tab_id_ = dragging_tab_id_;
     diag_last_resizing_tab_id_ = resizing_tab_id_;
 
-    for (const auto& [tab_id, tab] : BrowserManager::instance().get_tabs()) {
+    for (const auto& tab_entry : BrowserManager::instance().tabs_snapshot()) {
+        const int tab_id = tab_entry.tab_id;
+        auto* tab = tab_entry.tab;
+        if (tab == nullptr) continue;
         if (!tab || !tab->floating) {
             continue;
         }
@@ -814,7 +833,10 @@ void UiFrameRunner::reconcile_detach_states(UiFrameContext& context) {
     // indirectly (resize_tab) and the window set, so we avoid iterating the map while acting.
     std::vector<int> detaching;
     std::vector<int> redocking;
-    for (const auto& [tab_id, tab] : BrowserManager::instance().get_tabs()) {
+    for (const auto& tab_entry : BrowserManager::instance().tabs_snapshot()) {
+        const int tab_id = tab_entry.tab_id;
+        auto* tab = tab_entry.tab;
+        if (tab == nullptr) continue;
         if (!tab) {
             continue;
         }
@@ -988,7 +1010,10 @@ void UiFrameRunner::render_window(UiFrameContext& context, const ManagedWindow& 
         placements = compute_panel_layout(work, inputs);
     } else {
         // Secondary window: the single tab hosted here fills the whole client area.
-        for (const auto& [tab_id, tab] : BrowserManager::instance().get_tabs()) {
+        for (const auto& tab_entry : BrowserManager::instance().tabs_snapshot()) {
+        const int tab_id = tab_entry.tab_id;
+        auto* tab = tab_entry.tab;
+        if (tab == nullptr) continue;
             if (!tab || !tab->open || tab->minimized || tab->host_surface != surface ||
                 tab->detach_state != BrowserTab::DetachState::Detached) {
                 continue;

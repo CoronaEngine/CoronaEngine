@@ -362,6 +362,48 @@
             </div>
           </div>
         </div>
+        <div class="scene-quick-render-mode">
+          <span>降噪类型</span>
+          <div
+            class="scene-quick-render-menu"
+            @keydown.esc.stop="activeMenu = null; $refs.mainDenoiserButton?.focus()"
+          >
+            <button
+              ref="mainDenoiserButton"
+              type="button"
+              class="scene-quick-render-trigger"
+              aria-label="降噪类型"
+              aria-haspopup="menu"
+              :aria-expanded="activeMenu === 'denoiser'"
+              :disabled="mainRenderBackend !== 'vision' || mainVisionRenderMode === 'ssat' || mainVisionDenoiserBusy || !currentMainCameraId()"
+              @click="toggleMenu('denoiser')"
+              @keydown.down.prevent="activeMenu = 'denoiser'"
+            >
+              <span>{{ mainVisionRenderMode === 'ssat' ? 'SSAT' : visionDenoisers.find(item => item.value === mainVisionDenoiser)?.label }}</span>
+              <span aria-hidden="true">▾</span>
+            </button>
+            <div v-if="activeMenu === 'denoiser'" class="scene-quick-render-dropdown" role="menu" aria-label="降噪类型选项">
+              <button
+                v-for="denoiser in visionDenoisers"
+                :key="denoiser.value"
+                type="button"
+                role="menuitemradio"
+                :aria-checked="denoiser.value === mainVisionDenoiser"
+                @click="selectMainVisionDenoiser(denoiser.value)"
+              >
+                {{ denoiser.label }}
+              </button>
+            </div>
+          </div>
+        </div>
+        <PtSettings :scene-id="currentMainSceneId()" :camera-id="currentMainCameraId() || ''"
+          :enabled="mainRenderBackend === 'vision' && mainVisionRenderMode === 'path_tracing'" />
+        <RestirSettings :scene-id="currentMainSceneId()" :camera-id="currentMainCameraId() || ''"
+          :enabled="mainRenderBackend === 'vision' && mainVisionRenderMode === 'restir'" />
+        <ReblurSettings :scene-id="currentMainSceneId()" :camera-id="currentMainCameraId() || ''"
+          :enabled="mainRenderBackend === 'vision' && mainVisionRenderMode !== 'ssat' && mainVisionDenoiser === 'reblur' && !mainVisionDenoiserBusy" />
+        <RelaxSettings :scene-id="currentMainSceneId()" :camera-id="currentMainCameraId() || ''"
+          :enabled="mainRenderBackend === 'vision' && mainVisionRenderMode !== 'ssat' && mainVisionDenoiser === 'relax' && !mainVisionDenoiserBusy" />
         <div class="scene-quick-render-options">
           <label title="累积 PT / ReSTIR 样本">
             <input
@@ -373,15 +415,15 @@
             />
             <span>累积样本</span>
           </label>
-          <label title="SVGF 降噪">
+          <label title="启用所选降噪算法">
             <input
               type="checkbox"
-              aria-label="SVGF"
+              aria-label="降噪"
               :checked="mainVisionDenoise"
               :disabled="mainRenderBackend !== 'vision' || mainVisionRenderMode === 'ssat' || mainVisionDenoiseBusy || !currentMainCameraId()"
               @change="toggleMainVisionDenoise"
             />
-            <span>SVGF</span>
+            <span>降噪</span>
           </label>
           <label title="ReSTIR Stable Plane">
             <input
@@ -394,10 +436,24 @@
             <span>Stable Plane</span>
           </label>
         </div>
-        <p v-if="mainVisionAccumulationError || mainVisionDenoiseError || mainVisionStablePlanesError" role="alert" class="text-red-300 text-xs">
-          {{ mainVisionAccumulationError || mainVisionDenoiseError || mainVisionStablePlanesError }}
+        <p v-if="mainVisionAccumulationError || mainVisionDenoiseError || mainVisionDenoiserError || mainVisionStablePlanesError" role="alert" class="text-red-300 text-xs">
+          {{ mainVisionAccumulationError || mainVisionDenoiseError || mainVisionDenoiserError || mainVisionStablePlanesError }}
         </p>
       </section>
+      <label class="scene-quick-camera-speed" data-guidance="camera-speed">
+        <span>{{ translate('editorSettings.cameraSpeed') }}</span>
+        <input
+          type="range"
+          min="0.01"
+          max="2"
+          step="0.01"
+          :value="cameraSpeed"
+          :aria-label="translate('editorSettings.cameraSpeed')"
+          :title="translate('editorSettings.cameraSpeed')"
+          @input="setCameraSpeedFromPanel($event.target.value)"
+        />
+        <strong>{{ cameraSpeed.toFixed(2) }}</strong>
+      </label>
       <section
         class="scene-quick-lighting"
         data-guidance="scene-lighting"
@@ -609,12 +665,18 @@
 
 <script setup>
 import FrameTimingOverlay from '@/components/ui/FrameTimingOverlay.vue';
+import PtSettings from '@/components/ui/PtSettings.vue';
+import RestirSettings from '@/components/ui/RestirSettings.vue';
+import ReblurSettings from '@/components/ui/ReblurSettings.vue';
+import RelaxSettings from '@/components/ui/RelaxSettings.vue';
 import { computed, ref, onMounted, onUnmounted, reactive, watch, nextTick } from 'vue';
 import { useRouter } from 'vue-router';
 import { useI18n } from 'vue-i18n';
 import { DEFAULT_SCENE_NAME } from '@/utils/constants.js';
+import { resolveOpenedProjectScene, resolveSceneTabs } from '@/utils/projectSceneLifecycle.js';
 import {
   normalizeVisionRenderMode, visionAccumulationFromCamera, visionDenoiseFromCamera, visionStablePlanesFromCamera, visionRenderModes,
+  visionDenoisers, visionDenoiserFromCamera,
 } from '@/utils/visionRenderModes.js';
 import {
   Bridge,
@@ -626,6 +688,7 @@ import { projectLauncherService } from '@/services/projectLauncherService.js';
 import { useErrorHandler } from '@/composables/useErrorHandler.js';
 import { useDockStore } from '@/stores/dockStore.js';
 import { PLUGIN_MANIFEST } from '@/config/pluginManifest.js';
+import { pickedNodeIdentity } from '@/utils/modelHierarchy.js';
 import { coronaEventBus } from '@/utils/eventBus.js';
 import {
   closeFloatingPanel,
@@ -799,6 +862,7 @@ let actorSelectionCallbackToken = null;
 let gizmoPointerResultCallbackToken = null;
 let actorTransformCallbackToken = null;
 let sceneAddedCallbackToken = null;
+let projectOpenedCallbackToken = null;
 const actorTransformBaselines = new Map();
 const ACTOR_TRANSFORM_EPSILON = 1e-5;
 let sceneRenamedCallbackToken = null;
@@ -965,8 +1029,9 @@ const handleActorTransformForCabbage = (payload = {}) => {
   }
 };
 
-const emitActorChangeFast = (type, sceneId, actorName) => {
+const emitActorChangeFast = (type, sceneId, actorName, nodeContext = {}) => {
   editorApi.sceneTools.selectActor(sceneId, type, actorName, {
+    ...nodeContext,
     sourceViewport: 'main',
     sourceCameraHandle: Number(cameraBindingState.value.cameraHandle || 0),
   }).catch((error) => {
@@ -975,6 +1040,8 @@ const emitActorChangeFast = (type, sceneId, actorName) => {
 };
 
 const handleActorSelectionForObjectDock = async (payload = {}, maybeSceneId = '', maybeActorName = '') => {
+  coronaEventBus.modelNodeSelection = pickedNodeIdentity(payload);
+  coronaEventBus.emit('model-node-selection', coronaEventBus.modelNodeSelection);
   const actorType = String(payload?.actor_type || payload?.type || '').trim().toLowerCase();
   const sceneId = String(payload?.scene || payload?.scene_id || maybeSceneId || '').trim();
   const actorName = String(payload?.actor || payload?.actor_name || maybeActorName || '').trim();
@@ -1012,7 +1079,7 @@ const viewportPickController = createViewportPickController({
   getHitRect: getViewportHitRect,
   getRenderRect: getViewportRenderRect,
   getActorIndex: () => actorPickIndex,
-  emitActorChange: (type, sceneId, actorName) => emitActorChangeFast(type, sceneId, actorName),
+  emitActorChange: (type, sceneId, actorName, nodeContext) => emitActorChangeFast(type, sceneId, actorName, nodeContext),
 });
 
 const viewportGizmoController = createViewportGizmoController({
@@ -1032,7 +1099,9 @@ const viewportGizmoController = createViewportGizmoController({
   },
 });
 
+const handleModelNodeGizmoSelection = (identity) => { if (identity) viewportGizmoController.clearTarget(); };
 const syncMainViewportGizmoSelection = async (selection = {}, pickResult = null) => {
+  if (coronaEventBus.modelNodeSelection) { viewportGizmoController.clearTarget(); return; }
   const sceneId =
     String(cameraBindingState.value.sceneId || tabs.value[activeTab.value]?.id || '').trim();
   let target = resolveViewportGizmoTarget({
@@ -1050,7 +1119,7 @@ const syncMainViewportGizmoSelection = async (selection = {}, pickResult = null)
       actorIndex: actorPickIndex,
     });
   }
-  if (target) {
+  if (target && !coronaEventBus.modelNodeSelection) {
     viewportGizmoController.setTarget(target);
   } else {
     viewportGizmoController.clearTarget();
@@ -1194,6 +1263,9 @@ const mainVisionAccumulationError = ref('');
 const mainVisionDenoise = ref(false);
 const mainVisionDenoiseBusy = ref(false);
 const mainVisionDenoiseError = ref('');
+const mainVisionDenoiser = ref('scene');
+const mainVisionDenoiserBusy = ref(false);
+const mainVisionDenoiserError = ref('');
 const mainVisionStablePlanes = ref(true);
 const mainVisionStablePlanesBusy = ref(false);
 const mainVisionStablePlanesError = ref('');
@@ -1244,6 +1316,7 @@ const mainRenderModeLabel = computed(() => {
 let pendingMainRenderSelection = null;
 let pendingMainAccumulationSelection = null;
 let pendingMainDenoiseSelection = null;
+let pendingMainDenoiserSelection = null;
 let pendingMainStablePlanesSelection = null;
 const currentMainCameraId = () =>
   cameraBindingState.value.cameraId || cameraBindingState.value.cameraName || null;
@@ -1362,7 +1435,7 @@ function refreshCameraAfterProjectChange() {
   }, 0);
 }
 
-function applyActualProjectChange(projectPath) {
+function applyActualProjectChange(projectPath, { refreshCamera = true } = {}) {
   if (!viewCurrent()) return false;
   const normalizedPath = normalizeActiveProjectPath(projectPath);
   if (normalizedPath === activeProjectPathSnapshot) return false;
@@ -1375,7 +1448,7 @@ function applyActualProjectChange(projectPath) {
   clearNodeReviewForProjectChange();
   clearKnownEditorCameraInputLocks();
   void reconcileEditorCameraInputLocks();
-  refreshCameraAfterProjectChange();
+  if (refreshCamera) refreshCameraAfterProjectChange();
   return true;
 }
 
@@ -1579,10 +1652,48 @@ const toggleMainVisionDenoise = async () => {
       if (currentMainCamera.value) currentMainCamera.value.vision_denoise = previous;
       mainVisionDenoiseError.value = error.message;
     }
-    logError('Failed to set main viewport SVGF denoising', error);
+    logError('Failed to set main viewport denoising', error);
     return false;
   } finally {
     mainVisionDenoiseBusy.value = false;
+  }
+};
+
+const selectMainVisionDenoiser = async (type) => {
+  activeMenu.value = null;
+  const sceneId = currentMainSceneId();
+  const cameraId = currentMainCameraId();
+  if (mainRenderBackend.value !== 'vision' || mainVisionRenderMode.value === 'ssat'
+    || mainVisionDenoiserBusy.value || !cameraId) return false;
+  const previous = mainVisionDenoiser.value;
+  const previousSelection = pendingMainDenoiserSelection;
+  const selection = { sceneId, cameraId, type };
+  const isCurrent = () => currentMainSceneId() === sceneId && currentMainCameraId() === cameraId;
+  pendingMainDenoiserSelection = selection;
+  mainVisionDenoiserBusy.value = true;
+  mainVisionDenoiser.value = type;
+  mainVisionDenoiserError.value = '';
+  try {
+    const result = unwrapBridgeData(
+      await editorApi.sceneTools.setVisionDenoiser(sceneId, cameraId, type),
+    );
+    if (isCurrent()) {
+      if (!result?.pending && result?.type) selection.type = result.type;
+      mainVisionDenoiser.value = selection.type;
+      if (currentMainCamera.value) currentMainCamera.value.vision_denoiser = selection.type;
+    }
+    return true;
+  } catch (error) {
+    if (isCurrent()) {
+      pendingMainDenoiserSelection = previousSelection;
+      mainVisionDenoiser.value = previous;
+      if (currentMainCamera.value) currentMainCamera.value.vision_denoiser = previous;
+      mainVisionDenoiserError.value = error.message;
+    }
+    logError('Failed to set main viewport denoiser type', error);
+    return false;
+  } finally {
+    mainVisionDenoiserBusy.value = false;
   }
 };
 
@@ -1626,7 +1737,7 @@ const toggleMainVisionStablePlanes = async () => {
 
 // 新增：点击其他地方关闭菜单
 const handleClickOutside = (event) => {
-  if (activeMenu.value === 'render') {
+  if (activeMenu.value === 'render' || activeMenu.value === 'denoiser') {
     if (!event.target.closest('.scene-quick-render-menu')) activeMenu.value = null;
     return;
   }
@@ -1676,6 +1787,8 @@ const applySceneSnapshot = (sceneId, payload, { preservePose = false } = {}) => 
     pendingMainAccumulationSelection = null;
     mainVisionDenoise.value = false;
     pendingMainDenoiseSelection = null;
+    mainVisionDenoiser.value = 'scene';
+    pendingMainDenoiserSelection = null;
     mainVisionStablePlanes.value = true;
     pendingMainStablePlanesSelection = null;
     cameraBindingState.value = {
@@ -1718,6 +1831,7 @@ const applySceneSnapshot = (sceneId, payload, { preservePose = false } = {}) => 
   if (bindingChanged) {
     mainVisionAccumulationError.value = '';
     mainVisionDenoiseError.value = '';
+    mainVisionDenoiserError.value = '';
     mainVisionStablePlanesError.value = '';
   }
   lastCameraViewportSignature = '';
@@ -1754,6 +1868,15 @@ const applySceneSnapshot = (sceneId, payload, { preservePose = false } = {}) => 
     pendingMainDenoiseSelection = null;
     mainVisionDenoise.value = snapshotDenoise;
   }
+  const snapshotDenoiser = visionDenoiserFromCamera(activeCamera);
+  if (pendingMainDenoiserSelection?.sceneId === normalizedSceneId
+    && pendingMainDenoiserSelection.cameraId === currentMainCameraId()) {
+    mainVisionDenoiser.value = pendingMainDenoiserSelection.type;
+    if (snapshotDenoiser === pendingMainDenoiserSelection.type) pendingMainDenoiserSelection = null;
+  } else {
+    pendingMainDenoiserSelection = null;
+    mainVisionDenoiser.value = snapshotDenoiser;
+  }
   const snapshotStablePlanes = visionStablePlanesFromCamera(activeCamera);
   if (pendingMainStablePlanesSelection?.sceneId === normalizedSceneId
     && pendingMainStablePlanesSelection.cameraId === currentMainCameraId()) {
@@ -1767,6 +1890,7 @@ const applySceneSnapshot = (sceneId, payload, { preservePose = false } = {}) => 
     currentMainCamera.value.vision_render_mode = mainVisionRenderMode.value;
     currentMainCamera.value.vision_accumulation = mainVisionAccumulation.value;
     currentMainCamera.value.vision_denoise = mainVisionDenoise.value;
+    currentMainCamera.value.vision_denoiser = mainVisionDenoiser.value;
     currentMainCamera.value.vision_stable_planes = mainVisionStablePlanes.value;
   }
 
@@ -2311,6 +2435,8 @@ const refreshActorPickIndex = async (sceneId) => {
 
 const applyActorPickResult = (result, payload = result?.payload) => {
   if (result.status === 'pending' || result.status === 'stale') return;
+  if (result.status === 'selected') coronaEventBus.emit('model-node-picked', { ...payload, actor_name: payload?.actor_name || result.actor?.name });
+  if (result.status === 'miss') coronaEventBus.emit('model-node-picked', payload);
 
   if (result.status !== 'selected') {
     const fallbackActorHandle = Number(payload?.actorHandle || 0);
@@ -3048,6 +3174,30 @@ const onSceneAddedEvent = (payload) => addSceneTab(payload?.name, payload?.route
 
 const onSceneRenamedEvent = (payload) => renameSceneTab(payload?.old_path, payload?.new_path, payload?.name);
 
+let projectOpenedRefreshRevision = 0;
+const onProjectOpenedEvent = async (payload = {}) => {
+  const refreshRevision = ++projectOpenedRefreshRevision;
+  const openedSceneRoute = resolveOpenedProjectScene(payload);
+  applyActualProjectChange(payload?.path, { refreshCamera: false });
+
+  try {
+    const result = await editorApi.main.onInit();
+    if (!viewCurrent() || refreshRevision !== projectOpenedRefreshRevision) return;
+    const snapshot = resolveSceneTabs(result?.data ?? result, openedSceneRoute || DEFAULT_SCENE_NAME);
+    tabs.value = snapshot.tabs;
+    activeTab.value = snapshot.activeIndex;
+    resetRealtimeCameraInput();
+    const sceneId = tabs.value[activeTab.value]?.id || openedSceneRoute || DEFAULT_SCENE_NAME;
+    await syncSceneCameraBinding(sceneId, { preservePose: false });
+    if (!viewCurrent() || refreshRevision !== projectOpenedRefreshRevision) return;
+    syncViewportUiMode();
+    scheduleCameraViewportSync();
+    broadcastViewportControlsState();
+  } catch (error) {
+    logError('Failed to restore editor state after opening project', error);
+  }
+};
+
 const pendingPanelRedocks = new Map();
 const PANEL_REDOCK_TTL_MS = 5000;
 
@@ -3103,8 +3253,7 @@ onMounted(async () => {
   const result = await editorApi.main.onInit();
   if (!viewCurrent()) return;
   const initData = result?.data ?? result;
-  const scenes = initData?.scenes ?? [];
-  const activeIndex = Number(initData?.active_index ?? 0);
+  const initialTabs = resolveSceneTabs(initData, DEFAULT_SCENE_NAME);
   await pollProjectResourceLoadStatus();
   if (!viewCurrent()) return;
   try {
@@ -3115,21 +3264,8 @@ onMounted(async () => {
     visionAvailable.value = false;
   }
 
-  if (scenes.length > 0) {
-    for (const s of scenes) {
-      tabs.value.push({ name: s.name, id: s.path });
-    }
-  } else {
-    // 兼容旧格式
-    tabs.value.push({
-      name: initData?.name ?? DEFAULT_SCENE_NAME,
-      id: initData?.path ?? DEFAULT_SCENE_NAME,
-    });
-  }
-  const resolvedActiveIndex =
-    tabs.value.length > 0
-      ? Math.min(Math.max(Number.isFinite(activeIndex) ? activeIndex : 0, 0), tabs.value.length - 1)
-      : 0;
+  tabs.value = initialTabs.tabs;
+  const resolvedActiveIndex = initialTabs.activeIndex;
   activeTab.value = resolvedActiveIndex;
 
   await startEngine();
@@ -3182,6 +3318,8 @@ onMounted(async () => {
   coronaEventBus.on('node-graph-panel-open-request', handleNodeGraphPanelOpenRequest);
   sceneAddedCallbackToken = await subscribeWhileCurrent(editorApi.events.onSceneAdded, onSceneAddedEvent);
   if (!viewCurrent()) return;
+  projectOpenedCallbackToken = await subscribeWhileCurrent(editorApi.events.onProjectOpened, onProjectOpenedEvent);
+  if (!viewCurrent()) return;
   sceneRenamedCallbackToken = await subscribeWhileCurrent(editorApi.events.onSceneRenamed, onSceneRenamedEvent);
   if (!viewCurrent()) return;
   actorSelectionCallbackToken = await subscribeWhileCurrent(editorApi.events.onActorSelectionChanged, handleActorSelectionForObjectDock);
@@ -3193,6 +3331,7 @@ onMounted(async () => {
   gizmoPointerResultCallbackToken =
     await subscribeWhileCurrent(editorApi.events.onViewportGizmoPointerResult, handleViewportGizmoPointerResult);
     if (!viewCurrent()) return;
+  coronaEventBus.on('model-node-selection', handleModelNodeGizmoSelection);
   coronaEventBus.on('viewport-ui-calibration-changed', applyViewportUiCalibration);
 
   // Primary work docks start hidden. If this main CEF page is reused, close any native
@@ -3257,6 +3396,7 @@ onUnmounted(() => {
   window.removeEventListener('corona-active-project-changed', onActiveProjectChanged);
   window.removeEventListener('storage', onActiveProjectStorageChanged);
   closeTutorialSessionChannel();
+  coronaEventBus.off('model-node-selection', handleModelNodeGizmoSelection);
   coronaEventBus.off('panel-redock-request', handlePanelRedockRequest);
   coronaEventBus.off('panel-closed', handlePanelClosed);
   for (const timer of pendingPanelRedocks.values()) window.clearTimeout(timer);
@@ -3301,6 +3441,12 @@ onUnmounted(() => {
       logError('Failed to unregister scene added callback', error);
     });
     sceneAddedCallbackToken = null;
+  }
+  if (projectOpenedCallbackToken) {
+    editorApi.off(projectOpenedCallbackToken).catch((error) => {
+      logError('Failed to unregister project opened callback', error);
+    });
+    projectOpenedCallbackToken = null;
   }
   if (sceneRenamedCallbackToken) {
     editorApi.off(sceneRenamedCallbackToken).catch((error) => {
@@ -3442,6 +3588,38 @@ onUnmounted(() => {
 .scene-quick-render button:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+.scene-quick-camera-speed {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding-bottom: 9px;
+  margin-bottom: 9px;
+  border-bottom: 1px solid #55431f;
+  font-size: 11px;
+}
+
+.scene-quick-camera-speed span {
+  white-space: nowrap;
+}
+
+.scene-quick-camera-speed input {
+  flex: 1;
+  min-width: 0;
+  accent-color: #d8b86c;
+  cursor: pointer;
+}
+
+.scene-quick-camera-speed input:focus-visible {
+  outline: 2px solid #d8b86c;
+  outline-offset: 3px;
+}
+
+.scene-quick-camera-speed strong {
+  min-width: 32px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
 }
 
 .scene-quick-lighting-header,

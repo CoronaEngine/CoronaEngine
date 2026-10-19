@@ -30,6 +30,7 @@ auto compute_spatial_weight = [](Float history) -> Float {
     
     auto compile_filter = [&]<bool cached>() {
     Kernel kernel = [&, pipeline_ref, soft_clamp_asinh, compute_spatial_weight](Var<PrefilterParam> param) {
+        skip_empty_tile(param);
         Int2 screen_size = make_int2(dispatch_dim().xy());
         Int2 pixel = make_int2(dispatch_idx().xy());
         Uint idx = dispatch_id();
@@ -57,12 +58,28 @@ auto compute_spatial_weight = [](Float history) -> Float {
             if constexpr (cached) emissive = center_guide.emissive;
             else emissive = PixelStateUtils::is_emissive(pipeline_ref, center_hit);
             $if(!emissive) {
+                // Like NRD history repair, stop doing neighbourhood work once
+                // both channels have reliable history. Preserve the variance
+                // floor that the full path applies at zero spatial weight.
+                $if(history >= Cfg::VarianceBlend::kHistoryThreshold &&
+                    history_indirect >= Cfg::VarianceBlend::kHistoryThreshold) {
+                    param.radiance_direct.write(idx, make_RadType4(center_direct,
+                        max(temporal_var_direct, Cfg::Variance::kMinVarianceConsistent)));
+                    param.radiance_indirect.write(idx, make_RadType4(center_indirect,
+                        max(temporal_var_indirect, Cfg::Variance::kMinVarianceConsistent)));
+                    $return();
+                };
                 Interaction it{false};
                 if constexpr (!cached) it = pipeline_ref->geometry().compute_surface_interaction(center_hit, false);
                 center_guide.apply(it);
                 // Clamp center luminance for half precision safety
                 Float center_lum_direct = HalfSafeUtils::clamp_luminance(luminance(center_direct));
                 Float center_lum_indirect = HalfSafeUtils::clamp_luminance(luminance(center_indirect));
+                // A fresh Monte Carlo sample is not a reliable lighting edge.
+                // Reconstruct it using geometry, then restore luminance
+                // rejection as each channel independently gains history.
+                Float confidence_direct = saturate((history - 1.f) / (Cfg::Variance::kHistoryThreshold - 1.f));
+                Float confidence_indirect = saturate((history_indirect - 1.f) / (Cfg::Variance::kHistoryThreshold - 1.f));
 
                 Float3 spatial_sum_direct = make_float3(0.f);
                 Float3 spatial_sum_indirect = make_float3(0.f);
@@ -137,6 +154,8 @@ auto compute_spatial_weight = [](Float history) -> Float {
                                 center_lum_direct, n_lum_direct, Cfg::Prefilter::kLuminanceSigma);
                             Float w_lum_indirect = LuminanceWeightUtils::compute_normalized(
                                 center_lum_indirect, n_lum_indirect, Cfg::Prefilter::kLuminanceSigma);
+                            w_lum_direct = lerp(confidence_direct, 1.f, w_lum_direct);
+                            w_lum_indirect = lerp(confidence_indirect, 1.f, w_lum_indirect);
                             
                             Float w_total_direct = w * w_lum_direct;
                             Float w_total_indirect = w * w_lum_indirect;
@@ -291,6 +310,7 @@ auto compute_spatial_weight = [](Float history) -> Float {
 CommandBatch Prefilter::dispatch(RealTimeDenoiseInput &input, bool use_shading_normal) noexcept {
     PrefilterParam param;
     bind_stable_planes(param, input);
+    svgf_->bind_tiles(param);
     svgf_->poisson()->bind_guides(param);
     param.use_shading_normal = use_shading_normal;
     param.radiance_direct = input.direct.descriptor();

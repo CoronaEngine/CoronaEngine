@@ -27,6 +27,9 @@ class GpuCollisionPipeline {
         std::uint32_t vertex_base{};
         std::uint32_t vertex_count{};
         Matrix transform{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+        // Nonzero completed-pose version permits exact reuse. Zero means that
+        // the source may have changed in place and must always be imported.
+        std::uint64_t revision{};
     };
     struct VertexUpdate {
         std::uint64_t key{};
@@ -68,6 +71,12 @@ class GpuCollisionPipeline {
         // Device traversal counters; geometry remains resident on the GPU.
         std::uint32_t nodes_visited{}, triangles_tested{};
     };
+    struct MeshMotionResult {
+        Point displacement{}, normal{};
+        bool grounded{}, ceiling{}, collided{};
+        int obstacle{-1}, triangle{-1}, obstacle_triangle{-1};
+        float turn{};
+    };
 
     GpuCollisionPipeline();
     ~GpuCollisionPipeline();
@@ -96,6 +105,11 @@ class GpuCollisionPipeline {
     [[nodiscard]] std::vector<Contact> contacts(std::span<const Pair> pairs);
     [[nodiscard]] std::vector<VertexResult> sample_vertices(std::span<const VertexQuery> queries);
     [[nodiscard]] std::vector<GroundResult> ground(std::span<const GroundQuery> queries);
+    // Sweep the actual deformed triangles and resolve sliding entirely on the
+    // device. Only the final callback payload is read back, once per command.
+    [[nodiscard]] MeshMotionResult move_mesh(const Instance& moving, std::span<const Instance> obstacles,
+                                             Point displacement, bool snap_to_ground,
+                                             float turn=0, Point pivot={}, Point turn_axis={0,1,0});
     void retain(std::span<const std::uint64_t> active_keys);
 
    private:

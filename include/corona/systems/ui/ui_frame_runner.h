@@ -19,7 +19,9 @@
 
 #include <chrono>
 #include <cstdint>
+#include <unordered_map>
 
+#include <corona/systems/ui/mouse_move_dispatch.h>
 #include <corona/systems/ui/panel_layout.h>
 #include <corona/systems/ui/sdl_input_router.h>
 
@@ -135,6 +137,7 @@ class UiFrameRunner {
     int diag_last_resizing_tab_id_ = -1;
 
     SdlInputRouter input_router_{};
+    std::unordered_map<SDL_WindowID, MouseMoveDispatch> mouse_move_dispatch_;
     BrowserInputHandler input_handler_{};
     SDLEventHandler event_handler_{};
 };

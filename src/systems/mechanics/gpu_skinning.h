@@ -37,6 +37,9 @@ public:
         Horizon::HardwareBuffer vertex_buffer;
         Horizon::HardwareBuffer storage_buffer;
         bool readback{true};
+        // Opt in only when these render targets are exclusively written by this
+        // pipeline. An identical palette can then reuse the completed pose.
+        bool reuse_unchanged{};
     };
 
     struct Result {
@@ -47,6 +50,10 @@ public:
         std::vector<std::byte> vertices;
         std::array<float, 3> min_xyz{};
         std::array<float, 3> max_xyz{};
+        bool pose_changed{};
+        // Version of the completed output, scoped to that buffer's lifetime.
+        // Consumers must compare resource identity as well as this counter.
+        std::uint64_t pose_revision{};
     };
 
     struct Batch {

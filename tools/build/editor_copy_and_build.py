@@ -211,10 +211,10 @@ def maybe_run_npm(frontend_dir: Path, node_dir: Path) -> int:
 
 
 def copy_game_frontend(dest_root: Path, repository_root: Path | None = None) -> None:
-    """Keep the story modules beside CabbageEditor, as in the source checkout."""
+    """Keep the story modules inside CabbageEditor/game, mirroring editor/game."""
     root = repository_root or Path(__file__).resolve().parents[2]
-    source = root / "game" / "frontend"
-    destination = dest_root.parent / "game"
+    source = root / "editor" / "game" / "frontend"
+    destination = dest_root / "game"
     if not source.is_dir():
         raise FileNotFoundError(f"Story frontend modules not found: {source}")
     if source.resolve() == (destination / "frontend").resolve():
@@ -225,8 +225,8 @@ def copy_game_frontend(dest_root: Path, repository_root: Path | None = None) -> 
 def copy_game_art(dest_root: Path, repository_root: Path | None = None) -> None:
     """Deploy game-owned models/textures without modifying the shared engine assets."""
     root = repository_root or Path(__file__).resolve().parents[2]
-    source = root / "game" / "art"
-    destination = dest_root.parent / "game" / "art"
+    source = root / "editor" / "game" / "art"
+    destination = dest_root / "game" / "art"
     if not source.is_dir():
         raise FileNotFoundError(f"Game art resources not found: {source}")
     if source.resolve() == destination.resolve():
@@ -237,10 +237,10 @@ def copy_game_art(dest_root: Path, repository_root: Path | None = None) -> None:
 
 
 def copy_game_runtime(dest_root: Path, repository_root: Path | None = None) -> None:
-    """Deploy Python gameplay next to editor; no C++ manifest or engine rebuild needed."""
+    """Deploy Python gameplay inside CabbageEditor/game, on the editor import path."""
     root = repository_root or Path(__file__).resolve().parents[2]
-    source = root / "game"
-    destination = dest_root.parent / "game"
+    source = root / "editor" / "game"
+    destination = dest_root / "game"
     if source.resolve() == destination.resolve():
         return
     destination.mkdir(parents=True, exist_ok=True)
@@ -257,8 +257,8 @@ def copy_game_data(dest_root: Path, repository_root: Path | None = None) -> None
     repository validates against.
     """
     root = repository_root or Path(__file__).resolve().parents[2]
-    source = root / "game" / "data"
-    destination = dest_root.parent / "game" / "data"
+    source = root / "editor" / "game" / "data"
+    destination = dest_root / "game" / "data"
     if not source.is_dir():
         raise FileNotFoundError(f"Story content data not found: {source}")
     if source.resolve() == destination.resolve():

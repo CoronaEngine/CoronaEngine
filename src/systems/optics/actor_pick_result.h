@@ -9,12 +9,14 @@ namespace Corona::Systems::OpticsDetail {
 struct ActorPickResolvedResult {
     std::string_view status;
     std::uintptr_t actor_handle{0};
+    std::uint32_t node_index{UINT32_MAX};
 };
 
 [[nodiscard]] inline ActorPickResolvedResult resolve_actor_pick_result(
     bool read_ok,
     std::uint32_t instance_id,
-    std::span<const std::uintptr_t> scene_actor_handles) noexcept {
+    std::span<const std::uintptr_t> scene_actor_handles,
+    std::span<const std::uint32_t> node_indices = {}) noexcept {
     if (!read_ok) {
         return {"error", 0};
     }
@@ -26,7 +28,7 @@ struct ActorPickResolvedResult {
     if (instance_index >= scene_actor_handles.size()) {
         return {"miss", 0};
     }
-    return {"success", scene_actor_handles[instance_index]};
+    return {"success", scene_actor_handles[instance_index], instance_index < node_indices.size() ? node_indices[instance_index] : UINT32_MAX};
 }
 
 }  // namespace Corona::Systems::OpticsDetail

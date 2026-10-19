@@ -294,7 +294,10 @@ LightEval LightSampler::evaluate_miss_point(const LightSampleContext &p_ref, con
                                             const Float &pdf_wi, const SampledWavelengths &swl,
                                             Float *light_pdf_point, LightEvalMode mode) const noexcept {
     LightEvalContext p_light{p_ref.pos + wi};
-    LightEval ret = env_light()->evaluate_wi(p_ref, p_light, swl, mode);
+    LightEval ret{swl.dimension()};
+    dispatch_environment([&](const Environment *env) {
+        ret = env->evaluate_wi(p_ref, p_light, swl, mode);
+    });
     Float light_pmf = PMF(p_ref, env_index());
     if (light_pdf_point) {
         *light_pdf_point = ret.pdf * light_pmf;
