@@ -1695,16 +1695,17 @@ void MechanicsSystem::update_skinned_geometry(float dt) {
     for (const auto& job : frame_jobs)
         for (const auto& request : job.requests) active_gpu_keys.push_back(request.key);
 
-    // Release the per-model Scene read handles before any GPU submission.
+    // Release per-model Scene read handles after skinning stages its source
+    // bytes and before GPU submission. Releasing earlier leaves Request spans
+    // dangling if Geometry concurrently evicts CPU mesh data.
     // The collision topology built below is the only later consumer of Scene data
     // and it goes through the self-locking overload, so no Scene read lock is held
     // across skinning/collision waits.  Holding them across a stalled GPU wait
     // blocked GeometrySystem's periodic *exclusive* RAM residency pass forever,
     // which froze the whole geometry pipeline (imports included) until restart.
-    frame_scenes.clear();
 
-    // Spans are created only after frame_jobs stops growing. All palettes and
-    // source scene locks survive both GPU stages; no geometry storage lock is
+    // Spans are created only after frame_jobs stops growing. Palettes survive
+    // both GPU stages; no geometry storage lock is
     // held while recording, submitting or waiting.
     std::vector<GpuSkinningPipeline::Batch> skin_batches;
     skin_batches.reserve(frame_jobs.size());
@@ -1714,8 +1715,9 @@ void MechanicsSystem::update_skinned_geometry(float dt) {
         Corona::Diagnostics::PhaseScope skin_phase{"Mechanics", "skinned:gpu_skinning"};
         impl_->gpu_skinning.ensure();
         skin_phase.set("skinned:gpu_skinning_submit");
-        skin_results = impl_->gpu_skinning->update_batch(skin_batches);
+        skin_results = impl_->gpu_skinning->update_batch(skin_batches, [&] { frame_scenes.clear(); });
     }
+    frame_scenes.clear();
     Corona::Diagnostics::mark_thread_phase("Mechanics", "skinned:publish_and_collision");
     std::size_t result_offset = 0;
     for (auto& job : frame_jobs) {
@@ -1794,7 +1796,7 @@ void MechanicsSystem::update_skinned_geometry(float dt) {
         if (job.collision_ready) collision_updates.push_back({job.geometry, job.collision_sources, dt});
     if (!collision_updates.empty()) {
         Corona::Diagnostics::PhaseScope collision_phase{"Mechanics", "skinned:gpu_collision"};
-        impl_->gpu_collision->update_vertices(collision_updates);
+        impl_->gpu_collision->update_vertices(collision_updates, false);
     }
 
     // Publish only after both batches succeed. Revalidate identity because scene
@@ -1879,6 +1881,16 @@ void MechanicsSystem::update_skinned_geometry(float dt) {
     }
     if (impl_->gpu_collision) impl_->gpu_collision->retain(collision_keys);
     const std::unordered_set<std::uint64_t> live_collision_keys(collision_keys.begin(), collision_keys.end());
+    for (const auto key : geom_handles) {
+        auto geometry = geom_storage.try_acquire_write(key);
+        if (!geometry) continue;
+        geometry->collision_model_id = 0;
+        if (!live_collision_keys.contains(key) || geometry->gpu_build_state != GeometryDevice::GpuBuildState::Ready ||
+            geometry->mesh_handles.empty() || (geometry->is_skinned && !geometry->skinned_aabb_valid)) continue;
+        auto resource = hub.model_resource_storage().try_acquire_read(geometry->model_resource_handle);
+        if (resource && impl_->gpu_collision && impl_->gpu_collision->contains(key, resource->model_id))
+            geometry->collision_model_id = resource->model_id;
+    }
     std::erase_if(impl_->skinned_collision_cache, [&](const auto& item) { return !live_collision_keys.contains(item.first); });
     std::erase_if(impl_->skinned_collision_model_ids, [&](const auto& item) { return !live_collision_keys.contains(item.first); });
     std::erase_if(impl_->skinned_octree_cache, [&](const auto& item) { return !live_collision_keys.contains(item.first); });

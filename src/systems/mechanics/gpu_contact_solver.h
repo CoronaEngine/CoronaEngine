@@ -11,7 +11,8 @@
 namespace Corona::Systems {
 
 // Ordered Gauss-Seidel contacts run in parallel only across disjoint islands.
-// CPU construction retains contact order and includes fixed/sleeping endpoints.
+// CPU construction retains contact order for connected writable bodies. Fixed,
+// kinematic and sleeping endpoints are shared read-only between islands.
 class GpuContactSolverPipeline {
    public:
     static constexpr std::uint32_t max_bodies = 1u << 20;

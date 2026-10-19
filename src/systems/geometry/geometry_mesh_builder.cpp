@@ -1,3 +1,4 @@
+#include "geometry_draw_buffers.h"
 #include <corona/systems/geometry/model_node_import.h>
 /// @file geometry_mesh_builder.cpp
 /// @brief 从 Resource::Scene 构建 GPU MeshDevice 数组的单一实现。
@@ -183,37 +184,14 @@ std::vector<MeshDevice> build_mesh_devices_from_scene_range(
         dev.vertex_count = static_cast<std::uint32_t>(vertices.size());
         dev.index_count = static_cast<std::uint32_t>(indices.size());
         dev.max_index = max_index;
-
-        // ---- 创建顶点/索引缓冲（4 个）----
-        // vertexBuffer / indexBuffer：渲染管线使用（Vertex Shader 读取）
-        // vertexStorageBuffer / indexStorageBuffer：Compute Shader 使用（可读写）
-        dev.vertexBuffer = make_geometry_buffer(
-            vertices,
-            Horizon::BufferUsage_TransferDst | Horizon::BufferUsage_Vertex,
-            "geometry.vertex");
-        dev.indexBuffer = make_geometry_buffer(
-            indices,
-            Horizon::BufferUsage_TransferDst | Horizon::BufferUsage_Index,
-            "geometry.index");
-        dev.vertexStorageBuffer = make_geometry_buffer(
-            vertices,
-            Horizon::BufferUsage_TransferSrc | Horizon::BufferUsage_TransferDst |
-                Horizon::BufferUsage_Storage,
-            "geometry.vertex_storage");
-        dev.indexStorageBuffer = make_geometry_buffer(
-            indices,
-            Horizon::BufferUsage_TransferSrc | Horizon::BufferUsage_TransferDst |
-                Horizon::BufferUsage_Storage,
-            "geometry.index_storage");
-
-        // ---- GPU mesh 显存记账（P0）----
-        // 顶点/索引各上传两份（普通 + storage），故 ×2。
-        {
-            const std::size_t mesh_gpu_bytes =
-                2u * vertices.size() * sizeof(Resource::Vertex) +
-                2u * indices.size()  * sizeof(std::uint16_t);
-            dev.mesh_mem = Corona::Memory::GpuMemToken(Corona::Memory::ResKind::Mesh, mesh_gpu_bytes);
-        }
+        auto buffers = GeometryDetail::make_draw_buffers(vertices, indices);
+        dev.draw_clusters = std::move(buffers.clusters);
+        dev.vertexBuffer = dev.vertexStorageBuffer = std::move(buffers.vertices);
+        dev.indexBuffer = dev.indexStorageBuffer = std::move(buffers.indices);
+        dev.shadowIndexBuffer = std::move(buffers.shadow_indices);
+        // One shared vertex allocation, original indices, spatial shadow indices.
+        dev.mesh_mem = Corona::Memory::GpuMemToken(Corona::Memory::ResKind::Mesh,
+            buffers.byte_size);
 
         // ---- 材质索引 ----
         // material_index 指向 scene.data.materials 数组

@@ -23,6 +23,7 @@ struct GeometryRenderStatus {
     bool observed{false};
     bool ready{false};
     bool failed{false};
+    bool collision_ready{false};
     std::string gpu_build_state{"Unavailable"};
     std::size_t mesh_count{0};
     std::size_t renderable_mesh_count{0};

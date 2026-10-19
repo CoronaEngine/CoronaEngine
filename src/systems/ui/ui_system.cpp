@@ -240,7 +240,7 @@ void UiSystem::update() {
     if (frame_count_.load(std::memory_order_relaxed) % 600 == 0) {
         if (auto* manager = Kernel::KernelContext::instance().system_manager()) {
             for (const auto& stats : manager->get_all_stats()) {
-                CFW_LOG_INFO("[UI/Frame] system={} avg={:.2f}ms max={:.2f}ms target_fps={} actual_fps={:.1f}",
+                CFW_LOG_INFO("[UI/Frame] system={} avg={:.2f}ms max={:.2f}ms target_fps={} update_hz={:.1f}",
                              stats.name,
                              stats.average_frame_time_ms,
                              stats.max_frame_time_ms,
