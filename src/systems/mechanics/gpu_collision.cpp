@@ -850,7 +850,7 @@ struct GpuCollisionPipeline::Impl {
     };
 
     ~Impl() {
-        if (poisoned && last_receipt.data) {
+        if (last_receipt.data) {
             try {
                 executor.wait_completed(last_receipt);
             } catch (...) {
@@ -888,19 +888,22 @@ struct GpuCollisionPipeline::Impl {
         s.data[1] = workspace.data[1];
         return s;
     }
-    void finish(H::HardwareStream& stream) {
+    void finish(H::HardwareStream& stream, bool wait_for_completion = true) {
         poisoned = true;
-        last_receipt = {};
+        // Chain device work, including disjoint meshes, without a CPU fence
+        // between pose capture and its consumer. Queue submissions retain the
+        // recorded buffers until completion; staging is never rewritten.
+        if (last_receipt.data) executor.wait(last_receipt);
         {
             GpuPerformance::OperationScope timing{GpuPerformance::Operation::Commit};
             last_receipt = stream << H::commit();
         }
         ++submissions;
-        {
+        if (wait_for_completion) {
             GpuPerformance::OperationScope timing{GpuPerformance::Operation::Wait};
             executor.wait_completed(last_receipt);
+            last_receipt = {};
         }
-        last_receipt = {};
         poisoned = false;
         for (auto& s : scratch) {
             s->data[0] = {};
@@ -1178,7 +1181,7 @@ void GpuCollisionPipeline::update_vertices(std::uint64_t key, std::span<const Ve
     const VertexUpdate update{key, sources, pose_dt};
     update_vertices(std::span(&update, 1));
 }
-void GpuCollisionPipeline::update_vertices(std::span<const VertexUpdate> updates) {
+void GpuCollisionPipeline::update_vertices(std::span<const VertexUpdate> updates, bool wait_for_completion) {
     GpuPerformance::Scope performance{"collision.update"};
     GpuPerformance::record_work_items(updates.size());
     impl_->usable();
@@ -1210,7 +1213,16 @@ void GpuCollisionPipeline::update_vertices(std::span<const VertexUpdate> updates
     // A stationary pose has zero surface velocity even if its previous pose
     // differs. No history copy, world transform, or refit is needed to express it.
     for (const auto& update : updates) impl_->mesh(update.key).pose_dt = 0.0f;
-    if (changed.empty()) return;
+    if (changed.empty()) {
+        if (wait_for_completion && impl_->last_receipt.data) {
+            impl_->poisoned = true;
+            GpuPerformance::OperationScope timing{GpuPerformance::Operation::Wait};
+            impl_->executor.wait_completed(impl_->last_receipt);
+            impl_->last_receipt = {};
+            impl_->poisoned = false;
+        }
+        return;
+    }
     // Capture source contents now: skin outputs are reused on the next animation
     // tick, including when physics is paused. This is a device-only transfer.
     Impl::Recording recording{*impl_};
@@ -1228,7 +1240,7 @@ void GpuCollisionPipeline::update_vertices(std::span<const VertexUpdate> updates
         // Transforming to identity here only invalidates a useful world cache.
         impl_->prepare(stream, instance, false, false);
     }
-    impl_->finish(stream);
+    impl_->finish(stream, wait_for_completion);
     impl_->in_flight_uploads.clear();
     for (const auto* update : changed)
         impl_->mesh(update->key).completed_sources.assign(update->sources.begin(), update->sources.end());

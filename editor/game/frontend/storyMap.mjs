@@ -328,7 +328,7 @@ export const MAP_ACTOR_DATA = Object.freeze({
 
 export async function ensureStoryMap({ api, sceneId, frontendUrl, resolveAsset = null,
   placement = MAP_PLACEMENT, wait = ms => new Promise(resolve => setTimeout(resolve, ms)),
-  confirmAttempts = 30 }) {
+  confirmAttempts = 150 }) {
   const actors = sceneSnapshot(await api.scene.getSnapshot(sceneId))?.actors;
   let map = (Array.isArray(actors) ? actors : []).find(isMapActor) || null;
 
@@ -382,7 +382,9 @@ export async function ensureStoryMap({ api, sceneId, frontendUrl, resolveAsset =
   for (let attempt = 0; ; attempt++) {
     const confirmed = sceneSnapshot(await api.scene.getSnapshot(sceneId))?.actors
       ?.find(item => item.actor_guid === placement.guid);
-    if (isMapReady(confirmed, placement)) return confirmed;
+    // Native publishes readiness only after its original triangle data is
+    // available. Older bridges omit this field and retain their old behavior.
+    if (isMapReady(confirmed, placement) && confirmed.collision_ready !== false) return confirmed;
     if (attempt >= confirmAttempts - 1) throw new Error('等待地图就位超时，请重试进入世界');
     await wait(200);
   }

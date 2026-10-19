@@ -2979,6 +2979,7 @@ nlohmann::json actor_to_json(const NativeEditorScene& scene, const NativeEditorA
         : Corona::API::GeometryRenderStatus{};
     item["render_status_observed"] = render_status.observed;
     item["render_ready"] = render_status.ready;
+    item["collision_ready"] = render_status.collision_ready;
     item["render_failed"] = render_status.failed;
     item["gpu_build_state"] = render_status.gpu_build_state;
     item["mesh_count"] = render_status.mesh_count;
@@ -7600,6 +7601,7 @@ std::string get_editor_actor_geometry_status_from_python(const std::string& scen
             {"actor", actor->name},
             {"actor_type", actor->actor_type},
             {"ready", render_ready},
+            {"collision_ready", render_status.collision_ready},
             {"failed", gpu_state == "Failed"},
             {"gpu_build_state", gpu_state},
             {"mesh_count", mesh_count},

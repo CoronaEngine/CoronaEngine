@@ -365,7 +365,7 @@ std::vector<GpuSkinningPipeline::Result> GpuSkinningPipeline::update(
 }
 
 std::vector<GpuSkinningPipeline::Result> GpuSkinningPipeline::update_batch(
-    std::span<const Batch> batches) {
+    std::span<const Batch> batches, const std::function<void()>& release_mesh_inputs) {
     GpuPerformance::Scope performance{"skinning"};
     impl_->ensure_usable();
     struct Work {
@@ -410,7 +410,10 @@ std::vector<GpuSkinningPipeline::Result> GpuSkinningPipeline::update_batch(
     }
     std::vector<Result> results(work.size());
     for (std::size_t i = 0; i < work.size(); ++i) results[i].key = work[i].request->key;
-    if (!has_work) return results;
+    if (!has_work) {
+        if (release_mesh_inputs) release_mesh_inputs();
+        return results;
+    }
 
     bool has_skin = false, has_commands = false;
     for (auto& item : work) {
@@ -434,6 +437,7 @@ std::vector<GpuSkinningPipeline::Result> GpuSkinningPipeline::update_batch(
         }
     }
 
+    if (release_mesh_inputs) release_mesh_inputs();
     if (has_commands) {
         auto stream = impl_->executor.stream();
         if (has_skin) {

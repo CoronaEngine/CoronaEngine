@@ -155,6 +155,9 @@ struct GeometryDevice {
     // 物理系统每帧读取它覆盖静态 min_xyz/max_xyz，使碰撞 AABB 跟随当前动画姿态。
     // skinned_aabb_valid=false 表示尚未蒙皮过（首帧前），物理回退静态 AABB。
     bool skinned_aabb_valid{false};
+    // Published by Mechanics only after the exact triangle data has been
+    // prepared. Consumers compare against the currently loaded model identity.
+    std::uint64_t collision_model_id{};
     ktm::fvec3 skinned_aabb_min{0.0f, 0.0f, 0.0f};
     ktm::fvec3 skinned_aabb_max{0.0f, 0.0f, 0.0f};
 

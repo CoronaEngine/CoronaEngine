@@ -226,7 +226,8 @@ async function initializeStoryCharacters({ api, sceneId, frontendUrl, isCurrent 
           { enabled: false }))).actor;
       }
       // Finish this model before submitting the next one. Ready GPU build state
-      // alone is insufficient: require actual render slots AND valid bounds.
+      // alone is insufficient: require render slots, bounds, and native
+      // triangle collision readiness (older bridges omit the latter field).
       for (let attempt = 0; ; attempt++) {
         if (!isCurrent()) throw canceled();
         await assertSource();
@@ -236,7 +237,7 @@ async function initializeStoryCharacters({ api, sceneId, frontendUrl, isCurrent 
         if (!loaded(actor) || actor.render_failed || ['Failed', 'Invalid'].includes(actor.gpu_build_state)) {
           throw new Error(actor?.load_error?.message || '模型渲染失败');
         }
-        if (actor.render_ready === true && hasUsableBounds(actor.local_aabb)) break;
+        if (actor.render_ready === true && actor.collision_ready !== false && hasUsableBounds(actor.local_aabb)) break;
         if (attempt >= renderAttempts - 1) throw new Error('等待模型渲染超时');
         await wait(200);
       }
