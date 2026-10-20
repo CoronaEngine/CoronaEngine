@@ -137,6 +137,50 @@ test('lost right button resets held keys and pending frames', () => {
   f.step(100); assert.equal(f.frames.size, 0); assert.equal(f.calls.length, 0);
 });
 
+/**
+ * 额外的「键 → 方向」只属于注册了它的那台控制器（小世界的空格上升就是这么进来的）。
+ *
+ * 非真空：把 `createViewportCameraController` 里的 `extraMovement` 去掉，第二条 fixture 的
+ * `keyDown` 立刻返回 false、相机一格都不动；把它写成「谁都认空格」，第一条 fixture 的
+ * 「编辑器视口一个键都不多」立刻失败。
+ */
+test('extra movement keys are opt-in per controller: Space is dead by default and climbs when registered', () => {
+  // 记录 preventDefault 的事件：这条用例要证明「认下来的键会挡住页面滚动/聚焦按钮」。
+  const keyEvent = (props = {}) => {
+    const instance = { defaultPrevented: false, preventDefault() { instance.defaultPrevented = true; }, ...props };
+    return instance;
+  };
+  const plain = fixture();
+  const space = keyEvent({ code: 'Space', key: ' ' });
+  assert.equal(plain.controller.keyDown(space), false, '没有注册的控制器不认空格');
+  assert.equal(space.defaultPrevented, false, '不认的键既不 preventDefault 也不吞掉');
+  plain.step(50);
+  near(plain.pose().position[1], 0);
+
+  const timer = clock();
+  let pose = initialPose();
+  const climbing = createViewportCameraController({
+    getPose: () => pose, setPose: next => { pose = next; }, submitPose: () => true,
+    extraMovement: { space: 'up' }, ...timer,
+  });
+  const down = keyEvent({ code: 'Space', key: ' ' });
+  assert.equal(climbing.keyDown(down), true);
+  assert.equal(down.defaultPrevented, true, '认下来的键必须 preventDefault（不滚页面、不点亮按钮）');
+  timer.step(50);
+  near(pose.position[1], 0.6, '与 Q 同一速度：0.2 m/帧 × 60 × 0.05 s');
+  // Q 和空格同时按也只有一个 `up`：同一个方向一帧只走一次，不会变成双倍速。
+  const q = keyEvent({ code: 'KeyQ' });
+  climbing.keyDown(q);
+  timer.step(timer.now() + 50);
+  near(pose.position[1], 1.2, 'Q + 空格仍然是 Q 的速度');
+  climbing.keyUp(down);
+  timer.step(timer.now() + 50);
+  near(pose.position[1], 1.8, '松开空格之后只由 Q 继续抬');
+  climbing.keyUp(q);
+  assert.equal(timer.frames.size, 0);
+  climbing.dispose();
+});
+
 test('story binding and creative host callbacks produce identical poses for identical inputs', () => {
   const creative = fixture(), timer = clock(), calls = [];
   const story = createStoryCameraController({

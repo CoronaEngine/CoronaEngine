@@ -7,6 +7,7 @@ import { createPlayerSave } from '../../frontend/playerSave.mjs';
 import { ensureStoryCharacters, syncPlacementActors } from '../../frontend/storyActors.mjs';
 import * as gameplayModule from '../../frontend/storyGameplay.mjs';
 import * as storyPropsModule from '../../frontend/storyProps.mjs';
+import * as storyLootModule from '../../frontend/storyLoot.mjs';
 import * as prophetDialogueModule from '../../frontend/prophetDialogue.mjs';
 import * as storyCubeModule from '../../frontend/storyCube.mjs';
 import * as storyMapModule from '../../frontend/storyMap.mjs';
@@ -14,11 +15,13 @@ import * as storyMapHeightModule from '../../frontend/storyMapHeight.mjs';
 import * as storyMapHeightLoaderModule from '../../frontend/storyMapHeightLoader.mjs';
 import * as storyWorldRulesModule from '../../frontend/storyWorldRules.mjs';
 import * as storyProphetActionsModule from '../../frontend/storyProphetActions.mjs';
-import { STORY_CHARACTERS, PROPHET_GUID, resolveStoryAssetPath, sceneSnapshot,
-  characterTransform } from '../../frontend/storyCharacters.mjs';
+import { STORY_CHARACTERS, PROPHET_GUID, PLAYER_MODEL_YAW_OFFSET, isMonsterRole, resolveStoryAssetPath,
+  sceneSnapshot, characterTransform } from '../../frontend/storyCharacters.mjs';
 import { actorFixture, apiFixture, CHARACTER_BY_GUID } from './fixtures.mjs';
 import { createStoryNavigationController } from '../../frontend/storyNavigation.mjs';
 import { createStoryCameraController } from '../../../Frontend/src/utils/viewportStoryCamera.js';
+import { createStoryWorldControls, SMALL_WORLD_VIEW_LABELS } from '../../../Frontend/src/utils/viewportStoryWorldCamera.js';
+import { routeStoryKeydown } from '../../../Frontend/src/utils/storyKeyRouter.js';
 import { editorApi } from '../../../Frontend/src/api/editorApi.js';
 import * as launcher from '../../../Frontend/src/services/projectLauncherService.js';
 import * as worldMode from '../../../Frontend/src/services/worldModeService.js';
@@ -246,14 +249,16 @@ async function fixture(t, options = {}) {
     return { data: { status: 'success' } };
   });
   t.mock.method(editorApi.sceneTools, 'setActorState', async (scene, guid, state) => {
+    calls.push(['state', activePath, guid, structuredClone(state)]);
     const actor = actors.get(activePath).find(item => item.actor_guid === guid);
     Object.assign(actor, state);
     return { status: 'success', actor: structuredClone(actor) };
   });
-  // 世界碎片（红球）在快照里并不存在，由剧情建模流程创建：这里补上同一份建模夹具
+  // 剧情角色在快照里并不都存在，由建模流程创建：这里按同一份角色表补上建模夹具。
+  // （世界碎片不再是一个场景 actor：Boss 的奖励直接进入背包。）
   t.mock.method(editorApi.sceneTools, 'createActor', async (scene, path, type, data) => {
     calls.push(['create', activePath, scene, path, structuredClone(data)]);
-    const character = [...STORY_CHARACTERS, gameplayModule.FRAGMENT].find(item => item.guid === data.actor_guid);
+    const character = STORY_CHARACTERS.find(item => item.guid === data.actor_guid);
     // 剧情世界的地图：引擎侧不是角色、也不是布局里的陈列物，它自带一条 static 的
     // 物理记录（真实引擎的 create_actor 会把 body_type 写进 mechanics）。
     if (!character && data.actor_guid === storyMapModule.MAP_GUID) {
@@ -269,6 +274,23 @@ async function fixture(t, options = {}) {
       if (existing && data.update_if_exists) Object.assign(existing, actor);
       else if (!existing) actors.get(activePath).push(actor);
       return { status: 'success', actor: structuredClone(existing || actor) };
+    }
+    // 先知旁的方块：和地图一样是引擎侧创建的「非角色」actor，真实引擎会建它，夹具也必须会，
+    // 否则小世界里一个可被碎片规则动画的物体都没有（碎片不影响先知，也就只剩它了）。
+    if (!character && data.actor_guid === storyCubeModule.CUBE_GUID) {
+      const existing = actors.get(activePath).find(item => item.actor_guid === data.actor_guid);
+      const describe = () => ({ name: data.name, actor_guid: data.actor_guid, handle: ++handle,
+        load_status: 'loaded', render_ready: true, gpu_build_state: 'Ready',
+        model_ref: data.model_ref, route: path, semantic_role: 'prophet-cube',
+        entity_id: 'story.prophet.cube', entity_type: 'story_prop',
+        local_aabb: [-0.5, -0.5, -0.5, 0.5, 0.5, 0.5], visible: true, follow_camera: false,
+        camera_lock: { enabled: false }, mechanics: { physics_enabled: false },
+        geometry: { position: [...data.position], rotation: [...data.rotation], scale: [...data.scale] } });
+      if (existing && data.update_if_exists) Object.assign(existing, {
+        geometry: { position: [...data.position], rotation: [...data.rotation], scale: [...data.scale] } });
+      else if (!existing) actors.get(activePath).push(describe());
+      const actor = existing || actors.get(activePath).at(-1);
+      return { status: 'success', actor: structuredClone(actor) };
     }
     // 陈列物（guid 形如 story.placement.0000）不是剧情角色：它由布局驱动创建，
     // 形状与名字来自 storyProps / syncPlacementActors 写下的字段，不能套用角色夹具。
@@ -348,6 +370,10 @@ async function fixture(t, options = {}) {
       '@/services/projectLauncherService.js': launcher,
       '@/services/worldSessionLifecycle.js': lifecycle,
       '@/utils/viewportStoryCamera.js': { createStoryCameraController },
+      // 小世界的相机（自由/俯视）走真实模块：它自己就是这条用例要证明的东西之一。
+      '@/utils/viewportStoryWorldCamera.js': { createStoryWorldControls, SMALL_WORLD_VIEW_LABELS },
+      // 键盘路由走真实模块，页面根的 onKeyDown 分支与真机一致。
+      '@/utils/storyKeyRouter.js': { routeStoryKeydown },
       // 图片资源：测试里只当作一个 URL 字符串
       '@/assets/hero-figure.png': { default: 'hero-figure.png' },
       '../../../../game/frontend/storyNavigation.mjs': { createStoryNavigationController, NAVIGATION_KEY },
@@ -355,8 +381,10 @@ async function fixture(t, options = {}) {
       '../../../../game/frontend/playerController.mjs': { createPlayerController, VIEW_LABELS },
       '../../../../game/frontend/playerSave.mjs': { createPlayerSave },
       '../../../../game/frontend/storyGameplay.mjs': gameplayModule,
-      '../../../../game/frontend/storyCharacters.mjs': { STORY_CHARACTERS, PROPHET_GUID, resolveStoryAssetPath, sceneSnapshot },
+      '../../../../game/frontend/storyCharacters.mjs': { STORY_CHARACTERS, PROPHET_GUID, PLAYER_MODEL_YAW_OFFSET,
+        isMonsterRole, resolveStoryAssetPath, sceneSnapshot },
       '../../../../game/frontend/storyProps.mjs': storyPropsModule,
+      '../../../../game/frontend/storyLoot.mjs': storyLootModule,
       '../../../../game/frontend/prophetDialogue.mjs': prophetDialogueModule,
       '../../../../game/frontend/storyCube.mjs': storyCubeModule,
       // 地图走真实模块：它的确认与幂等都写在里面，桩掉就失去了这条用例的意义。
@@ -843,21 +871,21 @@ test('Space cannot start during an acknowledged save; a late save never leaves t
   assert.equal(page.instance.camera.snapshotPlayer().grounded, true);
   assert.equal(page.instance.camera.snapshotPlayer().position[1], f.actors.get(MAIN)[0].geometry.position[1]);
 });
-test('HUD pins the boss plate top-center, vitals bottom-left and skills bottom-right, with Space listed in the left tip', async t => {
+test('HUD pins the boss plate top-center, vitals top-left and skills bottom-right without the old tip strip', async t => {
   const f = await fixture(t); const page = f.mount(); await page.mount();
   // Mounted state so the whole HUD renders before its anchors are inspected.
   page.instance.gameplayState.value = { role: 'main', config: gameplayConfig,
     state: { revision: 0, rage: 40, boss: { hp: 200 }, drop: null, inventory: { worldFragment: 1 } } };
-  page.instance.feedback.value = '获得 世界碎片 ×1'; page.instance.canPickup.value = true;
+  page.instance.feedback.value = 'Boss 已击败 · 小世界已开启';
   page.instance.gameplayError.value = '保存失败，请重试';
   page.instance.bossNearby.value = true;
   const tree = renderStory(proxyRefs(page.instance), []);
   const bottom = findNode(tree, node => node.props?.class === 'story-bottom-stack');
   assert.deepEqual(bottom.children.filter(node => node.type !== vue.Comment).map(node => node.props?.class),
     ['gameplay-error', 'story-feedback']);
-  const controls = findNode(tree, node => node.props?.class === 'action-tips');
-  assert.match(JSON.stringify(controls, (key, value) => key === 'ctx' ? undefined : value), /Space/);
-  // ui2.html 的四个 HUD 锚点：首领血条 / 生命栏 / 操作提示 / 战技群
+  assert.equal(findNode(tree, node => node.props?.class === 'action-tips'), null,
+    '左下角的按键提示条已删除');
+  // hud (1).html 的三个 HUD 锚点：首领血条 / 生命栏 / 战技群
   const vitals = findNode(tree, node => node.props?.class === 'vitals-container');
   const cluster = findNode(tree, node => node.props?.class === 'action-cluster');
   const spells = findNode(tree, node => node.props?.class === 'spells-group');
@@ -876,6 +904,12 @@ test('HUD pins the boss plate top-center, vitals bottom-left and skills bottom-r
   // 原型的四角落布局
   assert.equal(declarations('.boss-wrap').position, 'absolute');
   assert.equal(declarations('.boss-wrap').left, '50%');
+  // 小怪血条与 Boss 血条共用中心线，固定在中上部，不再贴右侧纵向排列。
+  assert.equal(declarations('.monster-bars').position, 'absolute');
+  assert.equal(declarations('.monster-bars').left, '50%');
+  assert.match(declarations('.monster-bars').transform, /translateX\(-50%\)/);
+  assert.equal(declarations('.monster-bars').right, undefined);
+  assert.match(declarations('.monster-bars').top, /^calc\(/);
   assert.equal(declarations('.vitals-container').position, 'absolute');
   assert.equal(declarations('.vitals-container')['pointer-events'], 'auto');
   assert.match(declarations('.vitals-container').left, /^clamp\(/);
@@ -994,9 +1028,11 @@ test('the bottom-centre channel is owned by one column, not two hand-tuned offse
   page.instance.feedback.value = '获得 世界碎片 ×1';
   page.instance.gameplayError.value = '保存失败，请重试';
   const tree = renderStory(proxyRefs(p()), []);
-  for (const panel of ['subworld-notice', 'world-indicator', 'action-tips', 'story-bottom-column'])
+  for (const panel of ['subworld-notice', 'world-indicator', 'story-bottom-column'])
     assert.ok(findNode(tree, item => item.props?.class === panel),
       `${panel} 应当渲染出来才能参与这项检查`);
+  assert.equal(findNode(tree, item => item.props?.class === 'action-tips'), null,
+    '左下角的按键提示条已删除');
   // 底部两个子项在同一个 flex 列里，不参加「谁都贴底」的竞争：都不能有自己的绝对锚点。
   const stack = styleDeclarations('.story-bottom-stack');
   for (const orphan of ['position', 'left', 'right', 'top', 'bottom', 'transform'])
@@ -1147,9 +1183,8 @@ test('the item bar sits above the bottom row instead of inside it', async t => {
   assert.equal(p().roleRef.value, 'child', '这道检查针对小世界：物品栏只在这里存在');
   const childTree = renderStory(proxyRefs(p()), []);
   assert.ok(has(childTree, 'hotbar'), '小世界里物品栏应当渲染出来');
-  assert.ok(has(childTree, 'action-tips'), '小世界里左下角的操作提示应当渲染出来');
-  // 物品栏（只在小世界）与战技群（只在主世界）互斥，所以这两块永远不会同屏；
-  // 真正会同屏的是物品栏与左下角的操作提示。
+  assert.equal(has(childTree, 'action-tips'), false, '左下角的按键提示条已删除');
+  // 物品栏（只在小世界）与战技群（只在主世界）互斥，所以这两块永远不会同屏。
   assert.equal(has(childTree, 'action-cluster'), false, '小世界不渲染战技群');
   assert.equal(p().roleRef.value === 'child' && has(mainTree, 'hotbar'), false, '主世界不渲染物品栏');
   // 单一通道：物品栏自己不得再长出一条贴底锚点，它只能坐在列的底边上。
@@ -1262,38 +1297,38 @@ test('inventory arrows reach slots, close, locked tooltip and enabled world butt
   assert.equal(f.route, '/'); assert.deepEqual(f.opens(), []);
 });
 
-test('the bag travel entry appears only after the world fragment is collected, then enters without a native open', async t => {
-  // 小世界一览本来只有一条（主世界）；拾得碎片后才多出可出入的第二条。
+test('the boss kill opens the small world and drops gear straight into the bag, without a pickup', async t => {
+  // 小世界一览本来只有一条（主世界）；Boss 倒下后，凭证与装备同时进背包，第二条随即出现。
   const state = { version: 2, revision: 0, rage: 20, boss: { hp: 20 }, drop: null, inventory: { worldFragment: 0 } };
-  let pageInstance = null;
   const f = await fixture(t, { gameplay: async request => {
     if (request.action !== 'load') {
       state.revision += 1;
-      if (request.action === 'pickupDrop') {
-        state.drop.collected = true; state.inventory.worldFragment += 1;
-      } else if (request.action === 'hitBoss' || request.hit) {
+      if (request.action === 'hitBoss' || request.hit) {
         state.boss.hp = Math.max(0, state.boss.hp - 100);
       }
-      if (state.boss.hp === 0 && !state.drop) {
-        // 红球落在玩家脚下，便于拾取
-        const player = pageInstance?.instance.camera.snapshotPlayer().position || [0, 0, 0];
-        state.drop = { id: 'story.boss.world-fragment', position: [player[0], 0, player[2]], collected: false };
+      // 击杀本身发放凭证、64 个方块与 64 个球：没有红球，也没有 pickupDrop。
+      if (state.boss.hp === 0) {
+        state.inventory.worldFragment = 1;
+        state.inventory.block = (state.inventory.block || 0) + 64;
+        state.inventory.ball = (state.inventory.ball || 0) + 64;
       }
     }
     return { status: 'ok', role: 'main', config: gameplayConfig, state: structuredClone(state) };
   } });
-  const page = f.mount(); pageInstance = page; await page.mount();
+  let page = f.mount(); await page.mount();
   const entry = () => findNode(renderStory(proxyRefs(page.instance), []),
     node => node.props?.['data-inventory-travel'] !== undefined);
+  const gearIds = () => page.instance.bag.cells.filter(item => item?.cat === 'equip').map(item => item.u);
+  const gearBefore = gearIds();
 
   clickWorld(page); await turn();
   assert.equal(f.opens().length, 0, 'a living Boss cannot travel');
-  assert.equal(entry(), null, 'no second world exists before the fragment is collected');
-
-  // 走到 Boss 身前击败它，再拾起红色球（世界碎片）：一览里随即辟出第二界
+  assert.equal(entry(), null, 'no second world exists before the Boss falls');
   page.instance.inventoryOpen.value = false;
-  // 攻击沿 facingYaw 判定，而玩家会转向自己走的方向，所以先在 x 上对准 Boss（它不在玩家
-  // 出生点正前方），再直着走进去，直到这一刀真的能落上——用的是页面攻击自己那条判据。
+
+  // 走到 Boss 身前击败它。攻击沿 facingYaw 判定，而玩家会转向自己走的方向，
+  // 所以先在 x 上对准 Boss（它不在玩家出生点正前方），再直着走进去，
+  // 直到这一刀真的能落上——用的是页面攻击自己那条判据。
   const bagBoss = STORY_CHARACTERS.find(character => character.role === 'boss');
   const bagBossActor = () => f.actors.get(MAIN).find(a => a.actor_guid === bagBoss.guid);
   await walkTo(page, f, 'KeyD', 100, () => page.instance.camera.snapshotPlayer().position[0]
@@ -1303,12 +1338,39 @@ test('the bag travel entry appears only after the world fragment is collected, t
   assert.equal(gameplayModule.canHitBoss(page.instance.camera.snapshotPlayer(),
     gameplayModule.worldBounds(bagBossActor()), gameplayConfig), true, 'the player can reach the Boss');
   await page.instance.gameplay.attack();
+  await turn();
   assert.equal(page.instance.gameplay.data.state.boss.hp, 0);
-  await page.instance.gameplay.pickup();
+  // 没有 F 拾取这一步：世界碎片在击杀确认时已经在背包里。
   assert.equal(page.instance.gameplayState.value.state.inventory.worldFragment, 1);
+  assert.equal(page.instance.gameplayState.value.state.drop, null);
+  assert.equal(page.instance.fKeyAction.value.kind, null, '红球已不存在，F 没有可拾取的目标');
+  assert.match(page.instance.feedback.value, /小世界已开启/);
+  // 背包里直接多出几件装备，且都是背包 UI 认得的兵甲定义。
+  const gearAfter = gearIds();
+  assert.equal(gearAfter.length, gearBefore.length + 5, 'Boss 倒下后背包应多出 5 件装备');
+  for (const id of ['boss-main', 'boss-helm', 'boss-chest', 'boss-legs', 'boss-boots'])
+    assert.ok(gearAfter.includes(id), `背包里应有 ${id}`);
+  // 同时多出 64 个方块：背包与物品栏读的是同一份存档计数。
+  const blockItem = page.instance.bagCellItems()[1];
+  assert.equal(blockItem.name, '方块');
+  assert.equal(blockItem.qty, 64);
+  assert.ok(blockItem.stats.some(([, value]) => value === '可以在小世界中使用'),
+    '鼠标悬停的浮签必须说明方块可以在小世界中使用');
+  assert.match(page.instance.bagTipFoot(blockItem), /可以在小世界中使用/);
+  const ballItem = page.instance.bagCellItems()[2];
+  assert.equal(ballItem.name, '球');
+  assert.equal(ballItem.qty, 64);
+  assert.equal(page.instance.hotbarSlots.value[0].id, 'block');
+  assert.equal(page.instance.hotbarSlots.value[0].owned, 64);
+  assert.equal(page.instance.hotbarSlots.value[1].id, 'ball');
+  assert.equal(page.instance.hotbarSlots.value[1].owned, 64);
+  // 再确认一次状态不会重复发奖。
+  await page.instance.gameplay.flush();
+  assert.equal(gearIds().length, gearAfter.length);
+
   page.instance.inventoryOpen.value = true;
   const node = entry();
-  assert.ok(node, 'the fragment opens a second small world');
+  assert.ok(node, 'the small world entry exists as soon as the Boss dies');
   assert.equal(node.props.disabled, false);
 
   // 点它＝原来的「小世界」按钮：走既有换场景流程，并收起行囊
@@ -1319,32 +1381,114 @@ test('the bag travel entry appears only after the world fragment is collected, t
   assert.deepEqual(f.opens(), [CHILD]);
 });
 
-// 回归：F 的提示与 F 的动作必须永远一致。碎片只掉在主世界，先知只站在小世界，
-// 所以两个世界各有一条 F；两条都必须「提示说什么，F 就做什么」。
-test('the F prompt and the F key agree: near the pickup it picks up, near the prophet it talks', async t => {
-  const state = { version: 2, revision: 0, rage: 20, boss: { hp: 0 },
-    drop: { id: 'story.boss.world-fragment', position: [0, 0, 0], collected: false },
-    inventory: { worldFragment: 0 } };
-  const f = await fixture(t, { gameplay: async (request, activePath) => {
-    if (request.action === 'pickupDrop') { state.drop.collected = true; state.inventory.worldFragment += 1; }
-    return { status: 'ok', role: activePath === MAIN ? 'main' : 'child',
-      config: gameplayConfig, state: structuredClone(state) };
-  } });
+test('only the nearest nearby monster shows one health bar at a fixed slot', async t => {
+  const cast = STORY_CHARACTERS.filter(character => isMonsterRole(character.role));
+  const monsters = Object.fromEntries(cast.map(character => [character.role, {
+    hp: gameplayConfig.monsters[character.role].hp }]));
+  const state = { version: 2, revision: 0, rage: 0, boss: { hp: 200 }, drop: null,
+    monsters, inventory: { worldFragment: 0, block: 0, ball: 0 } };
+  const f = await fixture(t, { gameplay: async (request, activePath) => ({ status: 'ok',
+    role: activePath === MAIN ? 'main' : 'child', config: gameplayConfig, state: structuredClone(state) }) });
+  let page = f.mount(); await page.mount(); await turn();
+  let p = () => page.instance;
+
+  // 出生点离所有怪物都很远：右侧什么都不显示。
+  p().updateProximity();
+  assert.equal(p().nearbyMonsterBar.value, null, '远离怪物时不显示血条');
+  assert.equal(findNode(renderStory(proxyRefs(p()), []),
+    node => node.props?.class === 'monster-bars'), null);
+
+  // Place the player beside the first monster, then reopen the page so the camera reads
+  // the saved actor position (a snapshotPlayer copy is not the live controller state).
+  const playerGuid = STORY_CHARACTERS.find(character => character.role === 'player').guid;
+  const playerActor = () => f.actors.get(MAIN).find(actor => actor.actor_guid === playerGuid);
+  playerActor().geometry.position = [cast[0].x, 0, cast[0].z];
+  page.unmount(); page = f.mount(); await page.mount(); await turn();
+  p = () => page.instance;
+  assert.equal(p().nearbyMonsterBar.value.id, cast[0].role);
+  assert.equal(p().nearbyMonsterBar.value.name, cast[0].name);
+  const shown = findNode(renderStory(proxyRefs(p()), []),
+    node => node.props?.['data-monster-role'] === cast[0].role);
+  assert.ok(shown, '靠近后必须渲染这一只的血条');
+
+  // 走到第二只旁边：还是同一个位置、同一个单条组件，只换内容。
+  playerActor().geometry.position = [cast[1].x, 0, cast[1].z];
+  page.unmount(); page = f.mount(); await page.mount(); await turn();
+  p = () => page.instance;
+  assert.equal(p().nearbyMonsterBar.value.id, cast[1].role);
+  assert.equal(p().nearbyMonsterBar.value.name, cast[1].name);
+
+  // 已死亡的怪物即使就在身边也不再显示。
+  p().gameplayState.value.state.monsters[cast[1].role].hp = 0;
+  p().updateProximity();
+  assert.equal(p().nearbyMonsterBar.value, null);
+});
+
+test('the small world item bar starts with the 64 blocks the boss dropped', async t => {
+  const state = { version: 2, revision: 0, rage: 0, boss: { hp: 0 }, drop: null,
+    inventory: { worldFragment: 1, block: 64 } };
+  const f = await fixture(t, { gameplay: async (request, activePath) => ({ status: 'ok',
+    role: activePath === MAIN ? 'main' : 'child', config: gameplayConfig, state: structuredClone(state) }) });
+  let page = f.mount(); await page.mount(); await turn();
+  clickWorld(page); await turn(); await turn();
+  page = f.mount(); await page.mount(); await turn(); await turn();
+  assert.equal(page.instance.roleRef.value, 'child');
+  assert.equal(page.instance.hotbarSlots.value[0].id, 'block');
+  assert.equal(page.instance.hotbarSlots.value[0].owned, 64);
+  assert.equal(page.instance.hotbarSlots.value[0].available, 64);
+  const blockItem = page.instance.bagCellItems()[1];
+  assert.equal(blockItem.name, '方块');
+  assert.equal(blockItem.qty, 64);
+});
+
+test('monster loot appears in the bag and can be selected in the small world item bar', async t => {
+  const state = { version: 2, revision: 0, rage: 0, boss: { hp: 0 }, drop: null,
+    monsters: Object.fromEntries(STORY_CHARACTERS.filter(character => isMonsterRole(character.role))
+      .map(character => [character.role, { hp: 0 }])),
+    inventory: { worldFragment: 1, block: 64, ball: 2,
+      'hunter-blade': 1, 'hunter-helm': 1, 'hunter-chest': 0, 'hunter-boots': 0 } };
+  const f = await fixture(t, { gameplay: async (request, activePath) => ({ status: 'ok',
+    role: activePath === MAIN ? 'main' : 'child', config: gameplayConfig, state: structuredClone(state) }) });
+  const page = f.mount(); await page.mount(); await turn();
+  const cells = page.instance.bagCellItems();
+  assert.equal(cells[1].name, '方块');
+  assert.equal(cells[1].qty, 64);
+  assert.equal(cells[2].name, '球');
+  assert.equal(cells[2].qty, 2);
+  assert.equal(page.instance.bagCellItems().some(item => item?.u === 'pillar'), false,
+    '石柱已全部换成球');
+  const gear = page.instance.bag.cells.filter(item => item?.u?.startsWith('hunter-'));
+  assert.deepEqual(gear.map(item => item.u).sort(), ['hunter-blade', 'hunter-helm']);
+  for (const item of cells.slice(1, 3))
+    assert.match(page.instance.bagTipFoot(item), /可以在小世界中使用/);
+  const slots = page.instance.hotbarSlots.value;
+  assert.deepEqual(slots.slice(0, 2).map(entry => [entry.id, entry.available]),
+    [['block', 64], ['ball', 2]]);
+});
+
+// 回归：F 的提示与 F 的动作必须永远一致。拾取红球已经删掉，主世界不再有 F；
+// 小世界里只剩先知与小世界的方块，提示说什么，F 就做什么。
+test('the F prompt and the F key agree: no pickup in the main world, the prophet still talks', async t => {
+  const state = { version: 2, revision: 0, rage: 20, boss: { hp: 0 }, drop: null,
+    inventory: { worldFragment: 1 } };
+  const f = await fixture(t, { gameplay: async (request, activePath) => ({
+    status: 'ok', role: activePath === MAIN ? 'main' : 'child',
+    config: gameplayConfig, state: structuredClone(state) }) });
   let page = f.mount(); await page.mount();
 
-  // 主世界：碎片就在玩家脚下（距离 0 ≤ pickupRange 2），先知根本不在场。
+  // 主世界：Boss 已死，世界里没有红球，先知也不在场，所以没有 F 动作。
   const p = () => page.instance;
   const hint = () => p().controlHints.value.find(([key]) => key === 'F')?.[1];
   p().updateProximity();
-  assert.equal(p().fKeyAction.value.kind, 'pickup');
-  assert.equal(hint(), '按 F 拾取');
+  assert.equal(p().fKeyAction.value.kind, null, '拾取已删，主世界没有可执行动作');
+  assert.equal(hint(), undefined, '没有动作就没有 F 提示');
+  assert.equal(p().gameplay.pickup, undefined, 'pickup 不再是玩法 API 的一部分');
   p().onKeyDown(event({ code: 'KeyF' }));
   await turn();
-  assert.equal(p().gameplayState.value.state.inventory.worldFragment, 1, '提示说拾取，F 就必须拾取');
+  assert.equal(p().gameplayState.value.state.inventory.worldFragment, 1, 'F 不会改动拾取进度');
   assert.equal(p().dialogueOpen.value, false, '主世界没有先知可谈');
 
-  // 小世界：碎片在主世界已经拾走，这里只可能谈先知。分两次进入同一份夹具：
-  // 先知远在天边时 F 什么都不做，把它挪到玩家身边后提示与 F 一起变成交谈。
+  // 小世界：先知远在天边时 F 什么都不做，把它挪到玩家身边后提示与 F 一起变成交谈。
   const character = role => STORY_CHARACTERS.find(item => item.role === role);
   const childActor = role => f.actors.get(CHILD).find(item => item.actor_guid === character(role).guid);
   const prophetAt = [...childActor('prophet').geometry.position];
@@ -1356,7 +1500,9 @@ test('the F prompt and the F key agree: near the pickup it picks up, near the pr
   assert.equal(p().dialogueOpen.value, false, '够不着就不能交谈');
 
   // 让玩家站到先知面前：页面在挂载时把场景快照读进 prophetActor，所以摆位要在挂载前完成。
-  childActor('player').geometry.position = [...prophetAt];
+  // 小世界里内部主角不显示，相机就是那双眼睛——F 量的是相机脚下的玩家位置
+  // （`viewportStoryWorldCamera.snapshotPlayer`），所以「站到先知面前」是把机位放过去。
+  f.poses.set(CHILD, pose([...prophetAt]));
   page.unmount(); await turn();
   page = f.mount(); await page.mount(); await turn(); await turn();
   assert.equal(p().fKeyAction.value.kind, 'prophet', '先知就在身上，裁决必须选它');
@@ -1368,12 +1514,9 @@ test('the F prompt and the F key agree: near the pickup it picks up, near the pr
   assert.equal(p().gameplayState.value.state.inventory.worldFragment, 1, '交谈不会顺手改动拾取进度');
 });
 
-// 回归（拾取失效）：F 的距离与射程必须和玩法模块自己那套逐字对齐。
-// 上一条用例手写的 state 少了一整块盘上字段（operations / legacyRevision / inventory.block），
-// 于是「页面的 state 是不是后端真的那份」从来没被验过：真存档多一个字段、少一个 position，
-// 页面就会算出 Infinity 距离，提示不出现、F 静默什么都不做——玩家看到的就是「不能拾取物体」。
-// 这里把 game/runtime/story_gameplay.py 的 initial_state() / CONFIG 原样取来当夹具，
-// 再验同一条规则的两侧：距离用 state.drop.position，射程用 config.pickupRange。
+// 真实存档的形状仍然由 game/runtime/story_gameplay.py 的 initial_state() / CONFIG 决定。
+// 这里把两边原样取来，钉住「击杀即开界」这条新规则：没有红球、没有 pickupRange，
+// 页面因此也不该再出现任何拾取提示。
 function readPythonGameplay(t) {
   const python = process.env.CORONA_PYTHON || 'conda';
   const args = process.env.CORONA_PYTHON ? ['-c'] : ['run', '-n', 'coronaengine-dev', 'python', '-c'];
@@ -1390,97 +1533,63 @@ function readPythonGameplay(t) {
     return null;
   }
 }
-test('the real save shape from story_gameplay.py picks up inside config.pickupRange and refuses outside it', async t => {
+test('the real save shape starts with no red ball and no pickup range', async t => {
   const { config: realConfig, state: realState } = readPythonGameplay(t);
   if (!realConfig) return;
   // 盘上的初始存档形状：这些字段一个都不能少，否则页面拿到的不是后端真的那份 state。
   assert.deepEqual(Object.keys(realState).sort(),
-    ['boss', 'drop', 'inventory', 'legacyRevision', 'operations', 'rage', 'revision', 'version'],
+    ['boss', 'drop', 'equipped', 'inventory', 'legacyRevision', 'monsters', 'operations', 'rage',
+      'revision', 'version'],
     '夹具必须就是 story_gameplay.initial_state() 的真实字段');
-  assert.equal(realConfig.pickupRange, 2, '射程来自后端的 CONFIG，不是前端自己写的数');
+  assert.equal(realState.drop, null, '新存档不再预置红球');
+  assert.equal(realState.inventory.worldFragment, 0);
+  assert.equal(realState.inventory.block, 0, '方块是击杀奖励，开局背包里没有');
+  assert.deepEqual(Object.keys(realState.monsters).sort(), Object.keys(realConfig.monsters).sort(),
+    '每只普通怪物都有自己的血量');
+  assert.equal('pickupRange' in realConfig, false, '拾取射程已随拾取步骤一起删除');
 
-  // 真存档的红球：position 是 [x, y, z]，收集标记是 collected；用后端自己的射程把它放在边界内。
-  const state = structuredClone(realState);
-  const range = realConfig.pickupRange;
-  state.boss.hp = 0;
-  state.drop = { id: 'story.boss.world-fragment', position: [range - 1, 0, 0], collected: false };
-  const f = await fixture(t, { gameplay: async (request, activePath) => {
-    if (request.action === 'pickupDrop') { state.drop.collected = true; state.inventory.worldFragment += 1; }
-    return { status: 'ok', role: activePath === MAIN ? 'main' : 'child',
-      config: realConfig, state: structuredClone(state) };
-  } });
-  const page = f.mount(); await page.mount(); await turn();
-  const p = () => page.instance;
-  const hint = () => p().controlHints.value.find(([key]) => key === 'F')?.[1];
-  p().camera.snapshotPlayer().position = [0, 0, 0];
-  p().updateProximity();
-
-  assert.equal(p().fKeyAction.value.kind, 'pickup', '真实 state + 真实射程：边界内的红球必须可选');
-  assert.equal(hint(), '按 F 拾取');
-  p().onKeyDown(event({ code: 'KeyF' }));
-  await turn();
-  assert.equal(p().gameplayState.value.state.inventory.worldFragment, 1, '提示说拾取，F 就必须真的提交 pickupDrop');
-  assert.equal(p().gameplayState.value.state.drop.collected, true);
-});
-
-// 反向：超出射程一样要有提示与动作都要消失（这正是页面算距离、算射程两件事同时错才会漏掉的边界）。
-test('a drop outside the real pickupRange offers neither the prompt nor the F action', async t => {
-  const { config: realConfig, state: realState } = readPythonGameplay(t);
-  if (!realConfig) return;
-  const state = structuredClone(realState);
-  state.boss.hp = 0;
-  state.drop = { id: 'story.boss.world-fragment', position: [realConfig.pickupRange + 1, 0, 0], collected: false };
   const f = await fixture(t, { gameplay: async (request, activePath) => ({ status: 'ok',
-    role: activePath === MAIN ? 'main' : 'child', config: realConfig, state: structuredClone(state) }) });
+    role: activePath === MAIN ? 'main' : 'child', config: realConfig, state: structuredClone(realState) }) });
   const page = f.mount(); await page.mount(); await turn();
   const p = () => page.instance;
-  p().camera.snapshotPlayer().position = [0, 0, 0];
   p().updateProximity();
-
-  assert.equal(p().fKeyAction.value.kind, null, '射程外的红球不是候选');
+  assert.equal(p().fKeyAction.value.kind, null, '主世界没有可拾取的目标');
   assert.equal(p().controlHints.value.find(([key]) => key === 'F'), undefined, '没有动作就没有 F 提示');
-  p().onKeyDown(event({ code: 'KeyF' }));
-  await turn();
-  assert.equal(p().gameplayState.value.state.inventory.worldFragment, 0, '够不着就不许拾取');
 });
 
-// 端到端：这就是玩家真实的拾取动作序列（与盘上 story_world_*\.game\story-gameplay.json 一致：
-// Boss 死在 [0,0,12]，红球落在同一处，玩家站在 z≈11.6）。走到球上，提示必须变成拾取，F 必须真的拾起来。
-test('walking onto the drop the dead boss left turns the F prompt into a real pickup', async t => {
+// 端到端：Boss 死在玩家面前时，凭证直接进入真实存档，世界与背包同一帧更新，
+// 场景里不再留下任何红球 actor。
+test('the killing blow grants the fragment and gear immediately, with no red ball left behind', async t => {
   const { config: realConfig, state: realState } = readPythonGameplay(t);
   if (!realConfig) return;
-  // 红球落在龙倒下的地方：这里用 Boss 自己的出生点，而不是再抄一份位置。
   const boss = STORY_CHARACTERS.find(item => item.role === 'boss');
-  const bossPosition = [boss.x, 0, boss.z];
   const state = structuredClone(realState);
   const f = await fixture(t, { gameplay: async (request, activePath) => {
     if (request.action === 'hitBoss' || request.hit) {
       state.revision += 1;
       state.boss.hp = Math.max(0, state.boss.hp - realConfig.damage);
+      // 击杀即发奖：没有掉落物，也没有 pickupDrop 操作。
       if (state.boss.hp === 0) {
-        state.drop = { id: 'story.boss.world-fragment', position: [...bossPosition], collected: false };
+        state.inventory.worldFragment = 1;
+        state.inventory.block = (state.inventory.block || 0) + 64;
+        state.inventory.ball = (state.inventory.ball || 0) + 64;
+        state.drop = null;
       }
-    } else if (request.action === 'pickupDrop') {
-      state.revision += 1;
-      state.drop.collected = true; state.inventory.worldFragment += 1;
     }
     return { status: 'ok', role: activePath === MAIN ? 'main' : 'child',
       config: realConfig, state: structuredClone(state) };
   } });
   const page = f.mount(); await page.mount(); await turn();
   const p = () => page.instance;
-  const hint = () => p().controlHints.value.find(([key]) => key === 'F')?.[1];
+  const gearBefore = p().bag.cells.filter(item => item?.cat === 'equip').length;
 
-  // Boss 还活着：没有红球，就没有拾取这一行。
-  assert.equal(hint(), undefined, 'Boss 未死时不该出现拾取提示');
-
-  // 走到 Boss 面前把它打死：红球落在 Boss 倒下的位置。攻击受冷却限制，
-  // 因此把玩法模块读的那个时钟（performance.now）接到本用例手里，而不是忙等。
+  // 走到 Boss 面前把它打死。攻击受冷却限制，因此把玩法模块读的那个时钟
+  // （performance.now）接到本用例手里，而不是忙等。
   let clock = 0;
   t.mock.method(performance, 'now', () => clock);
-  // 走到 Boss 面前（用真实的按键移动路径，而不是改一份快照副本）。攻击沿 facingYaw 判定，
-  // 所以先在 x 上对准 Boss（它不在玩家出生点的正前方），再往里走到模型边缘之内——
-  // `meleeRange` 量的是到包围盒的距离，小世界里这个夹具的包围盒只有 0.214 m 深。
+  // 攻击沿 facingYaw 判定，所以先在 x 上对准 Boss（它不在玩家出生点的正前方），
+  // 再往里走到模型边缘之内——`meleeRange` 量的是到包围盒的距离，
+  // 这个夹具的包围盒只有 0.214 m 深。
   p().onKeyDown(event({ code: 'KeyD', key: 'd' }));
   for (let i = 0; i < 200 && p().camera.snapshotPlayer().position[0] < boss.x - 0.1; i++) f.step(50);
   p().camera.keyUp(event({ code: 'KeyD', key: 'd' }));
@@ -1490,17 +1599,23 @@ test('walking onto the drop the dead boss left turns the F prompt into a real pi
   assert.ok(p().camera.snapshotPlayer().position[2] >= boss.z - 0.5, '玩家必须能走到 Boss 脚下');
   const swings = Math.ceil(realConfig.bossHp / realConfig.damage);
   for (let i = 0; i < swings; i++) { clock += realConfig.cooldownMs; await p().gameplay.attack(); await turn(); }
-  assert.equal(state.boss.hp, 0, '打满次数后 Boss 必须倒下');
-  assert.ok(state.drop && state.drop.collected === false, 'Boss 死后必须留下未拾取的红球');
 
-  // 玩家就站在红球上：提示与 F 都必须是拾取。
-  p().updateProximity();
-  assert.equal(p().fKeyAction.value.kind, 'pickup', '站在红球上，F 的裁决必须是拾取');
-  assert.equal(hint(), '按 F 拾取', '站在红球上必须给出拾取提示');
-  p().onKeyDown(event({ code: 'KeyF' }));
-  await turn();
-  assert.equal(p().gameplayState.value.state.inventory.worldFragment, 1, '按 F 必须真的把红球捡起来');
-  assert.equal(p().gameplayState.value.state.drop.collected, true);
+  assert.equal(state.boss.hp, 0, '打满次数后 Boss 必须倒下');
+  assert.equal(state.drop, null, '不再留下未拾取的红球');
+  assert.equal(state.inventory.worldFragment, 1, '击杀确认时凭证已经在背包里');
+  assert.equal(state.inventory.block, 64, '击杀确认时 64 个方块已经在背包里');
+  assert.equal(state.inventory.ball, 64, '击杀确认时 64 个球已经在背包里');
+  assert.equal(p().gameplayState.value.state.inventory.worldFragment, 1);
+  assert.equal(p().bagCellItems()[1].qty, 64);
+  assert.equal(p().bagCellItems()[2].qty, 64);
+  assert.ok(p().bagCellItems()[1].stats.some(([, value]) => value === '可以在小世界中使用'));
+  assert.match(p().feedback.value, /小世界已开启/);
+  // 场景里没有红球 actor：奖励不再经过世界。
+  assert.equal(f.actors.get(MAIN).find(actor => actor.actor_guid === gameplayModule.FRAGMENT_GUID), undefined,
+    '主世界不再出现世界碎片模型');
+  // 背包直接多出几件兵甲，并且不是靠 F 拾取得来的。
+  assert.equal(p().bag.cells.filter(item => item?.cat === 'equip').length, gearBefore + 5);
+  assert.equal(p().fKeyAction.value.kind, null, 'F 没有可拾取的目标');
 });
 
 // 回归（Bug 1）：小世界的陈列是盘上的权威数据，进入世界时必须读回来。它一度一份也没读回来
@@ -1549,7 +1664,7 @@ test('leaving and re-entering the small world shows the saved block count, not t
   assert.deepEqual(countText(), ['61']);
 });
 
-// 回归（小世界里无法取回方块）：小世界没有红球可用，唯一能被 F 拿回来的东西就是玩家自己
+// 回归（小世界里无法取回方块）：小世界里唯一能被 F 拿回来的东西就是玩家自己
 // 放下的方块——取回就是摆放的逆操作。这里走完整的玩家动作序列：进小世界、按 B 在身前放一块、
 // 提示变成「按 F 取回方块」、按 F 之后布局少一项、物品栏的可用数回到摆放前，而且场景里的 actor
 // 是由既有的陈列 reconcile 路径退场的（没有第二条撤下路径）。
@@ -1861,7 +1976,7 @@ test('repairing a stale generation in place would leave the old asset on the act
  */
 function rampGrid(zHalf = 80) {
   // z 方向铺得够宽（±80 模型米 ≈ ±17 世界米），主世界的 Boss（z = 5.5）才落在网内而不是被夹到边上；
-  // 高度只随 x 变化，所以每一行的值相同。需要覆盖更远的 z 时用参数（例如红球落点的用例）。
+  // 高度只随 x 变化，所以每一行的值相同。需要覆盖更远的 z 时用参数（例如摆放物落点的用例）。
   const bounds = [-10, 10, -zHalf, zHalf], res = 4;
   const originY = storyMapModule.mapOriginTransform().position[1];
   const centreY = storyMapModule.MAP_PLACEMENT.centreY;
@@ -1883,169 +1998,19 @@ function rampGrid(zHalf = 80) {
 // 页面根本没读 `story-map-height.json`（loader 无人调用），以及读到了也没交给控制器
 // （createStoryCameraController 不转发 getGroundY）。因此这里断言的是端到端的结果：
 // 玩家的 y 必须等于 heightAt(x, z) + 该模型的原点离地高度，而不是固定地板。
-test('the player walks on the baked map grid once it is loaded', async t => {
-  const f = await fixture(t, {
-    mapHeight: async () => storyMapHeightModule.setHeightGrid(rampGrid()),
-    // 主世界且 Boss 还活着：Boss 与玩家同一次进入被摆到地面上（血条为 0 时不会摆它）。
-    gameplay: () => ({ status: 'ok', role: 'main',
-      state: { version: 2, revision: 0, rage: 0, boss: { hp: 200 }, drop: null, inventory: { worldFragment: 0 } },
-      config: gameplayConfig }),
-  });
-  const page = f.mount(); await page.mount();
-  // 1) 页面真的去读部署包里那一份数据（相对 dist/index.html 往上三级）。
-  const read = f.calls.find(call => call[0] === 'mapHeight');
-  assert.ok(read, '进入世界必须读入地图高度网格');
-  assert.match(read[1], /^file:/, '页面在 file:// 下读盘（fetch 读不了 file:，走 XHR）');
-  assert.match(read[1], /\/game\/data\/story-map-height\.json$/);
-  assert.equal(storyMapHeightModule.hasHeightGrid(), true, '读到的网格必须真的装进模块');
-
-  // 2) 玩家的地面跟着网格：1 m 的地面 + 模型原点离地 0.9 m ≈ 1.9 m，而不是 0.9 m 的固定地板。
-  const localAabb = f.actors.get(MAIN).find(a => a.actor_guid === STORY_CHARACTERS[0].guid).local_aabb;
-  const flat = characterTransform(STORY_CHARACTERS[0], localAabb).position[1];
-  const player = f.actors.get(MAIN).find(a => a.actor_guid === STORY_CHARACTERS[0].guid);
-  const standing = page.instance.camera.snapshotPlayer();
-  assert.ok(Math.abs(player.geometry.position[1] - (1 + flat)) < 0.02,
-    `玩家的脚必须在网格给出的地面上（期望 ${1 + flat}，实际 ${player.geometry.position[1]}）`);
-  assert.ok(Math.abs(standing.position[1] - (1 + flat)) < 0.02);
-  assert.ok(Math.abs(standing.position[1] - flat) > 0.5, '不是固定地板：固定地板会低整整 1 m');
-
-  // 3) 走动时高度跟着地形变：yaw = 0 下 D 走向 +x，而网格沿 +x 上坡。
-  page.instance.onKeyDown(event({ code: 'KeyD' }));
-  f.step(50);
-  const walked = page.instance.camera.snapshotPlayer();
-  assert.ok(walked.position[0] > standing.position[0], 'D 必须真的往前走了');
-  assert.ok(walked.position[1] > standing.position[1], '上坡时玩家必须跟着地面升高');
-  assert.ok(Math.abs(walked.position[1]
-    - (storyMapHeightModule.heightAt(walked.position[0], walked.position[2]) + flat)) < 1e-9,
-  'player.position[1] 就是 heightAt(x, z) 加上原点离地高度');
-  page.instance.camera.keyUp(event({ code: 'KeyD' }));
-
-  // 4) 同一次进入里摆下的角色也吃同一份地面（Boss 在这里被放在 z = 5.5 的空地上）。
-  const boss = f.actors.get(MAIN).find(a => a.actor_guid === STORY_CHARACTERS[1].guid);
-  const bossFlat = characterTransform(STORY_CHARACTERS[1], boss.local_aabb).position[1];
-  const ground = storyMapHeightModule.heightAt(boss.geometry.position[0], boss.geometry.position[2]);
-  assert.ok(Math.abs(boss.geometry.position[1] - (ground + bossFlat)) < 1e-9,
-    `Boss 的脚也要落在网格上（期望 ${ground + bossFlat}，实际 ${boss.geometry.position[1]}）`);
-});
-
-// 数据文件读不到不是进入世界的失败：地面退回原来的固定地板，其他一切照旧。
-test('a missing height grid keeps the constant floor and never blocks the world', async t => {
-  const f = await fixture(t, { mapHeight: async () => { throw new Error('读取失败（404）'); } });
-  const page = f.mount(); await page.mount();
-  assert.ok(f.calls.some(call => call[0] === 'mapHeight'), '页面必须尝试读取网格');
-  assert.deepEqual(f.alerts, [], '网格读不到不能阻止进入世界');
-  assert.match(page.instance.actionFeedback.value, /地图高度网格未能读取/);
-  assert.equal(storyMapHeightModule.hasHeightGrid(), false);
-
-  const player = f.actors.get(MAIN).find(a => a.actor_guid === STORY_CHARACTERS[0].guid);
-  const flat = characterTransform(STORY_CHARACTERS[0], player.local_aabb).position[1];
-  assert.ok(Math.abs(player.geometry.position[1] - flat) < 1e-9, '没有网格就还是固定地板');
-  assert.ok(Math.abs(page.instance.camera.snapshotPlayer().position[1] - flat) < 1e-9);
-  page.instance.onKeyDown(event({ code: 'KeyD' }));
-  f.step(50);
-  const walked = page.instance.camera.snapshotPlayer();
-  assert.ok(walked.position[0] > 0, '没有网格也要走');
-  assert.ok(Math.abs(walked.position[1] - flat) < 1e-9, '固定地板下走动不改高度');
-  page.instance.camera.keyUp(event({ code: 'KeyD' }));
-});
-
-// 物体摆放也必须站在地面上：布局里存的 y 是**落点那一格**的地面线（和角色同一个来源），
-// 而不是把玩家自己的 y 抄下来——玩家站在上坡上时，抄下来就会浮在地面上方。
-test('a placed block stores the ground height at its own spot, not the player height', async t => {
-  let layout = { version: 1, placements: [] };
-  const saved = [];
-  const state = { version: 2, revision: 0, rage: 0, boss: { hp: 0 }, drop: null,
-    inventory: { worldFragment: 1, block: 4 } };
-  const f = await fixture(t, {
-    documents: { loadPlacements: layout },
-    mapHeight: async () => storyMapHeightModule.setHeightGrid(rampGrid()),
-    gameplay: async (request, activePath) => {
-      if (request.action === 'savePlacements') {
-        saved.push(structuredClone(request.placements));
-        layout = { version: 1, placements: structuredClone(request.placements) };
-        return { status: 'ok', role: 'child', state: structuredClone(layout) };
-      }
-      return { status: 'ok', role: activePath === MAIN ? 'main' : 'child',
-        config: gameplayConfig, state: structuredClone(state) };
-    },
-  });
-  let page = f.mount(); await page.mount(); await turn();
-  clickWorld(page); await turn(); await turn();
-  page = f.mount(); await page.mount(); await turn(); await turn();
-  const p = () => page.instance;
-  assert.equal(p().roleRef.value, 'child');
-
-  // 先算出「方块自己那一格」的地面，再去摆放：断言不抄模块的换算，用的是被断言的同一个函数。
-  const player = p().camera.snapshotPlayer();
-  const x = player.position[0] + Math.sin(player.facingYaw) * storyPropsModule.PLACEMENT_DISTANCE;
-  const z = player.position[2] + Math.cos(player.facingYaw) * storyPropsModule.PLACEMENT_DISTANCE;
-  const ground = storyMapHeightModule.heightAt(x, z);
-  assert.ok(Number.isFinite(ground), '这条用例必须先真的装上网格');
-
-  p().onKeyDown(event({ code: 'KeyB', key: 'b' }));
-  await turn(); await turn(); await turn();
-  assert.equal(p().gameplayError.value, '', '摆放不能报错');
-  const entry = saved.at(-1)?.[0];
-  assert.ok(entry, '摆放必须先落盘');
-  assert.equal(entry.propId, 'block');
-  assert.ok(Math.abs(entry.position[0] - x) < 1e-9, '落点的 x 仍是玩家前方 2 米');
-  assert.ok(Math.abs(entry.position[2] - z) < 1e-9, '落点的 z 仍是玩家前方 2 米');
-  assert.ok(Math.abs(entry.position[1] - ground) < 1e-9,
-    `存下来的 y 必须是落点的地面高度（期望 ${ground}，实际 ${entry.position[1]}）`);
-  assert.ok(Math.abs(entry.position[1] - player.position[1]) > 0.5,
-    '与「抄玩家自己的 y」必须差得可观测，否则这条断言是空转的');
-});
-
-// 没有网格时退回旧常量：方块仍然落在玩家所在的那条地面上（固定地板），一步都不许变。
-test('without a grid a placed block keeps the old constant height', async t => {
-  let layout = { version: 1, placements: [] };
-  const saved = [];
-  const state = { version: 2, revision: 0, rage: 0, boss: { hp: 0 }, drop: null,
-    inventory: { worldFragment: 1, block: 4 } };
-  const f = await fixture(t, {
-    documents: { loadPlacements: layout },
-    gameplay: async (request, activePath) => {
-      if (request.action === 'savePlacements') {
-        saved.push(structuredClone(request.placements));
-        layout = { version: 1, placements: structuredClone(request.placements) };
-        return { status: 'ok', role: 'child', state: structuredClone(layout) };
-      }
-      return { status: 'ok', role: activePath === MAIN ? 'main' : 'child',
-        config: gameplayConfig, state: structuredClone(state) };
-    },
-  });
-  let page = f.mount(); await page.mount(); await turn();
-  clickWorld(page); await turn(); await turn();
-  page = f.mount(); await page.mount(); await turn(); await turn();
-  const p = () => page.instance;
-  assert.equal(storyMapHeightModule.hasHeightGrid(), false, '这条用例必须没有网格');
-
-  const player = p().camera.snapshotPlayer();
-  p().onKeyDown(event({ code: 'KeyB', key: 'b' }));
-  await turn(); await turn(); await turn();
-  assert.equal(p().gameplayError.value, '', '摆放不能报错');
-  const entry = saved.at(-1)?.[0];
-  assert.ok(entry, '摆放必须先落盘');
-  assert.ok(Math.abs(entry.position[1] - player.position[1]) < 1e-9,
-    `没有网格时 y 必须还是旧的常量（期望 ${player.position[1]}，实际 ${entry.position[1]}）`);
-});
-
-// 掉落的红球也必须落在它自己那一格的地面上：这里走完整的主世界路径（走到龙面前打死它），
-// 断言碎裂后碎片 actor 的落点就是 heightAt(落点)，而不是写死的 0 或玩家/龙的原点。
-test('the dropped fragment rests on the grid, not on the constant floor', async t => {
+test('a boss kill never leaves a red ball on the terrain', async t => {
   const { config: realConfig, state: realState } = readPythonGameplay(t);
   if (!realConfig) return;
   const boss = STORY_CHARACTERS.find(item => item.role === 'boss');
   const state = structuredClone(realState);
   const f = await fixture(t, {
-    // z 也要铺够宽：龙在 z = 5.5，网格夹边会让断言量到边缘值而不是它脚下的地面。
-    mapHeight: async () => storyMapHeightModule.setHeightGrid(rampGrid(160)),
     gameplay: async (request, activePath) => {
       if (request.action === 'hitBoss' || request.hit) {
         state.revision += 1;
         state.boss.hp = Math.max(0, state.boss.hp - realConfig.damage);
         if (state.boss.hp === 0) {
-          state.drop = { id: 'story.boss.world-fragment', position: [...request.bossPosition], collected: false };
+          state.inventory.worldFragment = 1;
+          state.drop = null;
         }
       }
       return { status: 'ok', role: activePath === MAIN ? 'main' : 'child',
@@ -2055,7 +2020,6 @@ test('the dropped fragment rests on the grid, not on the constant floor', async 
   const page = f.mount(); await page.mount(); await turn();
   const p = () => page.instance;
   assert.equal(p().roleRef.value, 'main');
-  assert.ok(f.calls.some(call => call[0] === 'mapHeight'), '主世界也必须读入高度网格');
 
   let clock = 0;
   t.mock.method(performance, 'now', () => clock);
@@ -2068,18 +2032,386 @@ test('the dropped fragment rests on the grid, not on the constant floor', async 
   const swings = Math.ceil(realConfig.bossHp / realConfig.damage);
   for (let i = 0; i < swings; i++) { clock += realConfig.cooldownMs; await p().gameplay.attack(); await turn(); }
   assert.equal(state.boss.hp, 0, '打满次数后 Boss 必须倒下');
-  assert.ok(state.drop && state.drop.collected === false, 'Boss 死后必须留下未拾取的红球');
+  assert.equal(state.drop, null, '击杀不再生成红球');
+  assert.equal(state.inventory.worldFragment, 1, '凭证直接进入背包');
+  assert.equal(f.actors.get(MAIN).find(actor => actor.actor_guid === gameplayModule.FRAGMENT_GUID),
+    undefined, '场景里没有世界碎片模型可落在地面上');
+});
 
-  const ground = storyMapHeightModule.heightAt(state.drop.position[0], state.drop.position[2]);
-  assert.ok(Number.isFinite(ground), '这条用例必须先真的装上网格');
-  assert.ok(Math.abs(state.drop.position[1] - ground) < 1e-9,
-    `掉落的 y 必须是落点的地面高度（期望 ${ground}，实际 ${state.drop.position[1]}）`);
-  assert.ok(Math.abs(state.drop.position[1]) > 0.5, '与写死的 0 必须差得可观测');
+/* ============================================================
+   小世界视角：不显示内部主角、自由视角 + 俯视视角、Ctrl+滚轮缩放、碎片不影响先知
+   ============================================================ */
+// 进入小世界的既有路径：先切世界，再按世界重新挂载页面。
+async function enterChild(f, page) {
+  clickWorld(page); await turn(); await turn();
+  page = f.mount(); await page.mount(); await turn(); await turn();
+  return page;
+}
+const SHOWN = { version: 2, revision: 0, rage: 0, boss: { hp: 0 }, drop: null,
+  inventory: { worldFragment: 1, block: 64 } };
+const childGameplay = () => async (request, activePath) => ({ status: 'ok',
+  role: activePath === MAIN ? 'main' : 'child', config: gameplayConfig, state: structuredClone(SHOWN) });
+/**
+ * 小世界的玩法桩，但会真的回写陈列：摆放（B）走的是 `savePlacements`，一个只会回 ok 的桩会让
+ * 页面报「保存小世界陈列失败」，于是场景里不会出现方块 actor。
+ */
+function placementAware() {
+  let layout = { version: 1, placements: [] };
+  return async (request, activePath) => {
+    if (request.action === 'savePlacements') {
+      layout = { version: 1, placements: structuredClone(request.placements) };
+      return { status: 'ok', role: 'child', state: structuredClone(layout) };
+    }
+    return { status: 'ok', role: activePath === MAIN ? 'main' : 'child',
+      config: gameplayConfig, state: structuredClone(SHOWN) };
+  };
+}
+// 渲染后的提示行文本：把 vnode 里的字符串全部拼起来，再断言「视角 · …」那一行。
+function renderedText(instance) {
+  const texts = [];
+  const walk = node => {
+    if (Array.isArray(node)) { for (const child of node) walk(child); return; }
+    if (!node || typeof node !== 'object') return;
+    if (typeof node.children === 'string') { texts.push(node.children); return; }
+    for (const child of Array.isArray(node.children) ? node.children : []) walk(child);
+  };
+  walk(renderStory(proxyRefs(instance), []));
+  return texts.join('');
+}
 
-  // 碎片模型自己也吃这条地面：地板被抹平时红球会各沉一半进退。
-  const fragment = f.actors.get(MAIN).find(actor => actor.actor_guid === gameplayModule.FRAGMENT_GUID);
-  assert.ok(fragment, '主世界必须真的摆出碎片');
-  const flat = characterTransform(gameplayModule.FRAGMENT, fragment.local_aabb).position[1];
-  assert.ok(Math.abs(fragment.geometry.position[1] - (ground + flat)) < 1e-9,
-    `红球必须站在网格给出的地面上：期望 ${ground + flat}，实际 ${fragment.geometry.position[1]}`);
+test('小世界里内部主角不渲染，主世界里照常显示', async t => {
+  const f = await fixture(t, { gameplay: childGameplay() });
+  const playerOf = path => f.actors.get(path)
+    .find(actor => actor.actor_guid === STORY_CHARACTERS[0].guid);
+  // 可见性由引擎持久化：普通进入世界一个字节都不写，只有真正要翻转的那一次才写。
+  const visibilityWrites = path => f.calls.filter(call => call[0] === 'state'
+    && call[1] === path && call[2] === STORY_CHARACTERS[0].guid);
+  let page = f.mount(); await page.mount(); await turn();
+  assert.equal(playerOf(MAIN).visible, true, '主世界的玩家模型必须看得见');
+  assert.deepEqual(visibilityWrites(MAIN), [], '主世界的可见性本来就对，不许写');
+
+  page = await enterChild(f, page);
+  const player = playerOf(CHILD);
+  assert.ok(player, '玩家 actor 仍然存在：存档、F 的射程、摆放都读它');
+  assert.equal(player.visible, false, '小世界里内部主角不显示——相机就是它的眼睛');
+  assert.equal(visibilityWrites(CHILD).length, 1, '隐藏只写一次');
+
+  // 再进一次小世界：已经隐藏了，于是同一次进入不再写可见性（引擎记住了）。
+  clickWorld(page); await turn(); await turn();
+  page = f.mount(); await page.mount(); await turn(); await turn();
+  page = await enterChild(f, page);
+  assert.equal(playerOf(CHILD).visible, false);
+  assert.equal(visibilityWrites(CHILD).length, 1, '第二次进入不再重复写');
+
+  // 非空证明的另一半：回到主世界，它必须重新可见（隐藏只属于小世界）。
+  clickWorld(page); await turn(); await turn();
+  page = f.mount(); await page.mount(); await turn(); await turn();
+  assert.equal(playerOf(MAIN).visible, true, '主世界不许被小世界的隐藏连累');
+});
+
+test('小世界的 V 在自由视角与俯视视角之间切换，并且熬得住一次重新渲染', async t => {
+  const f = await fixture(t, { gameplay: childGameplay() });
+  let page = f.mount(); await page.mount(); await turn();
+  const p = () => page.instance;
+  // 主世界仍然是原来的三档，且名字没被小世界的表覆盖。
+  const mainLabels = [];
+  for (let i = 0; i < 3; i++) { p().onKeyDown(event({ code: 'KeyV', key: 'v' })); mainLabels.push(p().viewLabel()); }
+  assert.deepEqual(mainLabels, ['降临视角', '俯视建筑', '第三人称']);
+
+  page = await enterChild(f, page);
+  assert.equal(p().camera.viewMode(), 'free', '进入小世界从自由视角开始');
+  assert.equal(p().viewLabel(), '自由视角');
+  p().onKeyDown(event({ code: 'KeyV', key: 'v' }));
+  assert.equal(p().camera.viewMode(), 'top');
+  assert.deepEqual(p().camera.snapshotPose().camera.forward, [0, -1, 0], '俯视就是正下方');
+  assert.equal(p().viewLabel(), '俯视视角');
+  // 「重新渲染」：真的再渲染一次组件，相机不能回到自由视角。
+  await nextTick();
+  assert.equal(p().viewLabel(), '俯视视角');
+  assert.equal(p().camera.viewMode(), 'top');
+  assert.equal(p().camera.snapshotPose().camera.forward[1], -1);
+  // 再按一次 V 回到自由视角：小世界只有这两档，没有第三人称/降临。
+  p().onKeyDown(event({ code: 'KeyV', key: 'v' }));
+  assert.equal(p().camera.viewMode(), 'free');
+  assert.equal(p().viewLabel(), '自由视角');
+  assert.doesNotMatch(renderedText(p()), /第三人称/);
+});
+
+test('Ctrl+滚轮缩放，普通滚轮仍然换物品栏格子', async t => {
+  const f = await fixture(t, { gameplay: childGameplay() });
+  let page = f.mount(); await page.mount(); await turn();
+  const p = () => page.instance;
+  page = await enterChild(f, page);
+  const fov = () => p().camera.snapshotPose().camera.fov;
+  const opened = fov();
+  const slot = p().hotbarIndex.value;
+  p().onSurfaceWheel(event({ deltaY: -120 }));
+  assert.notEqual(p().hotbarIndex.value, slot, '普通滚轮还是换格');
+  assert.equal(fov(), opened, '普通滚轮不缩放相机');
+
+  const slotNow = p().hotbarIndex.value;
+  p().onSurfaceWheel(event({ deltaY: -120, ctrlKey: true }));
+  assert.equal(p().hotbarIndex.value, slotNow, 'Ctrl+滚轮不换格');
+  assert.equal(fov(), opened - 5, 'Ctrl+滚轮才是缩放');
+  p().onSurfaceWheel(event({ deltaY: 120, ctrlKey: true }));
+  assert.equal(fov(), opened, '反方向回到原处');
+
+  // 主世界没有 zoom：Ctrl+滚轮仍然走改动前那条路（相机拉近），行为不变。
+  clickWorld(page); await turn(); await turn();
+  page = f.mount(); await page.mount(); await turn();
+  const mainFov = p().camera.snapshotPose().camera.fov;
+  const before = p().camera.snapshotPose().camera.position;
+  p().onSurfaceWheel(event({ deltaY: -120, ctrlKey: true }));
+  f.step();
+  assert.equal(p().camera.snapshotPose().camera.fov, mainFov, '主世界不改 fov');
+  assert.notDeepEqual(p().camera.snapshotPose().camera.position, before, '主世界仍然拉近相机');
+});
+
+/**
+ * 「按空格可以上升」的页面级验收：同一个键盘事件，主世界起跳、小世界抬相机。
+ *
+ * 非真空：把小世界那台控制器的 `extraMovement` 去掉，下面三条「空格抬高」的断言全部失败
+ * （帧数为 0、机位不动）；把空格塞进共用的 MOVEMENT 表，主世界那条「还是跳跃」失败；
+ * 把 `isInputLocked` 从相机里摘掉，物品栏打开时那条「帧数为 0 / 机位不动」失败。
+ */
+test('空格在小世界里抬高相机（自由与俯视），面板打开时无效，主世界仍然是跳跃', async t => {
+  const f = await fixture(t, { gameplay: childGameplay() });
+  let page = f.mount(); await page.mount(); await turn();
+  const p = () => page.instance;
+
+  // 主世界：空格 = 跳跃，不是「把机位抬上去」。
+  const groundY = p().camera.snapshotPlayer().position[1];
+  const mainSpace = event({ code: 'Space', key: ' ' });
+  p().onKeyDown(mainSpace);
+  f.step();
+  assert.equal(p().camera.snapshotPlayer().grounded, false, '主世界的空格必须还是跳跃');
+  assert.ok(p().camera.snapshotPlayer().position[1] > groundY, '人离地了');
+  assert.equal(mainSpace.defaultPrevented, true, '跳跃也挡住页面滚动');
+
+  page = await enterChild(f, page);
+  const y = () => p().camera.snapshotPose().camera.position[1];
+  // 页面把真实时钟交给相机，而这里的帧时钟是假时钟，所以**第一帧**的 dt 是「上一帧到现在」
+  // 那一段，不能写死；第二帧起 dt 恰好等于 50 ms。于是每次按键都走两帧，只量第二帧的位移：
+  // 0.2 m/帧 × 60 × 0.05 s = 0.6 m。第一帧只断言「确实动了」，证明按键不是空操作。
+  const hold = (code, key) => {
+    const before = y();
+    const down = event({ code, key });
+    p().onKeyDown(down);
+    f.step();
+    const afterFirst = y();
+    f.step();
+    const delta = y() - afterFirst;
+    p().camera.keyUp(event({ code, key }));
+    f.step();
+    return { down, held: afterFirst - before, delta };
+  };
+
+  // ---- 自由视角 ----
+  const free = hold('Space', ' ');
+  assert.equal(free.down.defaultPrevented, true, '相机接手之后 Space 不滚页面、也不点亮聚焦按钮');
+  assert.ok(free.held > 0, '按住空格的第一帧就开始上升，不是空操作');
+  assert.ok(Math.abs(free.delta - 0.6) < 1e-6, `自由视角的空格抬 0.6 m/帧（实际 ${free.delta}）`);
+  assert.equal(f.frames.size, 0, '松开空格就停');
+
+  // ---- Q/E 没有被空格顶掉 ----
+  const q = hold('KeyQ', 'q');
+  assert.ok(Math.abs(q.delta - 0.6) < 1e-6, `Q 还是抬（实际 ${q.delta}）`);
+  const e = hold('KeyE', 'e');
+  assert.ok(Math.abs(e.delta + 0.6) < 1e-6, `E 还是降（实际 ${e.delta}）`);
+
+  // ---- 俯视视角 ----
+  p().onKeyDown(event({ code: 'KeyV', key: 'v' }));
+  assert.equal(p().camera.viewMode(), 'top');
+  const top = hold('Space', ' ');
+  assert.equal(top.down.defaultPrevented, true);
+  assert.ok(Math.abs(top.delta - 0.6) < 1e-6, `俯视视角的空格同样抬 0.6 m/帧（实际 ${top.delta}）`);
+  assert.deepEqual(p().camera.snapshotPose().camera.forward, [0, -1, 0], '上升不改俯视朝向');
+
+  // ---- 面板（物品栏）占着输入：空格既不动相机、也不启动帧 ----
+  p().onKeyDown(event({ code: 'Tab' }));
+  assert.equal(p().inventoryOpen.value, true);
+  const beforePanel = structuredClone(p().camera.snapshotPose().camera);
+  p().onKeyDown(event({ code: 'Space', key: ' ' }));
+  assert.equal(f.frames.size, 0, '面板打开时空格不得启动相机帧');
+  assert.deepEqual(p().camera.snapshotPose().camera, beforePanel, '面板打开时机位一个数都不动');
+  p().onKeyDown(event({ code: 'Tab' }));
+  assert.equal(p().inventoryOpen.value, false);
+  // 非真空：面板关掉之后同一个空格又生效。
+  const reopened = hold('Space', ' ');
+  assert.ok(Math.abs(reopened.delta - 0.6) < 1e-6, `关掉面板后空格恢复（实际 ${reopened.delta}）`);
+  assert.equal(f.frames.size, 0);
+});
+
+test('碎片规则不写先知：正常物体照常浮动，先知一个字节都没有', async t => {
+  const rules = { version: 1, rules: [{ fragmentId: 'sway', type: 'sway', axis: 'x',
+    amplitude: 0.25, periodMs: 2400 }] };
+  const f = await fixture(t, { documents: { loadWorldRules: rules }, gameplay: childGameplay() });
+  let page = f.mount(); await page.mount(); await turn();
+  page = await enterChild(f, page);
+  const actorOf = guid => f.actors.get(CHILD).find(actor => actor.actor_guid === guid);
+  const prophet = actorOf(PROPHET_GUID);
+  const cube = actorOf(storyCubeModule.CUBE_GUID);
+  const map = actorOf(storyMapModule.MAP_GUID);
+  assert.ok(prophet && cube && map, '先知、方块、地图都在小世界里');
+  assert.equal(page.instance.worldRuleRunner.isRunning(), true, '规则按保存的碎片跑起来');
+
+  const writes = () => f.calls.filter(call => call[0] === 'actorTransform');
+  const start = writes().length;
+  for (let i = 0; i < 5; i++) f.step(50);
+  const fresh = writes().slice(start);
+  assert.ok(fresh.some(call => call[1] === cube.handle), '方块照常被浮动：否则这条用例证明不了什么');
+  assert.deepEqual(fresh.filter(call => call[1] === prophet.handle), [], '先知一个字节都不写');
+  assert.deepEqual(fresh.filter(call => call[1] === map.handle), [], '地图仍然零写入');
+
+  // 「调整物体」这条静态路径同样不列先知：碎片/物体都改不到它。
+  const listed = storyProphetActionsModule.selectableObjects(
+    { data: { scene: { actors: f.actors.get(CHILD) } } }).map(entry => entry.guid);
+  assert.ok(!listed.includes(PROPHET_GUID), '先知不在可调物体列表里');
+  assert.ok(listed.includes(storyCubeModule.CUBE_GUID), '方块才是可调物体');
+});
+
+/* ---------------------------------------------------------------
+   碎片改为可作用于单独物体：盘上的 target 一直走到帧循环，且只动它自己那个物体。
+   --------------------------------------------------------------- */
+test('带目标的碎片规则只动自己的物体：另一件没规则的物体一个字节都不写', async t => {
+  const spinTarget = storyPropsModule.placementGuid(0);
+  const bystander = storyPropsModule.placementGuid(1);
+  // 两条规则各指一个物体：浮动 → 先知方块，旋转 → 第一件陈列物。第二件陈列物没有任何规则。
+  const rules = { version: 1, rules: [
+    { fragmentId: 'sway', type: 'sway', axis: 'x', amplitude: 0.25, periodMs: 2400,
+      target: storyCubeModule.CUBE_GUID },
+    { fragmentId: 'spin', type: 'spin', axis: 'z', amplitude: 15, periodMs: 3600, target: spinTarget },
+  ] };
+  const f = await fixture(t, { documents: { loadWorldRules: rules }, gameplay: placementAware() });
+  let page = f.mount(); await page.mount(); await turn();
+  page = await enterChild(f, page);
+  const p = () => page.instance;
+  // 放两件方块：布局是权威来源，场景里的 actor 由既有 reconcile 路径创建（guid = 序号）。
+  for (let i = 0; i < 2; i++) {
+    p().onKeyDown(event({ code: 'KeyB', key: 'b' }));
+    for (let step = 0; step < 3; step++) await turn();
+  }
+  assert.deepEqual(p().placements.value.map(entry => entry.index), [0, 1], '两件方块都落盘了');
+  const actorOf = guid => f.actors.get(CHILD).find(actor => actor.actor_guid === guid);
+  const cube = actorOf(storyCubeModule.CUBE_GUID);
+  const spun = actorOf(spinTarget);
+  const idle = actorOf(bystander);
+  const prophet = actorOf(PROPHET_GUID);
+  const map = actorOf(storyMapModule.MAP_GUID);
+  assert.ok(cube && spun && idle && prophet && map, '方块、两件陈列物、先知与地图都在小世界里');
+
+  // 目标表是进入世界那一刻的快照：按当前场景再起一次规则，让两件陈列物都进目标表。
+  p().applyWorldRules(await editorApi.scene.getSnapshot());
+  assert.equal(p().worldRuleRunner.isRunning(), true, '规则跑起来了');
+  assert.equal(p().worldRuleRunner.animatedCount(), 2, '只有带规则的两件物体进动画集合');
+
+  const writes = () => f.calls.filter(call => call[0] === 'actorTransform');
+  const start = writes().length;
+  for (let i = 0; i < 6; i++) f.step(50);
+  const fresh = writes().slice(start);
+  const forHandle = handle => fresh.filter(call => call[1] === handle);
+  // 方块：被自己的浮动规则写入位置，旋转保持基准（旋转规则没有指向它）。
+  const cubePos = forHandle(cube.handle).filter(call => call[2] === 0);
+  const cubeRot = forHandle(cube.handle).filter(call => call[2] === 1);
+  assert.ok(cubePos.length > 0, '方块照常被自己的规则浮动');
+  assert.ok(cubePos.some(call => Math.abs(call[3][0] - cube.geometry.position[0]) > 1e-9),
+    '方块的位置真的被浮动了，不只是写回基准');
+  assert.ok(cubeRot.every(call => call[3][2] === 0), '方块的旋转一直是基准：旋转规则没串过来');
+  // 第一件陈列物：位置一直是自己的基准位（浮动规则不是写给它的），旋转却真的在转。
+  const spunPos = forHandle(spun.handle).filter(call => call[2] === 0);
+  const spunRot = forHandle(spun.handle).filter(call => call[2] === 1);
+  assert.ok(spunPos.length > 0, '它有自己的规则，所以每帧仍有一次位置写入（合成值就是基准位）');
+  assert.ok(spunPos.every(call => call[3][0] === spun.geometry.position[0]
+    && call[3][1] === spun.geometry.position[1]
+    && call[3][2] === spun.geometry.position[2]), '它的位置一直是自己的基准位：方块的浮动没有串过来');
+  assert.ok(spunRot.some(call => Math.abs(call[3][2]) > 1e-9), '它被自己的旋转规则转动');
+  // 没有规则的陈列物、先知、地图：一个字节都没有。
+  assert.deepEqual(forHandle(idle.handle), [], '没有规则的物体一次都没被写');
+  assert.deepEqual(forHandle(prophet.handle), [], '先知零写入');
+  assert.deepEqual(forHandle(map.handle), [], '地图零写入');
+});
+
+/* ---------------------------------------------------------------
+   「碎片」屏与「调整碎片」子屏是真的渲染得出来的：先选目标物体，再装填/调整。
+   --------------------------------------------------------------- */
+test('「碎片」屏先选目标物体再装填：落盘的规则带着那个物体的 guid', async t => {
+  const saved = [];
+  let layout = { version: 1, placements: [] };
+  const f = await fixture(t, {
+    gameplay: async (request, activePath) => {
+      if (request.action === 'saveWorldRules') {
+        saved.push(structuredClone(request.rules));
+        return { status: 'ok', role: 'child',
+          state: { version: 1, rules: structuredClone(request.rules) } };
+      }
+      if (request.action === 'savePlacements') {
+        layout = { version: 1, placements: structuredClone(request.placements) };
+        return { status: 'ok', role: 'child', state: structuredClone(layout) };
+      }
+      return { status: 'ok', role: activePath === MAIN ? 'main' : 'child',
+        config: gameplayConfig, state: structuredClone(SHOWN) };
+    },
+  });
+  let page = f.mount(); await page.mount(); await turn();
+  page = await enterChild(f, page);
+  const p = () => page.instance;
+  const collectNodes = (node, predicate, found = []) => {
+    if (Array.isArray(node)) { for (const child of node) collectNodes(child, predicate, found); return found; }
+    if (!node || typeof node !== 'object') return found;
+    if (predicate(node)) found.push(node);
+    for (const child of Array.isArray(node.children) ? node.children : []) collectNodes(child, predicate, found);
+    return found;
+  };
+  const render = () => renderStory(proxyRefs(p()), []);
+
+  // 「碎片」屏：每块碎片一行，点行进子屏（不再直接装填成「整世界生效」）。
+  p().dialogueOpen.value = true;
+  p().openProphetScreen('fragments');
+  await turn();
+  const rows = collectNodes(render(), node => node.props?.['data-prophet-fragment'] !== undefined);
+  assert.deepEqual(rows.map(node => node.props['data-prophet-fragment']), ['sway', 'spin']);
+  // 点行 = 进子屏（而不是立刻把碎片装成「整世界生效」）。
+  rows[0].props.onClick();
+  assert.equal(p().prophetScreen.value, 'fragment-adjust');
+  assert.equal(p().installedRules.value.length, 0, '进子屏本身一个字节都没写');
+  await turn();
+  let tree = render();
+  const targets = collectNodes(tree, node => node.props?.['data-fragment-target'] !== undefined);
+  const targetGuids = targets.map(node => node.props['data-fragment-target']);
+  assert.ok(targetGuids.includes(storyCubeModule.CUBE_GUID), '方块是可以选的');
+  assert.ok(!targetGuids.includes(storyMapModule.MAP_GUID), '地图不在目标列表里');
+  assert.ok(!targetGuids.includes(PROPHET_GUID), '先知不在目标列表里');
+  // 目标列表就是「调整物体」那份列表：同一个 selectableObjects，没有第二套过滤器。
+  assert.deepEqual(targetGuids, storyProphetActionsModule.selectableObjects(
+    { data: { scene: { actors: f.actors.get(CHILD) } } }).map(entry => entry.guid));
+  const toggleOf = rendered => collectNodes(rendered,
+    node => node.props?.['data-fragment-toggle'] !== undefined)[0];
+  assert.equal(toggleOf(tree).props.disabled, true, '没选目标时装填不可用');
+  assert.equal(p().fragmentToggle.value.state, 'pick-target');
+
+  // 选方块：按钮变成「装填到这个物体」，点下去之后规则带着方块的 guid 落盘。
+  const cubeEntry = p().selectableList.value.find(entry => entry.guid === storyCubeModule.CUBE_GUID);
+  p().selectFragmentTarget(cubeEntry);
+  tree = render();
+  const install = toggleOf(tree);
+  assert.equal(install.props.disabled, false);
+  assert.equal(install.props['data-state'], 'install');
+  await install.props.onClick();
+  await turn(); await turn();
+  assert.deepEqual(saved.at(-1), [{ fragmentId: 'sway', type: 'sway', axis: 'x',
+    amplitude: 0.25, periodMs: 2400, target: storyCubeModule.CUBE_GUID }],
+  '装填记录必须点名那个物体');
+  assert.equal(p().installedRules.value[0].target, storyCubeModule.CUBE_GUID);
+  // 装好之后子屏显示的是这个物体上的数字，五个调整按钮都在。
+  tree = render();
+  const actions = collectNodes(tree, node => node.props?.['data-fragment-action'] !== undefined);
+  assert.deepEqual(actions.map(node => node.props['data-fragment-action']),
+    ['amplitude-up', 'amplitude-down', 'period-up', 'period-down', 'axis-next']);
+  assert.ok(actions.every(node => node.props.disabled === false));
+  assert.equal(toggleOf(tree).props['data-state'], 'remove');
+  // 「碎片」屏那一行也写出了作用对象。
+  p().leaveProphetScreen();
+  await turn();
+  const owner = collectNodes(render(), node => node.props?.['data-fragment-owner'] !== undefined);
+  assert.equal(owner.length, 1, '装填过的那一行写出作用对象');
 });

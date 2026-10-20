@@ -1,17 +1,18 @@
 /** Pure geometry + acknowledged gameplay commands. No per-frame native queries. */
 import { hasUsableBounds, rotatePoint, vector3 } from './storyCharacters.mjs';
-// The pickup range lives here, the prophet range in `prophetDialogue`; this module owns the
-// arithmetic that imports both, so the F key's one decision never re-derives a distance.
-import { PROPHET_INTERACTION, prophetAvailable, prophetDistance } from './prophetDialogue.mjs';
+// The prophet's reach lives in `prophetDialogue`; this module owns the arithmetic that
+// combines it with the block reach, so the F key's one decision never re-derives a distance.
+import { PROPHET_INTERACTION } from './prophetDialogue.mjs';
 // The block's reach belongs to the placement geometry, not to the combat config: the resolver
 // reads it from the module that owns where a block lands, so placing and retrieving stay one
 // pair of numbers and no caller has to re-state the reach.
-import { PLACED_BLOCK_REACH } from './storyProps.mjs';
+import { PLACED_BLOCK_REACH, findProp } from './storyProps.mjs';
+import { monsterEquipmentName } from './storyLoot.mjs';
 
 export const GAMEPLAY_KEY = '__corona_story_gameplay_v1__';
+// Kept only so a world saved by the old flow can hide the red ball actor it once
+// created. The current game never creates it: the boss reward goes straight into the bag.
 export const FRAGMENT_GUID = 'f9f5c8b0-7324-4b6c-a011-000000000005';
-export const FRAGMENT = Object.freeze({ role: 'fragment', name: '世界碎片', guid: FRAGMENT_GUID,
-  asset: 'fragment/Ball.obj', x: 0, z: 12, size: 0.5, rotation: [0, 0, 0] });
 
 export function worldBounds(actor) {
   const { position, rotation, scale } = actor?.geometry || {};
@@ -30,6 +31,12 @@ export function distanceToBounds(position, bounds) {
   return Math.hypot(...[0, 2].map(axis => Math.max(bounds[axis] - position[axis], 0, position[axis] - bounds[axis + 3])));
 }
 export const canAct = player => Boolean(player?.grounded && player.movementState !== 'dodging');
+/** 到掉落物的水平距离；不在可行动状态、或掉落物没有位置时返回 Infinity。
+ *  界面用它决定 F 提示的候选（Boss 的奖励现在直接进背包，这个候选通常为空）。 */
+export function pickupDistance(player, drop) {
+  return canAct(player) && vector3(drop?.position)
+    ? Math.hypot(player.position[0] - drop.position[0], player.position[2] - drop.position[2]) : Infinity;
+}
 export function canHitBoss(player, bounds, config) {
   if (!canAct(player) || !Number.isFinite(player.facingYaw)
     || distanceToBounds(player.position, bounds) > config.meleeRange) return false;
@@ -39,34 +46,42 @@ export function canHitBoss(player, bounds, config) {
   return length < 1e-8 || (Math.sin(player.facingYaw) * dx + Math.cos(player.facingYaw) * dz)
     / length >= Math.cos(config.meleeHalfAngle) - 1e-9;
 }
-export function pickupDistance(player, drop) {
-  return canAct(player) && vector3(drop?.position)
-    ? Math.hypot(player.position[0] - drop.position[0], player.position[2] - drop.position[2]) : Infinity;
+/**
+ * The nearest attackable thing in front of the player: the boss and every living monster
+ * are candidates, and the one whose bounding box is closest wins. The caller supplies the
+ * range and half-angle, so a normal swing and a skill share this one rule.
+ */
+export function nearestAttackTarget(player, targets = [], config = {}) {
+  if (!canAct(player)) return null;
+  let best = null;
+  for (const target of Array.isArray(targets) ? targets : []) {
+    if (!target?.bounds || !canHitBoss(player, target.bounds, config)) continue;
+    const distance = distanceToBounds(player.position, target.bounds);
+    if (!best || distance < best.distance) best = { ...target, distance };
+  }
+  return best;
 }
 /**
  * The one rule the F key follows, shared by the on-screen prompt and the key handler.
  *
  * Each candidate carries its own configured range as a distance: the prophet's comes from
- * `PROPHET_INTERACTION.range` (defaulted here so a caller cannot forget it), the pickup's
- * from `config.pickupRange`, and the placed block's from `PLACED_BLOCK_REACH` (the reach the
- * placement geometry itself owns, so retrieving is the mirror of placing). The prompt text is
- * produced beside the decision, so a prompt can never describe a different action than the one
- * F performs. The nearer target wins; an exact tie keeps the earlier candidate — the prophet
- * first, as it always was, which is what stops a block lying next to the prophet from stealing
- * the conversation. Pure: no engine, no DOM.
+ * `PROPHET_INTERACTION.range` (defaulted here so a caller cannot forget it), and the placed
+ * block's from `PLACED_BLOCK_REACH` (the reach the placement geometry itself owns, so
+ * retrieving is the mirror of placing). The prompt text is produced beside the decision, so a
+ * prompt can never describe a different action than the one F performs. The nearer target wins;
+ * an exact tie keeps the earlier candidate — the prophet first, as it always was, which is what
+ * stops a block lying next to the prophet from stealing the conversation. Pure: no engine, no DOM.
  */
 export const INTERACTION_PROMPTS = Object.freeze({
   prophet: 'F 与先知交谈',
-  pickup: '按 F 拾取',
   block: '按 F 取回方块',
 });
 export function contextualInteraction({ prophetDistance: toProphet = Infinity,
-  pickupDistance: toPickup = Infinity, blockDistance: toBlock = Infinity,
-  range = PROPHET_INTERACTION.range, pickupRange = Infinity,
+  blockDistance: toBlock = Infinity,
+  range = PROPHET_INTERACTION.range,
   blockRange = PLACED_BLOCK_REACH } = {}) {
   const candidates = [
     { kind: 'prophet', distance: toProphet, limit: range },
-    { kind: 'pickup', distance: toPickup, limit: pickupRange },
     { kind: 'block', distance: toBlock, limit: blockRange },
   ].filter(candidate => Number.isFinite(candidate.distance)
     && Number.isFinite(candidate.limit) && candidate.distance <= candidate.limit);
@@ -90,10 +105,10 @@ export function unwrapGameplay(value) {
   try { return JSON.parse(value); } catch { return value; }
 }
 
-export function createStoryGameplay({ api, projectPath, readPlayer, readBoss,
+export function createStoryGameplay({ api, projectPath, readPlayer, readBoss, readMonsters = () => [],
   reconcile = async () => {}, onState = () => {}, onFeedback = () => {},
   trackWork = promise => promise, now = () => performance.now(), newId = () => crypto.randomUUID(),
-  requestTimeoutMs = 15_000, groundYAt = null }) {
+  requestTimeoutMs = 15_000 }) {
   let data = null, pending = null, inFlight = null, visualDirty = false, lastAttack = -Infinity;
   // The small world's exhibit layout is its own document: it is not part of the
   // combat state, so it is cached separately and never merged into `data.state`.
@@ -140,6 +155,7 @@ export function createStoryGameplay({ api, projectPath, readPlayer, readBoss,
     const work = (async () => {
       if (pending) {
         const operation = pending;
+        const before = data?.state || null;
         const response = unwrapGameplay(await request(operation));
         if (response?.code === 'REVISION_CONFLICT') {
           accept(response); pending = null; visualDirty = true;
@@ -151,8 +167,17 @@ export function createStoryGameplay({ api, projectPath, readPlayer, readBoss,
         pending = null; visualDirty = true;
         // Already committed; visual retry must not resend or grant the reward again.
         await applyVisuals();
-        if (operation.action === 'pickupDrop') onFeedback('获得 世界碎片 ×1');
-        else if (data.state.boss.hp === 0 && (operation.action === 'hitBoss' || operation.hit)) {
+        if (operation.monsterId && before?.monsters?.[operation.monsterId]?.hp > 0
+          && data.state.monsters?.[operation.monsterId]?.hp === 0) {
+          const gained = Object.keys(data.state.inventory || {})
+            .map(key => ({ key, amount: (data.state.inventory[key] || 0)
+              - (before.inventory?.[key] || 0) }))
+            .filter(entry => entry.amount > 0)
+            .map(({ key, amount }) =>
+              `${findProp(key)?.name || monsterEquipmentName(key)} ×${amount}`);
+          onFeedback(gained.length ? `击败怪物 · 获得 ${gained.join('、')}` : '击败怪物');
+        } else if (!operation.monsterId && data.state.boss.hp === 0
+          && (operation.action === 'hitBoss' || operation.hit)) {
           onFeedback('Boss 已击败 · 小世界已开启');
         }
       } else await applyVisuals();
@@ -164,6 +189,13 @@ export function createStoryGameplay({ api, projectPath, readPlayer, readBoss,
   function commit(action, fields) {
     pending = { action, operationId: newId(), expectedRevision: data.state.revision, ...fields };
     return flush();
+  }
+  // 背包的三件事（披挂 / 服用 / 弃置）都只是一条后端操作：界面只管发命令，
+  // 扣几件、加多少属性一律由后端算，客户端不报数值。战斗请求在途时先让路，
+  // 免得把一次没发出的攻击顶掉。
+  function commitBag(action, fields) {
+    if (!data || data.role !== 'main' || pending || inFlight) return Promise.resolve(false);
+    return commit(action, fields);
   }
   // The side documents are declared as functions of this factory, not only as methods of the
   // returned object: `load()` calls them by name, and an object literal's methods are *not*
@@ -188,7 +220,7 @@ export function createStoryGameplay({ api, projectPath, readPlayer, readBoss,
     return data;
   }
   // Exhibits are authored one write at a time and never share the combat revision,
-  // so a rejected layout can never corrupt a boss or drop reward.
+  // so a rejected layout can never corrupt a boss or its reward.
   async function loadPlacements() {
     const response = unwrapGameplay(await request({ action: 'loadPlacements' }));
     if (response?.status !== 'ok' || !response.state?.placements) {
@@ -248,16 +280,22 @@ export function createStoryGameplay({ api, projectPath, readPlayer, readBoss,
     rosterCache = response.state;
     return rosterCache;
   }
-  // Where the fragment the boss leaves behind rests: the ground **at the boss's own (x, z)**
-  // from the same baked grid the characters stand on (`storyMapHeight.heightAt`, handed in by
-  // the page). The boss's own origin is not a ground line (it is scaled from its own AABB), so
-  // it is never used; with no grid — or a junk sample — the old constant 0 (the flat engine
-  // floor this drop landed on before the grid existed) is kept. `storyActors` re-derives the
-  // model's own foot offset from `heightAt`, so storing the ground line here is what makes the
-  // red ball sit on the terrain instead of sinking half into it.
-  function dropGroundY(x, z) {
-    const ground = typeof groundYAt === 'function' ? groundYAt(x, z) : null;
-    return Number.isFinite(ground) ? ground : 0;
+  // The boss and every living monster compete for the same swing. The page owns where
+  // those actors are; this module only asks for their bounds and applies one nearest rule.
+  function attackCandidates() {
+    const player = readPlayer();
+    const targets = [];
+    const boss = readBoss();
+    if (data.state.boss.hp > 0 && boss) {
+      targets.push({ kind: 'boss', id: 'boss', name: 'Boss', bounds: worldBounds(boss) });
+    }
+    const monsters = readMonsters();
+    for (const entry of Array.isArray(monsters) ? monsters : []) {
+      if (!entry?.id || !entry.actor || !(data.state.monsters?.[entry.id]?.hp > 0)) continue;
+      targets.push({ kind: 'monster', id: entry.id, name: entry.name,
+        bounds: worldBounds(entry.actor) });
+    }
+    return { player, targets };
   }
   return {
     get data() { return data; },
@@ -279,15 +317,16 @@ export function createStoryGameplay({ api, projectPath, readPlayer, readBoss,
     attack() {
       if (inFlight) return inFlight;
       if (pending || visualDirty) return flush();
-      if (!data || data.role !== 'main' || data.state.boss.hp <= 0 || !canAct(readPlayer())) return Promise.resolve(false);
-      const time = now(), boss = readBoss(), bounds = worldBounds(boss);
+      if (!data || data.role !== 'main' || !canAct(readPlayer())) return Promise.resolve(false);
+      const time = now();
       if (time - lastAttack < data.config.cooldownMs) return Promise.resolve(false);
+      const { player, targets } = attackCandidates();
+      if (!targets.length) return Promise.resolve(false);
+      const target = nearestAttackTarget(player, targets, data.config);
       lastAttack = time;
-      if (!canHitBoss(readPlayer(), bounds, data.config)) {
-        onFeedback('靠近并面向 Boss 后攻击'); return Promise.resolve(false);
-      }
-      return commit('hitBoss', { bossPosition: [boss.geometry.position[0],
-        dropGroundY(boss.geometry.position[0], boss.geometry.position[2]), boss.geometry.position[2]] });
+      if (!target) { onFeedback('靠近并面向目标后攻击'); return Promise.resolve(false); }
+      return commit(target.kind === 'boss' ? 'hitBoss' : 'hitMonster',
+        target.kind === 'monster' ? { monsterId: target.id } : {});
     },
     skillStatus(skillId) {
       const skill = data?.config.skills?.[skillId];
@@ -306,23 +345,21 @@ export function createStoryGameplay({ api, projectPath, readPlayer, readBoss,
       const time = now();
       if (time - lastAttack < data.config.cooldownMs || time < skillUntil[skillId]) return Promise.resolve(false);
       if (data.state.rage < skill.rageCost) { onFeedback('怒气不足'); return Promise.resolve(false); }
-      const boss = readBoss();
-      const hit = data.state.boss.hp > 0 && canHitBoss(readPlayer(), worldBounds(boss),
+      const { player, targets } = attackCandidates();
+      const target = nearestAttackTarget(player, targets,
         { meleeRange: skill.range, meleeHalfAngle: skill.halfAngle });
+      const hit = Boolean(target);
       lastAttack = time;
       skillUntil[skillId] = time + skill.cooldownMs;
       return commit('castSkill', { skillId, hit,
-        ...(hit ? { bossPosition: [boss.geometry.position[0],
-          dropGroundY(boss.geometry.position[0], boss.geometry.position[2]), boss.geometry.position[2]] } : {}) });
-    },
-    pickup() {
-      if (inFlight) return inFlight;
-      if (pending || visualDirty) return flush();
-      const drop = data?.state.drop;
-      if (data?.role !== 'main' || !drop || drop.collected
-        || pickupDistance(readPlayer(), drop) > data.config.pickupRange) return Promise.resolve(false);
-      return commit('pickupDrop', { dropId: drop.id });
+        ...(hit && target.kind === 'monster' ? { monsterId: target.id } : {}) });
     },
     flush,
+    // 属性与技能数值由后端按已披挂的装备算好放在 config 里，页面直接显示即可。
+    get attributes() { return data?.config?.attributes || null; },
+    equipItem(itemId) { return commitBag('equipItem', { itemId }); },
+    unequipItem(slot) { return commitBag('unequipItem', { slot }); },
+    useItem(itemId) { return commitBag('useItem', { itemId }); },
+    discardItem(itemId) { return commitBag('discardItem', { itemId }); },
   };
 }

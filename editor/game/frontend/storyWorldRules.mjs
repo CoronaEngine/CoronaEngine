@@ -4,11 +4,17 @@
  * `game/data/fragments.json` is the authoritative catalogue; this module is its runtime
  * projection plus the per-frame engine that animates a world while a rule is installed.
  *
- * A world may carry several rules at once, and one object may be affected by all of them:
- * a `sway` rule moves it, a `spin` rule turns it. The engine therefore composes every
- * installed rule into EXACTLY ONE `actorTransform` write per actor per frame (operation 0
- * carries the composed position, operation 1 the composed rotation, scale is never
- * written), so two rules can never fight over the same actor.
+ * A world may carry several rules at once. Each rule names at most ONE object (`target`, an
+ * actor guid): 碎片改为可作用于单独物体. Two rules may name the same object — then the object is
+ * affected by both, and a `sway` rule moves it while a `spin` rule turns it — and the engine
+ * composes EVERY rule of a target into EXACTLY ONE `actorTransform` write per actor per frame
+ * (operation 0 carries the composed position, operation 1 the composed rotation, scale is never
+ * written), so two rules can never fight over the same actor. An object no rule names is never
+ * written at all.
+ *
+ * A rule saved before rules had targets carries no `target`; it keeps its old meaning — it
+ * applies to every eligible object — so worlds saved by an older build still animate exactly
+ * what they animated before (see `WORLD_RULE_VERSION` and `rulesFor` in the runner).
  *
  * The engine deliberately runs its OWN animation frame loop instead of joining the
  * player controller's: `playerController` stops scheduling whenever the player stands
@@ -22,10 +28,35 @@
  * the un-spun base rotation.
  */
 
-import { sceneSnapshot } from './storyCharacters.mjs';
-import { isMapActor } from './storyMap.mjs';
+import { isProphetActor, PROPHET_GUID, sceneSnapshot } from './storyCharacters.mjs';
+import { isMapActor, MAP_GUID } from './storyMap.mjs';
 
+/**
+ * The save format stays at version 1 on purpose. `target` is an OPTIONAL field: a rule without
+ * one is a legacy rule, and legacy keeps its old meaning ("applies to every eligible object",
+ * see `collectSwayTargets` / the runner), so a world saved before fragments could be aimed at
+ * one object still loads and still floats. Bumping the version would make every existing world
+ * unreadable — `game/runtime/world_rules.py` refuses an unknown version — for no gain: nothing
+ * that reads version 1 can tell the two rule shapes apart.
+ */
 export const WORLD_RULE_VERSION = 1;
+
+/** Longest accepted target identity (a guid from the scene; the longest here is 38 chars). */
+export const MAX_TARGET_LENGTH = 128;
+
+/**
+ * 保留身份：地图与先知永远不能成为一条规则的目标。
+ *
+ * `isMapActor` / `isProphetActor` 是「这个 actor 是谁」的唯一裁决；这里只把它们的 guid 提出来，
+ * 给「还没有场景、只有一条存档记录」的路径用（存盘、校验、UI 里选目标）。地图与先知的 guid
+ * 是稳定身份（见 storyMap.js 的 MAP_GUID 注释与 storyCharacters.js 的角色表），所以引用同一个
+ * 常量不会漂。
+ */
+export const RESERVED_TARGET_GUIDS = Object.freeze([MAP_GUID, PROPHET_GUID]);
+
+export function isReservedTargetGuid(guid) {
+  return RESERVED_TARGET_GUIDS.includes(typeof guid === 'string' ? guid.trim() : guid);
+}
 
 /**
  * The rotation a rule's `amplitude` is measured in: the catalogue and the saved record
@@ -78,6 +109,8 @@ const RULE_TYPES = Object.freeze(['sway', 'spin']);
  * backend rejects must be rejected here too, before a frame loop can ever see it.
  */
 const RULE_AXES = Object.freeze({ sway: AXES, spin: Object.freeze(['z']) });
+/** 每种规则允许的轴，供「调整碎片」子屏的换轴动作复用（与校验同一份表）。 */
+export { RULE_AXES };
 
 export const fragmentIds = () => FRAGMENTS.map(fragment => fragment.id);
 export const initialFragmentIds = () => FRAGMENTS.filter(fragment => fragment.initial).map(f => f.id);
@@ -109,8 +142,32 @@ export function validateRule(raw) {
   if (!positiveNumber(source.periodMs)) throw new Error('世界规则周期无效');
   const excludeRoles = (Array.isArray(source.excludeRoles) ? source.excludeRoles : [])
     .filter(role => typeof role === 'string' && role.trim()).map(role => role.trim());
-  return Object.freeze({ type: source.type, axis: source.axis, amplitude: source.amplitude,
-    periodMs: source.periodMs, excludeRoles: Object.freeze([...new Set(excludeRoles)]) });
+  const target = normalizeTarget(source.target);
+  const rule = { type: source.type, axis: source.axis, amplitude: source.amplitude,
+    periodMs: source.periodMs, excludeRoles: Object.freeze([...new Set(excludeRoles)]) };
+  // 目标只在真的有时才出现：没有 target 的记录是「旧规则」，语义是整个小世界（见文件头）。
+  // 保留字段 absent 而不是 null，是为了让「旧规则」与「指向某个对象的规则」在深比较里也分得开。
+  if (target !== null) rule.target = target;
+  return Object.freeze(rule);
+}
+
+/**
+ * A rule's target: `null` for a legacy rule (no target field), otherwise a non-empty guid that
+ * is not a reserved identity. Anything else is refused rather than silently dropped — a rule
+ * whose target could not be read must not become a world-wide rule by accident.
+ */
+export function normalizeTarget(raw) {
+  if (raw === undefined || raw === null) return null;
+  if (typeof raw !== 'string') throw new Error('世界规则目标无效');
+  const target = raw.trim();
+  // 空串不当作「没有目标」：那会把一条本该只作用于一个物体的规则悄悄放大成整世界规则。
+  // 没有目标只允许写成「没有这个字段」，与运行时 world_rules.py 的 _target 一致。
+  if (!target) throw new Error('世界规则目标无效');
+  if (target.length > MAX_TARGET_LENGTH) throw new Error('世界规则目标无效');
+  // 防御纵深：地图与先知不能成为目标。前端选目标时 `selectableObjects` 已经把它们挡在外面，
+  // 这一条保证一份手改/旧版存档也进不来（运行时 world_rules.py 里有同一份判断）。
+  if (isReservedTargetGuid(target)) throw new Error('世界规则目标不能是地图或先知');
+  return target;
 }
 
 // Fail fast on a bad catalogue rather than deep inside a frame callback.
@@ -201,8 +258,14 @@ function excludedRoles(rawRule) {
  * transform has exactly one author (`storyMap.ensureStoryMap`). A rule that swayed it would
  * write a position and a rotation every frame and undo — or fight — that owner. The exclusion
  * is by identity (`isMapActor`), so it holds for a rule the player installed before this guard
- * existed and for a hand-edited rule record alike: a rule never names its targets, so the only
- * place a map-targeted rule can be refused is here, where the targets are resolved.
+ * existed and for a hand-edited rule record alike — and, since a rule may name its target, for
+ * a rule whose `target` is the map: `validateRule` refuses that guid outright, and a target
+ * list that smuggled the map in still loses it here, where the targets are resolved.
+ *
+ * The prophet is never a target either: 碎片不影响先知. It is a character with a script, not
+ * scenery to be floated or spun, and the same identity argument applies (`isProphetActor`) —
+ * the prophet is excluded even though it is visible, adjustable-looking and role-less in an
+ * older world, because the exclusion is read from its identity and not from its name.
  */
 export function collectSwayTargets(snapshot, rawRule = null) {
   const excluded = excludedRoles(rawRule);
@@ -214,6 +277,8 @@ export function collectSwayTargets(snapshot, rawRule = null) {
     if (excluded.includes(role)) continue;
     if (actor?.visible === false) continue;
     if (isMapActor(actor)) continue;
+    // 先知不参与碎片规则：它是有剧本的角色，不是可以被浮动/旋转的物体。
+    if (isProphetActor(actor)) continue;
     const handle = handleOf(actor);
     const base = positionOf(actor);
     if (!Number.isInteger(handle) || handle <= 0 || !base) continue;
@@ -230,9 +295,13 @@ export function collectSwayTargets(snapshot, rawRule = null) {
   return targets;
 }
 
-/** One rule target as `isMapActor` reads it: the same identity fields, under target names. */
-const mapIdentityOf = target => ({ actor_guid: target?.guid, model_ref: target?.modelRef,
-  entity_id: target?.entityId, entity_type: target?.entityType });
+/**
+ * One rule target as an identity reader sees it: the same identity fields, under target names.
+ * Both excludes (`isMapActor`, `isProphetActor`) are asked of this projection, so the runner
+ * cannot disagree with `collectSwayTargets` about who a target actually is.
+ */
+const identityOf = target => ({ actor_guid: target?.guid, semantic_role: target?.role,
+  model_ref: target?.modelRef, entity_id: target?.entityId, entity_type: target?.entityType });
 
 /** A tab that was hidden for a while must not make objects jump. */
 const MAX_DELTA_MS = 100;
@@ -249,7 +318,7 @@ export function createWorldRuleRunner({ bridge = null, rules = [], targets = [],
     ? id => cancelAnimationFrame(id) : null);
   const getBridge = typeof bridge === 'function' ? bridge : () => bridge;
 
-  let installedRules = [...rules];
+  let installedRules = [];
   let frame = null;
   let lastTimestamp = null;
   let elapsedMs = 0;
@@ -261,21 +330,41 @@ export function createWorldRuleRunner({ bridge = null, rules = [], targets = [],
   const savedPosition = target => target.base;
 
   /**
-   * The animated set, with the map refused — the one place a target list is accepted.
+   * The animated set, with the map and the prophet refused — the one place a target list is
+   * accepted.
    *
-   * Dropping it here as well as in `collectSwayTargets` is what makes a map-targeted rule
-   * harmless rather than merely unlikely: whatever a caller hands in — the initial list, an
-   * old rule that outlived this build, a list captured before the map existed, a hand-edited
-   * record — the map never enters `currentTargets`, so not one frame, not `refreshBase` and
-   * not `restore` can write its transform (which `storyMap.ensureStoryMap` alone owns).
+   * Dropping them here as well as in `collectSwayTargets` is what makes a map- or
+   * prophet-targeted rule harmless rather than merely unlikely: whatever a caller hands in —
+   * the initial list, an old rule that outlived this build, a list captured before the map
+   * existed, a hand-edited record — the map (whose transform `storyMap.ensureStoryMap` alone
+   * owns) and the prophet (碎片不影响先知) never enter `currentTargets`, so not one frame, not
+   * `refreshBase` and not `restore` can write their transform.
    */
   const animateTargets = list => (Array.isArray(list)
-    ? list.filter(target => !isMapActor(mapIdentityOf(target))).map(target => ({
-      ...target, base: [...target.base],
-      baseRotation: Array.isArray(target.baseRotation) ? [...target.baseRotation] : [...ZERO],
-    })) : []);
+    ? list.filter(target => !isMapActor(identityOf(target)) && !isProphetActor(identityOf(target)))
+      .map(target => ({
+        ...target, base: [...target.base],
+        baseRotation: Array.isArray(target.baseRotation) ? [...target.baseRotation] : [...ZERO],
+      })) : []);
 
   let currentTargets = animateTargets(targets);
+  // The targets that actually carry a rule. Only these are ever written: an object with no
+  // rule must not receive a position or a rotation write, not even the one putting it back.
+  let animated = [];
+
+  /**
+   * The rules of ONE target: its own rules, plus the legacy rules (no `target` at all), whose
+   * meaning is unchanged — they apply to every eligible object. Order is the installed order,
+   * so a rule set behaves the same way it always did.
+   */
+  const rulesFor = target => installedRules.filter(rule => !rule.target || rule.target === target.guid);
+
+  function recomputeAnimated() {
+    animated = currentTargets.filter(target => rulesFor(target).length > 0);
+  }
+  // The constructor's rules go through the same door as `setRules`, so a bad or reserved-target
+  // record behaves identically whether it arrived at construction or later.
+  setRules(rules);
 
   function writeBase(target) {
     const bridge = getBridge();
@@ -288,6 +377,7 @@ export function createWorldRuleRunner({ bridge = null, rules = [], targets = [],
   /** Replace the animated set (after entering a world, installing, or moving a prop). */
   function setTargets(next) {
     currentTargets = animateTargets(next);
+    recomputeAnimated();
   }
 
   /**
@@ -305,14 +395,22 @@ export function createWorldRuleRunner({ bridge = null, rules = [], targets = [],
   }
 
   /**
-   * One frame of every installed rule, composed: the sway contributes the position offset,
-   * the spin contributes the rotation offset, and each actor receives exactly ONE position
-   * write plus ONE rotation write — never one write per rule, so two rules can never fight
-   * over the same actor or lose the base the scene persisted.
+   * One frame of the rules that are installed, composed per target.
+   *
+   * Each rule is applied ONLY to its own target; a target carrying several rules gets one
+   * composed position write plus one composed rotation write, so two rules can never fight over
+   * the same actor or lose the base the scene persisted. An object that carries no rule is not
+   * in `animated`, so it is never written — not even with its own base.
    */
-  function apply(positionOffset, rotationOffset) {
+  function apply(elapsed) {
     const bridge = getBridge();
-    for (const target of currentTargets) {
+    for (const target of animated) {
+      const rules = rulesFor(target);
+      if (!rules.length) continue;
+      // The two offsets are computed per target: two objects carrying different rules must not
+      // share one number, which is exactly the cross-talk this shape prevents.
+      const positionOffset = totalOffset(rules, elapsed);
+      const rotationOffset = totalRotationOffset(rules, elapsed);
       const base = savedPosition(target), rotation = savedRotation(target);
       const position = [base[0] + positionOffset[0], base[1] + positionOffset[1],
         base[2] + positionOffset[2]];
@@ -335,9 +433,7 @@ export function createWorldRuleRunner({ bridge = null, rules = [], targets = [],
     elapsedMs += Math.min(Math.max(timestamp - lastTimestamp, 0), MAX_DELTA_MS);
     lastTimestamp = timestamp;
     try {
-      // Both offsets are computed once per frame and handed to every actor together.
-      apply(totalOffset(installedRules, elapsedMs),
-        totalRotationOffset(installedRules, elapsedMs));
+      apply(elapsedMs);
     } catch (error) {
       // The bridge is gone, so restoring through it would fail too: stop quietly and
       // report once. The persisted scene still holds the un-swayed base transform.
@@ -354,14 +450,25 @@ export function createWorldRuleRunner({ bridge = null, rules = [], targets = [],
   }
 
   function setRules(next) {
-    installedRules = Array.isArray(next) ? next.map(rule => ({ ...validateRule(rule) })) : [];
+    // 一条指向保留身份（地图/先知）的规则在这里被忽略，而不是让整份规则装不进去：这样一份
+    // 手改存档里的坏记录只会少动一个物体，不会把同一个世界里的其它规则一起停掉。正常的
+    // 校验仍然由 validateRule 兜底。
+    installedRules = Array.isArray(next)
+      ? next.filter(rule => !isReservedTargetGuid(rule?.target))
+        .map(rule => ({ ...validateRule(rule) }))
+      : [];
     elapsedMs = 0;
     lastTimestamp = null;
+    recomputeAnimated();
   }
 
-  /** Leave every object exactly on its persisted base position and rotation. */
+  /**
+   * Leave every object this loop animated exactly on its persisted base position and rotation.
+   * Objects that carried no rule are untouched, because they were never written.
+   */
   function restore() {
-    for (const target of currentTargets) {
+    const list = animated;
+    for (const target of list) {
       try { writeBase(target); } catch (error) { onError(error); return; }
     }
   }
@@ -377,7 +484,9 @@ export function createWorldRuleRunner({ bridge = null, rules = [], targets = [],
 
   function start() {
     if (running) return true;  // idempotent: one loop, however often it is asked for
-    if (!frameRequest || !currentTargets.length || !installedRules.length) return false;
+    // No rule that can reach an object means no loop at all: a rule aimed at an object that is
+    // not in the captured target list must not keep an animation frame alive for nothing.
+    if (!frameRequest || !animated.length) return false;
     running = true;
     lastTimestamp = null;
     schedule();
@@ -395,6 +504,8 @@ export function createWorldRuleRunner({ bridge = null, rules = [], targets = [],
     setTargets, setRules, refreshBase, start, stop, restore,
     isRunning: () => running,
     targetCount: () => currentTargets.length,
+    /** How many objects actually carry a rule — the only ones this loop ever writes. */
+    animatedCount: () => animated.length,
     ruleCount: () => installedRules.length,
     dispose() { const wasRunning = running; halt(); return wasRunning; },
   };

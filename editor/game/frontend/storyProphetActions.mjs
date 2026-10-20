@@ -10,9 +10,10 @@
  */
 
 import { CUBE_PLACEMENT, cubeMoveTransform, cubeScaleTransform, cubeTransformOf } from './storyCube.mjs';
-import { sceneSnapshot } from './storyCharacters.mjs';
+import { isProphetActor, sceneSnapshot } from './storyCharacters.mjs';
 import { isMapActor } from './storyMap.mjs';
-import { FRAGMENTS, findFragment, ownedFragmentIds } from './storyWorldRules.mjs';
+import { FRAGMENTS, RULE_AXES, findFragment, normalizeTarget, ownedFragmentIds }
+  from './storyWorldRules.mjs';
 
 /** The two main options. Keys are live in the chooser only. */
 export const PROPHET_SCREENS = Object.freeze([
@@ -31,15 +32,20 @@ export const ADJUST_ACTIONS = Object.freeze([
 ]);
 
 /**
- * 碎片的规则可以现场改数字：幅度与周期各两个方向，共四步。与 ADJUST_ACTIONS 同一种
- * 形状（{id, key, group, label}），按键在「调整碎片」子屏里有效；每一步落在哪个字段、
+ * 碎片的规则可以现场改数字：幅度、周期各两个方向，加一个换轴，共五步。与 ADJUST_ACTIONS 同
+ * 一种形状（{id, key, group, label}），按键在「调整碎片」子屏里有效；每一步落在哪个字段、
  * 往哪个方向走，由下面的 FRAGMENT_STEPS 决定，免得两处漂移。
+ *
+ * 「目标物体」不在这里：它由子屏的物体列表先选（`selectFragmentTarget`），动作只作用于
+ * 「这块碎片 × 这个物体」那一条记录。
  */
 export const FRAGMENT_ADJUST_ACTIONS = Object.freeze([
   Object.freeze({ id: 'amplitude-up', key: '1', group: '幅度', label: '幅度增大' }),
   Object.freeze({ id: 'amplitude-down', key: '2', group: '幅度', label: '幅度减小' }),
   Object.freeze({ id: 'period-up', key: '3', group: '周期', label: '周期加长' }),
   Object.freeze({ id: 'period-down', key: '4', group: '周期', label: '周期缩短' }),
+  // 轴由规则类型决定：sway 可以在 x/y/z 之间换，spin 只能绕 z（换了也会被后端拒绝）。
+  Object.freeze({ id: 'axis-next', key: '5', group: '方向', label: '换一条浮动轴' }),
 ]);
 
 const FRAGMENT_STEPS = Object.freeze({
@@ -128,6 +134,8 @@ export function selectableObjects(snapshot) {
     const entityType = actor?.entity_type || actor?.runtime?.entity_type || '';
     const entityId = String(actor?.entity_id || actor?.runtime?.entity_id || '');
     if (CHARACTER_ROLES.includes(role) || entityType === CHARACTER_ENTITY_TYPE) continue;
+    // 先知永远不是可调物体：身份由 `isProphetActor` 一处裁决，角色名或改名都不影响。
+    if (isProphetActor(actor)) continue;
     if (UNPLACEABLE_PROP_IDS.some(id => entityId === `${PLACEMENT_ENTITY_PREFIX}${id}`)) continue;
     // 地图是世界的立足面，不是可调物体：不出现在列表里，就没有任何一条调整动作能写到它。
     if (isMapActor(actor)) continue;
@@ -207,21 +215,52 @@ function fragmentNumbers(fragment, record) {
 }
 
 /**
- * The «碎片» screen's list: every catalogued fragment with its ownership, its装填 state and
- * the human-readable details of the rule it carries. An installed fragment shows the numbers
- * the player actually saved (the record), not the catalogue defaults — otherwise「调整碎片」
- * would look like it did nothing.
+ * 一条装填记录作用于哪个物体：`target` 是 actor 的 guid。
+ *
+ * 没有 `target` 的记录是**旧规则**（这份改动之前存下的世界）：它仍然作用于整个小世界，语义
+ * 与改动前逐字一致，所以老世界不需要迁移也能照样动。判定一律用 guid，绝不用显示名——名字
+ * 可以随时改，guid 才是 actor 的身份。
  */
-export function fragmentPanel(installedRules = []) {
+const recordTarget = record => (typeof record?.target === 'string' && record.target
+  ? record.target : null);
+/** 读目标的宽松版本：只用来查一条记录，遇到什么都返回 null，绝不抛异常。 */
+const readTarget = raw => (typeof raw === 'string' && raw.trim() ? raw.trim() : null);
+const sameTarget = (a, b) => (a || null) === (b || null);
+/** 目标的一句话名字：页面给了显示名就用它，没有就退回 guid；没有目标就是整个小世界。 */
+const targetLabelOf = (target, label) => (target ? (label || target) : '整个小世界');
+/** 类型的中文名，子屏标题与换轴反馈共用。 */
+const typeLabelOf = type => (type === 'spin' ? '旋转规则' : '浮动规则');
+
+/** 这块碎片此刻装在哪个物体上（guid）；没装填返回 null，装的是旧规则也返回 null。 */
+export function installedTargetOf(installedRules = [], fragmentId) {
+  const records = Array.isArray(installedRules) ? installedRules : [];
+  const record = records.find(entry => entry?.fragmentId === fragmentId) || null;
+  return record ? recordTarget(record) : null;
+}
+/** 这块碎片是不是一条旧规则（整世界生效）——子屏据此说明「作用于整个小世界」。 */
+export function isLegacyRule(record) {
+  return Boolean(record) && recordTarget(record) === null;
+}
+
+/**
+ * The «碎片» screen's list: every catalogued fragment with its ownership, its装填 state, the
+ * human-readable details of the rule it carries and the object it acts on.
+ *
+ * `names` maps guid → display name so the row can say 作用于：方块（放置物） instead of a guid;
+ * it is optional, and a missing name falls back to the guid rather than hiding the target.
+ */
+export function fragmentPanel(installedRules = [], names = {}) {
   const records = Array.isArray(installedRules) ? installedRules : [];
   const installed = new Map(records.filter(rule => rule?.fragmentId)
     .map(rule => [rule.fragmentId, rule]));
   const owned = new Set(ownedFragmentIds());
+  const nameOf = guid => (guid ? names?.[guid] || null : null);
   return FRAGMENTS.map(fragment => {
     const record = installed.get(fragment.id) || null;
     const state = record ? RULE_STATE.installed
       : owned.has(fragment.id) ? RULE_STATE.owned : RULE_STATE.locked;
     const numbers = fragmentNumbers(fragment, record);
+    const target = recordTarget(record);
     return {
       id: fragment.id,
       name: fragment.name,
@@ -233,6 +272,10 @@ export function fragmentPanel(installedRules = []) {
       owned: state.id !== 'locked',
       amplitude: numbers.amplitude,
       periodMs: numbers.periodMs,
+      // 作用对象：null = 旧规则（整个小世界）。guid 是身份，label 只用来显示。
+      target,
+      targetLabel: record ? targetLabelOf(target, nameOf(target)) : null,
+      legacy: isLegacyRule(record),
       amplitudeUnit: fragmentRuleBounds(fragment).amplitude.unit,
       periodUnit: fragmentRuleBounds(fragment).periodMs.unit,
       details: ruleDetails({ ...fragment.rule, ...numbers }),
@@ -276,7 +319,9 @@ export function prophetKeyAction(key, screen = null, fragmentId = null) {
   }
   if (screen === 'fragments') {
     const entry = fragmentForKey(key);
-    return entry ? { type: 'toggle-fragment', fragmentId: entry.id } : null;
+    // 数字键打开「装填 / 调整」子屏，而不是立刻装填：一块碎片必须先选中要作用于哪个物体，
+    // 没有目标就装填等于回到「影响所有物体」，那正是本次要改掉的行为。
+    return entry ? { type: 'open-fragment-adjust', fragmentId: entry.id } : null;
   }
   if (screen === 'fragment-adjust') {
     const action = fragmentAdjustActionForKey(key);
@@ -288,31 +333,56 @@ export function prophetKeyAction(key, screen = null, fragmentId = null) {
 }
 
 /**
- * 装填 or 拆下. Returns the rule records to persist plus what happened, so the caller only
- * has to save them; the semantics of a rule always come from the catalogue.
+ * 装填 / 拆下 / 换目标 — 一块碎片只作用于一个物体。
+ *
+ * `target` 是被选中物体的 actor guid（`label` 只是它的显示名）。三种结果：
+ *   - 这块碎片已经装在这个物体上 → 拆下；
+ *   - 已经装在别的物体上（或是一条没有目标的旧规则）→ 换目标，数字与轴原样保留；
+ *   - 还没装 → 用目录里的数字装到这个物体上。
+ * 没有 `target` 时保持改动前的行为（一条整世界生效的记录），这条路径只给旧存档与既有调用用；
+ * 新界面一定先选物体。返回要落盘的记录与发生了什么，写入由调用方负责。
  */
-export function toggleFragment(installedRules = [], fragmentId) {
+export function toggleFragment(installedRules = [], fragmentId, { target = null, label = null } = {}) {
   const records = Array.isArray(installedRules) ? installedRules : [];
   const catalogue = findFragment(fragmentId);
   if (!catalogue) throw new Error(`未知碎片：${String(fragmentId)}`);
-  const present = records.some(record => record?.fragmentId === fragmentId);
-  if (present) {
-    return { action: 'removed', fragmentId,
-      rules: records.filter(record => record?.fragmentId !== fragmentId),
+  // 目标只有两种合法写法：null（旧规则/整世界），或一个非空 guid。地图与先知在这里就被
+  // `normalizeTarget` 拒绝（`isReservedTargetGuid`），所以它们既装不上也换不过去。
+  const guid = normalizeTarget(target);
+  const at = records.find(record => record?.fragmentId === fragmentId) || null;
+  if (at && sameTarget(recordTarget(at), guid)) {
+    return { action: 'removed', fragmentId, target: guid, label: targetLabelOf(guid, label),
+      rules: records.filter(record => record !== at),
       feedback: `已拆下：${catalogue.name}` };
+  }
+  if (at) {
+    const moved = { ...at };
+    if (guid === null) delete moved.target; else moved.target = guid;
+    return { action: 'retargeted', fragmentId, target: guid, label: targetLabelOf(guid, label),
+      rules: records.map(record => (record === at ? moved : record)),
+      feedback: `已改目标：${catalogue.name} → ${targetLabelOf(guid, label)}` };
   }
   if (!ownedFragmentIds().includes(fragmentId)) throw new Error(`尚未获得碎片：${catalogue.name}`);
   const rule = catalogue.rule;
-  return { action: 'installed', fragmentId,
-    rules: [...records, { fragmentId, type: rule.type, axis: rule.axis,
-      amplitude: rule.amplitude, periodMs: rule.periodMs }],
-    feedback: `已装填：${catalogue.name}` };
+  const record = { fragmentId, type: rule.type, axis: rule.axis,
+    amplitude: rule.amplitude, periodMs: rule.periodMs };
+  // 「旧规则」那一份记录不带 target 键：两种形状在深比较里也分得开。
+  if (guid !== null) record.target = guid;
+  return { action: 'installed', fragmentId, target: guid, label: targetLabelOf(guid, label),
+    rules: [...records, record],
+    feedback: `已装填：${catalogue.name}${guid ? `（作用于 ${targetLabelOf(guid, label)}）` : ''}` };
 }
 
-/** The installed record of one fragment, or null. Never throws, whatever it is handed. */
-export function fragmentRuleOf(installedRules = [], fragmentId) {
+/**
+ * The installed record of one fragment ON ONE OBJECT, or null. Never throws, whatever it is
+ * handed. Without `target` it answers for the legacy record (a rule with no target), which is
+ * what an old world has and what the old 2-argument calls asked for.
+ */
+export function fragmentRuleOf(installedRules = [], fragmentId, { target = null } = {}) {
   const records = Array.isArray(installedRules) ? installedRules : [];
-  return records.find(record => record?.fragmentId === fragmentId) || null;
+  const guid = readTarget(target);
+  return records.find(record => record?.fragmentId === fragmentId
+    && sameTarget(recordTarget(record), guid)) || null;
 }
 
 const formatField = (field, value, fragment) => {
@@ -329,22 +399,50 @@ function steppedValue(bounds, current, direction) {
 }
 
 /**
- * Change one number of an installed fragment. Returns the whole rule list to persist (the
- * edited record plus every other record in its original order) plus what to tell the player,
- * so the caller only has to save it. Never throws and never returns a rule the backend would
- * reject: both numbers are pushed back inside the mirrored bounds first, and nothing is
- * changed when the action is unknown, the fragment is not installed, or the value already
- * sits on the bound the step walks toward.
+ * Change one number (or the axis) of an installed fragment ON ONE OBJECT.
+ *
+ * `target` selects which record: the guid of the object the player picked. Without it the
+ * legacy record (no target) is edited, which is what an old world has; a record that names a
+ * different object is never touched by an action that does not name it — that is what stops
+ * two objects from cross-talking in the UI either.
+ *
+ * Returns the whole rule list to persist plus what to tell the player, so the caller only has
+ * to save it. Never throws and never returns a rule the backend would reject: numbers are
+ * pushed back inside the mirrored bounds first, the axis is only ever one of the type's, and
+ * nothing changes when the action is unknown, the fragment is not installed, or the value
+ * already sits on the bound the step walks toward.
  */
-export function adjustFragmentRule(installedRules = [], fragmentId, actionId) {
+export function adjustFragmentRule(installedRules = [], fragmentId, actionId,
+  { target = null, label = null } = {}) {
   const records = Array.isArray(installedRules) ? installedRules : [];
-  const refuse = feedback => ({ changed: false, rules: records, feedback });
+  const guid = readTarget(target);
+  const refuse = feedback => ({ changed: false, rules: records, feedback, target: guid });
   const action = findFragmentAdjustAction(actionId);
   if (!action) return refuse(`未知的调整：${String(actionId)}`);
   const catalogue = findFragment(fragmentId);
-  const record = fragmentRuleOf(records, fragmentId);
+  const record = fragmentRuleOf(records, fragmentId, { target: guid });
   if (!record) {
-    return refuse(catalogue ? '先装填该碎片再调整' : `未知碎片：${String(fragmentId)}`);
+    if (!catalogue) return refuse(`未知碎片：${String(fragmentId)}`);
+    return refuse(guid
+      ? `先在该物体上装填${catalogue.name}再调整`
+      : '先装填该碎片再调整');
+  }
+  const axes = RULE_AXES[catalogue.rule.type] || [];
+  const axis = axes.includes(record.axis) ? record.axis : catalogue.rule.axis;
+  // 「换一条浮动轴」：轴必须属于规则类型（spin 只有 z，按了也只会得到一句说明），
+  // 类型本身来自碎片——一条规则的类型就是它装的那块碎片，不在子屏里改。
+  if (action.id === 'axis-next') {
+    if (axes.length <= 1) {
+      return refuse(`${typeLabelOf(catalogue.rule.type)}只能绕 ${axes[0] || 'z'} 轴，方向不能改`);
+    }
+    const nextAxis = axes[(axes.indexOf(axis) + 1) % axes.length];
+    const updated = { ...record, axis: nextAxis };
+    return {
+      changed: true,
+      rules: records.map(entry => (entry === record ? updated : entry)),
+      target: guid,
+      feedback: `方向已改为 ${AXIS_NAMES[nextAxis] || nextAxis}（${nextAxis} 轴）`,
+    };
   }
   const step = FRAGMENT_STEPS[action.id];
   const meta = FRAGMENT_FIELDS[step.field];
@@ -373,47 +471,66 @@ export function adjustFragmentRule(installedRules = [], fragmentId, actionId) {
     ? Math.min(Math.max(otherCurrent, otherBounds.min), otherBounds.max) : otherBounds.min;
   const amplitude = step.field === 'amplitude' ? next : other;
   const periodMs = step.field === 'periodMs' ? next : other;
-  const updated = { fragmentId, type: catalogue.rule.type, axis: catalogue.rule.axis,
-    amplitude, periodMs };
+  // `...record` keeps the target (and the axis the player may have changed) — an edit must not
+  // quietly move the rule back to the whole world or to the catalogue's axis.
+  const updated = { ...record, fragmentId, type: catalogue.rule.type, axis, amplitude, periodMs };
   const edge = next === bounds.max ? `（已达${meta.label}上限）`
     : next === bounds.min ? `（已达${meta.label}下限）` : '';
   return {
     changed: true,
     rules: records.map(entry => (entry === record ? updated : entry)),
+    target: guid,
     feedback: `${meta.label}已调到 ${fixed2(next * bounds.scale)} ${bounds.unit}${edge}`,
   };
 }
 
 /**
- * What the «调整碎片» sub-screen shows: which fragment, its current numbers, and the four
- * steps. A fragment that is not installed is still describable (catalogue defaults) so the
- * sub-screen can explain itself instead of rendering blank.
+ * What the «调整碎片» sub-screen shows: the chosen object, this fragment's rule for THAT object
+ * (or, with no object chosen, the legacy whole-world record), its numbers, axis and type, and
+ * the adjustment steps. A fragment that is not installed is still describable (catalogue
+ * defaults) so the sub-screen can explain itself instead of rendering blank.
  */
-export function fragmentAdjustPanel(installedRules = [], fragmentId) {
-  const record = fragmentRuleOf(installedRules, fragmentId);
+export function fragmentAdjustPanel(installedRules = [], fragmentId, { target = null, label = null } = {}) {
+  const guid = readTarget(target);
+  const record = fragmentRuleOf(installedRules, fragmentId, { target: guid });
   const catalogue = findFragment(fragmentId);
+  const targetLabel = targetLabelOf(guid, label);
   if (!catalogue) {
     return { id: fragmentId ?? null, name: String(fragmentId ?? '未知碎片'), description: '',
       known: false, installed: false, amplitude: null, periodMs: null,
+      target: guid, targetLabel, legacy: false, type: null, typeLabel: '—', axis: null,
+      axisLabel: '方向 —',
       amplitudeLabel: '幅度 —', periodLabel: '周期 —', details: '未知碎片，无法调整',
       hint: '先装填该碎片再调整', actions: FRAGMENT_ADJUST_ACTIONS };
   }
   const numbers = fragmentNumbers(catalogue, record);
   const unitOf = field => fragmentRuleBounds(catalogue)[field].unit;
+  const axes = RULE_AXES[catalogue.rule.type] || [];
+  const axis = record && axes.includes(record.axis) ? record.axis : catalogue.rule.axis;
   return {
     id: catalogue.id,
     name: catalogue.name,
     description: catalogue.description,
     known: true,
     installed: Boolean(record),
+    target: guid,
+    targetLabel,
+    // 旧规则（没有目标）照旧作用于整个小世界，子屏必须把这一点说出来，而不是假装它只作用
+    // 于某个物体。
+    legacy: isLegacyRule(record),
+    type: catalogue.rule.type,
+    typeLabel: catalogue.rule.type === 'spin' ? '旋转 ±度' : '浮动（米）',
+    axis,
+    axisLabel: `方向 ${AXIS_NAMES[axis] || axis}（${axis} 轴）`,
     amplitude: numbers.amplitude,
     periodMs: numbers.periodMs,
     amplitudeUnit: unitOf('amplitude'),
     periodUnit: unitOf('periodMs'),
     amplitudeLabel: formatField('amplitude', numbers.amplitude, catalogue),
     periodLabel: formatField('periodMs', numbers.periodMs, catalogue),
-    details: ruleDetails({ ...catalogue.rule, ...numbers }),
-    hint: record ? '' : '先装填该碎片再调整',
+    details: ruleDetails({ ...catalogue.rule, axis, amplitude: numbers.amplitude,
+      periodMs: numbers.periodMs }),
+    hint: record ? '' : (guid ? `先在该物体上装填${catalogue.name}再调整` : '先装填该碎片再调整'),
     actions: FRAGMENT_ADJUST_ACTIONS,
   };
 }

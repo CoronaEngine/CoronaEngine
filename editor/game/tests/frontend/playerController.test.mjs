@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createPlayerController, PLAYER_CONTROLS } from '../../frontend/playerController.mjs';
 import { createPlayerSave } from '../../frontend/playerSave.mjs';
+import { PLAYER_MODEL_YAW_OFFSET } from '../../frontend/storyCharacters.mjs';
 import { actorFixture, apiFixture, deferred } from './fixtures.mjs';
 export function controlFixture(options = {}) {
   const calls = [], frames = new Map(), errors = []; let id = 0, time = 0, current = true, locked = false;
@@ -24,16 +25,26 @@ test('third-person starts behind player and movement/facing is camera relative',
   const f = controlFixture();
   assert.ok(f.pose.position[2] < 0); assert.ok(f.pose.position[1] > f.actor.geometry.position[1]);
   f.controller.keyDown(key('KeyW')); f.step(50);
-  const p = f.controller.snapshotPlayer(); near(p.position[2], 0.15); near(p.rotation[1], Math.PI); near(p.facingYaw, 0); assert.equal(p.grounded, true);
+  const p = f.controller.snapshotPlayer(); near(p.position[2], 0.15); near(p.rotation[1], PLAYER_MODEL_YAW_OFFSET); near(p.facingYaw, 0); assert.equal(p.grounded, true);
   near(p.position[1], f.actor.geometry.position[1]);
   assert.equal(f.calls.filter(c => c[0] === 'actor').length, 2);
   near(f.pose.position[2], 0.15 - Math.cos(PLAYER_CONTROLS.pitch) * 4.5);
   f.controller.dispose(); assert.equal(f.frames.size, 0);
 });
+test('releasing the last movement key reports idle, which is what stops the walk clip', () => {
+  const f = controlFixture();
+  f.controller.keyDown(key('KeyW')); f.step(50);
+  assert.equal(f.controller.snapshotPlayer().movementState, 'walking');
+  // The page subscribes through this callback; it is the only signal after the loop stops.
+  f.controller.keyUp(key('KeyW'));
+  assert.equal(f.controller.snapshotPlayer().movementState, 'idle');
+  f.controller.dispose();
+});
+
 test('diagonal movement is normalized and a stalled frame does not teleport', () => {
   const f = controlFixture(); f.controller.keyDown(key('KeyW')); f.controller.keyDown(key('KeyD'));
   f.step(5000); const p = f.controller.snapshotPlayer(); near(Math.hypot(p.position[0],p.position[2]), 0.15);
-  near(p.rotation[1], Math.PI + Math.PI/4); near(p.facingYaw, Math.PI/4); f.controller.dispose();
+  near(p.rotation[1], PLAYER_MODEL_YAW_OFFSET + Math.PI/4); near(p.facingYaw, Math.PI/4); f.controller.dispose();
 });
 test('right drag rotates the camera, clamps pitch, and determines WASD direction', () => {
   const f = controlFixture();
@@ -155,7 +166,7 @@ test('standing and directional jumps use logical facing or normalized camera-rel
     for (let i = 0; i < 7; i++) f.step(50);
     const p = f.controller.snapshotPlayer();
     near(p.position[0], expected[0]); near(p.position[2], expected[1]);
-    near(p.position[1], f.actor.geometry.position[1]); near(p.rotation[1], p.facingYaw + Math.PI);
+    near(p.position[1], f.actor.geometry.position[1]); near(p.rotation[1], p.facingYaw + PLAYER_MODEL_YAW_OFFSET);
     assert.equal(p.grounded, true); assert.equal(f.frames.size, 0);
     f.controller.dispose();
   }

@@ -477,6 +477,7 @@ const editorApiStatic = {
     onActorChanged: (callback) => register_manifest_editor_api_callback('events.onActorChanged', callback),
     onActorSelectionChanged: (callback) => register_manifest_editor_api_callback('events.onActorSelectionChanged', callback),
     onActorTransformUpdated: (callback) => register_manifest_editor_api_callback('events.onActorTransformUpdated', callback),
+    // 原生三角面移动的每帧结果：少了这条登记，玩家控制器的 pendingMove 永远等不到回调。
     onMeshMoveResult: (callback) => register_manifest_editor_api_callback('events.onMeshMoveResult', callback),
     onActorPickResult: (callback) => register_manifest_editor_api_callback('events.onActorPickResult', callback),
     onViewportGizmoPointerResult: (callback) => register_manifest_editor_api_callback('events.onViewportGizmoPointerResult', callback),
@@ -730,10 +731,6 @@ const editorApiStatic = {
       call_manifest_editor_api('sceneTools.setActorState', [sceneName, actorName, state]),
     setActorAnimation: (sceneName, actorName, animation, blendSeconds = 0.2) =>
       call_manifest_editor_api('sceneTools.setActorAnimation', [sceneName, actorName, animation, blendSeconds]),
-    pauseActorAnimation: (sceneName, actorName) =>
-      call_manifest_editor_api('sceneTools.pauseActorAnimation', [sceneName, actorName]),
-    resumeActorAnimation: (sceneName, actorName) =>
-      call_manifest_editor_api('sceneTools.resumeActorAnimation', [sceneName, actorName]),
     saveActor: (sceneName, actorName) =>
       call_manifest_editor_api('sceneTools.saveActor', [sceneName, actorName]),
     selectModelFile: (sceneName, actorName, fileType = 'model') =>
@@ -754,24 +751,6 @@ const editorApiStatic = {
       call_manifest_editor_api('sceneTools.setVisionAccumulation', [sceneName, cameraId, !!enabled]),
     getVisionAccumulation: (sceneName, cameraId = null) =>
       call_manifest_editor_api('sceneTools.getVisionAccumulation', [sceneName, cameraId]),
-    setVisionDenoiser: (sceneName, cameraId = null, type = 'scene') =>
-      call_manifest_editor_api('sceneTools.setVisionDenoiser', [sceneName, cameraId, type]),
-    getPtSettings: (sceneName, cameraId) =>
-      call_manifest_editor_api('sceneTools.getPtSettings', [sceneName, cameraId]),
-    setPtSettings: (sceneName, cameraId, settings) =>
-      call_manifest_editor_api('sceneTools.setPtSettings', [sceneName, cameraId, settings]),
-    getRestirSettings: (sceneName, cameraId) =>
-      call_manifest_editor_api('sceneTools.getRestirSettings', [sceneName, cameraId]),
-    setRestirSettings: (sceneName, cameraId, settings) =>
-      call_manifest_editor_api('sceneTools.setRestirSettings', [sceneName, cameraId, settings]),
-    getReblurSettings: (sceneName, cameraId) =>
-      call_manifest_editor_api('sceneTools.getReblurSettings', [sceneName, cameraId]),
-    setReblurSettings: (sceneName, cameraId, settings) =>
-      call_manifest_editor_api('sceneTools.setReblurSettings', [sceneName, cameraId, settings]),
-    getRelaxSettings: (sceneName, cameraId) =>
-      call_manifest_editor_api('sceneTools.getRelaxSettings', [sceneName, cameraId]),
-    setRelaxSettings: (sceneName, cameraId, settings) =>
-      call_manifest_editor_api('sceneTools.setRelaxSettings', [sceneName, cameraId, settings]),
     setVisionDenoise: (sceneName, cameraId = null, enabled = false) =>
       call_manifest_editor_api('sceneTools.setVisionDenoise', [sceneName, cameraId, !!enabled]),
     getVisionDenoise: (sceneName, cameraId = null) =>
@@ -839,10 +818,6 @@ const editorApiStatic = {
       call_manifest_editor_api('sceneTools.actorStopAudio', [actorName]),
     getActorSkeletonLeaves: (sceneName, actorName) =>
       call_manifest_editor_api('sceneTools.getActorSkeletonLeaves', [sceneName, actorName]),
-    getModelNodes: (sceneName, actorName, parentIndex = -1, offset = 0, limit = 100) =>
-      call_manifest_editor_api('sceneTools.getModelNodes', [sceneName, actorName, parentIndex, offset, limit]),
-    setModelNodeState: (sceneName, actorName, nodeIndex, state) =>
-      call_manifest_editor_api('sceneTools.setModelNodeState', [sceneName, actorName, nodeIndex, state]),
     getActorIkChains: (sceneName, actorName) =>
       call_manifest_editor_api('sceneTools.getActorIkChains', [sceneName, actorName]),
     setActorIkChains: (sceneName, actorName, chains, expectedRevision) =>

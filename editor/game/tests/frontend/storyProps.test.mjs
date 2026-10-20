@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { HOTBAR_SLOTS, MAX_PLACEMENTS, PLACED_BLOCK_REACH, PLACEMENT_PREFIX, PLACEMENT_SITES,
-  blockSpawnTransform, canPlace, cycleSlot, exhibitItems, findProp, hotbarSlots,
+  blockSpawnTransform, canPlace, canonicalPropId, cycleSlot, exhibitItems, findProp, hotbarSlots,
   nearestPlacedBlock, nextPlacementIndex, placeableProps, placementGuid, placementIndex,
   removePlacement, sanitizePlacements, validPlacement } from '../../frontend/storyProps.mjs';
 
@@ -82,34 +82,46 @@ test('the free count is always owned minus placed, per item', () => {
     { ...placementAt(5), propId: 'world-fragment' },
   ];
   const items = exhibitItems(inventory, placed);
-  assert.deepEqual(items.map(item => [item.id, item.owned, item.placed, item.available]),
-    [['block', 64, 2, 62]]);
+  // 前两件是搭建件，其余是这次新加的植被（没库存就全是 0）。
+  const rows = items.map(item => [item.id, item.owned, item.placed, item.available]);
+  assert.deepEqual(rows.slice(0, 2), [['block', 64, 2, 62], ['ball', 0, 0, 0]]);
+  assert.ok(rows.slice(2).every(row => row[1] === 0 && row[2] === 0 && row[3] === 0));
   // Every placed block is one block fewer in the bag.
   assert.deepEqual(exhibitItems(inventory, [...placed, placementAt(7)])
-    .map(item => [item.id, item.available]), [['block', 61]]);
+    .map(item => [item.id, item.available]).slice(0, 2), [['block', 61], ['ball', 0]]);
   // Never negative, never more than the bag holds.
-  assert.deepEqual(exhibitItems({}, placed).map(item => item.available), [0]);
-  assert.deepEqual(exhibitItems({ block: 1 }, [placementAt(0), placementAt(1), placementAt(2)])
-    .map(item => item.available), [0]);
+  assert.ok(exhibitItems({}, placed).every(item => item.available === 0));
+  assert.ok(exhibitItems({ block: 1 }, [placementAt(0), placementAt(1), placementAt(2)])
+    .every(item => item.available === 0));
   assert.equal(findProp('block').asset, 'cube/cube.obj');
+  assert.equal(findProp('ball').asset, 'fragment/Ball.obj');
+  // 退役的石柱 id 指向球：旧布局与旧存档不会丢东西。
+  assert.equal(canonicalPropId('pillar'), 'ball');
+  assert.equal(findProp('pillar').id, 'ball');
+  assert.equal(canPlace('pillar'), true);
 });
 
 test('the world fragment can never be placed, so it is never an item bar entry', () => {
   assert.equal(findProp('world-fragment').placeable, false);
   assert.equal(findProp('block').placeable, true);
-  assert.deepEqual(placeableProps().map(prop => prop.id), ['block']);
+  assert.deepEqual(placeableProps().map(prop => prop.id), ['block', 'ball', 'tree1', 'tree2', 'tree3', 'grass1', 'grass2', 'grass4', 'grass5']);
   assert.equal(canPlace('block'), true);
+  assert.equal(canPlace('ball'), true);
   assert.equal(canPlace('world-fragment'), false);
   assert.equal(canPlace('no-such-prop'), false, '未知 id 不得抛错，也不得放行');
   // Even holding fragments changes nothing: they simply do not appear as placeable.
   const items = exhibitItems({ worldFragment: 9, block: 3 }, []);
-  assert.deepEqual(items.map(item => item.id), ['block']);
-  assert.deepEqual(items.map(item => item.owned), [3]);
+  assert.deepEqual(items.map(item => item.id), ['block', 'ball', 'tree1', 'tree2', 'tree3', 'grass1', 'grass2', 'grass4', 'grass5']);
+  assert.deepEqual(items.map(item => item.owned), [3, 0, 0, 0, 0, 0, 0, 0, 0]);
   // A fragment entry already in a save stays valid (it is not destroyed), but it is still
   // not offered as something new to put down.
   const stranded = [{ ...placementAt(0), propId: 'world-fragment' }];
   assert.deepEqual(sanitizePlacements(stranded).map(entry => entry.propId), ['world-fragment']);
-  assert.deepEqual(exhibitItems({ worldFragment: 9 }, stranded).map(item => item.id), ['block']);
+  assert.deepEqual(exhibitItems({ worldFragment: 9 }, stranded).map(item => item.id),
+    ['block', 'ball', 'tree1', 'tree2', 'tree3', 'grass1', 'grass2', 'grass4', 'grass5']);
+  // 旧布局里的石柱在净化时直接变成球，不会在进入小世界时被丢掉。
+  const legacyPillar = [{ ...placementAt(0), propId: 'pillar' }];
+  assert.deepEqual(sanitizePlacements(legacyPillar).map(entry => entry.propId), ['ball']);
 });
 
 test('a full world refuses the next placement instead of losing it on save', () => {
@@ -135,15 +147,15 @@ test('a full world refuses the next placement instead of losing it on save', () 
 // 直接渲染这个列表，滚轮与数字键都在它的长度上换格，因此长度必须是常数 HOTBAR_SLOTS。
 const emptySlot = slot => ({ slot, id: null, name: '', owned: 0, placed: 0, available: 0, empty: true });
 
-test('the item bar always has 8 slots, empties included', () => {
-  assert.equal(HOTBAR_SLOTS, 8);
+test('the item bar always has 9 slots, empties included', () => {
+  assert.equal(HOTBAR_SLOTS, 9);
   const slots = hotbarSlots({ block: 64 }, []);
   assert.equal(slots.length, HOTBAR_SLOTS);
   // 第一格是方块本身，可用数量照旧来自 exhibitItems。
   assert.deepEqual(slots[0], { slot: 0, id: 'block', name: '方块',
     description: findProp('block').description, owned: 64, placed: 0, available: 64, empty: false });
   // 其后全是空格子，形状固定，编号与下标一致。
-  assert.deepEqual(slots.slice(1), [1, 2, 3, 4, 5, 6, 7].map(emptySlot));
+  assert.deepEqual(slots.slice(1), [1, 2, 3, 4, 5, 6, 7, 8].map(emptySlot));
   // 空手也是一整排空格子，而不是零格：否则滚轮与数字键就没有格子可选。
   assert.deepEqual(hotbarSlots({}, []), Array.from({ length: HOTBAR_SLOTS }, (unused, slot) => emptySlot(slot)));
   assert.deepEqual(hotbarSlots({ worldFragment: 9 }, []), hotbarSlots({}, []),

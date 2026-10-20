@@ -1,6 +1,6 @@
-import { FRAGMENT, FRAGMENT_GUID } from './storyGameplay.mjs';
+import { FRAGMENT_GUID } from './storyGameplay.mjs';
 import { PLACEMENT_PREFIX, placementScene } from './storyProps.mjs';
-import { STORY_CHARACTERS, PLAYER_GUID, BOSS_MODEL_REF, PLAYER_MODEL_REF, PROPHET_MODEL_REF, PLAYER_MODEL_YAW_OFFSET, unwrap, sceneSnapshot, resolveStoryAssetPath,
+import { STORY_CHARACTERS, PLAYER_GUID, BOSS_MODEL_REF, PLAYER_MODEL_REF, PROPHET_MODEL_REF, PLAYER_MODEL_YAW_OFFSET, isMonsterRole, unwrap, sceneSnapshot, resolveStoryAssetPath,
   characterTransform, rotatedBounds, hasUsableBounds } from './storyCharacters.mjs';
 import { PROPHET_PLACEMENT } from './storyDialogue.mjs';
 
@@ -13,6 +13,21 @@ const success = (response, operation) => {
   return data;
 };
 const loaded = actor => actor?.load_status === 'loaded' && Number(actor?.handle) > 0;
+/**
+ * Whether an actor's `route` still names the shipped art for `asset`.
+ *
+ * The engine exposes `actor.route` as a portable, project-relative path whose file name is the
+ * asset it actually imported (the same reading `storyMap.isMapCurrentAsset` relies on). A route
+ * that names another file cannot be repaired in place — `create_actor`'s `skip_if_exists` branch
+ * rewrites the transform and nothing else — so it has to be deleted and created again. An actor
+ * with no route yet is inconclusive and reported as current, which keeps the cheap repair path.
+ */
+const routeFileName = value => (typeof value === 'string' && value.trim()
+  ? value.replace(/\\/g, '/').split('/').pop().toLowerCase() : '');
+const routeNamesShippedArt = (actor, asset) => {
+  const actual = routeFileName(actor?.route);
+  return !actual || actual === routeFileName(asset);
+};
 /**
  * Delete an actor so the next `createActor` really imports the current route.
  *
@@ -65,26 +80,92 @@ export async function ensureStoryCharacters(options) {
   finally { await waitForStoryResources(options, true); }
 }
 
+/**
+ * Scene-document writes that can fail for a moment and succeed on a retry.
+ *
+ * The editor replaces `scene.ini` atomically (`MoveFileExW` over `.scene.ini.tmp`,
+ * `scene_folder.cpp:1206`), and the temp name is fixed, so two writers racing over the same world
+ * make one of them fail with `scene_replace_failed`. That became reachable when the animation
+ * work added a second writer on the UI thread (`UiSystem::update` →
+ * `tick_native_animation_updates` → `persist_native_scene_actors`) next to the one the Python
+ * runtime thread performs for `createActor`/`setActorState`. A single lost race used to abort the
+ * whole world load at whichever character happened to be in flight — the error surfaced as
+ * 「羽翼兽加载失败」/「Boss加载失败」 with `Unable to replace scene.ini`.
+ *
+ * Retrying is safe because every call routed through `call` is idempotent: `createActor` matches
+ * the guid and `setActorState`/`setActorTransform` assign values.
+ */
+const TRANSIENT_SCENE_WRITE = /Unable to replace scene\.ini|scene_replace_failed/i;
+const TRANSIENT_SCENE_WRITE_ATTEMPTS = 6;
+
 async function initializeStoryCharacters({ api, sceneId, frontendUrl, isCurrent = () => true,
   wait = ms => new Promise(resolve => setTimeout(resolve, ms)), renderAttempts = 150,
   gameplay = null, combatOnly = false, assertSource = async () => {} }) {
   const check = () => { if (!isCurrent()) throw canceled(); };
-  const call = async (operation, invoke) => { check(); await assertSource(); check();
-    const result = success(await invoke(), operation); check(); return result; };
+  const call = async (operation, invoke) => {
+    for (let attempt = 1; ; attempt++) {
+      check(); await assertSource(); check();
+      try {
+        const result = success(await invoke(), operation);
+        check();
+        return result;
+      } catch (error) {
+        if (attempt >= TRANSIENT_SCENE_WRITE_ATTEMPTS || !TRANSIENT_SCENE_WRITE.test(error?.message || '')) throw error;
+        // Back off a little: the other writer is mid-replace, so the retry needs it to finish.
+        await wait(250 * attempt);
+      }
+    }
+  };
   check();
   await assertSource();
   let snapshot = sceneSnapshot(await api.scene.getSnapshot(sceneId));
   check();
   const actors = new Map((snapshot?.actors || []).map(actor => [actor.actor_guid, actor]));
-  const visibleCharacters = STORY_CHARACTERS.filter(character => !gameplay || character.role === 'player'
-    || (gameplay.role === 'main' && character.role === 'boss' && gameplay.state.boss.hp > 0)
-    || (gameplay.role === 'child' && character.role === 'prophet'));
-  if (gameplay?.role === 'main' && gameplay.state.drop && !gameplay.state.drop.collected) {
-    visibleCharacters.push({ ...FRAGMENT, x: gameplay.state.drop.position[0], z: gameplay.state.drop.position[2] });
+  // 一个 guid 只允许一个 actor。换模型走"先删后建"，若删除没生效，`create_actor` 会保留 guid
+  // 但给新 actor 起一个派生名字（`玩家_1`），于是同一个角色有两份模型叠在一起——而按 guid 建表
+  // 的 Map 只会留下其中一个，页面因此看不出来。这里先清掉多余的，保留名字与角色一致的那个。
+  {
+    const shipped = new Map(STORY_CHARACTERS.map(character => [character.guid, character.name]));
+    const byGuid = new Map();
+    for (const actor of snapshot?.actors || []) {
+      if (!shipped.has(actor.actor_guid)) continue;
+      if (!byGuid.has(actor.actor_guid)) byGuid.set(actor.actor_guid, []);
+      byGuid.get(actor.actor_guid).push(actor);
+    }
+    for (const [guid, group] of byGuid) {
+      if (group.length < 2) continue;
+      const expectedName = shipped.get(guid);
+      const keep = group.find(actor => actor.name === expectedName) || group[group.length - 1];
+      for (const actor of group) {
+        if (actor === keep) continue;
+        check();
+        // 必须按**名字**删：`removeActorForRebuild` 的第一优先键是 guid，而这两个 actor 共用 guid，
+        // 按 guid 删会命中引擎找到的第一个——也就是要保留的那一个。
+        await call(`清理重复的${expectedName || actor.name}`,
+          () => api.sceneTools.removeActor(sceneId, actor.name));
+        actors.delete(guid);
+      }
+      actors.set(guid, keep);
+    }
   }
+  // Creatures belong to the main world and are NOT gated on `boss.hp`, unlike the boss: they
+  // are the arena's other monsters, so killing the boss must not empty the arena. The small
+  // world keeps its own cast (player + prophet), which is why this branch names 'main'.
+  const visibleCharacters = STORY_CHARACTERS.filter(character => !gameplay
+    ? !isMonsterRole(character.role)
+    : character.role === 'player'
+      || (gameplay.role === 'main' && character.role === 'boss' && gameplay.state.boss.hp > 0)
+      // A monster stays in the arena until its own health reaches zero; the boss's health
+      // has no effect on them. A save that predates the roster has no entry and stays alive.
+      || (gameplay.role === 'main' && isMonsterRole(character.role)
+          && ((gameplay.state.monsters?.[character.role]?.hp ?? 1) > 0))
+      || (gameplay.role === 'child' && character.role === 'prophet'));
   if (gameplay) {
     const visibleGuids = new Set(visibleCharacters.map(character => character.guid));
     // Only manage game-owned actors; scenery and user-authored models stay untouched.
+    // FRAGMENT_GUID is no longer part of the cast, but a world saved by the old flow may
+    // still contain its red ball — leave it in the managed set so it is hidden rather
+    // than left lying in the arena after the reward moved into the bag.
     for (const guid of [...STORY_CHARACTERS.map(character => character.guid), FRAGMENT_GUID]) {
       const actor = actors.get(guid);
       if (actor && actor.visible !== false && !visibleGuids.has(guid)) {
@@ -93,9 +174,13 @@ async function initializeStoryCharacters({ api, sceneId, frontendUrl, isCurrent 
     }
   }
   // Never use the update subset to decide which actors should be visible.
-  const characters = visibleCharacters.filter(character => !combatOnly || ['boss', 'fragment'].includes(character.role));
+  // 小世界里内部主角不显示：小世界的相机就是它的眼睛（自由视角 / 俯视视角）。它仍然是场景
+  // 里真实存在、并且仍然被存档的 actor——F 的射程、摆放的位置、玩家存档读的都是它。
+  const hideProtagonistRole = gameplay?.role === 'child';
+  const characters = visibleCharacters.filter(character => !combatOnly || character.role === 'boss');
   for (let character of characters) {
     check();
+    const hideProtagonist = hideProtagonistRole && character.role === 'player';
     let actor = actors.get(character.guid);
     const wasPresent = Boolean(actor);
     if (gameplay?.role === 'child' && character.role === 'prophet' && actor?.model_ref !== PROPHET_MODEL_REF) {
@@ -156,6 +241,10 @@ async function initializeStoryCharacters({ api, sceneId, frontendUrl, isCurrent 
       const initializedPlayer = wasPresent && character.role === 'player'
         && sameVector(actor.geometry?.scale, placement.scale);
       const legacyPlayer = character.role === 'player' && actor.model_ref !== PLAYER_MODEL_REF;
+      // A marker mismatch alone only means "placement generation changed". A *route* that
+      // names another file means the imported art itself is stale, and no repair can swap it.
+      const stalePlayerModel = character.role === 'player' && wasPresent
+        && !routeNamesShippedArt(actor, character.asset);
       const initializedProphet = wasPresent && character.role === 'prophet'
         && actor.model_ref === PROPHET_MODEL_REF && sameVector(actor.geometry?.scale, placement.scale);
       // The prophet is placed on demand, so a first attempt must be committed in one
@@ -176,13 +265,58 @@ async function initializeStoryCharacters({ api, sceneId, frontendUrl, isCurrent 
         savedGeometry.rotation[1] += PLAYER_MODEL_YAW_OFFSET;
       }
       const transform = characterTransform(character, actor.local_aabb, savedGeometry);
-      if (legacyPlayer || legacyProphet) {
+      if (stalePlayerModel) {
+        // Replacement, not repair: the world was built around a different player model, and the
+        // engine only imports a route when an actor is created. The guid is preserved, so the
+        // controller and the save path keep addressing the same actor. x/z survive the rebuild
+        // (the player is standing somewhere); rotation and y are re-derived from the table, so
+        // the previous model's facing convention cannot leak into the new one.
+        const saved = actor.geometry?.position;
+        const position = Array.isArray(saved) ? { position: [saved[0], 0, saved[2]],
+          rotation: [...character.rotation] } : null;
+        const route = source || resolveStoryAssetPath(frontendUrl, character.asset);
+        await removeActorForRebuild(api, sceneId, actor, `替换${character.name}模型`, call);
+        check();
+        const created = await call(`创建${character.name}`, () => api.sceneTools.createActor(sceneId, route, 'model', {
+      ...(character.animation_sources
+        ? { animation_sources: character.animation_sources.map(resolveStoryAssetPath) }
+        : {}),
+          name: character.name, actor_guid: character.guid, semantic_role: character.role,
+          entity_id: `story.${character.role}`, entity_type: 'story_character',
+          model_ref: PLAYER_MODEL_REF,
+          position: [character.x, 0, character.z], rotation: [...character.rotation], scale: [1, 1, 1],
+          follow_camera: false, physics_enabled: false,
+        }));
+        actor = created.actor;
+        if (!loaded(actor)) throw new Error(actor?.load_error?.message || '模型解码失败');
+        for (let attempt = 0; !hasUsableBounds(actor.local_aabb); attempt++) {
+          if (!isCurrent()) throw canceled();
+          if (attempt >= renderAttempts) throw new Error('等待模型包围盒超时，请重试进入世界');
+          await wait(200);
+          if (!isCurrent()) throw canceled();
+          await assertSource();
+          actor = sceneSnapshot(await api.scene.getSnapshot(sceneId))?.actors
+            ?.find(item => item.actor_guid === character.guid);
+          if (!loaded(actor)) throw new Error(actor?.load_error?.message || '模型实例已失效');
+        }
+        check();
+        const rebuilt = characterTransform(character, actor.local_aabb, position);
+        if (Object.entries(rebuilt).some(([key, value]) => !sameVector(actor.geometry?.[key], value))) {
+          actor = (await call('设置模型位置', () => api.scene.setActorTransform(sceneId, character.guid, rebuilt))).actor;
+        }
+        if (actor.model_ref !== PLAYER_MODEL_REF) {
+          throw new Error(`${character.name}模型未被引擎确认，请重试进入世界`);
+        }
+      } else if (legacyPlayer || legacyProphet) {
         const modelRef = legacyPlayer ? PLAYER_MODEL_REF : PROPHET_MODEL_REF;
         // Commit placement and its marker together, not while the new actor is still unscaled.
         // A lost reply/reentry must neither flip the player again nor preserve an ungrounded prophet.
         // Reuse the portable resource route; an existing world needs no source art.
         const route = actor.route || source || resolveStoryAssetPath(frontendUrl, character.asset);
         actor = (await call(`校正${character.name}摆位`, () => api.sceneTools.createActor(sceneId, route, 'model', {
+      ...(character.animation_sources
+        ? { animation_sources: character.animation_sources.map(resolveStoryAssetPath) }
+        : {}),
           actor_guid: character.guid, skip_if_exists: true, update_if_exists: true,
           model_ref: modelRef, ...transform,
         }))).actor;
@@ -200,6 +334,9 @@ async function initializeStoryCharacters({ api, sceneId, frontendUrl, isCurrent 
         await removeActorForRebuild(api, sceneId, actor, `替换${character.name}模型`, call);
         check();
         const created = await call(`创建${character.name}`, () => api.sceneTools.createActor(sceneId, route, 'model', {
+      ...(character.animation_sources
+        ? { animation_sources: character.animation_sources.map(resolveStoryAssetPath) }
+        : {}),
           name: character.name, actor_guid: character.guid, semantic_role: character.role,
           entity_id: `story.${character.role}`, entity_type: 'story_character',
           model_ref: BOSS_MODEL_REF,
@@ -217,9 +354,10 @@ async function initializeStoryCharacters({ api, sceneId, frontendUrl, isCurrent 
         actor = (await call('关闭物理驱动', () => api.sceneTools.setActorPhysics(sceneId, character.guid,
           { physics_enabled: false }))).actor;
       }
-      if (actor.follow_camera || !actor.visible) {
-        actor = (await call('设置模型可见性', () => api.sceneTools.setActorState(sceneId, character.guid,
-          { visible: true, follow_camera: false }))).actor;
+      if (actor.follow_camera || Boolean(!actor.visible) !== hideProtagonist) {
+        actor = (await call(hideProtagonist ? '隐藏主角' : '设置模型可见性',
+          () => api.sceneTools.setActorState(sceneId, character.guid,
+            { visible: !hideProtagonist, follow_camera: false }))).actor;
       }
       if (actor.camera_lock?.enabled || actor.camera_lock?.lock_to_camera) {
         actor = (await call('关闭相机锁定', () => api.sceneTools.setActorCameraLock(sceneId, character.guid,
@@ -266,8 +404,19 @@ export async function syncPlacementActors({ api, sceneId, frontendUrl, placement
   assertSource = async () => {}, isCurrent = () => true,
   wait = ms => new Promise(resolve => setTimeout(resolve, ms)), renderAttempts = 150 }) {
   const check = () => { if (!isCurrent()) throw canceled(); };
-  const call = async (operation, invoke) => { check(); await assertSource(); check();
-    const result = success(await invoke(), operation); check(); return result; };
+  const call = async (operation, invoke) => {
+    for (let attempt = 1; ; attempt++) {
+      check(); await assertSource(); check();
+      try {
+        const result = success(await invoke(), operation);
+        check();
+        return result;
+      } catch (error) {
+        if (attempt >= TRANSIENT_SCENE_WRITE_ATTEMPTS || !TRANSIENT_SCENE_WRITE.test(error?.message || '')) throw error;
+        await wait(250 * attempt);
+      }
+    }
+  };
   const desired = placementScene(placements);
   check();
   await assertSource();
@@ -289,6 +438,19 @@ export async function syncPlacementActors({ api, sceneId, frontendUrl, placement
     const { prop, guid } = entry;
     const source = resolveStoryAssetPath(frontendUrl, prop.asset);
     let actor = actors.get(guid);
+    // A recorded placement can name a different model than the layout now says. The
+    // retired pillar is the concrete case: its old actor is a cube, but the same slot is
+    // now a ball. A `skip_if_exists` repair never rewrites `route`, so the stale actor has
+    // to be removed before the correct art can be imported.
+    if (actor) {
+      const entityId = String(actor.entity_id || actor.runtime?.entity_id || '');
+      const expectedId = `story.placement.${prop.id}`;
+      if ((entityId && entityId !== expectedId) || !routeNamesShippedArt(actor, prop.asset)) {
+        await call('替换陈列物模型', () => api.sceneTools.removeActor(sceneId, guid));
+        actors.delete(guid);
+        actor = null;
+      }
+    }
     const wasPresent = Boolean(actor);
     try {
       if (!actor) {

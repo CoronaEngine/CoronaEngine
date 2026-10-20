@@ -1,16 +1,20 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { DEGREES_TO_RADIANS, FRAGMENTS, WORLD_RULE_VERSION, collectSwayTargets,
-  createWorldRuleRunner, findFragment, initialFragmentIds, ownedFragmentIds, ruleOffset,
-  ruleRotationOffset, totalOffset, totalRotationOffset, validateRule }
-  from '../../frontend/storyWorldRules.mjs';
+import { DEGREES_TO_RADIANS, FRAGMENTS, RESERVED_TARGET_GUIDS, WORLD_RULE_VERSION,
+  collectSwayTargets, createWorldRuleRunner, findFragment, initialFragmentIds, isReservedTargetGuid,
+  normalizeTarget, ownedFragmentIds, ruleOffset, ruleRotationOffset, totalOffset,
+  totalRotationOffset, validateRule } from '../../frontend/storyWorldRules.mjs';
 import { MAP_ENTITY_ID, MAP_ENTITY_TYPE, MAP_GUID, MAP_MODEL_REF } from '../../frontend/storyMap.mjs';
+import { PROPHET_ENTITY_ID, PROPHET_GUID, PROPHET_MODEL_REF } from '../../frontend/storyCharacters.mjs';
 
 const SWAY = findFragment('sway').rule;
 const SPIN = findFragment('spin').rule;
 const snapshotWith = actors => ({ data: { scene: { actors } } });
 const actor = (guid, handle, position, extra = {}) => ({
-  actor_guid: guid, handle, semantic_role: 'prophet', visible: true,
+  // 这个默认角色以前写的是 'prophet'（当年只是拿它当「有名字的物体」用）。先知现在由
+  // `isProphetActor` 按身份排除，所以夹具里普通的可动画物体必须换一个中性的角色名，
+  // 否则这些用例会变成在测「先知也被排除」，而不是在测规则本身。
+  actor_guid: guid, handle, semantic_role: 'object', visible: true,
   geometry: { position: position ? [...position] : undefined, rotation: [0, 0, 0], scale: [1, 1, 1] },
   ...extra,
 });
@@ -190,7 +194,7 @@ test('the runner sways every target on its own frame loop and restores the base 
   const errors = [];
   const runner = createWorldRuleRunner({
     bridge: () => bridge, rules: [SWAY],
-    targets: [{ guid: 'a', role: 'prophet', handle: 11, base: [1, 0, 2] }],
+    targets: [{ guid: 'a', role: 'object', handle: 11, base: [1, 0, 2] }],
     requestFrame: scheduler.requestFrame, cancelFrame: scheduler.cancelFrame,
     onError: error => errors.push(error),
   });
@@ -236,7 +240,7 @@ test('sway and spin are composed into exactly one position and one rotation writ
   const bridge = recordingBridge();
   const runner = createWorldRuleRunner({
     bridge: () => bridge, rules: [SWAY, SPIN],
-    targets: [{ guid: 'a', role: 'prophet', handle: 11, base: [1, 0, 2], baseRotation: [0, 0.5, 0] }],
+    targets: [{ guid: 'a', role: 'object', handle: 11, base: [1, 0, 2], baseRotation: [0, 0.5, 0] }],
     requestFrame: scheduler.requestFrame, cancelFrame: scheduler.cancelFrame,
   });
   assert.equal(runner.ruleCount(), 2, 'both rules are installed at once');
@@ -266,8 +270,8 @@ test('sway and spin are composed into exactly one position and one rotation writ
   const second = recordingBridge();
   const many = createWorldRuleRunner({
     bridge: () => second, rules: [SWAY, SPIN],
-    targets: [{ guid: 'a', role: 'prophet', handle: 11, base: [0, 0, 0] },
-      { guid: 'b', role: 'prophet', handle: 12, base: [2, 0, 3] }],
+    targets: [{ guid: 'a', role: 'object', handle: 11, base: [0, 0, 0] },
+      { guid: 'b', role: 'object', handle: 12, base: [2, 0, 3] }],
     requestFrame: scheduler.requestFrame, cancelFrame: scheduler.cancelFrame,
   });
   many.start();
@@ -297,7 +301,7 @@ test('a rule set that names the map writes nothing to its handle, while a normal
   const mapTarget = { guid: MAP_GUID, role: 'world-map', handle: MAP_HANDLE,
     base: [0, 6.6477, 0], baseRotation: [0, 0, 0],
     modelRef: MAP_MODEL_REF, entityId: MAP_ENTITY_ID, entityType: MAP_ENTITY_TYPE };
-  const normalTarget = { guid: 'a', role: 'prophet', handle: 11, base: [1, 0, 2],
+  const normalTarget = { guid: 'a', role: 'object', handle: 11, base: [1, 0, 2],
     baseRotation: [0, 0, 0] };
   const scheduler = manualScheduler();
   const bridge = recordingBridge();
@@ -339,13 +343,61 @@ test('a rule set that names the map writes nothing to its handle, while a normal
   blind.stop();
 });
 
+/**
+ * 碎片不影响先知：先知是有剧本的角色，不是可以被浮动/旋转的物体。这条守卫和地图那条同一
+ * 类——身份由 `isProphetActor` 一处裁决，并且在两个地方生效：目标表生成（快照）和
+ * runner 自己的装入（任何人递进来的旧规则/手工记录都过不去）。
+ */
+test('a fragment rule never animates the prophet, while a normal object still is', () => {
+  const PROPHET_HANDLE = 41, OBJECT_HANDLE = 42;
+  // 三种身份写法各写一次：老世界可能只留着其中一项。名字故意写成「路人甲」，
+  // 证明挡住规则的是身份、不是显示名。
+  for (const identity of [{ actor_guid: PROPHET_GUID }, { model_ref: PROPHET_MODEL_REF },
+    { entity_id: PROPHET_ENTITY_ID }, { semantic_role: 'prophet' }]) {
+    const prophet = actor('prophet-actor', PROPHET_HANDLE, [1, 0, 2], { name: '路人甲', ...identity });
+    const object = actor('object', OBJECT_HANDLE, [3, 0, 4]);
+    assert.deepEqual(collectSwayTargets(snapshotWith([prophet, object]), SWAY)
+      .map(target => target.guid), ['object'],
+    `身份字段 ${Object.keys(identity)[0]} 单独出现也必须让先知退出规则目标`);
+
+    const scheduler = manualScheduler(), bridge = recordingBridge();
+    const runner = createWorldRuleRunner({
+      bridge: () => bridge, rules: [SWAY, SPIN],
+      targets: [{ guid: 'prophet-actor', role: 'prophet', handle: PROPHET_HANDLE, base: [1, 0, 2],
+        baseRotation: [0, 0, 0] }, { guid: 'object', role: 'object', handle: OBJECT_HANDLE,
+        base: [3, 0, 4], baseRotation: [0, 0, 0] }],
+      requestFrame: scheduler.requestFrame, cancelFrame: scheduler.cancelFrame,
+    });
+    assert.equal(runner.targetCount(), 1, '装入目标表时就拒绝先知');
+    runner.start();
+    for (let i = 0; i <= 10; i++) scheduler.fire(1000 + i * 50);
+    assert.equal(countWrites(bridge, PROPHET_HANDLE, 0), 0, '一个位置写入都不许落到先知上');
+    assert.equal(countWrites(bridge, PROPHET_HANDLE, 1), 0, '一个旋转写入都不许落到先知上');
+    assert.ok(countWrites(bridge, OBJECT_HANDLE, 0) > 0, '普通物体照常被写：否则这条用例证明不了什么');
+    runner.stop();
+    assert.equal(countWrites(bridge, PROPHET_HANDLE, 0), 0, '停下时的回位也不许写先知');
+  }
+  // Non-vacuity: 去掉身份后同一个 handle 会被写，所以挡住它的是 isProphetActor ——
+  // 不是缺 handle、缺几何或者规则本身没跑。
+  const scheduler = manualScheduler(), loose = recordingBridge();
+  const blind = createWorldRuleRunner({
+    bridge: () => loose, rules: [SWAY],
+    targets: [{ guid: 'anonymous', role: 'object', handle: PROPHET_HANDLE, base: [1, 0, 2] }],
+    requestFrame: scheduler.requestFrame, cancelFrame: scheduler.cancelFrame,
+  });
+  blind.start();
+  scheduler.fire(1000);
+  assert.ok(countWrites(loose, PROPHET_HANDLE, 0) > 0, '去掉先知身份后同一个 handle 会被写');
+  blind.stop();
+});
+
 test('the runner refuses to run without rules or targets, and stops on a dead bridge', () => {
   const scheduler = manualScheduler();
   const bridge = recordingBridge();
   const errors = [];
   const make = overrides => createWorldRuleRunner({
     bridge: () => bridge, rules: [SWAY],
-    targets: [{ guid: 'a', role: 'prophet', handle: 11, base: [0, 0, 0] }],
+    targets: [{ guid: 'a', role: 'object', handle: 11, base: [0, 0, 0] }],
     requestFrame: scheduler.requestFrame, cancelFrame: scheduler.cancelFrame,
     onError: error => errors.push(error), ...overrides,
   });
@@ -361,4 +413,156 @@ test('the runner refuses to run without rules or targets, and stops on a dead br
   assert.equal(dead.isRunning(), false);
   assert.equal(errors.length, 1);
   assert.match(errors[0].message, /actorTransform/);
+});
+
+// ---- 碎片改为可作用于单独物体（target = actor guid）-------------------------------
+
+/** 一条指向某个物体的规则：目录里的数字，目标换成 guid。 */
+const aimed = (guid, overrides = {}) => ({ ...SWAY, target: guid, ...overrides });
+
+test('两条规则各作用于一个物体：互不串味，没有规则的物体一个字节都不写', () => {
+  const scheduler = manualScheduler();
+  const bridge = recordingBridge();
+  // A 被沿 x 摆动，B 被沿 y 摆动。同一时刻（四分之一周期）两者的峰值方向不同，
+  // 所以「谁被谁的规则动了」在写入里一眼能看出来。
+  const runner = createWorldRuleRunner({
+    bridge: () => bridge,
+    rules: [aimed('a', { axis: 'x', amplitude: 0.25 }), aimed('b', { axis: 'y', amplitude: 1.5 })],
+    targets: [{ guid: 'a', role: 'object', handle: 11, base: [1, 0, 2] },
+      { guid: 'b', role: 'object', handle: 12, base: [0, 0, 0] },
+      { guid: 'c', role: 'object', handle: 13, base: [5, 0, 5] }],
+    requestFrame: scheduler.requestFrame, cancelFrame: scheduler.cancelFrame,
+  });
+  assert.equal(runner.targetCount(), 3, '三个物体都在目标表里');
+  assert.equal(runner.animatedCount(), 2, '只有真的带规则的物体进动画集合');
+  assert.equal(runner.start(), true);
+  const STEP = 50, elapsed = SWAY.periodMs / 4;   // 两条规则的周期相同，峰值同时到
+  for (let i = 0; i * STEP <= elapsed; i++) scheduler.fire(1000 + i * STEP);
+
+  const a = lastWrite(bridge, 11, 0), b = lastWrite(bridge, 12, 0);
+  assert.deepEqual(a, [1 + 0.25, 0, 2], 'A 只被自己的规则动：x 峰、y 与 z 原样');
+  // B: float 1.5 on y at the same instant -> y = 1.5, x stays 0 (A's rule never reached it).
+  assert.ok(Math.abs(b[1] - 1.5) < 1e-9, 'B 按自己的规则在 y 上升');
+  assert.equal(b[0], 0, 'A 的 x 浮动没有串到 B 上（cross-talk = 0）');
+  assert.equal(b[2], 0);
+  // A rotation is written too, but only with its own base: neither rule is a spin.
+  assert.deepEqual(lastWrite(bridge, 11, 1), [0, 0, 0]);
+
+  assert.equal(countWrites(bridge, 13, 0), 0, '没有规则的物体一次都没被写');
+  assert.equal(countWrites(bridge, 13, 1), 0);
+  runner.stop();
+  assert.equal(countWrites(bridge, 13, 0), 0, '停下时的回位也不碰没有规则的物体');
+  assert.deepEqual(lastWrite(bridge, 11, 0), [1, 0, 2], 'A 回到自己的基准位');
+  assert.deepEqual(lastWrite(bridge, 12, 0), [0, 0, 0]);
+});
+
+test('同一个物体上的两条规则被合成：每帧仍只有一次位置写入与一次旋转写入', () => {
+  const scheduler = manualScheduler();
+  const bridge = recordingBridge();
+  const runner = createWorldRuleRunner({
+    bridge: () => bridge,
+    // sway 与 spin 都指向同一个物体：前者的位移与后者的旋转必须都落在它身上。
+    rules: [{ ...SWAY, target: 'a' }, { ...SPIN, target: 'a' }],
+    targets: [{ guid: 'a', role: 'object', handle: 11, base: [1, 0, 2], baseRotation: [0, 0.5, 0] }],
+    requestFrame: scheduler.requestFrame, cancelFrame: scheduler.cancelFrame,
+  });
+  assert.equal(runner.animatedCount(), 1);
+  runner.start();
+  const STEP = 50, elapsed = SWAY.periodMs / 4;
+  for (let i = 0; i * STEP <= elapsed; i++) scheduler.fire(1000 + i * STEP);
+  assert.deepEqual(lastWrite(bridge, 11, 0), [1 + SWAY.amplitude, 0, 2], '位移来自 sway');
+  const turn = lastWrite(bridge, 11, 1);
+  assert.ok(Math.abs(turn[2] - SPIN.amplitude * DEGREES_TO_RADIANS
+    * Math.sin((2 * Math.PI * elapsed) / SPIN.periodMs)) < 1e-9, '旋转来自 spin');
+  assert.deepEqual([turn[0], turn[1]], [0, 0.5], '旋转的其余欧拉角仍是基准');
+  const frames = 1 + Math.floor(elapsed / STEP);
+  assert.equal(countWrites(bridge, 11, 0), frames, '一个物体每帧一次位置写入');
+  assert.equal(countWrites(bridge, 11, 1), frames, '一个物体每帧一次旋转写入');
+  runner.stop();
+});
+
+test('一份指向地图或先知的规则被拒绝：模型层与 runner 都不收，普通物体照常', () => {
+  // 保留身份来自同一处：地图的 MAP_GUID、先知的 PROPHET_GUID。
+  assert.deepEqual([...RESERVED_TARGET_GUIDS].sort(), [MAP_GUID, PROPHET_GUID].sort());
+  assert.equal(isReservedTargetGuid(MAP_GUID), true);
+  assert.equal(isReservedTargetGuid(` ${PROPHET_GUID} `), true);
+  assert.equal(isReservedTargetGuid('story.placement.0003'), false);
+  for (const reserved of [MAP_GUID, PROPHET_GUID]) {
+    assert.throws(() => validateRule({ ...SWAY, target: reserved }), /世界规则/, reserved);
+    assert.throws(() => normalizeTarget(reserved), /世界规则/);
+    // `collectSwayTargets` 用同一条校验：一份指向保留身份的旧规则连目标表都生不出来。
+    assert.throws(() => collectSwayTargets(snapshotWith([actor('a', 11, [1, 0, 2])]),
+      { ...SWAY, target: reserved }), /世界规则/);
+  }
+  // 合法的目标原样保留（前后空白被裁掉），没有目标时连键都不出现。
+  assert.equal(validateRule({ ...SWAY, target: ' story.placement.0003 ' }).target,
+    'story.placement.0003');
+  assert.equal('target' in validateRule(SWAY), false);
+  for (const bad of ['', '   ', 7, {}, [], 'x'.repeat(200)]) {
+    assert.throws(() => validateRule({ ...SWAY, target: bad }), /世界规则/, JSON.stringify(bad));
+  }
+
+  // runner：一份手改存档里的「指向地图」的记录被忽略，别的规则照常跑，地图零写入。
+  const MAP_HANDLE = 91, OBJECT_HANDLE = 11;
+  const scheduler = manualScheduler(), bridge = recordingBridge();
+  const runner = createWorldRuleRunner({
+    bridge: () => bridge,
+    rules: [aimed(MAP_GUID), aimed('a')],
+    targets: [{ guid: MAP_GUID, role: 'object', handle: MAP_HANDLE, base: [0, 0, 0] },
+      { guid: 'a', role: 'object', handle: OBJECT_HANDLE, base: [1, 0, 2] }],
+    requestFrame: scheduler.requestFrame, cancelFrame: scheduler.cancelFrame,
+  });
+  assert.equal(runner.ruleCount(), 1, '指向地图的那条规则在装入时就被忽略');
+  assert.equal(runner.start(), true);
+  for (let i = 0; i <= 6; i++) scheduler.fire(1000 + i * 50);
+  assert.equal(countWrites(bridge, MAP_HANDLE, 0), 0, '地图一个位置写入都没有');
+  assert.equal(countWrites(bridge, MAP_HANDLE, 1), 0, '地图一个旋转写入都没有');
+  assert.ok(countWrites(bridge, OBJECT_HANDLE, 0) > 0, '普通物体照常被写：否则这条用例证明不了什么');
+  runner.stop();
+});
+
+test('旧存档（没有 target 的规则）仍然作用于所有合格物体，与带目标的规则可以共存', () => {
+  // 改动前存下的样子：一条没有 target 的规则，版本还是 1。
+  const legacySave = { version: 1, rules: [{ fragmentId: 'sway', type: 'sway', axis: 'x',
+    amplitude: 0.25, periodMs: 2400 }] };
+  assert.equal(legacySave.version, WORLD_RULE_VERSION, '存档版本不跳，旧文件照样能读');
+  // `validateRule` 收下它，并且不凭空补一个 target：回读出来仍是「旧规则」。
+  assert.equal('target' in validateRule(legacySave.rules[0]), false);
+
+  const scheduler = manualScheduler();
+  const bridge = recordingBridge();
+  const runner = createWorldRuleRunner({
+    bridge: () => bridge, rules: legacySave.rules,
+    targets: [{ guid: 'a', role: 'object', handle: 11, base: [1, 0, 2] },
+      { guid: 'b', role: 'object', handle: 12, base: [0, 0, 0] }],
+    requestFrame: scheduler.requestFrame, cancelFrame: scheduler.cancelFrame,
+  });
+  assert.equal(runner.animatedCount(), 2, '旧规则照旧作用于每一个合格物体');
+  runner.start();
+  const STEP = 50, elapsed = SWAY.periodMs / 4;
+  for (let i = 0; i * STEP <= elapsed; i++) scheduler.fire(1000 + i * STEP);
+  assert.deepEqual(lastWrite(bridge, 11, 0), [1 + 0.25, 0, 2], 'A 照旧被浮动');
+  assert.deepEqual(lastWrite(bridge, 12, 0), [0 + 0.25, 0, 0], 'B 也照旧被浮动');
+  runner.stop();
+  assert.deepEqual(lastWrite(bridge, 11, 0), [1, 0, 2], '停下时回到基准');
+  assert.deepEqual(lastWrite(bridge, 12, 0), [0, 0, 0]);
+
+  // 旧规则与新规则共存：旧规则管所有物体，新规则只管自己的那一个。
+  const mixed = recordingBridge();
+  const scheduler2 = manualScheduler();
+  const both = createWorldRuleRunner({
+    bridge: () => mixed,
+    rules: [{ fragmentId: 'sway', type: 'sway', axis: 'x', amplitude: 0.25, periodMs: 2400 },
+      { fragmentId: 'spin', type: 'spin', axis: 'z', amplitude: 15, periodMs: 3600, target: 'b' }],
+    targets: [{ guid: 'a', role: 'object', handle: 11, base: [0, 0, 0] },
+      { guid: 'b', role: 'object', handle: 12, base: [0, 0, 0] }],
+    requestFrame: scheduler2.requestFrame, cancelFrame: scheduler2.cancelFrame,
+  });
+  assert.equal(both.animatedCount(), 2);
+  both.start();
+  for (let i = 0; i <= 5; i++) scheduler2.fire(1000 + i * 50);
+  assert.ok(countWrites(mixed, 11, 0) > 0, '旧规则仍然浮动 A');
+  assert.deepEqual(lastWrite(mixed, 11, 1), [0, 0, 0], 'B 的旋转规则没有转到 A 上');
+  assert.notDeepEqual(lastWrite(mixed, 12, 1), [0, 0, 0], 'B 被自己的旋转规则转动');
+  both.stop();
 });

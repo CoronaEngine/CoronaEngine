@@ -1,4 +1,3 @@
-import { FRAGMENT } from '../../frontend/storyGameplay.mjs';
 import { STORY_CHARACTERS, BOSS_MODEL_REF, PLAYER_MODEL_REF, PROPHET_MODEL_REF, characterTransform } from '../../frontend/storyCharacters.mjs';
 export const deferred = () => { let resolve, reject; const promise = new Promise((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; };
 export const url = 'file:///D:/Corona%20Engine/editor/Frontend/dist/index.html#/world';
@@ -59,8 +58,7 @@ export function apiFixture({ actors = [], wrapped = true } = {}) {
           }
           return wrap({ status: 'success', actor: structuredClone(actor), existed: true });
         }
-        const character = CHARACTER_BY_GUID.get(data.actor_guid)
-          || [FRAGMENT].find(c => c.guid === data.actor_guid);
+        const character = CHARACTER_BY_GUID.get(data.actor_guid);
         const actor = { ...actorFixture(character), model_ref: data.model_ref || '', route: `Assets/${path.split('/').at(-1)}`,
           geometry: { position: [...data.position], rotation: [...data.rotation], scale: [...data.scale] } };
         state.actors.push(actor);
@@ -85,7 +83,17 @@ export function apiFixture({ actors = [], wrapped = true } = {}) {
 }
 
 export const gameplayConfig = { playerHp: 100, rageMax: 100, ragePerHit: 10, bossHp: 200,
-  damage: 20, cooldownMs: 400, bossBarRadius: 10, meleeRange: 2.5, meleeHalfAngle: Math.PI / 3, pickupRange: 2,
+  damage: 20, cooldownMs: 400, bossBarRadius: 10, monsterBarRadius: 10,
+  meleeRange: 2.5, meleeHalfAngle: Math.PI / 3,
+  monsterDropMin: 5, monsterDropMax: 15, monsterEquipmentChance: 0.5,
+  monsters: {
+    'monster-wyvern': { hp: 180 },
+    'monster-lizardf': { hp: 120 },
+    'monster-lizardm': { hp: 120 },
+    'monster-lion': { hp: 160 },
+    'monster-mantis': { hp: 80 },
+    'monster-larva': { hp: 90 },
+  },
   skills: {
     heavy: { key: 'E', name: '重斩', damage: 50, rageCost: 30, range: 2.5, halfAngle: Math.PI / 3, cooldownMs: 1200 },
     sweep: { key: 'R', name: '横扫', damage: 80, rageCost: 50, range: 3.5, halfAngle: Math.PI / 2, cooldownMs: 3000 },
