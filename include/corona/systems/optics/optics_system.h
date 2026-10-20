@@ -9,10 +9,8 @@
 #include <corona/shared_data_hub.h>
 #include <corona/systems/display/published_image.h>
 #include <corona/systems/optics/actor_pick_readback_worker.h>
-#ifdef CORONA_ENABLE_VISION
 #include <corona/systems/optics/vision_pipeline_key.h>
 #include <corona/systems/optics/vision_scene_resource.h>
-#endif
 
 #include <chrono>
 #include <atomic>
@@ -29,22 +27,18 @@
 // 前向声明 Hardware 结构体
 struct Hardware;
 
-#ifdef CORONA_ENABLE_VISION
 namespace ocarina {
 class Device;
 }
-#endif
 
 namespace Corona::Systems {
 
 class GeometrySystem;  // 前向声明，用于 LOD 查询
 
-#ifdef CORONA_ENABLE_VISION
 namespace Vision {
 struct VisionBuildResult;  // 定义见 vision/vision_geometry_adapter.h
 class VisionZeroCopyBridge;  // 定义见 vision/vision_zero_copy_bridge.h
 }  // namespace Vision
-#endif
 
 /**
  * @brief 光学系统 (Optics System)
@@ -145,8 +139,7 @@ class OpticsSystem : public Kernel::SystemBase {
         bool external_live{false};
     };
 
-#ifdef CORONA_ENABLE_VISION
-    // Vision 相关私有方法（在 CORONA_ENABLE_VISION 宏保护下实现）
+    // Vision 相关私有方法
     bool init_vision_lazy();  ///< 首次切换到 Vision 时的 lazy 初始化
     void run_vision_frame(float frame_count, uint64_t frame_index);
     void process_vision_actor_pick(std::uintptr_t camera_handle,
@@ -254,7 +247,6 @@ class OpticsSystem : public Kernel::SystemBase {
                        std::shared_ptr<VisionSceneResource>,
                        VisionSceneResourceKeyHash>
         vision_scene_resources_;
-#endif  // CORONA_ENABLE_VISION
 
     struct ActorPickRequest {
         std::uintptr_t pick_handle{0};

@@ -2,9 +2,6 @@
 
 // Vision material adapter - maps CoronaEngine OpticsDevice + MeshDevice material
 // parameters to a Vision PrincipledBSDF material.
-// Only compiled when CORONA_ENABLE_VISION is defined.
-
-#ifdef CORONA_ENABLE_VISION
 
 #include <array>
 #include <memory>
@@ -40,5 +37,3 @@ std::shared_ptr<::vision::Material> create_vision_material(
     const MeshDevice& mesh_dev);
 
 }  // namespace Corona::Systems::Vision
-
-#endif  // CORONA_ENABLE_VISION

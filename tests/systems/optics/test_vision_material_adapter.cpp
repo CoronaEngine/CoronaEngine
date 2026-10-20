@@ -1,9 +1,11 @@
 #include <corona/shared_data_hub.h>
 
 #include <cstdlib>
+#include <filesystem>
 #include <iostream>
 
 #include "base/scattering/material.h"
+#include "rhi/context.h"
 #include "vision/vision_material_adapter.h"
 
 namespace {
@@ -27,6 +29,10 @@ std::uint64_t material_hash(const Corona::OpticsDevice& optics) {
 }  // namespace
 
 int main() {
+    // CTest runs from the plugin directory, not the standalone hotfix layout.
+    ocarina::DynamicModule::clear_search_path();
+    ocarina::RHIContext::instance().init(std::filesystem::current_path());
+
     Corona::OpticsDevice base;
     base.metallic = 0.2f;
     base.roughness = 0.4f;

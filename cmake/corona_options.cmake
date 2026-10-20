@@ -47,14 +47,11 @@ set(CORONA_LOCK_TIMEOUT_MS "5000"
     CACHE STRING "Lock wait threshold in ms used when CORONA_ENABLE_LOCK_TIMEOUT_DIAGNOSTICS is ON")
 
 # ------------------------------------------------------------------------------
-# Vision is part of every engine build. Keep the internal variable for
-# existing target declarations, but do not expose a feature toggle.
+# Vision is a required part of every engine build.
 # Vulkan and Slang requirements are validated by the Ocarina target.
 # ------------------------------------------------------------------------------
-set(CORONA_BUILD_VISION ON CACHE INTERNAL "Vision is always enabled" FORCE)
-
 # Standalone apps, additional tests and offline filtering remain optional.
-option(VISION_BUILD_APPS    "Build Vision sample apps (vision-gui, viewers, ...)" ${CORONA_BUILD_VISION})
+option(VISION_BUILD_APPS    "Build Vision sample apps (vision-gui, viewers, ...)" ON)
 option(VISION_BUILD_TESTS   "Build Vision test executables"                       OFF)
 option(VISION_BUILD_OIDN    "Fetch and build Intel Open Image Denoise for Vision" OFF)
 option(VISION_UNITY_BUILD   "Enable unity build for Vision plugin sources"        OFF)
@@ -66,7 +63,6 @@ message(STATUS "[Options] BUILD_CORONA_RUNTIME                    = ${BUILD_CORO
 message(STATUS "[Options] BUILD_CORONA_TESTING                    = ${BUILD_CORONA_TESTING}")
 message(STATUS "[Options] BUILD_CORONA_EXAMPLES                   = ${BUILD_CORONA_EXAMPLES}")
 message(STATUS "[Options] CORONA_BUILD_HARDWARE                   = ${CORONA_BUILD_HARDWARE}")
-message(STATUS "[Options] CORONA_BUILD_VISION                     = ${CORONA_BUILD_VISION}")
 message(STATUS "[Options] VISION_BUILD_APPS                       = ${VISION_BUILD_APPS}")
 message(STATUS "[Options] VISION_BUILD_TESTS                      = ${VISION_BUILD_TESTS}")
 message(STATUS "[Options] VISION_BUILD_OIDN                       = ${VISION_BUILD_OIDN}")

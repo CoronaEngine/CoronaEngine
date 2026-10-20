@@ -32,9 +32,7 @@
 #include GLSL(../../../assets/shaders/optics_cursor.comp.glsl)
 #include GLSL(../../../assets/shaders/optics_ui_warp.comp.glsl)
 #include GLSL(../../../assets/shaders/optics_composite.comp.glsl)
-#ifdef CORONA_ENABLE_VISION
 #include GLSL(../../../assets/shaders/vision_resolve.comp.glsl)
-#endif
 // clang-format on
 
 // ============================================================================
@@ -170,9 +168,7 @@ struct Hardware {
     std::optional<Corona::Horizon::ComputePipeline<optics_cursor_comp_glsl_t>> opticsCursorPipeline;
     std::optional<Corona::Horizon::ComputePipeline<optics_ui_warp_comp_glsl_t>> opticsUiWarpPipeline;
     std::optional<Corona::Horizon::ComputePipeline<optics_composite_comp_glsl_t>> opticsCompositePipeline;
-#ifdef CORONA_ENABLE_VISION
     std::optional<Corona::Horizon::ComputePipeline<vision_resolve_comp_glsl_t>> visionResolvePipeline;
-#endif
 
     // === CPU-side uniform data ===
     struct UniformBufferObject {

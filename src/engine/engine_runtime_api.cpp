@@ -2674,11 +2674,7 @@ void* get_default_surface() {
 }
 
 bool is_vision_available() {
-#ifdef CORONA_ENABLE_VISION
     return true;
-#else
-    return false;
-#endif
 }
 
 void set_render_backend(const std::string& mode, std::uintptr_t camera_handle) {
@@ -2688,11 +2684,7 @@ void set_render_backend(const std::string& mode, std::uintptr_t camera_handle) {
         return;
     }
 
-    int backend = mode == "vision" ? 1 : 0;
-    if (backend == 1 && !is_vision_available()) {
-        CFW_LOG_WARNING("[set_render_backend] Vision not compiled in; falling back to Native");
-        backend = 0;
-    }
+    const int backend = mode == "vision" ? 1 : 0;
 
     CameraStateUpdateCommand command{};
     command.camera_handle = resolved_handle;
@@ -2996,11 +2988,6 @@ bool get_requested_vision_stable_planes(std::uintptr_t camera_handle) {
 }
 
 void load_vision_scene(const std::string& path) {
-    if (!is_vision_available()) {
-        CFW_LOG_WARNING("[load_vision_scene] Vision not compiled in; request ignored");
-        return;
-    }
-
     if (auto* event_bus = Kernel::KernelContext::instance().event_bus()) {
         Events::VisionSceneLoadEvent event;
         event.scene_path = path;
@@ -3012,11 +2999,6 @@ void load_vision_scene_from_json(const std::string& json_text,
                                  const std::string& base_dir,
                                  const std::string& scene_key,
                                  bool external_live) {
-    if (!is_vision_available()) {
-        CFW_LOG_WARNING("[load_vision_scene_from_json] Vision not compiled in; request ignored");
-        return;
-    }
-
     if (auto* event_bus = Kernel::KernelContext::instance().event_bus()) {
         Events::VisionSceneLoadEvent event;
         event.scene_json = json_text;

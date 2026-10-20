@@ -1,7 +1,5 @@
 #include "vision_camera_adapter.h"
 
-#ifdef CORONA_ENABLE_VISION
-
 #include <cmath>
 #include <cstdlib>
 
@@ -113,5 +111,3 @@ void sync_vision_camera(::vision::Pipeline& pipeline, const CameraDevice& camera
 }
 
 }  // namespace Corona::Systems::Vision
-
-#endif  // CORONA_ENABLE_VISION

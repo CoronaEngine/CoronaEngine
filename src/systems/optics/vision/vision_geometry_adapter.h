@@ -3,9 +3,6 @@
 // Vision geometry adapter - converts CoronaEngine scene geometry (CPU mesh data,
 // transforms, per-mesh materials) into Vision ShapeGroup / ShapeInstance objects
 // and adds them to the Vision scene.
-// Only compiled when CORONA_ENABLE_VISION is defined.
-
-#ifdef CORONA_ENABLE_VISION
 
 #include <cstdint>
 
@@ -65,5 +62,3 @@ AddVisionShapeResult add_vision_shape_for_actor(
 bool remove_vision_shape_for_actor(::vision::Scene& scene, unsigned int shape_index);
 
 }  // namespace Corona::Systems::Vision
-
-#endif  // CORONA_ENABLE_VISION

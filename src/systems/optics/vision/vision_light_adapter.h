@@ -2,9 +2,6 @@
 
 // Vision light adapter - maps CoronaEngine EnvironmentDevice sun/sky parameters
 // to Vision directional light and environment light.
-// Only compiled when CORONA_ENABLE_VISION is defined.
-
-#ifdef CORONA_ENABLE_VISION
 
 // Forward declarations
 namespace vision {
@@ -25,5 +22,3 @@ namespace Corona::Systems::Vision {
 void setup_vision_lights(::vision::Scene& scene, const EnvironmentDevice& env);
 
 }  // namespace Corona::Systems::Vision
-
-#endif  // CORONA_ENABLE_VISION

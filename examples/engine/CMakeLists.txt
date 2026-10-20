@@ -26,34 +26,32 @@ add_custom_target(corona_engine_startup_config
 )
 add_dependencies(corona_engine corona_engine_startup_config)
 
-if(CORONA_BUILD_VISION)
-    # Dynamically loaded MODULE libraries are absent from TARGET_RUNTIME_DLLS
-    # of the executable. Deploy them and their dependencies explicitly.
-    get_property(_vision_plugins GLOBAL PROPERTY CORONA_VISION_PLUGIN_TARGETS)
-    if(NOT TARGET ocarina-backend-vulkan-compute)
-        message(FATAL_ERROR "Vision requires the Ocarina Vulkan compute backend (Vulkan SDK and Slang).")
-    endif()
-    list(APPEND _vision_plugins ocarina-backend-vulkan-compute)
-    add_custom_target(corona_engine_vision_runtime
-        COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:corona_engine>"
-        DEPENDS ${_vision_plugins} copy_slang_headers
-    )
-    foreach(_plugin IN LISTS _vision_plugins)
-        add_custom_command(TARGET corona_engine_vision_runtime POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "$<TARGET_FILE:${_plugin}>" $<TARGET_RUNTIME_DLLS:${_plugin}>
-                "$<TARGET_FILE_DIR:corona_engine>"
-            COMMAND_EXPAND_LISTS VERBATIM
-        )
-    endforeach()
-    add_custom_command(TARGET corona_engine_vision_runtime POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_directory
-            "$<TARGET_FILE_DIR:ocarina-backend-vulkan-compute>/slang"
-            "$<TARGET_FILE_DIR:corona_engine>/slang"
-        VERBATIM
-    )
-    add_dependencies(corona_engine corona_engine_vision_runtime)
+# Dynamically loaded MODULE libraries are absent from TARGET_RUNTIME_DLLS
+# of the executable. Deploy them and their dependencies explicitly.
+get_property(_vision_plugins GLOBAL PROPERTY CORONA_VISION_PLUGIN_TARGETS)
+if(NOT TARGET ocarina-backend-vulkan-compute)
+    message(FATAL_ERROR "Vision requires the Ocarina Vulkan compute backend (Vulkan SDK and Slang).")
 endif()
+list(APPEND _vision_plugins ocarina-backend-vulkan-compute)
+add_custom_target(corona_engine_vision_runtime
+    COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:corona_engine>"
+    DEPENDS ${_vision_plugins} copy_slang_headers
+)
+foreach(_plugin IN LISTS _vision_plugins)
+    add_custom_command(TARGET corona_engine_vision_runtime POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "$<TARGET_FILE:${_plugin}>" $<TARGET_RUNTIME_DLLS:${_plugin}>
+            "$<TARGET_FILE_DIR:corona_engine>"
+        COMMAND_EXPAND_LISTS VERBATIM
+    )
+endforeach()
+add_custom_command(TARGET corona_engine_vision_runtime POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "$<TARGET_FILE_DIR:ocarina-backend-vulkan-compute>/slang"
+        "$<TARGET_FILE_DIR:corona_engine>/slang"
+    VERBATIM
+)
+add_dependencies(corona_engine corona_engine_vision_runtime)
 
 add_custom_command(TARGET corona_engine POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E rm -f

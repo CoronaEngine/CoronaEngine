@@ -12,8 +12,8 @@ Editor, Vision, and `modules/corona_resource` keep their own test directories.
 
 Each test directory defines its targets in a local `CMakeLists.txt`. The root
 build adds `tests/` after the production modules when `BUILD_CORONA_TESTING` or
-`BUILD_TESTING` is enabled. Vision-dependent engine tests also require
-`CORONA_BUILD_VISION`.
+`BUILD_TESTING` is enabled, including Vision-dependent engine tests. Configuration
+also checks that the required Vision targets and Optics linkage are present.
 
 Configure and build with the existing `tests-<configuration>` or
 `vision-tests-<configuration>` presets, then run CTest directly. CMake adds the

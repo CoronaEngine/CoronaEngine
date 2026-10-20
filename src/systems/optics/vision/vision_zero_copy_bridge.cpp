@@ -1,7 +1,5 @@
 // Vision zero-copy bridge implementation. See vision_zero_copy_bridge.h.
 
-#ifdef CORONA_ENABLE_VISION
-
 #include "vision_zero_copy_bridge.h"
 
 #include <stdexcept>
@@ -137,5 +135,3 @@ bool VisionZeroCopyBridge::copy_from_framebuffer(::vision::Pipeline& pipeline) {
 }
 
 }  // namespace Corona::Systems::Vision
-
-#endif  // CORONA_ENABLE_VISION

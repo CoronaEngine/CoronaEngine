@@ -1,7 +1,5 @@
 #include "vision_light_adapter.h"
 
-#ifdef CORONA_ENABLE_VISION
-
 #include <cmath>
 #include <vector>
 
@@ -152,5 +150,3 @@ void setup_vision_lights(::vision::Scene& scene, const EnvironmentDevice& env) {
 }
 
 }  // namespace Corona::Systems::Vision
-
-#endif  // CORONA_ENABLE_VISION

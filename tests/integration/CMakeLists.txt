@@ -6,9 +6,8 @@ target_include_directories(corona_engine_startup_config_tests PRIVATE
 target_link_libraries(corona_engine_startup_config_tests PRIVATE nlohmann_json::nlohmann_json)
 add_test(NAME EngineStartupConfigTests
     COMMAND corona_engine_startup_config_tests ${CMAKE_CURRENT_BINARY_DIR}/startup-config-fixture)
-add_test(NAME VisionRequiredConfigurationTests
-    COMMAND ${CMAKE_COMMAND} "-DREPO_ROOT=${PROJECT_SOURCE_DIR}"
-        -P "${CMAKE_CURRENT_SOURCE_DIR}/test_vision_required.cmake")
+# Inspect the actual target graph while it is available during configuration.
+include("${CMAKE_CURRENT_SOURCE_DIR}/test_vision_required.cmake")
 add_test(NAME EngineStartupConfigDeploymentTests
     COMMAND ${CMAKE_COMMAND}
         "-DREPO_ROOT=${PROJECT_SOURCE_DIR}"
@@ -35,107 +34,105 @@ add_test(NAME UiSurfaceRemovalRaceTests
          COMMAND corona_ui_surface_removal_race_tests)
 set_tests_properties(UiSurfaceRemovalRaceTests PROPERTIES TIMEOUT 15)
 
-if(CORONA_BUILD_VISION)
-    add_executable(corona_vision_reblur_tests test_vision_reblur.cpp)
-    target_include_directories(corona_vision_reblur_tests PRIVATE ${CMAKE_SOURCE_DIR}/vision/src)
-    target_link_libraries(corona_vision_reblur_tests PRIVATE
-        corona::engine vision-all_libs vision-reblur-kernels)
-    add_test(NAME VisionReblurTests COMMAND corona_vision_reblur_tests)
-    set_tests_properties(VisionReblurTests PROPERTIES
-        WORKING_DIRECTORY "$<TARGET_FILE_DIR:vision-material-principled_bsdf>"
-        RUN_SERIAL TRUE TIMEOUT 300)
+add_executable(corona_vision_reblur_tests test_vision_reblur.cpp)
+target_include_directories(corona_vision_reblur_tests PRIVATE ${CMAKE_SOURCE_DIR}/vision/src)
+target_link_libraries(corona_vision_reblur_tests PRIVATE
+    corona::engine vision-all_libs vision-reblur-kernels)
+add_test(NAME VisionReblurTests COMMAND corona_vision_reblur_tests)
+set_tests_properties(VisionReblurTests PROPERTIES
+    WORKING_DIRECTORY "$<TARGET_FILE_DIR:vision-material-principled_bsdf>"
+    RUN_SERIAL TRUE TIMEOUT 300)
 
-    add_test(NAME VisionRelaxEvaluationTools
-        COMMAND ${Python_EXECUTABLE} ${CMAKE_SOURCE_DIR}/vision/src/tests/test_relax_eval.py)
-    set_tests_properties(VisionRelaxEvaluationTools PROPERTIES TIMEOUT 30)
-    add_executable(corona_vision_relax_scene_tests test_vision_relax_producers.cpp)
-    target_include_directories(corona_vision_relax_scene_tests PRIVATE ${CMAKE_SOURCE_DIR}/vision/src)
-    target_link_libraries(corona_vision_relax_scene_tests PRIVATE corona::engine vision-all_libs vision-relax-filter)
-    add_test(NAME VisionRelaxPT COMMAND corona_vision_relax_scene_tests pt)
-    add_test(NAME VisionRelaxReSTIR COMMAND corona_vision_relax_scene_tests restir)
-    add_test(NAME VisionRelaxLifecycle COMMAND corona_vision_relax_scene_tests lifecycle)
-    set_tests_properties(VisionRelaxPT VisionRelaxReSTIR VisionRelaxLifecycle PROPERTIES
-        WORKING_DIRECTORY "$<TARGET_FILE_DIR:vision-material-principled_bsdf>"
-        RUN_SERIAL TRUE TIMEOUT 300)
+add_test(NAME VisionRelaxEvaluationTools
+    COMMAND ${Python_EXECUTABLE} ${CMAKE_SOURCE_DIR}/vision/src/tests/test_relax_eval.py)
+set_tests_properties(VisionRelaxEvaluationTools PROPERTIES TIMEOUT 30)
+add_executable(corona_vision_relax_scene_tests test_vision_relax_producers.cpp)
+target_include_directories(corona_vision_relax_scene_tests PRIVATE ${CMAKE_SOURCE_DIR}/vision/src)
+target_link_libraries(corona_vision_relax_scene_tests PRIVATE corona::engine vision-all_libs vision-relax-filter)
+add_test(NAME VisionRelaxPT COMMAND corona_vision_relax_scene_tests pt)
+add_test(NAME VisionRelaxReSTIR COMMAND corona_vision_relax_scene_tests restir)
+add_test(NAME VisionRelaxLifecycle COMMAND corona_vision_relax_scene_tests lifecycle)
+set_tests_properties(VisionRelaxPT VisionRelaxReSTIR VisionRelaxLifecycle PROPERTIES
+    WORKING_DIRECTORY "$<TARGET_FILE_DIR:vision-material-principled_bsdf>"
+    RUN_SERIAL TRUE TIMEOUT 300)
 
-    add_executable(corona_vision_relax_tests test_vision_relax.cpp test_vision_relax_passes.cpp)
-    target_include_directories(corona_vision_relax_tests PRIVATE ${CMAKE_SOURCE_DIR}/vision/src)
-    target_link_libraries(corona_vision_relax_tests PRIVATE vision-relax-filter)
-    add_test(NAME VisionRelaxHelpers COMMAND corona_vision_relax_tests helpers)
-    add_test(NAME VisionRelaxPrepass COMMAND corona_vision_relax_tests prepass)
-    add_test(NAME VisionRelaxTemporal COMMAND corona_vision_relax_tests temporal)
-    add_test(NAME VisionRelaxHistory COMMAND corona_vision_relax_tests history)
-    add_test(NAME VisionRelaxAtrous COMMAND corona_vision_relax_tests atrous)
-    add_test(NAME VisionRelaxLayerHistory COMMAND corona_vision_relax_tests layers)
-    set_tests_properties(VisionRelaxHelpers VisionRelaxPrepass VisionRelaxTemporal VisionRelaxHistory VisionRelaxAtrous VisionRelaxLayerHistory PROPERTIES
-        WORKING_DIRECTORY "$<TARGET_FILE_DIR:ocarina-backend-vulkan-compute>"
-        RUN_SERIAL TRUE TIMEOUT 120)
+add_executable(corona_vision_relax_tests test_vision_relax.cpp test_vision_relax_passes.cpp)
+target_include_directories(corona_vision_relax_tests PRIVATE ${CMAKE_SOURCE_DIR}/vision/src)
+target_link_libraries(corona_vision_relax_tests PRIVATE vision-relax-filter)
+add_test(NAME VisionRelaxHelpers COMMAND corona_vision_relax_tests helpers)
+add_test(NAME VisionRelaxPrepass COMMAND corona_vision_relax_tests prepass)
+add_test(NAME VisionRelaxTemporal COMMAND corona_vision_relax_tests temporal)
+add_test(NAME VisionRelaxHistory COMMAND corona_vision_relax_tests history)
+add_test(NAME VisionRelaxAtrous COMMAND corona_vision_relax_tests atrous)
+add_test(NAME VisionRelaxLayerHistory COMMAND corona_vision_relax_tests layers)
+set_tests_properties(VisionRelaxHelpers VisionRelaxPrepass VisionRelaxTemporal VisionRelaxHistory VisionRelaxAtrous VisionRelaxLayerHistory PROPERTIES
+    WORKING_DIRECTORY "$<TARGET_FILE_DIR:ocarina-backend-vulkan-compute>"
+    RUN_SERIAL TRUE TIMEOUT 120)
 
-    add_executable(corona_vision_shader_binding_tests
-        test_vision_shader_bindings.cpp test_vision_shader_comments.cpp)
-    target_link_libraries(corona_vision_shader_binding_tests PRIVATE ocarina-native ocarina-include)
-    add_test(NAME VisionShaderBindingTests COMMAND corona_vision_shader_binding_tests)
-    set_tests_properties(VisionShaderBindingTests PROPERTIES
-        WORKING_DIRECTORY "$<TARGET_FILE_DIR:ocarina-backend-vulkan-compute>"
-        RUN_SERIAL TRUE TIMEOUT 120)
+add_executable(corona_vision_shader_binding_tests
+    test_vision_shader_bindings.cpp test_vision_shader_comments.cpp)
+target_link_libraries(corona_vision_shader_binding_tests PRIVATE ocarina-native ocarina-include)
+add_test(NAME VisionShaderBindingTests COMMAND corona_vision_shader_binding_tests)
+set_tests_properties(VisionShaderBindingTests PROPERTIES
+    WORKING_DIRECTORY "$<TARGET_FILE_DIR:ocarina-backend-vulkan-compute>"
+    RUN_SERIAL TRUE TIMEOUT 120)
 
-    add_executable(corona_vision_runtime_geometry_sync_tests test_vision_runtime_geometry_sync.cpp)
-    target_include_directories(corona_vision_runtime_geometry_sync_tests PRIVATE
-        ${PROJECT_SOURCE_DIR}/include
-        ${PROJECT_SOURCE_DIR}/src/systems/optics
-        ${CMAKE_SOURCE_DIR}/vision/src)
-    target_link_libraries(corona_vision_runtime_geometry_sync_tests PRIVATE corona::engine vision-all_libs)
-    add_test(NAME VisionRuntimeGeometrySyncTests COMMAND corona_vision_runtime_geometry_sync_tests)
-    set_tests_properties(VisionRuntimeGeometrySyncTests PROPERTIES
+add_executable(corona_vision_runtime_geometry_sync_tests test_vision_runtime_geometry_sync.cpp)
+target_include_directories(corona_vision_runtime_geometry_sync_tests PRIVATE
+    ${PROJECT_SOURCE_DIR}/include
+    ${PROJECT_SOURCE_DIR}/src/systems/optics
+    ${CMAKE_SOURCE_DIR}/vision/src)
+target_link_libraries(corona_vision_runtime_geometry_sync_tests PRIVATE corona::engine vision-all_libs)
+add_test(NAME VisionRuntimeGeometrySyncTests COMMAND corona_vision_runtime_geometry_sync_tests)
+set_tests_properties(VisionRuntimeGeometrySyncTests PROPERTIES
+    WORKING_DIRECTORY "$<TARGET_FILE_DIR:vision-material-principled_bsdf>")
+foreach(case fresh material topology lights stale eviction)
+    add_test(NAME VisionRuntimeGeometry_${case} COMMAND corona_vision_runtime_geometry_sync_tests ${case})
+    set_tests_properties(VisionRuntimeGeometry_${case} PROPERTIES
         WORKING_DIRECTORY "$<TARGET_FILE_DIR:vision-material-principled_bsdf>")
-    foreach(case fresh material topology lights stale eviction)
-        add_test(NAME VisionRuntimeGeometry_${case} COMMAND corona_vision_runtime_geometry_sync_tests ${case})
-        set_tests_properties(VisionRuntimeGeometry_${case} PROPERTIES
-            WORKING_DIRECTORY "$<TARGET_FILE_DIR:vision-material-principled_bsdf>")
-    endforeach()
-    add_executable(corona_vision_embedded_mode_switch_tests
-        test_vision_embedded_mode_switch.cpp
-        test_vision_svgf_reprojection.cpp
-        test_vision_svgf_total_albedo.cpp)
-    target_include_directories(corona_vision_embedded_mode_switch_tests PRIVATE
-        ${PROJECT_SOURCE_DIR}/include
-        ${PROJECT_SOURCE_DIR}/src/systems/optics
-        ${CMAKE_SOURCE_DIR}/vision/src)
-    target_link_libraries(corona_vision_embedded_mode_switch_tests PRIVATE
-        corona::engine vision-all_libs)
-    add_test(NAME VisionEmbeddedModeSwitchTests COMMAND corona_vision_embedded_mode_switch_tests)
-    add_test(NAME VisionSceneAssetReuseTests COMMAND corona_vision_embedded_mode_switch_tests --scene-asset-reuse)
-    set_tests_properties(VisionSceneAssetReuseTests PROPERTIES
-        WORKING_DIRECTORY "$<TARGET_FILE_DIR:vision-material-principled_bsdf>"
-        RUN_SERIAL TRUE TIMEOUT 300)
-    set_tests_properties(VisionEmbeddedModeSwitchTests PROPERTIES
-        WORKING_DIRECTORY "$<TARGET_FILE_DIR:vision-material-principled_bsdf>")
+endforeach()
+add_executable(corona_vision_embedded_mode_switch_tests
+    test_vision_embedded_mode_switch.cpp
+    test_vision_svgf_reprojection.cpp
+    test_vision_svgf_total_albedo.cpp)
+target_include_directories(corona_vision_embedded_mode_switch_tests PRIVATE
+    ${PROJECT_SOURCE_DIR}/include
+    ${PROJECT_SOURCE_DIR}/src/systems/optics
+    ${CMAKE_SOURCE_DIR}/vision/src)
+target_link_libraries(corona_vision_embedded_mode_switch_tests PRIVATE
+    corona::engine vision-all_libs)
+add_test(NAME VisionEmbeddedModeSwitchTests COMMAND corona_vision_embedded_mode_switch_tests)
+add_test(NAME VisionSceneAssetReuseTests COMMAND corona_vision_embedded_mode_switch_tests --scene-asset-reuse)
+set_tests_properties(VisionSceneAssetReuseTests PROPERTIES
+    WORKING_DIRECTORY "$<TARGET_FILE_DIR:vision-material-principled_bsdf>"
+    RUN_SERIAL TRUE TIMEOUT 300)
+set_tests_properties(VisionEmbeddedModeSwitchTests PROPERTIES
+    WORKING_DIRECTORY "$<TARGET_FILE_DIR:vision-material-principled_bsdf>")
 
-    add_executable(corona_vision_restir_estimator_tests
-        test_vision_restir_estimators.cpp
-        test_vision_restir_reprojection.cpp
-        test_vision_restir_continuation.cpp
-        test_vision_glass_transport.cpp
-        test_vision_restir_support.cpp)
-    target_include_directories(corona_vision_restir_estimator_tests PRIVATE
-        ${CMAKE_SOURCE_DIR}/vision/src)
-    target_link_libraries(corona_vision_restir_estimator_tests PRIVATE
-        corona::engine vision-all_libs vision-integrator-ReSTIR)
-    add_test(NAME VisionReSTIREstimatorTests COMMAND corona_vision_restir_estimator_tests)
-    # Real material variants and stable-plane SVGF compile GPU shaders on a cold cache.
-    set_tests_properties(VisionReSTIREstimatorTests PROPERTIES
-        WORKING_DIRECTORY "$<TARGET_FILE_DIR:vision-material-principled_bsdf>"
-        RUN_SERIAL TRUE
-        TIMEOUT 300)
-    add_test(NAME VisionReSTIRVisibilityMIS
-        COMMAND ${Python_EXECUTABLE} ${CMAKE_SOURCE_DIR}/vision/src/tests/test_restir_visibility_mis.py)
-    set_tests_properties(VisionReSTIRVisibilityMIS PROPERTIES TIMEOUT 30)
-    add_test(NAME VisionReSTIRPairwiseMIS
-        COMMAND ${Python_EXECUTABLE} ${CMAKE_SOURCE_DIR}/vision/src/tests/test_restir_pairwise_mis.py)
-    add_test(NAME VisionReSTIRGISupport
-        COMMAND ${Python_EXECUTABLE} ${CMAKE_SOURCE_DIR}/vision/src/tests/test_restir_gi_support.py)
-    set_tests_properties(VisionReSTIRPairwiseMIS VisionReSTIRGISupport PROPERTIES TIMEOUT 30)
-endif()
+add_executable(corona_vision_restir_estimator_tests
+    test_vision_restir_estimators.cpp
+    test_vision_restir_reprojection.cpp
+    test_vision_restir_continuation.cpp
+    test_vision_glass_transport.cpp
+    test_vision_restir_support.cpp)
+target_include_directories(corona_vision_restir_estimator_tests PRIVATE
+    ${CMAKE_SOURCE_DIR}/vision/src)
+target_link_libraries(corona_vision_restir_estimator_tests PRIVATE
+    corona::engine vision-all_libs vision-integrator-ReSTIR)
+add_test(NAME VisionReSTIREstimatorTests COMMAND corona_vision_restir_estimator_tests)
+# Real material variants and stable-plane SVGF compile GPU shaders on a cold cache.
+set_tests_properties(VisionReSTIREstimatorTests PROPERTIES
+    WORKING_DIRECTORY "$<TARGET_FILE_DIR:vision-material-principled_bsdf>"
+    RUN_SERIAL TRUE
+    TIMEOUT 300)
+add_test(NAME VisionReSTIRVisibilityMIS
+    COMMAND ${Python_EXECUTABLE} ${CMAKE_SOURCE_DIR}/vision/src/tests/test_restir_visibility_mis.py)
+set_tests_properties(VisionReSTIRVisibilityMIS PROPERTIES TIMEOUT 30)
+add_test(NAME VisionReSTIRPairwiseMIS
+    COMMAND ${Python_EXECUTABLE} ${CMAKE_SOURCE_DIR}/vision/src/tests/test_restir_pairwise_mis.py)
+add_test(NAME VisionReSTIRGISupport
+    COMMAND ${Python_EXECUTABLE} ${CMAKE_SOURCE_DIR}/vision/src/tests/test_restir_gi_support.py)
+set_tests_properties(VisionReSTIRPairwiseMIS VisionReSTIRGISupport PROPERTIES TIMEOUT 30)
 
 add_executable(corona_collaborative_editor_loopback_tests
     test_collaborative_editor_loopback.cpp

@@ -15,10 +15,6 @@
 // for the preceding Vulkan submit receipt before allowing Vision to reuse or
 // release this allocation. This is correct but CPU-serialized; a shared timeline
 // semaphore is the performance follow-up.
-//
-// Only compiled when CORONA_ENABLE_VISION is defined.
-
-#ifdef CORONA_ENABLE_VISION
 
 #include <horizon.h>
 
@@ -73,5 +69,3 @@ private:
 };
 
 }  // namespace Corona::Systems::Vision
-
-#endif  // CORONA_ENABLE_VISION

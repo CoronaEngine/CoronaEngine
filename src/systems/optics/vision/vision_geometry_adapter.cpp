@@ -1,7 +1,5 @@
 #include "vision_geometry_adapter.h"
 
-#ifdef CORONA_ENABLE_VISION
-
 #include <horizon/core/logging.h>
 #include <corona/resource/resource_manager.h>
 #include <corona/resource/types/scene.h>
@@ -403,5 +401,3 @@ bool remove_vision_shape_for_actor(::vision::Scene& scene, unsigned int shape_in
 }
 
 }  // namespace Corona::Systems::Vision
-
-#endif  // CORONA_ENABLE_VISION

@@ -484,11 +484,11 @@ void write_scene(Scene* scene, const std::filesystem::path& scene_path);
 // ============================================================================
 // Render backend control (Native vs Vision)
 // ============================================================================
-/// 是否在编译期启用了 Vision 后端（CORONA_ENABLE_VISION）。
+/// 兼容接口：引擎始终包含 Vision，返回 true；不代表 Vulkan 设备已经初始化成功。
 [[nodiscard]] bool is_vision_available();
 
 /// 请求切换光学渲染后端。mode: "native" 或 "vision"。
-/// 仅当 is_vision_available() 为 true 时生效，否则被忽略。
+/// Vision 设备在需要渲染时延迟初始化。
 void set_render_backend(const std::string& mode, std::uintptr_t camera_handle = 0);
 
 /// 获取当前请求的渲染后端，返回 "native" 或 "vision"。

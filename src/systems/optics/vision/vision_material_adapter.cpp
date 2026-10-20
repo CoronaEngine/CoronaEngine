@@ -1,7 +1,5 @@
 #include "vision_material_adapter.h"
 
-#ifdef CORONA_ENABLE_VISION
-
 #include <corona/shared_data_hub.h>
 
 #include <algorithm>
@@ -62,5 +60,3 @@ std::shared_ptr<::vision::Material> create_vision_material(
 }
 
 }  // namespace Corona::Systems::Vision
-
-#endif  // CORONA_ENABLE_VISION

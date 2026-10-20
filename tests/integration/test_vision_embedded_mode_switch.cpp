@@ -3,6 +3,7 @@
 #include "base/mgr/global.h"
 #include "base/mgr/pipeline.h"
 #include "base/mgr/switch_profile.h"
+#include "base/scattering/material.h"
 #include "base/sensor/sensor.h"
 #include "vision/vision_camera_adapter.h"
 #include "vision/vision_external_live_aabb.h"
@@ -1093,6 +1094,7 @@ struct VisionEmbeddedModeSwitchTest {
     // preparation path. Kept out of CTest because scene shader cold starts vary.
     static void benchmark_switches(const char* scene) {
         namespace fs = std::filesystem;
+        ocarina::DynamicModule::clear_search_path();
         ocarina::RHIContext::instance().init(fs::current_path());
         static auto device = ocarina::RHIContext::instance().create_device();
         device.init_rtx();
@@ -1200,6 +1202,7 @@ struct VisionEmbeddedModeSwitchTest {
     // view context as OpticsSystem's editor render loop. It is not a CTest job.
     static void capture_camera_motion(const char* scene, const char* destination, bool fast = false) {
         namespace fs = std::filesystem;
+        ocarina::DynamicModule::clear_search_path();
         ocarina::RHIContext::instance().init(fs::current_path());
         static auto device = ocarina::RHIContext::instance().create_device();
         device.init_rtx();
@@ -1413,6 +1416,7 @@ struct VisionEmbeddedModeSwitchTest {
         const unsigned char white_tga[] = {0,0,2,0,0,0,0,0,0,0,0,0,1,0,1,0,24,0,255,255,255};
         std::ofstream(base / "albedo.tga", std::ios::binary).write(
             reinterpret_cast<const char*>(white_tga), sizeof(white_tga));
+        ocarina::DynamicModule::clear_search_path();
         ocarina::RHIContext::instance().init(original_cwd);
         // Keep the device alive until process exit: Vision's global kernel tools own GPU state.
         static auto device = ocarina::RHIContext::instance().create_device();
@@ -1612,8 +1616,12 @@ struct VisionEmbeddedModeSwitchTest {
         resource->mark_transforms_changed();
         pt->update_geometry();
         // Changing CWD must not change the meaning of relative source resources.
-        // The alternate working directory also contains Vision Vulkan compiler headers.
-        fs::current_path(original_cwd.parent_path() / "examples" / "engine");
+        // Keep this fixture independent of the example engine's build layout.
+        const auto alternate_cwd = base / "alternate-cwd";
+        fs::create_directories(alternate_cwd);
+        fs::copy(original_cwd / "slang", alternate_cwd / "slang",
+                 fs::copy_options::recursive | fs::copy_options::overwrite_existing);
+        fs::current_path(alternate_cwd);
         const auto key = system.make_vision_pipeline_key(request.scene_key, CameraVisionRenderMode::SVGF,
                                                          Vision::VisionPipelineSource::ExternalLive);
         expect(system.ensure_external_vision_runtime(key) != nullptr,
@@ -1755,12 +1763,25 @@ struct VisionEmbeddedModeSwitchTest {
         fs::remove(base / "file-scene.json");
         fs::remove(base / "albedo.tga");
         fs::remove(base / "triangle.obj");
+        expect(fs::canonical(alternate_cwd).parent_path() == fs::canonical(base),
+               "alternate working directory must remain inside the test fixture");
+        fs::remove_all(alternate_cwd);
         fs::remove(base);
         std::cout << "PASS: PT/ReSTIR/SVGF mode switching and history reset\n";
     }
 };
 }
 int main(int argc, char** argv) {
+    // Test devices are function-static; release global texture owners before
+    // those devices are destroyed, including when a test throws.
+    struct RuntimeCleanup {
+        ~RuntimeCleanup() {
+            vision::Global::instance().set_pipeline(nullptr);
+            vision::ImagePool::destroy_instance();
+            vision::MaterialLut::destroy_instance();
+            vision::Global::instance().set_device(nullptr);
+        }
+    } runtime_cleanup;
     try {
         Corona::Systems::VisionEmbeddedModeSwitchTest::check_mode_api();
         Corona::Systems::VisionEmbeddedModeSwitchTest::check_accumulation_api();

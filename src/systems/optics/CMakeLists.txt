@@ -10,26 +10,26 @@ corona_add_system(optics
         ${PROJECT_SOURCE_DIR}/include/corona/systems/optics/actor_pick_readback_worker.h
         actor_pick_result.h
         hardware.h
-        $<$<BOOL:${CORONA_BUILD_VISION}>:vision/vision_material_adapter.cpp>
-        $<$<BOOL:${CORONA_BUILD_VISION}>:vision/vision_material_adapter.h>
-        $<$<BOOL:${CORONA_BUILD_VISION}>:vision/vision_geometry_adapter.cpp>
-        $<$<BOOL:${CORONA_BUILD_VISION}>:vision/vision_geometry_adapter.h>
-        $<$<BOOL:${CORONA_BUILD_VISION}>:vision/vision_camera_adapter.cpp>
-        $<$<BOOL:${CORONA_BUILD_VISION}>:vision/vision_camera_adapter.h>
-        $<$<BOOL:${CORONA_BUILD_VISION}>:vision/vision_light_adapter.cpp>
-        $<$<BOOL:${CORONA_BUILD_VISION}>:vision/vision_light_adapter.h>
-        $<$<BOOL:${CORONA_BUILD_VISION}>:vision/vision_render_mode_config.cpp>
-        $<$<BOOL:${CORONA_BUILD_VISION}>:vision/vision_render_mode_config.h>
-        $<$<BOOL:${CORONA_BUILD_VISION}>:${PROJECT_SOURCE_DIR}/include/corona/systems/optics/vision_pipeline_key.h>
-        $<$<BOOL:${CORONA_BUILD_VISION}>:${PROJECT_SOURCE_DIR}/include/corona/systems/optics/vision_scene_resource.h>
-        $<$<BOOL:${CORONA_BUILD_VISION}>:vision/vision_interop_lifetime.h>
-        $<$<BOOL:${CORONA_BUILD_VISION}>:vision/vision_zero_copy_bridge.cpp>
-        $<$<BOOL:${CORONA_BUILD_VISION}>:vision/vision_zero_copy_bridge.h>
+        vision/vision_material_adapter.cpp
+        vision/vision_material_adapter.h
+        vision/vision_geometry_adapter.cpp
+        vision/vision_geometry_adapter.h
+        vision/vision_camera_adapter.cpp
+        vision/vision_camera_adapter.h
+        vision/vision_light_adapter.cpp
+        vision/vision_light_adapter.h
+        vision/vision_render_mode_config.cpp
+        vision/vision_render_mode_config.h
+        ${PROJECT_SOURCE_DIR}/include/corona/systems/optics/vision_pipeline_key.h
+        ${PROJECT_SOURCE_DIR}/include/corona/systems/optics/vision_scene_resource.h
+        vision/vision_interop_lifetime.h
+        vision/vision_zero_copy_bridge.cpp
+        vision/vision_zero_copy_bridge.h
     DEPENDENCIES
         Horizon
         corona::resource::manager
     INCLUDE_DIRS
-    	$<$<BOOL:${CORONA_BUILD_VISION}>:${CMAKE_SOURCE_DIR}/vision/src>
+        ${CMAKE_SOURCE_DIR}/vision/src
 )
 
 # Only the compatibility bridge sees Horizon's private command recorder. Do not
@@ -44,11 +44,9 @@ target_link_libraries(corona_optics_system PRIVATE horizon::volk)
 # to CoronaEngine, that include path is searched before build/_deps/imgui-src
 # (v1.92.5), causing <imgui.h> to resolve to the old bundled copy and breaking
 # headers that depend on newer types such as ImGuiViewport (C2061). The optics
-# system's public headers do not use any vision symbols, so PRIVATE linkage is
-# sufficient.
-if(CORONA_BUILD_VISION)
-    target_link_libraries(corona_optics_system PRIVATE vision-all_libs)
-endif()
+# system's public headers only forward-declare Vision types, so PRIVATE linkage
+# is sufficient.
+target_link_libraries(corona_optics_system PRIVATE vision-all_libs)
 
 set(OPTICS_CURSOR_SHADER "${PROJECT_SOURCE_DIR}/assets/shaders/optics_cursor.comp.glsl")
 set_source_files_properties("${OPTICS_CURSOR_SHADER}" PROPERTIES HEADER_FILE_ONLY TRUE)
@@ -66,7 +64,7 @@ set_source_files_properties(
     PROPERTIES OBJECT_DEPENDS "${OPTICS_GIZMO_SHADER}"
 )
 
-# The Vision-enabled OpticsSystem translation unit exceeds MSVC's default COFF
+# The OpticsSystem translation unit exceeds MSVC's default COFF
 # section limit in Debug builds. Restrict /bigobj to that compiler and source
 # file so other toolchains and compilation units retain their normal flags.
 if(MSVC)
@@ -80,14 +78,14 @@ endif()
 
 # ------------------------------------------------------------------------------
 # Vision import-scene verification demo (OFF by default)
-# When enabled (and Vision is built), the optics system loads a known-good scene
+# When enabled, the optics system loads a known-good scene
 # straight from disk via vision::Importer::import_scene to verify that the Vision
 # backend can produce a picture in isolation, bypassing the CoronaEngine->Vision
 # scene-building adapters. Edit kVisionDemoScenePath in optics_system.cpp to point
 # at a local *.json scene.
 # ------------------------------------------------------------------------------
 option(CORONA_VISION_IMPORT_DEMO "Enable the Vision import-scene verification demo in OpticsSystem" OFF)
-if(CORONA_BUILD_VISION AND CORONA_VISION_IMPORT_DEMO)
+if(CORONA_VISION_IMPORT_DEMO)
     target_compile_definitions(corona_optics_system PRIVATE CORONA_VISION_IMPORT_DEMO)
 endif()
 

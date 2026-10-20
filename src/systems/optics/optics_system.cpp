@@ -55,11 +55,8 @@
 #include "../common/diagnostic_env.h"
 #include "../common/vision_restir_settings.h"
 
-// CORONA_ENABLE_VISION is controlled by CMake (-DCORONA_ENABLE_VISION).
-
 //#define CORONA_VISION_IMPORT_DEMO
 
-#ifdef CORONA_ENABLE_VISION
 #ifdef _WIN32
 #include <Windows.h>
 #endif
@@ -84,7 +81,6 @@
 #include "vision/vision_render_mode_config.h"
 #include "vision/vision_interop_lifetime.h"
 #include "vision/vision_zero_copy_bridge.h"
-#endif
 
 namespace {
 
@@ -713,7 +709,6 @@ void mix_hash_float(std::size_t& sig, float value) {
     mix_hash(sig, static_cast<std::size_t>(bits));
 }
 
-#ifdef CORONA_ENABLE_VISION
 constexpr uint64_t kVisionRuntimeIdleEvictFrames = 240;
 
 [[nodiscard]] ::vision::float4x4 corona_transform_to_vision_o2w(
@@ -908,7 +903,6 @@ struct ExternalLiveResolvedTransform {
 
     return std::nullopt;
 }
-#endif
 
 void apply_pending_camera_moves() {
     auto& hub = Corona::SharedDataHub::instance();
@@ -1811,7 +1805,6 @@ bool upload_instance_tables(const RenderInstanceBatch& batch,
     return true;
 }
 
-#ifdef CORONA_ENABLE_VISION
 [[nodiscard]] auto make_default_vision_project_desc() -> vision::ProjectDesc {
     // Each *Desc has in-class default initializers; the overridden
     // init(const ParameterSet&) is only used for JSON-driven configuration.
@@ -2416,7 +2409,6 @@ void validate_vision_source_node(const vision::DataWrap& node,
 constexpr const char* kVisionDemoScenePath =
     R"(E:\CoronaExample\test_vision\render_scene\cbox\vision_scene.json)";
 #endif
-#endif  // CORONA_ENABLE_VISION
 }  // namespace
 
 namespace Corona::Systems {
@@ -2448,7 +2440,6 @@ struct OpticsSystem::UiViewResources {
     uint64_t last_used_frame = 0;
 };
 
-#ifdef CORONA_ENABLE_VISION
 [[nodiscard]] bool vision_zero_copy_forced_disabled() {
     static const bool disabled =
         Vision::vision_zero_copy_disabled_from_value(
@@ -3095,7 +3086,6 @@ void OpticsSystem::shutdown_vision_backend() {
     }
     vision_initialized_ = false;
 }
-#endif
 
 OpticsSystem::OpticsSystem() {
     // Useful for bounded validation and machines with limited cooling.
@@ -3194,9 +3184,7 @@ bool OpticsSystem::initialize_render_pipelines() {
         hardware_->opticsCursorPipeline.emplace(optics_cursor_comp_glsl, ktm::uvec3(8, 8, 1));
         hardware_->opticsUiWarpPipeline.emplace(optics_ui_warp_comp_glsl, ktm::uvec3(8, 8, 1));
         hardware_->opticsCompositePipeline.emplace(optics_composite_comp_glsl, ktm::uvec3(8, 8, 1));
-#ifdef CORONA_ENABLE_VISION
         hardware_->visionResolvePipeline.emplace(vision_resolve_comp_glsl, ktm::uvec3(8, 8, 1));
-#endif
         hardware_->shaderHasInit = true;
     } catch (const std::exception& e) {
         CFW_LOG_CRITICAL("OpticsSystem: Failed to initialize typed pipelines: {}", e.what());
@@ -3592,18 +3580,13 @@ bool OpticsSystem::initialize(Kernel::ISystemContext* ctx) {
                 CameraStateUpdateCommand command{};
                 command.camera_handle = event.camera_handle;
                 command.fields = CameraStateUpdateField::RenderBackend;
-#ifdef CORONA_ENABLE_VISION
                 command.render_backend =
                     event.backend == static_cast<int>(RenderBackend::Vision)
                         ? CameraRenderBackend::Vision
                         : CameraRenderBackend::Native;
-#else
-                command.render_backend = CameraRenderBackend::Native;
-#endif
                 SharedDataHub::instance().enqueue_camera_state_update(command);
             });
 
-#ifdef CORONA_ENABLE_VISION
         vision_scene_load_sub_id_ = event_bus->subscribe<Events::VisionSceneLoadEvent>(
             [this](const Events::VisionSceneLoadEvent& event) {
                 // Only stash the request here (any thread). The actual import touches
@@ -3626,7 +3609,6 @@ bool OpticsSystem::initialize(Kernel::ISystemContext* ctx) {
                 std::lock_guard<std::mutex> lock(vision_scene_load_mutex_);
                 pending_vision_scene_load_ = std::move(request);
             });
-#endif
 
         residency_sub_id_ = event_bus->subscribe<Events::ActorResidencyChangedEvent>(
             [this](const Events::ActorResidencyChangedEvent& e) {
@@ -3751,7 +3733,6 @@ void OpticsSystem::update() {
         }
     }
 
-#ifdef CORONA_ENABLE_VISION
     std::vector<std::uintptr_t> requested_vision_cameras;
     bool camera_views_ready = true;
     for (const auto& scene : std::as_const(SharedDataHub::instance().scene_storage())) {
@@ -3783,7 +3764,6 @@ void OpticsSystem::update() {
             }
         }
     }
-#endif
 
     const bool shadow_pipelines_ready = std::all_of(
         hardware_->shadowPipelines.begin(), hardware_->shadowPipelines.end(),
@@ -4987,19 +4967,13 @@ void OpticsSystem::optics_pipeline(float frame_count, uint64_t frame_index) {
                                                                        viewport.height,
                                                                        target.published_image});
                 }
-
-#ifdef CORONA_ENABLE_VISION
-                // (Vision render path runs in run_vision_frame below)
-#endif
             }
         }
     }
 
-#ifdef CORONA_ENABLE_VISION
     if (vision_initialized_) {
         run_vision_frame(frame_count, frame_index);
     }
-#endif
 
     // ���ճ��ڿ��У������� / �ӿڹرգ��� surface Ŀ�꣬Լ����̬�����µ��Դ�ռ�á�
     evict_idle_surface_targets(frame_index);
@@ -5480,7 +5454,6 @@ void OpticsSystem::enqueue_actor_pick_readback(
     }
 }
 
-#ifdef CORONA_ENABLE_VISION
 void OpticsSystem::process_vision_actor_pick(std::uintptr_t camera_handle,
                                              const CameraDevice& camera,
                                              const SceneDevice& scene,
@@ -5563,7 +5536,6 @@ void OpticsSystem::process_vision_actor_pick(std::uintptr_t camera_handle,
                                 scene_batch.nodeIndices,
                                 std::move(*actor_pick_reservation));
 }
-#endif
 
 bool OpticsSystem::has_pending_screenshot(std::uintptr_t camera_handle) {
     std::lock_guard<std::mutex> lock(screenshot_mutex_);
@@ -5733,11 +5705,9 @@ void OpticsSystem::shutdown() {
         if (backend_switch_sub_id_ != 0) {
             event_bus->unsubscribe(backend_switch_sub_id_);
         }
-#ifdef CORONA_ENABLE_VISION
         if (vision_scene_load_sub_id_ != 0) {
             event_bus->unsubscribe(vision_scene_load_sub_id_);
         }
-#endif
         if (residency_sub_id_ != 0) {
             event_bus->unsubscribe(residency_sub_id_);
         }
@@ -5770,13 +5740,11 @@ void OpticsSystem::shutdown() {
     offscreen_screenshot_targets_.clear();
     native_view_resources_.clear();
     ui_view_resources_.clear();
-#ifdef CORONA_ENABLE_VISION
     shutdown_vision_backend();
-#endif
     hardware_.reset();
 
 }
-#ifdef CORONA_ENABLE_VISION
+
 std::size_t OpticsSystem::compute_vision_scene_signature() const {
     // Lightweight per-frame change detector. Traverses the same hierarchy as
     // build_vision_geometry (enabled scene �� actor �� profile �� optics �� geometry)
@@ -7642,7 +7610,5 @@ bool OpticsSystem::load_external_vision_scene_from_json(const VisionSceneLoadReq
         return false;
     }
 }
-
-#endif  // CORONA_ENABLE_VISION
 
 }  // namespace Corona::Systems

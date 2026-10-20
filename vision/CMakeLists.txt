@@ -3,8 +3,8 @@
 # Vision sub-project (integrated into CoronaEngine)
 #
 # This file is meant to be included via `add_subdirectory(vision)` from the
-# CoronaEngine root, gated by `CORONA_BUILD_VISION`. It no longer issues its
-# own `project()` call or overrides global output directories. Third-party
+# CoronaEngine root as a required renderer module. It does not issue its own
+# `project()` call or override global output directories. Third-party
 # dependencies (assimp, glfw, cxxopts, Horizon) are resolved at the root level
 # through Conan package targets (see cmake/corona_third_party.cmake) and reused here.
 # ==============================================================================

@@ -59,9 +59,7 @@ include(corona_cef)
 add_subdirectory(modules/corona_resource)  # Resource management module
 add_subdirectory(src)               # Core engine static library
 
-if(CORONA_BUILD_VISION)
-    add_subdirectory(vision)        # Vision renderer module (local source)
-endif()
+add_subdirectory(vision)            # Vision renderer module (local source)
 
 if(BUILD_CORONA_TESTING OR BUILD_TESTING)
     add_subdirectory(tests)         # Core engine module and integration tests
