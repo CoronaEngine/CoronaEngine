@@ -1,7 +1,7 @@
 # UI System 配置 (ImGui removed — Phase 6 of the ImGui-removal plan).
 # The frame loop is now ui_frame_runner.cpp (raw SDL + quad compositor); there is no
-# longer an imgui or imgui_backends (imgui_impl_sdl3) target. The imgui.vert/frag GLSL
-# shaders are still used by the quad compositor and remain compiled below.
+# longer an imgui or imgui_backends (imgui_impl_sdl3) target. The quad compositor's
+# shaders/ui_quad.vert/frag.glsl shaders are compiled below.
 set(UI_SYSTEM_SOURCES
     ui_system.cpp
     ui_frame_runner.cpp
@@ -63,7 +63,7 @@ set(UI_SYSTEM_SOURCES
 
     ${PROJECT_SOURCE_DIR}/include/corona/systems/ui/vulkan_backend.h
     ${PROJECT_SOURCE_DIR}/include/corona/systems/ui/cef_runtime.h
-    # quad_compositor.h owns the `#include GLSL(ui_quad.vert/frag)` macros.
+    # quad_compositor.h owns the `#include GLSL(shaders/ui_quad.vert/frag.glsl)` macros.
     # Helicon's shader scan is textual over the target's SOURCES (it does not
     # follow #include chains), so this header must be listed explicitly or the
     # ui_quad shader headers are never generated (C1083). Mirrors how the optics

@@ -48,10 +48,10 @@ target_link_libraries(corona_optics_system PRIVATE horizon::volk)
 # is sufficient.
 target_link_libraries(corona_optics_system PRIVATE vision-all_libs)
 
-set(OPTICS_CURSOR_SHADER "${PROJECT_SOURCE_DIR}/assets/shaders/optics_cursor.comp.glsl")
+set(OPTICS_CURSOR_SHADER "${CMAKE_CURRENT_SOURCE_DIR}/shaders/optics_cursor.comp.glsl")
 set_source_files_properties("${OPTICS_CURSOR_SHADER}" PROPERTIES HEADER_FILE_ONLY TRUE)
 target_sources(corona_optics_system PRIVATE "${OPTICS_CURSOR_SHADER}")
-set(OPTICS_GIZMO_SHADER "${PROJECT_SOURCE_DIR}/assets/shaders/optics_gizmo.comp.glsl")
+set(OPTICS_GIZMO_SHADER "${CMAKE_CURRENT_SOURCE_DIR}/shaders/optics_gizmo.comp.glsl")
 set_source_files_properties("${OPTICS_GIZMO_SHADER}" PROPERTIES HEADER_FILE_ONLY TRUE)
 target_sources(corona_optics_system PRIVATE "${OPTICS_GIZMO_SHADER}")
 # The shader is included through Helicon's GLSL(...) macro in hardware.h.  Keep
@@ -95,5 +95,5 @@ helicon_compile_shaders(corona_optics_system
 )
 
 # Native shader changes must invalidate the translation unit and hardcoded cache.
-file(GLOB OPTICS_SHADER_SOURCES CONFIGURE_DEPENDS "${PROJECT_SOURCE_DIR}/assets/shaders/*.glsl")
+file(GLOB OPTICS_SHADER_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/*.glsl")
 set_property(SOURCE optics_system.cpp APPEND PROPERTY OBJECT_DEPENDS "${OPTICS_SHADER_SOURCES}")

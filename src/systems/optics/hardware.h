@@ -17,22 +17,22 @@
 #include <vector>
 
 // clang-format off
-#include GLSL(../../../assets/shaders/visibility.vert.glsl)
-#include GLSL(../../../assets/shaders/visibility.frag.glsl)
-#include GLSL(../../../assets/shaders/shadow.vert.glsl)
-#include GLSL(../../../assets/shaders/shadow.frag.glsl)
-#include GLSL(../../../assets/shaders/lighting.comp.glsl)
-#include GLSL(../../../assets/shaders/sky.comp.glsl)
-#include GLSL(../../../assets/shaders/sky_sh_project.comp.glsl)
-#include GLSL(../../../assets/shaders/tonemap.comp.glsl)
-#include GLSL(../../../assets/shaders/actor_pick.comp.glsl)
-#include GLSL(../../../assets/shaders/image_readback.comp.glsl)
-#include GLSL(../../../assets/shaders/optics_overlay.comp.glsl)
-#include GLSL(../../../assets/shaders/optics_gizmo.comp.glsl)
-#include GLSL(../../../assets/shaders/optics_cursor.comp.glsl)
-#include GLSL(../../../assets/shaders/optics_ui_warp.comp.glsl)
-#include GLSL(../../../assets/shaders/optics_composite.comp.glsl)
-#include GLSL(../../../assets/shaders/vision_resolve.comp.glsl)
+#include GLSL(shaders/visibility.vert.glsl)
+#include GLSL(shaders/visibility.frag.glsl)
+#include GLSL(shaders/shadow.vert.glsl)
+#include GLSL(shaders/shadow.frag.glsl)
+#include GLSL(shaders/lighting.comp.glsl)
+#include GLSL(shaders/sky.comp.glsl)
+#include GLSL(shaders/sky_sh_project.comp.glsl)
+#include GLSL(shaders/tonemap.comp.glsl)
+#include GLSL(shaders/actor_pick.comp.glsl)
+#include GLSL(shaders/image_readback.comp.glsl)
+#include GLSL(shaders/optics_overlay.comp.glsl)
+#include GLSL(shaders/optics_gizmo.comp.glsl)
+#include GLSL(shaders/optics_cursor.comp.glsl)
+#include GLSL(shaders/optics_ui_warp.comp.glsl)
+#include GLSL(shaders/optics_composite.comp.glsl)
+#include GLSL(shaders/vision_resolve.comp.glsl)
 // clang-format on
 
 // ============================================================================

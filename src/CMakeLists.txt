@@ -58,7 +58,7 @@ target_include_directories(CoronaEngine PUBLIC
 
 # CoronaEngine's public system headers include Helicon-generated shader headers.
 # Keep those generated roots direct and early for this target so stale transitive
-# include roots cannot resolve the same ../../../assets/... paths first.
+# include roots cannot shadow the system-owned shaders/... paths.
 target_include_directories(CoronaEngine BEFORE PUBLIC
         ${CMAKE_BINARY_DIR}/src/systems/display/generated_shaders
         ${CMAKE_BINARY_DIR}/src/systems/optics/generated_shaders

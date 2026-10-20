@@ -4,7 +4,9 @@ from pathlib import Path
 def test_gizmo_storage_image_matches_rgba16_float_overlay():
     shader = (
         Path(__file__).resolve().parents[3]
-        / "assets"
+        / "src"
+        / "systems"
+        / "optics"
         / "shaders"
         / "optics_gizmo.comp.glsl"
     ).read_text(encoding="utf-8")

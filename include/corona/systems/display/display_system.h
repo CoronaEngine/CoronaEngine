@@ -11,7 +11,7 @@
 #include <corona/kernel/system/system_base.h>
 #include "Codegen/ControlFlows.h"  // Horizon: GLSL()/HLSL() include macros
 // clang-format off
-#include GLSL(../../../assets/shaders/composite.comp.glsl)
+#include GLSL(shaders/composite.comp.glsl)
 // clang-format on
 
 #include <atomic>

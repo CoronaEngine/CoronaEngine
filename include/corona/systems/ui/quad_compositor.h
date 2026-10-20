@@ -16,8 +16,8 @@
 #include "horizon.h"
 #include "Codegen/ControlFlows.h"  // Horizon: GLSL()/HLSL() include macros
 // clang-format off
-#include GLSL(../../../assets/shaders/ui_quad.vert.glsl)
-#include GLSL(../../../assets/shaders/ui_quad.frag.glsl)
+#include GLSL(shaders/ui_quad.vert.glsl)
+#include GLSL(shaders/ui_quad.frag.glsl)
 // clang-format on
 
 #include <cstddef>
