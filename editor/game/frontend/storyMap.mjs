@@ -47,7 +47,7 @@ export const MAP_GUID = 'corona.story.world-map.v1';
  * (removal + creation is the only path that re-imports). Forgetting the bump ships a world that
  * silently keeps the previous map forever — the exact bug the bump to `.v2` fixes.
  */
-export const MAP_MODEL_REF = 'corona.story.world-map.v2';
+export const MAP_MODEL_REF = 'corona.story.world-map.v3';
 /**
  * The map's record identity inside a scene snapshot. `MAP_ACTOR_DATA` writes both onto the
  * actor, so a snapshot can be recognised even when the guid or the version marker is missing
@@ -74,29 +74,31 @@ export const MAP_MAX_AXIS = 1680.0027;
  *
  * This used to be 2.5, hand-tuned to fight "the characters float above the map". That float was
  * never terrain: it was the missing `scale / MAP_MAX_AXIS` factor, and no constant can fix a
- * surface that varies by metres (the grid here spans −0.60 m .. 13.99 m). A non-zero value now
- * only lifts the map off the plane the world floor (`[physics] floor_y = 0`), the authored spawn
- * sites and every placed prop live on. Re-measure `courtyardY` when the art changes; leave this.
+ * surface that varies by metres. A non-zero value now only lifts the map off the plane the
+ * world floor (`[physics] floor_y = 0`), the authored spawn sites and every placed prop live
+ * on. Re-measure `courtyardY` when the art changes; leave this.
  */
 export const MAP_SURFACE_LIFT = 0;
 
 /** Mirrors the `map` block of game/data/prophet.json, field for field. */
 export const MAP_PLACEMENT = Object.freeze({
-  asset: 'scene/01_山门神殿_平地版.glb',
+  asset: 'scene/01_山门神殿_平地版_仅地面.glb',
   guid: MAP_GUID,
   modelRef: MAP_MODEL_REF,
   // The map's world depth in metres, NOT life size. At the model's real 1680 m the third-person
   // camera (~4.5 m back, ~2 m up) sits inside the building and all you can see is a wall, and
   // the walkable area is far outside the engine's 50 m preload radius. 90 m makes it a level
-  // you can survey: 64.8 x 14.7 x 90 m. The engine puts the model's AABB centre on the world
+  // you can survey: 64.8 x 0 x 90 m. The engine puts the model's AABB centre on the world
   // origin (`position.x` = `position.z` = 0 below), so the world footprint is the symmetric
   // +/-32.4 x +/-45 m: wide enough for the characters authored at +/-30 m.
   scale: 90,
-  // The walkable courtyard of the flat-ground re-export sits on the model's own y = 0 plane:
-  // the floor is one flat surface spanning the whole x/z footprint, which is what makes the four
-  // story spawn sites agree to the centimetre instead of sitting on a hillside.
+  // The stripped "仅地面" (ground-only) edition of the flat re-export: every building,
+  // vegetation and rock slice has been removed from the GLB, leaving only the Ground plane at
+  // the model's own y = 0. `courtyardY` and `centreY` are therefore both 0, the floor is one
+  // flat surface spanning the whole x/z footprint, and `position.y` lands on the engine floor
+  // y = 0 without any offset to subtract.
   courtyardY: 0,
-  centreY: 124.091286,
+  centreY: 0,
 });
 
 /** Strict validation, so a bad edit in the JSON table fails loudly instead of drifting. */
@@ -110,12 +112,13 @@ export function validateMapPlacement(raw) {
   if (!finiteNumber(source.courtyardY) || source.courtyardY < 0 || source.courtyardY > COORD_LIMIT) {
     throw new Error('地图参数无效：courtyardY');
   }
-  // The AABB mid-height the courtyard is measured against. It must sit inside the model's own
-  // height, or `position.y` would be nonsense (a sign or axis error caught here, not on screen).
-  if (!finiteNumber(source.centreY) || source.centreY <= 0 || source.centreY > COORD_LIMIT) {
+  // The AABB mid-height the courtyard is measured against. A flat model (the ground-only
+  // edition, stripped of every building/vegetation/rock slice) has height 0, so `centreY`
+  // may be 0 — the courtyard is the whole model, not a surface below its centre.
+  if (!finiteNumber(source.centreY) || source.centreY < 0 || source.centreY > COORD_LIMIT) {
     throw new Error('地图参数无效：centreY');
   }
-  if (source.centreY <= source.courtyardY) throw new Error('地图庭院不在模型包围盒中心之下');
+  if (source.centreY < source.courtyardY) throw new Error('地图庭院不在模型包围盒中心之下');
   return Object.freeze({
     asset: source.asset.trim(), guid: source.guid.trim(), modelRef: source.modelRef.trim(),
     scale: source.scale, courtyardY: source.courtyardY, centreY: source.centreY,
@@ -146,16 +149,14 @@ validateMapPlacement(MAP_PLACEMENT);
  *     and the line `storyCharacters.characterTransform` puts character feet on.
  *
  * `MAP_MAX_AXIS` (1680.0027 m) is the factor that turns model metres into world metres: z is this
- * map's largest axis (1680 m deep) while the map is only 274 m tall, so `centre_y` is 124.091286 m
- * and NOT `max_axis / 2` (840.0 m) or `scale / 2` (45.0 m). The courtyard sits
- * `124.091286 - 0 = 124.091286` m below the AABB centre, which is 6.6477 world metres at the
- * shipped `scale = 90`. Dividing that offset by `scale` instead (1.3788) leaves the map ~5 m below
- * the floor — the "characters float above the map" that a hand-tuned `MAP_SURFACE_LIFT` used to
- * paper over, and that the baked height grid now answers for real. Writing the metre value itself
- * (124.09) would be off by more than a hundred metres.
+ * map's largest axis (1680 m deep). The ground-only edition keeps only the Ground plane, so
+ * `centre_y` is 0 (the model has no height) and the courtyard sits `0 - 0 = 0` m below the AABB
+ * centre, which is 0 world metres at the shipped `scale = 90`: `position.y` is 0 and the plane
+ * lands exactly on the engine floor. Writing the old measured 124.09 m centre here would now
+ * launch the map ~6.6 m into the air — the baked height grid is the only ground line.
  *
- * `position.x`/`position.z` stay 0 on purpose: the model's courtyard is within centimetres of
- * its own origin (AABB centre x = -5.16 m), and the story's spawn sites are authored in
+ * `position.x`/`position.z` stay 0 on purpose: the Ground plane is within centimetres of the
+ * model origin (AABB centre x = -0.0018 m), and the story's spawn sites are authored in
  * courtyard coordinates, so the courtyard origin must be the world origin.
  *
  * Returns a fresh object every call: the engine call and its read-back confirmation must

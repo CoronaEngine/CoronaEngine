@@ -71,6 +71,17 @@ class StoryAssetTests(unittest.TestCase):
             self.assertTrue(texture.is_relative_to(model.parent), str(texture))
             self.assertTrue(texture.is_file(), str(texture))
 
+    def _assert_fbx_character_art(self, model: Path):
+        """FBX: the container header is present; clip checking is engine-side for FBX.
+
+        FBX is a binary (or ASCII) container, not XML, so the COLLADA parser above cannot
+        touch it. The monsters ship as FBX and the engine confirms their clips at import;
+        this only pins that the file is a real FBX and not a mis-named placeholder.
+        """
+        head = model.read_bytes()[:23]
+        self.assertTrue(head.startswith(b"Kaydara FBX Binary") or head.startswith(b"; FBX"),
+                        f"{model.name} 不是有效的 FBX（缺 Kaydara 或分号头）")
+
     def test_role_sources_are_animated_and_all_external_images_are_local(self):
         node = shutil.which("node")
         if not node:
@@ -91,7 +102,7 @@ class StoryAssetTests(unittest.TestCase):
         # entry declares `model_ref` here — this pins that, so a future role cannot quietly
         # adopt a second, competing source for the same key.
         markers = [c["model_ref"] for c in characters if c.get("model_ref")]
-        self.assertEqual(markers, ["story.boss.em001.v1"],
+        self.assertEqual(markers, ["story.boss.em001_00.v1"],
                          "the boss alone declares its generation on the entry")
         for character in characters:
             with self.subTest(role=character["role"]):
@@ -100,6 +111,8 @@ class StoryAssetTests(unittest.TestCase):
                 self.assertTrue(model.is_file(), str(model))
                 if model.suffix.lower() == ".glb":
                     self._assert_glb_character_art(model)
+                elif model.suffix.lower() == ".fbx":
+                    self._assert_fbx_character_art(model)
                 else:
                     self._assert_dae_character_art(model)
 
@@ -109,7 +122,12 @@ class StoryAssetTests(unittest.TestCase):
     # `scene` is the story world map: its measurements are re-derived from the shipped GLB
     # below and compared with the placement the page actually runs.
     ART_SOURCES = {
-        "player": ROOT / "assets/Maria WProp J J Ong",
+        # The player ships as one self-contained GLB (E3D-Assassin.glb, whose textures are
+        # embedded), so there is no source directory to diff against — the same treatment as
+        # the boss below: `_assert_glb_character_art` stands in for the copy check. The two
+        # retired rigs still on disk (Maria WProp J J Ong.dae / player_walk.glb) are exempted
+        # by exact path in RETIRED_CHARACTER_ART.
+        "player": None,
         # The boss is the em001 lineage, shipped as one self-contained GLB: its textures
         # are the embedded PNGs Blender wrote, so there is no source directory to diff
         # against — `_assert_glb_character_art` is what stands in for that comparison.
@@ -119,14 +137,27 @@ class StoryAssetTests(unittest.TestCase):
         "fragment": ROOT / "assets/model",
         "cube": ROOT / "assets/model",
         "scene": ROOT / "assets/model",
+        # Main-world props (grass/tree GLBs) and the monster library (textures, FBX rigs and
+        # the em001 trial GLBs) predate this table and have no source directory in the repo;
+        # they are registered as source-less like the player/boss self-contained GLBs so the
+        # folder census below can still see them (nothing can quietly opt out of the census).
+        "props": None,
+        "monster": None,
     }
     # A character folder carries one rigged model; props are plain meshes with no animation.
     CHARACTER_ART_ROLES = ("player", "boss", "merchant", "prophet")
     # Retired art that is still on disk. `boss/Dragon 2.5_dae.dae` was the boss until the
     # em001_04 swap; it is kept so that swap can be reverted without a rebuild, and it is named
     # by exact path so this exemption can never widen into "the boss folder is unchecked".
-    # Delete that file (and this entry) to reclaim ~9 MB.
-    RETIRED_CHARACTER_ART = frozenset({"boss/Dragon 2.5_dae.dae"})
+    # `boss/Em001_04.glb` is the trial generation before the shipped Em001_00.glb, kept for
+    # the same revert reason. The player folder keeps two retired rigs beside the live
+    # E3D-Assassin.glb (Maria WProp J J Ong.dae was the player before the assassin swap,
+    # player_walk.glb an earlier walk clip test asset); both are exempted the same way.
+    # Delete them (and these entries) to reclaim their space.
+    RETIRED_CHARACTER_ART = frozenset({"boss/Dragon 2.5_dae.dae",
+                                       "boss/Em001_04.glb",
+                                       "player/Maria WProp J J Ong.dae",
+                                       "player/player_walk.glb"})
 
     # The story world map. `scale` is the map's largest world axis in metres: the engine
     # normalises every static model into a unit cube, so that is exactly the `geometry.scale`
@@ -135,15 +166,16 @@ class StoryAssetTests(unittest.TestCase):
     # the engine floor y = 0 that the story uses for feet.
     # Both numbers live in the `map` block of game/data/prophet.json; the tests below
     # re-derive them from the shipped GLB so neither side can drift away from the art.
-    # The map was re-exported with a flat floor under this new name ("平地版" = flat-ground
-    # edition), so the shipped route changed with the geometry, and the engine keys an imported
-    # bundle by content hash. A world that already carries the map is *not* re-imported by the
-    # engine's `skip_if_exists` repair branch (it returns before the route is read —
+    # The shipped model is the "仅地面" (ground-only) edition: the flat re-export stripped
+    # down to its Ground slice, so every building, vegetation and rock is gone and the map is
+    # one y = 0 plane (`centreY` = `courtyardY` = 0). The engine keys an imported bundle by
+    # content hash. A world that already carries the map is *not* re-imported by the engine's
+    # `skip_if_exists` repair branch (it returns before the route is read —
     # cef_editor_native_api_handlers.cpp:3410-3424 — and only rewrites the transform), so the
     # asset generation is bumped in the data instead: `modelRef` is the migration key, and the
     # page deletes and re-creates an actor whose generation is stale.
     # `test_a_stale_map_actor_is_replaced_not_repaired` guards that this stays wired.
-    STORY_WORLD_MAP = "scene/01_山门神殿_平地版.glb"
+    STORY_WORLD_MAP = "scene/01_山门神殿_平地版_仅地面.glb"
     STORY_WORLD_MAP_SPAWN_SITES = (
         ("player", 0, 0), ("boss", 2, 5.5), ("merchant", -30, -15), ("prophet", 30, -15),
     )
@@ -327,7 +359,8 @@ class StoryAssetTests(unittest.TestCase):
         # lands at `position.y + (y - centre_y) * scale / max_axis`, with `position` in world
         # metres (`native_actor_world_aabb` is `position + local * scale`). `scale / max_axis` is
         # therefore the one factor that turns model metres into world metres, and the map is
-        # 64.8 x 14.7 x 90 m at the shipped `scale = 90` exactly because of it.
+        # 64.8 x 0 x 90 m at the shipped `scale = 90` exactly because of it (the ground-only
+        # edition has no height).
         low = [min(point[axis] for point in points) for axis in range(3)]
         high = [max(point[axis] for point in points) for axis in range(3)]
         centre_y = (low[1] + high[1]) / 2
@@ -363,22 +396,27 @@ class StoryAssetTests(unittest.TestCase):
         self.assertAlmostEqual(projection["mapTransform"]["position"][1], position_y, delta=0.01)
         self.assertEqual(projection["surfaceLift"], 0.0,
                          "MAP_SURFACE_LIFT 必须回到 0：它不是手感旋钮，地面由高度网格给出")
-        # Writing the metre offset itself (124.09) would be off by hundreds of metres;
-        # `max_axis / 2` (840 m) mistakes the map's depth for its height.
-        self.assertGreater(position_y, 0)
-        self.assertLess(position_y, max_axis)
+        # The ground-only edition has no geometry above the courtyard: `centreY` = `courtyardY`
+        # = 0, so there is no offset to subtract and `position_y` must be exactly 0 — the plane
+        # itself is the engine floor. The old traps (writing the 124.09 m metre offset itself,
+        # or mistaking `max_axis / 2` = 840 m for the mid height) would now launch the map into
+        # the air instead of sinking it.
+        self.assertAlmostEqual(position_y, 0.0, delta=0.01,
+                               msg="仅地面版没有可减的偏移：position.y 必须落在 0")
+        self.assertLessEqual(position_y, max_axis)
 
-    def test_the_map_actor_is_phantom_so_it_builds_no_collision_mesh(self):
-        """A solid body would make the engine build a triangle octree over ~1.64M triangles
-        on every world. The map is scenery: characters stand on the courtyard because it is
-        aligned to y = 0 and the world floor is `[physics] floor_y = 0`.
+    def test_the_map_actor_is_static_and_builds_the_ground_collision_mesh(self):
+        """The map is static scenery, and it has to be: its triangles are the ground the
+        characters stand on (the engine builds a triangle octree over static bodies, and the
+        map is the world floor), so `body_type` must be `static`. `follow_camera: false`
+        keeps it drawn in scene space, not UI space.
 
         The map is created by the page on every entry (`game/frontend/storyMap.mjs`), not
         seeded into new worlds by native creation code, so that is where the body type lives.
         """
         source = (ROOT / "editor/game/frontend/storyMap.mjs").read_text(encoding="utf-8")
-        self.assertIn("body_type: 'phantom'", source)
-        self.assertNotIn("body_type: 'static'", source)
+        self.assertIn("body_type: 'static'", source)
+        self.assertNotIn("body_type: 'phantom'", source)
         # The map must arrive with the world the player enters, not only with a new world.
         page = (ROOT / "editor/Frontend/src/views/layout/StoryWorld.vue").read_text(encoding="utf-8")
         self.assertIn("import { ensureStoryMap } from '../../../../game/frontend/storyMap.mjs';", page)
@@ -416,20 +454,24 @@ class StoryAssetTests(unittest.TestCase):
         self.assertIn("update_if_exists: true", source)
         # The generation marker is documented as the thing a future asset swap must bump.
         self.assertIn("MUST bump this string", source)
-        self.assertTrue(marker.endswith(".v2"), "modelRef 必须落在换图之后的代次上")
+        self.assertTrue(marker.endswith(".v3"), "modelRef 必须落在换图之后的代次上")
         # The pre-swap GLB must not be the shipped asset either.
         self.assertNotIn("优化版", story_map["asset"])
 
     def test_the_story_page_reads_the_height_grid_and_hands_it_to_the_player(self):
-        """The map's ground line is the baked grid, and the page is the only place that can read it.
+        """The map's ground line for *placed objects* is the baked grid, and the page is the
+        only place that can read it.
 
-        This shipped half-wired once with zero coverage: the loader existed, `playerController`
-        already accepted `getGroundY`, and nothing ever called either — so the player stood on the
-        engine floor while the terrain varied by metres, and no test noticed. These are the links
-        that have to be present, checked in the files that own them. Both story worlds (主世界
-        role `main` and 小世界 role `child`) enter through this one component
-        (`WorldEntry.vue` mounts it for any `mode === 'story'` world), so the wiring below is not
-        role-specific: `ensureStoryMap` and this read carry no `role` gate at all.
+        The characters' feet come from the engine's native triangle collision (the map is a
+        static body, so `moveActorMesh` answers every move with `grounded`), which is why the
+        front-end `getGroundY` chain was removed from the camera/controller binding in
+        bd923e02. What still needs the baked grid is everything the page places: the blocks
+        the player spawns, the boss's drop and the prophet's cube all read `heightAt` through
+        `groundYAt`. These are the links that have to be present, checked in the files that
+        own them. Both story worlds (主世界 role `main` and 小世界 role `child`) enter through
+        this one component (`WorldEntry.vue` mounts it for any `mode === 'story'` world), so
+        the wiring below is not role-specific: `ensureStoryMap` and this read carry no `role`
+        gate at all.
         """
         page = (ROOT / "editor/Frontend/src/views/layout/StoryWorld.vue").read_text(encoding="utf-8")
         self.assertIn("import { heightAt } from '../../../../game/frontend/storyMapHeight.mjs';", page)
@@ -453,22 +495,27 @@ class StoryAssetTests(unittest.TestCase):
         self.assertIn("groundYAt,", gameplay_call[:gameplay_call.index("});")],
                       "玩法模块（掉落的碎片）必须拿到同一条地面线")
         self.assertIn("groundYAt,", page[page.index("await ensureStoryCube({"):])
-        # The option has to survive the camera binding, which is where it was dropped.
-        camera = (ROOT / "editor/Frontend/src/utils/viewportStoryCamera.js").read_text(encoding="utf-8")
-        self.assertIn("getGroundY = null,", camera)
-        self.assertIn("getBridge, onError, getGroundY,", camera)
-        # ... and be read by the controller on every ground write, with the constant as fallback.
+        # The characters' ground is the engine's triangle collision now (map is static, so
+        # `moveActorMesh` answers with `grounded`); the front-end height chain was removed
+        # from the camera/controller binding in bd923e02, so the player controller must not
+        # silently re-adopt a dead `getGroundY` that nothing supplies.
         controller = (ROOT / "editor/game/frontend/playerController.mjs").read_text(encoding="utf-8")
-        self.assertIn("getGroundY = null,", controller)
-        self.assertIn("const value = getGroundY(x, z);", controller)
-        self.assertIn("if (next === null) { groundY = null; return fallback; }", controller)
-        # The characters' feet come from the same grid, or they float over the terrain the player
-        # walks on (the placement module and the grid must agree on the frame).
+        self.assertIn("grounded: event.grounded === true", controller,
+                      "角色的地面必须来自原生三角形碰撞回调")
+        self.assertIn("moveActorMesh", controller)
+        self.assertNotIn("getGroundY", controller, "碰撞加固后控制器不再接收前端高度链")
+        camera = (ROOT / "editor/Frontend/src/utils/viewportStoryCamera.js").read_text(encoding="utf-8")
+        self.assertNotIn("getGroundY", camera, "相机链也不应携带已被原生碰撞取代的地面线")
+        # The characters' feet come from native triangle collision, not the grid: the map is a
+        # static body, so `characterTransform` (whose saved-geometry form the actors re-derive)
+        # no longer takes a height lookup — bd923e02 removed the `heightAt`/`groundYAt` chain
+        # from the character placement path.
         actors = (ROOT / "editor/game/frontend/storyActors.mjs").read_text(encoding="utf-8")
-        self.assertIn("characterTransform(character, actor.local_aabb, savedGeometry, heightAt)", actors)
+        self.assertIn("characterTransform(character, actor.local_aabb", actors)
         characters = (ROOT / "editor/game/frontend/storyCharacters.mjs").read_text(encoding="utf-8")
-        self.assertIn("groundYAt = null)", characters)
-        self.assertIn("const ground = typeof groundYAt === 'function' ? groundYAt(x, z) : null;", characters)
+        self.assertIn("export function characterTransform(character, localBounds, savedGeometry = null)",
+                      characters, "角色摆放不再接收前端高度链")
+        self.assertNotIn("groundYAt", characters, "角色地面由原生碰撞解决，不残留前端地面线")
 
     def test_the_baked_height_grid_covers_the_shipped_map(self):
         """The grid is a build artifact of the model: its frame has to be that model's own.
@@ -516,10 +563,11 @@ class StoryAssetTests(unittest.TestCase):
         self.assertLessEqual(worst, ceiling + 0.01,
                              f"网格最高采样 {worst:.4f} m 高过可行走带上沿 {ceiling:.4f} m："
                              "建筑/墙顶又变成地面了")
-        # Non-vacuity: the model really does have geometry far above the band, so the assertion
-        # above is a statement about the grid and not about a flat model.
-        self.assertGreater(high[1], ceiling + 100.0,
-                           "模型本身必须远高于可行走带，否则上面那条断言是空转的")
+        # The "仅地面" edition is a single y = 0 plane, so the ceiling assertion above is not
+        # vacuous in reverse: the whole model must be the walkable band itself, with nothing
+        # above it at all — a leftover building slice would lift `high[1]` off zero and fail.
+        self.assertAlmostEqual(high[1], low[1], delta=0.001,
+                               msg="仅地面版模型必须是一块 y = 0 的平面（建筑物/草木/石头已全部裁掉）")
 
         # The flat floor is the point of this re-export: the four story spawn sites have to read
         # the same world height through the runtime lookup the game actually calls (`heightAt`,
@@ -545,18 +593,19 @@ class StoryAssetTests(unittest.TestCase):
         is asked with the shipped model: every map vertex inside `SITE_RADIUS` world metres of
         the site is counted, and the highest of them must stay under `SITE_ROOF`. This is the
         reading that was missing when the boss was authored at (0, 12): the temple's main hall
-        front bay rises 3.088 m within 4 m of that point, so the dragon stood inside the
+        front bay rose 3.088 m within 4 m of that point, so the dragon stood inside the
         building and was invisible from the courtyard.
+
+        The shipped map is now the "仅地面" (ground-only) edition — every building, vegetation
+        and rock slice was stripped out of the GLB, so the clearance is trivially satisfied by
+        construction; the assertion is kept because a future asset swap could reintroduce a
+        slice above the site without touching this test's coordinate pins.
 
         World x/z and world y are the engine's own placement — the model AABB centre becomes
         the origin, the largest axis becomes 1 (`MAP_MAX_AXIS`), then the actor's transform is
         applied (`native_actor_world_aabb` is `position + local * scale`), so
         `world = position + (model - centre) * scale / max_axis` per axis. The radius is
         filtered in world space: 4 world metres is 74.7 model metres on this map, not 4.
-
-        Non-vacuity: the same 40 m window is asserted to really hold a building metres above the
-        ceiling, and the old (0, 12) site is measured inside the same 4 m radius and must fail
-        it — so the ceiling below is a statement about this site, not about a flat map.
         """
         placement = self._map_placement()
         projection = self._runtime_projection(self.STORY_WORLD_MAP_SPAWN_SITES)
@@ -583,23 +632,6 @@ class StoryAssetTests(unittest.TestCase):
             return max((point[1] for point in world
                         if (point[0] - x) ** 2 + (point[2] - z) ** 2 <= limit), default=float("-inf"))
 
-        # Non-vacuity of the measurement itself: the temple really does rise far above the
-        # ceiling right where the boss stands, so "clear within 4 m" is a statement about this
-        # site and not about a map with nothing on it. The window is 40 world metres — the
-        # courtyard is only 64.8 x 90 m, so that covers the whole forecourt and the hall.
-        self.assertGreater(highest_within(site_x, site_z, 40.0), self.SITE_ROOF + 2.0,
-                           f"({site_x:g}, {site_z:g}) 40 m 内必须有远高于 {self.SITE_ROOF} m 的建筑，"
-                           "否则「4 m 内净空」是空转的")
-        # The 4 m radius is the boss's own half-width (its 8 m `size`), and it is also the
-        # edge of the flat forecourt: at 5 m the temple front is already 1.825 m high and at
-        # 6 m 2.141 m, so a larger boss would stand inside the hall. Pin the measured growth
-        # rate here — raising `size` past 8 must fail loudly rather than quietly bury it.
-        self.assertGreater(highest_within(site_x, site_z, 5.0), 1.5,
-                           "5 m 处的寺庙前檐必须真的存在，否则「4 m 内净空」量的是平地")
-        self.assertGreater(highest_within(site_x, site_z, 6.0), 2.0,
-                           "6 m 处的寺庙前檐必须真的存在")
-        self.assertGreater(highest_within(site_x, site_z, 10.0), 3.0,
-                           "10 m 处的大殿必须真的存在")
         # The measured site, not a second copy of it: this test is about the shipped coordinate.
         # The clearance below is asserted first on purpose: a site that fails it must say *that*,
         # not "the pin changed", or a moved-and-buried boss reads as a stale test constant.
@@ -612,10 +644,6 @@ class StoryAssetTests(unittest.TestCase):
                         f"{roof:.3f} m，龙会被埋在里面")
         self.assertAlmostEqual(site_x, 2.0, delta=0.001, msg="boss 出生点 x 变了就要重新量净空")
         self.assertAlmostEqual(site_z, 5.5, delta=0.001, msg="boss 出生点 z 变了就要重新量净空")
-        # Non-vacuity: the same measurement at the old site has to break the ceiling.
-        old_roof = highest_within(0.0, 12.0, self.SITE_RADIUS)
-        self.assertGreater(old_roof, self.SITE_ROOF,
-                           "旧出生点 (0, 12) 必须真的被寺庙埋住，否则这条守卫什么都没证明")
 
     def test_models_and_supplied_sidecars_are_unchanged_copies_of_engine_assets(self):
         for role, source_root in self.ART_SOURCES.items():
@@ -673,25 +701,26 @@ class StoryAssetTests(unittest.TestCase):
         self.assertEqual(transform["position"][2], 0)
         self.assertEqual(transform["scale"], [story_map["scale"]] * 3)
         self.assertEqual(transform["rotation"], [0, 0, 0])
-        # Two classic slips are what the value guards: taking `max_axis / 2` as the mid height
-        # (840 m instead of the measured 124.09 m) puts the map in orbit, and writing the metre
-        # offset itself (124.09 m) misses by more than a hundred metres. `scale / max_axis` is the
-        # only factor that agrees with the 64.8 x 14.7 x 90 m world size the placement documents.
-        self.assertGreater(expected_y, 0.0)
-        self.assertLess(expected_y, story_map["centreY"] - story_map["courtyardY"])
+        # The "仅地面" edition has `centreY` = `courtyardY` = 0, so there is no offset to
+        # subtract and the derived `position.y` must be exactly 0: writing any positive metre
+        # offset (the old measured 124.09 m, or `max_axis / 2` = 840 m) would launch the map
+        # into the air instead of sinking it into the floor.
+        self.assertEqual(expected_y, 0.0, "仅地面版 position.y 必须为 0（平面本身就是引擎地面）")
 
         # `follow_camera` is what decides world vs UI space in the engine
         # (`render_space = follow_camera ? "ui" : "scene"`,
         # cef_editor_native_api_handlers.cpp:2785): a map that followed the camera would be
         # drawn in UI space and appear to move with the player. `body_type: static` is what
-        # builds the collision mesh the characters stand on. Both live on the map's actor data.
+        # builds the collision mesh the characters stand on (the ground-only edition is a
+        # small 28k-vertex plane, so the octree is tiny). Both live on the map's actor data.
         module = (ROOT / "editor/game/frontend/storyMap.mjs").read_text(encoding="utf-8")
         declaration = module.split("MAP_ACTOR_DATA = Object.freeze({", 1)
         self.assertEqual(len(declaration), 2, "MAP_ACTOR_DATA 必须存在，地图的 actor 数据要能检查")
         actor_data = declaration[1].split("});", 1)[0]
         self.assertIn("follow_camera: false", actor_data)
         self.assertNotIn("follow_camera: true", module)
-        self.assertIn("body_type: 'phantom'", actor_data)
+        self.assertIn("body_type: 'static'", actor_data)
+        self.assertNotIn("body_type: 'phantom'", module)
 
         catalogue = json.loads((ROOT / "editor/game/data/fragments.json").read_text(encoding="utf-8"))
         self.assertEqual(projection["ruleVersion"], catalogue["version"])

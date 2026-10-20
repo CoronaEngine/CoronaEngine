@@ -1,11 +1,13 @@
 """Bake the story map's walkable height grid into ``editor/game/data/story-map-height.json``.
 
-The map (``editor/game/art/models/scene/01_山门神殿_平地版.glb``) ships as scenery with no collision
-(``body_type: 'phantom'``): the engine builds no triangle octree for it, so nothing in the
-engine can answer "how high is the ground here?". This script answers that question offline
-and once: it decodes every ``POSITION`` accessor of the GLB, rasterises the ~2M vertices onto a
+The map (``editor/game/art/models/scene/01_山门神殿_平地版_仅地面.glb``) ships as scenery with no
+collision (``body_type: 'phantom'``): the engine builds no triangle octree for it, so nothing in
+the engine can answer "how high is the ground here?". This script answers that question offline
+and once: it decodes every ``POSITION`` accessor of the GLB, rasterises the vertices onto a
 256x256 grid over the model's x/z footprint, fills the empty cells by nearest-neighbour so the
-grid has no holes, and writes the result as int16 centimetres.
+grid has no holes, and writes the result as int16 centimetres. The "仅地面" (ground-only)
+edition has one material slice — the flat y = 0 Ground plane — so every cell bakes to 0 and the
+grid is the constant floor the characters stand on.
 
 The grid describes the **walkable ground**, not the topmost surface. Keeping the maximum y per
 cell (what this script used to do) made every cell a building or a wall stands on report the
@@ -58,7 +60,7 @@ from collections import deque
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
-SOURCE = ROOT / "editor/game/art/models/scene/01_山门神殿_平地版.glb"
+SOURCE = ROOT / "editor/game/art/models/scene/01_山门神殿_平地版_仅地面.glb"
 OUTPUT = ROOT / "editor/game/data/story-map-height.json"
 
 # 256x256 over the 64.8 x 90 m footprint is ~25 x 35 cm per cell: fine enough for a walkable

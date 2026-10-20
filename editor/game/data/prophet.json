@@ -56,13 +56,13 @@
     "moveRange": 10.0
   },
   "map": {
-    "$comment": "剧情世界的地图（山门神殿，平地版）。与 cube 一样，摆位全部由这里驱动；它是世界自带的静态地面，客户端每次进入世界都会确认它在位（storyMap.mjs），因此新世界与已有世界走的是同一条路。scale 是这张图在世界里的最大轴（米），故意不是真实尺寸：模型本身 z 向深 1680.0027 米，缩到 90 米才是一个看得清的关卡。引擎把每个静态模型归一化成单位立方体（包围盒中心移到原点、最大轴缩到 1），create_actor 的 position 因此是归一化后的坐标而不是米：geometry.scale 要写 scale 才显示世界尺寸。courtyardY 是可行走庭院在模型文件里的绝对高度，这张图的地面是一整块 y = 0 的平面，所以它是 0；centreY 是模型世界包围盒的中高 124.091286 米。庭院在中心之下 centreY − courtyardY = 124.091286 米，乘上 scale / max_axis = 90 / 1680.0027 = 0.05357134，所以 position.y 要写 6.6477 才能让庭院落在引擎地面 y = 0，也就是剧情放脚的地方（公式在 storyMap.mjs）。注意 centreY 既不是 max_axis/2 = 840.0 也不是 scale/2 = 45.0：这张图 z 向深 1680 米、y 向只有 274 米高，写成前者会把地图抬到八百米高空，写成后者会把它埋进地里。三个数都能由资产本身重算，game/tests/test_story_assets.py 会逐字段比对这份数据与前端投影，并对模型重新测量。modelRef 是这张图的『资产代次』（迁移键），不是 actor 身份：guid 保持 corona.story.world-map.v1 不变，否则已有世界会认不出自己那张图而再叠一张；引擎只在『创建』actor 时导入模型（create_actor 的 skip_if_exists 修复分支只写 position/rotation/scale/follow_camera/body_type，从不改写 actor.route，见 src/systems/ui/cef/cef_editor_native_api_handlers.cpp:3410-3424），所以换一次地图资产就必须把 modelRef 升一版：storyMap.mjs 看到已有 actor 的代次不是当前值（或 actor.route 仍指向旧文件）时会先删除它、再按当前数据重建，让引擎真正导入新模型。忘了升版，已有世界就会永远渲染上一版地图——这正是 v1 → v2 修掉的问题。",
-    "asset": "scene/01_山门神殿_平地版.glb",
+    "$comment": "剧情世界的地图（山门神殿，仅地面版）。山门神殿去掉建筑物、草木、石头后只保留 y=0 的 Ground 平面（28407 顶点，x 向 -600..600、z 向 -840..840、y 恒为 0），所以 centreY 与 courtyardY 都是 0，position.y 因此落 0，地面就是引擎地面。与 cube 一样，摆位全部由这里驱动；它是世界自带的静态地面，客户端每次进入世界都会确认它在位（storyMap.mjs），因此新世界与已有世界走的是同一条路。scale 是这张图在世界里的最大轴（米），故意不是真实尺寸：模型本身 z 向深 1680.0027 米，缩到 90 米才是一个看得清的关卡。引擎把每个静态模型归一化成单位立方体（包围盒中心移到原点、最大轴缩到 1），create_actor 的 position 因此是归一化后的坐标而不是米：geometry.scale 要写 scale 才显示世界尺寸。courtyardY 是可行走庭院在模型文件里的绝对高度，这张图的地面是一整块 y = 0 的平面，所以它是 0；centreY 是模型世界包围盒的中高，去掉所有建筑物后它也是 0（模型只剩一块平面），position.y = (centreY - courtyardY) * scale / max_axis = 0，正好落在引擎地面 y = 0，也就是剧情放脚的地方（公式在 storyMap.mjs）。注意本版 max_axis 仍是 1680.0027（Ground 的 z 向足迹不变），centreY 从上一版测量值 124.091286 变为 0，是因为建筑/草木/石头全部被裁掉。modelRef 是这张图的『资产代次』（迁移键），不是 actor 身份：guid 保持 corona.story.world-map.v1 不变，否则已有世界会认不出自己那张图而再叠一张；引擎只在『创建』actor 时导入模型（create_actor 的 skip_if_exists 修复分支只写 position/rotation/scale/follow_camera/body_type，从不改写 actor.route，见 src/systems/ui/cef/cef_editor_native_api_handlers.cpp:3410-3424），所以换一次地图资产就必须把 modelRef 升一版：storyMap.mjs 看到已有 actor 的代次不是当前值（或 actor.route 仍指向旧文件）时会先删除它、再按当前数据重建，让引擎真正导入新模型。忘了升版，已有世界就会永远渲染上一版地图——这正是 v1 → v2 → v3 修掉的问题。",
+    "asset": "scene/01_山门神殿_平地版_仅地面.glb",
     "guid": "corona.story.world-map.v1",
-    "modelRef": "corona.story.world-map.v2",
+    "modelRef": "corona.story.world-map.v3",
     "scale": 90,
     "courtyardY": 0,
-    "centreY": 124.091286
+    "centreY": 0
   },
   "script": {
     "id": "prophet",
