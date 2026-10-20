@@ -92,6 +92,8 @@ let visualPlacements = null;
 let disposed = false;
 let cameraReady = false;
 let playerSave = null;
+// 原生移动结果的事件订阅（离开世界必须注销，否则旧页面继续收事件）。
+let motionCallbackToken = null;
 let savingPlayer = false;
 let initialization = Promise.resolve();
 let exitPending = null;
@@ -1915,6 +1917,10 @@ onMounted(async () => {
     const index = Math.min(Math.max(Number(init?.active_index) || 0, 0), Math.max(0, scenes.length - 1));
     sceneId = scenes[index]?.path || init?.path;
     if (!sceneId) throw new Error('当前世界没有可用场景');
+    // 原生三角面移动的结果必须回送控制器：没有这条登记，按键只会更新输入状态，
+    // 移动请求一直挂在 pendingMove 上等回调，角色永远不动（15 秒后还会报超时）。
+    motionCallbackToken = await editorApi.events.onMeshMoveResult(camera.acceptMeshMove);
+    if (!current()) { await editorApi.off(motionCallbackToken); motionCallbackToken = null; return; }
     // 地图高度网格是这张地图真正的地面线，而角色的脚 y 由它给出：必须在
     // ensureStoryCharacters 之前读入，否则角色先按固定地板落地，之后才补网格也来不及。
     // 读不到只报告、不阻断进入世界（`heightAt` 返回 null，摆位与控制器都退回固定地板）。
@@ -2015,6 +2021,10 @@ onMounted(async () => {
 });
 onUnmounted(() => {
   disposed = true;
+  if (motionCallbackToken !== null) {
+    editorApi.off(motionCallbackToken).catch(() => {});
+    motionCallbackToken = null;
+  }
   clearTimeout(feedbackTimer);
   clearTimeout(toastTimer);
   clearTimeout(bagToastTimer);
