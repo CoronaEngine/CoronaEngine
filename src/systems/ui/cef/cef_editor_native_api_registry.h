@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include <cef_browser.h>
 #include <cef_frame.h>
@@ -61,6 +61,13 @@ std::string unsupported_editor_api_route_json(const NativeRequest& request);
 
 void register_builtin_native_api_handlers();
 void tick_native_animation_updates();
+
+/// Reports a native editor API request that entered dispatch and never returned.
+/// A blocked CEF UI thread runs no handler completion, so nothing else in the
+/// logging can name a handler that deadlocked.  Call this from a thread that is
+/// still alive (the engine main loop); it is rate limited internally and reports
+/// each stuck request once.
+void report_stuck_native_api_request();
 
 std::string arg_string(const nlohmann::json& args, size_t index, std::string fallback = "");
 bool arg_bool(const nlohmann::json& args, size_t index, bool fallback = false);

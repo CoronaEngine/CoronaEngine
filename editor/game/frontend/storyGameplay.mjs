@@ -31,6 +31,12 @@ export function distanceToBounds(position, bounds) {
   return Math.hypot(...[0, 2].map(axis => Math.max(bounds[axis] - position[axis], 0, position[axis] - bounds[axis + 3])));
 }
 export const canAct = player => Boolean(player?.grounded && player.movementState !== 'dodging');
+/** 到掉落物的水平距离；不在可行动状态、或掉落物没有位置时返回 Infinity。
+ *  界面用它决定 F 提示的候选（Boss 的奖励现在直接进背包，这个候选通常为空）。 */
+export function pickupDistance(player, drop) {
+  return canAct(player) && vector3(drop?.position)
+    ? Math.hypot(player.position[0] - drop.position[0], player.position[2] - drop.position[2]) : Infinity;
+}
 export function canHitBoss(player, bounds, config) {
   if (!canAct(player) || !Number.isFinite(player.facingYaw)
     || distanceToBounds(player.position, bounds) > config.meleeRange) return false;

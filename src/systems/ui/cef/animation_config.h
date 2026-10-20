@@ -30,7 +30,8 @@ inline nlohmann::json serialize(const Resource::AnimationSnapshot& snapshot) {
     };
     return {{"animation_sources", snapshot.sources}, {"animations", std::move(clips)},
             {"animation", {{"current", nullable(snapshot.current)}, {"target", nullable(snapshot.target)},
-                           {"transitioning", !snapshot.target.empty()}, {"time_seconds", snapshot.time_seconds},
+                           {"transitioning", !snapshot.target.empty()}, {"paused", snapshot.paused},
+                           {"time_seconds", snapshot.time_seconds},
                            {"transition_weight", snapshot.transition_weight}, {"load_status", snapshot.load_status},
                            {"load_error", nullable(snapshot.load_error)}, {"requested_sources", snapshot.requested_sources}}}};
 }

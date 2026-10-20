@@ -6,7 +6,7 @@ import { worldModeState, normalizeProjectPath } from '@/services/worldModeServic
 import { createStoryCameraController } from '@/utils/viewportStoryCamera.js';
 import { projectLauncherService, cancelPendingProjectOpen, getProjectSelectionVersion } from '@/services/projectLauncherService.js';
 import { trackWorldSessionWork, notifyWorldError, registerWorldSessionSave } from '@/services/worldSessionLifecycle.js';
-import { createStoryNavigationController, NAVIGATION_KEY } from '../../../../../game/frontend/storyNavigation.mjs';
+import { createStoryNavigationController, NAVIGATION_KEY } from '../../../../game/frontend/storyNavigation.mjs';
 // 剧情 HUD 样式：复刻 ui2.html《自然荒野 · 战术协同系统 HUD》
 import './StoryWorld.hud.css';
 // 中央「机体投影」用的人物图（537×817，比例与投影仓一致，不会裁切）
@@ -14,30 +14,30 @@ import HERO_FIGURE from '@/assets/hero-figure.png';
 // 行囊（Tab 背包）样式：复刻 bag2.html《自然荒野 · 战术编成与收纳库》，收在 .story-bag 之下
 import './StoryWorld.bag.css';
 
-import { ensureStoryCharacters, syncPlacementActors } from '../../../../../game/frontend/storyActors.mjs';
-import { createPlayerAnimationSwitcher, PLAYER_ATTACK_CLIP, PLAYER_SKILL_CLIP } from '../../../../../game/frontend/storyPlayerAnimation.mjs';
-import { createBossDirector } from '../../../../../game/frontend/storyBossAi.mjs';
-import { createPlayerController, VIEW_LABELS } from '../../../../../game/frontend/playerController.mjs';
-import { createPlayerSave } from '../../../../../game/frontend/playerSave.mjs';
+import { ensureStoryCharacters, syncPlacementActors } from '../../../../game/frontend/storyActors.mjs';
+import { createPlayerAnimationSwitcher, PLAYER_ATTACK_CLIP, PLAYER_SKILL_CLIP } from '../../../../game/frontend/storyPlayerAnimation.mjs';
+import { createBossDirector } from '../../../../game/frontend/storyBossAi.mjs';
+import { createPlayerController, VIEW_LABELS } from '../../../../game/frontend/playerController.mjs';
+import { createPlayerSave } from '../../../../game/frontend/playerSave.mjs';
 import { createStoryGameplay, worldBounds, distanceToBounds, pickupDistance,
-  contextualInteraction, FRAGMENT_GUID } from '../../../../../game/frontend/storyGameplay.mjs';
+  contextualInteraction, FRAGMENT_GUID } from '../../../../game/frontend/storyGameplay.mjs';
 import { STORY_CHARACTERS, PROPHET_GUID, resolveStoryAssetPath,
-  sceneSnapshot } from '../../../../../game/frontend/storyCharacters.mjs';
+  sceneSnapshot } from '../../../../game/frontend/storyCharacters.mjs';
 import { MAX_PLACEMENTS, PLACED_BLOCK_REACH, PLACEMENT_DISTANCE, blockSpawnTransform, cycleSlot, findProp,
   hotbarSlots as hotbarSlotsFor, nearestPlacedBlock, nextPlacementIndex, placementGuid,
-  removePlacement, sanitizePlacements } from '../../../../../game/frontend/storyProps.mjs';
+  removePlacement, sanitizePlacements } from '../../../../game/frontend/storyProps.mjs';
 import { PROPHET_INTERACTION, prophetAvailable, prophetDistance,
-  normalizeDialogue } from '../../../../../game/frontend/prophetDialogue.mjs';
-import { ensureStoryCube, cubeTransformOf, playerFacingYaw } from '../../../../../game/frontend/storyCube.mjs';
-import { ensureStoryMap } from '../../../../../game/frontend/storyMap.mjs';
-import { heightAt } from '../../../../../game/frontend/storyMapHeight.mjs';
-import { loadStoryMapHeight, mapHeightUrl } from '../../../../../game/frontend/storyMapHeightLoader.mjs';
+  normalizeDialogue } from '../../../../game/frontend/prophetDialogue.mjs';
+import { ensureStoryCube, cubeTransformOf, playerFacingYaw } from '../../../../game/frontend/storyCube.mjs';
+import { ensureStoryMap } from '../../../../game/frontend/storyMap.mjs';
+import { heightAt } from '../../../../game/frontend/storyMapHeight.mjs';
+import { loadStoryMapHeight, mapHeightUrl } from '../../../../game/frontend/storyMapHeightLoader.mjs';
 import { collectSwayTargets, createWorldRuleRunner,
-  findFragment } from '../../../../../game/frontend/storyWorldRules.mjs';
+  findFragment } from '../../../../game/frontend/storyWorldRules.mjs';
 import { ADJUST_ACTIONS, FRAGMENT_ADJUST_ACTIONS, PROPHET_SCREENS, adjustFeedback,
   adjustFragmentRule, fragmentAdjustPanel, fragmentPanel,
   nextObjectTransform, objectLabel, prophetKeyAction, selectableObjects,
-  toggleFragment } from '../../../../../game/frontend/storyProphetActions.mjs';
+  toggleFragment } from '../../../../game/frontend/storyProphetActions.mjs';
 
 
 const router = useRouter();

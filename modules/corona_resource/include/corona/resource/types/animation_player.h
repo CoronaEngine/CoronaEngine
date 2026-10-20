@@ -16,16 +16,19 @@ struct AnimationSnapshot {
     std::vector<AnimationClipInfo> clips;
     std::string current, target, load_status{"loading"}, load_error;
     double time_seconds{}, transition_weight{};
+    bool paused{};
     std::uint64_t revision{};
 };
 
-// Per-geometry ownership. APIs only enqueue requests; the mechanics thread
-// commits catalogs and advances the player. Background import jobs own values,
+// Per-geometry ownership. APIs enqueue clip requests or set the pause flag under
+// the player lock; mechanics commits catalogs and advances playback. Import jobs own values,
 // never actor pointers, so destruction/replacement cannot write into a new actor.
 class AnimationPlayer {
 public:
     void set_sources(std::vector<std::string> sources, std::vector<std::filesystem::path> paths);
     void request_switch(std::string_view animation, double blend_seconds = 0.2);
+    // Freeze both clip clocks and an in-flight blend; changing clips keeps this flag.
+    void set_paused(bool paused);
     AnimationSnapshot snapshot() const;
     std::uint64_t revision() const;
     void reset_model();
@@ -61,5 +64,6 @@ private:
     std::optional<Switch> command_;
     std::string current_, target_, status_{"loading"}, error_;
     double time_{}, target_time_{}, elapsed_{}, duration_{};
+    bool paused_{};
 };
 } // namespace Corona::Resource
