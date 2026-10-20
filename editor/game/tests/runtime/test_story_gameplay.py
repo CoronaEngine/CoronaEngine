@@ -86,10 +86,10 @@ class GameplayTests(unittest.TestCase):
         self.assertEqual(set(state['monsters']), set(game.CONFIG['monsters']))
         for role, stats in game.CONFIG['monsters'].items():
             self.assertEqual(state['monsters'][role]['hp'], stats['hp'])
-        result = self.call(self.request('hitMonster', monsterId='monster-em1'))
+        result = self.call(self.request('hitMonster', monsterId='monster-mantis'))
         self.assertEqual(result['status'], 'ok', result)
-        self.assertEqual(result['state']['monsters']['monster-em1']['hp'], 60)
-        self.assertEqual(result['state']['monsters']['monster-em2']['hp'], 90)
+        self.assertEqual(result['state']['monsters']['monster-mantis']['hp'], 60)
+        self.assertEqual(result['state']['monsters']['monster-larva']['hp'], 90)
         self.assertEqual(result['state']['boss']['hp'], 200, '打怪不会顺带伤到 Boss')
         self.assertEqual(result['state']['rage'], 10)
         self.assertEqual(self.call(action='hitMonster', monsterId='no-such-monster')['status'], 'error')
@@ -101,15 +101,15 @@ class GameplayTests(unittest.TestCase):
                 patch.object(game.random, 'randint', return_value=7), \
                 patch.object(game.random, 'choice', side_effect=['ball', 'hunter-blade']):
             for _ in range(4):
-                last = self.request('hitMonster', monsterId='monster-em1')
+                last = self.request('hitMonster', monsterId='monster-mantis')
                 result = self.call(last)
-        self.assertEqual(result['state']['monsters']['monster-em1']['hp'], 0)
+        self.assertEqual(result['state']['monsters']['monster-mantis']['hp'], 0)
         self.assertEqual(result['state']['inventory']['ball'], 7, '击杀掉落 7 个球')
-        self.assertEqual(result['state']['inventory']['hunter-blade'], 1,
-                         '50% 命中：装备也直接进背包')
+        self.assertEqual(result['state']['inventory']['hunter-blade'], 2,
+                         '50% 命中：装备也直接进背包（开局自带 1 件）')
         # A retry of the same operation must not roll or grant again.
         self.assertEqual(self.call(last)['state']['inventory']['ball'], 7)
-        self.assertEqual(self.call()['state']['inventory']['hunter-blade'], 1)
+        self.assertEqual(self.call()['state']['inventory']['hunter-blade'], 2)
         last_operation = self.call()['state']['operations'][-1]
         self.assertEqual(last_operation['loot'], 'ball')
         self.assertEqual(last_operation['lootCount'], 7)
@@ -119,29 +119,30 @@ class GameplayTests(unittest.TestCase):
                 patch.object(game.random, 'randint', return_value=5), \
                 patch.object(game.random, 'choice', return_value='block'):
             for _ in range(5):
-                last = self.request('hitMonster', monsterId='monster-em2')
+                last = self.request('hitMonster', monsterId='monster-larva')
                 result = self.call(last)
-        self.assertEqual(result['state']['monsters']['monster-em2']['hp'], 0)
+        self.assertEqual(result['state']['monsters']['monster-larva']['hp'], 0)
         self.assertEqual(result['state']['inventory']['ball'], 7)
         self.assertEqual(result['state']['inventory']['block'], 5)
         last_operation = self.call()['state']['operations'][-1]
         self.assertEqual(last_operation['loot'], 'block')
         self.assertEqual(last_operation['lootCount'], 5)
         self.assertIsNone(last_operation['gear'])
-        self.assertEqual(self.call(action='hitMonster', monsterId='monster-em1')['status'], 'error')
+        self.assertEqual(self.call(action='hitMonster', monsterId='monster-mantis')['status'], 'error')
 
     def test_a_client_cannot_forge_a_drop_by_sending_loot_or_gear(self):
         with patch.object(game.random, 'random', return_value=0.9), \
                 patch.object(game.random, 'randint', return_value=9), \
                 patch.object(game.random, 'choice', return_value='block'):
             for _ in range(4):
-                last = self.request('hitMonster', monsterId='monster-em1',
+                last = self.request('hitMonster', monsterId='monster-mantis',
                                     loot='ball', gear='hunter-blade', lootCount=99)
                 result = self.call(last)
-        self.assertEqual(result['state']['monsters']['monster-em1']['hp'], 0)
+        self.assertEqual(result['state']['monsters']['monster-mantis']['hp'], 0)
         self.assertEqual(result['state']['inventory']['block'], 9, '掉落只能由后端掷点决定')
         self.assertEqual(result['state']['inventory']['ball'], 0)
-        self.assertEqual(result['state']['inventory']['hunter-blade'], 0)
+        self.assertEqual(result['state']['inventory']['hunter-blade'], 1,
+                         '只能拿到开局自带的那一件，客户端塞不进额外的')
         last_operation = self.call()['state']['operations'][-1]
         self.assertEqual(last_operation['loot'], 'block')
         self.assertEqual(last_operation['lootCount'], 9)
@@ -149,16 +150,16 @@ class GameplayTests(unittest.TestCase):
 
     def test_skills_can_finish_a_monster_without_touching_the_boss(self):
         for _ in range(3):
-            self.call(action='hitMonster', monsterId='monster-em1')
-        self.assertEqual(self.call()['state']['monsters']['monster-em1']['hp'], 20)
+            self.call(action='hitMonster', monsterId='monster-mantis')
+        self.assertEqual(self.call()['state']['monsters']['monster-mantis']['hp'], 20)
         self.assertEqual(self.call()['state']['rage'], 30)
         with patch.object(game.random, 'random', return_value=0.9), \
                 patch.object(game.random, 'randint', return_value=5), \
                 patch.object(game.random, 'choice', return_value='block'):
             result = self.call(action='castSkill', skillId='heavy', hit=True,
-                               monsterId='monster-em1')
+                               monsterId='monster-mantis')
         self.assertEqual(result['status'], 'ok', result)
-        self.assertEqual(result['state']['monsters']['monster-em1']['hp'], 0)
+        self.assertEqual(result['state']['monsters']['monster-mantis']['hp'], 0)
         self.assertEqual(result['state']['boss']['hp'], 200)
         self.assertEqual(result['state']['rage'], 0)
 
@@ -226,7 +227,7 @@ class GameplayTests(unittest.TestCase):
         path = self.root / game.SAVE_PATH
         path.write_text(json.dumps(old), encoding='utf-8')
         migrated = self.call()['state']
-        self.assertEqual(migrated['version'], 3)
+        self.assertEqual(migrated['version'], 4)
         self.assertEqual(migrated['legacyRevision'], 3)
         self.assertEqual(migrated['rage'], 0)
         self.assertEqual(migrated['boss'], old['boss'])
@@ -347,9 +348,9 @@ class GameplayTests(unittest.TestCase):
         """The pillar reused the block's cube model; both its count and its old log entry
         are folded into the ball, so an existing small world does not lose the object."""
         monsters = game.initial_monsters()
-        monsters['monster-em1']['hp'] = 0
+        monsters['monster-mantis']['hp'] = 0
         operations = [{'operationId': str(uuid.uuid4()), 'action': 'hitMonster',
-                       'expectedRevision': index, 'monsterId': 'monster-em1'}
+                       'expectedRevision': index, 'monsterId': 'monster-mantis'}
                       for index in range(4)]
         operations[-1]['loot'] = 'pillar'
         inventory = game.initial_inventory()
@@ -364,7 +365,7 @@ class GameplayTests(unittest.TestCase):
         self.assertEqual(loaded['status'], 'ok', loaded)
         self.assertEqual(loaded['state']['inventory']['ball'], 1)
         self.assertNotIn('pillar', loaded['state']['inventory'])
-        self.assertEqual(loaded['state']['monsters']['monster-em1']['hp'], 0)
+        self.assertEqual(loaded['state']['monsters']['monster-mantis']['hp'], 0)
         self.assertTrue(all('gear' not in operation for operation in loaded['state']['operations']),
                         '旧日志没有装备字段，重放时不会凭空补发装备')
 
@@ -430,12 +431,12 @@ class GameplayTests(unittest.TestCase):
         self.assertEqual(result['state']['inventory']['boss-main'], 1, 'Boss 的兵甲随击杀进包')
         self.assertEqual(self.call()['config']['skills']['heavy']['cooldownMs'], 1200)
         # 空手 20 点伤害：怪物 80 血打一下还剩 60。
-        hit = self.call(action='hitMonster', monsterId='monster-em1')
-        self.assertEqual(hit['state']['monsters']['monster-em1']['hp'], 60)
+        hit = self.call(action='hitMonster', monsterId='monster-mantis')
+        self.assertEqual(hit['state']['monsters']['monster-mantis']['hp'], 60)
         self.assertEqual(self.call(action='equipItem', itemId='boss-main')['status'], 'ok')
         # 攻击 20 + 148：同一条命令，伤害由后端按属性算。
-        self.assertEqual(self.call(action='hitMonster', monsterId='monster-em1')
-                         ['state']['monsters']['monster-em1']['hp'], 0)
+        self.assertEqual(self.call(action='hitMonster', monsterId='monster-mantis')
+                         ['state']['monsters']['monster-mantis']['hp'], 0)
         equipped = self.call()['state']
         self.assertEqual(equipped['equipped']['weapon'], 'boss-main')
         self.assertEqual(equipped['inventory']['boss-main'], 0, '披挂后不在囊中重复计数')
@@ -459,7 +460,7 @@ class GameplayTests(unittest.TestCase):
         self.assertEqual(reloaded['state']['inventory']['rage-herb'], 1)
         self.assertEqual(reloaded['state']['rage'], 30)
         self.assertEqual(self.call(action='discardItem', itemId='not-an-item')['status'], 'error')
-        self.assertEqual(self.call(action='equipItem', itemId='hunter-blade')['status'], 'error',
+        self.assertEqual(self.call(action='equipItem', itemId='boss-main')['status'], 'error',
                          '囊中没有的装备不能凭空披挂')
 
 

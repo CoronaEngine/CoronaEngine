@@ -30,24 +30,46 @@ DROP_ID = 'story.boss.world-fragment'
 # bar per creature and the player can hunt them separately from the boss. Keys are the
 # `role` values from `game/frontend/storyCharacters.mjs`; the names stay in the frontend.
 MONSTER_HP = {
-    'monster-em135': 180,
-    'monster-em001-a': 120,
-    'monster-em001-b': 120,
-    'monster-em001-c': 120,
-    'monster-em3': 160,
-    'monster-em1': 80,
-    'monster-em2': 90,
+    'monster-wyvern': 180,
+    'monster-lizardf': 120,
+    'monster-lizardm': 120,
+    'monster-lion': 160,
+    'monster-mantis': 80,
+    'monster-larva': 90,
 }
-# Placeable models a monster may leave behind. The counter name is the prop id.
-LOOT_PROPS = ('block', 'ball')
+# 旧档里的怪物名册（换成 fbx 角色表之前那批）。读旧存档时按这张表改名，
+# 这样既有存档的进度和操作日志都还能重放，不会因为改名而整档失效。
+LEGACY_MONSTER_IDS = {
+    'monster-em135': 'monster-wyvern',
+    'monster-em001-a': 'monster-lizardf',
+    'monster-em001-b': 'monster-lizardm',
+    'monster-em001-c': 'monster-lizardm',
+    'monster-em3': 'monster-lion',
+    'monster-em1': 'monster-mantis',
+    'monster-em2': 'monster-larva',
+}
+
+
+def known_monster(role):
+    """当前名册或旧名册里的怪物 id，统一成当前名册的 id。"""
+    if role in CONFIG['monsters']:
+        return role
+    return LEGACY_MONSTER_IDS.get(role)
+# Placeable models a monster may leave behind. The counter name is the prop id; the props
+# themselves are defined in `game/frontend/storyProps.mjs` and the bag renders them from
+# these counters. 方块/球 是基础搭建件，树与草丛是这次新增的植被。
+LOOT_PROPS = ('block', 'ball', 'tree1', 'tree2', 'tree3', 'grass1', 'grass2', 'grass4', 'grass5')
+# 基础搭建件掉得多、植被掉得少一些（但也不能少到看不见）。
+BULK_LOOT = ('block', 'ball')
 # Equipment a monster may leave behind, independently of the model roll. These ids must
 # match `game/frontend/storyLoot.mjs`; the names and icons stay in the frontend.
 MONSTER_EQUIPMENT = ('hunter-blade', 'hunter-helm', 'hunter-chest', 'hunter-boots')
 # Boss 倒下时一并进包的五件兵甲。id 与前端 `BOSS_LOOT_ITEMS` 一致，属性由
 # `game/core/attributes.py` 提供，这里只管它们的归属流转。
 BOSS_EQUIPMENT = ('boss-main', 'boss-helm', 'boss-chest', 'boss-legs', 'boss-boots')
-# 开局随身的三份回气草：让「物品使用」从第一分钟就能用，不必先等掉落。
-STARTING_ITEMS = {'rage-herb': 3}
+# 开局随身：三份回气草，外加一套猎人装备（武器 + 胸甲）。
+# 玩家进世界就能披挂，不必先等掉落；这也是背包开局有东西的原因。
+STARTING_ITEMS = {'rage-herb': 3, 'hunter-blade': 1, 'hunter-chest': 1}
 CONFIG = {
     'playerHp': 100, 'rageMax': 100, 'ragePerHit': 10, 'bossHp': 200, 'damage': 20,
     'cooldownMs': 400, 'bossBarRadius': 10, 'monsterBarRadius': 10, 'meleeRange': 2.5,
@@ -72,14 +94,21 @@ BLOCK_REWARD = 64
 BALL_REWARD = 64
 MONSTER_DROP_MIN = 5
 MONSTER_DROP_MAX = 15
+# 植被掉得比搭建件少一档，但一掉就是一小捆，不至于只够摆一棵。
+PROP_DROP_MIN = 3
+PROP_DROP_MAX = 6
+# Boss 倒下时除方块/球之外，还各给这几件植被一捆。
+BOSS_PROP_REWARD = {'tree1': 4, 'tree2': 4, 'tree3': 4,
+                    'grass1': 8, 'grass2': 8, 'grass4': 8, 'grass5': 8}
 # Backwards-compatible name for saves and tests written before the reward moved to the kill.
 BLOCK_SEED = BLOCK_REWARD
 
 
 def initial_inventory():
-    return {'worldFragment': 0, 'block': 0, 'ball': 0,
-            **{item: 0 for item in (*MONSTER_EQUIPMENT, *BOSS_EQUIPMENT)},
-            **STARTING_ITEMS}
+    counters = {'worldFragment': 0,
+                **{item: 0 for item in (*LOOT_PROPS, *MONSTER_EQUIPMENT, *BOSS_EQUIPMENT)}}
+    counters.update(STARTING_ITEMS)
+    return counters
 
 
 # 五个披挂位：空着就是 None。装备不计入 `inventory`，入包后才算件数。
@@ -92,7 +121,7 @@ def initial_monsters():
 
 
 def initial_state():
-    return {'version': 3, 'revision': 0, 'legacyRevision': 0, 'rage': 0, 'boss': {'hp': CONFIG['bossHp']},
+    return {'version': 4, 'revision': 0, 'legacyRevision': 0, 'rage': 0, 'boss': {'hp': CONFIG['bossHp']},
             'drop': None, 'monsters': initial_monsters(), 'equipped': initial_equipped(),
             'inventory': initial_inventory(), 'operations': []}
 
@@ -162,7 +191,7 @@ def _operation(request, *, stored=False):
     if type(revision) is not int or revision < 0:
         raise ValueError('无效的玩法存档版本号')
     operation = {'operationId': ident, 'action': action, 'expectedRevision': revision}
-    if action == 'hitMonster' and request.get('monsterId') not in CONFIG['monsters']:
+    if action == 'hitMonster' and known_monster(request.get('monsterId')) is None:
         raise ValueError('未知的怪物')
     if action == 'castSkill':
         if request.get('skillId') not in CONFIG['skills'] or type(request.get('hit')) is not bool:
@@ -178,8 +207,10 @@ def _operation(request, *, stored=False):
                 raise ValueError('Boss 掉落位置无效')
             operation['bossPosition'] = position
     if action in ('hitMonster', 'castSkill') and request.get('monsterId') is not None:
-        if request.get('monsterId') not in CONFIG['monsters']:
+        monster_id = known_monster(request.get('monsterId'))
+        if monster_id is None:
             raise ValueError('未知的怪物')
+        # 旧档的操作日志保留旧 id（重放要与存档逐字一致），应用时再映射。
         operation['monsterId'] = request['monsterId']
     if action == 'pickupDrop':
         if request.get('dropId') != DROP_ID:
@@ -236,7 +267,10 @@ def _drop_monster_loot(state, operation, *, live):
     """
     if live:
         loot = random.choice(LOOT_PROPS)
-        loot_count = random.randint(MONSTER_DROP_MIN, MONSTER_DROP_MAX)
+        # 搭建件掉落量大、植被掉落量小：两类各有一个区间。
+        low, high = ((MONSTER_DROP_MIN, MONSTER_DROP_MAX) if loot in BULK_LOOT
+                     else (PROP_DROP_MIN, PROP_DROP_MAX))
+        loot_count = random.randint(low, high)
         gear = (random.choice(MONSTER_EQUIPMENT)
                 if random.random() < CONFIG['monsterEquipmentChance'] else None)
         operation['loot'] = loot
@@ -272,6 +306,9 @@ def _damage_monster(state, monster_id, damage, operation, *, live):
 
 def _apply(state, operation, *, legacy=False, live=False):
     action, damage, monster_id = operation['action'], 0, operation.get('monsterId')
+    # 旧操作日志里的怪物 id 只用于对账，应用时映射到当前名册。
+    if monster_id is not None:
+        monster_id = known_monster(monster_id) or monster_id
     # 一件一次：这一击按当前披挂算出来的属性结算，客户端不参与算数。
     total = attrs.aggregate(state['equipped'])
     if action == 'hitBoss':
@@ -362,6 +399,9 @@ def _apply(state, operation, *, legacy=False, live=False):
                 state['inventory']['worldFragment'] = max(1, state['inventory']['worldFragment'])
                 state['inventory']['block'] = state['inventory'].get('block', 0) + BLOCK_REWARD
                 state['inventory']['ball'] = state['inventory'].get('ball', 0) + BALL_REWARD
+                # Boss 的植被奖励是固定的（不掷点），重放同样能算出来。
+                for prop, count in BOSS_PROP_REWARD.items():
+                    state['inventory'][prop] = state['inventory'].get(prop, 0) + count
                 # 掷点结果是服务端定的：先写进操作日志，再按日志发货，重放才不会重掷。
                 if live:
                     operation['bossGear'] = list(BOSS_EQUIPMENT)
@@ -382,7 +422,37 @@ def _validate(state):
         # 因此这里不需要（也不能）凭空发装备。
         state = deepcopy(state)
         state.update(version=3, equipped=initial_equipped())
-    if state['version'] != 3:
+    if state['version'] == 3:
+        # v4 给每位玩家一套开局装备：旧档没有这些计数，按初始值补上才与重放对得上。
+        # 怪物名册同时改成了新的角色表：旧 id 按 LEGACY_MONSTER_IDS 改名并保留血量。
+        state = deepcopy(state)
+        state.update(version=4)
+        renamed = {}
+        for role, stats in (state.get('monsters') or {}).items():
+            target = known_monster(role)
+            if target is None:
+                continue
+            hp = stats.get('hp') if isinstance(stats, dict) else None
+            if type(hp) is not int:
+                continue
+            # 两只旧怪映射到同一只新怪时，保留更低的血量（打得更狠的那份进度）。
+            renamed[target] = {'hp': hp if target not in renamed else min(renamed[target]['hp'], hp)}
+        for role, stats in CONFIG['monsters'].items():
+            renamed.setdefault(role, {'hp': stats['hp']})
+        state['monsters'] = renamed
+        inventory = state.get('inventory')
+        if isinstance(inventory, dict):
+            for item, count in STARTING_ITEMS.items():
+                current = inventory.get(item, 0)
+                inventory[item] = count if type(current) is not int else max(current, count)
+            # 新档的 Boss 奖励里多了植被：已经打倒过 Boss 的旧档按同一份奖励补齐，
+            # 否则重放旧操作会把这几项算出来，和存档对不上。
+            boss = state.get('boss')
+            if isinstance(boss, dict) and boss.get('hp') == 0:
+                for prop, count in BOSS_PROP_REWARD.items():
+                    current = inventory.get(prop, 0)
+                    inventory[prop] = count if type(current) is not int else max(current, count)
+    if state['version'] != 4:
         raise ValueError('不支持的玩法存档版本')
     revision, boundary, operations = state['revision'], state['legacyRevision'], state['operations']
     # A world saved before the block counter existed lacks it. Zero is the pre-kill default;
@@ -397,8 +467,9 @@ def _validate(state):
             raise ValueError('玩法状态或存档版本号无效')
         for prop in (*LOOT_PROPS, *MONSTER_EQUIPMENT, *BOSS_EQUIPMENT):
             state['inventory'].setdefault(prop, 0)
-        # 回气草是开局随身物：没有这份计数的旧档补成初始值，才能与重放对得上。
-        state['inventory'].setdefault('rage-herb', STARTING_ITEMS['rage-herb'])
+        # 开局随身物（回气草 + 初始装备）：没有这份计数的旧档补成初始值，才能与重放对得上。
+        for item, count in STARTING_ITEMS.items():
+            state['inventory'].setdefault(item, count)
         state['inventory']['ball'] += legacy_pillar
     if not isinstance(state.get('monsters'), dict):
         state['monsters'] = initial_monsters()

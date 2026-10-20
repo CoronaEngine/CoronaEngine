@@ -21,7 +21,7 @@ import { createPlayerController, VIEW_LABELS } from '../../../../game/frontend/p
 import { createPlayerSave } from '../../../../game/frontend/playerSave.mjs';
 import { createStoryGameplay, worldBounds, distanceToBounds, pickupDistance,
   contextualInteraction, FRAGMENT_GUID } from '../../../../game/frontend/storyGameplay.mjs';
-import { STORY_CHARACTERS, PROPHET_GUID, resolveStoryAssetPath,
+import { STORY_CHARACTERS, PROPHET_GUID, isMonsterRole, resolveStoryAssetPath,
   sceneSnapshot } from '../../../../game/frontend/storyCharacters.mjs';
 import { MAX_PLACEMENTS, PLACED_BLOCK_REACH, PLACEMENT_DISTANCE, blockSpawnTransform, cycleSlot, findProp,
   hotbarSlots as hotbarSlotsFor, nearestPlacedBlock, nextPlacementIndex, placementGuid,
@@ -29,6 +29,7 @@ import { MAX_PLACEMENTS, PLACED_BLOCK_REACH, PLACEMENT_DISTANCE, blockSpawnTrans
 import { PROPHET_INTERACTION, prophetAvailable, prophetDistance,
   normalizeDialogue } from '../../../../game/frontend/prophetDialogue.mjs';
 import { ensureStoryCube, cubeTransformOf, playerFacingYaw } from '../../../../game/frontend/storyCube.mjs';
+import { MONSTER_EQUIPMENT } from '../../../../game/frontend/storyLoot.mjs';
 import { ensureStoryMap } from '../../../../game/frontend/storyMap.mjs';
 import { heightAt } from '../../../../game/frontend/storyMapHeight.mjs';
 import { loadStoryMapHeight, mapHeightUrl } from '../../../../game/frontend/storyMapHeightLoader.mjs';
@@ -43,6 +44,8 @@ import { ADJUST_ACTIONS, FRAGMENT_ADJUST_ACTIONS, PROPHET_SCREENS, adjustFeedbac
 const router = useRouter();
 const surface = ref(null);
 const inventoryOpen = ref(false);
+// 离玩家最近、且在血条射程内的普通怪物；同一时刻只显示它，血条位置固定。
+const nearbyMonsterId = ref(null);
 const inventoryPanel = ref(null);
 const selectedSlot = ref(0);
 const navigationPending = ref(false);
@@ -61,6 +64,8 @@ let feedbackTimer = null;
 let toastTimer = null;
 let bossActor = null;
 let bossBounds = null;
+// 主世界的普通怪物：{ id, name, actor, bounds }，攻击目标裁决与小怪血条共用这一份。
+let monsterActors = [];
 let sceneId = null;
 let visualSignature = null;
 let lastHitHp = null;
@@ -208,6 +213,19 @@ function updateProximity() {
   canPickup.value = Boolean(reach.drop) && reach.distance <= (data?.config?.pickupRange ?? 0);
   // 提示与 F 键读的是同一个函数、同一份现算的距离；缓存只用于渲染这一行提示。
   fKeyAction.value = interactionFor(data, player);
+  // 普通怪物血条只在靠近时出现；同时有多只在射程内时只取最近的那一只。
+  nearbyMonsterId.value = null;
+  if (data?.role === 'main' && player?.position) {
+    const radius = Number(data.config.monsterBarRadius) || 0;
+    let nearest = null;
+    for (const entry of monsterActors) {
+      if (!entry.bounds || (data.state.monsters?.[entry.id]?.hp ?? 1) <= 0) continue;
+      const distance = distanceToBounds(player.position, entry.bounds);
+      if (!Number.isFinite(distance) || distance > radius) continue;
+      if (!nearest || distance < nearest.distance) nearest = { id: entry.id, distance };
+    }
+    nearbyMonsterId.value = nearest?.id || null;
+  }
   // 走路/奔跑/待机跟着控制器走：`movementState` 由控制器现算，这里不做第二次判断。
   if (cameraReady && player?.movementState) playerAnimationSwitcher()?.update(player.movementState);
   if (cameraReady) startActorTicker();
@@ -308,6 +326,7 @@ async function assertSource() {
 const signature = data => JSON.stringify([data.role, data.state.boss.hp === 0, data.state.drop]);
 const gameplay = createStoryGameplay({
   api: editorApi, projectPath, readPlayer: camera.snapshotPlayer, readBoss: () => bossActor,
+  readMonsters: () => monsterActors,
   // 掉落的碎片和角色、方块读同一个地面：地图的烘好高度网格（没有网格时退回原来的常量）。
   groundYAt,
   trackWork: trackWorldSessionWork,
@@ -315,7 +334,13 @@ const gameplay = createStoryGameplay({
     // 即使 current() 为假也镜像已确认的世界角色：HUD 要跟随引擎真正确认的世界，
     // 而不是可能已经过期的渲染守卫。
     roleRef.value = data.role;
-    if (current()) { gameplayState.value = data; updateProximity(); }
+    if (current()) {
+      gameplayState.value = data;
+      // 存档 → 行囊：Boss 兵甲只发一次，怪物装备按件数补齐（丢弃/披挂会同步扣账）。
+      syncBossLoot(data);
+      syncMonsterGear(data);
+      updateProximity();
+    }
   },
   onFeedback: showFeedback,
   reconcile: async data => {
@@ -626,6 +651,64 @@ const BAG_WEIGHT_MAX = 120;
 const FRAGMENT_DEF = { u: 'corona-world-fragment', name: '世界碎片', type: '未解之物', cat: 'mat', rarity: 'epic',
   glyph: 'g-ore', real: true, stats: [['来历', '界隙所遗'], ['用途', '待考']],
   flavor: '从裂隙里落下的一角，边缘仍在缓慢地转动。' };
+/* 击杀得到的可摆放模型：数量接真实存档（inventory[itemKey] 减去已摆放）。 */
+const BLOCK_DEF = { u: 'corona-block', name: '方块', type: '小世界材料', cat: 'mat', rarity: 'fine',
+  glyph: 'g-cube', real: true, itemKey: 'block',
+  stats: [['用途', '可以在小世界中使用'], ['摆放', '按 B 放在身前']],
+  flavor: '怪物身上掉下来的整叠方块，只在小世界里派得上用场。' };
+const BALL_DEF = { u: 'corona-ball', name: '球', type: '小世界模型', cat: 'mat', rarity: 'rare',
+  glyph: 'g-ball', real: true, itemKey: 'ball',
+  stats: [['用途', '可以在小世界中使用'], ['摆放', '按 B 放在身前']],
+  flavor: '从怪物身上滚落的圆球，表面还留着一点余温。' };
+/* 怪物与 Boss 掉落的植被：和小世界里的摆放物一一对应（itemKey = 摆放 id）。 */
+const TREE1_DEF = { u: 'corona-tree1', name: '古松', type: '小世界植被', cat: 'mat', rarity: 'rare',
+  glyph: 'g-herb', real: true, itemKey: 'tree1',
+  stats: [['用途', '可以在小世界中使用'], ['摆放', '按 B 放在身前']],
+  flavor: '从怪物身上夺回来的古松，栽在小世界里正合适。' };
+const TREE2_DEF = { u: 'corona-tree2', name: '阔叶树', type: '小世界植被', cat: 'mat', rarity: 'rare',
+  glyph: 'g-herb', real: true, itemKey: 'tree2',
+  stats: [['用途', '可以在小世界中使用'], ['摆放', '按 B 放在身前']],
+  flavor: '枝叶宽大的乔木，落在小世界也有影子。' };
+const TREE3_DEF = { u: 'corona-tree3', name: '枯槎', type: '小世界植被', cat: 'mat', rarity: 'rare',
+  glyph: 'g-herb', real: true, itemKey: 'tree3',
+  stats: [['用途', '可以在小世界中使用'], ['摆放', '按 B 放在身前']],
+  flavor: '半枯的老树，枝干虬结，比活树更有野气。' };
+const GRASS1_DEF = { u: 'corona-grass1', name: '细草', type: '小世界植被', cat: 'mat', rarity: 'common',
+  glyph: 'g-herb', real: true, itemKey: 'grass1',
+  stats: [['用途', '可以在小世界中使用'], ['摆放', '按 B 放在身前']],
+  flavor: '一小丛青草，铺在地面上就有了生气。' };
+const GRASS2_DEF = { u: 'corona-grass2', name: '秀草', type: '小世界植被', cat: 'mat', rarity: 'common',
+  glyph: 'g-herb', real: true, itemKey: 'grass2',
+  stats: [['用途', '可以在小世界中使用'], ['摆放', '按 B 放在身前']],
+  flavor: '叶片略高的草，风一过就成片地倒。' };
+const GRASS4_DEF = { u: 'corona-grass4', name: '蒿草', type: '小世界植被', cat: 'mat', rarity: 'fine',
+  glyph: 'g-herb', real: true, itemKey: 'grass4',
+  stats: [['用途', '可以在小世界中使用'], ['摆放', '按 B 放在身前']],
+  flavor: '荒野里最常见的草，扎成一丛才看得见。' };
+const GRASS5_DEF = { u: 'corona-grass5', name: '芒草', type: '小世界植被', cat: 'mat', rarity: 'fine',
+  glyph: 'g-herb', real: true, itemKey: 'grass5',
+  stats: [['用途', '可以在小世界中使用'], ['摆放', '按 B 放在身前']],
+  flavor: '穗子发白的草，秋天时会整片发亮。' };
+const REAL_BAG_DEFS = Object.freeze([FRAGMENT_DEF, BLOCK_DEF, BALL_DEF, TREE1_DEF, TREE2_DEF, TREE3_DEF,
+  GRASS1_DEF, GRASS2_DEF, GRASS4_DEF, GRASS5_DEF]);
+/* Boss 倒下时一并进包的五件兵甲；id 与后端 BOSS_EQUIPMENT 一致。 */
+const BOSS_LOOT_ITEMS = [
+  { u: 'boss-main', name: '龙牙断岳', type: '长兵', cat: 'equip', slot: 'weapon', rarity: 'epic', glyph: 'g-sword',
+    stats: [['锋芒', '128 - 168'], ['力道', '+47'], ['破甲', '+21%']],
+    flavor: '刃口还残留着龙焰的温度，握久了掌心会发烫。' },
+  { u: 'boss-helm', name: '龙鳞重盔', type: '重甲', cat: 'equip', slot: 'helm', rarity: 'epic', glyph: 'g-helm-h',
+    stats: [['护体', '+150'], ['定神', '+24'], ['抗蚀', '+12%']],
+    flavor: '每一片鳞都朝着同一个方向，像是还记着风。' },
+  { u: 'boss-chest', name: '龙脊重铠', type: '重甲', cat: 'equip', slot: 'chest', rarity: 'epic', glyph: 'g-armor',
+    stats: [['护体', '+210'], ['筋骨', '+31'], ['抗蚀', '+20%']],
+    flavor: '背脊那一道棱线取自龙骨，披上时能听见极轻的嗡鸣。' },
+  { u: 'boss-legs', name: '龙尾胫铠', type: '重甲', cat: 'equip', slot: 'legs', rarity: 'epic', glyph: 'g-legs-h',
+    stats: [['护体', '+168'], ['负重', '+18'], ['筋骨', '+12']],
+    flavor: '胫甲末端收成尾鳍的形状，走起路来却毫不拖沓。' },
+  { u: 'boss-boots', name: '龙爪战靴', type: '靴履', cat: 'equip', slot: 'boots', rarity: 'epic', glyph: 'g-boots-h',
+    stats: [['护体', '+112'], ['身法', '+24'], ['疾行', '+10%']],
+    flavor: '鞋底是三枚钩爪，踩在石上会留下极浅的白痕。' },
+];
 
 /* 世界图象：山形 / 月相（与 bag.html 同一套坐标） */
 const WS_SHAPES = [
@@ -681,11 +764,19 @@ const bag = reactive({
   tipStyle: { left: '0px', top: '0px' },
   tipItem: null,
   toast: '',
+  /* 发放入账本：Boss 兵甲只发一次；怪物装备按「已入包件数」记账，重进不会重复。 */
+  bossLoot: false,
+  monsterGear: {},
 });
 let bagToastTimer = null;
 const bagTip = ref(null);
 
-function bagDef(u) { return BAG_ITEMS.find(def => def.u === u) || null; }
+function bagDef(u) {
+  return BOSS_LOOT_ITEMS.find(def => def.u === u)
+    || MONSTER_EQUIPMENT.find(def => def.u === u)
+    || REAL_BAG_DEFS.find(def => def.u === u)
+    || null;
+}
 function bagMakeItem(def) {
   return { ...def, uid: `${def.u}#${++bagUidSeq}`, qty: def.qty || 1 };
 }
@@ -753,7 +844,10 @@ function bagSave() {
       cells: bag.cells.map(item => (item && !item.real ? { u: item.u, qty: item.qty } : null)),
       /* 只存图象偏好：世界名称是固定身份，不写档也不读档。 */
       worlds: bag.worlds.slice(0, 2).map(world => ({ art: { ...world.art } })),
-      worldCur: bag.worldCur,    }));
+      worldCur: bag.worldCur,
+      bossLoot: Boolean(bag.bossLoot),
+      monsterGear: { ...bag.monsterGear },
+    }));
   } catch { /* 界面状态不写存档，失败即忽略 */ }
 }
 function bagInit() {
@@ -792,6 +886,9 @@ function bagInit() {
       }));
       bag.worldCur = clampWorldIndex(saved.worldCur);
     }
+    bag.bossLoot = Boolean(saved.bossLoot);
+    bag.monsterGear = saved.monsterGear && typeof saved.monsterGear === 'object'
+      ? { ...saved.monsterGear } : {};
   }
   if (!bag.worlds.length) {
     bag.worlds = [WORLD_MAIN, WORLD_SMALL].map(world => ({ art: { ...world.art } }));
@@ -801,36 +898,71 @@ function bagInit() {
   while (bag.worlds.length < 2) {
     bag.worlds.push({ art: { ...WORLD_SMALL.art } });
   }
-  if (!bag.cells.length) {
-    // 未披挂的兵甲 + 消耗品 + 材料，乱序铺进格阵（与 bag.html 同一铺陈方式）
-    const equipDefs = BAG_ITEMS.filter(def => def.cat === 'equip');
-    const pool = equipDefs.filter(def => !Object.values(BAG_LOADOUT).includes(def.u)).map(bagMakeItem)
-      .concat(BAG_ITEMS.filter(def => def.cat !== 'equip').map(bagMakeItem));
-    for (let i = pool.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [pool[i], pool[j]] = [pool[j], pool[i]];
-    }
-    const floorCount = Math.min(pool.length, Math.round(BAG_TOTAL * 0.78));
-    bag.cells = Array.from({ length: BAG_TOTAL }, (_, i) => {
-      const mustFill = (BAG_TOTAL - i) <= pool.length;
-      const wantFill = pool.length
-        && (i < floorCount || Math.random() < 0.55 + (Math.floor(i / BAG_COLS) < 2 ? 0.12 : 0));
-      return mustFill || wantFill ? pool.pop() : null;
-    });
-    if (!Object.keys(bag.gear).length) {
-      Object.entries(BAG_LOADOUT).forEach(([slotId, u]) => {
-        const def = bagDef(u);
-        if (def) bag.gear[slotId] = bagMakeItem(def);
-      });
-    }
-  }
+  // 格阵默认是空的：内容全部来自存档（世界碎片 / 方块 / 球 / 装备）。
+  if (!bag.cells.length) bag.cells = Array.from({ length: BAG_TOTAL }, () => null);
+}
+/* 可摆放模型与物品栏同源：库存减去已经摆下去的数量，就是行囊里那一叠的件数。 */
+function bagRealProp(def) {
+  const data = gameplayState.value;
+  if (!data) return null;
+  const owned = data.state.inventory?.[def.itemKey] || 0;
+  const placed = placements.value.filter(entry => entry.propId === def.itemKey).length;
+  const count = Math.max(0, owned - placed);
+  return count > 0 ? { ...def, uid: def.u, qty: count, real: true, realCount: count } : null;
+}
+function bagRealItemAt(slot) {
+  const def = REAL_BAG_DEFS[slot];
+  if (!def) return null;
+  return def === FRAGMENT_DEF ? bagRealFragment() : bagRealProp(def);
 }
 function bagCellItems() {
   const source = bag.cells;
   return Array.from({ length: BAG_TOTAL }, (_, i) => {
-    if (i === 0) { const real = bagRealFragment(); if (real) return real; }
+    if (i < REAL_BAG_DEFS.length) {
+      const real = bagRealItemAt(i);
+      if (real) return real;
+    }
     return source[i] || null;
   });
+}
+/* Boss 倒下时把这 5 件兵甲铺进行囊，只发一次（ledger 跟着格阵一起存）。 */function syncBossLoot(data = gameplayState.value) {
+  if (!data || (data.state.inventory?.worldFragment || 0) <= 0 || bag.bossLoot) return [];
+  const granted = [];
+  for (const id of BOSS_LOOT_ITEMS.map(item => item.u)) {
+    const def = bagDef(id);
+    if (!def) continue;
+    const index = bag.cells.findIndex((cell, i) => i >= REAL_BAG_DEFS.length && !cell);
+    if (index === -1) break;
+    bag.cells[index] = bagMakeItem(def);
+    granted.push(def);
+  }
+  if (granted.length === BOSS_LOOT_ITEMS.length) { bag.bossLoot = true; bagSave(); }
+  return granted;
+}
+/* 小怪掉落的装备：后端只记每种累计件数，页面按「已入包件数」补齐，重进不会重复发。 */
+function syncMonsterGear(data = gameplayState.value) {
+  if (!data) return [];
+  const granted = [];
+  for (const def of MONSTER_EQUIPMENT) {
+    const owned = Number(data.state.inventory?.[def.u]) || 0;
+    let synced = Number(bag.monsterGear[def.u]) || 0;
+    while (synced < owned) {
+      const index = bag.cells.findIndex((cell, i) => i >= REAL_BAG_DEFS.length && !cell);
+      if (index === -1) break;
+      bag.cells[index] = bagMakeItem(def);
+      synced += 1;
+      bag.monsterGear[def.u] = synced;
+      granted.push(def);
+    }
+  }
+  if (granted.length) bagSave();
+  return granted;
+}
+/* 披挂 / 卸下 / 弃置都会改变后端的件数：账本跟着走，重进世界才不会重复补发。 */
+function adjustGearLedger(itemId, delta) {
+  if (!MONSTER_EQUIPMENT.some(def => def.u === itemId)) return;
+  const next = (Number(bag.monsterGear[itemId]) || 0) + delta;
+  bag.monsterGear[itemId] = Math.max(0, next);
 }
 function bagPassFilter(item) {
   if (!item) return false;
@@ -1033,6 +1165,9 @@ function bagEquipFromSlot(index) {
   bag.cells[index] = previous;            // 旧物回落到同一格，格阵不塌陷
   bagToast(`披掛 · ${SLOT_BY_ID[slotId].name} · ${item.name}`);
   bag.sel = item.uid;
+  // 后端记一次披挂：属性与伤害按它算；账本同步扣一件，重进不会又补一件。
+  adjustGearLedger(item.u, -1);
+  gameplay.equipItem(item.u).catch(() => {});
   bagSave();
 }
 function bagUnequip(slotId) {
@@ -1044,6 +1179,8 @@ function bagUnequip(slotId) {
   bag.gear[slotId] = null;
   bagToast(`卸下 · ${item.name}`);
   bag.sel = item.uid;
+  adjustGearLedger(item.u, 1);
+  gameplay.unequipItem(slotId).catch(() => {});
   bagSave();
 }
 function bagUseFromSlot(index) {
@@ -1058,6 +1195,8 @@ function bagUseFromSlot(index) {
     bag.cells[index] = null;
     if (bag.sel === entry.uid) bag.sel = null;
   }
+  // 服用效果（回气）由后端结算。
+  gameplay.useItem(entry.u).catch(() => {});
   bagSave();
 }
 function bagDropItem(uid) {
@@ -1067,6 +1206,9 @@ function bagDropItem(uid) {
   else bag.cells[found.idx] = null;
   bag.sel = null;
   bagToast(`${found.item.cat === 'equip' ? '熔去' : '弃之'} · ${found.item.name}`);
+  // 弃置要落在存档里，否则重进世界会按计数把这件东西补回来。
+  adjustGearLedger(found.item.u, -1);
+  gameplay.discardItem(found.item.u).catch(() => {});
   bagSave();
 }
 function bagDetailAct(uid, action) {
@@ -1282,6 +1424,20 @@ const worldLabel = computed(() => transitioning.value ? '切换中…'
   : inSubworld.value ? '小世界' : '主世界');
 // 小世界没有 Boss、没有怒气消耗、没有攻击目标，整条战斗 HUD 隐藏而不是显示一排禁用控件。
 const showCombatHud = computed(() => !inSubworld.value);
+// 每只普通怪物一条血条：名称来自角色表，血量来自玩法存档，上限来自后端 CONFIG。
+const monsterBars = computed(() => {
+  const data = gameplayState.value;
+  if (!data?.state?.monsters) return [];
+  return STORY_CHARACTERS.filter(character => isMonsterRole(character.role)).map(character => {
+    const hp = Math.max(0, Number(data.state.monsters?.[character.role]?.hp) || 0);
+    const max = Math.max(1, Number(data.config.monsters?.[character.role]?.hp) || hp || 1);
+    return { id: character.role, name: character.name, hp, max,
+      percent: Math.max(0, Math.min(100, 100 * hp / max)), dead: hp <= 0 };
+  });
+});
+// 屏幕只显示这一条：靠近时是哪只怪物，它就换成哪只，位置不移动。
+const nearbyMonsterBar = computed(() =>
+  monsterBars.value.find(entry => entry.id === nearbyMonsterId.value) || null);
 function viewLabel() {
   void viewTick.value;
   const mode = camera.viewMode?.();
@@ -1964,6 +2120,15 @@ onMounted(async () => {
       : snapshot.actors?.find(actor =>
         actor.actor_guid === STORY_CHARACTERS.find(character => character.role === 'boss').guid) || null;
     bossBounds = worldBounds(bossActor);
+    // 主世界的 7 只普通怪物：血条与攻击目标都用这一份（小世界没有它们）。
+    monsterActors = loadedGameplay?.role === 'child' ? []
+      : STORY_CHARACTERS.filter(character => isMonsterRole(character.role))
+        .map(character => {
+          const actor = snapshot.actors?.find(item => item.actor_guid === character.guid) || null;
+          return actor ? { id: character.role, name: character.name, actor,
+            bounds: worldBounds(actor) } : null;
+        })
+        .filter(Boolean);
     // 先知只在小世界按需生成，主世界里缺失是正常的：交互保持不可用即可。
     prophetActor = snapshot.actors?.find(actor => actor.actor_guid === PROPHET_GUID) || null;
     playerActor = player;
@@ -2086,6 +2251,20 @@ onUnmounted(() => {
           :aria-valuenow="gameplayState.state.boss.hp" :aria-valuemax="gameplayState.config.bossHp" aria-valuemin="0">
           <div class="boss-bar-lag" :style="{ width: `${bossPercent()}%` }"></div>
           <div class="boss-bar-fill" :style="{ width: `${bossPercent()}%` }"></div>
+        </div>
+      </section>
+
+      <!-- 中上部：只显示离玩家最近的那只普通怪物，靠近才出现 -->
+      <section v-if="!inventoryOpen && showCombatHud && nearbyMonsterBar" class="monster-bars"
+        aria-label="附近怪物血条">
+        <div class="monster-bar" :data-monster-role="nearbyMonsterBar.id">
+          <span class="monster-bar__name">{{ nearbyMonsterBar.name }}</span>
+          <span class="monster-bar__hp">{{ nearbyMonsterBar.hp }} / {{ nearbyMonsterBar.max }}</span>
+          <div class="monster-bar__track" role="progressbar" :aria-label="`${nearbyMonsterBar.name} 生命`"
+            :aria-valuenow="nearbyMonsterBar.hp" :aria-valuemax="nearbyMonsterBar.max" aria-valuemin="0">
+            <div class="monster-bar__lag" :style="{ width: `${nearbyMonsterBar.percent}%` }"></div>
+            <div class="monster-bar__fill" :style="{ width: `${nearbyMonsterBar.percent}%` }"></div>
+          </div>
         </div>
       </section>
 

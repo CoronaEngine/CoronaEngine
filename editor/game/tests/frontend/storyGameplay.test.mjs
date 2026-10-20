@@ -130,7 +130,7 @@ test('ten acknowledged hits grant the fragment immediately, with no red ball and
 });
 
 test('a monster swing dispatches its role and a kill reports both dropped items', async () => {
-  const monster = STORY_CHARACTERS.find(character => character.role === 'monster-em1');
+  const monster = STORY_CHARACTERS.find(character => character.role === 'monster-mantis');
   const boss = STORY_CHARACTERS.find(character => character.role === 'boss');
   const monsterActor = actorFixture(monster), bossActor = actorFixture(boss);
   const bounds = worldBounds(monsterActor);
