@@ -5,6 +5,7 @@
 #include <corona/resource/types/animation_player.h>
 #include <corona/systems/display/image_frame_metadata.h>
 #include <corona/systems/optics/viewport_gizmo_math.h>
+#include <corona/systems/optics/material_source.h>
 
 #include <ktm/ktm.h>
 #include <corona/systems/geometry/model_node_state.h>
@@ -29,6 +30,14 @@ namespace Corona {
 
 class Model;
 
+struct MeshMaterialDevice {
+    enum Slot : std::size_t { BaseColor, Normal, Metallic, Roughness, Occlusion,
+                             Emissive, Specular, SpecularColor, Count };
+    Resource::MaterialData source;
+    std::array<Horizon::HardwareImage, Count> textures;
+    std::array<std::shared_ptr<Memory::GpuMemToken>, Count> memory;
+};
+
 struct MeshDevice {
     Geometry::MeshDrawClusters draw_clusters;
     Horizon::HardwareBuffer shadowIndexBuffer;
@@ -41,6 +50,7 @@ struct MeshDevice {
 
     uint32_t materialIndex;
     Horizon::HardwareImage textureBuffer;
+    std::shared_ptr<const MeshMaterialDevice> material;
 
     // 材质颜色 (RGBA)
     std::array<float, 4> materialColor{1.0f, 1.0f, 1.0f, 1.0f};
@@ -240,6 +250,7 @@ struct AcousticsDevice {
 
 struct OpticsDevice {
     std::uintptr_t geometry_handle{};
+    std::shared_ptr<const Materials::Overrides> material_overrides;
 
     bool visible{true};  // 控制模型是否参与渲染
 

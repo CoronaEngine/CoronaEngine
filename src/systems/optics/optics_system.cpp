@@ -1,3 +1,4 @@
+#include "native_material.h"
 #include <corona/utils/scene_path_key.h>
 #include <corona/diagnostics/thread_phase.h>
 #include <corona/events/display_system_events.h>
@@ -329,6 +330,7 @@ struct RenderInstanceBatch {
         std::vector<Corona::Horizon::HardwareBuffer> vertex_storage_buffers;
         std::vector<Corona::Horizon::HardwareBuffer> index_storage_buffers;
         std::vector<Corona::Horizon::HardwareImage> sampled_textures;
+        std::vector<std::shared_ptr<const Corona::MeshMaterialDevice>> model_materials;
     };
 
     std::vector<Hardware::InstanceInfo> instances;
@@ -362,6 +364,7 @@ struct RenderInstanceBatch {
         if (slot.geo.index_storage) {
             resource_keep_alive->index_storage_buffers.push_back(slot.geo.index_storage);
         }
+        if (slot.material) resource_keep_alive->model_materials.push_back(slot.material);
         if (texture_descriptor != 0u && slot.texture) {
             resource_keep_alive->sampled_textures.push_back(slot.texture);
         }
@@ -1678,42 +1681,9 @@ bool collect_actor_instances_for_visibility(
                     multiply_ktm_mat4(model_matrix, ms.instance_transform);
                 auto material_id = static_cast<uint32_t>(batch.materials.size());
                 {
-                    Hardware::MaterialInfo mat_info{};
-
-                    const bool lighting_active =
-                        optics.bEnableLighting && !diag.force_solid_material;
-                    const float lighting_enabled = lighting_active ? 1.0f : 0.0f;
-                    mat_info.textureDescriptor = texture_descriptor;
-
-                    if (lighting_active) {
-                        mat_info.metallic = optics.metallic;
-                        mat_info.roughness = optics.roughness;
-                        mat_info.subsurface = optics.subsurface;
-                        mat_info.specular = optics.specular;
-                        mat_info.specularTint = optics.specularTint;
-                        mat_info.anisotropic = optics.anisotropic;
-                        mat_info.sheen = optics.sheen;
-                        mat_info.sheenTint = optics.sheenTint;
-                        mat_info.clearcoat = optics.clearcoat;
-                        mat_info.clearcoatGloss = optics.clearcoatGloss;
-                    } else {
-                        mat_info.metallic = 0.0f;
-                        mat_info.roughness = 1.0f;
-                        mat_info.subsurface = 0.0f;
-                        mat_info.specular = 0.0f;
-                        mat_info.specularTint = 0.0f;
-                        mat_info.anisotropic = 0.0f;
-                        mat_info.sheen = 0.0f;
-                        mat_info.sheenTint = 0.0f;
-                        mat_info.clearcoat = 0.0f;
-                        mat_info.clearcoatGloss = 0.0f;
-                    }
-
-                    mat_info.lightingEnabled = lighting_enabled;
-                    mat_info.materialColor = ktm::fvec4{
-                        ms.material_color[0], ms.material_color[1],
-                        ms.material_color[2], ms.material_color[3]};
-                    batch.materials.push_back(mat_info);
+                    batch.materials.push_back(Corona::Systems::OpticsDetail::pack_native_material(
+                        ms, optics, texture_descriptor, diag.disable_textures || diag.force_solid_material,
+                        optics.bEnableLighting && !diag.force_solid_material));
                 }
                 log_optics_material_once(actor_handle,
                                          optics.geometry_handle,
@@ -4154,36 +4124,9 @@ void OpticsSystem::optics_pipeline(float frame_count, uint64_t frame_index) {
                                 const ktm::fmat4x4 mesh_model_matrix =
                                     multiply_ktm_mat4(model_matrix, ms.instance_transform);
                                 auto materialID = static_cast<uint32_t>(batch.materials.size());
-                                {
-                                    Hardware::MaterialInfo mat_info{};
-                                    const bool lighting_active =
-                                        optics.bEnableLighting && !diag.force_solid_material;
-                                    float lighting_enabled = lighting_active ? 1.0f : 0.0f;
-                                    mat_info.textureDescriptor = texture_descriptor;
-                                    if (lighting_active) {
-                                        mat_info.metallic = optics.metallic;
-                                        mat_info.roughness = optics.roughness;
-                                        mat_info.subsurface = optics.subsurface;
-                                        mat_info.specular = optics.specular;
-                                        mat_info.specularTint = optics.specularTint;
-                                        mat_info.anisotropic = optics.anisotropic;
-                                        mat_info.sheen = optics.sheen;
-                                        mat_info.sheenTint = optics.sheenTint;
-                                        mat_info.clearcoat = optics.clearcoat;
-                                        mat_info.clearcoatGloss = optics.clearcoatGloss;
-                                    } else {
-                                        mat_info.metallic = 0.0f; mat_info.roughness = 1.0f;
-                                        mat_info.subsurface = 0.0f; mat_info.specular = 0.0f;
-                                        mat_info.specularTint = 0.0f; mat_info.anisotropic = 0.0f;
-                                        mat_info.sheen = 0.0f; mat_info.sheenTint = 0.0f;
-                                        mat_info.clearcoat = 0.0f; mat_info.clearcoatGloss = 0.0f;
-                                    }
-                                    mat_info.lightingEnabled = lighting_enabled;
-                                    mat_info.materialColor = ktm::fvec4{
-                                        ms.material_color[0], ms.material_color[1],
-                                        ms.material_color[2], ms.material_color[3]};
-                                    batch.materials.push_back(mat_info);
-                                }
+                                batch.materials.push_back(Corona::Systems::OpticsDetail::pack_native_material(
+                                    ms, optics, texture_descriptor, diag.disable_textures || diag.force_solid_material,
+                                    optics.bEnableLighting && !diag.force_solid_material));
                                 log_optics_material_once(actor_handle,
                                                          optics.geometry_handle,
                                                          ms.mesh_index,

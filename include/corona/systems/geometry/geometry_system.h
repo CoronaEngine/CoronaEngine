@@ -1,5 +1,7 @@
 #pragma once
 
+namespace Corona { struct MeshMaterialDevice; }
+
 #include <horizon.h>
 
 #include <corona/events/geometry_system_events.h>
@@ -373,6 +375,8 @@ class GeometrySystem : public Kernel::SystemBase {
         ktm::fmat4x4           instance_transform{ktm::fmat4x4::from_eye()};
         RenderMeshBuffers      geo;              ///< LOD 解析后的几何缓冲
         Horizon::HardwareImage texture;          ///< 贴图句柄（null = 无贴图）
+        std::shared_ptr<const MeshMaterialDevice> material;
+        std::uint32_t material_index = 0;
         std::array<float, 4>   material_color = {1.f, 1.f, 1.f, 1.f}; ///< 材质颜色 RGBA
         bool                   valid = false;    ///< false = 首次加载中，唯一合法的跳过原因
         bool                   texture_ready = false;

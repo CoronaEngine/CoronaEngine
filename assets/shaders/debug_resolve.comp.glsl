@@ -193,7 +193,7 @@ InstanceInfo loadInstanceInfo(uint instanceID)
 }
 
 // ============================================================================
-// MaterialInfo layout (64 bytes = 16 uints)
+// MaterialInfo layout (128 bytes = 32 uints)
 // ============================================================================
 
 struct MaterialInfo
@@ -215,7 +215,7 @@ struct MaterialInfo
 
 MaterialInfo loadMaterialInfo(uint materialID)
 {
-    uint base = materialID * 16u;
+    uint base = materialID * 32u;
     MaterialInfo mat;
     mat.textureDescriptor = readUint(pushConsts.materialTableBufferIndex, base);
     mat.metallic          = readFloat(pushConsts.materialTableBufferIndex, base + 1u);

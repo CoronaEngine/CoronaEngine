@@ -165,7 +165,7 @@ InstanceInfo loadInstanceInfo(uint instanceID)
 }
 
 // ============================================================================
-// MaterialInfo layout (64 bytes = 16 uints)
+// MaterialInfo layout (128 bytes = 32 uints)
 // ============================================================================
 
 struct MaterialInfo
@@ -183,11 +183,23 @@ struct MaterialInfo
     float clearcoatGloss;
     float lightingEnabled;
     vec4  materialColor;
+    uint normalDescriptor;
+    uint metallicDescriptor;
+    uint roughnessDescriptor;
+    uint occlusionDescriptor;
+    uint emissiveDescriptor;
+    uint specularDescriptor;
+    uint specularColorDescriptor;
+    uint flags;
+    vec3 emissive;
+    float normalScale;
+    vec3 specularColor;
+    float occlusionStrength;
 };
 
 MaterialInfo loadMaterialInfo(uint materialID)
 {
-    uint base = materialID * 16u;
+    uint base = materialID * 32u;
     MaterialInfo mat;
     mat.textureDescriptor = readUint(pushConsts.materialTableBufferIndex, base);
     mat.metallic          = readFloat(pushConsts.materialTableBufferIndex, base + 1u);
@@ -202,6 +214,18 @@ MaterialInfo loadMaterialInfo(uint materialID)
     mat.clearcoatGloss    = readFloat(pushConsts.materialTableBufferIndex, base + 10u);
     mat.lightingEnabled   = readFloat(pushConsts.materialTableBufferIndex, base + 11u);
     mat.materialColor     = readVec4(pushConsts.materialTableBufferIndex, base + 12u);
+    mat.normalDescriptor = readUint(pushConsts.materialTableBufferIndex, base + 16u);
+    mat.metallicDescriptor = readUint(pushConsts.materialTableBufferIndex, base + 17u);
+    mat.roughnessDescriptor = readUint(pushConsts.materialTableBufferIndex, base + 18u);
+    mat.occlusionDescriptor = readUint(pushConsts.materialTableBufferIndex, base + 19u);
+    mat.emissiveDescriptor = readUint(pushConsts.materialTableBufferIndex, base + 20u);
+    mat.specularDescriptor = readUint(pushConsts.materialTableBufferIndex, base + 21u);
+    mat.specularColorDescriptor = readUint(pushConsts.materialTableBufferIndex, base + 22u);
+    mat.flags = readUint(pushConsts.materialTableBufferIndex, base + 23u);
+    mat.emissive = readVec3(pushConsts.materialTableBufferIndex, base + 24u);
+    mat.normalScale = readFloat(pushConsts.materialTableBufferIndex, base + 27u);
+    mat.specularColor = readVec3(pushConsts.materialTableBufferIndex, base + 28u);
+    mat.occlusionStrength = readFloat(pushConsts.materialTableBufferIndex, base + 31u);
     return mat;
 }
 
@@ -441,6 +465,9 @@ vec3 DisneyBRDF(vec3 V, vec3 Normal, vec3 Tangent, vec3 Bitangent,
     float ndoth = max(dot(N, H), 0.0);
     float ldoth = max(dot(L, H), 0.0);
 
+    bool importedMR = (matl.flags & 32u) != 0u;
+    float specularWeight = importedMR ? matl.sheenTint : 1.0;
+    vec3 dielectricF0 = clamp(matl.specularColor * matl.specular * 0.08, vec3(0), vec3(1)) * specularWeight;
     // Sky-driven ambient (SH9). evalSkySH returns the directional irradiance
     // E(n) from the atmospheric model; Lambertian exitance = albedo·E(n)/π.
     // Perf toggle (skyAmbientEnabled): when off, skip the whole SH ambient —
@@ -459,13 +486,14 @@ vec3 DisneyBRDF(vec3 V, vec3 Normal, vec3 Tangent, vec3 Bitangent,
     }
     vec3 ambient = albedo * (1.0 - matl.metallic) * irradiance * (1.0 / PI);
     ambient *= clamp(ambientOcclusion, 0.0, 1.0);
+    if (importedMR) ambient *= 1.0 - max(dielectricF0.r, max(dielectricF0.g, dielectricF0.b));
 
     if (ndotl <= 0.0) return ambient;
 
     // --- Derived color values ---
     float Cdlum = luminance(albedo);
     vec3 Ctint = Cdlum > 0.0 ? albedo / Cdlum : vec3(1.0);
-    vec3 Cspec0 = mix(matl.specular * 0.08 * mix(vec3(1.0), Ctint, matl.specularTint),
+    vec3 Cspec0 = mix(dielectricF0 * mix(vec3(1.0), Ctint, matl.specularTint),
                       albedo, matl.metallic);
     vec3 Csheen = mix(vec3(1.0), Ctint, matl.sheenTint);
 
@@ -494,7 +522,7 @@ vec3 DisneyBRDF(vec3 V, vec3 Normal, vec3 Tangent, vec3 Bitangent,
             * AnisotropicSmithGGX(ndotv, dot(V, X), dot(V, Y), Gax, Gay);
 
     float FH = SchlickFresnel(ldoth);
-    vec3 F = mix(Cspec0, vec3(1.0), FH);
+    vec3 F = mix(Cspec0, vec3(mix(specularWeight, 1.0, matl.metallic)), FH);
 
     // === Sheen lobe ===
     vec3 Fsheen = FH * matl.sheen * Csheen;
@@ -507,6 +535,10 @@ vec3 DisneyBRDF(vec3 V, vec3 Normal, vec3 Tangent, vec3 Bitangent,
     // === Combine all lobes ===
     vec3 diffuse = (1.0 / PI) * (mix(Fd, ss, matl.subsurface) * albedo + Fsheen)
                    * (1.0 - matl.metallic);
+    if (importedMR) {
+        vec3 dielectricF = mix(dielectricF0, vec3(specularWeight), FH);
+        diffuse *= 1.0 - max(dielectricF.r, max(dielectricF.g, dielectricF.b));
+    }
     vec3 specular = Ds * F * G;
     vec3 clearcoat = vec3(0.25 * matl.clearcoat * Gr * Fr * Dr);
 
@@ -515,6 +547,7 @@ vec3 DisneyBRDF(vec3 V, vec3 Normal, vec3 Tangent, vec3 Bitangent,
 
 struct Surface {
     vec3 position;
+    vec3 geometricNormal;
     vec3 normal;
     vec3 tangent;
     vec3 bitangent;
@@ -652,11 +685,14 @@ bool decodeSurface(ivec2 pixel, out Surface surface)
         T = normalize(cross(abs(interpNormal.z) < 0.9 ? vec3(0,0,1) : vec3(0,1,0), interpNormal));
         B = normalize(cross(interpNormal, T));
     }
+    // Preserve the UV orientation, including mirrored UV islands. Discarding
+    // this sign reverses the green normal-map channel on half of a model.
+    float tangentSign = dot(cross(interpNormal, T), B) < 0.0 ? -1.0 : 1.0;
     // Re-orthogonalize
     T -= dot(T, interpNormal) * interpNormal;
     if (dot(T,T) < 1e-10) T = cross(abs(interpNormal.z) < 0.9 ? vec3(0,0,1) : vec3(0,1,0), interpNormal);
     T = normalize(T);
-    B = normalize(cross(interpNormal, T));
+    B = normalize(cross(interpNormal, T)) * tangentSign;
 
     // --- Sample material ---
     vec4 baseColor = matl.materialColor;
@@ -666,6 +702,41 @@ bool decodeSurface(ivec2 pixel, out Surface surface)
         if (finiteVec4(texSample)) {
             baseColor.rgb *= texSample.rgb;
         }
+    }
+
+    // Material data textures are LINEAR views. Colour/emissive/specular RGB
+    // are sRGB views; the sampler decodes those before applying linear factors.
+    vec4 metalSample = vec4(1);
+    if (matl.metallicDescriptor != 0u) {
+        metalSample = fetchMaterialTexture(matl.metallicDescriptor, interpUV, uvDx, uvDy);
+        if (finiteVec4(metalSample)) matl.metallic *= metalSample[matl.flags & 3u];
+    }
+    if (matl.roughnessDescriptor != 0u) {
+        vec4 sampleValue = matl.roughnessDescriptor == matl.metallicDescriptor ? metalSample :
+            fetchMaterialTexture(matl.roughnessDescriptor, interpUV, uvDx, uvDy);
+        if (finiteVec4(sampleValue)) matl.roughness *= sampleValue[(matl.flags >> 2u) & 3u];
+    }
+    float materialAO = 1.0;
+    if (matl.occlusionDescriptor != 0u) {
+        vec4 sampleValue = matl.occlusionDescriptor == matl.metallicDescriptor ? metalSample :
+            fetchMaterialTexture(matl.occlusionDescriptor, interpUV, uvDx, uvDy);
+        if (finiteVec4(sampleValue)) materialAO = mix(1.0, sampleValue.r, matl.occlusionStrength);
+    }
+    matl.occlusionStrength = clamp(materialAO, 0.0, 1.0);
+    if (matl.emissiveDescriptor != 0u) {
+        vec4 sampleValue = fetchMaterialTexture(matl.emissiveDescriptor, interpUV, uvDx, uvDy);
+        if (finiteVec4(sampleValue)) matl.emissive *= sampleValue.rgb;
+    }
+    if (matl.specularDescriptor != 0u) {
+        vec4 sampleValue = fetchMaterialTexture(matl.specularDescriptor, interpUV, uvDx, uvDy);
+        if (finiteVec4(sampleValue)) {
+            if ((matl.flags & 32u) != 0u) matl.sheenTint *= sampleValue.a;
+            else matl.specular *= sampleValue.a;
+        }
+    }
+    if (matl.specularColorDescriptor != 0u) {
+        vec4 sampleValue = fetchMaterialTexture(matl.specularColorDescriptor, interpUV, uvDx, uvDy);
+        if (finiteVec4(sampleValue)) matl.specularColor *= sampleValue.rgb;
     }
 
     matl.metallic = clamp(matl.metallic, 0.0, 1.0);
@@ -679,7 +750,24 @@ bool decodeSurface(ivec2 pixel, out Surface surface)
         ? min(0.18, 0.5*(dot(normalDx,normalDx)+dot(normalDy,normalDy))) : 0.0;
     matl.roughness = sqrt(clamp(matl.roughness*matl.roughness + variance, 0.045*0.045, 1.0));
     matl.anisotropic = clamp(matl.anisotropic, 0.0, 0.99);
+    vec3 geometricNormal = interpNormal;
+    if (matl.normalDescriptor != 0u && matl.normalScale != 0.0) {
+        vec3 mapped = fetchMaterialTexture(matl.normalDescriptor, interpUV, uvDx, uvDy).xyz * 2.0 - 1.0;
+        mapped.xy *= matl.normalScale;
+        if (finiteVec3(mapped) && dot(mapped,mapped) > 1e-8)
+            interpNormal = normalize(mat3(T,B,interpNormal) * normalize(mapped));
+        T -= interpNormal * dot(T,interpNormal);
+        if (dot(T,T) < 1e-10) T = cross(abs(interpNormal.z) < 0.9 ? vec3(0,0,1) : vec3(0,1,0),interpNormal);
+        T = normalize(T);
+        B = normalize(cross(interpNormal,T)) * tangentSign;
+    }
+    if ((matl.flags & 16u) != 0u && dot(geometricNormal,readVec3(pushConsts.uniformBufferIndex,36u)-interpPos) < 0.0) {
+        geometricNormal = -geometricNormal;
+        interpNormal = -interpNormal;
+        B = -B;
+    }
     surface.position = interpPos;
+    surface.geometricNormal = geometricNormal;
     surface.normal = interpNormal;
     surface.tangent = T;
     surface.bitangent = B;
@@ -703,7 +791,7 @@ float ambientOcclusion(ivec2 pixel, Surface surface) {
     mat4 projection = readMat4(pushConsts.uniformBufferIndex, 60u);
     mat4 inverseProjection = readMat4(pushConsts.uniformBufferIndex, 76u);
     vec3 p = (view * vec4(surface.position, 1)).xyz;
-    vec3 n = normalize(mat3(view) * surface.normal);
+    vec3 n = normalize(mat3(view) * surface.geometricNormal);
     const float radius = 0.6;
     float radiusPixels = clamp(abs(projection[1][1]) * radius * float(pushConsts.gbufferSize.y) / (2.0 * max(abs(p.z), 0.01)), 1.0, 192.0);
     float occlusion = 0.0;
@@ -738,10 +826,10 @@ float ambientOcclusion(ivec2 pixel, Surface surface) {
 }
 
 vec3 shadeDirect(Surface s, float ao, vec3 viewDirection) {
-    if (s.material.lightingEnabled <= 0.5) return s.baseColor;
-    float shadow = computeSunShadow(s.position, s.normal);
-    return DisneyBRDF(viewDirection,s.normal,s.tangent,s.bitangent,
-        pushConsts.lightColor,s.baseColor,s.material,shadow,ao);
+    if (s.material.lightingEnabled <= 0.5) return s.baseColor + s.material.emissive;
+    float shadow = computeSunShadow(s.position, s.geometricNormal);
+    return s.material.emissive + DisneyBRDF(viewDirection,s.normal,s.tangent,s.bitangent,
+        pushConsts.lightColor,s.baseColor,s.material,shadow,ao * s.material.occlusionStrength);
 }
 
 // Screen-space reflection using perspective-correct ray segments and depth
@@ -849,8 +937,10 @@ vec3 reflection(Surface s, float ao) {
     vec3 v = normalize(eye-s.position);
     vec3 r = reflect(-v,s.normal);
     float roughness = s.material.roughness;
-    vec3 f0 = mix(vec3(0.08 * clamp(s.material.specular,0.0,1.0)),s.baseColor,s.material.metallic);
-    vec3 fresnel = f0 + (vec3(1)-f0) * pow(1.0-max(dot(s.normal,v),0.0),5.0);
+    float weight = (s.material.flags & 32u) != 0u ? s.material.sheenTint : 1.0;
+    vec3 f0 = mix(clamp(s.material.specularColor * (0.08 * s.material.specular),vec3(0),vec3(1))*weight,s.baseColor,s.material.metallic);
+    vec3 f90 = vec3(mix(weight, 1.0, s.material.metallic));
+    vec3 fresnel = mix(f0, f90, pow(1.0-max(dot(s.normal,v),0.0),5.0));
     // SH provides a bounded low-frequency fallback at screen edges and misses.
     vec3 radiance = (pushConsts.featureFlags & 4u) != 0u ? max(evalSkySH(r,pushConsts.skyIrradianceSHBufferIndex),vec3(0)) / PI : vec3(0);
     if ((pushConsts.featureFlags & 2u) != 0u && roughness < pushConsts.ssrMaxRoughness && max(fresnel.x,max(fresnel.y,fresnel.z)) > 0.02) {
@@ -863,7 +953,7 @@ vec3 reflection(Surface s, float ao) {
             radiance = mix(radiance,shadeDirect(hit,1.0,-r),confidence);
         }
     }
-    return radiance * fresnel * (1.0-0.65*roughness) * mix(1.0,ao,roughness);
+    return radiance * fresnel * (1.0-0.65*roughness) * mix(1.0,ao * s.material.occlusionStrength,roughness);
 }
 
 void main() {
