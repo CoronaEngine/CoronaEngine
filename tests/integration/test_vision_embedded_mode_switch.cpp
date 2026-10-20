@@ -7,6 +7,7 @@
 #include "base/sensor/sensor.h"
 #include "vision/vision_camera_adapter.h"
 #include "vision/vision_external_live_aabb.h"
+#include "vision/vision_zero_copy_bridge.h"
 #include <filesystem>
 #include <fstream>
 #include <cmath>
@@ -1407,7 +1408,41 @@ struct VisionEmbeddedModeSwitchTest {
         }
         std::cout << "PASS: scene assets reused across algorithms, reload and GPU retirement\n";
     }
-    static void run() {
+    static void check_shared_display(vision::Pipeline& pipeline) {
+        const auto resolution = pipeline.frame_buffer()->resolution();
+        Vision::VisionZeroCopyBridge bridge;
+        expect(bridge.ensure(pipeline, resolution.x, resolution.y),
+               "Vision display must export and import Vulkan external memory");
+        const auto descriptor = bridge.imported().store_descriptor();
+        for (int frame = 0; frame < 3; ++frame) {
+            pipeline.upload_data();
+            pipeline.display(1.0 / 60.0);
+            expect(bridge.ensure(pipeline, resolution.x, resolution.y) &&
+                       bridge.copy_from_framebuffer(pipeline),
+                   "consecutive Vision frames must transfer through the shared buffer");
+            expect(bridge.valid() && !bridge.failed() &&
+                       bridge.imported().store_descriptor() == descriptor,
+                   "steady-state display must reuse its shared allocation");
+        }
+        expect(bridge.ensure(pipeline, resolution.x + 1, resolution.y),
+               "shared buffer resize must reallocate and import successfully");
+        expect(!bridge.copy_from_framebuffer(pipeline) && bridge.failed() && !bridge.valid(),
+               "mismatched framebuffer must fail instead of publishing stale pixels");
+        expect(!bridge.ensure(pipeline, resolution.x, resolution.y) &&
+                   !bridge.copy_from_framebuffer(pipeline),
+               "a failed bridge must remain stopped until view recreation");
+
+        Vision::VisionZeroCopyBridge recreated;
+        expect(recreated.ensure(pipeline, resolution.x, resolution.y) &&
+                   recreated.copy_from_framebuffer(pipeline),
+               "view recreation must restore shared GPU display after a failure");
+        Vision::VisionZeroCopyBridge empty;
+        expect(!empty.ensure(pipeline, 0, resolution.y) && empty.failed() &&
+                   !empty.ensure(pipeline, resolution.x, resolution.y),
+               "allocation failure must latch without retrying each frame");
+        std::cout << "PASS: Vulkan shared display, reuse, resize, failure latch and recreation\n";
+    }
+    static void run(bool shared_display_only = false) {
         namespace fs = std::filesystem;
         const auto original_cwd = fs::current_path();
         const auto base = original_cwd / "embedded-mode-switch-test-assets";
@@ -1447,6 +1482,15 @@ struct VisionEmbeddedModeSwitchTest {
         expect(system.prepare_vision_camera_view(system.active_vision_runtime(), 101,
                    16, 16, false, false), "camera must render before the unused base renderer");
         render(*pt, "PT-camera-before-base");
+        if (shared_display_only) {
+            check_shared_display(*pt);
+            pt.reset();
+            system.clear_vision_runtimes();
+            fs::remove(base / "albedo.tga");
+            fs::remove(base / "triangle.obj");
+            fs::remove(base);
+            return;
+        }
         pt->activate_view_context(0);
         pt->commit_command();
         render(*pt, "PT");
@@ -1790,7 +1834,9 @@ int main(int argc, char** argv) {
         Corona::Systems::VisionEmbeddedModeSwitchTest::check_reblur_settings_api();
         Corona::Systems::VisionEmbeddedModeSwitchTest::check_relax_settings_api();
         Corona::Systems::VisionEmbeddedModeSwitchTest::check_frame_timing();
-        if (argc == 2 && std::string(argv[1]) == "--scene-asset-reuse") {
+        if (argc == 2 && std::string(argv[1]) == "--shared-display") {
+            Corona::Systems::VisionEmbeddedModeSwitchTest::run(true);
+        } else if (argc == 2 && std::string(argv[1]) == "--scene-asset-reuse") {
             Corona::Systems::VisionEmbeddedModeSwitchTest::check_scene_asset_reuse();
         } else if ((argc == 3 || (argc == 4 && std::string(argv[3]) == "--denoise")) &&
             std::string(argv[1]) == "--profile-switches") {

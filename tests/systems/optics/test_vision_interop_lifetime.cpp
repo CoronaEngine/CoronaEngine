@@ -11,7 +11,6 @@
 namespace {
 
 using Corona::Systems::Vision::drain_vision_interop_submissions;
-using Corona::Systems::Vision::vision_zero_copy_disabled_from_value;
 
 [[noreturn]] void fail(std::string_view message) {
     std::cerr << "FAIL: " << message << '\n';
@@ -25,23 +24,6 @@ void expect(bool condition, std::string_view message) {
 }
 
 using Receipt = Corona::Horizon::SubmitReceipt;
-
-void zero_copy_disable_flag_accepts_boolean_values() {
-    expect(!vision_zero_copy_disabled_from_value(nullptr),
-           "unset zero-copy flag should keep zero-copy enabled");
-    expect(!vision_zero_copy_disabled_from_value(""),
-           "empty zero-copy flag should keep zero-copy enabled");
-    expect(!vision_zero_copy_disabled_from_value("0"),
-           "zero should keep zero-copy enabled");
-    expect(!vision_zero_copy_disabled_from_value("false"),
-           "false should keep zero-copy enabled");
-    expect(!vision_zero_copy_disabled_from_value("OFF"),
-           "OFF should keep zero-copy enabled");
-    expect(vision_zero_copy_disabled_from_value("1"),
-           "one should disable zero-copy");
-    expect(vision_zero_copy_disabled_from_value("true"),
-           "true should disable zero-copy");
-}
 
 void interop_resources_are_released_only_after_submissions_finish() {
     std::unordered_map<std::uintptr_t, Receipt> receipts{
@@ -71,7 +53,6 @@ void interop_resources_are_released_only_after_submissions_finish() {
 }  // namespace
 
 int main() {
-    zero_copy_disable_flag_accepts_boolean_values();
     interop_resources_are_released_only_after_submissions_finish();
     std::cout << "Vision interop lifetime tests passed\n";
     return 0;

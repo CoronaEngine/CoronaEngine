@@ -2440,13 +2440,6 @@ struct OpticsSystem::UiViewResources {
     uint64_t last_used_frame = 0;
 };
 
-[[nodiscard]] bool vision_zero_copy_forced_disabled() {
-    static const bool disabled =
-        Vision::vision_zero_copy_disabled_from_value(
-            std::getenv("CORONA_VISION_DISABLE_ZERO_COPY"));
-    return disabled;
-}
-
 struct OpticsSystem::VisionPipelineRuntime {
     ocarina::SP<vision::Pipeline> pipeline;
     std::shared_ptr<VisionSceneResource> scene_resource;
@@ -2462,9 +2455,6 @@ struct OpticsSystem::VisionPipelineRuntime {
     // Zero-copy path: shares Vision's pre-tonemap linear color buffer with Vulkan
     // and resolves it via the vision_resolve compute pass.
     std::unordered_map<std::uintptr_t, std::unique_ptr<Vision::VisionZeroCopyBridge>> bridges;
-    std::unordered_set<std::uintptr_t> zero_copy_disabled;
-    std::unordered_map<std::uintptr_t, Horizon::HardwareBuffer> readback_buffers;
-    std::unordered_map<std::uintptr_t, std::vector<ocarina::float4>> readback_pixels;
     std::unordered_set<std::uintptr_t> retained_contexts;
     std::unordered_map<std::uintptr_t, bool> view_denoise_states;
     std::unordered_map<std::uintptr_t, CameraVisionDenoiser> view_denoiser_types;
@@ -2567,9 +2557,6 @@ struct OpticsSystem::VisionPipelineRuntime {
 
     void clear_camera_runtime_state() noexcept {
         bridges.clear();
-        zero_copy_disabled.clear();
-        readback_buffers.clear();
-        readback_pixels.clear();
         retained_contexts.clear();
         view_denoise_states.clear();
         view_denoiser_types.clear();
@@ -2678,9 +2665,6 @@ bool OpticsSystem::prepare_vision_camera_view(VisionPipelineRuntime& runtime,
             pipeline->commit_command();
             runtime.wait_for_interop_submission(camera_handle, "view context recreation");
             runtime.bridges.erase(camera_handle);
-            runtime.zero_copy_disabled.erase(camera_handle);
-            runtime.readback_buffers.erase(camera_handle);
-            runtime.readback_pixels.erase(camera_handle);
             runtime.retained_contexts.erase(camera_handle);
             runtime.view_denoise_states.erase(camera_handle);
             runtime.view_denoiser_types.erase(camera_handle);
@@ -6874,44 +6858,6 @@ void OpticsSystem::run_vision_frame(float frame_count, uint64_t frame_index) {
                     runtime.view_denoiser_types.erase(camera_handle);
                 }
             }
-            for (auto it = runtime.readback_buffers.begin();
-                 it != runtime.readback_buffers.end();) {
-                if (active_contexts.contains(it->first)) {
-                    ++it;
-                    continue;
-                }
-                const auto camera_handle = it->first;
-                bool camera_exists = false;
-                bool retain_context = false;
-                if (auto camera = SharedDataHub::instance().camera_storage().try_acquire_read(
-                        camera_handle)) {
-                    camera_exists = true;
-                    retain_context = camera->surface != nullptr;
-                }
-
-                if (retain_context) {
-                    if (!runtime.retained_contexts.contains(camera_handle)) {
-                        pipeline->commit_command();
-                        pipeline->invalidate_view_context(camera_handle);
-                        runtime.retained_contexts.insert(camera_handle);
-                    }
-                    ++it;
-                    continue;
-                }
-
-                pipeline->commit_command();
-                runtime.readback_pixels.erase(camera_handle);
-                runtime.zero_copy_disabled.erase(camera_handle);
-                it = runtime.readback_buffers.erase(it);
-                if (camera_exists) {
-                    pipeline->invalidate_view_context(camera_handle);
-                    runtime.retained_contexts.insert(camera_handle);
-                } else {
-                    pipeline->remove_view_context(camera_handle);
-                    runtime.view_denoise_states.erase(camera_handle);
-                    runtime.view_denoiser_types.erase(camera_handle);
-                }
-            }
             for (auto it = runtime.retained_contexts.begin();
                  it != runtime.retained_contexts.end();) {
                 if (SharedDataHub::instance().camera_storage().try_acquire_read(*it)) {
@@ -6951,6 +6897,16 @@ void OpticsSystem::run_vision_frame(float frame_count, uint64_t frame_index) {
                     return;
                 }
 
+                auto& bridge = runtime.bridges[cam_handle];
+                if (!bridge) {
+                    bridge = std::make_unique<Vision::VisionZeroCopyBridge>();
+                }
+                // Keep failed bridges tracked for normal view cleanup. A resize,
+                // scene reload or view recreation provides a fresh retry.
+                if (bridge->failed()) {
+                    return;
+                }
+
                 Vision::sync_vision_camera(*pipeline, camera);
                 pipeline->upload_data();
                 pipeline->display(1.0 / 60.0);
@@ -6965,59 +6921,16 @@ void OpticsSystem::run_vision_frame(float frame_count, uint64_t frame_index) {
                 const uint32_t w = res.x;
                 const uint32_t h = res.y;
 
-                const uint64_t pixel_count = static_cast<uint64_t>(w) * static_cast<uint64_t>(h);
-                std::optional<uint32_t> vision_src_descriptor;
-                bool used_zero_copy = false;
-                if (vision_device_->supports_buffer_export() &&
-                    !vision_zero_copy_forced_disabled() &&
-                    !runtime.zero_copy_disabled.contains(cam_handle)) {
-                    // Vision is about to write the shared allocation. The preceding Vulkan
-                    // resolve must finish first until external timeline semaphores replace
-                    // this conservative CPU-side synchronization.
-                    runtime.wait_for_interop_submission(cam_handle,
-                                                        "zero-copy buffer reuse",
-                                                        false);
-                    auto& bridge = runtime.bridges[cam_handle];
-                    if (!bridge) {
-                        bridge = std::make_unique<Vision::VisionZeroCopyBridge>();
-                    }
-                    if (bridge->ensure(*pipeline, w, h) &&
-                        bridge->copy_from_framebuffer(*pipeline)) {
-                        vision_src_descriptor = bridge->imported().store_descriptor();
-                        used_zero_copy = true;
-                    } else {
-                        runtime.wait_for_interop_submission(cam_handle, "failed bridge release");
-                        runtime.bridges.erase(cam_handle);
-                        runtime.zero_copy_disabled.insert(cam_handle);
-                    }
+                // The preceding resolve must finish before Vision reuses or
+                // reallocates its shared buffer. Frame pixels never visit the CPU.
+                runtime.wait_for_interop_submission(cam_handle, "shared buffer reuse", false);
+                if (!bridge->ensure(*pipeline, w, h) ||
+                    !bridge->copy_from_framebuffer(*pipeline)) {
+                    // The bridge logs and latches the failure. Do not resolve an
+                    // invalid descriptor or publish stale pixels as a new frame.
+                    return;
                 }
-
-                if (!vision_src_descriptor) {
-                    auto& pixels = runtime.readback_pixels[cam_handle];
-                    pixels.resize(pixel_count);
-
-                    const auto src = fb->display_source_buffer();
-                    pipeline->stream() << src.download(pixels.data())
-                                       << ocarina::synchronize()
-                                       << ocarina::commit();
-
-                    auto& fallback_buffer = runtime.readback_buffers[cam_handle];
-                    const uint64_t float_count = pixel_count * 4u;
-                    if (!fallback_buffer ||
-                        fallback_buffer.get_element_count() != float_count) {
-                        fallback_buffer = make_storage_buffer<float>(
-                            float_count, "optics.vision_readback");
-                    }
-                    if (!fallback_buffer.write_bytes(
-                            std::as_bytes(std::span<const ocarina::float4>(
-                                pixels.data(), pixels.size())))) {
-                        CFW_LOG_ERROR(
-                            "OpticsSystem: unable to upload Vision fallback buffer for camera {}",
-                            cam_handle);
-                        return;
-                    }
-                    vision_src_descriptor = fallback_buffer.store_descriptor();
-                }
+                const uint32_t vision_src_descriptor = bridge->imported().store_descriptor();
 
                 void* surface = camera.surface;
                 hardware_->gbufferSize = ktm::uvec2{w, h};
@@ -7034,7 +6947,7 @@ void OpticsSystem::run_vision_frame(float frame_count, uint64_t frame_index) {
                 {
                     auto& visionResolve = *hardware_->visionResolvePipeline;
                     visionResolve.pushConsts.gbufferSize = upload_value(hardware_->gbufferSize);
-                    visionResolve.pushConsts.srcBufferIndex = *vision_src_descriptor;
+                    visionResolve.pushConsts.srcBufferIndex = vision_src_descriptor;
                     visionResolve.pushConsts.outputImage =
                         target.final_output.store_descriptor();
                     visionResolve.pushConsts.exposure = 1.0f;
@@ -7057,10 +6970,7 @@ void OpticsSystem::run_vision_frame(float frame_count, uint64_t frame_index) {
                 const Horizon::SubmitReceipt vision_submit_receipt =
                     stream << Horizon::commit();
                 hardware_->last_receipt = vision_submit_receipt;
-                if (used_zero_copy) {
-                    runtime.interop_submissions.insert_or_assign(cam_handle,
-                                                                 vision_submit_receipt);
-                }
+                runtime.interop_submissions.insert_or_assign(cam_handle, vision_submit_receipt);
 
                 process_pending_screenshots(cam_handle, *presented);
 

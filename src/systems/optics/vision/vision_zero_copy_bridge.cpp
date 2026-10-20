@@ -31,7 +31,20 @@ void VisionZeroCopyBridge::release() {
     valid_ = false;
 }
 
+bool VisionZeroCopyBridge::fail(const char* reason) {
+    valid_ = false;
+    failed_ = true;
+    CFW_LOG_ERROR(
+        "Vision GPU display unavailable: {}. No new frames will be published; "
+        "recreate the view to retry.",
+        reason);
+    return false;
+}
+
 bool VisionZeroCopyBridge::ensure(::vision::Pipeline& pipeline, uint32_t width, uint32_t height) {
+    if (failed_) {
+        return false;
+    }
     if (valid_ && width == width_ && height == height_) {
         return true;
     }
@@ -39,11 +52,14 @@ bool VisionZeroCopyBridge::ensure(::vision::Pipeline& pipeline, uint32_t width, 
     release();
 
     if (width == 0 || height == 0) {
-        return false;
+        return fail("shared buffer dimensions must be nonzero");
     }
 
     try {
         ocarina::Device& device = pipeline.device();
+        if (!device.supports_buffer_export()) {
+            throw std::runtime_error("Vulkan external buffer export is required");
+        }
         const uint64_t pixel_count = static_cast<uint64_t>(width) * static_cast<uint64_t>(height);
 
         // Allocate the shared color buffer as an OS-exportable allocation
@@ -60,8 +76,7 @@ bool VisionZeroCopyBridge::ensure(::vision::Pipeline& pipeline, uint32_t width, 
         // Vulkan import must use this or it under-maps the allocation.
         const uint64_t alloc_size = device.get_aligned_memory_size(shared_->buffer.handle());
         if (shareable_handle == 0 || alloc_size == 0) {
-            release();
-            return false;
+            throw std::runtime_error("Vulkan buffer export returned an invalid handle or size");
         }
 
         auto handle = Corona::Horizon::ExternalMemoryHandle::win32(
@@ -85,6 +100,9 @@ bool VisionZeroCopyBridge::ensure(::vision::Pipeline& pipeline, uint32_t width, 
         desc.cpu_access = Corona::Horizon::CpuAccessMode::None;
 
         imported_ = Corona::Horizon::HardwareBuffer::import_external(handle, desc);
+        if (!imported_) {
+            throw std::runtime_error("Vulkan external buffer import returned an invalid buffer");
+        }
 
         width_ = width;
         height_ = height;
@@ -92,20 +110,22 @@ bool VisionZeroCopyBridge::ensure(::vision::Pipeline& pipeline, uint32_t width, 
         CFW_LOG_INFO("Vision output: external-memory buffer {}x{} (Vulkan)", width, height);
         return true;
     } catch (const std::exception& error) {
-        CFW_LOG_WARNING("Vision shared buffer unavailable; using readback: {}", error.what());
         release();
-        return false;
+        return fail(error.what());
     }
 }
 
 bool VisionZeroCopyBridge::copy_from_framebuffer(::vision::Pipeline& pipeline) {
-    if (!valid_) {
+    if (failed_) {
         return false;
+    }
+    if (!valid_) {
+        return fail("shared buffer has not been initialized");
     }
 
     auto* fb = pipeline.frame_buffer();
     if (fb == nullptr) {
-        return false;
+        return fail("Vision framebuffer is unavailable");
     }
 
     // Use the framebuffer-selected display source. Normal framebuffers return
@@ -113,6 +133,10 @@ bool VisionZeroCopyBridge::copy_from_framebuffer(::vision::Pipeline& pipeline) {
     const auto src = fb->display_source_buffer();
 
     const uint64_t pixel_count = static_cast<uint64_t>(width_) * static_cast<uint64_t>(height_);
+    if (fb->resolution().x != width_ || fb->resolution().y != height_ ||
+        src.size() < pixel_count) {
+        return fail("Vision display source does not match the shared buffer extent");
+    }
 
     try {
         // Optics has waited for the previous resolve receipt before reusing us.
@@ -129,8 +153,7 @@ bool VisionZeroCopyBridge::copy_from_framebuffer(::vision::Pipeline& pipeline) {
         imported_.set_external_ownership(false);
         return true;
     } catch (const std::exception& error) {
-        CFW_LOG_WARNING("Vision shared buffer transfer failed: {}", error.what());
-        return false;
+        return fail(error.what());
     }
 }
 

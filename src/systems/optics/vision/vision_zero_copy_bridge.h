@@ -1,8 +1,8 @@
 #pragma once
 
 // Vision zero-copy bridge — shares Vision's pre-tonemap linear float4 color
-// buffer with the Vulkan engine via Vulkan external memory, eliminating
-// the per-frame GPU->CPU->GPU readback used by the [MANUAL-READBACK] path.
+// buffer with the Vulkan engine via Vulkan external memory. This is the only
+// Vision display path; failure stops publishing frames without CPU readback.
 //
 // Direction: Vision renders into the framebuffer-selected display source
 // (linear HDR, pre-tonemap). We copy that on-device into an Ocarina exportable
@@ -36,8 +36,8 @@ public:
 
     // (Re)allocates the shared exportable buffer and re-imports it into Vulkan
     // when the resolution changes. Safe to call every frame; a no-op when the
-    // dimensions are unchanged. Returns false if allocation/import failed, in
-    // which case the caller should fall back (e.g. skip this frame).
+    // dimensions are unchanged. Failure is latched until the bridge is recreated:
+    // callers must skip rendering/publishing this view while failed() is true.
     bool ensure(::vision::Pipeline& pipeline, uint32_t width, uint32_t height);
 
     // Copies the current pre-tonemap linear display source into the shared
@@ -50,6 +50,7 @@ public:
     // the resolve pass's source SSBO. Valid only after a successful ensure().
     [[nodiscard]] Corona::Horizon::HardwareBuffer& imported() noexcept { return imported_; }
     [[nodiscard]] bool valid() const noexcept { return valid_; }
+    [[nodiscard]] bool failed() const noexcept { return failed_; }
     [[nodiscard]] uint32_t width() const noexcept { return width_; }
     [[nodiscard]] uint32_t height() const noexcept { return height_; }
 
@@ -59,6 +60,7 @@ private:
     // backing allocation). pimpl holds the ocarina Buffer<float4> to keep
     // ocarina types out of this engine-facing header.
     void release();
+    bool fail(const char* reason);
 
     struct Shared;       // owns the exported ocarina Buffer<float4>
     Shared* shared_ = nullptr;
@@ -66,6 +68,7 @@ private:
     uint32_t width_ = 0;
     uint32_t height_ = 0;
     bool valid_ = false;
+    bool failed_ = false;
 };
 
 }  // namespace Corona::Systems::Vision

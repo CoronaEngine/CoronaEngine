@@ -103,6 +103,10 @@ target_link_libraries(corona_vision_embedded_mode_switch_tests PRIVATE
     corona::engine vision-all_libs)
 add_test(NAME VisionEmbeddedModeSwitchTests COMMAND corona_vision_embedded_mode_switch_tests)
 add_test(NAME VisionSceneAssetReuseTests COMMAND corona_vision_embedded_mode_switch_tests --scene-asset-reuse)
+add_test(NAME VisionSharedDisplayTests COMMAND corona_vision_embedded_mode_switch_tests --shared-display)
+set_tests_properties(VisionSharedDisplayTests PROPERTIES
+    WORKING_DIRECTORY "$<TARGET_FILE_DIR:vision-material-principled_bsdf>"
+    RUN_SERIAL TRUE TIMEOUT 120)
 set_tests_properties(VisionSceneAssetReuseTests PROPERTIES
     WORKING_DIRECTORY "$<TARGET_FILE_DIR:vision-material-principled_bsdf>"
     RUN_SERIAL TRUE TIMEOUT 300)
