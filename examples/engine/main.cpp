@@ -112,8 +112,7 @@ int main(int argc, char* argv[]) {
 
     try {
         const auto startup = Corona::Startup::read_startup_config(
-            Corona::Startup::default_startup_config_path(), std::getenv("CORONA_SWITCH_PROFILE"),
-            std::getenv("CORONA_VISION_BACKEND"));
+            Corona::Startup::default_startup_config_path(), std::getenv("CORONA_SWITCH_PROFILE"));
         Corona::Startup::apply_startup_config(startup);
         CFW_LOG_INFO("[Startup] Configuration: {} ({})",
                      Corona::Utils::path_to_utf8(startup.path),

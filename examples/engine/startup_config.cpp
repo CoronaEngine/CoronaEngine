@@ -16,8 +16,7 @@ std::filesystem::path default_startup_config_path() {
 }
 
 StartupConfig read_startup_config(const std::filesystem::path& path,
-                                  const char* switch_profile_environment,
-                                  const char* vision_backend_environment) {
+                                  const char* switch_profile_environment) {
     StartupConfig config;
     config.path = std::filesystem::absolute(path);
     try {
@@ -27,7 +26,7 @@ StartupConfig read_startup_config(const std::filesystem::path& path,
             const auto data = nlohmann::json::parse(input);
             if (!data.is_object()) throw std::runtime_error("Root must be an object");
             for (const auto& [key, value] : data.items()) {
-                if (key != "profiling" && key != "vision") throw std::runtime_error("Unknown startup section: " + key);
+                if (key != "profiling") throw std::runtime_error("Unknown startup section: " + key);
             }
             if (data.contains("profiling")) {
                 const auto& profiling = data.at("profiling");
@@ -38,15 +37,6 @@ StartupConfig read_startup_config(const std::filesystem::path& path,
                         throw std::runtime_error("profiling.switch_profile must be a boolean (true/false)");
                     }
                     config.switch_profile = value.get<bool>();
-                }
-            }
-            if (data.contains("vision")) {
-                const auto& vision = data.at("vision");
-                if (!vision.is_object()) throw std::runtime_error("vision must be an object");
-                for (const auto& [key, value] : vision.items()) {
-                    if (key != "backend") throw std::runtime_error("Unknown vision option: " + key);
-                    if (!value.is_string()) throw std::runtime_error("vision.backend must be a string");
-                    config.vision_backend = value.get<std::string>();
                 }
             }
             config.file_loaded = true;
@@ -60,11 +50,6 @@ StartupConfig read_startup_config(const std::filesystem::path& path,
         config.switch_profile = std::string_view(switch_profile_environment) == "1";
         config.from_environment = true;
     }
-    if (vision_backend_environment != nullptr) config.vision_backend = vision_backend_environment;
-    if (config.vision_backend == "vulkan") config.vision_backend = "vulkan-compute";
-    if (config.vision_backend != "cuda" && config.vision_backend != "vulkan-compute") {
-        throw std::runtime_error("Vision backend must be cuda or vulkan-compute");
-    }
     return config;
 }
 
@@ -76,12 +61,6 @@ void apply_startup_config(const StartupConfig& config) {
     const auto result = setenv("CORONA_SWITCH_PROFILE", value, 1);
 #endif
     if (result != 0) throw std::runtime_error("Cannot apply CORONA_SWITCH_PROFILE startup setting");
-#ifdef _WIN32
-    const auto backend_result = _putenv_s("CORONA_VISION_BACKEND", config.vision_backend.c_str());
-#else
-    const auto backend_result = setenv("CORONA_VISION_BACKEND", config.vision_backend.c_str(), 1);
-#endif
-    if (backend_result != 0) throw std::runtime_error("Cannot apply CORONA_VISION_BACKEND startup setting");
 }
 
 }  // namespace Corona::Startup

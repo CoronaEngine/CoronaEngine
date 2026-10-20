@@ -40,7 +40,7 @@ struct VisionRuntimeGeometrySyncTest {
             reinterpret_cast<const char*>(white_tga), sizeof(white_tga));
         ocarina::RHIContext::instance().init(original_cwd);
         // Keep the device alive until process exit: Vision's global kernel tools own GPU state.
-        static auto device = ocarina::RHIContext::instance().create_device("cuda");
+        static auto device = ocarina::RHIContext::instance().create_device();
         device.init_rtx();
         vision::Global::instance().set_device(&device);
         OpticsSystem system;
@@ -112,7 +112,7 @@ struct VisionRuntimeGeometrySyncTest {
             pipeline.stream() << shader(out).dispatch(1u) << out.download(&result) << synchronize() << commit();
             return result.z;
         };
-        expect(std::abs(probe(*pt)) < 1e-4f && std::abs(probe(*svgf)) < 1e-4f, "initial CUDA hits at z=0");
+        expect(std::abs(probe(*pt)) < 1e-4f && std::abs(probe(*svgf)) < 1e-4f, "initial Vulkan hits at z=0");
         auto mesh = pt->scene().instances()[0]->mesh();
         auto* address = mesh->vertices().data();
         for (auto& v : mesh->vertices()) v.pos[2] = 1.f;
@@ -122,8 +122,8 @@ struct VisionRuntimeGeometrySyncTest {
         const auto pz = probe(*pt), sz = probe(*svgf);
         const float cpu_z = svgf->scene().instances()[0]->mesh()->vertices()[0].pos[2];
         std::cout << "EDIT cpu_second_z=" << cpu_z << " GPU_PT_z=" << pz << " GPU_SVGF_z=" << sz << " expected=1" << std::endl;
-        expect(std::abs(pz - 1.f) < 1e-4f, "producer CUDA geometry updates");
-        expect(cpu_z == 1.f && std::abs(sz - 1.f) < 1e-4f, "consumer CPU and CUDA must receive in-place vertices");
+        expect(std::abs(pz - 1.f) < 1e-4f, "producer Vulkan geometry updates");
+        expect(cpu_z == 1.f && std::abs(sz - 1.f) < 1e-4f, "consumer CPU and Vulkan must receive in-place vertices");
         auto resource = system.vision_scene_resources_.at(system.make_vision_scene_resource_key(request.scene_key, Vision::VisionPipelineSource::ExternalLive));
         auto gpu_pt = pt->geometry().gpu_resource();
         auto gpu_svgf = svgf->geometry().gpu_resource();
@@ -160,7 +160,7 @@ struct VisionRuntimeGeometrySyncTest {
             system.sync_external_live_vision_transforms(*pr);
             expect(system.sync_shared_vision_scene(*sr), "new material topology must import into independent runtime");
             expect(svgf->scene().instances()[0]->material()->hash() == material->hash(), "new material mapping");
-            expect(std::abs(probe(*svgf)-1.5f)<1e-4f,"new material geometry CUDA hit");
+            expect(std::abs(probe(*svgf)-1.5f)<1e-4f,"new material geometry Vulkan hit");
             svgf->set_output_denoise(true);
             render(*svgf,"new-material-SVGF");
             system.clear_vision_runtimes(); return;
@@ -302,7 +302,7 @@ struct VisionRuntimeGeometrySyncTest {
         binding.visible = true; hub.set_external_vision_binding(ah,binding);
         system.sync_external_live_vision_transforms(*pr);
         expect(system.sync_shared_vision_scene(*sr), "restored consumer");
-        expect(std::abs(probe(*svgf)-2.f)<1e-4f, "restored geometry CUDA hit");
+        expect(std::abs(probe(*svgf)-2.f)<1e-4f, "restored geometry Vulkan hit");
         // Let the second runtime sleep through two versions; it consumes only latest.
         auto sleeping_builds = gpu_svgf->build_count();
         mesh = pt->scene().instances()[0]->mesh();

@@ -49,7 +49,7 @@ struct ScreenshotRequestEvent {
  * @brief Request to switch the optics render backend (published by script API,
  *        consumed by OpticsSystem).
  *
- * backend: 0 = Native (Vulkan rasterization), 1 = Vision (CUDA path tracing).
+ * backend: 0 = Native (Vulkan rasterization), 1 = Vision (Vulkan path tracing).
  * The switch is only meaningful when the engine is compiled with
  * CORONA_ENABLE_VISION; otherwise OpticsSystem keeps the Native backend.
  */

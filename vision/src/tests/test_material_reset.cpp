@@ -151,7 +151,7 @@ bool is_finite_vec(float3 value) {
 }// namespace
 
 int main() {
-    auto device = RHIContext::instance().create_device("cuda");
+    auto device = RHIContext::instance().create_device();
     Global::instance().set_device(&device);
 
     PipelineDesc desc;

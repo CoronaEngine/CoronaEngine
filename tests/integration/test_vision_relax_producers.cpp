@@ -340,7 +340,7 @@ int main(int argc, char **argv) {
         Env::set_valid_check(false);
         DynamicModule::clear_search_path();
         RHIContext::instance().init(std::filesystem::current_path());
-        static auto device = RHIContext::instance().create_device("cuda");
+        static auto device = RHIContext::instance().create_device();
         device.init_rtx();
         Global::instance().set_device(&device);
         const std::string_view group = argc > 1 ? argv[1] : "pt";

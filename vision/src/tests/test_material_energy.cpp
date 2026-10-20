@@ -225,7 +225,7 @@ void test_material_energy(Device &device,
 }// namespace
 
 int main(int argc, char *argv[]) {
-    auto device = RHIContext::instance().create_device("cuda");
+    auto device = RHIContext::instance().create_device();
     Global::instance().set_device(&device);
 
     PipelineDesc desc;

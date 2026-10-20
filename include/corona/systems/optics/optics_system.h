@@ -56,7 +56,7 @@ class VisionZeroCopyBridge;  // 定义见 vision/vision_zero_copy_bridge.h
 /// 渲染后端枚举
 enum class RenderBackend : int {
     Native = 0,  ///< 默认 Vulkan/光栅化管线
-    Vision = 1,  ///< Vision CUDA 路径追踪后端
+    Vision = 1,  ///< Vision Vulkan 路径追踪后端
 };
 
 class OpticsSystem : public Kernel::SystemBase {
@@ -402,7 +402,7 @@ class OpticsSystem : public Kernel::SystemBase {
 
     // ---- Vision 外部场景加载（跨线程：事件写请求，渲染线程消费）----
     // VisionSceneLoadEvent 只携带轻量请求写入此处；实际 import 在 run_vision_frame
-    // 起始的渲染线程执行，避免在 Python/CEF 线程触碰 CUDA pipeline。
+    // 起始的渲染线程执行，避免在 Python/CEF 线程触碰 Vulkan pipeline。
     std::mutex vision_scene_load_mutex_;
     std::optional<VisionSceneLoadRequest> pending_vision_scene_load_;
 

@@ -5,7 +5,6 @@ if (${OIDN_ON})
 endif ()
 
 
-vision_add_plugin(optix CATEGORY denoiser SOURCES optix.cpp)
 add_subdirectory(SVGF)
 add_subdirectory(ReBLUR)
 add_subdirectory(ReLAX)

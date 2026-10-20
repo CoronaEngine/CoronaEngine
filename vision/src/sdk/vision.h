@@ -26,7 +26,7 @@
 #define VISION_SDK_API VISION_SDK_EXTERN_C
 #endif
 
-#define VISION_SDK_ABI_VERSION 0x00010000u
+#define VISION_SDK_ABI_VERSION 0x00020000u
 
 /// Stable ABI surface for CoronaEngine <-> Vision integration.
 ///
@@ -47,13 +47,6 @@ enum VisionStatusCode : uint32_t {
 	VisionStatusCode_DeviceError = 4,
 	VisionStatusCode_SceneError = 5,
 	VisionStatusCode_InternalError = 6,
-};
-
-enum VisionBackend : uint32_t {
-	VisionBackend_Auto = 0,
-	VisionBackend_CUDA = 1,
-	VisionBackend_DX12 = 2,
-	VisionBackend_Vulkan = 3,
 };
 
 enum VisionScenePacketFormat : uint32_t {
@@ -115,7 +108,6 @@ struct VisionExtent2D {
 struct VisionExternalMemory {
 	uint64_t os_handle{};
 	uint64_t byte_size{};
-	uint32_t backend{};
 	uint32_t reserved{};
 };
 
@@ -139,7 +131,6 @@ struct VisionOutputTarget {
 };
 
 struct VisionServiceCreateInfo {
-	VisionBackend backend{VisionBackend_Auto};
 	uint32_t reserved{};
 	VisionStringView runtime_dir{};
 	VisionStringView plugin_dir{};

@@ -19,18 +19,18 @@ class SwitchProfileTests(unittest.TestCase):
     def test_function_summary_counts_calls_and_separates_child_time(self):
         report = parse_log("\n".join([
             event("B", "PT_to_ReSTIR", 0, "switch"),
-            event("B", "CUDADevice::create_shader", 0, "backend"),
-            event("B", "optixModuleCreate", 1000, "optix_module"),
-            event("E", "optixModuleCreate", 5000, "optix_module"),
-            event("E", "CUDADevice::create_shader", 6000, "backend"),
-            event("B", "optixModuleCreate", 6000, "optix_module"),
-            event("E", "optixModuleCreate", 8000, "optix_module"),
+            event("B", "VulkanComputeDevice::create_shader", 0, "backend"),
+            event("B", "vkCreateShaderModule", 1000, "shader_module"),
+            event("E", "vkCreateShaderModule", 5000, "shader_module"),
+            event("E", "VulkanComputeDevice::create_shader", 6000, "backend"),
+            event("B", "vkCreateShaderModule", 6000, "shader_module"),
+            event("E", "vkCreateShaderModule", 8000, "shader_module"),
             event("E", "PT_to_ReSTIR", 8000, "switch"),
         ]))
         functions = {entry["name"]: entry for entry in report["phases"][0]["functions"]}
-        self.assertEqual(functions["optixModuleCreate"]["calls"], 2)
-        self.assertEqual(functions["optixModuleCreate"]["total_ms"], 6)
-        self.assertEqual(functions["CUDADevice::create_shader"]["self_ms"], 2)
+        self.assertEqual(functions["vkCreateShaderModule"]["calls"], 2)
+        self.assertEqual(functions["vkCreateShaderModule"]["total_ms"], 6)
+        self.assertEqual(functions["VulkanComputeDevice::create_shader"]["self_ms"], 2)
 
     def test_runtime_paths_come_from_ctest_and_selected_runtime_wins(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -48,20 +48,20 @@ class SwitchProfileTests(unittest.TestCase):
             event("B", "PT_to_ReSTIR", 0, "switch"),
             event("B", "scene", 0), event("E", "scene", 1000),
             event("B", "compile", 1000, "compile"),
-            event("B", "NVRTC", 2000, "nvrtc"), event("E", "NVRTC", 5000, "nvrtc"),
+            event("B", "Slang", 2000, "slang"), event("E", "Slang", 5000, "slang"),
             event("E", "compile", 6000, "compile"),
             event("E", "PT_to_ReSTIR", 10000, "switch"),
         ]))
         phase = report["phases"][0]
         self.assertEqual(phase["duration_ms"], 10)
-        self.assertEqual(phase["breakdown_ms"], {"switch": 4, "prepare": 1, "compile": 2, "nvrtc": 3})
+        self.assertEqual(phase["breakdown_ms"], {"switch": 4, "prepare": 1, "compile": 2, "slang": 3})
 
     def test_abort_retains_incomplete_stage_without_inventing_a_duration(self):
         report = parse_log("\n".join([
             event("B", "PT_to_ReSTIR", 0, "switch"),
             event("B", "scene", 0), event("E", "scene", 1000),
             event("B", "compile", 1000, "compile"),
-            "NVRTC compilation failed",
+            "Slang compilation failed",
         ]))
         phase = report["phases"][0]
         self.assertIsNone(phase["duration_ms"])
@@ -73,17 +73,17 @@ class SwitchProfileTests(unittest.TestCase):
         self.assertTrue(parse_log("old executable output")["warnings"])
         self.assertTrue(parse_log("CORONA_PROFILE {broken")["warnings"])
 
-    def test_shader_cache_and_nvrtc_time_stay_with_the_switch(self):
+    def test_shader_cache_and_slang_time_stay_with_the_switch(self):
         report = parse_log("\n".join([
             event("B", "PT_to_ReSTIR", 0, "switch"),
-            "shader PTX cache hit: kernel_gamma.ptx",
-            "shader PTX cache miss: __raygen__DI temporal.ptx",
-            "task NVRTC compile __raygen__DI temporal.cu is take 123.45 ms",
+            "shader SPIR-V cache hit: kernel_gamma.spv",
+            "shader SPIR-V cache miss: __raygen__DI temporal.spv",
+            "task Slang compile __raygen__DI temporal.slang is take 123.45 ms",
             event("E", "PT_to_ReSTIR", 200000, "switch"),
         ]))
         shaders = report["shaders"]
-        self.assertEqual(shaders[0]["nvrtc_ms"], 0)
-        self.assertEqual(shaders[1]["nvrtc_ms"], 123.45)
+        self.assertEqual(shaders[0]["slang_ms"], 0)
+        self.assertEqual(shaders[1]["slang_ms"], 123.45)
         self.assertEqual(shaders[1]["phase"], "PT_to_ReSTIR")
 
     def test_report_escapes_scene_and_log_content(self):
@@ -94,14 +94,14 @@ class SwitchProfileTests(unittest.TestCase):
             self.assertIn("&lt;script&gt;", html)
             self.assertEqual(json.loads((Path(tmp) / "report.json").read_text(encoding="utf-8"))["runs"], [])
 
-    def test_nvrtc_seconds_are_converted_to_milliseconds(self):
+    def test_slang_seconds_are_converted_to_milliseconds(self):
         report = parse_log("\n".join([
             event("B", "PT_to_ReSTIR", 0, "switch"),
-            "shader PTX cache miss: __raygen__DI temporal.ptx",
-            "task NVRTC compile __raygen__DI temporal.cu is take 22.80 s",
+            "shader SPIR-V cache miss: __raygen__DI temporal.spv",
+            "task Slang compile __raygen__DI temporal.slang is take 22.80 s",
             event("E", "PT_to_ReSTIR", 23000000, "switch"),
         ]))
-        self.assertEqual(report["shaders"][0]["nvrtc_ms"], 22800)
+        self.assertEqual(report["shaders"][0]["slang_ms"], 22800)
 
 
 class BoundedProcessTests(unittest.TestCase):

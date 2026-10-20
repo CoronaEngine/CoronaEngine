@@ -335,11 +335,6 @@ def run_vision_eval(
         cmd.append("--stage-profile")
 
     env = os.environ.copy()
-    cuda_bins = [
-        r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.1\bin\x64",
-        r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.1\bin",
-    ]
-    env["PATH"] = ";".join(cuda_bins + [env.get("PATH", "")])
     if extra_env:
         env.update(extra_env)
     stamp = time.strftime("%Y%m%d-%H%M%S")

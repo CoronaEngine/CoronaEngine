@@ -2,7 +2,7 @@
 
 Runs two independent processes without deleting existing cache files. The second
 process registers unused slots before creating each view; shader variants must
-keep their identities and hit the PTX cache warmed by the first process.
+keep their identities and hit the SPIR-V cache warmed by the first process.
 """
 import argparse
 import json
@@ -48,7 +48,7 @@ def compare_runs(runs):
     if identities(runs[0]) != identities(runs[1]):
         errors.append("changing binding slots changed shader identities")
     if any(s["cache"] != "hit" for s in runs[1]["profile"]["shaders"]):
-        errors.append("second process did not hit every warmed PTX cache entry")
+        errors.append("second process did not hit every warmed SPIR-V cache entry")
     before = {phase: (int(visibility), int(surfaces)) for phase, visibility, surfaces in runs[0]["bindings"]}
     after = {phase: (int(visibility), int(surfaces)) for phase, visibility, surfaces in runs[1]["bindings"]}
     for phase in phases[:2]:

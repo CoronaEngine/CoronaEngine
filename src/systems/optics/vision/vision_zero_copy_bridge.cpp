@@ -49,7 +49,7 @@ bool VisionZeroCopyBridge::ensure(::vision::Pipeline& pipeline, uint32_t width, 
         const uint64_t pixel_count = static_cast<uint64_t>(width) * static_cast<uint64_t>(height);
 
         // Allocate the shared color buffer as an OS-exportable allocation
-        // (CUDA VMM or dedicated Vulkan memory). A plain create_buffer is NOT
+        // (dedicated Vulkan memory). A plain create_buffer is NOT
         // exportable and export_handle() would throw "Invalid handle".
         shared_ = new Shared{device.create_exported_buffer<ocarina::float4>(
             pixel_count, "VisionZeroCopyBridge::shared")};
@@ -91,8 +91,7 @@ bool VisionZeroCopyBridge::ensure(::vision::Pipeline& pipeline, uint32_t width, 
         width_ = width;
         height_ = height;
         valid_ = true;
-        CFW_LOG_INFO("Vision output: external-memory buffer {}x{} ({})", width, height,
-                     metadata.memory_type_index != ~0u ? "Vulkan" : "CUDA");
+        CFW_LOG_INFO("Vision output: external-memory buffer {}x{} (Vulkan)", width, height);
         return true;
     } catch (const std::exception& error) {
         CFW_LOG_WARNING("Vision shared buffer unavailable; using readback: {}", error.what());

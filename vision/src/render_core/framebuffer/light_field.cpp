@@ -308,7 +308,6 @@ public:
             Float D = 3.f * cast<float>(x) +
                       3.f * cast<float>(y) * tan(lent.angle) +
                       cast<float>(k) + lent.offset;
-            // NOTE: CUDA backend currently does not implement CallOp::FMOD codegen.
             // Use A = D - floor(D / pe) * pe to compute a positive modulus in [0, pe).
             Float pe_val = lent.pe;
             Float A = D - floor(D / pe_val) * pe_val;

@@ -1094,7 +1094,7 @@ struct VisionEmbeddedModeSwitchTest {
     static void benchmark_switches(const char* scene) {
         namespace fs = std::filesystem;
         ocarina::RHIContext::instance().init(fs::current_path());
-        static auto device = ocarina::RHIContext::instance().create_device("cuda");
+        static auto device = ocarina::RHIContext::instance().create_device();
         device.init_rtx();
         vision::Global::instance().set_device(&device);
         OpticsSystem system;
@@ -1142,7 +1142,7 @@ struct VisionEmbeddedModeSwitchTest {
         namespace profile = vision::switch_profile;
         ocarina::DynamicModule::clear_search_path();
         ocarina::RHIContext::instance().init(std::filesystem::current_path());
-        static auto device = ocarina::RHIContext::instance().create_device("cuda");
+        static auto device = ocarina::RHIContext::instance().create_device();
         device.init_rtx();
         vision::Global::instance().set_device(&device);
         OpticsSystem system;
@@ -1201,7 +1201,7 @@ struct VisionEmbeddedModeSwitchTest {
     static void capture_camera_motion(const char* scene, const char* destination, bool fast = false) {
         namespace fs = std::filesystem;
         ocarina::RHIContext::instance().init(fs::current_path());
-        static auto device = ocarina::RHIContext::instance().create_device("cuda");
+        static auto device = ocarina::RHIContext::instance().create_device();
         device.init_rtx();
         vision::Global::instance().set_device(&device);
         OpticsSystem system;
@@ -1294,7 +1294,7 @@ struct VisionEmbeddedModeSwitchTest {
         const auto runtime_dir = fs::current_path();
         ocarina::DynamicModule::clear_search_path();
         ocarina::RHIContext::instance().init(runtime_dir);
-        static auto device = ocarina::RHIContext::instance().create_device("cuda");
+        static auto device = ocarina::RHIContext::instance().create_device();
         device.init_rtx();
         vision::Global::instance().set_device(&device);
         for (bool embedded : {true, false}) {
@@ -1415,7 +1415,7 @@ struct VisionEmbeddedModeSwitchTest {
             reinterpret_cast<const char*>(white_tga), sizeof(white_tga));
         ocarina::RHIContext::instance().init(original_cwd);
         // Keep the device alive until process exit: Vision's global kernel tools own GPU state.
-        static auto device = ocarina::RHIContext::instance().create_device("cuda");
+        static auto device = ocarina::RHIContext::instance().create_device();
         device.init_rtx();
         vision::Global::instance().set_device(&device);
         OpticsSystem system;
@@ -1612,7 +1612,7 @@ struct VisionEmbeddedModeSwitchTest {
         resource->mark_transforms_changed();
         pt->update_geometry();
         // Changing CWD must not change the meaning of relative source resources.
-        // The alternate working directory also contains Vision CUDA compiler headers.
+        // The alternate working directory also contains Vision Vulkan compiler headers.
         fs::current_path(original_cwd.parent_path() / "examples" / "engine");
         const auto key = system.make_vision_pipeline_key(request.scene_key, CameraVisionRenderMode::SVGF,
                                                          Vision::VisionPipelineSource::ExternalLive);

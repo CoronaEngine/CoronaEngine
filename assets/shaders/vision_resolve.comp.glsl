@@ -3,7 +3,7 @@
 
 // Zero-copy Vision resolve pass.
 // Reads Vision's PRE-tonemap linear HDR color (float32 RGBA, row-major
-// y*width+x) from a CUDA buffer imported into Vulkan, applies Vision's exposure
+// y*width+x) from a Vulkan buffer imported into Vulkan, applies Vision's exposure
 // + ACES tone map, and writes the engine's RGBA16F display image. The float32 ->
 // half16 narrowing happens implicitly on imageStore into the rgba16 target, so
 // no CPU readback / conversion is needed.

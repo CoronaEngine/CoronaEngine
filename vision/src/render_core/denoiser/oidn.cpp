@@ -22,18 +22,7 @@ private:
 
 private:
     [[nodiscard]] oidn::DeviceRef create_device() const noexcept {
-        oidn::DeviceType device_type{};
-        switch (backend_) {
-            case CPU:
-                device_type = oidn::DeviceType::CPU;
-                break;
-            case GPU:
-                device_type = oidn::DeviceType::CUDA;
-                break;
-            default:
-                break;
-        }
-        return oidn::DeviceRef(oidn::newDevice(device_type));
+        return oidn::DeviceRef(oidn::newDevice(oidn::DeviceType::CPU));
     }
     [[nodiscard]] oidn::FilterRef create_filter() const noexcept {
         switch (mode_) {

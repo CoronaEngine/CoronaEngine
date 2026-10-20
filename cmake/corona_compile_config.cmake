@@ -114,15 +114,11 @@ endif()
 # /execution-charset:utf-8) because OpenUSD also injects /utf-8 on every pxr
 # target. Mixing /utf-8 with the long form triggers MSVC D8016.
 #
-# COMPILE_LANGUAGE filter prevents the flag from being forwarded to nvcc when
-# building CUDA device code. For CUDA we additionally route /utf-8 to the
-# host compiler (cl.exe) via -Xcompiler so that non-ASCII literals in the
-# host portion of .cu files are also interpreted as UTF-8.
+# Apply UTF-8 to host C/C++ compilation.
 # ------------------------------------------------------------------------------
 if(MSVC OR CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
     add_compile_options(
         $<$<COMPILE_LANGUAGE:C,CXX>:/utf-8>
-        $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=/utf-8>
     )
 endif()
 

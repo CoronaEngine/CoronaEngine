@@ -308,7 +308,7 @@ private:
 public:
     EvalApp(int argc, char **argv)
         : cli_parser_(argc, argv),
-          device_(RHIContext::instance().create_device(cli_parser_.backend())) {
+          device_(RHIContext::instance().create_device()) {
         init();
     }
 

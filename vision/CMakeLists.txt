@@ -9,11 +9,11 @@
 # through Conan package targets (see cmake/corona_third_party.cmake) and reused here.
 # ==============================================================================
 
-# Vision sources require C++20 and depend on CUDA.
+# Vision sources require C++20 and use Vulkan compute.
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
 
-find_package(CUDAToolkit 11.0 REQUIRED)
+find_package(Vulkan REQUIRED)
 
 add_compile_definitions(_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING)
 
@@ -61,18 +61,9 @@ function(vision_add_application name)
     set_target_properties(${name} PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin/")
 endfunction()
 
-message(STATUS "[Vision] CUDAToolkit found, integrating Vision sources")
+message(STATUS "[Vision] Integrating Vulkan compute renderer")
 message(STATUS "[Vision] VISION_BUILD_APPS  = ${VISION_BUILD_APPS}")
 message(STATUS "[Vision] VISION_BUILD_TESTS = ${VISION_BUILD_TESTS}")
 message(STATUS "[Vision] VISION_BUILD_OIDN  = ${VISION_BUILD_OIDN}")
 
 add_subdirectory(src)
-
-if (VISION_BUILD_OIDN)
-    add_custom_target(CP_OIDN_CUDA ALL
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                    $<TARGET_FILE_DIR:OpenImageDenoise_device_cuda>/OpenImageDenoise_device_cuda.dll
-                    ${CMAKE_BINARY_DIR}/bin/
-            DEPENDS OpenImageDenoise_device_cuda
-    )
-endif ()

@@ -211,7 +211,7 @@ void verify_device_ray_generation(Device &device, TSensor sensor) {
 }// namespace
 
 int main(int argc, char *argv[]) {
-    auto device = RHIContext::instance().create_device("cuda");
+    auto device = RHIContext::instance().create_device();
     device.init_rtx();
     Global::instance().set_device(&device);
 

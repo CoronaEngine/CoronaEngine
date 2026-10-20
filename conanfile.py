@@ -25,7 +25,6 @@ class CoronaEngineConan(ConanFile):
         "with_editor": [True, False],
         "with_examples": [True, False],
         "with_tests": [True, False],
-        "with_vision": [True, False],
         "with_vision_tests": [True, False],
         "with_oidn": [True, False],
         "with_cef": [True, False],
@@ -36,7 +35,6 @@ class CoronaEngineConan(ConanFile):
         "with_editor": True,
         "with_examples": True,
         "with_tests": False,
-        "with_vision": True,
         "with_vision_tests": False,
         "with_oidn": False,
         "with_cef": True,
@@ -96,11 +94,10 @@ class CoronaEngineConan(ConanFile):
             self.requires("cef-binary/143.0.14.gdd46a37.chromium143.0.7499.193",
                           transitive_headers=True, transitive_libs=True)
 
-        if bool(self.options.with_vision):
-            self.requires("cxxopts/3.2.0", transitive_headers=True)
-            self.requires("glfw/3.4", transitive_headers=True, transitive_libs=True)
-            if bool(self.options.with_oidn):
-                self.requires("openimagedenoise/2.3.3", transitive_headers=True, transitive_libs=True)
+        self.requires("cxxopts/3.2.0", transitive_headers=True)
+        self.requires("glfw/3.4", transitive_headers=True, transitive_libs=True)
+        if bool(self.options.with_oidn):
+            self.requires("openimagedenoise/2.3.3", transitive_headers=True, transitive_libs=True)
 
     def generate(self):
         deps = CMakeDeps(self)
@@ -116,7 +113,6 @@ class CoronaEngineConan(ConanFile):
         variables["BUILD_CORONA_EDITOR"] = bool(self.options.with_editor)
         variables["BUILD_CORONA_EXAMPLES"] = bool(self.options.with_examples)
         variables["BUILD_CORONA_TESTING"] = bool(self.options.with_tests)
-        variables["CORONA_BUILD_VISION"] = bool(self.options.with_vision)
         variables["VISION_BUILD_TESTS"] = bool(self.options.with_vision_tests)
         variables["VISION_BUILD_OIDN"] = bool(self.options.with_oidn)
         variables["CORONA_ENABLE_CEF"] = bool(self.options.with_cef)
@@ -126,12 +122,6 @@ class CoronaEngineConan(ConanFile):
             variables["CORONA_CEF_ROOT"] = cef_dep.package_folder.replace("\\", "/")
 
         toolchain.generate()
-
-    def validate(self):
-        if bool(self.options.with_vision_tests) and not bool(self.options.with_vision):
-            raise ConanInvalidConfiguration("with_vision_tests=True requires with_vision=True")
-        if bool(self.options.with_oidn) and not bool(self.options.with_vision):
-            raise ConanInvalidConfiguration("with_oidn=True requires with_vision=True")
 
     def build(self):
         cmake = CMake(self)

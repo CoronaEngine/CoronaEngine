@@ -306,7 +306,7 @@ void test_sampling_distribution(Device &device, Pipeline &pipeline) {
 }// namespace
 
 int main(int argc, char *argv[]) {
-    auto device = RHIContext::instance().create_device("cuda");
+    auto device = RHIContext::instance().create_device();
     Global::instance().set_device(&device);
 
     PipelineDesc desc;

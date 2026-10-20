@@ -15,12 +15,11 @@ if "%BUILD_DIR%"=="" set "BUILD_DIR=D:\yzy\code\cpp\Vision\cmake-build-codex-msv
 set "MSVC_ROOT=C:\Program Files\Microsoft Visual Studio\18\Insiders\VC\Tools\MSVC\14.50.35615"
 set "WINSDK_ROOT=C:\Program Files (x86)\Windows Kits\10"
 set "WINSDK_VER=10.0.26100.0"
-set "CUDA_ROOT=C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.1"
 set "CMAKE_EXE=D:\Program Files (x86)\CLion 2025.3.1.1\bin\cmake\win\x64\bin\cmake.exe"
 
 set "INCLUDE=%MSVC_ROOT%\include;%WINSDK_ROOT%\Include\%WINSDK_VER%\ucrt;%WINSDK_ROOT%\Include\%WINSDK_VER%\shared;%WINSDK_ROOT%\Include\%WINSDK_VER%\um;%WINSDK_ROOT%\Include\%WINSDK_VER%\winrt;%WINSDK_ROOT%\Include\%WINSDK_VER%\cppwinrt"
 set "LIB=%MSVC_ROOT%\lib\x64;%WINSDK_ROOT%\Lib\%WINSDK_VER%\ucrt\x64;%WINSDK_ROOT%\Lib\%WINSDK_VER%\um\x64"
-set "PATH=%MSVC_ROOT%\bin\Hostx64\x64;%WINSDK_ROOT%\bin\%WINSDK_VER%\x64;%CUDA_ROOT%\bin\x64;%CUDA_ROOT%\bin;C:\Windows\System32;C:\Windows;C:\Windows\System32\WindowsPowerShell\v1.0;%PATH%"
+set "PATH=%MSVC_ROOT%\bin\Hostx64\x64;%WINSDK_ROOT%\bin\%WINSDK_VER%\x64;C:\Windows\System32;C:\Windows;C:\Windows\System32\WindowsPowerShell\v1.0;%PATH%"
 
 echo [build] Target: %TARGET%
 echo [build] BuildDir: %BUILD_DIR%

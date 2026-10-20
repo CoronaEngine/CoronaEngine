@@ -193,7 +193,7 @@ public:                                                                     \
 
     // Host-dispatched kernels need a pointer to the selected half, with offset
     // already applied. The bindless host view loses its slot's byte offset, and
-    // CUDA parameter-buffer indexing does not apply a descriptor offset either.
+    // Parameter-buffer indexing does not apply a descriptor offset either.
     // Keep each view bounded to one frame so writes cannot alias previous data.
 #define VS_MAKE_DOUBLE_BUFFER(Type, buffer_name)                                                                              \
     VS_MAKE_BUFFER(Type, buffer_name, 2)                                                                                      \

@@ -26,7 +26,6 @@ struct LaunchParams {
     fs::path output_dir;
     string output_fn;
     bool clear_cache{false};
-    string backend{"cuda"};
     bool maximized_window{false};
     bool headless{false};
     bool denoise{false};
@@ -45,7 +44,6 @@ struct LaunchParams {
         scene_file = cli_parser->scene_file();
         output_dir = cli_parser->output_dir();
         clear_cache = cli_parser->clear_cache();
-        backend = cli_parser->backend();
         headless = cli_parser->headless();
         denoise = cli_parser->denoise();
         spp = cli_parser->spp();
@@ -77,7 +75,7 @@ public:
 public:
     App(int argc, char *argv[])
         : cli_parser(make_unique<CLIParser>(argc, argv)),
-          device(RHIContext::instance().create_device(cli_parser->backend())) {
+          device(RHIContext::instance().create_device()) {
         init(argc);
     }
     void init(int argc = 0);

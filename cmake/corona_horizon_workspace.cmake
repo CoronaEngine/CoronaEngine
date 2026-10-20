@@ -25,7 +25,4 @@ function(corona_add_horizon_workspace)
     list(TRANSFORM _corona_horizon_links REPLACE "^horizon-core$" "$<LINK_ONLY:horizon-core>")
     set_property(TARGET Horizon PROPERTY INTERFACE_LINK_LIBRARIES "${_corona_horizon_links}")
 
-    if(MSVC AND TARGET ocarina-backend-cuda)
-        target_compile_options(ocarina-backend-cuda PRIVATE /FIio.h)
-    endif()
 endfunction()

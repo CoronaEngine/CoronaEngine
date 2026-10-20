@@ -1,7 +1,7 @@
 #pragma once
 
 // Vision zero-copy bridge — shares Vision's pre-tonemap linear float4 color
-// buffer with the Vulkan engine via CUDA/Vulkan external memory, eliminating
+// buffer with the Vulkan engine via Vulkan external memory, eliminating
 // the per-frame GPU->CPU->GPU readback used by the [MANUAL-READBACK] path.
 //
 // Direction: Vision renders into the framebuffer-selected display source
@@ -11,7 +11,7 @@
 // writes the engine's RGBA16F finalOutputImage. The final-color view_texture_ is
 // display texture and is intentionally not used, avoiding double tone mapping.
 //
-// NOTE: no external CUDA/Vulkan timeline semaphore yet. Optics currently waits
+// NOTE: no external Vulkan timeline semaphore yet. Optics currently waits
 // for the preceding Vulkan submit receipt before allowing Vision to reuse or
 // release this allocation. This is correct but CPU-serialized; a shared timeline
 // semaphore is the performance follow-up.

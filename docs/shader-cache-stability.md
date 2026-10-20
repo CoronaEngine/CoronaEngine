@@ -11,7 +11,7 @@
 - ReSTIR 的 reservoir base、FrameBuffer 的双缓冲 base、光谱表、alias 表及材质 LUT 使用设备端索引。双缓冲的 host 查询仍返回 host 整数。
 - 首次捕获索引时惰性分配地址稳定的存储；资源和 shader 在热重载中一起移动时，参数地址保持有效。复制资源会深拷贝参数，向已捕获的参数复制赋值则原址更新。参数存储的所有者必须覆盖 shader 的使用期；替换一个已有 owner 时需同时替换其 shader。
 - 构造一次 shader invocation 时，`ShaderArgumentPack` 复制当时的参数值；已经排队的 invocation 不受之后索引更新的影响。不能把已捕获参数改成 host getter；这个限制在 Release 中也检查。
-- AST 的 Scope 哈希跳过纯注释节点。CUDA 的 AST / IR 输出显式关闭注释，并消除注释留下的分号、空 else 和 else-if 形式差异；默认诊断输出仍保留注释。代码生成缓存版本升为 2，因此升级后会有一次冷编译。
+- AST 的 Scope 哈希跳过纯注释节点。当前运行后端固定为 Vulkan；Slang 编译缓存同时纳入生成源、内建着色器、编译器版本及工作组大小。
 
 shader 的算法、类型、布局及实际编译选项仍影响缓存。跨不同场景若这些内容变化，编译仍然必要；本改动不承诺所有不同场景共享同一份 shader。
 
@@ -31,16 +31,18 @@ shader 的算法、类型、布局及实际编译选项仍影响缓存。跨不�
 
 1. 两次运行阶段完整、进程成功退出，第二次确实执行槽位扰动，且 PT 的 visibility、ReSTIR 的 visibility / surfaces 实际 slot 均发生变化（PT 不分配 surfaces）。
 2. 两次 shader 标识及数量相同。
-3. 第二次所有 PTX 缓存命中。
+3. 第二次所有 SPIR-V 缓存命中。
 4. 同一进程重复切换不再创建 shader。
 
-工具不会删除已有缓存。结果写入 `build/cache-stability/<timestamp>/report.json`，并保存各进程的命令、工作目录、PID、超时、退出码及 stdout/stderr。报告只根据已有 PTX 日志判定命中，不推断 OptiX 驱动缓存命中。
+工具不会删除已有缓存。结果写入 `build/cache-stability/<timestamp>/report.json`，并保存各进程的命令、工作目录、PID、超时、退出码及 stdout/stderr。报告只根据 Slang 编译器的 SPIR-V 日志判定命中，不推断 Vulkan 驱动缓存命中。
 
 Horizon 修复已合入并推送到 [`main`](https://github.com/CoronaEngine/Horizon/tree/main)，提交为 [`2607a3b380e526fb3c319168493119d9b93285d3`](https://github.com/CoronaEngine/Horizon/commit/2607a3b380e526fb3c319168493119d9b93285d3)。CoronaEngine 的 `.workspace/horizon.lock.json` 指向 `main` 的该提交；同步这个 lock 即可取得修复，无需再应用补丁。
 
 修复基于 Horizon `67d2223ea02a408f71d7cc3abbc2b142c78414fc`。需要移植到其他 Horizon 分支时，可以 cherry-pick 上述修复提交；当前锁定版本已经包含修复，无需重复应用。
 
 CoronaEngine 的调用点和测试依赖上述 Horizon API，应与更新后的 lock 一起使用。
+
+以下为迁移前的历史测试记录，保留原始后端、指标和结果。
 
 ## 首轮验证（2026-10-05，Horizon e3edffc6）
 

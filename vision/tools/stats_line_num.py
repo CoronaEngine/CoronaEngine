@@ -48,7 +48,6 @@ framework_skip_rules = [
     "tests",
     "vulkan",
     "stats_line_num.py",
-    "builtin\\optix\\",
     "sdk_pt",
     ".natvis",
 ]

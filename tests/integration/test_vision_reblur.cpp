@@ -749,7 +749,7 @@ int main() {
         Env::set_valid_check(false);
         DynamicModule::clear_search_path();
         RHIContext::instance().init(std::filesystem::current_path());
-        static auto device = RHIContext::instance().create_device("cuda");
+        static auto device = RHIContext::instance().create_device();
         device.init_rtx();
         Global::instance().set_device(&device);
         auto stream = device.create_stream();

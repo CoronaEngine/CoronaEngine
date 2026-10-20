@@ -18,7 +18,7 @@ def run_fixture(padding, cache):
                 ph=boundary, name=phase, ts=index * 10 + (boundary == "E"),
                 cat="switch", tid=1)))
             if boundary == "B" and index < 2:
-                lines.append(f"shader PTX cache {cache}: kernel_{index}_stablehash.ptx")
+                lines.append(f"shader SPIR-V cache {cache}: kernel_{index}_stablehash.spv")
     return dict(process=dict(status="success"), profile=parse_log("\n".join(lines)),
                 bindings=[[p, str(10 + padding), str(0xffffffff if p in (phases[0], phases[2]) else 20 + padding)]
                           for p in phases],
@@ -34,7 +34,7 @@ class ShaderCacheStabilityTests(unittest.TestCase):
 
     def test_misses_or_different_identities_fail_even_if_process_succeeded(self):
         for field, value, message in (("cache", "miss", "every warmed"),
-                                      ("name", "new_hash.ptx", "identities")):
+                                      ("name", "new_hash.spv", "identities")):
             runs = copy.deepcopy(self.runs)
             runs[1]["profile"]["shaders"][0][field] = value
             self.assertIn(message, " ".join(compare_runs(runs)))
@@ -57,7 +57,7 @@ class ShaderCacheStabilityTests(unittest.TestCase):
     def test_timeout_and_repeated_compilation_fail(self):
         self.runs[1]["process"]["status"] = "timeout"
         self.runs[1]["profile"]["shaders"].append(dict(
-            name="repeated.ptx", cache="hit", phase="PT_to_ReSTIR.repeat"))
+            name="repeated.spv", cache="hit", phase="PT_to_ReSTIR.repeat"))
         errors = " ".join(compare_runs(self.runs))
         self.assertIn("timeout", errors)
         self.assertIn("rebuilt shaders", errors)

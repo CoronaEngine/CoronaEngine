@@ -3079,7 +3079,7 @@ void OpticsSystem::shutdown_vision_backend() {
     // Join stream workers and release shared imports, pipelines and scene GPU
     // resources before invoking the backend's Device deleter. The executable
     // ultimately calls TerminateProcess, so a function-static Device would
-    // never run its cleanup callbacks or release its Vulkan/CUDA context.
+    // never run its cleanup callbacks or release its Vulkan context.
     clear_vision_runtimes();
     if (vision_device_) {
         CFW_LOG_INFO("OpticsSystem: destroying Vision compute device");
@@ -3607,7 +3607,7 @@ bool OpticsSystem::initialize(Kernel::ISystemContext* ctx) {
         vision_scene_load_sub_id_ = event_bus->subscribe<Events::VisionSceneLoadEvent>(
             [this](const Events::VisionSceneLoadEvent& event) {
                 // Only stash the request here (any thread). The actual import touches
-                // the CUDA pipeline and MUST run on the render thread, so it is
+                // the Vulkan pipeline and MUST run on the render thread, so it is
                 // deferred to apply_pending_vision_scene_load() in update().
                 // Capture legacy relative load paths now, before deferred work.
                 // Embedded scene keys are relative to their explicit resource base.
@@ -5891,7 +5891,7 @@ Vision::VisionBuildResult OpticsSystem::rebuild_vision_scene(VisionPipelineRunti
         // init_vision_lazy(). If we don't re-register the lights here, the
         // following scene.prepare() reinitialises the light sampler with a missing
         // (or geometry-introduced area-light only) env_light_, corrupting the
-        // light sampler's env index / PMF bookkeeping and crashing the CUDA device
+        // light sampler's env index / PMF bookkeeping and crashing the Vulkan device
         // (observed: process exit code -1 right after "Vision scene rebuilt").
         // Mirror the initialization path: always re-inject a single Infinite sky
         // light (+ optional point sun) from the current Corona environment so the
@@ -5919,7 +5919,7 @@ Vision::VisionBuildResult OpticsSystem::rebuild_vision_scene(VisionPipelineRunti
         // image_pool().prepare(stream()) -> ...). Re-running it on an already-initialised
         // pipeline reallocates the framebuffer / sensor / image-pool device buffers
         // that the render loop is already holding references to, which crashes the
-        // CUDA device (observed: crash on the following prepare_view_texture()).
+        // Vulkan device (observed: crash on the following prepare_view_texture()).
         //
         // The correct runtime update is an INCREMENTAL sequence that only refreshes
         // the parts affected by the topology change, while leaving the framebuffer,
@@ -5940,7 +5940,7 @@ Vision::VisionBuildResult OpticsSystem::rebuild_vision_scene(VisionPipelineRunti
         // light_sampler_->prepare(scene_bindless, scene_device), which rebuilds the on-device light count / PMF /
         // env-index buffers. Skipping it leaves the UniformLightSampler indexing a stale
         // light buffer with the new (different) light_num(), so the very first render()
-        // after the rebuild performs an out-of-bounds GPU read and crashes the CUDA
+        // after the rebuild performs an out-of-bounds GPU read and crashes the Vulkan
         // device (observed: process exit -1 right after "Vision scene rebuilt", with no
         // "This scene contains N light types" log emitted during the rebuild).
         // It must run AFTER prepare_geometry() because area lights reference shapes.
@@ -6682,14 +6682,8 @@ bool OpticsSystem::init_vision_lazy() {
                 auto& context = ocarina::RHIContext::instance();
                 ocarina::DynamicModule::clear_search_path();
                 context.init(runtime_directory);
-                const char* configured_backend = std::getenv("CORONA_VISION_BACKEND");
-                std::string backend = configured_backend ? configured_backend : "vulkan-compute";
-                if (backend == "vulkan") backend = "vulkan-compute";
-                if (backend != "cuda" && backend != "vulkan-compute") {
-                    throw std::runtime_error("CORONA_VISION_BACKEND must be cuda or vulkan-compute");
-                }
-                CFW_LOG_INFO("OpticsSystem: Vision compute backend = {}", backend);
-                return context.create_device(backend.c_str());
+                CFW_LOG_INFO("OpticsSystem: Vision compute backend = vulkan-compute");
+                return context.create_device();
             }());
         }
         vision_device_->init_rtx();
@@ -6825,7 +6819,7 @@ bool OpticsSystem::init_vision_lazy() {
         // only allocated during Pipeline::prepare() (Scene::prepare -> Sensor::prepare
         // -> EncodedObject::prepare_data -> reset_device_buffer). Running it
         // before prepare() uploads into unallocated device memory and crashes the
-        // CUDA device deterministically.
+        // Vulkan device deterministically.
         for (auto sd_it = SharedDataHub::instance().scene_storage().cbegin();
              sd_it != SharedDataHub::instance().scene_storage().cend(); ++sd_it) {
             const auto& sd = *sd_it;
@@ -7009,7 +7003,7 @@ void OpticsSystem::run_vision_frame(float frame_count, uint64_t frame_index) {
                 if (vision_device_->supports_buffer_export() &&
                     !vision_zero_copy_forced_disabled() &&
                     !runtime.zero_copy_disabled.contains(cam_handle)) {
-                    // CUDA is about to write the shared allocation. The preceding Vulkan
+                    // Vision is about to write the shared allocation. The preceding Vulkan
                     // resolve must finish first until external timeline semaphores replace
                     // this conservative CPU-side synchronization.
                     runtime.wait_for_interop_submission(cam_handle,

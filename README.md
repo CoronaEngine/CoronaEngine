@@ -11,7 +11,7 @@
 | CMake | 3.29 或更高版本 |
 | Ninja | 必须在 PATH 中；工程使用 Ninja Multi-Config |
 | Visual Studio 或 Build Tools | 安装“使用 C++ 的桌面开发”、MSVC x64/x86 工具集与 Windows SDK |
-| CUDA Toolkit | 仅 Vision / Ocarina / Vision Hotfix 需要；安装后应存在 CUDA_PATH |
+| Vulkan SDK | Vulkan 头文件、加载器与构建工具；Slang 由 Conan 提供 |
 
 ## 开发工具环境
 
@@ -57,15 +57,16 @@ VS Code / CMake Tools
 这个文件由原生引擎入口在初始化前读取；`CoronaEditor.ini` 继续保存编辑器的项目状态，
 `editor/config/app_config.py` 继续管理 Python 侧的应用配置。独立测试程序和其他嵌入式宿主仍可直接用环境变量控制 profiler。
 
-Vision 的计算后端默认是 Horizon/Ocarina 的 `vulkan-compute`。可在同一启动配置中增加
-`"vision": { "backend": "cuda" }` 切回 CUDA，或设为 `"vulkan-compute"` 使用 Vulkan。
-`CORONA_VISION_BACKEND` 环境变量优先于配置文件；`vulkan` 是 `vulkan-compute` 的别名。
-切换后须重启引擎。相机的渲染后端仍选择 `vision`，再独立选择 ReSTIR、降噪器和降噪开关。
+Vision 在所有构建目标族中始终启用，计算设备固定为 Horizon/Ocarina Vulkan Compute。
+引擎配置不再包含 `vision.backend`；旧配置应删除整个 `vision` 节。
+独立 `vision-eval`、`vision-gui` 和 SDK 同样固定使用 Vulkan，不再接受设备后端选择参数。
+SDK ABI 已升至 `0x00020000`；使用旧版结构或接口的调用方需要重新编译。
+相机仍可选择常规渲染或 `vision`，并独立选择 PT、ReSTIR、降噪器和降噪开关。
 计算设备由 OpticsSystem 持有，场景切换时复用；关闭时先释放共享输出、管线与场景资源，
 再显式销毁设备，避免依赖进程终止时不会执行的静态析构。
 Vulkan 运行文件（后端 DLL、Slang DLL 和 `slang/` 内建着色器）由 `corona_engine_vision_runtime` 自动部署。
 
-两种计算后端均通过可导出的缓冲区向引擎传递线性 HDR 颜色，显示端共用曝光、ACES 和 sRGB 转换。
+Vision 通过可导出的 Vulkan 缓冲区向引擎传递线性 HDR 颜色，显示端应用曝光、ACES 和 sRGB 转换。
 Vulkan 共享内存校验 GPU/驱动 UUID 并执行跨实例资源所有权交接；不支持共享时使用 CPU 回读。
 `CORONA_VISION_DISABLE_ZERO_COPY=1` 可强制回读，用于排查共享输出问题。
 
@@ -80,5 +81,5 @@ Vulkan 共享内存校验 GPU/驱动 UUID 并执行跨实例资源所有权交�
 静态前端验证可设置 `CORONA_OPTICS_MAX_FPS=2`。独立 `vision-eval` 可设置
 `VISION_EVAL_FRAME_INTERVAL_MS=500` 在帧间休息；输出的渲染计时不包含休息时间，
 `frame_interval_ms` 会写入指标，因此该场景下的 `average_fps` 表示渲染耗时的倒数，而非实际显示帧率。
-测试期间保留 `CORONA_VISION_BACKEND=cuda` 与 `vulkan-compute` 的配置对照，使用相同分辨率、
-相机、采样数、ReSTIR 参数、Stable Planes、降噪器与历史帧数。
+对比不同构建的画质与性能时，使用相同分辨率、相机、采样数、ReSTIR 参数、
+Stable Planes、降噪器与历史帧数；原始图像与各次测试记录分别保存。

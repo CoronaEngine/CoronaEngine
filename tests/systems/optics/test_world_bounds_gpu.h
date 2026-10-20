@@ -1,6 +1,6 @@
 #pragma once
 
-// Exercise production geometry/light refresh with a deterministic CUDA consumer.
+// Exercise production geometry/light refresh with a deterministic Vulkan consumer.
 // The probe replaces only the image integrator's compilation, not the scene,
 // light sampler, encoded buffers, bindless tables, or geometry update paths.
 class WorldBoundsProbePipeline final : public vision::Pipeline {
@@ -62,10 +62,10 @@ public:
 inline vision::Device& world_bounds_test_device() {
     using namespace vision;
     // Compiled Vision kernels use process-wide printer/debugger resources.
-    // Keep their owning CUDA device alive across both probe fixtures.
+    // Keep their owning Vulkan device alive across both probe fixtures.
     static auto device = [] {
         RHIContext::instance().init(std::filesystem::current_path());
-        auto device = RHIContext::instance().create_device("cuda");
+        auto device = RHIContext::instance().create_device();
         device.init_rtx();
         return device;
     }();
@@ -114,9 +114,9 @@ inline void world_bounds_gpu_regressions() {
                   << actual.x << ',' << actual.y << ',' << actual.z << ") pmf="
                   << actual.w << " expected_pmf=" << pmf << std::endl;
         expect(std::abs(actual.y - radius) < 1e-4f && actual.x == 0.f && actual.z == 0.f,
-               "CUDA directional-light sample must use current world radius");
+               "Vulkan directional-light sample must use current world radius");
         expect(std::abs(actual.w - pmf) < 1e-4f,
-               "CUDA power sampler PMF must use current world radius");
+               "Vulkan power sampler PMF must use current world radius");
         expect(all(pipeline->scene().world_center() == center), "CPU world center must match transformed triangle");
         for (auto light : pipeline->scene().light_manager().lights()) {
             if (!light->match(LightType::DeltaDirection)) continue;
@@ -130,7 +130,7 @@ inline void world_bounds_gpu_regressions() {
             for (uint axis = 0; axis < 3; ++axis) {
                 expect(ocarina::bit_cast<float>(encoded.host_buffer()[tail + 1 + axis]) == center[axis] &&
                        ocarina::bit_cast<float>(uploaded[tail + 1 + axis]) == center[axis],
-                       "host encoding and CUDA directional center must match current bounds");
+                       "host encoding and Vulkan directional center must match current bounds");
             }
         }
     };
@@ -166,7 +166,7 @@ inline void world_bounds_gpu_regressions() {
     pipeline->rebuild_geometry_gpu();
     verify(std::sqrt(2.f), make_float3(0, 1, 0));
     pipeline->stream() << synchronize() << commit();
-    std::cout << "WorldBounds CUDA radius and power-PMF regressions passed\n";
+    std::cout << "WorldBounds Vulkan radius and power-PMF regressions passed\n";
 }
 
 inline void world_bounds_multiview_area_regression() {

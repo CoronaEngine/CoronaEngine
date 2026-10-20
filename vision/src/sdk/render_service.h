@@ -45,7 +45,6 @@ struct OutputBufferView {
 struct ExternalImageHandle {
     uint64_t handle{};
     uint64_t size_bytes{};
-    VisionBackend backend{VisionBackend_Auto};
 };
 
 struct RenderOutput {
@@ -58,7 +57,6 @@ struct RenderOutput {
 };
 
 struct SessionConfig {
-    VisionBackend backend{VisionBackend_Auto};
     VisionExtent2D initial_extent{};
     uint32_t session_flags{VisionSessionFlag_EnableShaderCache};
     std::string runtime_dir{};
@@ -91,7 +89,6 @@ class RenderSession {
 public:
     virtual ~RenderSession() noexcept = default;
 
-    [[nodiscard]] virtual VisionBackend backend() const noexcept = 0;
     [[nodiscard]] virtual VisionExtent2D extent() const noexcept = 0;
 
     virtual VisionStatusCode update_scene(const SceneSource &scene) noexcept = 0;

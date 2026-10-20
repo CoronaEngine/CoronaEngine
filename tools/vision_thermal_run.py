@@ -147,7 +147,6 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--cwd", type=Path, required=True)
-    parser.add_argument("--backend", choices=["cuda", "vulkan-compute"], required=True)
     parser.add_argument("--limit", type=float, default=54)
     parser.add_argument("--seconds", type=float, default=600)
     parser.add_argument("command", nargs=argparse.REMAINDER)
@@ -169,18 +168,18 @@ def main():
         if max(row[1] for row in initial) >= args.limit:
             raise RuntimeError("GPU is at the temperature limit before launch")
     except Exception as error:
-        summary = dict(backend=args.backend, command=command, reason="preflight_blocked",
+        summary = dict(backend="vulkan-compute", command=command, reason="preflight_blocked",
                        error=str(error), returncode=None, cleanup_ok=True, gpu_cleanup_ok=False)
         (args.output / "run.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
         print(json.dumps(summary), flush=True)
         return 1
-    environment = dict(os.environ, CORONA_VISION_BACKEND=args.backend)
+    environment = os.environ.copy()
     # Preserve the identity of the actual deployed binaries with every result.
     # Source state alone cannot establish which incremental-build DLL was tested.
     executable = Path(command[0])
     if not executable.is_absolute():
         executable = args.cwd / executable
-    candidates = [executable, args.cwd / f"ocarina-backend-{args.backend}.dll"]
+    candidates = [executable, args.cwd / "ocarina-backend-vulkan-compute.dll"]
     binary_fingerprints = {
         str(path.resolve()): hashlib.sha256(path.read_bytes()).hexdigest()
         for path in candidates if path.is_file()
@@ -203,7 +202,7 @@ def main():
                                        stdin=subprocess.DEVNULL, creationflags=subprocess.CREATE_NO_WINDOW)
             job.attach(process)
             (args.output / "pid.txt").write_text(str(process.pid))
-            print(f"Started PID {process.pid}, backend={args.backend}, cutoff={args.limit} C", flush=True)
+            print(f"Started PID {process.pid}, backend=vulkan-compute, cutoff={args.limit} C", flush=True)
             while process.poll() is None:
                 rows = temperatures()  # Failure also terminates the child in finally.
                 elapsed = time.monotonic() - start
@@ -258,7 +257,7 @@ def main():
                 reason = "cleanup_failed"
         if maximum >= args.limit and reason == "completed":
             reason = "thermal_cutoff"
-        summary = dict(backend=args.backend, command=command, reason=reason,
+        summary = dict(backend="vulkan-compute", command=command, reason=reason,
                        binary_fingerprints=binary_fingerprints,
                        telemetry="nvml" if _monitor else "nvidia-smi",
                        max_temperature_c=maximum, cutoff_temperature_c=args.limit,

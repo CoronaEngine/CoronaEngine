@@ -1,4 +1,4 @@
-"""Prepare identical ReSTIR fixtures and compare CUDA/Vulkan evaluation images.
+"""Prepare identical ReSTIR fixtures and compare reference/candidate evaluation images.
 
 Original assets/scenes are read only. Run vision-eval under vision_thermal_run.py;
 use VISION_EVAL_FRAME_INTERVAL_MS to keep temporal convergence thermally safe.
@@ -69,7 +69,7 @@ def prepare(source: Path, destination: Path, width: int, height: int, denoiser: 
     print(json.dumps(inventory, ensure_ascii=False, indent=2))
 
 
-def compare(first: Path, second: Path, output: Path, first_label="CUDA", second_label="Vulkan"):
+def compare(first: Path, second: Path, output: Path, first_label="Reference", second_label="Candidate"):
     import numpy as np
     from PIL import Image, ImageDraw
     a, b = [np.asarray(Image.open(path).convert("RGB"), dtype=np.float64) / 255 for path in (first, second)]
@@ -92,8 +92,8 @@ def compare(first: Path, second: Path, output: Path, first_label="CUDA", second_
     metrics = dict(first_label=first_label, second_label=second_label,
                    width=a.shape[1], height=a.shape[0], mae=float(np.mean(abs(a-b))),
                    rmse=float(np.sqrt(mse)), psnr_db=float(-10*np.log10(max(mse, 1e-20))),
-                   ssim_luminance=float(ssim.mean()), cuda_mean_luminance=float(x.mean()),
-                   vulkan_mean_luminance=float(y.mean()), luminance_ratio=float(y.mean()/max(x.mean(), 1e-20)))
+                   ssim_luminance=float(ssim.mean()), reference_mean_luminance=float(x.mean()),
+                   candidate_mean_luminance=float(y.mean()), luminance_ratio=float(y.mean()/max(x.mean(), 1e-20)))
     linear_paths = [path.with_suffix('.pfm') for path in (first, second)]
     if all(path.is_file() for path in linear_paths):
         def read_linear(path):
@@ -108,7 +108,7 @@ def compare(first: Path, second: Path, output: Path, first_label="CUDA", second_
         if linear_a.shape != a.shape or linear_b.shape != a.shape:
             raise ValueError('Linear and display image sizes differ')
         nonfinite = [int(np.count_nonzero(~np.isfinite(pixels))) for pixels in (linear_a, linear_b)]
-        metrics['linear_nonfinite_values'] = dict(cuda=nonfinite[0], vulkan=nonfinite[1])
+        metrics['linear_nonfinite_values'] = dict(reference=nonfinite[0], candidate=nonfinite[1])
         if not any(nonfinite):
             linear_rmse = float(np.sqrt(np.mean((linear_a-linear_b)**2)))
             metrics['linear_rmse'] = linear_rmse
@@ -138,8 +138,8 @@ if __name__ == "__main__":
     comparison.add_argument("first", type=Path)
     comparison.add_argument("second", type=Path)
     comparison.add_argument("output", type=Path)
-    comparison.add_argument("--first-label", default="CUDA")
-    comparison.add_argument("--second-label", default="Vulkan")
+    comparison.add_argument("--first-label", default="Reference")
+    comparison.add_argument("--second-label", default="Candidate")
     args = vars(parser.parse_args())
     command = args.pop("command")
     (prepare if command == "prepare" else compare)(**args)

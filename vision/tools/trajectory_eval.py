@@ -28,10 +28,6 @@ TRAJECTORY_ROOT = REPO_ROOT / "eval-out" / "trajectory"
 
 CMD_EXE = Path(r"C:\Windows\System32\cmd.exe")
 
-CUDA_BIN = [
-    r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.1\bin\x64",
-    r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.1\bin",
-]
 
 
 def load_targets() -> dict:
@@ -49,10 +45,8 @@ def load_trajectory(name: str) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def get_env_with_cuda() -> dict:
+def get_runtime_env() -> dict:
     env = os.environ.copy()
-    extra = ";".join(CUDA_BIN)
-    env["PATH"] = extra + ";" + env.get("PATH", "")
     return env
 
 
@@ -153,7 +147,7 @@ def generate_golden_at_pose(
           f"pitch={pitch:.1f} yaw={yaw:.1f}")
     result = subprocess.run(
         cmd, capture_output=True, text=True, cwd=str(REPO_ROOT),
-        env=get_env_with_cuda(), timeout=3600,
+        env=get_runtime_env(), timeout=3600,
     )
     if result.returncode != 0 or not golden_path.exists():
         print(f"[golden] FAILED")
@@ -212,7 +206,7 @@ def run_trajectory_eval(
     try:
         result = subprocess.run(
             cmd, capture_output=True, text=True, cwd=str(REPO_ROOT),
-            env=get_env_with_cuda(), timeout=1200,
+            env=get_runtime_env(), timeout=1200,
         )
     except subprocess.TimeoutExpired:
         print("[eval] TIMEOUT")

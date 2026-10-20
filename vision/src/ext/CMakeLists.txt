@@ -97,8 +97,7 @@ if (VISION_BUILD_OIDN)
     foreach (_oidn_tgt
             OpenImageDenoise
             OpenImageDenoise_core
-            OpenImageDenoise_device_cpu
-            OpenImageDenoise_device_cuda)
+            OpenImageDenoise_device_cpu)
         if (TARGET ${_oidn_tgt})
             set_target_properties(${_oidn_tgt} PROPERTIES
                     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin/)

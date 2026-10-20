@@ -6,6 +6,9 @@ target_include_directories(corona_engine_startup_config_tests PRIVATE
 target_link_libraries(corona_engine_startup_config_tests PRIVATE nlohmann_json::nlohmann_json)
 add_test(NAME EngineStartupConfigTests
     COMMAND corona_engine_startup_config_tests ${CMAKE_CURRENT_BINARY_DIR}/startup-config-fixture)
+add_test(NAME VisionRequiredConfigurationTests
+    COMMAND ${CMAKE_COMMAND} "-DREPO_ROOT=${PROJECT_SOURCE_DIR}"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/test_vision_required.cmake")
 add_test(NAME EngineStartupConfigDeploymentTests
     COMMAND ${CMAKE_COMMAND}
         "-DREPO_ROOT=${PROJECT_SOURCE_DIR}"
@@ -65,7 +68,7 @@ if(CORONA_BUILD_VISION)
     add_test(NAME VisionRelaxAtrous COMMAND corona_vision_relax_tests atrous)
     add_test(NAME VisionRelaxLayerHistory COMMAND corona_vision_relax_tests layers)
     set_tests_properties(VisionRelaxHelpers VisionRelaxPrepass VisionRelaxTemporal VisionRelaxHistory VisionRelaxAtrous VisionRelaxLayerHistory PROPERTIES
-        WORKING_DIRECTORY "$<TARGET_FILE_DIR:ocarina-backend-cuda>"
+        WORKING_DIRECTORY "$<TARGET_FILE_DIR:ocarina-backend-vulkan-compute>"
         RUN_SERIAL TRUE TIMEOUT 120)
 
     add_executable(corona_vision_shader_binding_tests
@@ -73,7 +76,7 @@ if(CORONA_BUILD_VISION)
     target_link_libraries(corona_vision_shader_binding_tests PRIVATE ocarina-native ocarina-include)
     add_test(NAME VisionShaderBindingTests COMMAND corona_vision_shader_binding_tests)
     set_tests_properties(VisionShaderBindingTests PROPERTIES
-        WORKING_DIRECTORY "$<TARGET_FILE_DIR:ocarina-backend-cuda>"
+        WORKING_DIRECTORY "$<TARGET_FILE_DIR:ocarina-backend-vulkan-compute>"
         RUN_SERIAL TRUE TIMEOUT 120)
 
     add_executable(corona_vision_runtime_geometry_sync_tests test_vision_runtime_geometry_sync.cpp)

@@ -209,7 +209,7 @@ void importer_accepts_shared_scene_resource_options() {
 void scene_gpu_context_routes_material_lut_to_scene_bindless() {
     try {
         ocarina::RHIContext::instance().init(std::filesystem::current_path());
-        auto device = ocarina::RHIContext::instance().create_device("cuda");
+        auto device = ocarina::RHIContext::instance().create_device();
         device.init_rtx();
         vision::Global::instance().set_device(&device);
 
@@ -250,10 +250,10 @@ void scene_gpu_context_routes_material_lut_to_scene_bindless() {
                "scene GPU context should restore after scope exit");
         vision::MaterialLut::instance().unload_lut(lut_name);
     } catch (const std::exception& e) {
-        std::cout << "SKIP: CUDA-backed scene GPU context integration unavailable: "
+        std::cout << "SKIP: Vulkan-backed scene GPU context integration unavailable: "
                   << e.what() << '\n';
     } catch (...) {
-        std::cout << "SKIP: CUDA-backed scene GPU context integration unavailable\n";
+        std::cout << "SKIP: Vulkan-backed scene GPU context integration unavailable\n";
     }
 }
 
@@ -377,7 +377,7 @@ vision::ProjectDesc make_empty_project_desc() {
 void two_scene_views_bind_one_real_scene_gpu_resource() {
     try {
         ocarina::RHIContext::instance().init(std::filesystem::current_path());
-        auto device = ocarina::RHIContext::instance().create_device("cuda");
+        auto device = ocarina::RHIContext::instance().create_device();
         device.init_rtx();
         vision::Global::instance().set_device(&device);
 
@@ -402,17 +402,17 @@ void two_scene_views_bind_one_real_scene_gpu_resource() {
                    &ssat_scene_view.geometry().accel(),
                "Scene geometry views should expose one shared acceleration structure");
     } catch (const std::exception& e) {
-        std::cout << "SKIP: CUDA-backed GeometryGpuResource integration unavailable: "
+        std::cout << "SKIP: Vulkan-backed GeometryGpuResource integration unavailable: "
                   << e.what() << '\n';
     } catch (...) {
-        std::cout << "SKIP: CUDA-backed GeometryGpuResource integration unavailable\n";
+        std::cout << "SKIP: Vulkan-backed GeometryGpuResource integration unavailable\n";
     }
 }
 
 void two_pipelines_consume_one_shared_logical_scene() {
     try {
         ocarina::RHIContext::instance().init(std::filesystem::current_path());
-        auto device = ocarina::RHIContext::instance().create_device("cuda");
+        auto device = ocarina::RHIContext::instance().create_device();
         device.init_rtx();
         vision::Global::instance().set_device(&device);
 
@@ -447,10 +447,10 @@ void two_pipelines_consume_one_shared_logical_scene() {
         expect(first->scene().shared_data_identity() == scene_resource.logical_scene_identity(),
                "pipeline Scene views should point at the VisionSceneResource logical scene");
     } catch (const std::exception& e) {
-        std::cout << "SKIP: CUDA-backed Pipeline shared-scene integration unavailable: "
+        std::cout << "SKIP: Vulkan-backed Pipeline shared-scene integration unavailable: "
                   << e.what() << '\n';
     } catch (...) {
-        std::cout << "SKIP: CUDA-backed Pipeline shared-scene integration unavailable\n";
+        std::cout << "SKIP: Vulkan-backed Pipeline shared-scene integration unavailable\n";
     }
 }
 

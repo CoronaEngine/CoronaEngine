@@ -18,10 +18,6 @@ public:
     explicit UnsupportedRenderSession(SessionConfig config) noexcept
         : config_(std::move(config)) {}
 
-    [[nodiscard]] VisionBackend backend() const noexcept override {
-        return config_.backend;
-    }
-
     [[nodiscard]] VisionExtent2D extent() const noexcept override {
         return config_.initial_extent;
     }

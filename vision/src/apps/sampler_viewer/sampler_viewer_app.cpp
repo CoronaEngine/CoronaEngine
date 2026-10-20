@@ -236,7 +236,7 @@ void draw_disk(vector<uchar4> &pixels, uint2 size, int cx, int cy, int radius, u
 namespace vision {
 
 struct SamplerViewerApp::Impl {
-    Device device{RHIContext::instance().create_device("cuda")};
+    Device device{RHIContext::instance().create_device()};
     vector<SamplerEntry> samplers{discover_samplers()};
     ViewerState state{};
     vector<float2> samples{};

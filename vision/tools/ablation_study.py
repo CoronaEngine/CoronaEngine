@@ -29,10 +29,6 @@ ABLATION_ROOT = REPO_ROOT / "eval-out" / "ablation"
 
 CMD_EXE = Path(r"C:\Windows\System32\cmd.exe")
 
-CUDA_BIN = [
-    r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.1\bin\x64",
-    r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.1\bin",
-]
 
 ABLATION_CONFIGS = [
     # {
@@ -84,10 +80,8 @@ def load_targets() -> dict:
     return json.loads(SCENE_TARGETS.read_text(encoding="utf-8"))
 
 
-def get_env_with_cuda(extra_env: dict | None = None) -> dict:
+def get_runtime_env(extra_env: dict | None = None) -> dict:
     env = os.environ.copy()
-    cuda_path = ";".join(CUDA_BIN)
-    env["PATH"] = cuda_path + ";" + env.get("PATH", "")
     for k in ["SSAT_SKIP_PHASE2", "SSAT_SKIP_PHASE3"]:
         env.pop(k, None)
     if extra_env:
@@ -132,7 +126,7 @@ def ensure_golden(scene_key: str, exe: Path, runtime_dir: Path, scene: Path,
     ]
     result = subprocess.run(
         cmd, capture_output=True, text=True, cwd=str(REPO_ROOT),
-        env=get_env_with_cuda(), timeout=3600,
+        env=get_runtime_env(), timeout=3600,
     )
     if result.returncode != 0 or not golden_png.exists():
         print(f"[golden] FAILED")
@@ -170,7 +164,7 @@ def run_eval_config(
     if golden.exists():
         cmd.extend(["--rmse-reference", str(golden)])
 
-    env = get_env_with_cuda(config["env_overrides"])
+    env = get_runtime_env(config["env_overrides"])
 
     print(f"\n[eval] config={name}: {config['description']}")
     try:

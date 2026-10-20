@@ -33,7 +33,6 @@ public:
         }
     }
     [[nodiscard]] bool clear_cache() const noexcept;
-    [[nodiscard]] string backend() const noexcept;
     [[nodiscard]] string pipeline() const noexcept;
     [[nodiscard]] string mode() const noexcept;
     [[nodiscard]] fs::path scene_file() const noexcept;

@@ -55,7 +55,7 @@ class ThermalGuardTests(unittest.TestCase):
             stack.enter_context(patch.object(guard, "_Job", return_value=job))
             stack.enter_context(patch("builtins.print"))
             stack.enter_context(patch.object(sys, "argv", ["guard", "--output", directory, "--cwd", directory,
-                                                          "--backend", "vulkan-compute", "--limit", "60",
+                                                          "--limit", "60",
                                                           "--", "missing-cpu-test.exe"]))
             code = guard.main()
             result = json.loads((Path(directory) / "run.json").read_text())

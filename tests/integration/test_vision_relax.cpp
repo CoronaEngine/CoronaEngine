@@ -157,7 +157,7 @@ int main(int argc, char **argv) {
         Env::set_valid_check(false);
         DynamicModule::clear_search_path();
         RHIContext::instance().init(std::filesystem::current_path());
-        auto device = RHIContext::instance().create_device("cuda");
+        auto device = RHIContext::instance().create_device();
         auto stream = device.create_stream();
         const std::string_view group = argc > 1 ? argv[1] : "helpers";
         if (group == "helpers") check_helpers(device, stream);

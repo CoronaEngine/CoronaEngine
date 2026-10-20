@@ -46,7 +46,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--scene", type=Path, required=True)
     parser.add_argument("--build-dir", type=Path, default=ROOT / "cmake-build-relwithdebinfo")
-    parser.add_argument("--runtime-dir", type=Path, help="DLL/cuda/.cache directory (default: BUILD/bin)")
+    parser.add_argument("--runtime-dir", type=Path, help="DLL/slang/.cache directory (default: BUILD/bin)")
     parser.add_argument("--output-dir", type=Path, default=ROOT / "build/switch-profile" / datetime.now().strftime("%Y%m%d-%H%M%S-%f"))
     parser.add_argument("--runs", type=int, choices=(1, 2), default=2, help="1: current cache; 2: also repeat in a new process")
     parser.add_argument("--timeout", type=positive_float, default=300, help="hard seconds per process, plus at most 20 seconds cleanup")
@@ -66,10 +66,10 @@ def main(argv=None):
     command = [str(executable), "--profile-switches", str(scene)]
     if args.denoise:
         command.append("--denoise")
-    report = dict(scene=str(scene), runtime_dir=str(runtime), ptx_cache=str(runtime / ".cache"),
+    report = dict(scene=str(scene), runtime_dir=str(runtime), spirv_cache=str(runtime / ".cache"),
                   build_dir=str(build), denoise=args.denoise, runs=[],
                   timing="CPU wall clock; first frame includes GPU synchronization",
-                  backend_detail="See emitted function scopes for DSL/NVRTC/OptiX and cache I/O. No inferred driver-cache hits.")
+                  backend_detail="See emitted function scopes for DSL/Slang/Vulkan and cache I/O. No inferred driver-cache hits.")
     succeeded = True
     for index in range(1, args.runs + 1):
         run_dir = output / f"run-{index}"

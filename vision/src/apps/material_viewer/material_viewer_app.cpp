@@ -363,7 +363,7 @@ struct MaterialViewerApp::Impl {
     MaterialViewerGLRenderer gl_renderer;
 
     Impl()
-        : device(RHIContext::instance().create_device("cuda")),
+        : device(RHIContext::instance().create_device()),
           background(static_cast<size_t>(kWindowSize.x) * kWindowSize.y, make_uchar4(0u, 0u, 0u, 255u)) {
         Global::instance().set_device(&device);
 

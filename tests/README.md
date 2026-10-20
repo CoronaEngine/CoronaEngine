@@ -65,19 +65,17 @@ as needed. The total execution bound is the number of runs times the per-run
 timeout plus up to 20 seconds cleanup per run. A failed process stops the batch
 and still produces a partial report, with unfinished scopes explicitly marked.
 
-`--runtime-dir <directory>` selects the DLL / `cuda` / `.cache` directory, default
+`--runtime-dir <directory>` selects the DLL / `slang` / `.cache` directory, default
 `<build-dir>/bin`. Runtime dependency paths are read from the generated CTest
-configuration. Use the same runtime directory when comparing runs: PTX cache
-keys currently depend on absolute CUDA include paths. Profiling does not edit
-the scene, delete caches, or infer OptiX driver-cache hits. Engine scopes cover
+configuration. Use the same runtime directory when comparing runs. SPIR-V cache
+keys include the generated source, builtins and compiler version. Profiling does not edit
+the scene, delete caches, or infer Vulkan driver-cache hits. Engine scopes cover
 scene initialization, geometry, images, buffers, lights, view preparation and
-DI/GI compilation. NVRTC per-shader times and PTX hits/misses come from existing
-compiler logs. With the instrumented Ocarina backend built, the function table
-also records cache I/O, `nvrtcCompileProgram`, `cuModuleLoadData`,
-`optixModuleCreate`, `optixProgramGroupCreate`, `optixPipelineCreate`, and SBT
-preparation. It separates inclusive and self time; do not sum inclusive parent
-and child rows. Backend instrumentation lives in the Horizon workspace alongside
-the existing renderer timing, so rebuild `ocarina-backend-cuda` as well.
+DI/GI compilation. Slang per-shader times and SPIR-V hits/misses come from
+compiler logs. The instrumented Ocarina compiler also emits
+`SlangShaderCompiler::compile` scopes. The report separates inclusive and self
+time; do not sum inclusive parent and child rows. Backend instrumentation lives
+in the Horizon workspace, so rebuild `ocarina-backend-vulkan-compute` as well.
 
 `VisionSceneAssetReuseTests` checks first-time PT → ReSTIR creation with the
 scene/model/texture files removed after the initial PT import. It covers both

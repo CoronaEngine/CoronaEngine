@@ -456,7 +456,7 @@ int main() {
         ocarina::RHIContext::instance().init(runtime_directory);
         // As in the other Vision integration tests, the device outlives the
         // global kernel tools and all pipelines through process shutdown.
-        static auto device = ocarina::RHIContext::instance().create_device("cuda");
+        static auto device = ocarina::RHIContext::instance().create_device();
         device.init_rtx();
         vision::Global::instance().set_device(&device);
         vision::Global::instance().set_scene_path(fixture);

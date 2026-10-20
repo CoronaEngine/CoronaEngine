@@ -13,18 +13,18 @@ def parse_log(text):
     stacks = defaultdict(list)
     for line in text.splitlines():
         if MARKER not in line:
-            cache = re.search(r"shader PTX cache (hit|miss): (.+)", line)
-            timing = re.search(r"task NVRTC compile (.+)\.cu is take ([\d.]+) (ms|s)\b", line)
+            cache = re.search(r"shader SPIR-V cache (hit|miss): (.+)", line)
+            timing = re.search(r"task Slang compile (.+)\.slang is take ([\d.]+) (ms|s)\b", line)
             if cache:
                 active = [node["name"] for stack in stacks.values() for node in stack
                           if node["category"] == "switch"]
                 shaders.append(dict(name=cache[2], cache=cache[1],
                                     phase=active[0] if len(active) == 1 else None,
-                                    nvrtc_ms=0 if cache[1] == "hit" else None))
+                                    slang_ms=0 if cache[1] == "hit" else None))
             elif timing:
                 for shader in reversed(shaders):
-                    if shader["name"] == timing[1] + ".ptx":
-                        shader["nvrtc_ms"] = float(timing[2]) * (1000 if timing[3] == "s" else 1)
+                    if shader["name"] == timing[1] + ".spv":
+                        shader["slang_ms"] = float(timing[2]) * (1000 if timing[3] == "s" else 1)
                         break
             continue
         try:
@@ -59,7 +59,7 @@ def parse_log(text):
     phases = []
     def function_summary(node, result):
         name = node["name"]
-        if "::" in name or name.startswith(("optix", "cuModule", "nvrtc", "emit_cuda")):
+        if "::" in name or name.startswith(("vkCreate", "slang", "emit_slang")):
             row = result.setdefault(name, dict(name=name, calls=0, incomplete=0, total_ms=0, self_ms=0))
             if node["duration_ms"] is None:
                 row["incomplete"] += 1
@@ -87,8 +87,8 @@ def parse_log(text):
     if not phases:
         warnings.append("No switch profile events; rebuild the native benchmark target.")
     return dict(phases=phases, scopes=roots, events=events, warnings=warnings, shaders=shaders,
-                cache=dict(ptx_hits=len(re.findall(r"PTX cache hit", text, re.I)),
-                           ptx_misses=len(re.findall(r"PTX cache miss", text, re.I))))
+                cache=dict(spirv_hits=len(re.findall(r"SPIR-V cache hit", text, re.I)),
+                           spirv_misses=len(re.findall(r"SPIR-V cache miss", text, re.I))))
 
 
 def _ms(value):
@@ -109,16 +109,16 @@ def write_report(output: Path, report):
     body = [f"<h1>PT → ReSTIR 切换耗时</h1><p>{html.escape(report.get('scene', ''))}</p>",
             "<p>墙钟计时；准备阶段包含 GPU 提交，首帧阶段显式等待 GPU 完成。分布使用各阶段自身耗时，父子阶段不会重复累计。未完成阶段不推算总时长。</p>",
             "<p>第 1 次运行使用现有缓存；第 2 次运行复用前一次留下的磁盘缓存。同一进程再次切换测量内存复用。工具不清缓存。</p>"]
-    backend_scopes = any(event.get("name") == "CUDADevice::create_shader"
+    backend_scopes = any(event.get("name") == "SlangShaderCompiler::compile"
                          for run in report.get("runs", []) for event in run["profile"]["events"])
-    body.append("<p>编译阶段包含 DSL、NVRTC 和驱动调用。NVRTC 明细读取已有计时日志；" +
-                ("函数表单独记录 PTX 读写、CUDA/OptiX 模块、Program Group、Pipeline 和 SBT。" if backend_scopes else "本次日志未包含独立的 CUDA/OptiX 后端函数计时。") +
-                "PTX 命中不代表 OptiX 驱动缓存命中，后者不做推断。</p>")
+    body.append("<p>编译阶段包含 DSL、Slang 和驱动调用。Slang 明细读取已有计时日志；" +
+                ("函数表记录 Slang 编译范围内的缓存查询和编译耗时。" if backend_scopes else "本次日志未包含独立的 Vulkan 后端函数计时。") +
+                "SPIR-V 命中不代表 Vulkan 驱动缓存命中，后者不做推断。</p>")
     for index, run in enumerate(report.get("runs", []), 1):
         process, profile = run["process"], run["profile"]
         body.append(f"<h2>运行 {index} · {html.escape(process['status'])} · 进程总计 {_ms(process['elapsed_ms'])}</h2>")
         body.append(f"<p>退出码 {process.get('exit_code')} · PID {process.get('pid')} · 工作目录 {html.escape(process.get('cwd', ''))}</p>")
-        body.append(f"<p>PTX 缓存命中 {profile['cache']['ptx_hits']} / 未命中 {profile['cache']['ptx_misses']}（按日志统计，整次运行）</p>")
+        body.append(f"<p>SPIR-V 缓存命中 {profile['cache']['spirv_hits']} / 未命中 {profile['cache']['spirv_misses']}（按日志统计，整次运行）</p>")
         body.extend(f"<p class='warning'>{html.escape(w)}</p>" for w in profile["warnings"])
         for phase in profile["phases"]:
             body.append(f"<section><h3>{html.escape(phase['name'])} · {_ms(phase['duration_ms'])}</h3>")
@@ -138,9 +138,9 @@ def write_report(output: Path, report):
                 body.append("</table></details>")
             shaders = [shader for shader in profile.get("shaders", []) if shader["phase"] == phase["name"]]
             if shaders:
-                body.append("<details><summary>着色器 PTX 缓存 / NVRTC 明细（不与上方总时间重复相加）</summary><table><tr><th>着色器</th><th>PTX</th><th>NVRTC</th></tr>")
+                body.append("<details><summary>着色器 SPIR-V 缓存 / Slang 明细（不与上方总时间重复相加）</summary><table><tr><th>着色器</th><th>SPIR-V</th><th>Slang</th></tr>")
                 for shader in shaders:
-                    body.append(f"<tr><td>{html.escape(shader['name'])}</td><td>{shader['cache']}</td><td>{_ms(shader['nvrtc_ms'])}</td></tr>")
+                    body.append(f"<tr><td>{html.escape(shader['name'])}</td><td>{shader['cache']}</td><td>{_ms(shader['slang_ms'])}</td></tr>")
                 body.append("</table></details>")
         relative = f"run-{index}"
         body.append(f"<p><a href='{relative}/stdout.log'>stdout</a> · <a href='{relative}/stderr.log'>stderr</a> · <a href='{relative}/process.json'>启动与退出信息</a> · <a href='{relative}/trace.json'>Chrome/Perfetto trace</a></p>")

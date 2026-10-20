@@ -23,7 +23,7 @@ using namespace vision;
 struct App {
     Device device;
     SP<Pipeline> rp{};
-    App() : device(RHIContext::instance().create_device("cuda")) {
+    App() : device(RHIContext::instance().create_device()) {
         Global::instance().set_device(&device);
         fs::path file_path = parent_path(__FILE__, 1) / "precompute.json";
         rp = Importer::import_scene(file_path);

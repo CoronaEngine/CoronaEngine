@@ -115,7 +115,7 @@ int main(int argc, char **argv) {
         if (argc == 2 && std::string_view{argv[1]} == "--comments-only") return 0;
         DynamicModule::clear_search_path();
         RHIContext::instance().init(std::filesystem::current_path());
-        auto device = RHIContext::instance().create_device("cuda");
+        auto device = RHIContext::instance().create_device();
         auto stream = device.create_stream();
         check_uniform_capture(device, stream);
         check_registered_buffer_identity(device, stream);
