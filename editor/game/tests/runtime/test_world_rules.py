@@ -28,6 +28,15 @@ def map_identity():
     return block
 
 
+def prophet_guid():
+    """先知的 actor 身份，与 game/frontend/storyCharacters.mjs 里 role='prophet' 的角色同源。
+
+    这个 guid 只写在角色表里（不在数据文件中），所以这里与运行时常量各自引用一次；
+    game/tests/test_story_assets.py 会拿 node 读出角色表，证明两处没有漂开。
+    """
+    return 'f9f5c8b0-7324-4b6c-a011-000000000004'
+
+
 class WorldRuleValidationTests(unittest.TestCase):
     def test_initial_state_is_an_empty_versioned_rule_set(self):
         self.assertEqual(world_rules.initial_state(), {'version': 1, 'rules': []})
@@ -64,11 +73,43 @@ class WorldRuleValidationTests(unittest.TestCase):
             sway_rule(periodMs=10 ** 9),
             spin_rule(periodMs=0), spin_rule(periodMs=-3600), spin_rule(periodMs='3600'),
             spin_rule(periodMs=10 ** 9),
+            # target 只在真的给出时才要求合法：空串、非字符串、超长都拒绝。null/缺失是
+            # 「旧规则」（作用于整个小世界），因此不在这张表里。
+            sway_rule(target=''), sway_rule(target='   '), sway_rule(target=7),
+            sway_rule(target=['a']), sway_rule(target='x' * (world_rules.MAX_TARGET_LENGTH + 1)),
         ]
         for case in cases:
             with self.subTest(case=case):
                 with self.assertRaises(world_rules.WorldRuleError):
                     world_rules.validate_rule(case)
+
+    def test_a_rule_may_name_the_one_object_it_acts_on(self):
+        """碎片改为可作用于单独物体：target 是 actor guid，合法时原样保留。"""
+        target = 'story.placement.0003'
+        named = sway_rule(target=target)
+        self.assertEqual(world_rules.validate_rule(named), named)
+        # 空白被裁掉，身份本身不变。
+        self.assertEqual(world_rules.validate_rule(sway_rule(target=' story.placement.0003 ')),
+                         named)
+        # 没有 target 的记录回读出来仍然没有 target 键：旧规则就是旧规则。
+        self.assertNotIn('target', world_rules.validate_rule(sway_rule()))
+        self.assertNotIn('target', world_rules.validate_rule(sway_rule(target=None)))
+
+    def test_a_rule_that_names_the_map_or_the_prophet_is_refused(self):
+        """地图不算物体，先知是角色：任何规则都不许指向它们。
+
+        前端在选目标时就用 isMapActor / isProphetActor 把两者挡在列表外（storyProphetActions
+        .selectableObjects），运行时这一层是防御纵深：一份手改存档、一个旧版本、一次直接调用
+        都进不来。非真空：把 `_target` 里的保留判断删掉，这份记录会被接受并落到盘上，
+        下面每一条断言都会失败。
+        """
+        identity = map_identity()
+        self.assertIn(identity['guid'], world_rules.RESERVED_TARGETS,
+                      '运行时保留表里的地图 guid 必须就是数据文件里的那一个')
+        for reserved in (identity['guid'], prophet_guid()):
+            with self.subTest(reserved=reserved):
+                with self.assertRaises(world_rules.WorldRuleError):
+                    world_rules.validate_rule(sway_rule(target=reserved))
 
     def test_state_requires_the_supported_version_and_unique_fragments(self):
         self.assertEqual(world_rules.validate_state({'version': 1, 'rules': [sway_rule()]}),
@@ -122,25 +163,48 @@ class WorldRuleStorageTests(unittest.TestCase):
         self.assertIn('浮动', self.save_path().read_text(encoding='utf-8'))
         self.assertEqual(world_rules.load(self.root)['rules'][0]['fragmentId'], '浮动')
 
-    def test_a_saved_rule_that_names_the_map_is_ignored_rather_than_honoured(self):
-        """地图不是物体，任何规则都不许写到它身上——而运行时里没有「规则目标」这种东西。
+    def test_a_saved_rule_that_names_the_map_is_refused_rather_than_stored(self):
+        """指向地图/先知的规则在运行时就被拒绝，而不是被悄悄改成一条整世界规则。
 
-        规则的目标由前端按场景快照解析（storyWorldRules.mjs 的 collectSwayTargets，地图在那里
-        就被 isMapActor 挡掉），运行时只存碎片与数字，因此「拒绝一条指向地图的规则」这件事本身
-        不在这里：这里能保证的是更硬的一条——存档里写下的地图身份根本活不过校验，被丢弃而不是
-        被交给任何消费者。非真空：把 validate_rule 的返回值换回 `dict(entry)` 会让这些键留下，
-        这条用例就会失败。
+        前端在选目标时就把两者挡在列表外（storyProphetActions.selectableObjects +
+        storyWorldRules.RESERVED_TARGET_GUIDS）；这里是防御纵深：一份手改存档、一个旧版本、
+        一次直接调用都写不进去。拒绝而不是丢字段，是因为「丢掉 target」会把一条本来只该作用
+        于一个物体的规则变成作用于整个小世界——那正是这次要改掉的行为。
+
+        非真空：把 `_target` 里的保留判断删掉，`save` 会把这条记录写到盘上，下面每条断言都会失败。
         """
         identity = map_identity()
+        for reserved in (identity['guid'], prophet_guid()):
+            with self.subTest(reserved=reserved):
+                with self.assertRaises(world_rules.WorldRuleError):
+                    world_rules.save(self.root, [sway_rule(target=reserved)])
+        self.assertFalse(self.save_path().exists(), '被拒绝的保存一个字节都不写')
+        # 身份字段只认 target：写进 guid/model_ref 这些本不属于规则的字段，谁也混不进来。
         named = sway_rule(guid=identity['guid'], modelRef=identity['modelRef'],
                           model_ref=identity['modelRef'], entity_id='story.world.map',
-                          entity_type='story_scenery', target=identity['guid'],
-                          targets=[identity['guid']], actor_guid=identity['guid'])
+                          entity_type='story_scenery', targets=[identity['guid']],
+                          actor_guid=identity['guid'])
         self.assertEqual(world_rules.validate_rule(named), sway_rule(), '地图身份在校验时就被丢掉')
         world_rules.save(self.root, [named])
         self.assertEqual(world_rules.load(self.root), {'version': 1, 'rules': [sway_rule()]})
         self.assertEqual(json.loads(self.save_path().read_text(encoding='utf-8')),
                          {'version': 1, 'rules': [sway_rule()]}, '盘上也不留任何地图身份')
+
+    def test_a_rule_with_a_target_round_trips_and_old_targetless_rules_stay_targetless(self):
+        """碎片指向一个物体时原样落盘；改动前存的「没有 target」的记录一字不改地回读。
+
+        这就是旧世界的兼容承诺：target 是可选的，缺了它规则仍然是**旧的整世界语义**，
+        既不需要迁移，也不会因为一次读写往返变成「只作用于某个物体」。
+        """
+        targeted = sway_rule(target='story.placement.0003')
+        legacy = spin_rule()
+        world_rules.save(self.root, [targeted, legacy])
+        self.assertEqual(world_rules.load(self.root),
+                         {'version': 1, 'rules': [targeted, legacy]})
+        written = json.loads(self.save_path().read_text(encoding='utf-8'))
+        self.assertEqual(written['rules'][0]['target'], 'story.placement.0003')
+        self.assertNotIn('target', written['rules'][1], '旧规则不会凭空长出一个 target')
+        self.assertEqual(written['version'], 1, '版本号不跳：旧构建仍能读，新构建向后兼容')
 
     def test_a_world_may_keep_a_sway_and_a_spin_at_the_same_time(self):
         world_rules.save(self.root, [sway_rule(), spin_rule()])

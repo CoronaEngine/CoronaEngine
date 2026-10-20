@@ -15,11 +15,13 @@ import HERO_FIGURE from '@/assets/hero-figure.png';
 import './StoryWorld.bag.css';
 
 import { ensureStoryCharacters, syncPlacementActors } from '../../../../game/frontend/storyActors.mjs';
+import { createPlayerAnimationSwitcher, PLAYER_ATTACK_CLIP, PLAYER_SKILL_CLIP } from '../../../../game/frontend/storyPlayerAnimation.mjs';
+import { createBossDirector } from '../../../../game/frontend/storyBossAi.mjs';
 import { createPlayerController, VIEW_LABELS } from '../../../../game/frontend/playerController.mjs';
 import { createPlayerSave } from '../../../../game/frontend/playerSave.mjs';
 import { createStoryGameplay, worldBounds, distanceToBounds, pickupDistance,
-  contextualInteraction } from '../../../../game/frontend/storyGameplay.mjs';
-import { STORY_CHARACTERS, PROPHET_GUID, resolveStoryAssetPath,
+  contextualInteraction, FRAGMENT_GUID } from '../../../../game/frontend/storyGameplay.mjs';
+import { STORY_CHARACTERS, PROPHET_GUID, isMonsterRole, resolveStoryAssetPath,
   sceneSnapshot } from '../../../../game/frontend/storyCharacters.mjs';
 import { MAX_PLACEMENTS, PLACED_BLOCK_REACH, PLACEMENT_DISTANCE, blockSpawnTransform, cycleSlot, findProp,
   hotbarSlots as hotbarSlotsFor, nearestPlacedBlock, nextPlacementIndex, placementGuid,
@@ -27,7 +29,10 @@ import { MAX_PLACEMENTS, PLACED_BLOCK_REACH, PLACEMENT_DISTANCE, blockSpawnTrans
 import { PROPHET_INTERACTION, prophetAvailable, prophetDistance,
   normalizeDialogue } from '../../../../game/frontend/prophetDialogue.mjs';
 import { ensureStoryCube, cubeTransformOf, playerFacingYaw } from '../../../../game/frontend/storyCube.mjs';
+import { MONSTER_EQUIPMENT } from '../../../../game/frontend/storyLoot.mjs';
 import { ensureStoryMap } from '../../../../game/frontend/storyMap.mjs';
+import { heightAt } from '../../../../game/frontend/storyMapHeight.mjs';
+import { loadStoryMapHeight, mapHeightUrl } from '../../../../game/frontend/storyMapHeightLoader.mjs';
 import { collectSwayTargets, createWorldRuleRunner,
   findFragment } from '../../../../game/frontend/storyWorldRules.mjs';
 import { ADJUST_ACTIONS, FRAGMENT_ADJUST_ACTIONS, PROPHET_SCREENS, adjustFeedback,
@@ -35,9 +40,12 @@ import { ADJUST_ACTIONS, FRAGMENT_ADJUST_ACTIONS, PROPHET_SCREENS, adjustFeedbac
   nextObjectTransform, objectLabel, prophetKeyAction, selectableObjects,
   toggleFragment } from '../../../../game/frontend/storyProphetActions.mjs';
 
+
 const router = useRouter();
 const surface = ref(null);
 const inventoryOpen = ref(false);
+// 离玩家最近、且在血条射程内的普通怪物；同一时刻只显示它，血条位置固定。
+const nearbyMonsterId = ref(null);
 const inventoryPanel = ref(null);
 const selectedSlot = ref(0);
 const navigationPending = ref(false);
@@ -56,6 +64,8 @@ let feedbackTimer = null;
 let toastTimer = null;
 let bossActor = null;
 let bossBounds = null;
+// 主世界的普通怪物：{ id, name, actor, bounds }，攻击目标裁决与小怪血条共用这一份。
+let monsterActors = [];
 let sceneId = null;
 let visualSignature = null;
 let lastHitHp = null;
@@ -87,6 +97,8 @@ let visualPlacements = null;
 let disposed = false;
 let cameraReady = false;
 let playerSave = null;
+// 原生移动结果的事件订阅（离开世界必须注销，否则旧页面继续收事件）。
+let motionCallbackToken = null;
 let savingPlayer = false;
 let initialization = Promise.resolve();
 let exitPending = null;
@@ -96,11 +108,18 @@ let dpiQuery = null;
 let focused = document.hasFocus();
 const current = () => !disposed && !leaving && worldModeState.status === 'ready'
   && worldModeState.mode === 'story' && worldModeState.revision === revision;
-// Spawn placement is authored; runtime support and motion use native triangles.
-const groundYAt = () => null;
-let motionCallbackToken = null;
+/**
+ * 物体的地面线：与角色、玩家控制器同一个来源——烘好的地图高度网格。
+ * 摆放、掉落和先知方块都读这一个函数（`heightAt` 在没有网格时返回 null，各调用点便退回
+ * 它们原来的常量高度），因此世界上所有东西站的是同一条地面，而不是三套各自算的 y。
+ */
+const groundYAt = (x, z) => heightAt(x, z);
 const camera = createStoryCameraController({
   createControls: createPlayerController,
+  // 玩家的地面线：地图是 phantom（引擎不为它建碰撞体），脚下多高只能由烘好的高度网格回答。
+  // `heightAt` 在没有网格时返回 null，控制器便退回原来的固定地板——这条绑定必须在
+  // createStoryCameraController 里继续往下传，否则控制器收不到它（这正是之前的原因）。
+  getGroundY: groundYAt,
   onError: error => {
     if (current()) gameplayError.value = error.message;
     notifyWorldError(error);
@@ -113,6 +132,78 @@ const camera = createStoryCameraController({
   getPixelRatio: () => window.devicePixelRatio,
 });
 const unwrap = (response) => response?.data ?? response;
+/**
+ * 玩家的动作播放器：把控制器报出的 movementState 翻成 clip，并负责攻击/技能的一次性播放。
+ * 懒创建——`sceneId` 要等 `onInit` 才知道；整页只建一次，世界重建时 guid 不变。
+ * 失败只报告不抛出：动作属于表现层，不该让一次桥调用失败挡住移动。
+ */
+let playerAnimation = null;
+function playerAnimationSwitcher() {
+  if (playerAnimation || !sceneId) return playerAnimation;
+  try {
+    playerAnimation = createPlayerAnimationSwitcher({
+      api: editorApi, sceneId, guid: STORY_CHARACTERS[0].guid,
+      onError: (error) => { if (current()) gameplayError.value = error.message || '动作切换失败'; },
+    });
+  } catch (error) {
+    if (current()) gameplayError.value = error.message;
+  }
+  return playerAnimation;
+}
+/**
+ * 小怪简易版：让一只小怪发现玩家后走过去、进入范围就挥砍。
+ * 用 100ms 定时器驱动，而不是挂在 `updateProximity` 上——那个回调只在玩家移动时触发，
+ * 玩家站住不动小怪就不会动，无法验证。
+ */
+/**
+ * Boss 动作状态机：待机 / 靠近时挥砍（两套轮换）/ 被击中时受击 / 血量归零死亡。
+ * 不造成伤害——游戏里没有"玩家血量"状态，`config.playerHp` 无人消费，
+ * 所以这里先把可见的威胁做出来；等血量系统落地时，`onAttack` 是唯一要接伤害的地方。
+ */
+let bossDirector = null;
+let bossLastHp = null;
+function bossStateMachine() {
+  if (bossDirector || !sceneId) return bossDirector;
+  const entry = STORY_CHARACTERS.find(character => character.role === 'boss');
+  if (!entry) return null;
+  try {
+    bossDirector = createBossDirector({
+      api: editorApi, sceneId, guid: entry.guid,
+      onError: (error) => { if (current()) gameplayError.value = `Boss 动作: ${error.message}`; },
+    });
+  } catch (error) {
+    if (current()) gameplayError.value = error.message;
+  }
+  return bossDirector;
+}
+function tickBoss() {
+  const data = gameplayState.value;
+  if (!data || data.role !== 'main') return;
+  const player = camera.snapshotPlayer();
+  const boss = bossActor;
+  if (!player?.position || !boss?.geometry?.position) return;
+  const hp = data.state.boss.hp;
+  const bossSite = STORY_CHARACTERS.find(character => character.role === 'boss');
+      // 距离用**人物表落点**算：actor 位置只在进入世界时快照一次，Boss 站点改过之后
+      // 旧世界里的副本不会跟着动，页面就会拿旧坐标判断，一进世界就开打。
+      const bounds = worldBounds(boss);
+      const half = bounds && bounds[3] > bounds[0]
+        ? Math.max(bounds[3] - bounds[0], bounds[5] - bounds[2]) / 2
+        : (bossSite?.size ?? 8) / 2;
+      const distance = Math.hypot(player.position[0] - bossSite.x, player.position[2] - bossSite.z) - half;
+  const wasHit = bossLastHp !== null && hp < bossLastHp;
+  bossLastHp = hp;
+  bossStateMachine()?.tick({ hp, distance: Math.max(0, distance), wasHit });
+}
+// Boss 状态机由 100ms 定时器驱动：玩家站住不动时 Boss 仍然要反应。
+let actorTimer = null;
+function startActorTicker() {
+  if (actorTimer || typeof window === 'undefined') return;
+  actorTimer = window.setInterval(() => {
+    if (!current() || !cameraReady) return;
+    try { tickBoss(); } catch (error) { if (current()) gameplayError.value = error.message; }
+  }, 100);
+}
 function updateProximity() {
   if (!current()) return;
   const data = gameplayState.value, player = camera.snapshotPlayer();
@@ -122,6 +213,22 @@ function updateProximity() {
   canPickup.value = Boolean(reach.drop) && reach.distance <= (data?.config?.pickupRange ?? 0);
   // 提示与 F 键读的是同一个函数、同一份现算的距离；缓存只用于渲染这一行提示。
   fKeyAction.value = interactionFor(data, player);
+  // 普通怪物血条只在靠近时出现；同时有多只在射程内时只取最近的那一只。
+  nearbyMonsterId.value = null;
+  if (data?.role === 'main' && player?.position) {
+    const radius = Number(data.config.monsterBarRadius) || 0;
+    let nearest = null;
+    for (const entry of monsterActors) {
+      if (!entry.bounds || (data.state.monsters?.[entry.id]?.hp ?? 1) <= 0) continue;
+      const distance = distanceToBounds(player.position, entry.bounds);
+      if (!Number.isFinite(distance) || distance > radius) continue;
+      if (!nearest || distance < nearest.distance) nearest = { id: entry.id, distance };
+    }
+    nearbyMonsterId.value = nearest?.id || null;
+  }
+  // 走路/奔跑/待机跟着控制器走：`movementState` 由控制器现算，这里不做第二次判断。
+  if (cameraReady && player?.movementState) playerAnimationSwitcher()?.update(player.movementState);
+  if (cameraReady) startActorTicker();
 }
 // 今天还剩下的世界碎片：只有主世界会掉落，被拾走之后就不再是候选。
 function reachableDrop(data, player) {
@@ -219,14 +326,21 @@ async function assertSource() {
 const signature = data => JSON.stringify([data.role, data.state.boss.hp === 0, data.state.drop]);
 const gameplay = createStoryGameplay({
   api: editorApi, projectPath, readPlayer: camera.snapshotPlayer, readBoss: () => bossActor,
-  // 掉落位置保留剧情数据中的摆放坐标。
+  readMonsters: () => monsterActors,
+  // 掉落的碎片和角色、方块读同一个地面：地图的烘好高度网格（没有网格时退回原来的常量）。
   groundYAt,
   trackWork: trackWorldSessionWork,
   onState: data => {
     // 即使 current() 为假也镜像已确认的世界角色：HUD 要跟随引擎真正确认的世界，
     // 而不是可能已经过期的渲染守卫。
     roleRef.value = data.role;
-    if (current()) { gameplayState.value = data; updateProximity(); }
+    if (current()) {
+      gameplayState.value = data;
+      // 存档 → 行囊：Boss 兵甲只发一次，怪物装备按件数补齐（丢弃/披挂会同步扣账）。
+      syncBossLoot(data);
+      syncMonsterGear(data);
+      updateProximity();
+    }
   },
   onFeedback: showFeedback,
   reconcile: async data => {
@@ -253,10 +367,13 @@ const gameplay = createStoryGameplay({
     if (current()) updateProximity();
   },
 });
-async function runAction(action) {
+async function runAction(action, clip = null) {
   if (!current() || !focused || document.hidden || inventoryOpen.value
     || navigation.busy || savingPlayer || actionBusy.value || !cameraReady) return;
   actionBusy.value = true;
+  // 一次性动作先起播：它会在自身时长后把角色交还给当前的移动状态，
+  // 所以挥砍不会被下一帧的走路更新打断。
+  if (clip) playerAnimationSwitcher()?.playOnce(clip);
   try {
     await action();
     if (current()) gameplayError.value = '';
@@ -534,6 +651,64 @@ const BAG_WEIGHT_MAX = 120;
 const FRAGMENT_DEF = { u: 'corona-world-fragment', name: '世界碎片', type: '未解之物', cat: 'mat', rarity: 'epic',
   glyph: 'g-ore', real: true, stats: [['来历', '界隙所遗'], ['用途', '待考']],
   flavor: '从裂隙里落下的一角，边缘仍在缓慢地转动。' };
+/* 击杀得到的可摆放模型：数量接真实存档（inventory[itemKey] 减去已摆放）。 */
+const BLOCK_DEF = { u: 'corona-block', name: '方块', type: '小世界材料', cat: 'mat', rarity: 'fine',
+  glyph: 'g-cube', real: true, itemKey: 'block',
+  stats: [['用途', '可以在小世界中使用'], ['摆放', '按 B 放在身前']],
+  flavor: '怪物身上掉下来的整叠方块，只在小世界里派得上用场。' };
+const BALL_DEF = { u: 'corona-ball', name: '球', type: '小世界模型', cat: 'mat', rarity: 'rare',
+  glyph: 'g-ball', real: true, itemKey: 'ball',
+  stats: [['用途', '可以在小世界中使用'], ['摆放', '按 B 放在身前']],
+  flavor: '从怪物身上滚落的圆球，表面还留着一点余温。' };
+/* 怪物与 Boss 掉落的植被：和小世界里的摆放物一一对应（itemKey = 摆放 id）。 */
+const TREE1_DEF = { u: 'corona-tree1', name: '古松', type: '小世界植被', cat: 'mat', rarity: 'rare',
+  glyph: 'g-herb', real: true, itemKey: 'tree1',
+  stats: [['用途', '可以在小世界中使用'], ['摆放', '按 B 放在身前']],
+  flavor: '从怪物身上夺回来的古松，栽在小世界里正合适。' };
+const TREE2_DEF = { u: 'corona-tree2', name: '阔叶树', type: '小世界植被', cat: 'mat', rarity: 'rare',
+  glyph: 'g-herb', real: true, itemKey: 'tree2',
+  stats: [['用途', '可以在小世界中使用'], ['摆放', '按 B 放在身前']],
+  flavor: '枝叶宽大的乔木，落在小世界也有影子。' };
+const TREE3_DEF = { u: 'corona-tree3', name: '枯槎', type: '小世界植被', cat: 'mat', rarity: 'rare',
+  glyph: 'g-herb', real: true, itemKey: 'tree3',
+  stats: [['用途', '可以在小世界中使用'], ['摆放', '按 B 放在身前']],
+  flavor: '半枯的老树，枝干虬结，比活树更有野气。' };
+const GRASS1_DEF = { u: 'corona-grass1', name: '细草', type: '小世界植被', cat: 'mat', rarity: 'common',
+  glyph: 'g-herb', real: true, itemKey: 'grass1',
+  stats: [['用途', '可以在小世界中使用'], ['摆放', '按 B 放在身前']],
+  flavor: '一小丛青草，铺在地面上就有了生气。' };
+const GRASS2_DEF = { u: 'corona-grass2', name: '秀草', type: '小世界植被', cat: 'mat', rarity: 'common',
+  glyph: 'g-herb', real: true, itemKey: 'grass2',
+  stats: [['用途', '可以在小世界中使用'], ['摆放', '按 B 放在身前']],
+  flavor: '叶片略高的草，风一过就成片地倒。' };
+const GRASS4_DEF = { u: 'corona-grass4', name: '蒿草', type: '小世界植被', cat: 'mat', rarity: 'fine',
+  glyph: 'g-herb', real: true, itemKey: 'grass4',
+  stats: [['用途', '可以在小世界中使用'], ['摆放', '按 B 放在身前']],
+  flavor: '荒野里最常见的草，扎成一丛才看得见。' };
+const GRASS5_DEF = { u: 'corona-grass5', name: '芒草', type: '小世界植被', cat: 'mat', rarity: 'fine',
+  glyph: 'g-herb', real: true, itemKey: 'grass5',
+  stats: [['用途', '可以在小世界中使用'], ['摆放', '按 B 放在身前']],
+  flavor: '穗子发白的草，秋天时会整片发亮。' };
+const REAL_BAG_DEFS = Object.freeze([FRAGMENT_DEF, BLOCK_DEF, BALL_DEF, TREE1_DEF, TREE2_DEF, TREE3_DEF,
+  GRASS1_DEF, GRASS2_DEF, GRASS4_DEF, GRASS5_DEF]);
+/* Boss 倒下时一并进包的五件兵甲；id 与后端 BOSS_EQUIPMENT 一致。 */
+const BOSS_LOOT_ITEMS = [
+  { u: 'boss-main', name: '龙牙断岳', type: '长兵', cat: 'equip', slot: 'weapon', rarity: 'epic', glyph: 'g-sword',
+    stats: [['锋芒', '128 - 168'], ['力道', '+47'], ['破甲', '+21%']],
+    flavor: '刃口还残留着龙焰的温度，握久了掌心会发烫。' },
+  { u: 'boss-helm', name: '龙鳞重盔', type: '重甲', cat: 'equip', slot: 'helm', rarity: 'epic', glyph: 'g-helm-h',
+    stats: [['护体', '+150'], ['定神', '+24'], ['抗蚀', '+12%']],
+    flavor: '每一片鳞都朝着同一个方向，像是还记着风。' },
+  { u: 'boss-chest', name: '龙脊重铠', type: '重甲', cat: 'equip', slot: 'chest', rarity: 'epic', glyph: 'g-armor',
+    stats: [['护体', '+210'], ['筋骨', '+31'], ['抗蚀', '+20%']],
+    flavor: '背脊那一道棱线取自龙骨，披上时能听见极轻的嗡鸣。' },
+  { u: 'boss-legs', name: '龙尾胫铠', type: '重甲', cat: 'equip', slot: 'legs', rarity: 'epic', glyph: 'g-legs-h',
+    stats: [['护体', '+168'], ['负重', '+18'], ['筋骨', '+12']],
+    flavor: '胫甲末端收成尾鳍的形状，走起路来却毫不拖沓。' },
+  { u: 'boss-boots', name: '龙爪战靴', type: '靴履', cat: 'equip', slot: 'boots', rarity: 'epic', glyph: 'g-boots-h',
+    stats: [['护体', '+112'], ['身法', '+24'], ['疾行', '+10%']],
+    flavor: '鞋底是三枚钩爪，踩在石上会留下极浅的白痕。' },
+];
 
 /* 世界图象：山形 / 月相（与 bag.html 同一套坐标） */
 const WS_SHAPES = [
@@ -589,11 +764,19 @@ const bag = reactive({
   tipStyle: { left: '0px', top: '0px' },
   tipItem: null,
   toast: '',
+  /* 发放入账本：Boss 兵甲只发一次；怪物装备按「已入包件数」记账，重进不会重复。 */
+  bossLoot: false,
+  monsterGear: {},
 });
 let bagToastTimer = null;
 const bagTip = ref(null);
 
-function bagDef(u) { return BAG_ITEMS.find(def => def.u === u) || null; }
+function bagDef(u) {
+  return BOSS_LOOT_ITEMS.find(def => def.u === u)
+    || MONSTER_EQUIPMENT.find(def => def.u === u)
+    || REAL_BAG_DEFS.find(def => def.u === u)
+    || null;
+}
 function bagMakeItem(def) {
   return { ...def, uid: `${def.u}#${++bagUidSeq}`, qty: def.qty || 1 };
 }
@@ -661,7 +844,10 @@ function bagSave() {
       cells: bag.cells.map(item => (item && !item.real ? { u: item.u, qty: item.qty } : null)),
       /* 只存图象偏好：世界名称是固定身份，不写档也不读档。 */
       worlds: bag.worlds.slice(0, 2).map(world => ({ art: { ...world.art } })),
-      worldCur: bag.worldCur,    }));
+      worldCur: bag.worldCur,
+      bossLoot: Boolean(bag.bossLoot),
+      monsterGear: { ...bag.monsterGear },
+    }));
   } catch { /* 界面状态不写存档，失败即忽略 */ }
 }
 function bagInit() {
@@ -700,6 +886,9 @@ function bagInit() {
       }));
       bag.worldCur = clampWorldIndex(saved.worldCur);
     }
+    bag.bossLoot = Boolean(saved.bossLoot);
+    bag.monsterGear = saved.monsterGear && typeof saved.monsterGear === 'object'
+      ? { ...saved.monsterGear } : {};
   }
   if (!bag.worlds.length) {
     bag.worlds = [WORLD_MAIN, WORLD_SMALL].map(world => ({ art: { ...world.art } }));
@@ -709,36 +898,71 @@ function bagInit() {
   while (bag.worlds.length < 2) {
     bag.worlds.push({ art: { ...WORLD_SMALL.art } });
   }
-  if (!bag.cells.length) {
-    // 未披挂的兵甲 + 消耗品 + 材料，乱序铺进格阵（与 bag.html 同一铺陈方式）
-    const equipDefs = BAG_ITEMS.filter(def => def.cat === 'equip');
-    const pool = equipDefs.filter(def => !Object.values(BAG_LOADOUT).includes(def.u)).map(bagMakeItem)
-      .concat(BAG_ITEMS.filter(def => def.cat !== 'equip').map(bagMakeItem));
-    for (let i = pool.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [pool[i], pool[j]] = [pool[j], pool[i]];
-    }
-    const floorCount = Math.min(pool.length, Math.round(BAG_TOTAL * 0.78));
-    bag.cells = Array.from({ length: BAG_TOTAL }, (_, i) => {
-      const mustFill = (BAG_TOTAL - i) <= pool.length;
-      const wantFill = pool.length
-        && (i < floorCount || Math.random() < 0.55 + (Math.floor(i / BAG_COLS) < 2 ? 0.12 : 0));
-      return mustFill || wantFill ? pool.pop() : null;
-    });
-    if (!Object.keys(bag.gear).length) {
-      Object.entries(BAG_LOADOUT).forEach(([slotId, u]) => {
-        const def = bagDef(u);
-        if (def) bag.gear[slotId] = bagMakeItem(def);
-      });
-    }
-  }
+  // 格阵默认是空的：内容全部来自存档（世界碎片 / 方块 / 球 / 装备）。
+  if (!bag.cells.length) bag.cells = Array.from({ length: BAG_TOTAL }, () => null);
+}
+/* 可摆放模型与物品栏同源：库存减去已经摆下去的数量，就是行囊里那一叠的件数。 */
+function bagRealProp(def) {
+  const data = gameplayState.value;
+  if (!data) return null;
+  const owned = data.state.inventory?.[def.itemKey] || 0;
+  const placed = placements.value.filter(entry => entry.propId === def.itemKey).length;
+  const count = Math.max(0, owned - placed);
+  return count > 0 ? { ...def, uid: def.u, qty: count, real: true, realCount: count } : null;
+}
+function bagRealItemAt(slot) {
+  const def = REAL_BAG_DEFS[slot];
+  if (!def) return null;
+  return def === FRAGMENT_DEF ? bagRealFragment() : bagRealProp(def);
 }
 function bagCellItems() {
   const source = bag.cells;
   return Array.from({ length: BAG_TOTAL }, (_, i) => {
-    if (i === 0) { const real = bagRealFragment(); if (real) return real; }
+    if (i < REAL_BAG_DEFS.length) {
+      const real = bagRealItemAt(i);
+      if (real) return real;
+    }
     return source[i] || null;
   });
+}
+/* Boss 倒下时把这 5 件兵甲铺进行囊，只发一次（ledger 跟着格阵一起存）。 */function syncBossLoot(data = gameplayState.value) {
+  if (!data || (data.state.inventory?.worldFragment || 0) <= 0 || bag.bossLoot) return [];
+  const granted = [];
+  for (const id of BOSS_LOOT_ITEMS.map(item => item.u)) {
+    const def = bagDef(id);
+    if (!def) continue;
+    const index = bag.cells.findIndex((cell, i) => i >= REAL_BAG_DEFS.length && !cell);
+    if (index === -1) break;
+    bag.cells[index] = bagMakeItem(def);
+    granted.push(def);
+  }
+  if (granted.length === BOSS_LOOT_ITEMS.length) { bag.bossLoot = true; bagSave(); }
+  return granted;
+}
+/* 小怪掉落的装备：后端只记每种累计件数，页面按「已入包件数」补齐，重进不会重复发。 */
+function syncMonsterGear(data = gameplayState.value) {
+  if (!data) return [];
+  const granted = [];
+  for (const def of MONSTER_EQUIPMENT) {
+    const owned = Number(data.state.inventory?.[def.u]) || 0;
+    let synced = Number(bag.monsterGear[def.u]) || 0;
+    while (synced < owned) {
+      const index = bag.cells.findIndex((cell, i) => i >= REAL_BAG_DEFS.length && !cell);
+      if (index === -1) break;
+      bag.cells[index] = bagMakeItem(def);
+      synced += 1;
+      bag.monsterGear[def.u] = synced;
+      granted.push(def);
+    }
+  }
+  if (granted.length) bagSave();
+  return granted;
+}
+/* 披挂 / 卸下 / 弃置都会改变后端的件数：账本跟着走，重进世界才不会重复补发。 */
+function adjustGearLedger(itemId, delta) {
+  if (!MONSTER_EQUIPMENT.some(def => def.u === itemId)) return;
+  const next = (Number(bag.monsterGear[itemId]) || 0) + delta;
+  bag.monsterGear[itemId] = Math.max(0, next);
 }
 function bagPassFilter(item) {
   if (!item) return false;
@@ -941,6 +1165,9 @@ function bagEquipFromSlot(index) {
   bag.cells[index] = previous;            // 旧物回落到同一格，格阵不塌陷
   bagToast(`披掛 · ${SLOT_BY_ID[slotId].name} · ${item.name}`);
   bag.sel = item.uid;
+  // 后端记一次披挂：属性与伤害按它算；账本同步扣一件，重进不会又补一件。
+  adjustGearLedger(item.u, -1);
+  gameplay.equipItem(item.u).catch(() => {});
   bagSave();
 }
 function bagUnequip(slotId) {
@@ -952,6 +1179,8 @@ function bagUnequip(slotId) {
   bag.gear[slotId] = null;
   bagToast(`卸下 · ${item.name}`);
   bag.sel = item.uid;
+  adjustGearLedger(item.u, 1);
+  gameplay.unequipItem(slotId).catch(() => {});
   bagSave();
 }
 function bagUseFromSlot(index) {
@@ -966,6 +1195,8 @@ function bagUseFromSlot(index) {
     bag.cells[index] = null;
     if (bag.sel === entry.uid) bag.sel = null;
   }
+  // 服用效果（回气）由后端结算。
+  gameplay.useItem(entry.u).catch(() => {});
   bagSave();
 }
 function bagDropItem(uid) {
@@ -975,6 +1206,9 @@ function bagDropItem(uid) {
   else bag.cells[found.idx] = null;
   bag.sel = null;
   bagToast(`${found.item.cat === 'equip' ? '熔去' : '弃之'} · ${found.item.name}`);
+  // 弃置要落在存档里，否则重进世界会按计数把这件东西补回来。
+  adjustGearLedger(found.item.u, -1);
+  gameplay.discardItem(found.item.u).catch(() => {});
   bagSave();
 }
 function bagDetailAct(uid, action) {
@@ -1190,6 +1424,20 @@ const worldLabel = computed(() => transitioning.value ? '切换中…'
   : inSubworld.value ? '小世界' : '主世界');
 // 小世界没有 Boss、没有怒气消耗、没有攻击目标，整条战斗 HUD 隐藏而不是显示一排禁用控件。
 const showCombatHud = computed(() => !inSubworld.value);
+// 每只普通怪物一条血条：名称来自角色表，血量来自玩法存档，上限来自后端 CONFIG。
+const monsterBars = computed(() => {
+  const data = gameplayState.value;
+  if (!data?.state?.monsters) return [];
+  return STORY_CHARACTERS.filter(character => isMonsterRole(character.role)).map(character => {
+    const hp = Math.max(0, Number(data.state.monsters?.[character.role]?.hp) || 0);
+    const max = Math.max(1, Number(data.config.monsters?.[character.role]?.hp) || hp || 1);
+    return { id: character.role, name: character.name, hp, max,
+      percent: Math.max(0, Math.min(100, 100 * hp / max)), dead: hp <= 0 };
+  });
+});
+// 屏幕只显示这一条：靠近时是哪只怪物，它就换成哪只，位置不移动。
+const nearbyMonsterBar = computed(() =>
+  monsterBars.value.find(entry => entry.id === nearbyMonsterId.value) || null);
 function viewLabel() {
   void viewTick.value;
   const mode = camera.viewMode?.();
@@ -1226,6 +1474,8 @@ function cycleView() {
   const label = viewLabel();
   camera.cycleViewMode?.();
   viewTick.value++;
+  // 视角循环可能把玩家模型翻回可见，小世界里立刻改回隐藏。
+  keepChildPlayerHidden();
   showToast(`视角：${label} → ${viewLabel()}（V 键切换）`);
 }
 function openDialogue() {
@@ -1307,6 +1557,7 @@ function enterAdjustMode() {
   previousViewMode.value = camera.viewMode?.() || null;
   camera.setViewMode?.('top');
   adjustMode.value = true;
+  keepChildPlayerHidden();
   dialogueOpen.value = false;
   camera.resetInput();
   void nextTick(() => surface.value?.focus());
@@ -1336,6 +1587,7 @@ function exitAdjustMode({ reopenDialogue = true } = {}) {
   if (!adjustMode.value) return;
   if (previousViewMode.value) camera.setViewMode?.(previousViewMode.value);
   previousViewMode.value = null;
+  keepChildPlayerHidden();
   adjustMode.value = false;
   adjustSelection.value = null;
   actionFeedback.value = '';
@@ -1380,6 +1632,41 @@ function rememberCube(actor) {
   cubeActor = actor || null;
   cubeTransform = cubeTransformOf(cubeActor);
   return cubeTransform;
+}
+// ---- 小世界模型裁剪（场景只保留玩家（隐形）、先知与地形）----------------------
+// 角色可见性的权威处理在 game/frontend/storyActors.mjs（只读不改）：它把小世界里的
+// Boss、商人、小怪与红球设为不可见。这里在进入小世界时把它们从场景中**移除**——
+// 隐藏只是改可见性，模型仍占着场景；移除只针对快照中真实存在的 actor，重复进入幂等。
+async function cullChildWorld(snapshot, gameplay) {
+  if (gameplay?.role !== 'child') return;
+  // 只对快照中真实存在的 actor 发起移除：重复进入小世界时场景里已没有它们，返回空列表。
+  const present = new Set((Array.isArray(snapshot?.actors) ? snapshot.actors : [])
+    .map(actor => actor?.actor_guid).filter(Boolean));
+  const keepRoles = new Set(['player', 'prophet']);
+  const list = [...STORY_CHARACTERS.filter(character => !keepRoles.has(character.role))
+    .map(character => character.guid), FRAGMENT_GUID]
+    .filter(guid => present.has(guid));
+  for (const guid of list) {
+    try {
+      const data = unwrap(await editorApi.sceneTools.removeActor(sceneId, guid));
+      if (!data || data.ok === false || !['success', 'loaded'].includes(data.status)) {
+        throw new Error(data?.message || data?.diagnostics?.[0]?.message || '引擎未确认移除');
+      }
+    } catch (error) {
+      actionFeedback.value = `小世界模型移除失败：${error.message}`;
+    }
+  }
+}
+// 小世界的玩家不渲染模型：玩法（移动、跳跃、摆放、存档）仍然对着它，只是不再画出角色。
+// 相机控制器在绑定与切换视角时会尝试恢复可见性（V 循环、调整模式的俯瞰视角），
+// 这里在同一 tick 内把它改回隐藏——引擎读到的最终值就是不可见。
+function keepChildPlayerHidden() {
+  if (!inSubworld.value || !playerActor?.handle) return;
+  const bridge = current() ? window.coronaBridge : null;
+  if (typeof bridge?.setActorState !== 'function') return;
+  try {
+    bridge.setActorState(playerActor.handle, { visible: false });
+  } catch (error) { if (current()) gameplayError.value = error.message; }
 }
 // Rebuild the animated set from a fresh snapshot: reading the scene is an asynchronous
 // CEF round trip, so the frame loop only replays the handles captured here. Passing no
@@ -1740,16 +2027,16 @@ function onKeyDown(event) {
   if (event.code === 'KeyE' || event.code === 'KeyR' || ['e', 'r'].includes(event.key?.toLowerCase())) {
     event.preventDefault(); event.stopPropagation();
     const skill = event.code === 'KeyE' || event.key?.toLowerCase() === 'e' ? 'heavy' : 'sweep';
-    if (!event.repeat && focused) void runAction(() => gameplay.castSkill(skill));
+    if (!event.repeat && focused) void runAction(() => gameplay.castSkill(skill), PLAYER_SKILL_CLIP);
     return;
   }
   if (focused && camera.keyDown(event)) event.stopPropagation?.();
 }
 function onBlur() { focused = false; camera.resetInput(); }
-function onFocus() { focused = !document.hidden; camera.resume(); }
+function onFocus() { focused = !document.hidden; }
 function onVisibilityChange() {
   if (document.hidden) onBlur();
-  else { focused = document.hasFocus(); camera.resume(); }
+  else focused = document.hasFocus();
 }
 function watchDpi() {
   dpiQuery?.removeEventListener('change', onDpiChanged);
@@ -1767,7 +2054,7 @@ function onPointerDown(event) {
   // Adjusting is label-driven: the left button neither attacks nor picks an object, it only
   // focuses the viewport so dragging and the wheel still let the player look at the object.
   if (adjustMode.value) return;
-  void runAction(gameplay.attack);
+  void runAction(gameplay.attack, PLAYER_ATTACK_CLIP);
 }
 
 onMounted(async () => {
@@ -1786,8 +2073,19 @@ onMounted(async () => {
     const index = Math.min(Math.max(Number(init?.active_index) || 0, 0), Math.max(0, scenes.length - 1));
     sceneId = scenes[index]?.path || init?.path;
     if (!sceneId) throw new Error('当前世界没有可用场景');
+    // 原生三角面移动的结果必须回送控制器：没有这条登记，按键只会更新输入状态，
+    // 移动请求一直挂在 pendingMove 上等回调，角色永远不动（15 秒后还会报超时）。
     motionCallbackToken = await editorApi.events.onMeshMoveResult(camera.acceptMeshMove);
     if (!current()) { await editorApi.off(motionCallbackToken); motionCallbackToken = null; return; }
+    // 地图高度网格是这张地图真正的地面线，而角色的脚 y 由它给出：必须在
+    // ensureStoryCharacters 之前读入，否则角色先按固定地板落地，之后才补网格也来不及。
+    // 读不到只报告、不阻断进入世界（`heightAt` 返回 null，摆位与控制器都退回固定地板）。
+    try {
+      await loadStoryMapHeight(mapHeightUrl(window.location.href));
+    } catch (error) {
+      actionFeedback.value = `地图高度网格未能读取：${error.message}`;
+    }
+    if (!current()) return;
     const loadedGameplay = await gameplay.load();
     if (!current()) return;
     lastHitHp = loadedGameplay.state.boss.hp;
@@ -1801,18 +2099,36 @@ onMounted(async () => {
       isCurrent: () => current() && worldModeState.projectPath === projectPath,
     });
     if (!current() || worldModeState.projectPath !== projectPath) return;
+    // 小世界只保留玩家（隐形）、先知与地形：Boss、商人、小怪与红球在此从副本场景移除。
+    await cullChildWorld(snapshot, loadedGameplay);
     // 地图是这条故事线的地面：与角色、方块一样在进入世界时由前端确认在位。
     // 不按角色分叉——主世界要有它，小世界是主场景的副本因此自动继承同一份；
     // 没有它角色只会站在空气里，所以这里不设 role 门槛。
-    await ensureStoryMap({
-      api: editorApi, sceneId, frontendUrl: window.location.href, resolveAsset: resolveStoryAssetPath,
-    });
+    // 与方块同样的处理方式：失败只报告，不阻断进入世界。
+    try {
+      await ensureStoryMap({
+        api: editorApi, sceneId, frontendUrl: window.location.href, resolveAsset: resolveStoryAssetPath,
+      });
+    } catch (error) {
+      actionFeedback.value = `地图未能就位：${error.message}`;
+    }
     if (!current() || worldModeState.projectPath !== projectPath) return;
     // Look the boss up by role: array position is not an identity, and inserting a
     // character would otherwise silently point this at whoever slid into slot 1.
-    bossActor = snapshot.actors?.find(actor =>
-      actor.actor_guid === STORY_CHARACTERS.find(character => character.role === 'boss').guid) || null;
+    // 小世界没有 Boss：裁剪后场景里不再有它，这里也保持 null，战斗逻辑由 role 守卫。
+    bossActor = loadedGameplay?.role === 'child' ? null
+      : snapshot.actors?.find(actor =>
+        actor.actor_guid === STORY_CHARACTERS.find(character => character.role === 'boss').guid) || null;
     bossBounds = worldBounds(bossActor);
+    // 主世界的 7 只普通怪物：血条与攻击目标都用这一份（小世界没有它们）。
+    monsterActors = loadedGameplay?.role === 'child' ? []
+      : STORY_CHARACTERS.filter(character => isMonsterRole(character.role))
+        .map(character => {
+          const actor = snapshot.actors?.find(item => item.actor_guid === character.guid) || null;
+          return actor ? { id: character.role, name: character.name, actor,
+            bounds: worldBounds(actor) } : null;
+        })
+        .filter(Boolean);
     // 先知只在小世界按需生成，主世界里缺失是正常的：交互保持不可用即可。
     prophetActor = snapshot.actors?.find(actor => actor.actor_guid === PROPHET_GUID) || null;
     playerActor = player;
@@ -1823,7 +2139,7 @@ onMounted(async () => {
       rememberCube(prophetActor && playerActor ? await ensureStoryCube({
         api: editorApi, sceneId, frontendUrl: window.location.href,
         role: loadedGameplay?.role, prophetActor, playerActor, resolveAsset: resolveStoryAssetPath,
-        // 初始摆放沿用先知的位置。
+        // 方块与角色同一个地面来源：地图的烘好高度网格（没有网格时退回原来的高度）。
         groundYAt,
       }) : null);
     } catch (error) {
@@ -1843,6 +2159,8 @@ onMounted(async () => {
     visualPlacements = placementSignature(placements.value);
     cameraReady = camera.bind(snapshot, sceneId);
     camera.bindPlayer(player, targetOffset);
+    // 小世界的玩家不渲染模型：绑定发生在相机控制器之后，避免它把模型翻回可见。
+    if (loadedGameplay?.role === 'child') keepChildPlayerHidden();
     updateProximity();
     playerSave = createPlayerSave({ api: editorApi, sceneId,
       readPlayer: camera.snapshotPlayer, stopInput: camera.resetInput,
@@ -1858,7 +2176,6 @@ onMounted(async () => {
     window.addEventListener('pointercancel', camera.resetInput);
     document.addEventListener('keyup', camera.keyUp);
     initializing.value = false;
-    camera.resume();
     if (focused) surface.value?.focus();
   })());
   try { await initialization; } catch (error) {
@@ -1869,6 +2186,10 @@ onMounted(async () => {
 });
 onUnmounted(() => {
   disposed = true;
+  if (motionCallbackToken !== null) {
+    editorApi.off(motionCallbackToken).catch(() => {});
+    motionCallbackToken = null;
+  }
   clearTimeout(feedbackTimer);
   clearTimeout(toastTimer);
   clearTimeout(bagToastTimer);
@@ -1879,11 +2200,14 @@ onUnmounted(() => {
   // 离开世界不能把俯瞰视角留下来：否则存进场景的就是这个非常规机位。
   exitAdjustMode({ reopenDialogue: false });
   worldRuleRunner.dispose();
-  const motionSettled = camera.resetInput();
+  // 一次性动作的计时器必须随页面销毁，否则世界换掉之后它还会去调旧场景的接口。
+  playerAnimation?.dispose();
+  playerAnimation = null;
+  if (actorTimer !== null) { clearInterval(actorTimer); actorTimer = null; }
+  bossDirector?.dispose();
+  bossDirector = null;
+  bossLastHp = null;
   camera.dispose();
-  Promise.resolve(motionSettled).finally(() => {
-    if (motionCallbackToken !== null) { editorApi.off(motionCallbackToken).catch(notifyWorldError); motionCallbackToken = null; }
-  }).catch(notifyWorldError);
   saveRegistration.retire();
   resizeObserver?.disconnect();
   window.removeEventListener('resize', camera.syncViewport);
@@ -1927,6 +2251,20 @@ onUnmounted(() => {
           :aria-valuenow="gameplayState.state.boss.hp" :aria-valuemax="gameplayState.config.bossHp" aria-valuemin="0">
           <div class="boss-bar-lag" :style="{ width: `${bossPercent()}%` }"></div>
           <div class="boss-bar-fill" :style="{ width: `${bossPercent()}%` }"></div>
+        </div>
+      </section>
+
+      <!-- 中上部：只显示离玩家最近的那只普通怪物，靠近才出现 -->
+      <section v-if="!inventoryOpen && showCombatHud && nearbyMonsterBar" class="monster-bars"
+        aria-label="附近怪物血条">
+        <div class="monster-bar" :data-monster-role="nearbyMonsterBar.id">
+          <span class="monster-bar__name">{{ nearbyMonsterBar.name }}</span>
+          <span class="monster-bar__hp">{{ nearbyMonsterBar.hp }} / {{ nearbyMonsterBar.max }}</span>
+          <div class="monster-bar__track" role="progressbar" :aria-label="`${nearbyMonsterBar.name} 生命`"
+            :aria-valuenow="nearbyMonsterBar.hp" :aria-valuemax="nearbyMonsterBar.max" aria-valuemin="0">
+            <div class="monster-bar__lag" :style="{ width: `${nearbyMonsterBar.percent}%` }"></div>
+            <div class="monster-bar__fill" :style="{ width: `${nearbyMonsterBar.percent}%` }"></div>
+          </div>
         </div>
       </section>
 
@@ -2003,7 +2341,7 @@ onUnmounted(() => {
             :class="{ 'is-active': skillStatus(HEAVY_SKILL_ID).available }"
             :disabled="!skillStatus(HEAVY_SKILL_ID).available"
             :aria-label="`${heavySkill.key} ${heavySkill.name}，消耗 ${heavySkill.rageCost} 怒气`"
-            @click.stop="runAction(() => gameplay.castSkill(HEAVY_SKILL_ID))">
+            @click.stop="runAction(() => gameplay.castSkill(HEAVY_SKILL_ID), PLAYER_SKILL_CLIP)">
             <svg viewBox="0 0 48 48">
               <circle cx="24" cy="24" r="18" stroke-dasharray="6 6" fill="rgba(230,213,167,.18)" />
               <circle cx="24" cy="24" r="18" stroke-dasharray="6 6" />
@@ -2021,7 +2359,7 @@ onUnmounted(() => {
               :class="{ 'is-cd': skillStatus(id).remainingMs > 0, unavailable: !skillStatus(id).available }"
               :style="{ '--cd-deg': `${Math.round(360 * skillStatus(id).remainingMs / (skill.cdMs || 1))}deg` }"
               :aria-label="`${skill.key} ${skill.name}，消耗 ${skill.rageCost} 怒气`"
-              @click.stop="runAction(() => gameplay.castSkill(id))">
+              @click.stop="runAction(() => gameplay.castSkill(id), PLAYER_SKILL_CLIP)">
               <span class="spell-cost">{{ skill.rageCost }}</span>
               <!-- 技能图标：自包含行内 SVG（与器物图标同一套做法，不用 <use>） -->
               <svg class="spell-icon" viewBox="0 0 48 48" v-html="skillIconInner(id)" />

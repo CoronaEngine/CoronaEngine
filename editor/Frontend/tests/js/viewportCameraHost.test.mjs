@@ -2,6 +2,7 @@ import { NAVIGATION_KEY } from '../../../game/frontend/storyNavigation.mjs';
 import { actorFixture, gameplayConfig, projectReady } from '../../../game/tests/frontend/fixtures.mjs';
 import * as gameplayModule from '../../../game/frontend/storyGameplay.mjs';
 import * as storyPropsModule from '../../../game/frontend/storyProps.mjs';
+import * as storyLootModule from '../../../game/frontend/storyLoot.mjs';
 import * as prophetDialogueModule from '../../../game/frontend/prophetDialogue.mjs';
 import * as storyCubeModule from '../../../game/frontend/storyCube.mjs';
 import * as storyWorldRulesModule from '../../../game/frontend/storyWorldRules.mjs';
@@ -9,7 +10,7 @@ import * as storyProphetActionsModule from '../../../game/frontend/storyProphetA
 import * as storyMapModule from '../../../game/frontend/storyMap.mjs';
 import * as storyMapHeightModule from '../../../game/frontend/storyMapHeight.mjs';
 import { mapHeightUrl } from '../../../game/frontend/storyMapHeightLoader.mjs';
-import { STORY_CHARACTERS, PROPHET_GUID, resolveStoryAssetPath, sceneSnapshot } from '../../../game/frontend/storyCharacters.mjs';
+import { STORY_CHARACTERS, PROPHET_GUID, PLAYER_MODEL_YAW_OFFSET, isMonsterRole, resolveStoryAssetPath, sceneSnapshot } from '../../../game/frontend/storyCharacters.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
@@ -17,6 +18,8 @@ import { ref, reactive, nextTick, watch, computed } from 'vue';
 import { babelParse, compileScript, parse } from 'vue/compiler-sfc';
 import { cameraMovementKey, createViewportCameraController } from '../../src/utils/viewportCameraController.js';
 import { createStoryCameraController } from '../../src/utils/viewportStoryCamera.js';
+import { createStoryWorldControls, SMALL_WORLD_VIEW_LABELS } from '../../src/utils/viewportStoryWorldCamera.js';
+import { routeStoryKeydown } from '../../src/utils/storyKeyRouter.js';
 import { createStoryNavigationController } from '../../../game/frontend/storyNavigation.mjs';
 import { createPlayerController, VIEW_LABELS } from '../../../game/frontend/playerController.mjs';
 import { createPlayerSave } from '../../../game/frontend/playerSave.mjs';
@@ -213,13 +216,13 @@ for (const node of [...imports].reverse()) {
 }
 const makeStory = new Function('modules', 'window', 'document', `${setupSource}; return StoryWorld;`);
 const deferred = () => { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; };
-async function mountStory(t, { pendingInit = null, sceneSnapshot = { data: snapshot() } } = {}) {
+async function mountStory(t, { pendingInit = null, sceneSnapshot = { data: snapshot() }, role = 'main' } = {}) {
   const mounted = [], unmounted = [], frames = new Map(), calls = [], routes = [];
   const listeners = new Map(); let id = 0, time = 0;
   // The page drives both combat and exhibits over the same bridge key, so the harness
   // answers by action, and keeps a mutable scene so placement actors can be observed.
   const sceneActors = structuredClone(sceneSnapshot.data?.actors ?? sceneFixture().actors);
-  const placementExhibit = { role: 'main', placements: [] };
+  const placementExhibit = { role, placements: [] };
   let gameplayOptions = null;
   const placementActor = guid => sceneActors.find(actor => actor.actor_guid === guid);
   const dom = () => ({
@@ -237,7 +240,11 @@ async function mountStory(t, { pendingInit = null, sceneSnapshot = { data: snaps
     '@/api/editorApi.js': { editorApi: {
       project: { getProjectLoadStatus: async () => projectReady('world') },
       sceneTools: {
-        setActorState: async (scene, guid, state) => { Object.assign(placementActor(guid), state); return { status: 'success' }; },
+        setActorState: async (scene, guid, state) => {
+          const actor = placementActor(guid);
+          Object.assign(actor, state);
+          return { status: 'success', actor };
+        },
         createActor: async (scene, path, type, data) => {
           const actor = { ...actorFixture(STORY_CHARACTERS[0]), name: data.name, actor_guid: data.actor_guid,
             local_aabb: [-0.25, -0.25, -0.25, 0.25, 0.25, 0.25], route: path,
@@ -280,6 +287,7 @@ async function mountStory(t, { pendingInit = null, sceneSnapshot = { data: snaps
     '../../../../game/frontend/storyNavigation.mjs': { createStoryNavigationController, NAVIGATION_KEY },
     '../../../../game/frontend/storyActors.mjs': { ensureStoryCharacters, syncPlacementActors },
     '../../../../game/frontend/storyProps.mjs': storyPropsModule,
+    '../../../../game/frontend/storyLoot.mjs': storyLootModule,
     '../../../../game/frontend/prophetDialogue.mjs': prophetDialogueModule,
     '../../../../game/frontend/storyCube.mjs': storyCubeModule,
     '../../../../game/frontend/storyWorldRules.mjs': storyWorldRulesModule,
@@ -294,7 +302,8 @@ async function mountStory(t, { pendingInit = null, sceneSnapshot = { data: snaps
     // 地图走真实模块（与 storyWorld.test.mjs 同一套桩：假时钟让「当帧确认」不必真的等 200ms）。
     '../../../../game/frontend/storyMap.mjs': { ...storyMapModule,
       ensureStoryMap: options => storyMapModule.ensureStoryMap({ ...options, wait: async () => {} }) },
-    '../../../../game/frontend/storyCharacters.mjs': { STORY_CHARACTERS, PROPHET_GUID, resolveStoryAssetPath, sceneSnapshot },
+    '../../../../game/frontend/storyCharacters.mjs': { STORY_CHARACTERS, PROPHET_GUID, PLAYER_MODEL_YAW_OFFSET,
+      isMonsterRole, resolveStoryAssetPath, sceneSnapshot },
     // 这个夹具测的是页面/相机绑定：网格按「读不到」处理（清空并返回 null），
     // 因此玩家地面仍是固定地板；「有图贴地」那条链路由 game/tests/frontend/storyWorld.test.mjs 覆盖。
     '../../../../game/frontend/storyMapHeight.mjs': storyMapHeightModule,
@@ -304,6 +313,10 @@ async function mountStory(t, { pendingInit = null, sceneSnapshot = { data: snaps
       ...options, now: () => time,
       requestFrame: callback => { frames.set(++id, callback); return id; }, cancelFrame: id => frames.delete(id),
     }) },
+    // 小世界的相机（自由/俯视）也走真实模块：它由同一个 story camera controller 绑定。
+    '@/utils/viewportStoryWorldCamera.js': { createStoryWorldControls, SMALL_WORLD_VIEW_LABELS },
+    // 键盘路由是页面根的裁决，走真实模块，这样 `onKeyDown` 的分支在测试里与真机一致。
+    '@/utils/storyKeyRouter.js': { routeStoryKeydown },
   }, window, document);
   const page = component.setup({}, { expose() {} });
   page.surface.value = { focus() {}, getBoundingClientRect: () => ({ left: 0, top: 0, width: 800, height: 600 }) };
@@ -311,7 +324,24 @@ async function mountStory(t, { pendingInit = null, sceneSnapshot = { data: snaps
   if (!pendingInit) await mounting;
   const cleanup = async () => { for (const fn of unmounted) fn(); await flushWorldSessionSaves(); assert.equal(listeners.size, 0); assert.equal(frames.size, 0); };
   t.after(cleanup);
-  return { page, calls, routes, frames, document, worldModeState, mounting, sceneActors, placementExhibit,
+  /**
+   * 真机链路：浏览器把 keydown 交给**页面自己注册的那个监听器**
+   * （`onMounted` 里的 `document.addEventListener('keydown', onKeyDown)`），而不是测试直接
+   * 调用 `page.onKeyDown`。事件对象照浏览器给的形状造：`code`/`key`/`repeat`/`target`，并且
+   * `preventDefault` / `stopPropagation` 会真的留下痕迹，于是「相机有没有吃掉这个键」可以断言。
+   */
+  const dispatch = (type, init = {}) => {
+    const event = { type, repeat: false, ctrlKey: false, altKey: false, metaKey: false, shiftKey: false,
+      isComposing: false, defaultPrevented: false, cancelBubble: false, keyCode: 0,
+      preventDefault() { this.defaultPrevented = true; },
+      stopPropagation() { this.cancelBubble = true; },
+      stopImmediatePropagation() { this.cancelBubble = true; },
+      target: { tagName: 'DIV', isContentEditable: false, closest: () => null },
+      ...init };
+    for (const [callback, name] of listeners) if (name === type) callback(event);
+    return event;
+  };
+  return { page, calls, routes, frames, document, dispatch, worldModeState, mounting, sceneActors, placementExhibit,
     get gameplayOptions() { return gameplayOptions; },
     step(next) { time = next; const callbacks = [...frames.values()]; frames.clear(); for (const cb of callbacks) cb(time); } };
 }
@@ -447,31 +477,103 @@ test('F talks to a nearby prophet and leaves the pickup path alone', async t => 
   assert.equal(p.dialogueLine.value, 0);
 });
 
-test('only the small world exhibits what the main world yielded', async t => {
+test('only the small world places what the main world yielded', async t => {
   const h = await mountStory(t), p = h.page;
-  enterWorld(h, 'main', { inventory: { worldFragment: 2 } });
+  // 主世界没有物品栏，也没有可摆放的陈列物；B 键不生效。
+  enterWorld(h, 'main', { inventory: { worldFragment: 2, block: 4 } });
   assert.deepEqual(p.placements.value, []);
-  assert.deepEqual(p.exhibitItems.value.map(item => [item.name, item.owned, item.placed, item.available]),
-    [['世界碎片', 2, 0, 2]]);
+  assert.equal(p.hotbarVisible.value, false);
+  await p.placeSelectedItem();
+  assert.deepEqual(h.placementExhibit.placements, [], '主世界不许摆放');
 
-  enterWorld(h, 'child', { inventory: { worldFragment: 2 } });
-  await p.placeExhibit('world-fragment');
-  assert.deepEqual(p.placements.value.map(item => [item.propId, item.index, item.siteId]),
-    [['world-fragment', 0, 'west']]);
+  // 小世界：物品栏里的方块可以在身前落地，布局写入盘上并生成真实 actor。
+  enterWorld(h, 'child', { inventory: { worldFragment: 2, block: 4 } });
+  assert.equal(p.hotbarVisible.value, true);
+  assert.equal(p.hotbarSlots.value[0].id, 'block');
+  assert.equal(p.hotbarSlots.value[0].available, 4);
+  await p.placeSelectedItem();
+  assert.equal(p.placements.value.length, 1);
+  assert.equal(p.placements.value[0].propId, 'block');
   assert.deepEqual(h.placementExhibit.placements.map(item => item.index), [0], 'the layout was persisted');
-  assert.equal(p.exhibitItems.value[0].available, 1);
+  assert.equal(p.hotbarSlots.value[0].available, 3);
   const actor = h.sceneActors.find(item => item.actor_guid === 'story.placement.0000');
   assert.ok(actor, 'the exhibit exists as a real scene actor');
-  assert.equal(actor.name, '世界碎片1');
+  assert.equal(actor.name, '方块1');
 
-  await p.placeExhibit('world-fragment');
-  assert.deepEqual(p.placements.value.map(item => item.siteId), ['west', 'east']);
-  await p.withdrawExhibit();
-  assert.deepEqual(p.placements.value.map(item => item.siteId), ['west']);
-  assert.equal(h.sceneActors.some(item => item.actor_guid === 'story.placement.0001'), false);
+  await p.placeSelectedItem();
+  assert.equal(p.placements.value.length, 2);
+  // 取回：站到方块旁边后 F 的裁决是「取回方块」，场景 actor 由同一条 reconcile 路径退场。
+  const first = p.placements.value[0];
+  p.camera.snapshotPlayer().position = [...first.position];
+  p.updateProximity();
+  assert.equal(p.fKeyAction.value.kind, 'block');
+  await p.retrievePlacedBlock();
+  assert.equal(p.placements.value.length, 1);
+  assert.equal(h.sceneActors.some(item => item.actor_guid === 'story.placement.0000'), false);
 
   // Authoring is refused outside the small world.
-  enterWorld(h, 'main', { inventory: { worldFragment: 2 } });
-  await p.placeExhibit('world-fragment');
-  assert.deepEqual(p.placements.value.map(item => item.siteId), ['west']);
+  enterWorld(h, 'main', { inventory: { worldFragment: 2, block: 4 } });
+  await p.placeSelectedItem();
+  assert.equal(p.placements.value.length, 1);
+});
+
+test('小世界里空格经过页面根到达自由相机并上升，动作进行中也不被跳跃闸门吞掉', async t => {
+  // 直接以 child 身份挂载：`bindPlayer` 一开始就把玩家绑到自由相机，与真机进入小世界同一条路。
+  const h = await mountStory(t, { role: 'child' });
+  const p = h.page;
+  assert.equal(p.roleRef.value, 'child');
+  assert.equal(p.camera.viewMode(), 'free', '小世界挂载即自由视角');
+  const before = p.camera.snapshotPose().camera.position[1];
+  // 主世界的跳跃闸门（actionBusy/busy/needsSave）挡的是「改写玩家存档」的空格；小世界的空格是
+  // 相机升降、不碰存档，因此即使动作进行中也必须到达相机。这是改动前全套件都绿、真机却按不动的缺口。
+  p.actionBusy.value = true;
+  p.onKeyDown(input({ code: 'Space', key: ' ' }));
+  h.step(50);
+  const rose = p.camera.snapshotPose().camera.position[1] - before;
+  assert.ok(Math.abs(rose - 0.6) < 1e-9, `空格抬 0.6 m / 50 ms，实际 ${rose}`);
+  // 主世界对照：同一页面根、同一状态，空格仍走跳跃闸门（这里断言路由，不驱动跳跃侧效）。
+  const mainRoute = routeStoryKeydown(input({ code: 'Space', key: ' ' }),
+    { current: true, adjustMode: false, dialogueOpen: false, inSubworld: false,
+      inventoryOpen: false, actionBusy: true, busy: false, needsSave: false });
+  assert.equal(mainRoute, 'space-busy', '主世界忙碌时空格仍属于跳跃闸门');
+});
+
+test('小世界的空格经页面注册的真实 keydown 监听器上升（Q/E 同一条路，去掉 space 映射即红）', async t => {
+  // 与真机同一条链路：`onMounted` 注册的 `document.addEventListener('keydown', onKeyDown)`
+  // 是唯一入口，事件对象带 code/key/target，preventDefault 会留下痕迹。**不直接调用
+  // `page.onKeyDown`** —— 上一版测试就是在这里把「页面根有没有把键交到相机手上」跳过去了。
+  const h = await mountStory(t, { role: 'child' });
+  const p = h.page;
+  assert.equal(p.roleRef.value, 'child');
+  assert.equal(p.camera.viewMode(), 'free', '小世界挂载即自由视角');
+  const height = () => p.camera.snapshotPose().camera.position[1];
+  // 主世界的跳跃闸门在同一页面根上开着；小世界的空格是相机升降，不能经过它。
+  p.actionBusy.value = true;
+
+  // Chromium 给空格的就是这两个值：`code: 'Space'`、`key: ' '`。
+  const start = height();
+  const down = h.dispatch('keydown', { code: 'Space', key: ' ' });
+  h.step(50);
+  const rose = height() - start;
+  assert.ok(Math.abs(rose - 0.6) < 1e-9, `空格抬 0.6 m / 50 ms，实际 ${rose}`);
+  assert.equal(down.defaultPrevented, true, '相机必须吃掉空格：页面不滚动、聚焦按钮不被激活');
+  h.dispatch('keyup', { code: 'Space', key: ' ' });
+
+  // 同一颗键从「只有 key/keyCode、没有 code」的宿主合成事件里进来也必须认：路由层
+  // （storyKeyRouter 的 isSpace）三种写法都认，控制器不能只认 `code` 推出来的那一种。
+  const beforeSynthetic = height();
+  h.dispatch('keydown', { code: '', key: ' ', keyCode: 32 });
+  h.step(100);
+  const syntheticRise = height() - beforeSynthetic;
+  assert.ok(Math.abs(syntheticRise - 0.6) < 1e-9, `没有 code 的空格同样抬 0.6 m，实际 ${syntheticRise}`);
+  h.dispatch('keyup', { code: '', key: ' ', keyCode: 32 });
+
+  // 对照：E 是 `down`，同一条页面根、同一台控制器、同一档速度。
+  const beforeE = height();
+  h.dispatch('keydown', { code: 'KeyE', key: 'e' });
+  h.step(150);
+  const dropped = height() - beforeE;
+  assert.ok(Math.abs(dropped + 0.6) < 1e-9, `E 降 0.6 m，实际 ${dropped}`);
+  h.dispatch('keyup', { code: 'KeyE', key: 'e' });
+  assert.equal(p.camera.isInputActive(), false, '松开按键后没有键留在按下状态');
 });

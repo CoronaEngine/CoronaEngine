@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createStoryGameplay, GAMEPLAY_KEY, FRAGMENT, worldBounds, canHitBoss, distanceToBounds,
-  contextualInteraction, INTERACTION_PROMPTS } from '../../frontend/storyGameplay.mjs';
+import { createStoryGameplay, GAMEPLAY_KEY, FRAGMENT_GUID, worldBounds, canHitBoss,
+  distanceToBounds, contextualInteraction, nearestAttackTarget,
+  INTERACTION_PROMPTS } from '../../frontend/storyGameplay.mjs';
 import { PROPHET_INTERACTION } from '../../frontend/prophetDialogue.mjs';
 import { PLACED_BLOCK_REACH } from '../../frontend/storyProps.mjs';
 import { STORY_CHARACTERS, rotatePoint } from '../../frontend/storyCharacters.mjs';
@@ -9,14 +10,18 @@ import { actorFixture, apiFixture, deferred, url, gameplayConfig } from './fixtu
 import { ensureStoryCharacters } from '../../frontend/storyActors.mjs';
 
 const config = gameplayConfig;
-// 龙在主世界里被摆在哪儿，就从授权数据里读，而不是在用例里再抄一份坐标：
-// 它一挪动，「红球落在龙倒下的地方」和「走到龙脚下」这类断言就得跟着走。
-const bossSite = STORY_CHARACTERS.find(character => character.role === 'boss');
+// A legacy actor id: old saves can still contain the red ball this flow used to create.
+const LEGACY_FRAGMENT = { role: 'fragment', name: '世界碎片', guid: FRAGMENT_GUID,
+  x: 0, z: 12, size: 0.5, rotation: [0, 0, 0] };
 function fixture(options = {}) {
-  let state = { version: 2, revision: 0, rage: 0, boss: { hp: 200 }, drop: null, inventory: { worldFragment: 0 } };
+  let state = { version: 2, revision: 0, rage: 0, boss: { hp: 200 }, drop: null,
+    inventory: { worldFragment: 0, block: 0, ball: 0 } };
   let role = 'main', time = 0, id = 0, fail = false, lostReply = false, visualFail = false, gate = null, replyGate = null;
   const boss = actorFixture(STORY_CHARACTERS[1]), bounds = worldBounds(boss);
-  const player = { position: [0, 0, bounds[2] - 1], rotation: [0, Math.PI, 0], facingYaw: 0, grounded: true };
+  // 玩家摆在 Boss 正前方：x 用 Boss 自己的中线，而不是写死的 0——
+  // Boss 一旦横向挪位，写死 0 会让玩家站到十几米开外，命中类断言全部失真。
+  const bossCentreX = (bounds[0] + bounds[3]) / 2;
+  const player = { position: [bossCentreX, 0, bounds[2] - 1], rotation: [0, Math.PI, 0], facingYaw: 0, grounded: true };
   const requests = [], reads = [], feedback = [], states = [], visuals = [], operations = new Set();
   // 小世界的自有文档（陈列 / 世界规则 / 名册）与战斗版本号无关，进入世界时各读一次；
   // `requests` 只记战斗请求与 `load`，文档读取记在 `reads` 里，两者互不混淆。
@@ -47,12 +52,17 @@ function fixture(options = {}) {
         if (request.action === 'hitBoss') {
           state.boss.hp -= 20;
           state.rage = Math.min(config.rageMax, state.rage + config.ragePerHit);
-          if (!state.boss.hp) state.drop = { id: 'story.boss.world-fragment', position: request.bossPosition, collected: false };
         } else if (request.action === 'castSkill') {
           const skill = config.skills[request.skillId];
           state.rage -= skill.rageCost;
           if (request.hit) state.boss.hp = Math.max(0, state.boss.hp - skill.damage);
-        } else { state.drop.collected = true; state.inventory.worldFragment++; }
+        }
+        // The killing blow grants the fragment, 64 blocks and 64 balls; no drop is written.
+        if (!state.boss.hp) {
+          state.inventory.worldFragment = Math.max(1, state.inventory.worldFragment);
+          state.inventory.block = (state.inventory.block || 0) + 64;
+          state.inventory.ball = (state.inventory.ball || 0) + 64;
+        }
       }
       if (lostReply) { lostReply = false; throw new Error('reply lost'); }
       const reply = { data: response() };
@@ -90,40 +100,84 @@ test('world bounds include scale and rotation; range uses the model edge, not it
   assert.equal(canHitBoss(null, null, config), false);
 });
 
-test('ten acknowledged hits, cooldown, one drop and one pickup', async () => {
+test('the nearest living target in front wins the swing, boss or monster alike', () => {
+  const config = { meleeRange: 2.5, meleeHalfAngle: Math.PI / 3 };
+  const player = { position: [0, 0, 0], facingYaw: 0, grounded: true };
+  const near = { id: 'monster-near', bounds: [-1, 0, 0.5, 1, 2, 1.5] };
+  const far = { id: 'monster-far', bounds: [-1, 0, 2, 1, 2, 3] };
+  const behind = { id: 'monster-behind', bounds: [-1, 0, -2, 1, 2, -1] };
+  assert.equal(nearestAttackTarget(player, [far, near, behind], config).id, 'monster-near');
+  assert.equal(nearestAttackTarget(player, [behind], config), null);
+  assert.equal(nearestAttackTarget(player, [], config), null);
+  assert.equal(nearestAttackTarget({ ...player, grounded: false }, [near], config), null);
+});
+
+test('ten acknowledged hits grant the fragment immediately, with no red ball and no pickup', async () => {
   const f = fixture(); await f.game.load();
   for (let i = 0; i < 10; i++) {
     await f.game.attack(); await f.game.attack(); f.tick();
     assert.equal(f.state.boss.hp, 200 - (i + 1) * 20);
   }
   await f.game.attack(); assert.equal(f.state.revision, 10);
-  assert.deepEqual(f.state.drop.position, [bossSite.x, 0, bossSite.z]);
-  await f.game.pickup(); assert.equal(f.state.inventory.worldFragment, 0);
-  f.player.position = [bossSite.x, 0, bossSite.z];
-  await f.game.pickup(); await f.game.pickup();
+  // 击杀本身就把凭证交给背包：世界里没有红球，F 也没有「拾取」这一步。
   assert.equal(f.state.inventory.worldFragment, 1);
-  assert.equal(f.state.revision, 11);
-  assert.equal(f.feedback.filter(v => v.startsWith('获得')).length, 1);
+  assert.equal(f.state.inventory.block, 64, '击杀同时把 64 个方块交给行囊');
+  assert.equal(f.state.inventory.ball, 64, '击杀同时把 64 个球交给行囊');
+  assert.equal(f.state.drop, null);
+  assert.equal(f.game.pickup, undefined, 'pickup 不再是玩法 API 的一部分');
+  assert.deepEqual(f.requests.map(request => request.action).includes('pickupDrop'), false);
+  assert.deepEqual(f.feedback, ['Boss 已击败 · 小世界已开启']);
 });
 
-// 掉落也必须落在地面上：碎片落点读的是同一份烘好高度网格，而不是写死的 0（旧常量）。
-// 没有网格时（这条文件里的其它用例）就还是 0，所以旧断言原样保留在上面那条用例里。
-test('the dropped fragment lands on the grid at the boss site, and on the old constant without one', async () => {
-  const ground = (x, z) => 2 + 0.5 * x - 0.25 * z;
-  const f = fixture({ groundYAt: ground }); await f.game.load();
-  for (let i = 0; i < 10; i++) { await f.game.attack(); f.tick(); }
-  assert.equal(f.state.drop.collected, false, 'Boss 倒下时必须掉一件');
-  const [x, y, z] = f.state.drop.position;
-  assert.deepEqual([x, z], [bossSite.x, bossSite.z], '掉落的 x/z 仍是 Boss 倒下的地方');
-  assert.equal(y, ground(x, z), '碎片必须落在 Boss 脚下那一格的地面上');
-  assert.ok(Math.abs(y - 0) > 0.5, '与旧常量 0 必须差得可观测，否则这条断言是空转的');
+test('a monster swing dispatches its role and a kill reports both dropped items', async () => {
+  const monster = STORY_CHARACTERS.find(character => character.role === 'monster-mantis');
+  const boss = STORY_CHARACTERS.find(character => character.role === 'boss');
+  const monsterActor = actorFixture(monster), bossActor = actorFixture(boss);
+  const bounds = worldBounds(monsterActor);
+  const player = { position: [(bounds[0] + bounds[3]) / 2, 0, bounds[2] - 1],
+    rotation: [0, Math.PI, 0], facingYaw: 0, grounded: true };
+  const monsterState = Object.fromEntries(STORY_CHARACTERS
+    .filter(character => character.role.startsWith('monster'))
+    .map(character => [character.role, { hp: character.role === monster.role ? 20 : 120 }]));
+  const state = { version: 2, revision: 0, rage: 0, boss: { hp: 200 }, drop: null,
+    monsters: monsterState,
+    inventory: { worldFragment: 0, block: 0, ball: 0, 'hunter-blade': 0,
+      'hunter-helm': 0, 'hunter-chest': 0, 'hunter-boots': 0 } };
+  const requests = [], feedback = [];
+  const documents = { loadPlacements: { version: 1, placements: [] },
+    loadWorldRules: { version: 1, rules: [] }, loadSubworlds: { version: 1, subworlds: [] } };
+  const game = createStoryGameplay({ projectPath: 'D:/story', readPlayer: () => player,
+    readBoss: () => bossActor,
+    readMonsters: () => [{ id: monster.role, name: monster.name, actor: monsterActor }],
+    onFeedback: value => feedback.push(value),
+    api: { scratch: { sendKeyEvent: async (key, mods, json) => {
+      assert.equal(key, GAMEPLAY_KEY);
+      const request = JSON.parse(json);
+      if (documents[request.action]) return { status: 'ok', role: 'main', state: documents[request.action] };
+      if (request.action === 'load') return { status: 'ok', role: 'main', config: gameplayConfig,
+        state: structuredClone(state) };
+      requests.push(request);
+      state.revision++;
+      if (request.action === 'hitMonster') {
+        state.monsters[request.monsterId].hp = 0;
+        state.inventory.ball = 7;
+        state.inventory['hunter-blade'] = 1;
+      }
+      return { status: 'ok', role: 'main', config: gameplayConfig, state: structuredClone(state) };
+    } } } });
+  await game.load();
+  await game.attack();
+  assert.equal(requests.at(-1).action, 'hitMonster');
+  assert.equal(requests.at(-1).monsterId, monster.role);
+  assert.equal(game.data.state.monsters[monster.role].hp, 0);
+  assert.deepEqual(feedback, ['击败怪物 · 获得 球 ×7、猎人长刃 ×1']);
 });
 
 test('out of range, behind and child world never dispatch damage', async () => {
   const f = fixture(); await f.game.load(); f.player.facingYaw = Math.PI;
   await f.game.attack(); f.tick(); f.player.facingYaw = 0; f.player.position[2] = -100;
   await f.game.attack(); f.tick(); f.player.position[2] = 10;
-  f.role('child'); await f.game.load(); await f.game.attack(); await f.game.pickup();
+  f.role('child'); await f.game.load(); await f.game.attack();
   assert.ok(f.requests.every(v => v.action === 'load'));
 });
 
@@ -201,27 +255,29 @@ test('revision conflict reconciles authoritative state and clears only the obsol
   f.tick(); await f.game.attack(); assert.equal(f.state.boss.hp, 160);
 });
 
-test('dead boss is not created or resurrected; pending drop is grounded and stable', async () => {
-  const f = apiFixture({ actors: STORY_CHARACTERS.map(c => actorFixture(c)) });
-  const gameplay = { role: 'main', state: { boss: { hp: 0 }, drop: { id: 'x', position: [0, 0, 12], collected: false } } };
-  const load = extra => ensureStoryCharacters({ api: f.api, sceneId: 'scene.ini', frontendUrl: url,
-    gameplay, wait: async () => {}, ...extra });
-  await load(); await load();
+test('a dead boss is hidden and the old red-ball actor is retired, never created', async () => {
+  const f = apiFixture({ actors: [...STORY_CHARACTERS.map(c => actorFixture(c)),
+    actorFixture(LEGACY_FRAGMENT)] });
+  const gameplay = { role: 'main', state: { boss: { hp: 0 }, drop: null } };
+  await ensureStoryCharacters({ api: f.api, sceneId: 'scene.ini', frontendUrl: url,
+    gameplay, wait: async () => {} });
   assert.equal(f.get(STORY_CHARACTERS[1].guid).visible, false);
-  assert.equal(f.calls.filter(c => c[0] === 'create').length, 1);
-  const drop = f.get(FRAGMENT.guid), bounds = worldBounds(drop);
-  assert.ok(Math.abs(bounds[1]) < 1e-9);
-  assert.ok(Math.abs(Math.max(...[0, 1, 2].map(i => bounds[i + 3] - bounds[i])) - 0.5) < 1e-9);
-  gameplay.state.drop.collected = true; await load({ combatOnly: true });
-  assert.equal(f.get(FRAGMENT.guid).visible, false);
+  assert.equal(f.get(FRAGMENT_GUID).visible, false, '旧存档里的红球必须退场');
+  assert.equal(f.calls.filter(c => c[0] === 'create').length, 0);
+  // A world that does not contain the legacy actor is not given one either.
+  const fresh = apiFixture();
+  await ensureStoryCharacters({ api: fresh.api, sceneId: 'scene.ini', frontendUrl: url,
+    gameplay, wait: async () => {} });
+  assert.equal(fresh.get(FRAGMENT_GUID), undefined, '主世界不再创建世界碎片 actor');
 });
 
-test('child hides copied boss and fragment and never creates either', async () => {
-  const f = apiFixture({ actors: [...STORY_CHARACTERS, FRAGMENT].map(c => actorFixture(c)) });
+test('child hides copied boss and legacy fragment and never creates either', async () => {
+  const f = apiFixture({ actors: [...STORY_CHARACTERS.map(c => actorFixture(c)),
+    actorFixture(LEGACY_FRAGMENT)] });
   await ensureStoryCharacters({ api: f.api, sceneId: 'scene.ini', frontendUrl: url,
     gameplay: { role: 'child', state: { boss: { hp: 200 }, drop: null } } });
   assert.equal(f.get(STORY_CHARACTERS[1].guid).visible, false);
-  assert.equal(f.get(FRAGMENT.guid).visible, false);
+  assert.equal(f.get(FRAGMENT_GUID).visible, false);
   assert.equal(f.calls.filter(c => c[0] === 'create').length, 0);
   const empty = apiFixture();
   await ensureStoryCharacters({ api: empty.api, sceneId: 'scene.ini', frontendUrl: url,
@@ -282,16 +338,13 @@ test('a missing initial load reply fails visibly without accepting its late stat
 });
 
 
-test('airborne attacks and pickups never mutate progress or consume the next grounded attack', async () => {
+test('airborne attacks never mutate progress or consume the next grounded attack', async () => {
   const f = fixture(); await f.game.load(); f.player.grounded = false;
-  for (let i = 0; i < 3; i++) { await f.game.attack(); await f.game.pickup(); }
+  for (let i = 0; i < 3; i++) await f.game.attack();
   assert.equal(f.requests.length, 1); assert.equal(f.state.boss.hp, 200);
   f.player.grounded = true; await f.game.attack(); assert.equal(f.state.boss.hp, 180);
   for (let i = 0; i < 9; i++) { f.tick(); await f.game.attack(); }
-  f.player.position = [bossSite.x, 1.2, bossSite.z]; f.player.grounded = false;
-  await f.game.pickup(); assert.equal(f.state.inventory.worldFragment, 0);
-  f.player.position[1] = 0; f.player.grounded = true;
-  await f.game.pickup(); assert.equal(f.state.inventory.worldFragment, 1);
+  assert.equal(f.state.inventory.worldFragment, 1, '最后一刀落地就把凭证交给背包');
 });
 
 test('normal hits and misses keep the shared action interval without showing skill cooldowns', async () => {
@@ -338,70 +391,50 @@ test('insufficient rage, dodging and pending acknowledgements cannot start anoth
 });
 
 // F 的裁决：提示文本和按键动作同源，这里只钉住纯函数本身（不碰引擎、不碰 DOM）。
-test('the F resolver picks the nearer of prophet and pickup and carries its own prompt', () => {
-  // 两个距离都用真实配置的射程：先知 PROPHET_INTERACTION.range，碎片 config.pickupRange。
-  const range = PROPHET_INTERACTION.range, pickupRange = config.pickupRange;
-  assert.equal(range, 12); assert.equal(pickupRange, 2);
-  const resolve = (prophet, pickup) => contextualInteraction({ prophetDistance: prophet,
-    pickupDistance: pickup, range, pickupRange });
-  // 只有先知 / 只有碎片在范围内。
-  assert.deepEqual(resolve(3, Infinity), { kind: 'prophet', distance: 3, prompt: 'F 与先知交谈' });
-  assert.deepEqual(resolve(Infinity, 1.2), { kind: 'pickup', distance: 1.2, prompt: '按 F 拾取' });
-  // 都在范围内：近者胜，两种朝向都试。
-  assert.equal(resolve(1.5, 2).kind, 'prophet');
-  assert.deepEqual(resolve(8, 1.5), { kind: 'pickup', distance: 1.5, prompt: '按 F 拾取' });
-  assert.equal(resolve(0.5, 1.9).kind, 'prophet');
-  assert.equal(resolve(11.9, 0.1).kind, 'pickup');
-  // 恰好等距：先知胜（确定性平局规则，与旧有的先知优先一致）。
-  assert.deepEqual(resolve(1.5, 1.5), { kind: 'prophet', distance: 1.5, prompt: 'F 与先知交谈' });
-  assert.equal(resolve(range, 11.5).kind, 'prophet', '两个都在射程内但先知更近');
-  // 都不在范围内：没有动作，也没有提示。
-  assert.deepEqual(resolve(Infinity, Infinity), { kind: null, distance: null, prompt: null });
-  assert.deepEqual(resolve(range + 0.5, pickupRange + 0.5), { kind: null, distance: null, prompt: null });
+// 拾取红球已从流程里删掉，因此裁决只剩先知与小世界里的方块两项。
+test('the F resolver no longer knows pickup, and still answers the prophet alone', () => {
+  const range = PROPHET_INTERACTION.range;
+  assert.equal(range, 12);
+  const resolve = prophet => contextualInteraction({ prophetDistance: prophet, range });
+  // 只有先知在范围内 / 不在范围内。
+  assert.deepEqual(resolve(3), { kind: 'prophet', distance: 3, prompt: 'F 与先知交谈' });
+  assert.deepEqual(resolve(Infinity), { kind: null, distance: null, prompt: null });
   // 边界含端点：恰在射程上算命中，越界一点点就不算。
-  assert.equal(resolve(range, Infinity).kind, 'prophet');
-  assert.equal(resolve(range + 0.01, Infinity).kind, null);
-  assert.equal(resolve(Infinity, pickupRange).kind, 'pickup');
-  assert.equal(resolve(Infinity, pickupRange + 0.01).kind, null);
-  // 先知射程默认取真实配置；碎片射程不传＝不设限（调用方自己已经量过距离）。
-  assert.equal(contextualInteraction({ prophetDistance: 13, pickupDistance: Infinity }).kind, null);
-  assert.equal(contextualInteraction({ prophetDistance: 1, pickupDistance: Infinity, range: 0 }).kind, null);
-  assert.equal(contextualInteraction({ prophetDistance: 1, pickupDistance: Infinity, range: 0.5 }).kind, null);
-  assert.equal(contextualInteraction({ prophetDistance: 0.4, pickupDistance: Infinity, range: 0.5 }).kind, 'prophet');
+  assert.equal(resolve(range).kind, 'prophet');
+  assert.equal(resolve(range + 0.01).kind, null);
+  // 先知射程默认取真实配置。
+  assert.equal(contextualInteraction({ prophetDistance: 13 }).kind, null);
+  assert.equal(contextualInteraction({ prophetDistance: 1, range: 0 }).kind, null);
+  assert.equal(contextualInteraction({ prophetDistance: 1, range: 0.5 }).kind, null);
+  assert.equal(contextualInteraction({ prophetDistance: 0.4, range: 0.5 }).kind, 'prophet');
   // 缺参 / 脏数据永远退化成“什么都没有”，不会抛错。
   assert.deepEqual(contextualInteraction(), { kind: null, distance: null, prompt: null });
-  assert.equal(contextualInteraction({ prophetDistance: NaN, pickupDistance: null }).kind, null);
-  assert.equal(contextualInteraction({ prophetDistance: '3', pickupDistance: undefined }).kind, null);
-  // 提示文本只此一份：裁决给出的字符串就是界面显示的那一行。
+  assert.equal(contextualInteraction({ prophetDistance: NaN }).kind, null);
+  assert.equal(contextualInteraction({ prophetDistance: '3' }).kind, null);
+  // 提示文本只此一份：裁决给出的字符串就是界面显示的那一行，且不再有拾取这一项。
   assert.equal(INTERACTION_PROMPTS.prophet, 'F 与先知交谈');
-  assert.equal(INTERACTION_PROMPTS.pickup, '按 F 拾取');
   assert.equal(INTERACTION_PROMPTS.block, '按 F 取回方块');
+  assert.equal('pickup' in INTERACTION_PROMPTS, false);
   assert.equal(Object.isFrozen(INTERACTION_PROMPTS), true);
 });
 
-// 第三个候选：小世界里玩家自己放下的方块。它和红球、先知一起进同一个裁决，
+// 小世界里玩家自己放下的方块：与先知进同一个裁决，
 // 因此“提示说什么、F 就做什么”这条老规矩不需要第二条路径来维持。
 test('the F resolver takes back the nearest placed block, and the prophet still wins a tie', () => {
   const reach = PLACED_BLOCK_REACH;
   assert.equal(reach, 2.5, '取回的射程是陈列几何给出的那个常量');
-  const resolve = (prophet, pickup, block) => contextualInteraction({ prophetDistance: prophet,
-    pickupDistance: pickup, blockDistance: block, range: PROPHET_INTERACTION.range,
-    pickupRange: config.pickupRange, blockRange: reach });
+  const resolve = (prophet, block) => contextualInteraction({ prophetDistance: prophet,
+    blockDistance: block, range: PROPHET_INTERACTION.range, blockRange: reach });
   // 只有方块在范围内：提示就是取回。
-  assert.deepEqual(resolve(Infinity, Infinity, 1), { kind: 'block', distance: 1, prompt: '按 F 取回方块' });
-  assert.deepEqual(resolve(Infinity, Infinity, reach), { kind: 'block', distance: reach, prompt: '按 F 取回方块' });
-  assert.deepEqual(resolve(Infinity, Infinity, reach + 0.01), { kind: null, distance: null, prompt: null });
-  // 与红球都够得着：近者胜，两个方向都试。
-  assert.equal(resolve(Infinity, 1.9, 0.5).kind, 'block');
-  assert.equal(resolve(Infinity, 0.5, 1.9).kind, 'pickup');
+  assert.deepEqual(resolve(Infinity, 1), { kind: 'block', distance: 1, prompt: '按 F 取回方块' });
+  assert.deepEqual(resolve(Infinity, reach), { kind: 'block', distance: reach, prompt: '按 F 取回方块' });
+  assert.deepEqual(resolve(Infinity, reach + 0.01), { kind: null, distance: null, prompt: null });
   // 与先知都够得着：近者胜。
-  assert.equal(resolve(1.2, Infinity, 0.4).kind, 'block');
-  assert.equal(resolve(0.4, Infinity, 1.2).kind, 'prophet');
+  assert.equal(resolve(1.2, 0.4).kind, 'block');
+  assert.equal(resolve(0.4, 1.2).kind, 'prophet');
   // 平局仍然守旧：先知优先，不会被一件躺在脚边的方块抢走对话。
-  assert.deepEqual(resolve(2, Infinity, 2), { kind: 'prophet', distance: 2, prompt: 'F 与先知交谈' });
-  assert.deepEqual(resolve(1, Infinity, 1), { kind: 'prophet', distance: 1, prompt: 'F 与先知交谈' });
-  // 红球与方块平局：拾取在先（这是把方块排在最后的直接后果）。
-  assert.equal(resolve(Infinity, 1.5, 1.5).kind, 'pickup');
+  assert.deepEqual(resolve(2, 2), { kind: 'prophet', distance: 2, prompt: 'F 与先知交谈' });
+  assert.deepEqual(resolve(1, 1), { kind: 'prophet', distance: 1, prompt: 'F 与先知交谈' });
   // 缺参 / 脏数据照旧退化成“什么都没有”，新候选不得改变这一点。
   assert.deepEqual(contextualInteraction(), { kind: null, distance: null, prompt: null });
   assert.deepEqual(contextualInteraction({ blockDistance: 1 }), { kind: 'block', distance: 1, prompt: '按 F 取回方块' });
@@ -409,7 +442,7 @@ test('the F resolver takes back the nearest placed block, and the prophet still 
   assert.equal(contextualInteraction({ blockDistance: NaN }).kind, null);
   assert.equal(contextualInteraction({ blockDistance: '1' }).kind, null);
   assert.equal(contextualInteraction({ blockDistance: 1, blockRange: 0 }).kind, null);
-  // 主世界没有陈列物：不传方块距离时，原有的两条规则一字不变。
-  assert.equal(resolve(3, Infinity, Infinity).kind, 'prophet');
-  assert.deepEqual(resolve(Infinity, 1.2, Infinity), { kind: 'pickup', distance: 1.2, prompt: '按 F 拾取' });
+  // 主世界没有陈列物：不传方块距离时只回答先知。
+  assert.equal(resolve(3, Infinity).kind, 'prophet');
+  assert.deepEqual(resolve(Infinity, reach + 1), { kind: null, distance: null, prompt: null });
 });

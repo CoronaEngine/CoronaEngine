@@ -330,39 +330,46 @@
   flex: 1;
   box-shadow: inset 0 2px 8px rgba(0, 0, 0, 0.5);
 }
-/* 披挂位排布：左四（头盔 / 胸甲 / 腿甲 / 战靴）＋ 右一（武器），
-   中央是放大的人形投影（跨 2 列 × 2 行）。 */
+/* 披挂位排布：对齐 bag3 的 3 列 × 4 行；
+   武器在顶、头/身/腿/靴围着中央人形，最下一行是版面占位。 */
 .story-bag .doll {
   display: grid;
-  grid-template-columns: repeat(4, var(--s));
+  grid-template-columns: repeat(3, var(--s));
   grid-template-rows: repeat(4, var(--s));
   justify-content: center;
   gap: var(--sg);
   padding: 4px 0;
 }
 
+.story-bag .eslot[data-slot='weapon'] {
+  grid-area: 1 / 2;
+}
 .story-bag .eslot[data-slot='helm'] {
-  grid-area: 1 / 1;
+  grid-area: 2 / 1;
 }
 .story-bag .eslot[data-slot='chest'] {
-  grid-area: 2 / 1;
+  grid-area: 2 / 3;
 }
 .story-bag .eslot[data-slot='legs'] {
   grid-area: 3 / 1;
 }
 .story-bag .eslot[data-slot='boots'] {
+  grid-area: 3 / 3;
+}
+.story-bag .eslot[data-slot='acc1'] {
   grid-area: 4 / 1;
 }
-.story-bag .eslot[data-slot='weapon'] {
-  grid-area: 1 / 4;
+.story-bag .eslot[data-slot='core'] {
+  grid-area: 4 / 2;
+}
+.story-bag .eslot[data-slot='acc2'] {
+  grid-area: 4 / 3;
 }
 
-/* 中央人形：真实人物图。投影仓是 1 : 1.52，图片也是 1 : 1.52，
-   所以 object-fit: contain 会刚好铺满且不裁切，多余留白不可见。
-   底部用渐变把脚部与仓底融为一体，顶部叠一层绿光让它像被投影出来。 */
+/* 中央人形：bag3 的线稿投影，占据第 2 列的第 2–3 行。 */
 .story-bag .figure {
-  grid-column: 2 / 4;
-  grid-row: 1 / 5;
+  grid-column: 2;
+  grid-row: 2 / 4;
   position: relative;
   display: grid;
   place-items: center;
@@ -373,19 +380,7 @@
   background: linear-gradient(180deg, rgba(104, 159, 56, 0.08), rgba(0, 0, 0, 0.3));
   margin: 2px;
 }
-.story-bag .figure svg {
-  width: 100%;
-  height: 100%;
-  padding: 6%;
-  opacity: 0.82;
-  stroke: var(--c-blue-light);
-  filter: drop-shadow(0 0 12px rgba(104, 159, 56, 0.45));
-  transition: all 0.3s;
-}
-/* 真实人物图。
-   图是 1:1.52，投影仓是 1:2.17，所以「contain」会上下留大片空档并把图自带的
-   浅色背景露成一块亮斑。人物居中，因此改为铺满并裁掉左右空档（cover），
-   四周再羽化，让人物浮在仓里而不是贴一张照片。 */
+/* 人物模型：保持原图的漫射边缘，让它像被投影在仓里而不是贴一张照片。 */
 .story-bag .figure img {
   position: absolute;
   inset: 0;
@@ -404,7 +399,11 @@
     linear-gradient(180deg, transparent 0, #000 9%, #000 88%, transparent 100%),
     linear-gradient(90deg, transparent 0, #000 7%, #000 93%, transparent 100%);
   mask-composite: intersect;
-  transition: opacity 0.3s;
+  transition: opacity 0.3s, transform 0.3s;
+}
+.story-bag .figure:hover img {
+  opacity: 1;
+  transform: scale(1.02);
 }
 /* 顶部绿光：像投影出来的轮廓 */
 .story-bag .figure::after {
@@ -417,10 +416,6 @@
     linear-gradient(180deg, rgba(104, 159, 56, 0.16), transparent 38%),
     radial-gradient(70% 40% at 50% 100%, rgba(104, 159, 56, 0.12), transparent 70%);
   mix-blend-mode: screen;
-}
-.story-bag .figure:hover img {
-  opacity: 1;
-  transform: scale(1.02);
 }
 
 .story-bag .eslot {
@@ -441,6 +436,15 @@
   box-shadow: 0 0 14px var(--c-gold-glow);
   transform: translateY(-2px);
   z-index: 2;
+}
+.story-bag .eslot--ghost {
+  cursor: default;
+  opacity: 0.55;
+}
+.story-bag .eslot--ghost:hover {
+  border-color: rgba(255, 255, 255, 0.12);
+  box-shadow: inset 0 0 12px rgba(0, 0, 0, 0.6);
+  transform: none;
 }
 .story-bag .eslot__ph {
   position: absolute;
@@ -1486,4 +1490,17 @@
 .story-bag .hints kbd {
   background-image: linear-gradient(180deg, #a9b3a1, #6f7a68);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.45), inset 0 -2px 4px rgba(0, 0, 0, 0.4);
+}
+
+/* 版面占位格：只负责把 3×4 编成格补齐，不参与悬停/选中反馈。 */
+.story-bag .eslot--ghost,
+.story-bag .eslot--ghost:hover {
+  cursor: default;
+  opacity: 0.55;
+  transform: none;
+  border-color: rgba(255, 255, 255, 0.12);
+  box-shadow: inset 0 0 12px rgba(0, 0, 0, 0.6);
+}
+.story-bag .eslot--ghost::after {
+  display: none;
 }

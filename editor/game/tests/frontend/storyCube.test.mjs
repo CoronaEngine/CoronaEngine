@@ -7,9 +7,10 @@ import { PLAYER_MODEL_YAW_OFFSET } from '../../frontend/storyCharacters.mjs';
 import { MAP_ENTITY_ID, MAP_ENTITY_TYPE, MAP_GUID, MAP_MODEL_REF } from '../../frontend/storyMap.mjs';
 import { ADJUST_ACTIONS, FRAGMENT_ADJUST_ACTIONS, FRAGMENT_RULE_BOUNDS, PROPHET_SCREENS,
   adjustActionForKey, adjustFeedback, adjustFragmentRule, fragmentAdjustActionForKey,
-  fragmentAdjustPanel, fragmentForKey, fragmentPanel, fragmentRuleOf, isAdjustAction,
-  nextObjectTransform, objectLabel, prophetKeyAction,
+  fragmentAdjustPanel, fragmentForKey, fragmentPanel, fragmentRuleOf, installedTargetOf,
+  isAdjustAction, isLegacyRule, nextObjectTransform, objectLabel, prophetKeyAction,
   ruleDetails, screenForKey, selectableObjects, toggleFragment } from '../../frontend/storyProphetActions.mjs';
+import { PROPHET_GUID } from '../../frontend/storyCharacters.mjs';
 
 const prophet = (position = [0, 0, -4]) => ({
   actor_guid: 'f9f5c8b0-7324-4b6c-a011-000000000004', handle: 21,
@@ -273,9 +274,11 @@ test('「调整碎片」走一步只改一个数字，且始终贴着后端的�
     ['amplitude-down', '2', '幅度', '幅度减小'],
     ['period-up', '3', '周期', '周期加长'],
     ['period-down', '4', '周期', '周期缩短'],
+    // 第 5 步是方向：规则的类型由碎片决定，轴由这里换（sway 可在 x/y/z 之间换）。
+    ['axis-next', '5', '方向', '换一条浮动轴'],
   ]);
   assert.equal(fragmentAdjustActionForKey('1').id, 'amplitude-up');
-  assert.equal(fragmentAdjustActionForKey('5'), null);
+  assert.equal(fragmentAdjustActionForKey('5').id, 'axis-next');
 
   const start = [swayRecord()];
   const up = adjustFragmentRule(start, 'sway', 'amplitude-up');
@@ -417,7 +420,8 @@ test('「调整碎片」子屏：按键分发、当前数字，以及未装填�
   assert.equal(prophetKeyAction('1', 'fragment-adjust').type, 'adjust-fragment');
   assert.equal(prophetKeyAction('1', 'fragment-adjust').id, 'amplitude-up');
   assert.equal(prophetKeyAction('4', 'fragment-adjust', 'sway').fragmentId, 'sway');
-  assert.equal(prophetKeyAction('5', 'fragment-adjust'), null);
+  // 5 是「换一条浮动轴」，与子屏里的第五个按钮同一条分发。
+  assert.equal(prophetKeyAction('5', 'fragment-adjust').id, 'axis-next');
   assert.equal(prophetKeyAction('1', 'fragment-adjust').type, 'adjust-fragment');
 
   const installed = [swayRecord(0.6, 1200)];
@@ -617,3 +621,118 @@ test('the main world hides the cube instead of showing it', async () => {
   assert.equal(world.state.creates, 0);
   assert.equal(world.state.actors[0].visible, false);
 });
+
+// ---- 碎片改为可作用于单独物体：目标先选，再装填/调整 ------------------------------
+
+const BLOCK_A = 'story.placement.0003';
+const BLOCK_B = 'story.placement.0007';
+
+test('装填到选中的物体上：一块碎片只有一个目标，换目标只改那一条记录', () => {
+  const installed = toggleFragment([], 'sway', { target: BLOCK_A, label: '方块A（放置物）' });
+  assert.equal(installed.action, 'installed');
+  assert.equal(installed.target, BLOCK_A);
+  assert.deepEqual(installed.rules, [{ fragmentId: 'sway', type: 'sway', axis: 'x',
+    amplitude: 0.25, periodMs: 2400, target: BLOCK_A }], 'target 就是 actor 的 guid');
+  assert.match(installed.feedback, /方块A/);
+  // 换到另一个物体：改目标，不新增第二条记录（一块碎片只有一条规则、一个目标）。
+  const moved = toggleFragment(installed.rules, 'sway', { target: BLOCK_B });
+  assert.equal(moved.action, 'retargeted');
+  assert.equal(moved.rules.length, 1);
+  assert.equal(moved.rules[0].target, BLOCK_B);
+  assert.equal(moved.rules[0].amplitude, 0.25, '换目标不动数字');
+  assert.match(moved.feedback, /已改目标/);
+  // 同一个目标再点一次 = 拆下。
+  const removed = toggleFragment(moved.rules, 'sway', { target: BLOCK_B });
+  assert.equal(removed.action, 'removed');
+  assert.deepEqual(removed.rules, []);
+  // 另一块碎片可以同时装在另一个物体上：两条记录各带各的目标。
+  const both = toggleFragment(installed.rules, 'spin', { target: BLOCK_B });
+  assert.deepEqual(both.rules.map(rule => [rule.fragmentId, rule.target]),
+    [['sway', BLOCK_A], ['spin', BLOCK_B]]);
+  assert.equal(installedTargetOf(both.rules, 'sway'), BLOCK_A);
+  assert.equal(installedTargetOf(both.rules, 'spin'), BLOCK_B);
+  assert.equal(installedTargetOf(both.rules, 'nope'), null);
+});
+
+test('调整只改「这块碎片 × 这个物体」那一条记录，别的记录一个数都不动', () => {
+  const rules = toggleFragment(toggleFragment([], 'sway', { target: BLOCK_A }).rules,
+    'spin', { target: BLOCK_B }).rules;
+  const up = adjustFragmentRule(rules, 'sway', 'amplitude-up', { target: BLOCK_A });
+  assert.equal(up.changed, true);
+  assert.equal(fragmentRuleOf(up.rules, 'sway', { target: BLOCK_A }).amplitude, 0.3);
+  assert.equal(fragmentRuleOf(up.rules, 'spin', { target: BLOCK_B }).amplitude, 15,
+    '另一件物体上的记录没被碰');
+  assert.equal(up.rules.find(rule => rule.fragmentId === 'sway').target, BLOCK_A,
+    '调整不会把规则悄悄放回整个小世界');
+  // 目标不对就不动：拿 B 的 guid 去调只装在 A 上的碎片，什么也不会发生。
+  const wrong = adjustFragmentRule(rules, 'sway', 'amplitude-up', { target: BLOCK_B });
+  assert.equal(wrong.changed, false);
+  assert.match(wrong.feedback, /先在该物体上装填浮动碎片/);
+  assert.equal(wrong.rules, rules, '被拒绝的调整连列表都不换');
+  // 换轴同样只落在那一条记录上，并且保留它的目标。
+  const axis = adjustFragmentRule(rules, 'sway', 'axis-next', { target: BLOCK_A });
+  assert.equal(axis.changed, true);
+  const swayed = axis.rules.find(rule => rule.fragmentId === 'sway');
+  assert.equal(swayed.axis, 'y', 'x → y');
+  assert.equal(swayed.target, BLOCK_A);
+  assert.equal(axis.rules.find(rule => rule.fragmentId === 'spin').axis, 'z', '旋转规则没被换轴');
+  // 旋转只能绕 z：按 5 只得到一句说明，不产生新记录。
+  const noAxis = adjustFragmentRule(rules, 'spin', 'axis-next', { target: BLOCK_B });
+  assert.equal(noAxis.changed, false);
+  assert.match(noAxis.feedback, /只能绕 z 轴/);
+});
+
+test('「调整碎片」子屏先选目标：没有目标时只说清楚该先做什么，不写任何记录', () => {
+  const rules = toggleFragment([], 'sway', { target: BLOCK_A }).rules;
+  // 选了 B，但 B 上没有这条碎片：子屏要说明，动作全部拒绝。
+  const atB = fragmentAdjustPanel(rules, 'sway', { target: BLOCK_B, label: '方块B' });
+  assert.equal(atB.target, BLOCK_B);
+  assert.equal(atB.targetLabel, '方块B');
+  assert.equal(atB.installed, false);
+  assert.match(atB.hint, /先在该物体上装填/);
+  assert.equal(adjustFragmentRule(rules, 'sway', 'amplitude-up', { target: BLOCK_B }).changed, false);
+  // 选了 A：显示的就是 A 上那条记录。
+  const atA = fragmentAdjustPanel(rules, 'sway', { target: BLOCK_A, label: '方块A' });
+  assert.equal(atA.installed, true);
+  assert.equal(atA.targetLabel, '方块A');
+  assert.equal(atA.hint, '');
+  assert.equal(atA.axis, 'x');
+  // 没有目标的老记录：子屏说的是「整个小世界」，并且认得出它是旧规则。
+  const legacyPanel = fragmentAdjustPanel([{ fragmentId: 'sway' }], 'sway');
+  assert.equal(legacyPanel.target, null);
+  assert.equal(legacyPanel.targetLabel, '整个小世界');
+  assert.equal(legacyPanel.legacy, true);
+  assert.equal(isLegacyRule({ fragmentId: 'sway' }), true);
+  assert.equal(isLegacyRule({ fragmentId: 'sway', target: BLOCK_A }), false);
+  // 「碎片」屏那一行写的是作用对象，而不是一串 guid。
+  const listed = fragmentPanel(rules, { [BLOCK_A]: '方块A' }).find(entry => entry.id === 'sway');
+  assert.equal(listed.target, BLOCK_A);
+  assert.equal(listed.targetLabel, '方块A');
+  assert.equal(listed.legacy, false);
+});
+
+test('地图与先知既不在目标列表里，也装不上：UI 与模型层都拒绝', () => {
+  // 目标列表 = 调整物体那份列表：只有小世界里的物体，地图与先知按身份排除。
+  const snapshot = { data: { scene: { actors: [
+    { actor_guid: BLOCK_A, name: '方块A', handle: 16, semantic_role: 'placement',
+      entity_type: 'story_prop', entity_id: 'story.placement.block',
+      geometry: { position: [2, 0, 0], rotation: [0, 0, 0], scale: [1, 1, 1] } },
+    prophet([0, 0, -4]),
+    { actor_guid: MAP_GUID, name: '剧情世界地图', handle: 18, semantic_role: 'world-map',
+      entity_type: MAP_ENTITY_TYPE, entity_id: MAP_ENTITY_ID, model_ref: MAP_MODEL_REF,
+      geometry: { position: [0, 6.6477, 0], rotation: [0, 0, 0], scale: [90, 90, 90] } },
+  ] } } };
+  const targets = selectableObjects(snapshot).map(entry => entry.guid);
+  assert.deepEqual(targets, [BLOCK_A], '只有方块是候选目标');
+  assert.ok(!targets.includes(MAP_GUID));
+  assert.ok(!targets.includes(PROPHET_GUID));
+  // 即便绕过列表直接点名，模型层也拒绝：既装不上，也不会生成一条记录。
+  for (const reserved of [MAP_GUID, PROPHET_GUID]) {
+    assert.throws(() => toggleFragment([], 'sway', { target: reserved }), /世界规则目标不能是地图或先知/);
+  }
+  const rules = toggleFragment([], 'sway', { target: BLOCK_A }).rules;
+  const refused = adjustFragmentRule(rules, 'sway', 'amplitude-up', { target: MAP_GUID });
+  assert.equal(refused.changed, false);
+  assert.deepEqual(refused.rules, rules, '一条指向地图的调整写不出任何东西');
+});
+

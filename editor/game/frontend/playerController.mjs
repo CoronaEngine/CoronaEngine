@@ -328,6 +328,10 @@ export function createPlayerController({ getPose, setPose, submitPose, getBridge
         if (frame !== null) cancelFrame(frame);
         frame = null; lastTime = null;
       }
+      // The player is now standing still, and the frame loop that used to report movement has
+      // just stopped — without this, subscribers keep the last state they saw and the character
+      // never leaves its walking animation.
+      onPlayerChanged();
       return true;
     },
     pointerDown(event) {

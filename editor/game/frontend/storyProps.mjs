@@ -35,6 +35,29 @@ export const STORY_PROPS = Object.freeze([
     height: 0.5, yaw: 0,
     placeable: true,
   }),
+  Object.freeze({
+    // Monster loot: the same ball art the world fragment used before the reward moved
+    // into the bag, now a placeable model in its own right.
+    id: 'ball', name: '球', itemKey: 'ball',
+    asset: 'fragment/Ball.obj', description: '击败怪物得到的球，可在小世界中摆放。',
+    height: 0.5, yaw: 0,
+    placeable: true,
+  }),
+  // 主世界怪物掉落的植被模型：树与草丛，进背包后可在小世界里摆出来。
+  Object.freeze({ id: 'tree1', name: '古松', itemKey: 'tree1', asset: 'props/tree1.glb',
+    description: '从怪物身上夺回来的古松，栽在小世界里正合适。', height: 6.5, yaw: 0, placeable: true }),
+  Object.freeze({ id: 'tree2', name: '阔叶树', itemKey: 'tree2', asset: 'props/tree2.glb',
+    description: '枝叶宽大的乔木，落在小世界也有影子。', height: 7.5, yaw: 0, placeable: true }),
+  Object.freeze({ id: 'tree3', name: '枯槎', itemKey: 'tree3', asset: 'props/tree3.glb',
+    description: '半枯的老树，枝干虬结，比活树更有野气。', height: 5.5, yaw: 0, placeable: true }),
+  Object.freeze({ id: 'grass1', name: '细草', itemKey: 'grass1', asset: 'props/grass1.glb',
+    description: '一小丛青草，铺在地面上就有了生气。', height: 0.6, yaw: 0, placeable: true }),
+  Object.freeze({ id: 'grass2', name: '秀草', itemKey: 'grass2', asset: 'props/grass2.glb',
+    description: '叶片略高的草，风一过就成片地倒。', height: 0.8, yaw: 0, placeable: true }),
+  Object.freeze({ id: 'grass4', name: '蒿草', itemKey: 'grass4', asset: 'props/grass4.glb',
+    description: '荒野里最常见的草，扎成一丛才看得见。', height: 0.7, yaw: 0, placeable: true }),
+  Object.freeze({ id: 'grass5', name: '芒草', itemKey: 'grass5', asset: 'props/grass5.glb',
+    description: '穗子发白的草，秋天时会整片发亮。', height: 0.9, yaw: 0, placeable: true }),
 ]);
 
 /** The props the player may actually put down. A keepsake is never one of them. */
@@ -119,8 +142,17 @@ export function blockSpawnTransform(player, yaw, distance = PLACEMENT_DISTANCE, 
  */
 export const PLACED_BLOCK_REACH = 2.5;
 
+/**
+ * Retired prop ids. `pillar` shared the block's cube model, so every old placement and
+ * inventory count is treated as a ball instead. Keeping the alias here means old saves
+ * open without losing their objects, and the next save writes the canonical id.
+ */
+export const PROP_ALIASES = Object.freeze({ pillar: 'ball' });
+
+export const canonicalPropId = id => PROP_ALIASES[id] || id;
+
 export function findProp(id) {
-  return STORY_PROPS.find(prop => prop.id === id) || null;
+  return STORY_PROPS.find(prop => prop.id === canonicalPropId(id)) || null;
 }
 
 export function placementGuid(index) {
@@ -155,7 +187,7 @@ export function sanitizePlacements(raw) {
   for (const entry of raw) {
     if (!validPlacement(entry) || seen.has(entry.index)) continue;
     seen.add(entry.index);
-    result.push({ propId: entry.propId, index: entry.index, siteId: entry.siteId,
+    result.push({ propId: canonicalPropId(entry.propId), index: entry.index, siteId: entry.siteId,
       position: [...entry.position], rotation: [...entry.rotation], scale: entry.scale });
   }
   return result.sort((a, b) => a.index - b.index);
@@ -173,12 +205,12 @@ export function nextPlacementIndex(placements) {
 /**
  * The placement the player may take back: the nearest one within `reach`.
  *
- * Distance is horizontal (x/z), the same measure `storyGameplay.pickupDistance` uses for the
- * drop, so every proximity rule on the page reads the same way. Only props that may be placed
+ * Distance is horizontal (x/z), the same measure the prophet interaction uses, so every
+ * proximity rule on the page reads the same way. Only props that may be placed
  * (`canPlace`) are ever candidates — a keepsake that somehow sits in the layout, or an entry
  * written by a future build, is never something F can hand back.
  *
- * The reach is the whole gate: unlike the drop, retrieving is symmetric with placing, and
+ * The reach is the whole gate: retrieving is symmetric with placing, and
  * placing itself is allowed mid-air or mid-dodge, so a movement state must not silently
  * remove the prompt. Pure: junk player data, junk lists and a junk reach all answer `null`
  * instead of throwing.
@@ -217,7 +249,7 @@ export function siteFor(placement) {
 /** Exhibits are laid out in index order so a reload reproduces the same arrangement. */
 export function placementScene(placements, propId) {
   return sanitizePlacements(placements)
-    .filter(entry => !propId || entry.propId === propId)
+    .filter(entry => !propId || entry.propId === canonicalPropId(propId))
     .map(entry => ({ ...entry, guid: placementGuid(entry.index), prop: findProp(entry.propId) }))
     .filter(entry => Boolean(entry.prop));
 }
@@ -248,7 +280,7 @@ export function exhibitItems(inventory = {}, placements = []) {
  * If the placeable prop list ever grows past this, raise `HOTBAR_SLOTS`: it is the single
  * constant that sizes the bar, and `hotbarSlots` pads or truncates nothing beyond it.
  */
-export const HOTBAR_SLOTS = 8;
+export const HOTBAR_SLOTS = 9;
 
 /**
  * The item bar: exactly `size` cells in slot order. What the player actually holds fills the

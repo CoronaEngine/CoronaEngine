@@ -1,19 +1,24 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { STORY_CHARACTERS, PLAYER_GUID, BOSS_MODEL_REF, PLAYER_MODEL_REF, PROPHET_MODEL_REF, resolveStoryAssetPath, characterTransform, rotatedBounds } from '../../frontend/storyCharacters.mjs';
+import { STORY_CHARACTERS, PLAYER_GUID, BOSS_MODEL_REF, PLAYER_MODEL_REF, PLAYER_MODEL_YAW_OFFSET, PROPHET_MODEL_REF, isMonsterRole, resolveStoryAssetPath, characterTransform, rotatedBounds } from '../../frontend/storyCharacters.mjs';
 import { ensureStoryCharacters } from '../../frontend/storyActors.mjs';
 import { actorFixture, apiFixture, url, deferred, projectReady } from './fixtures.mjs';
 const load = (f, extra = {}) => ensureStoryCharacters({ api: f.api, sceneId: 'scene.ini', frontendUrl: url, wait: async () => {}, ...extra });
 // Derived from the story table, never a literal: a hard-coded count turns every content
 // addition into a pile of unrelated failures. With no `gameplay` the world's role is unknown,
-// so only the four inhabitants are created — that is the invariant these tests assert.
-const INHABITANTS = STORY_CHARACTERS;
+// so only the four inhabitants are created — the creatures belong to the main world and are
+// only created for a world that has positively reported `role === 'main'`.
+const INHABITANTS = STORY_CHARACTERS.filter(character => !isMonsterRole(character.role));
 const INHABITANT_COUNT = INHABITANTS.length;
+const MONSTERS = STORY_CHARACTERS.filter(character => isMonsterRole(character.role));
 const CHILD_ROLES = ['player', 'prophet'];
 const CHILD_ACTOR_COUNT = CHILD_ROLES.length;
 
 test('source/deployed/UNC asset resolution handles encoded Chinese and spaces', () => {
-  assert.equal(resolveStoryAssetPath(url, STORY_CHARACTERS[0].asset), 'D:/Corona Engine/editor/game/art/models/player/Maria WProp J J Ong.dae');
+  // Asserted through the table, not a literal: the player's art is content, and pinning the
+  // file name here turned a model swap into an unrelated-looking test failure.
+  assert.equal(resolveStoryAssetPath(url, STORY_CHARACTERS[0].asset),
+    `D:/Corona Engine/editor/game/art/models/${STORY_CHARACTERS[0].asset}`);
   assert.equal(resolveStoryAssetPath('file:///E:/游戏/CabbageEditor/Frontend/dist/index.html#/world', 'model/a #%.dae'), 'E:/游戏/CabbageEditor/game/art/models/model/a #%.dae');
   assert.equal(resolveStoryAssetPath('file://server/share/CabbageEditor/Frontend/dist/index.html', 'model/a.dae'), '//server/share/CabbageEditor/game/art/models/model/a.dae');
   assert.throws(() => resolveStoryAssetPath('http://localhost/index.html', 'a.dae'), /引擎文件页面/);
@@ -58,7 +63,8 @@ test('unrelated names are untouched; fixed NPCs and disabled physics are enforce
   assert.deepEqual(f.state.actors[0], unrelated);
   assert.equal(boss.mechanics.physics_enabled, false);
   assert.equal(boss.follow_camera, false); assert.equal(boss.camera_lock.enabled, false);
-  assert.equal(boss.geometry.position[2], 5.5);
+  // 位置以人物表为准：移动角色不该让这条断言失败，它检查的是"摆位与表一致"。
+  assert.equal(boss.geometry.position[2], STORY_CHARACTERS.find(c => c.role === 'boss').z);
 });
 test('partial failure preserves successful actors; retry repairs incomplete placement without duplication', async () => {
   const f = apiFixture(); const original = f.api.scene.setActorTransform;
@@ -75,7 +81,9 @@ test('failed existing resources are rebound by GUID; failures identify role and 
   const f = apiFixture({ actors: [actorFixture()] }); f.get(PLAYER_GUID).load_status = 'missing_resource';
   await load(f); assert.ok(f.calls.some(c => c[0] === 'rebind'));
   const broken = apiFixture(); broken.api.sceneTools.createActor = async () => { throw new Error('missing texture'); };
-  await assert.rejects(load(broken), /玩家加载失败.*Maria.*missing texture/);
+  // The role and the source path both have to be named, so the message is matched on the
+  // table's own asset rather than on a file name this test would otherwise have to track.
+  await assert.rejects(load(broken), new RegExp(`玩家加载失败.*${STORY_CHARACTERS[0].asset.replace('.', '\\.')}.*missing texture`));
 });
 test('cancellation after an in-flight import never schedules another mutation', async () => {
   const f = apiFixture(), gate = deferred(); let current = true;
@@ -97,7 +105,7 @@ test('GPU failure and timeout are not reported as successful initialization', as
 test('GPU Ready without valid render slots still waits for actual render readiness', async () => {
   const f = apiFixture({ actors: STORY_CHARACTERS.map(c => actorFixture(c)) });
   f.get(PLAYER_GUID).render_ready = false; f.get(PLAYER_GUID).gpu_build_state = 'Ready';
-  await assert.rejects(load(f, { renderAttempts: 2 }), /玩家.*Maria.*超时/);
+  await assert.rejects(load(f, { renderAttempts: 2 }), /玩家.*超时/);
 });
 
 
@@ -150,8 +158,10 @@ test('unavailable bounds time out with the source path; retry reuses the origina
     return f.wrap({ status: 'success', actor: structuredClone(f.get(args[3].actor_guid)) });
   };
   let waits = 0;
+  // The path is asserted as "the player's folder", not as a file name: the shipped art is
+  // content, and pinning the name here made a model swap look like a timeout regression.
   await assert.rejects(load(f, { renderAttempts: 2, wait: async () => { waits++; } }),
-    /玩家加载失败.*game\/art\/models\/player\/Maria.*等待模型包围盒超时/);
+    /玩家加载失败.*game\/art\/models\/player\/.*等待模型包围盒超时/);
   assert.equal(waits, 2);
   assert.equal(f.calls.length, 1);
   assert.equal(f.state.actors.length, 1);
@@ -199,12 +209,19 @@ test('a failed async import reports the role without waiting for a bounds timeou
 
 test('legacy player facing is migrated with its marker in one write, preserving position and portable art', async () => {
   const player = actorFixture(); delete player.model_ref;
-  player.route = 'Assets/Models/maria.dae';
+  // The route names the *shipped* file, so this is the "placement generation only" case: the
+  // imported art is current and only its facing convention is stale, which is repaired in
+  // place with one write. The other case — a route naming a previous model — replaces the
+  // actor instead, and is covered by the swap test below.
+  player.route = `Assets/${STORY_CHARACTERS[0].asset.split('/').pop()}`;
   player.geometry.position = [7, 0.9, -9]; player.geometry.rotation = [0, 0.42, 0];
   const f = apiFixture({ actors: [player, ...INHABITANTS.slice(1).map(c => actorFixture(c))] });
   const result = await load(f, { frontendUrl: 'http://source-art-unavailable' });
   assert.deepEqual(result.player.geometry.position, player.geometry.position);
-  assert.deepEqual(result.player.geometry.rotation, [0, 0.42 + Math.PI, 0]);
+  // The migration re-applies the model's own facing offset, so it is asserted through the
+  // constant rather than as a literal: the offset is a property of the art, and a literal here
+  // would fail for the wrong reason the next time the player model changes.
+  assert.deepEqual(result.player.geometry.rotation, [0, 0.42 + PLAYER_MODEL_YAW_OFFSET, 0]);
   assert.equal(result.player.model_ref, PLAYER_MODEL_REF);
   assert.equal(f.calls.length, 1);
   assert.equal(f.calls[0][0], 'create');
@@ -213,6 +230,84 @@ test('legacy player facing is migrated with its marker in one write, preserving 
   assert.equal(f.calls[0][4].model_ref, PLAYER_MODEL_REF);
   for (let i = 0; i < 3; i++) await load(f);
   assert.equal(f.calls.length, 1); assert.equal(f.state.actors.length, INHABITANT_COUNT);
+});
+test('a lost race on scene.ini is retried instead of aborting the world load', async () => {
+  const f = apiFixture({ actors: [] });
+  const create = f.api.sceneTools.createActor;
+  let failures = 1;
+  f.api.sceneTools.createActor = async (...args) => {
+    if (failures > 0) {
+      failures -= 1;
+      throw new Error('创建模型：Unable to replace scene.ini');
+    }
+    return create(...args);
+  };
+  await load(f);
+  assert.equal(failures, 0, 'the retry consumed the injected failure');
+  // The whole cast still comes up, and the retried character was not created twice.
+  assert.equal(f.state.actors.length, INHABITANT_COUNT);
+  for (const character of INHABITANTS) {
+    assert.equal(f.state.actors.filter(actor => actor.actor_guid === character.guid).length, 1, character.role);
+  }
+});
+
+test('a permanent scene.ini failure still surfaces after the retries are spent', async () => {
+  const f = apiFixture({ actors: [] });
+  f.api.sceneTools.createActor = async () => { throw new Error('创建模型：Unable to replace scene.ini'); };
+  await assert.rejects(load(f), /Unable to replace scene\.ini/);
+});
+
+test('a duplicate actor sharing the player guid is deleted, keeping the named one', async () => {
+  // The exact shape observed after a model swap: `玩家` and `玩家_1`, same guid, both imported.
+  const player = actorFixture();
+  const duplicate = { ...actorFixture(), name: `${player.name}_1`,
+    geometry: { ...player.geometry, position: [0, 0, 0] } };
+  assert.equal(duplicate.actor_guid, player.actor_guid, 'the fixture must reproduce the shared guid');
+  const f = apiFixture({ actors: [player, duplicate, ...INHABITANTS.slice(1).map(c => actorFixture(c))] });
+  await load(f);
+  const removed = f.calls.filter(call => call[0] === 'remove');
+  assert.equal(removed.length, 1, 'exactly the duplicate is deleted');
+  assert.equal(f.state.actors.filter(a => a.actor_guid === player.actor_guid).length, 1,
+    'one actor per guid afterwards');
+  assert.equal(f.state.actors.find(a => a.actor_guid === player.actor_guid).name, player.name,
+    'the actor whose name matches the character survives');
+});
+
+test('a world without duplicates costs no extra engine calls', async () => {
+  const f = apiFixture({ actors: STORY_CHARACTERS.map(c => actorFixture(c)) });
+  await load(f);
+  assert.equal(f.calls.filter(call => call[0] === 'remove').length, 0);
+});
+
+test('a player built from previous art is replaced, not repaired, so the engine imports the new model', async () => {
+  // The world still holds the previous player model. Bumping the generation marker alone would
+  // only rewrite the transform: `create_actor`'s `skip_if_exists` branch never re-imports, so
+  // the world would keep rendering the old character forever. The route is what names the file
+  // actually on screen, so a route naming another file forces removal + creation.
+  const player = actorFixture();
+  player.model_ref = PLAYER_MODEL_REF;          // marker already current: only the art is stale
+  player.route = 'Assets/Maria WProp J J Ong.dae';
+  player.geometry.position = [7, 0.9, -9];      // where the player is actually standing
+  const f = apiFixture({ actors: [player, ...INHABITANTS.slice(1).map(c => actorFixture(c))] });
+  await load(f);
+  const ops = f.calls.map(call => call[0]);
+  assert.deepEqual(ops.slice(0, 2), ['remove', 'create']);
+  assert.equal(f.calls[0][1], PLAYER_GUID, 'the stale actor itself is removed');
+  const created = f.calls[1][4];
+  assert.equal(created.actor_guid, PLAYER_GUID, 'the guid is preserved, so the controller still works');
+  assert.equal(created.model_ref, PLAYER_MODEL_REF);
+  assert.equal(f.state.actors.length, INHABITANT_COUNT, 'the rebuild must not duplicate the player');
+  // x/z survive the rebuild; y is re-derived from the ground line. Rotation comes from the
+  // table, because the old rotation encoded the previous model's facing convention.
+  const rebuilt = f.get(PLAYER_GUID).geometry;
+  assert.equal(rebuilt.position[0], 7);
+  assert.equal(rebuilt.position[2], -9);
+  assert.deepEqual(rebuilt.rotation, [...STORY_CHARACTERS[0].rotation]);
+  // Re-entry is now the cheap path and must not replace anything again.
+  const writes = f.calls.length;
+  await load(f);
+  assert.equal(f.calls.length, writes);
+  assert.equal(f.state.actors.length, INHABITANT_COUNT);
 });
 test('a legacy boss is replaced, not repaired, so the engine imports the new model', async () => {
   // The dragon is already in the world with no generation marker. `skip_if_exists` alone can
@@ -248,7 +343,7 @@ test('migration retries before/after commit never rotate twice or duplicate a pl
     await assert.rejects(load(f), /玩家加载失败.*(reply lost|disk full)/);
     f.api.sceneTools.createActor = create;
     await load(f); await load(f);
-    assert.deepEqual(f.get(PLAYER_GUID).geometry.rotation, [0, -0.8 + Math.PI, 0]);
+    assert.deepEqual(f.get(PLAYER_GUID).geometry.rotation, [0, -0.8 + PLAYER_MODEL_YAW_OFFSET, 0]);
     assert.equal(f.get(PLAYER_GUID).model_ref, PLAYER_MODEL_REF); assert.equal(f.state.actors.length, 4);
   }
 });
@@ -256,7 +351,7 @@ test('legacy incomplete import receives the default corrected pose, not a second
   const player = actorFixture(); delete player.model_ref;
   player.geometry = { position: [0, 0, 0], rotation: [0, 0, 0], scale: [1, 1, 1] };
   const f = apiFixture({ actors: [player] }); await load(f); await load(f);
-  assert.deepEqual(f.get(PLAYER_GUID).geometry.rotation, [0, Math.PI, 0]);
+  assert.deepEqual(f.get(PLAYER_GUID).geometry.rotation, [0, PLAYER_MODEL_YAW_OFFSET, 0]);
   assert.ok(f.get(PLAYER_GUID).geometry.position[1] > 0);
   assert.equal(f.state.actors.length, 4);
 });
@@ -292,6 +387,12 @@ test('main hides NPCs; child reuses only prophet; corrected dragon bounds stay g
     assert.equal(f.state.actors.length, STORY_CHARACTERS.length);
     assert.equal(f.get(STORY_CHARACTERS[2].guid).visible, false);
     assert.equal(f.get(STORY_CHARACTERS[3].guid).visible, role === 'child');
+    // Creatures inhabit the main world and only the main world. They are deliberately NOT tied
+    // to `boss.hp` (this load reports hp 200, but a dead boss must not empty the arena), so
+    // the assertion below is about the world's role alone.
+    for (const monster of MONSTERS) {
+      assert.equal(f.get(monster.guid).visible, role === 'main', monster.role);
+    }
     const boss = f.get(STORY_CHARACTERS[1].guid);
     if (role === 'main') {
       // Asserted against the table, not a literal: the boss's rotation is a property of the
@@ -305,6 +406,17 @@ test('main hides NPCs; child reuses only prophet; corrected dragon bounds stay g
   }
 });
 
+
+test('a monster whose health reaches zero leaves the main-world stage', async () => {
+  const f = apiFixture({ actors: STORY_CHARACTERS.map(character => actorFixture(character)) });
+  const dead = MONSTERS[0];
+  const monsters = Object.fromEntries(MONSTERS.map(monster =>
+    [monster.role, { hp: monster.role === dead.role ? 0 : 120 }]));
+  await load(f, { gameplay: { role: 'main', state: { boss: { hp: 200 }, drop: null, monsters } } });
+  assert.equal(f.get(dead.guid).visible, false, '血量归零的怪物不再出现在主世界');
+  for (const monster of MONSTERS.slice(1))
+    assert.equal(f.get(monster.guid).visible, true, monster.role);
+});
 
 test('each character reaches real render readiness before the next character is submitted', async () => {
   const f = apiFixture(), gate = deferred(), entered = deferred();
