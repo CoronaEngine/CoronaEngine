@@ -77,6 +77,7 @@ corona_add_system(ui
     DEPENDENCIES
         Horizon
         corona::system::network
+        corona::system::mechanics
         libcef_dll_wrapper
         debug "${CEF_LIBCEF_DEBUG}"
         optimized "${CEF_LIBCEF_RELEASE}"

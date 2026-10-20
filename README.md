@@ -7,13 +7,20 @@
 | 工具 | 要求 |
 | --- | --- |
 | Git | 克隆源码及管理锁定的 Horizon 工作区 |
-| [Miniforge](https://github.com/conda-forge/miniforge) / [Miniconda / Conda](https://docs.conda.io/) | 管理开发工具 Python 环境和 Conan；无需单独安装 Python 或 Conan |
+| [Miniforge](https://github.com/conda-forge/miniforge) / [Miniconda / Conda](https://docs.conda.io/) | 管理 Python、Conan 和 Node.js；无需单独安装这些工具 |
 | CMake | 3.29 或更高版本 |
 | Ninja | 必须在 PATH 中；工程使用 Ninja Multi-Config |
 | Visual Studio 或 Build Tools | 安装“使用 C++ 的桌面开发”、MSVC x64/x86 工具集与 Windows SDK |
 | Vulkan SDK | Vulkan 头文件、加载器与构建工具；Slang 由 Conan 提供 |
 
 ## 开发工具环境
+
+CMake Configure 会自动创建或复用 `coronaengine-dev` 环境（可通过 `CORONA_CONDA_ENV` 指定环境名称）。
+启用编辑器时，CMake 使用该环境的 Python 自动检查 Node.js **22.19.0** 和 npm；
+缺失、版本不符或安装损坏时，通过 conda-forge 安装或修复到同一环境，已有环境也会补齐。
+首次安装需要联网，后续配置在工具可用时直接复用，不调用 Conda 安装。
+前端构建使用检查得到的绝对路径，无需手动激活环境，也不依赖系统 Node.js 或仓库内的副本。
+`node_modules` 仍保留在前端构建目录中。关闭 `BUILD_CORONA_EDITOR` 时不检查或安装 Node.js。
 
 VS Code / CMake Tools
 

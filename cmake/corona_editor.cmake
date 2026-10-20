@@ -59,7 +59,10 @@ function(corona_install_corona_editor target_name core_target)
     endif()
 
     set(_CORONA_PY_SCRIPT "${PROJECT_SOURCE_DIR}/tools/build/editor_copy_and_build.py")
-    set(_CORONA_NODE_DIR "${PROJECT_SOURCE_DIR}/third_party/node-v22.19.0-win-x64")
+    if(NOT CORONA_NODE_DIR OR NOT IS_DIRECTORY "${CORONA_NODE_DIR}")
+        message(FATAL_ERROR "[Corona:Editor] Conda Node.js is unavailable; re-run CMake configure.")
+    endif()
+    set(_CORONA_NODE_DIR "${CORONA_NODE_DIR}")
 
     if(NOT EXISTS "${_CORONA_PY_SCRIPT}")
         message(WARNING "[Corona:Editor] Script not found: ${_CORONA_PY_SCRIPT}; skipping editor copy/build.")

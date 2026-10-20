@@ -44,6 +44,7 @@ if(BUILD_CORONA_TESTING)
 endif()
 
 include(corona_python)              # Embedded Python discovery and dependency checks
+include(corona_nodejs)              # Install/check editor Node.js in the same Conda environment
 include(corona_msvc_dependencies)   # Stable Ninja header tracking across console encodings
 include(corona_compile_config)      # Compiler settings, standards, and shared definitions
 include(corona_third_party)         # Conan-provided external dependency targets

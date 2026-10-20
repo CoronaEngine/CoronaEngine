@@ -274,7 +274,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--merge-content", action="store_true",
                     help="Merge source directory content directly into dest (don't create subdirectory)")
     ap.add_argument("--frontend-dir", required=True, help="Frontend directory path for npm build")
-    ap.add_argument("--node-dir", required=True, help="Bundled Node directory path")
+    ap.add_argument("--node-dir", required=True, help="Conda Node directory selected during CMake configure")
     args = ap.parse_args(argv)
 
     dest_root = Path(args.dest_root).resolve()
