@@ -20,6 +20,7 @@
 #include "base/mgr/global.h"
 #include "base/mgr/pipeline.h"
 #include "base/mgr/evaluation_debug.h"
+#include "base/scattering/material.h"
 #include "core/image/image.h"
 #include "core/util/logging.h"
 #include "core/runtime/dynamic_module.h"
@@ -309,6 +310,15 @@ public:
         : cli_parser_(argc, argv),
           device_(RHIContext::instance().create_device(cli_parser_.backend())) {
         init();
+    }
+
+    ~EvalApp() {
+        if (pipeline_) pipeline_->commit_command();
+        pipeline_.reset();
+        Global::instance().set_pipeline(nullptr);
+        ImagePool::destroy_instance();
+        MaterialLut::destroy_instance();
+        Global::instance().set_device(nullptr);
     }
 
     void init() {

@@ -70,6 +70,7 @@
 #include "base/mgr/pipeline.h"
 #include "base/mgr/switch_profile.h"
 #include "base/mgr/scene.h"
+#include "base/scattering/material.h"
 #include "base/sensor/frame_buffer.h"
 #include "base/sensor/light_field_types.h"
 #include "base/sensor/sensor.h"
@@ -3085,6 +3086,9 @@ void OpticsSystem::shutdown_vision_backend() {
         auto& global = vision::Global::instance();
         global.set_pipeline(nullptr);
         vision::ImagePool::destroy_instance();
+        // Material LUTs are process-global and outlive their scene bindless arrays.
+        // Release their texture owners while the compute device is still valid.
+        vision::MaterialLut::destroy_instance();
         vision_device_.reset();
         global.set_device(nullptr);
         CFW_LOG_INFO("OpticsSystem: Vision compute device destroyed");
