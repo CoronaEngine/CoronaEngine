@@ -3,7 +3,7 @@
 特性：
 1. 解析 requirements.txt（支持基本格式：包名[extra]==x.y.z、>=、>、<=、<、~=、!= 等）
 2. 检测是否安装、版本是否满足
-3. 可选：自动安装缺失或不满足版本的包 (--auto-install)
+3. 可选：按完整 requirements.txt 安装并复检，保留 pip 索引选项 (--auto-install)
 4. 可选：输出 JSON (--json)
 5. 根据结果设置退出码（全部满足=0，有缺失/不满足=1）
 
@@ -57,7 +57,7 @@ def version_satisfies(installed: str, spec: str | None) -> bool:
             # Fallback to a simple heuristic if parsing fails
             pass
     # Simple fallback: only '==...' and '>=...'
-    m_eq = re.fullmatch(r"==\s*([0-9][0-9a-zA-Z\._-]*)", spec)
+    m_eq = re.fullmatch(r"==\s*([0-9][0-9a-zA-Z\._+-]*)", spec)
     if m_eq:
         return installed == m_eq.group(1)
     m_ge = re.fullmatch(r">=\s*([0-9][0-9a-zA-Z\._-]*)", spec)
@@ -89,13 +89,17 @@ class RequirementEntry:
 REQ_LINE_RE = re.compile(r"^\s*([A-Za-z0-9_.\-]+)(\[[A-Za-z0-9_,\-]+\])?\s*([!=<>~]{1,2}[^;#\s]+)?(?:\s*;\s*([^#]+))?\s*$")
 
 
-def parse_requirements(path: str) -> List[RequirementEntry]:
+def parse_requirements(path: str, *, ignore_errors: bool = False) -> List[RequirementEntry]:
     entries: List[RequirementEntry] = []
     with open(path, 'r', encoding='utf-8') as f:
         for idx, line in enumerate(f, 1):
             raw = line.rstrip('\n')
             stripped = line.strip()
             if not stripped or stripped.startswith('#'):
+                continue
+            # pip reads these options from the original file during installation.
+            if stripped.startswith(('--index-url ', '--index-url=',
+                                    '--extra-index-url ', '--extra-index-url=')):
                 continue
             if Requirement is not None:
                 try:
@@ -110,8 +114,11 @@ def parse_requirements(path: str) -> List[RequirementEntry]:
                     pass  # 回退到正则
             m = REQ_LINE_RE.match(stripped)
             if not m:
-                print(f"[WARN] Unable to parse line {idx}: {raw}", file=sys.stderr)
-                continue
+                message = f"Unable to parse {path}:{idx}: {raw}"
+                if ignore_errors:
+                    print(f"[WARN] {message}", file=sys.stderr)
+                    continue
+                raise ValueError(message)
             name = m.group(1)
             extras_part = m.group(2)
             extras = []
@@ -133,16 +140,11 @@ def check_entry(entry: RequirementEntry) -> Tuple[bool, str, str | None]:
     return True, 'ok', version
 
 
-def auto_install(entry: RequirementEntry) -> int:
-    """执行 pip 安装，返回退出码。"""
-    spec = entry.name
-    if entry.extras:
-        spec += f"[{','.join(entry.extras)}]"
-    if entry.spec:
-        spec += entry.spec
-    cmd = [sys.executable, '-m', 'pip', 'install', spec]
-    print(f"[AUTO-INSTALL] {' '.join(cmd)}")
-    return subprocess.call(cmd)
+def auto_install(requirements_path: str) -> int:
+    """Install together so pip honors the file's indexes and resolves dependencies."""
+    cmd = [sys.executable, '-m', 'pip', 'install', '-r', requirements_path]
+    print(f"[AUTO-INSTALL] {' '.join(cmd)}", file=sys.stderr)
+    return subprocess.call(cmd, stdout=sys.stderr)
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -152,7 +154,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument('--auto-install', action='store_true', help='Auto install missing or mismatched packages')
     p.add_argument('--fail-missing', action='store_true', help='Exit with code 1 when packages are missing (default behavior)')
     p.add_argument('--fail-mismatch', action='store_true', help='Exit with code 1 when version mismatches exist (default behavior)')
-    p.add_argument('--ignore-errors', action='store_true', help='Ignore parse errors (default: ignore and warn)')
+    p.add_argument('--ignore-errors', action='store_true', help='Ignore parse errors (default: fail)')
     p.add_argument('--no-unicode', action='store_true', help='Use ASCII symbols to avoid mojibake on legacy terminals')
     return p
 
@@ -163,7 +165,17 @@ def main(argv: List[str] | None = None) -> int:
     if not os.path.isfile(req_path):
         print(f"[ERROR] Requirements file does not exist: {req_path}", file=sys.stderr)
         return 2
-    entries = parse_requirements(req_path)
+    try:
+        entries = parse_requirements(req_path, ignore_errors=args.ignore_errors)
+    except ValueError as error:
+        print(f"[ERROR] {error}", file=sys.stderr)
+        return 2
+    install_failed = False
+    if args.auto_install and any(not check_entry(e)[0] for e in entries):
+        install_failed = auto_install(req_path) != 0
+        if install_failed:
+            print("[ERROR] Auto-install failed", file=sys.stderr)
+    # Report the final environment, including packages installed as dependencies.
     results = []
     missing = []
     mismatch = []
@@ -182,22 +194,6 @@ def main(argv: List[str] | None = None) -> int:
                 missing.append(e)
             elif status == 'version-mismatch':
                 mismatch.append(e)
-            if args.auto_install:
-                rc = auto_install(e)
-                if rc != 0:
-                    print(f"[ERROR] Auto-install failed: {e.display}", file=sys.stderr)
-    # 如果启用了自动安装，对失败的重新检查（仅对 missing/mismatch）
-    if args.auto_install and (missing or mismatch):
-        missing = []
-        mismatch = []
-        for e in entries:
-            ok, status, version = check_entry(e)
-            # 更新对应 result (简化: 不更新; 或者可在此修正)
-            if not ok:
-                if status == 'missing':
-                    missing.append(e)
-                elif status == 'version-mismatch':
-                    mismatch.append(e)
 
     if args.json:
         payload = {
@@ -243,10 +239,7 @@ def main(argv: List[str] | None = None) -> int:
             print("\nVersion mismatches:")
             for e in mismatch:
                 print(f"  - {e.display}")
-    exit_code = 0
-    if (missing and (args.fail_missing or not (args.fail_missing is False))) or (mismatch and (args.fail_mismatch or not (args.fail_mismatch is False))):
-        exit_code = 1
-    return exit_code
+    return int(bool(install_failed or missing or mismatch))
 
 
 if __name__ == '__main__':  # pragma: no cover

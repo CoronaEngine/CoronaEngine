@@ -22,6 +22,8 @@ CMake 首次配置会将 [CoronaEditor](https://github.com/CoronaEngine/CoronaEd
 配置时会递归初始化 CoronaEditor 声明的子模块，并检出其记录的提交。
 Python 依赖检查使用 `CoronaEditor/editor/requirements.txt`；构建时仍将资源部署为可执行目录下的
 `assets/` 和 `CabbageEditor/`，并自动构建前端。根目录原有的 `assets/`、`editor/` 不再参与构建。
+Python 层使用固定的 PyTorch/torchvision CPU wheels，不需要 CUDA。缺包或版本不符时，pip 按完整
+`requirements.txt` 安装；安装或复检失败会终止配置。
 启用编辑器时，CMake 使用该环境的 Python 自动检查 Node.js **22.19.0** 和 npm；
 缺失、版本不符或安装损坏时，通过 conda-forge 安装或修复到同一环境，已有环境也会补齐。
 首次安装需要联网，后续配置在工具可用时直接复用，不调用 Conda 安装。

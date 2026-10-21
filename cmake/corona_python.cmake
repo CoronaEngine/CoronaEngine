@@ -176,13 +176,11 @@ endfunction()
 # ------------------------------------------------------------------------------
 function(corona_run_python_requirements_check)
     if(NOT EXISTS "${CORONA_PY_CHECK_SCRIPT}")
-        message(WARNING "[Python] Dependency check script missing: ${CORONA_PY_CHECK_SCRIPT}")
-        return()
+        message(FATAL_ERROR "[Python] Dependency check script missing: ${CORONA_PY_CHECK_SCRIPT}")
     endif()
 
     if(NOT EXISTS "${CORONA_PY_REQUIREMENTS_FILE}")
-        message(WARNING "[Python] requirements.txt not found: ${CORONA_PY_REQUIREMENTS_FILE}")
-        return()
+        message(FATAL_ERROR "[Python] requirements.txt not found: ${CORONA_PY_REQUIREMENTS_FILE}")
     endif()
 
     set(_CRP_ARGS -r "${CORONA_PY_REQUIREMENTS_FILE}" --no-unicode)
@@ -209,7 +207,7 @@ function(corona_run_python_requirements_check)
 
         message(FATAL_ERROR "[Python] Requirement check failed (exit code ${_CORONA_PY_RES}); see output above, fix issues, then re-run")
     else()
-        message(STATUS "[Python] Requirements satisfied; no installation needed")
+        message(STATUS "[Python] Requirements satisfied")
     endif()
 endfunction()
 
