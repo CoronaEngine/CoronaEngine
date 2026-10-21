@@ -1,7 +1,0 @@
-node_modules
-dist
-build
-.cache
-src/blockly/configs/renderer.js
-*.min.js
-*.min.css
