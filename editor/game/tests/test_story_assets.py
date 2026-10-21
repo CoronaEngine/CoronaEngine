@@ -175,7 +175,7 @@ class StoryAssetTests(unittest.TestCase):
     # asset generation is bumped in the data instead: `modelRef` is the migration key, and the
     # page deletes and re-creates an actor whose generation is stale.
     # `test_a_stale_map_actor_is_replaced_not_repaired` guards that this stays wired.
-    STORY_WORLD_MAP = "scene/01_山门神殿_丰富.glb"
+    STORY_WORLD_MAP = "scene/01_山门神殿_平地版_仅地面.glb"
     STORY_WORLD_MAP_SPAWN_SITES = (
         ("player", 0, 0), ("boss", 2, 5.5), ("merchant", -30, -15), ("prophet", 30, -15),
     )
@@ -454,7 +454,7 @@ class StoryAssetTests(unittest.TestCase):
         self.assertIn("update_if_exists: true", source)
         # The generation marker is documented as the thing a future asset swap must bump.
         self.assertIn("MUST bump this string", source)
-        self.assertTrue(marker.endswith(".v4"), "modelRef 必须落在换图之后的代次上")
+        self.assertTrue(marker.endswith(".v5"), "modelRef 必须落在换图之后的代次上")
         # The pre-swap GLB must not be the shipped asset either.
         self.assertNotIn("优化版", story_map["asset"])
 
@@ -563,11 +563,12 @@ class StoryAssetTests(unittest.TestCase):
         self.assertLessEqual(worst, ceiling + 0.01,
                              f"网格最高采样 {worst:.4f} m 高过可行走带上沿 {ceiling:.4f} m："
                              "建筑/墙顶又变成地面了")
-        # The rich edition keeps buildings/trees/rocks above the courtyard band; the grid above
-        # already proves no baked cell rises above the walkable band (the ground, not the roof),
-        # which is the invariant that matters. The raw model AABB is deliberately tall now.
-        self.assertGreater(high[1] - low[1], 1.0,
-                           msg="丰富版模型应保留建筑/树木的高度，而非仅一块平面")
+        # The shipped edition is the "仅地面" (ground-only) flat plane: buildings, vegetation
+        # and rocks were stripped out, so the raw model AABB has no height at all. This pins that:
+        # a future asset swap that reintroduces a tall slice (a building, a hill) without updating
+        # this test fails loudly instead of silently turning the small world back into a scenery pile.
+        self.assertLessEqual(high[1] - low[1], 0.05,
+                           msg="当前应是仅地面平面，模型高度应接近 0；若换回丰富版需同步改回此断言")
 
         # The flat floor is the point of this re-export: the four story spawn sites have to read
         # the same world height through the runtime lookup the game actually calls (`heightAt`,
@@ -705,11 +706,10 @@ class StoryAssetTests(unittest.TestCase):
         self.assertEqual(transform["position"][2], 0)
         self.assertEqual(transform["scale"], [story_map["scale"]] * 3)
         self.assertEqual(transform["rotation"], [0, 0, 0])
-        # The rich edition has real geometry above the courtyard, so the derived `position.y` is
-        # the non-zero offset that lifts the model until its courtyard plane sits on y = 0. The
-        # dangerous failure mode is writing a raw metre offset (the old 124.09 m) or
-        # `max_axis / 2` = 840 m: those would launch the map into the air.
-        self.assertGreater(expected_y, 0.0)
+        # The ground-only edition is a flat y = 0 plane, so centreY == courtyardY and the derived
+        # position.y is exactly 0: the plane already sits on the engine floor. The dangerous
+        # failure mode is writing a raw metre offset (the old 124.09 m) or `max_axis / 2` = 840 m.
+        self.assertAlmostEqual(expected_y, 0.0, delta=0.01)
         self.assertLess(expected_y, 20.0)
 
         # `follow_camera` is what decides world vs UI space in the engine

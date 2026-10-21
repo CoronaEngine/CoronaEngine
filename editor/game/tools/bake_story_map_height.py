@@ -60,7 +60,7 @@ from collections import deque
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
-SOURCE = ROOT / "editor/game/art/models/scene/01_山门神殿_丰富.glb"
+SOURCE = ROOT / "editor/game/art/models/scene/01_山门神殿_平地版_仅地面.glb"
 OUTPUT = ROOT / "editor/game/data/story-map-height.json"
 
 # 256x256 over the 64.8 x 90 m footprint is ~25 x 35 cm per cell: fine enough for a walkable
@@ -74,7 +74,7 @@ RESOLUTION = 256
 # have to climb onto. `PIT_FLOOR` is the deepest y that is still "ground": below it is a hole in
 # the map surface (the pit at model (77.3, -57.8) reaches -12.908) that must be filled from its
 # neighbours instead of being baked as a well.
-COURTYARD_Y = 0.790125
+COURTYARD_Y = 0.0
 COURTYARD_BAND = 2.0
 PIT_FLOOR = -5.0
 

@@ -47,7 +47,7 @@ export const MAP_GUID = 'corona.story.world-map.v1';
  * (removal + creation is the only path that re-imports). Forgetting the bump ships a world that
  * silently keeps the previous map forever — the exact bug the bump to `.v2` fixes.
  */
-export const MAP_MODEL_REF = 'corona.story.world-map.v4';
+export const MAP_MODEL_REF = 'corona.story.world-map.v5';
 /**
  * The map's record identity inside a scene snapshot. `MAP_ACTOR_DATA` writes both onto the
  * actor, so a snapshot can be recognised even when the guid or the version marker is missing
@@ -62,7 +62,7 @@ const finiteNumber = value => typeof value === 'number' && Number.isFinite(value
 const positiveNumber = value => finiteNumber(value) && value > 0 && value <= COORD_LIMIT;
 
 /** The model's real largest world axis in metres: what the engine divides the model by. */
-export const MAP_MAX_AXIS = 420.0;
+export const MAP_MAX_AXIS = 1680.0027;
 
 /**
  * Extra world metres on top of the derived placement. Zero by construction, and not a knob.
@@ -82,20 +82,16 @@ export const MAP_SURFACE_LIFT = 0;
 
 /** Mirrors the `map` block of game/data/prophet.json, field for field. */
 export const MAP_PLACEMENT = Object.freeze({
-  asset: 'scene/01_山门神殿_丰富.glb',
+  asset: 'scene/01_山门神殿_平地版_仅地面.glb',
   guid: MAP_GUID,
   modelRef: MAP_MODEL_REF,
-  // The map's world depth in metres, NOT life size. The rich re-export spans 300 x 80 x 420 m;
-  // at scale = 90 the z axis (420 m) becomes the 90 m level footprint, x becomes ~64 m wide.
-  // The engine puts the model's AABB centre on the world origin, so the footprint is the
-  // symmetric +/-32 x +/-45 m: wide enough for the characters authored at +/-30 m.
+  // The ground-only edition keeps just the flat y = 0 plane: buildings, trees and rocks are
+  // stripped out, so the small world is basic terrain under the (hidden) player and the prophet.
+  // The model spans 1200 x 1680 m; at scale = 90 the z axis (1680 m) becomes the 90 m level
+  // footprint. centreY == courtyardY == 0 because the model has no height.
   scale: 90,
-  // The rich edition keeps the Ground plane, buildings, trees and rocks. The walkable courtyard
-  // sits at model y = 0.790 m (the lowest surface in the 40 m spawn window), and the AABB mid
-  // height is 34.146 m; the runtime subtracts that offset so the courtyard lands on the engine
-  // floor y = 0.
-  courtyardY: 0.790125,
-  centreY: 34.145747,
+  courtyardY: 0,
+  centreY: 0,
 });
 
 /** Strict validation, so a bad edit in the JSON table fails loudly instead of drifting. */

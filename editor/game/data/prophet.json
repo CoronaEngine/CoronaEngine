@@ -56,13 +56,13 @@
     "moveRange": 10.0
   },
   "map": {
-    "$comment": "剧情世界的地图（山门神殿，丰富版）。保留 Ground 平面、建筑、树木与石块：模型 AABB 为 x[-150,150]、z[-210,210]，最大轴 z 向 420 米；可行走庭院在原点 40m 窗口内最低地面 y=0.790，故 courtyardY=0.790125，包围盒中高 centreY=34.145747，position.y=(centreY-courtyardY)*scale/max_axis≈7.17m，把庭院压到引擎地面 y=0。scale=90 使足迹约 64x90m。与 cube 一样摆位由这里驱动，客户端进世界时确认它在位（storyMap.mjs）。引擎把静态模型归一化成单位立方体后 create_actor 的 position 是归一化坐标，geometry.scale 写 scale。modelRef 是资产代次（迁移键）：guid 保持 corona.story.world-map.v1 不变，否则已有世界会再叠一张；引擎只在创建 actor 时导入模型（skip_if_exists 修复分支只写 position/rotation/scale/follow_camera/body_type，从不改写 actor.route），所以换地图资产必须把 modelRef 升一版，storyMap.mjs 看到代次不符会先删后建，让引擎真正导入新模型。本版由 v3 升到 v4。",
-    "asset": "scene/01_山门神殿_丰富.glb",
+    "$comment": "剧情世界的地图（山门神殿，仅地面版）。从丰富版里剥离掉建筑物、草木与石头，只保留 y=0 的平地，让小世界只剩基本地形 + 先知（玩家隐身）。模型 AABB 为 x[-600,600]、z[-840,840]，最大轴 z 向 1680 米，纯平面故 courtyardY=0、centreY=0；scale=90 使足迹约 64x90m。与 cube 一样摆位由这里驱动，客户端进世界时确认它在位（storyMap.mjs）。引擎把静态模型归一化成单位立方体后 create_actor 的 position 是归一化坐标，geometry.scale 写 scale。modelRef 是资产代次（迁移键）：guid 保持 corona.story.world-map.v1 不变，否则已有世界会再叠一张；换地图资产必须把 modelRef 升一版，storyMap.mjs 看到代次不符会先删后建。本版由 v4（丰富版）升到 v5。",
+    "asset": "scene/01_山门神殿_平地版_仅地面.glb",
     "guid": "corona.story.world-map.v1",
-    "modelRef": "corona.story.world-map.v4",
+    "modelRef": "corona.story.world-map.v5",
     "scale": 90,
-    "courtyardY": 0.790125,
-    "centreY": 34.145747
+    "courtyardY": 0,
+    "centreY": 0
   },
   "script": {
     "id": "prophet",
