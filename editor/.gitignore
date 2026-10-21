@@ -48,6 +48,8 @@ models/
 !/game/data/**
 !/game/art/models/
 !/game/art/models/**
+# 325MB 丰富版地图：超过 GitHub fork 100MB 上限且 fork 不支持 LFS，待压缩后再入库
+/game/art/models/scene/01_山门神殿_丰富.glb
 screenshots/
 
 # Environment files

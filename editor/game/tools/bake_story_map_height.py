@@ -1,13 +1,13 @@
 """Bake the story map's walkable height grid into ``editor/game/data/story-map-height.json``.
 
-The map (``editor/game/art/models/scene/01_山门神殿_平地版_仅地面.glb``) ships as scenery with no
-collision (``body_type: 'phantom'``): the engine builds no triangle octree for it, so nothing in
-the engine can answer "how high is the ground here?". This script answers that question offline
-and once: it decodes every ``POSITION`` accessor of the GLB, rasterises the vertices onto a
-256x256 grid over the model's x/z footprint, fills the empty cells by nearest-neighbour so the
-grid has no holes, and writes the result as int16 centimetres. The "仅地面" (ground-only)
-edition has one material slice — the flat y = 0 Ground plane — so every cell bakes to 0 and the
-grid is the constant floor the characters stand on.
+The map (``editor/game/art/models/scene/01_山门神殿_丰富.glb``) ships as scenery with no
+collision (``body_type: 'static'``): the engine builds a triangle octree for it, but nothing in
+the engine answers "how high is the walkable ground here?" per cell. This script answers that
+offline and once: it decodes every ``POSITION`` accessor of the GLB, rasterises the vertices onto
+a 256x256 grid over the model's x/z footprint, fills the empty cells by nearest-neighbour so the
+grid has no holes, and writes the result as int16 centimetres. The rich edition keeps the Ground
+plane plus buildings, trees and rocks, so the band rules below ignore everything above the walkable
+courtyard surface.
 
 The grid describes the **walkable ground**, not the topmost surface. Keeping the maximum y per
 cell (what this script used to do) made every cell a building or a wall stands on report the
@@ -60,7 +60,7 @@ from collections import deque
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
-SOURCE = ROOT / "editor/game/art/models/scene/01_山门神殿_平地版_仅地面.glb"
+SOURCE = ROOT / "editor/game/art/models/scene/01_山门神殿_丰富.glb"
 OUTPUT = ROOT / "editor/game/data/story-map-height.json"
 
 # 256x256 over the 64.8 x 90 m footprint is ~25 x 35 cm per cell: fine enough for a walkable
@@ -74,7 +74,7 @@ RESOLUTION = 256
 # have to climb onto. `PIT_FLOOR` is the deepest y that is still "ground": below it is a hole in
 # the map surface (the pit at model (77.3, -57.8) reaches -12.908) that must be filled from its
 # neighbours instead of being baked as a well.
-COURTYARD_Y = 0.0
+COURTYARD_Y = 0.790125
 COURTYARD_BAND = 2.0
 PIT_FLOOR = -5.0
 

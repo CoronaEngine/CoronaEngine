@@ -78,3 +78,7 @@ __pycache__/
 # 密钥文件 —— 严禁提交
 **/ai_setting.py
 **/ai_setting.*
+
+# 剧情世界丰富版地图（325MB，超过 GitHub fork 100MB 上限且 fork 不支持 LFS，待压缩后再入库）
+01_山门神殿_丰富.glb
+

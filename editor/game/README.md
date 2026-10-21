@@ -103,7 +103,7 @@ assert clock.state.phase is DayPhase.NIGHT
 python -B editor/game/tools/bake_story_map_height.py
 ```
 
-脚本读取 `editor/game/art/models/scene/01_山门神殿_平地版_仅地面.glb`，生成
+脚本读取 `editor/game/art/models/scene/01_山门神殿_丰富.glb`，生成
 `editor/game/data/story-map-height.json`。资源路径按脚本位置解析，不依赖当前工作目录。
 场景建模精简工具在 `editor/game/tools/strip_scene_glb.py`：按材质名白名单（默认只保留
 `Ground`）剔除山门神殿 GLB 中的建筑物/草木/石头材质片并重打包。

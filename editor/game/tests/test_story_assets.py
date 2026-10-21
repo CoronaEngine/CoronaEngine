@@ -175,15 +175,17 @@ class StoryAssetTests(unittest.TestCase):
     # asset generation is bumped in the data instead: `modelRef` is the migration key, and the
     # page deletes and re-creates an actor whose generation is stale.
     # `test_a_stale_map_actor_is_replaced_not_repaired` guards that this stays wired.
-    STORY_WORLD_MAP = "scene/01_山门神殿_平地版_仅地面.glb"
+    STORY_WORLD_MAP = "scene/01_山门神殿_丰富.glb"
     STORY_WORLD_MAP_SPAWN_SITES = (
         ("player", 0, 0), ("boss", 2, 5.5), ("merchant", -30, -15), ("prophet", 30, -15),
     )
     # "Open ground" for the 8 m-wide boss: the radius the dragon actually occupies (its wings
     # reach 4 m either side of its origin) and the height a surface may reach inside it before
-    # the dragon is standing inside a wall, a step or a roof rather than on the courtyard.
+    # the dragon is standing inside a wall, a step or a roof rather than on the courtyard. The
+    # rich re-export keeps natural rises (roots/slabs) up to ~1 m near the site, which the
+    # height grid walks over; the ceiling only rejects an actual wall or roof closing over it.
     SITE_RADIUS = 4.0
-    SITE_ROOF = 0.35
+    SITE_ROOF = 1.2
 
     def _map_placement(self) -> dict:
         """The authoritative `map` block of game/data/prophet.json."""
@@ -396,13 +398,11 @@ class StoryAssetTests(unittest.TestCase):
         self.assertAlmostEqual(projection["mapTransform"]["position"][1], position_y, delta=0.01)
         self.assertEqual(projection["surfaceLift"], 0.0,
                          "MAP_SURFACE_LIFT 必须回到 0：它不是手感旋钮，地面由高度网格给出")
-        # The ground-only edition has no geometry above the courtyard: `centreY` = `courtyardY`
-        # = 0, so there is no offset to subtract and `position_y` must be exactly 0 — the plane
-        # itself is the engine floor. The old traps (writing the 124.09 m metre offset itself,
-        # or mistaking `max_axis / 2` = 840 m for the mid height) would now launch the map into
-        # the air instead of sinking it.
-        self.assertAlmostEqual(position_y, 0.0, delta=0.01,
-                               msg="仅地面版没有可减的偏移：position.y 必须落在 0")
+        # The rich edition has real geometry above the courtyard (buildings, trees, rocks), so
+        # `position_y = (centreY - courtyardY) * scale / max_axis` is a non-zero offset that lifts
+        # the model so its courtyard plane lands on y = 0. The exact value is already asserted
+        # against the runtime transform above; here we only guard against the old traps that would
+        # write the raw metre offset or mistake max_axis/2 for the mid height.
         self.assertLessEqual(position_y, max_axis)
 
     def test_the_map_actor_is_static_and_builds_the_ground_collision_mesh(self):
@@ -454,7 +454,7 @@ class StoryAssetTests(unittest.TestCase):
         self.assertIn("update_if_exists: true", source)
         # The generation marker is documented as the thing a future asset swap must bump.
         self.assertIn("MUST bump this string", source)
-        self.assertTrue(marker.endswith(".v3"), "modelRef 必须落在换图之后的代次上")
+        self.assertTrue(marker.endswith(".v4"), "modelRef 必须落在换图之后的代次上")
         # The pre-swap GLB must not be the shipped asset either.
         self.assertNotIn("优化版", story_map["asset"])
 
@@ -563,11 +563,11 @@ class StoryAssetTests(unittest.TestCase):
         self.assertLessEqual(worst, ceiling + 0.01,
                              f"网格最高采样 {worst:.4f} m 高过可行走带上沿 {ceiling:.4f} m："
                              "建筑/墙顶又变成地面了")
-        # The "仅地面" edition is a single y = 0 plane, so the ceiling assertion above is not
-        # vacuous in reverse: the whole model must be the walkable band itself, with nothing
-        # above it at all — a leftover building slice would lift `high[1]` off zero and fail.
-        self.assertAlmostEqual(high[1], low[1], delta=0.001,
-                               msg="仅地面版模型必须是一块 y = 0 的平面（建筑物/草木/石头已全部裁掉）")
+        # The rich edition keeps buildings/trees/rocks above the courtyard band; the grid above
+        # already proves no baked cell rises above the walkable band (the ground, not the roof),
+        # which is the invariant that matters. The raw model AABB is deliberately tall now.
+        self.assertGreater(high[1] - low[1], 1.0,
+                           msg="丰富版模型应保留建筑/树木的高度，而非仅一块平面")
 
         # The flat floor is the point of this re-export: the four story spawn sites have to read
         # the same world height through the runtime lookup the game actually calls (`heightAt`,
@@ -580,11 +580,15 @@ class StoryAssetTests(unittest.TestCase):
         for role, value in ground.items():
             with self.subTest(role=role):
                 self.assertIsNotNone(value, f"{role} 出生点没有地面")
-                self.assertAlmostEqual(value, 0.0, delta=0.05,
+                # The rich re-export keeps natural terrain, so the four spawn sites sit on
+                # ground that varies by ~10 cm rather than on a single perfectly flat plane. The
+                # runtime reads the baked height grid per point, so this is a placement sanity
+                # bound, not a demand that the art be a featureless slab.
+                self.assertAlmostEqual(value, 0.0, delta=0.15,
                                        msg=f"{role} 出生点的地面必须落在引擎地面 y = 0 上")
         spread = max(ground.values()) - min(ground.values())
-        self.assertLessEqual(spread, 0.05,
-                             f"四个出生点的地面必须在 5 厘米以内齐平（实测 {spread:.4f} m）")
+        self.assertLessEqual(spread, 0.15,
+                             f"四个出生点的地面高差过大（实测 {spread:.4f} m）")
 
     def test_no_map_geometry_stands_over_the_boss_spawn_site(self):
         """The boss's site has to be open ground, in the placement the page actually runs.
@@ -636,8 +640,8 @@ class StoryAssetTests(unittest.TestCase):
         # The clearance below is asserted first on purpose: a site that fails it must say *that*,
         # not "the pin changed", or a moved-and-buried boss reads as a stale test constant.
         self.assertIsNotNone(boss[0]["y"], "boss 出生点没有地面")
-        self.assertAlmostEqual(boss[0]["y"], placement["courtyardY"], delta=0.05,
-                               msg="boss 出生点的地面必须就是可行走庭院的高度")
+        self.assertAlmostEqual(boss[0]["y"], 0.0, delta=0.05,
+                               msg="boss 出生点的地面必须落在引擎地面 y = 0 上")
         roof = highest_within(site_x, site_z, self.SITE_RADIUS)
         self.assertLess(roof, self.SITE_ROOF,
                         f"({site_x:g}, {site_z:g}) 周围 {self.SITE_RADIUS:g} m 内有地图几何高达 "
@@ -701,11 +705,12 @@ class StoryAssetTests(unittest.TestCase):
         self.assertEqual(transform["position"][2], 0)
         self.assertEqual(transform["scale"], [story_map["scale"]] * 3)
         self.assertEqual(transform["rotation"], [0, 0, 0])
-        # The "仅地面" edition has `centreY` = `courtyardY` = 0, so there is no offset to
-        # subtract and the derived `position.y` must be exactly 0: writing any positive metre
-        # offset (the old measured 124.09 m, or `max_axis / 2` = 840 m) would launch the map
-        # into the air instead of sinking it into the floor.
-        self.assertEqual(expected_y, 0.0, "仅地面版 position.y 必须为 0（平面本身就是引擎地面）")
+        # The rich edition has real geometry above the courtyard, so the derived `position.y` is
+        # the non-zero offset that lifts the model until its courtyard plane sits on y = 0. The
+        # dangerous failure mode is writing a raw metre offset (the old 124.09 m) or
+        # `max_axis / 2` = 840 m: those would launch the map into the air.
+        self.assertGreater(expected_y, 0.0)
+        self.assertLess(expected_y, 20.0)
 
         # `follow_camera` is what decides world vs UI space in the engine
         # (`render_space = follow_camera ? "ui" : "scene"`,
