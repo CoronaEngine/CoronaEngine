@@ -25,7 +25,7 @@ include_guard(GLOBAL)
 set(CORONA_EDITOR_SOURCE_DIR "${PROJECT_SOURCE_DIR}/CoronaEditor")
 
 function(corona_prepare_editor_sources)
-    # Different build presets share this checkout. Never update an existing copy.
+    # Different build presets share this checkout. Never pull an existing copy.
     file(MAKE_DIRECTORY "${PROJECT_SOURCE_DIR}/.workspace")
     file(LOCK "${PROJECT_SOURCE_DIR}/.workspace/corona-editor.lock"
         GUARD FUNCTION TIMEOUT 600 RESULT_VARIABLE _editor_lock_result)
@@ -53,6 +53,21 @@ function(corona_prepare_editor_sources)
             "[Corona:Editor] Incomplete checkout at ${CORONA_EDITOR_SOURCE_DIR}. "
             "Expected assets/ and editor/ directly inside CoronaEditor/. "
             "Repair or move this directory aside, then re-run CMake.")
+    endif()
+    if(EXISTS "${CORONA_EDITOR_SOURCE_DIR}/.gitmodules")
+        if(NOT EXISTS "${CORONA_EDITOR_SOURCE_DIR}/.git")
+            message(FATAL_ERROR "[Corona:Editor] Submodules require a Git checkout at ${CORONA_EDITOR_SOURCE_DIR}.")
+        endif()
+        find_package(Git REQUIRED)
+        message(STATUS "[Corona:Editor] Initializing submodules")
+        execute_process(
+            COMMAND "${GIT_EXECUTABLE}" -C "${CORONA_EDITOR_SOURCE_DIR}"
+                submodule update --init --recursive
+            RESULT_VARIABLE _editor_submodule_result
+        )
+        if(NOT _editor_submodule_result STREQUAL "0")
+            message(FATAL_ERROR "[Corona:Editor] Submodule initialization failed (${_editor_submodule_result}); check Git/network access and re-run CMake.")
+        endif()
     endif()
     message(STATUS "[Corona:Editor] Source checkout: ${CORONA_EDITOR_SOURCE_DIR}")
 endfunction()

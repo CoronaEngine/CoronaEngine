@@ -19,6 +19,7 @@ CMake Configure 会自动创建或复用 `coronaengine-dev` 环境（可通过 `
 CMake 首次配置会将 [CoronaEditor](https://github.com/CoronaEngine/CoronaEditor) 浅克隆到仓库根目录的
 `CoronaEditor/`，直接使用其中的 `assets/` 和 `editor/`，不会再嵌套一层 `CoronaEditor/`。
 已有副本直接复用，不自动拉取或覆盖本地修改；需要更新时在该目录中手动执行 Git 更新。
+配置时会递归初始化 CoronaEditor 声明的子模块，并检出其记录的提交。
 Python 依赖检查使用 `CoronaEditor/editor/requirements.txt`；构建时仍将资源部署为可执行目录下的
 `assets/` 和 `CabbageEditor/`，并自动构建前端。根目录原有的 `assets/`、`editor/` 不再参与构建。
 启用编辑器时，CMake 使用该环境的 Python 自动检查 Node.js **22.19.0** 和 npm；
