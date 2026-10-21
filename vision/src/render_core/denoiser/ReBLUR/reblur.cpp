@@ -90,7 +90,7 @@ void ReBLUR::render_sub_UI(Widgets *widgets) noexcept {
 void ReBLUR::compile() noexcept {
     auto &camera = scene().sensor(); auto &sampler = renderer().sampler();
     Kernel guides = [&](Var<GuideParam> p) {
-        auto output = p.output.soa_view_var<Guide>();
+        auto output = guide_view(p.output);
         Uint i = dispatch_id();
         $if(p.layered != 0u) {
             // Test the small validity field before loading the surface, camera
@@ -189,7 +189,8 @@ void ReBLUR::compile() noexcept {
         p.indirect.write(i, make_RadType4(p.specular.read(i).xyz(), 1.f));
     };
     publish_ = device().compile(publish, "REBLUR-PublishPT");
-    filter_->compile(device()); coverage_->compile();
+    filter_->compile(device());
+    coverage_->compile();
     frame_ = InvalidUI32;
 }
 
@@ -229,6 +230,8 @@ CommandBatch ReBLUR::dispatch(RealTimeDenoiseInput &input) noexcept {
     p.camera = input.camera_pos; p.prev_camera = input.prev_camera_pos;
     p.world_to_raster = current_raster_; p.prev_world_to_raster = previous_raster_;
     p.unproject = 2.f * std::tan(radians(camera->fov_y()) * .5f) / static_cast<float>(input.resolution.y);
+    const auto frame_delta_ms = pipeline()->frame_delta_ms();
+    p.frame_rate_scale = frame_delta_ms > 0.0 ? std::max(33.333f / static_cast<float>(frame_delta_ms), 1.f) : 1.f;
     ret << filter_->dispatch(p, input.layer_index);
     if (input.channel_kind == RealTimeDenoiseInput::ChannelKind::DiffuseSpecular) {
         PublishParam pp;

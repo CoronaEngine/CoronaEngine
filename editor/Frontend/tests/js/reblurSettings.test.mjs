@@ -4,6 +4,18 @@ import { effectScope, reactive } from 'vue';
 import { reblurDefaults, validateReblurSettings, useReblurSettings } from '../../src/utils/reblurSettings.js';
 
 const settle = () => new Promise(resolve => setImmediate(resolve));
+
+test('defaults match the RTXPT NRD 4.14.3 REBLUR preset', () => {
+  assert.deepEqual(reblurDefaults, {
+    max_history: 50, fast_history: 6, history_fix_frames: 3, history_fix_stride: 14,
+    diffuse_prepass: 15, specular_prepass: 40, min_radius: 1, max_radius: 30,
+    lobe_fraction: 0.15, roughness_fraction: 0.15, plane_sensitivity: 0.02, min_hit_weight: 0.1,
+    stabilization: 63 / 64, antilag_sigma: 4, antilag_sensitivity: 3,
+    anti_firefly: true, reconstruction: 2,
+  });
+  assert.equal(validateReblurSettings(reblurDefaults), '');
+});
+
 function fixture(api = {}) {
   const props = reactive({ sceneId: 'kitchen', cameraId: 'camera-a', enabled: true });
   const scope = effectScope();
@@ -35,7 +47,7 @@ test('loads effective values and applies an independent camera preference with d
 test('rejects invalid and inconsistent input before sending changes', async t => {
   const f = fixture(); t.after(f.stop);
   for (const patch of [{ max_history: '' }, { diffuse_prepass: NaN }, { stabilization: 2 },
-    { fast_history: 31 }, { min_radius: 31 }, { reconstruction: 1.5 }]) {
+    { fast_history: 51 }, { min_radius: 31 }, { reconstruction: 1.5 }]) {
     f.state.draft.value = { ...reblurDefaults, ...patch };
     assert.equal(await f.state.apply(), false);
     assert.notEqual(f.state.error.value, '');
@@ -93,7 +105,7 @@ test('failed requests preserve the draft and reset only updates the draft until 
   assert.equal(f.state.draft.value.max_history, 21);
   assert.match(f.state.error.value, /renderer unavailable/);
   f.state.reset();
-  assert.equal(f.state.draft.value.max_history, 30);
+  assert.equal(f.state.draft.value.max_history, 50);
   assert.equal(f.sent.length, 0);
   assert.equal(validateReblurSettings(f.state.draft.value), '');
 });

@@ -53,7 +53,7 @@ CommandBatch Filter::dispatch(FilterParam p, uint layer) {
     p.fix_frames = settings.history_fix_frames; p.fix_stride = settings.history_fix_stride;
     p.diffuse_prepass = settings.diffuse_prepass; p.specular_prepass = settings.specular_prepass;
     p.min_radius = settings.min_radius; p.max_radius = settings.max_radius;
-    p.lobe_fraction = settings.lobe_fraction; p.roughness_fraction = settings.roughness_fraction;
+    p.lobe_fraction = settings.lobe_fraction * settings.lobe_fraction; p.roughness_fraction = settings.roughness_fraction;
     p.plane_sensitivity = settings.plane_sensitivity; p.min_hit_weight = settings.min_hit_weight;
     p.stabilization = settings.stabilization; p.antilag_sigma = settings.antilag_sigma;
     p.antilag_sensitivity = settings.antilag_sensitivity; p.anti_firefly = settings.anti_firefly;
@@ -63,6 +63,9 @@ CommandBatch Filter::dispatch(FilterParam p, uint layer) {
         p.dst_diffuse = diffuse_[dst].descriptor(); p.dst_specular = specular_[dst].descriptor();
     };
     CommandBatch commands;
+    // Every lane in a shared-memory workgroup must reach its preload barrier.
+    const uint2 neighborhood_size = make_uint2((size_.x + 15u) / 16u * 16u,
+                                               (size_.y + 7u) / 8u * 8u);
     bind(1u, 0u);
     commands << pack_(p).dispatch(uint(tiles_.size()) * 32u);
     uint src = 0u;
@@ -70,11 +73,11 @@ CommandBatch Filter::dispatch(FilterParam p, uint layer) {
         bind(src, src ^ 1u); commands << reconstruct_(p).dispatch(size_); src ^= 1u;
     }
     bind(src, src ^ 1u); commands << prepass_(p).dispatch(size_); src ^= 1u;
-    bind(src, src ^ 1u); commands << temporal_(p).dispatch(size_); src ^= 1u;
-    bind(src, src ^ 1u); commands << fix_(p).dispatch(size_); src ^= 1u;
+    bind(src, src ^ 1u); commands << temporal_(p).dispatch(neighborhood_size); src ^= 1u;
+    bind(src, src ^ 1u); commands << fix_(p).dispatch(neighborhood_size); src ^= 1u;
     bind(src, src ^ 1u); commands << blur_(p).dispatch(size_); src ^= 1u;
     bind(src, src ^ 1u); commands << post_blur_(p).dispatch(size_); src ^= 1u;
-    bind(src, src ^ 1u); commands << stabilize_(p).dispatch(size_);
+    bind(src, src ^ 1u); commands << stabilize_(p).dispatch(neighborhood_size);
     state.frame = p.frame;
     return commands;
 }

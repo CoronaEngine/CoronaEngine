@@ -1,5 +1,5 @@
 #pragma once
-#include "filter.h"
+#include "guide_layout.h"
 
 namespace vision::reblur {
 // Match NRD's FP16 signal/history storage, keeping all filtering in Float.
@@ -113,6 +113,6 @@ inline Float spatial_weight(const Var<FilterParam> &p, const Var<Guide> &a, cons
 inline Float antilag(Float h, Float avg, Float sigma, Float count, const Var<FilterParam> &p) {
     Float hc = clamp(h, avg - sigma * p.antilag_sigma, avg + sigma * p.antilag_sigma);
     Float d = abs(h - hc) / (max(h, hc) + 1e-6f);
-    return 1.f / (1.f + d * count / max(p.antilag_sensitivity, 1e-6f));
+    return 1.f / (1.f + d * count / max(p.antilag_sensitivity * p.frame_rate_scale * p.frame_rate_scale, 1e-6f));
 }
 }

@@ -2,14 +2,14 @@ import { ref, watch } from 'vue';
 
 export const reblurGroups = [
   { label: '时间累积', fields: [
-    ['max_history', '最大历史帧数', 30, 1, 63, 1, '增大可减少静态噪声，但响应变化更慢。'],
+    ['max_history', '最大历史帧数', 50, 1, 63, 1, '增大可减少静态噪声，但响应变化更慢。'],
     ['fast_history', '快速历史帧数', 6, 0, 63, 1, '用于跟踪亮度变化，不超过最大历史帧数。'],
     ['history_fix_frames', '历史修复帧数', 3, 0, 63, 1, '历史不足时使用空间邻域修复。'],
     ['history_fix_stride', '历史修复步长', 14, 0, 100, 1, '控制历史修复时邻域采样的间距。'],
   ] },
   { label: '空间滤波', fields: [
-    ['diffuse_prepass', '漫反射预滤波半径', 30, 0, 100, 1, '屏幕像素半径，0 表示不扩散漫反射预滤波。'],
-    ['specular_prepass', '镜面预滤波半径', 50, 0, 100, 1, '屏幕像素半径，增大可能模糊反射细节。'],
+    ['diffuse_prepass', '漫反射预滤波半径', 15, 0, 100, 1, '屏幕像素半径，0 表示不扩散漫反射预滤波。'],
+    ['specular_prepass', '镜面预滤波半径', 40, 0, 100, 1, '屏幕像素半径，增大可能模糊反射细节。'],
     ['min_radius', '最小模糊半径', 1, 0, 100, 0.5, '不超过最大模糊半径。'],
     ['max_radius', '最大模糊半径', 30, 0, 100, 1, '限制空间滤波的最大屏幕半径。'],
     ['lobe_fraction', '法线波瓣比例', 0.15, 0, 1, 0.01, '控制滤波对法线差异的容忍程度。'],
@@ -18,14 +18,14 @@ export const reblurGroups = [
     ['min_hit_weight', '最小命中距离权重', 0.1, 0, 1, 0.01, '控制不同光线命中距离样本的混合。'],
   ] },
   { label: '稳定与抗拖影', fields: [
-    ['stabilization', '时间稳定强度', 1, 0, 1, 0.05, '0 关闭额外时间稳定，1 使用完整强度。'],
+    ['stabilization', '时间稳定强度', 63 / 64, 0, 1, 0.05, '0 关闭额外时间稳定，1 使用完整强度。'],
     ['antilag_sigma', '抗拖影亮度容差', 4, 0, 10, 0.1, '以局部亮度标准差控制历史亮度截断。'],
     ['antilag_sensitivity', '抗拖影响应参数', 3, 0, 10, 0.1, '较小值会更快降低变化区域的历史权重。'],
   ] },
 ];
 export const reblurDefaults = Object.fromEntries([
   ...reblurGroups.flatMap(group => group.fields.map(([key, , value]) => [key, value])),
-  ['anti_firefly', true], ['reconstruction', 0],
+  ['anti_firefly', true], ['reconstruction', 2],
 ]);
 
 export function validateReblurSettings(settings) {

@@ -38,15 +38,15 @@ struct TemporalData {
 };
 
 struct Settings {
-    float max_history{30.f}, fast_history{6.f}, history_fix_frames{3.f};
+    float max_history{50.f}, fast_history{6.f}, history_fix_frames{3.f};
     float history_fix_stride{14.f};
-    float diffuse_prepass{30.f}, specular_prepass{50.f};
+    float diffuse_prepass{15.f}, specular_prepass{40.f};
     float min_radius{1.f}, max_radius{30.f};
     float lobe_fraction{0.15f}, roughness_fraction{0.15f};
     float plane_sensitivity{0.02f}, min_hit_weight{0.1f};
-    float stabilization{1.f}, antilag_sigma{4.f}, antilag_sensitivity{3.f};
+    float stabilization{63.f / 64.f}, antilag_sigma{4.f}, antilag_sensitivity{3.f};
     uint anti_firefly{1u};
-    HitDistanceReconstructionMode reconstruction{HitDistanceReconstructionMode::OFF};
+    HitDistanceReconstructionMode reconstruction{HitDistanceReconstructionMode::AREA_5X5};
 };
 
 struct FilterParam {
@@ -63,7 +63,7 @@ struct FilterParam {
     uint frame{}, history_valid{}, reconstruction{};
     float4x4 world_to_raster{make_float4x4(1.f)}, prev_world_to_raster{make_float4x4(1.f)};
     array_float3 camera{}, prev_camera{};
-    float unproject{1.f}, max_history{}, fast_history{}, fix_frames{}, fix_stride{};
+    float unproject{1.f}, frame_rate_scale{1.f}, max_history{}, fast_history{}, fix_frames{}, fix_stride{};
     float diffuse_prepass{}, specular_prepass{}, min_radius{}, max_radius{};
     float lobe_fraction{}, roughness_fraction{}, plane_sensitivity{}, min_hit_weight{};
     float stabilization{}, antilag_sigma{}, antilag_sensitivity{};
@@ -80,7 +80,7 @@ OC_PARAM_STRUCT(vision::reblur, FilterParam, guide, prev_guide, history, prev_hi
                 raw_diffuse, raw_specular, output_diffuse, output_specular,
                 src_diffuse, src_specular, dst_diffuse, dst_specular, fast, tracking, tiles,
                 size, frame, history_valid, reconstruction, world_to_raster, prev_world_to_raster,
-                camera, prev_camera, unproject, max_history, fast_history, fix_frames, fix_stride,
+                camera, prev_camera, unproject, frame_rate_scale, max_history, fast_history, fix_frames, fix_stride,
                 diffuse_prepass, specular_prepass, min_radius, max_radius, lobe_fraction,
                 roughness_fraction, plane_sensitivity, min_hit_weight,
                 stabilization, antilag_sigma, antilag_sensitivity, anti_firefly) {};

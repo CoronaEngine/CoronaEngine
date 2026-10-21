@@ -3,7 +3,7 @@
 namespace vision::reblur {
 void Filter::compile_modulation(Device &device) {
     Kernel pack = [](Var<FilterParam> p) {
-        auto guides = p.guide.soa_view_var<Guide>();
+        auto guides = guide_view(p.guide);
         // One warp packs a 16x16 tile and shares the validity reads with classification.
         ocarina::configure_block(32u);
         Uint lane = dispatch_id() % 32u, tile = dispatch_id() / 32u;
@@ -16,13 +16,12 @@ void Filter::compile_modulation(Device &device) {
             $if(all(q < p.size)) {
                 Uint i = q.y * p.size.x + q.x;
                 auto g = guides.read(i);
-                Float4 d = make_float4(0.f), s = make_float4(0.f);
                 $if(valid_guide(g)) {
                     active = 1u;
-                    d = pack_signal(p.raw_diffuse.read(i), g.diffuse_factor.xyz(), g.position.w, 1.f);
-                    s = pack_signal(p.raw_specular.read(i), g.specular_factor.xyz(), g.position.w, g.normal_roughness.w);
+                    Float4 d = pack_signal(p.raw_diffuse.read(i), g.diffuse_factor.xyz(), g.position.w, 1.f);
+                    Float4 s = pack_signal(p.raw_specular.read(i), g.specular_factor.xyz(), g.position.w, g.normal_roughness.w);
+                    p.dst_diffuse.write(i, store_half(d)); p.dst_specular.write(i, store_half(s));
                 };
-                p.dst_diffuse.write(i, store_half(d)); p.dst_specular.write(i, store_half(s));
             };
         };
         Uint count = ocarina::warp_active_count_bits(active != 0u);
