@@ -93,6 +93,21 @@ export const MAP_PLACEMENT = Object.freeze({
   centreY: 124.0913,
 });
 
+/**
+ * Subworld (小世界) map placement: the ground-only white plane. The subworld is the player's
+ * own sandbox; it intentionally keeps just the flat y=0 slab with no buildings/vegetation/rocks.
+ * modelRef stays v5 to match what already ships in every subworld scene.ini, so ensureStoryMap
+ * sees an already-current map and does not rebuild it.
+ */
+export const SUBWORLD_MAP_PLACEMENT = Object.freeze({
+  asset: 'scene/01_山门神殿_平地版_仅地面.glb',
+  guid: MAP_GUID,
+  modelRef: 'corona.story.world-map.v5',
+  scale: 90,
+  courtyardY: 0,
+  centreY: 0,
+});
+
 /** Strict validation, so a bad edit in the JSON table fails loudly instead of drifting. */
 export function validateMapPlacement(raw) {
   const source = raw && typeof raw === 'object' ? raw : {};

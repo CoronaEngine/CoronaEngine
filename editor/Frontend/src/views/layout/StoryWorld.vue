@@ -30,7 +30,7 @@ import { PROPHET_INTERACTION, prophetAvailable, prophetDistance,
   normalizeDialogue } from '../../../../game/frontend/prophetDialogue.mjs';
 import { ensureStoryCube, cubeTransformOf, playerFacingYaw } from '../../../../game/frontend/storyCube.mjs';
 import { MONSTER_EQUIPMENT } from '../../../../game/frontend/storyLoot.mjs';
-import { ensureStoryMap } from '../../../../game/frontend/storyMap.mjs';
+import { ensureStoryMap, MAP_PLACEMENT, SUBWORLD_MAP_PLACEMENT } from '../../../../game/frontend/storyMap.mjs';
 import { heightAt } from '../../../../game/frontend/storyMapHeight.mjs';
 import { loadStoryMapHeight, mapHeightUrl } from '../../../../game/frontend/storyMapHeightLoader.mjs';
 import { collectSwayTargets, createWorldRuleRunner,
@@ -2108,6 +2108,7 @@ onMounted(async () => {
     try {
       await ensureStoryMap({
         api: editorApi, sceneId, frontendUrl: window.location.href, resolveAsset: resolveStoryAssetPath,
+        placement: loadedGameplay?.role === 'child' ? SUBWORLD_MAP_PLACEMENT : MAP_PLACEMENT,
       });
     } catch (error) {
       actionFeedback.value = `地图未能就位：${error.message}`;
