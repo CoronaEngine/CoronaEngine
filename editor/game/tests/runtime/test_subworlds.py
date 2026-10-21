@@ -1,14 +1,16 @@
 from pathlib import Path
+import hashlib
 import json
 import os
 import shutil
 import stat
 import tempfile
 import unittest
+import uuid
 from unittest.mock import patch
 
 from game.runtime import subworlds
-from game.runtime.subworlds import CHILD, METADATA, StorySubworlds, SubworldError
+from game.runtime.subworlds import CHILD, METADATA, PENDING, StorySubworlds, SubworldError
 
 SCENE = '[format]\ntype = corona_scene_folder\nversion = 1\n[world]\ntype = story\n[camera:main]\nposition = 1, 2, 3\n'
 
@@ -38,13 +40,24 @@ class SubworldTests(unittest.TestCase):
     def enter(self):
         return self.manager.prepare(self.root, 'O')
 
-    def assert_clean_failure(self):
+    def assert_no_residue(self):
         self.assertFalse((self.root / CHILD).exists())
         self.assertFalse((self.root / METADATA).exists())
+        self.assertFalse((self.root / PENDING).exists())
         self.assertFalse((self.root / '.game/story-navigation.lock').exists())
         self.assertEqual(list((self.root / '.game').glob('.subworld-staging-*')), [])
+
+    def assert_clean_failure(self):
+        self.assert_no_residue()
         self.assertEqual((self.root / 'scene.ini').read_text(encoding='utf-8'), SCENE)
         self.assertEqual((self.root / 'Assets/model.glb').read_bytes(), b'model bytes')
+
+    def write_manifest(self, digest, size=11, route='Assets/model.glb'):
+        document = {'format': 'corona_scene_assets', 'version': 1, 'bundles': [{
+            'type': 'model', 'main': route, 'sha256': '',
+            'files': [{'path': route, 'sha256': digest, 'size': size}],
+            'dependencies': []}]}
+        (self.root / 'assets.manifest.json').write_text(json.dumps(document), encoding='utf-8')
 
     def test_first_entry_copies_complete_saved_scene_and_resources(self):
         (self.root / '.game').mkdir()
@@ -128,9 +141,101 @@ class SubworldTests(unittest.TestCase):
         self.assert_clean_failure()
 
     def test_publish_failure_rolls_back_parent_link(self):
-        with patch.object(Path, 'rename', side_effect=OSError('rename failed')):
-            with self.assertRaisesRegex(OSError, 'rename failed'):
+        # Both publication paths must fail before a switch may report failure.
+        with patch.object(subworlds, 'RENAME_BACKOFF', 0), \
+                patch.object(Path, 'rename', side_effect=OSError('rename failed')), \
+                patch.object(subworlds, '_copy_into', side_effect=OSError('copy failed')):
+            with self.assertRaisesRegex(SubworldError, '无法发布'):
                 self.enter()
+        self.assert_clean_failure()
+
+    def test_denied_rename_is_retried_until_it_succeeds(self):
+        calls = {'rename': 0}
+        original = Path.rename
+
+        def flaky(path, *args, **kwargs):
+            calls['rename'] += 1
+            if calls['rename'] <= 2:
+                # What Windows reports while the editor or a scanner holds a handle.
+                raise PermissionError(13, 'Access is denied')
+            return original(path, *args, **kwargs)
+
+        with patch.object(subworlds, 'RENAME_BACKOFF', 0), patch.object(Path, 'rename', flaky):
+            child = Path(self.enter()['navigation']['target'])
+        self.assertEqual(calls['rename'], 3)
+        self.assertEqual((child / 'Assets/model.glb').read_bytes(), b'model bytes')
+        self.assertEqual(list((self.root / '.game').glob('.subworld-staging-*')), [])
+        self.assertEqual(json.loads((child / METADATA).read_text())['role'], 'child')
+        self.assertEqual(json.loads((self.root / METADATA).read_text())['role'], 'main')
+
+    def test_permanent_rename_denial_publishes_by_copying(self):
+        with patch.object(subworlds, 'RENAME_BACKOFF', 0), \
+                patch.object(Path, 'rename', side_effect=PermissionError(13, 'Access is denied')):
+            result = self.enter()['navigation']
+        child = Path(result['target'])
+        self.assertTrue(result['created'])
+        for route in ('scene.ini', 'assets.manifest.json', 'Assets/model.glb'):
+            self.assertEqual((child / route).read_bytes(), (self.root / route).read_bytes(), route)
+        self.assertEqual(json.loads((child / METADATA).read_text())['role'], 'child')
+        self.assertEqual(json.loads((self.root / METADATA).read_text())['role'], 'main')
+        self.assertFalse((self.root / PENDING).exists())
+        self.assertEqual(list((self.root / '.game').glob('.subworld-staging-*')), [])
+
+    def test_copy_fallback_never_leaves_a_half_written_child(self):
+        staging = self.root / '.game/.subworld-staging-fixture'
+        staged = staging / 'world'
+        subworlds._copy_scene(self.root, staged)
+        self.addCleanup(shutil.rmtree, staging, True)
+        with patch.object(subworlds.shutil, 'copytree', side_effect=OSError('disk full')):
+            with self.assertRaises(OSError):
+                subworlds._copy_into(staged, self.root / CHILD, self.root)
+        self.assertFalse((self.root / CHILD).exists())
+        self.assertFalse((self.root / PENDING).exists())
+
+    def test_interrupted_copy_fallback_is_repaired_instead_of_fatal(self):
+        partial = self.root / CHILD
+        (partial / 'Assets').mkdir(parents=True)
+        (partial / 'scene.ini').write_text('partial')
+        (self.root / METADATA).parent.mkdir(exist_ok=True)
+        (self.root / METADATA).write_text(json.dumps({
+            'version': 1, 'role': 'main', 'id': str(uuid.uuid4()), 'target': '.game/subworld'}))
+        (self.root / PENDING).write_text('{}')
+        result = self.enter()['navigation']
+        child = Path(result['target'])
+        self.assertTrue(result['created'])
+        self.assertEqual((child / 'Assets/model.glb').read_bytes(), b'model bytes')
+        self.assertEqual(json.loads((child / METADATA).read_text())['role'], 'child')
+        self.assertEqual(list((self.root / '.game').glob('.subworld-stale-*')), [])
+        self.assertFalse((self.root / PENDING).exists())
+
+    def test_leftover_marker_beside_a_complete_pair_is_only_cleared(self):
+        child = Path(self.enter()['navigation']['target'])
+        (self.root / PENDING).write_text('{}')
+        self.assertFalse(self.manager.prepare(self.root, 'O')['navigation']['created'])
+        self.assertEqual((child / 'Assets/model.glb').read_bytes(), b'model bytes')
+        self.assertFalse((self.root / PENDING).exists())
+
+    def test_tampered_source_content_is_caught_while_copying(self):
+        self.write_manifest(hashlib.sha256(b'model bytes').hexdigest())
+        # Same size as the manifest records, so only the content hash can notice.
+        (self.root / 'Assets/model.glb').write_bytes(b'MODEL BYTES')
+        manager = StorySubworlds(save=self.save, validate=lambda _: None)
+        with self.assertRaisesRegex(SubworldError, '清单'):
+            manager.prepare(self.root, 'O')
+        self.assert_no_residue()
+
+    def test_truncated_staged_copy_is_not_published(self):
+        self.write_manifest(hashlib.sha256(b'model bytes').hexdigest())
+
+        def truncating_copy(source, staged):
+            digests = subworlds._copy_scene(source, staged)
+            # The bytes were read correctly, so only the on-disk size can notice this.
+            (staged / 'Assets/model.glb').write_bytes(b'model')
+            return digests
+
+        manager = StorySubworlds(save=self.save, validate=lambda _: None, copy_scene=truncating_copy)
+        with self.assertRaisesRegex(SubworldError, '大小|不一致'):
+            manager.prepare(self.root, 'O')
         self.assert_clean_failure()
 
     def test_parent_metadata_write_failure_rolls_back_partial_link(self):

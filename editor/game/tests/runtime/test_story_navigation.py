@@ -14,6 +14,7 @@ class StoryNavigationTests(unittest.TestCase):
     save = fixtures.SubworldTests.save
     validate = fixtures.SubworldTests.validate
     assert_clean_failure = fixtures.SubworldTests.assert_clean_failure
+    assert_no_residue = fixtures.SubworldTests.assert_no_residue
     def setUp(self):
         fixtures.SubworldTests.setUp(self)
         self.info = {'mode': 'story', 'project_path': str(self.root), 'entrance_scene': 'scene.ini'}
@@ -42,8 +43,12 @@ class StoryNavigationTests(unittest.TestCase):
         result = self.navigate()
         self.assertEqual(result['status'], 'ok', result)
         self.api.main.scene_save.assert_called_once_with('scene.ini')
+        # Switching happens inside the Python update phase, so the native per-file
+        # sha256 pass is not repeated here; content is verified once by the copy in
+        # game.runtime.subworlds._verify_staged, which hashes every byte it copies.
+        self.assertTrue(self.api.project.validate_portable_scene.call_args_list)
         for call in self.api.project.validate_portable_scene.call_args_list:
-            self.assertIs(call.args[0]['verifyHashes'], True)
+            self.assertIs(call.args[0]['verifyHashes'], False)
         self.assertTrue(result['navigation']['created'])
         self.info['project_path'] = result['navigation']['target']
         result = self.navigate('exit')

@@ -447,4 +447,10 @@ class StorySubworlds:
             raise
         finally:
             # Only this freshly-created staging directory, never the source or final child.
-            shutil.rmtree(staging, onexc=_remove_readonly, ignore_errors=True)
+            # Cleanup never decides the outcome: a lock that outlives the switch must not
+            # turn a published child into a reported failure. Leftovers are swept by the
+            # next _recover_interrupted instead.
+            try:
+                shutil.rmtree(staging, onexc=_remove_readonly)
+            except OSError:
+                pass
