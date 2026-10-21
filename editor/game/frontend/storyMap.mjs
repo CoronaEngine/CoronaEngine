@@ -47,7 +47,7 @@ export const MAP_GUID = 'corona.story.world-map.v1';
  * (removal + creation is the only path that re-imports). Forgetting the bump ships a world that
  * silently keeps the previous map forever — the exact bug the bump to `.v2` fixes.
  */
-export const MAP_MODEL_REF = 'corona.story.world-map.v5';
+export const MAP_MODEL_REF = 'corona.story.world-map.v6';
 /**
  * The map's record identity inside a scene snapshot. `MAP_ACTOR_DATA` writes both onto the
  * actor, so a snapshot can be recognised even when the guid or the version marker is missing
@@ -82,16 +82,15 @@ export const MAP_SURFACE_LIFT = 0;
 
 /** Mirrors the `map` block of game/data/prophet.json, field for field. */
 export const MAP_PLACEMENT = Object.freeze({
-  asset: 'scene/01_山门神殿_平地版_仅地面.glb',
+  asset: 'scene/01_山门神殿_平地版.glb',
   guid: MAP_GUID,
   modelRef: MAP_MODEL_REF,
-  // The ground-only edition keeps just the flat y = 0 plane: buildings, trees and rocks are
-  // stripped out, so the small world is basic terrain under the (hidden) player and the prophet.
-  // The model spans 1200 x 1680 m; at scale = 90 the z axis (1680 m) becomes the 90 m level
-  // footprint. centreY == courtyardY == 0 because the model has no height.
+  // The flat-ground edition keeps the full scene (buildings, trees, rocks) on a flat terrain.
+  // The model spans 1210 x 274 x 1680 m; at scale = 90 the z axis (1680 m) becomes the 90 m
+  // level footprint. The courtyard floor sits at model y = 0, the AABB mid height at y = 124.09.
   scale: 90,
-  courtyardY: 0,
-  centreY: 0,
+  courtyardY: 0.0,
+  centreY: 124.0913,
 });
 
 /** Strict validation, so a bad edit in the JSON table fails loudly instead of drifting. */

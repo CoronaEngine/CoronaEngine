@@ -60,7 +60,7 @@ from collections import deque
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
-SOURCE = ROOT / "editor/game/art/models/scene/01_山门神殿_平地版_仅地面.glb"
+SOURCE = ROOT / "editor/game/art/models/scene/01_山门神殿_平地版.glb"
 OUTPUT = ROOT / "editor/game/data/story-map-height.json"
 
 # 256x256 over the 64.8 x 90 m footprint is ~25 x 35 cm per cell: fine enough for a walkable
