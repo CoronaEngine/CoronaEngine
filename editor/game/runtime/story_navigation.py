@@ -78,7 +78,13 @@ def handle_navigation_request(payload: str, *, api=None) -> dict:
             _success(api.main.scene_save(route), '保存当前世界')
 
         def validate(path):
-            data = _success(api.project.validate_portable_scene({'path': str(path), 'verifyHashes': True}), '校验世界及资源')
+            # Switching is a key press inside the Python update phase, so the native
+            # per-file sha256 pass is not paid here: it re-read the whole world, twice
+            # per call, on both sides of a copy we had just made ourselves. The switch
+            # still verifies structure, safe routes, existence, recorded sizes and
+            # bundle dependencies; content hashes of the source are verified once,
+            # during the copy, by game.runtime.subworlds._verify_staged.
+            data = _success(api.project.validate_portable_scene({'path': str(path), 'verifyHashes': False}), '校验世界及资源')
             if data.get('status') != 'portable_v1':
                 raise SubworldError('仅支持可移植剧情世界，不能切换旧格式场景')
 
