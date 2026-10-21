@@ -53,3 +53,14 @@ export function registerWorldSessionSave(save) {
 export async function flushWorldSessionSaves() {
   for (const entry of [...saves]) await entry.flush();
 }
+// 世界切换准备阶段的瞬时锁重试（WinError 5 拒绝访问）实现在 utils 里，这里只转出。
+// 转出而不是让页面多写一条 import：StoryWorld.vue 的导入清单被前端与剧情两套「按源码路径
+// 桩模块」的测试夹具逐条镜像，新增一条路径就要同步改别处的夹具；走会话边界这一条既有导入，
+// 两套夹具都不用动。
+export {
+  SWITCH_ATTEMPTS,
+  SWITCH_DELAYS_MS,
+  isTransientSwitchLock,
+  runStorySwitchWithRetry,
+  switchFailureMessage,
+} from '../utils/storyWorldSwitchRetry.js';

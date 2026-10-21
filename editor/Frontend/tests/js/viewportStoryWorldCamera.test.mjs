@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createStoryCameraController } from '../../src/utils/viewportStoryCamera.js';
 import { createViewportCameraController } from '../../src/utils/viewportCameraController.js';
-import { createPlayerController } from '../../../../game/frontend/playerController.mjs';
+import { createPlayerController } from '../../../game/frontend/playerController.mjs';
 import { SMALL_WORLD_CAMERA, SMALL_WORLD_VIEW_LABELS, SMALL_WORLD_VIEWS,
   createSmallWorldCamera, createStoryWorldControls } from '../../src/utils/viewportStoryWorldCamera.js';
 
@@ -30,6 +30,9 @@ const cameraPose = (position = [0, 0, 0], forward = [0, 0, 1]) => ({
 });
 const playerActor = (position = [0, 0.9, 0]) => ({ handle: 41,
   actor_guid: 'f9f5c8b0-7324-4b6c-a011-000000000001',
+  // 新版第三人称控制器用三角形几何包围盒算脚底偏移，缺了它 bindPlayer 会抛
+  // 「玩家三角形几何边界未就绪」——这是引擎快照本来就有的字段，测试必须照真机给全。
+  local_aabb: [-0.25, -0.9, -0.25, 0.25, 0.9, 0.25],
   geometry: { position: [...position], rotation: [0, -Math.PI / 2, 0], scale: [1, 1, 1] } });
 
 /**
@@ -193,7 +196,7 @@ test('the dispatcher routes each world to its own camera, and zoom only exists i
     made.push(controller);
     return controller;
   };
-  const bridge = { actorTransform: () => true, cameraMove: () => true };
+  const bridge = { actorTransform: () => true, cameraMove: () => true, moveActorMesh: () => true };
   let role = 'main';
   const clockSource = clock();
   let pose = cameraPose();
@@ -302,7 +305,9 @@ test('裸鼠标转向只属于小世界的自由视角：俯视与主世界都�
   let pose = cameraPose();
   const controls = createStoryWorldControls({
     createThirdPerson: createPlayerController, role: () => 'main',
-    getBridge: () => ({ cameraMove: () => true, actorTransform: () => true }),
+    // `moveActorMesh` 是新版第三人称控制器在 bindPlayer 时唯一多要求的接口（原生三角面移动）；
+    // 缺了它主世界的绑定会直接抛「当前引擎缺少玩家实时控制接口」，与相机分派本身无关。
+    getBridge: () => ({ cameraMove: () => true, actorTransform: () => true, moveActorMesh: () => true }),
     getPose: () => pose, setPose: next => { pose = next; }, submitPose: () => true, ...timer,
   });
   controls.bindPlayer(playerActor(), 0.45);
@@ -318,7 +323,9 @@ test('裸鼠标转向只属于小世界的自由视角：俯视与主世界都�
   const childTimer = clock();
   const child = createStoryWorldControls({
     createThirdPerson: createViewportCameraController, role: () => 'child',
-    getBridge: () => ({ cameraMove: () => true, actorTransform: () => true }),
+    // `moveActorMesh` 是新版第三人称控制器在 bindPlayer 时唯一多要求的接口（原生三角面移动）；
+    // 缺了它主世界的绑定会直接抛「当前引擎缺少玩家实时控制接口」，与相机分派本身无关。
+    getBridge: () => ({ cameraMove: () => true, actorTransform: () => true, moveActorMesh: () => true }),
     getPose: () => childPose, setPose: next => { childPose = next; },
     submitPose: () => true, ...childTimer,
   });
@@ -360,7 +367,9 @@ test('主世界的裸鼠标转向仍然是它自己那一套，没有被小世�
   let pose = cameraPose([0, 0, 0], [0, 0, 1]);
   const controls = createStoryWorldControls({
     createThirdPerson: createPlayerController, role: () => 'main',
-    getBridge: () => ({ cameraMove: () => true, actorTransform: () => true }),
+    // `moveActorMesh` 是新版第三人称控制器在 bindPlayer 时唯一多要求的接口（原生三角面移动）；
+    // 缺了它主世界的绑定会直接抛「当前引擎缺少玩家实时控制接口」，与相机分派本身无关。
+    getBridge: () => ({ cameraMove: () => true, actorTransform: () => true, moveActorMesh: () => true }),
     getPose: () => pose, setPose: next => { pose = next; }, submitPose: () => true,
     getRect: () => ({ left: 0, top: 0, width: 800, height: 600 }), ...timer,
   });
@@ -463,18 +472,39 @@ test('面板/对话占着输入时空格既不抬相机也不吞掉事件', () =
 test('主世界的空格仍然是跳跃，只有小世界的相机把它当上升', () => {
   const timer = clock();
   let pose = cameraPose();
+  const moves = [];
   const controls = createStoryWorldControls({
     createThirdPerson: createPlayerController, role: () => 'main',
-    getBridge: () => ({ cameraMove: () => true, actorTransform: () => true }),
+    // `moveActorMesh` 是新版第三人称控制器在 bindPlayer 时唯一多要求的接口（原生三角面移动）；
+    // 缺了它主世界的绑定会直接抛「当前引擎缺少玩家实时控制接口」，与相机分派本身无关。
+    // 移动请求的 id 记下来，下面用 `acceptMeshMove` 回送原生姿态——真机上这一步由
+    // `editorApi.events.onMeshMoveResult` 完成；控制器不再自行套用未确认的位移。
+    getBridge: () => ({ cameraMove: () => true, actorTransform: () => true,
+      moveActorMesh: (...args) => { moves.push(args); return true; } }),
     getPose: () => pose, setPose: next => { pose = next; }, submitPose: () => true, ...timer,
   });
   controls.bindPlayer(playerActor(), 0.45);
   assert.equal(controls.viewMode(), 'third');
+  // 先让玩家落地：新版控制器只在 `player.grounded` 为真时起跳，而落地这件事由原生三角面
+  // 回调带来（真机是 `onMeshMoveResult`）。这里走一次 W 并回送 grounded=true，与真机同一条路。
+  controls.keyDown(event({ code: 'KeyW', key: 'w' }));
+  timer.step(timer.now() + 16);
+  const settle = moves.at(-1);
+  assert.equal(controls.acceptMeshMove({ requestId: settle[2], actorHandle: settle[0], status: 'success',
+    position: [0, 0.9, 0], rotation: [0, -Math.PI / 2, 0], grounded: true }), true);
+  controls.keyUp(event({ code: 'KeyW', key: 'w' }));
+  assert.equal(controls.snapshotPlayer().grounded, true, '落地之后才谈得上起跳');
   const ground = controls.snapshotPlayer().position[1];
   const down = keyEvent({ code: 'Space', key: ' ' });
   assert.equal(controls.keyDown(down), true);
   assert.equal(down.defaultPrevented, true, '跳跃也要挡住页面滚动');
   timer.step(timer.now() + 50);
+  const jump = moves.at(-1);
+  assert.ok(jump, '空格在主世界必须变成一次原生三角面移动请求');
+  assert.equal(jump[5], true, 'jump.requested 传给了引擎：主世界这一下是跳跃，不是升降');
+  assert.equal(controls.acceptMeshMove({ requestId: jump[2], actorHandle: jump[0], status: 'success',
+    position: [0, ground + 0.3, 0], rotation: [0, -Math.PI / 2, 0], grounded: false }), true,
+  '分派器必须把原生回调转发给正在驱动玩家的那台控制器');
   assert.equal(controls.snapshotPlayer().grounded, false, '主世界的空格必须起跳');
   assert.ok(controls.snapshotPlayer().position[1] > ground, '人离地了');
   controls.dispose();
@@ -484,7 +514,9 @@ test('主世界的空格仍然是跳跃，只有小世界的相机把它当上�
   const childTimer = clock();
   const child = createStoryWorldControls({
     createThirdPerson: createViewportCameraController, role: () => 'child',
-    getBridge: () => ({ cameraMove: () => true, actorTransform: () => true }),
+    // `moveActorMesh` 是新版第三人称控制器在 bindPlayer 时唯一多要求的接口（原生三角面移动）；
+    // 缺了它主世界的绑定会直接抛「当前引擎缺少玩家实时控制接口」，与相机分派本身无关。
+    getBridge: () => ({ cameraMove: () => true, actorTransform: () => true, moveActorMesh: () => true }),
     getPose: () => childPose, setPose: next => { childPose = next; }, submitPose: () => true, ...childTimer,
   });
   child.bindPlayer(playerActor(), 0.45);

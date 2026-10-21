@@ -4,8 +4,11 @@ import { useRouter, onBeforeRouteLeave } from 'vue-router';
 import { editorApi } from '@/api/editorApi.js';
 import { worldModeState, normalizeProjectPath } from '@/services/worldModeService.js';
 import { createStoryCameraController } from '@/utils/viewportStoryCamera.js';
+import { createStoryWorldControls, SMALL_WORLD_VIEW_LABELS } from '@/utils/viewportStoryWorldCamera.js';
+import { routeStoryKeydown } from '@/utils/storyKeyRouter.js';
 import { projectLauncherService, cancelPendingProjectOpen, getProjectSelectionVersion } from '@/services/projectLauncherService.js';
-import { trackWorldSessionWork, notifyWorldError, registerWorldSessionSave } from '@/services/worldSessionLifecycle.js';
+import { trackWorldSessionWork, notifyWorldError, registerWorldSessionSave,
+  runStorySwitchWithRetry } from '@/services/worldSessionLifecycle.js';
 import { createStoryNavigationController, NAVIGATION_KEY } from '../../../../game/frontend/storyNavigation.mjs';
 // 剧情 HUD 样式：复刻 ui2.html《自然荒野 · 战术协同系统 HUD》
 import './StoryWorld.hud.css';
@@ -21,8 +24,8 @@ import { createPlayerController, VIEW_LABELS } from '../../../../game/frontend/p
 import { createPlayerSave } from '../../../../game/frontend/playerSave.mjs';
 import { createStoryGameplay, worldBounds, distanceToBounds, pickupDistance,
   contextualInteraction, FRAGMENT_GUID } from '../../../../game/frontend/storyGameplay.mjs';
-import { STORY_CHARACTERS, PROPHET_GUID, isMonsterRole, resolveStoryAssetPath,
-  sceneSnapshot } from '../../../../game/frontend/storyCharacters.mjs';
+import { STORY_CHARACTERS, PROPHET_GUID, PLAYER_MODEL_YAW_OFFSET, isMonsterRole,
+  resolveStoryAssetPath, sceneSnapshot } from '../../../../game/frontend/storyCharacters.mjs';
 import { MAX_PLACEMENTS, PLACED_BLOCK_REACH, PLACEMENT_DISTANCE, blockSpawnTransform, cycleSlot, findProp,
   hotbarSlots as hotbarSlotsFor, nearestPlacedBlock, nextPlacementIndex, placementGuid,
   removePlacement, sanitizePlacements } from '../../../../game/frontend/storyProps.mjs';
@@ -106,6 +109,9 @@ let resizeObserver = null;
 let leaving = false;
 let dpiQuery = null;
 let focused = document.hasFocus();
+// 每次「离开世界」都把代数 +1：正在退避等待的切换重试据此立刻停手，避免取消之后又去
+// 复制一遍子世界（那次复制没人会用到）。
+let switchGeneration = 0;
 const current = () => !disposed && !leaving && worldModeState.status === 'ready'
   && worldModeState.mode === 'story' && worldModeState.revision === revision;
 /**
@@ -115,11 +121,18 @@ const current = () => !disposed && !leaving && worldModeState.status === 'ready'
  */
 const groundYAt = (x, z) => heightAt(x, z);
 const camera = createStoryCameraController({
-  createControls: createPlayerController,
-  // 玩家的地面线：地图是 phantom（引擎不为它建碰撞体），脚下多高只能由烘好的高度网格回答。
-  // `heightAt` 在没有网格时返回 null，控制器便退回原来的固定地板——这条绑定必须在
-  // createStoryCameraController 里继续往下传，否则控制器收不到它（这正是之前的原因）。
-  getGroundY: groundYAt,
+  // 主世界：第三人称跟随（原样）。小世界：自由视角 / 俯视视角，见 viewportStoryWorldCamera.js。
+  // 两台控制器都建好、只让当前世界的那台收输入；`role()` 在 bindPlayer 时与每次调用时读，
+  // 页面是在 `gameplay.load()` 之后才 bind 的，所以这里必须读 ref 而不是常量。
+  // `getGroundY` 与 `modelYawOffset` 走 `...options` 转交给两台控制器：小世界的相机要用地面线
+  // 算「隐形主角」的脚 y，写回存档时又要用模型朝向偏移换算逻辑朝向。
+  createControls: options => createStoryWorldControls({ ...options,
+    createThirdPerson: createPlayerController,
+    role: () => (roleRef.value === 'child' ? 'child' : 'main'),
+    modelYawOffset: PLAYER_MODEL_YAW_OFFSET,
+    // 玩家的地面线：地图是 phantom（引擎不为它建碰撞体），脚下多高只能由烘好的高度网格回答。
+    // `heightAt` 在没有网格时返回 null，控制器便退回原来的固定地板。
+    getGroundY: groundYAt }),
   onError: error => {
     if (current()) gameplayError.value = error.message;
     notifyWorldError(error);
@@ -129,6 +142,9 @@ const camera = createStoryCameraController({
   isInputLocked: () => initializing.value || !focused || document.hidden || navigation.busy || savingPlayer || inventoryOpen.value || dialogueOpen.value,
   onPlayerChanged: updateProximity,
   getRect: () => surface.value?.getBoundingClientRect(),
+  // 自由视角的裸鼠标转向：指针锁定之后视口坐标不再有意义，判定改由「是否锁定」回答。
+  // 拿不到锁定的页面（或浏览器）这里恒为 false，转向照旧由裸鼠标事件驱动。
+  isPointerLocked: () => Boolean(surface.value) && document.pointerLockElement === surface.value,
   getPixelRatio: () => window.devicePixelRatio,
 });
 const unwrap = (response) => response?.data ?? response;
@@ -1438,24 +1454,37 @@ const monsterBars = computed(() => {
 // 屏幕只显示这一条：靠近时是哪只怪物，它就换成哪只，位置不移动。
 const nearbyMonsterBar = computed(() =>
   monsterBars.value.find(entry => entry.id === nearbyMonsterId.value) || null);
+// 视角名按世界取：主世界是「第三人称 / 降临 / 俯视建筑」，小世界是「自由视角 / 俯视视角」。
+// 两个表都含 `top`，因此必须按世界选表而不是合并——否则主世界的「俯视建筑」会被改名。
 function viewLabel() {
   void viewTick.value;
   const mode = camera.viewMode?.();
-  return (mode && VIEW_LABELS?.[mode]) || '第三人称';
+  const labels = inSubworld.value ? SMALL_WORLD_VIEW_LABELS : VIEW_LABELS;
+  return (mode && labels?.[mode]) || (inSubworld.value ? '自由视角' : '第三人称');
 }
 // 操作提示按世界过滤：先知的 F 与碎片的 F 分属两个世界，天然互斥。
 // F 这一行只由 fKeyAction 决定（同一个裁决也驱动 F 键），因此提示与实际动作不会分歧。
-const controlHints = computed(() => [
-  ['WASD', '移动'],
-  ['鼠标', '转向 · 滚轮缩放'],
-  ['Space', '跳远'],
-  ['Shift', '长按跑步 · 点按闪避'],
-  ...(showCombatHud.value ? [['左键', '攻击'], ['E / R', '技能']] : []),
-  ...(fKeyAction.value.prompt ? [['F', fKeyAction.value.prompt]] : []),
-  ['V', `视角 · ${viewLabel()}`],
-  ['Tab', '背包'],
-  ['Esc', inSubworld.value ? '保存离开' : '保存退出'],
-]);
+const controlHints = computed(() => {
+  // 视角切换会改变「转向」那一行（自由视角裸鼠标 / 俯视右键），所以这里也读一次 viewTick：
+  // 否则按 V 之后提示会停在上一格，和真实输入对不上。
+  void viewTick.value;
+  return [
+    // 小世界里内部主角不显示，相机就是那双眼睛：滚轮留给物品栏换格，缩放挪到 Ctrl+滚轮。
+    // 自由视角不按键也能转向（`viewportStoryWorldCamera` 的裸鼠标）；单击只是把鼠标锁进视口，
+    // Esc 第一下放开它。俯视视角仍然只有右键拖动改朝向，提示因此分开写。
+    ...(inSubworld.value
+      ? [['WASD', '移动 · Q/E/空格 升降'],
+        [camera.isLookActive?.() ? '鼠标' : '鼠标右键',
+          camera.isLookActive?.() ? '移动转向 · 单击锁定 · Esc 放开' : '转向'],
+        ['Ctrl+滚轮', '缩放']]
+      : [['WASD', '移动'], ['鼠标', '转向 · 滚轮缩放'], ['Space', '跳远'], ['Shift', '长按跑步 · 点按闪避']]),
+    ...(showCombatHud.value ? [['左键', '攻击'], ['E / R', '技能']] : []),
+    ...(fKeyAction.value.prompt ? [['F', fKeyAction.value.prompt]] : []),
+    ['V', `视角 · ${viewLabel()}`],
+    ['Tab', '背包'],
+    ['Esc', inSubworld.value ? '保存离开' : '保存退出'],
+  ];
+});
 const hotbarSlots = computed(() => {
   void viewTick.value;
   return hotbarSlotsFor(gameplayState.value?.state?.inventory, placements.value);
@@ -1658,15 +1687,21 @@ async function cullChildWorld(snapshot, gameplay) {
   }
 }
 // 小世界的玩家不渲染模型：玩法（移动、跳跃、摆放、存档）仍然对着它，只是不再画出角色。
-// 相机控制器在绑定与切换视角时会尝试恢复可见性（V 循环、调整模式的俯瞰视角），
-// 这里在同一 tick 内把它改回隐藏——引擎读到的最终值就是不可见。
+// 玩家 actor 由 `storyActors` 在小世界里建成时就是隐藏的（`visible: false`），但页面自己还要
+// 再确认一次：V 切视角、调整模式的俯瞰往返都可能把模型翻回可见，最终落在场景里的必须是不可见。
+// 这里走编辑侧的 `sceneTools.setActorState`（异步的 CEF API，**不是** bridge 方法——bridge 上
+// 没有这个名字，用 bridge 调只会静默什么都不做）。只写 `visible`，不删 actor，所以交互、
+// 拾取与存档都照旧。并发重复请求合并成一次；落定之后可以再写，于是 V 之后仍然会被改回隐藏。
+let childPlayerHidePending = null;
 function keepChildPlayerHidden() {
-  if (!inSubworld.value || !playerActor?.handle) return;
-  const bridge = current() ? window.coronaBridge : null;
-  if (typeof bridge?.setActorState !== 'function') return;
-  try {
-    bridge.setActorState(playerActor.handle, { visible: false });
-  } catch (error) { if (current()) gameplayError.value = error.message; }
+  if (!inSubworld.value || !sceneId || !playerActor?.actor_guid || !current()) return false;
+  if (childPlayerHidePending) return false;
+  const guid = playerActor.actor_guid;
+  childPlayerHidePending = Promise.resolve()
+    .then(() => editorApi.sceneTools.setActorState(sceneId, guid, { visible: false }))
+    .catch(error => { if (current()) gameplayError.value = error.message || '隐藏小世界主角失败'; })
+    .finally(() => { childPlayerHidePending = null; });
+  return true;
 }
 // Rebuild the animated set from a fresh snapshot: reading the scene is an asynchronous
 // CEF round trip, so the frame loop only replays the handles captured here. Passing no
@@ -1784,10 +1819,14 @@ function cycleHotbar(delta) {
   return true;
 }
 /**
- * 视口滚轮只有一个入口：物品栏可见时换格且不缩放相机，其余情况（主世界、任何面板打开）
- * 仍交给相机缩放。preventDefault 已由模板上的 @wheel.prevent 完成，这里不再重复。
+ * 视口滚轮有两个入口，但只有一个裁决：
+ *   - Ctrl+滚轮 = 缩放。只有小世界的自由/俯视相机有 `zoom`（改 fov）；主世界没有，于是
+ *     `zoom` 返回 false，滚轮继续走改动前那条路（相机拉近/推远），行为不变。
+ *   - 其余情况：物品栏可见时换格，否则交给相机。
+ * preventDefault 已由模板上的 @wheel.prevent 完成，这里不再重复。
  */
 function onSurfaceWheel(event) {
+  if (event.ctrlKey && camera.zoom?.(event)) return true;
   if (!hotbarVisible.value) return camera.wheel(event);
   if (focused && !document.hidden) cycleHotbar(event.deltaY);
   return true;
@@ -1912,6 +1951,7 @@ async function saveBeforeLeave() {
 }
 onBeforeRouteLeave(saveBeforeLeave);
 async function exitStory() {
+  switchGeneration++;
   navigation.interrupt();
   if (!await saveBeforeLeave()) return;
   navigation.cancel();
@@ -1932,7 +1972,16 @@ const navigation = createStoryNavigationController({
     const result = unwrap(await editorApi.viewport.setCameraPose(pose.sceneId, pose.cameraName, pose.camera));
     if (result?.status !== 'success') throw new Error(result?.message || '保存相机视角失败');
   },
-  prepare: direction => editorApi.scratch.sendKeyEvent(NAVIGATION_KEY, '', JSON.stringify({ projectPath, direction })),
+  // 准备阶段的 rename 常被编辑器自己打开的世界文件挡住（WinError 5 拒绝访问），
+  // 且失败时运行时已回滚干净，所以按 150/250/400ms 退避重放同一次准备（共 4 次），
+  // 最后一次仍失败才把 Python 返回的原文交给 notify 上报。取消/卸载后不再重试。
+  prepare: direction => {
+    const generation = switchGeneration;
+    return runStorySwitchWithRetry(
+      () => editorApi.scratch.sendKeyEvent(NAVIGATION_KEY, '', JSON.stringify({ projectPath, direction })),
+      { aborted: () => !current() || switchGeneration !== generation },
+    );
+  },
   trackPreparation: trackWorldSessionWork,
   openProject: path => projectLauncherService.openProject(path),
   cancelProjectOpen: cancelPendingProjectOpen,
@@ -1940,10 +1989,25 @@ const navigation = createStoryNavigationController({
   notify: error => { if (current()) gameplayError.value = error.message; notifyWorldError(error); },
 });
 function onKeyDown(event) {
-  if (!current()) return;
+  // 键盘路由抽到 `storyKeyRouter.js`，这一层只执行对应分支的副作用。路由是纯函数，测试才能
+  // 走「页面根 → 路由裁决 → 相机」的完整链路，而不是只把事件直接塞给相机。
+  // 小世界的分界也在这里：Space 在主世界是跳跃（动作/保存进行中必须被吞），在小世界是相机
+  // 升降；E/R 技能只属于主世界，小世界的 E 留给相机。
+  const route = routeStoryKeydown(event, {
+    current: current(),
+    adjustMode: adjustMode.value,
+    dialogueOpen: dialogueOpen.value,
+    inSubworld: inSubworld.value,
+    inventoryOpen: inventoryOpen.value,
+    actionBusy: actionBusy.value,
+    busy: gameplay.busy,
+    needsSave: gameplay.needsSave,
+  });
+
+  if (route === 'ignore') return;
   // The adjustment mode owns the keyboard outright: only the adjustment steps and the way out
   // get through, so a stray key cannot cast a skill or swing while the player is arranging.
-  if (adjustMode.value) {
+  if (route === 'adjust') {
     event.preventDefault();
     event.stopPropagation();
     if (event.code === 'Escape' || event.key === 'Escape') {
@@ -1957,7 +2021,7 @@ function onKeyDown(event) {
     return;
   }
   // 对话面板打开时独占键盘：Esc 不再退出世界，F/Space 也不会漏给相机或其它交互。
-  if (dialogueOpen.value) {
+  if (route === 'dialogue') {
     event.preventDefault();
     event.stopPropagation();
     if (event.code === 'Escape' || event.key === 'Escape') {
@@ -1977,22 +2041,20 @@ function onKeyDown(event) {
     }
     return;
   }
-  // 物品栏：调整模式与对话（上面两个分支）已经吃掉数字键，因此这里只在
-  // 小世界、面板关闭时接管数字键与 B。主世界里这套键完全不生效。
-  if (inSubworld.value && !inventoryOpen.value && !event.ctrlKey && !event.altKey
-    && !event.metaKey && !event.isComposing) {
-    if (/^[1-9]$/.test(event.key || '')) {
-      event.preventDefault(); event.stopPropagation();
-      if (!event.repeat) selectHotbarSlot(Number(event.key) - 1);
-      return;
-    }
-    if (event.code === 'KeyB' || event.key?.toLowerCase() === 'b') {
-      event.preventDefault(); event.stopPropagation();
-      if (!event.repeat) void placeSelectedItem();
-      return;
-    }
+  if (route === 'hotbar-slot') {
+    event.preventDefault(); event.stopPropagation();
+    if (!event.repeat) selectHotbarSlot(Number(event.key) - 1);
+    return;
   }
-  if (event.code === 'Escape' || event.key === 'Escape') {
+  if (route === 'place-item') {
+    event.preventDefault(); event.stopPropagation();
+    if (!event.repeat) void placeSelectedItem();
+    return;
+  }
+  if (route === 'escape') {
+    // 第一次 Esc 只把鼠标还给页面：自由视角锁定指针之后，玩家按 Esc 想的是「放开鼠标」，
+    // 而不是「存档离开」。没有锁定时这一层不生效，Esc 的含义与改动前一模一样。
+    if (releaseMouseLook()) { event.preventDefault(); event.stopPropagation(); return; }
     event.preventDefault();
     event.stopPropagation();
     if (navigation.busy) { if (!event.repeat) void exitStory(); }
@@ -2000,37 +2062,38 @@ function onKeyDown(event) {
     else if (!event.repeat) void exitStory();
     return;
   }
-  if (event.ctrlKey || event.altKey || event.metaKey || event.isComposing) return;
-  if (event.code === 'Tab' || event.key === 'Tab') {
+  if (route === 'tab') {
     event.preventDefault(); event.stopPropagation();
     if (!event.repeat && focused && !document.hidden && cameraReady && !navigation.busy && !savingPlayer) toggleInventory();
     return;
   }
-  if (inventoryOpen.value) {
+  if (route === 'inventory') {
     if (!['Enter', 'Space'].includes(event.code)) event.preventDefault();
     event.stopPropagation(); return;
   }
-  if (event.code === 'KeyV' || event.key?.toLowerCase() === 'v') {
+  if (route === 'cycle-view') {
     event.preventDefault(); event.stopPropagation();
     if (!event.repeat) cycleView();
     return;
   }
-  if (event.code === 'KeyF' || event.key?.toLowerCase() === 'f') {
+  if (route === 'interact') {
     event.preventDefault(); event.stopPropagation();
     if (!event.repeat && focused) interact();
     return;
   }
-  if ((event.code === 'Space' || event.key === ' ' || event.key === 'Spacebar')
-    && (actionBusy.value || gameplay.busy || gameplay.needsSave)) {
+  if (route === 'space-busy') {
     event.preventDefault(); event.stopPropagation(); return;
   }
-  if (event.code === 'KeyE' || event.code === 'KeyR' || ['e', 'r'].includes(event.key?.toLowerCase())) {
+  if (route === 'skill') {
     event.preventDefault(); event.stopPropagation();
     const skill = event.code === 'KeyE' || event.key?.toLowerCase() === 'e' ? 'heavy' : 'sweep';
     if (!event.repeat && focused) void runAction(() => gameplay.castSkill(skill), PLAYER_SKILL_CLIP);
     return;
   }
-  if (focused && camera.keyDown(event)) event.stopPropagation?.();
+  if (route === 'camera') {
+    if (focused && camera.keyDown(event)) event.stopPropagation?.();
+    return;
+  }
 }
 function onBlur() { focused = false; camera.resetInput(); }
 function onFocus() { focused = !document.hidden; }
@@ -2044,6 +2107,32 @@ function watchDpi() {
   dpiQuery?.addEventListener('change', onDpiChanged);
 }
 function onDpiChanged() { camera.syncViewport(); watchDpi(); }
+/**
+ * 自由视角把鼠标交给相机：点击视口时请求指针锁定（可选的增强）。
+ *
+ * 浏览器只在用户手势里允许 requestPointerLock，所以请求挂在点击上。但**转向不依赖它**：
+ * 拿不到锁定（CEF 宿主、被拒绝、测试环境里没有这个 API）时，裸鼠标移动照样转向，见
+ * viewportStoryWorldCamera.js 的 pointerMove。所以这里只做「能锁就锁」，不把任何行为挂在
+ * 它成功之上。点到 HUD/按钮上不抢鼠标——那些控件还要用光标点。
+ */
+function captureMouseLook(event) {
+  if (!inSubworld.value || camera.viewMode?.() !== 'free') return false;
+  if (event?.target?.closest?.('button, input, select, textarea, [contenteditable="true"]')) return false;
+  const element = surface.value;
+  if (!element || typeof element.requestPointerLock !== 'function') return false;
+  if (document.pointerLockElement === element) return true;
+  try {
+    // Chrome 返回 Promise；被拒绝只是「没有锁定」，不该留下未处理的 rejection。
+    element.requestPointerLock()?.catch?.(() => false);
+    return true;
+  } catch { return false; }
+}
+/** Esc 的第一层含义：把鼠标还给页面（指针锁定），而不是直接存档离开。 */
+function releaseMouseLook() {
+  if (!document.pointerLockElement) return false;
+  try { document.exitPointerLock?.(); } catch { /* 已经释放 */ }
+  return true;
+}
 function onPointerDown(event) {
   if (inventoryOpen.value) return;
   surface.value?.focus();
@@ -2054,6 +2143,8 @@ function onPointerDown(event) {
   // Adjusting is label-driven: the left button neither attacks nor picks an object, it only
   // focuses the viewport so dragging and the wheel still let the player look at the object.
   if (adjustMode.value) return;
+  // 小世界的自由视角：这一下点击顺便把鼠标交给相机（Esc 归还）。
+  captureMouseLook(event);
   void runAction(gameplay.attack, PLAYER_ATTACK_CLIP);
 }
 

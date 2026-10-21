@@ -25,7 +25,8 @@ import { createPlayerController, VIEW_LABELS } from '../../../game/frontend/play
 import { createPlayerSave } from '../../../game/frontend/playerSave.mjs';
 import { ensureStoryCharacters, syncPlacementActors } from '../../../game/frontend/storyActors.mjs';
 import { sceneFixture } from '../../../game/tests/frontend/fixtures.mjs';
-import { registerWorldSessionSave, flushWorldSessionSaves, trackWorldSessionWork } from '../../src/services/worldSessionLifecycle.js';
+import { registerWorldSessionSave, flushWorldSessionSaves, trackWorldSessionWork,
+  runStorySwitchWithRetry } from '../../src/services/worldSessionLifecycle.js';
 import { normalizeVisionRenderMode, visionAccumulationFromCamera, visionDenoiseFromCamera, visionStablePlanesFromCamera, visionDenoiserFromCamera } from '../../src/utils/visionRenderModes.js';
 
 const source = fs.readFileSync(new URL('../../src/views/layout/MainPage.vue', import.meta.url), 'utf8');
@@ -216,13 +217,19 @@ for (const node of [...imports].reverse()) {
 }
 const makeStory = new Function('modules', 'window', 'document', `${setupSource}; return StoryWorld;`);
 const deferred = () => { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; };
-async function mountStory(t, { pendingInit = null, sceneSnapshot = { data: snapshot() }, role = 'main' } = {}) {
+async function mountStory(t, { pendingInit = null, sceneSnapshot = { data: snapshot() }, role = 'main',
+  navigationFailures = 0 } = {}) {
   const mounted = [], unmounted = [], frames = new Map(), calls = [], routes = [];
   const listeners = new Map(); let id = 0, time = 0;
+  // 小世界切换准备：把页面真正交给控制器的 options 抓住，并记录每次桥调用，
+  // 这样「重试接在 prepare 上」可以被直接观测，而不是只测一个孤立的重试工具。
+  const navigationAttempts = [];
+  let navigationOptions = null;
   // The page drives both combat and exhibits over the same bridge key, so the harness
   // answers by action, and keeps a mutable scene so placement actors can be observed.
   const sceneActors = structuredClone(sceneSnapshot.data?.actors ?? sceneFixture().actors);
   const placementExhibit = { role, placements: [] };
+  const intervals = new Set();
   let gameplayOptions = null;
   const placementActor = guid => sceneActors.find(actor => actor.actor_guid === guid);
   const dom = () => ({
@@ -232,8 +239,26 @@ async function mountStory(t, { pendingInit = null, sceneSnapshot = { data: snaps
   const document = { ...dom(), hasFocus: () => true, hidden: false };
   const worldModeState = { mode: 'story', status: 'ready', revision: 1, projectPath: 'world' };
   const window = { ...dom(), devicePixelRatio: 1, location: { href: 'file:///D:/engine/editor/Frontend/dist/index.html' }, alert: message => calls.push(['alert', message]),
-    coronaBridge: Object.fromEntries(['actorTransform', 'cameraMove', 'setCameraViewport', 'setViewportGizmoTarget', 'setViewportUiMode', 'setViewportSystemCursorHidden']
+    // 页面用 `window.setInterval` 驱动 Boss/小怪的状态机：测试里只登记句柄，
+    // 卸载时照常 clearInterval，不会留下真实定时器把进程挂住。
+    setInterval: () => { const id = -1 - intervals.size; intervals.add(id); return id; },
+    clearInterval: id => { intervals.delete(id); },
+    matchMedia: () => null,
+    coronaBridge: Object.fromEntries(['actorTransform', 'cameraMove', 'setCameraViewport', 'setViewportGizmoTarget', 'setViewportUiMode', 'setViewportSystemCursorHidden', 'setProperty']
       .map(name => [name, (...args) => { calls.push([name, ...args]); return true; }])) };
+  // 新版第三人称把移动交给原生的三角面移动接口，姿态只由回调（`onMeshMoveResult`）带回来：
+  // 这里记下请求 id，测试用 `ack` 回送，与真机同一个来回。
+  const moves = [];
+  const stateWrites = [];
+  window.coronaBridge.moveActorMesh = (...args) => { moves.push(args); calls.push(['moveActorMesh', ...args]); return true; };
+  let meshMoveCallback = null;
+  const ack = ({ position, grounded = false, rotation = [0, -Math.PI / 2, 0], status = 'success' } = {}) => {
+    const request = moves.at(-1);
+    assert.ok(request, '还没有移动请求可以回送');
+    assert.equal(meshMoveCallback({ requestId: request[2], actorHandle: request[0], status,
+      position, rotation, grounded }), true, '页面必须把原生回调转给相机控制器');
+    return request;
+  };
   const component = makeStory({
     vue: { ref, nextTick, watch, reactive, computed, onMounted: fn => mounted.push(fn), onUnmounted: fn => unmounted.push(fn) },
     'vue-router': { onBeforeRouteLeave() {}, useRouter: () => ({ replace: async path => routes.push(path) }) },
@@ -242,6 +267,8 @@ async function mountStory(t, { pendingInit = null, sceneSnapshot = { data: snaps
       sceneTools: {
         setActorState: async (scene, guid, state) => {
           const actor = placementActor(guid);
+          // 单独记可见性写入：`calls` 还留着「页面究竟动过哪些引擎接口」的严格断言。
+          stateWrites.push([guid, state?.visible]);
           Object.assign(actor, state);
           return { status: 'success', actor };
         },
@@ -261,6 +288,16 @@ async function mountStory(t, { pendingInit = null, sceneSnapshot = { data: snaps
       },
       projectSettings: { getActiveProjectInfo: async () => ({ mode: 'story', project_path: 'world' }) },
       scratch: { sendKeyEvent: async (key, text, payload) => {
+        // 世界切换准备：前 `navigationFailures` 次用真机上那一行 WinError 5 失败，之后放行。
+        if (key === NAVIGATION_KEY) {
+          navigationAttempts.push(payload);
+          if (navigationAttempts.length <= navigationFailures) {
+            return { status: 'error', message: '剧情世界切换准备失败：[WinError 5] 拒绝访问。: '
+              + "'D:\\world\\.game\\.subworld-staging-8n07rd4x\\world' -> 'D:\\world\\.game\\subworld'" };
+          }
+          return { status: 'ok', navigation: { source: 'world', target: 'world/.game/subworld',
+            mode: 'story', direction: JSON.parse(payload).direction } };
+        }
         let message = {};
         try { message = JSON.parse(payload); } catch { return { status: 'ok', role: placementExhibit.role }; }
         if (String(message.action || '').endsWith('Placements')) {
@@ -273,6 +310,9 @@ async function mountStory(t, { pendingInit = null, sceneSnapshot = { data: snaps
           config: gameplayConfig };
       } },
       main: { onInit: async () => pendingInit ? pendingInit.promise : ({ scenes: [{ path: 'scene.ini' }] }) },
+      // 页面的移动回调登记：真机由原生三角面移动的完成事件触发，测试里由 `ack` 手动喂。
+      events: { onMeshMoveResult: async callback => { meshMoveCallback = callback; return 'mesh-move-token'; } },
+      off: async () => {},
       scene: { getSnapshot: async () => ({ ...(sceneSnapshot.data ?? sceneSnapshot), actors: sceneActors }),
         setActorTransform: async (scene, guid, transform) => { calls.push(['playerSave', guid]);
           const actor = placementActor(guid);
@@ -283,8 +323,12 @@ async function mountStory(t, { pendingInit = null, sceneSnapshot = { data: snaps
     // 图片资源：测试里只当作一个 URL 字符串（默认导入经上面的改写走 .default）。
     '@/assets/hero-figure.png': { default: 'hero-figure.png' },
     '@/services/projectLauncherService.js': { projectLauncherService: {}, cancelPendingProjectOpen() {}, getProjectSelectionVersion: () => 0 },
-    '@/services/worldSessionLifecycle.js': { registerWorldSessionSave, trackWorldSessionWork, notifyWorldError: error => window.alert(error.message) },
-    '../../../../game/frontend/storyNavigation.mjs': { createStoryNavigationController, NAVIGATION_KEY },
+    '@/services/worldSessionLifecycle.js': { registerWorldSessionSave, trackWorldSessionWork,
+      runStorySwitchWithRetry, notifyWorldError: error => window.alert(error.message) },
+    '../../../../game/frontend/storyNavigation.mjs': {
+      // 真实控制器：只在创建时把页面传入的 options 抄一份，供切换重试的接线断言使用。
+      createStoryNavigationController: options => { navigationOptions = options; return createStoryNavigationController(options); },
+      NAVIGATION_KEY },
     '../../../../game/frontend/storyActors.mjs': { ensureStoryCharacters, syncPlacementActors },
     '../../../../game/frontend/storyProps.mjs': storyPropsModule,
     '../../../../game/frontend/storyLoot.mjs': storyLootModule,
@@ -294,6 +338,12 @@ async function mountStory(t, { pendingInit = null, sceneSnapshot = { data: snaps
     '../../../../game/frontend/storyProphetActions.mjs': storyProphetActionsModule,
     '../../../../game/frontend/playerController.mjs': { createPlayerController, VIEW_LABELS },
     '../../../../game/frontend/playerSave.mjs': { createPlayerSave },
+    // 动作播放器与 Boss 状态机属于表现层，这个夹具只测相机/页面接线，用惰性桩即可。
+    '../../../../game/frontend/storyPlayerAnimation.mjs': {
+      PLAYER_ATTACK_CLIP: 'attack', PLAYER_SKILL_CLIP: 'skill',
+      createPlayerAnimationSwitcher: () => ({ update() {}, play() {}, tick() {}, dispose() {} }),
+    },
+    '../../../../game/frontend/storyBossAi.mjs': { createBossDirector: () => ({ tick() {}, dispose() {} }) },
     '../../../../game/frontend/storyGameplay.mjs': {
       ...gameplayModule,
       // Observing the real controller keeps the page's own wiring under test.
@@ -322,6 +372,8 @@ async function mountStory(t, { pendingInit = null, sceneSnapshot = { data: snaps
   page.surface.value = { focus() {}, getBoundingClientRect: () => ({ left: 0, top: 0, width: 800, height: 600 }) };
   const mounting = Promise.all(mounted.map(fn => fn()));
   if (!pendingInit) await mounting;
+  // 注意：页面卸载时用全局 `clearInterval` 收 actorTimer，因此 harness 的 window 注册表只
+  // 负责「不创建真实定时器」，不拿来断言清理（留给 unmounted 钩子自己的断言）。
   const cleanup = async () => { for (const fn of unmounted) fn(); await flushWorldSessionSaves(); assert.equal(listeners.size, 0); assert.equal(frames.size, 0); };
   t.after(cleanup);
   /**
@@ -342,26 +394,37 @@ async function mountStory(t, { pendingInit = null, sceneSnapshot = { data: snaps
     return event;
   };
   return { page, calls, routes, frames, document, dispatch, worldModeState, mounting, sceneActors, placementExhibit,
+    moves, ack, stateWrites, navigationAttempts,
+    get navigationOptions() { return navigationOptions; },
     get gameplayOptions() { return gameplayOptions; },
     step(next) { time = next; const callbacks = [...frames.values()]; frames.clear(); for (const cb of callbacks) cb(time); } };
 }
 
 test('real story page binds player follow and stops on blur, hidden state, exit and revision changes', async t => {
   const h = await mountStory(t), p = h.page;
-  p.onKeyDown(input({ code: 'KeyD' })); h.step(50);
-  assert.ok(h.calls.some(call => call[0] === 'actorTransform' && call[2] === 0 && call[3][0] > 0));
+  // 移动走的是新的原生三角面接口：页面把键交给第三人称控制器，控制器发请求，
+  // 姿态只由回调（`onMeshMoveResult`，真机）带回来——所以这里必须回送一次。
+  p.onKeyDown(input({ code: 'KeyD' }));
+  h.step(50);
+  const move = h.moves.at(-1);
+  assert.ok(move, 'D 键必须变成一次原生三角面移动请求');
+  assert.ok(move[3][0] > 0, 'D 把玩家往 +x 送');
+  h.ack({ position: [0.5, 0.9, 0], grounded: true });
+  const moves = h.moves.length;
   p.onBlur(); assert.equal(h.frames.size, 0);
-  const count = h.calls.length;
-  p.camera.wheel(input({ deltaY: -1 })); h.step(100); assert.equal(h.calls.length, count);
+  p.onKeyDown(input({ code: 'KeyD' })); h.step(100);
+  assert.equal(h.moves.length, moves, '失焦之后一个移动请求都不许再发');
   p.onFocus(); p.onKeyDown(input({ code: 'KeyW' }));
   h.document.hidden = true; p.onVisibilityChange(); assert.equal(h.frames.size, 0);
   h.document.hidden = false; p.onFocus(); p.onKeyDown(input({ code: 'KeyW' }));
-  h.worldModeState.revision++; h.step(150); assert.equal(h.calls.length, count);
+  h.worldModeState.revision++; h.step(150);
+  assert.equal(h.moves.length, moves, '页面失活（revision 变了）之后不再驱动玩家');
   h.worldModeState.revision--;
   p.onKeyDown(input({ code: 'Escape', stopPropagation() {} }));
   await new Promise(resolve => setImmediate(resolve));
   assert.deepEqual(h.routes, ['/StartScreen']);
-  p.camera.wheel(input({ deltaY: -1 })); h.step(200); assert.equal(h.calls.length, count + 1); // One final persisted player pose.
+  // 离开世界时最后一份玩家姿态仍然落盘（playerSave → api.scene.setActorTransform）。
+  assert.ok(h.calls.some(call => call[0] === 'playerSave'), '最后的玩家姿态被保存');
 });
 
 test('story Escape works during loading and late initialization cannot bind a camera', async t => {
@@ -576,4 +639,185 @@ test('小世界的空格经页面注册的真实 keydown 监听器上升（Q/E �
   assert.ok(Math.abs(dropped + 0.6) < 1e-9, `E 降 0.6 m，实际 ${dropped}`);
   h.dispatch('keyup', { code: 'KeyE', key: 'e' });
   assert.equal(p.camera.isInputActive(), false, '松开按键后没有键留在按下状态');
+});
+
+// ---- 重新接回的四条小世界相机功能：每条都带「去掉守卫就红」的对照 --------------
+
+/**
+ * 非真空证据：分派器换回 `createPlayerController`（本次修复前那一版），第一条断言就变成
+ * 'third'；把 `SMALL_WORLD_VIEW_LABELS` 换成 `VIEW_LABELS`，提示行会写成「降临视角」。
+ */
+test('小世界的 V 只切自由视角 ↔ 俯视视角，主世界仍是第三人称三档', async t => {
+  const child = await mountStory(t, { role: 'child' });
+  const p = child.page;
+  const hint = () => p.controlHints.value.find(([key]) => key === 'V')[1];
+  const pose = () => p.camera.snapshotPose().camera;
+  assert.equal(p.camera.viewMode(), 'free', '小世界进来就是自由视角');
+  assert.equal(hint(), '视角 · 自由视角');
+  const free = pose().position[1];
+  p.onKeyDown(input({ code: 'KeyV', key: 'v' }));
+  assert.equal(p.camera.viewMode(), 'top');
+  assert.equal(hint(), '视角 · 俯视视角', '提示用的是小世界自己的两个名字');
+  assert.deepEqual(pose().forward, [0, -1, 0], '俯视是正下方');
+  assert.ok(pose().position[1] - free >= 18 - 1e-9, '俯视把相机抬到地面之上 18 m');
+  p.onKeyDown(input({ code: 'KeyV', key: 'v' }));
+  assert.equal(p.camera.viewMode(), 'free', 'V 回到自由视角，不会切到第三人称');
+  assert.equal(hint(), '视角 · 自由视角');
+
+  // 对照：主世界同一个 V 走的是自己的三档，与上面那对照样互不串台。
+  const main = await mountStory(t);
+  assert.equal(main.page.camera.viewMode(), 'third');
+  main.page.onKeyDown(input({ code: 'KeyV', key: 'v' }));
+  assert.equal(main.page.camera.viewMode(), 'first', '主世界仍是第三人称 → 降临 → 俯视');
+  assert.equal(main.page.controlHints.value.find(([key]) => key === 'V')[1], '视角 · 降临视角');
+});
+
+/**
+ * 玩家只隐藏、不删除：`visible: false` 走编辑侧的 `sceneTools.setActorState`（同步的 bridge
+ * 上没有这个方法，叫 bridge 只会静默什么都不做）。非真空：去掉 `keepChildPlayerHidden` 的
+ * 调用点，下面第一条可见性断言就是 true。
+ */
+test('小世界的玩家 actor 被隐藏且仍留在场景里，主世界一次都不写', async t => {
+  const child = await mountStory(t, { role: 'child' });
+  const p = child.page;
+  const guid = STORY_CHARACTERS[0].guid;
+  const player = () => child.sceneActors.find(actor => actor.actor_guid === guid);
+  assert.ok(player(), '玩家 actor 必须还在场景里：移动、拾取、摆放、存档都对着它');
+  await new Promise(resolve => setImmediate(resolve));
+  const writes = () => child.stateWrites.filter(([writtenTo]) => writtenTo === guid).length;
+  assert.ok(writes() >= 1, '进入小世界时就已经写过「不可见」');
+  // V 切视角或调整模式的俯瞰往返会把模型翻回可见：页面必须再写一次隐藏。
+  player().visible = true;
+  const before = writes();
+  assert.equal(p.keepChildPlayerHidden(), true, '小世界要再确认一次隐藏');
+  assert.equal(p.keepChildPlayerHidden(), false, '并发的第二次请求被合并成一次');
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(writes(), before + 1, '只写了一次可见性');
+  assert.equal(player().visible, false, '最终落在场景里的可见性是不可见');
+  assert.ok(player(), '隐藏不等于移除');
+
+  // 对照：主世界同一个调用什么都不做，一个字节也不写。
+  const main = await mountStory(t);
+  const mainWrites = () => main.stateWrites.filter(([writtenTo]) => writtenTo === guid).length;
+  const mainBefore = mainWrites();
+  assert.equal(main.page.keepChildPlayerHidden(), false, '主世界没有这条守卫');
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(mainWrites(), mainBefore, '主世界不写玩家可见性');
+});
+
+/**
+ * 裸鼠标转向只在「小世界的自由视角」存在，而且走的是页面自己注册的 window 监听器
+ * （`onMounted` 里的 `window.addEventListener('pointermove', camera.pointerMove)`）。
+ * 非真空：分派器换回 `createPlayerController` 时下面第一条 notDeepEqual 失败（第三人称
+ * 的裸鼠标不转向）。
+ */
+test('小世界自由视角里不按键的 mousemove 就转向，俯视与主世界都不受它影响', async t => {
+  const child = await mountStory(t, { role: 'child' });
+  const p = child.page;
+  const forward = () => [...p.camera.snapshotPose().camera.forward];
+  const start = forward();
+  child.dispatch('pointermove', { clientX: 400, clientY: 300, movementX: 60, movementY: 0, buttons: 0 });
+  assert.notDeepEqual(forward(), start, '不按任何键，鼠标一动就转向');
+  // 0.15°/px × 60px = 9°：与创造模式同一个常数（`CREATIVE_LOOK_SENSITIVITY`）。
+  const turned = Math.acos(Math.min(1, Math.abs(start[0] * forward()[0] + start[2] * forward()[2])));
+  assert.ok(Math.abs(turned - 9 * Math.PI / 180) < 1e-6, `转 9°，实际 ${(turned * 180 / Math.PI).toFixed(3)}°`);
+
+  p.onKeyDown(input({ code: 'KeyV', key: 'v' }));
+  const top = forward();
+  child.dispatch('pointermove', { clientX: 460, clientY: 300, movementX: 60, movementY: 0, buttons: 0 });
+  assert.deepEqual(forward(), top, '俯视视角仍然只有右键拖动改朝向');
+
+  const main = await mountStory(t);
+  const mainForward = [...main.page.camera.snapshotPose().camera.forward];
+  main.dispatch('pointermove', { clientX: 400, clientY: 300, movementX: 60, movementY: 0, buttons: 0 });
+  assert.deepEqual([...main.page.camera.snapshotPose().camera.forward], mainForward,
+    '主世界的裸鼠标不转向，滚轮缩放照旧');
+});
+
+/**
+ * 普通滚轮属于物品栏（换格），缩放挪到 Ctrl+滚轮（改 fov）。非真空：删掉
+ * `if (event.ctrlKey && camera.zoom?.(event))` 这一行，下面的 fov 断言立刻失败。
+ */
+test('小世界 Ctrl+滚轮缩 fov，普通滚轮换物品栏格子，互不干扰', async t => {
+  const h = await mountStory(t, { role: 'child' });
+  const p = h.page;
+  enterWorld(h, 'child', { inventory: { worldFragment: 2, block: 4 } });
+  assert.equal(p.hotbarVisible.value, true);
+  const fov = () => p.camera.snapshotPose().camera.fov;
+  const startFov = fov();
+  const slot = p.hotbarIndex.value;
+  p.onSurfaceWheel(input({ deltaY: 100 }));
+  assert.equal(fov(), startFov, '普通滚轮不动 fov');
+  assert.equal(p.hotbarIndex.value, slot + 1, '普通滚轮换物品栏格子');
+  const slot2 = p.hotbarIndex.value;
+  p.onSurfaceWheel(input({ deltaY: -100, ctrlKey: true }));
+  assert.equal(fov(), startFov - 5, 'Ctrl+滚轮把 fov 收了一档（zoomStep = 5）');
+  assert.equal(p.hotbarIndex.value, slot2, 'Ctrl+滚轮不换格');
+
+  // 对照：主世界的相机没有 zoom，Ctrl+滚轮照原路走（相机拉近），fov 一个数都不动。
+  const main = await mountStory(t);
+  const before = main.page.camera.snapshotPose().camera.fov;
+  main.page.onSurfaceWheel(input({ deltaY: 100, ctrlKey: true }));
+  assert.equal(main.page.camera.snapshotPose().camera.fov, before, '主世界没有 fov 缩放');
+});
+
+/**
+ * 面板占着输入时相机一个数都不动，空格也不被页面吞掉（面板要自己用它翻页）。
+ * 非真空：把 `isInputLocked` 里的 `inventoryOpen` 去掉，下面的高度断言立刻失败。
+ */
+test('小世界面板打开时空格不抬相机、也不吞掉事件', async t => {
+  const h = await mountStory(t, { role: 'child' });
+  const p = h.page;
+  const height = () => p.camera.snapshotPose().camera.position[1];
+  const start = height();
+  p.inventoryOpen.value = true;
+  const blocked = h.dispatch('keydown', { code: 'Space', key: ' ' });
+  h.step(50);
+  assert.equal(height(), start, '面板打开时空格不动相机');
+  assert.equal(blocked.defaultPrevented, false, '没有接手就不得 preventDefault');
+  p.inventoryOpen.value = false;
+  // 时间必须往前走：帧时钟是手动的，同一个时刻再跑一帧 dt = 0（真机上不会发生）。
+  const down = h.dispatch('keydown', { code: 'Space', key: ' ' });
+  h.step(100);
+  const rose = height() - start;
+  assert.ok(Math.abs(rose - 0.6) < 1e-9, `关掉面板后同一个空格抬 0.6 m，实际 ${rose}`);
+  assert.equal(down.defaultPrevented, true);
+});
+
+/**
+ * 进入小世界时 `rename` 暂存副本会被 WinError 5（拒绝访问）挡住，而运行时在失败时已经
+ * 回滚干净，所以页面应当退避重试同一次准备，而不是把第一枪的失败直接抛给玩家。
+ * 这里断言的是页面接给控制器的那个 `prepare`（不是孤立的工具函数）：桥被调三次、第三次的结果
+ * 原样透传。非真空：把 `prepare` 改回直接 `scratch.sendKeyEvent`，三次的计数立刻变成一。
+ */
+test('小世界切换准备被 WinError 5 挡住两次后第三次成功，桥恰好调用三次', async t => {
+  const h = await mountStory(t, { navigationFailures: 2 });
+
+  const result = await h.navigationOptions.prepare('enter');
+
+  assert.equal(result.status, 'ok', '第三次成功之后必须把成功结果原样交回控制器');
+  assert.equal(h.navigationAttempts.length, 3, '两次退避重试 + 一次成功');
+  assert.deepEqual(JSON.parse(h.navigationAttempts[0]), { projectPath: 'world', direction: 'enter' },
+    '每次重试发的都是同一个请求，桥协议没有变化');
+  assert.deepEqual(h.calls.filter(call => call[0] === 'alert'), [], '成功路径不弹任何错误');
+});
+
+/**
+ * 重试用尽之后必须把 Python 的原文交回控制器（由它只上报一次），页面自己不得吞掉或改写错误，
+ * 也不得卡在载入态。非真空：把重试次数改成 1，立刻变成一次调用。
+ */
+test('切换准备每次都失败时用尽四次尝试，把 Python 原文交回控制器且不锁死页面', async t => {
+  const h = await mountStory(t, { navigationFailures: 4 });
+
+  const result = await h.navigationOptions.prepare('enter');
+
+  assert.equal(result.status, 'error');
+  assert.match(result.message, /剧情世界切换准备失败/, '上报的仍是 Python 的原文');
+  assert.match(result.message, /WinError 5/, '系统错误码必须保留，否则无法定位是谁占着文件');
+  assert.equal(h.navigationAttempts.length, 4, '4 次尝试后放弃');
+  // 页面没有卡死：同一份接线再点一次就正常（失败只影响这一次切换）。
+  const retry = await h.navigationOptions.prepare('enter');
+  assert.equal(retry.status, 'ok');
+  assert.equal(h.navigationAttempts.length, 5);
+  assert.equal(h.page.navigation.busy, false, '准备失败不留载入态');
 });

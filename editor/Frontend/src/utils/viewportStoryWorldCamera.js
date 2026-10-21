@@ -376,6 +376,15 @@ export function createStoryWorldControls({
     bindPlayer: (actor, offset) => (childWorld() ? small : third).bindPlayer(actor, offset),
     onCameraBound: () => call('onCameraBound', []),
     snapshotPlayer: () => call('snapshotPlayer', []),
+    /**
+     * 原生三角面移动的回调必须回到「正在驱动玩家的那台控制器」。
+     *
+     * 主世界的第三人称只有在 `acceptMeshMove` 收到原生姿态之后才更新玩家位置（它不再自行
+     * 套用未确认的位移，`pendingMove` 会一直挂着直到超时）。页面把 `camera.acceptMeshMove`
+     * 交给 `editorApi.events.onMeshMoveResult`，所以分派器少这一条转发，主世界的 WASD 就
+     * 永远落不了地。小世界的相机没有这个能力，`call` 会返回 undefined（不是抛错）。
+     */
+    acceptMeshMove: event => call('acceptMeshMove', [event]),
     acknowledgePlayerSave: pose => call('acknowledgePlayerSave', [pose]),
     viewMode: () => call('viewMode', []),
     setViewMode: next => call('setViewMode', [next]),

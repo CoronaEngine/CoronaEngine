@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { STORY_KEY_ROUTES, routeStoryKeydown } from '../../src/utils/storyKeyRouter.js';
 import { createViewportCameraController } from '../../src/utils/viewportCameraController.js';
-import { createPlayerController } from '../../../../game/frontend/playerController.mjs';
+import { createPlayerController } from '../../../game/frontend/playerController.mjs';
 import { createStoryWorldControls } from '../../src/utils/viewportStoryWorldCamera.js';
 
 const near = (actual, expected, label = '') => assert.ok(Math.abs(actual - expected) < 1e-9,
@@ -38,6 +38,9 @@ const cameraPose = (position = [0, 0, 0], forward = [0, 0, 1]) => ({
 });
 const playerActor = (position = [0, 0.9, 0]) => ({ handle: 41,
   actor_guid: 'f9f5c8b0-7324-4b6c-a011-000000000001',
+  // 新版第三人称控制器用三角形几何包围盒算脚底偏移（缺了就抛「玩家三角形几何边界未就绪」），
+  // 这两个字段真机快照里本来就有。
+  local_aabb: [-0.25, -0.9, -0.25, 0.25, 0.9, 0.25],
   geometry: { position: [...position], rotation: [0, -Math.PI / 2, 0], scale: [1, 1, 1] } });
 
 const baseState = {
@@ -52,13 +55,29 @@ const baseState = {
 function world(role = 'child', createThirdPerson = createViewportCameraController) {
   const timer = clock();
   let pose = cameraPose();
-  const bridge = { cameraMove: () => true, actorTransform: () => true };
+  const moves = [];
+  // `moveActorMesh` 是新版第三人称在 bindPlayer 时唯一多要求的接口（原生三角面移动）；
+  // 缺了它主世界的绑定直接抛「当前引擎缺少玩家实时控制接口」。
+  const bridge = { cameraMove: () => true, actorTransform: () => true,
+    moveActorMesh: (...args) => { moves.push(args); return true; } };
   const controls = createStoryWorldControls({
     createThirdPerson, role: () => role, getBridge: () => bridge,
     getPose: () => pose, setPose: next => { pose = next; }, submitPose: () => true, ...timer,
   });
   controls.bindPlayer(playerActor(), 0.45);
-  return { controls, timer, pose: () => pose, step: ms => timer.step(timer.now() + ms) };
+  /**
+   * 落地：新版控制器只在 `player.grounded` 为真时起跳，而 grounded 由原生三角面回调带来
+   * （真机是 `editorApi.events.onMeshMoveResult`）。这里走一次 W 并回送 grounded=true。
+   */
+  const land = () => {
+    controls.keyDown(keyEvent({ code: 'KeyW', key: 'w' }));
+    timer.step(timer.now() + 16);
+    const move = moves.at(-1);
+    controls.acceptMeshMove({ requestId: move[2], actorHandle: move[0], status: 'success',
+      position: [0, 0.9, 0], rotation: [0, -Math.PI / 2, 0], grounded: true });
+    controls.keyUp(keyEvent({ code: 'KeyW', key: 'w' }));
+  };
+  return { controls, timer, land, moves, pose: () => pose, step: ms => timer.step(timer.now() + ms) };
 }
 
 /**
@@ -97,6 +116,8 @@ test('小世界里空格一直路由到相机：即使动作/保存进行中也�
 
 test('主世界保持空格=跳跃：动作/保存进行中仍然被页面吞掉', () => {
   const main = world('main', createPlayerController);
+  main.land();
+  assert.equal(main.controls.snapshotPlayer().grounded, true, '落地之后才谈得上起跳');
   const ground = main.controls.snapshotPlayer().position[1];
   const state = { ...baseState, inSubworld: false, actionBusy: true, busy: true, needsSave: true };
   const down = keyEvent({ code: 'Space', key: ' ' });
@@ -109,6 +130,10 @@ test('主世界保持空格=跳跃：动作/保存进行中仍然被页面吞掉
   assert.equal(idle.route, 'camera');
   assert.equal(idle.handled, true);
   main.step(50);
+  const request = main.moves.at(-1);
+  assert.equal(request[5], true, '主世界这一下是跳跃请求，不是相机升降');
+  assert.equal(main.controls.acceptMeshMove({ requestId: request[2], actorHandle: request[0],
+    status: 'success', position: [0, ground + 0.3, 0], rotation: [0, -Math.PI / 2, 0], grounded: false }), true);
   assert.equal(main.controls.snapshotPlayer().grounded, false, '主世界的空格必须起跳');
   assert.ok(main.controls.snapshotPlayer().position[1] > ground, '人离地了');
   main.controls.dispose();
