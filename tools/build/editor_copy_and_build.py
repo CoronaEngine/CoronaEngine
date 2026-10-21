@@ -103,7 +103,7 @@ def copy_tree(src: Path, dst: Path, merge_content: bool = False) -> None:
             # Test files
             "tests", "test",
             # Temporary and log files
-            ".cache", ".temp", "tmp",
+            ".cache", ".temp", ".tmp", "tmp",
             # OS files
             ".DS_Store", "Thumbs.db", "desktop.ini"
         }
@@ -181,6 +181,57 @@ def stream_run(cmd: list[str], cwd: Optional[Path] = None, env: Optional[dict] =
         return 127
 
 
+def _can_write_and_delete(directory: Path) -> bool:
+    """Probe whether a directory both accepts writes and honours deletes.
+
+    esbuild ships a Go binary that cleans up its temp files with os.Remove.
+    Restricted environments (file sandboxes whose ACLs only grant delete rights
+    inside the source tree) let the write succeed but reject the unlink with
+    "Access is denied", which aborts the Vite build via [vite:esbuild-transpile].
+    A directory is therefore only usable when the delete half also works.
+    """
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+        probe = directory / f".corona-write-probe-{os.getpid()}"
+        probe.write_bytes(b"probe")
+        probe.unlink()
+        return True
+    except OSError:
+        return False
+
+
+def _select_npm_tmp_dir(frontend_dir: Path) -> Optional[Path]:
+    """Return a fresh temp directory to export as TMP/TEMP for the npm children.
+
+    The probe cannot be applied to the inherited temp directory: this Python
+    process deletes there happily, while the esbuild Go binary can be refused by
+    a file sandbox even though ordinary children (cmd.exe, node) succeed. That
+    asymmetry is what turns a Vite build into
+    "[vite:esbuild-transpile] remove <path>: Access is denied". So the directory
+    is chosen by construction instead: the frontend always lives inside the
+    build tree, which is writable and deletable in every configuration observed.
+    """
+    for base in (
+        frontend_dir.parent / ".tmp",  # CabbageEditor/.tmp, outside the Vite root
+        frontend_dir / ".tmp",
+        Path(__file__).resolve().parents[2] / "build" / ".tmp",
+    ):
+        if not _can_write_and_delete(base):
+            continue
+        unique = base / f"npm-tmp-{os.getpid()}"
+        try:
+            unique.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            continue
+        echo(f"[npm-build] TMP/TEMP -> {unique}")
+        return unique
+    echo(
+        "[npm-build] WARNING: no writable-and-deletable temp directory found; "
+        "esbuild may fail while cleaning up its temp files"
+    )
+    return None
+
+
 def maybe_run_npm(frontend_dir: Path, node_dir: Path) -> int:
     if not frontend_dir.is_dir():
         echo(f"[npm-build] ERROR: Frontend directory not found: {frontend_dir}")
@@ -191,17 +242,30 @@ def maybe_run_npm(frontend_dir: Path, node_dir: Path) -> int:
         return 127
     env = os.environ.copy()
     env["PATH"] = str(node_dir) + os.pathsep + env.get("PATH", "")
-    # Keep environment unchanged
-    echo("[npm-build] Installing dependencies...")
-    rc = stream_run([str(npm_cmd), "install"], cwd=frontend_dir, env=env)
-    if rc != 0:
-        print(f"[npm-build] ERROR: 'npm install' failed (exit code {rc}).", flush=True)
-        return rc
-    echo("[npm-build] Building frontend...")
-    rc = stream_run([str(npm_cmd), "run", "build"], cwd=frontend_dir, env=env)
-    if rc != 0:
-        print(f"[npm-build] ERROR: 'npm run build' failed (exit code {rc}).", flush=True)
-        return rc
+    tmp_dir = _select_npm_tmp_dir(frontend_dir)
+    if tmp_dir is not None:
+        for key in ("TMP", "TEMP", "TMPDIR"):
+            env[key] = str(tmp_dir)
+    try:
+        echo("[npm-build] Installing dependencies...")
+        rc = stream_run([str(npm_cmd), "install"], cwd=frontend_dir, env=env)
+        if rc != 0:
+            print(f"[npm-build] ERROR: 'npm install' failed (exit code {rc}).", flush=True)
+            return rc
+        echo("[npm-build] Building frontend...")
+        rc = stream_run([str(npm_cmd), "run", "build"], cwd=frontend_dir, env=env)
+        if rc != 0:
+            print(f"[npm-build] ERROR: 'npm run build' failed (exit code {rc}).", flush=True)
+            return rc
+    finally:
+        # Only ever remove the directory this function created for the build.
+        if tmp_dir is not None:
+            container = tmp_dir.parent
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+            try:
+                container.rmdir()  # drop the shared .tmp container once empty
+            except OSError:
+                pass
     frontend_index = frontend_dir / "dist" / "index.html"
     if not frontend_index.is_file():
         echo(f"[npm-build] ERROR: Build output is missing or not a file: {frontend_index}")
