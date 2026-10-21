@@ -37,7 +37,7 @@ std::filesystem::path find_frontend_index_path() {
 
     const std::vector<std::filesystem::path> candidates{
         cwd / "CabbageEditor" / "Frontend" / "dist" / "index.html",
-        cwd / "editor" / "Frontend" / "dist" / "index.html",
+        cwd / "CoronaEditor" / "editor" / "Frontend" / "dist" / "index.html",
     };
 
     for (const auto& candidate : candidates) {

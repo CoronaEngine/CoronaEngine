@@ -700,7 +700,7 @@ void legacy_ini_sections_are_read_case_insensitively() {
 
 void fbx_import_archives_only_loader_declared_textures() {
     TempDir temp;
-    const auto fixture = fs::path(CORONA_SOURCE_DIR) / "assets" / "wolf" / "fbx";
+    const auto fixture = fs::path(CORONA_SOURCE_DIR) / "CoronaEditor" / "assets" / "wolf" / "fbx";
     const auto source = temp.path / "source";
     fs::create_directories(source / "textures");
     fs::copy_file(fixture / "Wolf.fbx", source / "Wolf.fbx");

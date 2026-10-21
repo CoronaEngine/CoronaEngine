@@ -16,6 +16,11 @@
 ## 开发工具环境
 
 CMake Configure 会自动创建或复用 `coronaengine-dev` 环境（可通过 `CORONA_CONDA_ENV` 指定环境名称）。
+CMake 首次配置会将 [CoronaEditor](https://github.com/CoronaEngine/CoronaEditor) 浅克隆到仓库根目录的
+`CoronaEditor/`，直接使用其中的 `assets/` 和 `editor/`，不会再嵌套一层 `CoronaEditor/`。
+已有副本直接复用，不自动拉取或覆盖本地修改；需要更新时在该目录中手动执行 Git 更新。
+Python 依赖检查使用 `CoronaEditor/editor/requirements.txt`；构建时仍将资源部署为可执行目录下的
+`assets/` 和 `CabbageEditor/`，并自动构建前端。根目录原有的 `assets/`、`editor/` 不再参与构建。
 启用编辑器时，CMake 使用该环境的 Python 自动检查 Node.js **22.19.0** 和 npm；
 缺失、版本不符或安装损坏时，通过 conda-forge 安装或修复到同一环境，已有环境也会补齐。
 首次安装需要联网，后续配置在工具可用时直接复用，不调用 Conda 安装。
@@ -62,7 +67,7 @@ VS Code / CMake Tools
 启动日志会输出配置文件路径、是否加载成功及实际开关值。文件缺失时使用默认值；格式、字段名或类型错误会报错并终止启动。
 
 这个文件由原生引擎入口在初始化前读取；`CoronaEditor.ini` 继续保存编辑器的项目状态，
-`editor/config/app_config.py` 继续管理 Python 侧的应用配置。独立测试程序和其他嵌入式宿主仍可直接用环境变量控制 profiler。
+`CoronaEditor/editor/config/app_config.py` 继续管理 Python 侧的应用配置。独立测试程序和其他嵌入式宿主仍可直接用环境变量控制 profiler。
 
 Vision 在所有构建目标族中始终启用，计算设备固定为 Horizon/Ocarina Vulkan Compute。
 引擎配置不再包含 `vision.backend`；旧配置应删除整个 `vision` 节。

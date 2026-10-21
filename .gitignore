@@ -7,6 +7,7 @@
 /cmake-build-*/
 
 # Managed source workspaces. Keep lock files tracked.
+/CoronaEditor/
 /.workspace/*
 !/.workspace/horizon.lock.json
 

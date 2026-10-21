@@ -21,6 +21,42 @@
 
 include_guard(GLOBAL)
 
+# Both source directories live in the external repository; runtime paths stay unchanged.
+set(CORONA_EDITOR_SOURCE_DIR "${PROJECT_SOURCE_DIR}/CoronaEditor")
+
+function(corona_prepare_editor_sources)
+    # Different build presets share this checkout. Never update an existing copy.
+    file(MAKE_DIRECTORY "${PROJECT_SOURCE_DIR}/.workspace")
+    file(LOCK "${PROJECT_SOURCE_DIR}/.workspace/corona-editor.lock"
+        GUARD FUNCTION TIMEOUT 600 RESULT_VARIABLE _editor_lock_result)
+    if(NOT _editor_lock_result STREQUAL "0")
+        message(FATAL_ERROR "[Corona:Editor] Cannot lock source checkout: ${_editor_lock_result}")
+    endif()
+
+    if(NOT EXISTS "${CORONA_EDITOR_SOURCE_DIR}")
+        find_package(Git REQUIRED)
+        message(STATUS "[Corona:Editor] Cloning into ${CORONA_EDITOR_SOURCE_DIR}")
+        execute_process(
+            COMMAND "${GIT_EXECUTABLE}" clone --depth 1 --single-branch
+                https://github.com/CoronaEngine/CoronaEditor.git "${CORONA_EDITOR_SOURCE_DIR}"
+            RESULT_VARIABLE _editor_clone_result
+        )
+        if(NOT _editor_clone_result STREQUAL "0")
+            message(FATAL_ERROR "[Corona:Editor] Clone failed (${_editor_clone_result}); check Git/network access and re-run CMake.")
+        endif()
+    endif()
+
+    if(NOT IS_DIRECTORY "${CORONA_EDITOR_SOURCE_DIR}/assets"
+       OR NOT EXISTS "${CORONA_EDITOR_SOURCE_DIR}/editor/requirements.txt"
+       OR NOT EXISTS "${CORONA_EDITOR_SOURCE_DIR}/editor/Frontend/package.json")
+        message(FATAL_ERROR
+            "[Corona:Editor] Incomplete checkout at ${CORONA_EDITOR_SOURCE_DIR}. "
+            "Expected assets/ and editor/ directly inside CoronaEditor/. "
+            "Repair or move this directory aside, then re-run CMake.")
+    endif()
+    message(STATUS "[Corona:Editor] Source checkout: ${CORONA_EDITOR_SOURCE_DIR}")
+endfunction()
+
 # ------------------------------------------------------------------------------
 # Function: collect editor resources during configuration
 # ------------------------------------------------------------------------------
@@ -30,7 +66,7 @@ function(corona_configure_corona_editor target_name)
         return()
     endif()
 
-    set(_CORONA_EDITOR_DIR "${PROJECT_SOURCE_DIR}/editor")
+    set(_CORONA_EDITOR_DIR "${CORONA_EDITOR_SOURCE_DIR}/editor")
     set(_CORONA_EXISTING_DIRS)
 
     if(EXISTS "${_CORONA_EDITOR_DIR}")

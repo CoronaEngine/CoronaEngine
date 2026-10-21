@@ -8,12 +8,9 @@ class PackPathBoundaryTests(unittest.TestCase):
     def test_pack_tool_has_a_tools_canonical_owner(self):
         repo_root = Path(__file__).resolve().parents[2]
         canonical = repo_root / "tools" / "pack.py"
-        compatibility = repo_root / "editor" / "scripts" / "pack.py"
-        duplicate_test = repo_root / "editor" / "scripts" / "test_pack.py"
 
         self.assertTrue(canonical.is_file())
-        self.assertIn("Compatibility", compatibility.read_text(encoding="utf-8"))
-        self.assertFalse(duplicate_test.exists())
+        self.assertEqual(Path(should_exclude.__code__.co_filename).resolve(), canonical)
 
     def test_current_generated_paths_are_excluded(self):
         self.assertTrue(should_exclude("Frontend/node_modules/vue/index.js"))

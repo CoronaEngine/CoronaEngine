@@ -4457,7 +4457,7 @@ std::filesystem::path editor_root_path() {
     if (std::filesystem::is_directory(installed)) {
         return installed;
     }
-    const auto source = cwd / "editor";
+    const auto source = cwd / "CoronaEditor" / "editor";
     if (std::filesystem::is_directory(source)) {
         return source;
     }

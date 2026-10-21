@@ -11,7 +11,7 @@
 #    - `CORONA_CONDA_ENV`: conda environment name (default: coronaengine-dev)
 # 4. Assert the discovered interpreter is from the conda environment and that
 #    its version is 3.13.x to match the ABI (python313.lib).
-# 5. Validate requirements listed in `editor/requirements.txt` via
+# 5. Validate requirements listed in `CoronaEditor/editor/requirements.txt` via
 #    `check_pip_modules.py`, optionally installing missing packages. Only runs
 #    when `BUILD_CORONA_EDITOR` is enabled.
 # 6. Create the `check_python_deps` custom target for manual re-validation.
@@ -135,7 +135,7 @@ unset(_corona_conda_env_path)
 
 message(STATUS "[Python] Final chosen interpreter: ${Python_EXECUTABLE} (${Python_VERSION})")
 
-set(CORONA_PY_REQUIREMENTS_FILE "${PROJECT_SOURCE_DIR}/editor/requirements.txt")
+set(CORONA_PY_REQUIREMENTS_FILE "${CORONA_EDITOR_SOURCE_DIR}/editor/requirements.txt")
 set(CORONA_PY_CHECK_SCRIPT "${PROJECT_SOURCE_DIR}/tools/build/check_pip_modules.py")
 
 # ------------------------------------------------------------------------------
