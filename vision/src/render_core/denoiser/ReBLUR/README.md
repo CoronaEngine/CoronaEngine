@@ -49,6 +49,19 @@ and 11.637/12.147 ms. Per-pass sums are recorded separately and must not replace
 these continuous measurements. Full evidence and reproduction commands are in
 `build/recordings/reblur-performance-20261021/optimization-20261021/final-report/`.
 
+The broader `corona_vision_reblur_tests` stress comparison added during commit
+validation is not fully passing. At 127x73, frame 1, the constant three-layer
+case reports specular B of 0.199829102 (EDSL) versus 0.198364258 (HLSL) at
+layer 1, pixel (8,25), exceeding the 0.001396729 component tolerance. The HDR
+case with input RGB (50000,10000,30000) reports diffuse G of 9992 versus 9968
+at layer 0, pixel (1,4), exceeding the 19.937 tolerance. These two scenarios
+remain failing regressions at the same strict tolerance; the 72-case and
+720p/1080p results above do not establish equivalence for these stress inputs.
+Constant-layer isolation also compares against three separate original NRD
+instances. Invalid-pixel checks retain exact raw-bit passthrough for both
+backends. Reproduction logs and binary fingerprints are in
+`build/recordings/reblur-commit-20261022/main7-all-tests-fixed-r1/`.
+
 The retained optimizations use hardware typed textures, dispatch-uniform resource
 indices, lazy read-only parameter loads and an NRD-only dynamic constant UBO,
 plus matched shared-memory layouts and selective HistoryFix unrolling. They
