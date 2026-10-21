@@ -1,4 +1,5 @@
 #include "native_material.h"
+#include <corona/utils/runtime_paths.h>
 #include <corona/utils/scene_path_key.h>
 #include <corona/diagnostics/thread_phase.h>
 #include <corona/events/display_system_events.h>
@@ -551,7 +552,7 @@ struct CursorIconPixels {
 
 std::filesystem::path find_mouse_icon_path() {
     std::error_code ec;
-    auto current = std::filesystem::current_path(ec);
+    auto current = Corona::Utils::executable_directory();
     if (!ec) {
         for (auto dir = current; !dir.empty(); dir = dir.parent_path()) {
             auto candidate = dir / kMouseIconRelativePath;
@@ -613,7 +614,7 @@ std::optional<CursorIconPixels> load_mouse_icon_pixels() {
 
 std::filesystem::path find_relative_asset_path(const std::filesystem::path& relative_path) {
     std::error_code ec;
-    auto current = std::filesystem::current_path(ec);
+    auto current = Corona::Utils::executable_directory();
     if (!ec) {
         for (auto dir = current; !dir.empty(); dir = dir.parent_path()) {
             auto candidate = dir / relative_path;

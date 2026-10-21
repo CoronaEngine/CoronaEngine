@@ -179,7 +179,7 @@ def main():
     executable = Path(command[0])
     if not executable.is_absolute():
         executable = args.cwd / executable
-    candidates = [executable, args.cwd / "ocarina-backend-vulkan-compute.dll"]
+    candidates = [executable, executable.parent / "ocarina-backend-vulkan-compute.dll"]
     binary_fingerprints = {
         str(path.resolve()): hashlib.sha256(path.read_bytes()).hexdigest()
         for path in candidates if path.is_file()
@@ -198,7 +198,9 @@ def main():
              (args.output / "temperature.csv").open("w", newline="", encoding="utf-8") as samples:
             writer = csv.writer(samples)
             writer.writerow(["elapsed_s", "gpu", "temperature_c", "utilization_pct", "power_w", "sm_mhz", "memory_mhz", "memory_used_mib"])
-            process = subprocess.Popen(command, cwd=args.cwd, env=environment, stdout=out, stderr=err,
+            # Pass lpApplicationName explicitly: Windows limits the executable
+            # token to MAX_PATH when it must parse it from the command line.
+            process = subprocess.Popen(command, executable=str(executable), cwd=args.cwd, env=environment, stdout=out, stderr=err,
                                        stdin=subprocess.DEVNULL, creationflags=subprocess.CREATE_NO_WINDOW)
             job.attach(process)
             (args.output / "pid.txt").write_text(str(process.pid))

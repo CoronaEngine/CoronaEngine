@@ -48,6 +48,17 @@ VS Code / CMake Tools
 
 ## 引擎启动配置
 
+编辑器前端、Python 后端、`assets/` 和 `CoronaEditor.ini` 按可执行文件所在目录定位，
+从终端、IDE 或快捷方式启动时不要求工作目录与可执行目录相同。CEF 路径使用 Windows 宽字符，
+本地页面 URL 会转义中文、空格、`#` 和 `%`。CEF 缓存默认位于
+`%LOCALAPPDATA%/CoronaEngine/CEFRoot`，也可用 `CORONA_CEF_ROOT_CACHE` 指定绝对路径。
+
+Windows 路径读取已移除固定的 `MAX_PATH` 缓冲区，主程序也声明了长路径支持；
+但当前 CEF 和原生运行组件仍不能保证在超过 260 字符的可执行目录下启动。
+源码目录较深时，可用 CMake 参数 `-DCORONA_ENGINE_RUNTIME_DIR=E:/CoronaRuntime`
+将引擎及运行资源统一输出到较短目录；Ninja Multi-Config 会再附加 `RelWithDebInfo` 等配置名。
+应保留完整的运行目录一起启动，仅移动 EXE 不足以部署 CEF、Python 和资源。
+
 `corona_engine.exe` 启动时读取**进程当前工作目录（cwd）**下的 `CoronaEngine.json`。
 仓库根目录的 [CoronaEngine.default.json](CoronaEngine.default.json) 是默认模板。
 在选定的工作目录中，将模板复制为 `CoronaEngine.json`，再修改配置；从仓库根目录启动时也遵循此规则。

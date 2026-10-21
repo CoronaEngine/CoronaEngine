@@ -1,4 +1,5 @@
 #include "cef_bridge_helpers.h"
+#include <corona/utils/runtime_paths.h>
 #include "cef_editor_api.h"
 #include "ui_resource_read.h"
 
@@ -94,7 +95,7 @@ const ViewportGizmoCpuMasks& viewport_gizmo_cpu_masks() {
             "assets/icon/axis_z.png",
         }};
         std::error_code ec;
-        auto root = std::filesystem::current_path(ec);
+        auto root = Utils::executable_directory();
         for (std::size_t i = 0; i < paths.size(); ++i) {
             auto path = std::filesystem::path(paths[i]);
             if (!ec) {

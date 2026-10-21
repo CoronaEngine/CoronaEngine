@@ -11,6 +11,7 @@
 #endif
 
 #include "browser_manager.h"
+#include <corona/utils/runtime_paths.h>
 #include "actor_selection_routing.h"
 #include "../collaborative_editor_runtime.h"
 #include "cef_client.h"
@@ -767,7 +768,7 @@ void persist_vision_proxy_actors_from_document(const std::filesystem::path& proj
 std::map<std::string, std::string> vision_camera_section(const nlohmann::json& document);
 
 std::string read_last_project_from_editor_ini() {
-    const auto cwd_ini = std::filesystem::current_path() / "CoronaEditor.ini";
+    const auto cwd_ini = Utils::executable_directory() / "CoronaEditor.ini";
     const auto ini = read_ini_file(cwd_ini);
     const auto raw = ini_value(ini, "General", "last_project");
     if (raw.empty()) {
@@ -4452,20 +4453,11 @@ std::string current_time_string() {
 }
 
 std::filesystem::path editor_root_path() {
-    const auto cwd = std::filesystem::current_path();
-    const auto installed = cwd / "CabbageEditor";
-    if (std::filesystem::is_directory(installed)) {
-        return installed;
-    }
-    const auto source = cwd / "CoronaEditor" / "editor";
-    if (std::filesystem::is_directory(source)) {
-        return source;
-    }
-    return cwd;
+    return Utils::editor_directory();
 }
 
 std::filesystem::path editor_ini_path() {
-    return std::filesystem::current_path() / "CoronaEditor.ini";
+    return Utils::executable_directory() / "CoronaEditor.ini";
 }
 
 std::filesystem::path project_template_path() {

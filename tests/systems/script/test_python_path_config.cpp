@@ -1,5 +1,6 @@
 
 #include <corona/systems/script/python/python_path_config.h>
+#include <corona/utils/runtime_paths.h>
 
 #include <cstdlib>
 #include <filesystem>
@@ -185,6 +186,21 @@ void test_decision_falls_back_only_when_allowed_and_possible() {
 }  // namespace
 
 int main() {
+    {
+        TempRoot unrelated("unrelated_cwd");
+        const auto previous = fs::current_path();
+        fs::current_path(unrelated.path);
+        const auto native_root = Corona::Utils::executable_path().parent_path();
+        using namespace Corona::Script::Python::PathCfg;
+        require(engine_root_path() == native_root, "runtime root must not depend on cwd");
+        require(fs::u8path(engine_root()) == native_root, "Python root must be UTF-8");
+        require(fs::u8path(editor_backend_abs()) == native_root / "CabbageEditor",
+                "editor imports must resolve beside the executable, including Unicode paths");
+        if (const auto expected = _wgetenv(L"CORONA_TEST_EXPECTED_RUNTIME_ROOT")) {
+            require(native_root == fs::path(expected), "long executable path must not be truncated");
+        }
+        fs::current_path(previous);
+    }
     test_missing_everything_reports_missing_lib();
     test_lib_without_dlls_reports_missing_dlls();
     test_lib_and_dlls_without_site_module_is_rejected();

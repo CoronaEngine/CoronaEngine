@@ -17,6 +17,23 @@ def _load_copy_module():
     return module
 
 
+def test_runtime_contract_is_deployed_and_loads_without_repository_docs(tmp_path):
+    import sys
+    module = _load_copy_module()
+    source = REPO_ROOT / "CoronaEditor" / "editor" / "script_runtime" / "blockly"
+    destination = tmp_path / "中文 runtime" / "CabbageEditor" / "script_runtime" / "blockly"
+    module.copy_tree(source, destination, merge_content=True)
+    spec = importlib.util.spec_from_file_location("deployed_contract", destination / "ai_node_graph_contract.py")
+    contract = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = contract
+    try:
+        spec.loader.exec_module(contract)
+        assert contract.CONTRACT_PATH.parent == destination
+        assert contract.load_contract_catalog()["blocks"]
+    finally:
+        sys.modules.pop(spec.name, None)
+
+
 def test_editor_copy_removes_stale_python_sources_from_deployed_editor(tmp_path):
     module = _load_copy_module()
     source = tmp_path / "editor"

@@ -7,6 +7,7 @@
 #include <corona/systems/script/engine_scripts.h>
 #include <corona/systems/script/python/python_error_handler.h>
 #include <corona/systems/script/python/python_path_config.h>
+#include <corona/utils/path_utils.h>
 #include <nanobind/stl/string.h>
 #include <nlohmann/json.hpp>
 #include <windows.h>
@@ -183,7 +184,7 @@ bool PythonAPI::initializeInterpreterLocked() {
         const std::string configured_home = PathCfg::configured_python_home_dir();
         std::error_code fallback_ec;
         const bool fallback_available =
-            !configured_home.empty() && std::filesystem::exists(configured_home, fallback_ec);
+            !configured_home.empty() && std::filesystem::exists(Utils::utf8_to_path(configured_home), fallback_ec);
         const auto decision = PathCfg::decide_packaged_runtime_usage(
             packaged, PathCfg::packaged_runtime_required(), fallback_available);
 
@@ -256,17 +257,17 @@ bool PythonAPI::initializeInterpreterLocked() {
     const auto bundled_editor = PathCfg::runtime_backend_abs();
     const auto bundled_root = PathCfg::engine_root();
 
-    const auto bundled_stdlib_path = std::filesystem::path(bundled_stdlib);
-    const auto bundled_dlls_path = std::filesystem::path(bundled_dlls);
-    const auto bundled_lib_path = std::filesystem::path(bundled_lib);
-    const auto bundled_editor_main_path = std::filesystem::path(bundled_editor) / "main.py";
+    const auto bundled_stdlib_path = Utils::utf8_to_path(bundled_stdlib);
+    const auto bundled_dlls_path = Utils::utf8_to_path(bundled_dlls);
+    const auto bundled_lib_path = Utils::utf8_to_path(bundled_lib);
+    const auto bundled_editor_main_path = Utils::utf8_to_path(bundled_editor) / "main.py";
     if ((!std::filesystem::exists(bundled_stdlib_path) &&
          !std::filesystem::exists(bundled_lib_path)) ||
         !std::filesystem::exists(bundled_dlls_path) ||
         !std::filesystem::exists(bundled_editor_main_path)) {
         const std::string message =
             "Bundled Python runtime is incomplete. Expected python stdlib zip or Lib directory, " +
-            bundled_dlls + ", and " + bundled_editor_main_path.generic_string();
+            bundled_dlls + ", and " + Utils::path_to_utf8(bundled_editor_main_path);
         lifecycle_.transition(PythonLifecycleState::Failed);
         {
             std::lock_guard lock(lifecycle_mtx_);

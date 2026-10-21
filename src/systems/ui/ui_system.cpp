@@ -7,6 +7,7 @@
 #include <corona/systems/ui/camera_viewport_manager.h>
 #include <corona/systems/ui/sdl_window_manager.h>
 #include <corona/systems/ui/ui_system.h>
+#include <corona/utils/runtime_paths.h>
 
 #include <algorithm>
 #include <atomic>
@@ -28,25 +29,7 @@ namespace Corona::Systems {
 namespace {
 
 std::filesystem::path find_frontend_index_path() {
-    std::error_code ec;
-    const auto cwd = std::filesystem::current_path(ec);
-    if (ec) {
-        CFW_LOG_WARNING("UiSystem: Unable to resolve current path: {}", ec.message());
-        return {};
-    }
-
-    const std::vector<std::filesystem::path> candidates{
-        cwd / "CabbageEditor" / "Frontend" / "dist" / "index.html",
-        cwd / "CoronaEditor" / "editor" / "Frontend" / "dist" / "index.html",
-    };
-
-    for (const auto& candidate : candidates) {
-        if (std::filesystem::exists(candidate, ec) && !ec) {
-            return candidate;
-        }
-        ec.clear();
-    }
-    return candidates.front();
+    return Utils::editor_directory() / "Frontend" / "dist" / "index.html";
 }
 
 void create_initial_frontend_tab() {
@@ -58,11 +41,11 @@ void create_initial_frontend_tab() {
 
     if (!std::filesystem::exists(frontend_index)) {
         CFW_LOG_WARNING("UiSystem: Initial frontend file not found: {}",
-                        frontend_index.string());
+                        Utils::path_to_utf8(frontend_index));
     }
 
     const int tab_id = UI::BrowserManager::instance().create_tab(
-        frontend_index.string(), "/StartScreen", "main", 1920, 1080, true);
+        Utils::path_to_utf8(frontend_index), "/StartScreen", "main", 1920, 1080, true);
     CFW_LOG_INFO("UiSystem: Initial Vue/CEF tab created: ID={}", tab_id);
 }
 

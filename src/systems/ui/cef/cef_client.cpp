@@ -1,4 +1,6 @@
 #include "cef_client.h"
+#include "cef_paths.h"
+#include <corona/utils/runtime_paths.h>
 
 #include <windows.h>
 
@@ -348,6 +350,18 @@ void OffscreenCefClient::OnLoadEnd(CefRefPtr<CefBrowser> browser,
     browser->GetHost()->Invalidate(PET_VIEW);
 }
 
+void OffscreenCefClient::OnLoadError(CefRefPtr<CefBrowser> browser,
+                                    CefRefPtr<CefFrame> frame,
+                                    ErrorCode error_code,
+                                    const CefString& error_text,
+                                    const CefString& failed_url) {
+    if (error_code != ERR_ABORTED && frame && frame->IsMain()) {
+        CFW_LOG_ERROR("CEF: Load failed tab={} code={} error={} URL={}",
+                      tab_id_, static_cast<int>(error_code),
+                      error_text.ToString(), failed_url.ToString());
+    }
+}
+
 void OffscreenCefClient::OnBeforeClose(CefRefPtr<CefBrowser> browser) {
     CEF_REQUIRE_UI_THREAD();
     if (browser) {
@@ -489,6 +503,8 @@ void OffscreenCefClient::OnRenderProcessTerminated(CefRefPtr<CefBrowser> browser
                                                    int error_code,
                                                    const CefString& error_string) {
     CEF_REQUIRE_UI_THREAD();
+    CFW_LOG_ERROR("CEF: Renderer terminated tab={} status={} code={} error={}",
+                  tab_id_, static_cast<int>(status), error_code, error_string.ToString());
     if (browser_side_router_) {
         browser_side_router_->OnRenderProcessTerminated(browser);
     }
@@ -587,9 +603,9 @@ bool initialize_cef() {
 
 #ifdef _WIN32
     std::filesystem::path root_cache_path;
-    if (const char* test_cache = std::getenv("CORONA_CEF_ROOT_CACHE"); test_cache && *test_cache) {
+    if (const wchar_t* test_cache = _wgetenv(L"CORONA_CEF_ROOT_CACHE"); test_cache && *test_cache) {
         root_cache_path = std::filesystem::absolute(test_cache);
-    } else if (const char* local_app_data = std::getenv("LOCALAPPDATA")) {
+    } else if (const wchar_t* local_app_data = _wgetenv(L"LOCALAPPDATA")) {
         root_cache_path = std::filesystem::path(local_app_data) / "CoronaEngine" / "CEFRoot";
     } else {
         root_cache_path = std::filesystem::current_path() / "cef_root";
@@ -604,7 +620,7 @@ bool initialize_cef() {
     }
     if (cache_ec) {
         CFW_LOG_WARNING("CEF: failed to prepare cache path {}: {}; falling back to local cache",
-                        cache_path.string(), cache_ec.message());
+                        Utils::path_to_utf8(cache_path), cache_ec.message());
         cache_ec.clear();
         root_cache_path = std::filesystem::current_path() / "cef_root";
         cache_path = root_cache_path / "Default";
@@ -612,26 +628,28 @@ bool initialize_cef() {
             std::filesystem::create_directories(cache_path, cache_ec);
         }
         if (cache_ec) {
-            CFW_LOG_WARNING("CEF: local cache path {} is unavailable: {}", cache_path.string(),
+            CFW_LOG_WARNING("CEF: local cache path {} is unavailable: {}", Utils::path_to_utf8(cache_path),
                             cache_ec.message());
             root_cache_path.clear();
             cache_path.clear();
         }
     }
     if (!cache_path.empty()) {
-        CefString(&settings.root_cache_path).FromString(root_cache_path.string());
-        CefString(&settings.cache_path).FromString(cache_path.string());
+        set_cef_path(settings.root_cache_path, root_cache_path);
+        set_cef_path(settings.cache_path, cache_path);
     }
 
-    wchar_t exe_path[MAX_PATH]{};
-    const DWORD exe_path_length = GetModuleFileNameW(nullptr, exe_path, MAX_PATH);
-    if (exe_path_length == 0 || exe_path_length >= MAX_PATH) {
+    const auto exe_path = Utils::executable_path();
+    if (exe_path.empty()) {
         CFW_LOG_ERROR("CEF: failed to resolve the current executable path");
         return false;
     }
-    CefString(&settings.browser_subprocess_path).FromWString(exe_path);
+    set_cef_path(settings.browser_subprocess_path, exe_path);
+    set_cef_path(settings.resources_dir_path, exe_path.parent_path());
+    set_cef_path(settings.locales_dir_path, exe_path.parent_path() / "locales");
     CFW_LOG_INFO("CEF: Using main executable for subprocesses: {}",
-                 std::filesystem::path(exe_path).string());
+                 Utils::path_to_utf8(exe_path));
+    CFW_LOG_INFO("CEF: Cache directory: {}", Utils::path_to_utf8(cache_path));
 
     CefString(&settings.user_agent).FromASCII("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
     settings.background_color = CefColorSetARGB(0, 0, 0, 0);
