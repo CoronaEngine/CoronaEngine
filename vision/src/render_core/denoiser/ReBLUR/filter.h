@@ -116,11 +116,13 @@ class Filter {
 public:
     Settings settings;
     void prepare(Device &device, uint2 size, uint layer_count = 1u);
+    void prepare_native(Device &device, uint2 size);
     void compile(Device &device);
     void reset() noexcept;
     [[nodiscard]] uint2 resolution() const noexcept { return size_; }
     [[nodiscard]] ByteBufferView guides() const { return guide_.view(); }
     [[nodiscard]] ByteBufferView history() const { return history_.view(); }
+    [[nodiscard]] FilterParam native_parameters(FilterParam param, uint layer);
     [[nodiscard]] CommandBatch dispatch(FilterParam param, uint layer = 0u);
 };
 }

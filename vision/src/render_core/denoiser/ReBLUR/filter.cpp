@@ -6,9 +6,24 @@ void Filter::reset() noexcept {
     for (auto &layer : layers_) layer.frame = InvalidUI32;
 }
 
+void Filter::prepare_native(Device &device, uint2 size) {
+    const bool resized = size_.x != size.x || size_.y != size.y;
+    if (resized || history_.size() != 0u) {
+        reset();
+        history_ = {};
+        diffuse_ = {}; specular_ = {};
+        fast_ = {}; tracking_ = {}; tiles_ = {};
+        for (auto &layer : layers_) { layer.guide = {}; layer.history = {}; }
+    }
+    size_ = size;
+    const auto guide_bytes = size_t(size.x) * size.y * sizeof(Guide);
+    if (guide_.size() != guide_bytes)
+        guide_ = device.create_byte_buffer(guide_bytes, "REBLUR current geometry SOA");
+}
+
 void Filter::prepare(Device &device, uint2 size, uint layer_count) {
     const uint n = size.x * size.y;
-    if (size_.x != size.x || size_.y != size.y) {
+    if (size_.x != size.x || size_.y != size.y || history_.size() != size_t(n) * sizeof(TemporalData)) {
         size_ = size;
         reset();
         for (uint i = 0; i < 2; ++i) {
@@ -38,6 +53,15 @@ void Filter::compile(Device &device) {
     compile_spatial(device);
     compile_stabilization(device);
     reset();
+}
+
+FilterParam Filter::native_parameters(FilterParam p, uint layer) {
+    auto &state = layers_[layer];
+    p.size = size_;
+    p.history_valid &= state.frame != InvalidUI32 && state.frame + 1u == p.frame;
+    p.guide = guide_.descriptor();
+    state.frame = p.frame;
+    return p;
 }
 
 CommandBatch Filter::dispatch(FilterParam p, uint layer) {

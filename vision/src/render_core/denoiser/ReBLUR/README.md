@@ -1,8 +1,63 @@
 # REBLUR shader implementation
 
-This plugin implements full-resolution RGB diffuse/specular REBLUR in the same
-`Kernel`, `OC_PARAM_STRUCT`, `device.compile` and `CommandBatch` shader API as PT
-and SVGF. Select it explicitly; the existing SVGF and SSAT defaults are unchanged.
+This plugin provides full-resolution RGB diffuse/specular REBLUR. When built
+with `VISION_REBLUR_NATIVE_NRD`, selecting REBLUR uses the Ocarina C++ EDSL
+translation of NRD 4.14.3 by default. The adapter prepares NRD inputs and remodulates its
+outputs; it does not add receiver/material/path identity rejection to NRD.
+Material classification is zero, matching RTXPT's preparation pass. Each of the
+three stable-plane denoisers retains its own NRD history.
+
+The earlier 96-bit identity and exact-token shader experiments have been
+removed from the native path. Their DLL override and token shader deployment
+are no longer used. Native mode allocates current guides and NRD's pools,
+without allocating or compiling the legacy custom filter's histories/scratch.
+`REBLUR_NATIVE_NRD=1` explicitly selects the original HLSL validation reference;
+unset or `0` selects the new original-algorithm Ocarina C++ EDSL port.
+It implements the quality, full-resolution RGB diffuse/specular variant, including
+world-space specular Blur/PostBlur, original history repair and surface/virtual
+reprojection. GPU passes use native R8/RG8 UNORM, R16/RGBA16 float, R16/R32 uint,
+R32 float and RGB10A2 textures with hardware clamp sampling. NRD.dll remains the
+CPU settings/constants/resource scheduler; the EDSL path does not dispatch its
+HLSL shaders. Builds without native NRD retain the older custom filter. Existing
+SVGF and SSAT selections are unchanged.
+
+The same-input replay target is `corona_vision_reblur_replay`. Set
+`REBLUR_REPLAY_BACKEND=native` or `edsl` and use identical
+`REBLUR_REPLAY_WIDTH/HEIGHT` (defaults 1280/720). It uploads immutable inputs once,
+runs three independent histories with 64 warmup and 32 measured frames, and
+downloads outputs after measurement. `REBLUR_REPLAY_OUTPUT_DIR` optionally saves
+the final RGBA32F buffers. `tools/reblur_compare_replay.py` validates the input,
+settings and camera fingerprints before comparing per-pass GPU timings;
+`tools/reblur_compare_outputs.py` compares the saved outputs. A sum of pass queries
+is reported separately from a continuous GPU interval.
+
+`corona_vision_reblur_edsl_tests` checks typed resource behavior and compares eight
+frames across three layers at 1x1, 31x19 and 127x73, including a rotated camera,
+fractional motion and invalid guides. Format-store, matrix and sampler probes
+test the lower-level contracts separately. The numerical tolerance is fixed at
+`0.001 + 0.002 * abs(HLSL)` per component. Compiler floating-point differences can
+cross nearest-tap or history-footprint boundaries; the test reports those as
+failures, rather than treating equal algorithm structure as numerical equivalence.
+
+Validation on 2026-10-22 (RTX 3070 Ti, Vulkan) passes all 72 small-sequence
+comparisons and the full 96-frame 720p/1080p replay at that unchanged tolerance.
+Hit-distance outputs are bit identical; RGB retains small rounding differences
+within tolerance. The final three-layer continuous NRD GPU intervals are
+3.987/4.139 ms at 720p and 8.776/9.179 ms at 1080p (HLSL/EDSL), excluding
+Pack/Unpack. Complete filter intervals including conversion are 5.287/5.461 ms
+and 11.637/12.147 ms. Per-pass sums are recorded separately and must not replace
+these continuous measurements. Full evidence and reproduction commands are in
+`build/recordings/reblur-performance-20261021/optimization-20261021/final-report/`.
+
+The retained optimizations use hardware typed textures, dispatch-uniform resource
+indices, lazy read-only parameter loads and an NRD-only dynamic constant UBO,
+plus matched shared-memory layouts and selective HistoryFix unrolling. They
+preserve the resource ABI and filtering settings. Three explicit scalar rounding
+points retain Native's normalized-mean-before-square behavior in TA and TS;
+Slang's reassociation otherwise changed variance, history counters and subsequent
+frames. The native reference also serializes its reset clear dispatches to prevent
+late clears from overwriting the first frame. Diagnostic chronology and moment
+probes used to establish these causes have been removed.
 
 In the editor, select **Vision PT** or **Vision ReSTIR**, choose **REBLUR** in
 the **降噪类型** menu, and check **降噪**. The main viewport and detached camera
@@ -68,6 +123,11 @@ scattering segments, following the pinned RTXPT convention.
 
 ## Stages and reference
 
+The native backend dispatches the original NRD stage descriptions without
+changing their shader arithmetic, sampling budgets or filtering rules. The
+translation details and historical evaluations below describe the legacy
+custom implementation unless explicitly labeled native NRD.
+
 The stage order is ClassifyAndPack, optional HitDistReconstruction, PrePass,
 TemporalAccumulation, HistoryFix, Blur, PostBlur and TemporalStabilization.
 The final stage also stores the post-blur history, updates geometry and
@@ -90,25 +150,41 @@ units; only the internal filter uses NRD normalized hit distances and YCoCg.
 
 | Setting | Default |
 | --- | ---: |
-| max_history | 30 |
+| max_history | 50 |
 | fast_history | 6 |
-| diffuse_prepass | 30 |
-| specular_prepass | 50 |
+| history_fix_frames / history_fix_stride | 3 / 14 |
+| diffuse_prepass | 15 |
+| specular_prepass | 40 |
+| min_radius | 1 |
 | max_radius | 30 |
-| stabilization | 1 |
+| lobe_fraction / roughness_fraction | 0.15 / 0.15 |
+| plane_sensitivity / min_hit_weight | 0.02 / 0.1 |
+| stabilization | 63/64 |
+| antilag_sigma / antilag_sensitivity | 4 / 3 |
 | anti_firefly | true |
+| reconstruction | AREA_5X5 |
 
-Checkerboard is OFF. Reconstruction defaults to OFF because producers provide
-lobe distances and missing supported lobes receive independent guide rays.
-The internal filter also implements 3x3 and 5x5 reconstruction. SH/SG, occlusion,
+These defaults match RTXPT's `NrdConfig::getDefaultREBLURSettings()` preset.
+The public lobe fraction is squared at dispatch, matching NRD's constant setup.
+Checkerboard is OFF. Producers provide lobe distances and independent guide rays
+for missing supported lobes; 5x5 reconstruction is enabled by the matched preset.
+The internal filter also implements OFF and 3x3 reconstruction. SH/SG, occlusion,
 spectral rendering, deforming-object motion and dynamic resolution upsampling
 are outside this RGB variant. Reduced spatial radii trade noise reduction for
 detail; default settings require scene-level assessment for glossy reflections.
-History limits are frame counts; this variant does not adapt settings to measured
-frame duration. Legacy per-layer DirectIndirect diagnostic dumps do not expose
+History limits are frame counts. Antilag sensitivity and stabilization clipping
+use NRD's `max(33.333 / frame_delta_ms, 1)` frame-rate scale. Legacy per-layer
+DirectIndirect diagnostic dumps do not expose
 REBLUR's separate filtered lobe buffers; the evaluation below reads final PFMs.
 
 ## Validation
+
+The native-only test mode is `REBLUR_TEST_BACKEND=native`. It checks guide-only
+allocation, switching storage modes, constants, independent layers, resize,
+invalid-pixel passthrough, HDR and finite outputs. It does not impose the removed
+full 96-bit identity contract on NRD. Numerical tolerances are unchanged; the
+previously observed constant-signal precision failure is reported separately
+from performance results, and later cases still run after an assertion fails.
 
 `VisionReblurTests` executes the actual filter shaders and imported PT/ReSTIR
 scenes. It covers color and distance packing, colored lobe ownership, constant

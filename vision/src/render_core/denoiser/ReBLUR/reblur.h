@@ -9,6 +9,10 @@
 #include "base/denoiser.h"
 #include "params.h"
 #include "filter.h"
+#ifdef VISION_REBLUR_NATIVE_NRD
+#include "native_nrd.h"
+#include "edsl_nrd.h"
+#endif
 
 namespace vision ::inline reblur {
 
@@ -20,6 +24,7 @@ struct GuideParam {
     BufferDesc<float2> motion;
     BufferDesc<> output;
     BufferDesc<float4> diffuse, specular;
+    uint2 size{};
     uint layered{}, stable{}, frame{};
 };
 struct PublishParam {
@@ -27,13 +32,18 @@ struct PublishParam {
     BufferDesc<RadType4> direct, indirect;
 };
 }
-OC_PARAM_STRUCT(vision::reblur, GuideParam, visibility, planes, surfaces, extensions, motion, output, diffuse, specular, layered, stable, frame) {};
+OC_PARAM_STRUCT(vision::reblur, GuideParam, visibility, planes, surfaces, extensions, motion, output, diffuse, specular, size, layered, stable, frame) {};
 OC_PARAM_STRUCT(vision::reblur, PublishParam, diffuse, specular, bypass, direct, indirect) {};
 
 namespace vision::reblur {
 
 class ReBLUR : public Denoiser {
     SP<Filter> filter_{make_shared<Filter>()};
+#ifdef VISION_REBLUR_NATIVE_NRD
+    SP<NativeReblur> native_;
+    SP<EdslReblur> edsl_;
+    NativeCameraParams native_camera_;
+#endif
     Settings scene_settings_;
     string settings_override_;
     SP<Denoiser> coverage_;
@@ -58,7 +68,11 @@ public:
     [[nodiscard]] bool has_prepared_resources() const noexcept override { return filter_->resolution().x != 0u; }
     [[nodiscard]] CommandBatch dispatch(RealTimeDenoiseInput &input) noexcept override;
     void render_sub_UI(Widgets *widgets) noexcept override;
+#ifdef VISION_REBLUR_NATIVE_NRD
+    VS_HOTFIX_MAKE_RESTORE(Denoiser, filter_, native_, edsl_, native_camera_, scene_settings_, settings_override_, coverage_, enabled_, frame_, fov_, current_raster_, previous_raster_, prepare_guides_, publish_)
+#else
     VS_HOTFIX_MAKE_RESTORE(Denoiser, filter_, scene_settings_, settings_override_, coverage_, enabled_, frame_, fov_, current_raster_, previous_raster_, prepare_guides_, publish_)
+#endif
     [[nodiscard]] string_view impl_type() const noexcept override { return "ReBLUR"; }
     [[nodiscard]] string_view category() const noexcept override { return "denoiser"; }
     [[nodiscard]] bool requires_lobe_signals() const noexcept override { return true; }
