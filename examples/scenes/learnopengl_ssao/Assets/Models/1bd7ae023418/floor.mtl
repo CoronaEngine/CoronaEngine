@@ -1,6 +1,0 @@
-newmtl ssao_floor
-Ka 0.5 0.5 0.5
-Kd 0.5 0.5 0.5
-Ks 0.0 0.0 0.0
-Ns 8.0
-
