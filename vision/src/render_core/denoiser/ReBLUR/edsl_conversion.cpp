@@ -15,9 +15,12 @@ PassShader compile_pack(Device &device) {
         $if(any(pixel >= p.external.size)) { $return(); };
         Uint index = pixel.y * p.external.size.x + pixel.x;
         Int2 position = make_int2(pixel);
-        auto guides = p.external.guide.soa_view_var<Guide>();
-        Float4 geometry = guides.position.read(index);
-        Uint4 identity = guides.identity.read(index);
+        // Match NativeReblurPack.hlsl's five fixed 16-byte SOA planes.
+        // The main pixel guard and guide allocation make these loads in bounds.
+        Ulong field_bytes = p.external.size.x.cast<ulong>() * p.external.size.y.cast<ulong>() * 16ull;
+        Ulong element_offset = index.cast<ulong>() * 16ull;
+        Float4 geometry = call<float4>("oc_nrd_byte_load_float4_aligned16", p.external.guide, element_offset);
+        Uint4 identity = call<uint4>("oc_nrd_byte_load_uint4_aligned16", p.external.guide, field_bytes + element_offset);
         auto c = p.constants;
 
         Image<float4, Format::RGBA16Float> diffuse_output{p.outputs.t0};
@@ -36,11 +39,11 @@ PassShader compile_pack(Device &device) {
             $return();
         };
 
-        Float4 normal_roughness = guides.normal_roughness.read(index);
-        Float4 diffuse_factor = guides.diffuse_factor.read(index);
-        Float4 specular_factor = guides.specular_factor.read(index);
-        Float4 diffuse = p.external.raw_diffuse.read(index);
-        Float4 specular = p.external.raw_specular.read(index);
+        Float4 normal_roughness = call<float4>("oc_nrd_byte_load_float4_aligned16", p.external.guide, field_bytes * 2ull + element_offset);
+        Float4 diffuse_factor = call<float4>("oc_nrd_byte_load_float4_aligned16", p.external.guide, field_bytes * 3ull + element_offset);
+        Float4 specular_factor = call<float4>("oc_nrd_byte_load_float4_aligned16", p.external.guide, field_bytes * 4ull + element_offset);
+        Float4 diffuse = call<float4>("oc_nrd_buffer_load_float4_aligned16", p.external.raw_diffuse, index.cast<ulong>());
+        Float4 specular = call<float4>("oc_nrd_buffer_load_float4_aligned16", p.external.raw_specular, index.cast<ulong>());
         diffuse = make_float4(diffuse.xyz() / max(diffuse_factor.xyz(), make_float3(1e-3f)), diffuse.w);
         specular = make_float4(specular.xyz() / max(specular_factor.xyz(), make_float3(1e-3f)), specular.w);
         // Validate before saturation can turn an infinite hit into a valid one.

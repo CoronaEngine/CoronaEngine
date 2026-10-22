@@ -21,7 +21,8 @@ PassShader compile_history_fix(Device &device) {
         Uint2 groups = (make_uint2(c.gRectSize) + make_uint2(7u, 15u)) / make_uint2(8u, 16u);
         Int2 local = make_int2(thread_idx().xy());
         Int2 pixel = make_int2((groups - 1u - block_idx().xy()) * make_uint2(8u, 16u)) + local;
-        Float is_sky = tiles.read(pixel >> 4);
+        // The padded 8x16 dispatch still fits the ceil(rect / 16) tile grid.
+        Float is_sky = tiles.read_in_bounds(pixel >> 4);
 
         // BORDER=2, 12x20 footprint, matching the three upstream shared arrays.
         SharedArray<float, 240> cached_diff_luma;
@@ -29,22 +30,25 @@ PassShader compile_history_fix(Device &device) {
         SharedArray<float2, 240> cached_frames;
         Uint lane = thread_idx().y * 8u + thread_idx().x;
         $if(is_sky == 0.f) {
-            $for(entry, lane, 240u, 128u) {
-                Int2 source = clamp(pixel - local - 2 + make_int2(entry % 12u, entry / 12u), make_int2(0), c.gRectSizeMinusOne);
-                Float2 frames = UnpackData1(data1.read_in_bounds(source));
-                Float4 entry_value = make_float4(in_diffuse_fast.read_in_bounds(source), in_specular_fast.read_in_bounds(source), frames);
-                cached_diff_luma.write(entry, entry_value.x);
-                cached_spec_luma.write(entry, entry_value.y);
-                cached_frames.write(entry, entry_value.zw());
-            };
+            for (uint iteration = 0u; iteration != 2u; ++iteration) {
+                Uint entry = lane + iteration * 128u;
+                $if(entry < 240u) {
+                    Int2 source = clamp(pixel - local - 2 + make_int2(entry % 12u, entry / 12u), make_int2(0), c.gRectSizeMinusOne);
+                    Float2 frames = UnpackData1(data1.read_in_bounds(source));
+                    Float4 entry_value = make_float4(in_diffuse_fast.read_in_bounds(source), in_specular_fast.read_in_bounds(source), frames);
+                    cached_diff_luma.write(entry, entry_value.x);
+                    cached_spec_luma.write(entry, entry_value.y);
+                    cached_frames.write(entry, entry_value.zw());
+                };
+            }
         };
         call("GroupMemoryBarrierWithGroupSync");
         $if(is_sky != 0.f || any(pixel > c.gRectSizeMinusOne)) { $return(); };
-        Float z = UnpackViewZ(c, depth.read(pixel));
+        Float z = UnpackViewZ(c, depth.read_in_bounds(pixel));
         $if(z > c.gDenoisingRange) { $return(); };
 
         Float material;
-        Float4 nr = NRD_FrontEnd_UnpackNormalAndRoughness(normals.read(pixel), material);
+        Float4 nr = NRD_FrontEnd_UnpackNormalAndRoughness(normals.read_in_bounds(pixel), material);
         Float3 n = nr.xyz();
         Float roughness = nr.w;
         Float frustum = GetFrustumSize(c.gMinRectDimMulUnproject, c.gOrthoMode, z);
@@ -81,7 +85,7 @@ PassShader compile_history_fix(Device &device) {
             Float magic = specular ? GetSpecMagicCurve(roughness) : Float{1.f};
             Float lobe_stride = specular ? stride.y * Lerp(.5f, 1.f, magic) : Float{stride.x};
             lobe_stride = floor(lobe_stride);
-            Float4 signal = input.read(pixel);
+            Float4 signal = input.read_in_bounds(pixel);
             $if(lobe_stride != 0.f) {
                 Int stride_i = (lobe_stride + .5f).cast<int>();
                 Float non_linear = 1.f / (1.f + accum);

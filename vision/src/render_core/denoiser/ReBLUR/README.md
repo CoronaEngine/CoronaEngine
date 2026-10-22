@@ -39,15 +39,65 @@ test the lower-level contracts separately. The numerical tolerance is fixed at
 cross nearest-tap or history-footprint boundaries; the test reports those as
 failures, rather than treating equal algorithm structure as numerical equivalence.
 
-Validation on 2026-10-22 (RTX 3070 Ti, Vulkan) passes all 72 small-sequence
-comparisons and the full 96-frame 720p/1080p replay at that unchanged tolerance.
-Hit-distance outputs are bit identical; RGB retains small rounding differences
-within tolerance. The final three-layer continuous NRD GPU intervals are
-3.987/4.139 ms at 720p and 8.776/9.179 ms at 1080p (HLSL/EDSL), excluding
-Pack/Unpack. Complete filter intervals including conversion are 5.287/5.461 ms
-and 11.637/12.147 ms. Per-pass sums are recorded separately and must not replace
-these continuous measurements. Full evidence and reproduction commands are in
-`build/recordings/reblur-performance-20261021/optimization-20261021/final-report/`.
+Validation on 2026-10-22 (RTX 3070 Ti, Vulkan) passes the original stress suite,
+all 72 small-sequence comparisons, and the 96-frame 720p/1080p replay at unchanged
+tolerance. All 28 final captures match input/settings/camera fingerprints; six
+full-resolution outputs per capture are byte-identical within each version across
+modes/repeats. Native-to-EDSL comparisons have zero failed components; hit-distance
+outputs are bit identical. The canonical CLion engine build and default-EDSL
+headless 720p run also pass, with finite RGB and successful GPU/process cleanup.
+
+Pack now uses Native's five fixed 16-byte Guide planes and seven aligned vector
+loads. Generic buffer reads and Unpack are unchanged. HistoryFix removes only
+proven-in-bounds dimension reads and emits its original 240-entry shared preload
+in two static stages. Thread ownership, values, order, barrier, filtering math,
+history steps and all four normalized-mean rounding chains remain unchanged.
+Driver-reported HF registers fall from 72 to 64.
+
+All timings below are GPU milliseconds summed over three layers. Each EDSL
+version has two complete 32-frame repeats (720p ABBA, 1080p BAAB); HLSL has one
+fresh 32-frame control. Every run uses 64 warmup frames and 250 ms pauses outside
+the GPU queries. No samples are discarded. HLSL controls run separately, so small
+differences and tails should not be generalized beyond this replay.
+
+Per-stage/query-sum **means** (Pack/Unpack are format conversion):
+
+| Stage | 720p HLSL | 720p EDSL | 1080p HLSL | 1080p EDSL |
+|---|---:|---:|---:|---:|
+| Pack | 0.631 | 0.638 | 1.466 | 1.480 |
+| ClassifyTiles | 0.024 | 0.031 | 0.045 | 0.050 |
+| HitDistReconstruction5x5 | 0.429 | 0.428 | 0.944 | 0.937 |
+| PrePass | 0.670 | 0.660 | 1.542 | 1.443 |
+| TemporalAccumulation | 0.816 | 0.879 | 1.865 | 1.899 |
+| HistoryFix | 0.644 | 0.655 | 1.421 | 1.458 |
+| Blur | 0.633 | 0.617 | 1.297 | 1.336 |
+| PostBlur | 0.548 | 0.601 | 1.413 | 1.377 |
+| TemporalStabilization | 0.282 | 0.354 | 0.669 | 0.759 |
+| Unpack | 0.680 | 0.611 | 1.362 | 1.352 |
+| Pack_Unpack_query_sum | 1.311 | 1.249 | 2.828 | 2.832 |
+| NRD_8_pass_query_sum | 4.046 | 4.225 | 9.195 | 9.258 |
+
+Continuous interval **means** use aligned BOTTOM_OF_PIPE boundaries. These are
+independent measurements, not sums of individual stage queries:
+
+| Size / interval | HLSL | Previous EDSL | Retained EDSL |
+|---|---:|---:|---:|
+| 720p pure NRD | 4.107 | 4.199 | 4.203 |
+| 720p filter including conversion | 5.339 | 5.604 | 5.455 |
+| 1080p pure NRD | 8.994 | 9.296 | 9.188 |
+| 1080p filter including conversion | 11.837 | 12.401 | 12.176 |
+
+Pack mean decreases 14.00%/11.34% at 720p/1080p, with both reversed-order pairs
+faster. HistoryFix p50 decreases 3.65%/3.74%; its mean changes +0.34%/-1.47% and
+pair directions are mixed, so a repeatable HF mean-speedup is not established.
+Its 1080p p95 increases 15.52%; tail noise remains. Complete-filter means decrease
+2.65%/1.82%, with both pairs faster. Pure-NRD means change +0.09%/-1.16%; the
+final EDSL/HLSL mean gaps are 2.35%/2.15%. Mature-history skipping and local-window
+unrolling were not retained.
+Reproduction commands, all per-frame mean/p50/p95 data, source/binary hashes,
+strict outputs and rejected experiments are in
+`build/recordings/reblur-pack-hf-opt-20261022/`. The retained result is
+`final-retained-reports/summary.md`; earlier candidate reports are historical.
 
 The broader `corona_vision_reblur_tests` constant/HDR regressions also pass.
 Their first differing stage was HistoryFix: Slang reassociated the normalized
