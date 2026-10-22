@@ -67,6 +67,25 @@ void scene_folder_detection_requires_versioned_scene_ini() {
     expect(layout->scene_name == "Portable", "scene name should be parsed");
 }
 
+void unsupported_archives_are_not_detected_or_modified() {
+    TempDir temp;
+    write_text(temp.path / "project.ini", "[Project]\nname = Old\n");
+    write_text(temp.path / "default.scene", "[base]\nname = Old\n");
+    expect(!detect_scene_folder(temp.path), "old directory must not be recognized");
+    expect(!detect_scene_folder(temp.path / "project.ini"), "project.ini must be rejected");
+    expect(!detect_scene_folder(temp.path / "default.scene"), ".scene must be rejected");
+    expect(!fs::exists(temp.path / "scene.ini"), "detection must not migrate");
+    write_text(temp.path / "scene.ini", "[format]\ntype = corona_scene_folder\nversion = 2\n");
+    expect(!detect_scene_folder(temp.path), "unsupported version must be rejected");
+}
+
+void bundled_example_is_a_complete_single_scene() {
+    const auto scene = fs::path(CORONA_SOURCE_DIR) / "examples/scenes/learnopengl_ssao";
+    expect(detect_scene_folder(scene).has_value(), "example must use scene.ini");
+    expect(validate_portable_scene(scene).ok(), "example resources and manifest must validate");
+    expect(!fs::exists(scene / "project.ini"), "example must not contain an old index");
+}
+
 void glb_import_is_content_addressed_and_manifest_validates() {
     TempDir temp;
     const auto source = temp.path / "source" / "chair.glb";
@@ -136,85 +155,6 @@ void missing_obj_dependency_fails_without_creating_bundle() {
            "failed import should not leave a bundle");
 }
 
-void legacy_project_migrates_to_transactional_scene_folder() {
-    TempDir temp;
-    const auto legacy = temp.path / "legacy";
-    const auto target = temp.path / "Portable";
-    write_text(legacy / "project.ini",
-               "[Project]\nname = Legacy\nmode = 3d\nentrance_scene = Scene/default.scene\n");
-    write_text(legacy / "Scene" / "default.scene",
-               "[base]\nname = Migrated\n"
-               "[sun]\nsun_direction = 1, 2, 3\nenabled = true\n"
-               "[actors]\n"
-               "chair.actor_type = model\n"
-               "chair.name = Chair\n"
-               "chair.route = Resource/chair.glb\n"
-               "chair.material.texture = Resource/chair.png\n"
-               "chair.geometry.position = 1, 2, 3\n"
-               "[scripts]\npath = Scripts/scene_script.py\n");
-    write_text(legacy / "Resource" / "chair.glb", "model");
-    write_text(legacy / "Resource" / "chair.png", "texture");
-    write_text(legacy / "Scripts" / "scene_script.py", "print('portable')\n");
-    const auto original_scene = sha256_file(legacy / "Scene" / "default.scene");
-
-    LegacyMigrationRequest request{legacy / "project.ini", target, "Portable"};
-    const auto result = migrate_legacy_scene(request);
-    expect(result.ok(), "legacy project migration should succeed");
-    expect(result.root == target, "migration should return the target root");
-    expect(fs::is_regular_file(target / "scene.ini"), "migration should write scene.ini");
-    expect(fs::is_regular_file(target / "assets.manifest.json"), "migration should write manifest");
-    expect(detect_scene_folder(target).has_value(), "migrated target should be a portable scene");
-    expect(sha256_file(legacy / "Scene" / "default.scene") == original_scene,
-           "migration should not modify the legacy scene");
-
-    auto ini = std::ifstream(target / "scene.ini");
-    const std::string text((std::istreambuf_iterator<char>(ini)), std::istreambuf_iterator<char>());
-    expect(text.find("\nmode =") == std::string::npos, "portable scene must not persist mode");
-    expect(text.find("entrance_scene") == std::string::npos,
-           "portable scene must not persist entrance_scene");
-    expect(text.find("chair.route = Assets/Models/") != std::string::npos,
-           "actor route should be rewritten into Assets");
-    expect(text.find("chair.material.texture = Assets/Images/") != std::string::npos,
-           "actor material texture should be rewritten into Assets");
-    expect(text.find("path = Assets/Scripts/") != std::string::npos,
-           "script route should be rewritten into Assets");
-}
-
-void legacy_template_script_placeholder_is_ignored_when_missing() {
-    TempDir temp;
-    const auto legacy = temp.path / "legacy";
-    const auto target = temp.path / "Portable";
-    write_text(legacy / "project.ini",
-               "[Project]\nname = Legacy\nentrance_scene = Scene/default.scene\n");
-    write_text(legacy / "Scene" / "default.scene",
-               "[base]\nname = Legacy\n"
-               "[actors]\n"
-               "[scripts]\npath = Scripts/scene_script.py\n");
-
-    const auto result = migrate_legacy_scene({legacy / "project.ini", target, "Portable"});
-    expect(result.ok(), "missing legacy template script should not block migration");
-    auto ini = std::ifstream(target / "scene.ini");
-    const std::string text((std::istreambuf_iterator<char>(ini)), std::istreambuf_iterator<char>());
-    expect(text.find("path = Assets/Scripts/") == std::string::npos,
-           "missing legacy template script must not be copied into Assets");
-}
-
-void missing_legacy_asset_aborts_without_target_directory() {
-    TempDir temp;
-    const auto legacy = temp.path / "legacy";
-    const auto target = temp.path / "Portable";
-    write_text(legacy / "project.ini",
-               "[Project]\nname = Legacy\nentrance_scene = Scene/default.scene\n");
-    write_text(legacy / "Scene" / "default.scene",
-               "[base]\nname = Broken\n"
-               "[actors]\nchair.actor_type = model\nchair.route = Resource/missing.glb\n");
-
-    const auto result = migrate_legacy_scene({legacy / "project.ini", target, "Portable"});
-    expect(!result.ok(), "migration with a missing model should fail");
-    expect(!result.diagnostics.empty(), "migration failure should list diagnostics");
-    expect(!fs::exists(target), "failed migration should not leave a target directory");
-    expect(fs::is_regular_file(legacy / "project.ini"), "legacy source should remain intact");
-}
 
 void new_scene_folder_has_no_mode_and_an_empty_valid_manifest() {
     TempDir temp;
@@ -366,21 +306,6 @@ void actor_import_rewrites_model_path_into_portable_assets() {
     expect(store.validate_manifest().empty(), "actor manifest should validate");
 }
 
-void legacy_actor_model_path_is_resolved_beside_actor_before_project_root() {
-    TempDir temp;
-    const auto legacy = temp.path / "legacy";
-    const auto target = temp.path / "Portable";
-    write_text(legacy / "project.ini",
-               "[Project]\nname = Legacy\nentrance_scene = Scene/default.scene\n");
-    write_text(legacy / "Scene" / "default.scene",
-               "[base]\nname = Actor migration\n[actors]\n"
-               "chair.actor_type = actor\nchair.route = Actors/chair.actor\n");
-    write_text(legacy / "Actors" / "chair.actor", "[base]\nname = Chair\npath = models/chair.glb\n");
-    write_text(legacy / "Actors" / "models" / "chair.glb", "model");
-
-    const auto result = migrate_legacy_scene({legacy / "project.ini", target, "Portable"});
-    expect(result.ok(), "legacy actor model route should resolve relative to the actor descriptor");
-}
 
 void manifest_rejects_unlisted_but_existing_asset_route() {
     TempDir temp;
@@ -647,24 +572,6 @@ void generic_audio_import_uses_portable_audio_category() {
     expect(imported.main_route.find("Assets/Audio/") == 0, "audio route should use Assets/Audio");
 }
 
-void legacy_audio_actor_migrates_into_portable_audio_category() {
-    TempDir temp;
-    const auto legacy = temp.path / "legacy";
-    const auto target = temp.path / "portable";
-    write_text(legacy / "project.ini",
-               "[Project]\nentrance_scene = Scene/default.scene\n");
-    write_text(legacy / "Scene" / "default.scene",
-               "[base]\nname = Audio migration\n[actors]\n"
-               "music.actor_type = audio\nmusic.route = media/theme.wav\n");
-    write_text(legacy / "media" / "theme.wav", "audio");
-
-    const auto migrated = migrate_legacy_scene({legacy / "project.ini", target, ""});
-    expect(migrated.ok(), "legacy audio actor should migrate");
-    auto input = std::ifstream(target / "scene.ini");
-    const std::string saved((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
-    expect(saved.find("music.route = Assets/Audio/") != std::string::npos,
-           "migrated audio actor should use Assets/Audio");
-}
 
 void existing_bundle_directory_with_wrong_content_is_rejected() {
     TempDir temp;
@@ -680,23 +587,6 @@ void existing_bundle_directory_with_wrong_content_is_rejected() {
            "bundle directory mismatch should report bundle_collision");
 }
 
-void legacy_ini_sections_are_read_case_insensitively() {
-    TempDir temp;
-    const auto legacy = temp.path / "legacy";
-    const auto target = temp.path / "Portable";
-    write_text(legacy / "project.ini",
-               "[project]\nname = Legacy\nentrance_scene = Content/main.scene\n");
-    write_text(legacy / "Content" / "main.scene",
-               "[Base]\nname = Case migration\n[Actors]\n"
-               "chair.actor_type = model\nchair.route = Resource/chair.glb\n");
-    write_text(legacy / "Resource" / "chair.glb", "model");
-    const auto migrated = migrate_legacy_scene({legacy / "project.ini", target, ""});
-    expect(migrated.ok(), "legacy INI section names should be matched without case sensitivity");
-    auto input = std::ifstream(target / "scene.ini");
-    const std::string saved((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
-    expect(saved.find("chair.route = Assets/Models/") != std::string::npos,
-           "case-insensitive actors section should still migrate its model");
-}
 
 void fbx_import_archives_only_loader_declared_textures() {
     TempDir temp;
@@ -735,12 +625,11 @@ void usd_remote_dependency_is_rejected() {
 int main() {
     portable_route_validation_rejects_escape_and_absolute_paths();
     scene_folder_detection_requires_versioned_scene_ini();
+    unsupported_archives_are_not_detected_or_modified();
+    bundled_example_is_a_complete_single_scene();
     glb_import_is_content_addressed_and_manifest_validates();
     obj_import_copies_material_and_texture_dependencies();
     missing_obj_dependency_fails_without_creating_bundle();
-    legacy_project_migrates_to_transactional_scene_folder();
-    legacy_template_script_placeholder_is_ignored_when_missing();
-    missing_legacy_asset_aborts_without_target_directory();
     new_scene_folder_has_no_mode_and_an_empty_valid_manifest();
     reopening_asset_store_preserves_existing_manifest_bundles();
     corrupted_manifest_blocks_import_and_writeback();
@@ -751,7 +640,6 @@ int main() {
     obj_import_supports_multiple_material_libraries_on_one_line();
     unsupported_model_extension_is_rejected();
     actor_import_rewrites_model_path_into_portable_assets();
-    legacy_actor_model_path_is_resolved_beside_actor_before_project_root();
     manifest_rejects_unlisted_but_existing_asset_route();
     dae_import_collects_declared_external_texture_and_rejects_missing_one();
     dae_import_ignores_surface_image_id_references();
@@ -766,9 +654,7 @@ int main() {
     concurrent_section_updates_do_not_lose_each_other();
     cleanup_only_removes_unreferenced_bundles_and_supports_dry_run();
     generic_audio_import_uses_portable_audio_category();
-    legacy_audio_actor_migrates_into_portable_audio_category();
     existing_bundle_directory_with_wrong_content_is_rejected();
-    legacy_ini_sections_are_read_case_insensitively();
     fbx_import_archives_only_loader_declared_textures();
     usd_remote_dependency_is_rejected();
     std::cout << "All scene folder tests passed\n";

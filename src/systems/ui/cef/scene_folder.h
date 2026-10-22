@@ -117,22 +117,4 @@ struct CleanupResult {
     const std::filesystem::path& scene_root,
     bool dry_run = true);
 
-struct LegacyMigrationRequest {
-    std::filesystem::path source_path;
-    std::filesystem::path target_root;
-    std::string scene_name;
-};
-
-struct LegacyMigrationResult {
-    std::filesystem::path root;
-    std::vector<Diagnostic> diagnostics;
-
-    [[nodiscard]] bool ok() const noexcept {
-        return diagnostics.empty() && !root.empty();
-    }
-};
-
-[[nodiscard]] LegacyMigrationResult migrate_legacy_scene(
-    const LegacyMigrationRequest& request);
-
 }  // namespace Corona::Systems::UI::SceneFolders

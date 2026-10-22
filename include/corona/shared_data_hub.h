@@ -717,7 +717,7 @@ class SharedDataHub {
     resolve_actor_primary_transform_handle(std::uintptr_t actor_handle);
 
     // Runtime-only editor metadata keyed by native actor handle. Persisted state
-    // remains in .scene; this cache only bridges Python proxy actors to native
+    // remains in scene.ini; this cache only bridges Python proxy actors to native
     // systems such as OpticsSystem/ExternalVisionSceneAdapter.
     void set_actor_guid(std::uintptr_t actor_handle, std::string actor_guid);
     [[nodiscard]] std::string actor_guid(std::uintptr_t actor_handle) const;

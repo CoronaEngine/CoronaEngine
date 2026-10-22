@@ -1,25 +1,11 @@
 # LearnOpenGL SSAO native scene
 
-Native CoronaEngine scene example based on the LearnOpenGL Advanced Lighting SSAO chapter.
+Open this scene directory, or its `scene.ini`, from the editor launcher.
+A project is one scene; no project index or scene list is stored.
 
-Open this project file from the editor launcher:
-
-```text
-examples/scenes/learnopengl_ssao/project.ini
-```
-
-The project uses the same structure as runtime editor projects:
-
-```text
-project.ini
-Scene/default.scene
-Resource/floor.obj
-Resource/nanosuit/nanosuit.obj
-```
+- `scene.ini`: scene metadata, actors, camera, environment.
+- `assets.manifest.json`: content hashes and model dependencies.
+- `Assets/Models/`: self-contained model bundles, safe to move with this directory.
 
 The nanosuit asset is mirrored from:
-
-```text
 https://github.com/JoeyDeVries/LearnOpenGL/tree/master/resources/objects/nanosuit
-```
-

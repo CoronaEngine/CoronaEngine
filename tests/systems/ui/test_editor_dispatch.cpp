@@ -454,7 +454,7 @@ void test_queued_python_callback_is_handed_off_when_owner_starts_waiting() {
     };
     set_editor_dispatch_hooks(hooks);
 
-    // Kitchen import occupies the owner while Python queues list_routes. The
+    // Kitchen import occupies the owner while Python queues get_snapshot. The
     // owner then asks Python to parse the imported scene before pumping CEF.
     std::atomic<int> writes{0};
     EditorDispatchReport report;

@@ -1,0 +1,232 @@
+{
+  "format": "corona_scene_assets",
+  "version": 1,
+  "bundles": [
+    {
+      "type": "model",
+      "sha256": "1bd7ae023418e7925093085ec4753be74787f162986004e6caa3d0b6cd422ced",
+      "main": "Assets/Models/1bd7ae023418/floor.obj",
+      "files": [
+        {
+          "path": "Assets/Models/1bd7ae023418/floor.mtl",
+          "sha256": "629ffb51eacfdaaf7994e31d7d3e0518192274d2fc4308bc95e68eba111eefc5",
+          "size": 77
+        },
+        {
+          "path": "Assets/Models/1bd7ae023418/floor.obj",
+          "sha256": "9239c793067360d7870bb361de338328f91cf0d7c7986bf4e107b6a60adc4364",
+          "size": 215
+        }
+      ],
+      "dependencies": [
+        "Assets/Models/1bd7ae023418/floor.mtl"
+      ]
+    },
+    {
+      "type": "model",
+      "sha256": "c98448433ea8f6ad7c27365865f45fcdd8104ab4b00fa130272769ed44138bc2",
+      "main": "Assets/Models/c98448433ea8/nanosuit.obj",
+      "files": [
+        {
+          "path": "Assets/Models/c98448433ea8/arm_dif.png",
+          "sha256": "46c8d2f3bc12651d2491b55a35468608fb072a8fd33ecd86076532ce53ea4a64",
+          "size": 575246
+        },
+        {
+          "path": "Assets/Models/c98448433ea8/arm_showroom_ddn.png",
+          "sha256": "93331ad2c3d64b0aef5aea4d8ccbada69b7179e34e321dcc8fe9e794b204b981",
+          "size": 866022
+        },
+        {
+          "path": "Assets/Models/c98448433ea8/arm_showroom_refl.png",
+          "sha256": "bf33d9634b6dd7a9e48b889449bc4b6a5346856c4c3d812b57acdd703f4beb4a",
+          "size": 395663
+        },
+        {
+          "path": "Assets/Models/c98448433ea8/arm_showroom_spec.png",
+          "sha256": "d0378468a8cf19249b8813ddc656dd5c955fb0439516419464a14d44e3716f7a",
+          "size": 1667518
+        },
+        {
+          "path": "Assets/Models/c98448433ea8/back.jpg",
+          "sha256": "1ff71e7e538cebb1651a799bcbf9c1ad6d271877e96180f619d5a71affb6cf54",
+          "size": 52123
+        },
+        {
+          "path": "Assets/Models/c98448433ea8/body_dif.png",
+          "sha256": "3ddaaec438a013310a5905a3c57deeecbd308ea916b893e81a9a9588576e7955",
+          "size": 636275
+        },
+        {
+          "path": "Assets/Models/c98448433ea8/body_showroom_ddn.png",
+          "sha256": "1d81ba4a2b4f7c99e0f34af0dfd02f3b668c5b7c018994b2b50c3821b30369ec",
+          "size": 859857
+        },
+        {
+          "path": "Assets/Models/c98448433ea8/body_showroom_refl.png",
+          "sha256": "a60795d025f03eaf8b9029884ae9cd3f823f8f585a4868fabe3b400fa18c32d8",
+          "size": 92473
+        },
+        {
+          "path": "Assets/Models/c98448433ea8/body_showroom_spec.png",
+          "sha256": "fff8a858f7f083b7ef878f2dbb93433078a27f1c69c99b0d7a4569dc924c5152",
+          "size": 1767209
+        },
+        {
+          "path": "Assets/Models/c98448433ea8/cell_arm_alpha.png",
+          "sha256": "6dd73e53134f67265fea4b22c5e7752787d1cbcd88408f298b4c8fb2eed69893",
+          "size": 102388
+        },
+        {
+          "path": "Assets/Models/c98448433ea8/cell_body_alpha.png",
+          "sha256": "0bc9692cdce87d4ff07ce42e1ee6c76ab2050a8aac78367f6616134a558677dc",
+          "size": 88415
+        },
+        {
+          "path": "Assets/Models/c98448433ea8/cell_ddn.png",
+          "sha256": "d4bc273b207c693dd0daf929ceb626b43a260e77874b3bfc20725fb35846f16f",
+          "size": 283835
+        },
+        {
+          "path": "Assets/Models/c98448433ea8/cell_hand_alpha.png",
+          "sha256": "1cfe15e67dcc1db5fdd95c31f3f167764309c466fda6c3e5077a25621b340de3",
+          "size": 64561
+        },
+        {
+          "path": "Assets/Models/c98448433ea8/cell_helmet_alpha.png",
+          "sha256": "172ef1ab18453c22837f392398553fafba62c83adaf382ef0d9a6b66a313af45",
+          "size": 42938
+        },
+        {
+          "path": "Assets/Models/c98448433ea8/cell_leg_alpha.png",
+          "sha256": "f111cb37145e075d321404ef0df3a9af52f65cf21d25a5b7ad94dbd49d8c9484",
+          "size": 584147
+        },
+        {
+          "path": "Assets/Models/c98448433ea8/front.jpg",
+          "sha256": "06cb443d76c70580b240495bf7f9463f53ee79f738929fb24e65a76f0c97f80a",
+          "size": 53531
+        },
+        {
+          "path": "Assets/Models/c98448433ea8/glass_ddn.png",
+          "sha256": "8f8a4bc19e226f6d86bb55c20422559ab0e3c79e49343cb660ad4787685c889f",
+          "size": 5988
+        },
+        {
+          "path": "Assets/Models/c98448433ea8/glass_dif.png",
+          "sha256": "4867a780ae12c96b88af142376ac4a3f48ea1c96af355ed5a27c2d0f37c2d7e3",
+          "size": 1303
+        },
+        {
+          "path": "Assets/Models/c98448433ea8/glass_refl.png",
+          "sha256": "989f62e91d571e747f04d8dc45da1106c03b3b35d57a087570b28a224f9a7bf6",
+          "size": 3313
+        },
+        {
+          "path": "Assets/Models/c98448433ea8/hand_dif.png",
+          "sha256": "ecb785a88409b306e83f6fffe0db02b4b4ccf6df8a0607c33bdd72b69b1d6fba",
+          "size": 655217
+        },
+        {
+          "path": "Assets/Models/c98448433ea8/hand_showroom_ddn.png",
+          "sha256": "14f1700d73b77ccdf5eeffc2ba33dfc528c20ae860db484666a70b21aa73ab33",
+          "size": 999651
+        },
+        {
+          "path": "Assets/Models/c98448433ea8/hand_showroom_refl.png",
+          "sha256": "626d377f3694d227bca49f1d9564476be15fb279067d6c3f6accf2c169691586",
+          "size": 65175
+        },
+        {
+          "path": "Assets/Models/c98448433ea8/hand_showroom_spec.png",
+          "sha256": "95bdc3a73fc3fc072c63645ec175c4020b76ab7ccc9dbf0393ebe83cd2500d2c",
+          "size": 1741615
+        },
+        {
+          "path": "Assets/Models/c98448433ea8/helmet_diff.png",
+          "sha256": "6d9065bee53c6a0442de2372187c66d156fa0c71a685693adfcc933f6a61c798",
+          "size": 525264
+        },
+        {
+          "path": "Assets/Models/c98448433ea8/helmet_showroom_ddn.png",
+          "sha256": "554f3dff9e1e153187adc4a6e4416aea383d3a58b7a044dd42f162ecba7fa945",
+          "size": 746785
+        },
+        {
+          "path": "Assets/Models/c98448433ea8/helmet_showroom_refl.png",
+          "sha256": "47a7211c07180e0e355e29044b82d45113bceb0b69609976e59528e8acf2de0b",
+          "size": 56443
+        },
+        {
+          "path": "Assets/Models/c98448433ea8/helmet_showroom_spec.png",
+          "sha256": "3685093cef7c6459e33de00e339adee7d6789d0ed0adf390e81c377b41319d16",
+          "size": 1565316
+        },
+        {
+          "path": "Assets/Models/c98448433ea8/leg_dif.png",
+          "sha256": "5717f907963af1ce62600987393195748fd2b52138e77c1aec859f400e02db8d",
+          "size": 1179745
+        },
+        {
+          "path": "Assets/Models/c98448433ea8/leg_showroom_ddn.png",
+          "sha256": "ac3aa177776cefcdc86cbcba883fe67281a1388a37f2caac9914ad3cb2d91b80",
+          "size": 1370738
+        },
+        {
+          "path": "Assets/Models/c98448433ea8/leg_showroom_refl.png",
+          "sha256": "1633c7a2ca54ccb3ae826ef54d3f250a6123f7cf7808df15e5cfe9e076a89633",
+          "size": 74957
+        },
+        {
+          "path": "Assets/Models/c98448433ea8/leg_showroom_spec.png",
+          "sha256": "694028bb9ce6527c759b3ddaa78d719c33c4d6ac74c6befed6a07ec44ca06e8c",
+          "size": 1772341
+        },
+        {
+          "path": "Assets/Models/c98448433ea8/nanosuit.mtl",
+          "sha256": "cf12b2daff83483e183475de7a0d8260a7595e85cca42a8c5c6b6a117520e9c0",
+          "size": 1641
+        },
+        {
+          "path": "Assets/Models/c98448433ea8/nanosuit.obj",
+          "sha256": "69cf9493f76026490c92222192361d52a571671400349c69a99f22a4d7316d38",
+          "size": 1908459
+        }
+      ],
+      "dependencies": [
+        "Assets/Models/c98448433ea8/arm_dif.png",
+        "Assets/Models/c98448433ea8/arm_showroom_ddn.png",
+        "Assets/Models/c98448433ea8/arm_showroom_refl.png",
+        "Assets/Models/c98448433ea8/arm_showroom_spec.png",
+        "Assets/Models/c98448433ea8/back.jpg",
+        "Assets/Models/c98448433ea8/body_dif.png",
+        "Assets/Models/c98448433ea8/body_showroom_ddn.png",
+        "Assets/Models/c98448433ea8/body_showroom_refl.png",
+        "Assets/Models/c98448433ea8/body_showroom_spec.png",
+        "Assets/Models/c98448433ea8/cell_arm_alpha.png",
+        "Assets/Models/c98448433ea8/cell_body_alpha.png",
+        "Assets/Models/c98448433ea8/cell_ddn.png",
+        "Assets/Models/c98448433ea8/cell_hand_alpha.png",
+        "Assets/Models/c98448433ea8/cell_helmet_alpha.png",
+        "Assets/Models/c98448433ea8/cell_leg_alpha.png",
+        "Assets/Models/c98448433ea8/front.jpg",
+        "Assets/Models/c98448433ea8/glass_ddn.png",
+        "Assets/Models/c98448433ea8/glass_dif.png",
+        "Assets/Models/c98448433ea8/glass_refl.png",
+        "Assets/Models/c98448433ea8/hand_dif.png",
+        "Assets/Models/c98448433ea8/hand_showroom_ddn.png",
+        "Assets/Models/c98448433ea8/hand_showroom_refl.png",
+        "Assets/Models/c98448433ea8/hand_showroom_spec.png",
+        "Assets/Models/c98448433ea8/helmet_diff.png",
+        "Assets/Models/c98448433ea8/helmet_showroom_ddn.png",
+        "Assets/Models/c98448433ea8/helmet_showroom_refl.png",
+        "Assets/Models/c98448433ea8/helmet_showroom_spec.png",
+        "Assets/Models/c98448433ea8/leg_dif.png",
+        "Assets/Models/c98448433ea8/leg_showroom_ddn.png",
+        "Assets/Models/c98448433ea8/leg_showroom_refl.png",
+        "Assets/Models/c98448433ea8/leg_showroom_spec.png",
+        "Assets/Models/c98448433ea8/nanosuit.mtl"
+      ]
+    }
+  ]
+}
