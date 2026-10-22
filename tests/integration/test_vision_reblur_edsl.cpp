@@ -328,7 +328,7 @@ void check_native_equivalence(Device &device, Stream &stream) {
         if (!destination.parent_path().empty()) std::filesystem::create_directories(destination.parent_path());
         comparison_csv.open(destination);
         expect(bool(comparison_csv), "cannot open EDSL comparison CSV");
-        comparison_csv << "width,height,frame,layer,components,rmse,max_abs,max_relative,failed_components,first_pixel,camera_yaw,camera_tx,camera_ty,camera_tz\n"
+        comparison_csv << "width,height,frame,layer,components,rmse,max_abs,max_relative,failed_components,first_pixel,camera_yaw,camera_tx,camera_ty,camera_tz,anti_firefly\n"
                        << std::setprecision(std::numeric_limits<double>::max_digits10);
     }
     std::filesystem::path output_directory;
@@ -344,7 +344,7 @@ void check_native_equivalence(Device &device, Stream &stream) {
     };
     std::cout << std::setprecision(std::numeric_limits<double>::max_digits10);
     uint failures = 0;
-    for (uint2 size : {make_uint2(1u), make_uint2(31u, 19u), make_uint2(127u, 73u)}) {
+    for (uint anti_firefly : {1u, 0u}) for (uint2 size : {make_uint2(1u), make_uint2(31u, 19u), make_uint2(127u, 73u)}) {
         uint n = size.x * size.y;
         auto guide = device.create_byte_buffer(size_t(n) * sizeof(Guide));
         auto input_d = device.create_buffer<float4>(n), input_s = device.create_buffer<float4>(n);
@@ -370,6 +370,7 @@ void check_native_equivalence(Device &device, Stream &stream) {
         std::cout << "EDSL oracle camera " << size.x << 'x' << size.y << " yaw=" << yaw
                   << " view_translation=" << tx << ',' << ty << ',' << tz << '\n';
         Settings settings;
+        settings.anti_firefly = anti_firefly;
         FilterParam p; p.size = size; p.guide = guide.descriptor();
         p.raw_diffuse = input_d.descriptor(); p.raw_specular = input_s.descriptor();
         for (uint frame = 0u; frame != 8u; ++frame) for (uint layer = 0u; layer != 3u; ++layer) {
@@ -390,7 +391,7 @@ void check_native_equivalence(Device &device, Stream &stream) {
             }
             HostByteBuffer packed;
             DynamicBufferLayoutCodec<Guide>::encode(guides.data(), n, packed, {}, DynamicBufferLayout::SOA);
-            const std::string prefix = "s" + std::to_string(size.x) + "x" + std::to_string(size.y) +
+            const std::string prefix = "af" + std::to_string(anti_firefly) + "_s" + std::to_string(size.x) + "x" + std::to_string(size.y) +
                                        "_f" + std::to_string(frame) + "_l" + std::to_string(layer);
             if (frame == 0u) {
                 save_bytes(prefix + "_input_GuideSOA.bin", packed.data(), packed.size());
@@ -429,12 +430,13 @@ void check_native_equivalence(Device &device, Stream &stream) {
             }
             const double rmse = std::sqrt(squared_error / (double(n) * 8.0));
             std::cout << "EDSL oracle " << size.x << 'x' << size.y << " frame=" << frame << " layer=" << layer
+                      << " anti_firefly=" << anti_firefly
                       << " rmse=" << rmse << " max_abs=" << max_error << " max_relative=" << max_relative
                       << " failed_components=" << mismatch << " first_pixel=" << first << '\n';
             if (comparison_csv.is_open()) {
                 comparison_csv << size.x << ',' << size.y << ',' << frame << ',' << layer << ',' << size_t(n) * 8u
                                << ',' << rmse << ',' << max_error << ',' << max_relative << ',' << mismatch << ',' << first
-                               << ',' << yaw << ',' << tx << ',' << ty << ',' << tz << '\n';
+                               << ',' << yaw << ',' << tx << ',' << ty << ',' << tz << ',' << anti_firefly << '\n';
                 comparison_csv.flush();
                 expect(bool(comparison_csv), "cannot write EDSL comparison CSV");
             }

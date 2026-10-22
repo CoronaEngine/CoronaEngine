@@ -24,10 +24,13 @@ PassShader compile_history_fix(Device &device) {
         // The padded 8x16 dispatch still fits the ceil(rect / 16) tile grid.
         Float is_sky = tiles.read_in_bounds(pixel >> 4);
 
-        // BORDER=2, 12x20 footprint, matching the three upstream shared arrays.
-        SharedArray<float, 240> cached_diff_luma;
-        SharedArray<float, 240> cached_spec_luma;
+        // Frames keep NRD's BORDER=2 footprint. Immutable fast inputs can be
+        // shared across the 72-tap anti-firefly windows without changing order.
+        // Pitch 24 gives the 8x4 warp footprint distinct shared-memory banks.
+        SharedArray<float, 576> cached_diff_luma;
+        SharedArray<float, 576> cached_spec_luma;
         SharedArray<float2, 240> cached_frames;
+        auto luma_index = [](Int2 position) { return (position.y * 24 + position.x).cast<uint>(); };
         Uint lane = thread_idx().y * 8u + thread_idx().x;
         $if(is_sky == 0.f) {
             for (uint iteration = 0u; iteration != 2u; ++iteration) {
@@ -36,11 +39,33 @@ PassShader compile_history_fix(Device &device) {
                     Int2 source = clamp(pixel - local - 2 + make_int2(entry % 12u, entry / 12u), make_int2(0), c.gRectSizeMinusOne);
                     Float2 frames = UnpackData1(data1.read_in_bounds(source));
                     Float4 entry_value = make_float4(in_diffuse_fast.read_in_bounds(source), in_specular_fast.read_in_bounds(source), frames);
-                    cached_diff_luma.write(entry, entry_value.x);
-                    cached_spec_luma.write(entry, entry_value.y);
+                    Uint luma_entry = (entry / 12u + 2u) * 24u + entry % 12u + 2u;
+                    cached_diff_luma.write(luma_entry, entry_value.x);
+                    cached_spec_luma.write(luma_entry, entry_value.y);
                     cached_frames.write(entry, entry_value.zw());
                 };
             }
+            $if(c.gAntiFirefly != 0.f) {
+                for (uint iteration = 0u; iteration != 2u; ++iteration) {
+                    Uint entry = lane + iteration * 128u;
+                    $if(entry < 144u) {
+                        Uint2 halo;
+                        $if(entry < 64u) {
+                            Uint row = entry / 16u;
+                            row += select(entry >= 32u, Uint{20u}, Uint{0u});
+                            halo = make_uint2(entry % 16u, row);
+                        } $else {
+                            Uint side = entry - 64u;
+                            Uint x = side % 4u;
+                            halo = make_uint2(x + select(x >= 2u, Uint{12u}, Uint{0u}), side / 4u + 2u);
+                        };
+                        Int2 source = clamp(pixel - local - 4 + make_int2(halo), make_int2(0), c.gRectSizeMinusOne);
+                        Uint luma_entry = halo.y * 24u + halo.x;
+                        cached_diff_luma.write(luma_entry, in_diffuse_fast.read_in_bounds(source));
+                        cached_spec_luma.write(luma_entry, in_specular_fast.read_in_bounds(source));
+                    };
+                }
+            };
         };
         call("GroupMemoryBarrierWithGroupSync");
         $if(is_sky != 0.f || any(pixel > c.gRectSizeMinusOne)) { $return(); };
@@ -56,6 +81,7 @@ PassShader compile_history_fix(Device &device) {
         Float3 xv = ReconstructViewPosition(uv, c.gFrustum, z, c.gOrthoMode);
         Float3 nv = RotateVectorInverse(c.gViewToWorld, n);
         Int2 shared_pos = local + 2;
+        Int2 luma_pos = local + 4;
         auto shared_index = [](Int2 position) { return (position.y * 12 + position.x).cast<uint>(); };
         Float2 frames = cached_frames.read(shared_index(shared_pos));
         Float2 frame_average = frames;
@@ -78,7 +104,6 @@ PassShader compile_history_fix(Device &device) {
         auto filter_lobe = [&](bool specular) {
             auto &input = specular ? in_specular : in_diffuse;
             auto &output = specular ? out_specular : out_diffuse;
-            auto &input_fast = specular ? in_specular_fast : in_diffuse_fast;
             auto &output_fast = specular ? out_specular_fast : out_diffuse_fast;
             Float accum = specular ? frames.y : frames.x;
             Float lobe_roughness = specular ? roughness : Float{1.f};
@@ -166,7 +191,7 @@ PassShader compile_history_fix(Device &device) {
             };
 
             auto &cached_luma = specular ? cached_spec_luma : cached_diff_luma;
-            Float center = cached_luma.read(shared_index(shared_pos));
+            Float center = cached_luma.read(luma_index(luma_pos));
             Float moment1 = center, moment2 = center * center;
             Float f = saturate(accum / (c.gHistoryFixFrameNum + NRD_EPS));
             if (specular) f = Lerp(1.f, f, magic);
@@ -175,7 +200,7 @@ PassShader compile_history_fix(Device &device) {
             $for(y, 0, 5) {
                 $for(x, 0, 5) {
                     $if(x != 2 || y != 2) {
-                        Float sample = cached_luma.read(shared_index(local + make_int2(x, y)));
+                        Float sample = cached_luma.read(luma_index(local + make_int2(x, y) + 2));
                         moment1 += sample;
                         moment2 = ocarina::fma(sample, sample, moment2);
                     };
@@ -190,8 +215,7 @@ PassShader compile_history_fix(Device &device) {
                 $for(y, -4, 5) {
                     $for(x, -4, 5) {
                         $if(abs(x) > 1 || abs(y) > 1) {
-                            Int2 tap = clamp(pixel + make_int2(x, y), make_int2(0), c.gRectSizeMinusOne);
-                            Float sample = input_fast.read_in_bounds(tap);
+                            Float sample = cached_luma.read(luma_index(luma_pos + make_int2(x, y)));
                             m1 += sample;
                             m2 = ocarina::fma(sample, sample, m2);
                         };

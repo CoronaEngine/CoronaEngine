@@ -40,64 +40,108 @@ cross nearest-tap or history-footprint boundaries; the test reports those as
 failures, rather than treating equal algorithm structure as numerical equivalence.
 
 Validation on 2026-10-22 (RTX 3070 Ti, Vulkan) passes the original stress suite,
-all 72 small-sequence comparisons, and the 96-frame 720p/1080p replay at unchanged
-tolerance. All 28 final captures match input/settings/camera fingerprints; six
-full-resolution outputs per capture are byte-identical within each version across
-modes/repeats. Native-to-EDSL comparisons have zero failed components; hit-distance
-outputs are bit identical. The canonical CLion engine build and default-EDSL
-headless 720p run also pass, with finite RGB and successful GPU/process cleanup.
+all 72 original small-sequence comparisons plus 72 additional anti-firefly-off
+comparisons, and fresh 720p/1080p same-input replays at the unchanged tolerance.
+Each final capture has 64 warmup and 128 measured frames, three layers and
+250 ms pauses outside queries. EDSL before/after runs use 720p ABBA and 1080p
+BAAB order, with one fresh original-HLSL control per size. All 10 captures match
+input/settings/camera fingerprints. All six EDSL outputs are byte-identical
+before/after and across repeats; native comparisons have zero failed components.
+The canonical CLion engine build and default-EDSL 720p headless run pass, with
+finite RGB, positive mean radiance and successful GPU/process cleanup.
 
-Pack now uses Native's five fixed 16-byte Guide planes and seven aligned vector
-loads. Generic buffer reads and Unpack are unchanged. HistoryFix removes only
-proven-in-bounds dimension reads and emits its original 240-entry shared preload
-in two static stages. Thread ownership, values, order, barrier, filtering math,
-history steps and all four normalized-mean rounding chains remain unchanged.
-Driver-reported HF registers fall from 72 to 64.
+Pack retains the five fixed 16-byte Guide planes and seven aligned vector loads.
+HistoryFix now shares the original 72-tap anti-firefly fast-luma neighborhood:
+each 8x16 group loads a 16x24 luma footprint, using pitch 24 to avoid bank
+overlap in an 8x4 warp footprint. Its original 12x20 frame cache is unchanged.
+The original 240 core entries and 144 disjoint halo entries cover the footprint;
+halo reads are skipped when anti-firefly is disabled. Fast inputs and outputs
+are different transient/permanent textures, so earlier reads cannot alias writes.
+All original clamps, tap order, floating-point expressions, four normalized-mean
+rounding chains and the single unconditional group barrier remain unchanged.
+AF-off coverage includes partial groups and borders; no AF-off speedup is claimed.
 
-All timings below are GPU milliseconds summed over three layers. Each EDSL
-version has two complete 32-frame repeats (720p ABBA, 1080p BAAB); HLSL has one
-fresh 32-frame control. Every run uses 64 warmup frames and 250 ms pauses outside
-the GPU queries. No samples are discarded. HLSL controls run separately, so small
-differences and tails should not be generalized beyond this replay.
+Actual SPIR-V retains ten runtime loops, identical ordered float-operation
+signatures and the 8x16 group. Each anti-firefly loop replaces its texture fetch
+with one shared load. Logical shared storage grows from 3840 to 6528 bytes.
+Driver-reported HF registers remain 64; physical shared allocation is
+8448 -> 10112 bytes, and executable size is 79744 -> 78080 bytes. The driver's
+implausible local-memory statistic is not used to infer spills or occupancy.
 
-Per-stage/query-sum **means** (Pack/Unpack are format conversion):
+HistoryFix GPU milliseconds below sum the three layers; all samples are retained:
 
-| Stage | 720p HLSL | 720p EDSL | 1080p HLSL | 1080p EDSL |
-|---|---:|---:|---:|---:|
-| Pack | 0.631 | 0.638 | 1.466 | 1.480 |
-| ClassifyTiles | 0.024 | 0.031 | 0.045 | 0.050 |
-| HitDistReconstruction5x5 | 0.429 | 0.428 | 0.944 | 0.937 |
-| PrePass | 0.670 | 0.660 | 1.542 | 1.443 |
-| TemporalAccumulation | 0.816 | 0.879 | 1.865 | 1.899 |
-| HistoryFix | 0.644 | 0.655 | 1.421 | 1.458 |
-| Blur | 0.633 | 0.617 | 1.297 | 1.336 |
-| PostBlur | 0.548 | 0.601 | 1.413 | 1.377 |
-| TemporalStabilization | 0.282 | 0.354 | 0.669 | 0.759 |
-| Unpack | 0.680 | 0.611 | 1.362 | 1.352 |
-| Pack_Unpack_query_sum | 1.311 | 1.249 | 2.828 | 2.832 |
-| NRD_8_pass_query_sum | 4.046 | 4.225 | 9.195 | 9.258 |
+| Size | Previous mean | Shared-luma mean | Mean change | Previous P95 | Shared-luma P95 | P95 change |
+|---|---:|---:|---:|---:|---:|---:|
+| 720p | 0.622341 | 0.421397 | -32.29% | 0.624640 | 0.421888 | -32.46% |
+| 1080p | 1.471406 | 0.979184 | -33.45% | 2.336512 | 1.409536 | -39.67% |
 
-Continuous interval **means** use aligned BOTTOM_OF_PIPE boundaries. These are
-independent measurements, not sums of individual stage queries:
+Both reversed-order pairs improve HF mean and P95 at both sizes. HF P50 falls
+32.57%/32.82%. This is the result for the replay's default anti-firefly-on settings.
 
-| Size / interval | HLSL | Previous EDSL | Retained EDSL |
-|---|---:|---:|---:|
-| 720p pure NRD | 4.107 | 4.199 | 4.203 |
-| 720p filter including conversion | 5.339 | 5.604 | 5.455 |
-| 1080p pure NRD | 8.994 | 9.296 | 9.188 |
-| 1080p filter including conversion | 11.837 | 12.401 | 12.176 |
+Per-stage/query-sum means, in GPU ms over three layers (Pack/Unpack are format
+conversion; NRD_8_pass_query_sum excludes them):
 
-Pack mean decreases 14.00%/11.34% at 720p/1080p, with both reversed-order pairs
-faster. HistoryFix p50 decreases 3.65%/3.74%; its mean changes +0.34%/-1.47% and
-pair directions are mixed, so a repeatable HF mean-speedup is not established.
-Its 1080p p95 increases 15.52%; tail noise remains. Complete-filter means decrease
-2.65%/1.82%, with both pairs faster. Pure-NRD means change +0.09%/-1.16%; the
-final EDSL/HLSL mean gaps are 2.35%/2.15%. Mature-history skipping and local-window
-unrolling were not retained.
-Reproduction commands, all per-frame mean/p50/p95 data, source/binary hashes,
-strict outputs and rejected experiments are in
-`build/recordings/reblur-pack-hf-opt-20261022/`. The retained result is
-`final-retained-reports/summary.md`; earlier candidate reports are historical.
+| Stage | 720p HLSL | 720p previous EDSL | 720p shared-luma EDSL | 1080p HLSL | 1080p previous EDSL | 1080p shared-luma EDSL |
+|---|---:|---:|---:|---:|---:|---:|
+| Pack | 0.633 | 0.636 | 0.631 | 1.535 | 1.579 | 1.533 |
+| ClassifyTiles | 0.025 | 0.031 | 0.030 | 0.040 | 0.050 | 0.053 |
+| HitDistReconstruction5x5 | 0.449 | 0.433 | 0.426 | 0.922 | 0.977 | 0.932 |
+| PrePass | 0.789 | 0.621 | 0.639 | 1.655 | 1.493 | 1.467 |
+| TemporalAccumulation | 0.969 | 0.845 | 0.840 | 1.912 | 1.898 | 1.915 |
+| HistoryFix | 0.610 | 0.622 | 0.421 | 1.449 | 1.471 | 0.979 |
+| Blur | 0.653 | 0.610 | 0.586 | 1.274 | 1.380 | 1.366 |
+| PostBlur | 0.548 | 0.581 | 0.602 | 1.269 | 1.370 | 1.329 |
+| TemporalStabilization | 0.305 | 0.341 | 0.340 | 0.687 | 0.780 | 0.743 |
+| Unpack | 0.680 | 0.593 | 0.597 | 1.344 | 1.378 | 1.341 |
+| Pack_Unpack_query_sum | 1.313 | 1.229 | 1.227 | 2.879 | 2.956 | 2.874 |
+| NRD_8_pass_query_sum | 4.348 | 4.084 | 3.884 | 9.208 | 9.418 | 8.785 |
+
+These totals are sums of individual pass queries, not continuous/end-to-end
+intervals. EDSL before/after uses identical timestamp boundaries. The original
+HLSL per-pass control uses its existing BOTTOM_OF_PIPE/barrier boundaries,
+whereas EDSL individual stages use COMPUTE_SHADER boundaries; the control is
+not an identical-scope instruction microbenchmark. Separate continuous-interval
+results from the previous experiment remain in its recording directory.
+
+The preceding +15.52% HF P95 result is reproduced from its retained captures:
+four isolated delayed layer queries in one 32-frame process shifted the pooled
+tail, while the other layers stayed near their median. That optimization only
+improved HF P50 about 3.7%, so sparse long intervals could hide its mean benefit.
+A fresh same-executable A/A check changes idle-run HF P95 by +31.96% with
+identical medians. Raw GPU ticks agree with the ordinary timing CSV; query
+retirement occurs after its fence. Thus the previous small mean/tail comparison
+does not establish a repeatable shader regression.
+
+The physical cause of those isolated intervals remains unresolved. Affine CPU/GPU
+clock bounds account for roughly 63-70 ppm clock skew; that skew affects absolute
+cross-clock alignment, not measured GPU durations. PDH activity does not establish
+competing-process causation. Rich-versus-temperature-only monitoring preserves
+HF P50 and leaves substantial tails; none of its 28 HF P95 tail frames overlaps
+a timed NVML call, even with a 1 ms post-call window. ETW capture was denied by
+Windows (0x80070005), so no specific preemption source is asserted. The retained
+change reduces shader texture traffic; it does not claim to repair GPU scheduling.
+
+A narrower existing-radius-two reuse attempt added an inner-loop branch and was
+rejected after a 128-frame 1080p run (HF mean 1.911 ms, P50 1.739 ms). The full
+footprint has no per-tap source-selection branch. No guard, tolerance or math
+change was retained from diagnostic hypotheses.
+
+Fresh captures, binary/source hashes, strict outputs, per-frame/per-layer
+mean/P50/P95, A/A and monitor diagnostics, address/alias proofs and SPIR-V checks
+are in `build/recordings/reblur-hf-tail-20261022/`; final results are
+`analysis/final/summary.md` and `summary.json`. `final-plan.json` records order;
+`probe.py` records the actual runtime DLL hashes and `binary-source-provenance.json`
+identifies each saved replay's compiled source. Both EDSL versions use the same
+backend DLL in the final runs, with raw sidecar diagnostics disabled. Reproduction:
+
+```powershell
+python build/recordings/reblur-hf-tail-20261022/run-final.py
+python build/recordings/reblur-hf-tail-20261022/report-final.py --manifest build/recordings/reblur-hf-tail-20261022/final-plan.json --output build/recordings/reblur-hf-tail-20261022/analysis/final
+```
+
+Capture labels must be fresh directories; existing recordings are never overwritten.
+The earlier Pack optimization and continuous-interval reports remain historical in
+`build/recordings/reblur-pack-hf-opt-20261022/`.
 
 The broader `corona_vision_reblur_tests` constant/HDR regressions also pass.
 Their first differing stage was HistoryFix: Slang reassociated the normalized
