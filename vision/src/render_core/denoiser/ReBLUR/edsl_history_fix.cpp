@@ -177,6 +177,9 @@ PassShader compile_history_fix(Device &device) {
                     };
                 };
             };
+            // Square the rounded normalized mean, matching the original shader.
+            // Reassociating its scale into rawSum * rawSum changes near-constant
+            // variances and can move the output into a different FP16 bin.
             Float luma = GetLuma(signal);
             $if(c.gAntiFirefly != 0.f) {
                 Float m1 = 0.f, m2 = 0.f;
@@ -190,11 +193,11 @@ PassShader compile_history_fix(Device &device) {
                         };
                     };
                 };
-                m1 *= 1.f / 72.f;
+                m1 = call<float>("oc_nrd_round_mul", m1, 1.f / 72.f);
                 Float sigma = sqrt(abs(ocarina::fma(m2, 1.f / 72.f, -(m1 * m1)))) * 2.f;
                 luma = clamp(luma, m1 - sigma, m1 + sigma);
             };
-            moment1 /= 25.f;
+            moment1 = call<float>("oc_nrd_round_mul", moment1, 1.f / 25.f);
             Float sigma = sqrt(abs(ocarina::fma(moment2, 1.f / 25.f, -(moment1 * moment1)))) * 2.f;
             Float clamped_luma = clamp(luma, moment1 - sigma, moment1 + sigma);
             Float has_fast_history = (c.gMaxFastAccumulatedFrameNum < c.gMaxAccumulatedFrameNum).cast<float>();
