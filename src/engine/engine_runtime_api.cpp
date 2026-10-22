@@ -745,7 +745,7 @@ float Corona::API::Environment::get_fixed_dt() const {
 // ########################
 //         Geometry
 // ########################
-Corona::API::Geometry::Geometry(const std::string& model_path) {
+Corona::API::Geometry::Geometry(const std::string& model_path, Resource::ModelImportOptions options) {
     // 保存路径供 Actor 标识和 GeometrySystem 资源加载/卸载使用
     model_path_ = Utils::utf8_to_path(model_path);
 
@@ -779,6 +779,7 @@ Corona::API::Geometry::Geometry(const std::string& model_path) {
         handle->model_resource_handle = model_resource_handle_;
         handle->mesh_handles.clear();  // 留空，待 GeometrySystem 异步构建
         handle->model_path_utf8 = model_path;  // 供 GeometrySystem 异步 import
+        handle->import_options = options;
         // 空路径（如 audio actor）无需导入，直接 Ready；有路径才进 PendingImport。
         handle->gpu_build_state = model_path.empty()
             ? GeometryDevice::GpuBuildState::Ready
@@ -944,6 +945,33 @@ Corona::API::Geometry Corona::API::Geometry::from_image(const std::string& image
         geo.transform_handle_ = 0;
     }
     return geo;
+}
+
+void Corona::API::Geometry::set_matrix(const std::array<float, 16>& matrix) {
+    for (float value : matrix) {
+        if (!std::isfinite(value)) throw std::invalid_argument("Non-finite geometry matrix");
+    }
+    if (std::abs(matrix[3]) > 1e-6f || std::abs(matrix[7]) > 1e-6f ||
+        std::abs(matrix[11]) > 1e-6f || std::abs(matrix[15] - 1.0f) > 1e-6f)
+        throw std::invalid_argument("Geometry requires an affine matrix");
+    if (auto transform = SharedDataHub::instance().model_transform_storage().acquire_write(transform_handle_)) {
+        for (int c = 0; c < 4; ++c)
+            for (int r = 0; r < 4; ++r) transform->affine_basis[c][r] = matrix[c*4+r];
+        transform->affine_basis[3] = ktm::fvec4{0, 0, 0, 1};
+        transform->position = ktm::fvec3{matrix[12], matrix[13], matrix[14]};
+        transform->euler_rotation = ktm::fvec3{0, 0, 0};
+        transform->scale = ktm::fvec3{1, 1, 1};
+    }
+}
+
+std::array<float, 16> Corona::API::Geometry::get_matrix() const {
+    std::array<float, 16> result{1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1};
+    if (auto transform = SharedDataHub::instance().model_transform_storage().acquire_read(transform_handle_)) {
+        const auto matrix = transform->compute_matrix();
+        for (int c = 0; c < 4; ++c)
+            for (int r = 0; r < 4; ++r) result[c*4+r] = matrix[c][r];
+    }
+    return result;
 }
 
 void Corona::API::Geometry::set_position(const std::array<float, 3>& pos) {
@@ -1789,6 +1817,9 @@ Corona::API::Actor::Profile* Corona::API::Actor::add_profile(const Profile& prof
     }
     profile_storage_handles_[profile_handle] = storage_profile_handle;
 
+    Resource::ModelImportOptions import_options;
+    if (auto geometry = SharedDataHub::instance().geometry_storage().acquire_read(profile.geometry->get_handle()))
+        import_options = geometry->import_options;
     if (handle_ != 0) {
         if (auto accessor = SharedDataHub::instance().actor_storage().acquire_write(handle_)) {
             if (storage_profile_handle != 0) {
@@ -1797,6 +1828,11 @@ Corona::API::Actor::Profile* Corona::API::Actor::add_profile(const Profile& prof
             // 将 Geometry 的 model_path 同步到 ActorDevice，
             // GeometrySystem 的 load/unload 路径依赖此字段
             accessor->model_path = profile.geometry->get_model_path();
+            accessor->model_import_options = import_options;
+            // Imported renderer scenes keep their authored units and camera.
+            // The editor's fixed 50/80-unit streaming radii must not evict their
+            // geometry, including while async import still has a zero AABB.
+            if (import_options.scene_geometry) accessor->pinned = true;
         } else {
             CFW_LOG_ERROR("[Actor::add_profile] Failed to acquire write access to actor storage");
         }
@@ -2583,6 +2619,26 @@ void Corona::API::Camera::set_size(int width, int height) {
     command.width = static_cast<std::uint32_t>(width_);
     command.height = static_cast<std::uint32_t>(height_);
     SharedDataHub::instance().enqueue_camera_state_update(command);
+}
+
+void Corona::API::Camera::set_projection(float x_sign, float near_plane, float far_plane) {
+    if (!std::isfinite(x_sign) || std::abs(x_sign) != 1.0f ||
+        !std::isfinite(near_plane) || !std::isfinite(far_plane) ||
+        near_plane <= 0.0f || far_plane <= near_plane) {
+        throw std::invalid_argument("Invalid camera projection or clip range");
+    }
+    projection_ = {x_sign, near_plane, far_plane};
+    CameraStateUpdateCommand command{};
+    command.camera_handle = handle_;
+    command.fields = CameraStateUpdateField::Projection;
+    command.projection_x_sign = x_sign;
+    command.near_plane = near_plane;
+    command.far_plane = far_plane;
+    SharedDataHub::instance().enqueue_camera_state_update(command);
+}
+
+std::array<float, 3> Corona::API::Camera::get_projection() const {
+    return projection_;
 }
 
 std::array<int, 2> Corona::API::Camera::get_size() const {

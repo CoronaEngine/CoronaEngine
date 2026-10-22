@@ -180,6 +180,9 @@ void BindAll(nanobind::module_& m) {
              "Set local rotation (Euler angles ZYX order) [pitch, yaw, roll]")
         .def("set_scale", &Geometry::set_scale, nb::arg("scale"),
              "Set local scale [x, y, z]")
+        .def("set_matrix", &Geometry::set_matrix, nb::arg("matrix"),
+             "Set a column-major affine matrix, preserving shear and reflection")
+        .def("get_matrix", &Geometry::get_matrix)
         .def("set_native_local_correction", &Geometry::set_native_local_correction,
              nb::arg("offset"), nb::arg("scale"),
              "Set native-only local correction applied before rendering")

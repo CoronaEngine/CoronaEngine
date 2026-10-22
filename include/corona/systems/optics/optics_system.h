@@ -404,9 +404,13 @@ class OpticsSystem : public Kernel::SystemBase {
         std::shared_ptr<std::promise<bool>> completion_promise;
         std::chrono::steady_clock::time_point expires_at{};
     };
+    // Only requests promoted before draining camera commands may use this frame.
+    std::vector<PendingScreenshot> incoming_screenshots_;
     std::vector<PendingScreenshot> pending_screenshots_;
     std::mutex screenshot_mutex_;
+    void begin_screenshot_frame();
     bool has_pending_screenshot(std::uintptr_t camera_handle);
+    // A zero camera handle cancels every request during shutdown.
     void fail_pending_screenshots(std::uintptr_t camera_handle);
     void fail_expired_pending_screenshots();
     void fail_unrenderable_pending_screenshots();

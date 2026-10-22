@@ -969,6 +969,11 @@ void apply_pending_camera_state_updates() {
     auto& camera_storage = hub.camera_storage();
     for (const auto& update : updates) {
         if (auto camera = camera_storage.acquire_write(update.camera_handle)) {
+            if (Corona::has_camera_state_field(update.fields, Corona::CameraStateUpdateField::Projection)) {
+                camera->projection_x_sign = update.projection_x_sign;
+                camera->near_plane = update.near_plane;
+                camera->far_plane = update.far_plane;
+            }
             if (Corona::has_camera_state_field(
                     update.fields, Corona::CameraStateUpdateField::Surface)) {
                 camera->surface = update.surface;
@@ -3550,7 +3555,7 @@ bool OpticsSystem::initialize(Kernel::ISystemContext* ctx) {
                 const auto expires_at =
                     std::chrono::steady_clock::now() + kScreenshotRequestTimeout;
                 std::lock_guard<std::mutex> lock(screenshot_mutex_);
-                pending_screenshots_.push_back(
+                incoming_screenshots_.push_back(
                     {event.camera_handle,
                      event.file_path,
                      event.completion_promise,
@@ -3702,6 +3707,10 @@ void OpticsSystem::update() {
         }
     }
     update_phase.set("camera_commands");
+    // Setters enqueue camera changes before publishing their screenshot request.
+    // Promote requests first, then drain those changes. Requests arriving later
+    // must wait for the next frame instead of capturing this frame's old state.
+    begin_screenshot_frame();
     apply_pending_camera_moves();
     apply_pending_camera_viewport_updates();
     apply_pending_camera_state_updates();
@@ -5522,6 +5531,14 @@ void OpticsSystem::process_vision_actor_pick(std::uintptr_t camera_handle,
                                 std::move(*actor_pick_reservation));
 }
 
+void OpticsSystem::begin_screenshot_frame() {
+    std::lock_guard<std::mutex> lock(screenshot_mutex_);
+    pending_screenshots_.insert(pending_screenshots_.end(),
+                               std::make_move_iterator(incoming_screenshots_.begin()),
+                               std::make_move_iterator(incoming_screenshots_.end()));
+    incoming_screenshots_.clear();
+}
+
 bool OpticsSystem::has_pending_screenshot(std::uintptr_t camera_handle) {
     std::lock_guard<std::mutex> lock(screenshot_mutex_);
     return std::any_of(pending_screenshots_.begin(), pending_screenshots_.end(),
@@ -5534,12 +5551,17 @@ void OpticsSystem::fail_pending_screenshots(std::uintptr_t camera_handle) {
     std::vector<PendingScreenshot> matched;
     {
         std::lock_guard<std::mutex> lock(screenshot_mutex_);
-        auto it = std::remove_if(pending_screenshots_.begin(), pending_screenshots_.end(),
-                                 [camera_handle](const PendingScreenshot& req) {
-                                     return req.camera_handle == camera_handle;
-                                 });
-        matched.assign(std::make_move_iterator(it), std::make_move_iterator(pending_screenshots_.end()));
-        pending_screenshots_.erase(it, pending_screenshots_.end());
+        for (auto* queue : {&pending_screenshots_, &incoming_screenshots_}) {
+            auto it = std::remove_if(queue->begin(), queue->end(),
+                                    [camera_handle, &matched](PendingScreenshot& req) {
+                                        if (camera_handle != 0 && req.camera_handle != camera_handle) {
+                                            return false;
+                                        }
+                                        matched.push_back(std::move(req));
+                                        return true;
+                                    });
+            queue->erase(it, queue->end());
+        }
     }
 
     for (auto& req : matched) {
@@ -5554,16 +5576,18 @@ void OpticsSystem::fail_expired_pending_screenshots() {
     const auto now = std::chrono::steady_clock::now();
     {
         std::lock_guard<std::mutex> lock(screenshot_mutex_);
-        auto it = std::remove_if(pending_screenshots_.begin(), pending_screenshots_.end(),
-                                 [now, &expired](PendingScreenshot& req) {
-                                     if (req.expires_at == std::chrono::steady_clock::time_point{} ||
-                                         req.expires_at > now) {
-                                         return false;
-                                     }
-                                     expired.push_back(std::move(req));
-                                     return true;
-                                 });
-        pending_screenshots_.erase(it, pending_screenshots_.end());
+        for (auto* queue : {&pending_screenshots_, &incoming_screenshots_}) {
+            auto it = std::remove_if(queue->begin(), queue->end(),
+                                    [now, &expired](PendingScreenshot& req) {
+                                        if (req.expires_at == std::chrono::steady_clock::time_point{} ||
+                                            req.expires_at > now) {
+                                            return false;
+                                        }
+                                        expired.push_back(std::move(req));
+                                        return true;
+                                    });
+            queue->erase(it, queue->end());
+        }
     }
 
     for (auto& req : expired) {
@@ -5579,11 +5603,13 @@ void OpticsSystem::fail_unrenderable_pending_screenshots() {
     std::vector<std::uintptr_t> pending_handles;
     {
         std::lock_guard<std::mutex> lock(screenshot_mutex_);
-        pending_handles.reserve(pending_screenshots_.size());
-        for (const auto& req : pending_screenshots_) {
-            if (std::find(pending_handles.begin(), pending_handles.end(), req.camera_handle) ==
-                pending_handles.end()) {
-                pending_handles.push_back(req.camera_handle);
+        pending_handles.reserve(pending_screenshots_.size() + incoming_screenshots_.size());
+        for (const auto* queue : {&pending_screenshots_, &incoming_screenshots_}) {
+            for (const auto& req : *queue) {
+                if (std::find(pending_handles.begin(), pending_handles.end(), req.camera_handle) ==
+                    pending_handles.end()) {
+                    pending_handles.push_back(req.camera_handle);
+                }
             }
         }
     }
@@ -5700,6 +5726,8 @@ void OpticsSystem::shutdown() {
             event_bus->unsubscribe(native_frame_consumed_sub_id_);
         }
     }
+
+    fail_pending_screenshots(0);
 
     if (actor_pick_readback_worker_) {
         actor_pick_readback_worker_->shutdown();

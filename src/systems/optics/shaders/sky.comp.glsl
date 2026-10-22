@@ -197,13 +197,10 @@ void main()
         return;
     }
 
-    vec2 aspect_ratio = vec2(float(pushConsts.gbufferSize.x) / float(pushConsts.gbufferSize.y), 1);
-    float fov = tan(radians(pushConsts.cameraFov * 0.5));
-    vec2 point_ndc = screenUV;
-
-    vec3 cam_local_point = vec3((2.0 * point_ndc.x - 1.0) * aspect_ratio.x * fov,
-                          (1.0 - 2.0 * point_ndc.y) * aspect_ratio.y * fov,
-                          1.0);
+    // Use the actual projection, including an imported camera's reflected image X.
+    mat4 projection = uniformBufferObjects[pushConsts.uniformBufferIndex].eyeProjMatrix;
+    vec3 cam_local_point = vec3((2.0 * screenUV.x - 1.0) / projection[0][0],
+                               (2.0 * screenUV.y - 1.0) / projection[1][1], 1.0);
 
     vec3 cam_origin = vec3(0, 6371e3 + 1., 0) + uniformBufferObjects[pushConsts.uniformBufferIndex].eyePosition;
 

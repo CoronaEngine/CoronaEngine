@@ -1,4 +1,5 @@
 #include "corona/resource/resource_manager.h"
+#include "corona/resource/types/scene.h"
 
 #include "corona/diagnostics/thread_phase.h"
 #include "horizon/core/logging.h"
@@ -52,11 +53,19 @@ ResourceManager::~ResourceManager() {
     resource_cache_.clear();
 }
 
-TResourceID ResourceManager::import_sync(const std::filesystem::path& path) {
-    return load_internal(path);
+TResourceID ResourceManager::import_uid(const std::filesystem::path& path, ModelImportOptions options) {
+    if (!options.cache_key()) return IResource::generate_uid(path);
+    // This suffix is identity only; no synthetic file is ever opened or copied.
+    auto key = path;
+    key += ".corona-geometry-" + std::to_string(options.cache_key());
+    return IResource::generate_uid(key);
 }
 
-std::future<TResourceID> ResourceManager::import_async(const std::filesystem::path& path) {
+TResourceID ResourceManager::import_sync(const std::filesystem::path& path, ModelImportOptions options) {
+    return load_internal(path, options);
+}
+
+std::future<TResourceID> ResourceManager::import_async(const std::filesystem::path& path, ModelImportOptions options) {
     auto promise = std::make_shared<std::promise<TResourceID>>();
     auto future = promise->get_future();
 
@@ -66,11 +75,11 @@ std::future<TResourceID> ResourceManager::import_async(const std::filesystem::pa
     Corona::Diagnostics::PhaseScope import_phase{"Resource", "import_async:arena_wait"};
 
     // 将加载任务提交到任务组
-    import_arena_.execute([this, path, promise]() {
-        async_tasks_.run([this, path, promise]() {
+    import_arena_.execute([this, path, options, promise]() {
+        async_tasks_.run([this, path, options, promise]() {
             Corona::Diagnostics::PhaseScope task_phase{"Resource", "import_async:load_internal"};
             try {
-                promise->set_value(load_internal(path));
+                promise->set_value(load_internal(path, options));
             } catch (...) {
                 promise->set_value(IResource::INVALID_UID);
             }
@@ -224,7 +233,7 @@ EvictResult ResourceManager::evict_until_under_budget() {
     return last_result;
 }
 
-TResourceID ResourceManager::load_internal(const std::filesystem::path& path) {
+TResourceID ResourceManager::load_internal(const std::filesystem::path& path, ModelImportOptions options) {
     // 1. 检查路径是否为空
     if (path.empty()) {
         CFW_LOG_ERROR("[ResourceManager] Cannot load resource: path is empty");
@@ -264,7 +273,7 @@ TResourceID ResourceManager::load_internal(const std::filesystem::path& path) {
         return IResource::INVALID_UID;
     }
 
-    auto const rid = IResource::generate_uid(normalized_path);
+    auto const rid = import_uid(normalized_path, options);
 
     // 防止递归导入自死锁：parser 在解析资源时可能间接调用 import_sync(X) →
     // load_internal(X) 回到同一资源，此时本线程已持有 Loading 状态，再进入会
@@ -286,7 +295,20 @@ TResourceID ResourceManager::load_internal(const std::filesystem::path& path) {
         bool success = false;
 
         try {
-            if (const auto parser = parser_registry_.find_parser(normalized_path)) {
+            if (options.scene_geometry) {
+                SceneParser parser;
+                auto& config = parser.assimp_options;
+                config.normalize_model = false;
+                config.geometry_only = true;
+                config.convert_left_handed = false;
+                config.flip_uvs = options.flip_uvs;
+                config.flip_normals = options.flip_normals;
+                config.face_normals = options.face_normals;
+                config.simplify_mesh = false;
+                config.lod_options.enabled = false;
+                resource = parser.import_from(normalized_path, resource_cache_);
+                success = resource != nullptr;
+            } else if (const auto parser = parser_registry_.find_parser(normalized_path)) {
                 resource = parser->import_from(normalized_path, this->resource_cache_);
                 if (resource) {
                     success = true;
@@ -305,6 +327,7 @@ TResourceID ResourceManager::load_internal(const std::filesystem::path& path) {
 
         std::unique_lock lock(entry->mutex);
         if (success) {
+            resource->uid = rid;
             entry->resource = resource;
             entry->state = LoadState::Ready;
             // 用文件大小作为内存占用的初始估算值

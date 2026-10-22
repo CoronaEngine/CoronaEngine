@@ -2,6 +2,7 @@
 #include <horizon/core/storage.h>
 #include <corona/memory/gpu_mem_ledger.h>
 #include <corona/resource/types/scene.h>  // Resource::IkChain（GeometryDevice::ik_chains）
+#include <corona/resource/model_import_options.h>
 #include <corona/resource/types/animation_player.h>
 #include <corona/systems/display/image_frame_metadata.h>
 #include <corona/systems/optics/viewport_gizmo_math.h>
@@ -84,6 +85,9 @@ struct MeshInstanceDevice {
 };
 
 struct ModelTransform {
+    // Authored linear transform, composed after editable TRS. Translation lives
+    // in position so streaming/picking retain the correct actor origin.
+    ktm::fmat4x4 affine_basis{ktm::fmat4x4::from_eye()};
     ktm::fvec3 position;
     ktm::fvec3 euler_rotation;
     ktm::fvec3 scale;
@@ -114,6 +118,7 @@ struct ModelResource {
 };
 
 struct GeometryDevice {
+    Resource::ModelImportOptions import_options;
     // GPU 资源（mesh_handles）的生命周期状态。
     // - Ready：mesh_handles 已就绪（默认）。from_image、网络重建、距离重载等
     //   同步路径产出的都是 Ready，行为不变。
@@ -301,6 +306,7 @@ struct ExternalVisionBindingDevice {
 struct ActorDevice {
     std::vector<std::uintptr_t> profile_handles;
     std::filesystem::path model_path;
+    Resource::ModelImportOptions model_import_options;
     bool follow_camera{false};
     bool pinned{false};  // 标记后不会被距离剔除卸载，也不会被不可见帧淘汰
 };
@@ -354,6 +360,8 @@ struct CameraDevice {
     float aspect{16.0f / 9.0f};
     float near_plane{0.1f};
     float far_plane{100.0f};
+    // Preserve the image-right axis of imported cameras, including reflected bases.
+    float projection_x_sign{1.0f};
     std::uint32_t width{1920};
     std::uint32_t height{1080};
     CameraOutputMode output_mode{CameraOutputMode::FinalColor};
@@ -404,6 +412,7 @@ struct CameraDevice {
 
     [[nodiscard]] ktm::fmat4x4 compute_projection_matrix() const {
         ktm::fmat4x4 proj = ktm::perspective_lh(ktm::radians(fov), aspect, near_plane, far_plane);
+        proj[0][0] *= projection_x_sign;
         // Vulkan NDC Y轴向下（与OpenGL相反），需要翻转Y分量
         proj[1][1] *= -1.0f;
         return proj;
@@ -489,6 +498,7 @@ enum class CameraStateUpdateField : std::uint32_t {
     VisionRelaxSettings = 1u << 13,
     VisionPtSettings = 1u << 14,
     VisionRestirSettings = 1u << 15,
+    Projection = 1u << 16,
 };
 
 constexpr CameraStateUpdateField operator|(CameraStateUpdateField lhs,
@@ -509,6 +519,9 @@ struct CameraStateUpdateCommand {
     void* surface{};
     std::uint32_t width{1};
     std::uint32_t height{1};
+    float projection_x_sign{1.0f};
+    float near_plane{0.1f};
+    float far_plane{100.0f};
     CameraOutputMode output_mode{CameraOutputMode::FinalColor};
     CameraRenderBackend render_backend{CameraRenderBackend::Native};
     CameraVisionRenderMode vision_render_mode{CameraVisionRenderMode::PathTracing};

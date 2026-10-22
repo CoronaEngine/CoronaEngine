@@ -1017,7 +1017,7 @@ ktm::fvec3 viewport_gizmo_pointer_ray(const Corona::CameraDevice& camera,
     const float tan_half_fov = std::tan(ktm::radians(camera.fov) * 0.5f);
     return ktm::normalize(
         forward +
-        right * (ndc_x * tan_half_fov * camera.aspect) -
+        right * (ndc_x * tan_half_fov * camera.aspect * camera.projection_x_sign) -
         up * (ndc_y * tan_half_fov));
 }
 

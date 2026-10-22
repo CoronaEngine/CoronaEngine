@@ -296,7 +296,7 @@ SceneParser::SceneParser() {
     register_extension(".dae", [this](const auto& path, ResourceCache& cache) { return parse_assimp(path); });
     // register_extension(".blend", [this](const auto& path, ResourceCache& cache) { return parse_assimp(path); });
     register_extension(".3ds", [this](const auto& path, ResourceCache& cache) { return parse_assimp(path); });
-    // register_extension(".ply", [this](const auto& path, ResourceCache& cache) { return parse_assimp(path); });
+    register_extension(".ply", [this](const auto& path, ResourceCache& cache) { return parse_assimp(path); });
     register_extension(".stl", [this](const auto& path, ResourceCache& cache) { return parse_assimp(path); });
 }
 
@@ -339,20 +339,55 @@ std::shared_ptr<IResource> SceneParser::parse_assimp(const std::filesystem::path
     // Assimp 5.4.3 的 ValidateDataStructure 会误判合法的 KHR_materials_specular：
     // 只有 specularColorTexture（slot 1）而没有 specularTexture（slot 0）时会拒绝模型。
     // 该槽位不参与本引擎的实际材质解析，因此不要启用结构校验。
-    const aiScene* ai_scene = importer.ReadFile(
-        path_str,
-        aiProcess_Triangulate |
-            aiProcess_FindDegenerates |
-            aiProcess_FindInvalidData |
+    if (assimp_options.face_normals)
+        importer.SetPropertyInteger(AI_CONFIG_PP_RVC_FLAGS, aiComponent_NORMALS);
+    unsigned int flags = aiProcess_Triangulate |
             aiProcess_RemoveComponent |
-            aiProcess_GenSmoothNormals |
+            (assimp_options.face_normals ? aiProcess_GenNormals : aiProcess_GenSmoothNormals) |
             aiProcess_JoinIdenticalVertices |
             aiProcess_SortByPType |
-            aiProcess_FlipUVs |
             aiProcess_GenBoundingBoxes |
-            aiProcess_LimitBoneWeights |  // 限制每顶点最多 4 骨骼权重并归一化（蒙皮）
-            aiProcess_MakeLeftHanded |    // 转换为左手坐标系
-            aiProcess_FlipWindingOrder);  // 翻转三角形绕序以匹配左手坐标系
+            aiProcess_LimitBoneWeights;
+    // FindInvalidData discards constant UV channels, and FindDegenerates can
+    // change authored topology. External geometry must preserve both.
+    if (!assimp_options.geometry_only)
+        flags |= aiProcess_FindDegenerates | aiProcess_FindInvalidData;
+    if (assimp_options.flip_uvs) flags |= aiProcess_FlipUVs;
+    if (assimp_options.convert_left_handed)
+        flags |= aiProcess_MakeLeftHanded | aiProcess_FlipWindingOrder;
+    // Validate imported indices before postprocessing: JoinIdenticalVertices and
+    // SortByPType dereference them. Validation afterwards cannot prevent a crash.
+    const auto validate_geometry = [](const aiScene* input, bool triangles_only) {
+        for (unsigned int m = 0; m < input->mNumMeshes; ++m) {
+            const auto* mesh = input->mMeshes[m];
+            const auto finite = [](const aiVector3D& v) {
+                return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z);
+            };
+            std::vector<bool> referenced(mesh->mNumVertices, false);
+            for (unsigned int f = 0; f < mesh->mNumFaces; ++f) {
+                const auto& face = mesh->mFaces[f];
+                if (triangles_only && face.mNumIndices != 3)
+                    throw std::runtime_error("External mesh contains non-triangle primitives");
+                for (unsigned int c = 0; c < face.mNumIndices; ++c) {
+                    if (face.mIndices[c] >= mesh->mNumVertices)
+                        throw std::runtime_error("External mesh index out of bounds");
+                    referenced[face.mIndices[c]] = true;
+                }
+            }
+            for (unsigned int v = 0; v < mesh->mNumVertices; ++v) {
+                // Some source PLYs contain unused vertices with NaN normals.
+                // JoinIdenticalVertices removes those; only referenced data matters.
+                if (referenced[v] && (!finite(mesh->mVertices[v]) || (mesh->HasNormals() && !finite(mesh->mNormals[v])) ||
+                    (mesh->mTextureCoords[0] && !finite(mesh->mTextureCoords[0][v]))))
+                    throw std::runtime_error("Non-finite external mesh attribute");
+            }
+        }
+    };
+    const aiScene* ai_scene = importer.ReadFile(path_str, assimp_options.geometry_only ? 0 : flags);
+    if (ai_scene && assimp_options.geometry_only) {
+        validate_geometry(ai_scene, false);
+        ai_scene = importer.ApplyPostProcessing(flags);
+    }
 
     if (!ai_scene || ai_scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !ai_scene->mRootNode) {
         CFW_LOG_ERROR("[Assimp] Failed to load scene: {}", path_to_utf8(path));
@@ -368,7 +403,19 @@ std::shared_ptr<IResource> SceneParser::parse_assimp(const std::filesystem::path
     auto scene = std::make_shared<Scene>(path);
     std::vector<std::uint32_t> material_map;
 
-    process_assimp_materials(ai_scene, *scene, material_map, scene_dir, path, assimp_options.image_options);
+    if (assimp_options.geometry_only) validate_geometry(ai_scene, true);
+
+    if (!assimp_options.geometry_only)
+        process_assimp_materials(ai_scene, *scene, material_map, scene_dir, path, assimp_options.image_options);
+    if (assimp_options.flip_normals) {
+        for (unsigned int m = 0; m < ai_scene->mNumMeshes; ++m) {
+            auto* mesh = ai_scene->mMeshes[m];
+            if (mesh->HasNormals())
+                for (unsigned int v = 0; v < mesh->mNumVertices; ++v) mesh->mNormals[v] *= -1.0f;
+            for (unsigned int f = 0; f < mesh->mNumFaces; ++f)
+                std::reverse(mesh->mFaces[f].mIndices, mesh->mFaces[f].mIndices + mesh->mFaces[f].mNumIndices);
+        }
+    }
 
     // 创建初始变换矩阵，用于处理不同格式的坐标系差异
     // STL 格式通常使用 Z-up 坐标系，需要旋转到 Y-up
@@ -389,7 +436,9 @@ std::shared_ptr<IResource> SceneParser::parse_assimp(const std::filesystem::path
     }
 
     // 计算全局归一化参数，确保所有子网格使用相同的变换
-    GlobalNormalizationParams global_params = compute_global_normalization_params(ai_scene, initial_transform);
+    GlobalNormalizationParams global_params;
+    if (assimp_options.normalize_model)
+        global_params = compute_global_normalization_params(ai_scene, initial_transform);
 
     // ---- 蒙皮检测 ----
     // 模型带动画或任一 mesh 带骨骼即视为蒙皮场景。蒙皮分支在 process_assimp_mesh

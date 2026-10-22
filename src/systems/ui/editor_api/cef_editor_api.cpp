@@ -1477,7 +1477,8 @@ void clear_python_script_callbacks() {
     EditorApiCallbackRegistry::instance().clear_python_script_callbacks();
 }
 
-NativeResult invoke_python_script_service(const NativeRequest& request, const char* route) {
+NativeResult invoke_python_script_service(const NativeRequest& request, const char* route,
+                                         std::chrono::milliseconds timeout) {
     const std::string route_name = route && *route ? route : "python-script";
     auto* coordinator = Script::Python::active_python_runtime_coordinator();
     if (!coordinator) {
@@ -1496,7 +1497,7 @@ NativeResult invoke_python_script_service(const NativeRequest& request, const ch
     // 线程此刻若回调编辑器 API，可以就地执行（见 editor_dispatch.h 的三段交接协议）。
     Detail::EditorWaitingForPythonScope waiting_for_python;
     const auto response = coordinator->submit_and_wait(std::move(runtime_request),
-                                                       std::chrono::seconds(2));
+                                                       timeout);
     if (response.status != Script::Python::PythonRuntimeResponseStatus::Success) {
         int error_code = 500;
         if (response.status == Script::Python::PythonRuntimeResponseStatus::Timeout) {

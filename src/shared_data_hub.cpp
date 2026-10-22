@@ -16,7 +16,7 @@ ktm::fmat4x4 ModelTransform::compute_matrix() const {
 
     ktm::fmat4x4 result;
     affine >> result;
-    return result;
+    return result * affine_basis;
 }
 
 SharedDataHub& SharedDataHub::instance() {
@@ -335,6 +335,12 @@ void SharedDataHub::enqueue_camera_state_update(CameraStateUpdateCommand command
     }
     pending.sequence = ++camera_state_update_sequence_;
     pending.fields = pending.fields | command.fields;
+
+    if (has_camera_state_field(command.fields, CameraStateUpdateField::Projection)) {
+        pending.projection_x_sign = command.projection_x_sign;
+        pending.near_plane = command.near_plane;
+        pending.far_plane = command.far_plane;
+    }
 
     if (has_camera_state_field(command.fields, CameraStateUpdateField::Surface)) {
         pending.surface = command.surface;

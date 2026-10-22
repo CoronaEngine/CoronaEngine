@@ -530,6 +530,8 @@ const char* actor_load_status_name(ActorLoadStatus status) {
 }
 
 struct NativeEditorActor {
+    std::optional<std::array<float, 16>> authored_matrix;
+    Corona::Resource::ModelImportOptions import_options;
     std::string name;
     std::string actor_guid;
     std::string route;
@@ -676,6 +678,8 @@ std::string normalize_body_type(std::string value) {
 }
 
 struct NativeEditorScene {
+    bool read_only{false};
+    bool frame_when_ready{false};
     std::filesystem::path project_root;
     std::string route;
     std::string name;
@@ -1169,11 +1173,13 @@ void remove_ini_section(const std::filesystem::path& file_path,
 }
 
 void persist_native_scene_actors(const NativeEditorScene& scene) {
+    if (scene.read_only) return;
     const auto scene_file = resolve_project_path(scene.project_root, scene.route);
     replace_ini_section(scene_file, "actors", build_actors_section_lines(scene));
 }
 
 void persist_native_scene_environment(const NativeEditorScene& scene) {
+    if (scene.read_only) return;
     const auto scene_file = resolve_project_path(scene.project_root, scene.route);
     replace_ini_section(scene_file, "sun", build_sun_section_lines(scene));
     replace_ini_section(scene_file, "grid", build_grid_section_lines(scene));
@@ -1181,6 +1187,7 @@ void persist_native_scene_environment(const NativeEditorScene& scene) {
 }
 
 void persist_native_scene_cameras(const NativeEditorScene& scene) {
+    if (scene.read_only) return;
     const auto scene_file = resolve_project_path(scene.project_root, scene.route);
     replace_ini_section(scene_file, "camera", build_camera_section_lines(scene));
 }
@@ -1194,6 +1201,7 @@ std::filesystem::path resolve_project_sidecar_vision_json(const NativeEditorScen
 }
 
 void persist_native_scene_vision_metadata(const NativeEditorScene& scene) {
+    if (scene.read_only) return;
     const auto scene_file = resolve_project_path(scene.project_root, scene.route);
     const auto storage = normalize_route(scene.vision_storage);
     const auto source_id = sanitize_vision_source_id(scene.vision_source_id);
@@ -1220,6 +1228,7 @@ void persist_native_scene_vision_metadata(const NativeEditorScene& scene) {
 }
 
 void persist_native_scene_vision_document(const NativeEditorScene& scene) {
+    if (scene.read_only) return;
     const auto scene_file = resolve_project_path(scene.project_root, scene.route);
     if (normalize_route(scene.vision_storage) != "embedded" ||
         scene.vision_document_data.empty()) {
@@ -1239,6 +1248,7 @@ void persist_native_scene_vision_document(const NativeEditorScene& scene) {
 }
 
 void persist_native_scene_common(const NativeEditorScene& scene) {
+    if (scene.read_only) throw std::runtime_error("External geometry scenes cannot be saved");
     if (detect_scene_folder(scene.project_root)) {
         SceneFolders::SceneAssetStore store(scene.project_root);
         auto diagnostics = store.validate_manifest();
@@ -1571,11 +1581,12 @@ NativeEditorActor& add_native_actor_to_scene(NativeEditorScene& scene,
         // 音频物体：无网格，纯 transform 几何（空路径）。
         item.geometry = std::make_unique<Corona::API::Geometry>(std::string{});
     } else {
-        item.geometry = std::make_unique<Corona::API::Geometry>(path_to_utf8(asset_path));
+        item.geometry = std::make_unique<Corona::API::Geometry>(path_to_utf8(asset_path), item.import_options);
     }
     item.geometry->set_position(item.position);
     item.geometry->set_rotation(item.rotation);
     item.geometry->set_scale(item.scale);
+    if (item.authored_matrix) item.geometry->set_matrix(*item.authored_matrix);
     if (!item.persisted_animation_sources.empty()) {
         std::vector<std::filesystem::path> paths;
         for (const auto& source : item.persisted_animation_sources) {
@@ -1795,6 +1806,17 @@ void validate_archive_snapshot(const nlohmann::json& snapshot) {
             throw std::runtime_error("ArchiveSnapshot actor asset_path must be absolute");
         }
         const auto& transform = actor["transform"];
+        if (transform.contains("matrix")) {
+            const auto& matrix = transform.at("matrix");
+            if (!matrix.is_array() || matrix.size() != 16)
+                throw std::runtime_error("Actor matrix requires 16 values");
+            for (const auto& value : matrix)
+                if (!value.is_number() || !std::isfinite(value.get<float>()))
+                    throw std::runtime_error("Actor matrix requires finite float values");
+            for (int i : {3, 7, 11, 15})
+                if (std::abs(matrix[i].get<float>() - (i == 15 ? 1.0f : 0.0f)) > 1e-6f)
+                    throw std::runtime_error("Actor matrix must be affine");
+        }
         validate_snapshot_float3(transform.value("position", nlohmann::json()),
                                  "actor.transform.position");
         validate_snapshot_float3(transform.value("rotation", nlohmann::json()),
@@ -1838,6 +1860,14 @@ void validate_archive_snapshot(const nlohmann::json& snapshot) {
         validate_snapshot_float3(camera.value("world_up", nlohmann::json()), "camera.world_up");
         validate_snapshot_finite_number(camera, "fov", "camera.fov");
         validate_snapshot_finite_number(camera, "move_speed", "camera.move_speed");
+        const auto x_sign = camera.value("projection_x_sign", 1.0f);
+        const auto near_plane = camera.value("near_plane", 0.1f);
+        const auto far_plane = camera.value("far_plane", 100.0f);
+        if (!std::isfinite(x_sign) || std::abs(x_sign) != 1.0f ||
+            !std::isfinite(near_plane) || !std::isfinite(far_plane) ||
+            near_plane <= 0.0f || far_plane <= near_plane) {
+            throw std::runtime_error("ArchiveSnapshot camera projection is invalid");
+        }
         for (const auto* dimension : {"width", "height", "view_width", "view_height"}) {
             if (!camera.contains(dimension) || !camera[dimension].is_number_integer() ||
                 camera[dimension].get<std::int64_t>() <= 0 ||
@@ -1903,6 +1933,12 @@ NativeEditorActor native_actor_from_snapshot(const nlohmann::json& actor_data) {
     }
     item.resolved_asset_path = actor_data.value("asset_path", std::string{});
     const auto transform = actor_data.value("transform", nlohmann::json::object());
+    if (transform.contains("matrix")) item.authored_matrix = transform.at("matrix").get<std::array<float, 16>>();
+    const auto options = actor_data.value("import_options", nlohmann::json::object());
+    item.import_options.scene_geometry = options.value("scene_geometry", false);
+    item.import_options.flip_uvs = options.value("flip_uvs", false);
+    item.import_options.flip_normals = options.value("flip_normals", false);
+    item.import_options.face_normals = options.value("face_normals", false);
     item.position = snapshot_float3(transform.value("position", nlohmann::json::array()),
                                     {0.0f, 0.0f, 0.0f});
     item.rotation = snapshot_float3(transform.value("rotation", nlohmann::json::array()),
@@ -2004,7 +2040,7 @@ bool snapshot_actor_resource_supported(const NativeEditorActor& actor,
         return image_extensions.contains(extension);
     }
     static const std::set<std::string> model_extensions{
-        ".actor", ".dae", ".fbx", ".glb", ".gltf", ".obj", ".usd", ".usda", ".usdc"};
+        ".actor", ".dae", ".fbx", ".glb", ".gltf", ".obj", ".ply", ".usd", ".usda", ".usdc"};
     return model_extensions.contains(extension);
 }
 
@@ -2086,6 +2122,8 @@ NativeEditorCamera materialize_camera_snapshot(NativeEditorScene& scene,
                                           {0.0f, 1.0f, 0.0f});
     item.engine_camera = std::make_unique<Corona::API::Camera>(
         position, forward, world_up, camera_data.value("fov", 45.0f));
+    item.engine_camera->set_projection(camera_data.value("projection_x_sign", 1.0f),
+        camera_data.value("near_plane", 0.1f), camera_data.value("far_plane", 100.0f));
     item.engine_camera->set_size(item.width, item.height);
     item.engine_camera->set_output_mode(camera_data.value("output_mode", std::string{"final_color"}));
     item.engine_camera->set_render_backend(camera_data.value("render_backend", std::string{"native"}));
@@ -2120,6 +2158,8 @@ NativeEditorScene& materialize_scene_snapshot_into_state(
     state.project_path.clear();
     state.scene = std::make_unique<NativeEditorScene>();
     auto& scene = *state.scene;
+    scene.read_only = snapshot.value("read_only", false);
+    scene.frame_when_ready = scene.read_only && data.at("cameras").empty();
     scene.project_root = path_from_utf8(snapshot.at("project_root").get<std::string>());
     scene.route = data.value("route", std::string{});
     scene.name = data.value("name", stem_utf8(scene.route));
@@ -2173,11 +2213,12 @@ NativeEditorScene& materialize_scene_snapshot_into_state(
         for (const auto& actor_data : data.at("actors")) {
             materialize_actor_snapshot(scene, actor_data, allow_degraded, diagnostics);
         }
-        scene.engine_scene->set_simulation_enabled(true);
+        scene.engine_scene->set_simulation_enabled(data.value("simulation_enabled", true));
         apply_native_scene_vision_source(scene);
         restore_native_camera_lock_target(scene);
         scene.load_diagnostics = diagnostics;
-        state.project_path = path_to_utf8(scene.project_root);
+        state.project_path = scene.read_only ? snapshot.at("source_path").get<std::string>()
+                                            : path_to_utf8(scene.project_root);
         return scene;
     } catch (...) {
         state.scene.reset();
@@ -2195,7 +2236,13 @@ NativeResult invoke_project_archive_parser(const std::string& path,
         {"path", path},
         {"load_policy", load_policy},
     }});
-    return invoke_python_script_service(parser_request, "python-archive");
+    // External renderer scenes can contain millions of inline coordinates or
+    // curves to skip. Their one-time parse needs a larger budget than UI calls.
+    const auto extension = to_lower_ascii(path_from_utf8(path).extension().string());
+    const auto timeout = (extension == ".xml" || extension == ".pbrt")
+                             ? std::chrono::seconds(300)
+                             : std::chrono::seconds(2);
+    return invoke_python_script_service(parser_request, "python-archive", timeout);
 }
 
 struct PreparedArchiveLoad {
@@ -2277,13 +2324,17 @@ NativeEditorScene* reload_native_editor_scene(const std::string& project_path_ar
         throw std::runtime_error("No active project path for native editor reload");
     }
 
-    const auto project_root = path_from_utf8(project_path);
-    const auto archive_path = project_root / "scene.ini";
+    auto project_root = path_from_utf8(project_path);
+    const bool external = state.scene && state.scene->read_only &&
+        (absolute_normalized_path(project_root) == absolute_normalized_path(state.scene->project_root) ||
+         absolute_normalized_path(project_root) == absolute_normalized_path(path_from_utf8(state.project_path)));
+    const auto archive_path = external ? path_from_utf8(state.project_path) : project_root / "scene.ini";
+    project_root = archive_path.parent_path();
     const auto requested_route = normalize_route(scene_route_arg);
-    if (!requested_route.empty() && requested_route != "scene.ini" &&
+    if (!requested_route.empty() && requested_route != path_to_utf8(archive_path.filename()) &&
         absolute_normalized_path(resolve_project_path(project_root, requested_route)) !=
             absolute_normalized_path(archive_path)) {
-        throw std::runtime_error("Only the current scene.ini can be reloaded");
+        throw std::runtime_error("Only the current scene source can be reloaded");
     }
 
     auto prepared = prepare_archive_load(path_to_utf8(archive_path), "prompt");
@@ -2309,9 +2360,9 @@ bool native_scene_request_matches(const NativeEditorScene& scene,
     const auto requested_path = path_from_utf8(requested);
     if (requested_path.is_absolute() || requested_path.has_parent_path()) {
         return absolute_normalized_path(resolve_project_path(scene.project_root, requested)) ==
-               absolute_normalized_path(scene.project_root / "scene.ini");
+               absolute_normalized_path(scene.project_root / path_from_utf8(scene.route));
     }
-    return requested == "scene.ini" || requested == scene.name;
+    return requested == scene.route || requested == scene.name;
 
 }
 
@@ -2371,6 +2422,27 @@ nlohmann::json project_resource_load_status() {
             ++pending;
         }
     }
+    if (state.scene->frame_when_ready && pending == 0) {
+        if (ready == 0) state.scene->frame_when_ready = false;
+        if (ready > 0 && !state.scene->cameras.empty()) {
+            const auto bounds = state.scene->engine_scene->get_aabb();
+            std::array<float, 3> center{};
+            float radius2 = 0;
+            for (int i = 0; i < 3; ++i) {
+                center[i] = (bounds[i] + bounds[i+3]) * 0.5f;
+                const auto extent = (bounds[i+3] - bounds[i]) * 0.5f;
+                radius2 += extent * extent;
+            }
+            const auto radius = std::sqrt(radius2);
+            if (std::isfinite(radius) && radius > 0) {
+                state.scene->frame_when_ready = false;
+                auto position = center;
+                position[2] -= radius * 3.0f;
+                auto& camera = state.scene->cameras[state.scene->active_camera_index];
+                camera.engine_camera->set(position, {0,0,1}, {0,1,0}, 45.0f);
+            }
+        }
+    }
     const auto total = ready + failed + pending;
     const double progress = total == 0
                                 ? 100.0
@@ -2400,6 +2472,11 @@ nlohmann::json camera_to_json(const NativeEditorCamera& camera) {
     item["forward"] = camera.engine_camera ? camera.engine_camera->get_forward() : std::array<float, 3>{0.0f, 0.0f, 1.0f};
     item["world_up"] = camera.engine_camera ? camera.engine_camera->get_world_up() : std::array<float, 3>{0.0f, 1.0f, 0.0f};
     item["fov"] = camera.engine_camera ? camera.engine_camera->get_fov() : 45.0f;
+    const auto projection = camera.engine_camera ? camera.engine_camera->get_projection()
+                                                : std::array<float, 3>{1.0f, 0.1f, 100.0f};
+    item["projection_x_sign"] = projection[0];
+    item["near_plane"] = projection[1];
+    item["far_plane"] = projection[2];
     item["width"] = camera.width;
     item["height"] = camera.height;
     item["output_mode"] = camera.engine_camera ? camera.engine_camera->get_output_mode() : "final_color";
@@ -2760,14 +2837,23 @@ std::optional<std::array<float, 6>> native_actor_world_aabb(const NativeEditorAc
     if (!local || !actor.geometry) {
         return std::nullopt;
     }
-    const auto position = actor.geometry->get_position();
-    const auto scale = actor.geometry->get_scale();
-    std::array<float, 6> result{};
-    for (size_t axis = 0; axis < 3; ++axis) {
-        const auto a = position[axis] + (*local)[axis] * scale[axis];
-        const auto b = position[axis] + (*local)[axis + 3] * scale[axis];
-        result[axis] = std::min(a, b);
-        result[axis + 3] = std::max(a, b);
+    auto& hub = Corona::SharedDataHub::instance();
+    auto geometry = hub.geometry_storage().try_acquire_read(actor.geometry->get_handle());
+    if (!geometry) return std::nullopt;
+    auto transform = hub.model_transform_storage().try_acquire_read(geometry->transform_handle);
+    if (!transform) return std::nullopt;
+    const auto matrix = transform->compute_matrix();
+    const float infinity = std::numeric_limits<float>::infinity();
+    std::array<float, 6> result{infinity,infinity,infinity,-infinity,-infinity,-infinity};
+    for (unsigned int corner = 0; corner < 8; ++corner) {
+        const std::array<float, 4> point{(*local)[(corner&1) ? 3 : 0],
+            (*local)[(corner&2) ? 4 : 1], (*local)[(corner&4) ? 5 : 2], 1};
+        for (int axis = 0; axis < 3; ++axis) {
+            float value = 0;
+            for (int c = 0; c < 4; ++c) value += matrix[c][axis] * point[c];
+            result[axis] = std::min(result[axis], value);
+            result[axis+3] = std::max(result[axis+3], value);
+        }
     }
     if (!aabb_has_usable_extent(result)) {
         return std::nullopt;
@@ -4159,7 +4245,7 @@ std::optional<std::filesystem::path> show_native_path_dialog(
     options.title = title ? title : L"";
     if (!pick_folder) {
         options.filters = {
-            {L"Corona 场景或 Vision 文件", L"scene.ini;*.json"},
+            {L"Corona / Mitsuba 3 / PBRT v4 / Vision", L"scene.ini;*.xml;*.pbrt;*.json"},
             {L"所有文件", L"*.*"},
         };
     }
@@ -4174,7 +4260,7 @@ std::optional<std::filesystem::path> open_project_file_native() {
     return show_native_path_dialog(
         false,
         default_path,
-        L"打开项目或 Vision 场景");
+        L"打开 Corona 或外部场景");
 }
 
 std::optional<std::filesystem::path> browse_folder_native(
@@ -4187,7 +4273,7 @@ std::optional<std::filesystem::path> browse_folder_native(
 const std::vector<NativeFileDialogFilter>* resource_dialog_filters(
     const std::string& file_type) {
     static const std::vector<NativeFileDialogFilter> model_filters{
-        {L"三维模型", L"*.obj;*.fbx;*.3ds;*.dae;*.usd;*.usda;*.usdz;*.gltf;*.glb;*.usdc;*.stl"},
+        {L"三维模型", L"*.obj;*.ply;*.fbx;*.3ds;*.dae;*.usd;*.usda;*.usdz;*.gltf;*.glb;*.usdc;*.stl"},
         {L"所有文件", L"*.*"},
     };
     static const std::vector<NativeFileDialogFilter> multimedia_filters{
@@ -4412,7 +4498,8 @@ nlohmann::json make_native_main_init_payload(NativeEditorScene* scene) {
         {"scene", {{"path", scene->route}, {"name", scene->name}}},
         {"path", scene->route},
         {"name", scene->name},
-        {"project_path", path_to_utf8(scene->project_root)},
+        {"project_path", scene->read_only ? native_editor_state().project_path : path_to_utf8(scene->project_root)},
+        {"read_only", scene->read_only},
     };
 }
 
@@ -5658,6 +5745,11 @@ nlohmann::json recent_projects_native() {
 
 nlohmann::json active_project_info_json() {
     auto& state = native_editor_state();
+    if (state.scene && state.scene->read_only) {
+        return {{"name", state.scene->name}, {"mode", "creative"},
+                {"project_path", state.project_path}, {"read_only", true},
+                {"source_path", state.project_path}};
+    }
     const auto project_path = normalize_route(
         state.project_path.empty() ? resolve_active_project_path(nlohmann::json::array())
                                    : state.project_path);
@@ -6601,6 +6693,11 @@ std::string set_editor_camera_transform_from_python(const std::string& scene_nam
                                       : camera->engine_camera->get_world_up();
         const auto fov = json_float_value(camera_data, "fov", camera->engine_camera->get_fov());
         camera->engine_camera->set(position, forward, world_up, fov);
+        const auto projection = camera->engine_camera->get_projection();
+        camera->engine_camera->set_projection(
+            camera_data.value("projection_x_sign", projection[0]),
+            camera_data.value("near_plane", projection[1]),
+            camera_data.value("far_plane", projection[2]));
 
         const bool persist = json_bool_value(camera_data, "persist", true);
         if (persist) {
@@ -6694,6 +6791,11 @@ std::string capture_editor_camera_view_from_python(const std::string& scene_name
         camera->height = std::max(json_int_value(camera_data, "height", camera->height), 1);
         camera->engine_camera->set_size(camera->width, camera->height);
         const auto output_mode = json_string_value(camera_data, {"output_mode"});
+        const auto projection = camera->engine_camera->get_projection();
+        camera->engine_camera->set_projection(
+            camera_data.value("projection_x_sign", projection[0]),
+            camera_data.value("near_plane", projection[1]),
+            camera_data.value("far_plane", projection[2]));
         camera->engine_camera->set_output_mode(output_mode.empty() ? "base_color" : output_mode);
         camera->engine_camera->set_ssao_enabled(
             json_bool_value(camera_data, "ssao_enabled", camera->engine_camera->get_ssao_enabled()));
@@ -7095,8 +7197,10 @@ void register_project_launcher_api_handlers(NativeApiRegistry& registry) {
                     {"diagnostics", prepared.diagnostics},
                 });
             }
-            update_editor_settings_section("General", {{"last_project", state.project_path}});
-            add_recent_project_native(state.scene->project_root);
+            if (!state.scene->read_only) {
+                update_editor_settings_section("General", {{"last_project", state.project_path}});
+                add_recent_project_native(state.scene->project_root);
+            }
             std::size_t unresolved_count = 0;
             for (const auto& actor : state.scene->actors) {
                 if (actor.load_status != ActorLoadStatus::Loaded) ++unresolved_count;
@@ -7321,7 +7425,9 @@ void register_main_view_api_handlers(NativeApiRegistry& registry) {
         {"on_init", [](const NativeRequest& request, const NativeContext&) {
             auto& state = native_editor_state();
             const auto requested_path = normalize_route(arg_string(request.args, 0));
-            if (!requested_path.empty()) {
+            if (!requested_path.empty() && !(state.scene && state.scene->read_only &&
+                absolute_normalized_path(path_from_utf8(requested_path)) ==
+                absolute_normalized_path(path_from_utf8(state.project_path)))) {
                 const auto project_root = canonical_project_dir_for_settings(
                     path_from_utf8(requested_path));
                 if (!is_valid_project_dir(project_root)) {
@@ -7350,6 +7456,9 @@ void register_main_view_api_handlers(NativeApiRegistry& registry) {
         {"run_project", script_method},
         {"scene_save", [](const NativeRequest& request, const NativeContext&) {
             auto* scene = ensure_native_editor_scene();
+            if (scene->read_only)
+                return native_success({{"ok", false}, {"status", "read_only"},
+                                       {"message", "External geometry scenes cannot be saved"}});
             const auto scene_route = normalize_route(arg_string(request.args, 0));
             scene = resolve_native_editor_scene_request(scene, scene_route);
             const auto snapshot = arg_object(request.args, 1);
@@ -8141,10 +8250,12 @@ void register_scene_tools_api_handlers(NativeApiRegistry& registry) {
             const auto project_path = arg_string(request.args, 1);
             auto* current = resolve_native_editor_scene_request(ensure_native_editor_scene(), scene_route);
             if (!project_path.empty() && absolute_normalized_path(path_from_utf8(project_path)) !=
-                                         absolute_normalized_path(current->project_root)) {
-                return native_failure("Reload only accepts the current project directory", 2);
+                                         absolute_normalized_path(current->project_root) &&
+                !(current->read_only && absolute_normalized_path(path_from_utf8(project_path)) ==
+                    absolute_normalized_path(path_from_utf8(native_editor_state().project_path)))) {
+                return native_failure("Reload only accepts the current project or scene source", 2);
             }
-            auto* scene = reload_native_editor_scene(path_to_utf8(current->project_root), "scene.ini");
+            auto* scene = reload_native_editor_scene(path_to_utf8(current->project_root), current->route);
             return native_success({
                 {"status", "success"},
                 {"scene", scene->route},

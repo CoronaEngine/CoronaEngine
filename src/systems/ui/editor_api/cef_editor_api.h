@@ -6,6 +6,7 @@
 
 #include <Python.h>
 
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -153,7 +154,8 @@ std::uint64_t register_python_script_callback_callable(const std::string& event_
                                                        PyObject* callback);
 void clear_python_script_callbacks();
 NativeResult invoke_python_script_service(const NativeRequest& request,
-                                          const char* route = "python-script");
+                                          const char* route = "python-script",
+                                          std::chrono::milliseconds timeout = std::chrono::seconds(2));
 bool enqueue_python_project_context_changed(std::string_view project_path);
 
 }  // namespace Corona::Systems::UI
