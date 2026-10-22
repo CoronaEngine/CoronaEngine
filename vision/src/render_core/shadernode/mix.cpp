@@ -46,7 +46,11 @@ private:
 
 public:
     MixNode() = default;
-    explicit MixNode(const ShaderNodeDesc &desc) : ShaderNode(desc) {}
+    explicit MixNode(const ShaderNodeDesc &desc) : ShaderNode(desc) {
+        t_.set(ShaderNodeSlot::create_slot(*desc.slot("t")));
+        A_.set(ShaderNodeSlot::create_slot(*desc.slot("A")));
+        B_.set(ShaderNodeSlot::create_slot(*desc.slot("B")));
+    }
     VS_MAKE_PLUGIN_NAME_FUNC
     OC_ENCODABLE_FUNC(ShaderNode, t_, A_, B_)
     VS_HOTFIX_MAKE_RESTORE(ShaderNode, t_, A_, B_)

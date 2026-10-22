@@ -11,6 +11,10 @@
 namespace vision {
 using namespace ocarina;
 
+GeometryGpuResource::~GeometryGpuResource() {
+    MaterialLut::release_scene_luts(bindless_array_);
+}
+
 namespace {
 
 vector<uint> collect_instance_mesh_ids(const GeometryData &data) {

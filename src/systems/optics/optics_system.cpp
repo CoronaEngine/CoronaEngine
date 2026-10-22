@@ -5866,6 +5866,8 @@ std::size_t OpticsSystem::compute_vision_scene_signature() const {
                 if (!optics->visible) continue;
 
                 // Material parameters bridged into the Vision principled BSDF.
+                mix(optics->principled ? optics->principled->revision : 0u);
+                mix(reinterpret_cast<std::size_t>(optics->material_overrides.get()));
                 mix_float(optics->metallic);
                 mix_float(optics->roughness);
                 mix_float(optics->subsurface);

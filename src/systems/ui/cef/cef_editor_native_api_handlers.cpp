@@ -697,6 +697,7 @@ struct NativeEditorScene {
     std::string vision_document_asset_root;
     std::array<float, 3> sun_direction{1.0f, 1.0f, 1.0f};
     bool sun_enabled{true};
+    nlohmann::json authored_lighting;
     bool floor_grid_enabled{true};
     std::vector<NativeEditorActor> actors;
     std::vector<NativeEditorCamera> cameras;
@@ -1397,6 +1398,7 @@ void apply_native_scene_environment(NativeEditorScene& scene) {
     scene.environment->set_floor_grid(scene.floor_grid_enabled);
     scene.environment->set_sun_intensity(scene.sun_enabled ? 10.0f : 0.0f);
     scene.environment->set_sky_intensity(scene.sun_enabled ? 20.0f : 0.0f);
+    scene.environment->set_authored_lighting(scene.authored_lighting.is_null() ? "" : scene.authored_lighting.dump());
 }
 
 void apply_native_scene_vision_source(NativeEditorScene& scene) {
@@ -1545,14 +1547,20 @@ void apply_native_actor_optics_state(NativeEditorActor& item) {
     }
     auto overrides = std::make_shared<const Corona::Materials::Overrides>(
         NativeMaterialConfig::parse(NativeMaterialConfig::resolve(item.persisted_optics)));
+    auto principled = NativeMaterialConfig::principled(item.persisted_optics.material);
     auto& hub = Corona::SharedDataHub::instance();
     if (item.engine_actor) {
         if (auto actor = hub.actor_storage().acquire_read(item.engine_actor->get_handle())) {
             for (const auto handle : actor->profile_handles) {
                 auto profile = hub.profile_storage().acquire_read(handle);
-                if (!profile || profile->geometry_handle != item.geometry->get_handle()) continue;
-                if (auto write = hub.optics_storage().acquire_write(profile->optics_handle))
+                if (!profile || !profile->optics_handle) continue;
+                if (auto write = hub.optics_storage().acquire_write(profile->optics_handle)) {
+                    // Geometry belongs to the component. Profile::geometry_handle
+                    // is intentionally empty for API-created actor profiles.
+                    if (write->geometry_handle != item.geometry->get_handle()) continue;
                     write->material_overrides = overrides;
+                    write->principled = principled;
+                }
             }
         }
     }
@@ -1707,6 +1715,7 @@ nlohmann::json native_scene_environment_payload(const NativeEditorScene& scene) 
             {"enabled", scene.sun_enabled},
             {"direction", scene.sun_direction},
         }},
+        {"authored_lighting", scene.authored_lighting},
         {"grid", {{"enabled", scene.floor_grid_enabled}}},
         {"physics", {
             {"gravity", scene.environment->get_gravity()},
@@ -2172,6 +2181,7 @@ NativeEditorScene& materialize_scene_snapshot_into_state(
     scene.terrain_type = terrain.value("type", std::string{});
     scene.terrain_path = terrain.value("path", std::string{});
     scene.sun_enabled = environment.value("sun_enabled", true);
+    scene.authored_lighting = environment.value("authored_lighting",nlohmann::json{});
     scene.sun_direction = snapshot_float3(
         environment.value("sun_direction", nlohmann::json::array()), {1.0f, 1.0f, 1.0f});
     scene.floor_grid_enabled = environment.value("floor_grid_enabled", true);
@@ -2637,6 +2647,8 @@ nlohmann::json actor_to_json(const NativeEditorScene& scene, const NativeEditorA
         }
     }
     item["material"] = {{"source", "model"}, {"overrides", NativeMaterialConfig::resolve(actor.persisted_optics)}};
+    if (actor.persisted_optics.material.contains("principled"))
+        item["material"]["principled"] = actor.persisted_optics.material["principled"];
     if (!actor.persisted_optics.texture.empty()) item["material"]["texture"] = actor.persisted_optics.texture;
     item["camera_lock"] = {
         {"enabled", actor.camera_lock_enabled},

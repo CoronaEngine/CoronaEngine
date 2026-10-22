@@ -19,9 +19,10 @@ struct EnvironmentDevice;
 
 namespace Corona::Systems::Vision {
 
-enum class VisionLightingMode { None, NeutralPreview };
+enum class VisionLightingMode { None, NeutralPreview, Authored };
 
 struct VisionLightingState {
+    std::size_t authored_revision{};
     VisionLightingMode mode{VisionLightingMode::None};
     // Vision stores the outgoing direction, whereas Corona stores toward-sun.
     std::array<float, 3> sun_direction{};

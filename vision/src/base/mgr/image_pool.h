@@ -28,6 +28,8 @@ private:
 public:
     ImagePool() = default;
     void set_source_cache(SP<SourceCache> cache) { source_cache_ = ocarina::move(cache); }
+    // Engine bridges may supply already decoded images from their resource cache.
+    void register_source(const ShaderNodeDesc& desc, Image image);
     static ImagePool &instance();
     static void destroy_instance();
     [[nodiscard]] RegistrableTexture3D load_texture(const ShaderNodeDesc &desc,

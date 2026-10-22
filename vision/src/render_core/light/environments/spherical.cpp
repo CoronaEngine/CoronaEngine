@@ -193,8 +193,8 @@ public:
         vector<float> weights(res.x * res.y, 0);
         color_->for_each_pixel([&](const std::byte *pixel, int idx, PixelStorage pixel_storage) {
             float f = 0;
-            float v = idx / res.y + 0.5f;
-            float theta = v / res.x;
+            float v = idx / res.x + 0.5f;
+            float theta = v / res.y;
             float sinTheta = std::sin(Pi * theta);
             switch (pixel_storage) {
                 case PixelStorage::FLOAT4: {

@@ -328,8 +328,11 @@ void ShaderNodeDesc::init(const ParameterSet &ps) noexcept {
         parameter_.set_value("value", ps.as_float(1.f));
     } else {
         sub_type = ps["type"].as_string();
-        set_parameter(ps["param"]);
+        // An explicit shader node replaces the slot's default number. Keeping
+        // the old `value` changes image identity and bypasses supplied pixels.
+        parameter_.set_json(ps["param"].data());
     }
+    reset_hash();
 }
 
 void LightSamplerDesc::init(const ParameterSet &ps) noexcept {

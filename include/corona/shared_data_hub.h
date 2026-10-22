@@ -256,6 +256,7 @@ struct AcousticsDevice {
 struct OpticsDevice {
     std::uintptr_t geometry_handle{};
     std::shared_ptr<const Materials::Overrides> material_overrides;
+    std::shared_ptr<const Materials::Principled> principled;
 
     bool visible{true};  // 控制模型是否参与渲染
 
@@ -632,6 +633,8 @@ struct ViewportGizmoState {
 };
 
 struct EnvironmentDevice {
+    std::shared_ptr<const nlohmann::json> authored_lighting;
+    std::size_t authored_lighting_revision{};
     ktm::fvec3 sun_position;
     std::uint32_t floor_grid_enabled{1};
 

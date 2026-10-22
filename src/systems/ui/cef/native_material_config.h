@@ -9,6 +9,73 @@
 namespace NativeMaterialConfig {
 using Json = nlohmann::json;
 
+inline void validate_expression(const Json& value, unsigned depth=0) {
+    if (depth > 32) throw std::invalid_argument("Appearance expression is too deep");
+    if (value.is_number()) {
+        if (!std::isfinite(value.get<double>())) throw std::invalid_argument("Nonfinite appearance value");
+    } else if (value.is_array()) {
+        if (value.empty() || value.size() > 16) throw std::invalid_argument("Invalid appearance vector size");
+        for (const auto& component : value) {
+            if (!component.is_number()) throw std::invalid_argument("Appearance vector must be numeric");
+            validate_expression(component,depth+1);
+        }
+    } else if (value.is_object()) {
+        const auto kind = value.value("kind",std::string{});
+        if (kind != "image" && kind != "checkerboard" && kind != "multiply" && kind != "mix" && kind != "sqrt")
+            throw std::invalid_argument("Unknown appearance expression: " + kind);
+        if (kind == "image") {
+            if (!value.contains("path") || !value["path"].is_string()) throw std::invalid_argument("Image path required");
+            const auto encoding=value.value("encoding",std::string{"srgb"});
+            if (encoding!="srgb" && encoding!="linear") throw std::invalid_argument("Unsupported image encoding");
+        }
+        if (kind!="image" && !value.contains("a")) throw std::invalid_argument("Appearance operand a required");
+        if (kind!="image" && kind!="sqrt" && !value.contains("b")) throw std::invalid_argument("Appearance operand b required");
+        if (kind=="mix" && !value.contains("weight")) throw std::invalid_argument("Appearance mix weight required");
+        if (value.contains("uv") && (!value["uv"].is_array() || value["uv"].size()!=9))
+            throw std::invalid_argument("Appearance UV transform needs nine numbers");
+        for (const auto* key : {"a","b","weight","uv"})
+            if (value.contains(key)) validate_expression(value[key],depth+1);
+    } else throw std::invalid_argument("Invalid appearance expression");
+}
+
+inline std::shared_ptr<const Corona::Materials::Principled> principled(const Json& config) {
+    if (!config.contains("principled")) return {};
+    const auto& data = config.at("principled");
+    if (!data.is_object() || data.size() > 32) throw std::invalid_argument("Invalid Principled material");
+    auto result = std::make_shared<Corona::Materials::Principled>();
+    auto scalar = [&](const char* key, float fallback) {
+        if (!data.contains(key)) return fallback;
+        validate_expression(data[key]);
+        if (data[key].is_array() && data[key].size()!=1 && data[key].size()!=3)
+            throw std::invalid_argument("Principled scalar has invalid channel count");
+        return data[key].is_number() ? data[key].get<float>() : fallback;
+    };
+    auto color = [&](const char* key, auto& destination) {
+        if (!data.contains(key)) return;
+        validate_expression(data[key]);
+        if (data[key].is_array()) {
+            if (data[key].size()!=3) throw std::invalid_argument("Principled color needs three channels");
+            for (unsigned c=0;c<3;++c) destination[c]=data[key][c].get<float>();
+        } else if (data[key].is_number()) for (unsigned c=0;c<3;++c) destination[c]=data[key].get<float>();
+    };
+    auto& surface=result->surface;
+    color("base_color",surface.base_color);
+    color("emission",surface.emissive);
+    surface.metallic=scalar("metallic",0.f);
+    surface.roughness=scalar("roughness",.5f);
+    surface.ior=scalar("ior",1.5f);
+    surface.specular_factor=scalar("specular",0.f);
+    surface.clearcoat=scalar("coat",0.f);
+    surface.clearcoat_roughness=scalar("coat_roughness",.1f);
+    surface.double_sided=data.value("two_sided",false);
+    result->transmission=scalar("transmission",0.f);
+    result->anisotropic=scalar("anisotropic",0.f);
+    result->emission_two_sided=data.value("emission_two_sided",false);
+    result->expressions=std::make_shared<const Json>(data);
+    result->revision=std::hash<std::string>{}(data.dump());
+    return result;
+}
+
 inline Corona::Materials::Overrides parse(const Json& rows) {
     if (!rows.is_array() || rows.size() > 4096)
         throw std::invalid_argument("material.overrides must contain at most 4096 objects");
@@ -73,6 +140,7 @@ inline void validate(const Json& config) {
     if (source != "model" && source != "scene" && source != "legacy")
         throw std::invalid_argument("material.source must be model, scene, or legacy");
     (void)parse(config.value("overrides", Json::array()));
+    (void)principled(config);
 }
 
 // Old editor saves manufactured these exact values, even for models which had

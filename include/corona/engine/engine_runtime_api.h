@@ -402,6 +402,7 @@ class Environment {
    public:
     Environment();
     ~Environment();
+    void set_authored_lighting(const std::string& description);
 
     void set_sun_direction(const std::array<float, 3>& direction);
     [[nodiscard]] std::array<float, 3> get_sun_direction() const;

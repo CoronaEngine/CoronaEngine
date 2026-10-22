@@ -9,6 +9,8 @@
 // Forward declarations
 namespace vision {
 class Material;
+class Scene;
+class ShapeInstance;
 }  // namespace vision
 
 namespace Corona {
@@ -35,5 +37,7 @@ namespace Corona::Systems::Vision {
 std::shared_ptr<::vision::Material> create_vision_material(
     const OpticsDevice& optics,
     const MeshDevice& mesh_dev);
+void attach_vision_emission(::vision::Scene& scene, ::vision::ShapeInstance& instance,
+    const OpticsDevice& optics, const MeshDevice& mesh, unsigned instance_index);
 
 }  // namespace Corona::Systems::Vision

@@ -9,6 +9,7 @@
 #include "base/illumination/light.h"
 #include "base/import/node_desc.h"
 #include "base/mgr/scene.h"
+#include "vision_environment_adapter.h"
 
 namespace Corona::Systems::Vision {
 
@@ -27,6 +28,7 @@ namespace {
 }  // namespace
 
 VisionLightingMode vision_lighting_mode(const EnvironmentDevice& env) noexcept {
+    if (env.authored_lighting) return VisionLightingMode::Authored;
     return std::isfinite(env.sky_intensity) && env.sky_intensity > 0.f
                ? VisionLightingMode::NeutralPreview
                : VisionLightingMode::None;
@@ -34,6 +36,7 @@ VisionLightingMode vision_lighting_mode(const EnvironmentDevice& env) noexcept {
 
 VisionLightingState make_vision_lighting_state(const EnvironmentDevice& env) noexcept {
     VisionLightingState result;
+    result.authored_revision=env.authored_lighting_revision;
     result.mode = vision_lighting_mode(env);
     const auto positive_finite = [](float value) {
         return std::isfinite(value) ? std::max(value, 0.f) : 0.f;
@@ -59,6 +62,7 @@ VisionLightingState make_vision_lighting_state(const EnvironmentDevice& env) noe
 }
 
 const char* vision_lighting_mode_name(VisionLightingMode mode) noexcept {
+    if (mode==VisionLightingMode::Authored) return "authored";
     return mode == VisionLightingMode::NeutralPreview ? "neutral-preview" : "none";
 }
 
@@ -86,7 +90,16 @@ VisionLightSetupResult setup_vision_lights(::vision::Scene& scene, const Environ
     // and sky stay in the sampling list; the last registered infinite light is
     // the background selected by env_light_. Register the delta sun first so
     // only the spherical sky contributes on ray misses (no double-counted sun).
-    if (state.sun_intensity > 0.f) {
+    if (env.authored_lighting) {
+        for (const auto& light:env.authored_lighting->at("directionals")) {
+            auto desc=make_light_desc("directional");
+            const auto d=light.at("direction").get<std::array<float,3>>();
+            desc.set_value("direction",::vision::DataWrap::array({d[0],d[1],-d[2]}));
+            desc.set_value("color",vision_json(appearance_slot(light.at("color"))));
+            desc.set_value("scale",1.f);
+            light_mgr.init({desc});
+        }
+    } else if (state.sun_intensity > 0.f) {
         auto sun_desc = make_light_desc("directional");
         sun_desc.set_value("direction", ::vision::DataWrap::array(
             {state.sun_direction[0], state.sun_direction[1], state.sun_direction[2]}));
@@ -100,6 +113,14 @@ VisionLightSetupResult setup_vision_lights(::vision::Scene& scene, const Environ
     auto sky_desc = make_light_desc("spherical");
     sky_desc.set_value("color", ::vision::DataWrap::array({1.f, 1.f, 1.f}));
     sky_desc.set_value("scale", result.environment_radiance);
+    if (env.authored_lighting) {
+        const auto& environments=env.authored_lighting->at("environments");
+        if (!environments.empty()) {
+            sky_desc.set_value("color",vision_json(authored_environment_slot(environments)));
+            sky_desc.set_value("scale",1.f);
+            result.environment_radiance=1.f;
+        }
+    }
     light_mgr.init({sky_desc});
 
     for (auto& light : light_mgr.lights()) {

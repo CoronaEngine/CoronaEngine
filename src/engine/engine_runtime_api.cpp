@@ -24,6 +24,7 @@
 #include <string>
 #include <utility>
 #include <vector>
+#include <nlohmann/json.hpp>
 
 #include "corona/resource/types/audio.h"
 #include "corona/resource/types/image.h"
@@ -620,6 +621,48 @@ float Corona::API::Environment::get_sun_intensity() const {
         return accessor->sun_intensity;
     }
     return 10.0f;
+}
+
+void Corona::API::Environment::set_authored_lighting(const std::string& description) {
+    if (description.empty()) {
+        if (auto write=SharedDataHub::instance().environment_storage().acquire_write(handle_)) {
+            write->authored_lighting.reset();
+            write->authored_lighting_revision=0;
+        }
+        return;
+    }
+    auto data = std::make_shared<const nlohmann::json>(nlohmann::json::parse(description));
+    if (!data->is_object() || !data->contains("directionals") || !data->at("directionals").is_array() ||
+        !data->contains("environments") || !data->at("environments").is_array())
+        throw std::invalid_argument("Authored lighting requires directional/environment arrays");
+    // Validate before publishing so a failed load cannot leave a partial state.
+    for (const auto& light:data->at("directionals")) {
+        const auto direction=light.at("direction").get<std::array<float,3>>();
+        const auto color=light.at("color").get<std::array<float,3>>();
+        float length2=0;
+        for (unsigned c=0;c<3;++c) {
+            if (!std::isfinite(direction[c]) || !std::isfinite(color[c]) || color[c]<0)
+                throw std::invalid_argument("Invalid authored directional light");
+            length2+=direction[c]*direction[c];
+        }
+        if (!std::isfinite(length2) || length2<1e-12f) throw std::invalid_argument("Invalid light direction");
+    }
+    auto& hub = Corona::SharedDataHub::instance();
+    if (auto write = hub.environment_storage().acquire_write(handle_)) {
+        write->authored_lighting = data;
+        write->authored_lighting_revision = std::hash<std::string>{}(description);
+        write->sun_intensity = 0.f;
+        write->sky_intensity = 0.f;
+        const auto& lights = data->at("directionals");
+        if (!lights.empty()) {
+            const auto& light=lights.front();
+            const auto direction=light.at("direction").get<std::array<float,3>>();
+            const auto color=light.at("color").get<std::array<float,3>>();
+            write->sun_position={-direction[0],-direction[1],-direction[2]};
+            write->sun_color={color[0],color[1],color[2]};
+            write->sun_intensity=1.f;
+        }
+    }
 }
 
 void Corona::API::Environment::set_sky_intensity(float intensity) {

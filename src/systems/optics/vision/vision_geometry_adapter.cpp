@@ -149,6 +149,8 @@ struct CpuMeshData {
 struct PreparedMesh {
     CpuMeshData data;
     std::array<float, 4> color{1.f, 1.f, 1.f, 1.f};
+    std::shared_ptr<const MeshMaterialDevice> material;
+    uint32_t material_index{};
 };
 
 struct PreparedInstance {
@@ -346,10 +348,16 @@ void stage_actor_geometry(std::uintptr_t actor_handle,
                 }
                 if (native_mesh) {
                     mesh.color = native_mesh->materialColor;
+                    mesh.material=native_mesh->material;
+                    mesh.material_index=native_mesh->materialIndex;
                 } else if (source_mesh) {
                     const auto material_index = source->data.meshes[mesh_index].material_index;
                     if (material_index < source->data.materials.size()) {
                         mesh.color = source->data.materials[material_index].base_color;
+                        auto material=std::make_shared<MeshMaterialDevice>();
+                        material->source=source->data.materials[material_index];
+                        mesh.material=std::move(material);
+                        mesh.material_index=material_index;
                     }
                 }
                 prepared.meshes.emplace(mesh_index, std::move(mesh));
@@ -378,6 +386,7 @@ std::vector<PreparedGroup> stage_scene_geometry(VisionBuildResult& result) {
 
 void append_prepared_group(::vision::Scene& scene, PreparedGroup& prepared_group) {
     auto group = std::make_shared<::vision::ShapeGroup>();
+    unsigned instance_index=static_cast<unsigned>(scene.instances().size());
     for (auto& prepared : prepared_group) {
         std::unordered_map<std::size_t, std::shared_ptr<::vision::Mesh>> meshes;
         std::unordered_map<std::size_t, std::shared_ptr<::vision::Material>> materials;
@@ -401,9 +410,11 @@ void append_prepared_group(::vision::Scene& scene, PreparedGroup& prepared_group
             meshes.emplace(mesh_index, scene.geometry().data()->register_mesh(mesh));
             MeshDevice material_source;
             material_source.materialColor = source.color;
+            material_source.material=source.material;
+            material_source.materialIndex=source.material_index;
             auto material = create_vision_material(prepared.optics, material_source);
             if (!material) material = scene.obtain_black_body();
-            scene.add_material(material);
+            material=scene.material_registry().register_(std::move(material));
             materials.emplace(mesh_index, std::move(material));
         }
         for (const auto& source : prepared.instances) {
@@ -411,6 +422,11 @@ void append_prepared_group(::vision::Scene& scene, PreparedGroup& prepared_group
             instance->set_o2w(source.o2w);
             instance->set_name("corona-node:" + std::to_string(prepared.geometry_handle) + ":" + std::to_string(source.draw_index));
             instance->set_material(materials.at(source.mesh_index));
+            MeshDevice material_source;
+            const auto& mesh=prepared.meshes.at(source.mesh_index);
+            material_source.material=mesh.material;
+            material_source.materialIndex=mesh.material_index;
+            attach_vision_emission(scene,*instance,prepared.optics,material_source,instance_index++);
             instance->init_aabb();
             group->aabb.extend(instance->aabb);
             group->add_instance(*instance);
@@ -438,6 +454,7 @@ VisionBuildResult build_vision_geometry(::vision::Scene& scene) {
     scene.clear_shapes();
     scene.geometry().data()->clear_meshes();
     for (auto& group : groups) append_prepared_group(scene, group);
+    scene.material_registry().remove_unused_elements();
     scene.fill_instances();
     scene.update_geometry_instances();
     return result;
