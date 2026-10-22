@@ -112,7 +112,7 @@ inline Float3 GetXvirtual(const Float4 &d, Float hit, Float curvature, Float3 x,
     object.z = -object.z;
     Float mag = 1.f / ocarina::fma(2.f * curvature, object.z, -1.f);
     Float f = length(x) * (1.f - abs(dot(n, v)));
-    mag *= 1.f / ocarina::fma(f, max(curvature, 0.f), 1.f);
+    mag = call<float>("oc_nrd_round_mul", mag, 1.f / ocarina::fma(f, max(curvature, 0.f), 1.f));
     Float3 iw = v * length(object * mag);
     Float closeness = saturate(length(iw) / (hit + NRD_EPS));
     return Lerp(prev, x, closeness * d.w) - iw * d.w;
@@ -190,6 +190,6 @@ inline Float GetLumaScale(Float oldLuma, Float newLuma) { return (newLuma + NRD_
 inline Float4 ChangeLuma(Float4 value, Float newLuma) { return make_float4(value.xyz() * GetLumaScale(value.x, newLuma), value.w); }
 inline Float4 ClampNegativeToZero(Float4 value) { return make_float4(_NRD_LinearToYCoCg(_NRD_YCoCgToLinear(value.xyz())), saturate(value.w)); }
 inline Float4 MixHistoryAndCurrent(const Var<SharedConstants> &c, Float4 history, Float4 current, Float f, Float roughness = 1.f) { return make_float4(Lerp(history.xyz(), current.xyz(), f), Lerp(history.w, current.w, max(f, GetMinAllowedLimitForHitDistNonLinearAccumSpeed(c, roughness)))); }
-inline Float ComputeAntilag(const Var<SharedConstants> &c, Float history, Float avg, Float sigma, Float accum) { Float s = sigma * c.gAntilagParams.x; Float hc = clamp(history, avg - s, avg + s); Float d = abs(history - hc) / (max(history, hc) + NRD_EPS); Float magic = c.gAntilagParams.y * c.gFramerateScale * c.gFramerateScale; return 1.f / (1.f + d * accum / magic); }
+inline Float ComputeAntilag(const Var<SharedConstants> &c, Float history, Float rawMomentSum, Float sigma, Float accum) { Float s = sigma * c.gAntilagParams.x; Float hc = clamp(history, ocarina::fma(rawMomentSum, 1.f / 9.f, -s), ocarina::fma(rawMomentSum, 1.f / 9.f, s)); Float d = abs(history - hc) / (max(history, hc) + NRD_EPS); Float magic = c.gAntilagParams.y * c.gFramerateScale * c.gFramerateScale; return 1.f / (1.f + d * accum / magic); }
 inline Float2 GetTemporalAccumulationParams(const Var<SharedConstants> &c, Float screenQuality, Float accum) { Float w = screenQuality; w *= accum / (1.f + accum); return make_float2(w, 1.f + 3.f * c.gFramerateScale * w); }
 }

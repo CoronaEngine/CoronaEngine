@@ -1,5 +1,6 @@
 #include "edsl_nrd_common.h"
 #include "edsl_nrd_resources.h"
+#include <cstdlib>
 
 namespace vision::reblur::edsl {
 namespace {
@@ -32,6 +33,27 @@ inline Float2 rotate_offset(Float4 rotation, Float2 v) {
 
 inline Float4 scale_rotation(Float4 rotation, Float2 scale) {
     return make_float4(scale.x * rotation.xz(), scale.y * rotation.yw());
+}
+
+inline Float4 prepass_dominant_direction(Float3 n, Float3 v, Float roughness) {
+    Float factor = GetSpecularDominantFactor(abs(dot(n, v)), roughness);
+    // Match the Native PrePass reflect/mix graph and its FP32 boundaries.
+    Float partial = call<float>("oc_nrd_round_add",
+        call<float>("oc_nrd_round_mul", n.x, v.x), call<float>("oc_nrd_round_mul", n.z, v.z));
+    Float reflection_dot = ocarina::fma(n.y, -v.y, -partial);
+    Float twice_dot = call<float>("oc_nrd_round_add", reflection_dot, reflection_dot);
+    Float3 delta = make_float3(
+        call<float>("oc_nrd_round_add", ocarina::fma(n.x, twice_dot, n.x), v.x),
+        call<float>("oc_nrd_round_add", ocarina::fma(n.y, twice_dot, n.y), v.y),
+        call<float>("oc_nrd_round_add", ocarina::fma(n.z, twice_dot, n.z), v.z));
+    Float3 mixed = ocarina::fma(make_float3(-factor), delta, n);
+    Float length_squared = ocarina::fma(mixed.z, mixed.z,
+        ocarina::fma(mixed.x, mixed.x, call<float>("oc_nrd_round_mul", mixed.y, mixed.y)));
+    Float scale = rsqrt(length_squared);
+    return make_float4(make_float3(
+        call<float>("oc_nrd_round_mul", mixed.x, scale),
+        call<float>("oc_nrd_round_mul", mixed.y, scale),
+        call<float>("oc_nrd_round_mul", mixed.z, scale)), factor);
 }
 
 inline Int2 spatial_pixel(const Var<SharedConstants> &c, bool reversed) {
@@ -104,7 +126,7 @@ constexpr std::array<float3, 8> spatial_taps{{
     {-.3535533905932738f, -.3535533905932738f, .5f}
 }};
 
-void spatial_filter(Var<Dispatch> &p, uint stage, bool temporal_stabilization) {
+void spatial_filter(Var<Dispatch> &p, uint stage, bool temporal_stabilization, uint prepass_probe = 0u) {
     auto &c = p.constants;
     Int2 pixel = spatial_pixel(c, stage != 1u);
     TileImage tiles{p.inputs.t0};
@@ -145,9 +167,19 @@ void spatial_filter(Var<Dispatch> &p, uint stage, bool temporal_stabilization) {
             Float smc = specular ? GetSpecMagicCurve(roughness) : Float{1.f};
             Float signal_roughness = specular ? roughness : Float{1.f};
             Float4 Dv = make_float4(0.f);
+            Float3 probe_reflection = make_float3(0.f), probe_mixed = make_float3(0.f);
             Float NoD = 0.f;
             if (specular) {
-                Dv = GetSpecularDominantDirection(Nv, Vv, roughness);
+                if (stage == 0u && prepass_probe == 3u) {
+                    Float factor = GetSpecularDominantFactor(abs(dot(Nv, Vv)), roughness);
+                    probe_reflection = call<float3>("reflect", -Vv, Nv);
+                    probe_mixed = Lerp(Nv, probe_reflection, factor);
+                    Dv = make_float4(normalize(probe_mixed), factor);
+                } else if (stage == 0u) {
+                    Dv = prepass_dominant_direction(Nv, Vv, roughness);
+                } else {
+                    Dv = GetSpecularDominantDirection(Nv, Vv, roughness);
+                }
                 NoD = abs(dot(Nv, Dv.xyz()));
             }
             Float hit_scale = _REBLUR_GetHitDistanceNormalization(z, c.gHitDistParams, signal_roughness);
@@ -217,6 +249,34 @@ void spatial_filter(Var<Dispatch> &p, uint stage, bool temporal_stabilization) {
                 B *= world_radius / skew;
             }
 
+            auto store_probe = [&](uint slot, Float value) {
+                auto target = [&]() -> Int2 {
+                    if (prepass_probe == 4u)
+                        return make_int2(SignalImage{p.outputs.t3}.read_in_bounds(make_int2(23, 0)).xy());
+                    return make_int2(1235, 529);
+                };
+                $if(all(pixel == target())) {
+                    Uint bits = as<uint>(value);
+                    Uint4 bytes = (make_uint4(bits) >> make_uint4(0u, 8u, 16u, 24u)) & 255u;
+                    SignalImage{p.outputs.t3}.write_in_bounds(make_int2(slot, 0u), make_float4(bytes));
+                };
+            };
+            if (prepass_probe && stage == 0u && specular) {
+                const std::array<Float, 8> values{radius, hit_distance, NoD, Dv.w,
+                    scaled_rotator.x, scaled_rotator.y, scaled_rotator.z, scaled_rotator.w};
+                for (uint index = 0u; index != values.size(); ++index) store_probe(index, values[index]);
+                if (prepass_probe >= 2u) {
+                    const std::array<Float, 9> vectors{Nv.x, Nv.y, Nv.z, Dv.x, Dv.y, Dv.z, Vv.x, Vv.y, Vv.z};
+                    for (uint index = 0u; index != vectors.size(); ++index) store_probe(8u + index, vectors[index]);
+                }
+                if (prepass_probe == 4u) store_probe(22u, 1.f);
+                if (prepass_probe == 3u) {
+                    const std::array<Float, 7> values{NoV, probe_mixed.x, probe_mixed.y, probe_mixed.z,
+                        probe_reflection.x, probe_reflection.y, probe_reflection.z};
+                    for (uint index = 0u; index != values.size(); ++index) store_probe(17u + index, values[index]);
+                }
+            }
+
             Float4 sum = value;
             Float weight_sum = 1.f;
             Uint rng = tracking_rng_seed(make_uint2(pixel), c.gFrameIndex);
@@ -231,7 +291,16 @@ void spatial_filter(Var<Dispatch> &p, uint stage, bool temporal_stabilization) {
                     Float4 clip = c.gViewToClip * make_float4(point, 1.f);
                     uv = make_float2(clip.x, -clip.y) / clip.w * .5f + .5f;
                 }
-                uv = (floor(uv * c.gRectSize) + .5f) * c.gRectSizeInv;
+                if (prepass_probe && stage == 0u && specular) {
+                    Float2 pre_floor_pixel = uv * c.gRectSize;
+                    if (prepass_probe == 1u) {
+                        store_probe(8u + sample * 2u, pre_floor_pixel.x);
+                        store_probe(9u + sample * 2u, pre_floor_pixel.y);
+                    }
+                    uv = (floor(pre_floor_pixel) + .5f) * c.gRectSizeInv;
+                } else {
+                    uv = (floor(uv * c.gRectSize) + .5f) * c.gRectSizeInv;
+                }
                 Float2 uv_scaled = viewport_uv(c, uv);
                 Float sample_z = UnpackViewZ(c, view_z.sample(uv_scaled, false));
                 Float sample_material = 0.f;
@@ -310,7 +379,9 @@ PassShader compile_classify(Device &device) {
 }
 
 PassShader compile_reconstruction(Device &device, bool is_5x5) {
-    Kernel kernel = [is_5x5](Var<Dispatch> p) {
+    const char *probe = std::getenv("REBLUR_EDSL_HRD_PROBE");
+    const bool hrd_probe = is_5x5 && probe && probe[0] == '1' && probe[1] == '\0';
+    Kernel kernel = [is_5x5, hrd_probe](Var<Dispatch> p) {
         configure_block(8u, 16u);
         auto &c = p.constants;
         Int2 pixel = make_int2(dispatch_idx().xy());
@@ -372,7 +443,7 @@ PassShader compile_reconstruction(Device &device, bool is_5x5) {
                 Float sample_z = sample_data.z;
                 Float2 hit = sample_data.xy();
                 Float2 offset = make_float2(static_cast<float>(x), static_cast<float>(y));
-                Float2 sample_uv = uv + offset * c.gRectSizeInv;
+                Float2 sample_uv = ocarina::fma(make_float2(pixel) + .5f, c.gRectSizeInv, offset * c.gRectSizeInv);
                 Float w = in_screen_weight(sample_uv);
                 w *= GetGaussianWeight(length(offset) * .5f);
                 Float3 sample_Xv = ReconstructViewPosition(sample_uv, c.gFrustum, sample_z, c.gOrthoMode);
@@ -390,19 +461,35 @@ PassShader compile_reconstruction(Device &device, bool is_5x5) {
                 weights += ww;
             }
         }
+        std::optional<Float> diagnostic_numerator;
+        if (hrd_probe) diagnostic_numerator.emplace(center.x);
         center /= max(weights, make_float2(1e-6f));
         d.w = center.x;
         s.w = center.y;
         SignalImage{p.outputs.t0}.write_in_bounds(pixel, d);
         SignalImage{p.outputs.t1}.write_in_bounds(pixel, s);
+        if (hrd_probe) {
+            $if(c.gFrameIndex == 0u && all(pixel == make_int2(396, 466))) {
+                SignalImage diagnostic{p.outputs.t2};
+                const std::array<Float, 4> values{*diagnostic_numerator, weights.x, center.x, center_hit_view_z.x};
+                for (uint index = 0u; index != values.size(); ++index) {
+                    Uint bits = as<uint>(values[index]);
+                    Uint4 bytes = (make_uint4(bits) >> make_uint4(0u, 8u, 16u, 24u)) & 255u;
+                    diagnostic.write_in_bounds(make_int2(index, 0u), make_float4(bytes));
+                }
+            };
+        }
     };
     return device.compile(kernel, is_5x5 ? "NRD-EDSL-REBLUR-HitDistReconstruction5x5" : "NRD-EDSL-REBLUR-HitDistReconstruction3x3");
 }
 
 PassShader compile_prepass(Device &device) {
-    Kernel kernel = [](Var<Dispatch> p) {
+    const char *probe = std::getenv("REBLUR_EDSL_PREPASS_PROBE");
+    const uint prepass_probe = probe && (probe[0] >= '1' && probe[0] <= '4') && probe[1] == '\0'
+        ? uint(probe[0] - '0') : 0u;
+    Kernel kernel = [prepass_probe](Var<Dispatch> p) {
         configure_block(8u, 16u);
-        spatial_filter(p, 0u, true);
+        spatial_filter(p, 0u, true, prepass_probe);
     };
     return device.compile(kernel, "NRD-EDSL-REBLUR-PrePass");
 }

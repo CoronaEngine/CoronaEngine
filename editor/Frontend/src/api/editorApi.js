@@ -435,6 +435,13 @@ const create_dynamic_editor_api_function = (wrapperPath) => async (...args) => {
 };
 
 const create_dynamic_editor_api_namespace = (wrapperPath, target = {}) => {
+  // Existing namespaces also need access to methods defined by the native manifest.
+  for (const [property, member] of Object.entries(target)) {
+    if (member !== null && typeof member === 'object') {
+      const childPath = wrapperPath ? `${wrapperPath}.${property}` : property;
+      target[property] = create_dynamic_editor_api_namespace(childPath, member);
+    }
+  }
   return new Proxy(target, {
     get(current, property) {
       if (typeof property !== 'string') {

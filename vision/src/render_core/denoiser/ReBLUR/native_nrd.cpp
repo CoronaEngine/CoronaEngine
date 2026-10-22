@@ -1,5 +1,6 @@
 #include "native_nrd.h"
 #include "backends/vulkan_compute/vulkan_interop.h"
+#include "math/half.h"
 #include <vulkan/vulkan.hpp>
 #include <nvrhi/vulkan.h>
 #include <nvrhi/utils.h>
@@ -17,6 +18,7 @@
 #include <map>
 #include <mutex>
 #include <stdexcept>
+#include <string_view>
 #include <vector>
 
 // This translation unit must use the same Vulkan-Hpp headers/dispatcher mode
@@ -40,6 +42,15 @@ static_assert(offsetof(NativeReblurConstants, width) == 40u);
 static_assert(offsetof(NativeReblurConstants, hit_distance_parameters) == 48u);
 static_assert(offsetof(NativeReblurConstants, previous_view_depth_row) == 64u);
 static_assert(offsetof(NativeReblurConstants, denoising_range) == 80u);
+
+struct alignas(16) CanonicalFrontendConstants {
+    uint32_t width{}, height{};
+    float clamp_max{}, padding{};
+    float hit_distance_parameters[4]{};
+};
+static_assert(sizeof(CanonicalFrontendConstants) == 32u);
+static_assert(offsetof(CanonicalFrontendConstants, clamp_max) == 8u);
+static_assert(offsetof(CanonicalFrontendConstants, hit_distance_parameters) == 16u);
 
 void require(bool condition, const char *message) {
     if (!condition) throw std::runtime_error(message);
@@ -156,7 +167,7 @@ struct NativeLayer {
     std::vector<nvrhi::SamplerHandle> samplers;
     std::vector<nvrhi::TextureHandle> permanent, transient;
     nvrhi::TextureHandle motion, normal, view_z, disocclusion_mix, input_diffuse, input_specular, output_diffuse, output_specular;
-    nvrhi::TextureHandle ta_probe, ts_probe, hf_probe;
+    nvrhi::TextureHandle ta_probe, ts_probe, hf_probe, hrd_probe, prepass_probe;
     nvrhi::BindingSetHandle pack_binding, unpack_binding;
     std::map<std::vector<uint32_t>, nvrhi::BindingSetHandle> binding_cache;
     ~NativeLayer() { if (instance) nrd::DestroyInstance(*instance); }
@@ -166,7 +177,12 @@ struct NativeLayer {
 
 struct NativeReblur::Impl {
     std::filesystem::path shader_directory;
-    std::filesystem::path test_ta_shader, test_ts_shader, test_hf_shader;
+    std::filesystem::path test_ta_shader, test_ts_shader, test_hf_shader, test_prepass_shader, test_hrd_shader, test_postblur_shader;
+    bool prepass_probe_enabled{};
+    bool postblur_probe_enabled{};
+    bool prepass_probe_runtime{};
+    uint2 prepass_probe_pixel{1235u, 529u};
+    std::array<ocarina::half, 24u * 4u> prepass_probe_initial{};
     NativeMessageCallback message_callback;
     nvrhi::vulkan::DeviceHandle device;
     VkDevice borrowed_device{};
@@ -174,6 +190,13 @@ struct NativeReblur::Impl {
     // One instance owns three independent denoisers. NRD aliases their
     // transient pool, and conversion inputs/outputs are reused in queue order.
     std::unique_ptr<NativeLayer> resources;
+    // Only the explicit packed-input diagnostic uses these independent
+    // instances. The renderer's original shared three-identifier path stays
+    // unchanged.
+    bool replay_only{};
+    uint32_t replay_plane_number{};
+    std::array<std::shared_ptr<Impl>, 3> replay_planes;
+    uint64_t replay_serial{};
     nvrhi::CommandListHandle command_list;
     struct SamplingProbe {
         std::filesystem::path shader_path;
@@ -183,6 +206,18 @@ struct NativeReblur::Impl {
         nvrhi::BindingSetHandle binding;
     };
     std::unique_ptr<SamplingProbe> sampling;
+    struct CanonicalFrontend {
+        std::filesystem::path shader_path, backend_shader_path;
+        uint2 size{};
+        Pipeline pipeline;
+        nvrhi::BufferHandle inputs, constants;
+        nvrhi::BindingSetHandle binding;
+        Pipeline backend_pipeline;
+        nvrhi::BindingSetHandle backend_binding;
+        std::array<nvrhi::TextureHandle, 2> nrd_outputs;
+        std::array<nvrhi::BufferHandle, 2> linear_outputs;
+    };
+    std::unique_ptr<CanonicalFrontend> canonical_frontend;
     struct ProfileSample {
         nvrhi::TimerQueryHandle timer;
         nvrhi::EventQueryHandle completion;
@@ -258,6 +293,49 @@ struct NativeReblur::Impl {
             require(test_ts_shader.is_absolute() && std::filesystem::is_regular_file(test_ts_shader),
                     "Native REBLUR: TEST TS shader must be an existing absolute file");
         }
+        if (const char *path = std::getenv("REBLUR_NATIVE_TEST_HRD_SHADER"); path && *path) {
+            test_hrd_shader = path;
+            require(test_hrd_shader.is_absolute() && std::filesystem::is_regular_file(test_hrd_shader),
+                    "Native REBLUR: TEST HRD shader must be an existing absolute file");
+        }
+        if (const char *path = std::getenv("REBLUR_NATIVE_TEST_PREPASS_SHADER"); path && *path) {
+            test_prepass_shader = path;
+            require(test_prepass_shader.is_absolute() && std::filesystem::is_regular_file(test_prepass_shader),
+                    "Native REBLUR: TEST PrePass shader must be an existing absolute file");
+        }
+        if (const char *path = std::getenv("REBLUR_NATIVE_TEST_POSTBLUR_SHADER"); path && *path) {
+            test_postblur_shader = path;
+            require(test_postblur_shader.is_absolute() && std::filesystem::is_regular_file(test_postblur_shader),
+                    "Native REBLUR: TEST PostBlur shader must be an existing absolute file");
+        }
+        if (const char *value = std::getenv("REBLUR_NATIVE_PREPASS_PROBE"))
+            prepass_probe_enabled = std::strcmp(value, "1") == 0;
+        if (const char *value = std::getenv("REBLUR_NATIVE_POSTBLUR_PROBE"))
+            postblur_probe_enabled = std::strcmp(value, "1") == 0;
+        require(!prepass_probe_enabled || !postblur_probe_enabled,
+                "Native REBLUR: select only one spatial probe");
+        prepass_probe_enabled = prepass_probe_enabled || postblur_probe_enabled;
+        if (const char *value = std::getenv("REBLUR_NATIVE_PREPASS_PROBE_RUNTIME"))
+            prepass_probe_runtime = std::strcmp(value, "1") == 0;
+        require(!prepass_probe_runtime || (prepass_probe_enabled && !postblur_probe_enabled),
+                "Native REBLUR: runtime PrePass probe requires REBLUR_NATIVE_PREPASS_PROBE=1");
+        if (prepass_probe_runtime) {
+            if (const char *value = std::getenv("REBLUR_PREPASS_PROBE_PIXEL")) {
+                const std::string_view pixel{value};
+                const auto comma = pixel.find(',');
+                auto parse = [](std::string_view text, uint &coordinate) {
+                    const auto result = std::from_chars(text.data(), text.data() + text.size(), coordinate);
+                    return !text.empty() && result.ec == std::errc{} && result.ptr == text.data() + text.size() && coordinate <= 2048u;
+                };
+                if (comma == pixel.npos || !parse(pixel.substr(0u, comma), prepass_probe_pixel.x) ||
+                    !parse(pixel.substr(comma + 1u), prepass_probe_pixel.y))
+                    throw std::invalid_argument("REBLUR_PREPASS_PROBE_PIXEL must be x,y unsigned decimals in [0,2048]");
+            }
+            prepass_probe_initial[23u * 4u] = ocarina::half(prepass_probe_pixel.x);
+            prepass_probe_initial[23u * 4u + 1u] = ocarina::half(prepass_probe_pixel.y);
+        }
+        require(!prepass_probe_enabled || !(postblur_probe_enabled ? test_postblur_shader : test_prepass_shader).empty(),
+                "Native REBLUR: spatial probe requires its matching TEST shader");
         require(profile_path.empty() || pass_profile_path.empty() ||
                     std::filesystem::absolute(profile_path).lexically_normal() != std::filesystem::absolute(pass_profile_path).lexically_normal(),
                 "Native REBLUR: aggregate and per-pass profiling require separate CSV files");
@@ -394,7 +472,12 @@ struct NativeReblur::Impl {
                      << ",\"format\":" << std::quoted(format.name) << ",\"formatValue\":" << static_cast<uint32_t>(sample.format)
                      << ",\"width\":" << sample.width << ",\"height\":" << sample.height
                      << ",\"rowBytes\":" << row_bytes << ",\"constants\":" << std::quoted(sample.constants)
-                     << ",\"constantBytes\":" << sample.constant_bytes << "}\n";
+                     << ",\"constantBytes\":" << sample.constant_bytes;
+            if (prepass_probe_runtime && sample.slot == 3u && sample.width == 24u && sample.height == 1u &&
+                sample.shader == "REBLUR_DiffuseSpecular_PrePass.cs")
+                metadata << ",\"prepassProbeMode\":\"runtime-early17\",\"probePixel\":[" << prepass_probe_pixel.x
+                         << ',' << prepass_probe_pixel.y << "],\"probeCoordinateSlot\":23,\"probeMarkerSlot\":22";
+            metadata << "}\n";
         }
         metadata.close();
         require(bool(metadata), "Native REBLUR: cannot write snapshot metadata");
@@ -492,12 +575,13 @@ struct NativeReblur::Impl {
             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0u, 1u, &barrier, 0u, nullptr, 0u, nullptr);
     }
 
-    nvrhi::TextureHandle create_texture(uint32_t width, uint32_t height, nvrhi::Format format, const std::string &name) {
+    nvrhi::TextureHandle create_texture(uint32_t width, uint32_t height, nvrhi::Format format, const std::string &name,
+                                       bool replay_external = false) {
         require(format != nvrhi::Format::UNKNOWN, "Native REBLUR: unsupported NRD texture format");
         nvrhi::TextureDesc description;
         description.width = width; description.height = height; description.format = format;
         description.dimension = nvrhi::TextureDimension::Texture2D; description.mipLevels = 1u;
-        description.initialState = nvrhi::ResourceStates::ShaderResource;
+        description.initialState = replay_only && replay_external ? nvrhi::ResourceStates::UnorderedAccess : nvrhi::ResourceStates::ShaderResource;
         description.keepInitialState = true; description.isUAV = true; description.debugName = name;
         auto result = device->createTexture(description);
         require(bool(result), "Native REBLUR: texture allocation failed");
@@ -690,6 +774,276 @@ struct NativeReblur::Impl {
         require(bool(metadata), "Native REBLUR: cannot write format store metadata");
     }
 
+    Impl &replay_plane(uint32_t index) {
+        require(index < replay_planes.size(), "Native REBLUR: invalid replay plane");
+        auto &plane = replay_planes[index];
+        if (!plane) {
+            plane = std::make_shared<Impl>(shader_directory);
+            plane->replay_only = true;
+            plane->replay_plane_number = index;
+            if (!plane->snapshot_directory.empty()) {
+                plane->snapshot_directory /= "plane" + std::to_string(index);
+                std::filesystem::create_directories(plane->snapshot_directory);
+            }
+        }
+        return *plane;
+    }
+
+    void upload_prepared(const ocarina::VulkanInteropContext &context, uint2 size, const PackedNrdInputs &inputs) {
+        initialize(context);
+        auto &layer = prepare_layer(0u, size.x, size.y);
+        const nvrhi::TextureHandle textures[]{layer.motion, layer.normal, layer.view_z,
+            layer.input_diffuse, layer.input_specular, layer.disocclusion_mix};
+        command_list->open();
+        for (uint32_t i = 0u; i != inputs.size(); ++i) {
+            const size_t pitch = size_t(size.x) * nvrhi::getFormatInfo(textures[i]->getDesc().format).bytesPerBlock;
+            require(inputs[i].size() == pitch * size.y, "Native REBLUR: prepared texture byte count mismatch");
+            command_list->writeTexture(textures[i], 0u, 0u, inputs[i].data(), pitch);
+        }
+        // close() returns replay inputs to their producer-UAV initial states.
+        // This upload and transition command list is outside NRD timestamps.
+        command_list->close();
+        device->executeCommandList(command_list, nvrhi::CommandQueue::Compute);
+    }
+
+    void read_prepared(const ocarina::VulkanInteropContext &context, uint2 size, PackedNrdOutputs &outputs) {
+        initialize(context);
+        auto &layer = prepare_layer(0u, size.x, size.y);
+        const nvrhi::TextureHandle textures[]{layer.output_diffuse, layer.output_specular};
+        std::array<nvrhi::StagingTextureHandle, 2> staging;
+        command_list->open();
+        for (uint32_t i = 0u; i != staging.size(); ++i) {
+            staging[i] = device->createStagingTexture(textures[i]->getDesc(), nvrhi::CpuAccessMode::Read);
+            require(bool(staging[i]), "Native REBLUR: replay readback allocation failed");
+            command_list->copyTexture(staging[i], nvrhi::TextureSlice{}, textures[i], nvrhi::TextureSlice{});
+        }
+        command_list->close();
+        auto completion = device->createEventQuery();
+        require(bool(completion), "Native REBLUR: replay readback event allocation failed");
+        device->executeCommandList(command_list, nvrhi::CommandQueue::Compute);
+        device->setEventQuery(completion, nvrhi::CommandQueue::Compute);
+        device->waitEventQuery(completion);
+        for (uint32_t i = 0u; i != staging.size(); ++i) {
+            const size_t row_bytes = size_t(size.x) * 8u;
+            size_t pitch{};
+            const void *mapped = device->mapStagingTexture(staging[i], nvrhi::TextureSlice{}, nvrhi::CpuAccessMode::Read, &pitch);
+            require(mapped && pitch >= row_bytes, "Native REBLUR: replay readback map failed");
+            outputs[i].resize(row_bytes * size.y);
+            for (uint32_t y = 0u; y != size.y; ++y)
+                std::memcpy(outputs[i].data() + size_t(y) * row_bytes,
+                            static_cast<const std::byte *>(mapped) + size_t(y) * pitch, row_bytes);
+            device->unmapStagingTexture(staging[i]);
+        }
+        collect_profile_results();
+    }
+
+    void upload_canonical(const ocarina::VulkanInteropContext &context, uint2 size,
+                          const std::vector<std::byte> &inputs, const std::filesystem::path &shader_path,
+                          const PackedNrdOutputs *nrd_outputs, const std::filesystem::path &backend_shader_path) {
+        initialize(context);
+        auto &layer = prepare_layer(0u, size.x, size.y);
+        require(inputs.size() == uint64_t(size.x) * size.y * 96u,
+                "Native REBLUR: canonical input byte count mismatch");
+        if (!canonical_frontend || canonical_frontend->size.x != size.x || canonical_frontend->size.y != size.y ||
+            canonical_frontend->shader_path != shader_path || canonical_frontend->backend_shader_path != backend_shader_path) {
+            auto frontend = std::make_unique<CanonicalFrontend>();
+            frontend->shader_path = shader_path; frontend->backend_shader_path = backend_shader_path; frontend->size = size;
+            nvrhi::BufferDesc input_desc;
+            input_desc.byteSize = inputs.size(); input_desc.structStride = 16u;
+            input_desc.initialState = nvrhi::ResourceStates::ShaderResource; input_desc.keepInitialState = true;
+            input_desc.debugName = "Canonical RTXPT frontend input";
+            frontend->inputs = device->createBuffer(input_desc);
+            frontend->constants = device->createBuffer(nvrhi::utils::CreateVolatileConstantBufferDesc(
+                sizeof(CanonicalFrontendConstants), "Canonical RTXPT frontend constants", 16u));
+            require(frontend->inputs && frontend->constants, "Native REBLUR: canonical buffer allocation failed");
+            nvrhi::BindingLayoutDesc layout;
+            layout.visibility = nvrhi::ShaderType::Compute; layout.bindingOffsets = binding_offsets();
+            layout.bindings = {nvrhi::BindingLayoutItem::VolatileConstantBuffer(0u),
+                               nvrhi::BindingLayoutItem::StructuredBuffer_SRV(0u)};
+            for (uint32_t slot = 0u; slot != 6u; ++slot) layout.bindings.push_back(nvrhi::BindingLayoutItem::Texture_UAV(slot));
+            const auto spirv = read_spirv(shader_path);
+            frontend->pipeline = create_pipeline(spirv.data(), spirv.size() * sizeof(uint32_t), "Canonical RTXPT frontend", layout);
+            nvrhi::BindingSetDesc bindings;
+            bindings.bindings = {nvrhi::BindingSetItem::ConstantBuffer(0u, frontend->constants),
+                nvrhi::BindingSetItem::StructuredBuffer_SRV(0u, frontend->inputs),
+                nvrhi::BindingSetItem::Texture_UAV(0u, layer.input_diffuse),
+                nvrhi::BindingSetItem::Texture_UAV(1u, layer.input_specular),
+                nvrhi::BindingSetItem::Texture_UAV(2u, layer.normal),
+                nvrhi::BindingSetItem::Texture_UAV(3u, layer.view_z),
+                nvrhi::BindingSetItem::Texture_UAV(4u, layer.motion),
+                nvrhi::BindingSetItem::Texture_UAV(5u, layer.disocclusion_mix)};
+            frontend->binding = device->createBindingSet(bindings, frontend->pipeline.layout);
+            require(bool(frontend->binding), "Native REBLUR: canonical binding set failed");
+            if (nrd_outputs) {
+                require(!backend_shader_path.empty(), "Native REBLUR: canonical backend shader required");
+                nvrhi::BindingLayoutDesc backend_layout;
+                backend_layout.visibility = nvrhi::ShaderType::Compute; backend_layout.bindingOffsets = binding_offsets();
+                backend_layout.bindings = {nvrhi::BindingLayoutItem::VolatileConstantBuffer(0u),
+                    nvrhi::BindingLayoutItem::Texture_SRV(0u), nvrhi::BindingLayoutItem::Texture_SRV(1u),
+                    nvrhi::BindingLayoutItem::StructuredBuffer_SRV(2u),
+                    nvrhi::BindingLayoutItem::StructuredBuffer_UAV(0u), nvrhi::BindingLayoutItem::StructuredBuffer_UAV(1u)};
+                const auto backend_spirv = read_spirv(backend_shader_path);
+                frontend->backend_pipeline = create_pipeline(backend_spirv.data(), backend_spirv.size() * sizeof(uint32_t),
+                    "Canonical common backend", backend_layout);
+                for (uint32_t slot = 0u; slot != 2u; ++slot) {
+                    frontend->nrd_outputs[slot] = create_texture(size.x, size.y, nvrhi::Format::RGBA16_FLOAT, "Canonical fixed NRD output");
+                    nvrhi::BufferDesc desc;
+                    desc.byteSize = uint64_t(size.x) * size.y * 16u; desc.structStride = 16u; desc.canHaveUAVs = true;
+                    desc.initialState = nvrhi::ResourceStates::UnorderedAccess; desc.keepInitialState = true;
+                    desc.debugName = "Canonical common linear output";
+                    frontend->linear_outputs[slot] = device->createBuffer(desc);
+                    require(bool(frontend->linear_outputs[slot]), "Native REBLUR: canonical linear output allocation failed");
+                }
+                nvrhi::BindingSetDesc backend_bindings;
+                backend_bindings.bindings = {nvrhi::BindingSetItem::ConstantBuffer(0u, frontend->constants),
+                    nvrhi::BindingSetItem::Texture_SRV(0u, frontend->nrd_outputs[0]),
+                    nvrhi::BindingSetItem::Texture_SRV(1u, frontend->nrd_outputs[1]),
+                    nvrhi::BindingSetItem::StructuredBuffer_SRV(2u, frontend->inputs),
+                    nvrhi::BindingSetItem::StructuredBuffer_UAV(0u, frontend->linear_outputs[0]),
+                    nvrhi::BindingSetItem::StructuredBuffer_UAV(1u, frontend->linear_outputs[1])};
+                frontend->backend_binding = device->createBindingSet(backend_bindings, frontend->backend_pipeline.layout);
+                require(bool(frontend->backend_binding), "Native REBLUR: canonical backend binding set failed");
+            }
+            canonical_frontend = std::move(frontend);
+        }
+        command_list->open();
+        command_list->writeBuffer(canonical_frontend->inputs, inputs.data(), inputs.size());
+        if (nrd_outputs) for (uint32_t slot = 0u; slot != 2u; ++slot) {
+            require((*nrd_outputs)[slot].size() == uint64_t(size.x) * size.y * 8u,
+                    "Native REBLUR: canonical fixed NRD output byte count mismatch");
+            command_list->writeTexture(canonical_frontend->nrd_outputs[slot], 0u, 0u, (*nrd_outputs)[slot].data(), size_t(size.x) * 8u);
+            command_list->clearBufferUInt(canonical_frontend->linear_outputs[slot], 0u);
+        }
+        command_list->close();
+        device->executeCommandList(command_list, nvrhi::CommandQueue::Compute);
+    }
+
+    void run_canonical(const ocarina::VulkanInteropContext &context, uint2 size,
+                       float4 hit_parameters, float clamp_max) {
+        initialize(context); collect_profile_results();
+        require(canonical_frontend && canonical_frontend->size.x == size.x && canonical_frontend->size.y == size.y,
+                "Native REBLUR: canonical input must upload before conversion");
+        require(pass_profile_path.empty() && (profile_path.empty() || interval_profile),
+                "Native REBLUR: canonical conversion requires interval profiling without per-pass timers");
+        CanonicalFrontendConstants constants;
+        constants.width = size.x; constants.height = size.y; constants.clamp_max = clamp_max;
+        std::memcpy(constants.hit_distance_parameters, &hit_parameters, sizeof(constants.hit_distance_parameters));
+        const uint64_t serial = profile_serial++;
+        std::shared_ptr<IntervalPool> queries;
+        command_list->open();
+        command_list->writeBuffer(canonical_frontend->constants, &constants, sizeof(constants));
+        const VkCommandBuffer native = command_list->getNativeObject(nvrhi::ObjectTypes::VK_CommandBuffer);
+        auto point = [&](uint32_t index) {
+            if (queries) VULKAN_HPP_DEFAULT_DISPATCHER.vkCmdWriteTimestamp(
+                native, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, queries->pool, index);
+        };
+        if (interval_profile) {
+            queries = std::make_shared<IntervalPool>(); queries->owner = device; queries->device = borrowed_device;
+            VkQueryPoolCreateInfo info{VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};
+            info.queryType = VK_QUERY_TYPE_TIMESTAMP; info.queryCount = 5u;
+            require(VULKAN_HPP_DEFAULT_DISPATCHER.vkCreateQueryPool(borrowed_device, &info, nullptr, &queries->pool) == VK_SUCCESS,
+                    "Native REBLUR: canonical interval query allocation failed");
+            VULKAN_HPP_DEFAULT_DISPATCHER.vkCmdResetQueryPool(native, queries->pool, 0u, 5u);
+        }
+        point(0u);
+        nvrhi::ComputeState state;
+        state.pipeline = canonical_frontend->pipeline.pipeline; state.bindings = {canonical_frontend->binding};
+        command_list->setComputeState(state);
+        command_list->dispatch((size.x + 15u) / 16u, (size.y + 7u) / 8u);
+        command_list->commitBarriers();
+        // Match Horizon's post-dispatch visibility barrier for the common
+        // frontend. No input copy, readback, or later marker lies in Pack.
+        VkMemoryBarrier barrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+        barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT |
+                                VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
+        VULKAN_HPP_DEFAULT_DISPATCHER.vkCmdPipelineBarrier(native, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
+            0u, 1u, &barrier, 0u, nullptr, 0u, nullptr);
+        point(1u); point(2u);
+        if (canonical_frontend->backend_binding) {
+            state.pipeline = canonical_frontend->backend_pipeline.pipeline; state.bindings = {canonical_frontend->backend_binding};
+            command_list->setComputeState(state);
+            command_list->dispatch((size.x + 15u) / 16u, (size.y + 7u) / 8u);
+            command_list->commitBarriers();
+            VULKAN_HPP_DEFAULT_DISPATCHER.vkCmdPipelineBarrier(native, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
+                0u, 1u, &barrier, 0u, nullptr, 0u, nullptr);
+        }
+        point(3u); point(4u);
+        command_list->close();
+        nvrhi::EventQueryHandle completion;
+        if (queries) {
+            completion = device->createEventQuery();
+            require(bool(completion), "Native REBLUR: canonical completion event allocation failed");
+            queries->submitted = true;
+        }
+        device->executeCommandList(command_list, nvrhi::CommandQueue::Compute);
+        if (queries) {
+            device->setEventQuery(completion, nvrhi::CommandQueue::Compute);
+            pending_intervals.push_back({std::move(queries), completion, serial, size.x, size.y});
+        }
+    }
+
+    void read_canonical_outputs(const ocarina::VulkanInteropContext &context, uint2 size, PackedNrdOutputs &outputs) {
+        initialize(context);
+        require(canonical_frontend && canonical_frontend->backend_binding, "Native REBLUR: canonical backend not initialized");
+        std::array<nvrhi::BufferHandle, 2> staging;
+        const size_t bytes = size_t(size.x) * size.y * 16u;
+        command_list->open();
+        for (uint32_t slot = 0u; slot != 2u; ++slot) {
+            nvrhi::BufferDesc desc;
+            desc.byteSize = bytes; desc.cpuAccess = nvrhi::CpuAccessMode::Read;
+            desc.initialState = nvrhi::ResourceStates::CopyDest; desc.keepInitialState = true;
+            staging[slot] = device->createBuffer(desc);
+            require(bool(staging[slot]), "Native REBLUR: canonical output staging allocation failed");
+            command_list->copyBuffer(staging[slot], 0u, canonical_frontend->linear_outputs[slot], 0u, bytes);
+        }
+        command_list->close();
+        auto completion = device->createEventQuery();
+        require(bool(completion), "Native REBLUR: canonical readback completion allocation failed");
+        device->executeCommandList(command_list, nvrhi::CommandQueue::Compute);
+        device->setEventQuery(completion, nvrhi::CommandQueue::Compute); device->waitEventQuery(completion);
+        for (uint32_t slot = 0u; slot != 2u; ++slot) {
+            const void *mapped = device->mapBuffer(staging[slot], nvrhi::CpuAccessMode::Read);
+            require(mapped, "Native REBLUR: canonical linear output map failed");
+            outputs[slot].resize(bytes); std::memcpy(outputs[slot].data(), mapped, bytes);
+            device->unmapBuffer(staging[slot]);
+        }
+        collect_profile_results();
+    }
+
+    void read_prepared_inputs(const ocarina::VulkanInteropContext &context, uint2 size, PackedNrdInputs &inputs) {
+        initialize(context);
+        auto &layer = prepare_layer(0u, size.x, size.y);
+        const nvrhi::TextureHandle textures[]{layer.motion, layer.normal, layer.view_z,
+            layer.input_diffuse, layer.input_specular, layer.disocclusion_mix};
+        std::array<nvrhi::StagingTextureHandle, 6> staging;
+        command_list->open();
+        for (uint32_t slot = 0u; slot != staging.size(); ++slot) {
+            staging[slot] = device->createStagingTexture(textures[slot]->getDesc(), nvrhi::CpuAccessMode::Read);
+            require(bool(staging[slot]), "Native REBLUR: converted input readback allocation failed");
+            command_list->copyTexture(staging[slot], nvrhi::TextureSlice{}, textures[slot], nvrhi::TextureSlice{});
+        }
+        command_list->close();
+        auto completion = device->createEventQuery();
+        require(bool(completion), "Native REBLUR: converted input readback event allocation failed");
+        device->executeCommandList(command_list, nvrhi::CommandQueue::Compute);
+        device->setEventQuery(completion, nvrhi::CommandQueue::Compute); device->waitEventQuery(completion);
+        for (uint32_t slot = 0u; slot != staging.size(); ++slot) {
+            const size_t row_bytes = size_t(size.x) * nvrhi::getFormatInfo(textures[slot]->getDesc().format).bytesPerBlock;
+            size_t pitch{};
+            const void *mapped = device->mapStagingTexture(staging[slot], nvrhi::TextureSlice{}, nvrhi::CpuAccessMode::Read, &pitch);
+            require(mapped && pitch >= row_bytes, "Native REBLUR: converted input readback map failed");
+            inputs[slot].resize(row_bytes * size.y);
+            for (uint32_t y = 0u; y != size.y; ++y)
+                std::memcpy(inputs[slot].data() + size_t(y) * row_bytes,
+                    static_cast<const std::byte *>(mapped) + size_t(y) * pitch, row_bytes);
+            device->unmapStagingTexture(staging[slot]);
+        }
+        collect_profile_results();
+    }
+
     NativeLayer &prepare_layer(uint32_t index, uint32_t width, uint32_t height) {
         require(index < 3u, "Native REBLUR: invalid layer");
         if (resources && resources->width == width && resources->height == height) return *resources;
@@ -698,7 +1052,7 @@ struct NativeReblur::Impl {
         const nrd::DenoiserDesc denoisers[]{
             {0u, nrd::Denoiser::REBLUR_DIFFUSE_SPECULAR}, {1u, nrd::Denoiser::REBLUR_DIFFUSE_SPECULAR},
             {2u, nrd::Denoiser::REBLUR_DIFFUSE_SPECULAR}};
-        nrd::InstanceCreationDesc creation{}; creation.denoisers = denoisers; creation.denoisersNum = 3u;
+        nrd::InstanceCreationDesc creation{}; creation.denoisers = denoisers; creation.denoisersNum = replay_only ? 1u : 3u;
         nrd_check(nrd::CreateInstance(creation, layer->instance), "CreateInstance");
         const auto &description = nrd::GetInstanceDesc(*layer->instance);
         require(description.constantBufferSpaceIndex == 0u && description.samplersSpaceIndex == 0u && description.resourcesSpaceIndex == 0u,
@@ -713,6 +1067,10 @@ struct NativeReblur::Impl {
             layer->ta_probe = create_texture(63u, 1u, nvrhi::Format::RGBA16_FLOAT, "Native REBLUR TEST TA probe");
         if (!test_ts_shader.empty())
             layer->ts_probe = create_texture(4u, 1u, nvrhi::Format::RGBA16_FLOAT, "Native REBLUR TEST TS probe");
+        if (!test_hrd_shader.empty())
+            layer->hrd_probe = create_texture(4u, 1u, nvrhi::Format::RGBA16_FLOAT, "Native REBLUR TEST HRD probe");
+        if (prepass_probe_enabled)
+            layer->prepass_probe = create_texture(24u, 1u, nvrhi::Format::RGBA16_FLOAT, "Native REBLUR TEST PrePass probe");
         for (uint32_t i = 0u; i < description.samplersNum; ++i) {
             const bool linear = description.samplers[i] == nrd::Sampler::LINEAR_CLAMP;
             require(linear || description.samplers[i] == nrd::Sampler::NEAREST_CLAMP, "Native REBLUR: unsupported sampler");
@@ -726,8 +1084,13 @@ struct NativeReblur::Impl {
                 std::strcmp(source.shaderFileName, "REBLUR_DiffuseSpecular_HistoryFix.cs") == 0;
             const bool ta_probe_pipeline = !test_ta_shader.empty() &&
                 std::strcmp(source.shaderFileName, "REBLUR_DiffuseSpecular_TemporalAccumulation.cs") == 0;
+            const bool hrd_probe_pipeline = !test_hrd_shader.empty() &&
+                std::strcmp(source.shaderFileName, "REBLUR_DiffuseSpecular_HitDistReconstruction_5x5.cs") == 0;
             const bool ts_probe_pipeline = !test_ts_shader.empty() &&
                 std::strcmp(source.shaderFileName, "REBLUR_DiffuseSpecular_TemporalStabilization.cs") == 0;
+            const bool prepass_probe_pipeline = prepass_probe_enabled &&
+                std::strcmp(source.shaderFileName, postblur_probe_enabled ?
+                    "REBLUR_DiffuseSpecular_PostBlur.cs" : "REBLUR_DiffuseSpecular_PrePass.cs") == 0;
             require(source.computeShaderSPIRV.bytecode && source.computeShaderSPIRV.size,
                     "Native REBLUR: NRD library has no matching SPIR-V shaders");
             nvrhi::BindingLayoutDesc layout;
@@ -745,8 +1108,15 @@ struct NativeReblur::Impl {
             if (hf_probe_pipeline) layout.bindings.push_back(nvrhi::BindingLayoutItem::Texture_UAV(4u));
             if (ta_probe_pipeline) layout.bindings.push_back(nvrhi::BindingLayoutItem::Texture_UAV(7u));
             if (ts_probe_pipeline) layout.bindings.push_back(nvrhi::BindingLayoutItem::Texture_UAV(6u));
+            if (hrd_probe_pipeline) layout.bindings.push_back(nvrhi::BindingLayoutItem::Texture_UAV(2u));
+            if (prepass_probe_pipeline) layout.bindings.push_back(nvrhi::BindingLayoutItem::Texture_UAV(3u));
             const char *test_shader_directory = std::getenv("REBLUR_NATIVE_TEST_SHADER_DIR");
-            if (hf_probe_pipeline) {
+            if (hrd_probe_pipeline) {
+                const auto test_spirv = read_spirv(test_hrd_shader);
+                std::fprintf(stdout, "Native REBLUR TEST independent HRD accumulator probe shader: %s\n", test_hrd_shader.string().c_str());
+                layer->pipelines.push_back(create_pipeline(test_spirv.data(), test_spirv.size() * sizeof(uint32_t),
+                    source.shaderFileName, layout, source.shaderEntryPointName));
+            } else if (hf_probe_pipeline) {
                 const auto test_spirv = read_spirv(test_hf_shader);
                 std::fprintf(stdout, "Native REBLUR TEST independent HF spatial probe shader: %s\n", test_hf_shader.string().c_str());
                 layer->pipelines.push_back(create_pipeline(test_spirv.data(), test_spirv.size() * sizeof(uint32_t),
@@ -759,6 +1129,18 @@ struct NativeReblur::Impl {
             } else if (ts_probe_pipeline) {
                 const auto test_spirv = read_spirv(test_ts_shader);
                 std::fprintf(stdout, "Native REBLUR TEST independent temporal stabilization probe shader: %s\n", test_ts_shader.string().c_str());
+                layer->pipelines.push_back(create_pipeline(test_spirv.data(), test_spirv.size() * sizeof(uint32_t),
+                    source.shaderFileName, layout, source.shaderEntryPointName));
+            } else if (!test_prepass_shader.empty() &&
+                std::strcmp(source.shaderFileName, "REBLUR_DiffuseSpecular_PrePass.cs") == 0) {
+                const auto test_spirv = read_spirv(test_prepass_shader);
+                std::fprintf(stdout, "Native REBLUR TEST PrePass shader: %s\n", test_prepass_shader.string().c_str());
+                layer->pipelines.push_back(create_pipeline(test_spirv.data(), test_spirv.size() * sizeof(uint32_t),
+                    source.shaderFileName, layout, source.shaderEntryPointName));
+            } else if (!test_postblur_shader.empty() &&
+                std::strcmp(source.shaderFileName, "REBLUR_DiffuseSpecular_PostBlur.cs") == 0) {
+                const auto test_spirv = read_spirv(test_postblur_shader);
+                std::fprintf(stdout, "Native REBLUR TEST PostBlur shader: %s\n", test_postblur_shader.string().c_str());
                 layer->pipelines.push_back(create_pipeline(test_spirv.data(), test_spirv.size() * sizeof(uint32_t),
                     source.shaderFileName, layout, source.shaderEntryPointName));
             } else if (test_shader_directory && *test_shader_directory &&
@@ -784,14 +1166,14 @@ struct NativeReblur::Impl {
         };
         allocate_pool(description.permanentPool, description.permanentPoolSize, layer->permanent, "permanent");
         allocate_pool(description.transientPool, description.transientPoolSize, layer->transient, "transient");
-        layer->motion = create_texture(width, height, nvrhi::Format::RGBA16_FLOAT, "Native REBLUR motion");
-        layer->normal = create_texture(width, height, nvrhi::Format::R10G10B10A2_UNORM, "Native REBLUR normal roughness");
-        layer->view_z = create_texture(width, height, nvrhi::Format::R32_FLOAT, "Native REBLUR viewZ");
-        layer->disocclusion_mix = create_texture(width, height, nvrhi::Format::R8_UNORM, "Native REBLUR disocclusion threshold mix");
-        layer->input_diffuse = create_texture(width, height, nvrhi::Format::RGBA16_FLOAT, "Native REBLUR diffuse input");
-        layer->input_specular = create_texture(width, height, nvrhi::Format::RGBA16_FLOAT, "Native REBLUR specular input");
-        layer->output_diffuse = create_texture(width, height, nvrhi::Format::RGBA16_FLOAT, "Native REBLUR diffuse output");
-        layer->output_specular = create_texture(width, height, nvrhi::Format::RGBA16_FLOAT, "Native REBLUR specular output");
+        layer->motion = create_texture(width, height, nvrhi::Format::RGBA16_FLOAT, "Native REBLUR motion", true);
+        layer->normal = create_texture(width, height, nvrhi::Format::R10G10B10A2_UNORM, "Native REBLUR normal roughness", true);
+        layer->view_z = create_texture(width, height, nvrhi::Format::R32_FLOAT, "Native REBLUR viewZ", true);
+        layer->disocclusion_mix = create_texture(width, height, nvrhi::Format::R8_UNORM, "Native REBLUR disocclusion threshold mix", true);
+        layer->input_diffuse = create_texture(width, height, nvrhi::Format::RGBA16_FLOAT, "Native REBLUR diffuse input", true);
+        layer->input_specular = create_texture(width, height, nvrhi::Format::RGBA16_FLOAT, "Native REBLUR specular input", true);
+        layer->output_diffuse = create_texture(width, height, nvrhi::Format::RGBA16_FLOAT, "Native REBLUR diffuse output", true);
+        layer->output_specular = create_texture(width, height, nvrhi::Format::RGBA16_FLOAT, "Native REBLUR specular output", true);
         nvrhi::BindingSetDesc pack_set;
         pack_set.bindings = {nvrhi::BindingSetItem::PushConstants(0u, sizeof(NativeReblurConstants)),
             nvrhi::BindingSetItem::Texture_UAV(0u, layer->input_diffuse), nvrhi::BindingSetItem::Texture_UAV(1u, layer->input_specular),
@@ -824,11 +1206,13 @@ struct NativeReblur::Impl {
     }
 
     void run(const ocarina::VulkanInteropContext &context, const FilterParam &parameters,
-             const NativeCameraParams &camera, uint32_t layer_index, const Settings &settings, bool reset) {
+             const NativeCameraParams &camera, uint32_t layer_index, const Settings &settings, bool reset,
+             const nrd::CommonSettings *prepared_common = nullptr, const nrd::ReblurSettings *prepared_method = nullptr) {
         initialize(context);
         collect_profile_results();
         device->runGarbageCollection();
         const auto width = parameters.size.x, height = parameters.size.y;
+        const auto reported_layer = prepared_common ? replay_plane_number : layer_index;
         require(width && height && width <= UINT16_MAX && height <= UINT16_MAX, "Native REBLUR: invalid resolution");
         require(std::isfinite(camera.denoising_range) && camera.denoising_range > 0.f && camera.denoising_range < 1e30f,
                 "Native REBLUR: denoising range must be positive and finite");
@@ -842,6 +1226,7 @@ struct NativeReblur::Impl {
         for (uint32_t component = 0u; component < 4u; ++component)
             conversion.previous_view_depth_row[component] = camera.world_to_view_prev[component * 4u + 2u];
         const bool continuous = parameters.history_valid && layer.frames[layer_index] != UINT32_MAX && layer.frames[layer_index] + 1u == parameters.frame;
+        if (!prepared_common) {
         require(conversion.guide && conversion.raw_diffuse && conversion.raw_specular && conversion.output_diffuse && conversion.output_specular,
                 "Native REBLUR: missing external buffer address");
         require(parameters.guide.size_in_byte() >= uint64_t(width) * height * sizeof(Guide), "Native REBLUR: guide buffer is too small");
@@ -852,7 +1237,8 @@ struct NativeReblur::Impl {
         require(((conversion.guide | conversion.raw_diffuse | conversion.raw_specular |
                     conversion.output_diffuse | conversion.output_specular) & 15u) == 0u,
                 "Native REBLUR: conversion buffers require 16-byte aligned addresses");
-        auto method = nrd_settings(settings);
+        }
+        auto method = prepared_method ? *prepared_method : nrd_settings(settings);
         nrd_check(nrd::SetDenoiserSettings(*layer.instance, layer_index, &method), "SetDenoiserSettings");
         nrd::CommonSettings common{};
         std::memcpy(common.worldToViewMatrix, camera.world_to_view.data(), sizeof(common.worldToViewMatrix));
@@ -874,6 +1260,7 @@ struct NativeReblur::Impl {
         // NRD filters injected clears by the requested identifier, so a reset
         // clears this denoiser's history while preserving the other layers.
         common.accumulationMode = (reset || !continuous) ? nrd::AccumulationMode::CLEAR_AND_RESTART : nrd::AccumulationMode::CONTINUE;
+        if (prepared_common) common = *prepared_common;
         nrd_check(nrd::SetCommonSettings(*layer.instance, common), "SetCommonSettings");
         const nrd::Identifier identifier = layer_index;
         const nrd::DispatchDesc *dispatches{}; uint32_t dispatch_count{};
@@ -920,20 +1307,22 @@ struct NativeReblur::Impl {
             if (!pass_profile_path.empty()) {
                 query = device->createTimerQuery();
                 require(bool(query), "Native REBLUR: per-pass timer allocation failed");
-                pass_samples.push_back({query, {}, serial, width, height, parameters.frame, layer_index, pass_index, name ? name : "Unnamed", true});
+                pass_samples.push_back({query, {}, serial, width, height, parameters.frame, reported_layer, pass_index, name ? name : "Unnamed", true});
                 command_list->beginTimerQuery(query);
             }
             ++pass_index;
             return query;
         };
         auto end_pass = [&](const nvrhi::TimerQueryHandle &query) { if (query) command_list->endTimerQuery(query); };
+        if (!prepared_common) {
         const auto pack_timer = begin_pass("Pack");
         nvrhi::ComputeState pack_state; pack_state.pipeline = pack.pipeline; pack_state.bindings = {layer.pack_binding};
         command_list->setComputeState(pack_state); command_list->setPushConstants(&conversion, sizeof(conversion));
         command_list->dispatch((width + 15u) / 16u, (height + 7u) / 8u);
         external_buffer_barrier();
-        interval_point(1u);
         end_pass(pack_timer);
+        }
+        interval_point(1u);
         if (!snapshot_directory.empty()) {
             snapshot_constants(parameters.frame, layer_index, 0u, &conversion, sizeof(conversion));
             snapshot_texture(snapshots, layer.input_diffuse, parameters.frame, layer_index, 0u, 0u,
@@ -962,8 +1351,13 @@ struct NativeReblur::Impl {
                 std::strcmp(description.shaderFileName, "REBLUR_DiffuseSpecular_HistoryFix.cs") == 0;
             const bool ta_probe_dispatch = bool(layer.ta_probe) &&
                 std::strcmp(description.shaderFileName, "REBLUR_DiffuseSpecular_TemporalAccumulation.cs") == 0;
+            const bool hrd_probe_dispatch = bool(layer.hrd_probe) &&
+                std::strcmp(description.shaderFileName, "REBLUR_DiffuseSpecular_HitDistReconstruction_5x5.cs") == 0;
             const bool ts_probe_dispatch = bool(layer.ts_probe) &&
                 std::strcmp(description.shaderFileName, "REBLUR_DiffuseSpecular_TemporalStabilization.cs") == 0;
+            const bool prepass_probe_dispatch = bool(layer.prepass_probe) &&
+                std::strcmp(description.shaderFileName, postblur_probe_enabled ?
+                    "REBLUR_DiffuseSpecular_PostBlur.cs" : "REBLUR_DiffuseSpecular_PrePass.cs") == 0;
             const auto pass_timer = begin_pass(dispatch.name ? dispatch.name : description.shaderFileName);
             if (dispatch.name) command_list->beginMarker(dispatch.name);
             if (dispatch.constantBufferDataSize)
@@ -997,6 +1391,10 @@ struct NativeReblur::Impl {
                     bindings.bindings.push_back(nvrhi::BindingSetItem::Texture_UAV(7u, layer.ta_probe));
                 if (ts_probe_dispatch)
                     bindings.bindings.push_back(nvrhi::BindingSetItem::Texture_UAV(6u, layer.ts_probe));
+                if (hrd_probe_dispatch)
+                    bindings.bindings.push_back(nvrhi::BindingSetItem::Texture_UAV(2u, layer.hrd_probe));
+                if (prepass_probe_dispatch)
+                    bindings.bindings.push_back(nvrhi::BindingSetItem::Texture_UAV(3u, layer.prepass_probe));
                 auto binding = device->createBindingSet(bindings, pipeline.layout);
                 require(bool(binding), "Native REBLUR: denoiser binding set failed");
                 found = layer.binding_cache.emplace(std::move(key), std::move(binding)).first;
@@ -1007,6 +1405,19 @@ struct NativeReblur::Impl {
                 command_list->clearTextureFloat(layer.ta_probe, nvrhi::AllSubresources, nvrhi::Color(0.f));
             if (ts_probe_dispatch)
                 command_list->clearTextureFloat(layer.ts_probe, nvrhi::AllSubresources, nvrhi::Color(0.f));
+            if (hrd_probe_dispatch)
+                command_list->clearTextureFloat(layer.hrd_probe, nvrhi::AllSubresources, nvrhi::Color(0.f));
+            if (prepass_probe_dispatch) {
+                if (prepass_probe_runtime) {
+                    command_list->writeTexture(layer.prepass_probe, 0u, 0u, prepass_probe_initial.data(), 24u * 8u);
+                    // The shader reads its target from u3[23,0] before writing
+                    // diagnostics. Make the upload visible even if bindings repeat.
+                    command_list->setTextureState(layer.prepass_probe, nvrhi::AllSubresources, nvrhi::ResourceStates::UnorderedAccess);
+                    command_list->commitBarriers();
+                } else {
+                    command_list->clearTextureFloat(layer.prepass_probe, nvrhi::AllSubresources, nvrhi::Color(0.f));
+                }
+            }
             nvrhi::ComputeState state; state.pipeline = pipeline.pipeline; state.bindings = {found->second};
             command_list->setComputeState(state);
             command_list->dispatch(dispatch.gridWidth, dispatch.gridHeight);
@@ -1047,14 +1458,23 @@ struct NativeReblur::Impl {
                     snapshot_texture(snapshots, layer.ta_probe, parameters.frame, layer_index, snapshot_ordinal, 7u,
                                      nrd::ResourceType::MAX_NUM, UINT32_MAX, dispatch.name, description.shaderFileName,
                                      dispatch.constantBufferDataSize);
+                if (hrd_probe_dispatch)
+                    snapshot_texture(snapshots, layer.hrd_probe, parameters.frame, layer_index, snapshot_ordinal, 2u,
+                                     nrd::ResourceType::MAX_NUM, UINT32_MAX, dispatch.name, description.shaderFileName,
+                                     dispatch.constantBufferDataSize);
                 if (ts_probe_dispatch)
                     snapshot_texture(snapshots, layer.ts_probe, parameters.frame, layer_index, snapshot_ordinal, 6u,
+                                     nrd::ResourceType::MAX_NUM, UINT32_MAX, dispatch.name, description.shaderFileName,
+                                     dispatch.constantBufferDataSize);
+                if (prepass_probe_dispatch)
+                    snapshot_texture(snapshots, layer.prepass_probe, parameters.frame, layer_index, snapshot_ordinal, 3u,
                                      nrd::ResourceType::MAX_NUM, UINT32_MAX, dispatch.name, description.shaderFileName,
                                      dispatch.constantBufferDataSize);
             }
         }
         if (nrd_timer) command_list->endTimerQuery(nrd_timer);
         interval_point(2u);
+        if (!prepared_common) {
         const auto unpack_timer = begin_pass("Unpack");
         external_buffer_barrier();
         nvrhi::ComputeState unpack_state; unpack_state.pipeline = unpack.pipeline; unpack_state.bindings = {layer.unpack_binding};
@@ -1062,6 +1482,7 @@ struct NativeReblur::Impl {
         command_list->dispatch((width + 15u) / 16u, (height + 7u) / 8u);
         external_buffer_barrier();
         end_pass(unpack_timer);
+        }
         interval_point(3u);
         if (interval_pool) {
             // Include close()'s original keepInitialState work in full-filter
@@ -1076,7 +1497,7 @@ struct NativeReblur::Impl {
             for (const auto &texture : layer.transient) restore_initial(texture);
             for (const auto &texture : {layer.motion, layer.normal, layer.view_z, layer.disocclusion_mix,
                     layer.input_diffuse, layer.input_specular, layer.output_diffuse, layer.output_specular,
-                    layer.ta_probe, layer.ts_probe, layer.hf_probe}) restore_initial(texture);
+                    layer.ta_probe, layer.ts_probe, layer.hf_probe, layer.hrd_probe, layer.prepass_probe}) restore_initial(texture);
             command_list->commitBarriers();
             interval_point(4u);
         }
@@ -1095,8 +1516,8 @@ struct NativeReblur::Impl {
             device->waitEventQuery(completion);
             write_snapshots(snapshots);
         }
-        if (timer) pending_profiles.push_back({timer, completion, serial, width, height, parameters.frame, layer_index, 0u, "REBLUR-Filter", false});
-        if (nrd_timer) pending_profiles.push_back({nrd_timer, completion, serial, width, height, parameters.frame, layer_index, 0u, "REBLUR-NRD", false});
+        if (timer) pending_profiles.push_back({timer, completion, serial, width, height, parameters.frame, reported_layer, 0u, "REBLUR-Filter", false});
+        if (nrd_timer) pending_profiles.push_back({nrd_timer, completion, serial, width, height, parameters.frame, reported_layer, 0u, "REBLUR-NRD", false});
         for (auto &sample : pass_samples) {
             sample.completion = completion;
             pending_profiles.push_back(std::move(sample));
@@ -1135,6 +1556,87 @@ ocarina::Command *NativeReblur::sampling_probe(ocarina::BufferDesc<float4> outpu
         require(context.backend == ocarina::NativeInteropBackend::VulkanCompute && context.native,
                 "Native REBLUR: Vulkan compute interop is required for the sampling probe");
         state->run_sampling_probe(*static_cast<const ocarina::VulkanInteropContext *>(context.native), output, probe_spirv);
+    });
+}
+
+ocarina::Command *NativeReblur::upload_replay_inputs(uint2 size, uint layer,
+                                                    std::shared_ptr<const PackedNrdInputs> inputs) {
+    return ocarina::native_callback([state = impl_, size, layer, inputs = std::move(inputs)]
+        (const ocarina::NativeInteropContext &context) {
+        require(inputs && context.backend == ocarina::NativeInteropBackend::VulkanCompute && context.native,
+                "Native REBLUR: Vulkan context and prepared inputs required");
+        state->replay_plane(layer).upload_prepared(*static_cast<const ocarina::VulkanInteropContext *>(context.native), size, *inputs);
+    });
+}
+
+ocarina::Command *NativeReblur::replay_dispatch(uint2 size, uint layer,
+                                               const nrd::CommonSettings &common, const nrd::ReblurSettings &settings) {
+    return ocarina::native_callback([state = impl_, size, layer, common, settings]
+        (const ocarina::NativeInteropContext &context) {
+        require(context.backend == ocarina::NativeInteropBackend::VulkanCompute && context.native,
+                "Native REBLUR: Vulkan context required for prepared replay");
+        auto &plane = state->replay_plane(layer);
+        plane.profile_serial = state->replay_serial++;
+        FilterParam parameters{};
+        parameters.size = size; parameters.frame = common.frameIndex;
+        plane.run(*static_cast<const ocarina::VulkanInteropContext *>(context.native), parameters,
+                  NativeCameraParams{}, 0u, Settings{}, false, &common, &settings);
+    });
+}
+
+ocarina::Command *NativeReblur::readback_replay_outputs(uint2 size, uint layer,
+                                                       std::shared_ptr<PackedNrdOutputs> outputs) {
+    return ocarina::native_callback([state = impl_, size, layer, outputs = std::move(outputs)]
+        (const ocarina::NativeInteropContext &context) {
+        require(outputs && context.backend == ocarina::NativeInteropBackend::VulkanCompute && context.native,
+                "Native REBLUR: Vulkan context and replay outputs required");
+        state->replay_plane(layer).read_prepared(*static_cast<const ocarina::VulkanInteropContext *>(context.native), size, *outputs);
+    });
+}
+
+ocarina::Command *NativeReblur::upload_canonical_inputs(uint2 size, uint layer,
+    std::shared_ptr<const std::vector<std::byte>> inputs, std::filesystem::path frontend_spirv,
+    std::shared_ptr<const PackedNrdOutputs> nrd_outputs, std::filesystem::path backend_spirv) {
+    return ocarina::native_callback([state = impl_, size, layer, inputs = std::move(inputs), frontend_spirv = std::move(frontend_spirv),
+                                    nrd_outputs = std::move(nrd_outputs), backend_spirv = std::move(backend_spirv)]
+        (const ocarina::NativeInteropContext &context) {
+        require(inputs && context.backend == ocarina::NativeInteropBackend::VulkanCompute && context.native,
+                "Native REBLUR: Vulkan context and canonical inputs required");
+        state->replay_plane(layer).upload_canonical(*static_cast<const ocarina::VulkanInteropContext *>(context.native),
+            size, *inputs, frontend_spirv, nrd_outputs.get(), backend_spirv);
+    });
+}
+
+ocarina::Command *NativeReblur::dispatch_canonical_conversion(uint2 size, uint layer,
+    float4 hit_distance_parameters, float clamp_max) {
+    return ocarina::native_callback([state = impl_, size, layer, hit_distance_parameters, clamp_max]
+        (const ocarina::NativeInteropContext &context) {
+        require(context.backend == ocarina::NativeInteropBackend::VulkanCompute && context.native,
+                "Native REBLUR: Vulkan context required for canonical conversion");
+        auto &plane = state->replay_plane(layer);
+        plane.profile_serial = state->replay_serial++;
+        plane.run_canonical(*static_cast<const ocarina::VulkanInteropContext *>(context.native),
+            size, hit_distance_parameters, clamp_max);
+    });
+}
+
+ocarina::Command *NativeReblur::readback_replay_inputs(uint2 size, uint layer,
+    std::shared_ptr<PackedNrdInputs> inputs) {
+    return ocarina::native_callback([state = impl_, size, layer, inputs = std::move(inputs)]
+        (const ocarina::NativeInteropContext &context) {
+        require(inputs && context.backend == ocarina::NativeInteropBackend::VulkanCompute && context.native,
+                "Native REBLUR: Vulkan context and converted input destination required");
+        state->replay_plane(layer).read_prepared_inputs(*static_cast<const ocarina::VulkanInteropContext *>(context.native), size, *inputs);
+    });
+}
+
+ocarina::Command *NativeReblur::readback_canonical_outputs(uint2 size, uint layer,
+    std::shared_ptr<PackedNrdOutputs> outputs) {
+    return ocarina::native_callback([state = impl_, size, layer, outputs = std::move(outputs)]
+        (const ocarina::NativeInteropContext &context) {
+        require(outputs && context.backend == ocarina::NativeInteropBackend::VulkanCompute && context.native,
+                "Native REBLUR: Vulkan context and canonical output destination required");
+        state->replay_plane(layer).read_canonical_outputs(*static_cast<const ocarina::VulkanInteropContext *>(context.native), size, *outputs);
     });
 }
 

@@ -17,6 +17,8 @@
 #include <string>
 #include <thread>
 #include <vector>
+#include "reblur_packed_replay.h"
+#include "reblur_real_conversion.h"
 
 // Fixed-input replay for the native NRD and original-algorithm EDSL backends.
 // Run each backend in its own process, with the same replay environment.
@@ -187,6 +189,17 @@ void run(Device &device, Stream &stream) {
     const char *backend_environment = std::getenv("REBLUR_REPLAY_BACKEND");
     const std::string backend = backend_environment ? backend_environment : "edsl";
     if (backend != "native" && backend != "edsl") throw std::runtime_error("REBLUR_REPLAY_BACKEND must be native or edsl");
+    if (const char *canonical = std::getenv("REBLUR_CONVERSION_INPUT_DIR"); canonical && *canonical) {
+        vision::reblur::real_conversion::run(device, stream, backend,
+            option("REBLUR_CONVERSION_WARMUP", 64u, true), option("REBLUR_CONVERSION_FRAMES", 128u),
+            option("REBLUR_CONVERSION_FRAME_PAUSE_MS", 250u, true));
+        return;
+    }
+    if (const char *capture = std::getenv("REBLUR_REPLAY_CAPTURE_DIR"); capture && *capture) {
+        reblur_packed_replay::run(device, stream, backend, option("REBLUR_REPLAY_WARMUP", 64u, true),
+            option("REBLUR_REPLAY_FRAME_PAUSE_MS", 250u, true));
+        return;
+    }
     const uint2 size = make_uint2(option("REBLUR_REPLAY_WIDTH", 1280u), option("REBLUR_REPLAY_HEIGHT", 720u));
     const uint warmup = option("REBLUR_REPLAY_WARMUP", 64u, true);
     const uint frames = option("REBLUR_REPLAY_FRAMES", 32u);
@@ -283,6 +296,11 @@ void run(Device &device, Stream &stream) {
 int main() {
     try {
         using namespace ocarina;
+        if (const char *capture = std::getenv("REBLUR_REPLAY_CAPTURE_DIR"); capture && *capture &&
+            std::getenv("REBLUR_REPLAY_CAPTURE_VALIDATE_ONLY")) {
+            reblur_packed_replay::validate_capture(capture);
+            return 0;
+        }
         Env::set_valid_check(false);
         DynamicModule::clear_search_path();
         RHIContext::instance().init(std::filesystem::current_path());

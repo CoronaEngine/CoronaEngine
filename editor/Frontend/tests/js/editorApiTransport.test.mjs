@@ -13,6 +13,23 @@ const CALLER_CEF = 1;
 
 const MANIFEST_METHODS = [
   {
+    api: 'SceneTools.set_vision_denoiser', js_wrapper: 'sceneTools.setVisionDenoiser',
+    params: [{ name: 'scene_name', type: 'string' }, { name: 'camera_name', type: 'string', optional: true },
+      { name: 'type', type: 'string', optional: true }],
+    return: 'object', allowed_callers: CALLER_CEF,
+  },
+  {
+    api: 'SceneTools.get_reblur_settings', js_wrapper: 'sceneTools.getReblurSettings',
+    params: [{ name: 'scene_name', type: 'string' }, { name: 'camera_name', type: 'string' }],
+    return: 'object', allowed_callers: CALLER_CEF,
+  },
+  {
+    api: 'SceneTools.set_reblur_settings', js_wrapper: 'sceneTools.setReblurSettings',
+    params: [{ name: 'scene_name', type: 'string' }, { name: 'camera_name', type: 'string' },
+      { name: 'settings', type: 'object' }],
+    return: 'object', allowed_callers: CALLER_CEF,
+  },
+  {
     api: 'SceneTools.get_restir_settings', js_wrapper: 'sceneTools.getRestirSettings',
     params: [{ name: 'scene_name', type: 'string' }, { name: 'camera_id', type: 'string' }],
     return: 'object', allowed_callers: CALLER_CEF,
@@ -77,12 +94,14 @@ function createFakeCefHost() {
   const hangFor = new Set();
   const requests = [];
   const pending = new Map();
+  const responses = new Map();
 
   return {
     requests,
     failFor,
     hangFor,
     pending,
+    responses,
     cefQuery({ request, onSuccess, onFailure }) {
       let payload = null;
       try {
@@ -113,6 +132,10 @@ function createFakeCefHost() {
       }
       if (payload.api === 'EditorApi.register_callback') {
         onSuccess(JSON.stringify({ status: 'success', data: { callback_token: 42 } }));
+        return;
+      }
+      if (responses.has(payload.api)) {
+        onSuccess(JSON.stringify(responses.get(payload.api)));
         return;
       }
       onSuccess(JSON.stringify({ status: 'success', data: {} }));
@@ -248,6 +271,68 @@ test('ReSTIR wrappers preserve the camera binding and nested settings through th
     { api: 'SceneTools.get_restir_settings', args: ['SceneA', 'camera-b'] },
     { api: 'SceneTools.set_restir_settings', args: ['SceneA', 'camera-b', settings] },
   ]);
+});
+
+test('denoiser selection reaches native for each camera and retains the pending acknowledgement', async () => {
+  const { editorApi, host } = await loadEditorApi();
+  const sceneTools = editorApi.sceneTools;
+  const listSceneTree = sceneTools.listSceneTree;
+  host.responses.set('SceneTools.set_vision_denoiser', {
+    status: 'success', data: { status: 'success', pending: true, type: 'reblur' },
+  });
+  const response = await sceneTools.setVisionDenoiser('SceneA', 'camera-a', 'reblur');
+  assert.equal(response.data.pending, true);
+  assert.equal(response.data.type, 'reblur');
+
+  host.responses.set('SceneTools.set_vision_denoiser', {
+    status: 'success', data: { status: 'success', pending: true, type: 'svgf' },
+  });
+  await sceneTools.setVisionDenoiser('SceneA', 'camera-b', 'svgf');
+  await sceneTools.listSceneTree('SceneA');
+  assert.equal(editorApi.sceneTools, sceneTools);
+  assert.equal(sceneTools.listSceneTree, listSceneTree);
+  assert.deepEqual(host.requests.filter(entry => entry.api !== 'EditorApi.list_methods'), [
+    { api: 'SceneTools.set_vision_denoiser', args: ['SceneA', 'camera-a', 'reblur'] },
+    { api: 'SceneTools.set_vision_denoiser', args: ['SceneA', 'camera-b', 'svgf'] },
+    { api: 'SceneTools.list_scene_tree', args: ['SceneA'] },
+  ]);
+});
+
+test('REBLUR settings preserve independent camera bindings and parameter values', async () => {
+  const { editorApi, host } = await loadEditorApi();
+  await editorApi.sceneTools.getReblurSettings('SceneA', 'camera-a');
+  await editorApi.sceneTools.setReblurSettings('SceneA', 'camera-a', { max_history: 12, anti_firefly: false });
+  await editorApi.sceneTools.getReblurSettings('SceneA', 'camera-b');
+  await editorApi.sceneTools.setReblurSettings('SceneA', 'camera-b', { max_history: 24, anti_firefly: true });
+  assert.deepEqual(host.requests.filter(entry => entry.api.includes('reblur_settings')), [
+    { api: 'SceneTools.get_reblur_settings', args: ['SceneA', 'camera-a'] },
+    { api: 'SceneTools.set_reblur_settings', args: ['SceneA', 'camera-a', { max_history: 12, anti_firefly: false }] },
+    { api: 'SceneTools.get_reblur_settings', args: ['SceneA', 'camera-b'] },
+    { api: 'SceneTools.set_reblur_settings', args: ['SceneA', 'camera-b', { max_history: 24, anti_firefly: true }] },
+  ]);
+});
+
+test('denoiser selection rejects a native failure response', async () => {
+  const { editorApi, host } = await loadEditorApi();
+  host.responses.set('SceneTools.set_vision_denoiser', {
+    status: 'error', message: 'Camera not found',
+  });
+  await assert.rejects(
+    async () => editorApi.sceneTools.setVisionDenoiser('SceneA', 'missing-camera', 'reblur'),
+    /Camera not found/,
+  );
+  assert.deepEqual(host.requests.at(-1), {
+    api: 'SceneTools.set_vision_denoiser', args: ['SceneA', 'missing-camera', 'reblur'],
+  });
+});
+
+test('an unknown method in an existing namespace is rejected before native dispatch', async () => {
+  const { editorApi, host } = await loadEditorApi();
+  await assert.rejects(
+    async () => editorApi.sceneTools.notARealMethod(),
+    /wrapper path is not defined by C\+\+ manifest: sceneTools\.notARealMethod/,
+  );
+  assert.deepEqual(host.requests.map(entry => entry.api), ['EditorApi.list_methods', 'EditorApi.list_events']);
 });
 
 test('an unknown wrapper path is rejected instead of being sent to native', async () => {

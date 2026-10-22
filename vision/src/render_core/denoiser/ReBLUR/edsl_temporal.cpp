@@ -348,8 +348,9 @@ PassShader compile_temporal(Device &device) {
         Float normal_sum = 0.f;
         Float4 normal_valid = make_float4(prevViewZ0.z < c.gDenoisingRange, prevViewZ1.y < c.gDenoisingRange,
                                          prevViewZ2.y < c.gDenoisingRange, prevViewZ3.x < c.gDenoisingRange);
+        Uint2 previous_normal_origin = make_uint2(smb.origin);
         for (uint k = 0u; k < 4u; ++k) {
-            Int2 q = make_int2(smb.origin) + make_int2(k % 2u, k / 2u);
+            Int2 q = make_int2(previous_normal_origin + make_uint2(k % 2u, k / 2u));
             smbNavg += NRD_FrontEnd_UnpackNormalAndRoughness(prev_normals.read(q)).xyz() * normal_valid[k];
             normal_sum += normal_valid[k];
         }
@@ -707,8 +708,12 @@ PassShader compile_temporal(Device &device) {
 PassShader compile_stabilization(Device &device) {
     const char *probe = std::getenv("REBLUR_EDSL_EDGE_PROBE");
     const bool edge_probe = probe && std::string_view(probe) == "1";
-    const bool chain_probe = probe && std::string_view(probe) == "2";
-    Kernel kernel = [edge_probe, chain_probe](Var<Dispatch> p) {
+    const bool xvirtual_chain_probe = probe && std::string_view(probe) == "4";
+    const bool clip_chain_probe = probe && std::string_view(probe) == "5";
+    const bool full_replay_chain_probe = probe && std::string_view(probe) == "6";
+    const bool replay_chain_probe = probe && (std::string_view(probe) == "3" || xvirtual_chain_probe || clip_chain_probe || full_replay_chain_probe);
+    const bool chain_probe = probe && (std::string_view(probe) == "2" || replay_chain_probe);
+    Kernel kernel = [edge_probe, chain_probe, replay_chain_probe, xvirtual_chain_probe, clip_chain_probe, full_replay_chain_probe](Var<Dispatch> p) {
         configure_block(8u, 16u);
         auto &c = p.constants;
         Image<float, Format::R8Unorm> tiles{p.inputs.t0};
@@ -779,18 +784,20 @@ PassShader compile_stabilization(Device &device) {
                 diffMin = min(diffMin, d); diffMax = max(diffMax, d);
             }
         }
+        Float diffMomentSum = diffM1;
         diffM1 = call<float>("oc_nrd_round_mul", diffM1, 1.f / 9.f);
         Float diffSigma = sqrt(abs(ocarina::fma(diffM2, 1.f / 9.f, -(diffM1 * diffM1))));
         $if(c.gMaxBlurRadius != 0.f) { diffLuma = clamp(diffLuma, diffMin, diffMax); };
         Float2 smbSampleUv = saturate(smbPixelUv);
         Float smbDiffHistory = temporal_sample_custom(diff_stabilized, smbSampleUv, c.gRectSizePrev, c.gResourceSizeInvPrev, smbWeights, smbAllowCatRom);
         smbDiffHistory = max(smbDiffHistory, 0.f);
-        Float diffAntilag = ComputeAntilag(c, smbDiffHistory, diffM1, diffSigma, smbQuality * data1.x);
+        Float diffAntilag = ComputeAntilag(c, smbDiffHistory, diffMomentSum, diffSigma, smbQuality * data1.x);
         Float2 diffTemporal = GetTemporalAccumulationParams(c, smbQuality, data1.x);
         Float diffHistoryWeight = diffTemporal.x * diffAntilag;
         diffHistoryWeight *= (pixelUv.x >= c.gSplitScreen).cast<float>();
         diffHistoryWeight *= (smbPixelUv.x >= c.gSplitScreenPrev).cast<float>();
-        smbDiffHistory = clamp(smbDiffHistory, diffM1 - diffSigma * diffTemporal.y, diffM1 + diffSigma * diffTemporal.y);
+        Float diffSigmaScaled = diffSigma * diffTemporal.y;
+        smbDiffHistory = clamp(smbDiffHistory, ocarina::fma(diffMomentSum, 1.f / 9.f, -diffSigmaScaled), ocarina::fma(diffMomentSum, 1.f / 9.f, diffSigmaScaled));
         Float diffLumaStabilized = Lerp(diffLuma, smbDiffHistory, min(diffHistoryWeight, c.gStabilizationStrength));
         out_diff.write_in_bounds(pixel, ChangeLuma(in_diff.read_in_bounds(pixel), diffLumaStabilized));
         out_diff_stabilized.write_in_bounds(pixel, diffLumaStabilized);
@@ -808,6 +815,7 @@ PassShader compile_stabilization(Device &device) {
                 specMin = min(specMin, s); specMax = max(specMax, s);
             }
         }
+        Float specMomentSum = specM1;
         specM1 = call<float>("oc_nrd_round_mul", specM1, 1.f / 9.f);
         Float specSigma = sqrt(abs(ocarina::fma(specM2, 1.f / 9.f, -(specM1 * specM1))));
         $if(c.gMaxBlurRadius != 0.f) { specLuma = clamp(specLuma, specMin, specMax); };
@@ -854,9 +862,20 @@ PassShader compile_stabilization(Device &device) {
             c.gResourceSizeInvPrev, vmbWeights, vmbAllowCatRom);
         Float vmbSpecHistoryRaw = vmbSpecHistory;
         if (chain_probe) {
-            $if(c.gFrameIndex == 6u && all(pixel == make_int2(5, 2))) {
+            $if(c.gFrameIndex == (full_replay_chain_probe ? 22u : replay_chain_probe ? 1u : 6u) &&
+                all(pixel == (full_replay_chain_probe ? make_int2(1050, 636) : replay_chain_probe ? make_int2(44, 51) : make_int2(5, 2)))) {
                 SignalImage diagnostic{p.outputs.t6};
-                const std::array<Float, 4> values{vmbPixelUv.x, vmbPixelUv.y, vmbQuality, vmbSpecHistoryRaw};
+                const auto values = [&] {
+                    if (xvirtual_chain_probe) {
+                        Float4 clip = ProjectiveTransform(c.gWorldToClipPrev, Xvirtual);
+                        return std::array<Float, 4>{Xvirtual.x, Xvirtual.y, Xvirtual.z, clip.w};
+                    }
+                    if (clip_chain_probe) {
+                        Float4 clip = ProjectiveTransform(c.gWorldToClipPrev, Xvirtual);
+                        return std::array<Float, 4>{clip.x, clip.y, clip.w, vmbPixelUv.x};
+                    }
+                    return std::array<Float, 4>{vmbPixelUv.x, vmbPixelUv.y, vmbQuality, vmbSpecHistoryRaw};
+                }();
                 for (uint i = 0u; i != values.size(); ++i) {
                     Uint raw_bits = as<uint>(values[i]);
                     Uint4 bytes = (make_uint4(raw_bits) >> make_uint4(0u, 8u, 16u, 24u)) & 255u;
@@ -867,7 +886,7 @@ PassShader compile_stabilization(Device &device) {
         smbSpecHistory = max(smbSpecHistory, 0.f); vmbSpecHistory = max(vmbSpecHistory, 0.f);
         Float specLumaHistory = Lerp(smbSpecHistory, vmbSpecHistory, virtualHistoryAmount);
         Float footprintQuality = Lerp(smbQuality, vmbQuality, virtualHistoryAmount);
-        Float specAntilag = ComputeAntilag(c, specLumaHistory, specM1, specSigma, footprintQuality * data1.y);
+        Float specAntilag = ComputeAntilag(c, specLumaHistory, specMomentSum, specSigma, footprintQuality * data1.y);
         Float2 specTemporal = GetTemporalAccumulationParams(c, footprintQuality, data1.y);
         Float specHistoryWeight = specTemporal.x * specAntilag;
         specHistoryWeight *= (pixelUv.x >= c.gSplitScreen).cast<float>();
@@ -877,7 +896,8 @@ PassShader compile_stabilization(Device &device) {
         Float smc = GetSpecMagicCurve(roughness);
         Float acceleration = Lerp(smc, 1.f, .5f + responsiveFactor * .5f);
         specHistoryWeight *= select(materialID == c.gStrandMaterialID, .5f, acceleration);
-        specLumaHistory = clamp(specLumaHistory, specM1 - specSigma * specTemporal.y, specM1 + specSigma * specTemporal.y);
+        Float specSigmaScaled = specSigma * specTemporal.y;
+        specLumaHistory = clamp(specLumaHistory, ocarina::fma(specMomentSum, 1.f / 9.f, -specSigmaScaled), ocarina::fma(specMomentSum, 1.f / 9.f, specSigmaScaled));
         Float specLumaStabilized = Lerp(specLuma, specLumaHistory, min(specHistoryWeight, c.gStabilizationStrength));
         spec = ChangeLuma(spec, specLumaStabilized);
         out_spec.write_in_bounds(pixel, spec);

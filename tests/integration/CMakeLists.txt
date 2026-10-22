@@ -55,7 +55,7 @@ if(VISION_REBLUR_NATIVE_NRD)
 
     add_executable(corona_vision_reblur_replay test_vision_reblur_replay.cpp)
     target_include_directories(corona_vision_reblur_replay PRIVATE ${CMAKE_SOURCE_DIR}/vision/src)
-    target_link_libraries(corona_vision_reblur_replay PRIVATE corona::engine vision-all_libs vision-reblur-kernels)
+    target_link_libraries(corona_vision_reblur_replay PRIVATE corona::engine vision-all_libs vision-reblur-kernels NativeNrd::Nrd)
 endif()
 
 if(TARGET ocarina-backend-vulkan-compute)
