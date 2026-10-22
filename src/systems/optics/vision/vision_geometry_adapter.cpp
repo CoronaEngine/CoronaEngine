@@ -4,6 +4,8 @@
 #include <corona/resource/resource_manager.h>
 #include <corona/resource/types/scene.h>
 #include <corona/shared_data_hub.h>
+#include <corona/systems/geometry/model_node_geometry.h>
+#include <corona/systems/geometry/model_node_import.h>
 
 #include <cmath>
 #include <cstddef>
@@ -11,6 +13,7 @@
 #include <span>
 #include <vector>
 #include <unordered_map>
+#include <unordered_set>
 
 #include "base/mgr/geometry.h"
 #include "base/mgr/scene.h"
@@ -29,23 +32,14 @@ struct CpuMeshData {
 };
 
 [[nodiscard]] auto load_cpu_mesh_from_resource(const GeometryDevice& geometry,
+                                               const Resource::Scene& source,
                                                std::size_t mesh_index,
                                                CpuMeshData& out_mesh) -> bool {
-    if (geometry.model_resource_handle == 0) {
+    if (mesh_index >= source.data.meshes.size()) {
         return false;
     }
 
-    auto resource = SharedDataHub::instance().model_resource_storage().try_acquire_read(geometry.model_resource_handle);
-    if (!resource || resource->model_id == 0) {
-        return false;
-    }
-
-    auto scene = Resource::ResourceManager::get_instance().acquire_read<Resource::Scene>(resource->model_id);
-    if (!scene || mesh_index >= scene->data.meshes.size()) {
-        return false;
-    }
-
-    const auto& indices = scene->get_mesh_indices(static_cast<uint32_t>(mesh_index));
+    const auto& indices = source.get_mesh_indices(static_cast<uint32_t>(mesh_index));
     if (indices.empty()) {
         return false;
     }
@@ -56,7 +50,7 @@ struct CpuMeshData {
     // 蒙皮只改顶点位置/法线、不改拓扑，故索引仍来自 Scene。
     // 若该 mesh 有蒙皮字节且数量与绑定顶点一致 → reinterpret 直接用；
     // 否则回退到 Scene 的绑定姿态顶点（静态网格 / 蒙皮数据尚未就绪）。
-    const auto& bind_vertices = scene->get_mesh_vertices(static_cast<uint32_t>(mesh_index));
+    const auto& bind_vertices = source.get_mesh_vertices(static_cast<uint32_t>(mesh_index));
     if (geometry.is_skinned &&
         mesh_index < geometry.skinned_cpu_vertices.size() &&
         !geometry.skinned_cpu_vertices[mesh_index].empty()) {
@@ -150,212 +144,300 @@ struct CpuMeshData {
     return !out_mesh.vertices.empty() && !out_mesh.indices.empty();
 }
 
-[[nodiscard]] ::vision::float4x4 model_transform_to_vision_o2w(
-    const Corona::ModelTransform& transform) {
-    const ktm::fmat4x4 corona_mat = transform.compute_matrix();
-    ::vision::float4x4 o2w = ::vision::make_float4x4(1.f);
-    for (int col = 0; col < 4; ++col) {
+// Geometry is staged independently of raster residency. Holding copied CPU data
+// also lets an asynchronous import fail without clearing the last complete scene.
+struct PreparedMesh {
+    CpuMeshData data;
+    std::array<float, 4> color{1.f, 1.f, 1.f, 1.f};
+};
+
+struct PreparedInstance {
+    std::size_t mesh_index{};
+    std::size_t draw_index{};
+    ::vision::float4x4 o2w{::vision::make_float4x4(1.f)};
+};
+
+struct PreparedGeometry {
+    std::uintptr_t geometry_handle{};
+    OpticsDevice optics;
+    std::unordered_map<std::size_t, PreparedMesh> meshes;
+    std::vector<PreparedInstance> instances;
+};
+
+using PreparedGroup = std::vector<PreparedGeometry>;
+
+[[nodiscard]] ::vision::float4x4 matrix_to_vision(const ktm::fmat4x4& source) {
+    ::vision::float4x4 result = ::vision::make_float4x4(1.f);
+    for (int column = 0; column < 4; ++column) {
         for (int row = 0; row < 4; ++row) {
-            float value = corona_mat[col][row];
-            if (row == 2) value = -value;
-            if (col == 2) value = -value;
-            o2w[col][row] = value;
+            result[column][row] = source[column][row] *
+                ((row == 2) != (column == 2) ? -1.f : 1.f);
         }
     }
-    return o2w;
+    return result;
 }
 
-[[nodiscard]] bool append_actor_geometry_to_group(
-    ::vision::Scene& scene,
-    ::vision::ShapeGroup& group,
-    std::uintptr_t actor_handle,
-    VisionBuildResult& result) {
-    auto& hub = SharedDataHub::instance();
-    auto& actor_storage = hub.actor_storage();
-    auto& profile_storage = hub.profile_storage();
-    auto& optics_storage = hub.optics_storage();
-    auto& geom_storage = hub.geometry_storage();
-    auto& transform_storage = hub.model_transform_storage();
-
-    auto actor = actor_storage.try_acquire_read(actor_handle);
-    if (!actor) {
+[[nodiscard]] bool valid_mesh(const CpuMeshData& mesh) {
+    if (mesh.vertices.empty() || mesh.indices.empty() || mesh.indices.size() % 3 != 0) {
         return false;
     }
+    for (const auto index : mesh.indices) {
+        if (index >= mesh.vertices.size()) return false;
+    }
+    for (const auto& vertex : mesh.vertices) {
+        for (int axis = 0; axis < 3; ++axis) {
+            if (!std::isfinite(vertex.position[axis])) return false;
+        }
+    }
+    return true;
+}
 
-    bool group_has_instances = false;
-    for (auto profile_handle : actor->profile_handles) {
-        auto profile = profile_storage.try_acquire_read(profile_handle);
-        if (!profile || profile->optics_handle == 0) {
+void stage_actor_geometry(std::uintptr_t actor_handle,
+                          PreparedGroup& group,
+                          VisionBuildResult& result) {
+    auto& hub = SharedDataHub::instance();
+    auto actor = hub.actor_storage().try_acquire_read(actor_handle);
+    if (!actor) {
+        ++result.skipped_no_data;
+        return;
+    }
+
+    for (const auto profile_handle : actor->profile_handles) {
+        auto profile = hub.profile_storage().try_acquire_read(profile_handle);
+        if (!profile) {
+            ++result.skipped_no_data;
+            continue;
+        }
+        if (profile->optics_handle == 0) continue;
+        auto optics = hub.optics_storage().try_acquire_read(profile->optics_handle);
+        if (!optics) {
+            ++result.skipped_no_data;
+            continue;
+        }
+        if (!optics->visible || optics->geometry_handle == 0) continue;
+        ++result.candidate_count;
+        auto geometry = hub.geometry_storage().try_acquire_read(optics->geometry_handle);
+        if (!geometry) {
+            ++result.skipped_no_data;
+            continue;
+        }
+        if (geometry->gpu_build_state == GeometryDevice::GpuBuildState::Failed) {
+            ++result.invalid_data;
             continue;
         }
 
-        auto optics = optics_storage.try_acquire_read(profile->optics_handle);
-        if (!optics || !optics->visible || optics->geometry_handle == 0) {
-            continue;
+        Resource::ReadHandle<Resource::Scene> source;
+        if (geometry->model_resource_handle != 0) {
+            auto resource = hub.model_resource_storage().try_acquire_read(geometry->model_resource_handle);
+            if (resource && resource->model_id != 0) {
+                source = Resource::ResourceManager::get_instance().acquire_read<Resource::Scene>(resource->model_id);
+            }
         }
-
-        auto geom = geom_storage.try_acquire_read(optics->geometry_handle);
-        if (!geom) {
-            continue;
-        }
-
-        // 跳过 GPU 资源未就绪的 actor（mesh_handles 为空 = Actor 首次加载中或已被卸载）。
-        // 等价于 MeshSlot.valid=false。
-        if (geom->mesh_handles.empty()) {
+        if (!source && geometry->mesh_handles.empty()) {
             ++result.skipped_no_data;
             continue;
         }
 
-        ++result.candidate_count;
-
-        ::vision::float4x4 o2w = ::vision::make_float4x4(1.f);
-        if (auto transform = transform_storage.try_acquire_read(geom->transform_handle)) {
-            o2w = model_transform_to_vision_o2w(*transform);
+        PreparedGeometry prepared;
+        prepared.geometry_handle = optics->geometry_handle;
+        prepared.optics = *optics;
+        auto object_to_world = ::vision::make_float4x4(1.f);
+        if (geometry->transform_handle != 0) {
+            auto transform = hub.model_transform_storage().try_acquire_read(geometry->transform_handle);
+            if (!transform) {
+                ++result.skipped_no_data;
+                continue;
+            }
+            object_to_world = matrix_to_vision(transform->compute_matrix());
         }
 
-        std::unordered_map<std::size_t, std::shared_ptr<::vision::Mesh>> shared_meshes;
-        // A glTF mesh can be instanced thousands of times. MeshInstanceDevice has no
-        // per-instance material override, so material state must follow the source
-        // mesh rather than the expanded draw instance. Registering a material for
-        // every node multiplied the Vision material table (and its GPU state) by the
-        // instance count.
-        std::unordered_map<std::size_t, std::shared_ptr<::vision::Material>> shared_materials;
-        const std::size_t draw_instance_count = geom->mesh_instances.empty()
-            ? geom->mesh_handles.size()
-            : geom->mesh_instances.size();
-        for (std::size_t draw_instance_index = 0;
-             draw_instance_index < draw_instance_count;
-             ++draw_instance_index) {
-            const MeshInstanceDevice* mesh_instance = geom->mesh_instances.empty()
-                ? nullptr
-                : &geom->mesh_instances[draw_instance_index];
-            if (mesh_instance && !mesh_instance->visible) continue;
-            const std::size_t mesh_index = mesh_instance != nullptr
-                ? static_cast<std::size_t>(mesh_instance->mesh_index)
-                : draw_instance_index;
-            if (mesh_index >= geom->mesh_handles.size()) {
-                continue;
+        // Runtime instances include edited node transforms/visibility. Before the
+        // raster upload exists, use the identical imported CPU instance table.
+        const auto* current_instances = &geometry->mesh_instances;
+        std::optional<GeometryDevice> imported_node_storage;
+        if (current_instances->empty() && source && !geometry->model_node_overrides.empty()) {
+            // Persisted node edits may arrive before the native GPU build. Apply
+            // the same node-delta code to CPU instances rather than briefly
+            // exposing unedited source geometry in Vision.
+            auto& imported_nodes = imported_node_storage.emplace();
+            imported_nodes.model_nodes = ModelNodes::from_scene(source->data);
+            imported_nodes.model_node_overrides = geometry->model_node_overrides;
+            imported_nodes.node_instance_prefix = source->data.node_instance_prefix;
+            imported_nodes.has_node_instance_prefix = source->data.has_node_instance_prefix;
+            for (const auto& instance : source->data.mesh_instances) {
+                MeshInstanceDevice converted;
+                converted.mesh_index = instance.mesh_index;
+                converted.node_index = instance.node_index;
+                converted.transform = ModelNodes::ktm_matrix(instance.transform);
+                converted.original_transform = converted.transform;
+                imported_nodes.mesh_instances.push_back(converted);
             }
-            auto& mesh_dev = geom->mesh_handles[mesh_index];
-            std::shared_ptr<::vision::Mesh> mesh;
-            if(auto existing=shared_meshes.find(mesh_index);existing!=shared_meshes.end()){mesh=existing->second;}else {
-            CpuMeshData cpu_mesh;
-            if (!load_cpu_mesh_from_resource(*geom, mesh_index, cpu_mesh) &&
-                !load_cpu_mesh_from_buffers(mesh_dev, cpu_mesh)) {
-                ++result.skipped_no_data;
-                CFW_LOG_WARNING(
-                    "Vision geometry adapter: no CPU mesh data available, skipping mesh "
-                    "(actor={}, geometry_handle={}, model_resource_handle={}, mesh_index={})",
-                    actor_handle, optics->geometry_handle, geom->model_resource_handle,
-                    mesh_index);
-                continue;
-            }
-
-            std::vector<::vision::Vertex> vertices;
-            vertices.reserve(cpu_mesh.vertices.size());
-            for (const auto& src_vertex : cpu_mesh.vertices) {
-                const auto& pos=src_vertex.position;
-                const auto& normal=src_vertex.normal;
-                ::vision::Vertex v;
-                v.pos = {pos[0], pos[1], -pos[2]};
-                v.n   = {normal[0], normal[1], -normal[2]};
-                v.uv  = {src_vertex.tex_coords[0], src_vertex.tex_coords[1]};
-                v.uv2 = {0.f, 0.f};
-                vertices.push_back(v);
-            }
-
-            std::vector<::vision::Triangle> triangles;
-            triangles.reserve(cpu_mesh.indices.size() / 3);
-            if (cpu_mesh.indices.size() < 3) {
-                continue;
-            }
-            for (std::size_t triangle_index = 0;
-                 triangle_index + 2 < cpu_mesh.indices.size();
-                 triangle_index += 3) {
-                triangles.emplace_back(cpu_mesh.indices[triangle_index],
-                                       cpu_mesh.indices[triangle_index + 2],
-                                       cpu_mesh.indices[triangle_index + 1]);
-            }
-
-            mesh = std::make_shared<::vision::Mesh>(
-                std::move(vertices), std::move(triangles));
-            mesh = scene.geometry().data()->register_mesh(mesh);
-
-            shared_meshes.emplace(mesh_index,mesh);
-            }
-            std::shared_ptr<::vision::Material> material;
-            if (auto existing = shared_materials.find(mesh_index);
-                existing != shared_materials.end()) {
-                material = existing->second;
-            } else {
-                material = create_vision_material(*optics, mesh_dev);
-                if (!material) {
-                    material = scene.obtain_black_body();
+            if (imported_nodes.mesh_instances.empty()) {
+                for (std::uint32_t mesh_index = 0; mesh_index < source->data.meshes.size(); ++mesh_index) {
+                    MeshInstanceDevice instance;
+                    instance.mesh_index = mesh_index;
+                    instance.node_delta_prefix = !source->data.meshes[mesh_index].bone_weights.empty() && source->data.skeleton
+                        ? source->data.skeleton->global_inverse : source->data.node_instance_prefix;
+                    for (std::uint32_t node_index = 0; node_index < source->data.nodes.size(); ++node_index) {
+                        if (source->data.nodes[node_index].mesh_index == mesh_index) {
+                            instance.node_index = node_index;
+                            break;
+                        }
+                    }
+                    imported_nodes.mesh_instances.push_back(instance);
                 }
-                shared_materials.emplace(mesh_index, material);
-                scene.add_material(material);
             }
-            auto instance = std::make_shared<::vision::ShapeInstance>(mesh);
-            auto local=::vision::make_float4x4(1.f);
-            if(mesh_instance)for(int col=0;col<4;++col)for(int row=0;row<4;++row){float value=mesh_instance->transform[col][row];if(row==2)value=-value;if(col==2)value=-value;local[col][row]=value;}
-            instance->set_o2w(o2w*local);
-            // Stable mapping used by runtime instance transform updates, independent of duplicate node names.
-            instance->set_name("corona-node:"+std::to_string(optics->geometry_handle)+":"+std::to_string(draw_instance_index));
-            instance->set_material(material);
-            instance->init_aabb();
-
-            group.aabb.extend(instance->aabb);
-            group.add_instance(*instance);
+            if (!ModelNodes::apply_overrides(imported_nodes)) {
+                ++result.invalid_data;
+                continue;
+            }
+            current_instances = &imported_nodes.mesh_instances;
+        }
+        const bool runtime_instances = !current_instances->empty();
+        const bool source_instances = !runtime_instances && source && !source->data.mesh_instances.empty();
+        const std::size_t draw_count = runtime_instances ? current_instances->size()
+            : source_instances ? source->data.mesh_instances.size()
+            : source ? source->data.meshes.size() : geometry->mesh_handles.size();
+        if (draw_count == 0) {
+            ++result.invalid_data;
+            continue;
+        }
+        std::unordered_set<std::size_t> unavailable_meshes;
+        for (std::size_t draw_index = 0; draw_index < draw_count; ++draw_index) {
+            std::size_t mesh_index = draw_index;
+            auto local = ::vision::make_float4x4(1.f);
+            if (runtime_instances) {
+                const auto& instance = (*current_instances)[draw_index];
+                if (!instance.visible) continue;
+                mesh_index = instance.mesh_index;
+                local = matrix_to_vision(instance.transform);
+            } else if (source_instances) {
+                const auto& instance = source->data.mesh_instances[draw_index];
+                mesh_index = instance.mesh_index;
+                ktm::fmat4x4 source_matrix = ktm::fmat4x4::from_eye();
+                for (int column = 0; column < 4; ++column)
+                    for (int row = 0; row < 4; ++row)
+                        source_matrix[column][row] = instance.transform[column * 4 + row];
+                local = matrix_to_vision(source_matrix);
+            }
+            if (unavailable_meshes.contains(mesh_index)) continue;
+            if (!prepared.meshes.contains(mesh_index)) {
+                PreparedMesh mesh;
+                const MeshDevice* native_mesh = mesh_index < geometry->mesh_handles.size()
+                    ? &geometry->mesh_handles[mesh_index] : nullptr;
+                const bool source_mesh = source && mesh_index < source->data.meshes.size();
+                if (!source_mesh && !native_mesh) {
+                    ++result.invalid_data;
+                    unavailable_meshes.insert(mesh_index);
+                    continue;
+                }
+                const bool loaded = (source_mesh && load_cpu_mesh_from_resource(*geometry, *source, mesh_index, mesh.data)) ||
+                    (native_mesh && load_cpu_mesh_from_buffers(*native_mesh, mesh.data));
+                if (!loaded || !valid_mesh(mesh.data)) {
+                    // Existing CPU assets with malformed triangles are permanent
+                    // failures; missing mapped raster data can become ready later.
+                    if (source_mesh || loaded) ++result.invalid_data;
+                    else ++result.skipped_no_data;
+                    unavailable_meshes.insert(mesh_index);
+                    CFW_LOG_WARNING("Vision geometry adapter: unavailable/invalid mesh "
+                                    "(actor={}, geometry={}, mesh={}, cpu_source={})",
+                                    actor_handle, optics->geometry_handle, mesh_index, source_mesh);
+                    continue;
+                }
+                if (native_mesh) {
+                    mesh.color = native_mesh->materialColor;
+                } else if (source_mesh) {
+                    const auto material_index = source->data.meshes[mesh_index].material_index;
+                    if (material_index < source->data.materials.size()) {
+                        mesh.color = source->data.materials[material_index].base_color;
+                    }
+                }
+                prepared.meshes.emplace(mesh_index, std::move(mesh));
+            }
+            prepared.instances.push_back({mesh_index, draw_index, object_to_world * local});
             ++result.instance_count;
-            group_has_instances = true;
+        }
+        if (!prepared.instances.empty()) group.push_back(std::move(prepared));
+    }
+}
+
+std::vector<PreparedGroup> stage_scene_geometry(VisionBuildResult& result) {
+    std::vector<PreparedGroup> groups;
+    auto& scenes = SharedDataHub::instance().scene_storage();
+    for (auto scene_it = scenes.cbegin(); scene_it != scenes.cend(); ++scene_it) {
+        const auto& scene = *scene_it;
+        if (!scene.enabled) continue;
+        PreparedGroup group;
+        // Raster frustum culling must not remove offscreen shadows, reflections
+        // or indirect-light geometry from the ray-tracing scene.
+        for (const auto actor : scene.actor_handles) stage_actor_geometry(actor, group, result);
+        if (!group.empty()) groups.push_back(std::move(group));
+    }
+    return groups;
+}
+
+void append_prepared_group(::vision::Scene& scene, PreparedGroup& prepared_group) {
+    auto group = std::make_shared<::vision::ShapeGroup>();
+    for (auto& prepared : prepared_group) {
+        std::unordered_map<std::size_t, std::shared_ptr<::vision::Mesh>> meshes;
+        std::unordered_map<std::size_t, std::shared_ptr<::vision::Material>> materials;
+        for (auto& [mesh_index, source] : prepared.meshes) {
+            std::vector<::vision::Vertex> vertices;
+            vertices.reserve(source.data.vertices.size());
+            for (const auto& vertex : source.data.vertices) {
+                ::vision::Vertex converted;
+                converted.pos = {vertex.position[0], vertex.position[1], -vertex.position[2]};
+                converted.n = {vertex.normal[0], vertex.normal[1], -vertex.normal[2]};
+                converted.uv = {vertex.tex_coords[0], vertex.tex_coords[1]};
+                converted.uv2 = {0.f, 0.f};
+                vertices.push_back(converted);
+            }
+            std::vector<::vision::Triangle> triangles;
+            triangles.reserve(source.data.indices.size() / 3);
+            for (std::size_t i = 0; i < source.data.indices.size(); i += 3) {
+                triangles.emplace_back(source.data.indices[i], source.data.indices[i + 2], source.data.indices[i + 1]);
+            }
+            auto mesh = std::make_shared<::vision::Mesh>(std::move(vertices), std::move(triangles));
+            meshes.emplace(mesh_index, scene.geometry().data()->register_mesh(mesh));
+            MeshDevice material_source;
+            material_source.materialColor = source.color;
+            auto material = create_vision_material(prepared.optics, material_source);
+            if (!material) material = scene.obtain_black_body();
+            scene.add_material(material);
+            materials.emplace(mesh_index, std::move(material));
+        }
+        for (const auto& source : prepared.instances) {
+            auto instance = std::make_shared<::vision::ShapeInstance>(meshes.at(source.mesh_index));
+            instance->set_o2w(source.o2w);
+            instance->set_name("corona-node:" + std::to_string(prepared.geometry_handle) + ":" + std::to_string(source.draw_index));
+            instance->set_material(materials.at(source.mesh_index));
+            instance->init_aabb();
+            group->aabb.extend(instance->aabb);
+            group->add_instance(*instance);
         }
     }
-
-    return group_has_instances;
+    scene.add_shape(group);
 }
 
 }  // namespace
 
-VisionBuildResult build_vision_geometry(::vision::Scene& scene) {
-    // Full clear so repeated rebuilds (dynamic import/export) do not accumulate
-    // orphaned meshes. clear_shapes() only drops instances_/groups_; the mesh
-    // registry (mesh_map_/meshes_) must also be cleared, otherwise meshes of
-    // removed objects survive across rebuilds and keep getting re-indexed and
-    // re-uploaded by prepare_geometry() -> tidy_up_meshes()/upload(), leaking
-    // GPU memory that grows monotonically with each import. The subsequent loop
-    // re-registers every currently-present mesh via register_mesh() (hash-deduped).
-    scene.clear_shapes();
-    scene.geometry().data()->clear_meshes();
-
-    auto& hub = SharedDataHub::instance();
+VisionBuildResult inspect_vision_geometry() {
     VisionBuildResult result;
+    (void)stage_scene_geometry(result);
+    return result;
+}
 
-    // 用 cbegin/cend 显式取只读迭代器（共享读锁），避免非 const range-for 命中写迭代器。
-    for (auto scene_it = hub.scene_storage().cbegin(); scene_it != hub.scene_storage().cend(); ++scene_it) {
-        const auto& scene_dev = *scene_it;
-        if (!scene_dev.enabled) continue;
-
-        auto group = std::make_shared<::vision::ShapeGroup>();
-        bool group_has_instances = false;
-
-        // 优先消费可见集合（视锥剔除结果），为空时回退到全量 actor 列表
-        const auto& handles = scene_dev.visible_actor_handles.empty()
-                                  ? scene_dev.actor_handles
-                                  : scene_dev.visible_actor_handles;
-        for (auto actor_handle : handles) {
-            group_has_instances |=
-                append_actor_geometry_to_group(scene, *group, actor_handle, result);
-        }
-
-        if (group_has_instances) {
-            scene.add_shape(group);
-        }
+VisionBuildResult build_vision_geometry(::vision::Scene& scene) {
+    VisionBuildResult result;
+    auto groups = stage_scene_geometry(result);
+    if (!result.complete()) {
+        result.instance_count = 0; // Existing scene is retained; nothing was added.
+        return result;
     }
 
-    // Finalize: encode material/mesh IDs into instance handles and register with geometry.
-    // BVH build + device upload are intentionally left to Pipeline::prepare_geometry(),
-    // which runs reset_device_buffer() + upload(stream) + build_accel(stream) during prepare();
-    // building here as well would just be a redundant full BVH rebuild.
+    scene.clear_shapes();
+    scene.geometry().data()->clear_meshes();
+    for (auto& group : groups) append_prepared_group(scene, group);
     scene.fill_instances();
     scene.update_geometry_instances();
     return result;
@@ -366,36 +448,26 @@ AddVisionShapeResult add_vision_shape_for_actor(
     std::uintptr_t actor_handle,
     const Corona::ExternalVisionBindingDevice& binding) {
     (void)binding;
-
     AddVisionShapeResult result;
-    result.material_topology_before =
-        scene.materials().topology_num();
-
-    auto group = std::make_shared<::vision::ShapeGroup>();
-    VisionBuildResult build_result;
-    if (!append_actor_geometry_to_group(scene, *group, actor_handle, build_result)) {
-        result.candidate_count = build_result.candidate_count;
-        result.skipped_no_data = build_result.skipped_no_data;
-        result.material_topology_after =
-            scene.materials().topology_num();
-        return result;
+    result.material_topology_before = scene.materials().topology_num();
+    PreparedGroup group;
+    VisionBuildResult staged;
+    stage_actor_geometry(actor_handle, group, staged);
+    result.candidate_count = staged.candidate_count;
+    result.skipped_no_data = staged.skipped_no_data;
+    result.invalid_data = staged.invalid_data;
+    if (staged.complete() && !group.empty()) {
+        append_prepared_group(scene, group);
+        result.added = true;
+        result.shape_index = static_cast<int>(scene.groups().size()) - 1;
+        result.instance_count = staged.instance_count;
     }
-
-    scene.add_shape(group);
-    result.added = true;
-    result.shape_index = static_cast<int>(scene.groups().size()) - 1;
-    result.instance_count = build_result.instance_count;
-    result.candidate_count = build_result.candidate_count;
-    result.skipped_no_data = build_result.skipped_no_data;
-    result.material_topology_after =
-        scene.materials().topology_num();
+    result.material_topology_after = scene.materials().topology_num();
     return result;
 }
 
 bool remove_vision_shape_for_actor(::vision::Scene& scene, unsigned int shape_index) {
-    if (shape_index >= scene.groups().size()) {
-        return false;
-    }
+    if (shape_index >= scene.groups().size()) return false;
     scene.remove_shape(shape_index, true);
     return true;
 }

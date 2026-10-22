@@ -44,6 +44,12 @@ void Sensor::render_sub_UI(Widgets *widgets) noexcept {
 
 RayState Sensor::generate_ray(const SensorSample &ss) const noexcept {
     RayVar ray = generate_ray_in_local_space(ss);
+    // Clip against camera-space Z planes after the concrete camera (e.g. thin
+    // lens) has generated its ray. Using near/far as ray distances would clip
+    // oblique rays differently from rasterization.
+    Float dz = max(ray->direction().z, 1e-8f);
+    ray.org_min.w = max(ray->t_min(), ((*primary_clip_planes_).x - ray->origin().z) / dz);
+    ray.dir_max.w = min(ray->t_max(), ((*primary_clip_planes_).y - ray->origin().z) / dz);
     Float4x4 c2w = *c2w_;
     ray = transform_ray(c2w, ray);
     return {.ray = ray, .ior = 1.f, .medium = *medium_id_};
@@ -57,6 +63,14 @@ RayVar Sensor::generate_ray_in_local_space(const vision::SensorSample &ss) const
 }
 
 void Sensor::update_resolution(uint2 res) noexcept {
+    if (external_camera_) {
+        // Corona uses Vulkan NDC: raster (0,0) maps to (-1,-1), and its
+        // projection already flips Y. No aspect-dependent screen window.
+        raster_to_screen_ = translation<H>(-1.f, -1.f, 0.f) *
+                            scale<H>(2.f / res.x, 2.f / res.y, 1.f);
+        raster_to_sensor_ = inverse(camera_to_screen_) * raster_to_screen_;
+        return;
+    }
     Box2f scrn = frame_buffer().screen_window();
     float2 span = scrn.span();
     float4x4 screen_to_raster = transform::scale<H>(res.x, res.y, 1u) *
@@ -67,11 +81,15 @@ void Sensor::update_resolution(uint2 res) noexcept {
 }
 
 void Sensor::update_raster() noexcept {
-    camera_to_screen_ = transform::perspective<H>(fov_y(), z_near, z_far);
+    if (!external_camera_) {
+        camera_to_screen_ = transform::perspective<H>(fov_y(), z_near, z_far);
+    }
     raster_to_sensor_ = inverse(camera_to_screen_) * raster_to_screen_;
 }
 
 void Sensor::update_mat(float4x4 m) noexcept {
+    external_camera_ = false;
+    primary_clip_planes_ = make_float2(0.f, ray_t_max);
     pitch_ = degrees(std::atan2(m[1][2], m[1][1]));
     yaw_ = degrees(std::atan2(m[2][0], m[0][0]));
     position_ = make_float3(m[3]);
@@ -81,6 +99,39 @@ void Sensor::update_mat(float4x4 m) noexcept {
 void Sensor::set_mat(ocarina::float4x4 m) noexcept {
     c2w_ = m;
     position_ = make_float3(m[3]);
+}
+
+Sensor::CameraChange Sensor::set_external_camera(float4x4 camera_to_world,
+                                                float4x4 camera_to_screen,
+                                                uint2 resolution, float fov_y,
+                                                float near_plane, float far_plane) noexcept {
+    const auto differs = [](const float4x4 &a, const float4x4 &b) {
+        for (uint col = 0; col < 4; ++col) {
+            for (uint row = 0; row < 4; ++row) {
+                if (std::abs(a[col][row] - b[col][row]) > 1e-6f) return true;
+            }
+        }
+        return false;
+    };
+    const auto raster_to_screen = translation<H>(-1.f, -1.f, 0.f) *
+                                  scale<H>(2.f / resolution.x, 2.f / resolution.y, 1.f);
+    CameraChange change{
+        !external_camera_ || differs(c2w_.hv(), camera_to_world),
+        !external_camera_ || differs(camera_to_screen_, camera_to_screen) ||
+            differs(raster_to_screen_, raster_to_screen) ||
+            primary_clip_planes_.hv().x != near_plane || primary_clip_planes_.hv().y != far_plane};
+    if (change.pose || change.projection) ++external_camera_revision_;
+    if (change.projection) ++external_projection_revision_;
+    external_camera_ = true;
+    c2w_ = camera_to_world;
+    position_ = make_float3(camera_to_world[3]);
+    camera_to_screen_ = camera_to_screen;
+    raster_to_screen_ = raster_to_screen;
+    raster_to_sensor_ = inverse(camera_to_screen_) * raster_to_screen_;
+    fov_y_ = fov_y;
+    tan_fov_y_over_2_ = tan(radians(fov_y_) * 0.5f);
+    primary_clip_planes_ = make_float2(near_plane, far_plane);
+    return change;
 }
 
 void Sensor::after_render() noexcept {
@@ -152,12 +203,18 @@ void Sensor::prepare() noexcept {
 }
 
 float4x4 Sensor::camera_to_world_rotation() const noexcept {
+    if (external_camera_) {
+        auto rotation = c2w_.hv();
+        rotation[3] = make_float4(0.f, 0.f, 0.f, 1.f);
+        return rotation;
+    }
     float4x4 horizontal = rotation_y<H>(yaw());
     float4x4 vertical = rotation_x<H>(-pitch());
     return scale<H>(1, 1, -1) * horizontal * vertical;
 }
 
 float4x4 Sensor::camera_to_world() const noexcept {
+    if (external_camera_) return c2w_.hv();
     float4x4 translate = translation<H>(position_);
     return translate * camera_to_world_rotation();
 }

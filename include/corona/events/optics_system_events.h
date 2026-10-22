@@ -3,6 +3,7 @@
 #include <horizon/core/storage.h>
 
 #include <future>
+#include <chrono>
 #include <memory>
 #include <string>
 
@@ -43,6 +44,7 @@ struct ScreenshotRequestEvent {
     std::uintptr_t camera_handle = 0;
     std::string file_path;
     std::shared_ptr<std::promise<bool>> completion_promise;
+    std::chrono::steady_clock::time_point deadline{};
 };
 
 /**

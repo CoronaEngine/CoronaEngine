@@ -7694,11 +7694,11 @@ void register_scene_tools_api_handlers(NativeApiRegistry& registry) {
 
                 if (const auto sun = state.find("sun"); sun != state.end() && sun->is_object()) {
                     if (const auto enabled = sun->find("enabled");
-                        enabled != state.end() && enabled->is_boolean()) {
+                        enabled != sun->end() && enabled->is_boolean()) {
                         scene->sun_enabled = enabled->get<bool>();
                     }
                     if (const auto direction = sun->find("direction");
-                        direction != state.end()) {
+                        direction != sun->end()) {
                         if (const auto value = json_float3_value(*direction)) {
                             scene->sun_direction = *value;
                         }
@@ -7706,28 +7706,28 @@ void register_scene_tools_api_handlers(NativeApiRegistry& registry) {
                 }
                 if (const auto grid = state.find("grid"); grid != state.end() && grid->is_object()) {
                     if (const auto enabled = grid->find("enabled");
-                        enabled != state.end() && enabled->is_boolean()) {
+                        enabled != grid->end() && enabled->is_boolean()) {
                         scene->floor_grid_enabled = enabled->get<bool>();
                     }
                 }
                 if (const auto physics = state.find("physics");
                     physics != state.end() && physics->is_object()) {
                     if (const auto gravity = physics->find("gravity");
-                        gravity != state.end()) {
+                        gravity != physics->end()) {
                         if (const auto value = json_float3_value(*gravity)) {
                             scene->environment->set_gravity(*value);
                         }
                     }
                     if (const auto value = physics->find("floor_y");
-                        value != state.end() && value->is_number()) {
+                        value != physics->end() && value->is_number()) {
                         scene->environment->set_floor_y(value->get<float>());
                     }
                     if (const auto value = physics->find("floor_restitution");
-                        value != state.end() && value->is_number()) {
+                        value != physics->end() && value->is_number()) {
                         scene->environment->set_floor_restitution(value->get<float>());
                     }
                     if (const auto value = physics->find("fixed_dt");
-                        value != state.end() && value->is_number()) {
+                        value != physics->end() && value->is_number()) {
                         scene->environment->set_fixed_dt(value->get<float>());
                     }
                 }

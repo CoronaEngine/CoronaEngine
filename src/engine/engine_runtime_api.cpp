@@ -2283,14 +2283,19 @@ bool Corona::API::Camera::save_screenshot_sync(const std::string& path) const {
     auto promise = std::make_shared<std::promise<bool>>();
     auto future = promise->get_future();
 
+    // An offscreen Vision capture may need its first shader compilation and
+    // acceleration-structure build. Use the same deadline in caller and queue.
+    const auto timeout = std::chrono::seconds(get_render_backend() == "vision" ? 120 : 10);
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+
     if (auto* event_bus = Kernel::KernelContext::instance().event_bus()) {
-        event_bus->publish<Events::ScreenshotRequestEvent>({handle_, path, std::move(promise)});
+        event_bus->publish<Events::ScreenshotRequestEvent>({handle_, path, std::move(promise), deadline});
     } else {
         return false;
     }
 
     // Block until OpticsSystem processes this screenshot
-    auto status = future.wait_for(std::chrono::seconds(10));
+    auto status = future.wait_until(deadline);
     if (status == std::future_status::timeout) {
         CFW_LOG_WARNING("[Camera::save_screenshot_sync] Timeout waiting for screenshot: {}", path);
         return false;

@@ -207,10 +207,13 @@ CommandBatch ReBLUR::dispatch(RealTimeDenoiseInput &input) noexcept {
     }
     filter_->prepare(device(), input.resolution, input.layer_count);
     const auto &camera = scene().sensor();
-    if (frame_ != input.frame_index) {
-        if (frame_ == InvalidUI32 || frame_ + 1u != input.frame_index || fov_ != camera->fov_y()) filter_->reset();
+    if (frame_ != input.frame_index || camera_revision_ != camera->external_camera_revision()) {
+        if (frame_ == InvalidUI32 || frame_ + 1u != input.frame_index || fov_ != camera->fov_y() ||
+            projection_revision_ != camera->external_projection_revision()) filter_->reset();
         previous_raster_ = current_raster_; current_raster_ = camera->host_world_to_raster();
         frame_ = input.frame_index; fov_ = camera->fov_y();
+        camera_revision_ = camera->external_camera_revision();
+        projection_revision_ = camera->external_projection_revision();
     }
     GuideParam gp;
     gp.visibility = input.visibility.descriptor(); gp.motion = input.motion_vec.descriptor();
