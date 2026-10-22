@@ -343,9 +343,9 @@ CommandBatch VarianceEstimator::dispatch_variance(RealTimeDenoiseInput &input) n
     param.motion_vectors = input.motion_vec.descriptor();
     param.camera_pos = input.camera_pos;
     param.prev_camera_pos = input.prev_camera_pos;
-    // Sensor projects the configured FOV across the shorter image dimension.
-    param.pixels_per_radian = 0.5f * compute_screen_short_edge(input.resolution) /
-        tan(radians(pipeline()->scene().sensor()->fov_y()) * 0.5f);
+    // The camera owns its projection: imported portrait cameras use authored
+    // vertical FOV while standalone Vision retains its screen window.
+    param.pixels_per_radian = pipeline()->scene().sensor()->vertical_focal_length();
     param.frame_index = input.frame_index;
     param.history_valid = svgf_->history_valid(input);
     param.channel_kind = static_cast<uint>(input.channel_kind);

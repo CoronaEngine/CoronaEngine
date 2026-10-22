@@ -18,9 +18,16 @@ void LightManager::add_light(vision::TLight light) noexcept {
 }
 
 void LightManager::remove_light(vision::TLight light) noexcept {
-    std::erase_if(lights_, [&](TLight elm) {
-        return elm.get() == light.get();
-    });
+    // Polymorphic::erase also removes the instance from its topology group.
+    // std::erase_if erases through the vector base and leaves stale pointers in
+    // that group, which later encoding and shader dispatch still visit.
+    for (auto it = lights_.begin(); it != lights_.end();) {
+        if (it->get() == light.get()) {
+            it = lights_.erase(it);
+        } else {
+            ++it;
+        }
+    }
     if (env_light() == light.get()) {
         env_light_.impl() = nullptr;
     }

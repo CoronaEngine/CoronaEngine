@@ -44,6 +44,30 @@ using namespace GeometryInternal;
 
 namespace {
 
+// Both cold imports and cache-hit actor rebuilds must publish the same local
+// bounds before their GPU resources become Ready. Otherwise a freshly-created
+// MechanicsDevice keeps its zero AABB and frustum culling tests the actor origin.
+void refresh_geometry_resource_bounds(std::uintptr_t geometry_handle, std::uint64_t model_id) {
+    auto scene = Resource::ResourceManager::get_instance().acquire_read<Resource::Scene>(model_id);
+    if (!scene) return;
+    const auto bounds = scene->get_scene_aabb();
+    auto& mechanics = SharedDataHub::instance().mechanics_storage();
+    std::vector<std::uintptr_t> handles;
+    // Do not acquire a write lock while a storage iterator retains its read lock.
+    for (auto it = mechanics.cbegin(); it != mechanics.cend(); ++it) {
+        if (it->geometry_handle == geometry_handle) {
+            handles.push_back(reinterpret_cast<std::uintptr_t>(&*it));
+        }
+    }
+    for (auto handle : handles) {
+        if (auto value = mechanics.try_acquire_write(handle);
+            value && value->geometry_handle == geometry_handle) {
+            value->min_xyz = make_fvec3(bounds.min[0], bounds.min[1], bounds.min[2]);
+            value->max_xyz = make_fvec3(bounds.max[0], bounds.max[1], bounds.max[2]);
+        }
+    }
+}
+
 std::mutex g_invalid_mesh_slot_log_mutex;
 std::unordered_set<std::string> g_invalid_mesh_slot_logs;
 
@@ -1501,6 +1525,8 @@ bool GeometrySystem::rebuild_actor_gpu_resources(std::uintptr_t actor,
                 }
             }
 
+            refresh_geometry_resource_bounds(geom_handle, rid);
+
             // ---- 第 5.3 步：如果不需要重建，跳过此 geometry ----
             // 初始加载场景：mesh_handles 已在 Python API 层创建完毕
             if (!needs_rebuild) {
@@ -2874,29 +2900,8 @@ void GeometrySystem::process_pending_geometry_imports() {
             }  // geom_write 释放
             if (!import_ok) continue;
 
-            // 第 2 步：回填 MechanicsDevice AABB（geometry 槽锁已释放）。
-            // Mechanics 在 Python 同步构造时读到 model_id=0 → AABB 为 0；
-            // 这里用 Scene 的 AABB 回填，八叉树下帧重建即自愈。
-            // 注意：Storage 迭代器在当前槽持有锁，不能在迭代中对同槽再 acquire_write
-            // （会重入死锁）。故先 const 遍历收集句柄，迭代结束后再写。
-            if (auto scene = resource_manager.acquire_read<Resource::Scene>(rid)) {
-                const auto aabb_min = scene->get_scene_aabb().min;  // std::array<float,3>
-                const auto aabb_max = scene->get_scene_aabb().max;
-                auto& mech_storage = hub.mechanics_storage();
-
-                std::vector<std::uintptr_t> mech_handles;
-                for (auto mit = mech_storage.cbegin(); mit != mech_storage.cend(); ++mit) {
-                    if (mit->geometry_handle == geom_handle) {
-                        mech_handles.push_back(reinterpret_cast<std::uintptr_t>(&(*mit)));
-                    }
-                }
-                for (std::uintptr_t mh : mech_handles) {
-                    if (auto mw = mech_storage.try_acquire_write(mh)) {
-                        mw->min_xyz = make_fvec3(aabb_min[0], aabb_min[1], aabb_min[2]);
-                        mw->max_xyz = make_fvec3(aabb_max[0], aabb_max[1], aabb_max[2]);
-                    }
-                }
-            }
+            // Geometry slot lock is released before taking mechanics slot locks.
+            refresh_geometry_resource_bounds(geom_handle, rid);
 
             CFW_LOG_NOTICE("[GeometrySystem] Async import finished for geometry {} (rid={})",
                            geom_handle, rid);

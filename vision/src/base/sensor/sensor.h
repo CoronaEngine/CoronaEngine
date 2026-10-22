@@ -24,6 +24,9 @@ protected:
     float velocity_{5.f};
     float sensitivity_{1.f};
     float fov_y_{20.f};
+    bool external_camera_{};
+    uint64_t external_camera_revision_{};
+    uint64_t external_projection_revision_{};
     float4x4 raster_to_screen_{};
     float4x4 camera_to_screen_{};
     EncodedData<float> tan_fov_y_over_2_{};
@@ -33,6 +36,9 @@ protected:
     EncodedData<float4x4> prev_s2r_{};
     /// previous position in world space
     EncodedData<float3> prev_pos_;
+    // Zero / ray_t_max retains the unbounded standalone Vision camera. Corona
+    // supplies view-space near/far planes, applied only to primary rays.
+    EncodedData<float2> primary_clip_planes_{make_float2(0.f, ray_t_max)};
 
 protected:
     void update_raster() noexcept;
@@ -42,14 +48,30 @@ public:
     Sensor() = default;
     explicit Sensor(const SensorDesc &desc);
     OC_ENCODABLE_FUNC(Photosensory, tan_fov_y_over_2_, c2w_, prev_w2s_,
-                      raster_to_sensor_, prev_s2r_, prev_pos_)
+                      raster_to_sensor_, prev_s2r_, prev_pos_, primary_clip_planes_)
     VS_HOTFIX_MAKE_RESTORE(Photosensory, position_, yaw_,pitch_,velocity_,sensitivity_,
                            fov_y_,raster_to_screen_,camera_to_screen_,tan_fov_y_over_2_,
-                           c2w_,prev_w2s_, raster_to_sensor_,prev_s2r_,prev_pos_)
+                           c2w_,prev_w2s_, raster_to_sensor_,prev_s2r_,prev_pos_,
+                           external_camera_,external_camera_revision_,external_projection_revision_,primary_clip_planes_)
     void init(const SensorDesc &desc) noexcept;
     void update_resolution(uint2 res) noexcept;
     void update_mat(float4x4 m) noexcept;
     void set_mat(float4x4 m) noexcept;
+    struct CameraChange {
+        bool pose{};
+        bool projection{};
+    };
+    // External cameras own their complete pose and projection. Interactive
+    // yaw/pitch limits and the standalone screen window must not alter them.
+    [[nodiscard]] CameraChange set_external_camera(float4x4 camera_to_world,
+                                                   float4x4 camera_to_screen,
+                                                   uint2 resolution, float fov_y,
+                                                   float near_plane, float far_plane) noexcept;
+    [[nodiscard]] uint64_t external_camera_revision() const noexcept { return external_camera_revision_; }
+    [[nodiscard]] uint64_t external_projection_revision() const noexcept { return external_projection_revision_; }
+    [[nodiscard]] float vertical_focal_length() const noexcept {
+        return std::abs(inverse(raster_to_sensor_.hv())[1][1]);
+    }
     void render_sub_UI(Widgets *widgets) noexcept override;
     virtual void before_render() noexcept {}
     virtual void after_render() noexcept;

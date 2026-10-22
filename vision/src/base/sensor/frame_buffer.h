@@ -70,10 +70,11 @@ namespace vision {
 struct RayData {
     float4 org_ior{};
     float4 dir_medium{};
+    float2 clip_range{0.f, ray_t_max};
 };
 }// namespace vision
 // clang-format off
-OC_STRUCT(vision, RayData, org_ior,dir_medium) {
+OC_STRUCT(vision, RayData, org_ior,dir_medium,clip_range) {
     [[nodiscard]] Float3 origin() const noexcept { return org_ior.xyz(); }
     void set_origin(const Float3 &val) noexcept { org_ior.xyz() = val; }
     [[nodiscard]] Float3 direction() const noexcept { return dir_medium.xyz(); }
@@ -83,10 +84,15 @@ OC_STRUCT(vision, RayData, org_ior,dir_medium) {
     [[nodiscard]] Bool in_medium() const noexcept { return medium_id() != InvalidUI32; }
     [[nodiscard]] Uint medium_id() const noexcept { return as<uint>(dir_medium.w); }
     void set_medium(const Uint &id) noexcept { dir_medium.w = as<float>(id); }
-    [[nodiscard]] RayVar to_ray() const noexcept { return ocarina::make_ray(origin(), direction()); }
+    [[nodiscard]] RayVar to_ray() const noexcept {
+        RayVar ray = ocarina::make_ray(origin(), direction(), clip_range.y);
+        ray.org_min.w = clip_range.x;
+        return ray;
+    }
     void from_ray(const RayVar &ray) noexcept {
         set_origin(ray->origin());
         set_direction(ray->direction());
+        clip_range = make_float2(ray->t_min(), ray->t_max());
     }
     [[nodiscard]] vision::RayState to_ray_state() const noexcept {
         return {.ray = to_ray(), .ior = ior(), .medium = medium_id()};

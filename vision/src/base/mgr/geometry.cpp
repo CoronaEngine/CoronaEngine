@@ -370,10 +370,23 @@ Interaction Geometry::compute_surface_interaction(const TriangleHitVar &hit, boo
 }
 
 TriangleHitVar Geometry::trace_closest(const RayVar &ray) const noexcept {
+    // No TLAS is built for an empty scene. Resolve that case while generating
+    // the shader so it neither captures nor traces an unbuilt acceleration
+    // structure. Topology changes recompile the scene's kernels.
+    if (!gpu_resource_ || gpu_resource_->data().instances().empty()) {
+        TriangleHitVar miss;
+        miss.inst_id = InvalidUI32;
+        miss.prim_id = InvalidUI32;
+        miss.bary = make_float2(0.f);
+        return miss;
+    }
     return gpu_resource_->accel().trace_closest(ray);
 }
 
 Bool Geometry::trace_occlusion(const RayVar &ray) const noexcept {
+    if (!gpu_resource_ || gpu_resource_->data().instances().empty()) {
+        return Bool{false};
+    }
     return gpu_resource_->accel().trace_occlusion(ray);
 }
 
