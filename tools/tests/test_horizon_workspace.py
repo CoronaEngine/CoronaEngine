@@ -25,6 +25,7 @@ from horizon_workspace import (  # noqa: E402
     inspect_workspace,
     sync_workspace,
 )
+from workflow import CommandError
 
 
 GIT_CONFIG = (
@@ -173,6 +174,16 @@ class HorizonWorkspaceTests(unittest.TestCase):
         )
 
     # -- clone creates an ordinary clone --------------------------------------
+
+    def test_failed_clone_cleans_git_objects_and_allows_retry(self) -> None:
+        self.write_lock("b" * 40)
+        with self.assertRaises(CommandError):
+            self.clone()
+        self.assertFalse(self.worktree.exists())
+        self.write_lock(self.locked)
+        self.clone()
+        self.assertEqual(self.head(), self.locked)
+        self.assertTrue((self.worktree / "file.txt").is_file())
 
     def test_clone_lands_on_the_locked_commit_checked_out_on_a_branch(self) -> None:
         self.clone()

@@ -77,7 +77,7 @@ class CoronaEngineConan(ConanFile):
         self.requires("fmt/12.1.0", transitive_headers=True, transitive_libs=True)
         self.requires("spdlog/1.17.0", transitive_headers=True, transitive_libs=True)
         self.requires("xxhash/0.8.3", transitive_headers=True, transitive_libs=True)
-        self.requires("assimp/5.4.3", transitive_headers=True, transitive_libs=True)
+        self.requires("assimp/6.0.5", transitive_headers=True, transitive_libs=True)
         self.requires("stb/cci.20230920", transitive_headers=True)
         self.requires("nanobind/2.9.2", transitive_headers=True, transitive_libs=True)
         self.requires("sdl/3.4.0", transitive_headers=True, transitive_libs=True)

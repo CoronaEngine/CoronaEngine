@@ -1,6 +1,7 @@
 #pragma once
 
 #include <corona/systems/geometry/model_node_state.h>
+#include <corona/resource/model_import_options.h>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -46,7 +47,7 @@ void set_editor_camera_input_enabled(bool enabled);
 // ============================================================================
 class Geometry {
    public:
-    explicit Geometry(const std::string& model_path);
+    explicit Geometry(const std::string& model_path, Resource::ModelImportOptions options = {});
     ~Geometry();
 
     Geometry(const Geometry&) = delete;
@@ -72,6 +73,9 @@ class Geometry {
     void set_position(const std::array<float, 3>& pos);
     void set_rotation(const std::array<float, 3>& euler);
     void set_scale(const std::array<float, 3>& size);
+    // Column-major affine matrix. Preserve shear and reflection without TRS decomposition.
+    void set_matrix(const std::array<float, 16>& matrix);
+    [[nodiscard]] std::array<float, 16> get_matrix() const;
     void set_native_local_correction(const std::array<float, 3>& offset, float scale);
 
     [[nodiscard]] std::array<float, 3> get_position() const;
@@ -364,6 +368,10 @@ class Camera {
     [[nodiscard]] std::array<float, 3> get_forward() const;
     [[nodiscard]] std::array<float, 3> get_world_up() const;
     [[nodiscard]] float get_fov() const;
+    void set_projection(float x_sign, float near_plane, float far_plane);
+    // x sign, near clip, far clip.
+    // Return the accepted settings even before the render thread consumes them.
+    [[nodiscard]] std::array<float, 3> get_projection() const;
 
     // ========== 原 Viewport 功能 ==========
     void set_image_effects(ImageEffects* effects);
@@ -384,6 +392,7 @@ class Camera {
     ImageEffects* image_effects_{nullptr};
     int width_{1920};
     int height_{1080};
+    std::array<float, 3> projection_{1.0f, 0.1f, 100.0f};
 };
 
 // ============================================================================
@@ -393,6 +402,7 @@ class Environment {
    public:
     Environment();
     ~Environment();
+    void set_authored_lighting(const std::string& description);
 
     void set_sun_direction(const std::array<float, 3>& direction);
     [[nodiscard]] std::array<float, 3> get_sun_direction() const;

@@ -16,6 +16,8 @@ corona_add_system(optics
         vision/vision_geometry_adapter.h
         vision/vision_camera_adapter.cpp
         vision/vision_camera_adapter.h
+        vision/vision_diagnostic_adapter.cpp
+        vision/vision_diagnostic_adapter.h
         vision/vision_light_adapter.cpp
         vision/vision_light_adapter.h
         vision/vision_render_mode_config.cpp

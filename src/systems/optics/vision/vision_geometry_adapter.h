@@ -23,8 +23,13 @@ namespace Corona::Systems::Vision {
 // not be loaded yet), so dynamic-scene rebuilds can retry only when warranted.
 struct VisionBuildResult {
     int instance_count = 0;   ///< ShapeInstances successfully added.
-    int candidate_count = 0;  ///< Visible objects with geometry that passed all filters.
+    int candidate_count = 0;  ///< Explicitly enabled objects with geometry (not raster visibility).
     int skipped_no_data = 0;  ///< Candidates skipped because mesh data was unavailable.
+    int invalid_data = 0;     ///< Failed imports or malformed meshes; not a readiness delay.
+
+    [[nodiscard]] bool complete() const noexcept {
+        return skipped_no_data == 0 && invalid_data == 0;
+    }
 };
 
 struct AddVisionShapeResult {
@@ -35,9 +40,10 @@ struct AddVisionShapeResult {
     int instance_count{0};
     int candidate_count{0};
     int skipped_no_data{0};
+    int invalid_data{0};
 };
 
-// Clears the Vision scene's existing shapes and repopulates it from the
+// Stages all CPU data, then replaces the Vision scene's existing shapes from the
 // CoronaEngine SharedDataHub (all enabled SceneDevice → actors → geometry).
 //
 // For each GeometryDevice that has a valid model_resource_handle:
@@ -52,7 +58,14 @@ struct AddVisionShapeResult {
 //
 // Returns a VisionBuildResult describing how many instances were added and
 // whether any candidate objects were skipped due to missing mesh data.
+// An incomplete result leaves existing Vision geometry unchanged. Callers must
+// not advance their accepted scene revision until complete() is true.
 VisionBuildResult build_vision_geometry(::vision::Scene& scene);
+
+// Readiness/diagnostics pass using the same CPU staging path as the build. Does
+// not create a device or mutate a Vision scene. instance_count is the number of
+// staged instances (including ready objects when other objects are pending).
+VisionBuildResult inspect_vision_geometry();
 
 AddVisionShapeResult add_vision_shape_for_actor(
     ::vision::Scene& scene,

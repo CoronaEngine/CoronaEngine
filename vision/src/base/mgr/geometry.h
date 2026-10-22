@@ -67,6 +67,7 @@ private:
 
 public:
     explicit GeometryGpuResource(Device &device) noexcept;
+    ~GeometryGpuResource();
     GeometryGpuResource(const GeometryGpuResource &) = delete;
     GeometryGpuResource &operator=(const GeometryGpuResource &) = delete;
     GeometryGpuResource(GeometryGpuResource &&) = delete;

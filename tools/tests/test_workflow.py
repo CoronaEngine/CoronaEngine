@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import stat
 import sys
 import tempfile
 import unittest
@@ -68,6 +69,24 @@ class WorkflowTests(unittest.TestCase):
             root.mkdir()
             with self.assertRaises(RuntimeError):
                 safe_remove(root, root.parent)
+
+    def test_safe_remove_deletes_readonly_git_objects(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            checkout = root / "Horizon"
+            objects = checkout / ".git" / "objects" / "pack"
+            objects.mkdir(parents=True)
+            git_object = objects / "fixture.idx"
+            git_object.write_bytes(b"readonly Git object")
+            git_object.chmod(stat.S_IREAD)
+            safe_remove(root, checkout)
+            self.assertFalse(checkout.exists())
+
+    def test_safe_remove_refuses_repository_root(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with self.assertRaises(RuntimeError):
+                safe_remove(root, root)
 
     def test_horizon_lock_requires_full_commit(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

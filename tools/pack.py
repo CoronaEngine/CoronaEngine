@@ -58,7 +58,7 @@ EXCLUDE_DIRS = {
     "backend_legacy",
     "Backend_backup",
     "Backend_legacy",
-    # 旧 Quasar 测试报告路径（当前 AITool/Quasar 子模块另行管理）
+    # 旧 Quasar 测试报告路径（当前 AITool/Quasar 源码由 CoronaEditor 管理）
     "backend/Quasar/experiments/service_tests/reports",
     "Backend/Quasar/experiments/service_tests/reports",
 }
@@ -285,8 +285,10 @@ def main():
 
     args = parser.parse_args()
 
-    # 确定项目根目录（脚本所在目录）
-    root_dir = Path(__file__).parent.parent.resolve()
+    # 编辑器源码由 CMake 下载到独立工作区，工具本身仍由引擎仓库维护。
+    root_dir = Path(__file__).resolve().parents[1] / "CoronaEditor" / "editor"
+    if not root_dir.is_dir():
+        parser.error(f"Editor source directory not found: {root_dir}; run CMake configure first")
 
     # 确定输出文件名
     if args.output:

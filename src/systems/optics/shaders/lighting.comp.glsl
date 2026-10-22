@@ -959,22 +959,30 @@ vec3 reflection(Surface s, float ao) {
 void main() {
     ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
     if (any(greaterThanEqual(pixel,ivec2(pushConsts.gbufferSize)))) return;
+    uint mode = pushConsts.outputMode;
+    // Geometry diagnostics must not depend on normals, UVs or materials being
+    // decodable. Otherwise a valid rasterized triangle with an invalid shading
+    // attribute appears to be missing even in the object/visibility views.
+    if (mode == 4u || mode == 5u) {
+        uvec4 vis = imageLoad(imagesRG32UI[pushConsts.visibilityImageIndex],pixel);
+        vec3 color = vec3(0);
+        if (vis.x != 0u && vis.x <= pushConsts.instanceCount) {
+            uint id = mode == 4u ? loadInstanceInfo(vis.x-1u).objectID : (vis.x*1664525u+vis.y);
+            color = fract(vec3(0.1031,0.11369,0.13787)*float(id % 65521u));
+        }
+        imageStore(imagesRGBA16[pushConsts.finalOutputImage],pixel,vec4(color,1));
+        return;
+    }
     Surface surface;
     if (!decodeSurface(pixel,surface)) {
         imageStore(imagesRGBA16[pushConsts.finalOutputImage],pixel,vec4(0));
         return;
     }
-    uint mode = pushConsts.outputMode;
     float ao = (mode == 0u || mode == 6u || mode == 7u) ? ambientOcclusion(pixel,surface) : 1.0;
     vec3 color;
     if (mode == 1u) color = surface.baseColor;
     else if (mode == 2u) color = surface.normal*0.5+0.5;
     else if (mode == 3u) color = fract(abs(surface.position)*0.1);
-    else if (mode == 4u || mode == 5u) {
-        uvec4 vis = imageLoad(imagesRG32UI[pushConsts.visibilityImageIndex],pixel);
-        uint id = mode == 4u ? surface.objectID : (vis.x * 1664525u + vis.y);
-        color = fract(vec3(0.1031,0.11369,0.13787)*float(id % 65521u));
-    }
     else if (mode == 6u || mode == 7u) color = vec3(ao);
     else if (mode == 8u || mode == 9u) color = vec3(computeSunShadow(surface.position,surface.normal));
     else {

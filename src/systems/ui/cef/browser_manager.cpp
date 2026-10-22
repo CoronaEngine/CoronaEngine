@@ -8,31 +8,13 @@
 #include <thread>
 
 #include "cef_client.h"
+#include "cef_paths.h"
 #include "cef_bridge_helpers.h"
 #include "cef_osr_mode.h"
 #include "horizon/core/logging.h"
 #include "corona/systems/ui/camera_viewport_manager.h"
 
-namespace fs = std::filesystem;
-
 namespace Corona::Systems::UI {
-
-static std::string convert_local_path_to_url(const std::string& local_path) {
-    if (fs::path(local_path).is_absolute()) {
-        std::string url = "file://";
-        for (char c : local_path) {
-            if (c == '\\') {
-                url += '/';
-            } else if (c == ' ') {
-                url += "%20";
-            } else {
-                url += c;
-            }
-        }
-        return url;
-    }
-    return local_path;
-}
 
 BrowserManager& BrowserManager::instance() {
     static BrowserManager instance;
@@ -131,7 +113,7 @@ int BrowserManager::create_tab(const std::string& url, const std::string& path,
                  thread_id, path);
 
     // URL Processing
-    std::string full_url = convert_local_path_to_url(url);
+    std::string full_url = local_path_to_url(url);
     if (!path.empty()) {
         std::string clean_fragment = path;
         if (clean_fragment.starts_with("#")) {

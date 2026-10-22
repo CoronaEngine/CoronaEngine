@@ -80,6 +80,7 @@ class ImageParser : public IParser {
     std::shared_ptr<IResource> parse_stb_image(const std::filesystem::path& path,
                                                const ImageImportOptions& options = {});
     std::shared_ptr<IResource> parse_exr(const std::filesystem::path& path);
+    std::shared_ptr<IResource> parse_float_image(const std::filesystem::path& path);
 
     bool export_png(const IResource& resource, const std::filesystem::path& path);
     bool export_jpg(const IResource& resource, const std::filesystem::path& path);

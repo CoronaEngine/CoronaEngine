@@ -160,6 +160,12 @@ int main(int argc, char* argv[]) {
     if (!engine.initialize()) {
         CFW_LOG_ERROR("[Main] Failed to initialize engine!");
         CFW_LOG_FLUSH();
+#ifdef _WIN32
+        // 初始化失败时进程处于"半初始化"状态：实测 CefInitialize 失败后，即使正常从 main
+        // 返回也会卡死在进程退出阶段（工作线程全部被挂起、主线程阻塞在 LPC 等待，60s 不退出）。
+        // 此时没有需要保存的运行时数据，直接终止进程以跳过析构与 DLL 分离流程。
+        ::TerminateProcess(::GetCurrentProcess(), static_cast<UINT>(EXIT_FAILURE));
+#endif
         return -1;
     }
 

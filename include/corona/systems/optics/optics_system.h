@@ -217,6 +217,7 @@ class OpticsSystem : public Kernel::SystemBase {
 
     /// 去抖检测：若签名变化则触发（延迟）重建，覆盖导入/导出/参数调整等动态操作。
     void sync_vision_dynamic_scene(VisionPipelineRuntime& runtime);
+    bool sync_engine_vision_lighting(VisionPipelineRuntime& runtime, const SceneDevice& scene);
 
     /// external_live transform-only path:
     /// proxy actor transform -> mapped Vision ShapeInstance::set_o2w()
@@ -367,6 +368,8 @@ class OpticsSystem : public Kernel::SystemBase {
     std::atomic<std::uint64_t> pending_native_consumed_serial_{0};
     /// Rate limit for the "native frame throttle saturated" report.
     std::chrono::steady_clock::time_point last_native_throttle_report_{};
+    std::chrono::steady_clock::duration explicit_render_interval_{};
+    std::chrono::steady_clock::time_point next_render_update_{};
 
     // LOD 系统引用（渲染时查询 LOD 缓冲）
     GeometrySystem* geometry_system_ = nullptr;
@@ -387,8 +390,8 @@ class OpticsSystem : public Kernel::SystemBase {
     uint32_t vision_stable_frames_{0};          ///< 签名保持稳定的连续帧数，用于去抖
     static constexpr uint32_t kVisionRebuildDebounceFrames = 3;  ///< 稳定该帧数后才重建
 
-    // 当一次重建检测到"有候选物体但 0 实例"（数据尚未就绪）时，不锁定签名并在
-    // 后续帧重试，直到数据就绪或达到上限后兜底接受，避免每帧空转重建。
+    // Incomplete builds never advance the applied signature. Repeated failures
+    // back off to a five-second retry while preserving the last complete scene.
     uint32_t vision_rebuild_retries_{0};        ///< 数据未就绪导致的连续重试次数
     static constexpr uint32_t kVisionRebuildMaxRetries = 30;  ///< 重试上限（约 0.5s @60fps）
 
@@ -404,9 +407,13 @@ class OpticsSystem : public Kernel::SystemBase {
         std::shared_ptr<std::promise<bool>> completion_promise;
         std::chrono::steady_clock::time_point expires_at{};
     };
+    // Only requests promoted before draining camera commands may use this frame.
+    std::vector<PendingScreenshot> incoming_screenshots_;
     std::vector<PendingScreenshot> pending_screenshots_;
     std::mutex screenshot_mutex_;
+    void begin_screenshot_frame();
     bool has_pending_screenshot(std::uintptr_t camera_handle);
+    // A zero camera handle cancels every request during shutdown.
     void fail_pending_screenshots(std::uintptr_t camera_handle);
     void fail_expired_pending_screenshots();
     void fail_unrenderable_pending_screenshots();

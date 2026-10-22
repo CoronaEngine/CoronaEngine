@@ -95,6 +95,7 @@ target_link_libraries(CoronaResourceManager
     astcenc-native-static
     tinyexr_headers
     PUBLIC
+    nlohmann_json::nlohmann_json
     Horizon
     TBB::tbb
     ktm::ktm

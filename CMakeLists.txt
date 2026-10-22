@@ -43,6 +43,8 @@ if(BUILD_CORONA_TESTING)
     set(CORONA_RESOURCE_BUILD_TESTS ON CACHE BOOL "Build CoronaResource tests" FORCE)
 endif()
 
+include(corona_editor)              # Fetch editor/assets before checking Python requirements
+corona_prepare_editor_sources()
 include(corona_python)              # Embedded Python discovery and dependency checks
 include(corona_nodejs)              # Install/check editor Node.js in the same Conda environment
 include(corona_msvc_dependencies)   # Stable Ninja header tracking across console encodings
@@ -51,7 +53,6 @@ include(corona_third_party)         # Conan-provided external dependency targets
 include(corona_tbb)                 # Engine-owned TBB discovery and runtime copy helpers
 include(corona_add_system)          # Helper for adding system modules
 include(corona_runtime_deps)        # Runtime dependency collection and copy helpers
-include(corona_editor)              # Editor asset packaging helpers
 include(corona_cef)
 
 # ------------------------------------------------------------------------------

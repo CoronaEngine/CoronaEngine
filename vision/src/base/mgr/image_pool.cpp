@@ -12,6 +12,11 @@
 namespace vision {
 using namespace ocarina;
 
+void ImagePool::register_source(const ShaderNodeDesc& desc, Image image) {
+    if (!source_cache_) source_cache_=std::make_shared<SourceCache>();
+    source_cache_->try_emplace(desc.hash(),std::make_shared<const Image>(std::move(image)));
+}
+
 RegistrableTexture3D ImagePool::load_texture(const ShaderNodeDesc &desc,
                                              BindlessArray &bindless_array,
                                              Device &device) noexcept {

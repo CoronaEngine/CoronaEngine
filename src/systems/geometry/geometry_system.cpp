@@ -44,6 +44,30 @@ using namespace GeometryInternal;
 
 namespace {
 
+// Both cold imports and cache-hit actor rebuilds must publish the same local
+// bounds before their GPU resources become Ready. Otherwise a freshly-created
+// MechanicsDevice keeps its zero AABB and frustum culling tests the actor origin.
+void refresh_geometry_resource_bounds(std::uintptr_t geometry_handle, std::uint64_t model_id) {
+    auto scene = Resource::ResourceManager::get_instance().acquire_read<Resource::Scene>(model_id);
+    if (!scene) return;
+    const auto bounds = scene->get_scene_aabb();
+    auto& mechanics = SharedDataHub::instance().mechanics_storage();
+    std::vector<std::uintptr_t> handles;
+    // Do not acquire a write lock while a storage iterator retains its read lock.
+    for (auto it = mechanics.cbegin(); it != mechanics.cend(); ++it) {
+        if (it->geometry_handle == geometry_handle) {
+            handles.push_back(reinterpret_cast<std::uintptr_t>(&*it));
+        }
+    }
+    for (auto handle : handles) {
+        if (auto value = mechanics.try_acquire_write(handle);
+            value && value->geometry_handle == geometry_handle) {
+            value->min_xyz = make_fvec3(bounds.min[0], bounds.min[1], bounds.min[2]);
+            value->max_xyz = make_fvec3(bounds.max[0], bounds.max[1], bounds.max[2]);
+        }
+    }
+}
+
 std::mutex g_invalid_mesh_slot_log_mutex;
 std::unordered_set<std::string> g_invalid_mesh_slot_logs;
 
@@ -349,6 +373,8 @@ void GeometrySystem::update() {
 
         std::vector<typename Spatial::Octree<Impl::Payload>::Entry> octree_entries;
         std::unordered_set<Impl::Payload> added_actors;
+        std::unordered_set<Impl::Payload> pinned_actors;
+        std::unordered_set<Impl::Payload> pinned_not_ready;
         for (std::uintptr_t actor_handle : actor_handles) {
             if (added_actors.count(actor_handle)) continue;
 
@@ -356,6 +382,7 @@ void GeometrySystem::update() {
             auto actor_read = actor_storage.acquire_read(actor_handle);
             if ( !actor_read ) continue;
             const ActorDevice& actor_dev = *actor_read;
+            if (actor_dev.pinned) pinned_actors.insert(actor_handle);
 
             for (std::uintptr_t profile_handle : actor_dev.profile_handles) {
                 auto& profile_storage = hub.profile_storage();
@@ -376,6 +403,11 @@ void GeometrySystem::update() {
                 // 无网格的 actor（如音频物体，空 model_path）不参与几何加载/距离剔除，
                 // 否则距离剔除每帧反复请求加载空路径并报 "empty model path" 错误。
                 if (geometry_read->model_path_utf8.empty()) continue;
+                if (actor_dev.pinned &&
+                    (geometry_read->gpu_build_state != GeometryDevice::GpuBuildState::Ready ||
+                     geometry_read->mesh_handles.empty())) {
+                    pinned_not_ready.insert(actor_handle);
+                }
 
                 auto transform_read = transform_storage.acquire_read(geometry_read->transform_handle);
                 if (!transform_read.valid()) continue;
@@ -409,9 +441,21 @@ void GeometrySystem::update() {
                                                      ? ActorLoadState::Unloaded
                                                      : ActorLoadState::Loaded;
             for (auto actor_handle : added_actors) {
+                // A pinned source scene must not depend on the 50-unit preload
+                // sphere to become resident. Async import/build still owns GPU
+                // readiness; do not publish residency while meshes are absent.
+                const bool pinned = pinned_actors.contains(actor_handle);
+                const bool pinned_ready = pinned && !pinned_not_ready.contains(actor_handle);
+                const auto actor_initial_state = pinned
+                    ? (pinned_ready ? ActorLoadState::Loaded : ActorLoadState::Unloaded)
+                    : initial_state;
                 auto [it, inserted] = scene_state.actor_load_states.try_emplace(
-                    actor_handle, initial_state);
-                if (inserted && initial_state == ActorLoadState::Loaded) {
+                    actor_handle, actor_initial_state);
+                const bool became_ready = !inserted && pinned_ready &&
+                    it->second == ActorLoadState::Unloaded;
+                if ((inserted && actor_initial_state == ActorLoadState::Loaded) || became_ready) {
+                    it->second = ActorLoadState::Loaded;
+                    if (pinned_ready) impl_->offline_actors[actor_handle] = false;
                     initial_resident.push_back(
                         {scene_handle, actor_handle, /*loaded=*/true});
                 }
@@ -1233,7 +1277,7 @@ void GeometrySystem::on_load_finished(const Events::ActorLoadFinishedEvent& even
             std::error_code ec;
             normalized = std::filesystem::weakly_canonical(normalized, ec);
             if (ec) normalized = actor_read->model_path;  // 回退，防止 pin 泄漏
-            auto rid = Resource::IResource::generate_uid(normalized);
+            auto rid = Resource::ResourceManager::import_uid(normalized, actor_read->model_import_options);
             Resource::ResourceManager::get_instance().unpin(rid);
         }
     }
@@ -1481,6 +1525,8 @@ bool GeometrySystem::rebuild_actor_gpu_resources(std::uintptr_t actor,
                 }
             }
 
+            refresh_geometry_resource_bounds(geom_handle, rid);
+
             // ---- 第 5.3 步：如果不需要重建，跳过此 geometry ----
             // 初始加载场景：mesh_handles 已在 Python API 层创建完毕
             if (!needs_rebuild) {
@@ -1682,7 +1728,7 @@ void GeometrySystem::process_async_tasks() {
                             std::error_code ec;
                             normalized = std::filesystem::weakly_canonical(normalized, ec);
                             if (ec) normalized = actor_read->model_path;
-                            auto rid = Resource::IResource::generate_uid(normalized);
+                            auto rid = Resource::ResourceManager::import_uid(normalized, actor_read->model_import_options);
                             scene_state.unloading_tasks[task.actor] =
                                 Resource::ResourceManager::get_instance().remove_cache_async(rid);
                         } else {
@@ -1757,11 +1803,11 @@ void GeometrySystem::on_load_requested(const Events::ActorLoadRequestedEvent& e)
     std::error_code ec;
     normalized = std::filesystem::weakly_canonical(normalized, ec);
     if (!ec) {
-        auto rid = Resource::IResource::generate_uid(normalized);
+        auto rid = Resource::ResourceManager::import_uid(normalized, actor_read->model_import_options);
         Resource::ResourceManager::get_instance().pin(rid);
     }
 
-    scene_state.loading_tasks[e.actor] = Resource::ResourceManager::get_instance().import_async(actor_read->model_path);
+    scene_state.loading_tasks[e.actor] = Resource::ResourceManager::get_instance().import_async(actor_read->model_path, actor_read->model_import_options);
 }
 
 // 锁顺序同 on_load_requested: impl_->mtx → Storage。
@@ -1812,7 +1858,7 @@ void GeometrySystem::on_unload_requested(const Events::ActorUnloadRequestedEvent
     std::error_code ec;
     normalized = std::filesystem::weakly_canonical(normalized, ec);
     if (ec) normalized = actor_read->model_path;
-    auto rid = Resource::IResource::generate_uid(normalized);
+    auto rid = Resource::ResourceManager::import_uid(normalized, actor_read->model_import_options);
 
     CFW_LOG_NOTICE("[GeometrySystem] Start unloading actor {} (path: {})",
                   e.actor, Utils::path_to_utf8(actor_read->model_path));
@@ -2183,6 +2229,15 @@ void GeometrySystem::on_restore_requested(const Events::ActorRestoreRequestedEve
         return;
     }
 
+    Resource::ModelImportOptions import_options;
+    {
+        auto actor = hub.actor_storage().try_acquire_read(event.actor);
+        // A contended actor is retried by the visible/offline restore scan. Do
+        // not silently substitute default import options and normalize geometry.
+        if (!actor) return;
+        import_options = actor->model_import_options;
+    }
+
     // ---- 第 1.5 步：恢复运行时状态到 SharedDataHub ----
     // evict 时存入 ActorStreamingRecord 的 transform / body_type /
     // optics_visible 在 restore 时写回对应的存储槽位，保证 actor 恢复后
@@ -2259,12 +2314,12 @@ void GeometrySystem::on_restore_requested(const Events::ActorRestoreRequestedEve
             std::error_code ec;
             norm = std::filesystem::weakly_canonical(norm, ec);
             if (!ec) {
-                auto rid = Resource::IResource::generate_uid(norm);
+                auto rid = Resource::ResourceManager::import_uid(norm, import_options);
                 Resource::ResourceManager::get_instance().pin(rid);
             }
         }
         scene_state.loading_tasks[event.actor] =
-            Resource::ResourceManager::get_instance().import_async(model_path);
+            Resource::ResourceManager::get_instance().import_async(model_path, import_options);
     }
 
     CFW_LOG_NOTICE("[GeometrySystem] Restore started for actor {} ({})", event.actor,
@@ -2845,29 +2900,8 @@ void GeometrySystem::process_pending_geometry_imports() {
             }  // geom_write 释放
             if (!import_ok) continue;
 
-            // 第 2 步：回填 MechanicsDevice AABB（geometry 槽锁已释放）。
-            // Mechanics 在 Python 同步构造时读到 model_id=0 → AABB 为 0；
-            // 这里用 Scene 的 AABB 回填，八叉树下帧重建即自愈。
-            // 注意：Storage 迭代器在当前槽持有锁，不能在迭代中对同槽再 acquire_write
-            // （会重入死锁）。故先 const 遍历收集句柄，迭代结束后再写。
-            if (auto scene = resource_manager.acquire_read<Resource::Scene>(rid)) {
-                const auto aabb_min = scene->get_scene_aabb().min;  // std::array<float,3>
-                const auto aabb_max = scene->get_scene_aabb().max;
-                auto& mech_storage = hub.mechanics_storage();
-
-                std::vector<std::uintptr_t> mech_handles;
-                for (auto mit = mech_storage.cbegin(); mit != mech_storage.cend(); ++mit) {
-                    if (mit->geometry_handle == geom_handle) {
-                        mech_handles.push_back(reinterpret_cast<std::uintptr_t>(&(*mit)));
-                    }
-                }
-                for (std::uintptr_t mh : mech_handles) {
-                    if (auto mw = mech_storage.try_acquire_write(mh)) {
-                        mw->min_xyz = make_fvec3(aabb_min[0], aabb_min[1], aabb_min[2]);
-                        mw->max_xyz = make_fvec3(aabb_max[0], aabb_max[1], aabb_max[2]);
-                    }
-                }
-            }
+            // Geometry slot lock is released before taking mechanics slot locks.
+            refresh_geometry_resource_bounds(geom_handle, rid);
 
             CFW_LOG_NOTICE("[GeometrySystem] Async import finished for geometry {} (rid={})",
                            geom_handle, rid);
@@ -2882,6 +2916,7 @@ void GeometrySystem::process_pending_geometry_imports() {
         std::uintptr_t geom_handle;
         std::string    path;
         ktm::fvec3     world_pos;
+        Resource::ModelImportOptions options;
     };
     std::vector<ToImport> to_import;
     for (auto it = geom_storage.cbegin(); it != geom_storage.cend(); ++it) {
@@ -2905,7 +2940,7 @@ void GeometrySystem::process_pending_geometry_imports() {
                 world_pos = tr->position;
             }
         }
-        to_import.push_back({geom_handle, geom_dev.model_path_utf8, world_pos});
+        to_import.push_back({geom_handle, geom_dev.model_path_utf8, world_pos, geom_dev.import_options});
     }
     if (to_import.empty()) return;
 
@@ -2944,7 +2979,7 @@ void GeometrySystem::process_pending_geometry_imports() {
 
         impl_->pending_import_tasks[item.geom_handle] =
             Impl::PendingImportTask{epoch, std::chrono::steady_clock::now(),
-                                    resource_manager.import_async(Utils::utf8_to_path(item.path))};
+                                    resource_manager.import_async(Utils::utf8_to_path(item.path), item.options)};
         CFW_LOG_NOTICE("[GeometryImport] launched geometry={} epoch={} path='{}'",
                        item.geom_handle, epoch, item.path);
         ++launched;

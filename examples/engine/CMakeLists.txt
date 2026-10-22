@@ -10,6 +10,17 @@ corona_add_example(
     COPY_ASSETS
 )
 
+if(MSVC)
+    target_sources(corona_engine PRIVATE runtime.manifest)
+endif()
+
+set(CORONA_ENGINE_RUNTIME_DIR "" CACHE PATH
+    "Optional short output directory for CoronaEngine and its runtime files")
+if(CORONA_ENGINE_RUNTIME_DIR)
+    set_target_properties(corona_engine PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CORONA_ENGINE_RUNTIME_DIR}")
+endif()
+
 # 链接 CoronaEngine 核心库（已包含所有系统）
 target_link_libraries(corona_engine PRIVATE
     corona::engine

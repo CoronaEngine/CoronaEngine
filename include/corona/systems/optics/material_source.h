@@ -2,8 +2,20 @@
 
 #include <corona/resource/types/scene.h>
 #include <optional>
+#include <memory>
+#include <nlohmann/json_fwd.hpp>
 
 namespace Corona::Materials {
+
+// One immutable, renderer-independent appearance per imported shape instance.
+// Expressions reference source images; they do not own a second geometry scene.
+struct Principled {
+    Resource::MaterialParameters surface;
+    float transmission{0.f}, anisotropic{0.f};
+    bool emission_two_sided{false};
+    std::shared_ptr<const nlohmann::json> expressions;
+    std::size_t revision{};
+};
 
 // Scene-authored overrides. Empty fields inherit the model. No renderer API
 // setter is needed; scene loading publishes one immutable list per actor.

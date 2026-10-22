@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import stat
 import subprocess
 from pathlib import Path
 from typing import Iterable, Mapping, Sequence
@@ -283,7 +284,17 @@ def safe_remove(repo_root: Path, path: Path) -> None:
         return
     print(f"[INFO] Removing {target}")
     if target.is_dir() and not target.is_symlink():
-        shutil.rmtree(target)
+        def remove_readonly(function, filename, error):
+            # Git objects are read-only on Windows. Do not mask other failures.
+            if (os.name == "nt" and isinstance(error, PermissionError)
+                    and function in (os.unlink, os.rmdir)
+                    and not os.stat(filename).st_mode & stat.S_IWRITE):
+                os.chmod(filename, stat.S_IREAD | stat.S_IWRITE)
+                function(filename)
+            else:
+                raise error
+
+        shutil.rmtree(target, onexc=remove_readonly)
     else:
         target.unlink()
 

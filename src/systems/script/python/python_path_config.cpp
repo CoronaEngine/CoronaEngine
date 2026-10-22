@@ -2,18 +2,13 @@
 // Created by 25473 on 2025/11/19.
 //
 #include <corona/systems/script/python/python_path_config.h>
+#include <corona/utils/runtime_paths.h>
 
 #include <algorithm>
 #include <cstdlib>
 #include <filesystem>
 #include <string>
 #include <string_view>
-#include <vector>
-
-#ifdef _WIN32
-#include <windows.h>
-#endif
-
 namespace Corona::Script::Python::PathCfg {
 
 namespace {
@@ -22,7 +17,7 @@ std::filesystem::path resolve_executable_dir();
 
 std::filesystem::path configured_python_home() {
 #ifdef CORONA_PYTHON_HOME_DIR
-    return std::filesystem::path(CORONA_PYTHON_HOME_DIR);
+    return Utils::utf8_to_path(std::string(CORONA_PYTHON_HOME_DIR));
 #else
     return {};
 #endif
@@ -43,27 +38,11 @@ bool packaged_python_runtime_available() {
 }
 
 std::filesystem::path resolve_executable_dir() {
-#ifdef _WIN32
-    std::vector<wchar_t> buffer(MAX_PATH);
-    while (true) {
-        const DWORD length = GetModuleFileNameW(
-            nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
-        if (length == 0) {
-            break;
-        }
-        // On Windows, an exact-size result means the buffer may have been too
-        // small. Grow it and retry rather than returning a truncated path.
-        if (length < buffer.size() - 1) {
-            return std::filesystem::path(std::wstring(buffer.data(), length)).parent_path();
-        }
-        buffer.resize(buffer.size() * 2);
-    }
-#endif
-    return std::filesystem::current_path();
+    return Utils::executable_directory();
 }
 
 std::string normalize(const std::filesystem::path& path) {
-    auto value = path.generic_string();
+    auto value = Utils::path_to_utf8(path);
     std::ranges::replace(value, '\\', '/');
     return value;
 }
@@ -97,7 +76,7 @@ PackagedRuntimeInspection inspect_packaged_runtime(const std::filesystem::path& 
 }
 
 std::string PackagedRuntimeInspection::describe() const {
-    const std::string root_text = root.string();
+    const std::string root_text = Utils::path_to_utf8(root);
     switch (issue) {
         case PackagedRuntimeIssue::None:
             return "packaged python runtime is usable: " + root_text;
@@ -163,7 +142,7 @@ auto editor_backend_rel() -> const std::string& {
 }
 
 auto editor_backend_abs() -> const std::string& {
-    static const std::string abs = normalize(engine_root_path() / editor_backend_rel());
+    static const std::string abs = normalize(Utils::editor_directory());
     return abs;
 }
 
@@ -186,7 +165,7 @@ auto python_dll_dir() -> std::string {
     return normalize(packaged_python_runtime_available()
                          ? engine_root_path() / "python-runtime" / "DLLs"
 #ifdef CORONA_PYTHON_MODULE_DLL_DIR
-                         : std::filesystem::path(CORONA_PYTHON_MODULE_DLL_DIR)
+                         : Utils::utf8_to_path(std::string(CORONA_PYTHON_MODULE_DLL_DIR))
 #else
                          : configured_python_home() / "DLLs"
 #endif
@@ -197,7 +176,7 @@ auto python_lib_dir() -> std::string {
     return normalize(packaged_python_runtime_available()
                          ? engine_root_path() / "python-runtime" / "Lib"
 #ifdef CORONA_PYTHON_MODULE_LIB_DIR
-                         : std::filesystem::path(CORONA_PYTHON_MODULE_LIB_DIR)
+                         : Utils::utf8_to_path(std::string(CORONA_PYTHON_MODULE_LIB_DIR))
 #else
                          : configured_python_home() / "Lib"
 #endif

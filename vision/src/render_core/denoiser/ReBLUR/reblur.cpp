@@ -274,8 +274,9 @@ CommandBatch ReBLUR::dispatch(RealTimeDenoiseInput &input) noexcept {
 #endif
         filter_->prepare(device(), input.resolution, input.layer_count);
     const auto &camera = scene().sensor();
-    if (frame_ != input.frame_index) {
-        const bool restart = frame_ == InvalidUI32 || frame_ + 1u != input.frame_index || fov_ != camera->fov_y();
+    if (frame_ != input.frame_index || camera_revision_ != camera->external_camera_revision()) {
+        const bool restart = frame_ == InvalidUI32 || frame_ + 1u != input.frame_index || fov_ != camera->fov_y() ||
+                             projection_revision_ != camera->external_projection_revision();
         if (restart) filter_->reset();
         previous_raster_ = current_raster_; current_raster_ = camera->host_world_to_raster();
 #ifdef VISION_REBLUR_NATIVE_NRD
@@ -283,6 +284,8 @@ CommandBatch ReBLUR::dispatch(RealTimeDenoiseInput &input) noexcept {
                                            input.resolution, restart, pipeline()->frame_delta_ms());
 #endif
         frame_ = input.frame_index; fov_ = camera->fov_y();
+        camera_revision_ = camera->external_camera_revision();
+        projection_revision_ = camera->external_projection_revision();
     }
     GuideParam gp;
     gp.visibility = input.visibility.descriptor(); gp.motion = input.motion_vec.descriptor();

@@ -52,6 +52,7 @@ class IResource {
     std::uint64_t get_uid() const;
 
    private:
+    friend class ResourceManager;
     std::uint64_t uid;
 };
 

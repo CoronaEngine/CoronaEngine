@@ -9,6 +9,7 @@
 
 #include <sstream>
 #include <cstdlib>
+#include <cmath>
 
 namespace Corona::Cache {
 
@@ -60,7 +61,8 @@ std::string ActorStreamingRecord::to_json() const {
     j["actor"] = handle_to_hex(actor);
 
     // model_path
-    j["model_path"] = model_path.u8string();
+    const auto path_utf8 = model_path.u8string();
+    j["model_path"] = std::string(reinterpret_cast<const char*>(path_utf8.data()), path_utf8.size());
 
     // profile_handles → hex 字符串数组
     auto& j_profiles = (j["profile_handles"] = nlohmann::json::array());
@@ -87,6 +89,10 @@ std::string ActorStreamingRecord::to_json() const {
     j["scl_x"] = transform.scale.x;
     j["scl_y"] = transform.scale.y;
     j["scl_z"] = transform.scale.z;
+    auto& basis = (j["affine_basis"] = nlohmann::json::array());
+    for (int column = 0; column < 4; ++column)
+        for (int row = 0; row < 4; ++row)
+            basis.push_back(transform.affine_basis[column][row]);
 
     // 布尔标志
     j["body_type"] = std::string(body_type_to_string(body_type));
@@ -108,7 +114,7 @@ std::optional<ActorStreamingRecord> ActorStreamingRecord::from_json(const std::s
         rec.scene = parse_hex_ptr(j.value("scene", "0x0"));
         rec.actor = parse_hex_ptr(j.value("actor", "0x0"));
 
-        rec.model_path = j.value("model_path", "");
+        rec.model_path = std::filesystem::u8path(j.value("model_path", ""));
 
         if (j.contains("profile_handles") && j["profile_handles"].is_array()) {
             for (const auto& v : j["profile_handles"])
@@ -133,6 +139,24 @@ std::optional<ActorStreamingRecord> ActorStreamingRecord::from_json(const std::s
         rec.transform.scale.x           = j.value("scl_x", 1.0f);
         rec.transform.scale.y           = j.value("scl_y", 1.0f);
         rec.transform.scale.z           = j.value("scl_z", 1.0f);
+        // ActorCache serializes even memory entries. Omitting the authored basis
+        // would therefore lose scale/shear/reflection on every evict/restore.
+        if (const auto basis = j.find("affine_basis"); basis != j.end()) {
+            if (!basis->is_array() || basis->size() != 16) return std::nullopt;
+            for (int column = 0; column < 4; ++column) {
+                for (int row = 0; row < 4; ++row) {
+                    const auto& value = (*basis)[column * 4 + row];
+                    if (!value.is_number()) return std::nullopt;
+                    const float coefficient = value.get<float>();
+                    if (!std::isfinite(coefficient)) return std::nullopt;
+                    rec.transform.affine_basis[column][row] = coefficient;
+                }
+            }
+            if (rec.transform.affine_basis[0][3] != 0 ||
+                rec.transform.affine_basis[1][3] != 0 ||
+                rec.transform.affine_basis[2][3] != 0 ||
+                rec.transform.affine_basis[3][3] != 1) return std::nullopt;
+        }
 
         // body_type：优先读新字段；旧存档只有 physics_enabled bool 时做迁移
         if (j.contains("body_type") && j["body_type"].is_string()) {

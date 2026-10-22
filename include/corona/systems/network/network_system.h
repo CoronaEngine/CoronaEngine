@@ -233,7 +233,7 @@ public:
     /**
      * @brief 向所有已连接的 peer 广播 Actor 创建事件。
      * @param actor_guid 稳定 Actor 网络 ID
-     * @param scene_name 场景路径（如 "Scene/场景1.scene"）
+     * @param scene_name 场景路径（如 "scene.ini"）
      * @param model_path 模型相对路径（如 "Resource/ball.obj"）
      * @param transform  9 个 float: position(3) + rotation(3) + scale(3)
      * @param optics_packed 打包的 OpticsPacked 结构 (72 字节)

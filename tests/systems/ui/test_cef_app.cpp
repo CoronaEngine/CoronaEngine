@@ -14,6 +14,7 @@
 #include "cef/cef_osr_mode.h"
 #include "cef/browser_manager.h"
 #include "cef/cef_client.h"
+#include "cef/cef_paths.h"
 
 namespace {
 
@@ -354,6 +355,24 @@ void test_osr_mode_resolution() {
             "surrounding whitespace must not change the selected mode");
 }
 
+void test_cef_unicode_paths() {
+    using Corona::Systems::UI::local_path_to_url;
+    using Corona::Systems::UI::set_cef_path;
+    const auto path = std::filesystem::path(L"C:\\Users\\中文用户\\AppData\\Local\\缓存 #1") /
+                      std::wstring(180, L'x') / std::wstring(100, L'y');
+    CefSettings settings;
+    set_cef_path(settings.root_cache_path, path);
+    require(CefString(&settings.root_cache_path).ToWString() == path.wstring(),
+            "CEF must preserve Unicode cache paths longer than MAX_PATH");
+    require(local_path_to_url("C:/中文 #100%/index.html") ==
+                "file:///C:/%E4%B8%AD%E6%96%87%20%23100%25/index.html",
+            "local URLs must escape Unicode, spaces, fragments and literal percent signs");
+    require(local_path_to_url("https://example.test/page#/route") ==
+                "https://example.test/page#/route", "remote URLs must remain unchanged");
+    require(local_path_to_url(R"(\\server\share\a b.html)") ==
+                "file://server/share/a%20b.html", "UNC URLs must retain their host");
+}
+
 int main(int argc, char* argv[]) {
     test_browser_process_dispatch(argc, argv);
     test_popup_wiring();
@@ -364,5 +383,6 @@ int main(int argc, char* argv[]) {
     test_remote_debugging_port_policy();
     test_remote_debugging_port_wiring();
     test_osr_mode_resolution();
+    test_cef_unicode_paths();
     return 0;
 }

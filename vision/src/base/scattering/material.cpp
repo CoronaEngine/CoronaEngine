@@ -62,6 +62,15 @@ void MaterialLut::unload_lut(const std::string &name) noexcept {
     }
 }
 
+void MaterialLut::release_scene_luts(const BindlessArray &bindless_array) noexcept {
+    if (!s_material_lut) return;
+    // No slot removal: the whole array is retiring. Other scene registrations
+    // stay alive, and no dangling address can alias a later scene's LUT cache.
+    std::erase_if(s_material_lut->lut_map_, [&](const auto &entry) {
+        return entry.first.bindless_array == &bindless_array;
+    });
+}
+
 const RegistrableTexture3D &MaterialLut::get_lut(const std::string &name) const noexcept {
     const auto &bindless = active_material_lut_bindless();
     const LutKey key{.name = name, .bindless_array = &bindless};

@@ -7,6 +7,7 @@
 #include "parser_registry.h"
 #include "resource.h"
 #include "resource_cache.h"
+#include "model_import_options.h"
 
 namespace Corona::Resource {
 
@@ -64,7 +65,7 @@ class ResourceManager final {
      * @param path 资源路径
      * @return TResourceID 资源ID，如果失败返回 IResource::INVALID_UID
      */
-    TResourceID import_sync(const std::filesystem::path& path);
+    TResourceID import_sync(const std::filesystem::path& path, ModelImportOptions options = {});
 
     /**
      * @brief 异步导入资源
@@ -72,7 +73,9 @@ class ResourceManager final {
      * @param path 资源路径
      * @return std::future<TResourceID> 包含资源ID的future对象
      */
-    std::future<TResourceID> import_async(const std::filesystem::path& path);
+    std::future<TResourceID> import_async(const std::filesystem::path& path, ModelImportOptions options = {});
+
+    static TResourceID import_uid(const std::filesystem::path& normalized_path, ModelImportOptions options = {});
 
     // Separate typed animation cache; uses the same managed worker lifetime.
     std::shared_future<AnimationSources> import_animations_async(std::vector<std::filesystem::path> paths);
@@ -244,7 +247,7 @@ class ResourceManager final {
      * @param path 资源路径
      * @return TResourceID 资源ID
      */
-    TResourceID load_internal(const std::filesystem::path& path);
+    TResourceID load_internal(const std::filesystem::path& path, ModelImportOptions options = {});
 
    private:
     // 模型/场景导入通常同时触发多个大任务。将导入任务限制在小型 arena

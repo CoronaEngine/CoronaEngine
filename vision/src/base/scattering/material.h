@@ -46,6 +46,8 @@ public:
     void load_lut(const string &name, uint3 res, PixelStorage storage, const void *data,
                   BindlessArray &bindless_array, Device &device) noexcept;
     void unload_lut(const string &name) noexcept;
+    // Called while retiring a scene GPU resource, before its bindless array dies.
+    static void release_scene_luts(const BindlessArray &bindless_array) noexcept;
     template<typename... Args>
     [[nodiscard]] float_array sample(const string &name, Args &&...args) const noexcept {
         return get_lut(name).sample(OC_FORWARD(args)...);

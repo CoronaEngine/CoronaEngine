@@ -32,6 +32,7 @@ layout(push_constant) uniform PushConsts
     uint  srcBufferIndex;   // imported Vision pre-tonemap buffer (float4 per pixel)
     uint  outputImage;      // engine finalOutputImage (RGBA16F)
     float exposure;         // Vision FrameBuffer exposure (default 1.0)
+    uint diagnostic;        // Geometry AOVs already contain display values.
 } pushConsts;
 
 vec3 acesFilmicToneMapCurve(vec3 x)
@@ -72,7 +73,7 @@ void main()
 
     // Vision exposure curve, then ACES, then sRGB encode (matches Native tonemap).
     vec3 exposed = vec3(1.0) - exp(-hdr * pushConsts.exposure);
-    vec3 ldr = linearToSrgb(acesFilmicToneMapCurve(exposed));
+    vec3 ldr = pushConsts.diagnostic != 0u ? hdr : linearToSrgb(acesFilmicToneMapCurve(exposed));
 
     imageStore(imagesRGBA16[nonuniformEXT(pushConsts.outputImage)], pixel, vec4(ldr, 1.0));
 }

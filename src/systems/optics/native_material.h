@@ -15,7 +15,7 @@ inline Hardware::MaterialInfo pack_native_material(const GeometrySystem::MeshSlo
     result.textureDescriptor = base_descriptor;
     result.lightingEnabled = lighting_enabled ? 1.0f : 0.0f;
     result.materialColor = {mesh.material_color[0], mesh.material_color[1], mesh.material_color[2], mesh.material_color[3]};
-    if (!mesh.material) {
+    if (!mesh.material && !optics.principled) {
         // Procedural/editor geometry has no imported material. Keep its existing
         // rendering contract; loaded models always take the data-driven branch.
         result.metallic = optics.metallic;
@@ -30,9 +30,10 @@ inline Hardware::MaterialInfo pack_native_material(const GeometrySystem::MeshSlo
         result.clearcoatGloss = optics.clearcoatGloss;
         return result;
     }
-    const auto& material = *mesh.material;
-    Resource::MaterialParameters value = material.source;
-    if (optics.material_overrides) {
+    const MeshMaterialDevice empty_material{};
+    const auto& material = mesh.material ? *mesh.material : empty_material;
+    Resource::MaterialParameters value = optics.principled ? optics.principled->surface : material.source;
+    if (optics.material_overrides && !optics.principled) {
         // Global scene values first; material-specific values always win,
         // independent of JSON row ordering.
         for (bool specific : {false, true})
@@ -63,6 +64,14 @@ inline Hardware::MaterialInfo pack_native_material(const GeometrySystem::MeshSlo
     }
     result.flags = (material.source.metallic_channel & 3u) |
         ((material.source.roughness_channel & 3u) << 2u) | (value.double_sided ? 16u : 0u) | 32u;
+    if (optics.principled) {
+        // Source scene appearance replaces unrelated OBJ/PLY material slots.
+        // The raster preview consumes the shared constant factors; texture
+        // expressions and light transport are evaluated by the Vision bridge.
+        result.textureDescriptor=0u;
+        result.anisotropic=optics.principled->anisotropic;
+        return result;
+    }
     if (!disable_textures) {
         const auto descriptor = [&](MeshMaterialDevice::Slot slot) {
             const auto& image = material.textures[slot];

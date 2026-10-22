@@ -145,6 +145,12 @@ struct LODGenerationOptions {
 
 // Assimp 导入选项
 struct AssimpImportOptions {
+    bool normalize_model = true;
+    bool geometry_only = false;
+    bool convert_left_handed = true;
+    bool flip_uvs = true;
+    bool flip_normals = false;
+    bool face_normals = false;
     bool simplify_mesh = true;           // 是否启用网格简化
     float simplification_error = 0.01f;  // 简化误差阈值
     // 静态网格使用共享 MeshData + 每节点 MeshInstanceData；蒙皮网格仍走旧路径。

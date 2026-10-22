@@ -1,6 +1,10 @@
 #include "corona/resource/types/image.h"
 
 #include <iomanip>
+#include <bit>
+#include <fstream>
+#include <cmath>
+#include <cstring>
 
 #include "corona/resource/resource_manager.h"
 
@@ -227,7 +231,8 @@ ImageParser::ImageParser() {
     register_extension(".tga", [this](const auto& path, ResourceCache& cache) { return parse_stb_image(path); });
 
     register_extension(".exr", [this](const auto& path, ResourceCache& cache) { return parse_exr(path); });
-    // register_extension(".hdr", [this](const auto& path, ResourceCache& cache) { return parse_exr(path); });
+    register_extension(".hdr", [this](const auto& path, ResourceCache&) { return parse_float_image(path); });
+    register_extension(".pfm", [this](const auto& path, ResourceCache&) { return parse_float_image(path); });
 
     register_exporter(".png", [this](const IResource& resource, const std::filesystem::path& path) { return export_png(resource, path); });
     register_exporter(".jpg", [this](const IResource& resource, const std::filesystem::path& path) { return export_jpg(resource, path); });
@@ -256,6 +261,57 @@ std::shared_ptr<IResource> ImageParser::parse_stb_image(const std::filesystem::p
     }
 
     return ptr;
+}
+
+std::shared_ptr<IResource> ImageParser::parse_float_image(const std::filesystem::path& path) {
+    auto image = std::make_shared<Image>(path);
+    if (path.extension() != ".pfm" && path.extension() != ".PFM") {
+        int width=0,height=0,channels=0;
+        std::unique_ptr<float,decltype(&stbi_image_free)> data(
+            stbi_loadf(path.string().c_str(),&width,&height,&channels,4),stbi_image_free);
+        if (!data || width<=0 || height<=0) throw std::runtime_error("Invalid HDR image: "+path.string());
+        image->set_float_data(data.get(),width,height,4);
+        return image;
+    }
+    std::ifstream input(path,std::ios::binary);
+    auto token=[&]() {
+        std::string word;
+        while (input>>word) {
+            if (word.starts_with('#')) { std::getline(input,word); continue; }
+            return word;
+        }
+        throw std::runtime_error("Truncated PFM header: "+path.string());
+    };
+    const auto magic=token();
+    if (magic!="PF" && magic!="Pf") throw std::runtime_error("Invalid PFM signature");
+    const int width=std::stoi(token()),height=std::stoi(token());
+    const float scale=std::stof(token());
+    if (width<=0 || height<=0 || width>32768 || height>32768 ||
+        size_t(width)*height>268435456 || !std::isfinite(scale) || scale==0)
+        throw std::runtime_error("Invalid PFM dimensions/scale");
+    char end=0; input.get(end);
+    if (end=='\r' && input.peek()=='\n') input.get();
+    else if (end!='\n') throw std::runtime_error("Invalid PFM header terminator");
+    const unsigned channels=magic=="PF" ? 3 : 1;
+    const bool swap=(scale<0)!=(std::endian::native==std::endian::little);
+    std::vector<float> pixels(size_t(width)*height*4,1.f),row(size_t(width)*channels);
+    for (int y=height-1;y>=0;--y) {
+        if (!input.read(reinterpret_cast<char*>(row.data()),row.size()*sizeof(float)))
+            throw std::runtime_error("Truncated PFM pixels");
+        for (int x=0;x<width;++x) for (unsigned c=0;c<3;++c) {
+            float value=row[size_t(x)*channels+(channels==1 ? 0:c)];
+            if (swap) {
+                auto bits=std::bit_cast<uint32_t>(value);
+                bits=(bits>>24)|((bits>>8)&0xff00)|((bits<<8)&0xff0000)|(bits<<24);
+                value=std::bit_cast<float>(bits);
+            }
+            value*=std::abs(scale);
+            if (!std::isfinite(value)) throw std::runtime_error("Nonfinite PFM pixel");
+            pixels[(size_t(y)*width+x)*4+c]=value;
+        }
+    }
+    image->set_float_data(pixels.data(),width,height,4);
+    return image;
 }
 
 std::shared_ptr<IResource> ImageParser::parse_exr(const std::filesystem::path& path) {

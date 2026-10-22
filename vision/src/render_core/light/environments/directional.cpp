@@ -42,6 +42,15 @@ private:
     EncodedData<float> world_radius_;
     EncodedData<float3> world_center_;
 
+    [[nodiscard]] Float3 shadow_endpoint(const LightSampleContext &p_ref) const noexcept {
+        // One radius is insufficient for a reference near the far side of the
+        // scene. This distance reaches beyond the entire bounding sphere from
+        // any reference, including a camera outside that sphere.
+        Float radius = max(*world_radius_, 1e-4f);
+        Float distance = length(p_ref.pos - *world_center_) + radius + max(radius * 1e-4f, 1e-3f);
+        return p_ref.pos + w_light() * distance;
+    }
+
 public:
     DirectionalLight()
         : Environment(LightType::DeltaDirection | LightType::Infinite) {}
@@ -66,7 +75,7 @@ public:
     [[nodiscard]] LightSample sample_wi(const LightSampleContext &p_ref, Float2 u,
                                         const SampledWavelengths &swl) const noexcept override {
         LightSample ret{swl.dimension()};
-        ret.p_light = p_ref.pos + w_light() * *world_radius_;
+        ret.p_light = shadow_endpoint(p_ref);
         ret.eval = evaluate_wi(p_ref, LightEvalContext(ret.p_light, *direction_), swl, LightEvalMode::All);
         return ret;
     }
@@ -74,14 +83,14 @@ public:
     [[nodiscard]] LightSample evaluate_point(const LightSampleContext &p_ref, LightSurfacePoint lsp,
                                              const SampledWavelengths &swl, LightEvalMode mode) const noexcept override {
         LightSample ret{swl.dimension()};
-        ret.p_light = p_ref.pos + w_light() * *world_radius_;
+        ret.p_light = shadow_endpoint(p_ref);
         ret.eval = evaluate_wi(p_ref, LightEvalContext(ret.p_light, *direction_), swl, mode);
         return ret;
     }
 
     [[nodiscard]] LightEvalContext compute_light_eval_context(const LightSampleContext &p_ref,
                                                               vision::LightSurfacePoint lsp) const noexcept override {
-        Float3 p_light = p_ref.pos + w_light() * *world_radius_;
+        Float3 p_light = shadow_endpoint(p_ref);
         return LightEvalContext(p_light, *direction_);
     }
 

@@ -1,2 +1,0 @@
-"""Canonical ProjectSettings editor plugin."""
-
