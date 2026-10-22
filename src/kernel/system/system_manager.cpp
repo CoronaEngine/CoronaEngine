@@ -3,6 +3,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 #include "horizon/core/logging.h"
@@ -82,8 +83,15 @@ class SystemManager : public ISystemManager {
 
     bool initialize_all() override {
         auto systems = snapshot_systems(true);
-        for (auto& system : systems) {
+        for (std::size_t index = 0; index < systems.size(); ++index) {
+            auto& system = systems[index];
             if (!system->initialize(context_.get())) {
+                // 记录失败的系统：其 initialize() 可能只完成了一部分，shutdown() 不能假设
+                // 它已完整初始化（例如 UI 系统在 CEF 初始化失败后仍持有半初始化的状态）。
+                // 尚未轮到初始化的系统一并标记，避免对从未初始化的对象调用 shutdown()。
+                for (std::size_t rest = index; rest < systems.size(); ++rest) {
+                    failed_systems_.insert(systems[rest].get());
+                }
                 CFW_LOG_ERROR("Failed to initialize system: {}", system->get_name());
                 return false;
             }
@@ -146,6 +154,13 @@ class SystemManager : public ISystemManager {
     void shutdown_all() override {
         auto systems = snapshot_systems();
         for (auto it = systems.rbegin(); it != systems.rend(); ++it) {
+            if (failed_systems_.count(it->get()) != 0) {
+                // initialize() 失败的系统不执行 shutdown()：半初始化的对象上调用
+                // shutdown 属于未定义行为（CEF 未初始化时 CefShutdown 会挂死/崩溃）。
+                CFW_LOG_WARNING("Shutdown skipped for system with failed initialization: {}",
+                                (*it)->get_name());
+                continue;
+            }
             (*it)->shutdown();
             CFW_LOG_INFO("Shutdown system: {}", (*it)->get_name());
         }
@@ -234,6 +249,8 @@ class SystemManager : public ISystemManager {
     std::unique_ptr<SystemContext> context_;
     std::vector<std::shared_ptr<ISystem>> systems_;
     std::map<std::string, std::shared_ptr<ISystem>> systems_by_name_;
+    // 初始化失败的系统（只由主线程在 initialize_all/shutdown_all 中读写）
+    std::unordered_set<const ISystem*> failed_systems_;
     std::mutex mutex_;
     bool systems_sorted_ = false;
 };

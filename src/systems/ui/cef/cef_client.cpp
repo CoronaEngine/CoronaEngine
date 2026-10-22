@@ -8,11 +8,15 @@
 #include <cstring>
 #include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <cstdint>
+#include <cstdio>
 #include <filesystem>
+#include <fstream>
 #include <string>
 #include <system_error>
 #include <thread>
+#include <vector>
 
 #include <horizon/core/logging.h>
 
@@ -580,6 +584,140 @@ void OffscreenCefClient::OnContextMenuDismissed(CefRefPtr<CefBrowser> browser,
 // CEF 生命周期管理
 // ============================================================================
 
+namespace {
+
+// CEF 缓存目录必须"真实可写"而不是"存在"：Chromium 会在该目录创建 profile
+// 单例锁文件（ProcessSingleton），创建失败时直接中止 CefInitialize
+// （日志表现为 "Lock file can not be created! Error code: 5" ->
+// "ContentMainRun failed with exit code 21"）。exists() 只能说明目录可读，
+// 进程以低完整性级别运行、目录属于其他用户或位于只读介质上时都会误判。
+bool prepare_cef_cache_dir(const std::filesystem::path& dir) {
+    if (dir.empty()) {
+        return false;
+    }
+    std::error_code ec;
+    std::filesystem::create_directories(dir, ec);  // 目录已存在时返回 false 且 ec 为空
+    if (ec) {
+        return false;
+    }
+    const auto probe = dir / ".corona_cef_write_probe";
+    {
+        std::ofstream stream(probe, std::ios::binary | std::ios::trunc);
+        if (!stream) {
+            return false;
+        }
+        stream << "probe";
+        if (!stream) {
+            return false;
+        }
+    }
+    std::filesystem::remove(probe, ec);
+    return true;
+}
+
+// 读取当前进程令牌的完整性级别 RID（0x1000=Low, 0x2000=Medium, 0x3000=High）。
+// 低完整性级别进程无法写入 Medium 标签的目录，是 profile 锁文件失败的典型原因。
+int cef_process_integrity_rid() {
+    HANDLE token = nullptr;
+    if (!::OpenProcessToken(::GetCurrentProcess(), TOKEN_QUERY, &token)) {
+        return -1;
+    }
+    DWORD size = 0;
+    ::GetTokenInformation(token, TokenIntegrityLevel, nullptr, 0, &size);
+    std::vector<unsigned char> buffer(size > 0 ? size : 0);
+    int rid = -1;
+    if (!buffer.empty() &&
+        ::GetTokenInformation(token, TokenIntegrityLevel, buffer.data(), size, &size)) {
+        const auto* label = reinterpret_cast<const TOKEN_MANDATORY_LABEL*>(buffer.data());
+        // PSID 是 void*，取最后一个子权威值需要先转成 SID*（可变长结构）。
+        const auto* sid = static_cast<const SID*>(label->Label.Sid);
+        if (sid != nullptr && sid->SubAuthorityCount > 0) {
+            rid = static_cast<int>(sid->SubAuthority[sid->SubAuthorityCount - 1]);
+        }
+    }
+    ::CloseHandle(token);
+    return rid;
+}
+
+const char* cef_integrity_name(int rid) {
+    switch (rid) {
+        case SECURITY_MANDATORY_UNTRUSTED_RID:
+            return "untrusted";
+        case SECURITY_MANDATORY_LOW_RID:
+            return "low";
+        case SECURITY_MANDATORY_MEDIUM_RID:
+            return "medium";
+        case SECURITY_MANDATORY_MEDIUM_PLUS_RID:
+            return "medium-plus";
+        case SECURITY_MANDATORY_HIGH_RID:
+            return "high";
+        case SECURITY_MANDATORY_SYSTEM_RID:
+            return "system";
+        default:
+            return "unknown";
+    }
+}
+
+std::string integrity_description() {
+    const int rid = cef_process_integrity_rid();
+    if (rid < 0) {
+        return "unknown";
+    }
+    char buffer[64] = {};
+    std::snprintf(buffer, sizeof(buffer), "%s(0x%x)", cef_integrity_name(rid),
+                  static_cast<unsigned>(rid));
+    return buffer;
+}
+
+// 默认记录 libcef 的 ERROR 级别日志：CefInitialize 失败的真实原因由 libcef 自己打印，
+// 设为 FATAL 会把 "Lock file can not be created" 之类关键信息全部吞掉。
+cef_log_severity_t cef_log_severity_from_env() {
+    if (const char* raw = std::getenv("CORONA_CEF_LOG_SEVERITY"); raw != nullptr && *raw != '\0') {
+        std::string value(raw);
+        std::transform(value.begin(), value.end(), value.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        if (value == "verbose") {
+            return LOGSEVERITY_VERBOSE;
+        }
+        if (value == "info") {
+            return LOGSEVERITY_INFO;
+        }
+        if (value == "warning" || value == "warn") {
+            return LOGSEVERITY_WARNING;
+        }
+        if (value == "error") {
+            return LOGSEVERITY_ERROR;
+        }
+        if (value == "fatal" || value == "none") {
+            return LOGSEVERITY_FATAL;
+        }
+    }
+    return LOGSEVERITY_ERROR;
+}
+
+const char* cef_log_severity_name(cef_log_severity_t severity) {
+    switch (severity) {
+        case LOGSEVERITY_VERBOSE:
+            return "verbose";
+        case LOGSEVERITY_INFO:
+            return "info";
+        case LOGSEVERITY_WARNING:
+            return "warning";
+        case LOGSEVERITY_ERROR:
+            return "error";
+        case LOGSEVERITY_FATAL:
+            return "fatal";
+        default:
+            return "unknown";
+    }
+}
+
+// CefInitialize 失败后调用 CefShutdown() 是未定义行为（会挂死或崩溃），
+// 因此 shutdown_cef() 必须只在初始化成功后真正执行。
+std::atomic<bool> g_cef_initialized{false};
+
+}  // namespace
+
 bool initialize_cef() {
     if (!was_cef_process_dispatch_completed()) {
         CFW_LOG_ERROR(
@@ -596,7 +734,7 @@ bool initialize_cef() {
     settings.windowless_rendering_enabled = true;
     settings.no_sandbox = true;
     apply_remote_debugging_port(settings);
-    settings.log_severity = LOGSEVERITY_FATAL;
+    settings.log_severity = cef_log_severity_from_env();
     settings.uncaught_exception_stack_size = 10;
 
     CefString(&settings.locale).FromASCII("zh-CN");
@@ -613,23 +751,29 @@ bool initialize_cef() {
 #else
     std::filesystem::path root_cache_path = std::filesystem::current_path() / "cef_root";
 #endif
-    std::filesystem::path cache_path = root_cache_path / "Default";
-    std::error_code cache_ec;
-    if (!std::filesystem::exists(cache_path, cache_ec)) {
-        std::filesystem::create_directories(cache_path, cache_ec);
+
+    const auto exe_path = Utils::executable_path();
+    if (exe_path.empty()) {
+        CFW_LOG_ERROR("CEF: failed to resolve the current executable path");
+        return false;
     }
-    if (cache_ec) {
-        CFW_LOG_WARNING("CEF: failed to prepare cache path {}: {}; falling back to local cache",
-                        Utils::path_to_utf8(cache_path), cache_ec.message());
-        cache_ec.clear();
-        root_cache_path = std::filesystem::current_path() / "cef_root";
+    const auto exe_dir = exe_path.parent_path();
+
+    std::filesystem::path cache_path = root_cache_path / "Default";
+    bool cache_writable = prepare_cef_cache_dir(cache_path);
+    if (!cache_writable) {
+        // 回退目标不依赖 cwd：优先使用 exe 所在目录，避免从其他目录启动时又落到不可写位置。
+        const auto local_cache_root = exe_dir / "cef_root";
+        CFW_LOG_WARNING("CEF: cache path {} is not writable; falling back to {}",
+                        Utils::path_to_utf8(cache_path), Utils::path_to_utf8(local_cache_root));
+        root_cache_path = local_cache_root;
         cache_path = root_cache_path / "Default";
-        if (!std::filesystem::exists(cache_path, cache_ec)) {
-            std::filesystem::create_directories(cache_path, cache_ec);
-        }
-        if (cache_ec) {
-            CFW_LOG_WARNING("CEF: local cache path {} is unavailable: {}", Utils::path_to_utf8(cache_path),
-                            cache_ec.message());
+        cache_writable = prepare_cef_cache_dir(cache_path);
+        if (!cache_writable) {
+            CFW_LOG_ERROR(
+                "CEF: no writable cache directory (tried {} and {}); process integrity={}",
+                Utils::path_to_utf8(root_cache_path.parent_path() / "Default"),
+                Utils::path_to_utf8(cache_path), integrity_description());
             root_cache_path.clear();
             cache_path.clear();
         }
@@ -639,14 +783,9 @@ bool initialize_cef() {
         set_cef_path(settings.cache_path, cache_path);
     }
 
-    const auto exe_path = Utils::executable_path();
-    if (exe_path.empty()) {
-        CFW_LOG_ERROR("CEF: failed to resolve the current executable path");
-        return false;
-    }
     set_cef_path(settings.browser_subprocess_path, exe_path);
-    set_cef_path(settings.resources_dir_path, exe_path.parent_path());
-    set_cef_path(settings.locales_dir_path, exe_path.parent_path() / "locales");
+    set_cef_path(settings.resources_dir_path, exe_dir);
+    set_cef_path(settings.locales_dir_path, exe_dir / "locales");
     CFW_LOG_INFO("CEF: Using main executable for subprocesses: {}",
                  Utils::path_to_utf8(exe_path));
     CFW_LOG_INFO("CEF: Cache directory: {}", Utils::path_to_utf8(cache_path));
@@ -656,14 +795,24 @@ bool initialize_cef() {
     settings.persist_session_cookies = true;
 
     if (!CefInitialize(main_args, settings, app.get(), nullptr)) {
-        CFW_LOG_ERROR("Failed to initialize CEF.");
+        CFW_LOG_ERROR(
+            "Failed to initialize CEF (cache={}, cache_writable={}, integrity={}, log_severity={})",
+            Utils::path_to_utf8(cache_path), cache_writable ? "yes" : "no",
+            integrity_description(), cef_log_severity_name(settings.log_severity));
         return false;
     }
+
+    g_cef_initialized.store(true);
 
     return true;
 }
 
 void shutdown_cef() {
+    if (!g_cef_initialized.exchange(false)) {
+        // CefInitialize 未成功时调用 CefShutdown() 是未定义行为（实测会挂死或崩溃）。
+        CFW_LOG_INFO("CEF: shutdown skipped (CEF was not initialized successfully)");
+        return;
+    }
     CFW_LOG_INFO("CEF: Starting shutdown...");
     CefShutdown();
     CFW_LOG_INFO("CEF: Shutdown complete");
