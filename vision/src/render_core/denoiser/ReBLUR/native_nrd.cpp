@@ -193,6 +193,28 @@ struct NativeReblur::Impl {
     };
     std::deque<ProfileSample> pending_profiles;
     std::string profile_path, pass_profile_path;
+    struct IntervalPool {
+        nvrhi::vulkan::DeviceHandle owner;
+        VkDevice device{};
+        VkQueryPool pool{};
+        bool submitted{}, complete{};
+        ~IntervalPool() {
+            // Ordinary retirement already has its completion event. Only a
+            // failed encoding/submission/output path needs this fallback.
+            if (submitted && !complete) owner->waitForIdle();
+            if (pool) VULKAN_HPP_DEFAULT_DISPATCHER.vkDestroyQueryPool(device, pool, nullptr);
+        }
+    };
+    struct IntervalSample {
+        std::shared_ptr<IntervalPool> queries;
+        nvrhi::EventQueryHandle completion;
+        uint64_t serial{};
+        uint32_t width{}, height{};
+    };
+    std::deque<IntervalSample> pending_intervals;
+    bool interval_profile{};
+    double interval_timestamp_period{};
+    uint64_t interval_timestamp_mask{};
     std::filesystem::path snapshot_directory;
     bool snapshot_frame_enabled{};
     uint32_t snapshot_frame{};
@@ -216,6 +238,10 @@ struct NativeReblur::Impl {
         }
         if (const char *path = std::getenv("REBLUR_GPU_PROFILE"); path && *path) profile_path = path;
         if (const char *path = std::getenv("REBLUR_NATIVE_PROFILE_PASSES"); path && *path) pass_profile_path = path;
+        if (const char *mode = std::getenv("REBLUR_GPU_PROFILE_MODE"); mode && std::strcmp(mode, "intervals") == 0)
+            interval_profile = !profile_path.empty();
+        require(!interval_profile || pass_profile_path.empty(),
+                "Native REBLUR: interval profiling must not include per-pass timers");
         if (const char *path = std::getenv("REBLUR_NATIVE_SNAPSHOT_DIR"); path && *path) snapshot_directory = path;
         if (const char *path = std::getenv("REBLUR_NATIVE_TEST_HF_PROBE_SHADER"); path && *path) {
             test_hf_shader = path;
@@ -240,13 +266,44 @@ struct NativeReblur::Impl {
         if (!snapshot_directory.empty()) std::filesystem::create_directories(snapshot_directory);
     }
     ~Impl() {
-        try { collect_profile_results(); }
+        try {
+            while (!pending_intervals.empty()) {
+                device->waitEventQuery(pending_intervals.front().completion);
+                collect_profile_results();
+            }
+            collect_profile_results();
+        }
         catch (const std::exception &error) { std::fprintf(stderr, "[Native REBLUR] profile flush: %s\n", error.what()); }
     }
 
     void collect_profile_results() {
         if (!device) return;
         static std::mutex output_mutex;
+        while (!pending_intervals.empty() && device->pollEventQuery(pending_intervals.front().completion)) {
+            const auto &sample = pending_intervals.front();
+            sample.queries->complete = true;
+            uint64_t ticks[5]{};
+            const VkResult result = VULKAN_HPP_DEFAULT_DISPATCHER.vkGetQueryPoolResults(
+                borrowed_device, sample.queries->pool, 0u, 5u, sizeof(ticks), ticks, sizeof(uint64_t), VK_QUERY_RESULT_64_BIT);
+            require(result == VK_SUCCESS, "Native REBLUR: interval query results unavailable after completion");
+            {
+                std::lock_guard lock(output_mutex);
+                std::ofstream output(std::filesystem::path(profile_path), std::ios::app | std::ios::ate);
+                require(bool(output), "Native REBLUR: cannot open interval profile output");
+                if (output.tellp() == std::streampos(0)) output << "batch,name,width,height,ms\n";
+                output << std::setprecision(17);
+                const char *names[]{"REBLUR-Pack", "REBLUR-NRD", "REBLUR-Unpack", "REBLUR-Epilogue", "REBLUR-Filter"};
+                for (uint32_t phase = 0u; phase != 5u; ++phase) {
+                    const uint32_t begin = phase == 4u ? 0u : phase;
+                    const uint32_t end = phase == 4u ? 4u : phase + 1u;
+                    const uint64_t duration = (ticks[end] - ticks[begin]) & interval_timestamp_mask;
+                    output << sample.serial << ',' << names[phase] << ',' << sample.width << ',' << sample.height << ','
+                           << double(duration) * interval_timestamp_period / 1000000.0 << '\n';
+                }
+                require(bool(output), "Native REBLUR: cannot write interval profile output");
+            }
+            pending_intervals.pop_front();
+        }
         // A recycled timestamp slot may still report its old available value
         // before the queued GPU reset executes. Gate reads on this submission's
         // queue event, not timestamp availability from a previous generation.
@@ -391,6 +448,18 @@ struct NativeReblur::Impl {
         device = nvrhi::vulkan::createDevice(description);
         require(bool(device), "Native REBLUR: cannot wrap Vulkan device");
         borrowed_device = context.device;
+        if (interval_profile) {
+            VkPhysicalDeviceProperties properties{};
+            VULKAN_HPP_DEFAULT_DISPATCHER.vkGetPhysicalDeviceProperties(context.physical_device, &properties);
+            uint32_t count{};
+            VULKAN_HPP_DEFAULT_DISPATCHER.vkGetPhysicalDeviceQueueFamilyProperties(context.physical_device, &count, nullptr);
+            std::vector<VkQueueFamilyProperties> queues(count);
+            VULKAN_HPP_DEFAULT_DISPATCHER.vkGetPhysicalDeviceQueueFamilyProperties(context.physical_device, &count, queues.data());
+            const uint32_t bits = queues.at(context.queue_family).timestampValidBits;
+            require(bits && properties.limits.timestampPeriod > 0.f, "Native REBLUR: compute timestamps unavailable");
+            interval_timestamp_period = properties.limits.timestampPeriod;
+            interval_timestamp_mask = bits == 64u ? UINT64_MAX : (uint64_t(1u) << bits) - 1u;
+        }
         command_list = device->createCommandList(nvrhi::CommandListParameters().setQueueType(nvrhi::CommandQueue::Compute));
         require(bool(command_list), "Native REBLUR: command list creation failed");
         nvrhi::BindingLayoutDesc pack_layout;
@@ -811,6 +880,8 @@ struct NativeReblur::Impl {
         nrd_check(nrd::GetComputeDispatches(*layer.instance, &identifier, 1u, dispatches, dispatch_count), "GetComputeDispatches");
         const auto &instance = nrd::GetInstanceDesc(*layer.instance);
         nvrhi::TimerQueryHandle timer, nrd_timer;
+        VkQueryPool interval_pool{};
+        std::shared_ptr<IntervalPool> interval_owner;
         const uint64_t serial = profile_serial++;
         std::vector<ProfileSample> pass_samples;
         std::vector<SnapshotSample> snapshots;
@@ -820,7 +891,30 @@ struct NativeReblur::Impl {
         // A volatile buffer needs a version written in every opened command
         // list, even when reset/clear dispatches have no own constant data.
         command_list->writeBuffer(layer.constants, layer.zero_constants.data(), layer.zero_constants.size());
-        if (!profile_path.empty()) { timer = device->createTimerQuery(); require(bool(timer), "Native REBLUR: timer allocation failed"); command_list->beginTimerQuery(timer); }
+        auto interval_point = [&](uint32_t point) {
+            if (interval_pool) {
+                const VkCommandBuffer native = command_list->getNativeObject(nvrhi::ObjectTypes::VK_CommandBuffer);
+                VULKAN_HPP_DEFAULT_DISPATCHER.vkCmdWriteTimestamp(native, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, interval_pool, point);
+            }
+        };
+        if (interval_profile) {
+            interval_owner = std::make_shared<IntervalPool>();
+            interval_owner->owner = device;
+            interval_owner->device = borrowed_device;
+            VkQueryPoolCreateInfo info{VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};
+            info.queryType = VK_QUERY_TYPE_TIMESTAMP;
+            info.queryCount = 5u;
+            require(VULKAN_HPP_DEFAULT_DISPATCHER.vkCreateQueryPool(borrowed_device, &info, nullptr, &interval_owner->pool) == VK_SUCCESS,
+                    "Native REBLUR: interval query allocation failed");
+            interval_pool = interval_owner->pool;
+            const VkCommandBuffer native = command_list->getNativeObject(nvrhi::ObjectTypes::VK_CommandBuffer);
+            VULKAN_HPP_DEFAULT_DISPATCHER.vkCmdResetQueryPool(native, interval_pool, 0u, 5u);
+            interval_point(0u);
+        } else if (!profile_path.empty()) {
+            timer = device->createTimerQuery();
+            require(bool(timer), "Native REBLUR: timer allocation failed");
+            command_list->beginTimerQuery(timer);
+        }
         auto begin_pass = [&](const char *name) {
             nvrhi::TimerQueryHandle query;
             if (!pass_profile_path.empty()) {
@@ -838,6 +932,7 @@ struct NativeReblur::Impl {
         command_list->setComputeState(pack_state); command_list->setPushConstants(&conversion, sizeof(conversion));
         command_list->dispatch((width + 15u) / 16u, (height + 7u) / 8u);
         external_buffer_barrier();
+        interval_point(1u);
         end_pass(pack_timer);
         if (!snapshot_directory.empty()) {
             snapshot_constants(parameters.frame, layer_index, 0u, &conversion, sizeof(conversion));
@@ -959,6 +1054,7 @@ struct NativeReblur::Impl {
             }
         }
         if (nrd_timer) command_list->endTimerQuery(nrd_timer);
+        interval_point(2u);
         const auto unpack_timer = begin_pass("Unpack");
         external_buffer_barrier();
         nvrhi::ComputeState unpack_state; unpack_state.pipeline = unpack.pipeline; unpack_state.bindings = {layer.unpack_binding};
@@ -966,15 +1062,35 @@ struct NativeReblur::Impl {
         command_list->dispatch((width + 15u) / 16u, (height + 7u) / 8u);
         external_buffer_barrier();
         end_pass(unpack_timer);
+        interval_point(3u);
+        if (interval_pool) {
+            // Include close()'s original keepInitialState work in full-filter
+            // timing, while reporting it separately from format conversion.
+            auto restore_initial = [&](const nvrhi::TextureHandle &texture) {
+                if (!texture || !texture->getDesc().keepInitialState) return;
+                const auto state = command_list->getTextureSubresourceState(texture, 0u, 0u);
+                if (state != nvrhi::ResourceStates::Unknown && state != texture->getDesc().initialState)
+                    command_list->setTextureState(texture, nvrhi::AllSubresources, texture->getDesc().initialState);
+            };
+            for (const auto &texture : layer.permanent) restore_initial(texture);
+            for (const auto &texture : layer.transient) restore_initial(texture);
+            for (const auto &texture : {layer.motion, layer.normal, layer.view_z, layer.disocclusion_mix,
+                    layer.input_diffuse, layer.input_specular, layer.output_diffuse, layer.output_specular,
+                    layer.ta_probe, layer.ts_probe, layer.hf_probe}) restore_initial(texture);
+            command_list->commitBarriers();
+            interval_point(4u);
+        }
         if (timer) command_list->endTimerQuery(timer);
         command_list->close();
         nvrhi::EventQueryHandle completion;
-        if (timer || !pass_samples.empty() || !snapshots.empty()) {
+        if (timer || interval_pool || !pass_samples.empty() || !snapshots.empty()) {
             completion = device->createEventQuery();
             require(bool(completion), "Native REBLUR: completion event allocation failed");
         }
+        if (interval_owner) interval_owner->submitted = true;
         device->executeCommandList(command_list, nvrhi::CommandQueue::Compute);
         if (completion) device->setEventQuery(completion, nvrhi::CommandQueue::Compute);
+        if (interval_owner) pending_intervals.push_back({std::move(interval_owner), completion, serial, width, height});
         if (!snapshots.empty()) {
             device->waitEventQuery(completion);
             write_snapshots(snapshots);

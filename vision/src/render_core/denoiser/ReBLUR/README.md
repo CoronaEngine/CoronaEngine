@@ -96,12 +96,93 @@ conversion; NRD_8_pass_query_sum excludes them):
 | Pack_Unpack_query_sum | 1.313 | 1.229 | 1.227 | 2.879 | 2.956 | 2.874 |
 | NRD_8_pass_query_sum | 4.348 | 4.084 | 3.884 | 9.208 | 9.418 | 8.785 |
 
-These totals are sums of individual pass queries, not continuous/end-to-end
-intervals. EDSL before/after uses identical timestamp boundaries. The original
-HLSL per-pass control uses its existing BOTTOM_OF_PIPE/barrier boundaries,
-whereas EDSL individual stages use COMPUTE_SHADER boundaries; the control is
-not an identical-scope instruction microbenchmark. Separate continuous-interval
-results from the previous experiment remain in its recording directory.
+These preceding totals are historical sums of individual pass queries. Native
+BOTTOM_OF_PIPE and EDSL COMPUTE_SHADER pass boundaries differ, so the apparent
+10.67%/4.59% pure-NRD advantage is not a confirmed continuous-timing result.
+
+Fresh matched-boundary continuous measurements use
+`REBLUR_GPU_PROFILE_MODE=intervals` and `REBLUR_GPU_PROFILE=path/to/intervals.csv`
+for both replay backends. Five shared BOTTOM_OF_PIPE samples define:
+
+| Point | Boundary in both backends |
+|---|---|
+| T0 | Before Pack preparation/dispatch |
+| T1 | After Pack and its producer/consumer visibility barrier |
+| T2 | After the final NRD dispatch, before its outgoing dependency barrier |
+| T3 | After Unpack and its output visibility barrier |
+| T4 | After the original resource-state restoration epilogue |
+
+Pack=T1-T0, NRD=T2-T1, Unpack=T3-T2, Epilogue=T4-T3, Filter=T4-T0.
+NRD-to-Unpack dependencies belong to Unpack in both backends. Native explicitly
+flushes its original keepInitialState texture restoration before T4, so close()
+has no remaining GPU restoration; shaders, values and dependency semantics are
+unchanged. EDSL has no equivalent epilogue, so its T3/T4 writes are adjacent.
+All five points are reserved before the layer and read only after its completion
+event/fence. Normal query retirement adds no GPU waits.
+
+Each layer's NRD and Filter are directly measured continuous GPU intervals.
+Reported values sum the three layer intervals; they are not one interval across
+inter-layer submission gaps. Conversion is the sum of the disjoint Pack and
+Unpack intervals. Filter includes Epilogue and is not reconstructed from pass sums.
+Input uploads, output readback, CPU preparation and the existing 250 ms frame pause
+are outside these GPU intervals.
+
+The matched comparison retains all 128 measured frames after 64 warmup frames.
+Four complete processes/backend/resolution use 720p ABBA+BAAB and 1080p BAAB+ABBA
+order (A=original HLSL, B=EDSL), with one frozen replay executable and runtime.
+All 16 captures pass protocol, fingerprint, completion, closure and original
+component-tolerance checks. Every backend's six outputs are byte-identical across
+repeats and to its preceding same-input capture; no numerical work was removed.
+
+Mean GPU ms, three layers:
+
+| Size | Scope | HLSL | EDSL | EDSL change | Faster EDSL pairs |
+|---|---|---:|---:|---:|---:|
+| 720p | Pure NRD | 4.122224 | 4.091868 | -0.74% | 2/4 |
+| 720p | Pack | 0.632038 | 0.640140 | +1.28% | 1/4 |
+| 720p | Unpack | 0.674976 | 0.674653 | -0.05% | 2/4 |
+| 720p | Pack+Unpack | 1.307013 | 1.314793 | +0.60% | 1/4 |
+| 720p | Resource epilogue | 0.000601 | 0.000343 | -43.01% | 4/4 |
+| 720p | Complete Filter | 5.429838 | 5.407004 | -0.42% | 2/4 |
+| 1080p | Pure NRD | 9.136028 | 8.984089 | -1.66% | 4/4 |
+| 1080p | Pack | 1.522849 | 1.576144 | +3.50% | 0/4 |
+| 1080p | Unpack | 1.412231 | 1.397757 | -1.02% | 4/4 |
+| 1080p | Pack+Unpack | 2.935080 | 2.973901 | +1.32% | 0/4 |
+| 1080p | Resource epilogue | 0.000695 | 0.000326 | -53.17% | 4/4 |
+| 1080p | Complete Filter | 12.071803 | 11.958316 | -0.94% | 4/4 |
+
+At 720p, NRD and complete Filter are faster in only two of four EDSL pairs.
+Their paired process intervals cross equality: observed mean reductions of
+0.74% and 0.42% do not establish a repeatable lead. At 1080p, EDSL wins all four
+NRD and Filter pairs: mean reductions are 1.66% and 0.94%. The paired geometric
+EDSL/HLSL 95% intervals are 0.974754..0.992065 (NRD) and
+0.982598..0.998671 (Filter). These use four process pairs, not 512 independent
+frames, and have small-sample/normality assumptions; the conclusion is limited
+to this replay/device/settings.
+
+The 1080p phase decomposition is 0.151939 ms saved inside NRD, 0.038821 ms
+extra for Pack+Unpack and 0.000370 ms less epilogue work, leaving a directly
+measured 0.113488 ms Filter saving. Pack itself is slower in all four EDSL
+1080p pairs. End-to-end improvement is therefore smaller than the core gain.
+
+The concrete implementation reason HF can beat the original HLSL is shared-luma
+reuse, rather than the choice of source language. For a full 128-live-pixel group
+with anti-firefly enabled, the original reads fast textures 480+18432=18912
+logical times; the retained EDSL footprint needs 768 cooperative preload reads
+and no fast-texture fetch inside the AF loops. Texture caches can already merge
+physical traffic, so this is not a proportional DRAM or GPU-time claim. The
+ordered 72-tap reduction and its math are unchanged. The previous controlled
+EDSL before/after comparison establishes the HF optimization's gain; these
+whole-NRD intervals alone do not attribute every fraction of a millisecond to
+cache reuse, compiler generation or backend resource transitions.
+
+New raw captures, frozen hashes, all per-frame/per-layer mean/P50/P95, four-pair
+uncertainty, original strict outputs and source audits are retained under
+`build/recordings/reblur-continuous-20261022/`. `reports/summary.md` and
+`reports/summary.json` are the current matched-boundary results; `plan.json`
+records exact order. Red/green interval probes, legacy-mode probes, the original
+stress suite, interval-mode 144-case oracle, canonical engine build and headless
+default-EDSL run pass. Test processes exit and GPU cleanup succeeds.
 
 The preceding +15.52% HF P95 result is reproduced from its retained captures:
 four isolated delayed layer queries in one 32-frame process shifted the pooled
