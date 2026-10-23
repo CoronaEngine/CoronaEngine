@@ -4,19 +4,16 @@ namespace vision::reblur {
 Shader<void(FilterParam)> Filter::compile_spatial_pass(Device &device, uint stage) {
     Kernel kernel = [stage](Var<FilterParam> p) {
         ocarina::configure_block(32u, 8u);
-        auto guides = p.guide.soa_view_var<Guide>();
+        auto guides = guide_view(p.guide);
         auto current_history = p.history.soa_view_var<TemporalData>();
         Uint i = dispatch_id(); Int2 pixel = make_int2(dispatch_idx().xy());
         Uint2 tile = dispatch_idx().xy() / 16u;
         $if(p.tiles.read(tile.y * ((p.size.x + 15u) / 16u) + tile.x) == 0u) {
-            if (stage == 0u) {
-                // Pack and PrePass initialize both signals; later passes keep them zero.
-                p.dst_diffuse.write(i, make_half4(0.f)); p.dst_specular.write(i, make_half4(0.f));
-                p.tracking.write(i, 0.f);
-            }
             $return();
         };
-        auto g = guides.read(i);
+        auto g = read_guide_geometry(guides, i);
+        if (stage == 2u) g.specular_factor = guides.specular_factor.read(i);
+        $if(!valid_guide(g)) { $return(); };
         Float4 d = make_float4(p.src_diffuse.read(i)), s = make_float4(p.src_specular.read(i));
         Float tracking = s.w * hit_scale(g.position.w, g.normal_roughness.w);
         $if(valid_guide(g)) {
@@ -36,8 +33,8 @@ Shader<void(FilterParam)> Filter::compile_spatial_pass(Device &device, uint stag
                     Float2 slope = make_float2(0.f);
                     for (uint axis = 0u; axis < 2u; ++axis) {
                         Int2 step = axis == 0u ? make_int2(1, 0) : make_int2(0, 1);
-                        auto a = guides.read(pixel_index(pixel - step, p.size));
-                        auto b = guides.read(pixel_index(pixel + step, p.size));
+                        auto a = read_guide_geometry(guides, pixel_index(pixel - step, p.size));
+                        auto b = read_guide_geometry(guides, pixel_index(pixel + step, p.size));
                         slope[axis] = select(same_surface(g, a) && same_surface(g, b),
                             min(direction_angle(N, a.normal_roughness.xyz()), direction_angle(N, b.normal_roughness.xyz())), 0.f);
                     }
@@ -71,14 +68,22 @@ Shader<void(FilterParam)> Filter::compile_spatial_pass(Device &device, uint stag
                 }
                 Float area = rough * hfactor * (stage == 0u ? Float{1.f} : alpha);
                 radius *= sqrt(area);
-                if (stage == 0u && spec) {
+                // Every specular spatial pass is bounded by the projected
+                // reflection lobe; narrow planar mirrors cannot borrow a
+                // diffuse-sized startup radius. PostBlur adds pixel support below.
+                if (spec) {
                     Float lobe_radius = h * NoD * lobe_tan(r, .3f);
                     radius = min(radius, lobe_radius / max(p.unproject * (g.position.w + h * Dfactor), 1e-6f));
                 }
                 if (stage == 2u) radius *= 2.f;
                 radius = max(radius, p.min_radius * smc);
                 Float base_radius = radius;
-                if (stage == 2u && spec) radius = max(radius, min(p.min_radius, 1.f) * pixel_support);
+                if (stage == 2u && spec) {
+                    // Curvature needs a two-pixel reconstruction footprint;
+                    // a planar narrow reflection retains the one-pixel floor.
+                    Float curvature_support = smooth01(linear_step(.5f / 255.f, 2.f / 255.f, normal_footprint));
+                    radius = max(radius, min(p.min_radius, 1.f) * pixel_support * (1.f + curvature_support));
+                }
                 // A zero radius setting is an exact spatial bypass for evaluation.
                 if (stage == 0u) radius *= (spec ? p.specular_prepass : p.diffuse_prepass) != 0.f;
                 else { radius *= p.max_radius != 0.f; base_radius *= p.max_radius != 0.f; }
@@ -87,15 +92,34 @@ Shader<void(FilterParam)> Filter::compile_spatial_pass(Device &device, uint stag
                 Float min_hit_weight = p.min_hit_weight * fraction_scale * smc;
                 if (stage != 0u) min_hit_weight *= sqrt(alpha);
                 Float hit_norm = lerp(min(alpha, smc), .0005f, 1.f);
+                // These lobe parameters depend only on the center pixel.
+                Float normal_width = fraction_scale / normal_param(alpha, p.lobe_fraction, rough);
+                Float roughness_norm = 1.f;
+                if (spec) roughness_norm = lerp(saturate(rough * p.roughness_fraction * fraction_scale), .01f, 1.f);
                 for (uint k = 0; k < taps.size(); ++k) {
                     Float2 tap = make_float2(taps[k]);
                     Float2 direction = make_float2(cs * tap.x - sn * tap.y, sn * tap.x + cs * tap.y);
                     Float2 offset = direction * radius;
                     Int2 q = make_int2(floor(make_float2(pixel) + .5f + offset));
                     $if(in_screen(q, p.size)) {
-                        Uint j = pixel_index(q, p.size); auto ng = guides.read(j);
-                        Float4 value = make_float4(spec ? p.src_specular.read(j) : p.src_diffuse.read(j));
-                        Float w = spatial_weight(p, g, ng, alpha, fraction_scale, spec);
+                        Uint j = pixel_index(q, p.size); auto ng = read_guide_geometry(guides, j);
+                        Float4 value = make_float4(0.f);
+                        $if(valid_guide(ng)) {
+                            value = make_float4(spec ? p.src_specular.read(j) : p.src_diffuse.read(j));
+                        };
+                        Float sample_angle = direction_angle(N, ng.normal_roughness.xyz());
+                        Float geometry = geometry_weight(p, g, ng);
+                        Float roughness_weight = 1.f;
+                        if (spec) roughness_weight = 1.f - smooth01(abs(ng.normal_roughness.w - rough) / roughness_norm);
+                        // PostBlur's wider pixel support uses the same neighbor
+                        // geometry, normal angle and roughness rejection.
+                        auto sample_weight = [&](Float footprint) {
+                            Float weight = geometry;
+                            weight *= 1.f - smooth01(sample_angle / max(normal_width, footprint));
+                            if (spec) weight *= roughness_weight;
+                            return weight;
+                        };
+                        Float w = sample_weight(0.f);
                         if (stage == 0u && spec) {
                             Float hs = value.w * hit_scale(ng.position.w, ng.normal_roughness.w);
                             Float dist = length(ng.position.xyz() - g.position.xyz()) + 1e-6f;
@@ -111,7 +135,7 @@ Shader<void(FilterParam)> Filter::compile_spatial_pass(Device &device, uint stag
                         w *= lerp(hw, min_hit_weight, 1.f);
                         if (stage == 2u && spec) {
                             $if(pixel_support > 0.f) {
-                                Float expanded = spatial_weight(p, g, ng, alpha, fraction_scale, true, normal_footprint);
+                                Float expanded = sample_weight(normal_footprint);
                                 // Secondary-hit variation cannot remove pixel
                                 // support; wider taps keep the original test.
                                 Float local_hit = max(hw, pixel_support * (dot(offset, offset) <= 1.f).cast<float>());
@@ -120,12 +144,13 @@ Shader<void(FilterParam)> Filter::compile_spatial_pass(Device &device, uint stag
                                 // A tap moved by the radius floor is a new
                                 // contribution, not an old weight to preserve.
                                 Float base = select(all(q == original_q), w, 0.f);
-                                $if(expanded > base) {
+                                $if(valid_guide(ng) && expanded > base) {
                                     // Raw-to-fast innovation distinguishes noise
                                     // from a stable, narrow luminance edge.
                                     Float a = make_float2(p.fast.read(i)).y, b = make_float2(p.fast.read(j)).y;
                                     Float raw_a = pack_signal(p.raw_specular.read(i), g.specular_factor.xyz(), g.position.w, r).x;
-                                    Float raw_b = pack_signal(p.raw_specular.read(j), ng.specular_factor.xyz(), ng.position.w, ng.normal_roughness.w).x;
+                                    Float3 specular_factor = guides.specular_factor.read(j).xyz();
+                                    Float raw_b = pack_signal(p.raw_specular.read(j), specular_factor, ng.position.w, ng.normal_roughness.w).x;
                                     Float noise = abs(raw_a - a) + abs(raw_b - b);
                                     Float difference = (a - b) / (.2f * (a + b) + noise + 1e-6f);
                                     Float edge = exponential_weight(difference * difference);

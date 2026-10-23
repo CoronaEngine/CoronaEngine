@@ -41,7 +41,8 @@ class ThermalGuardTests(unittest.TestCase):
         with patch.object(guard, "renderer_gpu_processes", return_value=remaining):
             self.assertEqual(guard.wait_for_gpu_release(222, timeout=0), remaining)
 
-    def run_guard(self, *, existing=(), residue=(), rows=None, returncode=0, polls=None):
+    def run_guard(self, *, existing=(), residue=(), rows=None, returncode=0, polls=None,
+                  limit=60, allow_70c=False):
         with tempfile.TemporaryDirectory() as directory, ExitStack() as stack:
             process = Mock(pid=222, returncode=returncode)
             process.poll.side_effect = polls
@@ -54,9 +55,13 @@ class ThermalGuardTests(unittest.TestCase):
             job.cleanup.return_value = True
             stack.enter_context(patch.object(guard, "_Job", return_value=job))
             stack.enter_context(patch("builtins.print"))
-            stack.enter_context(patch.object(sys, "argv", ["guard", "--output", directory, "--cwd", directory,
-                                                          "--limit", "60",
-                                                          "--", "missing-cpu-test.exe"]))
+            arguments = ["guard", "--output", directory, "--cwd", directory]
+            if limit is not None:
+                arguments.extend(["--limit", str(limit)])
+            if allow_70c:
+                arguments.append("--allow-70c")
+            arguments.extend(["--", "missing-cpu-test.exe"])
+            stack.enter_context(patch.object(sys, "argv", arguments))
             code = guard.main()
             result = json.loads((Path(directory) / "run.json").read_text())
             return code, result, launcher.call_count, job.cleanup.call_count
@@ -90,6 +95,51 @@ class ThermalGuardTests(unittest.TestCase):
         self.assertEqual((code, cleanups), (1, 1))
         self.assertEqual(result["reason"], "thermal_cutoff")
         self.assertEqual(result["max_temperature_c"], 60)
+
+    def test_default_limit_stays_at_54_with_or_without_opt_in(self):
+        for allow_70c in (False, True):
+            with self.subTest(allow_70c=allow_70c):
+                code, result, launches, cleanups = self.run_guard(limit=None, allow_70c=allow_70c)
+                self.assertEqual((code, launches, cleanups), (0, 1, 1))
+                self.assertEqual(result["cutoff_temperature_c"], 54)
+                self.assertIs(result["allow_70c"], allow_70c)
+
+    def test_limit_above_60_requires_explicit_opt_in(self):
+        for limit in (60.1, 70):
+            with self.subTest(limit=limit), self.assertRaises(SystemExit) as error:
+                self.run_guard(limit=limit)
+            self.assertEqual(error.exception.code, 2)
+
+    def test_opt_in_allows_70_and_records_selected_limit(self):
+        code, result, launches, cleanups = self.run_guard(
+            limit=70, allow_70c=True, rows=[telemetry(69), telemetry(69)])
+        self.assertEqual((code, launches, cleanups), (0, 1, 1))
+        self.assertEqual(result["cutoff_temperature_c"], 70)
+        self.assertIs(result["allow_70c"], True)
+
+    def test_opt_in_thermal_cutoff_stops_at_exactly_70_and_cleans_up(self):
+        code, result, launches, cleanups = self.run_guard(
+            limit=70, allow_70c=True,
+            rows=[telemetry(69), telemetry(70), telemetry(69)], polls=[None, 0])
+        self.assertEqual((code, launches, cleanups), (1, 1, 1))
+        self.assertEqual(result["reason"], "thermal_cutoff")
+        self.assertEqual(result["max_temperature_c"], 70)
+        self.assertTrue(result["cleanup_ok"])
+        self.assertTrue(result["gpu_cleanup_ok"])
+
+    def test_limits_above_70_are_rejected_even_with_opt_in(self):
+        for limit in (70.1, 71):
+            with self.subTest(limit=limit), self.assertRaises(SystemExit) as error:
+                self.run_guard(limit=limit, allow_70c=True)
+            self.assertEqual(error.exception.code, 2)
+
+    def test_preflight_records_opt_in_and_blocks_launch_at_70(self):
+        code, result, launches, _ = self.run_guard(
+            limit=70, allow_70c=True, rows=[telemetry(70)])
+        self.assertEqual((code, launches), (1, 0))
+        self.assertEqual(result["reason"], "preflight_blocked")
+        self.assertEqual(result["cutoff_temperature_c"], 70)
+        self.assertIs(result["allow_70c"], True)
 
     def test_missing_live_telemetry_still_cleans_up_and_fails(self):
         code, result, _, cleanups = self.run_guard(

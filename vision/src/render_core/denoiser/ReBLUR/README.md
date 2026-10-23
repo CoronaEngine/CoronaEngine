@@ -1,8 +1,257 @@
 # REBLUR shader implementation
 
-This plugin implements full-resolution RGB diffuse/specular REBLUR in the same
-`Kernel`, `OC_PARAM_STRUCT`, `device.compile` and `CommandBatch` shader API as PT
-and SVGF. Select it explicitly; the existing SVGF and SSAT defaults are unchanged.
+This plugin provides full-resolution RGB diffuse/specular REBLUR. When built
+with `VISION_REBLUR_NATIVE_NRD`, selecting REBLUR uses the Ocarina C++ EDSL
+translation of NRD 4.14.3 by default. The adapter prepares NRD inputs and remodulates its
+outputs; it does not add receiver/material/path identity rejection to NRD.
+Material classification is zero, matching RTXPT's preparation pass. Each of the
+three stable-plane denoisers retains its own NRD history.
+
+The earlier 96-bit identity and exact-token shader experiments have been
+removed from the native path. Their DLL override and token shader deployment
+are no longer used. Native mode allocates current guides and NRD's pools,
+without allocating or compiling the legacy custom filter's histories/scratch.
+`REBLUR_NATIVE_NRD=1` explicitly selects the original HLSL validation reference;
+unset or `0` selects the new original-algorithm Ocarina C++ EDSL port.
+It implements the quality, full-resolution RGB diffuse/specular variant, including
+world-space specular Blur/PostBlur, original history repair and surface/virtual
+reprojection. GPU passes use native R8/RG8 UNORM, R16/RGBA16 float, R16/R32 uint,
+R32 float and RGB10A2 textures with hardware clamp sampling. NRD.dll remains the
+CPU settings/constants/resource scheduler; the EDSL path does not dispatch its
+HLSL shaders. Builds without native NRD retain the older custom filter. Existing
+SVGF and SSAT selections are unchanged.
+
+The same-input replay target is `corona_vision_reblur_replay`. Set
+`REBLUR_REPLAY_BACKEND=native` or `edsl` and use identical
+`REBLUR_REPLAY_WIDTH/HEIGHT` (defaults 1280/720). It uploads immutable inputs once,
+runs three independent histories with 64 warmup and 32 measured frames, and
+downloads outputs after measurement. `REBLUR_REPLAY_OUTPUT_DIR` optionally saves
+the final RGBA32F buffers. `tools/reblur_compare_replay.py` validates the input,
+settings and camera fingerprints before comparing per-pass GPU timings;
+`tools/reblur_compare_outputs.py` compares the saved outputs. A sum of pass queries
+is reported separately from a continuous GPU interval.
+
+`corona_vision_reblur_edsl_tests` checks typed resource behavior and compares eight
+frames across three layers at 1x1, 31x19 and 127x73, including a rotated camera,
+fractional motion and invalid guides. Format-store, matrix and sampler probes
+test the lower-level contracts separately. The numerical tolerance is fixed at
+`0.001 + 0.002 * abs(HLSL)` per component. Compiler floating-point differences can
+cross nearest-tap or history-footprint boundaries; the test reports those as
+failures, rather than treating equal algorithm structure as numerical equivalence.
+
+Validation on 2026-10-22 (RTX 3070 Ti, Vulkan) passes the original stress suite,
+all 72 original small-sequence comparisons plus 72 additional anti-firefly-off
+comparisons, and fresh 720p/1080p same-input replays at the unchanged tolerance.
+Each final capture has 64 warmup and 128 measured frames, three layers and
+250 ms pauses outside queries. EDSL before/after runs use 720p ABBA and 1080p
+BAAB order, with one fresh original-HLSL control per size. All 10 captures match
+input/settings/camera fingerprints. All six EDSL outputs are byte-identical
+before/after and across repeats; native comparisons have zero failed components.
+The canonical CLion engine build and default-EDSL 720p headless run pass, with
+finite RGB, positive mean radiance and successful GPU/process cleanup.
+
+Pack retains the five fixed 16-byte Guide planes and seven aligned vector loads.
+HistoryFix now shares the original 72-tap anti-firefly fast-luma neighborhood:
+each 8x16 group loads a 16x24 luma footprint, using pitch 24 to avoid bank
+overlap in an 8x4 warp footprint. Its original 12x20 frame cache is unchanged.
+The original 240 core entries and 144 disjoint halo entries cover the footprint;
+halo reads are skipped when anti-firefly is disabled. Fast inputs and outputs
+are different transient/permanent textures, so earlier reads cannot alias writes.
+All original clamps, tap order, floating-point expressions, four normalized-mean
+rounding chains and the single unconditional group barrier remain unchanged.
+AF-off coverage includes partial groups and borders; no AF-off speedup is claimed.
+
+Actual SPIR-V retains ten runtime loops, identical ordered float-operation
+signatures and the 8x16 group. Each anti-firefly loop replaces its texture fetch
+with one shared load. Logical shared storage grows from 3840 to 6528 bytes.
+Driver-reported HF registers remain 64; physical shared allocation is
+8448 -> 10112 bytes, and executable size is 79744 -> 78080 bytes. The driver's
+implausible local-memory statistic is not used to infer spills or occupancy.
+
+HistoryFix GPU milliseconds below sum the three layers; all samples are retained:
+
+| Size | Previous mean | Shared-luma mean | Mean change | Previous P95 | Shared-luma P95 | P95 change |
+|---|---:|---:|---:|---:|---:|---:|
+| 720p | 0.622341 | 0.421397 | -32.29% | 0.624640 | 0.421888 | -32.46% |
+| 1080p | 1.471406 | 0.979184 | -33.45% | 2.336512 | 1.409536 | -39.67% |
+
+Both reversed-order pairs improve HF mean and P95 at both sizes. HF P50 falls
+32.57%/32.82%. This is the result for the replay's default anti-firefly-on settings.
+
+Per-stage/query-sum means, in GPU ms over three layers (Pack/Unpack are format
+conversion; NRD_8_pass_query_sum excludes them):
+
+| Stage | 720p HLSL | 720p previous EDSL | 720p shared-luma EDSL | 1080p HLSL | 1080p previous EDSL | 1080p shared-luma EDSL |
+|---|---:|---:|---:|---:|---:|---:|
+| Pack | 0.633 | 0.636 | 0.631 | 1.535 | 1.579 | 1.533 |
+| ClassifyTiles | 0.025 | 0.031 | 0.030 | 0.040 | 0.050 | 0.053 |
+| HitDistReconstruction5x5 | 0.449 | 0.433 | 0.426 | 0.922 | 0.977 | 0.932 |
+| PrePass | 0.789 | 0.621 | 0.639 | 1.655 | 1.493 | 1.467 |
+| TemporalAccumulation | 0.969 | 0.845 | 0.840 | 1.912 | 1.898 | 1.915 |
+| HistoryFix | 0.610 | 0.622 | 0.421 | 1.449 | 1.471 | 0.979 |
+| Blur | 0.653 | 0.610 | 0.586 | 1.274 | 1.380 | 1.366 |
+| PostBlur | 0.548 | 0.581 | 0.602 | 1.269 | 1.370 | 1.329 |
+| TemporalStabilization | 0.305 | 0.341 | 0.340 | 0.687 | 0.780 | 0.743 |
+| Unpack | 0.680 | 0.593 | 0.597 | 1.344 | 1.378 | 1.341 |
+| Pack_Unpack_query_sum | 1.313 | 1.229 | 1.227 | 2.879 | 2.956 | 2.874 |
+| NRD_8_pass_query_sum | 4.348 | 4.084 | 3.884 | 9.208 | 9.418 | 8.785 |
+
+These preceding totals are historical sums of individual pass queries. Native
+BOTTOM_OF_PIPE and EDSL COMPUTE_SHADER pass boundaries differ, so the apparent
+10.67%/4.59% pure-NRD advantage is not a confirmed continuous-timing result.
+
+Fresh matched-boundary continuous measurements use
+`REBLUR_GPU_PROFILE_MODE=intervals` and `REBLUR_GPU_PROFILE=path/to/intervals.csv`
+for both replay backends. Five shared BOTTOM_OF_PIPE samples define:
+
+| Point | Boundary in both backends |
+|---|---|
+| T0 | Before Pack preparation/dispatch |
+| T1 | After Pack and its producer/consumer visibility barrier |
+| T2 | After the final NRD dispatch, before its outgoing dependency barrier |
+| T3 | After Unpack and its output visibility barrier |
+| T4 | After the original resource-state restoration epilogue |
+
+Pack=T1-T0, NRD=T2-T1, Unpack=T3-T2, Epilogue=T4-T3, Filter=T4-T0.
+NRD-to-Unpack dependencies belong to Unpack in both backends. Native explicitly
+flushes its original keepInitialState texture restoration before T4, so close()
+has no remaining GPU restoration; shaders, values and dependency semantics are
+unchanged. EDSL has no equivalent epilogue, so its T3/T4 writes are adjacent.
+All five points are reserved before the layer and read only after its completion
+event/fence. Normal query retirement adds no GPU waits.
+
+Each layer's NRD and Filter are directly measured continuous GPU intervals.
+Reported values sum the three layer intervals; they are not one interval across
+inter-layer submission gaps. Conversion is the sum of the disjoint Pack and
+Unpack intervals. Filter includes Epilogue and is not reconstructed from pass sums.
+Input uploads, output readback, CPU preparation and the existing 250 ms frame pause
+are outside these GPU intervals.
+
+The matched comparison retains all 128 measured frames after 64 warmup frames.
+Four complete processes/backend/resolution use 720p ABBA+BAAB and 1080p BAAB+ABBA
+order (A=original HLSL, B=EDSL), with one frozen replay executable and runtime.
+All 16 captures pass protocol, fingerprint, completion, closure and original
+component-tolerance checks. Every backend's six outputs are byte-identical across
+repeats and to its preceding same-input capture; no numerical work was removed.
+
+Mean GPU ms, three layers:
+
+| Size | Scope | HLSL | EDSL | EDSL change | Faster EDSL pairs |
+|---|---|---:|---:|---:|---:|
+| 720p | Pure NRD | 4.122224 | 4.091868 | -0.74% | 2/4 |
+| 720p | Pack | 0.632038 | 0.640140 | +1.28% | 1/4 |
+| 720p | Unpack | 0.674976 | 0.674653 | -0.05% | 2/4 |
+| 720p | Pack+Unpack | 1.307013 | 1.314793 | +0.60% | 1/4 |
+| 720p | Resource epilogue | 0.000601 | 0.000343 | -43.01% | 4/4 |
+| 720p | Complete Filter | 5.429838 | 5.407004 | -0.42% | 2/4 |
+| 1080p | Pure NRD | 9.136028 | 8.984089 | -1.66% | 4/4 |
+| 1080p | Pack | 1.522849 | 1.576144 | +3.50% | 0/4 |
+| 1080p | Unpack | 1.412231 | 1.397757 | -1.02% | 4/4 |
+| 1080p | Pack+Unpack | 2.935080 | 2.973901 | +1.32% | 0/4 |
+| 1080p | Resource epilogue | 0.000695 | 0.000326 | -53.17% | 4/4 |
+| 1080p | Complete Filter | 12.071803 | 11.958316 | -0.94% | 4/4 |
+
+At 720p, NRD and complete Filter are faster in only two of four EDSL pairs.
+Their paired process intervals cross equality: observed mean reductions of
+0.74% and 0.42% do not establish a repeatable lead. At 1080p, EDSL wins all four
+NRD and Filter pairs: mean reductions are 1.66% and 0.94%. The paired geometric
+EDSL/HLSL 95% intervals are 0.974754..0.992065 (NRD) and
+0.982598..0.998671 (Filter). These use four process pairs, not 512 independent
+frames, and have small-sample/normality assumptions; the conclusion is limited
+to this replay/device/settings.
+
+The 1080p phase decomposition is 0.151939 ms saved inside NRD, 0.038821 ms
+extra for Pack+Unpack and 0.000370 ms less epilogue work, leaving a directly
+measured 0.113488 ms Filter saving. Pack itself is slower in all four EDSL
+1080p pairs. End-to-end improvement is therefore smaller than the core gain.
+
+The concrete implementation reason HF can beat the original HLSL is shared-luma
+reuse, rather than the choice of source language. For a full 128-live-pixel group
+with anti-firefly enabled, the original reads fast textures 480+18432=18912
+logical times; the retained EDSL footprint needs 768 cooperative preload reads
+and no fast-texture fetch inside the AF loops. Texture caches can already merge
+physical traffic, so this is not a proportional DRAM or GPU-time claim. The
+ordered 72-tap reduction and its math are unchanged. The previous controlled
+EDSL before/after comparison establishes the HF optimization's gain; these
+whole-NRD intervals alone do not attribute every fraction of a millisecond to
+cache reuse, compiler generation or backend resource transitions.
+
+New raw captures, frozen hashes, all per-frame/per-layer mean/P50/P95, four-pair
+uncertainty, original strict outputs and source audits are retained under
+`build/recordings/reblur-continuous-20261022/`. `reports/summary.md` and
+`reports/summary.json` are the current matched-boundary results; `plan.json`
+records exact order. Red/green interval probes, legacy-mode probes, the original
+stress suite, interval-mode 144-case oracle, canonical engine build and headless
+default-EDSL run pass. Test processes exit and GPU cleanup succeeds.
+
+The preceding +15.52% HF P95 result is reproduced from its retained captures:
+four isolated delayed layer queries in one 32-frame process shifted the pooled
+tail, while the other layers stayed near their median. That optimization only
+improved HF P50 about 3.7%, so sparse long intervals could hide its mean benefit.
+A fresh same-executable A/A check changes idle-run HF P95 by +31.96% with
+identical medians. Raw GPU ticks agree with the ordinary timing CSV; query
+retirement occurs after its fence. Thus the previous small mean/tail comparison
+does not establish a repeatable shader regression.
+
+The physical cause of those isolated intervals remains unresolved. Affine CPU/GPU
+clock bounds account for roughly 63-70 ppm clock skew; that skew affects absolute
+cross-clock alignment, not measured GPU durations. PDH activity does not establish
+competing-process causation. Rich-versus-temperature-only monitoring preserves
+HF P50 and leaves substantial tails; none of its 28 HF P95 tail frames overlaps
+a timed NVML call, even with a 1 ms post-call window. ETW capture was denied by
+Windows (0x80070005), so no specific preemption source is asserted. The retained
+change reduces shader texture traffic; it does not claim to repair GPU scheduling.
+
+A narrower existing-radius-two reuse attempt added an inner-loop branch and was
+rejected after a 128-frame 1080p run (HF mean 1.911 ms, P50 1.739 ms). The full
+footprint has no per-tap source-selection branch. No guard, tolerance or math
+change was retained from diagnostic hypotheses.
+
+Fresh captures, binary/source hashes, strict outputs, per-frame/per-layer
+mean/P50/P95, A/A and monitor diagnostics, address/alias proofs and SPIR-V checks
+are in `build/recordings/reblur-hf-tail-20261022/`; final results are
+`analysis/final/summary.md` and `summary.json`. `final-plan.json` records order;
+`probe.py` records the actual runtime DLL hashes and `binary-source-provenance.json`
+identifies each saved replay's compiled source. Both EDSL versions use the same
+backend DLL in the final runs, with raw sidecar diagnostics disabled. Reproduction:
+
+```powershell
+python build/recordings/reblur-hf-tail-20261022/run-final.py
+python build/recordings/reblur-hf-tail-20261022/report-final.py --manifest build/recordings/reblur-hf-tail-20261022/final-plan.json --output build/recordings/reblur-hf-tail-20261022/analysis/final
+```
+
+Capture labels must be fresh directories; existing recordings are never overwritten.
+The earlier Pack optimization and continuous-interval reports remain historical in
+`build/recordings/reblur-pack-hf-opt-20261022/`.
+
+The broader `corona_vision_reblur_tests` constant/HDR regressions also pass.
+Their first differing stage was HistoryFix: Slang reassociated the normalized
+mean's square into the raw sum's square times the squared scale. This changed
+near-constant variance and crossed FP16 output boundaries. HistoryFix now
+rounds both the 72-tap anti-firefly mean and the 25-tap local mean before
+squaring, matching the original shader's FP32 operation order for both lobes.
+At 127x73, frame 1, layer 1, pixel (8,25), constant specular B now matches
+0.198364258 instead of 0.199829102. HDR diffuse G at layer 0, pixel (1,4)
+now matches 9968 instead of 9992 for input RGB (50000,10000,30000).
+
+The complete original stress suite, 72-case oracle and fresh 96-frame
+720p/1080p paired replays pass the unchanged component tolerance. Both stress
+captures' first two frames have 86/86 identical stage textures/constants.
+Constant-layer isolation still uses three separate original NRD instances;
+invalid pixels retain exact raw-bit passthrough for both backends. Tests and
+the original HLSL reference are unchanged. Reproduction, before/after snapshots,
+generated instruction checks and binary fingerprints are in
+`build/recordings/reblur-stress-fix-20261022/`.
+
+The retained optimizations use hardware typed textures, dispatch-uniform resource
+indices, lazy read-only parameter loads and an NRD-only dynamic constant UBO,
+plus matched shared-memory layouts and selective HistoryFix unrolling. They
+preserve the resource ABI and filtering settings. Three explicit scalar rounding
+points retain Native's normalized-mean-before-square behavior in TA and TS;
+Slang's reassociation otherwise changed variance, history counters and subsequent
+frames. The native reference also serializes its reset clear dispatches to prevent
+late clears from overwriting the first frame. Diagnostic chronology and moment
+probes used to establish these causes have been removed.
 
 In the editor, select **Vision PT** or **Vision ReSTIR**, choose **REBLUR** in
 the **降噪类型** menu, and check **降噪**. The main viewport and detached camera
@@ -68,6 +317,11 @@ scattering segments, following the pinned RTXPT convention.
 
 ## Stages and reference
 
+The native backend dispatches the original NRD stage descriptions without
+changing their shader arithmetic, sampling budgets or filtering rules. The
+translation details and historical evaluations below describe the legacy
+custom implementation unless explicitly labeled native NRD.
+
 The stage order is ClassifyAndPack, optional HitDistReconstruction, PrePass,
 TemporalAccumulation, HistoryFix, Blur, PostBlur and TemporalStabilization.
 The final stage also stores the post-blur history, updates geometry and
@@ -90,25 +344,41 @@ units; only the internal filter uses NRD normalized hit distances and YCoCg.
 
 | Setting | Default |
 | --- | ---: |
-| max_history | 30 |
+| max_history | 50 |
 | fast_history | 6 |
-| diffuse_prepass | 30 |
-| specular_prepass | 50 |
+| history_fix_frames / history_fix_stride | 3 / 14 |
+| diffuse_prepass | 15 |
+| specular_prepass | 40 |
+| min_radius | 1 |
 | max_radius | 30 |
-| stabilization | 1 |
+| lobe_fraction / roughness_fraction | 0.15 / 0.15 |
+| plane_sensitivity / min_hit_weight | 0.02 / 0.1 |
+| stabilization | 63/64 |
+| antilag_sigma / antilag_sensitivity | 4 / 3 |
 | anti_firefly | true |
+| reconstruction | AREA_5X5 |
 
-Checkerboard is OFF. Reconstruction defaults to OFF because producers provide
-lobe distances and missing supported lobes receive independent guide rays.
-The internal filter also implements 3x3 and 5x5 reconstruction. SH/SG, occlusion,
+These defaults match RTXPT's `NrdConfig::getDefaultREBLURSettings()` preset.
+The public lobe fraction is squared at dispatch, matching NRD's constant setup.
+Checkerboard is OFF. Producers provide lobe distances and independent guide rays
+for missing supported lobes; 5x5 reconstruction is enabled by the matched preset.
+The internal filter also implements OFF and 3x3 reconstruction. SH/SG, occlusion,
 spectral rendering, deforming-object motion and dynamic resolution upsampling
 are outside this RGB variant. Reduced spatial radii trade noise reduction for
 detail; default settings require scene-level assessment for glossy reflections.
-History limits are frame counts; this variant does not adapt settings to measured
-frame duration. Legacy per-layer DirectIndirect diagnostic dumps do not expose
+History limits are frame counts. Antilag sensitivity and stabilization clipping
+use NRD's `max(33.333 / frame_delta_ms, 1)` frame-rate scale. Legacy per-layer
+DirectIndirect diagnostic dumps do not expose
 REBLUR's separate filtered lobe buffers; the evaluation below reads final PFMs.
 
 ## Validation
+
+The native-only test mode is `REBLUR_TEST_BACKEND=native`. It checks guide-only
+allocation, switching storage modes, constants, independent layers, resize,
+invalid-pixel passthrough, HDR and finite outputs. It does not impose the removed
+full 96-bit identity contract on NRD. Numerical tolerances are unchanged; the
+previously observed constant-signal precision failure is reported separately
+from performance results, and later cases still run after an assertion fails.
 
 `VisionReblurTests` executes the actual filter shaders and imported PT/ReSTIR
 scenes. It covers color and distance packing, colored lobe ownership, constant

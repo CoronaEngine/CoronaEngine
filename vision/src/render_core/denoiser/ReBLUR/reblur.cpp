@@ -2,9 +2,36 @@
 #include "base/mgr/pipeline.h"
 #include "base/integral/integrator.h"
 #include "utils.h"
+#ifdef VISION_REBLUR_NATIVE_NRD
+#include "rhi/context.h"
+#endif
 
 namespace vision::reblur {
 namespace {
+#ifdef VISION_REBLUR_NATIVE_NRD
+void store_native_matrix(std::array<float, 16> &destination, const float4x4 &matrix) {
+    for (uint column = 0; column != 4u; ++column)
+        for (uint row = 0; row != 4u; ++row)
+            destination[column * 4u + row] = matrix[column][row];
+}
+
+void update_native_camera(NativeCameraParams &camera, const float4x4 &world_to_raster,
+                          const float4x4 &camera_to_world, uint2 size, bool restart, double frame_delta_ms) {
+    camera.world_to_view_prev = camera.world_to_view;
+    camera.view_to_clip_prev = camera.view_to_clip;
+    const auto raster_to_clip = make_float4x4(
+        make_float4(2.f / size.x, 0.f, 0.f, 0.f),
+        make_float4(0.f, -2.f / size.y, 0.f, 0.f),
+        make_float4(0.f, 0.f, 1.f, 0.f), make_float4(-1.f, 1.f, 0.f, 1.f));
+    store_native_matrix(camera.world_to_view, inverse(camera_to_world));
+    store_native_matrix(camera.view_to_clip, raster_to_clip * world_to_raster * camera_to_world);
+    if (restart) {
+        camera.world_to_view_prev = camera.world_to_view;
+        camera.view_to_clip_prev = camera.view_to_clip;
+    }
+    camera.frame_delta_ms = frame_delta_ms > 0. ? static_cast<float>(frame_delta_ms) : 1000.f / 60.f;
+}
+#endif
 Settings read_settings(const DataWrap &data, Settings s) {
     auto read = [&](const char *key, float current, float low, float high) {
         const auto it = data.find(key);
@@ -88,9 +115,17 @@ void ReBLUR::render_sub_UI(Widgets *widgets) noexcept {
     if (widgets->check_box("turn on", &on)) { set_enabled(on); changed_ = true; }
 }
 void ReBLUR::compile() noexcept {
+#ifdef VISION_REBLUR_NATIVE_NRD
+    native_.reset();
+    edsl_.reset();
+    if (NativeReblur::requested())
+        native_ = make_shared<NativeReblur>(device().context()->runtime_directory() / "reblur-native");
+    else
+        edsl_ = make_shared<EdslReblur>(device());
+#endif
     auto &camera = scene().sensor(); auto &sampler = renderer().sampler();
     Kernel guides = [&](Var<GuideParam> p) {
-        auto output = p.output.soa_view_var<Guide>();
+        auto output = guide_view(p.output);
         Uint i = dispatch_id();
         $if(p.layered != 0u) {
             // Test the small validity field before loading the surface, camera
@@ -122,6 +157,30 @@ void ReBLUR::compile() noexcept {
             valid = plane.valid != 0u && hit->is_hit();
             branch = plane.branch_sequence; instance_hash = guide_instance(hit.inst_id, plane.instance_hash);
             motion = plane.motion;
+#ifdef VISION_REBLUR_NATIVE_NRD
+            if (native_ || edsl_) {
+                // RTXPT relaxes disocclusion and roughness where extended
+                // stable paths diverge. Store its R8 mix in spare validity bits.
+                $if(plane.depth > 0u && valid) {
+                    Float divergence = 0.f;
+                    Float3 direction = normalize(plane.extension.final_direction.as_vec3());
+                    Int2 pixel = make_int2(i % p.size.x, i / p.size.x);
+                    for (const int2 offset : {make_int2(-1, 0), make_int2(1, 0),
+                                               make_int2(0, -1), make_int2(0, 1)}) {
+                        Int2 neighbor_pixel = clamp(pixel + offset, make_int2(0), make_int2(p.size) - 1);
+                        Uint neighbor_index = cast<uint>(neighbor_pixel.y) * p.size.x + cast<uint>(neighbor_pixel.x);
+                        auto neighbor = p.planes.read(neighbor_index);
+                        $if(neighbor.valid == 0u || neighbor.branch_sequence == InvalidUI32) {
+                            divergence += .02f;
+                        } $else {
+                            divergence += 1.f - dot(direction, normalize(neighbor.extension.final_direction.as_vec3()));
+                        };
+                    }
+                    Float mix = saturate((divergence - .00002f) * 25.f);
+                    g.identity.w = 1u | (cast<uint>(mix * 255.f + .5f) << 8u);
+                };
+            }
+#endif
         } $else {
             $if(p.stable != 0u) {
                 surface = p.surfaces.read(i); hit = surface.hit;
@@ -135,7 +194,7 @@ void ReBLUR::compile() noexcept {
         $if(valid) {
             auto it = pipeline()->geometry().compute_surface_interaction(hit, eye);
             g.position = make_float4(it.pos, camera->linear_depth(it.pos));
-            g.identity = make_uint4(instance_hash, it.material_id(), branch, 1u);
+            g.identity = make_uint4(instance_hash, it.material_id(), branch, g.identity.w | 1u);
             $if(it.has_material()) {
                 SampledWavelengths swl{spectrum()->dimension()};
                 scene().materials().dispatch(it.material_id(), [&](const Material *material) {
@@ -189,7 +248,11 @@ void ReBLUR::compile() noexcept {
         p.indirect.write(i, make_RadType4(p.specular.read(i).xyz(), 1.f));
     };
     publish_ = device().compile(publish, "REBLUR-PublishPT");
-    filter_->compile(device()); coverage_->compile();
+#ifdef VISION_REBLUR_NATIVE_NRD
+    if (!native_ && !edsl_)
+#endif
+        filter_->compile(device());
+    coverage_->compile();
     frame_ = InvalidUI32;
 }
 
@@ -205,12 +268,21 @@ CommandBatch ReBLUR::dispatch(RealTimeDenoiseInput &input) noexcept {
         OC_ERROR("REBLUR requires explicit diffuse/specular radiance and world-space hit distances");
         return ret;
     }
-    filter_->prepare(device(), input.resolution, input.layer_count);
+#ifdef VISION_REBLUR_NATIVE_NRD
+    if (native_ || edsl_) filter_->prepare_native(device(), input.resolution);
+    else
+#endif
+        filter_->prepare(device(), input.resolution, input.layer_count);
     const auto &camera = scene().sensor();
     if (frame_ != input.frame_index || camera_revision_ != camera->external_camera_revision()) {
-        if (frame_ == InvalidUI32 || frame_ + 1u != input.frame_index || fov_ != camera->fov_y() ||
-            projection_revision_ != camera->external_projection_revision()) filter_->reset();
+        const bool restart = frame_ == InvalidUI32 || frame_ + 1u != input.frame_index || fov_ != camera->fov_y() ||
+                             projection_revision_ != camera->external_projection_revision();
+        if (restart) filter_->reset();
         previous_raster_ = current_raster_; current_raster_ = camera->host_world_to_raster();
+#ifdef VISION_REBLUR_NATIVE_NRD
+        if (native_ || edsl_) update_native_camera(native_camera_, current_raster_, camera->host_c2w(),
+                                           input.resolution, restart, pipeline()->frame_delta_ms());
+#endif
         frame_ = input.frame_index; fov_ = camera->fov_y();
         camera_revision_ = camera->external_camera_revision();
         projection_revision_ = camera->external_projection_revision();
@@ -219,6 +291,7 @@ CommandBatch ReBLUR::dispatch(RealTimeDenoiseInput &input) noexcept {
     gp.visibility = input.visibility.descriptor(); gp.motion = input.motion_vec.descriptor();
     gp.planes = input.stable_planes.descriptor(); gp.surfaces = input.stable_surfaces.descriptor();
     gp.extensions = frame_buffer().cur_surface_exts_view(input.frame_index).descriptor();
+    gp.size = input.resolution;
     gp.layered = input.layer_count > 1u; gp.stable = input.use_stable_planes; gp.frame = input.frame_index;
     gp.output = filter_->guides().descriptor();
     gp.diffuse = input.lobe_signals.diffuse_radiance_hitdist.descriptor();
@@ -232,6 +305,18 @@ CommandBatch ReBLUR::dispatch(RealTimeDenoiseInput &input) noexcept {
     p.camera = input.camera_pos; p.prev_camera = input.prev_camera_pos;
     p.world_to_raster = current_raster_; p.prev_world_to_raster = previous_raster_;
     p.unproject = 2.f * std::tan(radians(camera->fov_y()) * .5f) / static_cast<float>(input.resolution.y);
+    const auto frame_delta_ms = pipeline()->frame_delta_ms();
+    p.frame_rate_scale = frame_delta_ms > 0.0 ? std::max(33.333f / static_cast<float>(frame_delta_ms), 1.f) : 1.f;
+#ifdef VISION_REBLUR_NATIVE_NRD
+    if (native_) {
+        p = filter_->native_parameters(p, input.layer_index);
+        ret << native_->dispatch(p, native_camera_, input.layer_index, filter_->settings,
+                                  p.history_valid == 0u, filter_);
+    } else if (edsl_) {
+        p = filter_->native_parameters(p, input.layer_index);
+        ret << edsl_->dispatch(p, native_camera_, input.layer_index, filter_->settings, p.history_valid == 0u);
+    } else
+#endif
     ret << filter_->dispatch(p, input.layer_index);
     if (input.channel_kind == RealTimeDenoiseInput::ChannelKind::DiffuseSpecular) {
         PublishParam pp;

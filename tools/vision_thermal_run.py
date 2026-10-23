@@ -148,11 +148,14 @@ def main():
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--cwd", type=Path, required=True)
     parser.add_argument("--limit", type=float, default=54)
+    parser.add_argument("--allow-70c", action="store_true",
+                        help="Explicitly allow a selected temperature limit up to 70 C")
     parser.add_argument("--seconds", type=float, default=600)
     parser.add_argument("command", nargs=argparse.REMAINDER)
     args = parser.parse_args()
-    if not 40 <= args.limit <= 60:
-        parser.error("Use a limit between 40 and 60 C")
+    maximum_limit = 70 if args.allow_70c else 60
+    if not 40 <= args.limit <= maximum_limit:
+        parser.error(f"Use a limit between 40 and {maximum_limit} C")
     command = args.command[1:] if args.command[:1] == ["--"] else args.command
     if not command:
         parser.error("Missing command")
@@ -169,6 +172,7 @@ def main():
             raise RuntimeError("GPU is at the temperature limit before launch")
     except Exception as error:
         summary = dict(backend="vulkan-compute", command=command, reason="preflight_blocked",
+                       cutoff_temperature_c=args.limit, allow_70c=args.allow_70c,
                        error=str(error), returncode=None, cleanup_ok=True, gpu_cleanup_ok=False)
         (args.output / "run.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
         print(json.dumps(summary), flush=True)
@@ -263,6 +267,7 @@ def main():
                        binary_fingerprints=binary_fingerprints,
                        telemetry="nvml" if _monitor else "nvidia-smi",
                        max_temperature_c=maximum, cutoff_temperature_c=args.limit,
+                       allow_70c=args.allow_70c,
                        elapsed_s=time.monotonic() - start,
                        returncode=process.returncode if process else None, cleanup_ok=cleanup_ok,
                        gpu_cleanup_ok=gpu_cleanup_ok, remaining_gpu_processes=remaining,

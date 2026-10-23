@@ -56,6 +56,17 @@ foreach(_plugin IN LISTS _vision_plugins)
         COMMAND_EXPAND_LISTS VERBATIM
     )
 endforeach()
+if(VISION_REBLUR_NATIVE_NRD)
+    add_custom_command(TARGET corona_engine_vision_runtime POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory
+            "$<TARGET_FILE_DIR:corona_engine>/reblur-native"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "$<TARGET_FILE_DIR:vision-denoiser-ReBLUR>/reblur-native/NativeReblurPack.spv"
+            "$<TARGET_FILE_DIR:vision-denoiser-ReBLUR>/reblur-native/NativeReblurUnpack.spv"
+            "$<TARGET_FILE_DIR:corona_engine>/reblur-native"
+        VERBATIM
+    )
+endif()
 add_custom_command(TARGET corona_engine_vision_runtime POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory
         "$<TARGET_FILE_DIR:ocarina-backend-vulkan-compute>/slang"

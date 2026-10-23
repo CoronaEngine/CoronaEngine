@@ -6,9 +6,24 @@ void Filter::reset() noexcept {
     for (auto &layer : layers_) layer.frame = InvalidUI32;
 }
 
+void Filter::prepare_native(Device &device, uint2 size) {
+    const bool resized = size_.x != size.x || size_.y != size.y;
+    if (resized || history_.size() != 0u) {
+        reset();
+        history_ = {};
+        diffuse_ = {}; specular_ = {};
+        fast_ = {}; tracking_ = {}; tiles_ = {};
+        for (auto &layer : layers_) { layer.guide = {}; layer.history = {}; }
+    }
+    size_ = size;
+    const auto guide_bytes = size_t(size.x) * size.y * sizeof(Guide);
+    if (guide_.size() != guide_bytes)
+        guide_ = device.create_byte_buffer(guide_bytes, "REBLUR current geometry SOA");
+}
+
 void Filter::prepare(Device &device, uint2 size, uint layer_count) {
     const uint n = size.x * size.y;
-    if (size_.x != size.x || size_.y != size.y) {
+    if (size_.x != size.x || size_.y != size.y || history_.size() != size_t(n) * sizeof(TemporalData)) {
         size_ = size;
         reset();
         for (uint i = 0; i < 2; ++i) {
@@ -40,6 +55,15 @@ void Filter::compile(Device &device) {
     reset();
 }
 
+FilterParam Filter::native_parameters(FilterParam p, uint layer) {
+    auto &state = layers_[layer];
+    p.size = size_;
+    p.history_valid &= state.frame != InvalidUI32 && state.frame + 1u == p.frame;
+    p.guide = guide_.descriptor();
+    state.frame = p.frame;
+    return p;
+}
+
 CommandBatch Filter::dispatch(FilterParam p, uint layer) {
     auto &state = layers_[layer];
     p.size = size_;
@@ -53,7 +77,7 @@ CommandBatch Filter::dispatch(FilterParam p, uint layer) {
     p.fix_frames = settings.history_fix_frames; p.fix_stride = settings.history_fix_stride;
     p.diffuse_prepass = settings.diffuse_prepass; p.specular_prepass = settings.specular_prepass;
     p.min_radius = settings.min_radius; p.max_radius = settings.max_radius;
-    p.lobe_fraction = settings.lobe_fraction; p.roughness_fraction = settings.roughness_fraction;
+    p.lobe_fraction = settings.lobe_fraction * settings.lobe_fraction; p.roughness_fraction = settings.roughness_fraction;
     p.plane_sensitivity = settings.plane_sensitivity; p.min_hit_weight = settings.min_hit_weight;
     p.stabilization = settings.stabilization; p.antilag_sigma = settings.antilag_sigma;
     p.antilag_sensitivity = settings.antilag_sensitivity; p.anti_firefly = settings.anti_firefly;
@@ -63,6 +87,9 @@ CommandBatch Filter::dispatch(FilterParam p, uint layer) {
         p.dst_diffuse = diffuse_[dst].descriptor(); p.dst_specular = specular_[dst].descriptor();
     };
     CommandBatch commands;
+    // Every lane in a shared-memory workgroup must reach its preload barrier.
+    const uint2 neighborhood_size = make_uint2((size_.x + 15u) / 16u * 16u,
+                                               (size_.y + 7u) / 8u * 8u);
     bind(1u, 0u);
     commands << pack_(p).dispatch(uint(tiles_.size()) * 32u);
     uint src = 0u;
@@ -70,11 +97,11 @@ CommandBatch Filter::dispatch(FilterParam p, uint layer) {
         bind(src, src ^ 1u); commands << reconstruct_(p).dispatch(size_); src ^= 1u;
     }
     bind(src, src ^ 1u); commands << prepass_(p).dispatch(size_); src ^= 1u;
-    bind(src, src ^ 1u); commands << temporal_(p).dispatch(size_); src ^= 1u;
-    bind(src, src ^ 1u); commands << fix_(p).dispatch(size_); src ^= 1u;
+    bind(src, src ^ 1u); commands << temporal_(p).dispatch(neighborhood_size); src ^= 1u;
+    bind(src, src ^ 1u); commands << fix_(p).dispatch(neighborhood_size); src ^= 1u;
     bind(src, src ^ 1u); commands << blur_(p).dispatch(size_); src ^= 1u;
     bind(src, src ^ 1u); commands << post_blur_(p).dispatch(size_); src ^= 1u;
-    bind(src, src ^ 1u); commands << stabilize_(p).dispatch(size_);
+    bind(src, src ^ 1u); commands << stabilize_(p).dispatch(neighborhood_size);
     state.frame = p.frame;
     return commands;
 }
