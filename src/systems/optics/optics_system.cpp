@@ -1,4 +1,5 @@
 #include "native_material.h"
+#include "native_camera.h"
 #include <corona/utils/runtime_paths.h>
 #include <corona/utils/scene_path_key.h>
 #include <corona/diagnostics/thread_phase.h>
@@ -332,6 +333,7 @@ struct RenderInstanceBatch {
         std::vector<Corona::Horizon::HardwareBuffer> index_storage_buffers;
         std::vector<Corona::Horizon::HardwareImage> sampled_textures;
         std::vector<std::shared_ptr<const Corona::MeshMaterialDevice>> model_materials;
+        std::vector<std::shared_ptr<Corona::Systems::OpticsDetail::NativeAppearance>> appearances;
     };
 
     std::vector<Hardware::InstanceInfo> instances;
@@ -515,12 +517,13 @@ struct OpticsEventViewport {
 }
 
 
-[[nodiscard]] Corona::Horizon::RasterizerPipelineDesc make_visibility_pipeline_desc() {
+[[nodiscard]] Corona::Horizon::RasterizerPipelineDesc make_visibility_pipeline_desc(bool reversed_depth = true) {
     Corona::Horizon::RasterizerPipelineDesc desc;
     // 新版 Horizon: shader 在构造 RasterizerPipeline 时传入，不在 desc 中设置
     desc.depth_test_enabled = true;
     desc.depth_write_enabled = true;
-    desc.depth_compare_op = Corona::Horizon::CompareOp::LessOrEqual;
+    desc.depth_compare_op = reversed_depth ? Corona::Horizon::CompareOp::GreaterOrEqual
+                                          : Corona::Horizon::CompareOp::LessOrEqual;
     // 新版没有 cull_mode 字段，默认行为
     desc.blend_enabled = false;  // opaque
     desc.clear_depth_target = true;
@@ -1169,27 +1172,6 @@ void apply_pending_camera_releases() {
 
 [[nodiscard]] ktm::fvec4 make_vec4(const ktm::fvec3& v, float w) {
     return ktm::fvec4{v.x, v.y, v.z, w};
-}
-
-[[nodiscard]] ktm::fmat4x4 make_inverse_projection_matrix(
-    const Corona::CameraDevice& camera) {
-    const ktm::fmat4x4 proj = camera.compute_projection_matrix();
-    const float sx = proj[0][0];
-    const float sy = proj[1][1];
-    const float depth_scale = proj[2][2];
-    const float depth_bias = proj[3][2];
-    if (std::abs(sx) < 1e-6f || std::abs(sy) < 1e-6f ||
-        std::abs(depth_bias) < 1e-6f) {
-        return ktm::fmat4x4::from_eye();
-    }
-
-    ktm::fmat4x4 inv{};
-    inv[0][0] = 1.0f / sx;
-    inv[1][1] = 1.0f / sy;
-    inv[3][2] = 1.0f;
-    inv[2][3] = 1.0f / depth_bias;
-    inv[3][3] = -depth_scale / depth_bias;
-    return inv;
 }
 
 [[nodiscard]] ktm::fvec3 add_vec3(const ktm::fvec3& a, const ktm::fvec3& b) {
@@ -3211,7 +3193,7 @@ bool OpticsSystem::initialize_render_pipelines() {
         hardware_->uiVisibilityPipeline.emplace(
             visibility_vert_glsl_t{},
             visibility_frag_glsl_t{},
-            make_visibility_pipeline_desc());
+            make_visibility_pipeline_desc(false));
         const auto shadow_desc = make_shadow_pipeline_desc();
         for (auto& shadow_pipeline : hardware_->shadowPipelines) {
             shadow_pipeline.emplace(
@@ -3370,6 +3352,7 @@ void OpticsSystem::bind_native_view_resources(std::uintptr_t camera_handle,
         resources.visibility =
             make_storage_image(width, height, Horizon::Format::RG32_UINT, "optics.native_visibility");
         resources.depth = make_depth_image(width, height, "optics.native_depth");
+        resources.depth.set_clear_depth(0.0f, 0);
         resources.visibility_pipeline.emplace(make_visibility_pipeline_desc());
         resources.visibility_pipeline->visibilityData = resources.visibility;
         resources.visibility_pipeline->bind_depth_target(resources.depth);
@@ -3935,10 +3918,11 @@ void OpticsSystem::optics_pipeline(float frame_count, uint64_t frame_index) {
                 hardware_->uniformBufferObjects.eyePosition = make_vec4(camera->position, 1.0f);
                 hardware_->uniformBufferObjects.eyeDir = make_vec4(camera->forward, 0.0f);
                 hardware_->uniformBufferObjects.eyeViewMatrix = camera->compute_view_matrix();
-                hardware_->uniformBufferObjects.eyeProjMatrix = camera->compute_projection_matrix();
+                hardware_->uniformBufferObjects.eyeProjMatrix = OpticsDetail::native_projection(*camera);
                 hardware_->uniformBufferObjects.eyeInvProjMatrix =
-                    make_inverse_projection_matrix(*camera);
-                hardware_->vpUniformBufferObjects.viewProjMatrix = camera->compute_view_proj_matrix();
+                    OpticsDetail::native_inverse_projection(*camera);
+                hardware_->vpUniformBufferObjects.viewProjMatrix =
+                    multiply_ktm_mat4(OpticsDetail::native_projection(*camera), camera->compute_view_matrix());
 
                 // ---- Per-submission buffer ���ã�������֡/��������� buffer ���Ǿ�����----
                 // �ӳظ���һ�ݵ�ǰ�� GPU ���õ� buffer������� pass ȫ�̸�����Щ lease��
@@ -4184,6 +4168,16 @@ void OpticsSystem::optics_pipeline(float frame_count, uint64_t frame_index) {
                                 batch.materials.push_back(Corona::Systems::OpticsDetail::pack_native_material(
                                     ms, optics, texture_descriptor, diag.disable_textures || diag.force_solid_material,
                                     optics.bEnableLighting && !diag.force_solid_material));
+                                if (optics.principled && !diag.disable_textures && !diag.force_solid_material) {
+                                    auto appearance=hardware_->appearance_cache.obtain(optics.principled);
+                                    if (appearance) {
+                                        auto& packed=batch.materials.back();
+                                        // Bit 6 changes occlusionDescriptor into an expression-program SSBO.
+                                        packed.flags|=64u;
+                                        packed.occlusionDescriptor=appearance->program.store_descriptor();
+                                        batch.resource_keep_alive->appearances.push_back(std::move(appearance));
+                                    }
+                                }
                                 log_optics_material_once(actor_handle,
                                                          optics.geometry_handle,
                                                          ms.mesh_index,
@@ -4892,7 +4886,17 @@ void OpticsSystem::optics_pipeline(float frame_count, uint64_t frame_index) {
                         if (!is_debug_mode && sky_sh_needs_update) {
                             stream << hardware_->skySHProjectPipeline->dispatch_extent(1, 1);
                         }
-                        stream << lighting.dispatch_extent(hardware_->gbufferSize.x, hardware_->gbufferSize.y);
+                        lighting.dispatch_extent(hardware_->gbufferSize.x, hardware_->gbufferSize.y);
+                        RenderDetail::IndirectDispatch material_dispatch{&lighting};
+                        std::unordered_set<uint32_t> material_programs, material_images;
+                        for (const auto& appearance : sceneBatch.resource_keep_alive->appearances) {
+                            if (material_programs.insert(appearance->program.store_descriptor()).second)
+                                material_dispatch.buffers.push_back(appearance->program);
+                            for (const auto& image : appearance->images)
+                                if (material_images.insert(image->image.store_descriptor()).second)
+                                    material_dispatch.images.push_back(image->image);
+                        }
+                        stream << material_dispatch;
                         if (!is_debug_mode) {
                             stream << sky.dispatch_extent(hardware_->gbufferSize.x, hardware_->gbufferSize.y)
                                    << tonemap.dispatch_extent(hardware_->gbufferSize.x, hardware_->gbufferSize.y);
@@ -5547,7 +5551,8 @@ void OpticsSystem::process_vision_actor_pick(std::uintptr_t camera_handle,
     bind_native_view_resources(camera_handle, camera.width, camera.height, frame_index);
     auto& visibility = *native_view_resources_.at(camera_handle)->visibility_pipeline;
 
-    hardware_->vpUniformBufferObjects.viewProjMatrix = camera.compute_view_proj_matrix();
+    hardware_->vpUniformBufferObjects.viewProjMatrix =
+        multiply_ktm_mat4(OpticsDetail::native_projection(camera), camera.compute_view_matrix());
     (void)write_object_bytes(hardware_->vpUniformBuffer,
                              hardware_->vpUniformBufferObjects);
     const uint32_t scene_vp_descriptor = hardware_->vpUniformBuffer.store_descriptor();

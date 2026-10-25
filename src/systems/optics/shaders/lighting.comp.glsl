@@ -229,6 +229,55 @@ MaterialInfo loadMaterialInfo(uint materialID)
     return mat;
 }
 
+// Imported scene expressions are immutable postfix programs. Per-image UV,
+// encoding and wrapping are preserved instead of baking a repeating UV tile.
+ivec2 appearanceTexel(ivec2 p, ivec2 size, uint wrap) {
+    if (wrap == 1u) return clamp(p,ivec2(0),size-1);
+    if (wrap == 2u) {
+        p=((p%(2*size))+2*size)%(2*size);
+        return min(p,2*size-1-p);
+    }
+    return ((p%size)+size)%size;
+}
+vec3 appearancePixel(uint tex, ivec2 p, ivec2 size, uint wrap) {
+    if (wrap==3u && (any(lessThan(p,ivec2(0))) || any(greaterThanEqual(p,size)))) return vec3(0);
+    return texelFetch(textures[nonuniformEXT(tex)],appearanceTexel(p,size,wrap),0).rgb;
+}
+void evaluateAppearance(inout MaterialInfo matl, vec2 uv, out vec3 color, out vec3 normalMap) {
+    uint buf=matl.occlusionDescriptor;
+    vec3 values[128];
+    uint count=min(readUint(buf,0u),128u);
+    for (uint i=0u;i<count;++i) {
+        uint b=16u+i*24u;
+        uint op=readUint(buf,b);
+        uint a=readUint(buf,b+1u), c=readUint(buf,b+2u), t=readUint(buf,b+3u);
+        vec3 value=readVec3(buf,b+4u);
+        vec2 q=vec2(dot(readVec3(buf,b+8u),vec3(uv,1)),dot(readVec3(buf,b+11u),vec3(uv,1)));
+        if (op==1u) {
+            uint tex=readUint(buf,b+7u),wrap=readUint(buf,b+17u);
+            ivec2 size=textureSize(textures[nonuniformEXT(tex)],0);
+            vec2 p=q*vec2(size)-0.5;
+            ivec2 at=ivec2(floor(p));vec2 f=fract(p);
+            if (readUint(buf,b+18u)==1u) value=appearancePixel(tex,ivec2(floor(q*vec2(size))),size,wrap);
+            else value=mix(mix(appearancePixel(tex,at,size,wrap),appearancePixel(tex,at+ivec2(1,0),size,wrap),f.x),
+                mix(appearancePixel(tex,at+ivec2(0,1),size,wrap),appearancePixel(tex,at+ivec2(1,1),size,wrap),f.x),f.y);
+        } else if (op==2u) value=values[a]*values[c];
+        else if (op==3u) value=mix(values[a],values[c],values[t].x);
+        else if (op==4u) value=sqrt(max(values[a],vec3(0)));
+        else if (op==5u) {
+            ivec2 cell=ivec2(floor(q*readFloat(buf,b+19u)));
+            value=((cell.x+cell.y)&1)==0 ? values[a]:values[c];
+        }
+        values[i]=value;
+    }
+    color=values[readUint(buf,1u)];matl.roughness=values[readUint(buf,2u)].x;
+    matl.metallic=values[readUint(buf,3u)].x;matl.sheenTint=values[readUint(buf,4u)].x;
+    matl.emissive=values[readUint(buf,5u)];normalMap=values[readUint(buf,6u)];
+    matl.clearcoat=values[readUint(buf,7u)].x;matl.clearcoatGloss=1.0-values[readUint(buf,8u)].x;
+    matl.normalDescriptor=readUint(buf,9u); // boolean for an expression normal, not a texture descriptor
+    matl.occlusionDescriptor=0u;
+}
+
 // ============================================================================
 // Vertex layout (32 bytes = 8 floats)
 // ============================================================================
@@ -696,6 +745,8 @@ bool decodeSurface(ivec2 pixel, out Surface surface)
 
     // --- Sample material ---
     vec4 baseColor = matl.materialColor;
+    vec3 expressionNormal=vec3(0.5,0.5,1);
+    if ((matl.flags & 64u)!=0u) evaluateAppearance(matl,interpUV,baseColor.rgb,expressionNormal);
     if (matl.textureDescriptor != 0u && pushConsts.disableAlbedoSample == 0u)
     {
         vec4 texSample = fetchMaterialTexture(matl.textureDescriptor, interpUV, uvDx, uvDy);
@@ -752,7 +803,8 @@ bool decodeSurface(ivec2 pixel, out Surface surface)
     matl.anisotropic = clamp(matl.anisotropic, 0.0, 0.99);
     vec3 geometricNormal = interpNormal;
     if (matl.normalDescriptor != 0u && matl.normalScale != 0.0) {
-        vec3 mapped = fetchMaterialTexture(matl.normalDescriptor, interpUV, uvDx, uvDy).xyz * 2.0 - 1.0;
+        vec3 mapped = ((matl.flags & 64u)!=0u ? expressionNormal :
+            fetchMaterialTexture(matl.normalDescriptor, interpUV, uvDx, uvDy).xyz) * 2.0 - 1.0;
         mapped.xy *= matl.normalScale;
         if (finiteVec3(mapped) && dot(mapped,mapped) > 1e-8)
             interpNormal = normalize(mat3(T,B,interpNormal) * normalize(mapped));
@@ -814,7 +866,7 @@ float ambientOcclusion(ivec2 pixel, Surface surface) {
         ivec2 q = pixel + ivec2(round(disk[i] * radiusPixels));
         if (any(lessThan(q,ivec2(0))) || any(greaterThanEqual(q,ivec2(pushConsts.gbufferSize))) || all(equal(q,pixel))) continue;
         float d = texelFetch(textures[nonuniformEXT(pushConsts.depthImageIndex)], q, 0).r;
-        if (d >= 1.0) continue;
+        if (d <= 0.0) continue;
         vec3 delta = viewPosition(q,d,inverseProjection) - p;
         float distance2 = dot(delta,delta);
         if (distance2 < 1e-8 || distance2 >= radius*radius) continue;
@@ -845,7 +897,7 @@ bool traceReflection(Surface source, vec3 direction, out Surface hit, out float 
     vec3 ray = mat3(view) * direction;
     float distance = pushConsts.ssrMaxDistance;
     // Clip rays before the camera near plane, avoiding negative/zero clip W.
-    float nearPlane = abs(viewPosition(ivec2(pushConsts.gbufferSize / 2u), 0.0, inverseProjection).z);
+    float nearPlane = abs(viewPosition(ivec2(pushConsts.gbufferSize / 2u), 1.0, inverseProjection).z);
     if (ray.z < 0.0) distance = min(distance, (a.z - nearPlane * 1.01) / -ray.z);
     if (distance <= 0.02) return false;
     vec3 b = a + ray * distance;
@@ -877,7 +929,7 @@ bool traceReflection(Surface source, vec3 direction, out Surface hit, out float 
     float previousZ = a.z;
     ivec2 firstPixel = ivec2(pa);
     float firstDepth = texelFetch(textures[nonuniformEXT(pushConsts.depthImageIndex)],firstPixel,0).r;
-    bool previousValid = firstDepth < 1.0;
+    bool previousValid = firstDepth > 0.0;
     float previousGap = a.z - viewPosition(firstPixel,firstDepth,inverseProjection).z;
     for (uint i = 1u; i <= steps; ++i) {
         float t = float(i) / float(steps);
@@ -886,7 +938,7 @@ bool traceReflection(Surface source, vec3 direction, out Surface hit, out float 
         ivec2 ip = ivec2(pixel);
         float z = mix(qa,qb,t).z / mix(ka,kb,t);
         float depth = texelFetch(textures[nonuniformEXT(pushConsts.depthImageIndex)],ip,0).r;
-        if (depth < 1.0) {
+        if (depth > 0.0) {
             float sceneZ = viewPosition(ip,depth,inverseProjection).z;
             float thickness = max(pushConsts.ssrThickness, abs(sceneZ) * 0.001);
             float gap = z-sceneZ;
@@ -905,7 +957,7 @@ bool traceReflection(Surface source, vec3 direction, out Surface hit, out float 
                     // change faster than ray Z on a slope, including rays toward
                     // the eye; ray direction alone cannot select the half interval.
                     bool crossed = (mz >= sz) != startsBehind;
-                    if (md < 1.0 && crossed) hi=mid; else lo=mid;
+                    if (md > 0.0 && crossed) hi=mid; else lo=mid;
                 }
                 vec2 hp = mix(pa,pb,hi);
                 ivec2 hitPixel = ivec2(hp);
@@ -914,7 +966,7 @@ bool traceReflection(Surface source, vec3 direction, out Surface hit, out float 
                 float hitZ = viewPosition(hitPixel,hd,inverseProjection).z;
                 float gap = hz - hitZ;
                 thickness = max(pushConsts.ssrThickness, abs(hitZ)*0.001);
-                if (hd < 1.0 && gap >= -thickness*0.25 && gap <= thickness &&
+                if (hd > 0.0 && gap >= -thickness*0.25 && gap <= thickness &&
                     decodeSurface(hitPixel,hit) && dot(hit.normal,direction) < -0.05 &&
                     length(hit.position-source.position) > 0.05) {
                     vec2 uv = hp / vec2(pushConsts.gbufferSize);
@@ -925,7 +977,7 @@ bool traceReflection(Surface source, vec3 direction, out Surface hit, out float 
             }
             previousGap = gap;
         }
-        previousValid = depth < 1.0;
+        previousValid = depth > 0.0;
         previousT = t;
         previousZ = z;
     }

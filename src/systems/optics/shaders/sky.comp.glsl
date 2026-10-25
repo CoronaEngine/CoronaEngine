@@ -193,7 +193,7 @@ void main()
                                    ivec2(gl_GlobalInvocationID.xy), 0).r;
 
     // Only render sky for pixels without geometry
-    if (gbufferDepth < 1.0) {
+    if (gbufferDepth > 0.0) {
         return;
     }
 

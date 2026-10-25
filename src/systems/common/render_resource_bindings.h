@@ -43,4 +43,14 @@ struct RetainSubmission {
     void record(Horizon::CommandRecorder& recorder) const;
 };
 
+// Indirect bindless handles (for example, textures indexed by a material SSBO)
+// still need barriers and submission lifetime tracking. These dependencies do
+// not occupy push-constant slots or change the shader's descriptor ABI.
+struct IndirectDispatch {
+    Horizon::ComputePipelineBase* pipeline;
+    std::vector<Horizon::HardwareBuffer> buffers;
+    std::vector<Horizon::HardwareImage> images;
+    void record(Horizon::CommandRecorder& recorder) const;
+};
+
 } // namespace Corona::Systems::RenderDetail

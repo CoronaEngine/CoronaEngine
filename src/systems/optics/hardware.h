@@ -7,6 +7,7 @@
 #include "Codegen/CustomLibrary.h"
 #include "Codegen/TypeAlias.h"
 #include "native_frame_throttle.h"
+#include "native_appearance.h"
 
 #include <array>
 #include <cstdint>
@@ -106,6 +107,7 @@ private:
 };
 
 struct Hardware {
+    Corona::Systems::OpticsDetail::NativeAppearanceCache appearance_cache;
     Corona::Systems::OpticsDetail::NativeFrameThrottle native_frame_throttle;
     // === Visibility Buffer (replaces GBuffer rasterization output) ===
     Corona::Horizon::HardwareImage visibilityImage;  // RG32_UINT: R=instanceID, G=primitiveID
@@ -261,11 +263,11 @@ struct Hardware {
         uint32_t normalDescriptor{};
         uint32_t metallicDescriptor{};
         uint32_t roughnessDescriptor{};
-        uint32_t occlusionDescriptor{};
+        uint32_t occlusionDescriptor{}; // With flags bit 6: immutable appearance program SSBO
         uint32_t emissiveDescriptor{};
         uint32_t specularDescriptor{};
         uint32_t specularColorDescriptor{};
-        uint32_t flags{}; // metal channel[1:0], rough channel[3:2], double-sided[4], imported MR[5]
+        uint32_t flags{}; // metal channel[1:0], rough channel[3:2], double-sided[4], imported MR[5], expression program[6]
         std::array<float, 3> emissive{0.0f, 0.0f, 0.0f};
         float normalScale{1.0f};
         std::array<float, 3> specularColor{1.0f, 1.0f, 1.0f};

@@ -66,8 +66,9 @@ inline Hardware::MaterialInfo pack_native_material(const GeometrySystem::MeshSlo
         ((material.source.roughness_channel & 3u) << 2u) | (value.double_sided ? 16u : 0u) | 32u;
     if (optics.principled) {
         // Source scene appearance replaces unrelated OBJ/PLY material slots.
-        // The raster preview consumes the shared constant factors; texture
-        // expressions and light transport are evaluated by the Vision bridge.
+        // Constant factors also provide the fallback when textures are disabled.
+        // The native collector attaches the shared appearance program separately
+        // from the model's own texture descriptors.
         result.textureDescriptor=0u;
         result.anisotropic=optics.principled->anisotropic;
         return result;
