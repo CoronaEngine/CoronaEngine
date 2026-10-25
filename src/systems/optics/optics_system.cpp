@@ -1,5 +1,6 @@
 #include "native_material.h"
 #include "native_camera.h"
+#include "native_light_data.h"
 #include <corona/utils/runtime_paths.h>
 #include <corona/utils/scene_path_key.h>
 #include <corona/diagnostics/thread_phase.h>
@@ -334,6 +335,7 @@ struct RenderInstanceBatch {
         std::vector<Corona::Horizon::HardwareImage> sampled_textures;
         std::vector<std::shared_ptr<const Corona::MeshMaterialDevice>> model_materials;
         std::vector<std::shared_ptr<Corona::Systems::OpticsDetail::NativeAppearance>> appearances;
+        std::shared_ptr<Corona::Systems::OpticsDetail::NativeLighting> direct_lighting;
     };
 
     std::vector<Hardware::InstanceInfo> instances;
@@ -2442,14 +2444,13 @@ using RenderDetail::bind_sampled_image;
 using RenderDetail::bind_storage_buffer;
 
 namespace {
-constexpr auto kScreenshotRequestTimeout = std::chrono::seconds(10);
+// A cold native capture may first build the full-scene shadow BVH on the CPU.
+constexpr auto kScreenshotRequestTimeout = std::chrono::seconds(30);
 }
 
 struct OpticsSystem::NativeViewResources {
     Horizon::HardwareImage visibility;
     Horizon::HardwareImage depth;
-    std::optional<Horizon::RasterizerPipeline<visibility_vert_glsl_t, visibility_frag_glsl_t>>
-        visibility_pipeline;
     uint32_t width = 0;
     uint32_t height = 0;
     uint64_t last_used_frame = 0;
@@ -3206,6 +3207,7 @@ bool OpticsSystem::initialize_render_pipelines() {
         hardware_->skySHProjectPipeline.emplace(sky_sh_project_comp_glsl, ktm::uvec3(64, 1, 1));
         hardware_->tonemapPipeline.emplace(tonemap_comp_glsl, ktm::uvec3(8, 8, 1));
         hardware_->actorPickPipeline.emplace(actor_pick_comp_glsl, ktm::uvec3(1, 1, 1));
+        hardware_->screenshotReadbackPipeline.emplace(image_readback_comp_glsl, ktm::uvec3(8, 8, 1));
         hardware_->opticsOverlayPipeline.emplace(optics_overlay_comp_glsl, ktm::uvec3(8, 8, 1));
         hardware_->opticsGizmoPipeline.emplace(optics_gizmo_comp_glsl, ktm::uvec3(8, 8, 1));
         hardware_->opticsCursorPipeline.emplace(optics_cursor_comp_glsl, ktm::uvec3(8, 8, 1));
@@ -3344,8 +3346,7 @@ void OpticsSystem::bind_native_view_resources(std::uintptr_t camera_handle,
     }
     auto& resources = *resources_ptr;
     if (resources.width != width || resources.height != height ||
-        !resources.visibility || !resources.depth ||
-        !resources.visibility_pipeline) {
+        !resources.visibility || !resources.depth) {
         if (hardware_->last_receipt.serial != 0) {
             hardware_->executor.wait_idle(hardware_->last_receipt);
         }
@@ -3353,9 +3354,6 @@ void OpticsSystem::bind_native_view_resources(std::uintptr_t camera_handle,
             make_storage_image(width, height, Horizon::Format::RG32_UINT, "optics.native_visibility");
         resources.depth = make_depth_image(width, height, "optics.native_depth");
         resources.depth.set_clear_depth(0.0f, 0);
-        resources.visibility_pipeline.emplace(make_visibility_pipeline_desc());
-        resources.visibility_pipeline->visibilityData = resources.visibility;
-        resources.visibility_pipeline->bind_depth_target(resources.depth);
         resources.width = width;
         resources.height = height;
     }
@@ -3365,6 +3363,12 @@ void OpticsSystem::bind_native_view_resources(std::uintptr_t camera_handle,
     hardware_->gbufferSize.y = height;
     hardware_->visibilityImage = resources.visibility;
     hardware_->depthImage = resources.depth;
+    // Draw recording snapshots attachments and resources into each submission.
+    // Cameras need distinct images, but share the same immutable pipeline state.
+    // Keeping it alive also avoids Horizon's device-wide idle on pipeline
+    // destruction racing the display queue when a camera closes or is evicted.
+    hardware_->visibilityPipeline->visibilityData = resources.visibility;
+    hardware_->visibilityPipeline->bind_depth_target(resources.depth);
 
     // UI visibility/depth �ɹ��� helper ͳһ���䲢�󶨣�Native �� Vision ͬԴ����
 
@@ -3909,8 +3913,7 @@ void OpticsSystem::optics_pipeline(float frame_count, uint64_t frame_index) {
                 }
                 bind_native_view_resources(cam_handle, camera->width, camera->height,
                                            frame_index);
-                auto& native_resources = *native_view_resources_.at(cam_handle);
-                auto& visibility = *native_resources.visibility_pipeline;
+                auto& visibility = *hardware_->visibilityPipeline;
 
                 // ================================================================
                 // 1. Update camera uniform buffers
@@ -4591,9 +4594,12 @@ void OpticsSystem::optics_pipeline(float frame_count, uint64_t frame_index) {
                 sun_dir.z = 1.0f;
                 std::uint32_t floor_grid_enabled = 1;
                 ktm::fvec3 sun_color{1.0f, 0.949f, 0.853f};
-                float sun_intensity = 10.0f;
-                float sky_intensity = 20.0f;
+                float sun_intensity = 0.0f;
+                float sky_intensity = 0.0f;
                 float exposure = 1.0f;
+                EnvironmentDevice native_environment;
+                native_environment.sun_intensity=0.f;
+                native_environment.sky_intensity=0.f;
                 if (scene.environment != 0) {
                     if (auto env = SharedDataHub::instance().environment_storage().try_acquire_read(
                             scene.environment)) {
@@ -4603,12 +4609,21 @@ void OpticsSystem::optics_pipeline(float frame_count, uint64_t frame_index) {
                         sun_intensity = env->sun_intensity;
                         sky_intensity = env->sky_intensity;
                         exposure = env->exposure;
+                        native_environment=*env;
                     }
                 }
                 if (ktm::length(sun_dir) < 1e-5f) {
                     sun_dir = make_vec3(1.0f, 1.0f, 1.0f);
                 }
                 sun_dir = ktm::normalize(sun_dir);
+                auto direct_lighting=hardware_->lighting_cache.obtain(scene,native_environment,
+                    compute_vision_scene_signature(),hardware_->appearance_cache);
+                sceneBatch.resource_keep_alive->direct_lighting=direct_lighting;
+                if (direct_lighting->authored_environment) {
+                    // All authored directional lights are evaluated below, so
+                    // the legacy first-sun approximation must not add energy.
+                    sun_intensity=0.f;sky_intensity=0.f;
+                }
 
                 const bool needs_shadow = !is_debug_mode ||
                     camera->output_mode == CameraOutputMode::ShadowMask ||
@@ -4691,7 +4706,7 @@ void OpticsSystem::optics_pipeline(float frame_count, uint64_t frame_index) {
                 bind_sampled_image(lighting, lighting.pushConsts.depthImageIndex, hardware_->depthImage);
                 bind_storage_buffer(lighting, lighting.pushConsts.instanceInfoBufferIndex, sceneInstanceBuffer);
                 bind_storage_buffer(lighting, lighting.pushConsts.materialTableBufferIndex, sceneMaterialBuffer);
-                bind_storage_buffer(lighting, lighting.pushConsts.vpBufferIndex, sceneVpBuffer);
+                bind_storage_buffer(lighting, lighting.pushConsts.directLightingBufferIndex, direct_lighting->data);
                 bind_storage_buffer(lighting, lighting.pushConsts.uniformBufferIndex, sceneUboBuffer);
                 bind_storage_buffer(lighting, lighting.pushConsts.shadowInfoBufferIndex, sceneShadowBuffer);
                 bind_storage_buffer(lighting, lighting.pushConsts.skyIrradianceSHBufferIndex, hardware_->skyIrradianceSHBuffer);
@@ -4700,7 +4715,10 @@ void OpticsSystem::optics_pipeline(float frame_count, uint64_t frame_index) {
                 lighting.pushConsts.materialCount = sceneMaterialCount;
                 lighting.pushConsts.featureFlags = (should_run_ssao ? 1u : 0u) |
                     ((!loading_guard && !env_flag_enabled("CORONA_OPTICS_DISABLE_SSR")) ? 2u : 0u) |
-                    (kSkyAmbientEnabled ? 4u : 0u) | (camera->shadow_cascade_debug ? 8u : 0u);
+                    (kSkyAmbientEnabled ? 4u : 0u) | (camera->shadow_cascade_debug ? 8u : 0u) |
+                    (direct_lighting->authored_environment ? 16u : 0u) |
+                    (OpticsDetail::LightData::sample_budget(uint64_t(hardware_->gbufferSize.x)*hardware_->gbufferSize.y,
+                        direct_lighting->triangles) << 16u);
                 bind_sampled_image(lighting, lighting.pushConsts.shadowMap0, hardware_->shadowCascadeImages[0]);
                 bind_sampled_image(lighting, lighting.pushConsts.shadowMap1, hardware_->shadowCascadeImages[1]);
                 bind_sampled_image(lighting, lighting.pushConsts.shadowMap2, hardware_->shadowCascadeImages[2]);
@@ -4752,6 +4770,8 @@ void OpticsSystem::optics_pipeline(float frame_count, uint64_t frame_index) {
                 sky.pushConsts.floor_grid_enabled = floor_grid_enabled;
                 sky.pushConsts.cameraFov = camera->fov;
                 sky.pushConsts.sky_intensity = sky_intensity;
+                sky.pushConsts.authoredEnvironment = direct_lighting->authored_environment ? 1u : 0u;
+                bind_sampled_image(sky, sky.pushConsts.environmentImage, direct_lighting->environment);
 
                 // ================================================================
                 // 7. Tonemap pass: ACES filmic HDR �� LDR
@@ -4888,8 +4908,11 @@ void OpticsSystem::optics_pipeline(float frame_count, uint64_t frame_index) {
                         }
                         lighting.dispatch_extent(hardware_->gbufferSize.x, hardware_->gbufferSize.y);
                         RenderDetail::IndirectDispatch material_dispatch{&lighting};
+                        material_dispatch.images.push_back(direct_lighting->environment);
                         std::unordered_set<uint32_t> material_programs, material_images;
-                        for (const auto& appearance : sceneBatch.resource_keep_alive->appearances) {
+                        auto light_appearances=direct_lighting->appearances;
+                        light_appearances.insert(light_appearances.end(),sceneBatch.resource_keep_alive->appearances.begin(),sceneBatch.resource_keep_alive->appearances.end());
+                        for (const auto& appearance : light_appearances) {
                             if (material_programs.insert(appearance->program.store_descriptor()).second)
                                 material_dispatch.buffers.push_back(appearance->program);
                             for (const auto& image : appearance->images)
@@ -5549,7 +5572,7 @@ void OpticsSystem::process_vision_actor_pick(std::uintptr_t camera_handle,
     }
 
     bind_native_view_resources(camera_handle, camera.width, camera.height, frame_index);
-    auto& visibility = *native_view_resources_.at(camera_handle)->visibility_pipeline;
+    auto& visibility = *hardware_->visibilityPipeline;
 
     hardware_->vpUniformBufferObjects.viewProjMatrix =
         multiply_ktm_mat4(OpticsDetail::native_projection(camera), camera.compute_view_matrix());
@@ -5747,7 +5770,9 @@ void OpticsSystem::process_pending_screenshots(std::uintptr_t camera_handle,
         // Capture-only staging: four bytes per pixel, never a persistent image.
         auto staging = make_storage_buffer<std::uint32_t>(
             pixel_count, "optics.screenshot_staging", Horizon::CpuAccessMode::Read);
-        Horizon::ComputePipeline readback(image_readback_comp_glsl, ktm::uvec3{8,8,1});
+        // Reuse the pipeline: destroying a temporary Horizon pipeline invokes
+        // vkDeviceWaitIdle while the display thread may be submitting work.
+        auto& readback = *hardware_->screenshotReadbackPipeline;
         bind_storage_image(readback, readback.pc.inputImage, render_target);
         bind_storage_buffer(readback, readback.pc.outputBuffer, staging);
         readback.pc.size = upload_value(ktm::uvec2{w,h});

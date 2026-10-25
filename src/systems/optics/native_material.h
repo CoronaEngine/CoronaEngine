@@ -71,6 +71,7 @@ inline Hardware::MaterialInfo pack_native_material(const GeometrySystem::MeshSlo
         // from the model's own texture descriptors.
         result.textureDescriptor=0u;
         result.anisotropic=optics.principled->anisotropic;
+        if (optics.principled->emission_two_sided) result.flags|=128u;
         return result;
     }
     if (!disable_textures) {

@@ -8,6 +8,7 @@
 #include "Codegen/TypeAlias.h"
 #include "native_frame_throttle.h"
 #include "native_appearance.h"
+#include "native_lighting.h"
 
 #include <array>
 #include <cstdint>
@@ -108,6 +109,7 @@ private:
 
 struct Hardware {
     Corona::Systems::OpticsDetail::NativeAppearanceCache appearance_cache;
+    Corona::Systems::OpticsDetail::NativeLightingCache lighting_cache;
     Corona::Systems::OpticsDetail::NativeFrameThrottle native_frame_throttle;
     // === Visibility Buffer (replaces GBuffer rasterization output) ===
     Corona::Horizon::HardwareImage visibilityImage;  // RG32_UINT: R=instanceID, G=primitiveID
@@ -165,6 +167,7 @@ struct Hardware {
     std::optional<Corona::Horizon::ComputePipeline<sky_sh_project_comp_glsl_t>> skySHProjectPipeline;
     std::optional<Corona::Horizon::ComputePipeline<tonemap_comp_glsl_t>> tonemapPipeline;
     std::optional<Corona::Horizon::ComputePipeline<actor_pick_comp_glsl_t>> actorPickPipeline;
+    std::optional<Corona::Horizon::ComputePipeline<image_readback_comp_glsl_t>> screenshotReadbackPipeline;
     std::optional<Corona::Horizon::ComputePipeline<optics_overlay_comp_glsl_t>> opticsOverlayPipeline;
     std::optional<Corona::Horizon::ComputePipeline<optics_gizmo_comp_glsl_t>> opticsGizmoPipeline;
     std::optional<Corona::Horizon::ComputePipeline<optics_cursor_comp_glsl_t>> opticsCursorPipeline;

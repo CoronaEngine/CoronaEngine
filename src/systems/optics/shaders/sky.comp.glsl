@@ -17,6 +17,8 @@ layout(push_constant) uniform PushConsts
     uint floor_grid_enabled;
     float cameraFov;
     float sky_intensity;
+    uint authoredEnvironment;
+    uint environmentImage;
 } pushConsts;
 
 layout(set = 1, binding = 0) buffer UniformBufferObject
@@ -214,7 +216,20 @@ void main()
     vec3 rayOrigin = cam_origin;
     vec3 rayDir = normalize(fwd + up * cam_local_point.y + right * cam_local_point.x);
 
-    vec3 renderResult = getAtmosphericSky(rayOrigin, rayDir, pushConsts.sun_dir, pushConsts.sky_intensity);
+    vec3 renderResult = vec3(0);
+    if (pushConsts.authoredEnvironment != 0u) {
+        const float pi=3.141592653589793;
+        vec2 uv=vec2(fract(atan(-rayDir.z,rayDir.x)/(2*pi)),acos(clamp(rayDir.y,-1.0,1.0))/pi);
+        ivec2 size=textureSize(textures[nonuniformEXT(pushConsts.environmentImage)],0);
+        vec2 p=uv*vec2(size)-.5;ivec2 at=ivec2(floor(p));vec2 f=fract(p);
+        renderResult=vec3(0);
+        for(int y=0;y<2;++y) for(int x=0;x<2;++x) {
+            ivec2 q=at+ivec2(x,y);q.x=(q.x%size.x+size.x)%size.x;q.y=clamp(q.y,0,size.y-1);
+            renderResult+=texelFetch(textures[nonuniformEXT(pushConsts.environmentImage)],q,0).rgb*(x==0?1-f.x:f.x)*(y==0?1-f.y:f.y);
+        }
+    } else if (pushConsts.sky_intensity > 0.0) {
+        renderResult = getAtmosphericSky(rayOrigin, rayDir, pushConsts.sun_dir, pushConsts.sky_intensity);
+    }
 
     // Floor grid overlay
     if (pushConsts.floor_grid_enabled != 0u)
