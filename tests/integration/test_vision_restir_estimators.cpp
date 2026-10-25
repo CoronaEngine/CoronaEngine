@@ -28,6 +28,8 @@
 #endif
 
 void check_restir_reprojection(vision::Pipeline& pipeline);
+void check_stable_plane_store_oracle(vision::Pipeline& pipeline, const char* label);
+void check_restir_reservoir_lifetimes(vision::Pipeline& pipeline);
 void check_stable_plane(vision::Pipeline& pipeline, bool tinted_mirror = true);
 void check_stable_emitter_coverage(vision::Pipeline& pipeline);
 void check_glass_svgf(vision::Pipeline& pipeline);
@@ -35,6 +37,8 @@ void check_glass_runtime_depth(vision::Pipeline&, vision::Pipeline&, unsigned);
 void check_restir_material_reuse(vision::Pipeline& pipeline, const std::vector<vision::SurfaceData>& surfaces);
 void check_restir_gi_depth_one_continuation(vision::Pipeline& pipeline);
 void check_restir_gi_receiver_support(vision::Pipeline& pipeline);
+void check_restir_gi_receiver_positions(vision::Pipeline& pipeline, const char* label,
+                                       bool require_replaced = false, bool require_jacobian = false);
 void check_glass_transport_energy(vision::Pipeline& pipeline, unsigned recursion, const char* label);
 void check_glass_depth_guides(vision::Pipeline& pipeline);
 void check_glass_children_disappear(vision::Pipeline& pipeline);
@@ -428,7 +432,7 @@ int main() {
     try {
         // Three full-resolution planes and their history amplify alignment
         // gaps into hundreds of MiB. Keep all attributes at full precision.
-        constexpr size_t surface_bytes = 2u * (sizeof(vision::SurfaceData) + sizeof(vision::SurfaceExtend)) +
+        constexpr size_t surface_bytes = 2u * sizeof(vision::SurfaceData) + sizeof(vision::SurfaceExtend) + sizeof(vision::SurfaceExtendHistory) +
             vision::StablePlaneCount * (sizeof(vision::StablePlaneData) + sizeof(vision::StablePlaneHistory));
         std::cout << "ReSTIR surface storage bytes/pixel=" << surface_bytes << '\n';
         expect(surface_bytes <= 1760u, "ReSTIR surface storage exceeds its full-precision budget");
@@ -496,10 +500,12 @@ int main() {
             }
         };
         check(check_restir_reprojection, *reused_pipeline);
+        check(check_restir_reservoir_lifetimes, *reused_pipeline);
         check(check_restir_gi_depth_one_continuation, *direct_pipeline);
         const auto support_pipeline = vision::Importer::import_scene(fixture / "support.json");
         expect(bool(support_pipeline), "could not import the tilted receiver support fixture");
         check(check_restir_gi_receiver_support, *support_pipeline);
+        check([](vision::Pipeline& p) { check_restir_gi_receiver_positions(p, "tilted-geometry"); }, *support_pipeline);
         // Capture real ReSTIR surface guides, including material/texture evaluation.
         // Equal geometry must not hide a material boundary; similar separately
         // imported materials must remain reusable regardless of their identities.
@@ -567,6 +573,11 @@ int main() {
             }
         }
         check_restir_material_reuse(*material_pipeline, material_surfaces);
+        for (const unsigned index : {0u, 3u, 12u, 14u}) {
+            std::cout << "GI position material index=" << index << '\n';
+            check([](vision::Pipeline& p) { check_restir_gi_receiver_positions(p, "material-diffuse-substrate-spectral-normal-map"); },
+                  *material_fixtures[index]);
+        }
         write_file(fixture / "glass-front.obj", "v -4 -4 -1\nv 4 -4 -1\nv 0 4 -1\nvn 0 0 1\nf 1//1 2//1 3//1\n");
         write_file(fixture / "glass-back-target.obj", "v -4 -4 -3\nv 4 -4 -3\nv 0 4 -3\nvn 0 0 1\nf 1//1 2//1 3//1\n");
         write_file(fixture / "glass-front-target.obj", "v -4 -4 1\nv 0 4 1\nv 4 -4 1\nvn 0 0 -1\nf 1//1 2//1 3//1\n");
@@ -588,6 +599,7 @@ int main() {
         check_glass_planes(*glass_pipeline, *glass_pipeline->frame_buffer());
         check_glass_transport_energy(*glass_pipeline, 5u, "two-sided");
         check_glass_depth_guides(*glass_pipeline);
+        check([](vision::Pipeline& p) { check_restir_gi_receiver_positions(p, "glass", false, true); }, *glass_pipeline);
         write_file(fixture / "glass-rear.obj", "v -4 -4 -1.2\nv 0 4 -1.2\nv 4 -4 -1.2\nvn 0 0 -1\nf 1//1 2//1 3//1\n");
         std::vector<vision::SP<vision::Pipeline>> glass_fixtures;
         auto run_glass_variant = [&](vision::DataWrap description, unsigned recursion, const char* label) {
@@ -716,6 +728,7 @@ int main() {
         expect(std::abs(reflected.normal_depth.w - 3.f) < 1e-4f,
                "stable plane depth must describe the virtual image behind the mirror");
         check_stable_plane(*mirror_pipeline);
+        check([](vision::Pipeline& p) { check_restir_gi_receiver_positions(p, "mirror", true, true); }, *mirror_pipeline);
         auto mirror_emitter_scene = mirror_scene;
         mirror_emitter_scene["scene"]["shapes"].back()["param"]["emission"] = vision::DataWrap::parse(
             R"({"type":"area","param":{"color":[1,0.5,0.25],"scale":2}})");
@@ -804,6 +817,7 @@ int main() {
                    std::abs(metal.pos_diff.z - 1.f) < 1e-4f && std::abs(metal.normal_depth.w - 3.f) < 1e-4f,
                "low-roughness metal must use stable endpoint guides without any mirror material in the scene");
         check_stable_plane(*metal_pipeline, false);
+        check([](vision::Pipeline& p) { check_restir_gi_receiver_positions(p, "stable-metal", true, true); }, *metal_pipeline);
         const char* rejected_materials[] = {
             R"({"type":"metal","param":{"material_name":"Cr","roughness":0.3,"remapping_roughness":false}})",
             R"({"type":"metal","param":{"material_name":"Cr","roughness":0.002,"remapping_roughness":false,"normal":{"node":"tilted","channels":"xyz"}},"node_tab":{"tilted":{"type":"number","param":{"value":[0.6,0,0.8]}}}})",
@@ -837,6 +851,10 @@ int main() {
         fs::remove(fixture / "mirror-receiver.obj");
         fs::remove(fixture / "material.json");
         expect(!regression_failed, "ReSTIR regression checks failed");
+        // Capture only after normal regressions; both retained pipelines and
+        // their required scene files remain alive until the cleanup below.
+        check_stable_plane_store_oracle(*direct_pipeline, "diffuse");
+        check_stable_plane_store_oracle(*glass_pipeline, "glass");
         // Remove only the files this test created; preserve the fixture on failure.
         fs::remove(fixture / "direct.json");
         fs::remove(fixture / "indirect.json");

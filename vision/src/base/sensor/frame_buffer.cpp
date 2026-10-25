@@ -240,6 +240,29 @@ void FrameBuffer::compile() noexcept {
     compile_compute_hit();
     compile_accumulation();
     compile_tone_mapping();
+    compile_surface_exts_history();
+}
+
+void FrameBuffer::compile_surface_exts_history() noexcept {
+    // Copy words rather than performing FP operations, preserving every FP32
+    // bit (including signed zero and NaN payloads) in the receiver position.
+    Kernel kernel = [](BufferVar<uint> current, BufferVar<uint> previous) {
+        Uint index = dispatch_id();
+        constexpr uint stride = sizeof(SurfaceExtend) / sizeof(uint);
+        constexpr uint offset = offsetof(SurfaceExtend, view_pos) / sizeof(uint);
+        for (uint component = 0u; component < 3u; ++component) {
+            previous.write(index * 3u + component, current.read(index * stride + offset + component));
+        }
+    };
+    save_surface_exts_history_ = device().compile(kernel, "FrameBuffer-SaveSurfaceExtHistory");
+}
+
+CommandBatch FrameBuffer::save_surface_exts_history(uint frame_index) const noexcept {
+    CommandBatch ret;
+    if (frame_index == 0u || surface_exts_size() == 0u || surface_ext_history_size() == 0u) { return ret; }
+    ret << save_surface_exts_history_(surface_exts_.view_as<uint>(), surface_ext_history_.view_as<uint>())
+               .dispatch(frame_buffer_size());
+    return ret;
 }
 
 CommandBatch FrameBuffer::compute_hit(uint frame_index, uint2 pixel) const noexcept {
@@ -374,19 +397,21 @@ void FrameBuffer::resize(ocarina::uint2 res) noexcept {
     resolution_ = res;
 }
 
-void FrameBuffer::manage_stable_plane_buffers(bool enabled) noexcept {
+void FrameBuffer::manage_stable_plane_buffers(bool enabled, bool retain_history) noexcept {
     stable_plane_buffers_enabled_ = enabled;
+    stable_plane_history_retained_ = retain_history;
     uint pixels = enabled ? frame_buffer_size() : 1u;
-    auto resize = [&]<typename T>(RegistrableBuffer<T> &buffer, uint count, const char *name) {
-        if (buffer.size() == count * pixels) { return; }
-        init_buffer_impl(buffer, buffer.has_registered(), name, count, pixels);
+    uint history_pixels = enabled && retain_history ? frame_buffer_size() : 1u;
+    auto resize = [&]<typename T>(RegistrableBuffer<T> &buffer, uint count, uint view_pixels, const char *name) {
+        if (buffer.size() == count * view_pixels) { return; }
+        init_buffer_impl(buffer, buffer.has_registered(), name, count, view_pixels);
     };
-    resize(stable_planes_, StablePlaneCount, "FrameBuffer::stable_planes");
-    resize(stable_plane_history_, StablePlaneCount, "FrameBuffer::stable_plane_history");
-    resize(stable_direct_, StablePlaneCount, "FrameBuffer::stable_direct");
-    resize(stable_indirect_, StablePlaneCount, "FrameBuffer::stable_indirect");
-    resize(stable_radiance_, 1u, "FrameBuffer::stable_radiance");
-    resize(stable_dominant_, 1u, "FrameBuffer::stable_dominant");
+    resize(stable_planes_, StablePlaneCount, pixels, "FrameBuffer::stable_planes");
+    resize(stable_plane_history_, StablePlaneCount, history_pixels, "FrameBuffer::stable_plane_history");
+    resize(stable_direct_, StablePlaneCount, pixels, "FrameBuffer::stable_direct");
+    resize(stable_indirect_, StablePlaneCount, pixels, "FrameBuffer::stable_indirect");
+    resize(stable_radiance_, 1u, pixels, "FrameBuffer::stable_radiance");
+    resize(stable_dominant_, 1u, pixels, "FrameBuffer::stable_dominant");
 }
 
 void FrameBuffer::update_resolution(ocarina::uint2 res) noexcept {
@@ -396,7 +421,8 @@ void FrameBuffer::update_resolution(ocarina::uint2 res) noexcept {
     resize(res);
     reset_surfaces();
     reset_surface_exts();
-    if (stable_planes_.has_registered()) { manage_stable_plane_buffers(stable_plane_buffers_enabled_); }
+    reset_surface_ext_history();
+    if (stable_planes_.has_registered()) { manage_stable_plane_buffers(stable_plane_buffers_enabled_, stable_plane_history_retained_); }
     reset_motion_vectors();
     reset_hit_bsdfs();
     reset_rt_buffer();

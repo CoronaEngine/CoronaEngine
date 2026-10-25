@@ -60,7 +60,7 @@ endif()
 
 if(TARGET ocarina-backend-vulkan-compute)
     find_package(Vulkan REQUIRED)
-    foreach(_probe IN ITEMS native_callback shared_array compute_math_parity)
+    foreach(_probe IN ITEMS native_callback shared_array compute_math_parity storage_parity runtime_parity_extended)
         set(_target corona_ocarina_${_probe}_tests)
         add_executable(${_target}
             ${CMAKE_SOURCE_DIR}/.workspace/Horizon/modules/ocarina/tests/runtime/test_${_probe}.cpp)
@@ -148,6 +148,7 @@ set_tests_properties(VisionEmbeddedModeSwitchTests PROPERTIES
 add_executable(corona_vision_restir_estimator_tests
     test_vision_restir_estimators.cpp
     test_vision_restir_reprojection.cpp
+    test_vision_restir_reservoir_lifetimes.cpp
     test_vision_restir_continuation.cpp
     test_vision_glass_transport.cpp
     test_vision_restir_support.cpp)

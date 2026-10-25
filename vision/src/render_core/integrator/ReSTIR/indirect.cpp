@@ -127,6 +127,7 @@ void ReSTIRGI::compile_initial_samples() noexcept {
         GISampleVar sample = init_sample(it, ss, hit_bsdf);
         samples_.write(dispatch_id(), sample);
     };
+    kernel.function()->set_block_dim(32u, 1u, 1u);
     initial_samples_ = device().compile(kernel, "ReSTIR indirect initial samples");
 }
 
@@ -325,9 +326,9 @@ GIReservoirVar ReSTIRGI::constant_combine(const GIReservoirVar &canonical_rsv,
         Float weight = 0.f;
         $if(rsv.W > 0.f && rsv.sample.sp->valid()) {
             SurfaceDataVar neighbor_surf = cur_surfaces().read(idx);
-            Interaction neighbor_it = pipeline()->geometry().compute_surface_interaction(neighbor_surf.hit, cur_view_pos(neighbor_surf.is_replaced, idx));
+            Float3 neighbor_pos = neighbor_surf->position();
             Float p_hat = compute_p_hat(canonical_it, rsv.sample);
-            p_hat = p_hat * Jacobian_det(canonical_it.pos, neighbor_it.pos, rsv.sample.sp);
+            p_hat = p_hat * Jacobian_det(canonical_it.pos, neighbor_pos, rsv.sample.sp);
             $if(p_hat > 0.f) {
                 Float v = pipeline()->geometry().visibility(canonical_it, rsv.sample.sp->position());
                 weight = GIReservoir::safe_weight(rsv.C, p_hat, rsv.W) * v;
@@ -446,6 +447,7 @@ void ReSTIRGI::compile_spatial_shading() noexcept {
         if (lobes) frame_buffer().denoiser_gi_specular().write(dispatch_id(), make_float4(specular, distance));
         cur_reservoirs().write(dispatch_id(), rsv);
     };
+    kernel.function()->set_block_dim(8u, 8u, 1u);
     spatial_shading_ = device().compile(kernel, "ReSTIR indirect spatial reuse and shading");
 }
 
@@ -484,12 +486,11 @@ CommandBatch ReSTIRGI::dispatch(uint frame_index) const noexcept {
 
 void ReSTIRGI::update_resolution(ocarina::uint2 res) noexcept {
     Pipeline *rp = pipeline();
-    reservoirs_.super() = device().create_buffer<GIReservoir>(rp->pixel_num() * 3,
-                                                              "ReSTIRGI::reservoirs_ x 3");
+    reservoirs_.super() = device().create_buffer<GIReservoir>(rp->pixel_num() * 2,
+                                                              "ReSTIRGI::reservoirs_ x 2");
     reservoirs_.register_self(0, rp->pixel_num());
     reservoirs_.register_view_index(1, rp->pixel_num(), rp->pixel_num());
-    reservoirs_.register_view_index(2, rp->pixel_num() * 2, rp->pixel_num());
-    vector<GIReservoir> host{rp->pixel_num() * 3, GIReservoir{}};
+    vector<GIReservoir> host{rp->pixel_num() * 2, GIReservoir{}};
     reservoirs_.upload_immediately(host.data());
 
     samples_.super() = device().create_buffer<GISample>(rp->pixel_num(),
@@ -505,12 +506,11 @@ void ReSTIRGI::prepare() noexcept {
 
     frame_buffer().prepare_screen_buffer(radiance_);
 
-    reservoirs_.super() = device().create_buffer<GIReservoir>(rp->pixel_num() * 3,
-                                                              "ReSTIRGI::reservoirs_ x 3");
+    reservoirs_.super() = device().create_buffer<GIReservoir>(rp->pixel_num() * 2,
+                                                              "ReSTIRGI::reservoirs_ x 2");
     reservoirs_.register_self(0, rp->pixel_num());
     reservoirs_.register_view(rp->pixel_num(), rp->pixel_num());
-    reservoirs_.register_view(rp->pixel_num() * 2, rp->pixel_num());
-    vector<GIReservoir> host{rp->pixel_num() * 3, GIReservoir{}};
+    vector<GIReservoir> host{rp->pixel_num() * 2, GIReservoir{}};
     reservoirs_.upload_immediately(host.data());
 
     samples_.super() = device().create_buffer<GISample>(rp->pixel_num(),
