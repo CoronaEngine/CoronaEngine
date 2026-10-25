@@ -114,6 +114,7 @@ public:
         compile_gamma();
         compile_accumulation();
         compile_tone_mapping();
+        compile_surface_exts_history();
         compile_compute_geom_lf();
         compile_generate_rays();
         compile_encode();

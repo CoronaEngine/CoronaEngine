@@ -65,9 +65,17 @@ struct SurfaceExtend {
     array_float3 final_direction{};
     uint prefix_depth{};
 };
+// ReSTIR's previous receiver only needs its FP32 ray/view origin. Transport
+// state and the complete extension remain available for the current frame.
+struct SurfaceExtendHistory {
+    array_float3 view_pos{};
+};
+static_assert(sizeof(SurfaceExtend) == 44u);
+static_assert(sizeof(SurfaceExtendHistory) == 12u);
 }// namespace vision
 // clang-format off
 OC_STRUCT(vision, SurfaceExtend, throughput, view_pos, t_max, final_direction, prefix_depth) {};
+OC_STRUCT(vision, SurfaceExtendHistory, view_pos) {};
 // clang-format om
 
 namespace vision {

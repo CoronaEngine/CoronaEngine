@@ -4,6 +4,62 @@
 namespace vision {
 using namespace ocarina;
 namespace {
+// Experimental lossless full-record transpose. Type reflection follows the
+// storage emitter's offsets and traverses defined leaves only, never padding.
+constexpr uint CooperativeSPWidth = 64u;
+constexpr uint CooperativeSPStride = CooperativeSPWidth + 1u;
+// Padding words51/63 need no LDS rows; declared shared storage fits Vulkan16KiB.
+using CooperativeSPWords = SharedArray<uint, CooperativeSPStride * 62u>;
+
+// This Vulkan compute kernel shares only its LDS tile and owner flags.
+void synchronize_stable_plane_shared() noexcept {
+    auto *function = Function::current();
+    const Expression *shared_only = function->literal(Type::of<bool>(), true);
+    function->expr_statement(function->call_builtin(nullptr, CallOp::SYNCHRONIZE_BLOCK, {shared_only}));
+}
+
+void stage_stable_plane_words(const Expression *value, const Type *type,
+                              size_t offset, CooperativeSPWords &words,
+                              const Uint &lane, std::array<bool, 64> &occupied) {
+    if (type->is_structure()) {
+        size_t member_offset = 0u;
+        for (uint member = 0u; member < type->members().size(); ++member) {
+            const Type *member_type = type->members()[member];
+            member_offset = mem_offset(member_offset, member_type->alignment());
+            stage_stable_plane_words(Function::current()->member(member_type, value, int(member)),
+                                     member_type, offset + member_offset, words, lane, occupied);
+            member_offset += member_type->size();
+        }
+    } else if (type->is_array() || type->is_vector()) {
+        for (uint component = 0u; component < type->dimension(); ++component) {
+            Uint index = component;
+            stage_stable_plane_words(Function::current()->subscript(type->element(), value, index.expression()),
+                                     type->element(), offset + component * type->element()->size(), words, lane, occupied);
+        }
+    } else {
+        OC_ERROR_IF(type->size() != sizeof(uint) || offset % sizeof(uint) != 0u ||
+                        offset >= sizeof(StablePlaneData),
+                    "SP cooperative store requires aligned 32-bit fields");
+        uint word = uint(offset / sizeof(uint));
+        OC_ERROR_IF(occupied[word], "SP cooperative store reflected overlapping fields");
+        occupied[word] = true;
+        Uint index = (word - uint(word > 51u)) * CooperativeSPStride + lane;
+        if (type->tag() == Type::Tag::FLOAT) {
+            words.write(index, as<uint>(eval<float>(value)));
+        } else {
+            OC_ERROR_IF(type->tag() != Type::Tag::UINT,
+                        "SP cooperative store only accepts FP32/uint fields");
+            words.write(index, eval<uint>(value));
+        }
+    }
+}
+
+static_assert(sizeof(StablePlaneData) == 256u);
+static_assert((CooperativeSPStride * 62u + CooperativeSPWidth) * sizeof(uint) <= 16u * 1024u);
+static_assert(offsetof(StablePlaneData, extension) + sizeof(SurfaceExtend) == 204u);
+static_assert(offsetof(StablePlaneData, motion) == 208u);
+static_assert(offsetof(StablePlaneData, reservoir_eligible) + sizeof(uint) == 252u);
+
 struct BuildPath {
     RayState ray;
     Float3 weight{make_float3(1.f)};
@@ -69,9 +125,9 @@ void scatter_path(BuildPath &path, const Interaction &it, const StableLobe &lobe
 }
 }// namespace
 
-void StablePlanes::prepare() noexcept {
+void StablePlanes::prepare(bool retain_history) noexcept {
     auto &fb = frame_buffer();
-    fb.manage_stable_plane_buffers(integrator()->stable_planes_enabled());
+    fb.manage_stable_plane_buffers(integrator()->stable_planes_enabled(), retain_history);
 }
 
 void StablePlanes::compile() noexcept {
@@ -107,6 +163,14 @@ void StablePlanes::compile() noexcept {
     };
     clear_children_ = device().compile(clear_children, "Stable planes clear children");
     Kernel build_kernel = [&](Uint frame, Uint jitter) {
+        // Logical tracing and native pipeline classification stay separate.
+        // Vulkan executes this explicitly opted-in kernel as compute ray queries.
+        Function::current()->require_ray_query_compute_workgroups();
+        configure_block(CooperativeSPWidth, 1u, 1u);
+        CooperativeSPWords cooperative_words;
+        SharedArray<uint, CooperativeSPWidth> cooperative_active;
+        Uint cooperative_lane = thread_idx().x;
+        Bool cooperative_store = dispatch_dim().x % CooperativeSPWidth == 0u;
         camera->load_data(); sampler->load_data(); integrator()->load_data();
         Uint exploration_limit = min(recursion_limit, integrator()->runtime_suffix_depth());
         initial(sampler, frame, spectrum);
@@ -114,11 +178,15 @@ void StablePlanes::compile() noexcept {
         SensorSample ss = sampler->sensor_sample(dispatch_idx().xy(), camera->filter(), jitter != 0u);
         sampler->set_seed(dispatch_idx().xy(), frame, Dimension::ReSTIR_RIS);
         auto planes = fb.cur_stable_planes_var(frame);
+        auto plane_words = fb.bindless_array().buffer_var<uint>(fb.stable_planes().index_var());
         RayState camera_ray = fb.rays().read(dispatch_id())->to_ray_state();
         std::array<BuildPath, StablePlaneCount> paths;
         paths[0].ray = camera_ray; paths[0].active = true;
         Float3 stable_radiance = make_float3(0.f);
         Uint dominant = InvalidUI32;
+        SurfaceDataVar exported;
+        SurfaceExtendVar extension;
+        Float2 exported_motion = make_float2(0.f);
         for (uint layer = 0; layer < StablePlaneCount; ++layer) {
             BuildPath &path = paths[layer];
             StablePlaneDataVar plane;
@@ -243,21 +311,76 @@ void StablePlanes::compile() noexcept {
                     });
                     $if(!continued) { $break; };
                 };
-                planes.write(layer * (dispatch_dim().x * dispatch_dim().y) + dispatch_id(), plane);
+                $if(!cooperative_store) {
+                    planes.write(layer * (dispatch_dim().x * dispatch_dim().y) + dispatch_id(), plane);
+                };
+            };
+            // This branch is uniform for the whole dispatch. With a 64x1 block,
+            // width divisible by64 means no invocation can take the generated
+            // entry-point OOB return. Other widths execute no barriers.
+            $if(cooperative_store) {
+                cooperative_active.write(cooperative_lane, cast<uint>(path.active));
+                $if(path.active) {
+                    std::array<bool, 64> occupied{};
+                    stage_stable_plane_words(plane.expression(), Type::of<StablePlaneData>(),
+                                             0u, cooperative_words, cooperative_lane, occupied);
+                    for (uint word = 0u; word < occupied.size(); ++word) {
+                        OC_ERROR_IF(occupied[word] != (word != 51u && word != 63u),
+                                    "SP cooperative store reflected an unexpected padding layout");
+                    }
+                };
+                synchronize_stable_plane_shared();
+                // Query only after all64 owner flags are visible. A complete
+                // logical warp32 samples all64 flags in pairs, independent of
+                // native subgroup size or local-invocation mapping. Partial
+                // logical warps use the exact same group-wide OR serially.
+                Bool tile_active = true;
+                if (layer != 0u) {
+                    tile_active = false;
+                    Bool complete_warp = warp_active_bit_mask(Bool{true}).x == InvalidUI32;
+                    $if(complete_warp) {
+                        Uint pair = warp_lane_id();
+                        Uint pair_active = cooperative_active.read(pair) | cooperative_active.read(pair + 32u);
+                        tile_active = warp_active_bit_mask(pair_active != 0u).x != 0u;
+                    } $else {
+                        $for(active_owner, CooperativeSPWidth) {
+                            tile_active |= cooperative_active.read(active_owner) != 0u;
+                        };
+                    };
+                }
+                $if(tile_active) {
+                    // Each wave writes consecutive words of one owner's record.
+                    // The original aggregate store leaves these two padding words
+                    // untouched; preserve padding canaries with the same mask.
+                    $if(cooperative_lane != 51u && cooperative_lane != 63u) {
+                        Uint group_first = dispatch_id() - cooperative_lane;
+                        Uint layer_first = layer * (dispatch_dim().x * dispatch_dim().y);
+                        Uint packed_lane = cooperative_lane - cast<uint>(cooperative_lane > 51u);
+                        $for(owner, CooperativeSPWidth) {
+                            $if(cooperative_active.read(owner) != 0u) {
+                                Uint address = (layer_first + group_first + owner) * 64u + cooperative_lane;
+                                Uint word = cooperative_words.read(packed_lane * CooperativeSPStride + owner);
+                                plane_words.write(address, word);
+                            };
+                        };
+                    };
+                };
+                // Inactive owners participate too. No next-layer staging may
+                // overwrite the tile while another invocation still reads it.
+                synchronize_stable_plane_shared();
             };
             // The transmission child wins, followed by reflection and base.
             $if(plane.valid != 0u && plane.reservoir_eligible != 0u && (dominant == InvalidUI32 || Uint{layer} == 1u)) {
                 dominant = layer;
+                exported = plane.surface;
+                extension = plane.extension;
+                exported_motion = plane.motion;
             };
         }
         fb.stable_radiance().write(dispatch_id(), make_float4(stable_radiance, 1.f));
         fb.stable_dominant().write(dispatch_id(), dominant);
-        SurfaceDataVar exported;
-        SurfaceExtendVar extension;
         $if(dominant != InvalidUI32) {
-            auto plane = planes.read(dominant * (dispatch_dim().x * dispatch_dim().y) + dispatch_id());
-            exported = plane.surface; extension = plane.extension;
-            fb.motion_vectors().write(dispatch_id(), plane.motion);
+            fb.motion_vectors().write(dispatch_id(), exported_motion);
         };
         fb.cur_surfaces_var(frame).write(dispatch_id(), exported);
         fb.cur_surface_exts_var(frame).write(dispatch_id(), extension);

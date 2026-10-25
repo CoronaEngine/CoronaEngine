@@ -144,6 +144,7 @@ protected:
     Shader<void(Buffer<TriangleHit>, uint2, uint)> compute_hit_;
     Shader<void(Buffer<float4>, Buffer<float4>, uint)> accumulate_;
     Shader<void(Buffer<float4>, Texture2D, float)> tone_mapping_;
+    Shader<void(Buffer<uint>, Buffer<uint>)> save_surface_exts_history_;
 
 protected:
     string cur_view_{final_result};
@@ -158,6 +159,7 @@ protected:
 
     uint2 resolution_;
     bool stable_plane_buffers_enabled_{};
+    bool stable_plane_history_retained_{true};
     Box2f screen_window_;
     EncodedData<uint> accumulation_;
     TToneMapper tone_mapper_{};
@@ -244,7 +246,34 @@ public:                                                                     \
 
     /// save two frames of data , use for ReSTIR
     VS_MAKE_DOUBLE_BUFFER(RegistrableBuffer<SurfaceData>, surfaces)
-    VS_MAKE_DOUBLE_BUFFER(RegistrableBuffer<SurfaceExtend>, surface_exts)
+    VS_MAKE_BUFFER(RegistrableBuffer<SurfaceExtend>, surface_exts, 1)
+    VS_MAKE_BUFFER(RegistrableBuffer<SurfaceExtendHistory>, surface_ext_history, 1)
+    template<typename T>
+    requires is_integral_expr_v<T>
+    [[nodiscard]] T prev_surface_exts_index(const T &) const noexcept {
+        if constexpr (is_dsl_v<T>) { return surface_ext_history_.index_var(); }
+        else { return surface_ext_history_base(); }
+    }
+    template<typename T>
+    requires is_integral_expr_v<T>
+    [[nodiscard]] T cur_surface_exts_index(const T &) const noexcept {
+        if constexpr (is_dsl_v<T>) { return surface_exts_.index_var(); }
+        else { return surface_exts_base(); }
+    }
+    [[nodiscard]] auto prev_surface_exts_view(uint) const noexcept { return surface_ext_history_.view(); }
+    [[nodiscard]] auto cur_surface_exts_view(uint) const noexcept { return surface_exts_.view(); }
+    [[nodiscard]] auto prev_surface_exts_var(const Uint &frame) const noexcept {
+        return bindless_array().buffer_var<SurfaceExtendHistory>(prev_surface_exts_index(frame));
+    }
+    [[nodiscard]] auto cur_surface_exts_var(const Uint &frame) const noexcept {
+        return bindless_array().buffer_var<SurfaceExtend>(cur_surface_exts_index(frame));
+    }
+    [[nodiscard]] auto prev_surface_exts_byte_view(uint frame) const noexcept {
+        return ByteBufferView(prev_surface_exts_view(frame));
+    }
+    [[nodiscard]] auto cur_surface_exts_byte_view(uint frame) const noexcept {
+        return ByteBufferView(cur_surface_exts_view(frame));
+    }
     VS_MAKE_BUFFER(RegistrableBuffer<StablePlaneData>, stable_planes, 3)
     VS_MAKE_BUFFER(RegistrableBuffer<StablePlaneHistory>, stable_plane_history, 3)
     VS_MAKE_BUFFER(RegistrableBuffer<float4>, stable_direct, 3)
@@ -266,7 +295,9 @@ public:                                                                     \
     }
     // Preserve registered slots for compiled kernels while disabled. A single
     // element per view is enough; no disabled pass may access these buffers.
-    void manage_stable_plane_buffers(bool enabled) noexcept;
+    // Current records remain complete; only consumers opt out of history.
+    void manage_stable_plane_buffers(bool enabled, bool retain_history = true) noexcept;
+    [[nodiscard]] bool stable_plane_history_retained() const noexcept { return stable_plane_history_retained_; }
     [[nodiscard]] auto stable_direct_view(uint layer) const noexcept {
         auto view = stable_direct_.view().subview(layer * frame_buffer_size(), frame_buffer_size());
         return decltype(view)(view.handle() + view.offset_in_byte(), view.size());
@@ -316,14 +347,14 @@ public:
 public:
     FrameBuffer() = default;
     explicit FrameBuffer(const FrameBufferDesc &desc);
-    VS_HOTFIX_MAKE_RESTORE(Node, cur_view_, surfaces_, surface_exts_, hit_bsdfs_,
-                           stable_planes_, stable_plane_history_, stable_plane_buffers_enabled_, stable_direct_, stable_indirect_, stable_radiance_, stable_dominant_,
+    VS_HOTFIX_MAKE_RESTORE(Node, cur_view_, surfaces_, surface_exts_, surface_ext_history_, hit_bsdfs_,
+                           stable_planes_, stable_plane_history_, stable_plane_buffers_enabled_, stable_plane_history_retained_, stable_direct_, stable_indirect_, stable_radiance_, stable_dominant_,
                            motion_vectors_, hit_buffer_, screen_buffers_,
                            denoiser_diffuse_, denoiser_specular_, denoiser_bypass_, denoiser_di_specular_, denoiser_gi_specular_, denoiser_di_bypass_,
                            view_texture_, visualizer_, window_buffer_, rt_buffer_,
                            tone_mapper_, upsampler_,
                            /// shaders
-                           compute_geom_, compute_hit_,
+                           compute_geom_, compute_hit_, save_surface_exts_history_,
                            accumulate_)
     OC_ENCODABLE_FUNC(EncodedObject, accumulation_, tone_mapper_, exposure_)
     VS_MAKE_GUI_STATUS_FUNC(Node, upsampler_, tone_mapper_)
@@ -384,6 +415,8 @@ public:
     void compile_gamma() noexcept;
     void compile_accumulation() noexcept;
     void compile_tone_mapping() noexcept;
+    void compile_surface_exts_history() noexcept;
+    [[nodiscard]] CommandBatch save_surface_exts_history(uint frame_index) const noexcept;
     void update_device_data() noexcept override;
     [[nodiscard]] CommandBatch gamma_correct(const Texture2D &input,
                                             const Texture2D &output) const noexcept;

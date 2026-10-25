@@ -18,7 +18,7 @@ public:
     StablePlanes(IntegratorPtr integrator, uint max_recursion)
         : max_recursion_(max_recursion) { set_integrator(integrator); }
     VS_HOTFIX_MAKE_RESTORE(ReSTIR, max_recursion_, clear_children_, build_, fill_, save_history_)
-    void prepare() noexcept;
+    void prepare(bool retain_history = true) noexcept;
     void set_max_recursion(uint value) noexcept { max_recursion_ = value; }
     void compile() noexcept;
     [[nodiscard]] CommandBatch build(uint frame, bool jitter, bool retain_history) const noexcept;

@@ -194,7 +194,7 @@ public:
         return pipeline()->bindless_array().buffer_var<SurfaceData>(frame_buffer().cur_surfaces_index(frame_index()));
     }
     [[nodiscard]] auto prev_surface_extends() const noexcept {
-        return pipeline()->bindless_array().buffer_var<SurfaceExtend>(frame_buffer().prev_surface_exts_index(frame_index()));
+        return pipeline()->bindless_array().buffer_var<SurfaceExtendHistory>(frame_buffer().prev_surface_exts_index(frame_index()));
     }
     [[nodiscard]] auto cur_surface_extends() const noexcept {
         return pipeline()->bindless_array().buffer_var<SurfaceExtend>(frame_buffer().cur_surface_exts_index(frame_index()));

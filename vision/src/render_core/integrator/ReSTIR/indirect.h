@@ -130,14 +130,16 @@ public:
                                                  param.diff_factor, prev_depth);
     }
     [[nodiscard]] Uint reservoir_base() const noexcept { return reservoirs_.index_var(); }
+    // Final history stays in slice A. Temporal gathers A into scratch B;
+    // the following spatial dispatch gathers B and replaces A.
     [[nodiscard]] auto prev_reservoirs() const noexcept {
-        return pipeline()->bindless_array().buffer_var<GIReservoir>((frame_index() & 1) + reservoir_base());
+        return pipeline()->bindless_array().buffer_var<GIReservoir>(reservoir_base());
     }
     [[nodiscard]] auto cur_reservoirs() const noexcept {
-        return pipeline()->bindless_array().buffer_var<GIReservoir>(((frame_index() + 1) & 1) + reservoir_base());
+        return pipeline()->bindless_array().buffer_var<GIReservoir>(reservoir_base());
     }
     [[nodiscard]] auto passthrough_reservoirs() const noexcept {
-        return pipeline()->bindless_array().buffer_var<GIReservoir>(2 + reservoir_base());
+        return pipeline()->bindless_array().buffer_var<GIReservoir>(1 + reservoir_base());
     }
     [[nodiscard]] GIParam construct_param() const noexcept;
     [[nodiscard]] CommandBatch dispatch(uint frame_index) const noexcept;

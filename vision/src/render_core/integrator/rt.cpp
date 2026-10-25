@@ -72,7 +72,6 @@ private:
     DataWrap scene_restir_settings_;
     SP<StablePlanes> stable_planes_;
     mutable bool stable_resources_dirty_{};
-    SP<ScreenBuffer> specular_buffer_{make_shared<ScreenBuffer>("RealTimeIntegrator::specular_buffer_")};
     Shader<void(uint, float, float, uint)> combine_;
     Shader<void()> merge_dominant_;
     Shader<void()> compose_layers_;
@@ -102,7 +101,7 @@ public:
 
     void restore(vision::RuntimeObject *old_obj) noexcept override {
         IlluminationIntegrator::restore(old_obj);
-        VS_HOTFIX_MOVE_ATTRS(direct_, indirect_, scene_restir_settings_, stable_planes_, stable_resources_dirty_, specular_buffer_,
+        VS_HOTFIX_MOVE_ATTRS(direct_, indirect_, scene_restir_settings_, stable_planes_, stable_resources_dirty_,
                              combine_, merge_dominant_, compose_layers_, prepare_denoiser_, compose_denoiser_, denoiser_factors_, path_tracing_, denoiser_)
         direct_->set_integrator(shared_from_this());
         indirect_->set_integrator(shared_from_this());
@@ -144,13 +143,13 @@ public:
         // the SHARC placeholder reserves 176 MiB without affecting transport.
         Pipeline *rp = pipeline();
 
-        frame_buffer().prepare_screen_buffer(specular_buffer_);
         frame_buffer().prepare_hit_bsdfs();
         frame_buffer().prepare_surfaces();
         frame_buffer().prepare_surface_exts();
+        frame_buffer().prepare_surface_ext_history();
         frame_buffer().prepare_visibility_buffer();
         frame_buffer().prepare_motion_vectors();
-        stable_planes_->prepare();
+        stable_planes_->prepare(!denoiser_runtime_disabled() && denoiser_ && denoiser_->enabled());
         if (denoiser_ && denoiser_->requires_lobe_signals()) frame_buffer().prepare_denoiser_signals();
         stable_resources_dirty_ = false;
     }
@@ -350,13 +349,18 @@ public:
         const Pipeline *rp = pipeline();
         Stream &stream = rp->stream();
         reset_denoise_timing();
-        if (stable_resources_dirty_) {
+        const bool retain_history = !denoiser_runtime_disabled() && denoiser_ && denoiser_->enabled();
+        if (stable_resources_dirty_ || frame_buffer().stable_plane_history_retained() != retain_history) {
+            // Resize history before build snapshots the complete previous raw
+            // planes. A history-only switch must preserve those current records.
             stream << synchronize() << commit();
-            frame_buffer().manage_stable_plane_buffers(stable_planes_enabled());
+            frame_buffer().manage_stable_plane_buffers(stable_planes_enabled(), retain_history);
             pipeline()->upload_bindless_array();
-            if (denoiser_) { denoiser_->set_stable_planes_enabled(stable_planes_enabled()); }
-            stable_resources_dirty_ = false;
-            pipeline()->invalidate();
+            if (stable_resources_dirty_) {
+                if (denoiser_) { denoiser_->set_stable_planes_enabled(stable_planes_enabled()); }
+                stable_resources_dirty_ = false;
+                pipeline()->invalidate();
+            }
         }
         cur_stage_profile_ = {};
         cur_stage_profile_.enabled = stage_profile_runtime_enabled();
@@ -374,8 +378,10 @@ public:
         };
 
         submit(frame_buffer().compute_GBuffer(frame_index_), &cur_stage_profile_.gbuffer_ms);
+        // GBuffer does not write extensions. Save the previous receiver before
+        // either stable-plane build or DI overwrites the full current record.
+        submit(frame_buffer().save_surface_exts_history(frame_index_), &cur_stage_profile_.gbuffer_ms);
         if (stable_planes_enabled()) {
-            const bool retain_history = !denoiser_runtime_disabled() && denoiser_ && denoiser_->enabled();
             submit(stable_planes_->build(frame_index_, jitter_primary_samples(), retain_history), &cur_stage_profile_.stable_build_ms);
             submit(stable_planes_->fill(frame_index_, direct_->factor(), indirect_->factor()), &cur_stage_profile_.stable_fill_ms);
         }

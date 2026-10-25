@@ -8,9 +8,257 @@
 #include "render_core/denoiser/SVGF/svgf.h"
 
 #include <iostream>
+#include <array>
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
+#include <cstring>
+#include <cstddef>
+#include <iterator>
 #include <stdexcept>
 #include <string>
 #include <vector>
+
+namespace {
+// Removing the snapshot, moving it after an extension writer, retaining a
+// parity offset, truncating a float, or failing to rebind on resize must fail.
+template<typename FrameBufferType>
+void check_extension_history(vision::Pipeline& pipeline, FrameBufferType& frame_buffer) {
+    using namespace vision;
+    static_assert(sizeof(SurfaceExtend) == 44u);
+    if constexpr (!requires { frame_buffer.save_surface_exts_history(1u); }) {
+        throw std::runtime_error("ReSTIR must retain an ordered FP32 receiver-position history");
+    } else {
+        const uint2 original_resolution = pipeline.resolution();
+        const auto original_position = pipeline.scene().sensor()->position();
+        auto* integrator = pipeline.renderer().integrator().get();
+        const bool original_planes = integrator->stable_planes_enabled();
+        const uint patterns[]{0u, 0x80000000u, 1u, 0x80000001u, 0x3f800001u,
+            0xbf800001u, 0x7f7fffffu, 0xff7fffffu, 0x7fc12345u, 0xffc54321u,
+            0x7f800000u, 0xff800000u};
+        constexpr uint current_words = sizeof(SurfaceExtend) / sizeof(uint);
+        constexpr uint position_offset = offsetof(SurfaceExtend, view_pos) / sizeof(uint);
+        Kernel read_history = [&](BufferVar<uint> output, Uint frame) {
+            auto previous = frame_buffer.prev_surface_exts_var(frame).read(dispatch_id());
+            for (uint component = 0u; component < 3u; ++component) {
+                output.write(dispatch_id() * 3u + component, as<uint>(previous.view_pos[component]));
+            }
+        };
+        auto read = pipeline.device().compile(read_history, "restir_extension_history_readback");
+        for (const uint2 resolution : {make_uint2(9u, 7u), make_uint2(13u, 11u), original_resolution}) {
+            pipeline.stream() << synchronize() << commit();
+            pipeline.change_resolution(resolution);
+            const uint pixels = frame_buffer.frame_buffer_size();
+            auto current = frame_buffer.cur_surface_exts_view(0u);
+            auto previous = frame_buffer.prev_surface_exts_view(0u);
+            if (current.size_in_byte() != pixels * 44u || previous.size_in_byte() != pixels * 12u) {
+                throw std::runtime_error("ReSTIR extension storage must keep full current records and 12-byte previous positions after resize");
+            }
+            std::vector<uint> history(pixels * 3u), expected(history.size());
+            std::vector<uint> source(pixels * current_words), unchanged(source.size());
+            std::vector<uint> poison(source.size(), 0xdeadbeefu);
+            auto output = pipeline.device().create_buffer<uint>(history.size(), "restir_extension_history_results");
+            pipeline.stream() << previous.template view_as<uint>().download(history.data())
+                              << synchronize() << commit();
+            if (history != std::vector<uint>(history.size(), 0u)) {
+                throw std::runtime_error("ReSTIR compact extension history must reset on resize");
+            }
+            for (const uint frame : {1u, 2u, 3u, 4u, 7u, 8u}) {
+                for (uint pixel = 0u; pixel < pixels; ++pixel) {
+                    for (uint word = 0u; word < current_words; ++word) {
+                        source[pixel * current_words + word] = 0x3f000000u + pixel * current_words + word;
+                    }
+                    for (uint component = 0u; component < 3u; ++component) {
+                        const uint bits = patterns[(pixel * 3u + component + frame) % std::size(patterns)];
+                        source[pixel * current_words + position_offset + component] = bits;
+                        expected[pixel * 3u + component] = bits;
+                    }
+                }
+                // Uploads, the real snapshot, overwrite and bindless reads share
+                // one command batch: a delayed or aliased copy sees poison.
+                pipeline.stream() << current.template view_as<uint>().upload(source.data())
+                                  << frame_buffer.save_surface_exts_history(frame)
+                                  << current.template view_as<uint>().download(unchanged.data())
+                                  << current.template view_as<uint>().upload(poison.data())
+                                  << read(output, frame).dispatch(pixels)
+                                  << output.download(history.data()) << synchronize() << commit();
+                if (history != expected || unchanged != source) {
+                    throw std::runtime_error("ReSTIR extension history must preserve all FP32 bits, frame parity and complete current records");
+                }
+            }
+            // Frame zero invalidates reuse, and must not publish stale current
+            // extension state as history after an accumulation/camera reset.
+            const auto before_reset = history;
+            pipeline.stream() << frame_buffer.save_surface_exts_history(0u)
+                              << read(output, 0u).dispatch(pixels)
+                              << output.download(history.data()) << synchronize() << commit();
+            if (history != before_reset) {
+                throw std::runtime_error("ReSTIR extension history must skip the invalid first frame");
+            }
+            for (const bool planes : {false, true, false}) {
+                integrator->set_stable_planes_enabled(planes);
+                pipeline.invalidate();
+                pipeline.upload_data();
+                // Settle the mode transition and frame-zero invalidation.
+                pipeline.display(1.0 / 60.0);
+                for (uint step = 0u; step < 2u; ++step) {
+                    std::vector<SurfaceExtend> receivers(pixels);
+                    for (uint pixel = 0u; pixel < pixels; ++pixel) {
+                        receivers[pixel].view_pos = {float(pixel) + 0.25f, -float(step + 1u), float(planes) + 0.5f};
+                    }
+                    pipeline.stream() << frame_buffer.cur_surface_exts_view(pipeline.frame_index()).upload(receivers.data())
+                                      << synchronize() << commit();
+                    auto camera_position = original_position;
+                    camera_position.x += float(step + 1u) * 0.01f;
+                    pipeline.scene().sensor()->set_position(camera_position);
+                    pipeline.upload_data();
+                    pipeline.display(1.0 / 60.0);
+                    std::vector<array_float3> positions(pixels);
+                    pipeline.stream() << frame_buffer.prev_surface_exts_view(pipeline.frame_index() - 1u)
+                                          .template view_as<array_float3>().download(positions.data())
+                                      << synchronize() << commit();
+                    for (uint pixel = 0u; pixel < pixels; ++pixel) {
+                        for (uint component = 0u; component < 3u; ++component) {
+                            if (positions[pixel][component] != receivers[pixel].view_pos[component]) {
+                                throw std::runtime_error("ReSTIR render must snapshot receiver history before stable-plane/DI writers in both SP modes and camera motion");
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        pipeline.scene().sensor()->set_position(original_position);
+        integrator->set_stable_planes_enabled(original_planes);
+        pipeline.invalidate();
+        pipeline.upload_data();
+        pipeline.display(1.0 / 60.0);
+        std::cout << "PASS: ReSTIR compact FP32 extension history preserves bit patterns, current records, parity, resize, SP transitions and camera motion\n";
+    }
+}
+} // namespace
+
+
+// Optional process-to-process oracle for the production SP builder. The test
+// binary exposes only a capture destination; production has no added knob.
+void check_stable_plane_store_oracle(vision::Pipeline& pipeline, const char* label) {
+    using namespace vision;
+    const char* directory = std::getenv("CORONA_SP_STORE_ORACLE_DIR");
+    if (!directory || !*directory) return;
+    const auto out = std::filesystem::path(directory) / label;
+    std::filesystem::create_directories(out);
+    auto fail = [](bool okay, const char* message) { if (!okay) throw std::runtime_error(message); };
+    auto& fb = *pipeline.frame_buffer();
+    const auto original_resolution = pipeline.resolution();
+    const bool original_denoise = pipeline.output_desc().denoise;
+    const bool original_accumulation = fb.enable_accumulation();
+    constexpr uint words = sizeof(StablePlaneData) / sizeof(uint);
+    constexpr uint valid_word = offsetof(StablePlaneData, valid) / sizeof(uint);
+    static_assert(words == 64u && valid_word == 61u);
+    StablePlaneData defaults{};
+    std::array<uint, words> default_words{};
+    std::memcpy(default_words.data(), &defaults, sizeof(defaults));
+    auto draw = [&] { pipeline.upload_data(); pipeline.display(1.0 / 60.0); };
+    auto write_words = [&](const std::string& name, const std::vector<uint>& data) {
+        std::ofstream file(out / name, std::ios::binary);
+        file.write(reinterpret_cast<const char*>(data.data()), std::streamsize(data.size() * sizeof(uint)));
+        fail(bool(file), "could not write SP full-payload oracle file");
+    };
+    uint total_inactive = 0u, total_children = 0u;
+    pipeline.set_output_denoise(false);
+    fb.set_enable_accumulation(false);
+    fb.auto_manage_accumulation_buffer(false);
+    for (uint width : {64u, 128u, 63u, 65u}) {
+        pipeline.stream() << synchronize() << commit();
+        pipeline.change_resolution(make_uint2(width, 7u));
+        fb.prepare_view_texture();
+        pipeline.invalidate();
+        draw(); draw(); // settle resize before uploading the complete canaries
+        const uint pixels = pipeline.pixel_num();
+        auto current = fb.cur_stable_planes_view(0u).view_as<uint>();
+        fail(current.size() == size_t(pixels) * StablePlaneCount * words,
+             "SP oracle must expose the full three-layer 256B current allocation");
+        std::vector<uint> produced(current.size());
+        pipeline.stream() << current.download(produced.data()) << synchronize() << commit();
+        uint prototype = pixels;
+        for (uint pixel = 0u; pixel < pixels; ++pixel) {
+            const auto begin = size_t(pixel) * words;
+            if (produced[begin + valid_word] != 0u && produced[begin] != InvalidUI32 &&
+                produced[begin + 1u] != InvalidUI32 && produced[begin + 60u] != InvalidUI32) {
+                prototype = pixel; break;
+            }
+        }
+        fail(prototype < pixels, "SP oracle requires one real valid base record as its seed");
+        for (uint word = 0u; word < words; ++word) {
+            const bool floating = (word >= 2u && word <= 34u) ||
+                (word >= 40u && word <= 49u) || (word >= 52u && word <= 56u);
+            if (floating) fail((produced[size_t(prototype) * words + word] & 0x7f800000u) != 0x7f800000u,
+                               "SP oracle seed must contain only finite FP32 fields");
+        }
+        std::vector<uint> seed(current.size()), actual(seed.size());
+        for (uint prior_valid : {0u, 1u}) {
+            for (uint record = 0u; record < pixels * StablePlaneCount; ++record) {
+                for (uint word = 0u; word < words; ++word)
+                    seed[size_t(record) * words + word] = produced[size_t(prototype) * words + word];
+                // Real field values and IDs remain valid. Only padding gets
+                // unique finite [0.5,1) bit canaries, avoiding arbitrary NaNs.
+                seed[size_t(record) * words + 51u] = 0x3f000000u | ((record * 131u + 51u * 17u) & 0x007fffffu);
+                seed[size_t(record) * words + 63u] = 0x3f000000u | ((record * 131u + 63u * 17u) & 0x007fffffu);
+                seed[size_t(record) * words + valid_word] = record < pixels ? 0u : prior_valid;
+            }
+            pipeline.stream() << current.upload(seed.data()) << synchronize() << commit();
+            draw(); // executes the real GBuffer, clear, SP build and consumers
+            const uint frame = pipeline.frame_index() - 1u;
+            std::vector<uint> ray_words(size_t(pixels) * sizeof(RayData) / sizeof(uint));
+            std::vector<uint> hit_words(size_t(pixels) * sizeof(TriangleHit) / sizeof(uint));
+            pipeline.stream() << current.download(actual.data())
+                << fb.rays().view_as<uint>().download(ray_words.data())
+                << fb.cur_visibility_buffer_view(frame).view_as<uint>().download(hit_words.data())
+                << synchronize() << commit();
+            uint inactive = 0u, children = 0u;
+            for (uint record = 0u; record < pixels * StablePlaneCount; ++record) {
+                const auto begin = size_t(record) * words;
+                fail(actual[begin + 51u] == seed[begin + 51u] && actual[begin + 63u] == seed[begin + 63u],
+                     "production SP stores/clears must preserve both padding canaries");
+                if (record < pixels) continue;
+                if (actual[begin + valid_word] != 0u) { ++children; continue; }
+                ++inactive;
+                for (uint word = 0u; word < words; ++word) {
+                    if (word == 51u || word == 63u) continue;
+                    const uint expected = prior_valid ? default_words[word] : seed[begin + word];
+                    fail(actual[begin + word] == expected,
+                         "inactive SP children must retain untouched payload or complete cleared defaults");
+                }
+            }
+            total_inactive += inactive; total_children += children;
+            // RayData contains eight padding bytes. Compare its forty defined
+            // bytes per pixel separately so process allocation cannot fake a
+            // changed camera input. TriangleHit has no padding.
+            static_assert(sizeof(RayData) == 48u);
+            std::vector<uint> ray_input(size_t(pixels) * 10u);
+            for (uint pixel = 0u; pixel < pixels; ++pixel)
+                for (uint word = 0u; word < 10u; ++word)
+                    ray_input[size_t(pixel) * 10u + word] = ray_words[size_t(pixel) * 12u + word];
+            const auto stem = std::to_string(width) + "-prior" + std::to_string(prior_valid);
+            write_words(stem + "-planes.u32", actual);
+            write_words(stem + "-rays.u32", ray_input);
+            write_words(stem + "-hits.u32", hit_words);
+            std::ofstream meta(out / (stem + ".txt"));
+            meta << "width=" << width << " height=7 frame=" << frame << " inactive=" << inactive
+                 << " children=" << children << " prior_valid=" << prior_valid << '\n';
+            fail(bool(meta), "could not write SP oracle frame metadata");
+        }
+    }
+    fail(total_inactive > 0u, "SP storage oracle must exercise inactive children");
+    if (std::string(label) == "glass")
+        fail(total_children > 0u, "glass SP storage oracle must exercise active child payloads");
+    pipeline.change_resolution(original_resolution);
+    fb.prepare_view_texture(); pipeline.invalidate();
+    fb.set_enable_accumulation(original_accumulation);
+    fb.auto_manage_accumulation_buffer(original_accumulation);
+    pipeline.set_output_denoise(original_denoise);
+    draw(); draw();
+    std::cout << "PASS: production SP full-payload oracle " << label << " captures=" << out.string() << '\n';
+}
 
 void check_restir_reprojection(vision::Pipeline& pipeline) {
     using namespace vision;
@@ -167,6 +415,7 @@ void check_restir_reprojection(vision::Pipeline& pipeline) {
     }
     std::cout << "PASS: ReSTIR maps jittered history and rejects offscreen reservoir pixels ("
               << pixel_cases.size() << " cases)\n";
+    check_extension_history(pipeline, *pipeline.frame_buffer());
 }
 
 void check_restir_material_reuse(vision::Pipeline& pipeline, const std::vector<vision::SurfaceData>& surfaces) {
@@ -298,6 +547,82 @@ void check_glass_svgf(vision::Pipeline& pipeline) {
     std::cout << "PASS: real glass SVGF layer colors/history/motion, exact raw+filtered composition, toggles and camera isolation\n";
 }
 
+void check_stable_plane_history_lifecycle(vision::Pipeline& pipeline) {
+    using namespace vision;
+    auto fail = [](bool okay, const char* message) { if (!okay) throw std::runtime_error(message); };
+    auto& fb = *pipeline.frame_buffer();
+    const uint2 original_resolution = pipeline.resolution();
+    const bool original_denoise = pipeline.output_desc().denoise;
+    auto draw = [&] { pipeline.upload_data(); pipeline.display(1.0 / 60.0); };
+    auto capacity = [&](bool retained) {
+        fail(fb.cur_stable_planes_view(0u).size() == 3u * pipeline.pixel_num(),
+             "raw stable planes must retain every complete current record");
+        fail(fb.prev_stable_planes_view(0u).size() == (retained ? 3u * pipeline.pixel_num() : 3u),
+             "stable-plane history capacity must follow the active consumer through toggles and resize");
+    };
+    auto same_bits = [](const auto& a, const auto& b) { return std::memcmp(&a, &b, sizeof(a)) == 0; };
+    for (auto resolution : {make_uint2(64u, 5u), make_uint2(128u, 5u),
+                            make_uint2(63u, 5u), make_uint2(65u, 5u),
+                            make_uint2(7u, 5u), make_uint2(1u), original_resolution}) {
+        pipeline.set_output_denoise(false);
+        draw();
+        capacity(false);
+        pipeline.change_resolution(resolution);
+        fb.prepare_view_texture();
+        pipeline.invalidate();
+        capacity(false);
+        draw(); draw();
+        std::vector<StablePlaneData> previous_current(3u * pipeline.pixel_num());
+        pipeline.stream() << fb.cur_stable_planes_view(0u).download(previous_current.data()) << synchronize() << commit();
+        const uint frame_before_enable = pipeline.frame_index();
+        pipeline.set_output_denoise(true);
+        draw();
+        capacity(true);
+        fail(pipeline.frame_index() == frame_before_enable + 1u,
+             "allocating denoiser history must preserve the previous raw frame for snapshotting");
+        std::vector<StablePlaneHistory> previous(previous_current.size());
+        pipeline.stream() << fb.prev_stable_planes_view(0u).download(previous.data()) << synchronize() << commit();
+        uint valid = 0u;
+        for (uint i = 0u; i < previous.size(); ++i) {
+            const auto& a = previous[i]; const auto& b = previous_current[i];
+            fail(a.valid == b.valid, "newly enabled SP history must preserve the previous raw record validity");
+            if (b.valid == 0u) continue;
+            ++valid;
+            fail(same_bits(a.surface.hit, b.surface.hit) &&
+                 same_bits(a.surface.virtual_position, b.surface.virtual_position) &&
+                 same_bits(a.surface.virtual_geometric_normal, b.surface.virtual_geometric_normal) &&
+                 a.surface.approximate == b.surface.approximate && a.surface.stable_branch == b.surface.stable_branch &&
+                 same_bits(a.motion, b.motion) && same_bits(a.depth_position, b.depth_position) &&
+                 a.branch_sequence == b.branch_sequence && a.instance_hash == b.instance_hash &&
+                 a.depth == b.depth && a.material_id == b.material_id,
+                 "enabling denoising must save every previous guide bit before current planes are overwritten");
+        }
+        fail(valid > 0u, "SP history lifecycle fixture must exercise valid previous records");
+        pipeline.change_resolution(make_uint2(resolution.x + 2u, resolution.y + 1u));
+        fb.prepare_view_texture();
+        pipeline.invalidate();
+        capacity(true);
+        draw();
+        pipeline.set_output_denoise(false);
+        draw();
+        capacity(false);
+    }
+    pipeline.change_resolution(original_resolution);
+    fb.prepare_view_texture();
+    pipeline.invalidate();
+    capacity(false);
+    // Existing callers retain history unless they explicitly opt out.
+    fb.manage_stable_plane_buffers(true);
+    capacity(true);
+    fb.manage_stable_plane_buffers(true, false);
+    capacity(false);
+    pipeline.upload_bindless_array();
+    pipeline.set_output_denoise(original_denoise);
+    draw();
+    capacity(original_denoise);
+    std::cout << "PASS: SP history raw/on/raw allocation, exact prior guides, 1x1 and resize lifecycle\n";
+}
+
 void check_stable_plane(vision::Pipeline& pipeline, bool tinted_mirror) {
     using namespace vision;
     pipeline.activate_global_context();
@@ -405,6 +730,7 @@ void check_stable_plane(vision::Pipeline& pipeline, bool tinted_mirror) {
     }
     std::cout << "PASS: stable plane runtime on/off toggles and history reset\n";
     std::cout << "PASS: stable plane endpoint, branch rejection, virtual motion and SVGF history\n";
+    check_stable_plane_history_lifecycle(pipeline);
 }
 
 // Deterministic mirror emission has no eligible reservoir endpoint. Coverage

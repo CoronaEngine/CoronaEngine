@@ -11,6 +11,7 @@
 #include <cmath>
 #include <iostream>
 #include <stdexcept>
+#include <string>
 #include <vector>
 
 void check_restir_gi_receiver_support(vision::Pipeline& pipeline) {
@@ -114,4 +115,167 @@ void check_restir_gi_receiver_support(vision::Pipeline& pipeline) {
         throw std::runtime_error("GI target and shading must reject positive-F directions whose material PDF is zero");
     }
     std::cout << "PASS: GI target and shading enforce the receiver's sampling support\n";
+}
+
+// Check independently produced frame data, not a SurfaceData record populated
+// by this test. The reference reconstructs geometry using the old GI donor path.
+void check_restir_gi_receiver_positions(vision::Pipeline& pipeline, const char* label,
+                                       bool require_replaced, bool require_jacobian) {
+    using namespace vision;
+    pipeline.activate_global_context();
+    auto integrator = std::dynamic_pointer_cast<IlluminationIntegrator>(pipeline.renderer().integrator().impl());
+    if (!integrator) throw std::runtime_error("GI position parity needs a real illumination integrator");
+    auto& camera = pipeline.scene().sensor();
+    auto& sampler = pipeline.renderer().sampler();
+    auto& fb = *pipeline.frame_buffer();
+    const auto original_position = camera->position();
+    const auto original_yaw = camera->yaw();
+    const bool original_planes = integrator->stable_planes_enabled();
+    const bool original_accumulation = fb.enable_accumulation();
+    ParameterSet settings{DataWrap{{"spatial", {{"open", true}, {"sample_num", 4u}, {"radius", 12.f}}},
+                                    {"temporal", {{"open", false}}}}};
+    ReSTIRGI gi{integrator, settings};
+    constexpr uint words = 16u;
+    Kernel kernel = [&](Uint frame, Var<GIParam> param, BufferVar<uint> output) {
+        Env::instance().clear_global_vars();
+        camera->load_data(); sampler->load_data();
+        sampler->set_seed(dispatch_idx().xy(), frame, 5u);
+        const auto& geometry = pipeline.geometry();
+        Uint base = dispatch_id() * words;
+        for (uint word = 0u; word < words; ++word) output.write(base + word, 0u);
+        auto surfaces = fb.cur_surfaces_var(frame);
+        SurfaceDataVar surface = surfaces.read(dispatch_id());
+        $if(surface.hit->is_miss()) { $return(); };
+        output.write(base + 9u, 1u);
+        // Invalid replacement paths are excluded by production spatial validation.
+        $if(surface.is_replaced &&
+            (surface.stable_branch == 0u || surface.stable_branch == InvalidUI32)) { $return(); };
+        Float3 view = camera->device_position();
+        $if(surface.is_replaced) {
+            view = fb.cur_surface_exts_var(frame).read(dispatch_id()).view_pos.as_vec3();
+        };
+        Interaction receiver = geometry.compute_surface_interaction(surface.hit, view);
+        Float3 stored = surface->position();
+        Uint position_mismatch = 0u, nonfinite = 0u;
+        for (uint component = 0u; component < 3u; ++component) {
+            Uint cached_bits = as<uint>(stored[component]);
+            Uint reference_bits = as<uint>(receiver.pos[component]);
+            position_mismatch |= cast<uint>(cached_bits != reference_bits) << component;
+            nonfinite += cast<uint>(ocarina::isnan(stored[component]) || ocarina::isinf(stored[component]) ||
+                                    ocarina::isnan(receiver.pos[component]) || ocarina::isinf(receiver.pos[component]));
+            output.write(base + 10u + component, cached_bits);
+            output.write(base + 13u + component, reference_bits);
+        }
+        Uint accepted = 0u, donor_mismatch = 0u, endpoints = 0u, positive_jacobians = 0u, jacobian_mismatch = 0u;
+        $for(i, 4u) {
+            Float2 offset = square_to_disk(sampler->next_2d()) * param.s_radius;
+            Int2 neighbor = make_int2(dispatch_idx().xy()) + make_int2(ocarina::round(offset));
+            neighbor = ocarina::clamp(neighbor, make_int2(0u), make_int2(dispatch_dim().xy()) - 1);
+            Uint index = dispatch_id(neighbor);
+            SurfaceDataVar donor = surfaces.read(index);
+            $if(ReSTIRGI::is_valid_neighbor(surface, donor, param)) {
+                accepted += 1u;
+                Float3 donor_view = camera->device_position();
+                $if(donor.is_replaced) {
+                    donor_view = fb.cur_surface_exts_var(frame).read(index).view_pos.as_vec3();
+                };
+                Interaction reference = geometry.compute_surface_interaction(donor.hit, donor_view);
+                Float3 cached = donor->position();
+                for (uint component = 0u; component < 3u; ++component) {
+                    donor_mismatch += cast<uint>(as<uint>(cached[component]) != as<uint>(reference.pos[component]));
+                }
+                // Use the first secondary endpoint of this frame's real DI BSDF
+                // candidate, the same segment that seeds production GI. A lone
+                // triangle has only environment misses; multi-surface fixtures
+                // below must also supply positive nontrivial Jacobian controls.
+                HitBSDFVar bsdf = fb.hit_bsdfs().read(index);
+                $if(bsdf->valid() && !ocarina::isinf(bsdf.pdf)) {
+                    RayVar ray = reference.spawn_ray(bsdf.wi.as_vec3());
+                    TriangleHitVar endpoint_hit = geometry.trace_closest(ray);
+                    $if(endpoint_hit->is_hit()) {
+                        Interaction endpoint = geometry.compute_surface_interaction(endpoint_hit, ray);
+                        Var<SurfacePoint> sample_point;
+                        sample_point->set(endpoint);
+                        Float old_jacobian = gi.Jacobian_det(receiver.pos, reference.pos, sample_point);
+                        Float cached_jacobian = gi.Jacobian_det(receiver.pos, cached, sample_point);
+                        endpoints += 1u;
+                        positive_jacobians += cast<uint>(old_jacobian > 0.f);
+                        jacobian_mismatch += cast<uint>(as<uint>(old_jacobian) != as<uint>(cached_jacobian));
+                    };
+                };
+            };
+        };
+        output.write(base, 1u);
+        output.write(base + 1u, cast<uint>(surface.is_replaced));
+        output.write(base + 2u, position_mismatch);
+        output.write(base + 3u, nonfinite);
+        output.write(base + 4u, accepted);
+        output.write(base + 5u, donor_mismatch);
+        output.write(base + 6u, endpoints);
+        output.write(base + 7u, positive_jacobians);
+        output.write(base + 8u, jacobian_mismatch);
+    };
+    Global::SceneGpuContextScope scope{pipeline.geometry().bindless_array(), pipeline.device()};
+    fb.prepare_view_texture();
+    auto shader = pipeline.device().compile(kernel, "restir_produced_receiver_position_parity");
+    const auto param = gi.construct_param();
+    std::vector<uint> values(pipeline.pixel_num() * words);
+    auto output = pipeline.device().create_buffer<uint>(values.size(), "restir_receiver_position_parity_results");
+    uint sp_replaced = 0u, sp_jacobians = 0u;
+    auto restore = [&] {
+        camera->set_position(original_position); camera->set_yaw(original_yaw); camera->update_device_data();
+        integrator->set_stable_planes_enabled(original_planes);
+        fb.set_enable_accumulation(original_accumulation);
+        pipeline.invalidate(); pipeline.upload_data(); pipeline.display(1.0 / 60.0);
+    };
+    try {
+        fb.set_enable_accumulation(false);
+        for (const bool planes : {false, true}) {
+            integrator->set_stable_planes_enabled(planes);
+            pipeline.invalidate();
+            for (uint pose = 0u; pose < 3u; ++pose) {
+                auto position = original_position;
+                if (pose > 0u) position.x += 0.037f;
+                camera->set_position(position);
+                camera->set_yaw(original_yaw + (pose == 2u ? 1.25f : 0.f));
+                camera->update_device_data();
+                pipeline.upload_data(); pipeline.display(1.0 / 60.0);
+                const uint frame = pipeline.frame_index() - 1u;
+                pipeline.stream() << shader(frame, param, output).dispatch(pipeline.resolution())
+                                  << output.download(values.data()) << synchronize() << commit();
+                uint hits = 0u, receivers = 0u, replaced = 0u, donors = 0u, jacobians = 0u;
+                for (uint pixel = 0u; pixel < pipeline.pixel_num(); ++pixel) {
+                    const uint* value = values.data() + pixel * words;
+                    hits += value[9];
+                    if (value[0] == 0u) continue;
+                    receivers += 1u; replaced += value[1]; donors += value[4]; jacobians += value[7];
+                    if (value[2] || value[3] || value[5] || value[8]) {
+                        std::cerr << "position parity fixture=" << label << " SP=" << planes << " pose=" << pose
+                                  << " pixel=" << pixel << " stored_bits=" << value[10] << ',' << value[11] << ',' << value[12]
+                                  << " reference_bits=" << value[13] << ',' << value[14] << ',' << value[15] << '\n';
+                        throw std::runtime_error("produced ReSTIR receiver position or GI Jacobian differs bitwise from geometry reconstruction");
+                    }
+                }
+                std::cout << "GI position fixture=" << label << " SP=" << planes << " pose=" << pose
+                          << " frame=" << frame << " hits=" << hits << " receivers=" << receivers << " replaced=" << replaced
+                          << " donors=" << donors << " positive_jacobians=" << jacobians << '\n';
+                if (hits == 0u)
+                    throw std::runtime_error("GI position parity fixture must produce real hit receivers at every pose");
+                // Pure specular SP-off fixtures can contain only unsupported
+                // replacement chains, which production correctly excludes from
+                // spatial reuse. Their mandatory reuse controls are SP-on.
+                const bool expect_donors = planes || (!require_replaced && !require_jacobian);
+                if (expect_donors && (receivers == 0u || donors == 0u))
+                    throw std::runtime_error("GI position parity fixture must exercise its expected spatial-reuse domain");
+                if (planes) { sp_replaced += replaced; sp_jacobians += jacobians; }
+            }
+        }
+        if ((require_replaced && sp_replaced == 0u) || (require_jacobian && sp_jacobians == 0u))
+            throw std::runtime_error("GI position parity fixture did not exercise required SP-on replacements or positive real-endpoint Jacobians");
+    } catch (...) {
+        restore();
+        throw;
+    }
+    restore();
+    std::cout << "PASS: produced ReSTIR receiver positions and GI Jacobians are bit-exact in both SP modes and camera motion: " << label << '\n';
 }
