@@ -847,25 +847,41 @@ void ReSTIRDI::compile_shader1() noexcept {
     shader1_ = device().compile(kernel, "ReSTIR direct spatial reuse and shading");
 }
 
+void ReSTIRDI::restore(RuntimeObject *old_obj) noexcept {
+    const auto *previous = dynamic_cast<ReSTIRDI *>(old_obj);
+    if (previous->reservoirs_.has_registered()) {
+        const auto &buffer = previous->reservoirs_;
+        const uint base = buffer.index().hv();
+        const auto *bindings = buffer.bindless_array()->impl();
+        OC_ERROR_IF(base + 1u >= bindings->buffer_num() ||
+                        !di_reservoir_storage_matches(buffer.name(), bindings->buffer_view(base),
+                                                      bindings->buffer_view(base + 1u), buffer.length().hv()),
+                    "DI reservoir storage ABI changed; restart the engine before loading the new shaders.");
+    }
+    ReSTIR::restore(old_obj);
+    VS_HOTFIX_MOVE_ATTRS(M_light_, M_bsdf_, debias_, pairwise_, reweight_, max_recursion_, stable_planes_enabled_,
+                       radiance_, reservoirs_, shader0_, shader1_)
+}
+
 void ReSTIRDI::prepare() noexcept {
     switch_profile::Scope profile{"ReSTIRDI::prepare", "buffers"};
     Pipeline *rp = pipeline();
     frame_buffer().prepare_screen_buffer(radiance_);
-    reservoirs_.super() = device().create_buffer<DIReservoir>(rp->pixel_num() * 2,
-                                                              "ReSTIRDI::reservoirs_ x 2");
+    reservoirs_.super() = device().create_buffer<DIReservoirStorage>(rp->pixel_num() * 2,
+                                                                  DIReservoirStorage::Name);
     reservoirs_.register_self(0, rp->pixel_num());
     reservoirs_.register_view(rp->pixel_num(), rp->pixel_num());
-    vector<DIReservoir> host{rp->pixel_num() * 2, DIReservoir{}};
+    vector<DIReservoirStorage> host{rp->pixel_num() * 2, DIReservoirStorage{}};
     reservoirs_.upload_immediately(host.data());
 }
 
 void ReSTIRDI::update_resolution(ocarina::uint2 res) noexcept {
     Pipeline *rp = pipeline();
-    reservoirs_.super() = device().create_buffer<DIReservoir>(rp->pixel_num() * 2,
-                                                              "ReSTIRDI::reservoirs_ x 2");
+    reservoirs_.super() = device().create_buffer<DIReservoirStorage>(rp->pixel_num() * 2,
+                                                                  DIReservoirStorage::Name);
     reservoirs_.register_self(0, rp->pixel_num());
     reservoirs_.register_view_index(1, rp->pixel_num(), rp->pixel_num());
-    vector<DIReservoir> host{rp->pixel_num() * 2, DIReservoir{}};
+    vector<DIReservoirStorage> host{rp->pixel_num() * 2, DIReservoirStorage{}};
     reservoirs_.upload_immediately(host.data());
 }
 

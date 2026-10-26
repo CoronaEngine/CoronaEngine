@@ -5,6 +5,7 @@
 #pragma once
 
 #include "common.h"
+#include "di_reservoir_storage.h"
 #include "base/mgr/switch_profile.h"
 
 namespace vision {
@@ -56,7 +57,7 @@ private:
     uint max_recursion_{};
     bool stable_planes_enabled_{true};
     SP<ScreenBuffer> radiance_{make_shared<ScreenBuffer>("ReSTIRDI::radiance_")};
-    mutable RegistrableBuffer<DIReservoir> reservoirs_{pipeline()->bindless_array()};
+    mutable RegistrableBuffer<DIReservoirStorage> reservoirs_{pipeline()->bindless_array()};
 
     /**
      * generate initial candidates
@@ -101,8 +102,7 @@ public:
     }
     [[nodiscard]] bool stable_planes_enabled() const noexcept { return stable_planes_enabled_; }
     void set_stable_planes_enabled(bool enabled) noexcept { stable_planes_enabled_ = enabled; }
-    VS_HOTFIX_MAKE_RESTORE(ReSTIR, M_light_, M_bsdf_, debias_, pairwise_, reweight_, max_recursion_, stable_planes_enabled_,
-                           radiance_, reservoirs_, shader0_, shader1_)
+    void restore(RuntimeObject *old_obj) noexcept override;
     OC_MAKE_MEMBER_GETTER(open, )
     OC_MAKE_MEMBER_GETTER(radiance, &)
     [[nodiscard]] float factor() const noexcept { return open() ? factor_ : 0.f; }
@@ -139,13 +139,13 @@ public:
     // Final history stays in slice A. Temporal gathers A into scratch B;
     // the following spatial dispatch gathers B and replaces A.
     [[nodiscard]] auto prev_reservoirs() const noexcept {
-        return pipeline()->bindless_array().buffer_var<DIReservoir>(reservoir_base());
+        return DIReservoirStorageView{pipeline()->bindless_array().buffer_var<DIReservoirStorage>(reservoir_base())};
     }
     [[nodiscard]] auto passthrough_reservoirs() const noexcept {
-        return pipeline()->bindless_array().buffer_var<DIReservoir>(1 + reservoir_base());
+        return DIReservoirStorageView{pipeline()->bindless_array().buffer_var<DIReservoirStorage>(1 + reservoir_base())};
     }
     [[nodiscard]] auto cur_reservoirs() const noexcept {
-        return pipeline()->bindless_array().buffer_var<DIReservoir>(reservoir_base());
+        return DIReservoirStorageView{pipeline()->bindless_array().buffer_var<DIReservoirStorage>(reservoir_base())};
     }
     [[nodiscard]] HOTFIX_VIRTUAL DIReservoirVar RIS(const Bool &hit, const Interaction &it, const Var<DIParam> &param,
                                                     const Float3 &throughput, Uint *flag) const noexcept;
