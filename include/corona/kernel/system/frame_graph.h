@@ -88,6 +88,24 @@ struct FrameTickReport {
 };
 
 /**
+ * @brief 单节点的统计快照（带名字与 id，便于外部直接打印）
+ */
+struct FrameNodeSnapshot {
+    FrameNodeId id{kInvalidFrameNodeId};
+    std::string_view name;  ///< 指向图内节点名，图的生命周期内有效
+    FrameNodeStats stats;
+};
+
+/**
+ * @brief 整图统计快照
+ *
+ * 拷贝式快照：调用方拿到之后可以慢慢读，不受 tick 线程影响。
+ */
+struct FrameGraphStats {
+    std::vector<FrameNodeSnapshot> nodes;
+};
+
+/**
  * @brief 帧图：在**调用线程上内联执行**的 DAG 调度器
  *
  * 设计约束（决定了它为什么不直接套用 taskflow / TBB flow_graph）：
@@ -130,6 +148,8 @@ class FrameGraph {
     FrameGraph() = default;
     FrameGraph(const FrameGraph&) = delete;
     FrameGraph& operator=(const FrameGraph&) = delete;
+    FrameGraph(FrameGraph&&) noexcept = default;
+    FrameGraph& operator=(FrameGraph&&) noexcept = default;
 
     // ========================================
     // 构图
@@ -235,6 +255,11 @@ class FrameGraph {
      * @brief 节点统计快照；id 无效时返回默认值
      */
     [[nodiscard]] FrameNodeStats stats(FrameNodeId id) const;
+
+    /**
+     * @brief 整图统计快照（逐节点拷贝）
+     */
+    [[nodiscard]] FrameGraphStats snapshot_stats() const;
 
     /**
      * @brief 清零所有统计

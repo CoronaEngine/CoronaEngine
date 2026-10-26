@@ -295,6 +295,16 @@ FrameNodeStats FrameGraph::stats(FrameNodeId id) const {
     return nodes_[id].stats;
 }
 
+FrameGraphStats FrameGraph::snapshot_stats() const {
+    FrameGraphStats snapshot;
+    snapshot.nodes.reserve(nodes_.size());
+    for (std::size_t i = 0; i < nodes_.size(); ++i) {
+        snapshot.nodes.push_back(FrameNodeSnapshot{
+            static_cast<FrameNodeId>(i), nodes_[i].desc.name, nodes_[i].stats});
+    }
+    return snapshot;
+}
+
 void FrameGraph::reset_stats() {
     for (auto& node : nodes_) {
         node.stats = FrameNodeStats{};

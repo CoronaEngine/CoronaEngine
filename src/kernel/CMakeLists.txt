@@ -5,6 +5,7 @@ set(CORONA_ENGINE_KERNEL_SOURCE_FILES
     system/frame_graph.cpp
     system/system_base.cpp
     system/system_manager.cpp
+    system/systems_thread.cpp
 )
 
 set(CORONA_ENGINE_KERNEL_HEADER_FILES
@@ -17,6 +18,7 @@ set(CORONA_ENGINE_KERNEL_HEADER_FILES
     ${PROJECT_SOURCE_DIR}/include/corona/kernel/system/i_system_context.h
     ${PROJECT_SOURCE_DIR}/include/corona/kernel/system/i_system_manager.h
     ${PROJECT_SOURCE_DIR}/include/corona/kernel/system/system_base.h
+    ${PROJECT_SOURCE_DIR}/include/corona/kernel/system/systems_thread.h
 )
 
 add_library(CoronaEngineKernel STATIC

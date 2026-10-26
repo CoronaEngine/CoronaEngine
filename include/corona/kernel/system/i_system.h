@@ -122,6 +122,25 @@ class ISystem {
     virtual void update() = 0;
 
     /**
+     * @brief 帧时间注入（可选）
+     *
+     * 由外部调度者（帧图 / SystemsThread）在每次调用 update() 之前告知本帧的
+     * 时间步长与帧号。默认空实现，系统可继续自测 dt。
+     *
+     * 为什么需要它：目前多个系统在 update() 内部用 steady_clock 自己算 dt
+     * （例如 MechanicsSystem 的定步长累加器），一旦 update() 的调用者从
+     * "每个系统一条线程" 变成 "一条线程按 DAG 顺序依次调用"，自测 dt 会
+     * 与真实调度间隔错配，因此调度者需要显式把帧时间喂进来。
+     *
+     * @param dt 本帧时间步长（秒）
+     * @param frame_number 帧号（单调递增，从 0 开始）
+     */
+    virtual void feed_frame_time(float dt, std::uint64_t frame_number) {
+        (void)dt;
+        (void)frame_number;
+    }
+
+    /**
      * @brief 帧同步点（可选）
      *
      * 对于需要与主线程或其他系统同步的系统，可以实现此方法。

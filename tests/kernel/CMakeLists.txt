@@ -35,3 +35,11 @@ add_executable(corona_frame_graph_tests
 target_link_libraries(corona_frame_graph_tests PRIVATE CoronaEngineKernel)
 add_test(NAME FrameGraphTests
          COMMAND corona_frame_graph_tests)
+
+# 单线程 DAG 执行器：依赖装配、执行序、帧时间注入、速率门控、异常隔离、线程生命周期。
+add_executable(corona_systems_thread_tests
+    test_systems_thread.cpp
+)
+target_link_libraries(corona_systems_thread_tests PRIVATE CoronaEngineKernel)
+add_test(NAME SystemsThreadTests
+         COMMAND corona_systems_thread_tests)
