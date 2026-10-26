@@ -10,10 +10,15 @@
 #include <stdexcept>
 #include <utility>
 
+#include "horizon/core/logging.h"
+
 namespace Corona::Kernel {
 namespace {
 
 using Clock = std::chrono::steady_clock;
+
+/// 每这么多 tick 打一次逐节点统计：120Hz 下约 5s，与 UiSystem 的 [UI/Frame] 节奏对齐
+constexpr std::uint64_t kStatsReportTicks = 600;
 
 /// 单次 tick 允许的最大 dt：暂停/断点/长阻塞之后不要让物理与动画一次性跳太远
 constexpr double kMaxDeltaSeconds = 0.25;
@@ -238,6 +243,11 @@ void SystemsThread::thread_loop(std::stop_token stop_token) {
         record(report);
         const auto cost = Clock::now() - begin;
 
+        const std::uint64_t tick_index = ticks_.load(std::memory_order_relaxed);
+        if (tick_index != 0 && tick_index % kStatsReportTicks == 0) {
+            log_stats(tick_index);
+        }
+
         // 绝对 deadline 节拍：睡眠到下一个边界，避免"计算耗时 + 睡眠"的累积漂移
         const auto deadline = Clock::now() + (period_ns - cost);
         std::unique_lock lock{state_mutex_};
@@ -258,6 +268,25 @@ void SystemsThread::thread_loop(std::stop_token stop_token) {
 FrameGraphStats SystemsThread::stats() const {
     std::lock_guard lock{stats_mutex_};
     return stats_snapshot_;
+}
+
+void SystemsThread::log_stats(std::uint64_t tick_index) const {
+    const FrameGraphStats snapshot = stats();
+    const auto rate = tick_rate_.load(std::memory_order_relaxed);
+    const double rate_d = static_cast<double>(rate == 0 ? 1 : rate);
+    const double total_ms = last_tick_ms_.load(std::memory_order_relaxed);
+    CFW_LOG_INFO("[SystemsThread/Frame] tick={} rate={}Hz last_tick={:.2f}ms failures={}",
+                 tick_index, rate, total_ms, failures_.load(std::memory_order_relaxed));
+    // 逐节点：invocations 折算成实际 update_hz，gated_out 说明被速率门控跳过了多少次。
+    // 这两个数就是判断"这个系统是不是真的按目标频率在跑"的唯一依据。
+    for (const auto& node : snapshot.nodes) {
+        const auto& s = node.stats;
+        const double hz = tick_index == 0
+                              ? 0.0
+                              : static_cast<double>(s.invocations) * rate_d / static_cast<double>(tick_index);
+        CFW_LOG_INFO("[SystemsThread/Node] system={} avg={:.2f}ms max={:.2f}ms update_hz={:.1f} gated={} disabled={}",
+                     node.name, s.average_ms, s.max_ms, hz, s.gated_out, s.disabled_out);
+    }
 }
 
 std::string SystemsThread::dump() const {

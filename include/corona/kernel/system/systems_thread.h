@@ -156,6 +156,8 @@ private:
     void thread_loop(std::stop_token stop_token);
     FrameTickReport tick_locked(double delta_seconds);
     void record(const FrameTickReport& report);
+    /// 周期性把逐节点统计打到日志（节奏见 kStatsReportTicks）
+    void log_stats(std::uint64_t tick_index) const;
     [[nodiscard]] double period_ms() const;
 
     SystemsThreadConfig config_;
