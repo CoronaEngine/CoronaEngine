@@ -219,6 +219,8 @@ FrameTickReport FrameGraph::run_tick(const FrameTick& tick) {
                 (node.stats.average_ms * static_cast<double>(node.stats.invocations - 1) + ms) /
                 static_cast<double>(node.stats.invocations);
             node.stats.max_ms = std::max(node.stats.max_ms, ms);
+            ++node.stats.failures;
+            ++node.stats.consecutive_failures;
             report.completed = false;
             report.failed_node = id;
             report.stopped_on = id;
@@ -233,6 +235,8 @@ FrameTickReport FrameGraph::run_tick(const FrameTick& tick) {
                 (node.stats.average_ms * static_cast<double>(node.stats.invocations - 1) + ms) /
                 static_cast<double>(node.stats.invocations);
             node.stats.max_ms = std::max(node.stats.max_ms, ms);
+            ++node.stats.failures;
+            ++node.stats.consecutive_failures;
             report.completed = false;
             report.failed_node = id;
             report.stopped_on = id;
@@ -243,6 +247,7 @@ FrameTickReport FrameGraph::run_tick(const FrameTick& tick) {
 
         const double ms = elapsed_ms(node_start, Clock::now());
         ++node.stats.invocations;
+        node.stats.consecutive_failures = 0;
         if (status == FrameNodeStatus::idle) {
             ++node.stats.idle_invocations;
             ++report.idle;

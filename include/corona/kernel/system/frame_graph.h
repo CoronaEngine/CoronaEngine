@@ -67,6 +67,8 @@ struct FrameNodeStats {
     std::uint64_t idle_invocations = 0;  ///< 其中返回 idle 的次数
     std::uint64_t gated_out = 0;      ///< 被速率门控跳过的次数
     std::uint64_t disabled_out = 0;   ///< 因自身或上游关闭而跳过的次数
+    std::uint64_t failures = 0;       ///< 抛异常的累计次数
+    std::uint32_t consecutive_failures = 0;  ///< 连续失败次数：成功执行一次即清零
     double last_ms = 0.0;             ///< 最近一次执行耗时（毫秒）
     double average_ms = 0.0;          ///< 平均执行耗时（毫秒）
     double max_ms = 0.0;              ///< 最大执行耗时（毫秒）

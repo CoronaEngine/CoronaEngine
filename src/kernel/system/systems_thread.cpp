@@ -19,6 +19,10 @@ using Clock = std::chrono::steady_clock;
 
 /// 每这么多 tick 打一次逐节点统计：120Hz 下约 5s，与 UiSystem 的 [UI/Frame] 节奏对齐
 constexpr std::uint64_t kStatsReportTicks = 600;
+/// 同一个节点连续失败多少 tick 后升级成 ERROR（120Hz 下约 2.5s）
+constexpr std::uint64_t kNodeFailureEscalationTicks = 300;
+/// 持续失败时重复喊话的周期（120Hz 下 5s，与统计同节奏）
+constexpr std::uint64_t kNodeFailureReportTicks = 600;
 
 /// 单次 tick 允许的最大 dt：暂停/断点/长阻塞之后不要让物理与动画一次性跳太远
 constexpr double kMaxDeltaSeconds = 0.25;
@@ -189,10 +193,18 @@ FrameTickReport SystemsThread::tick_locked(double delta_seconds) {
 }
 
 void SystemsThread::record(const FrameTickReport& report) {
-    ticks_.fetch_add(1, std::memory_order_relaxed);
+    const std::uint64_t tick = ticks_.fetch_add(1, std::memory_order_relaxed);
     last_tick_ms_.store(report.total_ms, std::memory_order_relaxed);
     if (!report.completed) {
         failures_.fetch_add(1, std::memory_order_relaxed);
+        note_node_failure(report, tick);
+    } else if (failing_node_ != kInvalidFrameNodeId) {
+        CFW_LOG_INFO("[SystemsThread/NodeFail] system={} recovered after {} ticks ({} failures total)",
+                     graph_.node_name(failing_node_), failing_ticks_, failing_total_);
+        failing_node_ = kInvalidFrameNodeId;
+        failing_ticks_ = 0;
+        failing_total_ = 0;
+        failing_escalated_ = false;
     }
 
     // 统计快照与最后一帧错误：运行期读取方（编辑器/诊断）随时可能来取
@@ -201,6 +213,44 @@ void SystemsThread::record(const FrameTickReport& report) {
     stats_snapshot_ = std::move(snapshot);
     if (!report.error.empty()) {
         last_error_ = report.error;
+    }
+}
+
+void SystemsThread::note_node_failure(const FrameTickReport& report, std::uint64_t tick) {
+    const FrameNodeId node =
+        report.failed_node != kInvalidFrameNodeId ? report.failed_node : report.stopped_on;
+    if (node == kInvalidFrameNodeId) {
+        return;
+    }
+
+    if (node != failing_node_) {
+        failing_node_ = node;
+        failing_ticks_ = 1;
+        failing_total_ = 1;
+        failing_escalated_ = false;
+        CFW_LOG_ERROR("[SystemsThread/NodeFail] system={} tick={} error={} —— 本帧在 {} 处中止，"
+                      "它之后的节点本 tick 不执行",
+                      graph_.node_name(node), tick, report.error, graph_.node_name(report.stopped_on));
+        return;
+    }
+
+    ++failing_ticks_;
+    ++failing_total_;
+
+    // 同一个节点连续失败：先按周期喊一次，再在超过升级阈值时明确说"链路已经停了"。
+    // 不在这里关引擎（那会把编辑器一起带走），但也不能默不作声——否则表现就是
+    // "画面不动、进程还在、日志干净"，比直接崩掉更难查。
+    if (!failing_escalated_ && failing_ticks_ >= kNodeFailureEscalationTicks) {
+        failing_escalated_ = true;
+        CFW_LOG_ERROR("[SystemsThread/NodeFail] system={} 已连续失败 {} tick（约 {:.1f}s），"
+                      "依赖它的下游节点在此期间一次都没有执行；按这条链路的上游查起",
+                      graph_.node_name(node), failing_ticks_,
+                      static_cast<double>(failing_ticks_) * period_ms() / 1000.0);
+        return;
+    }
+    if (failing_ticks_ % kNodeFailureReportTicks == 0) {
+        CFW_LOG_WARNING("[SystemsThread/NodeFail] system={} still failing ({} ticks, last error={})",
+                        graph_.node_name(node), failing_ticks_, report.error);
     }
 }
 

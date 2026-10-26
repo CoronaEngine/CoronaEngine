@@ -156,6 +156,8 @@ private:
     void thread_loop(std::stop_token stop_token);
     FrameTickReport tick_locked(double delta_seconds);
     void record(const FrameTickReport& report);
+    /// 同一节点连续失败的上报与升级（不关引擎，但必须喊出来）
+    void note_node_failure(const FrameTickReport& report, std::uint64_t tick);
     /// 周期性把逐节点统计打到日志（节奏见 kStatsReportTicks）
     void log_stats(std::uint64_t tick_index) const;
     [[nodiscard]] double period_ms() const;
@@ -181,6 +183,12 @@ private:
     mutable std::mutex stats_mutex_;
     FrameGraphStats stats_snapshot_{};
     std::string last_error_;
+
+    // 卡在同一个节点时的现场（只在 tick 线程写）
+    FrameNodeId failing_node_{kInvalidFrameNodeId};
+    std::uint64_t failing_ticks_{0};
+    std::uint64_t failing_total_{0};
+    bool failing_escalated_{false};
 };
 
 }  // namespace Corona::Kernel

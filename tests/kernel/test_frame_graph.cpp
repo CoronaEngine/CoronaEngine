@@ -7,8 +7,9 @@
 //  4. 速率门控：只跳过自己，不跳过下游（M-β 语义）
 //  5. enabled：关闭子树，不影响无关分支
 //  6. 节点抛异常 => 报告 failed 且中止本 tick，但图仍可继续使用
-//  7. 边界钩子按执行序调用
-//  8. 统计累计与清零、dump 内容
+//  7. 连续失败计数在成功执行后清零（上层据此区分偶发与卡死）
+//  8. 边界钩子按执行序调用
+//  9. 统计累计与清零、dump 内容
 
 #include "corona/kernel/system/frame_graph.h"
 
@@ -321,6 +322,33 @@ void test_exception_aborts_tick_only() {
     const auto second = graph.run_tick(FrameTick{1, 0.016});
     CHECK(!second.completed);
     CHECK(before == 2);  // the graph keeps working, it is not poisoned
+
+    CHECK(graph.stats(boom).failures == 2);
+    CHECK(graph.stats(boom).consecutive_failures == 2);
+}
+
+// 连续失败计数必须能"清零"：否则上层没法区分"偶发一次"和"卡在这个节点上"，
+// 而后者在单线程 DAG 里的表现就是"画面不动、进程还在、日志干净"。
+void test_failure_counter_resets_after_success() {
+    FrameGraph graph;
+    int attempt = 0;
+
+    const auto flaky = graph.add_node(node("flaky", {}, [&attempt](const FrameTick&) -> FrameNodeStatus {
+        ++attempt;
+        if (attempt <= 2) throw std::runtime_error("flaky");
+        return FrameNodeStatus::ran;
+    }));
+    CHECK(graph.compile(nullptr));
+
+    CHECK(!graph.run_tick(FrameTick{0, 0.016}).completed);
+    CHECK(!graph.run_tick(FrameTick{1, 0.016}).completed);
+    CHECK(graph.stats(flaky).consecutive_failures == 2);
+    CHECK(graph.stats(flaky).failures == 2);
+
+    CHECK(graph.run_tick(FrameTick{2, 0.016}).completed);
+    CHECK(graph.stats(flaky).consecutive_failures == 0);
+    CHECK(graph.stats(flaky).failures == 2);  // 累计值不清零，只清连续值
+    CHECK(graph.stats(flaky).invocations == 3);  // 抛异常的那两次也算"执行过"
 }
 
 void test_boundary_hook() {
@@ -396,6 +424,7 @@ int main() {
     test_run_and_rate_gating();
     test_disable_subtree();
     test_exception_aborts_tick_only();
+    test_failure_counter_resets_after_success();
     test_boundary_hook();
     test_idle_and_stats();
 
