@@ -1130,14 +1130,21 @@ Detail::PresentOutcome DisplaySystem::compose_and_present(
         << Horizon::commit();
     release_inputs(resources.last_receipt);
     resources.executor.wait(resources.last_receipt);
-    const auto present_deadline = resources.scene_cadence.present_deadline(
-        {state.optics.image_handle, receipt_serial(optics_receipt)},
-        optics_system_ ? optics_system_->get_target_fps() : 0,
-        std::chrono::steady_clock::now());
+    // 节拍由调度器负责，这里默认不再自己睡：
+    // 原实现在每次 present 前 sleep_until(cadence)，由于 period 取自 Optics 的
+    // 60Hz，clamp 之后每个出图帧固定睡 ~8ms。在"五个系统同一条线程按 DAG 执行"
+    // 之后，这 8ms 会把整条 DAG 卡在 Display 节点里（120Hz tick 的预算只有
+    // 8.33ms），于是 Mechanics/Geometry 实际只能按 ~30Hz 被驱动。
+    // 需要复现旧行为（例如做 A/B 或对照实验）时设 CORONA_DISPLAY_CADENCE_SLEEP=1。
     // No producer image locks are held here. Composition is already on the
     // GPU, and the surface lease protects the same output until present ends.
-    // The bounded sleep also bounds shutdown latency; no busy spin is used.
-    std::this_thread::sleep_until(present_deadline);
+    if (std::getenv("CORONA_DISPLAY_CADENCE_SLEEP") != nullptr) {
+        const auto present_deadline = resources.scene_cadence.present_deadline(
+            {state.optics.image_handle, receipt_serial(optics_receipt)},
+            optics_system_ ? optics_system_->get_target_fps() : 0,
+            std::chrono::steady_clock::now());
+        std::this_thread::sleep_until(present_deadline);
+    }
     resources.last_receipt = resources.executor.stream()
         << Horizon::present(displayer, resources.output)
         << Horizon::commit();

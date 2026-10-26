@@ -13,6 +13,7 @@
 #include "corona/kernel/system/i_system_context.h"
 #include "corona/kernel/system/i_system_manager.h"
 #include "corona/kernel/system/system_base.h"
+#include "corona/kernel/system/systems_thread.h"
 
 namespace Corona::Kernel {
 
@@ -104,7 +105,27 @@ class SystemManager : public ISystemManager {
 
     void start_all() override {
         auto systems = snapshot_systems();
+
+        if (dag_) {
+            // DAG 里的系统不再各自建线程：状态照旧切到 running，update() 交给 DAG 线程
+            for (auto& system : systems) {
+                if (dag_system_names_.count(std::string(system->get_name())) != 0) {
+                    system->start_inline();
+                    CFW_LOG_INFO("Started system (inline, DAG): {}", system->get_name());
+                }
+            }
+            if (dag_->start()) {
+                CFW_LOG_INFO("Started systems thread: {} system(s) at {}Hz", dag_->graph().node_count(),
+                             dag_->tick_rate());
+            } else {
+                CFW_LOG_ERROR("Failed to start systems thread");
+            }
+        }
+
         for (auto& system : systems) {
+            if (dag_ && dag_system_names_.count(std::string(system->get_name())) != 0) {
+                continue;
+            }
             system->start();
             CFW_LOG_INFO("Started system: {}", system->get_name());
         }
@@ -112,20 +133,40 @@ class SystemManager : public ISystemManager {
 
     void pause_all() override {
         auto systems = snapshot_systems();
+        if (dag_) {
+            dag_->pause();
+        }
         for (auto& system : systems) {
+            if (dag_ && dag_system_names_.count(std::string(system->get_name())) != 0) {
+                continue;
+            }
             system->pause();
         }
     }
 
     void resume_all() override {
         auto systems = snapshot_systems();
+        if (dag_) {
+            dag_->resume();
+        }
         for (auto& system : systems) {
+            if (dag_ && dag_system_names_.count(std::string(system->get_name())) != 0) {
+                continue;
+            }
             system->resume();
         }
     }
 
     void stop_all() override {
         auto systems = snapshot_systems();
+
+        // DAG 线程必须最先停：它是这批系统 update() 的唯一调用者，先停它才能保证
+        // 后面 Display/UI 的关停序列不会被一次 tick 打断。
+        if (dag_) {
+            dag_->stop();
+            CFW_LOG_INFO("Stopped systems thread");
+        }
+
         // UI produces frames consumed by Display. Stop that producer first, then
         // stop Display immediately so it cannot continue presenting while the
         // remaining systems are draining.
@@ -187,14 +228,7 @@ class SystemManager : public ISystemManager {
         }
 
         SystemStats stats;
-        stats.name = sys->get_name();
-        stats.state = sys->get_state();
-        stats.target_fps = sys->get_target_fps();
-        stats.actual_fps = sys->get_actual_fps();
-        stats.average_frame_time_ms = sys->get_average_frame_time();
-        stats.max_frame_time_ms = sys->get_max_frame_time();
-        stats.total_frames = sys->get_total_frames();
-        stats.total_update_calls = sys->get_total_frames();
+        fill_stats(stats, *sys);
         return stats;
     }
 
@@ -206,15 +240,7 @@ class SystemManager : public ISystemManager {
 
         for (const auto& sys : systems_) {
             SystemStats stats;
-            stats.name = sys->get_name();
-            stats.state = sys->get_state();
-            stats.target_fps = sys->get_target_fps();
-            stats.actual_fps = sys->get_actual_fps();
-            stats.average_frame_time_ms = sys->get_average_frame_time();
-            stats.max_frame_time_ms = sys->get_max_frame_time();
-            stats.total_frames = sys->get_total_frames();
-            stats.total_update_calls = sys->get_total_frames();
-
+            fill_stats(stats, *sys);
             all_stats.push_back(stats);
         }
 
@@ -223,6 +249,59 @@ class SystemManager : public ISystemManager {
 
     SystemContext* get_context() {
         return context_.get();
+    }
+
+    // ========================================
+    // DAG 模式
+    // ========================================
+
+    bool configure_dag(const SystemDagConfig& config, std::string* error) override {
+        std::lock_guard<std::mutex> lock(mutex_);
+
+        dag_.reset();
+        dag_config_ = config;
+        dag_system_names_.clear();
+
+        if (config.nodes.empty()) {
+            if (error) *error = "system dag: empty node list";
+            return false;
+        }
+
+        SystemsThreadConfig thread_config;
+        thread_config.tick_rate = config.tick_rate;
+        thread_config.nodes.reserve(config.nodes.size());
+
+        for (const auto& node : config.nodes) {
+            auto it = systems_by_name_.find(std::string(node.system));
+            if (it == systems_by_name_.end()) {
+                if (error) {
+                    *error = "system dag: unknown system '" + std::string(node.system) + "'";
+                }
+                return false;
+            }
+            SystemsThreadNode spec;
+            spec.system = it->second.get();
+            spec.after = node.after;
+            spec.period_ticks = node.period_ticks;
+            spec.phase = node.phase;
+            thread_config.nodes.push_back(spec);
+            dag_system_names_.insert(std::string(node.system));
+        }
+
+        auto dag = std::make_unique<SystemsThread>(std::move(thread_config));
+        if (!dag->prepare(error)) {
+            return false;
+        }
+        dag_ = std::move(dag);
+        return true;
+    }
+
+    [[nodiscard]] bool dag_enabled() const override {
+        return dag_ != nullptr;
+    }
+
+    [[nodiscard]] std::string dag_dump() const override {
+        return dag_ ? dag_->dump() : std::string{};
     }
 
    private:
@@ -246,11 +325,59 @@ class SystemManager : public ISystemManager {
         return nullptr;
     }
 
+    /**
+     * @brief 填一个 SystemStats
+     *
+     * DAG 里的系统没有自己的线程，SystemBase 的自测统计不会更新，因此改从
+     * 帧图快照取：invocations 即帧数，耗时即该节点的墙钟耗时。这样
+     * 编辑器/日志里的"系统帧时间"在两种模式下口径一致。
+     */
+    void fill_stats(SystemStats& out, ISystem& sys) {
+        out.name = sys.get_name();
+        out.state = sys.get_state();
+        out.target_fps = sys.get_target_fps();
+        out.actual_fps = sys.get_actual_fps();
+        out.average_frame_time_ms = sys.get_average_frame_time();
+        out.max_frame_time_ms = sys.get_max_frame_time();
+        out.total_frames = sys.get_total_frames();
+        out.total_update_calls = sys.get_total_frames();
+
+        if (!dag_) {
+            return;
+        }
+        const FrameGraphStats snapshot = dag_->stats();
+        const std::string_view name = sys.get_name();
+        for (const auto& node : snapshot.nodes) {
+            if (node.name != name) {
+                continue;
+            }
+            out.total_frames = node.stats.invocations;
+            out.total_update_calls = node.stats.invocations;
+            out.average_frame_time_ms = static_cast<float>(node.stats.average_ms);
+            out.max_frame_time_ms = static_cast<float>(node.stats.max_ms);
+
+            const std::uint64_t ticks = dag_->ticks();
+            if (ticks != 0) {
+                out.actual_fps = static_cast<float>(
+                    static_cast<double>(node.stats.invocations) * dag_->tick_rate() /
+                    static_cast<double>(ticks));
+            }
+            // DAG 系统的 running/paused 由调度器统一表达，避免"系统状态 running
+            // 但线程根本不存在"这种自相矛盾的读数
+            out.state = dag_->is_running() ? SystemState::running : SystemState::stopped;
+            return;
+        }
+    }
+
     std::unique_ptr<SystemContext> context_;
     std::vector<std::shared_ptr<ISystem>> systems_;
     std::map<std::string, std::shared_ptr<ISystem>> systems_by_name_;
     // 初始化失败的系统（只由主线程在 initialize_all/shutdown_all 中读写）
     std::unordered_set<const ISystem*> failed_systems_;
+    // DAG 模式：把一批系统收进一条线程（由主线程在 configure/start/stop 里读写）
+    std::unique_ptr<SystemsThread> dag_;
+    SystemDagConfig dag_config_;
+    std::unordered_set<std::string> dag_system_names_;
     std::mutex mutex_;
     bool systems_sorted_ = false;
 };

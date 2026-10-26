@@ -188,6 +188,18 @@ class ISystem {
     virtual void start() = 0;
 
     /**
+     * @brief 由外部调度者驱动（帧图 / SystemsThread）时的启动
+     *
+     * 语义与 start() 相同（进入 running 状态、准备好接收 update()），但**不建线程**：
+     * update() 由调度者在它自己的线程上按拓扑序调用。
+     *
+     * 默认实现什么都不做，因此只有自己的线程模型依赖 SystemBase 的系统需要覆写。
+     * 为什么不在 start() 里加参数：start() 是既有公开契约，改签名会波及全部调用点；
+     * 默认空实现则让"DAG 里的系统"与"自带线程的系统"共用同一套生命周期调用。
+     */
+    virtual void start_inline() {}
+
+    /**
      * @brief 暂停系统
      *
      * 暂停 update() 循环，但不销毁线程。

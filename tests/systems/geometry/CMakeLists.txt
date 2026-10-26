@@ -20,9 +20,12 @@ add_test(NAME GeometryModelNodeStateTests COMMAND corona_model_node_state_tests)
 add_executable(corona_model_node_pick_tests test_model_node_pick.cpp)
 # test_model_node_pick.cpp 直接包含 <corona/engine/engine_runtime_api.h>，
 # 所以需要 include/ 而不只是 optics 的私有头目录。
+# engine_runtime_api.h 还会引出 <corona/resource/model_import_options.h>（在
+# modules/corona_resource/include 下），因此和 geometry 那个用例一样要链 CoronaResourceManager。
 target_include_directories(corona_model_node_pick_tests PRIVATE
     ${PROJECT_SOURCE_DIR}/include
     ${PROJECT_SOURCE_DIR}/src/systems/optics)
+target_link_libraries(corona_model_node_pick_tests PRIVATE Horizon CoronaResourceManager)
 add_test(NAME GeometryModelNodePickTests COMMAND corona_model_node_pick_tests)
 add_executable(corona_model_node_geometry_tests test_model_node_geometry.cpp)
 target_include_directories(corona_model_node_geometry_tests PRIVATE ${PROJECT_SOURCE_DIR}/include)

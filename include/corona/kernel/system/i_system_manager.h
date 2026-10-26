@@ -1,12 +1,44 @@
 #pragma once
 #include <cstdint>
 #include <memory>
+#include <string>
 #include <string_view>
 #include <vector>
 
 #include "i_system.h"
 
 namespace Corona::Kernel {
+
+/**
+ * @brief DAG 中的一个系统节点
+ */
+struct SystemDagNode {
+    std::string_view system;                  ///< 系统名（ISystem::get_name()）
+    std::vector<std::string_view> after;      ///< 必须先执行的其他系统名
+    std::uint32_t period_ticks{1};            ///< 速率门控周期，1 = 每 tick 都跑
+    std::uint32_t phase{0};                   ///< 速率门控相位，必须 < period_ticks
+};
+
+/**
+ * @brief DAG 装配参数
+ *
+ * 典型形态（引擎当前的五系统）：
+ * @code
+ * SystemDagConfig config;
+ * config.tick_rate = 120;
+ * config.nodes = {
+ *     {"Mechanics", {},                       2, 0},
+ *     {"Geometry",  {"Mechanics"},            2, 0},
+ *     {"Acoustics", {"Mechanics"},            2, 0},
+ *     {"Optics",    {"Geometry"},             2, 0},
+ *     {"Display",   {"Optics"},               1, 0},
+ * };
+ * @endcode
+ */
+struct SystemDagConfig {
+    std::vector<SystemDagNode> nodes;
+    std::uint32_t tick_rate{120};  ///< 本线程 tick 频率（Hz）
+};
 
 /**
  * @brief 系统统计信息结构体
@@ -174,6 +206,36 @@ class ISystemManager {
      * @return 所有系统的统计信息列表
      */
     virtual std::vector<SystemStats> get_all_stats() = 0;
+
+    // ========================================
+    // DAG 模式（单线程驱动多个系统）
+    // ========================================
+
+    /**
+     * @brief 装配 DAG：把列出的系统收进一条线程，按依赖顺序执行
+     *
+     * 必须先 initialize_all()，因为这里要按名字取系统实例；而 systems 之间
+     * 的 initialize 存在顺序依赖（见 SystemManager::initialize_all 的注释），
+     * 在 initialize 过程中取系统会重入同一把非递归锁。
+     *
+     * 装配之后 start_all() 对这些系统不再各自建线程，而是在一条新线程上跑
+     * FrameGraph；未列出的系统（Network / Script 等）行为不变。
+     *
+     * @param config 节点依赖、速率门控与本线程 tick 频率
+     * @param error 失败原因（可为 nullptr）
+     * @return 成功返回 true
+     */
+    virtual bool configure_dag(const SystemDagConfig& config, std::string* error = nullptr) = 0;
+
+    /**
+     * @brief 是否已装配 DAG
+     */
+    [[nodiscard]] virtual bool dag_enabled() const = 0;
+
+    /**
+     * @brief DAG 的可读 dump（执行序、逐节点统计、最近异常）
+     */
+    [[nodiscard]] virtual std::string dag_dump() const = 0;
 };
 
 /**

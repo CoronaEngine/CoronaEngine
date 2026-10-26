@@ -1,4 +1,4 @@
-﻿#include "corona/engine.h"
+#include "corona/engine.h"
 
 #include <corona/events/engine_events.h>
 #include <corona/kernel/event/i_event_stream.h>
@@ -19,13 +19,68 @@
 #include <corona/systems/ui/ui_system.h>
 
 #include <chrono>
+#include <cstdlib>
 #include <memory>
+#include <string>
+#include <string_view>
 #include <thread>
 
 namespace Corona {
 
 // 保存 UiSystem 指针，用于主循环中直接调用
 static Systems::UiSystem* g_ui_system_ = nullptr;
+
+// ============================================================================
+// 系统 DAG 装配
+// ============================================================================
+
+/**
+ * @brief 装配默认的五系统 DAG
+ *
+ * 拓扑来自实际数据流（不是 priority）：
+ * - Mechanics 先跑：它写 skinned vertices / 刚体位姿，下游要读
+ * - Geometry 与 Acoustics 互不依赖，排在同一层
+ *   （Geometry 要 Mechanics 的蒙皮结果；Acoustics 只想读相机与变换）
+ * - Optics 要读 Geometry 上传后的可画几何
+ * - Display 消费 Optics 产出的图像
+ *
+ * 速率门控按 M-β：120Hz tick 上，重链路各 60Hz（period_ticks = 2），
+ * Display 每 tick 都跑但内容一致时会自己跳过 present。
+ */
+static void configure_systems_dag(Kernel::ISystemManager* sys_mgr) {
+    const char* dag_env = std::getenv("CORONA_SYSTEMS_DAG");
+    if (dag_env != nullptr && std::string_view{dag_env} == "0") {
+        CFW_LOG_NOTICE("Systems DAG disabled by CORONA_SYSTEMS_DAG=0 (legacy per-system threads)");
+        return;
+    }
+
+    std::uint32_t tick_rate = 120;
+    if (const char* rate_env = std::getenv("CORONA_SYSTEMS_DAG_TICK")) {
+        const int parsed = std::atoi(rate_env);
+        if (parsed >= 30 && parsed <= 480) {
+            tick_rate = static_cast<std::uint32_t>(parsed);
+        }
+    }
+
+    Kernel::SystemDagConfig config;
+    config.tick_rate = tick_rate;
+    config.nodes = {
+        {"Mechanics", {}, 2, 0},
+        {"Geometry", {"Mechanics"}, 2, 0},
+        {"Acoustics", {"Mechanics"}, 2, 0},
+        {"Optics", {"Geometry"}, 2, 0},
+        {"Display", {"Optics"}, 1, 0},
+    };
+
+    std::string error;
+    if (!sys_mgr->configure_dag(config, &error)) {
+        CFW_LOG_ERROR("Failed to configure systems DAG ({}); falling back to per-system threads", error);
+        return;
+    }
+
+    CFW_LOG_NOTICE("Systems DAG enabled: {}Hz tick, order = Mechanics -> {{Geometry, Acoustics}} -> Optics -> Display",
+                   tick_rate);
+}
 
 // ============================================================================
 // 构造与析构
@@ -90,6 +145,13 @@ bool Engine::initialize() {
         CFW_LOG_CRITICAL("Failed to initialize systems");
         return false;
     }
+
+    // 4. 装配系统 DAG：把五个重系统收进一条线程按依赖顺序执行
+    //
+    // 必须在 initialize_all() 之后：initialize() 是在 SystemManager 的锁内被调用的，
+    // 此时按名字 get_system() 会重入同一把非递归锁。装配失败不阻断启动，回退到
+    // "一个系统一条线程"的旧模式并打印原因 —— 编辑器起不来比跑得慢更糟。
+    configure_systems_dag(sys_mgr);
 
     initialized_.store(true);
 
