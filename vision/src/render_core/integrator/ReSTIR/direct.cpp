@@ -142,8 +142,10 @@ SampledSpectrum ReSTIRDI::Li(const Interaction &it, MaterialEvaluator *bsdf, con
     const SampledWavelengths &swl = sampled_wavelengths();
     SampledSpectrum f{swl.dimension()};
     LightSample ls{swl.dimension()};
+    LightEvalContext area_context;
     $if(sample->valid()) {
-        ls = light_sampler->evaluate_point(it, sample->lsp(), swl);
+        ls = light_sampler->evaluate_point(it, sample->lsp(), swl, LightEvalMode::All,
+                                           bsdf_pdf_point ? &area_context : nullptr);
     };
     Float3 wi = normalize(ls.p_light - it.pos);
     ScatterEval eval{swl.dimension(), 1};
@@ -164,7 +166,12 @@ SampledSpectrum ReSTIRDI::Li(const Interaction &it, MaterialEvaluator *bsdf, con
     }
 
     if (bsdf_pdf_point) {
-        *bsdf_pdf_point = light_sampler->PDF_point(it, sample->lsp(), eval.pdf());
+        $if(sample->valid()) {
+            *bsdf_pdf_point = light_sampler->PDF_point(it, sample->lsp(), eval.pdf(), &area_context);
+        }
+        $else {
+            *bsdf_pdf_point = light_sampler->PDF_point(it, sample->lsp(), eval.pdf());
+        };
     }
     if (output_ls) {
         *output_ls = ls;
@@ -463,16 +470,22 @@ DIReservoirVar ReSTIRDI::temporal_reuse(DIReservoirVar rsv, const SurfaceDataVar
             rsv = combine_temporal(rsv, cur_surf, prev_rsv, prev_surf, view_pos, prev_view_pos);
         }
         $else {
-            $for(i, temporal_.N) {
-                Int2 p = reservoir_pixel(square_to_disk(sampler()->next_2d()) * param.t_radius + prev_p_film);
-                $if(!in_screen(p, res)) { $continue; };
-                auto data = get_prev_data(make_uint2(p), prev_view_pos);
-                auto another_surf = data.first;
-                auto another_rsv = data.second;
-                $if(is_temporal_valid(cur_surf, another_surf, param,
-                                      addressof(another_rsv.sample))) {
-                    rsv = combine_temporal(rsv, cur_surf, another_rsv, another_surf, view_pos, prev_view_pos);
-                    $break;
+            $if(param.t_radius == 0.f) {
+                // The rejected pixel is unchanged; preserve all fallback RNG.
+                $for(i, temporal_.N) { (void)sampler()->next_2d(); };
+            }
+            $else {
+                $for(i, temporal_.N) {
+                    Int2 p = reservoir_pixel(square_to_disk(sampler()->next_2d()) * param.t_radius + prev_p_film);
+                    $if(!in_screen(p, res)) { $continue; };
+                    auto data = get_prev_data(make_uint2(p), prev_view_pos);
+                    auto another_surf = data.first;
+                    auto another_rsv = data.second;
+                    $if(is_temporal_valid(cur_surf, another_surf, param,
+                                          addressof(another_rsv.sample))) {
+                        rsv = combine_temporal(rsv, cur_surf, another_rsv, another_surf, view_pos, prev_view_pos);
+                        $break;
+                    };
                 };
             };
         };

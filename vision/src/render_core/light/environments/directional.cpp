@@ -81,7 +81,8 @@ public:
     }
 
     [[nodiscard]] LightSample evaluate_point(const LightSampleContext &p_ref, LightSurfacePoint lsp,
-                                             const SampledWavelengths &swl, LightEvalMode mode) const noexcept override {
+                                             const SampledWavelengths &swl, LightEvalMode mode,
+                                             LightEvalContext * = nullptr) const noexcept override {
         LightSample ret{swl.dimension()};
         ret.p_light = shadow_endpoint(p_ref);
         ret.eval = evaluate_wi(p_ref, LightEvalContext(ret.p_light, *direction_), swl, mode);

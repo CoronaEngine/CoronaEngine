@@ -37,6 +37,9 @@ void check_glass_runtime_depth(vision::Pipeline&, vision::Pipeline&, unsigned);
 void check_restir_material_reuse(vision::Pipeline& pipeline, const std::vector<vision::SurfaceData>& surfaces);
 void check_restir_gi_depth_one_continuation(vision::Pipeline& pipeline);
 void check_restir_gi_receiver_support(vision::Pipeline& pipeline);
+void check_di_light_context_equivalence(vision::Pipeline& pipeline);
+void check_di_light_context_equivalence(vision::Pipeline& pipeline, const char* label, unsigned coverage);
+void check_di_temporal_gather_equivalence(vision::Pipeline& pipeline);
 void check_restir_gi_receiver_positions(vision::Pipeline& pipeline, const char* label,
                                        bool require_replaced = false, bool require_jacobian = false);
 void check_glass_transport_energy(vision::Pipeline& pipeline, unsigned recursion, const char* label);
@@ -476,6 +479,20 @@ int main() {
                "stabilizing the raw primary ray must not freeze stochastic lighting samples");
         expect(direct.mean() > 0.05, "DI must illuminate the receiver under the white environment");
         check_primary_sampling_modes(*direct_pipeline);
+        check_di_light_context_equivalence(*direct_pipeline);
+
+        write_file(fixture / "context-emitter.obj",
+                   "v -2 -2 1\nv -2 2 1\nv 2 -2 1\nv 3 -2 1\nv 3 -1 1\nv 4 -2 1\n"
+                   "vn 0 0 -1\nf 1//1 2//1 3//1\nf 4//1 5//1 6//1\n");
+        auto context_scene = scene_description(true);
+        context_scene["scene"]["shapes"].push_back(vision::DataWrap::parse(R"({
+          "type":"model","param":{"fn":"context-emitter.obj","material":"receiver",
+          "normalize_to_unit_bounds":false,
+          "emission":{"type":"area","param":{"color":[1,0.5,0.25],"scale":2}}}})"));
+        write_file(fixture / "context-area.json", context_scene.dump(2));
+        const auto context_pipeline = vision::Importer::import_scene(fixture / "context-area.json");
+        context_pipeline->prepare();
+        check_di_light_context_equivalence(*context_pipeline);
 
         const auto indirect_pipeline = vision::Importer::import_scene(fixture / "indirect.json");
         expect(bool(indirect_pipeline), "could not import indirect-channel fixture");
@@ -500,6 +517,7 @@ int main() {
             }
         };
         check(check_restir_reprojection, *reused_pipeline);
+        check(check_di_temporal_gather_equivalence, *reused_pipeline);
         check(check_restir_reservoir_lifetimes, *reused_pipeline);
         check(check_restir_gi_depth_one_continuation, *direct_pipeline);
         const auto support_pipeline = vision::Importer::import_scene(fixture / "support.json");
@@ -527,6 +545,79 @@ int main() {
             R"({"type":"principled_bsdf","param":{"color":[0.8,0.2,0.1],"coat_weight":1,"coat_ior":2.5,"roughness":0.4,"normal":{"node":"test_normal","channels":"xyz"}},"node_tab":{"test_normal":{"type":"number","param":{"value":[0.6,0,0.8]}}}})",
             R"({"type":"principled_bsdf","param":{"color":[0.8,0.2,0.1],"coat_weight":1,"coat_ior":2.5,"roughness":0.4,"normal":{"node":"test_normal","channels":"xyz"}},"node_tab":{"test_normal":{"type":"number","param":{"value":[0.6,0,0.8]}}}})",
         };
+
+        // Additional DI light-context coverage runs only the direct GPU oracle.
+        // Retain every pipeline: MaterialLut identity includes its bindless owner.
+        std::vector<vision::SP<vision::Pipeline>> context_fixtures;
+        const auto run_context_fixture = [&](vision::DataWrap description, const char* label, unsigned coverage) {
+            const auto path = fixture / (std::string("context-") + label + ".json");
+            write_file(path, description.dump(2));
+            auto pipeline = vision::Importer::import_scene(path);
+            expect(bool(pipeline), "could not import DI light-context coverage fixture");
+            context_fixtures.push_back(pipeline);
+            pipeline->prepare();
+            std::cout << "DI light-context fixture=" << label << '\n';
+            check_di_light_context_equivalence(*pipeline, label, coverage);
+        };
+        // Nonuniform triangle areas, real UVs and a small nonconstant image.
+        write_file(fixture / "context-uv-emitter.obj",
+            "v -2 -2 1\nv -2 2 1\nv 2 -2 1\nv 3 -2 1\nv 3 -1 1\nv 4 -2 1\n"
+            "vt 0 0\nvt 0 1\nvt 1 0\nvn 0 0 -1\n"
+            "f 1/1/1 2/2/1 3/3/1\nf 4/1/1 5/2/1 6/3/1\n");
+        const unsigned char context_colors[]{255,32,16, 16,255,32, 32,16,255, 255,255,32};
+        std::string context_ppm = "P6\n2 2\n255\n";
+        context_ppm.append(reinterpret_cast<const char*>(context_colors), sizeof(context_colors));
+        write_file(fixture / "context-emission.ppm", context_ppm);
+        auto transformed_context = context_scene;
+        transformed_context["scene"]["shapes"][1]["param"]["fn"] = "context-uv-emitter.obj";
+        transformed_context["scene"]["shapes"][1]["param"]["transform"] = vision::DataWrap::parse(
+            R"({"type":"trs","param":{"t":[0.25,0.1,0.5],"r":[1,0,0,0],"s":[1.5,0.5,2]}})");
+        transformed_context["scene"]["shapes"][1]["param"]["emission"]["param"]["color"] = vision::DataWrap::parse(
+            R"({"channels":"xyz","node":{"type":"image","param":{"fn":"context-emission.ppm","color_space":"linear","filter":"nearest"}}})");
+        auto mapped_receiver = vision::DataWrap::parse(materials[14]);
+        mapped_receiver["name"] = "receiver";
+        transformed_context["scene"]["materials"][0] = mapped_receiver;
+        run_context_fixture(transformed_context, "trs-textured-principled", 1u | 16u | 64u);
+
+        write_file(fixture / "context-back-emitter.obj",
+            "v -2 -2 1\nv -2 2 1\nv 2 -2 1\nv 3 -2 1\nv 3 -1 1\nv 4 -2 1\n"
+            "vn 0 0 1\nf 1//1 3//1 2//1\nf 4//1 6//1 5//1\n");
+        auto back_context = context_scene;
+        back_context["scene"]["shapes"][1]["param"]["fn"] = "context-back-emitter.obj";
+        run_context_fixture(back_context, "back-facing", 2u);
+        auto grazing_context = context_scene;
+        grazing_context["scene"]["shapes"][1]["param"]["transform"] = vision::DataWrap::parse(
+            R"({"type":"trs","param":{"t":[1000,0,0],"r":[1,0,0,0],"s":[1,1,1]}})");
+        run_context_fixture(grazing_context, "grazing", 1u | 8u);
+        auto black_context = context_scene;
+        auto black_receiver = vision::DataWrap::parse(materials[7]);
+        black_receiver["name"] = "receiver";
+        black_context["scene"]["materials"][0] = black_receiver;
+        run_context_fixture(black_context, "zero-receiver", 2u);
+
+        auto delta_context = scene_description(true);
+        delta_context["scene"]["lights"] = vision::DataWrap::parse(R"([
+            {"type":"point","param":{"position":[0,0,1],"color":[1,0.5,0.25],"scale":2}},
+            {"type":"directional","param":{"direction":[0,0,-1],"color":[0.25,0.5,1],"scale":2}}
+        ])");
+        run_context_fixture(delta_context, "point-directional", 4u | 32u);
+        auto glass_context = context_scene;
+        glass_context["scene"]["materials"][0] = vision::DataWrap::parse(
+            R"({"type":"glass","name":"receiver","param":{"material_name":"BK7","roughness":0.5}})");
+        run_context_fixture(glass_context, "rgb-glass", 1u);
+        // Full-spectrum dispersive glass already fails the original ReSTIR
+        // PDF-array ABI. Keep supported transmission and hero-spectrum cases
+        // independent; this optimization does not change that material ABI.
+        auto spectral_context = context_scene;
+        spectral_context["render"]["spectrum"] = vision::DataWrap::parse(R"({"type":"hero","param":{"dimension":3}})");
+        run_context_fixture(spectral_context, "hero-diffuse", 1u);
+        auto mix_context = context_scene;
+        auto mixed_receiver = vision::DataWrap::parse(R"({"type":"mix","name":"receiver","param":{"frac":0.35}})");
+        mixed_receiver["param"]["mat0"] = vision::DataWrap::parse(materials[0]);
+        mixed_receiver["param"]["mat1"] = vision::DataWrap::parse(materials[3]);
+        mix_context["scene"]["materials"][0] = mixed_receiver;
+        run_context_fixture(mix_context, "mix-diffuse-substrate", 1u);
+
         std::vector<vision::SurfaceData> material_surfaces;
         // Compare live scenes: the existing MaterialLut cache is keyed by a raw
         // BindlessArray address, so destroying fixtures here can alias stale LUTs.

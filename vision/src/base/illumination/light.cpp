@@ -256,7 +256,7 @@ void IPointLight::render_sub_UI(Widgets *widgets) noexcept {
 LightSample IPointLight::evaluate_point(const LightSampleContext &p_ref,
                                         LightSurfacePoint lsp,
                                         const SampledWavelengths &swl,
-                                        LightEvalMode mode) const noexcept {
+                                        LightEvalMode mode, LightEvalContext *) const noexcept {
     LightSample ls{swl.dimension()};
     LightEvalContext lec{position()};
     ls.eval = _evaluate_point(p_ref, lec, swl, mode);
