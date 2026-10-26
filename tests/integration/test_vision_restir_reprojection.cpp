@@ -870,3 +870,252 @@ void check_stable_emitter_coverage(vision::Pipeline& pipeline) {
     if (!guides_ok || error > 1e-5f || history_effect < 1e-3f)
         throw std::runtime_error("exact mirror emitter coverage must use current/previous virtual endpoint and motion without reservoir eligibility");
 }
+
+// Isolate production gather/validation from the unchanged estimator combine.
+namespace {
+class DITemporalGatherOracle final : public vision::ReSTIRDI {
+public:
+    mutable vision::Uint* accepted{};
+    mutable vision::Float3* received_view{};
+    mutable vision::Float3* received_prev_view{};
+    DITemporalGatherOracle() { temporal_.N = 9u; }
+    [[nodiscard]] vision::DIReservoirVar combine_temporal(
+        const vision::DIReservoirVar&, const vision::SurfaceDataVar&,
+        vision::DIReservoirVar& donor, const vision::SurfaceDataVar&,
+        vision::Float3 view, vision::Float3 previous_view) const noexcept override {
+        *accepted = donor.sample.prim_id;
+        *received_view = view; *received_prev_view = previous_view;
+        donor.sample.age += 1u;
+        // The real combine consumes exactly one next_1d after four targets.
+        // Target evaluation does not consume random samples.
+        (void)sampler()->next_1d();
+        return donor;
+    }
+    [[nodiscard]] vision::DIReservoirVar reference(
+        vision::DIReservoirVar rsv, const vision::SurfaceDataVar& cur_surf,
+        const vision::Float2& motion_vec, const vision::SensorSample& ss,
+        const vision::Var<vision::DIParam>& param) const noexcept;
+};
+
+vision::DIReservoirVar DITemporalGatherOracle::reference(
+    vision::DIReservoirVar rsv, const vision::SurfaceDataVar& cur_surf,
+    const vision::Float2& motion_vec, const vision::SensorSample& ss,
+    const vision::Var<vision::DIParam>& param) const noexcept {
+    using namespace vision;
+    Float2 prev_p_film = previous_reservoir_coord(ss.p_film, motion_vec);
+    Int2 prev_p = reservoir_pixel(prev_p_film);
+    Float limit = rsv.C * param.history_limit;
+    Int2 res = make_int2(dispatch_dim().xy());
+    auto& camera = scene().sensor();
+    Float3 view_pos = camera->device_position();
+    Float3 prev_view_pos = camera->prev_device_position();
+    auto get_prev_data = [this, &limit](const Uint2& pos, Float3& view_pos) {
+        Uint index = dispatch_id(make_uint2(pos));
+        DIReservoirVar prev_rsv = prev_reservoirs().read(index);
+        prev_rsv->truncation(limit);
+        SurfaceDataVar surf = prev_surfaces().read(index);
+        view_pos = scene().sensor()->prev_device_position();
+        $if(surf.is_replaced) { view_pos = prev_surface_extends().read(index).view_pos.as_vec3(); };
+        return make_pair(surf, prev_rsv);
+    };
+    view_pos = cur_view_pos(cur_surf.is_replaced);
+    $if(in_screen(prev_p, res) && param.temporal) {
+        auto data = get_prev_data(make_uint2(prev_p), prev_view_pos);
+        auto prev_surf = data.first;
+        auto prev_rsv = data.second;
+        $if(is_temporal_valid(cur_surf, prev_surf, param, addressof(prev_rsv.sample))) {
+            rsv = combine_temporal(rsv, cur_surf, prev_rsv, prev_surf, view_pos, prev_view_pos);
+        }
+        $else {
+            $for(i, temporal_.N) {
+                Int2 p = reservoir_pixel(square_to_disk(sampler()->next_2d()) * param.t_radius + prev_p_film);
+                $if(!in_screen(p, res)) { $continue; };
+                auto data = get_prev_data(make_uint2(p), prev_view_pos);
+                auto another_surf = data.first;
+                auto another_rsv = data.second;
+                $if(is_temporal_valid(cur_surf, another_surf, param, addressof(another_rsv.sample))) {
+                    rsv = combine_temporal(rsv, cur_surf, another_rsv, another_surf, view_pos, prev_view_pos);
+                    $break;
+                };
+            };
+        };
+    };
+    return rsv;
+}
+} // namespace
+
+void check_di_temporal_gather_equivalence(vision::Pipeline& pipeline) {
+    using namespace vision;
+    pipeline.activate_global_context();
+    Global::SceneGpuContextScope scope{pipeline.geometry().bindless_array(), pipeline.device()};
+    auto& camera = pipeline.scene().sensor();
+    auto& random = pipeline.renderer().sampler();
+    const uint pixels = pipeline.pixel_num();
+    const uint2 resolution = pipeline.resolution();
+    if (resolution.x < 8u || resolution.y < 8u)
+        throw std::runtime_error("DI temporal gather oracle needs at least an 8x8 fixture");
+    DITemporalGatherOracle di;
+    di.radiance() = make_shared<ScreenBuffer>("di_temporal_gather_oracle_radiance");
+    const uint first_slot = pipeline.bindless_array().buffer_num();
+    di.prepare();
+    const uint last_slot = pipeline.bindless_array().buffer_num();
+    pipeline.upload_bindless_array();
+    constexpr uint words = 23u;
+    const uint center = (resolution.y / 2u) * resolution.x + resolution.x / 2u;
+    auto surface = [] {
+        SurfaceDataVar result;
+        result.hit.inst_id = 0u; result.hit.prim_id = 0u;
+        result.hit.bary = make_float2(0.25f, 0.5f);
+        result.normal_depth = make_float4(0.f, 0.f, 1.f, 2.f);
+        result.pos_diff = make_float4(0.f, 0.f, 2.f, 1.f);
+        result.diffuse_roughness = make_float4(0.5f, 0.25f, 0.125f, 0.4f);
+        result.specular_roughness = make_float4(0.04f, 0.04f, 0.04f, 0.4f);
+        result.flag = SurfaceData::Diffuse;
+        return result;
+    };
+    Kernel initialize = [&](Uint scenario) {
+        Env::instance().clear_global_vars();
+        di.emplace_frame_index(Uint{1u});
+        SurfaceDataVar previous = surface();
+        DIReservoirVar reservoir;
+        Uint index = dispatch_id();
+        reservoir.weight_sum = cast<float>(index) + 0.125f;
+        reservoir.C = 31.f; reservoir.W = cast<float>(index) + 0.75f;
+        reservoir.sample.light_index = 7u; reservoir.sample.prim_id = index + 1u;
+        reservoir.sample.bary = make_float2(0.125f, 0.75f);
+        reservoir.sample.age = 2u; reservoir.sample.p_hat = cast<float>(index) + 0.5f;
+        reservoir.sample->set_pos(make_float3(cast<float>(index), Float{0.375f}, Float{-1.5f}));
+        // A valid neighborhood surrounds one invalid primary reprojection.
+        $if((scenario == 1u || scenario == 2u || scenario == 3u) &&
+            (scenario == 3u || index == center)) { reservoir.sample.age = 30u; };
+        $if((scenario == 6u && index == center) || (scenario == 13u && index == 0u)) {
+            previous.hit.inst_id = InvalidUI32; previous.hit.prim_id = InvalidUI32;
+        };
+        $if(scenario == 7u) { previous.diffuse_roughness.x = 1.f; };
+        $if(scenario == 8u) { previous.pos_diff.z = 10.f; };
+        $if(scenario == 9u) { previous.stable_branch = 2u; };
+        $if(scenario == 10u || scenario == 11u) {
+            previous.is_replaced = true;
+            previous.stable_branch = ocarina::select(scenario == 10u, 1u, InvalidUI32);
+            previous.virtual_position.set(Float3{make_float3(0.f, 0.f, 2.f)});
+        };
+        $if(scenario == 12u) { previous.normal_depth.z = -1.f; };
+        di.prev_reservoirs().write(index, reservoir);
+        di.prev_surfaces().write(index, previous);
+        SurfaceExtendHistoryVar extension;
+        extension.view_pos.set(make_float3(cast<float>(index) * 0.001f, Float{0.25f}, Float{-0.5f}));
+        di.prev_surface_extends().write(index, extension);
+        SurfaceExtendVar current_extension;
+        current_extension.view_pos.set(Float3{make_float3(0.5f, -0.25f, 0.125f)});
+        di.cur_surface_extends().write(index, current_extension);
+    };
+    auto initializer = pipeline.device().compile(initialize, "di_temporal_oracle_seed");
+    auto compile = [&](bool reference) {
+        Kernel kernel = [&](Uint scenario, Var<DIParam> param, BufferVar<uint> output) {
+            Env::instance().clear_global_vars();
+            di.emplace_frame_index(Uint{1u});
+            camera->load_data(); random->load_data();
+            camera->set_device_c2w(Float4x4{make_float4x4(1.f)});
+            random->set_seed(dispatch_idx().xy(), Uint{31u}, Dimension::PathTracing);
+            SurfaceDataVar current = surface();
+            $if(scenario == 10u || scenario == 11u) {
+                current.is_replaced = true; current.stable_branch = 1u;
+                current.virtual_position.set(Float3{make_float3(0.f, 0.f, 2.f)});
+            };
+            DIReservoirVar reservoir;
+            reservoir.weight_sum = 0.875f; reservoir.C = 2.f; reservoir.W = 0.625f;
+            reservoir.sample.light_index = 3u; reservoir.sample.prim_id = 900u;
+            reservoir.sample.bary = make_float2(0.25f, 0.625f);
+            reservoir.sample.age = 4u; reservoir.sample.p_hat = 0.75f;
+            reservoir.sample->set_pos(make_float3(0.125f, -0.5f, 0.25f));
+            SensorSample ss;
+            ss.p_film = make_float2(float(resolution.x / 2u) + 0.5f, float(resolution.y / 2u) + 0.5f);
+            $if(scenario == 5u) { ss.p_film = make_float2(-0.5f, 0.5f); };
+            $if(scenario == 13u) { ss.p_film = make_float2(0.5f); };
+            Uint accepted = 0u;
+            Float3 view = make_float3(0.f), previous_view = make_float3(0.f);
+            di.accepted = &accepted; di.received_view = &view; di.received_prev_view = &previous_view;
+            auto result = reference ? di.reference(reservoir, current, make_float2(0.f), ss, param)
+                                    : di.temporal_reuse(reservoir, current, make_float2(0.f), ss, param);
+            Float actual_next = random->next_1d();
+            random->set_seed(dispatch_idx().xy(), Uint{31u}, Dimension::PathTracing);
+            Bool known_eighteen = scenario == 1u || scenario == 3u ||
+                                  (scenario >= 7u && scenario <= 9u) || scenario == 11u || scenario == 12u;
+            $if(known_eighteen) { $for(i, 9u) { (void)random->next_2d(); }; };
+            $if(scenario == 0u || scenario == 10u) { (void)random->next_1d(); };
+            Float expected_next = random->next_1d();
+            Uint start = dispatch_id() * words;
+            auto put = [&](uint word, const Float& value) { output.write(start + word, as<uint>(value)); };
+            output.write(start, accepted);
+            put(1u, result.weight_sum); put(2u, result.C); put(3u, result.W);
+            output.write(start + 4u, result.sample.light_index);
+            output.write(start + 5u, result.sample.prim_id);
+            put(6u, result.sample.bary.x); put(7u, result.sample.bary.y);
+            output.write(start + 8u, result.sample.age); put(9u, result.sample.p_hat);
+            for (uint component = 0u; component < 3u; ++component) {
+                put(10u + component, result.sample->p_light()[component]);
+                put(13u + component, view[component]); put(16u + component, previous_view[component]);
+            }
+            put(19u, actual_next); put(20u, expected_next);
+            output.write(start + 21u, cast<uint>(known_eighteen || scenario == 0u || scenario == 4u ||
+                                                scenario == 5u || scenario == 10u));
+            output.write(start + 22u, cast<uint>(ReSTIRDI::is_temporal_valid(current, current, param, nullptr)));
+        };
+        return pipeline.device().compile(kernel, reference ? "di_temporal_gather_reference" : "di_temporal_gather_production");
+    };
+    auto reference_shader = compile(true);
+    auto production_shader = compile(false);
+    auto buffer = pipeline.device().create_buffer<uint>(pixels * words, "di_temporal_gather_oracle_results");
+    std::vector<uint> expected(pixels * words), actual(expected.size());
+    uint positive_fallbacks = 0u, rejected = 0u, replaced = 0u;
+    for (uint scenario = 0u; scenario < 14u; ++scenario) {
+        DIParam param{};
+        param.temporal = scenario != 4u; param.max_age = 30u; param.history_limit = 5u;
+        param.t_dot = 0.8f; param.t_depth = 0.3f; param.diff_factor = 0.3f;
+        param.t_radius = scenario == 2u || scenario == 3u || scenario == 6u || scenario == 13u ? 4.f : 0.f;
+        pipeline.stream() << initializer(scenario).dispatch(resolution)
+                          << reference_shader(scenario, param, buffer).dispatch(resolution) << buffer.download(expected.data())
+                          << production_shader(scenario, param, buffer).dispatch(resolution) << buffer.download(actual.data())
+                          << synchronize() << commit();
+        if (expected != actual) {
+            uint word = 0u; while (expected[word] == actual[word]) ++word;
+            throw std::runtime_error("DI temporal gather parity failed scenario=" + std::to_string(scenario) +
+                                     " word=" + std::to_string(word));
+        }
+        uint accepted_count = 0u;
+        for (uint pixel = 0u; pixel < pixels; ++pixel) {
+            const uint start = pixel * words;
+            if (actual[start + 22u] != 1u) throw std::runtime_error("DI temporal oracle invalid canonical fixture");
+            if (actual[start + 21u] && actual[start + 19u] != actual[start + 20u])
+                throw std::runtime_error("DI temporal oracle changed the independently replayed RNG consumption");
+            if (actual[start]) {
+                ++accepted_count;
+                if (actual[start + 8u] != 3u) throw std::runtime_error("DI temporal gather age must increment once");
+                if (actual[start + 2u] != 0x41200000u) throw std::runtime_error("DI temporal history C must truncate to 2*5=10");
+                if (scenario == 10u &&
+                    (actual[start + 13u] != 0x3f000000u || actual[start + 14u] != 0xbe800000u ||
+                     actual[start + 15u] != 0x3e000000u || actual[start + 17u] != 0x3e800000u ||
+                     actual[start + 18u] != 0xbf000000u))
+                    throw std::runtime_error("DI temporal replaced receivers must load their distinct current/history view origins");
+                if ((scenario == 2u || scenario == 6u) && actual[start] == center + 1u)
+                    throw std::runtime_error("DI temporal fallback accepted its invalid initial pixel");
+                if (scenario == 13u && actual[start] == 1u)
+                    throw std::runtime_error("DI temporal corner fallback accepted its invalid initial pixel");
+            }
+        }
+        const bool first_valid = scenario == 0u || scenario == 10u;
+        const bool fallback = scenario == 2u || scenario == 6u || scenario == 13u;
+        if (first_valid && accepted_count != pixels) throw std::runtime_error("DI temporal oracle did not accept all valid initial pixels");
+        if (fallback && accepted_count == 0u) throw std::runtime_error("DI temporal oracle did not exercise positive-radius fallback");
+        if (!first_valid && !fallback && accepted_count != 0u) throw std::runtime_error("DI temporal oracle accepted invalid history");
+        positive_fallbacks += fallback ? accepted_count : 0u;
+        replaced += scenario == 10u ? accepted_count : 0u;
+        rejected += !first_valid && !fallback ? pixels : 0u;
+    }
+    pipeline.frame_buffer()->unregister(di.radiance());
+    ByteBufferView empty{handle_ty{0u}, 0u};
+    for (uint slot = first_slot; slot < last_slot; ++slot) pipeline.bindless_array().set_buffer(slot, empty);
+    pipeline.invalidate();
+    std::cout << "PASS: DI temporal real gather parity, 14 scenarios; fallback=" << positive_fallbacks
+              << " replaced=" << replaced << " rejected=" << rejected << "; zero-radius consumes 18 RNG scalars\n";
+}

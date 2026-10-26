@@ -149,7 +149,8 @@ public:
                                                 LightEvalMode mode) const noexcept;
 
     [[nodiscard]] virtual LightSample evaluate_point(const LightSampleContext &p_ref, LightSurfacePoint lsp,
-                                                     const SampledWavelengths &swl, LightEvalMode mode) const noexcept = 0;
+                                                     const SampledWavelengths &swl, LightEvalMode mode,
+                                                     LightEvalContext *area_context = nullptr) const noexcept = 0;
 
     [[nodiscard]] virtual LightEvalContext compute_light_eval_context(const LightSampleContext &p_ref,
                                                                       LightSurfacePoint lsp) const noexcept = 0;
@@ -217,7 +218,8 @@ public:
     [[nodiscard]] LightSample sample_wi(const LightSampleContext &p_ref, Float2 u,
                                         const SampledWavelengths &swl) const noexcept override;
     [[nodiscard]] LightSample evaluate_point(const LightSampleContext &p_ref, LightSurfacePoint lsp,
-                                             const SampledWavelengths &swl, LightEvalMode mode) const noexcept override;
+                                             const SampledWavelengths &swl, LightEvalMode mode,
+                                             LightEvalContext *area_context = nullptr) const noexcept override;
     [[nodiscard]] LightEvalContext compute_light_eval_context(const LightSampleContext &p_ref,
                                                               LightSurfacePoint lsp) const noexcept override;
 };

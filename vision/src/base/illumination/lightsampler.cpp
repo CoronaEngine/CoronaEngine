@@ -219,23 +219,26 @@ LightSurfacePoint LightSampler::sample_only(const LightSampleContext &lsc, TSamp
 }
 
 LightSample LightSampler::evaluate_point(const LightSampleContext &lsc, const LightSurfacePoint &lsp,
-                                         const SampledWavelengths &swl, LightEvalMode mode) const noexcept {
+                                         const SampledWavelengths &swl, LightEvalMode mode,
+                                         LightEvalContext *area_context) const noexcept {
     auto [type_id, inst_id] = extract_light_id(lsp.light_index);
     Float pmf = PMF(lsc, lsp.light_index);
     LightSample ls{swl.dimension()};
     dispatch_light(type_id, inst_id, [&](const Light *light) {
-        ls = light->evaluate_point(lsc, lsp, swl, mode);
+        ls = light->evaluate_point(lsc, lsp, swl, mode, area_context);
     });
     ls.eval.pdf *= pmf;
     return ls;
 }
 
 Float LightSampler::PDF_point(const LightSampleContext &lsc, const LightSurfacePoint &lsp,
-                              const Float &pdf_wi) const noexcept {
+                              const Float &pdf_wi, const LightEvalContext *area_context) const noexcept {
     auto [type_id, inst_id] = extract_light_id(lsp.light_index);
     Float ret = 0.f;
     dispatch_light(type_id, inst_id, [&](const Light *light) {
-        ret = light->PDF_point(lsc, lsp, pdf_wi);
+        ret = area_context && light->match(LightType::Area)
+                  ? light->PDF_point(lsc, *area_context, pdf_wi)
+                  : light->PDF_point(lsc, lsp, pdf_wi);
     });
     return ret;
 }

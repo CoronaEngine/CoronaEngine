@@ -4,6 +4,7 @@
 #define VISION_PLUGIN_NAME "ReSTIR"
 #define VISION_CATEGORY "integrator"
 #include "render_core/integrator/ReSTIR/indirect.h"
+#include "render_core/integrator/ReSTIR/direct.h"
 #include "base/integral/integrator.h"
 #include "base/mgr/global.h"
 #include "base/mgr/pipeline.h"
@@ -278,4 +279,228 @@ void check_restir_gi_receiver_positions(vision::Pipeline& pipeline, const char* 
     }
     restore();
     std::cout << "PASS: produced ReSTIR receiver positions and GI Jacobians are bit-exact in both SP modes and camera motion: " << label << '\n';
+}
+
+// coverage bits: 1 positive area target, 2 all area targets zero,
+// 4 positive non-area target, 8 grazing area target, 16 varying area UVs,
+// 32 both point and directional samples, 64 both primitive IDs.
+// The one-argument entry keeps its API.
+void check_di_light_context_equivalence(vision::Pipeline& pipeline, const char* label,
+                                        unsigned coverage) {
+    using namespace vision;
+    pipeline.activate_global_context();
+    auto integrator = std::dynamic_pointer_cast<IlluminationIntegrator>(pipeline.renderer().integrator().impl());
+    if (!integrator) throw std::runtime_error("DI context oracle needs an illumination integrator");
+    integrator->set_denoise_enabled(false);
+    pipeline.frame_buffer()->set_enable_accumulation(false);
+    pipeline.upload_data();
+    Global::SceneGpuContextScope scope{pipeline.geometry().bindless_array(), pipeline.device()};
+    auto& sampler = pipeline.renderer().sampler();
+    auto& spectrum = pipeline.renderer().spectrum();
+    auto& camera = pipeline.scene().sensor();
+    auto& lights = pipeline.renderer().light_sampler();
+    constexpr uint candidate_words = 32u;
+    constexpr uint words = 10u * candidate_words + 16u;
+    constexpr uint count = 64u;
+    bool expects_area = false;
+    lights->for_each([&](TLight light) { expects_area |= light->match(LightType::Area); });
+    auto build = [&](bool reuse_context) {
+        ParameterSet settings{DataWrap{{"spatial", DataWrap::object()}, {"temporal", DataWrap::object()}}};
+        ReSTIRDI di{integrator, settings};
+        Kernel kernel = [&](BufferVar<uint> output) {
+            Env::instance().clear_global_vars();
+            sampler->load_data(); camera->load_data();
+            di.initial(sampler, Uint{0u}, spectrum);
+            sampler->set_seed(dispatch_idx().xy(), Uint{31u}, Dimension::PathTracing);
+            const auto& swl = di.sampled_wavelengths();
+            const auto& geometry = pipeline.geometry();
+            Uint base = dispatch_id() * words;
+            $for(word, words) { output.write(base + word, 0u); };
+            // Existing fixtures place their primary receiver at z=-1. Vary the
+            // barycentrics across threads without consuming candidate RNG.
+            Float2 offset = make_float2(cast<float>(dispatch_id() % 8u) - 3.5f,
+                                       cast<float>(dispatch_id() / 8u) - 3.5f) * 0.02f;
+            Float3 origin = camera->device_position();
+            RayVar ray = make_ray(origin, normalize(make_float3(offset, Float{-1.f}) - origin));
+            TriangleHitVar hit = geometry.trace_closest(ray);
+            $if(hit->is_miss()) { $return(); };
+            Interaction it = geometry.compute_surface_interaction(hit, ray);
+            DIReservoirVar reservoir;
+            Float selected_correction = 1.f;
+            // Preserve one material build per candidate and its mutable shading
+            // frame/wavelength effects. Kernels start from independent state.
+            $for(candidate, 10u) {
+                LightSurfacePoint lsp = lights->sample_only(it, sampler);
+                LightEvalContext context;
+                LightSample ls{swl.dimension()};
+                if (reuse_context) {
+                    ls = lights->evaluate_point(it, lsp, swl, LightEvalMode::All, &context);
+                } else {
+                    ls = lights->evaluate_point(it, lsp, swl);
+                }
+                Float3 wi = normalize(ls.p_light - it.pos);
+                ScatterEval eval{swl.dimension(), 1u};
+                pipeline.scene().materials().dispatch(it.material_id(), [&](const Material* material) {
+                    auto bsdf = material->create_evaluator(it, swl);
+                    swl.check_dispersive(spectrum, bsdf);
+                    eval = bsdf.evaluate(it.wo, wi);
+                });
+                Float converted_pdf = reuse_context ? lights->PDF_point(it, lsp, eval.pdf(), &context)
+                                                   : lights->PDF_point(it, lsp, eval.pdf());
+                // Compare the actual context produced by the new evaluate call
+                // with the old independently reconstructed AreaLight context.
+                Uint kind = 0u;
+                auto [type, instance] = lights->extract_light_id(lsp.light_index);
+                lights->dispatch_light(type, instance, [&](const Light* light) {
+                    kind = static_cast<uint>(light->type());
+                    if (!reuse_context && light->match(LightType::Area)) {
+                        context = light->compute_light_eval_context(it, lsp);
+                    }
+                });
+                Float p_hat = luminance((eval.f * ls.eval.L).vec3());
+                DISampleVar sample;
+                sample->set_lsp(lsp); sample->set_pos(ls.p_light); sample.p_hat = p_hat;
+                Bool delta = ls.eval.pdf < 0.f;
+                Float light_pdf = ocarina::select(delta, -ls.eval.pdf, ls.eval.pdf);
+                Float light_mass = 10.f * light_pdf;
+                Float mis = ocarina::select(delta, 0.1f, light_pdf / (light_mass + converted_pdf));
+                Float weight = DIReservoir::safe_weight(mis, p_hat, 1.f / light_pdf);
+                Bool selected = reservoir->update(sampler->next_1d(), sample, weight);
+                Float correction = 1.f;
+                $if(!delta && light_mass > 0.f) { correction = (light_mass + converted_pdf) / light_mass; };
+                selected_correction = ocarina::select(selected, correction, selected_correction);
+                Uint start = base + candidate * candidate_words;
+                auto put_float = [&](uint word, const Float& value) { output.write(start + word, as<uint>(value)); };
+                output.write(start, 1u); output.write(start + 1u, kind);
+                output.write(start + 2u, lsp.light_index); output.write(start + 3u, lsp.prim_id);
+                put_float(4u, lsp.bary.x); put_float(5u, lsp.bary.y);
+                for (uint component = 0u; component < 3u; ++component) {
+                    put_float(6u + component, ls.p_light[component]);
+                    put_float(9u + component, ls.eval.L.vec3()[component]);
+                    put_float(12u + component, eval.f.vec3()[component]);
+                }
+                put_float(15u, ls.eval.pdf); put_float(16u, eval.pdf());
+                put_float(17u, converted_pdf); put_float(18u, p_hat);
+                put_float(19u, weight); put_float(20u, selected_correction);
+                output.write(start + 21u, cast<uint>(selected));
+                $if(kind == static_cast<uint>(LightType::Area)) {
+                    for (uint component = 0u; component < 3u; ++component) {
+                        put_float(22u + component, context.pos[component]);
+                        put_float(25u + component, context.ng[component]);
+                    }
+                    put_float(28u, context.uv.x); put_float(29u, context.uv.y);
+                    put_float(30u, context.PDF_pos);
+                    put_float(31u, abs(dot(normalize(context.pos - it.pos), context.ng)));
+                };
+            };
+            // The unaffected BSDF candidate must remain in the reservoir and
+            // consume its original RNG/ray-query sequence (10+1 production RIS).
+            DISampleVar bsdf_sample;
+            BSDFSample bsdf_sample_result{swl.dimension(), 1u};
+            Float bsdf_light_pdf = 0.f;
+            HitBSDFVar hit_bsdf;
+            Uint flag = 0u;
+            Float bsdf_target = di.compute_p_hat(it, nullptr, &bsdf_sample, &bsdf_sample_result,
+                                                &bsdf_light_pdf, &hit_bsdf, &flag);
+            bsdf_sample.p_hat = bsdf_target;
+            Float bsdf_weight = DIReservoir::safe_weight(
+                bsdf_sample_result.eval.pdf() / (10.f * bsdf_light_pdf + bsdf_sample_result.eval.pdf()),
+                bsdf_target, 1.f / bsdf_sample_result.eval.pdf());
+            Bool bsdf_selected = reservoir->update(sampler->next_1d(), bsdf_sample, bsdf_weight);
+            selected_correction = ocarina::select(bsdf_selected, 1.f, selected_correction);
+            Bool occluded = false;
+            $if(reservoir->valid() && selected_correction != 1.f) {
+                occluded = geometry.occluded(it, reservoir.sample->p_light());
+                reservoir.weight_sum *= ocarina::select(occluded, selected_correction, 1.f);
+            };
+            reservoir->update_W(reservoir.sample.p_hat); reservoir->truncation(1.f);
+            Uint start = base + 10u * candidate_words;
+            auto put_float = [&](uint word, const Float& value) { output.write(start + word, as<uint>(value)); };
+            put_float(0u, reservoir.weight_sum); put_float(1u, reservoir.C); put_float(2u, reservoir.W);
+            output.write(start + 3u, reservoir.sample.light_index);
+            output.write(start + 4u, reservoir.sample.prim_id);
+            put_float(5u, reservoir.sample.bary.x); put_float(6u, reservoir.sample.bary.y);
+            output.write(start + 7u, reservoir.sample.age); put_float(8u, reservoir.sample.p_hat);
+            for (uint component = 0u; component < 3u; ++component)
+                put_float(9u + component, reservoir.sample->p_light()[component]);
+            output.write(start + 12u, cast<uint>(occluded));
+            put_float(13u, sampler->next_1d());
+            put_float(14u, bsdf_light_pdf); put_float(15u, bsdf_target);
+        };
+        return pipeline.device().compile(kernel, reuse_context ? "di_light_context_cached" : "di_light_context_reference");
+    };
+    auto reference_shader = build(false);
+    auto candidate_shader = build(true);
+    auto buffer = pipeline.device().create_buffer<uint>(count * words, "di_light_context_results");
+    std::vector<uint> reference(count * words), candidate(count * words);
+    pipeline.stream() << reference_shader(buffer).dispatch(count) << buffer.download(reference.data())
+                      << candidate_shader(buffer).dispatch(count) << buffer.download(candidate.data())
+                      << synchronize() << commit();
+    uint active = 0u, area = 0u, non_area = 0u;
+    uint area_positive = 0u, area_zero = 0u, non_area_positive = 0u;
+    uint grazing = 0u, point = 0u, directional = 0u;
+    bool have_area_uv = false, varied_area_uv = false;
+    uint first_u = 0u, first_v = 0u, first_primitive = 0u;
+    bool varied_primitive = false;
+    for (uint thread = 0u; thread < count; ++thread) {
+        for (uint sample = 0u; sample < 10u; ++sample) {
+            const uint start = thread * words + sample * candidate_words;
+            if (reference[start]) {
+                ++active;
+                const uint type = reference[start + 1u];
+                const uint target = reference[start + 18u];
+                const bool finite = (target & 0x7f800000u) != 0x7f800000u;
+                if (!finite) throw std::runtime_error("DI context candidate target must be finite");
+                const bool positive = (target & 0x80000000u) == 0u && (target & 0x7fffffffu) != 0u;
+                if (type == static_cast<uint>(LightType::Area)) {
+                    ++area; area_positive += positive; area_zero += (target & 0x7fffffffu) == 0u;
+                    const uint cosine = reference[start + 31u];
+                    // abs(cos) is nonnegative; float uint ordering is monotone.
+                    grazing += positive && cosine < 0x3c23d70au; // 0.01f
+                    if (!have_area_uv) {
+                        first_u = reference[start + 28u]; first_v = reference[start + 29u];
+                        first_primitive = reference[start + 3u];
+                        have_area_uv = true;
+                    } else {
+                        varied_area_uv |= first_u != reference[start + 28u] || first_v != reference[start + 29u];
+                        varied_primitive |= first_primitive != reference[start + 3u];
+                    }
+                } else {
+                    ++non_area; non_area_positive += positive;
+                    point += (type & static_cast<uint>(LightType::DeltaPosition)) != 0u;
+                    directional += (type & static_cast<uint>(LightType::DeltaDirection)) != 0u;
+                }
+            }
+        }
+    }
+    if (active == 0u) throw std::runtime_error("DI light context oracle missed every fixture receiver");
+    if (expects_area && area == 0u) throw std::runtime_error("DI context oracle did not sample an AreaLight fixture");
+    for (uint word = 0u; word < count * words; ++word) {
+        if (reference[word] != candidate[word]) {
+            throw std::runtime_error("DI light context mismatch at uint word " + std::to_string(word) +
+                                     " old=" + std::to_string(reference[word]) + " new=" + std::to_string(candidate[word]));
+        }
+    }
+    if ((coverage & 1u) && area_positive == 0u)
+        throw std::runtime_error("DI context fixture needs positive area contributions");
+    if ((coverage & 2u) && (area_zero == 0u || area_positive != 0u))
+        throw std::runtime_error("DI context fixture needs exclusively zero area contributions");
+    if ((coverage & 4u) && non_area_positive == 0u)
+        throw std::runtime_error("DI context fixture needs positive non-area contributions");
+    if ((coverage & 8u) && grazing == 0u)
+        throw std::runtime_error("DI context fixture needs a positive grazing area target");
+    if ((coverage & 16u) && !varied_area_uv)
+        throw std::runtime_error("DI context texture fixture needs varying sampled UVs");
+    if ((coverage & 64u) && !varied_primitive)
+        throw std::runtime_error("DI context unequal-area fixture must sample both primitive IDs");
+    if ((coverage & 32u) && (point == 0u || directional == 0u))
+        throw std::runtime_error("DI context control must sample both point and directional lights");
+    std::cout << "PASS: DI light context " << label << " candidate/reservoir/RNG bit parity; area=" << area
+              << " non_area=" << non_area << " area_positive=" << area_positive << " area_zero=" << area_zero
+              << " non_area_positive=" << non_area_positive << " grazing=" << grazing
+              << " varied_uv=" << varied_area_uv << " varied_primitive=" << varied_primitive << " point=" << point << " directional=" << directional << '\n';
+}
+
+void check_di_light_context_equivalence(vision::Pipeline& pipeline) {
+    check_di_light_context_equivalence(pipeline, "existing-fixture", 0u);
 }
