@@ -27,3 +27,11 @@ target_compile_definitions(corona_storage_lock_timeout_tests PRIVATE
 target_link_libraries(corona_storage_lock_timeout_tests PRIVATE Horizon)
 add_test(NAME StorageLockTimeoutTests
          COMMAND corona_storage_lock_timeout_tests)
+
+# 帧图（DAG 调度器）契约测试：拓扑序、环检测、速率门控、子树关闭、异常中止、统计。
+add_executable(corona_frame_graph_tests
+    test_frame_graph.cpp
+)
+target_link_libraries(corona_frame_graph_tests PRIVATE CoronaEngineKernel)
+add_test(NAME FrameGraphTests
+         COMMAND corona_frame_graph_tests)
