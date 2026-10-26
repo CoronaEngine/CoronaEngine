@@ -1,12 +1,12 @@
 #include "native_lighting.h"
-#include "native_light_data.h"
+#include "native_lpv_data.h"
 #include <horizon/core/logging.h>
 #include <cstring>
 #include <numbers>
 
 namespace Corona::Systems::OpticsDetail {
 namespace {
-using namespace LightData;
+using namespace LpvData;
 using Json=nlohmann::json;
 using Matrix=ktm::fmat4x4;
 Matrix multiply(const Matrix& a,const Matrix& b) {
@@ -20,8 +20,8 @@ Vec transform(const Matrix& m,Vec p,float w=1) {
     for (unsigned r=0;r<3;++r) out[r]=m[0][r]*p[0]+m[1][r]*p[1]+m[2][r]*p[2]+m[3][r]*w;
     return out;
 }
-// CPU evaluation is only used for the environment reprojection and emission
-// importance weights. Actual surface/emitter textures use the GPU expression.
+// CPU evaluation supplies environment reprojection and low-frequency voxel
+// reflectance/emission. Visible surfaces keep their full GPU material expression.
 class Images {
     struct Image { unsigned width,height; std::vector<Vec> pixels; Vec average{}; };
     std::unordered_map<std::string,Image> images_;
@@ -74,7 +74,7 @@ public:
     }
 };
 
-struct EnvironmentMap { unsigned width=512,height=256; std::vector<float> pixels;std::vector<double> cdf;double integral{}; };
+struct EnvironmentMap { unsigned width=512,height=256; std::vector<float> pixels;double integral{};std::array<Vec,direction_count> boundary{};std::array<double,direction_count> weights{}; };
 EnvironmentMap environment_map(const Json& environments,Images& images) {
     struct Layer { Json color; Matrix inverse;bool equal_area; };
     std::vector<Layer> layers;
@@ -88,7 +88,7 @@ EnvironmentMap environment_map(const Json& environments,Images& images) {
     // miss a tiny bright HDR sun entirely and change the direct illumination.
     for (const auto& layer:layers) images.resolution(layer.color,out.width,out.height);
     if (!layers.empty()) {out.height=std::max(out.height,(out.width+1)/2);out.width=out.height*2;}
-    out.pixels.resize(size_t(out.width)*out.height*4);out.cdf.reserve(size_t(out.width)*out.height);
+    out.pixels.resize(size_t(out.width)*out.height*4);
     constexpr float pi=std::numbers::pi_v<float>;
     for (unsigned y=0;y<out.height;++y) for(unsigned x=0;x<out.width;++x) {
         // Canonical Corona world coordinates, identical to Vision reprojection.
@@ -107,24 +107,32 @@ EnvironmentMap environment_map(const Json& environments,Images& images) {
         for(unsigned c=0;c<3;++c) out.pixels[(size_t(y)*out.width+x)*4+c]=std::max(0.f,color[c]);
         out.pixels[(size_t(y)*out.width+x)*4+3]=1;
         out.integral+=luminance(color)*texel_solid_angle(y,out.width,out.height);
-        out.cdf.push_back(out.integral);
+        auto travel=mul(world,-1);unsigned best=0;float alignment=-2;
+        for(unsigned d=0;d<direction_count;++d)if(float a=dot(travel,directions[d].vector);a>alignment){alignment=a;best=d;}
+        auto angle=texel_solid_angle(y,out.width,out.height);
+        out.boundary[best]=add(out.boundary[best],mul(color,float(angle)));out.weights[best]+=angle;
     }
+    for(unsigned d=0;d<direction_count;++d)if(out.weights[d]>0)out.boundary[d]=mul(out.boundary[d],float(1/out.weights[d]));
     return out;
 }
 
-struct Emitter { Triangle triangle;std::array<float,6> uv;Vec emission;float area;double weight;uint32_t program;bool two_sided; };
-void append(std::vector<uint32_t>& out,Vec v) {for(float x:v) out.push_back(bits(x));}
+struct Emitter {Vec position,normal,emission;float area;bool two_sided;};
 }
 
 std::shared_ptr<NativeLighting> NativeLightingCache::obtain(const SceneDevice& scene,
-    const EnvironmentDevice& env,std::size_t signature,NativeAppearanceCache& appearances) {
+    const EnvironmentDevice& env,std::size_t signature) {
     signature^=env.authored_lighting_revision+0x9e3779b97f4a7c15ULL+(signature<<6)+(signature>>2);
     for (auto actor:scene.actor_handles) signature^=actor+0x9e3779b97f4a7c15ULL+(signature<<6)+(signature>>2);
     if(value_ && signature_==signature) return value_;
     auto result=std::make_shared<NativeLighting>();result->authored_environment=bool(env.authored_lighting);
     auto& hub=SharedDataHub::instance();auto& manager=Resource::ResourceManager::get_instance();
-    Images images;std::vector<Triangle> triangles;std::vector<Emitter> emitters;
-    std::unordered_map<const Materials::Principled*,std::pair<Vec,uint32_t>> emission_cache;
+    Images images;Grid grid;std::vector<Emitter> emitters;
+    Vec low{},high{};low.fill(std::numeric_limits<float>::max());high.fill(-std::numeric_limits<float>::max());
+    uint32_t triangle_count=0;
+    // The first pass only computes bounds; the second voxelizes source meshes.
+    // No persistent world-space triangle copy or acceleration structure exists.
+    for(unsigned pass=0;pass<2;++pass) {
+
     // Deliberately no camera visibility or residency filtering: an off-screen
     // lamp still illuminates the room, and an off-screen wall still blocks it.
     for(auto actor_handle:scene.actor_handles) {
@@ -168,68 +176,90 @@ std::shared_ptr<NativeLighting> NativeLightingCache::obtain(const SceneDevice& s
                     std::memcpy(mapped_vertices.data(),vp,mapped_vertices.size()*sizeof(Resource::Vertex));vertices=mapped_vertices;
                     for(size_t i=0;i<ib.get_element_count();++i) indices.push_back(ib.get_element_size()==2?static_cast<const uint16_t*>(ip)[i]:static_cast<const uint32_t*>(ip)[i]);
                 }
-                Vec emission{};uint32_t program=0;bool two_sided=false;
-                if(optics->principled) {
-                    const auto& p=optics->principled;two_sided=p->emission_two_sided;
-                    auto found=emission_cache.find(p.get());
-                    if(found==emission_cache.end()) {
-                        emission=p->expressions && p->expressions->contains("emission")?images.evaluate(p->expressions->at("emission"),.5f,.5f,true):p->surface.emissive;
-                        if(luminance(emission)>0) if(auto appearance=appearances.obtain(p)) {program=appearance->program.store_descriptor();result->appearances.push_back(std::move(appearance));}
-                        found=emission_cache.emplace(p.get(),std::pair{emission,program}).first;
+                Vec emission{},albedo{.8f,.8f,.8f};bool two_sided=false;
+                if(pass==1) {
+                    Resource::MaterialParameters material;
+                    if(optics->principled) material=optics->principled->surface;
+                    else if(mesh_index<geometry->mesh_handles.size() && geometry->mesh_handles[mesh_index].material)
+                        material=geometry->mesh_handles[mesh_index].material->source;
+                    if(!optics->principled && optics->material_overrides && mesh_index<geometry->mesh_handles.size()) {
+                        const auto& mesh=geometry->mesh_handles[mesh_index];
+                        const std::string name=mesh.material?mesh.material->source.name:std::string{};
+                        for(bool specific:{false,true})for(const auto& row:*optics->material_overrides)
+                            if((row.index.has_value() || row.material!="*")==specific && row.matches(mesh.materialIndex,name))row.apply(material);
                     }
-                    emission=found->second.first;program=found->second.second;
-                } else if(mesh_index<geometry->mesh_handles.size()) {
-                    const auto& m=geometry->mesh_handles[mesh_index];
-                    if(m.material) {emission=m.material->source.emissive;two_sided=m.material->source.double_sided;}
+                    for(unsigned k=0;k<3;++k)albedo[k]=material.base_color[k]*(1-material.metallic);
+                    emission=material.emissive;
+                    two_sided=optics->principled?optics->principled->emission_two_sided:material.double_sided;
+                    if(optics->principled && optics->principled->expressions) {
+                        const auto& e=*optics->principled->expressions;
+                        if(e.contains("base_color")) albedo=images.evaluate(e.at("base_color"),.5f,.5f,true);
+                        if(e.contains("metallic")) albedo=mul(albedo,1-std::clamp(images.evaluate(e.at("metallic"))[0],0.f,1.f));
+                        if(e.contains("emission")) emission=images.evaluate(e.at("emission"),.5f,.5f,true);
+                    }
+                    for(auto& v:albedo)v=std::isfinite(v)?std::clamp(v,0.f,.98f):0.f;
                 }
                 auto matrix=multiply(world,instance.transform);
                 for(size_t i=0;i+2<indices.size();i+=3) {
                     if(indices[i]>=vertices.size() || indices[i+1]>=vertices.size() || indices[i+2]>=vertices.size()) continue;
                     const auto& a=vertices[indices[i]];const auto& b=vertices[indices[i+1]];const auto& c=vertices[indices[i+2]];
-                    Triangle t;t.p=transform(matrix,a.position);t.e1=sub(transform(matrix,b.position),t.p);t.e2=sub(transform(matrix,c.position),t.p);
-                    const float area=.5f*std::sqrt(dot(cross(t.e1,t.e2),cross(t.e1,t.e2)));
-                    if(!std::isfinite(area) || area<=1e-20f) continue;
+                    auto pa=transform(matrix,a.position),pb=transform(matrix,b.position),pc=transform(matrix,c.position);
+                    auto cross_n=cross(sub(pb,pa),sub(pc,pa));float area=.5f*std::sqrt(dot(cross_n,cross_n));
+                    if(!std::isfinite(area) || area<=1e-20f)continue;
+                    if(pass==0) {for(auto p:{pa,pb,pc})for(unsigned k=0;k<3;++k){low[k]=std::min(low[k],p[k]);high[k]=std::max(high[k],p[k]);}continue;}
+                    // A clear dielectric is not an opaque LPV wall. This only
+                    // permits low-frequency light through; no caustics or
+                    // colored transparent shadows are implied.
+                    if(!optics->principled || optics->principled->transmission<.999f)
+                        grid.voxelize(pa,pb,pc,albedo,area);
+                    ++triangle_count;
                     if(luminance(emission)>0) {
-                        // Imported flipped normals may be independent of winding.
-                        auto n=transform(ktm::transpose(ktm::inverse(matrix)),a.normal,0);
-                        auto uv=std::array<float,6>{a.tex_coords[0],a.tex_coords[1],b.tex_coords[0],b.tex_coords[1],c.tex_coords[0],c.tex_coords[1]};
-                        if(dot(cross(t.e1,t.e2),n)<0) {std::swap(t.e1,t.e2);std::swap(uv[2],uv[4]);std::swap(uv[3],uv[5]);}
-                        t.emitter=static_cast<uint32_t>(emitters.size()+1);
-                        emitters.push_back({t,uv,emission,area,double(area)*luminance(emission)*(two_sided?2:1),program,two_sided});
+                        auto n=normalized(cross_n);auto authored_n=transform(ktm::transpose(ktm::inverse(matrix)),a.normal,0);
+                        if(dot(n,authored_n)<0)n=mul(n,-1);
+                        // Stratified triangle samples keep large emitters from collapsing to a point.
+                        unsigned steps=std::clamp(unsigned(std::ceil(std::sqrt(area)/grid.size)),1u,32u);
+                        unsigned count=steps*steps;
+                        for(unsigned j=0;j<count;++j) {
+                            float root=std::sqrt((j+.5f)/count),v=std::fmod(j*.61803398875f+.5f,1.f);
+                            auto pos=add(pa,add(mul(sub(pb,pa),root*(1-v)),mul(sub(pc,pa),root*v)));
+                            emitters.push_back({pos,n,emission,area/count,two_sided});
+                        }
                     }
-                    triangles.push_back(t);
                 }
             }
         }
     }
-    std::vector<Node> nodes;nodes.reserve(triangles.size()/2);build_bvh(triangles,nodes,0,static_cast<uint32_t>(triangles.size()));
-    std::vector<uint32_t> words(16);words[0]=static_cast<uint32_t>(nodes.size());words[1]=static_cast<uint32_t>(triangles.size());words[2]=static_cast<uint32_t>(emitters.size());
-    words[4]=static_cast<uint32_t>(words.size());
-    for(const auto& node:nodes) {append(words,node.low);words.push_back(node.first);append(words,node.high);words.push_back(node.count);words.push_back(node.escape);words.insert(words.end(),3,0);}
-    words[5]=static_cast<uint32_t>(words.size());
-    for(const auto& t:triangles) {append(words,t.p);words.push_back(t.emitter);append(words,t.e1);words.push_back(0);append(words,t.e2);words.push_back(0);}
-    words[6]=static_cast<uint32_t>(words.size());double total=0,cdf=0;for(const auto& e:emitters) total+=e.weight;
-    for(const auto& e:emitters) {
-        cdf+=e.weight;append(words,e.triangle.p);words.push_back(e.two_sided?1:0);append(words,e.triangle.e1);words.push_back(bits(float(cdf/total)));
-        append(words,e.triangle.e2);words.push_back(bits(float(e.weight/total/e.area)));
-        for(float uv:e.uv) words.push_back(bits(uv));words.insert(words.end(),2,0);
-        append(words,e.emission);words.push_back(e.program);words.insert(words.end(),8,0);
+    if(pass==0) {if(low[0]>high[0]){low={-1,-1,-1};high={1,1,1};}grid.fit(low,high);}
     }
-    words[7]=static_cast<uint32_t>(words.size());
-    if(env.authored_lighting) for(const auto& light:env.authored_lighting->at("directionals")) {
-        // Authored direction is propagation, whereas the BRDF needs to-light.
-        append(words,mul(normalized(light.at("direction").get<Vec>()),-1.f));words.push_back(0);append(words,images.evaluate(light.at("color")));words.push_back(0);++words[3];
+    grid.finish();
+    constexpr float pi=std::numbers::pi_v<float>;
+    for(const auto& e:emitters) {
+        auto flux=mul(e.emission,pi*e.area/(grid.size*grid.size));grid.inject(e.position,e.normal,flux);
+        if(e.two_sided)grid.inject(e.position,mul(e.normal,-1),flux);
     }
     auto map=environment_map(env.authored_lighting?env.authored_lighting->at("environments"):Json::array(),images);
+    // Incoming environment irradiance enters only boundary cells, then geometry
+    // blocks its transport. Additional authored directionals use the same route.
+    auto boundary=map.boundary;
+    unsigned directionals=0;
+    if(env.authored_lighting)for(const auto& light:env.authored_lighting->at("directionals")) {
+        if(directionals++==0)continue; // only the primary sun owns the RSM/CSM
+        auto direction=normalized(light.at("direction").get<Vec>()),color=images.evaluate(light.at("color"));
+        unsigned best=0;float alignment=-2;
+        for(unsigned d=0;d<direction_count;++d)if(float a=dot(direction,directions[d].vector);a>alignment){alignment=a;best=d;}
+        boundary[best]=add(boundary[best],mul(color,1/directions[best].weight));
+    }
+    std::vector<uint32_t> words(header_words+cell_count*cell_words);
+    words[0]=resolution;words[1]=cell_count;for(unsigned k=0;k<3;++k)words[4+k]=bits(grid.origin[k]);words[7]=bits(grid.size);
+    words[13]=env.authored_lighting?1:0;
+    for(unsigned d=0;d<direction_count;++d)for(unsigned c=0;c<3;++c)words[32+d*3+c]=bits(boundary[d][c]);
+    std::memcpy(words.data()+header_words,grid.cells.data(),grid.cells.size()*sizeof(Cell));
     result->environment=Horizon::HardwareImage(Horizon::HardwareImageDesc::texture_2d(map.width,map.height,Horizon::Format::RGBA32_FLOAT,Horizon::ImageUsage_Sampled|Horizon::ImageUsage_TransferDst,"native.environment"));
     Horizon::HardwareBufferDesc staging_desc;staging_desc.element_count=map.pixels.size();staging_desc.element_size=sizeof(float);staging_desc.usage=Horizon::BufferUsage_TransferSrc;staging_desc.cpu_access=Horizon::CpuAccessMode::Write;
     Horizon::HardwareBuffer staging(staging_desc,std::as_bytes(std::span(map.pixels)));Horizon::HardwareExecutor executor;
     auto receipt=executor.stream()<<result->environment.copy_from(staging)<<Horizon::commit();executor.wait_completed(receipt);
-    words[8]=result->environment.store_descriptor();words[9]=static_cast<uint32_t>(words.size());words[10]=map.width;words[11]=map.height;words[12]=bits(float(map.integral));words[13]=env.authored_lighting?1:0;
-    for(double v:map.cdf) words.push_back(bits(map.integral>0?float(v/map.integral):0.f));
-    // Shadow traversal randomly reads this large immutable buffer. Keep it in
-    // device memory; host-visible storage makes every BVH walk cross PCIe.
-    Horizon::HardwareBufferDesc desc;desc.element_count=words.size();desc.element_size=4;desc.usage=Horizon::BufferUsage_Storage|Horizon::BufferUsage_TransferDst;desc.cpu_access=Horizon::CpuAccessMode::None;desc.debug_name="native.direct_lighting";
+    words[8]=result->environment.store_descriptor();
+    Horizon::HardwareBufferDesc desc;desc.element_count=words.size();desc.element_size=4;desc.usage=Horizon::BufferUsage_Storage|Horizon::BufferUsage_TransferDst;desc.cpu_access=Horizon::CpuAccessMode::None;desc.debug_name="native.lpv.geometry_sources";
     result->data=Horizon::HardwareBuffer(desc);
     staging_desc.element_count=words.size();staging_desc.element_size=sizeof(uint32_t);
     Horizon::HardwareBuffer data_staging(staging_desc,std::as_bytes(std::span(words)));
@@ -237,8 +267,11 @@ std::shared_ptr<NativeLighting> NativeLightingCache::obtain(const SceneDevice& s
     executor.wait_completed(receipt);
     result->memory=Memory::GpuMemToken(Memory::ResKind::Texture,map.pixels.size()*sizeof(float));
     result->geometry_memory=Memory::GpuMemToken(Memory::ResKind::Mesh,words.size()*sizeof(uint32_t));
-    result->triangles=words[1];result->emitters=words[2];result->directionals=words[3];
-    CFW_LOG_INFO("Native direct lighting: {} triangles, {} emissive triangles, {} directionals, environment integral {}",result->triangles,result->emitters,result->directionals,map.integral);
+    result->triangles=triangle_count;result->emitters=static_cast<uint32_t>(emitters.size());result->directionals=directionals;
+    result->voxel_size=grid.size;
+    result->occupied=static_cast<uint32_t>(std::count_if(grid.cells.begin(),grid.cells.end(),[](const Cell& c){return c.occupied>0;}));
+    CFW_LOG_INFO("Native LPV: {} triangles voxelized, {} occupied / {} cells, cell size {}, {} emitter samples; no scene ray traversal",
+        result->triangles,result->occupied,cell_count,grid.size,result->emitters);
     signature_=signature;value_=result;return result;
 }
 } // namespace Corona::Systems::OpticsDetail

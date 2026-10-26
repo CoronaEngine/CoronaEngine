@@ -1,6 +1,6 @@
 #include "native_material.h"
 #include "native_camera.h"
-#include "native_light_data.h"
+#include "native_lpv_data.h"
 #include <corona/utils/runtime_paths.h>
 #include <corona/utils/scene_path_key.h>
 #include <corona/diagnostics/thread_phase.h>
@@ -541,8 +541,8 @@ struct OpticsEventViewport {
     desc.depth_compare_op = Corona::Horizon::CompareOp::LessOrEqual;
     // 新版没有 cull_mode 字段，默认行为
     desc.clear_depth_target = true;
-    desc.debug_name = "corona.shadow";
-    desc.blend_enabled = false; // Integer dummy attachments cannot be blended.
+    desc.debug_name = "corona.solar_rsm";
+    desc.blend_enabled = false; // RSM flux is the nearest solar-visible surface.
     return desc;
 }
 constexpr char kMouseIconRelativePath[] = "assets/icon/mouse_icon.png";
@@ -2451,6 +2451,8 @@ constexpr auto kScreenshotRequestTimeout = std::chrono::seconds(30);
 struct OpticsSystem::NativeViewResources {
     Horizon::HardwareImage visibility;
     Horizon::HardwareImage depth;
+    Horizon::HardwareImage opaque_visibility, opaque_depth, exit_visibility, exit_depth, opaque_color, front_snapshot;
+    Memory::GpuMemToken refraction_memory;
     uint32_t width = 0;
     uint32_t height = 0;
     uint64_t last_used_frame = 0;
@@ -3139,7 +3141,20 @@ bool OpticsSystem::initialize_hardware_resources() {
             hardware_->shadowCascadeImages[i] =
                 make_depth_image(kShadowMapSize, kShadowMapSize,
                                  "optics.shadow_cascade_" + std::to_string(i));
+            hardware_->rsmPositions[i]=make_storage_image(kShadowMapSize,kShadowMapSize,Horizon::Format::RGBA32_FLOAT,"optics.rsm.position");
+            hardware_->rsmNormals[i]=make_storage_image(kShadowMapSize,kShadowMapSize,Horizon::Format::RGBA16_FLOAT,"optics.rsm.normal");
+            hardware_->rsmFluxes[i]=make_storage_image(kShadowMapSize,kShadowMapSize,Horizon::Format::RGBA16_FLOAT,"optics.rsm.flux");
+            hardware_->rsmPositions[i].set_clear_color(0,0,0,0);
+            hardware_->rsmNormals[i].set_clear_color(0,0,0,0);
+            hardware_->rsmFluxes[i].set_clear_color(0,0,0,0);
         }
+
+        const auto lpv_words=OpticsDetail::LpvData::cell_count*OpticsDetail::LpvData::transport_words;
+        hardware_->lpvInjection=make_storage_buffer<float>(lpv_words,"optics.lpv.injection",Horizon::CpuAccessMode::None);
+        hardware_->lpvAccumulated=make_storage_buffer<float>(OpticsDetail::LpvData::cell_count*OpticsDetail::LpvData::sh_words,"optics.lpv.accumulated",Horizon::CpuAccessMode::None);
+        for(auto& wave:hardware_->lpvWave)wave=make_storage_buffer<float>(lpv_words,"optics.lpv.wave",Horizon::CpuAccessMode::None);
+        hardware_->lpvMemory=Memory::GpuMemToken(Memory::ResKind::Texture,
+            4ull*kShadowMapSize*kShadowMapSize*32+(3ull*lpv_words+OpticsDetail::LpvData::cell_count*OpticsDetail::LpvData::sh_words)*sizeof(float));
 
         // --- Uniform buffers ---
         hardware_->uniformBuffer =
@@ -3195,6 +3210,9 @@ bool OpticsSystem::initialize_render_pipelines() {
             visibility_vert_glsl_t{},
             visibility_frag_glsl_t{},
             make_visibility_pipeline_desc(false));
+        hardware_->refractionOpaquePipeline.emplace(visibility_vert_glsl_t{},visibility_frag_glsl_t{},make_visibility_pipeline_desc());
+        hardware_->refractionExitPipeline.emplace(visibility_vert_glsl_t{},visibility_frag_glsl_t{},make_visibility_pipeline_desc(false));
+        hardware_->refractionFrontPipeline.emplace(refraction_front_comp_glsl,ktm::uvec3(16,16,1));
         const auto shadow_desc = make_shadow_pipeline_desc();
         for (auto& shadow_pipeline : hardware_->shadowPipelines) {
             shadow_pipeline.emplace(
@@ -3203,6 +3221,7 @@ bool OpticsSystem::initialize_render_pipelines() {
                 shadow_desc);
         }
         hardware_->lightingPipeline.emplace(lighting_comp_glsl, ktm::uvec3(8, 8, 1));
+        hardware_->lpvPipeline.emplace(lpv_comp_glsl,ktm::uvec3(8,8,1));
         hardware_->skyPipeline.emplace(sky_comp_glsl, ktm::uvec3(8, 8, 1));
         hardware_->skySHProjectPipeline.emplace(sky_sh_project_comp_glsl, ktm::uvec3(64, 1, 1));
         hardware_->tonemapPipeline.emplace(tonemap_comp_glsl, ktm::uvec3(8, 8, 1));
@@ -3354,6 +3373,9 @@ void OpticsSystem::bind_native_view_resources(std::uintptr_t camera_handle,
             make_storage_image(width, height, Horizon::Format::RG32_UINT, "optics.native_visibility");
         resources.depth = make_depth_image(width, height, "optics.native_depth");
         resources.depth.set_clear_depth(0.0f, 0);
+        resources.opaque_visibility={};resources.opaque_depth={};resources.exit_visibility={};
+        resources.exit_depth={};resources.opaque_color={};resources.refraction_memory={};
+        resources.front_snapshot={};
         resources.width = width;
         resources.height = height;
     }
@@ -3914,6 +3936,13 @@ void OpticsSystem::optics_pipeline(float frame_count, uint64_t frame_index) {
                 bind_native_view_resources(cam_handle, camera->width, camera->height,
                                            frame_index);
                 auto& visibility = *hardware_->visibilityPipeline;
+                struct RefractionDraw {
+                    Horizon::HardwareBuffer index,vertex,indirect;
+                    Horizon::DrawIndexedIndirectParams params;
+                    ktm::fmat4x4 clip;
+                    uint32_t instance,material;
+                };
+                std::vector<RefractionDraw> refraction_draws;
 
                 // ================================================================
                 // 1. Update camera uniform buffers
@@ -4216,6 +4245,7 @@ void OpticsSystem::optics_pipeline(float frame_count, uint64_t frame_index) {
                                 auto& pc = static_cast<Pipeline::VertexResourceBindings&>(target_visibility).pushConsts;
                                 pc.modelMatrix = upload_value(clip_matrix);
                                 pc.uniformBufferIndex = 0u;
+                                    pc.padding0 = 0u;
                                 pc.instanceID = instanceID + 1;
                                 pc.textureIndex = texture_descriptor;
 
@@ -4267,6 +4297,7 @@ void OpticsSystem::optics_pipeline(float frame_count, uint64_t frame_index) {
                                     const auto& pending = pending_visibility_draws[draw_index];
                                     pc.modelMatrix = upload_value(pending.clip_matrix);
                                     pc.uniformBufferIndex = 0u;
+                                    pc.padding0 = 0u;
                                     pc.instanceID = pending.instance_id;
                                     pc.textureIndex = pending.texture_descriptor;
 
@@ -4276,6 +4307,8 @@ void OpticsSystem::optics_pipeline(float frame_count, uint64_t frame_index) {
                                         draw_index * sizeof(Horizon::DrawIndexedIndirectCommand);
                                     draw_params.stride = sizeof(Horizon::DrawIndexedIndirectCommand);
 
+                                    if (!follow_camera_pass) refraction_draws.push_back({pending.index_buffer,pending.vertex_buffer,
+                                        indirect_buffer,draw_params,pending.clip_matrix,pending.instance_id,pending.material_id});
                                     target_visibility.record_indirect(
                                         pending.index_buffer,
                                         pending.vertex_buffer,
@@ -4290,6 +4323,7 @@ void OpticsSystem::optics_pipeline(float frame_count, uint64_t frame_index) {
                     return has_instances;
                 };
 
+                std::shared_ptr<OpticsDetail::NativeLighting> direct_lighting;
                 struct ShadowCasterSnapshot {
                     std::uintptr_t actor_handle = 0;
                     std::uintptr_t profile_handle = 0;
@@ -4332,6 +4366,9 @@ void OpticsSystem::optics_pipeline(float frame_count, uint64_t frame_index) {
                                 !diag_geometry_allowed(optics_acc->geometry_handle)) {
                                 continue;
                             }
+                            // Clear glass transmits the solar field approximately;
+                            // colored shadows and caustics require a separate model.
+                            if(optics_acc->principled && optics_acc->principled->transmission>=.999f)continue;
                             auto geom = geom_storage.try_acquire_read(optics_acc->geometry_handle);
                             if (!geom || geom->transform_handle == 0) continue;
                             auto transform =
@@ -4431,6 +4468,11 @@ void OpticsSystem::optics_pipeline(float frame_count, uint64_t frame_index) {
                     auto& shadow = *shadow_pipelines[cascade_index];
                     shadow.clear_records();
                     shadow.bind_depth_target(shadow_depth);
+                    shadow.rsmPosition=hardware_->rsmPositions[cascade_index];
+                    shadow.rsmNormal=hardware_->rsmNormals[cascade_index];
+                    shadow.rsmFlux=hardware_->rsmFluxes[cascade_index];
+                    bind_storage_buffer(shadow,shadow.rsmConsts.lpvInfo,direct_lighting->data);
+                    bind_storage_buffer(shadow,shadow.rsmConsts.shadowInfo,sceneShadowBuffer);
                     uint32_t shadow_draws = 0;
 
                     struct PendingShadowDraw {
@@ -4438,6 +4480,7 @@ void OpticsSystem::optics_pipeline(float frame_count, uint64_t frame_index) {
                         Horizon::HardwareBuffer vertex_buffer;
                         std::uint32_t first_command{}, command_count{};
                         ktm::fmat4x4 clip_matrix{ktm::fmat4x4::from_eye()};
+                        ktm::fmat4x4 model_matrix{ktm::fmat4x4::from_eye()};
                     };
                     std::vector<PendingShadowDraw> pending_shadow_draws;
                     std::vector<Horizon::DrawIndexedIndirectCommand> commands;
@@ -4472,6 +4515,7 @@ void OpticsSystem::optics_pipeline(float frame_count, uint64_t frame_index) {
                             pending.index_buffer = slot.geo.index;
                             pending.vertex_buffer = slot.geo.vertex;
                             pending.clip_matrix = clip_matrix;
+                            pending.model_matrix = shadow_model_matrix;
                             pending.first_command = static_cast<std::uint32_t>(commands.size());
                             if (slot.draw_clusters && !slot.draw_clusters->empty()) {
                                 for (const auto& cluster : *slot.draw_clusters) {
@@ -4513,6 +4557,10 @@ void OpticsSystem::optics_pipeline(float frame_count, uint64_t frame_index) {
                             const auto& pending = pending_shadow_draws[draw_index];
                             shadow.pushConsts.lightViewProjModel =
                                 upload_value(pending.clip_matrix);
+                            const auto& model=pending.model_matrix;
+                            shadow.pushConsts.modelRow0=upload_value(ktm::fvec4{model[0][0],model[1][0],model[2][0],model[3][0]});
+                            shadow.pushConsts.modelRow1=upload_value(ktm::fvec4{model[0][1],model[1][1],model[2][1],model[3][1]});
+                            shadow.pushConsts.modelRow2=upload_value(ktm::fvec4{model[0][2],model[1][2],model[2][2],model[3][2]});
 
                             Horizon::DrawIndexedIndirectParams draw_params;
                             draw_params.stride = sizeof(Horizon::DrawIndexedIndirectCommand);
@@ -4616,13 +4664,32 @@ void OpticsSystem::optics_pipeline(float frame_count, uint64_t frame_index) {
                     sun_dir = make_vec3(1.0f, 1.0f, 1.0f);
                 }
                 sun_dir = ktm::normalize(sun_dir);
-                auto direct_lighting=hardware_->lighting_cache.obtain(scene,native_environment,
-                    compute_vision_scene_signature(),hardware_->appearance_cache);
+                bool geometry_loading = false;
+                auto& shared_hub = SharedDataHub::instance();
+                // During async import the actor may not yet have a visible
+                // scene-batch instance. Inspect the storage globally so the
+                // loading guard is active from the first import frame.
+                for (auto it = shared_hub.geometry_storage().cbegin();
+                     it != shared_hub.geometry_storage().cend(); ++it) {
+                    if (it->gpu_build_state == GeometryDevice::GpuBuildState::PendingImport ||
+                        it->gpu_build_state == GeometryDevice::GpuBuildState::PendingBuild) {
+                        geometry_loading = true;
+                        break;
+                    }
+                }
+                // Do not re-voxelize a large scene for every asynchronous mesh
+                // upload. An empty volume is safe during import and invalidates
+                // once all geometry is ready; camera changes do not rebuild it.
+                const SceneDevice loading_lpv_scene{};
+                direct_lighting=hardware_->lighting_cache.obtain(
+                    geometry_loading?loading_lpv_scene:scene,native_environment,
+                    geometry_loading?0:compute_vision_scene_signature());
                 sceneBatch.resource_keep_alive->direct_lighting=direct_lighting;
                 if (direct_lighting->authored_environment) {
-                    // All authored directional lights are evaluated below, so
-                    // the legacy first-sun approximation must not add energy.
-                    sun_intensity=0.f;sky_intensity=0.f;
+                    // The first authored directional is the solar RSM source.
+                    // Authored HDR enters through LPV boundaries, so legacy sky
+                    // must not be added a second time.
+                    sky_intensity=0.f;
                 }
 
                 const bool needs_shadow = !is_debug_mode ||
@@ -4665,6 +4732,9 @@ void OpticsSystem::optics_pipeline(float frame_count, uint64_t frame_index) {
                      sun_intensity > 0.0f) ? 1u : 0u;
                 native_shadows_enabled = hardware_->shadowInfoBufferObjects.shadowEnabled != 0u;
                 prepare_shadow_caster_meshes();
+                hardware_->shadowInfoBufferObjects.lpvRadianceDescriptor=hardware_->lpvAccumulated.store_descriptor();
+                hardware_->shadowInfoBufferObjects.sunColor=ktm::fvec4{sun_color.x*sun_intensity,sun_color.y*sun_intensity,sun_color.z*sun_intensity,0};
+                hardware_->shadowInfoBufferObjects.sunDirection=ktm::fvec4{sun_dir.x,sun_dir.y,sun_dir.z,0};
                 (void)write_object_bytes(sceneShadowBuffer,
                                          hardware_->shadowInfoBufferObjects);
 
@@ -4681,24 +4751,52 @@ void OpticsSystem::optics_pipeline(float frame_count, uint64_t frame_index) {
                 const bool is_ssao_debug_mode =
                     camera->output_mode == CameraOutputMode::SSAO ||
                     camera->output_mode == CameraOutputMode::SSAORaw;
-                bool geometry_loading = false;
-                auto& shared_hub = SharedDataHub::instance();
-                // During async import the actor may not yet have a visible
-                // scene-batch instance. Inspect the storage globally so the
-                // loading guard is active from the first import frame.
-                for (auto it = shared_hub.geometry_storage().cbegin();
-                     it != shared_hub.geometry_storage().cend(); ++it) {
-                    if (it->gpu_build_state == GeometryDevice::GpuBuildState::PendingImport ||
-                        it->gpu_build_state == GeometryDevice::GpuBuildState::PendingBuild) {
-                        geometry_loading = true;
-                        break;
-                    }
-                }
                 const bool loading_guard = Corona::Geometry::NativeRenderLoadGuard::is_loading(
                     geometry_loading, false);
                 const bool should_run_ssao = Corona::Geometry::NativeRenderLoadGuard::effective_ssao(
                     loading_guard, camera->ssao_enabled, is_ssao_debug_mode);
                 const uint32_t sceneMaterialCount = static_cast<uint32_t>(sceneBatch.materials.size());
+                const bool has_refraction=!is_debug_mode && !loading_guard && !env_flag_enabled("CORONA_OPTICS_DISABLE_REFRACTION") &&
+                    std::any_of(sceneBatch.materials.begin(),sceneBatch.materials.end(),[](const auto& m){return (m.flags&256u)!=0u;});
+                auto& refraction=*native_view_resources_.at(cam_handle);
+                if(has_refraction) {
+                    const auto w=hardware_->gbufferSize.x,h=hardware_->gbufferSize.y;
+                    if(!refraction.opaque_visibility) {
+                        refraction.opaque_visibility=make_storage_image(w,h,Horizon::Format::RG32_UINT,"refraction.opaque_visibility");
+                        refraction.opaque_depth=make_depth_image(w,h,"refraction.opaque_depth");refraction.opaque_depth.set_clear_depth(0,0);
+                        refraction.exit_visibility=make_storage_image(w,h,Horizon::Format::RG32_UINT,"refraction.exit_visibility");
+                        refraction.exit_depth=make_depth_image(w,h,"refraction.exit_depth");refraction.exit_depth.set_clear_depth(1,0);
+                        refraction.opaque_color=make_storage_image(w,h,Horizon::Format::RGBA16_FLOAT,"refraction.opaque_color");
+                        refraction.front_snapshot=make_storage_image(w,h,Horizon::Format::RG32_UINT,"refraction.front_snapshot");
+                        refraction.refraction_memory=Memory::GpuMemToken(Memory::ResKind::Texture,uint64_t(w)*h*40);
+                    }
+                    auto& front=*hardware_->refractionFrontPipeline;
+                    bind_storage_image(front,front.pushConsts.visibilityIndex,hardware_->visibilityImage);
+                    bind_sampled_image(front,front.pushConsts.depthIndex,hardware_->depthImage);
+                    bind_storage_buffer(front,front.pushConsts.instances,sceneInstanceBuffer);
+                    bind_storage_image(front,front.pushConsts.outputIndex,refraction.front_snapshot);
+                    front.pushConsts.size=upload_value(hardware_->gbufferSize);
+                    front.pushConsts.instanceCount=native_instance_count;
+                    auto& opaque=*hardware_->refractionOpaquePipeline;
+                    auto& exit=*hardware_->refractionExitPipeline;
+                    opaque.clear_records();exit.clear_records();
+                    opaque.visibilityData=refraction.opaque_visibility;opaque.bind_depth_target(refraction.opaque_depth);
+                    exit.visibilityData=refraction.exit_visibility;exit.bind_depth_target(refraction.exit_depth);
+                    using Pipeline=Horizon::RasterizerPipeline<visibility_vert_glsl_t,visibility_frag_glsl_t>;
+                    for(const auto& draw:refraction_draws) {
+                        bool glass=(sceneBatch.materials[draw.material].flags&256u)!=0u;
+                        auto& pass=glass?exit:opaque;
+                        auto& pc=static_cast<Pipeline::VertexResourceBindings&>(pass).pushConsts;
+                        pc.modelMatrix=upload_value(draw.clip);pc.instanceID=draw.instance;
+                        pc.padding0=0u;pc.textureIndex=0u;pc.uniformBufferIndex=0u;
+                        if(glass) {
+                            bind_storage_image(pass,pc.textureIndex,refraction.front_snapshot);
+                            pc.uniformBufferIndex=sceneBatch.instances.at(draw.instance-1u).objectID;
+                            pc.padding0=1u;
+                        }
+                        pass.record_indirect(draw.index,draw.vertex,draw.indirect,draw.params);
+                    }
+                }
                 // One VBuffer resolve: AO and shadow visibility are evaluated at
                 // the shaded surface. No guide/AO/mask images or filter traffic.
                 lighting.pushConsts.gbufferSize = upload_value(hardware_->gbufferSize);
@@ -4716,9 +4814,7 @@ void OpticsSystem::optics_pipeline(float frame_count, uint64_t frame_index) {
                 lighting.pushConsts.featureFlags = (should_run_ssao ? 1u : 0u) |
                     ((!loading_guard && !env_flag_enabled("CORONA_OPTICS_DISABLE_SSR")) ? 2u : 0u) |
                     (kSkyAmbientEnabled ? 4u : 0u) | (camera->shadow_cascade_debug ? 8u : 0u) |
-                    (direct_lighting->authored_environment ? 16u : 0u) |
-                    (OpticsDetail::LightData::sample_budget(uint64_t(hardware_->gbufferSize.x)*hardware_->gbufferSize.y,
-                        direct_lighting->triangles) << 16u);
+                    (direct_lighting->authored_environment ? 16u : 0u) | (has_refraction ? 32u : 0u);
                 bind_sampled_image(lighting, lighting.pushConsts.shadowMap0, hardware_->shadowCascadeImages[0]);
                 bind_sampled_image(lighting, lighting.pushConsts.shadowMap1, hardware_->shadowCascadeImages[1]);
                 bind_sampled_image(lighting, lighting.pushConsts.shadowMap2, hardware_->shadowCascadeImages[2]);
@@ -4733,6 +4829,13 @@ void OpticsSystem::optics_pipeline(float frame_count, uint64_t frame_index) {
                 lighting.pushConsts.ssrThickness = 0.08f;
                 lighting.pushConsts.ssrMaxRoughness = 0.55f;
                 lighting.pushConsts.ssrMaxSteps = 48u;
+                hardware_->shadowInfoBufferObjects.refractionDescriptors={};
+                if(has_refraction) {
+                    hardware_->shadowInfoBufferObjects.refractionDescriptors={refraction.opaque_visibility.store_descriptor(),
+                        refraction.opaque_depth.store_descriptor(),refraction.exit_visibility.store_descriptor(),
+                        refraction.exit_depth.store_descriptor(),refraction.opaque_color.store_descriptor(),0,0,0};
+                }
+                (void)write_object_bytes(sceneShadowBuffer,hardware_->shadowInfoBufferObjects);
 
                 // ================================================================
                 // 5b. Sky �� SH9 projection (sky-driven ambient).
@@ -4838,10 +4941,17 @@ void OpticsSystem::optics_pipeline(float frame_count, uint64_t frame_index) {
                 Horizon::SubmitReceipt latest_submit_receipt;
                 {
                     const auto native_submit_start = PerfClock::now();
-                    auto stream = hardware_->executor.stream();
+                    double measurement_pause_ms=0;
+                    std::optional<Horizon::HardwareStream> stream{std::in_place,hardware_->executor};
                     bool native_submission_cancelled = false;
 
-                    stream << visibility.extent(hardware_->gbufferSize.x, hardware_->gbufferSize.y);
+                    *stream << visibility.extent(hardware_->gbufferSize.x, hardware_->gbufferSize.y);
+                    if(has_refraction) {
+                        *stream << hardware_->refractionFrontPipeline->dispatch_extent(hardware_->gbufferSize.x,hardware_->gbufferSize.y);
+                        *stream << hardware_->refractionOpaquePipeline->extent(hardware_->gbufferSize.x,hardware_->gbufferSize.y);
+                        hardware_->refractionExitPipeline->extent(hardware_->gbufferSize.x,hardware_->gbufferSize.y);
+                        *stream << RenderDetail::IndirectRaster{&*hardware_->refractionExitPipeline,{refraction.front_snapshot}};
+                    }
                         if (!diag.skip_shadows &&
                             hardware_->shadowInfoBufferObjects.shadowEnabled != 0u) {
                             const auto native_shadow_start = PerfClock::now();
@@ -4896,7 +5006,7 @@ void OpticsSystem::optics_pipeline(float frame_count, uint64_t frame_index) {
                                     [&](std::uint32_t cascade) {
                                         auto& cascade_pipeline =
                                             *shadow_pipelines[cascade];
-                                        stream << cascade_pipeline.extent(kShadowMapSize, kShadowMapSize);
+                                        *stream << cascade_pipeline.extent(kShadowMapSize, kShadowMapSize);
                                     });
                             }
                             native_shadow_ms =
@@ -4904,24 +5014,93 @@ void OpticsSystem::optics_pipeline(float frame_count, uint64_t frame_index) {
                         }
                     if (!native_submission_cancelled && !diag.skip_deferred_compute) {
                         if (!is_debug_mode && sky_sh_needs_update) {
-                            stream << hardware_->skySHProjectPipeline->dispatch_extent(1, 1);
+                            *stream << hardware_->skySHProjectPipeline->dispatch_extent(1, 1);
+                        }
+                        const bool cache_lpv=direct_lighting->authored_environment && !native_shadows_enabled;
+                        if(!is_debug_mode && (!cache_lpv || hardware_->lpvCachedSource!=direct_lighting)) {
+                        // Authored local/HDR lighting is camera-independent. Retaining
+                        // its immutable source also prevents pointer reuse in this key.
+                        hardware_->lpvCachedSource.reset();
+                        auto& lpv=*hardware_->lpvPipeline;
+                        bind_storage_buffer(lpv,lpv.pushConsts.info,direct_lighting->data);
+                        bind_storage_buffer(lpv,lpv.pushConsts.injection,hardware_->lpvInjection);
+                        bind_storage_buffer(lpv,lpv.pushConsts.accumulated,hardware_->lpvAccumulated);
+                        bind_storage_buffer(lpv,lpv.pushConsts.source,hardware_->lpvWave[1]);
+                        bind_storage_buffer(lpv,lpv.pushConsts.destination,hardware_->lpvWave[0]);
+                        bind_storage_buffer(lpv,lpv.pushConsts.shadowInfo,sceneShadowBuffer);
+                        bind_storage_buffer(lpv,lpv.pushConsts.uniformInfo,sceneUboBuffer);
+                        bind_storage_buffer(lpv,lpv.pushConsts.skySH,hardware_->skyIrradianceSHBuffer);
+                        lpv.pushConsts.authored=direct_lighting->authored_environment?1u:0u;
+                        lpv.pushConsts.disabled=env_flag_enabled("CORONA_OPTICS_DISABLE_LPV")?1u:0u;
+                        lpv.pushConsts.sunDirection=upload_value(sun_dir);
+                        lpv.pushConsts.stride=8u;
+                        constexpr auto lpv_n=OpticsDetail::LpvData::resolution;
+                        lpv.pushConsts.mode=0u;
+                        *stream << lpv.dispatch_extent(lpv_n,lpv_n*lpv_n);
+                        if(native_shadows_enabled)for(uint32_t cascade=0;cascade<kShadowCascadeCount;++cascade) {
+                            if((diag.shadow_cascade_mask&(1u<<cascade))==0u)continue;
+                            bind_sampled_image(lpv,lpv.pushConsts.positionImage,hardware_->rsmPositions[cascade]);
+                            bind_sampled_image(lpv,lpv.pushConsts.normalImage,hardware_->rsmNormals[cascade]);
+                            bind_sampled_image(lpv,lpv.pushConsts.fluxImage,hardware_->rsmFluxes[cascade]);
+                            const auto& cascade_view=shadow_cascade_views[cascade];
+                            lpv.pushConsts.texelArea=cascade_view.orthographic_width*cascade_view.orthographic_height/
+                                float(kShadowMapSize*kShadowMapSize);
+                            lpv.pushConsts.cascade=cascade;lpv.pushConsts.mode=1u;
+                            *stream << lpv.dispatch_extent(kShadowMapSize/8,kShadowMapSize/8);
+                        }
+                        lpv.pushConsts.mode=2u;
+                        *stream << lpv.dispatch_extent(lpv_n,lpv_n*lpv_n);
+                        lpv.pushConsts.mode=3u;
+                        for(unsigned step=0;step<OpticsDetail::LpvData::propagation_steps;++step) {
+                            bind_storage_buffer(lpv,lpv.pushConsts.source,hardware_->lpvWave[step%2]);
+                            bind_storage_buffer(lpv,lpv.pushConsts.destination,hardware_->lpvWave[(step+1)%2]);
+                            *stream << lpv.dispatch_extent(lpv_n,lpv_n*lpv_n);
+                            if(env_flag_enabled("CORONA_OPTICS_THERMAL_BATCH") && (step+1)%8==0) {
+                                auto receipt=*stream << Horizon::commit();
+                                hardware_->executor.wait_completed(receipt);
+                                stream.emplace(hardware_->executor);
+                                const auto pause_start=PerfClock::now();
+                                std::this_thread::sleep_for(std::chrono::milliseconds(80));
+                                measurement_pause_ms+=elapsed_ms(pause_start,PerfClock::now());
+                            }
+                        }
+                        bind_storage_buffer(lpv,lpv.pushConsts.source,hardware_->lpvWave[OpticsDetail::LpvData::propagation_steps%2]);
+                        lpv.pushConsts.mode=4u;
+                        *stream << lpv.dispatch_extent(lpv_n,lpv_n*lpv_n);
+                        if(cache_lpv)hardware_->lpvCachedSource=direct_lighting;
                         }
                         lighting.dispatch_extent(hardware_->gbufferSize.x, hardware_->gbufferSize.y);
                         RenderDetail::IndirectDispatch material_dispatch{&lighting};
+                        material_dispatch.buffers.push_back(hardware_->lpvAccumulated);
                         material_dispatch.images.push_back(direct_lighting->environment);
                         std::unordered_set<uint32_t> material_programs, material_images;
-                        auto light_appearances=direct_lighting->appearances;
-                        light_appearances.insert(light_appearances.end(),sceneBatch.resource_keep_alive->appearances.begin(),sceneBatch.resource_keep_alive->appearances.end());
-                        for (const auto& appearance : light_appearances) {
+                        for (const auto& appearance : sceneBatch.resource_keep_alive->appearances) {
                             if (material_programs.insert(appearance->program.store_descriptor()).second)
                                 material_dispatch.buffers.push_back(appearance->program);
                             for (const auto& image : appearance->images)
                                 if (material_images.insert(image->image.store_descriptor()).second)
                                     material_dispatch.images.push_back(image->image);
                         }
-                        stream << material_dispatch;
+                        if(has_refraction) {
+                            // Immutable opaque background: refraction never reads its own output.
+                            const uint32_t flags=(should_run_ssao?1u:0u) |
+                                ((!loading_guard && !env_flag_enabled("CORONA_OPTICS_DISABLE_SSR"))?2u:0u) |
+                                (kSkyAmbientEnabled?4u:0u) | (direct_lighting->authored_environment?16u:0u);
+                            lighting.pushConsts.featureFlags=flags;
+                            bind_storage_image(lighting,lighting.pushConsts.visibilityImageIndex,refraction.opaque_visibility);
+                            bind_sampled_image(lighting,lighting.pushConsts.depthImageIndex,refraction.opaque_depth);
+                            bind_storage_image(lighting,lighting.pushConsts.finalOutputImage,refraction.opaque_color);
+                            *stream << material_dispatch;
+                            lighting.pushConsts.featureFlags=flags|32u|(camera->shadow_cascade_debug?8u:0u);
+                            bind_storage_image(lighting,lighting.pushConsts.visibilityImageIndex,hardware_->visibilityImage);
+                            bind_sampled_image(lighting,lighting.pushConsts.depthImageIndex,hardware_->depthImage);
+                            bind_storage_image(lighting,lighting.pushConsts.finalOutputImage,render_target);
+                            for(const auto& image:{refraction.opaque_visibility,refraction.opaque_depth,refraction.exit_visibility,refraction.exit_depth,refraction.opaque_color})
+                                material_dispatch.images.push_back(image);
+                        }
+                        *stream << material_dispatch;
                         if (!is_debug_mode) {
-                            stream << sky.dispatch_extent(hardware_->gbufferSize.x, hardware_->gbufferSize.y)
+                            *stream << sky.dispatch_extent(hardware_->gbufferSize.x, hardware_->gbufferSize.y)
                                    << tonemap.dispatch_extent(hardware_->gbufferSize.x, hardware_->gbufferSize.y);
                         }
                     }
@@ -4932,14 +5111,14 @@ void OpticsSystem::optics_pipeline(float frame_count, uint64_t frame_index) {
                     }
 
                     if (actor_pick_request) {
-                        stream << hardware_->actorPickPipeline->dispatch_extent(1, 1);
+                        *stream << hardware_->actorPickPipeline->dispatch_extent(1, 1);
                     }
 
                     if (!is_debug_mode) {
                         const auto ui_state =
                             SharedDataHub::instance().viewport_ui_state(cam_handle);
                         presented_target = compose_surface_ui_overlay(
-                            stream,
+                            *stream,
                             cam_handle, *camera, scene, target, render_target,
                             ui_state.mode, ui_state.calibration, frame_index);
                     }
@@ -4948,16 +5127,24 @@ void OpticsSystem::optics_pipeline(float frame_count, uint64_t frame_index) {
                     // ���������õ� buffer �� GPU ��ɣ�executor ������Щ busy �ڱ���
                     // ֱ���� submission �� timeline semaphore ��ɲ� retire �����ʱ busy
                     // use_count ��� 1���ط��ɸ��ø� buffer�������������Ǿ����Ĺؼ���
-                    stream << RetainSubmission{vpLease.busy}
+                    *stream << RetainSubmission{vpLease.busy}
                            << RetainSubmission{uboLease.busy}
                            << RetainSubmission{shadowLease.busy}
                            << RetainSubmission{instLease.busy}
                            << RetainSubmission{matLease.busy}
                            << RetainSubmission{sceneBatch.resource_keep_alive};
-                    latest_submit_receipt = stream << Horizon::commit();
+                    latest_submit_receipt = *stream << Horizon::commit();
                     hardware_->last_receipt = latest_submit_receipt;
                     native_commit_ms = elapsed_ms(native_commit_start, PerfClock::now());
                     native_submit_ms = elapsed_ms(native_submit_start, PerfClock::now());
+                    if (env_flag_enabled("CORONA_OPTICS_MEASURE_RENDER_TIME")) {
+                        // Opt-in regression measurement: command recording through GPU
+                        // completion, excluding scene loading, frame pacing and PNG IO.
+                        hardware_->executor.wait_completed(latest_submit_receipt);
+                        CFW_LOG_INFO("NativeRenderTiming camera={} extent={}x{} render_ms={:.3f}",
+                            cam_handle, camera->width, camera->height,
+                            elapsed_ms(native_submit_start, PerfClock::now())-measurement_pause_ms);
+                    }
                 }
                 if (hardware_) {
                     hardware_->native_frame_throttle.submitted(latest_submit_receipt);

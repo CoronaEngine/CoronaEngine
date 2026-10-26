@@ -21,9 +21,11 @@
 // clang-format off
 #include GLSL(shaders/visibility.vert.glsl)
 #include GLSL(shaders/visibility.frag.glsl)
+#include GLSL(shaders/refraction_front.comp.glsl)
 #include GLSL(shaders/shadow.vert.glsl)
 #include GLSL(shaders/shadow.frag.glsl)
 #include GLSL(shaders/lighting.comp.glsl)
+#include GLSL(shaders/lpv.comp.glsl)
 #include GLSL(shaders/sky.comp.glsl)
 #include GLSL(shaders/sky_sh_project.comp.glsl)
 #include GLSL(shaders/tonemap.comp.glsl)
@@ -117,6 +119,11 @@ struct Hardware {
     Corona::Horizon::HardwareImage uiVisibilityImage;  // Pass 2 visibility, isolated from scene pass
     Corona::Horizon::HardwareImage uiDepthImage;        // Pass 2 depth, isolated from scene pass
     std::array<Corona::Horizon::HardwareImage, 4> shadowCascadeImages;
+    std::array<Corona::Horizon::HardwareImage, 4> rsmPositions, rsmNormals, rsmFluxes;
+    Corona::Horizon::HardwareBuffer lpvInjection, lpvAccumulated;
+    std::array<Corona::Horizon::HardwareBuffer, 2> lpvWave;
+    Corona::Memory::GpuMemToken lpvMemory;
+    std::shared_ptr<const void> lpvCachedSource;
 
     // === Final composited output ===
     Corona::Horizon::HardwareImage finalOutputImage;
@@ -161,8 +168,12 @@ struct Hardware {
     bool shaderHasInit = false;
     std::optional<Corona::Horizon::RasterizerPipeline<visibility_vert_glsl_t, visibility_frag_glsl_t>> visibilityPipeline;
     std::optional<Corona::Horizon::RasterizerPipeline<visibility_vert_glsl_t, visibility_frag_glsl_t>> uiVisibilityPipeline;
+    std::optional<Corona::Horizon::RasterizerPipeline<visibility_vert_glsl_t, visibility_frag_glsl_t>> refractionOpaquePipeline;
+    std::optional<Corona::Horizon::RasterizerPipeline<visibility_vert_glsl_t, visibility_frag_glsl_t>> refractionExitPipeline;
+    std::optional<Corona::Horizon::ComputePipeline<refraction_front_comp_glsl_t>> refractionFrontPipeline;
     std::array<std::optional<Corona::Horizon::RasterizerPipeline<shadow_vert_glsl_t, shadow_frag_glsl_t>>, 4> shadowPipelines;
     std::optional<Corona::Horizon::ComputePipeline<lighting_comp_glsl_t>> lightingPipeline;
+    std::optional<Corona::Horizon::ComputePipeline<lpv_comp_glsl_t>> lpvPipeline;
     std::optional<Corona::Horizon::ComputePipeline<sky_comp_glsl_t>> skyPipeline;
     std::optional<Corona::Horizon::ComputePipeline<sky_sh_project_comp_glsl_t>> skySHProjectPipeline;
     std::optional<Corona::Horizon::ComputePipeline<tonemap_comp_glsl_t>> tonemapPipeline;
@@ -201,8 +212,17 @@ struct Hardware {
         float shadowMapSize = 1024.0f;
         float shadowBias = 0.0015f;
         uint32_t shadowEnabled = 0;
-        uint32_t padding0 = 0;
+        uint32_t lpvRadianceDescriptor = 0;
+        ktm::fvec4 sunColor{};
+        ktm::fvec4 sunDirection{};
+        // Per-camera refraction descriptors live in the SSBO, keeping resolve
+        // push constants within Vulkan's guaranteed 128-byte limit.
+        std::array<uint32_t,8> refractionDescriptors{};
     } shadowInfoBufferObjects{};
+    static_assert(offsetof(ShadowInfoBufferObject, lpvRadianceDescriptor)==75u*sizeof(uint32_t));
+    static_assert(offsetof(ShadowInfoBufferObject, sunColor)==76u*sizeof(uint32_t));
+    static_assert(offsetof(ShadowInfoBufferObject, sunDirection)==80u*sizeof(uint32_t));
+    static_assert(offsetof(ShadowInfoBufferObject, refractionDescriptors)==84u*sizeof(uint32_t));
 
     // === GPU-side instance info table (matches GLSL InstanceInfo layout) ===
     // 96 bytes = 24 uints per entry:
@@ -239,7 +259,7 @@ struct Hardware {
     //   [0]      textureDescriptor
     //   [1]      metallic  (as float bits)
     //   [2]      roughness (as float bits)
-    //   [3]      subsurface
+    //   [3]      subsurface (imported MR: transmission)
     //   [4]      specular
     //   [5]      specularTint
     //   [6]      anisotropic

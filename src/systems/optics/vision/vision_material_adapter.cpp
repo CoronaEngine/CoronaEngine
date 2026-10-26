@@ -44,6 +44,8 @@ std::shared_ptr<::vision::Material> create_vision_material(
 
     if (optics.principled && optics.principled->expressions) {
         const auto& p=*optics.principled->expressions;
+        // Reflection sidedness is independent of the area light's sidedness.
+        desc.set_value("two_sided", p.value("two_sided", false));
         const std::pair<const char*,const char*> slots[]={{"base_color","color"},{"metallic","metallic"},
             {"roughness","roughness"},{"ior","ior"},{"specular","spec_tint"},
             {"transmission","transmission_weight"},{"anisotropic","anisotropic"},

@@ -195,6 +195,7 @@ struct MaterialInfo
     float normalScale;
     vec3 specularColor;
     float occlusionStrength;
+    float transmission; float ior;
 };
 
 MaterialInfo loadMaterialInfo(uint materialID)
@@ -226,6 +227,14 @@ MaterialInfo loadMaterialInfo(uint materialID)
     mat.normalScale = readFloat(pushConsts.materialTableBufferIndex, base + 27u);
     mat.specularColor = readVec3(pushConsts.materialTableBufferIndex, base + 28u);
     mat.occlusionStrength = readFloat(pushConsts.materialTableBufferIndex, base + 31u);
+    mat.transmission=(mat.flags&256u)!=0u?clamp(mat.subsurface,0,1):0;
+    if((mat.flags&32u)!=0u)mat.subsurface=0;
+    float sqrtF0=sqrt(clamp(mat.specular*.08,0,.9996));
+    mat.ior=(1.0+sqrtF0)/max(1.0-sqrtF0,1e-4);
+    if((mat.flags&32u)!=0u) {
+        mat.ior=max(mat.specularTint,.001);
+        mat.specularTint=0;
+    }
     return mat;
 }
 
@@ -275,6 +284,8 @@ void evaluateAppearance(inout MaterialInfo matl, vec2 uv, out vec3 color, out ve
     matl.emissive=values[readUint(buf,5u)];normalMap=values[readUint(buf,6u)];
     matl.clearcoat=values[readUint(buf,7u)].x;matl.clearcoatGloss=1.0-values[readUint(buf,8u)].x;
     matl.normalDescriptor=readUint(buf,9u); // boolean for an expression normal, not a texture descriptor
+    matl.transmission=clamp(values[readUint(buf,10u)].x,0,1);
+    matl.ior=clamp(values[readUint(buf,11u)].x,.001,10000);
     matl.occlusionDescriptor=0u;
 }
 
@@ -499,6 +510,15 @@ vec3 shadowCascadeDebugColor(uint cascadeIndex)
     return vec3(0.08, 0.08, 0.08);
 }
 
+float dielectricFresnel(float cosine,float etaI,float etaT) {
+    float c=clamp(abs(cosine),0,1),s2=(etaI/etaT)*(etaI/etaT)*(1-c*c);
+    if(s2>=1)return 1;
+    float t=sqrt(max(0,1-s2));
+    float rs=(etaI*c-etaT*t)/max(etaI*c+etaT*t,1e-6);
+    float rp=(etaT*c-etaI*t)/max(etaT*c+etaI*t,1e-6);
+    return .5*(rs*rs+rp*rp);
+}
+
 vec3 DisneyBRDF(vec3 V, vec3 Normal, vec3 Tangent, vec3 Bitangent, vec3 L,
     vec3 lightColor, vec3 albedo, MaterialInfo matl, float shadowFactor)
 {
@@ -552,6 +572,10 @@ vec3 DisneyBRDF(vec3 V, vec3 Normal, vec3 Tangent, vec3 Bitangent, vec3 L,
 
     float FH = SchlickFresnel(ldoth);
     vec3 F = mix(Cspec0, vec3(mix(specularWeight, 1.0, matl.metallic)), FH);
+    // Glass retains its reflection lobe on either side of the interface.
+    // shadeDirect supplies etaT/etaI for the viewing side, including eta < 1.
+    float glassWeight=matl.transmission*(1.0-matl.metallic);
+    F=mix(F,vec3(dielectricFresnel(ldoth,1.0,matl.ior)),glassWeight);
 
     // === Sheen lobe ===
     vec3 Fsheen = FH * matl.sheen * Csheen;
@@ -563,7 +587,7 @@ vec3 DisneyBRDF(vec3 V, vec3 Normal, vec3 Tangent, vec3 Bitangent, vec3 L,
 
     // === Combine all lobes ===
     vec3 diffuse = (1.0 / PI) * (mix(Fd, ss, matl.subsurface) * albedo + Fsheen)
-                   * (1.0 - matl.metallic);
+                   * (1.0 - matl.metallic) * (1.0 - matl.transmission);
     if (importedMR) {
         vec3 dielectricF = mix(dielectricF0, vec3(specularWeight), FH);
         diffuse *= 1.0 - max(dielectricF.r, max(dielectricF.g, dielectricF.b));
@@ -577,6 +601,7 @@ vec3 DisneyBRDF(vec3 V, vec3 Normal, vec3 Tangent, vec3 Bitangent, vec3 L,
 struct Surface {
     vec3 position;
     vec3 emissionNormal;
+    vec3 outwardNormal;
     vec3 geometricNormal;
     vec3 normal;
     vec3 tangent;
@@ -586,10 +611,10 @@ struct Surface {
     uint objectID;
 };
 
-bool decodeSurface(ivec2 pixel, out Surface surface)
+bool decodeSurfaceFrom(ivec2 pixel, uint visibilityIndex, bool geometryOnly, out Surface surface)
 {
     // --- Read visibility buffer ---
-    uvec4 vis = imageLoad(imagesRG32UI[pushConsts.visibilityImageIndex], pixel);
+    uvec4 vis = imageLoad(imagesRG32UI[visibilityIndex], pixel);
     uint instanceID_1based = vis.r;
     uint primitiveID = vis.g;
 
@@ -685,6 +710,19 @@ bool decodeSurface(ivec2 pixel, out Surface surface)
     float normalLength = length(rawNormal);
     if (normalLength < 1e-12) return false;
     vec3 interpNormal = rawNormal / normalLength;
+
+    // Exit normals and opaque depth hits need no material expression evaluation,
+    // texture fetches, tangent frames or normal derivatives. In particular, do
+    // not evaluate a 128-node material program at every exit refinement.
+    if (geometryOnly) {
+        surface.position=interpPos;
+        surface.normal=interpNormal;
+        surface.outwardNormal=interpNormal;
+        surface.objectID=inst.objectID;
+        if ((matl.flags&16u)!=0u && dot(surface.normal,readVec3(pushConsts.uniformBufferIndex,36u)-interpPos)<0)
+            surface.normal=-surface.normal;
+        return finiteVec3(interpPos) && finiteVec3(interpNormal);
+    }
 
     vec2 interpUV = bary.x * v0.texCoord + bary.y * v1.texCoord + bary.z * v2.texCoord;
     vec2 uvDx = v0.texCoord*baryDx.x + v1.texCoord*baryDx.y + v2.texCoord*baryDx.z;
@@ -794,6 +832,7 @@ bool decodeSurface(ivec2 pixel, out Surface surface)
         T = normalize(T);
         B = normalize(cross(interpNormal,T)) * tangentSign;
     }
+    surface.outwardNormal=interpNormal;
     if ((matl.flags & 16u) != 0u && dot(geometricNormal,readVec3(pushConsts.uniformBufferIndex,36u)-interpPos) < 0.0) {
         geometricNormal = -geometricNormal;
         interpNormal = -interpNormal;
@@ -819,6 +858,10 @@ vec3 viewPosition(ivec2 pixel, float depth, mat4 inverseProjection) {
 
 // Stateless, bounded screen-space obscurance. Only depth is read for neighbours;
 // no full-resolution normal, AO, filter, or temporal-history image is needed.
+bool decodeSurface(ivec2 pixel,out Surface surface) {
+    return decodeSurfaceFrom(pixel,pushConsts.visibilityImageIndex,false,surface);
+}
+
 float ambientOcclusion(ivec2 pixel, Surface surface) {
     if ((pushConsts.featureFlags & 1u) == 0u) return 1.0;
     mat4 view = readMat4(pushConsts.uniformBufferIndex, 44u);
@@ -859,185 +902,76 @@ float ambientOcclusion(ivec2 pixel, Surface surface) {
     return clamp(1.0 - pushConsts.ssaoStrength * occlusion * (2.0/12.0), 0.0, 1.0);
 }
 
-float lightRadicalInverse(uint index,uint radix) {
-    float value=0.0,place=1.0/float(radix);
-    while(index>0u) {value+=float(index%radix)*place;index/=radix;place/=float(radix);}
-    return value;
+// Link-aware interpolation stays on a connected side of the receiver surface.
+float lpvEdge(uint info,ivec3 p,int axis,int sign,int n) {
+    if(sign<0)p[axis]-=1;
+    if(any(lessThan(p,ivec3(0)))||any(greaterThanEqual(p,ivec3(n))))return 0;
+    uint cell=uint((p.z*n+p.y)*n+p.x);
+    return clamp(readFloat(info,256u+cell*208u+196u+uint(axis)*4u),0,1);
 }
-float shadowEpsilon(vec3 p) { return max(2e-5,max(abs(p.x),max(abs(p.y),abs(p.z)))*2e-6); }
-bool directIntersection(vec3 p, vec3 n, vec3 direction, float distance, bool anyHit,
-    out uint emitter, out vec3 barycentric, out float nearest) {
-    uint buf=pushConsts.directLightingBufferIndex;
-    uint nodeCount=readUint(buf,0u),nodes=readUint(buf,4u),triangles=readUint(buf,5u);
-    float epsilon=shadowEpsilon(p);
-    vec3 origin=p+n*(dot(n,direction)>=0.0?epsilon:-epsilon);
-    float end=distance-epsilon*2.0;
-    nearest=end;emitter=0u;barycentric=vec3(0);bool found=false;
-    vec3 inverse=1.0/mix(direction,vec3(1e-20),lessThan(abs(direction),vec3(1e-20)));
-    uint index=0u;
-    while(index<nodeCount) {
-        uint node=nodes+index*12u;
-        vec3 low=readVec3(buf,node), high=readVec3(buf,node+4u);
-        vec3 a=(low-origin)*inverse,b=(high-origin)*inverse;
-        vec3 nearT=min(a,b),farT=max(a,b);
-        float t0=max(0.0,max(nearT.x,max(nearT.y,nearT.z)));
-        float t1=min(nearest,min(farT.x,min(farT.y,farT.z)));
-        if(t0>t1) {index=readUint(buf,node+8u);continue;}
-        uint count=readUint(buf,node+7u),first=readUint(buf,node+3u);
-        for(uint i=0u;i<count;++i) {
-            uint tri=triangles+(first+i)*12u;
-            vec3 v=readVec3(buf,tri),e1=readVec3(buf,tri+4u),e2=readVec3(buf,tri+8u);
-            vec3 h=cross(direction,e2);float det=dot(e1,h);
-            if(abs(det)<1e-20) continue;
-            float inv=1.0/det;vec3 s=origin-v;
-            float u=dot(s,h)*inv;if(u<0.0 || u>1.0) continue;
-            vec3 q=cross(s,e1);float w=dot(direction,q)*inv;if(w<0.0 || u+w>1.0) continue;
-            float t=dot(e2,q)*inv;
-            if(t>epsilon*.25 && t<nearest) {
-                if(anyHit) return true;
-                nearest=t;emitter=readUint(buf,tri+3u);barycentric=vec3(1-u-w,u,w);found=true;
-            }
-        }
-        ++index;
+float lpvConnection(uint info,ivec3 a,ivec3 b,int n) {
+    const ivec3 orders[6]=ivec3[6](ivec3(0,1,2),ivec3(0,2,1),ivec3(1,0,2),ivec3(1,2,0),ivec3(2,0,1),ivec3(2,1,0));
+    float best=0;
+    for(int order=0;order<6;++order){ivec3 p=a;float visibility=1;
+        for(int k=0;k<3;++k){int axis=orders[order][k],sign=b[axis]>p[axis]?1:-1;
+            if(p[axis]!=b[axis]){visibility*=1-lpvEdge(info,p,axis,sign,n);p[axis]+=sign;}}
+        best=max(best,visibility);
     }
-    return found;
+    return best;
 }
-bool directVisible(vec3 p,vec3 n,vec3 direction,float distance) {
-    uint emitter;vec3 barycentric;float nearest;
-    return !directIntersection(p,n,direction,distance,true,emitter,barycentric,nearest);
-}
-vec2 environmentUV(vec3 d) {
-    return vec2(fract(atan(-d.z,d.x)/(2.0*PI)),acos(clamp(d.y,-1.0,1.0))/PI);
-}
-vec3 environmentRadiance(vec3 d) {
-    uint buf=pushConsts.directLightingBufferIndex, tex=readUint(buf,8u);
-    ivec2 size=ivec2(readUint(buf,10u),readUint(buf,11u));
-    vec2 p=environmentUV(d)*vec2(size)-.5;ivec2 at=ivec2(floor(p));vec2 f=fract(p);
-    // Longitude repeats; latitude clamps. Do not wrap across a pole.
-    vec3 result=vec3(0);
-    for(int y=0;y<2;++y) for(int x=0;x<2;++x) {
-        ivec2 q=at+ivec2(x,y);q.x=(q.x%size.x+size.x)%size.x;q.y=clamp(q.y,0,size.y-1);
-        result+=texelFetch(textures[nonuniformEXT(tex)],q,0).rgb*(x==0?1-f.x:f.x)*(y==0?1-f.y:f.y);
+vec3 sampleLpv(vec3 position,vec3 normal,vec3 direction,bool diffuse) {
+    vec3 query=-direction;float xq=query.x,yq=query.y,zq=query.z;
+    float basis[9]=float[9](.282094792,.488602512*xq,.488602512*yq,.488602512*zq,
+        1.092548431*xq*yq,1.092548431*yq*zq,.315391565*(3*zq*zq-1),
+        1.092548431*xq*zq,.546274215*(xq*xq-yq*yq));
+    if(diffuse){basis[0]*=PI;for(int k=1;k<4;++k)basis[k]*=2*PI/3;for(int k=4;k<9;++k)basis[k]*=PI/4;}
+    uint info=pushConsts.directLightingBufferIndex;
+    int n=int(readUint(info,0u));float size=readFloat(info,7u);
+    uint radiance=readUint(pushConsts.shadowInfoBufferIndex,75u);
+    vec3 origin=readVec3(info,4u),samplePosition=position+normal*size*.25;
+    vec3 q=(samplePosition-origin)/size-.5,t=fract(q);ivec3 base=ivec3(floor(q));
+    float weights[8];float best=-1;ivec3 anchor=base;
+    for(int corner=0;corner<8;++corner){ivec3 d=ivec3(corner&1,(corner>>1)&1,(corner>>2)&1),p=base+d;
+        vec3 w=mix(vec3(1)-t,t,vec3(d));float value=w.x*w.y*w.z;
+        if(any(lessThan(p,ivec3(0)))||any(greaterThanEqual(p,ivec3(n)))||dot(origin+(vec3(p)+.5)*size-position,normal)<=size*1e-5)value=0;
+        weights[corner]=value;if(value>best){best=value;anchor=p;}
     }
-    return result;
-}
-float environmentPDF(vec3 d) {
-    uint buf=pushConsts.directLightingBufferIndex,w=readUint(buf,10u),h=readUint(buf,11u),base=readUint(buf,9u);
-    uvec2 p=min(uvec2(environmentUV(d)*vec2(w,h)),uvec2(w-1u,h-1u));uint i=p.y*w+p.x;
-    float mass=readFloat(buf,base+i)-(i==0u?0.0:readFloat(buf,base+i-1u));
-    float solid=(2.0*PI/float(w))*(cos(PI*float(p.y)/float(h))-cos(PI*float(p.y+1u)/float(h)));
-    return mass/max(solid,1e-12);
-}
-vec3 sampleEnvironment(float u,float v,float z) {
-    uint buf=pushConsts.directLightingBufferIndex,w=readUint(buf,10u),h=readUint(buf,11u),base=readUint(buf,9u);
-    uint low=0u,high=w*h-1u;
-    while(low<high) {uint m=(low+high)/2u;if(readFloat(buf,base+m)<u) low=m+1u;else high=m;}
-    uint x=low%w,y=low/w;
-    float phi=2.0*PI*(float(x)+v)/float(w);
-    float cosine=mix(cos(PI*float(y)/float(h)),cos(PI*float(y+1u)/float(h)),z);
-    float sine=sqrt(max(0.0,1.0-cosine*cosine));
-    return vec3(sine*cos(phi),cosine,-sine*sin(phi));
-}
-float ggxDirectionPDF(vec3 v,vec3 l,vec3 n,float alpha) {
-    vec3 sum=v+l;if(dot(sum,sum)<1e-12) return 0.0;
-    vec3 h=normalize(sum);float nh=max(dot(n,h),0.0),vh=max(dot(v,h),0.0);
-    float d=alpha*alpha/(PI*sqr(nh*nh*(alpha*alpha-1.0)+1.0));
-    return vh>0.0?d*nh/(4.0*vh):0.0;
-}
-vec3 sampleGGXDirection(Surface s,vec3 v,float alpha,float u,float azimuth) {
-    float phi=2.0*PI*azimuth;
-    float cosine=sqrt((1.0-u)/(1.0+(alpha*alpha-1.0)*u)),sine=sqrt(max(0.0,1.0-cosine*cosine));
-    vec3 h=s.tangent*(sine*cos(phi))+s.bitangent*(sine*sin(phi))+s.normal*cosine;
-    return reflect(-v,h);
-}
-vec3 shadeDirect(Surface s, float ao, vec3 viewDirection, bool includeEmission) {
-    // SSR re-shades from its reflected view direction. Emission cannot be
-    // face-forwarded using the main camera's direction during VBuffer decode.
-    vec3 emission=includeEmission && ((s.material.flags&128u)!=0u || dot(s.emissionNormal,viewDirection)>0.0)?s.material.emissive:vec3(0);
-    if (s.material.lightingEnabled <= 0.5) return s.baseColor + emission;
-    uint buf=pushConsts.directLightingBufferIndex;
-    bool authored=(pushConsts.featureFlags&16u)!=0u;
-    vec3 color=emission;
-    if(!authored) {
-        color+=DisneyBRDF(viewDirection,s.normal,s.tangent,s.bitangent,pushConsts.sun_dir,
-            pushConsts.lightColor,s.baseColor,s.material,computeSunShadow(s.position,s.geometricNormal));
-        if((pushConsts.featureFlags&4u)!=0u) {
-            vec3 f0=clamp(s.material.specularColor*s.material.specular*.08,vec3(0),vec3(1))*s.material.sheenTint;
-            color+=s.baseColor*(1.0-s.material.metallic)*(1.0-max(f0.x,max(f0.y,f0.z)))*
-                evalSkySH(s.normal,pushConsts.skyIrradianceSHBufferIndex)/PI*ao*s.material.occlusionStrength;
-        }
+    vec3 result=vec3(0);float weight=0;
+    for(int corner=0;corner<8;++corner){if(weights[corner]<=0)continue;
+        ivec3 p=base+ivec3(corner&1,(corner>>1)&1,(corner>>2)&1);
+        float w=weights[corner]*lpvConnection(info,anchor,p,n);uint cell=uint((p.z*n+p.y)*n+p.x);
+        for(uint c=0u;c<3u;++c){float value=0;for(uint k=0u;k<9u;++k)value+=readFloat(radiance,cell*27u+c*9u+k)*basis[k];result[c]+=w*max(value,0);}
+        weight+=w;
     }
-    uint directions=readUint(buf,3u),directionBase=readUint(buf,7u);
-    for(uint i=0u;i<directions;++i) {
-        vec3 l=readVec3(buf,directionBase+i*8u),energy=readVec3(buf,directionBase+i*8u+4u);
-        if(dot(s.normal,l)>0.0 && directVisible(s.position,s.geometricNormal,l,1e30))
-            color+=DisneyBRDF(viewDirection,s.normal,s.tangent,s.bitangent,l,energy,s.baseColor,s.material,1.0);
-    }
-    uint count=readUint(buf,2u),base=readUint(buf,6u),samples=max((pushConsts.featureFlags>>16u)&255u,2u);
-    // A shared low-discrepancy quadrature gives coherent soft shadows without
-    // per-pixel white noise or a temporal/history dependency in native mode.
-    float alpha=max(.002,s.material.roughness*s.material.roughness);
-    for(uint i=0u;i<(count>0u?samples:0u);++i) {
-        uint q=i/2u,light;vec3 bary,l;float distance;
-        float u=(float(q)+.5)/float(samples/2u);
-        bool areaSample=(i&1u)==0u;
-        if(areaSample) {
-            uint low=0u,high=count-1u;
-            while(low<high) {uint m=(low+high)/2u;if(readFloat(buf,base+m*32u+7u)<u) low=m+1u;else high=m;}
-            light=base+low*32u;
-            float root=sqrt(lightRadicalInverse(q+1u,2u)),v=lightRadicalInverse(q+1u,3u);
-            bary=vec3(1-root,root*(1-v),root*v);
-            vec3 delta=readVec3(buf,light)+readVec3(buf,light+4u)*bary.y+readVec3(buf,light+8u)*bary.z-s.position;
-            distance=length(delta);if(distance<1e-8) continue;l=delta/distance;
-        } else {
-            l=sampleGGXDirection(s,viewDirection,alpha,u,lightRadicalInverse(q+1u,2u));
-            if(dot(s.normal,l)<=0.0) continue;
-            uint emitter;
-            if(!directIntersection(s.position,s.geometricNormal,l,1e30,false,emitter,bary,distance) || emitter==0u) continue;
-            light=base+(emitter-1u)*32u;
-        }
-        vec3 e1=readVec3(buf,light+4u),e2=readVec3(buf,light+8u);
-        float cosine=dot(normalize(cross(e1,e2)),-l);if(readUint(buf,light+3u)!=0u) cosine=abs(cosine);
-        if(cosine<=0.0 || dot(s.normal,l)<=0.0) continue;
-        if(areaSample && !directVisible(s.position,s.geometricNormal,l,distance)) continue;
-        vec3 emission=readVec3(buf,light+20u);uint program=readUint(buf,light+23u);
-        if(program!=0u) {
-            MaterialInfo material=s.material;material.occlusionDescriptor=program;vec3 unused,normal;
-            vec2 uv=readVec2(buf,light+12u)*bary.x+readVec2(buf,light+14u)*bary.y+readVec2(buf,light+16u)*bary.z;
-            evaluateAppearance(material,uv,unused,normal);emission=material.emissive;
-        }
-        float pdfArea=readFloat(buf,light+11u)*distance*distance/cosine;
-        float pdf=.5*(pdfArea+ggxDirectionPDF(viewDirection,l,s.normal,alpha));
-        color+=DisneyBRDF(viewDirection,s.normal,s.tangent,s.bitangent,l,emission,s.baseColor,s.material,1.0)*
-            (1.0/(max(pdf,1e-20)*float(samples)));
-    }
-    if(authored && readFloat(buf,12u)>0.0) {
-        for(uint i=0u;i<samples;++i) {
-            vec3 l;
-            uint q=i/2u;
-            if((i&1u)==0u) l=sampleEnvironment((float(q)+.5)/float(samples/2u),lightRadicalInverse(q+1u,2u),lightRadicalInverse(q+1u,3u));
-            else l=sampleGGXDirection(s,viewDirection,alpha,(float(q)+.5)/float(samples/2u),lightRadicalInverse(q+1u,2u));
-            if(dot(s.normal,l)<=0.0) continue;
-            float pdf=.5*(environmentPDF(l)+ggxDirectionPDF(viewDirection,l,s.normal,alpha));
-            if(pdf<=1e-12 || !directVisible(s.position,s.geometricNormal,l,1e30)) continue;
-            color+=DisneyBRDF(viewDirection,s.normal,s.tangent,s.bitangent,l,environmentRadiance(l),s.baseColor,s.material,1.0)/(pdf*float(samples));
-        }
-    }
+    return weight>1e-10?result/weight:vec3(0);
+}
+vec3 lpvIrradiance(vec3 position,vec3 normal) {
+    return sampleLpv(position,normal,normal,true);
+}
+vec3 shadeDirect(Surface s,float ao,vec3 viewDirection,bool includeEmission) {
+    vec3 emission=includeEmission && ((s.material.flags&128u)!=0u || dot(s.emissionNormal,viewDirection)>0)?s.material.emissive:vec3(0);
+    if(s.material.lightingEnabled<=.5)return s.baseColor+emission;
+    if(s.material.transmission>0 && dot(viewDirection,s.outwardNormal)<0)
+        s.material.ior=1.0/s.material.ior;
+    vec3 color=emission+DisneyBRDF(viewDirection,s.normal,s.tangent,s.bitangent,pushConsts.sun_dir,
+        pushConsts.lightColor,s.baseColor,s.material,computeSunShadow(s.position,s.geometricNormal));
+    vec3 irradiance=lpvIrradiance(s.position,s.geometricNormal);
+    color+=s.baseColor*(1.0-s.material.metallic)*(1.0-s.material.transmission)*irradiance/PI*ao*s.material.occlusionStrength;
     return color;
 }
 
 // Screen-space reflection using perspective-correct ray segments and depth
 // crossings. Re-shade the hit from VBuffer: never read the output being written.
 // This avoids colour ping-pong, a GBuffer, a Hi-Z pyramid and reflection history.
-bool traceReflection(Surface source, vec3 direction, out Surface hit, out float confidence) {
+bool traceScreen(Surface source, vec3 direction, uint depthIndex, uint visibilityIndex, bool transmitting, out Surface hit, out float confidence) {
     confidence = 0.0;
     mat4 view = readMat4(pushConsts.uniformBufferIndex, 44u);
     mat4 projection = readMat4(pushConsts.uniformBufferIndex, 60u);
     mat4 inverseProjection = readMat4(pushConsts.uniformBufferIndex, 76u);
-    vec3 origin = source.position + source.normal * max(0.015, pushConsts.ssrThickness * 0.25);
+    vec3 origin = source.position + (transmitting?direction:source.normal) * max(0.001, pushConsts.ssrThickness * 0.25);
     vec3 a = (view * vec4(origin,1)).xyz;
     vec3 ray = mat3(view) * direction;
-    float distance = pushConsts.ssrMaxDistance;
+    float distance = transmitting ? max(pushConsts.ssrMaxDistance,readFloat(pushConsts.directLightingBufferIndex,7u)*float(readUint(pushConsts.directLightingBufferIndex,0u))*2.0) : pushConsts.ssrMaxDistance;
     // Clip rays before the camera near plane, avoiding negative/zero clip W.
     float nearPlane = abs(viewPosition(ivec2(pushConsts.gbufferSize / 2u), 1.0, inverseProjection).z);
     if (ray.z < 0.0) distance = min(distance, (a.z - nearPlane * 1.01) / -ray.z);
@@ -1065,12 +999,22 @@ bool traceReflection(Surface source, vec3 direction, out Surface hit, out float 
     kb = mix(ka,kb,screenEnd);
     delta = pb-pa;
     float pixels = max(abs(delta.x), abs(delta.y));
-    if (pixels < 1.0) return false;
+    if (pixels < 1.0) {
+        // A normally incident transmitted ray may stay in one screen pixel.
+        ivec2 ip=ivec2(pa);
+        float depth=texelFetch(textures[nonuniformEXT(depthIndex)],ip,0).r;
+        float z=viewPosition(ip,depth,inverseProjection).z;
+        float along=abs(ray.z)>1e-7?(z-a.z)/ray.z:-1;
+        if(transmitting && depth>0 && along>0 && along<distance && decodeSurfaceFrom(ip,visibilityIndex,true,hit)) {
+            confidence=1;return true;
+        }
+        return false;
+    }
     uint steps = uint(clamp(ceil(pixels / 4.0), 1.0, float(pushConsts.ssrMaxSteps)));
     float previousT = 0.0;
     float previousZ = a.z;
     ivec2 firstPixel = ivec2(pa);
-    float firstDepth = texelFetch(textures[nonuniformEXT(pushConsts.depthImageIndex)],firstPixel,0).r;
+    float firstDepth = texelFetch(textures[nonuniformEXT(depthIndex)],firstPixel,0).r;
     bool previousValid = firstDepth > 0.0;
     float previousGap = a.z - viewPosition(firstPixel,firstDepth,inverseProjection).z;
     for (uint i = 1u; i <= steps; ++i) {
@@ -1079,7 +1023,7 @@ bool traceReflection(Surface source, vec3 direction, out Surface hit, out float 
         if (any(lessThan(pixel,vec2(0))) || any(greaterThanEqual(pixel,vec2(pushConsts.gbufferSize)))) return false;
         ivec2 ip = ivec2(pixel);
         float z = mix(qa,qb,t).z / mix(ka,kb,t);
-        float depth = texelFetch(textures[nonuniformEXT(pushConsts.depthImageIndex)],ip,0).r;
+        float depth = texelFetch(textures[nonuniformEXT(depthIndex)],ip,0).r;
         if (depth > 0.0) {
             float sceneZ = viewPosition(ip,depth,inverseProjection).z;
             float thickness = max(pushConsts.ssrThickness, abs(sceneZ) * 0.001);
@@ -1089,10 +1033,13 @@ bool traceReflection(Surface source, vec3 direction, out Surface hit, out float 
                 float lo = previousT, hi = t;
                 bool startsBehind = previousValid && previousGap >= 0.0;
                 // Refine the first crossing, then reject silhouettes and backfaces.
-                for (int j = 0; j < 5; ++j) {
+                // A parallel glass slab can project a long world-space ray to
+                // only a few pixels. Five bisections leave depth errors larger
+                // than the hit tolerance and cause alternating environment stripes.
+                for (int j = 0; j < (transmitting ? 12 : 5); ++j) {
                     float mid = (lo+hi)*0.5;
                     ivec2 mp = ivec2(clamp(mix(pa,pb,mid),vec2(0),vec2(pushConsts.gbufferSize)-1.0));
-                    float md = texelFetch(textures[nonuniformEXT(pushConsts.depthImageIndex)],mp,0).r;
+                    float md = texelFetch(textures[nonuniformEXT(depthIndex)],mp,0).r;
                     float mz = mix(qa,qb,mid).z / mix(ka,kb,mid);
                     float sz = viewPosition(mp,md,inverseProjection).z;
                     // Bracket the signed ray/scene depth gap. Scene depth can
@@ -1103,13 +1050,13 @@ bool traceReflection(Surface source, vec3 direction, out Surface hit, out float 
                 }
                 vec2 hp = mix(pa,pb,hi);
                 ivec2 hitPixel = ivec2(hp);
-                float hd = texelFetch(textures[nonuniformEXT(pushConsts.depthImageIndex)],hitPixel,0).r;
+                float hd = texelFetch(textures[nonuniformEXT(depthIndex)],hitPixel,0).r;
                 float hz = mix(qa,qb,hi).z / mix(ka,kb,hi);
                 float hitZ = viewPosition(hitPixel,hd,inverseProjection).z;
                 float gap = hz - hitZ;
                 thickness = max(pushConsts.ssrThickness, abs(hitZ)*0.001);
                 if (hd > 0.0 && gap >= -thickness*0.25 && gap <= thickness &&
-                    decodeSurface(hitPixel,hit) && dot(hit.normal,direction) < -0.05 &&
+                    decodeSurfaceFrom(hitPixel,visibilityIndex,transmitting,hit) && dot(hit.normal,direction) < -0.05 &&
                     length(hit.position-source.position) > 0.05) {
                     vec2 uv = hp / vec2(pushConsts.gbufferSize);
                     float edge = min(min(uv.x,uv.y),min(1.0-uv.x,1.0-uv.y));
@@ -1126,6 +1073,23 @@ bool traceReflection(Surface source, vec3 direction, out Surface hit, out float 
     return false;
 }
 
+// Canonical Corona lat-long orientation, shared with sky.comp and Vision.
+vec3 refractionEnvironment(vec3 direction,Surface source) {
+    if((pushConsts.featureFlags&16u)!=0u) {
+        uint tex=readUint(pushConsts.directLightingBufferIndex,8u);
+        float phi=atan(-direction.z,direction.x);if(phi<0)phi+=2.0*PI;
+        return max(textureLod(textures[nonuniformEXT(tex)],vec2(phi/(2.0*PI),acos(clamp(direction.y,-1,1))/PI),0).rgb,vec3(0));
+    }
+    return sampleLpv(source.position,source.geometricNormal,direction,false);
+}
+bool screenPixel(vec3 world,out ivec2 pixel) {
+    vec4 clip=readMat4(pushConsts.uniformBufferIndex,60u)*readMat4(pushConsts.uniformBufferIndex,44u)*vec4(world,1);
+    if(clip.w<=1e-6)return false;
+    vec2 uv=clip.xy/clip.w*.5+.5;
+    if(any(lessThan(uv,vec2(0)))||any(greaterThanEqual(uv,vec2(1))))return false;
+    pixel=ivec2(uv*vec2(pushConsts.gbufferSize));return true;
+}
+
 vec3 reflection(Surface s, float ao) {
     vec3 eye = readVec3(pushConsts.uniformBufferIndex,36u);
     vec3 v = normalize(eye-s.position);
@@ -1135,31 +1099,120 @@ vec3 reflection(Surface s, float ao) {
     vec3 f0 = mix(clamp(s.material.specularColor * (0.08 * s.material.specular),vec3(0),vec3(1))*weight,s.baseColor,s.material.metallic);
     vec3 f90 = vec3(mix(weight, 1.0, s.material.metallic));
     vec3 fresnel = mix(f0, f90, pow(1.0-max(dot(s.normal,v),0.0),5.0));
-    // SH provides a bounded low-frequency fallback at screen edges and misses.
-    // Authored environment reflection is integrated above with visibility and
-    // MIS. Adding it again here would double its energy and leak through walls.
-    vec3 radiance = (pushConsts.featureFlags & 4u) != 0u && (pushConsts.featureFlags & 16u)==0u
-        ? max(evalSkySH(r,pushConsts.skyIrradianceSHBufferIndex),vec3(0)) / PI : vec3(0);
-    if ((pushConsts.featureFlags & 2u) != 0u && roughness < pushConsts.ssrMaxRoughness && max(fresnel.x,max(fresnel.y,fresnel.z)) > 0.02) {
+    float glassWeight=s.material.transmission*(1.0-s.material.metallic);
+    if(glassWeight>0) {
+        bool entering=dot(v,s.outwardNormal)>0;
+        float f=dielectricFresnel(dot(v,s.outwardNormal),entering?1:s.material.ior,entering?s.material.ior:1);
+        fresnel=mix(fresnel,vec3(f),glassWeight);
+    }
+    // SH radiance is a low-frequency, geometry-occluded fallback for SSR misses
+    // and rough metals. Keeping the receiver offset along its geometric normal
+    // avoids sampling the other side of a wall when the reflection is grazing.
+    // SSR replaces this approximation when an actual screen-space hit exists.
+    vec3 radiance=sampleLpv(s.position,s.geometricNormal,r,false);
+    if(glassWeight>0)radiance=mix(radiance,refractionEnvironment(r,s),glassWeight);
+    if ((pushConsts.featureFlags & 2u) != 0u && roughness < pushConsts.ssrMaxRoughness &&
+        (glassWeight>0 || max(fresnel.x,max(fresnel.y,fresnel.z)) > 0.02)) {
         Surface hit;
         float confidence;
-        if (traceReflection(s,r,hit,confidence)) {
+        // A foreground glass pane must not hide an opaque reflection target
+        // from the depth search. The auxiliary raster already reveals it; no
+        // recursive glass shading or scene intersection is needed.
+        bool opaqueSearch=glassWeight>0 && (pushConsts.featureFlags&32u)!=0u;
+        uint depth=opaqueSearch?readUint(pushConsts.shadowInfoBufferIndex,85u):pushConsts.depthImageIndex;
+        uint visibility=opaqueSearch?readUint(pushConsts.shadowInfoBufferIndex,84u):pushConsts.visibilityImageIndex;
+        if (traceScreen(s,r,depth,visibility,false,hit,confidence) && hit.material.transmission<=0.0) {
             confidence *= 1.0-smoothstep(pushConsts.ssrMaxRoughness*0.6,pushConsts.ssrMaxRoughness,roughness);
             // The hit sends radiance back along the reflected ray, not toward
             // the main camera. This matters for specular/metallic hit materials.
-            // Emissive geometry is already integrated by direct-light sampling
-            // at the source surface. SSR adds only reflected surface lighting;
-            // including the emitter again would count the same light twice.
-            radiance = mix(radiance,shadeDirect(hit,1.0,-r,false),confidence);
+            radiance = mix(radiance,shadeDirect(hit,1.0,-r,true),confidence);
         }
     }
-    return radiance * fresnel * (1.0-0.65*roughness) * mix(1.0,ao * s.material.occlusionStrength,roughness);
+    // Roughness changes the angular distribution, not the energy of a uniform
+    // environment. Do not apply the legacy metal/opaque SSR attenuation or SSAO
+    // darkening to the glass reflection lobe.
+    float attenuation=(1.0-0.65*roughness)*mix(1.0,ao*s.material.occlusionStrength,roughness);
+    return radiance*fresnel*mix(attenuation,1.0,glassWeight);
+}
+
+// Wyman 2005, section 3: two image-space interfaces. We use rasterized
+// front/furthest-surface distance instead of the optional precomputed dN.
+// Unlike the paper's environment-only result, the exiting ray first searches
+// the immutable opaque depth/color buffers for nearby scene geometry.
+vec3 refraction(ivec2 pixel,Surface source) {
+    float transmission=source.material.transmission*(1-source.material.metallic);
+    if(transmission<=0 || (pushConsts.featureFlags&32u)==0u)return vec3(0);
+    vec3 eye=readVec3(pushConsts.uniformBufferIndex,36u);
+    vec3 incident=normalize(source.position-eye),normal=source.outwardNormal;
+    bool entering=dot(incident,normal)<0;
+    float ior=source.material.ior;
+    vec3 facing=entering?normal:-normal;
+    vec3 direction=refract(incident,facing,entering?1.0/ior:ior);
+    float frontF=dielectricFresnel(dot(-incident,facing),entering?1:ior,entering?ior:1);
+    if(dot(direction,direction)<1e-10)return vec3(0); // entry TIR is reflected by reflection().
+    vec3 position=source.position;
+    float exitF=0;
+    vec3 internalReflection=vec3(0);
+    Surface back;
+    if(entering && decodeSurfaceFrom(pixel,readUint(pushConsts.shadowInfoBufferIndex,86u),true,back) && back.objectID==source.objectID) {
+        float d=length(back.position-source.position);
+        vec3 estimate=position+direction*d;
+        Surface candidate;
+        ivec2 projected;
+        // Bounded local plane refinement; no scene triangles or acceleration structure.
+        for(int iteration=0;iteration<2;++iteration) {
+            if(!screenPixel(estimate,projected) || !decodeSurfaceFrom(projected,readUint(pushConsts.shadowInfoBufferIndex,86u),true,candidate) || candidate.objectID!=source.objectID)break;
+            vec3 n=candidate.outwardNormal;
+            float denom=dot(direction,n);
+            if(denom<=.02)break;
+            float distance=dot(candidate.position-source.position,n)/denom;
+            if(distance<=0 || distance>d*2.0)break;
+            back=candidate;estimate=source.position+direction*distance;
+        }
+        position=estimate;
+        vec3 exitNormal=back.outwardNormal;
+        if(dot(direction,exitNormal)<0)exitNormal=-exitNormal;
+        exitF=dielectricFresnel(dot(direction,exitNormal),ior,1);
+        // The rejected exit energy is reflection, not absorption. Keep it in
+        // the same bounded environment/LPV fallback used for internal TIR.
+        // This does not trace another interface or claim a nested-medium path.
+        internalReflection=refractionEnvironment(reflect(direction,-exitNormal),source);
+        vec3 outgoing=refract(direction,-exitNormal,ior);
+        if(dot(outgoing,outgoing)<1e-10) {
+            // Bounded TIR fallback: preserve reflected energy, without claiming
+            // recursive interior paths or clamping the critical angle.
+            return transmission*(1-frontF)*clamp(source.baseColor,vec3(0),vec3(1))*internalReflection;
+        }
+        direction=normalize(outgoing);
+    }
+    Surface start=source;start.position=position;
+    Surface hit;float confidence;
+    vec3 color=refractionEnvironment(direction,source);
+    if(traceScreen(start,direction,readUint(pushConsts.shadowInfoBufferIndex,85u),readUint(pushConsts.shadowInfoBufferIndex,84u),true,hit,confidence)) {
+        ivec2 hp;
+        if(screenPixel(hit.position,hp))color=mix(color,imageLoad(imagesRGBA16[readUint(pushConsts.shadowInfoBufferIndex,88u)],hp).rgb,confidence);
+    }
+    vec3 transported=max(color,vec3(0))*(1-exitF)+internalReflection*exitF;
+    return transported*clamp(source.baseColor,vec3(0),vec3(1))*transmission*(1-frontF);
 }
 
 void main() {
     ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
     if (any(greaterThanEqual(pixel,ivec2(pushConsts.gbufferSize)))) return;
     uint mode = pushConsts.outputMode;
+    if (mode==0u && (pushConsts.featureFlags&40u)==32u) {
+        // The opaque resolve already shaded this exact surface. Reuse it in
+        // the final pass instead of repeating LPV, SSAO, SSR and material work.
+        uint visible=imageLoad(imagesRG32UI[pushConsts.visibilityImageIndex],pixel).r;
+        if(visible>0u && visible<=pushConsts.instanceCount) {
+            uint material=loadInstanceInfo(visible-1u).materialID;
+            if(material<pushConsts.materialCount && (loadMaterialInfo(material).flags&256u)==0u) {
+                imageStore(imagesRGBA16[pushConsts.finalOutputImage],pixel,
+                    imageLoad(imagesRGBA16[readUint(pushConsts.shadowInfoBufferIndex,88u)],pixel));
+                return;
+            }
+        }
+    }
     // Geometry diagnostics must not depend on normals, UVs or materials being
     // decodable. Otherwise a valid rasterized triangle with an invalid shading
     // attribute appears to be missing even in the object/visibility views.
@@ -1187,8 +1240,19 @@ void main() {
     else if (mode == 8u || mode == 9u) color = vec3(computeSunShadow(surface.position,surface.normal));
     else {
         vec3 eye = readVec3(pushConsts.uniformBufferIndex,36u);
+        // A dielectric reflects from inside as well as outside. Face only the
+        // shading frame; retain outwardNormal for Snell/Fresnel medium selection
+        // and retain the original geometry in diagnostic outputs.
+        if(surface.material.transmission>0 && dot(surface.geometricNormal,eye-surface.position)<0) {
+            surface.geometricNormal=-surface.geometricNormal;
+            surface.normal=-surface.normal;
+            surface.bitangent=-surface.bitangent;
+        }
         color = shadeDirect(surface,ao,normalize(eye-surface.position),true);
-        if (surface.material.lightingEnabled > 0.5) color += reflection(surface,ao);
+        if (surface.material.lightingEnabled > 0.5) {
+            color += reflection(surface,ao);
+            color += refraction(pixel,surface);
+        }
         if ((pushConsts.featureFlags & 8u) != 0u) color = shadowCascadeDebugColor(computeShadowCascadeIndex(surface.position));
     }
     if (!finiteVec3(color)) color=vec3(0);

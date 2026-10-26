@@ -4,6 +4,7 @@
 // is private. Isolate this compatibility bridge in one translation unit.
 #include "hardware_wrapper_vulkan/hardware/command_ir.h"
 #include "hardware_wrapper_vulkan/pipeline/vulkan_compute_pipeline.h"
+#include "hardware_wrapper_vulkan/pipeline/vulkan_rasterizer_pipeline.h"
 #include "hardware_wrapper_vulkan/resource_pool.h"
 #include "horizon_resource_bridge.h"
 
@@ -38,5 +39,29 @@ void IndirectDispatch::record(Horizon::CommandRecorder& recorder) const {
     for (const auto& image : images)
         append(image, 0, Horizon::DispatchBindingKind::StorageImage);
     recorder.dispatch(std::move(dispatch));
+}
+
+void IndirectRaster::record(Horizon::CommandRecorder& recorder) const {
+    using Store=Horizon::ResourceStore<Horizon::RasterizerPipelineWrap,Horizon::NoopReleaser>;
+    const auto resource=Horizon::read<Store>(Horizon::ResourceBridge::token(*pipeline));
+    if(!resource || !resource->impl)
+        throw std::logic_error("Indirect raster requires a valid graphics pipeline");
+    const auto implementation=std::static_pointer_cast<Horizon::VulkanRasterizerPipeline>(resource->impl);
+    implementation->bind_auto_resources();
+    Horizon::CommandRecorder snapshot;
+    implementation->record_into(snapshot);
+    auto task=snapshot.close();
+    for(auto& command:task.commands) {
+        if(command.op==Horizon::CommandOp::BeginRendering)
+            recorder.begin_rendering(command.payload.rendering);
+        else if(command.op==Horizon::CommandOp::EndRendering)
+            recorder.end_rendering();
+        else if(command.op==Horizon::CommandOp::DrawIndexedIndirect) {
+            auto draw=std::move(command.payload.draw_indexed_indirect);
+            for(const auto& image:images)draw.resource_uses.push_back({image,Horizon::AccessKind::Read});
+            recorder.draw_indexed_indirect({command.resources.at(0).handle},
+                {command.resources.at(1).handle},{command.resources.at(2).handle},std::move(draw));
+        } else throw std::logic_error("Unexpected command in indirect raster pass");
+    }
 }
 } // namespace Corona::Systems::RenderDetail

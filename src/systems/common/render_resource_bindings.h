@@ -53,4 +53,12 @@ struct IndirectDispatch {
     void record(Horizon::CommandRecorder& recorder) const;
 };
 
+// Raster bindless inputs need explicit submission dependencies as well. Images
+// must already have a shader-readable layout (e.g. compute-produced GENERAL).
+struct IndirectRaster {
+    Horizon::RasterizerPipelineBase* pipeline;
+    std::vector<Horizon::HardwareImage> images;
+    void record(Horizon::CommandRecorder& recorder) const;
+};
+
 } // namespace Corona::Systems::RenderDetail

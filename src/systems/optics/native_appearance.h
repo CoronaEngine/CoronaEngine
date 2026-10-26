@@ -106,6 +106,9 @@ public:
         for (unsigned i=0;i<std::size(slots);++i) words[i+1]=emit(p.value(slots[i].first,slots[i].second));
         words[0]=static_cast<uint32_t>(nodes.size());
         words[9]=p.contains("normal")?1:0;
+        words[10]=emit(p.value("transmission",Json(0.)));
+        words[11]=emit(p.value("ior",Json(1.5)));
+        words[0]=static_cast<uint32_t>(nodes.size());
         for (const auto& n:nodes) words.insert(words.end(),n.begin(),n.end());
         Horizon::HardwareBufferDesc desc;
         desc.element_count=words.size();desc.element_size=sizeof(uint32_t);

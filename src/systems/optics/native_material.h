@@ -46,9 +46,12 @@ inline Hardware::MaterialInfo pack_native_material(const GeometrySystem::MeshSlo
     };
     result.metallic = finite(value.metallic, 0.0f, 0.0f, 1.0f);
     result.roughness = finite(value.roughness, 0.5f, 0.0f, 1.0f);
-    const float ior = finite(value.ior, 1.5f, 0.0f, 10000.0f);
+    const float ior = finite(value.ior, 1.5f, 0.001f, 10000.0f);
     const float reflectance = (ior - 1.0f) / (ior + 1.0f);
     result.specular = reflectance * reflectance / 0.08f;
+    // MR does not use the legacy tint factor. Keep the actual relative IOR:
+    // F0 alone cannot distinguish eta from 1/eta (air bubbles use eta < 1).
+    result.specularTint = ior;
     // Imported MR uses the legacy sheen-tint word for specular weight. This
     // keeps the material table at 128 bytes; its sheen lobe remains disabled.
     result.sheenTint = finite(value.specular_factor, 1.0f, 0.0f, 1.0f);
@@ -71,6 +74,12 @@ inline Hardware::MaterialInfo pack_native_material(const GeometrySystem::MeshSlo
         // from the model's own texture descriptors.
         result.textureDescriptor=0u;
         result.anisotropic=optics.principled->anisotropic;
+        // Imported MR does not use subsurface: retain the 128-byte ABI and
+        // carry transmission in that word. The resolve separates the fields.
+        result.subsurface=finite(optics.principled->transmission,0.f,0.f,1.f);
+        const auto& p=optics.principled->expressions;
+        if (result.subsurface>0.f || (p && p->contains("transmission") && p->at("transmission").is_object()))
+            result.flags|=256u;
         if (optics.principled->emission_two_sided) result.flags|=128u;
         return result;
     }
