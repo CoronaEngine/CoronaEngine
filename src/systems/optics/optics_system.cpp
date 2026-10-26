@@ -3917,11 +3917,19 @@ void OpticsSystem::optics_pipeline(float frame_count, uint64_t frame_index) {
                 auto& target = *target_ptr;
 
                 if (!offscreen_screenshot) {
+                    // 只把串号取出来，不跨 GPU 往返持锁。
+                    // 以前 wait(consumed_receipt) 写在 acquire_write 的作用域里，
+                    // 一次几毫秒的设备往返全程霸占该 ImageStorage 槽位的写锁，
+                    // 主线程（UI 发布 UIFrameReady、Editor API 写 Storage）会被
+                    // 这段时间直接堵住；五个系统收进一条 DAG 线程后，这段阻塞还会
+                    // 把整条链一起拖住，所以锁范围必须和等待分离。
+                    Horizon::SubmitReceipt consumed{};
                     if (auto consumed_device =
                             SharedDataHub::instance().image_storage().acquire_write(target.image_handle)) {
-                        if (consumed_device->consumed_receipt.serial != 0) {
-                            hardware_->executor.wait(consumed_device->consumed_receipt);
-                        }
+                        consumed = consumed_device->consumed_receipt;
+                    }
+                    if (consumed.serial != 0) {
+                        hardware_->executor.wait(consumed);
                     }
                 }
                 bind_native_view_resources(cam_handle, camera->width, camera->height,
