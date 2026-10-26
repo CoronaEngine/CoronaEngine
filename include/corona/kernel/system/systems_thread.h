@@ -146,6 +146,12 @@ public:
     /// 最近一次 tick 的墙钟总耗时（毫秒）
     [[nodiscard]] double last_tick_ms() const { return last_tick_ms_.load(std::memory_order_relaxed); }
 
+    /// 历史最大 tick 墙钟耗时（毫秒）
+    [[nodiscard]] double max_tick_ms() const { return max_tick_ms_.load(std::memory_order_relaxed); }
+
+    /// 超过一个 tick 周期的次数：这条线能不能跟上 tick 频率的直接证据
+    [[nodiscard]] std::uint64_t tick_overruns() const { return overruns_.load(std::memory_order_relaxed); }
+
     /// 节点平均耗时（毫秒），按系统名查询；不存在返回 -1
     [[nodiscard]] double node_average_ms(std::string_view system_name) const;
 
@@ -158,6 +164,8 @@ private:
     void record(const FrameTickReport& report);
     /// 同一节点连续失败的上报与升级（不关引擎，但必须喊出来）
     void note_node_failure(const FrameTickReport& report, std::uint64_t tick);
+    /// 记录单 tick 墙钟成本，用于预算超支统计
+    void note_tick_cost(double cost_ms, double period_ms);
     /// 周期性把逐节点统计打到日志（节奏见 kStatsReportTicks）
     void log_stats(std::uint64_t tick_index) const;
     [[nodiscard]] double period_ms() const;
@@ -178,6 +186,9 @@ private:
     std::atomic<std::uint64_t> ticks_{0};
     std::atomic<std::uint64_t> failures_{0};
     std::atomic<double> last_tick_ms_{0.0};
+    std::atomic<double> max_tick_ms_{0.0};
+    std::atomic<double> cost_ms_total_{0.0};
+    std::atomic<std::uint64_t> overruns_{0};
     std::atomic<std::uint64_t> last_delta_ns_{0};
 
     mutable std::mutex stats_mutex_;

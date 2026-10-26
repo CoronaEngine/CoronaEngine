@@ -292,6 +292,8 @@ void SystemsThread::thread_loop(std::stop_token stop_token) {
         const FrameTickReport report = tick_locked(dt);
         record(report);
         const auto cost = Clock::now() - begin;
+        note_tick_cost(std::chrono::duration<double, std::milli>(cost).count(),
+                       static_cast<double>(period_ns.count()) / 1e6);
 
         const std::uint64_t tick_index = ticks_.load(std::memory_order_relaxed);
         if (tick_index != 0 && tick_index % kStatsReportTicks == 0) {
@@ -320,13 +322,31 @@ FrameGraphStats SystemsThread::stats() const {
     return stats_snapshot_;
 }
 
+void SystemsThread::note_tick_cost(double cost_ms, double period_ms) {
+    cost_ms_total_.fetch_add(cost_ms, std::memory_order_relaxed);
+    if (cost_ms > max_tick_ms_.load(std::memory_order_relaxed)) {
+        max_tick_ms_.store(cost_ms, std::memory_order_relaxed);
+    }
+    // 超预算的 tick 数才是"这条线能不能跟上 tick 频率"的直接证据：
+    // 平均耗时好看但每 10 帧爆一次，体感就是周期性卡顿。
+    if (period_ms > 0.0 && cost_ms > period_ms) {
+        overruns_.fetch_add(1, std::memory_order_relaxed);
+    }
+}
+
 void SystemsThread::log_stats(std::uint64_t tick_index) const {
     const FrameGraphStats snapshot = stats();
     const auto rate = tick_rate_.load(std::memory_order_relaxed);
     const double rate_d = static_cast<double>(rate == 0 ? 1 : rate);
     const double total_ms = last_tick_ms_.load(std::memory_order_relaxed);
-    CFW_LOG_INFO("[SystemsThread/Frame] tick={} rate={}Hz last_tick={:.2f}ms failures={}",
-                 tick_index, rate, total_ms, failures_.load(std::memory_order_relaxed));
+    CFW_LOG_INFO("[SystemsThread/Frame] tick={} rate={}Hz last_tick={:.2f}ms avg_tick={:.2f}ms max_tick={:.2f}ms overruns={} failures={}",
+                 tick_index, rate, total_ms,
+                 static_cast<double>(tick_index) == 0.0
+                     ? 0.0
+                     : cost_ms_total_.load(std::memory_order_relaxed) / static_cast<double>(tick_index),
+                 max_tick_ms_.load(std::memory_order_relaxed),
+                 overruns_.load(std::memory_order_relaxed),
+                 failures_.load(std::memory_order_relaxed));
     // 逐节点：invocations 折算成实际 update_hz，gated_out 说明被速率门控跳过了多少次。
     // 这两个数就是判断"这个系统是不是真的按目标频率在跑"的唯一依据。
     for (const auto& node : snapshot.nodes) {
