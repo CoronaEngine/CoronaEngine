@@ -804,7 +804,7 @@ void ReSTIRDI::compile_shader1() noexcept {
         }
         $if(param.stable_planes != 0u) {
             $if(frame_buffer().stable_dominant().read(dispatch_id()) == InvalidUI32) {
-                radiance_->write(dispatch_id(), make_float4(0.f));
+                write_radiance(dispatch_id(), make_float4(0.f));
                 cur_reservoirs().write(dispatch_id(), DIReservoirVar{});
                 $return();
             };
@@ -837,7 +837,7 @@ void ReSTIRDI::compile_shader1() noexcept {
                 bypass = L;
             }
         };
-        radiance_->write(dispatch_id(), make_float4(L, 1.f));
+        write_radiance(dispatch_id(), make_float4(L, 1.f));
         if (lobes) {
             frame_buffer().denoiser_di_specular().write(dispatch_id(), make_float4(specular, distance));
             frame_buffer().denoiser_di_bypass().write(dispatch_id(), make_float4(bypass, 0.f));
@@ -849,6 +849,8 @@ void ReSTIRDI::compile_shader1() noexcept {
 
 void ReSTIRDI::restore(RuntimeObject *old_obj) noexcept {
     const auto *previous = dynamic_cast<ReSTIRDI *>(old_obj);
+    OC_ERROR_IF(!previous->radiance_->name().ends_with(" [di-radiance-v1]"),
+                "DI radiance storage ABI changed; restart the engine before loading the new shaders.");
     if (previous->reservoirs_.has_registered()) {
         const auto &buffer = previous->reservoirs_;
         const uint base = buffer.index().hv();
@@ -860,13 +862,55 @@ void ReSTIRDI::restore(RuntimeObject *old_obj) noexcept {
     }
     ReSTIR::restore(old_obj);
     VS_HOTFIX_MOVE_ATTRS(M_light_, M_bsdf_, debias_, pairwise_, reweight_, max_recursion_, stable_planes_enabled_,
-                       radiance_, reservoirs_, shader0_, shader1_)
+                       radiance_, reservoirs_, shader0_, shader1_, raw_radiance_, compact_radiance_, radiance_prepared_)
 }
 
-void ReSTIRDI::prepare() noexcept {
+void ReSTIRDI::set_compact_radiance(bool compact) noexcept {
+    if (radiance_prepared_ && compact == compact_radiance_) return;
+    const string suffix = " [di-radiance-v1]";
+    if (!radiance_->name().ends_with(suffix)) radiance_->set_name(radiance_->name() + suffix);
+    ByteBufferView empty{handle_ty{0u}, 0u};
+    if (radiance_prepared_) {
+        // remove_buffer renumbers later slots; preserve their captured indices.
+        if (compact_radiance_) {
+            pipeline()->bindless_array().set_buffer(raw_radiance_.index().hv(), empty);
+            raw_radiance_.super().destroy();
+        } else {
+            frame_buffer().unregister(radiance_);
+            pipeline()->bindless_array().set_buffer(radiance_->index().hv(), empty);
+            radiance_->clear_all();
+        }
+    }
+    compact_radiance_ = compact;
+    if (compact) {
+        raw_radiance_.super() = device().create_buffer<uint2>(pipeline()->pixel_num(), radiance_->name() + " rgb21");
+        raw_radiance_.register_self();
+        vector<uint2> zero(pipeline()->pixel_num(), make_uint2(0u));
+        raw_radiance_.upload_immediately(zero.data());
+    } else {
+        frame_buffer().prepare_screen_buffer(radiance_);
+        vector<float4> zero(pipeline()->pixel_num(), make_float4(0.f));
+        radiance_->device_buffer().upload_immediately(zero.data());
+    }
+    radiance_prepared_ = true;
+}
+
+vector<float4> ReSTIRDI::download_radiance() const noexcept {
+    vector<float4> result(pipeline()->pixel_num());
+    if (compact_radiance_) {
+        vector<uint2> stored(result.size());
+        pipeline()->stream() << raw_radiance_.view().download(stored.data()) << synchronize() << commit();
+        for (size_t i = 0u; i < result.size(); ++i) result[i] = unpack_di_radiance_host(stored[i]);
+    } else {
+        pipeline()->stream() << radiance_->view().download(result.data()) << synchronize() << commit();
+    }
+    return result;
+}
+
+void ReSTIRDI::prepare(bool compact_radiance) noexcept {
     switch_profile::Scope profile{"ReSTIRDI::prepare", "buffers"};
     Pipeline *rp = pipeline();
-    frame_buffer().prepare_screen_buffer(radiance_);
+    set_compact_radiance(compact_radiance);
     reservoirs_.super() = device().create_buffer<DIReservoirStorage>(rp->pixel_num() * 2,
                                                                   DIReservoirStorage::Name);
     reservoirs_.register_self(0, rp->pixel_num());
@@ -877,6 +921,12 @@ void ReSTIRDI::prepare() noexcept {
 
 void ReSTIRDI::update_resolution(ocarina::uint2 res) noexcept {
     Pipeline *rp = pipeline();
+    if (compact_radiance_) {
+        raw_radiance_.super() = device().create_buffer<uint2>(rp->pixel_num(), radiance_->name() + " rgb21");
+        raw_radiance_.register_self();
+        vector<uint2> zero(rp->pixel_num(), make_uint2(0u));
+        raw_radiance_.upload_immediately(zero.data());
+    }
     reservoirs_.super() = device().create_buffer<DIReservoirStorage>(rp->pixel_num() * 2,
                                                                   DIReservoirStorage::Name);
     reservoirs_.register_self(0, rp->pixel_num());

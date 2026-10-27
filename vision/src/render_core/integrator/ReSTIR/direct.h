@@ -6,6 +6,7 @@
 
 #include "common.h"
 #include "di_reservoir_storage.h"
+#include "di_radiance_storage.h"
 #include "base/mgr/switch_profile.h"
 
 namespace vision {
@@ -56,7 +57,7 @@ private:
     bool reweight_{false};
     uint max_recursion_{};
     bool stable_planes_enabled_{true};
-    SP<ScreenBuffer> radiance_{make_shared<ScreenBuffer>("ReSTIRDI::radiance_")};
+    SP<ScreenBuffer> radiance_{make_shared<ScreenBuffer>("ReSTIRDI::radiance_ [di-radiance-v1]")};
     mutable RegistrableBuffer<DIReservoirStorage> reservoirs_{pipeline()->bindless_array()};
 
     /**
@@ -69,6 +70,11 @@ private:
      * spatial reuse and shading
      */
     Shader<void(uint, DIParam)> shader1_;
+
+    // Keep existing fields before these additions for the pre-move ABI check.
+    mutable RegistrableBuffer<uint2> raw_radiance_{pipeline()->bindless_array()};
+    bool compact_radiance_{};
+    bool radiance_prepared_{};
 
 protected:
     [[nodiscard]] static TSampler &sampler() noexcept { return renderer().sampler(); }
@@ -106,7 +112,18 @@ public:
     OC_MAKE_MEMBER_GETTER(open, )
     OC_MAKE_MEMBER_GETTER(radiance, &)
     [[nodiscard]] float factor() const noexcept { return open() ? factor_ : 0.f; }
-    void prepare() noexcept;
+    void prepare(bool compact_radiance = false) noexcept;
+    void set_compact_radiance(bool compact) noexcept;
+    [[nodiscard]] bool compact_radiance() const noexcept { return compact_radiance_; }
+    [[nodiscard]] const RegistrableBuffer<uint2> &raw_radiance() const noexcept { return raw_radiance_; }
+    [[nodiscard]] Float4 read_radiance(const Uint &index) const noexcept {
+        return compact_radiance_ ? unpack_di_radiance(raw_radiance_.read(index)) : radiance_->read(index);
+    }
+    void write_radiance(const Uint &index, const Float4 &value) const noexcept {
+        if (compact_radiance_) raw_radiance_.write(index, pack_di_radiance(value));
+        else radiance_->write(index, value);
+    }
+    [[nodiscard]] vector<float4> download_radiance() const noexcept;
     void compile() noexcept {
         switch_profile::Scope profile{"ReSTIR.DI.compile", "compile"};
         compile_shader0();

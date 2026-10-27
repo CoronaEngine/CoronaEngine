@@ -7,6 +7,7 @@
 #include "render_core/integrator/ReSTIR/indirect.h"
 
 #include <algorithm>
+#include <bit>
 #include <cstdlib>
 #include <iostream>
 #include <memory>
@@ -18,6 +19,119 @@
 namespace {
 void require(bool condition, const char* message) {
     if (!condition) throw std::runtime_error(message);
+}
+
+void check_di_radiance_storage(vision::Pipeline& pipeline) {
+    using namespace vision;
+    // Independent physical words: catches a mutually consistent pack/unpack
+    // permutation, rounding bias, HDR clipping, or lost sign/validity bit.
+    constexpr uint input[][4] = {
+        {0x00000000u,0x80000000u,0x00000001u,0x00000000u},
+        {0x000003ffu,0x00000400u,0x00000401u,0x3f800000u},
+        {0x000007ffu,0x00000800u,0x007fffffu,0x00000000u},
+        {0x00800000u,0x3f800000u,0x3f8003ffu,0x3f800000u},
+        {0x3f800400u,0x3f800401u,0x3f800bffu,0x00000000u},
+        {0x3f800c00u,0x3f800c01u,0xbf800400u,0x3f800000u},
+        {0xbf800c00u,0x477fe000u,0x47c35000u,0x00000000u},
+        {0x7f7ff800u,0x7f7ffc00u,0x7f7fffffu,0x3f800000u},
+        {0xff7fffffu,0x7f800000u,0xff800000u,0x00000000u},
+        {0x7f800001u,0x7fc12345u,0xffa12345u,0x3f800000u}};
+    constexpr uint packed[][2] = {
+        {0x00000000u,0x00000200u},
+        {0x00000000u,0x80000400u},
+        {0x00200001u,0x00400000u},
+        {0x00001000u,0x9fc000feu},
+        {0x0027f000u,0x1fc004feu},
+        {0x0047f002u,0xdfc000feu},
+        {0xff97f002u,0x23e1a91du},
+        {0xffefefffu,0xbfbffdfdu},
+        {0x001fefffu,0x7fc001feu},
+        {0x048ff800u,0xfff091ffu}};
+    constexpr uint decoded[][4] = {
+        {0x00000000u,0x80000000u,0x00000000u,0x00000000u},
+        {0x00000000u,0x00000000u,0x00000800u,0x3f800000u},
+        {0x00000800u,0x00000800u,0x00800000u,0x00000000u},
+        {0x00800000u,0x3f800000u,0x3f800000u,0x3f800000u},
+        {0x3f800000u,0x3f800800u,0x3f800800u,0x00000000u},
+        {0x3f801000u,0x3f801000u,0xbf800000u,0x3f800000u},
+        {0xbf801000u,0x477fe000u,0x47c35000u,0x00000000u},
+        {0x7f7ff800u,0x7f7ff800u,0x7f7ff800u,0x3f800000u},
+        {0xff7ff800u,0x7f800000u,0xff800000u,0x00000000u},
+        {0x7fc00000u,0x7fc12000u,0xffe12000u,0x3f800000u}};
+    constexpr uint literal_count = sizeof(input) / sizeof(input[0]);
+    const auto original_resolution = pipeline.resolution();
+    const uint first_slot = pipeline.bindless_array().buffer_num();
+    auto di = std::make_unique<ReSTIRDI>();
+    auto unprepared = std::make_unique<ReSTIRDI>();
+    if (std::getenv("CORONA_TEST_DI_RADIANCE_OLD_ABI") != nullptr)
+        unprepared->radiance()->set_name("ReSTIRDI::radiance_ legacy");
+    di->restore(unprepared.get());
+    di->radiance() = make_shared<ScreenBuffer>("di_radiance_storage_test");
+    di->prepare(true);
+    auto exercise = [&](bool compact) {
+        pipeline.stream() << synchronize() << commit();
+        di->set_compact_radiance(compact);
+        pipeline.upload_bindless_array();
+        if (!compact) {
+            auto initial = di->download_radiance();
+            for (const auto &value : initial) for (uint k=0u;k<4u;++k)
+                require(value[k]==0.f,"New FP32 DI output must be zero before a disabled producer can skip it");
+        }
+        const uint n = pipeline.pixel_num();
+        std::vector<uint> host(n*4u), actual(n*4u);
+        for (uint i=0u;i<n;++i) for(uint k=0u;k<4u;++k) host[4u*i+k]=input[i%literal_count][k];
+        auto source=pipeline.device().create_buffer<uint>(host.size(),"radiance_literal_source");
+        auto dest=pipeline.device().create_buffer<uint>(host.size(),"radiance_literal_result");
+        source.upload_immediately(host.data());
+        const bool corrupt = compact && std::getenv("CORONA_TEST_DI_RADIANCE_WRONG_WORD") != nullptr;
+        Kernel store_kernel = [&](BufferVar<uint> src) {
+            Uint i=dispatch_id();
+            Float4 value=make_float4(as<float>(src.read(i*4u)),as<float>(src.read(i*4u+1u)),
+                                    as<float>(src.read(i*4u+2u)),as<float>(src.read(i*4u+3u)));
+            di->write_radiance(i,value);
+            if(corrupt) {
+                auto raw=pipeline.bindless_array().buffer_var<uint2>(di->raw_radiance().index_var());
+                Uint2 words=raw.read(i); words.x ^= 1u; raw.write(i,words);
+            }
+        };
+        Kernel load_kernel = [&](BufferVar<uint> dst) {
+            Uint i=dispatch_id(); Float4 value=di->read_radiance(i);
+            dst.write(i*4u,as<uint>(value.x)); dst.write(i*4u+1u,as<uint>(value.y));
+            dst.write(i*4u+2u,as<uint>(value.z)); dst.write(i*4u+3u,as<uint>(value.w));
+        };
+        auto store=pipeline.device().compile(store_kernel,"DI radiance literal store");
+        auto load=pipeline.device().compile(load_kernel,"DI radiance literal load");
+        pipeline.stream()<<store(source).dispatch(n)<<load(dest).dispatch(n)
+                         <<dest.download(actual.data())<<synchronize()<<commit();
+        for(uint i=0u;i<n;++i) for(uint k=0u;k<4u;++k)
+            require(actual[4u*i+k]==(compact?decoded[i%literal_count][k]:input[i%literal_count][k]),
+                    "DI radiance decoded values differ from independent literals");
+        auto downloaded=di->download_radiance();
+        for(uint i=0u;i<n;++i) for(uint k=0u;k<4u;++k)
+            require(std::bit_cast<uint>(downloaded[i][k])==actual[4u*i+k],"DI radiance CPU diagnostic decode differs");
+        if(compact) {
+            const auto desc=pipeline.bindless_array()->buffer_view(di->raw_radiance().index().hv());
+            require(desc.size==size_t(n)*8u && di->radiance()->view().size()==0u,
+                    "Compact DI output must own only one 8-byte-per-pixel buffer");
+            std::vector<uint2> words(n);
+            pipeline.stream()<<di->raw_radiance().view().download(words.data())<<synchronize()<<commit();
+            for(uint i=0u;i<n;++i) require(words[i].x==packed[i%literal_count][0]&&words[i].y==packed[i%literal_count][1],
+                                          "DI radiance physical words differ from independent literals");
+        } else {
+            require(di->radiance()->view().size_in_byte()==size_t(n)*16u && di->raw_radiance().size()==0u,
+                    "FP32 denoiser output must release compact storage and preserve all four channels");
+        }
+    };
+    exercise(true); exercise(false); exercise(true);
+    auto restored=std::make_unique<ReSTIRDI>();
+    restored->restore(di.get()); di=std::move(restored); exercise(true);
+    pipeline.change_resolution(make_uint2(9u,7u)); di->update_resolution(pipeline.resolution()); exercise(true);
+    pipeline.change_resolution(original_resolution); di->update_resolution(original_resolution); exercise(true);
+    ByteBufferView empty{handle_ty{0u},0u};
+    for(uint slot=first_slot;slot<pipeline.bindless_array().buffer_num();++slot)
+        pipeline.bindless_array().set_buffer(slot,empty);
+    di.reset(); pipeline.invalidate();
+    std::cout<<"PASS: DI compact radiance literals, native capacity, diagnostics, mode switches, restore and resize\n";
 }
 
 // Called with the production ReSTIRDI instance and its registered slices.
@@ -246,4 +360,5 @@ void check_restir_reservoir_lifetimes(vision::Pipeline& pipeline) {
     vision::Global::SceneGpuContextScope scope{pipeline.geometry().bindless_array(), pipeline.device()};
     check_slices<vision::ReSTIRDI, vision::DIReservoir, vision::DIReservoirVar>(pipeline, "DI");
     check_slices<vision::ReSTIRGI, vision::GIReservoir, vision::GIReservoirVar>(pipeline, "GI");
+    check_di_radiance_storage(pipeline);
 }
