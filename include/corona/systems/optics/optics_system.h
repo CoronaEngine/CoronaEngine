@@ -98,6 +98,8 @@ class OpticsSystem : public Kernel::SystemBase {
     bool initialize_vision_backend_if_enabled();
     bool initialize_hardware_resources();
     bool initialize_render_pipelines();
+    bool ensure_native_render_resources();
+    void release_native_render_resources();
     bool ensure_cursor_icon_texture();
     bool ensure_gizmo_axis_textures();
 
@@ -128,7 +130,28 @@ class OpticsSystem : public Kernel::SystemBase {
                                   uint32_t height,
                                   uint64_t frame_index);
     void evict_idle_ui_view_resources(uint64_t frame_index);
+    struct RenderView {
+        std::uintptr_t scene_handle{};
+        std::uintptr_t camera_handle{};
+        CameraVisionRenderMode vision_mode{CameraVisionRenderMode::PathTracing};
+    };
+    struct LockedRenderView {
+        SharedDataHub::SceneStorage::ReadHandle scene;
+        // Camera settings are small value data. Never hold their storage lock
+        // across shader compilation, GPU execution or presentation waits.
+        CameraDevice camera;
+    };
+    struct RenderFramePlan {
+        std::vector<RenderView> native_views;
+        std::vector<RenderView> vision_views;
+        bool has_vision_cameras{false};
+    };
+    [[nodiscard]] RenderFramePlan build_render_frame_plan();
+    [[nodiscard]] std::optional<LockedRenderView> lock_render_view(
+        const RenderView& view, CameraRenderBackend backend);
     void optics_pipeline(float frame_count, uint64_t frame_index);
+    void run_native_frame(float frame_count, uint64_t frame_index,
+                          const std::vector<RenderView>& views);
     void process_pending_screenshots(std::uintptr_t camera_handle, Horizon::HardwareImage& render_target);
 
     struct VisionSceneLoadRequest {
@@ -141,7 +164,8 @@ class OpticsSystem : public Kernel::SystemBase {
 
     // Vision 相关私有方法
     bool init_vision_lazy();  ///< 首次切换到 Vision 时的 lazy 初始化
-    void run_vision_frame(float frame_count, uint64_t frame_index);
+    void run_vision_frame(float frame_count, uint64_t frame_index,
+                         const std::vector<RenderView>& views);
     void process_vision_actor_pick(std::uintptr_t camera_handle,
                                    const CameraDevice& camera,
                                    const SceneDevice& scene,
@@ -157,6 +181,12 @@ class OpticsSystem : public Kernel::SystemBase {
 
     VisionPipelineRuntime& get_or_create_runtime(const VisionPipelineKey& key);
     VisionPipelineRuntime& active_vision_runtime();
+    struct VisionCameraFeedback {
+        std::optional<std::string> restir_effective, restir_applied;
+        std::optional<std::string> pt_effective, reblur_effective, relax_effective;
+    };
+    void publish_vision_camera_feedback(std::uintptr_t camera_handle,
+                                       const VisionCameraFeedback& feedback);
     bool prepare_vision_camera_view(VisionPipelineRuntime& runtime,
                                    std::uintptr_t camera_handle,
                                    uint32_t width, uint32_t height,
@@ -165,7 +195,8 @@ class OpticsSystem : public Kernel::SystemBase {
                                    const std::string& reblur_settings = "{}",
                                    const std::string& relax_settings = "{}",
                                    const std::string& pt_settings = "{}",
-                                   const std::string& restir_settings = "{}");
+                                   const std::string& restir_settings = "{}",
+                                   VisionCameraFeedback* deferred_feedback = nullptr);
     VisionPipelineKey make_vision_pipeline_key(std::string scene_path,
                                                Corona::CameraVisionRenderMode mode,
                                                VisionPipelineSource source) const;
@@ -206,7 +237,8 @@ class OpticsSystem : public Kernel::SystemBase {
 
     /// 计算当前 SharedDataHub 场景的轻量签名，用于检测动态变化
     /// （几何拓扑 / transform / 材质参数 / materialColor / visible）。
-    std::size_t compute_vision_scene_signature() const;
+    // A caller holding a scene lock must pass that scene to avoid locking it again.
+    std::size_t compute_vision_scene_signature(const SceneDevice* locked_scene = nullptr) const;
 
     /// 以"全量重建"方式把当前场景数据重新同步到 Vision：
     /// build_vision_geometry → scene.prepare → prepare_geometry → invalidate。
@@ -217,7 +249,7 @@ class OpticsSystem : public Kernel::SystemBase {
 
     /// 去抖检测：若签名变化则触发（延迟）重建，覆盖导入/导出/参数调整等动态操作。
     void sync_vision_dynamic_scene(VisionPipelineRuntime& runtime);
-    bool sync_engine_vision_lighting(VisionPipelineRuntime& runtime, const SceneDevice& scene);
+    bool sync_engine_vision_lighting(VisionPipelineRuntime& runtime, const EnvironmentDevice& environment);
 
     /// external_live transform-only path:
     /// proxy actor transform -> mapped Vision ShapeInstance::set_o2w()
@@ -257,7 +289,8 @@ class OpticsSystem : public Kernel::SystemBase {
         std::uint32_t x{0};
         std::uint32_t y{0};
     };
-    std::optional<ActorPickRequest> take_pending_actor_pick(std::uintptr_t camera_handle);
+    std::optional<ActorPickRequest> take_pending_actor_pick(std::uintptr_t camera_handle,
+                                                          const CameraDevice& camera);
     void complete_actor_pick(const ActorPickRequest& request,
                              const std::vector<std::uintptr_t>& scene_actor_handles,
                              const std::vector<std::uint32_t>& node_indices,

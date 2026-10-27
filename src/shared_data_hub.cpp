@@ -2,6 +2,7 @@
 #include <corona/utils/scene_path_key.h>
 
 #include <algorithm>
+#include <utility>
 
 namespace Corona {
 
@@ -320,6 +321,17 @@ std::vector<CameraViewportUpdateCommand> SharedDataHub::drain_camera_viewport_up
         return lhs.sequence < rhs.sequence;
     });
     return updates;
+}
+
+void SharedDataHub::enqueue_default_surface_camera_update(DefaultSurfaceCameraUpdateCommand command) {
+    if (!command.surface || command.width == 0 || command.height == 0) return;
+    std::lock_guard lock(camera_viewport_update_mutex_);
+    pending_default_surface_camera_update_ = command;
+}
+
+std::optional<DefaultSurfaceCameraUpdateCommand> SharedDataHub::take_default_surface_camera_update() {
+    std::lock_guard lock(camera_viewport_update_mutex_);
+    return std::exchange(pending_default_surface_camera_update_, std::nullopt);
 }
 
 void SharedDataHub::enqueue_camera_state_update(CameraStateUpdateCommand command) {

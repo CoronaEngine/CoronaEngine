@@ -675,6 +675,12 @@ void DisplaySystem::update() {
             ImageAccess optics;
             ImageAccess ui;
         };
+        const bool profile_frame = [] {
+            const char* value = std::getenv("CORONA_VISION_FRAME_PROFILE");
+            return value && std::string_view(value) == "1";
+        }();
+        const auto input_start = profile_frame ? std::chrono::steady_clock::now()
+                                               : std::chrono::steady_clock::time_point{};
         auto frame_access = surface_frame_coordinator_.begin_frame(
             gate_it->second,
             [&]() -> FrameImages {
@@ -682,6 +688,7 @@ void DisplaySystem::update() {
                 return {state.optics.published_image.acquire_write(storage, state.optics),
                         state.ui.published_image.acquire_write(storage, state.ui)};
             });
+        const auto input_end = profile_frame ? std::chrono::steady_clock::now() : input_start;
         if (!frame_access) {
             continue;
         }
@@ -796,6 +803,12 @@ void DisplaySystem::update() {
                     optics_frame = nullptr;
                     ui_frame = nullptr;
                 });
+            if (profile_frame && present_outcome == Detail::PresentOutcome::Presented) {
+                CFW_LOG_INFO("DisplayInputProfile frame={} receipt={} input_lock_ms={} total_ms={}",
+                    state.optics.frame_index, optics_producer.serial,
+                    std::chrono::duration<double, std::milli>(input_end - input_start).count(),
+                    std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - input_start).count());
+            }
         } catch (const std::exception& error) {
             if (is_vulkan_device_lost_message(error.what())) {
                 const std::string failure_message =
@@ -994,6 +1007,18 @@ Detail::PresentOutcome DisplaySystem::compose_and_present(
     Horizon::HardwareImage& ui_image,
     const Horizon::SubmitReceipt* ui_receipt,
     const std::function<void(const Horizon::SubmitReceipt&)>& release_inputs) {
+    const bool profile_frame = [] {
+        const char* value = std::getenv("CORONA_VISION_FRAME_PROFILE");
+        return value && std::string_view(value) == "1";
+    }();
+    const auto profile_now = [&] {
+        return profile_frame ? std::chrono::steady_clock::now()
+                             : std::chrono::steady_clock::time_point{};
+    };
+    const auto profile_ms = [](auto begin, auto end) {
+        return std::chrono::duration<double, std::milli>(end - begin).count();
+    };
+    const auto profile_start = profile_now();
     // if (state.optics.image_handle != 0 &&
     //     (state.optics.frame_index <= 3 || state.optics.frame_index % 120 == 0)) {
     //     CFW_LOG_INFO("Display: compose camera surface={} optics_handle={} optics_frame={} optics_extent={}x{} ui_handle={} ui_frame={}",
@@ -1125,11 +1150,14 @@ Detail::PresentOutcome DisplaySystem::compose_and_present(
     // The producers may resume as soon as their last reader is submitted. A
     // separate present submission keeps swapchain waits outside their CPU locks
     // and reuses the same composite image with an explicit device dependency.
+    const auto submit_start = profile_now();
     resources.last_receipt = resources.executor.stream()
         << composite_pipeline.dispatch_extent(output_width, output_height)
         << Horizon::commit();
+    const auto submit_end = profile_now();
     release_inputs(resources.last_receipt);
     resources.executor.wait(resources.last_receipt);
+    const auto pace_start = profile_now();
     const auto present_deadline = resources.scene_cadence.present_deadline(
         {state.optics.image_handle, receipt_serial(optics_receipt)},
         optics_system_ ? optics_system_->get_target_fps() : 0,
@@ -1138,9 +1166,20 @@ Detail::PresentOutcome DisplaySystem::compose_and_present(
     // GPU, and the surface lease protects the same output until present ends.
     // The bounded sleep also bounds shutdown latency; no busy spin is used.
     std::this_thread::sleep_until(present_deadline);
+    const auto present_start = profile_now();
     resources.last_receipt = resources.executor.stream()
         << Horizon::present(displayer, resources.output)
         << Horizon::commit();
+    if (profile_frame) {
+        const auto end = profile_now();
+        // Submission wall times include any existing backpressure; they are
+        // not GPU timestamp queries and do not measure physical scan-out.
+        CFW_LOG_INFO("DisplayFrameProfile frame={} receipt={} extent={}x{} setup_record_ms={} composite_submit_ms={} release_ms={} pace_ms={} present_submit_ms={} total_ms={}",
+            state.optics.frame_index, receipt_serial(optics_receipt), output_width, output_height,
+            profile_ms(profile_start, submit_start), profile_ms(submit_start, submit_end),
+            profile_ms(submit_end, pace_start), profile_ms(pace_start, present_start),
+            profile_ms(present_start, end), profile_ms(profile_start, end));
+    }
     resources.last_signature = signature;
     resources.content_valid = true;
     return Detail::PresentOutcome::Presented;

@@ -111,6 +111,7 @@ private:
 };
 
 struct Hardware {
+    bool native_resources_ready = false;
     Corona::Systems::OpticsDetail::NativeAppearanceCache appearance_cache;
     Corona::Systems::OpticsDetail::NativeLightingCache lighting_cache;
     Corona::Systems::OpticsDetail::NativeFrameThrottle native_frame_throttle;
