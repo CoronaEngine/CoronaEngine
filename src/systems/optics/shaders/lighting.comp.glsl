@@ -903,32 +903,32 @@ float ambientOcclusion(ivec2 pixel, Surface surface) {
 }
 
 // Link-aware interpolation stays on a connected side of the receiver surface.
-float lpvEdge(uint info,ivec3 p,int axis,int sign,int n) {
+float lpvEdge(uint info,uint level,ivec3 p,int axis,int sign,int n) {
     if(sign<0)p[axis]-=1;
     if(any(lessThan(p,ivec3(0)))||any(greaterThanEqual(p,ivec3(n))))return 0;
-    uint cell=uint((p.z*n+p.y)*n+p.x);
+    uint cell=level*uint(n*n*n)+uint((p.z*n+p.y)*n+p.x);
     return clamp(readFloat(info,256u+cell*208u+196u+uint(axis)*4u),0,1);
 }
-float lpvConnection(uint info,ivec3 a,ivec3 b,int n) {
+float lpvConnection(uint info,uint level,ivec3 a,ivec3 b,int n) {
     const ivec3 orders[6]=ivec3[6](ivec3(0,1,2),ivec3(0,2,1),ivec3(1,0,2),ivec3(1,2,0),ivec3(2,0,1),ivec3(2,1,0));
     float best=0;
     for(int order=0;order<6;++order){ivec3 p=a;float visibility=1;
         for(int k=0;k<3;++k){int axis=orders[order][k],sign=b[axis]>p[axis]?1:-1;
-            if(p[axis]!=b[axis]){visibility*=1-lpvEdge(info,p,axis,sign,n);p[axis]+=sign;}}
+            if(p[axis]!=b[axis]){visibility*=1-lpvEdge(info,level,p,axis,sign,n);p[axis]+=sign;}}
         best=max(best,visibility);
     }
     return best;
 }
-vec3 sampleLpv(vec3 position,vec3 normal,vec3 direction,bool diffuse) {
+vec3 sampleLpvLevel(uint level,vec3 position,vec3 normal,vec3 direction,bool diffuse) {
     vec3 query=-direction;float xq=query.x,yq=query.y,zq=query.z;
     float basis[9]=float[9](.282094792,.488602512*xq,.488602512*yq,.488602512*zq,
         1.092548431*xq*yq,1.092548431*yq*zq,.315391565*(3*zq*zq-1),
         1.092548431*xq*zq,.546274215*(xq*xq-yq*yq));
     if(diffuse){basis[0]*=PI;for(int k=1;k<4;++k)basis[k]*=2*PI/3;for(int k=4;k<9;++k)basis[k]*=PI/4;}
     uint info=pushConsts.directLightingBufferIndex;
-    int n=int(readUint(info,0u));float size=readFloat(info,7u);
+    int n=int(readUint(info,0u));float size=readFloat(info,227u+level*4u);
     uint radiance=readUint(pushConsts.shadowInfoBufferIndex,75u);
-    vec3 origin=readVec3(info,4u),samplePosition=position+normal*size*.25;
+    vec3 origin=readVec3(info,224u+level*4u),samplePosition=position+normal*size*.25;
     vec3 q=(samplePosition-origin)/size-.5,t=fract(q);ivec3 base=ivec3(floor(q));
     float weights[8];float best=-1;ivec3 anchor=base;
     for(int corner=0;corner<8;++corner){ivec3 d=ivec3(corner&1,(corner>>1)&1,(corner>>2)&1),p=base+d;
@@ -939,11 +939,27 @@ vec3 sampleLpv(vec3 position,vec3 normal,vec3 direction,bool diffuse) {
     vec3 result=vec3(0);float weight=0;
     for(int corner=0;corner<8;++corner){if(weights[corner]<=0)continue;
         ivec3 p=base+ivec3(corner&1,(corner>>1)&1,(corner>>2)&1);
-        float w=weights[corner]*lpvConnection(info,anchor,p,n);uint cell=uint((p.z*n+p.y)*n+p.x);
+        float w=weights[corner]*lpvConnection(info,level,anchor,p,n);uint cell=level*uint(n*n*n)+uint((p.z*n+p.y)*n+p.x);
         for(uint c=0u;c<3u;++c){float value=0;for(uint k=0u;k<9u;++k)value+=readFloat(radiance,cell*27u+c*9u+k)*basis[k];result[c]+=w*max(value,0);}
         weight+=w;
     }
     return weight>1e-10?result/weight:vec3(0);
+}
+vec3 sampleLpv(vec3 position,vec3 normal,vec3 direction,bool diffuse) {
+    uint info=pushConsts.directLightingBufferIndex;
+    float n=float(readUint(info,0u));uint levels=readUint(info,12u);
+    // Blend radiance, never add overlapping levels. The four-cell overlap is
+    // wider than the interpolation footprint and fades before a child boundary.
+    vec3 result=vec3(0);float remaining=1;
+    for(int candidate=int(levels)-1;candidate>=0;--candidate) {
+        uint level=uint(candidate);
+        vec3 q=(position-readVec3(info,224u+level*4u))/readFloat(info,227u+level*4u);
+        vec3 edge=min(q,vec3(n)-q);
+        float weight=level==0u?1:smoothstep(1.5,4.5,min(edge.x,min(edge.y,edge.z)));
+        if(weight>0)result+=remaining*weight*sampleLpvLevel(level,position,normal,direction,diffuse);
+        remaining*=1-weight;if(remaining<1e-5)break;
+    }
+    return result;
 }
 vec3 lpvIrradiance(vec3 position,vec3 normal) {
     return sampleLpv(position,normal,normal,true);
@@ -963,6 +979,10 @@ vec3 shadeDirect(Surface s,float ao,vec3 viewDirection,bool includeEmission) {
 // Screen-space reflection using perspective-correct ray segments and depth
 // crossings. Re-shade the hit from VBuffer: never read the output being written.
 // This avoids colour ping-pong, a GBuffer, a Hi-Z pyramid and reflection history.
+float screenConfidence(vec2 uv) {
+    float edge=min(min(uv.x,uv.y),min(1-uv.x,1-uv.y));
+    return smoothstep(.02,.15,edge);
+}
 bool traceScreen(Surface source, vec3 direction, uint depthIndex, uint visibilityIndex, bool transmitting, out Surface hit, out float confidence) {
     confidence = 0.0;
     mat4 view = readMat4(pushConsts.uniformBufferIndex, 44u);
@@ -1006,7 +1026,7 @@ bool traceScreen(Surface source, vec3 direction, uint depthIndex, uint visibilit
         float z=viewPosition(ip,depth,inverseProjection).z;
         float along=abs(ray.z)>1e-7?(z-a.z)/ray.z:-1;
         if(transmitting && depth>0 && along>0 && along<distance && decodeSurfaceFrom(ip,visibilityIndex,true,hit)) {
-            confidence=1;return true;
+            confidence=screenConfidence(pa/vec2(pushConsts.gbufferSize));return confidence>0;
         }
         return false;
     }
@@ -1059,8 +1079,7 @@ bool traceScreen(Surface source, vec3 direction, uint depthIndex, uint visibilit
                     decodeSurfaceFrom(hitPixel,visibilityIndex,transmitting,hit) && dot(hit.normal,direction) < -0.05 &&
                     length(hit.position-source.position) > 0.05) {
                     vec2 uv = hp / vec2(pushConsts.gbufferSize);
-                    float edge = min(min(uv.x,uv.y),min(1.0-uv.x,1.0-uv.y));
-                    confidence = smoothstep(0.0,0.06,edge) * (1.0-smoothstep(0.75,1.0,hi));
+                    confidence = screenConfidence(uv) * (1.0-smoothstep(0.75,1.0,hi));
                     return confidence > 0.0;
                 }
             }
@@ -1071,6 +1090,58 @@ bool traceScreen(Surface source, vec3 direction, uint depthIndex, uint visibilit
         previousZ = z;
     }
     return false;
+}
+
+// Screen samples replace the corresponding LPV radiance instead of adding a
+// second GI estimate. A miss has exactly zero correction, including offscreen.
+vec3 screenGiCorrection(ivec2 pixel,Surface receiver) {
+    if(receiver.material.transmission>0 || receiver.material.metallic>.95)return vec3(0);
+    float edge=screenConfidence((vec2(pixel)+.5)/vec2(pushConsts.gbufferSize));
+    if(edge<=0)return vec3(0);
+    vec3 n=receiver.geometricNormal;
+    vec3 tangent=normalize(cross(abs(n.y)<.95?vec3(0,1,0):vec3(1,0,0),n));
+    vec3 bitangent=cross(n,tangent),correction=vec3(0);
+    // Fixed sample count and deterministic rotation, shared by every scene.
+    float rotation=fract(sin(dot(vec2(pixel),vec2(12.9898,78.233)))*43758.5453)*2*PI;
+    for(int sampleIndex=0;sampleIndex<32;++sampleIndex) {
+        float r=sqrt((float(sampleIndex)+.5)/32),phi=float(sampleIndex)*2.39996323+rotation;
+        vec3 direction=normalize(tangent*(r*cos(phi))+bitangent*(r*sin(phi))+n*sqrt(1-r*r));
+        Surface hit;float confidence;
+        if(traceScreen(receiver,direction,pushConsts.depthImageIndex,pushConsts.visibilityImageIndex,false,hit,confidence) &&
+           hit.material.transmission<=0 && hit.material.metallic<.95 &&
+           max(hit.material.emissive.x,max(hit.material.emissive.y,hit.material.emissive.z))<=0) {
+            vec3 coarse=sampleLpv(receiver.position,n,direction,false);
+            // Emitters already enter the LPV directly. Sampling tiny bright
+            // emitters with a diffuse screen estimator introduces fireflies;
+            // keep their LPV estimate and refine reflected light only.
+            vec3 detailed=shadeDirect(hit,1,-direction,false);
+            correction+=confidence*(detailed-coarse);
+        }
+    }
+    return correction*(PI/32)*edge;
+}
+vec3 filteredScreenGi(ivec2 pixel,Surface receiver) {
+    uint descriptor=readUint(pushConsts.shadowInfoBufferIndex,89u);
+    float confidence=screenConfidence((vec2(pixel)+.5)/vec2(pushConsts.gbufferSize));
+    if(confidence<=0)return vec3(0);
+    // The footprint grows smoothly toward the edge; normal/plane weights keep
+    // foreground and background from bleeding across silhouettes.
+    float stride=mix(8.,2.,confidence),sum=0;
+    float distanceToEye=length(receiver.position-readVec3(pushConsts.uniformBufferIndex,36u));
+    float tolerance=max(distanceToEye*.02,readFloat(pushConsts.directLightingBufferIndex,7u)*.01);
+    vec3 result=vec3(0);
+    for(int y=-2;y<=2;++y)for(int x=-2;x<=2;++x) {
+        ivec2 p=pixel+ivec2(round(vec2(x,y)*stride));
+        if(any(lessThan(p,ivec2(0)))||any(greaterThanEqual(p,ivec2(pushConsts.gbufferSize))))continue;
+        p=(p/2)*2;
+        Surface neighbor;if(!decodeSurface(p,neighbor))continue;
+        if(neighbor.material.transmission>0)continue;
+        float normalWeight=pow(max(dot(receiver.geometricNormal,neighbor.geometricNormal),0),16);
+        float plane=abs(dot(neighbor.position-receiver.position,receiver.geometricNormal));
+        float weight=exp(-float(x*x+y*y)/4.-plane/max(tolerance,1e-6))*normalWeight;
+        result+=weight*imageLoad(imagesRGBA16[nonuniformEXT(descriptor)],p).rgb;sum+=weight;
+    }
+    return sum>0?result/sum*confidence:vec3(0);
 }
 
 // Canonical Corona lat-long orientation, shared with sky.comp and Vision.
@@ -1200,6 +1271,13 @@ void main() {
     ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
     if (any(greaterThanEqual(pixel,ivec2(pushConsts.gbufferSize)))) return;
     uint mode = pushConsts.outputMode;
+    if((pushConsts.featureFlags&128u)!=0u) {
+        Surface receiver;vec3 correction=vec3(0);
+        if(all(equal(pixel&ivec2(1),ivec2(0))) && decodeSurface(pixel,receiver))correction=screenGiCorrection(pixel,receiver);
+        if(!finiteVec3(correction))correction=vec3(0);
+        imageStore(imagesRGBA16[pushConsts.finalOutputImage],pixel,vec4(clamp(correction,vec3(-65504),vec3(65504)),1));
+        return;
+    }
     if (mode==0u && (pushConsts.featureFlags&40u)==32u) {
         // The opaque resolve already shaded this exact surface. Reuse it in
         // the final pass instead of repeating LPV, SSAO, SSR and material work.
@@ -1250,6 +1328,11 @@ void main() {
         }
         color = shadeDirect(surface,ao,normalize(eye-surface.position),true);
         if (surface.material.lightingEnabled > 0.5) {
+            if((pushConsts.featureFlags&64u)!=0u && surface.material.transmission<=0) {
+                vec3 coarse=lpvIrradiance(surface.position,surface.geometricNormal);
+                vec3 correction=max(coarse+filteredScreenGi(pixel,surface),vec3(0))-coarse;
+                color+=surface.baseColor*(1-surface.material.metallic)*correction/PI*ao*surface.material.occlusionStrength;
+            }
             color += reflection(surface,ao);
             color += refraction(pixel,surface);
         }

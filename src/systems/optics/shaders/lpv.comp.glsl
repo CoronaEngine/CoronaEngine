@@ -9,6 +9,7 @@ layout(push_constant) uniform PushConsts {
     uint positionImage; uint normalImage; uint fluxImage; uint shadowInfo;
     uint uniformInfo; uint skySH; uint authored; uint disabled;
     vec3 sunDirection; float texelArea;
+    uint level; uint parent; uint padding0; uint padding1;
 } pushConsts;
 const float PI=3.14159265359,Y0=.282094792,Y1=.488602512;
 const uint HEADER=256u,CELL_WORDS=208u,CHANNELS=192u;
@@ -93,7 +94,7 @@ uint indexOf(ivec3 p,int n){return uint((p.z*n+p.y)*n+p.x);}
 // geometry remains cell-major and is packed once during source initialization.
 uint channelAt(uint cell,int direction,int n){return (uint(direction)*uint(n*n*n)+cell)*3u;}
 bool inside(ivec3 p,int n){return all(greaterThanEqual(p,ivec3(0)))&&all(lessThan(p,ivec3(n)));}
-vec4 link(ivec3 p,int axis,int sign,int n){if(sign<0)p[axis]-=1;if(!inside(p,n))return vec4(0);uint at=HEADER+indexOf(p,n)*CELL_WORDS+196u+uint(axis)*4u;return vec4(f(pushConsts.info,at),v(pushConsts.info,at+1));}
+vec4 link(ivec3 p,int axis,int sign,int n){if(sign<0)p[axis]-=1;if(!inside(p,n))return vec4(0);uint at=HEADER+(pushConsts.level*uint(n*n*n)+indexOf(p,n))*CELL_WORDS+196u+uint(axis)*4u;return vec4(f(pushConsts.info,at),v(pushConsts.info,at+1));}
 // Core 32-bit atomics suffice; no atomic-float extension, fixed-point overflow,
 // RTX features, or scene-intersection operation is needed.
 void addFloat(uint i,float value) {
@@ -112,8 +113,22 @@ vec3 skyRadiance(vec3 n) {
         v(b,12)*(1.092548*x*y)+v(b,15)*(1.092548*y*z)+v(b,18)*(.315392*(3*z*z-1))+
         v(b,21)*(1.092548*x*z)+v(b,24)*(.546274*(x*x-y*y)));
 }
+vec3 boundaryRadiance(vec3 world,int direction,int n) {
+    if(pushConsts.level==0u)return pushConsts.authored!=0u?v(pushConsts.info,32u+uint(direction)*3u):skyRadiance(-directionOf(direction));
+    uint at=224u+(pushConsts.level-1u)*4u;
+    vec3 q=(world-v(pushConsts.info,at))/f(pushConsts.info,at+3u)-.5;
+    ivec3 base=ivec3(floor(q));vec3 t=fract(q),result=vec3(0);float total=0;
+    for(int corner=0;corner<8;++corner) {
+        ivec3 d=ivec3(corner&1,(corner>>1)&1,(corner>>2)&1),p=base+d;
+        if(!inside(p,n))continue;
+        vec3 w=mix(vec3(1)-t,t,vec3(d));float weight=w.x*w.y*w.z;
+        result+=weight*v(pushConsts.parent,channelAt(indexOf(p,n),direction,n));total+=weight;
+    }
+    return total>0?result/total:vec3(0);
+}
 void main() {
-    int n=int(u(pushConsts.info,0));float size=f(pushConsts.info,7);vec3 origin=v(pushConsts.info,4);
+    int n=int(u(pushConsts.info,0));uint layoutAt=224u+pushConsts.level*4u;
+    float size=f(pushConsts.info,layoutAt+3u);vec3 origin=v(pushConsts.info,layoutAt);
     if(pushConsts.mode==1u) {
         // Integrate every valid RSM texel in this tile, rather than multiplying
         // one arbitrarily selected texel by stride^2. Only solar CSM owns RSMs.
@@ -158,7 +173,7 @@ void main() {
     if(pushConsts.mode==0u){for(uint k=0;k<CHANNELS;++k)put(pushConsts.injection,at+k,0);return;}
     if(pushConsts.mode==2u){for(int d=0;d<64;++d){uint offset=channelAt(cell,d,n);
         put3(pushConsts.destination,offset,vec3(0));
-        vec3 source=v(pushConsts.info,HEADER+cell*CELL_WORDS+4u+uint(d)*3u)+v(pushConsts.injection,offset);
+        vec3 source=v(pushConsts.info,HEADER+(pushConsts.level*uint(n*n*n)+cell)*CELL_WORDS+4u+uint(d)*3u)+v(pushConsts.injection,offset);
         put3(pushConsts.injection,offset,source);
     }return;}
     if(pushConsts.mode==4u) {
@@ -167,9 +182,11 @@ void main() {
         if(pushConsts.disabled==0u)for(int d=0;d<64;++d){vec3 dir=directionOf(d);float x=dir.x,y=dir.y,z=dir.z;
             float basis[9]=float[9](Y0,Y1*x,Y1*y,Y1*z,1.092548431*x*y,1.092548431*y*z,
                 .315391565*(3*z*z-1),1.092548431*x*z,.546274215*(x*x-y*y));
-            vec3 value=v(pushConsts.source,channelAt(cell,d,n))*angularWeight(d);
+            vec3 incident=v(pushConsts.source,channelAt(cell,d,n));
+            put3(pushConsts.parent,channelAt(cell,d,n),incident);
+            vec3 value=incident*angularWeight(d);
             for(int k=0;k<9;++k)coeff[k]+=basis[k]*value;}
-        for(uint c=0;c<3;++c)for(uint k=0;k<9;++k)put(pushConsts.accumulated,cell*27u+c*9u+k,coeff[k][c]);
+        for(uint c=0;c<3;++c)for(uint k=0;k<9;++k)put(pushConsts.accumulated,(pushConsts.level*uint(n*n*n)+cell)*27u+c*9u+k,coeff[k][c]);
         return;
     }
     // Upwind finite-volume transport. Angular channels retain their direction
@@ -189,7 +206,7 @@ void main() {
             for(int axis=0;axis<3;++axis)if(w[axis]>0){
                 int sign=dir[axis]>0?1:-1;ivec3 q=p;q[axis]-=sign;
                 vec3 incoming=inside(q,n)?v(pushConsts.source,channelAt(indexOf(q,n),d,n)):
-                    (pushConsts.authored!=0u?v(pushConsts.info,32u+uint(d)*3u):skyRadiance(-dir));
+                    boundaryRadiance(origin+(vec3(q)+.5)*size,d,n);
                 int face=axis*2+(sign>0?1:0);vec4 edge=edges[face];
                 result+=w[axis]*mix(incoming,reflected[face],edge.x);
             }

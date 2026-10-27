@@ -23,6 +23,7 @@ inline double texel_solid_angle(unsigned row,unsigned w,unsigned h) {
 // One preset for every scene. Transport retains its angular channels until a
 // surface interaction; only the final shading field is projected to RGB SH.
 inline constexpr unsigned resolution=32,cell_count=resolution*resolution*resolution;
+inline constexpr unsigned cascade_count=4,layout_offset=224;
 inline constexpr unsigned direction_count=64,header_words=256,cell_words=208;
 inline constexpr unsigned sh_words=27,transport_words=direction_count*3;
 inline constexpr unsigned propagation_steps=resolution*3,link_offset=196;
@@ -99,10 +100,42 @@ inline float cosine_integral(Vec n) {float sum=0;for(auto d:directions)sum+=d.we
 struct Cell {float occupied{};Vec albedo{};std::array<float,transport_words> source{};
     std::array<float,12> links{};};
 static_assert(sizeof(Cell)==cell_words*sizeof(float));
+struct Layout {
+    Vec origin{};
+    float size=1;
+    bool operator==(const Layout&) const = default;
+};
+inline std::array<Layout,cascade_count> cascade_layouts(Vec low,Vec high,Vec eye,Vec forward) {
+    std::array<Layout,cascade_count> result;
+    auto extent=sub(high,low),middle=mul(add(low,high),.5f);
+    float size=std::max({extent[0],extent[1],extent[2],.01f})/float(resolution-6);
+    result[0]={sub(middle,{size*resolution/2,size*resolution/2,size*resolution/2}),size};
+    // Focus on the viewed part of the source bounds. No scene-name settings or
+    // fixed world-unit distances: camera/scene scaling preserves the hierarchy.
+    forward=normalized(forward);
+    auto focus=add(eye,mul(forward,std::max(0.f,dot(sub(middle,eye),forward))));
+    for(unsigned axis=0;axis<3;++axis)focus[axis]=std::clamp(focus[axis],low[axis],high[axis]);
+    for(unsigned level=1;level<cascade_count;++level) {
+        auto parent=result[level-1];size=parent.size*.5f;
+        result[level].size=size;
+        for(unsigned axis=0;axis<3;++axis) {
+            float snapped=std::round((focus[axis]-parent.origin[axis])/size)*size+parent.origin[axis]-size*resolution/2;
+            result[level].origin[axis]=std::clamp(snapped,parent.origin[axis]+parent.size*2,
+                parent.origin[axis]+parent.size*(resolution-2)-size*resolution);
+        }
+    }
+    return result;
+}
 struct Grid {
     Vec origin{};float size=1;
     std::vector<Cell> cells=std::vector<Cell>(cell_count);
     std::vector<float> weights=std::vector<float>(cell_count);
+    // Union projected coverage: front/back faces of the same thin object must
+    // not add up to a completely sealed voxel link. Subpixel residuals have a
+    // bounded 1/64-cell budget; they cannot turn tiny triangles into solid cells.
+    std::vector<std::array<uint64_t,3>> coverage=std::vector<std::array<uint64_t,3>>(cell_count);
+    std::vector<Vec> residual=std::vector<Vec>(cell_count);
+    std::vector<Vec> opacity_weights=std::vector<Vec>(cell_count);
     bool inside(std::array<int,3> p) const {return p[0]>=0&&p[1]>=0&&p[2]>=0&&p[0]<int(resolution)&&p[1]<int(resolution)&&p[2]<int(resolution);}
     unsigned index(std::array<int,3> p) const {return (p[2]*resolution+p[1])*resolution+p[0];}
     std::array<int,3> coord(Vec p) const {auto q=mul(sub(p,origin),1/size);return {int(std::floor(q[0])),int(std::floor(q[1])),int(std::floor(q[2]))};}
@@ -129,8 +162,9 @@ struct Grid {
         return .5f*std::sqrt(dot(total,total));
     }
     static bool overlaps(Vec a,Vec b,Vec c,Vec middle,float half) {return clipped_area(a,b,c,middle,half)>0;}
-    void voxelize(Vec a,Vec b,Vec c,Vec albedo,float area) {
+    void voxelize(Vec a,Vec b,Vec c,Vec albedo,float area,float opacity=1.f) {
         Vec lo{},hi{};for(unsigned k=0;k<3;++k){lo[k]=std::min({a[k],b[k],c[k]});hi[k]=std::max({a[k],b[k],c[k]});}
+        for(unsigned k=0;k<3;++k)if(hi[k]<origin[k] || lo[k]>origin[k]+size*resolution)return;
         auto normal=normalized(cross(sub(b,a),sub(c,a)));
         // The regular voxel stores reflectance for RSM, but is never treated
         // as an entirely solid block. Transport is blocked only across links.
@@ -149,8 +183,30 @@ struct Grid {
                 // slab only, rather than producing two opaque layers.
                 if(hi[axis]<=middle[axis]-size*.5f)continue;
                 float cover=clipped_area(a,b,c,middle,size*.50001f)*std::abs(normal[axis])/(size*size);
-                auto& link=cells[index(p)].links;link[axis*4]+=cover;
+                if(cover<=0)continue;
+                const auto cell=index(p);
+                auto& link=cells[cell].links;link[axis*4]+=cover;
+                opacity_weights[cell][axis]+=cover*std::clamp(opacity,0.f,1.f);
                 for(unsigned k=0;k<3;++k)link[axis*4+1+k]+=cover*albedo[k];
+                auto& mask=coverage[cell][axis];
+                if(mask==~uint64_t(0))continue;
+                if(cover>=.99999f){mask=~uint64_t(0);continue;}
+                unsigned u=(axis+1)%3,v=(axis+2)%3;
+                auto ab=sub(b,a),ac=sub(c,a);
+                float determinant=ab[u]*ac[v]-ab[v]*ac[u];
+                if(std::abs(determinant)<1e-30f)continue;
+                uint64_t projected=0;
+                for(unsigned j=0;j<8;++j)for(unsigned i=0;i<8;++i) {
+                    float du=middle[u]+(float(i)+.5f-4)*size/8-a[u];
+                    float dv=middle[v]+(float(j)+.5f-4)*size/8-a[v];
+                    float beta=(du*ac[v]-dv*ac[u])/determinant;
+                    float gamma=(ab[u]*dv-ab[v]*du)/determinant;
+                    if(beta< -1e-5f || gamma< -1e-5f || beta+gamma>1.00001f)continue;
+                    float depth=a[axis]+ab[axis]*beta+ac[axis]*gamma;
+                    if(std::abs(depth-middle[axis])<=size*.50001f)projected|=uint64_t(1)<<(j*8+i);
+                }
+                mask|=projected;
+                if(!projected)residual[cell][axis]+=cover;
             }
         }
     }
@@ -159,7 +215,8 @@ struct Grid {
             auto& cell=cells[i];if(weights[i]>0)cell.albedo=mul(cell.albedo,1/weights[i]);
             for(unsigned axis=0;axis<3;++axis) {auto at=axis*4;float cover=cell.links[at];
                 if(cover>0)for(unsigned c=0;c<3;++c)cell.links[at+1+c]/=cover;
-                cell.links[at]=std::clamp(cover,0.f,1.f);
+                cell.links[at]=(cover>0?opacity_weights[i][axis]/cover:0)*std::min(1.f,
+                    float(std::popcount(coverage[i][axis]))/64.f+std::min(residual[i][axis],1.f/64.f));
             }
         }
     }

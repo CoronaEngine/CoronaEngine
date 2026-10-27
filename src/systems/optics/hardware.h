@@ -120,7 +120,7 @@ struct Hardware {
     Corona::Horizon::HardwareImage uiDepthImage;        // Pass 2 depth, isolated from scene pass
     std::array<Corona::Horizon::HardwareImage, 4> shadowCascadeImages;
     std::array<Corona::Horizon::HardwareImage, 4> rsmPositions, rsmNormals, rsmFluxes;
-    Corona::Horizon::HardwareBuffer lpvInjection, lpvAccumulated;
+    Corona::Horizon::HardwareBuffer lpvInjection, lpvAccumulated, lpvParent;
     std::array<Corona::Horizon::HardwareBuffer, 2> lpvWave;
     Corona::Memory::GpuMemToken lpvMemory;
     std::shared_ptr<const void> lpvCachedSource;
