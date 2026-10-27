@@ -372,6 +372,7 @@ void FrameBuffer::unregister(const std::string &name) noexcept {
     if (iter == screen_buffers_.end()) {
         OC_ERROR("");
     }
+    if (cur_view_ == name) cur_view_ = final_result;
     screen_buffers_.erase(iter);
 }
 

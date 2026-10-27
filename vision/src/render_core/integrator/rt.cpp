@@ -134,7 +134,7 @@ public:
     void prepare() noexcept override {
         switch_profile::Scope profile{"integrator.prepare", "buffers"};
         IlluminationIntegrator::prepare();
-        direct_->prepare();
+        direct_->prepare(denoiser_runtime_disabled() || !denoiser_ || !denoiser_->enabled());
         indirect_->prepare();
         if (!denoiser_runtime_disabled() && denoiser_ && denoiser_->enabled()) {
             denoiser_->prepare();
@@ -215,10 +215,14 @@ public:
             (denoiser_->enabled() || denoiser_->has_prepared_resources())) {
             denoiser_->compile();
         }
+        compile_composition();
+    }
+
+    void compile_composition() noexcept {
         TSensor &camera = scene().sensor();
         Kernel kernel = [&](Uint frame_index, Float di, Float ii, Uint layered) {
             camera->load_data();
-            Float3 direct = direct_->radiance()->read(dispatch_id()).xyz();
+            Float3 direct = direct_->read_radiance(dispatch_id()).xyz();
             Float3 indirect = indirect_->radiance()->read(dispatch_id()).xyz();
             Float3 L = direct * di + indirect * ii;
             $if(layered != 0u) {
@@ -236,7 +240,7 @@ public:
             Uint dominant = frame_buffer().stable_dominant().read(dispatch_id());
             $if(dominant < StablePlaneCount) {
                 Uint address = dominant * (dispatch_dim().x * dispatch_dim().y) + dispatch_id();
-                Float3 direct = frame_buffer().stable_direct().read(address).xyz() + direct_->radiance()->read(dispatch_id()).xyz();
+                Float3 direct = frame_buffer().stable_direct().read(address).xyz() + direct_->read_radiance(dispatch_id()).xyz();
                 Float3 indirect = frame_buffer().stable_indirect().read(address).xyz() + indirect_->radiance()->read(dispatch_id()).xyz();
                 frame_buffer().stable_direct().write(address, make_float4(direct, 1.f));
                 frame_buffer().stable_indirect().write(address, make_float4(indirect, 1.f));
@@ -253,7 +257,7 @@ public:
             }
             // Estimator buffers are no longer needed after the dominant merge.
             // Reuse them for the unscaled complete DirectIndirect pixel signal.
-            direct_->radiance()->write(dispatch_id(), make_float4(direct, 1.f));
+            direct_->write_radiance(dispatch_id(), make_float4(direct, 1.f));
             indirect_->radiance()->write(dispatch_id(), make_float4(indirect, 1.f));
         };
         compose_layers_ = device().compile(compose, "StablePlanes-ComposeCoverage");
@@ -268,7 +272,7 @@ public:
                 Float4 sd = frame_buffer().denoiser_di_specular().read(i);
                 Float4 sg = frame_buffer().denoiser_gi_specular().read(i);
                 Float3 bypass = frame_buffer().denoiser_di_bypass().read(i).xyz();
-                Float3 d = direct_->radiance()->read(i).xyz() - bypass;
+                Float3 d = direct_->read_radiance(i).xyz() - bypass;
                 Float3 g = indirect_->radiance()->read(i).xyz();
                 Float3 spec = sd.xyz() * di + sg.xyz() * gi;
                 Float3 diff = (d - sd.xyz()) * di + (g - sg.xyz()) * gi;
@@ -295,7 +299,7 @@ public:
                     total += frame_buffer().denoiser_diffuse().read(j).xyz() + frame_buffer().denoiser_specular().read(j).xyz() +
                              frame_buffer().denoiser_bypass().read(j).xyz();
                 };
-                direct_->radiance()->write(i, make_float4(total, 1.f));
+                direct_->write_radiance(i, make_float4(total, 1.f));
                 indirect_->radiance()->write(i, make_float4(0.f));
             };
             compose_denoiser_ = device().compile(compose_lobes, "Denoiser-ComposeReSTIR");
@@ -350,6 +354,19 @@ public:
         Stream &stream = rp->stream();
         reset_denoise_timing();
         const bool retain_history = !denoiser_runtime_disabled() && denoiser_ && denoiser_->enabled();
+        if (direct_->compact_radiance() == retain_history) {
+            // Finish the old representation before changing bindings captured by
+            // the DI producer and its raw/denoised composition kernels.
+            stream << synchronize() << commit();
+            direct_->set_compact_radiance(!retain_history);
+            pipeline()->upload_bindless_array();
+            Global::SceneGpuContextScope scene_gpu_context{
+                scene().geometry().bindless_array(), scene().geometry().gpu_resource()->device()};
+            direct_->compile();
+            const_cast<RealTimeIntegrator *>(this)->compile_composition();
+            // Output has no temporal state. Keep the frame sequence and prior
+            // raw stable planes intact for newly enabled denoiser history.
+        }
         if (stable_resources_dirty_ || frame_buffer().stable_plane_history_retained() != retain_history) {
             // Resize history before build snapshots the complete previous raw
             // planes. A history-only switch must preserve those current records.
@@ -392,9 +409,9 @@ public:
             const auto directory = evaluation_debug::directory(frame_index_);
             if (directory.empty()) return;
             fs::create_directories(directory);
-            vector<float4> direct(rp->pixel_num()), indirect(rp->pixel_num());
-            stream << direct_->radiance()->view().download(direct.data())
-                << indirect_->radiance()->view().download(indirect.data()) << synchronize() << commit();
+            vector<float4> direct = direct_->download_radiance();
+            vector<float4> indirect(rp->pixel_num());
+            stream << indirect_->radiance()->view().download(indirect.data()) << synchronize() << commit();
             auto write = [&](const char *channel, const auto &pixels) {
                 std::ofstream out(fs::path(directory) / (std::string(stage) + channel + ".f32"), std::ios::binary);
                 out.write(reinterpret_cast<const char *>(pixels.data()), pixels.size() * sizeof(float4));
