@@ -460,33 +460,6 @@ VisionBuildResult build_vision_geometry(::vision::Scene& scene) {
     return result;
 }
 
-AddVisionShapeResult add_vision_shape_for_actor(
-    ::vision::Scene& scene,
-    std::uintptr_t actor_handle,
-    const Corona::ExternalVisionBindingDevice& binding) {
-    (void)binding;
-    AddVisionShapeResult result;
-    result.material_topology_before = scene.materials().topology_num();
-    PreparedGroup group;
-    VisionBuildResult staged;
-    stage_actor_geometry(actor_handle, group, staged);
-    result.candidate_count = staged.candidate_count;
-    result.skipped_no_data = staged.skipped_no_data;
-    result.invalid_data = staged.invalid_data;
-    if (staged.complete() && !group.empty()) {
-        append_prepared_group(scene, group);
-        result.added = true;
-        result.shape_index = static_cast<int>(scene.groups().size()) - 1;
-        result.instance_count = staged.instance_count;
-    }
-    result.material_topology_after = scene.materials().topology_num();
-    return result;
-}
 
-bool remove_vision_shape_for_actor(::vision::Scene& scene, unsigned int shape_index) {
-    if (shape_index >= scene.groups().size()) return false;
-    scene.remove_shape(shape_index, true);
-    return true;
-}
 
 }  // namespace Corona::Systems::Vision

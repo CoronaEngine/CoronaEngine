@@ -131,13 +131,7 @@ void Scene::init(const SceneDesc &scene_desc) {
     data_->light_manager_.init(scene_desc.light_descs);
     load_materials(scene_desc.material_descs);
     load_mediums(scene_desc.mediums_desc);
-    if (cached_shape_initializer_) {
-        switch_profile::Scope restore_profile{"Scene::restore_cached_shapes", "scene_reuse"};
-        auto initializer = std::move(cached_shape_initializer_);
-        initializer(*this);
-    } else {
-        load_shapes(scene_desc.shape_descs);
-    }
+    load_shapes(scene_desc.shape_descs);
     data_->initialized_ = true;
 }
 

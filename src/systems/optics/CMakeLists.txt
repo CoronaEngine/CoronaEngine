@@ -79,20 +79,6 @@ endif()
 
 
 
-# ------------------------------------------------------------------------------
-# Vision import-scene verification demo (OFF by default)
-# When enabled, the optics system loads a known-good scene
-# straight from disk via vision::Importer::import_scene to verify that the Vision
-# backend can produce a picture in isolation, bypassing the CoronaEngine->Vision
-# scene-building adapters. Edit kVisionDemoScenePath in optics_system.cpp to point
-# at a local *.json scene.
-# ------------------------------------------------------------------------------
-option(CORONA_VISION_IMPORT_DEMO "Enable the Vision import-scene verification demo in OpticsSystem" OFF)
-if(CORONA_VISION_IMPORT_DEMO)
-    target_compile_definitions(corona_optics_system PRIVATE CORONA_VISION_IMPORT_DEMO)
-endif()
-
-
 helicon_compile_shaders(corona_optics_system
     OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated_shaders"
 )

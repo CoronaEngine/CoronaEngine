@@ -303,11 +303,7 @@ public:
     void init(const ParameterSet &ps) noexcept override;
 };
 
-struct ImporterDesc : public NodeDesc {
-public:
-    VISION_DESC_COMMON(Importer)
-    void init(const ParameterSet &ps) noexcept override;
-};
+
 
 struct PassDesc : public NodeDesc {
 public:

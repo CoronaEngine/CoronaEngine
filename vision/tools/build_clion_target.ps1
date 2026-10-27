@@ -1,6 +1,6 @@
 param(
     [string]$BuildDir = "D:\yzy\code\cpp\Vision\cmake-build-debug-msvc",
-    [string]$Target = "vision-eval",
+    [string]$Target = "vision-base",
     [int]$TimeoutSec = 600,
     [int]$Jobs = 4
 )

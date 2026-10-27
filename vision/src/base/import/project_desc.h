@@ -1,4 +1,4 @@
-﻿//
+//
 // Created by Zero on 06/09/2022.
 //
 
@@ -53,8 +53,6 @@ public:
 
 public:
     ProjectDesc() = default;
-    static ProjectDesc from_json(const fs::path &path);
-    void init(const DataWrap &data) noexcept;
 };
 
 }// namespace vision

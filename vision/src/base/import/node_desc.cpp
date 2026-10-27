@@ -224,11 +224,6 @@ void RasterizerDesc::init(const vision::ParameterSet &ps) noexcept {
     set_parameter(param);
 }
 
-void ImporterDesc::init(const vision::ParameterSet &ps) noexcept {
-    NodeDesc::init(ps);
-    ParameterSet param = ps.value("param", DataWrap::object());
-    set_parameter(param);
-}
 
 void PassDesc::init(const vision::ParameterSet &ps) noexcept {
     NodeDesc::init(ps);

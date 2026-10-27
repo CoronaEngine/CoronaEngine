@@ -2005,51 +2005,8 @@ std::string Corona::API::Actor::get_actor_guid() const {
     return SharedDataHub::instance().actor_guid(handle_);
 }
 
-void Corona::API::Actor::set_external_vision_binding(const std::string& source_path,
-                                                     const std::string& shape_guid,
-                                                     int shape_index,
-                                                     const std::string& json_path,
-                                                     const std::string& shape_type,
-                                                     const std::string& shape_identity_key,
-                                                     const std::string& model_path,
-                                                     bool visible,
-                                                     const std::string& source_base_dir) {
-    if (handle_ == 0) {
-        CFW_LOG_WARNING("[Actor::set_external_vision_binding] Invalid actor handle");
-        return;
-    }
 
-    ExternalVisionBindingDevice binding{};
-    binding.enabled = true;
-    binding.visible = visible;
-    binding.source_path = source_path;
-    binding.source_base_dir = source_base_dir;
-    binding.shape_guid = shape_guid;
-    binding.shape_index = shape_index;
-    binding.json_path = json_path;
-    binding.shape_type = shape_type;
-    binding.shape_identity_key = shape_identity_key;
-    binding.model_path = model_path;
-    SharedDataHub::instance().set_external_vision_binding(handle_, std::move(binding));
-}
 
-void Corona::API::Actor::clear_external_vision_binding() {
-    if (handle_ == 0) {
-        CFW_LOG_WARNING("[Actor::clear_external_vision_binding] Invalid actor handle");
-        return;
-    }
-
-    SharedDataHub::instance().clear_external_vision_binding(handle_);
-}
-
-bool Corona::API::Actor::has_external_vision_binding() const {
-    if (handle_ == 0) {
-        CFW_LOG_WARNING("[Actor::has_external_vision_binding] Invalid actor handle");
-        return false;
-    }
-
-    return SharedDataHub::instance().has_external_vision_binding(handle_);
-}
 
 std::uintptr_t Corona::API::Actor::get_handle() const {
     return handle_;
@@ -3092,27 +3049,7 @@ bool get_requested_vision_stable_planes(std::uintptr_t camera_handle) {
     return get_vision_stable_planes(resolved_handle);
 }
 
-void load_vision_scene(const std::string& path) {
-    if (auto* event_bus = Kernel::KernelContext::instance().event_bus()) {
-        Events::VisionSceneLoadEvent event;
-        event.scene_path = path;
-        event_bus->publish<Events::VisionSceneLoadEvent>(std::move(event));
-    }
-}
 
-void load_vision_scene_from_json(const std::string& json_text,
-                                 const std::string& base_dir,
-                                 const std::string& scene_key,
-                                 bool external_live) {
-    if (auto* event_bus = Kernel::KernelContext::instance().event_bus()) {
-        Events::VisionSceneLoadEvent event;
-        event.scene_json = json_text;
-        event.base_dir = base_dir;
-        event.scene_key = scene_key;
-        event.external_live = external_live;
-        event_bus->publish<Events::VisionSceneLoadEvent>(std::move(event));
-    }
-}
 
 // ########################
 //          Media

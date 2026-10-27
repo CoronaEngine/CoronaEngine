@@ -2,12 +2,12 @@
 REM === Vision Project Build — Standalone MSVC Environment ===
 REM Bypasses vcvars64.bat (fails in non-interactive shells).
 REM Usage: build_standalone.cmd [target] [build_dir]
-REM   Defaults: target=vision-eval, build_dir=cmake-build-codex-msvc3
+REM   Defaults: target=vision-base, build_dir=cmake-build-codex-msvc3
 
 setlocal
 
 set "TARGET=%~1"
-if "%TARGET%"=="" set "TARGET=vision-eval"
+if "%TARGET%"=="" set "TARGET=vision-base"
 
 set "BUILD_DIR=%~2"
 if "%BUILD_DIR%"=="" set "BUILD_DIR=D:\yzy\code\cpp\Vision\cmake-build-codex-msvc3"

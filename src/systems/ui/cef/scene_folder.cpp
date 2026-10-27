@@ -90,6 +90,7 @@ std::map<std::string, std::map<std::string, std::string>> read_ini(const fs::pat
         if (line.empty() || line[0] == ';' || line[0] == '#') continue;
         if (line.front() == '[' && line.back() == ']') {
             section = lower(trim(line.substr(1, line.size() - 2)));
+            result.try_emplace(section);
             continue;
         }
         const auto equals = line.find('=');
@@ -130,108 +131,9 @@ std::string percent_decode_uri(std::string_view value) {
     return decoded;
 }
 
-std::string decode_base64(std::string_view input) {
-    auto value_of = [](unsigned char ch) -> int {
-        if (ch >= 'A' && ch <= 'Z') return ch - 'A';
-        if (ch >= 'a' && ch <= 'z') return ch - 'a' + 26;
-        if (ch >= '0' && ch <= '9') return ch - '0' + 52;
-        if (ch == '+') return 62;
-        if (ch == '/') return 63;
-        return -1;
-    };
-    std::string output;
-    std::uint32_t value = 0;
-    int bits = -8;
-    for (const auto ch : input) {
-        if (std::isspace(static_cast<unsigned char>(ch)) || ch == '=') continue;
-        const auto decoded = value_of(static_cast<unsigned char>(ch));
-        if (decoded < 0) throw std::runtime_error("Invalid base64 Vision document");
-        value = (value << 6) | static_cast<std::uint32_t>(decoded);
-        bits += 6;
-        if (bits >= 0) {
-            output.push_back(static_cast<char>((value >> bits) & 0xff));
-            bits -= 8;
-        }
-    }
-    return output;
-}
 
-std::uint32_t adler32(std::string_view payload) {
-    constexpr std::uint32_t mod = 65521;
-    std::uint32_t a = 1;
-    std::uint32_t b = 0;
-    for (const auto ch : payload) {
-        a = (a + static_cast<unsigned char>(ch)) % mod;
-        b = (b + a) % mod;
-    }
-    return (b << 16) | a;
-}
 
-nlohmann::json decode_embedded_vision_document(std::string_view encoded) {
-    const auto payload = decode_base64(encoded);
-    if (payload.size() < 6) throw std::runtime_error("Embedded Vision document is truncated");
-    size_t offset = 2;
-    const auto checksum_offset = payload.size() - 4;
-    std::string json_text;
-    while (offset < checksum_offset) {
-        const auto header = static_cast<unsigned char>(payload[offset++]);
-        const bool final_block = (header & 0x01) != 0;
-        if (((header >> 1) & 0x03) != 0) {
-            throw std::runtime_error("Embedded Vision document uses unsupported compression");
-        }
-        if (offset + 4 > checksum_offset) throw std::runtime_error("Embedded Vision block is truncated");
-        const auto len = static_cast<std::uint16_t>(
-            static_cast<unsigned char>(payload[offset]) |
-            (static_cast<unsigned char>(payload[offset + 1]) << 8));
-        const auto nlen = static_cast<std::uint16_t>(
-            static_cast<unsigned char>(payload[offset + 2]) |
-            (static_cast<unsigned char>(payload[offset + 3]) << 8));
-        offset += 4;
-        if (static_cast<std::uint16_t>(~len) != nlen || offset + len > checksum_offset) {
-            throw std::runtime_error("Embedded Vision block length is invalid");
-        }
-        json_text.append(payload.data() + offset, len);
-        offset += len;
-        if (final_block) break;
-    }
-    const auto expected =
-        (static_cast<std::uint32_t>(static_cast<unsigned char>(payload[checksum_offset])) << 24) |
-        (static_cast<std::uint32_t>(static_cast<unsigned char>(payload[checksum_offset + 1])) << 16) |
-        (static_cast<std::uint32_t>(static_cast<unsigned char>(payload[checksum_offset + 2])) << 8) |
-        static_cast<std::uint32_t>(static_cast<unsigned char>(payload[checksum_offset + 3]));
-    if (adler32(json_text) != expected) throw std::runtime_error("Embedded Vision checksum mismatch");
-    auto document = nlohmann::json::parse(json_text);
-    if (!document.is_object()) throw std::runtime_error("Embedded Vision document must be an object");
-    return document;
-}
 
-bool vision_resource_key(std::string key) {
-    key = lower(std::move(key));
-    return key == "fn" || key == "path" || key == "file" || key == "filename" ||
-           key == "texture" || key == "image";
-}
-
-template <typename Callback>
-void visit_vision_resource_routes(const nlohmann::json& value,
-                                  const std::string& field,
-                                  Callback&& callback) {
-    if (value.is_object()) {
-        for (const auto& item : value.items()) {
-            // Render output destinations are not dependencies of the scene archive.
-            if (field == "vision_document.data" && item.key() == "output") continue;
-            const auto child_field = field.empty() ? item.key() : field + "." + item.key();
-            if (vision_resource_key(item.key()) && item.value().is_string()) {
-                callback(item.value().get<std::string>(), child_field);
-            } else {
-                visit_vision_resource_routes(item.value(), child_field, callback);
-            }
-        }
-    } else if (value.is_array()) {
-        for (size_t index = 0; index < value.size(); ++index) {
-            visit_vision_resource_routes(value[index], field + "[" + std::to_string(index) + "]", callback);
-        }
-    }
-}
 
 bool is_relative_inside(const fs::path& path) {
     if (path.empty() || path.is_absolute() || path.has_root_name()) return false;
@@ -1069,34 +971,10 @@ SceneValidationResult validate_portable_scene(const fs::path& scene_root,
     };
     validate_section_path("scripts", "path");
     validate_section_path("terrain", "path");
-    validate_section_path("vision", "source_path");
-    if (const auto section = ini.find("vision_document");
-        section != ini.end() && section->second.contains("asset_root")) {
-        const auto& root = section->second.at("asset_root");
-        if (!root.empty() && root != "Assets") {
-            result.diagnostics.push_back({"untrusted_asset_route",
-                                          "Vision asset_root must be Assets for a portable scene",
-                                          path_from_utf8(root), {}, "vision_document.asset_root"});
-        }
-        if (section->second.contains("data") && !section->second.at("data").empty()) {
-            try {
-                const auto document = decode_embedded_vision_document(section->second.at("data"));
-                visit_vision_resource_routes(
-                    document, "vision_document.data",
-                    [&](const std::string& route, const std::string& field) {
-                        if (lower(route).rfind("data:", 0) == 0) return;
-                        if (route.find("://") != std::string::npos) {
-                            result.diagnostics.push_back({"remote_dependency",
-                                                          "Remote Vision resources are unsupported",
-                                                          path_from_utf8(route), {}, field});
-                        } else {
-                            validate_route(route, field);
-                        }
-                    });
-            } catch (const std::exception& error) {
-                result.diagnostics.push_back({"invalid_vision_document", error.what(), layout->scene_file,
-                                              {}, "vision_document.data"});
-            }
+    for (const auto* section : {"vision", "vision_document", "vision_bindings", "vision_unsupported_shapes"}) {
+        if (ini.contains(section)) {
+            result.diagnostics.push_back({"unsupported_vision_archive",
+                "External Vision archives are no longer supported", layout->scene_file, {}, section});
         }
     }
     return result;
@@ -1285,19 +1163,10 @@ CleanupResult cleanup_portable_scene_assets(const fs::path& scene_root, bool dry
             if (is_valid_asset_route(value)) referenced_routes.insert(value);
         }
     }
-    // Embedded Vision paths are compressed inside scene.ini.  Until they are
-    // decoded here, conservatively retain every bundle rather than risk data loss.
-    if (ini.contains("vision_document") && ini.at("vision_document").contains("data") &&
-        !ini.at("vision_document").at("data").empty()) {
-        try {
-            const auto document = decode_embedded_vision_document(ini.at("vision_document").at("data"));
-            visit_vision_resource_routes(document, "vision_document.data",
-                                          [&](const std::string& route, const std::string&) {
-                                              if (is_valid_asset_route(route)) referenced_routes.insert(route);
-                                          });
-        } catch (const std::exception& error) {
-            result.diagnostics.push_back({"invalid_vision_document", error.what(), layout->scene_file,
-                                          {}, "vision_document.data"});
+    for (const auto* section : {"vision", "vision_document", "vision_bindings", "vision_unsupported_shapes"}) {
+        if (ini.contains(section)) {
+            result.diagnostics.push_back({"unsupported_vision_archive",
+                "External Vision archives are no longer supported", layout->scene_file, {}, section});
             return result;
         }
     }

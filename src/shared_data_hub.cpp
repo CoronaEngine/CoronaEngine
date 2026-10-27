@@ -121,78 +121,14 @@ std::string SharedDataHub::actor_guid(std::uintptr_t actor_handle) const {
     return it != actor_guids_.end() ? it->second : std::string{};
 }
 
-void SharedDataHub::set_external_vision_binding(std::uintptr_t actor_handle,
-                                                ExternalVisionBindingDevice binding,
-                                                bool refresh_source_path) {
-    if (actor_handle == 0) {
-        return;
-    }
-    binding.enabled = true;
-    if (!refresh_source_path) {
-        std::lock_guard<std::mutex> lock(actor_metadata_mutex_);
-        const auto it = external_vision_bindings_.find(actor_handle);
-        if (it != external_vision_bindings_.end() &&
-            it->second.source_path == binding.source_path &&
-            it->second.source_base_dir == binding.source_base_dir &&
-            (binding.source_path.empty() || !it->second.source_path_key.empty())) {
-            // Trust only the key already published by this hub, never a copied
-            // caller key that may no longer match its source fields.
-            binding.source_path_key = it->second.source_path_key;
-            it->second = std::move(binding);
-            return;
-        }
-    }
-    // Filesystem access must happen outside the shared metadata lock. Publish
-    // the complete value atomically, with the same last-writer semantics as set.
-    binding.source_path_key = Utils::normalize_scene_path_key(
-        binding.source_path, binding.source_base_dir);
-    std::lock_guard<std::mutex> lock(actor_metadata_mutex_);
-    external_vision_bindings_[actor_handle] = std::move(binding);
-}
 
-void SharedDataHub::refresh_external_vision_binding_paths() {
-    std::unordered_map<std::uintptr_t, ExternalVisionBindingDevice> snapshot;
-    {
-        std::lock_guard<std::mutex> lock(actor_metadata_mutex_);
-        snapshot = external_vision_bindings_;
-    }
-    for (const auto& [handle, binding] : snapshot) {
-        auto key = Utils::normalize_scene_path_key(binding.source_path, binding.source_base_dir);
-        std::lock_guard<std::mutex> lock(actor_metadata_mutex_);
-        const auto it = external_vision_bindings_.find(handle);
-        if (it != external_vision_bindings_.end() &&
-            it->second.source_path == binding.source_path &&
-            it->second.source_base_dir == binding.source_base_dir &&
-            it->second.source_path_key == binding.source_path_key) {
-            // Preserve unrelated edits made while resolving the path.
-            it->second.source_path_key = std::move(key);
-        }
-    }
-}
 
-void SharedDataHub::clear_external_vision_binding(std::uintptr_t actor_handle) {
-    std::lock_guard<std::mutex> lock(actor_metadata_mutex_);
-    external_vision_bindings_.erase(actor_handle);
-}
 
-std::optional<ExternalVisionBindingDevice> SharedDataHub::external_vision_binding(
-    std::uintptr_t actor_handle) const {
-    std::lock_guard<std::mutex> lock(actor_metadata_mutex_);
-    const auto it = external_vision_bindings_.find(actor_handle);
-    if (it == external_vision_bindings_.end() || !it->second.enabled) {
-        return std::nullopt;
-    }
-    return it->second;
-}
 
-bool SharedDataHub::has_external_vision_binding(std::uintptr_t actor_handle) const {
-    return external_vision_binding(actor_handle).has_value();
-}
 
 void SharedDataHub::clear_actor_metadata(std::uintptr_t actor_handle) {
     std::lock_guard<std::mutex> lock(actor_metadata_mutex_);
     actor_guids_.erase(actor_handle);
-    external_vision_bindings_.erase(actor_handle);
 }
 
 SharedDataHub::CameraStorage& SharedDataHub::camera_storage() { return camera_storage_; }

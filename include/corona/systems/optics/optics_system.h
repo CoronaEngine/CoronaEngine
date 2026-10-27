@@ -92,8 +92,7 @@ class OpticsSystem : public Kernel::SystemBase {
     void shutdown() override;
 
    private:
-    friend struct VisionEmbeddedModeSwitchTest;
-    friend struct VisionRuntimeGeometrySyncTest;
+    friend struct VisionEngineSceneTest;
     friend struct VisionDeviceLifetimeTest;
     bool initialize_vision_backend_if_enabled();
     bool initialize_hardware_resources();
@@ -154,13 +153,7 @@ class OpticsSystem : public Kernel::SystemBase {
                           const std::vector<RenderView>& views);
     void process_pending_screenshots(std::uintptr_t camera_handle, Horizon::HardwareImage& render_target);
 
-    struct VisionSceneLoadRequest {
-        std::string scene_path;
-        std::string scene_json;
-        std::string base_dir;
-        std::string scene_key;
-        bool external_live{false};
-    };
+
 
     // Vision 相关私有方法
     bool init_vision_lazy();  ///< 首次切换到 Vision 时的 lazy 初始化
@@ -171,12 +164,9 @@ class OpticsSystem : public Kernel::SystemBase {
                                    const SceneDevice& scene,
                                    uint64_t frame_index);
 
-    using VisionPipelineSource = Vision::VisionPipelineSource;
     using VisionPipelineKey = Vision::VisionPipelineKey;
     using VisionPipelineKeyHash = Vision::VisionPipelineKeyHash;
     using VisionSceneResource = Vision::VisionSceneResource;
-    using VisionSceneResourceKey = Vision::VisionSceneResourceKey;
-    using VisionSceneResourceKeyHash = Vision::VisionSceneResourceKeyHash;
     struct VisionPipelineRuntime;
 
     VisionPipelineRuntime& get_or_create_runtime(const VisionPipelineKey& key);
@@ -197,41 +187,14 @@ class OpticsSystem : public Kernel::SystemBase {
                                    const std::string& pt_settings = "{}",
                                    const std::string& restir_settings = "{}",
                                    VisionCameraFeedback* deferred_feedback = nullptr);
-    VisionPipelineKey make_vision_pipeline_key(std::string scene_path,
-                                               Corona::CameraVisionRenderMode mode,
-                                               VisionPipelineSource source) const;
-    VisionSceneResourceKey make_vision_scene_resource_key(
-        std::string scene_path,
-        VisionPipelineSource source) const;
-    std::shared_ptr<VisionSceneResource> get_or_create_vision_scene_resource(
-        const VisionSceneResourceKey& key,
-        std::string display_source_path);
+    VisionPipelineKey make_vision_pipeline_key(Corona::CameraVisionRenderMode mode) const;
+    std::shared_ptr<VisionSceneResource> get_or_create_vision_scene_resource();
     void release_unused_vision_scene_resources();
-    VisionPipelineRuntime* ensure_external_vision_runtime(
-        const VisionPipelineKey& key,
-        bool force_reload_scene_resource = false);
-    VisionPipelineRuntime* load_vision_runtime_source(
-        const VisionPipelineKey& key, const Vision::VisionSceneSourceDesc& source,
-        bool force_reload_scene_resource);
     void evict_idle_vision_runtimes(uint64_t frame_index);
     void activate_single_vision_runtime_key(const VisionPipelineKey& key);
     void clear_vision_runtimes();
     void shutdown_vision_backend();
 
-    /// 渲染线程起始处消费：若存在 pending 加载请求则切换 Vision 场景。
-    /// 仅在 Vision 已初始化后执行；空路径表示卸载外部场景、回到引擎构建场景。
-    void apply_pending_vision_scene_load();
-
-    /// 从磁盘 .json 导入一个 Vision 场景并带到可渲染状态（替换当前
-    /// runtime pipeline）。失败返回 false 且不改动现有 pipeline。
-    bool load_external_vision_scene(const std::string& scene_path,
-                                    Corona::CameraVisionRenderMode mode,
-                                    std::optional<VisionPipelineSource> source_override =
-                                        std::nullopt,
-                                    bool force_reload_scene_resource = false);
-    bool load_external_vision_scene_from_json(const VisionSceneLoadRequest& request,
-                                              Corona::CameraVisionRenderMode mode,
-                                              bool force_reload_scene_resource = false);
     void apply_vision_render_mode(Corona::CameraVisionRenderMode mode);
     bool load_engine_built_vision_scene(Corona::CameraVisionRenderMode mode);
 
@@ -251,23 +214,9 @@ class OpticsSystem : public Kernel::SystemBase {
     void sync_vision_dynamic_scene(VisionPipelineRuntime& runtime);
     bool sync_engine_vision_lighting(VisionPipelineRuntime& runtime, const EnvironmentDevice& environment);
 
-    /// external_live transform-only path:
-    /// proxy actor transform -> mapped Vision ShapeInstance::set_o2w()
-    /// -> Pipeline::update_geometry() -> invalidate view contexts.
-    void sync_external_live_vision_transforms(VisionPipelineRuntime& runtime);
-    bool sync_shared_vision_scene(VisionPipelineRuntime& runtime);
-
-    /// Mixed-rendering path: incrementally add/remove/transform engine-native
-    /// actors (those WITHOUT an external_vision_binding) into an ExternalLive
-    /// Vision scene, so engine-imported models appear alongside the imported
-    /// external scene's shapes. Tracked in VisionSceneResource::
-    /// engine_mixed_shapes_by_actor; never full-rebuilds the external scene.
-    void sync_engine_native_mixed_shapes(VisionPipelineRuntime& runtime);
-
     Corona::CameraVisionRenderMode current_vision_render_mode_{
         Corona::CameraVisionRenderMode::PathTracing};
     std::size_t last_vision_mode_conflict_signature_{0};
-    std::size_t last_vision_runtime_group_signature_{0};
     std::optional<VisionPipelineKey> active_vision_runtime_key_;
     // Declared before the dependents so they are also destroyed first during
     // ordinary C++ destruction. Normal engine shutdown releases this explicitly.
@@ -276,10 +225,7 @@ class OpticsSystem : public Kernel::SystemBase {
                        std::unique_ptr<VisionPipelineRuntime>,
                        VisionPipelineKeyHash>
         vision_runtimes_;
-    std::unordered_map<VisionSceneResourceKey,
-                       std::shared_ptr<VisionSceneResource>,
-                       VisionSceneResourceKeyHash>
-        vision_scene_resources_;
+    std::shared_ptr<VisionSceneResource> vision_scene_resource_;
 
     struct ActorPickRequest {
         std::uintptr_t pick_handle{0};
@@ -429,10 +375,6 @@ class OpticsSystem : public Kernel::SystemBase {
     static constexpr uint32_t kVisionRebuildMaxRetries = 30;  ///< 重试上限（约 0.5s @60fps）
 
     // ---- Vision 外部场景加载（跨线程：事件写请求，渲染线程消费）----
-    // VisionSceneLoadEvent 只携带轻量请求写入此处；实际 import 在 run_vision_frame
-    // 起始的渲染线程执行，避免在 Python/CEF 线程触碰 Vulkan pipeline。
-    std::mutex vision_scene_load_mutex_;
-    std::optional<VisionSceneLoadRequest> pending_vision_scene_load_;
 
     struct PendingScreenshot {
         std::uintptr_t camera_handle = 0;
@@ -452,7 +394,6 @@ class OpticsSystem : public Kernel::SystemBase {
     void fail_unrenderable_pending_screenshots();
     Kernel::EventId screenshot_request_sub_id_ = 0;
     Kernel::EventId backend_switch_sub_id_ = 0;
-    Kernel::EventId vision_scene_load_sub_id_ = 0;
     Kernel::EventId residency_sub_id_ = 0;
     Kernel::EventId native_frame_consumed_sub_id_ = 0;
 

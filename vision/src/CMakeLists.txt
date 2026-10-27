@@ -36,7 +36,6 @@ if (VISION_BUILD_APPS)
     add_subdirectory(apps)
 endif ()
 add_subdirectory(render_graph)
-add_subdirectory(importers)
 add_subdirectory(pipelines)
 add_subdirectory(render_core)
 add_subdirectory(sdk)
@@ -50,7 +49,6 @@ add_library(vision-main INTERFACE)
 target_link_libraries(vision-main INTERFACE
         vision-base
         vision-window
-        vision-importer
         vision-pipeline
         vision-render_graph
         vision-math)

@@ -25,7 +25,6 @@ add_dependencies(test-shader-graph-lifecycle
     vision-light-point
     vision-shadernode-number)
 vision_add_test(test-param_schema SOURCES test_param_schema.cpp)
-vision_add_test(test-project-desc-schema SOURCES test_project_desc_schema.cpp)
 
 function(vision_add_simple_test name)
     cmake_parse_arguments(TEST "" "" "SOURCES" ${ARGN})

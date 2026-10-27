@@ -272,17 +272,6 @@ class Actor {
     [[nodiscard]] std::string get_actor_guid() const;
     // Relative sources require an absolute scene/project source_base_dir.
     // Clear and rebind (or reload the scene) to refresh changed directory links.
-    void set_external_vision_binding(const std::string& source_path,
-                                     const std::string& shape_guid,
-                                     int shape_index,
-                                     const std::string& json_path,
-                                     const std::string& shape_type,
-                                     const std::string& shape_identity_key,
-                                     const std::string& model_path,
-                                     bool visible = true,
-                                     const std::string& source_base_dir = {});
-    void clear_external_vision_binding();
-    [[nodiscard]] bool has_external_vision_binding() const;
 
     [[nodiscard]] std::uintptr_t get_handle() const;
 
@@ -558,19 +547,6 @@ void set_vision_stable_planes(bool enabled, std::uintptr_t camera_handle = 0);
 /// Return the latest uncommitted preference, or committed state when none is pending.
 /// Persistence uses this while a render update is in flight.
 [[nodiscard]] bool get_requested_vision_stable_planes(std::uintptr_t camera_handle = 0);
-
-/// 请求加载一个外部 Vision 场景文件（.json）。仅当 Vision 后端可用且处于激活
-/// 状态时生效；实际导入在光学系统渲染线程执行。
-/// @param path 外部 Vision 场景 .json 的绝对路径；传空字符串表示卸载外部场景、
-///             恢复由引擎数据构建的场景。
-void load_vision_scene(const std::string& path);
-
-/// 请求从内存中的 Vision JSON 加载外部场景。base_dir 用于解析 JSON 内的相对
-/// 资源路径；scene_key 用于缓存、日志和运行时身份标识。
-void load_vision_scene_from_json(const std::string& json_text,
-                                 const std::string& base_dir,
-                                 const std::string& scene_key,
-                                 bool external_live = false);
 
 // ============================================================================
 // Media (video/audio) import

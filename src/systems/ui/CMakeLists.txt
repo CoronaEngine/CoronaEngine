@@ -25,8 +25,6 @@ set(UI_SYSTEM_SOURCES
     cef/cef_editor_native_api_registry.cpp
     cef/cef_editor_native_api_handlers.cpp
     cef/scene_folder.cpp
-    cef/vision_actor_material_bridge.cpp
-    cef/vision_actor_transform_bridge.cpp
     cef/cef_query_bridge.cpp
     cef/cef_realtime_bridge.cpp
     cef/request_response_broker.cpp
@@ -56,8 +54,6 @@ set(UI_SYSTEM_SOURCES
     cef/popup_overlay.h
     editor_api/cef_editor_api.h
     cef/scene_folder.h
-    cef/vision_actor_material_bridge.h
-    cef/vision_actor_transform_bridge.h
     cef/cef_renderer_bridge.h
     sdl/sdl_utils.h
 

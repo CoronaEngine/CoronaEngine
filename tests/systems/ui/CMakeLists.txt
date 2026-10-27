@@ -1,6 +1,3 @@
-add_executable(corona_vision_camera_direction_tests
-    test_vision_camera_direction.cpp
-)
 
 add_executable(corona_ik_chain_config_tests test_ik_chain_config.cpp)
 target_include_directories(corona_ik_chain_config_tests PRIVATE ${PROJECT_SOURCE_DIR}/src/systems/ui)
@@ -13,13 +10,6 @@ target_include_directories(corona_model_node_config_tests
     PRIVATE ${PROJECT_SOURCE_DIR}/include ${PROJECT_SOURCE_DIR}/src/systems/ui)
 target_link_libraries(corona_model_node_config_tests PRIVATE nlohmann_json::nlohmann_json)
 add_test(NAME ModelNodeConfigTests COMMAND corona_model_node_config_tests)
-target_include_directories(corona_vision_camera_direction_tests
-    PRIVATE ${PROJECT_SOURCE_DIR}/src/systems/ui
-)
-target_link_libraries(corona_vision_camera_direction_tests
-    PRIVATE nlohmann_json::nlohmann_json
-)
-add_test(NAME VisionCameraDirectionTests COMMAND corona_vision_camera_direction_tests)
 
 add_executable(corona_actor_selection_routing_tests
     test_actor_selection_routing.cpp
@@ -134,31 +124,7 @@ target_include_directories(corona_camera_viewport_manager_tests
 add_test(NAME CameraViewportManagerTests
          COMMAND corona_camera_viewport_manager_tests)
 
-add_executable(corona_vision_actor_material_bridge_tests
-    test_vision_actor_material_bridge.cpp
-    ${PROJECT_SOURCE_DIR}/src/systems/ui/cef/vision_actor_material_bridge.cpp
-)
-target_include_directories(corona_vision_actor_material_bridge_tests
-    PRIVATE ${PROJECT_SOURCE_DIR}/src/systems/ui
-)
-target_link_libraries(corona_vision_actor_material_bridge_tests
-    PRIVATE nlohmann_json::nlohmann_json
-)
-add_test(NAME VisionActorMaterialBridgeTests
-         COMMAND corona_vision_actor_material_bridge_tests)
 
-add_executable(corona_vision_actor_transform_bridge_tests
-    test_vision_actor_transform_bridge.cpp
-    ${PROJECT_SOURCE_DIR}/src/systems/ui/cef/vision_actor_transform_bridge.cpp
-  )
-target_include_directories(corona_vision_actor_transform_bridge_tests
-    PRIVATE ${PROJECT_SOURCE_DIR}/src/systems/ui
-)
-target_link_libraries(corona_vision_actor_transform_bridge_tests
-    PRIVATE nlohmann_json::nlohmann_json
-)
-add_test(NAME VisionActorTransformBridgeTests
-         COMMAND corona_vision_actor_transform_bridge_tests)
 
 add_executable(corona_request_response_broker_tests
     test_request_response_broker.cpp

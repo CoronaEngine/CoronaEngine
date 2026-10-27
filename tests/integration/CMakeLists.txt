@@ -75,9 +75,6 @@ if(TARGET ocarina-backend-vulkan-compute)
     endforeach()
 endif()
 
-add_test(NAME VisionRelaxEvaluationTools
-    COMMAND ${Python_EXECUTABLE} ${CMAKE_SOURCE_DIR}/vision/src/tests/test_relax_eval.py)
-set_tests_properties(VisionRelaxEvaluationTools PROPERTIES TIMEOUT 30)
 add_executable(corona_vision_relax_scene_tests test_vision_relax_producers.cpp)
 target_include_directories(corona_vision_relax_scene_tests PRIVATE ${CMAKE_SOURCE_DIR}/vision/src)
 target_link_libraries(corona_vision_relax_scene_tests PRIVATE corona::engine vision-all_libs vision-relax-filter)
@@ -108,42 +105,6 @@ add_test(NAME VisionShaderBindingTests COMMAND corona_vision_shader_binding_test
 set_tests_properties(VisionShaderBindingTests PROPERTIES
     WORKING_DIRECTORY "$<TARGET_FILE_DIR:ocarina-backend-vulkan-compute>"
     RUN_SERIAL TRUE TIMEOUT 120)
-
-add_executable(corona_vision_runtime_geometry_sync_tests test_vision_runtime_geometry_sync.cpp)
-target_include_directories(corona_vision_runtime_geometry_sync_tests PRIVATE
-    ${PROJECT_SOURCE_DIR}/include
-    ${PROJECT_SOURCE_DIR}/src/systems/optics
-    ${CMAKE_SOURCE_DIR}/vision/src)
-target_link_libraries(corona_vision_runtime_geometry_sync_tests PRIVATE corona::engine vision-all_libs)
-add_test(NAME VisionRuntimeGeometrySyncTests COMMAND corona_vision_runtime_geometry_sync_tests)
-set_tests_properties(VisionRuntimeGeometrySyncTests PROPERTIES
-    WORKING_DIRECTORY "$<TARGET_FILE_DIR:vision-material-principled_bsdf>")
-foreach(case fresh material topology lights stale eviction)
-    add_test(NAME VisionRuntimeGeometry_${case} COMMAND corona_vision_runtime_geometry_sync_tests ${case})
-    set_tests_properties(VisionRuntimeGeometry_${case} PROPERTIES
-        WORKING_DIRECTORY "$<TARGET_FILE_DIR:vision-material-principled_bsdf>")
-endforeach()
-add_executable(corona_vision_embedded_mode_switch_tests
-    test_vision_embedded_mode_switch.cpp
-    test_vision_svgf_reprojection.cpp
-    test_vision_svgf_total_albedo.cpp)
-target_include_directories(corona_vision_embedded_mode_switch_tests PRIVATE
-    ${PROJECT_SOURCE_DIR}/include
-    ${PROJECT_SOURCE_DIR}/src/systems/optics
-    ${CMAKE_SOURCE_DIR}/vision/src)
-target_link_libraries(corona_vision_embedded_mode_switch_tests PRIVATE
-    corona::engine vision-all_libs)
-add_test(NAME VisionEmbeddedModeSwitchTests COMMAND corona_vision_embedded_mode_switch_tests)
-add_test(NAME VisionSceneAssetReuseTests COMMAND corona_vision_embedded_mode_switch_tests --scene-asset-reuse)
-add_test(NAME VisionSharedDisplayTests COMMAND corona_vision_embedded_mode_switch_tests --shared-display)
-set_tests_properties(VisionSharedDisplayTests PROPERTIES
-    WORKING_DIRECTORY "$<TARGET_FILE_DIR:vision-material-principled_bsdf>"
-    RUN_SERIAL TRUE TIMEOUT 120)
-set_tests_properties(VisionSceneAssetReuseTests PROPERTIES
-    WORKING_DIRECTORY "$<TARGET_FILE_DIR:vision-material-principled_bsdf>"
-    RUN_SERIAL TRUE TIMEOUT 300)
-set_tests_properties(VisionEmbeddedModeSwitchTests PROPERTIES
-    WORKING_DIRECTORY "$<TARGET_FILE_DIR:vision-material-principled_bsdf>")
 
 add_executable(corona_vision_restir_estimator_tests
     test_vision_restir_estimators.cpp

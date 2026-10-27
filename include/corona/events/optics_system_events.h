@@ -59,28 +59,4 @@ struct RenderBackendSwitchEvent {
     std::uintptr_t camera_handle = 0;
 };
 
-/**
- * @brief Request to load an external Vision scene (published by script API,
- *        consumed by OpticsSystem).
- *
- * scene_path: absolute path to a Vision *.json scene.
- * scene_json/base_dir/scene_key: in-memory Vision scene JSON, the directory
- * used to resolve relative resources, and a stable cache/log key.
- * external_live: use the ExternalLive Vision runtime so native proxy actors can
- * update bound Vision shapes without rebuilding the whole scene.
- * Empty path and empty json means "unload the external scene and rebuild the
- * engine-driven scene from SharedDataHub".
- *
- * The request is applied when the Vision backend is active.
- * The actual import runs on the OpticsSystem render
- * thread; this event only carries the path across the thread boundary.
- */
-struct VisionSceneLoadEvent {
-    std::string scene_path;
-    std::string scene_json;
-    std::string base_dir;
-    std::string scene_key;
-    bool external_live = false;
-};
-
 }  // namespace Corona::Events

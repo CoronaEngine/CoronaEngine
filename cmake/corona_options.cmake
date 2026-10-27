@@ -51,7 +51,7 @@ set(CORONA_LOCK_TIMEOUT_MS "5000"
 # Vulkan and Slang requirements are validated by the Ocarina target.
 # ------------------------------------------------------------------------------
 # Standalone apps, additional tests and offline filtering remain optional.
-option(VISION_BUILD_APPS    "Build Vision sample apps (vision-gui, viewers, ...)" ON)
+option(VISION_BUILD_APPS    "Build Vision material and sampler viewers" ON)
 option(VISION_BUILD_TESTS   "Build Vision test executables"                       OFF)
 option(VISION_BUILD_OIDN    "Fetch and build Intel Open Image Denoise for Vision" OFF)
 option(VISION_UNITY_BUILD   "Enable unity build for Vision plugin sources"        OFF)
