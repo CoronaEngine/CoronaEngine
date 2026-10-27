@@ -257,7 +257,7 @@ void main()
                          float(pixel.y) / float(pushConsts.gbufferSize.y));
     float depth = textureLod(textures[nonuniformEXT(pushConsts.depthImageIndex)], screenUV, 0.0).r;
 
-    if (depth >= (1.0 - 1e-3))
+    if (depth <= 0.0)
     {
         // Background pixel — write zero to resolved images
         imageStore(imagesRGBA16[pushConsts.resolvedPositionImageIndex],  pixel, vec4(0.0));

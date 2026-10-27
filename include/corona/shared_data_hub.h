@@ -368,8 +368,9 @@ struct CameraDevice {
     CameraOutputMode output_mode{CameraOutputMode::FinalColor};
     CameraRenderBackend render_backend{CameraRenderBackend::Native};
     CameraVisionRenderMode vision_render_mode{CameraVisionRenderMode::PathTracing};
-    bool vision_denoise{false};
-    CameraVisionDenoiser vision_denoiser{CameraVisionDenoiser::Scene};
+    // PT produces one sample per pixel per frame; REBLUR owns temporal history.
+    bool vision_denoise{true};
+    CameraVisionDenoiser vision_denoiser{CameraVisionDenoiser::ReBLUR};
     std::string vision_reblur_settings{"{}"};
     std::string vision_pt_settings{"{}"};
     std::string vision_restir_settings{"{}"};
@@ -481,6 +482,11 @@ struct CameraViewportUpdateCommand {
     std::uint64_t sequence{};
 };
 
+struct DefaultSurfaceCameraUpdateCommand {
+    void* surface{};
+    std::uint32_t width{}, height{};
+};
+
 enum class CameraStateUpdateField : std::uint32_t {
     None = 0,
     Surface = 1u << 0,
@@ -526,8 +532,8 @@ struct CameraStateUpdateCommand {
     CameraOutputMode output_mode{CameraOutputMode::FinalColor};
     CameraRenderBackend render_backend{CameraRenderBackend::Native};
     CameraVisionRenderMode vision_render_mode{CameraVisionRenderMode::PathTracing};
-    bool vision_denoise{false};
-    CameraVisionDenoiser vision_denoiser{CameraVisionDenoiser::Scene};
+    bool vision_denoise{true};
+    CameraVisionDenoiser vision_denoiser{CameraVisionDenoiser::ReBLUR};
     std::string vision_reblur_settings{"{}"};
     std::string vision_pt_settings{"{}"};
     std::string vision_restir_settings{"{}"};
@@ -776,6 +782,8 @@ class SharedDataHub {
     std::vector<CameraMoveCommand> drain_camera_moves();
     void enqueue_camera_viewport_update(CameraViewportUpdateCommand command);
     std::vector<CameraViewportUpdateCommand> drain_camera_viewport_updates();
+    void enqueue_default_surface_camera_update(DefaultSurfaceCameraUpdateCommand command);
+    std::optional<DefaultSurfaceCameraUpdateCommand> take_default_surface_camera_update();
     void enqueue_camera_state_update(CameraStateUpdateCommand command);
     std::vector<CameraStateUpdateCommand> drain_camera_state_updates();
     [[nodiscard]] std::optional<bool> requested_camera_vision_denoise(
@@ -858,6 +866,7 @@ class SharedDataHub {
     std::unordered_map<std::uintptr_t, CameraViewportUpdateCommand>
         pending_camera_viewport_updates_;
     std::uint64_t camera_viewport_update_sequence_{0};
+    std::optional<DefaultSurfaceCameraUpdateCommand> pending_default_surface_camera_update_;
     mutable std::mutex camera_state_update_mutex_;
     std::unordered_map<std::uintptr_t, CameraStateUpdateCommand>
         pending_camera_state_updates_;

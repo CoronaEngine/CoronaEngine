@@ -312,6 +312,14 @@ Interaction Geometry::compute_surface_interaction(const TriangleHitVar &hit, boo
         Float3 dp02 = p0 - p2;
         Float3 dp12 = p1 - p2;
         Float3 ng_un = cross(dp02, dp12);
+        Float3 normal = hit->triangle_lerp(v0->normal(), v1->normal(), v2->normal());
+        // Authored emitter normals define the emitting hemisphere. Mirrored
+        // instances (and imported meshes with opposing winding) can reverse the
+        // cross product. Keep hit evaluation and area-light sampling consistent;
+        // the latter uses this function with is_complete=false as well.
+        $if(it.has_emission() && !is_zero(normal)) {
+            ng_un = select(dot(ng_un, o2w.apply_normal(normal)) < 0.f, -ng_un, ng_un);
+        };
         it.prim_area = 0.5f * length(ng_un);
         Float2 duv02 = v0->tex_coord() - v2->tex_coord();
         Float2 duv12 = v1->tex_coord() - v2->tex_coord();
@@ -336,7 +344,6 @@ Interaction Geometry::compute_surface_interaction(const TriangleHitVar &hit, boo
         if (is_complete) {
             comment("compute shading uvn");
             Float3 dn_du, dn_dv;
-            Float3 normal = hit->triangle_lerp(v0->normal(), v1->normal(), v2->normal());
             it.shading.set_frame(frame);
             it.ng_local = normal;
             $if(!is_zero(normal)) {

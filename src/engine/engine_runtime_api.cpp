@@ -2326,9 +2326,10 @@ bool Corona::API::Camera::save_screenshot_sync(const std::string& path) const {
     auto promise = std::make_shared<std::promise<bool>>();
     auto future = promise->get_future();
 
-    // An offscreen Vision capture may need its first shader compilation and
-    // acceleration-structure build. Use the same deadline in caller and queue.
-    const auto timeout = std::chrono::seconds(get_render_backend() == "vision" ? 120 : 10);
+    // Cold captures may need shader compilation or a full-scene shadow BVH.
+    // Use the same deadline in caller and queue; native preparation can exceed
+    // the old 10-second limit even while GPU execution remains responsive.
+    const auto timeout = std::chrono::seconds(get_render_backend() == "vision" ? 120 : 30);
     const auto deadline = std::chrono::steady_clock::now() + timeout;
 
     if (auto* event_bus = Kernel::KernelContext::instance().event_bus()) {

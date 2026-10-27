@@ -2,7 +2,7 @@
 // Created by Zero on 2023/4/18.
 //
 
-#include "base/shader_graph/shader_node.h"
+#include "base/shader_graph/shader_graph.h"
 #include "base/mgr/scene.h"
 
 namespace vision {
@@ -31,7 +31,7 @@ namespace vision {
 //        }
 //    }
 //}
-class BinaryOpNode : public ShaderNode {
+class BinaryOpNode : public SlotsShaderNode {
 private:
     VS_MAKE_SLOT(lhs)
     VS_MAKE_SLOT(rhs)
@@ -40,15 +40,16 @@ private:
 public:
     BinaryOpNode() = default;
     explicit BinaryOpNode(const ShaderNodeDesc &desc)
-        : ShaderNode(desc) {
-        lhs_.set(ShaderNodeSlot::create_slot(*desc.slot("lhs")));
-        rhs_.set(ShaderNodeSlot::create_slot(*desc.slot("rhs")));
+        : SlotsShaderNode(desc), op_(desc["op"].as_string("Multiply")) {}
+
+    void initialize_slots(const ShaderNodeDesc &desc) noexcept override {
+        VS_INIT_SLOT(lhs, ocarina::make_float3(1.f), Number);
+        VS_INIT_SLOT(rhs, ocarina::make_float3(1.f), Number);
     }
 
-    OC_ENCODABLE_FUNC(ShaderNode, lhs_, rhs_)
     VS_MAKE_PLUGIN_NAME_FUNC
     VS_MAKE_GUI_STATUS_FUNC(ShaderNode, lhs_, rhs_)
-    VS_HOTFIX_MAKE_RESTORE(ShaderNode, lhs_, rhs_)
+    VS_HOTFIX_MAKE_RESTORE(SlotsShaderNode, lhs_, rhs_, op_)
 
     bool render_UI(Widgets *widgets) noexcept override {
         bool ret = widgets->use_tree(name_, [&] {

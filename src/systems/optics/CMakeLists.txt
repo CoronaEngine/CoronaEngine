@@ -5,6 +5,7 @@
 corona_add_system(optics
     SOURCES
         optics_system.cpp
+        native_lighting.cpp
         retain_submission.cpp
         actor_pick_readback_worker.cpp
         ${PROJECT_SOURCE_DIR}/include/corona/systems/optics/actor_pick_readback_worker.h
