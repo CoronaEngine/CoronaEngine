@@ -4341,6 +4341,7 @@ void OpticsSystem::optics_pipeline(float frame_count, uint64_t frame_index) {
                 };
 
                 ShadowSceneBounds shadow_scene_bounds;
+                bool shadow_geometry_deforming = false;
                 std::vector<ShadowCasterSnapshot> shadow_casters;
                 std::vector<Horizon::HardwareBuffer> shadow_indirect_buffers;  // CRITICAL: Must outlive commit()
                 std::mutex shadow_indirect_buffers_mutex;  // Thread-safe for parallel shadow recording
@@ -4375,6 +4376,7 @@ void OpticsSystem::optics_pipeline(float frame_count, uint64_t frame_index) {
                             if(optics_acc->principled && optics_acc->principled->transmission>=.999f)continue;
                             auto geom = geom_storage.try_acquire_read(optics_acc->geometry_handle);
                             if (!geom || geom->transform_handle == 0) continue;
+                            shadow_geometry_deforming |= geom->is_skinned;
                             auto transform =
                                 transform_storage.try_acquire_read(geom->transform_handle);
                             auto mech = SharedDataHub::instance()
@@ -4901,6 +4903,63 @@ void OpticsSystem::optics_pipeline(float frame_count, uint64_t frame_index) {
                 // ================================================================
                 // 8. GPU sync & dispatch
                 // ================================================================
+                const bool lpv_disabled = env_flag_enabled("CORONA_OPTICS_DISABLE_LPV");
+                OpticsDetail::NativeLightFieldInputs light_field_inputs;
+                light_field_inputs.add(lpv_disabled ? 1u : 0u);
+                light_field_inputs.add(native_shadows_enabled ? diag.shadow_cascade_mask : 0u);
+                if (!direct_lighting->authored_environment || native_shadows_enabled) {
+                    for (float value : {sun_dir.x, sun_dir.y, sun_dir.z, sky_intensity})
+                        light_field_inputs.add(value);
+                }
+                if (native_shadows_enabled) {
+                    // RSM flux depends on the solar radiance and voxel albedo;
+                    // injection also partitions texels by camera-space depth.
+                    for (float value : {sun_color.x * sun_intensity, sun_color.y * sun_intensity,
+                                        sun_color.z * sun_intensity, camera->position.x,
+                                        camera->position.y, camera->position.z,
+                                        camera->forward.x, camera->forward.y, camera->forward.z})
+                        light_field_inputs.add(value);
+                    for (unsigned cascade = 0; cascade < kShadowCascadeCount; ++cascade) {
+                        for (unsigned c = 0; c < 4; ++c)
+                            for (unsigned r = 0; r < 4; ++r)
+                                light_field_inputs.add(shadow_cascade_views[cascade].light_view_proj[c][r]);
+                        light_field_inputs.add(shadow_splits[cascade]);
+                        light_field_inputs.add(shadow_cascade_views[cascade].orthographic_width);
+                        light_field_inputs.add(shadow_cascade_views[cascade].orthographic_height);
+                    }
+                    // Resident shadow casters and asynchronous shadow LODs can
+                    // change without replacing the immutable voxel source.
+                    light_field_inputs.add(static_cast<uint32_t>(shadow_casters.size()));
+                    for (const auto& caster : shadow_casters) {
+                        light_field_inputs.add(caster.cascade_visibility_mask);
+                        for (unsigned c = 0; c < 4; ++c)
+                            for (unsigned r = 0; r < 4; ++r)
+                                light_field_inputs.add(caster.model_matrix[c][r]);
+                        for (const auto& slots : caster.cascade_slots) {
+                            light_field_inputs.add(static_cast<uint32_t>(slots.size()));
+                            for (const auto& slot : slots) {
+                                light_field_inputs.add(slot.valid ? 1u : 0u);
+                                light_field_inputs.add(slot.mesh_index);
+                                light_field_inputs.add(slot.index_count);
+                                light_field_inputs.add(slot.bounds_valid ? 1u : 0u);
+                                for (unsigned k = 0; k < 3; ++k) {
+                                    light_field_inputs.add(slot.bounds_min[k]);
+                                    light_field_inputs.add(slot.bounds_max[k]);
+                                }
+                                for (unsigned c = 0; c < 4; ++c)
+                                    for (unsigned r = 0; r < 4; ++r)
+                                        light_field_inputs.add(slot.instance_transform[c][r]);
+                                light_field_inputs.meshes.push_back(slot.geo.vertex);
+                                light_field_inputs.meshes.push_back(slot.geo.index);
+                            }
+                        }
+                    }
+                }
+                const bool reuse_light_field = !geometry_loading && !shadow_geometry_deforming &&
+                    !env_flag_enabled("CORONA_OPTICS_FORCE_LIGHT_FIELD_UPDATE") &&
+                    hardware_->lightFieldCache.matches(direct_lighting, light_field_inputs);
+                const bool update_shadow_maps = native_shadows_enabled && !reuse_light_field;
+                const bool update_lpv = !is_debug_mode && !diag.skip_deferred_compute && !reuse_light_field;
                 // dispatch ������ workgroup ����(ԭ���� vkCmdDispatch)����Щ�ӳ�ͨ��
                 // ȫ�� local_size 8x8, �� dispatch_groups �����ػ��� ceil(w/8)xceil(h/8);
                 // ����ȡ�Թ��߷������ʵ local size(���� Horizon SPIR-V patch ����)��
@@ -4959,6 +5018,8 @@ void OpticsSystem::optics_pipeline(float frame_count, uint64_t frame_index) {
                     std::optional<Horizon::HardwareStream> stream{std::in_place,hardware_->executor};
                     bool native_submission_cancelled = false;
 
+                    if (update_shadow_maps || update_lpv) hardware_->lightFieldCache.invalidate();
+
                     *stream << visibility.extent(hardware_->gbufferSize.x, hardware_->gbufferSize.y);
                     if(has_refraction) {
                         *stream << hardware_->refractionFrontPipeline->dispatch_extent(hardware_->gbufferSize.x,hardware_->gbufferSize.y);
@@ -4966,8 +5027,7 @@ void OpticsSystem::optics_pipeline(float frame_count, uint64_t frame_index) {
                         hardware_->refractionExitPipeline->extent(hardware_->gbufferSize.x,hardware_->gbufferSize.y);
                         *stream << RenderDetail::IndirectRaster{&*hardware_->refractionExitPipeline,{refraction.front_snapshot}};
                     }
-                        if (!diag.skip_shadows &&
-                            hardware_->shadowInfoBufferObjects.shadowEnabled != 0u) {
+                        if (update_shadow_maps) {
                             const auto native_shadow_start = PerfClock::now();
                             std::array<std::exception_ptr, kShadowCascadeCount>
                                 cascade_errors{};
@@ -5030,11 +5090,7 @@ void OpticsSystem::optics_pipeline(float frame_count, uint64_t frame_index) {
                         if (!is_debug_mode && sky_sh_needs_update) {
                             *stream << hardware_->skySHProjectPipeline->dispatch_extent(1, 1);
                         }
-                        const bool cache_lpv=direct_lighting->authored_environment && !native_shadows_enabled;
-                        if(!is_debug_mode && (!cache_lpv || hardware_->lpvCachedSource!=direct_lighting)) {
-                        // Authored local/HDR lighting is camera-independent. Retaining
-                        // its immutable source also prevents pointer reuse in this key.
-                        hardware_->lpvCachedSource.reset();
+                        if(update_lpv) {
                         auto& lpv=*hardware_->lpvPipeline;
                         bind_storage_buffer(lpv,lpv.pushConsts.info,direct_lighting->data);
                         bind_storage_buffer(lpv,lpv.pushConsts.injection,hardware_->lpvInjection);
@@ -5046,7 +5102,7 @@ void OpticsSystem::optics_pipeline(float frame_count, uint64_t frame_index) {
                         bind_storage_buffer(lpv,lpv.pushConsts.uniformInfo,sceneUboBuffer);
                         bind_storage_buffer(lpv,lpv.pushConsts.skySH,hardware_->skyIrradianceSHBuffer);
                         lpv.pushConsts.authored=direct_lighting->authored_environment?1u:0u;
-                        lpv.pushConsts.disabled=env_flag_enabled("CORONA_OPTICS_DISABLE_LPV")?1u:0u;
+                        lpv.pushConsts.disabled=lpv_disabled?1u:0u;
                         lpv.pushConsts.sunDirection=upload_value(sun_dir);
                         lpv.pushConsts.stride=8u;
                         constexpr auto lpv_n=OpticsDetail::LpvData::resolution;
@@ -5086,7 +5142,6 @@ void OpticsSystem::optics_pipeline(float frame_count, uint64_t frame_index) {
                         lpv.pushConsts.mode=4u;
                         *stream << lpv.dispatch_extent(lpv_n,lpv_n*lpv_n);
                         }
-                        if(cache_lpv)hardware_->lpvCachedSource=direct_lighting;
                         }
                         lighting.dispatch_extent(hardware_->gbufferSize.x, hardware_->gbufferSize.y);
                         RenderDetail::IndirectDispatch material_dispatch{&lighting};
@@ -5169,15 +5224,19 @@ void OpticsSystem::optics_pipeline(float frame_count, uint64_t frame_index) {
                            << RetainSubmission{sceneBatch.resource_keep_alive};
                     latest_submit_receipt = *stream << Horizon::commit();
                     hardware_->last_receipt = latest_submit_receipt;
+                    if (update_lpv) {
+                        hardware_->lightFieldCache.submitted(direct_lighting, std::move(light_field_inputs));
+                    }
                     native_commit_ms = elapsed_ms(native_commit_start, PerfClock::now());
                     native_submit_ms = elapsed_ms(native_submit_start, PerfClock::now());
                     if (env_flag_enabled("CORONA_OPTICS_MEASURE_RENDER_TIME")) {
                         // Opt-in regression measurement: command recording through GPU
                         // completion, excluding scene loading, frame pacing and PNG IO.
                         hardware_->executor.wait_completed(latest_submit_receipt);
-                        CFW_LOG_INFO("NativeRenderTiming camera={} extent={}x{} render_ms={:.3f}",
+                        CFW_LOG_INFO("NativeRenderTiming camera={} extent={}x{} render_ms={:.3f} lpv_updated={} rsm_updated={}",
                             cam_handle, camera->width, camera->height,
-                            elapsed_ms(native_submit_start, PerfClock::now())-measurement_pause_ms);
+                            elapsed_ms(native_submit_start, PerfClock::now())-measurement_pause_ms,
+                            update_lpv ? 1 : 0, update_shadow_maps ? 1 : 0);
                     }
                 }
                 if (hardware_) {

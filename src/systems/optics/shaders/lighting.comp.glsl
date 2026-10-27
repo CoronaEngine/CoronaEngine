@@ -721,6 +721,8 @@ bool decodeSurfaceFrom(ivec2 pixel, uint visibilityIndex, bool geometryOnly, out
         surface.objectID=inst.objectID;
         if ((matl.flags&16u)!=0u && dot(surface.normal,readVec3(pushConsts.uniformBufferIndex,36u)-interpPos)<0)
             surface.normal=-surface.normal;
+        surface.geometricNormal=surface.normal;
+        surface.material=matl;
         return finiteVec3(interpPos) && finiteVec3(interpNormal);
     }
 
@@ -910,12 +912,16 @@ float lpvEdge(uint info,uint level,ivec3 p,int axis,int sign,int n) {
     return clamp(readFloat(info,256u+cell*208u+196u+uint(axis)*4u),0,1);
 }
 float lpvConnection(uint info,uint level,ivec3 a,ivec3 b,int n) {
+    if(all(equal(a,b)))return 1;
     const ivec3 orders[6]=ivec3[6](ivec3(0,1,2),ivec3(0,2,1),ivec3(1,0,2),ivec3(1,2,0),ivec3(2,0,1),ivec3(2,1,0));
     float best=0;
     for(int order=0;order<6;++order){ivec3 p=a;float visibility=1;
         for(int k=0;k<3;++k){int axis=orders[order][k],sign=b[axis]>p[axis]?1:-1;
             if(p[axis]!=b[axis]){visibility*=1-lpvEdge(info,level,p,axis,sign,n);p[axis]+=sign;}}
         best=max(best,visibility);
+        // Every link transmission is in [0,1]. Once an unobstructed path is
+        // found no remaining permutation can improve it (the result is exact).
+        if(best>=1)return 1;
     }
     return best;
 }
@@ -964,16 +970,21 @@ vec3 sampleLpv(vec3 position,vec3 normal,vec3 direction,bool diffuse) {
 vec3 lpvIrradiance(vec3 position,vec3 normal) {
     return sampleLpv(position,normal,normal,true);
 }
-vec3 shadeDirect(Surface s,float ao,vec3 viewDirection,bool includeEmission) {
+vec3 shadeDirectWithIrradiance(Surface s,float ao,vec3 viewDirection,bool includeEmission,out vec3 irradiance) {
+    irradiance=vec3(0);
     vec3 emission=includeEmission && ((s.material.flags&128u)!=0u || dot(s.emissionNormal,viewDirection)>0)?s.material.emissive:vec3(0);
     if(s.material.lightingEnabled<=.5)return s.baseColor+emission;
     if(s.material.transmission>0 && dot(viewDirection,s.outwardNormal)<0)
         s.material.ior=1.0/s.material.ior;
     vec3 color=emission+DisneyBRDF(viewDirection,s.normal,s.tangent,s.bitangent,pushConsts.sun_dir,
         pushConsts.lightColor,s.baseColor,s.material,computeSunShadow(s.position,s.geometricNormal));
-    vec3 irradiance=lpvIrradiance(s.position,s.geometricNormal);
+    irradiance=lpvIrradiance(s.position,s.geometricNormal);
     color+=s.baseColor*(1.0-s.material.metallic)*(1.0-s.material.transmission)*irradiance/PI*ao*s.material.occlusionStrength;
     return color;
+}
+vec3 shadeDirect(Surface s,float ao,vec3 viewDirection,bool includeEmission) {
+    vec3 irradiance;
+    return shadeDirectWithIrradiance(s,ao,viewDirection,includeEmission,irradiance);
 }
 
 // Screen-space reflection using perspective-correct ray segments and depth
@@ -1134,8 +1145,14 @@ vec3 filteredScreenGi(ivec2 pixel,Surface receiver) {
         ivec2 p=pixel+ivec2(round(vec2(x,y)*stride));
         if(any(lessThan(p,ivec2(0)))||any(greaterThanEqual(p,ivec2(pushConsts.gbufferSize))))continue;
         p=(p/2)*2;
-        Surface neighbor;if(!decodeSurface(p,neighbor))continue;
-        if(neighbor.material.transmission>0)continue;
+        Surface neighbor;
+        if(!decodeSurfaceFrom(p,pushConsts.visibilityImageIndex,true,neighbor))continue;
+        // Bilateral weights use position and the geometric normal only. The
+        // same conservative flag used by the opaque raster marks any possible
+        // transmission, including expression textures; evaluate those fully.
+        if((neighbor.material.flags&256u)!=0u) {
+            if(!decodeSurface(p,neighbor) || neighbor.material.transmission>0)continue;
+        }
         float normalWeight=pow(max(dot(receiver.geometricNormal,neighbor.geometricNormal),0),16);
         float plane=abs(dot(neighbor.position-receiver.position,receiver.geometricNormal));
         float weight=exp(-float(x*x+y*y)/4.-plane/max(tolerance,1e-6))*normalWeight;
@@ -1326,10 +1343,10 @@ void main() {
             surface.normal=-surface.normal;
             surface.bitangent=-surface.bitangent;
         }
-        color = shadeDirect(surface,ao,normalize(eye-surface.position),true);
+        vec3 coarse;
+        color = shadeDirectWithIrradiance(surface,ao,normalize(eye-surface.position),true,coarse);
         if (surface.material.lightingEnabled > 0.5) {
             if((pushConsts.featureFlags&64u)!=0u && surface.material.transmission<=0) {
-                vec3 coarse=lpvIrradiance(surface.position,surface.geometricNormal);
                 vec3 correction=max(coarse+filteredScreenGi(pixel,surface),vec3(0))-coarse;
                 color+=surface.baseColor*(1-surface.material.metallic)*correction/PI*ao*surface.material.occlusionStrength;
             }

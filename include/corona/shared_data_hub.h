@@ -368,8 +368,9 @@ struct CameraDevice {
     CameraOutputMode output_mode{CameraOutputMode::FinalColor};
     CameraRenderBackend render_backend{CameraRenderBackend::Native};
     CameraVisionRenderMode vision_render_mode{CameraVisionRenderMode::PathTracing};
-    bool vision_denoise{false};
-    CameraVisionDenoiser vision_denoiser{CameraVisionDenoiser::Scene};
+    // PT produces one sample per pixel per frame; REBLUR owns temporal history.
+    bool vision_denoise{true};
+    CameraVisionDenoiser vision_denoiser{CameraVisionDenoiser::ReBLUR};
     std::string vision_reblur_settings{"{}"};
     std::string vision_pt_settings{"{}"};
     std::string vision_restir_settings{"{}"};
@@ -526,8 +527,8 @@ struct CameraStateUpdateCommand {
     CameraOutputMode output_mode{CameraOutputMode::FinalColor};
     CameraRenderBackend render_backend{CameraRenderBackend::Native};
     CameraVisionRenderMode vision_render_mode{CameraVisionRenderMode::PathTracing};
-    bool vision_denoise{false};
-    CameraVisionDenoiser vision_denoiser{CameraVisionDenoiser::Scene};
+    bool vision_denoise{true};
+    CameraVisionDenoiser vision_denoiser{CameraVisionDenoiser::ReBLUR};
     std::string vision_reblur_settings{"{}"};
     std::string vision_pt_settings{"{}"};
     std::string vision_restir_settings{"{}"};

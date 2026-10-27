@@ -1683,13 +1683,13 @@ NativeEditorCamera make_native_camera(NativeEditorScene& scene,
     item.engine_camera->set_render_backend(section_value("render_backend", "native"));
     const auto vision_mode = section_value("vision_render_mode", "path_tracing");
     item.engine_camera->set_vision_render_mode(vision_mode);
-    item.engine_camera->set_vision_denoiser(section_value("vision_denoiser", "scene"));
+    item.engine_camera->set_vision_denoiser(section_value("vision_denoiser", legacy_svgf_mode(vision_mode) ? "svgf" : "reblur"));
     item.engine_camera->set_vision_reblur_settings(section_value("vision_reblur_settings", "{}"));
     item.engine_camera->set_vision_pt_settings(section_value("vision_pt_settings", "{}"));
     item.engine_camera->set_vision_restir_settings(section_value("vision_restir_settings", "{}"));
     item.engine_camera->set_vision_relax_settings(section_value("vision_relax_settings", "{}"));
     item.engine_camera->set_vision_denoise(
-        parse_bool(section_value("vision_denoise", ""), legacy_svgf_mode(vision_mode)));
+        parse_bool(section_value("vision_denoise", ""), true));
     item.engine_camera->set_vision_accumulation(
         parse_bool(section_value("vision_accumulation", ""), legacy_progressive_mode(vision_mode)));
     item.engine_camera->set_vision_stable_planes(
@@ -2138,13 +2138,13 @@ NativeEditorCamera materialize_camera_snapshot(NativeEditorScene& scene,
     item.engine_camera->set_render_backend(camera_data.value("render_backend", std::string{"native"}));
     const auto vision_mode = camera_data.value("vision_render_mode", std::string{"path_tracing"});
     item.engine_camera->set_vision_render_mode(vision_mode);
-    item.engine_camera->set_vision_denoiser(camera_data.value("vision_denoiser", std::string{"scene"}));
+    item.engine_camera->set_vision_denoiser(camera_data.value("vision_denoiser", std::string{legacy_svgf_mode(vision_mode) ? "svgf" : "reblur"}));
     item.engine_camera->set_vision_reblur_settings(camera_data.value("vision_reblur_settings", nlohmann::json::object()).dump());
     item.engine_camera->set_vision_pt_settings(camera_data.value("vision_pt_settings", nlohmann::json::object()).dump());
     item.engine_camera->set_vision_restir_settings(camera_data.value("vision_restir_settings", nlohmann::json::object()).dump());
     item.engine_camera->set_vision_relax_settings(camera_data.value("vision_relax_settings", nlohmann::json::object()).dump());
     item.engine_camera->set_vision_denoise(
-        json_bool_value(camera_data, "vision_denoise", legacy_svgf_mode(vision_mode)));
+        json_bool_value(camera_data, "vision_denoise", true));
     item.engine_camera->set_vision_accumulation(
         json_bool_value(camera_data, "vision_accumulation", legacy_progressive_mode(vision_mode)));
     item.engine_camera->set_vision_stable_planes(
@@ -2494,8 +2494,8 @@ nlohmann::json camera_to_json(const NativeEditorCamera& camera) {
     item["vision_render_mode"] = camera.engine_camera ? camera.engine_camera->get_vision_render_mode() : "path_tracing";
     item["vision_spp"] = camera.vision_spp;
     item["vision_max_depth"] = camera.vision_max_depth;
-    item["vision_denoise"] = camera.engine_camera ? camera.engine_camera->get_vision_denoise() : false;
-    item["vision_denoiser"] = camera.engine_camera ? camera.engine_camera->get_vision_denoiser() : "scene";
+    item["vision_denoise"] = camera.engine_camera ? camera.engine_camera->get_vision_denoise() : true;
+    item["vision_denoiser"] = camera.engine_camera ? camera.engine_camera->get_vision_denoiser() : "reblur";
     item["vision_reblur_settings"] = camera.engine_camera
         ? nlohmann::json::parse(camera.engine_camera->get_requested_vision_reblur_settings(), nullptr, false)
         : nlohmann::json::object();
@@ -3087,13 +3087,13 @@ NativeEditorCamera* ensure_native_editor_camera(NativeEditorScene& scene,
                                                : json_string_value(camera_data, {"render_backend"}));
     const auto vision_mode = json_string_value(camera_data, {"vision_render_mode"});
     item.engine_camera->set_vision_render_mode(vision_mode.empty() ? "path_tracing" : vision_mode);
-    item.engine_camera->set_vision_denoiser(camera_data.value("vision_denoiser", std::string{"scene"}));
+    item.engine_camera->set_vision_denoiser(camera_data.value("vision_denoiser", std::string{legacy_svgf_mode(vision_mode) ? "svgf" : "reblur"}));
     item.engine_camera->set_vision_reblur_settings(camera_data.value("vision_reblur_settings", nlohmann::json::object()).dump());
     item.engine_camera->set_vision_pt_settings(camera_data.value("vision_pt_settings", nlohmann::json::object()).dump());
     item.engine_camera->set_vision_restir_settings(camera_data.value("vision_restir_settings", nlohmann::json::object()).dump());
     item.engine_camera->set_vision_relax_settings(camera_data.value("vision_relax_settings", nlohmann::json::object()).dump());
     item.engine_camera->set_vision_denoise(
-        json_bool_value(camera_data, "vision_denoise", legacy_svgf_mode(vision_mode)));
+        json_bool_value(camera_data, "vision_denoise", true));
     item.engine_camera->set_vision_accumulation(
         json_bool_value(camera_data, "vision_accumulation", legacy_progressive_mode(vision_mode)));
     item.engine_camera->set_vision_stable_planes(

@@ -9,6 +9,7 @@
 #include "native_frame_throttle.h"
 #include "native_appearance.h"
 #include "native_lighting.h"
+#include "native_light_cache.h"
 
 #include <array>
 #include <cstdint>
@@ -123,7 +124,7 @@ struct Hardware {
     Corona::Horizon::HardwareBuffer lpvInjection, lpvAccumulated, lpvParent;
     std::array<Corona::Horizon::HardwareBuffer, 2> lpvWave;
     Corona::Memory::GpuMemToken lpvMemory;
-    std::shared_ptr<const void> lpvCachedSource;
+    Corona::Systems::OpticsDetail::NativeLightFieldCache lightFieldCache;
 
     // === Final composited output ===
     Corona::Horizon::HardwareImage finalOutputImage;
