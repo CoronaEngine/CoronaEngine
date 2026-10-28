@@ -475,12 +475,6 @@ class Scene {
 };
 
 // ============================================================================
-// Scene I/O utilities
-// ============================================================================
-Scene* read_scene(const std::filesystem::path& scene_path);
-void write_scene(Scene* scene, const std::filesystem::path& scene_path);
-
-// ============================================================================
 // Render backend control (Native vs Vision)
 // ============================================================================
 /// 兼容接口：引擎始终包含 Vision，返回 true；不代表 Vulkan 设备已经初始化成功。

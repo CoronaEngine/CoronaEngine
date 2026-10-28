@@ -527,15 +527,6 @@ void BindAll(nanobind::module_& m) {
              "Return True if physics simulation is enabled for this scene");
 
     // ============================================================================
-    // Scene I/O utilities
-    // ============================================================================
-    // m.def("read_scene", &read_scene, nb::arg("scene_path"),
-    //       "Load a scene from file",
-    //       nb::rv_policy::take_ownership);
-    // m.def("write_scene", &write_scene, nb::arg("scene"), nb::arg("scene_path"),
-    //       "Save a scene to file");
-
-    // ============================================================================
     // Logger: 日志前端转发接口
     // ============================================================================
     // NOTE: LogEntry 和 drain_logs() 已在新版 Horizon 中移除

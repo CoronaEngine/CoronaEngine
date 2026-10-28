@@ -509,7 +509,7 @@ nlohmann::json manifest_json(const std::vector<ImportResult>& bundles) {
 
 std::string safe_category(std::string_view category) {
     static const std::set<std::string> allowed = {
-        "Models", "Actors", "Images", "Audio", "Scripts", "Terrain", "Vision"};
+        "Models", "Actors", "Images", "Audio", "Scripts", "Terrain"};
     const std::string value(category);
     if (!allowed.contains(value)) throw std::invalid_argument("Unsupported asset category: " + value);
     return value;
@@ -718,7 +718,7 @@ ImportResult SceneAssetStore::import_model(const fs::path& source) {
     // scene.cpp register_extension），否则文件选择器能选、引擎能加载的格式会在
     // 这里被判为"不支持"。.usdz/.3ds/.stl 此前缺失。
     static const std::set<std::string> supported{
-        ".obj", ".gltf", ".glb", ".fbx", ".dae", ".usd", ".usda", ".usdc", ".usdz", ".3ds", ".stl"};
+        ".obj", ".ply", ".gltf", ".glb", ".fbx", ".dae", ".usd", ".usda", ".usdc", ".usdz", ".3ds", ".stl"};
     if (!supported.contains(lower(source.extension().string()))) {
         result.diagnostics.push_back({"unsupported_model", "Unsupported model extension", source});
         return result;
@@ -908,21 +908,71 @@ std::vector<Diagnostic> SceneAssetStore::validate_manifest(bool verify_hashes) c
     return diagnostics;
 }
 
+namespace {
+struct AssetReference {
+    std::string route;
+    std::string field;
+    std::string actor;
+};
+
+// Validation and garbage collection must agree on every persisted asset edge.
+std::vector<AssetReference> scene_asset_references(const fs::path& scene_file,
+                                                 std::vector<Diagnostic>& diagnostics) {
+    std::vector<AssetReference> references;
+    const auto ini = read_ini(scene_file);
+    for (const auto* section : {"vision", "vision_document", "vision_bindings", "vision_unsupported_shapes"}) {
+        if (ini.contains(section))
+            diagnostics.push_back({"unsupported_vision_archive",
+                "External Vision archives are no longer supported", scene_file, {}, section});
+    }
+    for (const auto& [section, fields] : ini) {
+        for (const auto& [key, value] : fields) {
+            const auto actor = section == "actors" ? key.substr(0, key.find('.')) : std::string{};
+            const auto field = section + "." + key;
+            if (section == "actors" && key.ends_with(".animation.sources")) {
+                try {
+                    const auto sources = nlohmann::json::parse(value);
+                    if (!sources.is_array()) throw std::runtime_error("Expected an array of animation asset paths");
+                    std::set<std::string> unique;
+                    for (const auto& source : sources) {
+                        if (!source.is_string() || source.get_ref<const std::string&>().empty() ||
+                            source.get_ref<const std::string&>().find('\0') != std::string::npos)
+                            throw std::runtime_error("Expected non-empty animation asset paths");
+                        const auto route = source.get<std::string>();
+                        if (!unique.insert(route).second) throw std::runtime_error("Duplicate animation asset path");
+                        references.push_back({route, field, actor});
+                    }
+                } catch (const std::exception& error) {
+                    diagnostics.push_back({"invalid_animation_sources", error.what(), scene_file, actor, field});
+                }
+            } else if ((section == "actors" && (key.ends_with(".route") || key.ends_with(".material.texture"))) ||
+                       ((section == "scripts" || section == "terrain") && key == "path") ||
+                       is_valid_asset_route(value)) {
+                if (!trim(value).empty()) references.push_back({value, field, actor});
+            }
+        }
+    }
+    return references;
+}
+} // namespace
+
 SceneValidationResult validate_portable_scene(const fs::path& scene_root,
                                                bool verify_hashes) {
     SceneValidationResult result;
+    const auto root = fs::is_directory(scene_root) ? scene_root : scene_root.parent_path();
+    std::scoped_lock lock(scene_file_mutex(root));
+    // Recover before format detection: an interrupted document may not parse.
+    if (fs::is_directory(scene_root) || scene_root.filename() == "scene.ini") {
+        SceneDocumentStore document(root);
+        result.diagnostics = document.recovery_diagnostics();
+        if (!result.diagnostics.empty()) return result;
+    }
     const auto layout = detect_scene_folder(scene_root);
     if (!layout) {
         result.diagnostics.push_back(
             {"invalid_scene_format", "Expected a portable scene folder version 1", scene_root});
         return result;
     }
-
-    SceneDocumentStore document(layout->root);
-    result.diagnostics.insert(result.diagnostics.end(),
-                              document.recovery_diagnostics().begin(),
-                              document.recovery_diagnostics().end());
-    if (!result.diagnostics.empty()) return result;
 
     SceneAssetStore assets(layout->root);
     result.diagnostics = assets.validate_manifest(verify_hashes);
@@ -941,7 +991,6 @@ SceneValidationResult validate_portable_scene(const fs::path& scene_root,
     } catch (...) {
         // validate_manifest already reports the parse failure with its path.
     }
-    const auto ini = read_ini(layout->scene_file);
     const auto validate_route = [&](std::string_view route,
                                     std::string field,
                                     std::string actor = {}) {
@@ -952,31 +1001,8 @@ SceneValidationResult validate_portable_scene(const fs::path& scene_root,
                                           path_from_utf8(route), std::move(actor), std::move(field)});
         }
     };
-    if (const auto actors = ini.find("actors"); actors != ini.end()) {
-        for (const auto& [key, value] : actors->second) {
-            if (key.ends_with(".route")) {
-                const auto actor = key.substr(0, key.size() - std::string(".route").size());
-                validate_route(value, "actors." + key, actor);
-            } else if (key.ends_with(".material.texture")) {
-                const auto actor = key.substr(0, key.size() - std::string(".material.texture").size());
-                validate_route(value, "actors." + key, actor);
-            }
-        }
-    }
-    const auto validate_section_path = [&](const char* section_name, const char* key) {
-        if (const auto section = ini.find(section_name);
-            section != ini.end() && section->second.contains(key)) {
-            validate_route(section->second.at(key), std::string(section_name) + "." + key);
-        }
-    };
-    validate_section_path("scripts", "path");
-    validate_section_path("terrain", "path");
-    for (const auto* section : {"vision", "vision_document", "vision_bindings", "vision_unsupported_shapes"}) {
-        if (ini.contains(section)) {
-            result.diagnostics.push_back({"unsupported_vision_archive",
-                "External Vision archives are no longer supported", layout->scene_file, {}, section});
-        }
-    }
+    for (const auto& reference : scene_asset_references(layout->scene_file, result.diagnostics))
+        validate_route(reference.route, reference.field, reference.actor);
     return result;
 }
 
@@ -1136,17 +1162,16 @@ bool SceneDocumentStore::replace_sections(
 
 CleanupResult cleanup_portable_scene_assets(const fs::path& scene_root, bool dry_run) {
     CleanupResult result;
-    std::scoped_lock lock(scene_file_mutex(scene_root));
+    const auto root = fs::is_directory(scene_root) ? scene_root : scene_root.parent_path();
+    std::scoped_lock lock(scene_file_mutex(root));
+    result.diagnostics = validate_portable_scene(scene_root).diagnostics;
+    if (!result.diagnostics.empty()) return result;
     const auto layout = detect_scene_folder(scene_root);
     if (!layout) {
         result.diagnostics.push_back(
             {"invalid_scene_format", "Expected a portable scene folder version 1", scene_root});
         return result;
     }
-    SceneAssetStore store(layout->root);
-    result.diagnostics = store.validate_manifest();
-    if (!result.diagnostics.empty()) return result;
-
     const auto manifest_path = layout->root / "assets.manifest.json";
     nlohmann::json manifest;
     try {
@@ -1157,19 +1182,9 @@ CleanupResult cleanup_portable_scene_assets(const fs::path& scene_root, bool dry
     }
 
     std::set<std::string> referenced_routes;
-    const auto ini = read_ini(layout->scene_file);
-    for (const auto& [section_name, section] : ini) {
-        for (const auto& [key, value] : section) {
-            if (is_valid_asset_route(value)) referenced_routes.insert(value);
-        }
-    }
-    for (const auto* section : {"vision", "vision_document", "vision_bindings", "vision_unsupported_shapes"}) {
-        if (ini.contains(section)) {
-            result.diagnostics.push_back({"unsupported_vision_archive",
-                "External Vision archives are no longer supported", layout->scene_file, {}, section});
-            return result;
-        }
-    }
+    for (const auto& reference : scene_asset_references(layout->scene_file, result.diagnostics))
+        referenced_routes.insert(reference.route);
+    if (!result.diagnostics.empty()) return result;
 
     const auto& bundles = manifest["bundles"];
     std::vector<bool> keep(bundles.size(), false);

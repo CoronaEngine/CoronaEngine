@@ -1168,6 +1168,8 @@ void persist_native_scene_common(const NativeEditorScene& scene) {
                            actor.load_status != ActorLoadStatus::Loaded);
             validate_route(actor.persisted_optics.texture, "actors.material.texture", actor.name,
                            true);
+            for (const auto& source : actor.persisted_animation_sources)
+                validate_route(source, "actors.animation.sources", actor.name);
         }
         validate_route(scene.script_path, "scripts.path");
         validate_route(scene.terrain_path, "terrain.path");
@@ -1596,6 +1598,14 @@ void validate_archive_snapshot(const nlohmann::json& snapshot) {
                                  "actor.transform.rotation");
         validate_snapshot_float3(transform.value("scale", nlohmann::json()),
                                  "actor.transform.scale");
+        if (actor.contains("camera_lock")) {
+            const auto& lock = actor.at("camera_lock");
+            if (!lock.is_object() || (lock.contains("enabled") && !lock["enabled"].is_boolean()))
+                throw std::runtime_error("ArchiveSnapshot actor camera_lock is invalid");
+            for (const auto* field : {"position_offset", "rotation_offset"}) {
+                if (lock.contains(field)) validate_snapshot_float3(lock[field], field);
+            }
+        }
         if (actor.contains("mechanics") && actor["mechanics"].is_object()) {
             const auto collision = actor["mechanics"].value("collision_type", std::string{"box"});
             if (collision != "box" && collision != "mesh" && collision != "none") {
@@ -1665,6 +1675,17 @@ void validate_archive_snapshot(const nlohmann::json& snapshot) {
         if (scene["environment"].contains("sun_direction")) {
             validate_snapshot_float3(scene["environment"]["sun_direction"],
                                      "environment.sun_direction");
+        }
+        if (scene["environment"].contains("physics")) {
+            const auto& physics = scene["environment"]["physics"];
+            if (!physics.is_object()) throw std::runtime_error("ArchiveSnapshot physics must be an object");
+            if (physics.contains("gravity")) validate_snapshot_float3(physics["gravity"], "physics.gravity");
+            for (const auto* field : {"floor_y", "floor_restitution", "fixed_dt"})
+                validate_snapshot_finite_number(physics, field, field);
+            if ((physics.contains("fixed_dt") && physics["fixed_dt"].get<float>() <= 0.0f) ||
+                (physics.contains("floor_restitution") &&
+                 (physics["floor_restitution"].get<float>() < 0.0f || physics["floor_restitution"].get<float>() > 1.0f)))
+                throw std::runtime_error("ArchiveSnapshot physics range is invalid");
         }
     }
 }
@@ -1952,6 +1973,11 @@ NativeEditorScene& materialize_scene_snapshot_into_state(
         scene.engine_scene = std::make_unique<Corona::API::Scene>();
         scene.environment = std::make_unique<Corona::API::Environment>();
         apply_native_scene_environment(scene);
+        const auto physics = environment.value("physics", nlohmann::json::object());
+        if (physics.contains("gravity")) scene.environment->set_gravity(physics["gravity"].get<std::array<float, 3>>());
+        if (physics.contains("floor_y")) scene.environment->set_floor_y(physics["floor_y"].get<float>());
+        if (physics.contains("floor_restitution")) scene.environment->set_floor_restitution(physics["floor_restitution"].get<float>());
+        if (physics.contains("fixed_dt")) scene.environment->set_fixed_dt(physics["fixed_dt"].get<float>());
         scene.engine_scene->set_environment(scene.environment.get());
         scene.engine_scene->set_simulation_enabled(false);
 
@@ -2022,6 +2048,24 @@ struct PreparedArchiveLoad {
 PreparedArchiveLoad prepare_archive_load(const std::string& path,
                                          const std::string& load_policy) {
     PreparedArchiveLoad prepared;
+    const auto source = path_from_utf8(path);
+    // External formats remain read-only and never require a Corona manifest.
+    if (std::filesystem::is_directory(source) || source.filename() == "scene.ini") {
+        const auto validation = SceneFolders::validate_portable_scene(source, true);
+        bool fatal = false;
+        for (const auto& diagnostic : validation.diagnostics) {
+            const bool recoverable = diagnostic.code == "missing_asset";
+            fatal |= !recoverable;
+            prepared.diagnostics.push_back({
+                {"severity", "error"}, {"recoverable", recoverable}, {"stage", "archive_validation"},
+                {"code", diagnostic.code}, {"message", diagnostic.message},
+                {"path", path_to_utf8(diagnostic.path)}, {"actor_name", diagnostic.actor}, {"field", diagnostic.field}});
+        }
+        if (fatal) {
+            prepared.service_ok = true;
+            return prepared;
+        }
+    }
     auto parser_result = invoke_project_archive_parser(path, load_policy);
     if (!parser_result.success) {
         prepared.error = parser_result.error;
@@ -2030,7 +2074,8 @@ PreparedArchiveLoad prepare_archive_load(const std::string& path,
     prepared.service_ok = true;
     const auto& data = parser_result.data;
     prepared.status = data.value("status", std::string{"invalid_archive"});
-    prepared.diagnostics = data.value("diagnostics", nlohmann::json::array());
+    for (const auto& diagnostic : data.value("diagnostics", nlohmann::json::array()))
+        prepared.diagnostics.push_back(diagnostic);
     if (!data.value("ok", false) || prepared.status == "invalid_archive") {
         return prepared;
     }
