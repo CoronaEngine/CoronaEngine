@@ -1,7 +1,7 @@
 // A real GPU regression for separating direct and indirect transport in ReSTIR.
 // A lone diffuse triangle in a constant environment has no indirect paths:
 // every BSDF continuation leaves the triangle and immediately hits the sky.
-#include "base/import/importer.h"
+#include "../support/vision_test_scene.h"
 #include "base/integral/integrator.h"
 #include "base/mgr/global.h"
 #include "base/mgr/pipeline.h"
@@ -441,14 +441,10 @@ int main() {
         // At z=-1 the full 45-degree camera frustum fits within this triangle.
         write_file(fixture / "receiver.obj",
                    "v -4 -4 -1\nv 4 -4 -1\nv 0 4 -1\nvn 0 0 1\nf 1//1 2//1 3//1\n");
-        write_file(fixture / "direct.json", scene_description(true).dump(2));
-        write_file(fixture / "indirect.json", scene_description(false).dump(2));
-        write_file(fixture / "indirect-reuse.json", scene_description(false, true).dump(2));
         write_file(fixture / "receiver-tilted.obj",
                    "v -4 -4 -1\nv 4 -4 -1\nv 0 4 -1\nvn 0.7071067812 0 0.7071067812\nf 1//1 2//1 3//1\n");
         auto support_scene = scene_description(false);
         support_scene["scene"]["shapes"][0]["param"]["fn"] = "receiver-tilted.obj";
-        write_file(fixture / "support.json", support_scene.dump(2));
 
         // Match the embedded engine bootstrap. Standalone hotfix registration
         // can leave ../bin ahead of the chosen runtime directory in this list.
@@ -460,7 +456,7 @@ int main() {
         device.init_rtx();
         vision::Global::instance().set_device(&device);
         vision::Global::instance().set_scene_path(fixture);
-        const auto direct_pipeline = vision::Importer::import_scene(fixture / "direct.json");
+        const auto direct_pipeline = Corona::Tests::make_vision_test_pipeline(scene_description(true), fixture);
         expect(bool(direct_pipeline), "could not import direct-channel fixture");
         const auto direct = render_channel(*direct_pipeline);
         check_stable_lobes(*direct_pipeline);
@@ -473,14 +469,14 @@ int main() {
         expect(direct.mean() > 0.05, "DI must illuminate the receiver under the white environment");
         check_primary_sampling_modes(*direct_pipeline);
 
-        const auto indirect_pipeline = vision::Importer::import_scene(fixture / "indirect.json");
+        const auto indirect_pipeline = Corona::Tests::make_vision_test_pipeline(scene_description(false), fixture);
         expect(bool(indirect_pipeline), "could not import indirect-channel fixture");
         const auto indirect = render_channel(*indirect_pipeline);
         std::cout << "indirect_mean=" << indirect.mean() << " indirect_max=" << indirect.max_abs
                   << " measured_hit_samples=" << indirect.samples << '\n';
         expect(indirect.max_abs <= 1e-6f,
                "GI must exclude an initial BSDF miss to the environment: this scene has zero indirect transport");
-        const auto reused_pipeline = vision::Importer::import_scene(fixture / "indirect-reuse.json");
+        const auto reused_pipeline = Corona::Tests::make_vision_test_pipeline(scene_description(false, true), fixture);
         expect(bool(reused_pipeline), "could not import the GI null-history fixture");
         const auto reused = render_channel(*reused_pipeline);
         std::cout << "reused_indirect_mean=" << reused.mean() << " reused_indirect_max=" << reused.max_abs << '\n';
@@ -497,7 +493,7 @@ int main() {
         };
         check(check_restir_reprojection, *reused_pipeline);
         check(check_restir_gi_depth_one_continuation, *direct_pipeline);
-        const auto support_pipeline = vision::Importer::import_scene(fixture / "support.json");
+        const auto support_pipeline = Corona::Tests::make_vision_test_pipeline(support_scene, fixture);
         expect(bool(support_pipeline), "could not import the tilted receiver support fixture");
         check(check_restir_gi_receiver_support, *support_pipeline);
         // Capture real ReSTIR surface guides, including material/texture evaluation.
@@ -536,8 +532,7 @@ int main() {
             auto material = vision::DataWrap::parse(material_json);
             material["name"] = "receiver";
             description["scene"]["materials"][0] = material;
-            write_file(fixture / "material.json", description.dump(2));
-            material_pipeline = vision::Importer::import_scene(fixture / "material.json");
+            material_pipeline = Corona::Tests::make_vision_test_pipeline(description, fixture);
             material_fixtures.push_back(material_pipeline);
             material_pipeline->frame_buffer()->set_enable_accumulation(false);
             material_pipeline->prepare();
@@ -580,8 +575,7 @@ int main() {
             {"type":"model","param":{"fn":"glass-front.obj","material":"glass","normalize_to_unit_bounds":false}},
             {"type":"model","param":{"fn":"glass-back-target.obj","material":"red","normalize_to_unit_bounds":false}},
             {"type":"model","param":{"fn":"glass-front-target.obj","material":"blue","normalize_to_unit_bounds":false}}])");
-        write_file(fixture / "glass.json", glass_scene.dump(2));
-        auto glass_pipeline = vision::Importer::import_scene(fixture / "glass.json");
+        auto glass_pipeline = Corona::Tests::make_vision_test_pipeline(glass_scene, fixture);
         glass_pipeline->frame_buffer()->set_enable_accumulation(false);
         glass_pipeline->prepare(); glass_pipeline->frame_buffer()->prepare_view_texture();
         glass_pipeline->upload_data(); glass_pipeline->display(1.0 / 60.0);
@@ -593,8 +587,7 @@ int main() {
         auto run_glass_variant = [&](vision::DataWrap description, unsigned recursion, const char* label) {
             std::cerr << "Running glass fixture: " << label << '\n';
             description["render"]["integrator"]["param"]["direct"]["max_recursion"] = recursion;
-            write_file(fixture / "glass-variant.json", description.dump(2));
-            auto p = vision::Importer::import_scene(fixture / "glass-variant.json");
+            auto p = Corona::Tests::make_vision_test_pipeline(description, fixture);
             glass_fixtures.push_back(p);
             p->frame_buffer()->set_enable_accumulation(false);
             p->prepare(); p->frame_buffer()->prepare_view_texture(); p->upload_data(); p->display(1.0 / 60.0);
@@ -627,16 +620,14 @@ int main() {
             auto shape = long_prefix["scene"]["shapes"][0]; shape["param"]["fn"] = file;
             long_prefix["scene"]["shapes"].push_back(shape);
         }
-        write_file(fixture / "glass-runtime.json", long_prefix.dump(2));
-        auto runtime_pipeline = vision::Importer::import_scene(fixture / "glass-runtime.json");
+        auto runtime_pipeline = Corona::Tests::make_vision_test_pipeline(long_prefix, fixture);
         glass_fixtures.push_back(runtime_pipeline);
         runtime_pipeline->frame_buffer()->set_enable_accumulation(false);
         runtime_pipeline->prepare(); runtime_pipeline->frame_buffer()->prepare_view_texture();
         for (unsigned budget : {0u, 1u, 3u, 5u}) {
             auto fresh_scene = long_prefix;
             fresh_scene["render"]["integrator"]["param"]["max_depth"] = budget + 1u;
-            write_file(fixture / "glass-runtime-fresh.json", fresh_scene.dump(2));
-            auto fresh = vision::Importer::import_scene(fixture / "glass-runtime-fresh.json");
+            auto fresh = Corona::Tests::make_vision_test_pipeline(fresh_scene, fixture);
             glass_fixtures.push_back(fresh);
             fresh->frame_buffer()->set_enable_accumulation(false);
             fresh->prepare(); fresh->frame_buffer()->prepare_view_texture();
@@ -699,8 +690,7 @@ int main() {
             R"({"type":"diffuse","name":"reflected","param":{"color":[0.8,0.2,0.1]}})"));
         mirror_scene["scene"]["shapes"].push_back(vision::DataWrap::parse(
             R"({"type":"model","param":{"fn":"mirror-receiver.obj","material":"reflected","normalize_to_unit_bounds":false}})"));
-        write_file(fixture / "mirror.json", mirror_scene.dump(2));
-        auto mirror_pipeline = vision::Importer::import_scene(fixture / "mirror.json");
+        auto mirror_pipeline = Corona::Tests::make_vision_test_pipeline(mirror_scene, fixture);
         mirror_pipeline->frame_buffer()->set_enable_accumulation(false);
         mirror_pipeline->prepare();
         mirror_pipeline->frame_buffer()->prepare_view_texture();
@@ -719,8 +709,7 @@ int main() {
         auto mirror_emitter_scene = mirror_scene;
         mirror_emitter_scene["scene"]["shapes"].back()["param"]["emission"] = vision::DataWrap::parse(
             R"({"type":"area","param":{"color":[1,0.5,0.25],"scale":2}})");
-        write_file(fixture / "mirror-emitter.json", mirror_emitter_scene.dump(2));
-        auto mirror_emitter = vision::Importer::import_scene(fixture / "mirror-emitter.json");
+        auto mirror_emitter = Corona::Tests::make_vision_test_pipeline(mirror_emitter_scene, fixture);
         material_fixtures.push_back(mirror_emitter);
         mirror_emitter->frame_buffer()->set_enable_accumulation(false);
         mirror_emitter->prepare(); mirror_emitter->frame_buffer()->prepare_view_texture();
@@ -729,16 +718,14 @@ int main() {
         filtered_glass["output"]["denoise"] = true;
         filtered_glass["render"]["denoiser"] = mirror_scene["render"]["denoiser"];
         filtered_glass["render"]["integrator"]["param"]["denoiser"] = mirror_scene["render"]["integrator"]["param"]["denoiser"];
-        write_file(fixture / "glass-filtered.json", filtered_glass.dump(2));
         // Two retained runtimes must begin with independent layer histories.
         for (unsigned camera = 0u; camera < 2u; ++camera) {
-            auto filtered_pipeline = vision::Importer::import_scene(fixture / "glass-filtered.json");
+            auto filtered_pipeline = Corona::Tests::make_vision_test_pipeline(filtered_glass, fixture);
             material_fixtures.push_back(filtered_pipeline);
             filtered_pipeline->frame_buffer()->set_enable_accumulation(false);
             filtered_pipeline->prepare(); filtered_pipeline->frame_buffer()->prepare_view_texture();
             check_glass_svgf(*filtered_pipeline);
         }
-        fs::remove(fixture / "glass-filtered.json");
         // One mesh contains a coplanar two-triangle mirror on the left and
         // another plane on the right. Branch identity must describe the plane,
         // not just the instance and not the individual triangle.
@@ -749,8 +736,7 @@ int main() {
             "f 1//1 2//1 3//1\nf 1//1 3//1 4//1\n"
             "f 2//2 5//2 6//2\nf 2//2 6//2 3//2\n");
         mirror_scene["scene"]["shapes"][0]["param"]["fn"] = "faceted-mirror.obj";
-        write_file(fixture / "mirror.json", mirror_scene.dump(2));
-        auto facets = vision::Importer::import_scene(fixture / "mirror.json");
+        auto facets = Corona::Tests::make_vision_test_pipeline(mirror_scene, fixture);
         facets->frame_buffer()->set_enable_accumulation(false);
         facets->prepare(); facets->frame_buffer()->prepare_view_texture();
         facets->upload_data(); facets->display(1.0 / 60.0);
@@ -772,8 +758,7 @@ int main() {
         // A scene-level opt-out must retain the legacy mirror-surface guides.
         mirror_scene["scene"]["shapes"][0]["param"]["fn"] = "receiver.obj";
         mirror_scene["render"]["integrator"]["param"]["direct"]["stable_planes"] = false;
-        write_file(fixture / "mirror-off.json", mirror_scene.dump(2));
-        auto disabled_planes = vision::Importer::import_scene(fixture / "mirror-off.json");
+        auto disabled_planes = Corona::Tests::make_vision_test_pipeline(mirror_scene, fixture);
         disabled_planes->frame_buffer()->set_enable_accumulation(false);
         disabled_planes->prepare(); disabled_planes->frame_buffer()->prepare_view_texture();
         disabled_planes->upload_data(); disabled_planes->display(1.0 / 60.0);
@@ -791,8 +776,7 @@ int main() {
         metal_scene["scene"]["materials"][0]["type"] = "metal";
         metal_scene["scene"]["materials"][0]["param"] = vision::DataWrap::parse(
             R"({"material_name":"Cr","roughness":0.002,"remapping_roughness":false})");
-        write_file(fixture / "stable-metal.json", metal_scene.dump(2));
-        auto metal_pipeline = vision::Importer::import_scene(fixture / "stable-metal.json");
+        auto metal_pipeline = Corona::Tests::make_vision_test_pipeline(metal_scene, fixture);
         metal_pipeline->frame_buffer()->set_enable_accumulation(false);
         metal_pipeline->prepare(); metal_pipeline->frame_buffer()->prepare_view_texture();
         metal_pipeline->upload_data(); metal_pipeline->display(1.0 / 60.0);
@@ -814,8 +798,7 @@ int main() {
             auto material = vision::DataWrap::parse(material_json);
             material["name"] = rejected["scene"]["materials"][0]["name"];
             rejected["scene"]["materials"][0] = material;
-            write_file(fixture / "stable-rejected.json", rejected.dump(2));
-            auto rejected_pipeline = vision::Importer::import_scene(fixture / "stable-rejected.json");
+            auto rejected_pipeline = Corona::Tests::make_vision_test_pipeline(rejected, fixture);
             material_fixtures.push_back(rejected_pipeline);
             rejected_pipeline->frame_buffer()->set_enable_accumulation(false);
             rejected_pipeline->prepare(); rejected_pipeline->frame_buffer()->prepare_view_texture();
@@ -828,22 +811,12 @@ int main() {
                    "rough, perturbed or mixed scattering must not form a stable reflection branch");
         }
         std::cout << "PASS: BSDF stable capability for metal and conservative scattering rejection\n";
-        fs::remove(fixture / "stable-rejected.json");
-        fs::remove(fixture / "stable-metal.json");
-        fs::remove(fixture / "mirror-off.json");
         fs::remove(fixture / "faceted-mirror.obj");
-        fs::remove(fixture / "mirror.json");
-        fs::remove(fixture / "mirror-emitter.json");
         fs::remove(fixture / "mirror-receiver.obj");
-        fs::remove(fixture / "material.json");
         expect(!regression_failed, "ReSTIR regression checks failed");
         // Remove only the files this test created; preserve the fixture on failure.
-        fs::remove(fixture / "direct.json");
-        fs::remove(fixture / "indirect.json");
-        fs::remove(fixture / "indirect-reuse.json");
         fs::remove(fixture / "receiver.obj");
         fs::remove(fixture / "receiver-tilted.obj");
-        fs::remove(fixture / "support.json");
         for (const char* name : {"glass-front.obj", "glass-back-target.obj", "glass-front-target.obj",
                                 "glass-rear.obj", "glass-third.obj", "glass-fourth.obj", "glass-runtime.json", "glass-runtime-fresh.json", "glass-tir.obj", "glass-occluder.obj", "glass.json", "glass-variant.json"}) {
             fs::remove(fixture / name);

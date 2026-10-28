@@ -60,7 +60,6 @@ TARGET_FAMILY_OPTIONS: dict[str, tuple[str, ...]] = {
     ),
 }
 VISION_TEST_TARGETS = {
-    "corona_vision_model_normalization_tests",
     "corona_vision_render_mode_config_tests",
     "corona_lightfield_geometry_tests",
     "corona_vision_material_adapter_tests",

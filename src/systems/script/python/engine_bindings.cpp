@@ -364,13 +364,9 @@ void BindAll(nanobind::module_& m) {
              "Return whether this actor renders in camera-local orthographic pass 2")
         .def("set_actor_guid", &Actor::set_actor_guid, nb::arg("actor_guid"))
         .def("get_actor_guid", &Actor::get_actor_guid)
-        .def("set_external_vision_binding", &Actor::set_external_vision_binding,
-             nb::arg("source_path"), nb::arg("shape_guid"), nb::arg("shape_index"),
-             nb::arg("json_path"), nb::arg("shape_type"), nb::arg("shape_identity_key"),
-             nb::arg("model_path"), nb::arg("visible") = true,
-             nb::arg("source_base_dir") = "")
-        .def("clear_external_vision_binding", &Actor::clear_external_vision_binding)
-        .def("has_external_vision_binding", &Actor::has_external_vision_binding)
+
+
+
         .def("get_handle", &Actor::get_handle, "Get the underlying handle of this actor");
 
     // ============================================================================
@@ -529,15 +525,6 @@ void BindAll(nanobind::module_& m) {
              "Enable or disable physics simulation for this scene (does not affect rendering)")
         .def("is_simulation_enabled", &Scene::is_simulation_enabled,
              "Return True if physics simulation is enabled for this scene");
-
-    // ============================================================================
-    // Scene I/O utilities
-    // ============================================================================
-    // m.def("read_scene", &read_scene, nb::arg("scene_path"),
-    //       "Load a scene from file",
-    //       nb::rv_policy::take_ownership);
-    // m.def("write_scene", &write_scene, nb::arg("scene"), nb::arg("scene_path"),
-    //       "Save a scene to file");
 
     // ============================================================================
     // Logger: 日志前端转发接口

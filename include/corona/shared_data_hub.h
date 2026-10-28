@@ -289,20 +289,7 @@ struct ProfileDevice {
     std::uintptr_t geometry_handle{};
 };
 
-struct ExternalVisionBindingDevice {
-    bool enabled{false};
-    bool visible{true};
-    std::string source_path;
-    std::string shape_guid;
-    int shape_index{-1};
-    std::string json_path;
-    std::string shape_type;
-    std::string shape_identity_key;
-    std::string model_path;
-    // Runtime-only path context and derived identity; never persist the key.
-    std::string source_base_dir;
-    std::string source_path_key;
-};
+
 
 struct ActorDevice {
     std::vector<std::uintptr_t> profile_handles;
@@ -740,17 +727,10 @@ class SharedDataHub {
 
     // Runtime-only editor metadata keyed by native actor handle. Persisted state
     // remains in scene.ini; this cache only bridges Python proxy actors to native
-    // systems such as OpticsSystem/ExternalVisionSceneAdapter.
+    // systems such as OpticsSystem.
     void set_actor_guid(std::uintptr_t actor_handle, std::string actor_guid);
     [[nodiscard]] std::string actor_guid(std::uintptr_t actor_handle) const;
-    void set_external_vision_binding(std::uintptr_t actor_handle, ExternalVisionBindingDevice binding,
-                                     bool refresh_source_path = false);
     // Explicit scene reload also refreshes retained actors (e.g. directory links).
-    void refresh_external_vision_binding_paths();
-    void clear_external_vision_binding(std::uintptr_t actor_handle);
-    [[nodiscard]] std::optional<ExternalVisionBindingDevice> external_vision_binding(
-        std::uintptr_t actor_handle) const;
-    [[nodiscard]] bool has_external_vision_binding(std::uintptr_t actor_handle) const;
     void clear_actor_metadata(std::uintptr_t actor_handle);
 
     CameraStorage& camera_storage();
@@ -848,7 +828,6 @@ class SharedDataHub {
     ActorStorage actor_storage_;
     mutable std::mutex actor_metadata_mutex_;
     std::unordered_map<std::uintptr_t, std::string> actor_guids_;
-    std::unordered_map<std::uintptr_t, ExternalVisionBindingDevice> external_vision_bindings_;
     EnvironmentStorage environment_storage_;
     CameraStorage camera_storage_;
     mutable std::mutex camera_timing_mutex_;

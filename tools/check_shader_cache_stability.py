@@ -1,22 +1,5 @@
-"""Check real PT/ReSTIR cache reuse after perturbing bindless allocation history.
-
-Runs two independent processes without deleting existing cache files. The second
-process registers unused slots before creating each view; shader variants must
-keep their identities and hit the SPIR-V cache warmed by the first process.
-"""
-import argparse
-import json
-import re
+"""Validate PT/ReSTIR cache identity from captured profiling reports."""
 from collections import Counter
-from datetime import datetime
-from pathlib import Path
-
-from profile_process import run_bounded
-from profile_render_switch import positive_float, runtime_environment
-from switch_profile_report import parse_log
-
-
-ROOT = Path(__file__).resolve().parents[1]
 
 
 def compare_runs(runs):
@@ -59,50 +42,3 @@ def compare_runs(runs):
                  for a, b in list(zip(before[phase], after[phase]))[:1 if phase == "PT.initial" else 2]):
             errors.append(f"{phase}: real shader buffer slots must change between processes")
     return errors
-
-
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--scene", required=True, type=Path)
-    parser.add_argument("--build-dir", type=Path, default=ROOT / "cmake-build-relwithdebinfo")
-    parser.add_argument("--runtime-dir", type=Path)
-    parser.add_argument("--output-dir", type=Path,
-                        default=ROOT / "build/cache-stability" / datetime.now().strftime("%Y%m%d-%H%M%S-%f"))
-    parser.add_argument("--timeout", type=positive_float, default=300)
-    args = parser.parse_args()
-    build, scene, output = args.build_dir.resolve(), args.scene.resolve(), args.output_dir.resolve()
-    runtime = (args.runtime_dir or build / "bin").resolve()
-    executable = build / "tests/integration/corona_vision_embedded_mode_switch_tests.exe"
-    for path in (scene, executable):
-        if not path.is_file():
-            parser.error(f"File not found: {path}")
-    if output.exists() and any(output.iterdir()):
-        parser.error(f"Output directory is not empty: {output}")
-    env = runtime_environment(build, runtime)
-    report = dict(scene=str(scene), runtime_dir=str(runtime), runs=[])
-    for index, padding in enumerate((0, 7), 1):
-        print(f"Run {index}/2: padding={padding}, hard timeout={args.timeout:g}s", flush=True)
-        process = run_bounded([str(executable), "--profile-bindings", str(scene), str(padding)],
-                              runtime, output / f"run-{index}", args.timeout, env)
-        log = Path(process["stdout"])
-        text = log.read_text(encoding="utf-8-sig", errors="replace") if log.exists() else ""
-        profile = parse_log(text)
-        padding_events = [list(event) for event in re.findall(r"BINDING_PADDING (\S+) slots=(\d+)", text)]
-        bindings = re.findall(r"BINDING_SLOTS (\S+) visibility=(\d+) surfaces=(\d+)", text)
-        report["runs"].append(dict(padding=padding, padding_events=padding_events,
-                                   bindings=bindings, process=process, profile=profile))
-        (output / "report.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
-        print(f"  {process['status']}: {profile['cache']}", flush=True)
-        if process["status"] != "success":
-            break
-    report["errors"] = compare_runs(report["runs"])
-    report["passed"] = not report["errors"]
-    (output / "report.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
-    for error in report["errors"]:
-        print(f"FAIL: {error}")
-    print(f"{'PASS' if report['passed'] else 'FAIL'}: {output / 'report.json'}")
-    return 0 if report["passed"] else 1
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

@@ -46,7 +46,6 @@ struct SceneTreeActorRow {
     item["visible"] = row.visible;
     item["handle"] = row.handle;
     item["audio_resource_id"] = row.audio_resource_id;
-    item["vision_proxy"] = false;
     item["load_status"] = row.load_status;
     item["gpu_build_state"] = row.gpu_build_state;
     item["model_node_count"] = row.model_node_count;

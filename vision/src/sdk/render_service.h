@@ -15,8 +15,6 @@ namespace vision {
 namespace sdk {
 
 enum class SceneSourceKind : uint32_t {
-    ProjectJsonFile = 0,
-    ProjectJsonMemory = 1,
     CoronaEngineSnapshot = 2,
 };
 
@@ -28,9 +26,8 @@ enum class OutputMode : uint32_t {
 };
 
 struct SceneSource {
-    SceneSourceKind kind{SceneSourceKind::ProjectJsonFile};
+    SceneSourceKind kind{SceneSourceKind::CoronaEngineSnapshot};
     std::string debug_name{};
-    std::string json_path{};
     const void *payload{};
     size_t payload_size{};
     uint32_t schema_version{1u};

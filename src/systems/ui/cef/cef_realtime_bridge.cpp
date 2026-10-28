@@ -641,7 +641,6 @@ bool handle_compute_actor_focus_pose_fast(const CefRefPtr<CefFrame>& frame,
         actor_found = true;
         profile_count = actor->profile_handles.size();
     }
-    const bool has_external_vision_binding = hub.has_external_vision_binding(actor_handle);
 
     FocusBounds bounds;
     const auto focus_sources = resolve_actor_focus_geometry_sources(actor_handle);
@@ -654,8 +653,7 @@ bool handle_compute_actor_focus_pose_fast(const CefRefPtr<CefFrame>& frame,
             "actor bounds are unavailable (handle=" + std::to_string(actor_handle) +
             ", actor_found=" + (actor_found ? "true" : "false") +
             ", profiles=" + std::to_string(profile_count) +
-            ", geometry_sources=" + std::to_string(focus_sources.size()) +
-            ", external_vision_binding=" + (has_external_vision_binding ? "true" : "false") + ")");
+            ", geometry_sources=" + std::to_string(focus_sources.size()) + ")");
     }
 
     const ktm::fvec3 center = make_fvec3(

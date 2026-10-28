@@ -1,9 +1,0 @@
-{
-  "description": "Translate camera 0.5m forward over 32 frames, then settle 32 frames",
-  "keyframes": [
-    {"frame": 0, "delta_pos": [0, 0, 0], "delta_pitch": 0, "delta_yaw": 0},
-    {"frame": 32, "delta_pos": [0, 0, -0.5], "delta_pitch": 0, "delta_yaw": 0},
-    {"frame": 64, "delta_pos": [0, 0, -0.5], "delta_pitch": 0, "delta_yaw": 0}
-  ],
-  "save_frames": [0, 8, 16, 24, 32, 40, 48, 56, 64]
-}

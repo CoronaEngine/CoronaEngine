@@ -113,8 +113,13 @@ inline void world_bounds_gpu_regressions() {
         std::cout << "WorldBounds probe expected_radius=" << radius << " actual=("
                   << actual.x << ',' << actual.y << ',' << actual.z << ") pmf="
                   << actual.w << " expected_pmf=" << pmf << std::endl;
-        expect(std::abs(actual.y - radius) < 1e-4f && actual.x == 0.f && actual.z == 0.f,
-               "Vulkan directional-light sample must use current world radius");
+        // The shadow endpoint must lie beyond the bounding sphere, including
+        // its displacement from the reference at the origin.
+        const float enclosing_distance = length(center) + radius;
+        expect(actual.y > enclosing_distance &&
+                   actual.y < enclosing_distance + std::max(radius * 1e-3f, 1e-2f) &&
+                   actual.x == 0.f && actual.z == 0.f,
+               "Vulkan directional-light endpoint must enclose current world bounds");
         expect(std::abs(actual.w - pmf) < 1e-4f,
                "Vulkan power sampler PMF must use current world radius");
         expect(all(pipeline->scene().world_center() == center), "CPU world center must match transformed triangle");
@@ -201,7 +206,8 @@ inline void world_bounds_multiview_area_regression() {
         pipeline->update_geometry();
         for (auto view : {0u, 7u}) {
             auto direction = pipeline->read_probe(view);
-            expect(std::abs(direction.y - std::sqrt(3.f) * extent) < 1e-4f,
+            const float radius = std::sqrt(3.f) * extent;
+            expect(direction.y > radius && direction.y < radius + 1e-2f,
                    "every view must consume changed EInstance directional constants");
             auto area = pipeline->read_probe(view, 1);
             expect(std::abs(area.x - .5f) < 1e-6f && std::abs(area.y - .5f) < 1e-6f,

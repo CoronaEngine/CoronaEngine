@@ -50,6 +50,7 @@ struct IndirectDispatch {
     Horizon::ComputePipelineBase* pipeline;
     std::vector<Horizon::HardwareBuffer> buffers;
     std::vector<Horizon::HardwareImage> images;
+    std::vector<Horizon::HardwareImage> writable_images;
     void record(Horizon::CommandRecorder& recorder) const;
 };
 

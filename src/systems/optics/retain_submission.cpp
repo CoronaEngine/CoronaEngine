@@ -38,6 +38,11 @@ void IndirectDispatch::record(Horizon::CommandRecorder& recorder) const {
         append(buffer, 1, Horizon::DispatchBindingKind::StorageBuffer);
     for (const auto& image : images)
         append(image, 0, Horizon::DispatchBindingKind::StorageImage);
+    for (const auto& image : writable_images) {
+        dispatch.bindings.push_back({2, logical_binding, image,
+            Horizon::DispatchBindingKind::StorageImage, Horizon::AccessKind::ReadWrite});
+        dispatch.resource_uses.push_back({image, Horizon::AccessKind::ReadWrite});
+    }
     recorder.dispatch(std::move(dispatch));
 }
 
