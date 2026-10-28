@@ -4,6 +4,7 @@ namespace Corona::Resource { struct Vertex; }
 #include <corona/systems/geometry/mesh_draw_bounds.h>
 
 namespace Corona::Systems::GeometryDetail {
+class UploadBatch;
 struct DrawBuffers {
     Horizon::HardwareBuffer vertices, indices, shadow_indices;
     Geometry::MeshDrawClusters clusters;
@@ -12,4 +13,7 @@ struct DrawBuffers {
 
 DrawBuffers make_draw_buffers(const std::vector<Resource::Vertex>& vertices,
                               const std::vector<std::uint16_t>& indices);
+DrawBuffers make_draw_buffers(const std::vector<Resource::Vertex>& vertices,
+                              const std::vector<std::uint16_t>& indices,
+                              UploadBatch& uploads);
 } // namespace Corona::Systems::GeometryDetail

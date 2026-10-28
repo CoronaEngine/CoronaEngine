@@ -48,7 +48,7 @@ struct SceneGpuTextureCache {
 //
 // 行为：为 scene 中每个 mesh 创建顶点/索引缓冲 + 对应 StorageBuffer + 纹理
 // （压缩 BC1/BC3，未压缩 1/3/4 通道→RGBA8），无纹理的 mesh 使用传入的占位纹理。
-// 纹理像素分批同步上传（每 32 个一批）。
+// 网格和纹理合批上传；仅在批次末尾或暂存数据达到 32 MiB 时等待该批次完成。
 //
 // 无状态、不加锁、不触碰 SharedDataHub 槽位——调用方负责把返回的数组写回
 // GeometryDevice::mesh_handles 并处理 LOD 缓存失效。GPU 资源创建在调用线程完成。
