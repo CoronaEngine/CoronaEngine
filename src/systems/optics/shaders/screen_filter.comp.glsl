@@ -1,6 +1,7 @@
 #version 460
 #extension GL_EXT_nonuniform_qualifier : enable
 #extension GL_GOOGLE_include_directive : require
+#include "native_policy.glsl"
 layout(local_size_x=8,local_size_y=8) in;
 layout(set=1,binding=0) readonly buffer Buffer {uint data[];} ssbos[];
 layout(set=2,binding=0,rgba16f) uniform image2D images[];
@@ -66,7 +67,7 @@ void main() {
             history.rgb=clamp(history.rgb,lo-sigma,hi+sigma);
             vec2 uv=(vec2(screenGiPixel(p))+.5)/vec2(pushConsts.gbufferSize);
             float motion=length((previousUv-uv)*vec2(screenGiSize()));
-            float lengthLimit=mix(32.,4.,smoothstep(0.,8.,motion));
+            float lengthLimit=mix(NATIVE_GI_HISTORY,NATIVE_GI_MOVING_HISTORY,smoothstep(0.,8.,motion));
             value.a=min(history.a+1.,lengthLimit);
             value.rgb=mix(history.rgb,value.rgb,1./value.a);
         }

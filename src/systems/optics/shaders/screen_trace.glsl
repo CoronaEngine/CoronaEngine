@@ -1,3 +1,4 @@
+#include "native_policy.glsl"
 // Shared hierarchical screen traversal for diffuse GI and glossy reflection.
 // Linear positive view Z avoids reversing the min reduction for reversed-Z.
 // The caller supplies screenSize(), screenView(), screenProjection(),
@@ -12,7 +13,7 @@ vec3 screenViewPosition(ivec2 pixel,float depth) {
 }
 // Perspective-correct segment/cell traversal. Empty/front-of-surface cells
 // advance to their boundary; potential crossings descend to a single pixel.
-// There is a hard iteration budget; exhaustion is a miss and uses LPV.
+// There is a hard iteration budget; misses retain the RSM/environment estimate.
 bool traceScreenHierarchy(vec3 position,vec3 normal,vec3 direction,float maxDistance,
                           float thickness,out ivec2 hitPixel,out float confidence) {
     confidence=0.;hitPixel=ivec2(0);
@@ -42,7 +43,7 @@ bool traceScreenHierarchy(vec3 position,vec3 normal,vec3 direction,float maxDist
     if(pixels<1.)return false;
     float epsilon=.002/pixels,t=min(1.,1.5/pixels);
     uint level=min(3u,screenLevels()-1u);
-    for(uint iteration=0u;iteration<128u && t<1.;++iteration) {
+    for(uint iteration=0u;iteration<uint(NATIVE_HIZ_STEPS) && t<1.;++iteration) {
         vec2 p=pa+delta*t;
         if(any(lessThan(p,vec2(0))) || any(greaterThanEqual(p,size)))break;
         float cellSize=float(1u<<level);

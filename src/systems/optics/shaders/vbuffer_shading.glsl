@@ -1,94 +1,5 @@
-// ============================================================================
-// SSBO helper functions — generic uint[] accessor for all buffer types
-// ============================================================================
-
-float readFloat(uint bufIdx, uint offset)
-{
-    return uintBitsToFloat(ssbos[nonuniformEXT(bufIdx)].data[offset]);
-}
-
-uint readUint(uint bufIdx, uint offset)
-{
-    return ssbos[nonuniformEXT(bufIdx)].data[offset];
-}
-
-uint readIndex16(uint bufIdx, uint index16)
-{
-    uint wordIndex = index16 >> 1u;
-    uint word = ssbos[nonuniformEXT(bufIdx)].data[wordIndex];
-    return (index16 & 1u) == 0u ? (word & 0xFFFFu) : (word >> 16u);
-}
-
-vec3 readVec3(uint bufIdx, uint offset)
-{
-    return vec3(readFloat(bufIdx, offset),
-                readFloat(bufIdx, offset + 1),
-                readFloat(bufIdx, offset + 2));
-}
-
-vec2 readVec2(uint bufIdx, uint offset)
-{
-    return vec2(readFloat(bufIdx, offset),
-                readFloat(bufIdx, offset + 1));
-}
-
-vec4 readVec4(uint bufIdx, uint offset)
-{
-    return vec4(readFloat(bufIdx, offset),
-                readFloat(bufIdx, offset + 1),
-                readFloat(bufIdx, offset + 2),
-                readFloat(bufIdx, offset + 3));
-}
-
-mat4 readMat4(uint bufIdx, uint offset)
-{
-    mat4 m;
-    for (int c = 0; c < 4; c++)
-        for (int r = 0; r < 4; r++)
-            m[c][r] = readFloat(bufIdx, offset + c * 4 + r);
-    return m;
-}
-
-bool finiteFloat(float v)
-{
-    return !isnan(v) && !isinf(v);
-}
-
-bool finiteVec2(vec2 v)
-{
-    return finiteFloat(v.x) && finiteFloat(v.y);
-}
-
-bool finiteVec3(vec3 v)
-{
-    return finiteFloat(v.x) && finiteFloat(v.y) && finiteFloat(v.z);
-}
-
-bool finiteVec4(vec4 v)
-{
-    return finiteFloat(v.x) && finiteFloat(v.y) && finiteFloat(v.z) && finiteFloat(v.w);
-}
-
-bool finiteMat4(mat4 m)
-{
-    for (int c = 0; c < 4; ++c)
-        for (int r = 0; r < 4; ++r)
-            if (!finiteFloat(m[c][r])) return false;
-    return true;
-}
-
-vec2 safeMaterialUV(vec2 uv)
-{
-    return fract(uv);
-}
-
-vec4 fetchMaterialTexture(uint descriptor, vec2 uv, vec2 dx, vec2 dy)
-{
-    // Explicit analytic gradients are required in compute. Sampling LOD 0 with
-    // texelFetch caused nearest-neighbour shimmer and ignored texture mipmaps.
-    return textureGrad(textures[nonuniformEXT(descriptor)], uv, dx, dy);
-}
-
+#include "native_policy.glsl"
+#include "bindless_read.glsl"
 // ============================================================================
 // InstanceInfo layout (96 bytes = 24 uints)
 // ============================================================================
@@ -122,131 +33,7 @@ InstanceInfo loadInstanceInfo(uint instanceID)
     return info;
 }
 
-// ============================================================================
-// MaterialInfo layout (128 bytes = 32 uints)
-// ============================================================================
-
-struct MaterialInfo
-{
-    uint  textureDescriptor;
-    float metallic;
-    float roughness;
-    float subsurface;
-    float specular;
-    float specularTint;
-    float anisotropic;
-    float sheen;
-    float sheenTint;
-    float clearcoat;
-    float clearcoatGloss;
-    float lightingEnabled;
-    vec4  materialColor;
-    uint normalDescriptor;
-    uint metallicDescriptor;
-    uint roughnessDescriptor;
-    uint occlusionDescriptor;
-    uint emissiveDescriptor;
-    uint specularDescriptor;
-    uint specularColorDescriptor;
-    uint flags;
-    vec3 emissive;
-    float normalScale;
-    vec3 specularColor;
-    float occlusionStrength;
-    float transmission; float ior;
-};
-
-MaterialInfo loadMaterialInfo(uint materialID)
-{
-    uint base = materialID * 32u;
-    MaterialInfo mat;
-    mat.textureDescriptor = readUint(pushConsts.materialTableBufferIndex, base);
-    mat.metallic          = readFloat(pushConsts.materialTableBufferIndex, base + 1u);
-    mat.roughness         = readFloat(pushConsts.materialTableBufferIndex, base + 2u);
-    mat.subsurface        = readFloat(pushConsts.materialTableBufferIndex, base + 3u);
-    mat.specular          = readFloat(pushConsts.materialTableBufferIndex, base + 4u);
-    mat.specularTint      = readFloat(pushConsts.materialTableBufferIndex, base + 5u);
-    mat.anisotropic       = readFloat(pushConsts.materialTableBufferIndex, base + 6u);
-    mat.sheen             = readFloat(pushConsts.materialTableBufferIndex, base + 7u);
-    mat.sheenTint         = readFloat(pushConsts.materialTableBufferIndex, base + 8u);
-    mat.clearcoat         = readFloat(pushConsts.materialTableBufferIndex, base + 9u);
-    mat.clearcoatGloss    = readFloat(pushConsts.materialTableBufferIndex, base + 10u);
-    mat.lightingEnabled   = readFloat(pushConsts.materialTableBufferIndex, base + 11u);
-    mat.materialColor     = readVec4(pushConsts.materialTableBufferIndex, base + 12u);
-    mat.normalDescriptor = readUint(pushConsts.materialTableBufferIndex, base + 16u);
-    mat.metallicDescriptor = readUint(pushConsts.materialTableBufferIndex, base + 17u);
-    mat.roughnessDescriptor = readUint(pushConsts.materialTableBufferIndex, base + 18u);
-    mat.occlusionDescriptor = readUint(pushConsts.materialTableBufferIndex, base + 19u);
-    mat.emissiveDescriptor = readUint(pushConsts.materialTableBufferIndex, base + 20u);
-    mat.specularDescriptor = readUint(pushConsts.materialTableBufferIndex, base + 21u);
-    mat.specularColorDescriptor = readUint(pushConsts.materialTableBufferIndex, base + 22u);
-    mat.flags = readUint(pushConsts.materialTableBufferIndex, base + 23u);
-    mat.emissive = readVec3(pushConsts.materialTableBufferIndex, base + 24u);
-    mat.normalScale = readFloat(pushConsts.materialTableBufferIndex, base + 27u);
-    mat.specularColor = readVec3(pushConsts.materialTableBufferIndex, base + 28u);
-    mat.occlusionStrength = readFloat(pushConsts.materialTableBufferIndex, base + 31u);
-    mat.transmission=(mat.flags&256u)!=0u?clamp(mat.subsurface,0,1):0;
-    if((mat.flags&32u)!=0u)mat.subsurface=0;
-    float sqrtF0=sqrt(clamp(mat.specular*.08,0,.9996));
-    mat.ior=(1.0+sqrtF0)/max(1.0-sqrtF0,1e-4);
-    if((mat.flags&32u)!=0u) {
-        mat.ior=max(mat.specularTint,.001);
-        mat.specularTint=0;
-    }
-    return mat;
-}
-
-// Imported scene expressions are immutable postfix programs. Per-image UV,
-// encoding and wrapping are preserved instead of baking a repeating UV tile.
-ivec2 appearanceTexel(ivec2 p, ivec2 size, uint wrap) {
-    if (wrap == 1u) return clamp(p,ivec2(0),size-1);
-    if (wrap == 2u) {
-        p=((p%(2*size))+2*size)%(2*size);
-        return min(p,2*size-1-p);
-    }
-    return ((p%size)+size)%size;
-}
-vec3 appearancePixel(uint tex, ivec2 p, ivec2 size, uint wrap) {
-    if (wrap==3u && (any(lessThan(p,ivec2(0))) || any(greaterThanEqual(p,size)))) return vec3(0);
-    return texelFetch(textures[nonuniformEXT(tex)],appearanceTexel(p,size,wrap),0).rgb;
-}
-void evaluateAppearance(inout MaterialInfo matl, vec2 uv, out vec3 color, out vec3 normalMap) {
-    uint buf=matl.occlusionDescriptor;
-    vec3 values[128];
-    uint count=min(readUint(buf,0u),128u);
-    for (uint i=0u;i<count;++i) {
-        uint b=16u+i*24u;
-        uint op=readUint(buf,b);
-        uint a=readUint(buf,b+1u), c=readUint(buf,b+2u), t=readUint(buf,b+3u);
-        vec3 value=readVec3(buf,b+4u);
-        vec2 q=vec2(dot(readVec3(buf,b+8u),vec3(uv,1)),dot(readVec3(buf,b+11u),vec3(uv,1)));
-        if (op==1u) {
-            uint tex=readUint(buf,b+7u),wrap=readUint(buf,b+17u);
-            ivec2 size=textureSize(textures[nonuniformEXT(tex)],0);
-            vec2 p=q*vec2(size)-0.5;
-            ivec2 at=ivec2(floor(p));vec2 f=fract(p);
-            if (readUint(buf,b+18u)==1u) value=appearancePixel(tex,ivec2(floor(q*vec2(size))),size,wrap);
-            else value=mix(mix(appearancePixel(tex,at,size,wrap),appearancePixel(tex,at+ivec2(1,0),size,wrap),f.x),
-                mix(appearancePixel(tex,at+ivec2(0,1),size,wrap),appearancePixel(tex,at+ivec2(1,1),size,wrap),f.x),f.y);
-        } else if (op==2u) value=values[a]*values[c];
-        else if (op==3u) value=mix(values[a],values[c],values[t].x);
-        else if (op==4u) value=sqrt(max(values[a],vec3(0)));
-        else if (op==5u) {
-            ivec2 cell=ivec2(floor(q*readFloat(buf,b+19u)));
-            value=((cell.x+cell.y)&1)==0 ? values[a]:values[c];
-        }
-        values[i]=value;
-    }
-    color=values[readUint(buf,1u)];matl.roughness=values[readUint(buf,2u)].x;
-    matl.metallic=values[readUint(buf,3u)].x;matl.sheenTint=values[readUint(buf,4u)].x;
-    matl.emissive=values[readUint(buf,5u)];normalMap=values[readUint(buf,6u)];
-    matl.clearcoat=values[readUint(buf,7u)].x;matl.clearcoatGloss=1.0-values[readUint(buf,8u)].x;
-    matl.normalDescriptor=readUint(buf,9u); // boolean for an expression normal, not a texture descriptor
-    matl.transmission=clamp(values[readUint(buf,10u)].x,0,1);
-    matl.ior=clamp(values[readUint(buf,11u)].x,.001,10000);
-    matl.occlusionDescriptor=0u;
-}
-
+#include "material_decode.glsl"
 // ============================================================================
 // Vertex layout (32 bytes = 8 floats)
 // ============================================================================
@@ -339,17 +126,17 @@ float AnisotropicSmithGGX(float ndots, float sdotx, float sdoty, float ax, float
 // cosine (Lambertian) convolution, so the result is diffuse irradiance / PI
 // ready to multiply by albedo. Returns radiance in the same units the sky
 // pass emits (scaled by sky_intensity at projection time).
-vec3 evalSkySH(vec3 n, uint shBuf)
+vec3 evalSkySH(vec3 n, uint shBuf, uint offset)
 {
-    vec3 L0  = readVec3(shBuf, 0u);
-    vec3 L1  = readVec3(shBuf, 3u);
-    vec3 L2  = readVec3(shBuf, 6u);
-    vec3 L3  = readVec3(shBuf, 9u);
-    vec3 L4  = readVec3(shBuf, 12u);
-    vec3 L5  = readVec3(shBuf, 15u);
-    vec3 L6  = readVec3(shBuf, 18u);
-    vec3 L7  = readVec3(shBuf, 21u);
-    vec3 L8  = readVec3(shBuf, 24u);
+    vec3 L0  = readVec3(shBuf, offset+0u);
+    vec3 L1  = readVec3(shBuf, offset+3u);
+    vec3 L2  = readVec3(shBuf, offset+6u);
+    vec3 L3  = readVec3(shBuf, offset+9u);
+    vec3 L4  = readVec3(shBuf, offset+12u);
+    vec3 L5  = readVec3(shBuf, offset+15u);
+    vec3 L6  = readVec3(shBuf, offset+18u);
+    vec3 L7  = readVec3(shBuf, offset+21u);
+    vec3 L8  = readVec3(shBuf, offset+24u);
 
     const float c1 = 0.429043;
     const float c2 = 0.511664;
@@ -829,11 +616,11 @@ float ambientOcclusion(ivec2 pixel, Surface surface) {
     mat4 inverseProjection = readMat4(pushConsts.uniformBufferIndex, 76u);
     vec3 p = (view * vec4(surface.position, 1)).xyz;
     vec3 n = normalize(mat3(view) * surface.geometricNormal);
-    const float radius = 0.6;
+    const float radius = NATIVE_SSAO_RADIUS;
     float radiusPixels = clamp(abs(projection[1][1]) * radius * float(pushConsts.gbufferSize.y) / (2.0 * max(abs(p.z), 0.01)), 1.0, 192.0);
     float occlusion = 0.0;
     // Fixed low-discrepancy disk avoids frame-to-frame noise without a history.
-    const vec2 disk[12] = vec2[12](
+    const vec2 disk[NATIVE_SSAO_SAMPLES] = vec2[NATIVE_SSAO_SAMPLES](
         vec2(0.204124145,0.000000000),
         vec2(-0.260699267,0.238821884),
         vec2(0.039904202,-0.454687792),
@@ -847,7 +634,7 @@ float ambientOcclusion(ivec2 pixel, Surface surface) {
         vec2(0.396471627,-0.847236832),
         vec2(0.292982443,0.934074206)
     );
-    for (int i = 0; i < 12; ++i) {
+    for (int i = 0; i < NATIVE_SSAO_SAMPLES; ++i) {
         ivec2 q = pixel + ivec2(round(disk[i] * radiusPixels));
         if (any(lessThan(q,ivec2(0))) || any(greaterThanEqual(q,ivec2(pushConsts.gbufferSize))) || all(equal(q,pixel))) continue;
         float d = texelFetch(textures[nonuniformEXT(pushConsts.depthImageIndex)], q, 0).r;
@@ -859,10 +646,24 @@ float ambientOcclusion(ivec2 pixel, Surface surface) {
         float horizon = max(dot(n,delta) / distance - 0.05, 0.0);
         occlusion += horizon * (1.0 - distance2/(radius*radius));
     }
-    return clamp(1.0 - pushConsts.ssaoStrength * occlusion * (2.0/12.0), 0.0, 1.0);
+    return clamp(1.0 - pushConsts.ssaoStrength * occlusion * (2.0/float(NATIVE_SSAO_SAMPLES)), 0.0, 1.0);
 }
 
-#include "lpv_sample.glsl"
+// The environment remains an infinite light. Its visibility is refined by
+// SSGI; RSM supplies only the solar single bounce, never an environment volume.
+vec3 environmentIrradiance(vec3 normal) {
+    if((pushConsts.featureFlags&16u)!=0u)
+        return evalSkySH(normal,pushConsts.directLightingBufferIndex,16u);
+    return (pushConsts.featureFlags&4u)!=0u ? evalSkySH(normal,pushConsts.skyIrradianceSHBufferIndex,0u) : vec3(0);
+}
+vec3 environmentRadiance(vec3 direction) {
+    if((pushConsts.featureFlags&16u)!=0u) {
+        float phi=atan(-direction.z,direction.x);if(phi<0.)phi+=2.*PI;
+        return max(textureLod(textures[nonuniformEXT(readUint(pushConsts.directLightingBufferIndex,8u))],
+            vec2(phi/(2.*PI),acos(clamp(direction.y,-1.,1.))/PI),0).rgb,vec3(0));
+    }
+    return environmentIrradiance(direction)/PI;
+}
 vec3 shadeDirectWithIrradiance(Surface s,float ao,vec3 viewDirection,bool includeEmission,out vec3 irradiance) {
     irradiance=vec3(0);
     vec3 emission=includeEmission && ((s.material.flags&128u)!=0u || dot(s.emissionNormal,viewDirection)>0)?s.material.emissive:vec3(0);
@@ -873,7 +674,7 @@ vec3 shadeDirectWithIrradiance(Surface s,float ao,vec3 viewDirection,bool includ
     if(max(pushConsts.lightColor.r,max(pushConsts.lightColor.g,pushConsts.lightColor.b))>0.)
         color+=DisneyBRDF(viewDirection,s.normal,s.tangent,s.bitangent,pushConsts.sun_dir,
             pushConsts.lightColor,s.baseColor,s.material,computeSunShadow(s.position,s.geometricNormal));
-    irradiance=lpvIrradiance(s.position,s.geometricNormal);
+    irradiance=environmentIrradiance(s.geometricNormal);
     color+=s.baseColor*(1.0-s.material.metallic)*(1.0-s.material.transmission)*irradiance/PI*ao*s.material.occlusionStrength;
     return color;
 }

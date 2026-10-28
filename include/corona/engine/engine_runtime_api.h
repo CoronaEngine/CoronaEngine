@@ -346,10 +346,6 @@ class Camera {
     void set_vision_stable_planes(bool enabled);
     [[nodiscard]] bool get_vision_stable_planes() const;
     [[nodiscard]] bool get_requested_vision_stable_planes() const;
-    void set_shadow_cascade_debug(bool enabled);
-    [[nodiscard]] bool get_shadow_cascade_debug() const;
-    void set_ssao_enabled(bool enabled);
-    [[nodiscard]] bool get_ssao_enabled() const;
     void set_view_state(bool open, int x, int y, int width, int height, float move_speed);
     [[nodiscard]] std::array<float, 6> get_view_state() const;
 

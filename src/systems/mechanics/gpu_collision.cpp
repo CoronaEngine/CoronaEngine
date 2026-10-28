@@ -1516,6 +1516,12 @@ std::vector<GpuCollisionPipeline::GroundResult> GpuCollisionPipeline::ground(std
 GpuCollisionPipeline::MeshMotionResult GpuCollisionPipeline::move_mesh(
     const Instance& moving, std::span<const Instance> obstacles, Point displacement, bool snap_to_ground,
     float turn, Point pivot, Point turn_axis) {
+    return move_mesh_async(moving,obstacles,displacement,snap_to_ground,turn,pivot,turn_axis).get();
+}
+
+std::future<GpuCollisionPipeline::MeshMotionResult> GpuCollisionPipeline::move_mesh_async(
+    const Instance& moving, std::span<const Instance> obstacles, Point displacement, bool snap_to_ground,
+    float turn, Point pivot, Point turn_axis) {
     GpuPerformance::Scope performance{"collision.mesh_motion"};
     impl_->usable(); validate_instance(moving); validate_point(displacement);
     validate_point(pivot); validate_point(turn_axis);
@@ -1524,7 +1530,8 @@ GpuCollisionPipeline::MeshMotionResult GpuCollisionPipeline::move_mesh(
         throw std::invalid_argument("Invalid mesh turn");
     auto& a=impl_->mesh(moving.key);
     if(!a.triangles) throw std::invalid_argument("Moving mesh has no triangles");
-    if(obstacles.empty()) { MeshMotionResult result{displacement}; result.turn=turn; return result; }
+    if(obstacles.empty()) { MeshMotionResult result{displacement}; result.turn=turn;
+        std::promise<MeshMotionResult> ready;ready.set_value(result);return ready.get_future(); }
     for(const auto& obstacle:obstacles) {
         validate_instance(obstacle); (void)impl_->mesh(obstacle.key);
         if(obstacle.key==moving.key) throw std::invalid_argument("Mesh motion self collision");
@@ -1586,12 +1593,17 @@ GpuCollisionPipeline::MeshMotionResult GpuCollisionPipeline::move_mesh(
     GpuPerformance::record_readback(24*sizeof(float));
     stream << H::CopyBufferCommand{impl_->motion_state,impl_->motion_callback,0,0,24*sizeof(float)};
     impl_->in_flight_uploads.push_back(staging);
-    impl_->finish(stream); impl_->in_flight_uploads.clear();
-    std::array<float,24> r{};
-    if(!impl_->motion_callback.read_bytes(std::as_writable_bytes(std::span(r))))
-        throw std::runtime_error("Mesh motion callback transfer failed");
-    return {{r[0],r[1],r[2]},{r[12],r[13],r[14]},r[9]>0,r[10]>0,r[11]>0,
-        static_cast<int>(r[15]),static_cast<int>(r[16]),static_cast<int>(r[17]),r[23]};
+    impl_->finish(stream,false);
+    // A compact completion record is read on a worker. The mechanics thread
+    // never waits for a rendering submission while holding scene/geometry locks.
+    return std::async(std::launch::async,[receipt=impl_->last_receipt,buffer=impl_->motion_callback,
+        uploads=std::move(impl_->in_flight_uploads)]() -> MeshMotionResult {
+        H::HardwareExecutor completion;completion.wait_completed(receipt);
+        std::array<float,24> r{};
+        if(!buffer.read_bytes(std::as_writable_bytes(std::span(r))))throw std::runtime_error("Mesh motion callback transfer failed");
+        return {{r[0],r[1],r[2]},{r[12],r[13],r[14]},r[9]>0,r[10]>0,r[11]>0,
+            static_cast<int>(r[15]),static_cast<int>(r[16]),static_cast<int>(r[17]),r[23]};
+    });
 }
 
 void GpuCollisionPipeline::retain(std::span<const std::uint64_t> keys) {

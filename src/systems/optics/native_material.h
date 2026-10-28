@@ -8,7 +8,8 @@
 
 namespace Corona::Systems::OpticsDetail {
 
-inline Hardware::MaterialInfo pack_native_material(const GeometrySystem::MeshSlot& mesh,
+template<class MeshSlot>
+inline Hardware::MaterialInfo pack_native_material(const MeshSlot& mesh,
     const OpticsDevice& optics, std::uint32_t base_descriptor,
     bool disable_textures, bool lighting_enabled) {
     Hardware::MaterialInfo result{};

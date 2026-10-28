@@ -1,6 +1,5 @@
 #include "native_material.h"
 #include "native_camera.h"
-#include "native_lpv_data.h"
 #include <corona/utils/runtime_paths.h>
 #include <corona/utils/scene_path_key.h>
 #include <corona/diagnostics/thread_phase.h>
@@ -85,12 +84,12 @@
 
 namespace {
 
-constexpr uint32_t kShadowCascadeCount = 4;
-constexpr uint32_t kShadowMapSize = 1024;
-constexpr float kShadowMaxDistance = 100.0f;
-constexpr float kShadowSplitLambda = 0.95f;
-constexpr float kShadowBias = 0.0015f;
-constexpr float kSsaoStrength = 1.0f;
+constexpr uint32_t kShadowCascadeCount = NATIVE_SHADOW_CASCADES;
+constexpr uint32_t kShadowMapSize = NATIVE_SHADOW_SIZE;
+constexpr float kShadowMaxDistance = NATIVE_SHADOW_DISTANCE;
+constexpr float kShadowSplitLambda = NATIVE_SHADOW_SPLIT;
+constexpr float kShadowBias = NATIVE_SHADOW_BIAS;
+constexpr float kSsaoStrength = NATIVE_SSAO_STRENGTH;
 constexpr std::uint64_t kInitialInstanceTableCapacity = 4096;
 constexpr std::uint64_t kInitialMaterialTableCapacity = 1024;
 
@@ -131,14 +130,15 @@ struct OpticsDiagConfig {
 [[nodiscard]] const OpticsDiagConfig& optics_diag_config() {
     static const OpticsDiagConfig cfg = [] {
         OpticsDiagConfig c;
+        c.profile = env_flag_enabled("CORONA_OPTICS_DIAG_PROFILE");
+        c.debug_labels = env_flag_enabled("CORONA_OPTICS_DIAG_DEBUG_LABELS");
+#ifdef CORONA_NATIVE_DEVELOPER_DIAGNOSTICS
         c.skip_scene_visibility = env_flag_enabled("CORONA_OPTICS_DIAG_SKIP_SCENE_VISIBILITY");
         c.skip_shadows = env_flag_enabled("CORONA_OPTICS_DIAG_SKIP_SHADOWS");
         c.skip_deferred_compute = env_flag_enabled("CORONA_OPTICS_DIAG_SKIP_DEFERRED_COMPUTE");
         c.disable_textures = env_flag_enabled("CORONA_OPTICS_DIAG_DISABLE_TEXTURES");
         c.disable_albedo_sample = env_flag_enabled("CORONA_OPTICS_DIAG_DISABLE_ALBEDO_SAMPLE");
         c.force_solid_material = env_flag_enabled("CORONA_OPTICS_DIAG_FORCE_SOLID_MATERIAL");
-        c.profile = env_flag_enabled("CORONA_OPTICS_DIAG_PROFILE");
-        c.debug_labels = env_flag_enabled("CORONA_OPTICS_DIAG_DEBUG_LABELS");
         if (auto v = env_u64("CORONA_OPTICS_DIAG_ONLY_ACTOR")) {
             c.only_actor = static_cast<std::uintptr_t>(*v);
         }
@@ -157,6 +157,7 @@ struct OpticsDiagConfig {
             Corona::Systems::OpticsDetail::parse_shadow_cascade_mask(
                 env_u64("CORONA_OPTICS_DIAG_SHADOW_CASCADE_MASK"),
                 kShadowCascadeCount);
+#endif
         if (c.skip_scene_visibility || c.skip_shadows || c.skip_deferred_compute ||
             c.disable_textures || c.disable_albedo_sample || c.force_solid_material || c.profile ||
             c.debug_labels ||
@@ -741,6 +742,20 @@ void apply_pending_camera_viewport_updates() {
             camera->aspect = static_cast<float>(render_width) /
                              static_cast<float>(render_height);
         }
+        if(update.surface && !update.view_open) {
+            // One embedded viewport owns a surface. Explicit floating camera
+            // windows remain independent; old saved cameras must not render
+            // an additional backend behind the active story viewport.
+            std::vector<std::uintptr_t> obsolete;
+            for(const auto& camera:std::as_const(camera_storage)) {
+                const auto handle=reinterpret_cast<std::uintptr_t>(&camera);
+                if(handle!=update.camera_handle && camera.surface==update.surface && !camera.view_open)
+                    obsolete.push_back(handle);
+            }
+            for(auto handle:obsolete)if(auto camera=camera_storage.try_acquire_write(handle)) {
+                if(camera->surface==update.surface && !camera->view_open){camera->surface=nullptr;camera->follows_default_surface=false;}
+            }
+        }
     }
 }
 
@@ -809,14 +824,6 @@ void apply_pending_camera_state_updates() {
             if (Corona::has_camera_state_field(
                     update.fields, Corona::CameraStateUpdateField::VisionStablePlanes)) {
                 camera->vision_stable_planes = update.vision_stable_planes;
-            }
-            if (Corona::has_camera_state_field(
-                    update.fields, Corona::CameraStateUpdateField::ShadowCascadeDebug)) {
-                camera->shadow_cascade_debug = update.shadow_cascade_debug;
-            }
-            if (Corona::has_camera_state_field(
-                    update.fields, Corona::CameraStateUpdateField::SsaoEnabled)) {
-                camera->ssao_enabled = update.ssao_enabled;
             }
             if (Corona::has_camera_state_field(
                     update.fields, Corona::CameraStateUpdateField::ViewState)) {
@@ -2025,7 +2032,7 @@ using RenderDetail::bind_sampled_image;
 using RenderDetail::bind_storage_buffer;
 
 namespace {
-// A cold native capture may first voxelize the scene and propagate the LPV.
+// A cold native capture may first build solar RSMs and compile shading pipelines.
 constexpr auto kScreenshotRequestTimeout = std::chrono::seconds(30);
 }
 
@@ -2625,13 +2632,9 @@ bool OpticsSystem::ensure_native_render_resources() {
             hardware_->rsmFluxes[i].set_clear_color(0,0,0,0);
         }
 
-        const auto lpv_words=OpticsDetail::LpvData::cell_count*OpticsDetail::LpvData::transport_words;
-        hardware_->lpvInjection=make_storage_buffer<float>(lpv_words,"optics.lpv.injection",Horizon::CpuAccessMode::None);
-        hardware_->lpvParent=make_storage_buffer<float>(lpv_words,"optics.lpv.parent",Horizon::CpuAccessMode::None);
-        hardware_->lpvAccumulated=make_storage_buffer<float>(OpticsDetail::LpvData::cascade_count*OpticsDetail::LpvData::cell_count*OpticsDetail::LpvData::sh_words,"optics.lpv.accumulated",Horizon::CpuAccessMode::None);
-        for(auto& wave:hardware_->lpvWave)wave=make_storage_buffer<float>(lpv_words,"optics.lpv.wave",Horizon::CpuAccessMode::None);
-        hardware_->lpvMemory=Memory::GpuMemToken(Memory::ResKind::Texture,
-            4ull*kShadowMapSize*kShadowMapSize*32+(4ull*lpv_words+OpticsDetail::LpvData::cascade_count*OpticsDetail::LpvData::cell_count*OpticsDetail::LpvData::sh_words)*sizeof(float));
+        hardware_->rsmMemory=Memory::GpuMemToken(Memory::ResKind::Texture,
+            kShadowCascadeCount*uint64_t(kShadowMapSize)*kShadowMapSize*32);
+
 
         hardware_->refractionOpaquePipeline.emplace(visibility_vert_glsl_t{},visibility_frag_glsl_t{},make_visibility_pipeline_desc());
         hardware_->refractionExitPipeline.emplace(visibility_vert_glsl_t{},visibility_frag_glsl_t{},make_visibility_pipeline_desc(false));
@@ -2647,12 +2650,11 @@ bool OpticsSystem::ensure_native_render_resources() {
         hardware_->screenGiPipeline.emplace(screen_gi_comp_glsl, ktm::uvec3(8,8,1));
         hardware_->screenDepthPipeline.emplace(screen_depth_comp_glsl, ktm::uvec3(8,8,1));
         hardware_->screenFilterPipeline.emplace(screen_filter_comp_glsl, ktm::uvec3(8,8,1));
-        hardware_->lpvPipeline.emplace(lpv_comp_glsl,ktm::uvec3(8,8,1));
         hardware_->skyPipeline.emplace(sky_comp_glsl, ktm::uvec3(8, 8, 1));
         hardware_->skySHProjectPipeline.emplace(sky_sh_project_comp_glsl, ktm::uvec3(64, 1, 1));
         hardware_->tonemapPipeline.emplace(tonemap_comp_glsl, ktm::uvec3(8, 8, 1));
         hardware_->native_resources_ready = true;
-        CFW_LOG_INFO("NativeResourceLifecycle allocated: RSM/LPV/CSM payload=253.5 MiB");
+        CFW_LOG_INFO("NativeResourceLifecycle allocated: RSM payload=128 MiB, CSM depth=16 MiB, LPV=0 MiB");
         return true;
     } catch (const std::exception& error) {
         CFW_LOG_ERROR("OpticsSystem: native resource allocation failed: {}", error.what());
@@ -2685,7 +2687,6 @@ void OpticsSystem::release_native_render_resources() {
     hardware_->screenGiPipeline.reset();
     hardware_->screenDepthPipeline.reset();
     hardware_->screenFilterPipeline.reset();
-    hardware_->lpvPipeline.reset();
     hardware_->skyPipeline.reset();
     hardware_->skySHProjectPipeline.reset();
     hardware_->tonemapPipeline.reset();
@@ -2699,11 +2700,7 @@ void OpticsSystem::release_native_render_resources() {
     hardware_->rsmPositions = {};
     hardware_->rsmNormals = {};
     hardware_->rsmFluxes = {};
-    hardware_->lpvInjection = {};
-    hardware_->lpvParent = {};
-    hardware_->lpvAccumulated = {};
-    hardware_->lpvWave = {};
-    hardware_->lpvMemory = {};
+    hardware_->rsmMemory = {};
     hardware_->vpUniformBufferPool = {};
     hardware_->uniformBufferPool = {};
     hardware_->shadowInfoBufferPool = {};
@@ -3384,7 +3381,7 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
         hardware_->shadowPipelines.begin(), hardware_->shadowPipelines.end(),
         [](const auto& pipeline) { return pipeline.has_value(); });
     if (!hardware_->visibilityPipeline || !hardware_->lightingPipeline ||
-        !shadow_pipelines_ready || !hardware_->lpvPipeline ||
+        !shadow_pipelines_ready ||
         !hardware_->skyPipeline || !hardware_->tonemapPipeline || !hardware_->skySHProjectPipeline) return;
     auto& lighting = *hardware_->lightingPipeline;
     auto& shadow_pipelines = hardware_->shadowPipelines;
@@ -3841,10 +3838,17 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
         };
 
         std::shared_ptr<OpticsDetail::NativeLighting> direct_lighting;
+        Horizon::HardwareBuffer rsm_material_buffer;
+        std::vector<Hardware::MaterialInfo> rsm_materials;
+        std::vector<Horizon::HardwareImage> rsm_material_images;
+        std::vector<Horizon::HardwareBuffer> rsm_material_programs;
         struct ShadowCasterSnapshot {
+            std::unordered_map<uint32_t,uint32_t> material_ids;
+            std::size_t material_revision{};
             std::uintptr_t actor_handle = 0;
             std::uintptr_t profile_handle = 0;
             std::uintptr_t geometry_handle = 0;
+            std::uint64_t pose_revision = 0;
             ktm::fmat4x4 model_matrix{ktm::fmat4x4::from_eye()};
             Corona::Systems::OpticsDetail::ShadowCasterBoundsSnapshot bounds{};
             float max_abs_scale = 1.0f;
@@ -3854,7 +3858,6 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
         };
 
         ShadowSceneBounds shadow_scene_bounds;
-        bool shadow_geometry_deforming = false;
         std::vector<ShadowCasterSnapshot> shadow_casters;
         std::vector<Horizon::HardwareBuffer> shadow_indirect_buffers;  // CRITICAL: Must outlive commit()
         std::mutex shadow_indirect_buffers_mutex;  // Thread-safe for parallel shadow recording
@@ -3889,7 +3892,6 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
                     if(optics_acc->principled && optics_acc->principled->transmission>=.999f)continue;
                     auto geom = geom_storage.try_acquire_read(optics_acc->geometry_handle);
                     if (!geom || geom->transform_handle == 0) continue;
-                    shadow_geometry_deforming |= geom->is_skinned;
                     auto transform =
                         transform_storage.try_acquire_read(geom->transform_handle);
                     auto mech = SharedDataHub::instance()
@@ -3901,6 +3903,7 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
                     snapshot.actor_handle = actor_handle;
                     snapshot.profile_handle = profile_handle;
                     snapshot.geometry_handle = optics_acc->geometry_handle;
+                    snapshot.pose_revision = geom->skin_pose_revision;
                     snapshot.model_matrix = apply_native_local_correction(
                         transform->compute_matrix(), *geom);
                     snapshot.max_abs_scale = std::max({
@@ -3976,6 +3979,27 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
                          ++cascade) {
                         caster.cascade_slots[cascade] = std::move(slots[cascade]);
                     }
+                    auto profile=SharedDataHub::instance().profile_storage().acquire_read(caster.profile_handle);
+                    auto optics=SharedDataHub::instance().optics_storage().acquire_read(profile->optics_handle);
+                    caster.material_revision=optics->principled?optics->principled->revision:0;
+                    for(const auto& cascade_slots:caster.cascade_slots)for(const auto& slot:cascade_slots) {
+                        if(caster.material_ids.contains(slot.mesh_index))continue;
+                        caster.material_ids.emplace(slot.mesh_index,static_cast<uint32_t>(rsm_materials.size()));
+                        const auto descriptor=slot.texture?slot.texture.store_descriptor():0u;
+                        rsm_materials.push_back(OpticsDetail::pack_native_material(slot,*optics,descriptor,false,optics->bEnableLighting));
+                        if(slot.texture)rsm_material_images.push_back(slot.texture);
+                        if(slot.material) {
+                            sceneBatch.resource_keep_alive->model_materials.push_back(slot.material);
+                            for(const auto& image:slot.material->textures)if(image)rsm_material_images.push_back(image);
+                        }
+                        if(auto appearance=hardware_->appearance_cache.obtain(optics->principled)) {
+                            rsm_materials.back().flags|=64u;
+                            rsm_materials.back().occlusionDescriptor=appearance->program.store_descriptor();
+                            rsm_material_programs.push_back(appearance->program);
+                            for(const auto& image:appearance->images)rsm_material_images.push_back(image->image);
+                            sceneBatch.resource_keep_alive->appearances.push_back(std::move(appearance));
+                        }
+                    }
                 }
             }
         };
@@ -3990,11 +4014,13 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
             shadow.rsmPosition=hardware_->rsmPositions[cascade_index];
             shadow.rsmNormal=hardware_->rsmNormals[cascade_index];
             shadow.rsmFlux=hardware_->rsmFluxes[cascade_index];
-            bind_storage_buffer(shadow,shadow.rsmConsts.lpvInfo,direct_lighting->data);
+            bind_storage_buffer(shadow,shadow.rsmConsts.materialTableBufferIndex,rsm_material_buffer);
             bind_storage_buffer(shadow,shadow.rsmConsts.shadowInfo,sceneShadowBuffer);
+            shadow.rsmConsts.cascade=cascade_index;
             uint32_t shadow_draws = 0;
 
             struct PendingShadowDraw {
+                uint32_t material_id{};
                 Horizon::HardwareBuffer index_buffer;
                 Horizon::HardwareBuffer vertex_buffer;
                 std::uint32_t first_command{}, command_count{};
@@ -4031,6 +4057,7 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
                     draw_cmd.first_instance = 0;
 
                     PendingShadowDraw pending{};
+                    pending.material_id=caster.material_ids.at(slot.mesh_index);
                     pending.index_buffer = slot.geo.index;
                     pending.vertex_buffer = slot.geo.vertex;
                     pending.clip_matrix = clip_matrix;
@@ -4074,6 +4101,7 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
                      draw_index < pending_shadow_draws.size();
                      ++draw_index) {
                     const auto& pending = pending_shadow_draws[draw_index];
+                    shadow.rsmConsts.materialID=pending.material_id;
                     shadow.pushConsts.lightViewProjModel =
                         upload_value(pending.clip_matrix);
                     const auto& model=pending.model_matrix;
@@ -4196,19 +4224,12 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
                 break;
             }
         }
-        // Do not re-voxelize a large scene for every asynchronous mesh
-        // upload. An empty volume is safe during import and invalidates
-        // once all geometry is ready; camera changes do not rebuild it.
-        const SceneDevice loading_lpv_scene{};
-        direct_lighting=hardware_->lighting_cache.obtain(
-            geometry_loading?loading_lpv_scene:scene,native_environment,
-            geometry_loading?0:compute_vision_scene_signature(&scene),
-            {camera->position.x,camera->position.y,camera->position.z},
-            {camera->forward.x,camera->forward.y,camera->forward.z});
+        direct_lighting=hardware_->lighting_cache.obtain(native_environment);
+        hardware_->executor.wait(direct_lighting->ready);
         sceneBatch.resource_keep_alive->direct_lighting=direct_lighting;
         if (direct_lighting->authored_environment) {
             // The first authored directional is the solar RSM source.
-            // Authored HDR enters through LPV boundaries, so legacy sky
+            // Authored HDR has its own irradiance projection, so legacy sky
             // must not be added a second time.
             sky_intensity=0.f;
         }
@@ -4240,6 +4261,12 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
                 shadow_cascade_views[cascade].light_view_proj;
             hardware_->shadowInfoBufferObjects.shadowMapDescriptors[cascade] =
                 hardware_->shadowCascadeImages[cascade].store_descriptor();
+            auto& rsm=hardware_->shadowInfoBufferObjects.rsmDescriptors;
+            rsm[cascade*4]=hardware_->rsmPositions[cascade].store_descriptor();
+            rsm[cascade*4+1]=hardware_->rsmNormals[cascade].store_descriptor();
+            rsm[cascade*4+2]=hardware_->rsmFluxes[cascade].store_descriptor();
+            rsm[cascade*4+3]=std::bit_cast<uint32_t>(shadow_cascade_views[cascade].orthographic_width*
+                shadow_cascade_views[cascade].orthographic_height/float(kShadowMapSize*kShadowMapSize));
             cascade_near = cascade_far;
         }
         hardware_->shadowInfoBufferObjects.cascadeSplits = ktm::fvec4{
@@ -4248,12 +4275,14 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
             static_cast<float>(kShadowMapSize);
         hardware_->shadowInfoBufferObjects.shadowBias = kShadowBias;
         hardware_->shadowInfoBufferObjects.shadowEnabled =
-            (needs_shadow &&
+            (needs_shadow && !geometry_loading &&
              !diag.skip_shadows && diag.shadow_cascade_mask != 0u &&
              sun_intensity > 0.0f) ? 1u : 0u;
         native_shadows_enabled = hardware_->shadowInfoBufferObjects.shadowEnabled != 0u;
         prepare_shadow_caster_meshes();
-        hardware_->shadowInfoBufferObjects.lpvRadianceDescriptor=hardware_->lpvAccumulated.store_descriptor();
+        rsm_material_buffer=make_storage_buffer<Hardware::MaterialInfo>(
+            std::max<std::size_t>(1,rsm_materials.size()),"optics.rsm.materials");
+        if(!rsm_materials.empty())write_array_bytes(rsm_material_buffer,rsm_materials.data(),rsm_materials.size());
         hardware_->shadowInfoBufferObjects.sunColor=ktm::fvec4{sun_color.x*sun_intensity,sun_color.y*sun_intensity,sun_color.z*sun_intensity,0};
         hardware_->shadowInfoBufferObjects.sunDirection=ktm::fvec4{sun_dir.x,sun_dir.y,sun_dir.z,0};
         (void)write_object_bytes(sceneShadowBuffer,
@@ -4275,14 +4304,14 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
         const bool loading_guard = Corona::Geometry::NativeRenderLoadGuard::is_loading(
             geometry_loading, false);
         const bool should_run_ssao = Corona::Geometry::NativeRenderLoadGuard::effective_ssao(
-            loading_guard, camera->ssao_enabled, is_ssao_debug_mode);
+            loading_guard, true, is_ssao_debug_mode);
         const uint32_t sceneMaterialCount = static_cast<uint32_t>(sceneBatch.materials.size());
-        const bool has_refraction=!is_debug_mode && !loading_guard && !env_flag_enabled("CORONA_OPTICS_DISABLE_REFRACTION") &&
+        const bool has_refraction=!is_debug_mode && !loading_guard && true &&
             std::any_of(sceneBatch.materials.begin(),sceneBatch.materials.end(),[](const auto& m){return (m.flags&256u)!=0u;});
         auto& refraction=*native_view_resources_.at(cam_handle);
-        const bool has_ssgi=!is_debug_mode && !loading_guard && !env_flag_enabled("CORONA_OPTICS_DISABLE_SSGI");
+        const bool has_ssgi=!is_debug_mode && !loading_guard && true;
         const bool has_screen_trace=!is_debug_mode && !loading_guard &&
-            (has_ssgi || !env_flag_enabled("CORONA_OPTICS_DISABLE_SSR"));
+            (has_ssgi || true);
         if(has_screen_trace && !refraction.screen_depth) {
             refraction.screen_layout=OpticsDetail::ScreenSpaceLayout::make(hardware_->gbufferSize.x,hardware_->gbufferSize.y);
             refraction.screen_depth=make_storage_buffer<float>(refraction.screen_layout.hierarchy_words,
@@ -4339,8 +4368,8 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
             }
         }
         const uint32_t native_lighting_flags = (should_run_ssao ? 1u : 0u) |
-            ((!loading_guard && !env_flag_enabled("CORONA_OPTICS_DISABLE_SSR")) ? 2u : 0u) |
-            (kSkyAmbientEnabled ? 4u : 0u) | (camera->shadow_cascade_debug ? 8u : 0u) |
+            ((!loading_guard && true) ? 2u : 0u) |
+            (kSkyAmbientEnabled ? 4u : 0u) | 0u |
             (direct_lighting->authored_environment ? 16u : 0u) | (has_refraction ? 32u : 0u) | (has_ssgi ? 64u : 0u);
         const auto configure_lighting = [&](auto& lighting) {
         lighting.pushConsts.gbufferSize = upload_value(hardware_->gbufferSize);
@@ -4366,10 +4395,10 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
         lighting.pushConsts.outputMode = static_cast<uint32_t>(camera->output_mode);
         lighting.pushConsts.ssaoStrength = kSsaoStrength;
         lighting.pushConsts.disableAlbedoSample = diag.disable_albedo_sample ? 1u : 0u;
-        lighting.pushConsts.ssrMaxDistance = 40.0f;
-        lighting.pushConsts.ssrThickness = 0.08f;
-        lighting.pushConsts.ssrMaxRoughness = 0.55f;
-        lighting.pushConsts.ssrMaxSteps = 48u;
+        lighting.pushConsts.ssrMaxDistance = NATIVE_TRACE_DISTANCE;
+        lighting.pushConsts.ssrThickness = NATIVE_TRACE_THICKNESS;
+        lighting.pushConsts.ssrMaxRoughness = NATIVE_SSR_ROUGHNESS;
+        lighting.pushConsts.ssrMaxSteps = NATIVE_REFRACTION_STEPS;
         };
         configure_lighting(lighting);
         if(has_ssgi)configure_lighting(*hardware_->screenGiPipeline);
@@ -4447,17 +4476,14 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
         // ================================================================
         // 8. GPU sync & dispatch
         // ================================================================
-        const bool lpv_disabled = env_flag_enabled("CORONA_OPTICS_DISABLE_LPV");
         OpticsDetail::NativeLightFieldInputs light_field_inputs;
-        light_field_inputs.add(lpv_disabled ? 1u : 0u);
         light_field_inputs.add(native_shadows_enabled ? diag.shadow_cascade_mask : 0u);
         if (!direct_lighting->authored_environment || native_shadows_enabled) {
             for (float value : {sun_dir.x, sun_dir.y, sun_dir.z, sky_intensity})
                 light_field_inputs.add(value);
         }
         if (native_shadows_enabled) {
-            // RSM flux depends on the solar radiance and voxel albedo;
-            // injection also partitions texels by camera-space depth.
+            // RSM flux depends on solar radiance, material, geometry and cascade projection.
             for (float value : {sun_color.x * sun_intensity, sun_color.y * sun_intensity,
                                 sun_color.z * sun_intensity, camera->position.x,
                                 camera->position.y, camera->position.z,
@@ -4472,9 +4498,13 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
                 light_field_inputs.add(shadow_cascade_views[cascade].orthographic_height);
             }
             // Resident shadow casters and asynchronous shadow LODs can
-            // change without replacing the immutable voxel source.
+            // change without replacing the environment image.
             light_field_inputs.add(static_cast<uint32_t>(shadow_casters.size()));
             for (const auto& caster : shadow_casters) {
+                light_field_inputs.add(static_cast<uint32_t>(caster.material_revision));
+                light_field_inputs.add(static_cast<uint32_t>(caster.material_revision>>32));
+                light_field_inputs.add(static_cast<uint32_t>(caster.pose_revision));
+                light_field_inputs.add(static_cast<uint32_t>(caster.pose_revision>>32));
                 light_field_inputs.add(caster.cascade_visibility_mask);
                 for (unsigned c = 0; c < 4; ++c)
                     for (unsigned r = 0; r < 4; ++r)
@@ -4499,16 +4529,21 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
                 }
             }
         }
-        const bool reuse_light_field = !geometry_loading && !shadow_geometry_deforming &&
-            !env_flag_enabled("CORONA_OPTICS_FORCE_LIGHT_FIELD_UPDATE") &&
-            hardware_->lightFieldCache.matches(direct_lighting, light_field_inputs);
-        const bool update_shadow_maps = native_shadows_enabled && !reuse_light_field;
-        const bool update_lpv = !is_debug_mode && !diag.skip_deferred_compute && !reuse_light_field;
-        // Reprojection only reuses static scene history. Geometry/material/light
-        // changes rebuild the light field; deformation/loading/backend switches
-        // invalidate history, without copying scene assets.
-        screen[6]=(has_ssgi && refraction.screen_history_valid && !update_lpv &&
-            !shadow_geometry_deforming && refraction.screen_had_refraction==has_refraction) ? 1u : 0u;
+        for(const auto& material:rsm_materials) {
+            std::array<uint32_t,32> words;
+            std::memcpy(words.data(),&material,sizeof(material));
+            for(auto word:words)light_field_inputs.add(word);
+        }
+        for(const auto& program:rsm_material_programs)light_field_inputs.meshes.push_back(program);
+        light_field_inputs.images=rsm_material_images;
+        const bool reset_rsm=!hardware_->lightFieldCache.owned_by(view.scene_handle,view.camera_handle);
+        const bool light_field_changed=reset_rsm ||
+            !hardware_->lightFieldCache.matches(direct_lighting, light_field_inputs);
+        const bool update_shadow_maps = native_shadows_enabled && !geometry_loading && light_field_changed;
+        // Receiver validation rejects changed surfaces locally. Updating the
+        // light field does not discard every static receiver's temporal history.
+        screen[6]=(has_ssgi && !geometry_loading && refraction.screen_history_valid &&
+            refraction.screen_had_refraction==has_refraction) ? 1u : 0u;
         (void)write_object_bytes(sceneShadowBuffer,hardware_->shadowInfoBufferObjects);
         // dispatch ������ workgroup ����(ԭ���� vkCmdDispatch)����Щ�ӳ�ͨ��
         // ȫ�� local_size 8x8, �� dispatch_groups �����ػ��� ceil(w/8)xceil(h/8);
@@ -4568,7 +4603,7 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
             std::optional<Horizon::HardwareStream> stream{std::in_place,hardware_->executor};
             bool native_submission_cancelled = false;
 
-            if (update_shadow_maps || update_lpv) hardware_->lightFieldCache.invalidate();
+            if (update_shadow_maps) hardware_->lightFieldCache.begin_update();
 
             *stream << visibility.extent(hardware_->gbufferSize.x, hardware_->gbufferSize.y);
             if(has_refraction) {
@@ -4630,7 +4665,8 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
                             [&](std::uint32_t cascade) {
                                 auto& cascade_pipeline =
                                     *shadow_pipelines[cascade];
-                                *stream << cascade_pipeline.extent(kShadowMapSize, kShadowMapSize);
+                                cascade_pipeline.extent(kShadowMapSize, kShadowMapSize);
+                                *stream << RenderDetail::IndirectRaster{&cascade_pipeline,rsm_material_images,rsm_material_programs};
                             });
                     }
                     native_shadow_ms =
@@ -4640,62 +4676,13 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
                 if (!is_debug_mode && sky_sh_needs_update) {
                     *stream << hardware_->skySHProjectPipeline->dispatch_extent(1, 1);
                 }
-                if(update_lpv) {
-                auto& lpv=*hardware_->lpvPipeline;
-                bind_storage_buffer(lpv,lpv.pushConsts.info,direct_lighting->data);
-                bind_storage_buffer(lpv,lpv.pushConsts.injection,hardware_->lpvInjection);
-                bind_storage_buffer(lpv,lpv.pushConsts.accumulated,hardware_->lpvAccumulated);
-                bind_storage_buffer(lpv,lpv.pushConsts.parent,hardware_->lpvParent);
-                bind_storage_buffer(lpv,lpv.pushConsts.source,hardware_->lpvWave[1]);
-                bind_storage_buffer(lpv,lpv.pushConsts.destination,hardware_->lpvWave[0]);
-                bind_storage_buffer(lpv,lpv.pushConsts.shadowInfo,sceneShadowBuffer);
-                bind_storage_buffer(lpv,lpv.pushConsts.uniformInfo,sceneUboBuffer);
-                bind_storage_buffer(lpv,lpv.pushConsts.skySH,hardware_->skyIrradianceSHBuffer);
-                lpv.pushConsts.authored=direct_lighting->authored_environment?1u:0u;
-                lpv.pushConsts.disabled=lpv_disabled?1u:0u;
-                lpv.pushConsts.sunDirection=upload_value(sun_dir);
-                lpv.pushConsts.stride=8u;
-                constexpr auto lpv_n=OpticsDetail::LpvData::resolution;
-                for(unsigned level=0;level<OpticsDetail::LpvData::cascade_count;++level) {
-                lpv.pushConsts.level=level;
-                bind_storage_buffer(lpv,lpv.pushConsts.destination,hardware_->lpvWave[0]);
-                lpv.pushConsts.mode=0u;
-                *stream << lpv.dispatch_extent(lpv_n,lpv_n*lpv_n);
-                if(native_shadows_enabled)for(uint32_t cascade=0;cascade<kShadowCascadeCount;++cascade) {
-                    if((diag.shadow_cascade_mask&(1u<<cascade))==0u)continue;
-                    bind_sampled_image(lpv,lpv.pushConsts.positionImage,hardware_->rsmPositions[cascade]);
-                    bind_sampled_image(lpv,lpv.pushConsts.normalImage,hardware_->rsmNormals[cascade]);
-                    bind_sampled_image(lpv,lpv.pushConsts.fluxImage,hardware_->rsmFluxes[cascade]);
-                    const auto& cascade_view=shadow_cascade_views[cascade];
-                    lpv.pushConsts.texelArea=cascade_view.orthographic_width*cascade_view.orthographic_height/
-                        float(kShadowMapSize*kShadowMapSize);
-                    lpv.pushConsts.cascade=cascade;lpv.pushConsts.mode=1u;
-                    *stream << lpv.dispatch_extent(kShadowMapSize/8,kShadowMapSize/8);
-                }
-                lpv.pushConsts.mode=2u;
-                *stream << lpv.dispatch_extent(lpv_n,lpv_n*lpv_n);
-                lpv.pushConsts.mode=3u;
-                for(unsigned step=0;step<OpticsDetail::LpvData::propagation_steps;++step) {
-                    bind_storage_buffer(lpv,lpv.pushConsts.source,hardware_->lpvWave[step%2]);
-                    bind_storage_buffer(lpv,lpv.pushConsts.destination,hardware_->lpvWave[(step+1)%2]);
-                    *stream << lpv.dispatch_extent(lpv_n,lpv_n*lpv_n);
-                    if(env_flag_enabled("CORONA_OPTICS_THERMAL_BATCH") && (step+1)%8==0) {
-                        auto receipt=*stream << Horizon::commit();
-                        hardware_->executor.wait_completed(receipt);
-                        stream.emplace(hardware_->executor);
-                        const auto pause_start=PerfClock::now();
-                        std::this_thread::sleep_for(std::chrono::milliseconds(80));
-                        measurement_pause_ms+=elapsed_ms(pause_start,PerfClock::now());
-                    }
-                }
-                bind_storage_buffer(lpv,lpv.pushConsts.source,hardware_->lpvWave[OpticsDetail::LpvData::propagation_steps%2]);
-                lpv.pushConsts.mode=4u;
-                *stream << lpv.dispatch_extent(lpv_n,lpv_n*lpv_n);
-                }
-                }
                 lighting.dispatch_extent(hardware_->gbufferSize.x, hardware_->gbufferSize.y);
                 RenderDetail::IndirectDispatch material_dispatch{&lighting};
-                material_dispatch.buffers.push_back(hardware_->lpvAccumulated);
+                if(native_shadows_enabled)for(uint32_t cascade=0;cascade<kShadowCascadeCount;++cascade) {
+                    material_dispatch.images.push_back(hardware_->rsmPositions[cascade]);
+                    material_dispatch.images.push_back(hardware_->rsmNormals[cascade]);
+                    material_dispatch.images.push_back(hardware_->rsmFluxes[cascade]);
+                }
                 material_dispatch.images.push_back(direct_lighting->environment);
                 std::unordered_set<uint32_t> material_programs, material_images;
                 for (const auto& appearance : sceneBatch.resource_keep_alive->appearances) {
@@ -4757,14 +4744,14 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
                 if(has_refraction) {
                     // Immutable opaque background: refraction never reads its own output.
                     const uint32_t flags=(should_run_ssao?1u:0u) |
-                        ((!loading_guard && !env_flag_enabled("CORONA_OPTICS_DISABLE_SSR"))?2u:0u) |
+                        ((!loading_guard && true)?2u:0u) |
                         (kSkyAmbientEnabled?4u:0u) | (direct_lighting->authored_environment?16u:0u) | (has_ssgi?64u:0u);
                     lighting.pushConsts.featureFlags=flags;
                     bind_storage_image(lighting,lighting.pushConsts.visibilityImageIndex,refraction.opaque_visibility);
                     bind_sampled_image(lighting,lighting.pushConsts.depthImageIndex,refraction.opaque_depth);
                     bind_storage_image(lighting,lighting.pushConsts.finalOutputImage,refraction.opaque_color);
                     *stream << material_dispatch;
-                    lighting.pushConsts.featureFlags=flags|32u|(camera->shadow_cascade_debug?8u:0u);
+                    lighting.pushConsts.featureFlags=flags|32u|0u;
                     bind_storage_image(lighting,lighting.pushConsts.visibilityImageIndex,hardware_->visibilityImage);
                     bind_sampled_image(lighting,lighting.pushConsts.depthImageIndex,hardware_->depthImage);
                     bind_storage_image(lighting,lighting.pushConsts.finalOutputImage,render_target);
@@ -4819,8 +4806,9 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
                 refraction.screen_had_refraction=has_refraction;
                 ++refraction.screen_frame;
             } else refraction.screen_history_valid=false;
-            if (update_lpv) {
-                hardware_->lightFieldCache.submitted(direct_lighting, std::move(light_field_inputs));
+            if (update_shadow_maps) {
+                hardware_->lightFieldCache.submitted(direct_lighting, std::move(light_field_inputs),
+                    view.scene_handle,view.camera_handle);
             }
             native_commit_ms = elapsed_ms(native_commit_start, PerfClock::now());
             native_submit_ms = elapsed_ms(native_submit_start, PerfClock::now());
@@ -4828,10 +4816,10 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
                 // Opt-in regression measurement: command recording through GPU
                 // completion, excluding scene loading, frame pacing and PNG IO.
                 hardware_->executor.wait_completed(latest_submit_receipt);
-                CFW_LOG_INFO("NativeRenderTiming camera={} extent={}x{} render_ms={:.3f} lpv_updated={} rsm_updated={}",
+                CFW_LOG_INFO("NativeRenderTiming camera={} extent={}x{} render_ms={:.3f} gi=RSM+SSGI rsm_updated={}",
                     cam_handle, camera->width, camera->height,
                     elapsed_ms(native_submit_start, PerfClock::now())-measurement_pause_ms,
-                    update_lpv ? 1 : 0, update_shadow_maps ? 1 : 0);
+                    update_shadow_maps ? 1 : 0);
             }
         }
         if (hardware_) {

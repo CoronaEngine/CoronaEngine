@@ -346,12 +346,6 @@ void SharedDataHub::enqueue_camera_state_update(CameraStateUpdateCommand command
         requested_camera_vision_stable_planes_[command.camera_handle] = {
             command.vision_stable_planes, pending.sequence};
     }
-    if (has_camera_state_field(command.fields, CameraStateUpdateField::ShadowCascadeDebug)) {
-        pending.shadow_cascade_debug = command.shadow_cascade_debug;
-    }
-    if (has_camera_state_field(command.fields, CameraStateUpdateField::SsaoEnabled)) {
-        pending.ssao_enabled = command.ssao_enabled;
-    }
     if (has_camera_state_field(command.fields, CameraStateUpdateField::ViewState)) {
         pending.view_open = command.view_open;
         pending.view_x = command.view_x;

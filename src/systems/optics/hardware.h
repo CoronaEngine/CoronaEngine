@@ -30,7 +30,6 @@
 #include GLSL(shaders/screen_gi.comp.glsl)
 #include GLSL(shaders/screen_depth.comp.glsl)
 #include GLSL(shaders/screen_filter.comp.glsl)
-#include GLSL(shaders/lpv.comp.glsl)
 #include GLSL(shaders/sky.comp.glsl)
 #include GLSL(shaders/sky_sh_project.comp.glsl)
 #include GLSL(shaders/tonemap.comp.glsl)
@@ -126,9 +125,7 @@ struct Hardware {
     Corona::Horizon::HardwareImage uiDepthImage;        // Pass 2 depth, isolated from scene pass
     std::array<Corona::Horizon::HardwareImage, 4> shadowCascadeImages;
     std::array<Corona::Horizon::HardwareImage, 4> rsmPositions, rsmNormals, rsmFluxes;
-    Corona::Horizon::HardwareBuffer lpvInjection, lpvAccumulated, lpvParent;
-    std::array<Corona::Horizon::HardwareBuffer, 2> lpvWave;
-    Corona::Memory::GpuMemToken lpvMemory;
+    Corona::Memory::GpuMemToken rsmMemory;
     Corona::Systems::OpticsDetail::NativeLightFieldCache lightFieldCache;
 
     // === Final composited output ===
@@ -182,7 +179,6 @@ struct Hardware {
     std::optional<Corona::Horizon::ComputePipeline<screen_gi_comp_glsl_t>> screenGiPipeline;
     std::optional<Corona::Horizon::ComputePipeline<screen_depth_comp_glsl_t>> screenDepthPipeline;
     std::optional<Corona::Horizon::ComputePipeline<screen_filter_comp_glsl_t>> screenFilterPipeline;
-    std::optional<Corona::Horizon::ComputePipeline<lpv_comp_glsl_t>> lpvPipeline;
     std::optional<Corona::Horizon::ComputePipeline<sky_comp_glsl_t>> skyPipeline;
     std::optional<Corona::Horizon::ComputePipeline<sky_sh_project_comp_glsl_t>> skySHProjectPipeline;
     std::optional<Corona::Horizon::ComputePipeline<tonemap_comp_glsl_t>> tonemapPipeline;
@@ -221,7 +217,7 @@ struct Hardware {
         float shadowMapSize = 1024.0f;
         float shadowBias = 0.0015f;
         uint32_t shadowEnabled = 0;
-        uint32_t lpvRadianceDescriptor = 0;
+        uint32_t reserved = 0;
         ktm::fvec4 sunColor{};
         ktm::fvec4 sunDirection{};
         // Per-camera refraction descriptors live in the SSBO, keeping resolve
@@ -230,8 +226,10 @@ struct Hardware {
         // Hierarchy + bounded GI temporal resources. See screen_history.glsl.
         std::array<uint32_t,16> screenDescriptors{};
         ktm::fmat4x4 previousViewProjection{}, previousView{}, inverseView{};
+        // Each cascade: position / normal / flux descriptors, projected texel area.
+        std::array<uint32_t,16> rsmDescriptors{};
     } shadowInfoBufferObjects{};
-    static_assert(offsetof(ShadowInfoBufferObject, lpvRadianceDescriptor)==75u*sizeof(uint32_t));
+    static_assert(offsetof(ShadowInfoBufferObject, reserved)==75u*sizeof(uint32_t));
     static_assert(offsetof(ShadowInfoBufferObject, sunColor)==76u*sizeof(uint32_t));
     static_assert(offsetof(ShadowInfoBufferObject, sunDirection)==80u*sizeof(uint32_t));
     static_assert(offsetof(ShadowInfoBufferObject, refractionDescriptors)==84u*sizeof(uint32_t));
@@ -239,6 +237,8 @@ struct Hardware {
     static_assert(offsetof(ShadowInfoBufferObject, previousViewProjection)==108u*sizeof(uint32_t));
     static_assert(offsetof(ShadowInfoBufferObject, previousView)==124u*sizeof(uint32_t));
     static_assert(offsetof(ShadowInfoBufferObject, inverseView)==140u*sizeof(uint32_t));
+
+    static_assert(offsetof(ShadowInfoBufferObject, rsmDescriptors)==156u*sizeof(uint32_t));
 
     // === GPU-side instance info table (matches GLSL InstanceInfo layout) ===
     // 96 bytes = 24 uints per entry:

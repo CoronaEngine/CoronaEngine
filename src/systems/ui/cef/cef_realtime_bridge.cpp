@@ -700,7 +700,7 @@ bool handle_mesh_move(const CefRefPtr<CefFrame>& frame, const CefRefPtr<CefProce
     if(!values || values->GetSize()!=3) return true;
     for(int i=0;i<3;++i) command.velocity[i]=static_cast<float>(values->GetDouble(i));
     command.dt=static_cast<float>(args->GetDouble(4)); command.jump=args->GetBool(5);
-    command.turn=args->GetSize()==7;
+    command.turn=args->GetSize()==7 && args->GetType(6)!=VTYPE_NULL;
     if(command.turn) command.facing=static_cast<float>(args->GetDouble(6));
     auto callback=[frame,id,actor=command.actor](MechanicsSystem::MeshMoveEvent result) {
         nlohmann::json payload={{"requestId",id},{"actorHandle",actor},{"status",result.status},
