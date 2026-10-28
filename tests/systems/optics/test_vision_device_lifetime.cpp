@@ -39,7 +39,7 @@ struct VisionDeviceLifetimeTest {
                 events.emplace_back("scene");
                 delete value;
             });
-        optics.vision_scene_resources_.emplace(Vision::VisionSceneResourceKey{}, std::move(resource));
+        optics.vision_scene_resource_ = std::move(resource);
     }
 
     static void run() {

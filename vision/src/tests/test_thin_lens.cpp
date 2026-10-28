@@ -1,4 +1,4 @@
-#include "base/import/importer.h"
+#include "../../../tests/support/vision_test_scene.h"
 #include "base/mgr/pipeline.h"
 #include "base/mgr/scene.h"
 #include "base/scattering/sample.h"
@@ -45,10 +45,7 @@ void expect_nearly_equal(float3 lhs, float3 rhs, const char *message, float eps 
     expect(nearly_equal(lhs, rhs, eps), message);
 }
 
-fs::path write_test_scene() {
-    const fs::path dir = fs::temp_directory_path() / "vision-test-thin-lens";
-    fs::create_directories(dir);
-    const fs::path scene = dir / "scene.json";
+DataWrap make_test_scene() {
     const char *json = R"JSON(
 {
   "scene": {
@@ -163,10 +160,7 @@ fs::path write_test_scene() {
   }
 }
 )JSON";
-    std::ofstream out(scene, std::ios::binary);
-    out << json;
-    out.close();
-    return scene;
+    return DataWrap::parse(json);
 }
 
 void verify_device_ray_generation(Device &device, TSensor sensor) {
@@ -175,12 +169,14 @@ void verify_device_ray_generation(Device &device, TSensor sensor) {
     Buffer<float3> ray_directions = device.create_buffer<float3>(2, "test_thin_lens_directions");
 
     Kernel kernel = [&](BufferVar<float3> origins, BufferVar<float3> directions) {
+        sensor->load_data();
         Uint index = dispatch_id();
         SensorSample sample;
         sample.time = 0.f;
-        sample.p_film = make_float2(16.5f, 16.5f);
+        sample.p_film = make_float2(16.f, 16.f);
         $if(index == 0u) {
-            sample.p_lens = make_float2(0.5f, 0.5f);
+            // Polar disk sampling maps a zero radial coordinate to the center.
+            sample.p_lens = make_float2(0.f, 0.5f);
         } $else {
             sample.p_lens = make_float2(1.f, 0.5f);
         };
@@ -211,16 +207,14 @@ void verify_device_ray_generation(Device &device, TSensor sensor) {
 }// namespace
 
 int main(int argc, char *argv[]) {
-    auto device = RHIContext::instance().create_device();
+    Env::set_valid_check(false);
+    DynamicModule::clear_search_path();
+    RHIContext::instance().init(std::filesystem::current_path());
+    static auto device = RHIContext::instance().create_device();
     device.init_rtx();
     Global::instance().set_device(&device);
 
-    const fs::path scene_path = write_test_scene();
-    expect(fs::exists(scene_path), "temporary test scene should exist");
-
-    Global::instance().set_scene_path(scene_path.parent_path());
-    auto pipeline = Importer::import_scene(scene_path.string());
-    expect(pipeline != nullptr, "import_scene should create a pipeline");
+    auto pipeline = Corona::Tests::make_vision_test_pipeline(make_test_scene());
 
     pipeline->init();
     pipeline->prepare();
@@ -229,7 +223,7 @@ int main(int argc, char *argv[]) {
     expect(sensor.get() != nullptr, "pipeline scene should create a sensor");
     expect(sensor->impl_type() == string_view{"thin_lens"}, "sensor impl_type should be thin_lens");
     expect(sensor->category() == string_view{"sensor"}, "sensor category should be sensor");
-    expect_nearly_equal(sensor->fov_y(), 45.f, "thin_lens fov_y should match scene json");
+    expect_nearly_equal(sensor->fov_y(), 45.f, "thin_lens fov_y should match fixture");
     expect_nearly_equal(sensor->position(), make_float3(0.f), "thin_lens position should stay at origin");
     expect_nearly_equal(sensor->forward(), make_float3(0.f, 0.f, -1.f), "thin_lens forward should face -Z");
 
@@ -245,6 +239,8 @@ int main(int argc, char *argv[]) {
     expect_nearly_equal(sensor->fov_y(), Sensor::fov_min, "fov_y should clamp to Sensor::fov_min");
     sensor->set_fov_y(45.f);
 
+    sensor->update_device_data();
+    pipeline->upload_data();
     verify_device_ray_generation(device, sensor);
     return 0;
 }

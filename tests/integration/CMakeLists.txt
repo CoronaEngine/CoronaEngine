@@ -75,6 +75,12 @@ if(TARGET ocarina-backend-vulkan-compute)
     endforeach()
 endif()
 
+if(TARGET test-thin-lens)
+    add_test(NAME VisionThinLensTests COMMAND test-thin-lens)
+    set_tests_properties(VisionThinLensTests PROPERTIES
+        WORKING_DIRECTORY "$<TARGET_FILE_DIR:vision-material-principled_bsdf>"
+        RUN_SERIAL TRUE TIMEOUT 300)
+endif()
 add_executable(corona_vision_relax_scene_tests test_vision_relax_producers.cpp)
 target_include_directories(corona_vision_relax_scene_tests PRIVATE ${CMAKE_SOURCE_DIR}/vision/src)
 target_link_libraries(corona_vision_relax_scene_tests PRIVATE corona::engine vision-all_libs vision-relax-filter)
@@ -106,6 +112,25 @@ set_tests_properties(VisionShaderBindingTests PROPERTIES
     WORKING_DIRECTORY "$<TARGET_FILE_DIR:ocarina-backend-vulkan-compute>"
     RUN_SERIAL TRUE TIMEOUT 120)
 
+add_executable(corona_vision_engine_scene_tests
+    test_vision_engine_scene.cpp
+    test_vision_svgf_reprojection.cpp
+    test_vision_svgf_total_albedo.cpp)
+target_include_directories(corona_vision_engine_scene_tests PRIVATE
+    ${PROJECT_SOURCE_DIR}/include
+    ${PROJECT_SOURCE_DIR}/src/systems/optics
+    ${CMAKE_SOURCE_DIR}/vision/src)
+target_link_libraries(corona_vision_engine_scene_tests PRIVATE
+    corona::engine vision-all_libs)
+add_test(NAME VisionEngineSceneTests COMMAND corona_vision_engine_scene_tests)
+add_test(NAME VisionCameraSettingsTests COMMAND corona_vision_engine_scene_tests --cpu-only)
+add_test(NAME VisionSharedDisplayTests COMMAND corona_vision_engine_scene_tests --shared-display)
+set_tests_properties(VisionCameraSettingsTests VisionSharedDisplayTests PROPERTIES
+    WORKING_DIRECTORY "$<TARGET_FILE_DIR:vision-material-principled_bsdf>"
+    RUN_SERIAL TRUE TIMEOUT 300)
+set_tests_properties(VisionEngineSceneTests PROPERTIES
+    WORKING_DIRECTORY "$<TARGET_FILE_DIR:vision-material-principled_bsdf>")
+
 add_executable(corona_vision_restir_estimator_tests
     test_vision_restir_estimators.cpp
     test_vision_restir_reprojection.cpp
@@ -117,11 +142,11 @@ target_include_directories(corona_vision_restir_estimator_tests PRIVATE
 target_link_libraries(corona_vision_restir_estimator_tests PRIVATE
     corona::engine vision-all_libs vision-integrator-ReSTIR)
 add_test(NAME VisionReSTIREstimatorTests COMMAND corona_vision_restir_estimator_tests)
-# Real material variants and stable-plane SVGF compile GPU shaders on a cold cache.
+# The full material/glass suite compiles many GPU variants on a cold cache.
 set_tests_properties(VisionReSTIREstimatorTests PROPERTIES
     WORKING_DIRECTORY "$<TARGET_FILE_DIR:vision-material-principled_bsdf>"
     RUN_SERIAL TRUE
-    TIMEOUT 300)
+    TIMEOUT 900)
 add_test(NAME VisionReSTIRVisibilityMIS
     COMMAND ${Python_EXECUTABLE} ${CMAKE_SOURCE_DIR}/vision/src/tests/test_restir_visibility_mis.py)
 set_tests_properties(VisionReSTIRVisibilityMIS PROPERTIES TIMEOUT 30)
@@ -173,6 +198,32 @@ set_tests_properties(CollaborativeEditorLoopbackTests PROPERTIES
     TIMEOUT 30
     ENVIRONMENT_MODIFICATION "${_CORONA_LOOPBACK_ENVIRONMENT}"
 )
+add_executable(corona_archive_roundtrip_tests
+    test_archive_roundtrip.cpp
+    ${PROJECT_SOURCE_DIR}/src/shared_data_hub.cpp)
+target_include_directories(corona_archive_roundtrip_tests PRIVATE
+    ${PROJECT_SOURCE_DIR}/include ${PROJECT_SOURCE_DIR}/src/systems/ui
+    ${PROJECT_SOURCE_DIR}/src/systems/script/include)
+target_link_libraries(corona_archive_roundtrip_tests PRIVATE
+    corona_ui_system corona::resource::manager)
+if(COMMAND helicon_install_runtime_deps)
+    helicon_install_runtime_deps(corona_archive_roundtrip_tests)
+endif()
+add_custom_command(TARGET corona_archive_roundtrip_tests POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "$<IF:$<CONFIG:Debug>,${CEF_ROOT}/Debug/libcef.dll,${CEF_ROOT}/Release/libcef.dll>"
+        "$<TARGET_FILE_DIR:corona_archive_roundtrip_tests>/libcef.dll"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "$<IF:$<CONFIG:Debug>,${CEF_ROOT}/Debug/chrome_elf.dll,${CEF_ROOT}/Release/chrome_elf.dll>"
+        "$<TARGET_FILE_DIR:corona_archive_roundtrip_tests>/chrome_elf.dll"
+    VERBATIM)
+add_test(NAME ArchiveRoundtripTests COMMAND ${Python_EXECUTABLE}
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_archive_roundtrip.py
+    $<TARGET_FILE:corona_archive_roundtrip_tests> ${CORONA_EDITOR_SOURCE_DIR})
+set_tests_properties(ArchiveRoundtripTests PROPERTIES
+    RUN_SERIAL TRUE TIMEOUT 180
+    ENVIRONMENT_MODIFICATION "${_CORONA_LOOPBACK_ENVIRONMENT}")
+
 unset(_CORONA_LOOPBACK_PYTHON_DIR)
 unset(_CORONA_LOOPBACK_PATH_DIRS)
 unset(_CORONA_LOOPBACK_ENVIRONMENT)

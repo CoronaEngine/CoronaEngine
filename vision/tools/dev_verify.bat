@@ -4,10 +4,7 @@ setlocal
 :: ============================================================
 ::  Vision Dev Verify — one-click pipeline
 ::  Usage:
-::    dev_verify.bat                    Run all stages (build + test + format + regression)
-::    dev_verify.bat regression         Regression only
 ::    dev_verify.bat build test         Multiple stages
-::    dev_verify.bat regression --spp 64 --threshold 0.05
 :: ============================================================
 
 set "OPENCV_IO_ENABLE_OPENEXR=1"

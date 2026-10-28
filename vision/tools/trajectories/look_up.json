@@ -1,9 +1,0 @@
-{
-  "description": "Look up 15 degrees over 16 frames, then settle 32 frames",
-  "keyframes": [
-    {"frame": 0, "delta_pos": [0, 0, 0], "delta_pitch": 0, "delta_yaw": 0},
-    {"frame": 16, "delta_pos": [0, 0, 0], "delta_pitch": 15, "delta_yaw": 0},
-    {"frame": 48, "delta_pos": [0, 0, 0], "delta_pitch": 15, "delta_yaw": 0}
-  ],
-  "save_frames": [0, 4, 8, 12, 16, 24, 32, 40, 48]
-}

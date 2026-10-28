@@ -1,8 +1,4 @@
-"""Prepare identical ReSTIR fixtures and compare reference/candidate evaluation images.
-
-Original assets/scenes are read only. Run vision-eval under vision_thermal_run.py;
-use VISION_EVAL_FRAME_INTERVAL_MS to keep temporal convergence thermally safe.
-"""
+"""Compare rendered reference and candidate images without parsing scene archives."""
 from __future__ import annotations
 
 import argparse
@@ -10,63 +6,6 @@ import json
 from pathlib import Path
 
 
-def prepare(source: Path, destination: Path, width: int, height: int, denoiser: str):
-    destination.mkdir(parents=True, exist_ok=True)
-    inventory = []
-    for directory in sorted(path for path in source.iterdir() if path.is_dir()):
-        path = directory / "vision_scene.json"
-        record = {"scene": directory.name, "source": str(path)}
-        try:
-            data = json.loads(path.read_text(encoding="utf-8-sig"))
-            missing = []
-
-            def resolve_assets(value):
-                if isinstance(value, dict):
-                    for key, item in value.items():
-                        if key == "fn" and isinstance(item, str) and item:
-                            asset = (directory / item).resolve()
-                            value[key] = asset.as_posix()
-                            if not asset.is_file():
-                                missing.append(str(asset))
-                        else:
-                            resolve_assets(item)
-                elif isinstance(value, list):
-                    for item in value:
-                        resolve_assets(item)
-
-            resolve_assets(data.get("scene", {}))
-            if missing:
-                raise ValueError(f"Missing assets: {missing[:5]}")
-            render = data.setdefault("render", {})
-            integrator = render.setdefault("integrator", {})
-            integrator["type"] = "rt"
-            parameters = integrator.setdefault("param", {})
-            for channel in ["direct", "indirect"]:
-                settings = parameters.setdefault(channel, {})
-                settings.setdefault("spatial", {})
-                settings.setdefault("temporal", {})
-            if denoiser == "svgf":
-                dn = parameters.setdefault("denoiser", {})
-                dn["type"] = "svgf"
-                dn.setdefault("param", {})["enabled"] = True
-            else:
-                parameters["denoiser"] = {"type": denoiser, "param": {"enabled": True}}
-            render.setdefault("sampler", {}).setdefault("param", {})["spp"] = 1
-            fb = data.setdefault("pipeline", {}).setdefault("param", {}).setdefault("frame_buffer", {})
-            if fb.get("type", "normal") != "normal":
-                raise ValueError("Light-field framebuffer requires a separate comparison protocol")
-            fb["type"] = "normal"
-            fb.setdefault("param", {}).update(resolution=[width, height], accumulation=False)
-            data["output"] = {"spp": 32, "denoise": True, "save_exit": False, "fn": "result.png"}
-            output = destination / directory.name / "vision_scene.json"
-            output.parent.mkdir(exist_ok=True)
-            output.write_text(json.dumps(data, indent=2), encoding="utf-8")
-            record.update(status="ready", fixture=str(output), resolution=[width, height], denoiser=denoiser)
-        except (OSError, ValueError) as error:
-            record.update(status="skipped", reason=str(error))
-        inventory.append(record)
-    (destination / "inventory.json").write_text(json.dumps(inventory, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(json.dumps(inventory, ensure_ascii=False, indent=2))
 
 
 def compare(first: Path, second: Path, output: Path, first_label="Reference", second_label="Candidate"):
@@ -128,12 +67,6 @@ def compare(first: Path, second: Path, output: Path, first_label="Reference", se
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
-    prep = commands.add_parser("prepare")
-    prep.add_argument("source", type=Path)
-    prep.add_argument("destination", type=Path)
-    prep.add_argument("--width", type=int, default=640)
-    prep.add_argument("--height", type=int, default=360)
-    prep.add_argument("--denoiser", choices=["svgf", "ReBLUR", "ReLAX"], default="svgf")
     comparison = commands.add_parser("compare")
     comparison.add_argument("first", type=Path)
     comparison.add_argument("second", type=Path)
@@ -142,4 +75,4 @@ if __name__ == "__main__":
     comparison.add_argument("--second-label", default="Candidate")
     args = vars(parser.parse_args())
     command = args.pop("command")
-    (prepare if command == "prepare" else compare)(**args)
+    compare(**args)
