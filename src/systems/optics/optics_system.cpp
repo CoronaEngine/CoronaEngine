@@ -2050,6 +2050,7 @@ struct OpticsSystem::NativeViewResources {
     uint32_t screen_frame=0;
     bool screen_history_valid=false;
     bool screen_had_refraction=false;
+    std::size_t screen_lighting_signature=0;
     uint32_t width = 0;
     uint32_t height = 0;
     uint64_t last_used_frame = 0;
@@ -3463,12 +3464,13 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
         // ================================================================
         hardware_->uniformBufferObjects.eyePosition = make_vec4(camera->position, 1.0f);
         hardware_->uniformBufferObjects.eyeDir = make_vec4(camera->forward, 0.0f);
-        hardware_->uniformBufferObjects.eyeViewMatrix = camera->compute_view_matrix();
+        const auto scene_view=camera->compute_view_matrix();
+        const auto scene_view_projection=multiply_ktm_mat4(OpticsDetail::native_projection(*camera),scene_view);
+        hardware_->uniformBufferObjects.eyeViewMatrix = scene_view;
         hardware_->uniformBufferObjects.eyeProjMatrix = OpticsDetail::native_projection(*camera);
         hardware_->uniformBufferObjects.eyeInvProjMatrix =
             OpticsDetail::native_inverse_projection(*camera);
-        hardware_->vpUniformBufferObjects.viewProjMatrix =
-            multiply_ktm_mat4(OpticsDetail::native_projection(*camera), camera->compute_view_matrix());
+        hardware_->vpUniformBufferObjects.viewProjMatrix = scene_view_projection;
 
         // ---- Per-submission buffer ���ã�������֡/��������� buffer ���Ǿ�����----
         // �ӳظ���һ�ݵ�ǰ�� GPU ���õ� buffer������� pass ȫ�̸�����Щ lease��
@@ -4540,10 +4542,18 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
         const bool light_field_changed=reset_rsm ||
             !hardware_->lightFieldCache.matches(direct_lighting, light_field_inputs);
         const bool update_shadow_maps = native_shadows_enabled && !geometry_loading && light_field_changed;
+        // History contains signed indirect irradiance. A real lighting edit
+        // must reset it; camera-dependent RSM redraws must not. No scene assets
+        // or per-pixel buffers are copied for this small signature.
+        std::size_t screen_lighting_signature=sky_sig;
+        for(float value:{sun_color.x*sun_intensity,sun_color.y*sun_intensity,sun_color.z*sun_intensity})
+            mix_hash_float(screen_lighting_signature,value);
+        mix_hash(screen_lighting_signature,direct_lighting->environment.store_descriptor());
         // Receiver validation rejects changed surfaces locally. Updating the
         // light field does not discard every static receiver's temporal history.
         screen[6]=(has_ssgi && !geometry_loading && refraction.screen_history_valid &&
-            refraction.screen_had_refraction==has_refraction) ? 1u : 0u;
+            refraction.screen_had_refraction==has_refraction &&
+            refraction.screen_lighting_signature==screen_lighting_signature) ? 1u : 0u;
         (void)write_object_bytes(sceneShadowBuffer,hardware_->shadowInfoBufferObjects);
         // dispatch ������ workgroup ����(ԭ���� vkCmdDispatch)����Щ�ӳ�ͨ��
         // ȫ�� local_size 8x8, �� dispatch_groups �����ػ��� ceil(w/8)xceil(h/8);
@@ -4735,9 +4745,11 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
                         bind_storage_image(filter,filter.pushConsts.outputIndex,output);
                         *stream << filtering;
                     };
-                    run_filter(0,refraction.ssgi_correction,refraction.ssgi_history[screen_current]);
-                    run_filter(1,refraction.ssgi_history[screen_current],refraction.ssgi_filtered);
-                    run_filter(2,refraction.ssgi_filtered,refraction.ssgi_correction);
+                    // Filter the noisy estimator before history validation and
+                    // accumulation. Reuse the same three passes and GI images.
+                    run_filter(1,refraction.ssgi_correction,refraction.ssgi_filtered);
+                    run_filter(0,refraction.ssgi_filtered,refraction.ssgi_history[screen_current]);
+                    run_filter(2,refraction.ssgi_history[screen_current],refraction.ssgi_correction);
                     material_dispatch.images.push_back(refraction.ssgi_correction);
                     material_dispatch.images.push_back(refraction.ssgi_validation[screen_current]);
                 }
@@ -4800,10 +4812,13 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
             latest_submit_receipt = *stream << Horizon::commit();
             hardware_->last_receipt = latest_submit_receipt;
             if(has_ssgi && !diag.skip_deferred_compute) {
-                refraction.previous_view_projection=hardware_->vpUniformBufferObjects.viewProjMatrix;
-                refraction.previous_view=hardware_->uniformBufferObjects.eyeViewMatrix;
+                // Preserve the scene matrices used by this submission, never
+                // scratch state from the subsequent orthographic UI pass.
+                refraction.previous_view_projection=scene_view_projection;
+                refraction.previous_view=scene_view;
                 refraction.screen_history_valid=true;
                 refraction.screen_had_refraction=has_refraction;
+                refraction.screen_lighting_signature=screen_lighting_signature;
                 ++refraction.screen_frame;
             } else refraction.screen_history_valid=false;
             if (update_shadow_maps) {
@@ -4979,15 +4994,14 @@ Horizon::HardwareImage* OpticsSystem::compose_surface_ui_overlay(
         make_orthographic_lh(ortho_width, kFollowCameraOrthoHeight,
                              kFollowCameraNear, kFollowCameraFar);
 
-    hardware_->vpUniformBufferObjects.viewProjMatrix =
-        multiply_ktm_mat4(ortho_proj, camera.compute_view_matrix());
+    Hardware::VPUniformBufferObject ui_vp;
+    ui_vp.viewProjMatrix=multiply_ktm_mat4(ortho_proj,camera.compute_view_matrix());
     // UI overlay pass ͬ��ÿ�����д���� buffer���볡�� pass ͬһ��������Ϊ�����á�
     // keep_alive ���ڴ���� stream �ϣ��뱾 overlay �� dispatch ͬһ submission����
     auto uiVpLease = hardware_->uiVpUniformBufferPool.acquire(
         [] { return make_storage_buffer<Hardware::VPUniformBufferObject>(1, "optics.ui_vp_uniform.pool"); });
     Horizon::HardwareBuffer& uiVpBuffer = *uiVpLease.buffer;
-    (void)write_object_bytes(uiVpBuffer,
-                             hardware_->vpUniformBufferObjects);
+    (void)write_object_bytes(uiVpBuffer,ui_vp);
     const uint32_t uiVpDescriptor = FramePlaceBufferPool::store_descriptor(uiVpBuffer);
     stream << RetainSubmission{uiVpLease.busy};
 

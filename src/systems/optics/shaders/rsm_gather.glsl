@@ -51,7 +51,7 @@ float rsmScreenVisibility(vec3 receiver,vec3 source) {
     }
     return 1.;
 }
-vec3 gatherRsm(Surface receiver,uint seed) {
+vec3 gatherRsm(Surface receiver,uint seed,uint frame) {
     if(pushConsts.shadowEnabled==0u)return vec3(0);
     vec3 result=vec3(0);
     const float radius=NATIVE_RSM_LOCAL_RADIUS;
@@ -60,7 +60,10 @@ vec3 gatherRsm(Surface receiver,uint seed) {
         uint posTex=rsmDescriptor(cascade,0u),normalTex=rsmDescriptor(cascade,1u),fluxTex=rsmDescriptor(cascade,2u);
         ivec2 size=textureSize(textures[nonuniformEXT(posTex)],0);
         for(uint i=0u;i<uint(NATIVE_RSM_SAMPLES_PER_CASCADE);++i) {
-            vec2 u=randomPair(i,seed+cascade*7919u);
+            // Each mixture branch needs its own complete 2D sequence. Taking
+            // even/odd indices of one Sobol sequence biases its first dimension.
+            vec2 u=temporalPair(frame*uint(NATIVE_RSM_SAMPLES_PER_CASCADE/2)+i/2u,
+                seed+cascade*7919u+(i&1u)*104729u);
             // Equal mixture: local disk for nearby transport + full-map support.
             // The PDF includes both branches, including clipped disk samples.
             vec2 uv=(i&1u)==0u?center+radius*sqrt(u.x)*vec2(cos(2.*PI*u.y),sin(2.*PI*u.y)):u;

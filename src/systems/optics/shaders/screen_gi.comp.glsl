@@ -8,8 +8,17 @@ layout(local_size_x=8,local_size_y=8) in;
 #include "screen_vbuffer_trace.glsl"
 
 uint randomBits(uint v) {v^=v>>16;v*=0x7feb352du;v^=v>>15;v*=0x846ca68bu;return v^(v>>16);}
-vec2 randomPair(uint index,uint seed) {
-    return vec2(randomBits(seed+index*2u),randomBits(seed+index*2u+1u))*(1./4294967296.);
+vec2 temporalPair(uint index,uint seed) {
+    // Digitally shifted 2D Sobol sequence. Keep the per-pixel shift fixed:
+    // hashing the frame discards stratification across the history window.
+    uint y=0u,direction=0x80000000u;
+    for(uint bits=index;bits!=0u;bits>>=1u) {
+        if((bits&1u)!=0u)y^=direction;
+        direction^=direction>>1u;
+    }
+    uvec2 v=uvec2(bitfieldReverse(index),y)^uvec2(randomBits(seed),randomBits(seed^0x9e3779b9u));
+    // 23-bit bin centers remain strictly inside (0,1) in float precision.
+    return (vec2(v>>9u)+.5)*(1./8388608.);
 }
 #include "rsm_gather.glsl"
 void main() {
@@ -26,13 +35,13 @@ void main() {
             vec3 tangent=normalize(cross(abs(n.y)<.95?vec3(0,1,0):vec3(1,0,0),n));
             vec3 bitangent=cross(n,tangent);
             uint frame=readUint(pushConsts.shadowInfoBufferIndex,97u);
-            uint seed=randomBits(uint(p.y)*uint(screenGiSize().x)+uint(p.x))^randomBits(frame);
+            uint seed=randomBits(uint(p.y)*uint(screenGiSize().x)+uint(p.x));
             uint samples=readUint(pushConsts.shadowInfoBufferIndex,98u)!=0u?uint(NATIVE_GI_STABLE_SAMPLES):uint(NATIVE_GI_RESET_SAMPLES);
-            vec3 rsm=gatherRsm(receiver,seed^0x9e3779b9u);
+            vec3 rsm=gatherRsm(receiver,seed^0x9e3779b9u,frame);
             for(uint i=0u;i<samples;++i) {
                 // Cosine-weighted diffuse hemisphere, not a specular reflection.
-                // Stratification plus frame scrambling gives new paths every frame.
-                vec2 u=randomPair(i,seed);u.x=(float(i)+u.x)/float(samples);
+                // Successive frames extend the same stratified sequence.
+                vec2 u=temporalPair(frame*uint(NATIVE_GI_STABLE_SAMPLES)+i,seed);
                 float r=sqrt(u.x),phi=2.*PI*u.y;
                 vec3 direction=tangent*(r*cos(phi))+bitangent*(r*sin(phi))+n*sqrt(1.-u.x);
                 ivec2 hp;float confidence;
