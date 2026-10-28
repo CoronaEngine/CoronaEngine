@@ -2025,7 +2025,7 @@ using RenderDetail::bind_sampled_image;
 using RenderDetail::bind_storage_buffer;
 
 namespace {
-// A cold native capture may first build the full-scene shadow BVH on the CPU.
+// A cold native capture may first voxelize the scene and propagate the LPV.
 constexpr auto kScreenshotRequestTimeout = std::chrono::seconds(30);
 }
 
@@ -2034,8 +2034,15 @@ struct OpticsSystem::NativeViewResources {
     Horizon::HardwareImage depth;
     Horizon::HardwareImage opaque_visibility, opaque_depth, exit_visibility, exit_depth, opaque_color, front_snapshot;
     Memory::GpuMemToken refraction_memory;
-    Horizon::HardwareImage ssgi_correction;
+    Horizon::HardwareImage ssgi_correction, ssgi_filtered;
+    std::array<Horizon::HardwareImage,2> ssgi_history, ssgi_validation;
+    Horizon::HardwareBuffer screen_depth;
+    OpticsDetail::ScreenSpaceLayout screen_layout{};
     Memory::GpuMemToken ssgi_memory;
+    ktm::fmat4x4 previous_view_projection{}, previous_view{};
+    uint32_t screen_frame=0;
+    bool screen_history_valid=false;
+    bool screen_had_refraction=false;
     uint32_t width = 0;
     uint32_t height = 0;
     uint64_t last_used_frame = 0;
@@ -2637,6 +2644,9 @@ bool OpticsSystem::ensure_native_render_resources() {
                 shadow_desc);
         }
         hardware_->lightingPipeline.emplace(lighting_comp_glsl, ktm::uvec3(8, 8, 1));
+        hardware_->screenGiPipeline.emplace(screen_gi_comp_glsl, ktm::uvec3(8,8,1));
+        hardware_->screenDepthPipeline.emplace(screen_depth_comp_glsl, ktm::uvec3(8,8,1));
+        hardware_->screenFilterPipeline.emplace(screen_filter_comp_glsl, ktm::uvec3(8,8,1));
         hardware_->lpvPipeline.emplace(lpv_comp_glsl,ktm::uvec3(8,8,1));
         hardware_->skyPipeline.emplace(sky_comp_glsl, ktm::uvec3(8, 8, 1));
         hardware_->skySHProjectPipeline.emplace(sky_sh_project_comp_glsl, ktm::uvec3(64, 1, 1));
@@ -2672,6 +2682,9 @@ void OpticsSystem::release_native_render_resources() {
     hardware_->refractionFrontPipeline.reset();
     for (auto& pipeline : hardware_->shadowPipelines) pipeline.reset();
     hardware_->lightingPipeline.reset();
+    hardware_->screenGiPipeline.reset();
+    hardware_->screenDepthPipeline.reset();
+    hardware_->screenFilterPipeline.reset();
     hardware_->lpvPipeline.reset();
     hardware_->skyPipeline.reset();
     hardware_->skySHProjectPipeline.reset();
@@ -2841,7 +2854,8 @@ void OpticsSystem::bind_native_view_resources(std::uintptr_t camera_handle,
         resources.opaque_visibility={};resources.opaque_depth={};resources.exit_visibility={};
         resources.exit_depth={};resources.opaque_color={};resources.refraction_memory={};
         resources.front_snapshot={};
-        resources.ssgi_correction={};resources.ssgi_memory={};
+        resources.ssgi_correction={};resources.ssgi_filtered={};resources.ssgi_history={};resources.ssgi_validation={};
+        resources.screen_depth={};resources.ssgi_memory={};resources.screen_history_valid=false;resources.screen_frame=0;
         resources.width = width;
         resources.height = height;
     }
@@ -4267,11 +4281,25 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
             std::any_of(sceneBatch.materials.begin(),sceneBatch.materials.end(),[](const auto& m){return (m.flags&256u)!=0u;});
         auto& refraction=*native_view_resources_.at(cam_handle);
         const bool has_ssgi=!is_debug_mode && !loading_guard && !env_flag_enabled("CORONA_OPTICS_DISABLE_SSGI");
-        if(has_ssgi && !refraction.ssgi_correction) {
-            const auto w=hardware_->gbufferSize.x,h=hardware_->gbufferSize.y;
-            refraction.ssgi_correction=make_storage_image(w,h,Horizon::Format::RGBA16_FLOAT,"ssgi.correction");
-            refraction.ssgi_memory=Memory::GpuMemToken(Memory::ResKind::Texture,uint64_t(w)*h*8);
+        const bool has_screen_trace=!is_debug_mode && !loading_guard &&
+            (has_ssgi || !env_flag_enabled("CORONA_OPTICS_DISABLE_SSR"));
+        if(has_screen_trace && !refraction.screen_depth) {
+            refraction.screen_layout=OpticsDetail::ScreenSpaceLayout::make(hardware_->gbufferSize.x,hardware_->gbufferSize.y);
+            refraction.screen_depth=make_storage_buffer<float>(refraction.screen_layout.hierarchy_words,
+                "screen.depth_hierarchy",Horizon::CpuAccessMode::None);
         }
+        if(has_ssgi && !refraction.ssgi_correction) {
+            const auto layout=refraction.screen_layout;
+            refraction.ssgi_correction=make_storage_image(layout.width,layout.height,Horizon::Format::RGBA16_FLOAT,"ssgi.raw");
+            refraction.ssgi_filtered=make_storage_image(layout.width,layout.height,Horizon::Format::RGBA16_FLOAT,"ssgi.filtered");
+            for(unsigned i=0;i<2;++i) {
+                refraction.ssgi_history[i]=make_storage_image(layout.width,layout.height,Horizon::Format::RGBA16_FLOAT,"ssgi.history");
+                refraction.ssgi_validation[i]=make_storage_image(layout.width,layout.height,Horizon::Format::RG32_UINT,"ssgi.validation");
+            }
+            refraction.ssgi_memory=Memory::GpuMemToken(Memory::ResKind::Texture,layout.bytes());
+        }
+        const uint32_t screen_current=refraction.screen_frame&1u,screen_previous=screen_current^1u;
+        if(!has_ssgi)refraction.screen_history_valid=false;
         if(has_refraction) {
             const auto w=hardware_->gbufferSize.x,h=hardware_->gbufferSize.y;
             if(!refraction.opaque_visibility) {
@@ -4310,8 +4338,11 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
                 pass.record_indirect(draw.index,draw.vertex,draw.indirect,draw.params);
             }
         }
-        // One VBuffer resolve: AO and shadow visibility are evaluated at
-        // the shaded surface. No guide/AO/mask images or filter traffic.
+        const uint32_t native_lighting_flags = (should_run_ssao ? 1u : 0u) |
+            ((!loading_guard && !env_flag_enabled("CORONA_OPTICS_DISABLE_SSR")) ? 2u : 0u) |
+            (kSkyAmbientEnabled ? 4u : 0u) | (camera->shadow_cascade_debug ? 8u : 0u) |
+            (direct_lighting->authored_environment ? 16u : 0u) | (has_refraction ? 32u : 0u) | (has_ssgi ? 64u : 0u);
+        const auto configure_lighting = [&](auto& lighting) {
         lighting.pushConsts.gbufferSize = upload_value(hardware_->gbufferSize);
         bind_storage_image(lighting, lighting.pushConsts.visibilityImageIndex, hardware_->visibilityImage);
         bind_sampled_image(lighting, lighting.pushConsts.depthImageIndex, hardware_->depthImage);
@@ -4324,10 +4355,6 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
         bind_storage_image(lighting, lighting.pushConsts.finalOutputImage, render_target);
         lighting.pushConsts.instanceCount = native_instance_count;
         lighting.pushConsts.materialCount = sceneMaterialCount;
-        const uint32_t native_lighting_flags = (should_run_ssao ? 1u : 0u) |
-            ((!loading_guard && !env_flag_enabled("CORONA_OPTICS_DISABLE_SSR")) ? 2u : 0u) |
-            (kSkyAmbientEnabled ? 4u : 0u) | (camera->shadow_cascade_debug ? 8u : 0u) |
-            (direct_lighting->authored_environment ? 16u : 0u) | (has_refraction ? 32u : 0u) | (has_ssgi ? 64u : 0u);
         lighting.pushConsts.featureFlags=native_lighting_flags;
         bind_sampled_image(lighting, lighting.pushConsts.shadowMap0, hardware_->shadowCascadeImages[0]);
         bind_sampled_image(lighting, lighting.pushConsts.shadowMap1, hardware_->shadowCascadeImages[1]);
@@ -4343,6 +4370,9 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
         lighting.pushConsts.ssrThickness = 0.08f;
         lighting.pushConsts.ssrMaxRoughness = 0.55f;
         lighting.pushConsts.ssrMaxSteps = 48u;
+        };
+        configure_lighting(lighting);
+        if(has_ssgi)configure_lighting(*hardware_->screenGiPipeline);
         hardware_->shadowInfoBufferObjects.refractionDescriptors={};
         if(has_refraction) {
             hardware_->shadowInfoBufferObjects.refractionDescriptors={refraction.opaque_visibility.store_descriptor(),
@@ -4350,7 +4380,22 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
                 refraction.exit_depth.store_descriptor(),refraction.opaque_color.store_descriptor(),0,0,0};
         }
         if(has_ssgi)hardware_->shadowInfoBufferObjects.refractionDescriptors[5]=refraction.ssgi_correction.store_descriptor();
-        (void)write_object_bytes(sceneShadowBuffer,hardware_->shadowInfoBufferObjects);
+        auto& screen=hardware_->shadowInfoBufferObjects.screenDescriptors;
+        screen={};
+        if(has_screen_trace) {
+            const auto layout=refraction.screen_layout;
+            screen[0]=refraction.screen_depth.store_descriptor();
+            screen[1]=layout.width;screen[2]=layout.height;screen[3]=layout.stride;
+            screen[4]=layout.levels;screen[5]=refraction.screen_frame;
+            if(has_ssgi) {
+                screen[7]=refraction.ssgi_history[screen_previous].store_descriptor();
+                screen[8]=refraction.ssgi_validation[screen_current].store_descriptor();
+                screen[9]=refraction.ssgi_validation[screen_previous].store_descriptor();
+                hardware_->shadowInfoBufferObjects.previousViewProjection=refraction.previous_view_projection;
+                hardware_->shadowInfoBufferObjects.previousView=refraction.previous_view;
+                hardware_->shadowInfoBufferObjects.inverseView=ktm::inverse(hardware_->uniformBufferObjects.eyeViewMatrix);
+            }
+        }
 
         // ================================================================
         // 5b. Sky �� SH9 projection (sky-driven ambient).
@@ -4459,6 +4504,12 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
             hardware_->lightFieldCache.matches(direct_lighting, light_field_inputs);
         const bool update_shadow_maps = native_shadows_enabled && !reuse_light_field;
         const bool update_lpv = !is_debug_mode && !diag.skip_deferred_compute && !reuse_light_field;
+        // Reprojection only reuses static scene history. Geometry/material/light
+        // changes rebuild the light field; deformation/loading/backend switches
+        // invalidate history, without copying scene assets.
+        screen[6]=(has_ssgi && refraction.screen_history_valid && !update_lpv &&
+            !shadow_geometry_deforming && refraction.screen_had_refraction==has_refraction) ? 1u : 0u;
+        (void)write_object_bytes(sceneShadowBuffer,hardware_->shadowInfoBufferObjects);
         // dispatch ������ workgroup ����(ԭ���� vkCmdDispatch)����Щ�ӳ�ͨ��
         // ȫ�� local_size 8x8, �� dispatch_groups �����ػ��� ceil(w/8)xceil(h/8);
         // ����ȡ�Թ��߷������ʵ local size(���� Horizon SPIR-V patch ����)��
@@ -4654,20 +4705,54 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
                         if (material_images.insert(image->image.store_descriptor()).second)
                             material_dispatch.images.push_back(image->image);
                 }
-                if(has_ssgi) {
-                    const auto flags=native_lighting_flags;
-                    lighting.pushConsts.featureFlags=(flags&~32u)|128u;
-                    if(has_refraction) {
-                        bind_storage_image(lighting,lighting.pushConsts.visibilityImageIndex,refraction.opaque_visibility);
-                        bind_sampled_image(lighting,lighting.pushConsts.depthImageIndex,refraction.opaque_depth);
+                if(has_screen_trace) {
+                    auto& depth=*hardware_->screenDepthPipeline;
+                    depth.pc.size=upload_value(hardware_->gbufferSize);
+                    bind_sampled_image(depth,depth.pc.depthIndex,has_refraction?refraction.opaque_depth:hardware_->depthImage);
+                    bind_storage_buffer(depth,depth.pc.pyramidIndex,refraction.screen_depth);
+                    bind_storage_buffer(depth,depth.pc.uniformIndex,sceneUboBuffer);
+                    for(uint32_t level=1;level<refraction.screen_layout.levels;++level) {
+                        depth.pc.level=level;
+                        const auto scale=1u<<level;
+                        depth.dispatch_extent((hardware_->gbufferSize.x+scale-1)/scale,(hardware_->gbufferSize.y+scale-1)/scale);
+                        RenderDetail::IndirectDispatch dispatch{&depth};
+                        *stream << dispatch;
                     }
-                    bind_storage_image(lighting,lighting.pushConsts.finalOutputImage,refraction.ssgi_correction);
-                    *stream << material_dispatch;
-                    lighting.pushConsts.featureFlags=flags;
-                    bind_storage_image(lighting,lighting.pushConsts.visibilityImageIndex,hardware_->visibilityImage);
-                    bind_sampled_image(lighting,lighting.pushConsts.depthImageIndex,hardware_->depthImage);
-                    bind_storage_image(lighting,lighting.pushConsts.finalOutputImage,render_target);
+                    material_dispatch.buffers.push_back(refraction.screen_depth);
+                }
+                if(has_ssgi) {
+                    const auto layout=refraction.screen_layout;
+                    auto& gi=*hardware_->screenGiPipeline;
+                    if(has_refraction) {
+                        bind_storage_image(gi,gi.pushConsts.visibilityImageIndex,refraction.opaque_visibility);
+                        bind_sampled_image(gi,gi.pushConsts.depthImageIndex,refraction.opaque_depth);
+                    }
+                    bind_storage_image(gi,gi.pushConsts.finalOutputImage,refraction.ssgi_correction);
+                    gi.dispatch_extent(layout.width,layout.height);
+                    auto dispatch=material_dispatch;
+                    dispatch.pipeline=&gi;
+                    dispatch.writable_images={refraction.ssgi_validation[screen_current]};
+                    *stream << dispatch;
+
+                    auto& filter=*hardware_->screenFilterPipeline;
+                    filter.pushConsts.gbufferSize=upload_value(hardware_->gbufferSize);
+                    bind_storage_buffer(filter,filter.pushConsts.uniformBufferIndex,sceneUboBuffer);
+                    bind_storage_buffer(filter,filter.pushConsts.shadowInfoBufferIndex,sceneShadowBuffer);
+                    filter.dispatch_extent(layout.width,layout.height);
+                    RenderDetail::IndirectDispatch filtering{&filter};
+                    filtering.images={refraction.ssgi_validation[screen_current],refraction.ssgi_validation[screen_previous],
+                        refraction.ssgi_history[screen_previous]};
+                    const auto run_filter=[&](uint32_t mode,const Horizon::HardwareImage& input,const Horizon::HardwareImage& output) {
+                        filter.pushConsts.mode=mode;
+                        bind_storage_image(filter,filter.pushConsts.inputIndex,input);
+                        bind_storage_image(filter,filter.pushConsts.outputIndex,output);
+                        *stream << filtering;
+                    };
+                    run_filter(0,refraction.ssgi_correction,refraction.ssgi_history[screen_current]);
+                    run_filter(1,refraction.ssgi_history[screen_current],refraction.ssgi_filtered);
+                    run_filter(2,refraction.ssgi_filtered,refraction.ssgi_correction);
                     material_dispatch.images.push_back(refraction.ssgi_correction);
+                    material_dispatch.images.push_back(refraction.ssgi_validation[screen_current]);
                 }
                 if(has_refraction) {
                     // Immutable opaque background: refraction never reads its own output.
@@ -4727,6 +4812,13 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
                    << RetainSubmission{sceneBatch.resource_keep_alive};
             latest_submit_receipt = *stream << Horizon::commit();
             hardware_->last_receipt = latest_submit_receipt;
+            if(has_ssgi && !diag.skip_deferred_compute) {
+                refraction.previous_view_projection=hardware_->vpUniformBufferObjects.viewProjMatrix;
+                refraction.previous_view=hardware_->uniformBufferObjects.eyeViewMatrix;
+                refraction.screen_history_valid=true;
+                refraction.screen_had_refraction=has_refraction;
+                ++refraction.screen_frame;
+            } else refraction.screen_history_valid=false;
             if (update_lpv) {
                 hardware_->lightFieldCache.submitted(direct_lighting, std::move(light_field_inputs));
             }

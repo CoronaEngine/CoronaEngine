@@ -10,6 +10,7 @@
 #include "native_appearance.h"
 #include "native_lighting.h"
 #include "native_light_cache.h"
+#include "native_screen_space.h"
 
 #include <array>
 #include <cstdint>
@@ -26,6 +27,9 @@
 #include GLSL(shaders/shadow.vert.glsl)
 #include GLSL(shaders/shadow.frag.glsl)
 #include GLSL(shaders/lighting.comp.glsl)
+#include GLSL(shaders/screen_gi.comp.glsl)
+#include GLSL(shaders/screen_depth.comp.glsl)
+#include GLSL(shaders/screen_filter.comp.glsl)
 #include GLSL(shaders/lpv.comp.glsl)
 #include GLSL(shaders/sky.comp.glsl)
 #include GLSL(shaders/sky_sh_project.comp.glsl)
@@ -175,6 +179,9 @@ struct Hardware {
     std::optional<Corona::Horizon::ComputePipeline<refraction_front_comp_glsl_t>> refractionFrontPipeline;
     std::array<std::optional<Corona::Horizon::RasterizerPipeline<shadow_vert_glsl_t, shadow_frag_glsl_t>>, 4> shadowPipelines;
     std::optional<Corona::Horizon::ComputePipeline<lighting_comp_glsl_t>> lightingPipeline;
+    std::optional<Corona::Horizon::ComputePipeline<screen_gi_comp_glsl_t>> screenGiPipeline;
+    std::optional<Corona::Horizon::ComputePipeline<screen_depth_comp_glsl_t>> screenDepthPipeline;
+    std::optional<Corona::Horizon::ComputePipeline<screen_filter_comp_glsl_t>> screenFilterPipeline;
     std::optional<Corona::Horizon::ComputePipeline<lpv_comp_glsl_t>> lpvPipeline;
     std::optional<Corona::Horizon::ComputePipeline<sky_comp_glsl_t>> skyPipeline;
     std::optional<Corona::Horizon::ComputePipeline<sky_sh_project_comp_glsl_t>> skySHProjectPipeline;
@@ -220,11 +227,18 @@ struct Hardware {
         // Per-camera refraction descriptors live in the SSBO, keeping resolve
         // push constants within Vulkan's guaranteed 128-byte limit.
         std::array<uint32_t,8> refractionDescriptors{};
+        // Hierarchy + bounded GI temporal resources. See screen_history.glsl.
+        std::array<uint32_t,16> screenDescriptors{};
+        ktm::fmat4x4 previousViewProjection{}, previousView{}, inverseView{};
     } shadowInfoBufferObjects{};
     static_assert(offsetof(ShadowInfoBufferObject, lpvRadianceDescriptor)==75u*sizeof(uint32_t));
     static_assert(offsetof(ShadowInfoBufferObject, sunColor)==76u*sizeof(uint32_t));
     static_assert(offsetof(ShadowInfoBufferObject, sunDirection)==80u*sizeof(uint32_t));
     static_assert(offsetof(ShadowInfoBufferObject, refractionDescriptors)==84u*sizeof(uint32_t));
+    static_assert(offsetof(ShadowInfoBufferObject, screenDescriptors)==92u*sizeof(uint32_t));
+    static_assert(offsetof(ShadowInfoBufferObject, previousViewProjection)==108u*sizeof(uint32_t));
+    static_assert(offsetof(ShadowInfoBufferObject, previousView)==124u*sizeof(uint32_t));
+    static_assert(offsetof(ShadowInfoBufferObject, inverseView)==140u*sizeof(uint32_t));
 
     // === GPU-side instance info table (matches GLSL InstanceInfo layout) ===
     // 96 bytes = 24 uints per entry:
