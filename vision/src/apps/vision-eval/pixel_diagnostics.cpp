@@ -67,9 +67,9 @@ void save_pixel_diagnostics(Pipeline &pipeline) {
                 write(prefix + name, packed);
             };
             export_field("identity.u32", [](const auto &p) { return make_uint4(p.branch_sequence, p.instance_hash, p.depth, p.material_id); });
-            export_field("state.u32", [](const auto &p) { return make_uint4(p.valid, p.reservoir_eligible, p.surface.approximate, p.surface.stable_branch); });
+            export_field("state.u32", [](const auto &p) { return make_uint4(p.valid(), p.reservoir_eligible(), p.surface.approximate, p.surface.stable_branch); });
             export_field("hit.u32", [](const auto &p) { return make_uint2(p.surface.hit.inst_id, p.surface.hit.prim_id); });
-            export_field("motion.f32", [](const auto &p) { return p.motion; });
+            export_field("motion.f32", [](const auto &p) { return p.motion(); });
             export_field("physical_normal_depth.f32", [](const auto &p) { return p.surface.normal_depth; });
             export_field("physical_position.f32", [](const auto &p) { return p.surface.pos_diff; });
             auto vector4 = [](const array_float3 &v) { return make_float4(v[0], v[1], v[2], 0.f); };

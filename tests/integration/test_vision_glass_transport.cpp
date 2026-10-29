@@ -142,29 +142,42 @@ void check_glass_depth_guides(vision::Pipeline &pipeline) {
         Bool gi_valid = ReSTIRGI::is_temporal_valid(c.surface, p, gi, nullptr);
         Float2 expected_motion = camera->raster_coord(c.surface.virtual_position.as_vec3()).xy() -
             camera->prev_raster_coord(c.surface.virtual_position.as_vec3()).xy();
-        Bool motion = length(c.motion - expected_motion) < 1e-5f &&
-            length(fb.motion_vectors().read(136u) - c.motion) < 1e-5f;
+        // Independent primitive conversion supplies the expected storage boundary.
+        Float2 stored_expected_motion = make_float2(make_half2(expected_motion));
+        Float stored_error = length(c->motion() - stored_expected_motion);
+        Float global_error = length(fb.motion_vectors().read(136u) - expected_motion);
+        Float rounding_error = length(stored_expected_motion - expected_motion);
+        Bool motion = stored_error < 1e-5f && global_error < 1e-5f;
         output.write(0u, make_float4(cast<float>(depth), cast<float>(di_valid), cast<float>(gi_valid), cast<float>(motion)));
+        output.write(1u, make_float4(global_error, stored_error, rounding_error, 0.f));
     };
     auto shader = pipeline.device().compile(kernel, "glass_physical_path_depth_history");
-    auto result = pipeline.device().create_buffer<float4>(1u, "glass_depth_history_result");
+    auto result = pipeline.device().create_buffer<float4>(2u, "glass_depth_history_result");
+    bool witnessed_half_rounding = false;
     for (unsigned motion_case : {0u, 1u, 2u}) {
         if (motion_case == 1u) { camera->set_position(make_float3(0.15f, 0.f, 0.f)); camera->update_device_data(); }
         if (motion_case == 2u) { camera->update_yaw(2.f); camera->update_device_data(); }
         pipeline.upload_data(); pipeline.display(1.0 / 60.0);
         uint frame = pipeline.frame_index() - 1u;
-        float4 value;
+        float4 values[2]{};
         pipeline.stream() << shader(fb.cur_stable_planes_view(frame, 1u), fb.prev_surfaces_view(frame), result, dp, gp).dispatch(1u)
-            << result.download(&value) << synchronize() << commit();
-        if (value.x != 1.f || value.y != 1.f || value.z != 1.f || value.w != 1.f)
+            << result.download(values) << synchronize() << commit();
+        const auto &value = values[0];
+        if (value.x != 1.f || value.y != 1.f || value.z != 1.f)
             throw std::runtime_error("glass static and translated history must use path-depth position consistently in DI and GI");
+        if (value.w != 1.f)
+            throw std::runtime_error("H2b SP motion must retain the half codec while global motion retains the FP32 geometry result");
+        witnessed_half_rounding |= values[1].z > 2e-5f;
         std::vector<StablePlaneData> planes(pipeline.pixel_num());
         pipeline.stream() << fb.cur_stable_planes_view(frame, 1u).download(planes.data()) << synchronize() << commit();
-        const auto motion = planes[136].motion;
+        const auto motion = planes[136].motion();
         if ((motion_case == 0u && std::hypot(motion.x, motion.y) > 1e-4f) ||
             (motion_case == 1u && motion.x >= -1e-4f) || (motion_case == 2u && std::abs(motion.x) < 1e-4f))
             throw std::runtime_error("glass static motion must vanish and rightward camera translation must move image left");
     }
+    if (!witnessed_half_rounding)
+        throw std::runtime_error("H2b motion fixture must distinguish FP32 export from half-rounded export by more than2e-5 pixels");
+    std::cout << "H2B_MOTION_EXPORT_PASS stored_half=1 global_fp32=1 rounding_witness=1\n";
 }
 
 // Empty child records must remain complete defaults when camera motion removes
@@ -180,7 +193,7 @@ void check_glass_children_disappear(vision::Pipeline& pipeline) {
         pipeline.stream() << fb.cur_stable_planes_view(pipeline.frame_index() - 1u).download(planes.data())
             << synchronize() << commit();
         uint active = 0u;
-        for (uint i = pipeline.pixel_num(); i < planes.size(); ++i) { active += planes[i].valid != 0u; }
+        for (uint i = pipeline.pixel_num(); i < planes.size(); ++i) { active += planes[i].valid() != 0u; }
         return active;
     };
     if (count_children() == 0u) throw std::runtime_error("glass fixture must initially have active children");
@@ -194,7 +207,7 @@ void check_glass_children_disappear(vision::Pipeline& pipeline) {
         for (uint i = pipeline.pixel_num(); i < planes.size(); ++i) {
             const auto &p = planes[i];
             if (p.branch_sequence != 1u || p.depth != 0u || p.instance_hash != 0u ||
-                p.material_id != InvalidUI32 || p.reservoir_eligible != 0u ||
+                p.material_id != InvalidUI32 || p.reservoir_eligible() != 0u ||
                 p.surface.hit.inst_id != InvalidUI32 || p.extension.throughput != array_float3{1.f, 1.f, 1.f})
                 throw std::runtime_error("inactive children must retain complete default records, not stale transport state");
         }
@@ -244,7 +257,7 @@ void check_glass_runtime_depth(vision::Pipeline& edited, vision::Pipeline& fresh
         if (layered) {
             std::vector<StablePlaneData> layers(a.size());
             edited.stream() << edited.frame_buffer()->cur_stable_planes_view(3u, 1u).download(layers.data()) << synchronize() << commit();
-            if (layers[136].valid && layers[136].depth > std::min(depth, 15u))
+            if (layers[136].valid() && layers[136].depth > std::min(depth, 15u))
                 throw std::runtime_error("runtime stable exploration must honor current encoded depth and bounded prefix length");
         }
     }

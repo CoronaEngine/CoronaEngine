@@ -18,9 +18,9 @@ static std::vector<vision::StablePlaneHistory> compact_history(const std::vector
         h.surface.virtual_position = p.surface.virtual_position;
         h.surface.virtual_geometric_normal = p.surface.virtual_geometric_normal;
         h.surface.approximate = p.surface.approximate; h.surface.stable_branch = p.surface.stable_branch;
-        h.motion = p.motion; h.depth_position = p.depth_position;
+        h.motion = p.motion(); h.depth_position = p.depth_position;
         h.branch_sequence = p.branch_sequence; h.instance_hash = p.instance_hash;
-        h.depth = p.depth; h.material_id = p.material_id; h.valid = p.valid;
+        h.depth = p.depth; h.material_id = p.material_id; h.valid = p.valid();
     }
     return ret;
 }
@@ -61,7 +61,7 @@ void layered_history_regression(vision::Pipeline& pipeline, Filter& denoiser) {
             auto hit = visible.read(center);
             auto it = pipeline.geometry().compute_surface_interaction(hit, false);
             StablePlaneDataVar plane;
-            plane.valid = 1u; plane.branch_sequence = 5u; plane.instance_hash = 37u;
+            plane->set_valid(1u); plane.branch_sequence = 5u; plane.instance_hash = 37u;
             plane.depth = 1u; plane.material_id = it.material_id();
             plane.surface.hit = hit; plane.surface.is_replaced = true;
             plane.surface.stable_branch = 37u;
@@ -120,7 +120,7 @@ void layered_history_regression(vision::Pipeline& pipeline, Filter& denoiser) {
                 if (change == 1) plane.instance_hash ^= 1u;
                 if (change == 2) plane.depth += 1u;
                 if (change == 3) plane.material_id ^= 1u;
-                if (change == 4) plane.valid = 0u;
+                if (change == 4) plane.set_valid(0u);
                 if (change == 5) plane.surface.hit.inst_id = InvalidUI32;
             }
             run(1u, 2u, colors[0]);
@@ -138,7 +138,7 @@ void layered_history_regression(vision::Pipeline& pipeline, Filter& denoiser) {
                 guides = baseline; run(0u, 2u, colors[2]);
                 for (auto &plane : guides) {
                     if (sky_endpoint) plane.surface.hit.inst_id = InvalidUI32;
-                    else plane.valid = 0u;
+                    else plane.set_valid(0u);
                 }
                 // Both ping-pong slots must become empty and stay empty through
                 // consecutive absent frames, then restart at age one on return.
@@ -173,7 +173,7 @@ void layered_history_regression(vision::Pipeline& pipeline, Filter& denoiser) {
                 const uint single_pixel = mode < 3u ? pixels - 1u :
                     std::min((mode - 3u) * 2u, extent.y - 1u) * extent.x;
                 for (uint i = 0; i < n; ++i) {
-                    guides[i].valid = mode == 0 || (mode >= 2 && i == single_pixel);
+                    guides[i].set_valid(mode == 0 || (mode >= 2 && i == single_pixel));
                     // If classification drops a live tile, fused preparation's
                     // demodulated green remains > 1 instead of being restored.
                     guides[i].surface.denoiser_albedo = {.2f, .35f, .7f};
@@ -190,7 +190,7 @@ void layered_history_regression(vision::Pipeline& pipeline, Filter& denoiser) {
                     << denoiser.poisson()->temp_buffer_indirect().view().upload(poison.data()) << synchronize() << commit();
                 run(0u, 2u, colors[1]);
                 for (uint i = 0; i < pixels; ++i) {
-                    const float green = guides[i].valid ? 1.f : 0.f;
+                    const float green = guides[i].valid() ? 1.f : 0.f;
                     if (!std::isfinite(float(output[i].x)) || !std::isfinite(float(output[i].y)) ||
                         std::abs(float(output[i].x)) > 1e-5f || std::abs(float(output[i].y) - green) > 1e-5f ||
                         std::abs(float(output[i].z)) > 1e-5f)
@@ -234,7 +234,7 @@ void layered_history_regression(vision::Pipeline& pipeline, Filter& denoiser) {
             guides = baseline;
             for (uint i = 0u; i < n; ++i) {
                 guides[i].branch_sequence = 5u + ((i + frame) & 1u);
-                if (emission == 1u) guides[i].valid = 0u;
+                if (emission == 1u) guides[i].set_valid(0u);
                 if (emission == 2u) guides[i].surface.hit.inst_id = InvalidUI32;
                 all_planes[i] = guides[i];
                 all_planes[n + i] = guides[i];
@@ -246,8 +246,8 @@ void layered_history_regression(vision::Pipeline& pipeline, Filter& denoiser) {
                     // incorrectly accepting a partial cache must change output.
                     all_planes[2u * n + i].branch_sequence = 11u +
                         ((i / input.resolution.x) >= input.resolution.y / 2u);
-                    all_planes[i].motion = make_float2(2.f, 0.f);
-                    all_planes[n + i].motion = make_float2(-2.f, 0.f);
+                    all_planes[i].set_motion(make_float2(2.f, 0.f));
+                    all_planes[n + i].set_motion(make_float2(-2.f, 0.f));
                 }
                 // Primary geometry is constant for the glass-internal edge.
                 // Emission-only coverage has no valid illumination layer.
@@ -397,7 +397,7 @@ void layered_history_regression(vision::Pipeline& pipeline, Filter& denoiser) {
             throw std::runtime_error("optical depth disocclusion must reject layer history");
         baseline = original; guides = baseline;
         run(0u, 1u, colors[1]);
-        for (auto& plane : guides) plane.motion = make_float2(1000.f);
+        for (auto& plane : guides) plane.set_motion(make_float2(1000.f));
         run(1u, 1u, colors[0]);
         if (float(history[center].moments_direct.z) != 1.f)
             throw std::runtime_error("layer motion must override primary surface motion");

@@ -69,7 +69,7 @@ Kernel prepare_guide = [write_guide](Var<CombinedPoissonParam> param) {
     skip_empty_tile(param);
     Uint idx = dispatch_id();
     $if(param.layered != 0u) {
-        $if(param.stable_planes.read(idx).valid == 0u) { $return(); };
+        $if(param.stable_planes.read(idx)->valid() == 0u) { $return(); };
     };
     write_guide(param, idx);
 };
@@ -90,7 +90,7 @@ Kernel prepare_layer_guide = [pipeline_ref](Var<CombinedPoissonParam> param) {
         Uint idx = y * param.width + x;
         // Read validity before geometry: sparse layers must not fetch the
         // full stable-plane payload for pixels without an endpoint.
-        Bool has_plane = param.stable_planes.read(idx).valid != 0u;
+        Bool has_plane = param.stable_planes.read(idx)->valid() != 0u;
         Bool valid = false;
         $if(has_plane) {
             auto plane = param.stable_planes.read(idx);

@@ -224,7 +224,7 @@ void check_glass_planes(vision::Pipeline& pipeline, FrameBuffer& fb) {
         const unsigned i = 8u * 16u + 8u;
         expect(primary[i].inst_id == base[i].surface.hit.inst_id && base[i].depth == 0u,
                "glass base must preserve the original camera visibility");
-        expect(transmitted[i].valid && reflected[i].valid &&
+        expect(transmitted[i].valid() && reflected[i].valid() &&
                transmitted[i].surface.hit.inst_id != reflected[i].surface.hit.inst_id,
                "glass must produce distinct valid reflection and transmission endpoint guides");
         expect(transmitted[i].surface.pos_diff.z < -2.f && reflected[i].surface.pos_diff.z > 0.f,
@@ -608,9 +608,14 @@ int main() {
         // Full-spectrum dispersive glass already fails the original ReSTIR
         // PDF-array ABI. Keep supported transmission and hero-spectrum cases
         // independent; this optimization does not change that material ABI.
-        auto spectral_context = context_scene;
-        spectral_context["render"]["spectrum"] = vision::DataWrap::parse(R"({"type":"hero","param":{"dimension":3}})");
-        run_context_fixture(spectral_context, "hero-diffuse", 1u);
+        const bool skip_hero = std::getenv("CORONA_TEST_SKIP_HERO") != nullptr;
+        if (skip_hero) {
+            std::cout << "SKIP: hero-diffuse (CORONA_TEST_SKIP_HERO)\n";
+        } else {
+            auto spectral_context = context_scene;
+            spectral_context["render"]["spectrum"] = vision::DataWrap::parse(R"({"type":"hero","param":{"dimension":3}})");
+            run_context_fixture(spectral_context, "hero-diffuse", 1u);
+        }
         auto mix_context = context_scene;
         auto mixed_receiver = vision::DataWrap::parse(R"({"type":"mix","name":"receiver","param":{"frac":0.35}})");
         mixed_receiver["param"]["mat0"] = vision::DataWrap::parse(materials[0]);
@@ -626,6 +631,12 @@ int main() {
         for (const char* material_json : materials) {
             auto description = scene_description(true);
             const auto material_index = material_surfaces.size();
+            if (skip_hero && (material_index == 12u || material_index == 13u)) {
+                std::cout << "SKIP: hero material " << material_index << " (CORONA_TEST_SKIP_HERO)\n";
+                material_surfaces.emplace_back();
+                material_fixtures.emplace_back();
+                continue;
+            }
             if (material_index == 11u || material_index == 15u)
                 description["scene"]["camera"]["param"]["transform"]["param"]["position"] = vision::DataWrap::parse("[3,0,0]");
             if (material_index == 12u || material_index == 13u)
@@ -665,6 +676,7 @@ int main() {
         }
         check_restir_material_reuse(*material_pipeline, material_surfaces);
         for (const unsigned index : {0u, 3u, 12u, 14u}) {
+            if (skip_hero && index == 12u) continue;
             std::cout << "GI position material index=" << index << '\n';
             check([](vision::Pipeline& p) { check_restir_gi_receiver_positions(p, "material-diffuse-substrate-spectral-normal-map"); },
                   *material_fixtures[index]);

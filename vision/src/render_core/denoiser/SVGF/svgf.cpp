@@ -146,7 +146,7 @@ void SVGF::compile_resolve() {
             $if(x < param.width && y < param.height) {
                 Uint idx = y * param.width + x;
                 auto plane = param.planes.read(idx);
-                Bool valid = plane.valid != 0u && plane.surface.hit->is_hit() && plane.surface.hit.inst_id != InvalidUI32;
+                Bool valid = plane->valid() != 0u && plane.surface.hit->is_hit() && plane.surface.hit.inst_id != InvalidUI32;
                 active |= valid;
                 $if(!valid) {
                     SVGFDataDualVar empty;
@@ -192,14 +192,14 @@ void SVGF::compile_resolve() {
     Kernel prepare_edge = [](Var<ResolveParam> param) {
         Uint idx = dispatch_id();
         Uint plane_idx = param.edge_layer * dispatch_dim().x * dispatch_dim().y + idx;
-        $if(param.coverage_planes.read(plane_idx).valid == 0u) {
+        $if(param.coverage_planes.read(plane_idx)->valid() == 0u) {
             // Invalid planes participate only through their validity bit.
             // Their stale geometry is never read by the edge classifier.
             param.edge_identity.write(idx, make_uint4(0u));
             $return();
         };
         auto plane = param.coverage_planes.read(plane_idx);
-        param.edge_identity.write(idx, make_uint4(plane.valid, plane.branch_sequence, plane.instance_hash, plane.depth));
+        param.edge_identity.write(idx, make_uint4(plane->valid(), plane.branch_sequence, plane.instance_hash, plane.depth));
         param.edge_surface.write(idx, make_uint4(plane.material_id, plane.surface.hit.inst_id, 0u, 0u));
         param.edge_position.write(idx, make_float4(plane.surface.virtual_position.as_vec3(), length(plane.depth_position.as_vec3() - param.camera_pos.as_vec3())));
         param.edge_normal.write(idx, make_float4(plane.surface.virtual_geometric_normal.as_vec3(), 0.f));

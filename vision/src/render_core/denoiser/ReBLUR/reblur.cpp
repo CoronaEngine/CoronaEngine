@@ -130,7 +130,7 @@ void ReBLUR::compile() noexcept {
         $if(p.layered != 0u) {
             // Test the small validity field before loading the surface, camera
             // and sampler state for mostly empty secondary stable planes.
-            $if(p.planes.read(i).valid == 0u) {
+            $if(p.planes.read(i)->valid() == 0u) {
                 Var<Guide> empty;
                 empty.position = make_float4(0.f); empty.normal_roughness = make_float4(0.f, 0.f, 1.f, 1.f);
                 empty.diffuse_factor = make_float4(1.f, 1.f, 1.f, 0.f); empty.specular_factor = empty.diffuse_factor;
@@ -154,9 +154,9 @@ void ReBLUR::compile() noexcept {
             auto plane = p.planes.read(i);
             surface = plane.surface; hit = surface.hit;
             eye = plane.extension.view_pos.as_vec3(); prefix = plane.extension.throughput.as_vec3();
-            valid = plane.valid != 0u && hit->is_hit();
+            valid = plane->valid() != 0u && hit->is_hit();
             branch = plane.branch_sequence; instance_hash = guide_instance(hit.inst_id, plane.instance_hash);
-            motion = plane.motion;
+            motion = plane->motion();
 #ifdef VISION_REBLUR_NATIVE_NRD
             if (native_ || edsl_) {
                 // RTXPT relaxes disocclusion and roughness where extended
@@ -170,7 +170,7 @@ void ReBLUR::compile() noexcept {
                         Int2 neighbor_pixel = clamp(pixel + offset, make_int2(0), make_int2(p.size) - 1);
                         Uint neighbor_index = cast<uint>(neighbor_pixel.y) * p.size.x + cast<uint>(neighbor_pixel.x);
                         auto neighbor = p.planes.read(neighbor_index);
-                        $if(neighbor.valid == 0u || neighbor.branch_sequence == InvalidUI32) {
+                        $if(neighbor->valid() == 0u || neighbor.branch_sequence == InvalidUI32) {
                             divergence += .02f;
                         } $else {
                             divergence += 1.f - dot(direction, normalize(neighbor.extension.final_direction.as_vec3()));

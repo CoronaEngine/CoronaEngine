@@ -13,6 +13,18 @@
 #include "base/using.h"
 
 namespace vision::svgf {
+// Current planes are packed; immutable history keeps ordinary FP32/uint fields.
+template<typename Plane>
+[[nodiscard]] inline Uint stored_plane_valid(const Plane &plane) {
+    if constexpr (requires { plane->valid(); }) return plane->valid();
+    else return plane.valid;
+}
+template<typename Plane>
+[[nodiscard]] inline Float2 stored_plane_motion(const Plane &plane) {
+    if constexpr (requires { plane->motion(); }) return plane->motion();
+    else return plane.motion;
+}
+
 inline Float3 modulation_albedo(Float3 albedo, Float epsilon) {
     return make_float3(sqrt(albedo.x * albedo.x + epsilon * epsilon),
                        sqrt(albedo.y * albedo.y + epsilon * epsilon),
@@ -68,7 +80,7 @@ template<typename Param>
 template<typename Param>
 [[nodiscard]] inline Float2 stable_motion(const Param &param, Uint index) {
     Float2 motion;
-    $if(param.layered != 0u) { motion = param.stable_planes.read(index).motion; }
+    $if(param.layered != 0u) { motion = param.stable_planes.read(index)->motion(); }
     $else { motion = param.motion_vectors.read(index); };
     return motion;
 }
@@ -92,7 +104,7 @@ struct StableGeometryGuide {
             $if(param.layered != 0u) {
                 auto read_identity = [&](const auto &plane) {
                     layered = true;
-                    valid = plane.valid != 0u && plane.surface.hit->is_hit() && plane.surface.hit.inst_id != InvalidUI32;
+                    valid = stored_plane_valid(plane) != 0u && plane.surface.hit->is_hit() && plane.surface.hit.inst_id != InvalidUI32;
                     sequence = plane.branch_sequence; identity = plane.instance_hash;
                     depth = plane.depth; material = plane.material_id;
                     depth_position = plane.depth_position.as_vec3();
@@ -191,21 +203,21 @@ struct CoverageGeometryGuide : StableGeometryGuide {
             auto read_coverage = [&](const auto &planes) {
                 for (uint layer = 0u; layer < StablePlaneCount; ++layer) {
                     auto plane = planes.read(layer * count + index);
-                    ambiguous |= plane.valid != 0u && (Bool(layer > 0u) || plane.surface.approximate != 0u ||
+                    ambiguous |= stored_plane_valid(plane) != 0u && (Bool(layer > 0u) || plane.surface.approximate != 0u ||
                         plane.surface.hit->is_miss() || plane.surface.hit.inst_id == InvalidUI32);
                 }
                 // Coverage belongs to the path, including deterministic emitters
                 // that have no eligible reservoir endpoint.
                 hit = primary; branch = 0u; replaced = false; approximate = false; valid = true;
                 auto plane = planes.read(index);
-                $if(!ambiguous && plane.valid != 0u) {
+                $if(!ambiguous && stored_plane_valid(plane) != 0u) {
                     hit = plane.surface.hit;
                     branch = plane.surface.stable_branch;
                     position = plane.surface.virtual_position.as_vec3();
                     normal = plane.surface.virtual_geometric_normal.as_vec3();
                     depth_position = plane.depth_position.as_vec3();
                     replaced = true;
-                    motion = plane.motion;
+                    motion = stored_plane_motion(plane);
                 };
             };
             if (previous) read_coverage(param.prev_coverage_planes);
@@ -222,8 +234,8 @@ template<typename Param>
         for (uint layer = 0u; layer < StablePlaneCount; ++layer) {
             auto a = param.coverage_planes.read(layer * count + center);
             auto b = param.coverage_planes.read(layer * count + neighbor);
-            edge |= a.valid != b.valid;
-            $if(a.valid != 0u && b.valid != 0u) {
+            edge |= a->valid() != b->valid();
+            $if(a->valid() != 0u && b->valid() != 0u) {
                 edge |= a.branch_sequence != b.branch_sequence || a.instance_hash != b.instance_hash ||
                     a.depth != b.depth || a.material_id != b.material_id || a.surface.hit.inst_id != b.surface.hit.inst_id;
                 $if(a.surface.hit->is_hit() && b.surface.hit->is_hit()) {
