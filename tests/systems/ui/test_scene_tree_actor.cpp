@@ -39,7 +39,7 @@ int main() {
     require(item.at("visible") == true, "visible");
     require(item.at("handle") == row.handle, "handle");
     require(item.at("audio_resource_id") == "", "audio_resource_id");
-    require(item.at("vision_proxy") == false, "vision_proxy");
+    require(!item.contains("vision_proxy"), "retired archive proxy metadata must not be published");
     require(item.at("load_status") == "gpu_uploading", "load_status");
     require(item.at("gpu_build_state") == "PendingBuild", "gpu_build_state");
     require(item.at("model_node_count") == 3778, "model_node_count");

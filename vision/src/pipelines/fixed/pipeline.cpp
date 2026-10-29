@@ -36,7 +36,6 @@ public:
     }
 
     void init_postprocessor(const DenoiserDesc &desc) override {
-//        postprocessor_.set_denoiser(Node::create_shared<Denoiser>(desc));
         postprocessor_.set_tone_mapper(renderer_.frame_buffer()->tone_mapper());
     }
 

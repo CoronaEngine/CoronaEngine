@@ -90,6 +90,7 @@ std::map<std::string, std::map<std::string, std::string>> read_ini(const fs::pat
         if (line.empty() || line[0] == ';' || line[0] == '#') continue;
         if (line.front() == '[' && line.back() == ']') {
             section = lower(trim(line.substr(1, line.size() - 2)));
+            result.try_emplace(section);
             continue;
         }
         const auto equals = line.find('=');
@@ -130,108 +131,9 @@ std::string percent_decode_uri(std::string_view value) {
     return decoded;
 }
 
-std::string decode_base64(std::string_view input) {
-    auto value_of = [](unsigned char ch) -> int {
-        if (ch >= 'A' && ch <= 'Z') return ch - 'A';
-        if (ch >= 'a' && ch <= 'z') return ch - 'a' + 26;
-        if (ch >= '0' && ch <= '9') return ch - '0' + 52;
-        if (ch == '+') return 62;
-        if (ch == '/') return 63;
-        return -1;
-    };
-    std::string output;
-    std::uint32_t value = 0;
-    int bits = -8;
-    for (const auto ch : input) {
-        if (std::isspace(static_cast<unsigned char>(ch)) || ch == '=') continue;
-        const auto decoded = value_of(static_cast<unsigned char>(ch));
-        if (decoded < 0) throw std::runtime_error("Invalid base64 Vision document");
-        value = (value << 6) | static_cast<std::uint32_t>(decoded);
-        bits += 6;
-        if (bits >= 0) {
-            output.push_back(static_cast<char>((value >> bits) & 0xff));
-            bits -= 8;
-        }
-    }
-    return output;
-}
 
-std::uint32_t adler32(std::string_view payload) {
-    constexpr std::uint32_t mod = 65521;
-    std::uint32_t a = 1;
-    std::uint32_t b = 0;
-    for (const auto ch : payload) {
-        a = (a + static_cast<unsigned char>(ch)) % mod;
-        b = (b + a) % mod;
-    }
-    return (b << 16) | a;
-}
 
-nlohmann::json decode_embedded_vision_document(std::string_view encoded) {
-    const auto payload = decode_base64(encoded);
-    if (payload.size() < 6) throw std::runtime_error("Embedded Vision document is truncated");
-    size_t offset = 2;
-    const auto checksum_offset = payload.size() - 4;
-    std::string json_text;
-    while (offset < checksum_offset) {
-        const auto header = static_cast<unsigned char>(payload[offset++]);
-        const bool final_block = (header & 0x01) != 0;
-        if (((header >> 1) & 0x03) != 0) {
-            throw std::runtime_error("Embedded Vision document uses unsupported compression");
-        }
-        if (offset + 4 > checksum_offset) throw std::runtime_error("Embedded Vision block is truncated");
-        const auto len = static_cast<std::uint16_t>(
-            static_cast<unsigned char>(payload[offset]) |
-            (static_cast<unsigned char>(payload[offset + 1]) << 8));
-        const auto nlen = static_cast<std::uint16_t>(
-            static_cast<unsigned char>(payload[offset + 2]) |
-            (static_cast<unsigned char>(payload[offset + 3]) << 8));
-        offset += 4;
-        if (static_cast<std::uint16_t>(~len) != nlen || offset + len > checksum_offset) {
-            throw std::runtime_error("Embedded Vision block length is invalid");
-        }
-        json_text.append(payload.data() + offset, len);
-        offset += len;
-        if (final_block) break;
-    }
-    const auto expected =
-        (static_cast<std::uint32_t>(static_cast<unsigned char>(payload[checksum_offset])) << 24) |
-        (static_cast<std::uint32_t>(static_cast<unsigned char>(payload[checksum_offset + 1])) << 16) |
-        (static_cast<std::uint32_t>(static_cast<unsigned char>(payload[checksum_offset + 2])) << 8) |
-        static_cast<std::uint32_t>(static_cast<unsigned char>(payload[checksum_offset + 3]));
-    if (adler32(json_text) != expected) throw std::runtime_error("Embedded Vision checksum mismatch");
-    auto document = nlohmann::json::parse(json_text);
-    if (!document.is_object()) throw std::runtime_error("Embedded Vision document must be an object");
-    return document;
-}
 
-bool vision_resource_key(std::string key) {
-    key = lower(std::move(key));
-    return key == "fn" || key == "path" || key == "file" || key == "filename" ||
-           key == "texture" || key == "image";
-}
-
-template <typename Callback>
-void visit_vision_resource_routes(const nlohmann::json& value,
-                                  const std::string& field,
-                                  Callback&& callback) {
-    if (value.is_object()) {
-        for (const auto& item : value.items()) {
-            // Render output destinations are not dependencies of the scene archive.
-            if (field == "vision_document.data" && item.key() == "output") continue;
-            const auto child_field = field.empty() ? item.key() : field + "." + item.key();
-            if (vision_resource_key(item.key()) && item.value().is_string()) {
-                callback(item.value().get<std::string>(), child_field);
-            } else {
-                visit_vision_resource_routes(item.value(), child_field, callback);
-            }
-        }
-    } else if (value.is_array()) {
-        for (size_t index = 0; index < value.size(); ++index) {
-            visit_vision_resource_routes(value[index], field + "[" + std::to_string(index) + "]", callback);
-        }
-    }
-}
 
 bool is_relative_inside(const fs::path& path) {
     if (path.empty() || path.is_absolute() || path.has_root_name()) return false;
@@ -607,7 +509,7 @@ nlohmann::json manifest_json(const std::vector<ImportResult>& bundles) {
 
 std::string safe_category(std::string_view category) {
     static const std::set<std::string> allowed = {
-        "Models", "Actors", "Images", "Audio", "Scripts", "Terrain", "Vision"};
+        "Models", "Actors", "Images", "Audio", "Scripts", "Terrain"};
     const std::string value(category);
     if (!allowed.contains(value)) throw std::invalid_argument("Unsupported asset category: " + value);
     return value;
@@ -816,7 +718,7 @@ ImportResult SceneAssetStore::import_model(const fs::path& source) {
     // scene.cpp register_extension），否则文件选择器能选、引擎能加载的格式会在
     // 这里被判为"不支持"。.usdz/.3ds/.stl 此前缺失。
     static const std::set<std::string> supported{
-        ".obj", ".gltf", ".glb", ".fbx", ".dae", ".usd", ".usda", ".usdc", ".usdz", ".3ds", ".stl"};
+        ".obj", ".ply", ".gltf", ".glb", ".fbx", ".dae", ".usd", ".usda", ".usdc", ".usdz", ".3ds", ".stl"};
     if (!supported.contains(lower(source.extension().string()))) {
         result.diagnostics.push_back({"unsupported_model", "Unsupported model extension", source});
         return result;
@@ -1006,21 +908,71 @@ std::vector<Diagnostic> SceneAssetStore::validate_manifest(bool verify_hashes) c
     return diagnostics;
 }
 
+namespace {
+struct AssetReference {
+    std::string route;
+    std::string field;
+    std::string actor;
+};
+
+// Validation and garbage collection must agree on every persisted asset edge.
+std::vector<AssetReference> scene_asset_references(const fs::path& scene_file,
+                                                 std::vector<Diagnostic>& diagnostics) {
+    std::vector<AssetReference> references;
+    const auto ini = read_ini(scene_file);
+    for (const auto* section : {"vision", "vision_document", "vision_bindings", "vision_unsupported_shapes"}) {
+        if (ini.contains(section))
+            diagnostics.push_back({"unsupported_vision_archive",
+                "External Vision archives are no longer supported", scene_file, {}, section});
+    }
+    for (const auto& [section, fields] : ini) {
+        for (const auto& [key, value] : fields) {
+            const auto actor = section == "actors" ? key.substr(0, key.find('.')) : std::string{};
+            const auto field = section + "." + key;
+            if (section == "actors" && key.ends_with(".animation.sources")) {
+                try {
+                    const auto sources = nlohmann::json::parse(value);
+                    if (!sources.is_array()) throw std::runtime_error("Expected an array of animation asset paths");
+                    std::set<std::string> unique;
+                    for (const auto& source : sources) {
+                        if (!source.is_string() || source.get_ref<const std::string&>().empty() ||
+                            source.get_ref<const std::string&>().find('\0') != std::string::npos)
+                            throw std::runtime_error("Expected non-empty animation asset paths");
+                        const auto route = source.get<std::string>();
+                        if (!unique.insert(route).second) throw std::runtime_error("Duplicate animation asset path");
+                        references.push_back({route, field, actor});
+                    }
+                } catch (const std::exception& error) {
+                    diagnostics.push_back({"invalid_animation_sources", error.what(), scene_file, actor, field});
+                }
+            } else if ((section == "actors" && (key.ends_with(".route") || key.ends_with(".material.texture"))) ||
+                       ((section == "scripts" || section == "terrain") && key == "path") ||
+                       is_valid_asset_route(value)) {
+                if (!trim(value).empty()) references.push_back({value, field, actor});
+            }
+        }
+    }
+    return references;
+}
+} // namespace
+
 SceneValidationResult validate_portable_scene(const fs::path& scene_root,
                                                bool verify_hashes) {
     SceneValidationResult result;
+    const auto root = fs::is_directory(scene_root) ? scene_root : scene_root.parent_path();
+    std::scoped_lock lock(scene_file_mutex(root));
+    // Recover before format detection: an interrupted document may not parse.
+    if (fs::is_directory(scene_root) || scene_root.filename() == "scene.ini") {
+        SceneDocumentStore document(root);
+        result.diagnostics = document.recovery_diagnostics();
+        if (!result.diagnostics.empty()) return result;
+    }
     const auto layout = detect_scene_folder(scene_root);
     if (!layout) {
         result.diagnostics.push_back(
             {"invalid_scene_format", "Expected a portable scene folder version 1", scene_root});
         return result;
     }
-
-    SceneDocumentStore document(layout->root);
-    result.diagnostics.insert(result.diagnostics.end(),
-                              document.recovery_diagnostics().begin(),
-                              document.recovery_diagnostics().end());
-    if (!result.diagnostics.empty()) return result;
 
     SceneAssetStore assets(layout->root);
     result.diagnostics = assets.validate_manifest(verify_hashes);
@@ -1039,7 +991,6 @@ SceneValidationResult validate_portable_scene(const fs::path& scene_root,
     } catch (...) {
         // validate_manifest already reports the parse failure with its path.
     }
-    const auto ini = read_ini(layout->scene_file);
     const auto validate_route = [&](std::string_view route,
                                     std::string field,
                                     std::string actor = {}) {
@@ -1050,55 +1001,8 @@ SceneValidationResult validate_portable_scene(const fs::path& scene_root,
                                           path_from_utf8(route), std::move(actor), std::move(field)});
         }
     };
-    if (const auto actors = ini.find("actors"); actors != ini.end()) {
-        for (const auto& [key, value] : actors->second) {
-            if (key.ends_with(".route")) {
-                const auto actor = key.substr(0, key.size() - std::string(".route").size());
-                validate_route(value, "actors." + key, actor);
-            } else if (key.ends_with(".material.texture")) {
-                const auto actor = key.substr(0, key.size() - std::string(".material.texture").size());
-                validate_route(value, "actors." + key, actor);
-            }
-        }
-    }
-    const auto validate_section_path = [&](const char* section_name, const char* key) {
-        if (const auto section = ini.find(section_name);
-            section != ini.end() && section->second.contains(key)) {
-            validate_route(section->second.at(key), std::string(section_name) + "." + key);
-        }
-    };
-    validate_section_path("scripts", "path");
-    validate_section_path("terrain", "path");
-    validate_section_path("vision", "source_path");
-    if (const auto section = ini.find("vision_document");
-        section != ini.end() && section->second.contains("asset_root")) {
-        const auto& root = section->second.at("asset_root");
-        if (!root.empty() && root != "Assets") {
-            result.diagnostics.push_back({"untrusted_asset_route",
-                                          "Vision asset_root must be Assets for a portable scene",
-                                          path_from_utf8(root), {}, "vision_document.asset_root"});
-        }
-        if (section->second.contains("data") && !section->second.at("data").empty()) {
-            try {
-                const auto document = decode_embedded_vision_document(section->second.at("data"));
-                visit_vision_resource_routes(
-                    document, "vision_document.data",
-                    [&](const std::string& route, const std::string& field) {
-                        if (lower(route).rfind("data:", 0) == 0) return;
-                        if (route.find("://") != std::string::npos) {
-                            result.diagnostics.push_back({"remote_dependency",
-                                                          "Remote Vision resources are unsupported",
-                                                          path_from_utf8(route), {}, field});
-                        } else {
-                            validate_route(route, field);
-                        }
-                    });
-            } catch (const std::exception& error) {
-                result.diagnostics.push_back({"invalid_vision_document", error.what(), layout->scene_file,
-                                              {}, "vision_document.data"});
-            }
-        }
-    }
+    for (const auto& reference : scene_asset_references(layout->scene_file, result.diagnostics))
+        validate_route(reference.route, reference.field, reference.actor);
     return result;
 }
 
@@ -1258,17 +1162,16 @@ bool SceneDocumentStore::replace_sections(
 
 CleanupResult cleanup_portable_scene_assets(const fs::path& scene_root, bool dry_run) {
     CleanupResult result;
-    std::scoped_lock lock(scene_file_mutex(scene_root));
+    const auto root = fs::is_directory(scene_root) ? scene_root : scene_root.parent_path();
+    std::scoped_lock lock(scene_file_mutex(root));
+    result.diagnostics = validate_portable_scene(scene_root).diagnostics;
+    if (!result.diagnostics.empty()) return result;
     const auto layout = detect_scene_folder(scene_root);
     if (!layout) {
         result.diagnostics.push_back(
             {"invalid_scene_format", "Expected a portable scene folder version 1", scene_root});
         return result;
     }
-    SceneAssetStore store(layout->root);
-    result.diagnostics = store.validate_manifest();
-    if (!result.diagnostics.empty()) return result;
-
     const auto manifest_path = layout->root / "assets.manifest.json";
     nlohmann::json manifest;
     try {
@@ -1279,28 +1182,9 @@ CleanupResult cleanup_portable_scene_assets(const fs::path& scene_root, bool dry
     }
 
     std::set<std::string> referenced_routes;
-    const auto ini = read_ini(layout->scene_file);
-    for (const auto& [section_name, section] : ini) {
-        for (const auto& [key, value] : section) {
-            if (is_valid_asset_route(value)) referenced_routes.insert(value);
-        }
-    }
-    // Embedded Vision paths are compressed inside scene.ini.  Until they are
-    // decoded here, conservatively retain every bundle rather than risk data loss.
-    if (ini.contains("vision_document") && ini.at("vision_document").contains("data") &&
-        !ini.at("vision_document").at("data").empty()) {
-        try {
-            const auto document = decode_embedded_vision_document(ini.at("vision_document").at("data"));
-            visit_vision_resource_routes(document, "vision_document.data",
-                                          [&](const std::string& route, const std::string&) {
-                                              if (is_valid_asset_route(route)) referenced_routes.insert(route);
-                                          });
-        } catch (const std::exception& error) {
-            result.diagnostics.push_back({"invalid_vision_document", error.what(), layout->scene_file,
-                                          {}, "vision_document.data"});
-            return result;
-        }
-    }
+    for (const auto& reference : scene_asset_references(layout->scene_file, result.diagnostics))
+        referenced_routes.insert(reference.route);
+    if (!result.diagnostics.empty()) return result;
 
     const auto& bundles = manifest["bundles"];
     std::vector<bool> keep(bundles.size(), false);

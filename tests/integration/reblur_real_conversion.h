@@ -4,7 +4,7 @@
 #include "render_core/denoiser/ReBLUR/edsl_nrd_common.h"
 #include "render_core/denoiser/ReBLUR/edsl_nrd_resources.h"
 #include "render_core/denoiser/ReBLUR/native_nrd.h"
-#include "ext/nlohmann/json.hpp"
+#include <nlohmann/json.hpp>
 #include "math/half.h"
 #include <algorithm>
 #include <array>

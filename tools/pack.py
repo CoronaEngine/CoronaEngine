@@ -285,7 +285,7 @@ def main():
 
     args = parser.parse_args()
 
-    # 编辑器源码由 CMake 下载到独立工作区，工具本身仍由引擎仓库维护。
+    # 编辑器源码由共享工作区脚本准备到引擎根目录，工具本身仍由引擎仓库维护。
     root_dir = Path(__file__).resolve().parents[1] / "CoronaEditor" / "editor"
     if not root_dir.is_dir():
         parser.error(f"Editor source directory not found: {root_dir}; run CMake configure first")

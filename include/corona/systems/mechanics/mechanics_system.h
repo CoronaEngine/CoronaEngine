@@ -133,6 +133,9 @@ class MechanicsSystem : public Kernel::SystemBase {
     };
     std::mutex mesh_move_mutex_;
     std::vector<PendingMeshMove> mesh_moves_;
+    std::function<bool()> poll_mesh_move_;
+    std::function<void()> cancel_mesh_move_;
+    std::uintptr_t active_mesh_mover_{}; // guarded by mesh_move_mutex_
     std::unordered_map<std::uintptr_t,MeshMoverState> mesh_movers_;
 
     /// 骨骼动画 GPU 蒙皮。CPU 推进 anim_time、求解 FK/IK 并生成 final 骨骼矩阵；

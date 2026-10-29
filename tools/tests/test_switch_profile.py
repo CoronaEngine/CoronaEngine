@@ -8,7 +8,6 @@ import unittest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from switch_profile_report import parse_log, write_report
 from profile_process import run_bounded
-from profile_render_switch import runtime_environment
 
 
 def event(ph, name, ts, cat="prepare", tid=1):
@@ -32,16 +31,6 @@ class SwitchProfileTests(unittest.TestCase):
         self.assertEqual(functions["vkCreateShaderModule"]["total_ms"], 6)
         self.assertEqual(functions["VulkanComputeDevice::create_shader"]["self_ms"], 2)
 
-    def test_runtime_paths_come_from_ctest_and_selected_runtime_wins(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            build = Path(tmp)
-            tests = build / "tests" / "integration"
-            tests.mkdir(parents=True)
-            (tests / "CTestTestfile.cmake").write_text('set_tests_properties([=[VisionEmbeddedModeSwitchTests]=] PROPERTIES ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:C:/dep/a;PATH=path_list_prepend:C:/dep/b")')
-            selected = build / "editor"
-            env = runtime_environment(build, selected)
-            self.assertEqual(env["PATH"].split(os.pathsep)[:3], [str(selected), "C:/dep/b", "C:/dep/a"])
-            self.assertEqual(env["CORONA_SWITCH_PROFILE"], "1")
 
     def test_nested_time_is_not_counted_twice(self):
         report = parse_log("\n".join([

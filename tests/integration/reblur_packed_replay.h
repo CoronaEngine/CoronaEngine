@@ -1,7 +1,7 @@
 #pragma once
 
 #include <NRD.h>
-#include "ext/nlohmann/json.hpp"
+#include <nlohmann/json.hpp>
 #include "math/half.h"
 #include <cstddef>
 #include <cstring>

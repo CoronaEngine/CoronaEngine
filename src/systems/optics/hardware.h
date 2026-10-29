@@ -7,6 +7,10 @@
 #include "Codegen/CustomLibrary.h"
 #include "Codegen/TypeAlias.h"
 #include "native_frame_throttle.h"
+#include "native_appearance.h"
+#include "native_lighting.h"
+#include "native_light_cache.h"
+#include "native_screen_space.h"
 
 #include <array>
 #include <cstdint>
@@ -19,9 +23,13 @@
 // clang-format off
 #include GLSL(shaders/visibility.vert.glsl)
 #include GLSL(shaders/visibility.frag.glsl)
+#include GLSL(shaders/refraction_front.comp.glsl)
 #include GLSL(shaders/shadow.vert.glsl)
 #include GLSL(shaders/shadow.frag.glsl)
 #include GLSL(shaders/lighting.comp.glsl)
+#include GLSL(shaders/screen_gi.comp.glsl)
+#include GLSL(shaders/screen_depth.comp.glsl)
+#include GLSL(shaders/screen_filter.comp.glsl)
 #include GLSL(shaders/sky.comp.glsl)
 #include GLSL(shaders/sky_sh_project.comp.glsl)
 #include GLSL(shaders/tonemap.comp.glsl)
@@ -106,6 +114,9 @@ private:
 };
 
 struct Hardware {
+    bool native_resources_ready = false;
+    Corona::Systems::OpticsDetail::NativeAppearanceCache appearance_cache;
+    Corona::Systems::OpticsDetail::NativeLightingCache lighting_cache;
     Corona::Systems::OpticsDetail::NativeFrameThrottle native_frame_throttle;
     // === Visibility Buffer (replaces GBuffer rasterization output) ===
     Corona::Horizon::HardwareImage visibilityImage;  // RG32_UINT: R=instanceID, G=primitiveID
@@ -113,6 +124,9 @@ struct Hardware {
     Corona::Horizon::HardwareImage uiVisibilityImage;  // Pass 2 visibility, isolated from scene pass
     Corona::Horizon::HardwareImage uiDepthImage;        // Pass 2 depth, isolated from scene pass
     std::array<Corona::Horizon::HardwareImage, 4> shadowCascadeImages;
+    std::array<Corona::Horizon::HardwareImage, 4> rsmPositions, rsmNormals, rsmFluxes;
+    Corona::Memory::GpuMemToken rsmMemory;
+    Corona::Systems::OpticsDetail::NativeLightFieldCache lightFieldCache;
 
     // === Final composited output ===
     Corona::Horizon::HardwareImage finalOutputImage;
@@ -157,12 +171,19 @@ struct Hardware {
     bool shaderHasInit = false;
     std::optional<Corona::Horizon::RasterizerPipeline<visibility_vert_glsl_t, visibility_frag_glsl_t>> visibilityPipeline;
     std::optional<Corona::Horizon::RasterizerPipeline<visibility_vert_glsl_t, visibility_frag_glsl_t>> uiVisibilityPipeline;
+    std::optional<Corona::Horizon::RasterizerPipeline<visibility_vert_glsl_t, visibility_frag_glsl_t>> refractionOpaquePipeline;
+    std::optional<Corona::Horizon::RasterizerPipeline<visibility_vert_glsl_t, visibility_frag_glsl_t>> refractionExitPipeline;
+    std::optional<Corona::Horizon::ComputePipeline<refraction_front_comp_glsl_t>> refractionFrontPipeline;
     std::array<std::optional<Corona::Horizon::RasterizerPipeline<shadow_vert_glsl_t, shadow_frag_glsl_t>>, 4> shadowPipelines;
     std::optional<Corona::Horizon::ComputePipeline<lighting_comp_glsl_t>> lightingPipeline;
+    std::optional<Corona::Horizon::ComputePipeline<screen_gi_comp_glsl_t>> screenGiPipeline;
+    std::optional<Corona::Horizon::ComputePipeline<screen_depth_comp_glsl_t>> screenDepthPipeline;
+    std::optional<Corona::Horizon::ComputePipeline<screen_filter_comp_glsl_t>> screenFilterPipeline;
     std::optional<Corona::Horizon::ComputePipeline<sky_comp_glsl_t>> skyPipeline;
     std::optional<Corona::Horizon::ComputePipeline<sky_sh_project_comp_glsl_t>> skySHProjectPipeline;
     std::optional<Corona::Horizon::ComputePipeline<tonemap_comp_glsl_t>> tonemapPipeline;
     std::optional<Corona::Horizon::ComputePipeline<actor_pick_comp_glsl_t>> actorPickPipeline;
+    std::optional<Corona::Horizon::ComputePipeline<image_readback_comp_glsl_t>> screenshotReadbackPipeline;
     std::optional<Corona::Horizon::ComputePipeline<optics_overlay_comp_glsl_t>> opticsOverlayPipeline;
     std::optional<Corona::Horizon::ComputePipeline<optics_gizmo_comp_glsl_t>> opticsGizmoPipeline;
     std::optional<Corona::Horizon::ComputePipeline<optics_cursor_comp_glsl_t>> opticsCursorPipeline;
@@ -196,8 +217,28 @@ struct Hardware {
         float shadowMapSize = 1024.0f;
         float shadowBias = 0.0015f;
         uint32_t shadowEnabled = 0;
-        uint32_t padding0 = 0;
+        uint32_t reserved = 0;
+        ktm::fvec4 sunColor{};
+        ktm::fvec4 sunDirection{};
+        // Per-camera refraction descriptors live in the SSBO, keeping resolve
+        // push constants within Vulkan's guaranteed 128-byte limit.
+        std::array<uint32_t,8> refractionDescriptors{};
+        // Hierarchy + bounded GI temporal resources. See screen_history.glsl.
+        std::array<uint32_t,16> screenDescriptors{};
+        ktm::fmat4x4 previousViewProjection{}, previousView{}, inverseView{};
+        // Each cascade: position / normal / flux descriptors, projected texel area.
+        std::array<uint32_t,16> rsmDescriptors{};
     } shadowInfoBufferObjects{};
+    static_assert(offsetof(ShadowInfoBufferObject, reserved)==75u*sizeof(uint32_t));
+    static_assert(offsetof(ShadowInfoBufferObject, sunColor)==76u*sizeof(uint32_t));
+    static_assert(offsetof(ShadowInfoBufferObject, sunDirection)==80u*sizeof(uint32_t));
+    static_assert(offsetof(ShadowInfoBufferObject, refractionDescriptors)==84u*sizeof(uint32_t));
+    static_assert(offsetof(ShadowInfoBufferObject, screenDescriptors)==92u*sizeof(uint32_t));
+    static_assert(offsetof(ShadowInfoBufferObject, previousViewProjection)==108u*sizeof(uint32_t));
+    static_assert(offsetof(ShadowInfoBufferObject, previousView)==124u*sizeof(uint32_t));
+    static_assert(offsetof(ShadowInfoBufferObject, inverseView)==140u*sizeof(uint32_t));
+
+    static_assert(offsetof(ShadowInfoBufferObject, rsmDescriptors)==156u*sizeof(uint32_t));
 
     // === GPU-side instance info table (matches GLSL InstanceInfo layout) ===
     // 96 bytes = 24 uints per entry:
@@ -234,7 +275,7 @@ struct Hardware {
     //   [0]      textureDescriptor
     //   [1]      metallic  (as float bits)
     //   [2]      roughness (as float bits)
-    //   [3]      subsurface
+    //   [3]      subsurface (imported MR: transmission)
     //   [4]      specular
     //   [5]      specularTint
     //   [6]      anisotropic
@@ -261,11 +302,11 @@ struct Hardware {
         uint32_t normalDescriptor{};
         uint32_t metallicDescriptor{};
         uint32_t roughnessDescriptor{};
-        uint32_t occlusionDescriptor{};
+        uint32_t occlusionDescriptor{}; // With flags bit 6: immutable appearance program SSBO
         uint32_t emissiveDescriptor{};
         uint32_t specularDescriptor{};
         uint32_t specularColorDescriptor{};
-        uint32_t flags{}; // metal channel[1:0], rough channel[3:2], double-sided[4], imported MR[5]
+        uint32_t flags{}; // metal channel[1:0], rough channel[3:2], double-sided[4], imported MR[5], expression program[6]
         std::array<float, 3> emissive{0.0f, 0.0f, 0.0f};
         float normalScale{1.0f};
         std::array<float, 3> specularColor{1.0f, 1.0f, 1.0f};

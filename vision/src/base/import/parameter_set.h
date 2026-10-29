@@ -6,7 +6,7 @@
 
 #include "math/basic_types.h"
 #include "core/util/logging.h"
-#include "ext/nlohmann/json.hpp"
+#include <nlohmann/json.hpp>
 #include "base/using.h"
 
 

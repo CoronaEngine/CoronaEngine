@@ -162,6 +162,7 @@ struct GeometryDevice {
     //   Vision 读取该副本；碰撞和光栅顶点缓冲直接使用 GPU 结果，
     //   不依赖该回读副本重新上传。光栅模式及非蒙皮几何此容器为空。
     bool is_skinned{false};
+    std::uint64_t skin_pose_revision = 0;
     std::shared_ptr<Resource::AnimationPlayer> animation_player{std::make_shared<Resource::AnimationPlayer>()};
     std::vector<std::vector<std::byte>> skinned_cpu_vertices;
 
@@ -289,20 +290,7 @@ struct ProfileDevice {
     std::uintptr_t geometry_handle{};
 };
 
-struct ExternalVisionBindingDevice {
-    bool enabled{false};
-    bool visible{true};
-    std::string source_path;
-    std::string shape_guid;
-    int shape_index{-1};
-    std::string json_path;
-    std::string shape_type;
-    std::string shape_identity_key;
-    std::string model_path;
-    // Runtime-only path context and derived identity; never persist the key.
-    std::string source_base_dir;
-    std::string source_path_key;
-};
+
 
 struct ActorDevice {
     std::vector<std::uintptr_t> profile_handles;
@@ -368,8 +356,9 @@ struct CameraDevice {
     CameraOutputMode output_mode{CameraOutputMode::FinalColor};
     CameraRenderBackend render_backend{CameraRenderBackend::Native};
     CameraVisionRenderMode vision_render_mode{CameraVisionRenderMode::PathTracing};
-    bool vision_denoise{false};
-    CameraVisionDenoiser vision_denoiser{CameraVisionDenoiser::Scene};
+    // PT produces one sample per pixel per frame; REBLUR owns temporal history.
+    bool vision_denoise{true};
+    CameraVisionDenoiser vision_denoiser{CameraVisionDenoiser::ReBLUR};
     std::string vision_reblur_settings{"{}"};
     std::string vision_pt_settings{"{}"};
     std::string vision_restir_settings{"{}"};
@@ -381,8 +370,6 @@ struct CameraDevice {
     std::string vision_relax_effective_settings{"{}"}; // Runtime feedback, not serialized.
     bool vision_accumulation{false};
     bool vision_stable_planes{true};
-    bool shadow_cascade_debug{false};
-    bool ssao_enabled{true};
     bool view_open{false};
     bool viewport_rect_active{false};
     int view_x{120};
@@ -481,6 +468,11 @@ struct CameraViewportUpdateCommand {
     std::uint64_t sequence{};
 };
 
+struct DefaultSurfaceCameraUpdateCommand {
+    void* surface{};
+    std::uint32_t width{}, height{};
+};
+
 enum class CameraStateUpdateField : std::uint32_t {
     None = 0,
     Surface = 1u << 0,
@@ -489,8 +481,6 @@ enum class CameraStateUpdateField : std::uint32_t {
     RenderBackend = 1u << 3,
     ViewState = 1u << 4,
     VisionRenderMode = 1u << 5,
-    ShadowCascadeDebug = 1u << 6,
-    SsaoEnabled = 1u << 7,
     VisionDenoise = 1u << 8,
     VisionAccumulation = 1u << 9,
     VisionStablePlanes = 1u << 10,
@@ -526,16 +516,14 @@ struct CameraStateUpdateCommand {
     CameraOutputMode output_mode{CameraOutputMode::FinalColor};
     CameraRenderBackend render_backend{CameraRenderBackend::Native};
     CameraVisionRenderMode vision_render_mode{CameraVisionRenderMode::PathTracing};
-    bool vision_denoise{false};
-    CameraVisionDenoiser vision_denoiser{CameraVisionDenoiser::Scene};
+    bool vision_denoise{true};
+    CameraVisionDenoiser vision_denoiser{CameraVisionDenoiser::ReBLUR};
     std::string vision_reblur_settings{"{}"};
     std::string vision_pt_settings{"{}"};
     std::string vision_restir_settings{"{}"};
     std::string vision_relax_settings{"{}"};
     bool vision_accumulation{false};
     bool vision_stable_planes{true};
-    bool shadow_cascade_debug{false};
-    bool ssao_enabled{true};
     bool view_open{false};
     int view_x{120};
     int view_y{120};
@@ -734,17 +722,10 @@ class SharedDataHub {
 
     // Runtime-only editor metadata keyed by native actor handle. Persisted state
     // remains in scene.ini; this cache only bridges Python proxy actors to native
-    // systems such as OpticsSystem/ExternalVisionSceneAdapter.
+    // systems such as OpticsSystem.
     void set_actor_guid(std::uintptr_t actor_handle, std::string actor_guid);
     [[nodiscard]] std::string actor_guid(std::uintptr_t actor_handle) const;
-    void set_external_vision_binding(std::uintptr_t actor_handle, ExternalVisionBindingDevice binding,
-                                     bool refresh_source_path = false);
     // Explicit scene reload also refreshes retained actors (e.g. directory links).
-    void refresh_external_vision_binding_paths();
-    void clear_external_vision_binding(std::uintptr_t actor_handle);
-    [[nodiscard]] std::optional<ExternalVisionBindingDevice> external_vision_binding(
-        std::uintptr_t actor_handle) const;
-    [[nodiscard]] bool has_external_vision_binding(std::uintptr_t actor_handle) const;
     void clear_actor_metadata(std::uintptr_t actor_handle);
 
     CameraStorage& camera_storage();
@@ -776,6 +757,8 @@ class SharedDataHub {
     std::vector<CameraMoveCommand> drain_camera_moves();
     void enqueue_camera_viewport_update(CameraViewportUpdateCommand command);
     std::vector<CameraViewportUpdateCommand> drain_camera_viewport_updates();
+    void enqueue_default_surface_camera_update(DefaultSurfaceCameraUpdateCommand command);
+    std::optional<DefaultSurfaceCameraUpdateCommand> take_default_surface_camera_update();
     void enqueue_camera_state_update(CameraStateUpdateCommand command);
     std::vector<CameraStateUpdateCommand> drain_camera_state_updates();
     [[nodiscard]] std::optional<bool> requested_camera_vision_denoise(
@@ -840,7 +823,6 @@ class SharedDataHub {
     ActorStorage actor_storage_;
     mutable std::mutex actor_metadata_mutex_;
     std::unordered_map<std::uintptr_t, std::string> actor_guids_;
-    std::unordered_map<std::uintptr_t, ExternalVisionBindingDevice> external_vision_bindings_;
     EnvironmentStorage environment_storage_;
     CameraStorage camera_storage_;
     mutable std::mutex camera_timing_mutex_;
@@ -858,6 +840,7 @@ class SharedDataHub {
     std::unordered_map<std::uintptr_t, CameraViewportUpdateCommand>
         pending_camera_viewport_updates_;
     std::uint64_t camera_viewport_update_sequence_{0};
+    std::optional<DefaultSurfaceCameraUpdateCommand> pending_default_surface_camera_update_;
     mutable std::mutex camera_state_update_mutex_;
     std::unordered_map<std::uintptr_t, CameraStateUpdateCommand>
         pending_camera_state_updates_;

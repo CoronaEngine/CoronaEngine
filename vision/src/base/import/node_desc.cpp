@@ -202,30 +202,10 @@ void LightDesc::init(const ParameterSet &ps) noexcept {
     o2w.init(param.value("o2w", DataWrap()));
 }
 
-void UVUnwrapperDesc::init(const vision::ParameterSet &ps) noexcept {
-    NodeDesc::init(ps);
-    sub_type = ps["type"].as_string("xatlas");
-    ParameterSet param = ps.value("param", DataWrap::object());
-    set_parameter(param);
-}
-
 void ToneMapperDesc::init(const vision::ParameterSet &ps) noexcept {
     NodeDesc::init(ps);
     sub_type = "impl";
     construct_name = ps["type"].as_string("linear");
-    ParameterSet param = ps.value("param", DataWrap::object());
-    set_parameter(param);
-}
-
-void RasterizerDesc::init(const vision::ParameterSet &ps) noexcept {
-    NodeDesc::init(ps);
-    sub_type = ps["type"].as_string("cpu");
-    ParameterSet param = ps.value("param", DataWrap::object());
-    set_parameter(param);
-}
-
-void ImporterDesc::init(const vision::ParameterSet &ps) noexcept {
-    NodeDesc::init(ps);
     ParameterSet param = ps.value("param", DataWrap::object());
     set_parameter(param);
 }
@@ -250,8 +230,6 @@ void PipelineDesc::init(const vision::ParameterSet &ps) noexcept {
     sub_type = ps["type"].as_string("fixed");
     ParameterSet param = ps.value("param", DataWrap::object());
     set_parameter(param);
-    rasterizer_desc.init(param.value("rasterizer", DataWrap::object()));
-    unwrapper_desc.init(param.value("uv_unwrapper", DataWrap::object()));
     frame_buffer_desc.init(param.value("frame_buffer", DataWrap::object()));
 }
 

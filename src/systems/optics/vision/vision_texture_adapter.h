@@ -30,7 +30,8 @@ inline ocarina::Image appearance_image(const std::string& path, const std::strin
     std::array<double,4> sums{};
     const size_t count=size_t(source->get_width())*source->get_height();
     for (size_t i=0;i<count;++i) for (unsigned c=0;c<4;++c) {
-        float value=c>=channels ? (c==3?1.f:0.f) : floats ? floats[i*channels+c] : bytes[i*channels+c]/255.f;
+        const unsigned channel = c < 3 && channels < 3 ? 0 : c == 3 && channels == 2 ? 1 : c;
+        float value=channel>=channels ? (c==3?1.f:0.f) : floats ? floats[i*channels+channel] : bytes[i*channels+channel]/255.f;
         if (c<3 && encoding=="srgb") value=value<=.04045f ? value/12.92f : std::pow((value+.055f)/1.055f,2.4f);
         pixels[i*4+c]=value;
         sums[c]+=value;
@@ -68,7 +69,7 @@ inline AppearanceJson appearance_slot(const AppearanceJson& value, unsigned chan
     if (kind=="mix") return slot({{"type","mix"},{"param",{
         {"t",appearance_slot(value.at("weight"),1)},{"A",appearance_slot(value.at("a"),channels)},
         {"B",appearance_slot(value.at("b"),channels)}}}});
-    if (kind=="sqrt") return slot({{"type","gamma"},{"param",{
+    if (kind=="sqrt") return slot({{"type","converter"},{"construct_name","gamma"},{"param",{
         {"color",appearance_slot(value.at("a"),3)},{"gamma",.5}}}});
     AppearanceJson node={{"type","image"},{"param",{{"color_space","linear"}}}};
     if (kind=="image") {

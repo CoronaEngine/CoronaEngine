@@ -262,6 +262,7 @@ public:
 
 private:
     float alpha_threshold_{0.022};
+    bool two_sided_{false};
 
 // X-macro table: (name, default_value, tag, extra, dim, required)
 // 'extra' is applied after VS_INIT_SLOT, e.g. .set_range(...)
@@ -295,6 +296,7 @@ private:
 #define PRINCIPLED_REGISTER_PARAM_(name, val, tag, extra, dim, required) ret.add_slot(#name, tag, dim, required);
             PRINCIPLED_SLOTS(PRINCIPLED_REGISTER_PARAM_)
 #undef PRINCIPLED_REGISTER_PARAM_
+            ret.add_plain("two_sided", ParamType::Bool);
             return ret;
         }();
         return schema;
@@ -310,8 +312,12 @@ private:
 protected:
     [[nodiscard]] uint64_t compute_topology_hash() const noexcept override {
         uint64_t ret = Material::compute_topology_hash();
-        ret = hash64(ret, switches_);
+        ret = hash64(ret, switches_, two_sided_);
         return ret;
+    }
+
+    [[nodiscard]] uint64_t compute_hash() const noexcept override {
+        return hash64(Material::compute_hash(), two_sided_);
     }
 
     VS_MAKE_MATERIAL_EVALUATOR(LobeSet)
@@ -321,7 +327,7 @@ public:
     PrincipledBSDF() = default;
 
     explicit PrincipledBSDF(const MaterialDesc &desc)
-        : Material(desc) {}
+        : Material(desc), two_sided_(desc["two_sided"].as_bool(false)) {}
 
     void initialize_slots(const vision::Material::Desc &desc) noexcept override {
         Material::initialize_slots(desc);
@@ -332,7 +338,7 @@ public:
 #undef PRINCIPLED_INIT_SLOT_
     }
 
-    VS_HOTFIX_MAKE_RESTORE(Material, sheen_mode_, switches_)
+    VS_HOTFIX_MAKE_RESTORE(Material, sheen_mode_, switches_, two_sided_)
 
     void render_sub_UI(Widgets *widgets) noexcept override {
         static vector<const char *> names = {"volume", "approximate"};
@@ -377,6 +383,22 @@ public:
     }
     [[nodiscard]] UP<Lobe> create_lobe_set(const Interaction &it, const SampledWavelengths &swl) const noexcept override {
         ShadingFrame shading_frame = compute_shading_frame(it, swl);
+        Float transmission = transmission_weight_.evaluate(it, swl)->as_scalar();
+        Float cos_theta = dot(it.wo, it.ng);
+        Float front_factor = cast<float>(cos_theta > 0.f);
+        if (two_sided_) {
+            // Two-sided reflection applies to opaque surfaces only. Keep the
+            // geometric normal and transmissive interfaces unchanged so eta,
+            // ray offsets and one-sided emission retain their original meaning.
+            Bool opaque = transmission <= 0.f;
+            Float side = select(opaque && dot(it.wo, shading_frame.normal()) < 0.f, -1.f, 1.f);
+            shading_frame.y *= side;
+            shading_frame.z *= side;
+            shading_frame.dn_du *= side;
+            shading_frame.dn_dv *= side;
+            front_factor = select(opaque, 1.f, front_factor);
+            cos_theta = select(opaque, abs(cos_theta), cos_theta);
+        }
         const_cast<Interaction &>(it).shading = shading_frame;
         LobeSet::Lobes lobes;
         auto [color, color_lum] = color_.eval_albedo_spectrum(it, swl);
@@ -396,8 +418,6 @@ public:
         SP<GGXMicrofacet> microfacet = make_shared<GGXMicrofacet>(alpha.x, alpha.y);
 
         SampledSpectrum weight = SampledSpectrum::one(swl.dimension());
-        Float cos_theta = dot(it.wo, it.ng);
-        Float front_factor = cast<float>(cos_theta > 0.f);
 
         if (switches_[ESheen]) {
             outline("principled sheen", [&] {
@@ -447,7 +467,7 @@ public:
         }
         if (switches_[ETrans]) {
             outline("principled transmission", [&] {
-                Float trans_weight = transmission_weight_.evaluate(it, swl)->as_scalar();
+                Float trans_weight = transmission;
                 float_array etas = it.correct_eta(iors);
                 Float eta = etas[0];
                 auto fresnel = make_shared<FresnelDielectric>(SampledSpectrum{swl, eta}, swl);

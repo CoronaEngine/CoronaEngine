@@ -122,7 +122,7 @@ bool decodeWorldPositionNormal(ivec2 pixel, out vec3 worldPos, out vec3 worldNor
     }
 
     float depth = texelFetch(textures[nonuniformEXT(pushConsts.depthImageIndex)], pixel, 0).r;
-    if (depth >= (1.0 - 1e-3)) {
+    if (depth <= 0.0) {
         return false;
     }
 

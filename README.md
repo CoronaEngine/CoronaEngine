@@ -6,7 +6,7 @@
 
 | 工具 | 要求 |
 | --- | --- |
-| Git | 克隆源码及管理锁定的 Horizon 工作区 |
+| Git | 克隆源码及管理 Horizon、CoronaEditor 工作区 |
 | [Miniforge](https://github.com/conda-forge/miniforge) / [Miniconda / Conda](https://docs.conda.io/) | 管理 Python、Conan 和 Node.js；无需单独安装这些工具 |
 | CMake | 3.29 或更高版本 |
 | Ninja | 必须在 PATH 中；工程使用 Ninja Multi-Config |
@@ -16,12 +16,24 @@
 ## 开发工具环境
 
 CMake Configure 会自动创建或复用 `coronaengine-dev` 环境（可通过 `CORONA_CONDA_ENV` 指定环境名称）。
-CMake 首次配置会将 [CoronaEditor](https://github.com/CoronaEngine/CoronaEditor) 浅克隆到仓库根目录的
-`CoronaEditor/`，直接使用其中的 `assets/` 和 `editor/`，不会再嵌套一层 `CoronaEditor/`。
-已有副本直接复用，不自动拉取或覆盖本地修改；需要更新时在该目录中手动执行 Git 更新。
-配置时会递归初始化 CoronaEditor 声明的子模块，并检出其记录的提交。
-Python 依赖检查使用 `CoronaEditor/editor/requirements.txt`；构建时仍将资源部署为可执行目录下的
-`assets/` 和 `CabbageEditor/`，并自动构建前端。根目录原有的 `assets/`、`editor/` 不再参与构建。
+Horizon 和 CoronaEditor 统一由 `tools/git_workspace.py` 管理，分别位于引擎根目录的
+`Horizon/` 和 `CoronaEditor/`。CMake bootstrap 及
+`tools/dev.py install/configure/build` 会准备这两个工作区。
+
+仓库地址、分支及完整 commit 固定在 `tools/source_workspaces.py` 中，不再读取 JSON lock 文件。
+首次准备使用非浅克隆，检出指定 commit、建立跟踪分支并递归初始化该提交记录的子模块。
+已有副本只报告状态并直接使用：普通构建不会拉取、切换版本或更新子模块，本地修改和提交可以直接参与构建。
+旧的 `.workspace/Horizon/` 和 `.workspace/CoronaEditor/` 普通 Git 副本会整体迁移到引擎根目录，保留本地修改、
+未跟踪文件及子模块；已有浅克隆也会复用，显式同步需要旧提交时才补全历史。
+
+修改代码中的 commit 后，使用 `python tools/dev.py horizon-sync` 或
+`python tools/dev.py editor-sync` 显式对齐对应工作区及子模块，然后重新 configure/build。
+同步不会强制覆盖未提交修改，也不会重置含有额外本地提交的分支；子模块同步失败会报错，可修复后重试。
+`python tools/dev.py status` 显示两者的版本和本地状态；`update` 只更新 Conan 依赖，不拉取源码仓库。
+
+Python 依赖检查使用 `CoronaEditor/editor/requirements.txt`；构建时将资源部署为
+可执行目录下的 `assets/` 和 `CabbageEditor/`，并自动构建前端。关闭编辑器构建仍准备该仓库，
+因为它也提供共享资源。源码工作区通过进程锁保护，多个 preset 共用同一副本。
 Python 层使用固定的 PyTorch/torchvision CPU wheels，不需要 CUDA。缺包或版本不符时，pip 按完整
 `requirements.txt` 安装；安装或复检失败会终止配置。
 启用编辑器时，CMake 使用该环境的 Python 自动检查 Node.js **22.19.0** 和 npm；
@@ -42,6 +54,6 @@ VS Code / CMake Tools
 
 ## 通过 CMake preset 构建
 
-使用 CMake Tools选择目标族 preset，例如 <code>core-debug</code>、<code>examples-debug</code>、<code>tests-debug</code>、<code>vision-debug</code>、<code>vision-tests-debug</code> 或 <code>vision-oidn-debug</code>，再执行 Configure 和 Build。
+使用 CMake Tools选择目标族 preset，例如 <code>core-debug</code>、<code>examples-debug</code>、<code>tests-debug</code>、<code>vision-debug</code> 或 <code>vision-tests-debug</code>，再执行 Configure 和 Build。
 
 引擎核心测试统一放在根目录 `tests/`，按模块组织；目录约定和运行方式见 [测试说明](tests/README.md)。

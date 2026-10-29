@@ -32,16 +32,17 @@ void sync_vision_camera(::vision::Pipeline& pipeline, const CameraDevice& camera
         (change.pose && pipeline.frame_buffer()->enable_accumulation());
     sensor->update_device_data();
 
-    if (invalidate) {
-        if (std::getenv("CORONA_VISION_CAMERA_LOG") != nullptr) {
-            OC_INFO_FORMAT("Vision camera invalidated frame_index={} resolution=({}, {}) "
-                           "fov={} projection_x_sign={} clip=({}, {}) pose_changed={}",
-                           pipeline.frame_index(), state.resolution.x, state.resolution.y,
-                           state.fov_y, camera.projection_x_sign,
-                           state.near_plane, state.far_plane, change.pose);
-        }
-        pipeline.invalidate();
+    if ((change.pose || change.projection || invalidate) &&
+        std::getenv("CORONA_VISION_CAMERA_LOG") != nullptr) {
+        OC_INFO_FORMAT("Vision camera synchronized frame_index={} resolution=({}, {}) "
+                       "position=({}, {}, {}) fov={} projection_x_sign={} clip=({}, {}) "
+                       "pose_changed={} invalidated={}",
+                       pipeline.frame_index(), state.resolution.x, state.resolution.y,
+                       camera.position.x, camera.position.y, camera.position.z,
+                       state.fov_y, camera.projection_x_sign,
+                       state.near_plane, state.far_plane, change.pose, invalidate);
     }
+    if (invalidate) pipeline.invalidate();
 }
 
 }  // namespace Corona::Systems::Vision

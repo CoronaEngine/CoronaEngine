@@ -28,6 +28,7 @@ private:
     EncodedData<float4x4> uv_transform_{make_float4x4(1.f)};
     EncodedData<uint> wrap_mode_{0u};
     EncodedData<uint> nearest_{0u};
+    EncodedData<float2> texture_extent_{make_float2(1.f)};
     mutable optional<float_array> cache_;
 
     [[nodiscard]] uint64_t compute_hash() const noexcept override {
@@ -69,11 +70,13 @@ public:
         nearest_=desc["filter"].as_string("bilinear")=="nearest" ? 1u : 0u;
         texture_ = &obtain_texture(desc);
         tex_id_ = texture_->index();
+        const auto size = texture_->host_tex().resolution();
+        texture_extent_ = make_float2(float(size.x), float(size.y));
     }
     VS_MAKE_GUI_STATUS_FUNC(ShaderNode, vector_)
-    OC_ENCODABLE_FUNC(ShaderNode, vector_, tex_id_, scale_, uv_transform_, wrap_mode_, nearest_)
+    OC_ENCODABLE_FUNC(ShaderNode, vector_, tex_id_, scale_, uv_transform_, wrap_mode_, nearest_, texture_extent_)
     VS_MAKE_PLUGIN_NAME_FUNC
-    VS_HOTFIX_MAKE_RESTORE(ShaderNode, vector_, texture_, tex_id_, desc_, scale_, uv_transform_, wrap_mode_, nearest_)
+    VS_HOTFIX_MAKE_RESTORE(ShaderNode, vector_, texture_, tex_id_, desc_, scale_, uv_transform_, wrap_mode_, nearest_, texture_extent_)
 
     [[nodiscard]] static const ParamSchema &param_schema() noexcept {
         static const ParamSchema schema = [] {
@@ -87,6 +90,7 @@ public:
             ret.add_plain("source_encoding", ParamType::String);
             ret.add_plain("wrap", ParamType::String);
             ret.add_plain("filter", ParamType::String);
+            ret.add_slot("uv_transform", Number, 9u, false);
             // Bridge metadata is also retained in the descriptor/hash.
             return ret;
         }();
@@ -109,6 +113,8 @@ public:
             texture_ = &obtain_texture(desc_);
             texture_->upload_immediately();
             tex_id_.hv() = texture_->index().hv();
+            const auto size = texture_->host_tex().resolution();
+            texture_extent_ = make_float2(float(size.x), float(size.y));
             changed_ = true;
         }
     }
@@ -154,10 +160,12 @@ public:
             Bool outside=any(uv<make_float2(0.f)) || any(uv>make_float2(1.f));
             uv=select(*wrap_mode_==1u,clamp(uv,make_float2(0.000001f),make_float2(.999999f)),uv);
             uv=select(*wrap_mode_==2u,make_float2(1.f)-abs(fract(uv*.5f)*2.f-make_float2(1.f)),uv);
-            const auto size=texture_->host_tex().resolution();
-            const auto extent=make_float2(float(size.x),float(size.y));
+            const Float2 extent = *texture_extent_;
             uv=select(*nearest_!=0u,(floor(uv*extent)+make_float2(.5f))/extent,uv);
-            float_array value = texture_->sample(channel_num(), uv);
+            // A topology group compiles one representative ImageNode for many
+            // materials. Its host texture pointer is not the current material's
+            // texture: use the descriptor decoded from that material's data.
+            float_array value = texture_->bindless_array()->tex3d_var(*tex_id_).sample(channel_num(), uv);
             value = value * *scale_ * select(*wrap_mode_==3u && outside,0.f,1.f);
             cache_.emplace(value);
         }

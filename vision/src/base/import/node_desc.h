@@ -303,30 +303,13 @@ public:
     void init(const ParameterSet &ps) noexcept override;
 };
 
-struct ImporterDesc : public NodeDesc {
-public:
-    VISION_DESC_COMMON(Importer)
-    void init(const ParameterSet &ps) noexcept override;
-};
+
 
 struct PassDesc : public NodeDesc {
 public:
     VISION_DESC_COMMON(Pass)
     void init(const ParameterSet &ps) noexcept override;
 };
-
-struct RasterizerDesc : public NodeDesc {
-public:
-    VISION_DESC_COMMON(Rasterizer)
-    void init(const ParameterSet &ps) noexcept override;
-};
-
-struct UVUnwrapperDesc : public NodeDesc {
-public:
-    VISION_DESC_COMMON(UVUnwrapper)
-    void init(const ParameterSet &ps) noexcept override;
-};
-
 
 struct ToneMapperDesc : public NodeDesc {
 public:
@@ -347,9 +330,7 @@ public:
 struct PipelineDesc : public NodeDesc {
 public:
     mutable Device *device{nullptr};
-    UVUnwrapperDesc unwrapper_desc;
     FrameBufferDesc frame_buffer_desc;
-    RasterizerDesc rasterizer_desc;
 
 public:
     VISION_DESC_COMMON(Pipeline)

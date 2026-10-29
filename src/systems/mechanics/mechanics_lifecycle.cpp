@@ -312,6 +312,8 @@ void MechanicsSystem::shutdown() {
         impl_->ctx->event_bus()->unsubscribe(impl_->residency_sub_id_);
     }
 
+    if(cancel_mesh_move_)cancel_mesh_move_();
+    cancel_mesh_move_={};poll_mesh_move_={};
     impl_->clear_runtime_state();
     std::vector<PendingMeshMove> cancelled;
     { std::lock_guard lock(mesh_move_mutex_); cancelled.swap(mesh_moves_); }

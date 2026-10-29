@@ -353,7 +353,7 @@ void main()
                          float(pixel.y) / float(pushConsts.gbufferSize.y));
     float depth = textureLod(textures[nonuniformEXT(pushConsts.depthImageIndex)], screenUV, 0.0).r;
 
-    if (depth >= (1.0 - 1e-3) || instanceID_1based == 0u)
+    if (depth <= 0.0 || instanceID_1based == 0u)
     {
         imageStore(imagesRGBA16[pushConsts.outputImageIndex], pixel, vec4(0.0));
         return;

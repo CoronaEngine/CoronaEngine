@@ -178,7 +178,7 @@ bool ShaderGraph::graph_resolved() const noexcept {
 
 ShaderNodeSlot ShaderGraph::construct_slot(const vision::ParameterSet &ps, vision::AttrTag tag) const noexcept {
     DataWrap data = ps.data();
-    if (data.is_null()) {
+    if (data.is_null() || (data.is_object() && data.empty())) {
         return ShaderNodeSlot{};
     }
     SP<ShaderNode> shader_node = get_node(data["node"]);
@@ -199,6 +199,9 @@ template<typename T>
         SlotDesc slot_desc = desc.slot(attr_name, val, tag);
         slot = ShaderNodeSlot::create_slot(slot_desc);
         slot->set_graph(shared_graph());
+        // Inline compound nodes need the same initialization as node_tab
+        // entries, after their graph is available to resolve child slots.
+        slot->initialize_slots(slot_desc.node);
     }
     return slot;
 }

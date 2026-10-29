@@ -63,10 +63,6 @@ fs::path Global::scene_path() const noexcept {
     return scene_path_;
 }
 
-fs::path Global::scene_cache_path() const noexcept {
-    return scene_path_ / ".cache";
-}
-
 Pipeline *Toolkit::pipeline() noexcept {
     return Global::instance().pipeline();
 }

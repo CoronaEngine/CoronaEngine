@@ -6,10 +6,10 @@
 /dist/
 /cmake-build-*/
 
-# Managed source workspaces. Keep lock files tracked.
+# Managed source workspaces (baselines live in tools/source_workspaces.py).
+/Horizon/
 /CoronaEditor/
-/.workspace/*
-!/.workspace/horizon.lock.json
+/.workspace/
 
 # CMake intermediate files
 CMakeUserPresets.json
