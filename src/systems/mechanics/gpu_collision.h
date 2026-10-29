@@ -7,6 +7,7 @@
 #include <memory>
 #include <span>
 #include <vector>
+#include <future>
 
 namespace Corona::Systems::MechanicsInternal {
 struct CollisionMesh;
@@ -112,6 +113,9 @@ class GpuCollisionPipeline {
     [[nodiscard]] MeshMotionResult move_mesh(const Instance& moving, std::span<const Instance> obstacles,
                                              Point displacement, bool snap_to_ground,
                                              float turn=0, Point pivot={}, Point turn_axis={0,1,0});
+    [[nodiscard]] std::future<MeshMotionResult> move_mesh_async(const Instance& moving,
+        std::span<const Instance> obstacles,Point displacement,bool snap_to_ground,
+        float turn=0,Point pivot={},Point turn_axis={0,1,0});
     void retain(std::span<const std::uint64_t> active_keys);
 
    private:

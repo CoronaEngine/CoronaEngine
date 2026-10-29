@@ -19,9 +19,7 @@ void BakePipeline::init_project(const vision::ProjectDesc &project_desc) {
     postprocessor_.set_tone_mapper(renderer_.frame_buffer()->tone_mapper());
 }
 
-void BakePipeline::init_postprocessor(const DenoiserDesc &desc) {
-    // Offline denoise disabled - normal/albedo computed from visibility buffer on-the-fly
-}
+void BakePipeline::init_postprocessor(const DenoiserDesc &desc) {}
 
 void BakePipeline::prepare() noexcept {
     Pipeline::prepare();

@@ -64,6 +64,7 @@ void IndirectRaster::record(Horizon::CommandRecorder& recorder) const {
         else if(command.op==Horizon::CommandOp::DrawIndexedIndirect) {
             auto draw=std::move(command.payload.draw_indexed_indirect);
             for(const auto& image:images)draw.resource_uses.push_back({image,Horizon::AccessKind::Read});
+            for(const auto& buffer:buffers)draw.resource_uses.push_back({buffer,Horizon::AccessKind::Read});
             recorder.draw_indexed_indirect({command.resources.at(0).handle},
                 {command.resources.at(1).handle},{command.resources.at(2).handle},std::move(draw));
         } else throw std::logic_error("Unexpected command in indirect raster pass");

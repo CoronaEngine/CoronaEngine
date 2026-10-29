@@ -405,10 +405,6 @@ void BindAll(nanobind::module_& m) {
         .def("set_vision_stable_planes", &Camera::set_vision_stable_planes, nb::arg("enabled"))
         .def("get_vision_stable_planes", &Camera::get_vision_stable_planes)
         .def("get_requested_vision_stable_planes", &Camera::get_requested_vision_stable_planes)
-        .def("set_shadow_cascade_debug", &Camera::set_shadow_cascade_debug, nb::arg("enabled"))
-        .def("get_shadow_cascade_debug", &Camera::get_shadow_cascade_debug)
-        .def("set_ssao_enabled", &Camera::set_ssao_enabled, nb::arg("enabled"))
-        .def("get_ssao_enabled", &Camera::get_ssao_enabled)
         .def("set_view_state", &Camera::set_view_state, nb::arg("open"), nb::arg("x"),
              nb::arg("y"), nb::arg("width"), nb::arg("height"), nb::arg("move_speed"))
         .def("get_view_state", &Camera::get_view_state)

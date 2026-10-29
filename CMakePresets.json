@@ -207,46 +207,6 @@
       }
     },
     {
-      "name": "vision-oidn-debug",
-      "displayName": "Vision OIDN - Debug",
-      "generator": "Ninja Multi-Config",
-      "binaryDir": "${sourceDir}/build/conan/vision-oidn/debug",
-      "cacheVariables": {
-        "CORONA_DEV_CONFIGURATION": "Debug",
-        "CORONA_DEV_TARGET_FAMILY": "vision-oidn"
-      }
-    },
-    {
-      "name": "vision-oidn-relwithdebinfo",
-      "displayName": "Vision OIDN - RelWithDebInfo",
-      "generator": "Ninja Multi-Config",
-      "binaryDir": "${sourceDir}/build/conan/vision-oidn/relwithdebinfo",
-      "cacheVariables": {
-        "CORONA_DEV_CONFIGURATION": "RelWithDebInfo",
-        "CORONA_DEV_TARGET_FAMILY": "vision-oidn"
-      }
-    },
-    {
-      "name": "vision-oidn-release",
-      "displayName": "Vision OIDN - Release",
-      "generator": "Ninja Multi-Config",
-      "binaryDir": "${sourceDir}/build/conan/vision-oidn/release",
-      "cacheVariables": {
-        "CORONA_DEV_CONFIGURATION": "Release",
-        "CORONA_DEV_TARGET_FAMILY": "vision-oidn"
-      }
-    },
-    {
-      "name": "vision-oidn-minsizerel",
-      "displayName": "Vision OIDN - MinSizeRel",
-      "generator": "Ninja Multi-Config",
-      "binaryDir": "${sourceDir}/build/conan/vision-oidn/minsizerel",
-      "cacheVariables": {
-        "CORONA_DEV_CONFIGURATION": "MinSizeRel",
-        "CORONA_DEV_TARGET_FAMILY": "vision-oidn"
-      }
-    },
-    {
       "name": "debug",
       "displayName": "Examples - Debug (legacy default)",
       "inherits": "examples-debug"
@@ -366,26 +326,6 @@
     {
       "name": "vision-tests-minsizerel",
       "configurePreset": "vision-tests-minsizerel",
-      "configuration": "MinSizeRel"
-    },
-    {
-      "name": "vision-oidn-debug",
-      "configurePreset": "vision-oidn-debug",
-      "configuration": "Debug"
-    },
-    {
-      "name": "vision-oidn-relwithdebinfo",
-      "configurePreset": "vision-oidn-relwithdebinfo",
-      "configuration": "RelWithDebInfo"
-    },
-    {
-      "name": "vision-oidn-release",
-      "configurePreset": "vision-oidn-release",
-      "configuration": "Release"
-    },
-    {
-      "name": "vision-oidn-minsizerel",
-      "configurePreset": "vision-oidn-minsizerel",
       "configuration": "MinSizeRel"
     },
     {

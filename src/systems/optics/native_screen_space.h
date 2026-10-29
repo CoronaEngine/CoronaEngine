@@ -1,4 +1,5 @@
 #pragma once
+#include "native_render_policy.h"
 #include <algorithm>
 #include <cstdint>
 
@@ -9,7 +10,7 @@ struct ScreenSpaceLayout {
     uint32_t width, height, stride, levels;
     uint64_t hierarchy_words;
     static ScreenSpaceLayout make(uint32_t width, uint32_t height) {
-        const uint32_t stride=std::max(2u,(std::max(width,height)+1919u)/1920u);
+        const uint32_t stride=std::max(2u,(std::max(width,height)+NATIVE_GI_LONG_EDGE-1u)/NATIVE_GI_LONG_EDGE);
         ScreenSpaceLayout result{(width+stride-1u)/stride,(height+stride-1u)/stride,stride,1u,0u};
         while(width>1u || height>1u) {
             width=(width+1u)/2u;height=(height+1u)/2u;

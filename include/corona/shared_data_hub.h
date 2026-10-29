@@ -162,6 +162,7 @@ struct GeometryDevice {
     //   Vision 读取该副本；碰撞和光栅顶点缓冲直接使用 GPU 结果，
     //   不依赖该回读副本重新上传。光栅模式及非蒙皮几何此容器为空。
     bool is_skinned{false};
+    std::uint64_t skin_pose_revision = 0;
     std::shared_ptr<Resource::AnimationPlayer> animation_player{std::make_shared<Resource::AnimationPlayer>()};
     std::vector<std::vector<std::byte>> skinned_cpu_vertices;
 
@@ -369,8 +370,6 @@ struct CameraDevice {
     std::string vision_relax_effective_settings{"{}"}; // Runtime feedback, not serialized.
     bool vision_accumulation{false};
     bool vision_stable_planes{true};
-    bool shadow_cascade_debug{false};
-    bool ssao_enabled{true};
     bool view_open{false};
     bool viewport_rect_active{false};
     int view_x{120};
@@ -482,8 +481,6 @@ enum class CameraStateUpdateField : std::uint32_t {
     RenderBackend = 1u << 3,
     ViewState = 1u << 4,
     VisionRenderMode = 1u << 5,
-    ShadowCascadeDebug = 1u << 6,
-    SsaoEnabled = 1u << 7,
     VisionDenoise = 1u << 8,
     VisionAccumulation = 1u << 9,
     VisionStablePlanes = 1u << 10,
@@ -527,8 +524,6 @@ struct CameraStateUpdateCommand {
     std::string vision_relax_settings{"{}"};
     bool vision_accumulation{false};
     bool vision_stable_planes{true};
-    bool shadow_cascade_debug{false};
-    bool ssao_enabled{true};
     bool view_open{false};
     int view_x{120};
     int view_y{120};

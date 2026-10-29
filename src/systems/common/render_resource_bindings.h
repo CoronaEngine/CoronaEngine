@@ -59,6 +59,7 @@ struct IndirectDispatch {
 struct IndirectRaster {
     Horizon::RasterizerPipelineBase* pipeline;
     std::vector<Horizon::HardwareImage> images;
+    std::vector<Horizon::HardwareBuffer> buffers;
     void record(Horizon::CommandRecorder& recorder) const;
 };
 

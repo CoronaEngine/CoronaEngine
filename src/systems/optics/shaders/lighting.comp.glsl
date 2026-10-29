@@ -24,7 +24,7 @@ bool traceScreen(Surface source, vec3 direction, uint depthIndex, uint visibilit
     vec3 origin = source.position + (transmitting?direction:source.normal) * max(0.001, pushConsts.ssrThickness * 0.25);
     vec3 a = (view * vec4(origin,1)).xyz;
     vec3 ray = mat3(view) * direction;
-    float distance = transmitting ? max(pushConsts.ssrMaxDistance,readFloat(pushConsts.directLightingBufferIndex,7u)*float(readUint(pushConsts.directLightingBufferIndex,0u))*2.0) : pushConsts.ssrMaxDistance;
+    float distance = pushConsts.ssrMaxDistance;
     // Clip rays before the camera near plane, avoiding negative/zero clip W.
     float nearPlane = abs(viewPosition(ivec2(pushConsts.gbufferSize / 2u), 1.0, inverseProjection).z);
     if (ray.z < 0.0) distance = min(distance, (a.z - nearPlane * 1.01) / -ray.z);
@@ -134,7 +134,7 @@ vec3 filteredScreenGi(ivec2 pixel,Surface receiver) {
     ivec2 base=ivec2(floor(q));vec2 f=fract(q);
     vec3 receiverView=(screenView()*vec4(receiver.position,1)).xyz;
     vec3 normalView=mat3(screenView())*receiver.geometricNormal;
-    float tolerance=max(receiverView.z*.01,readFloat(pushConsts.directLightingBufferIndex,7u)*.002);
+    float tolerance=max(receiverView.z*.01,.002);
     uint stamp=surfaceStamp(receiver.objectID,receiver.geometricNormal);
     for(int i=0;i<4;++i) {
         ivec2 d=ivec2(i&1,i>>1),p=base+d;
@@ -147,8 +147,9 @@ vec3 filteredScreenGi(ivec2 pixel,Surface receiver) {
         float weight=max(w.x*w.y,1e-3)*exp(-plane/max(tolerance,1e-5));
         result+=imageLoad(imagesRGBA16[nonuniformEXT(descriptor)],p).rgb*weight;sum+=weight;
     }
-    float edge=screenConfidence((vec2(pixel)+.5)/vec2(pushConsts.gbufferSize));
-    return sum>1e-6?result/sum*edge:vec3(0);
+    // The gather already fades the screen part and fills it with RSM. Fading
+    // this combined result again would create a dark frame around the viewport.
+    return sum>1e-6?result/sum:vec3(0);
 }
 
 // Canonical Corona lat-long orientation, shared with sky.comp and Vision.
@@ -158,7 +159,7 @@ vec3 refractionEnvironment(vec3 direction,Surface source) {
         float phi=atan(-direction.z,direction.x);if(phi<0)phi+=2.0*PI;
         return max(textureLod(textures[nonuniformEXT(tex)],vec2(phi/(2.0*PI),acos(clamp(direction.y,-1,1))/PI),0).rgb,vec3(0));
     }
-    return sampleLpv(source.position,source.geometricNormal,direction,false);
+    return environmentRadiance(direction);
 }
 bool screenPixel(vec3 world,out ivec2 pixel) {
     vec4 clip=readMat4(pushConsts.uniformBufferIndex,60u)*readMat4(pushConsts.uniformBufferIndex,44u)*vec4(world,1);
@@ -183,11 +184,9 @@ vec3 reflection(Surface s, float ao) {
         float f=dielectricFresnel(dot(v,s.outwardNormal),entering?1:s.material.ior,entering?s.material.ior:1);
         fresnel=mix(fresnel,vec3(f),glassWeight);
     }
-    // SH radiance is a low-frequency, geometry-occluded fallback for SSR misses
-    // and rough metals. Keeping the receiver offset along its geometric normal
-    // avoids sampling the other side of a wall when the reflection is grazing.
-    // SSR replaces this approximation when an actual screen-space hit exists.
-    vec3 radiance=sampleLpv(s.position,s.geometricNormal,r,false);
+    // RSM estimates diffuse transport. Specular misses use the environment;
+    // SSR replaces it when a screen-space surface is available.
+    vec3 radiance=environmentRadiance(r);
     if(glassWeight>0)radiance=mix(radiance,refractionEnvironment(r,s),glassWeight);
     if ((pushConsts.featureFlags & 2u) != 0u && roughness < pushConsts.ssrMaxRoughness &&
         (glassWeight>0 || max(fresnel.x,max(fresnel.y,fresnel.z)) > 0.02)) {
@@ -252,7 +251,7 @@ vec3 refraction(ivec2 pixel,Surface source) {
         if(dot(direction,exitNormal)<0)exitNormal=-exitNormal;
         exitF=dielectricFresnel(dot(direction,exitNormal),ior,1);
         // The rejected exit energy is reflection, not absorption. Keep it in
-        // the same bounded environment/LPV fallback used for internal TIR.
+        // the same bounded environment fallback used for internal TIR.
         // This does not trace another interface or claim a nested-medium path.
         internalReflection=refractionEnvironment(reflect(direction,-exitNormal),source);
         vec3 outgoing=refract(direction,-exitNormal,ior);
@@ -280,7 +279,7 @@ void main() {
     uint mode = pushConsts.outputMode;
     if (mode==0u && (pushConsts.featureFlags&40u)==32u) {
         // The opaque resolve already shaded this exact surface. Reuse it in
-        // the final pass instead of repeating LPV, SSAO, SSR and material work.
+        // the final pass instead of repeating GI, SSAO, SSR and material work.
         uint visible=imageLoad(imagesRG32UI[pushConsts.visibilityImageIndex],pixel).r;
         if(visible>0u && visible<=pushConsts.instanceCount) {
             uint material=loadInstanceInfo(visible-1u).materialID;

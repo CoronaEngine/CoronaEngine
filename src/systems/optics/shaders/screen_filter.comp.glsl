@@ -1,6 +1,7 @@
 #version 460
 #extension GL_EXT_nonuniform_qualifier : enable
 #extension GL_GOOGLE_include_directive : require
+#include "native_policy.glsl"
 layout(local_size_x=8,local_size_y=8) in;
 layout(set=1,binding=0) readonly buffer Buffer {uint data[];} ssbos[];
 layout(set=2,binding=0,rgba16f) uniform image2D images[];
@@ -11,7 +12,7 @@ layout(push_constant) uniform PushConsts {
     uint shadowInfoBufferIndex;
     uint inputIndex;
     uint outputIndex;
-    uint mode; // 0 temporal, 1 and 2 edge-aware spatial iterations
+    uint mode; // 1 prefilter, 0 temporal, 2 edge-aware spatial resolve
 } pushConsts;
 uint readUint(uint b,uint i) {return ssbos[nonuniformEXT(b)].data[i];}
 float readFloat(uint b,uint i) {return uintBitsToFloat(readUint(b,i));}
@@ -52,21 +53,25 @@ void main() {
         value.a=1.;
         if(weight>.05) {
             history/=weight;
-            // Clip signed irradiance history, not final colour/albedo. Permit
-            // local variance so sparse diffuse rays converge instead of sticking.
-            vec3 lo=value.rgb,hi=value.rgb,mean=vec3(0),second=vec3(0);float count=0.;
-            for(int y=-1;y<=1;++y)for(int x=-1;x<=1;++x) {
-                ivec2 q=p+ivec2(x,y);if(!inside(q))continue;
-                uvec2 ng=imageLoad(guides[guide],q).rg;
-                if(ng.x==0u || !sameSurface(g.y,ng.y) || abs(uintBitsToFloat(ng.x)-z)>z*.03)continue;
-                vec3 v=imageLoad(images[pushConsts.inputIndex],q).rgb;
-                lo=min(lo,v);hi=max(hi,v);mean+=v;second+=v*v;count+=1.;
-            }
-            mean/=max(count,1.);vec3 sigma=sqrt(max(second/max(count,1.)-mean*mean,vec3(0)));
-            history.rgb=clamp(history.rgb,lo-sigma,hi+sigma);
             vec2 uv=(vec2(screenGiPixel(p))+.5)/vec2(pushConsts.gbufferSize);
             float motion=length((previousUv-uv)*vec2(screenGiSize()));
-            float lengthLimit=mix(32.,4.,smoothstep(0.,8.,motion));
+            // A stochastic zero is not evidence of a lighting change. Clipping
+            // stationary history to this frame's sparse samples destroys energy
+            // between light hits and makes diffuse surfaces pulse. Reprojection
+            // validates geometry; clip only during motion, after prefiltering.
+            if(motion>.01) {
+                vec3 lo=value.rgb,hi=value.rgb,mean=vec3(0),second=vec3(0);float count=0.;
+                for(int y=-1;y<=1;++y)for(int x=-1;x<=1;++x) {
+                    ivec2 q=p+ivec2(x,y);if(!inside(q))continue;
+                    uvec2 ng=imageLoad(guides[guide],q).rg;
+                    if(ng.x==0u || !sameSurface(g.y,ng.y) || abs(uintBitsToFloat(ng.x)-z)>z*.03)continue;
+                    vec3 v=imageLoad(images[pushConsts.inputIndex],q).rgb;
+                    lo=min(lo,v);hi=max(hi,v);mean+=v;second+=v*v;count+=1.;
+                }
+                mean/=max(count,1.);vec3 sigma=sqrt(max(second/max(count,1.)-mean*mean,vec3(0)));
+                history.rgb=mix(history.rgb,clamp(history.rgb,lo-sigma,hi+sigma),smoothstep(.01,1.,motion));
+            }
+            float lengthLimit=mix(NATIVE_GI_HISTORY,NATIVE_GI_MOVING_HISTORY,smoothstep(0.,8.,motion));
             value.a=min(history.a+1.,lengthLimit);
             value.rgb=mix(history.rgb,value.rgb,1./value.a);
         }

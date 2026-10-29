@@ -5131,7 +5131,6 @@ GeometrySystem::query_shadow_mesh_slots_batch(
             RenderMeshBuffers selected = fallback;
             float bounds_padding = 0.0f;
             auto draw_clusters = mesh.draw_clusters;
-            auto shadow_index_buffer = mesh.shadowIndexBuffer;
             if (has_levels) {
                 const auto& levels = cache_it->second.levels;
                 const int target = std::clamp(targets[cascade], 0,
@@ -5154,7 +5153,6 @@ GeometrySystem::query_shadow_mesh_slots_batch(
                         candidate.max_index};
                     bounds_padding = candidate.geometric_error;
                     draw_clusters = candidate.draw_clusters;
-                    shadow_index_buffer = candidate.shadow_index_buffer;
                     break;
                 }
             }
@@ -5162,6 +5160,10 @@ GeometrySystem::query_shadow_mesh_slots_batch(
             auto append_shadow_slot = [&](uint32_t instance_index,
                                           const MeshInstanceDevice* instance) {
                 ShadowMeshSlot slot;
+                slot.texture = mesh.textureBuffer;
+                slot.material = mesh.material;
+                slot.material_index = mesh.materialIndex;
+                slot.material_color = mesh.materialColor;
                 if (!geom->is_skinned) slot.draw_clusters = draw_clusters;
                 slot.mesh_index = mesh_index;
                 slot.instance_index = instance_index;
@@ -5180,7 +5182,8 @@ GeometrySystem::query_shadow_mesh_slots_batch(
                     }
                 }
                 slot.geo = selected;
-                if (!geom->is_skinned && shadow_index_buffer) slot.geo.index = shadow_index_buffer;
+                // RSM evaluates UVs and normals. Position-only shadow indices
+                // weld attribute seams and cannot be used for reflective flux.
                 slot.vertex_count = slot.geo.vertex_count;
                 slot.index_count = slot.geo.index_count;
                 slot.max_index = slot.geo.max_index;

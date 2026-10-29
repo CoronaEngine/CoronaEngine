@@ -16,7 +16,6 @@ TARGET_FAMILIES = (
     "tests",
     "vision",
     "vision-tests",
-    "vision-oidn",
 )
 DEFAULT_TARGET_FAMILY = "examples"
 BOOTSTRAP_ENV = "CORONA_DEV_BOOTSTRAP_ACTIVE"

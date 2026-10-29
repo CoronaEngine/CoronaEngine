@@ -1,32 +1,27 @@
 #pragma once
 
 #include "native_appearance.h"
-#include "native_lpv_data.h"
 #include <corona/resource/types/scene.h>
 
 namespace Corona::Systems::OpticsDetail {
 
-// Immutable scene-wide voxel geometry and local-light injection, including
-// off-screen surfaces. LPV propagation runs on the GPU without ray traversal.
+// Environment image and its small lighting metadata. Geometry and materials
+// are consumed directly by the VBuffer and solar RSM raster passes.
 struct NativeLighting {
     Horizon::HardwareBuffer data;
     Horizon::HardwareImage environment;
-    Memory::GpuMemToken memory;
-    Memory::GpuMemToken geometry_memory;
-    uint32_t triangles{}, emitters{}, directionals{}, occupied{};
-    float voxel_size{};
-    LpvData::Vec bounds_low{},bounds_high{};
-    std::array<LpvData::Layout,LpvData::cascade_count> layouts{};
+    std::shared_ptr<Memory::GpuMemToken> environment_memory;
+    Horizon::SubmitReceipt ready;
+    std::vector<Horizon::HardwareBuffer> uploads;
     bool authored_environment{};
 };
 
 class NativeLightingCache {
-    std::size_t signature_{};
+    struct State;
+    std::shared_ptr<State> state_;
     std::shared_ptr<NativeLighting> value_;
 public:
-    std::shared_ptr<NativeLighting> obtain(const SceneDevice& scene,
-        const EnvironmentDevice& environment, std::size_t geometry_signature,
-        LpvData::Vec eye,LpvData::Vec forward);
+    std::shared_ptr<NativeLighting> obtain(const EnvironmentDevice& environment);
 };
 
 } // namespace Corona::Systems::OpticsDetail

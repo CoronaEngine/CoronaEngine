@@ -390,11 +390,14 @@ class GeometrySystem : public Kernel::SystemBase {
         float world_units_per_texel = 0.0f;
     };
 
-    /// Minimal immutable shadow-pass snapshot. Shadow rendering does not sample
-    /// the material texture, so keeping those handles out of the hot path avoids
-    /// four cascades worth of unnecessary ref-counted copies.
+    /// Solar shadow/RSM draw handles. Material resources are retained references;
+    /// geometry and texture contents are never copied into a scene snapshot.
     struct ShadowMeshSlot {
         Geometry::MeshDrawClusters draw_clusters;
+        Horizon::HardwareImage texture;
+        std::shared_ptr<const MeshMaterialDevice> material;
+        std::uint32_t material_index = 0;
+        std::array<float,4> material_color{1.f,1.f,1.f,1.f};
         uint32_t          mesh_index = 0;
         uint32_t          instance_index = 0;
         uint32_t          object_id = 0;
