@@ -38,7 +38,7 @@ corona_add_system(optics
 # Only the compatibility bridge sees Horizon's private command recorder. Do not
 # expose this include root to Vision: both projects have headers named core/*.
 set_source_files_properties(retain_submission.cpp PROPERTIES
-    INCLUDE_DIRECTORIES "${CMAKE_SOURCE_DIR}/.workspace/Horizon/src")
+    INCLUDE_DIRECTORIES "${CMAKE_SOURCE_DIR}/Horizon/src")
 target_link_libraries(corona_optics_system PRIVATE horizon::volk)
 
 # vision-all_libs is linked PRIVATEly here on purpose: vision bundles its own

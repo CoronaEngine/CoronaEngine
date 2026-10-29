@@ -1,30 +1,22 @@
-"""Tests for the Horizon workspace handling in ``tools/horizon_workspace.py``.
-
-The workspace is treated as an ordinary Git clone: builds report its state and
-always proceed, and the lock file is a hand-edited starting point rather than an
-authority. These tests exercise that contract against a local origin repository,
-so they need no network access.
-"""
+"""Shared workspace contract, exercised for both dependencies with local Git remotes."""
 
 from __future__ import annotations
 
 import contextlib
 import io
-import json
+import os
+from dataclasses import replace
 import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from horizon_workspace import (  # noqa: E402
-    SYNC_COMMAND,
-    ensure_workspace,
-    inspect_workspace,
-    sync_workspace,
-)
+from git_workspace import ensure_workspace, inspect_workspace, sync_workspace, _workspace_lock
+from source_workspaces import HORIZON, EDITOR
 from workflow import CommandError
 
 
@@ -56,7 +48,8 @@ def git_probe(cwd: Path, *arguments: str) -> subprocess.CompletedProcess[str]:
     )
 
 
-class HorizonWorkspaceTests(unittest.TestCase):
+class WorkspaceContract:
+    template = HORIZON
     """Exercises the ordinary-clone contract against a local origin repository."""
 
     def setUp(self) -> None:
@@ -85,25 +78,14 @@ class HorizonWorkspaceTests(unittest.TestCase):
         self.newer = git(self.seed, "rev-parse", "HEAD")
 
         self.repo_root = self.root / "CoronaEngine"
-        (self.repo_root / ".workspace").mkdir(parents=True)
-        self.lock_file = self.repo_root / ".workspace" / "horizon.lock.json"
-        self.worktree = self.repo_root / ".workspace" / "Horizon"
-        self.write_lock(self.locked)
+        self.repo_root.mkdir()
+        self.workspace = replace(self.template, url=self.origin.as_posix(), commit=self.locked)
+        self.worktree = self.repo_root / self.workspace.directory
 
     # -- helpers ---------------------------------------------------------------
 
-    def write_lock(self, commit: str) -> None:
-        self.lock_file.write_text(
-            json.dumps(
-                {
-                    "schema_version": 1,
-                    "url": self.origin.as_posix(),
-                    "ref": "main",
-                    "commit": commit,
-                }
-            ),
-            encoding="utf-8",
-        )
+    def set_baseline(self, commit: str) -> None:
+        self.workspace = replace(self.workspace, commit=commit)
 
     def advance_origin(self, content: str) -> str:
         """Commit ``content`` onto origin/main, as a Horizon contributor would."""
@@ -145,7 +127,7 @@ class HorizonWorkspaceTests(unittest.TestCase):
             return function(*arguments), buffer.getvalue()
 
     def clone(self) -> None:
-        self.silently(ensure_workspace, self.repo_root)
+        self.silently(ensure_workspace, self.repo_root, self.workspace)
 
     def head(self) -> str:
         return git(self.worktree, "rev-parse", "HEAD")
@@ -176,11 +158,11 @@ class HorizonWorkspaceTests(unittest.TestCase):
     # -- clone creates an ordinary clone --------------------------------------
 
     def test_failed_clone_cleans_git_objects_and_allows_retry(self) -> None:
-        self.write_lock("b" * 40)
+        self.set_baseline("b" * 40)
         with self.assertRaises(CommandError):
             self.clone()
         self.assertFalse(self.worktree.exists())
-        self.write_lock(self.locked)
+        self.set_baseline(self.locked)
         self.clone()
         self.assertEqual(self.head(), self.locked)
         self.assertTrue((self.worktree / "file.txt").is_file())
@@ -211,7 +193,7 @@ class HorizonWorkspaceTests(unittest.TestCase):
         self.assertEqual(git(self.origin, "rev-parse", "main^"), self.newer)
 
     def test_missing_clone_is_reported_without_raising(self) -> None:
-        status = inspect_workspace(self.repo_root)
+        status = inspect_workspace(self.repo_root, self.workspace)
         self.assertFalse(status.cloned)
         self.assertIn("missing", status.summary())
         self.assertEqual(status.advice(), ())
@@ -219,47 +201,15 @@ class HorizonWorkspaceTests(unittest.TestCase):
     def test_workspace_path_that_is_not_a_git_checkout_is_fatal(self) -> None:
         self.worktree.mkdir(parents=True)
         with self.assertRaises(RuntimeError) as context:
-            ensure_workspace(self.repo_root)
+            ensure_workspace(self.repo_root, self.workspace)
         self.assertIn("not a Git checkout", str(context.exception))
-
-    def test_unreadable_lock_is_reported_but_an_existing_clone_still_builds(self) -> None:
-        """A corrupt lock must not fail a build: it is only needed to align by."""
-        self.clone()
-        self.lock_file.write_text("{ not json", encoding="utf-8")
-        status, output = self.silently(ensure_workspace, self.repo_root)
-        self.assertTrue(status.cloned)
-        self.assertIsNone(status.lock)
-        self.assertIn("unreadable", status.summary())
-        self.assertIn("lock", " ".join(status.advice()))
-        self.assertIn("[WARN]", output)
-        self.assertEqual(self.head(), self.locked)
-
-    def test_sync_with_an_unreadable_lock_says_why_it_cannot_align(self) -> None:
-        self.clone()
-        self.lock_file.write_text("{ not json", encoding="utf-8")
-        with self.assertRaises(RuntimeError) as context:
-            self.silently(sync_workspace, self.repo_root)
-        self.assertIn("Cannot sync Horizon", str(context.exception))
-
-    def test_missing_lock_is_fatal_only_when_the_clone_must_be_created(self) -> None:
-        self.lock_file.unlink()
-        with self.assertRaises(RuntimeError) as context:
-            ensure_workspace(self.repo_root)
-        self.assertIn("does not exist", str(context.exception))
-        # With a clone present, the same missing lock is merely reported.
-        self.write_lock(self.locked)
-        self.clone()
-        self.lock_file.unlink()
-        status, _ = self.silently(ensure_workspace, self.repo_root)
-        self.assertTrue(status.cloned)
-        self.assertIsNone(status.lock)
 
     # -- drift is reported, never fatal ---------------------------------------
 
     def test_local_commit_ahead_of_the_lock_still_builds(self) -> None:
         self.clone()
         git(self.worktree, "checkout", "--detach", self.newer)
-        status, output = self.silently(ensure_workspace, self.repo_root)
+        status, output = self.silently(ensure_workspace, self.repo_root, self.workspace)
         self.assertTrue(status.cloned)
         self.assertFalse(status.in_sync)
         self.assertFalse(status.dirty)
@@ -274,8 +224,8 @@ class HorizonWorkspaceTests(unittest.TestCase):
         # A plain fetch is what a developer would run; it brings the commit into
         # the object database without touching the checkout.
         git(self.worktree, "fetch", "origin", "main")
-        self.write_lock(third)
-        status, output = self.silently(ensure_workspace, self.repo_root)
+        self.set_baseline(third)
+        status, output = self.silently(ensure_workspace, self.repo_root, self.workspace)
         self.assertTrue(status.cloned)
         self.assertFalse(status.in_sync)
         self.assertIn("behind", status.drift)
@@ -288,8 +238,8 @@ class HorizonWorkspaceTests(unittest.TestCase):
         git(self.worktree, "commit", "-am", "local branch of history")
         # A commit the clone already knows, so this is genuine divergence rather
         # than "the locked commit has not been fetched yet".
-        self.write_lock(self.newer)
-        status, output = self.silently(ensure_workspace, self.repo_root)
+        self.set_baseline(self.newer)
+        status, output = self.silently(ensure_workspace, self.repo_root, self.workspace)
         self.assertFalse(status.in_sync)
         self.assertIn("diverged", status.drift)
         self.assertIn("[WARN]", output)
@@ -299,7 +249,7 @@ class HorizonWorkspaceTests(unittest.TestCase):
         other = self.root / "other-origin.git"
         git(self.root, "init", "--bare", "--initial-branch=main", other.as_posix())
         git(self.worktree, "remote", "set-url", "origin", other.as_posix())
-        status, output = self.silently(ensure_workspace, self.repo_root)
+        status, output = self.silently(ensure_workspace, self.repo_root, self.workspace)
         self.assertFalse(status.url_matches)
         self.assertTrue(status.cloned)
         self.assertIn("origin", output.lower())
@@ -311,7 +261,7 @@ class HorizonWorkspaceTests(unittest.TestCase):
         (self.worktree / "file.txt").write_text("work in progress\n", encoding="utf-8")
         (self.worktree / "untracked.txt").write_text("scratch\n", encoding="utf-8")
         before = self.snapshot()
-        status, _ = self.silently(ensure_workspace, self.repo_root)
+        status, _ = self.silently(ensure_workspace, self.repo_root, self.workspace)
         self.assertTrue(status.dirty)
         self.assertTrue(status.in_sync)
         self.assertEqual(len(status.modified), 1)
@@ -324,7 +274,7 @@ class HorizonWorkspaceTests(unittest.TestCase):
     def test_a_renamed_file_is_reported_by_its_new_name(self) -> None:
         self.clone()
         git(self.worktree, "mv", "file.txt", "renamed.txt")
-        status, _ = self.silently(ensure_workspace, self.repo_root)
+        status, _ = self.silently(ensure_workspace, self.repo_root, self.workspace)
         self.assertTrue(status.dirty)
         self.assertIn("renamed.txt", status.summary())
         self.assertNotIn("file.txt", status.summary())
@@ -335,18 +285,18 @@ class HorizonWorkspaceTests(unittest.TestCase):
         (self.worktree / "file.txt").write_text("horizon edit\n", encoding="utf-8")
         git(self.worktree, "commit", "-am", "horizon edit")
         (self.worktree / "file.txt").write_text("horizon edit plus wip\n", encoding="utf-8")
-        self.write_lock(self.advance_origin("upstream moved on\n"))
+        self.set_baseline(self.advance_origin("upstream moved on\n"))
         before = self.snapshot()
-        status, output = self.silently(ensure_workspace, self.repo_root)
+        status, output = self.silently(ensure_workspace, self.repo_root, self.workspace)
         self.assertTrue(status.dirty)
         self.assertFalse(status.in_sync)
-        self.assertIn("compiled as-is", output)
+        self.assertIn("used as-is", output)
         self.assert_workspace_unchanged(before)
 
     def test_detached_head_is_reported_with_advice(self) -> None:
         self.clone()
         git(self.worktree, "checkout", "--detach", self.locked)
-        status, output = self.silently(ensure_workspace, self.repo_root)
+        status, output = self.silently(ensure_workspace, self.repo_root, self.workspace)
         self.assertTrue(status.detached)
         self.assertIn("detached HEAD", status.summary())
         self.assertIn("switch -c", output)
@@ -354,7 +304,7 @@ class HorizonWorkspaceTests(unittest.TestCase):
     def test_branch_behind_its_upstream_is_reported(self) -> None:
         """A fresh clone rests on the locked commit, which may trail origin/main."""
         self.clone()
-        status, output = self.silently(ensure_workspace, self.repo_root)
+        status, output = self.silently(ensure_workspace, self.repo_root, self.workspace)
         self.assertEqual(status.branch, "main")
         self.assertTrue(status.upstream_configured)
         self.assertEqual(status.behind, 1)
@@ -365,42 +315,43 @@ class HorizonWorkspaceTests(unittest.TestCase):
         self.clone()
         (self.worktree / "file.txt").write_text("unpushed\n", encoding="utf-8")
         git(self.worktree, "commit", "-am", "unpushed")
-        status, output = self.silently(ensure_workspace, self.repo_root)
+        status, output = self.silently(ensure_workspace, self.repo_root, self.workspace)
         self.assertEqual(status.ahead, 1)
         self.assertIn("1 ahead", output)
 
-    # -- horizon-sync only moves HEAD -----------------------------------------
+    # -- explicit sync adopts the code baseline -------------------------------
 
-    def test_sync_adopts_a_hand_edited_lock(self) -> None:
+    def test_sync_adopts_an_updated_code_baseline(self) -> None:
         self.clone()
         newest = self.advance_origin("three\n")
-        self.write_lock(newest)
-        self.silently(sync_workspace, self.repo_root)
+        self.set_baseline(newest)
+        self.silently(sync_workspace, self.repo_root, self.workspace)
         self.assertEqual(self.head(), newest)
-        self.assertTrue(inspect_workspace(self.repo_root).in_sync)
+        self.assertTrue(inspect_workspace(self.repo_root, self.workspace).in_sync)
 
     def test_sync_is_a_no_op_when_already_locked(self) -> None:
         self.clone()
         before = self.snapshot()
-        _, output = self.silently(sync_workspace, self.repo_root)
+        _, output = self.silently(sync_workspace, self.repo_root, self.workspace)
         self.assertIn("already at the locked commit", output)
         self.assert_workspace_unchanged(before)
 
-    def test_sync_never_writes_the_lock_file(self) -> None:
+    def test_sync_does_not_advance_the_code_baseline_to_remote_tip(self) -> None:
         self.clone()
-        before = self.lock_file.read_bytes()
+        baseline = self.workspace
         self.advance_origin("three\n")
-        self.silently(sync_workspace, self.repo_root)
-        self.assertEqual(self.lock_file.read_bytes(), before)
+        self.silently(sync_workspace, self.repo_root, self.workspace)
+        self.assertEqual(self.workspace, baseline)
+        self.assertEqual(self.head(), baseline.commit)
 
     def test_sync_keeps_uncommitted_work_and_refuses_to_overwrite_it(self) -> None:
         """Git protects the edit; the tooling neither stashes nor discards it."""
         self.clone()
         (self.worktree / "file.txt").write_text("precious local edit\n", encoding="utf-8")
         newest = self.advance_origin("three\n")
-        self.write_lock(newest)
+        self.set_baseline(newest)
         with self.assertRaises(RuntimeError) as context:
-            self.silently(sync_workspace, self.repo_root)
+            self.silently(sync_workspace, self.repo_root, self.workspace)
         # The message must explain that the refusal is protective, in Git's own words.
         message = str(context.exception)
         self.assertIn("left untouched", message)
@@ -421,8 +372,8 @@ class HorizonWorkspaceTests(unittest.TestCase):
         git(self.worktree, "commit", "-am", "local horizon work")
         local = self.head()
         newest = self.advance_origin("three\n")
-        self.write_lock(newest)
-        self.silently(sync_workspace, self.repo_root)
+        self.set_baseline(newest)
+        self.silently(sync_workspace, self.repo_root, self.workspace)
         self.assertEqual(self.head(), newest)
         self.assertEqual(git(self.worktree, "rev-parse", "refs/heads/main"), local)
         # Still reachable from the branch that holds it, not merely present as an
@@ -433,17 +384,17 @@ class HorizonWorkspaceTests(unittest.TestCase):
 
     def test_sync_reports_a_lock_commit_that_is_not_reachable(self) -> None:
         self.clone()
-        self.write_lock("b" * 40)
+        self.set_baseline("b" * 40)
         with self.assertRaises(RuntimeError) as context:
-            self.silently(sync_workspace, self.repo_root)
+            self.silently(sync_workspace, self.repo_root, self.workspace)
         self.assertIn("not reachable", str(context.exception))
 
     def test_sync_leaves_the_workspace_on_a_branch_not_a_detached_head(self) -> None:
         """A detached HEAD is the very state the report warns about, so sync avoids it."""
         self.clone()
         git(self.worktree, "checkout", "--detach", self.locked)
-        self.write_lock(self.advance_origin("three\n"))
-        status, output = self.silently(sync_workspace, self.repo_root)
+        self.set_baseline(self.advance_origin("three\n"))
+        status, output = self.silently(sync_workspace, self.repo_root, self.workspace)
         self.assertFalse(status.detached)
         self.assertEqual(self.branch(), "main")
         self.assertIn("main", output)
@@ -451,8 +402,8 @@ class HorizonWorkspaceTests(unittest.TestCase):
     def test_sync_fast_forwards_the_lock_branch_over_a_behind_tip(self) -> None:
         self.clone()
         newest = self.advance_origin("three\n")
-        self.write_lock(newest)
-        _, output = self.silently(sync_workspace, self.repo_root)
+        self.set_baseline(newest)
+        _, output = self.silently(sync_workspace, self.repo_root, self.workspace)
         self.assertIn("fast-forwarded", output)
         self.assertEqual(git(self.worktree, "rev-parse", "refs/heads/main"), newest)
         self.assertEqual(self.branch(), "main")
@@ -466,16 +417,157 @@ class HorizonWorkspaceTests(unittest.TestCase):
         # Origin moves onto a line the local commit is not on, so reassigning the
         # branch to the lock really would push that commit off it.
         newest = self.advance_origin_on_a_side_line("three\n")
-        self.write_lock(newest)
-        status, output = self.silently(sync_workspace, self.repo_root)
+        self.set_baseline(newest)
+        status, output = self.silently(sync_workspace, self.repo_root, self.workspace)
         self.assertEqual(status.head, newest)
         self.assertEqual(git(self.worktree, "rev-parse", "refs/heads/main"), local)
         self.assertTrue(status.detached)
         self.assertIn("branch 'main' was left", output)
         self.assertEqual(git(self.worktree, "rev-parse", "--verify", "--quiet", local), local)
 
-    def test_sync_command_constant_names_the_documented_entry_point(self) -> None:
-        self.assertIn("horizon-sync", SYNC_COMMAND)
+
+    def test_existing_shallow_clone_can_sync_to_an_older_baseline(self) -> None:
+        git(self.repo_root, "clone", "--depth", "1", self.origin.as_uri(), str(self.worktree))
+        self.assertEqual(git(self.worktree, "rev-parse", "--is-shallow-repository"), "true")
+        before = self.snapshot()
+        self.silently(ensure_workspace, self.repo_root, self.workspace)
+        self.assert_workspace_unchanged(before)
+        self.silently(sync_workspace, self.repo_root, self.workspace)
+        self.assertEqual(self.head(), self.locked)
+        self.assertEqual(git(self.worktree, "rev-parse", "refs/heads/main"), self.newer)
+
+    def add_submodule(self) -> tuple[str, str]:
+        self.subseed = self.root / "subseed"
+        self.subseed.mkdir()
+        git(self.subseed, "init", "-b", "main")
+        (self.subseed / "module.txt").write_text("one\n", encoding="utf-8")
+        git(self.subseed, "add", ".")
+        git(self.subseed, "commit", "-m", "module one")
+        first = git(self.subseed, "rev-parse", "HEAD")
+        git(self.seed, "-c", "protocol.file.allow=always", "submodule", "add",
+            self.subseed.as_posix(), "plugins/module")
+        git(self.seed, "commit", "-am", "add submodule")
+        git(self.seed, "push", "upstream", "main")
+        self.set_baseline(git(self.seed, "rev-parse", "HEAD"))
+        (self.subseed / "module.txt").write_text("two\n", encoding="utf-8")
+        git(self.subseed, "commit", "-am", "module two")
+        second = git(self.subseed, "rev-parse", "HEAD")
+        # Permit file transport only within these offline test fixtures.
+        self.enterContext(mock.patch.dict(os.environ, {"GIT_ALLOW_PROTOCOL": "file"}))
+        return first, second
+
+    def test_clone_initializes_pinned_submodule_and_build_leaves_edits_untouched(self) -> None:
+        first, second = self.add_submodule()
+        self.clone()
+        module = self.worktree / "plugins/module"
+        self.assertEqual(git(module, "rev-parse", "HEAD"), first)
+        git(module, "checkout", "--detach", second)
+        (module / "module.txt").write_text("local module work\n", encoding="utf-8")
+        self.silently(ensure_workspace, self.repo_root, self.workspace)
+        self.assertEqual(git(module, "rev-parse", "HEAD"), second)
+        self.assertEqual((module / "module.txt").read_text(), "local module work\n")
+
+    def test_sync_updates_submodule_when_parent_head_already_matches(self) -> None:
+        first, second = self.add_submodule()
+        self.clone()
+        module = self.worktree / "plugins/module"
+        git(module, "checkout", "--detach", second)
+        self.silently(sync_workspace, self.repo_root, self.workspace)
+        self.assertEqual(git(module, "rev-parse", "HEAD"), first)
+
+    def test_sync_refuses_to_overwrite_submodule_edits_and_can_retry(self) -> None:
+        first, second = self.add_submodule()
+        self.clone()
+        module = self.worktree / "plugins/module"
+        git(module, "checkout", "--detach", second)
+        (module / "module.txt").write_text("precious module work\n", encoding="utf-8")
+        with self.assertRaises(CommandError):
+            self.silently(sync_workspace, self.repo_root, self.workspace)
+        self.assertEqual((module / "module.txt").read_text(), "precious module work\n")
+        git(module, "stash", "push")
+        self.silently(sync_workspace, self.repo_root, self.workspace)
+        self.assertEqual(git(module, "rev-parse", "HEAD"), first)
+        self.assertIn("module.txt", git(module, "stash", "show", "--name-only"))
+
+    def test_failed_submodule_clone_is_not_published_and_can_retry(self) -> None:
+        first, _ = self.add_submodule()
+        missing = self.root / "missing-submodule"
+        git(self.seed, "config", "-f", ".gitmodules", "submodule.plugins/module.url", str(missing))
+        git(self.seed, "commit", "-am", "broken submodule URL")
+        git(self.seed, "push", "upstream", "main")
+        good = self.workspace
+        self.set_baseline(git(self.seed, "rev-parse", "HEAD"))
+        with self.assertRaises(CommandError):
+            self.clone()
+        self.assertFalse(self.worktree.exists())
+        self.workspace = good
+        self.clone()
+        self.assertEqual(git(self.worktree / "plugins/module", "rev-parse", "HEAD"), first)
+
+
+    def test_migrate_preserves_dirty_sources_untracked_files_and_submodules(self) -> None:
+        first, _ = self.add_submodule()
+        legacy = self.repo_root / self.workspace.legacy_directory
+        legacy.parent.mkdir(parents=True, exist_ok=True)
+        git(self.repo_root, "clone", "--recurse-submodules", str(self.origin), str(legacy))
+        (legacy / "scratch.txt").write_text("keep me", encoding="utf-8")
+        (legacy / "file.txt").write_text("local edit", encoding="utf-8")
+        module = legacy / "plugins/module"
+        (module / "module.txt").write_text("submodule edit", encoding="utf-8")
+        before = (git(legacy, "rev-parse", "HEAD"), git(legacy, "status", "--porcelain"))
+        self.silently(ensure_workspace, self.repo_root, self.workspace)
+        self.assertFalse(legacy.exists())
+        self.assertEqual((self.head(), git(self.worktree, "status", "--porcelain")), before)
+        self.assertEqual((self.worktree / "scratch.txt").read_text(), "keep me")
+        self.assertEqual(git(self.worktree / "plugins/module", "rev-parse", "HEAD"), first)
+        self.assertEqual((self.worktree / "plugins/module/module.txt").read_text(), "submodule edit")
+
+    def test_migration_refuses_two_existing_copies(self) -> None:
+        self.clone()
+        legacy = self.repo_root / self.workspace.legacy_directory
+        legacy.parent.mkdir(parents=True, exist_ok=True)
+        legacy.mkdir()
+        (legacy / "scratch.txt").write_text("keep me", encoding="utf-8")
+        before = self.snapshot()
+        with self.assertRaisesRegex(RuntimeError, "Both"):
+            ensure_workspace(self.repo_root, self.workspace)
+        self.assert_workspace_unchanged(before)
+        self.assertEqual((legacy / "scratch.txt").read_text(), "keep me")
+
+
+class HorizonWorkspaceTests(WorkspaceContract, unittest.TestCase):
+    template = HORIZON
+
+
+class EditorWorkspaceTests(WorkspaceContract, unittest.TestCase):
+    template = EDITOR
+
+
+
+class WorkspaceLockTests(unittest.TestCase):
+    def test_lock_excludes_another_process_and_releases_after_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            child = (
+                "import sys; from pathlib import Path; "
+                "from git_workspace import _workspace_lock; from source_workspaces import EDITOR; "
+                "lock = _workspace_lock(Path(sys.argv[1]), EDITOR, timeout=0.1); "
+                "lock.__enter__(); lock.__exit__(None, None, None)"
+            )
+            try:
+                with _workspace_lock(root, EDITOR):
+                    result = subprocess.run(
+                        [sys.executable, "-B", "-c", child, str(root)],
+                        cwd=Path(__file__).resolve().parents[1], capture_output=True, text=True, timeout=10,
+                    )
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("Timed out waiting", result.stderr)
+                    raise ValueError("test release on failure")
+            except ValueError:
+                pass
+            with _workspace_lock(root, EDITOR, timeout=0.1):
+                pass
+
 
 if __name__ == "__main__":
     unittest.main()

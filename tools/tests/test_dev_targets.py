@@ -14,6 +14,29 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import dev  # noqa: E402
 import workflow  # noqa: E402
+from source_workspaces import EDITOR, HORIZON
+
+
+class SourceWorkspaceWorkflowTests(unittest.TestCase):
+    def test_install_prepares_both_sources_before_conan(self):
+        calls = mock.Mock()
+        with mock.patch.object(dev, "ensure_workspace", calls.ensure), \
+                mock.patch.object(dev, "conan_install", calls.conan):
+            dev.install("RelWithDebInfo", "examples")
+        self.assertEqual(calls.mock_calls[:2], [
+            mock.call.ensure(dev.REPO_ROOT, HORIZON),
+            mock.call.ensure(dev.REPO_ROOT, EDITOR),
+        ])
+        self.assertEqual(calls.mock_calls[2][0], "conan")
+
+    def test_sync_commands_select_only_the_requested_source(self):
+        for command, workspace in (("editor-sync", EDITOR), ("horizon-sync", HORIZON)):
+            with self.subTest(command=command), \
+                    mock.patch.object(dev, "sync_workspace") as sync, \
+                    mock.patch.object(dev, "install") as install:
+                dev.execute(dev.create_parser().parse_args([command]))
+                sync.assert_called_once_with(dev.REPO_ROOT, workspace)
+                install.assert_not_called()
 
 
 class CmakeBuildForwardsEveryTargetTests(unittest.TestCase):
@@ -77,7 +100,7 @@ class ExecuteForwardsEveryParsedTargetTests(unittest.TestCase):
 
     def test_execute_falls_back_to_the_default_target(self):
         args = dev.create_parser().parse_args(["build-fast"])
-        with mock.patch.object(dev, "ensure_workspace"), \
+        with mock.patch.object(dev, "ensure_workspaces"), \
                 mock.patch.object(dev, "cmake_build") as cmake_build:
             dev.execute(args)
         forwarded = list(cmake_build.call_args.args[2])
