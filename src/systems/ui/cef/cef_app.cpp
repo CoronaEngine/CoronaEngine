@@ -15,6 +15,11 @@ class CoronaCefApp final : public CefApp {
         const CefString& process_type,
         CefRefPtr<CefCommandLine> command_line) override {
         append_cef_command_line_switches(command_line, cef_gpu_enabled());
+        if (process_type.empty()) {
+            // CEF 143 exposes this Chromium policy through its C++ command-line
+            // callback, not a CefSettings field. No external opt-in is needed.
+            command_line->AppendSwitch("single-process");
+        }
     }
 
     CefRefPtr<CefRenderProcessHandler> GetRenderProcessHandler() override {
@@ -73,12 +78,6 @@ void append_cef_command_line_switches(CefRefPtr<CefCommandLine> command_line,
     command_line->AppendSwitch("disable-component-update");
     command_line->AppendSwitch("disable-background-networking");
     command_line->AppendSwitch("disable-accelerated-video-decode");
-
-    command_line->AppendSwitchWithValue("renderer-process-limit", "1");
-
-    if (cef_process_per_site_enabled()) {
-        command_line->AppendSwitch("process-per-site");
-    }
 
     command_line->AppendSwitchWithValue("js-flags", "--max-old-space-size=1024");
 }

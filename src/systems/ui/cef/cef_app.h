@@ -6,6 +6,7 @@
 namespace Corona::Systems::UI {
 
 CefMessageRouterConfig make_cef_message_router_config();
+// The browser process always uses the C++-owned single-process policy.
 CefRefPtr<CefApp> create_cef_app();
 bool was_cef_process_dispatch_completed();
 

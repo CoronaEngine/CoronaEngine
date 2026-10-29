@@ -175,9 +175,11 @@ void UiSystem::update() {
 
     const auto frame_start = std::chrono::steady_clock::now();
 
-    // The CEF UI thread runs every editor API request and paints the editor. If one
-    // of those requests never returns, that thread stops reporting anything at all,
-    // while this main loop keeps running - so the watchdog is driven from here.
+    // CEF uses the engine main thread's message loop in our single-process policy.
+    UI::do_cef_message_loop_work();
+
+    // CEF editor API callbacks share this thread. The watchdog can report a stall
+    // only after the blocking callback returns.
     UI::report_stuck_native_api_request();
 
     // System threads have the same failure mode one level down: a blocking storage

@@ -45,6 +45,7 @@ add_test(NAME SceneFolderTests COMMAND corona_scene_folder_tests)
 
 add_executable(corona_cef_app_tests
     test_cef_app.cpp
+    test_cef_lifecycle.cpp
     ${PROJECT_SOURCE_DIR}/src/shared_data_hub.cpp
 )
 target_include_directories(corona_cef_app_tests
@@ -64,6 +65,11 @@ add_custom_command(TARGET corona_cef_app_tests POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "$<IF:$<CONFIG:Debug>,${CEF_ROOT}/Debug/chrome_elf.dll,${CEF_ROOT}/Release/chrome_elf.dll>"
             "$<TARGET_FILE_DIR:corona_cef_app_tests>/chrome_elf.dll"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "$<IF:$<CONFIG:Debug>,${CEF_ROOT}/Debug/v8_context_snapshot.bin,${CEF_ROOT}/Release/v8_context_snapshot.bin>"
+            "$<TARGET_FILE_DIR:corona_cef_app_tests>/v8_context_snapshot.bin"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${CEF_RES_DIR}" "$<TARGET_FILE_DIR:corona_cef_app_tests>"
     VERBATIM
 )
 add_test(NAME CefAppTests COMMAND corona_cef_app_tests)
@@ -84,6 +90,21 @@ set_tests_properties(CefAppTests PROPERTIES
     TIMEOUT 60
     ENVIRONMENT_MODIFICATION "${_CORONA_CEF_TESTS_ENVIRONMENT}"
 )
+
+add_test(NAME CefShutdownSingleProcess COMMAND corona_cef_app_tests --cef-lifecycle-test)
+add_test(NAME CefShutdownEarlyClose COMMAND corona_cef_app_tests --cef-lifecycle-test --close-before-created)
+foreach(_cef_lifecycle_test IN ITEMS CefShutdownSingleProcess CefShutdownEarlyClose)
+    # Software rendering keeps this lifecycle regression independent of GPU load.
+    # Cache roots belong to the build directory, never the user's editor profile.
+    set_tests_properties(${_cef_lifecycle_test} PROPERTIES
+        RUN_SERIAL TRUE
+        TIMEOUT 45
+        LABELS "cef;integration"
+        ENVIRONMENT_MODIFICATION "${_CORONA_CEF_TESTS_ENVIRONMENT}"
+        ENVIRONMENT "CORONA_CEF_ACCELERATED_OSR=software;CORONA_CEF_REMOTE_DEBUG_PORT=0;CORONA_CEF_ROOT_CACHE=${CMAKE_CURRENT_BINARY_DIR}/cef-test-cache/$<CONFIG>/${_cef_lifecycle_test}"
+    )
+endforeach()
+unset(_cef_lifecycle_test)
 unset(_CORONA_CEF_TESTS_PYTHON_DIR)
 unset(_CORONA_CEF_TESTS_PATH_DIRS)
 unset(_CORONA_CEF_TESTS_ENVIRONMENT)

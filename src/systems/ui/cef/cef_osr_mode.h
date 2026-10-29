@@ -21,8 +21,6 @@ bool cef_gpu_enabled();
 
 int resolve_windowless_frame_rate();
 
-bool cef_process_per_site_enabled();
-
 // DevTools is a local-trust backdoor: it exposes every native Editor API method (including
 // arbitrary Python execution) to anything that can reach the port. `build_default_port`
 // lets the caller pin its build's policy (0 disables, which is what CEF expects).
