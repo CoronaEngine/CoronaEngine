@@ -49,7 +49,6 @@ namespace vision {
 enum class LightType {
     Unset = 0,
     Area = 1 << 0,
-    DeltaPosition = 1 << 1,
     DeltaDirection = 1 << 2,
     Infinite = 1 << 3
 };
@@ -181,25 +180,6 @@ public:
     void add_emission_reference(T shape_instance) noexcept {}
     [[nodiscard]] ShapeInstance *instance() const noexcept;
     void bind_instance(uint index) noexcept { inst_idx_ = index; }
-};
-
-class IPointLight : public Light {
-public:
-    IPointLight() : Light(LightType::DeltaPosition) {}
-    explicit IPointLight(const LightDesc &desc) : Light(desc, LightType::DeltaPosition) {}
-
-    void render_sub_UI(Widgets *widgets) noexcept override;
-    [[nodiscard]] Float PDF_wi(const LightSampleContext &p_ref,
-                               const LightEvalContext &p_light) const noexcept override;
-    [[nodiscard]] virtual Float3 direction(const LightSampleContext &p_ref) const noexcept;
-    [[nodiscard]] virtual Float3 position() const noexcept = 0;
-    [[nodiscard]] virtual float3 &host_position() noexcept = 0;
-    [[nodiscard]] LightSample sample_wi(const LightSampleContext &p_ref, Float2 u,
-                                        const SampledWavelengths &swl) const noexcept override;
-    [[nodiscard]] LightSample evaluate_point(const LightSampleContext &p_ref, LightSurfacePoint lsp,
-                                             const SampledWavelengths &swl, LightEvalMode mode) const noexcept override;
-    [[nodiscard]] LightEvalContext compute_light_eval_context(const LightSampleContext &p_ref,
-                                                              LightSurfacePoint lsp) const noexcept override;
 };
 
 class Environment : public Light {
