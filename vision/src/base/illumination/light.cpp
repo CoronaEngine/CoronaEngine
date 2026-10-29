@@ -211,47 +211,6 @@ void IAreaLight::restore(vision::RuntimeObject *old_obj) noexcept {
     instance()->set_emission(std::static_pointer_cast<IAreaLight>(shared_from_this()));
 }
 
-Float IPointLight::PDF_wi(const LightSampleContext &p_ref,
-                          const LightEvalContext &p_light) const noexcept {
-    return -1.f;
-}
-
-Float3 IPointLight::direction(const LightSampleContext &p_ref) const noexcept {
-    return normalize(p_ref.pos - position());
-}
-
-LightSample IPointLight::sample_wi(const LightSampleContext &p_ref, Float2 u,
-                                   const SampledWavelengths &swl) const noexcept {
-    LightSample ret{swl.dimension()};
-    LightEvalContext p_light;
-    p_light.ng = direction(p_ref);
-    p_light.pos = position();
-    ret.eval = evaluate_wi(p_ref, p_light, swl, LightEvalMode::All);
-    ret.p_light = p_light.pos;
-    return ret;
-}
-
-void IPointLight::render_sub_UI(Widgets *widgets) noexcept {
-    changed_ |= widgets->drag_float3("position", &host_position(),
-                                     0.02, 0, 0);
-}
-
-LightSample IPointLight::evaluate_point(const LightSampleContext &p_ref,
-                                        LightSurfacePoint lsp,
-                                        const SampledWavelengths &swl,
-                                        LightEvalMode mode) const noexcept {
-    LightSample ls{swl.dimension()};
-    LightEvalContext lec{position()};
-    ls.eval = _evaluate_point(p_ref, lec, swl, mode);
-    ls.p_light = position();
-    return ls;
-}
-
-LightEvalContext IPointLight::compute_light_eval_context(const LightSampleContext &p_ref,
-                                                         LightSurfacePoint lsp) const noexcept {
-    return LightEvalContext{position(), normalize(p_ref.pos - position())};
-}
-
 Float2 Environment::convert_to_bary(const Float3 &world_dir) const noexcept {
     return make_float2(0.f);
 }

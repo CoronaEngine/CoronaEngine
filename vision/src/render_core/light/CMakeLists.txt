@@ -1,5 +1,4 @@
 add_library(vision-light INTERFACE)
 vision_add_plugin(area CATEGORY light SOURCES area.cpp)
-vision_add_plugin(point CATEGORY light SOURCES point.cpp)
 vision_add_plugin(directional CATEGORY light SOURCES environments/directional.cpp)
 vision_add_plugin(spherical CATEGORY light SOURCES environments/spherical.cpp)

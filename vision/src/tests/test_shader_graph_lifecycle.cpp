@@ -52,14 +52,14 @@ MaterialDesc make_diffuse_desc() {
     return desc;
 }
 
-LightDesc make_point_light_desc() {
+LightDesc make_directional_light_desc() {
     LightDesc desc;
     desc.init(ParameterSet(DataWrap::parse(R"json(
 {
-    "type": "point",
-    "name": "LifecyclePoint",
+    "type": "directional",
+    "name": "LifecycleDirectional",
     "param": {
-        "position": [0.0, 1.0, 0.0],
+        "direction": [0.0, -1.0, 0.0],
         "scale": 1.0,
         "color": { "node": "light_color", "channels": "xyz" },
         "strength": { "node": "light_strength", "channels": "x" }
@@ -131,7 +131,7 @@ bool test_material_root_and_attached_lifecycle() {
 }
 
 bool test_light_root_and_attached_lifecycle() {
-    LightDesc desc = make_point_light_desc();
+    LightDesc desc = make_directional_light_desc();
 
     auto root = Node::create_shared<Light>(desc);
     root->initialize_root(desc);
