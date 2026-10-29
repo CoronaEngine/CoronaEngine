@@ -15,7 +15,8 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from git_workspace import ensure_workspace, inspect_workspace, sync_workspace, _workspace_lock
+from git_workspace import ensure_workspace, inspect_workspace, sync_workspace, _workspace_lock, _clone_locked
+import git_workspace
 from source_workspaces import HORIZON, EDITOR
 from workflow import CommandError
 
@@ -168,12 +169,35 @@ class WorkspaceContract:
         self.assertTrue((self.worktree / "file.txt").is_file())
 
     def test_clone_lands_on_the_locked_commit_checked_out_on_a_branch(self) -> None:
-        self.clone()
+        # Record real Git commands: the clone must target the final root path,
+        # with no later rename or temporary source directory.
+        with mock.patch.object(git_workspace, "run_command", wraps=git_workspace.run_command) as commands, \
+                mock.patch.object(Path, "rename", side_effect=AssertionError("Clone must not rename sources")):
+            self.clone()
+        clones = [call.args[0] for call in commands.call_args_list if tuple(call.args[0][:2]) == ("git", "clone")]
+        self.assertEqual(len(clones), 1)
+        self.assertEqual(Path(clones[0][-1]), self.worktree)
+        self.assertEqual(self.worktree.parent, self.repo_root)
+        self.assertEqual({entry.name for entry in (self.repo_root / ".workspace").iterdir()}, {".locks"})
         self.assertEqual(self.head(), self.locked)
         self.assertEqual(git(self.worktree, "symbolic-ref", "--short", "HEAD"), "main")
         self.assertEqual(
             git(self.worktree, "rev-parse", "--abbrev-ref", "main@{upstream}"), "origin/main"
         )
+
+    def test_clone_refuses_to_clean_an_existing_destination(self) -> None:
+        self.worktree.mkdir()
+        existing = self.worktree / "local.txt"
+        existing.write_text("keep local work", encoding="utf-8")
+        with self.assertRaises(FileExistsError):
+            _clone_locked(self.repo_root, self.worktree, self.workspace)
+        self.assertEqual(existing.read_text(encoding="utf-8"), "keep local work")
+
+    def test_interrupted_clone_cleans_only_its_new_directory(self) -> None:
+        with mock.patch.object(git_workspace, "run_command", side_effect=KeyboardInterrupt):
+            with self.assertRaises(KeyboardInterrupt):
+                self.clone()
+        self.assertFalse(self.worktree.exists())
 
     def test_clone_allows_local_commits_to_be_made_and_pushed(self) -> None:
         """The point of the workspace: edit Horizon from inside CoronaEngine."""
@@ -489,7 +513,7 @@ class WorkspaceContract:
         self.assertEqual(git(module, "rev-parse", "HEAD"), first)
         self.assertIn("module.txt", git(module, "stash", "show", "--name-only"))
 
-    def test_failed_submodule_clone_is_not_published_and_can_retry(self) -> None:
+    def test_failed_submodule_clone_cleans_new_directory_and_can_retry(self) -> None:
         first, _ = self.add_submodule()
         missing = self.root / "missing-submodule"
         git(self.seed, "config", "-f", ".gitmodules", "submodule.plugins/module.url", str(missing))

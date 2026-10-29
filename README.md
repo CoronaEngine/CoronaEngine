@@ -21,7 +21,8 @@ Horizon 和 CoronaEditor 统一由 `tools/git_workspace.py` 管理，分别位�
 `tools/dev.py install/configure/build` 会准备这两个工作区。
 
 仓库地址、分支及完整 commit 固定在 `tools/source_workspaces.py` 中，不再读取 JSON lock 文件。
-首次准备使用非浅克隆，检出指定 commit、建立跟踪分支并递归初始化该提交记录的子模块。
+首次准备直接非浅克隆到根目录的 `Horizon/` 或 `CoronaEditor/`，检出指定 commit、建立跟踪分支，
+并递归初始化该提交记录的子模块，不经过临时克隆目录。失败时清理本次新建的目录，以便重试。
 已有副本只报告状态并直接使用：普通构建不会拉取、切换版本或更新子模块，本地修改和提交可以直接参与构建。
 旧的 `.workspace/Horizon/` 和 `.workspace/CoronaEditor/` 普通 Git 副本会整体迁移到引擎根目录，保留本地修改、
 未跟踪文件及子模块；已有浅克隆也会复用，显式同步需要旧提交时才补全历史。
