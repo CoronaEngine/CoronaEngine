@@ -3,8 +3,8 @@
 //
 
 #include "shape.h"
-#include "bake_utlis.h"
 #include <utility>
+#include "base/mgr/scene.h"
 #include "base/scattering/material.h"
 #include "math/transform.h"
 
@@ -138,31 +138,6 @@ uint64_t Mesh::compute_hash() const noexcept {
     return ret;
 }
 
-void Mesh::setup_lightmap_uv(const UnwrapperResult &result) {
-    resolution_ = make_uint2(result.width, result.height);
-    const UnwrapperMesh &u_mesh = result.meshes[0];
-    vector<Vertex> vertices;
-    vertices.reserve(u_mesh.vertices.size());
-    for (auto &vert : u_mesh.vertices) {
-        Vertex vertex = vertices_[vert.xref];
-        vertex.set_lightmap_uv(vert.uv);
-        vertices.push_back(vertex);
-    }
-    set_vertices(ocarina::move(vertices));
-    set_triangles(u_mesh.triangles);
-    has_lightmap_uv_ = true;
-}
-
-void Mesh::normalize_lightmap_uv() noexcept {
-    if (normalized_) {
-        return;
-    }
-    for (Vertex &vertex : vertices_) {
-        vertex.set_lightmap_uv(vertex.lightmap_uv() / make_float2(resolution_));
-    }
-    normalized_ = true;
-}
-
 void Mesh::upload_immediately() noexcept {
     upload_triangles_immediately(triangles_);
     upload_vertices_immediately(vertices_);
@@ -190,32 +165,6 @@ Box3f Mesh::compute_aabb() const noexcept {
         box.extend(v2);
     }
     return box;
-}
-
-float2 Mesh::lightmap_uv_unnormalized(uint index) const noexcept {
-    float2 ret = vertices_[index].lightmap_uv();
-    if (normalized_) {
-        ret *= make_float2(resolution_);
-    }
-    return ret;
-}
-
-uint Mesh::lightmap_size() const noexcept {
-    vector<float> areas = surface_areas();
-    float area = std::accumulate(areas.begin(), areas.end(), 0.f);
-    uint ret = area * 20;
-    return ret;
-}
-
-vector<float> Mesh::surface_areas() const noexcept {
-    vector<float> ret;
-    for (const Triangle &tri : triangles_) {
-        float3 v0 = vertices_[tri.i].position();
-        float3 v1 = vertices_[tri.j].position();
-        float3 v2 = vertices_[tri.k].position();
-        ret.push_back(triangle_area(v0, v1, v2));
-    }
-    return ret;
 }
 
 ShapeGroup::ShapeGroup(const vision::ShapeDesc &desc)

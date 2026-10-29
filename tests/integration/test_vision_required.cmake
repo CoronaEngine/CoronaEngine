@@ -9,9 +9,11 @@ block()
     endforeach()
 
     foreach(retired_target IN ITEMS vision-importer-json vision-importer-assimp
-            vision-shape-model vision-gui vision-eval)
+            vision-shape-model vision-gui vision-eval
+            vision-pipeline-bake vision-uvunwrapper vision-uvunwrapper-xatlas
+            vision-rasterizer vision-rasterizer-cpu)
         if(TARGET "${retired_target}")
-            message(FATAL_ERROR "Retired Vision archive target is still registered: ${retired_target}")
+            message(FATAL_ERROR "Retired Vision target is still registered: ${retired_target}")
         endif()
     endforeach()
 

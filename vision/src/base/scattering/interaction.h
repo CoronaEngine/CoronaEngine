@@ -271,12 +271,10 @@ public:
     Float3 ng_local;
 
     Float2 uv;
-    Float2 lightmap_uv;
     PartialDerivative<Float3> shading;
     Float prim_area{0.f};
     Uint prim_id{InvalidUI32};
     Uint inst_id{InvalidUI32};
-    Uint lightmap_id{InvalidUI32};
     Float du_dx;
     Float du_dy;
     Float dv_dx;
@@ -308,7 +306,6 @@ public:
     [[nodiscard]] MediumInterface mi() const noexcept { return *mi_; }
     [[nodiscard]] Bool has_emission() const noexcept { return light_id_ != InvalidUI32; }
     [[nodiscard]] Bool has_material() const noexcept { return mat_id_ != InvalidUI32; }
-    [[nodiscard]] Bool has_lightmap() const noexcept { return lightmap_id != InvalidUI32; }
     [[nodiscard]] Uint material_inst_id() const noexcept;
     [[nodiscard]] Uint material_type_id() const noexcept;
     [[nodiscard]] Uint material_id() const noexcept { return mat_id_; }

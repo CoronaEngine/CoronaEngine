@@ -146,9 +146,6 @@ DataWrap make_test_scene() {
             "type": "bilateral"
           }
         }
-      },
-      "rasterizer": {
-        "type": "cpu"
       }
     }
   },
