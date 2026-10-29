@@ -1749,145 +1749,24 @@ void test_actor_metadata_guid_round_trips_and_clears() {
     hub.actor_storage().deallocate(actor);
 }
 
-void test_external_vision_binding_round_trips_and_clears() {
-    auto& hub = Corona::SharedDataHub::instance();
 
-    auto actor = hub.actor_storage().allocate();
-    Corona::ExternalVisionBindingDevice binding{};
-    binding.source_path = "D:/vision/scene.json";
-    binding.shape_guid = "shape-chair";
-    binding.shape_index = 7;
-    binding.json_path = "/scene/shapes/7";
-    binding.shape_type = "model";
-    binding.shape_identity_key = "guid:shape-chair";
-    binding.model_path = "D:/vision/chair.obj";
-
-    hub.set_external_vision_binding(actor, binding);
-    expect_true(hub.has_external_vision_binding(actor),
-                "external Vision binding is present after set");
-    auto stored = hub.external_vision_binding(actor);
-    expect_true(stored.has_value(), "external Vision binding can be read");
-    expect_true(stored && stored->enabled, "external Vision binding is enabled");
-    expect_true(stored && stored->source_path == binding.source_path,
-                "external Vision binding source path round trips");
-    expect_true(stored && stored->shape_guid == binding.shape_guid,
-                "external Vision binding shape guid round trips");
-    expect_true(stored && stored->shape_index == binding.shape_index,
-                "external Vision binding shape index round trips");
-
-    hub.clear_external_vision_binding(actor);
-    expect_true(!hub.has_external_vision_binding(actor),
-                "external Vision binding clears");
-    expect_true(!hub.external_vision_binding(actor).has_value(),
-                "cleared external Vision binding is absent");
-
-    hub.actor_storage().deallocate(actor);
-}
-
-void test_actor_metadata_handle_cleanup_removes_guid_and_binding() {
+void test_actor_metadata_handle_cleanup_removes_guid() {
     auto& hub = Corona::SharedDataHub::instance();
 
     auto actor = hub.actor_storage().allocate();
     hub.set_actor_guid(actor, "actor-cleanup");
 
-    Corona::ExternalVisionBindingDevice binding{};
-    binding.source_path = "D:/vision/scene.json";
-    binding.shape_guid = "shape-cleanup";
-    hub.set_external_vision_binding(actor, binding);
-
     hub.clear_actor_metadata(actor);
     expect_true(hub.actor_guid(actor).empty(),
                 "actor metadata cleanup removes guid");
-    expect_true(!hub.has_external_vision_binding(actor),
-                "actor metadata cleanup removes external Vision binding");
 
     hub.actor_storage().deallocate(actor);
     auto reused = hub.actor_storage().allocate();
     expect_true(hub.actor_guid(reused).empty(),
                 "fresh or reused actor handle has no stale guid");
-    expect_true(!hub.has_external_vision_binding(reused),
-                "fresh or reused actor handle has no stale external Vision binding");
     hub.actor_storage().deallocate(reused);
 }
 
-void test_external_vision_binding_path_identity() {
-    auto& hub = Corona::SharedDataHub::instance();
-    const auto actor = hub.actor_storage().allocate();
-    const auto other = hub.actor_storage().allocate();
-    const auto root = std::filesystem::temp_directory_path() / "corona-binding-path-tests";
-    const auto base = root.generic_string();
-    Corona::ExternalVisionBindingDevice binding{};
-    binding.source_path = "scenes/../kitchen.json";
-    binding.source_base_dir = base;
-    binding.source_path_key = "untrusted caller key";
-    hub.set_external_vision_binding(actor, binding);
-    auto stored = *hub.external_vision_binding(actor);
-    const auto key = Corona::Utils::normalize_scene_path_key("kitchen.json", base);
-    expect_true(stored.source_path_key == key, "first binding derives a trusted scene key");
-    expect_true(stored.source_path == binding.source_path, "raw source remains portable");
-
-    binding.source_path = (root / "kitchen.json").generic_string();
-    hub.set_external_vision_binding(other, binding);
-    expect_true(hub.external_vision_binding(other)->source_path_key == key,
-                "absolute and relative equivalent sources share a key");
-#ifdef _WIN32
-    expect_true(Corona::Utils::normalize_scene_path_key("SCENES\\..\\KITCHEN.JSON", base) == key,
-                "Windows case and separator variants share a key");
-#endif
-    const auto cwd = std::filesystem::current_path();
-    std::filesystem::current_path(std::filesystem::temp_directory_path());
-    stored.visible = false;
-    stored.shape_index = 42;
-    stored.source_path_key = "stale caller key";
-    hub.set_external_vision_binding(actor, stored);
-    std::filesystem::current_path(cwd);
-    stored = *hub.external_vision_binding(actor);
-    expect_true(stored.source_path_key == key && !stored.visible && stored.shape_index == 42,
-                "unrelated updates reuse hub key independently of current directory");
-    stored.source_path = "other.json";
-    hub.set_external_vision_binding(actor, stored);
-    expect_true(hub.external_vision_binding(actor)->source_path_key != key,
-                "changed source invalidates copied key and isolates scenes");
-    stored.source_path = "scenes/../kitchen.json";
-    stored.source_base_dir = (root / "migrated").generic_string();
-    hub.set_external_vision_binding(actor, stored);
-    const auto migrated = Corona::Utils::normalize_scene_path_key(stored.source_path, stored.source_base_dir);
-    expect_true(hub.external_vision_binding(actor)->source_path_key == migrated && migrated != key,
-                "project migration or base change rebuilds source identity");
-    hub.clear_external_vision_binding(actor);
-    hub.set_external_vision_binding(actor, stored);
-    expect_true(hub.external_vision_binding(actor)->source_path_key == migrated,
-                "scene reload rebuilds key from source and base");
-    hub.set_external_vision_binding(actor, stored, true);
-    expect_true(hub.external_vision_binding(actor)->source_path_key == migrated,
-                "explicit refresh rebuilds valid source identity");
-    hub.refresh_external_vision_binding_paths();
-    expect_true(hub.external_vision_binding(actor)->source_path_key == migrated &&
-                    !hub.external_vision_binding(actor)->visible &&
-                    hub.external_vision_binding(actor)->shape_index == 42,
-                "reload refresh preserves unrelated binding state");
-    const std::string unicode_source = "\xe5\x9c\xba\xe6\x99\xaf/kitchen.json";
-    expect_true(Corona::Utils::normalize_scene_path_key(unicode_source, base).find(unicode_source) !=
-                    std::string::npos,
-                "runtime scene keys preserve UTF-8 paths");
-    stored.source_base_dir.clear();
-    bool rejected = false;
-    try {
-        hub.set_external_vision_binding(actor, stored);
-    } catch (const std::invalid_argument&) {
-        rejected = true;
-    }
-    expect_true(rejected && hub.external_vision_binding(actor)->source_path_key == migrated,
-                "relative source without explicit absolute base cannot publish a partial binding");
-    stored.source_path.clear();
-    hub.set_external_vision_binding(actor, stored);
-    expect_true(hub.external_vision_binding(actor)->source_path_key.empty(),
-                "empty source clears derived identity");
-    hub.clear_actor_metadata(actor);
-    hub.clear_actor_metadata(other);
-    hub.actor_storage().deallocate(actor);
-    hub.actor_storage().deallocate(other);
-}
 
 void test_network_identity_registry_resolves_actor_components() {
     auto& hub = Corona::SharedDataHub::instance();
@@ -2468,9 +2347,7 @@ int main() {
     test_lanchat_history_store_persists_agent_roster();
     test_actor_device_follow_camera_defaults_false_and_round_trips();
     test_actor_metadata_guid_round_trips_and_clears();
-    test_external_vision_binding_round_trips_and_clears();
-    test_external_vision_binding_path_identity();
-    test_actor_metadata_handle_cleanup_removes_guid_and_binding();
+    test_actor_metadata_handle_cleanup_removes_guid();
     test_network_identity_registry_resolves_actor_components();
     test_network_identity_registry_tracks_local_ownership();
     test_network_identity_registry_applies_pending_ownership_override();

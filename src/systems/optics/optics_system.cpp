@@ -1,6 +1,5 @@
 #include "native_material.h"
 #include "native_camera.h"
-#include "native_lpv_data.h"
 #include <corona/utils/runtime_paths.h>
 #include <corona/utils/scene_path_key.h>
 #include <corona/diagnostics/thread_phase.h>
@@ -58,7 +57,6 @@
 #include "../common/diagnostic_env.h"
 #include "../common/vision_restir_settings.h"
 
-//#define CORONA_VISION_IMPORT_DEMO
 
 #ifdef _WIN32
 #include <Windows.h>
@@ -76,10 +74,7 @@
 #include "base/sensor/sensor.h"
 #include "rhi/context.h"
 #include "vision/vision_geometry_adapter.h"
-#include "vision/vision_external_live_aabb.h"
-#include "vision/vision_geometry_snapshot.h"
 #include "vision/vision_geometry_sync_policy.h"
-#include "vision/vision_scene_import_cache.h"
 #include "vision/vision_camera_adapter.h"
 #include "vision/vision_diagnostic_adapter.h"
 #include "vision/vision_light_adapter.h"
@@ -89,12 +84,12 @@
 
 namespace {
 
-constexpr uint32_t kShadowCascadeCount = 4;
-constexpr uint32_t kShadowMapSize = 1024;
-constexpr float kShadowMaxDistance = 100.0f;
-constexpr float kShadowSplitLambda = 0.95f;
-constexpr float kShadowBias = 0.0015f;
-constexpr float kSsaoStrength = 1.0f;
+constexpr uint32_t kShadowCascadeCount = NATIVE_SHADOW_CASCADES;
+constexpr uint32_t kShadowMapSize = NATIVE_SHADOW_SIZE;
+constexpr float kShadowMaxDistance = NATIVE_SHADOW_DISTANCE;
+constexpr float kShadowSplitLambda = NATIVE_SHADOW_SPLIT;
+constexpr float kShadowBias = NATIVE_SHADOW_BIAS;
+constexpr float kSsaoStrength = NATIVE_SSAO_STRENGTH;
 constexpr std::uint64_t kInitialInstanceTableCapacity = 4096;
 constexpr std::uint64_t kInitialMaterialTableCapacity = 1024;
 
@@ -135,14 +130,15 @@ struct OpticsDiagConfig {
 [[nodiscard]] const OpticsDiagConfig& optics_diag_config() {
     static const OpticsDiagConfig cfg = [] {
         OpticsDiagConfig c;
+        c.profile = env_flag_enabled("CORONA_OPTICS_DIAG_PROFILE");
+        c.debug_labels = env_flag_enabled("CORONA_OPTICS_DIAG_DEBUG_LABELS");
+#ifdef CORONA_NATIVE_DEVELOPER_DIAGNOSTICS
         c.skip_scene_visibility = env_flag_enabled("CORONA_OPTICS_DIAG_SKIP_SCENE_VISIBILITY");
         c.skip_shadows = env_flag_enabled("CORONA_OPTICS_DIAG_SKIP_SHADOWS");
         c.skip_deferred_compute = env_flag_enabled("CORONA_OPTICS_DIAG_SKIP_DEFERRED_COMPUTE");
         c.disable_textures = env_flag_enabled("CORONA_OPTICS_DIAG_DISABLE_TEXTURES");
         c.disable_albedo_sample = env_flag_enabled("CORONA_OPTICS_DIAG_DISABLE_ALBEDO_SAMPLE");
         c.force_solid_material = env_flag_enabled("CORONA_OPTICS_DIAG_FORCE_SOLID_MATERIAL");
-        c.profile = env_flag_enabled("CORONA_OPTICS_DIAG_PROFILE");
-        c.debug_labels = env_flag_enabled("CORONA_OPTICS_DIAG_DEBUG_LABELS");
         if (auto v = env_u64("CORONA_OPTICS_DIAG_ONLY_ACTOR")) {
             c.only_actor = static_cast<std::uintptr_t>(*v);
         }
@@ -161,6 +157,7 @@ struct OpticsDiagConfig {
             Corona::Systems::OpticsDetail::parse_shadow_cascade_mask(
                 env_u64("CORONA_OPTICS_DIAG_SHADOW_CASCADE_MASK"),
                 kShadowCascadeCount);
+#endif
         if (c.skip_scene_visibility || c.skip_shadows || c.skip_deferred_compute ||
             c.disable_textures || c.disable_albedo_sample || c.force_solid_material || c.profile ||
             c.debug_labels ||
@@ -679,32 +676,7 @@ std::optional<CursorIconPixels> load_rgba_icon_pixels(
     return pixels;
 }
 
-using Corona::Utils::normalize_scene_path_key;
 
-[[nodiscard]] bool has_external_live_bindings_for_scene(const std::string& scene_path) {
-    const auto target_key = normalize_scene_path_key(scene_path);
-    if (target_key.empty()) {
-        return false;
-    }
-
-    auto& hub = Corona::SharedDataHub::instance();
-    for (auto scene_it = hub.scene_storage().cbegin(); scene_it != hub.scene_storage().cend(); ++scene_it) {
-        const auto& scene_dev = *scene_it;
-        if (!scene_dev.enabled) {
-            continue;
-        }
-        for (auto actor_handle : scene_dev.actor_handles) {
-            const auto binding = hub.external_vision_binding(actor_handle);
-            if (!binding) {
-                continue;
-            }
-            if (binding->source_path_key == target_key) {
-                return true;
-            }
-        }
-    }
-    return false;
-}
 
 void mix_hash(std::size_t& sig, std::size_t value) {
     sig ^= value + 0x9e3779b97f4a7c15ULL + (sig << 6) + (sig >> 2);
@@ -718,199 +690,6 @@ void mix_hash_float(std::size_t& sig, float value) {
 }
 
 constexpr uint64_t kVisionRuntimeIdleEvictFrames = 240;
-
-[[nodiscard]] ::vision::float4x4 corona_transform_to_vision_o2w(
-    const Corona::ModelTransform& transform) {
-    const ktm::fmat4x4 corona_mat = transform.compute_matrix();
-    ::vision::float4x4 o2w = ::vision::make_float4x4(1.f);
-    // Corona/Native uses +Z-forward left-handed coordinates. Vision uses
-    // -Z-forward coordinates, so convert object transforms by F * M * F where
-    // F = diag(1, 1, -1, 1), matching the built-in Vision geometry adapter.
-    for (int col = 0; col < 4; ++col) {
-        for (int row = 0; row < 4; ++row) {
-            float value = corona_mat[col][row];
-            if (row == 2) value = -value;
-            if (col == 2) value = -value;
-            o2w[col][row] = value;
-        }
-    }
-    return o2w;
-}
-
-[[nodiscard]] std::size_t external_live_transform_signature(
-    const Corona::ModelTransform& transform,
-    int shape_index) {
-    std::size_t sig = 0;
-    mix_hash(sig, static_cast<std::size_t>(shape_index));
-    mix_hash_float(sig, transform.position.x);
-    mix_hash_float(sig, transform.position.y);
-    mix_hash_float(sig, transform.position.z);
-    mix_hash_float(sig, transform.euler_rotation.x);
-    mix_hash_float(sig, transform.euler_rotation.y);
-    mix_hash_float(sig, transform.euler_rotation.z);
-    mix_hash_float(sig, transform.scale.x);
-    mix_hash_float(sig, transform.scale.y);
-    mix_hash_float(sig, transform.scale.z);
-    return sig;
-}
-
-[[nodiscard]] std::size_t external_live_hidden_transform_signature(int shape_index) {
-    std::size_t sig = 0;
-    mix_hash(sig, static_cast<std::size_t>(shape_index));
-    mix_hash(sig, 0x76497369626c6548ULL);
-    return sig;
-}
-
-[[nodiscard]] ::vision::float4x4 hidden_external_live_o2w() {
-    auto o2w = ::vision::make_float4x4(1.f);
-    o2w[0][0] = 0.f;
-    o2w[1][1] = 0.f;
-    o2w[2][2] = 0.f;
-    return o2w;
-}
-
-[[nodiscard]] int external_live_shape_index(const Corona::ExternalVisionBindingDevice& binding) {
-    if (binding.shape_index >= 0) {
-        return binding.shape_index;
-    }
-
-    constexpr std::string_view prefix = "/scene/shapes/";
-    if (binding.json_path.rfind(prefix, 0) != 0) {
-        return -1;
-    }
-    try {
-        return std::stoi(binding.json_path.substr(prefix.size()));
-    } catch (...) {
-        return -1;
-    }
-}
-
-[[nodiscard]] std::string external_live_json_path_for_shape(int shape_index) {
-    return shape_index < 0 ? std::string{} : std::string{"/scene/shapes/"} + std::to_string(shape_index);
-}
-
-void write_external_live_binding_shape_index(
-    std::uintptr_t actor_handle,
-    int shape_index) {
-    if (actor_handle == 0 || shape_index < 0) {
-        return;
-    }
-    auto& hub = Corona::SharedDataHub::instance();
-    auto binding = hub.external_vision_binding(actor_handle);
-    if (!binding) {
-        return;
-    }
-    binding->shape_index = shape_index;
-    binding->json_path = external_live_json_path_for_shape(shape_index);
-    hub.set_external_vision_binding(actor_handle, std::move(*binding));
-}
-
-struct ExternalLiveResolvedTransform {
-    int shape_index{-1};
-    std::size_t signature{0};
-    ::vision::float4x4 o2w{};
-};
-
-[[nodiscard]] std::optional<ExternalLiveResolvedTransform> resolve_external_live_transform(
-    std::uintptr_t actor_handle,
-    const Corona::ExternalVisionBindingDevice& binding) {
-    const int shape_index = external_live_shape_index(binding);
-    if (actor_handle == 0 || shape_index < 0) {
-        return std::nullopt;
-    }
-
-    auto& hub = Corona::SharedDataHub::instance();
-    auto actor = hub.actor_storage().try_acquire_read(actor_handle);
-    if (!actor) {
-        return std::nullopt;
-    }
-
-    for (auto profile_handle : actor->profile_handles) {
-        auto profile = hub.profile_storage().try_acquire_read(profile_handle);
-        if (!profile) {
-            continue;
-        }
-
-        std::uintptr_t geometry_handle = profile->geometry_handle;
-        if (geometry_handle == 0 && profile->optics_handle != 0) {
-            if (auto optics = hub.optics_storage().try_acquire_read(profile->optics_handle)) {
-                geometry_handle = optics->geometry_handle;
-            }
-        }
-        if (geometry_handle == 0) {
-            continue;
-        }
-
-        auto geometry = hub.geometry_storage().try_acquire_read(geometry_handle);
-        if (!geometry || geometry->transform_handle == 0) {
-            continue;
-        }
-
-        auto transform = hub.model_transform_storage().try_acquire_read(geometry->transform_handle);
-        if (!transform) {
-            continue;
-        }
-
-        ExternalLiveResolvedTransform result;
-        result.shape_index = shape_index;
-        result.signature = external_live_transform_signature(*transform, shape_index);
-        result.o2w = corona_transform_to_vision_o2w(*transform);
-        return result;
-    }
-
-    return std::nullopt;
-}
-
-// Engine-native variant: resolves a NON-bound engine actor's renderable transform
-// for mixed rendering into an ExternalLive scene. Unlike resolve_external_live_transform
-// it is driven by the engine geometry's own OpticsDevice/ModelTransform (no binding).
-// Returns std::nullopt when the actor is not currently renderable (no visible optics
-// with a geometry + transform) �� the caller treats that as "remove from mix".
-// `shape_index` is the actor's current Vision group index, folded into the signature
-// so a remap-induced index change forces a transform re-apply.
-[[nodiscard]] std::optional<ExternalLiveResolvedTransform> resolve_engine_native_transform(
-    std::uintptr_t actor_handle,
-    int shape_index) {
-    if (actor_handle == 0) {
-        return std::nullopt;
-    }
-
-    auto& hub = Corona::SharedDataHub::instance();
-    auto actor = hub.actor_storage().try_acquire_read(actor_handle);
-    if (!actor) {
-        return std::nullopt;
-    }
-
-    for (auto profile_handle : actor->profile_handles) {
-        auto profile = hub.profile_storage().try_acquire_read(profile_handle);
-        if (!profile || profile->optics_handle == 0) {
-            continue;
-        }
-
-        auto optics = hub.optics_storage().try_acquire_read(profile->optics_handle);
-        if (!optics || !optics->visible || optics->geometry_handle == 0) {
-            continue;
-        }
-
-        auto geometry = hub.geometry_storage().try_acquire_read(optics->geometry_handle);
-        if (!geometry || geometry->transform_handle == 0) {
-            continue;
-        }
-
-        auto transform = hub.model_transform_storage().try_acquire_read(geometry->transform_handle);
-        if (!transform) {
-            continue;
-        }
-
-        ExternalLiveResolvedTransform result;
-        result.shape_index = shape_index;
-        result.signature = external_live_transform_signature(*transform, shape_index);
-        result.o2w = corona_transform_to_vision_o2w(*transform);
-        return result;
-    }
-
-    return std::nullopt;
-}
 
 void apply_pending_camera_moves() {
     auto& hub = Corona::SharedDataHub::instance();
@@ -962,6 +741,20 @@ void apply_pending_camera_viewport_updates() {
             camera->height = render_height;
             camera->aspect = static_cast<float>(render_width) /
                              static_cast<float>(render_height);
+        }
+        if(update.surface && !update.view_open) {
+            // One embedded viewport owns a surface. Explicit floating camera
+            // windows remain independent; old saved cameras must not render
+            // an additional backend behind the active story viewport.
+            std::vector<std::uintptr_t> obsolete;
+            for(const auto& camera:std::as_const(camera_storage)) {
+                const auto handle=reinterpret_cast<std::uintptr_t>(&camera);
+                if(handle!=update.camera_handle && camera.surface==update.surface && !camera.view_open)
+                    obsolete.push_back(handle);
+            }
+            for(auto handle:obsolete)if(auto camera=camera_storage.try_acquire_write(handle)) {
+                if(camera->surface==update.surface && !camera->view_open){camera->surface=nullptr;camera->follows_default_surface=false;}
+            }
         }
     }
 }
@@ -1031,14 +824,6 @@ void apply_pending_camera_state_updates() {
             if (Corona::has_camera_state_field(
                     update.fields, Corona::CameraStateUpdateField::VisionStablePlanes)) {
                 camera->vision_stable_planes = update.vision_stable_planes;
-            }
-            if (Corona::has_camera_state_field(
-                    update.fields, Corona::CameraStateUpdateField::ShadowCascadeDebug)) {
-                camera->shadow_cascade_debug = update.shadow_cascade_debug;
-            }
-            if (Corona::has_camera_state_field(
-                    update.fields, Corona::CameraStateUpdateField::SsaoEnabled)) {
-                camera->ssao_enabled = update.ssao_enabled;
             }
             if (Corona::has_camera_state_field(
                     update.fields, Corona::CameraStateUpdateField::ViewState)) {
@@ -1808,8 +1593,8 @@ bool upload_instance_tables(const RenderInstanceBatch& batch,
     // catchable std::exception, crashing before any pipeline plugin is created.
     const vision::ParameterSet empty_ps{vision::DataWrap::object()};
     vision::ProjectDesc project_desc;
-    // Engine-built scenes render camera contexts, just like imported Vision
-    // projects. Keep the unused base renderer's path/history resources deferred.
+    // Engine-built scenes render camera contexts.
+    // Keep the unused base renderer's path/history resources deferred.
     // Preparing it at the viewport resolution can duplicate gigabytes of state.
     project_desc.pipeline_desc.init(vision::ParameterSet{vision::DataWrap{
         {"param", {{"defer_base_compile", true}}}}});
@@ -2114,23 +1899,9 @@ void log_vision_pipeline_diagnostics(vision::Pipeline& pipeline,
 
 std::string describe_vision_pipeline_key(
     const Corona::Systems::Vision::VisionPipelineKey& key) {
-    std::string result = "source=";
-    result.append(std::string(Corona::Systems::Vision::vision_pipeline_source_name(key.source)));
-    result.append(", mode=");
-    result.append(std::string(Corona::Systems::Vision::vision_render_mode_name(key.mode)));
-    result.append(", path=");
-    result.append(key.scene_path.empty() ? "<engine-built>" : key.scene_path);
-    return result;
+    return std::string(Corona::Systems::Vision::vision_render_mode_name(key.mode));
 }
 
-std::string describe_vision_scene_resource_key(
-    const Corona::Systems::Vision::VisionSceneResourceKey& key) {
-    std::string result = "source=";
-    result.append(std::string(Corona::Systems::Vision::vision_pipeline_source_name(key.source)));
-    result.append(", path=");
-    result.append(key.source_path_key.empty() ? "<engine-built>" : key.source_path_key);
-    return result;
-}
 
 std::array<float, 16> flatten_vision_matrix(const vision::float4x4& matrix) {
     std::array<float, 16> result{};
@@ -2221,9 +1992,7 @@ void apply_logical_instances_to_pipeline_scene(
 void bind_pipeline_scene_gpu_resource(
     vision::Pipeline& pipeline,
     Corona::Systems::Vision::VisionSceneResource& scene_resource,
-    Corona::Systems::Vision::VisionPipelineSource source,
-    Corona::CameraVisionRenderMode mode,
-    const std::string& scene_path) {
+    Corona::CameraVisionRenderMode mode) {
     vision::switch_profile::Scope profile{"scene.bind_gpu_resource", "geometry"};
     if (!scene_resource.has_logical_scene()) {
         scene_resource.set_logical_scene(pipeline.shared_scene_data());
@@ -2238,17 +2007,13 @@ void bind_pipeline_scene_gpu_resource(
     if (created_gpu_resource) {
         CFW_LOG_INFO(
             "OpticsSystem: created per-runtime Vision scene GPU view "
-            "(source={}, mode={}, path={})",
-            std::string(Corona::Systems::Vision::vision_pipeline_source_name(source)),
-            std::string(Corona::Systems::Vision::vision_render_mode_name(mode)),
-            scene_path);
+            "(mode={})",
+            std::string(Corona::Systems::Vision::vision_render_mode_name(mode)));
     } else {
         CFW_LOG_INFO(
             "OpticsSystem: reusing per-runtime Vision scene GPU view "
-            "(source={}, mode={}, path={})",
-            std::string(Corona::Systems::Vision::vision_pipeline_source_name(source)),
-            std::string(Corona::Systems::Vision::vision_render_mode_name(mode)),
-            scene_path);
+            "(mode={})",
+            std::string(Corona::Systems::Vision::vision_render_mode_name(mode)));
     }
     pipeline.scene().bind_geometry_gpu_resource(std::move(scene_gpu_resource));
     if (scene_resource.logical_instance_count() == 0u) {
@@ -2258,212 +2023,6 @@ void bind_pipeline_scene_gpu_resource(
     }
 }
 
-[[nodiscard]] std::string vision_framebuffer_type_from_project_data(
-    const vision::DataWrap& data) {
-    if (!data.contains("pipeline") || !data["pipeline"].is_object()) {
-        return "<missing>";
-    }
-    const auto& pipeline = data["pipeline"];
-    if (!pipeline.contains("param") || !pipeline["param"].is_object()) {
-        return "<missing>";
-    }
-    const auto& pipeline_param = pipeline["param"];
-    if (!pipeline_param.contains("frame_buffer") ||
-        !pipeline_param["frame_buffer"].is_object()) {
-        return "<missing>";
-    }
-    const auto& frame_buffer = pipeline_param["frame_buffer"];
-    if (!frame_buffer.contains("type") || !frame_buffer["type"].is_string()) {
-        return "<missing>";
-    }
-    return frame_buffer["type"].get<std::string>();
-}
-
-// Reject invalid input before entering Vision's noexcept descriptor/GPU setup.
-// Resource checks run only during import, never on the frame synchronization path.
-void validate_vision_source_node(const vision::DataWrap& node,
-                                const std::filesystem::path& base_dir) {
-    if (node.is_array()) {
-        for (const auto& child : node) validate_vision_source_node(child, base_dir);
-    } else if (node.is_object()) {
-        if (node.contains("param") && !node["param"].is_object()) {
-            throw std::invalid_argument("Vision node param must be an object");
-        }
-        if (node.contains("type") && !node["type"].is_string()) {
-            throw std::invalid_argument("Vision node type must be a string");
-        }
-        if (node.contains("fn")) {
-            if (!node["fn"].is_string() || node["fn"].get<std::string>().empty()) {
-                throw std::invalid_argument("Vision resource filename must be nonempty");
-            }
-            const auto path = base_dir / std::filesystem::u8path(node["fn"].get<std::string>());
-            if (!std::filesystem::is_regular_file(path)) {
-                throw std::invalid_argument("Vision resource not found: " + path.string());
-            }
-        }
-        for (const auto& child : node) validate_vision_source_node(child, base_dir);
-    }
-}
-
-// Loads a Vision scene description and brings it to a renderable state,
-// mirroring the reference snippet (ProjectDesc -> init -> prepare).
-// Resolves relative texture/mesh references against base_dir.
-[[nodiscard]] auto import_vision_scene_from_data(vision::DataWrap project_data,
-                                                const std::filesystem::path& base_dir,
-                                                const std::string& scene_label,
-                                                Corona::CameraVisionRenderMode mode,
-                                                const std::shared_ptr<
-                                                    Corona::Systems::Vision::VisionSceneResource>&
-                                                    scene_resource,
-                                                Corona::Systems::Vision::VisionPipelineSource source)
-    -> ocarina::SP<vision::Pipeline> {
-    vision::switch_profile::Scope profile{"scene.import", "scene"};
-    const auto cached_import = scene_resource ? scene_resource->import_cache : nullptr;
-    if (!project_data.is_object() || !project_data.contains("scene") ||
-        !project_data["scene"].is_object() ||
-        (!cached_import && !std::filesystem::is_directory(base_dir))) {
-        throw std::invalid_argument("Vision source requires a scene object and an existing base directory");
-    }
-    for (const auto* block : {"render", "pipeline", "output"}) {
-        if (project_data.contains(block) && !project_data[block].is_object()) {
-            throw std::invalid_argument(std::string("Vision block must be an object: ") + block);
-        }
-    }
-    for (const auto* block : {"shapes", "materials", "lights"}) {
-        if (project_data["scene"].contains(block) && !project_data["scene"][block].is_array()) {
-            throw std::invalid_argument(std::string("Vision scene block must be an array: ") + block);
-        }
-    }
-    const auto& scene_data = project_data["scene"];
-    if (scene_data.contains("camera") && !scene_data["camera"].is_object()) {
-        throw std::invalid_argument("Vision camera must be an object");
-    }
-    if (scene_data.contains("mediums")) {
-        const auto& mediums = scene_data["mediums"];
-        if (!mediums.is_object() ||
-            (mediums.contains("global") && !mediums["global"].is_string()) ||
-            (mediums.contains("process") && !mediums["process"].is_boolean()) ||
-            (mediums.contains("list") && !mediums["list"].is_array())) {
-            throw std::invalid_argument("Invalid Vision mediums descriptor");
-        }
-    }
-    if (!cached_import) {
-        validate_vision_source_node(scene_data, base_dir);
-        for (const auto* block : {"render", "pipeline"}) {
-            if (project_data.contains(block)) validate_vision_source_node(project_data[block], base_dir);
-        }
-    }
-    auto import_cache = cached_import ? cached_import :
-        std::make_shared<Corona::Systems::Vision::VisionSceneImportCache>();
-    if (!cached_import) import_cache->project_data = project_data;
-    const auto source_framebuffer_type =
-        vision_framebuffer_type_from_project_data(project_data);
-    Corona::Systems::Vision::configure_vision_scene_for_mode(project_data, mode);
-    // The editor renders per-camera contexts; compile the base renderer only
-    // if a caller actually renders it (e.g. offline capture/integration tests).
-    project_data["pipeline"]["param"]["defer_base_compile"] = true;
-    const auto configured_framebuffer_type =
-        vision_framebuffer_type_from_project_data(project_data);
-    CFW_LOG_INFO(
-        "OpticsSystem: Vision framebuffer config (scene={}, mode={}, source={}, configured={})",
-        scene_label,
-        std::string(Corona::Systems::Vision::vision_render_mode_name(mode)),
-        source_framebuffer_type,
-        configured_framebuffer_type);
-
-    vision::Global::instance().set_scene_path(base_dir);
-
-    vision::ProjectDesc project_desc;
-    project_desc.scene_path = base_dir;
-    project_desc.init(project_data);
-    if (cached_import) {
-        // Standalone area lights generate quad groups during Scene::init. The
-        // snapshot already contains those groups and their emission descriptors;
-        // staging restores them with an explicit instance ID instead.
-        std::erase_if(project_desc.scene_desc.light_descs, [](const auto& desc) {
-            return ocarina::to_lower(desc.sub_type) == "area";
-        });
-    }
-
-    auto pipeline = vision::Node::create_shared<vision::Pipeline>(project_desc.pipeline_desc);
-    if (!pipeline) {
-        CFW_LOG_ERROR("OpticsSystem: Vision pipeline creation returned null for {}",
-                      scene_label);
-        return {};
-    }
-    bind_pipeline_scene_resource_early(*pipeline, scene_resource);
-    pipeline->image_pool().set_source_cache(import_cache->images);
-    if (cached_import) {
-        const auto snapshot = scene_resource->geometry_snapshot
-            ? scene_resource->geometry_snapshot : cached_import->geometry;
-        if (!snapshot) throw std::runtime_error("Cached Vision scene has no geometry assets");
-        const auto polymorphic_mode = project_desc.renderer_desc.render_setting.polymorphic_mode;
-        pipeline->scene().set_cached_shape_initializer([snapshot, polymorphic_mode](vision::Scene& scene) {
-            // Snapshot medium IDs use the prepared registry mode and order.
-            scene.materials().set_mode(polymorphic_mode);
-            scene.mediums().set_mode(polymorphic_mode);
-            scene.tidy_up();
-            auto staged = Corona::Systems::Vision::stage_geometry_snapshot(*snapshot, scene);
-            for (auto& material : staged.new_materials) scene.add_material(std::move(material));
-            for (auto& light : staged.new_lights) scene.add_light(std::move(light));
-            for (const auto& group : staged.groups) scene.add_shape(group);
-        });
-    }
-    pipeline->init_project(project_desc);
-    if (scene_resource) {
-        bind_pipeline_scene_gpu_resource(
-            *pipeline, *scene_resource, source, mode, scene_label);
-    }
-    pipeline->init_postprocessor(project_desc.renderer_desc.denoiser_desc);
-    pipeline->init();
-    pipeline->set_output_denoise(project_desc.output_desc.denoise);
-    pipeline->prepare();
-    // prepare() does not create FrameBuffer::view_texture_; the render path tone
-    // maps into it and we later read it back, so create it explicitly here.
-    pipeline->frame_buffer()->prepare_view_texture();
-    if (!cached_import && scene_resource) {
-        import_cache->geometry = Corona::Systems::Vision::capture_geometry_snapshot(
-            *scene_resource, pipeline->scene());
-        scene_resource->import_cache = std::move(import_cache);
-    }
-    CFW_LOG_INFO(
-        "OpticsSystem: Vision framebuffer realized (scene={}, configured={}, lightfield={})",
-        scene_label,
-        configured_framebuffer_type,
-        dynamic_cast<const vision::ILightFieldFrameBuffer*>(pipeline->frame_buffer()) != nullptr);
-    return pipeline;
-}
-
-// Loads a Vision scene from disk and brings it to a renderable state.
-[[nodiscard]] auto import_vision_scene_from_file(const std::filesystem::path& scene_path,
-                                                Corona::CameraVisionRenderMode mode,
-                                                const std::shared_ptr<
-                                                    Corona::Systems::Vision::VisionSceneResource>&
-                                                    scene_resource,
-                                                Corona::Systems::Vision::VisionPipelineSource source)
-    -> ocarina::SP<vision::Pipeline> {
-    std::error_code ec;
-    if (!std::filesystem::exists(scene_path, ec)) {
-        CFW_LOG_ERROR("OpticsSystem: Vision scene not found: {}", scene_path.string());
-        return {};
-    }
-
-    return import_vision_scene_from_data(vision::create_json_from_file(scene_path),
-                                         scene_path.parent_path(),
-                                         scene_path.string(),
-                                         mode,
-                                         scene_resource,
-                                         source);
-}
-
-#ifdef CORONA_VISION_IMPORT_DEMO
-// Absolute path to a known-good Vision scene used purely to verify that the
-// Vision backend can produce a picture in isolation (i.e. without the
-// CoronaEngine->Vision scene-building adapters). Change this to point at any
-// local *.json scene. Kept as a constant so it is trivial to edit/relocate.
-constexpr const char* kVisionDemoScenePath =
-    R"(E:\CoronaExample\test_vision\render_scene\cbox\vision_scene.json)";
-#endif
 }  // namespace
 
 namespace Corona::Systems {
@@ -2473,7 +2032,7 @@ using RenderDetail::bind_sampled_image;
 using RenderDetail::bind_storage_buffer;
 
 namespace {
-// A cold native capture may first build the full-scene shadow BVH on the CPU.
+// A cold native capture may first build solar RSMs and compile shading pipelines.
 constexpr auto kScreenshotRequestTimeout = std::chrono::seconds(30);
 }
 
@@ -2482,8 +2041,16 @@ struct OpticsSystem::NativeViewResources {
     Horizon::HardwareImage depth;
     Horizon::HardwareImage opaque_visibility, opaque_depth, exit_visibility, exit_depth, opaque_color, front_snapshot;
     Memory::GpuMemToken refraction_memory;
-    Horizon::HardwareImage ssgi_correction;
+    Horizon::HardwareImage ssgi_correction, ssgi_filtered;
+    std::array<Horizon::HardwareImage,2> ssgi_history, ssgi_validation;
+    Horizon::HardwareBuffer screen_depth;
+    OpticsDetail::ScreenSpaceLayout screen_layout{};
     Memory::GpuMemToken ssgi_memory;
+    ktm::fmat4x4 previous_view_projection{}, previous_view{};
+    uint32_t screen_frame=0;
+    bool screen_history_valid=false;
+    bool screen_had_refraction=false;
+    std::size_t screen_lighting_signature=0;
     uint32_t width = 0;
     uint32_t height = 0;
     uint64_t last_used_frame = 0;
@@ -2501,19 +2068,14 @@ struct OpticsSystem::UiViewResources {
 struct OpticsSystem::VisionPipelineRuntime {
     ocarina::SP<vision::Pipeline> pipeline;
     std::shared_ptr<VisionSceneResource> scene_resource;
-    VisionPipelineSource source{VisionPipelineSource::EngineBuilt};
-    std::string scene_path;
-    uint64_t source_revision{0};
     Corona::CameraVisionRenderMode mode{Corona::CameraVisionRenderMode::PathTracing};
     uint64_t last_used_frame{0};
     uint64_t scene_gpu_transform_version{0};
-    uint64_t applied_geometry_version{0};
     bool engine_geometry_ready{false};
     bool engine_geometry_available{false};
     Vision::VisionGeometrySyncDebounce geometry_debounce;
     std::optional<Vision::VisionLightingState> engine_lighting;
     std::chrono::steady_clock::time_point next_geometry_retry{};
-    Vision::ExternalLiveAabbCache external_live_aabb_cache;
 
     // Zero-copy path: shares Vision's pre-tonemap linear color buffer with Vulkan
     // and resolves it via the vision_resolve compute pass.
@@ -2571,8 +2133,7 @@ struct OpticsSystem::VisionPipelineRuntime {
     void commit_and_clear_contexts() noexcept {
         CFW_LOG_INFO(
             "OpticsSystem: Vision runtime teardown begin "
-            "(scene={}, bridges={}, interop_submissions={}, contexts={})",
-            scene_path,
+            "(bridges={}, interop_submissions={}, contexts={})",
             bridges.size(),
             interop_submissions.size(),
             retained_contexts.size());
@@ -2616,7 +2177,7 @@ struct OpticsSystem::VisionPipelineRuntime {
             CFW_LOG_INFO("OpticsSystem: clearing Vision view contexts");
             pipeline->clear_view_contexts();
         }
-        CFW_LOG_INFO("OpticsSystem: Vision runtime teardown complete (scene={})", scene_path);
+        CFW_LOG_INFO("OpticsSystem: Vision runtime teardown complete");
     }
 
     void clear_camera_runtime_state() noexcept {
@@ -2634,7 +2195,7 @@ struct OpticsSystem::VisionPipelineRuntime {
         const bool needs_geometry_prepare =
             !pipeline->scene().geometry().has_gpu_resource();
         bind_pipeline_scene_gpu_resource(
-            *pipeline, *scene_resource, source, mode, scene_path);
+            *pipeline, *scene_resource, mode);
         if (needs_geometry_prepare) {
             pipeline->prepare_geometry();
         }
@@ -2663,41 +2224,19 @@ struct OpticsSystem::VisionPipelineRuntime {
         interop_submissions.clear();
     }
 
-    void publish_geometry() {
-        auto snapshot = Vision::capture_geometry_snapshot(*scene_resource, pipeline->scene());
-        scene_resource->geometry_snapshot = std::move(snapshot);
-        applied_geometry_version = ++scene_resource->geometry_version;
-    }
 
-    void seed_geometry_cache() {
-        external_live_aabb_cache = {};
-        external_live_aabb_cache.generation = scene_resource->external_live_cache_generation;
-        for (const auto& group : pipeline->scene().groups()) {
-            if (!group) continue;
-            auto state = std::make_shared<Vision::ExternalLiveAabbState>();
-            state->capture(group, true);
-            external_live_aabb_cache.loaded_groups.emplace(group->geometry_sync_identity, std::move(state));
-        }
-    }
 
     void reset_pipeline(ocarina::SP<vision::Pipeline> next_pipeline,
-                        VisionPipelineSource next_source,
-                        std::string next_scene_path,
                         Corona::CameraVisionRenderMode next_mode) {
         commit_and_clear_contexts();
         pipeline = std::move(next_pipeline);
-        source = next_source;
-        scene_path = std::move(next_scene_path);
-        source_revision = scene_resource ? scene_resource->source_revision : 0;
         mode = next_mode;
         scene_gpu_transform_version = 0;
-        applied_geometry_version = 0;
         engine_geometry_ready = false;
         engine_geometry_available = false;
         geometry_debounce.reset();
         engine_lighting.reset();
         next_geometry_retry = {};
-        external_live_aabb_cache = {};
         bind_shared_scene_gpu_resource();
     }
 };
@@ -2842,66 +2381,19 @@ void OpticsSystem::publish_vision_camera_feedback(std::uintptr_t camera_handle,
     if (feedback.relax_effective) camera->vision_relax_effective_settings = *feedback.relax_effective;
 }
 
-OpticsSystem::VisionPipelineKey OpticsSystem::make_vision_pipeline_key(
-    std::string scene_path,
-    CameraVisionRenderMode mode,
-    VisionPipelineSource source) const {
-    if (source == VisionPipelineSource::EngineBuilt) {
-        scene_path.clear();
-    } else {
-        scene_path = normalize_scene_path_key(scene_path);
-    }
-    return VisionPipelineKey{std::move(scene_path), mode, source};
+OpticsSystem::VisionPipelineKey OpticsSystem::make_vision_pipeline_key(CameraVisionRenderMode mode) const {
+    return VisionPipelineKey{mode};
 }
 
-OpticsSystem::VisionSceneResourceKey OpticsSystem::make_vision_scene_resource_key(
-    std::string scene_path,
-    VisionPipelineSource source) const {
-    if (source == VisionPipelineSource::EngineBuilt) {
-        scene_path.clear();
-    } else {
-        scene_path = normalize_scene_path_key(scene_path);
-    }
-    return VisionSceneResourceKey{std::move(scene_path), source};
-}
-
-std::shared_ptr<OpticsSystem::VisionSceneResource>
-OpticsSystem::get_or_create_vision_scene_resource(
-    const VisionSceneResourceKey& key,
-    std::string display_source_path) {
-    auto [it, inserted] = vision_scene_resources_.try_emplace(key);
-    if (inserted || !it->second) {
-        auto resource = std::make_shared<VisionSceneResource>();
-        resource->key = key;
-        resource->display_source_path = std::move(display_source_path);
-        it->second = std::move(resource);
-        CFW_LOG_INFO("OpticsSystem: created shared Vision scene resource ({})",
-                     describe_vision_scene_resource_key(key));
-    } else if (!display_source_path.empty() && it->second->display_source_path.empty()) {
-        it->second->display_source_path = std::move(display_source_path);
-    }
-    return it->second;
+std::shared_ptr<OpticsSystem::VisionSceneResource> OpticsSystem::get_or_create_vision_scene_resource() {
+    if (!vision_scene_resource_) vision_scene_resource_ = std::make_shared<VisionSceneResource>();
+    return vision_scene_resource_;
 }
 
 void OpticsSystem::release_unused_vision_scene_resources() {
-    for (auto it = vision_scene_resources_.begin(); it != vision_scene_resources_.end();) {
-        const auto& resource = it->second;
-        const bool in_use = std::any_of(vision_runtimes_.begin(), vision_runtimes_.end(),
-            [&](const auto& entry) { return entry.second->scene_resource == resource; });
-        if (in_use) {
-            ++it;
-        } else if (resource && resource->source_desc) {
-            // Teardown callers drained the last runtime. Keep CPU publications
-            // and matching transforms, including edits newer than the snapshot.
-            if (resource->has_logical_scene() || resource->has_scene_gpu_resource()) {
-                resource->logical_scene.reset();
-                resource->scene_gpu_resource.reset();
-            }
-            ++it;
-        } else {
-            it = vision_scene_resources_.erase(it);
-        }
-    }
+    const bool in_use = std::any_of(vision_runtimes_.begin(), vision_runtimes_.end(),
+        [&](const auto& entry) { return entry.second->scene_resource == vision_scene_resource_; });
+    if (!in_use) vision_scene_resource_.reset();
 }
 
 OpticsSystem::VisionPipelineRuntime& OpticsSystem::get_or_create_runtime(
@@ -2909,133 +2401,18 @@ OpticsSystem::VisionPipelineRuntime& OpticsSystem::get_or_create_runtime(
     auto [it, inserted] = vision_runtimes_.try_emplace(key);
     if (inserted || !it->second) {
         it->second = std::make_unique<VisionPipelineRuntime>();
-        it->second->scene_resource = get_or_create_vision_scene_resource(
-            make_vision_scene_resource_key(key.scene_path, key.source),
-            key.scene_path);
-        it->second->source = key.source;
-        it->second->scene_path = key.scene_path;
+        it->second->scene_resource = get_or_create_vision_scene_resource();
         it->second->mode = key.mode;
         CFW_LOG_INFO("OpticsSystem: created Vision runtime ({})",
                      describe_vision_pipeline_key(key));
     } else if (!it->second->scene_resource) {
-        it->second->scene_resource = get_or_create_vision_scene_resource(
-            make_vision_scene_resource_key(key.scene_path, key.source),
-            key.scene_path);
+        it->second->scene_resource = get_or_create_vision_scene_resource();
     }
     it->second->interop_executor = hardware_ ? &hardware_->executor : nullptr;
     return *it->second;
 }
 
-OpticsSystem::VisionPipelineRuntime* OpticsSystem::ensure_external_vision_runtime(
-    const VisionPipelineKey& key,
-    bool force_reload_scene_resource) {
-    if (key.source == VisionPipelineSource::EngineBuilt || key.scene_path.empty()) {
-        return &get_or_create_runtime(key);
-    }
-    const auto resource = get_or_create_vision_scene_resource(
-        make_vision_scene_resource_key(key.scene_path, key.source), key.scene_path);
-    // Fast path does not copy JSON or resolve paths every frame.
-    const auto existing = vision_runtimes_.find(key);
-    if (!force_reload_scene_resource && existing != vision_runtimes_.end() &&
-        existing->second->pipeline &&
-        existing->second->source_revision == resource->source_revision) {
-        return existing->second.get();
-    }
-    if (resource->source_desc) {
-        return load_vision_runtime_source(key, *resource->source_desc, force_reload_scene_resource);
-    }
-    Vision::VisionSceneSourceDesc source;
-    source.file_path = key.scene_path;
-    const auto base = std::filesystem::u8path(key.scene_path).parent_path().generic_u8string();
-    source.base_dir.assign(base.begin(), base.end());
-    return load_vision_runtime_source(key, source, force_reload_scene_resource);
-}
 
-OpticsSystem::VisionPipelineRuntime* OpticsSystem::load_vision_runtime_source(
-    const VisionPipelineKey& key, const Vision::VisionSceneSourceDesc& source,
-    bool force_reload_scene_resource) {
-    const auto resource_key = make_vision_scene_resource_key(key.scene_path, key.source);
-    auto resource = get_or_create_vision_scene_resource(resource_key, key.scene_path);
-    const bool replace_source = force_reload_scene_resource ||
-        !resource->source_desc || *resource->source_desc != source;
-    auto previous_pipeline = vision::Global::instance().pipeline_shared();
-    const auto previous_path = vision::Global::instance().scene_path();
-    try {
-        if (!replace_source) {
-            const auto existing = vision_runtimes_.find(key);
-            if (existing != vision_runtimes_.end() && existing->second->pipeline &&
-                existing->second->source_revision == resource->source_revision) {
-                return existing->second.get();
-            }
-        }
-        // Stage a replacement without modifying published logical state or
-        // retiring any pipeline. A failed load leaves the last good source intact.
-        auto candidate = replace_source ? std::make_shared<VisionSceneResource>() : resource;
-        if (replace_source) {
-            candidate->key = resource_key;
-            candidate->display_source_path = key.scene_path;
-        }
-        const bool reused_scene_assets = candidate->import_cache != nullptr;
-        auto pipeline = reused_scene_assets
-            ? import_vision_scene_from_data(candidate->import_cache->project_data,
-                  std::filesystem::u8path(source.base_dir), key.scene_path, key.mode,
-                  candidate, key.source)
-            : source.kind == Vision::VisionSceneSourceKind::Embedded
-            ? import_vision_scene_from_data(vision::DataWrap::parse(source.scene_json),
-                  std::filesystem::u8path(source.base_dir), key.scene_path, key.mode,
-                  candidate, key.source)
-            : import_vision_scene_from_file(std::filesystem::u8path(source.file_path),
-                  key.mode, candidate, key.source);
-        if (!pipeline) {
-            throw std::runtime_error("Vision source import returned no pipeline");
-        }
-        if (replace_source) {
-            // Copy before overwriting resource: source may refer to its descriptor.
-            candidate->source_desc = source;
-            candidate->source_revision = resource->source_revision + 1;
-            for (auto it = vision_runtimes_.begin(); it != vision_runtimes_.end();) {
-                if (it->second->scene_resource != resource) {
-                    ++it;
-                    continue;
-                }
-                it->second->commit_and_clear_contexts();
-                it = vision_runtimes_.erase(it);
-            }
-            *resource = std::move(*candidate);
-        }
-        auto& runtime = get_or_create_runtime(key);
-        runtime.scene_resource = resource;
-        runtime.reset_pipeline(std::move(pipeline), key.source, key.scene_path, key.mode);
-        if (key.source == VisionPipelineSource::ExternalLive) {
-            if (!resource->geometry_snapshot) {
-                runtime.publish_geometry();
-                resource->import_cache->geometry = resource->geometry_snapshot;
-                runtime.seed_geometry_cache();
-            }
-            else if (reused_scene_assets) {
-                // The latest publication was restored before prepare(), so do
-                // not stage and build the same geometry a second time.
-                runtime.applied_geometry_version = resource->geometry_version;
-                runtime.scene_gpu_transform_version = resource->logical_transform_version;
-                runtime.seed_geometry_cache();
-            }
-            else if (!sync_shared_vision_scene(runtime)) throw std::runtime_error("geometry snapshot import failed");
-        }
-        runtime.pipeline->activate_global_context();
-        log_vision_pipeline_diagnostics(*runtime.pipeline,
-            std::string("source import mode=") + std::string(Vision::vision_render_mode_name(key.mode)));
-        CFW_LOG_INFO("OpticsSystem: loaded {} Vision runtime ({}, source_revision={})",
-            resource->is_embedded() ? "embedded" : "file",
-            describe_vision_pipeline_key(key), resource->source_revision);
-        return &runtime;
-    } catch (const std::exception& e) {
-        vision::Global::instance().set_scene_path(previous_path);
-        if (previous_pipeline) previous_pipeline->activate_global_context();
-        CFW_LOG_ERROR("OpticsSystem: Vision source import failed ({}, published_revision={}): {}",
-            describe_vision_pipeline_key(key), resource->source_revision, e.what());
-        return nullptr;
-    }
-}
 
 void OpticsSystem::evict_idle_vision_runtimes(uint64_t frame_index) {
     for (auto it = vision_runtimes_.begin(); it != vision_runtimes_.end();) {
@@ -3053,10 +2430,7 @@ void OpticsSystem::evict_idle_vision_runtimes(uint64_t frame_index) {
         // the current scene's compiled variants so switching back after a few
         // seconds does not turn into another scene import and shader compile.
         // Closed views and previous scenes still follow normal idle eviction.
-        const bool current_source = active_vision_runtime_key_ &&
-            it->first.source == active_vision_runtime_key_->source &&
-            it->first.scene_path == active_vision_runtime_key_->scene_path;
-        const bool has_open_view = current_source && std::any_of(
+        const bool has_open_view = std::any_of(
             runtime->view_denoise_states.begin(), runtime->view_denoise_states.end(),
             [](const auto& view) {
                 auto camera = SharedDataHub::instance().camera_storage().try_acquire_read(view.first);
@@ -3102,8 +2476,7 @@ void OpticsSystem::activate_single_vision_runtime_key(const VisionPipelineKey& k
 
 OpticsSystem::VisionPipelineRuntime& OpticsSystem::active_vision_runtime() {
     if (!active_vision_runtime_key_) {
-        active_vision_runtime_key_ = make_vision_pipeline_key(
-            "", current_vision_render_mode_, VisionPipelineSource::EngineBuilt);
+        active_vision_runtime_key_ = make_vision_pipeline_key(current_vision_render_mode_);
         CFW_LOG_INFO("OpticsSystem: active Vision runtime key ({})",
                      describe_vision_pipeline_key(*active_vision_runtime_key_));
     }
@@ -3123,9 +2496,8 @@ void OpticsSystem::clear_vision_runtimes() {
         }
     }
     vision_runtimes_.clear();
-    vision_scene_resources_.clear();
+    vision_scene_resource_.reset();
     active_vision_runtime_key_.reset();
-    last_vision_runtime_group_signature_ = 0;
     vision_initialized_ = false;
 }
 
@@ -3261,13 +2633,9 @@ bool OpticsSystem::ensure_native_render_resources() {
             hardware_->rsmFluxes[i].set_clear_color(0,0,0,0);
         }
 
-        const auto lpv_words=OpticsDetail::LpvData::cell_count*OpticsDetail::LpvData::transport_words;
-        hardware_->lpvInjection=make_storage_buffer<float>(lpv_words,"optics.lpv.injection",Horizon::CpuAccessMode::None);
-        hardware_->lpvParent=make_storage_buffer<float>(lpv_words,"optics.lpv.parent",Horizon::CpuAccessMode::None);
-        hardware_->lpvAccumulated=make_storage_buffer<float>(OpticsDetail::LpvData::cascade_count*OpticsDetail::LpvData::cell_count*OpticsDetail::LpvData::sh_words,"optics.lpv.accumulated",Horizon::CpuAccessMode::None);
-        for(auto& wave:hardware_->lpvWave)wave=make_storage_buffer<float>(lpv_words,"optics.lpv.wave",Horizon::CpuAccessMode::None);
-        hardware_->lpvMemory=Memory::GpuMemToken(Memory::ResKind::Texture,
-            4ull*kShadowMapSize*kShadowMapSize*32+(4ull*lpv_words+OpticsDetail::LpvData::cascade_count*OpticsDetail::LpvData::cell_count*OpticsDetail::LpvData::sh_words)*sizeof(float));
+        hardware_->rsmMemory=Memory::GpuMemToken(Memory::ResKind::Texture,
+            kShadowCascadeCount*uint64_t(kShadowMapSize)*kShadowMapSize*32);
+
 
         hardware_->refractionOpaquePipeline.emplace(visibility_vert_glsl_t{},visibility_frag_glsl_t{},make_visibility_pipeline_desc());
         hardware_->refractionExitPipeline.emplace(visibility_vert_glsl_t{},visibility_frag_glsl_t{},make_visibility_pipeline_desc(false));
@@ -3280,12 +2648,14 @@ bool OpticsSystem::ensure_native_render_resources() {
                 shadow_desc);
         }
         hardware_->lightingPipeline.emplace(lighting_comp_glsl, ktm::uvec3(8, 8, 1));
-        hardware_->lpvPipeline.emplace(lpv_comp_glsl,ktm::uvec3(8,8,1));
+        hardware_->screenGiPipeline.emplace(screen_gi_comp_glsl, ktm::uvec3(8,8,1));
+        hardware_->screenDepthPipeline.emplace(screen_depth_comp_glsl, ktm::uvec3(8,8,1));
+        hardware_->screenFilterPipeline.emplace(screen_filter_comp_glsl, ktm::uvec3(8,8,1));
         hardware_->skyPipeline.emplace(sky_comp_glsl, ktm::uvec3(8, 8, 1));
         hardware_->skySHProjectPipeline.emplace(sky_sh_project_comp_glsl, ktm::uvec3(64, 1, 1));
         hardware_->tonemapPipeline.emplace(tonemap_comp_glsl, ktm::uvec3(8, 8, 1));
         hardware_->native_resources_ready = true;
-        CFW_LOG_INFO("NativeResourceLifecycle allocated: RSM/LPV/CSM payload=253.5 MiB");
+        CFW_LOG_INFO("NativeResourceLifecycle allocated: RSM payload=128 MiB, CSM depth=16 MiB, LPV=0 MiB");
         return true;
     } catch (const std::exception& error) {
         CFW_LOG_ERROR("OpticsSystem: native resource allocation failed: {}", error.what());
@@ -3315,7 +2685,9 @@ void OpticsSystem::release_native_render_resources() {
     hardware_->refractionFrontPipeline.reset();
     for (auto& pipeline : hardware_->shadowPipelines) pipeline.reset();
     hardware_->lightingPipeline.reset();
-    hardware_->lpvPipeline.reset();
+    hardware_->screenGiPipeline.reset();
+    hardware_->screenDepthPipeline.reset();
+    hardware_->screenFilterPipeline.reset();
     hardware_->skyPipeline.reset();
     hardware_->skySHProjectPipeline.reset();
     hardware_->tonemapPipeline.reset();
@@ -3329,11 +2701,7 @@ void OpticsSystem::release_native_render_resources() {
     hardware_->rsmPositions = {};
     hardware_->rsmNormals = {};
     hardware_->rsmFluxes = {};
-    hardware_->lpvInjection = {};
-    hardware_->lpvParent = {};
-    hardware_->lpvAccumulated = {};
-    hardware_->lpvWave = {};
-    hardware_->lpvMemory = {};
+    hardware_->rsmMemory = {};
     hardware_->vpUniformBufferPool = {};
     hardware_->uniformBufferPool = {};
     hardware_->shadowInfoBufferPool = {};
@@ -3484,7 +2852,8 @@ void OpticsSystem::bind_native_view_resources(std::uintptr_t camera_handle,
         resources.opaque_visibility={};resources.opaque_depth={};resources.exit_visibility={};
         resources.exit_depth={};resources.opaque_color={};resources.refraction_memory={};
         resources.front_snapshot={};
-        resources.ssgi_correction={};resources.ssgi_memory={};
+        resources.ssgi_correction={};resources.ssgi_filtered={};resources.ssgi_history={};resources.ssgi_validation={};
+        resources.screen_depth={};resources.ssgi_memory={};resources.screen_history_valid=false;resources.screen_frame=0;
         resources.width = width;
         resources.height = height;
     }
@@ -3751,29 +3120,6 @@ bool OpticsSystem::initialize(Kernel::ISystemContext* ctx) {
                 SharedDataHub::instance().enqueue_camera_state_update(command);
             });
 
-        vision_scene_load_sub_id_ = event_bus->subscribe<Events::VisionSceneLoadEvent>(
-            [this](const Events::VisionSceneLoadEvent& event) {
-                // Only stash the request here (any thread). The actual import touches
-                // the Vulkan pipeline and MUST run on the render thread, so it is
-                // deferred to apply_pending_vision_scene_load() in update().
-                // Capture legacy relative load paths now, before deferred work.
-                // Embedded scene keys are relative to their explicit resource base.
-                const auto base = event.base_dir.empty()
-                    ? std::filesystem::current_path()
-                    : std::filesystem::absolute(std::filesystem::u8path(event.base_dir));
-                const auto base_utf8 = base.generic_u8string();
-                const std::string base_text(base_utf8.begin(), base_utf8.end());
-                VisionSceneLoadRequest request{
-                    normalize_scene_path_key(event.scene_path, base_text),
-                    event.scene_json,
-                    base_text,
-                    normalize_scene_path_key(event.scene_key, base_text),
-                    event.external_live,
-                };
-                std::lock_guard<std::mutex> lock(vision_scene_load_mutex_);
-                pending_vision_scene_load_ = std::move(request);
-            });
-
         residency_sub_id_ = event_bus->subscribe<Events::ActorResidencyChangedEvent>(
             [this](const Events::ActorResidencyChangedEvent& e) {
                 std::unique_lock lock(residency_mtx_);
@@ -4017,8 +3363,7 @@ void OpticsSystem::optics_pipeline(float frame_count, uint64_t frame_index) {
     } else if (vision_initialized_) {
         // Native-only frames must not load, synchronize or render a Vision scene.
         // Keep on-demand capture resources until the next requested capture.
-        if (!plan.has_vision_cameras && active_vision_runtime_key_ &&
-            active_vision_runtime_key_->source == VisionPipelineSource::EngineBuilt) {
+        if (!plan.has_vision_cameras && active_vision_runtime_key_) {
             clear_vision_runtimes();
         } else {
             evict_idle_vision_runtimes(frame_index);
@@ -4037,7 +3382,7 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
         hardware_->shadowPipelines.begin(), hardware_->shadowPipelines.end(),
         [](const auto& pipeline) { return pipeline.has_value(); });
     if (!hardware_->visibilityPipeline || !hardware_->lightingPipeline ||
-        !shadow_pipelines_ready || !hardware_->lpvPipeline ||
+        !shadow_pipelines_ready ||
         !hardware_->skyPipeline || !hardware_->tonemapPipeline || !hardware_->skySHProjectPipeline) return;
     auto& lighting = *hardware_->lightingPipeline;
     auto& shadow_pipelines = hardware_->shadowPipelines;
@@ -4127,12 +3472,13 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
         // ================================================================
         hardware_->uniformBufferObjects.eyePosition = make_vec4(camera->position, 1.0f);
         hardware_->uniformBufferObjects.eyeDir = make_vec4(camera->forward, 0.0f);
-        hardware_->uniformBufferObjects.eyeViewMatrix = camera->compute_view_matrix();
+        const auto scene_view=camera->compute_view_matrix();
+        const auto scene_view_projection=multiply_ktm_mat4(OpticsDetail::native_projection(*camera),scene_view);
+        hardware_->uniformBufferObjects.eyeViewMatrix = scene_view;
         hardware_->uniformBufferObjects.eyeProjMatrix = OpticsDetail::native_projection(*camera);
         hardware_->uniformBufferObjects.eyeInvProjMatrix =
             OpticsDetail::native_inverse_projection(*camera);
-        hardware_->vpUniformBufferObjects.viewProjMatrix =
-            multiply_ktm_mat4(OpticsDetail::native_projection(*camera), camera->compute_view_matrix());
+        hardware_->vpUniformBufferObjects.viewProjMatrix = scene_view_projection;
 
         // ---- Per-submission buffer ���ã�������֡/��������� buffer ���Ǿ�����----
         // �ӳظ���һ�ݵ�ǰ�� GPU ���õ� buffer������� pass ȫ�̸�����Щ lease��
@@ -4502,10 +3848,17 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
         };
 
         std::shared_ptr<OpticsDetail::NativeLighting> direct_lighting;
+        Horizon::HardwareBuffer rsm_material_buffer;
+        std::vector<Hardware::MaterialInfo> rsm_materials;
+        std::vector<Horizon::HardwareImage> rsm_material_images;
+        std::vector<Horizon::HardwareBuffer> rsm_material_programs;
         struct ShadowCasterSnapshot {
+            std::unordered_map<uint32_t,uint32_t> material_ids;
+            std::size_t material_revision{};
             std::uintptr_t actor_handle = 0;
             std::uintptr_t profile_handle = 0;
             std::uintptr_t geometry_handle = 0;
+            std::uint64_t pose_revision = 0;
             ktm::fmat4x4 model_matrix{ktm::fmat4x4::from_eye()};
             Corona::Systems::OpticsDetail::ShadowCasterBoundsSnapshot bounds{};
             float max_abs_scale = 1.0f;
@@ -4515,7 +3868,6 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
         };
 
         ShadowSceneBounds shadow_scene_bounds;
-        bool shadow_geometry_deforming = false;
         std::vector<ShadowCasterSnapshot> shadow_casters;
         std::vector<Horizon::HardwareBuffer> shadow_indirect_buffers;  // CRITICAL: Must outlive commit()
         std::mutex shadow_indirect_buffers_mutex;  // Thread-safe for parallel shadow recording
@@ -4550,7 +3902,6 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
                     if(optics_acc->principled && optics_acc->principled->transmission>=.999f)continue;
                     auto geom = geom_storage.try_acquire_read(optics_acc->geometry_handle);
                     if (!geom || geom->transform_handle == 0) continue;
-                    shadow_geometry_deforming |= geom->is_skinned;
                     auto transform =
                         transform_storage.try_acquire_read(geom->transform_handle);
                     auto mech = SharedDataHub::instance()
@@ -4562,6 +3913,7 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
                     snapshot.actor_handle = actor_handle;
                     snapshot.profile_handle = profile_handle;
                     snapshot.geometry_handle = optics_acc->geometry_handle;
+                    snapshot.pose_revision = geom->skin_pose_revision;
                     snapshot.model_matrix = apply_native_local_correction(
                         transform->compute_matrix(), *geom);
                     snapshot.max_abs_scale = std::max({
@@ -4637,6 +3989,27 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
                          ++cascade) {
                         caster.cascade_slots[cascade] = std::move(slots[cascade]);
                     }
+                    auto profile=SharedDataHub::instance().profile_storage().acquire_read(caster.profile_handle);
+                    auto optics=SharedDataHub::instance().optics_storage().acquire_read(profile->optics_handle);
+                    caster.material_revision=optics->principled?optics->principled->revision:0;
+                    for(const auto& cascade_slots:caster.cascade_slots)for(const auto& slot:cascade_slots) {
+                        if(caster.material_ids.contains(slot.mesh_index))continue;
+                        caster.material_ids.emplace(slot.mesh_index,static_cast<uint32_t>(rsm_materials.size()));
+                        const auto descriptor=slot.texture?slot.texture.store_descriptor():0u;
+                        rsm_materials.push_back(OpticsDetail::pack_native_material(slot,*optics,descriptor,false,optics->bEnableLighting));
+                        if(slot.texture)rsm_material_images.push_back(slot.texture);
+                        if(slot.material) {
+                            sceneBatch.resource_keep_alive->model_materials.push_back(slot.material);
+                            for(const auto& image:slot.material->textures)if(image)rsm_material_images.push_back(image);
+                        }
+                        if(auto appearance=hardware_->appearance_cache.obtain(optics->principled)) {
+                            rsm_materials.back().flags|=64u;
+                            rsm_materials.back().occlusionDescriptor=appearance->program.store_descriptor();
+                            rsm_material_programs.push_back(appearance->program);
+                            for(const auto& image:appearance->images)rsm_material_images.push_back(image->image);
+                            sceneBatch.resource_keep_alive->appearances.push_back(std::move(appearance));
+                        }
+                    }
                 }
             }
         };
@@ -4651,11 +4024,13 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
             shadow.rsmPosition=hardware_->rsmPositions[cascade_index];
             shadow.rsmNormal=hardware_->rsmNormals[cascade_index];
             shadow.rsmFlux=hardware_->rsmFluxes[cascade_index];
-            bind_storage_buffer(shadow,shadow.rsmConsts.lpvInfo,direct_lighting->data);
+            bind_storage_buffer(shadow,shadow.rsmConsts.materialTableBufferIndex,rsm_material_buffer);
             bind_storage_buffer(shadow,shadow.rsmConsts.shadowInfo,sceneShadowBuffer);
+            shadow.rsmConsts.cascade=cascade_index;
             uint32_t shadow_draws = 0;
 
             struct PendingShadowDraw {
+                uint32_t material_id{};
                 Horizon::HardwareBuffer index_buffer;
                 Horizon::HardwareBuffer vertex_buffer;
                 std::uint32_t first_command{}, command_count{};
@@ -4692,6 +4067,7 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
                     draw_cmd.first_instance = 0;
 
                     PendingShadowDraw pending{};
+                    pending.material_id=caster.material_ids.at(slot.mesh_index);
                     pending.index_buffer = slot.geo.index;
                     pending.vertex_buffer = slot.geo.vertex;
                     pending.clip_matrix = clip_matrix;
@@ -4735,6 +4111,7 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
                      draw_index < pending_shadow_draws.size();
                      ++draw_index) {
                     const auto& pending = pending_shadow_draws[draw_index];
+                    shadow.rsmConsts.materialID=pending.material_id;
                     shadow.pushConsts.lightViewProjModel =
                         upload_value(pending.clip_matrix);
                     const auto& model=pending.model_matrix;
@@ -4857,19 +4234,12 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
                 break;
             }
         }
-        // Do not re-voxelize a large scene for every asynchronous mesh
-        // upload. An empty volume is safe during import and invalidates
-        // once all geometry is ready; camera changes do not rebuild it.
-        const SceneDevice loading_lpv_scene{};
-        direct_lighting=hardware_->lighting_cache.obtain(
-            geometry_loading?loading_lpv_scene:scene,native_environment,
-            geometry_loading?0:compute_vision_scene_signature(&scene),
-            {camera->position.x,camera->position.y,camera->position.z},
-            {camera->forward.x,camera->forward.y,camera->forward.z});
+        direct_lighting=hardware_->lighting_cache.obtain(native_environment);
+        hardware_->executor.wait(direct_lighting->ready);
         sceneBatch.resource_keep_alive->direct_lighting=direct_lighting;
         if (direct_lighting->authored_environment) {
             // The first authored directional is the solar RSM source.
-            // Authored HDR enters through LPV boundaries, so legacy sky
+            // Authored HDR has its own irradiance projection, so legacy sky
             // must not be added a second time.
             sky_intensity=0.f;
         }
@@ -4901,6 +4271,12 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
                 shadow_cascade_views[cascade].light_view_proj;
             hardware_->shadowInfoBufferObjects.shadowMapDescriptors[cascade] =
                 hardware_->shadowCascadeImages[cascade].store_descriptor();
+            auto& rsm=hardware_->shadowInfoBufferObjects.rsmDescriptors;
+            rsm[cascade*4]=hardware_->rsmPositions[cascade].store_descriptor();
+            rsm[cascade*4+1]=hardware_->rsmNormals[cascade].store_descriptor();
+            rsm[cascade*4+2]=hardware_->rsmFluxes[cascade].store_descriptor();
+            rsm[cascade*4+3]=std::bit_cast<uint32_t>(shadow_cascade_views[cascade].orthographic_width*
+                shadow_cascade_views[cascade].orthographic_height/float(kShadowMapSize*kShadowMapSize));
             cascade_near = cascade_far;
         }
         hardware_->shadowInfoBufferObjects.cascadeSplits = ktm::fvec4{
@@ -4909,12 +4285,14 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
             static_cast<float>(kShadowMapSize);
         hardware_->shadowInfoBufferObjects.shadowBias = kShadowBias;
         hardware_->shadowInfoBufferObjects.shadowEnabled =
-            (needs_shadow &&
+            (needs_shadow && !geometry_loading &&
              !diag.skip_shadows && diag.shadow_cascade_mask != 0u &&
              sun_intensity > 0.0f) ? 1u : 0u;
         native_shadows_enabled = hardware_->shadowInfoBufferObjects.shadowEnabled != 0u;
         prepare_shadow_caster_meshes();
-        hardware_->shadowInfoBufferObjects.lpvRadianceDescriptor=hardware_->lpvAccumulated.store_descriptor();
+        rsm_material_buffer=make_storage_buffer<Hardware::MaterialInfo>(
+            std::max<std::size_t>(1,rsm_materials.size()),"optics.rsm.materials");
+        if(!rsm_materials.empty())write_array_bytes(rsm_material_buffer,rsm_materials.data(),rsm_materials.size());
         hardware_->shadowInfoBufferObjects.sunColor=ktm::fvec4{sun_color.x*sun_intensity,sun_color.y*sun_intensity,sun_color.z*sun_intensity,0};
         hardware_->shadowInfoBufferObjects.sunDirection=ktm::fvec4{sun_dir.x,sun_dir.y,sun_dir.z,0};
         (void)write_object_bytes(sceneShadowBuffer,
@@ -4936,17 +4314,31 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
         const bool loading_guard = Corona::Geometry::NativeRenderLoadGuard::is_loading(
             geometry_loading, false);
         const bool should_run_ssao = Corona::Geometry::NativeRenderLoadGuard::effective_ssao(
-            loading_guard, camera->ssao_enabled, is_ssao_debug_mode);
+            loading_guard, true, is_ssao_debug_mode);
         const uint32_t sceneMaterialCount = static_cast<uint32_t>(sceneBatch.materials.size());
-        const bool has_refraction=!is_debug_mode && !loading_guard && !env_flag_enabled("CORONA_OPTICS_DISABLE_REFRACTION") &&
+        const bool has_refraction=!is_debug_mode && !loading_guard && true &&
             std::any_of(sceneBatch.materials.begin(),sceneBatch.materials.end(),[](const auto& m){return (m.flags&256u)!=0u;});
         auto& refraction=*native_view_resources_.at(cam_handle);
-        const bool has_ssgi=!is_debug_mode && !loading_guard && !env_flag_enabled("CORONA_OPTICS_DISABLE_SSGI");
-        if(has_ssgi && !refraction.ssgi_correction) {
-            const auto w=hardware_->gbufferSize.x,h=hardware_->gbufferSize.y;
-            refraction.ssgi_correction=make_storage_image(w,h,Horizon::Format::RGBA16_FLOAT,"ssgi.correction");
-            refraction.ssgi_memory=Memory::GpuMemToken(Memory::ResKind::Texture,uint64_t(w)*h*8);
+        const bool has_ssgi=!is_debug_mode && !loading_guard && true;
+        const bool has_screen_trace=!is_debug_mode && !loading_guard &&
+            (has_ssgi || true);
+        if(has_screen_trace && !refraction.screen_depth) {
+            refraction.screen_layout=OpticsDetail::ScreenSpaceLayout::make(hardware_->gbufferSize.x,hardware_->gbufferSize.y);
+            refraction.screen_depth=make_storage_buffer<float>(refraction.screen_layout.hierarchy_words,
+                "screen.depth_hierarchy",Horizon::CpuAccessMode::None);
         }
+        if(has_ssgi && !refraction.ssgi_correction) {
+            const auto layout=refraction.screen_layout;
+            refraction.ssgi_correction=make_storage_image(layout.width,layout.height,Horizon::Format::RGBA16_FLOAT,"ssgi.raw");
+            refraction.ssgi_filtered=make_storage_image(layout.width,layout.height,Horizon::Format::RGBA16_FLOAT,"ssgi.filtered");
+            for(unsigned i=0;i<2;++i) {
+                refraction.ssgi_history[i]=make_storage_image(layout.width,layout.height,Horizon::Format::RGBA16_FLOAT,"ssgi.history");
+                refraction.ssgi_validation[i]=make_storage_image(layout.width,layout.height,Horizon::Format::RG32_UINT,"ssgi.validation");
+            }
+            refraction.ssgi_memory=Memory::GpuMemToken(Memory::ResKind::Texture,layout.bytes());
+        }
+        const uint32_t screen_current=refraction.screen_frame&1u,screen_previous=screen_current^1u;
+        if(!has_ssgi)refraction.screen_history_valid=false;
         if(has_refraction) {
             const auto w=hardware_->gbufferSize.x,h=hardware_->gbufferSize.y;
             if(!refraction.opaque_visibility) {
@@ -4985,8 +4377,11 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
                 pass.record_indirect(draw.index,draw.vertex,draw.indirect,draw.params);
             }
         }
-        // One VBuffer resolve: AO and shadow visibility are evaluated at
-        // the shaded surface. No guide/AO/mask images or filter traffic.
+        const uint32_t native_lighting_flags = (should_run_ssao ? 1u : 0u) |
+            ((!loading_guard && true) ? 2u : 0u) |
+            (kSkyAmbientEnabled ? 4u : 0u) | 0u |
+            (direct_lighting->authored_environment ? 16u : 0u) | (has_refraction ? 32u : 0u) | (has_ssgi ? 64u : 0u);
+        const auto configure_lighting = [&](auto& lighting) {
         lighting.pushConsts.gbufferSize = upload_value(hardware_->gbufferSize);
         bind_storage_image(lighting, lighting.pushConsts.visibilityImageIndex, hardware_->visibilityImage);
         bind_sampled_image(lighting, lighting.pushConsts.depthImageIndex, hardware_->depthImage);
@@ -4999,10 +4394,6 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
         bind_storage_image(lighting, lighting.pushConsts.finalOutputImage, render_target);
         lighting.pushConsts.instanceCount = native_instance_count;
         lighting.pushConsts.materialCount = sceneMaterialCount;
-        const uint32_t native_lighting_flags = (should_run_ssao ? 1u : 0u) |
-            ((!loading_guard && !env_flag_enabled("CORONA_OPTICS_DISABLE_SSR")) ? 2u : 0u) |
-            (kSkyAmbientEnabled ? 4u : 0u) | (camera->shadow_cascade_debug ? 8u : 0u) |
-            (direct_lighting->authored_environment ? 16u : 0u) | (has_refraction ? 32u : 0u) | (has_ssgi ? 64u : 0u);
         lighting.pushConsts.featureFlags=native_lighting_flags;
         bind_sampled_image(lighting, lighting.pushConsts.shadowMap0, hardware_->shadowCascadeImages[0]);
         bind_sampled_image(lighting, lighting.pushConsts.shadowMap1, hardware_->shadowCascadeImages[1]);
@@ -5014,10 +4405,13 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
         lighting.pushConsts.outputMode = static_cast<uint32_t>(camera->output_mode);
         lighting.pushConsts.ssaoStrength = kSsaoStrength;
         lighting.pushConsts.disableAlbedoSample = diag.disable_albedo_sample ? 1u : 0u;
-        lighting.pushConsts.ssrMaxDistance = 40.0f;
-        lighting.pushConsts.ssrThickness = 0.08f;
-        lighting.pushConsts.ssrMaxRoughness = 0.55f;
-        lighting.pushConsts.ssrMaxSteps = 48u;
+        lighting.pushConsts.ssrMaxDistance = NATIVE_TRACE_DISTANCE;
+        lighting.pushConsts.ssrThickness = NATIVE_TRACE_THICKNESS;
+        lighting.pushConsts.ssrMaxRoughness = NATIVE_SSR_ROUGHNESS;
+        lighting.pushConsts.ssrMaxSteps = NATIVE_REFRACTION_STEPS;
+        };
+        configure_lighting(lighting);
+        if(has_ssgi)configure_lighting(*hardware_->screenGiPipeline);
         hardware_->shadowInfoBufferObjects.refractionDescriptors={};
         if(has_refraction) {
             hardware_->shadowInfoBufferObjects.refractionDescriptors={refraction.opaque_visibility.store_descriptor(),
@@ -5025,7 +4419,22 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
                 refraction.exit_depth.store_descriptor(),refraction.opaque_color.store_descriptor(),0,0,0};
         }
         if(has_ssgi)hardware_->shadowInfoBufferObjects.refractionDescriptors[5]=refraction.ssgi_correction.store_descriptor();
-        (void)write_object_bytes(sceneShadowBuffer,hardware_->shadowInfoBufferObjects);
+        auto& screen=hardware_->shadowInfoBufferObjects.screenDescriptors;
+        screen={};
+        if(has_screen_trace) {
+            const auto layout=refraction.screen_layout;
+            screen[0]=refraction.screen_depth.store_descriptor();
+            screen[1]=layout.width;screen[2]=layout.height;screen[3]=layout.stride;
+            screen[4]=layout.levels;screen[5]=refraction.screen_frame;
+            if(has_ssgi) {
+                screen[7]=refraction.ssgi_history[screen_previous].store_descriptor();
+                screen[8]=refraction.ssgi_validation[screen_current].store_descriptor();
+                screen[9]=refraction.ssgi_validation[screen_previous].store_descriptor();
+                hardware_->shadowInfoBufferObjects.previousViewProjection=refraction.previous_view_projection;
+                hardware_->shadowInfoBufferObjects.previousView=refraction.previous_view;
+                hardware_->shadowInfoBufferObjects.inverseView=ktm::inverse(hardware_->uniformBufferObjects.eyeViewMatrix);
+            }
+        }
 
         // ================================================================
         // 5b. Sky �� SH9 projection (sky-driven ambient).
@@ -5077,17 +4486,14 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
         // ================================================================
         // 8. GPU sync & dispatch
         // ================================================================
-        const bool lpv_disabled = env_flag_enabled("CORONA_OPTICS_DISABLE_LPV");
         OpticsDetail::NativeLightFieldInputs light_field_inputs;
-        light_field_inputs.add(lpv_disabled ? 1u : 0u);
         light_field_inputs.add(native_shadows_enabled ? diag.shadow_cascade_mask : 0u);
         if (!direct_lighting->authored_environment || native_shadows_enabled) {
             for (float value : {sun_dir.x, sun_dir.y, sun_dir.z, sky_intensity})
                 light_field_inputs.add(value);
         }
         if (native_shadows_enabled) {
-            // RSM flux depends on the solar radiance and voxel albedo;
-            // injection also partitions texels by camera-space depth.
+            // RSM flux depends on solar radiance, material, geometry and cascade projection.
             for (float value : {sun_color.x * sun_intensity, sun_color.y * sun_intensity,
                                 sun_color.z * sun_intensity, camera->position.x,
                                 camera->position.y, camera->position.z,
@@ -5102,9 +4508,13 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
                 light_field_inputs.add(shadow_cascade_views[cascade].orthographic_height);
             }
             // Resident shadow casters and asynchronous shadow LODs can
-            // change without replacing the immutable voxel source.
+            // change without replacing the environment image.
             light_field_inputs.add(static_cast<uint32_t>(shadow_casters.size()));
             for (const auto& caster : shadow_casters) {
+                light_field_inputs.add(static_cast<uint32_t>(caster.material_revision));
+                light_field_inputs.add(static_cast<uint32_t>(caster.material_revision>>32));
+                light_field_inputs.add(static_cast<uint32_t>(caster.pose_revision));
+                light_field_inputs.add(static_cast<uint32_t>(caster.pose_revision>>32));
                 light_field_inputs.add(caster.cascade_visibility_mask);
                 for (unsigned c = 0; c < 4; ++c)
                     for (unsigned r = 0; r < 4; ++r)
@@ -5129,11 +4539,30 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
                 }
             }
         }
-        const bool reuse_light_field = !geometry_loading && !shadow_geometry_deforming &&
-            !env_flag_enabled("CORONA_OPTICS_FORCE_LIGHT_FIELD_UPDATE") &&
-            hardware_->lightFieldCache.matches(direct_lighting, light_field_inputs);
-        const bool update_shadow_maps = native_shadows_enabled && !reuse_light_field;
-        const bool update_lpv = !is_debug_mode && !diag.skip_deferred_compute && !reuse_light_field;
+        for(const auto& material:rsm_materials) {
+            std::array<uint32_t,32> words;
+            std::memcpy(words.data(),&material,sizeof(material));
+            for(auto word:words)light_field_inputs.add(word);
+        }
+        for(const auto& program:rsm_material_programs)light_field_inputs.meshes.push_back(program);
+        light_field_inputs.images=rsm_material_images;
+        const bool reset_rsm=!hardware_->lightFieldCache.owned_by(view.scene_handle,view.camera_handle);
+        const bool light_field_changed=reset_rsm ||
+            !hardware_->lightFieldCache.matches(direct_lighting, light_field_inputs);
+        const bool update_shadow_maps = native_shadows_enabled && !geometry_loading && light_field_changed;
+        // History contains signed indirect irradiance. A real lighting edit
+        // must reset it; camera-dependent RSM redraws must not. No scene assets
+        // or per-pixel buffers are copied for this small signature.
+        std::size_t screen_lighting_signature=sky_sig;
+        for(float value:{sun_color.x*sun_intensity,sun_color.y*sun_intensity,sun_color.z*sun_intensity})
+            mix_hash_float(screen_lighting_signature,value);
+        mix_hash(screen_lighting_signature,direct_lighting->environment.store_descriptor());
+        // Receiver validation rejects changed surfaces locally. Updating the
+        // light field does not discard every static receiver's temporal history.
+        screen[6]=(has_ssgi && !geometry_loading && refraction.screen_history_valid &&
+            refraction.screen_had_refraction==has_refraction &&
+            refraction.screen_lighting_signature==screen_lighting_signature) ? 1u : 0u;
+        (void)write_object_bytes(sceneShadowBuffer,hardware_->shadowInfoBufferObjects);
         // dispatch ������ workgroup ����(ԭ���� vkCmdDispatch)����Щ�ӳ�ͨ��
         // ȫ�� local_size 8x8, �� dispatch_groups �����ػ��� ceil(w/8)xceil(h/8);
         // ����ȡ�Թ��߷������ʵ local size(���� Horizon SPIR-V patch ����)��
@@ -5192,7 +4621,7 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
             std::optional<Horizon::HardwareStream> stream{std::in_place,hardware_->executor};
             bool native_submission_cancelled = false;
 
-            if (update_shadow_maps || update_lpv) hardware_->lightFieldCache.invalidate();
+            if (update_shadow_maps) hardware_->lightFieldCache.begin_update();
 
             *stream << visibility.extent(hardware_->gbufferSize.x, hardware_->gbufferSize.y);
             if(has_refraction) {
@@ -5254,7 +4683,8 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
                             [&](std::uint32_t cascade) {
                                 auto& cascade_pipeline =
                                     *shadow_pipelines[cascade];
-                                *stream << cascade_pipeline.extent(kShadowMapSize, kShadowMapSize);
+                                cascade_pipeline.extent(kShadowMapSize, kShadowMapSize);
+                                *stream << RenderDetail::IndirectRaster{&cascade_pipeline,rsm_material_images,rsm_material_programs};
                             });
                     }
                     native_shadow_ms =
@@ -5264,62 +4694,13 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
                 if (!is_debug_mode && sky_sh_needs_update) {
                     *stream << hardware_->skySHProjectPipeline->dispatch_extent(1, 1);
                 }
-                if(update_lpv) {
-                auto& lpv=*hardware_->lpvPipeline;
-                bind_storage_buffer(lpv,lpv.pushConsts.info,direct_lighting->data);
-                bind_storage_buffer(lpv,lpv.pushConsts.injection,hardware_->lpvInjection);
-                bind_storage_buffer(lpv,lpv.pushConsts.accumulated,hardware_->lpvAccumulated);
-                bind_storage_buffer(lpv,lpv.pushConsts.parent,hardware_->lpvParent);
-                bind_storage_buffer(lpv,lpv.pushConsts.source,hardware_->lpvWave[1]);
-                bind_storage_buffer(lpv,lpv.pushConsts.destination,hardware_->lpvWave[0]);
-                bind_storage_buffer(lpv,lpv.pushConsts.shadowInfo,sceneShadowBuffer);
-                bind_storage_buffer(lpv,lpv.pushConsts.uniformInfo,sceneUboBuffer);
-                bind_storage_buffer(lpv,lpv.pushConsts.skySH,hardware_->skyIrradianceSHBuffer);
-                lpv.pushConsts.authored=direct_lighting->authored_environment?1u:0u;
-                lpv.pushConsts.disabled=lpv_disabled?1u:0u;
-                lpv.pushConsts.sunDirection=upload_value(sun_dir);
-                lpv.pushConsts.stride=8u;
-                constexpr auto lpv_n=OpticsDetail::LpvData::resolution;
-                for(unsigned level=0;level<OpticsDetail::LpvData::cascade_count;++level) {
-                lpv.pushConsts.level=level;
-                bind_storage_buffer(lpv,lpv.pushConsts.destination,hardware_->lpvWave[0]);
-                lpv.pushConsts.mode=0u;
-                *stream << lpv.dispatch_extent(lpv_n,lpv_n*lpv_n);
-                if(native_shadows_enabled)for(uint32_t cascade=0;cascade<kShadowCascadeCount;++cascade) {
-                    if((diag.shadow_cascade_mask&(1u<<cascade))==0u)continue;
-                    bind_sampled_image(lpv,lpv.pushConsts.positionImage,hardware_->rsmPositions[cascade]);
-                    bind_sampled_image(lpv,lpv.pushConsts.normalImage,hardware_->rsmNormals[cascade]);
-                    bind_sampled_image(lpv,lpv.pushConsts.fluxImage,hardware_->rsmFluxes[cascade]);
-                    const auto& cascade_view=shadow_cascade_views[cascade];
-                    lpv.pushConsts.texelArea=cascade_view.orthographic_width*cascade_view.orthographic_height/
-                        float(kShadowMapSize*kShadowMapSize);
-                    lpv.pushConsts.cascade=cascade;lpv.pushConsts.mode=1u;
-                    *stream << lpv.dispatch_extent(kShadowMapSize/8,kShadowMapSize/8);
-                }
-                lpv.pushConsts.mode=2u;
-                *stream << lpv.dispatch_extent(lpv_n,lpv_n*lpv_n);
-                lpv.pushConsts.mode=3u;
-                for(unsigned step=0;step<OpticsDetail::LpvData::propagation_steps;++step) {
-                    bind_storage_buffer(lpv,lpv.pushConsts.source,hardware_->lpvWave[step%2]);
-                    bind_storage_buffer(lpv,lpv.pushConsts.destination,hardware_->lpvWave[(step+1)%2]);
-                    *stream << lpv.dispatch_extent(lpv_n,lpv_n*lpv_n);
-                    if(env_flag_enabled("CORONA_OPTICS_THERMAL_BATCH") && (step+1)%8==0) {
-                        auto receipt=*stream << Horizon::commit();
-                        hardware_->executor.wait_completed(receipt);
-                        stream.emplace(hardware_->executor);
-                        const auto pause_start=PerfClock::now();
-                        std::this_thread::sleep_for(std::chrono::milliseconds(80));
-                        measurement_pause_ms+=elapsed_ms(pause_start,PerfClock::now());
-                    }
-                }
-                bind_storage_buffer(lpv,lpv.pushConsts.source,hardware_->lpvWave[OpticsDetail::LpvData::propagation_steps%2]);
-                lpv.pushConsts.mode=4u;
-                *stream << lpv.dispatch_extent(lpv_n,lpv_n*lpv_n);
-                }
-                }
                 lighting.dispatch_extent(hardware_->gbufferSize.x, hardware_->gbufferSize.y);
                 RenderDetail::IndirectDispatch material_dispatch{&lighting};
-                material_dispatch.buffers.push_back(hardware_->lpvAccumulated);
+                if(native_shadows_enabled)for(uint32_t cascade=0;cascade<kShadowCascadeCount;++cascade) {
+                    material_dispatch.images.push_back(hardware_->rsmPositions[cascade]);
+                    material_dispatch.images.push_back(hardware_->rsmNormals[cascade]);
+                    material_dispatch.images.push_back(hardware_->rsmFluxes[cascade]);
+                }
                 material_dispatch.images.push_back(direct_lighting->environment);
                 std::unordered_set<uint32_t> material_programs, material_images;
                 for (const auto& appearance : sceneBatch.resource_keep_alive->appearances) {
@@ -5329,32 +4710,68 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
                         if (material_images.insert(image->image.store_descriptor()).second)
                             material_dispatch.images.push_back(image->image);
                 }
-                if(has_ssgi) {
-                    const auto flags=native_lighting_flags;
-                    lighting.pushConsts.featureFlags=(flags&~32u)|128u;
-                    if(has_refraction) {
-                        bind_storage_image(lighting,lighting.pushConsts.visibilityImageIndex,refraction.opaque_visibility);
-                        bind_sampled_image(lighting,lighting.pushConsts.depthImageIndex,refraction.opaque_depth);
+                if(has_screen_trace) {
+                    auto& depth=*hardware_->screenDepthPipeline;
+                    depth.pc.size=upload_value(hardware_->gbufferSize);
+                    bind_sampled_image(depth,depth.pc.depthIndex,has_refraction?refraction.opaque_depth:hardware_->depthImage);
+                    bind_storage_buffer(depth,depth.pc.pyramidIndex,refraction.screen_depth);
+                    bind_storage_buffer(depth,depth.pc.uniformIndex,sceneUboBuffer);
+                    for(uint32_t level=1;level<refraction.screen_layout.levels;++level) {
+                        depth.pc.level=level;
+                        const auto scale=1u<<level;
+                        depth.dispatch_extent((hardware_->gbufferSize.x+scale-1)/scale,(hardware_->gbufferSize.y+scale-1)/scale);
+                        RenderDetail::IndirectDispatch dispatch{&depth};
+                        *stream << dispatch;
                     }
-                    bind_storage_image(lighting,lighting.pushConsts.finalOutputImage,refraction.ssgi_correction);
-                    *stream << material_dispatch;
-                    lighting.pushConsts.featureFlags=flags;
-                    bind_storage_image(lighting,lighting.pushConsts.visibilityImageIndex,hardware_->visibilityImage);
-                    bind_sampled_image(lighting,lighting.pushConsts.depthImageIndex,hardware_->depthImage);
-                    bind_storage_image(lighting,lighting.pushConsts.finalOutputImage,render_target);
+                    material_dispatch.buffers.push_back(refraction.screen_depth);
+                }
+                if(has_ssgi) {
+                    const auto layout=refraction.screen_layout;
+                    auto& gi=*hardware_->screenGiPipeline;
+                    if(has_refraction) {
+                        bind_storage_image(gi,gi.pushConsts.visibilityImageIndex,refraction.opaque_visibility);
+                        bind_sampled_image(gi,gi.pushConsts.depthImageIndex,refraction.opaque_depth);
+                    }
+                    bind_storage_image(gi,gi.pushConsts.finalOutputImage,refraction.ssgi_correction);
+                    gi.dispatch_extent(layout.width,layout.height);
+                    auto dispatch=material_dispatch;
+                    dispatch.pipeline=&gi;
+                    dispatch.writable_images={refraction.ssgi_validation[screen_current]};
+                    *stream << dispatch;
+
+                    auto& filter=*hardware_->screenFilterPipeline;
+                    filter.pushConsts.gbufferSize=upload_value(hardware_->gbufferSize);
+                    bind_storage_buffer(filter,filter.pushConsts.uniformBufferIndex,sceneUboBuffer);
+                    bind_storage_buffer(filter,filter.pushConsts.shadowInfoBufferIndex,sceneShadowBuffer);
+                    filter.dispatch_extent(layout.width,layout.height);
+                    RenderDetail::IndirectDispatch filtering{&filter};
+                    filtering.images={refraction.ssgi_validation[screen_current],refraction.ssgi_validation[screen_previous],
+                        refraction.ssgi_history[screen_previous]};
+                    const auto run_filter=[&](uint32_t mode,const Horizon::HardwareImage& input,const Horizon::HardwareImage& output) {
+                        filter.pushConsts.mode=mode;
+                        bind_storage_image(filter,filter.pushConsts.inputIndex,input);
+                        bind_storage_image(filter,filter.pushConsts.outputIndex,output);
+                        *stream << filtering;
+                    };
+                    // Filter the noisy estimator before history validation and
+                    // accumulation. Reuse the same three passes and GI images.
+                    run_filter(1,refraction.ssgi_correction,refraction.ssgi_filtered);
+                    run_filter(0,refraction.ssgi_filtered,refraction.ssgi_history[screen_current]);
+                    run_filter(2,refraction.ssgi_history[screen_current],refraction.ssgi_correction);
                     material_dispatch.images.push_back(refraction.ssgi_correction);
+                    material_dispatch.images.push_back(refraction.ssgi_validation[screen_current]);
                 }
                 if(has_refraction) {
                     // Immutable opaque background: refraction never reads its own output.
                     const uint32_t flags=(should_run_ssao?1u:0u) |
-                        ((!loading_guard && !env_flag_enabled("CORONA_OPTICS_DISABLE_SSR"))?2u:0u) |
+                        ((!loading_guard && true)?2u:0u) |
                         (kSkyAmbientEnabled?4u:0u) | (direct_lighting->authored_environment?16u:0u) | (has_ssgi?64u:0u);
                     lighting.pushConsts.featureFlags=flags;
                     bind_storage_image(lighting,lighting.pushConsts.visibilityImageIndex,refraction.opaque_visibility);
                     bind_sampled_image(lighting,lighting.pushConsts.depthImageIndex,refraction.opaque_depth);
                     bind_storage_image(lighting,lighting.pushConsts.finalOutputImage,refraction.opaque_color);
                     *stream << material_dispatch;
-                    lighting.pushConsts.featureFlags=flags|32u|(camera->shadow_cascade_debug?8u:0u);
+                    lighting.pushConsts.featureFlags=flags|32u|0u;
                     bind_storage_image(lighting,lighting.pushConsts.visibilityImageIndex,hardware_->visibilityImage);
                     bind_sampled_image(lighting,lighting.pushConsts.depthImageIndex,hardware_->depthImage);
                     bind_storage_image(lighting,lighting.pushConsts.finalOutputImage,render_target);
@@ -5402,8 +4819,19 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
                    << RetainSubmission{sceneBatch.resource_keep_alive};
             latest_submit_receipt = *stream << Horizon::commit();
             hardware_->last_receipt = latest_submit_receipt;
-            if (update_lpv) {
-                hardware_->lightFieldCache.submitted(direct_lighting, std::move(light_field_inputs));
+            if(has_ssgi && !diag.skip_deferred_compute) {
+                // Preserve the scene matrices used by this submission, never
+                // scratch state from the subsequent orthographic UI pass.
+                refraction.previous_view_projection=scene_view_projection;
+                refraction.previous_view=scene_view;
+                refraction.screen_history_valid=true;
+                refraction.screen_had_refraction=has_refraction;
+                refraction.screen_lighting_signature=screen_lighting_signature;
+                ++refraction.screen_frame;
+            } else refraction.screen_history_valid=false;
+            if (update_shadow_maps) {
+                hardware_->lightFieldCache.submitted(direct_lighting, std::move(light_field_inputs),
+                    view.scene_handle,view.camera_handle);
             }
             native_commit_ms = elapsed_ms(native_commit_start, PerfClock::now());
             native_submit_ms = elapsed_ms(native_submit_start, PerfClock::now());
@@ -5411,10 +4839,10 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
                 // Opt-in regression measurement: command recording through GPU
                 // completion, excluding scene loading, frame pacing and PNG IO.
                 hardware_->executor.wait_completed(latest_submit_receipt);
-                CFW_LOG_INFO("NativeRenderTiming camera={} extent={}x{} render_ms={:.3f} lpv_updated={} rsm_updated={}",
+                CFW_LOG_INFO("NativeRenderTiming camera={} extent={}x{} render_ms={:.3f} gi=RSM+SSGI rsm_updated={}",
                     cam_handle, camera->width, camera->height,
                     elapsed_ms(native_submit_start, PerfClock::now())-measurement_pause_ms,
-                    update_lpv ? 1 : 0, update_shadow_maps ? 1 : 0);
+                    update_shadow_maps ? 1 : 0);
             }
         }
         if (hardware_) {
@@ -5574,15 +5002,14 @@ Horizon::HardwareImage* OpticsSystem::compose_surface_ui_overlay(
         make_orthographic_lh(ortho_width, kFollowCameraOrthoHeight,
                              kFollowCameraNear, kFollowCameraFar);
 
-    hardware_->vpUniformBufferObjects.viewProjMatrix =
-        multiply_ktm_mat4(ortho_proj, camera.compute_view_matrix());
+    Hardware::VPUniformBufferObject ui_vp;
+    ui_vp.viewProjMatrix=multiply_ktm_mat4(ortho_proj,camera.compute_view_matrix());
     // UI overlay pass ͬ��ÿ�����д���� buffer���볡�� pass ͬһ��������Ϊ�����á�
     // keep_alive ���ڴ���� stream �ϣ��뱾 overlay �� dispatch ͬһ submission����
     auto uiVpLease = hardware_->uiVpUniformBufferPool.acquire(
         [] { return make_storage_buffer<Hardware::VPUniformBufferObject>(1, "optics.ui_vp_uniform.pool"); });
     Horizon::HardwareBuffer& uiVpBuffer = *uiVpLease.buffer;
-    (void)write_object_bytes(uiVpBuffer,
-                             hardware_->vpUniformBufferObjects);
+    (void)write_object_bytes(uiVpBuffer,ui_vp);
     const uint32_t uiVpDescriptor = FramePlaceBufferPool::store_descriptor(uiVpBuffer);
     stream << RetainSubmission{uiVpLease.busy};
 
@@ -6251,9 +5678,7 @@ void OpticsSystem::shutdown() {
         if (backend_switch_sub_id_ != 0) {
             event_bus->unsubscribe(backend_switch_sub_id_);
         }
-        if (vision_scene_load_sub_id_ != 0) {
-            event_bus->unsubscribe(vision_scene_load_sub_id_);
-        }
+
         if (residency_sub_id_ != 0) {
             event_bus->unsubscribe(residency_sub_id_);
         }
@@ -6519,636 +5944,8 @@ bool OpticsSystem::sync_engine_vision_lighting(VisionPipelineRuntime& runtime, c
     }
 }
 
-bool OpticsSystem::sync_shared_vision_scene(VisionPipelineRuntime& runtime) {
-    auto& resource = runtime.scene_resource;
-    if (!runtime.pipeline || !resource) return false;
-    try {
-        if (runtime.applied_geometry_version != resource->geometry_version) {
-            const auto snapshot = resource->geometry_snapshot;
-            if (!snapshot || snapshot->source_revision != runtime.source_revision)
-                throw std::runtime_error("geometry snapshot source mismatch");
-            auto& pipeline = *runtime.pipeline;
-            pipeline.activate_global_context();
-            runtime.wait_for_geometry_users();
-            ::vision::Global::SceneGpuContextScope scope{pipeline.geometry().bindless_array(), pipeline.device()};
-            auto staged = Vision::stage_geometry_snapshot(*snapshot, pipeline.scene());
-            auto& scene = pipeline.scene();
-            const bool materials_added = !staged.new_materials.empty();
-            for (auto& material : staged.new_materials) scene.add_material(std::move(material));
-            for (auto& light : staged.new_lights) scene.add_light(std::move(light));
-            scene.groups() = std::move(staged.groups);
-            scene.instances().clear();
-            for (const auto& group : scene.groups()) {
-                group->for_each([&](::vision::SP<::vision::ShapeInstance> instance, ::vision::uint) { scene.instances().push_back(instance); });
-            }
-            scene.geometry().data()->clear_meshes();
-            scene.register_instance_meshes();
-            scene.tidy_up();
-            if (materials_added) scene.prepare_materials();
-            apply_logical_instances_to_pipeline_scene(*resource, scene);
-            pipeline.rebuild_geometry_gpu();
-            pipeline.commit_command();
-            pipeline.invalidate_all_view_contexts();
-            runtime.seed_geometry_cache();
-            runtime.applied_geometry_version = resource->geometry_version;
-            runtime.scene_gpu_transform_version = resource->logical_transform_version;
-        }
-        runtime.upload_shared_scene_transforms_if_needed();
-        return true;
-    } catch (const std::exception& e) {
-        CFW_LOG_ERROR("OpticsSystem: shared geometry consume failed: {}", e.what());
-        return false;
-    }
-}
 
-void OpticsSystem::sync_external_live_vision_transforms(VisionPipelineRuntime& runtime) {
-    auto& pipeline = runtime.pipeline;
-    auto scene_resource = runtime.scene_resource;
-    if (!vision_initialized_ || !pipeline || !scene_resource || runtime.scene_path.empty()) {
-        return;
-    }
-    // An idle/second mode must consume before it can become this frame's producer.
-    if (!sync_shared_vision_scene(runtime)) return;
 
-    const auto& current_scene_key = scene_resource->key.source_path_key;
-    if (current_scene_key.empty()) {
-        return;
-    }
-
-    auto& hub = SharedDataHub::instance();
-    auto& vision_scene = pipeline->scene();
-    auto& groups = vision_scene.groups();
-
-    std::unordered_map<std::uintptr_t, Corona::ExternalVisionBindingDevice> active_bindings;
-    std::unordered_set<std::uintptr_t> active_bound_actors;
-    std::unordered_set<std::uintptr_t> hidden_bound_actors;
-    for (auto scene_it = hub.scene_storage().cbegin(); scene_it != hub.scene_storage().cend(); ++scene_it) {
-        const auto& scene_dev = *scene_it;
-        if (!scene_dev.enabled) {
-            continue;
-        }
-        for (auto actor_handle : scene_dev.actor_handles) {
-            // ����δ���ص� actor �� �� Vision shapes ��ͬ��
-            {
-                std::shared_lock lock(residency_mtx_);
-                if (!resident_actors_.count(actor_handle)) continue;
-            }
-            const auto binding = hub.external_vision_binding(actor_handle);
-            if (!binding) {
-                continue;
-            }
-            if (binding->source_path_key != current_scene_key) {
-                continue;
-            }
-            active_bound_actors.insert(actor_handle);
-            active_bindings.emplace(actor_handle, *binding);
-            if (!binding->visible) {
-                hidden_bound_actors.insert(actor_handle);
-            }
-        }
-    }
-
-    std::vector<std::uintptr_t> actors_to_remove;
-    for (const auto& [actor_handle, record] : scene_resource->external_live_shapes_by_actor) {
-        (void)record;
-        if (!active_bound_actors.contains(actor_handle)) {
-            actors_to_remove.push_back(actor_handle);
-        }
-    }
-
-    std::vector<std::uintptr_t> actors_to_add;
-    std::vector<std::uintptr_t> actors_to_replace;
-    for (const auto& [actor_handle, binding] : active_bindings) {
-        const auto* record = scene_resource->find_external_live_shape(actor_handle);
-        if (record == nullptr) {
-            const int binding_shape_index = external_live_shape_index(binding);
-            const auto group_index = static_cast<std::size_t>(binding_shape_index);
-            if (binding_shape_index >= 0 &&
-                group_index < groups.size() &&
-                groups[group_index]) {
-                scene_resource->upsert_external_live_shape({
-                    .actor_handle = actor_handle,
-                    .shape_index = binding_shape_index,
-                    .shape_guid = binding.shape_guid,
-                    .shape_identity_key = binding.shape_identity_key,
-                    .dynamically_added = false,
-                });
-            } else {
-                actors_to_add.push_back(actor_handle);
-            }
-            continue;
-        }
-        const int binding_shape_index = external_live_shape_index(binding);
-        const bool shape_identity_changed =
-            binding.shape_guid != record->shape_guid ||
-            binding.shape_identity_key != record->shape_identity_key;
-        if ((binding_shape_index >= 0 && binding_shape_index != record->shape_index) ||
-            shape_identity_changed) {
-            actors_to_replace.push_back(actor_handle);
-        }
-    }
-
-    bool geometry_changed = false;
-    bool material_registry_changed = false;
-    bool needs_compile = false;
-    bool removal_transform_changed = false;
-    std::size_t tombstoned_instance_count = 0;
-    const bool embedded_runtime = scene_resource->is_embedded();
-
-    auto remove_actor_shape = [&](std::uintptr_t actor_handle) {
-        const auto* record = scene_resource->find_external_live_shape(actor_handle);
-        if (record == nullptr || record->shape_index < 0) {
-            scene_resource->erase_external_live_shape(actor_handle);
-            return;
-        }
-
-        const auto record_copy = *record;
-        const auto removal_action =
-            Vision::external_live_shape_removal_action(record_copy, embedded_runtime);
-        if (removal_action == Vision::ExternalLiveShapeRemovalAction::ForgetTracking) {
-            scene_resource->erase_external_live_shape(actor_handle);
-            return;
-        }
-
-        if (removal_action == Vision::ExternalLiveShapeRemovalAction::HideOriginal) {
-            const auto group_index = static_cast<std::size_t>(record_copy.shape_index);
-            if (group_index >= groups.size() || !groups[group_index]) {
-                scene_resource->erase_external_live_shape(actor_handle);
-                return;
-            }
-
-            const auto hidden_o2w = hidden_external_live_o2w();
-            const auto hidden_signature =
-                external_live_hidden_transform_signature(record_copy.shape_index);
-            auto& group = groups[group_index];
-            group->aabb = {};
-            group->for_each([&](::vision::SP<::vision::ShapeInstance> instance,
-                                std::uint32_t instance_index) {
-                if (!instance) {
-                    return;
-                }
-                instance->set_o2w(hidden_o2w);
-                instance->init_aabb();
-                group->aabb.extend(instance->aabb);
-                scene_resource->upsert_logical_instance({
-                    .key = {.shape_index = record_copy.shape_index,
-                            .instance_index = static_cast<int>(instance_index)},
-                    .actor_handle = 0,
-                    .transform_signature = hidden_signature,
-                    .object_to_world = flatten_vision_matrix(hidden_o2w),
-                });
-                removal_transform_changed = true;
-                ++tombstoned_instance_count;
-            });
-            scene_resource->erase_external_live_shape(actor_handle);
-
-            std::size_t mesh_count = 0;
-            if (auto* geometry_data = vision_scene.geometry().data()) {
-                geometry_data->for_each_mesh(
-                    [&](const ::vision::Mesh*, std::uint32_t) { ++mesh_count; });
-            }
-            CFW_LOG_INFO(
-                "OpticsSystem: embedded Vision shape removal action={} actor={} guid={} "
-                "shape_index={} groups={} instances={} materials={} meshes={}",
-                Vision::external_live_shape_removal_action_name(removal_action),
-                actor_handle,
-                record_copy.shape_guid,
-                record_copy.shape_index,
-                groups.size(),
-                vision_scene.instances().size(),
-                vision_scene.materials().all_instance_num(),
-                mesh_count);
-            return;
-        }
-
-        const auto shape_index = static_cast<unsigned int>(record_copy.shape_index);
-        if (!Vision::remove_vision_shape_for_actor(vision_scene, shape_index)) {
-            scene_resource->erase_external_live_shape(actor_handle);
-            return;
-        }
-        auto actors_to_rewrite =
-            scene_resource->remap_external_live_shape_indices_after_remove(record_copy.shape_index);
-        for (auto rewrite_actor : actors_to_rewrite) {
-            if (const auto* rewritten = scene_resource->find_external_live_shape(rewrite_actor)) {
-                write_external_live_binding_shape_index(rewrite_actor, rewritten->shape_index);
-            }
-        }
-        geometry_changed = true;
-    };
-
-    std::sort(actors_to_remove.begin(), actors_to_remove.end(), [&](auto lhs, auto rhs) {
-        const auto* l = scene_resource->find_external_live_shape(lhs);
-        const auto* r = scene_resource->find_external_live_shape(rhs);
-        const int li = l == nullptr ? -1 : l->shape_index;
-        const int ri = r == nullptr ? -1 : r->shape_index;
-        return li > ri;
-    });
-    for (auto actor_handle : actors_to_remove) {
-        remove_actor_shape(actor_handle);
-    }
-
-    std::sort(actors_to_replace.begin(), actors_to_replace.end(), [&](auto lhs, auto rhs) {
-        const auto* l = scene_resource->find_external_live_shape(lhs);
-        const auto* r = scene_resource->find_external_live_shape(rhs);
-        const int li = l == nullptr ? -1 : l->shape_index;
-        const int ri = r == nullptr ? -1 : r->shape_index;
-        return li > ri;
-    });
-    for (auto actor_handle : actors_to_replace) {
-        remove_actor_shape(actor_handle);
-        actors_to_add.push_back(actor_handle);
-    }
-
-    for (auto actor_handle : actors_to_add) {
-        const auto binding_it = active_bindings.find(actor_handle);
-        if (binding_it == active_bindings.end()) {
-            continue;
-        }
-        const auto result =
-            Vision::add_vision_shape_for_actor(vision_scene, actor_handle, binding_it->second);
-        if (!result.added) {
-            continue;
-        }
-        write_external_live_binding_shape_index(actor_handle, result.shape_index);
-        scene_resource->upsert_external_live_shape({
-            .actor_handle = actor_handle,
-            .shape_index = result.shape_index,
-            .shape_guid = binding_it->second.shape_guid,
-            .shape_identity_key = binding_it->second.shape_identity_key,
-            .dynamically_added = true,
-        });
-        geometry_changed = true;
-        material_registry_changed = true;
-        needs_compile = needs_compile ||
-            result.material_topology_after != result.material_topology_before;
-    }
-
-    bool mesh_content_changed = false;
-    bool changed = removal_transform_changed;
-    std::size_t updated_actors = tombstoned_instance_count;
-
-    for (const auto& [actor_handle, active_binding] : active_bindings) {
-        auto binding = active_binding;
-        const auto* existing_shape_record =
-            scene_resource->find_external_live_shape(actor_handle);
-        if (existing_shape_record != nullptr && existing_shape_record->shape_index >= 0) {
-            binding.shape_index = existing_shape_record->shape_index;
-            binding.json_path = external_live_json_path_for_shape(existing_shape_record->shape_index);
-        }
-
-        auto resolved = resolve_external_live_transform(actor_handle, binding);
-        if (!resolved) {
-            continue;
-        }
-        const auto normal_signature = resolved->signature;
-        const bool actor_hidden = hidden_bound_actors.contains(actor_handle);
-        const bool original_external_shape =
-            existing_shape_record != nullptr && !existing_shape_record->dynamically_added;
-
-        const auto group_index = static_cast<std::size_t>(resolved->shape_index);
-        if (group_index >= groups.size() || !groups[group_index]) {
-            continue;
-        }
-
-        auto& group = groups[group_index];
-        scene_resource->upsert_external_live_shape({
-            .actor_handle = actor_handle,
-            .shape_index = resolved->shape_index,
-            .shape_guid = binding.shape_guid,
-            .shape_identity_key = binding.shape_identity_key,
-            .dynamically_added = existing_shape_record != nullptr
-                                   ? existing_shape_record->dynamically_added
-                                   : false,
-        });
-
-        std::size_t target_signature = normal_signature;
-        auto target_o2w = resolved->o2w;
-        if (actor_hidden) {
-            target_signature = external_live_hidden_transform_signature(resolved->shape_index);
-            target_o2w = hidden_external_live_o2w();
-        }
-        const auto result = Vision::sync_external_live_group(
-            *scene_resource, runtime.external_live_aabb_cache, actor_handle, resolved->shape_index, group,
-            normal_signature, target_signature, target_o2w, actor_hidden, original_external_shape);
-        if (result.changed) {
-            changed = true;
-            ++updated_actors;
-        }
-        mesh_content_changed |= result.geometry_changed;
-    }
-
-    for (auto it = scene_resource->external_live_transform_signatures.begin();
-         it != scene_resource->external_live_transform_signatures.end();) {
-        if (active_bound_actors.contains(it->first)) {
-            ++it;
-        } else {
-            it = scene_resource->external_live_transform_signatures.erase(it);
-        }
-    }
-
-    if (!changed && !geometry_changed) {
-        return;
-    }
-
-    try {
-        runtime.wait_for_geometry_users();
-        pipeline->activate_view_context(0u);
-        scene_resource->mark_transforms_changed();
-        if (mesh_content_changed) {
-            // Writable Mesh vectors have no revision signal. A content change must
-            // rebuild BLAS and resized buffers as well as the CPU bounds.
-            vision_scene.instances().clear();
-            for (const auto& current_group : groups) {
-                if (!current_group) continue;
-                current_group->for_each([&](::vision::SP<::vision::ShapeInstance> instance, ::vision::uint) {
-                    if (instance) {
-                        instance->mesh()->reset_hash();
-                        vision_scene.instances().push_back(instance);
-                    }
-                });
-            }
-            vision_scene.geometry().data()->clear_meshes();
-        }
-        if (geometry_changed || mesh_content_changed) {
-            vision_scene.register_instance_meshes();
-            vision_scene.tidy_up();
-            if (material_registry_changed) {
-                vision_scene.prepare_materials();
-            }
-            vision_scene.fill_instances();
-            pipeline->rebuild_geometry_gpu();
-            if (needs_compile) {
-                pipeline->compile();
-            }
-        } else {
-            pipeline->update_geometry();
-        }
-        scene_resource->mark_scene_gpu_transforms_uploaded();
-        runtime.scene_gpu_transform_version = scene_resource->logical_transform_version;
-        if (geometry_changed || mesh_content_changed) {
-            pipeline->commit_command();
-            runtime.publish_geometry();
-        }
-        pipeline->invalidate_all_view_contexts();
-        CFW_LOG_DEBUG("OpticsSystem: external_live updated {} proxy actor transform(s)",
-                      updated_actors);
-    } catch (const std::exception& e) {
-        CFW_LOG_ERROR("OpticsSystem: external_live transform sync failed: {}", e.what());
-    }
-}
-
-void OpticsSystem::sync_engine_native_mixed_shapes(VisionPipelineRuntime& runtime) {
-    auto& pipeline = runtime.pipeline;
-    auto scene_resource = runtime.scene_resource;
-    if (!vision_initialized_ || !pipeline || !scene_resource ||
-        runtime.source != VisionPipelineSource::ExternalLive ||
-        runtime.scene_path.empty()) {
-        return;
-    }
-    if (!sync_shared_vision_scene(runtime)) return;
-
-    auto& hub = SharedDataHub::instance();
-    auto& vision_scene = pipeline->scene();
-    auto& groups = vision_scene.groups();
-
-    // 1. Enumerate engine-native candidate actors: present in an enabled scene and
-    //    WITHOUT an external_vision_binding (bound proxies are handled by
-    //    sync_external_live_vision_transforms, which must have run first).
-    //    ֻ�ռ� Loaded ״̬�� actor �� Unloaded �� GPU ��Դ���ͷţ��� mesh �ɹ�����
-    std::unordered_set<std::uintptr_t> active_native_actors;
-    for (auto scene_it = hub.scene_storage().cbegin(); scene_it != hub.scene_storage().cend(); ++scene_it) {
-        const auto& scene_dev = *scene_it;
-        if (!scene_dev.enabled) {
-            continue;
-        }
-        for (auto actor_handle : scene_dev.actor_handles) {
-            if (actor_handle == 0 || hub.has_external_vision_binding(actor_handle)) {
-                continue;
-            }
-            {
-                std::shared_lock lock(residency_mtx_);
-                if (!resident_actors_.count(actor_handle)) continue;
-            }
-            active_native_actors.insert(actor_handle);
-        }
-    }
-
-    // 2. Diff against the tracked set: remove actors that left the scene or are no
-    //    longer renderable (invisible / geometry cleared); add newly-renderable ones.
-    std::vector<std::uintptr_t> actors_to_remove;
-    std::vector<std::uintptr_t> actors_to_add;
-    for (const auto& [actor_handle, record] : scene_resource->engine_mixed_shapes_by_actor) {
-        (void)record;
-        if (!active_native_actors.contains(actor_handle)) {
-            actors_to_remove.push_back(actor_handle);
-        }
-    }
-    const auto node_revision = [&](std::uintptr_t actor_handle){std::uint64_t revision=0;for(auto h:hub.resolve_actor_geometry_handles(actor_handle)){if(auto g=hub.geometry_storage().try_acquire_read(h))revision^=g->model_node_revision+0x9e3779b9u+(revision<<6)+(revision>>2);}return revision;};
-    for (auto actor_handle : active_native_actors) {
-        const auto* record = scene_resource->find_engine_mixed_shape(actor_handle);
-        const auto resolved = resolve_engine_native_transform(
-            actor_handle, record != nullptr ? record->shape_index : -1);
-        if (record == nullptr) {
-            // Only attempt to add a renderable (visible + transform) actor. Mesh
-            // readiness is checked inside add_vision_shape_for_actor.
-            if (resolved) {
-                actors_to_add.push_back(actor_handle);
-            }
-        } else if (record->model_node_revision != node_revision(actor_handle)) {
-            actors_to_remove.push_back(actor_handle);
-            if(resolved)actors_to_add.push_back(actor_handle);
-        } else if (!resolved) {
-            // Tracked but no longer renderable -> remove from the mix.
-            actors_to_remove.push_back(actor_handle);
-        }
-    }
-
-    bool geometry_changed = false;
-    bool material_registry_changed = false;
-    bool needs_compile = false;
-
-    auto remove_native = [&](std::uintptr_t actor_handle) {
-        const auto* record = scene_resource->find_engine_mixed_shape(actor_handle);
-        if (record == nullptr || record->shape_index < 0) {
-            scene_resource->erase_engine_mixed_shape(actor_handle);
-            return;
-        }
-        const int removed_index = record->shape_index;
-        if (!Vision::remove_vision_shape_for_actor(
-                vision_scene, static_cast<unsigned int>(removed_index))) {
-            scene_resource->erase_engine_mixed_shape(actor_handle);
-            return;
-        }
-        // Erase BEFORE remap so this record is not double-decremented.
-        scene_resource->erase_engine_mixed_shape(actor_handle);
-        auto actors_to_rewrite =
-            scene_resource->remap_external_live_shape_indices_after_remove(removed_index);
-        for (auto rewrite_actor : actors_to_rewrite) {
-            if (const auto* rewritten = scene_resource->find_external_live_shape(rewrite_actor)) {
-                write_external_live_binding_shape_index(rewrite_actor, rewritten->shape_index);
-            }
-        }
-        geometry_changed = true;
-    };
-
-    // Remove in descending shape_index order so each erase only shifts strictly
-    // higher, not-yet-processed indices (mirrors the bound-proxy removal pass).
-    std::sort(actors_to_remove.begin(), actors_to_remove.end(), [&](auto lhs, auto rhs) {
-        const auto* l = scene_resource->find_engine_mixed_shape(lhs);
-        const auto* r = scene_resource->find_engine_mixed_shape(rhs);
-        const int li = l == nullptr ? -1 : l->shape_index;
-        const int ri = r == nullptr ? -1 : r->shape_index;
-        return li > ri;
-    });
-    for (auto actor_handle : actors_to_remove) {
-        remove_native(actor_handle);
-    }
-
-    // Append new engine-native shapes (always land at the high end of groups_).
-    std::unordered_set<std::uintptr_t> just_added_actors;
-    for (auto actor_handle : actors_to_add) {
-        const auto result = Vision::add_vision_shape_for_actor(
-            vision_scene, actor_handle, Corona::ExternalVisionBindingDevice{});
-        if (!result.added) {
-            continue;  // mesh data not ready yet -> retry next frame
-        }
-        scene_resource->engine_mixed_shapes_by_actor[actor_handle] =
-            Vision::EngineMixedShapeRecord{
-                .actor_handle = actor_handle,
-                .shape_index = result.shape_index,
-                .transform_signature = 0,
-                .model_node_revision = node_revision(actor_handle),
-            };
-        just_added_actors.insert(actor_handle);
-        geometry_changed = true;
-        material_registry_changed = true;
-        needs_compile = needs_compile ||
-            result.material_topology_after != result.material_topology_before;
-    }
-
-    // Transform sync for tracked engine-native shapes (driven by the engine
-    // geometry's ModelTransform; no binding). Newly-added shapes have
-    // transform_signature==0 so they also pass through here once to register their
-    // logical instances before the single geometry commit below.
-    bool changed = false;
-    std::size_t updated_actors = 0;
-    for (auto& [actor_handle, record] : scene_resource->engine_mixed_shapes_by_actor) {
-        const auto resolved = resolve_engine_native_transform(actor_handle, record.shape_index);
-        if (!resolved) {
-            continue;
-        }
-        const auto group_index = static_cast<std::size_t>(resolved->shape_index);
-        if (group_index >= groups.size() || !groups[group_index]) {
-            continue;
-        }
-        if (record.transform_signature == resolved->signature) {
-            continue;
-        }
-
-        auto& group = groups[group_index];
-        group->aabb = ::vision::Box3f{};
-        const auto object_to_world = flatten_vision_matrix(resolved->o2w);
-        group->for_each([&](::vision::SP<::vision::ShapeInstance> instance,
-                            std::uint32_t instance_index) {
-            if (!instance) {
-                return;
-            }
-            scene_resource->upsert_logical_instance({
-                .key = {.shape_index = resolved->shape_index,
-                        .instance_index = static_cast<int>(instance_index)},
-                .actor_handle = actor_handle,
-                .transform_signature = resolved->signature,
-                .object_to_world = object_to_world,
-            });
-            auto matrix=resolved->o2w;
-            const std::string name(instance->name());
-            if(name.starts_with("corona-node:")){
-                const auto colon=name.find(':',12);
-                if(colon!=std::string::npos){
-                    const auto handle=static_cast<std::uintptr_t>(std::stoull(name.substr(12,colon-12)));
-                    const auto index=static_cast<std::size_t>(std::stoull(name.substr(colon+1)));
-                    if(auto geom=hub.geometry_storage().try_acquire_read(handle);geom&&index<geom->mesh_instances.size()){
-                        auto local=::vision::make_float4x4(1.f);
-                        for(int c=0;c<4;++c)for(int r=0;r<4;++r){float value=geom->mesh_instances[index].transform[c][r];if(r==2)value=-value;if(c==2)value=-value;local[c][r]=value;}
-                        matrix=matrix*local;
-                    }
-                }
-            }
-            instance->set_o2w(matrix);
-            instance->init_aabb();
-            group->aabb.extend(instance->aabb);
-        });
-        record.transform_signature = resolved->signature;
-        // Newly added shapes join the membership rebuild below. Count only
-        // existing actors here for the transform-only update path.
-        if (just_added_actors.contains(actor_handle)) {
-            continue;
-        }
-        changed = true;
-        ++updated_actors;
-    }
-
-    if (geometry_changed) {
-        try {
-            runtime.wait_for_geometry_users();
-            pipeline->activate_view_context(0u);
-            if (needs_compile) {
-                // A new material TYPE was introduced (e.g. the first engine-native
-                // PrincipledBSDF in a cbox scene that had none). Recompiling the
-                // integrator requires the renderer's light sampler + scene to be
-                // fully re-prepared first: PathTracingIntegrator::compile walks the
-                // light sampler during codegen, and a stale sampler (after tidy_up
-                // re-indexed lights) faults. So mirror rebuild_vision_scene's proven
-                // post-build sequence exactly (scene.prepare �� prepare_geometry ��
-                // prepare_lights �� bindless �� compile �� per-view-context recompile)
-                // instead of the lighter incremental path below.
-                vision_scene.prepare();
-                pipeline->prepare_geometry(true);
-            } else {
-                // Same material topology (e.g. another PrincipledBSDF object):
-                // cheap incremental geometry update, no integrator recompile. New
-                // material texture slots still need their bindless handles published
-                // (update_slotSOA + upload_handles) or the kernel reads unpublished
-                // slots for the new material instance.
-                vision_scene.register_instance_meshes();
-                vision_scene.tidy_up();
-                if (material_registry_changed) {
-                    vision_scene.prepare_materials();
-                }
-                vision_scene.fill_instances();
-                pipeline->rebuild_geometry_gpu();
-                pipeline->upload_scene_bindless_array();
-                pipeline->upload_bindless_array();
-            }
-            scene_resource->mark_transforms_changed();
-            scene_resource->mark_scene_gpu_transforms_uploaded();
-            runtime.scene_gpu_transform_version = scene_resource->logical_transform_version;
-            pipeline->commit_command();
-            runtime.publish_geometry();
-            pipeline->invalidate_all_view_contexts();
-        } catch (const std::exception& e) {
-            CFW_LOG_ERROR("OpticsSystem: engine-native mixed geometry sync failed: {}", e.what());
-        }
-        return;
-    }
-
-    if (!changed) {
-        return;
-    }
-
-    try {
-        pipeline->activate_view_context(0u);
-        scene_resource->mark_transforms_changed();
-        pipeline->update_geometry();
-        scene_resource->mark_scene_gpu_transforms_uploaded();
-        runtime.scene_gpu_transform_version = scene_resource->logical_transform_version;
-        pipeline->invalidate_all_view_contexts();
-        CFW_LOG_DEBUG("OpticsSystem: engine-native mixed updated {} actor transform(s)",
-                      updated_actors);
-    } catch (const std::exception& e) {
-        CFW_LOG_ERROR("OpticsSystem: engine-native mixed transform sync failed: {}", e.what());
-    }
-}
 
 bool OpticsSystem::init_vision_lazy() {
     if (vision_initialized_) return true;
@@ -7185,86 +5982,8 @@ bool OpticsSystem::init_vision_lazy() {
         vision::Global::instance().set_device(vision_device_.get());
         vision::Global::instance().set_scene_path(std::filesystem::current_path());
 
-#ifdef CORONA_VISION_IMPORT_DEMO
-        // Verification demo: load a known-good scene straight from disk instead of
-        // building the Vision scene from CoronaEngine data. This isolates the
-        // Vision render path so we can confirm it produces a picture at all.
-        const auto key = make_vision_pipeline_key(kVisionDemoScenePath,
-                                                  current_vision_render_mode_,
-                                                  VisionPipelineSource::ExternalFile);
-        auto scene_resource = get_or_create_vision_scene_resource(
-            make_vision_scene_resource_key(kVisionDemoScenePath,
-                                           VisionPipelineSource::ExternalFile),
-            kVisionDemoScenePath);
-        auto pipeline = import_vision_scene_from_file(
-            std::filesystem::path{kVisionDemoScenePath},
-            current_vision_render_mode_,
-            scene_resource,
-            VisionPipelineSource::ExternalFile);
-        if (!pipeline) {
-            CFW_LOG_ERROR("OpticsSystem: Vision demo pipeline import failed");
-            return false;
-        }
-        activate_single_vision_runtime_key(key);
-        auto& runtime = active_vision_runtime();
-        runtime.reset_pipeline(std::move(pipeline),
-                               VisionPipelineSource::ExternalFile,
-                               kVisionDemoScenePath,
-                               current_vision_render_mode_);
-        vision_initialized_ = true;
-        return true;
-#else
-        std::optional<VisionSceneLoadRequest> pending_external_scene;
-        {
-            std::lock_guard<std::mutex> lock(vision_scene_load_mutex_);
-            if (pending_vision_scene_load_ &&
-                (!pending_vision_scene_load_->scene_path.empty() ||
-                 !pending_vision_scene_load_->scene_json.empty())) {
-                pending_external_scene.swap(pending_vision_scene_load_);
-            }
-        }
-        if (pending_external_scene) {
-            const auto mode_selection = select_visible_vision_render_mode([this](auto camera) { return has_pending_screenshot(camera); });
-            const auto requested_mode = mode_selection.has_visible_camera
-                                            ? mode_selection.mode
-                                            : current_vision_render_mode_;
-            const bool loaded = !pending_external_scene->scene_json.empty()
-                                    ? load_external_vision_scene_from_json(
-                                          *pending_external_scene, requested_mode, true)
-                                    : load_external_vision_scene(pending_external_scene->scene_path,
-                                                                 requested_mode,
-                                                                 std::nullopt,
-                                                                 true);
-            if (!loaded) {
-                CFW_LOG_ERROR("OpticsSystem: failed to initialize Vision from external scene: {}",
-                              pending_external_scene->scene_json.empty()
-                                  ? pending_external_scene->scene_path
-                                  : pending_external_scene->scene_key);
-                return false;
-            }
-            vision_initialized_ = true;
-            const bool external_live =
-                pending_external_scene->scene_json.empty() &&
-                has_external_live_bindings_for_scene(pending_external_scene->scene_path);
-            vision_applied_signature_ = 0;
-            vision_pending_signature_ = 0;
-            vision_stable_frames_ = 0;
-            vision_rebuild_retries_ = 0;
-            CFW_LOG_INFO("OpticsSystem: initialized Vision from {} scene: {}",
-                         !pending_external_scene->scene_json.empty()
-                             ? "embedded"
-                             : (external_live ? "external_live" : "external"),
-                         pending_external_scene->scene_json.empty()
-                             ? pending_external_scene->scene_path
-                             : pending_external_scene->scene_key);
-            return true;
-        }
-
-        const auto key = make_vision_pipeline_key(
-            "", current_vision_render_mode_, VisionPipelineSource::EngineBuilt);
-        auto scene_resource = get_or_create_vision_scene_resource(
-            make_vision_scene_resource_key("", VisionPipelineSource::EngineBuilt),
-            "");
+        const auto key = make_vision_pipeline_key(current_vision_render_mode_);
+        auto scene_resource = get_or_create_vision_scene_resource();
         auto pipeline = create_vision_pipeline(current_vision_render_mode_, scene_resource);
         if (!pipeline) {
             CFW_LOG_ERROR("OpticsSystem: Failed to create Vision pipeline without external scene import");
@@ -7272,9 +5991,7 @@ bool OpticsSystem::init_vision_lazy() {
         }
         bind_pipeline_scene_gpu_resource(*pipeline,
                                          *scene_resource,
-                                         VisionPipelineSource::EngineBuilt,
-                                         current_vision_render_mode_,
-                                         "");
+                                         current_vision_render_mode_);
 
         // Populate Vision scene directly from CoronaEngine scene data.
         auto& scene = pipeline->scene();
@@ -7309,8 +6026,6 @@ bool OpticsSystem::init_vision_lazy() {
         activate_single_vision_runtime_key(key);
         auto& runtime = active_vision_runtime();
         runtime.reset_pipeline(std::move(pipeline),
-                               VisionPipelineSource::EngineBuilt,
-                               "",
                                current_vision_render_mode_);
         vision_initialized_ = true;
 
@@ -7325,7 +6040,6 @@ bool OpticsSystem::init_vision_lazy() {
         vision_stable_frames_ = 0;
 
         return true;
-#endif  // CORONA_VISION_IMPORT_DEMO
     } catch (const std::exception& e) {
         CFW_LOG_ERROR("OpticsSystem: Vision init failed: {}", e.what());
         return false;
@@ -7337,7 +6051,6 @@ void OpticsSystem::run_vision_frame(float frame_count, uint64_t frame_index,
     if (views.empty() || !hardware_->visionResolvePipeline) return;
     Corona::Diagnostics::PhaseScope vision_phase{"Optics", "vision:scene_sync"};
     (void)frame_count;
-    apply_pending_vision_scene_load();
 
     auto cleanup_runtime_contexts =
         [&](VisionPipelineRuntime& runtime,
@@ -7425,8 +6138,7 @@ void OpticsSystem::run_vision_frame(float frame_count, uint64_t frame_index,
                 return;
             }
 
-            if (runtime.source == VisionPipelineSource::EngineBuilt &&
-                (!runtime.engine_geometry_available ||
+            if ((!runtime.engine_geometry_available ||
                  (has_pending_screenshot(cam_handle) && !runtime.engine_geometry_ready))) return;
             active_contexts.insert(cam_handle);
             runtime.retained_contexts.erase(cam_handle);
@@ -7434,8 +6146,7 @@ void OpticsSystem::run_vision_frame(float frame_count, uint64_t frame_index,
             process_vision_actor_pick(cam_handle, camera, *locked.scene, frame_index);
             locked.scene = {};
             vision_phase.set("vision:lighting");
-            if (runtime.source == VisionPipelineSource::EngineBuilt &&
-                !sync_engine_vision_lighting(runtime, environment)) return;
+            if (!sync_engine_vision_lighting(runtime, environment)) return;
             try {
                 const bool denoise = camera.vision_denoise ||
                     Vision::vision_render_mode_uses_denoise(runtime.mode);
@@ -7525,8 +6236,7 @@ void OpticsSystem::run_vision_frame(float frame_count, uint64_t frame_index,
                     visionResolve.pushConsts.srcBufferIndex = vision_src_descriptor;
                     visionResolve.pushConsts.outputImage =
                         target.final_output.store_descriptor();
-                    visionResolve.pushConsts.exposure = runtime.source == VisionPipelineSource::EngineBuilt
-                        ? environment.exposure : 1.0f;
+                    visionResolve.pushConsts.exposure = environment.exposure;
                     visionResolve.pushConsts.diagnostic = diagnostic ? 1u : 0u;
 
                     // dispatch_extent replaces dispatch_groups
@@ -7644,135 +6354,6 @@ void OpticsSystem::run_vision_frame(float frame_count, uint64_t frame_index,
         }
     };
 
-#ifndef CORONA_VISION_IMPORT_DEMO
-    auto& seed_runtime = active_vision_runtime();
-    if (!seed_runtime.pipeline) return;
-
-    if (seed_runtime.source != VisionPipelineSource::EngineBuilt &&
-        !seed_runtime.scene_path.empty()) {
-        std::unordered_map<VisionPipelineKey,
-                           std::vector<RenderView>,
-                           VisionPipelineKeyHash>
-            camera_groups;
-
-        for (const auto& view : views) {
-            const auto key = make_vision_pipeline_key(seed_runtime.scene_path,
-                                                      view.vision_mode,
-                                                      seed_runtime.source);
-            camera_groups[key].push_back(view);
-        }
-
-        if (camera_groups.empty()) {
-            last_vision_runtime_group_signature_ = 0;
-            evict_idle_vision_runtimes(frame_index);
-            return;
-        }
-
-        last_vision_mode_conflict_signature_ = 0;
-        std::unordered_set<VisionPipelineRuntime*> active_runtimes;
-        std::unordered_set<VisionSceneResource*> active_scene_resources;
-        std::unordered_set<VisionSceneResource*> synced_external_live_resources;
-        std::vector<std::string> runtime_group_diagnostics;
-        std::size_t visible_camera_count = 0;
-        for (auto& [key, cameras] : camera_groups) {
-            auto* runtime = ensure_external_vision_runtime(key);
-            if (runtime == nullptr || !runtime->pipeline) {
-                continue;
-            }
-
-            runtime->last_used_frame = frame_index;
-            active_runtimes.insert(runtime);
-            visible_camera_count += cameras.size();
-            if (runtime->scene_resource) {
-                active_scene_resources.insert(runtime->scene_resource.get());
-            }
-
-            std::vector<std::uintptr_t> camera_handles;
-            camera_handles.reserve(cameras.size());
-            for (const auto& visible_camera : cameras) {
-                camera_handles.push_back(visible_camera.camera_handle);
-            }
-            std::sort(camera_handles.begin(), camera_handles.end());
-            std::string camera_list;
-            for (const auto camera_handle : camera_handles) {
-                if (!camera_list.empty()) {
-                    camera_list.push_back(',');
-                }
-                camera_list.append(std::to_string(camera_handle));
-            }
-            std::string diagnostic = "runtime={";
-            diagnostic.append(describe_vision_pipeline_key(key));
-            diagnostic.append("}, shared_scene={");
-            diagnostic.append(runtime->scene_resource
-                                  ? describe_vision_scene_resource_key(
-                                        runtime->scene_resource->key)
-                                  : "<none>");
-            diagnostic.append("}, camera_count=");
-            diagnostic.append(std::to_string(cameras.size()));
-            diagnostic.append(", cameras=[");
-            diagnostic.append(camera_list);
-            diagnostic.push_back(']');
-            runtime_group_diagnostics.push_back(std::move(diagnostic));
-
-            if (runtime->source == VisionPipelineSource::ExternalLive &&
-                runtime->scene_resource &&
-                synced_external_live_resources.insert(runtime->scene_resource.get()).second) {
-                sync_external_live_vision_transforms(*runtime);
-                // Mix engine-native (unbound) actors into the same external scene.
-                // Must run AFTER the bound-proxy sync so bound shapes are at their
-                // final indices and engine shapes append after them.
-                sync_engine_native_mixed_shapes(*runtime);
-            }
-            if (runtime->source == VisionPipelineSource::ExternalLive &&
-                runtime->scene_resource) {
-                if (!sync_shared_vision_scene(*runtime)) continue;
-            }
-
-            std::unordered_set<std::uintptr_t> active_contexts;
-            for (const auto& visible_camera : cameras) {
-                render_vision_camera(*runtime, visible_camera, active_contexts);
-            }
-            cleanup_runtime_contexts(*runtime, active_contexts);
-        }
-
-        std::sort(runtime_group_diagnostics.begin(), runtime_group_diagnostics.end());
-        std::string group_signature_source;
-        for (const auto& diagnostic : runtime_group_diagnostics) {
-            if (!group_signature_source.empty()) {
-                group_signature_source.push_back('|');
-            }
-            group_signature_source.append(diagnostic);
-        }
-        const auto group_signature = std::hash<std::string>{}(group_signature_source);
-        if (!runtime_group_diagnostics.empty() &&
-            group_signature != last_vision_runtime_group_signature_) {
-            last_vision_runtime_group_signature_ = group_signature;
-            CFW_LOG_INFO(
-                "OpticsSystem: external Vision runtime groups active_runtimes={}, "
-                "shared_scene_resources={}, visible_cameras={}",
-                active_runtimes.size(),
-                active_scene_resources.size(),
-                visible_camera_count);
-            for (const auto& diagnostic : runtime_group_diagnostics) {
-                CFW_LOG_INFO("OpticsSystem: external Vision runtime group {}", diagnostic);
-            }
-        }
-
-        const std::unordered_set<std::uintptr_t> no_active_contexts;
-        for (auto& [key, runtime] : vision_runtimes_) {
-            if (!runtime || active_runtimes.contains(runtime.get())) {
-                continue;
-            }
-            cleanup_runtime_contexts(*runtime, no_active_contexts);
-        }
-        evict_idle_vision_runtimes(frame_index);
-        return;
-    }
-#endif  // CORONA_VISION_IMPORT_DEMO
-
-    last_vision_runtime_group_signature_ = 0;
-
-#ifndef CORONA_VISION_IMPORT_DEMO
     const auto mode_selection = select_vision_render_mode(views);
     if (mode_selection.has_visible_camera) {
         if (mode_selection.conflict &&
@@ -7789,23 +6370,14 @@ void OpticsSystem::run_vision_frame(float frame_count, uint64_t frame_index,
         }
         apply_vision_render_mode(mode_selection.mode);
     }
-#endif
 
     auto& runtime = active_vision_runtime();
     auto& pipeline = runtime.pipeline;
     if (!pipeline) return;
 
-#ifndef CORONA_VISION_IMPORT_DEMO
-    if (mode_selection.has_visible_camera &&
-        runtime.source == VisionPipelineSource::EngineBuilt) {
+    if (mode_selection.has_visible_camera) {
         sync_vision_dynamic_scene(runtime);
-    } else if (mode_selection.has_visible_camera &&
-               runtime.source == VisionPipelineSource::ExternalLive) {
-        sync_external_live_vision_transforms(runtime);
-        sync_engine_native_mixed_shapes(runtime);
-        if (!sync_shared_vision_scene(runtime)) return;
     }
-#endif
 
     runtime.last_used_frame = frame_index;
     std::unordered_set<std::uintptr_t> active_contexts;
@@ -7817,66 +6389,12 @@ void OpticsSystem::run_vision_frame(float frame_count, uint64_t frame_index,
     evict_idle_vision_runtimes(frame_index);
 }
 
-void OpticsSystem::apply_pending_vision_scene_load() {
-    std::optional<VisionSceneLoadRequest> request;
-    {
-        std::lock_guard<std::mutex> lock(vision_scene_load_mutex_);
-        if (!pending_vision_scene_load_) return;
-        request.swap(pending_vision_scene_load_);
-    }
-
-    const auto mode_selection = select_visible_vision_render_mode([this](auto camera) { return has_pending_screenshot(camera); });
-    const auto requested_mode = mode_selection.has_visible_camera
-                                    ? mode_selection.mode
-                                    : current_vision_render_mode_;
-    if (!request->scene_json.empty()) {
-        if (load_external_vision_scene_from_json(*request, requested_mode, true)) {
-            vision_applied_signature_ = 0;
-            vision_pending_signature_ = 0;
-            vision_stable_frames_ = 0;
-            vision_rebuild_retries_ = 0;
-            CFW_LOG_INFO("OpticsSystem: embedded Vision scene loaded: {}",
-                         request->scene_key);
-        }
-        return;
-    }
-
-    const std::string& path = request->scene_path;
-    if (!path.empty()) {
-        if (load_external_vision_scene(path, requested_mode, std::nullopt, true)) {
-            const auto& runtime = active_vision_runtime();
-            vision_applied_signature_ = 0;
-            vision_pending_signature_ = 0;
-            vision_stable_frames_ = 0;
-            vision_rebuild_retries_ = 0;
-            CFW_LOG_INFO("OpticsSystem: {} Vision scene loaded: {}",
-                         runtime.source == VisionPipelineSource::ExternalLive
-                             ? "external_live"
-                             : "external",
-                         path);
-        }
-        return;
-    }
-
-    const auto& runtime = active_vision_runtime();
-    if (runtime.pipeline && runtime.source == VisionPipelineSource::EngineBuilt) {
-        // Empty path is a state request: leave ExternalFile mode and use the
-        // engine-built scene. If that state is already active, the normal
-        // dynamic signature sync below will rebuild only when scene data changed.
-        return;
-    }
-
-    (void)load_engine_built_vision_scene(requested_mode);
-}
 
 bool OpticsSystem::load_engine_built_vision_scene(CameraVisionRenderMode requested_mode) {
     auto previous_pipeline = vision::Global::instance().pipeline_shared();
     try {
-        const auto key = make_vision_pipeline_key(
-            "", requested_mode, VisionPipelineSource::EngineBuilt);
-        auto scene_resource = get_or_create_vision_scene_resource(
-            make_vision_scene_resource_key("", VisionPipelineSource::EngineBuilt),
-            "");
+        const auto key = make_vision_pipeline_key(requested_mode);
+        auto scene_resource = get_or_create_vision_scene_resource();
         auto pipeline = create_vision_pipeline(requested_mode, scene_resource);
         if (!pipeline) {
             CFW_LOG_ERROR("OpticsSystem: failed to recreate engine-built Vision pipeline");
@@ -7885,9 +6403,7 @@ bool OpticsSystem::load_engine_built_vision_scene(CameraVisionRenderMode request
         }
         bind_pipeline_scene_gpu_resource(*pipeline,
                                          *scene_resource,
-                                         VisionPipelineSource::EngineBuilt,
-                                         requested_mode,
-                                         "");
+                                         requested_mode);
         auto& scene = pipeline->scene();
         const auto build_signature = compute_vision_scene_signature();
         const auto build_result = Vision::build_vision_geometry(scene);
@@ -7907,8 +6423,6 @@ bool OpticsSystem::load_engine_built_vision_scene(CameraVisionRenderMode request
         activate_single_vision_runtime_key(key);
         auto& runtime = active_vision_runtime();
         runtime.reset_pipeline(std::move(pipeline),
-                               VisionPipelineSource::EngineBuilt,
-                               "",
                                requested_mode);
         runtime.pipeline->activate_global_context();
         current_vision_render_mode_ = requested_mode;
@@ -7945,7 +6459,7 @@ void OpticsSystem::apply_vision_render_mode(CameraVisionRenderMode mode) {
     }
 
     auto rekey_active_runtime = [&]() {
-        const auto key = make_vision_pipeline_key(runtime.scene_path, runtime.mode, runtime.source);
+        const auto key = make_vision_pipeline_key(runtime.mode);
         if (active_vision_runtime_key_ && *active_vision_runtime_key_ == key) {
             return;
         }
@@ -7972,7 +6486,7 @@ void OpticsSystem::apply_vision_render_mode(CameraVisionRenderMode mode) {
         return;
     }
 
-    if (runtime.scene_path.empty()) {
+    {
         // A different integrator needs a new renderer descriptor as well as new
         // base/view contexts. Rekeying the old runtime only changes its label.
         if ((mode == CameraVisionRenderMode::ReSTIR) !=
@@ -8009,80 +6523,9 @@ void OpticsSystem::apply_vision_render_mode(CameraVisionRenderMode mode) {
         return;
     }
 
-    const auto source_path = runtime.scene_path;
-    const auto source_type = runtime.source;
 
-    if (!load_external_vision_scene(source_path, mode, source_type)) {
-        CFW_LOG_WARNING(
-            "OpticsSystem: failed to switch external Vision scene '{}' to mode '{}'; "
-            "continuing with previous pipeline mode '{}'",
-            source_path,
-            std::string(Vision::vision_render_mode_name(mode)),
-            std::string(Vision::vision_render_mode_name(current_vision_render_mode_)));
-        return;
-    }
 }
 
-bool OpticsSystem::load_external_vision_scene(const std::string& scene_path,
-                                              CameraVisionRenderMode mode,
-                                              std::optional<VisionPipelineSource> source_override,
-                                              bool force_reload_scene_resource) {
-    vision::switch_profile::Scope profile{"runtime.load_scene", "scene"};
-    if (force_reload_scene_resource) {
-        SharedDataHub::instance().refresh_external_vision_binding_paths();
-    }
-    const auto source = source_override.value_or(
-        has_external_live_bindings_for_scene(scene_path)
-            ? VisionPipelineSource::ExternalLive
-            : VisionPipelineSource::ExternalFile);
-    const auto key = make_vision_pipeline_key(scene_path, mode, source);
-    auto* runtime = ensure_external_vision_runtime(key, force_reload_scene_resource);
-    if (runtime == nullptr || !runtime->pipeline) {
-        return false;
-    }
 
-    runtime->pipeline->activate_global_context();
-    if (active_vision_runtime_key_ && *active_vision_runtime_key_ != key &&
-        (mode == CameraVisionRenderMode::ReSTIR ||
-         current_vision_render_mode_ == CameraVisionRenderMode::ReSTIR)) {
-        runtime->pipeline->invalidate_all_view_contexts();
-        runtime->pipeline->invalidate();
-    }
-    active_vision_runtime_key_ = key;
-    current_vision_render_mode_ = mode;
-    CFW_LOG_INFO("OpticsSystem: active Vision runtime key ({})",
-                 describe_vision_pipeline_key(key));
-    return true;
-}
-
-bool OpticsSystem::load_external_vision_scene_from_json(const VisionSceneLoadRequest& request,
-                                                        CameraVisionRenderMode mode,
-                                                        bool force_reload_scene_resource) {
-    try {
-        Vision::VisionSceneSourceDesc desc;
-        desc.kind = Vision::VisionSceneSourceKind::Embedded;
-        desc.scene_json = request.scene_json;
-        const auto base = std::filesystem::absolute(request.base_dir.empty()
-            ? std::filesystem::current_path() : std::filesystem::u8path(request.base_dir)).lexically_normal();
-        const auto base_utf8 = base.generic_u8string();
-        desc.base_dir.assign(base_utf8.begin(), base_utf8.end());
-        const auto scene_key = request.scene_key.empty()
-            ? std::string("embedded_vision_") + std::to_string(std::hash<std::string>{}(request.scene_json))
-            : request.scene_key;
-        const auto source = request.external_live
-            ? VisionPipelineSource::ExternalLive : VisionPipelineSource::ExternalFile;
-        const auto key = make_vision_pipeline_key(
-            normalize_scene_path_key(scene_key, desc.base_dir), mode, source);
-        auto* runtime = load_vision_runtime_source(key, desc, force_reload_scene_resource);
-        if (!runtime) return false;
-        if (force_reload_scene_resource) SharedDataHub::instance().refresh_external_vision_binding_paths();
-        active_vision_runtime_key_ = key;
-        current_vision_render_mode_ = mode;
-        return true;
-    } catch (const std::exception& e) {
-        CFW_LOG_ERROR("OpticsSystem: Embedded Vision source invalid: {}", e.what());
-        return false;
-    }
-}
 
 }  // namespace Corona::Systems

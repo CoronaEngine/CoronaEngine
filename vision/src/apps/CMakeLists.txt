@@ -1,5 +1,2 @@
-add_subdirectory(vision-gui)
-add_subdirectory(vision-eval)
-add_subdirectory(precompute)
 add_subdirectory(material_viewer)
 add_subdirectory(sampler_viewer)

@@ -162,6 +162,7 @@ struct GeometryDevice {
     //   Vision 读取该副本；碰撞和光栅顶点缓冲直接使用 GPU 结果，
     //   不依赖该回读副本重新上传。光栅模式及非蒙皮几何此容器为空。
     bool is_skinned{false};
+    std::uint64_t skin_pose_revision = 0;
     std::shared_ptr<Resource::AnimationPlayer> animation_player{std::make_shared<Resource::AnimationPlayer>()};
     std::vector<std::vector<std::byte>> skinned_cpu_vertices;
 
@@ -289,20 +290,7 @@ struct ProfileDevice {
     std::uintptr_t geometry_handle{};
 };
 
-struct ExternalVisionBindingDevice {
-    bool enabled{false};
-    bool visible{true};
-    std::string source_path;
-    std::string shape_guid;
-    int shape_index{-1};
-    std::string json_path;
-    std::string shape_type;
-    std::string shape_identity_key;
-    std::string model_path;
-    // Runtime-only path context and derived identity; never persist the key.
-    std::string source_base_dir;
-    std::string source_path_key;
-};
+
 
 struct ActorDevice {
     std::vector<std::uintptr_t> profile_handles;
@@ -382,8 +370,6 @@ struct CameraDevice {
     std::string vision_relax_effective_settings{"{}"}; // Runtime feedback, not serialized.
     bool vision_accumulation{false};
     bool vision_stable_planes{true};
-    bool shadow_cascade_debug{false};
-    bool ssao_enabled{true};
     bool view_open{false};
     bool viewport_rect_active{false};
     int view_x{120};
@@ -495,8 +481,6 @@ enum class CameraStateUpdateField : std::uint32_t {
     RenderBackend = 1u << 3,
     ViewState = 1u << 4,
     VisionRenderMode = 1u << 5,
-    ShadowCascadeDebug = 1u << 6,
-    SsaoEnabled = 1u << 7,
     VisionDenoise = 1u << 8,
     VisionAccumulation = 1u << 9,
     VisionStablePlanes = 1u << 10,
@@ -540,8 +524,6 @@ struct CameraStateUpdateCommand {
     std::string vision_relax_settings{"{}"};
     bool vision_accumulation{false};
     bool vision_stable_planes{true};
-    bool shadow_cascade_debug{false};
-    bool ssao_enabled{true};
     bool view_open{false};
     int view_x{120};
     int view_y{120};
@@ -740,17 +722,10 @@ class SharedDataHub {
 
     // Runtime-only editor metadata keyed by native actor handle. Persisted state
     // remains in scene.ini; this cache only bridges Python proxy actors to native
-    // systems such as OpticsSystem/ExternalVisionSceneAdapter.
+    // systems such as OpticsSystem.
     void set_actor_guid(std::uintptr_t actor_handle, std::string actor_guid);
     [[nodiscard]] std::string actor_guid(std::uintptr_t actor_handle) const;
-    void set_external_vision_binding(std::uintptr_t actor_handle, ExternalVisionBindingDevice binding,
-                                     bool refresh_source_path = false);
     // Explicit scene reload also refreshes retained actors (e.g. directory links).
-    void refresh_external_vision_binding_paths();
-    void clear_external_vision_binding(std::uintptr_t actor_handle);
-    [[nodiscard]] std::optional<ExternalVisionBindingDevice> external_vision_binding(
-        std::uintptr_t actor_handle) const;
-    [[nodiscard]] bool has_external_vision_binding(std::uintptr_t actor_handle) const;
     void clear_actor_metadata(std::uintptr_t actor_handle);
 
     CameraStorage& camera_storage();
@@ -848,7 +823,6 @@ class SharedDataHub {
     ActorStorage actor_storage_;
     mutable std::mutex actor_metadata_mutex_;
     std::unordered_map<std::uintptr_t, std::string> actor_guids_;
-    std::unordered_map<std::uintptr_t, ExternalVisionBindingDevice> external_vision_bindings_;
     EnvironmentStorage environment_storage_;
     CameraStorage camera_storage_;
     mutable std::mutex camera_timing_mutex_;

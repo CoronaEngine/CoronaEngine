@@ -38,6 +38,11 @@ void IndirectDispatch::record(Horizon::CommandRecorder& recorder) const {
         append(buffer, 1, Horizon::DispatchBindingKind::StorageBuffer);
     for (const auto& image : images)
         append(image, 0, Horizon::DispatchBindingKind::StorageImage);
+    for (const auto& image : writable_images) {
+        dispatch.bindings.push_back({2, logical_binding, image,
+            Horizon::DispatchBindingKind::StorageImage, Horizon::AccessKind::ReadWrite});
+        dispatch.resource_uses.push_back({image, Horizon::AccessKind::ReadWrite});
+    }
     recorder.dispatch(std::move(dispatch));
 }
 
@@ -59,6 +64,7 @@ void IndirectRaster::record(Horizon::CommandRecorder& recorder) const {
         else if(command.op==Horizon::CommandOp::DrawIndexedIndirect) {
             auto draw=std::move(command.payload.draw_indexed_indirect);
             for(const auto& image:images)draw.resource_uses.push_back({image,Horizon::AccessKind::Read});
+            for(const auto& buffer:buffers)draw.resource_uses.push_back({buffer,Horizon::AccessKind::Read});
             recorder.draw_indexed_indirect({command.resources.at(0).handle},
                 {command.resources.at(1).handle},{command.resources.at(2).handle},std::move(draw));
         } else throw std::logic_error("Unexpected command in indirect raster pass");

@@ -4,7 +4,6 @@ Use the same camera pose, resolution, exposure and tone mapper for both images.
 The reference mask excludes genuinely dark geometry. Rejecting valid coverage
 history at subpixel grille holes produces a measurable excess of dark pixels.
 
-Reproduction trajectory: tools/trajectories/kitchen_radio_rotation.json.
 Example (1280x720, frame 80, PT reference at the saved frame's camera pose):
   --candidate frame_frame_0080.png --reference reference80.png
   --roi 520,394,550,418 --output coverage-check.json

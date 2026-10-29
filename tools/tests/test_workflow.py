@@ -45,7 +45,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(target_family_for_target("CoronaEngine"), "core")
         self.assertEqual(target_family_for_target("corona_engine"), "examples")
         self.assertEqual(target_family_for_target("corona_resource_tests"), "tests")
-        self.assertEqual(target_family_for_target("vision-gui"), "vision")
+        self.assertEqual(target_family_for_target("vision-base"), "vision")
         self.assertEqual(target_family_for_target("test-render_graph"), "vision-tests")
         self.assertEqual(target_family_for_target("vision-denoiser-oidn"), "vision-oidn")
         self.assertEqual(target_family_for_targets(["corona_engine"]), "examples")

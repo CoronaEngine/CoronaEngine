@@ -7,7 +7,6 @@
 #include <cstdint>
 
 namespace Corona {
-struct ExternalVisionBindingDevice;
 }
 
 // Forward declarations
@@ -32,16 +31,7 @@ struct VisionBuildResult {
     }
 };
 
-struct AddVisionShapeResult {
-    bool added{false};
-    int shape_index{-1};
-    unsigned int material_topology_before{0};
-    unsigned int material_topology_after{0};
-    int instance_count{0};
-    int candidate_count{0};
-    int skipped_no_data{0};
-    int invalid_data{0};
-};
+
 
 // Stages all CPU data, then replaces the Vision scene's existing shapes from the
 // CoronaEngine SharedDataHub (all enabled SceneDevice → actors → geometry).
@@ -67,11 +57,6 @@ VisionBuildResult build_vision_geometry(::vision::Scene& scene);
 // staged instances (including ready objects when other objects are pending).
 VisionBuildResult inspect_vision_geometry();
 
-AddVisionShapeResult add_vision_shape_for_actor(
-    ::vision::Scene& scene,
-    std::uintptr_t actor_handle,
-    const Corona::ExternalVisionBindingDevice& binding);
 
-bool remove_vision_shape_for_actor(::vision::Scene& scene, unsigned int shape_index);
 
 }  // namespace Corona::Systems::Vision

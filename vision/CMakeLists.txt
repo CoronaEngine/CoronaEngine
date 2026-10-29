@@ -5,7 +5,7 @@
 # This file is meant to be included via `add_subdirectory(vision)` from the
 # CoronaEngine root as a required renderer module. It does not issue its own
 # `project()` call or override global output directories. Third-party
-# dependencies (assimp, glfw, cxxopts, Horizon) are resolved at the root level
+# dependencies (glfw, Horizon) are resolved at the root level
 # through Conan package targets (see cmake/corona_third_party.cmake) and reused here.
 # ==============================================================================
 
@@ -29,7 +29,7 @@ add_compile_definitions(_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING)
 # collapses the argument list and parses the property name `LIBRARY_OUTPUT_DIRECTORY`
 # as if its value were the literal string `RUNTIME_OUTPUT_DIRECTORY`. That produces
 # DLLs under `build/vision/.../RUNTIME_OUTPUT_DIRECTORY/<Config>/...`, while
-# `vision-gui.exe` (hardcoded to `${CMAKE_BINARY_DIR}/bin/`) cannot find them at runtime.
+# Vision test executables (hardcoded to `${CMAKE_BINARY_DIR}/bin/`) cannot find them at runtime.
 #
 # Force the same `build/bin` / `build/lib` layout used by the standalone Vision
 # project. Because `set()` here is plain (no PARENT_SCOPE / CACHE), the override is

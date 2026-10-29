@@ -20,7 +20,7 @@ include_guard(GLOBAL)
 #   corona_add_example(
 #       NAME SceneExample
 #       SOURCES scene_example.cpp
-#       LIBRARIES corona::resource::manager corona::resource::scene
+#       LIBRARIES corona::resource::manager
 #       NEEDS_TBB ON
 #       NEEDS_ASSIMP ON
 #   )

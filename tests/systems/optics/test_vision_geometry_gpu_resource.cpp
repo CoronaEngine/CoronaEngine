@@ -1,7 +1,6 @@
 #include <corona/systems/optics/vision_scene_resource.h>
 
 #include "base/import/parameter_set.h"
-#include "base/import/importer.h"
 #include "base/import/project_desc.h"
 #include "base/mgr/geometry.h"
 #include "base/mgr/global.h"
@@ -23,7 +22,6 @@
 #include <type_traits>
 #include <utility>
 
-#include "test_external_live_aabb.h"
 
 namespace {
 
@@ -178,33 +176,6 @@ void material_lut_can_detect_the_active_bindless_owner() {
                   const vision::RegistrableTexture3D*>);
 }
 
-void importer_accepts_shared_scene_resource_options() {
-    static_assert(std::is_same_v<
-                  decltype(static_cast<vision::SP<vision::Pipeline> (*)(
-                               const vision::fs::path&,
-                               const vision::ImportSceneOptions&)>(
-                      &vision::Importer::import_scene)),
-                  vision::SP<vision::Pipeline> (*)(
-                      const vision::fs::path&,
-                      const vision::ImportSceneOptions&)>);
-    vision::ImportSceneOptions options;
-    auto* fake_scene = reinterpret_cast<vision::SceneData*>(0x5100);
-    auto* fake_gpu_resource =
-        reinterpret_cast<vision::GeometryGpuResource*>(0x5200);
-    auto shared_scene = std::shared_ptr<vision::SceneData>(
-        fake_scene,
-        [](vision::SceneData*) {});
-    auto shared_gpu_resource = std::shared_ptr<vision::GeometryGpuResource>(
-        fake_gpu_resource,
-        [](vision::GeometryGpuResource*) {});
-    options.scene_data = shared_scene;
-    options.geometry_gpu_resource = shared_gpu_resource;
-
-    expect(options.scene_data == shared_scene,
-           "Importer options should carry a shared logical SceneData resource");
-    expect(options.geometry_gpu_resource == shared_gpu_resource,
-           "Importer options should carry a shared scene GPU resource");
-}
 
 void scene_gpu_context_routes_material_lut_to_scene_bindless() {
     try {
@@ -457,12 +428,12 @@ void two_pipelines_consume_one_shared_logical_scene() {
 }  // namespace
 
 int main(int argc, char** argv) {
+    ocarina::DynamicModule::clear_search_path();
     if (argc == 2 && std::string_view{argv[1]} == "--world-bounds-gpu") {
         world_bounds_gpu_regressions();
         world_bounds_multiview_area_regression();
         return 0;
     }
-    external_live_aabb_regressions();
     geometry_gpu_resource_is_external_ownership_boundary();
     geometry_requires_explicit_command_stream_for_gpu_updates();
     scene_tables_accept_explicit_scene_gpu_bindless();
@@ -470,7 +441,6 @@ int main(int argc, char** argv) {
     svgf_helpers_accept_explicit_scene_resources();
     image_pool_accepts_explicit_scene_gpu_bindless();
     material_lut_can_detect_the_active_bindless_owner();
-    importer_accepts_shared_scene_resource_options();
     scene_gpu_context_routes_material_lut_to_scene_bindless();
     geometry_defaults_to_unbound_gpu_resource();
     geometry_medium_state_is_scene_owned();

@@ -50,8 +50,6 @@ enum VisionStatusCode : uint32_t {
 };
 
 enum VisionScenePacketFormat : uint32_t {
-	/// Direct pass-through of Vision's existing project JSON.
-	VisionScenePacketFormat_ProjectJsonUtf8 = 1,
 	/// Binary snapshot emitted by CoronaEngine's bridge layer.
 	VisionScenePacketFormat_CoronaEngineSnapshotV1 = 2,
 };

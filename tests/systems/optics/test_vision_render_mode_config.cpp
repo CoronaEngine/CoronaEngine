@@ -1,6 +1,6 @@
 #include "vision/vision_render_mode_config.h"
 
-#include "base/import/json_util.h"
+#include "../../support/vision_test_config.h"
 #include "base/import/project_desc.h"
 
 #include <cmath>
@@ -31,29 +31,6 @@ void expect_near(float actual, float expected, std::string_view message) {
     }
 }
 
-std::optional<std::filesystem::path> find_external_ssat_scene() {
-    const std::filesystem::path relative =
-        std::filesystem::path{"test_vision"} / "render_scene" / "cbox-lf" /
-        "vision_scene.json";
-    const std::filesystem::path fixed =
-        std::filesystem::path{"D:/Documents/GitHub/CoronaExample"} / relative;
-    if (std::filesystem::exists(fixed)) {
-        return fixed;
-    }
-
-    for (auto cursor = std::filesystem::current_path(); !cursor.empty();) {
-        const auto candidate = cursor.parent_path() / "CoronaExample" / relative;
-        if (std::filesystem::exists(candidate)) {
-            return candidate;
-        }
-        const auto parent = cursor.parent_path();
-        if (parent == cursor) {
-            break;
-        }
-        cursor = parent;
-    }
-    return std::nullopt;
-}
 
 vision::DataWrap make_base_scene() {
     return vision::DataWrap{
@@ -125,7 +102,7 @@ void restir_selects_rt_and_preserves_scene_parameters() {
     data["pipeline"]["param"]["frame_buffer"]["param"]["accumulation"] = true;
     Corona::Systems::Vision::configure_vision_scene_for_mode(data, CameraVisionRenderMode::ReSTIR);
     vision::ProjectDesc desc;
-    desc.init(data);
+    Corona::Tests::configure_vision_test_project(desc, data);
     expect(desc.renderer_desc.integrator_desc.sub_type == "rt", "ReSTIR must instantiate rt");
     expect(desc.renderer_desc.integrator_desc.denoiser_desc.sub_type == "svgf" &&
                !desc.output_desc.denoise, "ReSTIR must not implicitly enable SVGF");
@@ -301,19 +278,14 @@ void mode_names_and_denoise_flags_are_stable() {
            "ssat should enable denoise");
 }
 
-void cbox_lf_scene_supports_pt_and_ssat_mode_import() {
-    const auto scene_path = find_external_ssat_scene();
-    if (!scene_path) {
-        std::cout << "SKIP: cbox-lf external Vision scene sample not found\n";
-        return;
-    }
-
-    auto pt_data = vision::create_json_from_file(*scene_path);
+void lightfield_settings_survive_mode_changes() {
+    auto fixture = make_base_scene();
+    fixture["render"]["integrator"]["param"]["denoiser"]["param"]["angular_samples"] = 7;
+    auto pt_data = fixture;
     Corona::Systems::Vision::configure_vision_scene_for_mode(
         pt_data, CameraVisionRenderMode::PathTracing);
     vision::ProjectDesc pt_desc;
-    pt_desc.scene_path = scene_path->parent_path();
-    pt_desc.init(pt_data);
+    Corona::Tests::configure_vision_test_project(pt_desc, pt_data);
 
     expect(!pt_desc.output_desc.denoise,
            "PT algorithm configuration must not implicitly request denoise");
@@ -322,12 +294,11 @@ void cbox_lf_scene_supports_pt_and_ssat_mode_import() {
     expect(pt_desc.renderer_desc.integrator_desc.denoiser_desc.sub_type == "svgf",
            "PT import from cbox-lf should not keep the SSAT denoiser descriptor");
 
-    auto ssat_data = vision::create_json_from_file(*scene_path);
+    auto ssat_data = fixture;
     Corona::Systems::Vision::configure_vision_scene_for_mode(
         ssat_data, CameraVisionRenderMode::SSAT);
     vision::ProjectDesc ssat_desc;
-    ssat_desc.scene_path = scene_path->parent_path();
-    ssat_desc.init(ssat_data);
+    Corona::Tests::configure_vision_test_project(ssat_desc, ssat_data);
 
     expect(ssat_desc.output_desc.denoise,
            "SSAT import from cbox-lf should enable realtime denoise");
@@ -369,6 +340,6 @@ int main() {
     missing_blocks_are_created_for_requested_mode();
     ssat_defaults_from_cbox_lf_are_applied_to_minimal_scene();
     ssat_defaults_do_not_override_existing_values();
-    cbox_lf_scene_supports_pt_and_ssat_mode_import();
+    lightfield_settings_survive_mode_changes();
     return 0;
 }

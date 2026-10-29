@@ -1,8 +1,7 @@
-"""Dev verification orchestrator — one-click script to run build, test, format, and regression checks.
+"""Dev verification orchestrator — one-click script to run build, test, and format checks.
 
 Usage:
     python dev_verify.py                        # run all stages
-    python dev_verify.py --stage regression     # regression only
     python dev_verify.py --stage test format    # multiple stages
     python dev_verify.py --stage build --config Release
 """
@@ -16,7 +15,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-STAGES = ["build", "test", "format", "regression"]
+STAGES = ["build", "test", "format"]
 
 # Enable OpenCV EXR support for regression comparison
 os.environ["OPENCV_IO_ENABLE_OPENEXR"] = "1"
@@ -123,14 +122,8 @@ def main() -> None:
                         help="Stages to run (default: all)")
     parser.add_argument("--config", type=str, default="Release",
                         help="Build configuration (default: Release)")
-    parser.add_argument("--target", type=str, default="vision-gui",
-                        help="Build target (default: vision-gui)")
-    parser.add_argument("--spp", type=int, default=64,
-                        help="SPP for regression rendering (default: 64)")
-    parser.add_argument("--threshold", type=float, default=0.04,
-                        help="DS8 RMSE threshold for regression (default: 0.04)")
-    parser.add_argument("--scenes", nargs="*", default=None,
-                        help="Specific scenes for regression")
+    parser.add_argument("--target", type=str, default="vision-base",
+                        help="Build target (default: vision-base)")
     parser.add_argument("--stop-on-fail", action="store_true",
                         help="Stop at first failing stage")
     args = parser.parse_args()
@@ -160,45 +153,6 @@ def main() -> None:
         elif stage == "format":
             ok = run_script("format_check.py", [], "format check")
 
-        elif stage == "regression":
-            # Step 1: Generate golden images (skip if existing)
-            golden_args = [
-                "--build-dir", build_dir_str,
-                "--spp", str(args.spp),
-            ]
-            if args.scenes:
-                golden_args += ["--scenes"] + args.scenes
-
-            ok = run_script("generate_golden.py", golden_args,
-                            "regression: ensure golden images")
-            if not ok and args.stop_on_fail:
-                results[stage] = False
-                break
-
-            # Step 2: Render test images
-            render_args = [
-                "--build-dir", build_dir_str,
-                "--spp", str(args.spp),
-                "--output-name", "test_image.exr",
-            ]
-            if args.scenes:
-                render_args += ["--scenes"] + args.scenes
-
-            ok = run_script("regression_render.py", render_args,
-                            "regression: render test images")
-            if not ok and args.stop_on_fail:
-                results[stage] = False
-                break
-
-            # Step 3: Compare
-            compare_args = [
-                "--threshold", str(args.threshold),
-            ]
-            if args.scenes:
-                compare_args += ["--scenes"] + args.scenes
-
-            ok = run_script("regression_compare.py", compare_args,
-                            "regression: compare images")
         else:
             continue
 
