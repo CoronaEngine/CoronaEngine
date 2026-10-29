@@ -9,9 +9,10 @@ from workflow import CONFIGURATIONS, DEFAULT_CONFIGURATION, CommandError, export
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 LOCAL_RECIPES = (
-    "conan/recipes/ktm", "conan/recipes/pfr", "conan/recipes/slang",
-    "conan/recipes/vulkan-memory-allocator", "conan/recipes/astc-encoder",
-    "conan/recipes/cef-binary", "conan/recipes/ffmpeg",
+    "build_tools/conan/recipes/ktm", "build_tools/conan/recipes/pfr",
+    "build_tools/conan/recipes/slang", "build_tools/conan/recipes/vulkan-memory-allocator",
+    "build_tools/conan/recipes/astc-encoder", "build_tools/conan/recipes/cef-binary",
+    "build_tools/conan/recipes/ffmpeg",
 )
 RECIPE_TOGGLE_ENV = "CORONA_CONAN_EXPORT_LOCAL_RECIPES"
 

@@ -29,6 +29,7 @@ CoronaEngine 的构建工具目录。**引擎侧参与配置、构建、依赖�
 | CMake 模块：选项、工具链、依赖解析、编译配置、资源部署 | `cmake/*.cmake` |
 | CMake 直接调用的 Python 辅助脚本 | `scripts/*.py` |
 | Conan 依赖安装编排与本地 recipe 导出 | `workflow.py`、`dev.py` |
+| Conan profile 与本地 recipe 定义 | `conan/profiles/`、`conan/recipes/` |
 | Horizon 源码工作区（`.workspace/Horizon`）管理 | `horizon_workspace.py` |
 | Conan 本地缓存维护 | `conan_cache.py` |
 | 发布制品打包 | `pack.py` |
@@ -43,6 +44,7 @@ CoronaEngine 的构建工具目录。**引擎侧参与配置、构建、依赖�
 | `conan_cache.py` | Conan 本地缓存 `list` / `update` / `remove` / `clear` | 人手执行 |
 | `horizon_workspace.py` | 克隆、校验、同步、检视 `.workspace/Horizon`（锁定提交见 `.workspace/horizon.lock.json`） | `dev.py` |
 | `pack.py` | 把编辑器工程打成 `tar.gz`（默认输出到 `CoronaEditor/editor/`） | 人手执行 |
+| `conan/profiles/windows-msvc-<config>` | 每套配置一个 Conan profile，`windows-msvc-base` 提供 MSVC 探测与公共 `[conf]` | `workflow.py`
 | `cmake/corona_options.cmake` | 项目级 option 与缓存变量（`BUILD_CORONA_*`、`VISION_*` 等） | 根 `CMakeLists.txt` |
 | `cmake/corona_dev_bootstrap.cmake` | 创建/复用 Conda 环境，生成 Conan 工具链并注入 CMake | 根 `CMakeLists.txt`（最先） |
 | `cmake/corona_python.cmake` | 定位 Conda Python，校验/安装 `requirements.txt` 依赖 | 根 `CMakeLists.txt` |
@@ -144,8 +146,9 @@ CoronaEngine 的构建工具目录。**引擎侧参与配置、构建、依赖�
    self.requires("pkg/1.2.3", transitive_headers=True, transitive_libs=True)
    ```
 
-2. 如果这个包需要由仓库自己打包（本地 recipe）：新建 `conan/recipes/<pkg>/conanfile.py`，
-   并把 `"conan/recipes/<pkg>"` 加入 `build_tools/dev.py` 的 `LOCAL_RECIPES` 元组。
+2. 如果这个包需要由仓库自己打包（本地 recipe）：新建 `build_tools/conan/recipes/<pkg>/conanfile.py`，
+   并把 `"build_tools/conan/recipes/<pkg>"` 加入 `build_tools/dev.py` 与 `build_tools/conan_cache.py`
+   的 `LOCAL_RECIPES` 元组。
 3. 在 `build_tools/cmake/corona_third_party.cmake` 中消费它：
 
    ```cmake

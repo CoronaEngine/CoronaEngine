@@ -24,13 +24,13 @@ from workflow import (
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_TARGET = "corona_engine"
 LOCAL_RECIPES = (
-    "conan/recipes/ktm",
-    "conan/recipes/pfr",
-    "conan/recipes/slang",
-    "conan/recipes/vulkan-memory-allocator",
-    "conan/recipes/astc-encoder",
-    "conan/recipes/cef-binary",
-    "conan/recipes/ffmpeg",
+    "build_tools/conan/recipes/ktm",
+    "build_tools/conan/recipes/pfr",
+    "build_tools/conan/recipes/slang",
+    "build_tools/conan/recipes/vulkan-memory-allocator",
+    "build_tools/conan/recipes/astc-encoder",
+    "build_tools/conan/recipes/cef-binary",
+    "build_tools/conan/recipes/ffmpeg",
 )
 RECIPE_TOGGLE_ENV = "CORONA_CONAN_EXPORT_LOCAL_RECIPES"
 TARGET_FAMILY_OPTIONS: dict[str, tuple[str, ...]] = {

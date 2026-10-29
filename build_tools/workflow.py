@@ -61,7 +61,7 @@ def generators_dir(
 
 
 def profile_path(repo_root: Path, configuration: str) -> Path:
-    return repo_root / "conan" / "profiles" / f"windows-msvc-{configuration_slug(configuration)}"
+    return repo_root / "build_tools" / "conan" / "profiles" / f"windows-msvc-{configuration_slug(configuration)}"
 
 
 def run_command(
