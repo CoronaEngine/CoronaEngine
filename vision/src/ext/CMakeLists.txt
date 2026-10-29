@@ -7,9 +7,9 @@
 # Conan package targets (see cmake/corona_third_party.cmake). This file now
 # only:
 #   - asserts the expected upstream targets exist;
-#   - defines small INTERFACE wrappers (`vision-ext`, `vision-ext-xatlas`) so the
+#   - defines an INTERFACE wrapper (`vision-ext`) so the
 #     rest of the Vision tree can keep linking against stable names;
-#   - keeps Vision-local in-tree libraries (xatlas, vision-window-* in ./window).
+#   - keeps Vision-local window libraries (vision-window-* in ./window).
 # ==============================================================================
 
 if (MSVC)
@@ -48,10 +48,6 @@ endif ()
 # ------------------------------------------------------------------------------
 # In-tree dependencies kept inside Vision
 # ------------------------------------------------------------------------------
-add_subdirectory(xatlas)
-add_library(vision-ext-xatlas INTERFACE)
-target_link_libraries(vision-ext-xatlas INTERFACE xatlas)
-
 # Vision keeps its own imgui+glad+ImGuizmo bundle (target: vision-window-imgui).
 # That bundle is intentionally separate from CoronaEngine's global `imgui`
 # target so version drift between the two trees does not break either side.
