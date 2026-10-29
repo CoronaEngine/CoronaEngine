@@ -7,7 +7,7 @@ import sys
 import tempfile
 import unittest
 
-from tools.build.msvc_showincludes import dependency_prefixes, normalize_line
+from build_tools.scripts.msvc_showincludes import dependency_prefixes, normalize_line
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -62,7 +62,7 @@ class ClionMsvcEncodingTests(unittest.TestCase):
                 "cmake_minimum_required(VERSION 3.29)\n"
                 "project(HeaderDependencyProbe LANGUAGES CXX)\n"
                 f'set(Python_EXECUTABLE "{Path(sys.executable).as_posix()}")\n'
-                f'include("{ROOT.as_posix()}/cmake/corona_msvc_dependencies.cmake")\n'
+                f'include("{ROOT.as_posix()}/build_tools/cmake/corona_msvc_dependencies.cmake")\n'
                 "add_executable(probe main.cpp)\n",
                 encoding="utf-8",
             )

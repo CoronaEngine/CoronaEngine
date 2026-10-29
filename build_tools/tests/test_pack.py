@@ -1,13 +1,13 @@
 import unittest
 from pathlib import Path
 
-from tools.pack import should_exclude
+from build_tools.pack import should_exclude
 
 
 class PackPathBoundaryTests(unittest.TestCase):
-    def test_pack_tool_has_a_tools_canonical_owner(self):
+    def test_pack_tool_has_a_build_tools_canonical_owner(self):
         repo_root = Path(__file__).resolve().parents[2]
-        canonical = repo_root / "tools" / "pack.py"
+        canonical = repo_root / "build_tools" / "pack.py"
 
         self.assertTrue(canonical.is_file())
         self.assertEqual(Path(should_exclude.__code__.co_filename).resolve(), canonical)

@@ -109,7 +109,7 @@ function(corona_install_corona_editor target_name core_target)
         return()
     endif()
 
-    set(_CORONA_PY_SCRIPT "${PROJECT_SOURCE_DIR}/tools/build/editor_copy_and_build.py")
+    set(_CORONA_PY_SCRIPT "${PROJECT_SOURCE_DIR}/build_tools/scripts/editor_copy_and_build.py")
     if(NOT CORONA_NODE_DIR OR NOT IS_DIRECTORY "${CORONA_NODE_DIR}")
         message(FATAL_ERROR "[Corona:Editor] Conda Node.js is unavailable; re-run CMake configure.")
     endif()

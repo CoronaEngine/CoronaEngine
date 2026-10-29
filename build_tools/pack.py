@@ -5,11 +5,11 @@ CabbageEditor 项目打包脚本
 将项目打包为 tar.gz 格式，排除运行时生成内容、环境依赖、缓存等非必要文件。
 默认包含 InnerAgentWorkflow 子仓库代码。
 
-用法:
-    python pack.py                     # 默认打包
-    python pack.py --output my.tar.gz  # 指定输出文件名
-    python pack.py --exclude-workflow  # 排除子仓库
-    python pack.py --dry-run           # 仅预览文件列表
+用法（在仓库根执行）:
+    python build_tools/pack.py                     # 默认打包
+    python build_tools/pack.py --output my.tar.gz  # 指定输出文件名
+    python build_tools/pack.py --exclude-workflow  # 排除子仓库
+    python build_tools/pack.py --dry-run           # 仅预览文件列表
 """
 
 from __future__ import annotations
@@ -256,10 +256,10 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 示例:
-  python pack.py                        # 默认打包
-  python pack.py -o release.tar.gz      # 指定输出文件名
-  python pack.py --exclude-workflow     # 排除 InnerAgentWorkflow 子仓库
-  python pack.py --dry-run              # 预览将要打包的文件
+  python build_tools/pack.py                        # 默认打包
+  python build_tools/pack.py -o release.tar.gz      # 指定输出文件名
+  python build_tools/pack.py --exclude-workflow     # 排除 InnerAgentWorkflow 子仓库
+  python build_tools/pack.py --dry-run              # 预览将要打包的文件
         """,
     )
 
@@ -319,7 +319,7 @@ def main():
         print(f"   压缩大小: {format_size(archive_size)}")
     else:
         print("\n💡 使用 --dry-run 模式，未创建实际文件")
-        print("   如需打包，请运行: python pack.py")
+        print("   如需打包，请运行: python build_tools/pack.py")
 
     print()
 

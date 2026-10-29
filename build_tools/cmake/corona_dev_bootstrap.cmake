@@ -101,7 +101,7 @@ function(corona_dev_bootstrap)
         message(STATUS "Running CoronaEngine dependency bootstrap...")
         execute_process(
             COMMAND "${_corona_conda}" run --name "${CORONA_CONDA_ENV}" --no-capture-output
-                    python tools/dev.py _bootstrap
+                    python build_tools/dev.py _bootstrap
                     --configuration "${CORONA_DEV_CONFIGURATION}"
                     --target-family "${CORONA_DEV_TARGET_FAMILY}"
             WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"

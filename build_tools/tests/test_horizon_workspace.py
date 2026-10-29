@@ -1,4 +1,4 @@
-"""Tests for the Horizon workspace handling in ``tools/horizon_workspace.py``.
+"""Tests for the Horizon workspace handling in ``build_tools/horizon_workspace.py``.
 
 The workspace is treated as an ordinary Git clone: builds report its state and
 always proceed, and the lock file is a hand-edited starting point rather than an

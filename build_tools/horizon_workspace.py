@@ -37,7 +37,7 @@ from workflow import run_command, safe_remove
 COMMIT_PATTERN = re.compile(r"^[0-9a-fA-F]{40}$")
 LOCK_RELATIVE_PATH = Path(".workspace") / "horizon.lock.json"
 WORKTREE_RELATIVE_PATH = Path(".workspace") / "Horizon"
-SYNC_COMMAND = "python tools/dev.py horizon-sync"
+SYNC_COMMAND = "python build_tools/dev.py horizon-sync"
 PULL_COMMAND = "git -C .workspace/Horizon pull"
 LOCK_HINT = f"edit {LOCK_RELATIVE_PATH.as_posix()} and run '{SYNC_COMMAND}'"
 
@@ -559,7 +559,7 @@ def sync_workspace(repo_root: Path) -> HorizonStatus:
     print(f"[INFO] Horizon moved: {status.head} -> {moved.head}")
     _settle_on_branch(moved)
     print(
-        "[INFO] Horizon sources changed; run 'python tools/dev.py configure' or 'build' before "
+        "[INFO] Horizon sources changed; run 'python build_tools/dev.py configure' or 'build' before "
         "compiling (build-fast does not refresh dependencies)."
     )
     result = inspect_workspace(repo_root)

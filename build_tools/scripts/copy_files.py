@@ -3,8 +3,8 @@
 
 """
 将多个文件复制到目标目录，若内容相同则跳过（减少无意义写入）。
-用法：
-    python copy_files.py --dest <DEST_DIR> [--list deps.txt] <FILE1> <FILE2> ...
+用法（通常由 CMake 以绝对路径调用，也可手动执行）：
+    python build_tools/scripts/copy_files.py --dest <DEST_DIR> [--list deps.txt] <FILE1> <FILE2> ...
 - 目标目录会自动创建
 - 已存在且相同的文件将跳过复制
 - 日志为英文
