@@ -46,6 +46,13 @@ if (_vision_mutable_glfw AND WIN32)
 endif ()
 
 # ------------------------------------------------------------------------------
+# nlohmann_json (Conan package target at engine root)
+# ------------------------------------------------------------------------------
+if (NOT TARGET nlohmann_json::nlohmann_json)
+    message(FATAL_ERROR "[vision/ext] Expected target 'nlohmann_json::nlohmann_json' from CoronaEngine Conan dependencies.")
+endif ()
+
+# ------------------------------------------------------------------------------
 # In-tree dependencies kept inside Vision
 # ------------------------------------------------------------------------------
 # Vision keeps its own imgui+glad+ImGuizmo bundle (target: vision-window-imgui).
@@ -55,3 +62,4 @@ add_subdirectory(window)
 
 # Aggregated INTERFACE consumed by vision-base etc.
 add_library(vision-ext INTERFACE)
+target_link_libraries(vision-ext INTERFACE nlohmann_json::nlohmann_json)
