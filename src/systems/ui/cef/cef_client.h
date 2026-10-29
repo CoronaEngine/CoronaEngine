@@ -202,10 +202,14 @@ class OffscreenCefClient : public CefClient,
 // ============================================================================
 
 /**
- * @brief 初始化 CEF 框架
+ * @brief 初始化 CEF 框架；C++ 固定使用单进程及主线程消息循环。
  * @return 成功返回 true
  */
 bool initialize_cef();
+
+// Called by the engine main loop. The initialization thread also owns the CEF UI
+// loop; calls made before initialization or from another thread are ignored.
+void do_cef_message_loop_work();
 
 /**
  * @brief 关闭 CEF 框架

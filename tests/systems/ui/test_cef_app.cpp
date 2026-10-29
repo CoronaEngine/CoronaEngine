@@ -16,6 +16,8 @@
 #include "cef/cef_client.h"
 #include "cef/cef_paths.h"
 
+int run_cef_lifecycle_test(bool close_before_created);
+
 namespace {
 
 void require(bool condition, std::string_view message) {
@@ -35,7 +37,7 @@ void test_message_router_config() {
 // Switches this app appends. `allow-file-access` and `disable-web-security` used to sit here;
 // both were removed deliberately (see expect_exact_switch_set and the P0-2 record in
 // docs/development/cef-ui-risk-optimization-tasks.md).
-constexpr std::array<std::string_view, 13> kCommonSwitches{
+constexpr std::array<std::string_view, 11> kCommonSwitches{
     // Load-bearing. Do not drop these without an equivalent replacement:
     "allow-file-access-from-files",  // the Vue bundle is an ES-module graph served over file://
     "no-sandbox",                    // the CEF package ships no cef_sandbox.lib, so no sandbox is compiled in
@@ -48,8 +50,6 @@ constexpr std::array<std::string_view, 13> kCommonSwitches{
     "disable-component-update",
     "disable-background-networking",
     "disable-accelerated-video-decode",
-    "renderer-process-limit",
-    "process-per-site",
     "js-flags",
 };
 
@@ -58,8 +58,6 @@ void expect_common_switches(CefRefPtr<CefCommandLine> command_line) {
         require(command_line->HasSwitch(std::string(switch_name)), switch_name);
     }
 
-    require(command_line->GetSwitchValue("renderer-process-limit").ToString() == "1",
-            "renderer-process-limit must cap the renderer count at 1");
     require(command_line->GetSwitchValue("js-flags").ToString().find("--max-old-space-size=") == 0,
             "js-flags must set the V8 old-space ceiling");
 }
@@ -68,10 +66,14 @@ void expect_common_switches(CefRefPtr<CefCommandLine> command_line) {
 // accidental removal can slip through unnoticed. `disable-web-security` in particular must never
 // come back without a deliberate, documented reason: it disables the same-origin policy outright,
 // and the app does not need it (all native calls go through the cefQuery manifest contract).
-void expect_exact_switch_set(CefRefPtr<CefCommandLine> command_line, bool gpu_enabled) {
+void expect_exact_switch_set(CefRefPtr<CefCommandLine> command_line, bool gpu_enabled,
+                            bool browser_process = false) {
     std::set<std::string> expected;
     for (const auto switch_name : kCommonSwitches) {
         expected.insert(std::string(switch_name));
+    }
+    if (browser_process) {
+        expected.insert("single-process");
     }
     if (gpu_enabled) {
         expected.insert("enable-gpu-rasterization");
@@ -137,7 +139,7 @@ void test_app_contract() {
     } else {
         expect_gpu_disabled_switches(command_line);
     }
-    expect_exact_switch_set(command_line, Corona::Systems::UI::cef_gpu_enabled());
+    expect_exact_switch_set(command_line, Corona::Systems::UI::cef_gpu_enabled(), true);
 
     auto forced_accelerated = CefCommandLine::CreateCommandLine();
     forced_accelerated->InitFromString("corona_cef_app_tests.exe");
@@ -154,39 +156,25 @@ void test_app_contract() {
     expect_exact_switch_set(forced_software, false);
 }
 
-void test_process_per_site_toggle() {
-    _putenv_s("CORONA_CEF_PROCESS_PER_SITE", "");
-    require(Corona::Systems::UI::cef_process_per_site_enabled(),
-            "process-per-site must default to enabled");
-
-    auto default_line = CefCommandLine::CreateCommandLine();
-    default_line->InitFromString("corona_cef_app_tests.exe");
-    Corona::Systems::UI::append_cef_command_line_switches(default_line, false);
-    require(default_line->HasSwitch("process-per-site"),
-            "process-per-site must be appended by default");
-
-    for (const char* disabled : {"0", "false", "off", "no", "FALSE", "Off"}) {
-        _putenv_s("CORONA_CEF_PROCESS_PER_SITE", disabled);
-        require(!Corona::Systems::UI::cef_process_per_site_enabled(), disabled);
-
-        auto disabled_line = CefCommandLine::CreateCommandLine();
-        disabled_line->InitFromString("corona_cef_app_tests.exe");
-        Corona::Systems::UI::append_cef_command_line_switches(disabled_line, false);
-        require(!disabled_line->HasSwitch("process-per-site"),
-                "process-per-site must be omitted when disabled");
+void test_cpp_single_process_policy() {
+    using namespace Corona::Systems::UI;
+    auto app = create_cef_app();
+    for (const char* input : {"corona_cef_app_tests.exe",
+                             "corona_cef_app_tests.exe --single-process=false"}) {
+        auto browser_line = CefCommandLine::CreateCommandLine();
+        browser_line->InitFromString(input);
+        app->OnBeforeCommandLineProcessing({}, browser_line);
+        require(browser_line->HasSwitch("single-process"),
+                "C++ must always configure single-process mode without an external opt-in");
+        require(browser_line->GetSwitchValue("single-process").empty(),
+                "external values must not replace the C++ process policy");
+        expect_exact_switch_set(browser_line, cef_gpu_enabled(), true);
     }
 
-    for (const char* enabled : {"1", "true", "on", "yes"}) {
-        _putenv_s("CORONA_CEF_PROCESS_PER_SITE", enabled);
-        require(Corona::Systems::UI::cef_process_per_site_enabled(), enabled);
-    }
-
-    _putenv_s("CORONA_CEF_PROCESS_PER_SITE", "");
-    auto restored_line = CefCommandLine::CreateCommandLine();
-    restored_line->InitFromString("corona_cef_app_tests.exe");
-    Corona::Systems::UI::append_cef_command_line_switches(restored_line, false);
-    require(restored_line->HasSwitch("process-per-site"),
-            "process-per-site must come back after clearing the env var");
+    auto child_line = CefCommandLine::CreateCommandLine();
+    child_line->InitFromString("corona_cef_app_tests.exe --type=renderer");
+    app->OnBeforeCommandLineProcessing("renderer", child_line);
+    require(!child_line->HasSwitch("single-process"), "do not inject browser process mode into children");
 }
 
 void test_popup_wiring() {
@@ -223,10 +211,7 @@ void test_popup_wiring() {
     handler->SetTab(nullptr);
 }
 
-void test_browser_process_dispatch(int argc, char* argv[]) {
-    const auto exit_code =
-        Corona::Systems::UI::execute_cef_subprocess_if_needed(argc, argv);
-    require(!exit_code.has_value(), "browser process was treated as a subprocess");
+void test_browser_process_dispatch() {
     require(Corona::Systems::UI::was_cef_process_dispatch_completed(),
             "browser process dispatch state was not recorded");
 }
@@ -374,10 +359,19 @@ void test_cef_unicode_paths() {
 }
 
 int main(int argc, char* argv[]) {
-    test_browser_process_dispatch(argc, argv);
+    if (const auto exit_code = Corona::Systems::UI::execute_cef_subprocess_if_needed(argc, argv)) {
+        return *exit_code;
+    }
+    test_browser_process_dispatch();
+    const auto has_argument = [&](std::string_view argument) {
+        return std::find(argv + 1, argv + argc, argument) != argv + argc;
+    };
+    if (has_argument("--cef-lifecycle-test")) {
+        return run_cef_lifecycle_test(has_argument("--close-before-created"));
+    }
     test_popup_wiring();
     test_message_router_config();
-    test_process_per_site_toggle();
+    test_cpp_single_process_policy();
     test_app_contract();
     test_windowless_frame_rate_resolution();
     test_remote_debugging_port_policy();
