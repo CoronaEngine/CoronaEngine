@@ -323,7 +323,7 @@ void StablePlanes::compile() noexcept {
             BSDFSample sample{sampled_wavelengths()};
             scene().materials().dispatch(it.material_id(), [&](const Material *material) {
                 auto bsdf = material->create_evaluator(it, sampled_wavelengths());
-                near_specular = Bool(material->enable_delta()) && bsdf.flag() == SurfaceData::NearSpec && depth < std::max(1u, max_recursion_) - 1u;
+                near_specular = Bool(material->enable_delta()) && !bsdf.eval_stable_lobes(it.wo).has_stochastic_remainder && depth < std::max(1u, max_recursion_) - 1u;
                 $if(near_specular) { sample = bsdf.sample_delta(it.wo, sampler); };
             });
             $if(near_specular) {

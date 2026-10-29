@@ -161,7 +161,10 @@ void check_compound_material(Pipeline &pipeline) {
             auto guide = evaluator.sample_lobe(it.wo, sampler, false);
             SampledSpectrum dn{swl.dimension()}, sn{swl.dimension()}, dg{swl.dimension()}, sg{swl.dimension()};
             evaluator.denoiser_factors(it.wo, dn, sn);
-            evaluator.denoiser_factors(normalize(make_float3(1.f, 0.f, .1f)), dg, sg);
+            // Principled computes layer attenuation when building its lobes.
+            it.wo = normalize(make_float3(1.f, 0.f, .1f));
+            auto grazing = material->create_evaluator(it, swl);
+            grazing.denoiser_factors(it.wo, dg, sg);
             output.write(dispatch_id(), make_float4(select(guide.valid(), 1.f, 0.f), sn.average(), sg.average(), dg.average() / dn.average()));
         });
     };
@@ -185,7 +188,7 @@ void check_scene_signals(bool restir, bool lifecycle = false) {
     auto scene = DataWrap::parse(R"({
       "scene": {
         "camera":{"type":"thin_lens","param":{"fov_y":45,"lens_radius":0,"filter":{"type":"box"},"transform":{"type":"look_at","param":{"position":[0,0,0],"target_pos":[0,0,-1],"up":[0,1,0]}}}},
-        "materials":[{"type":"substrate","name":"receiver","param":{"color":[0.7,0.2,0.1],"spec":[0.1,0.4,0.8],"roughness":0.3}}],
+        "materials":[{"type":"principled_bsdf","name":"receiver","param":{"color":[0.7,0.2,0.1],"roughness":0.3,"subsurface_weight":0,"spec_tint":[0.1,0.4,0.8]}}],
         "shapes":[{"type":"model","param":{"fn":"receiver.obj","material":"receiver","normalize_to_unit_bounds":false}}],
         "lights":[{"type":"spherical","param":{"color":{"channels":"xyz","node":{"type":"number","param":{"value":[1,1,1]}}},"scale":1}}]
       },
@@ -211,16 +214,15 @@ void check_scene_signals(bool restir, bool lifecycle = false) {
         if (scenario >= 10u) {
             auto &material = scene["scene"]["materials"][0];
             if (scenario == 11u) {
-                material = DataWrap::parse(R"({"type":"plastic","name":"receiver","param":{"color":[0.7,0.2,0.1],"ior":1.5}})");
+                material = DataWrap::parse(R"({"type":"principled_bsdf","name":"receiver","param":{"color":[0.7,0.2,0.1],"ior":1.5,"subsurface_weight":0}})");
             }
-            material["param"]["roughness"] = .0001f;
-            material["param"]["remapping_roughness"] = false;
+            material["param"]["roughness"] = 0.01f;
         }
         if (scenario == 5u || scenario == 6u || scenario == 9u) {
             scene["scene"]["materials"] = DataWrap::parse(R"([
-                {"name":"glass","type":"glass","param":{"material_name":"BK7","roughness":0.001,"remapping_roughness":false}},
-                {"name":"red","type":"diffuse","param":{"color":[0.8,0.1,0.1]}},
-                {"name":"blue","type":"diffuse","param":{"color":[0.1,0.1,0.8]}}])");
+                {"name":"glass","type":"principled_bsdf","param":{"roughness":0.03162277660168379,"subsurface_weight":0,"transmission_weight":1,"ior":1.5,"color":[1,1,1]}},
+                {"name":"red","type":"principled_bsdf","param":{"color":[0.8,0.1,0.1],"subsurface_weight":0,"roughness":1,"spec_tint":[0,0,0]}},
+                {"name":"blue","type":"principled_bsdf","param":{"color":[0.1,0.1,0.8],"subsurface_weight":0,"roughness":1,"spec_tint":[0,0,0]}}])");
             scene["scene"]["shapes"] = DataWrap::parse(R"([
                 {"type":"model","param":{"fn":"receiver.obj","material":"glass","normalize_to_unit_bounds":false}},
                 {"type":"model","param":{"fn":"back.obj","material":"red","normalize_to_unit_bounds":false}},

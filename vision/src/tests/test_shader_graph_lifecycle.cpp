@@ -27,22 +27,22 @@ bool expect(bool condition, const char *message) {
     return true;
 }
 
-MaterialDesc make_diffuse_desc() {
+MaterialDesc make_principled_desc() {
     MaterialDesc desc;
     desc.init(ParameterSet(DataWrap::parse(R"json(
 {
-    "type": "diffuse",
-    "name": "LifecycleDiffuse",
+    "type": "principled_bsdf",
+    "name": "LifecyclePrincipled",
     "param": {
         "color": { "node": "albedo", "channels": "xyz" },
-        "sigma": { "node": "sigma_node", "channels": "x" }
+        "roughness": { "node": "roughness_node", "channels": "x" }
     },
     "node_tab": {
         "albedo": {
             "type": "number",
             "param": { "value": [0.7, 0.6, 0.5] }
         },
-        "sigma_node": {
+        "roughness_node": {
             "type": "number",
             "param": { "value": 0.0 }
         }
@@ -104,12 +104,15 @@ bool test_root_shader_graph_resolves_blueprint() {
 }
 
 bool test_material_root_and_attached_lifecycle() {
-    MaterialDesc desc = make_diffuse_desc();
+    MaterialDesc desc = make_principled_desc();
 
     auto root = Material::create_root(desc);
     auto child = Node::create_shared<Material>(desc);
 
     bool ok = true;
+    MaterialDesc default_desc;
+    default_desc.init(ParameterSet(DataWrap::object({{"param", DataWrap::object()}})));
+    ok &= expect(default_desc.sub_type == "principled_bsdf", "omitted material type should default to Principled");
     ok &= expect(root->is_root(), "root material should be marked as root");
     ok &= expect(root->has_graph(), "root material should have a graph");
     ok &= expect(root->graph_resolved(), "root material should be resolved after create_root");

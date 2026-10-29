@@ -47,7 +47,7 @@ void check_glass_transport_energy(vision::Pipeline &pipeline, unsigned recursion
             $if(depth < total_depth) {
                 pipeline.scene().materials().dispatch(it.material_id(), [&](const Material *material) {
                     auto evaluator = material->create_evaluator(it, env.sampled_wavelengths());
-                    near_specular = Bool(material->enable_delta()) && evaluator.flag() == SurfaceData::NearSpec && depth + 1u < recursion;
+                    near_specular = Bool(material->enable_delta()) && !evaluator.eval_stable_lobes(it.wo).has_stochastic_remainder && depth + 1u < recursion;
                     $if(near_specular) { bs = evaluator.sample_delta(it.wo, sampler); };
                 });
             };
