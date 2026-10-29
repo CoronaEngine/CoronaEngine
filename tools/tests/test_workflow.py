@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import json
+from dataclasses import replace
 import stat
 import sys
 import tempfile
@@ -9,7 +9,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from horizon_workspace import load_lock
+from source_workspaces import HORIZON
 from dev import conan_options, target_family_for_target, target_family_for_targets
 from workflow import (
     DEFAULT_TARGET_FAMILY,
@@ -87,19 +87,12 @@ class WorkflowTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 safe_remove(root, root)
 
-    def test_horizon_lock_requires_full_commit(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            lock_file = Path(directory) / "horizon.lock.json"
-            lock_file.write_text(json.dumps({
-                "schema_version": 1,
-                "url": "https://github.com/CoronaEngine/Horizon.git",
-                "ref": "conan-migration",
-                "commit": "a" * 40,
-            }), encoding="utf-8")
-            self.assertEqual(load_lock(lock_file).commit, "a" * 40)
-            lock_file.write_text("{}", encoding="utf-8")
-            with self.assertRaises(RuntimeError):
-                load_lock(lock_file)
+    def test_source_baseline_requires_full_commit(self) -> None:
+        self.assertEqual(replace(HORIZON, commit="a" * 40).commit, "a" * 40)
+        with self.assertRaises(ValueError):
+            replace(HORIZON, commit="short")
+        with self.assertRaises(ValueError):
+            replace(HORIZON, directory=Path("../outside"))
 
 
 if __name__ == "__main__":

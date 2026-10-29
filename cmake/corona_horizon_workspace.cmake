@@ -1,7 +1,7 @@
 include_guard(GLOBAL)
 
 function(corona_add_horizon_workspace)
-    set(_corona_horizon_source "${CMAKE_SOURCE_DIR}/.workspace/Horizon")
+    set(_corona_horizon_source "${CMAKE_SOURCE_DIR}/Horizon")
     if(NOT EXISTS "${_corona_horizon_source}/CMakeLists.txt")
         message(FATAL_ERROR
             "Horizon workspace was not prepared at ${_corona_horizon_source}. "
