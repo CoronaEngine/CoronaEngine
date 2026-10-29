@@ -39,10 +39,7 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
 
-# Bridge legacy Vision option names to the new CoronaEngine-controlled options.
-# Vision sub-CMake scripts still test these legacy names; aliasing here means
-# we do not have to mass-rewrite the deeper tree.
-set(OIDN_ON           ${VISION_BUILD_OIDN}  CACHE INTERNAL "Vision OIDN toggle (alias of VISION_BUILD_OIDN)")
+# Bridge the legacy Vision test option to the CoronaEngine-controlled option.
 set(OCARINA_BUILD_TESTS ${VISION_BUILD_TESTS} CACHE INTERNAL "Vision test toggle (alias of VISION_BUILD_TESTS)")
 
 # Allow Vision sources to find their own headers via `src/...`.
@@ -64,6 +61,5 @@ endfunction()
 message(STATUS "[Vision] Integrating Vulkan compute renderer")
 message(STATUS "[Vision] VISION_BUILD_APPS  = ${VISION_BUILD_APPS}")
 message(STATUS "[Vision] VISION_BUILD_TESTS = ${VISION_BUILD_TESTS}")
-message(STATUS "[Vision] VISION_BUILD_OIDN  = ${VISION_BUILD_OIDN}")
 
 add_subdirectory(src)

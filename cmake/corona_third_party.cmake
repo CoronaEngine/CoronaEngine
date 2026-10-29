@@ -167,10 +167,6 @@ if(NOT TARGET glfw)
     endif()
 endif()
 
-if(VISION_BUILD_OIDN)
-    find_package(OpenImageDenoise CONFIG REQUIRED)
-endif()
-
 if(MSVC)
     foreach(_corona_charset_target Helicon Horizon)
         corona_strip_msvc_charset_interface(${_corona_charset_target})

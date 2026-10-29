@@ -20,8 +20,8 @@ function(corona_dev_bootstrap)
     endif()
 
     set_property(CACHE CORONA_DEV_TARGET_FAMILY PROPERTY STRINGS
-        core examples tests vision vision-tests vision-oidn)
-    set(_corona_target_families core examples tests vision vision-tests vision-oidn)
+        core examples tests vision vision-tests)
+    set(_corona_target_families core examples tests vision vision-tests)
     list(FIND _corona_target_families "${CORONA_DEV_TARGET_FAMILY}" _corona_target_family_index)
     if(_corona_target_family_index EQUAL -1)
         message(FATAL_ERROR

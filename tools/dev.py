@@ -36,27 +36,23 @@ RECIPE_TOGGLE_ENV = "CORONA_CONAN_EXPORT_LOCAL_RECIPES"
 TARGET_FAMILY_OPTIONS: dict[str, tuple[str, ...]] = {
     "core": (
         "&:with_examples=False", "&:with_tests=False",
-        "&:with_vision_tests=False", "&:with_oidn=False",
+        "&:with_vision_tests=False",
     ),
     "examples": (
         "&:with_examples=True", "&:with_tests=False",
-        "&:with_vision_tests=False", "&:with_oidn=False",
+        "&:with_vision_tests=False",
     ),
     "tests": (
         "&:with_examples=False", "&:with_tests=True",
-        "&:with_vision_tests=False", "&:with_oidn=False",
+        "&:with_vision_tests=False",
     ),
     "vision": (
         "&:with_examples=False", "&:with_tests=False",
-        "&:with_vision_tests=False", "&:with_oidn=False",
+        "&:with_vision_tests=False",
     ),
     "vision-tests": (
         "&:with_examples=False", "&:with_tests=True",
-        "&:with_vision_tests=True", "&:with_oidn=False",
-    ),
-    "vision-oidn": (
-        "&:with_examples=False", "&:with_tests=False",
-        "&:with_vision_tests=False", "&:with_oidn=True",
+        "&:with_vision_tests=True",
     ),
 }
 VISION_TEST_TARGETS = {
@@ -75,8 +71,6 @@ def target_family_for_target(target: str) -> str:
     lowered = target.lower()
     if lowered in {"all", "corona_engine"}:
         return "examples"
-    if "oidn" in lowered:
-        return "vision-oidn"
     if target.startswith("test-") or target.startswith("vision-test") or target in VISION_TEST_TARGETS:
         return "vision-tests"
     if target.startswith("vision-"):

@@ -17,7 +17,6 @@ class CoronaEngineConan(ConanFile):
         "tests",
         "vision",
         "vision-tests",
-        "vision-oidn",
     )
 
     options = {
@@ -26,7 +25,6 @@ class CoronaEngineConan(ConanFile):
         "with_examples": [True, False],
         "with_tests": [True, False],
         "with_vision_tests": [True, False],
-        "with_oidn": [True, False],
         "with_cef": [True, False],
     }
 
@@ -36,7 +34,6 @@ class CoronaEngineConan(ConanFile):
         "with_examples": True,
         "with_tests": False,
         "with_vision_tests": False,
-        "with_oidn": False,
         "with_cef": True,
         "sdl/*:shared": False,
         "glfw/*:shared": False,
@@ -96,8 +93,6 @@ class CoronaEngineConan(ConanFile):
 
         self.requires("cxxopts/3.2.0", transitive_headers=True)
         self.requires("glfw/3.4", transitive_headers=True, transitive_libs=True)
-        if bool(self.options.with_oidn):
-            self.requires("openimagedenoise/2.3.3", transitive_headers=True, transitive_libs=True)
 
     def generate(self):
         deps = CMakeDeps(self)
@@ -114,7 +109,6 @@ class CoronaEngineConan(ConanFile):
         variables["BUILD_CORONA_EXAMPLES"] = bool(self.options.with_examples)
         variables["BUILD_CORONA_TESTING"] = bool(self.options.with_tests)
         variables["VISION_BUILD_TESTS"] = bool(self.options.with_vision_tests)
-        variables["VISION_BUILD_OIDN"] = bool(self.options.with_oidn)
         variables["CORONA_ENABLE_CEF"] = bool(self.options.with_cef)
 
         if bool(self.options.with_cef):

@@ -2,14 +2,13 @@
 # Vision external dependency glue
 #
 # Vision was originally a stand-alone project that pulled dependencies such as
-# glfw / oidn as git submodules under this directory. After integration into
+# glfw as git submodules under this directory. After integration into
 # CoronaEngine those dependencies are resolved once at the engine root via
 # Conan package targets (see cmake/corona_third_party.cmake). This file now
 # only:
 #   - asserts the expected upstream targets exist;
-#   - defines small INTERFACE wrappers (`vision-ext`,
-#     `vision-ext-oidn`, `vision-ext-xatlas`) so the rest of the Vision tree can
-#     keep linking against stable names;
+#   - defines small INTERFACE wrappers (`vision-ext`, `vision-ext-xatlas`) so the
+#     rest of the Vision tree can keep linking against stable names;
 #   - keeps Vision-local in-tree libraries (xatlas, vision-window-* in ./window).
 # ==============================================================================
 
@@ -44,28 +43,6 @@ if (_vision_mutable_glfw AND WIN32)
     target_compile_definitions(glfw PRIVATE
             _CRT_SECURE_NO_WARNINGS
             _CRT_NONSTDC_NO_DEPRECATE)
-endif ()
-
-# ------------------------------------------------------------------------------
-# OIDN (optional Conan package target at engine root, gated by VISION_BUILD_OIDN)
-# ------------------------------------------------------------------------------
-if (VISION_BUILD_OIDN)
-    if (NOT TARGET OpenImageDenoise)
-        message(FATAL_ERROR "[vision/ext] VISION_BUILD_OIDN=ON but target 'OpenImageDenoise' not found.")
-    endif ()
-
-    foreach (_oidn_tgt
-            OpenImageDenoise
-            OpenImageDenoise_core
-            OpenImageDenoise_device_cpu)
-        if (TARGET ${_oidn_tgt})
-            set_target_properties(${_oidn_tgt} PROPERTIES
-                    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin/)
-        endif ()
-    endforeach ()
-
-    add_library(vision-ext-oidn INTERFACE)
-    target_link_libraries(vision-ext-oidn INTERFACE OpenImageDenoise)
 endif ()
 
 # ------------------------------------------------------------------------------

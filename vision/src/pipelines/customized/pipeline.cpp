@@ -21,7 +21,6 @@ public:
     }
 
     void init_postprocessor(const DenoiserDesc &desc) override {
-        // Offline denoise disabled - normal/albedo computed from visibility buffer on-the-fly
         postprocessor_.set_tone_mapper(renderer_.frame_buffer()->tone_mapper());
     }
 

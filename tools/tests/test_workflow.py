@@ -41,18 +41,17 @@ class WorkflowTests(unittest.TestCase):
             target_family_slug("everything")
 
     def test_target_family_mapping_and_options(self) -> None:
-        self.assertEqual(TARGET_FAMILIES, ("core", "examples", "tests", "vision", "vision-tests", "vision-oidn"))
+        self.assertEqual(TARGET_FAMILIES, ("core", "examples", "tests", "vision", "vision-tests"))
         self.assertEqual(target_family_for_target("CoronaEngine"), "core")
         self.assertEqual(target_family_for_target("corona_engine"), "examples")
         self.assertEqual(target_family_for_target("corona_resource_tests"), "tests")
         self.assertEqual(target_family_for_target("vision-base"), "vision")
         self.assertEqual(target_family_for_target("test-render_graph"), "vision-tests")
-        self.assertEqual(target_family_for_target("vision-denoiser-oidn"), "vision-oidn")
+        self.assertEqual(target_family_for_target("vision-denoiser-SVGF"), "vision")
         self.assertEqual(target_family_for_targets(["corona_engine"]), "examples")
         with self.assertRaises(ValueError):
             target_family_for_targets(["corona_engine", "CoronaEngine"])
         self.assertIn("&:with_vision_tests=True", conan_options("vision-tests"))
-        self.assertIn("&:with_oidn=True", conan_options("vision-oidn"))
 
     def test_cmake_bracket_handles_embedded_delimiter(self) -> None:
         self.assertEqual(_cmake_bracket("a]]b"), "[=[a]]b]=]")
