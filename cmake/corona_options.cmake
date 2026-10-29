@@ -50,8 +50,7 @@ set(CORONA_LOCK_TIMEOUT_MS "5000"
 # Vision is a required part of every engine build.
 # Vulkan and Slang requirements are validated by the Ocarina target.
 # ------------------------------------------------------------------------------
-# Standalone apps and additional tests remain optional.
-option(VISION_BUILD_APPS    "Build Vision material and sampler viewers" ON)
+# Additional tests remain optional.
 option(VISION_BUILD_TESTS   "Build Vision test executables"                       OFF)
 option(VISION_UNITY_BUILD   "Enable unity build for Vision plugin sources"        OFF)
 option(VISION_INTERACTIVE_AUX_WORK "Enable optional non-render work in Vision interactive mode" ON)
@@ -62,5 +61,4 @@ message(STATUS "[Options] BUILD_CORONA_RUNTIME                    = ${BUILD_CORO
 message(STATUS "[Options] BUILD_CORONA_TESTING                    = ${BUILD_CORONA_TESTING}")
 message(STATUS "[Options] BUILD_CORONA_EXAMPLES                   = ${BUILD_CORONA_EXAMPLES}")
 message(STATUS "[Options] CORONA_BUILD_HARDWARE                   = ${CORONA_BUILD_HARDWARE}")
-message(STATUS "[Options] VISION_BUILD_APPS                       = ${VISION_BUILD_APPS}")
 message(STATUS "[Options] VISION_BUILD_TESTS                      = ${VISION_BUILD_TESTS}")
