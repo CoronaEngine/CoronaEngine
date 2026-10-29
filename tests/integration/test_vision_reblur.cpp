@@ -5,7 +5,7 @@
 #include "render_core/denoiser/ReBLUR/utils.h"
 #include "rhi/context.h"
 #include "rhi/stats.h"
-#include "base/import/importer.h"
+#include "../support/vision_test_scene.h"
 #include "base/integral/integrator.h"
 #include "base/mgr/pipeline.h"
 #include "base/sampler.h"
@@ -963,9 +963,8 @@ void check_scene_signals() {
         integrator["param"]["mis_mode"] = scenario >= 8u ? 2u : 0u;
         integrator["param"]["direct"]["open"] = direct_on;
         integrator["param"]["indirect"]["open"] = scenario != 4u;
-        { std::ofstream file(fixture / "scene.json"); file << scene.dump(2); }
         Global::instance().set_scene_path(fixture);
-        auto pipeline = Importer::import_scene(fixture / "scene.json"); pipelines.push_back(pipeline);
+        auto pipeline = Corona::Tests::make_vision_test_pipeline(scene, fixture); pipelines.push_back(pipeline);
         auto *illumination = dynamic_cast<IlluminationIntegrator *>(pipeline->renderer().integrator().get());
         expect(illumination && illumination->denoiser()->requires_lobe_signals(), "explicit REBLUR must load the real plugin");
         illumination->set_denoise_enabled(false);

@@ -1407,6 +1407,7 @@ void MechanicsSystem::update_skinned_geometry(float dt) {
         std::uintptr_t transform{};
         std::uint64_t ik_revision{};
         bool pose_ready{};
+        std::uint64_t pose_revision{};
         std::vector<Resource::IkChain> chains;
         std::vector<std::array<float, 16>> locals, finals;
         std::vector<GpuSkinningPipeline::Request> requests;
@@ -1778,6 +1779,8 @@ void MechanicsSystem::update_skinned_geometry(float dt) {
                 }
                 job.collision_sources.push_back({output->second.output, segment.vertex_base,
                                                 segment.vertex_count, segment.source_transform, output->second.pose_revision});
+                job.pose_revision ^= output->second.pose_revision + 0x9e3779b97f4a7c15ULL +
+                    (job.pose_revision<<6) + (job.pose_revision>>2);
                 const auto matrix = make_fmat4x4_colmajor(segment.source_transform);
                 // Transform the GPU-reduced source box, never scan skinned CPU positions.
                 for (int corner = 0; corner < 8; ++corner) {
@@ -1810,6 +1813,7 @@ void MechanicsSystem::update_skinned_geometry(float dt) {
                 geometry->skinned_cpu_vertices = vision_readback
                     ? std::move(job.blobs) : std::vector<std::vector<std::byte>>{};
                 geometry->skinned_aabb_valid = job.bounds_valid;
+                geometry->skin_pose_revision = job.pose_revision;
                 if (job.bounds_valid) {
                     geometry->skinned_aabb_min = job.bounds_min;
                     geometry->skinned_aabb_max = job.bounds_max;

@@ -61,6 +61,8 @@ inline std::shared_ptr<const Corona::Materials::Principled> principled(const Jso
     auto& surface=result->surface;
     color("base_color",surface.base_color);
     color("emission",surface.emissive);
+    if (data.contains("normal")) validate_expression(data["normal"]);
+    if (data.contains("opacity")) validate_expression(data["opacity"]);
     surface.metallic=scalar("metallic",0.f);
     surface.roughness=scalar("roughness",.5f);
     surface.ior=scalar("ior",1.5f);

@@ -119,7 +119,7 @@ def renderer_gpu_processes(watched_pids=()):
         if len(row) != 2 or not row[0].strip().isdigit():
             raise RuntimeError("GPU process telemetry unavailable: " + repr(row))
         pid, name = int(row[0]), row[1].strip()
-        if pid in watched_pids or PureWindowsPath(name).name.lower() in ("corona_engine.exe", "vision-eval.exe"):
+        if pid in watched_pids or PureWindowsPath(name).name.lower() == "corona_engine.exe":
             processes[pid] = dict(pid=pid, executable=name)
     return list(processes.values())
 

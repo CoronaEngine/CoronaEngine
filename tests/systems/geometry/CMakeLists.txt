@@ -23,6 +23,7 @@ add_executable(corona_model_node_pick_tests test_model_node_pick.cpp)
 target_include_directories(corona_model_node_pick_tests PRIVATE
     ${PROJECT_SOURCE_DIR}/include
     ${PROJECT_SOURCE_DIR}/src/systems/optics)
+target_link_libraries(corona_model_node_pick_tests PRIVATE corona::resource::manager)
 add_test(NAME GeometryModelNodePickTests COMMAND corona_model_node_pick_tests)
 add_executable(corona_model_node_geometry_tests test_model_node_geometry.cpp)
 target_include_directories(corona_model_node_geometry_tests PRIVATE ${PROJECT_SOURCE_DIR}/include)

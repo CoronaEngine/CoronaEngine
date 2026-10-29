@@ -1,4 +1,5 @@
 #include "geometry_draw_buffers.h"
+#include "geometry_upload_batch.h"
 #include <corona/systems/geometry/model_node_import.h>
 /// @file geometry_mesh_builder.cpp
 /// @brief 从 Resource::Scene 构建 GPU MeshDevice 数组的单一实现。
@@ -81,12 +82,13 @@ Horizon::HardwareImage make_geometry_texture(uint32_t width,
 
 bool upload_geometry_texture(Horizon::HardwareImage& texture,
                              std::span<const std::byte> bytes,
-                             const char* label) {
+                             const char* label, GeometryDetail::UploadBatch& uploads) {
     if (!texture || bytes.empty()) {
         CFW_LOG_WARNING("[GeometryMeshBuilder] Texture upload skipped (label={}, valid={}, bytes={})",
                         label, static_cast<bool>(texture), bytes.size_bytes());
         return false;
     }
+    Horizon::HardwareBuffer staging;
     try {
         // Horizon 移除了 HardwareImage::upload()：改为 staging buffer + copy_from()。
         Horizon::HardwareBufferDesc staging_desc;
@@ -94,25 +96,22 @@ bool upload_geometry_texture(Horizon::HardwareImage& texture,
         staging_desc.element_size = 1;
         staging_desc.usage = Horizon::BufferUsage_TransferSrc;
         staging_desc.cpu_access = Horizon::CpuAccessMode::Write;
-        const Horizon::HardwareBuffer staging(staging_desc, bytes);
-
-        Horizon::HardwareExecutor executor;
-        const auto receipt = executor.stream()
-            << texture.copy_from(staging)
-            << Horizon::commit();
-        // staging 是局部量，必须等 GPU 用完再析构。
-        executor.wait_idle(receipt);
-        return true;
+        staging = Horizon::HardwareBuffer(staging_desc, bytes);
     } catch (const std::exception& exc) {
         CFW_LOG_WARNING("[GeometryMeshBuilder] Texture upload failed (label={}, error={})",
                         label, exc.what());
         return false;
     }
+    // A batch flush also contains vertex/index uploads. Propagate submission or
+    // completion errors so a partially uploaded mesh is never published ready.
+    uploads.copy_image(staging, texture, bytes.size_bytes());
+    return true;
 }
 
 // Cache colour/data views separately, but share MR/AO and repeated materials.
 const SceneGpuTextureCache::Entry& load_material_image(
-    SceneGpuTextureCache& cache, std::uint64_t id, bool srgb) {
+    SceneGpuTextureCache& cache, std::uint64_t id, bool srgb,
+    GeometryDetail::UploadBatch& uploads) {
     auto& entries = srgb ? cache.entries : cache.linear_entries;
     if (auto found = entries.find(id); found != entries.end()) return found->second;
     SceneGpuTextureCache::Entry entry;
@@ -148,7 +147,7 @@ const SceneGpuTextureCache::Entry& load_material_image(
         if (!bytes.empty()) {
             entry.image = make_geometry_texture(width, height, format,
                 srgb ? "geometry.material.srgb" : "geometry.material.linear");
-            if (upload_geometry_texture(entry.image, bytes, "material")) {
+            if (upload_geometry_texture(entry.image, bytes, "material", uploads)) {
                 entry.valid = true;
                 entry.gpu_bytes = gpu_texture_bytes(format, width, height);
                 entry.mem = std::make_shared<Memory::GpuMemToken>(Memory::ResKind::Texture, entry.gpu_bytes);
@@ -163,7 +162,8 @@ const SceneGpuTextureCache::Entry& load_material_image(
 }
 
 std::shared_ptr<const MeshMaterialDevice> make_material(
-    const Resource::Scene& scene, std::uint32_t index, SceneGpuTextureCache& cache) {
+    const Resource::Scene& scene, std::uint32_t index, SceneGpuTextureCache& cache,
+    GeometryDetail::UploadBatch& uploads) {
     if (auto found = cache.materials.find(index); found != cache.materials.end()) return found->second;
     auto material = std::make_shared<MeshMaterialDevice>();
     if (index < scene.data.materials.size()) material->source = scene.data.materials[index];
@@ -175,7 +175,7 @@ std::shared_ptr<const MeshMaterialDevice> make_material(
         if (ids[slot] == Resource::InvalidTextureId) continue;
         const bool colour = slot == MeshMaterialDevice::BaseColor ||
             slot == MeshMaterialDevice::Emissive || slot == MeshMaterialDevice::SpecularColor;
-        const auto& image = load_material_image(cache, ids[slot], colour);
+        const auto& image = load_material_image(cache, ids[slot], colour, uploads);
         material->textures[slot] = image.image;
         material->memory[slot] = image.mem;
     }
@@ -196,6 +196,7 @@ std::unique_ptr<Horizon::HardwareImage> g_placeholder_texture;
 Horizon::HardwareImage& get_placeholder_texture() {
     std::lock_guard lock(g_placeholder_mutex);
     if (!g_placeholder_texture) {
+        GeometryDetail::UploadBatch uploads;
         static const unsigned char white_pixel[4] = {255, 255, 255, 255};  // 不透明白色
         g_placeholder_texture = std::make_unique<Horizon::HardwareImage>(
             make_geometry_texture(1, 1, Horizon::Format::SRGBA8_UNORM,
@@ -203,7 +204,8 @@ Horizon::HardwareImage& get_placeholder_texture() {
         const bool placeholder_upload_ok = upload_geometry_texture(
             *g_placeholder_texture,
             std::as_bytes(std::span<const unsigned char>(white_pixel, sizeof(white_pixel))),
-            "placeholder");
+            "placeholder", uploads);
+        uploads.finish();
         if (!placeholder_upload_ok) {
             CFW_LOG_WARNING("[GeometryMeshBuilder] Failed to upload placeholder texture");
         }
@@ -225,6 +227,7 @@ std::vector<MeshDevice> build_mesh_devices_from_scene_range(
     SceneGpuTextureCache& texture_cache) {
 
     Horizon::HardwareImage& placeholder_texture = get_placeholder_texture();
+    GeometryDetail::UploadBatch uploads;
 
     const std::size_t end_mesh = std::min(first_mesh + mesh_count, scene.data.meshes.size());
     std::vector<MeshDevice> mesh_devices;
@@ -257,7 +260,7 @@ std::vector<MeshDevice> build_mesh_devices_from_scene_range(
         dev.vertex_count = static_cast<std::uint32_t>(vertices.size());
         dev.index_count = static_cast<std::uint32_t>(indices.size());
         dev.max_index = max_index;
-        auto buffers = GeometryDetail::make_draw_buffers(vertices, indices);
+        auto buffers = GeometryDetail::make_draw_buffers(vertices, indices, uploads);
         dev.draw_clusters = std::move(buffers.clusters);
         dev.vertexBuffer = dev.vertexStorageBuffer = std::move(buffers.vertices);
         dev.indexBuffer = dev.indexStorageBuffer = std::move(buffers.indices);
@@ -267,7 +270,7 @@ std::vector<MeshDevice> build_mesh_devices_from_scene_range(
             buffers.byte_size);
 
         dev.materialIndex = mesh.material_index;
-        dev.material = make_material(scene, mesh.material_index, texture_cache);
+        dev.material = make_material(scene, mesh.material_index, texture_cache, uploads);
         dev.materialColor = dev.material->source.base_color;
         dev.textureBuffer = dev.material->textures[MeshMaterialDevice::BaseColor];
         dev.tex_mem = dev.material->memory[MeshMaterialDevice::BaseColor];
@@ -288,7 +291,7 @@ std::vector<MeshDevice> build_mesh_devices_from_scene_range(
             continue;
         }
 
-        CFW_LOG_DEBUG("[GeometryMeshBuilder] Mesh GPU resources ready "
+        CFW_LOG_DEBUG("[GeometryMeshBuilder] Mesh GPU resources staged "
                       "(mesh={}, device={}, vertices={}, indices={}, max_index={}, texture_created={}, tex={})",
                       mesh_idx, device_idx, vertices.size(), indices.size(), max_index,
                       texture_created, static_cast<bool>(dev.textureBuffer));
@@ -297,6 +300,7 @@ std::vector<MeshDevice> build_mesh_devices_from_scene_range(
         mesh_devices.emplace_back(std::move(dev));
     }
 
+    uploads.finish();
     return mesh_devices;
 }
 

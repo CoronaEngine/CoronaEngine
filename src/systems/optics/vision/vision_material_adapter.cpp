@@ -44,6 +44,8 @@ std::shared_ptr<::vision::Material> create_vision_material(
 
     if (optics.principled && optics.principled->expressions) {
         const auto& p=*optics.principled->expressions;
+        // Reflection sidedness is independent of the area light's sidedness.
+        desc.set_value("two_sided", p.value("two_sided", false));
         const std::pair<const char*,const char*> slots[]={{"base_color","color"},{"metallic","metallic"},
             {"roughness","roughness"},{"ior","ior"},{"specular","spec_tint"},
             {"transmission","transmission_weight"},{"anisotropic","anisotropic"},
@@ -51,6 +53,16 @@ std::shared_ptr<::vision::Material> create_vision_material(
         for (auto [source,target]:slots) if (p.contains(source))
             desc.set_value(target,vision_json(appearance_slot(p[source],
                 std::string_view(source)=="base_color" || std::string_view(source)=="specular" ? 3:1)));
+        if (p.contains("normal")) {
+            // Material's optional normal input references a named graph node;
+            // unlike regular Principled slots it cannot take an inline node.
+            ::vision::ShaderNodeDesc normal;
+            normal.init(::vision::ParameterSet{vision_json({{"type","converter"},
+                {"construct_name","normal_map"},
+                {"param",{{"color",appearance_slot(p["normal"])},{"strength",1.f}}}})});
+            desc.node_map.emplace("corona_normal",std::move(normal));
+            desc.set_value("normal",::vision::DataWrap{{"channels","xyz"},{"node","corona_normal"}});
+        }
         return ::vision::Material::create_root(desc);
     }
 

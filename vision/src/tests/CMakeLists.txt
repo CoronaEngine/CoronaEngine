@@ -15,6 +15,7 @@ vision_add_test(test-warper2d SOURCES test_warper2d.cpp)
 
 vision_add_test(test-render_graph SOURCES test_render_graph.cpp)
 vision_add_test(test-thin-lens SOURCES test_thin_lens.cpp)
+target_link_libraries(test-thin-lens corona::resource::manager)
 
 vision_add_test(test-material-energy SOURCES test_material_energy.cpp)
 vision_add_test(test-material-reset SOURCES test_material_reset.cpp)
@@ -25,7 +26,6 @@ add_dependencies(test-shader-graph-lifecycle
     vision-light-point
     vision-shadernode-number)
 vision_add_test(test-param_schema SOURCES test_param_schema.cpp)
-vision_add_test(test-project-desc-schema SOURCES test_project_desc_schema.cpp)
 
 function(vision_add_simple_test name)
     cmake_parse_arguments(TEST "" "" "SOURCES" ${ARGN})

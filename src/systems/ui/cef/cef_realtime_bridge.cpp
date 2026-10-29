@@ -641,7 +641,6 @@ bool handle_compute_actor_focus_pose_fast(const CefRefPtr<CefFrame>& frame,
         actor_found = true;
         profile_count = actor->profile_handles.size();
     }
-    const bool has_external_vision_binding = hub.has_external_vision_binding(actor_handle);
 
     FocusBounds bounds;
     const auto focus_sources = resolve_actor_focus_geometry_sources(actor_handle);
@@ -654,8 +653,7 @@ bool handle_compute_actor_focus_pose_fast(const CefRefPtr<CefFrame>& frame,
             "actor bounds are unavailable (handle=" + std::to_string(actor_handle) +
             ", actor_found=" + (actor_found ? "true" : "false") +
             ", profiles=" + std::to_string(profile_count) +
-            ", geometry_sources=" + std::to_string(focus_sources.size()) +
-            ", external_vision_binding=" + (has_external_vision_binding ? "true" : "false") + ")");
+            ", geometry_sources=" + std::to_string(focus_sources.size()) + ")");
     }
 
     const ktm::fvec3 center = make_fvec3(
@@ -702,7 +700,7 @@ bool handle_mesh_move(const CefRefPtr<CefFrame>& frame, const CefRefPtr<CefProce
     if(!values || values->GetSize()!=3) return true;
     for(int i=0;i<3;++i) command.velocity[i]=static_cast<float>(values->GetDouble(i));
     command.dt=static_cast<float>(args->GetDouble(4)); command.jump=args->GetBool(5);
-    command.turn=args->GetSize()==7;
+    command.turn=args->GetSize()==7 && args->GetType(6)!=VTYPE_NULL;
     if(command.turn) command.facing=static_cast<float>(args->GetDouble(6));
     auto callback=[frame,id,actor=command.actor](MechanicsSystem::MeshMoveEvent result) {
         nlohmann::json payload={{"requestId",id},{"actorHandle",actor},{"status",result.status},

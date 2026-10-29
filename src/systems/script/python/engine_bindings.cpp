@@ -364,13 +364,9 @@ void BindAll(nanobind::module_& m) {
              "Return whether this actor renders in camera-local orthographic pass 2")
         .def("set_actor_guid", &Actor::set_actor_guid, nb::arg("actor_guid"))
         .def("get_actor_guid", &Actor::get_actor_guid)
-        .def("set_external_vision_binding", &Actor::set_external_vision_binding,
-             nb::arg("source_path"), nb::arg("shape_guid"), nb::arg("shape_index"),
-             nb::arg("json_path"), nb::arg("shape_type"), nb::arg("shape_identity_key"),
-             nb::arg("model_path"), nb::arg("visible") = true,
-             nb::arg("source_base_dir") = "")
-        .def("clear_external_vision_binding", &Actor::clear_external_vision_binding)
-        .def("has_external_vision_binding", &Actor::has_external_vision_binding)
+
+
+
         .def("get_handle", &Actor::get_handle, "Get the underlying handle of this actor");
 
     // ============================================================================
@@ -409,10 +405,6 @@ void BindAll(nanobind::module_& m) {
         .def("set_vision_stable_planes", &Camera::set_vision_stable_planes, nb::arg("enabled"))
         .def("get_vision_stable_planes", &Camera::get_vision_stable_planes)
         .def("get_requested_vision_stable_planes", &Camera::get_requested_vision_stable_planes)
-        .def("set_shadow_cascade_debug", &Camera::set_shadow_cascade_debug, nb::arg("enabled"))
-        .def("get_shadow_cascade_debug", &Camera::get_shadow_cascade_debug)
-        .def("set_ssao_enabled", &Camera::set_ssao_enabled, nb::arg("enabled"))
-        .def("get_ssao_enabled", &Camera::get_ssao_enabled)
         .def("set_view_state", &Camera::set_view_state, nb::arg("open"), nb::arg("x"),
              nb::arg("y"), nb::arg("width"), nb::arg("height"), nb::arg("move_speed"))
         .def("get_view_state", &Camera::get_view_state)
@@ -529,15 +521,6 @@ void BindAll(nanobind::module_& m) {
              "Enable or disable physics simulation for this scene (does not affect rendering)")
         .def("is_simulation_enabled", &Scene::is_simulation_enabled,
              "Return True if physics simulation is enabled for this scene");
-
-    // ============================================================================
-    // Scene I/O utilities
-    // ============================================================================
-    // m.def("read_scene", &read_scene, nb::arg("scene_path"),
-    //       "Load a scene from file",
-    //       nb::rv_policy::take_ownership);
-    // m.def("write_scene", &write_scene, nb::arg("scene"), nb::arg("scene_path"),
-    //       "Save a scene to file");
 
     // ============================================================================
     // Logger: 日志前端转发接口

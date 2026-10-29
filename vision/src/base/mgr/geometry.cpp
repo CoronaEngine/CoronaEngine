@@ -292,7 +292,6 @@ Interaction Geometry::compute_surface_interaction(const TriangleHitVar &hit, boo
     auto o2w = Transform(inst->o2w());
     Var tri = get_triangle(mesh.triangle_buffer, hit.prim_id);
     auto [v0, v1, v2] = get_vertices(mesh.vertex_buffer, tri);
-    it.lightmap_id = inst.lightmap_id;
     it.set_light(inst.light_id);
     it.set_material(inst.mat_id);
     it.set_medium(inst.inside_medium, inst.outside_medium);
@@ -304,7 +303,6 @@ Interaction Geometry::compute_surface_interaction(const TriangleHitVar &hit, boo
         Var p2 = o2w.apply_point(v2->position());
         Float3 pos = hit->triangle_lerp(p0, p1, p2);
         it.pos = pos;
-        it.lightmap_uv = hit->triangle_lerp(v0->lightmap_uv(), v1->lightmap_uv(), v2->lightmap_uv());
 
         Frame<Float3> frame;
 
@@ -312,6 +310,14 @@ Interaction Geometry::compute_surface_interaction(const TriangleHitVar &hit, boo
         Float3 dp02 = p0 - p2;
         Float3 dp12 = p1 - p2;
         Float3 ng_un = cross(dp02, dp12);
+        Float3 normal = hit->triangle_lerp(v0->normal(), v1->normal(), v2->normal());
+        // Authored emitter normals define the emitting hemisphere. Mirrored
+        // instances (and imported meshes with opposing winding) can reverse the
+        // cross product. Keep hit evaluation and area-light sampling consistent;
+        // the latter uses this function with is_complete=false as well.
+        $if(it.has_emission() && !is_zero(normal)) {
+            ng_un = select(dot(ng_un, o2w.apply_normal(normal)) < 0.f, -ng_un, ng_un);
+        };
         it.prim_area = 0.5f * length(ng_un);
         Float2 duv02 = v0->tex_coord() - v2->tex_coord();
         Float2 duv12 = v1->tex_coord() - v2->tex_coord();
@@ -336,7 +342,6 @@ Interaction Geometry::compute_surface_interaction(const TriangleHitVar &hit, boo
         if (is_complete) {
             comment("compute shading uvn");
             Float3 dn_du, dn_dv;
-            Float3 normal = hit->triangle_lerp(v0->normal(), v1->normal(), v2->normal());
             it.shading.set_frame(frame);
             it.ng_local = normal;
             $if(!is_zero(normal)) {

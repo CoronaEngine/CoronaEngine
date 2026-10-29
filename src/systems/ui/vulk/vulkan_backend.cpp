@@ -28,43 +28,15 @@ namespace {
 constexpr auto kUiRenderTargetUsage =
     Corona::Horizon::ImageUsage_Sampled | Corona::Horizon::ImageUsage_Storage;
 
-std::uintptr_t select_main_camera_handle(const Corona::SceneDevice& scene) {
-    if (scene.active_camera_handle != 0 &&
-        std::find(scene.camera_handles.begin(),
-                  scene.camera_handles.end(),
-                  scene.active_camera_handle) != scene.camera_handles.end()) {
-        return scene.active_camera_handle;
-    }
-    return scene.camera_handles.empty() ? 0 : scene.camera_handles.front();
-}
-
 void sync_default_surface_camera_size(void* surface, uint32_t width, uint32_t height) {
     if (surface == nullptr || width == 0 || height == 0) {
         return;
     }
 
-    auto& hub = Corona::SharedDataHub::instance();
-    for (const auto& scene : std::as_const(hub.scene_storage())) {
-        if (!scene.enabled) {
-            continue;
-        }
-        const auto camera_handle = select_main_camera_handle(scene);
-        if (camera_handle == 0) {
-            continue;
-        }
-        if (auto camera = hub.camera_storage().try_acquire_write(camera_handle)) {
-            if (!camera->follows_default_surface) {
-                continue;
-            }
-            if (camera->surface != nullptr && camera->surface != surface) {
-                continue;
-            }
-            camera->surface = surface;
-            camera->width = width;
-            camera->height = height;
-            camera->aspect = static_cast<float>(width) / static_cast<float>(height);
-        }
-    }
+    // UI presentation must never wait for scene/camera locks. A renderer or
+    // geometry writer can hold them for longer than a keyboard gesture.
+    Corona::SharedDataHub::instance().enqueue_default_surface_camera_update(
+        {surface, width, height});
 }
 
 }  // namespace

@@ -2,7 +2,7 @@
 // Created by Zero on 07/03/2023.
 //
 
-#include "base/shader_graph/shader_node.h"
+#include "base/shader_graph/shader_graph.h"
 
 namespace vision {
 //{
@@ -38,7 +38,7 @@ namespace vision {
 //        }
 //    }
 //}
-class MixNode : public ShaderNode {
+class MixNode : public SlotsShaderNode {
 private:
     VS_MAKE_SLOT(t)
     VS_MAKE_SLOT(A)
@@ -46,14 +46,14 @@ private:
 
 public:
     MixNode() = default;
-    explicit MixNode(const ShaderNodeDesc &desc) : ShaderNode(desc) {
-        t_.set(ShaderNodeSlot::create_slot(*desc.slot("t")));
-        A_.set(ShaderNodeSlot::create_slot(*desc.slot("A")));
-        B_.set(ShaderNodeSlot::create_slot(*desc.slot("B")));
+    explicit MixNode(const ShaderNodeDesc &desc) : SlotsShaderNode(desc) {}
+    void initialize_slots(const ShaderNodeDesc &desc) noexcept override {
+        VS_INIT_SLOT(t, .5f, Number);
+        VS_INIT_SLOT(A, ocarina::make_float3(0.f), Number);
+        VS_INIT_SLOT(B, ocarina::make_float3(1.f), Number);
     }
     VS_MAKE_PLUGIN_NAME_FUNC
-    OC_ENCODABLE_FUNC(ShaderNode, t_, A_, B_)
-    VS_HOTFIX_MAKE_RESTORE(ShaderNode, t_, A_, B_)
+    VS_HOTFIX_MAKE_RESTORE(SlotsShaderNode, t_, A_, B_)
     [[nodiscard]] bool is_uniform() const noexcept override {
         return t_->is_uniform() && A_->is_uniform() && B_->is_uniform();
     }

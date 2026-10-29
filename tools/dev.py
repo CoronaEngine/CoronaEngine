@@ -4,7 +4,8 @@ import argparse
 import sys
 from pathlib import Path
 
-from horizon_workspace import LOCK_HINT, ensure_workspace, inspect_workspace, sync_workspace
+from git_workspace import ensure_workspace, inspect_workspace, sync_workspace
+from source_workspaces import WORKSPACES
 from workflow import (
     CONFIGURATIONS,
     DEFAULT_CONFIGURATION,
@@ -23,6 +24,7 @@ from workflow import (
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_TARGET = "corona_engine"
+WORKSPACE_COMMANDS = {f"{workspace.key}-sync": workspace for workspace in WORKSPACES}
 LOCAL_RECIPES = (
     "conan/recipes/ktm",
     "conan/recipes/pfr",
@@ -36,31 +38,26 @@ RECIPE_TOGGLE_ENV = "CORONA_CONAN_EXPORT_LOCAL_RECIPES"
 TARGET_FAMILY_OPTIONS: dict[str, tuple[str, ...]] = {
     "core": (
         "&:with_examples=False", "&:with_tests=False",
-        "&:with_vision_tests=False", "&:with_oidn=False",
+        "&:with_vision_tests=False",
     ),
     "examples": (
         "&:with_examples=True", "&:with_tests=False",
-        "&:with_vision_tests=False", "&:with_oidn=False",
+        "&:with_vision_tests=False",
     ),
     "tests": (
         "&:with_examples=False", "&:with_tests=True",
-        "&:with_vision_tests=False", "&:with_oidn=False",
+        "&:with_vision_tests=False",
     ),
     "vision": (
         "&:with_examples=False", "&:with_tests=False",
-        "&:with_vision_tests=False", "&:with_oidn=False",
+        "&:with_vision_tests=False",
     ),
     "vision-tests": (
         "&:with_examples=False", "&:with_tests=True",
-        "&:with_vision_tests=True", "&:with_oidn=False",
-    ),
-    "vision-oidn": (
-        "&:with_examples=False", "&:with_tests=False",
-        "&:with_vision_tests=False", "&:with_oidn=True",
+        "&:with_vision_tests=True",
     ),
 }
 VISION_TEST_TARGETS = {
-    "corona_vision_model_normalization_tests",
     "corona_vision_render_mode_config_tests",
     "corona_lightfield_geometry_tests",
     "corona_vision_material_adapter_tests",
@@ -76,8 +73,6 @@ def target_family_for_target(target: str) -> str:
     lowered = target.lower()
     if lowered in {"all", "corona_engine"}:
         return "examples"
-    if "oidn" in lowered:
-        return "vision-oidn"
     if target.startswith("test-") or target.startswith("vision-test") or target in VISION_TEST_TARGETS:
         return "vision-tests"
     if target.startswith("vision-"):
@@ -107,8 +102,13 @@ def conan_options(target_family: str) -> list[str]:
         raise ValueError(f"Unsupported target family: {target_family}") from error
 
 
+def ensure_workspaces() -> None:
+    for workspace in WORKSPACES:
+        ensure_workspace(REPO_ROOT, workspace)
+
+
 def install(configuration: str, target_family: str, *, update: bool = False) -> None:
-    ensure_workspace(REPO_ROOT)
+    ensure_workspaces()
     conan_install(
         REPO_ROOT,
         configuration,
@@ -126,14 +126,15 @@ def execute(args: argparse.Namespace) -> None:
     target_family = args.target_family or target_family_for_targets(targets)
     if args.command == "status":
         run_command(("git", "status", "--short", "--branch"), cwd=REPO_ROOT)
-        try:
-            horizon = inspect_workspace(REPO_ROOT)
-        except RuntimeError as error:
-            print(f"[WARN] Horizon workspace could not be inspected: {error}")
-        else:
-            print(horizon.summary())
-            for note in horizon.advice():
-                print(f"[WARN] {note}")
+        for workspace in WORKSPACES:
+            try:
+                status = inspect_workspace(REPO_ROOT, workspace)
+            except RuntimeError as error:
+                print(f"[WARN] {workspace.name} workspace could not be inspected: {error}")
+            else:
+                print(status.summary())
+                for note in status.advice():
+                    print(f"[WARN] {note}")
         run_command(("conan", "--version"), cwd=REPO_ROOT)
         run_command(("cmake", "--list-presets"), cwd=REPO_ROOT)
     elif args.command in {"install", "_bootstrap"}:
@@ -146,7 +147,7 @@ def execute(args: argparse.Namespace) -> None:
         cmake_configure(REPO_ROOT, configuration, target_family)
         cmake_build(REPO_ROOT, configuration, targets, target_family)
     elif args.command == "build-fast":
-        ensure_workspace(REPO_ROOT)
+        ensure_workspaces()
         cmake_build(REPO_ROOT, configuration, targets, target_family)
     elif args.command == "rebuild":
         safe_remove(REPO_ROOT, build_dir(REPO_ROOT, configuration, target_family))
@@ -156,8 +157,8 @@ def execute(args: argparse.Namespace) -> None:
     elif args.command == "update":
         install(configuration, target_family, update=True)
         cmake_configure(REPO_ROOT, configuration, target_family)
-    elif args.command == "horizon-sync":
-        sync_workspace(REPO_ROOT)
+    elif args.command in WORKSPACE_COMMANDS:
+        sync_workspace(REPO_ROOT, WORKSPACE_COMMANDS[args.command])
     elif args.command == "clean":
         clean_repo(REPO_ROOT)
     else:
@@ -168,16 +169,17 @@ def create_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="CoronaEngine developer workflow",
         epilog=(
-            "Horizon (.workspace/Horizon) is an ordinary Git clone. Builds only report its state "
-            "and always proceed, including with uncommitted edits; nothing here changes the clone "
-            "unless you ask. The lock file is read once when the clone is created and is otherwise "
-            f"edited by hand: {LOCK_HINT}"
+            "Horizon/ and CoronaEditor/ are ordinary Git clones at the engine repository root. "
+            "Builds use existing sources as-is, including local edits. Baselines are defined "
+            "in tools/source_workspaces.py; use horizon-sync or editor-sync to adopt them "
+            "explicitly (including submodules). update refreshes Conan dependencies only."
         ),
     )
     parser.add_argument(
         "command", nargs="?", default="status",
         choices=(
-            "status", "install", "configure", "build", "build-fast", "rebuild", "update", "horizon-sync",
+            "status", "install", "configure", "build", "build-fast", "rebuild", "update",
+            *WORKSPACE_COMMANDS,
             "clean", "_bootstrap",
         ),
     )

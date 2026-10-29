@@ -2005,51 +2005,8 @@ std::string Corona::API::Actor::get_actor_guid() const {
     return SharedDataHub::instance().actor_guid(handle_);
 }
 
-void Corona::API::Actor::set_external_vision_binding(const std::string& source_path,
-                                                     const std::string& shape_guid,
-                                                     int shape_index,
-                                                     const std::string& json_path,
-                                                     const std::string& shape_type,
-                                                     const std::string& shape_identity_key,
-                                                     const std::string& model_path,
-                                                     bool visible,
-                                                     const std::string& source_base_dir) {
-    if (handle_ == 0) {
-        CFW_LOG_WARNING("[Actor::set_external_vision_binding] Invalid actor handle");
-        return;
-    }
 
-    ExternalVisionBindingDevice binding{};
-    binding.enabled = true;
-    binding.visible = visible;
-    binding.source_path = source_path;
-    binding.source_base_dir = source_base_dir;
-    binding.shape_guid = shape_guid;
-    binding.shape_index = shape_index;
-    binding.json_path = json_path;
-    binding.shape_type = shape_type;
-    binding.shape_identity_key = shape_identity_key;
-    binding.model_path = model_path;
-    SharedDataHub::instance().set_external_vision_binding(handle_, std::move(binding));
-}
 
-void Corona::API::Actor::clear_external_vision_binding() {
-    if (handle_ == 0) {
-        CFW_LOG_WARNING("[Actor::clear_external_vision_binding] Invalid actor handle");
-        return;
-    }
-
-    SharedDataHub::instance().clear_external_vision_binding(handle_);
-}
-
-bool Corona::API::Actor::has_external_vision_binding() const {
-    if (handle_ == 0) {
-        CFW_LOG_WARNING("[Actor::has_external_vision_binding] Invalid actor handle");
-        return false;
-    }
-
-    return SharedDataHub::instance().has_external_vision_binding(handle_);
-}
 
 std::uintptr_t Corona::API::Actor::get_handle() const {
     return handle_;
@@ -2326,9 +2283,10 @@ bool Corona::API::Camera::save_screenshot_sync(const std::string& path) const {
     auto promise = std::make_shared<std::promise<bool>>();
     auto future = promise->get_future();
 
-    // An offscreen Vision capture may need its first shader compilation and
-    // acceleration-structure build. Use the same deadline in caller and queue.
-    const auto timeout = std::chrono::seconds(get_render_backend() == "vision" ? 120 : 10);
+    // Cold captures may need shader compilation or a full-scene shadow BVH.
+    // Use the same deadline in caller and queue; native preparation can exceed
+    // the old 10-second limit even while GPU execution remains responsive.
+    const auto timeout = std::chrono::seconds(get_render_backend() == "vision" ? 120 : 30);
     const auto deadline = std::chrono::steady_clock::now() + timeout;
 
     if (auto* event_bus = Kernel::KernelContext::instance().event_bus()) {
@@ -2528,53 +2486,9 @@ bool Corona::API::Camera::get_requested_vision_stable_planes() const {
     return Corona::API::get_requested_vision_stable_planes(handle_);
 }
 
-void Corona::API::Camera::set_shadow_cascade_debug(bool enabled) {
-    if (handle_ == 0) {
-        CFW_LOG_WARNING("[Camera::set_shadow_cascade_debug] Invalid camera handle");
-        return;
-    }
 
-    CameraStateUpdateCommand command{};
-    command.camera_handle = handle_;
-    command.fields = CameraStateUpdateField::ShadowCascadeDebug;
-    command.shadow_cascade_debug = enabled;
-    SharedDataHub::instance().enqueue_camera_state_update(command);
-}
 
-bool Corona::API::Camera::get_shadow_cascade_debug() const {
-    if (handle_ == 0) {
-        return false;
-    }
 
-    if (auto accessor = SharedDataHub::instance().camera_storage().acquire_read(handle_)) {
-        return accessor->shadow_cascade_debug;
-    }
-    return false;
-}
-
-void Corona::API::Camera::set_ssao_enabled(bool enabled) {
-    if (handle_ == 0) {
-        CFW_LOG_WARNING("[Camera::set_ssao_enabled] Invalid camera handle");
-        return;
-    }
-
-    CameraStateUpdateCommand command{};
-    command.camera_handle = handle_;
-    command.fields = CameraStateUpdateField::SsaoEnabled;
-    command.ssao_enabled = enabled;
-    SharedDataHub::instance().enqueue_camera_state_update(command);
-}
-
-bool Corona::API::Camera::get_ssao_enabled() const {
-    if (handle_ == 0) {
-        return true;
-    }
-
-    if (auto accessor = SharedDataHub::instance().camera_storage().acquire_read(handle_)) {
-        return accessor->ssao_enabled;
-    }
-    return true;
-}
 
 void Corona::API::Camera::set_view_state(bool open, int x, int y, int width, int height, float move_speed) {
     if (handle_ == 0) {
@@ -3091,27 +3005,7 @@ bool get_requested_vision_stable_planes(std::uintptr_t camera_handle) {
     return get_vision_stable_planes(resolved_handle);
 }
 
-void load_vision_scene(const std::string& path) {
-    if (auto* event_bus = Kernel::KernelContext::instance().event_bus()) {
-        Events::VisionSceneLoadEvent event;
-        event.scene_path = path;
-        event_bus->publish<Events::VisionSceneLoadEvent>(std::move(event));
-    }
-}
 
-void load_vision_scene_from_json(const std::string& json_text,
-                                 const std::string& base_dir,
-                                 const std::string& scene_key,
-                                 bool external_live) {
-    if (auto* event_bus = Kernel::KernelContext::instance().event_bus()) {
-        Events::VisionSceneLoadEvent event;
-        event.scene_json = json_text;
-        event.base_dir = base_dir;
-        event.scene_key = scene_key;
-        event.external_live = external_live;
-        event_bus->publish<Events::VisionSceneLoadEvent>(std::move(event));
-    }
-}
 
 // ########################
 //          Media
