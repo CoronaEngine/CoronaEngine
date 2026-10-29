@@ -337,7 +337,6 @@ public:
     void initialize() noexcept;
     void update_children_parents() noexcept;
     static UP<LobeSet> create_mix(const Float &frac, SP<Lobe> b0, SP<Lobe> b1) noexcept;
-    static UP<LobeSet> create_add(SP<Lobe> b0, SP<Lobe> b1) noexcept;
     void normalize_sampled_weight() noexcept;
     void flatten() noexcept;
     [[nodiscard]] bool is_multi() const noexcept override { return true; }

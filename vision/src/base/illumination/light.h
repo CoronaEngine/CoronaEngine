@@ -188,26 +188,6 @@ public:
     IPointLight() : Light(LightType::DeltaPosition) {}
     explicit IPointLight(const LightDesc &desc) : Light(desc, LightType::DeltaPosition) {}
 
-protected:
-    // Shared transform helpers for point-like lights that use an o2w matrix as
-    // their single source of truth for position and forward direction. Spot and
-    // projector both use local +Z as the light's forward axis, and older spot
-    // scenes can still be upgraded from explicit position/direction fields.
-    [[nodiscard]] static float4x4 resolve_o2w(const LightDesc &desc) noexcept;
-
-    template<typename Mat>
-    [[nodiscard]] static auto o2w_position(const Mat &o2w) noexcept {
-        return o2w[3].xyz();
-    }
-
-    [[nodiscard]] static float3 &host_o2w_position(float4x4 &o2w) noexcept;
-
-    template<typename Mat>
-    [[nodiscard]] static auto o2w_direction(const Mat &o2w) noexcept {
-        return transform_vector<D>(o2w, make_float3(0, 0, 1));
-    }
-
-public:
     void render_sub_UI(Widgets *widgets) noexcept override;
     [[nodiscard]] Float PDF_wi(const LightSampleContext &p_ref,
                                const LightEvalContext &p_light) const noexcept override;
