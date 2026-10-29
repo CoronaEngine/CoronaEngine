@@ -509,6 +509,7 @@ SurfaceDataVar ReSTIRDI::compute_hit(RayState rs, TriangleHitVar &hit, Interacti
         surf_ext.t_max += rs.ray->t_max();
         Float3 v_pos = camera_ray->at(surf_ext.t_max);
         Float3 w;
+        Bool delta_continuation = false;
         scene().materials().dispatch(it.material_id(), [&](const Material *material) {
             // Evaluator construction can apply a normal map to it.shading.
             // Preserve the original interaction for the canonical material guide.
@@ -516,6 +517,10 @@ SurfaceDataVar ReSTIRDI::compute_hit(RayState rs, TriangleHitVar &hit, Interacti
             guide_it.wo = guide_it.ng;
             auto bsdf = material->create_evaluator(it, sampled_wavelengths());
             cur_surf.flag = bsdf.flag();
+            // Several near-specular Principled lobes can share a flag without
+            // providing one supported delta sampler for their combination.
+            delta_continuation = Bool(material->enable_delta()) &&
+                !bsdf.eval_stable_lobes(it.wo).has_stochastic_remainder;
             Float diff_factor = bsdf.diffuse_factor();
             cur_surf->set_diffuse_factor(diff_factor);
             $if(counter == 0u || stable_chain) {
@@ -558,13 +563,11 @@ SurfaceDataVar ReSTIRDI::compute_hit(RayState rs, TriangleHitVar &hit, Interacti
                 cur_surf.denoiser_albedo.set(renderer().spectrum()->linear_srgb(
                     bsdf.albedo(albedo_wo) * SampledSpectrum(surf_ext.throughput.as_vec3()), sampled_wavelengths()));
             };
-            if (material->enable_delta()) {
-                $if(cur_surf->near_specular()) {
-                    BSDFSample bsdf_sample = bsdf.sample_delta(it.wo, renderer().sampler());
-                    w = bsdf_sample.wi;
-                    surf_ext.throughput.set(surf_ext.throughput.as_vec3() * bsdf_sample.eval.throughput().vec3());
-                };
-            }
+            $if(delta_continuation) {
+                BSDFSample bsdf_sample = bsdf.sample_delta(it.wo, renderer().sampler());
+                w = bsdf_sample.wi;
+                surf_ext.throughput.set(surf_ext.throughput.as_vec3() * bsdf_sample.eval.throughput().vec3());
+            };
         });
         $if(counter == 0) {
             cur_surf->set_depth(camera->linear_depth(v_pos));
@@ -573,10 +576,10 @@ SurfaceDataVar ReSTIRDI::compute_hit(RayState rs, TriangleHitVar &hit, Interacti
         };
         counter += 1;
         $if(counter >= max_recursion_) {
-            stable_chain = stable_chain && !cur_surf->near_specular();
+            stable_chain = stable_chain && !delta_continuation;
             $break;
         };
-        $if(cur_surf->near_specular()) {
+        $if(delta_continuation) {
             $if(stable_chain) {
                 Float3 n = it.ng;
                 Float3 transformed_n = image_vector(n);

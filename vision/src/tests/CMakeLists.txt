@@ -22,7 +22,7 @@ vision_add_test(test-material-reset SOURCES test_material_reset.cpp)
 
 vision_add_test(test-shader-graph-lifecycle SOURCES test_shader_graph_lifecycle.cpp)
 add_dependencies(test-shader-graph-lifecycle
-    vision-material-diffuse
+    vision-material-principled_bsdf
     vision-light-directional
     vision-shadernode-number)
 vision_add_test(test-param_schema SOURCES test_param_schema.cpp)

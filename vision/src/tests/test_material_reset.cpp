@@ -72,16 +72,8 @@ SP<Material> create_material(const char *json) {
     return material;
 }
 
-constexpr const char *kDiffuseJson = R"json(
-{
-    "type": "diffuse",
-    "name": "MatDiffuse",
-    "param": {
-        "color": {"channels": "xyz", "node": {"type": "number", "param": {"value": [1.0, 1.0, 1.0]}}},
-        "sigma": {"channels": "x", "node": {"type": "number", "param": {"value": 0.0}}}
-    },
-    "node_tab": {}
-}
+constexpr const char *kBlackBodyJson = R"json(
+{ "type": "black_body", "name": "ResetAbsorber", "param": {} }
 )json";
 
 constexpr const char *kPrincipledJson = R"json(
@@ -163,9 +155,9 @@ int main() {
     material_set.clear();
     material_set.set_mode(PolymorphicMode::ETopology);
 
-    auto diffuse = create_material(kDiffuseJson);
+    auto absorber = create_material(kBlackBodyJson);
     auto principled = create_material(kPrincipledJson);
-    pipeline->scene().add_material(diffuse);
+    pipeline->scene().add_material(absorber);
     pipeline->scene().add_material(principled);
     pipeline->scene().prepare_materials();
     pipeline->upload_scene_bindless_array();

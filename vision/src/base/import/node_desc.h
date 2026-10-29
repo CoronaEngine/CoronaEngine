@@ -413,10 +413,6 @@ public:
 
 struct MaterialDesc : public GraphDesc {
 public:
-    SP<MaterialDesc> mat0;
-    SP<MaterialDesc> mat1;
-
-public:
     MaterialDesc() : GraphDesc("Material") {}
     explicit MaterialDesc(string name) : GraphDesc("Material", std::move(name)) {}
     void init(const ParameterSet &ps) noexcept override;

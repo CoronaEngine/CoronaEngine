@@ -60,8 +60,8 @@ void check_stable_lobes(vision::Pipeline& pipeline) {
         pipeline.activate_global_context();
         Global::SceneGpuContextScope scope{pipeline.geometry().bindless_array(), pipeline.device()};
         DielectricLobe::prepare();
-        // These LUTs are added after the diffuse fixture was prepared. No scene
-        // material changed, so upload_data alone does not refresh these handles.
+        // Publish any LUT handles registered by this low-level contract before
+        // compiling shaders that access them.
         pipeline.geometry().upload_bindless_array(pipeline.stream());
         pipeline.upload_data();
         auto& sampler = pipeline.renderer().sampler();
@@ -171,6 +171,26 @@ void check_stable_lobes(vision::Pipeline& pipeline) {
             auto mix = Mix::create_mix(Float{0.5f}, reflection, make_shared<DiffuseLobe>(SampledSpectrum{swl, 0.4f}, swl));
             auto mixed = mix->eval_stable_lobes(wo);
             ok &= mixed.has_stochastic_remainder && !mixed.lobes[0].valid && !mixed.lobes[1].valid;
+            // Principled keeps zero-weight children in its lobe set. A single
+            // active reflection must preserve branch identity and transport.
+            LobeSet::Lobes weighted;
+            weighted.emplace_back(Float{1.f}, Float{.25f}, reflection);
+            weighted.emplace_back(Float{0.f}, Float{0.f},
+                make_shared<DiffuseLobe>(SampledSpectrum{swl, .4f}, swl));
+            auto single = make_unique<LobeSet>(std::move(weighted));
+            auto single_branches = single->eval_stable_lobes(wo);
+            auto single_sample = single->sample_delta_local(wo, sampler);
+            ok &= single->flag() == SurfaceData::NearSpec && single->supports_stable_reflection(wo) &&
+                  !single_branches.has_stochastic_remainder && single_branches.lobes[1].valid &&
+                  single_sample.valid() && single_sample.stable_lobe_index == 1u &&
+                  all(abs(single_branches.lobes[1].weight.vec3() - branches.lobes[1].weight.vec3() * .25f) < 1e-5f) &&
+                  all(abs(single_sample.eval.throughput().vec3() - sample.eval.throughput().vec3() * .25f) < 1e-5f);
+            LobeSet::Lobes empty_weights;
+            empty_weights.emplace_back(Float{0.f}, Float{0.f}, reflection);
+            auto inactive = make_unique<LobeSet>(std::move(empty_weights));
+            auto inactive_branches = inactive->eval_stable_lobes(wo);
+            ok &= inactive->flag() == BxDFFlag::Unset && inactive_branches.has_stochastic_remainder &&
+                  !inactive->sample_delta_local(wo, sampler).valid();
             Interaction it{false};
             it.shading.x = make_float3(0.f, 1.f, 0.f);
             it.shading.y = make_float3(0.f, 0.f, 1.f);
@@ -179,8 +199,16 @@ void check_stable_lobes(vision::Pipeline& pipeline) {
             Evaluator evaluator{it, swl};
             // No per-lobe frame: the adapter must use the existing delta frame,
             // including when individual_ns is enabled in the material registry.
-            evaluator.link(make_unique<Glass>(make_shared<FresnelDielectric>(SampledSpectrum{swl, 1.5f}, swl),
-                                              microfacet, SampledSpectrum{swl, 0.7f}, false, SurfaceData::NearSpec));
+            auto dielectric = make_shared<Glass>(make_shared<FresnelDielectric>(SampledSpectrum{swl, 1.5f}, swl),
+                                                 microfacet, SampledSpectrum{swl, 0.7f}, false, SurfaceData::NearSpec);
+            auto specular_mix = Mix::create_mix(Float{.5f}, reflection, dielectric);
+            ok &= specular_mix->flag() == SurfaceData::NearSpec &&
+                  specular_mix->eval_stable_lobes(wo).has_stochastic_remainder &&
+                  !specular_mix->sample_delta_local(wo, sampler).valid();
+            LobeSet::Lobes dielectric_children;
+            dielectric_children.emplace_back(Float{1.f}, Float{.6f}, dielectric);
+            dielectric_children.emplace_back(Float{0.f}, Float{0.f}, reflection);
+            evaluator.link(make_unique<LobeSet>(std::move(dielectric_children)));
             auto world_wo = it.shading.to_world(wo);
             auto world = evaluator.eval_stable_lobes(world_wo);
             auto world_sample = evaluator.sample_delta(world_wo, sampler);
@@ -195,7 +223,7 @@ void check_stable_lobes(vision::Pipeline& pipeline) {
         auto adapter = pipeline.device().compile(adapter_kernel, "stable_lobe_adapter_contract");
         pipeline.stream() << adapter(buffer).dispatch(samples) << buffer.download(data.data()) << synchronize() << commit();
         for (const auto& value : data) {
-            expect(value.x == 1.f, "mirror, mixed-lobe rejection and world-frame stable lobe contracts must agree with sampling");
+            expect(value.x == 1.f, "single-active reflection/transmission, mixed-lobe rejection and world-frame contracts must agree with sampling");
         }
         std::cout << "PASS: stable lobe contract, 4096 GPU samples including TIR and zero-colour transmission\n";
     }
@@ -258,9 +286,7 @@ vision::DataWrap scene_description(bool direct, bool reuse = false) {
             "position":[0,0,0], "target_pos":[0,0,-1], "up":[0,1,0]
           }}
         }},
-        "materials":[{"type":"diffuse", "name":"receiver", "param": {
-          "color":[0.8,0.8,0.8], "sigma":0
-        }}],
+        "materials":[{"type":"principled_bsdf","name":"receiver","param":{"color":[0.8,0.8,0.8],"subsurface_weight":0,"roughness":1,"spec_tint":[0,0,0]}}],
         "shapes":[{"type":"model", "param": {
           "fn":"receiver.obj", "material":"receiver", "normalize_to_unit_bounds":false
         }}],
@@ -500,20 +526,20 @@ int main() {
         // Equal geometry must not hide a material boundary; similar separately
         // imported materials must remain reusable regardless of their identities.
         const char* materials[]{
-            R"({"type":"diffuse","param":{"color":[0.8,0.1,0.1]}})",
-            R"({"type":"diffuse","param":{"color":[0.1,0.8,0.1]}})",
-            R"({"type":"diffuse","param":{"color":[0.75,0.12,0.1]}})",
-            R"({"type":"substrate","param":{"color":[0.5,0.5,0.5],"spec":[0.04,0.04,0.04],"roughness":0.2}})",
-            R"({"type":"substrate","param":{"color":[0.5,0.5,0.5],"spec":[0.8,0.8,0.8],"roughness":0.2}})",
-            R"({"type":"plastic","param":{"color":[0.5,0.5,0.5],"roughness":0.1}})",
-            R"({"type":"plastic","param":{"color":[0.5,0.5,0.5],"roughness":0.8}})",
-            R"({"type":"diffuse","param":{"color":[0,0,0]}})",
-            R"({"type":"glass","param":{"color":[1,1,1],"ior":1.1,"roughness":0.5}})",
-            R"({"type":"glass","param":{"color":[1,1,1],"ior":5.0,"roughness":0.5}})",
+            R"({"type":"principled_bsdf","param":{"color":[0.8,0.1,0.1],"subsurface_weight":0,"roughness":1,"spec_tint":[0,0,0]}})",
+            R"({"type":"principled_bsdf","param":{"color":[0.1,0.8,0.1],"subsurface_weight":0,"roughness":1,"spec_tint":[0,0,0]}})",
+            R"({"type":"principled_bsdf","param":{"color":[0.75,0.12,0.1],"subsurface_weight":0,"roughness":1,"spec_tint":[0,0,0]}})",
+            R"({"type":"principled_bsdf","param":{"color":[0.5,0.5,0.5],"roughness":0.2,"subsurface_weight":0,"ior":1.5}})",
+            R"({"type":"principled_bsdf","param":{"color":[0.5,0.5,0.5],"roughness":0.2,"subsurface_weight":0,"ior":5}})",
+            R"({"type":"principled_bsdf","param":{"color":[0.5,0.5,0.5],"roughness":0.1,"subsurface_weight":0}})",
+            R"({"type":"principled_bsdf","param":{"color":[0.5,0.5,0.5],"roughness":0.8,"subsurface_weight":0}})",
+            R"({"type":"black_body","param":{}})",
+            R"({"type":"principled_bsdf","param":{"color":[1,1,1],"ior":1.1,"roughness":0.5,"subsurface_weight":0,"transmission_weight":1}})",
+            R"({"type":"principled_bsdf","param":{"color":[1,1,1],"ior":5.0,"roughness":0.5,"subsurface_weight":0,"transmission_weight":1}})",
             R"({"type":"principled_bsdf","param":{"color":[0.8,0.2,0.1],"coat_weight":1,"coat_ior":2.5,"roughness":0.4}})",
             R"({"type":"principled_bsdf","param":{"color":[0.8,0.2,0.1],"coat_weight":1,"coat_ior":2.5,"roughness":0.4}})",
-            R"({"type":"diffuse","param":{"color":[0.8,0.2,0.1]}})",
-            R"({"type":"diffuse","param":{"color":[0.8,0.2,0.1]}})",
+            R"({"type":"principled_bsdf","param":{"color":[0.8,0.2,0.1],"subsurface_weight":0,"roughness":1,"spec_tint":[0,0,0]}})",
+            R"({"type":"principled_bsdf","param":{"color":[0.8,0.2,0.1],"subsurface_weight":0,"roughness":1,"spec_tint":[0,0,0]}})",
             R"({"type":"principled_bsdf","param":{"color":[0.8,0.2,0.1],"coat_weight":1,"coat_ior":2.5,"roughness":0.4,"normal":{"node":"test_normal","channels":"xyz"}},"node_tab":{"test_normal":{"type":"number","param":{"value":[0.6,0,0.8]}}}})",
             R"({"type":"principled_bsdf","param":{"color":[0.8,0.2,0.1],"coat_weight":1,"coat_ior":2.5,"roughness":0.4,"normal":{"node":"test_normal","channels":"xyz"}},"node_tab":{"test_normal":{"type":"number","param":{"value":[0.6,0,0.8]}}}})",
         };
@@ -568,9 +594,9 @@ int main() {
         auto glass_scene = scene_description(true);
         glass_scene["render"]["integrator"]["param"]["indirect"]["open"] = true;
         glass_scene["scene"]["materials"] = vision::DataWrap::parse(R"([
-            {"name":"glass","type":"glass","param":{"material_name":"BK7","roughness":0.001,"remapping_roughness":false}},
-            {"name":"red","type":"diffuse","param":{"color":[0.8,0.1,0.1]}},
-            {"name":"blue","type":"diffuse","param":{"color":[0.1,0.1,0.8]}}])");
+            {"name":"glass","type":"principled_bsdf","param":{"roughness":0.03162277660168379,"subsurface_weight":0,"transmission_weight":1,"ior":1.5,"color":[1,1,1]}},
+            {"name":"red","type":"principled_bsdf","param":{"color":[0.8,0.1,0.1],"subsurface_weight":0,"roughness":1,"spec_tint":[0,0,0]}},
+            {"name":"blue","type":"principled_bsdf","param":{"color":[0.1,0.1,0.8],"subsurface_weight":0,"roughness":1,"spec_tint":[0,0,0]}}])");
         glass_scene["scene"]["shapes"] = vision::DataWrap::parse(R"([
             {"type":"model","param":{"fn":"glass-front.obj","material":"glass","normalize_to_unit_bounds":false}},
             {"type":"model","param":{"fn":"glass-back-target.obj","material":"red","normalize_to_unit_bounds":false}},
@@ -598,7 +624,7 @@ int main() {
         write_file(fixture / "glass-occluder.obj", "v -4 -4 0.8\nv 0 4 0.8\nv 4 -4 0.8\nvn 0 0 -1\nf 1//1 2//1 3//1\n");
         auto occluded = glass_scene;
         occluded["scene"]["materials"].push_back(vision::DataWrap::parse(
-            R"({"name":"black","type":"diffuse","param":{"color":[0,0,0]}})"));
+            R"({"name":"black","type":"black_body","param":{}})"));
         occluded["scene"]["shapes"].push_back(vision::DataWrap::parse(
             R"({"type":"model","param":{"fn":"glass-occluder.obj","material":"black","normalize_to_unit_bounds":false}})"));
         run_glass_variant(occluded, 5u, "occluded-reflection");
@@ -684,10 +710,10 @@ int main() {
         mirror_scene["render"]["integrator"]["param"]["indirect"]["open"] = true;
         mirror_scene["render"]["denoiser"] = vision::DataWrap::parse(R"({"type":"svgf","param":{"enabled":true}})");
         mirror_scene["render"]["integrator"]["param"]["denoiser"] = vision::DataWrap::parse(R"({"type":"svgf","param":{"enabled":true}})");
-        mirror_scene["scene"]["materials"][0]["type"] = "mirror";
-        mirror_scene["scene"]["materials"][0]["param"] = vision::DataWrap::parse(R"({"color":[0.6,0.8,1],"roughness":0.001})");
+        mirror_scene["scene"]["materials"][0]["type"] = "principled_bsdf";
+        mirror_scene["scene"]["materials"][0]["param"] = vision::DataWrap::parse(R"({"color":[0.6,0.8,1],"metallic":1,"roughness":0.001,"subsurface_weight":0})");
         mirror_scene["scene"]["materials"].push_back(vision::DataWrap::parse(
-            R"({"type":"diffuse","name":"reflected","param":{"color":[0.8,0.2,0.1]}})"));
+            R"({"type":"principled_bsdf","name":"reflected","param":{"color":[0.8,0.2,0.1],"subsurface_weight":0,"roughness":1,"spec_tint":[0,0,0]}})"));
         mirror_scene["scene"]["shapes"].push_back(vision::DataWrap::parse(
             R"({"type":"model","param":{"fn":"mirror-receiver.obj","material":"reflected","normalize_to_unit_bounds":false}})"));
         auto mirror_pipeline = Corona::Tests::make_vision_test_pipeline(mirror_scene, fixture);
@@ -769,13 +795,13 @@ int main() {
         expect(disabled.is_replaced && disabled.stable_branch == vision::InvalidUI32 &&
                    std::abs(disabled.pos_diff.z + 1.f) < 1e-4f && std::abs(disabled.normal_depth.w - 1.f) < 1e-4f,
                "stable_planes=false must disable stable reuse and restore the primary mirror guides");
-        // No material named/type mirror exists in this scene. The same planar
-        // continuation must work for Kitchen's low-roughness conductor.
+        // The same planar continuation must work for another Principled metal
+        // with a different tint and roughness, without a dedicated mirror type.
         auto metal_scene = mirror_scene;
         metal_scene["render"]["integrator"]["param"]["direct"]["stable_planes"] = true;
-        metal_scene["scene"]["materials"][0]["type"] = "metal";
+        metal_scene["scene"]["materials"][0]["type"] = "principled_bsdf";
         metal_scene["scene"]["materials"][0]["param"] = vision::DataWrap::parse(
-            R"({"material_name":"Cr","roughness":0.002,"remapping_roughness":false})");
+            R"({"color":[0.65,0.65,0.65],"metallic":1,"roughness":0.04472136,"subsurface_weight":0})");
         auto metal_pipeline = Corona::Tests::make_vision_test_pipeline(metal_scene, fixture);
         metal_pipeline->frame_buffer()->set_enable_accumulation(false);
         metal_pipeline->prepare(); metal_pipeline->frame_buffer()->prepare_view_texture();
@@ -789,9 +815,9 @@ int main() {
                "low-roughness metal must use stable endpoint guides without any mirror material in the scene");
         check_stable_plane(*metal_pipeline, false);
         const char* rejected_materials[] = {
-            R"({"type":"metal","param":{"material_name":"Cr","roughness":0.3,"remapping_roughness":false}})",
-            R"({"type":"metal","param":{"material_name":"Cr","roughness":0.002,"remapping_roughness":false,"normal":{"node":"tilted","channels":"xyz"}},"node_tab":{"tilted":{"type":"number","param":{"value":[0.6,0,0.8]}}}})",
-            R"({"type":"mix","param":{"frac":0.5,"mat0":{"type":"mirror","param":{"color":[1,1,1],"roughness":0.001}},"mat1":{"type":"diffuse","param":{"color":[0.5,0.5,0.5]}}}})",
+            R"({"type":"principled_bsdf","param":{"roughness":0.5477225575051661,"subsurface_weight":0,"metallic":1,"color":[0.65,0.65,0.65]}})",
+            R"({"type":"principled_bsdf","param":{"roughness":0.044721359549995794,"normal":{"node":"tilted","channels":"xyz"},"subsurface_weight":0,"metallic":1,"color":[0.65,0.65,0.65]},"node_tab":{"tilted":{"type":"number","param":{"value":[0.6,0,0.8]}}}})",
+            R"({"type":"principled_bsdf","param":{"color":[0.5,0.5,0.5],"metallic":0.5,"roughness":0.001,"subsurface_weight":0}})",
         };
         for (const char* material_json : rejected_materials) {
             auto rejected = metal_scene;

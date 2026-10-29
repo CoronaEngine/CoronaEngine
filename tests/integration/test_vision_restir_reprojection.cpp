@@ -177,7 +177,7 @@ void check_restir_material_reuse(vision::Pipeline& pipeline, const std::vector<v
     const Case cases[]{
         {"same_diffuse", 0, 0, 1}, {"different_color", 0, 1, 0},
         {"similar_color", 0, 2, 1}, {"different_reflectivity", 3, 4, 0},
-        {"different_plastic_roughness", 5, 6, 0}, {"same_black", 7, 7, 1},
+        {"different_principled_roughness", 5, 6, 0}, {"same_black", 7, 7, 1},
         {"same_glossy", 3, 3, 1}, {"glass_reflectivity", 8, 9, 0},
         {"same_normal_mapped_material_different_view", 14, 15, 1},
         {"same_layered_material_different_view", 10, 11, 1}, {"same_hero_material_different_frame", 12, 13, 1},
