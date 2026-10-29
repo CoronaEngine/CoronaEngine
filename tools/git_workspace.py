@@ -9,7 +9,6 @@ from __future__ import annotations
 import errno
 import os
 import subprocess
-import tempfile
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -347,23 +346,21 @@ def _update_submodules(worktree: Path) -> None:
 
 
 def _clone_locked(repo_root: Path, worktree: Path, workspace: SourceWorkspace) -> None:
-    # Publish only a complete checkout. A failed clone/submodule init removes only
-    # our private staging directory, never an existing developer checkout.
-    worktree.parent.mkdir(parents=True, exist_ok=True)
-    staging_root = _inside_repo(repo_root, Path(".workspace"))
-    staging_root.mkdir(parents=True, exist_ok=True)
-    staging = Path(tempfile.mkdtemp(prefix=f".{workspace.key}-", dir=staging_root))
-    checkout = staging / "checkout"
+    # Claim the final directory before entering the cleanup scope. If it already
+    # exists, mkdir fails without touching it. Git accepts an empty destination.
+    worktree.mkdir(parents=True, exist_ok=False)
     try:
-        run_command(("git", "clone", "--no-checkout", workspace.url, checkout), cwd=repo_root)
-        _git(checkout, "fetch", "--tags", "origin", workspace.ref)
-        _git(checkout, "cat-file", "-e", f"{workspace.commit}^{{commit}}")
-        _git(checkout, "checkout", "-B", workspace.ref, workspace.commit)
-        _git(checkout, "branch", "--set-upstream-to", f"origin/{workspace.ref}", workspace.ref)
-        _update_submodules(checkout)
-        checkout.rename(worktree)
-    finally:
-        safe_remove(repo_root, staging)
+        run_command(("git", "clone", "--no-checkout", workspace.url, worktree), cwd=repo_root)
+        _git(worktree, "fetch", "--tags", "origin", workspace.ref)
+        _git(worktree, "cat-file", "-e", f"{workspace.commit}^{{commit}}")
+        _git(worktree, "checkout", "-B", workspace.ref, workspace.commit)
+        _git(worktree, "branch", "--set-upstream-to", f"origin/{workspace.ref}", workspace.ref)
+        _update_submodules(worktree)
+    except BaseException:
+        # Only remove the directory created by this attempt, so failures can be
+        # retried without treating a partial checkout as existing developer work.
+        safe_remove(repo_root, worktree)
+        raise
 
 
 def _migrate_legacy(repo_root: Path, worktree: Path, workspace: SourceWorkspace) -> None:
