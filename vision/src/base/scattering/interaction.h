@@ -10,6 +10,7 @@
 #include "base/scattering/sample.h"
 #include "math/optics.h"
 #include "base/using.h"
+#include "half_storage.h"
 
 namespace vision {
 struct SurfaceData {
@@ -103,22 +104,37 @@ static_assert(sizeof(StablePlaneHistory) <= 128u);
 struct StablePlaneData {
     SurfaceData surface{};
     SurfaceExtend extension{};
-    float2 motion{};
+    uint motion_storage{};
     array_float3 depth_position{};
     uint branch_sequence{1u};
     uint instance_hash{};
     uint depth{};
     uint material_id{InvalidUI32};
-    uint valid{};
-    uint reservoir_eligible{};
+    uint flags{};
+
+    [[nodiscard]] float2 motion() const noexcept { return unpack_storage_half2_host(motion_storage); }
+    void set_motion(float2 value) noexcept { motion_storage = pack_storage_half2_host(value); }
+    [[nodiscard]] uint valid() const noexcept { return flags & 1u; }
+    [[nodiscard]] uint reservoir_eligible() const noexcept { return (flags >> 1u) & 1u; }
+    void set_valid(uint value) noexcept { flags = (flags & ~1u) | uint(value != 0u); }
+    void set_reservoir_eligible(uint value) noexcept { flags = (flags & ~2u) | (uint(value != 0u) << 1u); }
 };
+static_assert(sizeof(SurfaceData) == 160u);
+static_assert(sizeof(StablePlaneData) == 240u);
+static_assert(sizeof(StablePlaneHistory) == 96u);
 }// namespace vision
 OC_STRUCT(vision, StablePlaneHistorySurface, hit, virtual_position, virtual_geometric_normal,
           approximate, stable_branch) {};
 OC_STRUCT(vision, StablePlaneHistory, surface, motion, depth_position,
           branch_sequence, instance_hash, depth, material_id, valid) {};
-OC_STRUCT(vision, StablePlaneData, surface, extension, motion, depth_position,
-          branch_sequence, instance_hash, depth, material_id, valid, reservoir_eligible) {
+OC_STRUCT(vision, StablePlaneData, surface, extension, motion_storage, depth_position,
+          branch_sequence, instance_hash, depth, material_id, flags) {
+    [[nodiscard]] Float2 motion() const noexcept { return vision::unpack_storage_half2(motion_storage); }
+    void set_motion(const Float2 &value) noexcept { motion_storage = vision::pack_storage_half2(value); }
+    [[nodiscard]] Uint valid() const noexcept { return flags & 1u; }
+    [[nodiscard]] Uint reservoir_eligible() const noexcept { return (flags >> 1u) & 1u; }
+    void set_valid(const Uint &value) noexcept { flags = (flags & ~1u) | ocarina::select(value != 0u, 1u, 0u); }
+    void set_reservoir_eligible(const Uint &value) noexcept { flags = (flags & ~2u) | ocarina::select(value != 0u, 2u, 0u); }
     [[nodiscard]] Var<vision::StablePlaneHistory> history() const noexcept {
         Var<vision::StablePlaneHistory> ret;
         ret.surface.hit = surface.hit;
@@ -126,9 +142,9 @@ OC_STRUCT(vision, StablePlaneData, surface, extension, motion, depth_position,
         ret.surface.virtual_geometric_normal = surface.virtual_geometric_normal;
         ret.surface.approximate = surface.approximate;
         ret.surface.stable_branch = surface.stable_branch;
-        ret.motion = motion; ret.depth_position = depth_position;
+        ret.motion = motion(); ret.depth_position = depth_position;
         ret.branch_sequence = branch_sequence; ret.instance_hash = instance_hash;
-        ret.depth = depth; ret.material_id = material_id; ret.valid = valid;
+        ret.depth = depth; ret.material_id = material_id; ret.valid = valid();
         return ret;
     }
 };

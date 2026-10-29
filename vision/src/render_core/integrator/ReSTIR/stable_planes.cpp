@@ -8,8 +8,9 @@ namespace {
 // storage emitter's offsets and traverses defined leaves only, never padding.
 constexpr uint CooperativeSPWidth = 64u;
 constexpr uint CooperativeSPStride = CooperativeSPWidth + 1u;
-// Padding words51/63 need no LDS rows; declared shared storage fits Vulkan16KiB.
-using CooperativeSPWords = SharedArray<uint, CooperativeSPStride * 62u>;
+// The compact record has sixty defined words and no padding.
+constexpr uint CooperativeSPRecordWords = 60u;
+using CooperativeSPWords = SharedArray<uint, CooperativeSPStride * CooperativeSPRecordWords>;
 
 // This Vulkan compute kernel shares only its LDS tile and owner flags.
 void synchronize_stable_plane_shared() noexcept {
@@ -20,7 +21,7 @@ void synchronize_stable_plane_shared() noexcept {
 
 void stage_stable_plane_words(const Expression *value, const Type *type,
                               size_t offset, CooperativeSPWords &words,
-                              const Uint &lane, std::array<bool, 64> &occupied) {
+                              const Uint &lane, std::array<bool, CooperativeSPRecordWords> &occupied) {
     if (type->is_structure()) {
         size_t member_offset = 0u;
         for (uint member = 0u; member < type->members().size(); ++member) {
@@ -43,7 +44,7 @@ void stage_stable_plane_words(const Expression *value, const Type *type,
         uint word = uint(offset / sizeof(uint));
         OC_ERROR_IF(occupied[word], "SP cooperative store reflected overlapping fields");
         occupied[word] = true;
-        Uint index = (word - uint(word > 51u)) * CooperativeSPStride + lane;
+        Uint index = word * CooperativeSPStride + lane;
         if (type->tag() == Type::Tag::FLOAT) {
             words.write(index, as<uint>(eval<float>(value)));
         } else {
@@ -54,11 +55,11 @@ void stage_stable_plane_words(const Expression *value, const Type *type,
     }
 }
 
-static_assert(sizeof(StablePlaneData) == 256u);
-static_assert((CooperativeSPStride * 62u + CooperativeSPWidth) * sizeof(uint) <= 16u * 1024u);
+static_assert(sizeof(StablePlaneData) == CooperativeSPRecordWords * sizeof(uint));
+static_assert((CooperativeSPStride * CooperativeSPRecordWords + CooperativeSPWidth) * sizeof(uint) <= 16u * 1024u);
 static_assert(offsetof(StablePlaneData, extension) + sizeof(SurfaceExtend) == 204u);
-static_assert(offsetof(StablePlaneData, motion) == 208u);
-static_assert(offsetof(StablePlaneData, reservoir_eligible) + sizeof(uint) == 252u);
+static_assert(offsetof(StablePlaneData, motion_storage) == 204u);
+static_assert(offsetof(StablePlaneData, flags) + sizeof(uint) == 240u);
 
 struct BuildPath {
     RayState ray;
@@ -77,7 +78,7 @@ struct BuildPath {
 
 [[nodiscard]] Bool on_prefix(const Uint &sequence, const Uint &depth, const StablePlaneDataVar &plane) {
     Uint shift = min(plane.depth - min(depth, plane.depth), 15u) * 2u;
-    return plane.valid != 0u && depth <= plane.depth && sequence == (plane.branch_sequence >> shift);
+    return plane->valid() != 0u && depth <= plane.depth && sequence == (plane.branch_sequence >> shift);
 }
 
 [[nodiscard]] Float3 rotate_from_to(const Float3 &v, const Float3 &from, const Float3 &to) {
@@ -125,6 +126,13 @@ void scatter_path(BuildPath &path, const Interaction &it, const StableLobe &lobe
 }
 }// namespace
 
+void StablePlanes::restore(RuntimeObject *old_obj) noexcept {
+    // ReSTIR can reload without replacing the FrameBuffer object.
+    frame_buffer().require_stable_plane_storage_abi();
+    ReSTIR::restore(old_obj);
+    VS_HOTFIX_MOVE_ATTRS(max_recursion_, clear_children_, build_, fill_, save_history_)
+}
+
 void StablePlanes::prepare(bool retain_history) noexcept {
     auto &fb = frame_buffer();
     fb.manage_stable_plane_buffers(integrator()->stable_planes_enabled(), retain_history);
@@ -134,7 +142,7 @@ void StablePlanes::compile() noexcept {
     Kernel save_history = [](BufferVar<StablePlaneData> current, BufferVar<StablePlaneHistory> previous,
                              BufferVar<uint> history_words) {
         Uint idx = dispatch_id();
-        $if(current.read(idx).valid != 0u) {
+        $if(current.read(idx)->valid() != 0u) {
             previous.write(idx, current.read(idx)->history());
         } $else {
             // Invalid records are never consumed. Clearing the validity word
@@ -157,7 +165,7 @@ void StablePlanes::compile() noexcept {
     // Keep complete default records for invalid children without rewriting the
     // mostly empty layers every frame. History has already been saved here.
     Kernel clear_children = [](BufferVar<StablePlaneData> buffer) {
-        $if(buffer.read(dispatch_id()).valid != 0u) {
+        $if(buffer.read(dispatch_id())->valid() != 0u) {
             buffer.write(dispatch_id(), StablePlaneDataVar{});
         };
     };
@@ -190,6 +198,7 @@ void StablePlanes::compile() noexcept {
         for (uint layer = 0; layer < StablePlaneCount; ++layer) {
             BuildPath &path = paths[layer];
             StablePlaneDataVar plane;
+            Float2 plane_motion = make_float2(0.f);
             fb.stable_direct().write(layer * (dispatch_dim().x * dispatch_dim().y) + dispatch_id(), make_float4(0.f));
             fb.stable_indirect().write(layer * (dispatch_dim().x * dispatch_dim().y) + dispatch_id(), make_float4(0.f));
             if (lobes) {
@@ -209,7 +218,7 @@ void StablePlanes::compile() noexcept {
                         } $else { hit = geometry.trace_closest(path.ray.ray); };
                     } else { hit = geometry.trace_closest(path.ray.ray); }
                     plane.surface.hit = hit;
-                    plane.valid = 1u;
+                    plane->set_valid(1u);
                     plane.depth = path.depth; plane.branch_sequence = path.sequence; plane.instance_hash = path.identity;
                     plane.extension.view_pos.set(path.ray.origin());
                     plane.extension.final_direction.set(path.ray.direction());
@@ -244,12 +253,9 @@ void StablePlanes::compile() noexcept {
                     scene().materials().dispatch(it.material_id(), [&](const Material *material) {
                         Interaction guide_it = it;
                         auto bsdf = material->create_evaluator(it, sampled_wavelengths());
-                        StableLobes lobes = bsdf.eval_stable_lobes(it.wo);
                         Bool exact_planar = bsdf.supports_stable_reflection(it.wo) &&
                             dot(bsdf.shading_frame().normal(), it.ng) > 0.99999f &&
                             dot(material->shading_normal(it, sampled_wavelengths()), it.ng) > 0.99999f;
-                        Bool supported = Bool(material->enable_delta()) && !lobes.has_stochastic_remainder &&
-                            (!bsdf.supports_stable_reflection(it.wo) || exact_planar);
                         plane.surface.flag = bsdf.flag();
                         plane.surface->set_position(it.pos);
                         plane.surface->set_normal(bsdf.shading_frame().normal());
@@ -260,9 +266,9 @@ void StablePlanes::compile() noexcept {
                         plane.surface.virtual_geometric_normal.set(path.vector(it.ng));
                         plane.surface->set_depth(camera->linear_depth(select(path.planar,
                             plane.surface.virtual_position.as_vec3(), plane.depth_position.as_vec3())));
-                        plane.motion = fb.compute_motion_vec(camera, ss.p_film, plane.surface.virtual_position.as_vec3(), true);
+                        plane_motion = fb.compute_motion_vec(camera, ss.p_film, plane.surface.virtual_position.as_vec3(), true);
                         $if(!path.planar) {
-                            plane.motion = camera->raster_coord(plane.surface.virtual_position.as_vec3()).xy() -
+                            plane_motion = camera->raster_coord(plane.surface.virtual_position.as_vec3()).xy() -
                                 camera->prev_raster_coord(plane.surface.virtual_position.as_vec3()).xy();
                         };
                         guide_it.wo = guide_it.ng;
@@ -279,7 +285,10 @@ void StablePlanes::compile() noexcept {
                         plane.surface.specular_roughness = make_float4(spectrum->linear_srgb(specular, guide_swl), roughness.y);
                         Float3 albedo_wo = select(dot(bsdf.shading_frame().normal(), it.wo) < 0.f, -it.wo, it.wo);
                         plane.surface.denoiser_albedo.set(spectrum->linear_srgb(bsdf.albedo(albedo_wo) * SampledSpectrum(path.weight), sampled_wavelengths()));
-                        plane.reservoir_eligible = !plane.surface->near_specular() && !it.has_emission();
+                        plane->set_reservoir_eligible(cast<uint>(!plane.surface->near_specular() && !it.has_emission()));
+                        StableLobes lobes = bsdf.eval_stable_lobes(it.wo);
+                        Bool supported = Bool(material->enable_delta()) && !lobes.has_stochastic_remainder &&
+                            (!bsdf.supports_stable_reflection(it.wo) || exact_planar);
                         $if(supported && path.depth < exploration_limit) {
                             if (layer == 0u) {
                                 $if(lobes.lobes[0].valid && lobes.lobes[1].valid) {
@@ -311,6 +320,8 @@ void StablePlanes::compile() noexcept {
                     });
                     $if(!continued) { $break; };
                 };
+                // Quantize the physical SP copy once; retain FP32 for the global export.
+                plane->set_motion(plane_motion);
                 $if(!cooperative_store) {
                     planes.write(layer * (dispatch_dim().x * dispatch_dim().y) + dispatch_id(), plane);
                 };
@@ -321,12 +332,12 @@ void StablePlanes::compile() noexcept {
             $if(cooperative_store) {
                 cooperative_active.write(cooperative_lane, cast<uint>(path.active));
                 $if(path.active) {
-                    std::array<bool, 64> occupied{};
+                    std::array<bool, CooperativeSPRecordWords> occupied{};
                     stage_stable_plane_words(plane.expression(), Type::of<StablePlaneData>(),
                                              0u, cooperative_words, cooperative_lane, occupied);
                     for (uint word = 0u; word < occupied.size(); ++word) {
-                        OC_ERROR_IF(occupied[word] != (word != 51u && word != 63u),
-                                    "SP cooperative store reflected an unexpected padding layout");
+                        OC_ERROR_IF(!occupied[word],
+                                    "SP cooperative store must cover every compact record word");
                     }
                 };
                 synchronize_stable_plane_shared();
@@ -350,16 +361,14 @@ void StablePlanes::compile() noexcept {
                 }
                 $if(tile_active) {
                     // Each wave writes consecutive words of one owner's record.
-                    // The original aggregate store leaves these two padding words
-                    // untouched; preserve padding canaries with the same mask.
-                    $if(cooperative_lane != 51u && cooperative_lane != 63u) {
+                    // Lanes60-63 are outside the compact record.
+                    $if(cooperative_lane < CooperativeSPRecordWords) {
                         Uint group_first = dispatch_id() - cooperative_lane;
                         Uint layer_first = layer * (dispatch_dim().x * dispatch_dim().y);
-                        Uint packed_lane = cooperative_lane - cast<uint>(cooperative_lane > 51u);
                         $for(owner, CooperativeSPWidth) {
                             $if(cooperative_active.read(owner) != 0u) {
-                                Uint address = (layer_first + group_first + owner) * 64u + cooperative_lane;
-                                Uint word = cooperative_words.read(packed_lane * CooperativeSPStride + owner);
+                                Uint address = (layer_first + group_first + owner) * CooperativeSPRecordWords + cooperative_lane;
+                                Uint word = cooperative_words.read(cooperative_lane * CooperativeSPStride + owner);
                                 plane_words.write(address, word);
                             };
                         };
@@ -370,11 +379,11 @@ void StablePlanes::compile() noexcept {
                 synchronize_stable_plane_shared();
             };
             // The transmission child wins, followed by reflection and base.
-            $if(plane.valid != 0u && plane.reservoir_eligible != 0u && (dominant == InvalidUI32 || Uint{layer} == 1u)) {
+            $if(plane->valid() != 0u && plane->reservoir_eligible() != 0u && (dominant == InvalidUI32 || Uint{layer} == 1u)) {
                 dominant = layer;
                 exported = plane.surface;
                 extension = plane.extension;
-                exported_motion = plane.motion;
+                exported_motion = plane_motion;
             };
         }
         fb.stable_radiance().write(dispatch_id(), make_float4(stable_radiance, 1.f));

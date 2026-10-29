@@ -347,7 +347,17 @@ public:
 public:
     FrameBuffer() = default;
     explicit FrameBuffer(const FrameBufferDesc &desc);
-    VS_HOTFIX_MAKE_RESTORE(Node, cur_view_, surfaces_, surface_exts_, surface_ext_history_, hit_bsdfs_,
+    // Buffer<T> stores handles/counts/descriptors, not inline T records; this
+    // guard reads the unchanged host name before moving typed GPU allocations.
+    void require_stable_plane_storage_abi() const noexcept {
+        OC_ERROR_IF(stable_planes_.size() != 0u && !stable_planes_.name().ends_with(" [motion-half-flags-v1]"),
+                    "SP motion storage ABI changed; restart the engine before loading the new shaders.");
+    }
+    void restore(RuntimeObject *old_obj) noexcept override {
+        const auto *previous = dynamic_cast<FrameBuffer *>(old_obj);
+        previous->require_stable_plane_storage_abi();
+        Node::restore(old_obj);
+        VS_HOTFIX_MOVE_ATTRS(cur_view_, surfaces_, surface_exts_, surface_ext_history_, hit_bsdfs_,
                            stable_planes_, stable_plane_history_, stable_plane_buffers_enabled_, stable_plane_history_retained_, stable_direct_, stable_indirect_, stable_radiance_, stable_dominant_,
                            motion_vectors_, hit_buffer_, screen_buffers_,
                            denoiser_diffuse_, denoiser_specular_, denoiser_bypass_, denoiser_di_specular_, denoiser_gi_specular_, denoiser_di_bypass_,
@@ -356,6 +366,7 @@ public:
                            /// shaders
                            compute_geom_, compute_hit_, save_surface_exts_history_,
                            accumulate_)
+    }
     OC_ENCODABLE_FUNC(EncodedObject, accumulation_, tone_mapper_, exposure_)
     VS_MAKE_GUI_STATUS_FUNC(Node, upsampler_, tone_mapper_)
     void prepare() noexcept override;
@@ -458,7 +469,9 @@ public:
     void init_buffer_impl(RegistrableBuffer<T> &buffer, bool has_register, const string &desc, uint count = 1, uint pixels = 0u) noexcept {
         pixels = pixels ? pixels : frame_buffer_size();
         uint element_num = count * pixels;
-        buffer.super() = device().create_buffer<T>(element_num, desc);
+        string storage_desc = desc;
+        if constexpr (std::is_same_v<T, StablePlaneData>) storage_desc += " [motion-half-flags-v1]";
+        buffer.super() = device().create_buffer<T>(element_num, storage_desc);
         vector<T> vec{};
         vec.assign(element_num, T{});
         buffer.upload_immediately(vec.data());
