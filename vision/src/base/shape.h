@@ -23,7 +23,6 @@ struct InstanceData {
     // todo compress unsigned int data
     uint light_id{InvalidUI32};
     uint mat_id{InvalidUI32};
-    uint lightmap_id{InvalidUI32};
     uint mesh_id{InvalidUI32};
     uint inside_medium{InvalidUI32};
     uint outside_medium{InvalidUI32};
@@ -36,7 +35,7 @@ struct InstanceData {
 }// namespace vision
 
 // clang-format off
-OC_STRUCT(vision, InstanceData, light_id, mat_id, lightmap_id,
+OC_STRUCT(vision, InstanceData, light_id, mat_id,
           mesh_id, inside_medium, outside_medium, o2w_transposed){
     [[nodiscard]] auto o2w() const noexcept {
         return make_float4x4(transpose(o2w_transposed));
@@ -45,8 +44,6 @@ OC_STRUCT(vision, InstanceData, light_id, mat_id, lightmap_id,
 // clang-format on
 
 namespace vision {
-
-class UnwrapperResult;
 
 struct MeshHandle {
     uint vertex_buffer;
@@ -83,12 +80,6 @@ protected:
     vector<Triangle> triangles_;
     uint index_{};
 
-    bool has_lightmap_uv_{false};
-    /// light map resolution
-    uint2 resolution_;
-    /// auto unwrap light map uv is not normalized
-    bool normalized_{false};
-
 protected:
     [[nodiscard]] uint64_t compute_hash() const noexcept override;
 
@@ -98,17 +89,10 @@ public:
     Mesh() = default;
     OC_MAKE_MEMBER_GETTER_SETTER(vertices, &)
     OC_MAKE_MEMBER_GETTER_SETTER(triangles, &)
-    OC_MAKE_MEMBER_GETTER_SETTER(has_lightmap_uv, )
-    OC_MAKE_MEMBER_GETTER_SETTER(resolution, )
     void upload_immediately() noexcept;
     [[nodiscard]] CommandBatch upload() noexcept;
     void update_data(Device &device, BindlessArray &bindless) noexcept;
-    void normalize_lightmap_uv() noexcept;
-    void setup_lightmap_uv(const UnwrapperResult &result);
-    [[nodiscard]] float2 lightmap_uv_unnormalized(uint index) const noexcept;
     [[nodiscard]] Box3f compute_aabb() const noexcept;
-    [[nodiscard]] uint lightmap_size() const noexcept;
-    [[nodiscard]] vector<float> surface_areas() const noexcept;
 };
 
 }// namespace vision
@@ -177,7 +161,6 @@ public:
     VS_MAKE_ATTR_SETTER_GETTER(outside)
     VS_MAKE_ATTR_SETTER_GETTER(material)
     VS_MAKE_ATTR_SETTER_GETTER(emission)
-    void set_lightmap_id(uint id) noexcept { handle_.lightmap_id = id; }
     [[nodiscard]] float4x4 o2w() const noexcept { return handle_.o2w(); }
     void set_o2w(float4x4 o2w) noexcept {
         handle_.o2w_transposed = transpose(make_float3x4(o2w));
@@ -189,7 +172,6 @@ public:
     virtual void update_material_id(uint id) noexcept { handle_.mat_id = id; }
     virtual void update_light_id(uint id) noexcept { handle_.light_id = id; }
     [[nodiscard]] vector<float> surface_areas() const noexcept;
-    [[nodiscard]] bool has_lightmap() const noexcept { return handle_.lightmap_id != InvalidUI32; }
 };
 }// namespace vision
 

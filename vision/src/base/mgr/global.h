@@ -61,7 +61,6 @@ public:
     void restore_scene_gpu_context(SceneGpuContext context) noexcept;
     void set_scene_path(const fs::path &sp) noexcept;
     [[nodiscard]] fs::path scene_path() const noexcept;
-    [[nodiscard]] fs::path scene_cache_path() const noexcept;
     [[nodiscard]] static decltype(auto) context() {
         return RHIContext::instance();
     }

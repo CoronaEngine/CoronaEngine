@@ -110,7 +110,7 @@ struct VisionExternalMemory {
 };
 
 struct VisionScenePacket {
-	VisionScenePacketFormat format{VisionScenePacketFormat_ProjectJsonUtf8};
+	VisionScenePacketFormat format{VisionScenePacketFormat_CoronaEngineSnapshotV1};
 	uint32_t schema_version{1u};
 	uint32_t flags{};
 	const void *data{};

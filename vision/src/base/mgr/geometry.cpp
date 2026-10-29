@@ -292,7 +292,6 @@ Interaction Geometry::compute_surface_interaction(const TriangleHitVar &hit, boo
     auto o2w = Transform(inst->o2w());
     Var tri = get_triangle(mesh.triangle_buffer, hit.prim_id);
     auto [v0, v1, v2] = get_vertices(mesh.vertex_buffer, tri);
-    it.lightmap_id = inst.lightmap_id;
     it.set_light(inst.light_id);
     it.set_material(inst.mat_id);
     it.set_medium(inst.inside_medium, inst.outside_medium);
@@ -304,7 +303,6 @@ Interaction Geometry::compute_surface_interaction(const TriangleHitVar &hit, boo
         Var p2 = o2w.apply_point(v2->position());
         Float3 pos = hit->triangle_lerp(p0, p1, p2);
         it.pos = pos;
-        it.lightmap_uv = hit->triangle_lerp(v0->lightmap_uv(), v1->lightmap_uv(), v2->lightmap_uv());
 
         Frame<Float3> frame;
 
