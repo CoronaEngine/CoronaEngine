@@ -1,2 +1,0 @@
-add_subdirectory(material_viewer)
-add_subdirectory(sampler_viewer)

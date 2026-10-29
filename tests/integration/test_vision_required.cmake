@@ -1,4 +1,4 @@
-# Vision is required by Optics independently of the standalone app/test options.
+# Vision is required by Optics independently of the optional test targets.
 # Run in the parent configure, where CMake can inspect the real build graph.
 block()
     foreach(required_target IN ITEMS corona_optics_system vision-all_libs

@@ -50,16 +50,7 @@ if (MSVC)
     add_compile_options(/MP)
 endif ()
 
-function(vision_add_application name)
-    cmake_parse_arguments(APP "" "" "SOURCES" ${ARGN})
-    add_executable(${name} ${APP_SOURCES})
-    target_compile_features(${name} PRIVATE c_std_11 cxx_std_20)
-    target_link_libraries(${name} PRIVATE vision-all_libs ${STDCXX_EXTRA_LIBS})
-    set_target_properties(${name} PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin/")
-endfunction()
-
 message(STATUS "[Vision] Integrating Vulkan compute renderer")
-message(STATUS "[Vision] VISION_BUILD_APPS  = ${VISION_BUILD_APPS}")
 message(STATUS "[Vision] VISION_BUILD_TESTS = ${VISION_BUILD_TESTS}")
 
 add_subdirectory(src)
