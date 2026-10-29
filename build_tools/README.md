@@ -245,27 +245,22 @@ python -m pytest build_tools/tests -q
 ### 3.1 可以放
 
 - CMake 模块（`corona_<topic>.cmake`）
-- 参与配置/构建/依赖安装/部署/打包/测试编排的 Python 脚本
-- 上述脚本的单元测试（`tests/`）
-- 构建相关的说明文档（本 README）
+- 参与配置、构建、依赖安装、部署、打包、测试编排的 Python 脚本
+- 上述脚本的单元测试
+- 构建相关的说明文档
 
 ### 3.2 禁止放
 
-- **与构建无关的工具**：性能剖析、渲染图对比、图像回归、benchmark、日志分析等一律放 `tools/`
-- 引擎源码、公开头文件、编辑器源码、第三方源码或二进制
+- 与构建无关的工具：性能剖析、渲染图对比、图像回归、benchmark、日志分析
+- 引擎源码与公开头文件
+- 编辑器前端/后端源码
+- 第三方源码或二进制
 - 构建产物与缓存：`build/`、`cmake-build-*`、`node_modules`、`__pycache__`、`*.pyc`
 - 日志、临时文件、截图、生成的报告、证据文件
-- 业务测试用例（放对应模块的 `tests/`）
-- 个人 IDE 配置、绝对路径脚本（例如硬编码 `D:\...` 的一次性批处理）
+- 业务测试用例
+- 个人 IDE 配置，以及硬编码机器绝对路径（如 `D:\...`）的一次性脚本
 
-### 3.3 判定标准
-
-新增文件前先问一句：**它是否参与 configure / build / install / package / test 的编排？**
-
-- 是 → 放 `build_tools/`，并按类型选择 `cmake/`、`scripts/` 或根目录
-- 否 → 放 `tools/`（开发者辅助脚本）或对应模块目录，不要进 `build_tools/`
-
-### 3.4 编码约定
+### 3.3 编码约定
 
 - 命名：脚本 `snake_case.py`，CMake 模块 `corona_<topic>.cmake`，测试 `test_<subject>.py`
 - `scripts/` 下的脚本必须能被 `python build_tools/scripts/<name>.py ...` 直接调用，
