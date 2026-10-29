@@ -211,23 +211,6 @@ void IAreaLight::restore(vision::RuntimeObject *old_obj) noexcept {
     instance()->set_emission(std::static_pointer_cast<IAreaLight>(shared_from_this()));
 }
 
-float4x4 IPointLight::resolve_o2w(const LightDesc &desc) noexcept {
-    if (desc.contains("o2w")) {
-        return desc.o2w.mat;
-    }
-    float3 position = desc["position"].as_float3(make_float3(0.f));
-    float3 direction = normalize(desc["direction"].as_float3(make_float3(0.f, 0.f, 1.f)));
-    float3 up = make_float3(0.f, 1.f, 0.f);
-    if (ocarina::abs(dot(direction, up)) > .999f) {
-        up = make_float3(1.f, 0.f, 0.f);
-    }
-    return look_at<H>(position, position + direction, up);
-}
-
-float3 &IPointLight::host_o2w_position(float4x4 &o2w) noexcept {
-    return reinterpret_cast<float3 &>(o2w[3]);
-}
-
 Float IPointLight::PDF_wi(const LightSampleContext &p_ref,
                           const LightEvalContext &p_light) const noexcept {
     return -1.f;

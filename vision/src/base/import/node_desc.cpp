@@ -166,7 +166,7 @@ void MaterialDesc::init(const ParameterSet &ps) noexcept {
     vision::GraphDesc::init(ps);
     init_node_map(ps.value("node_tab"));
     sub_type = ps["type"].as_string("diffuse");
-    if (sub_type == "mix" || sub_type == "add") {
+    if (sub_type == "mix") {
         mat0 = make_shared<MaterialDesc>();
         mat0->init(ps["param"]["mat0"]);
         mat1 = make_shared<MaterialDesc>();
