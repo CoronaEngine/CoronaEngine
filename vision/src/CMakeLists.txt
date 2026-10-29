@@ -35,7 +35,6 @@ add_subdirectory(math)
 add_subdirectory(render_graph)
 add_subdirectory(pipelines)
 add_subdirectory(render_core)
-add_subdirectory(sdk)
 
 if (VISION_BUILD_TESTS)
     add_subdirectory(tests)
