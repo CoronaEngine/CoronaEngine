@@ -1,0 +1,127 @@
+from __future__ import annotations
+
+from dataclasses import replace
+import stat
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from build_tools.source_workspaces import HORIZON
+from build_tools.dev import conan_options, target_family_for_target, target_family_for_targets
+from build_tools.workflow import (
+    DEFAULT_TARGET_FAMILY,
+    TARGET_FAMILIES,
+    _cmake_bracket,
+    _environment_value,
+    _set_environment_value,
+    build_dir,
+    clean_repo,
+    configuration_slug,
+    preset_name,
+    safe_remove,
+    target_family_slug,
+)
+
+
+class WorkflowTests(unittest.TestCase):
+    def test_configuration_paths_are_per_configuration_and_target_family(self) -> None:
+        root = Path("C:/repo")
+        self.assertEqual(configuration_slug("RelWithDebInfo"), "relwithdebinfo")
+        self.assertEqual(DEFAULT_TARGET_FAMILY, "examples")
+        self.assertEqual(build_dir(root, "Debug", "core"), root / "build" / "conan" / "core" / "debug")
+        self.assertEqual(build_dir(root, "Debug"), root / "build" / "conan" / "examples" / "debug")
+        self.assertEqual(preset_name("vision-tests", "RelWithDebInfo"), "vision-tests-relwithdebinfo")
+
+    def test_unknown_configuration_is_rejected(self) -> None:
+        with self.assertRaises(ValueError):
+            configuration_slug("Profile")
+        with self.assertRaises(ValueError):
+            target_family_slug("everything")
+
+    def test_target_family_mapping_and_options(self) -> None:
+        self.assertEqual(TARGET_FAMILIES, ("core", "examples", "tests", "vision", "vision-tests"))
+        self.assertEqual(target_family_for_target("CoronaEngine"), "core")
+        self.assertEqual(target_family_for_target("corona_engine"), "examples")
+        self.assertEqual(target_family_for_target("corona_resource_tests"), "tests")
+        self.assertEqual(target_family_for_target("vision-base"), "vision")
+        self.assertEqual(target_family_for_target("test-render_graph"), "vision-tests")
+        self.assertEqual(target_family_for_target("vision-denoiser-SVGF"), "vision")
+        self.assertEqual(target_family_for_targets(["corona_engine"]), "examples")
+        with self.assertRaises(ValueError):
+            target_family_for_targets(["corona_engine", "CoronaEngine"])
+        self.assertIn("&:with_vision_tests=True", conan_options("vision-tests"))
+
+    def test_cmake_bracket_handles_embedded_delimiter(self) -> None:
+        self.assertEqual(_cmake_bracket("a]]b"), "[=[a]]b]=]")
+
+    def test_environment_keys_are_merged_case_insensitively(self) -> None:
+        environment = {"PATH": "old", "Path": "duplicate", "OTHER": "value"}
+        _set_environment_value(environment, "Path", "with-msvc")
+        self.assertEqual(_environment_value(environment, "PATH"), "with-msvc")
+        self.assertEqual(sum(key.casefold() == "path" for key in environment), 1)
+
+    def test_safe_remove_refuses_outside_repository(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "repo"
+            root.mkdir()
+            with self.assertRaises(RuntimeError):
+                safe_remove(root, root.parent)
+
+    def test_safe_remove_deletes_readonly_git_objects(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            checkout = root / "Horizon"
+            objects = checkout / ".git" / "objects" / "pack"
+            objects.mkdir(parents=True)
+            git_object = objects / "fixture.idx"
+            git_object.write_bytes(b"readonly Git object")
+            git_object.chmod(stat.S_IREAD)
+            safe_remove(root, checkout)
+            self.assertFalse(checkout.exists())
+
+    def test_safe_remove_refuses_repository_root(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with self.assertRaises(RuntimeError):
+                safe_remove(root, root)
+
+    def test_clean_removes_artifacts_but_keeps_sources_and_lock_files(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            clean_repo(root)
+            self.assertFalse((root / "build").exists())
+            preserved = (
+                "build/.locks/horizon.lock", "build/.locks/editor.lock",
+                "Horizon/local.cpp", "CoronaEditor/local.py",
+            )
+            removed = (
+                "build/conan/examples/debug/CMakeCache.txt", "build/output.txt",
+                "install/file.txt", "out/file.txt", "dist/file.txt",
+            )
+            for relative in (*preserved, *removed):
+                path = root / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(relative, encoding="utf-8")
+
+            clean_repo(root)
+            clean_repo(root)
+
+            for relative in preserved:
+                self.assertEqual((root / relative).read_text(encoding="utf-8"), relative)
+            self.assertEqual({path.name for path in (root / "build").iterdir()}, {".locks"})
+            for relative in ("install", "out", "dist"):
+                self.assertFalse((root / relative).exists())
+
+    def test_source_baseline_requires_full_commit(self) -> None:
+        self.assertEqual(replace(HORIZON, commit="a" * 40).commit, "a" * 40)
+        with self.assertRaises(ValueError):
+            replace(HORIZON, commit="short")
+        with self.assertRaises(ValueError):
+            replace(HORIZON, directory=Path("../outside"))
+
+
+if __name__ == "__main__":
+    unittest.main()

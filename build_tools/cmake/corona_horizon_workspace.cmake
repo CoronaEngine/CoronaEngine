@@ -1,0 +1,27 @@
+include_guard(GLOBAL)
+
+function(corona_add_horizon_workspace)
+    set(_corona_horizon_source "${CMAKE_SOURCE_DIR}/Horizon")
+    if(NOT EXISTS "${_corona_horizon_source}/CMakeLists.txt")
+        message(FATAL_ERROR
+            "Horizon workspace was not prepared at ${_corona_horizon_source}. "
+            "Run 'conda run -n coronaengine-dev python build_tools/dev.py configure'.")
+    endif()
+
+    set(HORIZON_BUILD_TOOLS ON CACHE BOOL "" FORCE)
+    set(HORIZON_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+    set(HORIZON_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    set(HORIZON_BUILD_OCARINA_TESTS OFF CACHE BOOL "" FORCE)
+    set(HORIZON_BUILD_OCARINA ON CACHE BOOL "" FORCE)
+    set(HORIZON_BUILD_VISION_HOTFIX ON CACHE BOOL "" FORCE)
+
+    add_subdirectory(
+        "${_corona_horizon_source}"
+        "${CMAKE_BINARY_DIR}/workspace/horizon")
+    # Public Horizon headers do not need the internal core/... search path,
+    # which conflicts with Vision's legacy renderer headers.
+    get_target_property(_corona_horizon_links Horizon INTERFACE_LINK_LIBRARIES)
+    list(TRANSFORM _corona_horizon_links REPLACE "^horizon-core$" "$<LINK_ONLY:horizon-core>")
+    set_property(TARGET Horizon PROPERTY INTERFACE_LINK_LIBRARIES "${_corona_horizon_links}")
+
+endfunction()

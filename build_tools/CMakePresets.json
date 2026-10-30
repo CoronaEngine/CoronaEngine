@@ -1,0 +1,352 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 4,
+    "minor": 0,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "core-debug",
+      "displayName": "Core - Debug",
+      "generator": "Ninja Multi-Config",
+      "binaryDir": "${sourceDir}/build/conan/core/debug",
+      "cacheVariables": {
+        "CORONA_DEV_CONFIGURATION": "Debug",
+        "CORONA_DEV_TARGET_FAMILY": "core"
+      }
+    },
+    {
+      "name": "core-relwithdebinfo",
+      "displayName": "Core - RelWithDebInfo",
+      "generator": "Ninja Multi-Config",
+      "binaryDir": "${sourceDir}/build/conan/core/relwithdebinfo",
+      "cacheVariables": {
+        "CORONA_DEV_CONFIGURATION": "RelWithDebInfo",
+        "CORONA_DEV_TARGET_FAMILY": "core"
+      }
+    },
+    {
+      "name": "core-release",
+      "displayName": "Core - Release",
+      "generator": "Ninja Multi-Config",
+      "binaryDir": "${sourceDir}/build/conan/core/release",
+      "cacheVariables": {
+        "CORONA_DEV_CONFIGURATION": "Release",
+        "CORONA_DEV_TARGET_FAMILY": "core"
+      }
+    },
+    {
+      "name": "core-minsizerel",
+      "displayName": "Core - MinSizeRel",
+      "generator": "Ninja Multi-Config",
+      "binaryDir": "${sourceDir}/build/conan/core/minsizerel",
+      "cacheVariables": {
+        "CORONA_DEV_CONFIGURATION": "MinSizeRel",
+        "CORONA_DEV_TARGET_FAMILY": "core"
+      }
+    },
+    {
+      "name": "examples-debug",
+      "displayName": "Examples - Debug",
+      "generator": "Ninja Multi-Config",
+      "binaryDir": "${sourceDir}/build/conan/examples/debug",
+      "cacheVariables": {
+        "CORONA_DEV_CONFIGURATION": "Debug",
+        "CORONA_DEV_TARGET_FAMILY": "examples"
+      }
+    },
+    {
+      "name": "examples-relwithdebinfo",
+      "displayName": "Examples - RelWithDebInfo",
+      "generator": "Ninja Multi-Config",
+      "binaryDir": "${sourceDir}/build/conan/examples/relwithdebinfo",
+      "cacheVariables": {
+        "CORONA_DEV_CONFIGURATION": "RelWithDebInfo",
+        "CORONA_DEV_TARGET_FAMILY": "examples"
+      }
+    },
+    {
+      "name": "examples-release",
+      "displayName": "Examples - Release",
+      "generator": "Ninja Multi-Config",
+      "binaryDir": "${sourceDir}/build/conan/examples/release",
+      "cacheVariables": {
+        "CORONA_DEV_CONFIGURATION": "Release",
+        "CORONA_DEV_TARGET_FAMILY": "examples"
+      }
+    },
+    {
+      "name": "examples-minsizerel",
+      "displayName": "Examples - MinSizeRel",
+      "generator": "Ninja Multi-Config",
+      "binaryDir": "${sourceDir}/build/conan/examples/minsizerel",
+      "cacheVariables": {
+        "CORONA_DEV_CONFIGURATION": "MinSizeRel",
+        "CORONA_DEV_TARGET_FAMILY": "examples"
+      }
+    },
+    {
+      "name": "tests-debug",
+      "displayName": "Tests - Debug",
+      "generator": "Ninja Multi-Config",
+      "binaryDir": "${sourceDir}/build/conan/tests/debug",
+      "cacheVariables": {
+        "CORONA_DEV_CONFIGURATION": "Debug",
+        "CORONA_DEV_TARGET_FAMILY": "tests"
+      }
+    },
+    {
+      "name": "tests-relwithdebinfo",
+      "displayName": "Tests - RelWithDebInfo",
+      "generator": "Ninja Multi-Config",
+      "binaryDir": "${sourceDir}/build/conan/tests/relwithdebinfo",
+      "cacheVariables": {
+        "CORONA_DEV_CONFIGURATION": "RelWithDebInfo",
+        "CORONA_DEV_TARGET_FAMILY": "tests"
+      }
+    },
+    {
+      "name": "tests-release",
+      "displayName": "Tests - Release",
+      "generator": "Ninja Multi-Config",
+      "binaryDir": "${sourceDir}/build/conan/tests/release",
+      "cacheVariables": {
+        "CORONA_DEV_CONFIGURATION": "Release",
+        "CORONA_DEV_TARGET_FAMILY": "tests"
+      }
+    },
+    {
+      "name": "tests-minsizerel",
+      "displayName": "Tests - MinSizeRel",
+      "generator": "Ninja Multi-Config",
+      "binaryDir": "${sourceDir}/build/conan/tests/minsizerel",
+      "cacheVariables": {
+        "CORONA_DEV_CONFIGURATION": "MinSizeRel",
+        "CORONA_DEV_TARGET_FAMILY": "tests"
+      }
+    },
+    {
+      "name": "vision-debug",
+      "displayName": "Vision - Debug",
+      "generator": "Ninja Multi-Config",
+      "binaryDir": "${sourceDir}/build/conan/vision/debug",
+      "cacheVariables": {
+        "CORONA_DEV_CONFIGURATION": "Debug",
+        "CORONA_DEV_TARGET_FAMILY": "vision"
+      }
+    },
+    {
+      "name": "vision-relwithdebinfo",
+      "displayName": "Vision - RelWithDebInfo",
+      "generator": "Ninja Multi-Config",
+      "binaryDir": "${sourceDir}/build/conan/vision/relwithdebinfo",
+      "cacheVariables": {
+        "CORONA_DEV_CONFIGURATION": "RelWithDebInfo",
+        "CORONA_DEV_TARGET_FAMILY": "vision"
+      }
+    },
+    {
+      "name": "vision-release",
+      "displayName": "Vision - Release",
+      "generator": "Ninja Multi-Config",
+      "binaryDir": "${sourceDir}/build/conan/vision/release",
+      "cacheVariables": {
+        "CORONA_DEV_CONFIGURATION": "Release",
+        "CORONA_DEV_TARGET_FAMILY": "vision"
+      }
+    },
+    {
+      "name": "vision-minsizerel",
+      "displayName": "Vision - MinSizeRel",
+      "generator": "Ninja Multi-Config",
+      "binaryDir": "${sourceDir}/build/conan/vision/minsizerel",
+      "cacheVariables": {
+        "CORONA_DEV_CONFIGURATION": "MinSizeRel",
+        "CORONA_DEV_TARGET_FAMILY": "vision"
+      }
+    },
+    {
+      "name": "vision-tests-debug",
+      "displayName": "Vision Tests - Debug",
+      "generator": "Ninja Multi-Config",
+      "binaryDir": "${sourceDir}/build/conan/vision-tests/debug",
+      "cacheVariables": {
+        "CORONA_DEV_CONFIGURATION": "Debug",
+        "CORONA_DEV_TARGET_FAMILY": "vision-tests"
+      }
+    },
+    {
+      "name": "vision-tests-relwithdebinfo",
+      "displayName": "Vision Tests - RelWithDebInfo",
+      "generator": "Ninja Multi-Config",
+      "binaryDir": "${sourceDir}/build/conan/vision-tests/relwithdebinfo",
+      "cacheVariables": {
+        "CORONA_DEV_CONFIGURATION": "RelWithDebInfo",
+        "CORONA_DEV_TARGET_FAMILY": "vision-tests"
+      }
+    },
+    {
+      "name": "vision-tests-release",
+      "displayName": "Vision Tests - Release",
+      "generator": "Ninja Multi-Config",
+      "binaryDir": "${sourceDir}/build/conan/vision-tests/release",
+      "cacheVariables": {
+        "CORONA_DEV_CONFIGURATION": "Release",
+        "CORONA_DEV_TARGET_FAMILY": "vision-tests"
+      }
+    },
+    {
+      "name": "vision-tests-minsizerel",
+      "displayName": "Vision Tests - MinSizeRel",
+      "generator": "Ninja Multi-Config",
+      "binaryDir": "${sourceDir}/build/conan/vision-tests/minsizerel",
+      "cacheVariables": {
+        "CORONA_DEV_CONFIGURATION": "MinSizeRel",
+        "CORONA_DEV_TARGET_FAMILY": "vision-tests"
+      }
+    },
+    {
+      "name": "debug",
+      "displayName": "Examples - Debug (legacy default)",
+      "inherits": "examples-debug"
+    },
+    {
+      "name": "relwithdebinfo",
+      "displayName": "Examples - RelWithDebInfo (legacy default)",
+      "inherits": "examples-relwithdebinfo"
+    },
+    {
+      "name": "release",
+      "displayName": "Examples - Release (legacy default)",
+      "inherits": "examples-release"
+    },
+    {
+      "name": "minsizerel",
+      "displayName": "Examples - MinSizeRel (legacy default)",
+      "inherits": "examples-minsizerel"
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "core-debug",
+      "configurePreset": "core-debug",
+      "configuration": "Debug"
+    },
+    {
+      "name": "core-relwithdebinfo",
+      "configurePreset": "core-relwithdebinfo",
+      "configuration": "RelWithDebInfo"
+    },
+    {
+      "name": "core-release",
+      "configurePreset": "core-release",
+      "configuration": "Release"
+    },
+    {
+      "name": "core-minsizerel",
+      "configurePreset": "core-minsizerel",
+      "configuration": "MinSizeRel"
+    },
+    {
+      "name": "examples-debug",
+      "configurePreset": "examples-debug",
+      "configuration": "Debug"
+    },
+    {
+      "name": "examples-relwithdebinfo",
+      "configurePreset": "examples-relwithdebinfo",
+      "configuration": "RelWithDebInfo"
+    },
+    {
+      "name": "examples-release",
+      "configurePreset": "examples-release",
+      "configuration": "Release"
+    },
+    {
+      "name": "examples-minsizerel",
+      "configurePreset": "examples-minsizerel",
+      "configuration": "MinSizeRel"
+    },
+    {
+      "name": "tests-debug",
+      "configurePreset": "tests-debug",
+      "configuration": "Debug"
+    },
+    {
+      "name": "tests-relwithdebinfo",
+      "configurePreset": "tests-relwithdebinfo",
+      "configuration": "RelWithDebInfo"
+    },
+    {
+      "name": "tests-release",
+      "configurePreset": "tests-release",
+      "configuration": "Release"
+    },
+    {
+      "name": "tests-minsizerel",
+      "configurePreset": "tests-minsizerel",
+      "configuration": "MinSizeRel"
+    },
+    {
+      "name": "vision-debug",
+      "configurePreset": "vision-debug",
+      "configuration": "Debug"
+    },
+    {
+      "name": "vision-relwithdebinfo",
+      "configurePreset": "vision-relwithdebinfo",
+      "configuration": "RelWithDebInfo"
+    },
+    {
+      "name": "vision-release",
+      "configurePreset": "vision-release",
+      "configuration": "Release"
+    },
+    {
+      "name": "vision-minsizerel",
+      "configurePreset": "vision-minsizerel",
+      "configuration": "MinSizeRel"
+    },
+    {
+      "name": "vision-tests-debug",
+      "configurePreset": "vision-tests-debug",
+      "configuration": "Debug"
+    },
+    {
+      "name": "vision-tests-relwithdebinfo",
+      "configurePreset": "vision-tests-relwithdebinfo",
+      "configuration": "RelWithDebInfo"
+    },
+    {
+      "name": "vision-tests-release",
+      "configurePreset": "vision-tests-release",
+      "configuration": "Release"
+    },
+    {
+      "name": "vision-tests-minsizerel",
+      "configurePreset": "vision-tests-minsizerel",
+      "configuration": "MinSizeRel"
+    },
+    {
+      "name": "debug",
+      "configurePreset": "examples-debug",
+      "configuration": "Debug"
+    },
+    {
+      "name": "relwithdebinfo",
+      "configurePreset": "examples-relwithdebinfo",
+      "configuration": "RelWithDebInfo"
+    },
+    {
+      "name": "release",
+      "configurePreset": "examples-release",
+      "configuration": "Release"
+    },
+    {
+      "name": "minsizerel",
+      "configurePreset": "examples-minsizerel",
+      "configuration": "MinSizeRel"
+    }
+  ]
+}
