@@ -6,8 +6,8 @@
 
 | 工具 | 要求 |
 | --- | --- |
-| Git | 克隆源码及管理 Horizon、CoronaEditor 工作区 |
-| [Miniforge](https://github.com/conda-forge/miniforge) / [Miniconda / Conda](https://docs.conda.io/) | 管理 Python、Conan 和 Node.js；无需单独安装这些工具 |
+| Git | 构建时复用可用的 Git；缺失时由 Conda 自动安装。首次获取本仓库源码仍需 Git 或其他下载方式 |
+| [Miniforge](https://github.com/conda-forge/miniforge) / [Miniconda / Conda](https://docs.conda.io/) | 管理 Python、Conan、Git 和 Node.js；无需单独安装这些工具 |
 | CMake | 3.29 或更高版本 |
 | Ninja | 必须在 PATH 中；工程使用 Ninja Multi-Config |
 | Visual Studio 或 Build Tools | 安装“使用 C++ 的桌面开发”、MSVC x64/x86 工具集与 Windows SDK |
@@ -16,6 +16,12 @@
 ## 开发工具环境
 
 CMake Configure 会自动创建或复用 `coronaengine-dev` 环境（可通过 `CORONA_CONDA_ENV` 指定环境名称）。
+首次调用 Git 前会检查 `git --version`，复用 PATH 或当前 Conda 环境中可用的 Git。
+缺失或无法运行时，通过 conda-forge 安装到运行 `dev.py` 的 Python 所属 Conda 环境，安装后复检；
+已有 Git 包但程序损坏时执行修复。新装 Git 的路径只加入当前进程及子进程的 PATH，不修改系统环境变量。
+该检查覆盖 CMake bootstrap 和直接运行 `dev.py` 的构建、同步及状态命令；`clean` 不需要 Git。
+直接使用脚本时，应通过 `conda run -n coronaengine-dev python build_tools/dev.py ...` 或激活该环境运行。
+Git 与 Node.js 安装共用环境目录内的 `conda-meta/corona-tools.lock`，避免多个 preset 同时修改环境。
 Horizon 和 CoronaEditor 统一由 `build_tools/git_workspace.py` 管理，分别位于引擎根目录的
 `Horizon/` 和 `CoronaEditor/`。CMake bootstrap 及
 `build_tools/dev.py install/configure/build` 会准备这两个工作区。

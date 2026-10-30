@@ -1,6 +1,9 @@
 function(corona_dev_bootstrap)
     set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
-        "${CORONA_BUILD_TOOLS_DIR}/source_workspaces.py")
+        "${CORONA_BUILD_TOOLS_DIR}/source_workspaces.py"
+        "${CORONA_BUILD_TOOLS_DIR}/git_tool.py"
+        "${CORONA_BUILD_TOOLS_DIR}/conda_environment.py"
+        "${CORONA_BUILD_TOOLS_DIR}/file_lock.py")
     if(NOT DEFINED CORONA_CONDA_ENV OR CORONA_CONDA_ENV STREQUAL "")
         set(CORONA_CONDA_ENV "coronaengine-dev" CACHE STRING "Conda environment used by CoronaEngine development tools")
     endif()
