@@ -1,5 +1,5 @@
 # Public CMake entry point. Build implementation lives in build_tools/.
-cmake_minimum_required(VERSION 3.29)
+cmake_minimum_required(VERSION 4.0)
 
 include("${CMAKE_CURRENT_LIST_DIR}/build_tools/cmake/corona_paths.cmake")
 list(APPEND CMAKE_MODULE_PATH

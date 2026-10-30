@@ -8,7 +8,7 @@
 | --- | --- |
 | Git | 构建时复用可用的 Git；缺失时由 Conda 自动安装。首次获取本仓库源码仍需 Git 或其他下载方式 |
 | [Miniforge](https://github.com/conda-forge/miniforge) / [Miniconda / Conda](https://docs.conda.io/) | 管理 Python、Conan、Git、Ninja 和 Node.js；无需单独安装这些工具 |
-| CMake | 3.29 或更高版本 |
+| CMake | 4.0 或更高版本，与 Horizon 的最低要求一致 |
 | Ninja | 工程使用 Ninja Multi-Config；复用可用的 Ninja，缺失时由 Conda 自动安装 |
 | Visual Studio 或 Build Tools | 安装“使用 C++ 的桌面开发”、MSVC x64/x86 工具集与 Windows SDK |
 | Vulkan 开发组件 | Vulkan-Headers、Vulkan Loader、Volk、VMA 与 Slang 由 Conan 管理；默认构建无需安装 Vulkan SDK |
