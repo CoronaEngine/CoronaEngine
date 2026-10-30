@@ -6,15 +6,13 @@ submodules too. Preparation and sync are serialized across build presets.
 """
 from __future__ import annotations
 
-import errno
-import os
 import subprocess
-import time
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
 from build_tools.paths import WORKSPACE_LOCK_DIR
+from build_tools.file_lock import file_lock
 from build_tools.source_workspaces import SourceWorkspace
 from build_tools.workflow import run_command, safe_remove
 
@@ -281,36 +279,8 @@ def _inside_repo(repo_root: Path, relative: Path) -> Path:
 def _workspace_lock(repo_root: Path, workspace: SourceWorkspace, timeout: float = 600):
     """An OS lock is released even if a configuring process exits unexpectedly."""
     lock_dir = _inside_repo(repo_root, WORKSPACE_LOCK_DIR)
-    lock_dir.mkdir(parents=True, exist_ok=True)
-    with (lock_dir / f"{workspace.key}.lock").open("a+b") as stream:
-        if stream.tell() == 0:
-            stream.write(b"0")
-            stream.flush()
-        deadline = time.monotonic() + timeout
-        while True:
-            try:
-                stream.seek(0)
-                if os.name == "nt":
-                    import msvcrt
-                    msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
-                else:
-                    import fcntl
-                    fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-                break
-            except OSError as error:
-                if error.errno not in (errno.EACCES, errno.EAGAIN, errno.EDEADLK):
-                    raise
-                if time.monotonic() >= deadline:
-                    raise RuntimeError(f"Timed out waiting for {workspace.name} workspace lock") from error
-                time.sleep(0.1)
-        try:
-            yield
-        finally:
-            stream.seek(0)
-            if os.name == "nt":
-                msvcrt.locking(stream.fileno(), msvcrt.LK_UNLCK, 1)
-            else:
-                fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+    with file_lock(lock_dir / f"{workspace.key}.lock", timeout):
+        yield
 
 
 def inspect_workspace(repo_root: Path, workspace: SourceWorkspace) -> WorkspaceStatus:

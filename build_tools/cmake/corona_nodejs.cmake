@@ -8,14 +8,6 @@ function(corona_configure_nodejs)
         message(FATAL_ERROR "[Node.js] Configure the project's Conda Python first.")
     endif()
 
-    # Serialize installation across IDE configurations sharing one environment.
-    # Release the lock as soon as this function returns.
-    file(LOCK "${Python_ROOT_DIR}/conda-meta/corona-nodejs.lock"
-        GUARD FUNCTION TIMEOUT 300 RESULT_VARIABLE _node_lock_result)
-    if(NOT _node_lock_result STREQUAL "0")
-        message(FATAL_ERROR "[Node.js] Cannot lock the Conda environment: ${_node_lock_result}")
-    endif()
-
     set(_node_script "${CORONA_BUILD_SCRIPTS_DIR}/ensure_nodejs.py")
     set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_node_script}")
     message(STATUS "[Node.js] Checking the editor toolchain in ${Python_ROOT_DIR}")

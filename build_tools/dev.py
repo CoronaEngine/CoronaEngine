@@ -9,6 +9,7 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from build_tools.git_workspace import ensure_workspace, inspect_workspace, sync_workspace
+from build_tools.git_tool import ensure_git
 from build_tools.paths import LOCAL_RECIPES, REPO_ROOT
 from build_tools.source_workspaces import WORKSPACES
 from build_tools.workflow import (
@@ -119,6 +120,8 @@ def execute(args: argparse.Namespace) -> None:
     targets = args.targets or [DEFAULT_TARGET]
     configuration = args.configuration
     target_family = args.target_family or target_family_for_targets(targets)
+    if args.command != "clean":
+        ensure_git()
     if args.command == "status":
         run_command(("git", "status", "--short", "--branch"), cwd=REPO_ROOT)
         for workspace in WORKSPACES:

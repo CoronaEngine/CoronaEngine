@@ -13,6 +13,11 @@ from pathlib import Path
 import subprocess
 import sys
 
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from build_tools.conda_environment import conda_environment_lock
+
 
 NODE_VERSION = "22.19.0"
 
@@ -76,25 +81,29 @@ def ensure_nodejs(conda: str, prefix: Path) -> Path:
         log(f"Using {NODE_VERSION} from {node_dir}")
         return node_dir
 
-    log(f"Installing nodejs={NODE_VERSION} into {prefix}")
-    command = [
-        conda, "install", "--yes", "--prefix", str(prefix),
-        "--override-channels", "--channel", "conda-forge",
-        "--freeze-installed", f"nodejs={NODE_VERSION}",
-    ]
-    # If Conda already records the requested version, repair missing/broken
-    # files instead of accepting its "already installed" shortcut.
-    if any((prefix / "conda-meta").glob(f"nodejs-{NODE_VERSION}-*.json")):
-        command.append("--force-reinstall")
-    subprocess.run(command, stdout=sys.stderr, check=True)
+    with conda_environment_lock(prefix):
+        node_dir = probe_node(prefix)
+        if node_dir is not None:
+            return node_dir
+        log(f"Installing nodejs={NODE_VERSION} into {prefix}")
+        command = [
+            conda, "install", "--yes", "--prefix", str(prefix),
+            "--override-channels", "--channel", "conda-forge",
+            "--freeze-installed", f"nodejs={NODE_VERSION}",
+        ]
+        # If Conda already records the requested version, repair missing/broken
+        # files instead of accepting its "already installed" shortcut.
+        if any((prefix / "conda-meta").glob(f"nodejs-{NODE_VERSION}-*.json")):
+            command.append("--force-reinstall")
+        subprocess.run(command, stdout=sys.stderr, check=True)
 
-    node_dir = probe_node(prefix)
-    if node_dir is None:
-        raise RuntimeError(
-            f"Conda finished, but Node.js {NODE_VERSION} and npm are not usable in {prefix}."
-        )
-    log(f"Installed {NODE_VERSION} in {node_dir}")
-    return node_dir
+        node_dir = probe_node(prefix)
+        if node_dir is None:
+            raise RuntimeError(
+                f"Conda finished, but Node.js {NODE_VERSION} and npm are not usable in {prefix}."
+            )
+        log(f"Installed {NODE_VERSION} in {node_dir}")
+        return node_dir
 
 
 def main(argv: list[str] | None = None) -> int:
