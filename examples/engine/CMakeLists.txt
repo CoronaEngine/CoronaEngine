@@ -32,7 +32,7 @@ add_custom_target(corona_engine_startup_config
     COMMAND ${CMAKE_COMMAND}
         "-DSTARTUP_CONFIG_SOURCE=${PROJECT_SOURCE_DIR}/CoronaEngine.default.json"
         "-DSTARTUP_CONFIG_DESTINATION=$<TARGET_FILE_DIR:corona_engine>/CoronaEngine.json"
-        -P "${CORONA_BUILDER_DIR}/cmake/corona_seed_startup_config.cmake"
+        -P "${CORONA_BUILD_TOOLS_DIR}/cmake/corona_seed_startup_config.cmake"
     VERBATIM
 )
 add_dependencies(corona_engine corona_engine_startup_config)

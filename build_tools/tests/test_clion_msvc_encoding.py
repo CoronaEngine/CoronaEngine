@@ -7,8 +7,8 @@ import sys
 import tempfile
 import unittest
 
-from builder.scripts.msvc_showincludes import dependency_prefixes, normalize_line
-from builder.workflow import build_dir, load_conan_build_environment
+from build_tools.scripts.msvc_showincludes import dependency_prefixes, normalize_line
+from build_tools.workflow import build_dir, load_conan_build_environment
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -70,7 +70,7 @@ class MsvcBuildEnvironmentTests(unittest.TestCase):
                 "cmake_minimum_required(VERSION 3.29)\n"
                 "project(HeaderDependencyProbe LANGUAGES CXX)\n"
                 f'set(Python_EXECUTABLE "{Path(sys.executable).as_posix()}")\n'
-                f'include("{ROOT.as_posix()}/builder/cmake/corona_msvc_dependencies.cmake")\n'
+                f'include("{ROOT.as_posix()}/build_tools/cmake/corona_msvc_dependencies.cmake")\n'
                 "add_executable(probe main.cpp)\n"
                 "target_compile_options(probe PRIVATE /utf-8)\n",
                 encoding="utf-8",
@@ -119,7 +119,7 @@ class ClionMsvcEncodingTests(unittest.TestCase):
                 "cmake_minimum_required(VERSION 3.29)\n"
                 "project(HeaderDependencyProbe LANGUAGES CXX)\n"
                 f'set(Python_EXECUTABLE "{Path(sys.executable).as_posix()}")\n'
-                f'include("{ROOT.as_posix()}/builder/cmake/corona_msvc_dependencies.cmake")\n'
+                f'include("{ROOT.as_posix()}/build_tools/cmake/corona_msvc_dependencies.cmake")\n'
                 "add_executable(probe main.cpp)\n",
                 encoding="utf-8",
             )

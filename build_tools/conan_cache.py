@@ -7,8 +7,8 @@ from pathlib import Path
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from builder.paths import LOCAL_RECIPES, REPO_ROOT, conanfile_path
-from builder.workflow import CONFIGURATIONS, DEFAULT_CONFIGURATION, CommandError, export_local_recipes, profile_path, run_command
+from build_tools.paths import LOCAL_RECIPES, REPO_ROOT, conanfile_path
+from build_tools.workflow import CONFIGURATIONS, DEFAULT_CONFIGURATION, CommandError, export_local_recipes, profile_path, run_command
 
 
 RECIPE_TOGGLE_ENV = "CORONA_CONAN_EXPORT_LOCAL_RECIPES"

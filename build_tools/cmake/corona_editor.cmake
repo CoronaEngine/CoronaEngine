@@ -21,7 +21,7 @@
 
 include_guard(GLOBAL)
 
-# Source acquisition is shared with Horizon in builder/git_workspace.py.
+# Source acquisition is shared with Horizon in build_tools/git_workspace.py.
 set(CORONA_EDITOR_SOURCE_DIR "${PROJECT_SOURCE_DIR}/CoronaEditor")
 
 function(corona_validate_editor_sources)
@@ -30,7 +30,7 @@ function(corona_validate_editor_sources)
        OR NOT EXISTS "${CORONA_EDITOR_SOURCE_DIR}/editor/Frontend/package.json")
         message(FATAL_ERROR
             "[Corona:Editor] Incomplete workspace at ${CORONA_EDITOR_SOURCE_DIR}. "
-            "Run 'conda run -n coronaengine-dev python builder/dev.py configure'.")
+            "Run 'conda run -n coronaengine-dev python build_tools/dev.py configure'.")
     endif()
     message(STATUS "[Corona:Editor] Source checkout: ${CORONA_EDITOR_SOURCE_DIR}")
 endfunction()

@@ -4,7 +4,7 @@
 # Vision was originally a stand-alone project that pulled dependencies such as
 # glfw as git submodules under this directory. After integration into
 # CoronaEngine those dependencies are resolved once at the engine root via
-# Conan package targets (see builder/cmake/corona_third_party.cmake). This file now
+# Conan package targets (see build_tools/cmake/corona_third_party.cmake). This file now
 # only:
 #   - asserts the expected upstream targets exist;
 #   - defines an INTERFACE wrapper (`vision-ext`) so the

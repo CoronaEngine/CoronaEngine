@@ -15,10 +15,10 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from builder.git_workspace import ensure_workspace, inspect_workspace, sync_workspace, _workspace_lock, _clone_locked
-from builder import dev, git_workspace
-from builder.source_workspaces import HORIZON, EDITOR
-from builder.workflow import CommandError
+from build_tools.git_workspace import ensure_workspace, inspect_workspace, sync_workspace, _workspace_lock, _clone_locked
+from build_tools import dev, git_workspace
+from build_tools.source_workspaces import HORIZON, EDITOR
+from build_tools.workflow import CommandError
 
 
 GIT_CONFIG = (
@@ -546,7 +546,7 @@ class WorkspaceLockTests(unittest.TestCase):
     def acquire_in_child(self, root: Path) -> subprocess.CompletedProcess[str]:
         child = (
             "import sys; from pathlib import Path; "
-            "from builder.git_workspace import _workspace_lock; from builder.source_workspaces import EDITOR; "
+            "from build_tools.git_workspace import _workspace_lock; from build_tools.source_workspaces import EDITOR; "
             "lock = _workspace_lock(Path(sys.argv[1]), EDITOR, timeout=0.1); "
             "lock.__enter__(); lock.__exit__(None, None, None)"
         )
