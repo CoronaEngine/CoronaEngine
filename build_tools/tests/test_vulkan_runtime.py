@@ -14,7 +14,7 @@ from build_tools import workflow
 def project(tmp_path):
     cmake = shutil.which("cmake")
     ninja = shutil.which("ninja") or workflow.cached_ninja(REPO_ROOT, "RelWithDebInfo", "core")
-    module = REPO_ROOT / "Horizon/cmake/horizon_vulkan.cmake"
+    module = REPO_ROOT / "Horizon/build_tools/cmake/horizon_vulkan.cmake"
     if not cmake or not ninja or not module.is_file():
         pytest.skip("requires CMake, Ninja and the Horizon source workspace")
     source = tmp_path / "source"
