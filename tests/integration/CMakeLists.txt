@@ -59,14 +59,13 @@ if(VISION_REBLUR_NATIVE_NRD)
 endif()
 
 if(TARGET ocarina-backend-vulkan-compute)
-    find_package(Vulkan REQUIRED)
     foreach(_probe IN ITEMS native_callback shared_array compute_math_parity)
         set(_target corona_ocarina_${_probe}_tests)
         add_executable(${_target}
             ${CMAKE_SOURCE_DIR}/Horizon/modules/ocarina/tests/runtime/test_${_probe}.cpp)
         target_link_libraries(${_target} PRIVATE ocarina-native ocarina-include)
         if(_probe STREQUAL "native_callback")
-            target_link_libraries(${_target} PRIVATE Vulkan::Headers)
+            target_link_libraries(${_target} PRIVATE horizon::vulkan_headers)
         endif()
         add_test(NAME Ocarina_${_probe} COMMAND ${_target})
         set_tests_properties(Ocarina_${_probe} PROPERTIES
@@ -251,3 +250,13 @@ set_tests_properties(UiMultiSurfaceSmoke PROPERTIES
     SKIP_RETURN_CODE 77
     TIMEOUT 180
 )
+
+# Keep the Conan loader next to every probe executable. Windows searches the
+# executable directory before system directories, regardless of CTest's PATH.
+get_property(_integration_targets DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
+foreach(_target IN LISTS _integration_targets)
+    get_target_property(_type ${_target} TYPE)
+    if(_type STREQUAL "EXECUTABLE")
+        horizon_install_vulkan_runtime(${_target})
+    endif()
+endforeach()

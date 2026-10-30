@@ -11,7 +11,7 @@
 | CMake | 3.29 或更高版本 |
 | Ninja | 工程使用 Ninja Multi-Config；复用可用的 Ninja，缺失时由 Conda 自动安装 |
 | Visual Studio 或 Build Tools | 安装“使用 C++ 的桌面开发”、MSVC x64/x86 工具集与 Windows SDK |
-| Vulkan SDK | Vulkan 头文件、加载器与构建工具；Slang 由 Conan 提供 |
+| Vulkan 开发组件 | Vulkan-Headers、Vulkan Loader、Volk、VMA 与 Slang 由 Conan 管理；默认构建无需安装 Vulkan SDK |
 
 ## 开发工具环境
 
@@ -28,6 +28,11 @@ Ninja 在 Conan 编译依赖前检查：优先复用当前构建目录缓存、P
 路径随构建环境传回外层 CMake，不修改系统 PATH。CMake 在 `project()` 前修复失效的 Ninja 缓存；
 `build-fast` 遇到失效缓存时先重新配置再构建。`status`、源码同步和 `clean` 不安装 Ninja，
 `conan_cache.py update` 也会在编译依赖前准备 Ninja。
+
+Vulkan Headers 与 Loader 使用匹配的 `1.4.350.0` 版本。Ocarina 显式链接 Conan 的
+`Vulkan::Loader`；Windows 构建将该包的 `vulkan-1.dll` 部署到后端及可执行文件目录，
+并在复制 CEF 后重新部署，避免被 CEF 自带版本覆盖。运行渲染器仍需支持所需 Vulkan 功能的 GPU 驱动。
+Vulkan SDK 的验证层和调试工具可按需安装；可选的 Native NRD 后端仍需额外提供 DXC、NRD 和 NVRHI。
 
 Horizon 和 CoronaEditor 统一由 `build_tools/git_workspace.py` 管理，分别位于引擎根目录的
 `Horizon/` 和 `CoronaEditor/`。CMake bootstrap 及

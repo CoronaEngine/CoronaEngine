@@ -67,6 +67,7 @@ function(corona_install_runtime_deps target_name)
 
     if(NOT _CORONA_DEPS)
         message(STATUS "[Corona:RuntimeDeps] No INTERFACE_CORONA_RUNTIME_DEPS; skipping copy")
+        horizon_install_vulkan_runtime(${target_name})
         return()
     endif()
 
@@ -157,6 +158,10 @@ function(corona_install_runtime_deps target_name)
                 "${_CORONA_DESTINATION_DIR}/locales"
         )
     endif()
+
+    # CEF also ships vulkan-1.dll. Deploy our Conan loader last so the final
+    # runtime matches the package linked by Ocarina and used by Horizon/Volk.
+    horizon_install_vulkan_runtime(${target_name})
 
 endfunction()
 
