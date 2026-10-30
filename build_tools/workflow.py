@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Iterable, Mapping, Sequence
 
 from build_tools.paths import WORKSPACE_LOCK_DIR, conanfile_path, profiles_dir
+from build_tools.ninja_tool import probe_ninja
 
 
 CONFIGURATIONS = ("Debug", "Release", "RelWithDebInfo", "MinSizeRel")
@@ -248,6 +249,26 @@ def assert_cache_matches_repo(
         raise RuntimeError(f"CMake cache directory is '{cache_dir}', not '{expected_build}'. Run rebuild.")
 
 
+def cached_ninja(repo_root: Path, configuration: str, target_family: str = DEFAULT_TARGET_FAMILY) -> str | None:
+    cache = build_dir(repo_root, configuration, target_family) / "CMakeCache.txt"
+    if cache.is_file() and (_cache_value(cache, "CMAKE_GENERATOR") or "").startswith("Ninja"):
+        return _cache_value(cache, "CMAKE_MAKE_PROGRAM")
+    return None
+
+
+def repair_ninja_cache(repo_root: Path, configuration: str, target_family: str) -> None:
+    cache = build_dir(repo_root, configuration, target_family) / "CMakeCache.txt"
+    if not (_cache_value(cache, "CMAKE_GENERATOR") or "").startswith("Ninja"):
+        return
+    executable = _cache_value(cache, "CMAKE_MAKE_PROGRAM")
+    if not executable or not probe_ninja(executable):
+        # cmake --build starts the cached executable before CMake can regenerate.
+        # Refresh PATH in the generated environment before repairing the cache.
+        print("[Ninja] Reconfiguring because the cached build executable is unavailable.", flush=True)
+        write_cmake_build_environment(repo_root, configuration, target_family)
+        cmake_configure(repo_root, configuration, target_family)
+
+
 def cmake_build(
     repo_root: Path,
     configuration: str,
@@ -267,6 +288,7 @@ def cmake_build(
         raise ValueError("cmake_build requires at least one target")
 
     assert_cache_matches_repo(repo_root, configuration, target_family)
+    repair_ninja_cache(repo_root, configuration, target_family)
     environment = load_conan_build_environment(repo_root, configuration, target_family)
     run_command(
         ("cmake", "--build", "--preset", preset_name(target_family, configuration), "--target", *requested),

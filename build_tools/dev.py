@@ -10,6 +10,7 @@ if __package__ in (None, ""):
 
 from build_tools.git_workspace import ensure_workspace, inspect_workspace, sync_workspace
 from build_tools.git_tool import ensure_git
+from build_tools.ninja_tool import ensure_ninja
 from build_tools.paths import LOCAL_RECIPES, REPO_ROOT
 from build_tools.source_workspaces import WORKSPACES
 from build_tools.workflow import (
@@ -19,6 +20,7 @@ from build_tools.workflow import (
     TARGET_FAMILIES,
     CommandError,
     build_dir,
+    cached_ninja,
     clean_repo,
     cmake_build,
     cmake_configure,
@@ -122,6 +124,8 @@ def execute(args: argparse.Namespace) -> None:
     target_family = args.target_family or target_family_for_targets(targets)
     if args.command != "clean":
         ensure_git()
+    if args.command in {"install", "_bootstrap", "configure", "build", "build-fast", "rebuild", "update"}:
+        ensure_ninja(cached_ninja(REPO_ROOT, configuration, target_family))
     if args.command == "status":
         run_command(("git", "status", "--short", "--branch"), cwd=REPO_ROOT)
         for workspace in WORKSPACES:
