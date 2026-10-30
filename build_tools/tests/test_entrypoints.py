@@ -7,14 +7,14 @@ from unittest import mock
 
 import pytest
 
-from builder import conan_cache, workflow
-from builder.paths import BUILDER_ROOT, LOCAL_RECIPES, REPO_ROOT
+from build_tools import conan_cache, workflow
+from build_tools.paths import BUILD_TOOLS_ROOT, LOCAL_RECIPES, REPO_ROOT
 
 
 @pytest.mark.parametrize("script", ["dev.py", "conan_cache.py", "scripts/editor_copy_and_build.py"])
 def test_script_can_start_outside_repository(script, tmp_path):
     result = subprocess.run(
-        [sys.executable, str(BUILDER_ROOT / script), "--help"],
+        [sys.executable, str(BUILD_TOOLS_ROOT / script), "--help"],
         cwd=tmp_path, capture_output=True, text=True, timeout=30,
     )
     assert result.returncode == 0, result.stderr
@@ -31,11 +31,11 @@ def test_install_uses_relocated_recipe_and_profiles():
             recipe_toggle_env="CORONA_CONAN_EXPORT_LOCAL_RECIPES",
         )
     command = run.call_args.args[0]
-    assert Path(command[2]) == BUILDER_ROOT / "conanfile.py"
+    assert Path(command[2]) == BUILD_TOOLS_ROOT / "conanfile.py"
     assert Path(command[2]).is_file()
     for flag in ("-pr:a", "-pr:b"):
         profile = Path(command[command.index(flag) + 1])
-        assert profile == BUILDER_ROOT / "conan/profiles/windows-msvc-relwithdebinfo"
+        assert profile == BUILD_TOOLS_ROOT / "conan/profiles/windows-msvc-relwithdebinfo"
         assert profile.is_file()
     assert run.call_args.kwargs["cwd"] == REPO_ROOT
     assert "user.corona:target_family=tests" in command
@@ -55,5 +55,5 @@ def test_cache_update_selects_project_recipe_or_package(package):
     if package:
         assert command[2:4] == ["--requires", package]
     else:
-        assert Path(command[2]) == BUILDER_ROOT / "conanfile.py"
+        assert Path(command[2]) == BUILD_TOOLS_ROOT / "conanfile.py"
     assert run.call_args.kwargs["cwd"] == REPO_ROOT

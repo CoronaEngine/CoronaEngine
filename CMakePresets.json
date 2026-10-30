@@ -1,4 +1,4 @@
 {
   "version": 6,
-  "include": ["builder/CMakePresets.json"]
+  "include": ["build_tools/CMakePresets.json"]
 }

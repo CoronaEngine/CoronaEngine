@@ -4,14 +4,14 @@ import argparse
 import sys
 from pathlib import Path
 
-# Support both `python builder/dev.py` and `python -m builder.dev`.
+# Support both `python build_tools/dev.py` and `python -m build_tools.dev`.
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from builder.git_workspace import ensure_workspace, inspect_workspace, sync_workspace
-from builder.paths import LOCAL_RECIPES, REPO_ROOT
-from builder.source_workspaces import WORKSPACES
-from builder.workflow import (
+from build_tools.git_workspace import ensure_workspace, inspect_workspace, sync_workspace
+from build_tools.paths import LOCAL_RECIPES, REPO_ROOT
+from build_tools.source_workspaces import WORKSPACES
+from build_tools.workflow import (
     CONFIGURATIONS,
     DEFAULT_CONFIGURATION,
     DEFAULT_TARGET_FAMILY,
@@ -166,7 +166,7 @@ def create_parser() -> argparse.ArgumentParser:
         epilog=(
             "Horizon/ and CoronaEditor/ are ordinary Git clones at the engine repository root. "
             "Builds use existing sources as-is, including local edits. Baselines are defined "
-            "in builder/source_workspaces.py; use horizon-sync or editor-sync to adopt them "
+            "in build_tools/source_workspaces.py; use horizon-sync or editor-sync to adopt them "
             "explicitly (including submodules). update refreshes Conan dependencies only."
         ),
     )

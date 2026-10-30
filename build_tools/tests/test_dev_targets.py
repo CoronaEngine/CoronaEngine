@@ -12,9 +12,9 @@ from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from builder import dev  # noqa: E402
-from builder import workflow  # noqa: E402
-from builder.source_workspaces import EDITOR, HORIZON
+from build_tools import dev  # noqa: E402
+from build_tools import workflow  # noqa: E402
+from build_tools.source_workspaces import EDITOR, HORIZON
 
 
 class SourceWorkspaceWorkflowTests(unittest.TestCase):

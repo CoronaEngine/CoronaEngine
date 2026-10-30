@@ -23,7 +23,7 @@ from typing import Optional
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from builder.paths import REPO_ROOT
+from build_tools.paths import REPO_ROOT
 
 
 EDITOR_REPOSITORY = REPO_ROOT / "CoronaEditor"

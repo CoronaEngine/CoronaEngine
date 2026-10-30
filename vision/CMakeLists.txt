@@ -6,7 +6,7 @@
 # CoronaEngine root as a required renderer module. It does not issue its own
 # `project()` call or override global output directories. Third-party
 # dependencies (glfw, Horizon) are resolved at the root level
-# through Conan package targets (see builder/cmake/corona_third_party.cmake) and reused here.
+# through Conan package targets (see build_tools/cmake/corona_third_party.cmake) and reused here.
 # ==============================================================================
 
 # Vision sources require C++20 and use Vulkan compute.
