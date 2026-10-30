@@ -7,7 +7,7 @@ import subprocess
 from pathlib import Path
 from typing import Iterable, Mapping, Sequence
 
-from builder.paths import conanfile_path, profiles_dir
+from builder.paths import WORKSPACE_LOCK_DIR, conanfile_path, profiles_dir
 
 
 CONFIGURATIONS = ("Debug", "Release", "RelWithDebInfo", "MinSizeRel")
@@ -301,5 +301,16 @@ def safe_remove(repo_root: Path, path: Path) -> None:
 
 
 def clean_repo(repo_root: Path) -> None:
-    for relative_path in ("build", "install", "out", "dist"):
-        safe_remove(repo_root, repo_root / relative_path)
+    root = repo_root.resolve()
+    build_root = root / "build"
+    if build_root.exists():
+        # Keep lock files in place, even when unlocked: another process may have
+        # already opened one. Removing/recreating it would split the OS lock.
+        paths = [path for path in build_root.iterdir() if path != root / WORKSPACE_LOCK_DIR]
+        for path in (build_root, *paths):
+            if path.resolve() != path:
+                raise RuntimeError(f"Refusing to clean redirected build path: {path}")
+        for path in paths:
+            safe_remove(root, path)
+    for relative_path in ("install", "out", "dist"):
+        safe_remove(root, root / relative_path)

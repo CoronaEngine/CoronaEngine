@@ -16,7 +16,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from builder.git_workspace import ensure_workspace, inspect_workspace, sync_workspace, _workspace_lock, _clone_locked
-from builder import git_workspace
+from builder import dev, git_workspace
 from builder.source_workspaces import HORIZON, EDITOR
 from builder.workflow import CommandError
 
@@ -178,7 +178,11 @@ class WorkspaceContract:
         self.assertEqual(len(clones), 1)
         self.assertEqual(Path(clones[0][-1]), self.worktree)
         self.assertEqual(self.worktree.parent, self.repo_root)
-        self.assertEqual({entry.name for entry in (self.repo_root / ".workspace").iterdir()}, {".locks"})
+        self.assertEqual(
+            {entry.name for entry in (self.repo_root / "build" / ".locks").iterdir()},
+            {f"{self.workspace.key}.lock"},
+        )
+        self.assertFalse((self.repo_root / ".workspace").exists())
         self.assertEqual(self.head(), self.locked)
         self.assertEqual(git(self.worktree, "symbolic-ref", "--short", "HEAD"), "main")
         self.assertEqual(
@@ -529,36 +533,6 @@ class WorkspaceContract:
         self.assertEqual(git(self.worktree / "plugins/module", "rev-parse", "HEAD"), first)
 
 
-    def test_migrate_preserves_dirty_sources_untracked_files_and_submodules(self) -> None:
-        first, _ = self.add_submodule()
-        legacy = self.repo_root / self.workspace.legacy_directory
-        legacy.parent.mkdir(parents=True, exist_ok=True)
-        git(self.repo_root, "clone", "--recurse-submodules", str(self.origin), str(legacy))
-        (legacy / "scratch.txt").write_text("keep me", encoding="utf-8")
-        (legacy / "file.txt").write_text("local edit", encoding="utf-8")
-        module = legacy / "plugins/module"
-        (module / "module.txt").write_text("submodule edit", encoding="utf-8")
-        before = (git(legacy, "rev-parse", "HEAD"), git(legacy, "status", "--porcelain"))
-        self.silently(ensure_workspace, self.repo_root, self.workspace)
-        self.assertFalse(legacy.exists())
-        self.assertEqual((self.head(), git(self.worktree, "status", "--porcelain")), before)
-        self.assertEqual((self.worktree / "scratch.txt").read_text(), "keep me")
-        self.assertEqual(git(self.worktree / "plugins/module", "rev-parse", "HEAD"), first)
-        self.assertEqual((self.worktree / "plugins/module/module.txt").read_text(), "submodule edit")
-
-    def test_migration_refuses_two_existing_copies(self) -> None:
-        self.clone()
-        legacy = self.repo_root / self.workspace.legacy_directory
-        legacy.parent.mkdir(parents=True, exist_ok=True)
-        legacy.mkdir()
-        (legacy / "scratch.txt").write_text("keep me", encoding="utf-8")
-        before = self.snapshot()
-        with self.assertRaisesRegex(RuntimeError, "Both"):
-            ensure_workspace(self.repo_root, self.workspace)
-        self.assert_workspace_unchanged(before)
-        self.assertEqual((legacy / "scratch.txt").read_text(), "keep me")
-
-
 class HorizonWorkspaceTests(WorkspaceContract, unittest.TestCase):
     template = HORIZON
 
@@ -569,21 +543,46 @@ class EditorWorkspaceTests(WorkspaceContract, unittest.TestCase):
 
 
 class WorkspaceLockTests(unittest.TestCase):
+    def acquire_in_child(self, root: Path) -> subprocess.CompletedProcess[str]:
+        child = (
+            "import sys; from pathlib import Path; "
+            "from builder.git_workspace import _workspace_lock; from builder.source_workspaces import EDITOR; "
+            "lock = _workspace_lock(Path(sys.argv[1]), EDITOR, timeout=0.1); "
+            "lock.__enter__(); lock.__exit__(None, None, None)"
+        )
+        return subprocess.run(
+            [sys.executable, "-B", "-c", child, str(root)],
+            cwd=Path(__file__).resolve().parents[2], capture_output=True, text=True, timeout=10,
+        )
+
+    def test_clean_and_rebuild_keep_an_active_lock_effective_across_processes(self) -> None:
+        for command in ("clean", "rebuild"):
+            with self.subTest(command=command), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory).resolve()
+                with _workspace_lock(root, EDITOR):
+                    artifact = root / "build/conan/examples/relwithdebinfo/output.txt"
+                    artifact.parent.mkdir(parents=True)
+                    artifact.write_text("generated", encoding="utf-8")
+                    with mock.patch.object(dev, "REPO_ROOT", root), \
+                            mock.patch.object(dev, "install"), \
+                            mock.patch.object(dev, "cmake_configure"), \
+                            mock.patch.object(dev, "cmake_build"):
+                        dev.execute(dev.create_parser().parse_args([command]))
+                    self.assertFalse(artifact.exists())
+                    self.assertTrue((root / "build" / ".locks" / "editor.lock").is_file())
+                    result = self.acquire_in_child(root)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("Timed out waiting", result.stderr)
+
+                result = self.acquire_in_child(root)
+                self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_lock_excludes_another_process_and_releases_after_failure(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
-            child = (
-                "import sys; from pathlib import Path; "
-                "from builder.git_workspace import _workspace_lock; from builder.source_workspaces import EDITOR; "
-                "lock = _workspace_lock(Path(sys.argv[1]), EDITOR, timeout=0.1); "
-                "lock.__enter__(); lock.__exit__(None, None, None)"
-            )
             try:
                 with _workspace_lock(root, EDITOR):
-                    result = subprocess.run(
-                        [sys.executable, "-B", "-c", child, str(root)],
-                        cwd=Path(__file__).resolve().parents[2], capture_output=True, text=True, timeout=10,
-                    )
+                    result = self.acquire_in_child(root)
                     self.assertNotEqual(result.returncode, 0)
                     self.assertIn("Timed out waiting", result.stderr)
                     raise ValueError("test release on failure")

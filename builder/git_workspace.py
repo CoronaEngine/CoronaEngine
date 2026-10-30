@@ -14,6 +14,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
+from builder.paths import WORKSPACE_LOCK_DIR
 from builder.source_workspaces import SourceWorkspace
 from builder.workflow import run_command, safe_remove
 
@@ -279,7 +280,7 @@ def _inside_repo(repo_root: Path, relative: Path) -> Path:
 @contextmanager
 def _workspace_lock(repo_root: Path, workspace: SourceWorkspace, timeout: float = 600):
     """An OS lock is released even if a configuring process exits unexpectedly."""
-    lock_dir = _inside_repo(repo_root, Path(".workspace/.locks"))
+    lock_dir = _inside_repo(repo_root, WORKSPACE_LOCK_DIR)
     lock_dir.mkdir(parents=True, exist_ok=True)
     with (lock_dir / f"{workspace.key}.lock").open("a+b") as stream:
         if stream.tell() == 0:
@@ -313,7 +314,7 @@ def _workspace_lock(repo_root: Path, workspace: SourceWorkspace, timeout: float 
 
 
 def inspect_workspace(repo_root: Path, workspace: SourceWorkspace) -> WorkspaceStatus:
-    """Inspect without fetching, migrating, or changing the checkout."""
+    """Inspect without fetching or changing the checkout."""
     repo_root = Path(repo_root).resolve()
     worktree = _inside_repo(repo_root, workspace.directory)
     if not worktree.exists():
@@ -363,28 +364,8 @@ def _clone_locked(repo_root: Path, worktree: Path, workspace: SourceWorkspace) -
         raise
 
 
-def _migrate_legacy(repo_root: Path, worktree: Path, workspace: SourceWorkspace) -> None:
-    if workspace.legacy_directory is None:
-        return
-    legacy = _inside_repo(repo_root, workspace.legacy_directory)
-    if not legacy.exists():
-        return
-    if worktree.exists():
-        raise RuntimeError(f"Both {legacy} and {worktree} exist; move the legacy checkout aside "
-                           "after reconciling local work before continuing.")
-    # Linked worktrees need git worktree move/repair and cannot be renamed safely.
-    if not (legacy / ".git").is_dir():
-        raise RuntimeError(f"Cannot migrate {legacy}: expected an ordinary Git clone. "
-                           f"Move or repair it manually at {worktree}.")
-    current_commit(legacy)  # Validate before moving any user files.
-    worktree.parent.mkdir(parents=True, exist_ok=True)
-    legacy.rename(worktree)
-    print(f"[INFO] {workspace.name} workspace moved: {legacy} -> {worktree}; local work preserved")
-
-
 def _ensure_workspace(repo_root: Path, workspace: SourceWorkspace) -> WorkspaceStatus:
     worktree = _inside_repo(repo_root, workspace.directory)
-    _migrate_legacy(repo_root, worktree, workspace)
     status = inspect_workspace(repo_root, workspace)
     if status.error:
         raise RuntimeError(f"{status.error} (at {worktree})")

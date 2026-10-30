@@ -24,8 +24,7 @@ Horizon 和 CoronaEditor 统一由 `builder/git_workspace.py` 管理，分别位
 首次准备直接非浅克隆到根目录的 `Horizon/` 或 `CoronaEditor/`，检出指定 commit、建立跟踪分支，
 并递归初始化该提交记录的子模块，不经过临时克隆目录。失败时清理本次新建的目录，以便重试。
 已有副本只报告状态并直接使用：普通构建不会拉取、切换版本或更新子模块，本地修改和提交可以直接参与构建。
-旧的 `.workspace/Horizon/` 和 `.workspace/CoronaEditor/` 普通 Git 副本会整体迁移到引擎根目录，保留本地修改、
-未跟踪文件及子模块；已有浅克隆也会复用，显式同步需要旧提交时才补全历史。
+已有浅克隆也会复用，显式同步需要旧提交时才补全历史。
 
 修改代码中的 commit 后，使用 `python builder/dev.py horizon-sync` 或
 `python builder/dev.py editor-sync` 显式对齐对应工作区及子模块，然后重新 configure/build。
@@ -35,6 +34,8 @@ Horizon 和 CoronaEditor 统一由 `builder/git_workspace.py` 管理，分别位
 Python 依赖检查使用 `CoronaEditor/editor/requirements.txt`；构建时将资源部署为
 可执行目录下的 `assets/` 和 `CabbageEditor/`，并自动构建前端。关闭编辑器构建仍准备该仓库，
 因为它也提供共享资源。源码工作区通过进程锁保护，多个 preset 共用同一副本。
+锁文件位于 `build/.locks/horizon.lock` 和 `build/.locks/editor.lock`，进程退出即释放锁。
+`clean` 清理构建产物时保留 `build/.locks/`；`rebuild` 只清理当前目标族和配置的构建目录。
 Python 层使用固定的 PyTorch/torchvision CPU wheels，不需要 CUDA。缺包或版本不符时，pip 按完整
 `requirements.txt` 安装；安装或复检失败会终止配置。
 启用编辑器时，CMake 使用该环境的 Python 自动检查 Node.js **22.19.0** 和 npm；

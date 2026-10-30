@@ -18,6 +18,7 @@ from builder.workflow import (
     _environment_value,
     _set_environment_value,
     build_dir,
+    clean_repo,
     configuration_slug,
     preset_name,
     safe_remove,
@@ -86,6 +87,33 @@ class WorkflowTests(unittest.TestCase):
             root = Path(directory)
             with self.assertRaises(RuntimeError):
                 safe_remove(root, root)
+
+    def test_clean_removes_artifacts_but_keeps_sources_and_lock_files(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            clean_repo(root)
+            self.assertFalse((root / "build").exists())
+            preserved = (
+                "build/.locks/horizon.lock", "build/.locks/editor.lock",
+                "Horizon/local.cpp", "CoronaEditor/local.py",
+            )
+            removed = (
+                "build/conan/examples/debug/CMakeCache.txt", "build/output.txt",
+                "install/file.txt", "out/file.txt", "dist/file.txt",
+            )
+            for relative in (*preserved, *removed):
+                path = root / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(relative, encoding="utf-8")
+
+            clean_repo(root)
+            clean_repo(root)
+
+            for relative in preserved:
+                self.assertEqual((root / relative).read_text(encoding="utf-8"), relative)
+            self.assertEqual({path.name for path in (root / "build").iterdir()}, {".locks"})
+            for relative in ("install", "out", "dist"):
+                self.assertFalse((root / relative).exists())
 
     def test_source_baseline_requires_full_commit(self) -> None:
         self.assertEqual(replace(HORIZON, commit="a" * 40).commit, "a" * 40)
