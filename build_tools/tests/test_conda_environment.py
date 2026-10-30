@@ -1,4 +1,4 @@
-"""Git and Node installers must serialize mutations to one Conda prefix."""
+"""Git, Ninja and Node installers must serialize mutations to one Conda prefix."""
 
 from pathlib import Path
 import subprocess
@@ -16,7 +16,7 @@ import subprocess
 import sys
 import time
 
-from build_tools import git_tool
+from build_tools import git_tool, ninja_tool
 from build_tools.scripts import ensure_nodejs
 
 prefix = Path(sys.argv[1])
@@ -25,7 +25,7 @@ sys.prefix = str(prefix)
 marker = prefix / (kind + '.installed')
 
 def install(command, **kwargs):
-    # Exclusive creation catches overlapping Git/Node installs even if the
+    # Exclusive creation catches overlapping tool installs even if the
     # timing of their event log writes would otherwise hide the overlap.
     active = prefix / 'active-install'
     with active.open('x'):
@@ -41,16 +41,20 @@ def install(command, **kwargs):
 subprocess.run = install
 git_tool.find_conda = lambda prefix: 'test-conda'
 git_tool.find_git = lambda prefix, **kwargs: prefix / 'git.exe' if marker.exists() else None
+ninja_tool.find_conda = lambda prefix: 'test-conda'
+ninja_tool.find_ninja = lambda prefix, **kwargs: prefix / 'ninja.exe' if marker.exists() else None
 ensure_nodejs.probe_node = lambda prefix: prefix if marker.exists() else None
 (prefix / ('ready-' + worker)).touch()
 if kind == 'git':
     git_tool.ensure_git()
+elif kind == 'ninja':
+    ninja_tool.ensure_ninja()
 else:
     ensure_nodejs.ensure_nodejs('test-conda', prefix)
 '''
 
 
-@pytest.mark.parametrize("kinds", [("git", "git"), ("git", "node")])
+@pytest.mark.parametrize("kinds", [("git", "git"), ("git", "node"), ("ninja", "ninja"), ("ninja", "git"), ("ninja", "node")])
 def test_installers_share_a_lock_and_recheck_after_waiting(tmp_path, kinds):
     prefix = tmp_path / "shared environment"
     (prefix / "conda-meta").mkdir(parents=True)
@@ -79,10 +83,11 @@ def test_installers_share_a_lock_and_recheck_after_waiting(tmp_path, kinds):
                 worker.communicate()
 
     events = (prefix / "events").read_text().splitlines()
-    if kinds == ("git", "git"):
-        assert events == ["git:start", "git:end"]
+    first, second = kinds
+    if first == second:
+        assert events == [f"{first}:start", f"{first}:end"]
     else:
         assert events in (
-            ["git:start", "git:end", "node:start", "node:end"],
-            ["node:start", "node:end", "git:start", "git:end"],
+            [f"{first}:start", f"{first}:end", f"{second}:start", f"{second}:end"],
+            [f"{second}:start", f"{second}:end", f"{first}:start", f"{first}:end"],
         )

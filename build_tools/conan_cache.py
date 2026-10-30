@@ -8,6 +8,7 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from build_tools.paths import LOCAL_RECIPES, REPO_ROOT, conanfile_path
+from build_tools.ninja_tool import ensure_ninja
 from build_tools.workflow import CONFIGURATIONS, DEFAULT_CONFIGURATION, CommandError, export_local_recipes, profile_path, run_command
 
 
@@ -84,6 +85,7 @@ def update_cache(args: argparse.Namespace) -> None:
     command.extend(("-pr:a", str(profile), "-pr:b", str(profile), "--build=missing"))
     update_name = reference_name(args.reference or args.package) if (args.reference or args.package) else None
     command.append(f"--update={update_name}" if update_name else "--update")
+    ensure_ninja()
     export_local_recipes(REPO_ROOT, LOCAL_RECIPES, toggle_env=RECIPE_TOGGLE_ENV)
     run_command(command, cwd=REPO_ROOT)
 

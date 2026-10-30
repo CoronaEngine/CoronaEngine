@@ -47,6 +47,7 @@ class CmakeBuildForwardsEveryTargetTests(unittest.TestCase):
             recorded.append(command)
 
         with mock.patch.object(workflow, "assert_cache_matches_repo"), \
+                mock.patch.object(workflow, "repair_ninja_cache"), \
                 mock.patch.object(workflow, "load_conan_build_environment", return_value={}), \
                 mock.patch.object(workflow, "run_command", side_effect=fake_run_command):
             workflow.cmake_build(*call_args)
@@ -87,6 +88,7 @@ class ExecuteForwardsEveryParsedTargetTests(unittest.TestCase):
             "corona_engine", "corona_cef_app_tests", "corona_ui_surface_lifecycle_tests",
         ])
         with mock.patch.object(dev, "install"), \
+                mock.patch.object(dev, "ensure_ninja"), \
                 mock.patch.object(dev, "cmake_configure"), \
                 mock.patch.object(dev, "cmake_build") as cmake_build:
             dev.execute(args)
@@ -101,6 +103,7 @@ class ExecuteForwardsEveryParsedTargetTests(unittest.TestCase):
     def test_execute_falls_back_to_the_default_target(self):
         args = dev.create_parser().parse_args(["build-fast"])
         with mock.patch.object(dev, "ensure_workspaces"), \
+                mock.patch.object(dev, "ensure_ninja"), \
                 mock.patch.object(dev, "cmake_build") as cmake_build:
             dev.execute(args)
         forwarded = list(cmake_build.call_args.args[2])

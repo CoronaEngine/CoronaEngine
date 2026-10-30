@@ -2,6 +2,7 @@ function(corona_dev_bootstrap)
     set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
         "${CORONA_BUILD_TOOLS_DIR}/source_workspaces.py"
         "${CORONA_BUILD_TOOLS_DIR}/git_tool.py"
+        "${CORONA_BUILD_TOOLS_DIR}/ninja_tool.py"
         "${CORONA_BUILD_TOOLS_DIR}/conda_environment.py"
         "${CORONA_BUILD_TOOLS_DIR}/file_lock.py")
     if(NOT DEFINED CORONA_CONDA_ENV OR CORONA_CONDA_ENV STREQUAL "")
@@ -125,6 +126,8 @@ function(corona_dev_bootstrap)
         message(FATAL_ERROR "CoronaEngine build environment was not generated: ${_corona_build_environment}")
     endif()
     include("${_corona_build_environment}")
+    include(corona_ninja)
+    corona_configure_ninja()
     set(CMAKE_TOOLCHAIN_FILE "${_corona_toolchain}" CACHE FILEPATH "Conan toolchain" FORCE)
 
     # Conan installs exactly one configuration per build directory, and CMakeDeps

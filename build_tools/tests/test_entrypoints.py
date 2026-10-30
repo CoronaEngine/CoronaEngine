@@ -49,8 +49,10 @@ def test_cache_update_selects_project_recipe_or_package(package):
     argv = ["update"] + ([package] if package else [])
     args = conan_cache.create_parser().parse_args(argv)
     with mock.patch.object(conan_cache, "export_local_recipes"), \
+            mock.patch.object(conan_cache, "ensure_ninja") as prepare, \
             mock.patch.object(conan_cache, "run_command") as run:
         conan_cache.update_cache(args)
+    prepare.assert_called_once_with()
     command = run.call_args.args[0]
     if package:
         assert command[2:4] == ["--requires", package]
