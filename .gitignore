@@ -6,10 +6,9 @@
 /dist/
 /cmake-build-*/
 
-# Managed source workspaces (baselines live in tools/source_workspaces.py).
+# Managed source workspaces (baselines live in build_tools/source_workspaces.py).
 /Horizon/
 /CoronaEditor/
-/.workspace/
 
 # CMake intermediate files
 CMakeUserPresets.json
