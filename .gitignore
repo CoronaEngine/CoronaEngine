@@ -9,7 +9,6 @@
 # Managed source workspaces (baselines live in builder/source_workspaces.py).
 /Horizon/
 /CoronaEditor/
-/.workspace/
 
 # CMake intermediate files
 CMakeUserPresets.json

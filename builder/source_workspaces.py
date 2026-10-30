@@ -19,16 +19,14 @@ class SourceWorkspace:
     url: str
     ref: str
     commit: str
-    legacy_directory: Path | None = None
 
     def __post_init__(self) -> None:
         if not re.fullmatch(r"[a-z][a-z0-9-]*", self.key):
             raise ValueError(f"Invalid workspace key: {self.key}")
         if not self.name or not self.url or not self.ref or not re.fullmatch(r"[0-9a-f]{40}", self.commit):
             raise ValueError(f"Invalid source baseline for {self.key}; use a full lowercase commit SHA")
-        for directory in (self.directory, self.legacy_directory):
-            if directory is not None and (directory.is_absolute() or not directory.parts or ".." in directory.parts):
-                raise ValueError(f"Workspace directory must be inside the repository: {directory}")
+        if self.directory.is_absolute() or not self.directory.parts or ".." in self.directory.parts:
+            raise ValueError(f"Workspace directory must be inside the repository: {self.directory}")
 
     @property
     def sync_command(self) -> str:
@@ -46,7 +44,6 @@ HORIZON = SourceWorkspace(
     url="https://github.com/CoronaEngine/Horizon.git",
     ref="main",
     commit="ee30ca47e717e3c4704ec95489b06ddfbaa93d1e",
-    legacy_directory=Path(".workspace/Horizon"),
 )
 
 EDITOR = SourceWorkspace(
@@ -56,7 +53,6 @@ EDITOR = SourceWorkspace(
     url="https://github.com/CoronaEngine/CoronaEditor.git",
     ref="main",
     commit="3e0edf418d1963e990589435892526daaf3952e1",
-    legacy_directory=Path(".workspace/CoronaEditor"),
 )
 
 WORKSPACES = (HORIZON, EDITOR)

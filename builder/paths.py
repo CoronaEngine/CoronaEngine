@@ -5,6 +5,7 @@ from pathlib import Path
 
 BUILDER_ROOT = Path(__file__).resolve().parent
 REPO_ROOT = BUILDER_ROOT.parent
+WORKSPACE_LOCK_DIR = Path("build/.locks")
 LOCAL_RECIPES = tuple(
     f"builder/conan/recipes/{name}"
     for name in (
