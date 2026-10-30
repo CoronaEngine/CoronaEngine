@@ -13,8 +13,6 @@
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
 
-find_package(Vulkan REQUIRED)
-
 add_compile_definitions(_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING)
 
 # ------------------------------------------------------------------------------
