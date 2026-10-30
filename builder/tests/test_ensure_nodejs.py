@@ -8,7 +8,7 @@ import unittest
 from unittest.mock import patch
 
 
-SCRIPT = Path(__file__).resolve().parents[1] / "build" / "ensure_nodejs.py"
+SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "ensure_nodejs.py"
 spec = importlib.util.spec_from_file_location("ensure_nodejs", SCRIPT)
 nodejs = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(nodejs)

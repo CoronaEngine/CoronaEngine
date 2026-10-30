@@ -7,11 +7,11 @@ import tempfile
 import unittest
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from source_workspaces import HORIZON
-from dev import conan_options, target_family_for_target, target_family_for_targets
-from workflow import (
+from builder.source_workspaces import HORIZON
+from builder.dev import conan_options, target_family_for_target, target_family_for_targets
+from builder.workflow import (
     DEFAULT_TARGET_FAMILY,
     TARGET_FAMILIES,
     _cmake_bracket,

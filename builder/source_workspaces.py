@@ -32,11 +32,11 @@ class SourceWorkspace:
 
     @property
     def sync_command(self) -> str:
-        return f"python tools/dev.py {self.key}-sync"
+        return f"python builder/dev.py {self.key}-sync"
 
     @property
     def lock_hint(self) -> str:
-        return f"edit tools/source_workspaces.py and run '{self.sync_command}'"
+        return f"edit builder/source_workspaces.py and run '{self.sync_command}'"
 
 
 HORIZON = SourceWorkspace(

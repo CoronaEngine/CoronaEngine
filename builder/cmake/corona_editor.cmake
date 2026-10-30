@@ -21,7 +21,7 @@
 
 include_guard(GLOBAL)
 
-# Source acquisition is shared with Horizon in tools/git_workspace.py.
+# Source acquisition is shared with Horizon in builder/git_workspace.py.
 set(CORONA_EDITOR_SOURCE_DIR "${PROJECT_SOURCE_DIR}/CoronaEditor")
 
 function(corona_validate_editor_sources)
@@ -30,7 +30,7 @@ function(corona_validate_editor_sources)
        OR NOT EXISTS "${CORONA_EDITOR_SOURCE_DIR}/editor/Frontend/package.json")
         message(FATAL_ERROR
             "[Corona:Editor] Incomplete workspace at ${CORONA_EDITOR_SOURCE_DIR}. "
-            "Run 'conda run -n coronaengine-dev python tools/dev.py configure'.")
+            "Run 'conda run -n coronaengine-dev python builder/dev.py configure'.")
     endif()
     message(STATUS "[Corona:Editor] Source checkout: ${CORONA_EDITOR_SOURCE_DIR}")
 endfunction()
@@ -72,7 +72,7 @@ function(corona_install_corona_editor target_name core_target)
         return()
     endif()
 
-    set(_CORONA_PY_SCRIPT "${PROJECT_SOURCE_DIR}/tools/build/editor_copy_and_build.py")
+    set(_CORONA_PY_SCRIPT "${CORONA_BUILD_SCRIPTS_DIR}/editor_copy_and_build.py")
     if(NOT CORONA_NODE_DIR OR NOT IS_DIRECTORY "${CORONA_NODE_DIR}")
         message(FATAL_ERROR "[Corona:Editor] Conda Node.js is unavailable; re-run CMake configure.")
     endif()

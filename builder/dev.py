@@ -4,9 +4,14 @@ import argparse
 import sys
 from pathlib import Path
 
-from git_workspace import ensure_workspace, inspect_workspace, sync_workspace
-from source_workspaces import WORKSPACES
-from workflow import (
+# Support both `python builder/dev.py` and `python -m builder.dev`.
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from builder.git_workspace import ensure_workspace, inspect_workspace, sync_workspace
+from builder.paths import LOCAL_RECIPES, REPO_ROOT
+from builder.source_workspaces import WORKSPACES
+from builder.workflow import (
     CONFIGURATIONS,
     DEFAULT_CONFIGURATION,
     DEFAULT_TARGET_FAMILY,
@@ -22,18 +27,8 @@ from workflow import (
 )
 
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_TARGET = "corona_engine"
 WORKSPACE_COMMANDS = {f"{workspace.key}-sync": workspace for workspace in WORKSPACES}
-LOCAL_RECIPES = (
-    "conan/recipes/ktm",
-    "conan/recipes/pfr",
-    "conan/recipes/slang",
-    "conan/recipes/vulkan-memory-allocator",
-    "conan/recipes/astc-encoder",
-    "conan/recipes/cef-binary",
-    "conan/recipes/ffmpeg",
-)
 RECIPE_TOGGLE_ENV = "CORONA_CONAN_EXPORT_LOCAL_RECIPES"
 TARGET_FAMILY_OPTIONS: dict[str, tuple[str, ...]] = {
     "core": (
@@ -171,7 +166,7 @@ def create_parser() -> argparse.ArgumentParser:
         epilog=(
             "Horizon/ and CoronaEditor/ are ordinary Git clones at the engine repository root. "
             "Builds use existing sources as-is, including local edits. Baselines are defined "
-            "in tools/source_workspaces.py; use horizon-sync or editor-sync to adopt them "
+            "in builder/source_workspaces.py; use horizon-sync or editor-sync to adopt them "
             "explicitly (including submodules). update refreshes Conan dependencies only."
         ),
     )

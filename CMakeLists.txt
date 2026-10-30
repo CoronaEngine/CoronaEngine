@@ -1,97 +1,20 @@
-﻿# ============================================================================== 
-# CoronaEngine - Root CMake Configuration
-#
-# Responsibilities:
-#   - Coordinate the build using CMake modules in cmake and Python helpers in tools/build.
-#   - Register project-wide options, toolchains, third-party dependencies, and
-#     runtime asset staging helpers.
-#   - Add production modules before the engine tests and examples.
-# ============================================================================== 
-
+# Public CMake entry point. Build implementation lives in builder/.
 cmake_minimum_required(VERSION 3.29)
 
+include("${CMAKE_CURRENT_LIST_DIR}/builder/cmake/corona_paths.cmake")
 list(APPEND CMAKE_MODULE_PATH
-    "${CMAKE_CURRENT_SOURCE_DIR}/cmake"
-    "${CMAKE_CURRENT_SOURCE_DIR}/modules/corona_resource/cmake"
+    "${CORONA_BUILDER_DIR}/cmake"
+    "${CORONA_ROOT_DIR}/modules/corona_resource/cmake"
 )
-
-set_property(GLOBAL PROPERTY USE_FOLDERS ON)
 
 include(corona_dev_bootstrap)
 corona_dev_bootstrap()
 
-# ------------------------------------------------------------------------------
-# Project Declaration
-# ------------------------------------------------------------------------------
-project(
-    CoronaEngine
-    VERSION      0.5.0
+# Keep project() here so toolchain setup precedes compiler detection.
+project(CoronaEngine
+    VERSION 0.5.0
     HOMEPAGE_URL "https://github.com/CoronaEngine/CoronaEngine"
-    LANGUAGES    C CXX
+    LANGUAGES C CXX
 )
 
-# ------------------------------------------------------------------------------
-# Modular Configuration Includes
-# ------------------------------------------------------------------------------
-include(corona_options)             # Global build options (editor/examples/runtime switches)
-
-# Enable testing before adding dependency directories. Otherwise CMake can keep
-# stale CTestTestfile.cmake files from a previously enabled dependency test suite.
-include(CTest)
-if(BUILD_CORONA_TESTING)
-    enable_testing()
-    set(CORONA_RESOURCE_BUILD_TESTS ON CACHE BOOL "Build CoronaResource tests" FORCE)
-endif()
-
-include(corona_editor)              # Consume the editor workspace prepared by bootstrap
-corona_validate_editor_sources()
-include(corona_python)              # Embedded Python discovery and dependency checks
-include(corona_nodejs)              # Install/check editor Node.js in the same Conda environment
-include(corona_msvc_dependencies)   # Stable Ninja header tracking across console encodings
-include(corona_compile_config)      # Compiler settings, standards, and shared definitions
-include(corona_third_party)         # Conan-provided external dependency targets
-include(corona_tbb)                 # Engine-owned TBB discovery and runtime copy helpers
-include(corona_add_system)          # Helper for adding system modules
-include(corona_runtime_deps)        # Runtime dependency collection and copy helpers
-include(corona_cef)
-
-# ------------------------------------------------------------------------------
-# Subdirectories
-# ------------------------------------------------------------------------------
-add_subdirectory(modules/corona_resource)  # Resource management module
-add_subdirectory(src)               # Core engine static library
-
-add_subdirectory(vision)            # Vision renderer module (local source)
-
-if(BUILD_CORONA_TESTING OR BUILD_TESTING)
-    add_subdirectory(tests)         # Core engine module and integration tests
-endif()
-
-if(BUILD_CORONA_EXAMPLES)
-    add_subdirectory(examples)      # Example applications
-endif()
-
-# Apply after all subdirectories have registered their tests, including tests
-# contributed by dependency projects such as Horizon.
-include(corona_test_runtime)
-corona_configure_test_runtime("${CMAKE_CURRENT_SOURCE_DIR}")
-
-# ------------------------------------------------------------------------------
-# Configuration Summary
-# ------------------------------------------------------------------------------
-message(STATUS "")
-message(STATUS "================================================================================")
-message(STATUS "  CoronaEngine Configuration Summary")
-message(STATUS "================================================================================")
-message(STATUS "  Python executable     : ${Python_EXECUTABLE}")
-
-if(Python_VERSION)
-    message(STATUS "  Python version        : ${Python_VERSION}")
-endif()
-
-message(STATUS "  Build runtime         : ${BUILD_CORONA_RUNTIME}")
-message(STATUS "  Build examples        : ${BUILD_CORONA_EXAMPLES}")
-message(STATUS "  Build editor          : ${BUILD_CORONA_EDITOR}")
-message(STATUS "  Auto install deps     : ${CORONA_AUTO_INSTALL_PY_DEPS}")
-message(STATUS "================================================================================")
-message(STATUS "")
+include(corona_project)
