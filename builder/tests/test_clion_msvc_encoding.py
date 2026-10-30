@@ -1,4 +1,4 @@
-"""Windows integration check for the shared CLion configure/build environment."""
+"""Windows integration check for the saved Conan configure/build environment."""
 
 import os
 from pathlib import Path
@@ -7,7 +7,8 @@ import sys
 import tempfile
 import unittest
 
-from tools.build.msvc_showincludes import dependency_prefixes, normalize_line
+from builder.scripts.msvc_showincludes import dependency_prefixes, normalize_line
+from builder.workflow import build_dir, load_conan_build_environment
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -41,6 +42,62 @@ class ShowIncludesTests(unittest.TestCase):
         )
 
 
+@unittest.skipUnless(os.name == "nt", "requires the saved Windows Conan toolchain")
+class MsvcBuildEnvironmentTests(unittest.TestCase):
+    def test_header_edit_rebuilds_with_saved_conan_environment(self):
+        cache = build_dir(ROOT, "RelWithDebInfo", "examples") / "CMakeCache.txt"
+        if not cache.exists():
+            self.skipTest("requires the configured examples-relwithdebinfo preset")
+        environment = load_conan_build_environment(ROOT, "RelWithDebInfo", "examples")
+        values = {}
+        for line in cache.read_text(encoding="utf-8").splitlines():
+            if "=" in line and not line.startswith(("#", "//")):
+                key, value = line.split("=", 1)
+                values[key.split(":", 1)[0]] = value
+
+        def run(*command):
+            result = subprocess.run(
+                command, cwd=ROOT, env=environment,
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=120,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout.decode("utf-8", errors="replace"))
+            return result
+
+        with tempfile.TemporaryDirectory(prefix="corona-msvc-", dir=ROOT / "build") as directory:
+            source = Path(directory)
+            build = source / "build"
+            (source / "CMakeLists.txt").write_text(
+                "cmake_minimum_required(VERSION 3.29)\n"
+                "project(HeaderDependencyProbe LANGUAGES CXX)\n"
+                f'set(Python_EXECUTABLE "{Path(sys.executable).as_posix()}")\n'
+                f'include("{ROOT.as_posix()}/builder/cmake/corona_msvc_dependencies.cmake")\n'
+                "add_executable(probe main.cpp)\n"
+                "target_compile_options(probe PRIVATE /utf-8)\n",
+                encoding="utf-8",
+            )
+            (source / "main.cpp").write_text(
+                '#include "工程/value.h"\nint main() { return PROBE_VALUE; }\n',
+                encoding="utf-8",
+            )
+            (source / "工程").mkdir()
+            header = source / "工程/value.h"
+            header.write_text("#define PROBE_VALUE 0\n", encoding="ascii")
+            cmake = values["CMAKE_COMMAND"]
+            run(cmake, "-S", str(source), "-B", str(build), "-G", "Ninja",
+                "-DCMAKE_MAKE_PROGRAM=" + values["CMAKE_MAKE_PROGRAM"])
+            run(cmake, "--build", str(build))
+            executable = str(build / "probe.exe")
+            run(executable)
+            # A second build is a no-op; then editing only the Unicode header
+            # must invalidate the object through the relocated launcher.
+            self.assertIn(b"no work to do", run(cmake, "--build", str(build)).stdout)
+            header.write_text("#define PROBE_VALUE 7\n", encoding="ascii")
+            run(cmake, "--build", str(build))
+            self.assertEqual(subprocess.run([executable], env=environment, timeout=10).returncode, 7)
+
+
+
+# Retain the original CLion/code-page regression for developers with that profile.
 @unittest.skipUnless(os.name == "nt", "requires the saved Windows CLion toolchain")
 class ClionMsvcEncodingTests(unittest.TestCase):
     def test_header_edit_rebuilds_after_legacy_console_start(self):
@@ -62,7 +119,7 @@ class ClionMsvcEncodingTests(unittest.TestCase):
                 "cmake_minimum_required(VERSION 3.29)\n"
                 "project(HeaderDependencyProbe LANGUAGES CXX)\n"
                 f'set(Python_EXECUTABLE "{Path(sys.executable).as_posix()}")\n'
-                f'include("{ROOT.as_posix()}/cmake/corona_msvc_dependencies.cmake")\n'
+                f'include("{ROOT.as_posix()}/builder/cmake/corona_msvc_dependencies.cmake")\n'
                 "add_executable(probe main.cpp)\n",
                 encoding="utf-8",
             )

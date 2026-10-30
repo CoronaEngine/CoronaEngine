@@ -1,6 +1,6 @@
 function(corona_dev_bootstrap)
     set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
-        "${CMAKE_CURRENT_SOURCE_DIR}/tools/source_workspaces.py")
+        "${CORONA_BUILDER_DIR}/source_workspaces.py")
     if(NOT DEFINED CORONA_CONDA_ENV OR CORONA_CONDA_ENV STREQUAL "")
         set(CORONA_CONDA_ENV "coronaengine-dev" CACHE STRING "Conda environment used by CoronaEngine development tools")
     endif()
@@ -103,7 +103,7 @@ function(corona_dev_bootstrap)
         message(STATUS "Running CoronaEngine dependency bootstrap...")
         execute_process(
             COMMAND "${_corona_conda}" run --name "${CORONA_CONDA_ENV}" --no-capture-output
-                    python tools/dev.py _bootstrap
+                    python "${CORONA_BUILDER_DIR}/dev.py" _bootstrap
                     --configuration "${CORONA_DEV_CONFIGURATION}"
                     --target-family "${CORONA_DEV_TARGET_FAMILY}"
             WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"

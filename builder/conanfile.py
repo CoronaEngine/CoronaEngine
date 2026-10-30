@@ -47,6 +47,9 @@ class CoronaEngineConan(ConanFile):
     }
 
     def layout(self):
+        # The recipe lives in builder/, while CMake sources and build/ live at
+        # the repository root. Keep existing presets and generated paths valid.
+        self.folders.root = ".."
         configuration = str(self.settings.build_type).lower()
         target_family = self.conf.get("user.corona:target_family", default="examples")
         if target_family not in self._target_families:

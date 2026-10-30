@@ -14,8 +14,8 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
-from source_workspaces import SourceWorkspace
-from workflow import run_command, safe_remove
+from builder.source_workspaces import SourceWorkspace
+from builder.workflow import run_command, safe_remove
 
 _UNTRACKED_STATUS = "??"
 _STATUS_WIDTH = 3
@@ -471,7 +471,7 @@ def sync_workspace(repo_root: Path, workspace: SourceWorkspace) -> WorkspaceStat
                 _git(status.worktree, *args)
                 if not _commit_present(status.worktree, workspace.commit):
                     raise RuntimeError(f"Locked {workspace.name} commit {workspace.commit} is not reachable "
-                                       f"from '{workspace.ref}' at {workspace.url}; check tools/source_workspaces.py.")
+                                       f"from '{workspace.ref}' at {workspace.url}; check builder/source_workspaces.py.")
             checkout = run_command(
                 ("git", "-C", status.worktree, "-c", "submodule.recurse=false",
                  "checkout", "--detach", workspace.commit),
@@ -490,7 +490,7 @@ def sync_workspace(repo_root: Path, workspace: SourceWorkspace) -> WorkspaceStat
         else:
             print(f"[INFO] {workspace.name} is already at the locked commit {workspace.commit} ({workspace.ref})")
         _update_submodules(status.worktree)
-        print("[INFO] Sources synchronized; run 'python tools/dev.py configure' or 'build' "
+        print("[INFO] Sources synchronized; run 'python builder/dev.py configure' or 'build' "
               "before compiling (build-fast does not refresh dependencies).")
         result = inspect_workspace(repo_root, workspace)
         _report(result)

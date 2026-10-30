@@ -4,15 +4,13 @@ import argparse
 import sys
 from pathlib import Path
 
-from workflow import CONFIGURATIONS, DEFAULT_CONFIGURATION, CommandError, export_local_recipes, profile_path, run_command
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from builder.paths import LOCAL_RECIPES, REPO_ROOT, conanfile_path
+from builder.workflow import CONFIGURATIONS, DEFAULT_CONFIGURATION, CommandError, export_local_recipes, profile_path, run_command
 
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-LOCAL_RECIPES = (
-    "conan/recipes/ktm", "conan/recipes/pfr", "conan/recipes/slang",
-    "conan/recipes/vulkan-memory-allocator", "conan/recipes/astc-encoder",
-    "conan/recipes/cef-binary", "conan/recipes/ffmpeg",
-)
 RECIPE_TOGGLE_ENV = "CORONA_CONAN_EXPORT_LOCAL_RECIPES"
 
 
@@ -81,7 +79,7 @@ def update_cache(args: argparse.Namespace) -> None:
     pattern = cache_pattern(args)
     concrete = concrete_reference(pattern)
     command = ["conan", "install"]
-    command.extend(("--requires", concrete)) if concrete else command.append(".")
+    command.extend(("--requires", concrete)) if concrete else command.append(str(conanfile_path(REPO_ROOT)))
     profile = profile_path(REPO_ROOT, args.configuration)
     command.extend(("-pr:a", str(profile), "-pr:b", str(profile), "--build=missing"))
     update_name = reference_name(args.reference or args.package) if (args.reference or args.package) else None

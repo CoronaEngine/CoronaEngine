@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "build"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import check_pip_modules as checker
 
 

@@ -13,12 +13,12 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from git_workspace import ensure_workspace, inspect_workspace, sync_workspace, _workspace_lock, _clone_locked
-import git_workspace
-from source_workspaces import HORIZON, EDITOR
-from workflow import CommandError
+from builder.git_workspace import ensure_workspace, inspect_workspace, sync_workspace, _workspace_lock, _clone_locked
+from builder import git_workspace
+from builder.source_workspaces import HORIZON, EDITOR
+from builder.workflow import CommandError
 
 
 GIT_CONFIG = (
@@ -574,7 +574,7 @@ class WorkspaceLockTests(unittest.TestCase):
             root = Path(directory).resolve()
             child = (
                 "import sys; from pathlib import Path; "
-                "from git_workspace import _workspace_lock; from source_workspaces import EDITOR; "
+                "from builder.git_workspace import _workspace_lock; from builder.source_workspaces import EDITOR; "
                 "lock = _workspace_lock(Path(sys.argv[1]), EDITOR, timeout=0.1); "
                 "lock.__enter__(); lock.__exit__(None, None, None)"
             )
@@ -582,7 +582,7 @@ class WorkspaceLockTests(unittest.TestCase):
                 with _workspace_lock(root, EDITOR):
                     result = subprocess.run(
                         [sys.executable, "-B", "-c", child, str(root)],
-                        cwd=Path(__file__).resolve().parents[1], capture_output=True, text=True, timeout=10,
+                        cwd=Path(__file__).resolve().parents[2], capture_output=True, text=True, timeout=10,
                     )
                     self.assertNotEqual(result.returncode, 0)
                     self.assertIn("Timed out waiting", result.stderr)

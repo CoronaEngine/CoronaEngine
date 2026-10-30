@@ -20,7 +20,13 @@ import subprocess
 from typing import Optional
 
 
-EDITOR_REPOSITORY = Path(__file__).resolve().parents[2] / "CoronaEditor"
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from builder.paths import REPO_ROOT
+
+
+EDITOR_REPOSITORY = REPO_ROOT / "CoronaEditor"
 
 
 def echo(msg: str) -> None:
@@ -217,7 +223,7 @@ def _select_npm_tmp_dir(frontend_dir: Path) -> Optional[Path]:
     for base in (
         frontend_dir.parent / ".tmp",  # CabbageEditor/.tmp, outside the Vite root
         frontend_dir / ".tmp",
-        Path(__file__).resolve().parents[2] / "build" / ".tmp",
+        REPO_ROOT / "build" / ".tmp",
     ):
         if not _can_write_and_delete(base):
             continue

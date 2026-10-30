@@ -33,7 +33,7 @@ if(MSVC AND CMAKE_GENERATOR MATCHES "Ninja")
                     set(CMAKE_${_lang}_CL_SHOWINCLUDES_PREFIX "Note: including file: " PARENT_SCOPE)
                     set(_launcher "${CMAKE_${_lang}_COMPILER_LAUNCHER}")
                     list(PREPEND _launcher "${Python_EXECUTABLE}"
-                        "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/../tools/build/msvc_showincludes.py"
+                        "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/../scripts/msvc_showincludes.py"
                         "${_prefix_hex}")
                     set(CMAKE_${_lang}_COMPILER_LAUNCHER "${_launcher}" PARENT_SCOPE)
                 endforeach()
