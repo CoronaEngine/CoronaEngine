@@ -6,7 +6,108 @@
 #include <cmath>
 #include <iostream>
 #include <stdexcept>
+#include <string>
+#include <typeinfo>
 #include <vector>
+
+namespace {
+void check_principled_lobe_pruning(vision::Pipeline &pipeline) {
+    using namespace vision;
+    struct Fixture {
+        const char *name;
+        float metallic, transmission, sheen, coat;
+        bool two_sided, graph;
+        const char *children; // Sheen, Coat, Metallic, Transmission, sPecular, Diffuse.
+        bool numeric_output_key{false};
+    };
+    const Fixture fixtures[] = {
+        {"zero-weights", 0.f, 0.f, 0.f, 0.f, false, false, "PD"},
+        {"tiny-metallic", 1e-5f, 0.f, 0.f, 0.f, false, false, "MPD"},
+        {"positive-metallic", .5f, 0.f, 0.f, 0.f, false, false, "MPD"},
+        {"tiny-sheen", 0.f, 0.f, 1e-5f, 0.f, false, false, "SPD"},
+        {"tiny-coat", 0.f, 0.f, 0.f, 1e-5f, false, false, "CPD"},
+        {"tiny-transmission", 0.f, 1e-5f, 0.f, 0.f, false, false, "TPD"},
+        {"pure-glass", 0.f, 1.f, 0.f, 0.f, false, false, "T"},
+        {"one-sided-metal", 1.f, 0.f, 0.f, 0.f, false, false, "MPD"},
+        {"two-sided-opaque-metal", 1.f, 0.f, 0.f, 0.f, true, false, "M"},
+        {"two-sided-transmissive-metal", 1.f, 1.f, 0.f, 0.f, true, false, "MT"},
+        {"unknown-texture-coordinates", 0.f, 0.f, 0.f, 0.f, false, true, "SCMTPD"},
+        {"numeric-output-key", 0.f, 0.f, 0.f, 0.f, false, false, "MPD", true},
+    };
+    std::vector<uint64_t> hashes;
+    for (const auto &fixture : fixtures) {
+        auto description = DataWrap::parse(R"({"type":"principled_bsdf","param":{
+            "color":[1,1,1],"ior":1.5,"roughness":0.3}})");
+        auto &params = description["param"];
+        params["metallic"] = fixture.metallic;
+        params["transmission_weight"] = fixture.transmission;
+        params["sheen_weight"] = fixture.sheen;
+        params["coat_weight"] = fixture.coat;
+        params["two_sided"] = fixture.two_sided;
+        if (fixture.graph) {
+            description["node_tab"] = DataWrap::parse(R"({"test_uv":{
+                "type":"src_node","construct_name":"tex_coord","param":{}}})");
+            for (const char *key : {"metallic", "transmission_weight", "sheen_weight", "coat_weight"})
+                params[key] = DataWrap::parse(R"({"channels":"x","output_key":"UV","node":"test_uv"})");
+        }
+        if (fixture.numeric_output_key) {
+            // Named outputs bypass the slot swizzle: runtime reads x=1, not y=0.
+            description["node_tab"] = DataWrap::parse(R"({"test_number":{
+                "type":"number","param":{"value":[1,0]}}})");
+            params["metallic"] = DataWrap::parse(
+                R"({"channels":"y","output_key":"value","node":"test_number"})");
+        }
+        MaterialDesc desc;
+        desc.init(ParameterSet{description});
+        auto material = Material::create_root(desc);
+        material->prepare();
+        pipeline.geometry().upload_bindless_array(pipeline.stream());
+        pipeline.upload_data();
+        hashes.push_back(material->topology_hash());
+        std::string children;
+        uint child_count = 0u;
+        // Build inside a real DSL scope; these are host-side child objects,
+        // so no GPU dispatch is needed to reject zero-weight placeholders.
+        [[maybe_unused]] Kernel kernel = [&] {
+            Env::instance().clear_global_vars();
+            pipeline.renderer().sampler()->load_data();
+            SampledWavelengths swl{3u};
+            Interaction it{false};
+            it.shading.x = make_float3(1.f, 0.f, 0.f);
+            it.shading.y = make_float3(0.f, 1.f, 0.f);
+            it.shading.z = make_float3(0.f, 0.f, 1.f);
+            it.ng = it.shading.z;
+            it.wo = it.shading.z;
+            it.uv = make_float2(0.f);
+            auto root = material->create_lobe_set(it, swl);
+            const auto *set = dynamic_cast<const LobeSet *>(root.get());
+            if (!set) throw std::runtime_error("Principled must create a LobeSet");
+            child_count = set->lobe_num();
+            set->for_each([&](const WeightedLobe &child) {
+                if (dynamic_cast<const MetallicLobe *>(child.get())) children += 'M';
+                else if (dynamic_cast<const DielectricLobe *>(child.get())) children += 'T';
+                else if (dynamic_cast<const DiffuseLobe *>(child.get())) children += 'D';
+                else {
+                    const std::string type = typeid(*child.get()).name();
+                    children += type.find("SheenLTC") != std::string::npos ? 'S' :
+                                type.find("CoatLobe") != std::string::npos ? 'C' :
+                                type.find("SpecularLobe") != std::string::npos ? 'P' : '?';
+                }
+            });
+        };
+        if (children != fixture.children || child_count != children.size()) {
+            std::cout << "Principled pruning fixture=" << fixture.name << " expected=" << fixture.children
+                      << " actual=" << children << " child_count=" << child_count << '\n';
+            throw std::runtime_error("Principled must omit only provably inactive children");
+        }
+    }
+    if (hashes[0] == hashes[1])
+        throw std::runtime_error("Principled topology hash must distinguish active lobe sets with the same slot topology");
+    if (hashes[1] != hashes[2])
+        throw std::runtime_error("positive metallic values with the same children must share a topology hash");
+    std::cout << "PASS: Principled exact lobe pruning and topology identity\n";
+}
+}// namespace
 
 // Exercise the real material graph: zero-weight sheen, coat, metal, specular
 // and diffuse children must not hide a pure Principled transmission lobe.
@@ -14,6 +115,7 @@ void check_principled_stable_planes(vision::Pipeline &pipeline) {
     using namespace vision;
     pipeline.activate_global_context();
     Global::SceneGpuContextScope scope{pipeline.geometry().bindless_array(), pipeline.device()};
+    check_principled_lobe_pruning(pipeline);
     auto &sampler = pipeline.renderer().sampler();
     const auto original_normal_mode = MaterialRegistry::instance().individual_ns();
     struct RestoreNormalMode {
