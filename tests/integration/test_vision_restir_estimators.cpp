@@ -18,6 +18,7 @@
 #include <fstream>
 #include <iostream>
 #include <stdexcept>
+#include <string_view>
 #include <vector>
 #ifdef _WIN32
 #ifndef NOMINMAX
@@ -45,6 +46,7 @@ void check_restir_gi_receiver_positions(vision::Pipeline& pipeline, const char* 
 void check_glass_transport_energy(vision::Pipeline& pipeline, unsigned recursion, const char* label);
 void check_glass_depth_guides(vision::Pipeline& pipeline);
 void check_glass_children_disappear(vision::Pipeline& pipeline);
+void check_principled_stable_planes(vision::Pipeline& pipeline);
 
 namespace {
 namespace fs = std::filesystem;
@@ -429,10 +431,12 @@ void check_primary_sampling_modes(vision::Pipeline& pipeline) {
 }
 } // namespace
 
-int main() {
+int main(int argc, char **argv) {
     configure_headless_process();
     fs::path fixture;
     try {
+        const bool principled_only = argc == 2 && std::string_view{argv[1]} == "--principled-stable-planes";
+        expect(argc == 1 || principled_only, "usage: corona_vision_restir_estimator_tests [--principled-stable-planes]");
         // Three full-resolution planes and their history amplify alignment
         // gaps into hundreds of MiB. Keep all attributes at full precision.
         constexpr size_t surface_bytes = 2u * sizeof(vision::SurfaceData) + sizeof(vision::SurfaceExtend) + sizeof(vision::SurfaceExtendHistory) +
@@ -465,8 +469,19 @@ int main() {
         vision::Global::instance().set_scene_path(fixture);
         const auto direct_pipeline = Corona::Tests::make_vision_test_pipeline(scene_description(true), fixture);
         expect(bool(direct_pipeline), "could not import direct-channel fixture");
+        if (principled_only) {
+            direct_pipeline->prepare();
+            direct_pipeline->upload_data();
+            check_principled_stable_planes(*direct_pipeline);
+            fs::remove(fixture / "receiver.obj");
+            fs::remove(fixture / "receiver-tilted.obj");
+            std::error_code cleanup_error;
+            fs::remove(fixture, cleanup_error);
+            return 0;
+        }
         const auto direct = render_channel(*direct_pipeline);
         check_stable_lobes(*direct_pipeline);
+        check_principled_stable_planes(*direct_pipeline);
         std::cout << "direct_mean=" << direct.mean() << " direct_max=" << direct.max_abs << '\n';
         std::cout << "raw_static_primary_bary_delta=" << direct.max_primary_bary_delta << '\n';
         expect(direct.max_primary_bary_delta <= 1e-6f,
@@ -706,6 +721,17 @@ int main() {
             check_glass_transport_energy(*p, recursion, label);
             return p;
         };
+        auto principled_glass_scene = glass_scene;
+        principled_glass_scene["scene"]["materials"][0] = vision::DataWrap::parse(R"({
+            "name":"glass","type":"principled_bsdf","param":{"color":[1,1,1],"ior":1.5,
+            "metallic":0,"transmission_weight":1,"roughness":0,"sheen_weight":0,"coat_weight":0}})");
+        std::cerr << "Running Principled glass layered transport and endpoint fixture\n";
+        auto principled_glass_pipeline = run_glass_variant(principled_glass_scene, 5u, "two-sided");
+        check_glass_planes(*principled_glass_pipeline, *principled_glass_pipeline->frame_buffer());
+        auto principled_depth_scene = principled_glass_scene;
+        principled_depth_scene["scene"]["shapes"].push_back(vision::DataWrap::parse(
+            R"({"type":"model","param":{"fn":"glass-rear.obj","material":"glass","normalize_to_unit_bounds":false}})"));
+        run_glass_variant(principled_depth_scene, 2u, "principled-depth-exhaustion");
         auto thick = glass_scene;
         write_file(fixture / "glass-occluder.obj", "v -4 -4 0.8\nv 0 4 0.8\nv 4 -4 0.8\nvn 0 0 -1\nf 1//1 2//1 3//1\n");
         auto occluded = glass_scene;
