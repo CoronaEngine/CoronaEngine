@@ -291,12 +291,6 @@ template<typename T>
     return AttrDesc::slot(key, default_value, tag);
 }
 
-struct UpsamplerDesc : public NodeDesc {
-public:
-    VISION_DESC_COMMON(Upsampler)
-    void init(const ParameterSet &ps) noexcept override;
-};
-
 struct PassDesc : public NodeDesc {
 public:
     VISION_DESC_COMMON(Pass)
@@ -312,7 +306,6 @@ public:
 struct FrameBufferDesc : public NodeDesc {
 public:
     ToneMapperDesc tone_mapper;
-    UpsamplerDesc upsampler_desc;
 
 public:
     VISION_DESC_COMMON(FrameBuffer)

@@ -306,8 +306,8 @@
     {
       "category": "lightsampler",
       "name": "bvh",
-      "status": "未完成",
-      "note": "空 BVH，缺少插件构造导出；见 F04",
+      "status": "已移除",
+      "note": "占位实现及插件构建目标已删除；evidence 为审计基线位置，见 F04",
       "evidence": {
         "path": "vision/src/render_core/lightsampler/CMakeLists.txt",
         "line": 4
@@ -576,8 +576,8 @@
     {
       "category": "upsampler",
       "name": "bilateral",
-      "status": "构造但空实现",
-      "note": "见 F02",
+      "status": "已移除",
+      "note": "插件、抽象接口、配置和默认构造已删除；evidence 为审计基线位置，见 F02",
       "evidence": {
         "path": "vision/src/render_core/upsampler/CMakeLists.txt",
         "line": 2
@@ -2085,6 +2085,62 @@
         "evidence": "build/sharc-removal/relax-fix-verification.json",
         "note": "initial_validation preserves the initial removal run before this independent ReLAX repair."
       }
+    },
+    {
+      "feature_id": "F02",
+      "status": "removed",
+      "date": "2026-10-31",
+      "report": "vision/UNUSED_FEATURES.md",
+      "removed_standalone_files": 3,
+      "note": "Removed bilateral plugin, Upsampler/UpsamplingParam/UpsamplerDesc, FrameBuffer ownership and default construction, hotfix/GUI/getter references, unused ReSTIR include and thin-lens fixture configuration. C++ consumers must rebuild together.",
+      "remaining_plugin_targets": 47,
+      "remaining_plugin_categories": 17,
+      "validation_scope": "Shared F02/F04 removal validation; original audit counts and evidence remain historical.",
+      "validation": {
+        "engine_and_selected_test_build": "passed",
+        "retired_dlls_absent_in_runtime_and_engine": true,
+        "deployed_plugin_hashes_match": 47,
+        "test_totals_latest": {
+          "total": 28,
+          "passed": 28,
+          "failed": 0,
+          "skipped": 0
+        },
+        "aggregation": "27 passing tests in the main run plus VisionSwitchProfileScopeTests passing after its missing executable was built.",
+        "world_bounds_failure": "fixed; targeted and full-suite tests passed",
+        "evidence": "build/plugin-removal/regression-verification.json"
+      },
+      "initial_validation": {
+        "engine_and_selected_test_build": "passed",
+        "retired_dlls_absent_in_runtime_and_engine": true,
+        "deployed_plugin_hashes_match": 47,
+        "test_totals": {
+          "total": 5,
+          "passed": 4,
+          "failed": 1,
+          "skipped": 0
+        },
+        "unresolved_failure": "VisionWorldBoundsGpuTests: final clear_shapes leaves two light instances; expected PMF 1, actual 0.2. Six preceding radius/PMF checks pass. Relevant scene lifecycle, power sampler and fixture sources are unchanged; no pre-removal binary comparison was run.",
+        "evidence": "build/plugin-removal/verification.json"
+      },
+      "world_bounds_followup": {
+        "status": "fixed_and_verified",
+        "root_cause": "rebuild_geometry_gpu uploaded geometry and rebuilt light sampling without reconciling the changed instance membership. clear_shapes left an orphaned area light in the registry, keeping the directional PMF at 0.2 rather than 1.",
+        "change": "Activate the pipeline context, drain previous submissions, call Scene::fill_instances to rebind surviving emitters and remove orphaned area lights, then rebuild GPU geometry.",
+        "coverage": "Original radius/PMF assertions preserved. Added registry-count checks after clearing shapes and GPU directional-bounds checks for both views while preserving directional/environment lights.",
+        "note": "initial_validation preserves the first removal run; no pre-removal binary comparison was performed."
+      }
+    },
+    {
+      "feature_id": "F04",
+      "status": "removed",
+      "date": "2026-10-31",
+      "report": "vision/UNUSED_FEATURES.md",
+      "removed_standalone_files": 1,
+      "note": "Removed bvh.cpp and vision-lightsampler-bvh target; uniform and power remain. Validation is shared with F02; the WorldBounds rebuild failure has been fixed and all 28 latest test results pass.",
+      "remaining_plugin_targets": 47,
+      "remaining_plugin_categories": 17,
+      "evidence": "build/plugin-removal/regression-verification.json"
     }
   ]
 }

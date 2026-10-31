@@ -20,8 +20,7 @@ FrameBuffer::FrameBuffer(const vision::FrameBufferDesc &desc)
       resolution_(desc["resolution"].as_uint2(make_uint2(1280, 720))),
       screen_window_(make_float2(-1.f), make_float2(1.f)),
       exposure_(desc["exposure"].as_float(1.f)),
-      accumulation_(desc["accumulation"].as_bool(true)),
-      upsampler_(Node::create_shared<Upsampler>(desc.upsampler_desc)) {
+      accumulation_(desc["accumulation"].as_bool(true)) {
     visualizer_->init();
     update_screen_window();
     resize(resolution_);
@@ -52,7 +51,7 @@ void FrameBuffer::prepare_view_texture(uint external_handle) {
 }
 
 void FrameBuffer::update_runtime_object(const vision::IObjectConstructor *constructor) noexcept {
-    std::tuple tp = {addressof(visualizer_), addressof(tone_mapper_.impl()), addressof(upsampler_)};
+    std::tuple tp = {addressof(visualizer_), addressof(tone_mapper_.impl())};
     HotfixSystem::replace_objects(constructor, tp);
 }
 

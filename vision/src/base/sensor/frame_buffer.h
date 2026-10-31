@@ -10,7 +10,6 @@
 #include "tonemapper.h"
 #include "base/scattering/interaction.h"
 #include "visualizer.h"
-#include "upsampler.h"
 #include "base/using.h"
 
 namespace vision {
@@ -161,7 +160,6 @@ protected:
     Box2f screen_window_;
     EncodedData<uint> accumulation_;
     TToneMapper tone_mapper_{};
-    SP<Upsampler> upsampler_{};
     EncodedData<float> exposure_{};
 
 #define VS_MAKE_BUFFER(Type, buffer_name, count)                            \
@@ -321,12 +319,12 @@ public:
                            motion_vectors_, hit_buffer_, screen_buffers_,
                            denoiser_diffuse_, denoiser_specular_, denoiser_bypass_, denoiser_di_specular_, denoiser_gi_specular_, denoiser_di_bypass_,
                            view_texture_, visualizer_, window_buffer_, rt_buffer_,
-                           tone_mapper_, upsampler_,
+                           tone_mapper_,
                            /// shaders
                            compute_geom_, compute_hit_,
                            accumulate_)
     OC_ENCODABLE_FUNC(EncodedObject, accumulation_, tone_mapper_, exposure_)
-    VS_MAKE_GUI_STATUS_FUNC(Node, upsampler_, tone_mapper_)
+    VS_MAKE_GUI_STATUS_FUNC(Node, tone_mapper_)
     void prepare() noexcept override;
     [[nodiscard]] Float4 apply_exposure(const Float4 &input) const noexcept;
     [[nodiscard]] Float4 apply_exposure(const Float &exposure,
@@ -337,7 +335,6 @@ public:
     void update_screen_window() noexcept;
     OC_MAKE_MEMBER_GETTER(screen_window, )
     OC_MAKE_MEMBER_GETTER(tone_mapper, &)
-    OC_MAKE_MEMBER_GETTER(upsampler, )
     void prepare_view_texture(uint external_handle = InvalidUI32);
     [[nodiscard]] const Texture2D &view_texture() const noexcept { return view_texture_; }
     void register_callback(const SP<GBufferCallback> &cb) noexcept;

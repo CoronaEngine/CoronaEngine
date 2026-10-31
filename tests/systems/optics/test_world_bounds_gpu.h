@@ -177,6 +177,8 @@ inline void world_bounds_gpu_regressions() {
     // Preserve empty-scene coverage after removing the fixed emitter as well.
     pipeline->scene().clear_shapes();
     pipeline->rebuild_geometry_gpu();
+    expect(pipeline->scene().light_manager().lights().size() == 1,
+           "empty-scene rebuild must remove area lights and retain the directional light");
     verify(1.f, make_float3(0), 0.f);
     pipeline->stream() << synchronize() << commit();
     std::cout << "WorldBounds Vulkan radius and power-PMF regressions passed\n";
@@ -225,4 +227,13 @@ inline void world_bounds_multiview_area_regression() {
                "repeated multiview refresh must not leak area/environment/power slots");
     }
     std::cout << "WorldBounds two-view EInstance area/environment lifecycle regressions passed\n";
+    pipeline->scene().clear_shapes();
+    pipeline->rebuild_geometry_gpu();
+    expect(pipeline->scene().light_manager().lights().size() == 2,
+           "empty multiview rebuild must preserve directional and environment lights only");
+    for (auto view : {0u, 7u}) {
+        auto direction = pipeline->read_probe(view);
+        expect(direction.y > 1.f && direction.y < 1.01f,
+               "every view must consume the empty-scene directional bounds");
+    }
 }

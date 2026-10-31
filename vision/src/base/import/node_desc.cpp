@@ -146,13 +146,6 @@ void SlotDesc::init(const ParameterSet &ps) noexcept {
     }
 }
 
-void UpsamplerDesc::init(const vision::ParameterSet &ps) noexcept {
-    NodeDesc::init(ps);
-    sub_type = ps["type"].as_string("bilateral");
-    ParameterSet param = ps.value("param", DataWrap::object());
-    set_parameter(param);
-}
-
 void MaterialDesc::init(const ParameterSet &ps) noexcept {
     vision::GraphDesc::init(ps);
     init_node_map(ps.value("node_tab"));
@@ -205,7 +198,6 @@ void FrameBufferDesc::init(const vision::ParameterSet &ps) noexcept {
     ParameterSet param = ps.value("param", DataWrap::object());
     set_parameter(param);
     tone_mapper.init(parameter_.value("tone_mapper", DataWrap::object()));
-    upsampler_desc.init(parameter_.value("upsampler", DataWrap::object()));
 }
 
 void PipelineDesc::init(const vision::ParameterSet &ps) noexcept {

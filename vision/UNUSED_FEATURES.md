@@ -2,7 +2,7 @@
 
 审计日期：2026-10-31。代码基线：`781907e59b6f6449082e5801c7e3a2d4f45b22b6`。
 
-后续状态：F03 SHARC 已从源码和构建依赖中移除；其余清单及数量保留上述审计基线口径。当前插件目标为 49 个、18 类。构建和回归结果见 [SHARC 移除记录](E:/CoronaEngine/vision/SHARC_ANALYSIS.md)。
+后续状态：F02 双边上采样、F03 SHARC、F04 BVH 灯光采样器已从源码和构建依赖中移除；其余清单及数量保留上述审计基线口径。当前插件目标为 47 个、17 类。SHARC 的构建和回归结果见 [SHARC 移除记录](E:/CoronaEngine/vision/SHARC_ANALYSIS.md)。
 
 Vision 的闲置部分主要来自独立渲染器向 Corona 集成时遗留的入口、未完成的实验功能，以及仍会构造但不再参与输出的对象。最值得优先处理的是 **SSAT 模式未接入引擎场景创建、空实现插件、无消费者的 Postprocessor 着色器、保存链路断开**。这些问题不能通过删除所有“非默认插件”解决。
 
@@ -37,15 +37,15 @@ Vision 的闲置部分主要来自独立渲染器向 Corona 集成时遗留的�
 
 建议：若保留光场产品能力，应在引擎场景创建时应用 SSAT 描述符，并增加穿过真实引擎入口的 framebuffer 类型和降噪器类型验证；在此之前明确标识模式限制。
 
-### F02 双边上采样
+### F02 双边上采样 已移除
 
-**判定：默认构造，但执行未接入且实现为空。**
+**状态：已删除插件、抽象接口、默认构造和配置解析。**
 
-每个 `FrameBuffer` 都创建 `Upsampler`，默认插件为 `bilateral`。`BilateralUpsampler::compile()` 的 kernel 为空，`apply()` 返回空命令；当前渲染链没有调用其 `compile/apply`。它既不能提供超分辨率，也不能完成双边重建。
+移除前每个 `FrameBuffer` 都创建默认 `bilateral` 插件，但其 kernel 为空、`apply()` 返回空命令，渲染链没有调用其 `compile/apply`。
 
-证据：[默认构造](E:/CoronaEngine/vision/src/base/sensor/frame_buffer.cpp:24)、[空 kernel 与空命令](E:/CoronaEngine/vision/src/render_core/upsampler/bilateral.cpp:48)、[描述符默认值](E:/CoronaEngine/vision/src/base/import/node_desc.cpp:151)。
+现已移除 `Upsampler`、`UpsamplingParam`、`UpsamplerDesc`、Framebuffer 持有关系、getter、热更新与 GUI 状态引用、ReSTIR 的无用 include，以及薄透镜测试中的旧配置。构建不再生成 `vision-upsampler-bilateral`。
 
-建议：先去掉默认实例化和无效配置入口，再决定补全或隔离该插件。只移除 DLL 而保留构造会导致加载失败。
+`FrameBuffer` 和 `FrameBufferDesc` 的 C++ 布局发生变化，使用它们的 DLL 必须一起重建。旧 JSON 的 `param.upsampler` 不再由专用接口解析，也不会触发插件加载；其他降噪器内部的双边滤波和上采样逻辑不属于本次移除范围。
 
 ### F03 SHARC 辐射缓存 已移除
 
@@ -57,15 +57,21 @@ Vision 的闲置部分主要来自独立渲染器向 Corona 集成时遗留的�
 
 此前四块缓冲区合计 176 MiB 的分配已取消，因此本次移除不重复计入显存优化收益。具体修改和回归记录见 [SHARC 移除记录](E:/CoronaEngine/vision/SHARC_ANALYSIS.md)。
 
-### F04 BVH 灯光采样器
+### F04 BVH 灯光采样器 已移除
 
-**判定：未完成，插件目标不具备正常创建入口。**
+**状态：已删除占位实现和插件构建目标。**
 
-`LightBVHNode` 为空，`build_bvh()` 为空；`bvh.cpp` 末尾没有 `VS_MAKE_CLASS_CREATOR*` 或等价的构造导出。CMake 却仍生成 `vision-lightsampler-bvh`。引擎选用 `uniform`，测试中有 `power`，没有选择 `bvh`。
+移除前 `LightBVHNode` 和 `build_bvh()` 为空，`bvh.cpp` 也没有插件构造导出，但 CMake 仍生成 `vision-lightsampler-bvh`。当前已删除该文件及目标；引擎使用的 `uniform` 和测试使用的 `power` 均保留。
 
-证据：[完整占位实现](E:/CoronaEngine/vision/src/render_core/lightsampler/bvh.cpp:11)、[构建目标](E:/CoronaEngine/vision/src/render_core/lightsampler/CMakeLists.txt:4)。相关的 `Light::bound()` 也只返回空值且没有调用者。
+剩余构建目标见 [lightsampler/CMakeLists.txt](E:/CoronaEngine/vision/src/render_core/lightsampler/CMakeLists.txt)。相关的 `Light::bound()` 也只返回空值且没有调用者，本次未改动这一公共接口。
 
-建议：从正常可选能力中移除或补全；不能把它当成已实现的 BVH 加速。
+根集成构建检查已将两个插件及上采样分类目标列为 retired target，防止重新引入占位构建依赖。
+
+F02/F04 初次移除验证：`examples-relwithdebinfo` 引擎及三个相关测试目标构建成功；47 个保留插件在构建运行目录与引擎部署目录中的 SHA256 一致，两个旧插件 DLL 均已清除。五项 CTest 中，模式配置、引擎场景（含 PT/ReSTIR）、相机设置和共享显示四项通过；`VisionWorldBoundsGpuTests` 失败。该测试此前六次半径/概率检查通过，最终 `clear_shapes()` 后灯光表仍报告两个灯，PMF 为 0.2，预期为 1。对应场景清理、几何更新、power 采样器和测试代码在初次移除时均未修改；未进行移除前二进制对照，不将其定性为已复现的既有失败。初次失败记录保留在 [验证汇总](E:/CoronaEngine/build/plugin-removal/verification.json)、[测试日志](E:/CoronaEngine/build/plugin-removal/tests.log)和 [JUnit 结果](E:/CoronaEngine/build/plugin-removal/tests.xml)。
+
+后续回归已复现并修复 WorldBounds 失败：`Pipeline::rebuild_geometry_gpu()` 原先没有同步变更后的实例与灯光表，清空几何后仍有孤立面积光参与功率采样。现在重建入口先激活上下文、等待旧提交完成，再调用 `Scene::fill_instances()` 重绑定存活发光实例并清除孤立面积光，最后上传和重建几何。原有概率断言保留，新增单视图和双视图清空后的灯光数量与 GPU 边界检查；方向光和环境光继续保留。
+
+当前配置下的 28 项 Vision/LightField 测试最新结果全部通过，包括完整 ReSTIR 估计器、ReBLUR、ReLAX、引擎场景、共享显示和资源生命周期。整轮为 27 项通过、1 项因性能分析 Python 启动器依赖的 EXE 漏构建而启动失败；补建 `corona_switch_profile_scope_tests` 后该项重跑通过，没有修改其逻辑或断言。引擎已重建部署，`vision-base.dll` 和 47 个插件的构建/部署哈希一致。验证环境为 RTX 2080/Vulkan/RelWithDebInfo，Native NRD 未启用。详见 [后续验证汇总](E:/CoronaEngine/build/plugin-removal/regression-verification.json)、[整轮结果](E:/CoronaEngine/build/plugin-removal/regression-tests.xml)与 [补充重跑](E:/CoronaEngine/build/plugin-removal/profile-scope-tests.xml)。
 
 ### F05 真实镜头相机
 
@@ -284,7 +290,7 @@ fixed/customized 的 `init_postprocessor()` 调用 `set_tone_mapper()`，后者�
 | light | `spherical` | 主流程使用 | [CMake](E:/CoronaEngine/vision/src/render_core/light/CMakeLists.txt:4)；发光网格、方向光和环境光适配器 |
 | lightsampler | `uniform` | 主流程使用 | [CMake](E:/CoronaEngine/vision/src/render_core/lightsampler/CMakeLists.txt:2)；引擎默认 uniform，env_separate=false |
 | lightsampler | `power` | 仅测试显式选择 | [CMake](E:/CoronaEngine/vision/src/render_core/lightsampler/CMakeLists.txt:3)；world_bounds GPU 测试使用 |
-| lightsampler | `bvh` | 未完成 | [CMake](E:/CoronaEngine/vision/src/render_core/lightsampler/CMakeLists.txt:4)；空 BVH，缺少插件构造导出；见 F04 |
+| lightsampler | `bvh` | 已移除 | 占位源码及插件目标已删除；见 F04 |
 | material | `black_body` | 主流程使用 | [CMake](E:/CoronaEngine/vision/src/render_core/material/CMakeLists.txt:2)；principled 和黑体回退都是真实消费者 |
 | material | `principled_bsdf` | 主流程使用 | [CMake](E:/CoronaEngine/vision/src/render_core/material/CMakeLists.txt:3)；principled 和黑体回退都是真实消费者 |
 | medium | `homogeneous` | 可选未接入生产场景 | [CMake](E:/CoronaEngine/vision/src/render_core/medium/CMakeLists.txt:2)；Corona 当前不填充 mediums_desc；仅保留通用描述符加载路径 |
@@ -292,7 +298,7 @@ fixed/customized 的 `init_postprocessor()` 调用 `set_tone_mapper()`，后者�
 | pass | `integrate` | 未接入 | [CMake](E:/CoronaEngine/vision/src/render_core/pass/CMakeLists.txt:3)；由 customized 使用，当前无管线执行入口；见 F13 |
 | pass | `tonemapping` | 未接入 | [CMake](E:/CoronaEngine/vision/src/render_core/pass/CMakeLists.txt:4)；由 customized 使用，当前无管线执行入口；见 F13 |
 | pass | `gamma` | 未接入 | [CMake](E:/CoronaEngine/vision/src/render_core/pass/CMakeLists.txt:5)；由 customized 使用，当前无管线执行入口；见 F13 |
-| radiancecache | `sharc` | 已移除 | [移除记录](E:/CoronaEngine/vision/SHARC_ANALYSIS.md)；此表保留审计时的 50 个目标，当前剩余 49 个 |
+| radiancecache | `sharc` | 已移除 | [移除记录](E:/CoronaEngine/vision/SHARC_ANALYSIS.md)；此表保留审计时的 50 个目标，当前剩余 47 个 |
 | sampler | `independent` | 主流程使用 | [CMake](E:/CoronaEngine/vision/src/render_core/sampler/CMakeLists.txt:2)；默认随机采样器；spp 参数另见 F20 |
 | sensor | `thin_lens` | 主流程使用 | [CMake](E:/CoronaEngine/vision/src/render_core/sensor/CMakeLists.txt:2)；默认 SensorDesc 和 Corona 相机适配 |
 | sensor | `pinhole` | 可选未选择 | [CMake](E:/CoronaEngine/vision/src/render_core/sensor/CMakeLists.txt:3)；生产使用 thin_lens；半径为零不等于加载 pinhole 插件 |
@@ -311,7 +317,7 @@ fixed/customized 的 `init_postprocessor()` 调用 `set_tone_mapper()`，后者�
 | spectrum | `hero` | 仅测试显式选择 | [CMake](E:/CoronaEngine/vision/src/render_core/spectrum/CMakeLists.txt:2)；ReSTIR estimator 测试选择 hero |
 | spectrum | `srgb` | 主流程使用 | [CMake](E:/CoronaEngine/vision/src/render_core/spectrum/CMakeLists.txt:3)；引擎默认光谱模型 |
 | tonemapper | `impl` | 主流程使用 | [CMake](E:/CoronaEngine/vision/src/render_core/tonemapper/CMakeLists.txt:2)；默认 linear；aces/reinhard 工厂未被当前 Vision 描述符选择 |
-| upsampler | `bilateral` | 构造但空实现 | [CMake](E:/CoronaEngine/vision/src/render_core/upsampler/CMakeLists.txt:2)；见 F02 |
+| upsampler | `bilateral` | 已移除 | 插件、抽象接口、配置和默认构造均已删除；见 F02 |
 | warper | `alias` | 主流程间接使用 | [CMake](E:/CoronaEngine/vision/src/render_core/warper/CMakeLists.txt:2)；面积光、环境贴图和滤波器的概率分布采样依赖 |
 | warper | `alias2d` | 主流程间接使用 | [CMake](E:/CoronaEngine/vision/src/render_core/warper/CMakeLists.txt:3)；面积光、环境贴图和滤波器的概率分布采样依赖 |
 
@@ -405,9 +411,9 @@ SHARC 的 `constant.h` 已随 F03 移除；枚举和通用旗标没有直接消�
 ## 清理顺序
 
 1. **先修行为缺口**：F01 的 SSAT 入口、F09 保存请求、F20 失效配置；对空壳插件明确报不可用。
-2. **减少确定的无效工作**：F08 Postprocessor 编译、F15 调试资源默认初始化、F02 的无功能对象构造（F03 已移除）。移除前同步调用者和插件部署列表。
+2. **减少确定的无效工作**：F08 Postprocessor 编译、F15 调试资源默认初始化（F02、F03 已移除）。移除前同步调用者和插件部署列表。
 3. **清理独立闲置代码**：IES、金属 IOR 表、旧 TAA、无调用兼容包装；保持改动小并检查 ABI 使用范围。
-4. **拆分实验和独立 viewer**：customized/render graph、真实镜头、BVH、旧窗口与面板（SHARC 已移除），不牵连当前主渲染链。
+4. **拆分实验和独立 viewer**：customized/render graph、真实镜头、旧窗口与面板（SHARC、BVH 已移除），不牵连当前主渲染链。
 5. **保留测试与可选能力**：Hero spectrum、PowerLightSampler、非默认滤波器、Native NRD，以及预计算表。先决定产品支持范围，再裁剪构建。
 
-初次审计仅添加文档和机器清单；后续已执行 F03 移除，其验证记录独立维护。
+初次审计仅添加文档和机器清单；后续已执行 F02、F03、F04 移除，状态与验证记录见机器清单的 `resolutions`。
