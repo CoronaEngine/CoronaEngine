@@ -79,10 +79,11 @@ inline void world_bounds_gpu_regressions() {
     auto desc = make_empty_project_desc();
     desc.renderer_desc.light_sampler_desc.sub_type = "power";
     desc.renderer_desc.render_setting.min_world_radius = 1.f;
-    for (const auto* type : {"directional", "point"}) {
+    for (const auto* light_json : {
+             R"({"type":"directional","param":{"direction":[0,-1,0],"color":[1,1,1]}})",
+             R"({"type":"area","param":{"width":1,"height":1,"scale":4,"color":[1,1,1]}})"}) {
         LightDesc light;
-        light.init(ParameterSet{DataWrap::parse(
-            std::string{"{\"type\":\""} + type + "\",\"param\":{\"direction\":[0,-1,0],\"position\":[0,0,0]}}")});
+        light.init(ParameterSet{DataWrap::parse(light_json)});
         desc.scene_desc.light_descs.push_back(light);
     }
     auto pipeline = std::make_shared<WorldBoundsProbePipeline>(desc.pipeline_desc);
@@ -97,6 +98,7 @@ inline void world_bounds_gpu_regressions() {
     ShapeInstance instance{mesh};
     instance.set_o2w(make_float4x4(1.f));
     auto group = std::make_shared<ShapeGroup>(std::move(instance));
+    const auto group_index = static_cast<uint>(pipeline->scene().groups().size());
     pipeline->scene().add_shape(group);
     pipeline->scene().register_instance_meshes();
     pipeline->scene().tidy_up();
@@ -106,10 +108,11 @@ inline void world_bounds_gpu_regressions() {
     pipeline->upload_scene_bindless_array();
     pipeline->upload_bindless_array();
     pipeline->compile();
-    auto verify = [&](float radius, float3 center) {
+    auto verify = [&](float radius, float3 center, float area_power_factor = 4.f) {
         auto actual = pipeline->read_probe();
-        // Equal colors: directional power = pi*r^2; point power = 4*pi.
-        float pmf = radius * radius / (radius * radius + 4.f);
+        // Unit colors: directional power = pi*r^2; the fixed unit-area quad
+        // at scale 4 contributes 4*pi, independently of the moving triangle.
+        float pmf = radius * radius / (radius * radius + area_power_factor);
         std::cout << "WorldBounds probe expected_radius=" << radius << " actual=("
                   << actual.x << ',' << actual.y << ',' << actual.z << ") pmf="
                   << actual.w << " expected_pmf=" << pmf << std::endl;
@@ -122,7 +125,7 @@ inline void world_bounds_gpu_regressions() {
                "Vulkan directional-light endpoint must enclose current world bounds");
         expect(std::abs(actual.w - pmf) < 1e-4f,
                "Vulkan power sampler PMF must use current world radius");
-        expect(all(pipeline->scene().world_center() == center), "CPU world center must match transformed triangle");
+        expect(all(pipeline->scene().world_center() == center), "CPU world center must match current scene bounds");
         for (auto light : pipeline->scene().light_manager().lights()) {
             if (!light->match(LightType::DeltaDirection)) continue;
             auto& encoded = pipeline->scene().light_manager().lights().get_datas(light.get());
@@ -139,18 +142,19 @@ inline void world_bounds_gpu_regressions() {
             }
         }
     };
-    verify(std::sqrt(2.f), make_float3(0, 1, 0));
+    // The fixed XZ quad extends the triangle's bounds to z = +/-0.5.
+    verify(1.5f, make_float3(0, 1, 0));
     auto initial_slots = pipeline->bindless_array().buffer_num();
     group->instance(0).set_o2w(scale<H>(make_float3(20.f)));
     group->instance(0).init_aabb();
     group->aabb = group->instance(0).aabb;
     pipeline->update_geometry();
-    verify(std::sqrt(800.f), make_float3(0, 20, 0));
+    verify(std::sqrt(800.25f), make_float3(0, 20, 0));
     group->instance(0).set_o2w(make_float4x4(1.f));
     group->instance(0).init_aabb();
     group->aabb = group->instance(0).aabb;
     pipeline->update_geometry();
-    verify(std::sqrt(2.f), make_float3(0, 1, 0));
+    verify(1.5f, make_float3(0, 1, 0));
     expect(pipeline->bindless_array().buffer_num() == initial_slots,
            "bounds refresh must reuse light-sampling bindless slots");
     auto compiles = pipeline->compilations;
@@ -161,7 +165,7 @@ inline void world_bounds_gpu_regressions() {
     group->aabb = group->instance(0).aabb;
     pipeline->update_geometry();
     verify(1.f, make_float3(0));
-    pipeline->scene().remove_shape(0);
+    pipeline->scene().remove_shape(group_index);
     pipeline->rebuild_geometry_gpu();
     verify(1.f, make_float3(0));
     group->instance(0).set_o2w(make_float4x4(1.f));
@@ -169,7 +173,13 @@ inline void world_bounds_gpu_regressions() {
     group->aabb = group->instance(0).aabb;
     pipeline->scene().add_shape(group);
     pipeline->rebuild_geometry_gpu();
-    verify(std::sqrt(2.f), make_float3(0, 1, 0));
+    verify(1.5f, make_float3(0, 1, 0));
+    // Preserve empty-scene coverage after removing the fixed emitter as well.
+    pipeline->scene().clear_shapes();
+    pipeline->rebuild_geometry_gpu();
+    expect(pipeline->scene().light_manager().lights().size() == 1,
+           "empty-scene rebuild must remove area lights and retain the directional light");
+    verify(1.f, make_float3(0), 0.f);
     pipeline->stream() << synchronize() << commit();
     std::cout << "WorldBounds Vulkan radius and power-PMF regressions passed\n";
 }
@@ -217,4 +227,13 @@ inline void world_bounds_multiview_area_regression() {
                "repeated multiview refresh must not leak area/environment/power slots");
     }
     std::cout << "WorldBounds two-view EInstance area/environment lifecycle regressions passed\n";
+    pipeline->scene().clear_shapes();
+    pipeline->rebuild_geometry_gpu();
+    expect(pipeline->scene().light_manager().lights().size() == 2,
+           "empty multiview rebuild must preserve directional and environment lights only");
+    for (auto view : {0u, 7u}) {
+        auto direction = pipeline->read_probe(view);
+        expect(direction.y > 1.f && direction.y < 1.01f,
+               "every view must consume the empty-scene directional bounds");
+    }
 }

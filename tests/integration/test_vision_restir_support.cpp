@@ -283,7 +283,7 @@ void check_restir_gi_receiver_positions(vision::Pipeline& pipeline, const char* 
 
 // coverage bits: 1 positive area target, 2 all area targets zero,
 // 4 positive non-area target, 8 grazing area target, 16 varying area UVs,
-// 32 both point and directional samples, 64 both primitive IDs.
+// 32 directional samples, 64 both primitive IDs.
 // The one-argument entry keeps its API.
 void check_di_light_context_equivalence(vision::Pipeline& pipeline, const char* label,
                                         unsigned coverage) {
@@ -438,7 +438,7 @@ void check_di_light_context_equivalence(vision::Pipeline& pipeline, const char* 
                       << synchronize() << commit();
     uint active = 0u, area = 0u, non_area = 0u;
     uint area_positive = 0u, area_zero = 0u, non_area_positive = 0u;
-    uint grazing = 0u, point = 0u, directional = 0u;
+    uint grazing = 0u, directional = 0u;
     bool have_area_uv = false, varied_area_uv = false;
     uint first_u = 0u, first_v = 0u, first_primitive = 0u;
     bool varied_primitive = false;
@@ -467,7 +467,6 @@ void check_di_light_context_equivalence(vision::Pipeline& pipeline, const char* 
                     }
                 } else {
                     ++non_area; non_area_positive += positive;
-                    point += (type & static_cast<uint>(LightType::DeltaPosition)) != 0u;
                     directional += (type & static_cast<uint>(LightType::DeltaDirection)) != 0u;
                 }
             }
@@ -493,12 +492,12 @@ void check_di_light_context_equivalence(vision::Pipeline& pipeline, const char* 
         throw std::runtime_error("DI context texture fixture needs varying sampled UVs");
     if ((coverage & 64u) && !varied_primitive)
         throw std::runtime_error("DI context unequal-area fixture must sample both primitive IDs");
-    if ((coverage & 32u) && (point == 0u || directional == 0u))
-        throw std::runtime_error("DI context control must sample both point and directional lights");
+    if ((coverage & 32u) && directional == 0u)
+        throw std::runtime_error("DI context control must sample directional lights");
     std::cout << "PASS: DI light context " << label << " candidate/reservoir/RNG bit parity; area=" << area
               << " non_area=" << non_area << " area_positive=" << area_positive << " area_zero=" << area_zero
               << " non_area_positive=" << non_area_positive << " grazing=" << grazing
-              << " varied_uv=" << varied_area_uv << " varied_primitive=" << varied_primitive << " point=" << point << " directional=" << directional << '\n';
+              << " varied_uv=" << varied_area_uv << " varied_primitive=" << varied_primitive << " directional=" << directional << '\n';
 }
 
 void check_di_light_context_equivalence(vision::Pipeline& pipeline) {

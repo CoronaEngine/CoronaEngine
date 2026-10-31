@@ -24,7 +24,7 @@ function(vision_add_plugin name)
 endfunction()
 
 # Horizon (ocarina) is resolved at the CoronaEngine root level
-# (see cmake/corona_third_party.cmake). Do not re-declare here.
+# (see build_tools/cmake/corona_third_party.cmake). Do not re-declare here.
 
 add_subdirectory(ext)
 add_subdirectory(window)
@@ -35,7 +35,6 @@ add_subdirectory(math)
 add_subdirectory(render_graph)
 add_subdirectory(pipelines)
 add_subdirectory(render_core)
-add_subdirectory(sdk)
 
 if (VISION_BUILD_TESTS)
     add_subdirectory(tests)

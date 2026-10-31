@@ -579,26 +579,13 @@ UP<LobeSet> LobeSet::create_mix(const Float &frac, SP<Lobe> b0, SP<Lobe> b1) noe
     return ret;
 }
 
-UP<LobeSet> LobeSet::create_add(SP<vision::Lobe> b0, SP<vision::Lobe> b1) noexcept {
-    WeightedLobe wb0{1.f, 1.f, std::move(b0)};
-    WeightedLobe wb1{1.f, 1.f, std::move(b1)};
-    Lobes lobes;
-    lobes.push_back(std::move(wb0));
-    lobes.push_back(std::move(wb1));
-    OC_ERROR_IF(lobes.size() != 2, "AddLobe lobe num must be 2");
-    UP<LobeSet> ret = make_unique<LobeSet>();
-    ret->lobes_ = std::move(lobes);
-    ret->initialize();
-    return ret;
-}
-
 void LobeSet::normalize_sampled_weight() noexcept {
     Float weight_sum = 0;
     for_each([&](WeightedLobe &lobe) {
         weight_sum += lobe.sample_weight();
     });
     for_each([&](WeightedLobe &lobe) {
-        lobe.sample_weight() = lobe.sample_weight() / weight_sum;
+        lobe.sample_weight() /= select(weight_sum > 0.f, weight_sum, 1.f);
     });
 }
 
@@ -730,10 +717,58 @@ SampledDirection LobeSet::sample_wi_impl(const Float3 &world_wo, const Uint &fla
 }
 
 Uint LobeSet::flag() const noexcept {
-    Uint ret = BxDFFlag::Unset;
+    Uint ret = 0u;
     for_each([&](const WeightedLobe &lobe) {
-        ret |= lobe->flag();
+        ret |= select(lobe.sample_weight() > 0.f, lobe->flag(), 0u);
     });
+    return select(ret == 0u, Uint{BxDFFlag::Unset}, ret);
+}
+
+Uint LobeSet::active_lobe_count() const noexcept {
+    Uint count = 0u;
+    for_each([&](const WeightedLobe &lobe) {
+        count += cast<uint>(lobe.sample_weight() > 0.f);
+    });
+    return count;
+}
+
+Bool LobeSet::supports_stable_reflection(const Float3 &wo) const noexcept {
+    Bool supported = false;
+    $if(active_lobe_count() == 1u) {
+        for_each([&](const WeightedLobe &lobe) {
+            $if(lobe.sample_weight() > 0.f) {
+                supported = lobe->supports_stable_reflection(wo);
+            };
+        });
+    };
+    return supported;
+}
+
+StableLobes LobeSet::eval_stable_lobes(const Float3 &wo) const noexcept {
+    StableLobes ret{*swl()};
+    // Delta enumeration and sampling both use the evaluator's common local
+    // frame, as single lobes do. Ordinary sampling still honors child frames.
+    $if(active_lobe_count() == 1u) {
+        for_each([&](const WeightedLobe &lobe) {
+            $if(lobe.sample_weight() > 0.f) {
+                ret = lobe->eval_stable_lobes(wo);
+                for (auto &branch : ret.lobes) { branch.weight *= lobe.weight(); }
+            };
+        });
+    };
+    return ret;
+}
+
+BSDFSample LobeSet::sample_delta_local(const Float3 &wo, TSampler &sampler) const noexcept {
+    BSDFSample ret{*swl()};
+    $if(active_lobe_count() == 1u) {
+        for_each([&](const WeightedLobe &lobe) {
+            $if(lobe.sample_weight() > 0.f) {
+                ret = lobe->sample_delta_local(wo, sampler);
+                ret.eval.f *= lobe.weight();
+            };
+        });
+    };
     return ret;
 }
 

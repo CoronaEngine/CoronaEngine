@@ -10,6 +10,8 @@
 #include "base/color/spectrum.h"
 #include "base/sampler.h"
 #include "math/util.h"
+#include <array>
+#include <cmath>
 #include <iostream>
 
 using namespace vision;
@@ -20,14 +22,6 @@ namespace {
 constexpr float kLooseEps = 8e-2f;
 constexpr uint kSampleCount = 8192u;
 constexpr uint kMaterialCount = 8u;
-constexpr uint DiffuseIndex = 0u;
-constexpr uint MirrorIndex = 1u;
-constexpr uint GlassIndex = 2u;
-constexpr uint MetalIndex = 3u;
-constexpr uint MetallicIndex = 4u;
-constexpr uint PlasticIndex = 5u;
-constexpr uint SubstrateIndex = 6u;
-constexpr uint PrincipledIndex = 7u;
 
 int g_pass = 0;
 int g_fail = 0;
@@ -124,248 +118,74 @@ void install_srgb_spectrum(Pipeline &pipeline) {
     pipeline.renderer().spectrum()->prepare();
 }
 
-void test_material_energy(Device &device,
-                          const SP<Material> &diffuse,
-                          const SP<Material> &mirror,
-                          const SP<Material> &glass,
-                          const SP<Material> &metal,
-                          const SP<Material> &metallic,
-                          const SP<Material> &plastic,
-                          const SP<Material> &substrate,
-                          const SP<Material> &principled) {
-    std::cout << "[test-material-energy] Running test_material_energy ..." << std::endl;
+void test_material_energy(Device &device, const std::array<SP<Material>, kMaterialCount> &materials) {
     Stream stream = device.create_stream();
     Buffer<float3> results = device.create_buffer<float3>(kMaterialCount, "material_energy");
-
     Kernel kernel = [&](BufferVar<float3> out) {
         SampledWavelengths swl = make_test_swl();
         auto frame = make_identity_frame();
-        Float3 world_wo = normalize(make_float3(0.6f, 0.f, 0.8f));
-
-        auto make_interaction = [&] {
+        Float3 wo = normalize(make_float3(0.6f, 0.f, 0.8f));
+        for (uint i = 0; i < kMaterialCount; ++i) {
             Interaction it(false);
-            it.pos = make_float3(0.f);
-            it.wo = world_wo;
-            it.ng = frame.normal();
-            it.ng_local = frame.normal();
-            it.shading = frame;
-            return it;
-        };
-
-        auto build_evaluator = [&](const SP<Material> &material) {
-            Interaction it = make_interaction();
-            return material->create_evaluator(it, swl);
-        };
-
-        auto integrate_material = [&](const SP<Material> &material, Uint seed) {
+            it.pos = make_float3(0.f); it.wo = wo;
+            it.ng = frame.normal(); it.ng_local = frame.normal(); it.shading = frame;
+            auto evaluator = materials[i]->create_evaluator(it, swl);
             TSampler sampler{make_shared<TestSampler>()};
             sampler->load_data();
-            sampler->set_seed(make_uint2(seed, 0u), 0u, 0u);
-            MaterialEvaluator evaluator = build_evaluator(material);
-            SampledSpectrum ret = SampledSpectrum::zero(swl);
-            $for(i, kSampleCount) {
-                BSDFSample bs = evaluator.sample(world_wo, sampler);
-                ScatterEval se = bs.eval;
-                $if(se.pdf() > 0.f) {
-                    ret += se.safe_throughput();
-                };
+            sampler->set_seed(make_uint2(i, 0u), 0u, 0u);
+            SampledSpectrum energy = SampledSpectrum::zero(swl);
+            $for(sample_index, kSampleCount) {
+                auto sample = evaluator.sample(wo, sampler);
+                $if(sample.eval.pdf() > 0.f) { energy += sample.eval.safe_throughput(); };
             };
-            return ret / kSampleCount;
-        };
-
-        auto material_albedo = [&](const SP<Material> &material) {
-            MaterialEvaluator evaluator = build_evaluator(material);
-            return evaluator.albedo(world_wo);
-        };
-
-        out.write(DiffuseIndex, integrate_material(diffuse, DiffuseIndex).vec3());
-        out.write(MirrorIndex, material_albedo(mirror).vec3());
-        out.write(GlassIndex, material_albedo(glass).vec3());
-        out.write(MetalIndex, material_albedo(metal).vec3());
-        out.write(MetallicIndex, material_albedo(metallic).vec3());
-        out.write(PlasticIndex, integrate_material(plastic, PlasticIndex).vec3());
-        out.write(SubstrateIndex, integrate_material(substrate, SubstrateIndex).vec3());
-        out.write(PrincipledIndex, material_albedo(principled).vec3());
+            out.write(i, (energy / kSampleCount).vec3());
+        }
     };
-
     auto shader = device.compile(kernel, "test_material_energy");
-    vector<float3> host(kMaterialCount, make_float3(0.f));
-    stream << shader(results).dispatch(1u);
-    stream << results.download(host.data());
-    stream << synchronize() << commit();
-
-    const char *names[kMaterialCount] = {
-        "Diffuse", "Mirror", "Glass", "Metal",
-        "Metallic", "Plastic", "Substrate", "PrincipledBSDF"
-    };
-
-    for (uint i = 0u; i < kMaterialCount; ++i) {
-        std::cout << "[test-material-energy] Testing " << names[i]
-                  << " with energy [" << host[i].x << ", " << host[i].y << ", " << host[i].z << "]"
-                  << std::endl;
-        int fail_before = g_fail;
-        expect(host[i].x >= 0.f && host[i].y >= 0.f && host[i].z >= 0.f,
-               (std::string(names[i]) + " integral >= 0").c_str());
-        expect(host[i].x <= 1.f + kLooseEps,
-               (std::string(names[i]) + " integral R <= 1").c_str());
-        expect(host[i].y <= 1.f + kLooseEps,
-               (std::string(names[i]) + " integral G <= 1").c_str());
-        expect(host[i].z <= 1.f + kLooseEps,
-               (std::string(names[i]) + " integral B <= 1").c_str());
-        std::cout << "[test-material-energy] Result " << names[i] << ": "
-                  << (g_fail == fail_before ? "PASS" : "FAIL") << std::endl;
+    std::array<float3, kMaterialCount> host{};
+    stream << shader(results).dispatch(1u) << results.download(host.data()) << synchronize() << commit();
+    const char *names[]{"BlackBody", "Opaque", "SmoothMetal", "RoughMetal",
+                        "Transmission", "Coat", "Sheen", "MixedMetal"};
+    for (uint i = 0; i < kMaterialCount; ++i) {
+        std::cout << names[i] << " sampled energy=" << host[i].x << ',' << host[i].y << ',' << host[i].z << '\n';
+        for (uint channel = 0; channel < 3; ++channel) {
+            expect(std::isfinite(host[i][channel]), "sampled material energy must be finite");
+            expect(host[i][channel] >= 0.f, "sampled material energy must be non-negative");
+            expect(host[i][channel] <= 1.f + kLooseEps, "sampled material energy must not exceed one");
+        }
+        if (i == 0u) {
+            expect(host[i].x == 0.f && host[i].y == 0.f && host[i].z == 0.f,
+                   "black_body must absorb all incident energy");
+        } else {
+            expect(host[i].x > 0.f, "each Principled configuration must scatter energy");
+        }
     }
-
-    expect(host[GlassIndex].x > 0.f, "Glass total energy should be positive");
-    expect(host[MetalIndex].x > 0.f, "Metal total energy should be positive");
-    expect(host[PlasticIndex].x > 0.f, "Plastic total energy should be positive");
-    expect(host[PrincipledIndex].x > 0.f, "Principled total energy should be positive");
 }
 
 }// namespace
 
-int main(int argc, char *argv[]) {
+int main() {
     auto device = RHIContext::instance().create_device();
     Global::instance().set_device(&device);
-
     PipelineDesc desc;
     auto pipeline = make_shared<TestPipeline>(desc);
     Global::instance().set_pipeline(pipeline);
     install_srgb_spectrum(*pipeline);
 
-    auto diffuse = create_material(R"json(
-{
-    "type": "diffuse",
-    "name": "MatDiffuse",
-    "param": {
-        "color": {"channels": "xyz", "node": {"type": "number", "param": {"value": [1.0, 1.0, 1.0]}}},
-        "sigma": {"channels": "x", "node": {"type": "number", "param": {"value": 0.0}}}
-    },
-    "node_tab": {}
-}
-)json");
-
-    auto mirror = create_material(R"json(
-{
-    "type": "mirror",
-    "name": "MatMirror",
-    "param": {
-        "color": {"channels": "xyz", "node": {"type": "number", "param": {"value": [1.0, 1.0, 1.0]}}},
-        "roughness": {"channels": "x", "node": {"type": "number", "param": {"value": 0.14}}},
-        "anisotropic": {"channels": "x", "node": {"type": "number", "param": {"value": 0.0}}},
-        "remapping_roughness": false
-    },
-    "node_tab": {}
-}
-)json");
-
-    auto glass = create_material(R"json(
-{
-    "type": "glass",
-    "name": "MatGlass",
-    "param": {
-        "color": {"channels": "xyz", "node": {"type": "number", "param": {"value": [1.0, 1.0, 1.0]}}},
-        "ior": {"channels": "x", "node": {"type": "number", "param": {"value": 1.5}}},
-        "roughness": {"channels": "x", "node": {"type": "number", "param": {"value": 0.14}}},
-        "anisotropic": {"channels": "x", "node": {"type": "number", "param": {"value": 0.0}}},
-        "remapping_roughness": false
-    },
-    "node_tab": {}
-}
-)json");
-
-    auto metal = create_material(R"json(
-{
-    "type": "metal",
-    "name": "MatMetal",
-    "param": {
-        "material_name": "Cu",
-        "roughness": {"channels": "x", "node": {"type": "number", "param": {"value": 0.14}}},
-        "anisotropic": {"channels": "x", "node": {"type": "number", "param": {"value": 0.0}}},
-        "remapping_roughness": false
-    },
-    "node_tab": {}
-}
-)json");
-
-    auto metallic = create_material(R"json(
-{
-    "type": "metallic",
-    "name": "MatMetallic",
-    "param": {
-        "color": {"channels": "xyz", "node": {"type": "number", "param": {"value": [1.0, 1.0, 1.0]}}},
-        "edge_tint": {"channels": "xyz", "node": {"type": "number", "param": {"value": [0.9, 0.85, 0.8]}}},
-        "roughness": {"channels": "x", "node": {"type": "number", "param": {"value": 0.14}}},
-        "anisotropic": {"channels": "x", "node": {"type": "number", "param": {"value": 0.0}}},
-        "remapping_roughness": false
-    },
-    "node_tab": {}
-}
-)json");
-
-    auto plastic = create_material(R"json(
-{
-    "type": "plastic",
-    "name": "MatPlastic",
-    "param": {
-        "color": {"channels": "xyz", "node": {"type": "number", "param": {"value": [1.0, 1.0, 1.0]}}},
-        "ior": {"channels": "x", "node": {"type": "number", "param": {"value": 1.5}}},
-        "roughness": {"channels": "x", "node": {"type": "number", "param": {"value": 0.12}}},
-        "anisotropic": {"channels": "x", "node": {"type": "number", "param": {"value": 0.0}}},
-        "sigma_a": {"channels": "xyz", "node": {"type": "number", "param": {"value": [0.0, 0.0, 0.0]}}},
-        "thickness": {"channels": "x", "node": {"type": "number", "param": {"value": 1.0}}},
-        "remapping_roughness": true
-    },
-    "node_tab": {}
-}
-)json");
-
-    auto substrate = create_material(R"json(
-{
-    "type": "substrate",
-    "name": "MatSubstrate",
-    "param": {
-        "color": {"channels": "xyz", "node": {"type": "number", "param": {"value": [1.0, 1.0, 1.0]}}},
-        "spec": {"channels": "xyz", "node": {"type": "number", "param": {"value": [0.05, 0.05, 0.05]}}},
-        "roughness": {"channels": "x", "node": {"type": "number", "param": {"value": 0.5}}},
-        "anisotropic": {"channels": "x", "node": {"type": "number", "param": {"value": 0.0}}},
-        "remapping_roughness": false
-    },
-    "node_tab": {}
-}
-)json");
-
-    auto principled = create_material(R"json(
-{
-    "type": "principled_bsdf",
-    "name": "MatPrincipledBSDF",
-    "param": {
-        "color": {"channels": "xyz", "node": {"type": "number", "param": {"value": [1.0, 1.0, 1.0]}}},
-        "metallic": {"channels": "x", "node": {"type": "number", "param": {"value": 0.0}}},
-        "ior": {"channels": "x", "node": {"type": "number", "param": {"value": 1.5}}},
-        "roughness": {"channels": "x", "node": {"type": "number", "param": {"value": 0.3}}},
-        "spec_tint": {"channels": "xyz", "node": {"type": "number", "param": {"value": [1.0, 1.0, 1.0]}}},
-        "anisotropic": {"channels": "x", "node": {"type": "number", "param": {"value": 0.0}}},
-        "opacity": {"channels": "x", "node": {"type": "number", "param": {"value": 1.0}}},
-        "sheen_weight": {"channels": "x", "node": {"type": "number", "param": {"value": 0.0}}},
-        "sheen_roughness": {"channels": "x", "node": {"type": "number", "param": {"value": 0.5}}},
-        "sheen_tint": {"channels": "xyz", "node": {"type": "number", "param": {"value": [1.0, 1.0, 1.0]}}},
-        "coat_weight": {"channels": "x", "node": {"type": "number", "param": {"value": 0.0}}},
-        "coat_roughness": {"channels": "x", "node": {"type": "number", "param": {"value": 0.2}}},
-        "coat_ior": {"channels": "x", "node": {"type": "number", "param": {"value": 1.5}}},
-        "coat_tint": {"channels": "xyz", "node": {"type": "number", "param": {"value": [1.0, 1.0, 1.0]}}},
-        "subsurface_weight": {"channels": "x", "node": {"type": "number", "param": {"value": 0.0}}},
-        "subsurface_radius": {"channels": "xyz", "node": {"type": "number", "param": {"value": [1.0, 1.0, 1.0]}}},
-        "subsurface_scale": {"channels": "x", "node": {"type": "number", "param": {"value": 0.2}}},
-        "transmission_weight": {"channels": "x", "node": {"type": "number", "param": {"value": 0.0}}}
-    },
-    "node_tab": {}
-}
-)json");
-
-    test_material_energy(device, diffuse, mirror, glass, metal, metallic, plastic, substrate, principled);
-
-    std::cout << "\n[test-material-energy] " << g_pass << " passed, "
-              << g_fail << " failed." << std::endl;
-    return g_fail > 0 ? 1 : 0;
+    const char *fixtures[]{
+        R"({"type":"black_body","param":{}})",
+        R"({"type":"principled_bsdf","param":{"color":[0.7,0.6,0.5],"roughness":0.5}})",
+        R"({"type":"principled_bsdf","param":{"color":[0.8,0.7,0.6],"metallic":1,"roughness":0.001}})",
+        R"({"type":"principled_bsdf","param":{"color":[0.8,0.7,0.6],"metallic":1,"roughness":0.5}})",
+        R"({"type":"principled_bsdf","param":{"color":[1,1,1],"transmission_weight":1,"ior":1.5,"roughness":0.4}})",
+        R"({"type":"principled_bsdf","param":{"color":[0.7,0.6,0.5],"coat_weight":1,"roughness":0.4}})",
+        R"({"type":"principled_bsdf","param":{"color":[0.7,0.6,0.5],"sheen_weight":0.5,"roughness":0.4}})",
+        R"({"type":"principled_bsdf","param":{"color":[0.7,0.6,0.5],"metallic":0.5,"roughness":0.4}})",
+    };
+    static_assert(std::size(fixtures) == kMaterialCount);
+    std::array<SP<Material>, kMaterialCount> materials;
+    for (uint i = 0; i < kMaterialCount; ++i) materials[i] = create_material(fixtures[i]);
+    test_material_energy(device, materials);
+    std::cout << "[test-material-energy] " << g_pass << " passed, " << g_fail << " failed.\n";
+    return g_fail == 0 ? 0 : 1;
 }

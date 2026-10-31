@@ -22,7 +22,7 @@
 void check_camera_dolly_reprojection(vision::Pipeline& pipeline);
 void check_svgf_restir_motion_history(vision::Pipeline& pipeline);
 void check_motion_visibility_history(vision::Pipeline& pipeline);
-void check_substrate_sample_classification(vision::Pipeline& pipeline);
+void check_principled_sample_classification(vision::Pipeline& pipeline);
 void check_svgf_shading_guide(vision::Pipeline& pipeline);
 void check_svgf_total_albedo(vision::Pipeline& pipeline);
 void check_svgf_spatial_bypass(vision::Pipeline& pipeline);

@@ -81,8 +81,8 @@ public:
     }
     // Capability of the existing delta sampler, not a material-name test.
     // Returning true promises a single deterministic reflection direction.
-    // LobeSet keeps the default until it implements matching delta sampling
-    // (including child frames and weights); OR-ing child capabilities is unsafe.
+    // A combination may forward this capability only when exactly one child
+    // contributes; OR-ing the capabilities of a genuine mixture is unsafe.
     [[nodiscard]] virtual Bool supports_stable_reflection(const Float3 &wo) const noexcept { return false; }
     // Local directions; transport weights already include the local cosine.
     [[nodiscard]] virtual StableLobes eval_stable_lobes(const Float3 &wo) const noexcept {
@@ -306,6 +306,7 @@ public:
 
 protected:
     Lobes lobes_;
+    [[nodiscard]] Uint active_lobe_count() const noexcept;
 
 protected:
     [[nodiscard]] uint64_t compute_topology_hash() const noexcept override {
@@ -337,7 +338,6 @@ public:
     void initialize() noexcept;
     void update_children_parents() noexcept;
     static UP<LobeSet> create_mix(const Float &frac, SP<Lobe> b0, SP<Lobe> b1) noexcept;
-    static UP<LobeSet> create_add(SP<Lobe> b0, SP<Lobe> b1) noexcept;
     void normalize_sampled_weight() noexcept;
     void flatten() noexcept;
     [[nodiscard]] bool is_multi() const noexcept override { return true; }
@@ -347,6 +347,9 @@ public:
     [[nodiscard]] SampledSpectrum albedo(const Float &cos_theta) const noexcept override;
     [[nodiscard]] uint lobe_num() const noexcept { return lobes_.size(); }
     [[nodiscard]] Uint flag() const noexcept override;
+    [[nodiscard]] Bool supports_stable_reflection(const Float3 &wo) const noexcept override;
+    [[nodiscard]] StableLobes eval_stable_lobes(const Float3 &wo) const noexcept override;
+    [[nodiscard]] BSDFSample sample_delta_local(const Float3 &wo, TSampler &sampler) const noexcept override;
     [[nodiscard]] Float valid_world_factor(const Float3 &wo, const Float3 &wi) const noexcept override;
     [[nodiscard]] Float valid_factor(const Float3 &wo, const Float3 &wi) const noexcept override;
     [[nodiscard]] const SampledWavelengths *swl() const override { return lobes_[0]->swl(); }
