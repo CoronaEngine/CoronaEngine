@@ -137,12 +137,18 @@ add_executable(corona_vision_restir_estimator_tests
     test_vision_restir_reservoir_lifetimes.cpp
     test_vision_restir_continuation.cpp
     test_vision_glass_transport.cpp
+    test_vision_principled_stable_planes.cpp
     test_vision_restir_support.cpp)
 target_include_directories(corona_vision_restir_estimator_tests PRIVATE
     ${CMAKE_SOURCE_DIR}/vision/src)
 target_link_libraries(corona_vision_restir_estimator_tests PRIVATE
     corona::engine vision-all_libs vision-integrator-ReSTIR)
 add_test(NAME VisionReSTIREstimatorTests COMMAND corona_vision_restir_estimator_tests)
+add_test(NAME VisionPrincipledStablePlanes
+    COMMAND corona_vision_restir_estimator_tests --principled-stable-planes)
+set_tests_properties(VisionPrincipledStablePlanes PROPERTIES
+    WORKING_DIRECTORY "$<TARGET_FILE_DIR:vision-material-principled_bsdf>"
+    RUN_SERIAL TRUE TIMEOUT 300)
 # The full material/glass suite compiles many GPU variants on a cold cache.
 set_tests_properties(VisionReSTIREstimatorTests PROPERTIES
     WORKING_DIRECTORY "$<TARGET_FILE_DIR:vision-material-principled_bsdf>"
