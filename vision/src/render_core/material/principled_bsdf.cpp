@@ -2,6 +2,7 @@
 // Created by Zero on 2025/1/16.
 //
 
+#include <algorithm>
 #include <utility>
 #include "base/import/param_schema.h"
 #include "base/scattering/material.h"
@@ -397,6 +398,7 @@ public:
 #define PRINCIPLED_INIT_SLOT_(name, val, tag, extra, dim, required) VS_INIT_SLOT(name, val, tag) extra;
         PRINCIPLED_SLOTS(PRINCIPLED_INIT_SLOT_)
 #undef PRINCIPLED_INIT_SLOT_
+        update_switches();
     }
 
     VS_HOTFIX_MAKE_RESTORE(Material, sheen_mode_, switches_, two_sided_)
@@ -406,13 +408,15 @@ public:
         widgets->combo("sheen mode", reinterpret_cast<int *>(addressof(sheen_mode_)), names);
         int colNum = 3;
         for (int i = 0; i < LobeName.size(); ++i) {
-            widgets->check_box(LobeName[i], addressof(switches_[i]));
+            if (widgets->check_box(LobeName[i], addressof(switches_[i]))) {
+                reset_topology_hash();
+                reset_hash();
+            }
             if ((i + 1) % 3 != 0) {
                 widgets->same_line();
             }
         }
         Material::render_sub_UI(widgets);
-        update_switches();
     }
     void prepare() noexcept override {
         CoatLobe::prepare();
@@ -423,12 +427,31 @@ public:
     }
 
     void update_switches() noexcept {
-        //        switches_[ESheen] = !sheen_weight_->near_zero();
-        //        switches_[ECoat] = !coat_weight_->near_zero();
-        //        switches_[EMetallic] = !metallic_->near_zero();
-        //        switches_[ETrans] = (!metallic_->near_one()) && (!transmission_weight_->near_zero());
-        //        switches_[ESpec] = (!metallic_->near_one()) && (!transmission_weight_->near_one());
-        //        switches_[EDiffuse] = (!metallic_->near_one()) && (!transmission_weight_->near_one());
+        // Only numeric leaves prove an exact value. Uniform graph averages need
+        // not implement the graph's operation, and texture averages prove nothing.
+        const auto is_value = [](const ShaderNodeSlot &slot, float value) {
+            if (!slot || (slot->impl_type() != "number" && slot->impl_type() != "constant")) {
+                return false;
+            }
+            // Require every leaf component to agree, including named outputs
+            // which bypass the slot's swizzle during shader evaluation.
+            const auto values = slot->average();
+            return !values.empty() && std::all_of(values.begin(), values.end(),
+                                                  [value](float v) { return v == value; });
+        };
+        const auto previous = switches_;
+        const bool opaque = is_value(transmission_weight_, 0.f);
+        // One-sided back faces have front_factor=0, hence effective metallic=0.
+        const bool metal_only = two_sided_ && opaque && is_value(metallic_, 1.f);
+        switches_[ESheen] = !is_value(sheen_weight_, 0.f);
+        switches_[ECoat] = !is_value(coat_weight_, 0.f);
+        switches_[EMetallic] = !is_value(metallic_, 0.f);
+        switches_[ETrans] = !opaque;
+        switches_[ESpec] = switches_[EDiffuse] = !metal_only && !is_value(transmission_weight_, 1.f);
+        if (previous != switches_) {
+            reset_topology_hash();
+            reset_hash();
+        }
     }
 
     template<typename TLobe>
