@@ -269,6 +269,11 @@ void Pipeline::prepare_geometry(bool geometry_changed) noexcept {
 }
 
 void Pipeline::rebuild_geometry_gpu() noexcept {
+    activate_global_context();
+    // Retire users of the old light data before reconciling topology. This
+    // rebinds surviving emitters and removes area lights whose shapes vanished.
+    stream() << synchronize() << commit();
+    scene_view_.fill_instances();
     prepare_geometry(true);
 }
 

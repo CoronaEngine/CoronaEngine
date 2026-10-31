@@ -444,7 +444,7 @@ void check_svgf_layered_history(vision::Pipeline& pipeline) {
 void check_svgf_shading_guide(vision::Pipeline& pipeline) {
     using namespace vision;
     pipeline.activate_global_context();
-    // Reuse the normal-mapped substrate fixture prepared by the sampling test.
+    // Reuse the normal-mapped Principled fixture prepared by the sampling test.
     Global::SceneGpuContextScope scope{pipeline.geometry().bindless_array(), pipeline.device()};
     const auto visibility = pipeline.frame_buffer()->cur_visibility_buffer_view(pipeline.frame_index() - 1u);
     std::vector<TriangleHit> hits(pipeline.pixel_num());
@@ -754,16 +754,11 @@ void check_svgf_spatial_bypass(vision::Pipeline& pipeline) {
     std::cout << "PASS: rejected neighbours cannot contaminate propagated variance\n";
 }
 
-void check_substrate_sample_classification(vision::Pipeline& pipeline) {
+void check_principled_sample_classification(vision::Pipeline& pipeline) {
     using namespace vision;
     pipeline.activate_global_context();
     MaterialDesc desc;
-    desc.init(ParameterSet{DataWrap::parse(R"({
-        "type":"substrate","name":"substrate-routing-test",
-        "param":{"color":[0.8,0.5,0.2],"spec":[0.05,0.05,0.05],"roughness":0.3,
-                 "normal":{"channels":"xyz","node":"guide-normal"}},
-        "node_tab":{"guide-normal":{"type":"number","param":{"value":[0.6,0.0,0.8]}}}
-    })")});
+    desc.init(ParameterSet{DataWrap::parse(R"({"type":"principled_bsdf","name":"principled-routing-test","param":{"color":[0.8,0.5,0.2],"roughness":0.3,"normal":{"channels":"xyz","node":"guide-normal"},"subsurface_weight":0,"spec_tint":[0.05,0.05,0.05],"two_sided":true},"node_tab":{"guide-normal":{"type":"number","param":{"value":[0.6,0.0,0.8]}}}})")});
     auto material = Material::create_root(desc);
     pipeline.scene().add_material(material);
     pipeline.scene().instances()[0]->set_material(material);
@@ -774,7 +769,7 @@ void check_substrate_sample_classification(vision::Pipeline& pipeline) {
     pipeline.upload_scene_bindless_array();
     Global::SceneGpuContextScope scope{pipeline.geometry().bindless_array(), pipeline.device()};
     auto& sampler = pipeline.renderer().sampler();
-    Kernel kernel = [&](BufferVar<uint> out) {
+    Kernel kernel = [&](BufferVar<uint2> out) {
         sampler->load_data();
         sampler->set_seed(make_uint2(0u), dispatch_id(), Dimension::PathTracing);
         auto ray = make_ray(Float3{make_float3(0.f, 0.f, 3.f)}, Float3{make_float3(0.f, 0.f, -1.f)});
@@ -785,20 +780,32 @@ void check_substrate_sample_classification(vision::Pipeline& pipeline) {
         pipeline.scene().materials().dispatch(it.material_id(), [&](const Material* current) {
             current->build_evaluator(evaluator, it, swl);
         });
-        auto sampled = evaluator.sample(it.wo, sampler);
-        out.write(dispatch_id(), sampled.eval.flags);
+        // Request both denoiser channels independently through a normal map.
+        const Bool specular = (dispatch_id() & 1u) != 0u;
+        BSDFSample sampled{swl};
+        $if(specular) { sampled = evaluator.sample_lobe(it.wo, sampler, true); }
+        $else { sampled = evaluator.sample_lobe(it.wo, sampler, false); };
+        out.write(dispatch_id(), make_uint2(sampled.eval.flags, cast<uint>(sampled.valid())));
     };
-    auto shader = pipeline.device().compile(kernel, "substrate_sample_classification");
-    std::vector<uint> flags(32);
-    auto out = pipeline.device().create_buffer<uint>(flags.size(), "substrate_flags");
+    auto shader = pipeline.device().compile(kernel, "principled_sample_classification");
+    std::vector<uint2> flags(128);
+    auto out = pipeline.device().create_buffer<uint2>(flags.size(), "principled_flags");
     pipeline.stream() << shader(out).dispatch(static_cast<uint>(flags.size()))
                       << out.download(flags.data()) << synchronize() << commit();
-    for (auto value : flags) {
-        if ((value & BxDFFlag::GlossyRefl) != BxDFFlag::GlossyRefl) {
-            throw std::runtime_error("substrate sampled reflection must retain the glossy flag used by its direct-light and albedo split");
+    unsigned valid[2]{};
+    for (unsigned i = 0; i < flags.size(); ++i) {
+        if (flags[i].y == 0u) continue;
+        const bool specular = (i & 1u) != 0u;
+        const auto f = flags[i].x;
+        const bool glossy = (f & (BxDFFlag::Glossy | BxDFFlag::Specular | BxDFFlag::NearSpec)) != 0u;
+        if (glossy != specular || (f & BxDFFlag::Reflection) == 0u) {
+            throw std::runtime_error("Principled guide sampling must retain the requested diffuse/specular reflection class");
         }
+        ++valid[specular];
     }
-    std::cout << "PASS: substrate samples retain glossy reflection classification\n";
+    if (valid[0] == 0u || valid[1] == 0u)
+        throw std::runtime_error("both Principled guide channels must have supported samples");
+    std::cout << "PASS: normal-mapped Principled guide samples retain their lobe classification\n";
 }
 
 void check_motion_visibility_history(vision::Pipeline& pipeline) {

@@ -45,7 +45,7 @@ void append_cef_command_line_switches(CefRefPtr<CefCommandLine> command_line,
     // Load-bearing. Do not drop either without an equivalent replacement:
     //  * the Vue bundle is an ES-module graph served from file://, and Chromium refuses to load
     //    that without this switch;
-    //  * the CEF package ships no cef_sandbox.lib (cmake/corona_cef.cmake:63 sets the path but
+    //  * the CEF package ships no cef_sandbox.lib (build_tools/cmake/corona_cef.cmake:63 sets the path but
     //    nothing links it), so no sandbox is compiled in and CEF must be told not to use one.
     command_line->AppendSwitch("allow-file-access-from-files");
     command_line->AppendSwitch("no-sandbox");

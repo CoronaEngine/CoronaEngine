@@ -49,7 +49,6 @@ namespace vision {
 enum class LightType {
     Unset = 0,
     Area = 1 << 0,
-    DeltaPosition = 1 << 1,
     DeltaDirection = 1 << 2,
     Infinite = 1 << 3
 };
@@ -182,46 +181,6 @@ public:
     void add_emission_reference(T shape_instance) noexcept {}
     [[nodiscard]] ShapeInstance *instance() const noexcept;
     void bind_instance(uint index) noexcept { inst_idx_ = index; }
-};
-
-class IPointLight : public Light {
-public:
-    IPointLight() : Light(LightType::DeltaPosition) {}
-    explicit IPointLight(const LightDesc &desc) : Light(desc, LightType::DeltaPosition) {}
-
-protected:
-    // Shared transform helpers for point-like lights that use an o2w matrix as
-    // their single source of truth for position and forward direction. Spot and
-    // projector both use local +Z as the light's forward axis, and older spot
-    // scenes can still be upgraded from explicit position/direction fields.
-    [[nodiscard]] static float4x4 resolve_o2w(const LightDesc &desc) noexcept;
-
-    template<typename Mat>
-    [[nodiscard]] static auto o2w_position(const Mat &o2w) noexcept {
-        return o2w[3].xyz();
-    }
-
-    [[nodiscard]] static float3 &host_o2w_position(float4x4 &o2w) noexcept;
-
-    template<typename Mat>
-    [[nodiscard]] static auto o2w_direction(const Mat &o2w) noexcept {
-        return transform_vector<D>(o2w, make_float3(0, 0, 1));
-    }
-
-public:
-    void render_sub_UI(Widgets *widgets) noexcept override;
-    [[nodiscard]] Float PDF_wi(const LightSampleContext &p_ref,
-                               const LightEvalContext &p_light) const noexcept override;
-    [[nodiscard]] virtual Float3 direction(const LightSampleContext &p_ref) const noexcept;
-    [[nodiscard]] virtual Float3 position() const noexcept = 0;
-    [[nodiscard]] virtual float3 &host_position() noexcept = 0;
-    [[nodiscard]] LightSample sample_wi(const LightSampleContext &p_ref, Float2 u,
-                                        const SampledWavelengths &swl) const noexcept override;
-    [[nodiscard]] LightSample evaluate_point(const LightSampleContext &p_ref, LightSurfacePoint lsp,
-                                             const SampledWavelengths &swl, LightEvalMode mode,
-                                             LightEvalContext *area_context = nullptr) const noexcept override;
-    [[nodiscard]] LightEvalContext compute_light_eval_context(const LightSampleContext &p_ref,
-                                                              LightSurfacePoint lsp) const noexcept override;
 };
 
 class Environment : public Light {

@@ -143,6 +143,10 @@ void ReLAX::render_sub_UI(Widgets *widgets) noexcept {
 }
 void ReLAX::compile() noexcept {
     Clock compile_clock;
+    // Runtime enable can compile from dispatch(), outside Pipeline::compile().
+    // Material guide evaluation needs this scene's LUT bindings on both paths.
+    Global::SceneGpuContextScope scene_gpu_context{
+        scene().geometry().bindless_array(), scene().geometry().gpu_resource()->device()};
     auto &camera = scene().sensor(); auto &sampler = renderer().sampler();
     Kernel guides = [&](Var<GuideParam> p) {
         camera->load_data(); sampler->load_data();

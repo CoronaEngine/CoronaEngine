@@ -11,6 +11,7 @@
 #include "base/mgr/pipeline.h"
 #include "ltc_sheen_table.h"
 #include "base/scattering/precomputed_table.h"
+#include "base/scattering/dielectric_precompute.h"
 
 namespace vision {
 using namespace ocarina;
@@ -461,6 +462,12 @@ public:
 
     [[nodiscard]] vector<PrecomputedLobeTable> precompute() const noexcept override {
         vector<PrecomputedLobeTable> ret;
+        ret.push_back(Material::precompute_lobe<PureReflectionLobe>(
+            make_uint3(uint2(PureReflectionLobe::lut_res), 1u)));
+        ret.push_back(Material::precompute_lobe<DielectricLobePrecompute, 2>(
+            make_uint3(DielectricLobe::lut_res)));
+        ret.push_back(Material::precompute_lobe<DielectricLobeInvPrecompute, 2>(
+            make_uint3(DielectricLobe::lut_res)));
         ret.push_back(precompute_lobe<SpecularLobe>());
         ret.push_back(precompute_lobe<CoatLobe>());
         return ret;

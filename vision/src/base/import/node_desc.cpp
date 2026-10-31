@@ -105,8 +105,6 @@ void IntegratorDesc::init(const ParameterSet &ps) noexcept {
         denoiser_param.set_value("type", "svgf");
     }
     denoiser_desc.init(denoiser_param);
-    ParameterSet cache_param = parameter_.value("cache");
-    cache_desc.init(cache_param);
 }
 
 namespace detail {
@@ -148,33 +146,11 @@ void SlotDesc::init(const ParameterSet &ps) noexcept {
     }
 }
 
-void UpsamplerDesc::init(const vision::ParameterSet &ps) noexcept {
-    NodeDesc::init(ps);
-    sub_type = ps["type"].as_string("bilateral");
-    ParameterSet param = ps.value("param", DataWrap::object());
-    set_parameter(param);
-}
-
-void RadianceCacheDesc::init(const vision::ParameterSet &ps) noexcept {
-    NodeDesc::init(ps);
-    sub_type = ps["type"].as_string("sharc");
-    ParameterSet param = ps.value("param", DataWrap::object());
-    set_parameter(param);
-}
-
 void MaterialDesc::init(const ParameterSet &ps) noexcept {
     vision::GraphDesc::init(ps);
     init_node_map(ps.value("node_tab"));
-    sub_type = ps["type"].as_string("diffuse");
-    if (sub_type == "mix" || sub_type == "add") {
-        mat0 = make_shared<MaterialDesc>();
-        mat0->init(ps["param"]["mat0"]);
-        mat1 = make_shared<MaterialDesc>();
-        mat1->init(ps["param"]["mat1"]);
-        set_parameter(ps["param"]);
-    } else {
-        set_parameter(ps["param"]);
-    }
+    sub_type = ps["type"].as_string("principled_bsdf");
+    set_parameter(ps["param"]);
 }
 
 void MediumDesc::init(const ParameterSet &ps) noexcept {
@@ -222,7 +198,6 @@ void FrameBufferDesc::init(const vision::ParameterSet &ps) noexcept {
     ParameterSet param = ps.value("param", DataWrap::object());
     set_parameter(param);
     tone_mapper.init(parameter_.value("tone_mapper", DataWrap::object()));
-    upsampler_desc.init(parameter_.value("upsampler", DataWrap::object()));
 }
 
 void PipelineDesc::init(const vision::ParameterSet &ps) noexcept {
