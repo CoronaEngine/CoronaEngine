@@ -352,9 +352,10 @@ bool handle_camera_move_fast(const CefRefPtr<CefProcessMessage>& message) {
     return true;
 }
 
-bool handle_camera_viewport_fast(const CefRefPtr<CefProcessMessage>& message) {
+bool handle_camera_viewport_fast(const CefRefPtr<CefBrowser>& browser,
+                                  const CefRefPtr<CefProcessMessage>& message) {
     auto args = message->GetArgumentList();
-    if (!args || args->GetSize() < 7) {
+    if (!browser || !args || args->GetSize() < 9) {
         return true;
     }
 
@@ -381,33 +382,29 @@ bool handle_camera_viewport_fast(const CefRefPtr<CefProcessMessage>& message) {
         return true;
     }
 
-    std::array<double, 6> values{};
-    for (int i = 0; i < 6; ++i) {
-        if (!read_number(i + 1, values[static_cast<size_t>(i)])) {
+    std::array<double, 8> values{};
+    for (int i = 0; i < 8; ++i) {
+        if (!read_number(i + 1, values[static_cast<size_t>(i)]) ||
+            !std::isfinite(values[static_cast<size_t>(i)])) {
             return true;
         }
     }
-
-    void* surface = nullptr;
-    if (auto camera = Corona::SharedDataHub::instance().camera_storage().try_acquire_read(
-            camera_handle)) {
-        surface = camera->surface;
-    }
-    if (surface == nullptr) {
-        surface = Corona::API::get_default_surface();
+    if (values[6] <= 0.0 || values[7] <= 0.0) {
+        return true;
     }
 
-    Corona::SharedDataHub::instance().enqueue_camera_viewport_update({
+    const EmbeddedCameraViewportRequest request{
         .camera_handle = camera_handle,
-        .surface = surface,
-        .view_open = false,
-        .x = std::max(static_cast<int>(std::lround(values[0])), 0),
-        .y = std::max(static_cast<int>(std::lround(values[1])), 0),
-        .width = std::max(static_cast<int>(std::lround(values[2])), 1),
-        .height = std::max(static_cast<int>(std::lround(values[3])), 1),
+        .x = values[0],
+        .y = values[1],
+        .width = values[2],
+        .height = values[3],
+        .source_width = values[6],
+        .source_height = values[7],
         .render_width = std::max(static_cast<int>(std::lround(values[4])), 1),
         .render_height = std::max(static_cast<int>(std::lround(values[5])), 1),
-    });
+    };
+    BrowserManager::instance().set_embedded_camera_viewport(browser->GetIdentifier(), request);
     return true;
 }
 
@@ -2513,7 +2510,7 @@ bool handle_realtime_process_message(CefRefPtr<CefBrowser> browser,
     }
 
     if (message->GetName() == "CameraViewportFast") {
-        return handle_camera_viewport_fast(message);
+        return handle_camera_viewport_fast(browser, message);
     }
 
     if (message->GetName() == "ComputeActorFocusPoseFast") {

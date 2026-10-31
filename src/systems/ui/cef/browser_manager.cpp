@@ -21,6 +21,20 @@ BrowserManager& BrowserManager::instance() {
     return instance;
 }
 
+bool BrowserManager::set_embedded_camera_viewport(
+    int browser_id, const EmbeddedCameraViewportRequest& request) {
+    std::lock_guard tabs_lock(tabs_mutex_);
+    for (auto& [id, tab] : tabs_) {
+        const auto browser = tab->client ? tab->client->GetBrowser() : nullptr;
+        if (browser && browser->GetIdentifier() == browser_id) {
+            std::lock_guard tab_lock(tab->mutex);
+            tab->embedded_camera_viewport = request;
+            return true;
+        }
+    }
+    return false;
+}
+
 bool BrowserManager::hide_tab(int tab_id, bool if_close) {
     auto it = tabs_.find(tab_id);
     if (it == tabs_.end()) {

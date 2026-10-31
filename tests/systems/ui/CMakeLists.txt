@@ -124,6 +124,17 @@ target_include_directories(corona_camera_viewport_manager_tests
 add_test(NAME CameraViewportManagerTests
          COMMAND corona_camera_viewport_manager_tests)
 
+add_executable(corona_embedded_camera_viewport_tests
+    test_embedded_camera_viewport.cpp
+)
+
+target_include_directories(corona_embedded_camera_viewport_tests
+    PRIVATE ${PROJECT_SOURCE_DIR}/include
+)
+
+add_test(NAME EmbeddedCameraViewportTests
+         COMMAND corona_embedded_camera_viewport_tests)
+
 
 
 add_executable(corona_request_response_broker_tests

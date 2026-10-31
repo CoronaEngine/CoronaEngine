@@ -6,6 +6,7 @@
 #include <corona/systems/ui/quad_compositor.h>
 #include <corona/systems/ui/ui_surface_lifecycle.h>
 #include <corona/systems/display/published_image.h>
+#include <corona/systems/display/scene_viewport.h>
 
 #include <SDL3/SDL.h>
 
@@ -55,7 +56,7 @@ class VulkanBackend {
                       uint32_t target_pixels_w, uint32_t target_pixels_h);
 
     // Publish `surface`'s render target to DisplaySystem (UIFrameReadyEvent).
-    void present_surface(void* surface);
+    void present_surface(void* surface, const Detail::SceneViewport& scene_viewport = {});
     [[nodiscard]] bool first_present_ready(void* surface) const;
 
     // Recreate `surface`'s render target at the given pixel size (on window resize).
