@@ -62,7 +62,7 @@ if(TARGET ocarina-backend-vulkan-compute)
     foreach(_probe IN ITEMS native_callback shared_array compute_math_parity storage_parity runtime_parity_extended)
         set(_target corona_ocarina_${_probe}_tests)
         add_executable(${_target}
-            ${CMAKE_SOURCE_DIR}/Horizon/modules/ocarina/tests/runtime/test_${_probe}.cpp)
+            ${CMAKE_SOURCE_DIR}/Horizon/src/tests/runtime/test_${_probe}.cpp)
         target_link_libraries(${_target} PRIVATE ocarina-native ocarina-include)
         if(_probe STREQUAL "native_callback")
             target_link_libraries(${_target} PRIVATE horizon::vulkan_headers)
