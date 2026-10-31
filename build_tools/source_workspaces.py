@@ -42,8 +42,8 @@ HORIZON = SourceWorkspace(
     name="Horizon",
     directory=Path("Horizon"),
     url="https://github.com/CoronaEngine/Horizon.git",
-    ref="codex/vision-refactor-main-sync-20261101",
-    commit="16db0b5d09944689fc3232bea9b02495dddb654a",
+    ref="codex/horizon-source-layout-20261101",
+    commit="3e5f160676c3e14ec8e8cebfbda751937e40bd8c",
 )
 
 EDITOR = SourceWorkspace(

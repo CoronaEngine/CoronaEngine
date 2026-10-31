@@ -80,7 +80,7 @@ class WorkspaceContract:
 
         self.repo_root = self.root / "CoronaEngine"
         self.repo_root.mkdir()
-        self.workspace = replace(self.template, url=self.origin.as_posix(), commit=self.locked)
+        self.workspace = replace(self.template, url=self.origin.as_posix(), ref="main", commit=self.locked)
         self.worktree = self.repo_root / self.workspace.directory
 
     # -- helpers ---------------------------------------------------------------
