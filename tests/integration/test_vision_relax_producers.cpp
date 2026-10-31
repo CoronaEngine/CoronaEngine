@@ -289,10 +289,16 @@ void check_scene_signals(bool restir, bool lifecycle = false) {
                     "raw per-lobe energy plus bypass must equal the original estimator, including DI/GI switches and stable layers");
             }
         }
+        expect(!illumination->denoiser()->has_prepared_resources(),
+            "raw startup must exercise RELAX's lazy resource preparation and compilation");
+        expect(Global::instance().scene_bindless_array() == nullptr && Global::instance().scene_device() == nullptr,
+            "runtime denoiser enable must be tested outside a scene compilation scope");
         illumination->set_denoise_enabled(true);
         pipeline->output_desc().denoise = true;
         for (uint frame = 0; frame < 8u; ++frame) {
             pipeline->upload_data(); pipeline->display(1.0 / 60.0);
+            expect(Global::instance().scene_bindless_array() == nullptr && Global::instance().scene_device() == nullptr,
+                "lazy denoiser compilation must restore the caller's scene GPU context");
             const double denoise_ms = illumination->cur_denoise_time();
             expect(std::isfinite(denoise_ms) && denoise_ms > 0.0 && denoise_ms <= pipeline->cur_render_time(),
                 "completed denoising must report a finite elapsed time within the rendered frame");

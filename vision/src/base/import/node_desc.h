@@ -297,14 +297,6 @@ public:
     void init(const ParameterSet &ps) noexcept override;
 };
 
-struct RadianceCacheDesc : public NodeDesc {
-public:
-    VISION_DESC_COMMON(RadianceCache)
-    void init(const ParameterSet &ps) noexcept override;
-};
-
-
-
 struct PassDesc : public NodeDesc {
 public:
     VISION_DESC_COMMON(Pass)
@@ -392,7 +384,6 @@ public:
 struct IntegratorDesc : public NodeDesc {
 public:
     DenoiserDesc denoiser_desc;
-    RadianceCacheDesc cache_desc;
 
 public:
     VISION_DESC_COMMON(Integrator)

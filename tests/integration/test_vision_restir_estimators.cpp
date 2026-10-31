@@ -344,7 +344,7 @@ ChannelStats render_channel(vision::Pipeline& pipeline) {
     pipeline.prepare();
     ocarina::MemoryStats::instance().foreach_buffer_info([](auto data) {
         expect(data.name.rfind("Sharc::", 0) != 0 || data.size == 0u,
-               "ReSTIR must not allocate the unused SHARC transport cache");
+               "ReSTIR must not allocate the retired SHARC transport cache");
     });
     pipeline.frame_buffer()->prepare_view_texture();
     pipeline.upload_data();
