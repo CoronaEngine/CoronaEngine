@@ -3,7 +3,6 @@
 //
 
 #include "base/integral/integrator.h"
-#include "base/integral/radiance_cache.h"
 #include "base/mgr/pipeline.h"
 #include "base/mgr/switch_profile.h"
 #include "base/mgr/evaluation_debug.h"
@@ -80,12 +79,11 @@ private:
     Shader<void(uint, float)> compose_denoiser_;
     mutable float2 denoiser_factors_{make_float2(-1.f)};
     Shader<void(uint, Buffer<SurfaceData>)> path_tracing_;
-    SP<RadianceCache> cache_;
 
 public:
     RealTimeIntegrator() = default;
     explicit RealTimeIntegrator(const IntegratorDesc &desc)
-        : IlluminationIntegrator(desc), cache_(Node::create_shared<RadianceCache>(desc.cache_desc)) {
+        : IlluminationIntegrator(desc) {
         max_depth_ = max_depth_.hv() - 1;
     }
 
@@ -94,7 +92,6 @@ public:
         direct_ = make_shared<ReSTIRDI>(shared_from_this(), desc["direct"]);
         indirect_ = make_shared<ReSTIRGI>(shared_from_this(), desc["indirect"]);
         stable_planes_ = make_shared<StablePlanes>(shared_from_this(), direct_->max_recursion());
-        cache_->set_integrator(shared_from_this());
         scene_restir_settings_ = settings();
     }
 
@@ -107,7 +104,6 @@ public:
         direct_->set_integrator(shared_from_this());
         indirect_->set_integrator(shared_from_this());
         stable_planes_->set_integrator(shared_from_this());
-        cache_->set_integrator(shared_from_this());
     }
 
     void update_resolution(ocarina::uint2 res) noexcept override {
@@ -120,7 +116,7 @@ public:
     }
 
     void update_runtime_object(const vision::IObjectConstructor *constructor) noexcept override {
-        std::tuple tp = {addressof(direct_), addressof(indirect_), addressof(stable_planes_), addressof(cache_)};
+        std::tuple tp = {addressof(direct_), addressof(indirect_), addressof(stable_planes_)};
         HotfixSystem::replace_objects(constructor, tp);
     }
 
@@ -140,10 +136,6 @@ public:
         if (!denoiser_runtime_disabled() && denoiser_ && denoiser_->enabled()) {
             denoiser_->prepare();
         }
-        // This integrator does not query/update a radiance cache yet. Preparing
-        // the SHARC placeholder reserves 176 MiB without affecting transport.
-        Pipeline *rp = pipeline();
-
         frame_buffer().prepare_screen_buffer(specular_buffer_);
         frame_buffer().prepare_hit_bsdfs();
         frame_buffer().prepare_surfaces();
@@ -175,7 +167,6 @@ public:
         }
         direct_->render_UI(widgets);
         indirect_->render_UI(widgets);
-        cache_->render_UI(widgets);
     }
 
     [[nodiscard]] DataWrap settings() const override {

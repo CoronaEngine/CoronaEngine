@@ -1,0 +1,2090 @@
+{
+  "schema_version": 1,
+  "date": "2026-10-31",
+  "revision": "781907e59b6f6449082e5801c7e3a2d4f45b22b6",
+  "scope": "当前仓库静态调用、动态插件构造、场景描述符、构建和测试；不证明仓库外客户端或所有运行时路径未使用",
+  "counts": {
+    "vision_tracked_files": 359,
+    "lines_excluding_ext": 69350,
+    "plugin_targets": 50,
+    "plugin_categories": 19,
+    "feature_groups": 22,
+    "api_candidates": 127,
+    "unreferenced_config_constants": 31
+  },
+  "features": [
+    {
+      "id": "F01",
+      "title": "光场和 SSAT 没有接入当前引擎场景入口"
+    },
+    {
+      "id": "F02",
+      "title": "双边上采样"
+    },
+    {
+      "id": "F03",
+      "title": "SHARC 辐射缓存"
+    },
+    {
+      "id": "F04",
+      "title": "BVH 灯光采样器"
+    },
+    {
+      "id": "F05",
+      "title": "真实镜头相机"
+    },
+    {
+      "id": "F06",
+      "title": "PT 收敛自适应采样"
+    },
+    {
+      "id": "F07",
+      "title": "PT 的旧 TAA"
+    },
+    {
+      "id": "F08",
+      "title": "旧 Postprocessor 色调映射"
+    },
+    {
+      "id": "F09",
+      "title": "保存和离线输出入口"
+    },
+    {
+      "id": "F10",
+      "title": "IES 灯光分布导入"
+    },
+    {
+      "id": "F11",
+      "title": "金属光谱 IOR 表"
+    },
+    {
+      "id": "F12",
+      "title": "材质预计算工具入口"
+    },
+    {
+      "id": "F13",
+      "title": "Customized 管线和 RenderGraph"
+    },
+    {
+      "id": "F14",
+      "title": "Vision 独立窗口和旧参数面板"
+    },
+    {
+      "id": "F15",
+      "title": "CPU 调试可视化和 screen buffer 预览"
+    },
+    {
+      "id": "F16",
+      "title": "Beckmann 微表面分布"
+    },
+    {
+      "id": "F17",
+      "title": "SVGF 未接入的辅助算法和旧配置"
+    },
+    {
+      "id": "F18",
+      "title": "SSAT 的通用稀疏 gather 和辅助接口"
+    },
+    {
+      "id": "F19",
+      "title": "旧 JSON 和 BSON 文件读取器"
+    },
+    {
+      "id": "F20",
+      "title": "解析或写入后不生效的配置"
+    },
+    {
+      "id": "F21",
+      "title": "旧场景相机列表管理"
+    },
+    {
+      "id": "F22",
+      "title": "旧全局 ImagePool 路径"
+    }
+  ],
+  "plugins": [
+    {
+      "category": "pipeline",
+      "name": "customized",
+      "status": "未接入",
+      "note": "见 F13；图输出写回被注释",
+      "evidence": {
+        "path": "vision/src/pipelines/customized/CMakeLists.txt",
+        "line": 2
+      }
+    },
+    {
+      "category": "pipeline",
+      "name": "fixed",
+      "status": "主流程使用",
+      "note": "引擎默认管线",
+      "evidence": {
+        "path": "vision/src/pipelines/fixed/CMakeLists.txt",
+        "line": 2
+      }
+    },
+    {
+      "category": "denoiser",
+      "name": "ReBLUR",
+      "status": "主流程可选",
+      "note": "每相机上下文可选择；有集成测试",
+      "evidence": {
+        "path": "vision/src/render_core/denoiser/ReBLUR/CMakeLists.txt",
+        "line": 4
+      }
+    },
+    {
+      "category": "denoiser",
+      "name": "ReLAX",
+      "status": "主流程可选",
+      "note": "每相机上下文可选择；有集成测试",
+      "evidence": {
+        "path": "vision/src/render_core/denoiser/ReLAX/CMakeLists.txt",
+        "line": 5
+      }
+    },
+    {
+      "category": "denoiser",
+      "name": "SSAT",
+      "status": "引擎入口未接入",
+      "note": "内部算法调用链存在，配置测试不等于引擎运行覆盖；见 F01",
+      "evidence": {
+        "path": "vision/src/render_core/denoiser/SSAT/CMakeLists.txt",
+        "line": 2
+      }
+    },
+    {
+      "category": "denoiser",
+      "name": "SVGF",
+      "status": "主流程可选",
+      "note": "每相机上下文可选择；有集成测试",
+      "evidence": {
+        "path": "vision/src/render_core/denoiser/SVGF/CMakeLists.txt",
+        "line": 2
+      }
+    },
+    {
+      "category": "filter",
+      "name": "box",
+      "status": "仅测试显式选择",
+      "note": "测试和夹具使用；主流程默认 gaussian",
+      "evidence": {
+        "path": "vision/src/render_core/filter/CMakeLists.txt",
+        "line": 2
+      }
+    },
+    {
+      "category": "filter",
+      "name": "triangle",
+      "status": "仅测试显式选择",
+      "note": "测试和夹具使用；主流程默认 gaussian",
+      "evidence": {
+        "path": "vision/src/render_core/filter/CMakeLists.txt",
+        "line": 3
+      }
+    },
+    {
+      "category": "filter",
+      "name": "gaussian",
+      "status": "主流程使用",
+      "note": "SensorDesc 默认值；不能删除 FittedCurveFilter 和 alias2d",
+      "evidence": {
+        "path": "vision/src/render_core/filter/CMakeLists.txt",
+        "line": 4
+      }
+    },
+    {
+      "category": "filter",
+      "name": "sinc",
+      "status": "可选未选择",
+      "note": "当前仓库没有选择该滤波器的场景",
+      "evidence": {
+        "path": "vision/src/render_core/filter/CMakeLists.txt",
+        "line": 5
+      }
+    },
+    {
+      "category": "filter",
+      "name": "mitchell",
+      "status": "可选未选择",
+      "note": "当前仓库没有选择该滤波器的场景",
+      "evidence": {
+        "path": "vision/src/render_core/filter/CMakeLists.txt",
+        "line": 6
+      }
+    },
+    {
+      "category": "framebuffer",
+      "name": "normal",
+      "status": "主流程使用",
+      "note": "普通每相机 framebuffer",
+      "evidence": {
+        "path": "vision/src/render_core/framebuffer/CMakeLists.txt",
+        "line": 2
+      }
+    },
+    {
+      "category": "framebuffer",
+      "name": "lightfield",
+      "status": "引擎入口未接入",
+      "note": "见 F01；内部 PT/SSAT 支持存在",
+      "evidence": {
+        "path": "vision/src/render_core/framebuffer/CMakeLists.txt",
+        "line": 3
+      }
+    },
+    {
+      "category": "integrator",
+      "name": "pt",
+      "status": "主流程使用",
+      "note": "PT 和 ReSTIR",
+      "evidence": {
+        "path": "vision/src/render_core/integrator/CMakeLists.txt",
+        "line": 7
+      }
+    },
+    {
+      "category": "integrator",
+      "name": "rt",
+      "status": "主流程使用",
+      "note": "PT 和 ReSTIR",
+      "evidence": {
+        "path": "vision/src/render_core/integrator/CMakeLists.txt",
+        "line": 8
+      }
+    },
+    {
+      "category": "light",
+      "name": "area",
+      "status": "主流程使用",
+      "note": "发光网格、方向光和环境光适配器",
+      "evidence": {
+        "path": "vision/src/render_core/light/CMakeLists.txt",
+        "line": 2
+      }
+    },
+    {
+      "category": "light",
+      "name": "directional",
+      "status": "主流程使用",
+      "note": "发光网格、方向光和环境光适配器",
+      "evidence": {
+        "path": "vision/src/render_core/light/CMakeLists.txt",
+        "line": 3
+      }
+    },
+    {
+      "category": "light",
+      "name": "spherical",
+      "status": "主流程使用",
+      "note": "发光网格、方向光和环境光适配器",
+      "evidence": {
+        "path": "vision/src/render_core/light/CMakeLists.txt",
+        "line": 4
+      }
+    },
+    {
+      "category": "lightsampler",
+      "name": "uniform",
+      "status": "主流程使用",
+      "note": "引擎默认 uniform，env_separate=false",
+      "evidence": {
+        "path": "vision/src/render_core/lightsampler/CMakeLists.txt",
+        "line": 2
+      }
+    },
+    {
+      "category": "lightsampler",
+      "name": "power",
+      "status": "仅测试显式选择",
+      "note": "world_bounds GPU 测试使用",
+      "evidence": {
+        "path": "vision/src/render_core/lightsampler/CMakeLists.txt",
+        "line": 3
+      }
+    },
+    {
+      "category": "lightsampler",
+      "name": "bvh",
+      "status": "未完成",
+      "note": "空 BVH，缺少插件构造导出；见 F04",
+      "evidence": {
+        "path": "vision/src/render_core/lightsampler/CMakeLists.txt",
+        "line": 4
+      }
+    },
+    {
+      "category": "material",
+      "name": "black_body",
+      "status": "主流程使用",
+      "note": "principled 和黑体回退都是真实消费者",
+      "evidence": {
+        "path": "vision/src/render_core/material/CMakeLists.txt",
+        "line": 2
+      }
+    },
+    {
+      "category": "material",
+      "name": "principled_bsdf",
+      "status": "主流程使用",
+      "note": "principled 和黑体回退都是真实消费者",
+      "evidence": {
+        "path": "vision/src/render_core/material/CMakeLists.txt",
+        "line": 3
+      }
+    },
+    {
+      "category": "medium",
+      "name": "homogeneous",
+      "status": "可选未接入生产场景",
+      "note": "Corona 当前不填充 mediums_desc；仅保留通用描述符加载路径",
+      "evidence": {
+        "path": "vision/src/render_core/medium/CMakeLists.txt",
+        "line": 2
+      }
+    },
+    {
+      "category": "pass",
+      "name": "accumulate",
+      "status": "未接入",
+      "note": "由 customized 使用，当前无管线执行入口；见 F13",
+      "evidence": {
+        "path": "vision/src/render_core/pass/CMakeLists.txt",
+        "line": 2
+      }
+    },
+    {
+      "category": "pass",
+      "name": "integrate",
+      "status": "未接入",
+      "note": "由 customized 使用，当前无管线执行入口；见 F13",
+      "evidence": {
+        "path": "vision/src/render_core/pass/CMakeLists.txt",
+        "line": 3
+      }
+    },
+    {
+      "category": "pass",
+      "name": "tonemapping",
+      "status": "未接入",
+      "note": "由 customized 使用，当前无管线执行入口；见 F13",
+      "evidence": {
+        "path": "vision/src/render_core/pass/CMakeLists.txt",
+        "line": 4
+      }
+    },
+    {
+      "category": "pass",
+      "name": "gamma",
+      "status": "未接入",
+      "note": "由 customized 使用，当前无管线执行入口；见 F13",
+      "evidence": {
+        "path": "vision/src/render_core/pass/CMakeLists.txt",
+        "line": 5
+      }
+    },
+    {
+      "category": "radiancecache",
+      "name": "sharc",
+      "status": "已移除",
+      "note": "实现、抽象接口、配置和运行时依赖已移除；evidence 为审计基线位置，验证详见 SHARC_ANALYSIS.md",
+      "evidence": {
+        "path": "vision/src/render_core/radiancecache/sharc/CMakeLists.txt",
+        "line": 2
+      }
+    },
+    {
+      "category": "sampler",
+      "name": "independent",
+      "status": "主流程使用",
+      "note": "默认随机采样器；spp 参数另见 F20",
+      "evidence": {
+        "path": "vision/src/render_core/sampler/CMakeLists.txt",
+        "line": 2
+      }
+    },
+    {
+      "category": "sensor",
+      "name": "thin_lens",
+      "status": "主流程使用",
+      "note": "默认 SensorDesc 和 Corona 相机适配",
+      "evidence": {
+        "path": "vision/src/render_core/sensor/CMakeLists.txt",
+        "line": 2
+      }
+    },
+    {
+      "category": "sensor",
+      "name": "pinhole",
+      "status": "可选未选择",
+      "note": "生产使用 thin_lens；半径为零不等于加载 pinhole 插件",
+      "evidence": {
+        "path": "vision/src/render_core/sensor/CMakeLists.txt",
+        "line": 3
+      }
+    },
+    {
+      "category": "sensor",
+      "name": "realistic",
+      "status": "未完成",
+      "note": "继承基础射线生成，没有真实镜片追迹；见 F05",
+      "evidence": {
+        "path": "vision/src/render_core/sensor/CMakeLists.txt",
+        "line": 4
+      }
+    },
+    {
+      "category": "shadernode",
+      "name": "constant",
+      "status": "可选兼容路径",
+      "note": "保留在部分 ShaderNodeDesc 默认值中；常规数值适配使用 number，不能仅按显式字符串选择断言全局死代码",
+      "evidence": {
+        "path": "vision/src/render_core/shadernode/CMakeLists.txt",
+        "line": 2
+      }
+    },
+    {
+      "category": "shadernode",
+      "name": "image",
+      "status": "主流程使用",
+      "note": "材质表达式适配器创建；converter 的部分工厂闲置",
+      "evidence": {
+        "path": "vision/src/render_core/shadernode/CMakeLists.txt",
+        "line": 3
+      }
+    },
+    {
+      "category": "shadernode",
+      "name": "mix",
+      "status": "主流程使用",
+      "note": "材质表达式适配器创建；converter 的部分工厂闲置",
+      "evidence": {
+        "path": "vision/src/render_core/shadernode/CMakeLists.txt",
+        "line": 4
+      }
+    },
+    {
+      "category": "shadernode",
+      "name": "number",
+      "status": "主流程使用",
+      "note": "材质表达式适配器创建；converter 的部分工厂闲置",
+      "evidence": {
+        "path": "vision/src/render_core/shadernode/CMakeLists.txt",
+        "line": 5
+      }
+    },
+    {
+      "category": "shadernode",
+      "name": "math",
+      "status": "主流程使用",
+      "note": "材质表达式适配器创建；converter 的部分工厂闲置",
+      "evidence": {
+        "path": "vision/src/render_core/shadernode/CMakeLists.txt",
+        "line": 6
+      }
+    },
+    {
+      "category": "shadernode",
+      "name": "spd",
+      "status": "可选未选择",
+      "note": "有动态工厂；当前适配层和夹具没有选择",
+      "evidence": {
+        "path": "vision/src/render_core/shadernode/CMakeLists.txt",
+        "line": 7
+      }
+    },
+    {
+      "category": "shadernode",
+      "name": "src_node",
+      "status": "可选未选择",
+      "note": "有动态工厂；当前适配层和夹具没有选择",
+      "evidence": {
+        "path": "vision/src/render_core/shadernode/CMakeLists.txt",
+        "line": 8
+      }
+    },
+    {
+      "category": "shadernode",
+      "name": "converter",
+      "status": "主流程使用",
+      "note": "材质表达式适配器创建；converter 的部分工厂闲置",
+      "evidence": {
+        "path": "vision/src/render_core/shadernode/CMakeLists.txt",
+        "line": 9
+      }
+    },
+    {
+      "category": "shape",
+      "name": "quad",
+      "status": "间接依赖和测试使用",
+      "note": "AreaLight::init_geometry 会创建 quad；测试也显式使用",
+      "evidence": {
+        "path": "vision/src/render_core/shape/CMakeLists.txt",
+        "line": 2
+      }
+    },
+    {
+      "category": "shape",
+      "name": "cube",
+      "status": "可选未选择",
+      "note": "引擎通过资源导入三角网格；编辑器创建 cube/sphere 并不证明用了 Vision shape 插件",
+      "evidence": {
+        "path": "vision/src/render_core/shape/CMakeLists.txt",
+        "line": 3
+      }
+    },
+    {
+      "category": "shape",
+      "name": "sphere",
+      "status": "可选未选择",
+      "note": "引擎通过资源导入三角网格；编辑器创建 cube/sphere 并不证明用了 Vision shape 插件",
+      "evidence": {
+        "path": "vision/src/render_core/shape/CMakeLists.txt",
+        "line": 4
+      }
+    },
+    {
+      "category": "spectrum",
+      "name": "hero",
+      "status": "仅测试显式选择",
+      "note": "ReSTIR estimator 测试选择 hero",
+      "evidence": {
+        "path": "vision/src/render_core/spectrum/CMakeLists.txt",
+        "line": 2
+      }
+    },
+    {
+      "category": "spectrum",
+      "name": "srgb",
+      "status": "主流程使用",
+      "note": "引擎默认光谱模型",
+      "evidence": {
+        "path": "vision/src/render_core/spectrum/CMakeLists.txt",
+        "line": 3
+      }
+    },
+    {
+      "category": "tonemapper",
+      "name": "impl",
+      "status": "主流程使用",
+      "note": "默认 linear；aces/reinhard 工厂未被当前 Vision 描述符选择",
+      "evidence": {
+        "path": "vision/src/render_core/tonemapper/CMakeLists.txt",
+        "line": 2
+      }
+    },
+    {
+      "category": "upsampler",
+      "name": "bilateral",
+      "status": "构造但空实现",
+      "note": "见 F02",
+      "evidence": {
+        "path": "vision/src/render_core/upsampler/CMakeLists.txt",
+        "line": 2
+      }
+    },
+    {
+      "category": "warper",
+      "name": "alias",
+      "status": "主流程间接使用",
+      "note": "面积光、环境贴图和滤波器的概率分布采样依赖",
+      "evidence": {
+        "path": "vision/src/render_core/warper/CMakeLists.txt",
+        "line": 2
+      }
+    },
+    {
+      "category": "warper",
+      "name": "alias2d",
+      "status": "主流程间接使用",
+      "note": "面积光、环境贴图和滤波器的概率分布采样依赖",
+      "evidence": {
+        "path": "vision/src/render_core/warper/CMakeLists.txt",
+        "line": 3
+      }
+    }
+  ],
+  "api_candidates": [
+    {
+      "group": "描述符与旧解析",
+      "symbol": "fill_id",
+      "evidence": {
+        "path": "vision/src/base/import/node_desc.h",
+        "line": 28
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "描述符与旧解析",
+      "symbol": "set_type",
+      "evidence": {
+        "path": "vision/src/base/import/node_desc.h",
+        "line": 141
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "描述符与旧解析",
+      "symbol": "set_value_if_null",
+      "evidence": {
+        "path": "vision/src/base/import/parameter_set.h",
+        "line": 175
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "Spectrum 工具",
+      "symbol": "to_list",
+      "evidence": {
+        "path": "vision/src/base/color/spd.h",
+        "line": 41
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "Spectrum 工具",
+      "symbol": "array2vector",
+      "evidence": {
+        "path": "vision/src/base/color/spd.cpp",
+        "line": 34
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "Spectrum 工具",
+      "symbol": "zero_if_any_nan",
+      "evidence": {
+        "path": "vision/src/base/color/spectrum.h",
+        "line": 218
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "Spectrum 工具",
+      "symbol": "zero_if_any_nan_inf",
+      "evidence": {
+        "path": "vision/src/base/color/spectrum.h",
+        "line": 219
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "渲染环境辅助",
+      "symbol": "reset_frame_index",
+      "evidence": {
+        "path": "vision/src/base/integral/integrator.h",
+        "line": 108
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "渲染环境辅助",
+      "symbol": "emplace_frame_index",
+      "evidence": {
+        "path": "vision/src/base/integral/integrator.h",
+        "line": 130
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "渲染环境辅助",
+      "symbol": "emplace_sampled_wavelengths",
+      "evidence": {
+        "path": "vision/src/base/integral/integrator.h",
+        "line": 133
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "渲染环境辅助",
+      "symbol": "has_denoiser",
+      "evidence": {
+        "path": "vision/src/base/integral/integrator.h",
+        "line": 88
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "诊断辅助",
+      "symbol": "denoiser_disabled",
+      "evidence": {
+        "path": "vision/src/base/mgr/evaluation_debug.h",
+        "line": 12
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "几何辅助",
+      "symbol": "remove_mesh",
+      "evidence": {
+        "path": "vision/src/base/mgr/geometry.h",
+        "line": 51
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "几何辅助",
+      "symbol": "build_count",
+      "evidence": {
+        "path": "vision/src/base/mgr/geometry.h",
+        "line": 86
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "Pipeline 旧接口",
+      "symbol": "rebuild_view_context_renderers",
+      "evidence": {
+        "path": "vision/src/base/mgr/pipeline.h",
+        "line": 104
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "Pipeline 旧接口",
+      "symbol": "on_touch",
+      "evidence": {
+        "path": "vision/src/base/mgr/pipeline.h",
+        "line": 108
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "Pipeline 旧接口",
+      "symbol": "check_and_save",
+      "evidence": {
+        "path": "vision/src/base/mgr/pipeline.h",
+        "line": 114
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "Pipeline 旧接口",
+      "symbol": "clear_geometry",
+      "evidence": {
+        "path": "vision/src/base/mgr/pipeline.h",
+        "line": 142
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "Pipeline 旧接口",
+      "symbol": "deregister_buffer",
+      "evidence": {
+        "path": "vision/src/base/mgr/pipeline.h",
+        "line": 221
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "Pipeline 旧接口",
+      "symbol": "deregister_texture3d",
+      "evidence": {
+        "path": "vision/src/base/mgr/pipeline.h",
+        "line": 222
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "Pipeline 旧接口",
+      "symbol": "deregister_texture2d",
+      "evidence": {
+        "path": "vision/src/base/mgr/pipeline.h",
+        "line": 223
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "Pipeline 旧接口",
+      "symbol": "output_spp",
+      "evidence": {
+        "path": "vision/src/base/mgr/pipeline.h",
+        "line": 165
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "Pipeline 旧接口",
+      "symbol": "flip_debugger",
+      "evidence": {
+        "path": "vision/src/base/mgr/pipeline.h",
+        "line": 220
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "旧 UI",
+      "symbol": "render_perf_panel",
+      "evidence": {
+        "path": "vision/src/base/mgr/pipeline_ui.h",
+        "line": 29
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "旧 UI",
+      "symbol": "filp_show_fps",
+      "evidence": {
+        "path": "vision/src/base/mgr/pipeline_ui.h",
+        "line": 34
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "旧 UI",
+      "symbol": "cur_node",
+      "evidence": {
+        "path": "vision/src/base/mgr/pipeline_ui.h",
+        "line": 36
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "Registry",
+      "symbol": "get_element",
+      "evidence": {
+        "path": "vision/src/base/mgr/registries.h",
+        "line": 33
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "Registry",
+      "symbol": "precompute_albedo",
+      "evidence": {
+        "path": "vision/src/base/mgr/registries.h",
+        "line": 56
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "Registry",
+      "symbol": "SensorRegistry",
+      "evidence": {
+        "path": "vision/src/base/mgr/registries.h",
+        "line": 82
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "旧相机列表",
+      "symbol": "add_sensor",
+      "evidence": {
+        "path": "vision/src/base/mgr/scene.h",
+        "line": 154
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "旧相机列表",
+      "symbol": "remove_sensor",
+      "evidence": {
+        "path": "vision/src/base/mgr/scene.h",
+        "line": 155
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "旧相机列表",
+      "symbol": "cur_sensor_index",
+      "evidence": {
+        "path": "vision/src/base/mgr/scene.h",
+        "line": 158
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "旧相机列表",
+      "symbol": "set_cur_sensor_index",
+      "evidence": {
+        "path": "vision/src/base/mgr/scene.h",
+        "line": 159
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "节点构造辅助",
+      "symbol": "construct",
+      "evidence": {
+        "path": "vision/src/base/node.h",
+        "line": 80
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "节点构造辅助",
+      "symbol": "construct_unique",
+      "evidence": {
+        "path": "vision/src/base/node.h",
+        "line": 88
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "节点构造辅助",
+      "symbol": "static_object_cast",
+      "evidence": {
+        "path": "vision/src/base/node.h",
+        "line": 178
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "灯光辅助",
+      "symbol": "bound",
+      "evidence": {
+        "path": "vision/src/base/illumination/light.h",
+        "line": 118
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "灯光辅助",
+      "symbol": "is",
+      "evidence": {
+        "path": "vision/src/base/illumination/light.h",
+        "line": 144
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "灯光辅助",
+      "symbol": "add_emission_reference",
+      "evidence": {
+        "path": "vision/src/base/illumination/light.h",
+        "line": 180
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "材质和介质反向引用",
+      "symbol": "add_material_reference",
+      "evidence": {
+        "path": "vision/src/base/scattering/material.h",
+        "line": 210
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "材质和介质反向引用",
+      "symbol": "combine_flag",
+      "evidence": {
+        "path": "vision/src/base/scattering/material.h",
+        "line": 252
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "材质和介质反向引用",
+      "symbol": "add_inside_reference",
+      "evidence": {
+        "path": "vision/src/base/scattering/medium.h",
+        "line": 45
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "材质和介质反向引用",
+      "symbol": "add_outside_reference",
+      "evidence": {
+        "path": "vision/src/base/scattering/medium.h",
+        "line": 46
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "交互和采样辅助",
+      "symbol": "material_inst_id",
+      "evidence": {
+        "path": "vision/src/base/scattering/interaction.h",
+        "line": 309
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "交互和采样辅助",
+      "symbol": "material_type_id",
+      "evidence": {
+        "path": "vision/src/base/scattering/interaction.h",
+        "line": 310
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "交互和采样辅助",
+      "symbol": "is_transition",
+      "evidence": {
+        "path": "vision/src/base/scattering/interaction.h",
+        "line": 195
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "交互和采样辅助",
+      "symbol": "match_flag",
+      "evidence": {
+        "path": "vision/src/base/scattering/bxdf.h",
+        "line": 70
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "交互和采样辅助",
+      "symbol": "RaySample",
+      "evidence": {
+        "path": "vision/src/base/scattering/sample.h",
+        "line": 67
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "交互和采样辅助",
+      "symbol": "to_ratio_y",
+      "evidence": {
+        "path": "vision/src/base/scattering/lobe.h",
+        "line": 118
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "微表面辅助",
+      "symbol": "roughness_to_alpha",
+      "evidence": {
+        "path": "vision/src/base/scattering/microfacet.h",
+        "line": 24
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "微表面辅助",
+      "symbol": "alpha_to_roughness",
+      "evidence": {
+        "path": "vision/src/base/scattering/microfacet.h",
+        "line": 34
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "微表面辅助",
+      "symbol": "calculate_alpha",
+      "evidence": {
+        "path": "vision/src/base/scattering/microfacet.h",
+        "line": 44
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "旧滤波离散化",
+      "symbol": "discretize",
+      "evidence": {
+        "path": "vision/src/base/sensor/filter.h",
+        "line": 49
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "Framebuffer 旧接口",
+      "symbol": "foreach_neighbor",
+      "evidence": {
+        "path": "vision/src/base/sensor/frame_buffer.h",
+        "line": 31
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "Framebuffer 旧接口",
+      "symbol": "deregister_callback",
+      "evidence": {
+        "path": "vision/src/base/sensor/frame_buffer.h",
+        "line": 344
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "Framebuffer 旧接口",
+      "symbol": "fill_window_buffer",
+      "evidence": {
+        "path": "vision/src/base/sensor/frame_buffer.h",
+        "line": 352
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "Framebuffer 旧接口",
+      "symbol": "cur_screen_buffer",
+      "evidence": {
+        "path": "vision/src/base/sensor/frame_buffer.h",
+        "line": 360
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "Framebuffer 旧接口",
+      "symbol": "compute_motion_vector",
+      "evidence": {
+        "path": "vision/src/base/sensor/frame_buffer.h",
+        "line": 376
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "Framebuffer 旧接口",
+      "symbol": "has_custom_post_processing",
+      "evidence": {
+        "path": "vision/src/base/sensor/frame_buffer.h",
+        "line": 405
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "Framebuffer 旧接口",
+      "symbol": "post_processed_buffer",
+      "evidence": {
+        "path": "vision/src/base/sensor/frame_buffer.h",
+        "line": 407
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "Sensor 辅助接口",
+      "symbol": "set_mat",
+      "evidence": {
+        "path": "vision/src/base/sensor/sensor.h",
+        "line": 59
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "Sensor 辅助接口",
+      "symbol": "device_forward",
+      "evidence": {
+        "path": "vision/src/base/sensor/sensor.h",
+        "line": 92
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "Sensor 辅助接口",
+      "symbol": "device_up",
+      "evidence": {
+        "path": "vision/src/base/sensor/sensor.h",
+        "line": 93
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "Sensor 辅助接口",
+      "symbol": "device_right",
+      "evidence": {
+        "path": "vision/src/base/sensor/sensor.h",
+        "line": 94
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "Sensor 辅助接口",
+      "symbol": "set_sensitivity",
+      "evidence": {
+        "path": "vision/src/base/sensor/sensor.h",
+        "line": 79
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "ShaderGraph 兼容包装",
+      "symbol": "build_graph_blueprint",
+      "evidence": {
+        "path": "vision/src/base/shader_graph/shader_graph.h",
+        "line": 47
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "ShaderGraph 兼容包装",
+      "symbol": "resolve_graph",
+      "evidence": {
+        "path": "vision/src/base/shader_graph/shader_graph.h",
+        "line": 49
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "ShaderGraph 兼容包装",
+      "symbol": "set_graph_and_resolve",
+      "evidence": {
+        "path": "vision/src/base/shader_graph/shader_graph.h",
+        "line": 71
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "几何批量包装",
+      "symbol": "add_instances",
+      "evidence": {
+        "path": "vision/src/base/shape.h",
+        "line": 206
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "ImagePool 旧注入接口",
+      "symbol": "set_source_cache",
+      "evidence": {
+        "path": "vision/src/base/mgr/image_pool.h",
+        "line": 30
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "Denoise 辅助接口",
+      "symbol": "subpixel_resolution",
+      "evidence": {
+        "path": "vision/src/base/denoiser.h",
+        "line": 86
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "数学辅助",
+      "symbol": "gaussian_integral",
+      "evidence": {
+        "path": "vision/src/math/util.h",
+        "line": 45
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "数学辅助",
+      "symbol": "uniform_disk_PDF",
+      "evidence": {
+        "path": "vision/src/math/warp.h",
+        "line": 29
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "数学辅助",
+      "symbol": "uniform_sphere_PDF",
+      "evidence": {
+        "path": "vision/src/math/warp.h",
+        "line": 78
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "数学辅助",
+      "symbol": "uniform_hemisphere_PDF",
+      "evidence": {
+        "path": "vision/src/math/warp.h",
+        "line": 117
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "数学辅助",
+      "symbol": "square_to_cone",
+      "evidence": {
+        "path": "vision/src/math/warp.h",
+        "line": 54
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "数学辅助",
+      "symbol": "uniform_cone_PDF",
+      "evidence": {
+        "path": "vision/src/math/warp.h",
+        "line": 60
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "数学辅助",
+      "symbol": "square_to_sphere",
+      "evidence": {
+        "path": "vision/src/math/warp.h",
+        "line": 76
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "数学辅助",
+      "symbol": "square_to_hemisphere",
+      "evidence": {
+        "path": "vision/src/math/warp.h",
+        "line": 115
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "数学辅助",
+      "symbol": "linear_PDF",
+      "evidence": {
+        "path": "vision/src/math/warp.h",
+        "line": 127
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "数学辅助",
+      "symbol": "power_heuristic",
+      "evidence": {
+        "path": "vision/src/math/warp.h",
+        "line": 163
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "数学辅助",
+      "symbol": "robust_MIS_weight_n",
+      "evidence": {
+        "path": "vision/src/math/warp.h",
+        "line": 181
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "黑体辐射公式",
+      "symbol": "black_body_impl",
+      "evidence": {
+        "path": "vision/src/math/optics.h",
+        "line": 81
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "ReBLUR EDSL 辅助",
+      "symbol": "AtanApprox",
+      "evidence": {
+        "path": "vision/src/render_core/denoiser/ReBLUR/edsl_nrd_common.h",
+        "line": 52
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "ReBLUR EDSL 辅助",
+      "symbol": "GetStdDev",
+      "evidence": {
+        "path": "vision/src/render_core/denoiser/ReBLUR/edsl_nrd_common.h",
+        "line": 53
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "ReBLUR EDSL 辅助",
+      "symbol": "ComputeNonExponentialWeightWithSigma",
+      "evidence": {
+        "path": "vision/src/render_core/denoiser/ReBLUR/edsl_nrd_common.h",
+        "line": 59
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "ReBLUR EDSL 辅助",
+      "symbol": "IsInScreenBilinear",
+      "evidence": {
+        "path": "vision/src/render_core/denoiser/ReBLUR/edsl_nrd_common.h",
+        "line": 68
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "ReBLUR EDSL 辅助",
+      "symbol": "GetDisocclusionWeight",
+      "evidence": {
+        "path": "vision/src/render_core/denoiser/ReBLUR/edsl_nrd_common.h",
+        "line": 206
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "ReBLUR EDSL 辅助",
+      "symbol": "ComputeParallaxInPixels",
+      "evidence": {
+        "path": "vision/src/render_core/denoiser/ReBLUR/edsl_nrd_common.h",
+        "line": 207
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "ReBLUR EDSL 辅助",
+      "symbol": "GetColorCompressionExposureForSpatialPasses",
+      "evidence": {
+        "path": "vision/src/render_core/denoiser/ReBLUR/edsl_nrd_common.h",
+        "line": 208
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "ReBLUR EDSL 辅助",
+      "symbol": "GetFadeBasedOnAccumulatedFrames",
+      "evidence": {
+        "path": "vision/src/render_core/denoiser/ReBLUR/edsl_nrd_common.h",
+        "line": 217
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "SSAT phase space 辅助",
+      "symbol": "set_spatial",
+      "evidence": {
+        "path": "vision/src/render_core/denoiser/SSAT/phase_space.h",
+        "line": 45
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "SSAT phase space 辅助",
+      "symbol": "set_angular",
+      "evidence": {
+        "path": "vision/src/render_core/denoiser/SSAT/phase_space.h",
+        "line": 47
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "SSAT phase space 辅助",
+      "symbol": "offset_spatial",
+      "evidence": {
+        "path": "vision/src/render_core/denoiser/SSAT/phase_space.h",
+        "line": 50
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "SSAT phase space 辅助",
+      "symbol": "offset_angular",
+      "evidence": {
+        "path": "vision/src/render_core/denoiser/SSAT/phase_space.h",
+        "line": 58
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "SSAT phase space 辅助",
+      "symbol": "phase_distance_sq",
+      "evidence": {
+        "path": "vision/src/render_core/denoiser/SSAT/phase_space.h",
+        "line": 67
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "SSAT phase space 辅助",
+      "symbol": "make_phase_coord",
+      "evidence": {
+        "path": "vision/src/render_core/denoiser/SSAT/phase_space.h",
+        "line": 98
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "SSAT phase space 辅助",
+      "symbol": "make_phase_coord_zero",
+      "evidence": {
+        "path": "vision/src/render_core/denoiser/SSAT/phase_space.h",
+        "line": 106
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "SSAT 通用 gather",
+      "symbol": "phase_space_to_buffer_index",
+      "evidence": {
+        "path": "vision/src/render_core/denoiser/SSAT/sparse_gather.h",
+        "line": 117
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "SSAT 通用 gather",
+      "symbol": "gather",
+      "evidence": {
+        "path": "vision/src/render_core/denoiser/SSAT/sparse_gather.h",
+        "line": 166
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "SSAT 通用 gather",
+      "symbol": "gather_channel",
+      "evidence": {
+        "path": "vision/src/render_core/denoiser/SSAT/sparse_gather.h",
+        "line": 254
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "SSAT 通用 gather",
+      "symbol": "gather_with_geometry",
+      "evidence": {
+        "path": "vision/src/render_core/denoiser/SSAT/sparse_gather.h",
+        "line": 295
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "SSAT getter",
+      "symbol": "adaptive_sampler",
+      "evidence": {
+        "path": "vision/src/render_core/denoiser/SSAT/ssat.h",
+        "line": 19
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "SSAT getter",
+      "symbol": "temporal_accumulator",
+      "evidence": {
+        "path": "vision/src/render_core/denoiser/SSAT/ssat.h",
+        "line": 21
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "SSAT getter",
+      "symbol": "history_buffer",
+      "evidence": {
+        "path": "vision/src/render_core/denoiser/SSAT/temporal_accumulator.h",
+        "line": 95
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "SSAT 数学辅助",
+      "symbol": "subpixel_linear_index",
+      "evidence": {
+        "path": "vision/src/render_core/denoiser/SSAT/utils.h",
+        "line": 70
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "SSAT 数学辅助",
+      "symbol": "encode_subpixel",
+      "evidence": {
+        "path": "vision/src/render_core/denoiser/SSAT/utils.h",
+        "line": 85
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "SSAT 数学辅助",
+      "symbol": "compute_luminance",
+      "evidence": {
+        "path": "vision/src/render_core/denoiser/SSAT/utils.h",
+        "line": 94
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "SSAT 数学辅助",
+      "symbol": "weight_luminance",
+      "evidence": {
+        "path": "vision/src/render_core/denoiser/SSAT/utils.h",
+        "line": 99
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "SSAT 数学辅助",
+      "symbol": "weight_depth",
+      "evidence": {
+        "path": "vision/src/render_core/denoiser/SSAT/utils.h",
+        "line": 111
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "SSAT 数学辅助",
+      "symbol": "bspline_weight",
+      "evidence": {
+        "path": "vision/src/render_core/denoiser/SSAT/utils.h",
+        "line": 128
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "SVGF 辅助",
+      "symbol": "compute_full_geometry_weight",
+      "evidence": {
+        "path": "vision/src/render_core/denoiser/SVGF/utils.h",
+        "line": 387
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "SVGF 辅助",
+      "symbol": "should_skip",
+      "evidence": {
+        "path": "vision/src/render_core/denoiser/SVGF/utils.h",
+        "line": 464
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "SVGF 辅助",
+      "symbol": "is_instance_boundary",
+      "evidence": {
+        "path": "vision/src/render_core/denoiser/SVGF/utils.h",
+        "line": 566
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "SVGF 辅助",
+      "symbol": "compute_grazing_anisotropy",
+      "evidence": {
+        "path": "vision/src/render_core/denoiser/SVGF/utils.h",
+        "line": 630
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "SVGF 辅助",
+      "symbol": "compute_edge_anisotropy",
+      "evidence": {
+        "path": "vision/src/render_core/denoiser/SVGF/utils.h",
+        "line": 643
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "SVGF 辅助",
+      "symbol": "compute_combined_anisotropy",
+      "evidence": {
+        "path": "vision/src/render_core/denoiser/SVGF/utils.h",
+        "line": 673
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "SVGF 辅助",
+      "symbol": "apply_edge_anisotropic_transform",
+      "evidence": {
+        "path": "vision/src/render_core/denoiser/SVGF/utils.h",
+        "line": 693
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "LightField 旧接口",
+      "symbol": "tone_mapping_encoded",
+      "evidence": {
+        "path": "vision/src/render_core/framebuffer/light_field.cpp",
+        "line": 626
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "LightField 旧接口",
+      "symbol": "post_render",
+      "evidence": {
+        "path": "vision/src/render_core/framebuffer/light_field.cpp",
+        "line": 634
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "LightField 旧接口",
+      "symbol": "set_lenticular_params",
+      "evidence": {
+        "path": "vision/src/render_core/framebuffer/light_field.cpp",
+        "line": 716
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "LightField 旧接口",
+      "symbol": "set_geometry",
+      "evidence": {
+        "path": "vision/src/render_core/framebuffer/light_field.cpp",
+        "line": 726
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "LightField 旧接口",
+      "symbol": "output_resolution",
+      "evidence": {
+        "path": "vision/src/render_core/framebuffer/light_field.cpp",
+        "line": 739
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "旧窗口辅助",
+      "symbol": "get_window_handle",
+      "evidence": {
+        "path": "vision/src/window/GUI/window.h",
+        "line": 64
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "旧窗口辅助",
+      "symbol": "background_visible",
+      "evidence": {
+        "path": "vision/src/window/GUI/window.h",
+        "line": 81
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "旧窗口辅助",
+      "symbol": "WindowLoop",
+      "evidence": {
+        "path": "vision/src/window/GUI/window.h",
+        "line": 110
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    },
+    {
+      "group": "旧 GL shader 辅助",
+      "symbol": "create_gl_program",
+      "evidence": {
+        "path": "vision/src/window/GUI_impl/imGui/gl_helper.h",
+        "line": 59
+      },
+      "status": "无仓库调用或仅在闲置链内调用；公共接口需核对外部使用"
+    }
+  ],
+  "unreferenced_config_constants": [
+    {
+      "name": "kMinPositive",
+      "evidence": {
+        "path": "vision/src/render_core/denoiser/SVGF/svgf_config.h",
+        "line": 11
+      },
+      "status": "去注释与字符串后仅定义出现；不作为运行时配置生效"
+    },
+    {
+      "name": "kPoissonNormalPowerDefault",
+      "evidence": {
+        "path": "vision/src/render_core/denoiser/SVGF/svgf_config.h",
+        "line": 25
+      },
+      "status": "去注释与字符串后仅定义出现；不作为运行时配置生效"
+    },
+    {
+      "name": "kAlbedoThreshold",
+      "evidence": {
+        "path": "vision/src/render_core/denoiser/SVGF/svgf_config.h",
+        "line": 41
+      },
+      "status": "去注释与字符串后仅定义出现；不作为运行时配置生效"
+    },
+    {
+      "name": "kExtremeValueThreshold",
+      "evidence": {
+        "path": "vision/src/render_core/denoiser/SVGF/svgf_config.h",
+        "line": 90
+      },
+      "status": "去注释与字符串后仅定义出现；不作为运行时配置生效"
+    },
+    {
+      "name": "kExtremeValueScale",
+      "evidence": {
+        "path": "vision/src/render_core/denoiser/SVGF/svgf_config.h",
+        "line": 91
+      },
+      "status": "去注释与字符串后仅定义出现；不作为运行时配置生效"
+    },
+    {
+      "name": "kDecayRate",
+      "evidence": {
+        "path": "vision/src/render_core/denoiser/SVGF/svgf_config.h",
+        "line": 102
+      },
+      "status": "去注释与字符串后仅定义出现；不作为运行时配置生效"
+    },
+    {
+      "name": "kMaxVarianceMultiplier",
+      "evidence": {
+        "path": "vision/src/render_core/denoiser/SVGF/svgf_config.h",
+        "line": 103
+      },
+      "status": "去注释与字符串后仅定义出现；不作为运行时配置生效"
+    },
+    {
+      "name": "kMinVarianceFloor",
+      "evidence": {
+        "path": "vision/src/render_core/denoiser/SVGF/svgf_config.h",
+        "line": 104
+      },
+      "status": "去注释与字符串后仅定义出现；不作为运行时配置生效"
+    },
+    {
+      "name": "kMaxBlendWeight",
+      "evidence": {
+        "path": "vision/src/render_core/denoiser/SVGF/svgf_config.h",
+        "line": 105
+      },
+      "status": "去注释与字符串后仅定义出现；不作为运行时配置生效"
+    },
+    {
+      "name": "kHistoryBlendThreshold",
+      "evidence": {
+        "path": "vision/src/render_core/denoiser/SVGF/svgf_config.h",
+        "line": 158
+      },
+      "status": "去注释与字符串后仅定义出现；不作为运行时配置生效"
+    },
+    {
+      "name": "kDisocclusionBlendBoost",
+      "evidence": {
+        "path": "vision/src/render_core/denoiser/SVGF/svgf_config.h",
+        "line": 162
+      },
+      "status": "去注释与字符串后仅定义出现；不作为运行时配置生效"
+    },
+    {
+      "name": "kMinScale",
+      "evidence": {
+        "path": "vision/src/render_core/denoiser/SVGF/svgf_config.h",
+        "line": 175
+      },
+      "status": "去注释与字符串后仅定义出现；不作为运行时配置生效"
+    },
+    {
+      "name": "kMaxScale",
+      "evidence": {
+        "path": "vision/src/render_core/denoiser/SVGF/svgf_config.h",
+        "line": 176
+      },
+      "status": "去注释与字符串后仅定义出现；不作为运行时配置生效"
+    },
+    {
+      "name": "kVarianceScale",
+      "evidence": {
+        "path": "vision/src/render_core/denoiser/SVGF/svgf_config.h",
+        "line": 177
+      },
+      "status": "去注释与字符串后仅定义出现；不作为运行时配置生效"
+    },
+    {
+      "name": "kDirectAdaptiveStrength",
+      "evidence": {
+        "path": "vision/src/render_core/denoiser/SVGF/svgf_config.h",
+        "line": 178
+      },
+      "status": "去注释与字符串后仅定义出现；不作为运行时配置生效"
+    },
+    {
+      "name": "kIndirectAdaptiveStrength",
+      "evidence": {
+        "path": "vision/src/render_core/denoiser/SVGF/svgf_config.h",
+        "line": 179
+      },
+      "status": "去注释与字符串后仅定义出现；不作为运行时配置生效"
+    },
+    {
+      "name": "kEnabled",
+      "evidence": {
+        "path": "vision/src/render_core/denoiser/SVGF/svgf_config.h",
+        "line": 183
+      },
+      "status": "去注释与字符串后仅定义出现；不作为运行时配置生效"
+    },
+    {
+      "name": "kEdgeAwareEnabled",
+      "evidence": {
+        "path": "vision/src/render_core/denoiser/SVGF/svgf_config.h",
+        "line": 187
+      },
+      "status": "去注释与字符串后仅定义出现；不作为运行时配置生效"
+    },
+    {
+      "name": "kMinEdgeWeight",
+      "evidence": {
+        "path": "vision/src/render_core/denoiser/SVGF/svgf_config.h",
+        "line": 189
+      },
+      "status": "去注释与字符串后仅定义出现；不作为运行时配置生效"
+    },
+    {
+      "name": "kDefaultRhoBase",
+      "evidence": {
+        "path": "vision/src/render_core/denoiser/SSAT/ssat_config.h",
+        "line": 17
+      },
+      "status": "去注释与字符串后仅定义出现；不作为运行时配置生效"
+    },
+    {
+      "name": "kDefaultAlpha",
+      "evidence": {
+        "path": "vision/src/render_core/denoiser/SSAT/ssat_config.h",
+        "line": 23
+      },
+      "status": "去注释与字符串后仅定义出现；不作为运行时配置生效"
+    },
+    {
+      "name": "kDepthWeightScale",
+      "evidence": {
+        "path": "vision/src/render_core/denoiser/SSAT/ssat_config.h",
+        "line": 33
+      },
+      "status": "去注释与字符串后仅定义出现；不作为运行时配置生效"
+    },
+    {
+      "name": "kDefaultSpatialRadius",
+      "evidence": {
+        "path": "vision/src/render_core/denoiser/SSAT/ssat_config.h",
+        "line": 37
+      },
+      "status": "去注释与字符串后仅定义出现；不作为运行时配置生效"
+    },
+    {
+      "name": "kDefaultAngularSamples",
+      "evidence": {
+        "path": "vision/src/render_core/denoiser/SSAT/ssat_config.h",
+        "line": 41
+      },
+      "status": "去注释与字符串后仅定义出现；不作为运行时配置生效"
+    },
+    {
+      "name": "kDefaultSigmaLum",
+      "evidence": {
+        "path": "vision/src/render_core/denoiser/SSAT/ssat_config.h",
+        "line": 43
+      },
+      "status": "去注释与字符串后仅定义出现；不作为运行时配置生效"
+    },
+    {
+      "name": "kDefaultSigmaDepthAngular",
+      "evidence": {
+        "path": "vision/src/render_core/denoiser/SSAT/ssat_config.h",
+        "line": 47
+      },
+      "status": "去注释与字符串后仅定义出现；不作为运行时配置生效"
+    },
+    {
+      "name": "kAngularBandwidth",
+      "evidence": {
+        "path": "vision/src/render_core/denoiser/SSAT/ssat_config.h",
+        "line": 63
+      },
+      "status": "去注释与字符串后仅定义出现；不作为运行时配置生效"
+    },
+    {
+      "name": "kDefaultSigmaX",
+      "evidence": {
+        "path": "vision/src/render_core/denoiser/SSAT/ssat_config.h",
+        "line": 77
+      },
+      "status": "去注释与字符串后仅定义出现；不作为运行时配置生效"
+    },
+    {
+      "name": "kDefaultSigmaU",
+      "evidence": {
+        "path": "vision/src/render_core/denoiser/SSAT/ssat_config.h",
+        "line": 79
+      },
+      "status": "去注释与字符串后仅定义出现；不作为运行时配置生效"
+    },
+    {
+      "name": "kMaxNeighborRadius",
+      "evidence": {
+        "path": "vision/src/render_core/denoiser/SSAT/ssat_config.h",
+        "line": 83
+      },
+      "status": "去注释与字符串后仅定义出现；不作为运行时配置生效"
+    },
+    {
+      "name": "REBLUR_MAX_ACCUM_FRAME_NUM",
+      "evidence": {
+        "path": "vision/src/render_core/denoiser/ReBLUR/edsl_nrd_common.h",
+        "line": 40
+      },
+      "status": "去注释与字符串后仅定义出现；不作为运行时配置生效"
+    }
+  ],
+  "validation": {
+    "full_build_run": false,
+    "gpu_coverage_run": false,
+    "method": "逐项源码核查；词法统计仅用于发现候选，C++/EDSL 语法解析不作为结论依据"
+  },
+  "resolutions": [
+    {
+      "feature_id": "F03",
+      "status": "removed",
+      "date": "2026-10-31",
+      "report": "vision/SHARC_ANALYSIS.md",
+      "removed_standalone_files": 8,
+      "removed_standalone_lines": 965,
+      "remaining_plugin_targets": 49,
+      "remaining_plugin_categories": 18,
+      "validation_scope": "SHARC removal only; original counts and evidence refer to the audit revision",
+      "validation": {
+        "engine_and_selected_test_build": "passed",
+        "full_restir_gpu_regression": "passed_before_removal_after_removal_and_after_relax_fix",
+        "sampled_output": {
+          "all_byte_identical": true,
+          "all_finite": true,
+          "file_count": 60,
+          "float_count": 61440,
+          "max_absolute_difference": 0.0,
+          "baseline_directory": "E:\\CoronaEngine\\build\\sharc-removal\\baseline-restir-frames",
+          "compared_directory": "E:\\CoronaEngine\\build\\sharc-removal\\removed-restir-relaxfix-frames"
+        },
+        "post_removal_tests": {
+          "total": 18,
+          "passed": 18,
+          "failed": 0,
+          "skipped": 0
+        },
+        "preexisting_failures": [],
+        "resolved_failures": [
+          "VisionRelaxPT",
+          "VisionRelaxReSTIR",
+          "VisionRelaxLifecycle"
+        ],
+        "evidence": "build/sharc-removal/relax-fix-verification.json"
+      },
+      "initial_validation": {
+        "engine_and_selected_test_build": "passed",
+        "full_restir_gpu_regression": "passed_before_and_after",
+        "sampled_output": {
+          "all_byte_identical": true,
+          "all_finite": true,
+          "file_count": 60,
+          "float_count": 61440,
+          "max_absolute_difference": 0.0
+        },
+        "post_removal_tests": {
+          "total": 12,
+          "passed": 9,
+          "preexisting_failures_reproduced": 3
+        },
+        "preexisting_failures": [
+          "VisionRelaxPT",
+          "VisionRelaxReSTIR",
+          "VisionRelaxLifecycle"
+        ],
+        "baseline_failure_reproduction": "All three also fail with SEGFAULT using unchanged pre-removal binary snapshot.",
+        "evidence": "build/sharc-removal/verification.json"
+      },
+      "relax_followup": {
+        "status": "fixed_and_verified",
+        "root_cause": "ReLAX dispatch lazily compiled material guide shaders without SceneGpuContextScope. MaterialLut lookup had no scene key. All three native stacks reached SheenLTC::fetch_ltc and std::bad_variant_access, then noexcept termination (0xC0000409). CTest classified this as SEGFAULT.",
+        "test_totals": {
+          "total": 18,
+          "passed": 18,
+          "failed": 0,
+          "skipped": 0
+        },
+        "sampled_restir_output": {
+          "all_byte_identical": true,
+          "all_finite": true,
+          "file_count": 60,
+          "float_count": 61440,
+          "max_absolute_difference": 0.0,
+          "baseline_directory": "E:\\CoronaEngine\\build\\sharc-removal\\baseline-restir-frames",
+          "compared_directory": "E:\\CoronaEngine\\build\\sharc-removal\\removed-restir-relaxfix-frames"
+        },
+        "evidence": "build/sharc-removal/relax-fix-verification.json",
+        "note": "initial_validation preserves the initial removal run before this independent ReLAX repair."
+      }
+    }
+  ]
+}
