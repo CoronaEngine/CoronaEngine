@@ -135,9 +135,6 @@ DataWrap make_test_scene() {
           "resolution": [32, 32],
           "tone_mapper": {
             "type": "linear"
-          },
-          "upsampler": {
-            "type": "bilateral"
           }
         }
       }
