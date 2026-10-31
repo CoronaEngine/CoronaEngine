@@ -154,6 +154,13 @@ class CoronaRenderProcessHandler : public CefRenderProcessHandler {
                 for (size_t i = 0; i < 7; ++i) {
                     args->SetDouble(static_cast<int>(i), arguments[i]->GetDoubleValue());
                 }
+                // Callers express bounds in DOM pixels multiplied by browser DPR.
+                // OSR paints remain logical; the host's physical scale is known by
+                // native layout, so send the matching source extent for that mapping.
+                const auto global = ctx->GetGlobal();
+                const double scale = global->GetValue("devicePixelRatio")->GetDoubleValue();
+                args->SetDouble(7, global->GetValue("innerWidth")->GetDoubleValue() * scale);
+                args->SetDouble(8, global->GetValue("innerHeight")->GetDoubleValue() * scale);
                 ctx->GetFrame()->SendProcessMessage(PID_BROWSER, msg);
                 retval = CefV8Value::CreateBool(true);
                 return true;

@@ -6,6 +6,7 @@
 #include <corona/kernel/event/i_event_stream.h>
 #include <corona/shared_data_hub.h>
 #include <corona/systems/display/display_system.h>
+#include <corona/systems/display/scene_viewport.h>
 
 #include <algorithm>
 #include <array>
@@ -1103,12 +1104,12 @@ Detail::PresentOutcome DisplaySystem::compose_and_present(
     composite_pipeline.pushConsts.bgHeight = std::max(bg_extent.height, 1u);
     composite_pipeline.pushConsts.fgWidth = std::max(fg_extent.width, 1u);
     composite_pipeline.pushConsts.fgHeight = std::max(fg_extent.height, 1u);
-    composite_pipeline.pushConsts.bgViewportX = state.optics.viewport_x;
-    composite_pipeline.pushConsts.bgViewportY = state.optics.viewport_y;
-    composite_pipeline.pushConsts.bgViewportWidth =
-        state.optics.viewport_width != 0 ? state.optics.viewport_width : output_width;
-    composite_pipeline.pushConsts.bgViewportHeight =
-        state.optics.viewport_height != 0 ? state.optics.viewport_height : output_height;
+    const auto scene_viewport = Detail::scene_viewport_for_composite(
+        state.ui, state.optics, output_width, output_height);
+    composite_pipeline.pushConsts.bgViewportX = scene_viewport.x;
+    composite_pipeline.pushConsts.bgViewportY = scene_viewport.y;
+    composite_pipeline.pushConsts.bgViewportWidth = scene_viewport.width;
+    composite_pipeline.pushConsts.bgViewportHeight = scene_viewport.height;
     composite_pipeline.pushConsts.fgOpaque =
         (state.ui.image_handle != 0 && state.optics.image_handle == 0) ? 1u : 0u;
     // Resource bindings above track all three images and their transitions.
