@@ -1,7 +1,7 @@
 """Source dependency baselines. Change these commits to update a pinned version.
 
-Existing developer clones are never aligned implicitly. Run ``dev.py <key>-sync``
-after changing a baseline to explicitly adopt it in a local workspace.
+Build preparation aligns clean checkouts automatically. Edits at the pinned
+commit remain usable; changing commits requires committing or stashing edits.
 """
 
 from __future__ import annotations

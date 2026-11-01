@@ -1,6 +1,38 @@
+function(corona_watch_source_workspace worktree)
+    find_program(_corona_workspace_git NAMES git NO_CACHE REQUIRED)
+    execute_process(
+        COMMAND "${_corona_workspace_git}" -C "${worktree}" symbolic-ref --quiet HEAD
+        OUTPUT_VARIABLE _ref OUTPUT_STRIP_TRAILING_WHITESPACE
+        RESULT_VARIABLE _ref_result ERROR_QUIET)
+    set(_git_names HEAD packed-refs)
+    if(_ref_result EQUAL 0)
+        list(APPEND _git_names "${_ref}")
+    elseif(NOT _ref_result EQUAL 1)
+        message(FATAL_ERROR "Cannot inspect Git HEAD at ${worktree}")
+    endif()
+
+    # Ask Git for paths so linked worktrees and packed refs work too. A .git
+    # file can itself change when a linked worktree is moved or replaced.
+    set(_paths "${worktree}/.git")
+    foreach(_name IN LISTS _git_names)
+        execute_process(
+            COMMAND "${_corona_workspace_git}" -C "${worktree}"
+                    rev-parse --path-format=absolute --git-path "${_name}"
+            OUTPUT_VARIABLE _path OUTPUT_STRIP_TRAILING_WHITESPACE
+            COMMAND_ERROR_IS_FATAL ANY)
+        list(APPEND _paths "${_path}")
+    endforeach()
+    # GLOB detects creation/removal (including packed -> loose refs); the
+    # directory property detects content changes. No version stamp is needed.
+    file(GLOB _git_inputs CONFIGURE_DEPENDS LIST_DIRECTORIES false ${_paths})
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${_git_inputs})
+endfunction()
+
 function(corona_dev_bootstrap)
     set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
         "${CORONA_BUILD_TOOLS_DIR}/source_workspaces.py"
+        "${CORONA_BUILD_TOOLS_DIR}/git_workspace.py"
+        "${CORONA_BUILD_TOOLS_DIR}/dev.py"
         "${CORONA_BUILD_TOOLS_DIR}/git_tool.py"
         "${CORONA_BUILD_TOOLS_DIR}/ninja_tool.py"
         "${CORONA_BUILD_TOOLS_DIR}/conda_environment.py"
@@ -126,6 +158,11 @@ function(corona_dev_bootstrap)
         message(FATAL_ERROR "CoronaEngine build environment was not generated: ${_corona_build_environment}")
     endif()
     include("${_corona_build_environment}")
+    # Bootstrap (or dev.py before invoking CMake) has already aligned sources.
+    # Register their final Git paths before any source subdirectories are read.
+    foreach(_workspace IN ITEMS Horizon CoronaEditor)
+        corona_watch_source_workspace("${CMAKE_CURRENT_SOURCE_DIR}/${_workspace}")
+    endforeach()
     include(corona_ninja)
     corona_configure_ninja()
     set(CMAKE_TOOLCHAIN_FILE "${_corona_toolchain}" CACHE FILEPATH "Conan toolchain" FORCE)
