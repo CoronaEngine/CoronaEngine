@@ -62,7 +62,6 @@ public:
     [[nodiscard]] string_view impl_type() const noexcept override { return "test_pipeline"; }
     [[nodiscard]] string_view category() const noexcept override { return "pipeline"; }
 
-    void init_postprocessor(const DenoiserDesc &desc) override {}
     void render(double dt) noexcept override {}
 };
 

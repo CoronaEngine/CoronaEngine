@@ -9,7 +9,6 @@ public:
     explicit WorldBoundsProbePipeline(const vision::PipelineDesc& desc) : Pipeline(desc) {}
     vision::string_view impl_type() const noexcept override { return "WorldBoundsProbePipeline"; }
     vision::string_view category() const noexcept override { return "pipeline"; }
-    void init_postprocessor(const vision::DenoiserDesc&) override {}
     void render(double) noexcept override {}
     unsigned compilations{};
     void compile() noexcept override {

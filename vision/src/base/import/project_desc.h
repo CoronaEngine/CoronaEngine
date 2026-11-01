@@ -39,7 +39,6 @@ public:
     LightSamplerDesc light_sampler_desc;
     IntegratorDesc integrator_desc;
     WarperDesc warper_desc;
-    DenoiserDesc denoiser_desc;
     RenderSettingDesc render_setting;
 };
 
