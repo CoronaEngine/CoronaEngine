@@ -1,8 +1,8 @@
 """Shared Git workspace lifecycle for source dependencies.
 
-Builds clone missing sources at the baseline in source_workspaces.py and otherwise
-only report local state. Explicit sync preserves local edits/branches and aligns
-submodules too. Preparation and sync are serialized across build presets.
+Builds clone missing sources or align clean checkouts to source_workspaces.py.
+Edits at the locked commit remain usable; changing commits requires a clean tree.
+Preparation and explicit sync share the same lock and synchronization logic.
 """
 from __future__ import annotations
 
@@ -25,8 +25,8 @@ _RENAME_SEPARATOR = " -> "
 class WorkspaceStatus:
     """Read-only snapshot of a source workspace.
 
-    ``drift``, ``dirty_files``, ``ahead`` and ``behind`` are all reported to the
-    developer and never acted upon: the build proceeds regardless.
+    Inspection never changes the checkout. Preparation uses this snapshot to
+    decide whether a clean checkout needs synchronization.
     """
 
     lock: SourceWorkspace
@@ -68,12 +68,12 @@ class WorkspaceStatus:
 
     @property
     def in_sync(self) -> bool:
-        """Whether HEAD equals the locked commit. Reported, never enforced."""
+        """Whether HEAD equals the locked commit (independent of local edits)."""
         return self.cloned and self.head == self.lock.commit
 
     @property
     def needs_attention(self) -> bool:
-        """Local state worth warning about; the build still proceeds."""
+        """Local state worth reporting."""
         return self.cloned and (self.dirty or not self.in_sync or not self.url_matches)
 
     def summary(self) -> str:
@@ -111,7 +111,8 @@ class WorkspaceStatus:
         if not self.in_sync:
             notes.append(
                 f"{self.lock.name} HEAD {self.head} is not the locked commit {self.lock.commit} "
-                f"({self.drift}); the build continues regardless. To follow the lock: {self.lock.lock_hint}."
+                f"({self.drift}); configure/build will synchronize it if the tree is clean. "
+                f"To synchronize explicitly: {self.lock.sync_command}."
             )
         if not self.url_matches:
             notes.append(
@@ -343,15 +344,25 @@ def _ensure_workspace(repo_root: Path, workspace: SourceWorkspace) -> WorkspaceS
         _clone_locked(repo_root, worktree, workspace)
         print(f"[INFO] {workspace.name} workspace created at {worktree} (locked commit {workspace.commit})")
         status = inspect_workspace(repo_root, workspace)
-    _report(status)
     return status
 
 
 def ensure_workspace(repo_root: Path, workspace: SourceWorkspace) -> WorkspaceStatus:
-    """Create a missing clone, or report and use existing developer sources as-is."""
+    """Clone or align to the baseline, preserving edits when HEAD already matches."""
     repo_root = Path(repo_root).resolve()
     with _workspace_lock(repo_root, workspace):
-        return _ensure_workspace(repo_root, workspace)
+        status = _ensure_workspace(repo_root, workspace)
+        if not status.in_sync:
+            if status.dirty:
+                raise RuntimeError(
+                    f"{workspace.name} HEAD {status.head} differs from the locked commit "
+                    f"{workspace.commit}, but has uncommitted changes ({status._tree_summary()}). "
+                    f"Commit or stash them inside {workspace.directory.as_posix()} before building; "
+                    "local changes were left untouched."
+                )
+            status = _sync_workspace_locked(repo_root, workspace, status)
+        _report(status)
+        return status
 
 
 def _settle_on_branch(status: WorkspaceStatus) -> None:
@@ -411,41 +422,45 @@ def sync_workspace(repo_root: Path, workspace: SourceWorkspace) -> WorkspaceStat
     repo_root = Path(repo_root).resolve()
     with _workspace_lock(repo_root, workspace):
         status = _ensure_workspace(repo_root, workspace)
-        if not status.in_sync:
-            if not _commit_present(status.worktree, workspace.commit):
-                print(f"[INFO] Fetching '{workspace.ref}' from origin to obtain {workspace.commit}")
-                # Existing Editor clones may still be shallow; an explicit sync
-                # can expand them to retrieve an older pinned commit.
-                args = ["fetch", "--tags", "origin", workspace.ref]
-                if _git_or_default(status.worktree, "rev-parse", "--is-shallow-repository") == "true":
-                    args.insert(1, "--unshallow")
-                _git(status.worktree, *args)
-                if not _commit_present(status.worktree, workspace.commit):
-                    raise RuntimeError(f"Locked {workspace.name} commit {workspace.commit} is not reachable "
-                                       f"from '{workspace.ref}' at {workspace.url}; check build_tools/source_workspaces.py.")
-            checkout = run_command(
-                ("git", "-C", status.worktree, "-c", "submodule.recurse=false",
-                 "checkout", "--detach", workspace.commit),
-                cwd=repo_root, capture_output=True, quiet=True, check=False,
-            )
-            if checkout.returncode != 0:
-                detail = (checkout.stderr or checkout.stdout).strip()
-                raise RuntimeError(
-                    f"{workspace.name} could not move to the locked commit {workspace.commit}; "
-                    f"Git refused the checkout, so local changes were left untouched. {detail} "
-                    f"Commit or stash them inside {workspace.directory.as_posix()} and run "
-                    f"'{workspace.sync_command}' again, or keep building your current sources."
-                )
-            print(f"[INFO] {workspace.name} moved: {status.head} -> {workspace.commit}")
-            _settle_on_branch(inspect_workspace(repo_root, workspace))
-        else:
-            print(f"[INFO] {workspace.name} is already at the locked commit {workspace.commit} ({workspace.ref})")
-        _update_submodules(status.worktree)
-        print("[INFO] Sources synchronized; run 'python build_tools/dev.py configure' or 'build' "
-              "before compiling (build-fast does not refresh dependencies).")
-        result = inspect_workspace(repo_root, workspace)
+        result = _sync_workspace_locked(repo_root, workspace, status)
+        print("[INFO] Sources synchronized; the next CMake build reconfigures when Git inputs change.")
         _report(result)
         return result
+
+
+def _sync_workspace_locked(
+    repo_root: Path, workspace: SourceWorkspace, status: WorkspaceStatus,
+) -> WorkspaceStatus:
+    """Synchronize while the caller holds the workspace lock (never acquire it twice)."""
+    if not status.in_sync:
+        if not _commit_present(status.worktree, workspace.commit):
+            print(f"[INFO] Fetching '{workspace.ref}' from origin to obtain {workspace.commit}")
+            args = ["fetch", "--tags", "origin", workspace.ref]
+            if _git_or_default(status.worktree, "rev-parse", "--is-shallow-repository") == "true":
+                args.insert(1, "--unshallow")
+            _git(status.worktree, *args)
+            if not _commit_present(status.worktree, workspace.commit):
+                raise RuntimeError(f"Locked {workspace.name} commit {workspace.commit} is not reachable "
+                                   f"from '{workspace.ref}' at {workspace.url}; check build_tools/source_workspaces.py.")
+        checkout = run_command(
+            ("git", "-C", status.worktree, "-c", "submodule.recurse=false",
+             "checkout", "--detach", workspace.commit),
+            cwd=repo_root, capture_output=True, quiet=True, check=False,
+        )
+        if checkout.returncode != 0:
+            detail = (checkout.stderr or checkout.stdout).strip()
+            raise RuntimeError(
+                f"{workspace.name} could not move to the locked commit {workspace.commit}; "
+                f"Git refused the checkout, so local changes were left untouched. {detail} "
+                f"Commit or stash them inside {workspace.directory.as_posix()} and run "
+                f"'{workspace.sync_command}' again."
+            )
+        print(f"[INFO] {workspace.name} moved: {status.head} -> {workspace.commit}")
+        _settle_on_branch(inspect_workspace(repo_root, workspace))
+    else:
+        print(f"[INFO] {workspace.name} is already at the locked commit {workspace.commit} ({workspace.ref})")
+    _update_submodules(status.worktree)
+    return inspect_workspace(repo_root, workspace)
 
 
 def _report(status: WorkspaceStatus) -> None:
@@ -453,4 +468,4 @@ def _report(status: WorkspaceStatus) -> None:
     for note in status.advice():
         print(f"[WARN] {note}")
     if status.needs_attention:
-        print(f"[WARN] {status.lock.name} differs from the baseline or has local changes; the build continues either way.")
+        print(f"[WARN] {status.lock.name} has local changes or differs from its baseline; see the details above.")

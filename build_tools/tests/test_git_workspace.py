@@ -232,45 +232,70 @@ class WorkspaceContract:
             ensure_workspace(self.repo_root, self.workspace)
         self.assertIn("not a Git checkout", str(context.exception))
 
-    # -- drift is reported, never fatal ---------------------------------------
+    # -- preparation aligns clean sources automatically -----------------------
 
-    def test_local_commit_ahead_of_the_lock_still_builds(self) -> None:
+    def test_clean_checkout_ahead_of_the_lock_is_downgraded(self) -> None:
         self.clone()
         git(self.worktree, "checkout", "--detach", self.newer)
         status, output = self.silently(ensure_workspace, self.repo_root, self.workspace)
         self.assertTrue(status.cloned)
-        self.assertFalse(status.in_sync)
+        self.assertTrue(status.in_sync)
         self.assertFalse(status.dirty)
-        self.assertIn("ahead", status.drift)
-        self.assertIn("[WARN]", output)
-        self.assertEqual(self.head(), self.newer)
+        self.assertIn("moved:", output)
+        self.assertEqual(self.head(), self.locked)
 
-    def test_behind_the_lock_still_builds(self) -> None:
+    def test_build_fetches_and_adopts_an_updated_baseline(self) -> None:
         self.clone()
         git(self.worktree, "checkout", "--detach", self.locked)
         third = self.advance_origin("three\n")
-        # A plain fetch is what a developer would run; it brings the commit into
-        # the object database without touching the checkout.
-        git(self.worktree, "fetch", "origin", "main")
         self.set_baseline(third)
+        self.assertNotEqual(git_probe(self.worktree, "cat-file", "-e", third).returncode, 0)
         status, output = self.silently(ensure_workspace, self.repo_root, self.workspace)
         self.assertTrue(status.cloned)
-        self.assertFalse(status.in_sync)
-        self.assertIn("behind", status.drift)
-        self.assertIn("the build continues", output)
-        self.assertEqual(self.head(), self.locked)
+        self.assertTrue(status.in_sync)
+        self.assertIn("Fetching", output)
+        self.assertEqual(self.head(), third)
 
-    def test_diverged_from_the_lock_still_builds(self) -> None:
+    def test_build_aligns_diverged_checkout_and_preserves_local_branch(self) -> None:
         self.clone()
         (self.worktree / "file.txt").write_text("local branch of history\n", encoding="utf-8")
         git(self.worktree, "commit", "-am", "local branch of history")
+        local = self.head()
         # A commit the clone already knows, so this is genuine divergence rather
         # than "the locked commit has not been fetched yet".
         self.set_baseline(self.newer)
         status, output = self.silently(ensure_workspace, self.repo_root, self.workspace)
-        self.assertFalse(status.in_sync)
-        self.assertIn("diverged", status.drift)
+        self.assertTrue(status.in_sync)
+        self.assertTrue(status.detached)
+        self.assertEqual(git(self.worktree, "rev-parse", "refs/heads/main"), local)
         self.assertIn("[WARN]", output)
+
+    def test_matching_checkout_neither_fetches_nor_changes_refs(self) -> None:
+        self.clone()
+        before = self.snapshot()
+        with mock.patch.object(git_workspace, "run_command", wraps=git_workspace.run_command) as commands:
+            self.silently(ensure_workspace, self.repo_root, self.workspace)
+        for call in commands.call_args_list:
+            self.assertFalse({"fetch", "clone", "checkout", "pull", "submodule"}.intersection(call.args[0]))
+        self.assert_workspace_unchanged(before)
+
+    def test_build_rejects_unavailable_target_without_switching(self) -> None:
+        self.clone()
+        before = self.snapshot()
+        self.set_baseline("b" * 40)
+        with self.assertRaisesRegex(RuntimeError, "not reachable"):
+            self.silently(ensure_workspace, self.repo_root, self.workspace)
+        self.assert_workspace_unchanged(before)
+
+    def test_build_rejects_even_nonconflicting_untracked_changes_before_switching(self) -> None:
+        self.clone()
+        (self.worktree / "notes.txt").write_text("keep this scratch file", encoding="utf-8")
+        before = self.snapshot()
+        self.set_baseline(self.newer)
+        with self.assertRaisesRegex(RuntimeError, "uncommitted changes"):
+            self.silently(ensure_workspace, self.repo_root, self.workspace)
+        self.assert_workspace_unchanged(before)
+        self.assertEqual((self.worktree / "notes.txt").read_text(), "keep this scratch file")
 
     def test_unexpected_origin_is_reported_without_raising(self) -> None:
         self.clone()
@@ -307,7 +332,7 @@ class WorkspaceContract:
         self.assertIn("renamed.txt", status.summary())
         self.assertNotIn("file.txt", status.summary())
 
-    def test_dirty_workspace_ahead_of_the_lock_still_builds_untouched(self) -> None:
+    def test_dirty_workspace_at_another_commit_blocks_build_untouched(self) -> None:
         """The headline case: Horizon edited here, lock already advanced elsewhere."""
         self.clone()
         (self.worktree / "file.txt").write_text("horizon edit\n", encoding="utf-8")
@@ -315,10 +340,8 @@ class WorkspaceContract:
         (self.worktree / "file.txt").write_text("horizon edit plus wip\n", encoding="utf-8")
         self.set_baseline(self.advance_origin("upstream moved on\n"))
         before = self.snapshot()
-        status, output = self.silently(ensure_workspace, self.repo_root, self.workspace)
-        self.assertTrue(status.dirty)
-        self.assertFalse(status.in_sync)
-        self.assertIn("used as-is", output)
+        with self.assertRaisesRegex(RuntimeError, "uncommitted changes"):
+            self.silently(ensure_workspace, self.repo_root, self.workspace)
         self.assert_workspace_unchanged(before)
 
     def test_detached_head_is_reported_with_advice(self) -> None:
@@ -343,9 +366,9 @@ class WorkspaceContract:
         self.clone()
         (self.worktree / "file.txt").write_text("unpushed\n", encoding="utf-8")
         git(self.worktree, "commit", "-am", "unpushed")
-        status, output = self.silently(ensure_workspace, self.repo_root, self.workspace)
+        status = inspect_workspace(self.repo_root, self.workspace)
         self.assertEqual(status.ahead, 1)
-        self.assertIn("1 ahead", output)
+        self.assertIn("1 ahead", status.summary())
 
     # -- explicit sync adopts the code baseline -------------------------------
 
@@ -454,13 +477,11 @@ class WorkspaceContract:
         self.assertEqual(git(self.worktree, "rev-parse", "--verify", "--quiet", local), local)
 
 
-    def test_existing_shallow_clone_can_sync_to_an_older_baseline(self) -> None:
+    def test_build_expands_existing_shallow_clone_to_an_older_baseline(self) -> None:
         git(self.repo_root, "clone", "--depth", "1", self.origin.as_uri(), str(self.worktree))
         self.assertEqual(git(self.worktree, "rev-parse", "--is-shallow-repository"), "true")
-        before = self.snapshot()
         self.silently(ensure_workspace, self.repo_root, self.workspace)
-        self.assert_workspace_unchanged(before)
-        self.silently(sync_workspace, self.repo_root, self.workspace)
+        self.assertEqual(git(self.worktree, "rev-parse", "--is-shallow-repository"), "false")
         self.assertEqual(self.head(), self.locked)
         self.assertEqual(git(self.worktree, "rev-parse", "refs/heads/main"), self.newer)
 

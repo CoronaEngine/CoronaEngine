@@ -41,13 +41,18 @@ Horizon 和 CoronaEditor 统一由 `build_tools/git_workspace.py` 管理，分�
 仓库地址、分支及完整 commit 固定在 `build_tools/source_workspaces.py` 中，不再读取 JSON lock 文件。
 首次准备直接非浅克隆到根目录的 `Horizon/` 或 `CoronaEditor/`，检出指定 commit、建立跟踪分支，
 并递归初始化该提交记录的子模块，不经过临时克隆目录。失败时清理本次新建的目录，以便重试。
-已有副本只报告状态并直接使用：普通构建不会拉取、切换版本或更新子模块，本地修改和提交可以直接参与构建。
-已有浅克隆也会复用，显式同步需要旧提交时才补全历史。
+已有副本实时查询 Git HEAD：与指定 commit 一致时直接复用，不获取远端；不一致时自动同步并更新子模块。
+需要切换版本但存在未提交修改（包括未跟踪文件）时，停止构建并提示先提交或暂存；HEAD 已一致时仍允许本地修改参与构建。
+同步保留含有额外提交的分支，必要时检出为 detached HEAD；已有浅克隆在需要目标提交时才补全历史。
 
-修改代码中的 commit 后，使用 `python build_tools/dev.py horizon-sync` 或
-`python build_tools/dev.py editor-sync` 显式对齐对应工作区及子模块，然后重新 configure/build。
-同步不会强制覆盖未提交修改，也不会重置含有额外本地提交的分支；子模块同步失败会报错，可修复后重试。
-`python build_tools/dev.py status` 显示两者的版本和本地状态；`update` 只更新 Conan 依赖，不拉取源码仓库。
+每次 Ninja 构建检查 `source_workspaces.py` 和 Git 的 HEAD、当前分支引用及 packed-refs 是否变化，
+并检测这些元数据文件的出现和删除。变化时自动重新配置，在读取依赖项目的 CMake 规则前同步源码，
+再刷新依赖和继续本次构建；默认构建及指定 target 均适用。未变化时不重复运行 Python 检查或重新配置。
+不生成额外的版本标记文件；Git 路径由 Git 自身解析，兼容普通克隆及 linked worktree。
+
+仍可使用 `python build_tools/dev.py horizon-sync` 或 `editor-sync` 显式同步，包括 HEAD 已一致时修复子模块。
+同步不会强制覆盖修改；获取提交或更新子模块失败会终止当前构建，可处理后显式同步重试。
+`python build_tools/dev.py status` 只显示源码版本和本地状态；`update` 准备指定源码版本并额外更新 Conan 依赖。
 
 Python 依赖检查使用 `CoronaEditor/editor/requirements.txt`；构建时将资源部署为
 可执行目录下的 `assets/` 和 `CabbageEditor/`，并自动构建前端。关闭编辑器构建仍准备该仓库，

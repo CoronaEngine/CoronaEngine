@@ -172,9 +172,10 @@ def create_parser() -> argparse.ArgumentParser:
         description="CoronaEngine developer workflow",
         epilog=(
             "Horizon/ and CoronaEditor/ are ordinary Git clones at the engine repository root. "
-            "Builds use existing sources as-is, including local edits. Baselines are defined "
-            "in build_tools/source_workspaces.py; use horizon-sync or editor-sync to adopt them "
-            "explicitly (including submodules). update refreshes Conan dependencies only."
+            "Builds align clean sources to build_tools/source_workspaces.py. Local edits at "
+            "the pinned commit remain usable; commit or stash edits before changing versions. "
+            "horizon-sync and editor-sync also synchronize submodules explicitly. "
+            "update additionally refreshes Conan dependencies."
         ),
     )
     parser.add_argument(
