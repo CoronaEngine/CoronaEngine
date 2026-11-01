@@ -5998,13 +5998,8 @@ bool OpticsSystem::init_vision_lazy() {
 
         pipeline->prepare();
 
-        // Pipeline::prepare() allocates the internal per-pixel device buffers but
-        // does NOT create FrameBuffer::view_texture_ (only prepare_view_texture()
-        // does). The render path tone-maps into view_texture_ and we later read it
-        // via fill_window_buffer(view_texture()). Without this the first frame uses
-        // an uninitialized texture. The official vision-gui/vision-eval apps also
-        // call prepare_view_texture() right after prepare().
-        pipeline->frame_buffer()->prepare_view_texture();
+        // Camera contexts prepare their own pixel buffers and display texture.
+        // The embedded base view only supplies scene data until actually used.
 
         // sync_vision_camera uploads to GPU device buffers. Those device buffers are
         // only allocated during Pipeline::prepare() (Scene::prepare -> Sensor::prepare
@@ -6404,7 +6399,6 @@ bool OpticsSystem::load_engine_built_vision_scene(CameraVisionRenderMode request
         const auto env = engine_vision_environment();
         Vision::setup_vision_lights(scene, env);
         pipeline->prepare();
-        pipeline->frame_buffer()->prepare_view_texture();
         pipeline->set_output_denoise(
             Vision::vision_render_mode_uses_denoise(requested_mode));
 
