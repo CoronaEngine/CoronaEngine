@@ -2,7 +2,7 @@
 
 审计日期：2026-10-31。代码基线：`781907e59b6f6449082e5801c7e3a2d4f45b22b6`。
 
-后续状态：F02 双边上采样、F03 SHARC、F04 BVH 灯光采样器、F13 Customized/RenderGraph 已从源码和构建依赖中移除；其余清单及数量保留上述审计基线口径。当前插件目标为 42 个、16 类。SHARC 的构建和回归结果见 [SHARC 移除记录](E:/CoronaEngine/vision/SHARC_ANALYSIS.md)。
+后续状态：F02 双边上采样、F03 SHARC、F04 BVH 灯光采样器、F13 Customized/RenderGraph、F19 旧 JSON/BSON 文件读取器已移除；其余清单及数量保留上述审计基线口径。当前插件目标为 42 个、16 类。SHARC 的构建和回归结果见 [SHARC 移除记录](E:/CoronaEngine/vision/SHARC_ANALYSIS.md)。
 
 Vision 的闲置部分主要来自独立渲染器向 Corona 集成时遗留的入口、未完成的实验功能，以及仍会构造但不再参与输出的对象。最值得优先处理的是 **SSAT 模式未接入引擎场景创建、空实现插件、无消费者的 Postprocessor 着色器、保存链路断开**。这些问题不能通过删除所有“非默认插件”解决。
 
@@ -219,13 +219,15 @@ fixed 的 `init_postprocessor()` 调用 `set_tone_mapper()`，后者立即 `comp
 
 证据：[通用 gather](E:/CoronaEngine/vision/src/render_core/denoiser/SSAT/sparse_gather.h:166)、[闲置入口](E:/CoronaEngine/vision/src/render_core/denoiser/SSAT/sparse_gather.h:254)、[仍使用的转换](E:/CoronaEngine/vision/src/render_core/denoiser/SSAT/spatial_angular_filter.h:141)。
 
-### F19 旧 JSON 和 BSON 文件读取器
+### F19 旧 JSON 和 BSON 文件读取器 已移除
 
-**判定：无仓库调用。**
+**状态：2026-11-01 已删除两个旧接口及遗留 include。**
 
-`create_json_from_file()` 没有调用者，`remove_cxx_comment()` 仅被它使用。生产场景现在由 Corona 导入，测试通过内存描述符构造；这不影响仍被大量使用的 `ParameterSet`、`DataWrap`、`NodeDesc` 和材质图解析。
+删除 `base/import/json_util.h`（113 行），移除 `create_json_from_file()` 和 `detail::remove_cxx_comment()`，同步清理 `optics_system.cpp` 中唯一的遗留 include。移除前，前者没有仓库调用者，后者仅由前者使用。它们曾服务于独立 Vision 场景文件和烘焙 UV 缓存读取，两个消费入口已分别随外部场景导入和光照烘焙功能移除。
 
-证据：[旧文件读取器](E:/CoronaEngine/vision/src/base/import/json_util.h:98)、[测试入口说明](E:/CoronaEngine/tests/support/vision_test_scene.h:3)。
+当前场景由 Corona 构造，测试使用内存描述符；[ParameterSet 和 DataWrap](E:/CoronaEngine/vision/src/base/import/parameter_set.h)、`NodeDesc`、材质图与运行时 JSON 设置解析继续保留。没有插件目标或类布局变更。测试入口说明见 [vision_test_scene.h](E:/CoronaEngine/tests/support/vision_test_scene.h:3)。
+
+验证：源码引用扫描无残留；optics 的源码差异仅为删除该 include；补齐生成 shader 头文件后，使用现有 RelWithDebInfo 编译参数对 `optics_system.cpp` 执行 MSVC `/Zs` 语法编译检查，通过。本次未运行完整引擎构建或 GPU 回归。见 [验证汇总](E:/CoronaEngine/build/json-reader-removal/verification.json)。
 
 ### F20 解析或写入后不生效的配置
 
@@ -387,7 +389,7 @@ fixed 的 `init_postprocessor()` 调用 `set_tone_mapper()`，后者立即 `comp
 | 旧窗口辅助 | `get_window_handle`、`background_visible`、`WindowLoop` | [window.h](E:/CoronaEngine/vision/src/window/GUI/window.h:64) |
 | 旧 GL shader 辅助 | `create_gl_program` | [gl_helper.h](E:/CoronaEngine/vision/src/window/GUI_impl/imGui/gl_helper.h:59) |
 
-`create_gl_shader()` 仅由无调用的 `create_gl_program()` 使用；`remove_cxx_comment()` 仅由 F19 的文件读取器使用。`RaySample` 没有消费者，但 `RayState`、`ScatterSample`、`BSDFSample` 正在使用。ShaderGraph 三个兼容包装无调用，不代表 `ensure_graph_ready()`、`set_graph_blueprint()` 或整个材质图可移除。
+`create_gl_shader()` 仅由无调用的 `create_gl_program()` 使用；`remove_cxx_comment()` 已随 F19 的文件读取器移除。`RaySample` 没有消费者，但 `RayState`、`ScatterSample`、`BSDFSample` 正在使用。ShaderGraph 三个兼容包装无调用，不代表 `ensure_graph_ready()`、`set_graph_blueprint()` 或整个材质图可移除。
 
 `ReLAX::motion_to_uv()` 和 `sample_bicubic()` 在集成测试中使用，未列入无调用名单；同样保留测试覆盖价值。
 
@@ -422,4 +424,4 @@ SHARC 的 `constant.h` 已随 F03 移除；枚举和通用旗标没有直接消�
 4. **拆分实验和独立 viewer**：真实镜头、旧窗口与面板（SHARC、BVH、customized/render graph 已移除），不牵连当前主渲染链。
 5. **保留测试与可选能力**：Hero spectrum、PowerLightSampler、非默认滤波器、Native NRD，以及预计算表。先决定产品支持范围，再裁剪构建。
 
-初次审计仅添加文档和机器清单；后续已执行 F02、F03、F04、F13 移除，状态与验证记录见机器清单的 `resolutions`。
+初次审计仅添加文档和机器清单；后续已执行 F02、F03、F04、F13、F19 移除，状态与验证记录见机器清单的 `resolutions`。

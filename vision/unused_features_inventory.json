@@ -2236,6 +2236,34 @@
         "full_gpu_regression_completed": false
       },
       "evidence": "build/rendergraph-removal/verification.json"
+    },
+    {
+      "feature_id": "F19",
+      "status": "removed",
+      "date": "2026-11-01",
+      "report": "vision/UNUSED_FEATURES.md",
+      "baseline_revision": "ba4c86ab53fcbe8f07adcc72c1bd4d04fdbf4509",
+      "removed_standalone_files": 1,
+      "removed_standalone_lines": 113,
+      "removed_interfaces": [
+        "vision::create_json_from_file",
+        "vision::detail::remove_cxx_comment"
+      ],
+      "remaining_plugin_targets": 42,
+      "remaining_plugin_categories": 16,
+      "note": "Deleted json_util.h and its sole remaining include in optics_system.cpp. DataWrap, ParameterSet, NodeDesc, material graphs and runtime JSON setting parsing remain. No plugin target or class layout changes.",
+      "validation_scope": "F19 removal only; targeted syntax compilation and source-reference checks, without full engine build or GPU regression.",
+      "validation": {
+        "remaining_code_references": 0,
+        "optics_change_is_only_include_removal": true,
+        "active_json_parameter_api_sources_unchanged": true,
+        "shader_header_generation": "passed",
+        "optics_translation_unit_syntax_check": "passed",
+        "compiler_mode": "MSVC /Zs with the configured RelWithDebInfo compile command",
+        "full_build_run": false,
+        "gpu_regression_run": false
+      },
+      "evidence": "build/json-reader-removal/verification.json"
     }
   ]
 }
