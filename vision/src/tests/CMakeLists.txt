@@ -13,7 +13,6 @@ endfunction()
 vision_add_test(test-playground SOURCES test_playground.cpp)
 vision_add_test(test-warper2d SOURCES test_warper2d.cpp)
 
-vision_add_test(test-render_graph SOURCES test_render_graph.cpp)
 vision_add_test(test-thin-lens SOURCES test_thin_lens.cpp)
 target_link_libraries(test-thin-lens corona::resource::manager)
 

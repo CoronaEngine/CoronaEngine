@@ -291,12 +291,6 @@ template<typename T>
     return AttrDesc::slot(key, default_value, tag);
 }
 
-struct PassDesc : public NodeDesc {
-public:
-    VISION_DESC_COMMON(Pass)
-    void init(const ParameterSet &ps) noexcept override;
-};
-
 struct ToneMapperDesc : public NodeDesc {
 public:
     VISION_DESC_COMMON(ToneMapper)

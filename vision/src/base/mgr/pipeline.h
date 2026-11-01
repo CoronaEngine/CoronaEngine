@@ -145,7 +145,6 @@ public:
     virtual void update_geometry() noexcept;
     void refresh_world_bounds_dependents(bool geometry_changed = false) noexcept;
     void upload_scene_bindless_array() noexcept;
-    virtual void prepare_render_graph() noexcept {}
     virtual void compile() noexcept {
         switch_profile::Scope profile{"display.compile", "compile"};
         activate_global_context();

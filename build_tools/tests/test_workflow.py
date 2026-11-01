@@ -47,7 +47,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(target_family_for_target("corona_engine"), "examples")
         self.assertEqual(target_family_for_target("corona_resource_tests"), "tests")
         self.assertEqual(target_family_for_target("vision-base"), "vision")
-        self.assertEqual(target_family_for_target("test-render_graph"), "vision-tests")
+        self.assertEqual(target_family_for_target("test-shader-graph-lifecycle"), "vision-tests")
         self.assertEqual(target_family_for_target("vision-denoiser-SVGF"), "vision")
         self.assertEqual(target_family_for_targets(["corona_engine"]), "examples")
         with self.assertRaises(ValueError):

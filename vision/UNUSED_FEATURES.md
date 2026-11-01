@@ -2,7 +2,7 @@
 
 审计日期：2026-10-31。代码基线：`781907e59b6f6449082e5801c7e3a2d4f45b22b6`。
 
-后续状态：F02 双边上采样、F03 SHARC、F04 BVH 灯光采样器已从源码和构建依赖中移除；其余清单及数量保留上述审计基线口径。当前插件目标为 47 个、17 类。SHARC 的构建和回归结果见 [SHARC 移除记录](E:/CoronaEngine/vision/SHARC_ANALYSIS.md)。
+后续状态：F02 双边上采样、F03 SHARC、F04 BVH 灯光采样器、F13 Customized/RenderGraph 已从源码和构建依赖中移除；其余清单及数量保留上述审计基线口径。当前插件目标为 42 个、16 类。SHARC 的构建和回归结果见 [SHARC 移除记录](E:/CoronaEngine/vision/SHARC_ANALYSIS.md)。
 
 Vision 的闲置部分主要来自独立渲染器向 Corona 集成时遗留的入口、未完成的实验功能，以及仍会构造但不再参与输出的对象。最值得优先处理的是 **SSAT 模式未接入引擎场景创建、空实现插件、无消费者的 Postprocessor 着色器、保存链路断开**。这些问题不能通过删除所有“非默认插件”解决。
 
@@ -71,7 +71,7 @@ F02/F04 初次移除验证：`examples-relwithdebinfo` 引擎及三个相关测�
 
 后续回归已复现并修复 WorldBounds 失败：`Pipeline::rebuild_geometry_gpu()` 原先没有同步变更后的实例与灯光表，清空几何后仍有孤立面积光参与功率采样。现在重建入口先激活上下文、等待旧提交完成，再调用 `Scene::fill_instances()` 重绑定存活发光实例并清除孤立面积光，最后上传和重建几何。原有概率断言保留，新增单视图和双视图清空后的灯光数量与 GPU 边界检查；方向光和环境光继续保留。
 
-当前配置下的 28 项 Vision/LightField 测试最新结果全部通过，包括完整 ReSTIR 估计器、ReBLUR、ReLAX、引擎场景、共享显示和资源生命周期。整轮为 27 项通过、1 项因性能分析 Python 启动器依赖的 EXE 漏构建而启动失败；补建 `corona_switch_profile_scope_tests` 后该项重跑通过，没有修改其逻辑或断言。引擎已重建部署，`vision-base.dll` 和 47 个插件的构建/部署哈希一致。验证环境为 RTX 2080/Vulkan/RelWithDebInfo，Native NRD 未启用。详见 [后续验证汇总](E:/CoronaEngine/build/plugin-removal/regression-verification.json)、[整轮结果](E:/CoronaEngine/build/plugin-removal/regression-tests.xml)与 [补充重跑](E:/CoronaEngine/build/plugin-removal/profile-scope-tests.xml)。
+F02/F04 后续回归中的 28 项 Vision/LightField 测试全部通过，包括完整 ReSTIR 估计器、ReBLUR、ReLAX、引擎场景、共享显示和资源生命周期。整轮为 27 项通过、1 项因性能分析 Python 启动器依赖的 EXE 漏构建而启动失败；补建 `corona_switch_profile_scope_tests` 后该项重跑通过，没有修改其逻辑或断言。引擎已重建部署，`vision-base.dll` 和 47 个插件的构建/部署哈希一致。验证环境为 RTX 2080/Vulkan/RelWithDebInfo，Native NRD 未启用。详见 [后续验证汇总](E:/CoronaEngine/build/plugin-removal/regression-verification.json)、[整轮结果](E:/CoronaEngine/build/plugin-removal/regression-tests.xml)与 [补充重跑](E:/CoronaEngine/build/plugin-removal/profile-scope-tests.xml)。
 
 ### F05 真实镜头相机
 
@@ -107,7 +107,7 @@ F02/F04 初次移除验证：`examples-relwithdebinfo` 引擎及三个相关测�
 
 **判定：着色器会编译，但没有执行消费者。**
 
-fixed/customized 的 `init_postprocessor()` 调用 `set_tone_mapper()`，后者立即 `compile_tone_mapping()`；全仓库没有 `Postprocessor::tone_mapping()` 的调用。实际 framebuffer 渲染使用自己的 `tone_mapping_`，Corona 显示又通过零拷贝桥取得线性源并执行 `vision_resolve`。
+fixed 的 `init_postprocessor()` 调用 `set_tone_mapper()`，后者立即 `compile_tone_mapping()`；全仓库没有 `Postprocessor::tone_mapping()` 的调用。实际 framebuffer 渲染使用自己的 `tone_mapping_`，Corona 显示又通过零拷贝桥取得线性源并执行 `vision_resolve`。此前 customized 中的同类入口已随 F13 移除。
 
 证据：[初始化](E:/CoronaEngine/vision/src/pipelines/fixed/pipeline.cpp:38)、[触发编译](E:/CoronaEngine/vision/src/base/mgr/postprocessor.h:24)、[未调用的 dispatch 包装](E:/CoronaEngine/vision/src/base/mgr/postprocessor.cpp:26)、[显示源](E:/CoronaEngine/src/systems/optics/vision/vision_zero_copy_bridge.cpp:130)。
 
@@ -153,15 +153,21 @@ fixed/customized 的 `init_postprocessor()` 调用 `set_tone_mapper()`，后者�
 
 建议：将生成器恢复为单独工具目标，或明确只保留已生成表；不要把表生成函数和表运行时消费者一起删除。
 
-### F13 Customized 管线和 RenderGraph
+### F13 Customized 管线和 RenderGraph 已移除
 
-**判定：可动态创建，但当前生产和测试没有执行这条管线。**
+**状态：2026-11-01 已删除定制管线、RenderGraph、四个 pass 和空图测试。**
 
-引擎固定使用 `fixed`，没有描述符选择 `customized`。`integrate/accumulate/tonemapping/gamma` 四个 pass 只由 customized 创建。它的最终 `render_graph_.output_buffer()` 写回 framebuffer 代码已被注释。`test_render_graph.cpp` 的 `main()` 只构造一个空图，不构建、不编译、不执行图。
+移除前，引擎固定使用 `fixed`，没有描述符选择 `customized`。`integrate/accumulate/tonemapping/gamma` 四个 pass 只由 customized 创建，最终图输出写回 framebuffer 已被注释。`test_render_graph.cpp` 只构造空图，没有构建、编译、执行或断言。
 
-证据：[定制管线](E:/CoronaEngine/vision/src/pipelines/customized/pipeline.cpp:27)、[输出断点](E:/CoronaEngine/vision/src/pipelines/customized/pipeline.cpp:48)、[空测试](E:/CoronaEngine/vision/src/tests/test_render_graph.cpp:81)。
+本次删除 15 个独立文件、758 行（含构建文件和注释），同步移除 `PassDesc`、`Pipeline::prepare_render_graph()`、父级构建和链接依赖，更新构建工作流测试，并将退役目标加入 [根构建检查](E:/CoronaEngine/tests/integration/test_vision_required.cmake)。插件目标由 47 个降为 42 个，类别由 17 类降为 16 类；不再生成五个插件 DLL 和 `vision-render_graph` 共享库。
 
-建议：作为完整实验子系统单独管理。RenderGraph 没有生产消费者，不等于图算法已通过测试；也不能只删 pass DLL 而留下 customized 工厂入口。
+现有 [fixed 管线](E:/CoronaEngine/vision/src/pipelines/fixed/pipeline.cpp)直接调用积分器，累积、色调映射和 gamma 继续由 [FrameBuffer](E:/CoronaEngine/vision/src/base/sensor/frame_buffer.cpp)及显示链处理。材质 ShaderGraph、`GraphDesc`、PT/ReSTIR、降噪器内部 pass 均保留。
+
+删除虚函数改变了 `Pipeline` 的虚表布局，相关 DLL 必须同步重建；仓库外的 `type: customized` 配置不再受支持。部署脚本自动收集剩余插件，但不会删除历史 DLL，旧产物需要单独清理。收益为减少源码、构建和部署维护，不计入未测量的帧率或显存收益。
+
+本次完整引擎重建受当前 Horizon 接口不匹配阻断：未改动的 `ReSTIR/stable_planes.cpp:176` 调用 `ocarina::Function::require_ray_query_compute_workgroups()`，当前 Horizon `ccf5a3fb` 没有该方法，MSVC 报 C2039。仅包含 Horizon `ast/function.h` 的独立探针也复现同一错误，见 [探针记录](E:/CoronaEngine/build/rendergraph-removal/horizon-api-probe.json) 和 [构建日志](E:/CoronaEngine/build/rendergraph-removal/build.log)。完整引擎部署和 PT/ReSTIR 场景回归需在补齐该依赖兼容性后完成。
+
+已完成验证：10 项构建工作流测试通过；CMake 重新生成成功且八个退役目标均不存在；除受阻的 `vision-integrator-rt` 外，其余 41 个插件、`vision-base` 和三个独立测试可执行文件构建成功。一次 sampler DLL 链接文件访问失败经串行重试通过，无需源码改动。11 项独立 CTest 全部通过，包括 ReLAX 各滤波阶段、shader binding、ReSTIR MIS 数学测试和性能分析作用域；计划中的其余 18 项未运行，不计为通过。42 个新 DLL 的导入表均无退役模块引用，五个旧 RenderGraph 构建产物已删除。详见 [验证汇总](E:/CoronaEngine/build/rendergraph-removal/verification.json) 和 [CTest 结果](E:/CoronaEngine/build/rendergraph-removal/independent-tests.xml)。
 
 ### F14 Vision 独立窗口和旧参数面板
 
@@ -266,11 +272,11 @@ fixed/customized 的 `init_postprocessor()` 调用 `set_tone_mapper()`，后者�
 
 ## 全部插件状态
 
-共 50 个插件目标。主流程使用包含按材质、光源或降噪器选择而触发的路径，不意味着每帧都会实例化所有插件。
+下表保留初次审计时的 50 个插件目标及后续移除状态，当前剩余 42 个。主流程使用包含按材质、光源或降噪器选择而触发的路径，不意味着每帧都会实例化所有插件。
 
 | 类别 | 插件 | 当前状态 | 证据与说明 |
 | --- | --- | --- | --- |
-| pipeline | `customized` | 未接入 | [CMake](E:/CoronaEngine/vision/src/pipelines/customized/CMakeLists.txt:2)；见 F13；图输出写回被注释 |
+| pipeline | `customized` | 已移除 | 与 RenderGraph 和四个 pass 整组移除；见 F13 |
 | pipeline | `fixed` | 主流程使用 | [CMake](E:/CoronaEngine/vision/src/pipelines/fixed/CMakeLists.txt:2)；引擎默认管线 |
 | denoiser | `ReBLUR` | 主流程可选 | [CMake](E:/CoronaEngine/vision/src/render_core/denoiser/ReBLUR/CMakeLists.txt:4)；每相机上下文可选择；有集成测试 |
 | denoiser | `ReLAX` | 主流程可选 | [CMake](E:/CoronaEngine/vision/src/render_core/denoiser/ReLAX/CMakeLists.txt:5)；每相机上下文可选择；有集成测试 |
@@ -294,11 +300,11 @@ fixed/customized 的 `init_postprocessor()` 调用 `set_tone_mapper()`，后者�
 | material | `black_body` | 主流程使用 | [CMake](E:/CoronaEngine/vision/src/render_core/material/CMakeLists.txt:2)；principled 和黑体回退都是真实消费者 |
 | material | `principled_bsdf` | 主流程使用 | [CMake](E:/CoronaEngine/vision/src/render_core/material/CMakeLists.txt:3)；principled 和黑体回退都是真实消费者 |
 | medium | `homogeneous` | 可选未接入生产场景 | [CMake](E:/CoronaEngine/vision/src/render_core/medium/CMakeLists.txt:2)；Corona 当前不填充 mediums_desc；仅保留通用描述符加载路径 |
-| pass | `accumulate` | 未接入 | [CMake](E:/CoronaEngine/vision/src/render_core/pass/CMakeLists.txt:2)；由 customized 使用，当前无管线执行入口；见 F13 |
-| pass | `integrate` | 未接入 | [CMake](E:/CoronaEngine/vision/src/render_core/pass/CMakeLists.txt:3)；由 customized 使用，当前无管线执行入口；见 F13 |
-| pass | `tonemapping` | 未接入 | [CMake](E:/CoronaEngine/vision/src/render_core/pass/CMakeLists.txt:4)；由 customized 使用，当前无管线执行入口；见 F13 |
-| pass | `gamma` | 未接入 | [CMake](E:/CoronaEngine/vision/src/render_core/pass/CMakeLists.txt:5)；由 customized 使用，当前无管线执行入口；见 F13 |
-| radiancecache | `sharc` | 已移除 | [移除记录](E:/CoronaEngine/vision/SHARC_ANALYSIS.md)；此表保留审计时的 50 个目标，当前剩余 47 个 |
+| pass | `accumulate` | 已移除 | 随 customized/RenderGraph 移除；保留 FrameBuffer 累积；见 F13 |
+| pass | `integrate` | 已移除 | 随 customized/RenderGraph 移除；保留 PT/ReSTIR 积分器；见 F13 |
+| pass | `tonemapping` | 已移除 | 随 customized/RenderGraph 移除；保留 FrameBuffer 色调映射；见 F13 |
+| pass | `gamma` | 已移除 | 随 customized/RenderGraph 移除；保留现有 gamma 路径；见 F13 |
+| radiancecache | `sharc` | 已移除 | [移除记录](E:/CoronaEngine/vision/SHARC_ANALYSIS.md)；此表保留初次审计目标 |
 | sampler | `independent` | 主流程使用 | [CMake](E:/CoronaEngine/vision/src/render_core/sampler/CMakeLists.txt:2)；默认随机采样器；spp 参数另见 F20 |
 | sensor | `thin_lens` | 主流程使用 | [CMake](E:/CoronaEngine/vision/src/render_core/sensor/CMakeLists.txt:2)；默认 SensorDesc 和 Corona 相机适配 |
 | sensor | `pinhole` | 可选未选择 | [CMake](E:/CoronaEngine/vision/src/render_core/sensor/CMakeLists.txt:3)；生产使用 thin_lens；半径为零不等于加载 pinhole 插件 |
@@ -413,7 +419,7 @@ SHARC 的 `constant.h` 已随 F03 移除；枚举和通用旗标没有直接消�
 1. **先修行为缺口**：F01 的 SSAT 入口、F09 保存请求、F20 失效配置；对空壳插件明确报不可用。
 2. **减少确定的无效工作**：F08 Postprocessor 编译、F15 调试资源默认初始化（F02、F03 已移除）。移除前同步调用者和插件部署列表。
 3. **清理独立闲置代码**：IES、金属 IOR 表、旧 TAA、无调用兼容包装；保持改动小并检查 ABI 使用范围。
-4. **拆分实验和独立 viewer**：customized/render graph、真实镜头、旧窗口与面板（SHARC、BVH 已移除），不牵连当前主渲染链。
+4. **拆分实验和独立 viewer**：真实镜头、旧窗口与面板（SHARC、BVH、customized/render graph 已移除），不牵连当前主渲染链。
 5. **保留测试与可选能力**：Hero spectrum、PowerLightSampler、非默认滤波器、Native NRD，以及预计算表。先决定产品支持范围，再裁剪构建。
 
-初次审计仅添加文档和机器清单；后续已执行 F02、F03、F04 移除，状态与验证记录见机器清单的 `resolutions`。
+初次审计仅添加文档和机器清单；后续已执行 F02、F03、F04、F13 移除，状态与验证记录见机器清单的 `resolutions`。
