@@ -270,7 +270,7 @@ void VulkanBackend::render_quads(void* surface, std::span<const QuadDraw> quads,
     }
 }
 
-void VulkanBackend::present_surface(void* surface, const Detail::SceneViewport& scene_viewport) {
+void VulkanBackend::present_surface(void* surface) {
     if (!initialized_) {
         return;
     }
@@ -297,11 +297,7 @@ void VulkanBackend::present_surface(void* surface, const Detail::SceneViewport& 
         image_device->submit_receipt = submit_receipt;
         image_device->metadata = {++render->frame_index,
                                   render->resources.width,
-                                  render->resources.height,
-                                  scene_viewport.x,
-                                  scene_viewport.y,
-                                  scene_viewport.width,
-                                  scene_viewport.height};
+                                  render->resources.height};
     } else {
         return;
     }
