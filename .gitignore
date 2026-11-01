@@ -5,6 +5,7 @@
 /out/
 /dist/
 /cmake-build-*/
+/downloads/mitsuba/
 
 # Managed source workspaces (baselines live in build_tools/source_workspaces.py).
 /Horizon/
