@@ -10,7 +10,6 @@
 #include "core/image/image.h"
 #include "image_pool.h"
 #include "base/sensor/frame_buffer.h"
-#include "postprocessor.h"
 #include "pipeline_ui.h"
 #include "UI/GUI.h"
 #include "base/using.h"
@@ -57,7 +56,6 @@ protected:
     FrameBufferDesc frame_buffer_desc_{};
     BindlessArray bindless_array_{};
     mutable Stream stream_;
-    Postprocessor postprocessor_{this};
     bool need_save_{false};
     OutputDesc output_desc_{};
     float3 light_world_center_{};
@@ -134,7 +132,6 @@ public:
         renderer_.init(project_desc.renderer_desc, scene_view_);
         sync_output_denoise();
     };
-    virtual void init_postprocessor(const DenoiserDesc &desc) = 0;
     virtual void preprocess() noexcept {}
     void prepare() noexcept override;
     virtual void change_resolution(uint2 res) noexcept;

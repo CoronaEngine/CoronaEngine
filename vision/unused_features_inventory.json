@@ -2264,6 +2264,45 @@
         "gpu_regression_run": false
       },
       "evidence": "build/json-reader-removal/verification.json"
+    },
+    {
+      "feature_id": "F08",
+      "status": "removed",
+      "date": "2026-11-01",
+      "report": "vision/UNUSED_FEATURES.md",
+      "baseline_revision": "287bfedae01322fc6d79fc474021f60c6bf61374",
+      "removed_standalone_files": 2,
+      "removed_standalone_lines": 71,
+      "removed_interfaces": [
+        "vision::Postprocessor",
+        "vision::Pipeline::init_postprocessor",
+        "vision::RendererDesc::denoiser_desc"
+      ],
+      "remaining_plugin_targets": 42,
+      "remaining_plugin_categories": 16,
+      "note": "Removed Postprocessor, Pipeline ownership and initialization API, redundant fixed-pipeline overrides, engine/test call sites, four test overrides, and the unused renderer-level denoiser descriptor and fixture parser. IntegratorDesc denoising and active FrameBuffer/Corona display paths remain. Pipeline and RendererDesc ABI changes require rebuilding consumers.",
+      "validation": {
+        "remaining_code_references": 0,
+        "cmake_regeneration": "passed",
+        "removed_source_absent_from_compile_commands": true,
+        "vision_base_relinked": true,
+        "targeted_syntax_checks_passed": [
+          "src/systems/optics/optics_system.cpp",
+          "vision/src/tests/test_thin_lens.cpp",
+          "tests/systems/optics/test_vision_render_mode_config.cpp",
+          "tests/systems/optics/test_vision_geometry_gpu_resource.cpp",
+          "vision/src/tests/test_material_energy.cpp",
+          "vision/src/tests/test_material_reset.cpp",
+          "vision/src/tests/test_warper2d.cpp"
+        ],
+        "compiler_mode": "MSVC /Zs with configured RelWithDebInfo compile commands",
+        "full_build_completed": false,
+        "full_build_blocker": "Existing stable_planes.cpp:176 calls ocarina::Function::require_ray_query_compute_workgroups(), absent from Horizon ccf5a3fbcdd8dbbd2487f7a5745c411eb88a5d72 (MSVC C2039).",
+        "independent_plugin_build": "stopped at user request",
+        "gpu_regression_run": false,
+        "further_validation": "stopped at user request"
+      },
+      "evidence": "build/postprocessor-removal/verification.json"
     }
   ]
 }

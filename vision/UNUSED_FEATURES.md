@@ -2,9 +2,9 @@
 
 审计日期：2026-10-31。代码基线：`781907e59b6f6449082e5801c7e3a2d4f45b22b6`。
 
-后续状态：F02 双边上采样、F03 SHARC、F04 BVH 灯光采样器、F13 Customized/RenderGraph、F19 旧 JSON/BSON 文件读取器已移除；其余清单及数量保留上述审计基线口径。当前插件目标为 42 个、16 类。SHARC 的构建和回归结果见 [SHARC 移除记录](E:/CoronaEngine/vision/SHARC_ANALYSIS.md)。
+后续状态：F02 双边上采样、F03 SHARC、F04 BVH 灯光采样器、F08 Postprocessor、F13 Customized/RenderGraph、F19 旧 JSON/BSON 文件读取器已移除；其余清单及数量保留上述审计基线口径。当前插件目标为 42 个、16 类。SHARC 的构建和回归结果见 [SHARC 移除记录](E:/CoronaEngine/vision/SHARC_ANALYSIS.md)。
 
-Vision 的闲置部分主要来自独立渲染器向 Corona 集成时遗留的入口、未完成的实验功能，以及仍会构造但不再参与输出的对象。最值得优先处理的是 **SSAT 模式未接入引擎场景创建、空实现插件、无消费者的 Postprocessor 着色器、保存链路断开**。这些问题不能通过删除所有“非默认插件”解决。
+Vision 的闲置部分主要来自独立渲染器向 Corona 集成时遗留的入口、未完成的实验功能，以及仍会构造但不再参与输出的对象。最值得优先处理的是 **SSAT 模式未接入引擎场景创建、空实现插件、保存链路断开**。这些问题不能通过删除所有“非默认插件”解决。
 
 本清单覆盖 `vision/` 全部 359 个已跟踪文件，包括 19 类、50 个插件目标；交叉核查 Corona 的 optics 适配层、显示路径、测试、场景夹具和构建配置。排除 `vision/src/ext/` 后共 69,350 行，这个数字包含源码、生成表、脚本和构建文件，不是有效代码行数。第三方 ImGui、GLAD、ImGuizmo 仅检查依赖，不做供应商内部死代码清理。
 
@@ -103,15 +103,17 @@ F02/F04 后续回归中的 28 项 Vision/LightField 测试全部通过，包括�
 
 建议：清理成员和注释代码；若要保留实验记录，使用版本历史。
 
-### F08 旧 Postprocessor 色调映射
+### F08 旧 Postprocessor 色调映射 已移除
 
-**判定：着色器会编译，但没有执行消费者。**
+**状态：2026-11-01 已移除类、初始化接口及无效的 renderer 级降噪描述符。**
 
-fixed 的 `init_postprocessor()` 调用 `set_tone_mapper()`，后者立即 `compile_tone_mapping()`；全仓库没有 `Postprocessor::tone_mapping()` 的调用。实际 framebuffer 渲染使用自己的 `tone_mapping_`，Corona 显示又通过零拷贝桥取得线性源并执行 `vision_resolve`。此前 customized 中的同类入口已随 F13 移除。
+删除 `base/mgr/postprocessor.h/.cpp`（71 行）、`Pipeline` 的持有成员及 `init_postprocessor()` 纯虚接口；清理 fixed 管线的初始化覆盖、引擎与测试夹具调用，以及四个测试派生类的空 override。同步删除 `RendererDesc::denoiser_desc` 和测试配置中对 `render.denoiser` 的无效读取。
 
-证据：[初始化](E:/CoronaEngine/vision/src/pipelines/fixed/pipeline.cpp:38)、[触发编译](E:/CoronaEngine/vision/src/base/mgr/postprocessor.h:24)、[未调用的 dispatch 包装](E:/CoronaEngine/vision/src/base/mgr/postprocessor.cpp:26)、[显示源](E:/CoronaEngine/src/systems/optics/vision/vision_zero_copy_bridge.cpp:130)。
+移除前，初始化会编译 buffer 到 buffer 的色调映射 shader，但全仓库没有执行调用者。当前 [FrameBuffer 输出](E:/CoronaEngine/vision/src/base/sensor/frame_buffer.cpp:326)、[Corona 显示桥](E:/CoronaEngine/src/systems/optics/vision/vision_zero_copy_bridge.cpp:131)及 `vision_resolve` 继续工作；有效降噪仍由 [IntegratorDesc 和积分器](E:/CoronaEngine/vision/src/base/integral/integrator.cpp:81)管理，`FrameBuffer::post_path_tracing()` 等自定义后处理接口保留。
 
-建议：优先去除这套孤立着色器编译及持有关系。这里能确认存在无消费者的编译工作，但没有测量耗时，不给出性能收益数值。
+此变更影响 `Pipeline` 的对象布局、虚函数表及 `RendererDesc` 的布局，需要统一重编译相关模块。插件目标数量不变。收益是消除无消费者的初始化编译和 shader 持有；未测量性能收益。
+
+验证：引用检查无残留，CMake 已重新生成，`vision-base` 已重新链接；optics、薄透镜测试夹具、渲染模式配置、世界边界测试及三个 Vision 测试共 7 个翻译单元的 MSVC `/Zs` 检查通过。完整构建受既有 Horizon API 缺失阻塞（`stable_planes.cpp:176` 调用 `require_ray_query_compute_workgroups()`）；后续独立模块构建按用户要求停止，未执行 GPU 回归。见 [验证汇总](E:/CoronaEngine/build/postprocessor-removal/verification.json)。
 
 ### F09 保存和离线输出入口
 
@@ -235,7 +237,7 @@ fixed 的 `init_postprocessor()` 调用 `set_tone_mapper()`，后者立即 `comp
 | --- | --- | --- |
 | `Sampler::spp_` / `sample_per_pixel()` | `spp` 被解析、保存，但没有采样循环读取；不能用它控制当前每帧样本数 | [sampler.h](E:/CoronaEngine/vision/src/base/sampler.h:30) |
 | `MediumsDesc::process` | JSON 会写入，`MediumRegistry::load_mediums()` 不读取；实际判定使用自身的 `process_mediums_ && !elements_.empty()` | [解析](E:/CoronaEngine/vision/src/base/import/project_desc.cpp:25)、[消费缺口](E:/CoronaEngine/vision/src/base/mgr/registries.cpp:189) |
-| `RendererDesc::denoiser_desc` | 仅传给 `init_postprocessor()`，两个实现都忽略形参；有效降噪描述符在 `IntegratorDesc::denoiser_desc` | [fixed](E:/CoronaEngine/vision/src/pipelines/fixed/pipeline.cpp:38)、[积分器](E:/CoronaEngine/vision/src/base/integral/integrator.cpp:88) |
+| `RendererDesc::denoiser_desc` | 已随 F08 移除；有效降噪描述符 `IntegratorDesc::denoiser_desc` 保留 | [积分器](E:/CoronaEngine/vision/src/base/integral/integrator.cpp:88) |
 | `ProjectDesc::scene_path` | 测试有赋值，没有读取；测试还需单独 `Global::set_scene_path()` | [测试赋值](E:/CoronaEngine/tests/support/vision_test_scene.h:21) |
 | `output.spp/save_exit/fn` 的自动输出行为 | 保存消费点缺失，见 F09 | [pipeline.cpp](E:/CoronaEngine/vision/src/base/mgr/pipeline.cpp:225) |
 
@@ -419,9 +421,9 @@ SHARC 的 `constant.h` 已随 F03 移除；枚举和通用旗标没有直接消�
 ## 清理顺序
 
 1. **先修行为缺口**：F01 的 SSAT 入口、F09 保存请求、F20 失效配置；对空壳插件明确报不可用。
-2. **减少确定的无效工作**：F08 Postprocessor 编译、F15 调试资源默认初始化（F02、F03 已移除）。移除前同步调用者和插件部署列表。
+2. **减少确定的无效工作**：F15 调试资源默认初始化（F02、F03、F08 已移除）。移除前同步调用者和插件部署列表。
 3. **清理独立闲置代码**：IES、金属 IOR 表、旧 TAA、无调用兼容包装；保持改动小并检查 ABI 使用范围。
 4. **拆分实验和独立 viewer**：真实镜头、旧窗口与面板（SHARC、BVH、customized/render graph 已移除），不牵连当前主渲染链。
 5. **保留测试与可选能力**：Hero spectrum、PowerLightSampler、非默认滤波器、Native NRD，以及预计算表。先决定产品支持范围，再裁剪构建。
 
-初次审计仅添加文档和机器清单；后续已执行 F02、F03、F04、F13、F19 移除，状态与验证记录见机器清单的 `resolutions`。
+初次审计仅添加文档和机器清单；后续已执行 F02、F03、F04、F08、F13、F19 移除，状态与验证记录见机器清单的 `resolutions`。

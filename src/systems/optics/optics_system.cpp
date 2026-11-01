@@ -1651,7 +1651,6 @@ void bind_pipeline_scene_resource_early(
     }
     bind_pipeline_scene_resource_early(*pipeline, scene_resource);
     pipeline->init_project(project_desc);
-    pipeline->init_postprocessor(project_desc.renderer_desc.denoiser_desc);
     pipeline->init();
     pipeline->set_output_denoise(project_desc.output_desc.denoise);
     return pipeline;

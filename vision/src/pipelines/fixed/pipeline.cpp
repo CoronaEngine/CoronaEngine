@@ -30,15 +30,6 @@ public:
         preprocess();
     }
 
-    void init_project(const vision::ProjectDesc &project_desc) override {
-        Pipeline::init_project(project_desc);
-        init_postprocessor(project_desc.renderer_desc.denoiser_desc);
-    }
-
-    void init_postprocessor(const DenoiserDesc &desc) override {
-        postprocessor_.set_tone_mapper(renderer_.frame_buffer()->tone_mapper());
-    }
-
     void change_resolution(uint2 res) noexcept override {
         if (active_renderer_ != &renderer_ || !defer_base_compile_) {
             Pipeline::change_resolution(res);
