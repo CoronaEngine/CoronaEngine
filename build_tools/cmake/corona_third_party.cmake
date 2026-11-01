@@ -148,7 +148,6 @@ corona_require_target(ocarina-include "Horizon")
 corona_require_target(ocarina-core "Horizon")
 corona_require_target(horizon-hotfix "Horizon")
 corona_require_target(horizon::fmt "Horizon")
-corona_require_target(horizon::spdlog "Horizon")
 corona_require_target(horizon::xxhash "Horizon")
 
 if(NOT TARGET cxxopts AND TARGET cxxopts::cxxopts)

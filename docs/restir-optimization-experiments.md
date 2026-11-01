@@ -221,3 +221,93 @@ Bathroom的最大通道差与最大相对RMSE发生在不同帧，不能拼成�
 - Nsight 剖析和固定输入 BSDF 回放仅用于诊断，没有产出保留的渲染优化；完整材质与预解码参考路径的回放成本差异不能直接换算为整帧加速。
 
 上述实验没有撤销已接受的显存压缩和其他生产优化。后续若重试，应说明相对历史方案的实质变化，并在相同配置下重新验证。
+
+## 2026-11-01：Engine 1080p REBLUR 显存容量拐点
+
+Kitchen `scene_v3.xml`、SourceCamera、1920×1080、ReSTIR、SP3、EDSL REBLUR，RTX 3070 Ti 8 GiB、驱动 610.88。引擎界面显示的秒级耗时确实包含 GPU 执行异常，不能仅用历史 kernel 统计与当前墙钟口径不同来解释。
+
+根因在 REBLUR 资源准备：启用 `VISION_REBLUR_NATIVE_NRD` 的构建在 `compile()` 中始终选择 native NRD 或 EDSL，但 `update_resolution()` 和 `set_stable_planes_enabled()` 仍调用 fallback `Filter::prepare()`，分配另一套永远不使用的 history/scratch。首次 dispatch 的 `prepare_native()` 才释放这些缓冲。1080p 一次额外分配约 617 MiB，本次启动经历的两个分辨率累计约 994 MiB。这是无用临时分配，不应称为持续泄漏；在接近显存上限的 Engine 进程中，它触发了驻留/换页的性能拐点。Windows 同时记录到数百 MiB 非本地 GPU 内存。
+
+保留原上传内存策略，只在 NRD/EDSL 构建中直接准备必需的 guide，不申请 fallback history/scratch。未改 shader、采样预算、SP 层数或输出精度。使用分阶段同步计时和 Vulkan dispatch 时间戳，3 帧预热后采 6 帧，完成 A→B→A 回退复现：
+
+| 阶段（ms） | 原版 A1 | 跳过无用分配 B | 回退 A2 |
+|---|---:|---:|---:|
+| Pipeline 渲染，含降噪 | 1520.94 | 91.44 | 1566.44 |
+| SP 构建，含 history/clear | 949.08 | 8.20 | 997.83 |
+| 合并阶段合计 | 488.11 | 2.24 | 485.16 |
+
+GPU 时间戳独立确认原版慢在 `Stable planes build` 和 `Denoiser-MergeReSTIRLobes`，不是只有 CPU 等待统计变大。单独把上传 staging 移到系统内存仍约 692 ms，未解决问题，该实验已撤回。关闭降噪但保留 SP3 时约 39.07 ms；720p 开启降噪时约 30.36 ms，均为诊断对照，不是交付设置。
+
+最终关闭阶段同步及 dispatch profiler，8 帧预热后采 16 帧：渲染 **89.56 ms**，其中降噪 **45.13 ms**，总帧 **95.24 ms**。`render_ms` 已包含 `denoise_ms`；总帧还包含调度、互操作和帧间等待，不把三项相加。通过相机截图 API 保存并检查了 1920×1080 Kitchen 输出；该次正常退出、GPU 清理完成，最高 63°C。此前一次采样后的额外画面等待触发 70°C 守护，未把该次结束状态记为通过。
+
+核对 `svgf_magic`：SP 缓冲布局相同，其 Horizon 锁定版本 `448fb71a` 的 Vulkan compute 后端与当前迁移后的后端代码一致（排除 CMake 路径变化）。历史约 35 ms 排除了降噪及 housekeeping；不能直接与当前 UI 总渲染时间比较，也没有证据把本次异常归因于源码目录迁移或 Quill。
+
+验证：CLion RelWithDebInfo `corona_engine` 构建成功；真实 GPU 分配回归检查在原版失败、修复后通过；最终场景采样和截图通过。额外 CTest 回归尝试在首个 `VisionRenderModeConfigTests` 启动时被旧测试二进制阻塞：缺少已移除的 `UpsamplerDesc::init` 入口。已停止该测试进程，未宣称 CTest 套件通过，未为此扩大修改范围。
+
+### 同日补查：45 ms 降噪仍不是正常性能
+
+用户要求继续核对 `svgf_magic` 的 REBLUR。该分支与当前 HEAD 的整个 ReBLUR 目录没有源码差异；工作区仅有上节跳过无用分配的修复。三层调用顺序、EDSL shader 和默认参数没有新增成本。旧分支留下的 `H1reblur_A_kitchen64` 实测整段降噪为 13.6523 ms，包含 SP3 REBLUR、合成及 SVGF coverage-only，不能把当前约 45 ms 用计时范围不同解释。
+
+在隔离目录按 SHA256 恢复 H2bfinal 冻结运行时，当前工作区的源码及部署文件未被替换。使用原 NRD 动态库重新测得 12.2468 ms；进一步对齐当前 SourceCamera 的位置、方向、up、FOV，并临时替换为当前 Engine 的 NRD CPU 调度库，仍为 12.3918 ms。两轮均 1920×1080、16 帧预热、16 帧测量、150 ms 节流，正常退出且进程/GPU 清理通过，最高温度分别 60°C、59°C；隔离运行时的原 NRD 库已恢复。打包 kernel 的 SPIR-V 缓存键与当前 Engine 完全相同。
+
+| 当前机器上的运行条件 | 渲染含降噪（ms） | 整段降噪（ms） |
+|---|---:|---:|
+| 冻结运行时，原相机/原 NRD，1080p | 51.81 | 12.25 |
+| 冻结运行时，当前相机/当前 NRD，1080p | 53.58 | 12.39 |
+| 当前 Engine，1080p | 89.56 | 45.13 |
+| 当前 Engine，1920×1000 | 54.26 | 12.88 |
+
+最后一行保留相机、算法和参数，只减少 7.4% 像素；3 帧预热后采 6 帧，正常退出、最高 57°C。这种非线性跳变说明上节修复仅消除了秒级 SP/合并异常，当前 1080p 仍存在显存工作集容量/驻留瓶颈，尚未恢复旧分支的正常降噪速度。Windows 计数器也记录到当前进程使用非本地 GPU 内存，但没有资源级换页事件，因此不宣称已定位哪张具体纹理被换出。
+
+GPU dispatch 对照显示额外时间主要落在图像访问阶段：历史 Kitchen 记录的三次 Pack 合计约 0.88 ms，当前约 12.66 ms；主滤波阶段也显著变慢，PrepareGuides 和 coverage-only 没有同幅度增加。降低 Display 到 2 FPS，降噪仍 46.84 ms；保留上一节修复、重新独立测试 host-only upload staging，仍 47.24 ms。两者均不能解决剩余问题；staging 实验已再次撤回并重新构建，不交付全局内存分配策略改动，也不通过降低最终分辨率宣称修复。
+
+### 同日最终修复：1080p REBLUR 滤波恢复到 6 ms 内
+
+继续检查渲染中的实时分配快照，分别记录 Vision compute 与 Engine 原生 graphics/physics 的 VMA 分配。旧运行时也使用渲染中的快照，排除 teardown 后已释放 framebuffer 的记录。导入共享输出只是同一物理分配的另一个视图，不重复计算。
+
+| 资源差异或额外占用 | 实测容量（MiB） | 处理 |
+|---|---:|---|
+| 未使用的 embedded base `FrameBuffer::rays` | 58.008 | 延迟到真正渲染 base 时分配 |
+| 未使用的 embedded base `FrameBuffer::rt_buffer` | 19.336 | 同上 |
+| 未使用的 base 1536×825 FP32 display texture | 21.000 | 去掉初始化和首次相机同步产生的分配 |
+| 上述无用像素资源合计 | **98.344** | 已由实际 allocation trace 验证消失 |
+| 普通源图像相对旧版的格式扩展 | 约 74.38 | 保留；当前 CPU sRGB 解码后的线性 RGBA32F，不能当作无用资源删除 |
+| Vision/Engine 共享输出 | 31.641 | 保留；不重复计算原生侧 imported allocation |
+| Engine 原生本地堆，扣除共享输出重复项 | 约 261.88 | 包含必要的物理、几何、显示资源和池空闲空间 |
+| 改池策略前 compute 池未使用空间 | 约 244，单个空洞 188.5 | 缩小 VMA 首选大堆块 |
+| 改池策略前原生池未使用空间 | 约 77，部分启动的单个空洞超过 64 | 同上 |
+
+原生分配的具名资源包括 `mechanics.collision` 99.106 MiB、`geometry.vertices.shared` 25.960 MiB、indices/shadow indices 各 8.261 MiB、`optics.surface_final` 16.875 MiB、UI target/composite 各 10.5 MiB、CEF texture 5.25 MiB。这些是跨内存类型的具名分配总量，用于定位所有者，不能直接再加到本地堆容量上。物理、显示和渲染共享关系均保留。源图像差异指普通导入图片，不是新增 LUT。
+
+生产改动：
+
+- FrameBuffer 增加只准备编码数据和小型 hit buffer 的路径；嵌入式未使用 base 不申请逐像素资源。默认完整 `prepare()` 保留虚调用，兼容 LightField。base 第一次真正渲染时再准备像素缓冲、display texture 和 integrator。
+- Engine 初始化/reload 不再无条件创建 base display texture；相机 resize 只重建已经存在的 output。progressive base 的 resize/UI 更新也不提前创建 accumulation；实际首次 PT 渲染仍正常准备。
+- compute 和原生 graphics/physics 的 VMA `preferredLargeHeapBlockSize` 最终设为 **16 MiB**。它是池块偏好，不是资源大小限制；大资源仍可独立分配。所用 VMA 的 dedicated 偏好阈值随之降到 8 MiB，会改变池布局和独立分配数量；不修改资源内容、精度或共享所有权。两份 Horizon 工作副本保持一致。
+- 现有 Engine 场景集成测试真正执行原先未调用的 base 模式检查，新增未使用 base 无像素分配、第一次 RT/PT base 渲染完成分配的断言。progressive resize 回归在修复前实际失败，修复后通过。
+
+64 MiB 候选曾有一次 5.086 ms，但移除临时诊断后，三次新进程、各 32 帧预热/64 帧测量得到 **6.824 / 11.192 / 5.247 ms**，因此没有接受。慢轮次主要影响 PrePass、HistoryFix、Blur、TemporalStabilization、Unpack；Pack、GPU 频率、输入资源字节数和工作量基本相同。16 MiB 最终版本重新独立启动三次，保留所有测量帧，无异常帧剔除：
+
+| 1080p SP3 REBLUR GPU 滤波（ms） | 均值 | P95 | 最大值 |
+|---|---:|---:|---:|
+| 最终第 1 轮，64 帧 | 5.055046 | 5.376608 | 5.602496 |
+| 最终第 2 轮，64 帧 | 5.112059 | 5.400480 | 5.642016 |
+| 最终第 3 轮，64 帧 | 5.137640 | 5.409792 | 5.610816 |
+
+三轮共 **192 帧，均值 5.101582 ms，全部低于 6 ms**。最高温度分别 62/64/62°C，均正常退出，进程/GPU 清理通过。滤波统计是三层 REBLUR 各 pass 的 GPU timestamp 之和，**包含 Pack/Unpack**，不包含 PrepareGuides、coverage-only 和 composition；它是连续 GPU 区间的下界。与找到的旧 Kitchen GPU pass 合计 4.938344 ms 使用同一统计范围；旧记录本身是画质采集，不升级为正式 A/B 性能验收。修复前本次 Engine 同范围为 37.973275 ms。
+
+保持 Kitchen `scene_v3.xml`、SourceCamera 1920×1080、ReSTIR、SP3、默认 EDSL REBLUR、关闭额外 accumulation，不减少分辨率、SP 层数、样本/深度、物理行为或源图像精度。最后关闭阶段同步和 GPU profiler，以正常模式 8 帧预热、16 帧测量：
+
+| 正常模式统计 | 均值（ms） |
+|---|---:|
+| Pipeline 渲染，包含降噪 | **57.466194** |
+| 整段降噪，包含 guide、REBLUR、coverage 和合成 | **12.687244** |
+| 总帧 | **62.021500** |
+
+这些数值不能相加；6 ms 目标对应上表 GPU 滤波范围，不是 UI 的整段降噪。正常模式 optics/display FPS 上限均为 30，实测约 16.1 FPS；性能诊断使用 10 FPS 节流，其 `frame_ms` 不作为正常帧耗时。正常模式最高 68°C，正常退出且清理通过。通过相机 API 保存并查看 1920×1080 Kitchen PNG，场景能够正常出图。
+
+最终 CLion RelWithDebInfo Engine 构建成功；相关测试重新构建后，`VisionRenderModeConfigTests`、`VisionReblurTests`、`VisionEngineSceneTests`、`VisionCameraSettingsTests`、`VisionSharedDisplayTests` **5/5 通过**，GPU 守护正常结束，最高 54°C。独立代码审查发现的虚调用和 progressive resize 问题均已修复，最后无未解决的 P1/P2。临时堆 dump 已移除，既有 Quill 等改动保留；以上性能采集在提交前的工作区完成。
+
+证据目录：`D:/work/corona/restir-investigation-20261101/`；最终汇总为 `final-reblur-result.json`，三轮原始 CSV 和全样本保存在 `pool16-profiled-1/2/3`，正常模式及截图在 `normal-fixed-final16`，测试日志在 `pool16-ctest-guard`。每轮真实 allocation trace 均通过仅活动相机持有 rays/color/output 的检查，运行记录也校验了实际生效的相机和降噪配置。
+
+测量边界：没有资源级 Windows eviction trace，因此不指认某一张纹理必然被换出；容量/驻留压力的判断来自资源清单、分辨率容量拐点、受影响 pass 和重复实验。`REBLUR_GPU_PROFILE_MODE=filter/intervals` 在启动相机重配置时出现失败，未采用其数据，也未宣称连续区间低于 6 ms。最终性能验证使用与旧记录匹配的 dispatch 范围；最终版本不携带临时 VMA heap dump，因此不宣称最终池空闲字节数已经精确测定。

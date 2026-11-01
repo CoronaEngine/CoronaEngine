@@ -134,6 +134,7 @@ public:
     };
     virtual void preprocess() noexcept {}
     void prepare() noexcept override;
+    void prepare(bool allocate_framebuffer_pixels) noexcept;
     virtual void change_resolution(uint2 res) noexcept;
     virtual void invalidate() noexcept;
     virtual void clear_geometry() noexcept;

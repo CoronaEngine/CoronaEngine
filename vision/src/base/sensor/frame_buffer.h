@@ -368,6 +368,7 @@ public:
     OC_ENCODABLE_FUNC(EncodedObject, accumulation_, tone_mapper_, exposure_)
     VS_MAKE_GUI_STATUS_FUNC(Node, tone_mapper_)
     void prepare() noexcept override;
+    void prepare(bool allocate_pixel_buffers) noexcept;
     [[nodiscard]] Float4 apply_exposure(const Float4 &input) const noexcept;
     [[nodiscard]] Float4 apply_exposure(const Float &exposure,
                                         const Float4 &input) const noexcept;
