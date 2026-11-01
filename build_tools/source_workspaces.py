@@ -43,7 +43,7 @@ HORIZON = SourceWorkspace(
     directory=Path("Horizon"),
     url="https://github.com/CoronaEngine/Horizon.git",
     ref="main",
-    commit="b67ee07cd542c469172805f43a92d59d82b1a820",
+    commit="9d88725222988ce32f25386dcbfe2ed420fadb4b",
 )
 
 EDITOR = SourceWorkspace(
