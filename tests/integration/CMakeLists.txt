@@ -58,21 +58,8 @@ if(VISION_REBLUR_NATIVE_NRD)
     target_link_libraries(corona_vision_reblur_replay PRIVATE corona::engine vision-all_libs vision-reblur-kernels NativeNrd::Nrd)
 endif()
 
-if(TARGET ocarina-backend-vulkan-compute)
-    foreach(_probe IN ITEMS native_callback shared_array compute_math_parity storage_parity runtime_parity_extended)
-        set(_target corona_ocarina_${_probe}_tests)
-        add_executable(${_target}
-            ${CMAKE_SOURCE_DIR}/Horizon/src/tests/runtime/test_${_probe}.cpp)
-        target_link_libraries(${_target} PRIVATE ocarina-native ocarina-include)
-        if(_probe STREQUAL "native_callback")
-            target_link_libraries(${_target} PRIVATE horizon::vulkan_headers)
-        endif()
-        add_test(NAME Ocarina_${_probe} COMMAND ${_target})
-        set_tests_properties(Ocarina_${_probe} PROPERTIES
-            WORKING_DIRECTORY "$<TARGET_FILE_DIR:ocarina-backend-vulkan-compute>"
-            RUN_SERIAL TRUE TIMEOUT 120)
-    endforeach()
-endif()
+# Ocarina owns its runtime tests in the Horizon workspace. Engine integration
+# tests must not depend on the layout of Horizon's private test sources.
 
 if(TARGET test-thin-lens)
     add_test(NAME VisionThinLensTests COMMAND test-thin-lens)
