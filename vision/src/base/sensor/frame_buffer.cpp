@@ -27,12 +27,17 @@ FrameBuffer::FrameBuffer(const vision::FrameBufferDesc &desc)
 }
 
 void FrameBuffer::prepare() noexcept {
+    prepare(true);
+}
+
+void FrameBuffer::prepare(bool allocate_pixel_buffers) noexcept {
     encode_data();
     datas().reset_device_buffer_immediately(device(), "FrameBuffer::encoded_data");
     datas().register_self();
     datas().upload_immediately();
-    auto_manage_accumulation_buffer(accumulation_.hv());
     init_hit_buffer();
+    if (!allocate_pixel_buffers) { return; }
+    auto_manage_accumulation_buffer(accumulation_.hv());
     prepare_rt_buffer();
     prepare_rays();
 }
@@ -77,7 +82,9 @@ void FrameBuffer::render_sub_UI(Widgets *widgets) noexcept {
     changed_ |= widgets->drag_float("exposure", &exposure_.hv(), 0.01f, 0.f, 10.f);
     auto addr = reinterpret_cast<bool *>(&accumulation_.hv());
     changed_ |= widgets->check_box("accumulation", addr);
-    auto_manage_accumulation_buffer(accumulation_.hv());
+    if (rt_buffer_.device_buffer().size() != 0u) {
+        auto_manage_accumulation_buffer(accumulation_.hv());
+    }
     tone_mapper_->render_UI(widgets);
     for (auto iter = screen_buffers_.begin();
          iter != screen_buffers_.end(); ++iter) {
@@ -434,7 +441,10 @@ void FrameBuffer::update_resolution(ocarina::uint2 res) noexcept {
     reset_rays();
     reset_visibility_buffer();
     update_screen_window();
-    auto_manage_accumulation_buffer(accumulation_.hv());
+    // Data-only embedded bases have no pixel storage until their first render.
+    if (rt_buffer_.device_buffer().size() != 0u) {
+        auto_manage_accumulation_buffer(accumulation_.hv());
+    }
     for (auto &it : screen_buffers_) {
         it.second->update_resolution(res, device());
     }

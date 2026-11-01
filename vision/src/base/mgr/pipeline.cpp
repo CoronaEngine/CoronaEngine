@@ -163,12 +163,20 @@ void Pipeline::sync_output_denoise() noexcept {
 }
 
 void Pipeline::prepare() noexcept {
+    prepare(true);
+}
+
+void Pipeline::prepare(bool allocate_framebuffer_pixels) noexcept {
     switch_profile::Scope profile{"framebuffer.prepare", "buffers"};
     activate_global_context();
     if (!scene_view_.geometry().has_gpu_resource()) {
         scene_view_.geometry().init(device());
     }
-    renderer().frame_buffer()->prepare();
+    if (allocate_framebuffer_pixels) {
+        renderer().frame_buffer()->prepare();
+    } else {
+        renderer().frame_buffer()->prepare(false);
+    }
 }
 
 void Pipeline::on_touch(ocarina::uint2 pos) noexcept {

@@ -18,7 +18,7 @@ public:
     VS_MAKE_PLUGIN_NAME_FUNC
     void prepare() noexcept override {
         switch_profile::Scope profile{"pipeline.prepare", "resources"};
-        Pipeline::prepare();
+        Pipeline::prepare(!defer_base_compile_);
         scene().prepare();
         renderer_.prepare(scene(), !defer_base_compile_);
         image_pool().prepare(stream());
@@ -69,6 +69,8 @@ public:
         // Standalone/base rendering remains supported on its first actual use.
         if (active_renderer_ == &renderer_ && !base_compiled_) {
             if (defer_base_compile_) {
+                frame_buffer()->prepare();
+                frame_buffer()->prepare_view_texture();
                 integrator()->prepare();
                 upload_bindless_array();
             }
