@@ -96,7 +96,13 @@ void ReBLUR::prepare() noexcept {
     coverage_->prepare();
 }
 void ReBLUR::update_resolution(uint2 resolution) noexcept {
+#ifdef VISION_REBLUR_NATIVE_NRD
+    // This build always selects native NRD or EDSL in compile(). Neither uses
+    // the fallback filter's histories or scratch buffers, including at prepare.
+    filter_->prepare_native(device(), resolution);
+#else
     filter_->prepare(device(), resolution, pipeline()->renderer().integrator()->stable_planes_enabled() ? 3u : 1u);
+#endif
     filter_->reset(); frame_ = InvalidUI32;
     if (coverage_ && coverage_->has_prepared_resources()) coverage_->update_resolution(resolution);
 }
@@ -106,7 +112,9 @@ void ReBLUR::set_enabled(bool enabled) noexcept {
     if (coverage_) coverage_->set_enabled(enabled);
 }
 void ReBLUR::set_stable_planes_enabled(bool enabled) noexcept {
+#ifndef VISION_REBLUR_NATIVE_NRD
     if (has_prepared_resources()) filter_->prepare(device(), frame_buffer().raytracing_resolution(), enabled ? 3u : 1u);
+#endif
     filter_->reset(); frame_ = InvalidUI32;
     if (coverage_) coverage_->set_stable_planes_enabled(enabled);
 }
