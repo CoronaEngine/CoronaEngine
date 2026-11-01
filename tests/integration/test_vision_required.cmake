@@ -13,7 +13,10 @@ block()
             vision-pipeline-bake vision-uvunwrapper vision-uvunwrapper-xatlas
             vision-rasterizer vision-rasterizer-cpu vision-ext-xatlas xatlas
             vision-radiancecache vision-radiancecache-sharc
-            vision-upsampler vision-upsampler-bilateral vision-lightsampler-bvh)
+            vision-upsampler vision-upsampler-bilateral vision-lightsampler-bvh
+            vision-pipeline-customized vision-render_graph vision-pass
+            vision-pass-integrate vision-pass-accumulate vision-pass-tonemapping
+            vision-pass-gamma test-render_graph)
         if(TARGET "${retired_target}")
             message(FATAL_ERROR "Retired Vision target is still registered: ${retired_target}")
         endif()

@@ -32,7 +32,6 @@ add_subdirectory(UI)
 #add_subdirectory(hotfix)
 add_subdirectory(base)
 add_subdirectory(math)
-add_subdirectory(render_graph)
 add_subdirectory(pipelines)
 add_subdirectory(render_core)
 
@@ -46,7 +45,6 @@ target_link_libraries(vision-main INTERFACE
         vision-base
         vision-window
         vision-pipeline
-        vision-render_graph
         vision-math)
 
 add_library(vision-all_libs INTERFACE)

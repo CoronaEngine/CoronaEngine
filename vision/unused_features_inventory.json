@@ -106,8 +106,8 @@
     {
       "category": "pipeline",
       "name": "customized",
-      "status": "未接入",
-      "note": "见 F13；图输出写回被注释",
+      "status": "已移除",
+      "note": "2026-11-01 随 F13 整组移除；evidence 保留初次审计路径，参见 resolutions",
       "evidence": {
         "path": "vision/src/pipelines/customized/CMakeLists.txt",
         "line": 2
@@ -346,8 +346,8 @@
     {
       "category": "pass",
       "name": "accumulate",
-      "status": "未接入",
-      "note": "由 customized 使用，当前无管线执行入口；见 F13",
+      "status": "已移除",
+      "note": "2026-11-01 随 F13 整组移除；evidence 保留初次审计路径，参见 resolutions",
       "evidence": {
         "path": "vision/src/render_core/pass/CMakeLists.txt",
         "line": 2
@@ -356,8 +356,8 @@
     {
       "category": "pass",
       "name": "integrate",
-      "status": "未接入",
-      "note": "由 customized 使用，当前无管线执行入口；见 F13",
+      "status": "已移除",
+      "note": "2026-11-01 随 F13 整组移除；evidence 保留初次审计路径，参见 resolutions",
       "evidence": {
         "path": "vision/src/render_core/pass/CMakeLists.txt",
         "line": 3
@@ -366,8 +366,8 @@
     {
       "category": "pass",
       "name": "tonemapping",
-      "status": "未接入",
-      "note": "由 customized 使用，当前无管线执行入口；见 F13",
+      "status": "已移除",
+      "note": "2026-11-01 随 F13 整组移除；evidence 保留初次审计路径，参见 resolutions",
       "evidence": {
         "path": "vision/src/render_core/pass/CMakeLists.txt",
         "line": 4
@@ -376,8 +376,8 @@
     {
       "category": "pass",
       "name": "gamma",
-      "status": "未接入",
-      "note": "由 customized 使用，当前无管线执行入口；见 F13",
+      "status": "已移除",
+      "note": "2026-11-01 随 F13 整组移除；evidence 保留初次审计路径，参见 resolutions",
       "evidence": {
         "path": "vision/src/render_core/pass/CMakeLists.txt",
         "line": 5
@@ -2141,6 +2141,101 @@
       "remaining_plugin_targets": 47,
       "remaining_plugin_categories": 17,
       "evidence": "build/plugin-removal/regression-verification.json"
+    },
+    {
+      "feature_id": "F13",
+      "status": "removed",
+      "date": "2026-11-01",
+      "report": "vision/UNUSED_FEATURES.md",
+      "baseline_revision": "f108ef716dab494bac6172d56f79bd564fedb7a4",
+      "removed_standalone_files": 15,
+      "removed_standalone_lines": 758,
+      "removed_plugin_targets": [
+        "vision-pipeline-customized",
+        "vision-pass-integrate",
+        "vision-pass-accumulate",
+        "vision-pass-tonemapping",
+        "vision-pass-gamma"
+      ],
+      "removed_support_targets": [
+        "vision-render_graph",
+        "vision-pass",
+        "test-render_graph"
+      ],
+      "remaining_plugin_targets": 42,
+      "remaining_plugin_categories": 16,
+      "note": "Removed customized pipeline, RenderGraph resources and passes, empty graph test, PassDesc and Pipeline::prepare_render_graph; cleaned parent CMake dependencies and workflow test. Fixed pipeline, integrators, FrameBuffer output, material ShaderGraph and denoiser passes remain. Pipeline vtable changes require rebuilding all consumers together.",
+      "validation_scope": "F13 removal only; original counts and evidence remain historical.",
+      "validation": {
+        "workflow_tests": {
+          "total": 10,
+          "passed": 10
+        },
+        "cmake_configure": "passed",
+        "retired_targets_absent": [
+          "vision-pipeline-customized",
+          "vision-render_graph",
+          "vision-pass",
+          "vision-pass-integrate",
+          "vision-pass-accumulate",
+          "vision-pass-tonemapping",
+          "vision-pass-gamma",
+          "test-render_graph"
+        ],
+        "engine_and_regression_build": "blocked_by_existing_horizon_api_mismatch",
+        "blocker": {
+          "file": "vision/src/render_core/integrator/ReSTIR/stable_planes.cpp",
+          "line": 176,
+          "compiler_error": "C2039",
+          "missing_api": "ocarina::Function::require_ray_query_compute_workgroups",
+          "horizon_revision": "ccf5a3fbcdd8dbbd2487f7a5745c411eb88a5d72",
+          "isolated_horizon_only_probe_confirmed": true,
+          "restir_source_unchanged": true
+        },
+        "independent_build": {
+          "status": "passed",
+          "plugin_count": 41,
+          "vision_base": true,
+          "test_executable_count": 3,
+          "excluded_plugin": "vision-integrator-rt",
+          "retry": "A transient LNK1104 for vision-sampler-independent.dll was resolved by a serial link retry without code changes."
+        },
+        "ctest": {
+          "selected": 29,
+          "executed": 11,
+          "passed": 11,
+          "failed": 0,
+          "not_run_due_to_build_blocker": [
+            "VisionRenderModeConfigTests",
+            "LightFieldGeometryTests",
+            "VisionMaterialAdapterTests",
+            "VisionPipelineKeyTests",
+            "VisionSceneResourceTests",
+            "VisionInteropLifetimeTests",
+            "VisionDeviceLifetimeTests",
+            "VisionGeometryGpuResourceTests",
+            "VisionWorldBoundsGpuTests",
+            "VisionReblurTests",
+            "VisionRelaxPT",
+            "VisionRelaxReSTIR",
+            "VisionRelaxLifecycle",
+            "VisionEngineSceneTests",
+            "VisionCameraSettingsTests",
+            "VisionSharedDisplayTests",
+            "VisionReSTIREstimatorTests",
+            "VisionPrincipledStablePlanes"
+          ]
+        },
+        "binary_import_audit": {
+          "inspected": 42,
+          "retired_module_imports": 0
+        },
+        "removed_old_artifacts": 5,
+        "retired_artifacts_remaining": [],
+        "engine_deployment_completed": false,
+        "full_gpu_regression_completed": false
+      },
+      "evidence": "build/rendergraph-removal/verification.json"
     }
   ]
 }

@@ -15,7 +15,6 @@ add_subdirectory(warper)
 add_subdirectory(spectrum)
 add_subdirectory(tonemapper)
 add_subdirectory(denoiser)
-add_subdirectory(pass)
 add_subdirectory(framebuffer)
 
 add_library(vision-plugins INTERFACE)
@@ -24,7 +23,6 @@ target_link_libraries(vision-plugins INTERFACE
         vision-shape
         vision-tonemapper
         vision-denoiser
-        vision-pass
         vision-lightsampler
         vision-sensor
         vision-light
