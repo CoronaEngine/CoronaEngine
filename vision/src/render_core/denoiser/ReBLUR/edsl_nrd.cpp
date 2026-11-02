@@ -1,7 +1,6 @@
 #include "edsl_nrd.h"
 #include "edsl_nrd_params.h"
 #include "math/half.h"
-#include <NRD.h>
 #include <algorithm>
 #include <charconv>
 #include <cmath>
@@ -82,6 +81,9 @@ struct EdslReblur::Impl {
     uint2 prepass_probe_pixel{1235u, 529u};
     std::array<ocarina::half, 24u * 4u> prepass_probe_initial{};
     explicit Impl(Device &d) : device(d) {
+        for (const char *name : {"REBLUR_ORIGINAL_CORE", "REBLUR_NATIVE_NRD"})
+            if (const char *value = std::getenv(name); value && std::strcmp(value, "1") == 0)
+                throw std::invalid_argument("ReBLUR uses the repository-local EDSL implementation; remove the obsolete native SDK selector");
         if (const char *value = std::getenv("REBLUR_SNAPSHOT_FRAME")) {
             const char *end = value + std::strlen(value);
             const auto parsed = std::from_chars(value, end, snapshot_frame);

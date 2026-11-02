@@ -1,8 +1,10 @@
 #pragma once
-#include "native_nrd.h"
+#include "edsl_runtime.h"
+#include "scheduler/include/NRD.h"
+#include "filter.h"
 
 namespace vision::reblur {
-// NRD supplies CPU constants/resource scheduling; every GPU pass uses EDSL.
+// Repository-local CPU scheduling and Ocarina EDSL GPU kernels.
 class EdslReblur {
     struct Impl;
     std::unique_ptr<Impl> impl_;

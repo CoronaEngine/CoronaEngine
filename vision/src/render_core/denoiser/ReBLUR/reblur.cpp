@@ -2,13 +2,13 @@
 #include "base/mgr/pipeline.h"
 #include "base/integral/integrator.h"
 #include "utils.h"
-#ifdef VISION_REBLUR_NATIVE_NRD
+#ifdef VISION_REBLUR_EDSL
 #include "rhi/context.h"
 #endif
 
 namespace vision::reblur {
 namespace {
-#ifdef VISION_REBLUR_NATIVE_NRD
+#ifdef VISION_REBLUR_EDSL
 void store_native_matrix(std::array<float, 16> &destination, const float4x4 &matrix) {
     for (uint column = 0; column != 4u; ++column)
         for (uint row = 0; row != 4u; ++row)
@@ -96,9 +96,9 @@ void ReBLUR::prepare() noexcept {
     coverage_->prepare();
 }
 void ReBLUR::update_resolution(uint2 resolution) noexcept {
-#ifdef VISION_REBLUR_NATIVE_NRD
-    // This build always selects native NRD or EDSL in compile(). Neither uses
-    // the fallback filter's histories or scratch buffers, including at prepare.
+#ifdef VISION_REBLUR_EDSL
+    // EDSL uses only the current 80B guide; fallback filter histories and
+    // scratch buffers are not needed, including during resource preparation.
     filter_->prepare_native(device(), resolution);
 #else
     filter_->prepare(device(), resolution, pipeline()->renderer().integrator()->stable_planes_enabled() ? 3u : 1u);
@@ -112,7 +112,7 @@ void ReBLUR::set_enabled(bool enabled) noexcept {
     if (coverage_) coverage_->set_enabled(enabled);
 }
 void ReBLUR::set_stable_planes_enabled(bool enabled) noexcept {
-#ifndef VISION_REBLUR_NATIVE_NRD
+#ifndef VISION_REBLUR_EDSL
     if (has_prepared_resources()) filter_->prepare(device(), frame_buffer().raytracing_resolution(), enabled ? 3u : 1u);
 #endif
     filter_->reset(); frame_ = InvalidUI32;
@@ -123,13 +123,8 @@ void ReBLUR::render_sub_UI(Widgets *widgets) noexcept {
     if (widgets->check_box("turn on", &on)) { set_enabled(on); changed_ = true; }
 }
 void ReBLUR::compile() noexcept {
-#ifdef VISION_REBLUR_NATIVE_NRD
-    native_.reset();
-    edsl_.reset();
-    if (NativeReblur::requested())
-        native_ = make_shared<NativeReblur>(device().context()->runtime_directory() / "reblur-native");
-    else
-        edsl_ = make_shared<EdslReblur>(device());
+#ifdef VISION_REBLUR_EDSL
+    edsl_ = make_shared<EdslReblur>(device());
 #endif
     auto &camera = scene().sensor(); auto &sampler = renderer().sampler();
     Kernel guides = [&](Var<GuideParam> p) {
@@ -165,8 +160,8 @@ void ReBLUR::compile() noexcept {
             valid = plane->valid() != 0u && hit->is_hit();
             branch = plane.branch_sequence; instance_hash = guide_instance(hit.inst_id, plane.instance_hash);
             motion = plane->motion();
-#ifdef VISION_REBLUR_NATIVE_NRD
-            if (native_ || edsl_) {
+#ifdef VISION_REBLUR_EDSL
+            if (edsl_) {
                 // RTXPT relaxes disocclusion and roughness where extended
                 // stable paths diverge. Store its R8 mix in spare validity bits.
                 $if(plane.depth > 0u && valid) {
@@ -256,8 +251,8 @@ void ReBLUR::compile() noexcept {
         p.indirect.write(i, make_RadType4(p.specular.read(i).xyz(), 1.f));
     };
     publish_ = device().compile(publish, "REBLUR-PublishPT");
-#ifdef VISION_REBLUR_NATIVE_NRD
-    if (!native_ && !edsl_)
+#ifdef VISION_REBLUR_EDSL
+    if (!edsl_)
 #endif
         filter_->compile(device());
     coverage_->compile();
@@ -276,8 +271,8 @@ CommandBatch ReBLUR::dispatch(RealTimeDenoiseInput &input) noexcept {
         OC_ERROR("REBLUR requires explicit diffuse/specular radiance and world-space hit distances");
         return ret;
     }
-#ifdef VISION_REBLUR_NATIVE_NRD
-    if (native_ || edsl_) filter_->prepare_native(device(), input.resolution);
+#ifdef VISION_REBLUR_EDSL
+    if (edsl_) filter_->prepare_native(device(), input.resolution);
     else
 #endif
         filter_->prepare(device(), input.resolution, input.layer_count);
@@ -287,8 +282,8 @@ CommandBatch ReBLUR::dispatch(RealTimeDenoiseInput &input) noexcept {
                              projection_revision_ != camera->external_projection_revision();
         if (restart) filter_->reset();
         previous_raster_ = current_raster_; current_raster_ = camera->host_world_to_raster();
-#ifdef VISION_REBLUR_NATIVE_NRD
-        if (native_ || edsl_) update_native_camera(native_camera_, current_raster_, camera->host_c2w(),
+#ifdef VISION_REBLUR_EDSL
+        if (edsl_) update_native_camera(native_camera_, current_raster_, camera->host_c2w(),
                                            input.resolution, restart, pipeline()->frame_delta_ms());
 #endif
         frame_ = input.frame_index; fov_ = camera->fov_y();
@@ -315,12 +310,8 @@ CommandBatch ReBLUR::dispatch(RealTimeDenoiseInput &input) noexcept {
     p.unproject = 2.f * std::tan(radians(camera->fov_y()) * .5f) / static_cast<float>(input.resolution.y);
     const auto frame_delta_ms = pipeline()->frame_delta_ms();
     p.frame_rate_scale = frame_delta_ms > 0.0 ? std::max(33.333f / static_cast<float>(frame_delta_ms), 1.f) : 1.f;
-#ifdef VISION_REBLUR_NATIVE_NRD
-    if (native_) {
-        p = filter_->native_parameters(p, input.layer_index);
-        ret << native_->dispatch(p, native_camera_, input.layer_index, filter_->settings,
-                                  p.history_valid == 0u, filter_);
-    } else if (edsl_) {
+#ifdef VISION_REBLUR_EDSL
+    if (edsl_) {
         p = filter_->native_parameters(p, input.layer_index);
         ret << edsl_->dispatch(p, native_camera_, input.layer_index, filter_->settings, p.history_valid == 0u);
     } else

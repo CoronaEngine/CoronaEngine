@@ -2,7 +2,9 @@
 #include "render_core/denoiser/ReBLUR/edsl_nrd.h"
 #include "test_reblur_matrix_probe.h"
 #include "test_reblur_parameter_probe.h"
+#ifdef VISION_REBLUR_NATIVE_NRD
 #include "test_reblur_format_probe.h"
+#endif
 #include "rhi/context.h"
 #include <algorithm>
 #include <cmath>
@@ -222,6 +224,7 @@ void check_uint_gather(Device &device, Stream &stream) {
     }
     std::cout << "PASS: uint SRV Load/GatherRed, full-width values, clamp and float/uint descriptor aliases\n";
 }
+#ifdef VISION_REBLUR_NATIVE_NRD
 void check_sampling(Device &device, Stream &stream, const std::filesystem::path &probe_spirv) {
     using namespace vision::reblur;
     constexpr uint count = 256u;
@@ -251,6 +254,7 @@ void check_sampling(Device &device, Stream &stream, const std::filesystem::path 
     std::cout << "sampler max_abs=" << max_error << '\n';
     expect(max_error<1e-6f,"native linear-clamp sampler equivalence");
 }
+#endif
 void check_queued_resize(Device &device, Stream &stream) {
     using namespace vision::reblur;
     struct Replay {
@@ -317,6 +321,7 @@ void check_queued_resize(Device &device, Stream &stream) {
     }
     std::cout << "PASS: queued EDSL resize retains both resource generations and preserves separate/in-place invalid outputs\n";
 }
+#ifdef VISION_REBLUR_NATIVE_NRD
 void check_native_equivalence(Device &device, Stream &stream) {
     using namespace vision::reblur;
     EdslReblur implementation(device);
@@ -453,6 +458,7 @@ void check_native_equivalence(Device &device, Stream &stream) {
     expect(failures==0u,"EDSL native numerical equivalence");
     std::cout << "PASS: EDSL/native same-input three-layer numerical equivalence\n";
 }
+#endif
 }
 
 int main() {
@@ -468,6 +474,7 @@ int main() {
         vision::reblur::edsl::check_reblur_matrix_contract(device, stream);
         vision::reblur::edsl::check_reblur_parameter_contract(device, stream);
         check_queued_resize(device, stream);
+#ifdef VISION_REBLUR_NATIVE_NRD
         if (const char *probe=std::getenv("REBLUR_FORMAT_PROBE_SPIRV")) {
             const char *prefix=std::getenv("REBLUR_FORMAT_PROBE_OUTPUT");
             expect(prefix && *prefix,"format probe needs REBLUR_FORMAT_PROBE_OUTPUT");
@@ -478,6 +485,7 @@ int main() {
             if(std::getenv("REBLUR_EDSL_SAMPLING_ONLY")) return 0;
         }
         if (!std::getenv("REBLUR_EDSL_RESOURCES_ONLY")) check_native_equivalence(device, stream);
+#endif
         return 0;
     } catch (const std::exception &error) {
         std::cerr << "FAIL: " << error.what() << '\n';

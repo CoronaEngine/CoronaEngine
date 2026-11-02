@@ -9,8 +9,7 @@
 #include "base/denoiser.h"
 #include "params.h"
 #include "filter.h"
-#ifdef VISION_REBLUR_NATIVE_NRD
-#include "native_nrd.h"
+#ifdef VISION_REBLUR_EDSL
 #include "edsl_nrd.h"
 #endif
 
@@ -39,8 +38,7 @@ namespace vision::reblur {
 
 class ReBLUR : public Denoiser {
     SP<Filter> filter_{make_shared<Filter>()};
-#ifdef VISION_REBLUR_NATIVE_NRD
-    SP<NativeReblur> native_;
+#ifdef VISION_REBLUR_EDSL
     SP<EdslReblur> edsl_;
     NativeCameraParams native_camera_;
 #endif
@@ -69,8 +67,8 @@ public:
     [[nodiscard]] bool has_prepared_resources() const noexcept override { return filter_->resolution().x != 0u; }
     [[nodiscard]] CommandBatch dispatch(RealTimeDenoiseInput &input) noexcept override;
     void render_sub_UI(Widgets *widgets) noexcept override;
-#ifdef VISION_REBLUR_NATIVE_NRD
-    VS_HOTFIX_MAKE_RESTORE(Denoiser, filter_, native_, edsl_, native_camera_, scene_settings_, settings_override_, coverage_, enabled_, frame_, fov_, camera_revision_, projection_revision_, current_raster_, previous_raster_, prepare_guides_, publish_)
+#ifdef VISION_REBLUR_EDSL
+    VS_HOTFIX_MAKE_RESTORE(Denoiser, filter_, edsl_, native_camera_, scene_settings_, settings_override_, coverage_, enabled_, frame_, fov_, camera_revision_, projection_revision_, current_raster_, previous_raster_, prepare_guides_, publish_)
 #else
     VS_HOTFIX_MAKE_RESTORE(Denoiser, filter_, scene_settings_, settings_override_, coverage_, enabled_, frame_, fov_, camera_revision_, projection_revision_, current_raster_, previous_raster_, prepare_guides_, publish_)
 #endif

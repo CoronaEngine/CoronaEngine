@@ -1,5 +1,5 @@
 #include "render_core/denoiser/ReBLUR/reblur.h"
-#ifdef VISION_REBLUR_NATIVE_NRD
+#ifdef VISION_REBLUR_EDSL
 #include "render_core/denoiser/ReBLUR/edsl_nrd.h"
 #endif
 #include "render_core/denoiser/ReBLUR/utils.h"

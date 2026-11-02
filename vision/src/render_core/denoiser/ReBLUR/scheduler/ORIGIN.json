@@ -1,0 +1,281 @@
+{
+  "nrd_version": "4.14.3, 20 March 2025",
+  "mathlib_version": "1.3, 19 March 2025",
+  "scope": "CPU REBLUR_DIFFUSE_SPECULAR scheduler, original pool/constants/pass order; no shader bytecode, DLL, NVRHI or external headers.",
+  "files": [
+    {
+      "path": "include/NRD.h",
+      "upstream": "NRD/Include/NRD.h",
+      "upstream_sha256": "01b286f0b8b97ae42b368358500f4d17717d4423fbbbce29e59da3a90bb2f465",
+      "sha256": "b05b9826298e16f6bd34c27af6cd49eb325a73054a2b8b0fcd399fd06868f1d3",
+      "adapted": true
+    },
+    {
+      "path": "include/NRDDescs.h",
+      "upstream": "NRD/Include/NRDDescs.h",
+      "upstream_sha256": "c070f6c9248c30b173fc5c77c74f646fe9100feffda4eebabeae62772df22d7e",
+      "sha256": "683636421e94d773ce1a5f17dac59a2db4e85bbf5e10b42c1b5c77d31cf73cf3",
+      "adapted": true
+    },
+    {
+      "path": "include/NRDSettings.h",
+      "upstream": "NRD/Include/NRDSettings.h",
+      "upstream_sha256": "3f3194fe105d9a2c009e36ca7103de00653909620f39bd0926cb2d4ff23dfb26",
+      "sha256": "a114fcf8a74e4803e904ef3a5256f554e29a685037ff492e5ece41d8823e72c1",
+      "adapted": true
+    },
+    {
+      "path": "src/StdAllocator.h",
+      "upstream": "NRD/Source/StdAllocator.h",
+      "upstream_sha256": "9f7de951f3b680c71ff69471490b03f8117f74e39361931d70f99fc8dae0b736",
+      "sha256": "90c94c131b502c5b7dcb61e97ee6fbc940a172852b5bdae483f383f75416b2eb",
+      "adapted": true
+    },
+    {
+      "path": "src/Timer.h",
+      "upstream": "NRD/Source/Timer.h",
+      "upstream_sha256": "89715387062296a0826a3d7bd19425bbe422f1c12dafee71d102f5c39435d342",
+      "sha256": "89715387062296a0826a3d7bd19425bbe422f1c12dafee71d102f5c39435d342",
+      "adapted": false
+    },
+    {
+      "path": "src/Timer.cpp",
+      "upstream": "NRD/Source/Timer.cpp",
+      "upstream_sha256": "8cd8ea5c336d774cbdb516ada992f78d699b0f370faf108fc75ee02682b284a2",
+      "sha256": "8cd8ea5c336d774cbdb516ada992f78d699b0f370faf108fc75ee02682b284a2",
+      "adapted": false
+    },
+    {
+      "path": "src/Version.h",
+      "upstream": "NRD/Resources/Version.h",
+      "upstream_sha256": "86185b67c06c727f4a685e8183c945eaa3d2ce4108825505023bcd434b181a2f",
+      "sha256": "456716a8f815718d8f5b688ed750dbad561dc283229442f9e88b538f9e34c392",
+      "adapted": true
+    },
+    {
+      "path": "LICENSE-NRD.txt",
+      "upstream": "NRD/LICENSE.txt",
+      "upstream_sha256": "85201d19c2dc5041d9a2029e9fda9d78105fe41ce21ce9701d4aa7e56184b6e7",
+      "sha256": "85201d19c2dc5041d9a2029e9fda9d78105fe41ce21ce9701d4aa7e56184b6e7",
+      "adapted": false
+    },
+    {
+      "path": "math/ml.h",
+      "upstream": "MathLib/ml.h",
+      "upstream_sha256": "a8222ad2620f8f8afd7caa235e1fac5ca7d8389e7092d82994acf5b7de4ff48c",
+      "sha256": "a8222ad2620f8f8afd7caa235e1fac5ca7d8389e7092d82994acf5b7de4ff48c",
+      "adapted": false
+    },
+    {
+      "path": "math/ml.hlsli",
+      "upstream": "MathLib/ml.hlsli",
+      "upstream_sha256": "f5314c4a8fe72176c2e8242e3af9829697205d3db11d30f1cccb76bc1bf288fa",
+      "sha256": "f5314c4a8fe72176c2e8242e3af9829697205d3db11d30f1cccb76bc1bf288fa",
+      "adapted": false
+    },
+    {
+      "path": "math/LICENSE.txt",
+      "upstream": "MathLib/LICENSE.txt",
+      "upstream_sha256": "7c5e43e9fe07dd6f50cc6e000df7980640706d6278b4c6e4d3126a31e9ff1c93",
+      "sha256": "7c5e43e9fe07dd6f50cc6e000df7980640706d6278b4c6e4d3126a31e9ff1c93",
+      "adapted": false
+    },
+    {
+      "path": "math/Guts/bool1.h",
+      "upstream": "MathLib/Guts/bool1.h",
+      "upstream_sha256": "694a6bf3e194bc1a3482b52d7bf2ef3720508c86d57cb3c6ad719f811cd1b2ad",
+      "sha256": "694a6bf3e194bc1a3482b52d7bf2ef3720508c86d57cb3c6ad719f811cd1b2ad",
+      "adapted": false
+    },
+    {
+      "path": "math/Guts/conversion.h",
+      "upstream": "MathLib/Guts/conversion.h",
+      "upstream_sha256": "6bfbb6203ab5fb3c8682e6e0c738cbcf35e0b57aac116941785b9634d84bd78e",
+      "sha256": "6bfbb6203ab5fb3c8682e6e0c738cbcf35e0b57aac116941785b9634d84bd78e",
+      "adapted": false
+    },
+    {
+      "path": "math/Guts/emulation.h",
+      "upstream": "MathLib/Guts/emulation.h",
+      "upstream_sha256": "4c403b54bb361b6f42b4f25a218b7e287216b2f465b96902a4b34e06ceeb587e",
+      "sha256": "4c403b54bb361b6f42b4f25a218b7e287216b2f465b96902a4b34e06ceeb587e",
+      "adapted": false
+    },
+    {
+      "path": "math/Guts/f16.h",
+      "upstream": "MathLib/Guts/f16.h",
+      "upstream_sha256": "2371db97c1bbe7a7efafd974ee66e477b023993367cedb8b1fdbb84ffcf2477c",
+      "sha256": "2371db97c1bbe7a7efafd974ee66e477b023993367cedb8b1fdbb84ffcf2477c",
+      "adapted": false
+    },
+    {
+      "path": "math/Guts/f32.h",
+      "upstream": "MathLib/Guts/f32.h",
+      "upstream_sha256": "2360f9eddc400ff2700c7d5377d60226000744b8170f88e89b5ecbeb0475c68c",
+      "sha256": "2360f9eddc400ff2700c7d5377d60226000744b8170f88e89b5ecbeb0475c68c",
+      "adapted": false
+    },
+    {
+      "path": "math/Guts/f64.h",
+      "upstream": "MathLib/Guts/f64.h",
+      "upstream_sha256": "00397d43e1720923b3daf84649a4ac31e3a6944d322ee86a47d9918ac74cd0aa",
+      "sha256": "00397d43e1720923b3daf84649a4ac31e3a6944d322ee86a47d9918ac74cd0aa",
+      "adapted": false
+    },
+    {
+      "path": "math/Guts/i32.h",
+      "upstream": "MathLib/Guts/i32.h",
+      "upstream_sha256": "b4fdd80cd99486ea48e6eb09d631f87631b1bf6fafaddeeee49aa2671968bf78",
+      "sha256": "b4fdd80cd99486ea48e6eb09d631f87631b1bf6fafaddeeee49aa2671968bf78",
+      "adapted": false
+    },
+    {
+      "path": "math/Guts/math.h",
+      "upstream": "MathLib/Guts/math.h",
+      "upstream_sha256": "f46a845075f48327f569b8cf73366dd9f272c51d1e1a013a3cc61138b56c172b",
+      "sha256": "f46a845075f48327f569b8cf73366dd9f272c51d1e1a013a3cc61138b56c172b",
+      "adapted": false
+    },
+    {
+      "path": "math/Guts/other.h",
+      "upstream": "MathLib/Guts/other.h",
+      "upstream_sha256": "9fce0e81e51c41803ffb317715b921311d5a8b0b4da7fe6412d17dc7e3a68d0d",
+      "sha256": "9fce0e81e51c41803ffb317715b921311d5a8b0b4da7fe6412d17dc7e3a68d0d",
+      "adapted": false
+    },
+    {
+      "path": "math/Guts/packing.h",
+      "upstream": "MathLib/Guts/packing.h",
+      "upstream_sha256": "cdcd821b6deb11278e25be6d97bb68ee61f5773cbd01f4ec3ea50eae7190a991",
+      "sha256": "cdcd821b6deb11278e25be6d97bb68ee61f5773cbd01f4ec3ea50eae7190a991",
+      "adapted": false
+    },
+    {
+      "path": "math/Guts/sorting.h",
+      "upstream": "MathLib/Guts/sorting.h",
+      "upstream_sha256": "cc89494ed1f769750a6edf06871683093f8ba38ece3663654c8498ef8f012396",
+      "sha256": "cc89494ed1f769750a6edf06871683093f8ba38ece3663654c8498ef8f012396",
+      "adapted": false
+    },
+    {
+      "path": "math/Guts/swizzle.h",
+      "upstream": "MathLib/Guts/swizzle.h",
+      "upstream_sha256": "e0f3b010aa448fa217f5a943de714056cd61b3a78d5ba8f496144ee499b6294c",
+      "sha256": "e0f3b010aa448fa217f5a943de714056cd61b3a78d5ba8f496144ee499b6294c",
+      "adapted": false
+    },
+    {
+      "path": "math/Guts/u32.h",
+      "upstream": "MathLib/Guts/u32.h",
+      "upstream_sha256": "39f697ac064287a524359d985c0728dbe3d06af84e48db19f66a66c1bbc20564",
+      "sha256": "39f697ac064287a524359d985c0728dbe3d06af84e48db19f66a66c1bbc20564",
+      "adapted": false
+    },
+    {
+      "path": "src/InstanceImpl.h",
+      "upstream": "NRD/Source/InstanceImpl.h",
+      "upstream_sha256": "29d3f0ddc8087baa6b4b8b9068969124187c77ac005e998e5649ed2315e4ea0c",
+      "sha256": "b37b99b332992e8ac119fae5434fd47df320d0a4afb7b93e32203c2d7febd863",
+      "adapted": true
+    },
+    {
+      "path": "src/InstanceImpl.cpp",
+      "upstream": "NRD/Source/InstanceImpl.cpp",
+      "upstream_sha256": "3d37cadde23c000bd7985a291292e6314a3e6d1c5c9fb7fc8870eea0fba22381",
+      "sha256": "32349ca03faecb57d27498747293d836f1a5b1246b376686519a095a7eb257df",
+      "adapted": true
+    },
+    {
+      "path": "src/Reblur.cpp",
+      "upstream": "NRD/Source/Reblur.cpp",
+      "upstream_sha256": "372b90a344bb724a930ecdafbc8a83ff80876f013f13cba294d3f170f10478f5",
+      "sha256": "c3df33f6cbe554b6fec7437e6d929291b6bffd5e2d649b0cfba8a955f0843dce",
+      "adapted": true
+    },
+    {
+      "path": "src/Denoisers/Reblur_DiffuseSpecular.hpp",
+      "upstream": "NRD/Source/Denoisers/Reblur_DiffuseSpecular.hpp",
+      "upstream_sha256": "e5099d38956cd08d9448ac97be8bfe8fa6a34b95aa39a3276213949032e6d3fd",
+      "sha256": "84f42b75e73895123baf6c4fded6e730fb90bb54664ae73d81125f491ea33e9b",
+      "adapted": true
+    },
+    {
+      "path": "src/Wrapper.cpp",
+      "upstream": "NRD/Source/Wrapper.cpp",
+      "upstream_sha256": "c0c153caf66c6060b8ecbd1ae235fadabbe9ddc65ec273bcebbce2bf5df649a7",
+      "sha256": "b84fb51a9b062c3b2826aef43b073d94ac708d978b8a4a6c65e96e3651e19720",
+      "adapted": true
+    },
+    {
+      "path": "src/CpuReblurConfig.h",
+      "upstream": "NRD/Shaders/Include/REBLUR_Config.hlsli",
+      "upstream_sha256": "3f0674f824a215022a78547c85ecbf53cce04cfbd8f1f20087b95c1e2fcb1ffd",
+      "sha256": "06fc8c5e773ecf966e80477ec1a184e26456e66ec8bac19a91c111760735408c",
+      "adapted": true
+    },
+    {
+      "path": "src/CpuResourceLayouts.h",
+      "upstream": "NRD/Shaders/Resources/REBLUR_Blur.resources.hlsli",
+      "upstream_sha256": "15ccfa1d9b4a1bf62ba77fefe4d388f0cf42fc3206d6ea7385910931f7623783",
+      "sha256": "247f6485f7db75958c1c0a744f609a8717cc8d7a13eb77b0096032438364d80d",
+      "adapted": true
+    },
+    {
+      "path": "src/CpuBindings.h",
+      "upstream": "NRD/Shaders/Include/NRD.hlsli",
+      "upstream_sha256": "39d90b48ad787ddff98cb57651a543da3d89bf2270b6cb62ef9a0556fe04b5cd",
+      "sha256": "78da769bfc54d6d64c4fba3a30e2f341f38575f70b0c4c7781de3c385f5fd24e",
+      "adapted": true
+    }
+  ],
+  "derived_resource_declarations": [
+    {
+      "path": "NRD/Shaders/Resources/Clear_Float.resources.hlsli",
+      "sha256": "f9859aca1235ee587cbca11dea1cf1e634e4985162372299a7e728d8001ebdf4"
+    },
+    {
+      "path": "NRD/Shaders/Resources/Clear_Uint.resources.hlsli",
+      "sha256": "372fd61cbca38322c9593340f48992b0ecfc871ef043a735d8e336513c0b43a5"
+    },
+    {
+      "path": "NRD/Shaders/Resources/REBLUR_Blur.resources.hlsli",
+      "sha256": "15ccfa1d9b4a1bf62ba77fefe4d388f0cf42fc3206d6ea7385910931f7623783"
+    },
+    {
+      "path": "NRD/Shaders/Resources/REBLUR_ClassifyTiles.resources.hlsli",
+      "sha256": "280b948e3020167833ef448ba5c833a53035ee54dab0d29b52f678ecbdc6ac6a"
+    },
+    {
+      "path": "NRD/Shaders/Resources/REBLUR_HistoryFix.resources.hlsli",
+      "sha256": "fffe8e2d8c67c75e193751d9a67e54bab6dde1cd0c007bcff045ec27b65149fa"
+    },
+    {
+      "path": "NRD/Shaders/Resources/REBLUR_HitDistReconstruction.resources.hlsli",
+      "sha256": "57b62eb319aa27199e119043b8f53609b61bbe3e58e70b69c23f925935d16e26"
+    },
+    {
+      "path": "NRD/Shaders/Resources/REBLUR_PostBlur.resources.hlsli",
+      "sha256": "ab5a835d511df5fd696218896e792eb6c6ed3f862a4c1dc582e392b233282923"
+    },
+    {
+      "path": "NRD/Shaders/Resources/REBLUR_PrePass.resources.hlsli",
+      "sha256": "963d350f8bd67dd778bed59d0c3552f5a2915a8b744cfaab1c785623c039b2ad"
+    },
+    {
+      "path": "NRD/Shaders/Resources/REBLUR_SplitScreen.resources.hlsli",
+      "sha256": "f3a7cce3162cceabbb0cb07201f7c1e7a42bc4e367a5940bc6110a40848939ed"
+    },
+    {
+      "path": "NRD/Shaders/Resources/REBLUR_TemporalAccumulation.resources.hlsli",
+      "sha256": "17fd92890724f781ea15adb1d65431bb352d2df83039751bc25d92029272f76e"
+    },
+    {
+      "path": "NRD/Shaders/Resources/REBLUR_TemporalStabilization.resources.hlsli",
+      "sha256": "0abc9ac3ca7d572e88581b038466d63993456223df296274c11b079259c02672"
+    },
+    {
+      "path": "NRD/Shaders/Resources/REBLUR_Validation.resources.hlsli",
+      "sha256": "8058edd8ed018891511a3cbcedd280502429ec9e91b7d5fc93d6382767806319"
+    }
+  ]
+}

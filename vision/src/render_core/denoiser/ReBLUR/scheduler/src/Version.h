@@ -1,0 +1,18 @@
+#define STR_HELPER(x) #x
+#define STR(x) STR_HELPER(x)
+
+/*
+Versioning rules:
+- give version to someone - increment version before and after for tracking
+- BUILD - preserves binary compatibility
+- MINOR - settings & descs change
+- MAJOR - major feature update, API change
+- don't forget to update NRD.hlsli, README and UPDATE
+- don't forget to update requirements in NRDIntegration
+*/
+
+#define VERSION_MAJOR                   4
+#define VERSION_MINOR                   14
+#define VERSION_BUILD                   3
+
+#define VERSION_STRING STR(VERSION_MAJOR.VERSION_MINOR.VERSION_BUILD encoding=NRD_NORMAL_ENCODING.NRD_ROUGHNESS_ENCODING)
