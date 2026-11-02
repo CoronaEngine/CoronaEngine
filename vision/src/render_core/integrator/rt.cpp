@@ -500,14 +500,20 @@ public:
         if (!denoiser_runtime_disabled() && denoiser_ && denoiser_->enabled()) {
             begin_denoise_timing(stream);
             const uint count = stable_planes_enabled() ? StablePlaneCount : 1u;
+            bool composed_lobes = false;
             for (uint layer = 0u; layer < count; ++layer) {
                 auto dn_input = denoise_input(layer);
+                dn_input.stable_radiance_factor = direct_->factor();
+                const char *batch_compose = std::getenv("REBLUR_BATCH_COMPOSE");
+                dn_input.compose_only = denoiser_->impl_type() == "ReBLUR" &&
+                    (!batch_compose || batch_compose[0] != '0') && !raw_stable_outputs_required(precise_lobes);
                 submit(denoiser_->dispatch(dn_input), &cur_stage_profile_.spatial_angular_ms);
+                composed_lobes |= dn_input.composed_lobe_output;
             }
             debug_readback("filtered");
             if (stable_planes_enabled() || denoiser) {
-                if (denoiser) submit(compose_denoiser_(uint(stable_planes_enabled()), direct_->factor()).dispatch(pipeline()->resolution()), &cur_stage_profile_.combine_ms);
-                else submit(compose_layers_().dispatch(pipeline()->resolution()), &cur_stage_profile_.combine_ms);
+                if (denoiser && !composed_lobes) submit(compose_denoiser_(uint(stable_planes_enabled()), direct_->factor()).dispatch(pipeline()->resolution()), &cur_stage_profile_.combine_ms);
+                else if (!denoiser) submit(compose_layers_().dispatch(pipeline()->resolution()), &cur_stage_profile_.combine_ms);
                 debug_readback("composite_pre", false);
                 if (extra_aa) {
                     auto coverage = denoise_input();

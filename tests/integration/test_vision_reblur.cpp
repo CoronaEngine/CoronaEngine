@@ -26,8 +26,12 @@
 #include <optional>
 #include <sstream>
 #include <unordered_map>
+#include "reblur_guide_fusion.h"
 #include "reblur_precise_lobes_probe.h"
 #include "reblur_coverage_history_probe.h"
+#ifdef VISION_REBLUR_EDSL
+#include "reblur_unpack_compose_probe.h"
+#endif
 
 namespace {
 using namespace vision;
@@ -1396,12 +1400,22 @@ int main() {
         Global::instance().set_device(&device);
         auto stream = device.create_stream();
         std::cout << "REBLUR test backend: " << test_backend << '\n';
+#ifdef VISION_REBLUR_EDSL
+        if (std::getenv("REBLUR_TEST_UNPACK_COMPOSE_ONLY")) {
+            unpack_compose_probe::check(device, stream);
+            return 0;
+        }
+#endif
         if (std::getenv("REBLUR_TEST_PRECISE_LOBES_ONLY")) {
             precise_lobes_probe::check(device, stream);
             return 0;
         }
         if (std::getenv("REBLUR_TEST_COVERAGE_HISTORY_ONLY")) {
             coverage_history_probe::check(device, stream);
+            return 0;
+        }
+        if (std::getenv("REBLUR_TEST_GUIDE_FUSION_ONLY")) {
+            check_reblur_guide_fusion();
             return 0;
         }
         if (std::getenv("REBLUR_TEST_COVERAGE_ONLY")) {
@@ -1417,6 +1431,9 @@ int main() {
 #endif
         if (test_backend != "native") {
             select_native_backend("0");
+#ifdef VISION_REBLUR_EDSL
+            unpack_compose_probe::check(device, stream);
+#endif
             precise_lobes_probe::check(device, stream);
             coverage_history_probe::check(device, stream);
             check_storage_budget(device);

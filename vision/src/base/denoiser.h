@@ -43,6 +43,14 @@ struct RealTimeDenoiseInput {
 
     bool has_lobe_signals{false};
     DenoiseLobeInput lobe_signals;
+    // ReSTIR deterministic stable radiance receives its direct-light factor.
+    float stable_radiance_factor{1.f};
+    // Explicit final-output-only contract: filtered lobe buffers need not be
+    // published when dispatch composes their complete signal into rt_buffer.
+    // Submit all layers in ascending order; raw lobe storage may be retired.
+    bool compose_only{false};
+    // Dispatch result: the final lobe pass wrote the complete FP32 rt_buffer.
+    bool composed_lobe_output{};
 
 //    BufferView<float4> output;
 //    BufferView<float4> radiance;

@@ -133,6 +133,15 @@ struct OutputImages {
         }
     }
 };
+struct ComposeParam {
+    BufferDesc<float4> diffuse, specular, bypass, stable_radiance, output;
+    uint layer_count{1u}, layer_index{}, layered{};
+    float direct_factor{1.f};
+};
+struct BatchUnpackParam {
+    ImageDesc diffuse0, specular0, diffuse1, specular1, diffuse2, specular2;
+    ComposeParam composition;
+};
 struct Dispatch {
     SharedConstants constants;
     InputImages inputs;
@@ -141,18 +150,28 @@ struct Dispatch {
     float4 previous_view_depth_row{};
     uint reconstruction_5x5{}, temporal_stabilization{1u};
     uint output_alias_mask{}; // bit 0: diffuse output aliases raw; bit 1: specular
+    uint defer_unpack{}; // Raw D/S retire into per-layer compact guides after Pack.
+    uint inputs_precleared{}; // Sparse layers inherit exact invalid input texels.
 };
 }
 OC_STRUCT(vision::reblur::edsl, SharedConstants, gWorldToClip, gViewToClip, gViewToWorld, gWorldToViewPrev, gWorldToClipPrev, gWorldPrevToWorld, gRotatorPre, gRotator, gRotatorPost, gFrustum, gFrustumPrev, gCameraDelta, gHitDistParams, gViewVectorWorld, gViewVectorWorldPrev, gMvScale, gAntilagParams, gResourceSize, gResourceSizeInv, gResourceSizeInvPrev, gRectSize, gRectSizeInv, gRectSizePrev, gResolutionScale, gResolutionScalePrev, gRectOffset, gSpecProbabilityThresholdsForMvModification, gJitter, gPrintfAt, gRectOrigin, gRectSizeMinusOne, gDisocclusionThreshold, gDisocclusionThresholdAlternate, gCameraAttachedReflectionMaterialID, gStrandMaterialID, gStrandThickness, gStabilizationStrength, gDebug, gOrthoMode, gUnproject, gDenoisingRange, gPlaneDistSensitivity, gFramerateScale, gMinBlurRadius, gMaxBlurRadius, gDiffPrepassBlurRadius, gSpecPrepassBlurRadius, gMaxAccumulatedFrameNum, gMaxFastAccumulatedFrameNum, gAntiFirefly, gLobeAngleFraction, gRoughnessFraction, gResponsiveAccumulationRoughnessThreshold, gHistoryFixFrameNum, gHistoryFixBasePixelStride, gMinRectDimMulUnproject, gUsePrepassNotOnlyForSpecularMotionEstimation, gSplitScreen, gSplitScreenPrev, gCheckerboardResolveAccumSpeed, gViewZScale, gFireflySuppressorMinRelativeScale, gMinHitDistanceWeight, gDiffMinMaterial, gSpecMinMaterial, gHasHistoryConfidence, gHasDisocclusionThresholdMix, gDiffCheckerboard, gSpecCheckerboard, gFrameIndex, gIsRectChanged, gResetHistory) {};
 OC_PARAM_STRUCT(vision::reblur::edsl, ImageDesc, texture, surface, size) {};
 OC_PARAM_STRUCT(vision::reblur::edsl, InputImages, t0, t1, t2, t3, t4, t5, t6, t7, t8, t9, t10, t11, t12, t13, t14, t15, t16, t17, t18, t19) {};
 OC_PARAM_STRUCT(vision::reblur::edsl, OutputImages, t0, t1, t2, t3, t4, t5, t6, t7) {};
-OC_PARAM_STRUCT(vision::reblur::edsl, Dispatch, constants, inputs, outputs, external, previous_view_depth_row, reconstruction_5x5, temporal_stabilization, output_alias_mask) {};
+OC_PARAM_STRUCT(vision::reblur::edsl, ComposeParam, diffuse, specular, bypass, stable_radiance, output, layer_count, layer_index, layered, direct_factor) {};
+OC_PARAM_STRUCT(vision::reblur::edsl, BatchUnpackParam, diffuse0, specular0, diffuse1, specular1, diffuse2, specular2, composition) {};
+OC_PARAM_STRUCT(vision::reblur::edsl, Dispatch, constants, inputs, outputs, external, previous_view_depth_row, reconstruction_5x5, temporal_stabilization, output_alias_mask, defer_unpack, inputs_precleared) {};
 
 namespace vision::reblur::edsl {
 using PassShader = Shader<void(Dispatch)>;
+using ComposingUnpackShader = Shader<void(Dispatch, ComposeParam)>;
+using BatchedUnpackShader = Shader<void(Dispatch, BatchUnpackParam)>;
+// Emit the unchanged format conversion while scene guides are still in registers.
+void emit_pack_pixel(const Var<Dispatch> &parameters, const Var<Guide> &guide, const Float2 &repaired_hits);
 PassShader compile_pack(Device &device);
-PassShader compile_unpack(Device &device);
+PassShader compile_unpack(Device &device, bool compact_guide = false);
+ComposingUnpackShader compile_unpack_and_compose(Device &device, bool compact_guide = true);
+BatchedUnpackShader compile_unpack_batch(Device &device);
 PassShader compile_classify(Device &device);
 PassShader compile_reconstruction(Device &device, bool is_5x5);
 PassShader compile_prepass(Device &device);

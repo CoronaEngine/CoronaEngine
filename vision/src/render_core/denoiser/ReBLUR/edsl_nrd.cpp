@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <charconv>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 #include <stdexcept>
 #include <string_view>
@@ -60,6 +61,7 @@ struct Resources {
     std::array<uint, 3> frames{UINT32_MAX, UINT32_MAX, UINT32_MAX};
     std::vector<Storage> permanent, transient;
     Storage motion, normal, view_z, disocclusion, input_d, input_s, output_d, output_s;
+    std::array<Storage, 2> deferred_d, deferred_s;
     Storage ta_probe, ts_probe, hf_probe, hrd_probe, prepass_probe;
     std::vector<std::byte> zeros;
     ~Resources() { if (instance) nrd::DestroyInstance(*instance); }
@@ -68,7 +70,10 @@ struct Resources {
 
 struct EdslReblur::Impl {
     Device &device;
+    const bool compact_guide_cache;
     edsl::PassShader pack, unpack, classify, reconstruct3, reconstruct5, prepass, temporal, history_fix, blur, post, post_no_ts, stabilization;
+    edsl::ComposingUnpackShader unpack_compose;
+    edsl::BatchedUnpackShader unpack_batch;
     std::shared_ptr<Resources> resources;
     std::array<std::shared_ptr<Resources>, 3> replay_resources;
     edsl::PassShader replay_begin, replay_end;
@@ -80,7 +85,8 @@ struct EdslReblur::Impl {
     bool prepass_probe_runtime{};
     uint2 prepass_probe_pixel{1235u, 529u};
     std::array<ocarina::half, 24u * 4u> prepass_probe_initial{};
-    explicit Impl(Device &d) : device(d) {
+    explicit Impl(Device &d, bool compact_guide)
+        : device(d), compact_guide_cache(compact_guide) {
         for (const char *name : {"REBLUR_ORIGINAL_CORE", "REBLUR_NATIVE_NRD"})
             if (const char *value = std::getenv(name); value && std::strcmp(value, "1") == 0)
                 throw std::invalid_argument("ReBLUR uses the repository-local EDSL implementation; remove the obsolete native SDK selector");
@@ -125,7 +131,11 @@ struct EdslReblur::Impl {
         require_edsl(library.versionMajor == 4u && library.versionMinor == 14u && library.versionBuild == 3u &&
             library.normalEncoding == nrd::NormalEncoding::R10_G10_B10_A2_UNORM && library.roughnessEncoding == nrd::RoughnessEncoding::LINEAR,
             "incompatible NRD CPU runtime");
-        pack = edsl::compile_pack(device); unpack = edsl::compile_unpack(device);
+        pack = edsl::compile_pack(device); unpack = edsl::compile_unpack(device, compact_guide);
+        if (compact_guide) {
+            unpack_compose = edsl::compile_unpack_and_compose(device, true);
+            unpack_batch = edsl::compile_unpack_batch(device);
+        }
         classify = edsl::compile_classify(device);
         reconstruct3 = edsl::compile_reconstruction(device, false); reconstruct5 = edsl::compile_reconstruction(device, true);
         prepass = edsl::compile_prepass(device); temporal = edsl::compile_temporal(device);
@@ -151,7 +161,8 @@ struct EdslReblur::Impl {
     std::string snapshot_prefix(uint frame, uint layer, uint pass) const {
         return "f" + std::to_string(frame) + "_l" + std::to_string(layer) + "_p" + std::to_string(pass);
     }
-    void snapshot(CommandBatch &commands, const Storage &storage, uint frame, uint layer, uint pass, uint slot, std::string_view shader_name) {
+    void snapshot(CommandBatch &commands, const Storage &storage, uint frame, uint layer, uint pass, uint slot,
+                  std::string_view shader_name, bool native_core = false) {
         if (snapshot_directory.empty() || (snapshot_frame_enabled && frame != snapshot_frame)) return;
         const std::string name = snapshot_prefix(frame, layer, pass) + "_u" + std::to_string(slot) + ".bin";
         const auto path = snapshot_directory / name;
@@ -166,7 +177,8 @@ struct EdslReblur::Impl {
         meta << "{\"path\":\"" << name << "\",\"frame\":" << frame << ",\"layer\":" << layer
              << ",\"pass\":" << pass << ",\"slot\":" << slot << ",\"shader\":\"" << shader_name
              << "\",\"formatValue\":" << uint(storage.format) << ",\"width\":" << storage.size.x
-             << ",\"height\":" << storage.size.y << ",\"rowBytes\":" << storage.size.x * storage_bytes(storage.format);
+             << ",\"height\":" << storage.size.y << ",\"rowBytes\":" << storage.size.x * storage_bytes(storage.format)
+             << ",\"native_core\":" << (native_core ? "true" : "false");
         if (prepass_probe_runtime && slot == 3u && storage.size.x == 24u && storage.size.y == 1u &&
             shader_name == "REBLUR_DiffuseSpecular_PrePass.cs")
             meta << ",\"prepassProbeMode\":\"runtime-early17\",\"probePixel\":[" << prepass_probe_pixel.x
@@ -227,7 +239,7 @@ struct EdslReblur::Impl {
         if (!r || r->size.x != size.x || r->size.y != size.y) r = allocate_resources(size, true);
         return r;
     }
-    static Storage &resolve(Resources &r, const nrd::ResourceDesc &resource) {
+    static Storage &resolve(Resources &r, const nrd::ResourceDesc &resource, uint deferred_layer = 2u) {
         switch (resource.type) {
             case nrd::ResourceType::IN_MV: return r.motion;
             case nrd::ResourceType::IN_NORMAL_ROUGHNESS: return r.normal;
@@ -235,8 +247,8 @@ struct EdslReblur::Impl {
             case nrd::ResourceType::IN_DISOCCLUSION_THRESHOLD_MIX: return r.disocclusion;
             case nrd::ResourceType::IN_DIFF_RADIANCE_HITDIST: return r.input_d;
             case nrd::ResourceType::IN_SPEC_RADIANCE_HITDIST: return r.input_s;
-            case nrd::ResourceType::OUT_DIFF_RADIANCE_HITDIST: return r.output_d;
-            case nrd::ResourceType::OUT_SPEC_RADIANCE_HITDIST: return r.output_s;
+            case nrd::ResourceType::OUT_DIFF_RADIANCE_HITDIST: return deferred_layer < 2u ? r.deferred_d[deferred_layer] : r.output_d;
+            case nrd::ResourceType::OUT_SPEC_RADIANCE_HITDIST: return deferred_layer < 2u ? r.deferred_s[deferred_layer] : r.output_s;
             case nrd::ResourceType::PERMANENT_POOL: return r.permanent.at(resource.indexInPool);
             case nrd::ResourceType::TRANSIENT_POOL: return r.transient.at(resource.indexInPool);
             default: throw std::runtime_error("EDSL REBLUR: unexpected optional resource");
@@ -295,7 +307,6 @@ struct EdslReblur::Impl {
         parameters.temporal_stabilization = method.maxStabilizedFrameNum != 0u;
         parameters.reconstruction_5x5 = method.hitDistanceReconstructionMode == nrd::HitDistanceReconstructionMode::AREA_5X5;
         CommandBatch commands;
-        commands << ocarina::native_callback([hold = r](const ocarina::NativeInteropContext &) { (void)hold; });
         const Storage *packed[]{&r->input_d, &r->input_s, &r->normal, &r->view_z, &r->motion, &r->disocclusion};
         for (uint slot = 0u; slot != 6u; ++slot)
             snapshot(commands, *packed[slot], common.frameIndex, layer, 0u, slot, "Pack");
@@ -370,6 +381,7 @@ struct EdslReblur::Impl {
             if (capture_prepass) snapshot(commands, r->prepass_probe, common.frameIndex, layer, ordinal, 3u, file);
         }
         commands << replay_end(parameters).dispatch(size);
+        commands << ocarina::retain_until_complete(r);
         return commands;
     }
     CommandBatch readback_replay_outputs(uint2 size, uint layer, std::shared_ptr<PackedNrdOutputs> outputs) {
@@ -383,10 +395,31 @@ struct EdslReblur::Impl {
         commands << [r, outputs = std::move(outputs)] { (void)r; (void)outputs; };
         return commands;
     }
-    CommandBatch dispatch(FilterParam p, const NativeCameraParams &camera, uint layer, const Settings &settings, bool reset) {
+    CommandBatch dispatch(FilterParam p, const NativeCameraParams &camera, uint layer, const Settings &settings, bool reset,
+                          const EdslReblur::PackCommand &prepare_and_pack, const edsl::ComposeParam *composition, bool defer_unpack) {
+        require_edsl(!compact_guide_cache || bool(prepare_and_pack), "compact guide cache requires a fused preparation command");
+        require_edsl(!composition || compact_guide_cache, "composing Unpack requires compact guide cache");
+        require_edsl(!defer_unpack || composition, "batched Unpack requires composition parameters");
+        if (defer_unpack) {
+            const char *profile = std::getenv("REBLUR_GPU_PROFILE");
+            if (profile && *profile) {
+                const char *mode = std::getenv("REBLUR_GPU_PROFILE_MODE");
+                require_edsl(!mode || (std::strcmp(mode, "filter") != 0 &&
+                    std::strcmp(mode, "intervals") != 0),
+                    "batched Unpack supports dispatch/core profiling; filter ranges require one Unpack per Pack");
+            }
+        }
         require_edsl(layer < 3u && p.size.x && p.size.y && p.size.x <= UINT16_MAX && p.size.y <= UINT16_MAX, "invalid layer/resolution");
         require_edsl(std::isfinite(camera.denoising_range) && camera.denoising_range > 0.f, "invalid denoising range");
         auto &r = prepare(p.size);
+        const bool layered_batch = defer_unpack && composition->layer_count == 3u;
+        const uint deferred_layer = layered_batch ? layer : 2u;
+        if (layered_batch && r.deferred_d[0].size.x == 0u) {
+            for (uint i = 0u; i != 2u; ++i) {
+                r.deferred_d[i] = allocate(p.size, nrd::Format::RGBA16_SFLOAT);
+                r.deferred_s[i] = allocate(p.size, nrd::Format::RGBA16_SFLOAT);
+            }
+        }
         auto method = method_settings(settings);
         check_edsl(nrd::SetDenoiserSettings(*r.instance, layer, &method), "SetDenoiserSettings");
         nrd::CommonSettings common{};
@@ -410,23 +443,29 @@ struct EdslReblur::Impl {
         const nrd::DispatchDesc *dispatches{}; uint count{};
         check_edsl(nrd::GetComputeDispatches(*r.instance, &identifier, 1u, dispatches, count), "GetComputeDispatches");
         edsl::Dispatch parameters{}; parameters.external = p;
+        parameters.defer_unpack = uint(defer_unpack);
+        parameters.inputs_precleared = 0u;
         parameters.constants.gDenoisingRange = camera.denoising_range;
         parameters.constants.gHitDistParams = make_float4(3.f, .1f, 20.f, -25.f);
         for (uint c = 0u; c != 4u; ++c) parameters.previous_view_depth_row[c] = camera.world_to_view_prev[c * 4u + 2u];
         auto alias = [](const auto &a, const auto &b) { return a.head() + a.offset_in_byte() == b.head() + b.offset_in_byte(); };
         parameters.output_alias_mask = uint(alias(p.raw_diffuse, p.output_diffuse)) | (uint(alias(p.raw_specular, p.output_specular)) << 1u);
+        require_edsl(!defer_unpack || parameters.output_alias_mask == 3u,
+            "batched Unpack requires retired in-place raw/output lobe buffers");
         parameters.outputs[0] = r.input_d.descriptor(); parameters.outputs[1] = r.input_s.descriptor();
         parameters.outputs[2] = r.normal.descriptor(); parameters.outputs[3] = r.view_z.descriptor();
         parameters.outputs[4] = r.motion.descriptor(); parameters.outputs[5] = r.disocclusion.descriptor();
         CommandBatch commands;
         // ImageDesc contains borrowed bindless slots. Keep this resource
         // generation alive even if another resolution is queued before commit.
-        // Native callback captures survive through the following GPU batch's
-        // fence; the callback itself submits no work or host completion wait.
-        commands << ocarina::native_callback([hold = resources](const ocarina::NativeInteropContext &) { (void)hold; });
-        commands << pack(parameters).dispatch(p.size);
+        // The final lifetime hold owns these descriptors through the covering
+        // GPU fence without splitting the EDSL command batch.
+        if (prepare_and_pack) commands << prepare_and_pack(parameters);
+        else commands << pack(parameters).dispatch(p.size);
         const Storage *packed[]{&r.input_d, &r.input_s, &r.normal, &r.view_z, &r.motion, &r.disocclusion};
-        for (uint slot=0u; slot!=6u; ++slot) snapshot(commands,*packed[slot],p.frame,layer,0u,slot,"Pack");
+        for (uint slot=0u; slot!=6u; ++slot)
+            snapshot(commands,*packed[slot],p.frame,layer,0u,slot,
+                prepare_and_pack ? (defer_unpack ? "Pack-FusedGuides-BatchCompose" : "Pack-FusedGuides") : "Pack");
         const auto &instance = nrd::GetInstanceDesc(*r.instance);
         uint ordinal = 0u;
         for (uint i = 0u; i != count; ++i) {
@@ -435,7 +474,7 @@ struct EdslReblur::Impl {
             if (file.find("Clear") != file.npos) {
                 for (uint slot = 0; slot != dispatch.resourcesNum; ++slot) {
                     require_edsl(dispatch.resources[slot].descriptorType == nrd::DescriptorType::STORAGE_TEXTURE, "clear bound a read-only resource");
-                    commands << resolve(r, dispatch.resources[slot]).texture.upload(r.zeros.data());
+                    commands << resolve(r, dispatch.resources[slot], deferred_layer).texture.upload(r.zeros.data());
                 }
                 continue;
             }
@@ -447,7 +486,8 @@ struct EdslReblur::Impl {
                 const auto &range = pipeline.resourceRanges[range_index];
                 for (uint offset = 0; offset != range.descriptorsNum; ++offset) {
                     require_edsl(resource < dispatch.resourcesNum, "resource range overflow");
-                    auto image = resolve(r, dispatch.resources[resource++]).descriptor();
+                    const auto &storage = resolve(r, dispatch.resources[resource++], deferred_layer);
+                    auto image = storage.descriptor();
                     const auto slot = range.baseRegisterIndex + offset;
                     if (range.descriptorType == nrd::DescriptorType::TEXTURE) {
                         require_edsl(slot < parameters.inputs.size(), "input slot overflow"); parameters.inputs[slot] = image;
@@ -497,7 +537,7 @@ struct EdslReblur::Impl {
                     for (uint offset=0u; offset!=range.descriptorsNum; ++offset,++resource_index) {
                         if (range.descriptorType==nrd::DescriptorType::STORAGE_TEXTURE) {
                             output_slot=range.baseRegisterIndex+offset;
-                            snapshot(commands,resolve(r,dispatch.resources[resource_index]),p.frame,layer,ordinal,output_slot,file);
+                            snapshot(commands,resolve(r,dispatch.resources[resource_index], deferred_layer),p.frame,layer,ordinal,output_slot,file);
                         }
                     }
                 }
@@ -509,15 +549,31 @@ struct EdslReblur::Impl {
             if (capture_prepass) snapshot(commands, r.prepass_probe, p.frame, layer, ordinal, 3u, file);
         }
         parameters.inputs[0] = r.output_d.descriptor(); parameters.inputs[1] = r.output_s.descriptor();
-        commands << unpack(parameters).dispatch(p.size);
+        if (defer_unpack) {
+            if (layer + 1u == composition->layer_count) {
+                edsl::BatchUnpackParam batch;
+                batch.composition = *composition;
+                batch.diffuse0 = layered_batch ? r.deferred_d[0].descriptor() : r.output_d.descriptor();
+                batch.specular0 = layered_batch ? r.deferred_s[0].descriptor() : r.output_s.descriptor();
+                if (layered_batch) {
+                    batch.diffuse1 = r.deferred_d[1].descriptor(); batch.specular1 = r.deferred_s[1].descriptor();
+                    batch.diffuse2 = r.output_d.descriptor(); batch.specular2 = r.output_s.descriptor();
+                }
+                commands << unpack_batch(parameters, batch).dispatch(p.size);
+            }
+        } else if (composition) commands << unpack_compose(parameters, *composition).dispatch(p.size);
+        else commands << unpack(parameters).dispatch(p.size);
+        commands << ocarina::retain_until_complete(resources);
         r.frames[layer] = p.frame;
         return commands;
     }
 };
-EdslReblur::EdslReblur(Device &device) : impl_(std::make_unique<Impl>(device)) {}
+EdslReblur::EdslReblur(Device &device, bool compact_guide)
+    : impl_(std::make_unique<Impl>(device, compact_guide)) {}
 EdslReblur::~EdslReblur() = default;
-CommandBatch EdslReblur::dispatch(FilterParam p, const NativeCameraParams &camera, uint layer, const Settings &settings, bool reset) {
-    return impl_->dispatch(p, camera, layer, settings, reset);
+CommandBatch EdslReblur::dispatch(FilterParam p, const NativeCameraParams &camera, uint layer, const Settings &settings, bool reset,
+                                 const PackCommand &prepare_and_pack, const edsl::ComposeParam *composition, bool defer_unpack) {
+    return impl_->dispatch(p, camera, layer, settings, reset, prepare_and_pack, composition, defer_unpack);
 }
 CommandBatch EdslReblur::upload_replay_inputs(uint2 size, uint layer, std::shared_ptr<const PackedNrdInputs> inputs) {
     return impl_->upload_replay_inputs(size, layer, std::move(inputs));

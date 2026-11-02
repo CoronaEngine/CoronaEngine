@@ -6,7 +6,7 @@ void Filter::reset() noexcept {
     for (auto &layer : layers_) layer.frame = InvalidUI32;
 }
 
-void Filter::prepare_native(Device &device, uint2 size) {
+void Filter::prepare_native(Device &device, uint2 size, bool compact_guide) {
     const bool resized = size_.x != size.x || size_.y != size.y;
     if (resized || history_.size() != 0u) {
         reset();
@@ -16,9 +16,9 @@ void Filter::prepare_native(Device &device, uint2 size) {
         for (auto &layer : layers_) { layer.guide = {}; layer.history = {}; }
     }
     size_ = size;
-    const auto guide_bytes = size_t(size.x) * size.y * sizeof(Guide);
+    const auto guide_bytes = size_t(size.x) * size.y * (compact_guide ? sizeof(CompactGuide) : sizeof(Guide));
     if (guide_.size() != guide_bytes)
-        guide_ = device.create_byte_buffer(guide_bytes, "REBLUR current geometry SOA");
+        guide_ = device.create_byte_buffer(guide_bytes, compact_guide ? "REBLUR compact remodulation SOA" : "REBLUR current geometry SOA");
 }
 
 void Filter::prepare(Device &device, uint2 size, uint layer_count) {
