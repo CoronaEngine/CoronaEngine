@@ -1,0 +1,2 @@
+# Empty unified-diff context lines intentionally contain a single space.
+build_tools/patches/horizon/*.patch text eol=lf whitespace=-blank-at-eol

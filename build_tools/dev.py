@@ -10,6 +10,7 @@ if __package__ in (None, ""):
 
 from build_tools.git_workspace import ensure_workspace, inspect_workspace, sync_workspace
 from build_tools.git_tool import ensure_git
+from build_tools.horizon_runtime_patch import ensure_horizon_runtime_patch
 from build_tools.ninja_tool import ensure_ninja
 from build_tools.paths import LOCAL_RECIPES, REPO_ROOT
 from build_tools.source_workspaces import WORKSPACES
@@ -103,6 +104,7 @@ def conan_options(target_family: str) -> list[str]:
 def ensure_workspaces() -> None:
     for workspace in WORKSPACES:
         ensure_workspace(REPO_ROOT, workspace)
+    ensure_horizon_runtime_patch(REPO_ROOT)
 
 
 def install(configuration: str, target_family: str, *, update: bool = False) -> None:
