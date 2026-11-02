@@ -12,6 +12,8 @@
 namespace vision {
 struct GIParam {
     uint camera_jitter{1u};
+    uint precise_lobes{}, denoiser_layered{}, denoiser_di_active{};
+    float denoiser_di_factor{}, denoiser_gi_factor{};
     uint max_age{};
     float diff_factor{};
 
@@ -31,7 +33,7 @@ struct GIParam {
 };
 }// namespace vision
 
-OC_PARAM_STRUCT(vision, GIParam, camera_jitter, max_age, diff_factor, spatial, N,
+OC_PARAM_STRUCT(vision, GIParam, camera_jitter, precise_lobes, denoiser_layered, denoiser_di_active, denoiser_di_factor, denoiser_gi_factor, max_age, diff_factor, spatial, N,
                 s_dot, s_depth, s_radius, temporal, history_limit,
                 t_dot, t_depth, t_radius){};
 
@@ -158,6 +160,8 @@ public:
         return pipeline()->bindless_array().buffer_var<GIReservoir>(1 + reservoir_base());
     }
     [[nodiscard]] GIParam construct_param() const noexcept;
-    [[nodiscard]] CommandBatch dispatch(uint frame_index) const noexcept;
+    [[nodiscard]] CommandBatch dispatch(uint frame_index, bool precise_lobes = false,
+                                      bool denoiser_layered = false, float di_factor = 0.f,
+                                      float gi_factor = 0.f, bool di_active = false) const noexcept;
 };
 }// namespace vision

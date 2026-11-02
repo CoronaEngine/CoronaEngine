@@ -3,6 +3,7 @@
 //
 
 #include "indirect.h"
+#include "denoiser_signals.h"
 #include "base/integral/integrator.h"
 
 namespace vision {
@@ -432,8 +433,47 @@ void ReSTIRGI::compile_spatial_shading() noexcept {
     Kernel kernel = [&](Var<GIParam> param, Uint frame_index) {
         initial(sampler(), frame_index, spectrum);
         SurfaceDataVar surf = cur_surfaces().read(dispatch_id());
-        if (lobes) frame_buffer().denoiser_gi_specular().write(dispatch_id(), make_float4(0.f));
+        // Invoke only after shading, avoiding live DI staging registers during
+        // the expensive GI reservoir/material work. A miss still finalizes DI.
+        auto finish_lobes = [&](const Float3 &total, const Float3 &specular, const Float &distance) {
+            $if(param.precise_lobes != 0u) {
+                Uint i = dispatch_id();
+                Float4 direct = make_float4(0.f), di_specular = make_float4(0.f);
+                Float3 bypass = make_float3(0.f);
+                $if(param.denoiser_di_active != 0u) {
+                    direct = frame_buffer().denoiser_di_specular().read(i);
+                    di_specular = make_float4(frame_buffer().denoiser_gi_specular().read(i).xyz(), direct.w);
+                    bypass = frame_buffer().denoiser_di_bypass().read(i).xyz();
+                };
+                Uint layer = 0u;
+                $if(param.denoiser_layered != 0u) { layer = frame_buffer().stable_dominant().read(i); };
+                $if(layer < StablePlaneCount) {
+                    Uint address = layer * (dispatch_dim().x * dispatch_dim().y) + i;
+                    Float4 old_d = make_float4(0.f), old_s = make_float4(0.f), old_b = make_float4(0.f);
+                    $if(param.denoiser_layered != 0u) {
+                        old_d = frame_buffer().denoiser_diffuse().read(address);
+                        old_s = frame_buffer().denoiser_specular().read(address);
+                        old_b = frame_buffer().denoiser_bypass().read(address);
+                    };
+                    auto merged = denoiser_signals::merge_restir_lobes(direct.xyz(), total, di_specular,
+                        make_float4(specular, distance), bypass, param.denoiser_di_factor,
+                        param.denoiser_gi_factor, old_d, old_s, old_b);
+                    frame_buffer().denoiser_diffuse().write(address, merged.diffuse);
+                    frame_buffer().denoiser_specular().write(address, merged.specular);
+                    frame_buffer().denoiser_bypass().write(address, merged.bypass);
+                };
+                // Preserve the existing diagnostic specular-buffer contract.
+                frame_buffer().denoiser_di_specular().write(i, di_specular);
+                frame_buffer().denoiser_gi_specular().write(i, make_float4(specular, distance));
+            };
+        };
+        if (lobes) {
+            $if(param.precise_lobes == 0u) {
+                frame_buffer().denoiser_gi_specular().write(dispatch_id(), make_float4(0.f));
+            };
+        }
         $if(surf.hit->is_miss()) {
+            if (lobes) finish_lobes(make_float3(0.f), make_float3(0.f), Float{0.f});
             $return();
         };
         sampler()->load_data();
@@ -444,7 +484,10 @@ void ReSTIRGI::compile_spatial_shading() noexcept {
         Float3 specular = make_float3(0.f); Float distance = 0.f;
         Float3 L = shading(rsv, surf, lobes ? &specular : nullptr, lobes ? &distance : nullptr);
         write_radiance(dispatch_id(), make_float4(L, 1.f));
-        if (lobes) frame_buffer().denoiser_gi_specular().write(dispatch_id(), make_float4(specular, distance));
+        if (lobes) {
+            $if(param.precise_lobes != 0u) { finish_lobes(L, specular, distance); }
+            $else { frame_buffer().denoiser_gi_specular().write(dispatch_id(), make_float4(specular, distance)); };
+        }
         cur_reservoirs().write(dispatch_id(), rsv);
     };
     kernel.function()->set_block_dim(8u, 8u, 1u);
@@ -471,10 +514,16 @@ GIParam ReSTIRGI::construct_param() const noexcept {
     return param;
 }
 
-CommandBatch ReSTIRGI::dispatch(uint frame_index) const noexcept {
+CommandBatch ReSTIRGI::dispatch(uint frame_index, bool precise_lobes, bool denoiser_layered,
+                               float di_factor, float gi_factor, bool di_active) const noexcept {
     CommandBatch ret;
     const Pipeline *rp = pipeline();
     GIParam param = construct_param();
+    param.precise_lobes = uint(precise_lobes);
+    param.denoiser_layered = uint(denoiser_layered);
+    param.denoiser_di_active = uint(di_active);
+    param.denoiser_di_factor = di_factor;
+    param.denoiser_gi_factor = gi_factor;
     // The first frame after a mode/scene reset must not reuse old reservoirs.
     bool history_valid = history_.begin_frame(frame_index, param.camera_jitter);
     param.temporal = param.temporal && history_valid;

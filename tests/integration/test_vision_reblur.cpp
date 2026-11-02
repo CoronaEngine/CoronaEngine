@@ -26,6 +26,7 @@
 #include <optional>
 #include <sstream>
 #include <unordered_map>
+#include "reblur_precise_lobes_probe.h"
 #include "reblur_coverage_history_probe.h"
 
 namespace {
@@ -1395,6 +1396,10 @@ int main() {
         Global::instance().set_device(&device);
         auto stream = device.create_stream();
         std::cout << "REBLUR test backend: " << test_backend << '\n';
+        if (std::getenv("REBLUR_TEST_PRECISE_LOBES_ONLY")) {
+            precise_lobes_probe::check(device, stream);
+            return 0;
+        }
         if (std::getenv("REBLUR_TEST_COVERAGE_HISTORY_ONLY")) {
             coverage_history_probe::check(device, stream);
             return 0;
@@ -1412,6 +1417,7 @@ int main() {
 #endif
         if (test_backend != "native") {
             select_native_backend("0");
+            precise_lobes_probe::check(device, stream);
             coverage_history_probe::check(device, stream);
             check_storage_budget(device);
             check_helpers(device, stream);

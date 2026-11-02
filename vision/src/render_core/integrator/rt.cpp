@@ -27,6 +27,20 @@ namespace {
     const char *value = std::getenv("VISION_STAGE_PROFILE");
     return value != nullptr && value[0] != '\0' && value[0] != '0';
 }
+
+[[nodiscard]] bool precise_lobes_requested() noexcept {
+    // Diagnostic oracle: compare producer staging with the original FP32
+    // radiance buffers and separate lobe-merge dispatch on the same scenes.
+    const char *value = std::getenv("VISION_RESTIR_PRECISE_LOBES");
+    return value == nullptr || value[0] != '0';
+}
+
+[[nodiscard]] bool raw_stable_outputs_required(bool precise_lobes) noexcept {
+    // Evaluation requests retain raw channels for every frame, including setup.
+    return !precise_lobes || std::getenv("VISION_EVAL_DEBUG_DIR") ||
+        std::getenv("VISION_EVAL_DEBUG_FRAME") || std::getenv("VISION_EVAL_DEBUG_FRAMES") ||
+        std::getenv("VISION_EVAL_GI_STORAGE_DEBUG");
+}
 }
 
 class RealTimeIntegrator : public IlluminationIntegrator,
@@ -136,7 +150,8 @@ public:
         const bool denoiser_enabled = !denoiser_runtime_disabled() && denoiser_ && denoiser_->enabled();
         const bool extra_aa = !denoiser_ || denoiser_coverage_aa_enabled(impl_type(), denoiser_->impl_type());
         const bool retain_history = denoiser_enabled && extra_aa;
-        const bool compact = !denoiser_enabled;
+        const bool precise_lobes = denoiser_enabled && denoiser_->requires_lobe_signals() && precise_lobes_requested();
+        const bool compact = !denoiser_enabled || precise_lobes;
         direct_->prepare(compact);
         indirect_->prepare(compact);
         if (!denoiser_runtime_disabled() && denoiser_ && denoiser_->enabled()) {
@@ -148,7 +163,8 @@ public:
         frame_buffer().prepare_surface_ext_history();
         frame_buffer().prepare_visibility_buffer();
         frame_buffer().prepare_motion_vectors();
-        stable_planes_->prepare(retain_history, denoiser_ && denoiser_->uses_compact_coverage_history());
+        stable_planes_->prepare(retain_history, denoiser_ && denoiser_->uses_compact_coverage_history(),
+                                raw_stable_outputs_required(precise_lobes));
         if (denoiser_ && denoiser_->requires_lobe_signals()) frame_buffer().prepare_denoiser_signals();
         stable_resources_dirty_ = false;
     }
@@ -275,23 +291,17 @@ public:
                 Float4 sd = frame_buffer().denoiser_di_specular().read(i);
                 Float4 sg = frame_buffer().denoiser_gi_specular().read(i);
                 Float3 bypass = frame_buffer().denoiser_di_bypass().read(i).xyz();
-                Float3 d = direct_->read_radiance(i).xyz() - bypass;
-                Float3 g = indirect_->read_radiance(i).xyz();
-                Float3 spec = sd.xyz() * di + sg.xyz() * gi;
-                Float3 diff = (d - sd.xyz()) * di + (g - sg.xyz()) * gi;
-                Float2 wd = make_float2(max(luminance(d - sd.xyz()), 0.f) * di, max(luminance(sd.xyz()), 0.f) * di);
-                Float2 wg = make_float2(max(luminance(g - sg.xyz()), 0.f) * gi, max(luminance(sg.xyz()), 0.f) * gi);
-                Float2 dist = denoiser_signals::merge_hit_distances(wd, select(di > 0.f, sd.w, 0.f),
-                                                                  wg, select(gi > 0.f, sg.w, 0.f));
                 Float4 old_d = make_float4(0.f), old_s = make_float4(0.f), old_b = make_float4(0.f);
                 $if(layered != 0u) {
                     old_d = frame_buffer().denoiser_diffuse().read(address);
                     old_s = frame_buffer().denoiser_specular().read(address);
                     old_b = frame_buffer().denoiser_bypass().read(address);
                 };
-                frame_buffer().denoiser_diffuse().write(address, denoiser_signals::accumulate_lobe(old_d, diff, dist.x));
-                frame_buffer().denoiser_specular().write(address, denoiser_signals::accumulate_lobe(old_s, spec, dist.y));
-                frame_buffer().denoiser_bypass().write(address, old_b + make_float4(bypass * di, 0.f));
+                auto merged = denoiser_signals::merge_restir_lobes(direct_->read_radiance(i).xyz(),
+                    indirect_->read_radiance(i).xyz(), sd, sg, bypass, di, gi, old_d, old_s, old_b);
+                frame_buffer().denoiser_diffuse().write(address, merged.diffuse);
+                frame_buffer().denoiser_specular().write(address, merged.specular);
+                frame_buffer().denoiser_bypass().write(address, merged.bypass);
             };
             prepare_denoiser_ = device().compile(pack_lobes, "Denoiser-MergeReSTIRLobes");
             Kernel compose_lobes = [&](Uint layered, Float di) {
@@ -361,7 +371,9 @@ public:
         const bool denoiser_enabled = !denoiser_runtime_disabled() && denoiser_ && denoiser_->enabled();
         const bool extra_aa = !denoiser_ || denoiser_coverage_aa_enabled(impl_type(), denoiser_->impl_type());
         const bool retain_history = denoiser_enabled && extra_aa;
-        const bool compact = !denoiser_enabled;
+        const bool precise_lobes = denoiser_enabled && denoiser_->requires_lobe_signals() && precise_lobes_requested();
+        const bool raw_stable_outputs = raw_stable_outputs_required(precise_lobes);
+        const bool compact = !denoiser_enabled || precise_lobes;
         if (direct_->compact_radiance() != compact || indirect_->compact_radiance() != compact) {
             // Finish the old representation before changing bindings captured by
             // the DI/GI producers and their raw/denoised composition kernels.
@@ -378,12 +390,14 @@ public:
             // raw stable planes intact for newly enabled denoiser history.
         }
         const bool compact_history = denoiser_ && denoiser_->uses_compact_coverage_history();
+        const bool raw_outputs_changed = frame_buffer().stable_raw_outputs_retained() != raw_stable_outputs;
         if (stable_resources_dirty_ || frame_buffer().stable_plane_history_retained() != retain_history ||
-            frame_buffer().compact_coverage_history() != compact_history) {
+            frame_buffer().compact_coverage_history() != compact_history ||
+            raw_outputs_changed) {
             // Resize history before build snapshots the complete previous raw
             // planes. A history-only switch must preserve those current records.
             stream << synchronize() << commit();
-            frame_buffer().manage_stable_plane_buffers(stable_planes_enabled(), retain_history, compact_history);
+            frame_buffer().manage_stable_plane_buffers(stable_planes_enabled(), retain_history, compact_history, raw_stable_outputs);
             pipeline()->upload_bindless_array();
             if (stable_resources_dirty_) {
                 if (denoiser_) { denoiser_->set_stable_planes_enabled(stable_planes_enabled()); }
@@ -412,18 +426,26 @@ public:
         submit(frame_buffer().save_surface_exts_history(frame_index_), &cur_stage_profile_.gbuffer_ms);
         if (stable_planes_enabled()) {
             const bool copy_history = retain_history && denoiser_->needs_stable_plane_history(frame_index_);
-            submit(stable_planes_->build(frame_index_, jitter_primary_samples(), copy_history), &cur_stage_profile_.stable_build_ms);
-            submit(stable_planes_->fill(frame_index_, direct_->factor(), indirect_->factor()), &cur_stage_profile_.stable_fill_ms);
+            submit(stable_planes_->build(frame_index_, jitter_primary_samples(), copy_history, raw_stable_outputs), &cur_stage_profile_.stable_build_ms);
+            submit(stable_planes_->fill(frame_index_, direct_->factor(), indirect_->factor(), raw_stable_outputs), &cur_stage_profile_.stable_fill_ms);
         }
-        submit(direct_->dispatch(frame_index_), &cur_stage_profile_.restir_di_ms);
-        submit(indirect_->dispatch(frame_index_), &cur_stage_profile_.restir_gi_ms);
+        submit(direct_->dispatch(frame_index_, precise_lobes), &cur_stage_profile_.restir_di_ms);
+        submit(indirect_->dispatch(frame_index_, precise_lobes, stable_planes_enabled(),
+                                  direct_->factor(), indirect_->factor(), direct_->open()), &cur_stage_profile_.restir_gi_ms);
         cur_stage_profile_.path_tracing_ms = cur_stage_profile_.restir_di_ms + cur_stage_profile_.restir_gi_ms;
         auto debug_readback = [&](const char *stage, bool layers = true) {
             const auto directory = evaluation_debug::directory(frame_index_);
             if (directory.empty()) return;
             fs::create_directories(directory);
-            vector<float4> direct = direct_->download_radiance();
-            vector<float4> indirect = indirect_->download_radiance();
+            vector<float4> direct, indirect;
+            if (precise_lobes && string_view(stage).starts_with("composite_")) {
+                direct.resize(pipeline()->pixel_num());
+                indirect.assign(direct.size(), make_float4(0.f));
+                stream << frame_buffer().rt_buffer().view().download(direct.data()) << synchronize() << commit();
+            } else {
+                direct = direct_->download_radiance();
+                indirect = indirect_->download_radiance();
+            }
             auto write = [&](const char *channel, const auto &pixels) {
                 std::ofstream out(fs::path(directory) / (std::string(stage) + channel + ".f32"), std::ios::binary);
                 out.write(reinterpret_cast<const char *>(pixels.data()), pixels.size() * sizeof(float4));
@@ -457,7 +479,7 @@ public:
                 write_storage("gi_reservoirs.bin", reservoirs);
             }
         }
-        if (stable_planes_enabled()) {
+        if (stable_planes_enabled() && raw_stable_outputs) {
             submit(merge_dominant_().dispatch(pipeline()->resolution()), &cur_stage_profile_.combine_ms);
         }
         // Opt-in raw layer diagnostics belong here, after merging ownership and
@@ -471,8 +493,9 @@ public:
             if (denoiser && any(factors != denoiser_factors_)) {
                 denoiser_->set_enabled(false); denoiser_->set_enabled(true); denoiser_factors_ = factors;
             }
-            submit(prepare_denoiser_(uint(stable_planes_enabled()), factors.x, factors.y).dispatch(pipeline()->resolution()),
-                   &cur_stage_profile_.combine_ms);
+            if (!precise_lobes)
+                submit(prepare_denoiser_(uint(stable_planes_enabled()), factors.x, factors.y).dispatch(pipeline()->resolution()),
+                       &cur_stage_profile_.combine_ms);
         }
         if (!denoiser_runtime_disabled() && denoiser_ && denoiser_->enabled()) {
             begin_denoise_timing(stream);

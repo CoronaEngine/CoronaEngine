@@ -133,9 +133,9 @@ void StablePlanes::restore(RuntimeObject *old_obj) noexcept {
     VS_HOTFIX_MOVE_ATTRS(max_recursion_, clear_children_, build_, fill_, save_history_, save_coverage_history_)
 }
 
-void StablePlanes::prepare(bool retain_history, bool compact_coverage_history) noexcept {
+void StablePlanes::prepare(bool retain_history, bool compact_coverage_history, bool retain_raw_outputs) noexcept {
     auto &fb = frame_buffer();
-    fb.manage_stable_plane_buffers(integrator()->stable_planes_enabled(), retain_history, compact_coverage_history);
+    fb.manage_stable_plane_buffers(integrator()->stable_planes_enabled(), retain_history, compact_coverage_history, retain_raw_outputs);
 }
 
 void StablePlanes::compile() noexcept {
@@ -180,7 +180,7 @@ void StablePlanes::compile() noexcept {
         };
     };
     clear_children_ = device().compile(clear_children, "Stable planes clear children");
-    Kernel build_kernel = [&](Uint frame, Uint jitter) {
+    Kernel build_kernel = [&](Uint frame, Uint jitter, Uint raw_output) {
         // Logical tracing and native pipeline classification stay separate.
         // Vulkan executes this explicitly opted-in kernel as compute ray queries.
         Function::current()->require_ray_query_compute_workgroups();
@@ -209,8 +209,10 @@ void StablePlanes::compile() noexcept {
             BuildPath &path = paths[layer];
             StablePlaneDataVar plane;
             Float2 plane_motion = make_float2(0.f);
-            fb.stable_direct().write(layer * (dispatch_dim().x * dispatch_dim().y) + dispatch_id(), make_float4(0.f));
-            fb.stable_indirect().write(layer * (dispatch_dim().x * dispatch_dim().y) + dispatch_id(), make_float4(0.f));
+            $if(raw_output != 0u) {
+                fb.stable_direct().write(layer * (dispatch_dim().x * dispatch_dim().y) + dispatch_id(), make_float4(0.f));
+                fb.stable_indirect().write(layer * (dispatch_dim().x * dispatch_dim().y) + dispatch_id(), make_float4(0.f));
+            };
             if (lobes) {
                 Uint address = layer * (dispatch_dim().x * dispatch_dim().y) + dispatch_id();
                 fb.denoiser_diffuse().write(address, make_float4(0.f));
@@ -406,7 +408,7 @@ void StablePlanes::compile() noexcept {
     };
     build_ = device().compile(build_kernel, "Stable planes build");
 
-    Kernel fill_kernel = [&](Uint frame, Float di, Float gi) {
+    Kernel fill_kernel = [&](Uint frame, Float di, Float gi, Uint raw_output) {
         camera->load_data(); sampler->load_data(); integrator()->load_data();
         initial(sampler, frame, spectrum);
         sampler->set_seed(dispatch_idx().xy(), frame, Dimension::PathTracing);
@@ -444,8 +446,10 @@ void StablePlanes::compile() noexcept {
                     }
                 };
                 Uint address = owner * (dispatch_dim().x * dispatch_dim().y) + dispatch_id();
-                auto old = fb.stable_direct().read(address);
-                fb.stable_direct().write(address, old + make_float4(emission, 0.f));
+                $if(raw_output != 0u) {
+                    auto old = fb.stable_direct().read(address);
+                    fb.stable_direct().write(address, old + make_float4(emission, 0.f));
+                };
                 if (lobes) fb.denoiser_bypass().write(address, fb.denoiser_bypass().read(address) + make_float4(emission * di, 0.f));
                 $break;
             };
@@ -457,7 +461,9 @@ void StablePlanes::compile() noexcept {
                     emission = spectrum->linear_srgb(eval.L * throughput, sampled_wavelengths());
                 };
                 Uint address = owner * (dispatch_dim().x * dispatch_dim().y) + dispatch_id();
-                fb.stable_direct().write(address, fb.stable_direct().read(address) + make_float4(emission, 0.f));
+                $if(raw_output != 0u) {
+                    fb.stable_direct().write(address, fb.stable_direct().read(address) + make_float4(emission, 0.f));
+                };
                 if (lobes) fb.denoiser_bypass().write(address, fb.denoiser_bypass().read(address) + make_float4(emission * di, 0.f));
                 $break;
             };
@@ -475,7 +481,9 @@ void StablePlanes::compile() noexcept {
                     emission = spectrum->linear_srgb(eval.L * throughput, sampled_wavelengths());
                 };
                 Uint address = owner * (dispatch_dim().x * dispatch_dim().y) + dispatch_id();
-                fb.stable_direct().write(address, fb.stable_direct().read(address) + make_float4(emission, 0.f));
+                $if(raw_output != 0u) {
+                    fb.stable_direct().write(address, fb.stable_direct().read(address) + make_float4(emission, 0.f));
+                };
                 if (lobes) fb.denoiser_bypass().write(address, fb.denoiser_bypass().read(address) + make_float4(emission * di, 0.f));
                 $if(!sample.valid()) { $break; };
                 throughput *= sample.eval.throughput();
@@ -502,8 +510,10 @@ void StablePlanes::compile() noexcept {
                 Float3 total = integrator()->Li(ray, Float{1e16f}, total_depth - depth, throughput,
                     false, context, *this);
                 Uint address = owner * (dispatch_dim().x * dispatch_dim().y) + dispatch_id();
-                fb.stable_direct().write(address, fb.stable_direct().read(address) + make_float4(direct, 0.f));
-                fb.stable_indirect().write(address, make_float4(total - direct, 1.f));
+                $if(raw_output != 0u) {
+                    fb.stable_direct().write(address, fb.stable_direct().read(address) + make_float4(direct, 0.f));
+                    fb.stable_indirect().write(address, make_float4(total - direct, 1.f));
+                };
                 if (lobes) {
                     Float3 weighted_specular = direct_specular * di + (specular - direct_specular) * gi;
                     Float3 weighted_total = direct * di + (total - direct) * gi;
@@ -518,7 +528,7 @@ void StablePlanes::compile() noexcept {
     fill_ = device().compile(fill_kernel, "Stable planes residual fill");
 }
 
-CommandBatch StablePlanes::build(uint frame, bool jitter, bool retain_history) const noexcept {
+CommandBatch StablePlanes::build(uint frame, bool jitter, bool retain_history, bool raw_output) const noexcept {
     auto planes = frame_buffer().cur_stable_planes_view(frame);
     uint2 resolution = pipeline()->resolution();
     uint pixels = resolution.x * resolution.y;
@@ -534,11 +544,11 @@ CommandBatch StablePlanes::build(uint frame, bool jitter, bool retain_history) c
         }
     }
     ret << clear_children_(children).dispatch(children.size());
-    ret << build_(frame, uint(jitter)).dispatch(resolution);
+    ret << build_(frame, uint(jitter), uint(raw_output)).dispatch(resolution);
     return ret;
 }
-CommandBatch StablePlanes::fill(uint frame, float direct_factor, float indirect_factor) const noexcept {
-    CommandBatch ret; ret << fill_(frame, direct_factor, indirect_factor).dispatch(pipeline()->resolution()); return ret;
+CommandBatch StablePlanes::fill(uint frame, float direct_factor, float indirect_factor, bool raw_output) const noexcept {
+    CommandBatch ret; ret << fill_(frame, direct_factor, indirect_factor, uint(raw_output)).dispatch(pipeline()->resolution()); return ret;
 }
 }// namespace vision
 

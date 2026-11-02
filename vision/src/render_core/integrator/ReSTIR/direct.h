@@ -13,6 +13,7 @@ namespace vision {
 struct DIParam {
     uint camera_jitter{1u};
     uint stable_planes{1u};
+    uint precise_lobes{};
     uint M_light{};
     uint M_bsdf{};
     uint max_age{};
@@ -34,7 +35,7 @@ struct DIParam {
 };
 }// namespace vision
 
-OC_PARAM_STRUCT(vision, DIParam, camera_jitter, stable_planes, M_light, M_bsdf, max_age, diff_factor, spatial, N,
+OC_PARAM_STRUCT(vision, DIParam, camera_jitter, stable_planes, precise_lobes, M_light, M_bsdf, max_age, diff_factor, spatial, N,
                 s_dot, s_depth, s_radius, temporal, history_limit,
                 t_dot, t_depth, t_radius){};
 
@@ -237,7 +238,7 @@ public:
     HOTFIX_VIRTUAL void compile_shader0() noexcept;
     HOTFIX_VIRTUAL void compile_shader1() noexcept;
     [[nodiscard]] HOTFIX_VIRTUAL DIParam construct_param() const noexcept;
-    [[nodiscard]] HOTFIX_VIRTUAL CommandBatch dispatch(uint frame_index) const noexcept;
+    [[nodiscard]] HOTFIX_VIRTUAL CommandBatch dispatch(uint frame_index, bool precise_lobes = false) const noexcept;
 };
 
 }// namespace vision
