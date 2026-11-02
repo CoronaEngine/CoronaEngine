@@ -58,6 +58,12 @@ public:
     bool set_relax_settings(string_view json) noexcept override;
     [[nodiscard]] string relax_settings_json() const override;
     [[nodiscard]] bool enabled() noexcept override { return enabled_; }
+    [[nodiscard]] bool needs_stable_plane_history(uint frame) const noexcept override {
+        return !coverage_ || coverage_->needs_stable_plane_history(frame);
+    }
+    [[nodiscard]] bool uses_compact_coverage_history() const noexcept override {
+        return coverage_ && coverage_->uses_compact_coverage_history();
+    }
     [[nodiscard]] bool has_prepared_resources() const noexcept override { return filter_->resolution().x != 0u; }
     [[nodiscard]] CommandBatch dispatch(RealTimeDenoiseInput &input) noexcept override;
     void render_sub_UI(Widgets *widgets) noexcept override;

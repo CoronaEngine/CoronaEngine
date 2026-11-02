@@ -12,13 +12,14 @@ private:
     Shader<void(uint, uint)> build_;
     Shader<void(uint, float, float)> fill_;
     Shader<void(Buffer<StablePlaneData>, Buffer<StablePlaneHistory>, Buffer<uint>)> save_history_;
+    Shader<void(Buffer<StablePlaneData>, Buffer<CoveragePlaneHistory>)> save_coverage_history_;
 
 public:
     StablePlanes() = default;
     StablePlanes(IntegratorPtr integrator, uint max_recursion)
         : max_recursion_(max_recursion) { set_integrator(integrator); }
     void restore(RuntimeObject *old_obj) noexcept override;
-    void prepare(bool retain_history = true) noexcept;
+    void prepare(bool retain_history = true, bool compact_coverage_history = false) noexcept;
     void set_max_recursion(uint value) noexcept { max_recursion_ = value; }
     void compile() noexcept;
     [[nodiscard]] CommandBatch build(uint frame, bool jitter, bool retain_history) const noexcept;

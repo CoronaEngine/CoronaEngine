@@ -21,6 +21,7 @@ FrameBuffer::FrameBuffer(const vision::FrameBufferDesc &desc)
       screen_window_(make_float2(-1.f), make_float2(1.f)),
       exposure_(desc["exposure"].as_float(1.f)),
       accumulation_(desc["accumulation"].as_bool(true)) {
+    stable_planes_.set_name("FrameBuffer::stable_planes [motion-half-coverage-history-v3]");
     visualizer_->init();
     update_screen_window();
     resize(resolution_);
@@ -404,19 +405,38 @@ void FrameBuffer::resize(ocarina::uint2 res) noexcept {
     resolution_ = res;
 }
 
-void FrameBuffer::manage_stable_plane_buffers(bool enabled, bool retain_history) noexcept {
+void FrameBuffer::manage_stable_plane_buffers(bool enabled, bool retain_history, bool compact_coverage_history, bool retain_raw_outputs) noexcept {
     stable_plane_buffers_enabled_ = enabled;
     stable_plane_history_retained_ = retain_history;
+    compact_coverage_history_ = compact_coverage_history;
+    stable_raw_outputs_retained_ = retain_raw_outputs;
     uint pixels = enabled ? frame_buffer_size() : 1u;
-    uint history_pixels = enabled && retain_history ? frame_buffer_size() : 1u;
+    uint history_pixels = enabled && retain_history && !compact_coverage_history ? frame_buffer_size() : 1u;
+    uint coverage_pixels = enabled && retain_history && compact_coverage_history ? frame_buffer_size() : 1u;
+    uint raw_pixels = enabled && retain_raw_outputs ? frame_buffer_size() : 1u;
     auto resize = [&]<typename T>(RegistrableBuffer<T> &buffer, uint count, uint view_pixels, const char *name) {
         if (buffer.size() == count * view_pixels) { return; }
         init_buffer_impl(buffer, buffer.has_registered(), name, count, view_pixels);
     };
     resize(stable_planes_, StablePlaneCount, pixels, "FrameBuffer::stable_planes");
-    resize(stable_plane_history_, StablePlaneCount, history_pixels, "FrameBuffer::stable_plane_history");
-    resize(stable_direct_, StablePlaneCount, pixels, "FrameBuffer::stable_direct");
-    resize(stable_indirect_, StablePlaneCount, pixels, "FrameBuffer::stable_indirect");
+    // Release unconsumed raw channels before allocating a new history mode.
+    if (!retain_raw_outputs) {
+        resize(stable_direct_, StablePlaneCount, raw_pixels, "FrameBuffer::stable_direct");
+        resize(stable_indirect_, StablePlaneCount, raw_pixels, "FrameBuffer::stable_indirect");
+    }
+    // Release the inactive representation before allocating the larger active
+    // image, avoiding a transient full+compact history working set on switches.
+    if (compact_coverage_history) {
+        resize(stable_plane_history_, StablePlaneCount, history_pixels, "FrameBuffer::stable_plane_history");
+        resize(coverage_history_, 1u, coverage_pixels, "FrameBuffer::coverage_history");
+    } else {
+        resize(coverage_history_, 1u, coverage_pixels, "FrameBuffer::coverage_history");
+        resize(stable_plane_history_, StablePlaneCount, history_pixels, "FrameBuffer::stable_plane_history");
+    }
+    if (retain_raw_outputs) {
+        resize(stable_direct_, StablePlaneCount, raw_pixels, "FrameBuffer::stable_direct");
+        resize(stable_indirect_, StablePlaneCount, raw_pixels, "FrameBuffer::stable_indirect");
+    }
     resize(stable_radiance_, 1u, pixels, "FrameBuffer::stable_radiance");
     resize(stable_dominant_, 1u, pixels, "FrameBuffer::stable_dominant");
 }
@@ -429,7 +449,9 @@ void FrameBuffer::update_resolution(ocarina::uint2 res) noexcept {
     reset_surfaces();
     reset_surface_exts();
     reset_surface_ext_history();
-    if (stable_planes_.has_registered()) { manage_stable_plane_buffers(stable_plane_buffers_enabled_, stable_plane_history_retained_); }
+    if (stable_planes_.has_registered()) {
+        manage_stable_plane_buffers(stable_plane_buffers_enabled_, stable_plane_history_retained_, compact_coverage_history_, stable_raw_outputs_retained_);
+    }
     reset_motion_vectors();
     reset_hit_bsdfs();
     reset_rt_buffer();

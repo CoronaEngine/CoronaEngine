@@ -220,8 +220,22 @@ struct CoverageGeometryGuide : StableGeometryGuide {
                     motion = stored_plane_motion(plane);
                 };
             };
-            if (previous) read_coverage(param.prev_coverage_planes);
-            else read_coverage(param.coverage_planes);
+            if (previous) {
+                $if(param.compact_coverage_history != 0u) {
+                    auto plane = param.prev_coverage_history.read(index);
+                    ambiguous = plane.ambiguous != 0u;
+                    hit = primary; branch = 0u; replaced = false; approximate = false; valid = true;
+                    $if(!ambiguous && plane.valid != 0u) {
+                        hit = plane.hit; branch = plane.stable_branch;
+                        position = plane.virtual_position.as_vec3();
+                        normal = plane.virtual_geometric_normal.as_vec3();
+                        depth_position = plane.depth_position.as_vec3();
+                        replaced = true; motion = plane.motion;
+                    };
+                } $else {
+                    read_coverage(param.prev_coverage_planes);
+                };
+            } else read_coverage(param.coverage_planes);
         };
     }
 };

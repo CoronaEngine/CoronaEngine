@@ -33,10 +33,13 @@ struct ResolveParam {
     BufferDesc<uint4> edge_identity, edge_surface;
     BufferDesc<uint> edge_flags;
     uint edge_layer{0u};
+    uint2 edge_resolution{};
 
     uint composed_coverage{0u};
     BufferDesc<StablePlaneData> coverage_planes;
     BufferDesc<StablePlaneHistory> prev_coverage_planes;
+    BufferDesc<CoveragePlaneHistory> prev_coverage_history;
+    uint compact_coverage_history{0u};
     uint use_stable_planes{0u};
     uint layered{0u};
     BufferDesc<StablePlaneData> stable_planes;
@@ -66,7 +69,7 @@ struct ResolveParam {
 OC_PARAM_STRUCT(vision::svgf, PrepareLayerParam, planes, history, direct, indirect, temp_direct, temp_indirect,
                 guide_position, guide_normal, guide_identity, guide_surface, active_tiles, width, height){};
 
-OC_PARAM_STRUCT(vision::svgf, ResolveParam, guide_position, guide_normal, guide_depth, guide_meta, prev_guide_position, prev_guide_normal, prev_guide_depth, prev_guide_meta, edge_position, edge_normal, edge_identity, edge_surface, edge_flags, edge_layer, composed_coverage, coverage_planes, prev_coverage_planes, use_stable_planes, layered, stable_planes, prev_stable_planes, stable_surfaces, prev_stable_surfaces, direct, indirect,
+OC_PARAM_STRUCT(vision::svgf, ResolveParam, guide_position, guide_normal, guide_depth, guide_meta, prev_guide_position, prev_guide_normal, prev_guide_depth, prev_guide_meta, edge_position, edge_normal, edge_identity, edge_surface, edge_flags, edge_layer, edge_resolution, composed_coverage, coverage_planes, prev_coverage_planes, prev_coverage_history, compact_coverage_history, use_stable_planes, layered, stable_planes, prev_stable_planes, stable_surfaces, prev_stable_surfaces, direct, indirect,
                 history_direct, history_indirect, output_direct, output_indirect,
                 visibility, prev_visibility, motion_vectors, camera_pos, prev_camera_pos,
                 history_valid, channel_kind, frame_index, alpha, interior_alpha){};
@@ -102,12 +105,16 @@ private:
     std::array<LayerState, StablePlaneCount> layer_state_{};
     Shader<void(ResolveParam)> resolve_shader_;
     Shader<void(ResolveParam)> coverage_guide_shader_, legacy_resolve_shader_;
+    Shader<void(ResolveParam)> previous_coverage_guide_shader_;
+    Shader<void(ResolveParam)> total_resolve_shader_, total_legacy_resolve_shader_;
     Buffer<float4> coverage_position_, coverage_normal_, coverage_depth_;
     Buffer<uint4> coverage_meta_;
     Buffer<uint> edge_flags_;
     Shader<void(ResolveParam)> edge_guide_shader_, edge_classify_shader_, spatial_edge_classify_shader_;
+    Shader<void(ResolveParam)> tiled_edge_classify_shader_;
     uint edge_frame_{InvalidUI32}, edge_mask_{};
     Shader<void(ResolveParam)> publish_resolve_shader_;
+    Shader<void(ResolveParam)> total_publish_resolve_shader_;
     Shader<void(PrepareLayerParam)> prepare_layer_shader_;
     Buffer<uint> active_tiles_;
 
@@ -150,9 +157,10 @@ public:
     VS_HOTFIX_MAKE_RESTORE(Denoiser, svgf_data, svgf_data2,
                            poisson_, modulator_, variance_estimator_, prefilter_, params_,
                            resolve_direct_, resolve_indirect_, resolve_direct2_, resolve_indirect2_,
-                           resolve_shader_, publish_resolve_shader_, prepare_layer_shader_, active_tiles_, coverage_guide_shader_, legacy_resolve_shader_,
+                           resolve_shader_, publish_resolve_shader_, prepare_layer_shader_, active_tiles_, coverage_guide_shader_, legacy_resolve_shader_, previous_coverage_guide_shader_,
+                           total_resolve_shader_, total_legacy_resolve_shader_, total_publish_resolve_shader_,
                            coverage_position_, coverage_normal_, coverage_depth_, coverage_meta_,
-                           edge_flags_, edge_guide_shader_, edge_classify_shader_, spatial_edge_classify_shader_, edge_frame_, edge_mask_,
+                           edge_flags_, edge_guide_shader_, edge_classify_shader_, spatial_edge_classify_shader_, tiled_edge_classify_shader_, edge_frame_, edge_mask_,
                            layer_data_, layer_data2_, layer_state_)
     VS_MAKE_PLUGIN_NAME_FUNC
 
@@ -186,6 +194,8 @@ public:
         return ((frame_index & 1u) == 0u) ? svgf_data2.view() : svgf_data.view();
     }
     [[nodiscard]] bool history_valid(const RealTimeDenoiseInput &input) const noexcept;
+    [[nodiscard]] bool needs_stable_plane_history(uint frame) const noexcept override;
+    [[nodiscard]] bool uses_compact_coverage_history() const noexcept override { return params_.coverage_only_; }
     void prepare() noexcept override;
     void compile() noexcept override;
     [[nodiscard]] bool has_prepared_resources() const noexcept override {

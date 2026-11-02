@@ -52,6 +52,7 @@ class ReBLUR : public Denoiser {
     float4x4 current_raster_{make_float4x4(1.f)}, previous_raster_{make_float4x4(1.f)};
     Shader<void(struct GuideParam)> prepare_guides_;
     Shader<void(struct PublishParam)> publish_;
+    [[nodiscard]] bool coverage_enabled() const noexcept;
 public:
     ReBLUR() = default;
     explicit ReBLUR(const DenoiserDesc &desc);
@@ -64,6 +65,12 @@ public:
     bool set_reblur_settings(string_view json) noexcept override;
     [[nodiscard]] string reblur_settings_json() const override;
     [[nodiscard]] bool enabled() noexcept override { return enabled_; }
+    [[nodiscard]] bool needs_stable_plane_history(uint frame) const noexcept override {
+        return coverage_enabled() && (!coverage_ || coverage_->needs_stable_plane_history(frame));
+    }
+    [[nodiscard]] bool uses_compact_coverage_history() const noexcept override {
+        return coverage_enabled() && coverage_ && coverage_->uses_compact_coverage_history();
+    }
     [[nodiscard]] bool has_prepared_resources() const noexcept override { return filter_->resolution().x != 0u; }
     [[nodiscard]] CommandBatch dispatch(RealTimeDenoiseInput &input) noexcept override;
     void render_sub_UI(Widgets *widgets) noexcept override;

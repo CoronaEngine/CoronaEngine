@@ -130,12 +130,12 @@ void StablePlanes::restore(RuntimeObject *old_obj) noexcept {
     // ReSTIR can reload without replacing the FrameBuffer object.
     frame_buffer().require_stable_plane_storage_abi();
     ReSTIR::restore(old_obj);
-    VS_HOTFIX_MOVE_ATTRS(max_recursion_, clear_children_, build_, fill_, save_history_)
+    VS_HOTFIX_MOVE_ATTRS(max_recursion_, clear_children_, build_, fill_, save_history_, save_coverage_history_)
 }
 
-void StablePlanes::prepare(bool retain_history) noexcept {
+void StablePlanes::prepare(bool retain_history, bool compact_coverage_history) noexcept {
     auto &fb = frame_buffer();
-    fb.manage_stable_plane_buffers(integrator()->stable_planes_enabled(), retain_history);
+    fb.manage_stable_plane_buffers(integrator()->stable_planes_enabled(), retain_history, compact_coverage_history);
 }
 
 void StablePlanes::compile() noexcept {
@@ -152,6 +152,16 @@ void StablePlanes::compile() noexcept {
         };
     };
     save_history_ = device().compile(save_history, "StablePlanes-SaveHistory");
+    Kernel save_coverage_history = [](BufferVar<StablePlaneData> current, BufferVar<CoveragePlaneHistory> previous) {
+        Uint i = dispatch_id();
+        Uint pixels = dispatch_dim().x * dispatch_dim().y;
+        Uint secondary_valid = 0u;
+        for (uint layer = 1u; layer < StablePlaneCount; ++layer) {
+            secondary_valid |= current.read(layer * pixels + i)->valid();
+        }
+        previous.write(i, current.read(i)->coverage_history(secondary_valid));
+    };
+    save_coverage_history_ = device().compile(save_coverage_history, "StablePlanes-SaveCoverageHistory");
     auto &fb = frame_buffer();
     auto &camera = scene().sensor();
     auto &sampler = renderer().sampler();
@@ -516,8 +526,12 @@ CommandBatch StablePlanes::build(uint frame, bool jitter, bool retain_history) c
         (StablePlaneCount - 1u) * pixels};
     CommandBatch ret;
     if (retain_history && frame > 0u) {
-        auto history = frame_buffer().prev_stable_planes_view(frame);
-        ret << save_history_(planes, history, history.view_as<uint>()).dispatch(planes.size());
+        if (frame_buffer().compact_coverage_history()) {
+            ret << save_coverage_history_(planes, frame_buffer().coverage_history().view()).dispatch(resolution);
+        } else {
+            auto history = frame_buffer().prev_stable_planes_view(frame);
+            ret << save_history_(planes, history, history.view_as<uint>()).dispatch(planes.size());
+        }
     }
     ret << clear_children_(children).dispatch(children.size());
     ret << build_(frame, uint(jitter)).dispatch(resolution);

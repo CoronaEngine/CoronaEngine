@@ -275,10 +275,12 @@ CommandBatch ReLAX::dispatch(RealTimeDenoiseInput &input) noexcept {
             size_t producer = fb.denoiser_diffuse().view().size_in_byte() + fb.denoiser_specular().view().size_in_byte() +
                 fb.denoiser_bypass().view().size_in_byte() + fb.denoiser_di_specular().view().size_in_byte() +
                 fb.denoiser_gi_specular().view().size_in_byte() + fb.denoiser_di_bypass().view().size_in_byte();
-            // Coverage-only owns four float4 resolve images, plus four cached guides,
+            // Total-radiance coverage needs only the direct ping-pong pair.
+            // The dual-channel path owns four resolve images, plus four cached guides,
             // one edge mask and four Poisson scratch guides when geometry is guided.
             const size_t coverage_bytes = size_t(input.resolution.x) * input.resolution.y *
-                (4u * sizeof(float4) + ((value.use_stable_planes || value.composed_coverage) ? 8u * sizeof(float4) + sizeof(uint) : 0u));
+                ((value.total_radiance_coverage && value.channel_kind == RealTimeDenoiseInput::ChannelKind::DirectIndirect ? 2u : 4u) * sizeof(float4) +
+                 ((value.use_stable_planes || value.composed_coverage) ? 8u * sizeof(float4) + sizeof(uint) : 0u));
             std::ofstream out(profile_file(), std::ios::app);
             out << "{\"resources\":true,\"frame\":" << input.frame_index << ",\"filter_bytes\":" << filter_->allocated_bytes()
                 << ",\"producer_bytes\":" << producer << ",\"coverage_logical_bytes\":" << coverage_bytes << "}\n";

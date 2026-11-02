@@ -91,9 +91,12 @@ void ReBLUR::initialize_(const NodeDesc &) noexcept {
     DenoiserDesc desc{"svgf"}; desc.set_value("coverage_only", true);
     coverage_ = Node::create_shared<Denoiser>(desc);
 }
+bool ReBLUR::coverage_enabled() const noexcept {
+    return denoiser_coverage_aa_enabled(pipeline()->renderer().integrator()->impl_type(), impl_type());
+}
 void ReBLUR::prepare() noexcept {
     update_resolution(frame_buffer().raytracing_resolution());
-    coverage_->prepare();
+    if (coverage_enabled()) coverage_->prepare();
 }
 void ReBLUR::update_resolution(uint2 resolution) noexcept {
 #ifdef VISION_REBLUR_EDSL
@@ -104,7 +107,7 @@ void ReBLUR::update_resolution(uint2 resolution) noexcept {
     filter_->prepare(device(), resolution, pipeline()->renderer().integrator()->stable_planes_enabled() ? 3u : 1u);
 #endif
     filter_->reset(); frame_ = InvalidUI32;
-    if (coverage_ && coverage_->has_prepared_resources()) coverage_->update_resolution(resolution);
+    if (coverage_enabled() && coverage_ && coverage_->has_prepared_resources()) coverage_->update_resolution(resolution);
 }
 void ReBLUR::set_enabled(bool enabled) noexcept {
     if (enabled_ != enabled) { filter_->reset(); frame_ = InvalidUI32; }
@@ -116,7 +119,7 @@ void ReBLUR::set_stable_planes_enabled(bool enabled) noexcept {
     if (has_prepared_resources()) filter_->prepare(device(), frame_buffer().raytracing_resolution(), enabled ? 3u : 1u);
 #endif
     filter_->reset(); frame_ = InvalidUI32;
-    if (coverage_) coverage_->set_stable_planes_enabled(enabled);
+    if (coverage_enabled() && coverage_) coverage_->set_stable_planes_enabled(enabled);
 }
 void ReBLUR::render_sub_UI(Widgets *widgets) noexcept {
     bool on = enabled_;
@@ -255,7 +258,7 @@ void ReBLUR::compile() noexcept {
     if (!edsl_)
 #endif
         filter_->compile(device());
-    coverage_->compile();
+    if (coverage_enabled()) coverage_->compile();
     frame_ = InvalidUI32;
 }
 
@@ -263,6 +266,7 @@ CommandBatch ReBLUR::dispatch(RealTimeDenoiseInput &input) noexcept {
     CommandBatch ret;
     if (!enabled_) return ret;
     if (input.composed_coverage) {
+        if (!coverage_enabled()) return ret;
         auto coverage_input = input;
         coverage_input.composed_coverage = input.coverage_planes.size() != 0u;
         return coverage_->dispatch(coverage_input);
@@ -323,7 +327,7 @@ CommandBatch ReBLUR::dispatch(RealTimeDenoiseInput &input) noexcept {
         pp.bypass = frame_buffer().denoiser_layer_view(frame_buffer().denoiser_bypass(), input.layer_index).descriptor();
         pp.direct = input.direct.descriptor(); pp.indirect = input.indirect.descriptor();
         ret << publish_(pp).dispatch(input.resolution);
-        if (input.layer_count == 1u) ret << coverage_->dispatch(input);
+        if (input.layer_count == 1u && coverage_enabled()) ret << coverage_->dispatch(input);
     }
     return ret;
 }

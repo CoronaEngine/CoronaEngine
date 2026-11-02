@@ -71,7 +71,7 @@ private:
     DataWrap scene_restir_settings_;
     SP<StablePlanes> stable_planes_;
     mutable bool stable_resources_dirty_{};
-    Shader<void(uint, float, float, uint)> combine_;
+    Shader<void(uint, float, float, uint, uint)> combine_;
     Shader<void()> merge_dominant_;
     Shader<void()> compose_layers_;
     Shader<void(uint, float, float)> prepare_denoiser_;
@@ -121,17 +121,24 @@ public:
 
     VS_MAKE_PLUGIN_NAME_FUNC
     [[nodiscard]] bool jitter_primary_samples() const noexcept override {
-        // A raw frame is displayed directly, so shared film jitter otherwise
-        // moves every silhouette even with a stationary camera. Keep stochastic
-        // lighting/lens sampling and retain film jitter for reconstructed output.
-        return frame_buffer().enable_accumulation() ||
-               (!denoiser_runtime_disabled() && denoiser_ && denoiser_->enabled());
+        const bool denoiser_enabled = !denoiser_runtime_disabled() && denoiser_ && denoiser_->enabled();
+        if (denoiser_ && denoiser_->impl_type() == "ReBLUR") {
+            return frame_buffer().enable_accumulation() ||
+                (denoiser_enabled && denoiser_coverage_aa_enabled(impl_type(), denoiser_->impl_type()));
+        }
+        if (const char *value = std::getenv("VISION_RESTIR_PRIMARY_JITTER"); value && value[0] != '\0')
+            return value[0] != '0';
+        return frame_buffer().enable_accumulation() || denoiser_enabled;
     }
     void prepare() noexcept override {
         switch_profile::Scope profile{"integrator.prepare", "buffers"};
         IlluminationIntegrator::prepare();
-        direct_->prepare(denoiser_runtime_disabled() || !denoiser_ || !denoiser_->enabled());
-        indirect_->prepare(denoiser_runtime_disabled() || !denoiser_ || !denoiser_->enabled());
+        const bool denoiser_enabled = !denoiser_runtime_disabled() && denoiser_ && denoiser_->enabled();
+        const bool extra_aa = !denoiser_ || denoiser_coverage_aa_enabled(impl_type(), denoiser_->impl_type());
+        const bool retain_history = denoiser_enabled && extra_aa;
+        const bool compact = !denoiser_enabled;
+        direct_->prepare(compact);
+        indirect_->prepare(compact);
         if (!denoiser_runtime_disabled() && denoiser_ && denoiser_->enabled()) {
             denoiser_->prepare();
         }
@@ -141,7 +148,7 @@ public:
         frame_buffer().prepare_surface_ext_history();
         frame_buffer().prepare_visibility_buffer();
         frame_buffer().prepare_motion_vectors();
-        stable_planes_->prepare(!denoiser_runtime_disabled() && denoiser_ && denoiser_->enabled());
+        stable_planes_->prepare(retain_history, denoiser_ && denoiser_->uses_compact_coverage_history());
         if (denoiser_ && denoiser_->requires_lobe_signals()) frame_buffer().prepare_denoiser_signals();
         stable_resources_dirty_ = false;
     }
@@ -211,19 +218,24 @@ public:
 
     void compile_composition() noexcept {
         TSensor &camera = scene().sensor();
-        Kernel kernel = [&](Uint frame_index, Float di, Float ii, Uint layered) {
+        Kernel kernel = [&](Uint frame_index, Float di, Float ii, Uint layered, Uint resolved_lobes) {
             camera->load_data();
-            Float3 direct = direct_->read_radiance(dispatch_id()).xyz();
-            Float3 indirect = indirect_->read_radiance(dispatch_id()).xyz();
-            Float3 L = direct * di + indirect * ii;
-            $if(layered != 0u) {
-                L = frame_buffer().stable_radiance().read(dispatch_id()).xyz() * di;
-                for (uint layer = 0; layer < StablePlaneCount; ++layer) {
-                    Uint address = layer * (dispatch_dim().x * dispatch_dim().y) + dispatch_id();
-                    Float3 ld = frame_buffer().stable_direct().read(address).xyz();
-                    Float3 li = frame_buffer().stable_indirect().read(address).xyz();
-                    L += ld * di + li * ii;
-                }
+            Float3 L;
+            $if(resolved_lobes != 0u) {
+                L = frame_buffer().rt_buffer().read(dispatch_id()).xyz();
+            } $else {
+                Float3 direct = direct_->read_radiance(dispatch_id()).xyz();
+                Float3 indirect = indirect_->read_radiance(dispatch_id()).xyz();
+                L = direct * di + indirect * ii;
+                $if(layered != 0u) {
+                    L = frame_buffer().stable_radiance().read(dispatch_id()).xyz() * di;
+                    for (uint layer = 0; layer < StablePlaneCount; ++layer) {
+                        Uint address = layer * (dispatch_dim().x * dispatch_dim().y) + dispatch_id();
+                        Float3 ld = frame_buffer().stable_direct().read(address).xyz();
+                        Float3 li = frame_buffer().stable_indirect().read(address).xyz();
+                        L += ld * di + li * ii;
+                    }
+                };
             };
             frame_buffer().add_sample(dispatch_idx().xy(), L, frame_index);
         };
@@ -290,8 +302,7 @@ public:
                     total += frame_buffer().denoiser_diffuse().read(j).xyz() + frame_buffer().denoiser_specular().read(j).xyz() +
                              frame_buffer().denoiser_bypass().read(j).xyz();
                 };
-                direct_->write_radiance(i, make_float4(total, 1.f));
-                indirect_->write_radiance(i, make_float4(0.f));
+                frame_buffer().rt_buffer().write(i, make_float4(total, 1.f));
             };
             compose_denoiser_ = device().compile(compose_lobes, "Denoiser-ComposeReSTIR");
         }
@@ -312,16 +323,19 @@ public:
         ret.use_stable_planes = direct_->uses_stable_planes();
         ret.stable_surfaces = frame_buffer().cur_surfaces_view(frame_index_);
         ret.prev_stable_surfaces = frame_buffer().prev_surfaces_view(frame_index_);
-        ret.direct = direct_->radiance()->view();
-        ret.indirect = indirect_->radiance()->view();
+        if (!direct_->compact_radiance()) ret.direct = direct_->radiance()->view();
+        if (!indirect_->compact_radiance()) ret.indirect = indirect_->radiance()->view();
         if (stable_planes_enabled()) {
             ret.use_stable_planes = true;
             ret.layer_count = StablePlaneCount;
             ret.layer_index = layer;
             ret.stable_planes = frame_buffer().cur_stable_planes_view(frame_index_, layer);
-            ret.prev_stable_planes = frame_buffer().prev_stable_planes_view(frame_index_, layer);
-            ret.direct = frame_buffer().stable_direct_view(layer);
-            ret.indirect = frame_buffer().stable_indirect_view(layer);
+            if (frame_buffer().stable_plane_history_retained() && !frame_buffer().compact_coverage_history())
+                ret.prev_stable_planes = frame_buffer().prev_stable_planes_view(frame_index_, layer);
+            if (frame_buffer().stable_raw_outputs_retained()) {
+                ret.direct = frame_buffer().stable_direct_view(layer);
+                ret.indirect = frame_buffer().stable_indirect_view(layer);
+            }
         }
         // Camera positions for depth calculation from visibility buffer
         float3 cam_pos = camera->position();
@@ -344,13 +358,16 @@ public:
         const Pipeline *rp = pipeline();
         Stream &stream = rp->stream();
         reset_denoise_timing();
-        const bool retain_history = !denoiser_runtime_disabled() && denoiser_ && denoiser_->enabled();
-        if (direct_->compact_radiance() == retain_history || indirect_->compact_radiance() == retain_history) {
+        const bool denoiser_enabled = !denoiser_runtime_disabled() && denoiser_ && denoiser_->enabled();
+        const bool extra_aa = !denoiser_ || denoiser_coverage_aa_enabled(impl_type(), denoiser_->impl_type());
+        const bool retain_history = denoiser_enabled && extra_aa;
+        const bool compact = !denoiser_enabled;
+        if (direct_->compact_radiance() != compact || indirect_->compact_radiance() != compact) {
             // Finish the old representation before changing bindings captured by
             // the DI/GI producers and their raw/denoised composition kernels.
             stream << synchronize() << commit();
-            direct_->set_compact_radiance(!retain_history);
-            indirect_->set_compact_radiance(!retain_history);
+            direct_->set_compact_radiance(compact);
+            indirect_->set_compact_radiance(compact);
             pipeline()->upload_bindless_array();
             Global::SceneGpuContextScope scene_gpu_context{
                 scene().geometry().bindless_array(), scene().geometry().gpu_resource()->device()};
@@ -360,11 +377,13 @@ public:
             // Output has no temporal state. Keep the frame sequence and prior
             // raw stable planes intact for newly enabled denoiser history.
         }
-        if (stable_resources_dirty_ || frame_buffer().stable_plane_history_retained() != retain_history) {
+        const bool compact_history = denoiser_ && denoiser_->uses_compact_coverage_history();
+        if (stable_resources_dirty_ || frame_buffer().stable_plane_history_retained() != retain_history ||
+            frame_buffer().compact_coverage_history() != compact_history) {
             // Resize history before build snapshots the complete previous raw
             // planes. A history-only switch must preserve those current records.
             stream << synchronize() << commit();
-            frame_buffer().manage_stable_plane_buffers(stable_planes_enabled(), retain_history);
+            frame_buffer().manage_stable_plane_buffers(stable_planes_enabled(), retain_history, compact_history);
             pipeline()->upload_bindless_array();
             if (stable_resources_dirty_) {
                 if (denoiser_) { denoiser_->set_stable_planes_enabled(stable_planes_enabled()); }
@@ -392,7 +411,8 @@ public:
         // either stable-plane build or DI overwrites the full current record.
         submit(frame_buffer().save_surface_exts_history(frame_index_), &cur_stage_profile_.gbuffer_ms);
         if (stable_planes_enabled()) {
-            submit(stable_planes_->build(frame_index_, jitter_primary_samples(), retain_history), &cur_stage_profile_.stable_build_ms);
+            const bool copy_history = retain_history && denoiser_->needs_stable_plane_history(frame_index_);
+            submit(stable_planes_->build(frame_index_, jitter_primary_samples(), copy_history), &cur_stage_profile_.stable_build_ms);
             submit(stable_planes_->fill(frame_index_, direct_->factor(), indirect_->factor()), &cur_stage_profile_.stable_fill_ms);
         }
         submit(direct_->dispatch(frame_index_), &cur_stage_profile_.restir_di_ms);
@@ -466,16 +486,27 @@ public:
                 if (denoiser) submit(compose_denoiser_(uint(stable_planes_enabled()), direct_->factor()).dispatch(pipeline()->resolution()), &cur_stage_profile_.combine_ms);
                 else submit(compose_layers_().dispatch(pipeline()->resolution()), &cur_stage_profile_.combine_ms);
                 debug_readback("composite_pre", false);
-                auto coverage = denoise_input();
-                coverage.layer_count = 1u;
-                coverage.composed_coverage = true;
-                coverage.direct = direct_->radiance()->view();
-                coverage.indirect = indirect_->radiance()->view();
-                if (stable_planes_enabled()) {
-                    coverage.coverage_planes = frame_buffer().cur_stable_planes_view(frame_index_);
-                    coverage.prev_coverage_planes = frame_buffer().prev_stable_planes_view(frame_index_);
+                if (extra_aa) {
+                    auto coverage = denoise_input();
+                    coverage.layer_count = 1u;
+                    coverage.composed_coverage = true;
+                    coverage.total_radiance_coverage = denoiser;
+                    if (denoiser) {
+                        coverage.direct = frame_buffer().rt_buffer().view();
+                        coverage.indirect = coverage.direct; // Total coverage omits this channel.
+                    } else {
+                        coverage.direct = direct_->radiance()->view();
+                        coverage.indirect = indirect_->radiance()->view();
+                    }
+                    if (stable_planes_enabled()) {
+                        coverage.coverage_planes = frame_buffer().cur_stable_planes_view(frame_index_);
+                        if (frame_buffer().compact_coverage_history())
+                            coverage.prev_coverage_history = frame_buffer().coverage_history().view();
+                        else
+                            coverage.prev_coverage_planes = frame_buffer().prev_stable_planes_view(frame_index_);
+                    }
+                    submit(denoiser_->dispatch(coverage), &cur_stage_profile_.spatial_angular_ms);
                 }
-                submit(denoiser_->dispatch(coverage), &cur_stage_profile_.spatial_angular_ms);
                 debug_readback("composite_post", false);
             }
             end_denoise_timing(stream);
@@ -483,7 +514,7 @@ public:
         const bool resolved = !denoiser_runtime_disabled() && denoiser_ && denoiser_->enabled();
         // Raw ownership is unchanged. Filtered output resolves that same sum
         // before channel factors are applied exactly once in presentation.
-        submit(combine_(frame_index_, denoiser ? 1.f : direct_->factor(), denoiser ? 1.f : indirect_->factor(), uint(stable_planes_enabled() && !resolved))
+        submit(combine_(frame_index_, denoiser ? 1.f : direct_->factor(), denoiser ? 1.f : indirect_->factor(), uint(stable_planes_enabled() && !resolved), uint(denoiser))
                    .dispatch(pipeline()->resolution()), &cur_stage_profile_.combine_ms);
         submit(frame_buffer().post_path_tracing(frame_index_), &cur_stage_profile_.postprocess_ms);
         submit(frame_buffer().render_final(frame_index_), &cur_stage_profile_.render_final_ms);
