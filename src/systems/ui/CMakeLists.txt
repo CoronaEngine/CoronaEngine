@@ -1,10 +1,12 @@
-# UI System 配置 (ImGui removed — Phase 6 of the ImGui-removal plan).
-# The frame loop is now ui_frame_runner.cpp (raw SDL + quad compositor); there is no
-# longer an imgui or imgui_backends (imgui_impl_sdl3) target. The quad compositor's
-# shaders/ui_quad.vert/frag.glsl shaders are compiled below.
+# ImGui owns editor docking. Its draw data is rendered by Horizon into Display surfaces.
+# Only the SDL3 platform backend is used; no stock ImGui renderer is linked.
 set(UI_SYSTEM_SOURCES
     ui_system.cpp
     ui_frame_runner.cpp
+    imgui/imgui_draw_packet.cpp
+    imgui/imgui_renderer.cpp
+    imgui/imgui_platform.cpp
+    imgui/imgui_ui.cpp
     ui_surface_lifecycle.cpp
     camera_viewport_manager.cpp
     panel_layout.cpp
@@ -105,6 +107,7 @@ corona_add_system(ui
 )
 
 target_compile_definitions(corona_ui_system PUBLIC VK_NO_PROTOTYPES)
+target_link_libraries(corona_ui_system PRIVATE corona::imgui)
 
 # The camera-follow controller is an implementation detail of the Script
 # system, but the native editor handler invokes it as part of the aggregate

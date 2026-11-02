@@ -270,6 +270,27 @@ void VulkanBackend::render_quads(void* surface, std::span<const QuadDraw> quads,
     }
 }
 
+bool VulkanBackend::initialize_imgui_renderer() {
+    return ensure_pipeline() && imgui_renderer_.initialize();
+}
+
+void VulkanBackend::shutdown_imgui_renderer() {
+    for (auto& [surface, render] : surfaces_) {
+        if (render->resources.last_receipt.serial)
+            render->resources.executor.wait_completed(render->resources.last_receipt);
+    }
+    imgui_renderer_.shutdown();
+}
+
+void VulkanBackend::render_imgui(void* surface, const ImDrawData& data, uint32_t width, uint32_t height) {
+    auto* render = find_surface(surface);
+    if (!initialized_ || !render || !ensure_pipeline() || width == 0 || height == 0) return;
+    if (render->resources.width != width || render->resources.height != height) rebuild(surface, width, height);
+    new_frame(surface);
+    if (imgui_renderer_.render(data, render->resources, *pipeline_, width, height))
+        render->resources.frame_ready = true;
+}
+
 void VulkanBackend::present_surface(void* surface) {
     if (!initialized_) {
         return;

@@ -274,11 +274,10 @@ void BrowserManager::resize_tab(int tab_id, int width, int height) {
     const bool was_camera_view = tab->camera_view;
     const auto resize_started = std::chrono::steady_clock::now();
 
-    tab->width = width;
-    tab->height = height;
-
     {
         std::lock_guard<std::mutex> lock(tab->mutex);
+        tab->width = width;
+        tab->height = height;
         tab->popup.clear();
         tab->buffer_dirty = true;
     }

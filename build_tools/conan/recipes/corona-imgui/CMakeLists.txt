@@ -1,0 +1,15 @@
+cmake_minimum_required(VERSION 3.24)
+project(corona_imgui LANGUAGES CXX)
+find_package(SDL3 CONFIG REQUIRED)
+add_library(corona-imgui STATIC
+    imgui.cpp imgui_draw.cpp imgui_tables.cpp imgui_widgets.cpp imgui_demo.cpp
+    backends/imgui_impl_sdl3.cpp)
+target_compile_features(corona-imgui PUBLIC cxx_std_17)
+target_include_directories(corona-imgui PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(corona-imgui PUBLIC SDL3::SDL3)
+if(MSVC)
+    target_compile_options(corona-imgui PRIVATE /utf-8)
+endif()
+install(TARGETS corona-imgui ARCHIVE DESTINATION lib)
+install(FILES imgui.h imgui_internal.h imconfig.h imstb_rectpack.h imstb_textedit.h imstb_truetype.h DESTINATION include)
+install(FILES backends/imgui_impl_sdl3.h DESTINATION include/backends)

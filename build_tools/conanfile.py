@@ -81,6 +81,7 @@ class CoronaEngineConan(ConanFile):
         self.requires("stb/cci.20230920", transitive_headers=True)
         self.requires("nanobind/2.9.2", transitive_headers=True, transitive_libs=True)
         self.requires("sdl/3.4.0", transitive_headers=True, transitive_libs=True)
+        self.requires("corona-imgui/1.92.5")
         self.requires("enet/1.3.18", transitive_headers=True, transitive_libs=True)
         self.requires("onetbb/2022.3.0", transitive_headers=True, transitive_libs=True)
         self.requires("miniaudio/0.11.21", transitive_headers=True)

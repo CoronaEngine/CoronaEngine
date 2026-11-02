@@ -3,6 +3,7 @@
 #include "horizon.h"
 #include <SDL3/SDL.h>
 #include <include/internal/cef_types.h>
+#include <include/internal/cef_types_wrappers.h>
 
 #include "popup_overlay.h"
 
@@ -52,6 +53,22 @@ struct BrowserTab {
     int tab_id = -1;
     std::string name;
     std::string url;
+    std::string panel_id; // Stable ImGui identity, independent of the current browser id.
+    std::string panel_title;
+    bool native_docked = false;
+    bool native_force_viewport = false;
+    bool cef_visible = true;
+    // Published on the UI thread, read under mutex by CEF callbacks. CEF renders
+    // at logical resolution; screen coordinates are physical desktop pixels.
+    int content_screen_x = 0;
+    int content_screen_y = 0;
+    float content_screen_scale = 1.0f;
+    CefRect ime_caret{0, 0, 1, 18};
+    // Last Web-local camera rectangle; composed with the ImGui content origin each frame.
+    std::uintptr_t web_camera_handle = 0;
+    int web_camera_x = 0, web_camera_y = 0;
+    int web_camera_width = 0, web_camera_height = 0;
+    int web_camera_render_width = 0, web_camera_render_height = 0;
 
     OffscreenCefClient* client = nullptr;
     // VkDescriptorSet texture_id = VK_NULL_HANDLE;
