@@ -6,6 +6,7 @@ set(UI_SYSTEM_SOURCES
     imgui/imgui_draw_packet.cpp
     imgui/imgui_renderer.cpp
     imgui/imgui_platform.cpp
+    imgui/imgui_workspace.cpp
     imgui/imgui_ui.cpp
     ui_surface_lifecycle.cpp
     camera_viewport_manager.cpp

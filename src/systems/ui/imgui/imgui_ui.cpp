@@ -4,6 +4,7 @@
 #include <corona/systems/ui/camera_viewport_manager.h>
 #include <corona/shared_data_hub.h>
 #include "imgui_platform.h"
+#include "imgui_workspace.h"
 #include "cef/browser_manager.h"
 #include "cef/cef_client.h"
 #include "sdl/sdl_utils.h"
@@ -26,7 +27,7 @@ struct ContentRect {
     bool hovered;
 };
 std::string window_name(const BrowserTab& tab) {
-    if (tab.docking_pos == "main") return "Workspace###Corona.Workspace";
+    if (tab.docking_pos == "main") return kMainWorkspaceName;
     return (tab.panel_title.empty() ? tab.name : tab.panel_title) + "###Corona.Panel." +
         (tab.panel_id.empty() ? std::to_string(tab.tab_id) : tab.panel_id);
 }
@@ -92,10 +93,9 @@ void UiFrameRunner::run_frame(UiFrameContext& context) {
         default_docks_["right"] = ImGui::DockBuilderSplitNode(center, ImGuiDir_Right, 0.28f, nullptr, &center);
         default_docks_["bottom"] = ImGui::DockBuilderSplitNode(center, ImGuiDir_Down, 0.28f, nullptr, &center);
         default_docks_["center"] = center;
-        ImGui::DockBuilderDockWindow("Workspace###Corona.Workspace", center);
         ImGui::DockBuilderFinish(dockspace_);
     }
-    ImGui::DockSpaceOverViewport(dockspace_, main_viewport, ImGuiDockNodeFlags_PassthruCentralNode);
+    draw_editor_dockspace(dockspace_, main_viewport);
     auto snapshot = manager.tabs_snapshot();
     std::sort(snapshot.begin(), snapshot.end(), [](auto a, auto b) { return a.tab_id < b.tab_id; });
     std::vector<ContentRect> contents;
@@ -110,7 +110,6 @@ void UiFrameRunner::run_frame(UiFrameContext& context) {
         const auto name = window_name(*tab);
         ImGuiWindowFlags flags = ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar |
             ImGuiWindowFlags_NoScrollWithMouse;
-        if (main) flags |= ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoBackground;
         if (tab->camera_view) {
             // Display currently owns one optics layer per native surface. Match the old
             // implementation: camera windows cannot merge into another surface.
@@ -120,11 +119,11 @@ void UiFrameRunner::run_frame(UiFrameContext& context) {
         if (tab->camera_view || tab->native_force_viewport)
             window_class.ViewportFlagsOverrideSet = ImGuiViewportFlags_NoAutoMerge;
         ImGui::SetNextWindowClass(&window_class);
-        if (!tab->dock_initialized) {
+        if (!main && !tab->dock_initialized) {
             ImGui::SetNextWindowSize(ImVec2(static_cast<float>(std::max(tab->dock_width, 320)),
                 static_cast<float>(std::max(tab->dock_height, 240))), ImGuiCond_FirstUseEver);
-            if (main || tab->native_docked) {
-                std::string zone = main ? "center" : tab->docking_pos;
+            if (tab->native_docked) {
+                const std::string& zone = tab->docking_pos;
                 const auto it = default_docks_.find(zone);
                 const auto target = it != default_docks_.end() && ImGui::DockBuilderGetNode(it->second)
                     ? it->second : dockspace_;
@@ -135,19 +134,24 @@ void UiFrameRunner::run_frame(UiFrameContext& context) {
             }
             tab->dock_initialized = true;
         }
-        if (tab->detach_state == BrowserTab::DetachState::Detaching) {
+        if (!main && tab->detach_state == BrowserTab::DetachState::Detaching) {
             ImGui::SetNextWindowDockID(0);
             ImGui::SetNextWindowPos(ImVec2(static_cast<float>(tab->detach_x), static_cast<float>(tab->detach_y)));
             ImGui::SetNextWindowSize(ImVec2(static_cast<float>(std::max(tab->detach_w, 240)),
                 static_cast<float>(std::max(tab->detach_h, 180))));
             tab->detach_state = BrowserTab::DetachState::Docked;
-        } else if (tab->detach_state == BrowserTab::DetachState::Redocking) {
+        } else if (!main && tab->detach_state == BrowserTab::DetachState::Redocking) {
             ImGui::SetNextWindowDockID(dockspace_);
             tab->detach_state = BrowserTab::DetachState::Docked;
         }
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
         bool open = true;
-        const bool visible = ImGui::Begin(name.c_str(), main ? nullptr : &open, flags);
+        bool visible;
+        if (main) {
+            visible = begin_main_workspace();
+        } else {
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+            visible = ImGui::Begin(name.c_str(), &open, flags);
+        }
         if (ImGui::IsWindowDocked()) tab->native_force_viewport = false;
         const auto origin = ImGui::GetCursorScreenPos();
         auto size = ImGui::GetContentRegionAvail();
@@ -162,8 +166,11 @@ void UiFrameRunner::run_frame(UiFrameContext& context) {
             else ImGui::Dummy(size);
             contents.push_back({tab_id, ImGui::GetWindowViewport()->ID, origin, size, ImGui::IsItemHovered()});
         }
-        ImGui::End();
-        ImGui::PopStyleVar();
+        if (main) end_main_workspace();
+        else {
+            ImGui::End();
+            ImGui::PopStyleVar();
+        }
         if (!open) request_close(*tab);
     }
 
@@ -256,12 +263,15 @@ void UiFrameRunner::run_frame(UiFrameContext& context) {
             CameraViewportManager::instance().update_layout(content.tab_id, x, y, width, height);
         }
         if (tab->web_camera_handle && tab->web_camera_width > 0) {
+            // Main camera is the native surface background, never a dock-node
+            // viewport. Web still controls its render-resolution budget.
+            const bool main = tab->docking_pos == "main";
             SharedDataHub::instance().enqueue_camera_viewport_update({
                 .camera_handle = tab->web_camera_handle, .surface = surface, .view_open = false,
-                .x = x + static_cast<int>(tab->web_camera_x * sx),
-                .y = y + static_cast<int>(tab->web_camera_y * sy),
-                .width = std::max(1, static_cast<int>(tab->web_camera_width * sx)),
-                .height = std::max(1, static_cast<int>(tab->web_camera_height * sy)),
+                .x = main ? 0 : x + static_cast<int>(tab->web_camera_x * sx),
+                .y = main ? 0 : y + static_cast<int>(tab->web_camera_y * sy),
+                .width = main ? std::max(1, pixel_w) : std::max(1, static_cast<int>(tab->web_camera_width * sx)),
+                .height = main ? std::max(1, pixel_h) : std::max(1, static_cast<int>(tab->web_camera_height * sy)),
                 .render_width = std::max(1, static_cast<int>(tab->web_camera_render_width * sx)),
                 .render_height = std::max(1, static_cast<int>(tab->web_camera_render_height * sy)),
             });
