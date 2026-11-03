@@ -1,9 +1,11 @@
 #include "reblur.h"
 #include "base/mgr/pipeline.h"
 #include "base/integral/integrator.h"
+#include "base/mgr/evaluation_debug.h"
 #include "utils.h"
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
 #ifdef VISION_REBLUR_EDSL
 #include "rhi/context.h"
 #endif
@@ -366,6 +368,25 @@ CommandBatch ReBLUR::dispatch(RealTimeDenoiseInput &input) noexcept {
     if (!edsl_ || !fuse_guides_)
 #endif
         ret << prepare_guides_(gp).dispatch(input.resolution);
+#ifdef VISION_REBLUR_EDSL
+    const auto guide_debug_directory = evaluation_debug::directory(input.frame_index);
+    if (!fuse_guides_ && !guide_debug_directory.empty()) {
+        std::filesystem::create_directories(guide_debug_directory);
+        auto guides = std::make_shared<std::vector<std::byte>>(filter_->guides().size());
+        auto diffuse = std::make_shared<std::vector<float4>>(gp.size.x * gp.size.y);
+        auto specular = std::make_shared<std::vector<float4>>(gp.size.x * gp.size.y);
+        ret << filter_->guides().download(guides->data())
+            << input.lobe_signals.diffuse_radiance_hitdist.download(diffuse->data())
+            << input.lobe_signals.specular_radiance_hitdist.download(specular->data()) << synchronize();
+        ret << [guide_debug_directory, layer = input.layer_index, guides, diffuse, specular] {
+            auto write = [&](const char *field, const auto &data) {
+                std::ofstream file(guide_debug_directory / ("guide_layer_" + std::to_string(layer) + "_" + field + ".bin"), std::ios::binary);
+                file.write(reinterpret_cast<const char *>(data.data()), data.size() * sizeof(data[0]));
+            };
+            write("guides", *guides); write("raw_diffuse", *diffuse); write("raw_specular", *specular);
+        };
+    }
+#endif
     FilterParam p;
     p.frame = input.frame_index; p.history_valid = input.frame_index != 0u;
     p.raw_diffuse = gp.diffuse; p.raw_specular = gp.specular;

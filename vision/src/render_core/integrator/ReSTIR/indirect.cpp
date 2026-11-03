@@ -4,6 +4,7 @@
 
 #include "indirect.h"
 #include "denoiser_signals.h"
+#include "gi_reconnection.h"
 #include "base/integral/integrator.h"
 
 namespace vision {
@@ -27,11 +28,11 @@ Float ReSTIRGI::Jacobian_det(Float3 cur_pos, Float3 neighbor_pos,
     Float cur_dist2 = length_squared(cur_vec);
     Float neighbor_dist2 = length_squared(neighbor_vec);
     $if(sample_point->valid() && cur_dist2 > 0.f && neighbor_dist2 > 0.f) {
-        Float cos_phi_c = abs_dot(normalize(cur_vec), sample_point->normal());
-        Float cos_phi_n = abs_dot(normalize(neighbor_vec), sample_point->normal());
-        Float denominator = cos_phi_n * cur_dist2;
-        $if(denominator > 0.f) {
-            ret = (cos_phi_c * neighbor_dist2) / denominator;
+        Float cos_phi_c = dot(normalize(cur_vec), sample_point->normal());
+        Float cos_phi_n = dot(normalize(neighbor_vec), sample_point->normal());
+        Float denominator = abs(cos_phi_n) * cur_dist2;
+        $if(gi_reconnection_supported(cos_phi_c, cos_phi_n) && denominator > 0.f) {
+            ret = (abs(cos_phi_c) * neighbor_dist2) / denominator;
             ret = ocarina::max(ocarina::zero_if_nan_inf(ret), 0.f);
         };
     };

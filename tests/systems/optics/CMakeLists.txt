@@ -7,6 +7,11 @@ add_test(NAME VisionSwitchProfileScopeTests
             ${CMAKE_CURRENT_BINARY_DIR}/switch-profile-scope)
 set_tests_properties(VisionSwitchProfileScopeTests PROPERTIES TIMEOUT 30)
 
+add_executable(corona_restir_gi_reconnection_tests test_restir_gi_reconnection.cpp)
+target_include_directories(corona_restir_gi_reconnection_tests PRIVATE ${CMAKE_SOURCE_DIR}/vision/src)
+add_test(NAME ReSTIRGIReconnectionTests COMMAND corona_restir_gi_reconnection_tests)
+set_tests_properties(ReSTIRGIReconnectionTests PROPERTIES LABELS "cpu;vision;restir" TIMEOUT 30)
+
 
 add_executable(corona_vision_render_mode_config_tests
     test_vision_render_mode_config.cpp
