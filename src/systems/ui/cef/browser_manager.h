@@ -1,6 +1,7 @@
 #pragma once
 
 #include "horizon.h"
+#include <corona/systems/ui/embedded_camera_viewport.h>
 #include <SDL3/SDL.h>
 #include <include/internal/cef_types.h>
 
@@ -10,6 +11,7 @@
 #include <cstdint>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <functional>
 #include <string>
 #include <unordered_map>
@@ -59,6 +61,13 @@ struct BrowserTab {
 
     int width = 800;
     int height = 600;
+
+    // Retain browser-local bounds so native layout/DPI changes can remap them
+    // even when the page's logical size (and therefore its resize event) stays unchanged.
+    // Protected by mutex, like the CEF paint state below.
+    std::optional<EmbeddedCameraViewportRequest> embedded_camera_viewport;
+    std::optional<EmbeddedCameraViewportBounds> applied_embedded_camera_viewport;
+    void* embedded_camera_viewport_surface = nullptr;
 
     // Docking 相关属性
     std::string docking_pos;        // 位置: "left", "right", "top", "bottom", "center"
@@ -176,6 +185,9 @@ class BrowserManager {
         BrowserTab* tab = nullptr;
     };
     [[nodiscard]] std::vector<TabSnapshotEntry> tabs_snapshot() const;
+
+    // CEF-thread write: retain only the latest request while holding tab ownership.
+    bool set_embedded_camera_viewport(int browser_id, const EmbeddedCameraViewportRequest& request);
 
     void update();
     void close_all_tabs();

@@ -1,4 +1,5 @@
 #include <corona/systems/ui/ui_frame_runner.h>
+#include <corona/shared_data_hub.h>
 
 #include <horizon/core/logging.h>
 #include <corona/memory/gpu_mem_ledger.h>
@@ -1027,6 +1028,7 @@ void UiFrameRunner::render_window(UiFrameContext& context, const ManagedWindow& 
         }
     }
 
+    Corona::Systems::Detail::SceneViewport scene_viewport;
     // Resize each tab's CEF buffer to its LOGICAL panel size; bind camera viewports onto THIS
     // window's surface using PIXEL bounds.
     for (const PanelPlacement& placement : placements) {
@@ -1051,6 +1053,39 @@ void UiFrameRunner::render_window(UiFrameContext& context, const ManagedWindow& 
         }
 
         if (!tab->camera_view) {
+            std::optional<EmbeddedCameraViewportBounds> update;
+            {
+                std::lock_guard lock(tab->mutex);
+                if (tab->embedded_camera_viewport) {
+                    const auto bounds = map_embedded_camera_viewport(
+                        *tab->embedded_camera_viewport,
+                        placement.rect.x * scale_x, placement.rect.y * scale_y,
+                        placement.rect.w * scale_x, placement.rect.h * scale_y);
+                    scene_viewport = {static_cast<uint32_t>(bounds.x),
+                                      static_cast<uint32_t>(bounds.y),
+                                      static_cast<uint32_t>(bounds.width),
+                                      static_cast<uint32_t>(bounds.height)};
+                    if (tab->applied_embedded_camera_viewport != bounds ||
+                        tab->embedded_camera_viewport_surface != surface) {
+                        tab->applied_embedded_camera_viewport = bounds;
+                        tab->embedded_camera_viewport_surface = surface;
+                        update = bounds;
+                    }
+                }
+            }
+            if (update) {
+                SharedDataHub::instance().enqueue_camera_viewport_update({
+                    .camera_handle = update->camera_handle,
+                    .surface = surface,
+                    .view_open = false,
+                    .x = update->x,
+                    .y = update->y,
+                    .width = update->width,
+                    .height = update->height,
+                    .render_width = update->render_width,
+                    .render_height = update->render_height,
+                });
+            }
             continue;
         }
 
@@ -1120,7 +1155,9 @@ void UiFrameRunner::render_window(UiFrameContext& context, const ManagedWindow& 
     }
 
     context.vulkan_backend->render_quads(surface, quads, pixel_w, pixel_h);
-    context.vulkan_backend->present_surface(surface);
+    // Publish placement with the UI frame so Display can stretch the last scene
+    // into its new bounds while Optics rebuilds its render target.
+    context.vulkan_backend->present_surface(surface, scene_viewport);
 
     // Deferred show: reveal a freshly-detached window once its first frame is published.
     if (managed.pending_show && context.vulkan_backend->first_present_ready(surface)) {

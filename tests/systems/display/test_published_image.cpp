@@ -7,10 +7,13 @@
 #include <stdexcept>
 
 #include "corona/systems/display/published_image.h"
+#include "corona/systems/display/scene_viewport.h"
 
 namespace {
 using Corona::Systems::Detail::ImageFrameMetadata;
 using Corona::Systems::Detail::PublishedImage;
+using Corona::Systems::Detail::SceneViewport;
+using Corona::Systems::Detail::scene_viewport_for_composite;
 using Storage = Corona::Kernel::Utils::Storage<int, 2, 1>;
 
 void expect(bool condition, const char* message) {
@@ -217,9 +220,43 @@ void missing_images_clear_cached_frame_metadata() {
                "missing image must not leave stale dimensions or viewport coordinates");
     }
 }
+
+void current_ui_viewport_replaces_stale_optics_bounds() {
+    const ImageFrameMetadata ui{12, 1920, 1009, 0, 0, 1920, 1009};
+    const ImageFrameMetadata optics{11, 1536, 825, 0, 0, 1536, 825};
+    expect(scene_viewport_for_composite(ui, optics, 1920, 1009) ==
+               SceneViewport{0, 0, 1920, 1009},
+           "current UI viewport must fill the resized panel while optics still has its old image");
+}
+
+void ui_subpanel_bounds_remain_physical_pixels() {
+    const ImageFrameMetadata ui{12, 1920, 1080, 240, 120, 960, 540};
+    const ImageFrameMetadata optics{11, 1536, 825, 0, 0, 1536, 825};
+    expect(scene_viewport_for_composite(ui, optics, 3840, 2160) ==
+               SceneViewport{240, 120, 960, 540},
+           "UI subpanel offset and extent must not be scaled by image or output dimensions");
+}
+
+void unset_ui_viewport_preserves_optics_bounds() {
+    const ImageFrameMetadata ui{12, 1920, 1009};
+    const ImageFrameMetadata optics{11, 1280, 720, 30, 45, 900, 600};
+    expect(scene_viewport_for_composite(ui, optics, 1920, 1009) ==
+               SceneViewport{30, 45, 900, 600},
+           "an unset UI viewport must preserve the exact optics viewport");
+}
+
+void unset_viewports_fill_the_output() {
+    expect(scene_viewport_for_composite({}, {}, 1920, 1009) ==
+               SceneViewport{0, 0, 1920, 1009},
+           "without either viewport the scene must fill the output");
+}
 }  // namespace
 
 int main() {
+    current_ui_viewport_replaces_stale_optics_bounds();
+    ui_subpanel_bounds_remain_physical_pixels();
+    unset_ui_viewport_preserves_optics_bounds();
+    unset_viewports_fill_the_output();
     idle_eviction_rejects_cached_and_reused_handles();
     retirement_waits_for_image_access_and_receipt_writeback();
     layer_retirement_does_not_retire_the_surface_or_ui();
