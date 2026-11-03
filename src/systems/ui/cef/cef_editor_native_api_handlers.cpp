@@ -7919,9 +7919,6 @@ void register_editor_api_handlers(NativeApiRegistry& registry) {
 
 void register_python_script_api_handlers(NativeApiRegistry& registry) {
     static const NativeMethodTable ai_tool_methods = {
-        {"generate_hint", script_method},
-        {"read_local_file_as_base64", script_method},
-        {"send_message_to_ai_stream", script_method},
         {"submit_request", script_method},
     };
     static const NativeMethodTable corona_editor_methods = {

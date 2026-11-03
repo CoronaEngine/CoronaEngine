@@ -119,10 +119,6 @@ constexpr std::array<EditorApiParamSpec, 1> kObjectPayloadParam = {{
     param("payload", EditorApiValueType::Object),
 }};
 
-constexpr std::array<EditorApiParamSpec, 1> kAnyPayloadParam = {{
-    param("payload", EditorApiValueType::Any),
-}};
-
 constexpr std::array<EditorApiParamSpec, 2> kEditorApiRegisterCallbackParams = {{
     param("event_name", EditorApiValueType::String),
     param("callback_spec", EditorApiValueType::Object, true),
@@ -130,11 +126,6 @@ constexpr std::array<EditorApiParamSpec, 2> kEditorApiRegisterCallbackParams = {
 
 constexpr std::array<EditorApiParamSpec, 1> kCallbackTokenParam = {{
     param("callback_token", EditorApiValueType::Integer),
-}};
-
-constexpr std::array<EditorApiParamSpec, 2> kAiToolGenerateHintParams = {{
-    param("element_type", EditorApiValueType::String),
-    param("context", EditorApiValueType::Object, true),
 }};
 
 constexpr std::array<EditorApiParamSpec, 2> kMainViewImportResourceFileParams = {{
@@ -531,9 +522,6 @@ constexpr std::array<EditorApiParamSpec, 9> kScratchMouseEventParams = {{
 // manifest grows, instead of identifying the actual entry that drifted.
 constexpr auto kEditorApiMethods = std::to_array<EditorApiMethodSpec>({
     EDITOR_API_METHOD_SCHEMA_WRAPPED(AITool, submit_request, kObjectPayloadParam, "ai.submitRequest", "ai.submit_request", EditorApiValueType::Any),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED(AITool, generate_hint, kAiToolGenerateHintParams, "ai.generateHint", "ai.generate_hint", EditorApiValueType::Any),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED(AITool, read_local_file_as_base64, kPathParam, "ai.readLocalFileAsBase64", "ai.read_local_file_as_base64", EditorApiValueType::Any),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED(AITool, send_message_to_ai_stream, kAnyPayloadParam, "ai.sendMessageToAIStream", "ai.send_message_to_ai_stream", EditorApiValueType::Any),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(CoronaEditor, close_process, kNoParams, "app.closeProcess", "app.close_process", EditorApiValueType::Null),
     EDITOR_API_METHOD_SCHEMA(EditorApi, register_callback, kEditorApiRegisterCallbackParams, EditorApiValueType::Object),
     EDITOR_API_METHOD_SCHEMA(EditorApi, unregister_callback, kCallbackTokenParam, EditorApiValueType::Object),
