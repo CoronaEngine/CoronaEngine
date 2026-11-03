@@ -13,6 +13,7 @@
 #include "browser_manager.h"
 #include <corona/utils/runtime_paths.h>
 #include "actor_selection_routing.h"
+#include "archive_load_policy.h"
 #include "../collaborative_editor_runtime.h"
 #include "cef_client.h"
 #include "cef_editor_api.h"
@@ -2101,10 +2102,11 @@ PreparedArchiveLoad prepare_archive_load(const std::string& path,
         });
         return prepared;
     }
-    if (!prepared.diagnostics.empty() && load_policy != "degraded") {
+    const bool requires_confirmation = archive_diagnostics_require_confirmation(prepared.diagnostics);
+    if (requires_confirmation && load_policy != "degraded") {
         prepared.status = "decision_required";
     } else {
-        prepared.status = prepared.diagnostics.empty() ? "opened" : "opened_degraded";
+        prepared.status = requires_confirmation ? "opened_degraded" : "opened";
         prepared.ready = true;
     }
     return prepared;

@@ -1,4 +1,5 @@
 #include "cef/scene_folder.h"
+#include "cef/archive_load_policy.h"
 
 #include <cstdlib>
 #include <filesystem>
@@ -23,6 +24,34 @@ namespace {
 
 void expect(bool condition, std::string_view message) {
     if (!condition) fail(message);
+}
+
+void material_advisories_do_not_require_degraded_loading() {
+    using Corona::Systems::UI::archive_diagnostics_require_confirmation;
+    const auto advisories = nlohmann::json::array({
+        {{"severity", "warning"}, {"code", "MATERIAL_FEATURE_DEFERRED"},
+         {"requires_confirmation", false}},
+        {{"severity", "warning"}, {"code", "MATERIAL_APPROXIMATION"},
+         {"requires_confirmation", false}},
+    });
+    expect(!archive_diagnostics_require_confirmation(advisories),
+           "converted materials must not be reported as missing resources");
+    expect(!archive_diagnostics_require_confirmation(nlohmann::json::array()),
+           "an archive without diagnostics must load normally");
+    for (const auto& diagnostic : nlohmann::json::array({
+             {{"severity", "error"}, {"code", "RESOURCE_NOT_FOUND"}},
+             {{"severity", "warning"}, {"code", "ATTACHMENT_RESOURCE_NOT_FOUND"}},
+             {{"severity", "warning"}, {"code", "UNSUPPORTED_SHAPE"},
+              {"requires_confirmation", true}},
+             {{"severity", "error"}, {"code", "RESOURCE_NOT_FOUND"},
+              {"requires_confirmation", false}},
+             {{"severity", "warning"}, {"code", "UNKNOWN_DIAGNOSTIC"}},
+         })) {
+        auto mixed = advisories;
+        mixed.push_back(diagnostic);
+        expect(archive_diagnostics_require_confirmation(mixed),
+               "resource loss and errors must still require a loading decision");
+    }
 }
 
 void write_text(const fs::path& path, std::string_view value) {
@@ -664,6 +693,7 @@ void validation_recovers_before_reading_a_broken_scene() {
 }  // namespace
 
 int main() {
+    material_advisories_do_not_require_degraded_loading();
     ply_import_is_portable_and_hash_checked();
     animation_references_keep_bundles_and_dependencies();
     validation_recovers_before_reading_a_broken_scene();
