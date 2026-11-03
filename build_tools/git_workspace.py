@@ -1,11 +1,14 @@
 """Shared Git workspace lifecycle for source dependencies.
 
-Builds clone missing sources or align clean checkouts to source_workspaces.py.
-Edits at the locked commit remain usable; changing commits requires a clean tree.
+Builds clone missing sources or align existing checkouts to source_workspaces.py.
+Git preserves nonconflicting edits and refuses switches that would overwrite work.
+Remote branch tips are checked separately and never override the Python pin.
 Preparation and explicit sync share the same lock and synchronization logic.
 """
 from __future__ import annotations
 
+import os
+import re
 import subprocess
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -19,6 +22,7 @@ from build_tools.workflow import run_command, safe_remove
 _UNTRACKED_STATUS = "??"
 _STATUS_WIDTH = 3
 _RENAME_SEPARATOR = " -> "
+_REMOTE_CHECK_TIMEOUT = 10
 
 
 @dataclass(frozen=True)
@@ -26,7 +30,7 @@ class WorkspaceStatus:
     """Read-only snapshot of a source workspace.
 
     Inspection never changes the checkout. Preparation uses this snapshot to
-    decide whether a clean checkout needs synchronization.
+    decide whether the checkout needs synchronization with the Python pin.
     """
 
     lock: SourceWorkspace
@@ -111,7 +115,8 @@ class WorkspaceStatus:
         if not self.in_sync:
             notes.append(
                 f"{self.lock.name} HEAD {self.head} is not the locked commit {self.lock.commit} "
-                f"({self.drift}); configure/build will synchronize it if the tree is clean. "
+                f"({self.drift}); configure/build will synchronize it to the Python pin, "
+                "preserving nonconflicting local changes. "
                 f"To synchronize explicitly: {self.lock.sync_command}."
             )
         if not self.url_matches:
@@ -124,10 +129,10 @@ class WorkspaceStatus:
                 f"Run 'git -C {self.lock.directory.as_posix()} switch -c <name>' before committing."
             )
         if self.branch and self.upstream_configured and (self.ahead or self.behind):
-            counts = _upstream_counts(self.ahead, self.behind)
+            counts = _upstream_counts(self.ahead, self.behind, prefix="")
             notes.append(
                 f"{self.lock.name} '{self.branch}' is {counts} {self.upstream}. "
-                f"'git -C {self.lock.directory.as_posix()} pull' to integrate, or push from inside the workspace to publish."
+                "This comparison uses locally cached upstream refs and does not change the locked version."
             )
         elif self.branch and not self.upstream_configured:
             notes.append(
@@ -311,6 +316,40 @@ def inspect_workspace(repo_root: Path, workspace: SourceWorkspace) -> WorkspaceS
     )
 
 
+def remote_version_advice(repo_root: Path, workspace: SourceWorkspace) -> tuple[str, ...]:
+    """Compare the Python pin with the live remote branch, without fetching refs.
+
+    An unavailable remote is advisory when local sources are already usable.
+    Use the configured URL, not a developer's possibly different origin.
+    """
+    ref = f"refs/heads/{workspace.ref}"
+    try:
+        result = subprocess.run(
+            ("git", "-c", "credential.interactive=false", "ls-remote", "--exit-code",
+             "--refs", workspace.url, ref),
+            cwd=repo_root,
+            env={**os.environ, "GIT_TERMINAL_PROMPT": "0", "GCM_INTERACTIVE": "Never"},
+            capture_output=True, text=True, check=False, timeout=_REMOTE_CHECK_TIMEOUT,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return (f"{workspace.name}: could not check the latest remote '{workspace.ref}' "
+                f"at {workspace.url}; the Python pin {workspace.commit} remains unchanged.",)
+    if result.returncode == 0:
+        for line in result.stdout.splitlines():
+            fields = line.split()
+            if len(fields) != 2 or fields[1] != ref or not re.fullmatch(r"[0-9a-fA-F]{40}", fields[0]):
+                continue
+            remote_head = fields[0].lower()
+            if remote_head == workspace.commit:
+                return ()
+            return (f"{workspace.name} Python pin {workspace.commit} differs from the latest remote "
+                    f"'{workspace.ref}' {remote_head} at {workspace.url}. "
+                    "The build uses the Python pin; remote updates do not change it. "
+                    f"To change the baseline, {workspace.lock_hint}.",)
+    return (f"{workspace.name}: could not determine the latest remote '{workspace.ref}' "
+            f"at {workspace.url}; the Python pin {workspace.commit} remains unchanged.",)
+
+
 def _update_submodules(worktree: Path) -> None:
     # Force checkout mode instead of a user's update=merge/rebase setting. Never
     # use --force: Git must refuse an update that would overwrite local edits.
@@ -348,20 +387,15 @@ def _ensure_workspace(repo_root: Path, workspace: SourceWorkspace) -> WorkspaceS
 
 
 def ensure_workspace(repo_root: Path, workspace: SourceWorkspace) -> WorkspaceStatus:
-    """Clone or align to the baseline, preserving edits when HEAD already matches."""
+    """Apply the Python pin, letting Git protect conflicting local changes."""
     repo_root = Path(repo_root).resolve()
     with _workspace_lock(repo_root, workspace):
         status = _ensure_workspace(repo_root, workspace)
         if not status.in_sync:
-            if status.dirty:
-                raise RuntimeError(
-                    f"{workspace.name} HEAD {status.head} differs from the locked commit "
-                    f"{workspace.commit}, but has uncommitted changes ({status._tree_summary()}). "
-                    f"Commit or stash them inside {workspace.directory.as_posix()} before building; "
-                    "local changes were left untouched."
-                )
             status = _sync_workspace_locked(repo_root, workspace, status)
         _report(status)
+        for note in remote_version_advice(repo_root, workspace):
+            print(f"[WARN] {note}")
         return status
 
 
@@ -425,6 +459,8 @@ def sync_workspace(repo_root: Path, workspace: SourceWorkspace) -> WorkspaceStat
         result = _sync_workspace_locked(repo_root, workspace, status)
         print("[INFO] Sources synchronized; the next CMake build reconfigures when Git inputs change.")
         _report(result)
+        for note in remote_version_advice(repo_root, workspace):
+            print(f"[WARN] {note}")
         return result
 
 

@@ -1,7 +1,7 @@
 """Source dependency baselines. Change these commits to update a pinned version.
 
-Build preparation aligns clean checkouts automatically. Edits at the pinned
-commit remain usable; changing commits requires committing or stashing edits.
+Build preparation aligns local HEAD to these pins, preserving nonconflicting
+edits. A different live remote branch tip only produces a warning.
 """
 
 from __future__ import annotations

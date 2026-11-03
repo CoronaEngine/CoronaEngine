@@ -65,7 +65,8 @@ class WorkspaceContract:
         self.seed.mkdir()
         git(self.seed, "init", "-b", "main")
         (self.seed / "file.txt").write_text("one\n", encoding="utf-8")
-        git(self.seed, "add", "file.txt")
+        (self.seed / "stable.txt").write_text("stable\n", encoding="utf-8")
+        git(self.seed, "add", "file.txt", "stable.txt")
         git(self.seed, "commit", "-m", "one")
         self.locked = git(self.seed, "rev-parse", "HEAD")
 
@@ -146,13 +147,13 @@ class WorkspaceContract:
     def assert_workspace_unchanged(self, snapshot: tuple[str, str, str]) -> None:
         """Assert HEAD, refs and the working tree index are exactly as before."""
         self.assertEqual(self.head(), snapshot[0])
-        self.assertEqual(git(self.worktree, "for-each-ref", "--format=%(refname)"), snapshot[1])
+        self.assertEqual(git(self.worktree, "for-each-ref", "--format=%(refname) %(objectname)"), snapshot[1])
         self.assertEqual(git(self.worktree, "status", "--porcelain"), snapshot[2])
 
     def snapshot(self) -> tuple[str, str, str]:
         return (
             self.head(),
-            git(self.worktree, "for-each-ref", "--format=%(refname)"),
+            git(self.worktree, "for-each-ref", "--format=%(refname) %(objectname)"),
             git(self.worktree, "status", "--porcelain"),
         )
 
@@ -272,9 +273,14 @@ class WorkspaceContract:
 
     def test_matching_checkout_neither_fetches_nor_changes_refs(self) -> None:
         self.clone()
+        newest = self.advance_origin("three\n")
         before = self.snapshot()
         with mock.patch.object(git_workspace, "run_command", wraps=git_workspace.run_command) as commands:
-            self.silently(ensure_workspace, self.repo_root, self.workspace)
+            status, output = self.silently(ensure_workspace, self.repo_root, self.workspace)
+        self.assertTrue(status.in_sync)
+        self.assertIn(f"latest remote 'main' {newest}", output)
+        self.assertIn("[WARN]", output)
+        self.assertEqual(git(self.worktree, "rev-parse", "origin/main"), self.newer)
         for call in commands.call_args_list:
             self.assertFalse({"fetch", "clone", "checkout", "pull", "submodule"}.intersection(call.args[0]))
         self.assert_workspace_unchanged(before)
@@ -287,15 +293,37 @@ class WorkspaceContract:
             self.silently(ensure_workspace, self.repo_root, self.workspace)
         self.assert_workspace_unchanged(before)
 
-    def test_build_rejects_even_nonconflicting_untracked_changes_before_switching(self) -> None:
+    def test_build_applies_pin_and_preserves_untracked_changes(self) -> None:
         self.clone()
         (self.worktree / "notes.txt").write_text("keep this scratch file", encoding="utf-8")
-        before = self.snapshot()
-        self.set_baseline(self.newer)
-        with self.assertRaisesRegex(RuntimeError, "uncommitted changes"):
-            self.silently(ensure_workspace, self.repo_root, self.workspace)
-        self.assert_workspace_unchanged(before)
-        self.assertEqual((self.worktree / "notes.txt").read_text(), "keep this scratch file")
+        for head, lock in ((self.locked, self.newer), (self.newer, self.locked)):
+            with self.subTest(head=head, lock=lock):
+                git(self.worktree, "checkout", "--detach", head)
+                self.set_baseline(lock)
+                status, output = self.silently(ensure_workspace, self.repo_root, self.workspace)
+                self.assertTrue(status.dirty)
+                self.assertTrue(status.in_sync)
+                self.assertEqual(self.head(), lock)
+                self.assertIn("moved:", output)
+                self.assertNotIn("[ERROR]", output)
+                self.assertEqual((self.worktree / "notes.txt").read_text(), "keep this scratch file")
+
+    def test_build_fetches_pin_and_preserves_nonconflicting_edits(self) -> None:
+        self.clone()
+        (self.worktree / "stable.txt").write_text("local edit\n", encoding="utf-8")
+        git(self.worktree, "add", "stable.txt")
+        (self.worktree / "notes.txt").write_text("local notes\n", encoding="utf-8")
+        newest = self.advance_origin("three\n")
+        self.set_baseline(newest)
+        before_changes = git(self.worktree, "diff", "--cached")
+        status, output = self.silently(ensure_workspace, self.repo_root, self.workspace)
+        self.assertTrue(status.in_sync)
+        self.assertTrue(status.dirty)
+        self.assertEqual(self.head(), newest)
+        self.assertIn("Fetching", output)
+        self.assertEqual(git(self.worktree, "diff", "--cached"), before_changes)
+        self.assertEqual((self.worktree / "stable.txt").read_text(), "local edit\n")
+        self.assertEqual((self.worktree / "notes.txt").read_text(), "local notes\n")
 
     def test_unexpected_origin_is_reported_without_raising(self) -> None:
         self.clone()
@@ -332,17 +360,18 @@ class WorkspaceContract:
         self.assertIn("renamed.txt", status.summary())
         self.assertNotIn("file.txt", status.summary())
 
-    def test_dirty_workspace_at_another_commit_blocks_build_untouched(self) -> None:
-        """The headline case: Horizon edited here, lock already advanced elsewhere."""
+    def test_build_refuses_conflicting_edits_without_switching(self) -> None:
+        """A failed checkout must not fall back to building a different version."""
         self.clone()
         (self.worktree / "file.txt").write_text("horizon edit\n", encoding="utf-8")
         git(self.worktree, "commit", "-am", "horizon edit")
         (self.worktree / "file.txt").write_text("horizon edit plus wip\n", encoding="utf-8")
-        self.set_baseline(self.advance_origin("upstream moved on\n"))
+        self.set_baseline(self.newer)
         before = self.snapshot()
-        with self.assertRaisesRegex(RuntimeError, "uncommitted changes"):
+        with self.assertRaisesRegex(RuntimeError, "Git refused the checkout"):
             self.silently(ensure_workspace, self.repo_root, self.workspace)
         self.assert_workspace_unchanged(before)
+        self.assertEqual((self.worktree / "file.txt").read_text(), "horizon edit plus wip\n")
 
     def test_detached_head_is_reported_with_advice(self) -> None:
         self.clone()
@@ -361,6 +390,8 @@ class WorkspaceContract:
         self.assertEqual(status.behind, 1)
         self.assertIn("origin/main", output)
         self.assertIn("1 behind", output)
+        self.assertIn("does not change the locked version", output)
+        self.assertNotIn(" pull", output)
 
     def test_upstream_ahead_is_reported(self) -> None:
         self.clone()
@@ -390,10 +421,11 @@ class WorkspaceContract:
     def test_sync_does_not_advance_the_code_baseline_to_remote_tip(self) -> None:
         self.clone()
         baseline = self.workspace
-        self.advance_origin("three\n")
-        self.silently(sync_workspace, self.repo_root, self.workspace)
+        newest = self.advance_origin("three\n")
+        _, output = self.silently(sync_workspace, self.repo_root, self.workspace)
         self.assertEqual(self.workspace, baseline)
         self.assertEqual(self.head(), baseline.commit)
+        self.assertIn(f"latest remote 'main' {newest}", output)
 
     def test_sync_keeps_uncommitted_work_and_refuses_to_overwrite_it(self) -> None:
         """Git protects the edit; the tooling neither stashes nor discards it."""

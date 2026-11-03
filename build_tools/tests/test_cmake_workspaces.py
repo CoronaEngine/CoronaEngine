@@ -156,12 +156,27 @@ def test_build_tracks_pins_refs_and_deleted_checkouts(workspace_build):
 
     (horizon / "notes.txt").write_text("local notes", encoding="utf-8")
     pin(old, new)
-    assert "uncommitted changes" in compile(success=False)
+    # Nonconflicting untracked files survive a switch to the Python pin.
+    (build / "built.txt").unlink()
+    output = compile()
+    assert "[WARN]" in output
+    assert f"latest remote 'main' {new}" in output
     assert (horizon / "notes.txt").read_text() == "local notes"
-    assert (build / "built.txt").stat().st_mtime_ns == product_time
-    (horizon / "notes.txt").unlink()
-    compile()
+    assert git(horizon, "rev-parse", "HEAD") == old
     assert (build / "built.txt").read_text() == f"{old} {new}"
+    assert_noop()
+
+    # A genuine conflict stops before compiling against the wrong version.
+    product_time = (build / "built.txt").stat().st_mtime_ns
+    (horizon / "value.txt").write_text("local edit\n", encoding="utf-8")
+    pin(new, new)
+    assert "Git refused the checkout" in compile(success=False)
+    assert git(horizon, "rev-parse", "HEAD") == old
+    assert (horizon / "value.txt").read_text() == "local edit\n"
+    assert (build / "built.txt").stat().st_mtime_ns == product_time
+    (horizon / "value.txt").write_text("old\n", encoding="utf-8")
+    compile()
+    assert (build / "built.txt").read_text() == f"{new} {new}"
     assert_noop()
 
 
