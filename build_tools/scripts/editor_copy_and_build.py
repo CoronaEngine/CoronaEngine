@@ -17,6 +17,7 @@ import shutil
 import sys
 from pathlib import Path
 import subprocess
+import uuid
 from typing import Optional
 
 
@@ -34,7 +35,29 @@ def echo(msg: str) -> None:
 
 
 _STALE_EXTENSIONS = {".py", ".vue", ".js", ".ts", ".jsx", ".tsx", ".css", ".scss", ".mjs"}
-_PROTECTED_DEPLOYED_ROOTS = (Path("data"), Path("runtime") / "generated")
+_PROTECTED_DEPLOYED_ROOTS = (Path("data"), Path("runtime") / "generated", Path(".retired-plugins"))
+
+
+def _retire_removed_ai_packages(src_root: Path, dst_root: Path) -> None:
+    """Move obsolete deployed packages out of the import path, preserving local data."""
+    if not (src_root / "plugins" / "AITool" / "main.py").is_file():
+        return
+    destination = dst_root.resolve()
+    for name in ("Quasar", "cai_extensions"):
+        relative = Path("plugins") / "AITool" / name
+        retired = dst_root / relative
+        if (src_root / relative).exists() or not retired.exists():
+            continue
+        # Do not follow an old deployment junction outside the managed tree.
+        if not retired.resolve().is_relative_to(destination):
+            raise ValueError(f"Retired AI package is outside the deployment: {retired}")
+        archive = dst_root / ".retired-plugins"
+        if not archive.resolve().is_relative_to(destination):
+            raise ValueError(f"Retired plugin archive is outside the deployment: {archive}")
+        archive.mkdir(exist_ok=True)
+        backup = archive / f"{name}-{uuid.uuid4().hex}"
+        retired.rename(backup)
+        echo(f"[editor-copy] Retired {retired}; preserved previous files in {backup}")
 
 
 def _cleanup_stale_files(src_root: Path, dst_root: Path, ignore_fn) -> None:
@@ -42,6 +65,8 @@ def _cleanup_stale_files(src_root: Path, dst_root: Path, ignore_fn) -> None:
     手动递归遍历以跳过 ignore 目录（如 node_modules），避免进入超长路径。"""
     if not dst_root.exists() or not src_root.exists():
         return
+
+    _retire_removed_ai_packages(src_root, dst_root)
 
     dirs_to_check: list[Path] = []
 
@@ -112,7 +137,7 @@ def copy_tree(src: Path, dst: Path, merge_content: bool = False) -> None:
             # Test files
             "tests", "test",
             # Temporary and log files
-            ".cache", ".temp", ".tmp", "tmp",
+            ".cache", ".temp", ".tmp", "tmp", ".retired-plugins",
             # OS files
             ".DS_Store", "Thumbs.db", "desktop.ini"
         }
