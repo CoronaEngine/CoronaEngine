@@ -4,7 +4,6 @@
 
 #include "indirect.h"
 #include "denoiser_signals.h"
-#include "gi_reconnection.h"
 #include "base/integral/integrator.h"
 
 namespace vision {
@@ -607,7 +606,7 @@ vector<float4> ReSTIRGI::download_radiance() const noexcept {
     if (compact_radiance_) {
         vector<uint2> stored(result.size());
         pipeline()->stream() << raw_radiance_.view().download(stored.data()) << synchronize() << commit();
-        for (size_t i = 0u; i < result.size(); ++i) result[i] = unpack_gi_radiance_host(stored[i]);
+        for (size_t i = 0u; i < result.size(); ++i) result[i] = unpack_restir_radiance_host(stored[i]);
     } else {
         pipeline()->stream() << radiance_->view().download(result.data()) << synchronize() << commit();
     }

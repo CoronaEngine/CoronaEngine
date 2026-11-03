@@ -1,7 +1,7 @@
 #pragma once
 
 #include "render_core/integrator/ReSTIR/denoiser_signals.h"
-#include "render_core/integrator/ReSTIR/di_radiance_storage.h"
+#include "render_core/integrator/ReSTIR/radiance_storage.h"
 #include <array>
 #include <bit>
 #include <iostream>
@@ -73,7 +73,7 @@ inline void check(Device &device, Stream &stream) {
         stage.write(i * 3u, make_float4(direct.xyz(), sd.w));
         stage.write(i * 3u + 1u, make_float4(sd.xyz(), 0.f));
         stage.write(i * 3u + 2u, src.read(base + 4u));
-        raw.write(i, pack_di_radiance(direct));
+        raw.write(i, pack_restir_radiance(direct));
     };
     Kernel merge_staged = [](BufferVar<float4> src, BufferVar<float4> stage, BufferVar<uint2> raw,
                              BufferVar<float4> dst, Uint use_rounded) {
@@ -82,7 +82,7 @@ inline void check(Device &device, Stream &stream) {
         $if(factors.z != 0.f) { $return(); };
         Float4 direct = stage.read(i * 3u);
         Float4 sd = make_float4(stage.read(i * 3u + 1u).xyz(), direct.w);
-        $if(use_rounded != 0u) { direct = unpack_di_radiance(raw.read(i)); };
+        $if(use_rounded != 0u) { direct = unpack_restir_radiance(raw.read(i)); };
         auto merged = denoiser_signals::merge_restir_lobes(direct.xyz(), src.read(base + 1u).xyz(),
             sd, src.read(base + 3u), stage.read(i * 3u + 2u).xyz(), factors.x, factors.y,
             src.read(base + 5u), src.read(base + 6u), src.read(base + 7u));

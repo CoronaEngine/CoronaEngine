@@ -6,7 +6,7 @@
 
 #include "common.h"
 #include "di_reservoir_storage.h"
-#include "di_radiance_storage.h"
+#include "radiance_storage.h"
 #include "base/mgr/switch_profile.h"
 
 namespace vision {
@@ -118,10 +118,10 @@ public:
     [[nodiscard]] bool compact_radiance() const noexcept { return compact_radiance_; }
     [[nodiscard]] const RegistrableBuffer<uint2> &raw_radiance() const noexcept { return raw_radiance_; }
     [[nodiscard]] Float4 read_radiance(const Uint &index) const noexcept {
-        return compact_radiance_ ? unpack_di_radiance(raw_radiance_.read(index)) : radiance_->read(index);
+        return compact_radiance_ ? unpack_restir_radiance(raw_radiance_.read(index)) : radiance_->read(index);
     }
     void write_radiance(const Uint &index, const Float4 &value) const noexcept {
-        if (compact_radiance_) raw_radiance_.write(index, pack_di_radiance(value));
+        if (compact_radiance_) raw_radiance_.write(index, pack_restir_radiance(value));
         else radiance_->write(index, value);
     }
     [[nodiscard]] vector<float4> download_radiance() const noexcept;

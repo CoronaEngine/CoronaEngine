@@ -1,4 +1,4 @@
-#include "render_core/integrator/ReSTIR/gi_reconnection.h"
+#include "render_core/integrator/ReSTIR/indirect.h"
 
 #include <array>
 #include <iostream>
