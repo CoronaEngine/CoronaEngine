@@ -24,7 +24,7 @@ PassShader compile_history_fix(Device &device) {
         // The padded 8x16 dispatch still fits the ceil(rect / 16) tile grid.
         Float is_sky = tiles.read_in_bounds(pixel >> 4);
 
-        // Frames keep NRD's BORDER=2 footprint. Immutable fast inputs can be
+        // Frames keep ReBLUR's BORDER=2 footprint. Immutable fast inputs can be
         // shared across the 72-tap anti-firefly windows without changing order.
         // Pitch 24 gives the 8x4 warp footprint distinct shared-memory banks.
         SharedArray<float, 576> cached_diff_luma;

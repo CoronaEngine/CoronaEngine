@@ -82,7 +82,7 @@ void Filter::compile_history_clamping(Device &device) {
             }
         }
         p.history.write(idx, data);
-        // Like NRD, publish the slow/fast histories while they are in registers.
+        // Publish the slow/fast histories while they are in registers.
         // The optional firefly pass replaces slow illumination before publishing.
         persistent.length_hit = make_float2(data.meta.x, data.meta.z);
         $if(p.settings.anti_firefly == 0u) { p.prev_history.write(idx, persistent); };

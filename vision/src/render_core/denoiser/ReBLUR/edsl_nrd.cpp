@@ -286,7 +286,7 @@ struct EdslReblur::Impl {
             "captured replay dimensions disagree with common settings");
         require_edsl(method.checkerboardMode == nrd::CheckerboardMode::OFF && !method.enablePerformanceMode,
             "packed replay requires full-resolution quality REBLUR");
-        // Pass the captured complete records straight to the same NRD CPU
+        // Pass the captured complete records straight to the same ReBLUR CPU
         // scheduler. Do not project them through Corona's smaller Settings.
         check_edsl(nrd::SetDenoiserSettings(*r->instance, 0u, &method), "replay SetDenoiserSettings");
         check_edsl(nrd::SetCommonSettings(*r->instance, common), "replay SetCommonSettings");

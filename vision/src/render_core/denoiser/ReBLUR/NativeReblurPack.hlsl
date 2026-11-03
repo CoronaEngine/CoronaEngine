@@ -12,9 +12,9 @@ struct NativeReblurConstants
     uint64_t outputDiffuse;     // 24
     uint64_t outputSpecular;    // 32
     uint2 size;                 // 40
-    float4 hitDistanceParams;   // 48: NRD defaults (3, 0.1, 20, -25)
+    float4 hitDistanceParams;   // 48: ReBLUR defaults (3, 0.1, 20, -25)
     float4 previousViewDepthRow;// 64: row 2 of the previous world-to-view matrix
-    float denoisingRange;       // 80: view-space range shared with NRD
+    float denoisingRange;       // 80: view-space range shared with ReBLUR
 };
 [[vk::push_constant]] ConstantBuffer<NativeReblurConstants> g_Constants;
 
@@ -40,12 +40,12 @@ void main(uint2 pixel : SV_DispatchThreadID)
                  position.w > 0.0 && position.w < g_Constants.denoisingRange;
     if (!valid)
     {
-        // NRD ignores pixels beyond denoisingRange. Initialize every bound input
+        // ReBLUR ignores pixels beyond denoisingRange. Initialize every bound input
         // to avoid reading undefined scratch values in dispatch boundary tiles.
         g_OutDiffuse[pixel] = 0.0;
         g_OutSpecular[pixel] = 0.0;
         g_OutNormalRoughness[pixel] = 0.0;
-        // NRD ClassifyTiles skips viewZ > range. Treat the exact boundary
+        // ReBLUR ClassifyTiles skips viewZ > range. Treat the exact boundary
         // conservatively as invalid and publish a marker strictly beyond it.
         g_OutViewZ[pixel] = max(NRD_INF, g_Constants.denoisingRange * 2.0);
         g_OutMotion[pixel] = 0.0;
@@ -73,7 +73,7 @@ void main(uint2 pixel : SV_DispatchThreadID)
     // hit distance with the original material roughness above.
     g_OutNormalRoughness[pixel] = NRD_FrontEnd_PackNormalAndRoughness(normalRoughness.xyz, saturate(normalRoughness.w + disocclusionMix), 0.0);
     g_OutViewZ[pixel] = position.w;
-    // Corona stores current-minus-previous pixels; NRD adds its motion vector
+    // Corona stores current-minus-previous pixels; ReBLUR adds its motion vector
     // to the current UV. Host motionVectorScale.xy converts pixels to UVs.
     float previousViewDepth = dot(g_Constants.previousViewDepthRow, float4(position.xyz, 1.0));
     g_OutMotion[pixel] = float4(-float2(diffuseFactor.w, specularFactor.w), previousViewDepth - position.w, 0.0);

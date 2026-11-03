@@ -2,7 +2,7 @@
 #include "guide_layout.h"
 
 namespace vision::reblur {
-// Match NRD's FP16 signal/history storage, keeping all filtering in Float.
+// Match ReBLUR's FP16 signal/history storage, keeping all filtering in Float.
 // Signed YCoCg chroma must survive conversion; reprojection can overshoot
 // the packed input range, so saturate only at the storage boundary.
 inline Half4 store_half(Float4 value) {

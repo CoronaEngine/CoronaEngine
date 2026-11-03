@@ -22,8 +22,8 @@ public:
                                          uint layer, const Settings &settings, bool reset_history = false,
                                          const PackCommand &prepare_and_pack = {},
                                          const edsl::ComposeParam *composition = nullptr, bool defer_unpack = false);
-    // Diagnostic packed-input replay: transfers are separate from the NRD GPU
-    // interval, and every plane owns an independent NRD instance (identifier 0).
+    // Diagnostic packed-input replay: transfers are separate from the filtering GPU
+    // interval, and every plane owns an independent ReBLUR instance (identifier 0).
     [[nodiscard]] CommandBatch upload_replay_inputs(uint2 size, uint layer,
                                                     std::shared_ptr<const PackedNrdInputs> inputs);
     [[nodiscard]] CommandBatch replay_dispatch(uint2 size, uint layer,

@@ -187,7 +187,7 @@ struct NativeReblur::Impl {
     nvrhi::vulkan::DeviceHandle device;
     VkDevice borrowed_device{};
     Pipeline pack, unpack;
-    // One instance owns three independent denoisers. NRD aliases their
+    // One instance owns three independent denoisers. ReBLUR aliases their
     // transient pool, and conversion inputs/outputs are reused in queue order.
     std::unique_ptr<NativeLayer> resources;
     // Only the explicit packed-input diagnostic uses these independent
@@ -565,7 +565,7 @@ struct NativeReblur::Impl {
     void external_buffer_barrier() {
         // NVRHI tracks descriptor resources, but raw device-address loads and
         // stores are invisible to its state tracker. Order those accesses at
-        // conversion/NRD boundaries as well as the engine's interop boundary.
+        // conversion/filtering boundaries as well as the engine's interop boundary.
         command_list->commitBarriers();
         const VkCommandBuffer native = command_list->getNativeObject(nvrhi::ObjectTypes::VK_CommandBuffer);
         VkMemoryBarrier barrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
@@ -801,7 +801,7 @@ struct NativeReblur::Impl {
             command_list->writeTexture(textures[i], 0u, 0u, inputs[i].data(), pitch);
         }
         // close() returns replay inputs to their producer-UAV initial states.
-        // This upload and transition command list is outside NRD timestamps.
+        // This upload and transition command list is outside filtering timestamps.
         command_list->close();
         device->executeCommandList(command_list, nvrhi::CommandQueue::Compute);
     }
@@ -1257,7 +1257,7 @@ struct NativeReblur::Impl {
         common.frameIndex = parameters.frame;
         common.resourceSize[0] = common.resourceSizePrev[0] = common.rectSize[0] = common.rectSizePrev[0] = uint16_t(width);
         common.resourceSize[1] = common.resourceSizePrev[1] = common.rectSize[1] = common.rectSizePrev[1] = uint16_t(height);
-        // NRD filters injected clears by the requested identifier, so a reset
+        // The scheduler filters injected clears by the requested identifier, so a reset
         // clears this denoiser's history while preserving the other layers.
         common.accumulationMode = (reset || !continuous) ? nrd::AccumulationMode::CLEAR_AND_RESTART : nrd::AccumulationMode::CONTINUE;
         if (prepared_common) common = *prepared_common;

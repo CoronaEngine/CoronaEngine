@@ -323,7 +323,7 @@ PassShader compile_temporal(Device &device) {
         hitDistForTracking *= select(c.gSpecPrepassBlurRadius == 0.f, hitDistNormalization, 1.f);
         out_hit.write_in_bounds(pixel, hitDistForTracking);
 
-        // Surface motion and previous position, in NRD's camera-relative world.
+        // Surface motion and previous position, in ReBLUR's camera-relative world.
         Float3 mv = motion.read_in_bounds(pixel).xyz() * c.gMvScale.xyz();
         Float3 Xprev = X;
         Float2 smbPixelUv = ocarina::fma(make_float2(pixel) + .5f, c.gRectSizeInv, mv.xy());

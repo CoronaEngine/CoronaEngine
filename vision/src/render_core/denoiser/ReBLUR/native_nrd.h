@@ -13,10 +13,10 @@ namespace nrd { struct CommonSettings; struct ReblurSettings; }
 
 namespace vision::reblur {
 
-// Diagnostic replay of the exact native-format NRD boundary. Input order:
+// Diagnostic replay of the exact native-format ReBLUR boundary. Input order:
 // MV, normal/roughness, viewZ, diffuse, specular, disocclusion-threshold mix.
 
-// NRD expects non-jittered matrices, column-major storage and column vectors.
+// ReBLUR expects non-jittered matrices, column-major storage and column vectors.
 // Keep the camera interface separate from FilterParam's raster transforms.
 
 // Original NRD 4.14.3 backend, with independent history for each render layer.
@@ -42,8 +42,8 @@ public:
                                              Settings settings,
                                              bool reset_history = false,
                                              std::shared_ptr<void> resource_owner = {});
-    // Transfers run separately from the timed NRD dispatch. Each replay plane
-    // owns a separate identifier-0 NRD instance, matching RTXPT.
+    // Transfers run separately from the timed filtering dispatch. Each replay plane
+    // owns a separate identifier-0 ReBLUR instance, matching RTXPT.
     [[nodiscard]] ocarina::Command *upload_replay_inputs(uint2 size, uint layer,
                                                         std::shared_ptr<const PackedNrdInputs> inputs);
     [[nodiscard]] ocarina::Command *replay_dispatch(uint2 size, uint layer,

@@ -27,7 +27,7 @@ void Filter::compile_atrous(Device &device) {
             auto center = load_guide(p, idx); auto data = p.history.read(idx);
             if (first) {
                 // Reprojection has finished; Atrous reads only current guides.
-                // NRD's first Atrous pass also publishes previous geometry.
+                // ReLAX's first Atrous pass also publishes previous geometry.
                 Var<GeometryHistory> geometry;
                 geometry.position = center.position; geometry.normal_roughness = center.normal_roughness; geometry.identity = center.identity;
                 p.prev_guide.write(idx, geometry);
@@ -69,7 +69,7 @@ void Filter::compile_atrous(Device &device) {
                 }
             };
             if (!first) {
-                // NRD traverses the neighborhood once for diffuse and specular.
+                // ReLAX traverses the neighborhood once for diffuse and specular.
                 // Share positions, normals, ownership and plane weights without
                 // changing either lobe's tap order or squared-weight variance.
                 Float4 diffuse = p.src_diffuse.read(idx), specular = p.src_specular.read(idx);
@@ -121,7 +121,7 @@ void Filter::compile_atrous(Device &device) {
                                 Uint tap = pixel_index(pixel + make_int2(x, y), p.size); auto g = load_guide(p, tap);
                                 $if(spatial_compatible(center, g)) {
                                     Float angle = acos_approx(dot(normal, g.normal_roughness.xyz()));
-                                    // NRD leaves depthW=1 here. Keep the engine's
+                                    // ReLAX leaves depthW=1 here. Keep the engine's
                                     // geometric ownership at newly exposed depth edges.
                                     Float w = nonexp_weight(angle * diffuse_normal) * plane_weight(center, g, p.settings.depth_threshold);
                                     sum += input.read(tap) * w; weights += w;
