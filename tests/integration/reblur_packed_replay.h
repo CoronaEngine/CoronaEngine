@@ -1,6 +1,6 @@
 #pragma once
 
-#include <NRD.h>
+#include "render_core/denoiser/ReBLUR/scheduler/include/NRD.h"
 #include <nlohmann/json.hpp>
 #include "math/half.h"
 #include <cstddef>
@@ -199,7 +199,8 @@ struct Oracle {
             {"max_abs", max_abs}, {"rmse", components ? std::sqrt(squared_error / double(components)) : 0.}};
     }
 };
-inline void run(Device &device, Stream &stream, const std::string &backend, uint warmup, uint pause_ms) {
+inline void run(Device &device, Stream &stream, uint warmup, uint pause_ms) {
+    const std::string backend = "edsl";
     const auto capture = open_capture(std::getenv("REBLUR_REPLAY_CAPTURE_DIR"));
     require(warmup < capture.frames, "warmup must leave at least one measured captured frame");
     for (const auto &[name, expected] : {std::pair{"REBLUR_REPLAY_WIDTH", capture.size.x},
@@ -217,10 +218,7 @@ inline void run(Device &device, Stream &stream, const std::string &backend, uint
         std::strcmp(validation_option, "1") == 0, "REBLUR_REPLAY_VALIDATE_OUTPUTS must be 0 or 1");
     const bool validate_all_frames = !validation_option || std::strcmp(validation_option, "0") != 0;
     const std::filesystem::path output = output_path; std::filesystem::create_directories(output);
-    std::unique_ptr<NativeReblur> native;
-    std::unique_ptr<EdslReblur> edsl;
-    if (backend == "native") native = std::make_unique<NativeReblur>(device.context()->runtime_directory() / "reblur-native");
-    else edsl = std::make_unique<EdslReblur>(device);
+    auto edsl = std::make_unique<EdslReblur>(device);
     std::cout << "REBLUR packed-input replay backend=" << backend << " size=" << capture.size.x << 'x' << capture.size.y
               << " layers=3 warmup=" << warmup << " measure_frames=" << capture.frames - warmup
               << " frame_pause_ms=" << pause_ms << '\n'
@@ -235,21 +233,18 @@ inline void run(Device &device, Stream &stream, const std::string &backend, uint
         std::array<Frame, 3> frames;
         for (uint layer : {2u, 1u, 0u}) {
             frames[layer] = read_frame(capture, index, layer, hash);
-            if (native) stream << native->upload_replay_inputs(capture.size, layer, frames[layer].inputs);
-            else stream << edsl->upload_replay_inputs(capture.size, layer, frames[layer].inputs);
+            stream << edsl->upload_replay_inputs(capture.size, layer, frames[layer].inputs);
         }
         stream << synchronize() << commit();
         for (uint layer : {2u, 1u, 0u}) {
-            if (native) stream << native->replay_dispatch(capture.size, layer, frames[layer].common, frames[layer].method);
-            else stream << edsl->replay_dispatch(capture.size, layer, frames[layer].common, frames[layer].method);
+            stream << edsl->replay_dispatch(capture.size, layer, frames[layer].common, frames[layer].method);
         }
         stream << synchronize() << commit();
         if (validate_all_frames || index + 1u == capture.frames) {
             std::array<std::shared_ptr<PackedNrdOutputs>, 3> results;
             for (uint layer : {2u, 1u, 0u}) {
                 results[layer] = std::make_shared<PackedNrdOutputs>();
-                if (native) stream << native->readback_replay_outputs(capture.size, layer, results[layer]);
-                else stream << edsl->readback_replay_outputs(capture.size, layer, results[layer]);
+                stream << edsl->readback_replay_outputs(capture.size, layer, results[layer]);
             }
             stream << synchronize() << commit();
             for (uint layer : {2u, 1u, 0u}) {
@@ -270,7 +265,7 @@ inline void run(Device &device, Stream &stream, const std::string &backend, uint
         if (pause_ms && index + 1u != capture.frames)
             std::this_thread::sleep_until(frame_start + std::chrono::milliseconds(pause_ms));
     }
-    native.reset(); edsl.reset();
+    edsl.reset();
     Json oracle = Json::array(); uint64_t mismatches = 0u, nonfinite = 0u;
     for (uint layer = 0u; layer != 3u; ++layer) for (uint signal = 0u; signal != 2u; ++signal) {
         auto record = oracles[layer][signal].json(); record["layer"] = layer; record["signal"] = output_names[signal];

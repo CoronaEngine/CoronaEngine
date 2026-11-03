@@ -412,7 +412,7 @@ SHARC 的 `constant.h` 已随 F03 移除；枚举和通用旗标没有直接消�
 - PT、ReSTIR direct/indirect/stable planes、SVGF、ReBLUR、ReLAX、每相机 view context、共享场景资源、零拷贝显示桥、相机同步和 actor picking 都有真实调用。
 - 黑体材质是 fallback；它与未使用的 Planck 黑体辐射公式 `black_body_impl()` 是两回事。
 - `GUI/decl.h`、`GUI/widgets.h`、`GUI/window.h` 是仍被 include 的兼容转发头，不是三套重复实现。
-- `vision/src/render_core/denoiser/ReBLUR/native_nrd.cmake` 明确用 `VISION_REBLUR_NATIVE_NRD` 控制原生 NRD 和配套 EDSL 源；默认 OFF，但运行选择和测试存在，属于条件能力。
+- ReBLUR 的 CPU 调度器与 EDSL 内核均在仓库内；外部 SDK 原生后端及其构建和运行开关已移除，本地算法和测试继续保留。
 - `precomputed_table.h`、`dielectric_precompute.h`、`ltc_sheen_table.h`、`srgb2spec.h`、slot swizzle 生成头均有有效消费者。
 - `VISION_INTERACTIVE_AUX_WORK` 的根默认值是 ON，其打印回收有条件调用；不能因为头文件 fallback 为 0 就判为关闭或废弃。
 
@@ -424,6 +424,6 @@ SHARC 的 `constant.h` 已随 F03 移除；枚举和通用旗标没有直接消�
 2. **减少确定的无效工作**：F15 调试资源默认初始化（F02、F03、F08 已移除）。移除前同步调用者和插件部署列表。
 3. **清理独立闲置代码**：IES、金属 IOR 表、旧 TAA、无调用兼容包装；保持改动小并检查 ABI 使用范围。
 4. **拆分实验和独立 viewer**：真实镜头、旧窗口与面板（SHARC、BVH、customized/render graph 已移除），不牵连当前主渲染链。
-5. **保留测试与可选能力**：Hero spectrum、PowerLightSampler、非默认滤波器、Native NRD，以及预计算表。先决定产品支持范围，再裁剪构建。
+5. **保留测试与可选能力**：Hero spectrum、PowerLightSampler、非默认滤波器，以及预计算表。先决定产品支持范围，再裁剪构建。
 
 初次审计仅添加文档和机器清单；后续已执行 F02、F03、F04、F08、F13、F19 移除，状态与验证记录见机器清单的 `resolutions`。

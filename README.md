@@ -32,7 +32,7 @@ Ninja 在 Conan 编译依赖前检查：优先复用当前构建目录缓存、P
 Vulkan Headers 与 Loader 使用匹配的 `1.4.350.0` 版本。Ocarina 显式链接 Conan 的
 `Vulkan::Loader`；Windows 构建将该包的 `vulkan-1.dll` 部署到后端及可执行文件目录，
 并在复制 CEF 后重新部署，避免被 CEF 自带版本覆盖。运行渲染器仍需支持所需 Vulkan 功能的 GPU 驱动。
-Vulkan SDK 的验证层和调试工具可按需安装；可选的 Native NRD 后端仍需额外提供 DXC、NRD 和 NVRHI。
+Vulkan SDK 的验证层和调试工具可按需安装。ReBLUR 使用仓库内的 CPU 调度器和 Ocarina C++ EDSL 内核，无需外部降噪 SDK、DLL 或 NVRHI。
 
 Horizon 和 CoronaEditor 统一由 `build_tools/git_workspace.py` 管理，分别位于引擎根目录的
 `Horizon/` 和 `CoronaEditor/`。CMake bootstrap 及

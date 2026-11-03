@@ -39,14 +39,6 @@ void expect(bool condition, const char *message) {
     if (!condition) throw std::runtime_error(message);
 }
 
-void select_native_backend(const char *value) {
-#ifdef _WIN32
-    expect(_putenv_s("REBLUR_NATIVE_NRD", value) == 0, "set native backend environment");
-#else
-    expect(setenv("REBLUR_NATIVE_NRD", value, 1) == 0, "set native backend environment");
-#endif
-}
-
 ocarina::HostByteBuffer pack_guides(const reblur::Guide *guides, size_t count) {
     ocarina::HostByteBuffer bytes;
     ocarina::DynamicBufferLayoutCodec<reblur::Guide>::encode(guides, count, bytes,
@@ -160,227 +152,6 @@ void check_helpers(Device &device, Stream &stream) {
     std::cout << "PASS: reference packing, distance, motion and accumulation helpers\n";
 }
 
-#ifdef VISION_REBLUR_NATIVE_NRD
-uint check_native_reblur(Device &device, Stream &stream) {
-    const auto native_directory = device.context()->runtime_directory() / "reblur-native";
-    reblur::NativeReblur native(native_directory);
-    reblur::EdslReblur implementation(device);
-    // Original NRD uses compact material IDs; receiver and path IDs do not
-    // promise strict spatial or temporal history rejection.
-    uint failures = 0u;
-    auto finite = [](const float4 &value) {
-        return std::isfinite(value.x) && std::isfinite(value.y) &&
-               std::isfinite(value.z) && std::isfinite(value.w);
-    };
-    uint2 diagnostic_size{};
-    uint diagnostic_frame{}, diagnostic_layer{};
-    // Report every scenario even if another scenario fails its reference comparison.
-    auto check_case = [&](const char *name, auto &&check) {
-        try {
-            check();
-            std::cout << "PASS: " << name << ", " << diagnostic_size.x << 'x' << diagnostic_size.y << '\n';
-        } catch (const std::exception &error) {
-            ++failures;
-            std::cerr << "FAIL: " << name << ", " << diagnostic_size.x << 'x' << diagnostic_size.y
-                      << ": " << error.what() << '\n';
-        }
-    };
-    uint mismatch_reports = 0u;
-    auto near_reference = [&](const float4 &value, const float4 &reference, const char *message, uint pixel) {
-        bool equivalent = true;
-        for (uint c = 0u; c < 4u; ++c) {
-            const float tolerance = .001f + .002f * std::abs(reference[c]);
-            const bool matched = std::isfinite(value[c]) && std::isfinite(reference[c]) &&
-                                 std::abs(value[c] - reference[c]) <= tolerance;
-            equivalent &= matched;
-            if (!matched && mismatch_reports++ < 8u) {
-                std::cerr.precision(9);
-                std::cerr << "NRD reference mismatch: " << message << ", size=" << diagnostic_size.x << 'x' << diagnostic_size.y
-                          << ", frame=" << diagnostic_frame << ", layer=" << diagnostic_layer
-                          << ", pixel=" << pixel << " (" << pixel % diagnostic_size.x << ',' << pixel / diagnostic_size.x << ')'
-                          << ", component=" << c << ", actual=" << value[c] << ", reference=" << reference[c]
-                          << ", tolerance=" << tolerance << '\n';
-            }
-        }
-        return equivalent;
-    };
-    for (const uint2 size : {make_uint2(1u), make_uint2(127u, 73u)}) {
-        diagnostic_size = size;
-        const uint n = size.x * size.y;
-        reblur::Filter filter;
-        filter.prepare_native(device, size);
-        check_case("native guide storage without custom history", [&] {
-            expect(filter.guides().size() == size_t(n) * sizeof(reblur::Guide),
-                   "native adapter must allocate the current guide buffer");
-            expect(filter.history().size() == 0u,
-                   "native adapter must not allocate custom filter history");
-            reblur::Filter switched;
-            switched.prepare_native(device, size);
-            switched.prepare(device, size, 3u);
-            expect(switched.history().size() == size_t(n) * sizeof(reblur::TemporalData),
-                   "switching to the custom filter at the same size must restore its history");
-            switched.prepare_native(device, size);
-            expect(switched.history().size() == 0u,
-                   "switching back to native must release custom history");
-        });
-        auto input_d = device.create_buffer<float4>(n), input_s = device.create_buffer<float4>(n);
-        auto output_d = device.create_buffer<float4>(n), output_s = device.create_buffer<float4>(n);
-        auto edsl_output_d = device.create_buffer<float4>(n), edsl_output_s = device.create_buffer<float4>(n);
-        std::vector<reblur::Guide> guides(n);
-        std::vector<float4> d(n), s(n), actual_d(n), actual_s(n), edsl_d(n), edsl_s(n);
-        const float aspect = float(size.x) / float(size.y), view_z = 10.f;
-        reblur::NativeCameraParams camera;
-        camera.world_to_view = camera.world_to_view_prev =
-            {1.f, 0.f, 0.f, 0.f, 0.f, 1.f, 0.f, 0.f,
-             0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 0.f, 1.f};
-        const float near_z = .1f, far_z = 1000.f, depth_scale = far_z / (far_z - near_z);
-        // Column-major, +Z left-handed perspective with a 90-degree vertical FOV.
-        camera.view_to_clip = camera.view_to_clip_prev =
-            {1.f / aspect, 0.f, 0.f, 0.f, 0.f, 1.f, 0.f, 0.f,
-             0.f, 0.f, depth_scale, 1.f, 0.f, 0.f, -near_z * depth_scale, 0.f};
-        camera.frame_delta_ms = 16.67f;
-        auto reset_guides = [&] {
-            for (uint y = 0u; y < size.y; ++y) for (uint x = 0u; x < size.x; ++x) {
-                auto &g = guides[y * size.x + x];
-                g = reblur::Guide{};
-                g.position = make_float4((2.f * (float(x) + .5f) / float(size.x) - 1.f) * aspect * view_z,
-                                        (1.f - 2.f * (float(y) + .5f) / float(size.y)) * view_z, view_z, view_z);
-                g.normal_roughness = make_float4(0.f, 0.f, -1.f, .5f);
-                g.identity = make_uint4(1u);
-            }
-        };
-        reset_guides();
-        reblur::FilterParam p;
-        p.raw_diffuse = input_d.descriptor(); p.raw_specular = input_s.descriptor();
-        p.output_diffuse = output_d.descriptor(); p.output_specular = output_s.descriptor();
-        p.unproject = 2.f / float(size.y);
-        auto run = [&](uint frame, uint layer = 0u, bool history_valid = true) {
-            diagnostic_frame = frame; diagnostic_layer = layer;
-            p.frame = frame; p.history_valid = history_valid ? 1u : 0u;
-            const auto parameters = filter.native_parameters(p, layer);
-            const auto packed = pack_guides(guides.data(), n);
-            stream << filter.guides().upload(packed.data()) << input_d.upload(d.data()) << input_s.upload(s.data())
-                   << native.dispatch(parameters, camera, layer, filter.settings, parameters.history_valid == 0u)
-                   << output_d.download(actual_d.data()) << output_s.download(actual_s.data())
-                   << synchronize() << commit();
-            auto edsl_parameters = parameters;
-            edsl_parameters.output_diffuse = edsl_output_d.descriptor();
-            edsl_parameters.output_specular = edsl_output_s.descriptor();
-            stream << implementation.dispatch(edsl_parameters, camera, layer, filter.settings, parameters.history_valid == 0u)
-                   << edsl_output_d.download(edsl_d.data()) << edsl_output_s.download(edsl_s.data())
-                   << synchronize() << commit();
-            mismatch_reports = 0u;
-            bool equivalent = true;
-            for (uint i = 0u; i < n; ++i) {
-                const bool valid = (guides[i].identity.w & 1u) != 0u && std::isfinite(guides[i].position.w) &&
-                                   guides[i].position.w > 0.f && guides[i].position.w < camera.denoising_range;
-                if (!valid) continue;
-                equivalent &= near_reference(edsl_d[i], actual_d[i], "EDSL diffuse vs original Native", i);
-                equivalent &= near_reference(edsl_s[i], actual_s[i], "EDSL specular vs original Native", i);
-            }
-            expect(equivalent, "all valid EDSL components must match original Native NRD");
-            return parameters;
-        };
-        check_case("native NRD constants and three independent layers", [&] {
-            std::array<std::unique_ptr<reblur::NativeReblur>, 3> isolated;
-            for (auto &control : isolated) control = std::make_unique<reblur::NativeReblur>(native_directory);
-            auto isolated_output_d = device.create_buffer<float4>(n), isolated_output_s = device.create_buffer<float4>(n);
-            std::vector<float4> isolated_d(n), isolated_s(n);
-            // Compare interleaved layers with separate original-NRD instances,
-            // each receiving the same eight frames on its own layer zero.
-            for (uint frame = 0u; frame < 8u; ++frame) for (uint layer = 0u; layer < 3u; ++layer) {
-                const float k = float(layer + 1u);
-                const float4 expected_d = make_float4(.2f * k, .6f * k, 1.f * k, 2.f);
-                const float4 expected_s = make_float4(1.f * k, .3f * k, .1f * k, 2.f);
-                std::fill(d.begin(), d.end(), expected_d); std::fill(s.begin(), s.end(), expected_s);
-                auto isolated_parameters = run(frame, layer);
-                isolated_parameters.output_diffuse = isolated_output_d.descriptor();
-                isolated_parameters.output_specular = isolated_output_s.descriptor();
-                stream << isolated[layer]->dispatch(isolated_parameters, camera, 0u, filter.settings,
-                                                     isolated_parameters.history_valid == 0u)
-                       << isolated_output_d.download(isolated_d.data()) << isolated_output_s.download(isolated_s.data())
-                       << synchronize() << commit();
-                mismatch_reports = 0u;
-                bool independent = true;
-                for (uint i = 0u; i < n; ++i) {
-                    independent &= near_reference(actual_d[i], isolated_d[i], "interleaved vs isolated Native diffuse", i);
-                    independent &= near_reference(actual_s[i], isolated_s[i], "interleaved vs isolated Native specular", i);
-                }
-                expect(independent, "interleaved Native layers must match independent original-NRD instances");
-            }
-        });
-
-        if (size.x > 1u) {
-            check_case("native adapter invalid passthrough and finite reactivation", [&] {
-                reset_guides(); filter.reset();
-                auto hole = [&](uint i) {
-                    const uint x = i % size.x, y = i / size.x;
-                    return (x < 16u && y < 16u) || (x % 7u == 0u && y % 5u == 0u) ||
-                           x + 1u == size.x || y + 1u == size.y;
-                };
-                std::fill(d.begin(), d.end(), make_float4(4.f, 4.f, 4.f, 2.f)); s = d;
-                for (uint frame = 0u; frame < 8u; ++frame) run(frame);
-                for (uint i = 0u; i < n; ++i) if (hole(i)) {
-                    if (i % 2u == 0u) guides[i].identity.w = 0u;
-                    else guides[i].position.w = 0.f;
-                    d[i] = make_float4(-0.f, .25f, .75f, 7.f);
-                    s[i] = make_float4(1.5f, .125f, .5f, 9.f);
-                }
-                run(8u);
-                for (uint i = 0u; i < n; ++i) {
-                    expect(finite(actual_d[i]) && finite(actual_s[i]) && finite(edsl_d[i]) && finite(edsl_s[i]),
-                           "Native and EDSL sparse partial tiles must remain finite");
-                    // Raw passthrough is the Corona adapter's invalid-pixel contract.
-                    if (hole(i)) expect(std::memcmp(&actual_d[i], &d[i], sizeof(float4)) == 0 &&
-                                        std::memcmp(&actual_s[i], &s[i], sizeof(float4)) == 0 &&
-                                        std::memcmp(&edsl_d[i], &d[i], sizeof(float4)) == 0 &&
-                                        std::memcmp(&edsl_s[i], &s[i], sizeof(float4)) == 0,
-                                        "Native and EDSL invalid pixels must preserve all raw signal bits");
-                }
-                for (uint i = 0u; i < n; ++i) if (hole(i)) {
-                    guides[i].identity.w = 1u; guides[i].position.w = view_z;
-                    d[i] = s[i] = make_float4(.25f, .25f, .25f, 2.f);
-                }
-                run(9u);
-                // NRD can spatially mix valid neighbors into reappearing pixels.
-                for (uint i = 0u; i < n; ++i) expect(finite(actual_d[i]) && finite(actual_s[i]) &&
-                                                   finite(edsl_d[i]) && finite(edsl_s[i]),
-                                                   "Native and EDSL reappearing pixels must produce finite signals");
-            });
-        }
-
-        check_case("native HDR and signed chroma", [&] {
-            for (const float4 color : {make_float4(50000.f, 10000.f, 30000.f, 2.f),
-                                       make_float4(0.f, 1000.f, 40000.f, 2.f),
-                                       make_float4(65504.f, 65504.f, 65504.f, 2.f)}) {
-                reset_guides(); filter.reset();
-                std::fill(d.begin(), d.end(), color); s = d;
-                for (uint frame = 0u; frame < 8u; ++frame) {
-                    run(frame);
-                    // The original HLSL output is the HDR/signed-chroma golden;
-                    // NRD's half-precision histories need not return the raw color.
-                }
-            }
-        });
-        check_case("native nonfinite input sanitization", [&] {
-            reset_guides(); filter.reset();
-            const float nan = std::numeric_limits<float>::quiet_NaN(), inf = std::numeric_limits<float>::infinity();
-            for (uint i = 0u; i < n; ++i) {
-                d[i] = i % 2u == 0u ? make_float4(nan, 1.f, 2.f, inf) : make_float4(1.f, inf, 2.f, nan);
-                s[i] = i % 2u == 0u ? make_float4(1.f, 2.f, inf, nan) : make_float4(nan, 1.f, 2.f, inf);
-            }
-            for (uint frame = 0u; frame < 2u; ++frame) {
-                run(frame);
-                for (uint i = 0u; i < n; ++i) expect(finite(actual_d[i]) && finite(actual_s[i]) &&
-                                                   finite(edsl_d[i]) && finite(edsl_s[i]),
-                                                   "Native and EDSL valid nonfinite input must not poison filtered outputs");
-            }
-        });
-    }
-    std::cout << "Native NRD failing cases: " << failures << '\n';
-    return failures;
-}
-#endif
 
 void check_storage_precision(Device &device, Stream &stream) {
     reblur::Filter filter;
@@ -1385,13 +1156,6 @@ void check_input_contract() {
 int main() {
     try {
         check_input_contract<vision::reblur::ReBLUR>();
-        const char *backend_environment = std::getenv("REBLUR_TEST_BACKEND");
-        const std::string test_backend = backend_environment ? backend_environment : "all";
-        expect(test_backend == "native" || test_backend == "custom" || test_backend == "all",
-               "REBLUR_TEST_BACKEND must be native, custom or all");
-#ifndef VISION_REBLUR_NATIVE_NRD
-        expect(test_backend != "native", "native backend tests require VISION_REBLUR_NATIVE_NRD");
-#endif
         Env::set_valid_check(false);
         DynamicModule::clear_search_path();
         RHIContext::instance().init(std::filesystem::current_path());
@@ -1399,7 +1163,6 @@ int main() {
         device.init_rtx();
         Global::instance().set_device(&device);
         auto stream = device.create_stream();
-        std::cout << "REBLUR test backend: " << test_backend << '\n';
 #ifdef VISION_REBLUR_EDSL
         if (std::getenv("REBLUR_TEST_UNPACK_COMPOSE_ONLY")) {
             unpack_compose_probe::check(device, stream);
@@ -1419,34 +1182,23 @@ int main() {
             return 0;
         }
         if (std::getenv("REBLUR_TEST_COVERAGE_ONLY")) {
-            select_native_backend("0"); check_scene_signals();
+            check_scene_signals();
             return 0;
         }
-        uint native_failures = 0u;
-#ifdef VISION_REBLUR_NATIVE_NRD
-        if (test_backend != "custom") {
-            select_native_backend("1");
-            native_failures = check_native_reblur(device, stream);
-        }
-#endif
-        if (test_backend != "native") {
-            select_native_backend("0");
 #ifdef VISION_REBLUR_EDSL
-            unpack_compose_probe::check(device, stream);
+        unpack_compose_probe::check(device, stream);
 #endif
-            precise_lobes_probe::check(device, stream);
-            coverage_history_probe::check(device, stream);
-            check_storage_budget(device);
-            check_helpers(device, stream);
-            check_direction_angle_accuracy(device, stream);
-            check_storage_precision(device, stream);
-            check_filter(device, stream);
-            check_curved_glossy_footprint(device, stream);
-            check_sparse_tiles(device, stream);
-            check_packed_motion(device, stream);
-            check_scene_signals();
-        }
-        expect(native_failures == 0u, "native NRD integration cases failed");
+        precise_lobes_probe::check(device, stream);
+        coverage_history_probe::check(device, stream);
+        check_storage_budget(device);
+        check_helpers(device, stream);
+        check_direction_angle_accuracy(device, stream);
+        check_storage_precision(device, stream);
+        check_filter(device, stream);
+        check_curved_glossy_footprint(device, stream);
+        check_sparse_tiles(device, stream);
+        check_packed_motion(device, stream);
+        check_scene_signals();
         std::cout << "PASS: REBLUR input contract\n";
         return 0;
     } catch (const std::exception &error) {

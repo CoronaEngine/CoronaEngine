@@ -1,6 +1,5 @@
-// CPU-only REBLUR scheduler contract. The optional official oracle is loaded
-// explicitly at runtime; ordinary builds/tests need no external NRD SDK or DLL.
-#include <NRD.h>
+// CPU-only ReBLUR scheduler contract, checked against stored golden fixtures.
+#include "render_core/denoiser/ReBLUR/scheduler/include/NRD.h"
 #include <nlohmann/json.hpp>
 #include <algorithm>
 #include <array>
@@ -13,17 +12,7 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
-#include <type_traits>
 #include <vector>
-#ifdef _WIN32
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#include <windows.h>
-#endif
 
 namespace {
 using Json = nlohmann::json;
@@ -43,29 +32,6 @@ struct Api {
     decltype(&nrd::SetCommonSettings) common = &nrd::SetCommonSettings;
     decltype(&nrd::SetDenoiserSettings) settings = &nrd::SetDenoiserSettings;
     decltype(&nrd::GetComputeDispatches) dispatches = &nrd::GetComputeDispatches;
-#ifdef _WIN32
-    HMODULE module{};
-    explicit Api(const std::filesystem::path &path) {
-        module = LoadLibraryW(path.c_str());
-        require(module != nullptr, "cannot load explicit NRD oracle: " + path.string());
-        auto bind = [&](auto &function, const char *name) {
-            function = reinterpret_cast<std::remove_reference_t<decltype(function)>>(GetProcAddress(module, name));
-            require(function != nullptr, std::string("NRD oracle is missing ") + name);
-        };
-        bind(create, "CreateInstance"); bind(destroy, "DestroyInstance");
-        bind(library, "GetLibraryDesc"); bind(description, "GetInstanceDesc");
-        bind(common, "SetCommonSettings"); bind(settings, "SetDenoiserSettings");
-        bind(dispatches, "GetComputeDispatches");
-    }
-    ~Api() { if (module) FreeLibrary(module); }
-#else
-    explicit Api(const std::filesystem::path &) {
-        throw std::runtime_error("direct NRD DLL oracle requires Windows; use --fixture on this platform");
-    }
-#endif
-    Api() = default;
-    Api(const Api &) = delete;
-    Api &operator=(const Api &) = delete;
 };
 
 std::string bytes_hex(const uint8_t *bytes, uint32_t size) {
@@ -336,30 +302,16 @@ void compare(const Json &actual, const Json &expected) {
 
 int main(int argc, char **argv) {
     try {
-        std::filesystem::path oracle, capture, fixture, digest_fixture;
+        std::filesystem::path fixture, digest_fixture;
         for (int i = 1; i < argc; ++i) {
             const std::string option = argv[i];
-            require(i + 1 < argc, "options require a value: --oracle-dll/--capture/--fixture/--digest-fixture");
-            if (option == "--oracle-dll") oracle = argv[++i];
-            else if (option == "--capture") capture = argv[++i];
-            else if (option == "--fixture") fixture = argv[++i];
+            require(i + 1 < argc, "options require a value: --fixture/--digest-fixture");
+            if (option == "--fixture") fixture = argv[++i];
             else if (option == "--digest-fixture") digest_fixture = argv[++i];
             else throw std::runtime_error("unknown scheduler test option: " + option);
         }
-        require(capture.empty() || !oracle.empty(), "--capture requires an explicit official --oracle-dll");
         Api implementation;
         const auto actual = exercise(implementation);
-        if (!oracle.empty()) {
-            Api reference(oracle);
-            const auto expected = exercise(reference);
-            if (!capture.empty()) {
-                std::ofstream output(capture);
-                require(bool(output), "cannot write scheduler oracle fixture");
-                output << expected.dump();
-                require(bool(output), "cannot complete scheduler oracle fixture");
-            }
-            compare(actual, expected);
-        }
         if (!fixture.empty()) {
             std::ifstream input(fixture);
             require(bool(input), "cannot read scheduler oracle fixture");
@@ -374,7 +326,7 @@ int main(int argc, char **argv) {
             compare(digest(actual), expected.at("digest"));
         }
         std::cout << "PASS: CPU REBLUR scheduler reset/history/layer/resize/settings/camera/resource contracts"
-                  << (!oracle.empty() || !fixture.empty() ? "; official 4.14.3 pass/constants/pool comparison exact" : "")
+                  << (!fixture.empty() ? "; official 4.14.3 pass/constants/pool comparison exact" : "")
                   << (!digest_fixture.empty() ? "; official 4.14.3 golden digests match" : "") << '\n';
         return 0;
     } catch (const std::exception &error) {

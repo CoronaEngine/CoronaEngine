@@ -87,9 +87,6 @@ struct EdslReblur::Impl {
     std::array<ocarina::half, 24u * 4u> prepass_probe_initial{};
     explicit Impl(Device &d, bool compact_guide)
         : device(d), compact_guide_cache(compact_guide) {
-        for (const char *name : {"REBLUR_ORIGINAL_CORE", "REBLUR_NATIVE_NRD"})
-            if (const char *value = std::getenv(name); value && std::strcmp(value, "1") == 0)
-                throw std::invalid_argument("ReBLUR uses the repository-local EDSL implementation; remove the obsolete native SDK selector");
         if (const char *value = std::getenv("REBLUR_SNAPSHOT_FRAME")) {
             const char *end = value + std::strlen(value);
             const auto parsed = std::from_chars(value, end, snapshot_frame);
@@ -162,7 +159,7 @@ struct EdslReblur::Impl {
         return "f" + std::to_string(frame) + "_l" + std::to_string(layer) + "_p" + std::to_string(pass);
     }
     void snapshot(CommandBatch &commands, const Storage &storage, uint frame, uint layer, uint pass, uint slot,
-                  std::string_view shader_name, bool native_core = false) {
+                  std::string_view shader_name) {
         if (snapshot_directory.empty() || (snapshot_frame_enabled && frame != snapshot_frame)) return;
         const std::string name = snapshot_prefix(frame, layer, pass) + "_u" + std::to_string(slot) + ".bin";
         const auto path = snapshot_directory / name;
@@ -177,8 +174,7 @@ struct EdslReblur::Impl {
         meta << "{\"path\":\"" << name << "\",\"frame\":" << frame << ",\"layer\":" << layer
              << ",\"pass\":" << pass << ",\"slot\":" << slot << ",\"shader\":\"" << shader_name
              << "\",\"formatValue\":" << uint(storage.format) << ",\"width\":" << storage.size.x
-             << ",\"height\":" << storage.size.y << ",\"rowBytes\":" << storage.size.x * storage_bytes(storage.format)
-             << ",\"native_core\":" << (native_core ? "true" : "false");
+             << ",\"height\":" << storage.size.y << ",\"rowBytes\":" << storage.size.x * storage_bytes(storage.format);
         if (prepass_probe_runtime && slot == 3u && storage.size.x == 24u && storage.size.y == 1u &&
             shader_name == "REBLUR_DiffuseSpecular_PrePass.cs")
             meta << ",\"prepassProbeMode\":\"runtime-early17\",\"probePixel\":[" << prepass_probe_pixel.x

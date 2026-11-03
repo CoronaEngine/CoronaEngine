@@ -3,7 +3,7 @@
 // Diagnostic common-format conversion. Production Pack/Unpack stay intact.
 #include "render_core/denoiser/ReBLUR/edsl_nrd_common.h"
 #include "render_core/denoiser/ReBLUR/edsl_nrd_resources.h"
-#include "render_core/denoiser/ReBLUR/native_nrd.h"
+#include "render_core/denoiser/ReBLUR/edsl_runtime.h"
 #include <nlohmann/json.hpp>
 #include "math/half.h"
 #include <algorithm>
@@ -155,13 +155,12 @@ inline Json compare(const std::vector<std::byte> &canonical, const std::vector<s
 
 // Called only from the explicit REBLUR_CONVERSION_INPUT_DIR diagnostic branch.
 // Canonical buffers upload once; the loop repeats actual stateless conversion.
-inline void run(Device &device, Stream &stream, const std::string &backend,
-                uint warmup, uint measured_frames, uint pause_ms) {
+inline void run(Device &device, Stream &stream, uint warmup, uint measured_frames, uint pause_ms) {
+    const std::string backend = "edsl";
     using namespace detail;
     const char *input_option = std::getenv("REBLUR_CONVERSION_INPUT_DIR");
     const char *output_option = std::getenv("REBLUR_CONVERSION_OUTPUT_DIR");
     require(input_option && *input_option && output_option && *output_option, "input/output directories are required");
-    require(backend == "native" || backend == "edsl", "backend must be native or edsl");
     require(measured_frames && uint64_t(warmup) + measured_frames <= UINT32_MAX, "invalid iteration count");
     const char *scope_option = std::getenv("REBLUR_CONVERSION_SCOPE");
     const std::string scope = scope_option && *scope_option ? scope_option : "frontend";
@@ -183,21 +182,12 @@ inline void run(Device &device, Stream &stream, const std::string &backend,
     std::array<std::array<Texture2D, 2>, 3> fixed_nrd_images;
     std::array<std::array<Buffer<float4>, 2>, 3> linear_buffers;
     std::array<Dispatch, 3> parameters{};
-    std::unique_ptr<NativeReblur> native;
-    PassShader frontend, endpoint, unpack;
-    if (backend == "native") native = std::make_unique<NativeReblur>(device.context()->runtime_directory() / "reblur-native");
-    else {
-        frontend = compile_frontend(device);
-        Kernel empty = [](Var<Dispatch>) { configure_block(16u, 8u); };
-        // These empty dispatches close the existing shared-point profiler state
-        // machine. Their NRD/Unpack/Filter rows are not conversion measurements.
-        endpoint = device.compile(empty, "NRD-EDSL-REBLUR-TemporalStabilization");
-        unpack = full ? compile_common_backend(device) : device.compile(empty, "NRD-EDSL-REBLUR-Unpack");
-    }
-    const char *spirv_option = std::getenv("REBLUR_CONVERSION_SPIRV");
-    require(!native || (spirv_option && *spirv_option), "native frontend requires REBLUR_CONVERSION_SPIRV");
-    const char *backend_spirv_option = std::getenv("REBLUR_CONVERSION_BACKEND_SPIRV");
-    require(!native || !full || (backend_spirv_option && *backend_spirv_option), "native full conversion requires REBLUR_CONVERSION_BACKEND_SPIRV");
+    auto frontend = compile_frontend(device);
+    Kernel empty = [](Var<Dispatch>) { configure_block(16u, 8u); };
+    // Empty dispatches close the shared-point profiler state machine. Their
+    // filter/Unpack rows are not conversion measurements.
+    auto endpoint = device.compile(empty, "NRD-EDSL-REBLUR-TemporalStabilization");
+    auto unpack = full ? compile_common_backend(device) : device.compile(empty, "NRD-EDSL-REBLUR-Unpack");
     const std::array<PixelStorage, 6> storage{PixelStorage::HALF4, PixelStorage::RGB10A2, PixelStorage::FLOAT1,
         PixelStorage::HALF4, PixelStorage::HALF4, PixelStorage::UNORM1};
     auto zeros = std::make_shared<PackedNrdInputs>();
@@ -222,37 +212,29 @@ inline void run(Device &device, Stream &stream, const std::string &backend,
                 hash((*nrd_outputs[layer])[slot]);
             }
         }
-        if (native) {
-            // Defined zero initial contents make sky's untouched bytes stable;
-            // these uploads and all canonical copies are outside GPU timings.
-            stream << native->upload_replay_inputs(size, layer, zeros)
-                   << native->upload_canonical_inputs(size, layer, canonical[layer], spirv_option,
-                       nrd_outputs[layer], full ? backend_spirv_option : "");
-        } else {
-            edsl_inputs[layer] = device.create_byte_buffer(pixels * 96u, "Canonical RTXPT frontend input");
-            stream << edsl_inputs[layer].upload(canonical[layer]->data());
-            for (uint slot = 0u; slot != 6u; ++slot) {
-                images[layer][slot] = device.create_texture2d(size, storage[slot], "Canonical frontend output");
-                stream << images[layer][slot].upload((*zeros)[slot].data());
-            }
-            auto &p = parameters[layer];
-            p.external.size = size; p.external.guide = edsl_inputs[layer].descriptor();
-            p.constants.gHitDistParams = constants.hit_distance_parameters;
-            p.previous_view_depth_row.x = constants.clamp_max;
-            const uint output_to_input_slot[]{3u, 4u, 1u, 2u, 0u, 5u};
-            for (uint slot = 0u; slot != 6u; ++slot) p.outputs[slot] = {images[layer][output_to_input_slot[slot]], size};
-            if (full) for (uint slot = 0u; slot != 2u; ++slot) {
-                fixed_nrd_images[layer][slot] = device.create_texture2d(size, PixelStorage::HALF4, "Canonical fixed NRD output");
-                linear_buffers[layer][slot] = device.create_buffer<float4>(pixels, "Canonical common linear output");
-                stream << fixed_nrd_images[layer][slot].upload((*nrd_outputs[layer])[slot].data())
-                       << linear_buffers[layer][slot].upload(linear_zeros.data());
-                // A complete write occurs at every pixel, including defined zero sky.
-                p.inputs[slot] = {fixed_nrd_images[layer][slot], size};
-            }
-            if (full) {
-                p.external.output_diffuse = linear_buffers[layer][0].descriptor();
-                p.external.output_specular = linear_buffers[layer][1].descriptor();
-            }
+        edsl_inputs[layer] = device.create_byte_buffer(pixels * 96u, "Canonical RTXPT frontend input");
+        stream << edsl_inputs[layer].upload(canonical[layer]->data());
+        for (uint slot = 0u; slot != 6u; ++slot) {
+            images[layer][slot] = device.create_texture2d(size, storage[slot], "Canonical frontend output");
+            stream << images[layer][slot].upload((*zeros)[slot].data());
+        }
+        auto &p = parameters[layer];
+        p.external.size = size; p.external.guide = edsl_inputs[layer].descriptor();
+        p.constants.gHitDistParams = constants.hit_distance_parameters;
+        p.previous_view_depth_row.x = constants.clamp_max;
+        const uint output_to_input_slot[]{3u, 4u, 1u, 2u, 0u, 5u};
+        for (uint slot = 0u; slot != 6u; ++slot) p.outputs[slot] = {images[layer][output_to_input_slot[slot]], size};
+        if (full) for (uint slot = 0u; slot != 2u; ++slot) {
+            fixed_nrd_images[layer][slot] = device.create_texture2d(size, PixelStorage::HALF4, "Canonical fixed NRD output");
+            linear_buffers[layer][slot] = device.create_buffer<float4>(pixels, "Canonical common linear output");
+            stream << fixed_nrd_images[layer][slot].upload((*nrd_outputs[layer])[slot].data())
+                   << linear_buffers[layer][slot].upload(linear_zeros.data());
+            // A complete write occurs at every pixel, including defined zero sky.
+            p.inputs[slot] = {fixed_nrd_images[layer][slot], size};
+        }
+        if (full) {
+            p.external.output_diffuse = linear_buffers[layer][0].descriptor();
+            p.external.output_specular = linear_buffers[layer][1].descriptor();
         }
     }
     stream << synchronize() << commit();
@@ -262,13 +244,10 @@ inline void run(Device &device, Stream &stream, const std::string &backend,
     for (uint iteration = 0u; iteration != warmup + measured_frames; ++iteration) {
         const auto start = std::chrono::steady_clock::now();
         for (uint layer : {2u, 1u, 0u}) {
-            if (native) stream << native->dispatch_canonical_conversion(size, layer, constants.hit_distance_parameters, constants.clamp_max);
-            else {
-                // Match the NRD fixture's separate profiling batch per plane.
-                stream << native_callback([](const NativeInteropContext &) {});
-                stream << frontend(parameters[layer]).dispatch(size)
-                       << endpoint(parameters[layer]).dispatch(size) << unpack(parameters[layer]).dispatch(size);
-            }
+            // Keep each plane in a separate profiling batch.
+            stream << native_callback([](const NativeInteropContext &) {});
+            stream << frontend(parameters[layer]).dispatch(size)
+                   << endpoint(parameters[layer]).dispatch(size) << unpack(parameters[layer]).dispatch(size);
         }
         stream << synchronize() << commit();
         if (iteration % 16u == 0u || iteration + 1u == warmup + measured_frames)
@@ -277,21 +256,18 @@ inline void run(Device &device, Stream &stream, const std::string &backend,
             std::this_thread::sleep_until(start + std::chrono::milliseconds(pause_ms));
     }
     for (uint layer : {2u, 1u, 0u}) {
-        if (native) stream << native->readback_replay_inputs(size, layer, actual[layer]);
-        else for (uint slot = 0u; slot != 6u; ++slot) {
+        for (uint slot = 0u; slot != 6u; ++slot) {
             (*actual[layer])[slot].resize(pixels * pixel_bytes[slot]);
             stream << images[layer][slot].download((*actual[layer])[slot].data());
         }
         if (full) {
-            if (native) stream << native->readback_canonical_outputs(size, layer, linear_outputs[layer]);
-            else for (uint slot = 0u; slot != 2u; ++slot) {
+            for (uint slot = 0u; slot != 2u; ++slot) {
                 (*linear_outputs[layer])[slot].resize(pixels * 16u);
                 stream << linear_buffers[layer][slot].download((*linear_outputs[layer])[slot].data());
             }
         }
     }
     stream << synchronize() << commit();
-    native.reset();
     Json comparisons = Json::array(); bool byte_equal = true; uint64_t nonfinite = 0u;
     for (uint layer : {2u, 1u, 0u}) {
         const auto destination = output / ("plane" + std::to_string(layer)); std::filesystem::create_directories(destination);

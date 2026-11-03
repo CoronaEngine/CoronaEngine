@@ -424,11 +424,11 @@ Corona 最终两轮差值 **16.672552 / 16.612015 ms**；RTXPT **4.332389 / 4.34
 
 用户明确范围为“去掉本次 ReBLUR 的外部依赖”，原有 Horizon、Slang、CEF 等引擎基础依赖保留。此前5.378588 ms版本仍调用外部官方 NRD CPU 调度，本节完成生产路径的依赖移除，并重新验收性能。
 
-ReBLUR 现在始终编译自有 EDSL 核心，CPU 调度来自仓库内 `scheduler/` 静态目标：内置 NRD4.14.3 的 ReBLUR-only 调度、常量和资源描述，以及必要的 MathLib1.3 CPU头文件，共约0.6 MB，保留许可及来源哈希。原表达式和运算顺序保留，pipeline描述只保留名称/绑定/常量布局，三种原版 GPU bytecode 均为空。生产目标不再 include `native_nrd.cmake` 或编译 `native_nrd.cpp`，无 `NativeNrd::` 链接、SDK头路径、NRD/NVRHI导入库和 DXC 生成 NRD shader 的步骤。原 native 选择环境变量设置为1会明确拒绝，避免误以为还在运行SDK对照；正常默认无需设置。
+ReBLUR 现在始终编译自有 EDSL 核心，CPU 调度来自仓库内 `scheduler/` 静态目标：内置 NRD4.14.3 的 ReBLUR-only 调度、常量和资源描述，以及必要的 MathLib1.3 CPU头文件，共约0.6 MB，保留许可及来源哈希。原表达式和运算顺序保留，pipeline描述只保留名称/绑定/常量布局，三种原版 GPU bytecode 均为空。生产目标不再 include `native_nrd.cmake` 或编译 `native_nrd.cpp`，无 `NativeNrd::` 链接、SDK头路径、NRD/NVRHI导入库和 DXC 生成 NRD shader 的步骤。外部参考后端的源码、HLSL、构建和部署规则、环境变量选择分支现已一并删除；运行只使用仓库内实现。
 
-实际 PE 导入表已核对主程序、ReBLUR插件、EDSL测试与scheduler测试均无 NRD.dll；本地旧 `bin/NRD.dll` 和引擎目录的 `NRD.dll` 已按路径/SHA清单移入外部证据隔离目录，后续GPU测试、CTest及两轮正式性能采样期间均不存在于运行目录。CMake编译/链接图也不引用原 `build/recordings/.../native-nrd` 路径。保留的历史SDK参考源码不属于生产构建目标。
+实际 PE 导入表已核对主程序、ReBLUR插件、EDSL测试与scheduler测试均无 NRD.dll；本地旧 `bin/NRD.dll` 和引擎目录的 `NRD.dll` 已按路径/SHA清单移入外部证据隔离目录，后续GPU测试、CTest及两轮正式性能采样期间均不存在于运行目录。CMake编译/链接图也不引用原 `build/recordings/.../native-nrd` 路径。历史SDK参考源码已从当前工程移除，已有离线对照数据和性能记录继续保留。
 
-CPU调度对官方4.14.3的330次查询、3154个pass精确一致：比较了1/3identifier、历史/重置/resize、settings、相机/投影/MV、pipeline/资源池/绑定及完整832字节常量。显式开发验证可动态加载官方DLL或读取完整fixture，默认测试只读取仓库内29,620字节官方golden摘要，不加载SDK。golden仅从独立官方capture生成，原fixture SHA256为 `41e5e76ba10c5fcf1395c6348fabf9ac58a4790598ab15ede2946203e7eda5f1`，不从生产实现生成expected值。
+CPU调度对官方4.14.3的330次查询、3154个pass精确一致：比较了1/3identifier、历史/重置/resize、settings、相机/投影/MV、pipeline/资源池/绑定及完整832字节常量。当前验证仅使用仓库内29,620字节官方golden摘要或既有完整fixture，不再动态加载官方DLL或生成capture。golden仅从此前独立官方capture生成，原fixture SHA256为 `41e5e76ba10c5fcf1395c6348fabf9ac58a4790598ab15ede2946203e7eda5f1`，不从生产实现生成expected值。
 
 Horizon必要的五个运行时文件及两个测试文件，通过 `build_tools/patches/horizon/reblur-runtime.patch` 和before/after SHA清单随主仓库交付，源码准备流程自动验证或重放。86项CPU工作区/补丁回归通过；另对实际固定版本 `6429a2e0…` 的干净sparse clone重放，七份after SHA全部一致，二次执行bytes/mtime零写入。当前Horizon及用户既有math测试改动均保留。这样无需依靠另一份未记录的本地Horizon改动；原有固定Horizon基线仍按引擎既有流程获取。
 

@@ -1,6 +1,6 @@
 #pragma once
 
-// Actual scene/ray regression for the guide-to-NRD conversion dataflow. Both
+// Actual scene/ray regression for the guide-to-ReBLUR conversion dataflow. All
 // variants use the same default wavelengths, material graphs and sampler seeds.
 inline void check_reblur_guide_fusion() {
     using namespace vision;
@@ -32,7 +32,7 @@ inline void check_reblur_guide_fusion() {
         Environment(const char *key, const char *value) : name(key),
             old(std::getenv(key) ? std::getenv(key) : ""), present(std::getenv(key) != nullptr) { set(key, value); }
         ~Environment() { set(name.c_str(), present ? old.c_str() : nullptr); }
-    } backend{"REBLUR_NATIVE_NRD", "0"}, profiling{"REBLUR_GPU_PROFILE", nullptr},
+    } profiling{"REBLUR_GPU_PROFILE", nullptr},
       snapshot_frame{"REBLUR_SNAPSHOT_FRAME", "2"};
     const auto directory = fs::temp_directory_path() /
         ("corona_guide_fusion_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
@@ -139,29 +139,20 @@ inline void check_reblur_guide_fusion() {
         std::ofstream(directory / ("scene-" + std::to_string(scenario) + ".json")) << scene.dump(2);
         stage("scene_done");
         std::vector<float4> reference_rgb, reference_diffuse, reference_specular;
-        std::vector<float4> edsl_rgb, hlsl_rgb, batch_rgb;
-        for (uint variant = 0u; variant < 8u; ++variant) {
-#ifndef VISION_REBLUR_NATIVE_NRD
-            if (variant >= 4u && variant <= 6u) continue;
-#endif
+        std::vector<float4> edsl_rgb;
+        for (uint variant = 0u; variant < 5u; ++variant) {
             const bool fused = variant >= 2u;
-            const bool original_core = variant >= 4u && variant <= 6u;
-            const bool final_output_only = variant >= 5u;
-            const bool precleared_inputs = variant == 6u;
-            const char *variant_name = variant == 7u ? "-edsl-core-batch-final-only" :
+            const bool final_output_only = variant == 4u;
+            const char *variant_name = variant == 4u ? "-edsl-core-batch-final-only" :
                 (variant == 0u ? "-legacy-staged" : (variant == 1u ? "-precise-staged" :
-                (variant == 2u ? "-precise-fused80" : (variant == 3u ? "-precise-fused32" :
-                    (precleared_inputs ? "-original-core-batch-precleared" :
-                        (final_output_only ? "-original-core-batch-final-only" : "-original-core-fused32"))))));
+                (variant == 2u ? "-precise-fused80" : "-precise-fused32")));
             const auto capture = directory / (std::to_string(scenario) + variant_name);
             Environment producer{"VISION_RESTIR_PRECISE_LOBES", variant == 0u ? "0" : "1"};
             Environment mode{"REBLUR_FUSE_GUIDES", fused ? "1" : "0"};
             Environment compact{"REBLUR_COMPACT_GUIDE_CACHE", variant >= 3u ? "1" : "0"};
-            Environment core{"REBLUR_ORIGINAL_CORE", variant == 7u ? nullptr : (original_core ? "1" : "0")};
-            // The first five paths retain filtered D/S. Leave the batch selector
-            // unset in the last three paths to exercise the production default.
+            // The first four paths retain filtered D/S. Leave the batch selector
+            // unset in the final path to exercise the production default.
             Environment batching{"REBLUR_BATCH_COMPOSE", final_output_only ? nullptr : "0"};
-            Environment preclear{"REBLUR_PRECLEAR_INPUTS", precleared_inputs ? "1" : "0"};
             Environment composition{"REBLUR_COMPOSE_IN_UNPACK", nullptr};
             Environment snapshot{"REBLUR_EDSL_SNAPSHOT_DIR", capture.string().c_str()};
             Global::instance().set_scene_path(directory);
@@ -200,31 +191,14 @@ inline void check_reblur_guide_fusion() {
             pipeline->stream() << synchronize() << commit();
             if (variant == 0u) { reference_rgb = rgb; reference_diffuse = diffuse; reference_specular = specular; }
             else {
-                const auto same = [original_core](const auto &a, const auto &b) {
-                    if (a.size() != b.size()) return false;
-                    if (!original_core) return std::memcmp(a.data(), b.data(), a.size() * sizeof(a[0])) == 0;
-                    // The original HLSL core uses the same tolerance as the
-                    // existing independent NRD reference comparison.
-                    for (size_t i = 0u; i < a.size(); ++i) {
-                        if (std::memcmp(&a[i].w, &b[i].w, sizeof(float)) != 0) return false;
-                        for (uint c = 0u; c < 3u; ++c)
-                            if (!std::isfinite(a[i][c]) || !std::isfinite(b[i][c]) ||
-                                std::abs(a[i][c] - b[i][c]) > .001f + .002f * std::abs(b[i][c])) return false;
-                    }
-                    return true;
-                };
                 const auto exact = [](const auto &a, const auto &b) {
                     return a.size() == b.size() && std::memcmp(a.data(), b.data(), a.size() * sizeof(a[0])) == 0;
                 };
                 if (final_output_only) {
-                    if (!exact(rgb, original_core ? hlsl_rgb : edsl_rgb))
+                    if (!exact(rgb, edsl_rgb))
                         throw std::runtime_error("scene " + std::to_string(scenario) + variant_name +
-                            (original_core ? " batched final RT must match retained original HLSL composition byte-for-byte" :
-                                " batched final RT must match retained EDSL composition byte-for-byte"));
-                    if (precleared_inputs && !exact(rgb, batch_rgb))
-                        throw std::runtime_error("scene " + std::to_string(scenario) + variant_name +
-                            " precleared final RT must match the same HLSL batch without preclear byte-for-byte");
-                } else if (!same(rgb, reference_rgb) || !same(diffuse, reference_diffuse) || !same(specular, reference_specular)) {
+                            " batched final RT must match retained EDSL composition byte-for-byte");
+                } else if (!exact(rgb, reference_rgb) || !exact(diffuse, reference_diffuse) || !exact(specular, reference_specular)) {
                     throw std::runtime_error("scene " + std::to_string(scenario) + variant_name +
                         " changed final FP32 radiance or world-space lobe hit distances beyond the reference contract");
                 }
@@ -235,7 +209,7 @@ inline void check_reblur_guide_fusion() {
                     const auto packed = read_bytes(capture / name);
                     if (packed != read_bytes(staged / name))
                         throw std::runtime_error("scene " + std::to_string(scenario) + variant_name +
-                            " changed a native-format NRD input: " + name);
+                            " changed a packed ReBLUR input: " + name);
                     if (scenario == 0u && layer == 0u && slot < 2u) {
                         bool sampled_black_hit = false;
                         for (size_t offset = 6u; offset + 1u < packed.size(); offset += 8u) {
@@ -251,8 +225,6 @@ inline void check_reblur_guide_fusion() {
                     const auto metadata = read_bytes(capture / "metadata.jsonl");
                     if (std::string(metadata.begin(), metadata.end()).find("Pack-FusedGuides") == std::string::npos)
                         throw std::runtime_error("guide fusion regression must execute the fused pack command");
-                    if (original_core && std::string(metadata.begin(), metadata.end()).find("\"native_core\":true") == std::string::npos)
-                        throw std::runtime_error("original-core regression must execute the original NRD HLSL shaders");
                     const bool batched = std::string(metadata.begin(), metadata.end()).find("Pack-FusedGuides-BatchCompose") != std::string::npos;
                     if (batched != final_output_only)
                         throw std::runtime_error("batch fixture must select only the production-default final-output-only path");
@@ -262,8 +234,6 @@ inline void check_reblur_guide_fusion() {
                     while (std::getline(metadata_lines, metadata_line)) {
                         if (metadata_line.empty()) continue;
                         const auto record = DataWrap::parse(metadata_line);
-                        if (variant == 7u && record.at("native_core").get<bool>())
-                            throw std::runtime_error("EDSL batch regression must execute only EDSL core shaders");
                         if (record.at("pass").get<uint>() != 0u) continue;
                         const uint layer = record.at("layer").get<uint>();
                         if (layer >= layers) throw std::runtime_error("Pack metadata layer exceeds the scene layer count");
@@ -272,22 +242,16 @@ inline void check_reblur_guide_fusion() {
                         if (marked_batched != final_output_only)
                             throw std::runtime_error("every Pack must match the selected retained or batch path");
                         const bool marked_precleared = shader.find("Pack-FusedGuides-BatchCompose-Precleared") != std::string::npos;
-                        const bool expected_precleared = precleared_inputs && layers == StablePlaneCount && layer > 0u;
-                        if (marked_precleared != expected_precleared)
-                            throw std::runtime_error("scene " + std::to_string(scenario) + variant_name +
-                                " preclear Pack marker must appear only for batch layers 1 and 2");
+                        if (marked_precleared)
+                            throw std::runtime_error("EDSL Pack must not use an external-core preclear path");
                         captured_pack[layer] = true;
                     }
                     for (uint layer = 0u; layer < layers; ++layer)
-                        if (!captured_pack[layer]) throw std::runtime_error("preclear oracle requires Pack metadata for every layer");
+                        if (!captured_pack[layer]) throw std::runtime_error("guide oracle requires Pack metadata for every layer");
                 }
             }
             if (variant == 3u) edsl_rgb = rgb;
-            if (variant == 4u) {
-                hlsl_rgb = rgb;
-            }
-            if (variant == 5u) batch_rgb = rgb;
-            if (scenario == 1u && (variant == 3u || variant == 5u || variant == 6u || variant == 7u)) {
+            if (scenario == 1u && (variant == 3u || variant == 4u)) {
                 const uint direct_base = fb.stable_direct_base(), indirect_base = fb.stable_indirect_base();
                 uint lifecycle_step = 0u;
                 auto check_raw = [&](bool retained) {
@@ -342,12 +306,11 @@ inline void check_reblur_guide_fusion() {
                 integrator->set_stable_planes_enabled(false); render(); check_raw(false);
                 integrator->set_stable_planes_enabled(true); render(); check_raw(false);
                 std::cout << "PASS: actual ReSTIR raw allocation ON/OFF/debug/resize/stable-plane lifecycle, variant="
-                          << variant << (precleared_inputs ? " batch-precleared\n" :
-                              (final_output_only ? " batch\n" : " retained\n"));
+                          << variant << (final_output_only ? " batch\n" : " retained\n");
             }
         }
     }
     std::cout << "PASS: available data paths across " << (selected_scenario == InvalidUI32 ? 5u : 1u)
-              << " scenes preserve exact NRD inputs; batched final RT matches retained core byte-for-byte; evidence="
+              << " scenes preserve exact ReBLUR inputs; batched final RT matches retained core byte-for-byte; evidence="
               << directory.string() << '\n';
 }

@@ -23,8 +23,9 @@ matching NRD resource declarations, not shader implementations. The MathLib
 
 The current target matches the existing x86-64 build. It uses C++17 and MSVC's
 precise floating-point mode without an AVX/FMA override, matching the supplied
-NRD CPU binary's build settings. The independent CPU oracle compares dispatch
-selection, pools, resource bindings, and all 832 constant bytes; GPU and whole
+reference CPU build settings. The independent CPU test compares dispatch
+selection, pools, resource bindings, and all 832 constant bytes against the
+checked-in golden fixtures. It does not load a reference DLL. GPU and whole
 render validation remain required after integration.
 
 `ORIGIN.json` records hashes of the supplied source snapshot and imported files.
