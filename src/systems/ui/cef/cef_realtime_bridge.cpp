@@ -2342,6 +2342,20 @@ bool handle_dock_command(CefRefPtr<CefBrowser> browser,
             return true;
         }
 
+        if (cmd == "focusPanelTab") {
+            const int tab_id = command.value("tabId", -1);
+            bm.enqueue_main_thread_task([tab_id, frame, request_id] {
+                auto* tab = BrowserManager::instance().get_tab(tab_id);
+                const bool focused = tab && tab->open && !tab->panel_id.empty();
+                if (focused) {
+                    tab->minimized = false;
+                    tab->native_focus_requested = true;
+                }
+                send_dock_callback(frame, request_id, nullptr, nlohmann::json{{"focused", focused}});
+            });
+            return true;
+        }
+
         if (cmd == "closePanelTab") {
             int tab_id = command.value("tabId", -1);
             std::string panel_id = command.value("panelId", "");

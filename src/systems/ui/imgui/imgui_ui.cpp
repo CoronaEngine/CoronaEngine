@@ -122,11 +122,11 @@ void UiFrameRunner::run_frame(UiFrameContext& context) {
         if (!main && !tab->dock_initialized) {
             ImGui::SetNextWindowSize(ImVec2(static_cast<float>(std::max(tab->dock_width, 320)),
                 static_cast<float>(std::max(tab->dock_height, 240))), ImGuiCond_FirstUseEver);
-            if (tab->native_docked) {
+            if (tab->native_docked && !ImGui::FindWindowSettingsByID(ImHashStr(name.c_str()))) {
                 const std::string& zone = tab->docking_pos;
                 const auto it = default_docks_.find(zone);
                 const auto target = it != default_docks_.end() && ImGui::DockBuilderGetNode(it->second)
-                    ? it->second : dockspace_;
+                    ? it->second : resolve_default_panel_dock(dockspace_, zone);
                 ImGui::SetNextWindowDockID(target, ImGuiCond_FirstUseEver);
             } else if (tab->detach_state != BrowserTab::DetachState::Detaching) {
                 ImGui::SetNextWindowPos(ImVec2(main_viewport->Pos.x + tab->initial_x,
@@ -146,6 +146,12 @@ void UiFrameRunner::run_frame(UiFrameContext& context) {
         }
         bool open = true;
         bool visible;
+        if (!main && tab->native_focus_requested) {
+            ImGui::SetNextWindowFocus();
+            *context.active_tab_id = tab_id;
+            focus_browser_tab_exclusively(tab_id);
+            tab->native_focus_requested = false;
+        }
         if (main) {
             visible = begin_main_workspace();
         } else {

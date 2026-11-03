@@ -130,6 +130,25 @@ int main() {
         require(alpha_at(*ImGui::GetDrawData(), ImVec2(400, 350)) == 0, "resizing and redocking must not fill the background");
         settle(false);
         require(alpha_at(*ImGui::GetDrawData(), ImVec2(800, 450)) == 0, "closing panels must reveal the full scene again");
+
+        // A restored layout has no in-memory default_docks_ map. New left panels
+        // must use a side leaf, including when previous empty side nodes vanished.
+        ImGui::NewFrame();
+        constexpr ImGuiID restored_dockspace = 0x12345679;
+        ImGui::DockBuilderAddNode(restored_dockspace, ImGuiDockNodeFlags_DockSpace);
+        ImGui::DockBuilderSetNodeSize(restored_dockspace, io.DisplaySize);
+        ImGuiID restored_center = restored_dockspace;
+        const auto restored_right = ImGui::DockBuilderSplitNode(restored_center, ImGuiDir_Right, 0.3f, nullptr, &restored_center);
+        ImGui::DockBuilderGetNode(restored_center)->LocalFlags |= ImGuiDockNodeFlags_CentralNode;
+        ImGui::DockBuilderFinish(restored_dockspace);
+        const auto recovered_right = resolve_default_panel_dock(restored_dockspace, "right");
+        require(recovered_right == restored_right, "restored right dock must be reused");
+        const auto left = resolve_default_panel_dock(restored_dockspace, "left");
+        auto* left_node = ImGui::DockBuilderGetNode(left);
+        require(left != restored_dockspace && left_node && !left_node->IsCentralNode(), "new controls must not fill the root/central dock");
+        require(left_node->Size.x < io.DisplaySize.x * 0.5f, "new left dock must leave room for the camera background");
+        require(resolve_default_panel_dock(restored_dockspace, "left") == left, "subsequent AI panels must reuse the left dock");
+        ImGui::EndFrame();
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
         ImGui::DestroyContext();

@@ -57,6 +57,7 @@ struct BrowserTab {
     std::string panel_title;
     bool native_docked = false;
     bool native_force_viewport = false;
+    bool native_focus_requested = false;
     bool cef_visible = true;
     // Published on the UI thread, read under mutex by CEF callbacks. CEF renders
     // at logical resolution; screen coordinates are physical desktop pixels.
