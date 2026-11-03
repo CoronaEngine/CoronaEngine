@@ -18,9 +18,9 @@ static std::vector<vision::StablePlaneHistory> compact_history(const std::vector
         h.surface.virtual_position = p.surface.virtual_position;
         h.surface.virtual_geometric_normal = p.surface.virtual_geometric_normal;
         h.surface.approximate = p.surface.approximate; h.surface.stable_branch = p.surface.stable_branch;
-        h.motion = p.motion; h.depth_position = p.depth_position;
+        h.motion = p.motion(); h.depth_position = p.depth_position;
         h.branch_sequence = p.branch_sequence; h.instance_hash = p.instance_hash;
-        h.depth = p.depth; h.material_id = p.material_id; h.valid = p.valid;
+        h.depth = p.depth; h.material_id = p.material_id; h.valid = p.valid();
     }
     return ret;
 }
@@ -61,7 +61,7 @@ void layered_history_regression(vision::Pipeline& pipeline, Filter& denoiser) {
             auto hit = visible.read(center);
             auto it = pipeline.geometry().compute_surface_interaction(hit, false);
             StablePlaneDataVar plane;
-            plane.valid = 1u; plane.branch_sequence = 5u; plane.instance_hash = 37u;
+            plane->set_valid(1u); plane.branch_sequence = 5u; plane.instance_hash = 37u;
             plane.depth = 1u; plane.material_id = it.material_id();
             plane.surface.hit = hit; plane.surface.is_replaced = true;
             plane.surface.stable_branch = 37u;
@@ -120,7 +120,7 @@ void layered_history_regression(vision::Pipeline& pipeline, Filter& denoiser) {
                 if (change == 1) plane.instance_hash ^= 1u;
                 if (change == 2) plane.depth += 1u;
                 if (change == 3) plane.material_id ^= 1u;
-                if (change == 4) plane.valid = 0u;
+                if (change == 4) plane.set_valid(0u);
                 if (change == 5) plane.surface.hit.inst_id = InvalidUI32;
             }
             run(1u, 2u, colors[0]);
@@ -138,7 +138,7 @@ void layered_history_regression(vision::Pipeline& pipeline, Filter& denoiser) {
                 guides = baseline; run(0u, 2u, colors[2]);
                 for (auto &plane : guides) {
                     if (sky_endpoint) plane.surface.hit.inst_id = InvalidUI32;
-                    else plane.valid = 0u;
+                    else plane.set_valid(0u);
                 }
                 // Both ping-pong slots must become empty and stay empty through
                 // consecutive absent frames, then restart at age one on return.
@@ -173,7 +173,7 @@ void layered_history_regression(vision::Pipeline& pipeline, Filter& denoiser) {
                 const uint single_pixel = mode < 3u ? pixels - 1u :
                     std::min((mode - 3u) * 2u, extent.y - 1u) * extent.x;
                 for (uint i = 0; i < n; ++i) {
-                    guides[i].valid = mode == 0 || (mode >= 2 && i == single_pixel);
+                    guides[i].set_valid(mode == 0 || (mode >= 2 && i == single_pixel));
                     // If classification drops a live tile, fused preparation's
                     // demodulated green remains > 1 instead of being restored.
                     guides[i].surface.denoiser_albedo = {.2f, .35f, .7f};
@@ -190,7 +190,7 @@ void layered_history_regression(vision::Pipeline& pipeline, Filter& denoiser) {
                     << denoiser.poisson()->temp_buffer_indirect().view().upload(poison.data()) << synchronize() << commit();
                 run(0u, 2u, colors[1]);
                 for (uint i = 0; i < pixels; ++i) {
-                    const float green = guides[i].valid ? 1.f : 0.f;
+                    const float green = guides[i].valid() ? 1.f : 0.f;
                     if (!std::isfinite(float(output[i].x)) || !std::isfinite(float(output[i].y)) ||
                         std::abs(float(output[i].x)) > 1e-5f || std::abs(float(output[i].y) - green) > 1e-5f ||
                         std::abs(float(output[i].z)) > 1e-5f)
@@ -234,7 +234,7 @@ void layered_history_regression(vision::Pipeline& pipeline, Filter& denoiser) {
             guides = baseline;
             for (uint i = 0u; i < n; ++i) {
                 guides[i].branch_sequence = 5u + ((i + frame) & 1u);
-                if (emission == 1u) guides[i].valid = 0u;
+                if (emission == 1u) guides[i].set_valid(0u);
                 if (emission == 2u) guides[i].surface.hit.inst_id = InvalidUI32;
                 all_planes[i] = guides[i];
                 all_planes[n + i] = guides[i];
@@ -246,8 +246,8 @@ void layered_history_regression(vision::Pipeline& pipeline, Filter& denoiser) {
                     // incorrectly accepting a partial cache must change output.
                     all_planes[2u * n + i].branch_sequence = 11u +
                         ((i / input.resolution.x) >= input.resolution.y / 2u);
-                    all_planes[i].motion = make_float2(2.f, 0.f);
-                    all_planes[n + i].motion = make_float2(-2.f, 0.f);
+                    all_planes[i].set_motion(make_float2(2.f, 0.f));
+                    all_planes[n + i].set_motion(make_float2(-2.f, 0.f));
                 }
                 // Primary geometry is constant for the glass-internal edge.
                 // Emission-only coverage has no valid illumination layer.
@@ -397,7 +397,7 @@ void layered_history_regression(vision::Pipeline& pipeline, Filter& denoiser) {
             throw std::runtime_error("optical depth disocclusion must reject layer history");
         baseline = original; guides = baseline;
         run(0u, 1u, colors[1]);
-        for (auto& plane : guides) plane.motion = make_float2(1000.f);
+        for (auto& plane : guides) plane.set_motion(make_float2(1000.f));
         run(1u, 1u, colors[0]);
         if (float(history[center].moments_direct.z) != 1.f)
             throw std::runtime_error("layer motion must override primary surface motion");
@@ -444,7 +444,7 @@ void check_svgf_layered_history(vision::Pipeline& pipeline) {
 void check_svgf_shading_guide(vision::Pipeline& pipeline) {
     using namespace vision;
     pipeline.activate_global_context();
-    // Reuse the normal-mapped substrate fixture prepared by the sampling test.
+    // Reuse the normal-mapped Principled fixture prepared by the sampling test.
     Global::SceneGpuContextScope scope{pipeline.geometry().bindless_array(), pipeline.device()};
     const auto visibility = pipeline.frame_buffer()->cur_visibility_buffer_view(pipeline.frame_index() - 1u);
     std::vector<TriangleHit> hits(pipeline.pixel_num());
@@ -754,16 +754,11 @@ void check_svgf_spatial_bypass(vision::Pipeline& pipeline) {
     std::cout << "PASS: rejected neighbours cannot contaminate propagated variance\n";
 }
 
-void check_substrate_sample_classification(vision::Pipeline& pipeline) {
+void check_principled_sample_classification(vision::Pipeline& pipeline) {
     using namespace vision;
     pipeline.activate_global_context();
     MaterialDesc desc;
-    desc.init(ParameterSet{DataWrap::parse(R"({
-        "type":"substrate","name":"substrate-routing-test",
-        "param":{"color":[0.8,0.5,0.2],"spec":[0.05,0.05,0.05],"roughness":0.3,
-                 "normal":{"channels":"xyz","node":"guide-normal"}},
-        "node_tab":{"guide-normal":{"type":"number","param":{"value":[0.6,0.0,0.8]}}}
-    })")});
+    desc.init(ParameterSet{DataWrap::parse(R"({"type":"principled_bsdf","name":"principled-routing-test","param":{"color":[0.8,0.5,0.2],"roughness":0.3,"normal":{"channels":"xyz","node":"guide-normal"},"subsurface_weight":0,"spec_tint":[0.05,0.05,0.05],"two_sided":true},"node_tab":{"guide-normal":{"type":"number","param":{"value":[0.6,0.0,0.8]}}}})")});
     auto material = Material::create_root(desc);
     pipeline.scene().add_material(material);
     pipeline.scene().instances()[0]->set_material(material);
@@ -774,7 +769,7 @@ void check_substrate_sample_classification(vision::Pipeline& pipeline) {
     pipeline.upload_scene_bindless_array();
     Global::SceneGpuContextScope scope{pipeline.geometry().bindless_array(), pipeline.device()};
     auto& sampler = pipeline.renderer().sampler();
-    Kernel kernel = [&](BufferVar<uint> out) {
+    Kernel kernel = [&](BufferVar<uint2> out) {
         sampler->load_data();
         sampler->set_seed(make_uint2(0u), dispatch_id(), Dimension::PathTracing);
         auto ray = make_ray(Float3{make_float3(0.f, 0.f, 3.f)}, Float3{make_float3(0.f, 0.f, -1.f)});
@@ -785,20 +780,32 @@ void check_substrate_sample_classification(vision::Pipeline& pipeline) {
         pipeline.scene().materials().dispatch(it.material_id(), [&](const Material* current) {
             current->build_evaluator(evaluator, it, swl);
         });
-        auto sampled = evaluator.sample(it.wo, sampler);
-        out.write(dispatch_id(), sampled.eval.flags);
+        // Request both denoiser channels independently through a normal map.
+        const Bool specular = (dispatch_id() & 1u) != 0u;
+        BSDFSample sampled{swl};
+        $if(specular) { sampled = evaluator.sample_lobe(it.wo, sampler, true); }
+        $else { sampled = evaluator.sample_lobe(it.wo, sampler, false); };
+        out.write(dispatch_id(), make_uint2(sampled.eval.flags, cast<uint>(sampled.valid())));
     };
-    auto shader = pipeline.device().compile(kernel, "substrate_sample_classification");
-    std::vector<uint> flags(32);
-    auto out = pipeline.device().create_buffer<uint>(flags.size(), "substrate_flags");
+    auto shader = pipeline.device().compile(kernel, "principled_sample_classification");
+    std::vector<uint2> flags(128);
+    auto out = pipeline.device().create_buffer<uint2>(flags.size(), "principled_flags");
     pipeline.stream() << shader(out).dispatch(static_cast<uint>(flags.size()))
                       << out.download(flags.data()) << synchronize() << commit();
-    for (auto value : flags) {
-        if ((value & BxDFFlag::GlossyRefl) != BxDFFlag::GlossyRefl) {
-            throw std::runtime_error("substrate sampled reflection must retain the glossy flag used by its direct-light and albedo split");
+    unsigned valid[2]{};
+    for (unsigned i = 0; i < flags.size(); ++i) {
+        if (flags[i].y == 0u) continue;
+        const bool specular = (i & 1u) != 0u;
+        const auto f = flags[i].x;
+        const bool glossy = (f & (BxDFFlag::Glossy | BxDFFlag::Specular | BxDFFlag::NearSpec)) != 0u;
+        if (glossy != specular || (f & BxDFFlag::Reflection) == 0u) {
+            throw std::runtime_error("Principled guide sampling must retain the requested diffuse/specular reflection class");
         }
+        ++valid[specular];
     }
-    std::cout << "PASS: substrate samples retain glossy reflection classification\n";
+    if (valid[0] == 0u || valid[1] == 0u)
+        throw std::runtime_error("both Principled guide channels must have supported samples");
+    std::cout << "PASS: normal-mapped Principled guide samples retain their lobe classification\n";
 }
 
 void check_motion_visibility_history(vision::Pipeline& pipeline) {

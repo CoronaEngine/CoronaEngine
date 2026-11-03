@@ -3,7 +3,6 @@
 //
 
 #include "base/integral/integrator.h"
-#include "base/integral/radiance_cache.h"
 #include "base/mgr/pipeline.h"
 #include "base/mgr/switch_profile.h"
 #include "base/mgr/evaluation_debug.h"
@@ -72,7 +71,6 @@ private:
     DataWrap scene_restir_settings_;
     SP<StablePlanes> stable_planes_;
     mutable bool stable_resources_dirty_{};
-    SP<ScreenBuffer> specular_buffer_{make_shared<ScreenBuffer>("RealTimeIntegrator::specular_buffer_")};
     Shader<void(uint, float, float, uint)> combine_;
     Shader<void()> merge_dominant_;
     Shader<void()> compose_layers_;
@@ -80,12 +78,11 @@ private:
     Shader<void(uint, float)> compose_denoiser_;
     mutable float2 denoiser_factors_{make_float2(-1.f)};
     Shader<void(uint, Buffer<SurfaceData>)> path_tracing_;
-    SP<RadianceCache> cache_;
 
 public:
     RealTimeIntegrator() = default;
     explicit RealTimeIntegrator(const IntegratorDesc &desc)
-        : IlluminationIntegrator(desc), cache_(Node::create_shared<RadianceCache>(desc.cache_desc)) {
+        : IlluminationIntegrator(desc) {
         max_depth_ = max_depth_.hv() - 1;
     }
 
@@ -94,7 +91,6 @@ public:
         direct_ = make_shared<ReSTIRDI>(shared_from_this(), desc["direct"]);
         indirect_ = make_shared<ReSTIRGI>(shared_from_this(), desc["indirect"]);
         stable_planes_ = make_shared<StablePlanes>(shared_from_this(), direct_->max_recursion());
-        cache_->set_integrator(shared_from_this());
         scene_restir_settings_ = settings();
     }
 
@@ -102,12 +98,11 @@ public:
 
     void restore(vision::RuntimeObject *old_obj) noexcept override {
         IlluminationIntegrator::restore(old_obj);
-        VS_HOTFIX_MOVE_ATTRS(direct_, indirect_, scene_restir_settings_, stable_planes_, stable_resources_dirty_, specular_buffer_,
+        VS_HOTFIX_MOVE_ATTRS(direct_, indirect_, scene_restir_settings_, stable_planes_, stable_resources_dirty_,
                              combine_, merge_dominant_, compose_layers_, prepare_denoiser_, compose_denoiser_, denoiser_factors_, path_tracing_, denoiser_)
         direct_->set_integrator(shared_from_this());
         indirect_->set_integrator(shared_from_this());
         stable_planes_->set_integrator(shared_from_this());
-        cache_->set_integrator(shared_from_this());
     }
 
     void update_resolution(ocarina::uint2 res) noexcept override {
@@ -120,7 +115,7 @@ public:
     }
 
     void update_runtime_object(const vision::IObjectConstructor *constructor) noexcept override {
-        std::tuple tp = {addressof(direct_), addressof(indirect_), addressof(stable_planes_), addressof(cache_)};
+        std::tuple tp = {addressof(direct_), addressof(indirect_), addressof(stable_planes_)};
         HotfixSystem::replace_objects(constructor, tp);
     }
 
@@ -135,22 +130,18 @@ public:
     void prepare() noexcept override {
         switch_profile::Scope profile{"integrator.prepare", "buffers"};
         IlluminationIntegrator::prepare();
-        direct_->prepare();
-        indirect_->prepare();
+        direct_->prepare(denoiser_runtime_disabled() || !denoiser_ || !denoiser_->enabled());
+        indirect_->prepare(denoiser_runtime_disabled() || !denoiser_ || !denoiser_->enabled());
         if (!denoiser_runtime_disabled() && denoiser_ && denoiser_->enabled()) {
             denoiser_->prepare();
         }
-        // This integrator does not query/update a radiance cache yet. Preparing
-        // the SHARC placeholder reserves 176 MiB without affecting transport.
-        Pipeline *rp = pipeline();
-
-        frame_buffer().prepare_screen_buffer(specular_buffer_);
         frame_buffer().prepare_hit_bsdfs();
         frame_buffer().prepare_surfaces();
         frame_buffer().prepare_surface_exts();
+        frame_buffer().prepare_surface_ext_history();
         frame_buffer().prepare_visibility_buffer();
         frame_buffer().prepare_motion_vectors();
-        stable_planes_->prepare();
+        stable_planes_->prepare(!denoiser_runtime_disabled() && denoiser_ && denoiser_->enabled());
         if (denoiser_ && denoiser_->requires_lobe_signals()) frame_buffer().prepare_denoiser_signals();
         stable_resources_dirty_ = false;
     }
@@ -175,7 +166,6 @@ public:
         }
         direct_->render_UI(widgets);
         indirect_->render_UI(widgets);
-        cache_->render_UI(widgets);
     }
 
     [[nodiscard]] DataWrap settings() const override {
@@ -216,11 +206,15 @@ public:
             (denoiser_->enabled() || denoiser_->has_prepared_resources())) {
             denoiser_->compile();
         }
+        compile_composition();
+    }
+
+    void compile_composition() noexcept {
         TSensor &camera = scene().sensor();
         Kernel kernel = [&](Uint frame_index, Float di, Float ii, Uint layered) {
             camera->load_data();
-            Float3 direct = direct_->radiance()->read(dispatch_id()).xyz();
-            Float3 indirect = indirect_->radiance()->read(dispatch_id()).xyz();
+            Float3 direct = direct_->read_radiance(dispatch_id()).xyz();
+            Float3 indirect = indirect_->read_radiance(dispatch_id()).xyz();
             Float3 L = direct * di + indirect * ii;
             $if(layered != 0u) {
                 L = frame_buffer().stable_radiance().read(dispatch_id()).xyz() * di;
@@ -237,8 +231,8 @@ public:
             Uint dominant = frame_buffer().stable_dominant().read(dispatch_id());
             $if(dominant < StablePlaneCount) {
                 Uint address = dominant * (dispatch_dim().x * dispatch_dim().y) + dispatch_id();
-                Float3 direct = frame_buffer().stable_direct().read(address).xyz() + direct_->radiance()->read(dispatch_id()).xyz();
-                Float3 indirect = frame_buffer().stable_indirect().read(address).xyz() + indirect_->radiance()->read(dispatch_id()).xyz();
+                Float3 direct = frame_buffer().stable_direct().read(address).xyz() + direct_->read_radiance(dispatch_id()).xyz();
+                Float3 indirect = frame_buffer().stable_indirect().read(address).xyz() + indirect_->read_radiance(dispatch_id()).xyz();
                 frame_buffer().stable_direct().write(address, make_float4(direct, 1.f));
                 frame_buffer().stable_indirect().write(address, make_float4(indirect, 1.f));
             };
@@ -254,8 +248,8 @@ public:
             }
             // Estimator buffers are no longer needed after the dominant merge.
             // Reuse them for the unscaled complete DirectIndirect pixel signal.
-            direct_->radiance()->write(dispatch_id(), make_float4(direct, 1.f));
-            indirect_->radiance()->write(dispatch_id(), make_float4(indirect, 1.f));
+            direct_->write_radiance(dispatch_id(), make_float4(direct, 1.f));
+            indirect_->write_radiance(dispatch_id(), make_float4(indirect, 1.f));
         };
         compose_layers_ = device().compile(compose, "StablePlanes-ComposeCoverage");
         if (denoiser_ && denoiser_->requires_lobe_signals()) {
@@ -269,8 +263,8 @@ public:
                 Float4 sd = frame_buffer().denoiser_di_specular().read(i);
                 Float4 sg = frame_buffer().denoiser_gi_specular().read(i);
                 Float3 bypass = frame_buffer().denoiser_di_bypass().read(i).xyz();
-                Float3 d = direct_->radiance()->read(i).xyz() - bypass;
-                Float3 g = indirect_->radiance()->read(i).xyz();
+                Float3 d = direct_->read_radiance(i).xyz() - bypass;
+                Float3 g = indirect_->read_radiance(i).xyz();
                 Float3 spec = sd.xyz() * di + sg.xyz() * gi;
                 Float3 diff = (d - sd.xyz()) * di + (g - sg.xyz()) * gi;
                 Float2 wd = make_float2(max(luminance(d - sd.xyz()), 0.f) * di, max(luminance(sd.xyz()), 0.f) * di);
@@ -296,8 +290,8 @@ public:
                     total += frame_buffer().denoiser_diffuse().read(j).xyz() + frame_buffer().denoiser_specular().read(j).xyz() +
                              frame_buffer().denoiser_bypass().read(j).xyz();
                 };
-                direct_->radiance()->write(i, make_float4(total, 1.f));
-                indirect_->radiance()->write(i, make_float4(0.f));
+                direct_->write_radiance(i, make_float4(total, 1.f));
+                indirect_->write_radiance(i, make_float4(0.f));
             };
             compose_denoiser_ = device().compile(compose_lobes, "Denoiser-ComposeReSTIR");
         }
@@ -350,13 +344,33 @@ public:
         const Pipeline *rp = pipeline();
         Stream &stream = rp->stream();
         reset_denoise_timing();
-        if (stable_resources_dirty_) {
+        const bool retain_history = !denoiser_runtime_disabled() && denoiser_ && denoiser_->enabled();
+        if (direct_->compact_radiance() == retain_history || indirect_->compact_radiance() == retain_history) {
+            // Finish the old representation before changing bindings captured by
+            // the DI/GI producers and their raw/denoised composition kernels.
             stream << synchronize() << commit();
-            frame_buffer().manage_stable_plane_buffers(stable_planes_enabled());
+            direct_->set_compact_radiance(!retain_history);
+            indirect_->set_compact_radiance(!retain_history);
             pipeline()->upload_bindless_array();
-            if (denoiser_) { denoiser_->set_stable_planes_enabled(stable_planes_enabled()); }
-            stable_resources_dirty_ = false;
-            pipeline()->invalidate();
+            Global::SceneGpuContextScope scene_gpu_context{
+                scene().geometry().bindless_array(), scene().geometry().gpu_resource()->device()};
+            direct_->compile();
+            indirect_->compile();
+            const_cast<RealTimeIntegrator *>(this)->compile_composition();
+            // Output has no temporal state. Keep the frame sequence and prior
+            // raw stable planes intact for newly enabled denoiser history.
+        }
+        if (stable_resources_dirty_ || frame_buffer().stable_plane_history_retained() != retain_history) {
+            // Resize history before build snapshots the complete previous raw
+            // planes. A history-only switch must preserve those current records.
+            stream << synchronize() << commit();
+            frame_buffer().manage_stable_plane_buffers(stable_planes_enabled(), retain_history);
+            pipeline()->upload_bindless_array();
+            if (stable_resources_dirty_) {
+                if (denoiser_) { denoiser_->set_stable_planes_enabled(stable_planes_enabled()); }
+                stable_resources_dirty_ = false;
+                pipeline()->invalidate();
+            }
         }
         cur_stage_profile_ = {};
         cur_stage_profile_.enabled = stage_profile_runtime_enabled();
@@ -374,8 +388,10 @@ public:
         };
 
         submit(frame_buffer().compute_GBuffer(frame_index_), &cur_stage_profile_.gbuffer_ms);
+        // GBuffer does not write extensions. Save the previous receiver before
+        // either stable-plane build or DI overwrites the full current record.
+        submit(frame_buffer().save_surface_exts_history(frame_index_), &cur_stage_profile_.gbuffer_ms);
         if (stable_planes_enabled()) {
-            const bool retain_history = !denoiser_runtime_disabled() && denoiser_ && denoiser_->enabled();
             submit(stable_planes_->build(frame_index_, jitter_primary_samples(), retain_history), &cur_stage_profile_.stable_build_ms);
             submit(stable_planes_->fill(frame_index_, direct_->factor(), indirect_->factor()), &cur_stage_profile_.stable_fill_ms);
         }
@@ -386,9 +402,8 @@ public:
             const auto directory = evaluation_debug::directory(frame_index_);
             if (directory.empty()) return;
             fs::create_directories(directory);
-            vector<float4> direct(rp->pixel_num()), indirect(rp->pixel_num());
-            stream << direct_->radiance()->view().download(direct.data())
-                << indirect_->radiance()->view().download(indirect.data()) << synchronize() << commit();
+            vector<float4> direct = direct_->download_radiance();
+            vector<float4> indirect = indirect_->download_radiance();
             auto write = [&](const char *channel, const auto &pixels) {
                 std::ofstream out(fs::path(directory) / (std::string(stage) + channel + ".f32"), std::ios::binary);
                 out.write(reinterpret_cast<const char *>(pixels.data()), pixels.size() * sizeof(float4));
@@ -406,6 +421,22 @@ public:
                 }
             }
         };
+        if (std::getenv("VISION_EVAL_GI_STORAGE_DEBUG") != nullptr) {
+            const auto directory = evaluation_debug::directory(frame_index_);
+            if (!directory.empty()) {
+                debug_readback("producer", false);
+                vector<GISample> samples;
+                vector<GIReservoir> reservoirs;
+                indirect_->download_storage(samples, reservoirs);
+                auto write_storage = [&](const char *name, const auto &values) {
+                    std::ofstream out(directory / name, std::ios::binary);
+                    out.write(reinterpret_cast<const char *>(values.data()), values.size() * sizeof(values[0]));
+                    if (!out) throw std::runtime_error("GI storage diagnostic write failed");
+                };
+                write_storage("gi_samples.bin", samples);
+                write_storage("gi_reservoirs.bin", reservoirs);
+            }
+        }
         if (stable_planes_enabled()) {
             submit(merge_dominant_().dispatch(pipeline()->resolution()), &cur_stage_profile_.combine_ms);
         }

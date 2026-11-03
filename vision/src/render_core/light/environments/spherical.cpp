@@ -153,7 +153,8 @@ public:
     }
 
     [[nodiscard]] LightSample evaluate_point(const LightSampleContext &p_ref, LightSurfacePoint lsp,
-                                             const SampledWavelengths &swl, LightEvalMode mode) const noexcept override {
+                                             const SampledWavelengths &swl, LightEvalMode mode,
+                                             LightEvalContext * = nullptr) const noexcept override {
         Float pdf_map = 0.f;
         if (match_PDF(mode)) {
             pdf_map = warper_->PDF(lsp.bary);

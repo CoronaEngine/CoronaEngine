@@ -18,7 +18,7 @@ public:
     VS_MAKE_PLUGIN_NAME_FUNC
     void prepare() noexcept override {
         switch_profile::Scope profile{"pipeline.prepare", "resources"};
-        Pipeline::prepare();
+        Pipeline::prepare(!defer_base_compile_);
         scene().prepare();
         renderer_.prepare(scene(), !defer_base_compile_);
         image_pool().prepare(stream());
@@ -28,16 +28,6 @@ public:
             compile();
         }
         preprocess();
-    }
-
-    void init_project(const vision::ProjectDesc &project_desc) override {
-        Pipeline::init_project(project_desc);
-        init_postprocessor(project_desc.renderer_desc.denoiser_desc);
-    }
-
-    void init_postprocessor(const DenoiserDesc &desc) override {
-//        postprocessor_.set_denoiser(Node::create_shared<Denoiser>(desc));
-        postprocessor_.set_tone_mapper(renderer_.frame_buffer()->tone_mapper());
     }
 
     void change_resolution(uint2 res) noexcept override {
@@ -79,6 +69,8 @@ public:
         // Standalone/base rendering remains supported on its first actual use.
         if (active_renderer_ == &renderer_ && !base_compiled_) {
             if (defer_base_compile_) {
+                frame_buffer()->prepare();
+                frame_buffer()->prepare_view_texture();
                 integrator()->prepare();
                 upload_bindless_array();
             }

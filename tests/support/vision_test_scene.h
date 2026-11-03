@@ -58,7 +58,6 @@ inline auto make_vision_test_pipeline(const vision::DataWrap& configuration,
         group->post_init(shape);
         scene.add_shape(group, shape);
     }
-    pipeline->init_postprocessor(desc.renderer_desc.denoiser_desc);
     return pipeline;
 }
 

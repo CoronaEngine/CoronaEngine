@@ -5,9 +5,9 @@
 #pragma once
 
 #include "common.h"
+#include "gi_radiance_storage.h"
 #include "base/mgr/switch_profile.h"
 #include "reservoir.h"
-#include "base/sensor/upsampler.h"
 
 namespace vision {
 struct GIParam {
@@ -41,7 +41,7 @@ class RayTracingIntegrator;
 
 class ReSTIRGI : public ReSTIR {
 private:
-    SP<ScreenBuffer> radiance_{make_shared<ScreenBuffer>("ReSTIRGI::radiance_")};
+    SP<ScreenBuffer> radiance_{make_shared<ScreenBuffer>("ReSTIRGI::radiance_ [gi-radiance-v1]")};
     RegistrableBuffer<float4> rt_buffer_;
     RegistrableBuffer<GIReservoir> reservoirs_{pipeline()->bindless_array()};
     RegistrableBuffer<GISample> samples_{pipeline()->bindless_array()};
@@ -62,18 +62,34 @@ private:
      */
     Shader<void(GIParam, uint)> spatial_shading_;
 
+    // Keep existing fields before these additions for the pre-move ABI check.
+    mutable RegistrableBuffer<uint2> raw_radiance_{pipeline()->bindless_array()};
+    bool compact_radiance_{};
+    bool radiance_prepared_{};
+
 protected:
     [[nodiscard]] static TSampler &sampler() noexcept { return renderer().sampler(); }
 
 public:
     ReSTIRGI() = default;
     ReSTIRGI(IntegratorPtr integrator, const ParameterSet &desc);
-    VS_HOTFIX_MAKE_RESTORE(ReSTIR, radiance_, reservoirs_, samples_, sample_num_, ratio_, debias_,
-                           initial_samples_, temporal_pass_, spatial_shading_)
+    void restore(RuntimeObject *old_obj) noexcept override;
     OC_MAKE_MEMBER_GETTER(open, )
     OC_MAKE_MEMBER_GETTER(radiance, &)
     [[nodiscard]] float factor() const noexcept { return open() ? factor_ : 0.f; }
-    void prepare() noexcept;
+    void prepare(bool compact_radiance = false) noexcept;
+    void set_compact_radiance(bool compact) noexcept;
+    [[nodiscard]] bool compact_radiance() const noexcept { return compact_radiance_; }
+    [[nodiscard]] const RegistrableBuffer<uint2> &raw_radiance() const noexcept { return raw_radiance_; }
+    [[nodiscard]] Float4 read_radiance(const Uint &index) const noexcept {
+        return compact_radiance_ ? unpack_gi_radiance(raw_radiance_.read(index)) : radiance_->read(index);
+    }
+    void write_radiance(const Uint &index, const Float4 &value) const noexcept {
+        if (compact_radiance_) raw_radiance_.write(index, pack_gi_radiance(value));
+        else radiance_->write(index, value);
+    }
+    [[nodiscard]] vector<float4> download_radiance() const noexcept;
+    void download_storage(vector<GISample> &samples, vector<GIReservoir> &reservoirs) const noexcept;
     bool render_UI(Widgets *widgets) noexcept override;
     void render_sub_UI(Widgets *widgets) noexcept override;
     HOTFIX_VIRTUAL void compile_initial_samples() noexcept;
@@ -130,14 +146,16 @@ public:
                                                  param.diff_factor, prev_depth);
     }
     [[nodiscard]] Uint reservoir_base() const noexcept { return reservoirs_.index_var(); }
+    // Final history stays in slice A. Temporal gathers A into scratch B;
+    // the following spatial dispatch gathers B and replaces A.
     [[nodiscard]] auto prev_reservoirs() const noexcept {
-        return pipeline()->bindless_array().buffer_var<GIReservoir>((frame_index() & 1) + reservoir_base());
+        return pipeline()->bindless_array().buffer_var<GIReservoir>(reservoir_base());
     }
     [[nodiscard]] auto cur_reservoirs() const noexcept {
-        return pipeline()->bindless_array().buffer_var<GIReservoir>(((frame_index() + 1) & 1) + reservoir_base());
+        return pipeline()->bindless_array().buffer_var<GIReservoir>(reservoir_base());
     }
     [[nodiscard]] auto passthrough_reservoirs() const noexcept {
-        return pipeline()->bindless_array().buffer_var<GIReservoir>(2 + reservoir_base());
+        return pipeline()->bindless_array().buffer_var<GIReservoir>(1 + reservoir_base());
     }
     [[nodiscard]] GIParam construct_param() const noexcept;
     [[nodiscard]] CommandBatch dispatch(uint frame_index) const noexcept;

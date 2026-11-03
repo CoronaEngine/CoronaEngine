@@ -1,14 +1,7 @@
 #pragma once
 
-// Phase 4 of the ImGui-removal plan: a thin raw-SDL window manager that takes over the
-// job currently done by ImGui's imgui_impl_sdl3 platform layer. In Phase 4 it only wraps
-// the single main window (created today in imgui_ui.cpp); create/destroy_secondary_window
-// are stubs filled in Phase 7 (detach / re-dock).
-//
-// It is intentionally decoupled from ImGui: windows are identified by SDL_WindowID and the
-// native surface handle (HWND on Windows / NSWindow* on macOS) used as the DisplaySystem
-// surface key. Nothing references this manager yet in Phase 4 — it is wired into the frame
-// loop in Phase 6.
+// Tracks native windows and coordinates Display surface registration/retirement.
+// ImGui's SDL backend owns platform windows; legacy callers may still own raw SDL windows.
 
 #include <SDL3/SDL.h>
 
@@ -63,6 +56,9 @@ class SdlWindowManager {
     // window's native surface is resolved and stored. Returns false if the handle is null
     // or the surface cannot be resolved.
     bool adopt_main_window(SDL_Window* window);
+    // ImGui's SDL backend owns these windows; this manager owns only Display registration.
+    bool adopt_platform_window(SDL_Window* window);
+    void forget_platform_window(SDL_WindowID id);
 
     // Lookups.
     [[nodiscard]] SDL_Window* main_window() const { return main_window_; }

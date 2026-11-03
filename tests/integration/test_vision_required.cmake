@@ -1,4 +1,4 @@
-# Vision is required by Optics independently of the standalone app/test options.
+# Vision is required by Optics independently of the optional test targets.
 # Run in the parent configure, where CMake can inspect the real build graph.
 block()
     foreach(required_target IN ITEMS corona_optics_system vision-all_libs
@@ -9,9 +9,16 @@ block()
     endforeach()
 
     foreach(retired_target IN ITEMS vision-importer-json vision-importer-assimp
-            vision-shape-model vision-gui vision-eval)
+            vision-shape-model vision-gui vision-eval
+            vision-pipeline-bake vision-uvunwrapper vision-uvunwrapper-xatlas
+            vision-rasterizer vision-rasterizer-cpu vision-ext-xatlas xatlas
+            vision-radiancecache vision-radiancecache-sharc
+            vision-upsampler vision-upsampler-bilateral vision-lightsampler-bvh
+            vision-pipeline-customized vision-render_graph vision-pass
+            vision-pass-integrate vision-pass-accumulate vision-pass-tonemapping
+            vision-pass-gamma test-render_graph)
         if(TARGET "${retired_target}")
-            message(FATAL_ERROR "Retired Vision archive target is still registered: ${retired_target}")
+            message(FATAL_ERROR "Retired Vision target is still registered: ${retired_target}")
         endif()
     endforeach()
 

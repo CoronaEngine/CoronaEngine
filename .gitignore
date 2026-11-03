@@ -5,11 +5,14 @@
 /out/
 /dist/
 /cmake-build-*/
+/downloads/mitsuba/
 
-# Managed source workspaces. Keep lock files tracked.
+# Managed source workspaces (baselines live in build_tools/source_workspaces.py).
+/Horizon/
 /CoronaEditor/
-/.workspace/*
-!/.workspace/horizon.lock.json
+
+# Local experiment and validation artifacts
+/.workspace/
 
 # CMake intermediate files
 CMakeUserPresets.json

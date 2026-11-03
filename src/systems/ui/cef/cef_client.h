@@ -39,7 +39,10 @@ class OffscreenRenderHandler : public CefRenderHandler {
                             const CefAcceleratedPaintInfo& info) override;
     void OnPopupShow(CefRefPtr<CefBrowser> browser, bool show) override;
     void OnPopupSize(CefRefPtr<CefBrowser> browser, const CefRect& rect) override;
-    bool GetScreenPoint(CefRefPtr<CefBrowser> browser, int viewX, int viewY, int& screenX, int& screenY);
+    bool GetScreenPoint(CefRefPtr<CefBrowser> browser, int viewX, int viewY, int& screenX, int& screenY) override;
+    bool GetScreenInfo(CefRefPtr<CefBrowser> browser, CefScreenInfo& info) override;
+    void OnImeCompositionRangeChanged(CefRefPtr<CefBrowser> browser, const CefRange& range,
+                                      const RectList& bounds) override;
     void SetTab(BrowserTab* tab);
 
     IMPLEMENT_REFCOUNTING(OffscreenRenderHandler);

@@ -88,6 +88,7 @@ void OffscreenRenderHandler::GetViewRect(CefRefPtr<CefBrowser> browser, CefRect&
     std::lock_guard lock(tab_mutex_);
     BrowserTab* t = tab_;
     if (t) {
+        std::lock_guard geometry_lock(t->mutex);
         rect = CefRect(0, 0, t->width, t->height);
     } else {
         rect = CefRect(0, 0, 800, 600);
@@ -281,17 +282,35 @@ bool OffscreenRenderHandler::GetScreenPoint(CefRefPtr<CefBrowser> browser, int v
     std::lock_guard lock(tab_mutex_);
     if (!tab_) return false;
 
-    // 将局部坐标转换成屏幕绝对坐标
-    POINT mouse_pt;
-    GetCursorPos(&mouse_pt);
-    screenX = mouse_pt.x;
-    screenY = mouse_pt.y;
+    std::lock_guard geometry_lock(tab_->mutex);
+    screenX = tab_->content_screen_x + static_cast<int>(viewX * tab_->content_screen_scale);
+    screenY = tab_->content_screen_y + static_cast<int>(viewY * tab_->content_screen_scale);
     return true;
 }
 
 void OffscreenRenderHandler::SetTab(BrowserTab* tab) {
     std::lock_guard lock(tab_mutex_);
     tab_ = tab;
+}
+
+bool OffscreenRenderHandler::GetScreenInfo(CefRefPtr<CefBrowser>, CefScreenInfo& info) {
+    std::lock_guard lock(tab_mutex_);
+    if (!tab_) return false;
+    std::lock_guard geometry_lock(tab_->mutex);
+    // OSR buffers and popup composition currently use logical pixels. The final
+    // ImGui image scales them to the host framebuffer; do not request HiDPI paint
+    // buffers until the upload/resize contract also supports that resolution.
+    info.device_scale_factor = 1.0f;
+    info.rect = info.available_rect = CefRect(0, 0, tab_->width, tab_->height);
+    return true;
+}
+
+void OffscreenRenderHandler::OnImeCompositionRangeChanged(CefRefPtr<CefBrowser>,
+    const CefRange& range, const RectList& bounds) {
+    std::lock_guard lock(tab_mutex_);
+    if (!tab_ || bounds.empty()) return;
+    std::lock_guard geometry_lock(tab_->mutex);
+    tab_->ime_caret = bounds[std::min<std::size_t>(range.to, bounds.size() - 1)];
 }
 
 // ============================================================================

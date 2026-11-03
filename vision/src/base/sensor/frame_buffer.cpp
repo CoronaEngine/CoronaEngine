@@ -20,20 +20,24 @@ FrameBuffer::FrameBuffer(const vision::FrameBufferDesc &desc)
       resolution_(desc["resolution"].as_uint2(make_uint2(1280, 720))),
       screen_window_(make_float2(-1.f), make_float2(1.f)),
       exposure_(desc["exposure"].as_float(1.f)),
-      accumulation_(desc["accumulation"].as_bool(true)),
-      upsampler_(Node::create_shared<Upsampler>(desc.upsampler_desc)) {
+      accumulation_(desc["accumulation"].as_bool(true)) {
     visualizer_->init();
     update_screen_window();
     resize(resolution_);
 }
 
 void FrameBuffer::prepare() noexcept {
+    prepare(true);
+}
+
+void FrameBuffer::prepare(bool allocate_pixel_buffers) noexcept {
     encode_data();
     datas().reset_device_buffer_immediately(device(), "FrameBuffer::encoded_data");
     datas().register_self();
     datas().upload_immediately();
-    auto_manage_accumulation_buffer(accumulation_.hv());
     init_hit_buffer();
+    if (!allocate_pixel_buffers) { return; }
+    auto_manage_accumulation_buffer(accumulation_.hv());
     prepare_rt_buffer();
     prepare_rays();
 }
@@ -52,7 +56,7 @@ void FrameBuffer::prepare_view_texture(uint external_handle) {
 }
 
 void FrameBuffer::update_runtime_object(const vision::IObjectConstructor *constructor) noexcept {
-    std::tuple tp = {addressof(visualizer_), addressof(tone_mapper_.impl()), addressof(upsampler_)};
+    std::tuple tp = {addressof(visualizer_), addressof(tone_mapper_.impl())};
     HotfixSystem::replace_objects(constructor, tp);
 }
 
@@ -78,7 +82,9 @@ void FrameBuffer::render_sub_UI(Widgets *widgets) noexcept {
     changed_ |= widgets->drag_float("exposure", &exposure_.hv(), 0.01f, 0.f, 10.f);
     auto addr = reinterpret_cast<bool *>(&accumulation_.hv());
     changed_ |= widgets->check_box("accumulation", addr);
-    auto_manage_accumulation_buffer(accumulation_.hv());
+    if (rt_buffer_.device_buffer().size() != 0u) {
+        auto_manage_accumulation_buffer(accumulation_.hv());
+    }
     tone_mapper_->render_UI(widgets);
     for (auto iter = screen_buffers_.begin();
          iter != screen_buffers_.end(); ++iter) {
@@ -240,6 +246,29 @@ void FrameBuffer::compile() noexcept {
     compile_compute_hit();
     compile_accumulation();
     compile_tone_mapping();
+    compile_surface_exts_history();
+}
+
+void FrameBuffer::compile_surface_exts_history() noexcept {
+    // Copy words rather than performing FP operations, preserving every FP32
+    // bit (including signed zero and NaN payloads) in the receiver position.
+    Kernel kernel = [](BufferVar<uint> current, BufferVar<uint> previous) {
+        Uint index = dispatch_id();
+        constexpr uint stride = sizeof(SurfaceExtend) / sizeof(uint);
+        constexpr uint offset = offsetof(SurfaceExtend, view_pos) / sizeof(uint);
+        for (uint component = 0u; component < 3u; ++component) {
+            previous.write(index * 3u + component, current.read(index * stride + offset + component));
+        }
+    };
+    save_surface_exts_history_ = device().compile(kernel, "FrameBuffer-SaveSurfaceExtHistory");
+}
+
+CommandBatch FrameBuffer::save_surface_exts_history(uint frame_index) const noexcept {
+    CommandBatch ret;
+    if (frame_index == 0u || surface_exts_size() == 0u || surface_ext_history_size() == 0u) { return ret; }
+    ret << save_surface_exts_history_(surface_exts_.view_as<uint>(), surface_ext_history_.view_as<uint>())
+               .dispatch(frame_buffer_size());
+    return ret;
 }
 
 CommandBatch FrameBuffer::compute_hit(uint frame_index, uint2 pixel) const noexcept {
@@ -349,6 +378,7 @@ void FrameBuffer::unregister(const std::string &name) noexcept {
     if (iter == screen_buffers_.end()) {
         OC_ERROR("");
     }
+    if (cur_view_ == name) cur_view_ = final_result;
     screen_buffers_.erase(iter);
 }
 
@@ -374,19 +404,21 @@ void FrameBuffer::resize(ocarina::uint2 res) noexcept {
     resolution_ = res;
 }
 
-void FrameBuffer::manage_stable_plane_buffers(bool enabled) noexcept {
+void FrameBuffer::manage_stable_plane_buffers(bool enabled, bool retain_history) noexcept {
     stable_plane_buffers_enabled_ = enabled;
+    stable_plane_history_retained_ = retain_history;
     uint pixels = enabled ? frame_buffer_size() : 1u;
-    auto resize = [&]<typename T>(RegistrableBuffer<T> &buffer, uint count, const char *name) {
-        if (buffer.size() == count * pixels) { return; }
-        init_buffer_impl(buffer, buffer.has_registered(), name, count, pixels);
+    uint history_pixels = enabled && retain_history ? frame_buffer_size() : 1u;
+    auto resize = [&]<typename T>(RegistrableBuffer<T> &buffer, uint count, uint view_pixels, const char *name) {
+        if (buffer.size() == count * view_pixels) { return; }
+        init_buffer_impl(buffer, buffer.has_registered(), name, count, view_pixels);
     };
-    resize(stable_planes_, StablePlaneCount, "FrameBuffer::stable_planes");
-    resize(stable_plane_history_, StablePlaneCount, "FrameBuffer::stable_plane_history");
-    resize(stable_direct_, StablePlaneCount, "FrameBuffer::stable_direct");
-    resize(stable_indirect_, StablePlaneCount, "FrameBuffer::stable_indirect");
-    resize(stable_radiance_, 1u, "FrameBuffer::stable_radiance");
-    resize(stable_dominant_, 1u, "FrameBuffer::stable_dominant");
+    resize(stable_planes_, StablePlaneCount, pixels, "FrameBuffer::stable_planes");
+    resize(stable_plane_history_, StablePlaneCount, history_pixels, "FrameBuffer::stable_plane_history");
+    resize(stable_direct_, StablePlaneCount, pixels, "FrameBuffer::stable_direct");
+    resize(stable_indirect_, StablePlaneCount, pixels, "FrameBuffer::stable_indirect");
+    resize(stable_radiance_, 1u, pixels, "FrameBuffer::stable_radiance");
+    resize(stable_dominant_, 1u, pixels, "FrameBuffer::stable_dominant");
 }
 
 void FrameBuffer::update_resolution(ocarina::uint2 res) noexcept {
@@ -396,7 +428,8 @@ void FrameBuffer::update_resolution(ocarina::uint2 res) noexcept {
     resize(res);
     reset_surfaces();
     reset_surface_exts();
-    if (stable_planes_.has_registered()) { manage_stable_plane_buffers(stable_plane_buffers_enabled_); }
+    reset_surface_ext_history();
+    if (stable_planes_.has_registered()) { manage_stable_plane_buffers(stable_plane_buffers_enabled_, stable_plane_history_retained_); }
     reset_motion_vectors();
     reset_hit_bsdfs();
     reset_rt_buffer();
@@ -408,7 +441,10 @@ void FrameBuffer::update_resolution(ocarina::uint2 res) noexcept {
     reset_rays();
     reset_visibility_buffer();
     update_screen_window();
-    auto_manage_accumulation_buffer(accumulation_.hv());
+    // Data-only embedded bases have no pixel storage until their first render.
+    if (rt_buffer_.device_buffer().size() != 0u) {
+        auto_manage_accumulation_buffer(accumulation_.hv());
+    }
     for (auto &it : screen_buffers_) {
         it.second->update_resolution(res, device());
     }

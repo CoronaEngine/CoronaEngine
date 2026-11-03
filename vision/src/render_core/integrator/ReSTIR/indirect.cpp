@@ -112,7 +112,7 @@ void ReSTIRGI::compile_initial_samples() noexcept {
         initial(sampler(), frame_index, spectrum);
         SurfaceDataVar surf = cur_surfaces().read(dispatch_id());
         $if(surf.hit->is_miss()) {
-            radiance_->write(dispatch_id(), make_float4(0.f));
+            write_radiance(dispatch_id(), make_float4(0.f));
             $return();
         };
         camera->load_data();
@@ -127,6 +127,7 @@ void ReSTIRGI::compile_initial_samples() noexcept {
         GISampleVar sample = init_sample(it, ss, hit_bsdf);
         samples_.write(dispatch_id(), sample);
     };
+    kernel.function()->set_block_dim(32u, 1u, 1u);
     initial_samples_ = device().compile(kernel, "ReSTIR indirect initial samples");
 }
 
@@ -325,9 +326,9 @@ GIReservoirVar ReSTIRGI::constant_combine(const GIReservoirVar &canonical_rsv,
         Float weight = 0.f;
         $if(rsv.W > 0.f && rsv.sample.sp->valid()) {
             SurfaceDataVar neighbor_surf = cur_surfaces().read(idx);
-            Interaction neighbor_it = pipeline()->geometry().compute_surface_interaction(neighbor_surf.hit, cur_view_pos(neighbor_surf.is_replaced, idx));
+            Float3 neighbor_pos = neighbor_surf->position();
             Float p_hat = compute_p_hat(canonical_it, rsv.sample);
-            p_hat = p_hat * Jacobian_det(canonical_it.pos, neighbor_it.pos, rsv.sample.sp);
+            p_hat = p_hat * Jacobian_det(canonical_it.pos, neighbor_pos, rsv.sample.sp);
             $if(p_hat > 0.f) {
                 Float v = pipeline()->geometry().visibility(canonical_it, rsv.sample.sp->position());
                 weight = GIReservoir::safe_weight(rsv.C, p_hat, rsv.W) * v;
@@ -442,10 +443,11 @@ void ReSTIRGI::compile_spatial_shading() noexcept {
         rsv = spatial_reuse(rsv, surf, make_int2(dispatch_idx().xy()), param);
         Float3 specular = make_float3(0.f); Float distance = 0.f;
         Float3 L = shading(rsv, surf, lobes ? &specular : nullptr, lobes ? &distance : nullptr);
-        radiance_->write(dispatch_id(), make_float4(L, 1.f));
+        write_radiance(dispatch_id(), make_float4(L, 1.f));
         if (lobes) frame_buffer().denoiser_gi_specular().write(dispatch_id(), make_float4(specular, distance));
         cur_reservoirs().write(dispatch_id(), rsv);
     };
+    kernel.function()->set_block_dim(8u, 8u, 1u);
     spatial_shading_ = device().compile(kernel, "ReSTIR indirect spatial reuse and shading");
 }
 
@@ -484,12 +486,17 @@ CommandBatch ReSTIRGI::dispatch(uint frame_index) const noexcept {
 
 void ReSTIRGI::update_resolution(ocarina::uint2 res) noexcept {
     Pipeline *rp = pipeline();
-    reservoirs_.super() = device().create_buffer<GIReservoir>(rp->pixel_num() * 3,
-                                                              "ReSTIRGI::reservoirs_ x 3");
+    if (compact_radiance_) {
+        raw_radiance_.super() = device().create_buffer<uint2>(rp->pixel_num(), radiance_->name() + " rgb21");
+        raw_radiance_.register_self();
+        vector<uint2> zero(rp->pixel_num(), make_uint2(0u));
+        raw_radiance_.upload_immediately(zero.data());
+    }
+    reservoirs_.super() = device().create_buffer<GIReservoir>(rp->pixel_num() * 2,
+                                                              "ReSTIRGI::reservoirs_ x 2");
     reservoirs_.register_self(0, rp->pixel_num());
     reservoirs_.register_view_index(1, rp->pixel_num(), rp->pixel_num());
-    reservoirs_.register_view_index(2, rp->pixel_num() * 2, rp->pixel_num());
-    vector<GIReservoir> host{rp->pixel_num() * 3, GIReservoir{}};
+    vector<GIReservoir> host{rp->pixel_num() * 2, GIReservoir{}};
     reservoirs_.upload_immediately(host.data());
 
     samples_.super() = device().create_buffer<GISample>(rp->pixel_num(),
@@ -499,18 +506,75 @@ void ReSTIRGI::update_resolution(ocarina::uint2 res) noexcept {
     samples_.upload_immediately(vec.data());
 }
 
-void ReSTIRGI::prepare() noexcept {
+void ReSTIRGI::download_storage(vector<GISample> &samples, vector<GIReservoir> &reservoirs) const noexcept {
+    samples.resize(pipeline()->pixel_num());
+    reservoirs.resize(pipeline()->pixel_num() * 2u);
+    pipeline()->stream() << samples_.view().download(samples.data())
+                         << reservoirs_.view().download(reservoirs.data()) << synchronize() << commit();
+}
+
+void ReSTIRGI::restore(RuntimeObject *old_obj) noexcept {
+    const auto *previous = dynamic_cast<ReSTIRGI *>(old_obj);
+    OC_ERROR_IF(!previous->radiance_->name().ends_with(" [gi-radiance-v1]"),
+                "GI radiance storage ABI changed; restart the engine before loading the new shaders.");
+    ReSTIR::restore(old_obj);
+    VS_HOTFIX_MOVE_ATTRS(radiance_, reservoirs_, samples_, sample_num_, ratio_, debias_,
+                       initial_samples_, temporal_pass_, spatial_shading_, raw_radiance_, compact_radiance_, radiance_prepared_)
+}
+
+void ReSTIRGI::set_compact_radiance(bool compact) noexcept {
+    if (radiance_prepared_ && compact == compact_radiance_) return;
+    const string suffix = " [gi-radiance-v1]";
+    if (!radiance_->name().ends_with(suffix)) radiance_->set_name(radiance_->name() + suffix);
+    ByteBufferView empty{handle_ty{0u}, 0u};
+    if (radiance_prepared_) {
+        // remove_buffer renumbers later slots; preserve their captured indices.
+        if (compact_radiance_) {
+            pipeline()->bindless_array().set_buffer(raw_radiance_.index().hv(), empty);
+            raw_radiance_.super().destroy();
+        } else {
+            frame_buffer().unregister(radiance_);
+            pipeline()->bindless_array().set_buffer(radiance_->index().hv(), empty);
+            radiance_->clear_all();
+        }
+    }
+    compact_radiance_ = compact;
+    if (compact) {
+        raw_radiance_.super() = device().create_buffer<uint2>(pipeline()->pixel_num(), radiance_->name() + " rgb21");
+        raw_radiance_.register_self();
+        vector<uint2> zero(pipeline()->pixel_num(), make_uint2(0u));
+        raw_radiance_.upload_immediately(zero.data());
+    } else {
+        frame_buffer().prepare_screen_buffer(radiance_);
+        vector<float4> zero(pipeline()->pixel_num(), make_float4(0.f));
+        radiance_->device_buffer().upload_immediately(zero.data());
+    }
+    radiance_prepared_ = true;
+}
+
+vector<float4> ReSTIRGI::download_radiance() const noexcept {
+    vector<float4> result(pipeline()->pixel_num());
+    if (compact_radiance_) {
+        vector<uint2> stored(result.size());
+        pipeline()->stream() << raw_radiance_.view().download(stored.data()) << synchronize() << commit();
+        for (size_t i = 0u; i < result.size(); ++i) result[i] = unpack_gi_radiance_host(stored[i]);
+    } else {
+        pipeline()->stream() << radiance_->view().download(result.data()) << synchronize() << commit();
+    }
+    return result;
+}
+
+void ReSTIRGI::prepare(bool compact_radiance) noexcept {
     switch_profile::Scope profile{"ReSTIRGI::prepare", "buffers"};
     Pipeline *rp = pipeline();
 
-    frame_buffer().prepare_screen_buffer(radiance_);
+    set_compact_radiance(compact_radiance);
 
-    reservoirs_.super() = device().create_buffer<GIReservoir>(rp->pixel_num() * 3,
-                                                              "ReSTIRGI::reservoirs_ x 3");
+    reservoirs_.super() = device().create_buffer<GIReservoir>(rp->pixel_num() * 2,
+                                                              "ReSTIRGI::reservoirs_ x 2");
     reservoirs_.register_self(0, rp->pixel_num());
     reservoirs_.register_view(rp->pixel_num(), rp->pixel_num());
-    reservoirs_.register_view(rp->pixel_num() * 2, rp->pixel_num());
-    vector<GIReservoir> host{rp->pixel_num() * 3, GIReservoir{}};
+    vector<GIReservoir> host{rp->pixel_num() * 2, GIReservoir{}};
     reservoirs_.upload_immediately(host.data());
 
     samples_.super() = device().create_buffer<GISample>(rp->pixel_num(),

@@ -22,7 +22,7 @@
 void check_camera_dolly_reprojection(vision::Pipeline& pipeline);
 void check_svgf_restir_motion_history(vision::Pipeline& pipeline);
 void check_motion_visibility_history(vision::Pipeline& pipeline);
-void check_substrate_sample_classification(vision::Pipeline& pipeline);
+void check_principled_sample_classification(vision::Pipeline& pipeline);
 void check_svgf_shading_guide(vision::Pipeline& pipeline);
 void check_svgf_total_albedo(vision::Pipeline& pipeline);
 void check_svgf_spatial_bypass(vision::Pipeline& pipeline);
@@ -1102,16 +1102,30 @@ struct VisionEngineSceneTest {
         Vision::sync_vision_camera(*engine_restir, camera);
         expect(engine_restir->renderer().integrator()->impl_type() == "rt",
                "engine-built mode must select rt");
+        expect(engine_restir->frame_buffer()->rays().size() == 0u &&
+                   engine_restir->frame_buffer()->rt_buffer().device_buffer().size() == 0u &&
+                   engine_restir->frame_buffer()->view_texture().handle() == 0u,
+               "an unused embedded base must not allocate per-pixel buffers or a display image");
         // The fixture registers no engine geometry or environment. Its empty
         // engine-built scene must remain finite and black through both modes.
         render(*engine_restir, "Engine-ReSTIR", false);
+        expect(engine_restir->frame_buffer()->rays().size() == engine_restir->pixel_num() &&
+                   engine_restir->frame_buffer()->rt_buffer().device_buffer().size() == engine_restir->pixel_num() &&
+                   engine_restir->frame_buffer()->view_texture().handle() != 0u,
+               "the first actual base render must prepare its pixel buffers and display image");
         system.apply_vision_render_mode(CameraVisionRenderMode::ProgressivePathTracing);
         auto engine_pt = vision::Global::instance().pipeline_shared();
         Vision::sync_vision_camera(*engine_pt, camera);
         expect(engine_pt != engine_restir && engine_pt->renderer().integrator()->impl_type() == "pt" &&
                    engine_pt->frame_buffer()->enable_accumulation(),
                "engine-built switch must replace rt with progressive pt");
+        expect(engine_pt->frame_buffer()->accumulation_buffer().device_buffer().size() == 0u &&
+                   engine_pt->frame_buffer()->rays().size() == 0u &&
+                   engine_pt->frame_buffer()->rt_buffer().device_buffer().size() == 0u,
+               "resizing an unused progressive base must not allocate pixel or accumulation buffers");
         render(*engine_pt, "Engine-Progressive", false);
+        expect(engine_pt->frame_buffer()->accumulation_buffer().device_buffer().size() == engine_pt->pixel_num(),
+               "the first progressive base render must prepare its accumulation buffer");
         system.apply_vision_render_mode(CameraVisionRenderMode::ReSTIR);
         auto engine_return = vision::Global::instance().pipeline_shared();
         Vision::sync_vision_camera(*engine_return, camera);
@@ -1230,6 +1244,13 @@ struct VisionEngineSceneTest {
         hub.geometry_storage().deallocate(geometry);
         hub.model_transform_storage().deallocate(transform);
         hub.model_resource_storage().deallocate(model);
+        if (!shared_display_only) {
+            // Exercise the embedded base fallback after removing the fixture's
+            // geometry/environment, so its deterministic output is black.
+            vision::Global::instance().set_device(&device);
+            OpticsSystem system;
+            check_engine_modes(system);
+        }
         std::cout << "PASS: Corona resource import and Vision rendering/settings\n";
     }
 

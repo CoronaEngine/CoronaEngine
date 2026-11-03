@@ -14,9 +14,11 @@ void sync_vision_camera(::vision::Pipeline& pipeline, const CameraDevice& camera
     bool invalidate = false;
     if (ocarina::any(pipeline.resolution() != state.resolution)) {
         pipeline.change_resolution(state.resolution);
-        // Resolution changes resize the pixel buffers, but the output texture
-        // must also be recreated before tone mapping writes into it.
-        pipeline.frame_buffer()->prepare_view_texture();
+        // Resize an existing output; an embedded base may only hold scene data
+        // and must not acquire a display texture before its first real render.
+        if (pipeline.frame_buffer()->view_texture().handle() != 0u) {
+            pipeline.frame_buffer()->prepare_view_texture();
+        }
         invalidate = true;
     }
 

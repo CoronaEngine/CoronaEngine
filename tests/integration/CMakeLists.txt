@@ -58,22 +58,8 @@ if(VISION_REBLUR_NATIVE_NRD)
     target_link_libraries(corona_vision_reblur_replay PRIVATE corona::engine vision-all_libs vision-reblur-kernels NativeNrd::Nrd)
 endif()
 
-if(TARGET ocarina-backend-vulkan-compute)
-    find_package(Vulkan REQUIRED)
-    foreach(_probe IN ITEMS native_callback shared_array compute_math_parity)
-        set(_target corona_ocarina_${_probe}_tests)
-        add_executable(${_target}
-            ${CMAKE_SOURCE_DIR}/.workspace/Horizon/modules/ocarina/tests/runtime/test_${_probe}.cpp)
-        target_link_libraries(${_target} PRIVATE ocarina-native ocarina-include)
-        if(_probe STREQUAL "native_callback")
-            target_link_libraries(${_target} PRIVATE Vulkan::Headers)
-        endif()
-        add_test(NAME Ocarina_${_probe} COMMAND ${_target})
-        set_tests_properties(Ocarina_${_probe} PROPERTIES
-            WORKING_DIRECTORY "$<TARGET_FILE_DIR:ocarina-backend-vulkan-compute>"
-            RUN_SERIAL TRUE TIMEOUT 120)
-    endforeach()
-endif()
+# Ocarina owns its runtime tests in the Horizon workspace. Engine integration
+# tests must not depend on the layout of Horizon's private test sources.
 
 if(TARGET test-thin-lens)
     add_test(NAME VisionThinLensTests COMMAND test-thin-lens)
@@ -134,14 +120,21 @@ set_tests_properties(VisionEngineSceneTests PROPERTIES
 add_executable(corona_vision_restir_estimator_tests
     test_vision_restir_estimators.cpp
     test_vision_restir_reprojection.cpp
+    test_vision_restir_reservoir_lifetimes.cpp
     test_vision_restir_continuation.cpp
     test_vision_glass_transport.cpp
+    test_vision_principled_stable_planes.cpp
     test_vision_restir_support.cpp)
 target_include_directories(corona_vision_restir_estimator_tests PRIVATE
     ${CMAKE_SOURCE_DIR}/vision/src)
 target_link_libraries(corona_vision_restir_estimator_tests PRIVATE
     corona::engine vision-all_libs vision-integrator-ReSTIR)
 add_test(NAME VisionReSTIREstimatorTests COMMAND corona_vision_restir_estimator_tests)
+add_test(NAME VisionPrincipledStablePlanes
+    COMMAND corona_vision_restir_estimator_tests --principled-stable-planes)
+set_tests_properties(VisionPrincipledStablePlanes PROPERTIES
+    WORKING_DIRECTORY "$<TARGET_FILE_DIR:vision-material-principled_bsdf>"
+    RUN_SERIAL TRUE TIMEOUT 300)
 # The full material/glass suite compiles many GPU variants on a cold cache.
 set_tests_properties(VisionReSTIREstimatorTests PROPERTIES
     WORKING_DIRECTORY "$<TARGET_FILE_DIR:vision-material-principled_bsdf>"
@@ -251,3 +244,13 @@ set_tests_properties(UiMultiSurfaceSmoke PROPERTIES
     SKIP_RETURN_CODE 77
     TIMEOUT 180
 )
+
+# Keep the Conan loader next to every probe executable. Windows searches the
+# executable directory before system directories, regardless of CTest's PATH.
+get_property(_integration_targets DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
+foreach(_target IN LISTS _integration_targets)
+    get_target_property(_type ${_target} TYPE)
+    if(_type STREQUAL "EXECUTABLE")
+        horizon_install_vulkan_runtime(${_target})
+    endif()
+endforeach()

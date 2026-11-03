@@ -50,6 +50,12 @@ ReSTIR 沿用现有 stable planes 开关，最多三层。DI/GI 的 `open` 控�
 新增可选 `factor` 控制非负合成权重，默认 1。权重只应用一次。raw→启用、
 resize、投影改变、场景重编译和层开关均处理资源准备及历史失效。
 
+`ReLAX::compile()` 自行建立并恢复 `Global::SceneGpuContextScope`。正常管线编译
+已有外层上下文，但 raw→启用会从 `dispatch()` 延迟编译；该入口也必须绑定当前
+场景的 bindless array 和 device，否则 Principled 材质的 LUT 查询没有有效的场景键。
+`VisionRelaxPT`、`VisionRelaxReSTIR`、`VisionRelaxLifecycle` 均从未准备的 raw 状态
+开启降噪，断言该调用发生在编译作用域外，且渲染后上下文恢复，防止只验证预编译路径。
+
 ## 信号与管线
 
 输入是线性 RGB 和 **世界空间 hit distance**，w=0 表示未采样，不做距离归一化。
@@ -82,6 +88,13 @@ surface/virtual reprojection、折射 anchor 与虚拟位置分离、极暗/黑�
 2/5/8 轮 À-trous、三层归属/交换/消失、重复/跳帧和真实 PT/ReSTIR 生命周期。
 真实 producer 用例要求未过滤 `diffuse+specular+bypass` 与原 estimator 在 1e-4
 相对/绝对容差内一致。场景测试断言实际启用且准备 ReLAX，防止误测 raw。
+
+2026-10-31 在 Windows/Vulkan、RTX 2080、RelWithDebInfo 下修复延迟编译上下文后，
+18 项相关回归全部通过（0 失败、0 跳过），包含上述三项 producer/生命周期测试、
+六项滤波阶段测试及引擎集成检查。完整 ReSTIR 回归的 60 份采样缓冲区与修复前
+基线逐字节一致，61,440 个浮点值全部有限，最大差异为 0。
+原生崩溃栈、构建命令和完整结果见 [修复与验证记录](E:/CoronaEngine/vision/SHARC_ANALYSIS.md)。
+本轮没有重做下文历史版本的高分辨率画质与性能基准。
 
 ```powershell
 $env:CORONA_EXAMPLE = 'D:/work/corona/CoronaExample'

@@ -97,21 +97,25 @@ SampledSpectrum ReSTIRDI::Li(const Interaction &it, MaterialEvaluator *bsdf, DIS
     LightEval le{swl.dimension()};
     LightSurfacePoint lsp;
     $if(hit->is_hit()) {
-        Interaction next_it = geometry.compute_surface_interaction(hit, ray);
-        $if(next_it.has_emission()) {
-            /**
-             * The PDF of the LightEval is the PDF of the reflection function
-             * from the solid Angle space to the area space
-             */
-            le = light_sampler->evaluate_hit_point(it, next_it, bs->eval.pdf(),
-                                                   swl, light_pdf_point);
-            lsp.light_index = light_sampler->extract_light_index(next_it);
-            lsp.prim_id = hit.prim_id;
-            lsp.bary = hit.bary;
-            (*sample)->set_lsp(lsp);
-            (*sample)->set_pos(next_it.robust_position(it.pos - next_it.pos));
-            bs->eval.pdfs = le.pdf;
-            f = bs->eval.f * le.L;
+        // The instance light ID is exactly next_it.has_emission(). Avoid
+        // reconstructing the unused endpoint for non-emissive BSDF hits.
+        $if(geometry.is_emissive(hit.inst_id)) {
+            Interaction next_it = geometry.compute_surface_interaction(hit, ray);
+            $if(next_it.has_emission()) {
+                /**
+                 * The PDF of the LightEval is the PDF of the reflection function
+                 * from the solid Angle space to the area space
+                 */
+                le = light_sampler->evaluate_hit_point(it, next_it, bs->eval.pdf(),
+                                                       swl, light_pdf_point);
+                lsp.light_index = light_sampler->extract_light_index(next_it);
+                lsp.prim_id = hit.prim_id;
+                lsp.bary = hit.bary;
+                (*sample)->set_lsp(lsp);
+                (*sample)->set_pos(next_it.robust_position(it.pos - next_it.pos));
+                bs->eval.pdfs = le.pdf;
+                f = bs->eval.f * le.L;
+            };
         };
     }
     $else {
@@ -138,8 +142,10 @@ SampledSpectrum ReSTIRDI::Li(const Interaction &it, MaterialEvaluator *bsdf, con
     const SampledWavelengths &swl = sampled_wavelengths();
     SampledSpectrum f{swl.dimension()};
     LightSample ls{swl.dimension()};
+    LightEvalContext area_context;
     $if(sample->valid()) {
-        ls = light_sampler->evaluate_point(it, sample->lsp(), swl);
+        ls = light_sampler->evaluate_point(it, sample->lsp(), swl, LightEvalMode::All,
+                                           bsdf_pdf_point ? &area_context : nullptr);
     };
     Float3 wi = normalize(ls.p_light - it.pos);
     ScatterEval eval{swl.dimension(), 1};
@@ -160,7 +166,12 @@ SampledSpectrum ReSTIRDI::Li(const Interaction &it, MaterialEvaluator *bsdf, con
     }
 
     if (bsdf_pdf_point) {
-        *bsdf_pdf_point = light_sampler->PDF_point(it, sample->lsp(), eval.pdf());
+        $if(sample->valid()) {
+            *bsdf_pdf_point = light_sampler->PDF_point(it, sample->lsp(), eval.pdf(), &area_context);
+        }
+        $else {
+            *bsdf_pdf_point = light_sampler->PDF_point(it, sample->lsp(), eval.pdf());
+        };
     }
     if (output_ls) {
         *output_ls = ls;
@@ -254,7 +265,7 @@ DIReservoirVar ReSTIRDI::RIS(const Bool &hit, const Interaction &it, const Var<D
     };
 
     frame_buffer().hit_bsdfs().write(dispatch_id(), hit_bsdf);
-    $if(hit && ret->valid()) {
+    $if(hit && ret->valid() && selected_occluded_correction != 1.f) {
         Bool occluded = pipeline()->geometry().occluded(it, ret.sample->p_light());
         // Keep an unoccluded reservoir for reuse. The actual BSDF proposal is
         // q_bsdf * visibility, whereas candidate MIS uses the geometric PDF.
@@ -459,16 +470,22 @@ DIReservoirVar ReSTIRDI::temporal_reuse(DIReservoirVar rsv, const SurfaceDataVar
             rsv = combine_temporal(rsv, cur_surf, prev_rsv, prev_surf, view_pos, prev_view_pos);
         }
         $else {
-            $for(i, temporal_.N) {
-                Int2 p = reservoir_pixel(square_to_disk(sampler()->next_2d()) * param.t_radius + prev_p_film);
-                $if(!in_screen(p, res)) { $continue; };
-                auto data = get_prev_data(make_uint2(p), prev_view_pos);
-                auto another_surf = data.first;
-                auto another_rsv = data.second;
-                $if(is_temporal_valid(cur_surf, another_surf, param,
-                                      addressof(another_rsv.sample))) {
-                    rsv = combine_temporal(rsv, cur_surf, another_rsv, another_surf, view_pos, prev_view_pos);
-                    $break;
+            $if(param.t_radius == 0.f) {
+                // The rejected pixel is unchanged; preserve all fallback RNG.
+                $for(i, temporal_.N) { (void)sampler()->next_2d(); };
+            }
+            $else {
+                $for(i, temporal_.N) {
+                    Int2 p = reservoir_pixel(square_to_disk(sampler()->next_2d()) * param.t_radius + prev_p_film);
+                    $if(!in_screen(p, res)) { $continue; };
+                    auto data = get_prev_data(make_uint2(p), prev_view_pos);
+                    auto another_surf = data.first;
+                    auto another_rsv = data.second;
+                    $if(is_temporal_valid(cur_surf, another_surf, param,
+                                          addressof(another_rsv.sample))) {
+                        rsv = combine_temporal(rsv, cur_surf, another_rsv, another_surf, view_pos, prev_view_pos);
+                        $break;
+                    };
                 };
             };
         };
@@ -509,6 +526,7 @@ SurfaceDataVar ReSTIRDI::compute_hit(RayState rs, TriangleHitVar &hit, Interacti
         surf_ext.t_max += rs.ray->t_max();
         Float3 v_pos = camera_ray->at(surf_ext.t_max);
         Float3 w;
+        Bool delta_continuation = false;
         scene().materials().dispatch(it.material_id(), [&](const Material *material) {
             // Evaluator construction can apply a normal map to it.shading.
             // Preserve the original interaction for the canonical material guide.
@@ -516,6 +534,10 @@ SurfaceDataVar ReSTIRDI::compute_hit(RayState rs, TriangleHitVar &hit, Interacti
             guide_it.wo = guide_it.ng;
             auto bsdf = material->create_evaluator(it, sampled_wavelengths());
             cur_surf.flag = bsdf.flag();
+            // Several near-specular Principled lobes can share a flag without
+            // providing one supported delta sampler for their combination.
+            delta_continuation = Bool(material->enable_delta()) &&
+                !bsdf.eval_stable_lobes(it.wo).has_stochastic_remainder;
             Float diff_factor = bsdf.diffuse_factor();
             cur_surf->set_diffuse_factor(diff_factor);
             $if(counter == 0u || stable_chain) {
@@ -558,13 +580,11 @@ SurfaceDataVar ReSTIRDI::compute_hit(RayState rs, TriangleHitVar &hit, Interacti
                 cur_surf.denoiser_albedo.set(renderer().spectrum()->linear_srgb(
                     bsdf.albedo(albedo_wo) * SampledSpectrum(surf_ext.throughput.as_vec3()), sampled_wavelengths()));
             };
-            if (material->enable_delta()) {
-                $if(cur_surf->near_specular()) {
-                    BSDFSample bsdf_sample = bsdf.sample_delta(it.wo, renderer().sampler());
-                    w = bsdf_sample.wi;
-                    surf_ext.throughput.set(surf_ext.throughput.as_vec3() * bsdf_sample.eval.throughput().vec3());
-                };
-            }
+            $if(delta_continuation) {
+                BSDFSample bsdf_sample = bsdf.sample_delta(it.wo, renderer().sampler());
+                w = bsdf_sample.wi;
+                surf_ext.throughput.set(surf_ext.throughput.as_vec3() * bsdf_sample.eval.throughput().vec3());
+            };
         });
         $if(counter == 0) {
             cur_surf->set_depth(camera->linear_depth(v_pos));
@@ -573,10 +593,10 @@ SurfaceDataVar ReSTIRDI::compute_hit(RayState rs, TriangleHitVar &hit, Interacti
         };
         counter += 1;
         $if(counter >= max_recursion_) {
-            stable_chain = stable_chain && !cur_surf->near_specular();
+            stable_chain = stable_chain && !delta_continuation;
             $break;
         };
-        $if(cur_surf->near_specular()) {
+        $if(delta_continuation) {
             $if(stable_chain) {
                 Float3 n = it.ng;
                 Float3 transformed_n = image_vector(n);
@@ -669,11 +689,12 @@ void ReSTIRDI::compile_shader0() noexcept {
             hit = cur_surf.hit;
             $if(hit->is_hit()) { it = geometry.compute_surface_interaction(hit, surf_ext.view_pos.as_vec3()); };
         }
-        $else { cur_surf = compute_hit(rs, hit, it, surf_ext, false); };
-        cur_surfaces().write(dispatch_id(), cur_surf);
-
-        $if(cur_surf.is_replaced) {
-            cur_surface_extends().write(dispatch_id(), surf_ext);
+        $else {
+            cur_surf = compute_hit(rs, hit, it, surf_ext, false);
+            cur_surfaces().write(dispatch_id(), cur_surf);
+            $if(cur_surf.is_replaced) {
+                cur_surface_extends().write(dispatch_id(), surf_ext);
+            };
         };
 
         DIReservoirVar rsv = RIS(hit->is_hit(), it, param, surf_ext.throughput.as_vec3(), nullptr);
@@ -786,7 +807,7 @@ void ReSTIRDI::compile_shader1() noexcept {
         }
         $if(param.stable_planes != 0u) {
             $if(frame_buffer().stable_dominant().read(dispatch_id()) == InvalidUI32) {
-                radiance_->write(dispatch_id(), make_float4(0.f));
+                write_radiance(dispatch_id(), make_float4(0.f));
                 cur_reservoirs().write(dispatch_id(), DIReservoirVar{});
                 $return();
             };
@@ -819,7 +840,7 @@ void ReSTIRDI::compile_shader1() noexcept {
                 bypass = L;
             }
         };
-        radiance_->write(dispatch_id(), make_float4(L, 1.f));
+        write_radiance(dispatch_id(), make_float4(L, 1.f));
         if (lobes) {
             frame_buffer().denoiser_di_specular().write(dispatch_id(), make_float4(specular, distance));
             frame_buffer().denoiser_di_bypass().write(dispatch_id(), make_float4(bypass, 0.f));
@@ -829,27 +850,91 @@ void ReSTIRDI::compile_shader1() noexcept {
     shader1_ = device().compile(kernel, "ReSTIR direct spatial reuse and shading");
 }
 
-void ReSTIRDI::prepare() noexcept {
+void ReSTIRDI::restore(RuntimeObject *old_obj) noexcept {
+    const auto *previous = dynamic_cast<ReSTIRDI *>(old_obj);
+    OC_ERROR_IF(!previous->radiance_->name().ends_with(" [di-radiance-v1]"),
+                "DI radiance storage ABI changed; restart the engine before loading the new shaders.");
+    if (previous->reservoirs_.has_registered()) {
+        const auto &buffer = previous->reservoirs_;
+        const uint base = buffer.index().hv();
+        const auto *bindings = buffer.bindless_array()->impl();
+        OC_ERROR_IF(base + 1u >= bindings->buffer_num() ||
+                        !di_reservoir_storage_matches(buffer.name(), bindings->buffer_view(base),
+                                                      bindings->buffer_view(base + 1u), buffer.length().hv()),
+                    "DI reservoir storage ABI changed; restart the engine before loading the new shaders.");
+    }
+    ReSTIR::restore(old_obj);
+    VS_HOTFIX_MOVE_ATTRS(M_light_, M_bsdf_, debias_, pairwise_, reweight_, max_recursion_, stable_planes_enabled_,
+                       radiance_, reservoirs_, shader0_, shader1_, raw_radiance_, compact_radiance_, radiance_prepared_)
+}
+
+void ReSTIRDI::set_compact_radiance(bool compact) noexcept {
+    if (radiance_prepared_ && compact == compact_radiance_) return;
+    const string suffix = " [di-radiance-v1]";
+    if (!radiance_->name().ends_with(suffix)) radiance_->set_name(radiance_->name() + suffix);
+    ByteBufferView empty{handle_ty{0u}, 0u};
+    if (radiance_prepared_) {
+        // remove_buffer renumbers later slots; preserve their captured indices.
+        if (compact_radiance_) {
+            pipeline()->bindless_array().set_buffer(raw_radiance_.index().hv(), empty);
+            raw_radiance_.super().destroy();
+        } else {
+            frame_buffer().unregister(radiance_);
+            pipeline()->bindless_array().set_buffer(radiance_->index().hv(), empty);
+            radiance_->clear_all();
+        }
+    }
+    compact_radiance_ = compact;
+    if (compact) {
+        raw_radiance_.super() = device().create_buffer<uint2>(pipeline()->pixel_num(), radiance_->name() + " rgb21");
+        raw_radiance_.register_self();
+        vector<uint2> zero(pipeline()->pixel_num(), make_uint2(0u));
+        raw_radiance_.upload_immediately(zero.data());
+    } else {
+        frame_buffer().prepare_screen_buffer(radiance_);
+        vector<float4> zero(pipeline()->pixel_num(), make_float4(0.f));
+        radiance_->device_buffer().upload_immediately(zero.data());
+    }
+    radiance_prepared_ = true;
+}
+
+vector<float4> ReSTIRDI::download_radiance() const noexcept {
+    vector<float4> result(pipeline()->pixel_num());
+    if (compact_radiance_) {
+        vector<uint2> stored(result.size());
+        pipeline()->stream() << raw_radiance_.view().download(stored.data()) << synchronize() << commit();
+        for (size_t i = 0u; i < result.size(); ++i) result[i] = unpack_di_radiance_host(stored[i]);
+    } else {
+        pipeline()->stream() << radiance_->view().download(result.data()) << synchronize() << commit();
+    }
+    return result;
+}
+
+void ReSTIRDI::prepare(bool compact_radiance) noexcept {
     switch_profile::Scope profile{"ReSTIRDI::prepare", "buffers"};
     Pipeline *rp = pipeline();
-    frame_buffer().prepare_screen_buffer(radiance_);
-    reservoirs_.super() = device().create_buffer<DIReservoir>(rp->pixel_num() * 3,
-                                                              "ReSTIRDI::reservoirs_ x 3");
+    set_compact_radiance(compact_radiance);
+    reservoirs_.super() = device().create_buffer<DIReservoirStorage>(rp->pixel_num() * 2,
+                                                                  DIReservoirStorage::Name);
     reservoirs_.register_self(0, rp->pixel_num());
     reservoirs_.register_view(rp->pixel_num(), rp->pixel_num());
-    reservoirs_.register_view(rp->pixel_num() * 2, rp->pixel_num());
-    vector<DIReservoir> host{rp->pixel_num() * 3, DIReservoir{}};
+    vector<DIReservoirStorage> host{rp->pixel_num() * 2, DIReservoirStorage{}};
     reservoirs_.upload_immediately(host.data());
 }
 
 void ReSTIRDI::update_resolution(ocarina::uint2 res) noexcept {
     Pipeline *rp = pipeline();
-    reservoirs_.super() = device().create_buffer<DIReservoir>(rp->pixel_num() * 3,
-                                                              "ReSTIRDI::reservoirs_ x 3");
+    if (compact_radiance_) {
+        raw_radiance_.super() = device().create_buffer<uint2>(rp->pixel_num(), radiance_->name() + " rgb21");
+        raw_radiance_.register_self();
+        vector<uint2> zero(rp->pixel_num(), make_uint2(0u));
+        raw_radiance_.upload_immediately(zero.data());
+    }
+    reservoirs_.super() = device().create_buffer<DIReservoirStorage>(rp->pixel_num() * 2,
+                                                                  DIReservoirStorage::Name);
     reservoirs_.register_self(0, rp->pixel_num());
     reservoirs_.register_view_index(1, rp->pixel_num(), rp->pixel_num());
-    reservoirs_.register_view_index(2, rp->pixel_num() * 2, rp->pixel_num());
-    vector<DIReservoir> host{rp->pixel_num() * 3, DIReservoir{}};
+    vector<DIReservoirStorage> host{rp->pixel_num() * 2, DIReservoirStorage{}};
     reservoirs_.upload_immediately(host.data());
 }
 

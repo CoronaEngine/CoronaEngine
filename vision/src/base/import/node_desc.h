@@ -291,39 +291,6 @@ template<typename T>
     return AttrDesc::slot(key, default_value, tag);
 }
 
-struct UpsamplerDesc : public NodeDesc {
-public:
-    VISION_DESC_COMMON(Upsampler)
-    void init(const ParameterSet &ps) noexcept override;
-};
-
-struct RadianceCacheDesc : public NodeDesc {
-public:
-    VISION_DESC_COMMON(RadianceCache)
-    void init(const ParameterSet &ps) noexcept override;
-};
-
-
-
-struct PassDesc : public NodeDesc {
-public:
-    VISION_DESC_COMMON(Pass)
-    void init(const ParameterSet &ps) noexcept override;
-};
-
-struct RasterizerDesc : public NodeDesc {
-public:
-    VISION_DESC_COMMON(Rasterizer)
-    void init(const ParameterSet &ps) noexcept override;
-};
-
-struct UVUnwrapperDesc : public NodeDesc {
-public:
-    VISION_DESC_COMMON(UVUnwrapper)
-    void init(const ParameterSet &ps) noexcept override;
-};
-
-
 struct ToneMapperDesc : public NodeDesc {
 public:
     VISION_DESC_COMMON(ToneMapper)
@@ -333,7 +300,6 @@ public:
 struct FrameBufferDesc : public NodeDesc {
 public:
     ToneMapperDesc tone_mapper;
-    UpsamplerDesc upsampler_desc;
 
 public:
     VISION_DESC_COMMON(FrameBuffer)
@@ -343,9 +309,7 @@ public:
 struct PipelineDesc : public NodeDesc {
 public:
     mutable Device *device{nullptr};
-    UVUnwrapperDesc unwrapper_desc;
     FrameBufferDesc frame_buffer_desc;
-    RasterizerDesc rasterizer_desc;
 
 public:
     VISION_DESC_COMMON(Pipeline)
@@ -407,7 +371,6 @@ public:
 struct IntegratorDesc : public NodeDesc {
 public:
     DenoiserDesc denoiser_desc;
-    RadianceCacheDesc cache_desc;
 
 public:
     VISION_DESC_COMMON(Integrator)
@@ -427,10 +390,6 @@ public:
 };
 
 struct MaterialDesc : public GraphDesc {
-public:
-    SP<MaterialDesc> mat0;
-    SP<MaterialDesc> mat1;
-
 public:
     MaterialDesc() : GraphDesc("Material") {}
     explicit MaterialDesc(string name) : GraphDesc("Material", std::move(name)) {}

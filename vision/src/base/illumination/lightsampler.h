@@ -86,9 +86,10 @@ public:
     [[nodiscard]] LightSample sample_wi(const LightSampleContext &lsc, TSampler &sampler,
                                         const SampledWavelengths &swl) const noexcept;
     [[nodiscard]] LightSample evaluate_point(const LightSampleContext &lsc, const LightSurfacePoint &lsp,
-                                             const SampledWavelengths &swl, LightEvalMode mode = LightEvalMode::All) const noexcept;
+                                             const SampledWavelengths &swl, LightEvalMode mode = LightEvalMode::All,
+                                             LightEvalContext *area_context = nullptr) const noexcept;
     [[nodiscard]] Float PDF_point(const LightSampleContext &lsc, const LightSurfacePoint &lsp,
-                                  const Float &pdf_wi) const noexcept;
+                                  const Float &pdf_wi, const LightEvalContext *area_context = nullptr) const noexcept;
     [[nodiscard]] LightSurfacePoint sample_only(const LightSampleContext &lsc, TSampler &sampler) const noexcept;
     void dispatch_light(const Uint &id, const std::function<void(const Light *)> &func) const noexcept;
     void dispatch_light(const Uint &type_id, const Uint &inst_id, const std::function<void(const Light *)> &func) const noexcept;

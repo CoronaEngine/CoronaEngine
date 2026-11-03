@@ -352,7 +352,7 @@ bool handle_camera_move_fast(const CefRefPtr<CefProcessMessage>& message) {
     return true;
 }
 
-bool handle_camera_viewport_fast(const CefRefPtr<CefProcessMessage>& message) {
+bool handle_camera_viewport_fast(CefRefPtr<CefBrowser> browser, const CefRefPtr<CefProcessMessage>& message) {
     auto args = message->GetArgumentList();
     if (!args || args->GetSize() < 7) {
         return true;
@@ -388,25 +388,21 @@ bool handle_camera_viewport_fast(const CefRefPtr<CefProcessMessage>& message) {
         }
     }
 
-    void* surface = nullptr;
-    if (auto camera = Corona::SharedDataHub::instance().camera_storage().try_acquire_read(
-            camera_handle)) {
-        surface = camera->surface;
-    }
-    if (surface == nullptr) {
-        surface = Corona::API::get_default_surface();
-    }
-
-    Corona::SharedDataHub::instance().enqueue_camera_viewport_update({
-        .camera_handle = camera_handle,
-        .surface = surface,
-        .view_open = false,
-        .x = std::max(static_cast<int>(std::lround(values[0])), 0),
-        .y = std::max(static_cast<int>(std::lround(values[1])), 0),
-        .width = std::max(static_cast<int>(std::lround(values[2])), 1),
-        .height = std::max(static_cast<int>(std::lround(values[3])), 1),
-        .render_width = std::max(static_cast<int>(std::lround(values[4])), 1),
-        .render_height = std::max(static_cast<int>(std::lround(values[5])), 1),
+    BrowserManager::instance().enqueue_main_thread_task([browser, camera_handle, values] {
+        if (!browser) return;
+        for (auto [id, tab] : BrowserManager::instance().tabs_snapshot()) {
+            if (!tab || !tab->client) continue;
+            const auto candidate = tab->client->GetBrowser();
+            if (!candidate || candidate->GetIdentifier() != browser->GetIdentifier()) continue;
+            tab->web_camera_handle = camera_handle;
+            tab->web_camera_x = std::max(static_cast<int>(std::lround(values[0])), 0);
+            tab->web_camera_y = std::max(static_cast<int>(std::lround(values[1])), 0);
+            tab->web_camera_width = std::max(static_cast<int>(std::lround(values[2])), 1);
+            tab->web_camera_height = std::max(static_cast<int>(std::lround(values[3])), 1);
+            tab->web_camera_render_width = std::max(static_cast<int>(std::lround(values[4])), 1);
+            tab->web_camera_render_height = std::max(static_cast<int>(std::lround(values[5])), 1);
+            break;
+        }
     });
     return true;
 }
@@ -2202,12 +2198,15 @@ bool handle_dock_command(CefRefPtr<CefBrowser> browser,
 
         if (cmd == "createPanelTab") {
             std::string panel_id = command.value("panelId", "");
+            const bool native_docked = command.value("nativeDocked", false);
+            const std::string panel_title = command.value("title", panel_id);
             std::string route = command.value("routePath", "");
             int width = command.value("width", 400);
             int height = command.value("height", 600);
             int z_priority = command.value("zPriority", 0);
             std::string docking_pos = command.value("dockingPos", "right_top");
-            if (docking_pos != "right_top" &&
+            if (docking_pos != "left" && docking_pos != "right" && docking_pos != "bottom" &&
+                docking_pos != "right_top" &&
                 docking_pos != "right_bottom" &&
                 docking_pos != "left_bottom" &&
                 docking_pos != "center") {
@@ -2218,7 +2217,7 @@ bool handle_dock_command(CefRefPtr<CefBrowser> browser,
                 route = route.substr(1);
             }
             std::string standalone_route = route;
-            standalone_route += (standalone_route.find('?') == std::string::npos) ? "?standalone=1" : "&standalone=1";
+            standalone_route += (standalone_route.find('?') == std::string::npos) ? "?standalone=1&nativeHost=1" : "&standalone=1&nativeHost=1";
 
             // Create the tab on the main thread, like createDetachedPanel: create_tab
             // allocates a GPU texture (Horizon) and calls CefBrowserHost::CreateBrowser,
@@ -2226,7 +2225,7 @@ bool handle_dock_command(CefRefPtr<CefBrowser> browser,
             // reported from inside the task instead of synchronously.
             const std::string base_url = source_base_url(browser);
             bm.enqueue_main_thread_task(
-                [base_url, standalone_route, panel_id, docking_pos, width, height, z_priority,
+                [base_url, standalone_route, panel_id, panel_title, native_docked, docking_pos, width, height, z_priority,
                  frame, request_id] {
                     auto& bmgr = BrowserManager::instance();
                     const int tab_id = bmgr.create_tab(base_url, standalone_route, docking_pos,
@@ -2235,6 +2234,9 @@ bool handle_dock_command(CefRefPtr<CefBrowser> browser,
                     // rectangle. Seed an initial position from its anchor so multiple
                     // pop-outs don't stack at 0,0; the user can then drag it by its title bar.
                     if (auto* tab = bmgr.get_tab(tab_id)) {
+                        tab->panel_id = panel_id;
+                        tab->panel_title = panel_title;
+                        tab->native_docked = native_docked;
                         tab->floating = true;
                         tab->z_priority = z_priority;
                         // Spread anchors a bit so default panels are visible and not overlapping.
@@ -2276,7 +2278,7 @@ bool handle_dock_command(CefRefPtr<CefBrowser> browser,
                 route = route.substr(1);
             }
             std::string standalone_route = route;
-            standalone_route += (standalone_route.find('?') == std::string::npos) ? "?standalone=1" : "&standalone=1";
+            standalone_route += (standalone_route.find('?') == std::string::npos) ? "?standalone=1&nativeHost=1" : "&standalone=1&nativeHost=1";
 
             const std::string base_url = source_base_url(browser);
             bm.enqueue_main_thread_task([base_url, standalone_route, panel_id, width, height, x, y,
@@ -2288,6 +2290,8 @@ bool handle_dock_command(CefRefPtr<CefBrowser> browser,
                                              width, height, false);
                 auto* tab = bmgr.get_tab(tab_id);
                 if (tab) {
+                    tab->panel_id = panel_id;
+                    tab->panel_title = panel_id;
                     tab->detach_x = x;
                     tab->detach_y = y;
                     tab->detach_w = (width > 0) ? width : std::max(1, tab->width);
@@ -2335,6 +2339,20 @@ bool handle_dock_command(CefRefPtr<CefBrowser> browser,
                     }
                 });
             }
+            return true;
+        }
+
+        if (cmd == "focusPanelTab") {
+            const int tab_id = command.value("tabId", -1);
+            bm.enqueue_main_thread_task([tab_id, frame, request_id] {
+                auto* tab = BrowserManager::instance().get_tab(tab_id);
+                const bool focused = tab && tab->open && !tab->panel_id.empty();
+                if (focused) {
+                    tab->minimized = false;
+                    tab->native_focus_requested = true;
+                }
+                send_dock_callback(frame, request_id, nullptr, nlohmann::json{{"focused", focused}});
+            });
             return true;
         }
 
@@ -2513,7 +2531,7 @@ bool handle_realtime_process_message(CefRefPtr<CefBrowser> browser,
     }
 
     if (message->GetName() == "CameraViewportFast") {
-        return handle_camera_viewport_fast(message);
+        return handle_camera_viewport_fast(browser, message);
     }
 
     if (message->GetName() == "ComputeActorFocusPoseFast") {

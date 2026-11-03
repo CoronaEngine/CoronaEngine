@@ -99,29 +99,12 @@ struct LightFieldDenoiseInput : RealTimeDenoiseInput {
 
 class Denoiser : public Node, public GUIRenderable {
 public:
-    enum Mode {
-        RT = 0,
-        RTLightmap = 1
-    };
-
-    enum Backend {
-        GPU = 0,
-        CPU = 1
-    };
-
-protected:
-    Mode mode_{};
-    Backend backend_{};
-
-public:
     using Desc = DenoiserDesc;
 
 public:
     Denoiser() = default;
     explicit Denoiser(const DenoiserDesc &desc)
-        : Node(desc),
-          mode_(RT),
-          backend_(to_upper(desc["backend"].as_string()) == "CPU" ? CPU : GPU) {}
+        : Node(desc) {}
 
     virtual void compile() noexcept {}
 
@@ -161,8 +144,6 @@ public:
     virtual bool set_relax_settings(string_view json) noexcept { return false; }
     [[nodiscard]] virtual string relax_settings_json() const { return "{}"; }
     
-    [[nodiscard]] Backend backend() const noexcept { return backend_; }
-
     [[nodiscard]] virtual bool enabled() noexcept {
         return false;
     }

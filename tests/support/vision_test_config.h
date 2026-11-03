@@ -18,7 +18,6 @@ inline void configure_vision_test_project(vision::ProjectDesc& desc, const visio
     desc.renderer_desc.sampler_desc.init(render.value("sampler", DataWrap::object()));
     desc.renderer_desc.warper_desc.init(render.value("warper", DataWrap::object()));
     desc.renderer_desc.render_setting.init(render.value("render_setting", DataWrap::object()));
-    desc.renderer_desc.denoiser_desc.init(render.value("denoiser", DataWrap::object()));
     desc.output_desc.init(configuration.value("output", DataWrap::object()));
     desc.pipeline_desc.init(configuration.value("pipeline", DataWrap::object()));
 }

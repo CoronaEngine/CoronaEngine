@@ -2,6 +2,7 @@
 // Created by Zero on 2025/1/16.
 //
 
+#include <algorithm>
 #include <utility>
 #include "base/import/param_schema.h"
 #include "base/scattering/material.h"
@@ -10,6 +11,7 @@
 #include "base/mgr/pipeline.h"
 #include "ltc_sheen_table.h"
 #include "base/scattering/precomputed_table.h"
+#include "base/scattering/dielectric_precompute.h"
 
 namespace vision {
 using namespace ocarina;
@@ -215,6 +217,67 @@ public:
     return weight * saturate(1 - max_comp);
 }
 
+// Keep the ordinary layered BSDF intact. Only a pure, near-delta base lobe
+// can replace the stochastic camera prefix with enumerated stable branches.
+class PrincipledLobeSet final : public LobeSet {
+private:
+    Uint stable_lobe_{InvalidUI32};
+
+protected:
+    [[nodiscard]] uint64_t compute_topology_hash() const noexcept override {
+        return hash64(LobeSet::compute_topology_hash(), string{"PrincipledLobeSet"});
+    }
+
+public:
+    PrincipledLobeSet(Lobes lobes, Uint stable_lobe)
+        : LobeSet(std::move(lobes)), stable_lobe_(std::move(stable_lobe)) {}
+    VS_MAKE_LOBE_ASSIGNMENT(PrincipledLobeSet)
+
+    [[nodiscard]] Uint flag() const noexcept override {
+        return select(stable_lobe_ != InvalidUI32, SurfaceData::NearSpec, LobeSet::flag());
+    }
+
+    [[nodiscard]] Bool supports_stable_reflection(const Float3 &wo) const noexcept override {
+        Bool ret = false;
+        for_each([&](const WeightedLobe &lobe, uint index) {
+            if (dynamic_cast<const MetallicLobe *>(lobe.get())) {
+                ret |= stable_lobe_ == index && lobe->supports_stable_reflection(wo);
+            }
+        });
+        return ret;
+    }
+
+    [[nodiscard]] StableLobes eval_stable_lobes(const Float3 &wo) const noexcept override {
+        StableLobes ret{*swl()};
+        for_each([&](const WeightedLobe &lobe, uint index) {
+            if (dynamic_cast<const MetallicLobe *>(lobe.get()) ||
+                dynamic_cast<const DielectricLobe *>(lobe.get())) {
+                $if(stable_lobe_ == index) {
+                    // All Principled children share the evaluator's delta frame.
+                    ret = lobe->eval_stable_lobes(wo);
+                    for (auto &branch : ret.lobes) { branch.weight *= lobe.weight(); }
+                };
+            }
+        });
+        return ret;
+    }
+
+    [[nodiscard]] BSDFSample sample_delta_local(const Float3 &wo, TSampler &sampler) const noexcept override {
+        BSDFSample ret{*swl()};
+        for_each([&](const WeightedLobe &lobe, uint index) {
+            if (dynamic_cast<const MetallicLobe *>(lobe.get()) ||
+                dynamic_cast<const DielectricLobe *>(lobe.get())) {
+                $if(stable_lobe_ == index) {
+                    ret = lobe->sample_delta_local(wo, sampler);
+                    // Physical scaling differs from the normalized sampling weight.
+                    ret.eval.f *= lobe.weight();
+                };
+            }
+        });
+        return ret;
+    }
+};
+
 /**
  Example material JSON:
  {
@@ -320,7 +383,7 @@ protected:
         return hash64(Material::compute_hash(), two_sided_);
     }
 
-    VS_MAKE_MATERIAL_EVALUATOR(LobeSet)
+    VS_MAKE_MATERIAL_EVALUATOR(PrincipledLobeSet)
 
 public:
     VS_MAKE_PLUGIN_NAME_FUNC
@@ -336,6 +399,7 @@ public:
 #define PRINCIPLED_INIT_SLOT_(name, val, tag, extra, dim, required) VS_INIT_SLOT(name, val, tag) extra;
         PRINCIPLED_SLOTS(PRINCIPLED_INIT_SLOT_)
 #undef PRINCIPLED_INIT_SLOT_
+        update_switches();
     }
 
     VS_HOTFIX_MAKE_RESTORE(Material, sheen_mode_, switches_, two_sided_)
@@ -345,13 +409,15 @@ public:
         widgets->combo("sheen mode", reinterpret_cast<int *>(addressof(sheen_mode_)), names);
         int colNum = 3;
         for (int i = 0; i < LobeName.size(); ++i) {
-            widgets->check_box(LobeName[i], addressof(switches_[i]));
+            if (widgets->check_box(LobeName[i], addressof(switches_[i]))) {
+                reset_topology_hash();
+                reset_hash();
+            }
             if ((i + 1) % 3 != 0) {
                 widgets->same_line();
             }
         }
         Material::render_sub_UI(widgets);
-        update_switches();
     }
     void prepare() noexcept override {
         CoatLobe::prepare();
@@ -362,12 +428,31 @@ public:
     }
 
     void update_switches() noexcept {
-        //        switches_[ESheen] = !sheen_weight_->near_zero();
-        //        switches_[ECoat] = !coat_weight_->near_zero();
-        //        switches_[EMetallic] = !metallic_->near_zero();
-        //        switches_[ETrans] = (!metallic_->near_one()) && (!transmission_weight_->near_zero());
-        //        switches_[ESpec] = (!metallic_->near_one()) && (!transmission_weight_->near_one());
-        //        switches_[EDiffuse] = (!metallic_->near_one()) && (!transmission_weight_->near_one());
+        // Only numeric leaves prove an exact value. Uniform graph averages need
+        // not implement the graph's operation, and texture averages prove nothing.
+        const auto is_value = [](const ShaderNodeSlot &slot, float value) {
+            if (!slot || (slot->impl_type() != "number" && slot->impl_type() != "constant")) {
+                return false;
+            }
+            // Require every leaf component to agree, including named outputs
+            // which bypass the slot's swizzle during shader evaluation.
+            const auto values = slot->average();
+            return !values.empty() && std::all_of(values.begin(), values.end(),
+                                                  [value](float v) { return v == value; });
+        };
+        const auto previous = switches_;
+        const bool opaque = is_value(transmission_weight_, 0.f);
+        // One-sided back faces have front_factor=0, hence effective metallic=0.
+        const bool metal_only = two_sided_ && opaque && is_value(metallic_, 1.f);
+        switches_[ESheen] = !is_value(sheen_weight_, 0.f);
+        switches_[ECoat] = !is_value(coat_weight_, 0.f);
+        switches_[EMetallic] = !is_value(metallic_, 0.f);
+        switches_[ETrans] = !opaque;
+        switches_[ESpec] = switches_[EDiffuse] = !metal_only && !is_value(transmission_weight_, 1.f);
+        if (previous != switches_) {
+            reset_topology_hash();
+            reset_hash();
+        }
     }
 
     template<typename TLobe>
@@ -377,6 +462,12 @@ public:
 
     [[nodiscard]] vector<PrecomputedLobeTable> precompute() const noexcept override {
         vector<PrecomputedLobeTable> ret;
+        ret.push_back(Material::precompute_lobe<PureReflectionLobe>(
+            make_uint3(uint2(PureReflectionLobe::lut_res), 1u)));
+        ret.push_back(Material::precompute_lobe<DielectricLobePrecompute, 2>(
+            make_uint3(DielectricLobe::lut_res)));
+        ret.push_back(Material::precompute_lobe<DielectricLobeInvPrecompute, 2>(
+            make_uint3(DielectricLobe::lut_res)));
         ret.push_back(precompute_lobe<SpecularLobe>());
         ret.push_back(precompute_lobe<CoatLobe>());
         return ret;
@@ -418,11 +509,15 @@ public:
         SP<GGXMicrofacet> microfacet = make_shared<GGXMicrofacet>(alpha.x, alpha.y);
 
         SampledSpectrum weight = SampledSpectrum::one(swl.dimension());
+        Bool stable_layers = true;
+        Float metallic = 0.f;
+        Uint stable_lobe = InvalidUI32;
 
         if (switches_[ESheen]) {
             outline("principled sheen", [&] {
                 SampledSpectrum sheen_tint = sheen_tint_.eval_albedo_spectrum(it, swl).sample;
                 Float sheen_weight = sheen_weight_.evaluate(it, swl)->as_scalar() * front_factor;
+                stable_layers &= sheen_weight == 0.f;
                 Float sheen_roughness = sheen_roughness_.evaluate(it, swl)->as_scalar();
                 UP<SheenLTC> sheen_ltc = make_unique<SheenLTC>(sheen_mode_, cos_theta,
                                                                sheen_tint * sheen_weight * weight,
@@ -436,6 +531,7 @@ public:
         if (switches_[ECoat]) {
             outline("principled coat", [&] {
                 Float cc_weight = coat_weight_.evaluate(it, swl)->as_scalar() * front_factor;
+                stable_layers &= cc_weight == 0.f;
                 Float cc_roughness = clamp(coat_roughness_.evaluate(it, swl)->as_scalar(), 0.0001f, 1.f);
                 cc_roughness = sqr(cc_roughness);
                 Uint flag = select(cc_roughness < alpha_threshold_, SurfaceData::NearSpec, SurfaceData::Glossy);
@@ -454,13 +550,15 @@ public:
         }
         if (switches_[EMetallic]) {
             outline("principled metallic", [&] {
-                Float metallic = metallic_.evaluate(it, swl)->as_scalar() * front_factor;
+                metallic = metallic_.evaluate(it, swl)->as_scalar() * front_factor;
                 SP<FresnelF82Tint> fresnel_f82 = make_shared<FresnelF82Tint>(color, swl);
                 fresnel_f82->init_from_F82(specular_tint);
                 UP<MicrofacetReflection> metal_refl = make_unique<MicrofacetReflection>(weight * metallic,
                                                                                         swl, microfacet);
                 WeightedLobe metal_lobe(metallic * weight.average(),
                                         make_unique<MetallicLobe>(fresnel_f82, std::move(metal_refl), flag, shading_frame));
+                stable_lobe = select(stable_layers && metallic == 1.f && flag == SurfaceData::NearSpec,
+                                     uint(lobes.size()), stable_lobe);
                 lobes.push_back(std::move(metal_lobe));
                 weight *= (1.0f - metallic);
             });
@@ -476,6 +574,8 @@ public:
                 UP<Lobe> dielectric = make_unique<DielectricLobe>(fresnel_schlick, microfacet, color, false,
                                                                   flag, shading_frame);
                 WeightedLobe trans_lobe(t_weight.average(), t_weight.average(), std::move(dielectric));
+                stable_lobe = select(stable_layers && metallic == 0.f && transmission == 1.f && flag == SurfaceData::NearSpec,
+                                     uint(lobes.size()), stable_lobe);
                 lobes.push_back(std::move(trans_lobe));
                 weight *= (1.0f - trans_weight);
             });
@@ -502,7 +602,7 @@ public:
                 lobes.push_back(std::move(diffuse_lobe));
             });
         }
-        UP<LobeSet> ret = make_unique<LobeSet>(std::move(lobes));
+        UP<LobeSet> ret = make_unique<PrincipledLobeSet>(std::move(lobes), stable_lobe);
         return ret;
     }
 };

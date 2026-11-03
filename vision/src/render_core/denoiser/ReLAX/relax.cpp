@@ -143,6 +143,10 @@ void ReLAX::render_sub_UI(Widgets *widgets) noexcept {
 }
 void ReLAX::compile() noexcept {
     Clock compile_clock;
+    // Runtime enable can compile from dispatch(), outside Pipeline::compile().
+    // Material guide evaluation needs this scene's LUT bindings on both paths.
+    Global::SceneGpuContextScope scene_gpu_context{
+        scene().geometry().bindless_array(), scene().geometry().gpu_resource()->device()};
     auto &camera = scene().sensor(); auto &sampler = renderer().sampler();
     Kernel guides = [&](Var<GuideParam> p) {
         camera->load_data(); sampler->load_data();
@@ -163,8 +167,8 @@ void ReLAX::compile() noexcept {
             // validity and motion, not the complete stable-plane payload.
             auto &plane = p.planes.at(i);
             hit = plane.surface.hit;
-            valid = plane.valid != 0u && hit->is_hit();
-            g.motion = plane.motion;
+            valid = plane->valid() != 0u && hit->is_hit();
+            g.motion = plane->motion();
             $if(valid) {
                 surface = plane.surface;
                 eye = plane.extension.view_pos.as_vec3(); prefix = plane.extension.throughput.as_vec3();

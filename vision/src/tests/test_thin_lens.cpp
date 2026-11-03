@@ -72,13 +72,7 @@ DataWrap make_test_scene() {
       }
     },
     "materials": [
-      {
-        "name": "mat_diffuse",
-        "type": "diffuse",
-        "param": {
-          "color": [0.7, 0.7, 0.7]
-        }
-      }
+      {"name":"mat_diffuse","type":"principled_bsdf","param":{"color":[0.7,0.7,0.7],"subsurface_weight":0,"roughness":1,"spec_tint":[0,0,0]}}
     ],
     "mediums": {
       "process": false,
@@ -141,14 +135,8 @@ DataWrap make_test_scene() {
           "resolution": [32, 32],
           "tone_mapper": {
             "type": "linear"
-          },
-          "upsampler": {
-            "type": "bilateral"
           }
         }
-      },
-      "rasterizer": {
-        "type": "cpu"
       }
     }
   },
