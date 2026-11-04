@@ -51,9 +51,9 @@ def verify(port, project, peer, relative, control):
         return {p: hashlib.sha256(p.read_bytes()).hexdigest() for root in (project, peer)
                 for p in root.rglob("*") if p.is_file()}
 
-    def tap():
-        assert web.evaluate("window.coronaBridge.injectInput(0,'KeyD','','d')")
-        assert web.evaluate("window.coronaBridge.injectInput(1,'KeyD','d')")
+    def tap(code="KeyD"):
+        assert web.evaluate(f"window.coronaBridge.injectInput(0,{json.dumps(code)},'','d')")
+        assert web.evaluate(f"window.coronaBridge.injectInput(1,{json.dumps(code)},'d')")
 
     wait_for(lambda: web.evaluate("!!document.querySelector('#app[data-v-app] button')"), bool, "editor ready")
     session = open_project(project)
@@ -87,7 +87,8 @@ def verify(port, project, peer, relative, control):
         if runs:
             assert call("Scripts.stop", {"runId": runs[-1]})["code"] == "STALE_RUN"
         runs.append(run)
-        tap()
+        # A non-US layout can produce 'd' from a different physical key.
+        tap("KeyJ" if len(runs) == 1 else "KeyD")
         wait_for(position, lambda v: v == moved, "D moves exactly once")
         if ending == "reload":
             assert view("SceneTools.reload_scene", "scene.ini", str(project))["status"] == "success"
