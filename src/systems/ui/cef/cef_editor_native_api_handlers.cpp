@@ -5428,11 +5428,6 @@ void register_project_launcher_api_handlers(NativeApiRegistry& registry) {
             }
             CFW_LOG_INFO("[ProjectLauncher] open_project opened path='{}' status='{}'",
                          state.project_path, prepared.status);
-            if (!enqueue_python_project_context_changed(state.project_path)) {
-                CFW_LOG_WARNING(
-                    "[ProjectLauncher] Python project context update was not queued for '{}'",
-                    state.project_path);
-            }
             ++state.scene->tree_revision;
             return native_success({
                 {"ok", true}, {"status", prepared.status}, {"path", state.project_path},
@@ -5635,12 +5630,6 @@ void register_main_view_api_handlers(NativeApiRegistry& registry) {
             }
             if (!state.scene) {
                 return native_failure("No committed native editor scene; open a project first", 404);
-            }
-            if (!requested_path.empty() &&
-                !enqueue_python_project_context_changed(state.project_path)) {
-                CFW_LOG_WARNING(
-                    "[MainView] Python project context update was not queued for '{}'",
-                    state.project_path);
             }
             return native_success(make_native_main_init_payload(state.scene.get()));
         }},
@@ -7570,8 +7559,11 @@ void register_python_script_api_handlers(NativeApiRegistry& registry) {
         {"run_file", [](const NativeRequest& request, const NativeContext&) {
             auto payload = arg_object(request.args, 0);
             const auto* scene = native_editor_state().scene.get();
+            if (!scene || !matches_archive_session(*scene, payload)) {
+                return native_failure("PROJECT_CONTEXT_CHANGED", 409);
+            }
             const auto expected = path_from_utf8(payload.value("project_path", std::string{}));
-            if (!scene || scene->read_only || expected.empty() ||
+            if (scene->read_only || expected.empty() ||
                 absolute_normalized_path(expected) != absolute_normalized_path(scene->project_root)) {
                 return native_failure("Script project changed or is read-only", 409);
             }

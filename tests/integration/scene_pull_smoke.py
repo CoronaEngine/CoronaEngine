@@ -153,7 +153,7 @@ def run(port, root, control):
         path.parent.mkdir(exist_ok=True)
         source = source.encode()
         path.write_bytes(source)
-        return api(main, "Scripts.run_file", {"project_path": str(root), "path": path.relative_to(root).as_posix(),
+        return api(main, "Scripts.run_file", {**scope, "project_path": str(root), "path": path.relative_to(root).as_posix(),
                    "revision": hashlib.sha256(source).hexdigest(), "target_type": "actor", "scene_name": state["scene"],
                    "actor_name": "Probe", "requestId": filename})
 

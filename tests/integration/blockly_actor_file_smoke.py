@@ -117,12 +117,12 @@ def verify(port, root, switch_root=None):
         actors = api("SceneTools.get_scene_snapshot", "scene.ini")["actors"]
         return next(a["geometry"]["position"] for a in actors if a["name"] == "Probe")
 
-    def project_files():
-        return {p.relative_to(root).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest()
-                for p in root.rglob("*") if p.is_file()}
+    def project_files(project=root):
+        return {p.relative_to(project).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest()
+                for p in project.rglob("*") if p.is_file()}
 
     def scope():
-        return api("SceneTools.get_scene_snapshot", "scene.ini")["archive_session"]
+        return api("SceneTools.read_active_scene")["archive_session"]
 
     def edit_position(value):
         result = api("SceneTools.set_actor_transform", "scene.ini", "Probe", {"position": value, "archive_session": scope()})
@@ -167,7 +167,9 @@ def verify(port, root, switch_root=None):
             }}}}
         ]}
     }}], "edges": []}
+    first_session = scope()
     saved = api("ScratchTool.save_blockly_target", {
+        "archive_session": first_session,
         "project_path": str(root), "target_type": "actor", "scene_name": "scene.ini",
         "actor_name": "Probe", "script_kind": "node_graph", "workspace": graph,
         # The panel must regenerate and replace this file before requesting a run.
@@ -209,6 +211,7 @@ def verify(port, root, switch_root=None):
         request_id = running["requestId"]
         assert api("Scripts.get_run", {"requestId": request_id})["runId"] == running["runId"]
         replay = api("Scripts.run_file", {
+            "archive_session": first_session,
             "project_path": str(root), "path": saved["target"]["code_path"], "revision": hashlib.sha256(script).hexdigest(),
             "target_type": "actor", "scene_name": "scene.ini", "actor_name": "Probe", "requestId": request_id})
         assert replay["runId"] == running["runId"]
@@ -245,7 +248,7 @@ def verify(port, root, switch_root=None):
                "e.innerText.toLowerCase().replaceAll(String.fromCharCode(92), '/').includes(" + peer_path + "))")
         wait_for(lambda: web.evaluate("!!(" + row + ")"), bool, "switch target in Recent Projects")
         switch_request = "switch-" + runs[-1]["requestId"]
-        active = api("Scripts.run_file", {"requestId": switch_request, "project_path": str(root),
+        active = api("Scripts.run_file", {"archive_session": first_session, "requestId": switch_request, "project_path": str(root),
                      "path": report["path"], "revision": hashlib.sha256(script).hexdigest(),
                      "target_type": "actor", "actor_name": "Probe", "scene_name": "scene.ini"})
         wait_for(status, lambda r: r.get("runId") == active.get("runId") and r.get("currentNodeId") == "start", "switch run")
@@ -265,6 +268,37 @@ def verify(port, root, switch_root=None):
         assert position() == peer_start
         report["switch"] = {"runId": active["runId"], "requestId": switch_request, "from": str(root),
                             "to": str(switch_root), "newProjectPosition": peer_start}
+        peer_files = project_files(switch_root)
+        stale_target = {"archive_session": first_session, "project_path": str(root),
+                        "target_type": "actor", "scene_name": "scene.ini", "actor_name": "Probe",
+                        "script_kind": "node_graph"}
+        stale_run = {**stale_target, "requestId": "late-start", "path": report["path"],
+                     "revision": hashlib.sha256(script).hexdigest()}
+        def verify_rejected():
+            for name, payload in (
+                ("ScratchTool.load_blockly_target", stale_target),
+                ("ScratchTool.save_blockly_target", {**stale_target, "workspace": {}, "code": "raise AssertionError()"}),
+            ):
+                reply = api(name, payload)
+                assert reply.get("code") == "PROJECT_CONTEXT_CHANGED", reply
+            request = json.dumps({"api": "Scripts.run_file", "args": [stale_run]})
+            rejected = web.evaluate("new Promise(resolve=>window.cefQuery({request:" + json.dumps(request) +
+                                     ",onSuccess:r=>resolve(JSON.parse(r)),onFailure:(code,error)=>resolve({code,error})}))")
+            assert not rejected.get("success") and "PROJECT_CONTEXT_CHANGED" in str(rejected), rejected
+            assert not status()["snapshotCaptured"]
+            assert project_files() == saved_files and project_files(switch_root) == peer_files
+            return scope()
+
+        sessions = [first_session, verify_rejected()]
+        assert api("ProjectLauncher.open_project", str(root)).get("ok")
+        sessions.append(verify_rejected())
+        assert position() == start
+        assert api("ScratchTool.load_blockly_target", {**stale_target, "archive_session": sessions[-1]})["status"] == "loaded"
+        assert api("ProjectLauncher.open_project", str(root)).get("ok")
+        sessions.append(verify_rejected())
+        assert len(set(sessions)) == 4, sessions
+        report["sessionIsolation"] = {"openings": sessions, "staleLoadSaveRunRejected": True,
+                                      "unchangedArchives": [str(root), str(switch_root)]}
     return report
 
 

@@ -1513,16 +1513,4 @@ NativeResult invoke_python_script_service(const NativeRequest& request, const ch
     return native_success(parsed, route_name);
 }
 
-bool enqueue_python_project_context_changed(std::string_view project_path) {
-    auto* coordinator = Script::Python::active_python_runtime_coordinator();
-    if (!coordinator || project_path.empty()) return false;
-
-    Script::Python::PythonRuntimeRequest request;
-    request.kind = Script::Python::PythonRuntimeRequestKind::LifecycleControl;
-    request.source = "ProjectLauncher";
-    request.function = "project_context_changed";
-    request.payload_json = nlohmann::json{{"path", project_path}}.dump();
-    return coordinator->submit(std::move(request)).accepted;
-}
-
 }  // namespace Corona::Systems::UI
