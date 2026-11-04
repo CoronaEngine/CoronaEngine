@@ -263,7 +263,7 @@ bool restore_windowed_placement(HWND hwnd) {
 }  // namespace (input queue)
 
 // ── drain_input_events: 消费所有积攒的输入事件 ──
-// 开放给 ScriptSystem 调用（通过头文件声明），每帧由 Python show_log_on_js 消费
+// 开放给 ScriptSystem 调用（通过头文件声明），每帧由 Python update_runtime 消费
 void enqueue_input_event(InputEvent event) {
     std::lock_guard<std::mutex> lock(s_input_mutex);
     s_input_queue.push_back(std::move(event));

@@ -143,7 +143,7 @@ std::size_t PythonAPI::detach_python_objects_without_decref() {
         if (released.is_valid()) ++detached_count;
     };
     detach(pStartFunc);
-    detach(messageFunc);
+    detach(runtimeUpdateFunc);
     detach(pEditor);
     detach(pModule);
     detach(pFunc);
@@ -346,33 +346,16 @@ bool PythonAPI::ensureInitialized() {
     {
         nanobind::gil_scoped_acquire gil;
         try {
-            // nanobind::module_ main_mod = nanobind::module_::import_("cpp_client");
-
-            // nanobind::object init_func = nanobind::getattr(main_mod, "initialize");
-            // init_func();
-
-            // nanobind::object run_attr = nanobind::getattr(main_mod, "run");
-            // nanobind::object putq_attr = nanobind::getattr(main_mod, "put_queue");
-
-            // if (!nanobind::callable::check_(run_attr)) {
-            //     CFW_LOG_ERROR("PythonAPI: 'run' attribute is not callable");
-            //     return false;
-            // }
-
-            // pModule = std::move(main_mod);
-            // pFunc = std::move(run_attr);
-            // messageFunc = std::move(putq_attr);
-
             nanobind::module_ entrance = nanobind::module_::import_("main");
             nanobind::object editor = nanobind::getattr(entrance, "editor");
             nanobind::object start_attr = nanobind::getattr(entrance, "run");
-            nanobind::object log_attr = nanobind::getattr(editor, "show_log_on_js");
+            nanobind::object update_attr = nanobind::getattr(editor, "update_runtime");
             if (nanobind::hasattr(editor, "initialize_runtime")) {
                 nanobind::object init_runtime = nanobind::getattr(editor, "initialize_runtime");
                 init_runtime();
             }
             pStartFunc = std::move(start_attr);
-            messageFunc = std::move(log_attr);
+            runtimeUpdateFunc = std::move(update_attr);
             pEditor = editor;
             pStartFunc();
             if (nanobind::hasattr(editor, "start_runtime")) {
@@ -395,9 +378,8 @@ bool PythonAPI::ensureInitialized() {
             log_python_error(e);
             // pModule.reset();
             // pFunc.reset();
-            // messageFunc.reset();
             pStartFunc.reset();
-            messageFunc.reset();
+            runtimeUpdateFunc.reset();
             return false;
         }
     }
@@ -410,7 +392,7 @@ void PythonAPI::invokeEntry(bool isReload) {
         return;
     }
 
-    if (!messageFunc.is_valid()) {
+    if (!runtimeUpdateFunc.is_valid()) {
         return;
     }
     runtime_coordinator_.set_execution_phase("gil_wait:editor_update");
@@ -419,7 +401,7 @@ void PythonAPI::invokeEntry(bool isReload) {
 
     try {
         //(void)pFunc(isReload ? 1 : 0);
-        messageFunc();
+        runtimeUpdateFunc();
         runtime_coordinator_.set_execution_phase("idle");
     } catch (const nanobind::python_error& e) {
         runtime_coordinator_.set_execution_phase("editor_update_error");
@@ -428,16 +410,6 @@ void PythonAPI::invokeEntry(bool isReload) {
 }
 
 void PythonAPI::sendMessage(const std::string& message) const {
-    // if (!messageFunc.is_valid()) {
-    //     return;
-    // }
-    // nanobind::gil_scoped_acquire gil;
-
-    // try {
-    //     (void)messageFunc(message.c_str());
-    // } catch (const nanobind::python_error& e) {
-    //     log_python_error(e);
-    // }
 }
 
 void PythonAPI::runPythonScript() {
@@ -522,7 +494,7 @@ PythonRuntimeResponse PythonAPI::execute_runtime_request(const PythonRuntimeRequ
             }
             EngineScripts::clear_python_callback_registry();
             pStartFunc.reset();
-            messageFunc.reset();
+            runtimeUpdateFunc.reset();
             pEditor.reset();
             pModule.reset();
             pFunc.reset();
