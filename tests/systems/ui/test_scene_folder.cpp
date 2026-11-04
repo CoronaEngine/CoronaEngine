@@ -1,4 +1,4 @@
-#include "cef/scene_folder.h"
+#include "../../integration/archive_fixture.h"
 #include "cef/archive_load_policy.h"
 
 #include <cstdlib>
@@ -14,6 +14,7 @@
 
 namespace fs = std::filesystem;
 using namespace Corona::Systems::UI::SceneFolders;
+using namespace ArchiveFixture;
 
 namespace {
 
@@ -342,7 +343,7 @@ void manifest_rejects_unlisted_but_existing_asset_route() {
     TempDir temp;
     const auto scene = temp.path / "scene";
     write_text(scene / "Assets" / "Models" / "manual.glb", "unlisted");
-    SceneAssetStore store(scene);
+    SceneAssetStore store(scene, true);
     expect(store.write_manifest(), "empty manifest should be written");
     expect(!store.contains_route("Assets/Models/manual.glb"),
            "an existing file outside the manifest must not be trusted");

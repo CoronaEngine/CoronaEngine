@@ -41,7 +41,8 @@ target_compile_definitions(corona_scene_folder_tests PRIVATE
 if(MSVC)
     target_compile_options(corona_scene_folder_tests PRIVATE /EHsc)
 endif()
-add_test(NAME SceneFolderTests COMMAND corona_scene_folder_tests)
+add_test(NAME SceneFolderTests COMMAND ${Python_EXECUTABLE} ${PROJECT_SOURCE_DIR}/tests/integration/archive_driver.py
+    $<TARGET_FILE:corona_scene_folder_tests> ${CORONA_EDITOR_SOURCE_DIR})
 
 add_executable(corona_cef_app_tests
     test_cef_app.cpp

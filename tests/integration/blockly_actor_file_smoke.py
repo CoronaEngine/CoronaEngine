@@ -121,8 +121,11 @@ def verify(port, root, switch_root=None):
         return {p.relative_to(root).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest()
                 for p in root.rglob("*") if p.is_file()}
 
+    def scope():
+        return api("SceneTools.get_scene_snapshot", "scene.ini")["archive_session"]
+
     def edit_position(value):
-        result = api("SceneTools.set_actor_transform", "scene.ini", "Probe", {"position": value})
+        result = api("SceneTools.set_actor_transform", "scene.ini", "Probe", {"position": value, "archive_session": scope()})
         assert result["status"] == "success" and position() == value, result
 
     def key_down():
@@ -147,7 +150,7 @@ def verify(port, root, switch_root=None):
     before_edit = project_files()
     edit_position(start)
     assert project_files() == before_edit, "An ordinary Actor edit wrote to disk"
-    committed = api("MainView.scene_save", "scene.ini")
+    committed = api("MainView.scene_save", "scene.ini", {"archive_session": scope()})
     assert committed["ok"], committed
     after_save = project_files()
     assert {key for key in after_save if after_save[key] != before_edit.get(key)} == {"scene.ini"}
@@ -178,6 +181,7 @@ def verify(port, root, switch_root=None):
              lambda values: "Probe" in values, "actor selector")
     web.evaluate(f"(()=>{{const s={select};s.value='Probe';s.dispatchEvent(new Event('change'));}})()")
     wait_for(lambda: web.evaluate(f"{select}?.value"), lambda value: value == "Probe", "actor graph")
+    wait_for(lambda: web.evaluate("!!document.querySelector('.ng-node.type-start')"), bool, "saved Actor graph loaded")
     saved_files = None
     saved_workspace = None
     run_button = "document.querySelector('[data-guidance=\"node-run\"]')"
@@ -213,7 +217,7 @@ def verify(port, root, switch_root=None):
             moved = wait_for(position, lambda p: p != start, "key moved actor")
             assert moved == [start[0] + 1, *start[1:]], moved
             assert project_files() == saved_files, "Starting the run or moving the Actor changed the archive"
-            blocked = api("MainView.scene_save", "scene.ini")
+            blocked = api("MainView.scene_save", "scene.ini", {"archive_session": scope()})
             assert not blocked["ok"] and blocked["status"] == "run_active", blocked
             key_up()
         finally:

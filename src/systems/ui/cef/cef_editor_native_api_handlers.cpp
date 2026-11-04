@@ -71,25 +71,7 @@ namespace Corona::Systems::UI {
 
 namespace {
 
-using SceneFolders::create_scene_folder;
-using SceneFolders::detect_scene_folder;
 using SceneFolders::SceneAssetStore;
-using SceneFolders::SceneDocumentStore;
-
-
-
-
-
-class PortableSceneValidationError : public std::runtime_error {
-   public:
-    PortableSceneValidationError(std::string message, nlohmann::json diagnostics)
-        : std::runtime_error(std::move(message)), diagnostics_(std::move(diagnostics)) {}
-
-    [[nodiscard]] const nlohmann::json& diagnostics() const noexcept { return diagnostics_; }
-
-   private:
-    nlohmann::json diagnostics_;
-};
 
 std::shared_ptr<Corona::Systems::NetworkSystem> get_network_system() {
     auto sys_mgr = Corona::Kernel::KernelContext::instance().system_manager();
@@ -665,6 +647,10 @@ std::string normalize_body_type(std::string value) {
 }
 
 struct NativeEditorScene {
+    std::string archive_session;
+    std::uint64_t tree_revision{1};
+    nlohmann::json selection = nlohmann::json::object();
+    std::map<std::string, std::vector<nlohmann::json>> viewport_results;
     bool read_only{false};
     bool frame_when_ready{false};
     std::filesystem::path project_root;
@@ -806,24 +792,7 @@ std::string make_actor_guid(const std::string& scene_route,
 void replace_ini_section(const std::filesystem::path& file_path,
                          const std::string& section_name,
                           const std::vector<std::string>& replacement_lines) {
-    if (file_path.filename() == "scene.ini" && detect_scene_folder(file_path.parent_path())) {
-        SceneDocumentStore document_store(file_path.parent_path());
-        std::vector<SceneFolders::Diagnostic> diagnostics;
-        if (!document_store.replace_sections({{section_name, replacement_lines}}, diagnostics)) {
-            throw std::runtime_error(diagnostics.empty() ? "Unable to update portable scene"
-                                                         : diagnostics.front().message);
-        }
-        return;
-    }
-    if (to_lower_ascii(file_path.extension().string()) == ".scene" ||
-        file_path.filename() == "project.ini" || file_path.filename() == "scene.ini") {
-        throw PortableSceneValidationError(
-            "Expected a valid scene.ini",
-            nlohmann::json::array({{{"code", "invalid_scene_format"},
-                                    {"message", "Expected a valid scene.ini"},
-                                    {"path", path_to_utf8(file_path)},
-                                    {"actor", ""}, {"field", ""}}}));
-    }
+    if (file_path.filename() == "scene.ini") throw std::runtime_error("ProjectArchive owns scene.ini");
     std::vector<std::string> lines;
     {
         std::ifstream input(file_path);
@@ -1622,6 +1591,7 @@ NativeEditorScene& materialize_scene_snapshot_into_state(
     state.project_path.clear();
     state.scene = std::make_unique<NativeEditorScene>();
     auto& scene = *state.scene;
+    scene.archive_session = snapshot.value("archive_session", std::string{});
     scene.read_only = snapshot.value("read_only", false);
     scene.frame_when_ready = scene.read_only && data.at("cameras").empty();
     scene.project_root = path_from_utf8(snapshot.at("project_root").get<std::string>());
@@ -1981,6 +1951,7 @@ nlohmann::json actor_to_json(const NativeEditorScene& scene, const NativeEditorA
                             bool best_effort = CefCurrentlyOn(TID_UI)) {
     nlohmann::json item;
     item["name"] = actor.name;
+    item["archive_session"] = scene.archive_session;
     item["actor_guid"] = actor.actor_guid;
     item["handle"] = actor.engine_actor ? actor.engine_actor->get_handle() : 0;
     item["path"] = actor.route;
@@ -2137,9 +2108,16 @@ nlohmann::json scene_to_json(const NativeEditorScene& scene) {
 }
 
 // Send current values only. ProjectArchive owns the on-disk schema and atomic commit.
-NativeResult save_editor_scene(const NativeEditorScene& scene, bool actors_only) {
-    if (scene.read_only)
-        return native_success({{"ok", false}, {"status", "read_only"}, {"message", "External geometry scenes cannot be saved"}});
+NativeResult project_archive_call(const char* method, nlohmann::json request) {
+    return invoke_python_script_service({"ProjectArchive", method, nlohmann::json::array({std::move(request)})},
+                                        "python-archive", std::chrono::seconds(300));
+}
+
+bool matches_archive_session(const NativeEditorScene& scene, const nlohmann::json& request) {
+    return !scene.archive_session.empty() && request.value("archive_session", std::string{}) == scene.archive_session;
+}
+
+nlohmann::json archive_scene_values(const NativeEditorScene& scene) {
     auto state = scene_to_json(scene);
     state["core_version"] = scene.core_version;
     state["physics"] = native_scene_environment_payload(scene).at("physics");
@@ -2166,9 +2144,16 @@ NativeResult save_editor_scene(const NativeEditorScene& scene, bool actors_only)
             item["vision_stable_planes"] = camera->get_requested_vision_stable_planes();
         }
     }
-    return invoke_python_script_service({"ProjectArchive", "save", nlohmann::json::array({{
-        {"project_path", path_to_utf8(scene.project_root)}, {"actors_only", actors_only},
-        {"scene", std::move(state)}}})}, "python-archive", std::chrono::seconds(30));
+    return state;
+}
+
+NativeResult save_editor_scene(const NativeEditorScene& scene, bool actors_only,
+                               const nlohmann::json& metadata = nlohmann::json::object()) {
+    if (scene.read_only)
+        return native_success({{"ok", false}, {"status", "read_only"}, {"message", "External geometry scenes cannot be saved"}});
+    auto state = archive_scene_values(scene);
+    return project_archive_call("save", {{"project_path", path_to_utf8(scene.project_root)}, {"actors_only", actors_only},
+                                         {"scene", std::move(state)}, {"metadata", metadata}});
 }
 
 NativeEditorActor* find_native_actor(NativeEditorScene& scene, const std::string& actor_name) {
@@ -2217,8 +2202,9 @@ std::string unique_camera_name(const NativeEditorScene& scene, const std::string
 
 NativeEditorCamera& create_native_camera_view(NativeEditorScene& scene, const std::string& requested_name) {
     NativeEditorCamera item;
+    ++scene.tree_revision;
     item.name = unique_camera_name(scene, requested_name);
-    item.camera_id = scene.route + "#" + item.name;
+    item.camera_id = make_actor_guid(scene.route, item.name, scene.cameras.size());
     item.deletable = true;
     item.width = 1920;
     item.height = 1080;
@@ -2638,11 +2624,11 @@ float arg_float_value(const nlohmann::json& args, size_t index, float fallback =
     return fallback;
 }
 
-void emit_scene_tree_changed(const std::string& scene_route);
+
 
 std::vector<std::string> prepare_animation_sources(const NativeEditorScene& scene, const nlohmann::json& value) {
     auto sources = AnimationConfig::parse_sources(value);
-    if (sources.empty() || !detect_scene_folder(scene.project_root)) return sources;
+    if (sources.empty() || scene.read_only) return sources;
     SceneFolders::SceneAssetStore store(scene.project_root);
     for (auto& source : sources) {
         const auto path = resolve_project_path(scene.project_root, source);
@@ -2763,7 +2749,7 @@ NativeResult create_native_editor_actor(const std::string& scene_route_arg,
         if (existing != nullptr) {
             if (actor_data_bool(actor_data, {"update_if_exists"}).value_or(false)) {
                 apply_actor_data_to_existing(*existing);
-                emit_scene_tree_changed(scene->route);
+                ++scene->tree_revision;
             }
             return native_success({{"status", "success"}, {"scene", scene->route},
                                    {"actor", actor_to_json(*scene, *existing)}, {"existed", true}});
@@ -2773,7 +2759,7 @@ NativeResult create_native_editor_actor(const std::string& scene_route_arg,
     NativeEditorActor item;
     item.actor_type = actor_type;
     std::optional<SceneFolders::SceneAssetStore> portable_store;
-    if (!detect_scene_folder(scene->project_root)) throw std::runtime_error("Expected a valid scene.ini");
+    if (scene->read_only) throw std::runtime_error("External scenes are read-only");
     {
         portable_store.emplace(scene->project_root);
         const auto source = resolve_project_path(scene->project_root, source_path);
@@ -2905,7 +2891,7 @@ NativeResult create_native_editor_actor(const std::string& scene_route_arg,
         actor.mechanics->set_body_type("phantom");
     }
 
-    emit_scene_tree_changed(scene->route);
+    ++scene->tree_revision;
     return native_success({
         {"status", "success"},
         {"scene", scene->route},
@@ -2970,9 +2956,11 @@ NativeResult remove_native_editor_actor(const std::string& scene_route_arg,
     if (scene->engine_scene && it->engine_actor) {
         scene->engine_scene->remove_actor(it->engine_actor.get());
     }
+    if (scene->selection.value("actor_guid", std::string{}) == it->actor_guid)
+        scene->selection = nlohmann::json::object();
     scene->actors.erase(it);
 
-    emit_scene_tree_changed(scene->route);
+    ++scene->tree_revision;
 
     return native_success({
         {"status", "success"},
@@ -3031,20 +3019,6 @@ NativeResult set_native_editor_actor_transform(const std::string& scene_route_ar
         {"scene", scene->route},
         {"actor", actor_to_json(*scene, *actor)},
     });
-}
-
-void emit_actor_change(const NativeContext& context,
-                       const NativeEditorScene& scene,
-                       const NativeEditorActor& actor) {
-    (void)context;
-    emit_editor_api_event("SceneTools.actorChanged",
-                          {{"actor_type", actor.actor_type},
-                           {"scene", scene.route},
-                           {"actor", actor.name}});
-}
-
-void emit_scene_tree_changed(const std::string& scene_route) {
-    emit_editor_api_event("SceneTools.sceneTreeChanged", {{"scene", scene_route}});
 }
 
 enum class PendingNetworkActorApplyResult {
@@ -3158,7 +3132,7 @@ PendingNetworkActorApplyOutcome apply_pending_network_actor_transform(
             return pending_actor_outcome(PendingNetworkActorApplyResult::Retry, applied.error);
         }
         auto* actor = find_native_actor(*scene, actor_guid);
-        if (actor) emit_actor_change(context, *scene, *actor);
+        if (actor) ++scene->tree_revision;
         return pending_actor_outcome(PendingNetworkActorApplyResult::Applied, {},
                                      actor ? actor_to_json(*scene, *actor) : nlohmann::json::object());
     } catch (const std::exception& error) {
@@ -3478,7 +3452,7 @@ PendingNetworkActorApplyOutcome apply_pending_network_actor_state(
             }
         }
 
-        emit_actor_change(context, *scene, *actor);
+        ++scene->tree_revision;
         return pending_actor_outcome(PendingNetworkActorApplyResult::Applied, {},
                                      actor_to_json(*scene, *actor));
     } catch (const nlohmann::json::exception& error) {
@@ -3836,9 +3810,11 @@ bool is_path_within(const std::filesystem::path& root,
 }
 
 bool is_valid_project_dir(const std::filesystem::path& project_dir) {
-    std::error_code ec;
-    return std::filesystem::is_directory(project_dir, ec) &&
-           detect_scene_folder(project_dir).has_value();
+    const auto* scene = native_editor_state().scene.get();
+    if (scene && !scene->read_only && scene->project_root == project_dir) return true;
+    if (!std::filesystem::is_directory(project_dir)) return false;
+    const auto result = project_archive_call("project_info", {{"path", path_to_utf8(project_dir)}});
+    return result.success && result.data.contains("project_path");
 }
 
 std::filesystem::path canonical_project_dir_for_settings(const std::filesystem::path& project_dir) {
@@ -3846,10 +3822,9 @@ std::filesystem::path canonical_project_dir_for_settings(const std::filesystem::
         return {};
     }
 
+    if (project_dir.is_absolute()) return absolute_normalized_path(project_dir);
     std::vector<std::filesystem::path> candidates;
-    if (project_dir.is_absolute()) {
-        candidates.push_back(project_dir);
-    } else {
+    {
         candidates.push_back(std::filesystem::current_path() / project_dir);
         candidates.push_back(runtime_data_dir() / project_dir);
         candidates.push_back(editor_root_path() / project_dir);
@@ -3997,13 +3972,13 @@ nlohmann::json recent_projects_native() {
             continue;
         }
         const auto project_dir = canonical_project_dir_for_settings(path_from_utf8(item.get<std::string>()));
-        const auto layout = detect_scene_folder(project_dir);
-        const auto ini = layout ? read_ini_file(layout->scene_file) : IniFile{};
+        auto metadata = project_archive_call("project_info", {{"path", path_to_utf8(project_dir)}});
+        const bool exists = metadata.success && metadata.data.contains("project_path");
         result.push_back({
-            {"name", layout ? layout->scene_name : path_to_utf8(project_dir.filename())},
+            {"name", exists ? metadata.data.value("name", std::string{}) : path_to_utf8(project_dir.filename())},
             {"path", path_to_utf8(project_dir)},
-            {"if_exists", layout.has_value()},
-            {"last_edited", layout ? ini_value(ini, "scene", "last_opened", "-") : "-"},
+            {"if_exists", exists},
+            {"last_edited", exists ? metadata.data.value("last_opened", std::string{"-"}) : "-"},
         });
     }
     return result;
@@ -4014,7 +3989,7 @@ nlohmann::json active_project_info_json() {
     if (state.scene && state.scene->read_only) {
         return {{"name", state.scene->name}, {"mode", "creative"},
                 {"project_path", state.project_path}, {"read_only", true},
-                {"source_path", state.project_path}};
+                {"source_path", state.project_path}, {"archive_session", state.scene->archive_session}};
     }
     const auto project_path = normalize_route(
         state.project_path.empty() ? resolve_active_project_path(nlohmann::json::array())
@@ -4024,19 +3999,10 @@ nlohmann::json active_project_info_json() {
     }
 
     const auto project_root = path_from_utf8(project_path);
-    if (const auto portable = detect_scene_folder(project_root)) {
-        const auto scene_ini = read_ini_file(portable->scene_file);
-        return {
-            {"name", portable->scene_name},
-            {"mode", ini_value(scene_ini, "world", "type", "creative")},
-            {"prompt", ini_value(scene_ini, "world", "prompt")},
-            {"core_version", ini_value(scene_ini, "scene", "core_version")},
-            {"create_time", ini_value(scene_ini, "scene", "create_time")},
-            {"last_opened", ini_value(scene_ini, "scene", "last_opened")},
-            {"project_path", path_to_utf8(project_root)},
-        };
-    }
-    throw std::runtime_error("Expected a valid scene.ini");
+    auto info = project_archive_call("project_info", {{"path", path_to_utf8(project_root)}});
+    if (!info.success || !info.data.contains("project_path")) throw std::runtime_error("Unable to read project settings");
+    info.data["archive_session"] = state.scene ? state.scene->archive_session : "";
+    return info.data;
 }
 
 std::string detect_hostname_ipv4() {
@@ -4855,6 +4821,7 @@ std::string get_editor_scene_snapshot_from_python(const std::string& scene_name)
             {"status", "success"},
             {"scene", scene->route},
             {"scene_name", scene->name},
+            {"archive_session", scene->archive_session},
             {"project_path", path_to_utf8(scene->project_root)},
             {"actor_count", scene->actors.size()},
             {"actors", actors},
@@ -5342,9 +5309,8 @@ void register_project_launcher_api_handlers(NativeApiRegistry& registry) {
                 settings_value("General", "default_path", path_to_utf8(runtime_data_dir())));
             const auto base_dir = path_from_utf8(base_text);
             const auto target = base_dir / path_from_utf8(name);
-            if (!create_scene_folder(target, name)) {
-                throw std::runtime_error("Unable to create portable scene folder: " + path_to_utf8(target));
-            }
+            auto created = project_archive_call("create_project", {{"path", path_to_utf8(target)}, {"name", name}});
+            if (!created.success || !created.data.contains("path")) return native_failure("Project creation failed: " + created.error, 2);
             update_editor_settings_section("General", {{"default_path", path_to_utf8(base_dir)}});
             return native_success(path_to_utf8(target));
         }},
@@ -5365,12 +5331,9 @@ void register_project_launcher_api_handlers(NativeApiRegistry& registry) {
                 target = base_dir / (dir_base + "_" + std::to_string(index++));
             } while (std::filesystem::exists(target));
             const auto display_name = display_base + "_" + std::to_string(index - 1);
-            if (!create_scene_folder(target, display_name)) {
-                throw std::runtime_error("Unable to create portable world scene: " + path_to_utf8(target));
-            }
+            auto created = project_archive_call("create_project", {{"path", path_to_utf8(target)}, {"name", display_name}, {"world", {{"type", world_type}, {"prompt", prompt}}}});
+            if (!created.success || !created.data.contains("path")) return native_failure("Project creation failed: " + created.error, 2);
             update_editor_settings_section("General", {{"default_path", path_to_utf8(base_dir)}});
-            replace_ini_section_from_map(target / "scene.ini", "world",
-                                         {{"type", world_type}, {"prompt", prompt}});
             return native_success({{"name", display_name}, {"path", path_to_utf8(target)}});
         }},
         {"create_multiplayer_project", [](const NativeRequest& request, const NativeContext&) {
@@ -5386,11 +5349,9 @@ void register_project_launcher_api_handlers(NativeApiRegistry& registry) {
                 target = base_dir / (dir_base + "_" + std::to_string(index++));
             } while (std::filesystem::exists(target));
             const auto display_name = display_base + "_" + std::to_string(index - 1);
-            if (!create_scene_folder(target, display_name)) {
-                throw std::runtime_error("Unable to create portable multiplayer scene: " + path_to_utf8(target));
-            }
+            auto created = project_archive_call("create_project", {{"path", path_to_utf8(target)}, {"name", display_name}, {"multiplayer", {{"role", role}}}});
+            if (!created.success || !created.data.contains("path")) return native_failure("Project creation failed: " + created.error, 2);
             update_editor_settings_section("General", {{"default_path", path_to_utf8(base_dir)}});
-            replace_ini_section_from_map(target / "scene.ini", "multiplayer", {{"role", role}});
             return native_success({{"name", display_name}, {"path", path_to_utf8(target)}, {"role", role}});
         }},
 
@@ -5472,11 +5433,7 @@ void register_project_launcher_api_handlers(NativeApiRegistry& registry) {
                     "[ProjectLauncher] Python project context update was not queued for '{}'",
                     state.project_path);
             }
-            emit_editor_api_event("ProjectLauncher.projectOpened", {
-                {"path", state.project_path}, {"status", prepared.status},
-                {"scene", {{"path", state.scene->route}, {"name", state.scene->name}}},
-            });
-            emit_scene_tree_changed(state.scene->route);
+            ++state.scene->tree_revision;
             return native_success({
                 {"ok", true}, {"status", prepared.status}, {"path", state.project_path},
                 {"degraded", prepared.status == "opened_degraded" || unresolved_count > 0},
@@ -5501,44 +5458,14 @@ void register_project_launcher_api_handlers(NativeApiRegistry& registry) {
             auto root_text = data.value("path", std::string{});
             if (root_text.empty()) root_text = resolve_active_project_path(nlohmann::json::array());
             const auto root = canonical_project_dir_for_settings(path_from_utf8(root_text));
-            std::string format_status = "invalid";
-            SceneFolders::SceneValidationResult validation;
-            if (detect_scene_folder(root)) {
-                format_status = "portable_v1";
-                validation = SceneFolders::validate_portable_scene(root, data.value("verifyHashes", true));
-            } else if (std::filesystem::is_regular_file(root / "scene.ini")) {
-                const auto ini = read_ini_file(root / "scene.ini");
-                const auto type = ini_value(ini, "format", "type");
-                const auto version = ini_value(ini, "format", "version");
-                format_status = type == "corona_scene_folder" && version != "1"
-                                    ? "unsupported_version"
-                                    : "malformed";
-                validation.diagnostics.push_back({
-                    format_status, format_status == "unsupported_version"
-                                       ? "Portable scene version is unsupported"
-                                       : "Portable scene metadata is malformed",
-                    root / "scene.ini"});
-            } else {
-                validation.diagnostics.push_back({"invalid_scene_format", "Expected scene.ini", root / "scene.ini"});
-            }
-
-            nlohmann::json diagnostics = nlohmann::json::array();
-            for (const auto& item : validation.diagnostics) {
-                diagnostics.push_back({{"code", item.code}, {"message", item.message},
-                                       {"path", path_to_utf8(item.path)}, {"actor", item.actor},
-                                       {"field", item.field}});
-            }
-            return native_success({{"ok", validation.ok()}, {"status", format_status},
-                                   {"path", path_to_utf8(root)}, {"assetCount", validation.asset_count},
-                                   {"totalBytes", validation.total_bytes},
-                                   {"diagnostics", std::move(diagnostics)}});
+            return project_archive_call("validate_project", {{"path", path_to_utf8(root)}, {"verifyHashes", data.value("verifyHashes", true)}});
         }},
         {"import_portable_asset", [](const NativeRequest& request, const NativeContext&) {
             const auto data = arg_object(request.args, 0);
             auto root_text = data.value("path", std::string{});
             if (root_text.empty()) root_text = resolve_active_project_path(nlohmann::json::array());
             const auto root = canonical_project_dir_for_settings(path_from_utf8(root_text));
-            if (!detect_scene_folder(root)) {
+            if (!is_valid_project_dir(root)) {
                 return native_success({{"ok", false}, {"diagnostics", nlohmann::json::array({{
                     {"code", "invalid_scene_format"}, {"message", "Expected a portable scene folder"},
                     {"path", path_to_utf8(root)}, {"actor", ""}, {"field", ""}}})}});
@@ -5581,7 +5508,14 @@ void register_project_launcher_api_handlers(NativeApiRegistry& registry) {
             if (root_text.empty()) root_text = resolve_active_project_path(nlohmann::json::array());
             const auto root = canonical_project_dir_for_settings(path_from_utf8(root_text));
             const bool dry_run = data.value("dryRun", true);
-            const auto cleaned = SceneFolders::cleanup_portable_scene_assets(root, dry_run);
+            auto validation = project_archive_call("validate_project", {{"path", path_to_utf8(root)}});
+            if (!validation.success || !validation.data.value("ok", false)) {
+                if (!validation.success) return validation;
+                return native_success({{"ok", false}, {"dryRun", dry_run}, {"removedBundles", 0}, {"removedFiles", 0},
+                    {"reclaimedBytes", 0}, {"diagnostics", validation.data.value("diagnostics", nlohmann::json::array())}});
+            }
+            const auto cleaned = SceneFolders::cleanup_unreferenced_assets(root,
+                validation.data.at("references").get<std::set<std::string>>(), dry_run);
             nlohmann::json diagnostics = nlohmann::json::array();
             for (const auto& item : cleaned.diagnostics) {
                 diagnostics.push_back({{"code", item.code}, {"message", item.message},
@@ -5720,13 +5654,12 @@ void register_main_view_api_handlers(NativeApiRegistry& registry) {
             const auto scene_route = normalize_route(arg_string(request.args, 0));
             scene = resolve_native_editor_scene_request(scene, scene_route);
             const auto snapshot = arg_object(request.args, 1);
+            if (!matches_archive_session(*scene, snapshot))
+                return native_failure("PROJECT_CONTEXT_CHANGED", 409);
+            nlohmann::json metadata = nlohmann::json::object();
+            for (const char* key : {"name", "core_version"})
+                if (snapshot.contains(key) && snapshot[key].is_string()) metadata[key] = snapshot[key];
             if (!snapshot.empty()) {
-                if (snapshot.contains("name") && snapshot["name"].is_string()) {
-                    scene->name = snapshot["name"].get<std::string>();
-                }
-                if (snapshot.contains("core_version") && snapshot["core_version"].is_string()) {
-                    scene->core_version = snapshot["core_version"].get<std::string>();
-                }
                 if (snapshot.contains("script_path") && snapshot["script_path"].is_string()) {
                     scene->script_path = normalize_route(snapshot["script_path"].get<std::string>());
                 }
@@ -5738,8 +5671,10 @@ void register_main_view_api_handlers(NativeApiRegistry& registry) {
 
 
             }
-            auto saved = save_editor_scene(*scene, false);
+            auto saved = save_editor_scene(*scene, false, metadata);
             if (!saved.success || !saved.data.value("ok", false)) return saved;
+            if (metadata.contains("name")) scene->name = metadata["name"];
+            if (metadata.contains("core_version")) scene->core_version = metadata["core_version"];
             nlohmann::json save_diagnostics = scene->load_diagnostics;
             std::size_t unresolved_count = 0;
             for (const auto& actor : scene->actors) {
@@ -5818,45 +5753,14 @@ void register_project_settings_api_handlers(NativeApiRegistry& registry) {
             return native_success(active_project_info_json());
         }},
         {"save_active_project_info", [](const NativeRequest& request, const NativeContext&) {
-            const auto project_path = resolve_active_project_path(nlohmann::json::array());
-            if (project_path.empty()) {
-                return native_failure("未激活任何项目", 404);
-            }
-
-            const auto project_root = path_from_utf8(project_path);
-            const auto portable = detect_scene_folder(project_root);
-            if (!portable) {
-                return native_failure(
-                    "需要有效的 scene.ini",
-                    2);
-            }
-
+            auto* scene = native_editor_state().scene.get();
             const auto settings = arg_object(request.args, 0);
-            auto scene_ini = read_ini_file(portable->scene_file);
-            std::map<std::string, std::string> scene_values;
-            const auto existing_scene = scene_ini.find("scene");
-            if (existing_scene != scene_ini.end()) {
-                for (const auto& [key, value] : existing_scene->second) {
-                    scene_values[key] = value;
-                }
-            }
-            for (const auto& key : {std::string{"name"}, std::string{"core_version"}}) {
-                const auto value = settings.find(key);
-                if (value != settings.end() && value->is_string()) {
-                    const auto text = trim_ascii(value->get<std::string>());
-                    if (!text.empty()) {
-                        scene_values[key] = text;
-                    }
-                }
-            }
-            replace_ini_section_from_map(portable->scene_file, "scene", scene_values);
-            // Keep subsequent scene saves from overwriting the edited metadata.
-            if (auto* scene = native_editor_state().scene.get(); scene &&
-                absolute_normalized_path(scene->project_root) == absolute_normalized_path(project_root)) {
-                scene->name = scene_values["name"];
-                if (scene_values.contains("core_version")) scene->core_version = scene_values["core_version"];
-            }
-            update_editor_settings_section("General", {{"last_project", project_path}});
+            if (!scene || !matches_archive_session(*scene, settings)) return native_failure("PROJECT_CONTEXT_CHANGED", 409);
+            if (scene->read_only) return native_failure("READ_ONLY_PROJECT", 403);
+            auto result = project_archive_call("update_metadata", {{"path", path_to_utf8(scene->project_root)}, {"settings", settings}});
+            if (!result.success || !result.data.contains("name")) return native_failure("Project settings were not saved: " + result.error, 2);
+            scene->name = result.data.at("name");
+            scene->core_version = result.data.at("core_version");
             return native_success({{"message", "保存成功"}});
         }},
     };
@@ -5897,10 +5801,24 @@ void tick_native_animation_updates() {
                 actor.persisted_animation_sources = state.sources;
                 actor.actor_version = std::max(actor.actor_version + 1, 1);
             }
-            emit_actor_change(NativeContext{}, *scene, actor);
+            ++scene->tree_revision;
         }
         return true;
     }, route, kCollaborativeApplyDispatchTimeout);
+}
+
+std::string current_viewport_session() {
+    const auto* scene = native_editor_state().scene.get();
+    return scene ? scene->archive_session : "";
+}
+
+void retain_viewport_result(const CefRefPtr<CefFrame>& frame, const std::string& session,
+                            const char* kind, nlohmann::json payload) {
+    auto* scene = native_editor_state().scene.get();
+    if (!scene || !frame || !frame->IsValid() || session != scene->archive_session) return;
+    auto& results = scene->viewport_results[frame->GetIdentifier().ToString()];
+    if (results.size() >= 256) results.erase(results.begin());
+    results.push_back({{"kind", kind}, {"payload", std::move(payload)}});
 }
 
 void register_scene_tools_api_handlers(NativeApiRegistry& registry) {
@@ -5913,6 +5831,51 @@ void register_scene_tools_api_handlers(NativeApiRegistry& registry) {
             }
         }},
 
+        {"read_active_scene", [](const NativeRequest&, const NativeContext&) {
+            const auto* scene = native_editor_state().scene.get();
+            if (!scene) return native_success({{"archive_session", ""}});
+            return native_success({{"archive_session", scene->archive_session}, {"scene", scene->route},
+                {"name", scene->name}, {"project_path", native_editor_state().project_path}, {"read_only", scene->read_only},
+                {"tree_revision", scene->tree_revision}, {"selection", scene->selection}});
+        }},
+        {"read_actor", [](const NativeRequest& request, const NativeContext&) {
+            auto* scene = native_editor_state().scene.get();
+            const auto query = arg_object(request.args, 0);
+            if (!scene || !matches_archive_session(*scene, query)) return native_failure("PROJECT_CONTEXT_CHANGED", 409);
+            const auto id = query.value("actor", std::string{});
+            auto* actor = find_native_actor(*scene, id);
+            if (!actor) return native_failure("Actor not found: " + id, 404);
+            return native_success(actor_to_json(*scene, *actor));
+        }},
+        {"read_transforms", [](const NativeRequest& request, const NativeContext&) {
+            const auto query = arg_object(request.args, 0);
+            auto* scene = native_editor_state().scene.get();
+            if (!scene || !matches_archive_session(*scene, query)) return native_failure("PROJECT_CONTEXT_CHANGED", 409);
+            auto values = nlohmann::json::array();
+            for (const auto& guid : query.at("actors").get<std::vector<std::string>>()) {
+                auto* actor = find_native_actor_by_guid(*scene, guid);
+                if (!actor) continue;
+                values.push_back({{"scene", scene->route}, {"actor", actor->name}, {"actor_guid", guid},
+                    {"position", actor->geometry ? actor->geometry->get_position() : actor->position},
+                    {"rotation", actor->geometry ? actor->geometry->get_rotation() : actor->rotation},
+                    {"scale", actor->geometry ? actor->geometry->get_scale() : actor->scale}});
+            }
+            return native_success({{"archive_session", scene->archive_session}, {"actors", std::move(values)}});
+        }},
+        {"read_archive_scene", [](const NativeRequest& request, const NativeContext&) {
+            auto* scene = native_editor_state().scene.get();
+            if (!scene || !matches_archive_session(*scene, arg_object(request.args, 0)))
+                return native_failure("PROJECT_CONTEXT_CHANGED", 409);
+            return native_success({{"archive_session", scene->archive_session}, {"scene", archive_scene_values(*scene)}});
+        }},
+        {"take_viewport_results", [](const NativeRequest& request, const NativeContext& context) {
+            auto* scene = native_editor_state().scene.get();
+            if (!scene || !matches_archive_session(*scene, arg_object(request.args, 0)))
+                return native_failure("PROJECT_CONTEXT_CHANGED", 409);
+            if (!context.frame) return native_failure("Viewport results require the originating frame", 400);
+            auto node = scene->viewport_results.extract(context.frame->GetIdentifier().ToString());
+            return native_success(node.empty() ? nlohmann::json::array() : nlohmann::json(std::move(node.mapped())));
+        }},
         {"get_scene_snapshot", [](const NativeRequest& request, const NativeContext&) {
             try {
                 const auto raw = get_editor_scene_snapshot_from_python(arg_string(request.args, 0));
@@ -5925,8 +5888,12 @@ void register_scene_tools_api_handlers(NativeApiRegistry& registry) {
                 return native_failure(e.what(), 2);
             }
         }},
-        {"set_actor_transform", [](const NativeRequest& request, const NativeContext&) {
+        {"set_actor_transform", [](const NativeRequest& request, const NativeContext& context) {
             try {
+                const auto transform = arg_object(request.args, 2);
+                if ((context.browser || transform.contains("archive_session")) &&
+                    !matches_archive_session(*scene_for_request_route(request), transform))
+                    return native_failure("PROJECT_CONTEXT_CHANGED", 409);
                 const auto raw = set_editor_actor_transform_from_python(
                     arg_string(request.args, 0),
                     arg_string(request.args, 1),
@@ -5999,6 +5966,9 @@ void register_scene_tools_api_handlers(NativeApiRegistry& registry) {
 
         {"save_actor", [](const NativeRequest& request, const NativeContext&) {
             auto* scene = scene_for_request_route(request);
+            const auto scope = arg_object(request.args, 2);
+            if (!matches_archive_session(*scene, scope))
+                return native_failure("PROJECT_CONTEXT_CHANGED", 409);
             const auto actor_name = arg_string(request.args, 1);
             if (!actor_name.empty() && !find_native_actor(*scene, actor_name)) {
                 return native_failure("Actor not found: " + actor_name, 2);
@@ -6066,7 +6036,7 @@ void register_scene_tools_api_handlers(NativeApiRegistry& registry) {
 
                 actor->actor_version = std::max(actor->actor_version + 1, 1);
 
-                emit_actor_change(context, *scene, *actor);
+                ++scene->tree_revision;
                 return native_success({
                     {"status", "success"},
                     {"scene", scene->route},
@@ -6179,7 +6149,7 @@ void register_scene_tools_api_handlers(NativeApiRegistry& registry) {
 
                 actor->actor_version = std::max(actor->actor_version + 1, 1);
 
-                emit_actor_change(context, *scene, *actor);
+                ++scene->tree_revision;
                 return native_success({
                     {"status", "success"},
                     {"scene", scene->route},
@@ -6237,7 +6207,7 @@ void register_scene_tools_api_handlers(NativeApiRegistry& registry) {
 
                 actor->actor_version = std::max(actor->actor_version + 1, 1);
 
-                emit_actor_change(context, *scene, *actor);
+                ++scene->tree_revision;
                 return native_success({
                     {"status", "success"},
                     {"scene", scene->route},
@@ -6330,6 +6300,7 @@ void register_scene_tools_api_handlers(NativeApiRegistry& registry) {
                 }
             }
             const auto removed_index = static_cast<size_t>(std::distance(scene->cameras.begin(), it));
+            ++scene->tree_revision;
             scene->cameras.erase(it);
             if (scene->active_camera_index >= scene->cameras.size()) {
                 scene->active_camera_index = scene->cameras.empty() ? 0 : scene->cameras.size() - 1;
@@ -6344,6 +6315,12 @@ void register_scene_tools_api_handlers(NativeApiRegistry& registry) {
         }},
         {"list_scene_tree", [](const NativeRequest& request, const NativeContext&) {
             auto* scene = scene_for_request_route(request);
+            const auto query = arg_object(request.args, 1);
+            if (!query.empty() && !matches_archive_session(*scene, query))
+                return native_failure("PROJECT_CONTEXT_CHANGED", 409);
+            if (query.contains("known_revision") && query.at("known_revision") == scene->tree_revision)
+                return native_success({{"unchanged", true}, {"archive_session", scene->archive_session},
+                                       {"tree_revision", scene->tree_revision}});
             CFW_LOG_INFO("[SceneTree] snapshot requested='{}' resolved='{}' actors={} cameras={}",
                          arg_string(request.args, 0), scene->route,
                          scene->actors.size(), scene->cameras.size());
@@ -6399,6 +6376,8 @@ void register_scene_tools_api_handlers(NativeApiRegistry& registry) {
                                 arg_string(request.args, 0), scene->route);
             }
             nlohmann::json data = nlohmann::json::object();
+            data["archive_session"] = scene->archive_session;
+            data["tree_revision"] = scene->tree_revision;
             data["actors"] = std::move(actors);
             data["cameras"] = std::move(cameras);
             return native_success(std::move(data));
@@ -6534,7 +6513,7 @@ void register_scene_tools_api_handlers(NativeApiRegistry& registry) {
 
             std::string route;
             auto resolved_path = std::filesystem::weakly_canonical(source_path);
-            if (!detect_scene_folder(scene->project_root)) return native_failure("Expected a valid scene.ini", 2);
+            if (scene->read_only) return native_failure("External scenes are read-only", 2);
             {
                 std::error_code ec;
                 auto relative = std::filesystem::relative(resolved_path, scene->project_root, ec);
@@ -6675,7 +6654,7 @@ void register_scene_tools_api_handlers(NativeApiRegistry& registry) {
             const auto old_name = actor->name;
             actor->name = new_name;
 
-            emit_actor_change(context, *scene, *actor);
+            ++scene->tree_revision;
             return native_success({
                 {"status", "success"},
                 {"scene", scene->route},
@@ -7157,7 +7136,7 @@ void register_scene_tools_api_handlers(NativeApiRegistry& registry) {
             if (!actor) {
                 return native_failure("Actor not found: " + actor_name, 2);
             }
-            emit_actor_change(context, *scene, *actor);
+            ++scene->tree_revision;
             return native_success({{"status", "success"}, {"actor", actor_to_json(*scene, *actor)}});
         }},
         {"select_actor", [](const NativeRequest& request, const NativeContext&) {
@@ -7166,7 +7145,9 @@ void register_scene_tools_api_handlers(NativeApiRegistry& registry) {
             const auto actor_name = arg_string(request.args, 2);
             const auto payload = make_actor_selection_event_payload(
                 scene_name, actor_type, actor_name, arg_object(request.args, 3));
-            emit_editor_api_event("SceneTools.actorSelectionChanged", payload);
+            auto* scene = scene_for_request_route(request);
+            scene->selection = payload;
+            if (auto* actor = find_native_actor(*scene, actor_name)) scene->selection["actor_guid"] = actor->actor_guid;
             return native_success({
                 {"status", "success"},
                 {"scene", scene_name},
@@ -7250,10 +7231,8 @@ void register_scene_tools_api_handlers(NativeApiRegistry& registry) {
             if (duplicate) {
                 return native_failure("Camera name already exists: " + new_name, 2);
             }
+            ++scene->tree_revision;
             camera->name = new_name;
-            if (camera->camera_id.empty() || camera->camera_id == scene->route + "#" + camera_name) {
-                camera->camera_id = scene->route + "#" + new_name;
-            }
             return native_success({
                 {"status", "success"},
                 {"scene", scene->route},
@@ -7287,7 +7266,7 @@ void register_scene_tools_api_handlers(NativeApiRegistry& registry) {
             if (!actor) {
                 return native_success({{"status", "miss"}, {"handle", handle}});
             }
-            emit_actor_change(context, *scene, *actor);
+            ++scene->tree_revision;
             return native_success({
                 {"status", "success"},
                 {"actor", actor_to_json(*scene, *actor)},
@@ -7489,7 +7468,7 @@ void register_scene_tools_api_handlers(NativeApiRegistry& registry) {
                 }
                 actor->persisted_ik_chains = std::move(saved_config);
                 actor->actor_version = std::max(actor->actor_version + 1, 1);
-                emit_actor_change(context, *scene, *actor);
+                ++scene->tree_revision;
                 return native_success(payload);
             } catch (const std::exception& e) {
                 return native_failure(e.what(), 2);

@@ -2,7 +2,7 @@
 import json
 import math
 from pathlib import Path
-import subprocess
+from archive_driver import run_native
 import sys
 import tempfile
 
@@ -15,15 +15,7 @@ with tempfile.TemporaryDirectory(prefix="corona_archive_roundtrip_") as director
     root = Path(directory)
     def run(mode, path):
         output = root / "result.json"
-        with subprocess.Popen([executable, mode, str(path), str(output)], cwd=root,
-                              stdin=subprocess.PIPE, stdout=subprocess.PIPE, encoding="utf-8", errors="replace") as proc:
-            for line in proc.stdout:
-                if line.startswith("ARCHIVE_RPC "):
-                    request = json.loads(line.removeprefix("ARCHIVE_RPC "))
-                    assert request["module"] == "ProjectArchive", request
-                    result = getattr(ProjectArchive, request["function"])(*request["args"])
-                    print(json.dumps({"success": True, "data": result}), file=proc.stdin, flush=True)
-            assert proc.wait(timeout=60) == 0
+        run_native([executable, mode, str(path), str(output)], cwd=root)
         return json.loads(output.read_text(encoding="utf-8"))
 
     scene = root / "portable"
@@ -34,7 +26,7 @@ with tempfile.TemporaryDirectory(prefix="corona_archive_roundtrip_") as director
     scene_file.write_text(text + "\n" + extension, encoding="utf-8")
     original = parse_archive(str(scene))
     for iteration in range(2):
-        current = parse_archive(str(scene))
+        current = ProjectArchive.parse({"path": str(scene)})["snapshot"]
         payload = root / "parsed.json"
         payload.write_text(json.dumps(current), encoding="utf-8")
         result = run("roundtrip", payload)
@@ -45,6 +37,9 @@ with tempfile.TemporaryDirectory(prefix="corona_archive_roundtrip_") as director
         assert abs(physics["fixed_dt"] - .02) < 1e-6 and physics["floor_restitution"] == .25
         assert result["scene"]["actors"][0]["camera_lock"]["enabled"]
         saved = parse_archive(str(scene))
+        camera_section = saved["extensions"]["ini_sections"]["camera"]
+        assert camera_section["camera0.id"] == "main-camera"
+        assert camera_section["camera0.vendor.lens"] == "opaque-value" and camera_section["vendor_schema"] == "7"
         assert saved["scene"]["actors"][0]["persisted_fields"]["a.custom.note"] == "preserved"
         assert extension in scene_file.read_text(encoding="utf-8")
         lock = saved["scene"]["actors"][0]["camera_lock"]

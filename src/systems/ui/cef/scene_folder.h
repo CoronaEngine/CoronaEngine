@@ -2,19 +2,12 @@
 
 #include <cstdint>
 #include <filesystem>
-#include <map>
+#include <set>
 #include <optional>
 #include <string>
 #include <vector>
 
 namespace Corona::Systems::UI::SceneFolders {
-
-struct SceneFolderLayout {
-    std::filesystem::path root;
-    std::filesystem::path scene_file;
-    std::string scene_name;
-    std::uint32_t version{1};
-};
 
 struct Diagnostic {
     std::string code;
@@ -45,11 +38,6 @@ struct ImportResult {
 };
 
 [[nodiscard]] bool is_valid_asset_route(std::string_view route);
-[[nodiscard]] std::optional<SceneFolderLayout> detect_scene_folder(
-    const std::filesystem::path& input);
-[[nodiscard]] std::optional<SceneFolderLayout> create_scene_folder(
-    const std::filesystem::path& root,
-    std::string_view scene_name);
 [[nodiscard]] std::string sha256_file(const std::filesystem::path& path);
 
 class SceneAssetStore {
@@ -74,36 +62,6 @@ class SceneAssetStore {
     std::optional<Diagnostic> manifest_error_;
 };
 
-struct SceneValidationResult {
-    std::vector<Diagnostic> diagnostics;
-    std::uint64_t asset_count{};
-    std::uint64_t total_bytes{};
-
-    [[nodiscard]] bool ok() const noexcept { return diagnostics.empty(); }
-};
-
-[[nodiscard]] SceneValidationResult validate_portable_scene(
-    const std::filesystem::path& scene_root,
-    bool verify_hashes = true);
-
-class SceneDocumentStore {
-   public:
-    explicit SceneDocumentStore(std::filesystem::path scene_root);
-
-    [[nodiscard]] bool replace_sections(
-        const std::map<std::string, std::vector<std::string>>& sections,
-        std::vector<Diagnostic>& diagnostics);
-
-    [[nodiscard]] const std::vector<Diagnostic>& recovery_diagnostics() const noexcept {
-        return recovery_diagnostics_;
-    }
-
-   private:
-    void recover_interrupted_transaction();
-    std::filesystem::path root_;
-    std::vector<Diagnostic> recovery_diagnostics_;
-};
-
 struct CleanupResult {
     std::uint64_t removed_bundles{};
     std::uint64_t removed_files{};
@@ -113,8 +71,8 @@ struct CleanupResult {
     [[nodiscard]] bool ok() const noexcept { return diagnostics.empty(); }
 };
 
-[[nodiscard]] CleanupResult cleanup_portable_scene_assets(
+[[nodiscard]] CleanupResult cleanup_unreferenced_assets(
     const std::filesystem::path& scene_root,
-    bool dry_run = true);
+    const std::set<std::string>& referenced_routes, bool dry_run = true);
 
 }  // namespace Corona::Systems::UI::SceneFolders

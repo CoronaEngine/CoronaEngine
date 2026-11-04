@@ -274,6 +274,17 @@ constexpr std::array<EditorApiParamSpec, 1> kResourceIdParam = {{
     param("resource_id", EditorApiValueType::Any),
 }};
 
+constexpr std::array<EditorApiParamSpec, 2> kReadTreeParams = {{
+    param("scene_name", EditorApiValueType::String),
+    param("query", EditorApiValueType::Object, true),
+}};
+
+constexpr std::array<EditorApiParamSpec, 3> kSaveActorParams = {{
+    param("scene_name", EditorApiValueType::String),
+    param("actor_name", EditorApiValueType::String),
+    param("scope", EditorApiValueType::Object, true),
+}};
+
 constexpr std::array<EditorApiParamSpec, 2> kSceneActorParams = {{
     param("scene_name", EditorApiValueType::String),
     param("actor_name", EditorApiValueType::String),
@@ -614,6 +625,11 @@ constexpr auto kEditorApiMethods = std::to_array<EditorApiMethodSpec>({
     EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, get_vision_accumulation, kSceneToolsCameraOptionalParams, "sceneTools.getVisionAccumulation", "scene_tools.get_vision_accumulation", EditorApiValueType::Object),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, get_vision_stable_planes, kSceneToolsCameraOptionalParams, "sceneTools.getVisionStablePlanes", "scene_tools.get_vision_stable_planes", EditorApiValueType::Object),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, is_vision_available, kNoParams, "sceneTools.isVisionAvailable", "scene_tools.is_vision_available", EditorApiValueType::Object),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, read_active_scene, kNoParams, "scene.readActive", "scene.read_active_scene", EditorApiValueType::Object, animation_callers()),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, read_actor, kObjectPayloadParam, "scene.readActor", "scene.read_actor", EditorApiValueType::Object, animation_callers()),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, read_transforms, kObjectPayloadParam, "scene.readTransforms", "scene.read_transforms", EditorApiValueType::Object, animation_callers()),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, read_archive_scene, kObjectPayloadParam, "scene.readArchive", "scene.read_archive_scene", EditorApiValueType::Object, animation_callers()),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, take_viewport_results, kObjectPayloadParam, "scene.takeViewportResults", "scene.take_viewport_results", EditorApiValueType::Array, caller_mask(EditorApiCaller::Cef)),
     EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, get_scene_snapshot, kSceneNameOptionalParam, "scene.getSnapshot", "scene.get_snapshot", EditorApiValueType::Object, animation_callers()),
     EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, get_environment, kSceneNameParam, "", "scene.get_environment", EditorApiValueType::Object, cef_and_script_runtime_callers()),
     EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, set_environment, kSceneEnvironmentStateParams, "", "scene.set_environment", EditorApiValueType::Object, cef_and_script_runtime_callers()),
@@ -621,11 +637,11 @@ constexpr auto kEditorApiMethods = std::to_array<EditorApiMethodSpec>({
     EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, set_actor_state, kSceneActorStateParams, "sceneTools.setActorState", "scene_tools.set_actor_state", EditorApiValueType::Object, animation_callers()),
     EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, set_actor_physics, kSceneActorPhysicsParams, "sceneTools.setActorPhysics", "scene_tools.set_actor_physics", EditorApiValueType::Object, cef_and_script_runtime_callers()),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, set_actor_camera_lock, kSceneActorCameraLockParams, "sceneTools.setActorCameraLock", "scene_tools.set_actor_camera_lock", EditorApiValueType::Object),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, save_actor, kSceneActorParams, "sceneTools.saveActor", "scene_tools.save_actor", EditorApiValueType::Object, cef_and_script_runtime_callers()),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, save_actor, kSaveActorParams, "sceneTools.saveActor", "scene_tools.save_actor", EditorApiValueType::Object, cef_and_script_runtime_callers()),
     EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, select_model_file, kSceneToolsSelectModelFileParams, "sceneTools.selectModelFile", "scene_tools.select_model_file", EditorApiValueType::String, cef_and_script_runtime_callers()),
     EDITOR_API_METHOD1_WRAPPED(SceneTools, list_actor_tree, "scene.listActorTree", "scene.list_actor_tree", "scene_name", EditorApiValueType::String, EditorApiValueType::Array),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, list_camera_views, kSceneNameParam, "sceneTools.listCameraViews", "scene_tools.list_camera_views", EditorApiValueType::Object),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, list_scene_tree, kSceneNameParam, "sceneTools.listSceneTree", "scene_tools.list_scene_tree", EditorApiValueType::Object),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, list_scene_tree, kReadTreeParams, "sceneTools.listSceneTree", "scene_tools.list_scene_tree", EditorApiValueType::Object),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, open_actor, kSceneActorParams, "sceneTools.openActor", "scene_tools.open_actor", EditorApiValueType::Object),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, open_camera_view, kSceneCameraParams, "sceneTools.openCameraView", "scene_tools.open_camera_view", EditorApiValueType::Object),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, pick_actor_at_pixel, kSceneToolsPickActorParams, "sceneTools.pickActor", "scene_tools.pick_actor", EditorApiValueType::Object),
@@ -1330,8 +1346,14 @@ void EditorApiCallbackRegistry::clear_python_script_callbacks() {
     }
 }
 
+// Scene state (including changes and viewport results) is returned only to an active reader.
+static bool pull_only_event(std::string_view name) {
+    return name.starts_with("SceneTools.") || name == "ProjectLauncher.projectOpened";
+}
+
 std::size_t EditorApiCallbackRegistry::emit_editor_api_event(std::string_view event_name,
                                                              const nlohmann::json& payload) {
+    if (pull_only_event(event_name)) return 0;
     const auto event_spec = find_editor_api_event(event_name);
     if (!event_spec || !event_caller_allowed(*event_spec, EditorApiCaller::Cef) ||
         !validate_editor_api_event_payload(*event_spec, payload)) {
@@ -1342,6 +1364,7 @@ std::size_t EditorApiCallbackRegistry::emit_editor_api_event(std::string_view ev
 
 std::size_t EditorApiCallbackRegistry::emit_python_script_event(std::string_view event_name,
                                                                 const nlohmann::json& payload) {
+    if (pull_only_event(event_name)) return 0;
     const auto event_spec = find_editor_api_event(event_name);
     if (!event_spec || !event_caller_allowed(*event_spec, EditorApiCaller::PythonScript) ||
         !validate_editor_api_event_payload(*event_spec, payload)) {
@@ -1366,6 +1389,7 @@ std::size_t emit_editor_api_event(std::string_view event_name, const nlohmann::j
 std::size_t emit_editor_api_event_to_frame(std::string_view event_name,
                                             const nlohmann::json& payload,
                                             const CefRefPtr<CefFrame>& frame) {
+    if (pull_only_event(event_name)) return 0;
     const auto event_spec = find_editor_api_event(event_name);
     if (!frame || !event_spec || !event_caller_allowed(*event_spec, EditorApiCaller::Cef) ||
         !validate_editor_api_event_payload(*event_spec, payload)) {

@@ -591,7 +591,7 @@ void write_ini_file(const fs::path& path,
                     const std::map<std::string, std::map<std::string, std::string>>& ini) {
     fs::create_directories(path.parent_path());
     std::ofstream stream(path, std::ios::binary | std::ios::trunc);
-    if (!stream) throw std::runtime_error("Unable to write scene.ini");
+    if (!stream) throw std::runtime_error("Unable to write asset metadata");
     for (const auto& [section, values] : ini) {
         stream << '[' << section << "]\n";
         for (const auto& [key, value] : values) stream << key << " = " << value << '\n';
@@ -609,50 +609,6 @@ bool is_valid_asset_route(std::string_view route) {
     return iterator != path.end() && *iterator == "Assets";
 }
 
-std::optional<SceneFolderLayout> detect_scene_folder(const fs::path& input) {
-    auto root = fs::is_directory(input) ? input : input.parent_path();
-    const auto scene_file = fs::is_directory(input) ? input / "scene.ini" : input;
-    if (scene_file.filename() != "scene.ini" || !fs::is_regular_file(scene_file)) return std::nullopt;
-    const auto ini = read_ini(scene_file);
-    const auto format = ini.find("format");
-    if (format == ini.end() || !format->second.contains("type") ||
-        format->second.at("type") != "corona_scene_folder" ||
-        !format->second.contains("version") || format->second.at("version") != "1") return std::nullopt;
-    SceneFolderLayout layout{root, scene_file};
-    if (const auto scene = ini.find("scene"); scene != ini.end() && scene->second.contains("name")) {
-        layout.scene_name = scene->second.at("name");
-    }
-    if (layout.scene_name.empty()) layout.scene_name = path_utf8(root.filename());
-    return layout;
-}
-
-std::optional<SceneFolderLayout> create_scene_folder(const fs::path& root,
-                                                     std::string_view scene_name) {
-    if (root.empty() || fs::exists(root)) return std::nullopt;
-    const auto staging = root.parent_path() / ("." + root.filename().string() + ".creating");
-    std::error_code ec;
-    fs::remove_all(staging, ec);
-    try {
-        fs::create_directories(staging / "Assets");
-        std::map<std::string, std::map<std::string, std::string>> ini;
-        ini["format"] = {{"type", "corona_scene_folder"}, {"version", "1"}};
-        ini["scene"] = {{"name", scene_name.empty() ? root.filename().string() : std::string(scene_name)}};
-        ini["sun"] = {{"sun_direction", "1.0, 1.0, 1.0"}, {"enabled", "true"}};
-        ini["grid"] = {{"enabled", "true"}};
-        ini["actors"] = {};
-        ini["scripts"] = {{"path", ""}};
-        ini["terrain"] = {{"type", ""}, {"path", ""}};
-        write_ini_file(staging / "scene.ini", ini);
-        SceneAssetStore store(staging, true);
-        if (!store.write_manifest()) throw std::runtime_error("Unable to create asset manifest");
-        fs::rename(staging, root);
-        return detect_scene_folder(root);
-    } catch (...) {
-        fs::remove_all(staging, ec);
-        return std::nullopt;
-    }
-}
-
 std::string sha256_file(const fs::path& path) {
     Sha256Hasher hasher;
     hash_file_into(hasher, path);
@@ -664,7 +620,7 @@ SceneAssetStore::SceneAssetStore(fs::path scene_root, bool allow_missing_manifes
     std::scoped_lock lock(scene_file_mutex(root_));
     const auto manifest = root_ / "assets.manifest.json";
     if (!fs::is_regular_file(manifest)) {
-        if (!allow_missing_manifest && detect_scene_folder(root_)) {
+        if (!allow_missing_manifest && fs::is_directory(root_ / "Assets")) {
             manifest_error_ = Diagnostic{"invalid_manifest", "Portable asset manifest is missing", manifest};
         }
         return;
@@ -908,271 +864,12 @@ std::vector<Diagnostic> SceneAssetStore::validate_manifest(bool verify_hashes) c
     return diagnostics;
 }
 
-namespace {
-struct AssetReference {
-    std::string route;
-    std::string field;
-    std::string actor;
-};
-
-// Validation and garbage collection must agree on every persisted asset edge.
-std::vector<AssetReference> scene_asset_references(const fs::path& scene_file,
-                                                 std::vector<Diagnostic>& diagnostics) {
-    std::vector<AssetReference> references;
-    const auto ini = read_ini(scene_file);
-    for (const auto* section : {"vision", "vision_document", "vision_bindings", "vision_unsupported_shapes"}) {
-        if (ini.contains(section))
-            diagnostics.push_back({"unsupported_vision_archive",
-                "External Vision archives are no longer supported", scene_file, {}, section});
-    }
-    for (const auto& [section, fields] : ini) {
-        for (const auto& [key, value] : fields) {
-            const auto actor = section == "actors" ? key.substr(0, key.find('.')) : std::string{};
-            const auto field = section + "." + key;
-            if (section == "actors" && key.ends_with(".animation.sources")) {
-                try {
-                    const auto sources = nlohmann::json::parse(value);
-                    if (!sources.is_array()) throw std::runtime_error("Expected an array of animation asset paths");
-                    std::set<std::string> unique;
-                    for (const auto& source : sources) {
-                        if (!source.is_string() || source.get_ref<const std::string&>().empty() ||
-                            source.get_ref<const std::string&>().find('\0') != std::string::npos)
-                            throw std::runtime_error("Expected non-empty animation asset paths");
-                        const auto route = source.get<std::string>();
-                        if (!unique.insert(route).second) throw std::runtime_error("Duplicate animation asset path");
-                        references.push_back({route, field, actor});
-                    }
-                } catch (const std::exception& error) {
-                    diagnostics.push_back({"invalid_animation_sources", error.what(), scene_file, actor, field});
-                }
-            } else if ((section == "actors" && (key.ends_with(".route") || key.ends_with(".material.texture"))) ||
-                       ((section == "scripts" || section == "terrain") && key == "path") ||
-                       is_valid_asset_route(value)) {
-                if (!trim(value).empty()) references.push_back({value, field, actor});
-            }
-        }
-    }
-    return references;
-}
-} // namespace
-
-SceneValidationResult validate_portable_scene(const fs::path& scene_root,
-                                               bool verify_hashes) {
-    SceneValidationResult result;
-    const auto root = fs::is_directory(scene_root) ? scene_root : scene_root.parent_path();
-    std::scoped_lock lock(scene_file_mutex(root));
-    // Recover before format detection: an interrupted document may not parse.
-    if (fs::is_directory(scene_root) || scene_root.filename() == "scene.ini") {
-        SceneDocumentStore document(root);
-        result.diagnostics = document.recovery_diagnostics();
-        if (!result.diagnostics.empty()) return result;
-    }
-    const auto layout = detect_scene_folder(scene_root);
-    if (!layout) {
-        result.diagnostics.push_back(
-            {"invalid_scene_format", "Expected a portable scene folder version 1", scene_root});
-        return result;
-    }
-
-    SceneAssetStore assets(layout->root);
-    result.diagnostics = assets.validate_manifest(verify_hashes);
-    try {
-        const auto manifest = nlohmann::json::parse(
-            std::ifstream(layout->root / "assets.manifest.json"));
-        if (manifest.contains("bundles") && manifest["bundles"].is_array()) {
-            for (const auto& bundle : manifest["bundles"]) {
-                if (!bundle.contains("files") || !bundle["files"].is_array()) continue;
-                for (const auto& file : bundle["files"]) {
-                    ++result.asset_count;
-                    result.total_bytes += file.value("size", std::uint64_t{});
-                }
-            }
-        }
-    } catch (...) {
-        // validate_manifest already reports the parse failure with its path.
-    }
-    const auto validate_route = [&](std::string_view route,
-                                    std::string field,
-                                    std::string actor = {}) {
-        if (trim(std::string(route)).empty()) return;
-        if (!is_valid_asset_route(route) || !assets.contains_route(route)) {
-            result.diagnostics.push_back({"untrusted_asset_route",
-                                          "Persisted resource is outside Assets or absent from the manifest",
-                                          path_from_utf8(route), std::move(actor), std::move(field)});
-        }
-    };
-    for (const auto& reference : scene_asset_references(layout->scene_file, result.diagnostics))
-        validate_route(reference.route, reference.field, reference.actor);
-    return result;
-}
-
-namespace {
-
-void strip_bom(std::string& line) {
-    if (line.size() >= 3 && static_cast<unsigned char>(line[0]) == 0xEF &&
-        static_cast<unsigned char>(line[1]) == 0xBB && static_cast<unsigned char>(line[2]) == 0xBF) {
-        line.erase(0, 3);
-    }
-}
-
-std::vector<std::string> read_text_lines(const fs::path& path) {
-    std::vector<std::string> lines;
-    std::ifstream input(path);
-    for (std::string line; std::getline(input, line);) {
-        if (!line.empty() && line.back() == '\r') line.pop_back();
-        if (lines.empty()) strip_bom(line);
-        lines.push_back(std::move(line));
-    }
-    return lines;
-}
-
-bool section_header_matches(const std::string& line, std::string_view section) {
-    const auto value = trim(line);
-    return value.size() >= 3 && value.front() == '[' && value.back() == ']' &&
-           lower(trim(value.substr(1, value.size() - 2))) == lower(std::string(section));
-}
-
-bool is_section_header(const std::string& line) {
-    const auto value = trim(line);
-    return value.size() >= 3 && value.front() == '[' && value.back() == ']';
-}
-
-void replace_text_section(std::vector<std::string>& lines,
-                          const std::string& section,
-                          const std::vector<std::string>& replacement) {
-    auto begin = std::find_if(lines.begin(), lines.end(),
-                              [&](const auto& line) { return section_header_matches(line, section); });
-    if (begin == lines.end()) {
-        if (!lines.empty() && !lines.back().empty()) lines.emplace_back();
-        lines.insert(lines.end(), replacement.begin(), replacement.end());
-        return;
-    }
-    auto end = std::next(begin);
-    while (end != lines.end() && !is_section_header(*end)) ++end;
-    const auto insertion = lines.erase(begin, end);
-    lines.insert(insertion, replacement.begin(), replacement.end());
-}
-
-bool atomic_replace_text(const fs::path& target,
-                         const std::vector<std::string>& lines,
-                         std::vector<Diagnostic>& diagnostics) {
-    const auto temporary = target.parent_path() / ".scene.ini.tmp";
-    {
-        std::ofstream output(temporary, std::ios::binary | std::ios::trunc);
-        for (const auto& line : lines) output << line << '\n';
-        output.flush();
-        if (!output) {
-            diagnostics.push_back({"scene_write_failed", "Unable to write scene transaction", temporary});
-            return false;
-        }
-    }
-    if (!MoveFileExW(temporary.c_str(), target.c_str(),
-                     MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
-        diagnostics.push_back({"scene_replace_failed", "Unable to replace scene.ini", target});
-        return false;
-    }
-    return true;
-}
-
-}  // namespace
-
-SceneDocumentStore::SceneDocumentStore(fs::path scene_root) : root_(std::move(scene_root)) {
-    std::scoped_lock lock(scene_file_mutex(root_));
-    recover_interrupted_transaction();
-}
-
-void SceneDocumentStore::recover_interrupted_transaction() {
-    const auto marker = root_ / ".scene-save.transaction";
-    const auto backup = root_ / ".scene.ini.backup";
-    const auto scene = root_ / "scene.ini";
-    std::error_code ec;
-    if (fs::is_regular_file(marker)) {
-        if (!fs::is_regular_file(backup)) {
-            recovery_diagnostics_.push_back(
-                {"scene_recovery_failed", "Scene transaction backup is missing", backup});
-            return;
-        }
-        fs::copy_file(backup, scene, fs::copy_options::overwrite_existing, ec);
-        if (ec) {
-            recovery_diagnostics_.push_back({"scene_recovery_failed", ec.message(), backup});
-            return;
-        }
-        fs::remove(marker, ec);
-        if (ec) {
-            recovery_diagnostics_.push_back({"scene_recovery_failed", ec.message(), marker});
-            return;
-        }
-    }
-    fs::remove(backup, ec);
-    fs::remove(root_ / ".scene.ini.tmp", ec);
-}
-
-bool SceneDocumentStore::replace_sections(
-    const std::map<std::string, std::vector<std::string>>& sections,
-    std::vector<Diagnostic>& diagnostics) {
-    std::scoped_lock lock(scene_file_mutex(root_));
-    recovery_diagnostics_.clear();
-    recover_interrupted_transaction();
-    if (!recovery_diagnostics_.empty()) {
-        diagnostics.insert(diagnostics.end(), recovery_diagnostics_.begin(),
-                           recovery_diagnostics_.end());
-        return false;
-    }
-    const auto scene = root_ / "scene.ini";
-    const auto backup = root_ / ".scene.ini.backup";
-    const auto marker = root_ / ".scene-save.transaction";
-    auto lines = read_text_lines(scene);
-    for (const auto& [name, replacement] : sections) {
-        replace_text_section(lines, name, replacement);
-    }
-    std::error_code ec;
-    fs::copy_file(scene, backup, fs::copy_options::overwrite_existing, ec);
-    if (ec) {
-        diagnostics.push_back({"scene_backup_failed", ec.message(), backup});
-        return false;
-    }
-    {
-        std::ofstream output(marker, std::ios::binary | std::ios::trunc);
-        output << "scene.ini\n";
-        if (!output) {
-            diagnostics.push_back({"scene_transaction_failed", "Unable to create transaction marker", marker});
-            fs::remove(backup, ec);
-            return false;
-        }
-    }
-    if (!atomic_replace_text(scene, lines, diagnostics)) {
-        recovery_diagnostics_.clear();
-        recover_interrupted_transaction();
-        diagnostics.insert(diagnostics.end(), recovery_diagnostics_.begin(),
-                           recovery_diagnostics_.end());
-        return false;
-    }
-    fs::remove(marker, ec);
-    if (ec) {
-        diagnostics.push_back({"scene_commit_failed", ec.message(), marker});
-        recovery_diagnostics_.clear();
-        recover_interrupted_transaction();
-        diagnostics.insert(diagnostics.end(), recovery_diagnostics_.begin(),
-                           recovery_diagnostics_.end());
-        return false;
-    }
-    fs::remove(backup, ec);
-    return true;
-}
-
-CleanupResult cleanup_portable_scene_assets(const fs::path& scene_root, bool dry_run) {
+CleanupResult cleanup_unreferenced_assets(const fs::path& root, const std::set<std::string>& referenced_routes, bool dry_run) {
     CleanupResult result;
-    const auto root = fs::is_directory(scene_root) ? scene_root : scene_root.parent_path();
     std::scoped_lock lock(scene_file_mutex(root));
-    result.diagnostics = validate_portable_scene(scene_root).diagnostics;
+    result.diagnostics = SceneAssetStore(root).validate_manifest(true);
     if (!result.diagnostics.empty()) return result;
-    const auto layout = detect_scene_folder(scene_root);
-    if (!layout) {
-        result.diagnostics.push_back(
-            {"invalid_scene_format", "Expected a portable scene folder version 1", scene_root});
-        return result;
-    }
-    const auto manifest_path = layout->root / "assets.manifest.json";
+    const auto manifest_path = root / "assets.manifest.json";
     nlohmann::json manifest;
     try {
         manifest = nlohmann::json::parse(std::ifstream(manifest_path));
@@ -1180,11 +877,6 @@ CleanupResult cleanup_portable_scene_assets(const fs::path& scene_root, bool dry
         result.diagnostics.push_back({"invalid_manifest", error.what(), manifest_path});
         return result;
     }
-
-    std::set<std::string> referenced_routes;
-    for (const auto& reference : scene_asset_references(layout->scene_file, result.diagnostics))
-        referenced_routes.insert(reference.route);
-    if (!result.diagnostics.empty()) return result;
 
     const auto& bundles = manifest["bundles"];
     std::vector<bool> keep(bundles.size(), false);
@@ -1242,7 +934,7 @@ CleanupResult cleanup_portable_scene_assets(const fs::path& scene_root, bool dry
     if (dry_run || result.removed_bundles == 0) return result;
 
     manifest["bundles"] = std::move(retained);
-    const auto temporary = layout->root / "assets.manifest.json.tmp";
+    const auto temporary = root / "assets.manifest.json.tmp";
     try {
         {
             std::ofstream output(temporary, std::ios::binary | std::ios::trunc);
@@ -1258,14 +950,14 @@ CleanupResult cleanup_portable_scene_assets(const fs::path& scene_root, bool dry
         std::error_code ec;
         for (const auto& directory : bundle_directories) {
             ec.clear();
-            fs::remove_all(layout->root / directory, ec);
+            fs::remove_all(root / directory, ec);
             if (ec) {
                 result.diagnostics.push_back(
-                    {"cleanup_failed", ec.message(), layout->root / directory});
+                    {"cleanup_failed", ec.message(), root / directory});
             }
         }
     } catch (const std::exception& error) {
-        result.diagnostics.push_back({"cleanup_failed", error.what(), layout->root});
+        result.diagnostics.push_back({"cleanup_failed", error.what(), root});
     }
     return result;
 }
