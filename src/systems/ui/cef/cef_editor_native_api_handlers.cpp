@@ -7351,24 +7351,6 @@ void register_scene_tools_api_handlers(NativeApiRegistry& registry) {
                 {"camera", std::move(snapshot)},
             });
         }},
-        {"get_frame_timing", [](const NativeRequest& request, const NativeContext&) {
-            auto* scene = ensure_native_editor_scene();
-            scene = resolve_native_editor_scene_request(scene, normalize_route(arg_string(request.args, 0)));
-            auto* camera = find_native_camera(*scene, arg_string(request.args, 1));
-            if (!camera || !camera->engine_camera) return native_failure("Camera not found", 2);
-            auto& hub = SharedDataHub::instance();
-            const auto handle = camera->engine_camera->get_handle();
-            const auto timing = hub.camera_frame_timing(handle);
-            const auto device = hub.camera_storage().try_acquire_read(handle);
-            if (!timing || !device || device->render_backend != CameraRenderBackend::Vision ||
-                device->vision_render_mode != timing->mode) {
-                return native_success({{"render_ms", nullptr}, {"denoise_ms", nullptr}, {"frame_ms", nullptr}, {"age_ms", nullptr}});
-            }
-            const double age_ms = std::chrono::duration<double, std::milli>(
-                std::chrono::steady_clock::now() - timing->recorded_at).count();
-            return native_success({{"render_ms", timing->render_ms}, {"denoise_ms", timing->denoise_ms},
-                                   {"frame_ms", timing->frame_ms}, {"age_ms", age_ms}});
-        }},
         {"get_vision_denoise", [](const NativeRequest& request, const NativeContext&) {
             auto* scene = ensure_native_editor_scene();
             const auto scene_route = normalize_route(arg_string(request.args, 0));
