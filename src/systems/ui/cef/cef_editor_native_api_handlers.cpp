@@ -57,6 +57,7 @@
 #include <limits>
 #include <map>
 #include <memory>
+#include "project_document_store.h"
 #include <optional>
 #include <set>
 #include <sstream>
@@ -6123,8 +6124,32 @@ void register_main_view_api_handlers(NativeApiRegistry& registry) {
     });
 }
 
+
+namespace {
+NativeResult project_document_request(const NativeRequest& request, bool commit) {
+    const auto payload = arg_object(request.args, 0);
+    const auto active = resolve_active_project_path(nlohmann::json::array());
+    const auto expected = payload.value("project_path", std::string{});
+    if (active.empty() || expected.empty() ||
+        absolute_normalized_path(path_from_utf8(active)) != absolute_normalized_path(path_from_utf8(expected))) {
+        return native_success({{"success", false}, {"error", "PROJECT_CONTEXT_CHANGED"}});
+    }
+    if (auto* scene = native_editor_state().scene.get(); commit && scene && scene->read_only) {
+        return native_success({{"success", false}, {"error", "READ_ONLY_PROJECT"}});
+    }
+    return native_success(project_document_store(path_from_utf8(active), payload, commit));
+}
+}
+
 void register_project_settings_api_handlers(NativeApiRegistry& registry) {
     static const NativeMethodTable methods = {
+
+        {"read_project_document", [](const NativeRequest& request, const NativeContext&) {
+            return project_document_request(request, false);
+        }},
+        {"commit_project_document", [](const NativeRequest& request, const NativeContext&) {
+            return project_document_request(request, true);
+        }},
 
         {"get_active_project_info", [](const NativeRequest&, const NativeContext&) {
             return native_success(active_project_info_json());

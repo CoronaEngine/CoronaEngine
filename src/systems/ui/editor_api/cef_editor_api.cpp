@@ -607,6 +607,8 @@ constexpr auto kEditorApiMethods = std::to_array<EditorApiMethodSpec>({
     EDITOR_API_METHOD_SCHEMA_WRAPPED(ProjectLauncher, open_project, kOpenProjectParams, "project.openProject", "project.open_project", EditorApiValueType::Object),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(ProjectLauncher, open_project_file, kNoParams, "project.openProjectFile", "project.open_project_file", EditorApiValueType::Object),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(ProjectLauncher, validate_portable_scene, kObjectPayloadParam, "project.validatePortableScene", "project.validate_portable_scene", EditorApiValueType::Object),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED(ProjectSettings, read_project_document, kObjectPayloadParam, "projectSettings.readProjectDocument", "project_settings.read_project_document", EditorApiValueType::Object),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED(ProjectSettings, commit_project_document, kObjectPayloadParam, "projectSettings.commitProjectDocument", "project_settings.commit_project_document", EditorApiValueType::Object),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(ProjectSettings, get_active_project_info, kNoParams, "projectSettings.getActiveProjectInfo", "project_settings.get_active_project_info", EditorApiValueType::Object),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(ProjectSettings, save_active_project_info, kObjectPayloadParam, "projectSettings.saveActiveProjectInfo", "project_settings.save_active_project_info", EditorApiValueType::Object),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(ResourceSearch, focus_actor, kResourceSearchFocusActorParams, "resourceSearch.focusActor", "resource_search.focus_actor", EditorApiValueType::Object),
