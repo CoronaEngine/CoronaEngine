@@ -58,7 +58,6 @@
 #include <limits>
 #include <map>
 #include <memory>
-#include "project_document_store.h"
 #include <optional>
 #include <set>
 #include <sstream>
@@ -332,63 +331,6 @@ std::filesystem::path resolve_project_path(const std::filesystem::path& project_
 }
 
 using IniSection = std::unordered_map<std::string, std::string>;
-using IniFile = std::unordered_map<std::string, IniSection>;
-
-void strip_utf8_bom(std::string& line) {
-    if (line.size() >= 3 &&
-        static_cast<unsigned char>(line[0]) == 0xEF &&
-        static_cast<unsigned char>(line[1]) == 0xBB &&
-        static_cast<unsigned char>(line[2]) == 0xBF) {
-        line.erase(0, 3);
-    }
-}
-
-IniFile read_ini_file(const std::filesystem::path& file_path) {
-    IniFile result;
-    std::ifstream input(file_path);
-    if (!input) {
-        return result;
-    }
-
-    std::string section;
-    std::string line;
-    while (std::getline(input, line)) {
-        if (!line.empty() && line.back() == '\r') {
-            line.pop_back();
-        }
-        strip_utf8_bom(line);
-        auto trimmed = trim_ascii(line);
-        if (trimmed.empty() || trimmed[0] == '#' || trimmed[0] == ';') {
-            continue;
-        }
-        if (trimmed.front() == '[' && trimmed.back() == ']') {
-            section = to_lower_ascii(trim_ascii(trimmed.substr(1, trimmed.size() - 2)));
-            continue;
-        }
-        const auto equals = trimmed.find('=');
-        if (equals == std::string::npos || section.empty()) {
-            continue;
-        }
-        auto key = to_lower_ascii(trim_ascii(trimmed.substr(0, equals)));
-        auto value = trim_ascii(trimmed.substr(equals + 1));
-        result[section][key] = value;
-    }
-    return result;
-}
-
-std::string ini_value(const IniFile& ini,
-                      const std::string& section,
-                      const std::string& key,
-                      const std::string& fallback = {}) {
-    const auto sec_it = ini.find(to_lower_ascii(section));
-    if (sec_it == ini.end()) {
-        return fallback;
-    }
-    const auto key_it = sec_it->second.find(to_lower_ascii(key));
-    return key_it == sec_it->second.end() ? fallback : key_it->second;
-}
-
-
 std::array<float, 3> parse_float3(const std::string& value,
                                   std::array<float, 3> fallback) {
     std::stringstream input(value);
@@ -681,18 +623,13 @@ bool is_valid_project_dir(const std::filesystem::path& project_dir);
 std::filesystem::path canonical_project_dir_for_settings(const std::filesystem::path& project_dir);
 std::string safe_project_dir_name(std::string name, const std::string& fallback);
 void restore_native_camera_lock_target(NativeEditorScene& scene);
-void replace_ini_section_from_map(const std::filesystem::path& file_path,
-                                  const std::string& section_name,
-                                  const std::map<std::string, std::string>& values);
+NativeResult project_archive_call(const char* method, nlohmann::json request);
+std::filesystem::path editor_ini_path();
+std::string settings_value(const std::string& section, const std::string& key, const std::string& fallback);
 
 std::string read_last_project_from_editor_ini() {
-    const auto cwd_ini = Utils::executable_directory() / "CoronaEditor.ini";
-    const auto ini = read_ini_file(cwd_ini);
-    const auto raw = ini_value(ini, "General", "last_project");
-    if (raw.empty()) {
-        return {};
-    }
-    return normalize_route(path_to_utf8(canonical_project_dir_for_settings(path_from_utf8(raw))));
+    const auto raw = settings_value("General", "last_project", "");
+    return raw.empty() ? std::string{} : normalize_route(path_to_utf8(canonical_project_dir_for_settings(path_from_utf8(raw))));
 }
 
 std::string resolve_active_project_path(const nlohmann::json& args) {
@@ -784,84 +721,6 @@ std::string make_actor_guid(const std::string& scene_route,
     return out.str();
 }
 
-void replace_ini_section(const std::filesystem::path& file_path,
-                         const std::string& section_name,
-                          const std::vector<std::string>& replacement_lines) {
-    if (file_path.filename() == "scene.ini") throw std::runtime_error("ProjectArchive owns scene.ini");
-    std::vector<std::string> lines;
-    {
-        std::ifstream input(file_path);
-        std::string line;
-        while (std::getline(input, line)) {
-            if (!line.empty() && line.back() == '\r') {
-                line.pop_back();
-            }
-            strip_utf8_bom(line);
-            lines.push_back(line);
-        }
-    }
-
-    const auto target = to_lower_ascii(section_name);
-    auto is_target_section = [&](const std::string& line) {
-        const auto trimmed = trim_ascii(line);
-        if (trimmed.size() < 3 || trimmed.front() != '[' || trimmed.back() != ']') {
-            return false;
-        }
-        return to_lower_ascii(trim_ascii(trimmed.substr(1, trimmed.size() - 2))) == target;
-    };
-    auto is_any_section = [](const std::string& line) {
-        const auto trimmed = trim_ascii(line);
-        return trimmed.size() >= 3 && trimmed.front() == '[' && trimmed.back() == ']';
-    };
-
-    auto begin = lines.end();
-    for (auto it = lines.begin(); it != lines.end(); ++it) {
-        if (is_target_section(*it)) {
-            begin = it;
-            break;
-        }
-    }
-
-    if (begin == lines.end()) {
-        if (!lines.empty() && !lines.back().empty()) {
-            lines.emplace_back();
-        }
-        lines.insert(lines.end(), replacement_lines.begin(), replacement_lines.end());
-    } else {
-        auto end = std::next(begin);
-        while (end != lines.end() && !is_any_section(*end)) {
-            ++end;
-        }
-        auto insert_pos = lines.erase(begin, end);
-        insert_pos = lines.insert(insert_pos, replacement_lines.begin(), replacement_lines.end());
-        auto after_insert = std::next(insert_pos, static_cast<std::ptrdiff_t>(replacement_lines.size()));
-        if (after_insert != lines.end() && (after_insert == lines.begin() || !std::prev(after_insert)->empty())) {
-            after_insert = lines.insert(after_insert, "");
-            ++after_insert;
-        }
-
-        // A UTF-8 BOM on the first header used to make the original section
-        // invisible to the parser, so settings updates appended a duplicate
-        // section. Keep the newly written section and remove any stale copies.
-        for (auto it = after_insert; it != lines.end();) {
-            if (!is_target_section(*it)) {
-                ++it;
-                continue;
-            }
-            auto duplicate_end = std::next(it);
-            while (duplicate_end != lines.end() && !is_any_section(*duplicate_end)) {
-                ++duplicate_end;
-            }
-            it = lines.erase(it, duplicate_end);
-        }
-    }
-
-    std::ofstream output(file_path, std::ios::trunc);
-    for (const auto& line : lines) {
-        output << line << '\n';
-    }
-}
-
 void apply_native_scene_environment(NativeEditorScene& scene) {
     if (!scene.environment) {
         return;
@@ -876,28 +735,17 @@ void apply_native_scene_environment(NativeEditorScene& scene) {
 
 
 
-std::filesystem::path resolve_native_actor_asset_path(const NativeEditorScene& scene,
-                                                      NativeEditorActor& item) {
-    if (item.actor_type != "actor" || to_lower_ascii(actor_file_extension(item.route)) != "actor") {
-        return resolve_project_path(scene.project_root, item.route);
-    }
+nlohmann::json read_actor_descriptor(const NativeEditorScene& scene, const std::filesystem::path& source) {
+    auto data = SceneFolders::archive_asset_request({{"op", "descriptor"}, {"root", path_to_utf8(scene.project_root)},
+                                                     {"source", path_to_utf8(source)}});
+    if (!data.contains("model")) throw std::runtime_error("Invalid actor descriptor: " + data.dump());
+    return data;
+}
 
-    const auto actor_file = resolve_project_path(scene.project_root, item.route);
-    const auto actor_ini = read_ini_file(actor_file);
-    const auto model_route = normalize_route(ini_value(actor_ini, "base", "path"));
-    if (item.name.empty()) {
-        item.name = ini_value(actor_ini, "base", "name", stem_utf8(item.route));
-    }
-    if (item.actor_guid.empty()) {
-        item.actor_guid = ini_value(actor_ini, "base", "actor_guid");
-    }
-    if (!item.follow_camera) {
-        item.follow_camera = parse_bool(ini_value(actor_ini, "base", "follow_camera", "false"));
-    }
-    if (model_route.empty()) {
-        throw std::runtime_error("Actor file missing [base].path: " + item.route);
-    }
-    return resolve_project_path(scene.project_root, model_route);
+std::filesystem::path resolve_native_actor_asset_path(const NativeEditorScene& scene, NativeEditorActor& item) {
+    const auto source = resolve_project_path(scene.project_root, item.route);
+    if (item.actor_type != "actor" || to_lower_ascii(actor_file_extension(item.route)) != "actor") return source;
+    return path_from_utf8(read_actor_descriptor(scene, source).at("model").get<std::string>());
 }
 
 std::optional<std::string> optional_ini_string(const IniSection& section,
@@ -972,6 +820,7 @@ void apply_native_actor_optics_state(NativeEditorActor& item) {
 NativeEditorActor& add_native_actor_to_scene(NativeEditorScene& scene,
                                              NativeEditorActor item,
                                              const std::filesystem::path& asset_path) {
+    if (!asset_path.empty()) item.resolved_asset_path = path_to_utf8(asset_path);
     // Include the resolved model, not the mutable .actor wrapper. Cache this
     // signature once per resource binding; node UI requests do no disk IO.
     std::error_code node_identity_error;
@@ -1735,6 +1584,7 @@ NativeEditorScene* ensure_native_editor_scene(const std::string& project_path_ar
 }
 
 std::filesystem::path absolute_normalized_path(const std::filesystem::path& path);
+bool is_path_within(const std::filesystem::path& root, const std::filesystem::path& candidate);
 
 std::optional<std::string> stop_before_scene_replacement(const NativeEditorState& state) {
     if (!state.scene) return std::nullopt;
@@ -1967,6 +1817,7 @@ nlohmann::json actor_to_json(const NativeEditorScene& scene, const NativeEditorA
     item["model"] = actor.route;
     item["model_dependencies"] = nlohmann::json::array();
     item["actor_type"] = actor.actor_type;
+    if (actor.actor_type == "actor") item["resolved_model"] = actor.resolved_asset_path;
     item["ik_chains"] = native_actor_ik_configuration(actor);
     if (auto player = actor_animation_player(actor)) item.update(AnimationConfig::serialize(player->snapshot()));
     else {
@@ -2632,9 +2483,9 @@ float arg_float_value(const nlohmann::json& args, size_t index, float fallback =
 
 
 
-std::vector<std::string> prepare_animation_sources(const NativeEditorScene& scene, const nlohmann::json& value) {
+std::vector<std::string> prepare_animation_sources(const NativeEditorScene& scene, const nlohmann::json& value, bool memory_only = false) {
     auto sources = AnimationConfig::parse_sources(value);
-    if (sources.empty() || scene.read_only) return sources;
+    if (sources.empty() || scene.read_only || memory_only) return sources;
     SceneFolders::SceneAssetStore store(scene.project_root);
     for (auto& source : sources) {
         const auto path = resolve_project_path(scene.project_root, source);
@@ -2642,7 +2493,6 @@ std::vector<std::string> prepare_animation_sources(const NativeEditorScene& scen
         if (!imported.ok()) throw std::invalid_argument("Animation asset import failed: " + source);
         source = imported.main_route;
     }
-    if (!store.write_manifest()) throw std::runtime_error("Unable to save animation asset manifest");
     return AnimationConfig::parse_sources(sources); // content-addressed duplicates are invalid too
 }
 
@@ -2674,7 +2524,7 @@ NativeResult set_native_actor_animation_paused(const NativeRequest& request, boo
 NativeResult create_native_editor_actor(const std::string& scene_route_arg,
                                         const std::string& source_path,
                                         std::string actor_type,
-                                        const nlohmann::json& actor_data) {
+                                        const nlohmann::json& actor_data, bool memory_only = false) {
     const auto scene_route = normalize_route(scene_route_arg);
     actor_type = normalize_route(actor_type.empty() ? "model" : actor_type);
     if (actor_type.empty()) {
@@ -2713,7 +2563,7 @@ NativeResult create_native_editor_actor(const std::string& scene_route_arg,
 
     auto apply_actor_data_to_existing = [&](NativeEditorActor& target) {
         if (actor_data.contains("animation_sources"))
-            request_actor_animation_sources(*scene, target, prepare_animation_sources(*scene, actor_data.at("animation_sources")));
+            request_actor_animation_sources(*scene, target, prepare_animation_sources(*scene, actor_data.at("animation_sources"), memory_only));
         if (auto position = actor_data_float3(actor_data, "position")) {
             target.position = *position;
             if (target.geometry) {
@@ -2764,31 +2614,21 @@ NativeResult create_native_editor_actor(const std::string& scene_route_arg,
 
     NativeEditorActor item;
     item.actor_type = actor_type;
-    std::optional<SceneFolders::SceneAssetStore> portable_store;
     if (scene->read_only) throw std::runtime_error("External scenes are read-only");
-    {
-        portable_store.emplace(scene->project_root);
-        const auto source = resolve_project_path(scene->project_root, source_path);
+    const auto source = resolve_project_path(scene->project_root, source_path);
+    if (memory_only) {
+        if (!is_path_within(scene->project_root, absolute_normalized_path(source)))
+            return native_failure("File runs may only instantiate project assets", 400);
+        item.route = route_for_project_storage(scene->project_root, source_path);
+    } else {
+        SceneAssetStore store(scene->project_root);
         SceneFolders::ImportResult imported;
-        if (item.actor_type == "ui_image") {
-            imported = portable_store->import_file(source, "Images");
-        } else if (item.actor_type == "audio") {
-            imported = portable_store->import_file(source, "Audio");
-        } else if (item.actor_type == "actor" &&
-                   to_lower_ascii(source.extension().string()) == ".actor") {
-            const auto actor_ini = read_ini_file(source);
-            const auto model_route = ini_value(actor_ini, "base", "path");
-            auto model_source = path_from_utf8(model_route);
-            if (!model_source.is_absolute()) {
-                const auto beside_actor = source.parent_path() / model_source;
-                model_source = std::filesystem::is_regular_file(beside_actor)
-                                   ? beside_actor
-                                   : scene->project_root / model_source;
-            }
-            imported = portable_store->import_actor(source, model_source);
-        } else {
-            imported = portable_store->import_model(source);
-        }
+        if (item.actor_type == "ui_image") imported = store.import_file(source, "Images");
+        else if (item.actor_type == "audio") imported = store.import_file(source, "Audio");
+        else if (item.actor_type == "actor" && to_lower_ascii(source.extension().string()) == ".actor") {
+            const auto data = read_actor_descriptor(*scene, source);
+            imported = store.import_actor(source, path_from_utf8(data.at("model").get<std::string>()));
+        } else imported = store.import_model(source);
         if (!imported.ok()) {
             if (imported.diagnostics.empty()) {
                 return native_failure("Portable asset import failed without diagnostics", 2);
@@ -2798,14 +2638,6 @@ NativeResult create_native_editor_actor(const std::string& scene_route_arg,
                                   " (" + path_to_utf8(diagnostic.path) + ")", 2);
         }
         item.route = imported.main_route;
-        if (!portable_store->write_manifest()) {
-            return native_failure("Portable asset manifest update failed", 2);
-        }
-        const auto validation = portable_store->validate_manifest();
-        if (!validation.empty()) {
-            return native_failure("Portable asset manifest validation failed: " +
-                                  validation.front().message, 2);
-        }
     }
     item.name = unique_actor_name(*scene, preferred_name.empty() ? stem_utf8(item.route) : preferred_name);
     item.actor_guid = preferred_guid.empty()
@@ -2817,25 +2649,26 @@ NativeResult create_native_editor_actor(const std::string& scene_route_arg,
     item.scale = {1.0f, 1.0f, 1.0f};
     apply_runtime_metadata(item);
 
-    if (item.actor_type == "actor" && to_lower_ascii(actor_file_extension(item.route)) == "actor") {
+    if (!memory_only && item.actor_type == "actor" && to_lower_ascii(actor_file_extension(item.route)) == "actor") {
         const auto actor_file = resolve_project_path(scene->project_root, item.route);
-        const auto actor_ini = read_ini_file(actor_file);
-        const auto configured_name = ini_value(actor_ini, "base", "name");
+        const auto descriptor = read_actor_descriptor(*scene, actor_file);
+        const auto geometry = descriptor.at("geometry");
+        const auto configured_name = descriptor.value("name", "");
         if (preferred_name.empty() && !configured_name.empty()) {
             item.name = unique_actor_name(*scene, configured_name);
             item.actor_guid = preferred_guid.empty()
                 ? make_actor_guid(scene->route, item.name, scene->actors.size())
                 : preferred_guid;
         }
-        item.follow_camera = parse_bool(ini_value(actor_ini, "base", "follow_camera", "false"));
+        item.follow_camera = parse_bool(descriptor.value("follow_camera", "false"));
         item.position = parse_float3(
-            ini_value(actor_ini, "geometry", "position", "0.0, 0.0, 0.0"),
+            geometry.value("position", "0.0, 0.0, 0.0"),
             {0.0f, 0.0f, 0.0f});
         item.rotation = parse_float3(
-            ini_value(actor_ini, "geometry", "rotation", "0.0, 0.0, 0.0"),
+            geometry.value("rotation", "0.0, 0.0, 0.0"),
             {0.0f, 0.0f, 0.0f});
         item.scale = parse_float3(
-            ini_value(actor_ini, "geometry", "scale", "1.0, 1.0, 1.0"),
+            geometry.value("scale", "1.0, 1.0, 1.0"),
             {1.0f, 1.0f, 1.0f});
     }
 
@@ -2865,8 +2698,17 @@ NativeResult create_native_editor_actor(const std::string& scene_route_arg,
     }
 
     item.persisted_animation_sources = prepare_animation_sources(*scene,
-        actor_data.value("animation_sources", nlohmann::json::array()));
-    auto asset_path = resolve_native_actor_asset_path(*scene, item);
+        actor_data.value("animation_sources", nlohmann::json::array()), memory_only);
+    std::filesystem::path asset_path;
+    if (memory_only) {
+        asset_path = source;
+        if (to_lower_ascii(source.extension().string()) == ".actor") {
+            const auto resolved = path_from_utf8(actor_data.value("resolved_model", std::string{}));
+            if (resolved.empty() || !is_path_within(scene->project_root, absolute_normalized_path(resolved)))
+                return native_failure("Missing project Actor model binding", 400);
+            asset_path = resolved;
+        }
+    } else asset_path = resolve_native_actor_asset_path(*scene, item);
     if (item.actor_guid.empty()) {
         item.actor_guid = make_actor_guid(scene->route, item.name, scene->actors.size());
     }
@@ -3512,11 +3354,6 @@ std::filesystem::path editor_ini_path() {
     return Utils::executable_directory() / "CoronaEditor.ini";
 }
 
-std::filesystem::path actor_template_path() {
-    const auto editor_root = editor_root_path();
-    return editor_root / "plugins" / "ProjectLauncher" / "templates" / "actor" / "demo.actor";
-}
-
 std::filesystem::path runtime_data_dir() {
     return editor_root_path() / "data";
 }
@@ -3864,66 +3701,23 @@ std::string safe_project_dir_name(std::string name, const std::string& fallback)
 
 
 
-std::string settings_value(const std::string& section,
-                           const std::string& key,
-                           const std::string& fallback = {}) {
-    return ini_value(read_ini_file(editor_ini_path()), section, key, fallback);
+std::string settings_value(const std::string& section, const std::string& key, const std::string& fallback) {
+    auto result = project_archive_call("editor_settings", {{"ini", path_to_utf8(editor_ini_path())},
+                                      {"section", section}, {"key", key}, {"fallback", fallback}});
+    return result.success ? result.data.value("value", fallback) : fallback;
 }
 
-void replace_ini_section_from_map(const std::filesystem::path& file_path,
-                                  const std::string& section,
-                                  const std::map<std::string, std::string>& values) {
-    std::vector<std::string> lines;
-    lines.push_back("[" + section + "]");
-    for (const auto& [key, value] : values) {
-        lines.push_back(key + " = " + value);
-    }
-    replace_ini_section(file_path, section, lines);
-}
-
-void update_editor_settings_section(const std::string& section,
-                                    const std::map<std::string, std::string>& updates) {
-    const auto ini_path = editor_ini_path();
-    auto ini = read_ini_file(ini_path);
-    std::map<std::string, std::string> values;
-    const auto existing = ini.find(to_lower_ascii(section));
-    if (existing != ini.end()) {
-        for (const auto& [key, value] : existing->second) {
-            values[key] = value;
-        }
-    }
-    for (const auto& [key, value] : updates) {
-        values[key] = value;
-    }
-    replace_ini_section_from_map(ini_path, section, values);
+void update_editor_settings_section(const std::string& section, const std::map<std::string, std::string>& updates) {
+    auto result = project_archive_call("editor_settings", {{"ini", path_to_utf8(editor_ini_path())},
+                                      {"section", section}, {"updates", updates}});
+    if (!result.success) throw std::runtime_error(result.error);
 }
 
 void add_recent_project_native(const std::filesystem::path& project_dir) {
-    const auto path = path_to_utf8(canonical_project_dir_for_settings(project_dir));
-    auto recent_raw = settings_value("History", "recent_projects", "[]");
-    nlohmann::json recent = nlohmann::json::array();
-    try {
-        recent = nlohmann::json::parse(recent_raw);
-    } catch (...) {
-        recent = nlohmann::json::array();
-    }
-    if (!recent.is_array()) {
-        recent = nlohmann::json::array();
-    }
-    nlohmann::json next = nlohmann::json::array();
-    next.push_back(path);
-    for (const auto& item : recent) {
-        if (!item.is_string() || item.get<std::string>() == path) {
-            continue;
-        }
-        if (next.size() >= 10) {
-            break;
-        }
-        next.push_back(item.get<std::string>());
-    }
-    update_editor_settings_section("History", {{"recent_projects", next.dump()}});
+    auto result = project_archive_call("editor_settings", {{"ini", path_to_utf8(editor_ini_path())},
+        {"section", "History"}, {"recent", path_to_utf8(canonical_project_dir_for_settings(project_dir))}});
+    if (!result.success) throw std::runtime_error(result.error);
 }
-
 
 nlohmann::json make_native_main_init_payload(NativeEditorScene* scene) {
     if (!scene) throw std::runtime_error("No active scene");
@@ -3965,13 +3759,9 @@ NativeEditorActor* find_native_actor_by_guid(NativeEditorScene& scene,
 }
 
 nlohmann::json recent_projects_native() {
-    auto recent_raw = settings_value("History", "recent_projects", "[]");
-    nlohmann::json recent = nlohmann::json::array();
-    try {
-        recent = nlohmann::json::parse(recent_raw);
-    } catch (...) {
-        recent = nlohmann::json::array();
-    }
+    auto history = project_archive_call("editor_settings", {{"ini", path_to_utf8(editor_ini_path())},
+                                                           {"section", "History"}, {"recent_projects", true}});
+    const auto recent = history.success ? history.data.value("projects", nlohmann::json::array()) : nlohmann::json::array();
     nlohmann::json result = nlohmann::json::array();
     for (const auto& item : recent) {
         if (!item.is_string()) {
@@ -5076,191 +4866,29 @@ std::optional<std::filesystem::path> resolve_file_manager_path(
     return normalized_candidate;
 }
 
-nlohmann::json file_manager_tree_node(const std::filesystem::path& path,
-                                      const std::filesystem::path& project_root,
-                                      int level) {
-    const auto relative = std::filesystem::relative(path, project_root);
-    const auto route = normalize_route(path_to_utf8(relative));
-    const bool directory = std::filesystem::is_directory(path);
-    nlohmann::json node = {
-        {"name", path.filename().empty() ? path_to_utf8(project_root.filename())
-                                          : path_to_utf8(path.filename())},
-        {"path", route == "." ? std::string{} : route},
-        {"isDirectory", directory},
-        {"level", level},
-    };
-    if (!directory) {
-        std::error_code ec;
-        node["size"] = std::filesystem::file_size(path, ec);
-        return node;
-    }
-
-    node["expanded"] = level <= 1;
-    node["children"] = nlohmann::json::array();
-    std::error_code ec;
-    for (const auto& entry : std::filesystem::directory_iterator(path, ec)) {
-        if (ec) break;
-        node["children"].push_back(file_manager_tree_node(entry.path(), project_root, level + 1));
-    }
-    std::sort(node["children"].begin(), node["children"].end(),
-              [](const nlohmann::json& left, const nlohmann::json& right) {
-                  const auto left_dir = left.value("isDirectory", false);
-                  const auto right_dir = right.value("isDirectory", false);
-                  if (left_dir != right_dir) return left_dir > right_dir;
-                  return left.value("name", "") < right.value("name", "");
-              });
-    return node;
-}
-
-NativeResult create_file_manager_file(const std::filesystem::path& project_root,
-                                      const std::string& path,
-                                      const std::string& requested_name,
-                                      const std::string& file_type) {
-    const auto directory = resolve_file_manager_path(project_root, path, true);
-    if (!directory || !std::filesystem::is_directory(*directory)) {
-        return native_failure("Target directory does not exist", 404);
-    }
-    auto file_name = trim_ascii(requested_name);
-    if (file_name.empty()) return native_failure("file_name is required", 2);
-    auto file_path = path_from_utf8(file_name);
-    if (file_path.is_absolute() || file_path.has_parent_path()) {
-        return native_failure("file_name must be a file name", 2);
-    }
-
-    const std::string extension = file_type == "actor" ? ".actor" : "";
-    if (extension.empty()) return native_failure("Unsupported file type: " + file_type, 2);
-    if (to_lower_ascii(file_path.extension().string()) != extension) {
-        file_name += extension;
-        file_path = path_from_utf8(file_name);
-    }
-
-    const auto template_path = actor_template_path();
-    if (!std::filesystem::is_regular_file(template_path)) {
-        return native_failure("File template does not exist: " + path_to_utf8(template_path), 404);
-    }
-    auto target = *directory / file_path.filename();
-    const auto stem = target.stem().string();
-    int suffix = 1;
-    std::error_code ec;
-    while (std::filesystem::exists(target, ec)) {
-        if (ec) return native_failure("Unable to inspect target file: " + ec.message(), 2);
-        target = *directory / (stem + "_" + std::to_string(suffix++) + extension);
-    }
-    if (!std::filesystem::copy_file(template_path, target, ec) || ec) {
-        return native_failure("Unable to create file: " + path_to_utf8(target), 2);
-    }
-    const auto base_name = path_to_utf8(target.stem());
-    const auto ini = read_ini_file(target);
-    std::map<std::string, std::string> base;
-    const auto existing_base = ini.find("base");
-    if (existing_base != ini.end()) {
-        for (const auto& [key, value] : existing_base->second) {
-            base[key] = value;
-        }
-    }
-    base["name"] = base_name;
-    replace_ini_section_from_map(target, "base", base);
-    return native_success({
-        {"status", "success"},
-        {"path", route_for_project_storage(project_root, path_to_utf8(target))},
-        {"name", base_name},
-        {"file_type", file_type},
-    });
-}
-
 void register_file_manager_api_handlers(NativeApiRegistry& registry) {
+    static const auto files = [](const NativeRequest& request, const NativeContext&) {
+        const auto* scene = native_editor_state().scene.get();
+        if (!scene || scene->read_only) return native_failure("No writable project", 409);
+        auto args = request.args;
+        if (!args.empty() && args.back().is_object()) {
+            if (!matches_archive_session(*scene, args.back())) return native_failure("PROJECT_CONTEXT_CHANGED", 409);
+            args.erase(args.size() - 1);
+        } else if (request.function != "get_file_tree" && request.function != "get_files") {
+            return native_failure("PROJECT_CONTEXT_CHANGED", 409);
+        }
+        return project_archive_call("file_manager", {{"archive_session", scene->archive_session},
+            {"project_path", path_to_utf8(scene->project_root)}, {"op", request.function}, {"args", args}});
+    };
     static const NativeMethodTable methods = {
         {"get_project_info", [](const NativeRequest&, const NativeContext&) {
-            const auto project_root = resolve_file_manager_project_path();
-            if (!project_root) {
-                return native_success({{"path", ""}, {"name", "未打开项目"}, {"exists", false}});
-            }
-            return native_success({
-                {"path", path_to_utf8(*project_root)},
-                {"name", path_to_utf8(project_root->filename())},
-                {"exists", true},
-            });
+            const auto* scene = native_editor_state().scene.get();
+            if (!scene || scene->read_only) return native_success({{"path", ""}, {"name", "未打开项目"}, {"exists", false}});
+            return native_success({{"path", path_to_utf8(scene->project_root)},
+                {"name", path_to_utf8(scene->project_root.filename())}, {"exists", true}, {"archive_session", scene->archive_session}});
         }},
-        {"get_file_tree", [](const NativeRequest& request, const NativeContext&) {
-            const auto project_root = resolve_file_manager_project_path();
-            if (!project_root) return native_failure("No active project", 404);
-            const auto target = resolve_file_manager_path(*project_root, arg_string(request.args, 0), true);
-            if (!target || !std::filesystem::is_directory(*target)) {
-                return native_failure("Directory does not exist", 404);
-            }
-            return native_success(file_manager_tree_node(*target, *project_root,
-                                                          arg_string(request.args, 0).empty() ? 0 : 1));
-        }},
-        {"get_files", [](const NativeRequest& request, const NativeContext&) {
-            const auto project_root = resolve_file_manager_project_path();
-            if (!project_root) return native_failure("No active project", 404);
-            const auto target = resolve_file_manager_path(*project_root, arg_string(request.args, 0), true);
-            if (!target || !std::filesystem::is_directory(*target)) {
-                return native_failure("Directory does not exist", 404);
-            }
-            nlohmann::json files = nlohmann::json::array();
-            std::error_code ec;
-            for (const auto& entry : std::filesystem::directory_iterator(*target, ec)) {
-                if (ec) break;
-                files.push_back({
-                    {"name", path_to_utf8(entry.path().filename())},
-                    {"path", route_for_project_storage(*project_root, path_to_utf8(entry.path()))},
-                    {"isDirectory", entry.is_directory(ec)},
-                });
-            }
-            return native_success(std::move(files));
-        }},
-        {"create_folder", [](const NativeRequest& request, const NativeContext&) {
-            const auto project_root = resolve_file_manager_project_path();
-            if (!project_root) return native_failure("No active project", 404);
-            const auto parent = resolve_file_manager_path(*project_root, arg_string(request.args, 0), true);
-            const auto folder_name = path_from_utf8(trim_ascii(arg_string(request.args, 1)));
-            if (!parent || folder_name.empty() || folder_name.is_absolute() || folder_name.has_parent_path()) {
-                return native_failure("Invalid folder name or path", 2);
-            }
-            std::error_code ec;
-            const auto target = *parent / folder_name;
-            if (!std::filesystem::create_directories(target, ec) && ec) {
-                return native_failure("Unable to create folder: " + ec.message(), 2);
-            }
-            return native_success(true);
-        }},
-        {"create_file", [](const NativeRequest& request, const NativeContext&) {
-            const auto project_root = resolve_file_manager_project_path();
-            if (!project_root) return native_failure("No active project", 404);
-            return create_file_manager_file(*project_root, arg_string(request.args, 0),
-                                             arg_string(request.args, 1), arg_string(request.args, 2));
-        }},
-        {"delete_item", [](const NativeRequest& request, const NativeContext&) {
-            const auto project_root = resolve_file_manager_project_path();
-            if (!project_root) return native_failure("No active project", 404);
-            const auto target = resolve_file_manager_path(*project_root, arg_string(request.args, 0));
-            if (!target) return native_failure("Unable to delete the project root or an outside path", 2);
-            if (*target == *project_root / "scene.ini") return native_failure("Cannot delete scene.ini", 2);
-            std::error_code ec;
-            if (!std::filesystem::exists(*target, ec) || !std::filesystem::remove_all(*target, ec) || ec) {
-                return native_failure("Unable to delete item", 2);
-            }
-            return native_success(true);
-        }},
-        {"rename_item", [](const NativeRequest& request, const NativeContext&) {
-            const auto project_root = resolve_file_manager_project_path();
-            if (!project_root) return native_failure("No active project", 404);
-            const auto source = resolve_file_manager_path(*project_root, arg_string(request.args, 0));
-            const auto new_name = path_from_utf8(trim_ascii(arg_string(request.args, 1)));
-            if (!source || new_name.empty() || new_name.is_absolute() || new_name.has_parent_path()) {
-                return native_failure("Invalid rename path", 2);
-            }
-            std::error_code ec;
-            if (*source == *project_root / "scene.ini") return native_failure("Cannot rename scene.ini", 2);
-            const auto target = source->parent_path() / new_name;
-            if (!std::filesystem::exists(*source, ec) || std::filesystem::exists(target, ec)) {
-                return native_failure("Source does not exist or target already exists", 2);
-            }
-            std::filesystem::rename(*source, target, ec);
-            if (ec) return native_failure("Unable to rename item: " + ec.message(), 2);
-            return native_success(true);
-        }},
+        {"get_file_tree", files}, {"get_files", files}, {"create_folder", files}, {"create_file", files},
+        {"delete_item", files}, {"rename_item", files},
         {"open_file", [](const NativeRequest& request, const NativeContext&) {
             const auto project_root = resolve_file_manager_project_path();
             if (!project_root) return native_failure("No active project", 404);
@@ -5420,7 +5048,6 @@ void register_project_launcher_api_handlers(NativeApiRegistry& registry) {
                 });
             }
             if (!state.scene->read_only) {
-                update_editor_settings_section("General", {{"last_project", state.project_path}});
                 add_recent_project_native(state.scene->project_root);
             }
             std::size_t unresolved_count = 0;
@@ -5458,9 +5085,12 @@ void register_project_launcher_api_handlers(NativeApiRegistry& registry) {
         }},
         {"import_portable_asset", [](const NativeRequest& request, const NativeContext&) {
             const auto data = arg_object(request.args, 0);
-            auto root_text = data.value("path", std::string{});
-            if (root_text.empty()) root_text = resolve_active_project_path(nlohmann::json::array());
-            const auto root = canonical_project_dir_for_settings(path_from_utf8(root_text));
+            const auto* scene = native_editor_state().scene.get();
+            if (!scene || !matches_archive_session(*scene, data) || scene->read_only ||
+                (data.contains("path") && !data.value("path", std::string{}).empty() &&
+                 absolute_normalized_path(path_from_utf8(data.at("path").get<std::string>())) != scene->project_root))
+                return native_failure("PROJECT_CONTEXT_CHANGED", 409);
+            const auto& root = scene->project_root;
             if (!is_valid_project_dir(root)) {
                 return native_success({{"ok", false}, {"diagnostics", nlohmann::json::array({{
                     {"code", "invalid_scene_format"}, {"message", "Expected a portable scene folder"},
@@ -5484,10 +5114,6 @@ void register_project_launcher_api_handlers(NativeApiRegistry& registry) {
                 imported.diagnostics.push_back(
                     {"unsupported_category", "Unsupported portable asset category", source, {}, "category"});
             }
-            if (imported.ok() && !store.write_manifest()) {
-                imported.diagnostics.push_back(
-                    {"manifest_write_failed", "Unable to update portable asset manifest", root});
-            }
             nlohmann::json diagnostics = nlohmann::json::array();
             for (const auto& item : imported.diagnostics) {
                 diagnostics.push_back({{"code", item.code}, {"message", item.message},
@@ -5500,9 +5126,12 @@ void register_project_launcher_api_handlers(NativeApiRegistry& registry) {
         }},
         {"cleanup_portable_scene_assets", [](const NativeRequest& request, const NativeContext&) {
             const auto data = arg_object(request.args, 0);
-            auto root_text = data.value("path", std::string{});
-            if (root_text.empty()) root_text = resolve_active_project_path(nlohmann::json::array());
-            const auto root = canonical_project_dir_for_settings(path_from_utf8(root_text));
+            const auto* scene = native_editor_state().scene.get();
+            if (!scene || !matches_archive_session(*scene, data) || scene->read_only ||
+                (data.contains("path") && !data.value("path", std::string{}).empty() &&
+                 absolute_normalized_path(path_from_utf8(data.at("path").get<std::string>())) != scene->project_root))
+                return native_failure("PROJECT_CONTEXT_CHANGED", 409);
+            const auto& root = scene->project_root;
             const bool dry_run = data.value("dryRun", true);
             auto validation = project_archive_call("validate_project", {{"path", path_to_utf8(root)}});
             if (!validation.success || !validation.data.value("ok", false)) {
@@ -5716,16 +5345,13 @@ void register_main_view_api_handlers(NativeApiRegistry& registry) {
 namespace {
 NativeResult project_document_request(const NativeRequest& request, bool commit) {
     const auto payload = arg_object(request.args, 0);
-    const auto active = resolve_active_project_path(nlohmann::json::array());
-    const auto expected = payload.value("project_path", std::string{});
-    if (active.empty() || expected.empty() ||
-        absolute_normalized_path(path_from_utf8(active)) != absolute_normalized_path(path_from_utf8(expected))) {
+    const auto* scene = native_editor_state().scene.get();
+    if (!scene || !matches_archive_session(*scene, payload) ||
+        absolute_normalized_path(path_from_utf8(payload.value("project_path", std::string{}))) != scene->project_root) {
         return native_success({{"success", false}, {"error", "PROJECT_CONTEXT_CHANGED"}});
     }
-    if (auto* scene = native_editor_state().scene.get(); commit && scene && scene->read_only) {
-        return native_success({{"success", false}, {"error", "READ_ONLY_PROJECT"}});
-    }
-    return native_success(project_document_store(path_from_utf8(active), payload, commit));
+    if (scene->read_only) return native_success({{"success", false}, {"error", "READ_ONLY_PROJECT"}});
+    return project_archive_call(commit ? "commit_document" : "read_document", payload);
 }
 }
 
@@ -5990,6 +5616,8 @@ void register_scene_tools_api_handlers(NativeApiRegistry& registry) {
                 auto* scene = scene_for_request_route(request);
                 const auto actor_name = arg_string(request.args, 1);
                 const auto state = arg_object(request.args, 2);
+                if (!context.script_runtime && state.contains("animation_sources") && !matches_archive_session(*scene, state))
+                    return native_failure("PROJECT_CONTEXT_CHANGED", 409);
                 auto* actor = find_native_actor(*scene, actor_name);
                 if (!actor) {
                     return native_failure("Actor not found: " + actor_name, 2);
@@ -6003,7 +5631,7 @@ void register_scene_tools_api_handlers(NativeApiRegistry& registry) {
                     if (actor_data_bool(state, {"visible"}) && !actor->optics)
                         throw std::invalid_argument("Actor has no optics component");
                     request_actor_animation_sources(*scene, *actor,
-                        prepare_animation_sources(*scene, state.at("animation_sources")));
+                        prepare_animation_sources(*scene, state.at("animation_sources"), context.script_runtime));
                     changed = true;
                 }
                 if (const auto value = actor_data_bool(state, {"visible"})) {
@@ -6475,6 +6103,8 @@ void register_scene_tools_api_handlers(NativeApiRegistry& registry) {
         }},
         {"rebind_actor_resource", [](const NativeRequest& request, const NativeContext&) {
             auto* scene = scene_for_request_route(request);
+            if (!matches_archive_session(*scene, arg_object(request.args, 3)))
+                return native_failure("PROJECT_CONTEXT_CHANGED", 409);
             const auto actor_guid = arg_string(request.args, 1);
             auto source_path = path_from_utf8(arg_string(request.args, 2));
             if (source_path.is_relative()) source_path = scene->project_root / source_path;
@@ -6510,7 +6140,7 @@ void register_scene_tools_api_handlers(NativeApiRegistry& registry) {
                 if (ec || relative.empty() || relative.generic_string().rfind("..", 0) == 0) {
                     SceneAssetStore store(scene->project_root);
                     auto imported = store.import_model(resolved_path);
-                    if (!imported.ok() || !store.write_manifest()) {
+                    if (!imported.ok()) {
                         return native_success({
                             {"ok", false}, {"status", "resource_error"},
                             {"diagnostics", nlohmann::json::array({{
@@ -6617,12 +6247,16 @@ void register_scene_tools_api_handlers(NativeApiRegistry& registry) {
                 {"grid", {{"enabled", scene->floor_grid_enabled}}},
             });
         }},
-        {"create_actor", [](const NativeRequest& request, const NativeContext&) {
+        {"create_actor", [](const NativeRequest& request, const NativeContext& context) {
             const auto scene_route = arg_string(request.args, 0);
             const auto source_path = arg_string(request.args, 1);
             auto actor_type = normalize_route(arg_string(request.args, 2, "model"));
             const auto actor_data = arg_object(request.args, 3);
-            return create_native_editor_actor(scene_route, source_path, actor_type, actor_data);
+            const auto* scene = native_editor_state().scene.get();
+            if ((!context.script_runtime || actor_data.contains("archive_session")) &&
+                (!scene || !matches_archive_session(*scene, actor_data)))
+                return native_failure("PROJECT_CONTEXT_CHANGED", 409);
+            return create_native_editor_actor(scene_route, source_path, actor_type, actor_data, context.script_runtime);
         }},
         {"rename_actor", [](const NativeRequest& request, const NativeContext& context) {
             auto* scene = scene_for_request_route(request);

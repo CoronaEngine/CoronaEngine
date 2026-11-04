@@ -6,7 +6,7 @@
 #include <mutex>
 #include <nlohmann/json.hpp>
 
-// Only the Python driver touches scene.ini. Native tests still exercise the real asset store.
+// Native tests exercise the same archive operations through the Python driver.
 namespace ArchiveFixture {
 using namespace Corona::Systems::UI::SceneFolders;
 using Json = nlohmann::json;
@@ -19,6 +19,9 @@ inline Json call(const char* method, Json data, const char* module = "ProjectArc
     std::string line;
     if (!std::getline(std::cin, line)) throw std::runtime_error("Archive driver disconnected");
     return Json::parse(line);
+}
+inline std::string sha256_file(const fs::path& path) {
+    return call("sha256", {{"path", path}}, "ArchiveFixture").at("data").get<std::string>();
 }
 struct Layout { fs::path root, scene_file; std::string scene_name; };
 inline std::optional<Layout> detect_scene_folder(const fs::path& path) {

@@ -134,20 +134,28 @@ constexpr std::array<EditorApiParamSpec, 2> kMainViewImportResourceFileParams = 
     param("file_type", EditorApiValueType::String, true),
 }};
 
-constexpr std::array<EditorApiParamSpec, 2> kFileManagerCreateFolderParams = {{
+constexpr std::array<EditorApiParamSpec, 3> kFileManagerCreateFolderParams = {{
     param("path", EditorApiValueType::String),
     param("folder_name", EditorApiValueType::String),
+    param("scope", EditorApiValueType::Object),
 }};
 
-constexpr std::array<EditorApiParamSpec, 3> kFileManagerCreateFileParams = {{
+constexpr std::array<EditorApiParamSpec, 4> kFileManagerCreateFileParams = {{
     param("path", EditorApiValueType::String),
     param("file_name", EditorApiValueType::String),
     param("file_type", EditorApiValueType::String),
+    param("scope", EditorApiValueType::Object),
 }};
 
-constexpr std::array<EditorApiParamSpec, 2> kFileManagerRenameItemParams = {{
+constexpr std::array<EditorApiParamSpec, 3> kFileManagerRenameItemParams = {{
     param("old_path", EditorApiValueType::String),
     param("new_name", EditorApiValueType::String),
+    param("scope", EditorApiValueType::Object),
+}};
+
+constexpr std::array<EditorApiParamSpec, 2> kFileManagerDeleteParams = {{
+    param("path", EditorApiValueType::String),
+    param("scope", EditorApiValueType::Object),
 }};
 
 constexpr std::array<EditorApiParamSpec, 2> kFileManagerOpenFileParams = {{
@@ -376,10 +384,11 @@ constexpr std::array<EditorApiParamSpec, 2> kSceneToolsReloadSceneParams = {{
     param("project_path", EditorApiValueType::String, true),
 }};
 
-constexpr std::array<EditorApiParamSpec, 3> kSceneToolsRebindActorResourceParams = {{
+constexpr std::array<EditorApiParamSpec, 4> kSceneToolsRebindActorResourceParams = {{
     param("scene_name", EditorApiValueType::String),
     param("actor_guid", EditorApiValueType::String),
     param("path", EditorApiValueType::String),
+    param("scope", EditorApiValueType::Object),
 }};
 
 constexpr std::array<EditorApiParamSpec, 2> kSceneToolsCreateCameraViewParams = {{
@@ -523,9 +532,9 @@ constexpr auto kEditorApiMethods = std::to_array<EditorApiMethodSpec>({
     // ScriptRuntime discovers its allowed methods through this same manifest.
     // Individual calls still enforce each method's caller mask.
     EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(EditorApi, list_methods, kNoParams, "", "", EditorApiValueType::Object, animation_callers()),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED(FileManager, create_file, kFileManagerCreateFileParams, "files.createFile", "files.create_file", EditorApiValueType::Boolean),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED(FileManager, create_file, kFileManagerCreateFileParams, "files.createFile", "files.create_file", EditorApiValueType::Object),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(FileManager, create_folder, kFileManagerCreateFolderParams, "files.createFolder", "files.create_folder", EditorApiValueType::Boolean),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED(FileManager, delete_item, kPathParam, "files.deleteItem", "files.delete_item", EditorApiValueType::Boolean),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED(FileManager, delete_item, kFileManagerDeleteParams, "files.deleteItem", "files.delete_item", EditorApiValueType::Boolean),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(FileManager, get_file_tree, kPathOptionalParam, "files.getFileTree", "files.get_file_tree", EditorApiValueType::Object),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(FileManager, get_files, kPathOptionalParam, "files.getFiles", "files.get_files", EditorApiValueType::Array),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(FileManager, get_project_info, kNoParams, "files.getProjectInfo", "files.get_project_info", EditorApiValueType::Object),
@@ -1177,7 +1186,9 @@ NativeResult EditorApiRegistry::invoke(const EditorApiRequest& request,
     if (!args_validation.success) {
         return args_validation;
     }
-    auto result = invoke_native_api_method(*spec, request.args, context);
+    auto caller_context = context;
+    caller_context.script_runtime = request.caller == EditorApiCaller::ScriptRuntime;
+    auto result = invoke_native_api_method(*spec, request.args, caller_context);
     if (!result.success) {
         return result;
     }

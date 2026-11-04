@@ -1,6 +1,7 @@
 """Serve the real Python archive operations to native CPU tests over stdio."""
 
 import configparser
+import hashlib
 import io
 import json
 from pathlib import Path
@@ -25,7 +26,10 @@ def run_native(args, **kwargs):
                     if req["module"] == "ArchiveFixture":
                         data = req["args"][0]
                         root = Path(data["path"])
-                        if req["function"] == "recover":
+                        result = {}
+                        if req["function"] == "sha256":
+                            result = hashlib.sha256(root.read_bytes()).hexdigest()
+                        elif req["function"] == "recover":
                             recover_scene(root)
                         elif req["function"] == "sections":
                             # Build arbitrary input, including intentionally invalid fixtures.
@@ -39,7 +43,6 @@ def run_native(args, **kwargs):
                             atomic_replace(path, stream.getvalue().encode())
                         else:
                             raise AssertionError(req)
-                        result = {}
                     elif req["module"] == "FileScripts":
                         from script_runtime.file_runner import FileScripts
                         result = getattr(FileScripts, req["function"])(*req["args"])

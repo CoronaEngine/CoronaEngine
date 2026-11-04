@@ -23,6 +23,7 @@ struct NativeContext {
     CefRefPtr<CefBrowser> browser;
     CefRefPtr<CefFrame> frame;
     int64_t query_id = 0;
+    bool script_runtime = false;
 };
 
 struct NativeResult {

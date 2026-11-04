@@ -3,11 +3,14 @@
 #include <cstdint>
 #include <filesystem>
 #include <set>
-#include <optional>
+#include <nlohmann/json.hpp>
 #include <string>
 #include <vector>
 
 namespace Corona::Systems::UI::SceneFolders {
+
+// Executes the internal ProjectArchive service in the existing host.
+nlohmann::json archive_asset_request(nlohmann::json request);
 
 struct Diagnostic {
     std::string code;
@@ -38,7 +41,6 @@ struct ImportResult {
 };
 
 [[nodiscard]] bool is_valid_asset_route(std::string_view route);
-[[nodiscard]] std::string sha256_file(const std::filesystem::path& path);
 
 class SceneAssetStore {
    public:
@@ -58,8 +60,9 @@ class SceneAssetStore {
 
    private:
     std::filesystem::path root_;
-    std::vector<ImportResult> bundles_;
-    std::optional<Diagnostic> manifest_error_;
+    bool allow_missing_;
+    nlohmann::json request(nlohmann::json payload) const;
+    ImportResult import_model_source(const std::filesystem::path& source, const std::filesystem::path& actor);
 };
 
 struct CleanupResult {

@@ -30,6 +30,7 @@ int main(int argc, char** argv) {
         const std::string mode = argv[1];
         Json output;
         if (mode == "fixture") {
+            ArchiveFixture::ArchiveTestHost host;
             const fs::path root = fs::u8path(argv[2]);
             require(ArchiveFixture::create_scene_folder(root, "Roundtrip").has_value(), "create scene");
             const auto source = root.parent_path() / "triangle.ply";

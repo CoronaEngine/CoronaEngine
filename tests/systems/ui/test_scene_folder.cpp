@@ -12,6 +12,12 @@
 
 #include <nlohmann/json.hpp>
 
+nlohmann::json Corona::Systems::UI::SceneFolders::archive_asset_request(nlohmann::json request) {
+    const auto reply = ArchiveFixture::call("asset_operation", std::move(request));
+    if (!reply.at("success").get<bool>()) throw std::runtime_error(reply.at("error").get<std::string>());
+    return reply.at("data");
+}
+
 namespace fs = std::filesystem;
 using namespace Corona::Systems::UI::SceneFolders;
 using namespace ArchiveFixture;
