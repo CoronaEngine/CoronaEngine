@@ -22,9 +22,20 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <array>
 #include <span>
+#include <vector>
 
 namespace Corona::Systems {
+
+struct UiGeometryFrame {
+    Horizon::HardwareBuffer vertices;
+    Horizon::HardwareBuffer indices;
+    Horizon::HardwareBuffer indirect;
+    Horizon::SubmitReceipt receipt;
+    // Bindless integers do not own textures. Hold sampled images until this slot retires.
+    std::vector<Horizon::HardwareImage> sampled_images;
+};
 
 // ============================================================================
 // Per-window rendering resources (render target, executor, geometry buffers).
@@ -43,6 +54,8 @@ struct ViewportRenderResources {
     // Horizon 移除了 HardwareExecutor::last_receipt()，生产者自己记住最后一次提交：
     // 既用于 publish 时交给 Display 做跨线程 GPU 排序，也用于释放资源前排空。
     Horizon::SubmitReceipt last_receipt;
+    std::array<UiGeometryFrame, 3> imgui_frames;
+    std::size_t imgui_frame_index = 0;
 };
 
 // One textured (or solid) quad to draw into the UI render target.

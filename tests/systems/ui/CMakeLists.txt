@@ -124,17 +124,6 @@ target_include_directories(corona_camera_viewport_manager_tests
 add_test(NAME CameraViewportManagerTests
          COMMAND corona_camera_viewport_manager_tests)
 
-add_executable(corona_embedded_camera_viewport_tests
-    test_embedded_camera_viewport.cpp
-)
-
-target_include_directories(corona_embedded_camera_viewport_tests
-    PRIVATE ${PROJECT_SOURCE_DIR}/include
-)
-
-add_test(NAME EmbeddedCameraViewportTests
-         COMMAND corona_embedded_camera_viewport_tests)
-
 
 
 add_executable(corona_request_response_broker_tests
@@ -219,3 +208,16 @@ target_include_directories(corona_editor_dispatch_tests
     PRIVATE ${PROJECT_SOURCE_DIR}/src/systems/ui
 )
 add_test(NAME EditorDispatchTests COMMAND corona_editor_dispatch_tests)
+add_executable(corona_imgui_draw_packet_tests
+    test_imgui_draw_packet.cpp
+    ${PROJECT_SOURCE_DIR}/src/systems/ui/imgui/imgui_draw_packet.cpp)
+target_include_directories(corona_imgui_draw_packet_tests PRIVATE ${PROJECT_SOURCE_DIR}/src/systems/ui)
+target_link_libraries(corona_imgui_draw_packet_tests PRIVATE corona::imgui)
+add_test(NAME ImGuiDrawPacketTests COMMAND corona_imgui_draw_packet_tests)
+
+add_executable(corona_imgui_workspace_tests
+    test_imgui_workspace.cpp
+    ${PROJECT_SOURCE_DIR}/src/systems/ui/imgui/imgui_workspace.cpp)
+target_include_directories(corona_imgui_workspace_tests PRIVATE ${PROJECT_SOURCE_DIR}/src/systems/ui)
+target_link_libraries(corona_imgui_workspace_tests PRIVATE corona::imgui)
+add_test(NAME ImGuiWorkspaceTests COMMAND corona_imgui_workspace_tests)

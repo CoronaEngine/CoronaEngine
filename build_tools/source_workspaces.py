@@ -1,7 +1,7 @@
 """Source dependency baselines. Change these commits to update a pinned version.
 
-Build preparation aligns clean checkouts automatically. Edits at the pinned
-commit remain usable; changing commits requires committing or stashing edits.
+Build preparation aligns local HEAD to these pins, preserving nonconflicting
+edits. A different live remote branch tip only produces a warning.
 """
 
 from __future__ import annotations
@@ -43,7 +43,7 @@ HORIZON = SourceWorkspace(
     directory=Path("Horizon"),
     url="https://github.com/CoronaEngine/Horizon.git",
     ref="main",
-    commit="6429a2e0b7a82a7e2a60d3bbd48b29cb2721cb60",
+    commit="fc35ba8b79d354f446dd7a4e6c2b02e22cbf323e",
 )
 
 EDITOR = SourceWorkspace(
@@ -52,7 +52,7 @@ EDITOR = SourceWorkspace(
     directory=Path("CoronaEditor"),
     url="https://github.com/CoronaEngine/CoronaEditor.git",
     ref="main",
-    commit="c1a2c1e086dfd39388811166c28d9362818b8913",
+    commit="cbbf77317af07c627b0119ba70f0f0687ad3ece1",
 )
 
 WORKSPACES = (HORIZON, EDITOR)

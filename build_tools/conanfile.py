@@ -63,7 +63,7 @@ class CoronaEngineConan(ConanFile):
         self.version = os.environ.get("CORONAENGINE_CONAN_VERSION", "0.5.0")
 
     def requirements(self):
-        self.requires("ktm/0.2.14", transitive_headers=True)
+        self.requires("ktm/0.2.16", transitive_headers=True)
         self.requires("pfr/1.91.0", transitive_headers=True)
         self.requires("spirv-cross/1.4.350.0", transitive_headers=True, transitive_libs=True)
         self.requires("spirv-tools/1.4.350.0", transitive_headers=True, transitive_libs=True)
@@ -81,6 +81,7 @@ class CoronaEngineConan(ConanFile):
         self.requires("stb/cci.20230920", transitive_headers=True)
         self.requires("nanobind/2.9.2", transitive_headers=True, transitive_libs=True)
         self.requires("sdl/3.4.0", transitive_headers=True, transitive_libs=True)
+        self.requires("corona-imgui/1.92.5")
         self.requires("enet/1.3.18", transitive_headers=True, transitive_libs=True)
         self.requires("onetbb/2022.3.0", transitive_headers=True, transitive_libs=True)
         self.requires("miniaudio/0.11.21", transitive_headers=True)

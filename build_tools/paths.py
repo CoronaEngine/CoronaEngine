@@ -10,7 +10,7 @@ LOCAL_RECIPES = tuple(
     f"build_tools/conan/recipes/{name}"
     for name in (
         "ktm", "pfr", "slang", "vulkan-memory-allocator",
-        "astc-encoder", "cef-binary", "ffmpeg",
+        "astc-encoder", "cef-binary", "ffmpeg", "corona-imgui",
     )
 )
 

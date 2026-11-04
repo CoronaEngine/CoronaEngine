@@ -161,7 +161,8 @@ function(corona_dev_bootstrap)
         message(FATAL_ERROR "CoronaEngine build environment was not generated: ${_corona_build_environment}")
     endif()
     include("${_corona_build_environment}")
-    # Bootstrap (or dev.py before invoking CMake) has already aligned sources.
+    # Bootstrap (or dev.py before invoking CMake) has aligned sources to the
+    # Python pins, preserving nonconflicting local changes.
     # Register their final Git paths before any source subdirectories are read.
     foreach(_workspace IN ITEMS Horizon CoronaEditor)
         corona_watch_source_workspace("${CMAKE_CURRENT_SOURCE_DIR}/${_workspace}")

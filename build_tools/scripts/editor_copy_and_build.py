@@ -17,6 +17,7 @@ import shutil
 import sys
 from pathlib import Path
 import subprocess
+import uuid
 from typing import Optional
 
 
@@ -26,15 +27,34 @@ if __package__ in (None, ""):
 from build_tools.paths import REPO_ROOT
 
 
-EDITOR_REPOSITORY = REPO_ROOT / "CoronaEditor"
-
-
 def echo(msg: str) -> None:
     print(msg)
 
 
 _STALE_EXTENSIONS = {".py", ".vue", ".js", ".ts", ".jsx", ".tsx", ".css", ".scss", ".mjs"}
-_PROTECTED_DEPLOYED_ROOTS = (Path("data"), Path("runtime") / "generated")
+_PROTECTED_DEPLOYED_ROOTS = (Path("data"), Path("runtime") / "generated", Path(".retired-plugins"))
+
+
+def _retire_removed_ai_packages(src_root: Path, dst_root: Path) -> None:
+    """Move obsolete deployed packages out of the import path, preserving local data."""
+    if not (src_root / "plugins" / "AITool" / "main.py").is_file():
+        return
+    destination = dst_root.resolve()
+    for name in ("Quasar", "cai_extensions"):
+        relative = Path("plugins") / "AITool" / name
+        retired = dst_root / relative
+        if (src_root / relative).exists() or not retired.exists():
+            continue
+        # Do not follow an old deployment junction outside the managed tree.
+        if not retired.resolve().is_relative_to(destination):
+            raise ValueError(f"Retired AI package is outside the deployment: {retired}")
+        archive = dst_root / ".retired-plugins"
+        if not archive.resolve().is_relative_to(destination):
+            raise ValueError(f"Retired plugin archive is outside the deployment: {archive}")
+        archive.mkdir(exist_ok=True)
+        backup = archive / f"{name}-{uuid.uuid4().hex}"
+        retired.rename(backup)
+        echo(f"[editor-copy] Retired {retired}; preserved previous files in {backup}")
 
 
 def _cleanup_stale_files(src_root: Path, dst_root: Path, ignore_fn) -> None:
@@ -42,6 +62,8 @@ def _cleanup_stale_files(src_root: Path, dst_root: Path, ignore_fn) -> None:
     手动递归遍历以跳过 ignore 目录（如 node_modules），避免进入超长路径。"""
     if not dst_root.exists() or not src_root.exists():
         return
+
+    _retire_removed_ai_packages(src_root, dst_root)
 
     dirs_to_check: list[Path] = []
 
@@ -112,7 +134,7 @@ def copy_tree(src: Path, dst: Path, merge_content: bool = False) -> None:
             # Test files
             "tests", "test",
             # Temporary and log files
-            ".cache", ".temp", ".tmp", "tmp",
+            ".cache", ".temp", ".tmp", "tmp", ".retired-plugins",
             # OS files
             ".DS_Store", "Thumbs.db", "desktop.ini"
         }
@@ -283,63 +305,6 @@ def maybe_run_npm(frontend_dir: Path, node_dir: Path) -> int:
     return 0
 
 
-def copy_game_frontend(dest_root: Path, repository_root: Path | None = None) -> None:
-    """Keep the story modules inside CabbageEditor/game, mirroring editor/game."""
-    root = repository_root or EDITOR_REPOSITORY
-    source = root / "editor" / "game" / "frontend"
-    destination = dest_root / "game"
-    if not source.is_dir():
-        raise FileNotFoundError(f"Story frontend modules not found: {source}")
-    if source.resolve() == (destination / "frontend").resolve():
-        return
-    copy_tree(source, destination)
-
-
-def copy_game_art(dest_root: Path, repository_root: Path | None = None) -> None:
-    """Deploy game-owned models/textures without modifying the shared engine assets."""
-    root = repository_root or EDITOR_REPOSITORY
-    source = root / "editor" / "game" / "art"
-    destination = dest_root / "game" / "art"
-    if not source.is_dir():
-        raise FileNotFoundError(f"Game art resources not found: {source}")
-    if source.resolve() == destination.resolve():
-        return
-    echo(f"[editor-copy] Copying game art: {source} -> {destination}")
-    # Preserve model-relative texture paths and attribution, and propagate copy failures.
-    shutil.copytree(source, destination, dirs_exist_ok=True)
-
-
-def copy_game_runtime(dest_root: Path, repository_root: Path | None = None) -> None:
-    """Deploy Python gameplay inside CabbageEditor/game, on the editor import path."""
-    root = repository_root or EDITOR_REPOSITORY
-    source = root / "editor" / "game"
-    destination = dest_root / "game"
-    if source.resolve() == destination.resolve():
-        return
-    destination.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(source / "__init__.py", destination / "__init__.py")
-    for package in ("core", "systems", "world", "runtime"):
-        copy_tree(source / package, destination)
-
-
-def copy_game_data(dest_root: Path, repository_root: Path | None = None) -> None:
-    """Deploy the read-only story content (prophet script, placement, contract).
-
-    game/data is not a Python package and holds no runtime state, so it is copied as
-    plain JSON: the shipped program must carry the same authoritative content the
-    repository validates against.
-    """
-    root = repository_root or EDITOR_REPOSITORY
-    source = root / "editor" / "game" / "data"
-    destination = dest_root / "game" / "data"
-    if not source.is_dir():
-        raise FileNotFoundError(f"Story content data not found: {source}")
-    if source.resolve() == destination.resolve():
-        return
-    echo(f"[editor-copy] Copying game data: {source} -> {destination}")
-    shutil.copytree(source, destination, dirs_exist_ok=True)
-
-
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Copy editor resources and run npm build")
     ap.add_argument("--dest-root", required=True, help="Destination root directory (CabbageEditor under target dir)")
@@ -360,11 +325,6 @@ def main(argv: list[str] | None = None) -> int:
 
     for s in src_dirs:
         copy_tree(s, dest_root, merge_content=args.merge_content)
-
-    copy_game_runtime(dest_root)
-    copy_game_art(dest_root)
-    copy_game_data(dest_root)
-    copy_game_frontend(dest_root)
 
     # Run npm build last
     return maybe_run_npm(frontend_dir, node_dir)

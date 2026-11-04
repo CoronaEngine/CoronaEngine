@@ -40,6 +40,19 @@ class SourceWorkspaceWorkflowTests(unittest.TestCase):
                 sync.assert_called_once_with(dev.REPO_ROOT, workspace)
                 install.assert_not_called()
 
+    def test_status_checks_both_live_remotes_without_synchronizing(self):
+        with mock.patch.object(dev, "ensure_git"), mock.patch.object(dev, "run_command"), \
+                mock.patch.object(dev, "inspect_workspace"), \
+                mock.patch.object(dev, "remote_version_advice", return_value=()) as remote, \
+                mock.patch.object(dev, "ensure_workspace") as ensure, \
+                mock.patch.object(dev, "sync_workspace") as sync:
+            dev.execute(dev.create_parser().parse_args(["status"]))
+        self.assertEqual(remote.call_args_list, [
+            mock.call(dev.REPO_ROOT, HORIZON), mock.call(dev.REPO_ROOT, EDITOR),
+        ])
+        ensure.assert_not_called()
+        sync.assert_not_called()
+
 
 class CmakeBuildForwardsEveryTargetTests(unittest.TestCase):
     def _record_cmake_command(self, *call_args):

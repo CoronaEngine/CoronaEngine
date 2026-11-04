@@ -51,11 +51,13 @@ function(corona_strip_msvc_charset_interface target_name)
 endfunction()
 
 # Core engine dependencies.
-find_package(ktm CONFIG REQUIRED)
+# Horizon's Ocarina bridge requires KTM's trivially copyable vector types.
+find_package(ktm 0.2.16 CONFIG REQUIRED)
 find_package(assimp CONFIG REQUIRED)
 find_package(stb CONFIG REQUIRED)
 find_package(nanobind CONFIG REQUIRED)
 find_package(SDL3 CONFIG REQUIRED)
+find_package(corona-imgui CONFIG REQUIRED)
 find_package(enet CONFIG REQUIRED)
 find_package(TBB CONFIG REQUIRED)
 find_package(miniaudio CONFIG REQUIRED)

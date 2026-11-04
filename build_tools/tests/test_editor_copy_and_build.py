@@ -106,6 +106,46 @@ def _prepare_frontend_build(module, tmp_path):
     return frontend, node, npm
 
 
+@pytest.mark.parametrize("merge_content", [True, False])
+def test_editor_upgrade_retires_ai_packages_without_losing_local_data(tmp_path, merge_content):
+    module = _load_copy_module()
+    source = tmp_path / "source" / "editor"
+    entry = source / "plugins" / "AITool" / "main.py"
+    entry.parent.mkdir(parents=True)
+    entry.write_text("CURRENT_AI = True\n", encoding="utf-8")
+    output = tmp_path / "deployed"
+    destination = output if merge_content else output / "editor"
+    old = destination / "plugins" / "AITool" / "Quasar"
+    old.mkdir(parents=True)
+    retained = {
+        "module_settings.yaml": "old config",
+        "private/.env": "private-key-must-survive",
+        "__pycache__/runtime.pyc": "old bytecode",
+        "runtime.py": "old source",
+        "custom.json": "local data",
+    }
+    for name, content in retained.items():
+        path = old / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+    bridge = destination / "plugins" / "AITool" / "cai_extensions"
+    bridge.mkdir()
+    (bridge / "paths.pyc").write_text("old bridge", encoding="utf-8")
+    key_file = destination / ".env"
+    key_file.write_text("DEEPSEEK_API_KEY=keep", encoding="utf-8")
+
+    module.copy_tree(source, output, merge_content=merge_content)
+    module.copy_tree(source, output, merge_content=merge_content)
+
+    assert not old.exists()
+    assert not bridge.exists()
+    backups = list((destination / ".retired-plugins").glob("Quasar-*"))
+    assert len(backups) == 1
+    for name, content in retained.items():
+        assert (backups[0] / name).read_text(encoding="utf-8") == content
+    assert key_file.read_text(encoding="utf-8") == "DEEPSEEK_API_KEY=keep"
+
+
 @pytest.mark.parametrize("results", [[17], [0, 23]])
 def test_editor_build_propagates_npm_failure_to_main(tmp_path, monkeypatch, results):
     module = _load_copy_module()

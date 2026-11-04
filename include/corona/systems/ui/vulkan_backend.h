@@ -4,9 +4,9 @@
 // ViewportRenderResources, QuadDraw, and QuadCompositor. Include it (not the reverse) to
 // avoid a circular dependency.
 #include <corona/systems/ui/quad_compositor.h>
+#include <corona/systems/ui/imgui_renderer.h>
 #include <corona/systems/ui/ui_surface_lifecycle.h>
 #include <corona/systems/display/published_image.h>
-#include <corona/systems/display/scene_viewport.h>
 
 #include <SDL3/SDL.h>
 
@@ -19,16 +19,9 @@
 
 namespace Corona::Systems {
 
-// VulkanBackend (post-ImGui, Phase 7): renders UI quads into one render target per surface
-// and publishes each to the DisplaySystem via UIFrameReadyEvent. The main window is the
-// surface registered at initialize(); secondary (detached) windows register/unregister at
-// runtime. UI geometry is built as textured quads by the UI frame runner — there is no
-// ImGui draw-data path, font atlas, or multi-viewport renderer callback.
-//
-// The QuadCompositor and the rasterizer pipeline are shared across all surfaces: UI
-// rendering for every window happens on the same (UI) thread, sequentially, so a single
-// pipeline + compositor instance is safe. Per-surface state (render target, geometry
-// buffers, executor, image_handle, frame counter) lives in PerSurfaceRender.
+// Renders ImGui draw data (and legacy quad callers) into one UI image per native
+// surface. DisplaySystem owns swapchains and acknowledges consumption/retirement.
+// The UI thread shares pipeline state; each surface owns its target and frame ring.
 class VulkanBackend {
    public:
     explicit VulkanBackend(SDL_Window* window);
@@ -55,8 +48,12 @@ class VulkanBackend {
     void render_quads(void* surface, std::span<const QuadDraw> quads,
                       uint32_t target_pixels_w, uint32_t target_pixels_h);
 
+    bool initialize_imgui_renderer();
+    void shutdown_imgui_renderer();
+    void render_imgui(void* surface, const ImDrawData& data, uint32_t pixel_width, uint32_t pixel_height);
+
     // Publish `surface`'s render target to DisplaySystem (UIFrameReadyEvent).
-    void present_surface(void* surface, const Detail::SceneViewport& scene_viewport = {});
+    void present_surface(void* surface);
     [[nodiscard]] bool first_present_ready(void* surface) const;
 
     // Recreate `surface`'s render target at the given pixel size (on window resize).
@@ -106,6 +103,7 @@ class VulkanBackend {
 
     // Shared across all surfaces (single-threaded UI rendering).
     QuadCompositor compositor_;
+    ImGuiRenderer imgui_renderer_;
     std::optional<Horizon::RasterizerPipeline<ui_quad_vert_glsl_t, ui_quad_frag_glsl_t>> pipeline_;
 };
 

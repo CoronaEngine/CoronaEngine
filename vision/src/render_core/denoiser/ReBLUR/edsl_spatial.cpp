@@ -368,7 +368,7 @@ PassShader compile_classify(Device &device) {
         }
         SharedArray<uint, 32> sums;
         sums.write(local_index, sum);
-        call("GroupMemoryBarrierWithGroupSync");
+        synchronize_block();
         $if(local_index == 0u) {
             Uint total = 0u;
             $for(lane, 32u) { total += sums.read(lane); };
@@ -411,7 +411,7 @@ PassShader compile_reconstruction(Device &device, bool is_5x5) {
                 cached_hit_view_z.write(entry, make_float3(hit, sample_z));
             };
         };
-        call("GroupMemoryBarrierWithGroupSync");
+        synchronize_block();
         $if(is_sky != 0.f || any(pixel > c.gRectSizeMinusOne)) { $return(); };
         Uint2 shared_center = local + static_cast<uint>(radius);
         Uint center_index = shared_center.y * shared_width + shared_center.x;

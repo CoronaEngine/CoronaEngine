@@ -5690,10 +5690,12 @@ void register_project_launcher_api_handlers(NativeApiRegistry& registry) {
         {"create_world_project", [](const NativeRequest& request, const NativeContext&) {
             const auto data = arg_object(request.args, 0);
             const auto world_type = data.value("mode", std::string{"creative"});
+            if (world_type == "story") {
+                return native_failure("Story mode does not create a project. Use Test Mode on the start screen.", 2);
+            }
             const auto prompt = data.value("prompt", std::string{});
-            const bool story = world_type == "story";
-            const std::string display_base = story ? "剧情世界" : "创造世界";
-            const std::string dir_base = story ? "story_world" : "creative_world";
+            const std::string display_base = "创造世界";
+            const std::string dir_base = "creative_world";
             const auto base_dir = runtime_data_dir();
             std::filesystem::create_directories(base_dir);
             int index = 1;
@@ -7353,24 +7355,6 @@ void register_scene_tools_api_handlers(NativeApiRegistry& registry) {
                 {"camera", std::move(snapshot)},
             });
         }},
-        {"get_frame_timing", [](const NativeRequest& request, const NativeContext&) {
-            auto* scene = ensure_native_editor_scene();
-            scene = resolve_native_editor_scene_request(scene, normalize_route(arg_string(request.args, 0)));
-            auto* camera = find_native_camera(*scene, arg_string(request.args, 1));
-            if (!camera || !camera->engine_camera) return native_failure("Camera not found", 2);
-            auto& hub = SharedDataHub::instance();
-            const auto handle = camera->engine_camera->get_handle();
-            const auto timing = hub.camera_frame_timing(handle);
-            const auto device = hub.camera_storage().try_acquire_read(handle);
-            if (!timing || !device || device->render_backend != CameraRenderBackend::Vision ||
-                device->vision_render_mode != timing->mode) {
-                return native_success({{"render_ms", nullptr}, {"denoise_ms", nullptr}, {"frame_ms", nullptr}, {"age_ms", nullptr}});
-            }
-            const double age_ms = std::chrono::duration<double, std::milli>(
-                std::chrono::steady_clock::now() - timing->recorded_at).count();
-            return native_success({{"render_ms", timing->render_ms}, {"denoise_ms", timing->denoise_ms},
-                                   {"frame_ms", timing->frame_ms}, {"age_ms", age_ms}});
-        }},
         {"get_vision_denoise", [](const NativeRequest& request, const NativeContext&) {
             auto* scene = ensure_native_editor_scene();
             const auto scene_route = normalize_route(arg_string(request.args, 0));
@@ -7921,9 +7905,6 @@ void register_editor_api_handlers(NativeApiRegistry& registry) {
 
 void register_python_script_api_handlers(NativeApiRegistry& registry) {
     static const NativeMethodTable ai_tool_methods = {
-        {"generate_hint", script_method},
-        {"read_local_file_as_base64", script_method},
-        {"send_message_to_ai_stream", script_method},
         {"submit_request", script_method},
     };
     static const NativeMethodTable corona_editor_methods = {

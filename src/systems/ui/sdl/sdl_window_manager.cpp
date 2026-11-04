@@ -144,6 +144,33 @@ void* SdlWindowManager::main_surface() const {
     return it != windows_.end() ? it->second.surface : nullptr;
 }
 
+bool SdlWindowManager::adopt_platform_window(SDL_Window* window) {
+    const auto surface = native_surface_from_sdl_window(window);
+    if (!window || !surface) return false;
+    const auto id = SDL_GetWindowID(window);
+    ManagedWindow managed;
+    managed.window = window;
+    managed.window_id = id;
+    managed.surface = surface;
+    managed.pending_show = true;
+    windows_[id] = managed;
+    if (auto* bus = Kernel::KernelContext::instance().event_bus()) {
+        Events::DisplaySurfaceChangedEvent changed;
+        changed.surface = surface;
+        changed.registration_ticket = SurfaceCompletionTicket{};
+        bus->publish<Events::DisplaySurfaceChangedEvent>(changed);
+        if (!changed.registration_ticket->wait_until(SurfaceCompletionTicket::Clock::now() + std::chrono::seconds(5)))
+            return false;
+        const auto result = changed.registration_ticket->result();
+        return result && result->status == DisplaySurfaceResult::Status::Succeeded;
+    }
+    return false;
+}
+
+void SdlWindowManager::forget_platform_window(SDL_WindowID id) {
+    if (id != main_window_id_) windows_.erase(id);
+}
+
 SDL_Window* SdlWindowManager::window_for_id(SDL_WindowID window_id) const {
     const auto it = windows_.find(window_id);
     return it != windows_.end() ? it->second.window : nullptr;
