@@ -8,17 +8,30 @@ import tempfile
 
 sys.path.insert(0, str(Path(sys.argv[2]) / "editor"))
 from runtime.archive.parser import parse_archive
+from plugins.ProjectArchive.main import ProjectArchive
 
 executable = sys.argv[1]
 with tempfile.TemporaryDirectory(prefix="corona_archive_roundtrip_") as directory:
     root = Path(directory)
     def run(mode, path):
         output = root / "result.json"
-        subprocess.run([executable, mode, str(path), str(output)], check=True, timeout=60)
+        with subprocess.Popen([executable, mode, str(path), str(output)], cwd=root,
+                              stdin=subprocess.PIPE, stdout=subprocess.PIPE, encoding="utf-8", errors="replace") as proc:
+            for line in proc.stdout:
+                if line.startswith("ARCHIVE_RPC "):
+                    request = json.loads(line.removeprefix("ARCHIVE_RPC "))
+                    assert request["module"] == "ProjectArchive", request
+                    result = getattr(ProjectArchive, request["function"])(*request["args"])
+                    print(json.dumps({"success": True, "data": result}), file=proc.stdin, flush=True)
+            assert proc.wait(timeout=60) == 0
         return json.loads(output.read_text(encoding="utf-8"))
 
     scene = root / "portable"
     asset = run("fixture", scene)
+    scene_file = scene / "scene.ini"
+    text = scene_file.read_text(encoding="utf-8").replace("[actors]\n", "[actors]\na.custom.note = preserved\n")
+    extension = "[extension]\n; extension comment\noption = unchanged\n"
+    scene_file.write_text(text + "\n" + extension, encoding="utf-8")
     original = parse_archive(str(scene))
     for iteration in range(2):
         current = parse_archive(str(scene))
@@ -32,6 +45,8 @@ with tempfile.TemporaryDirectory(prefix="corona_archive_roundtrip_") as director
         assert abs(physics["fixed_dt"] - .02) < 1e-6 and physics["floor_restitution"] == .25
         assert result["scene"]["actors"][0]["camera_lock"]["enabled"]
         saved = parse_archive(str(scene))
+        assert saved["scene"]["actors"][0]["persisted_fields"]["a.custom.note"] == "preserved"
+        assert extension in scene_file.read_text(encoding="utf-8")
         lock = saved["scene"]["actors"][0]["camera_lock"]
         expected_lock = original["scene"]["actors"][0]["camera_lock"]
         assert lock["enabled"] == expected_lock["enabled"], lock
@@ -53,13 +68,12 @@ with tempfile.TemporaryDirectory(prefix="corona_archive_roundtrip_") as director
     assert run("open", scene)["status"] == "invalid_archive"
     manifest.write_bytes(data)
 
-    # No Python service is hosted by this executable: reaching it proves that
-    # recovery and full validation succeeded before the parser handoff.
+    # Recover an interrupted save with the same Python service that handles native open.
     document = scene / "scene.ini"
     (scene / ".scene.ini.backup").write_bytes(document.read_bytes())
     (scene / ".scene-save.transaction").write_text("scene.ini\n")
     document.write_text("interrupted")
-    assert run("open", document)["status"] == "service_initializing"
+    assert ProjectArchive.parse({"path": str(document)})["status"] == "ready"
     assert parse_archive(str(scene))["scene"]["environment"]["physics"] == original["scene"]["environment"]["physics"]
 
     for name, content in (

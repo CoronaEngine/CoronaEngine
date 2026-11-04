@@ -2,12 +2,14 @@
 #include <corona/resource/resource_manager.h>
 #include <corona/resource/types/scene.h>
 #include <corona/systems/script/camera_follow_controller.h>
+#include <corona/systems/script/python_runtime_coordinator.h>
 #include "cef/cef_editor_native_api_registry.h"
 #include "cef/cef_editor_native_api_test_support.h"
 #include "cef/scene_folder.h"
 #include <fstream>
 #include <iostream>
 #include <stdexcept>
+#include <thread>
 
 namespace UI = Corona::Systems::UI;
 namespace fs = std::filesystem;
@@ -56,6 +58,20 @@ int main(int argc, char** argv) {
             auto& kernel = Corona::Kernel::KernelContext::instance();
             require(kernel.initialize(), "initialize kernel");
             UI::register_builtin_native_api_handlers();
+            // The Python test driver hosts the actual archive service for this CPU-only binary.
+            namespace Py = Corona::Script::Python;
+            Py::PythonRuntimeCoordinator coordinator;
+            Py::install_active_python_runtime_coordinator(&coordinator);
+            std::jthread service([&](std::stop_token stop) {
+                while (!stop.stop_requested()) {
+                    auto request = coordinator.wait_pop(std::chrono::milliseconds(50));
+                    if (!request) continue;
+                    std::cout << "ARCHIVE_RPC " << request->payload_json << std::endl;
+                    std::string response;
+                    if (!std::getline(std::cin, response)) break;
+                    coordinator.complete(request->request_id, Py::PythonRuntimeResponse::success(response));
+                }
+            });
             if (mode == "open") {
                 output = invoke("ProjectLauncher", "open_project", {argv[2], {{"load_policy", "degraded"}}});
             } else {
@@ -70,6 +86,8 @@ int main(int argc, char** argv) {
                 output["save"] = invoke("MainView", "scene_save", {route});
             }
             UI::reset_native_editor_scene_for_test();
+            Py::install_active_python_runtime_coordinator(nullptr);
+            coordinator.stop();
             kernel.shutdown();
         }
         std::ofstream file(fs::u8path(argv[3]));

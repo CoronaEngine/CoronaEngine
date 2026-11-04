@@ -47,6 +47,8 @@ def install_host_probe(editor, trace_path):
         nonlocal delayed
         response = dispatch(message)
         request = json.loads(message)
+        if request["module"] == "ProjectArchive" and request["function"] == "save":
+            record("save", json.loads(response)["data"].get("status"))
         if request["module"] == "ScratchTool" and request["function"] == "run_file" and not delayed:
             delayed = True
             record("delay", request["args"][0]["requestId"])
@@ -73,6 +75,7 @@ def verify_trace(trace_path, engine_log, report):
     assert len({(r["pid"], r["interpreter"], r["modules"], r["prefix"]) for r in rows}) == 1, rows
     assert sum(r["event"] == "bootstrap" for r in rows) == 1 and any(r["event"] == "archive" for r in rows)
     runs = report["runs"]
+    assert any(r["event"] == "save" and r["id"] == "success" for r in rows), rows
     executions = [run["runId"] for run in runs]
     lookups = [runs[0]["requestId"], runs[0]["requestId"], runs[1]["requestId"]]
     if "switch" in report:
@@ -114,6 +117,14 @@ def verify(port, root, switch_root=None):
         actors = api("SceneTools.get_scene_snapshot", "scene.ini")["actors"]
         return next(a["geometry"]["position"] for a in actors if a["name"] == "Probe")
 
+    def project_files():
+        return {p.relative_to(root).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest()
+                for p in root.rglob("*") if p.is_file()}
+
+    def edit_position(value):
+        result = api("SceneTools.set_actor_transform", "scene.ini", "Probe", {"position": value})
+        assert result["status"] == "success" and position() == value, result
+
     def key_down():
         assert web.evaluate("window.coronaBridge.injectInput(0, 'KeyD', '', 'd')")
 
@@ -131,11 +142,25 @@ def verify(port, root, switch_root=None):
     opened = wait_for(lambda: api("ProjectLauncher.open_project", str(root)),
                       lambda r: r.get("status") != "service_initializing", "archive service")
     assert opened.get("ok"), opened
-    start = position()
+    initial = position()
+    start = [initial[0] + 3, initial[1] + 2, initial[2] + 1]
+    before_edit = project_files()
+    edit_position(start)
+    assert project_files() == before_edit, "An ordinary Actor edit wrote to disk"
+    committed = api("MainView.scene_save", "scene.ini")
+    assert committed["ok"], committed
+    after_save = project_files()
+    assert {key for key in after_save if after_save[key] != before_edit.get(key)} == {"scene.ini"}
+    assert after_save.keys() == before_edit.keys()
+    edit_position(initial)
+    assert project_files() == after_save
+    assert api("ProjectLauncher.open_project", str(root))["ok"]
+    assert position() == start, "Reopen must read the saved edit, not the latest in-memory Actor"
+    assert project_files() == after_save
     graph = {"version": 1, "nodes": [{"id": "start", "nodeType": "start", "workspace": {
         "blocks": {"languageVersion": 0, "blocks": [
-            {"type": "event_keyboard", "fields": {"x": "KeyD"}, "inputs": {"DO": {"block": {
-                "type": "object_move_direction", "fields": {"NAME": "Probe", "DIRECTION": "RIGHT", "SPEED": 20}
+            {"type": "event_keyboard", "id": "press-d", "x": 0, "y": 0, "fields": {"x": "KeyD"}, "inputs": {"DO": {"block": {
+                "type": "object_move_direction", "id": "move-probe", "fields": {"NAME": "Probe", "DIRECTION": "RIGHT", "SPEED": 20}
             }}}}
         ]}
     }}], "edges": []}
@@ -153,6 +178,8 @@ def verify(port, root, switch_root=None):
              lambda values: "Probe" in values, "actor selector")
     web.evaluate(f"(()=>{{const s={select};s.value='Probe';s.dispatchEvent(new Event('change'));}})()")
     wait_for(lambda: web.evaluate(f"{select}?.value"), lambda value: value == "Probe", "actor graph")
+    saved_files = None
+    saved_workspace = None
     run_button = "document.querySelector('[data-guidance=\"node-run\"]')"
     runs = []
     for _ in range(2):
@@ -164,6 +191,17 @@ def verify(port, root, switch_root=None):
         path = root / saved["target"]["code_path"]
         script = path.read_bytes()
         assert b"def run():" in script and b"KeyD" in script, script
+        if saved_files is None:
+            # The first run publishes Web's generated file in place of the test sentinel.
+            saved_files = project_files()
+            assert saved_files["scene.ini"] == after_save["scene.ini"]
+            saved_workspace = (root / saved["target"]["workspace_path"]).read_text(encoding="utf-8")
+        else:
+            current = project_files()
+            if current != saved_files:
+                changes = [k for k in sorted(current.keys() | saved_files.keys()) if current.get(k) != saved_files.get(k)]
+                raise AssertionError(("Run modified archive", changes, saved_workspace,
+                                      (root / saved["target"]["workspace_path"]).read_text(encoding="utf-8")))
         request_id = running["requestId"]
         assert api("Scripts.get_run", {"requestId": request_id})["runId"] == running["runId"]
         replay = api("Scripts.run_file", {
@@ -174,12 +212,16 @@ def verify(port, root, switch_root=None):
             key_down()
             moved = wait_for(position, lambda p: p != start, "key moved actor")
             assert moved == [start[0] + 1, *start[1:]], moved
+            assert project_files() == saved_files, "Starting the run or moving the Actor changed the archive"
+            blocked = api("MainView.scene_save", "scene.ini")
+            assert not blocked["ok"] and blocked["status"] == "run_active", blocked
             key_up()
         finally:
             web.evaluate(f"{run_button}.click()")
         stopped = wait_for(status, lambda r: r.get("status") == "stopped", "button stopped run")
         assert not stopped["snapshotCaptured"] and not stopped["inputLocked"], stopped
         assert position() == start
+        assert project_files() == saved_files, "Stopping the script changed project files"
         key_down()
         key_up()
         time.sleep(0.2)
@@ -187,7 +229,9 @@ def verify(port, root, switch_root=None):
         runs.append({"runId": running["runId"], "requestId": request_id, "before": start,
                      "moved": moved, "afterStopAndKey": position()})
     assert runs[0]["runId"] != runs[1]["runId"] and runs[0]["requestId"] != runs[1]["requestId"]
-    report = {"path": saved["target"]["code_path"], "runs": runs}
+    report = {"path": saved["target"]["code_path"], "runs": runs,
+              "save": {"initial": initial, "reopened": start, "sceneSha256": saved_files["scene.ini"],
+                       "unchangedFilesDuringRun": len(saved_files)}}
     if switch_root:
         # Run while the normal launcher is visible. Its open action must finish
         # stopping and restoring A before installing B (both have a Probe actor).
@@ -208,6 +252,7 @@ def verify(port, root, switch_root=None):
         wait_for(lambda: api("SceneTools.get_scene_snapshot", "scene.ini"),
                  lambda s: Path(s["project_path"]).resolve() == switch_root, "project switch")
         assert position() == peer_start
+        assert project_files() == saved_files
         assert api("Scripts.get_run", {"requestId": switch_request})["status"] == "stopped"
         assert not status()["snapshotCaptured"]
         key_down()
