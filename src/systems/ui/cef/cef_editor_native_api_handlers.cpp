@@ -5688,10 +5688,12 @@ void register_project_launcher_api_handlers(NativeApiRegistry& registry) {
         {"create_world_project", [](const NativeRequest& request, const NativeContext&) {
             const auto data = arg_object(request.args, 0);
             const auto world_type = data.value("mode", std::string{"creative"});
+            if (world_type == "story") {
+                return native_failure("Story mode does not create a project. Use Test Mode on the start screen.", 2);
+            }
             const auto prompt = data.value("prompt", std::string{});
-            const bool story = world_type == "story";
-            const std::string display_base = story ? "剧情世界" : "创造世界";
-            const std::string dir_base = story ? "story_world" : "creative_world";
+            const std::string display_base = "创造世界";
+            const std::string dir_base = "creative_world";
             const auto base_dir = runtime_data_dir();
             std::filesystem::create_directories(base_dir);
             int index = 1;
