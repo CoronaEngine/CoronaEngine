@@ -20,6 +20,7 @@ enum class EditorApiCaller : std::uint32_t {
     Cef = 1u << 0u,
     PythonScript = 1u << 1u,
     ScriptRuntime = 1u << 2u,
+    Native = 1u << 3u,
 };
 
 enum class EditorApiValueType : std::uint32_t {

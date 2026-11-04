@@ -15,7 +15,7 @@ namespace {
 ///
 /// `_invoke_cpp_editor_api` 现在会把 handler 派发到 CEF UI（编辑器状态 owner）线程并等它
 /// 执行（见 `editor_api/editor_dispatch.h`）。而 CEF UI 线程自己也会同步等 Python
-/// （`invoke_python_script_service` → `submit_and_wait`，例如 `ScratchTool.mouse_event`）。
+/// （`invoke_python_script_service` → `submit_and_wait`，例如 `Scripts.mouse_event`）。
 /// 如果这里握着 GIL 等 CEF 线程，Python 消费线程就拿不到 GIL 去答复 CEF 线程，形成
 /// "CEF 等 Python、Python 等 CEF"的环路。实测（LANChat 后台轮询每 ~2.5 s 一次）：
 /// 每次轮询撞上鼠标事件的 Python 往返就握手成 5 s 超时，期间每帧鼠标事件都在 2 s 超时里

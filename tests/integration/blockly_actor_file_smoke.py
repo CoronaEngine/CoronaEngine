@@ -16,7 +16,7 @@ import threading
 import time
 from pathlib import Path
 
-def install_host_probe(editor, trace_path):
+def install_host_probe(editor, trace_path, *, delay_first=True):
     """Record the interpreter actually parsing the archive and executing the file."""
     import _interpreters
     trace_lock = threading.Lock()
@@ -29,9 +29,9 @@ def install_host_probe(editor, trace_path):
             stream.write(json.dumps(row) + "\n")
 
     def audit(event, args):
-        if event == "exec" and "/scripts/blockly/" in args[0].co_filename.replace("\\", "/").lower():
+        if event == "exec" and "/scripts/files/" in args[0].co_filename.replace("\\", "/").lower():
             ctx = sys._getframe(1).f_locals["ctx"]
-            record("execute", ctx.context_id)
+            record("execute", ctx.id)
         elif event == "open" and str(args[0]).replace("\\", "/").endswith("/scene.ini"):
             frame = sys._getframe(1)
             while frame is not None:
@@ -41,7 +41,7 @@ def install_host_probe(editor, trace_path):
                 frame = frame.f_back
 
     dispatch = editor.dispatch_script_request_from_cpp
-    delayed = False
+    delayed = not delay_first
 
     def dispatch_with_delayed_receipt(cls, message):
         nonlocal delayed
@@ -49,13 +49,13 @@ def install_host_probe(editor, trace_path):
         request = json.loads(message)
         if request["module"] == "ProjectArchive" and request["function"] == "save":
             record("save", json.loads(response)["data"].get("status"))
-        if request["module"] == "ScratchTool" and request["function"] == "run_file" and not delayed:
+        if request["module"] == "FileScripts" and request["function"] == "run_file" and not delayed:
             delayed = True
             record("delay", request["args"][0]["requestId"])
             time.sleep(2.8)  # Longer than the 2 s native service deadline.
-        elif request["module"] == "ScratchTool" and request["function"] == "get_file_run":
+        elif request["module"] == "FileScripts" and request["function"] == "get_file_run":
             record("lookup", request["args"][0]["requestId"])
-        elif request["module"] == "ScratchTool" and request["function"] in ("stop_file", "stop_script_execution"):
+        elif request["module"] == "FileScripts" and request["function"] in ("stop_file", "stop_script_execution"):
             if json.loads(response).get("data", {}).get("restored"):
                 from api.editor_api import get_script_runtime_editor_api
                 scene = get_script_runtime_editor_api().scene.get_snapshot()
@@ -160,21 +160,24 @@ def verify(port, root, switch_root=None):
     assert api("ProjectLauncher.open_project", str(root))["ok"]
     assert position() == start, "Reopen must read the saved edit, not the latest in-memory Actor"
     assert project_files() == after_save
-    graph = {"version": 1, "nodes": [{"id": "start", "nodeType": "start", "workspace": {
-        "blocks": {"languageVersion": 0, "blocks": [
-            {"type": "event_keyboard", "id": "press-d", "x": 0, "y": 0, "fields": {"x": "KeyD"}, "inputs": {"DO": {"block": {
-                "type": "object_move_direction", "id": "move-probe", "fields": {"NAME": "Probe", "DIRECTION": "RIGHT", "SPEED": 20}
-            }}}}
-        ]}
-    }}], "edges": []}
+    target_fields = {"SCOPE": "SCENE", "v": "presses", "x": 1}
+    count = {"type": "variable_add", "id": "count-d", "fields": target_fields}
+    move = {"type": "object_move_direction", "id": "move-probe",
+            "fields": {"NAME": "Probe", "DIRECTION": "RIGHT", "SPEED": 20}, "next": {"block": count}}
+    seen = {"type": "variable_exists", "id": "seen-d", "fields": {"SCOPE": "SCENE", "NAME": "presses"}}
+    once = {"type": "control_else", "id": "once-per-run",
+            "inputs": {"CONDITION": {"block": seen}, "ELSE": {"block": move}}}
+    key = {"type": "event_keyboard", "id": "press-d", "x": 0, "y": 0, "fields": {"x": "KeyD"},
+           "inputs": {"DO": {"block": once}}}
+    graph = {"version": 1, "nodes": [{"id": "start", "nodeType": "start",
+             "workspace": {"blocks": {"languageVersion": 0, "blocks": [key]}}}], "edges": []}
     first_session = scope()
-    saved = api("ScratchTool.save_blockly_target", {
-        "archive_session": first_session,
-        "project_path": str(root), "target_type": "actor", "scene_name": "scene.ini",
-        "actor_name": "Probe", "script_kind": "node_graph", "workspace": graph,
-        # The panel must regenerate and replace this file before requesting a run.
-        "code": "raise RuntimeError('node panel did not generate the script')",
-    })
+    target = {"target_type": "actor", "scene_name": "scene.ini", "actor_name": "Probe", "script_kind": "node_graph",
+              "id": "node_graph:actor:scene.ini:Probe", "enabled": True, "runnable": True, "validation_errors": []}
+    locator = {"key": json.dumps(["node_graph", "actor", "scene.ini", "Probe"], separators=(",", ":")),
+               "archive_session": first_session, "project_path": str(root)}
+    saved = api("ProjectFiles.save", {**locator, "document": {"target": target, "workspace": graph},
+                "code": "raise RuntimeError('node panel did not generate the script')"})
     assert saved["status"] == "saved", saved
     web.evaluate("localStorage.setItem('corona.activeProjectPath'," + json.dumps(str(root)) +
                  "); location.hash = '/NodeGraph'")
@@ -191,28 +194,30 @@ def verify(port, root, switch_root=None):
     for _ in range(2):
         web.evaluate(f"{run_button}.click()")
         wait_for(lambda: web.evaluate(f"{run_button}.classList.contains('running')"), bool, "run accepted by panel")
-        status = lambda: api("ScratchTool.get_script_status")
-        running = wait_for(status, lambda r: r.get("status") == "running" and r.get("currentNodeId") == "start",
+        status = lambda: api("Scripts.get_status")
+        running = wait_for(status, lambda r: r.get("status") == "running" and r.get("marker", {}).get("id") == "start",
                            "generated file running")
-        path = root / saved["target"]["code_path"]
+        saved = api("ProjectFiles.load", locator)
+        path = root / saved["code_path"]
         script = path.read_bytes()
         assert b"def run():" in script and b"KeyD" in script, script
+        assert b"from script_runtime import file_api" in script and b"script_runtime.engine" not in script, script
         if saved_files is None:
             # The first run publishes Web's generated file in place of the test sentinel.
             saved_files = project_files()
             assert saved_files["scene.ini"] == after_save["scene.ini"]
-            saved_workspace = (root / saved["target"]["workspace_path"]).read_text(encoding="utf-8")
+            saved_workspace = (root / saved["document_path"]).read_text(encoding="utf-8")
         else:
             current = project_files()
             if current != saved_files:
                 changes = [k for k in sorted(current.keys() | saved_files.keys()) if current.get(k) != saved_files.get(k)]
                 raise AssertionError(("Run modified archive", changes, saved_workspace,
-                                      (root / saved["target"]["workspace_path"]).read_text(encoding="utf-8")))
+                                      (root / saved["document_path"]).read_text(encoding="utf-8")))
         request_id = running["requestId"]
         assert api("Scripts.get_run", {"requestId": request_id})["runId"] == running["runId"]
         replay = api("Scripts.run_file", {
             "archive_session": first_session,
-            "project_path": str(root), "path": saved["target"]["code_path"], "revision": hashlib.sha256(script).hexdigest(),
+            "project_path": str(root), "path": saved["code_path"], "revision": hashlib.sha256(script).hexdigest(),
             "target_type": "actor", "scene_name": "scene.ini", "actor_name": "Probe", "requestId": request_id})
         assert replay["runId"] == running["runId"]
         try:
@@ -223,6 +228,10 @@ def verify(port, root, switch_root=None):
             blocked = api("MainView.scene_save", "scene.ini", {"archive_session": scope()})
             assert not blocked["ok"] and blocked["status"] == "run_active", blocked
             key_up()
+            key_down()
+            key_up()
+            time.sleep(.2)
+            assert position() == moved, "SCENE variable did not survive within this run"
         finally:
             web.evaluate(f"{run_button}.click()")
         stopped = wait_for(status, lambda r: r.get("status") == "stopped", "button stopped run")
@@ -236,7 +245,7 @@ def verify(port, root, switch_root=None):
         runs.append({"runId": running["runId"], "requestId": request_id, "before": start,
                      "moved": moved, "afterStopAndKey": position()})
     assert runs[0]["runId"] != runs[1]["runId"] and runs[0]["requestId"] != runs[1]["requestId"]
-    report = {"path": saved["target"]["code_path"], "runs": runs,
+    report = {"path": saved["code_path"], "runs": runs,
               "save": {"initial": initial, "reopened": start, "sceneSha256": saved_files["scene.ini"],
                        "unchangedFilesDuringRun": len(saved_files)}}
     if switch_root:
@@ -251,7 +260,7 @@ def verify(port, root, switch_root=None):
         active = api("Scripts.run_file", {"archive_session": first_session, "requestId": switch_request, "project_path": str(root),
                      "path": report["path"], "revision": hashlib.sha256(script).hexdigest(),
                      "target_type": "actor", "actor_name": "Probe", "scene_name": "scene.ini"})
-        wait_for(status, lambda r: r.get("runId") == active.get("runId") and r.get("currentNodeId") == "start", "switch run")
+        wait_for(status, lambda r: r.get("runId") == active.get("runId") and r.get("marker", {}).get("id") == "start", "switch run")
         key_down()
         wait_for(position, lambda p: p == moved, "move in old project")
         key_up()
@@ -276,8 +285,8 @@ def verify(port, root, switch_root=None):
                      "revision": hashlib.sha256(script).hexdigest()}
         def verify_rejected():
             for name, payload in (
-                ("ScratchTool.load_blockly_target", stale_target),
-                ("ScratchTool.save_blockly_target", {**stale_target, "workspace": {}, "code": "raise AssertionError()"}),
+                ("ProjectFiles.load", locator),
+                ("ProjectFiles.save", {**locator, "document": {}, "code": "raise AssertionError()"}),
             ):
                 reply = api(name, payload)
                 assert reply.get("code") == "PROJECT_CONTEXT_CHANGED", reply
@@ -293,7 +302,7 @@ def verify(port, root, switch_root=None):
         assert api("ProjectLauncher.open_project", str(root)).get("ok")
         sessions.append(verify_rejected())
         assert position() == start
-        assert api("ScratchTool.load_blockly_target", {**stale_target, "archive_session": sessions[-1]})["status"] == "loaded"
+        assert api("ProjectFiles.load", {**locator, "archive_session": sessions[-1]})["status"] == "loaded"
         assert api("ProjectLauncher.open_project", str(root)).get("ok")
         sessions.append(verify_rejected())
         assert len(set(sessions)) == 4, sessions

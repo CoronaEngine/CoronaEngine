@@ -20,7 +20,6 @@ import time
 from pathlib import Path
 import CoronaEngine
 from api.editor_api import get_script_runtime_editor_api
-from script_runtime.engine import corona_engine as runtime
 
 def run():
     folder = Path(CONTROL)
@@ -46,8 +45,8 @@ def run():
         archive = scene.read_archive(session)
         assert archive['archive_session'] == session
         assert next(a for a in archive['scene']['actors'] if a['actor_guid'] == GUID)['geometry']['position'] == before
-        runtime.data_set('SCENE', 'isolation_probe', 37)
-        assert runtime.data_get('SCENE', 'isolation_probe') == 37
+        global isolation_probe
+        isolation_probe = 37
         (folder/'interpreter').write_text(str(id(sys.modules)))
         reads.clear()
         (folder/'ready').write_text(json.dumps(before))
@@ -196,9 +195,8 @@ def run(port, root, control):
     other = start_file("separate_run.py", f"""
 import json, sys
 from pathlib import Path
-from script_runtime.engine import corona_engine as runtime
 def run():
-    result = [str(id(sys.modules)), runtime.data_get('SCENE', 'isolation_probe', 'unset')]
+    result = [str(id(sys.modules)), globals().get('isolation_probe', 'unset')]
     Path({str(control / 'isolation')!r}).write_text(json.dumps(result))
 """)
     try:
@@ -207,8 +205,20 @@ def run():
         assert isolated == [(control / "interpreter").read_text(), "unset"], isolated
         assert other["runId"] != started["runId"]
         assert (root / "scene.ini").read_bytes() == saved_ini
-        return {**report, "restored": restored, "sceneIniUnchanged": True, "sameInterpreter": True,
-                "separateRunValue": isolated[1]}
+        assert api(main, "Scripts.stop", {"runId": other["runId"]})["restored"]
+        # Save the Actor from one real window after the other has saved the name.
+        new_name = "Two windows"
+        moved = [initial[0] + 2, *initial[1:]]
+        api(panels[1], "SceneTools.set_actor_transform", state["scene"], guid, {**scope, "position": moved})
+        api(panels[0], "ProjectSettings.save_active_project_info", {**scope, "name": new_name})
+        assert api(panels[1], "MainView.scene_save", state["scene"], scope)["ok"]
+        assert api(main, "ProjectLauncher.open_project", str(root))["ok"]
+        fresh = api(main, "SceneTools.read_active_scene")
+        assert fresh["archive_session"] != scope["archive_session"]
+        assert api(main, "ProjectSettings.get_active_project_info")["name"] == new_name
+        assert api(main, "SceneTools.read_actor", {"archive_session": fresh["archive_session"], "actor": guid})["geometry"]["position"] == moved
+        return {**report, "restored": restored, "sceneIniUnchangedDuringRun": True, "sameInterpreter": True,
+                "separateRunValue": isolated[1], "twoWindowSave": {"name": new_name, "position": moved}}
     finally:
         api(main, "Scripts.stop", {"runId": other["runId"], "restore_state": True})
         for panel in panels: panel.socket.close()

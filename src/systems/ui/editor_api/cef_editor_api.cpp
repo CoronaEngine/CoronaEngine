@@ -1,3 +1,4 @@
+#include <corona/systems/ui/file_script_api.h>
 #include "cef_editor_api.h"
 
 #include "editor_dispatch.h"
@@ -467,18 +468,18 @@ constexpr std::array<EditorApiParamSpec, 2> kSceneToolsActorPlayAudioParams = {{
     param("loop", EditorApiValueType::Boolean, true),
 }};
 
-constexpr std::array<EditorApiParamSpec, 3> kScratchKeyEventParams = {{
+constexpr std::array<EditorApiParamSpec, 3> kScriptKeyEventParams = {{
     param("key", EditorApiValueType::String),
     param("modifiers", EditorApiValueType::String, true),
     param("display_key", EditorApiValueType::String, true),
 }};
 
-constexpr std::array<EditorApiParamSpec, 2> kScratchKeyReleaseParams = {{
+constexpr std::array<EditorApiParamSpec, 2> kScriptKeyReleaseParams = {{
     param("key", EditorApiValueType::String),
     param("display_key", EditorApiValueType::String, true),
 }};
 
-constexpr std::array<EditorApiParamSpec, 9> kScratchMouseEventParams = {{
+constexpr std::array<EditorApiParamSpec, 9> kScriptMouseEventParams = {{
     param("event_type", EditorApiValueType::String),
     param("button", EditorApiValueType::String, true),
     param("x", EditorApiValueType::Number),
@@ -625,7 +626,7 @@ constexpr auto kEditorApiMethods = std::to_array<EditorApiMethodSpec>({
     EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, get_vision_accumulation, kSceneToolsCameraOptionalParams, "sceneTools.getVisionAccumulation", "scene_tools.get_vision_accumulation", EditorApiValueType::Object),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, get_vision_stable_planes, kSceneToolsCameraOptionalParams, "sceneTools.getVisionStablePlanes", "scene_tools.get_vision_stable_planes", EditorApiValueType::Object),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, is_vision_available, kNoParams, "sceneTools.isVisionAvailable", "scene_tools.is_vision_available", EditorApiValueType::Object),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, read_active_scene, kNoParams, "scene.readActive", "scene.read_active_scene", EditorApiValueType::Object, animation_callers()),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, read_active_scene, kNoParams, "scene.readActive", "scene.read_active_scene", EditorApiValueType::Object, animation_callers() | caller_mask(EditorApiCaller::Native)),
     EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, read_actor, kObjectPayloadParam, "scene.readActor", "scene.read_actor", EditorApiValueType::Object, animation_callers()),
     EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, read_transforms, kObjectPayloadParam, "scene.readTransforms", "scene.read_transforms", EditorApiValueType::Object, animation_callers()),
     EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, read_archive_scene, kObjectPayloadParam, "scene.readArchive", "scene.read_archive_scene", EditorApiValueType::Object, animation_callers()),
@@ -683,15 +684,16 @@ constexpr auto kEditorApiMethods = std::to_array<EditorApiMethodSpec>({
     EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, update_camera_view, kSceneToolsUpdateCameraViewParams, "sceneTools.updateCameraView", "scene_tools.update_camera_view", EditorApiValueType::Object),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, capture_viewport, kViewportCaptureParams, "viewport.capture", "viewport.capture", EditorApiValueType::Object),
     EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, set_camera_pose, kViewportSetCameraPoseParams, "viewport.setCameraPose", "viewport.set_camera_pose", EditorApiValueType::Object, cef_and_script_runtime_callers()),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Scripts, run_file, kObjectPayloadParam, "scripts.runFile", "", EditorApiValueType::Object, caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Scripts, get_run, kObjectPayloadParam, "scripts.getRun", "", EditorApiValueType::Object, caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Scripts, stop, kObjectPayloadParam, "scripts.stop", "", EditorApiValueType::Object, caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED(ScratchTool, get_script_status, kNoParams, "scratch.getScriptStatus", "scratch.get_script_status", EditorApiValueType::Any),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED(ScratchTool, key_event, kScratchKeyEventParams, "scratch.sendKeyEvent", "scratch.send_key_event", EditorApiValueType::Any),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED(ScratchTool, key_release, kScratchKeyReleaseParams, "scratch.sendKeyUpEvent", "scratch.send_key_up_event", EditorApiValueType::Any),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED(ScratchTool, load_blockly_target, kObjectPayloadParam, "scratch.loadBlocklyTarget", "scratch.load_blockly_target", EditorApiValueType::Any),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED(ScratchTool, mouse_event, kScratchMouseEventParams, "scratch.sendMouseEvent", "scratch.send_mouse_event", EditorApiValueType::Any),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED(ScratchTool, save_blockly_target, kObjectPayloadParam, "scratch.saveBlocklyTarget", "scratch.save_blockly_target", EditorApiValueType::Any),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Scripts, run_path, kObjectPayloadParam, "", "", EditorApiValueType::Object, caller_mask(EditorApiCaller::Native)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Scripts, run_file, kObjectPayloadParam, "scripts.runFile", "", EditorApiValueType::Object, (caller_mask(EditorApiCaller::Cef) | caller_mask(EditorApiCaller::Native))),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Scripts, get_run, kObjectPayloadParam, "scripts.getRun", "", EditorApiValueType::Object, (caller_mask(EditorApiCaller::Cef) | caller_mask(EditorApiCaller::Native))),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Scripts, stop, kObjectPayloadParam, "scripts.stop", "", EditorApiValueType::Object, (caller_mask(EditorApiCaller::Cef) | caller_mask(EditorApiCaller::Native))),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Scripts, get_status, kNoParams, "scripts.getStatus", "", EditorApiValueType::Object, (caller_mask(EditorApiCaller::Cef) | caller_mask(EditorApiCaller::Native))),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(ProjectFiles, load, kObjectPayloadParam, "projectFiles.load", "", EditorApiValueType::Object, caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(ProjectFiles, save, kObjectPayloadParam, "projectFiles.save", "", EditorApiValueType::Object, caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Scripts, key_event, kScriptKeyEventParams, "scripts.sendKeyEvent", "", EditorApiValueType::Any, caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Scripts, key_release, kScriptKeyReleaseParams, "scripts.sendKeyUpEvent", "", EditorApiValueType::Any, caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Scripts, mouse_event, kScriptMouseEventParams, "scripts.sendMouseEvent", "", EditorApiValueType::Any, caller_mask(EditorApiCaller::Cef)),
 });
 
 #undef EDITOR_API_METHOD_SCHEMA
@@ -1184,6 +1186,12 @@ NativeResult EditorApiRegistry::invoke(const EditorApiRequest& request,
         return result_validation;
     }
     return result;
+}
+
+nlohmann::json invoke_file_script_api(const std::string& api, const nlohmann::json& args) {
+    const auto result = EditorApiRegistry::instance().invoke({api, args, EditorApiCaller::Native}, {});
+    return {{"success", result.success}, {"code", result.success ? 0 : result.error_code},
+            {"data", result.data}, {"error", result.error}};
 }
 
 NativeResult CefEditorApiEndpoint::invoke(const std::string& api_name,

@@ -2,6 +2,7 @@
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
 #endif
+#include <SDL3/SDL_events.h>
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <windows.h>
@@ -172,9 +173,6 @@ const char* editor_api_module_js_wrapper_alias(const char* module) {
     if (name == "SceneTools") {
         return "sceneTools";
     }
-    if (name == "ScratchTool") {
-        return "scratch";
-    }
     return "";
 }
 
@@ -209,9 +207,6 @@ const char* editor_api_module_python_wrapper_alias(const char* module) {
     }
     if (name == "SceneTools") {
         return "scene_tools";
-    }
-    if (name == "ScratchTool") {
-        return "scratch";
     }
     return "";
 }
@@ -1741,6 +1736,16 @@ NativeEditorScene* ensure_native_editor_scene(const std::string& project_path_ar
 
 std::filesystem::path absolute_normalized_path(const std::filesystem::path& path);
 
+std::optional<std::string> stop_before_scene_replacement(const NativeEditorState& state) {
+    if (!state.scene) return std::nullopt;
+    const auto result = invoke_python_script_service({"FileScripts", "stop_script_execution", {true}});
+    if (!result.success) return result.error;
+    if (result.data.value("status", "") != "stopped" || result.data.value("snapshotCaptured", false)) {
+        return result.data.value("message", std::string{"Script restore incomplete"});
+    }
+    return std::nullopt;
+}
+
 NativeEditorScene* reload_native_editor_scene(const std::string& project_path_arg,
                                               const std::string& scene_route_arg) {
     auto& state = native_editor_state();
@@ -1771,6 +1776,7 @@ NativeEditorScene* reload_native_editor_scene(const std::string& project_path_ar
     if (!prepared.ready) {
         throw std::runtime_error("Archive reload requires user decision");
     }
+    if (auto error = stop_before_scene_replacement(state)) throw std::runtime_error(*error);
     return &materialize_scene_snapshot_into_state(
         state, prepared.snapshot, false, prepared.diagnostics);
 }
@@ -5392,14 +5398,9 @@ void register_project_launcher_api_handlers(NativeApiRegistry& registry) {
             auto& state = native_editor_state();
             // A file run can start between the Web launcher's cleanup and this open.
             // Fence the actual replacement on the editor thread with the old scene still installed.
-            if (state.scene) {
-                const auto stopped = invoke_python_script_service({"ScratchTool", "stop_script_execution",
-                    nlohmann::json::array({true})});
-                if (!stopped.success || stopped.data.value("status", std::string{}) != "stopped" ||
-                    stopped.data.value("snapshotCaptured", false)) {
-                    return native_success({{"ok", false}, {"status", "script_cleanup_failed"}, {"path", path},
-                        {"message", stopped.success ? stopped.data.value("message", std::string{"Script restore incomplete"}) : stopped.error}});
-                }
+            if (auto error = stop_before_scene_replacement(state)) {
+                return native_success({{"ok", false}, {"status", "script_cleanup_failed"}, {"path", path},
+                    {"message", *error}});
             }
             try {
                 materialize_scene_snapshot_into_state(
@@ -7555,42 +7556,58 @@ void register_editor_api_handlers(NativeApiRegistry& registry) {
 }
 
 void register_python_script_api_handlers(NativeApiRegistry& registry) {
+    static const auto file_method = [](const NativeRequest& request, const NativeContext&) {
+        return invoke_python_script_service({"FileScripts", request.function, request.args});
+    };
+    static const auto start_file = [](const NativeRequest& request, const NativeContext&) {
+        auto payload = arg_object(request.args, 0);
+        const auto* scene = native_editor_state().scene.get();
+        if (!scene || !matches_archive_session(*scene, payload)) {
+            return native_failure("PROJECT_CONTEXT_CHANGED", 409);
+        }
+        const bool by_path = request.function == "run_path";
+        if (by_path && !payload.contains("project_path")) payload["project_path"] = path_to_utf8(scene->project_root);
+        if (by_path && !payload.contains("target_type")) {
+            payload["target_type"] = payload.value("actor_name", std::string{}).empty() ? "project" : "actor";
+        }
+        const auto expected = path_from_utf8(payload.value("project_path", std::string{}));
+        if (scene->read_only || expected.empty() ||
+            absolute_normalized_path(expected) != absolute_normalized_path(scene->project_root)) {
+            return native_failure("Script project changed or is read-only", 409);
+        }
+        const auto path = path_from_utf8(payload.value("path", std::string{}));
+        if (path.empty() || path.has_root_path() || path.extension() != ".py") {
+            return native_failure("Script path must be a project-relative .py file", 400);
+        }
+        const auto root = absolute_normalized_path(scene->project_root);
+        // The Python file host resolves the path, checks containment and verifies
+        // the saved bytes against the revision before compiling them.
+        payload["project_path"] = path_to_utf8(root);
+        return invoke_python_script_service({"FileScripts", request.function, nlohmann::json::array({payload})});
+    };
     static const NativeMethodTable script_files = {
-        {"run_file", [](const NativeRequest& request, const NativeContext&) {
-            auto payload = arg_object(request.args, 0);
-            const auto* scene = native_editor_state().scene.get();
-            if (!scene || !matches_archive_session(*scene, payload)) {
-                return native_failure("PROJECT_CONTEXT_CHANGED", 409);
-            }
-            const auto expected = path_from_utf8(payload.value("project_path", std::string{}));
-            if (scene->read_only || expected.empty() ||
-                absolute_normalized_path(expected) != absolute_normalized_path(scene->project_root)) {
-                return native_failure("Script project changed or is read-only", 409);
-            }
-            const auto path = path_from_utf8(payload.value("path", std::string{}));
-            if (path.empty() || path.has_root_path() || path.extension() != ".py") {
-                return native_failure("Script path must be a project-relative .py file", 400);
-            }
-            const auto root = absolute_normalized_path(scene->project_root);
-            const auto file = std::filesystem::weakly_canonical(root / path);
-            const auto relative = file.lexically_relative(root);
-            if (relative.empty() || *relative.begin() == ".." ||
-                !std::filesystem::is_regular_file(file) || file.extension() != ".py") {
-                return native_failure("Script file is missing or outside the active project", 400);
-            }
-            payload["path"] = path_to_utf8(relative);
-            payload["project_path"] = path_to_utf8(root);
-            return invoke_python_script_service({"ScratchTool", "run_file", nlohmann::json::array({payload})});
+        {"key_event", file_method},
+        {"key_release", file_method},
+        {"mouse_event", file_method},
+        {"run_file", start_file},
+        {"run_path", start_file},
+        {"get_status", [](const NativeRequest& request, const NativeContext&) {
+            return invoke_python_script_service({"FileScripts", "get_script_status", request.args});
         }},
         {"get_run", [](const NativeRequest& request, const NativeContext&) {
-            return invoke_python_script_service({"ScratchTool", "get_file_run", request.args});
+            return invoke_python_script_service({"FileScripts", "get_file_run", request.args});
         }},
         {"stop", [](const NativeRequest& request, const NativeContext&) {
-            return invoke_python_script_service({"ScratchTool", "stop_file", request.args});
+            return invoke_python_script_service({"FileScripts", "stop_file", request.args});
         }},
     };
     static const NativeMethodTable corona_editor_methods = {
-        {"close_process", script_method},
+        {"close_process", [](const NativeRequest&, const NativeContext&) {
+            SDL_Event event{};
+            event.type = SDL_EVENT_QUIT;
+            if (!SDL_PushEvent(&event)) return native_failure("Unable to queue engine exit", 500);
+            return native_success(nullptr);
+        }},
     };
     static const NativeMethodTable resource_search_methods = {
         {"focus_actor", script_method},
@@ -7602,13 +7619,9 @@ void register_python_script_api_handlers(NativeApiRegistry& registry) {
         {"prepare_index", script_method},
         {"rebuild_index", script_method},
     };
-    static const NativeMethodTable scratch_tool_methods = {
-        {"get_script_status", script_method},
-        {"key_event", script_method},
-        {"key_release", script_method},
-        {"load_blockly_target", script_method},
-        {"mouse_event", script_method},
-        {"save_blockly_target", script_method},
+    static const NativeMethodTable project_file_methods = {
+        {"load", script_method},
+        {"save", script_method},
     };
 
     auto register_script_module = [&](const char* module, const NativeMethodTable& methods) {
@@ -7621,7 +7634,7 @@ void register_python_script_api_handlers(NativeApiRegistry& registry) {
 
     register_script_module("CoronaEditor", corona_editor_methods);
     register_script_module("ResourceSearch", resource_search_methods);
-    register_script_module("ScratchTool", scratch_tool_methods);
+    register_script_module("ProjectFiles", project_file_methods);
     register_script_module("Scripts", script_files);
 }
 

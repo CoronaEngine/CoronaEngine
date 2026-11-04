@@ -200,6 +200,9 @@ set_tests_properties(CollaborativeEditorLoopbackTests PROPERTIES
     TIMEOUT 30
     ENVIRONMENT_MODIFICATION "${_CORONA_LOOPBACK_ENVIRONMENT}"
 )
+add_executable(corona_native_file_probe EXCLUDE_FROM_ALL native_file_probe.cpp)
+target_link_libraries(corona_native_file_probe PRIVATE corona::engine corona_ui_system)
+
 add_executable(corona_archive_roundtrip_tests
     test_archive_roundtrip.cpp
     ${PROJECT_SOURCE_DIR}/src/shared_data_hub.cpp)

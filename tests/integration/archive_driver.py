@@ -40,6 +40,9 @@ def run_native(args, **kwargs):
                         else:
                             raise AssertionError(req)
                         result = {}
+                    elif req["module"] == "FileScripts":
+                        from script_runtime.file_runner import FileScripts
+                        result = getattr(FileScripts, req["function"])(*req["args"])
                     else:
                         assert req["module"] == "ProjectArchive", req
                         result = getattr(ProjectArchive, req["function"])(*req["args"])
