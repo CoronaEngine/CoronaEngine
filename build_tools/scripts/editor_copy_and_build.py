@@ -27,9 +27,6 @@ if __package__ in (None, ""):
 from build_tools.paths import REPO_ROOT
 
 
-EDITOR_REPOSITORY = REPO_ROOT / "CoronaEditor"
-
-
 def echo(msg: str) -> None:
     print(msg)
 
@@ -308,63 +305,6 @@ def maybe_run_npm(frontend_dir: Path, node_dir: Path) -> int:
     return 0
 
 
-def copy_game_frontend(dest_root: Path, repository_root: Path | None = None) -> None:
-    """Keep the story modules inside CabbageEditor/game, mirroring editor/game."""
-    root = repository_root or EDITOR_REPOSITORY
-    source = root / "editor" / "game" / "frontend"
-    destination = dest_root / "game"
-    if not source.is_dir():
-        raise FileNotFoundError(f"Story frontend modules not found: {source}")
-    if source.resolve() == (destination / "frontend").resolve():
-        return
-    copy_tree(source, destination)
-
-
-def copy_game_art(dest_root: Path, repository_root: Path | None = None) -> None:
-    """Deploy game-owned models/textures without modifying the shared engine assets."""
-    root = repository_root or EDITOR_REPOSITORY
-    source = root / "editor" / "game" / "art"
-    destination = dest_root / "game" / "art"
-    if not source.is_dir():
-        raise FileNotFoundError(f"Game art resources not found: {source}")
-    if source.resolve() == destination.resolve():
-        return
-    echo(f"[editor-copy] Copying game art: {source} -> {destination}")
-    # Preserve model-relative texture paths and attribution, and propagate copy failures.
-    shutil.copytree(source, destination, dirs_exist_ok=True)
-
-
-def copy_game_runtime(dest_root: Path, repository_root: Path | None = None) -> None:
-    """Deploy Python gameplay inside CabbageEditor/game, on the editor import path."""
-    root = repository_root or EDITOR_REPOSITORY
-    source = root / "editor" / "game"
-    destination = dest_root / "game"
-    if source.resolve() == destination.resolve():
-        return
-    destination.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(source / "__init__.py", destination / "__init__.py")
-    for package in ("core", "systems", "world", "runtime"):
-        copy_tree(source / package, destination)
-
-
-def copy_game_data(dest_root: Path, repository_root: Path | None = None) -> None:
-    """Deploy the read-only story content (prophet script, placement, contract).
-
-    game/data is not a Python package and holds no runtime state, so it is copied as
-    plain JSON: the shipped program must carry the same authoritative content the
-    repository validates against.
-    """
-    root = repository_root or EDITOR_REPOSITORY
-    source = root / "editor" / "game" / "data"
-    destination = dest_root / "game" / "data"
-    if not source.is_dir():
-        raise FileNotFoundError(f"Story content data not found: {source}")
-    if source.resolve() == destination.resolve():
-        return
-    echo(f"[editor-copy] Copying game data: {source} -> {destination}")
-    shutil.copytree(source, destination, dirs_exist_ok=True)
-
-
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Copy editor resources and run npm build")
     ap.add_argument("--dest-root", required=True, help="Destination root directory (CabbageEditor under target dir)")
@@ -385,11 +325,6 @@ def main(argv: list[str] | None = None) -> int:
 
     for s in src_dirs:
         copy_tree(s, dest_root, merge_content=args.merge_content)
-
-    copy_game_runtime(dest_root)
-    copy_game_art(dest_root)
-    copy_game_data(dest_root)
-    copy_game_frontend(dest_root)
 
     # Run npm build last
     return maybe_run_npm(frontend_dir, node_dir)
