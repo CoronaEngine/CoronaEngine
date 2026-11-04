@@ -1,10 +1,13 @@
 #include <SDL3/SDL.h>
+#include <process.h>
 
 #include <corona/systems/display/display_system.h>
 #include <corona/kernel/core/kernel_context.h>
 #include <corona/systems/ui/quad_compositor.h>
 #include <corona/systems/ui/vulkan_backend.h>
 #include <corona/events/display_system_events.h>
+#include <corona/shared_data_hub.h>
+#include "../../src/systems/common/render_resource_bindings.h"
 
 #include <cstdlib>
 #include <array>
@@ -13,6 +16,7 @@
 #include <fstream>
 #include <iostream>
 #include <memory>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -20,11 +24,17 @@ namespace {
 
 constexpr int kSkip = 77;
 
-bool verify_quad_pixels(Corona::Systems::DisplaySystem& display) try {
+bool verify_quad_pixels(Corona::Systems::DisplaySystem& display, const std::string& test_case) try {
     namespace Horizon = Corona::Horizon;
     using namespace Corona::Systems;
     constexpr uint32_t width = 32;
     constexpr uint32_t height = 16;
+    const bool scene_only = test_case == "scene-only";
+    const bool ui_only = test_case == "ui-only";
+    const bool shader_srgb = test_case == "shader-srgb";
+    const bool shader_unorm = test_case == "shader-unorm";
+    const bool direct_shader = shader_srgb || shader_unorm;
+    bool encode_output_srgb = shader_unorm;
     const auto capture_path = std::filesystem::temp_directory_path() /
                               ("corona-ui-pixels-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".raw");
     const auto remove_capture = [](const std::filesystem::path* path) {
@@ -51,6 +61,8 @@ bool verify_quad_pixels(Corona::Systems::DisplaySystem& display) try {
         return false;
     }
     bool cleanup_failed = false;
+    std::uintptr_t scene_handle = 0;
+    Detail::PublishedImage scene_publication;
     const auto retire_surface = [&](VulkanBackend* active_backend) noexcept {
         try {
             Corona::Kernel::KernelContext::instance().event_bus()->publish(
@@ -66,12 +78,63 @@ bool verify_quad_pixels(Corona::Systems::DisplaySystem& display) try {
             std::cerr << "UI pixel regression: failed to shut down backend\n";
             cleanup_failed = true;
         }
+        if (scene_handle != 0) {
+            try {
+                scene_publication.retire().wait();
+                auto& storage = Corona::SharedDataHub::instance().image_storage();
+                if (auto image = storage.acquire_write(scene_handle)) {
+                    Horizon::HardwareExecutor drain;
+                    if (image->submit_receipt.serial != 0) drain.wait_idle(image->submit_receipt);
+                    if (image->consumed_receipt.serial != 0) drain.wait_idle(image->consumed_receipt);
+                    *image = Corona::ImageDevice{};
+                }
+                storage.deallocate(scene_handle);
+                scene_handle = 0;
+            } catch (...) {
+                std::cerr << "UI pixel regression: failed to retire scene image\n";
+                cleanup_failed = true;
+            }
+        }
     };
     // Unwind Display and backend resources before the native window, even when
     // texture upload or rendering throws.
     std::unique_ptr<VulkanBackend, decltype(retire_surface)> surface_cleanup(&backend, retire_surface);
     display.update();
     Horizon::HardwareExecutor upload_executor;
+
+    // Optics publishes display-encoded values in a float image. The real
+    // Display composite must decode these before the SRGB swapchain encodes
+    // its output, including where the UI layer is completely transparent.
+    using Pixel = std::array<uint16_t, 4>;
+    std::array<Pixel, width * height> scene_pixels;
+    scene_pixels.fill({0x3800, 0x3800, 0x3800, 0x3c00});  // binary16 (0.5, 0.5, 0.5, 1).
+    Horizon::HardwareImage scene(Horizon::HardwareImageDesc::texture_2d(
+        width, height, Horizon::Format::RGBA16_FLOAT,
+        Horizon::ImageUsage_Storage | Horizon::ImageUsage_TransferDst | Horizon::ImageUsage_TransferSrc,
+        "ui.test.encoded_scene"));
+    const auto scene_staging = Horizon::HardwareBuffer::from_bytes(
+        std::as_bytes(std::span(scene_pixels)), 1, Horizon::BufferUsage_TransferSrc, "ui.test.scene_upload");
+    const auto scene_receipt = upload_executor.stream()
+                               << scene.copy_from(scene_staging)
+                               << Horizon::commit();
+    auto& image_storage = Corona::SharedDataHub::instance().image_storage();
+    scene_handle = image_storage.allocate();
+    scene_publication = Detail::PublishedImage(scene_handle);
+    if (auto image_device = image_storage.acquire_write(scene_handle)) {
+        *image_device = Corona::ImageDevice{};
+        image_device->image = scene;
+        image_device->submit_receipt = scene_receipt;
+        image_device->metadata = {1, width, height, 0, 0, width, height};
+    } else {
+        std::cerr << "UI pixel regression: cannot publish scene image\n";
+        return false;
+    }
+    Corona::Events::OpticsFrameReadyEvent scene_frame{surface, scene_handle, 1, width, height,
+                                                     0, 0, width, height};
+    scene_frame.published_image = scene_publication;
+    if (!ui_only && !direct_shader) {
+        Corona::Kernel::KernelContext::instance().event_bus()->publish(scene_frame);
+    }
 
     const std::array<std::byte, 4> blue{std::byte{0}, std::byte{0}, std::byte{255}, std::byte{255}};
     Horizon::HardwareImage texture(Horizon::HardwareImageDesc::texture_2d(
@@ -81,7 +144,20 @@ bool verify_quad_pixels(Corona::Systems::DisplaySystem& display) try {
     const auto upload_receipt = upload_executor.stream()
                                 << texture.copy_from(staging)
                                 << Horizon::commit();
-    std::array<QuadDraw, 2> quads;
+    // Match CEF's premultiplied BGRA upload and SRGB texture format: opaque
+    // gray, approximately 50% black, and fully transparent pixels.
+    const std::array<std::byte, 12> cef_pixels{
+        std::byte{128}, std::byte{128}, std::byte{128}, std::byte{255},
+        std::byte{0}, std::byte{0}, std::byte{0}, std::byte{128},
+        std::byte{0}, std::byte{0}, std::byte{0}, std::byte{0}};
+    Horizon::HardwareImage cef_texture(Horizon::HardwareImageDesc::texture_2d(
+        3, 1, Horizon::Format::SBGRA8_UNORM));
+    const auto cef_staging = Horizon::HardwareBuffer::from_bytes(
+        cef_pixels, 1, Horizon::BufferUsage_TransferSrc, "ui.test.cef_upload");
+    const auto cef_receipt = upload_executor.stream()
+                             << cef_texture.copy_from(cef_staging)
+                             << Horizon::commit();
+    std::array<QuadDraw, 5> quads;
     quads[0].dest_max = ktm::fvec2(16.0f, 16.0f);
     quads[0].color = ktm::fvec4(1.0f, 0.0f, 0.0f, 1.0f);
     quads[1].texture = &texture;
@@ -90,16 +166,147 @@ bool verify_quad_pixels(Corona::Systems::DisplaySystem& display) try {
     quads[1].dest_max = ktm::fvec2(32.0f, 16.0f);
     quads[1].has_clip = true;
     quads[1].clip_rect = ktm::fvec4(24.0f, 0.0f, 32.0f, 16.0f);
-    for (int frame = 0; frame < 5; ++frame) {
-        SDL_PumpEvents();
-        backend.new_frame(surface);
-        backend.render_quads(surface, quads, width, height);
-        backend.present_surface(surface);
-        display.update();
+    quads[2].texture = &cef_texture;
+    quads[2].texture_ready = cef_receipt;
+    quads[2].uv_min = quads[2].uv_max = ktm::fvec2(1.0f / 6.0f, 0.5f);
+    quads[2].dest_min = ktm::fvec2(16.0f, 0.0f);
+    quads[2].dest_max = ktm::fvec2(24.0f, 4.0f);
+    quads[3].texture = &cef_texture;
+    quads[3].texture_ready = cef_receipt;
+    quads[3].uv_min = quads[3].uv_max = ktm::fvec2(0.5f, 0.5f);
+    quads[3].dest_min = ktm::fvec2(16.0f, 4.0f);
+    quads[3].dest_max = ktm::fvec2(24.0f, 8.0f);
+    quads[4].texture = &cef_texture;
+    quads[4].texture_ready = cef_receipt;
+    quads[4].uv_min = quads[4].uv_max = ktm::fvec2(5.0f / 6.0f, 0.5f);
+    quads[4].dest_min = ktm::fvec2(16.0f, 8.0f);
+    quads[4].dest_max = ktm::fvec2(24.0f, 16.0f);
+    if (direct_shader) {
+        // Exercise both actual shader output branches independently of which
+        // swapchain formats this GPU supports. The dump captures the float
+        // source before presentation, so the target's conversion is excluded.
+        surface_cleanup.reset();
+        if (cleanup_failed) return false;
+        std::array<Pixel, width * height> ui_pixels{};
+        for (uint32_t y = 0; y < height; ++y) {
+            for (uint32_t x = 0; x < width; ++x) {
+                if (x >= 8 && x < 16) ui_pixels[y * width + x] = {0, 0, 0, 0x3800};
+                if (x >= 16 && x < 24) ui_pixels[y * width + x] = {0x32e8, 0x32e8, 0x32e8, 0x3c00};
+            }
+        }
+        Horizon::HardwareImage ui(Horizon::HardwareImageDesc::texture_2d(
+            width, height, Horizon::Format::RGBA16_FLOAT,
+            Horizon::ImageUsage_Storage | Horizon::ImageUsage_TransferDst, "ui.test.linear_ui"));
+        Horizon::HardwareImage output(Horizon::HardwareImageDesc::texture_2d(
+            width, height, Horizon::Format::RGBA16_FLOAT,
+            Horizon::ImageUsage_Storage | Horizon::ImageUsage_TransferSrc, "ui.test.shader_output"));
+        const auto ui_staging = Horizon::HardwareBuffer::from_bytes(
+            std::as_bytes(std::span(ui_pixels)), 1, Horizon::BufferUsage_TransferSrc, "ui.test.linear_ui_upload");
+        const auto ui_receipt = upload_executor.stream() << ui.copy_from(ui_staging) << Horizon::commit();
+        Horizon::ComputePipeline<composite_comp_glsl_t> pipeline(composite_comp_glsl, ktm::uvec3(8, 8, 1));
+        RenderDetail::bind_storage_image(pipeline, pipeline.pushConsts.bgImage, scene);
+        RenderDetail::bind_storage_image(pipeline, pipeline.pushConsts.fgImage, ui);
+        RenderDetail::bind_storage_image(pipeline, pipeline.pushConsts.outputImage, output);
+        pipeline.pushConsts.outputWidth = width;
+        pipeline.pushConsts.outputHeight = height;
+        pipeline.pushConsts.bgWidth = width;
+        pipeline.pushConsts.bgHeight = height;
+        pipeline.pushConsts.fgWidth = width;
+        pipeline.pushConsts.fgHeight = height;
+        pipeline.pushConsts.bgViewportX = 0;
+        pipeline.pushConsts.bgViewportY = 0;
+        pipeline.pushConsts.bgViewportWidth = width;
+        pipeline.pushConsts.bgViewportHeight = height;
+        pipeline.pushConsts.fgOpaque = 0;
+        pipeline.pushConsts.encodeOutputSrgb = shader_unorm ? 1u : 0u;
+        upload_executor.wait(scene_receipt);
+        upload_executor.wait(ui_receipt);
+        const auto composite_receipt = upload_executor.stream()
+                                       << pipeline.dispatch_extent(width, height) << Horizon::commit();
+        upload_executor.wait(composite_receipt);
+        Horizon::HardwareDisplayer displayer(surface);
+        const auto present_output = [&] {
+            const auto receipt = upload_executor.stream()
+                                 << Horizon::present(displayer, output) << Horizon::commit();
+            upload_executor.wait_idle(receipt);
+        };
+        if (shader_srgb) {
+            // Warm up FrameHash and fill its capture budget before changing
+            // the native extent; every dump then describes the same output.
+            for (int frame = 0; frame < 5; ++frame) present_output();
+            const auto initial = displayer.presentation_info();
+            SDL_SetWindowSize(window.get(), width + 16, height + 16);
+            SDL_PumpEvents();
+            auto resized = initial;
+            // Acquire/present reports OUT_OF_DATE or SUBOPTIMAL; the next
+            // query then refreshes the swapchain. A query alone need not
+            // detect native-window resize on every driver.
+            for (int frame = 0; frame < 8 && resized.generation <= initial.generation; ++frame) {
+                present_output();
+                SDL_PumpEvents();
+                resized = displayer.presentation_info();
+            }
+            SDL_SetWindowSize(window.get(), width, height);
+            SDL_PumpEvents();
+            auto restored = resized;
+            for (int frame = 0; frame < 8 && restored.generation <= resized.generation; ++frame) {
+                present_output();
+                SDL_PumpEvents();
+                restored = displayer.presentation_info();
+            }
+            if (initial.format == Horizon::Format::UNKNOWN || initial.generation == 0 ||
+                resized.generation <= initial.generation || restored.generation <= resized.generation ||
+                restored.format != initial.format) {
+                std::cerr << "UI pixel regression: presentation generation did not advance across resize/restore: "
+                          << initial.generation << "," << resized.generation << "," << restored.generation << '\n';
+                return false;
+            }
+        }
+        for (int frame = 0; frame < 5; ++frame) present_output();
+    } else {
+        for (int frame = 0; frame < 5; ++frame) {
+            SDL_PumpEvents();
+            if (!ui_only && frame > 0) {
+                // Publish real producer submissions for this constant diagnostic.
+                // Reusing one receipt would correctly hit Display's frame cache.
+                if (auto image_device = image_storage.acquire_write(scene_handle)) {
+                    if (image_device->consumed_receipt.serial != 0) {
+                        upload_executor.wait(image_device->consumed_receipt);
+                    }
+                    image_device->submit_receipt = upload_executor.stream()
+                                                   << scene.copy_from(scene_staging)
+                                                   << Horizon::commit();
+                    image_device->metadata.frame_index = frame + 1;
+                } else {
+                    std::cerr << "UI pixel regression: cannot publish next scene frame\n";
+                    return false;
+                }
+                scene_frame.frame_index = frame + 1;
+                Corona::Kernel::KernelContext::instance().event_bus()->publish(scene_frame);
+            }
+            if (!scene_only) {
+                backend.new_frame(surface);
+                backend.render_quads(surface, quads, width, height);
+                backend.present_surface(surface);
+            }
+            display.update();
+        }
     }
     surface_cleanup.reset();
     if (cleanup_failed) return false;
-    using Pixel = std::array<uint16_t, 4>;
+    if (!direct_shader) {
+        // Query the same native window after retiring Display's owner. This
+        // keeps the assertions valid on both SRGB and UNORM-only platforms.
+        Horizon::HardwareDisplayer probe(surface);
+        const auto presentation = probe.presentation_info();
+        if (presentation.format == Horizon::Format::UNKNOWN) {
+            std::cerr << "UI pixel regression: unknown presentation format\n";
+            return false;
+        }
+        encode_output_srgb = presentation.format != Horizon::Format::SRGBA8_UNORM &&
+                             presentation.format != Horizon::Format::SBGRA8_UNORM &&
+                             presentation.format != Horizon::Format::SBGRX8_UNORM;
+    }
     std::array<Pixel, width * height> pixels;
     std::ifstream capture(capture_path, std::ios::binary);
     capture.read(reinterpret_cast<char*>(pixels.data()), sizeof(pixels));
@@ -120,25 +327,49 @@ bool verify_quad_pixels(Corona::Systems::DisplaySystem& display) try {
         return true;
     };
     constexpr uint16_t one = 0x3c00;  // IEEE 754 binary16 encoding of 1.0.
+    // IEC 61966-2-1: encoded 0.5 corresponds to linear 0.2140411405;
+    // use its precomputed binary16 value, not a CPU copy of the shader math.
+    constexpr uint16_t linear_gray = 0x32d9;
+    const auto expect_gray = [&](uint32_t x, uint32_t y, uint16_t expected, const char* label) {
+        const auto& actual = pixels[y * width + x];
+        const bool matches = actual[3] == one &&
+            actual[0] >= expected - 1 && actual[0] <= expected + 1 &&
+            actual[1] >= expected - 1 && actual[1] <= expected + 1 &&
+            actual[2] >= expected - 1 && actual[2] <= expected + 1;
+        if (!matches) {
+            std::cerr << "UI pixel regression " << test_case << ": " << label
+                      << " expected half bits " << expected << " (+/-1 ULP), got "
+                      << actual[0] << "," << actual[1] << "," << actual[2] << "," << actual[3] << '\n';
+        } else {
+            std::cout << "UI pixel regression " << test_case << ": " << label
+                      << " verified half bits " << actual[0] << " (expected " << expected << ")\n";
+        }
+        return matches;
+    };
+    if (direct_shader) {
+        // Precomputed values: linear scene .2140411405, half-covered scene
+        // .1070205703, and decoded UI byte 128 .2158605001. Their encoded
+        // counterparts are .5, .3607802138 and .5019607843 respectively.
+        return expect_gray(4, 8, shader_unorm ? 0x3800 : linear_gray, "transparent UI") &&
+               expect_gray(12, 8, shader_unorm ? 0x35c6 : 0x2ed9, "50% black UI") &&
+               expect_gray(20, 8, shader_unorm ? 0x3804 : 0x32e8, "opaque gray UI");
+    }
+    if (scene_only) return expect_gray(20, 8, encode_output_srgb ? 0x3800 : linear_gray, "scene without UI");
+    const bool scene_linear = ui_only ? expect_pixel(20, 8, {0, 0, 0, one})
+                                     : expect_gray(20, 8, encode_output_srgb ? 0x3800 : linear_gray,
+                                                   "scene through transparent UI");
     return expect_pixel(4, 12, {one, 0, 0, one}) &&
            expect_pixel(12, 4, {one, 0, 0, one}) &&
            expect_pixel(26, 12, {0, 0, one, one}) &&
            expect_pixel(30, 2, {0, 0, one, one}) &&
-           expect_pixel(20, 8, {0, 0, 0, one});
+           expect_gray(20, 2, encode_output_srgb ? 0x3804 : 0x32e8, "SRGB UI byte 128") &&
+           (ui_only ? expect_pixel(20, 6, {0, 0, 0, one})
+                    : expect_gray(20, 6, encode_output_srgb ? 0x35c3 : 0x2ed3, "CEF black alpha 128/255")) &&
+           scene_linear;
 } catch (const std::exception& error) {
     std::cerr << "UI pixel regression setup failed: " << error.what() << '\n';
     return false;
 }
-
-class KernelSystemContext final : public Corona::Kernel::ISystemContext {
-   public:
-    Corona::Kernel::IEventBus* event_bus() override { return Corona::Kernel::KernelContext::instance().event_bus(); }
-    Corona::Kernel::IEventBusStream* event_stream() override { return Corona::Kernel::KernelContext::instance().event_stream(); }
-    Corona::Kernel::ISystem* get_system(std::string_view) override { return nullptr; }
-    float get_delta_time() const override { return 1.0f / 120.0f; }
-    uint64_t get_frame_number() const override { return frame_; }
-    uint64_t frame_ = 0;
-};
 
 void destroy_windows(std::vector<SDL_Window*>& windows) {
     for (auto* window : windows) {
@@ -147,7 +378,7 @@ void destroy_windows(std::vector<SDL_Window*>& windows) {
     windows.clear();
 }
 
-int run_smoke() {
+int run_smoke(const std::string& pixel_case = "combined", bool lifecycle = true) {
     if (std::getenv("CORONA_RUN_GPU_SMOKE") == nullptr ||
         std::string(std::getenv("CORONA_RUN_GPU_SMOKE")) != "1") {
         std::cout << "UiMultiSurfaceSmoke skipped; set CORONA_RUN_GPU_SMOKE=1 to enable\n";
@@ -175,21 +406,26 @@ int run_smoke() {
     }
     windows.push_back(main_window);
 
-    Corona::Systems::DisplaySystem display;
-    KernelSystemContext context;
-    if (!display.initialize(&context)) {
+    // Registration supplies SystemBase's context, which is used when Display
+    // acknowledges consumed Optics frames. Keep updates synchronous in this test.
+    auto display_system = std::make_shared<Corona::Systems::DisplaySystem>();
+    kernel.system_manager()->register_system(display_system);
+    auto& display = *display_system;
+    if (!kernel.system_manager()->initialize_all()) {
         std::cerr << "UiMultiSurfaceSmoke failed: DisplaySystem initialization failed\n";
         destroy_windows(windows);
         kernel.shutdown();
         SDL_Quit();
         return 1;
     }
-    if (!verify_quad_pixels(display)) {
+    const bool pixels_passed = verify_quad_pixels(display, pixel_case);
+    if (!pixels_passed || !lifecycle) {
         display.shutdown();
         kernel.shutdown();
         destroy_windows(windows);
         SDL_Quit();
-        return 1;
+        if (pixels_passed) std::cout << "UI pixel regression passed: " << pixel_case << '\n';
+        return pixels_passed ? 0 : 1;
     }
     Corona::Systems::VulkanBackend backend(main_window);
     if (!backend.initialize()) {
@@ -331,4 +567,16 @@ int run_smoke() {
 
 }  // namespace
 
-int main() { return run_smoke(); }
+int main(int argc, char** argv) {
+    if (argc == 3 && std::string(argv[1]) == "--display-pixels") return run_smoke(argv[2], false);
+    if (const char* enabled = std::getenv("CORONA_RUN_GPU_SMOKE"); enabled && std::string(enabled) == "1") {
+        // FrameHash has a per-process capture budget. Each child executes the
+        // real shader and readback with a fresh budget; one smoke invocation
+        // covers all cases without requiring extra CMake targets or settings.
+        for (const char* pixel_case : {"ui-only", "scene-only", "shader-srgb", "shader-unorm"}) {
+            const auto result = _spawnl(_P_WAIT, argv[0], argv[0], "--display-pixels", pixel_case, nullptr);
+            if (result != 0) return result == -1 ? 1 : static_cast<int>(result);
+        }
+    }
+    return run_smoke();
+}

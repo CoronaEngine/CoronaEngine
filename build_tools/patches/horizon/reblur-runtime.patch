@@ -1,3 +1,30 @@
+diff --git a/include/horizon.h b/include/horizon.h
+index d9f5faf4..08da0f83 100644
+--- a/include/horizon.h
++++ b/include/horizon.h
+@@ -404,6 +404,13 @@ namespace Corona::Horizon
+ 
+     [[nodiscard]] CommitCommand commit() noexcept;
+ 
++    struct PresentationInfo
++    {
++        Format format { Format::UNKNOWN };
++        // Advances whenever this displayer creates a new swapchain.
++        uint64_t generation { 0 };
++    };
++
+     class HardwareDisplayer
+     {
+     public:
+@@ -418,6 +425,8 @@ namespace Corona::Horizon
+ 
+         [[nodiscard]] explicit operator bool() const noexcept { return displayer_.id != 0 && manager_ != nullptr; }
+         [[nodiscard]] DisplayerRef displayer_ref() const noexcept { return displayer_; }
++        // Creates or refreshes the swapchain when drawable; otherwise the format is UNKNOWN.
++        [[nodiscard]] PresentationInfo presentation_info() const;
+ 
+     private:
+         DisplayerRef displayer_ {};
 diff --git a/src/backends/vulkan_compute/vk_command_visitor.cpp b/src/backends/vulkan_compute/vk_command_visitor.cpp
 index 587910c3..83a81c33 100644
 --- a/src/backends/vulkan_compute/vk_command_visitor.cpp
@@ -55,6 +82,88 @@ index aee6bfeb..33c6c221 100644
      void after_completion(std::function<void()> fn) noexcept;
      void host_function(std::function<void()> fn, bool async) noexcept;
      void native_callback(NativeCallbackFunction fn) noexcept;
+diff --git a/src/hardware_wrapper/hardware_displayer.cpp b/src/hardware_wrapper/hardware_displayer.cpp
+index d6780b77..6bf291b7 100644
+--- a/src/hardware_wrapper/hardware_displayer.cpp
++++ b/src/hardware_wrapper/hardware_displayer.cpp
+@@ -24,6 +24,12 @@ namespace Corona::Horizon
+ 
+     HardwareDisplayer::~HardwareDisplayer() = default;
+ 
++    PresentationInfo HardwareDisplayer::presentation_info() const
++    {
++        const auto manager = std::static_pointer_cast<DisplayManager>(manager_);
++        return manager ? manager->presentation_info() : PresentationInfo{};
++    }
++
+     // 从 horizon.h 移出（原为 inline）。只为压缩公共头，语义未变。
+     PresentCommand present(const HardwareDisplayer& displayer,
+                            const HardwareImage& image,
+diff --git a/src/hardware_wrapper_vulkan/display/display_manager.cpp b/src/hardware_wrapper_vulkan/display/display_manager.cpp
+index e6cab55a..2fa8cdf0 100644
+--- a/src/hardware_wrapper_vulkan/display/display_manager.cpp
++++ b/src/hardware_wrapper_vulkan/display/display_manager.cpp
+@@ -415,6 +415,32 @@ namespace Corona::Horizon
+         return present_queue_;
+     }
+ 
++    PresentationInfo DisplayManager::presentation_info()
++    {
++        std::lock_guard lock(mutex_);
++        if (!native_window_available() || !native_window_drawable(native_window_))
++        {
++            return { Format::UNKNOWN, presentation_generation_ };
++        }
++
++        if (needs_recreate_ && !pending_frame_)
++        {
++            // Preserve any acquired image until its presentation has completed.
++            destroy_swapchain();
++            needs_recreate_ = false;
++        }
++        ensure_swapchain();
++
++        if (swapchain_images_.empty())
++        {
++            return { Format::UNKNOWN, presentation_generation_ };
++        }
++
++        // Swapchain wrapping already translates the selected VkFormat to Format.
++        const auto image = read<ImageStore>(ResourceBridge::token(swapchain_images_.front()));
++        return { image ? image->desc.format : Format::UNKNOWN, presentation_generation_ };
++    }
++
+     void DisplayManager::ensure_swapchain()
+     {
+         if (swapchain_ != VK_NULL_HANDLE)
+@@ -431,6 +457,7 @@ namespace Corona::Horizon
+         choose_present_queue();
+         create_swapchain();
+         create_sync_objects();
++        ++presentation_generation_;
+     }
+ 
+     bool DisplayManager::native_window_available() const noexcept
+diff --git a/src/hardware_wrapper_vulkan/display/display_manager.h b/src/hardware_wrapper_vulkan/display/display_manager.h
+index c0fbcde8..21066301 100644
+--- a/src/hardware_wrapper_vulkan/display/display_manager.h
++++ b/src/hardware_wrapper_vulkan/display/display_manager.h
+@@ -56,6 +56,7 @@ namespace Corona::Horizon
+         [[nodiscard]] DisplayerRef displayer() const noexcept { return displayer_; }
+         [[nodiscard]] bool has_swapchain() const noexcept;
+         [[nodiscard]] Queue* present_queue() const noexcept;
++        [[nodiscard]] PresentationInfo presentation_info();
+ 
+         [[nodiscard]] SwapchainAcquire acquire_next_image();
+         [[nodiscard]] PreparedPresent prepare_present(PresentDesc& desc);
+@@ -109,6 +110,7 @@ namespace Corona::Horizon
+         VkSurfaceKHR surface_ { VK_NULL_HANDLE };
+         VkSwapchainKHR swapchain_ { VK_NULL_HANDLE };
+         VkFormat swapchain_format_ { VK_FORMAT_UNDEFINED };
++        uint64_t presentation_generation_ { 0 };
+         VkExtent2D swapchain_extent_ {};
+         uint32_t swapchain_min_image_count_ { 0 };
+         std::vector<HardwareImage> swapchain_images_;
 diff --git a/src/rhi/command.h b/src/rhi/command.h
 index 2c73150d..840661b7 100644
 --- a/src/rhi/command.h

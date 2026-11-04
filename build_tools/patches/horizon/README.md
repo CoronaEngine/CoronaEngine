@@ -1,6 +1,8 @@
-These seven Horizon changes are build inputs owned by CoronaEngine. The five
-production files implement fence-bound resource retention and reduce shader
-argument packing overhead; the two tests cover the corresponding behavior.
+These eleven Horizon changes are build inputs owned by CoronaEngine. The nine
+production files implement fence-bound resource retention, reduce shader
+argument packing overhead, and expose the actual presentation format and a
+generation that advances on swapchain creation or recreation. The two tests
+cover resource retention and shader argument packing.
 `reblur-runtime.json` records the exact upstream commit and SHA256 values before
 and after the patch (source line endings are normalized to LF).
 
@@ -8,10 +10,10 @@ and after the patch (source line endings are normalized to LF).
 before dependency installation or a build. A fresh source checkout therefore
 does not require another developer's uncommitted Horizon changes. Repeated
 preparation does not rewrite already-patched files. Unknown edits to any of the
-seven owned files stop preparation before any write; edits elsewhere, including
+eleven owned files stop preparation before any write; edits elsewhere, including
 `src/tests/runtime/test_compute_math_parity.cpp`, are preserved.
 
-This is the minimal delta required for the DSL optimization, not a full vendored
+This is the minimal delta required for the runtime integration, not a full vendored
 Horizon distribution. The existing bootstrap still downloads the pinned Horizon
 base from its separate repository and installs external toolchain dependencies.
 It does not establish an offline or zero-external-source build.

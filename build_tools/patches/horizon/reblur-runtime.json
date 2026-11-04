@@ -1,7 +1,7 @@
 {
   "source_url": "https://github.com/CoronaEngine/Horizon.git",
   "base_commit": "6429a2e0b7a82a7e2a60d3bbd48b29cb2721cb60",
-  "patch_sha256": "2c992d75f1aa678603a7e2a1c418153fcc79179c8a44e410bb8f064f02a4f953",
+  "patch_sha256": "77943f4fc460d6d4998ff013ea2fa66e99fc1edd7b8aab8bb1de0d265f6112b6",
   "files": {
     "src/backends/vulkan_compute/vk_command_visitor.cpp": {
       "before_sha256": "3a5f2334ff4bf52f572ffdc828d8b4a2dc56303b8025d3422ece5dad23b90222",
@@ -30,6 +30,22 @@
     "src/tests/runtime/test_stream_order.cpp": {
       "before_sha256": "8e5f4ea1fc81a88c00eb7c990bb296d9767a815e030a786e69c5396ba8fa79af",
       "after_sha256": "7fdb4d5bc155d9cbc1388ece80d9a0c2f7a566193df62636930154322b58f9f0"
+    },
+    "include/horizon.h": {
+      "before_sha256": "17d0ece17ee5e420b3780d273485524f955121e1081a4133e9af9c032625b599",
+      "after_sha256": "ae604c0a62bfa58ce36dc7b12dadce2669a583249436046979f89ee9bf615557"
+    },
+    "src/hardware_wrapper/hardware_displayer.cpp": {
+      "before_sha256": "dedbc992b54c7da10501b7a40fd57548dad622ea2b214a5a0280b777f3740b6d",
+      "after_sha256": "eb2ebeae85e97c25a5f33a8c747196d35ebfce585108e631cb3dc57c180c3272"
+    },
+    "src/hardware_wrapper_vulkan/display/display_manager.h": {
+      "before_sha256": "64b73d82e59822ffc8c88349e7760f8aa11181c275dcde5f7a367fcce667476c",
+      "after_sha256": "99df8a15a78330b8bd8e1cbf7fbb49fd1ff7eb619fa665d5d9ca77b0e367d092"
+    },
+    "src/hardware_wrapper_vulkan/display/display_manager.cpp": {
+      "before_sha256": "735d5f3ab2011eb300013e911f2669b326b329c9efb3f5c82bf73717ca7567e9",
+      "after_sha256": "dd31048b24bd14e2d47033de19acb90f78d15e3cedd1aa3afd5a9b57ba838469"
     }
   }
 }
