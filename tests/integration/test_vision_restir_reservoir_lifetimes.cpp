@@ -62,21 +62,43 @@ inline void check_restore(Pipeline& pipeline) {
     static_assert(sizeof(RegistrableBuffer<StablePlaneData>)==sizeof(RegistrableBuffer<float4>));
     static_assert(alignof(RegistrableBuffer<StablePlaneData>)==alignof(RegistrableBuffer<float4>));
     const uint first=pipeline.bindless_array()->buffer_num();
+    RestoreProbe fresh, restored_empty;
+    restored_empty.restore(&fresh);
+    if(restored_empty.stable_planes().size()!=0u || !restored_empty.stable_raw_outputs_retained() ||
+       !restored_empty.stable_planes().name().ends_with(" [motion-half-coverage-history-v3]"))
+        throw std::runtime_error("Compatible empty v3 framebuffer restore failed");
     RestoreProbe previous, restored;
+    const char* negative_value=std::getenv("VISION_H2_STORAGE_RESTORE_NEGATIVE");
+    const string_view negative=negative_value ? negative_value : "";
+    if(negative=="empty" || negative=="v2empty") {
+        previous.stable_planes().set_name(negative=="v2empty"
+            ? "FrameBuffer::stable_planes [motion-half-coverage-history-v2]" : "");
+        restored.restore(&previous);
+        throw std::runtime_error("H2 restore wrongly accepted a legacy empty framebuffer");
+    }
     previous.init_buffer_impl(previous.stable_planes(),false,"H2 restore fixture",StablePlaneCount,1u);
+    previous.manage_stable_plane_buffers(false,false,true,false);
     const auto handle=previous.stable_planes().handle();
     const auto count=previous.stable_planes().size();
-    if(const char* negative=std::getenv("VISION_H2_STORAGE_RESTORE_NEGATIVE"); negative && *negative) {
+    const auto direct_handle=previous.stable_direct().handle(), indirect_handle=previous.stable_indirect().handle();
+    const auto direct_index=previous.stable_direct().index().hv(), indirect_index=previous.stable_indirect().index().hv();
+    if(!negative.empty()) {
         // Root runs this as an expected-failing subprocess. No GPU work follows
         // this deliberate legacy tag; the real restore must reject before move.
-        previous.stable_planes().set_name("FrameBuffer::stable_planes");
+        previous.stable_planes().set_name(negative=="v2allocated"
+            ? "FrameBuffer::stable_planes [motion-half-coverage-history-v2]" : "FrameBuffer::stable_planes");
         restored.restore(&previous);
         throw std::runtime_error("H2 restore wrongly accepted a legacy SP allocation tag");
     }
     restored.restore(&previous);
     if(restored.stable_planes().handle()!=handle || restored.stable_planes().size()!=count ||
-       !restored.stable_planes().name().ends_with(" [motion-half-flags-v1]"))
+       !restored.stable_planes().name().ends_with(" [motion-half-coverage-history-v3]"))
         throw std::runtime_error("H2 compatible restore failed to move the existing SP allocation");
+    if(restored.stable_raw_outputs_retained() || !restored.compact_coverage_history() || restored.stable_plane_history_retained() ||
+       restored.stable_direct().handle()!=direct_handle || restored.stable_indirect().handle()!=indirect_handle ||
+       restored.stable_direct().index().hv()!=direct_index || restored.stable_indirect().index().hv()!=indirect_index ||
+       restored.stable_direct().size()!=StablePlaneCount || restored.stable_indirect().size()!=StablePlaneCount)
+        throw std::runtime_error("Compatible v3 restore must preserve suppressed raw mode and registered stubs");
     ByteBufferView empty{handle_ty{0u},0u};
     const uint end=pipeline.bindless_array()->buffer_num();
     for(uint slot=first;slot<end;++slot) pipeline.bindless_array().set_buffer(slot,empty);
@@ -508,6 +530,13 @@ void check_slices(vision::Pipeline& pipeline, const char* label) {
     std::cout << "PASS: ReSTIR " << label << " two-slice capacity, parity, gathers, pass toggles, reset, restore and resize\n";
 }
 } // namespace
+
+void check_stable_plane_storage_restore(vision::Pipeline& pipeline) {
+    pipeline.activate_global_context();
+    vision::Global::SceneGpuContextScope scope{pipeline.geometry().bindless_array(), pipeline.device()};
+    half_motion_storage_checks::check_restore(pipeline);
+    std::cout << "PASS: stable-plane storage ABI guard and raw allocation mode restoration\n";
+}
 
 void check_restir_reservoir_lifetimes(vision::Pipeline& pipeline) {
     pipeline.activate_global_context();

@@ -1,4 +1,3 @@
-// NVIDIA NRD 4.14.3 resource semantics in Ocarina EDSL. See LICENSE-NRD.txt.
 #pragma once
 #include "edsl_nrd_params.h"
 
@@ -30,7 +29,7 @@ public:
         else return narrow(call<float4>("oc_nrd_tex2d_read", texture_, pixel));
     }
     [[nodiscard]] Var<T> read(const Int2 &pixel) const {
-        // NRD descriptors have nonzero extents; preserve zero-border loads
+        // ReBLUR descriptors have nonzero extents; preserve zero-border loads
         // without issuing an out-of-bounds image access or multiplying NaNs.
         Bool inside = all(pixel >= 0) && all(pixel < make_int2(size_));
         Int2 q = clamp(pixel, make_int2(0), make_int2(size_) - 1);

@@ -6,13 +6,14 @@
 
 #include "common.h"
 #include "di_reservoir_storage.h"
-#include "di_radiance_storage.h"
+#include "radiance_storage.h"
 #include "base/mgr/switch_profile.h"
 
 namespace vision {
 struct DIParam {
     uint camera_jitter{1u};
     uint stable_planes{1u};
+    uint precise_lobes{};
     uint M_light{};
     uint M_bsdf{};
     uint max_age{};
@@ -34,7 +35,7 @@ struct DIParam {
 };
 }// namespace vision
 
-OC_PARAM_STRUCT(vision, DIParam, camera_jitter, stable_planes, M_light, M_bsdf, max_age, diff_factor, spatial, N,
+OC_PARAM_STRUCT(vision, DIParam, camera_jitter, stable_planes, precise_lobes, M_light, M_bsdf, max_age, diff_factor, spatial, N,
                 s_dot, s_depth, s_radius, temporal, history_limit,
                 t_dot, t_depth, t_radius){};
 
@@ -117,10 +118,10 @@ public:
     [[nodiscard]] bool compact_radiance() const noexcept { return compact_radiance_; }
     [[nodiscard]] const RegistrableBuffer<uint2> &raw_radiance() const noexcept { return raw_radiance_; }
     [[nodiscard]] Float4 read_radiance(const Uint &index) const noexcept {
-        return compact_radiance_ ? unpack_di_radiance(raw_radiance_.read(index)) : radiance_->read(index);
+        return compact_radiance_ ? unpack_restir_radiance(raw_radiance_.read(index)) : radiance_->read(index);
     }
     void write_radiance(const Uint &index, const Float4 &value) const noexcept {
-        if (compact_radiance_) raw_radiance_.write(index, pack_di_radiance(value));
+        if (compact_radiance_) raw_radiance_.write(index, pack_restir_radiance(value));
         else radiance_->write(index, value);
     }
     [[nodiscard]] vector<float4> download_radiance() const noexcept;
@@ -237,7 +238,7 @@ public:
     HOTFIX_VIRTUAL void compile_shader0() noexcept;
     HOTFIX_VIRTUAL void compile_shader1() noexcept;
     [[nodiscard]] HOTFIX_VIRTUAL DIParam construct_param() const noexcept;
-    [[nodiscard]] HOTFIX_VIRTUAL CommandBatch dispatch(uint frame_index) const noexcept;
+    [[nodiscard]] HOTFIX_VIRTUAL CommandBatch dispatch(uint frame_index, bool precise_lobes = false) const noexcept;
 };
 
 }// namespace vision

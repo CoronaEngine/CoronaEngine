@@ -311,3 +311,137 @@ GPU dispatch 对照显示额外时间主要落在图像访问阶段：历史 Kit
 证据目录：`D:/work/corona/restir-investigation-20261101/`；最终汇总为 `final-reblur-result.json`，三轮原始 CSV 和全样本保存在 `pool16-profiled-1/2/3`，正常模式及截图在 `normal-fixed-final16`，测试日志在 `pool16-ctest-guard`。每轮真实 allocation trace 均通过仅活动相机持有 rays/color/output 的检查，运行记录也校验了实际生效的相机和降噪配置。
 
 测量边界：没有资源级 Windows eviction trace，因此不指认某一张纹理必然被换出；容量/驻留压力的判断来自资源清单、分辨率容量拐点、受影响 pass 和重复实验。`REBLUR_GPU_PROFILE_MODE=filter/intervals` 在启动相机重配置时出现失败，未采用其数据，也未宣称连续区间低于 6 ms。最终性能验证使用与旧记录匹配的 dispatch 范围；最终版本不携带临时 VMA heap dump，因此不宣称最终池空闲字节数已经精确测定。
+
+## 2026-11-01：按 ReSTIR 开关差值比较 RTXPT，首轮接入优化
+
+本轮采用用户定义：**降噪增量 = 同一渲染器 ReBLUR ON 的 ReSTIR 渲染耗时 − OFF 耗时**。此前约 5.1 ms 的滤波 dispatch 合计、约 12.7 ms 的 `denoise_ms` 都不能代替这个指标。正式配对关闭分阶段同步与 dispatch profiler，保持 1920×1080、SP3、1 spp、NRD quality/5×5/anti-firefly/history50/prepass15/40；未降低分辨率、采样预算或输入精度。
+
+Kitchen `scene_v3.xml` / 对应冻结 glTF，SourceCamera，关闭额外 accumulation，RTX 3070 Ti 8 GiB / 驱动 610.88。修正历史 RTXPT 包装场景 60° FOV，与当前相机 **35.9833984375°** 对齐。参考资产缺失的 scene.bin 和 11 张贴图恢复到新目录；geometry/glTF/OBJ 与冻结清单 SHA256 一致，贴图与原始资源 hash 一致。
+
+RTXPT 原基准强制 OFF，叶级 CSV 也未包含原生 NRD。独立参考仓库增加基准开关、实际 NRD 配置、连续 `Frame.RenderGPU` 和等待 GPU 完成的 `Frame.RenderWall`。正式参考为单进程 OFF64→ON64→ON64→OFF64，每块跳过 32 帧、保留 32 帧，两次独立进程。跨进程先导对照有漂移，约 1.9 ms 的单对结果未作为最终结论。
+
+Corona 每次 OFF→ON→ON→OFF，每块跳过 16 个新完成的计时、采 24 个；优化前一轮，最终两轮独立进程。主指标为已等待 GPU 完成的 Pipeline render_ms；RTXPT 主指标为同步 Sample::Render wall interval，均排除基准 CSV 与节流 sleep。两边保留各自传输算法，RTXPT 原生 RR 与 Corona min-depth/RR 语义不同，不能宣称跨渲染器输入逐像素相同。Corona optics/display 30 FPS 上限在两种模式下均不构成瓶颈，应用 frame_ms 另外保留。
+
+| 1080p ReSTIR | ReBLUR OFF（ms） | ReBLUR ON（ms） | 开关差值（ms） |
+|---|---:|---:|---:|
+| Corona 优化前 | 38.955850 | 58.806183 | **19.850333** |
+| Corona 最终，两轮均值 | 39.308331 | 55.950615 | **16.642283** |
+| RTXPT，两轮均值 | 66.859308 | 71.199989 | **4.340681** |
+
+Corona 最终两轮差值 **16.672552 / 16.612015 ms**；RTXPT **4.332389 / 4.348973 ms**，连续 GPU parent 差值均值约 **4.104264 ms**。按用户口径节省 **3.208050 ms（16.16%）**，剩余增量约为 RTXPT 的 **3.83 倍，尚未达到基本同速**。UI 整段降噪仅从约 12.89 降到约 12.46 ms，不能代替省掉 SP history copy 后的整帧差值；应用帧间隔差值也从约 19.83 降至约 16.54 ms。
+
+保留的生产改动：
+
+- `Denoiser::needs_stable_plane_history(frame)` 默认 true；ReBLUR/ReLAX 委托给 coverage-only SVGF，按原 history_valid、连续帧、FOV、相机矩阵条件判断 previous guide 是否会读取。静止时省掉 StablePlanes-SaveHistory，首次移动在覆盖当前 planes 前仍保存；普通 SVGF 保留拷贝，历史存储与所有权不变。
+- ReSTIR lobe composition 已将总辐射放入 direct、indirect 写零。显式 `total_radiance_coverage` 契约允许 coverage-only 省去零通道计算和历史。PT / 普通 SVGF 保留双通道；PT 按需申请 indirect ping-pong，切回总辐射后释放。1080p 少两张 float4 history，逻辑容量 **63.28125 MiB**；真实 Vulkan allocation trace 验证了转换。ReLAX 的诊断字节统计同步修正。
+
+历史 trace 诊断排名：PrepareGuides 约 2.15 ms、coverage 约 4.43 ms、SP history copy 约 2.53 ms；这些数字不与正式开关差值混加。Corona PrepareGuides 重建材质 evaluator，在 hit distance 缺失时补发 lobe guide ray；RTXPT 从路径追踪记录直接准备 NRD 输入。后续重点是重复工作和数据流；已有同输入 replay 表明 EDSL NRD 核心接近原生 HLSL，不能将所有剩余差距归给核心滤波。
+
+最终额外诊断的 24 个完整 1080p 静止帧中，`StablePlanes-SaveHistory` dispatch **0 次**；三层 filter dispatch 合计 5.260097 ms、PrepareGuides 2.288235 ms、coverage 4.179979 ms。它验证了静止拷贝确实消失，并给出剩余成本位置；该 profiler 运行不计入上表正式性能均值。原始帧分组及各 pass 结果为 `final-profile-summary.json`。
+
+撤回实验：临时跳过计时回调仅观察到约 0.23 ms 差异，未交付关闭计时改动。六个 edge pass 合成一个直接访问原始 SP records 的 shader 虽通过输出对照，ON 却达约 81.12 ms、差值约 42.10 ms，故已撤回。重新编译并检查部署 DLL 不含 `SVGF-CoverageClassifyAllEdges`；未用硬件计数器进一步指认带宽或 occupancy。
+
+验证：CLion RelWithDebInfo corona_engine 构建成功。真实 GPU 对照覆盖 16×16 / 13×9 / 1×1、SP-off / composed、有效虚拟平面、歧义分支、静止→移动→停止、FOV/帧序重置、resize、RT/PT 切换，单通道与双通道 RGB 逐分量一致。candidate 仅在查询为 true 时保存历史，reference 无条件保存；故意不保存历史的第三对照确实产生不同 RGB，证明测试实际读取历史。独立审查提出的该项验证缺口已关闭，无未解决的重要发现。
+
+`VisionRenderModeConfigTests`、`VisionReblurTests`、`VisionRelaxPT`、`VisionRelaxReSTIR`、`VisionRelaxLifecycle`、`VisionEngineSceneTests`、`VisionCameraSettingsTests`、`VisionSharedDisplayTests` **8/8 通过**。正式配对均正常退出、进程/GPU 清理通过。Corona 最终两轮最高 64 / 66°C；RTXPT 63 / 62°C；相关 CTest 47°C。
+
+回退融合候选后再检查测试构建依赖，重新编译 Engine scene 的两个相关 object，并在 `final-engine-recheck` 复测 Engine scene / camera / shared display，**3/3 通过**。
+
+证据根目录：`D:/work/corona/reblur-onoff-20261101/`。汇总 `onoff-results.json`；原始数据 `corona-baseline-abba1`、`corona-final-abba1/2`、`rtxpt-abba1/2`；测试 `coverage-red3`、`coverage-green1`、`coverage-fusion-green1`、`final-ctest`；最终 dispatch 诊断 `corona-final-profile`。参考源码差异、构建 hash、匹配相机、资产恢复清单同目录。守护工具固定的 backend=vulkan-compute 标签不代表 RTXPT API，实际参考命令为 `--d3d12`。当前完成首轮优化，同速目标仍待实现。
+
+## 2026-11-02：原版 HLSL 核心、AA 对齐及最终输出数据流
+
+本轮验收始终采用用户定义：**同一渲染器 ReBLUR ON 的完整 ReSTIR render_ms − OFF render_ms**。旧约 5.1016 ms 是三层滤波 dispatch 的 GPU timestamp 合计，包含 Pack/Unpack，排除 PrepareGuides、coverage、独立 composition 及开关导致的生产/存储变化；此前不能用它证明完整降噪增量低于 6 ms。UI denoise_ms 和下面的诊断分项也不替代本指标。
+
+用户明确选择“对齐 RTXPT，关闭额外 AA”。ReSTIR+ReBLUR 现在默认使用居中主射线，不再准备、分配或运行额外 coverage AA，也不为它保留前帧 stable planes；显式 accumulation 仍可开启抖动。`VISION_RESTIR_EXTRA_AA=1` 保留旧 AA 对照，PT/ReLAX/普通 SVGF 的 AA 策略不变。这是经用户批准的策略变化，不能称为对旧 AA 图像逐像素无损的提速。
+
+最终场景为 Kitchen、SourceCamera、1920×1080、FOV 35.9833984375°、SP3、1 spp、关闭 accumulation，RTX 3070 Ti 8 GiB / 驱动 610.88。保持 NRD 4.14.3 quality、5×5、anti-firefly、history50、prepass15/40，不减少层数、分辨率、采样预算或 NRD 输入精度。两边保留各自 transport/RR 语义，不宣称跨渲染器输入或最终图像逐像素相同。
+
+最终版本两次独立进程，各 OFF→ON→ON→OFF，每块预热 24 个完成计时、保留 48 个，每进程 ON/OFF 各 96 样本；共保留 384 样本，不剔除异常帧。RTXPT 两次 OFF64→ON64→ON64→OFF64，每块跳过32帧、保留32帧，取同步 Frame.RenderWall。所有正式采样关闭 stage 同步、dispatch/core profiler 与快照。
+
+| 完整渲染，ms | OFF | ON | ON−OFF |
+|---|---:|---:|---:|
+| Corona 原始历史基线，旧 AA | 38.955850 | 58.806183 | 19.850333 |
+| Corona 最终第 1 轮 | 38.292720 | 43.832291 | **5.539571** |
+| Corona 最终第 2 轮 | 38.401551 | 43.887568 | **5.486017** |
+| Corona 最终，两轮均值 | **38.347135** | **43.859929** | **5.512794** |
+| RTXPT fresh，两轮均值 | 64.801042 | 69.386940 | **4.585898** |
+
+最终仍比 RTXPT 多 **0.926896 ms，约 20.21%**，尚未追平。历史基线同时包含旧 AA 和早期接入开销，不能把全部差值归为纯代码优化。
+
+最终 Corona 测量给 optics/display 各设15 FPS上限，在帧间等待；render_ms 计时不含等待。RTXPT 保持100 ms节流。先前30 FPS的第二次 preclear 实验触发70°C守护，整轮无效，未采用其三个已完成块或补齐缺失数据。正式两轮统一使用15 FPS上限重测，最高64/66°C，均正常退出，进程/GPU清理通过；生产默认帧率配置未修改。frame_ms 受两处节流影响，不作为性能验收。NRD质量配置保持一致。
+
+交付的接入与数据流改动：
+
+- ReSTIR 默认直接运行 NRD 4.14.3 原版 HLSL 的 SPIR-V 核心，借用现有 EDSL VkImage，不再维护一套重复纹理池。每代资源持有自己的包装和 binding cache；CPU dispatch/常量深复制，owner 保留至随后引擎 fence。首次 import 显式跟踪 UA/GENERAL，由 close 恢复初始状态，避免旧首帧 UNDEFINED 和重复恢复屏障。
+- Guide 与 Pack 融合，常规 remodulation cache 从80B降为32B FP32；1080p减少94.92MiB。DI/GI用FP32暂存并按原顺序合成 lobe，允许raw producer继续compact，而NRD输入始终取FP32暂存值，不经过RGB21量化；无消费者时省掉 raw stable stores、MergeDominant，并将两路 raw stable 全数组缩为共96B占位，1080p减少约189.84MiB。OFF/显式raw诊断仍恢复完整通道。
+- 默认最终输出路径在每层 Pack 消费原始 D/S 后，将已退役的同址缓冲保存为精确 guide；无效 guide 保存原始 RGB。保留前两层额外两对 FP16 NRD 输出，增加63.28MiB，末层一次 Unpack+Compose，保持原层序、加法分组和FP32乘法舍入，不写无消费者的 filtered D/S/hit-distance。批处理不再写旧 guide scratch，但当前仍保留其分配；原完整输出、非别名和 PT 调用保留旧契约。
+- 原版核心的第0/1层末尾将共享六张NRD输入硬件清为精确无效值，随后第1/2层无效像素跳过重复image stores；有效像素及第0层完全保持原Pack。清屏合并在已有native callback中，不新增正常路径的提交或等待；布局恢复成本计入完整渲染差值。仅 original-core+三层batch启用。`REBLUR_BATCH_COMPOSE=0`、`REBLUR_PRECLEAR_INPUTS=0` 提供各自对照。
+
+同期 batch-only 的30 FPS两轮为5.853546/5.777589 ms，对照 batch=0 为6.227379 ms；这组只作阶段记录，不与最终15 FPS数据混算。材质缓存v1/v2（7.481296/7.062693 ms）、逐层 streaming 合成（6.322720 ms）和 GENERAL sampled-image layout（6.276061 ms）未建立净收益，均已删除生产代码及专用测试，纹理/zero-spec-tint回归保留。
+
+剩余成本来自核心之外仍需执行的工作。独立15 FPS诊断，按完整1080p帧分组并丢弃ON前24帧，119个稳定帧的 batch-only 均值为：原版核心 pre-close 区间3.567172ms，Guide+Pack三层合计1.766688ms，最终批量Unpack+Compose为0.672212ms。核心区间不含可选清屏和close的UA/GENERAL恢复；这些数值不相加作为完整降噪增量。核心已经使用原版HLSL，剩余接入重点是Guide重建中的材质评估、必要的补充lobe射线以及数据桥接，不能再把全部差距归因于EDSL滤波核。默认关闭所有profiling；`REBLUR_ORIGINAL_CORE_PROFILE` 仅以已完成submission和非阻塞poll收集GPU时间，不新增等待。batch/original-core 明确拒绝不兼容的旧aggregate filter/nrd/intervals统计，dispatch CSV也明确不包含native core。
+
+验证与证据：
+
+- 最终七条路径×五个真实场景×连续三帧通过，六份NRD输入逐字节一致；batch/preclear最终RT对保留原版HLSL路径逐字节一致。retained、batch、preclear均实际执行ON/OFF、raw调试、resize和稳定平面切换；typed metadata证明只有对应路径/层启用fast path。GPU守护121.83秒，最高50°C，正常退出及清理通过。
+- 独立48组retained与48组batch矩阵通过：retained对照旧末层Unpack后独立Compose，batch对照旧全层Unpack后独立Compose，覆盖HDR/抵消、1/3层、有效/无效guide、别名及非别名；检查生产Pack的原地guide/原始RGB回退及完整输出默认契约。最终VisionReblurTests再次运行相应矩阵。
+- 最终CLion RelWithDebInfo corona_engine构建通过。VisionRenderModeConfigTests、VisionReblurTests、VisionRelaxPT、VisionRelaxReSTIR、VisionRelaxLifecycle、VisionEngineSceneTests、VisionCameraSettingsTests、VisionSharedDisplayTests **8/8通过，91.86秒**；最高51°C，进程/GPU清理通过。此前物理存储/coverage回归及旧layout拒绝证据保留，最终引擎需从新进程启动。
+
+正式性能原始文件：`D:/work/corona/reblur-onoff-20261101/round2-final-default15-abba1/2`，含全部 samples、实际camera/settings、run-config、runtime DLL SHA256和守护记录；参考为`round2-reference-rtxpt-abba1/2`。本轮汇总/源码与二进制清单：`D:/work/corona/reblur-round2-20261102/` 的 `final-results.json`、`final-source-sha256.json`、`final-source.diff`。最终真实场景快照已复制为 `final-sevenway-five-scenes-evidence/`，运行记录为 `final-sevenway-five-scenes-gpu/`、`final-eight-ctest/`；分项诊断在两个`current-*-profile15-summary.json`。失败及撤回实验的原始文件全部保留，未作为最终性能或通过结论。
+
+### 2026-11-02：默认使用自有 EDSL 核心，完整降噪增量低于 6 ms
+
+按用户后续要求，ReSTIR + ReBLUR 已从上一阶段的默认原版 HLSL 核心切回我们维护的 Ocarina EDSL 移植。GPU 核心沿用 NRD 4.14.3 原版算法和质量配置，CPU 常量及 pass 调度仍使用官方 NRD；这轮没有完全移除 NRD 依赖。`REBLUR_ORIGINAL_CORE=1` 保留原版 HLSL 对照，正常启动无需设置此变量。额外 AA 继续关闭，精确 FP32 lobe 输入、Guide/Pack 融合和最终批量合成继续保留。
+
+验收仍是完整 ReSTIR `render_ms(ON) - render_ms(OFF)`，不是 UI 的 `denoise_ms`、分项 GPU 时间之和或包含等待的 `frame_ms`。Kitchen 固定资产、SourceCamera、1920×1080、FOV 35.9833984375°、SP3、1 spp、关闭 accumulation；NRD quality/5×5/anti-firefly/history50/prepass15/40 不变。两轮均为独立进程、OFF/ON/ON/OFF，每段预热24帧、采样48帧，无 profiling；仅外部采样脚本设置 optics/display 15 FPS，等待不计入 render_ms，生产帧率配置没有改变。
+
+| 最终默认 EDSL | ReBLUR OFF | ReBLUR ON | 完整差值 |
+| --- | ---: | ---: | ---: |
+| 第一轮 | 38.382874 ms | 43.777253 ms | 5.394379 ms |
+| 第二轮 | 38.556606 ms | 43.919403 ms | 5.362797 ms |
+| 两轮合并 | 38.469740 ms | 43.848328 ms | **5.378588 ms** |
+
+两轮共384个正式样本，最高65/66°C，守护与进程/GPU清理均通过。两份103个运行时 DLL 哈希完全一致并匹配最终磁盘文件，二进制指纹一致。相同 AA0/batch 配置的本轮 EDSL 起点是6.677579 ms；移除空回调拆分后的单轮为6.270094 ms，参数内联与共享屏障候选为6.177226 ms，最后加入类型布局缓存后取得上表两轮结果。16×8 Guide 试验未建立 ON 时间净收益，默认仍为8×8。
+
+实际优化主要在提交和 CPU 参数准备，未替换滤波数学或降低精度：
+
+- 将 EDSL 每层仅用于保留资源的空 `native_callback` 改为 `retain_until_complete`，在既有 GPU fence 完成后释放 generation；不拆批、不增加 host completion 依赖。真实原版 HLSL 回调保留原有提交顺序。replay 同样覆盖，排队 resize、stream 析构及资源释放均验证。
+- `ShaderArgumentPack` 的 POD 内联区从256扩为2048字节，并预留参数描述数组。实际 ReBLUR Dispatch 每包85项溢出分配降至0。最大成员尺寸按编码后的具体 `raw_t` 缓存整数，避免每帧重复执行 `Type::of` 对72成员常量结构的递归遍历；全局类型注册和 Kernel 构造逻辑保持原样。host 类布局改变，因此本轮统一重编译 DLL 并使用新进程。独立 CPU 对照的24包中位耗时约0.715→0.097 ms，参数完整字节 hash 一致；这些 CPU 数字不替代上表的完整渲染验收。
+- Classify/HitDistReconstruction 的预载只读纹理、只写 workgroup shared，屏障对齐原版 `GroupMemoryBarrierWithGroupSync`，不再使用更强的 device/all-memory workgroup 屏障。
+
+最终验证：
+
+- 八条路径×五个真实场景×连续三帧通过。六份 NRD 输入逐字节一致；新增默认 EDSL batch 对 retained EDSL 最终 RGB 逐字节一致，metadata 逐条确认 `native_core=false`，包含实际 ON/OFF、raw 调试、resize 和稳定平面切换。原版 HLSL 与 EDSL 核心之间仍采用既有 `0.001 + 0.002*abs(reference)` 容限，不宣称两核心逐字节相同。运行250.82秒、最高55°C，正常退出及清理通过。
+- 最终 **9/9 CTest 通过，93.41秒**：上一阶段八项及独立 `VisionReblurEdslTests`，覆盖格式转换、边界和原版 NRD 数值对照；没有只验证默认 HLSL。独立 stream-order GPU 回归及诊断进一步证明 retained A/B 两代资源在同一 `(stream_slot, submit_serial)` 内，fence 前持有、fence 后释放，析构同步正确。
+- 真实 `ShaderArgumentPack` CPU 测试通过132参数逐块字节/布局、257个float4超过内联区容量后的动态回退、热缓存后新 Kernel 结构登记、f16/f32交替编码。原有用户 `test_compute_math_parity.cpp` 改动未触碰；独立 Horizon 仓库的本轮改动单独保存。
+
+新目标“完整增量尽量在6 ms内”已达到。此前 RTXPT 原始数据重算仍为4.585898 ms，当前 DSL 增量还多0.792690 ms（17.29%），不宣称已与 RTXPT 完全追平，也不将不同源码阶段的旧 HLSL 5.51 ms 与新 DSL 作胜负或因果比较。
+
+正式原始样本在 `D:/work/corona/reblur-onoff-20261101/dsl-final-default15-abba1/2/`。本轮证据根目录 `D:/work/corona/reblur-dsl-20261102/` 保存 `independent-final-audit.json`、`final-results.json`、`final-source-sha256.json`、`final-engine.diff`、`final-horizon.diff` 及完整 `final-source/`。场景快照为 `final-eightway-five-scenes-evidence/`，守护记录为 `final-oracle/`、`final-ctest/`、`final-runtime/`；CPU 对照为 `argument-pack-candidate/`。初次诊断的同 AST shader 名称碰撞已在测试夹具中修正并重新验证，失败证据保留，不混入通过记录。
+
+### 2026-11-02：ReBLUR 去除外部 NRD/NVRHI 依赖
+
+用户明确范围为“去掉本次 ReBLUR 的外部依赖”，原有 Horizon、Slang、CEF 等引擎基础依赖保留。此前5.378588 ms版本仍调用外部官方 NRD CPU 调度，本节完成生产路径的依赖移除，并重新验收性能。
+
+ReBLUR 现在始终编译自有 EDSL 核心，CPU 调度来自仓库内 `scheduler/` 静态目标：内置 NRD4.14.3 的 ReBLUR-only 调度、常量和资源描述，以及必要的 MathLib1.3 CPU头文件，共约0.6 MB，保留许可及来源哈希。原表达式和运算顺序保留，pipeline描述只保留名称/绑定/常量布局，三种原版 GPU bytecode 均为空。生产目标不再 include `native_nrd.cmake` 或编译 `native_nrd.cpp`，无 `NativeNrd::` 链接、SDK头路径、NRD/NVRHI导入库和 DXC 生成 NRD shader 的步骤。外部参考后端的源码、HLSL、构建和部署规则、环境变量选择分支现已一并删除；运行只使用仓库内实现。
+
+实际 PE 导入表已核对主程序、ReBLUR插件、EDSL测试与scheduler测试均无 NRD.dll；本地旧 `bin/NRD.dll` 和引擎目录的 `NRD.dll` 已按路径/SHA清单移入外部证据隔离目录，后续GPU测试、CTest及两轮正式性能采样期间均不存在于运行目录。CMake编译/链接图也不引用原 `build/recordings/.../native-nrd` 路径。历史SDK参考源码已从当前工程移除，已有离线对照数据和性能记录继续保留。
+
+CPU调度对官方4.14.3的330次查询、3154个pass精确一致：比较了1/3identifier、历史/重置/resize、settings、相机/投影/MV、pipeline/资源池/绑定及完整832字节常量。当前验证仅使用仓库内29,620字节官方golden摘要或既有完整fixture，不再动态加载官方DLL或生成capture。golden仅从此前独立官方capture生成，原fixture SHA256为 `41e5e76ba10c5fcf1395c6348fabf9ac58a4790598ab15ede2946203e7eda5f1`，不从生产实现生成expected值。
+
+Horizon必要的五个运行时文件及两个测试文件，通过 `build_tools/patches/horizon/reblur-runtime.patch` 和before/after SHA清单随主仓库交付，源码准备流程自动验证或重放。86项CPU工作区/补丁回归通过；另对实际固定版本 `6429a2e0…` 的干净sparse clone重放，七份after SHA全部一致，二次执行bytes/mtime零写入。当前Horizon及用户既有math测试改动均保留。这样无需依靠另一份未记录的本地Horizon改动；原有固定Horizon基线仍按引擎既有流程获取。
+
+去依赖后重新执行完整 ReSTIR `render_ms(ON)-render_ms(OFF)`：Kitchen固定资产、SourceCamera、1920×1080、FOV35.9833984375°、SP3、1spp、AA0、accumulation关闭，原版quality/5×5/anti-firefly/history50/prepass15/40保持。每轮独立进程按OFF/ON/ON/OFF、每段预热24/采样48，无profiling；外部15 FPS采样等待不计入render_ms，生产帧率设置未改变。
+
+| 内置CPU调度 + DSL | ReBLUR OFF | ReBLUR ON | 完整差值 |
+| --- | ---: | ---: | ---: |
+| 第一轮 | 38.249507 ms | 43.713488 ms | 5.463980 ms |
+| 第二轮 | 38.387474 ms | 43.967089 ms | 5.579615 ms |
+| 两轮合并 | 38.318491 ms | 43.840288 ms | **5.521797 ms** |
+
+两轮均低于6 ms；不用旧SDK版本的5.378588 ms替代本节结果，也不将不同源码阶段的微小差值归因为CPU静态链接的收益或损失。RTXPT更低的增量仍是后续性能目标，本轮完成依赖闭合及既定6 ms边界。
+
+最终无SDK验证：五条DSL数据路径×五个场景×三帧通过，六份输入逐字节一致，默认batch最终RGB对retained DSL逐字节一致，包含ON/OFF、raw、resize、SP切换；91.86秒、最高51°C。**10/10 CTest通过，97.44秒、最高52°C**，包含新增 `VisionReblurSchedulerTests` 的仓库内golden对照。所有守护退出和进程/GPU清理通过。CLion RelWithDebInfo配置/引擎/测试构建通过。新的ReBLUR对象布局采用新进程冷启动验证，旧进程跨版本热更新不在本轮验证范围。
+
+原始正式样本为 `D:/work/corona/reblur-onoff-20261101/self-final-default15-abba1/2/`；本轮证据根目录为 `D:/work/corona/reblur-self-contained-20261102/`，含PE导入表、SDK隔离清单、构建/测试记录、真实Horizon基线重放、性能与源码清单。完整调度oracle证据位于上一阶段证据目录的 `scheduler-oracle/`，Horizon86项回归为 `horizon-runtime-patch-validation.json`。

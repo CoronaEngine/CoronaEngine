@@ -9,9 +9,9 @@
 #include "base/denoiser.h"
 #include "params.h"
 #include "filter.h"
-#ifdef VISION_REBLUR_NATIVE_NRD
-#include "native_nrd.h"
+#ifdef VISION_REBLUR_EDSL
 #include "edsl_nrd.h"
+#include "edsl_nrd_params.h"
 #endif
 
 namespace vision ::inline reblur {
@@ -31,18 +31,29 @@ struct PublishParam {
     BufferDesc<float4> diffuse, specular, bypass;
     BufferDesc<RadType4> direct, indirect;
 };
+#ifdef VISION_REBLUR_EDSL
+struct GuidePackParam {
+    GuideParam guide;
+    edsl::Dispatch pack;
+};
+#endif
 }
 OC_PARAM_STRUCT(vision::reblur, GuideParam, visibility, planes, surfaces, extensions, motion, output, diffuse, specular, size, layered, stable, frame) {};
 OC_PARAM_STRUCT(vision::reblur, PublishParam, diffuse, specular, bypass, direct, indirect) {};
+#ifdef VISION_REBLUR_EDSL
+OC_PARAM_STRUCT(vision::reblur, GuidePackParam, guide, pack) {};
+#endif
 
 namespace vision::reblur {
 
 class ReBLUR : public Denoiser {
     SP<Filter> filter_{make_shared<Filter>()};
-#ifdef VISION_REBLUR_NATIVE_NRD
-    SP<NativeReblur> native_;
+#ifdef VISION_REBLUR_EDSL
     SP<EdslReblur> edsl_;
     NativeCameraParams native_camera_;
+    Shader<void(GuidePackParam)> prepare_and_pack_;
+    bool fuse_guides_{true};
+    bool compact_guides_{true};
 #endif
     Settings scene_settings_;
     string settings_override_;
@@ -54,6 +65,7 @@ class ReBLUR : public Denoiser {
     float4x4 current_raster_{make_float4x4(1.f)}, previous_raster_{make_float4x4(1.f)};
     Shader<void(struct GuideParam)> prepare_guides_;
     Shader<void(struct PublishParam)> publish_;
+    [[nodiscard]] bool coverage_enabled() const noexcept;
 public:
     ReBLUR() = default;
     explicit ReBLUR(const DenoiserDesc &desc);
@@ -66,11 +78,17 @@ public:
     bool set_reblur_settings(string_view json) noexcept override;
     [[nodiscard]] string reblur_settings_json() const override;
     [[nodiscard]] bool enabled() noexcept override { return enabled_; }
+    [[nodiscard]] bool needs_stable_plane_history(uint frame) const noexcept override {
+        return coverage_enabled() && (!coverage_ || coverage_->needs_stable_plane_history(frame));
+    }
+    [[nodiscard]] bool uses_compact_coverage_history() const noexcept override {
+        return coverage_enabled() && coverage_ && coverage_->uses_compact_coverage_history();
+    }
     [[nodiscard]] bool has_prepared_resources() const noexcept override { return filter_->resolution().x != 0u; }
     [[nodiscard]] CommandBatch dispatch(RealTimeDenoiseInput &input) noexcept override;
     void render_sub_UI(Widgets *widgets) noexcept override;
-#ifdef VISION_REBLUR_NATIVE_NRD
-    VS_HOTFIX_MAKE_RESTORE(Denoiser, filter_, native_, edsl_, native_camera_, scene_settings_, settings_override_, coverage_, enabled_, frame_, fov_, camera_revision_, projection_revision_, current_raster_, previous_raster_, prepare_guides_, publish_)
+#ifdef VISION_REBLUR_EDSL
+    VS_HOTFIX_MAKE_RESTORE(Denoiser, filter_, edsl_, native_camera_, prepare_and_pack_, fuse_guides_, compact_guides_, scene_settings_, settings_override_, coverage_, enabled_, frame_, fov_, camera_revision_, projection_revision_, current_raster_, previous_raster_, prepare_guides_, publish_)
 #else
     VS_HOTFIX_MAKE_RESTORE(Denoiser, filter_, scene_settings_, settings_override_, coverage_, enabled_, frame_, fov_, camera_revision_, projection_revision_, current_raster_, previous_raster_, prepare_guides_, publish_)
 #endif

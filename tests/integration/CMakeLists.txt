@@ -43,7 +43,7 @@ set_tests_properties(VisionReblurTests PROPERTIES
     WORKING_DIRECTORY "$<TARGET_FILE_DIR:vision-material-principled_bsdf>"
     RUN_SERIAL TRUE TIMEOUT 300)
 
-if(VISION_REBLUR_NATIVE_NRD)
+if(TARGET vision-reblur-scheduler)
     add_executable(corona_vision_reblur_edsl_tests test_vision_reblur_edsl.cpp)
     target_include_directories(corona_vision_reblur_edsl_tests PRIVATE ${CMAKE_SOURCE_DIR}/vision/src)
     target_link_libraries(corona_vision_reblur_edsl_tests PRIVATE
@@ -55,7 +55,15 @@ if(VISION_REBLUR_NATIVE_NRD)
 
     add_executable(corona_vision_reblur_replay test_vision_reblur_replay.cpp)
     target_include_directories(corona_vision_reblur_replay PRIVATE ${CMAKE_SOURCE_DIR}/vision/src)
-    target_link_libraries(corona_vision_reblur_replay PRIVATE corona::engine vision-all_libs vision-reblur-kernels NativeNrd::Nrd)
+    target_link_libraries(corona_vision_reblur_replay PRIVATE
+        corona::engine vision-all_libs vision-reblur-kernels)
+
+    add_executable(corona_vision_reblur_scheduler_tests test_vision_reblur_scheduler.cpp)
+    target_include_directories(corona_vision_reblur_scheduler_tests PRIVATE ${CMAKE_SOURCE_DIR}/vision/src)
+    target_link_libraries(corona_vision_reblur_scheduler_tests PRIVATE vision-reblur-scheduler nlohmann_json::nlohmann_json)
+    add_test(NAME VisionReblurSchedulerTests COMMAND corona_vision_reblur_scheduler_tests
+        --digest-fixture "${CMAKE_CURRENT_SOURCE_DIR}/data/reblur-scheduler-4.14.3.json")
+    set_tests_properties(VisionReblurSchedulerTests PROPERTIES TIMEOUT 60)
 endif()
 
 # Ocarina owns its runtime tests in the Horizon workspace. Engine integration

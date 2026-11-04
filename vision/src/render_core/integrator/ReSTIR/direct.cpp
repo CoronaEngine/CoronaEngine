@@ -804,6 +804,9 @@ void ReSTIRDI::compile_shader1() noexcept {
         if (lobes) {
             frame_buffer().denoiser_di_specular().write(dispatch_id(), make_float4(0.f));
             frame_buffer().denoiser_di_bypass().write(dispatch_id(), make_float4(0.f));
+            $if(param.precise_lobes != 0u) {
+                frame_buffer().denoiser_gi_specular().write(dispatch_id(), make_float4(0.f));
+            };
         }
         $if(param.stable_planes != 0u) {
             $if(frame_buffer().stable_dominant().read(dispatch_id()) == InvalidUI32) {
@@ -842,7 +845,14 @@ void ReSTIRDI::compile_shader1() noexcept {
         };
         write_radiance(dispatch_id(), make_float4(L, 1.f));
         if (lobes) {
-            frame_buffer().denoiser_di_specular().write(dispatch_id(), make_float4(specular, distance));
+            $if(param.precise_lobes != 0u) {
+                // GI consumes the unrounded total before these temporaries
+                // regain their public specular-signal meanings.
+                frame_buffer().denoiser_di_specular().write(dispatch_id(), make_float4(L, distance));
+                frame_buffer().denoiser_gi_specular().write(dispatch_id(), make_float4(specular, 0.f));
+            } $else {
+                frame_buffer().denoiser_di_specular().write(dispatch_id(), make_float4(specular, distance));
+            };
             frame_buffer().denoiser_di_bypass().write(dispatch_id(), make_float4(bypass, 0.f));
         }
         cur_reservoirs().write(dispatch_id(), st_rsv);
@@ -903,7 +913,7 @@ vector<float4> ReSTIRDI::download_radiance() const noexcept {
     if (compact_radiance_) {
         vector<uint2> stored(result.size());
         pipeline()->stream() << raw_radiance_.view().download(stored.data()) << synchronize() << commit();
-        for (size_t i = 0u; i < result.size(); ++i) result[i] = unpack_di_radiance_host(stored[i]);
+        for (size_t i = 0u; i < result.size(); ++i) result[i] = unpack_restir_radiance_host(stored[i]);
     } else {
         pipeline()->stream() << radiance_->view().download(result.data()) << synchronize() << commit();
     }
@@ -961,10 +971,11 @@ DIParam ReSTIRDI::construct_param() const noexcept {
     return param;
 }
 
-CommandBatch ReSTIRDI::dispatch(uint frame_index) const noexcept {
+CommandBatch ReSTIRDI::dispatch(uint frame_index, bool precise_lobes) const noexcept {
     CommandBatch ret;
     const Pipeline *rp = pipeline();
     auto param = construct_param();
+    param.precise_lobes = uint(precise_lobes);
     // Invalidation restarts the frame sequence without reallocating reservoirs.
     bool history_valid = history_.begin_frame(frame_index, param.camera_jitter);
     param.temporal = param.temporal && history_valid;

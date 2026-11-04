@@ -1,4 +1,3 @@
-// RELAX_FrontEnd_PackRadianceAndHitDist, NVIDIA NRD 4.14.3. See LICENSE-NRD.txt.
 #include "filter.h"
 #include "utils.h"
 

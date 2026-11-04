@@ -159,6 +159,8 @@ protected:
     uint2 resolution_;
     bool stable_plane_buffers_enabled_{};
     bool stable_plane_history_retained_{true};
+    bool compact_coverage_history_{};
+    bool stable_raw_outputs_retained_{true};
     Box2f screen_window_;
     EncodedData<uint> accumulation_;
     TToneMapper tone_mapper_{};
@@ -294,8 +296,11 @@ public:                                                                     \
     // Preserve registered slots for compiled kernels while disabled. A single
     // element per view is enough; no disabled pass may access these buffers.
     // Current records remain complete; only consumers opt out of history.
-    void manage_stable_plane_buffers(bool enabled, bool retain_history = true) noexcept;
+    void manage_stable_plane_buffers(bool enabled, bool retain_history = true,
+                                    bool compact_coverage_history = false, bool retain_raw_outputs = true) noexcept;
     [[nodiscard]] bool stable_plane_history_retained() const noexcept { return stable_plane_history_retained_; }
+    [[nodiscard]] bool compact_coverage_history() const noexcept { return compact_coverage_history_; }
+    [[nodiscard]] bool stable_raw_outputs_retained() const noexcept { return stable_raw_outputs_retained_; }
     [[nodiscard]] auto stable_direct_view(uint layer) const noexcept {
         auto view = stable_direct_.view().subview(layer * frame_buffer_size(), frame_buffer_size());
         return decltype(view)(view.handle() + view.offset_in_byte(), view.size());
@@ -334,6 +339,7 @@ public:                                                                     \
 
     RegistrableManaged<TriangleHit> hit_buffer_;
     OC_MAKE_MEMBER_GETTER(hit_buffer, &)
+    VS_MAKE_BUFFER(RegistrableBuffer<CoveragePlaneHistory>, coverage_history, 1)
 
 #undef VS_MAKE_DOUBLE_BUFFER
 
@@ -343,20 +349,22 @@ public:
     using Desc = FrameBufferDesc;
 
 public:
-    FrameBuffer() = default;
+    FrameBuffer() {
+        stable_planes_.set_name("FrameBuffer::stable_planes [motion-half-coverage-history-v3]");
+    }
     explicit FrameBuffer(const FrameBufferDesc &desc);
     // Buffer<T> stores handles/counts/descriptors, not inline T records; this
     // guard reads the unchanged host name before moving typed GPU allocations.
     void require_stable_plane_storage_abi() const noexcept {
-        OC_ERROR_IF(stable_planes_.size() != 0u && !stable_planes_.name().ends_with(" [motion-half-flags-v1]"),
-                    "SP motion storage ABI changed; restart the engine before loading the new shaders.");
+        OC_ERROR_IF(!stable_planes_.name().ends_with(" [motion-half-coverage-history-v3]"),
+                    "SP coverage history storage ABI changed; restart the engine before loading the new shaders.");
     }
     void restore(RuntimeObject *old_obj) noexcept override {
         const auto *previous = dynamic_cast<FrameBuffer *>(old_obj);
         previous->require_stable_plane_storage_abi();
         Node::restore(old_obj);
         VS_HOTFIX_MOVE_ATTRS(cur_view_, surfaces_, surface_exts_, surface_ext_history_, hit_bsdfs_,
-                           stable_planes_, stable_plane_history_, stable_plane_buffers_enabled_, stable_plane_history_retained_, stable_direct_, stable_indirect_, stable_radiance_, stable_dominant_,
+                           stable_planes_, stable_plane_history_, stable_plane_buffers_enabled_, stable_plane_history_retained_, compact_coverage_history_, stable_raw_outputs_retained_, coverage_history_, stable_direct_, stable_indirect_, stable_radiance_, stable_dominant_,
                            motion_vectors_, hit_buffer_, screen_buffers_,
                            denoiser_diffuse_, denoiser_specular_, denoiser_bypass_, denoiser_di_specular_, denoiser_gi_specular_, denoiser_di_bypass_,
                            view_texture_, visualizer_, window_buffer_, rt_buffer_,
@@ -468,7 +476,7 @@ public:
         pixels = pixels ? pixels : frame_buffer_size();
         uint element_num = count * pixels;
         string storage_desc = desc;
-        if constexpr (std::is_same_v<T, StablePlaneData>) storage_desc += " [motion-half-flags-v1]";
+        if constexpr (std::is_same_v<T, StablePlaneData>) storage_desc += " [motion-half-coverage-history-v3]";
         buffer.super() = device().create_buffer<T>(element_num, storage_desc);
         vector<T> vec{};
         vec.assign(element_num, T{});

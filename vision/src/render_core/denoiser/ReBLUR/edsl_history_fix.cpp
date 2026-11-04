@@ -1,14 +1,3 @@
-/*
-Copyright (c) 2022, NVIDIA CORPORATION. All rights reserved.
-
-NVIDIA CORPORATION and its licensors retain all intellectual property
-and proprietary rights in and to this software, related documentation
-and any modifications thereto. Any use, reproduction, disclosure or
-distribution of this software and related documentation without an express
-license agreement from NVIDIA CORPORATION is strictly prohibited.
-*/
-// NRD 4.14.3 REBLUR_HistoryFix, full RGB diffuse/specular quality variant.
-// See LICENSE-NRD.txt. No receiver/path identity or custom glossy filtering.
 #include "edsl_nrd_common.h"
 #include "edsl_nrd_resources.h"
 #include <cstdlib>
@@ -35,7 +24,7 @@ PassShader compile_history_fix(Device &device) {
         // The padded 8x16 dispatch still fits the ceil(rect / 16) tile grid.
         Float is_sky = tiles.read_in_bounds(pixel >> 4);
 
-        // Frames keep NRD's BORDER=2 footprint. Immutable fast inputs can be
+        // Frames keep ReBLUR's BORDER=2 footprint. Immutable fast inputs can be
         // shared across the 72-tap anti-firefly windows without changing order.
         // Pitch 24 gives the 8x4 warp footprint distinct shared-memory banks.
         SharedArray<float, 576> cached_diff_luma;

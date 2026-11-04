@@ -82,7 +82,7 @@ class DisplaySystem : public Kernel::SystemBase {
         // Producer consumed_receipts instead receive the earlier composite
         // submission, so their images can be reused while presentation waits.
         Horizon::SubmitReceipt last_receipt;
-        std::array<std::uint64_t, 24> last_signature{};
+        std::array<std::uint64_t, 25> last_signature{};
         bool content_valid = false;
         std::uint64_t skipped_frames = 0;
         Detail::ScenePresentCadence scene_cadence;

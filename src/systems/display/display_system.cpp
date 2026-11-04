@@ -1049,13 +1049,28 @@ Detail::PresentOutcome DisplaySystem::compose_and_present(
         return Detail::PresentOutcome::Failed;
     }
 
+    const auto presentation = displayer.presentation_info();
+    const auto presentation_format = presentation.format;
+    const bool swapchain_srgb = presentation_format == Horizon::Format::SRGBA8_UNORM ||
+                                presentation_format == Horizon::Format::SBGRA8_UNORM ||
+                                presentation_format == Horizon::Format::SBGRX8_UNORM;
+    const uint32_t encode_output_srgb = swapchain_srgb ? 0u : 1u;
+    const bool presentation_changed =
+        resources.last_signature[23] != static_cast<std::uint64_t>(presentation_format) ||
+        resources.last_signature[24] != presentation.generation;
+    if (!resources.content_valid || presentation_changed) {
+        CFW_LOG_INFO("Display color transfer surface={} format={} generation={} swapchain_srgb={} shader_srgb_encode={}",
+                     surface, static_cast<unsigned>(presentation_format), presentation.generation,
+                     swapchain_srgb, encode_output_srgb);
+    }
+
     // A producer publishes a new receipt/frame whenever it writes its image.
     // Keep the existing composite when neither layer nor its placement changed;
     // do not spend full-screen bandwidth at Display's independent tick rate.
     const auto receipt_serial = [](const Horizon::SubmitReceipt* receipt) {
         return receipt ? receipt->serial : 0;
     };
-    const std::array<std::uint64_t, 24> signature{
+    const std::array<std::uint64_t, 25> signature{
         state.optics.image_handle, state.optics.frame_index, receipt_serial(optics_receipt),
         state.ui.image_handle, state.ui.frame_index, receipt_serial(ui_receipt),
         output_width, output_height, optics_extent.width, optics_extent.height,
@@ -1065,7 +1080,8 @@ Detail::PresentOutcome DisplaySystem::compose_and_present(
         state.ui.viewport_x, state.ui.viewport_y, state.ui.viewport_width, state.ui.viewport_height,
         state.ui.first_present_boundary,
         static_cast<std::uint64_t>(optics_receipt != nullptr),
-        static_cast<std::uint64_t>(ui_receipt != nullptr), 0};
+        static_cast<std::uint64_t>(ui_receipt != nullptr),
+        static_cast<std::uint64_t>(presentation_format), presentation.generation};
     if (resources.content_valid && resources.last_signature == signature) {
         ++resources.skipped_frames;
         if (std::getenv("CORONA_DISPLAY_PROFILE") &&
@@ -1080,7 +1096,7 @@ Detail::PresentOutcome DisplaySystem::compose_and_present(
     // second full-screen composite/present between consecutive scene frames.
     // Resizes must proceed immediately; a paused scene releases UI after the
     // bounded grace interval, and every new scene receipt bypasses this gate.
-    if (resources.content_valid &&
+    if (resources.content_valid && !presentation_changed &&
         resources.last_signature[6] == output_width && resources.last_signature[7] == output_height &&
         resources.scene_cadence.defer_ui(
             {state.optics.image_handle, receipt_serial(optics_receipt)},
@@ -1111,6 +1127,7 @@ Detail::PresentOutcome DisplaySystem::compose_and_present(
         state.optics.viewport_height != 0 ? state.optics.viewport_height : output_height;
     composite_pipeline.pushConsts.fgOpaque =
         (state.ui.image_handle != 0 && state.optics.image_handle == 0) ? 1u : 0u;
+    composite_pipeline.pushConsts.encodeOutputSrgb = encode_output_srgb;
     // Resource bindings above track all three images and their transitions.
 
     // 新版 Horizon: 使用 dispatch_extent 替代 dispatch_groups

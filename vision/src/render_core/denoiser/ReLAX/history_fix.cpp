@@ -1,8 +1,3 @@
-/*
-Copyright (c) 2022, NVIDIA CORPORATION. All rights reserved.
-This software contains source code provided by NVIDIA Corporation. See LICENSE-NRD.txt.
-*/
-// NRD 4.14.3 RELAX_HistoryFix.hlsli, RGB variant.
 #include "filter.h"
 #include "utils.h"
 

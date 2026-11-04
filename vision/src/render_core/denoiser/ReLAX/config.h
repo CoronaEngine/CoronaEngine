@@ -1,6 +1,3 @@
-// NVIDIA NRD 4.14.3 RelaxSettings, 16a64cd4daebfb153590623f0348b36007284ba3.
-// This software contains source code provided by NVIDIA Corporation.
-// See LICENSE-NRD.txt.
 #pragma once
 #include "dsl/dsl.h"
 

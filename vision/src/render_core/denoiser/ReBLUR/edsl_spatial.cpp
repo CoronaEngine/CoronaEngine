@@ -1,17 +1,3 @@
-/*
-Copyright (c) 2022, NVIDIA CORPORATION. All rights reserved.
-
-NVIDIA CORPORATION and its licensors retain all intellectual property
-and proprietary rights in and to this software, related documentation
-and any modifications thereto. Any use, reproduction, disclosure or
-distribution of this software and related documentation without an express
-license agreement from NVIDIA CORPORATION is strictly prohibited.
-*/
-
-// NRD 4.14.3 REBLUR_DIFFUSE_SPECULAR, quality, full-resolution RGB.
-// EDSL translation of ClassifyTiles, HitDistReconstruction, PrePass,
-// Blur/PostBlur and REBLUR_Common_{Diffuse,Specular}SpatialFilter.
-// See LICENSE-NRD.txt. No SH, checkerboard, or performance permutations.
 #include "edsl_nrd_common.h"
 #include "edsl_nrd_resources.h"
 #include <cstdlib>

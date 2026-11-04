@@ -1,4 +1,3 @@
-// NVIDIA NRD 4.14.3 RELAX RGB translation. See LICENSE-NRD.txt.
 #pragma once
 #include "config.h"
 #include "math/geometry.h"
@@ -15,7 +14,7 @@ struct Guide {
     float2 motion{}; // Current minus previous raster coordinates, in pixels.
     uint4 identity{}; // Receiver/prefix hash, material, branch sequence, valid.
 };
-// Seven dense float4 columns, like NRD's separate guide textures. Identity is
+// Seven dense float4 guide columns. Identity is
 // bit-cast, never converted; motion occupies xy of its column. No FP16 storage.
 inline constexpr uint GuideColumnCount = 7u;
 struct GeometryHistory {

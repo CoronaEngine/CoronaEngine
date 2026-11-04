@@ -71,7 +71,7 @@ struct PythonAPI {
     nanobind::object pModule;      // module 'main'
     nanobind::object pEditor;      // CoronaEditor lifecycle owner
     nanobind::object pFunc;        // callable 'run'
-    nanobind::object messageFunc;  // callable 'put_queue'
+    nanobind::object runtimeUpdateFunc;  // CoronaEditor.update_runtime
 
     std::vector<std::string> moduleList;
     std::vector<std::string> callableList;

@@ -1,14 +1,23 @@
 #include "reblur.h"
 #include "base/mgr/pipeline.h"
 #include "base/integral/integrator.h"
+#include "base/mgr/evaluation_debug.h"
 #include "utils.h"
-#ifdef VISION_REBLUR_NATIVE_NRD
+#include <cstdlib>
+#include <cstring>
+#include <fstream>
+#ifdef VISION_REBLUR_EDSL
 #include "rhi/context.h"
 #endif
 
 namespace vision::reblur {
 namespace {
-#ifdef VISION_REBLUR_NATIVE_NRD
+#ifdef VISION_REBLUR_EDSL
+bool reblur_option_enabled(const char *name) {
+    const char *value = std::getenv(name);
+    return !value || std::strcmp(value, "0") != 0;
+}
+
 void store_native_matrix(std::array<float, 16> &destination, const float4x4 &matrix) {
     for (uint column = 0; column != 4u; ++column)
         for (uint row = 0; row != 4u; ++row)
@@ -91,20 +100,29 @@ void ReBLUR::initialize_(const NodeDesc &) noexcept {
     DenoiserDesc desc{"svgf"}; desc.set_value("coverage_only", true);
     coverage_ = Node::create_shared<Denoiser>(desc);
 }
+bool ReBLUR::coverage_enabled() const noexcept {
+    return denoiser_coverage_aa_enabled(pipeline()->renderer().integrator()->impl_type(), impl_type());
+}
 void ReBLUR::prepare() noexcept {
     update_resolution(frame_buffer().raytracing_resolution());
-    coverage_->prepare();
+    if (coverage_enabled()) coverage_->prepare();
 }
 void ReBLUR::update_resolution(uint2 resolution) noexcept {
-#ifdef VISION_REBLUR_NATIVE_NRD
-    // This build always selects native NRD or EDSL in compile(). Neither uses
-    // the fallback filter's histories or scratch buffers, including at prepare.
-    filter_->prepare_native(device(), resolution);
+#ifdef VISION_REBLUR_EDSL
+    // The standalone EDSL path does not use the fallback filter's histories
+    // or scratch buffers, including during the initial prepare.
+    // Initial prepare precedes compile: derive the same layout before allocating
+    // so fused EDSL never transiently allocates the unused 80-byte guide cache.
+    const bool compact = edsl_
+        ? compact_guides_
+        : reblur_option_enabled("REBLUR_FUSE_GUIDES") &&
+            reblur_option_enabled("REBLUR_COMPACT_GUIDE_CACHE");
+    filter_->prepare_native(device(), resolution, compact);
 #else
     filter_->prepare(device(), resolution, pipeline()->renderer().integrator()->stable_planes_enabled() ? 3u : 1u);
 #endif
     filter_->reset(); frame_ = InvalidUI32;
-    if (coverage_ && coverage_->has_prepared_resources()) coverage_->update_resolution(resolution);
+    if (coverage_enabled() && coverage_ && coverage_->has_prepared_resources()) coverage_->update_resolution(resolution);
 }
 void ReBLUR::set_enabled(bool enabled) noexcept {
     if (enabled_ != enabled) { filter_->reset(); frame_ = InvalidUI32; }
@@ -112,29 +130,53 @@ void ReBLUR::set_enabled(bool enabled) noexcept {
     if (coverage_) coverage_->set_enabled(enabled);
 }
 void ReBLUR::set_stable_planes_enabled(bool enabled) noexcept {
-#ifndef VISION_REBLUR_NATIVE_NRD
+#ifndef VISION_REBLUR_EDSL
     if (has_prepared_resources()) filter_->prepare(device(), frame_buffer().raytracing_resolution(), enabled ? 3u : 1u);
 #endif
     filter_->reset(); frame_ = InvalidUI32;
-    if (coverage_) coverage_->set_stable_planes_enabled(enabled);
+    if (coverage_enabled() && coverage_) coverage_->set_stable_planes_enabled(enabled);
 }
 void ReBLUR::render_sub_UI(Widgets *widgets) noexcept {
     bool on = enabled_;
     if (widgets->check_box("turn on", &on)) { set_enabled(on); changed_ = true; }
 }
 void ReBLUR::compile() noexcept {
-#ifdef VISION_REBLUR_NATIVE_NRD
-    native_.reset();
+#ifdef VISION_REBLUR_EDSL
     edsl_.reset();
-    if (NativeReblur::requested())
-        native_ = make_shared<NativeReblur>(device().context()->runtime_directory() / "reblur-native");
-    else
-        edsl_ = make_shared<EdslReblur>(device());
+    fuse_guides_ = reblur_option_enabled("REBLUR_FUSE_GUIDES");
+    compact_guides_ = fuse_guides_ && reblur_option_enabled("REBLUR_COMPACT_GUIDE_CACHE");
+    edsl_ = make_shared<EdslReblur>(device(), compact_guides_);
 #endif
     auto &camera = scene().sensor(); auto &sampler = renderer().sampler();
-    Kernel guides = [&](Var<GuideParam> p) {
-        auto output = guide_view(p.output);
+    auto compile_guides = [&]<typename Param, bool compact = false>() {
+    Kernel guides = [&](Var<Param> parameters) {
+        auto &p = [&]() -> auto & {
+            if constexpr (std::is_same_v<Param, GuideParam>) return parameters;
+#ifdef VISION_REBLUR_EDSL
+            else return parameters.guide;
+#endif
+        }();
         Uint i = dispatch_id();
+        Float2 repaired_hits = make_float2(-1.f);
+        auto publish_guide = [&](const Var<Guide> &guide) {
+            if constexpr (compact) {
+                $if(parameters.pack.defer_unpack == 0u) {
+                    auto output = p.output.template soa_view_var<CompactGuide>();
+                    Var<CompactGuide> cache;
+                    Float z = guide.position.w;
+                    Bool valid = (guide.identity.w & 1u) != 0u && !ocarina::isnan(z) && !ocarina::isinf(z) &&
+                        z > 0.f && z < parameters.pack.constants.gDenoisingRange;
+                    cache.diffuse_depth = make_float4(guide.diffuse_factor.xyz(), select(valid, z, 0.f));
+                    cache.specular_roughness = make_float4(guide.specular_factor.xyz(), guide.normal_roughness.w);
+                    output.write(i, cache);
+                };
+            } else {
+                guide_view(p.output).write(i, guide);
+            }
+#ifdef VISION_REBLUR_EDSL
+            if constexpr (!std::is_same_v<Param, GuideParam>) edsl::emit_pack_pixel(parameters.pack, guide, repaired_hits);
+#endif
+        };
         $if(p.layered != 0u) {
             // Test the small validity field before loading the surface, camera
             // and sampler state for mostly empty secondary stable planes.
@@ -143,7 +185,7 @@ void ReBLUR::compile() noexcept {
                 empty.position = make_float4(0.f); empty.normal_roughness = make_float4(0.f, 0.f, 1.f, 1.f);
                 empty.diffuse_factor = make_float4(1.f, 1.f, 1.f, 0.f); empty.specular_factor = empty.diffuse_factor;
                 empty.identity = make_uint4(0u);
-                output.write(i, empty);
+                publish_guide(empty);
                 $return();
             };
         };
@@ -165,8 +207,8 @@ void ReBLUR::compile() noexcept {
             valid = plane->valid() != 0u && hit->is_hit();
             branch = plane.branch_sequence; instance_hash = guide_instance(hit.inst_id, plane.instance_hash);
             motion = plane->motion();
-#ifdef VISION_REBLUR_NATIVE_NRD
-            if (native_ || edsl_) {
+#ifdef VISION_REBLUR_EDSL
+            if (edsl_) {
                 // RTXPT relaxes disocclusion and roughness where extended
                 // stable paths diverge. Store its R8 mix in spare validity bits.
                 $if(plane.depth > 0u && valid) {
@@ -234,6 +276,11 @@ void ReBLUR::compile() noexcept {
                                 signal.w = max(distance, 1e-5f);
                             };
                             if (spec) p.specular.write(i, signal); else p.diffuse.write(i, signal);
+#ifdef VISION_REBLUR_EDSL
+                            if constexpr (!std::is_same_v<Param, GuideParam>) {
+                                if (spec) repaired_hits.y = signal.w; else repaired_hits.x = signal.w;
+                            }
+#endif
                         };
                     }
                 });
@@ -247,27 +294,40 @@ void ReBLUR::compile() noexcept {
             // motion even when the subpixel sample moves within the pixel.
         };
         g.diffuse_factor.w = motion.x; g.specular_factor.w = motion.y;
-        output.write(i, g);
+        publish_guide(g);
     };
-    prepare_guides_ = device().compile(guides, "REBLUR-PrepareGuides");
+    guides.function()->set_block_dim(8u, 8u, 1u);
+    if (const char *block = std::getenv("REBLUR_GUIDE_BLOCK")) {
+        if (std::strcmp(block, "16x8") == 0) guides.function()->set_block_dim(16u, 8u, 1u);
+        else if (std::strcmp(block, "64x1") == 0) guides.function()->set_block_dim(64u, 1u, 1u);
+    }
+    return device().compile(guides, std::is_same_v<Param, GuideParam> ? "REBLUR-PrepareGuides" : "NRD-EDSL-REBLUR-Pack");
+    };
+    prepare_guides_ = compile_guides.operator()<GuideParam>();
+#ifdef VISION_REBLUR_EDSL
+    if (edsl_ && fuse_guides_) prepare_and_pack_ = compact_guides_
+        ? compile_guides.operator()<GuidePackParam, true>() : compile_guides.operator()<GuidePackParam, false>();
+#endif
     Kernel publish = [](Var<PublishParam> p) {
         Uint i = dispatch_id();
         p.direct.write(i, make_RadType4(p.diffuse.read(i).xyz() + p.bypass.read(i).xyz(), 1.f));
         p.indirect.write(i, make_RadType4(p.specular.read(i).xyz(), 1.f));
     };
     publish_ = device().compile(publish, "REBLUR-PublishPT");
-#ifdef VISION_REBLUR_NATIVE_NRD
-    if (!native_ && !edsl_)
+#ifdef VISION_REBLUR_EDSL
+    if (!edsl_)
 #endif
         filter_->compile(device());
-    coverage_->compile();
+    if (coverage_enabled()) coverage_->compile();
     frame_ = InvalidUI32;
 }
 
 CommandBatch ReBLUR::dispatch(RealTimeDenoiseInput &input) noexcept {
     CommandBatch ret;
+    input.composed_lobe_output = false;
     if (!enabled_) return ret;
     if (input.composed_coverage) {
+        if (!coverage_enabled()) return ret;
         auto coverage_input = input;
         coverage_input.composed_coverage = input.coverage_planes.size() != 0u;
         return coverage_->dispatch(coverage_input);
@@ -276,8 +336,8 @@ CommandBatch ReBLUR::dispatch(RealTimeDenoiseInput &input) noexcept {
         OC_ERROR("REBLUR requires explicit diffuse/specular radiance and world-space hit distances");
         return ret;
     }
-#ifdef VISION_REBLUR_NATIVE_NRD
-    if (native_ || edsl_) filter_->prepare_native(device(), input.resolution);
+#ifdef VISION_REBLUR_EDSL
+    if (edsl_) filter_->prepare_native(device(), input.resolution, compact_guides_);
     else
 #endif
         filter_->prepare(device(), input.resolution, input.layer_count);
@@ -287,8 +347,8 @@ CommandBatch ReBLUR::dispatch(RealTimeDenoiseInput &input) noexcept {
                              projection_revision_ != camera->external_projection_revision();
         if (restart) filter_->reset();
         previous_raster_ = current_raster_; current_raster_ = camera->host_world_to_raster();
-#ifdef VISION_REBLUR_NATIVE_NRD
-        if (native_ || edsl_) update_native_camera(native_camera_, current_raster_, camera->host_c2w(),
+#ifdef VISION_REBLUR_EDSL
+        if (edsl_) update_native_camera(native_camera_, current_raster_, camera->host_c2w(),
                                            input.resolution, restart, pipeline()->frame_delta_ms());
 #endif
         frame_ = input.frame_index; fov_ = camera->fov_y();
@@ -304,7 +364,29 @@ CommandBatch ReBLUR::dispatch(RealTimeDenoiseInput &input) noexcept {
     gp.output = filter_->guides().descriptor();
     gp.diffuse = input.lobe_signals.diffuse_radiance_hitdist.descriptor();
     gp.specular = input.lobe_signals.specular_radiance_hitdist.descriptor();
-    ret << prepare_guides_(gp).dispatch(input.resolution);
+#ifdef VISION_REBLUR_EDSL
+    if (!edsl_ || !fuse_guides_)
+#endif
+        ret << prepare_guides_(gp).dispatch(input.resolution);
+#ifdef VISION_REBLUR_EDSL
+    const auto guide_debug_directory = evaluation_debug::directory(input.frame_index);
+    if (!fuse_guides_ && !guide_debug_directory.empty()) {
+        std::filesystem::create_directories(guide_debug_directory);
+        auto guides = std::make_shared<std::vector<std::byte>>(filter_->guides().size());
+        auto diffuse = std::make_shared<std::vector<float4>>(gp.size.x * gp.size.y);
+        auto specular = std::make_shared<std::vector<float4>>(gp.size.x * gp.size.y);
+        ret << filter_->guides().download(guides->data())
+            << input.lobe_signals.diffuse_radiance_hitdist.download(diffuse->data())
+            << input.lobe_signals.specular_radiance_hitdist.download(specular->data()) << synchronize();
+        ret << [guide_debug_directory, layer = input.layer_index, guides, diffuse, specular] {
+            auto write = [&](const char *field, const auto &data) {
+                std::ofstream file(guide_debug_directory / ("guide_layer_" + std::to_string(layer) + "_" + field + ".bin"), std::ios::binary);
+                file.write(reinterpret_cast<const char *>(data.data()), data.size() * sizeof(data[0]));
+            };
+            write("guides", *guides); write("raw_diffuse", *diffuse); write("raw_specular", *specular);
+        };
+    }
+#endif
     FilterParam p;
     p.frame = input.frame_index; p.history_valid = input.frame_index != 0u;
     p.raw_diffuse = gp.diffuse; p.raw_specular = gp.specular;
@@ -315,14 +397,46 @@ CommandBatch ReBLUR::dispatch(RealTimeDenoiseInput &input) noexcept {
     p.unproject = 2.f * std::tan(radians(camera->fov_y()) * .5f) / static_cast<float>(input.resolution.y);
     const auto frame_delta_ms = pipeline()->frame_delta_ms();
     p.frame_rate_scale = frame_delta_ms > 0.0 ? std::max(33.333f / static_cast<float>(frame_delta_ms), 1.f) : 1.f;
-#ifdef VISION_REBLUR_NATIVE_NRD
-    if (native_) {
+#ifdef VISION_REBLUR_EDSL
+    if (edsl_) {
         p = filter_->native_parameters(p, input.layer_index);
-        ret << native_->dispatch(p, native_camera_, input.layer_index, filter_->settings,
-                                  p.history_valid == 0u, filter_);
-    } else if (edsl_) {
-        p = filter_->native_parameters(p, input.layer_index);
-        ret << edsl_->dispatch(p, native_camera_, input.layer_index, filter_->settings, p.history_valid == 0u);
+        EdslReblur::PackCommand prepare_and_pack;
+        if (fuse_guides_) prepare_and_pack = [this, gp](const edsl::Dispatch &parameters) {
+            GuidePackParam fused; fused.guide = gp; fused.pack = parameters;
+            return prepare_and_pack_(fused).dispatch(gp.size);
+        };
+        edsl::ComposeParam composition;
+        const edsl::ComposeParam *compose = nullptr;
+        auto matches = [](const auto &a, const auto &b) {
+            return a.handle() + a.offset_in_byte() == b.handle() + b.offset_in_byte() && a.size() == b.size();
+        };
+        const bool defer_unpack = input.compose_only &&
+            matches(input.lobe_signals.diffuse_radiance_hitdist, input.lobe_signals.output_diffuse) &&
+            matches(input.lobe_signals.specular_radiance_hitdist, input.lobe_signals.output_specular);
+        const uint pixels = input.resolution.x * input.resolution.y;
+        if (fuse_guides_ && compact_guides_ && reblur_option_enabled("REBLUR_COMPOSE_IN_UNPACK") &&
+            input.channel_kind == RealTimeDenoiseInput::ChannelKind::DirectIndirect &&
+            (input.layer_count == 1u || input.layer_count == StablePlaneCount) &&
+            (defer_unpack || input.layer_index + 1u == input.layer_count)) {
+            auto &fb = frame_buffer();
+            // External-buffer standalone callers retain their original path.
+            if (fb.denoiser_diffuse_size() >= size_t(pixels) * input.layer_count &&
+                matches(input.lobe_signals.output_diffuse, fb.denoiser_layer_view(fb.denoiser_diffuse(), input.layer_index)) &&
+                matches(input.lobe_signals.output_specular, fb.denoiser_layer_view(fb.denoiser_specular(), input.layer_index))) {
+                composition.diffuse = fb.denoiser_diffuse().view().descriptor();
+                composition.specular = fb.denoiser_specular().view().descriptor();
+                composition.bypass = fb.denoiser_bypass().view().descriptor();
+                composition.stable_radiance = fb.stable_radiance().view().descriptor();
+                composition.output = fb.rt_buffer().view().descriptor();
+                composition.layer_count = input.layer_count; composition.layer_index = input.layer_index;
+                composition.layered = uint(input.layer_count > 1u);
+                composition.direct_factor = input.stable_radiance_factor;
+                compose = &composition;
+            }
+        }
+        ret << edsl_->dispatch(p, native_camera_, input.layer_index, filter_->settings, p.history_valid == 0u,
+                               prepare_and_pack, compose, compose && defer_unpack);
+        input.composed_lobe_output = compose != nullptr && input.layer_index + 1u == input.layer_count;
     } else
 #endif
     ret << filter_->dispatch(p, input.layer_index);
@@ -332,7 +446,7 @@ CommandBatch ReBLUR::dispatch(RealTimeDenoiseInput &input) noexcept {
         pp.bypass = frame_buffer().denoiser_layer_view(frame_buffer().denoiser_bypass(), input.layer_index).descriptor();
         pp.direct = input.direct.descriptor(); pp.indirect = input.indirect.descriptor();
         ret << publish_(pp).dispatch(input.resolution);
-        if (input.layer_count == 1u) ret << coverage_->dispatch(input);
+        if (input.layer_count == 1u && coverage_enabled()) ret << coverage_->dispatch(input);
     }
     return ret;
 }

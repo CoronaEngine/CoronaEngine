@@ -1,20 +1,30 @@
-/*
-Copyright (c) 2022, NVIDIA CORPORATION. All rights reserved.
-
-NVIDIA CORPORATION and its licensors retain all intellectual property
-and proprietary rights in and to this software, related documentation
-and any modifications thereto. Any use, reproduction, disclosure or
-distribution of this software and related documentation without an express
-license agreement from NVIDIA CORPORATION is strictly prohibited.
-*/
-
-// This software contains source code provided by NVIDIA Corporation.
-// NRD 4.14.3: NRD.hlsli, Common.hlsli, REBLUR_Common.hlsli (see LICENSE-NRD.txt).
 #pragma once
-#include "guide_layout.h"
+#include "filter.h"
 
 namespace vision::reblur {
-// Match NRD's FP16 signal/history storage, keeping all filtering in Float.
+template<typename Buffer>
+[[nodiscard]] auto guide_view(const Buffer &buffer) {
+    return buffer.template soa_view_var<Guide>();
+}
+
+template<typename Guides, typename Index>
+[[nodiscard]] Var<Guide> read_guide_geometry(const Guides &guides, const Index &index) {
+    // Spatial geometry tests do not consume demodulation or motion. Avoid
+    // emitting reads/address calculations for those two unused field planes.
+    Var<Guide> guide;
+    guide.position = guides.position.read(index);
+    guide.identity = guides.identity.read(index);
+    guide.normal_roughness = guides.normal_roughness.read(index);
+    guide.diffuse_factor = make_float4(0.f);
+    guide.specular_factor = make_float4(0.f);
+    return guide;
+}
+template<typename Buffer>
+[[nodiscard]] auto geometry_history_view(const Buffer &buffer) {
+    return buffer.template soa_view_var<GeometryHistory>();
+}
+
+// Match ReBLUR's FP16 signal/history storage, keeping all filtering in Float.
 // Signed YCoCg chroma must survive conversion; reprojection can overshoot
 // the packed input range, so saturate only at the storage boundary.
 inline Half4 store_half(Float4 value) {

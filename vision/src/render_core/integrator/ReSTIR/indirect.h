@@ -5,13 +5,15 @@
 #pragma once
 
 #include "common.h"
-#include "gi_radiance_storage.h"
+#include "radiance_storage.h"
 #include "base/mgr/switch_profile.h"
 #include "reservoir.h"
 
 namespace vision {
 struct GIParam {
     uint camera_jitter{1u};
+    uint precise_lobes{}, denoiser_layered{}, denoiser_di_active{};
+    float denoiser_di_factor{}, denoiser_gi_factor{};
     uint max_age{};
     float diff_factor{};
 
@@ -31,13 +33,21 @@ struct GIParam {
 };
 }// namespace vision
 
-OC_PARAM_STRUCT(vision, GIParam, camera_jitter, max_age, diff_factor, spatial, N,
+OC_PARAM_STRUCT(vision, GIParam, camera_jitter, precise_lobes, denoiser_layered, denoiser_di_active, denoiser_di_factor, denoiser_gi_factor, max_age, diff_factor, spatial, N,
                 s_dot, s_depth, s_radius, temporal, history_limit,
                 t_dot, t_depth, t_radius){};
 
 namespace vision {
 
 class RayTracingIntegrator;
+
+// Cached secondary radiance is evaluated toward the source receiver. Preserve
+// that geometric side, including when both receivers view a two-sided back face.
+template<typename T>
+[[nodiscard]] inline auto gi_reconnection_supported(const T &target_cosine,
+                                                    const T &source_cosine) noexcept {
+    return target_cosine * source_cosine > 0.f;
+}
 
 class ReSTIRGI : public ReSTIR {
 private:
@@ -82,10 +92,10 @@ public:
     [[nodiscard]] bool compact_radiance() const noexcept { return compact_radiance_; }
     [[nodiscard]] const RegistrableBuffer<uint2> &raw_radiance() const noexcept { return raw_radiance_; }
     [[nodiscard]] Float4 read_radiance(const Uint &index) const noexcept {
-        return compact_radiance_ ? unpack_gi_radiance(raw_radiance_.read(index)) : radiance_->read(index);
+        return compact_radiance_ ? unpack_restir_radiance(raw_radiance_.read(index)) : radiance_->read(index);
     }
     void write_radiance(const Uint &index, const Float4 &value) const noexcept {
-        if (compact_radiance_) raw_radiance_.write(index, pack_gi_radiance(value));
+        if (compact_radiance_) raw_radiance_.write(index, pack_restir_radiance(value));
         else radiance_->write(index, value);
     }
     [[nodiscard]] vector<float4> download_radiance() const noexcept;
@@ -158,6 +168,8 @@ public:
         return pipeline()->bindless_array().buffer_var<GIReservoir>(1 + reservoir_base());
     }
     [[nodiscard]] GIParam construct_param() const noexcept;
-    [[nodiscard]] CommandBatch dispatch(uint frame_index) const noexcept;
+    [[nodiscard]] CommandBatch dispatch(uint frame_index, bool precise_lobes = false,
+                                      bool denoiser_layered = false, float di_factor = 0.f,
+                                      float gi_factor = 0.f, bool di_active = false) const noexcept;
 };
 }// namespace vision

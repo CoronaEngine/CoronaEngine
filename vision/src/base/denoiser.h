@@ -10,8 +10,17 @@
 #include "sensor/frame_buffer.h"
 #include "sensor/light_field_types.h"
 #include "base/using.h"
+#include <cstdlib>
 
 namespace vision {
+
+// ReSTIR+REBLUR matches RTXPT's centred primary rays without an extra coverage
+// filter. The old coverage-AA path remains a diagnostic comparison.
+[[nodiscard]] inline bool denoiser_coverage_aa_enabled(string_view integrator, string_view denoiser) noexcept {
+    if (integrator != "rt" || denoiser != "ReBLUR") return true;
+    const char *value = std::getenv("VISION_RESTIR_EXTRA_AA");
+    return value && value[0] == '1';
+}
 
 struct DenoiseLobeInput {
     // Linear RGB with world-space hit distance in w; zero distance is unsampled.
@@ -34,6 +43,14 @@ struct RealTimeDenoiseInput {
 
     bool has_lobe_signals{false};
     DenoiseLobeInput lobe_signals;
+    // ReSTIR deterministic stable radiance receives its direct-light factor.
+    float stable_radiance_factor{1.f};
+    // Explicit final-output-only contract: filtered lobe buffers need not be
+    // published when dispatch composes their complete signal into rt_buffer.
+    // Submit all layers in ascending order; raw lobe storage may be retired.
+    bool compose_only{false};
+    // Dispatch result: the final lobe pass wrote the complete FP32 rt_buffer.
+    bool composed_lobe_output{};
 
 //    BufferView<float4> output;
 //    BufferView<float4> radiance;
@@ -61,8 +78,12 @@ struct RealTimeDenoiseInput {
     // Complete DirectIndirect pixel signal, after layer illumination filtering.
     // Coverage includes deterministic emission/sky and all complementary paths.
     bool composed_coverage{false};
+    // Lobe composition has placed the complete pixel signal in direct and
+    // zero in indirect. Coverage may omit the unused indirect history/channel.
+    bool total_radiance_coverage{false};
     BufferView<StablePlaneData> coverage_planes;
     BufferView<StablePlaneHistory> prev_coverage_planes;
+    BufferView<CoveragePlaneHistory> prev_coverage_history;
 
     /// Camera positions for depth calculation from visibility buffer
     array_float3 camera_pos{};
@@ -109,6 +130,10 @@ public:
     virtual void compile() noexcept {}
 
     [[nodiscard]] virtual bool requires_lobe_signals() const noexcept { return false; }
+
+    // Keep history storage available; callers may omit an unused frame's copy.
+    [[nodiscard]] virtual bool needs_stable_plane_history(uint frame) const noexcept { return true; }
+    [[nodiscard]] virtual bool uses_compact_coverage_history() const noexcept { return false; }
 
     /// Cached resources still need resize/scene recompilation while disabled.
     [[nodiscard]] virtual bool has_prepared_resources() const noexcept { return false; }

@@ -21,13 +21,15 @@ class SourceWorkspaceWorkflowTests(unittest.TestCase):
     def test_install_prepares_both_sources_before_conan(self):
         calls = mock.Mock()
         with mock.patch.object(dev, "ensure_workspace", calls.ensure), \
+                mock.patch.object(dev, "ensure_horizon_runtime_patch", calls.runtime_patch), \
                 mock.patch.object(dev, "conan_install", calls.conan):
             dev.install("RelWithDebInfo", "examples")
         self.assertEqual(calls.mock_calls[:2], [
             mock.call.ensure(dev.REPO_ROOT, HORIZON),
             mock.call.ensure(dev.REPO_ROOT, EDITOR),
         ])
-        self.assertEqual(calls.mock_calls[2][0], "conan")
+        self.assertEqual(calls.mock_calls[2], mock.call.runtime_patch(dev.REPO_ROOT))
+        self.assertEqual(calls.mock_calls[3][0], "conan")
 
     def test_sync_commands_select_only_the_requested_source(self):
         for command, workspace in (("editor-sync", EDITOR), ("horizon-sync", HORIZON)):
@@ -37,6 +39,19 @@ class SourceWorkspaceWorkflowTests(unittest.TestCase):
                 dev.execute(dev.create_parser().parse_args([command]))
                 sync.assert_called_once_with(dev.REPO_ROOT, workspace)
                 install.assert_not_called()
+
+    def test_status_checks_both_live_remotes_without_synchronizing(self):
+        with mock.patch.object(dev, "ensure_git"), mock.patch.object(dev, "run_command"), \
+                mock.patch.object(dev, "inspect_workspace"), \
+                mock.patch.object(dev, "remote_version_advice", return_value=()) as remote, \
+                mock.patch.object(dev, "ensure_workspace") as ensure, \
+                mock.patch.object(dev, "sync_workspace") as sync:
+            dev.execute(dev.create_parser().parse_args(["status"]))
+        self.assertEqual(remote.call_args_list, [
+            mock.call(dev.REPO_ROOT, HORIZON), mock.call(dev.REPO_ROOT, EDITOR),
+        ])
+        ensure.assert_not_called()
+        sync.assert_not_called()
 
 
 class CmakeBuildForwardsEveryTargetTests(unittest.TestCase):

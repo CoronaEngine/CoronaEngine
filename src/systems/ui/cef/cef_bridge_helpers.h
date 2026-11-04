@@ -19,7 +19,7 @@ struct InputEvent {
     double arg4{0.0};  // y (mouse)
 };
 
-// 消费所有积攒的输入事件（由 Python show_log_on_js 每帧调用）
+// 消费所有积攒的输入事件（由 Python update_runtime 每帧消费）
 void enqueue_input_event(InputEvent event);
 
 std::vector<InputEvent> drain_input_events();

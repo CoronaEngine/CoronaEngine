@@ -119,10 +119,6 @@ constexpr std::array<EditorApiParamSpec, 1> kObjectPayloadParam = {{
     param("payload", EditorApiValueType::Object),
 }};
 
-constexpr std::array<EditorApiParamSpec, 1> kAnyPayloadParam = {{
-    param("payload", EditorApiValueType::Any),
-}};
-
 constexpr std::array<EditorApiParamSpec, 2> kEditorApiRegisterCallbackParams = {{
     param("event_name", EditorApiValueType::String),
     param("callback_spec", EditorApiValueType::Object, true),
@@ -130,11 +126,6 @@ constexpr std::array<EditorApiParamSpec, 2> kEditorApiRegisterCallbackParams = {
 
 constexpr std::array<EditorApiParamSpec, 1> kCallbackTokenParam = {{
     param("callback_token", EditorApiValueType::Integer),
-}};
-
-constexpr std::array<EditorApiParamSpec, 2> kAiToolGenerateHintParams = {{
-    param("element_type", EditorApiValueType::String),
-    param("context", EditorApiValueType::Object, true),
 }};
 
 constexpr std::array<EditorApiParamSpec, 2> kMainViewImportResourceFileParams = {{
@@ -530,10 +521,6 @@ constexpr std::array<EditorApiParamSpec, 9> kScratchMouseEventParams = {{
 // count here makes MSVC diagnostics point at the whole initializer when the
 // manifest grows, instead of identifying the actual entry that drifted.
 constexpr auto kEditorApiMethods = std::to_array<EditorApiMethodSpec>({
-    EDITOR_API_METHOD_SCHEMA_WRAPPED(AITool, submit_request, kObjectPayloadParam, "ai.submitRequest", "ai.submit_request", EditorApiValueType::Any),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED(AITool, generate_hint, kAiToolGenerateHintParams, "ai.generateHint", "ai.generate_hint", EditorApiValueType::Any),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED(AITool, read_local_file_as_base64, kPathParam, "ai.readLocalFileAsBase64", "ai.read_local_file_as_base64", EditorApiValueType::Any),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED(AITool, send_message_to_ai_stream, kAnyPayloadParam, "ai.sendMessageToAIStream", "ai.send_message_to_ai_stream", EditorApiValueType::Any),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(CoronaEditor, close_process, kNoParams, "app.closeProcess", "app.close_process", EditorApiValueType::Null),
     EDITOR_API_METHOD_SCHEMA(EditorApi, register_callback, kEditorApiRegisterCallbackParams, EditorApiValueType::Object),
     EDITOR_API_METHOD_SCHEMA(EditorApi, unregister_callback, kCallbackTokenParam, EditorApiValueType::Object),
@@ -619,6 +606,8 @@ constexpr auto kEditorApiMethods = std::to_array<EditorApiMethodSpec>({
     EDITOR_API_METHOD_SCHEMA_WRAPPED(ProjectLauncher, open_project, kOpenProjectParams, "project.openProject", "project.open_project", EditorApiValueType::Object),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(ProjectLauncher, open_project_file, kNoParams, "project.openProjectFile", "project.open_project_file", EditorApiValueType::Object),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(ProjectLauncher, validate_portable_scene, kObjectPayloadParam, "project.validatePortableScene", "project.validate_portable_scene", EditorApiValueType::Object),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED(ProjectSettings, read_project_document, kObjectPayloadParam, "projectSettings.readProjectDocument", "project_settings.read_project_document", EditorApiValueType::Object),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED(ProjectSettings, commit_project_document, kObjectPayloadParam, "projectSettings.commitProjectDocument", "project_settings.commit_project_document", EditorApiValueType::Object),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(ProjectSettings, get_active_project_info, kNoParams, "projectSettings.getActiveProjectInfo", "project_settings.get_active_project_info", EditorApiValueType::Object),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(ProjectSettings, save_active_project_info, kObjectPayloadParam, "projectSettings.saveActiveProjectInfo", "project_settings.save_active_project_info", EditorApiValueType::Object),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(ResourceSearch, focus_actor, kResourceSearchFocusActorParams, "resourceSearch.focusActor", "resource_search.focus_actor", EditorApiValueType::Object),
@@ -643,7 +632,6 @@ constexpr auto kEditorApiMethods = std::to_array<EditorApiMethodSpec>({
     EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, get_vision_render_mode, kSceneToolsCameraOptionalParams, "sceneTools.getVisionRenderMode", "scene_tools.get_vision_render_mode", EditorApiValueType::Object),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, get_vision_denoise, kSceneToolsCameraOptionalParams, "sceneTools.getVisionDenoise", "scene_tools.get_vision_denoise", EditorApiValueType::Object),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, get_vision_accumulation, kSceneToolsCameraOptionalParams, "sceneTools.getVisionAccumulation", "scene_tools.get_vision_accumulation", EditorApiValueType::Object),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, get_frame_timing, kSceneToolsCameraOptionalParams, "sceneTools.getFrameTiming", "scene_tools.get_frame_timing", EditorApiValueType::Object),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, get_vision_stable_planes, kSceneToolsCameraOptionalParams, "sceneTools.getVisionStablePlanes", "scene_tools.get_vision_stable_planes", EditorApiValueType::Object),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, is_vision_available, kNoParams, "sceneTools.isVisionAvailable", "scene_tools.is_vision_available", EditorApiValueType::Object),
     EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, get_scene_snapshot, kSceneNameOptionalParam, "scene.getSnapshot", "scene.get_snapshot", EditorApiValueType::Object, animation_callers()),
@@ -721,8 +709,6 @@ constexpr auto kEditorApiMethods = std::to_array<EditorApiMethodSpec>({
 #undef EDITOR_API_METHOD0_WRAPPED
 
 constexpr auto kEditorApiEvents = std::to_array<EditorApiEventSpec>({
-    {"AI.chunk", EditorApiValueType::String, all_callers(), "events.onAiChunk", "events.on_ai_chunk"},
-    {"Editor.logBatch", EditorApiValueType::Array, all_callers(), "events.onLogBatch", "events.on_log_batch"},
     {"LANChat.event", EditorApiValueType::Object, all_callers(), "events.onLanChatEvent", "events.on_lan_chat_event"},
     {"Network.actorDeleteSyncBroadcastRequested", EditorApiValueType::Object, all_callers(), "events.onNetworkActorDeleteSyncBroadcastRequested", "events.on_network_actor_delete_sync_broadcast_requested"},
     {"Network.actorOwnershipClaimed", EditorApiValueType::Object, all_callers(), "events.onNetworkActorOwnershipClaimed", "events.on_network_actor_ownership_claimed"},

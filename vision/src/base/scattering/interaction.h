@@ -100,6 +100,20 @@ struct StablePlaneHistory {
     uint material_id{InvalidUI32};
     uint valid{};
 };
+// Composed coverage reads only plane zero and whether any branch makes that
+// guide ambiguous. Keep its hit and geometry at their original precision.
+struct CoveragePlaneHistory {
+    TriangleHit hit{};
+    array_float3 virtual_position{};
+    array_float3 virtual_geometric_normal{};
+    array_float3 depth_position{};
+    float2 motion{};
+    uint stable_branch{};
+    uint valid{};
+    uint ambiguous{};
+};
+static_assert(sizeof(CoveragePlaneHistory) == 80u);
+static_assert(alignof(CoveragePlaneHistory) == 16u);
 static_assert(sizeof(StablePlaneHistory) <= 128u);
 struct StablePlaneData {
     SurfaceData surface{};
@@ -127,6 +141,8 @@ OC_STRUCT(vision, StablePlaneHistorySurface, hit, virtual_position, virtual_geom
           approximate, stable_branch) {};
 OC_STRUCT(vision, StablePlaneHistory, surface, motion, depth_position,
           branch_sequence, instance_hash, depth, material_id, valid) {};
+OC_STRUCT(vision, CoveragePlaneHistory, hit, virtual_position, virtual_geometric_normal,
+          depth_position, motion, stable_branch, valid, ambiguous) {};
 OC_STRUCT(vision, StablePlaneData, surface, extension, motion_storage, depth_position,
           branch_sequence, instance_hash, depth, material_id, flags) {
     [[nodiscard]] Float2 motion() const noexcept { return vision::unpack_storage_half2(motion_storage); }
@@ -145,6 +161,18 @@ OC_STRUCT(vision, StablePlaneData, surface, extension, motion_storage, depth_pos
         ret.motion = motion(); ret.depth_position = depth_position;
         ret.branch_sequence = branch_sequence; ret.instance_hash = instance_hash;
         ret.depth = depth; ret.material_id = material_id; ret.valid = valid();
+        return ret;
+    }
+    [[nodiscard]] Var<vision::CoveragePlaneHistory> coverage_history(const Uint &secondary_valid) const noexcept {
+        Var<vision::CoveragePlaneHistory> ret;
+        ret.hit = surface.hit;
+        ret.virtual_position = surface.virtual_position;
+        ret.virtual_geometric_normal = surface.virtual_geometric_normal;
+        ret.depth_position = depth_position;
+        ret.motion = motion(); ret.stable_branch = surface.stable_branch;
+        ret.valid = valid();
+        ret.ambiguous = ocarina::select(secondary_valid != 0u || (valid() != 0u &&
+            (surface.approximate != 0u || surface.hit->is_miss() || surface.hit.inst_id == InvalidUI32)), 1u, 0u);
         return ret;
     }
 };

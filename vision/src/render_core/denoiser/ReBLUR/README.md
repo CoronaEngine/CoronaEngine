@@ -1,28 +1,26 @@
 # REBLUR shader implementation
 
-This plugin provides full-resolution RGB diffuse/specular REBLUR. When built
-with `VISION_REBLUR_NATIVE_NRD`, selecting REBLUR uses the Ocarina C++ EDSL
-translation of NRD 4.14.3 by default. The adapter prepares NRD inputs and remodulates its
-outputs; it does not add receiver/material/path identity rejection to NRD.
+This plugin provides full-resolution RGB diffuse/specular REBLUR using the
+Ocarina C++ EDSL translation of NRD 4.14.3 and the CPU scheduler in this
+repository. The adapter prepares filter inputs and remodulates its
+outputs; it does not add receiver/material/path identity rejection to ReBLUR.
 Material classification is zero, matching RTXPT's preparation pass. Each of the
-three stable-plane denoisers retains its own NRD history.
+three stable-plane denoisers retains its own history.
 
-The earlier 96-bit identity and exact-token shader experiments have been
-removed from the native path. Their DLL override and token shader deployment
-are no longer used. Native mode allocates current guides and NRD's pools,
-without allocating or compiling the legacy custom filter's histories/scratch.
-`REBLUR_NATIVE_NRD=1` explicitly selects the original HLSL validation reference;
-unset or `0` selects the new original-algorithm Ocarina C++ EDSL port.
+The external SDK backend, its HLSL shaders, dependency configuration, deployment
+rules and backend-selection switches have been removed. Building and running
+ReBLUR does not load an external denoiser DLL or require an NRD SDK or NVRHI.
+The EDSL path allocates current guides and its scheduler's pools without
+allocating or compiling the legacy custom filter's histories/scratch.
 It implements the quality, full-resolution RGB diffuse/specular variant, including
 world-space specular Blur/PostBlur, original history repair and surface/virtual
 reprojection. GPU passes use native R8/RG8 UNORM, R16/RGBA16 float, R16/R32 uint,
-R32 float and RGB10A2 textures with hardware clamp sampling. NRD.dll remains the
-CPU settings/constants/resource scheduler; the EDSL path does not dispatch its
-HLSL shaders. Builds without native NRD retain the older custom filter. Existing
-SVGF and SSAT selections are unchanged.
+R32 float and RGB10A2 textures with hardware clamp sampling. CPU settings,
+constants and resource scheduling are compiled into `vision-reblur-scheduler`.
+Existing SVGF and SSAT selections are unchanged.
 
-The same-input replay target is `corona_vision_reblur_replay`. Set
-`REBLUR_REPLAY_BACKEND=native` or `edsl` and use identical
+The EDSL same-input replay target is `corona_vision_reblur_replay`, built from
+`tests/integration/test_vision_reblur_replay.cpp`. Use
 `REBLUR_REPLAY_WIDTH/HEIGHT` (defaults 1280/720). It uploads immutable inputs once,
 runs three independent histories with 64 warmup and 32 measured frames, and
 downloads outputs after measurement. `REBLUR_REPLAY_OUTPUT_DIR` optionally saves
@@ -31,13 +29,18 @@ settings and camera fingerprints before comparing per-pass GPU timings;
 `tools/reblur_compare_outputs.py` compares the saved outputs. A sum of pass queries
 is reported separately from a continuous GPU interval.
 
-`corona_vision_reblur_edsl_tests` checks typed resource behavior and compares eight
-frames across three layers at 1x1, 31x19 and 127x73, including a rotated camera,
-fractional motion and invalid guides. Format-store, matrix and sampler probes
-test the lower-level contracts separately. The numerical tolerance is fixed at
-`0.001 + 0.002 * abs(HLSL)` per component. Compiler floating-point differences can
-cross nearest-tap or history-footprint boundaries; the test reports those as
-failures, rather than treating equal algorithm structure as numerical equivalence.
+`corona_vision_reblur_edsl_tests` checks typed image storage, integer gathers,
+matrix and parameter contracts, and queued resizing. The scheduler tests compare
+against checked-in golden fixtures using `--fixture` or `--digest-fixture`;
+they do not load or capture an external DLL. Packed and conversion replays may
+read existing offline captures without requiring the SDK that produced them.
+
+## Historical validation records
+
+The measurements below include comparisons captured with the removed original
+HLSL reference backend. They document earlier validation and performance work;
+that backend and its SDK-dependent probes are no longer available in this
+checkout. The current test targets and commands are described under Validation.
 
 Validation on 2026-10-22 (RTX 3070 Ti, Vulkan) passes the original stress suite,
 all 72 original small-sequence comparisons plus 72 additional anti-firefly-off
@@ -317,10 +320,10 @@ scattering segments, following the pinned RTXPT convention.
 
 ## Stages and reference
 
-The native backend dispatches the original NRD stage descriptions without
-changing their shader arithmetic, sampling budgets or filtering rules. The
-translation details and historical evaluations below describe the legacy
-custom implementation unless explicitly labeled native NRD.
+The repository-local scheduler supplies the original ReBLUR stage descriptions
+to the EDSL kernels. The translation details and historical evaluations below
+describe the legacy custom implementation unless explicitly labeled as the
+original reference backend.
 
 The stage order is ClassifyAndPack, optional HitDistReconstruction, PrePass,
 TemporalAccumulation, HistoryFix, Blur, PostBlur and TemporalStabilization.
@@ -333,8 +336,8 @@ history. The screen-space spatial sampling variant is used.
 
 The algorithm reference is NVIDIA NRD 4.14.3 at
 `16a64cd4daebfb153590623f0348b36007284ba3`, as included by RTXPT at
-`21ef566cb37ef832438375fb3b5bd0b170e52f7c`. Retained source notices and
-[LICENSE-NRD.txt](LICENSE-NRD.txt) accompany the translation. This is an engine
+`21ef566cb37ef832438375fb3b5bd0b170e52f7c`. The upstream license in
+[LICENSE-NRD.txt](LICENSE-NRD.txt) accompanies the translation. This is an engine
 shader implementation, not binary or bitwise compatibility with the NRD SDK.
 
 ## Settings
@@ -373,12 +376,11 @@ REBLUR's separate filtered lobe buffers; the evaluation below reads final PFMs.
 
 ## Validation
 
-The native-only test mode is `REBLUR_TEST_BACKEND=native`. It checks guide-only
-allocation, switching storage modes, constants, independent layers, resize,
-invalid-pixel passthrough, HDR and finite outputs. It does not impose the removed
-full 96-bit identity contract on NRD. Numerical tolerances are unchanged; the
-previously observed constant-signal precision failure is reported separately
-from performance results, and later cases still run after an assertion fails.
+All test targets use repository-local implementations. Guide-only allocation,
+storage modes, constants, independent layers, resizing, invalid-pixel passthrough,
+HDR and finite-output checks remain available without an external reference
+backend. Historical HLSL comparisons above are retained as evidence rather than
+as a currently selectable test mode.
 
 `VisionReblurTests` executes the actual filter shaders and imported PT/ReSTIR
 scenes. It covers color and distance packing, colored lobe ownership, constant

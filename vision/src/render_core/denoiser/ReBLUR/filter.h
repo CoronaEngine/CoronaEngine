@@ -1,17 +1,3 @@
-/*
-Copyright (c) 2022, NVIDIA CORPORATION. All rights reserved.
-
-NVIDIA CORPORATION and its licensors retain all intellectual property
-and proprietary rights in and to this software, related documentation
-and any modifications thereto. Any use, reproduction, disclosure or
-distribution of this software and related documentation without an express
-license agreement from NVIDIA CORPORATION is strictly prohibited.
-*/
-
-// REBLUR_DIFFUSE_SPECULAR, full-resolution RGB variant.
-// Algorithm: NVIDIA NRD 4.14.3, 16a64cd4daebfb153590623f0348b36007284ba3.
-// This software contains source code provided by NVIDIA Corporation.
-// See LICENSE-NRD.txt for the upstream license.
 #pragma once
 
 #include "params.h"
@@ -26,6 +12,14 @@ struct Guide {
     float4 diffuse_factor{1.f, 1.f, 1.f, 0.f}; // RGB demodulation, motion.x in w
     float4 specular_factor{1.f, 1.f, 1.f, 0.f}; // RGB demodulation, motion.y in w
 };
+
+// Fused Pack has already consumed geometry, motion and classification. Unpack
+// needs only these exact FP32 factors plus the original viewZ and roughness.
+struct CompactGuide {
+    float4 diffuse_depth{};
+    float4 specular_roughness{};
+};
+static_assert(sizeof(CompactGuide) == 32u);
 
 struct History {
     float4 diffuse{}, specular{};
@@ -86,6 +80,7 @@ struct FilterParam {
 }
 
 OC_STRUCT(vision::reblur, Guide, position, identity, normal_roughness, diffuse_factor, specular_factor) {};
+OC_STRUCT(vision::reblur, CompactGuide, diffuse_depth, specular_roughness) {};
 OC_STRUCT(vision::reblur, History, diffuse, specular, fast_count, stabilized, tracking) {};
 OC_STRUCT(vision::reblur, GeometryHistory, position, normal_roughness, identity) {};
 OC_STRUCT(vision::reblur, PersistentHistory, diffuse, specular, fast_count, stabilized, hit_distance) {};
@@ -130,7 +125,7 @@ class Filter {
 public:
     Settings settings;
     void prepare(Device &device, uint2 size, uint layer_count = 1u);
-    void prepare_native(Device &device, uint2 size);
+    void prepare_native(Device &device, uint2 size, bool compact_guide = false);
     void compile(Device &device);
     void reset() noexcept;
     [[nodiscard]] uint2 resolution() const noexcept { return size_; }

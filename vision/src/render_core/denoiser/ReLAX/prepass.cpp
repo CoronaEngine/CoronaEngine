@@ -1,10 +1,3 @@
-/*
-Copyright (c) 2022, NVIDIA CORPORATION. All rights reserved.
-This software contains source code provided by NVIDIA Corporation.
-See LICENSE-NRD.txt.
-*/
-// NRD 4.14.3 RELAX_HitDistReconstruction.hlsli, RELAX_PrePass.hlsli,
-// Common.hlsli, Poisson.hlsli. Checkerboard OFF; equivalent buffer taps.
 #include "filter.h"
 #include "utils.h"
 

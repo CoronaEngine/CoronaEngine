@@ -1,5 +1,5 @@
 #include "render_core/denoiser/ReBLUR/reblur.h"
-#ifdef VISION_REBLUR_NATIVE_NRD
+#ifdef VISION_REBLUR_EDSL
 #include "render_core/denoiser/ReBLUR/edsl_nrd.h"
 #endif
 #include "render_core/denoiser/ReBLUR/utils.h"
@@ -9,6 +9,7 @@
 #include "base/integral/integrator.h"
 #include "base/mgr/pipeline.h"
 #include "base/sampler.h"
+#include "base/sensor/sensor.h"
 #include <array>
 #include <cmath>
 #include <filesystem>
@@ -22,19 +23,20 @@
 #include <limits>
 #include <memory>
 #include <string>
+#include <optional>
+#include <sstream>
+#include <unordered_map>
+#include "reblur_guide_fusion.h"
+#include "reblur_precise_lobes_probe.h"
+#include "reblur_coverage_history_probe.h"
+#ifdef VISION_REBLUR_EDSL
+#include "reblur_unpack_compose_probe.h"
+#endif
 
 namespace {
 using namespace vision;
 void expect(bool condition, const char *message) {
     if (!condition) throw std::runtime_error(message);
-}
-
-void select_native_backend(const char *value) {
-#ifdef _WIN32
-    expect(_putenv_s("REBLUR_NATIVE_NRD", value) == 0, "set native backend environment");
-#else
-    expect(setenv("REBLUR_NATIVE_NRD", value, 1) == 0, "set native backend environment");
-#endif
 }
 
 ocarina::HostByteBuffer pack_guides(const reblur::Guide *guides, size_t count) {
@@ -150,227 +152,6 @@ void check_helpers(Device &device, Stream &stream) {
     std::cout << "PASS: reference packing, distance, motion and accumulation helpers\n";
 }
 
-#ifdef VISION_REBLUR_NATIVE_NRD
-uint check_native_reblur(Device &device, Stream &stream) {
-    const auto native_directory = device.context()->runtime_directory() / "reblur-native";
-    reblur::NativeReblur native(native_directory);
-    reblur::EdslReblur implementation(device);
-    // Original NRD uses compact material IDs; receiver and path IDs do not
-    // promise strict spatial or temporal history rejection.
-    uint failures = 0u;
-    auto finite = [](const float4 &value) {
-        return std::isfinite(value.x) && std::isfinite(value.y) &&
-               std::isfinite(value.z) && std::isfinite(value.w);
-    };
-    uint2 diagnostic_size{};
-    uint diagnostic_frame{}, diagnostic_layer{};
-    // Report every scenario even if another scenario fails its reference comparison.
-    auto check_case = [&](const char *name, auto &&check) {
-        try {
-            check();
-            std::cout << "PASS: " << name << ", " << diagnostic_size.x << 'x' << diagnostic_size.y << '\n';
-        } catch (const std::exception &error) {
-            ++failures;
-            std::cerr << "FAIL: " << name << ", " << diagnostic_size.x << 'x' << diagnostic_size.y
-                      << ": " << error.what() << '\n';
-        }
-    };
-    uint mismatch_reports = 0u;
-    auto near_reference = [&](const float4 &value, const float4 &reference, const char *message, uint pixel) {
-        bool equivalent = true;
-        for (uint c = 0u; c < 4u; ++c) {
-            const float tolerance = .001f + .002f * std::abs(reference[c]);
-            const bool matched = std::isfinite(value[c]) && std::isfinite(reference[c]) &&
-                                 std::abs(value[c] - reference[c]) <= tolerance;
-            equivalent &= matched;
-            if (!matched && mismatch_reports++ < 8u) {
-                std::cerr.precision(9);
-                std::cerr << "NRD reference mismatch: " << message << ", size=" << diagnostic_size.x << 'x' << diagnostic_size.y
-                          << ", frame=" << diagnostic_frame << ", layer=" << diagnostic_layer
-                          << ", pixel=" << pixel << " (" << pixel % diagnostic_size.x << ',' << pixel / diagnostic_size.x << ')'
-                          << ", component=" << c << ", actual=" << value[c] << ", reference=" << reference[c]
-                          << ", tolerance=" << tolerance << '\n';
-            }
-        }
-        return equivalent;
-    };
-    for (const uint2 size : {make_uint2(1u), make_uint2(127u, 73u)}) {
-        diagnostic_size = size;
-        const uint n = size.x * size.y;
-        reblur::Filter filter;
-        filter.prepare_native(device, size);
-        check_case("native guide storage without custom history", [&] {
-            expect(filter.guides().size() == size_t(n) * sizeof(reblur::Guide),
-                   "native adapter must allocate the current guide buffer");
-            expect(filter.history().size() == 0u,
-                   "native adapter must not allocate custom filter history");
-            reblur::Filter switched;
-            switched.prepare_native(device, size);
-            switched.prepare(device, size, 3u);
-            expect(switched.history().size() == size_t(n) * sizeof(reblur::TemporalData),
-                   "switching to the custom filter at the same size must restore its history");
-            switched.prepare_native(device, size);
-            expect(switched.history().size() == 0u,
-                   "switching back to native must release custom history");
-        });
-        auto input_d = device.create_buffer<float4>(n), input_s = device.create_buffer<float4>(n);
-        auto output_d = device.create_buffer<float4>(n), output_s = device.create_buffer<float4>(n);
-        auto edsl_output_d = device.create_buffer<float4>(n), edsl_output_s = device.create_buffer<float4>(n);
-        std::vector<reblur::Guide> guides(n);
-        std::vector<float4> d(n), s(n), actual_d(n), actual_s(n), edsl_d(n), edsl_s(n);
-        const float aspect = float(size.x) / float(size.y), view_z = 10.f;
-        reblur::NativeCameraParams camera;
-        camera.world_to_view = camera.world_to_view_prev =
-            {1.f, 0.f, 0.f, 0.f, 0.f, 1.f, 0.f, 0.f,
-             0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 0.f, 1.f};
-        const float near_z = .1f, far_z = 1000.f, depth_scale = far_z / (far_z - near_z);
-        // Column-major, +Z left-handed perspective with a 90-degree vertical FOV.
-        camera.view_to_clip = camera.view_to_clip_prev =
-            {1.f / aspect, 0.f, 0.f, 0.f, 0.f, 1.f, 0.f, 0.f,
-             0.f, 0.f, depth_scale, 1.f, 0.f, 0.f, -near_z * depth_scale, 0.f};
-        camera.frame_delta_ms = 16.67f;
-        auto reset_guides = [&] {
-            for (uint y = 0u; y < size.y; ++y) for (uint x = 0u; x < size.x; ++x) {
-                auto &g = guides[y * size.x + x];
-                g = reblur::Guide{};
-                g.position = make_float4((2.f * (float(x) + .5f) / float(size.x) - 1.f) * aspect * view_z,
-                                        (1.f - 2.f * (float(y) + .5f) / float(size.y)) * view_z, view_z, view_z);
-                g.normal_roughness = make_float4(0.f, 0.f, -1.f, .5f);
-                g.identity = make_uint4(1u);
-            }
-        };
-        reset_guides();
-        reblur::FilterParam p;
-        p.raw_diffuse = input_d.descriptor(); p.raw_specular = input_s.descriptor();
-        p.output_diffuse = output_d.descriptor(); p.output_specular = output_s.descriptor();
-        p.unproject = 2.f / float(size.y);
-        auto run = [&](uint frame, uint layer = 0u, bool history_valid = true) {
-            diagnostic_frame = frame; diagnostic_layer = layer;
-            p.frame = frame; p.history_valid = history_valid ? 1u : 0u;
-            const auto parameters = filter.native_parameters(p, layer);
-            const auto packed = pack_guides(guides.data(), n);
-            stream << filter.guides().upload(packed.data()) << input_d.upload(d.data()) << input_s.upload(s.data())
-                   << native.dispatch(parameters, camera, layer, filter.settings, parameters.history_valid == 0u)
-                   << output_d.download(actual_d.data()) << output_s.download(actual_s.data())
-                   << synchronize() << commit();
-            auto edsl_parameters = parameters;
-            edsl_parameters.output_diffuse = edsl_output_d.descriptor();
-            edsl_parameters.output_specular = edsl_output_s.descriptor();
-            stream << implementation.dispatch(edsl_parameters, camera, layer, filter.settings, parameters.history_valid == 0u)
-                   << edsl_output_d.download(edsl_d.data()) << edsl_output_s.download(edsl_s.data())
-                   << synchronize() << commit();
-            mismatch_reports = 0u;
-            bool equivalent = true;
-            for (uint i = 0u; i < n; ++i) {
-                const bool valid = (guides[i].identity.w & 1u) != 0u && std::isfinite(guides[i].position.w) &&
-                                   guides[i].position.w > 0.f && guides[i].position.w < camera.denoising_range;
-                if (!valid) continue;
-                equivalent &= near_reference(edsl_d[i], actual_d[i], "EDSL diffuse vs original Native", i);
-                equivalent &= near_reference(edsl_s[i], actual_s[i], "EDSL specular vs original Native", i);
-            }
-            expect(equivalent, "all valid EDSL components must match original Native NRD");
-            return parameters;
-        };
-        check_case("native NRD constants and three independent layers", [&] {
-            std::array<std::unique_ptr<reblur::NativeReblur>, 3> isolated;
-            for (auto &control : isolated) control = std::make_unique<reblur::NativeReblur>(native_directory);
-            auto isolated_output_d = device.create_buffer<float4>(n), isolated_output_s = device.create_buffer<float4>(n);
-            std::vector<float4> isolated_d(n), isolated_s(n);
-            // Compare interleaved layers with separate original-NRD instances,
-            // each receiving the same eight frames on its own layer zero.
-            for (uint frame = 0u; frame < 8u; ++frame) for (uint layer = 0u; layer < 3u; ++layer) {
-                const float k = float(layer + 1u);
-                const float4 expected_d = make_float4(.2f * k, .6f * k, 1.f * k, 2.f);
-                const float4 expected_s = make_float4(1.f * k, .3f * k, .1f * k, 2.f);
-                std::fill(d.begin(), d.end(), expected_d); std::fill(s.begin(), s.end(), expected_s);
-                auto isolated_parameters = run(frame, layer);
-                isolated_parameters.output_diffuse = isolated_output_d.descriptor();
-                isolated_parameters.output_specular = isolated_output_s.descriptor();
-                stream << isolated[layer]->dispatch(isolated_parameters, camera, 0u, filter.settings,
-                                                     isolated_parameters.history_valid == 0u)
-                       << isolated_output_d.download(isolated_d.data()) << isolated_output_s.download(isolated_s.data())
-                       << synchronize() << commit();
-                mismatch_reports = 0u;
-                bool independent = true;
-                for (uint i = 0u; i < n; ++i) {
-                    independent &= near_reference(actual_d[i], isolated_d[i], "interleaved vs isolated Native diffuse", i);
-                    independent &= near_reference(actual_s[i], isolated_s[i], "interleaved vs isolated Native specular", i);
-                }
-                expect(independent, "interleaved Native layers must match independent original-NRD instances");
-            }
-        });
-
-        if (size.x > 1u) {
-            check_case("native adapter invalid passthrough and finite reactivation", [&] {
-                reset_guides(); filter.reset();
-                auto hole = [&](uint i) {
-                    const uint x = i % size.x, y = i / size.x;
-                    return (x < 16u && y < 16u) || (x % 7u == 0u && y % 5u == 0u) ||
-                           x + 1u == size.x || y + 1u == size.y;
-                };
-                std::fill(d.begin(), d.end(), make_float4(4.f, 4.f, 4.f, 2.f)); s = d;
-                for (uint frame = 0u; frame < 8u; ++frame) run(frame);
-                for (uint i = 0u; i < n; ++i) if (hole(i)) {
-                    if (i % 2u == 0u) guides[i].identity.w = 0u;
-                    else guides[i].position.w = 0.f;
-                    d[i] = make_float4(-0.f, .25f, .75f, 7.f);
-                    s[i] = make_float4(1.5f, .125f, .5f, 9.f);
-                }
-                run(8u);
-                for (uint i = 0u; i < n; ++i) {
-                    expect(finite(actual_d[i]) && finite(actual_s[i]) && finite(edsl_d[i]) && finite(edsl_s[i]),
-                           "Native and EDSL sparse partial tiles must remain finite");
-                    // Raw passthrough is the Corona adapter's invalid-pixel contract.
-                    if (hole(i)) expect(std::memcmp(&actual_d[i], &d[i], sizeof(float4)) == 0 &&
-                                        std::memcmp(&actual_s[i], &s[i], sizeof(float4)) == 0 &&
-                                        std::memcmp(&edsl_d[i], &d[i], sizeof(float4)) == 0 &&
-                                        std::memcmp(&edsl_s[i], &s[i], sizeof(float4)) == 0,
-                                        "Native and EDSL invalid pixels must preserve all raw signal bits");
-                }
-                for (uint i = 0u; i < n; ++i) if (hole(i)) {
-                    guides[i].identity.w = 1u; guides[i].position.w = view_z;
-                    d[i] = s[i] = make_float4(.25f, .25f, .25f, 2.f);
-                }
-                run(9u);
-                // NRD can spatially mix valid neighbors into reappearing pixels.
-                for (uint i = 0u; i < n; ++i) expect(finite(actual_d[i]) && finite(actual_s[i]) &&
-                                                   finite(edsl_d[i]) && finite(edsl_s[i]),
-                                                   "Native and EDSL reappearing pixels must produce finite signals");
-            });
-        }
-
-        check_case("native HDR and signed chroma", [&] {
-            for (const float4 color : {make_float4(50000.f, 10000.f, 30000.f, 2.f),
-                                       make_float4(0.f, 1000.f, 40000.f, 2.f),
-                                       make_float4(65504.f, 65504.f, 65504.f, 2.f)}) {
-                reset_guides(); filter.reset();
-                std::fill(d.begin(), d.end(), color); s = d;
-                for (uint frame = 0u; frame < 8u; ++frame) {
-                    run(frame);
-                    // The original HLSL output is the HDR/signed-chroma golden;
-                    // NRD's half-precision histories need not return the raw color.
-                }
-            }
-        });
-        check_case("native nonfinite input sanitization", [&] {
-            reset_guides(); filter.reset();
-            const float nan = std::numeric_limits<float>::quiet_NaN(), inf = std::numeric_limits<float>::infinity();
-            for (uint i = 0u; i < n; ++i) {
-                d[i] = i % 2u == 0u ? make_float4(nan, 1.f, 2.f, inf) : make_float4(1.f, inf, 2.f, nan);
-                s[i] = i % 2u == 0u ? make_float4(1.f, 2.f, inf, nan) : make_float4(nan, 1.f, 2.f, inf);
-            }
-            for (uint frame = 0u; frame < 2u; ++frame) {
-                run(frame);
-                for (uint i = 0u; i < n; ++i) expect(finite(actual_d[i]) && finite(actual_s[i]) &&
-                                                   finite(edsl_d[i]) && finite(edsl_s[i]),
-                                                   "Native and EDSL valid nonfinite input must not poison filtered outputs");
-            }
-        });
-    }
-    std::cout << "Native NRD failing cases: " << failures << '\n';
-    return failures;
-}
-#endif
 
 void check_storage_precision(Device &device, Stream &stream) {
     reblur::Filter filter;
@@ -909,6 +690,276 @@ void check_compound_material(Pipeline &pipeline) {
     std::cout << "PASS: smooth compound guide support and directional material factors\n";
 }
 
+void check_total_radiance_coverage(Pipeline &pipeline) {
+    // ReSTIR's lobe composition writes the complete signal to direct and zero
+    // to indirect. Compare its explicit contract with the existing dual-channel
+    // composed-coverage path, including motion and RT/PT switches.
+    Kernel capture_coverage = [](BufferVar<StablePlaneData> planes, BufferVar<CoveragePlaneHistory> history) {
+        Uint i = dispatch_id(), count = dispatch_dim().x * dispatch_dim().y;
+        Uint secondary_valid = 0u;
+        for (uint layer = 1u; layer < StablePlaneCount; ++layer) secondary_valid |= planes.read(layer * count + i)->valid();
+        history.write(i, planes.read(i)->coverage_history(secondary_valid));
+    };
+    auto capture = pipeline.device().compile(capture_coverage, "test-coverage-history-capture");
+    auto indirect_bytes = [] {
+        const char *path = std::getenv("CORONA_GPU_ALLOCATION_TRACE");
+        if (!path || !*path) return std::optional<size_t>{};
+        std::ifstream trace(path);
+        expect(bool(trace), "coverage allocation trace must be readable");
+        std::unordered_map<std::string, size_t> live;
+        std::string line; std::getline(trace, line);
+        while (std::getline(trace, line)) {
+            std::istringstream record(line); std::vector<std::string> fields;
+            for (std::string field; std::getline(record, field, '\t');) fields.push_back(field);
+            if (fields.size() < 7u || fields[2] != "buffer") continue;
+            if (fields[1] == "free") live.erase(fields[3]);
+            else if (fields[1] == "alloc" &&
+                (fields[5] == "SVGF::resolve_indirect" || fields[5] == "SVGF::resolve_indirect2"))
+                live[fields[3]] = std::stoull(fields[6]);
+        }
+        size_t bytes = 0u; for (const auto &[handle, size] : live) bytes += size;
+        return std::optional<size_t>{bytes};
+    };
+    DenoiserDesc desc{"svgf"};
+    desc.set_value("coverage_only", true);
+    auto coverage = Node::create_shared<Denoiser>(desc);
+    const auto before = indirect_bytes();
+    coverage->prepare();
+    if (before) expect(indirect_bytes() == before,
+        "coverage-only preparation must defer unused indirect history until PT requests it");
+    expect(!coverage->needs_stable_plane_history(0u), "first coverage frame must not request unused previous stable planes");
+    coverage->compile(); coverage->set_enabled(true);
+    auto reference = Node::create_shared<Denoiser>(desc);
+    reference->prepare(); reference->compile(); reference->set_enabled(true);
+    std::vector<TriangleHit> visible(pipeline.pixel_num());
+    pipeline.stream() << pipeline.frame_buffer()->cur_visibility_buffer_view(pipeline.frame_index() - 1u).download(visible.data())
+                      << synchronize() << commit();
+    const auto hit = visible[visible.size() / 2u + pipeline.resolution().x / 2u];
+    expect(hit.inst_id != InvalidUI32, "coverage comparison needs a visible receiver");
+    const auto eye = pipeline.scene().sensor()->position();
+    const auto original_yaw = pipeline.scene().sensor()->yaw();
+    for (const auto size : {make_uint2(16u, 16u), make_uint2(13u, 9u), make_uint2(17u, 9u), make_uint2(33u, 17u), make_uint2(1u, 1u)}) for (bool composed : {false, true}) {
+        const uint count = size.x * size.y;
+        coverage->update_resolution(size); reference->update_resolution(size);
+        auto d = pipeline.device().create_buffer<RadType4>(count, "coverage_total_input");
+        auto s = pipeline.device().create_buffer<RadType4>(count, "coverage_zero_input");
+        auto rd = pipeline.device().create_buffer<RadType4>(count, "coverage_reference_total");
+        auto rs = pipeline.device().create_buffer<RadType4>(count, "coverage_reference_zero");
+        auto visibility = pipeline.device().create_buffer<TriangleHit>(count, "coverage_total_visibility");
+        auto motion = pipeline.device().create_buffer<float2>(count, "coverage_total_motion");
+        auto planes = pipeline.device().create_buffer<StablePlaneData>(count * StablePlaneCount, "coverage_total_planes");
+        auto history = pipeline.device().create_buffer<StablePlaneHistory>(count * StablePlaneCount, "coverage_total_plane_history");
+        auto compact_history = pipeline.device().create_buffer<CoveragePlaneHistory>(count, "coverage_compact_plane_history");
+        auto reference_history = pipeline.device().create_buffer<StablePlaneHistory>(count * StablePlaneCount, "coverage_reference_plane_history");
+        auto missing_history = pipeline.device().create_buffer<StablePlaneHistory>(count * StablePlaneCount, "coverage_missing_plane_history");
+        std::vector<TriangleHit> geometry(count, hit);
+        std::vector<StablePlaneData> current_planes(count * StablePlaneCount);
+        std::vector<StablePlaneHistory> previous_planes(count * StablePlaneCount);
+        std::vector<CoveragePlaneHistory> previous_coverage(count);
+        std::vector<CoveragePlaneHistory> captured_coverage(count);
+        std::vector<float2> offsets(count, make_float2(-.25f, 0.f));
+        std::vector<RadType4> direct(count), indirect(count), actual(count), actual_s(count), expected(count), expected_s(count);
+        for (uint i = 0u; i < count; ++i) if (size.x != 33u && i % size.x > size.x / 2u) geometry[i].inst_id = InvalidUI32;
+        pipeline.stream() << visibility.upload(geometry.data()) << motion.upload(offsets.data())
+                          << history.upload(previous_planes.data()) << missing_history.upload(previous_planes.data()) << synchronize() << commit();
+        SP<Denoiser> missing_copy;
+        if (composed && size.x == 16u) {
+            missing_copy = Node::create_shared<Denoiser>(desc);
+            missing_copy->prepare(); missing_copy->compile(); missing_copy->set_enabled(true);
+        }
+        RealTimeDenoiseInput input;
+        input.resolution = size; input.composed_coverage = composed;
+        input.coverage_planes = planes.view(); input.prev_coverage_planes = history.view();
+        input.prev_coverage_history = compact_history.view();
+        input.visibility = input.prev_visibility = visibility.view(); input.motion_vec = motion.view();
+        input.camera_pos = input.prev_camera_pos = {eye.x, eye.y, eye.z};
+        bool previous_pt = false;
+        for (uint frame = 0u; frame != 10u; ++frame) {
+            const bool pt = frame == 6u || frame == 7u;
+            if (pt != previous_pt) {
+                // A fresh dual-channel reference represents the invalidation at
+                // a renderer switch; the adapter must reset its own channel state.
+                reference->set_enabled(false); reference->set_enabled(true);
+            }
+            input.frame_index = frame;
+            input.channel_kind = pt ? RealTimeDenoiseInput::ChannelKind::DiffuseSpecular
+                                    : RealTimeDenoiseInput::ChannelKind::DirectIndirect;
+            input.total_radiance_coverage = !pt;
+            for (uint i = 0u; i < count; ++i) {
+                const float v = ((i + frame) & 1u) ? .8f : .2f;
+                direct[i] = RadType4{v, v * .5f, 1.f - v, 1.f};
+                indirect[i] = pt ? RadType4{.1f + v, v, .4f, 1.f} : RadType4{0.f, 0.f, 0.f, 1.f};
+                const uint x = i % size.x, y = i / size.x;
+                for (uint layer = 0u; layer < StablePlaneCount; ++layer) {
+                    auto &plane = current_planes[layer * count + i]; plane = {};
+                    if (geometry[i].inst_id == InvalidUI32 || layer == 2u ||
+                        (layer == 1u && !(x >= size.x / 4u && x <= size.x / 2u && y < size.y / 2u))) continue;
+                    plane.set_valid(1u); plane.set_motion(make_float2(-.25f, 0.f));
+                    plane.branch_sequence = 5u + (x / 3u) % 2u;
+                    plane.instance_hash = 37u + (y / 2u) % 2u;
+                    plane.material_id = 7u + (x / 3u) % 2u; plane.depth = (x / 2u) % 3u;
+                    plane.surface.hit = hit; plane.surface.is_replaced = true;
+                    plane.surface.stable_branch = layer == 0u ? 3u : 7u;
+                    const auto position = make_float3(.5f + float(x) * .004f + float(frame & 1u) * .005f,
+                        float(y) * .004f, -1.f - float(frame % 3u) * .001f);
+                    const auto normal = normalize(make_float3(float((x / 4u) & 1u) * .05f, float((y / 3u) & 1u) * .04f, 1.f));
+                    plane.surface.virtual_position = {position.x, position.y, position.z};
+                    plane.surface.virtual_normal = plane.surface.virtual_geometric_normal = {normal.x, normal.y, normal.z};
+                    plane.depth_position = {position.x, position.y, position.z};
+                }
+            }
+            if (size.x == 17u) {
+                for (uint i = 0u; i < count; ++i) {
+                    const uint x = i % size.x;
+                    auto &base = current_planes[i];
+                    base.set_motion(make_float2(-.125f * float(x + 1u), .0625f));
+                    if (x == 1u) {
+                        base.set_valid(0u);
+                        base.surface.virtual_position = {std::numeric_limits<float>::quiet_NaN(), 0.f, 0.f};
+                    }
+                    if (x == 2u) base.surface.approximate = 1u;
+                    if (x == 3u) base.surface.hit.inst_id = InvalidUI32;
+                    if (x == 6u) base.surface.stable_branch = InvalidUI32;
+                    if (x == 9u) {
+                        // A valid exact virtual endpoint may replace primary sky.
+                        base.set_valid(1u); base.surface.hit = hit; base.surface.stable_branch = 3u;
+                        base.surface.virtual_position = {.5f, .01f * float(i / size.x), -1.f};
+                        base.surface.virtual_geometric_normal = {0.f, 0.f, 1.f};
+                    }
+                    // Composed coverage uses the virtual position for depth,
+                    // including when stored path depth differs substantially.
+                    base.depth_position = {20.f, -30.f, 50.f};
+                }
+            }
+            if (size.x == 33u) {
+                // Primary coverage is identical everywhere and two valid planes
+                // make it ambiguous. Only the third plane's cached edge votes
+                // can detect these boundaries, including tile halos and padding.
+                for (uint layer = 0u; layer < StablePlaneCount; ++layer) for (uint i = 0u; i < count; ++i) {
+                    const uint x = i % size.x, y = i / size.x;
+                    auto &plane = current_planes[layer * count + i]; plane = {};
+                    plane.set_valid(1u); plane.set_motion(make_float2(-.25f, 0.f));
+                    plane.branch_sequence = 5u; plane.instance_hash = 37u; plane.material_id = 7u;
+                    plane.surface.hit = hit; plane.surface.is_replaced = true; plane.surface.stable_branch = 3u;
+                    plane.surface.virtual_position = {.5f + float(x) * .004f, float(y) * .004f, -1.f};
+                    plane.surface.virtual_normal = plane.surface.virtual_geometric_normal = {0.f, 0.f, 1.f};
+                    plane.depth_position = plane.surface.virtual_position;
+                    if (layer != 2u) continue;
+                    if (x >= 16u) {
+                        if (y < 4u) ++plane.branch_sequence;
+                        else if (y < 8u) ++plane.instance_hash;
+                        else if (y < 12u) ++plane.depth;
+                        else if (y < 16u) ++plane.material_id;
+                        else plane.surface.hit.inst_id = InvalidUI32;
+                    }
+                    if (x == 15u && y == 7u) {
+                        plane.set_valid(0u);
+                        // Invalid records must not expose stale geometry.
+                        plane.surface.virtual_geometric_normal = {std::numeric_limits<float>::quiet_NaN(), 0.f, 0.f};
+                    }
+                    if (x >= 31u && y < 4u) plane.surface.virtual_position[2] += .5f;
+                    if (x >= 31u && y >= 4u && y < 8u) plane.surface.virtual_geometric_normal = {0.f, 0.f, -1.f};
+                    if (x >= 31u && y >= 8u && y < 12u) plane.depth_position[2] -= 2.f;
+                }
+            }
+            const bool moving = frame == 2u || frame == 3u || frame == 7u || frame == 9u;
+            if (moving) {
+                pipeline.scene().sensor()->set_yaw(original_yaw + float(frame) * .1f);
+                pipeline.scene().sensor()->update_device_data();
+            }
+            const bool copy_history = coverage->needs_stable_plane_history(frame);
+            expect(copy_history == moving,
+                "coverage must request previous stable planes exactly for continuous moving history");
+            for (uint i = 0u; i < count; ++i) {
+                const auto &base = previous_planes[i]; auto &compact = previous_coverage[i];
+                compact.hit = base.surface.hit; compact.virtual_position = base.surface.virtual_position;
+                compact.virtual_geometric_normal = base.surface.virtual_geometric_normal;
+                compact.depth_position = base.depth_position; compact.motion = base.motion;
+                compact.stable_branch = base.surface.stable_branch; compact.valid = base.valid;
+                compact.ambiguous = base.valid != 0u && (base.surface.approximate != 0u || base.surface.hit.is_miss() ||
+                    base.surface.hit.inst_id == InvalidUI32);
+                for (uint layer = 1u; layer < StablePlaneCount; ++layer)
+                    compact.ambiguous |= previous_planes[layer * count + i].valid != 0u;
+            }
+            // Mirror the production gate: the reference always snapshots the
+            // prior valid planes; only the candidate conditionally copies them.
+            if (copy_history) {
+                // Capture the GPU's previous current records before overwriting
+                // them, using the same helper as StablePlanes-SaveCoverageHistory.
+                pipeline.stream() << capture(planes, compact_history).dispatch(size)
+                                  << compact_history.download(captured_coverage.data()) << synchronize() << commit();
+                for (uint i = 0u; i < count; ++i) {
+                    const auto &actual = captured_coverage[i], &expected = previous_coverage[i];
+                    expect(actual.valid == expected.valid && actual.ambiguous == expected.ambiguous,
+                        "GPU compact history must preserve validity and aggregate secondary ambiguity");
+                    if (expected.valid == 0u || expected.ambiguous != 0u) continue;
+                    expect(std::memcmp(&actual.hit, &expected.hit, sizeof(TriangleHit)) == 0 &&
+                        actual.virtual_position == expected.virtual_position &&
+                        actual.virtual_geometric_normal == expected.virtual_geometric_normal &&
+                        actual.depth_position == expected.depth_position && all(actual.motion == expected.motion) &&
+                        actual.stable_branch == expected.stable_branch,
+                        "GPU compact history must preserve full-precision unambiguous plane-zero geometry and motion");
+                }
+                pipeline.stream() << history.upload(previous_planes.data());
+            }
+            pipeline.stream() << planes.upload(current_planes.data()) << reference_history.upload(previous_planes.data());
+            auto reference_input = input; reference_input.total_radiance_coverage = false;
+            reference_input.prev_coverage_history = {};
+            reference_input.prev_coverage_planes = reference_history.view();
+            reference_input.direct = rd.view(); reference_input.indirect = rs.view();
+            pipeline.stream() << rd.upload(direct.data()) << rs.upload(indirect.data()) << reference->dispatch(reference_input)
+                              << rd.download(expected.data()) << rs.download(expected_s.data()) << synchronize() << commit();
+            if (missing_copy && frame <= 2u) {
+                auto missing_input = reference_input; missing_input.prev_coverage_planes = missing_history.view();
+                std::vector<RadType4> missing(count);
+                pipeline.stream() << rd.upload(direct.data()) << rs.upload(indirect.data()) << missing_copy->dispatch(missing_input)
+                                  << rd.download(missing.data()) << synchronize() << commit();
+                if (frame == 2u) {
+                    bool differs = false;
+                    for (uint i = 0u; i < count; ++i) for (uint c = 0u; c < 3u; ++c)
+                        differs |= std::abs(float(missing[i][c]) - float(expected[i][c])) > 1e-5f;
+                    expect(differs, "valid moving virtual coverage must visibly exercise previous-plane reads");
+                }
+            }
+            const auto preceding_indirect = indirect_bytes();
+            input.direct = d.view(); input.indirect = s.view();
+            pipeline.stream() << d.upload(direct.data()) << s.upload(indirect.data()) << coverage->dispatch(input)
+                              << d.download(actual.data()) << s.download(actual_s.data()) << synchronize() << commit();
+            for (uint i = 0u; i < count; ++i) for (uint c = 0u; c < 3u; ++c) {
+                expect(std::isfinite(float(actual[i][c])) && actual[i][c] == expected[i][c],
+                       "total-radiance coverage must exactly preserve dual-channel direct RGB");
+                expect(std::isfinite(float(actual_s[i][c])) && actual_s[i][c] == expected_s[i][c],
+                       "RT zero indirect and PT nonzero specular coverage must match the dual-channel reference");
+            }
+            const auto pair_bytes = size_t(count) * sizeof(float4) * 2u;
+            if (preceding_indirect && pt && !previous_pt) expect(*indirect_bytes() == *preceding_indirect + pair_bytes,
+                "switching coverage to PT must allocate both indirect history images");
+            if (preceding_indirect && !pt && previous_pt) expect(*indirect_bytes() + pair_bytes == *preceding_indirect,
+                "switching coverage back to ReSTIR must release both unused indirect histories");
+            for (uint i = 0u; i < current_planes.size(); ++i) {
+                const auto &plane = current_planes[i]; auto &old = previous_planes[i];
+                old.surface.hit = plane.surface.hit; old.surface.virtual_position = plane.surface.virtual_position;
+                old.surface.virtual_geometric_normal = plane.surface.virtual_geometric_normal;
+                old.surface.approximate = plane.surface.approximate; old.surface.stable_branch = plane.surface.stable_branch;
+                old.motion = plane.motion(); old.depth_position = plane.depth_position;
+                old.branch_sequence = plane.branch_sequence; old.instance_hash = plane.instance_hash;
+                old.depth = plane.depth; old.material_id = plane.material_id; old.valid = plane.valid();
+            }
+            previous_pt = pt;
+        }
+        expect(!coverage->needs_stable_plane_history(10u), "stopped coverage must reuse its cached guides without copying previous planes");
+        const auto fov = pipeline.scene().sensor()->fov_y();
+        pipeline.scene().sensor()->set_fov_y(fov + 1.f);
+        expect(!coverage->needs_stable_plane_history(10u), "changed coverage FOV invalidates previous plane reuse");
+        pipeline.scene().sensor()->set_fov_y(fov);
+        expect(!coverage->needs_stable_plane_history(12u), "nonconsecutive coverage frames cannot read previous planes");
+        coverage->set_enabled(false); coverage->set_enabled(true);
+        expect(!coverage->needs_stable_plane_history(10u), "reset coverage cannot read previous planes");
+    }
+    pipeline.scene().sensor()->set_yaw(original_yaw); pipeline.scene().sensor()->update_device_data();
+    std::cout << "PASS: total-radiance coverage matches dual-channel GPU output through tile halos, motion, resize and RT/PT switches\n";
+}
+
 void check_scene_signals() {
     namespace fs = std::filesystem;
     const auto fixture = fs::temp_directory_path() / ("corona_reblur_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
@@ -972,6 +1023,7 @@ void check_scene_signals() {
         illumination->set_denoise_enabled(false);
         pipeline->frame_buffer()->set_enable_accumulation(false);
         pipeline->prepare(); pipeline->frame_buffer()->prepare_view_texture();
+        if (scenario == 0u) coverage_history_probe::check_allocation(*pipeline);
         pipeline->upload_data();
         if (pt) check_material(*pipeline);
         if (scenario >= 10u) check_compound_material(*pipeline);
@@ -1009,7 +1061,16 @@ void check_scene_signals() {
                     "raw per-lobe energy plus bypass must equal the original estimator, including DI/GI switches and stable layers");
             }
         }
-        illumination->set_denoise_enabled(true);
+        if (scenario == 0u) check_total_radiance_coverage(*pipeline);
+        pipeline->set_output_denoise(true);
+        // First enable follows the renderer's prepare-before-compile contract.
+        // The raw-only fixture deliberately skipped denoiser preparation.
+        if (!illumination->denoiser()->has_prepared_resources()) {
+            Global::SceneGpuContextScope context{pipeline->geometry().bindless_array(), pipeline->device()};
+            illumination->denoiser()->prepare();
+            pipeline->upload_bindless_array();
+            illumination->denoiser()->compile();
+        }
         for (uint frame = 0; frame < 8u; ++frame) {
             pipeline->upload_data(); pipeline->display(1.0 / 60.0);
         }
@@ -1017,6 +1078,7 @@ void check_scene_signals() {
         for (auto pixel : pixels) expect(std::isfinite(pixel.x) && std::isfinite(pixel.y) && std::isfinite(pixel.z),
             "enabling the actual REBLUR plugin after raw frames must produce finite colors");
         std::cout << "PASS: producer energy, runtime enable, scenario=" << scenario << '\n';
+        if (std::getenv("REBLUR_TEST_COVERAGE_ONLY")) break;
     }
     fs::remove_all(fixture);
 }
@@ -1094,13 +1156,6 @@ void check_input_contract() {
 int main() {
     try {
         check_input_contract<vision::reblur::ReBLUR>();
-        const char *backend_environment = std::getenv("REBLUR_TEST_BACKEND");
-        const std::string test_backend = backend_environment ? backend_environment : "all";
-        expect(test_backend == "native" || test_backend == "custom" || test_backend == "all",
-               "REBLUR_TEST_BACKEND must be native, custom or all");
-#ifndef VISION_REBLUR_NATIVE_NRD
-        expect(test_backend != "native", "native backend tests require VISION_REBLUR_NATIVE_NRD");
-#endif
         Env::set_valid_check(false);
         DynamicModule::clear_search_path();
         RHIContext::instance().init(std::filesystem::current_path());
@@ -1108,27 +1163,42 @@ int main() {
         device.init_rtx();
         Global::instance().set_device(&device);
         auto stream = device.create_stream();
-        std::cout << "REBLUR test backend: " << test_backend << '\n';
-        uint native_failures = 0u;
-#ifdef VISION_REBLUR_NATIVE_NRD
-        if (test_backend != "custom") {
-            select_native_backend("1");
-            native_failures = check_native_reblur(device, stream);
+#ifdef VISION_REBLUR_EDSL
+        if (std::getenv("REBLUR_TEST_UNPACK_COMPOSE_ONLY")) {
+            unpack_compose_probe::check(device, stream);
+            return 0;
         }
 #endif
-        if (test_backend != "native") {
-            select_native_backend("0");
-            check_storage_budget(device);
-            check_helpers(device, stream);
-            check_direction_angle_accuracy(device, stream);
-            check_storage_precision(device, stream);
-            check_filter(device, stream);
-            check_curved_glossy_footprint(device, stream);
-            check_sparse_tiles(device, stream);
-            check_packed_motion(device, stream);
-            check_scene_signals();
+        if (std::getenv("REBLUR_TEST_PRECISE_LOBES_ONLY")) {
+            precise_lobes_probe::check(device, stream);
+            return 0;
         }
-        expect(native_failures == 0u, "native NRD integration cases failed");
+        if (std::getenv("REBLUR_TEST_COVERAGE_HISTORY_ONLY")) {
+            coverage_history_probe::check(device, stream);
+            return 0;
+        }
+        if (std::getenv("REBLUR_TEST_GUIDE_FUSION_ONLY")) {
+            check_reblur_guide_fusion();
+            return 0;
+        }
+        if (std::getenv("REBLUR_TEST_COVERAGE_ONLY")) {
+            check_scene_signals();
+            return 0;
+        }
+#ifdef VISION_REBLUR_EDSL
+        unpack_compose_probe::check(device, stream);
+#endif
+        precise_lobes_probe::check(device, stream);
+        coverage_history_probe::check(device, stream);
+        check_storage_budget(device);
+        check_helpers(device, stream);
+        check_direction_angle_accuracy(device, stream);
+        check_storage_precision(device, stream);
+        check_filter(device, stream);
+        check_curved_glossy_footprint(device, stream);
+        check_sparse_tiles(device, stream);
+        check_packed_motion(device, stream);
+        check_scene_signals();
         std::cout << "PASS: REBLUR input contract\n";
         return 0;
     } catch (const std::exception &error) {

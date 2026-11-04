@@ -31,6 +31,7 @@
 void check_restir_reprojection(vision::Pipeline& pipeline);
 void check_stable_plane_store_oracle(vision::Pipeline& pipeline, const char* label);
 void check_restir_reservoir_lifetimes(vision::Pipeline& pipeline);
+void check_stable_plane_storage_restore(vision::Pipeline& pipeline);
 void check_stable_plane(vision::Pipeline& pipeline, bool tinted_mirror = true);
 void check_stable_emitter_coverage(vision::Pipeline& pipeline);
 void check_glass_svgf(vision::Pipeline& pipeline);
@@ -495,6 +496,13 @@ int main(int argc, char **argv) {
         vision::Global::instance().set_scene_path(fixture);
         const auto direct_pipeline = Corona::Tests::make_vision_test_pipeline(scene_description(true), fixture);
         expect(bool(direct_pipeline), "could not import direct-channel fixture");
+        if (std::getenv("VISION_TEST_STORAGE_RESTORE_ONLY")) {
+            direct_pipeline->prepare();
+            check_stable_plane_storage_restore(*direct_pipeline);
+            fs::remove(fixture / "receiver.obj"); fs::remove(fixture / "receiver-tilted.obj");
+            std::error_code cleanup_error; fs::remove(fixture, cleanup_error);
+            return 0;
+        }
         if (principled_only) {
             direct_pipeline->prepare();
             direct_pipeline->upload_data();

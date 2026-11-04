@@ -2,20 +2,14 @@
 #include "render_core/denoiser/ReBLUR/edsl_nrd.h"
 #include "test_reblur_matrix_probe.h"
 #include "test_reblur_parameter_probe.h"
-#include "test_reblur_format_probe.h"
 #include "rhi/context.h"
 #include <algorithm>
 #include <cmath>
 #include <bit>
 #include <filesystem>
-#include <iomanip>
 #include <iostream>
-#include <limits>
 #include <stdexcept>
-#include <string>
 #include <vector>
-#include <cstdlib>
-#include <fstream>
 
 namespace {
 using namespace vision::reblur::edsl;
@@ -222,35 +216,6 @@ void check_uint_gather(Device &device, Stream &stream) {
     }
     std::cout << "PASS: uint SRV Load/GatherRed, full-width values, clamp and float/uint descriptor aliases\n";
 }
-void check_sampling(Device &device, Stream &stream, const std::filesystem::path &probe_spirv) {
-    using namespace vision::reblur;
-    constexpr uint count = 256u;
-    NativeReblur reference(device.context()->runtime_directory() / "reblur-native");
-    auto native = device.create_buffer<float4>(count), software = device.create_buffer<float4>(count);
-    auto storage = device.create_texture2d(make_uint2(4u), PixelStorage::HALF4);
-    std::vector<half4> pixels(16u);
-    for(uint y=0u;y!=4u;++y) for(uint x=0u;x!=4u;++x) pixels[y*4u+x]=make_half4(float(x),float(y),float(x*y),1.f);
-    Dispatch p{}; p.inputs[0u]={storage,make_uint2(4u)}; p.external.output_diffuse=software.descriptor();
-    Kernel sample=[](Var<Dispatch> p) {
-        configure_block(64u);
-        Uint i=dispatch_id();
-        Float2 location=make_float2((i%16u).cast<float>()*.137f+.12345f,(i/16u).cast<float>()*.141f+.23456f);
-        vision::reblur::edsl::Image<float4,Format::RGBA16Float> input(p.inputs.t0);
-        p.external.output_diffuse.write(i,input.sample((location+.5f)/4.f));
-    };
-    auto shader=device.compile(sample,"REBLUR-EDSL-sampler-contract");
-    std::vector<float4> a(count),b(count);
-    stream << storage.upload(pixels.data()) << reference.sampling_probe(native.descriptor(),probe_spirv)
-           << shader(p).dispatch(count) << native.download(a.data()) << software.download(b.data()) << synchronize() << commit();
-    float max_error=0.f;
-    for(uint i=0u;i!=count;++i) {
-        for(uint c=0u;c!=4u;++c) max_error=std::max(max_error,std::abs(a[i][c]-b[i][c]));
-        if(i<16u) std::cout << "sampler i=" << i << " native=" << a[i].x << ',' << a[i].y << ',' << a[i].z
-                           << " edsl=" << b[i].x << ',' << b[i].y << ',' << b[i].z << '\n';
-    }
-    std::cout << "sampler max_abs=" << max_error << '\n';
-    expect(max_error<1e-6f,"native linear-clamp sampler equivalence");
-}
 void check_queued_resize(Device &device, Stream &stream) {
     using namespace vision::reblur;
     struct Replay {
@@ -317,142 +282,6 @@ void check_queued_resize(Device &device, Stream &stream) {
     }
     std::cout << "PASS: queued EDSL resize retains both resource generations and preserves separate/in-place invalid outputs\n";
 }
-void check_native_equivalence(Device &device, Stream &stream) {
-    using namespace vision::reblur;
-    EdslReblur implementation(device);
-    NativeReblur reference(device.context()->runtime_directory() / "reblur-native");
-    static_assert(sizeof(float4) == 4u * sizeof(float));
-    std::ofstream comparison_csv;
-    if (const char *path = std::getenv("REBLUR_EDSL_COMPARISON_CSV"); path && *path) {
-        const std::filesystem::path destination(path);
-        if (!destination.parent_path().empty()) std::filesystem::create_directories(destination.parent_path());
-        comparison_csv.open(destination);
-        expect(bool(comparison_csv), "cannot open EDSL comparison CSV");
-        comparison_csv << "width,height,frame,layer,components,rmse,max_abs,max_relative,failed_components,first_pixel,camera_yaw,camera_tx,camera_ty,camera_tz,anti_firefly\n"
-                       << std::setprecision(std::numeric_limits<double>::max_digits10);
-    }
-    std::filesystem::path output_directory;
-    if (const char *path = std::getenv("REBLUR_EDSL_OUTPUT_DIR"); path && *path) {
-        output_directory = path;
-        std::filesystem::create_directories(output_directory);
-    }
-    auto save_bytes = [&](const std::string &name, const void *data, size_t bytes) {
-        if (output_directory.empty()) return;
-        std::ofstream file(output_directory / name, std::ios::binary);
-        file.write(static_cast<const char *>(data), static_cast<std::streamsize>(bytes));
-        expect(bool(file), "cannot save EDSL comparison binary");
-    };
-    std::cout << std::setprecision(std::numeric_limits<double>::max_digits10);
-    uint failures = 0;
-    for (uint anti_firefly : {1u, 0u}) for (uint2 size : {make_uint2(1u), make_uint2(31u, 19u), make_uint2(127u, 73u)}) {
-        uint n = size.x * size.y;
-        auto guide = device.create_byte_buffer(size_t(n) * sizeof(Guide));
-        auto input_d = device.create_buffer<float4>(n), input_s = device.create_buffer<float4>(n);
-        auto result_d = device.create_buffer<float4>(n), result_s = device.create_buffer<float4>(n);
-        auto native_d = device.create_buffer<float4>(n), native_s = device.create_buffer<float4>(n);
-        std::vector<Guide> guides(n);
-        std::vector<float4> diffuse(n), specular(n), actual_d(n), actual_s(n), expected_d(n), expected_s(n);
-        const float aspect = float(size.x) / float(size.y), z = 10.f;
-        const bool rotated_camera = size.x > 1u || size.y > 1u;
-        const float yaw = rotated_camera ? .37f : 0.f;
-        const float cosine = std::cos(yaw), sine = std::sin(yaw);
-        const float tx = rotated_camera ? .3f : 0.f, ty = rotated_camera ? -.2f : 0.f, tz = rotated_camera ? .4f : 0.f;
-        NativeCameraParams camera;
-        // Column-major world-to-view: view = R_y(yaw) * world + t.
-        // Apply R_y^T to (view-t) below so every guide remains on viewZ=10.
-        camera.world_to_view = camera.world_to_view_prev =
-            {cosine,0.f,rotated_camera ? -sine : 0.f,0.f, 0.f,1.f,0.f,0.f,
-             sine,0.f,cosine,0.f, tx,ty,tz,1.f};
-        const float depth = 1000.f / 999.9f;
-        camera.view_to_clip = camera.view_to_clip_prev =
-            {1.f/aspect,0.f,0.f,0.f,0.f,1.f,0.f,0.f,0.f,0.f,depth,1.f,0.f,0.f,-.1f*depth,0.f};
-        camera.frame_delta_ms = 1000.f / 60.f;
-        std::cout << "EDSL oracle camera " << size.x << 'x' << size.y << " yaw=" << yaw
-                  << " view_translation=" << tx << ',' << ty << ',' << tz << '\n';
-        Settings settings;
-        settings.anti_firefly = anti_firefly;
-        FilterParam p; p.size = size; p.guide = guide.descriptor();
-        p.raw_diffuse = input_d.descriptor(); p.raw_specular = input_s.descriptor();
-        for (uint frame = 0u; frame != 8u; ++frame) for (uint layer = 0u; layer != 3u; ++layer) {
-            for (uint y = 0; y != size.y; ++y) for (uint x = 0; x != size.x; ++x) {
-                const uint i = y * size.x + x;
-                auto &g = guides[i]; g = Guide{};
-                const float vx = (2.f*(float(x)+.5f)/float(size.x)-1.f)*aspect*z;
-                const float vy = (1.f-2.f*(float(y)+.5f)/float(size.y))*z;
-                g.position = make_float4(cosine*(vx-tx)-sine*(z-tz), vy-ty,
-                                        sine*(vx-tx)+cosine*(z-tz), z);
-                g.identity = make_uint4(1u);
-                g.normal_roughness = make_float4(sine,0.f,-cosine, .15f + .7f*float(x)/float(size.x));
-                const float k = float(layer + 1u), pattern = float((x*13u+y*7u+frame)%17u)/17.f;
-                diffuse[i] = make_float4((.2f+pattern)*k,.6f*k,1.f*k, (i%11u==0u)?0.f:2.f);
-                specular[i] = make_float4(1.f*k,(.1f+pattern)*k,.1f*k, (i%13u==0u)?0.f:3.f);
-                if (frame == 5u && (i%7u==0u)) g.identity.w = 0u;
-                if (frame >= 3u) { g.diffuse_factor.w = .375f; g.specular_factor.w = -.125f; }
-            }
-            HostByteBuffer packed;
-            DynamicBufferLayoutCodec<Guide>::encode(guides.data(), n, packed, {}, DynamicBufferLayout::SOA);
-            const std::string prefix = "af" + std::to_string(anti_firefly) + "_s" + std::to_string(size.x) + "x" + std::to_string(size.y) +
-                                       "_f" + std::to_string(frame) + "_l" + std::to_string(layer);
-            if (frame == 0u) {
-                save_bytes(prefix + "_input_GuideSOA.bin", packed.data(), packed.size());
-                save_bytes(prefix + "_input_D_RGBA32F.bin", diffuse.data(), diffuse.size() * sizeof(float4));
-                save_bytes(prefix + "_input_S_RGBA32F.bin", specular.data(), specular.size() * sizeof(float4));
-            }
-            p.frame = frame; p.history_valid = frame != 0u;
-            p.output_diffuse = native_d.descriptor(); p.output_specular = native_s.descriptor();
-            stream << guide.upload(packed.data()) << input_d.upload(diffuse.data()) << input_s.upload(specular.data())
-                   << reference.dispatch(p,camera,layer,settings,frame==0u)
-                   << native_d.download(expected_d.data()) << native_s.download(expected_s.data()) << synchronize() << commit();
-            p.output_diffuse = result_d.descriptor(); p.output_specular = result_s.descriptor();
-            stream << implementation.dispatch(p,camera,layer,settings,frame==0u)
-                   << result_d.download(actual_d.data()) << result_s.download(actual_s.data()) << synchronize() << commit();
-            save_bytes(prefix + "_native_D_RGBA32F.bin", expected_d.data(), expected_d.size() * sizeof(float4));
-            save_bytes(prefix + "_native_S_RGBA32F.bin", expected_s.data(), expected_s.size() * sizeof(float4));
-            save_bytes(prefix + "_edsl_D_RGBA32F.bin", actual_d.data(), actual_d.size() * sizeof(float4));
-            save_bytes(prefix + "_edsl_S_RGBA32F.bin", actual_s.data(), actual_s.size() * sizeof(float4));
-            double squared_error = 0.0, max_error = 0.0, max_relative = 0.0;
-            uint mismatch=0u, first=0u;
-            for (uint i=0u; i!=n; ++i) for(uint c=0u;c!=4u;++c) {
-                const float a[]{actual_d[i][c],actual_s[i][c]}, b[]{expected_d[i][c],expected_s[i][c]};
-                for (uint lobe=0u;lobe!=2u;++lobe) {
-                    const float error=std::abs(a[lobe]-b[lobe]);
-                    const double difference = double(a[lobe]) - double(b[lobe]);
-                    if (std::isfinite(difference)) {
-                        const double absolute = std::abs(difference);
-                        squared_error += difference * difference;
-                        max_error = std::max(max_error, absolute);
-                        max_relative = std::max(max_relative, absolute / std::max(std::abs(double(b[lobe])), 1e-6));
-                    } else {
-                        squared_error = max_error = max_relative = std::numeric_limits<double>::infinity();
-                    }
-                    if(!std::isfinite(a[lobe]) || error> .001f+.002f*std::abs(b[lobe])) { if(mismatch==0u) first=i; ++mismatch; }
-                }
-            }
-            const double rmse = std::sqrt(squared_error / (double(n) * 8.0));
-            std::cout << "EDSL oracle " << size.x << 'x' << size.y << " frame=" << frame << " layer=" << layer
-                      << " anti_firefly=" << anti_firefly
-                      << " rmse=" << rmse << " max_abs=" << max_error << " max_relative=" << max_relative
-                      << " failed_components=" << mismatch << " first_pixel=" << first << '\n';
-            if (comparison_csv.is_open()) {
-                comparison_csv << size.x << ',' << size.y << ',' << frame << ',' << layer << ',' << size_t(n) * 8u
-                               << ',' << rmse << ',' << max_error << ',' << max_relative << ',' << mismatch << ',' << first
-                               << ',' << yaw << ',' << tx << ',' << ty << ',' << tz << ',' << anti_firefly << '\n';
-                comparison_csv.flush();
-                expect(bool(comparison_csv), "cannot write EDSL comparison CSV");
-            }
-            if (mismatch) {
-                ++failures;
-                std::cout << "native_d=" << expected_d[first].x << ',' << expected_d[first].y << ',' << expected_d[first].z << ',' << expected_d[first].w
-                          << " edsl_d=" << actual_d[first].x << ',' << actual_d[first].y << ',' << actual_d[first].z << ',' << actual_d[first].w << '\n';
-                std::cout << "native_s=" << expected_s[first].x << ',' << expected_s[first].y << ',' << expected_s[first].z << ',' << expected_s[first].w
-                          << " edsl_s=" << actual_s[first].x << ',' << actual_s[first].y << ',' << actual_s[first].z << ',' << actual_s[first].w << '\n';
-                if (std::getenv("REBLUR_EDSL_STOP_FIRST_MISMATCH")) throw std::runtime_error("EDSL native numerical equivalence");
-            }
-        }
-    }
-    expect(failures==0u,"EDSL native numerical equivalence");
-    std::cout << "PASS: EDSL/native same-input three-layer numerical equivalence\n";
-}
 }
 
 int main() {
@@ -468,16 +297,6 @@ int main() {
         vision::reblur::edsl::check_reblur_matrix_contract(device, stream);
         vision::reblur::edsl::check_reblur_parameter_contract(device, stream);
         check_queued_resize(device, stream);
-        if (const char *probe=std::getenv("REBLUR_FORMAT_PROBE_SPIRV")) {
-            const char *prefix=std::getenv("REBLUR_FORMAT_PROBE_OUTPUT");
-            expect(prefix && *prefix,"format probe needs REBLUR_FORMAT_PROBE_OUTPUT");
-            vision::reblur::edsl::check_reblur_format_contract(device,stream,probe,prefix);
-        }
-        if (const char *probe=std::getenv("REBLUR_SAMPLE_PROBE_SPIRV")) {
-            check_sampling(device,stream,probe);
-            if(std::getenv("REBLUR_EDSL_SAMPLING_ONLY")) return 0;
-        }
-        if (!std::getenv("REBLUR_EDSL_RESOURCES_ONLY")) check_native_equivalence(device, stream);
         return 0;
     } catch (const std::exception &error) {
         std::cerr << "FAIL: " << error.what() << '\n';

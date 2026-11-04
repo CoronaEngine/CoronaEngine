@@ -8,8 +8,9 @@ from pathlib import Path
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from build_tools.git_workspace import ensure_workspace, inspect_workspace, sync_workspace
+from build_tools.git_workspace import ensure_workspace, inspect_workspace, remote_version_advice, sync_workspace
 from build_tools.git_tool import ensure_git
+from build_tools.horizon_runtime_patch import ensure_horizon_runtime_patch
 from build_tools.ninja_tool import ensure_ninja
 from build_tools.paths import LOCAL_RECIPES, REPO_ROOT
 from build_tools.source_workspaces import WORKSPACES
@@ -103,6 +104,7 @@ def conan_options(target_family: str) -> list[str]:
 def ensure_workspaces() -> None:
     for workspace in WORKSPACES:
         ensure_workspace(REPO_ROOT, workspace)
+    ensure_horizon_runtime_patch(REPO_ROOT)
 
 
 def install(configuration: str, target_family: str, *, update: bool = False) -> None:
@@ -136,6 +138,8 @@ def execute(args: argparse.Namespace) -> None:
             else:
                 print(status.summary())
                 for note in status.advice():
+                    print(f"[WARN] {note}")
+                for note in remote_version_advice(REPO_ROOT, workspace):
                     print(f"[WARN] {note}")
         run_command(("conan", "--version"), cwd=REPO_ROOT)
         run_command(("cmake", "--list-presets"), cwd=REPO_ROOT)
@@ -172,8 +176,8 @@ def create_parser() -> argparse.ArgumentParser:
         description="CoronaEngine developer workflow",
         epilog=(
             "Horizon/ and CoronaEditor/ are ordinary Git clones at the engine repository root. "
-            "Builds align clean sources to build_tools/source_workspaces.py. Local edits at "
-            "the pinned commit remain usable; commit or stash edits before changing versions. "
+            "Builds align local HEAD to build_tools/source_workspaces.py, preserving "
+            "nonconflicting edits. Differences from the latest remote branch only warn. "
             "horizon-sync and editor-sync also synchronize submodules explicitly. "
             "update additionally refreshes Conan dependencies."
         ),

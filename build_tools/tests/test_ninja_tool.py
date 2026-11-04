@@ -144,6 +144,7 @@ def test_build_commands_prepare_ninja_before_work(command):
 def test_other_commands_do_not_prepare_ninja(command):
     with mock.patch.object(dev, "ensure_git"), mock.patch.object(dev, "ensure_ninja") as prepare, \
             mock.patch.object(dev, "run_command"), mock.patch.object(dev, "inspect_workspace"), \
+            mock.patch.object(dev, "remote_version_advice", return_value=()), \
             mock.patch.object(dev, "sync_workspace"), mock.patch.object(dev, "clean_repo"):
         dev.execute(dev.create_parser().parse_args([command]))
     prepare.assert_not_called()

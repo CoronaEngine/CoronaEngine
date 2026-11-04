@@ -242,3 +242,9 @@ add_executable(corona_imgui_workspace_tests
 target_include_directories(corona_imgui_workspace_tests PRIVATE ${PROJECT_SOURCE_DIR}/src/systems/ui)
 target_link_libraries(corona_imgui_workspace_tests PRIVATE corona::imgui)
 add_test(NAME ImGuiWorkspaceTests COMMAND corona_imgui_workspace_tests)
+
+add_executable(corona_project_document_store_tests test_project_document_store.cpp)
+target_include_directories(corona_project_document_store_tests PRIVATE ${PROJECT_SOURCE_DIR}/src/systems/ui)
+target_link_libraries(corona_project_document_store_tests PRIVATE nlohmann_json::nlohmann_json)
+add_test(NAME ProjectDocumentStoreTests COMMAND corona_project_document_store_tests
+    ${CMAKE_CURRENT_BINARY_DIR}/project-document-fixture)

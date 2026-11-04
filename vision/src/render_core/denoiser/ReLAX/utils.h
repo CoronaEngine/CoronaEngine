@@ -1,10 +1,3 @@
-/*
-Copyright (c) 2022, NVIDIA CORPORATION. All rights reserved.
-This software contains source code provided by NVIDIA Corporation.
-See LICENSE-NRD.txt for the upstream license.
-*/
-// NRD 4.14.3, 16a64cd4daebfb153590623f0348b36007284ba3:
-// NRD.hlsli (RELAX front end), Common.hlsli (12-tap Catmull-Rom).
 #pragma once
 #include "dsl/dsl.h"
 #include "filter.h"

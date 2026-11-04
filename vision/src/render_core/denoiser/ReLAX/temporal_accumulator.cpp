@@ -1,11 +1,3 @@
-/*
-Copyright (c) 2022, NVIDIA CORPORATION. All rights reserved.
-This software contains source code provided by NVIDIA Corporation.
-See LICENSE-NRD.txt.
-*/
-// NRD 4.14.3 RELAX_TemporalAccumulation.hlsli and Common.hlsli.
-// RGB, checkerboard OFF, no optional external confidence or deformation motion.
-// Positions/normals are cached in world space rather than reconstructed per tap.
 #include "filter.h"
 #include "utils.h"
 

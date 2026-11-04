@@ -32,7 +32,7 @@ Ninja 在 Conan 编译依赖前检查：优先复用当前构建目录缓存、P
 Vulkan Headers 与 Loader 使用匹配的 `1.4.350.0` 版本。Ocarina 显式链接 Conan 的
 `Vulkan::Loader`；Windows 构建将该包的 `vulkan-1.dll` 部署到后端及可执行文件目录，
 并在复制 CEF 后重新部署，避免被 CEF 自带版本覆盖。运行渲染器仍需支持所需 Vulkan 功能的 GPU 驱动。
-Vulkan SDK 的验证层和调试工具可按需安装；可选的 Native NRD 后端仍需额外提供 DXC、NRD 和 NVRHI。
+Vulkan SDK 的验证层和调试工具可按需安装。ReBLUR 使用仓库内的 CPU 调度器和 Ocarina C++ EDSL 内核，无需外部降噪 SDK、DLL 或 NVRHI。
 
 Horizon 和 CoronaEditor 统一由 `build_tools/git_workspace.py` 管理，分别位于引擎根目录的
 `Horizon/` 和 `CoronaEditor/`。CMake bootstrap 及
@@ -41,12 +41,19 @@ Horizon 和 CoronaEditor 统一由 `build_tools/git_workspace.py` 管理，分�
 仓库地址、分支及完整 commit 固定在 `build_tools/source_workspaces.py` 中，不再读取 JSON lock 文件。
 首次准备直接非浅克隆到根目录的 `Horizon/` 或 `CoronaEditor/`，检出指定 commit、建立跟踪分支，
 并递归初始化该提交记录的子模块，不经过临时克隆目录。失败时清理本次新建的目录，以便重试。
-已有副本实时查询 Git HEAD：与指定 commit 一致时直接复用，不获取远端；不一致时自动同步并更新子模块。
-需要切换版本但存在未提交修改（包括未跟踪文件）时，停止构建并提示先提交或暂存；HEAD 已一致时仍允许本地修改参与构建。
+Python 中的 commit 是构建基准。已有副本的 HEAD 与它一致时直接复用；不一致时切换到该 commit 并更新子模块，目标提交本地缺失时才获取远端。
+切换由普通 Git checkout 保护：不冲突的修改及未跟踪文件会保留，不因工作区有修改就直接报错。
+只有切换确实会覆盖本地内容、目标提交不可用或子模块同步失败等实际错误才终止；不会退回使用其他版本继续构建。
+HEAD 已一致时仍允许本地修改参与构建。
 同步保留含有额外提交的分支，必要时检出为 detached HEAD；已有浅克隆在需要目标提交时才补全历史。
 
+源码准备、显式同步和 `status` 使用 `git ls-remote` 查询 Python 中仓库地址及分支的最新 commit，
+与 Python 固定值不一致时只输出警告，不修改锁定值、不跟随远端更新。该查询不更新本地引用，不依赖可能过期的 `origin/main`。
+查询超时（每个工作区 10 秒）或远端不可用时也仅警告；获取缺失的锁定提交仍必须成功。
+未触发重新配置的纯 Ninja 增量构建不执行 Python，也不重复查询远端；可运行 `dev.py status` 主动检查。
+
 每次 Ninja 构建检查 `source_workspaces.py` 和 Git 的 HEAD、当前分支引用及 packed-refs 是否变化，
-并检测这些元数据文件的出现和删除。变化时自动重新配置，在读取依赖项目的 CMake 规则前同步源码，
+并检测这些元数据文件的出现和删除。变化时自动重新配置，在读取依赖项目的 CMake 规则前按 Python 固定值同步源码，
 再刷新依赖和继续本次构建；默认构建及指定 target 均适用。未变化时不重复运行 Python 检查或重新配置。
 不生成额外的版本标记文件；Git 路径由 Git 自身解析，兼容普通克隆及 linked worktree。
 

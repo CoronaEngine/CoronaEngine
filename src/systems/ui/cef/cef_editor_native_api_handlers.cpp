@@ -13,6 +13,7 @@
 #include "browser_manager.h"
 #include <corona/utils/runtime_paths.h>
 #include "actor_selection_routing.h"
+#include "archive_load_policy.h"
 #include "../collaborative_editor_runtime.h"
 #include "cef_client.h"
 #include "cef_editor_api.h"
@@ -56,6 +57,7 @@
 #include <limits>
 #include <map>
 #include <memory>
+#include "project_document_store.h"
 #include <optional>
 #include <set>
 #include <sstream>
@@ -158,9 +160,6 @@ std::string snake_to_lower_camel(const char* value) {
 
 const char* editor_api_module_js_wrapper_alias(const char* module) {
     const std::string_view name = module ? std::string_view(module) : std::string_view();
-    if (name == "AITool") {
-        return "ai";
-    }
     if (name == "CoronaEditor") {
         return "app";
     }
@@ -199,9 +198,6 @@ const char* editor_api_module_js_wrapper_alias(const char* module) {
 
 const char* editor_api_module_python_wrapper_alias(const char* module) {
     const std::string_view name = module ? std::string_view(module) : std::string_view();
-    if (name == "AITool") {
-        return "ai";
-    }
     if (name == "CoronaEditor") {
         return "app";
     }
@@ -2101,10 +2097,11 @@ PreparedArchiveLoad prepare_archive_load(const std::string& path,
         });
         return prepared;
     }
-    if (!prepared.diagnostics.empty() && load_policy != "degraded") {
+    const bool requires_confirmation = archive_diagnostics_require_confirmation(prepared.diagnostics);
+    if (requires_confirmation && load_policy != "degraded") {
         prepared.status = "decision_required";
     } else {
-        prepared.status = prepared.diagnostics.empty() ? "opened" : "opened_degraded";
+        prepared.status = requires_confirmation ? "opened_degraded" : "opened";
         prepared.ready = true;
     }
     return prepared;
@@ -5688,10 +5685,12 @@ void register_project_launcher_api_handlers(NativeApiRegistry& registry) {
         {"create_world_project", [](const NativeRequest& request, const NativeContext&) {
             const auto data = arg_object(request.args, 0);
             const auto world_type = data.value("mode", std::string{"creative"});
+            if (world_type == "story") {
+                return native_failure("Story mode does not create a project. Use Test Mode on the start screen.", 2);
+            }
             const auto prompt = data.value("prompt", std::string{});
-            const bool story = world_type == "story";
-            const std::string display_base = story ? "剧情世界" : "创造世界";
-            const std::string dir_base = story ? "story_world" : "creative_world";
+            const std::string display_base = "创造世界";
+            const std::string dir_base = "creative_world";
             const auto base_dir = runtime_data_dir();
             std::filesystem::create_directories(base_dir);
             int index = 1;
@@ -6119,8 +6118,32 @@ void register_main_view_api_handlers(NativeApiRegistry& registry) {
     });
 }
 
+
+namespace {
+NativeResult project_document_request(const NativeRequest& request, bool commit) {
+    const auto payload = arg_object(request.args, 0);
+    const auto active = resolve_active_project_path(nlohmann::json::array());
+    const auto expected = payload.value("project_path", std::string{});
+    if (active.empty() || expected.empty() ||
+        absolute_normalized_path(path_from_utf8(active)) != absolute_normalized_path(path_from_utf8(expected))) {
+        return native_success({{"success", false}, {"error", "PROJECT_CONTEXT_CHANGED"}});
+    }
+    if (auto* scene = native_editor_state().scene.get(); commit && scene && scene->read_only) {
+        return native_success({{"success", false}, {"error", "READ_ONLY_PROJECT"}});
+    }
+    return native_success(project_document_store(path_from_utf8(active), payload, commit));
+}
+}
+
 void register_project_settings_api_handlers(NativeApiRegistry& registry) {
     static const NativeMethodTable methods = {
+
+        {"read_project_document", [](const NativeRequest& request, const NativeContext&) {
+            return project_document_request(request, false);
+        }},
+        {"commit_project_document", [](const NativeRequest& request, const NativeContext&) {
+            return project_document_request(request, true);
+        }},
 
         {"get_active_project_info", [](const NativeRequest&, const NativeContext&) {
             return native_success(active_project_info_json());
@@ -7351,24 +7374,6 @@ void register_scene_tools_api_handlers(NativeApiRegistry& registry) {
                 {"camera", std::move(snapshot)},
             });
         }},
-        {"get_frame_timing", [](const NativeRequest& request, const NativeContext&) {
-            auto* scene = ensure_native_editor_scene();
-            scene = resolve_native_editor_scene_request(scene, normalize_route(arg_string(request.args, 0)));
-            auto* camera = find_native_camera(*scene, arg_string(request.args, 1));
-            if (!camera || !camera->engine_camera) return native_failure("Camera not found", 2);
-            auto& hub = SharedDataHub::instance();
-            const auto handle = camera->engine_camera->get_handle();
-            const auto timing = hub.camera_frame_timing(handle);
-            const auto device = hub.camera_storage().try_acquire_read(handle);
-            if (!timing || !device || device->render_backend != CameraRenderBackend::Vision ||
-                device->vision_render_mode != timing->mode) {
-                return native_success({{"render_ms", nullptr}, {"denoise_ms", nullptr}, {"frame_ms", nullptr}, {"age_ms", nullptr}});
-            }
-            const double age_ms = std::chrono::duration<double, std::milli>(
-                std::chrono::steady_clock::now() - timing->recorded_at).count();
-            return native_success({{"render_ms", timing->render_ms}, {"denoise_ms", timing->denoise_ms},
-                                   {"frame_ms", timing->frame_ms}, {"age_ms", age_ms}});
-        }},
         {"get_vision_denoise", [](const NativeRequest& request, const NativeContext&) {
             auto* scene = ensure_native_editor_scene();
             const auto scene_route = normalize_route(arg_string(request.args, 0));
@@ -7918,12 +7923,6 @@ void register_editor_api_handlers(NativeApiRegistry& registry) {
 }
 
 void register_python_script_api_handlers(NativeApiRegistry& registry) {
-    static const NativeMethodTable ai_tool_methods = {
-        {"generate_hint", script_method},
-        {"read_local_file_as_base64", script_method},
-        {"send_message_to_ai_stream", script_method},
-        {"submit_request", script_method},
-    };
     static const NativeMethodTable corona_editor_methods = {
         {"close_process", script_method},
     };
@@ -7959,7 +7958,6 @@ void register_python_script_api_handlers(NativeApiRegistry& registry) {
         });
     };
 
-    register_script_module("AITool", ai_tool_methods);
     register_script_module("CoronaEditor", corona_editor_methods);
     register_script_module("ResourceSearch", resource_search_methods);
     register_script_module("ScratchTool", scratch_tool_methods);

@@ -1,12 +1,3 @@
-/*
-Copyright (c) 2022, NVIDIA CORPORATION. All rights reserved.
-This software contains source code provided by NVIDIA Corporation.
-See LICENSE-NRD.txt for the upstream license.
-*/
-// NRD 4.14.3 REBLUR_TemporalAccumulation / TemporalStabilization.
-// Quality, diffuse + specular radiance, no SH, checkerboard OFF;
-// normal encoding R10G10B10A2_UNORM, linear roughness, specular motion V2.
-// MathLib portions use the MIT notice reproduced in edsl_nrd_common.h.
 #include "edsl_nrd_common.h"
 #include "edsl_nrd_resources.h"
 #include <array>
@@ -332,7 +323,7 @@ PassShader compile_temporal(Device &device) {
         hitDistForTracking *= select(c.gSpecPrepassBlurRadius == 0.f, hitDistNormalization, 1.f);
         out_hit.write_in_bounds(pixel, hitDistForTracking);
 
-        // Surface motion and previous position, in NRD's camera-relative world.
+        // Surface motion and previous position, in ReBLUR's camera-relative world.
         Float3 mv = motion.read_in_bounds(pixel).xyz() * c.gMvScale.xyz();
         Float3 Xprev = X;
         Float2 smbPixelUv = ocarina::fma(make_float2(pixel) + .5f, c.gRectSizeInv, mv.xy());

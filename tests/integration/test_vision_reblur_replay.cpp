@@ -1,5 +1,4 @@
 #include "render_core/denoiser/ReBLUR/edsl_nrd.h"
-#include "render_core/denoiser/ReBLUR/native_nrd.h"
 #include "rhi/context.h"
 #include <algorithm>
 #include <array>
@@ -20,10 +19,9 @@
 #include "reblur_packed_replay.h"
 #include "reblur_real_conversion.h"
 
-// Fixed-input replay for the native NRD and original-algorithm EDSL backends.
-// Run each backend in its own process, with the same replay environment.
+// Fixed-input replay for the repository-local ReBLUR EDSL implementation.
 // Inputs upload once, remain immutable, and use separate output allocations.
-// Per-pass GPU timing is supplied by each backend's profiler; readback occurs
+// Per-pass GPU timing is supplied by the filter profiler; readback occurs
 // only after the last measured frame and is excluded from the frame timings.
 namespace {
 using namespace ocarina;
@@ -186,17 +184,15 @@ void print_output(const char *name, uint layer, uint2 size, const std::vector<fl
 }
 
 void run(Device &device, Stream &stream) {
-    const char *backend_environment = std::getenv("REBLUR_REPLAY_BACKEND");
-    const std::string backend = backend_environment ? backend_environment : "edsl";
-    if (backend != "native" && backend != "edsl") throw std::runtime_error("REBLUR_REPLAY_BACKEND must be native or edsl");
+    const std::string backend = "edsl";
     if (const char *canonical = std::getenv("REBLUR_CONVERSION_INPUT_DIR"); canonical && *canonical) {
-        vision::reblur::real_conversion::run(device, stream, backend,
+        vision::reblur::real_conversion::run(device, stream,
             option("REBLUR_CONVERSION_WARMUP", 64u, true), option("REBLUR_CONVERSION_FRAMES", 128u),
             option("REBLUR_CONVERSION_FRAME_PAUSE_MS", 250u, true));
         return;
     }
     if (const char *capture = std::getenv("REBLUR_REPLAY_CAPTURE_DIR"); capture && *capture) {
-        reblur_packed_replay::run(device, stream, backend, option("REBLUR_REPLAY_WARMUP", 64u, true),
+        reblur_packed_replay::run(device, stream, option("REBLUR_REPLAY_WARMUP", 64u, true),
             option("REBLUR_REPLAY_FRAME_PAUSE_MS", 250u, true));
         return;
     }
@@ -212,7 +208,7 @@ void run(Device &device, Stream &stream) {
     std::cout << "Input: stationary perspective camera, FOV_y=90deg, planes at viewZ=10/11/12, normal=(0,0,-1), "
                  "roughness=0.05..0.95 along x; fixed integer-hash RGB, sparse zero hits (1/11 diffuse,1/13 specular), "
                  "whole invalid 16x16 tiles, zero motion, separate immutable inputs/outputs.\n";
-    for (const char *name : {"REBLUR_GPU_PROFILE", "REBLUR_GPU_PROFILE_MODE", "REBLUR_NATIVE_PROFILE_PASSES"}) {
+    for (const char *name : {"REBLUR_GPU_PROFILE", "REBLUR_GPU_PROFILE_MODE"}) {
         const char *value = std::getenv(name);
         std::cout << "Profiler " << name << '=' << (value ? value : "(unset)") << '\n';
     }
@@ -233,10 +229,7 @@ void run(Device &device, Stream &stream) {
     print_matrix("world_to_view", camera.world_to_view); print_matrix("world_to_view_prev", camera.world_to_view_prev);
     print_matrix("view_to_clip", camera.view_to_clip); print_matrix("view_to_clip_prev", camera.view_to_clip_prev);
     auto layers = make_inputs(device, stream, size);
-    std::unique_ptr<NativeReblur> native;
-    std::unique_ptr<EdslReblur> edsl;
-    if (backend == "native") native = std::make_unique<NativeReblur>(device.context()->runtime_directory() / "reblur-native");
-    else edsl = std::make_unique<EdslReblur>(device);
+    auto edsl = std::make_unique<EdslReblur>(device);
     std::cout << "Replay: GPU profiler owns pass timings; wall matrix below is host enqueue+frame sync only, excluding pauses/readback.\n";
     std::cout.flush();
     const uint total = warmup + frames;
@@ -250,8 +243,7 @@ void run(Device &device, Stream &stream) {
             p.guide = input.guide.descriptor();
             p.raw_diffuse = input.diffuse.descriptor(); p.raw_specular = input.specular.descriptor();
             p.output_diffuse = input.output_diffuse.descriptor(); p.output_specular = input.output_specular.descriptor();
-            if (native) stream << native->dispatch(p, camera, layer, settings, frame == 0u);
-            else stream << edsl->dispatch(p, camera, layer, settings, frame == 0u);
+            stream << edsl->dispatch(p, camera, layer, settings, frame == 0u);
         }
         stream << synchronize() << commit();
         wall_ms[frame] = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - begin).count();
@@ -288,7 +280,7 @@ void run(Device &device, Stream &stream) {
     }
     std::cout << "Output combined_fnv64=" << hex_hash(output_hash) << " order=layer0..2(diffuseRGBA32F,specularRGBA32F)\n";
     // Destroy the backend now so pending GPU profile samples flush before exit.
-    native.reset(); edsl.reset();
+    edsl.reset();
     std::cout << "PASS: replay completed; immutable inputs, three independent histories, no timed-loop readback\n";
 }
 } // namespace
