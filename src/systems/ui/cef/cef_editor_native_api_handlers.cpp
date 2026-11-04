@@ -160,9 +160,6 @@ std::string snake_to_lower_camel(const char* value) {
 
 const char* editor_api_module_js_wrapper_alias(const char* module) {
     const std::string_view name = module ? std::string_view(module) : std::string_view();
-    if (name == "AITool") {
-        return "ai";
-    }
     if (name == "CoronaEditor") {
         return "app";
     }
@@ -201,9 +198,6 @@ const char* editor_api_module_js_wrapper_alias(const char* module) {
 
 const char* editor_api_module_python_wrapper_alias(const char* module) {
     const std::string_view name = module ? std::string_view(module) : std::string_view();
-    if (name == "AITool") {
-        return "ai";
-    }
     if (name == "CoronaEditor") {
         return "app";
     }
@@ -7929,9 +7923,6 @@ void register_editor_api_handlers(NativeApiRegistry& registry) {
 }
 
 void register_python_script_api_handlers(NativeApiRegistry& registry) {
-    static const NativeMethodTable ai_tool_methods = {
-        {"submit_request", script_method},
-    };
     static const NativeMethodTable corona_editor_methods = {
         {"close_process", script_method},
     };
@@ -7967,7 +7958,6 @@ void register_python_script_api_handlers(NativeApiRegistry& registry) {
         });
     };
 
-    register_script_module("AITool", ai_tool_methods);
     register_script_module("CoronaEditor", corona_editor_methods);
     register_script_module("ResourceSearch", resource_search_methods);
     register_script_module("ScratchTool", scratch_tool_methods);

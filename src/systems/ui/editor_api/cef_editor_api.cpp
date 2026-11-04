@@ -521,7 +521,6 @@ constexpr std::array<EditorApiParamSpec, 9> kScratchMouseEventParams = {{
 // count here makes MSVC diagnostics point at the whole initializer when the
 // manifest grows, instead of identifying the actual entry that drifted.
 constexpr auto kEditorApiMethods = std::to_array<EditorApiMethodSpec>({
-    EDITOR_API_METHOD_SCHEMA_WRAPPED(AITool, submit_request, kObjectPayloadParam, "ai.submitRequest", "ai.submit_request", EditorApiValueType::Any),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(CoronaEditor, close_process, kNoParams, "app.closeProcess", "app.close_process", EditorApiValueType::Null),
     EDITOR_API_METHOD_SCHEMA(EditorApi, register_callback, kEditorApiRegisterCallbackParams, EditorApiValueType::Object),
     EDITOR_API_METHOD_SCHEMA(EditorApi, unregister_callback, kCallbackTokenParam, EditorApiValueType::Object),
@@ -710,7 +709,6 @@ constexpr auto kEditorApiMethods = std::to_array<EditorApiMethodSpec>({
 #undef EDITOR_API_METHOD0_WRAPPED
 
 constexpr auto kEditorApiEvents = std::to_array<EditorApiEventSpec>({
-    {"AI.chunk", EditorApiValueType::String, all_callers(), "events.onAiChunk", "events.on_ai_chunk"},
     {"LANChat.event", EditorApiValueType::Object, all_callers(), "events.onLanChatEvent", "events.on_lan_chat_event"},
     {"Network.actorDeleteSyncBroadcastRequested", EditorApiValueType::Object, all_callers(), "events.onNetworkActorDeleteSyncBroadcastRequested", "events.on_network_actor_delete_sync_broadcast_requested"},
     {"Network.actorOwnershipClaimed", EditorApiValueType::Object, all_callers(), "events.onNetworkActorOwnershipClaimed", "events.on_network_actor_ownership_claimed"},
