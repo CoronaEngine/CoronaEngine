@@ -133,11 +133,6 @@ constexpr std::array<EditorApiParamSpec, 2> kMainViewImportResourceFileParams = 
     param("file_type", EditorApiValueType::String, true),
 }};
 
-constexpr std::array<EditorApiParamSpec, 2> kMainViewUpdateViewToolStateParams = {{
-    param("tool_id", EditorApiValueType::String),
-    param("enabled", EditorApiValueType::Boolean),
-}};
-
 constexpr std::array<EditorApiParamSpec, 2> kFileManagerCreateFolderParams = {{
     param("path", EditorApiValueType::String),
     param("folder_name", EditorApiValueType::String),
@@ -461,18 +456,6 @@ constexpr std::array<EditorApiParamSpec, 2> kSceneToolsActorPlayAudioParams = {{
     param("loop", EditorApiValueType::Boolean, true),
 }};
 
-constexpr std::array<EditorApiParamSpec, 5> kScratchExecutePythonCodeParams = {{
-    param("code", EditorApiValueType::String),
-    param("mode", EditorApiValueType::Integer),
-    param("scene_name", EditorApiValueType::String, true),
-    param("actor_name", EditorApiValueType::String, true),
-    param("target_type", EditorApiValueType::String, true),
-}};
-
-constexpr std::array<EditorApiParamSpec, 1> kScratchStopScriptParams = {{
-    param("restore_state", EditorApiValueType::Boolean, true),
-}};
-
 constexpr std::array<EditorApiParamSpec, 3> kScratchKeyEventParams = {{
     param("key", EditorApiValueType::String),
     param("modifiers", EditorApiValueType::String, true),
@@ -558,12 +541,9 @@ constexpr auto kEditorApiMethods = std::to_array<EditorApiMethodSpec>({
     EDITOR_API_METHOD_SCHEMA_WRAPPED(LANChat, start_room, kObjectPayloadParam, "lanChat.startRoom", "lan_chat.start_room", EditorApiValueType::Object),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(LANChat, stop_local_room, kNoParams, "lanChat.stopLocalRoom", "lan_chat.stop_local_room", EditorApiValueType::Object),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(LANChat, stop_room, kNoParams, "lanChat.stopRoom", "lan_chat.stop_room", EditorApiValueType::Object),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED(MainView, get_menu_data, kNoParams, "main.getMenuData", "main.get_menu_data", EditorApiValueType::Object),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(MainView, import_resource_file, kMainViewImportResourceFileParams, "main.importResourceFile", "main.import_resource_file", EditorApiValueType::Object),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(MainView, on_init, kPathOptionalParam, "main.onInit", "main.on_init", EditorApiValueType::Object),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED(MainView, run_project, kPathOptionalParam, "main.runProject", "main.run_project", EditorApiValueType::Object),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(MainView, scene_save, kSceneSaveParams, "main.sceneSave", "main.scene_save", EditorApiValueType::Object),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED(MainView, update_view_tool_state, kMainViewUpdateViewToolStateParams, "main.updateViewToolState", "main.update_view_tool_state", EditorApiValueType::Object),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(Network, broadcast_actor_create, kNetworkBroadcastActorCreateParams, "network.broadcastActorCreate", "network.broadcast_actor_create", EditorApiValueType::Object),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(Network, broadcast_actor_delete, kNetworkBroadcastActorDeleteParams, "network.broadcastActorDelete", "network.broadcast_actor_delete", EditorApiValueType::Object),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(Network, broadcast_actor_scene_snapshot, kNetworkBroadcastSceneSnapshotParams, "network.broadcastSceneSnapshot", "network.broadcast_scene_snapshot", EditorApiValueType::Object),
@@ -687,17 +667,15 @@ constexpr auto kEditorApiMethods = std::to_array<EditorApiMethodSpec>({
     EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, update_camera_view, kSceneToolsUpdateCameraViewParams, "sceneTools.updateCameraView", "scene_tools.update_camera_view", EditorApiValueType::Object),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, capture_viewport, kViewportCaptureParams, "viewport.capture", "viewport.capture", EditorApiValueType::Object),
     EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, set_camera_pose, kViewportSetCameraPoseParams, "viewport.setCameraPose", "viewport.set_camera_pose", EditorApiValueType::Object, cef_and_script_runtime_callers()),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED(ScratchTool, execute_python_code, kScratchExecutePythonCodeParams, "scratch.executePythonCode", "scratch.execute_python_code", EditorApiValueType::Any),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED(ScratchTool, get_game_preview_status, kNoParams, "scratch.getGamePreviewStatus", "scratch.get_game_preview_status", EditorApiValueType::Any),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Scripts, run_file, kObjectPayloadParam, "scripts.runFile", "", EditorApiValueType::Object, caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Scripts, get_run, kObjectPayloadParam, "scripts.getRun", "", EditorApiValueType::Object, caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Scripts, stop, kObjectPayloadParam, "scripts.stop", "", EditorApiValueType::Object, caller_mask(EditorApiCaller::Cef)),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(ScratchTool, get_script_status, kNoParams, "scratch.getScriptStatus", "scratch.get_script_status", EditorApiValueType::Any),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(ScratchTool, key_event, kScratchKeyEventParams, "scratch.sendKeyEvent", "scratch.send_key_event", EditorApiValueType::Any),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(ScratchTool, key_release, kScratchKeyReleaseParams, "scratch.sendKeyUpEvent", "scratch.send_key_up_event", EditorApiValueType::Any),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(ScratchTool, load_blockly_target, kObjectPayloadParam, "scratch.loadBlocklyTarget", "scratch.load_blockly_target", EditorApiValueType::Any),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(ScratchTool, mouse_event, kScratchMouseEventParams, "scratch.sendMouseEvent", "scratch.send_mouse_event", EditorApiValueType::Any),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(ScratchTool, save_blockly_target, kObjectPayloadParam, "scratch.saveBlocklyTarget", "scratch.save_blockly_target", EditorApiValueType::Any),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED(ScratchTool, start_game_preview, kObjectPayloadParam, "scratch.startGamePreview", "scratch.start_game_preview", EditorApiValueType::Any),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED(ScratchTool, stop_game_preview, kNoParams, "scratch.stopGamePreview", "scratch.stop_game_preview", EditorApiValueType::Any),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED(ScratchTool, stop_script_execution, kScratchStopScriptParams, "scratch.stopScriptExecution", "scratch.stop_script_execution", EditorApiValueType::Any),
 });
 
 #undef EDITOR_API_METHOD_SCHEMA
