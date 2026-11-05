@@ -17,7 +17,7 @@ inline std::string validate_restir_settings(const Json& settings,
         bool integer{false};
     };
     static const std::map<std::string, NumberRange> ranges{
-        {"max_depth", {0, 128, true}}, {"min_depth", {0, 20, true}}, {"rr_threshold", {0, 1}},
+        {"max_depth", {1, 128, true}}, {"min_depth", {0, 20, true}}, {"rr_threshold", {0, 1}},
         {"direct.M_light", {0, 100, true}}, {"direct.M_bsdf", {0, 100, true}},
         {"direct.max_age", {0, 100, true}}, {"direct.max_recursion", {1, 100, true}},
         {"direct.diffuse_factor", {0, 1}}, {"indirect.max_age", {0, 100, true}},
@@ -26,12 +26,12 @@ inline std::string validate_restir_settings(const Json& settings,
         {"direct.temporal.theta", {0, 90}}, {"direct.temporal.depth", {0, 1}},
         {"direct.temporal.radius", {0, 50}},
         {"direct.spatial.theta", {0, 90}}, {"direct.spatial.depth", {0, 1}},
-        {"direct.spatial.radius", {0, 50}},
+        {"direct.spatial.radius", {0, 50}}, {"direct.spatial.sample_num", {1, 32, true}},
         {"indirect.temporal.history_limit", {0, 50, true}},
         {"indirect.temporal.theta", {0, 90}}, {"indirect.temporal.depth", {0, 1}},
         {"indirect.temporal.radius", {0, 50}},
         {"indirect.spatial.theta", {0, 90}}, {"indirect.spatial.depth", {0, 1}},
-        {"indirect.spatial.radius", {0, 50}},
+        {"indirect.spatial.radius", {0, 50}}, {"indirect.spatial.sample_num", {1, 32, true}},
     };
     static const std::set<std::string> objects{
         "direct", "indirect", "direct.temporal", "direct.spatial",

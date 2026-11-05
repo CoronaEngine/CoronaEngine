@@ -546,6 +546,8 @@ void StablePlanes::compile() noexcept {
                 context.restir_direct_split = true;
                 context.suppress_initial_emission_if = &covered;
                 context.complete_terminal_direct = true;
+                // Li starts at this unscattered hit; throughput already includes the prefix.
+                context.rr_depth_offset = &depth;
                 // compute_surface_interaction clips t_max to the hit distance.
                 // Li owns its traversal and must see that receiver again.
                 ray.ray.dir_max.w = ray_t_max;

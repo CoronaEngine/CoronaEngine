@@ -437,6 +437,10 @@ public:
     bool suppress_initial_emission{false};
     const Bool *suppress_initial_emission_if{};
     bool complete_terminal_direct{false};
+    // Roulette counts all surface scatters, including a caller-owned prefix.
+    const Uint *rr_depth_offset{};
+    // A caller may tune roulette without weighting the returned radiance.
+    const Float *rr_survival_scale{};
     // ReSTIR's direct channel also owns emission reached by its first BSDF ray.
     bool restir_direct_split{false};
 

@@ -53,7 +53,7 @@ private:
         if (!overrides.is_object()) return false;
         static const std::map<std::string, std::pair<double, double>> ranges{
             {"M_light", {0, 100}}, {"M_bsdf", {0, 100}}, {"max_age", {0, 100}},
-            {"max_recursion", {1, 100}}, {"diffuse_factor", {0, 1}},
+            {"max_recursion", {1, 100}}, {"sample_num", {1, 32}}, {"diffuse_factor", {0, 1}},
             {"history_limit", {0, 50}}, {"theta", {0, 90}}, {"depth", {0, 1}}, {"radius", {0, 50}}};
         for (const auto &[key, value] : overrides.items()) {
             if (!settings.contains(key)) return false;
@@ -67,6 +67,8 @@ private:
                 if (!value.is_number()) return false;
                 const bool integer = target.is_number_integer() || target.is_number_unsigned();
                 if (integer && !value.is_number_integer() && !value.is_number_unsigned()) return false;
+                // ReSTIR owns a primary receiver outside the suffix Li loop.
+                if (key == "max_depth" && value.get<double>() < 1.0) return false;
                 if (merge_illumination_setting(settings, key, value)) continue;
                 const auto range = ranges.find(key);
                 if (range == ranges.end()) return false;
@@ -97,7 +99,8 @@ public:
     RealTimeIntegrator() = default;
     explicit RealTimeIntegrator(const IntegratorDesc &desc)
         : IlluminationIntegrator(desc) {
-        max_depth_ = max_depth_.hv() - 1;
+        OC_ERROR_IF(max_depth_.hv() == 0u, "ReSTIR max_depth must be at least 1.");
+        max_depth_ = max_depth_.hv() - 1u;
     }
 
     void initialize_(const vision::NodeDesc &node_desc) noexcept override {
@@ -182,6 +185,24 @@ public:
         Integrator::invalidation();
     }
 
+    bool render_UI(Widgets *widgets) noexcept override {
+        bool open = widgets->use_folding_header(
+            ocarina::format("{} integrator", impl_type().data()),
+            [&] {
+                changed_ |= widgets->button_click("recompile", [&] { compile(); });
+                uint total_depth = max_depth_.hv() + 1u;
+                if (widgets->input_uint_limit("max depth", &total_depth, 1, 128, 1, 1)) {
+                    max_depth_ = total_depth - 1u;
+                    changed_ = true;
+                }
+                changed_ |= widgets->input_uint_limit("min depth", &min_depth_.hv(), 0, 20, 1, 1);
+                changed_ |= widgets->drag_float("rr threshold", &rr_threshold_.hv(), 0.01, 0, 1);
+                render_sub_UI(widgets);
+            });
+        denoiser_->render_UI(widgets);
+        return open;
+    }
+
     void render_sub_UI(Widgets *widgets) noexcept override {
         bool stable_planes = stable_planes_enabled();
         if (widgets->check_box("Stable Plane", &stable_planes)) {
@@ -193,6 +214,7 @@ public:
 
     [[nodiscard]] DataWrap settings() const override {
         auto result = illumination_settings();
+        result["max_depth"] = max_depth_.hv() + 1u;
         result.update(DataWrap{{"direct", direct_->settings()}, {"indirect", indirect_->settings()}});
         return result;
     }
@@ -205,12 +227,15 @@ public:
         // Finish readers before replacing a shader captured by an earlier frame.
         pipeline()->stream() << synchronize() << commit();
         const bool recompile_direct = direct_->set_settings(candidate["direct"]);
-        indirect_->set_settings(candidate["indirect"]);
-        apply_illumination_settings(candidate);
-        if (recompile_direct) {
+        const bool recompile_indirect = indirect_->set_settings(candidate["indirect"]);
+        auto transport = candidate;
+        transport["max_depth"] = candidate["max_depth"].get<uint>() - 1u;
+        apply_illumination_settings(transport);
+        if (recompile_direct || recompile_indirect) {
             Global::SceneGpuContextScope scene_gpu_context{
                 scene().geometry().bindless_array(), scene().geometry().gpu_resource()->device()};
-            direct_->compile();
+            if (recompile_direct) direct_->compile();
+            if (recompile_indirect) indirect_->compile();
             if (previous_recursion != direct_->max_recursion()) {
                 stable_planes_->set_max_recursion(direct_->max_recursion());
                 stable_planes_->compile();

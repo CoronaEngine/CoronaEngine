@@ -5,6 +5,7 @@
 #pragma once
 
 #include "common.h"
+#include "gi_reservoir_storage.h"
 #include "radiance_storage.h"
 #include "base/mgr/switch_profile.h"
 #include "reservoir.h"
@@ -53,7 +54,7 @@ class ReSTIRGI : public ReSTIR {
 private:
     SP<ScreenBuffer> radiance_{make_shared<ScreenBuffer>("ReSTIRGI::radiance_ [gi-radiance-v1]")};
     RegistrableBuffer<float4> rt_buffer_;
-    RegistrableBuffer<GIReservoir> reservoirs_{pipeline()->bindless_array()};
+    RegistrableBuffer<GIReservoirStorage> reservoirs_{pipeline()->bindless_array()};
     RegistrableBuffer<GISample> samples_{pipeline()->bindless_array()};
     uint sample_num_{1u};
     uint ratio_{2u};
@@ -77,12 +78,29 @@ private:
     bool compact_radiance_{};
     bool radiance_prepared_{};
 
+    // Internal pass-local receiver cache; no new virtual slots or stored state.
+    [[nodiscard]] GIReservoirVar constant_combine_cached(const GIReservoirVar &canonical_rsv,
+                                                        const Container<uint> &rsv_idx,
+                                                        const Interaction &canonical_it,
+                                                        MaterialEvaluator *cached_bsdf) const noexcept;
+    [[nodiscard]] GIReservoirVar spatial_reuse_cached(GIReservoirVar rsv, const SurfaceDataVar &cur_surf,
+                                                     const Int2 &pixel, const Var<GIParam> &param,
+                                                     const Interaction *cached_it,
+                                                     MaterialEvaluator *cached_bsdf) const noexcept;
+
 protected:
     [[nodiscard]] static TSampler &sampler() noexcept { return renderer().sampler(); }
+    [[nodiscard]] Bool receiver_reuse_allowed(const SurfaceDataVar &surface) const noexcept;
 
 public:
     ReSTIRGI() = default;
     ReSTIRGI(IntegratorPtr integrator, const ParameterSet &desc);
+    // Spatial container capacity and its loop bound are captured at compile time.
+    bool set_settings(const DataWrap &settings) {
+        const bool recompile = spatial_.sample_num != settings["spatial"]["sample_num"].get<uint>();
+        ReSTIR::set_settings(settings);
+        return recompile;
+    }
     void restore(RuntimeObject *old_obj) noexcept override;
     OC_MAKE_MEMBER_GETTER(open, )
     OC_MAKE_MEMBER_GETTER(radiance, &)
@@ -104,8 +122,8 @@ public:
     void render_sub_UI(Widgets *widgets) noexcept override;
     HOTFIX_VIRTUAL void compile_initial_samples() noexcept;
     HOTFIX_VIRTUAL void compile_temporal_reuse() noexcept;
-    [[nodiscard]] HOTFIX_VIRTUAL ScatterEval eval_bsdf(const Interaction &it, const GISampleVar &sample, MaterialEvalMode mode) const noexcept;
-    [[nodiscard]] HOTFIX_VIRTUAL Float compute_p_hat(const Interaction &it, const GISampleVar &sample) const noexcept;
+    [[nodiscard]] HOTFIX_VIRTUAL ScatterEval eval_bsdf(const Interaction &it, const GISampleVar &sample, MaterialEvalMode mode, MaterialEvaluator *bsdf = nullptr) const noexcept;
+    [[nodiscard]] HOTFIX_VIRTUAL Float compute_p_hat(const Interaction &it, const GISampleVar &sample, MaterialEvaluator *bsdf = nullptr) const noexcept;
     [[nodiscard]] HOTFIX_VIRTUAL Float selected_sample_support(const Interaction &target_it,
                                                                const Interaction &source_it,
                                                                const GISampleVar &sample) const noexcept;
@@ -156,16 +174,16 @@ public:
                                                  param.diff_factor, prev_depth);
     }
     [[nodiscard]] Uint reservoir_base() const noexcept { return reservoirs_.index_var(); }
-    // Final history stays in slice A. Temporal gathers A into scratch B;
-    // the following spatial dispatch gathers B and replaces A.
+    // Temporal history stays in slice A. Temporal gathers A into scratch B;
+    // spatial copies B back to A before reusing B for this frame's shading.
     [[nodiscard]] auto prev_reservoirs() const noexcept {
-        return pipeline()->bindless_array().buffer_var<GIReservoir>(reservoir_base());
+        return GIReservoirStorageView{pipeline()->bindless_array().buffer_var<GIReservoirStorage>(reservoir_base())};
     }
     [[nodiscard]] auto cur_reservoirs() const noexcept {
-        return pipeline()->bindless_array().buffer_var<GIReservoir>(reservoir_base());
+        return GIReservoirStorageView{pipeline()->bindless_array().buffer_var<GIReservoirStorage>(reservoir_base())};
     }
     [[nodiscard]] auto passthrough_reservoirs() const noexcept {
-        return pipeline()->bindless_array().buffer_var<GIReservoir>(1 + reservoir_base());
+        return GIReservoirStorageView{pipeline()->bindless_array().buffer_var<GIReservoirStorage>(1 + reservoir_base())};
     }
     [[nodiscard]] GIParam construct_param() const noexcept;
     [[nodiscard]] CommandBatch dispatch(uint frame_index, bool precise_lobes = false,

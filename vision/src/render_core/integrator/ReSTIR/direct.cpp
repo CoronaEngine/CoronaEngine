@@ -10,7 +10,7 @@ using namespace ocarina;
 
 ReSTIRDI::ReSTIRDI(IntegratorPtr integrator, const ParameterSet &desc)
     : ReSTIR(integrator, desc),
-      M_light_(desc["M_light"].as_uint(10)),
+      M_light_(desc["M_light"].as_uint(1)),
       M_bsdf_(desc["M_bsdf"].as_uint(1)),
       debias_(desc["debias"].as_bool(false)),
       reweight_(desc["reweight"].as_bool(false)),
@@ -75,7 +75,10 @@ SampledSpectrum ReSTIRDI::Li(const Interaction &it, MaterialEvaluator *bsdf, DIS
     if (!bsdf) {
         outline("ReSTIRDI::Li from bsdf", [&] {
             scene().materials().dispatch(it.material_id(), [&](const Material *material) {
-                MaterialEvaluator bsdf = material->create_evaluator(it, swl);
+                // Material construction may update its receiver's shading frame.
+                // Each target/proposal starts from the original receiver frame.
+                Interaction bsdf_it = it;
+                MaterialEvaluator bsdf = material->create_evaluator(bsdf_it, swl);
                 if (flag) { *flag = bsdf.flag(); }
                 swl.check_dispersive(spectrum, bsdf);
                 *bs = bsdf.sample(it.wo, sampler);
@@ -152,7 +155,10 @@ SampledSpectrum ReSTIRDI::Li(const Interaction &it, MaterialEvaluator *bsdf, con
     if (!bsdf) {
         outline("ReSTIRDI::Li from light", [&] {
             scene().materials().dispatch(it.material_id(), [&](const Material *material) {
-                MaterialEvaluator bsdf = material->create_evaluator(it, swl);
+                // Material construction may update its receiver's shading frame.
+                // Each target/proposal starts from the original receiver frame.
+                Interaction bsdf_it = it;
+                MaterialEvaluator bsdf = material->create_evaluator(bsdf_it, swl);
                 swl.check_dispersive(spectrum, bsdf);
                 eval = bsdf.evaluate(it.wo, wi);
             });

@@ -98,7 +98,8 @@ public:
         const uint light = settings["M_light"].get<uint>();
         const uint bsdf = settings["M_bsdf"].get<uint>();
         // RIS omits zero-count candidate generators when compiling its kernel.
-        const bool recompile = max_recursion_ != recursion || pairwise_ != pairwise ||
+        const bool recompile = spatial_.sample_num != settings["spatial"]["sample_num"].get<uint>() ||
+                               max_recursion_ != recursion || pairwise_ != pairwise ||
                                (M_light_ == 0u) != (light == 0u) || (M_bsdf_ == 0u) != (bsdf == 0u);
         ReSTIR::set_settings(settings);
         M_light_ = light;

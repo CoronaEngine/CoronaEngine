@@ -183,15 +183,16 @@ void check_restir_camera_preferences(const std::filesystem::path& root) {
                 std::optional<std::string>{R"({"direct":{"temporal":{"open":false}}})"},
             "ReSTIR pending preference must remain available after native acceptance");
 
+    // The API intentionally adds optional spatial.sample_num feedback; old partial requests remain valid.
     const auto defaults = nlohmann::json::parse(R"({
         "max_depth":15,"min_depth":5,"rr_threshold":1,
-        "direct":{"open":true,"M_light":10,"M_bsdf":1,"max_age":30,"max_recursion":5,
+        "direct":{"open":true,"M_light":1,"M_bsdf":1,"max_age":30,"max_recursion":5,
             "diffuse_factor":0.3,"pairwise":true,
-            "temporal":{"open":true,"history_limit":5,"theta":35,"depth":0.3,"radius":8},
-            "spatial":{"open":true,"theta":35,"depth":0.3,"radius":30}},
+            "temporal":{"open":true,"history_limit":5,"theta":35,"depth":0.3,"radius":0},
+            "spatial":{"open":true,"sample_num":1,"theta":35,"depth":0.3,"radius":30}},
         "indirect":{"open":true,"max_age":30,"diffuse_factor":0.3,
-            "temporal":{"open":true,"history_limit":5,"theta":35,"depth":0.3,"radius":8},
-            "spatial":{"open":true,"theta":35,"depth":0.3,"radius":12}}})");
+            "temporal":{"open":true,"history_limit":5,"theta":35,"depth":0.3,"radius":0},
+            "spatial":{"open":true,"sample_num":2,"theta":35,"depth":0.3,"radius":12}}})");
     {
         auto camera = hub.camera_storage().acquire_write(handle);
         require(static_cast<bool>(camera), "native fixture camera must exist in storage");
@@ -267,7 +268,7 @@ void check_restir_camera_preferences(const std::filesystem::path& root) {
         bool integer{false};
     };
     const Range ranges[] = {
-        {"/max_depth", 0, 128, true}, {"/min_depth", 0, 20, true}, {"/rr_threshold", 0, 1},
+        {"/max_depth", 1, 128, true}, {"/min_depth", 0, 20, true}, {"/rr_threshold", 0, 1},
         {"/direct/M_light", 0, 100, true}, {"/direct/M_bsdf", 0, 100, true},
         {"/direct/max_age", 0, 100, true}, {"/direct/max_recursion", 1, 100, true},
         {"/direct/diffuse_factor", 0, 1}, {"/indirect/max_age", 0, 100, true},
@@ -276,10 +277,12 @@ void check_restir_camera_preferences(const std::filesystem::path& root) {
         {"/direct/temporal/theta", 0, 90}, {"/direct/temporal/depth", 0, 1},
         {"/direct/temporal/radius", 0, 50}, {"/direct/spatial/theta", 0, 90},
         {"/direct/spatial/depth", 0, 1}, {"/direct/spatial/radius", 0, 50},
+        {"/direct/spatial/sample_num", 1, 32, true},
         {"/indirect/temporal/history_limit", 0, 50, true},
         {"/indirect/temporal/theta", 0, 90}, {"/indirect/temporal/depth", 0, 1},
         {"/indirect/temporal/radius", 0, 50}, {"/indirect/spatial/theta", 0, 90},
         {"/indirect/spatial/depth", 0, 1}, {"/indirect/spatial/radius", 0, 50},
+        {"/indirect/spatial/sample_num", 1, 32, true},
     };
     for (const auto& range : ranges) {
         for (const double endpoint : {range.minimum, range.maximum}) {

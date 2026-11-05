@@ -679,10 +679,10 @@ struct VisionEngineSceneTest {
         const std::string settings = R"({"max_depth":3,"min_depth":2,"rr_threshold":0.5,
           "direct":{"M_light":7,"M_bsdf":2,"max_age":12,"diffuse_factor":0.2,
             "temporal":{"open":false,"history_limit":4,"theta":25,"depth":0.2,"radius":6},
-            "spatial":{"open":false,"theta":30,"depth":0.4,"radius":20}},
+            "spatial":{"open":false,"sample_num":2,"theta":30,"depth":0.4,"radius":20}},
           "indirect":{"max_age":15,"diffuse_factor":0.4,
             "temporal":{"open":false,"history_limit":3,"theta":20,"depth":0.1,"radius":5},
-            "spatial":{"open":false,"theta":40,"depth":0.5,"radius":10}}})";
+            "spatial":{"open":false,"sample_num":4,"theta":40,"depth":0.5,"radius":10}}})";
         Corona::API::set_vision_restir_settings(settings, first);
         auto updates = hub.drain_camera_state_updates();
         expect(updates.size() == 1 && updates[0].fields == CameraStateUpdateField::VisionRestirSettings &&
@@ -706,8 +706,13 @@ struct VisionEngineSceneTest {
         render(pipeline, "ReSTIR-settings-second-camera");
         const auto other_history = pipeline.frame_index();
         const auto defaults = pipeline.renderer().integrator()->settings();
-        expect(defaults["direct"]["M_light"] == 10 && defaults["direct"]["pairwise"] == true &&
-                   defaults["indirect"]["spatial"]["radius"] == 12,
+        // Intentionally selected balanced defaults; explicit scene overrides still take priority.
+        expect(defaults["direct"]["M_light"] == 1 && defaults["direct"]["pairwise"] == true &&
+                   defaults["indirect"]["spatial"]["radius"] == 12 &&
+                   defaults["direct"]["spatial"]["sample_num"] == 1 &&
+                   defaults["indirect"]["spatial"]["sample_num"] == 2 &&
+                   defaults["direct"]["temporal"]["radius"] == 0 &&
+                   defaults["indirect"]["temporal"]["radius"] == 0,
                "ReSTIR UI feedback must include actual estimator defaults");
         prepare(first, "{}");
         render(pipeline, "ReSTIR-settings-before-edit");
@@ -739,7 +744,9 @@ struct VisionEngineSceneTest {
                    effective["direct"]["spatial"]["radius"] == 20 &&
                    effective["indirect"]["max_age"] == 15 &&
                    effective["indirect"]["temporal"]["theta"] == 20 &&
-                   effective["indirect"]["spatial"]["radius"] == 10,
+                   effective["indirect"]["spatial"]["radius"] == 10 &&
+                   effective["direct"]["spatial"]["sample_num"] == 2 &&
+                   effective["indirect"]["spatial"]["sample_num"] == 4,
                "nested DI/GI settings must reach the active estimator and feedback");
         render(pipeline, "ReSTIR-settings-after-edit");
         const auto history = pipeline.frame_index();
@@ -751,6 +758,9 @@ struct VisionEngineSceneTest {
         for (const char* invalid : {R"({"direct":{"max_age":101}})",
                 R"({"direct":{"max_recursion":0}})", R"({"direct":{"M_light":1.5}})",
                 R"({"indirect":{"temporal":{"open":1}}})", R"({"indirect":{"ratio":2}})",
+                R"({"direct":{"spatial":{"sample_num":0}}})",
+                R"({"indirect":{"spatial":{"sample_num":33}}})",
+                R"({"indirect":{"spatial":{"sample_num":1.5}}})",
                 R"({"indirect":{"spatial":{"theta":91}}})", R"({"direct":{"diffuse_factor":-0.1}})",
                 R"({"max_depth":4,"direct":{"unknown":true}})", R"({"direct":null})"}) {
             expect(!integrator->set_settings(vision::DataWrap::parse(invalid, nullptr, false)) &&
@@ -761,19 +771,36 @@ struct VisionEngineSceneTest {
         expect(pipeline.frame_index() == other_history &&
                    pipeline.renderer().integrator()->settings() == defaults,
                "editing ReSTIR must preserve another camera's values and history");
-        prepare(first, R"({"max_depth":0,"min_depth":20,"rr_threshold":0,
+        {
+            auto* illumination = dynamic_cast<vision::IlluminationIntegrator*>(
+                pipeline.renderer().integrator().get());
+            expect(illumination != nullptr, "ReSTIR must expose its internal suffix depth");
+            const auto before_zero = illumination->settings();
+            const auto suffix_before_zero = illumination->suffix_depth();
+            const auto history_before_zero = pipeline.frame_index();
+            const auto framebuffer_before_zero = pipeline.frame_buffer();
+            expect(!illumination->set_settings(vision::DataWrap{{"max_depth", 0}, {"min_depth", 0}}) &&
+                       illumination->settings() == before_zero &&
+                       illumination->suffix_depth() == suffix_before_zero &&
+                       pipeline.frame_index() == history_before_zero &&
+                       pipeline.frame_buffer() == framebuffer_before_zero,
+                   "zero public ReSTIR depth must be rejected without changing settings or view state");
+        }
+        prepare(first, R"({"max_depth":1,"min_depth":20,"rr_threshold":0,
           "direct":{"pairwise":false,"max_recursion":1},"indirect":{"open":false}})");
         render(pipeline, "ReSTIR-settings-compiled-pairwise-and-recursion");
         effective = vision::DataWrap::parse(Corona::API::get_effective_vision_restir_settings(first));
-        expect(effective["max_depth"] == 0 && effective["direct"]["pairwise"] == false &&
-                   effective["direct"]["max_recursion"] == 1,
-               "compiled ReSTIR settings and zero-depth boundary must apply");
-        prepare(first, R"({"max_depth":0,"direct":{"M_light":0,"M_bsdf":0,"pairwise":false,
+        const auto* illumination = dynamic_cast<vision::IlluminationIntegrator*>(
+            pipeline.renderer().integrator().get());
+        expect(effective["max_depth"] == 1 && illumination && illumination->suffix_depth() == 0 &&
+                   effective["direct"]["pairwise"] == false && effective["direct"]["max_recursion"] == 1,
+               "compiled ReSTIR settings must map public depth one to an empty suffix");
+        prepare(first, R"({"max_depth":1,"direct":{"M_light":0,"M_bsdf":0,"pairwise":false,
           "max_recursion":1},"indirect":{"open":false}})");
         render(pipeline, "ReSTIR-settings-zero-candidates", false);
         // Keep every other compiled setting unchanged so it cannot hide a
         // missing zero-to-positive candidate-generator specialization update.
-        prepare(first, R"({"max_depth":0,"direct":{"M_light":7,"M_bsdf":2,"pairwise":false,
+        prepare(first, R"({"max_depth":1,"direct":{"M_light":7,"M_bsdf":2,"pairwise":false,
           "max_recursion":1},"indirect":{"open":false}})");
         render(pipeline, "ReSTIR-settings-restored-candidates");
         prepare(first, R"({"direct":{"open":false},"indirect":{"open":false}})");
