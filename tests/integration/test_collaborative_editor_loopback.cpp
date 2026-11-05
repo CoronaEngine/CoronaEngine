@@ -5,7 +5,7 @@
 #include "cef/cef_editor_native_api_registry.h"
 #include "collaborative_editor_runtime.h"
 #include "cef/cef_editor_native_api_test_support.h"
-#include "cef/scene_folder.h"
+#include "archive_test_host.h"
 
 #include <array>
 #include <chrono>
@@ -41,7 +41,7 @@ struct TempProject {
         root = std::filesystem::temp_directory_path() /
                ("corona_collaborative_editor_loopback_" + std::to_string(nonce));
         std::filesystem::remove_all(root);
-        require(Corona::Systems::UI::SceneFolders::create_scene_folder(root, "Loopback").has_value(),
+        require(ArchiveFixture::create_scene_folder(root, "Loopback").has_value(),
                 "portable scene fixture creation failed");
         std::ofstream model(root / "remote.obj", std::ios::binary | std::ios::trunc);
         model << "o triangle\n"
@@ -60,7 +60,7 @@ struct TempProject {
 
 nlohmann::json empty_archive_snapshot(const std::filesystem::path& root) {
     return {
-        {"schema_version", 1},
+        {"schema_version", 1}, {"archive_session", root.string()},
         {"archive_type", "portable_scene"},
         {"project_root", root.string()},
         {"scene", {
@@ -337,7 +337,7 @@ void check_restir_camera_preferences(const std::filesystem::path& root) {
     require(scene_snapshot()["cameras"][0]["vision_restir_settings"] == requested &&
                 scene_snapshot()["cameras"][0]["vision_pt_settings"] == nlohmann::json{{"max_depth", 6}},
             "native snapshots must preserve independent pending PT and ReSTIR overrides");
-    require(invoke("MainView", "scene_save", {"scene.ini"}).data.value("ok", false),
+    require(invoke("MainView", "scene_save", {"scene.ini", {{"archive_session", root.string()}}}).data.value("ok", false),
             "native scene save failed while ReSTIR settings were pending");
     std::ifstream saved(root / "scene.ini");
     std::string line;
@@ -526,6 +526,7 @@ void run_loopback_test() {
 }  // namespace
 
 int main() {
+    ArchiveFixture::ArchiveTestHost host;
     run_loopback_test();
     return 0;
 }

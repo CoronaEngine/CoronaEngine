@@ -15,12 +15,14 @@ import websocket
 
 
 class Frontend:
-    def __init__(self, port=9222, host="127.0.0.1"):
+    def __init__(self, port=9222, host="127.0.0.1", target_id=None):
         if host not in ("127.0.0.1", "::1"):
             raise ValueError("Only the local engine endpoint is allowed")
         address = "[::1]" if host == "::1" else host
         with urlopen(f"http://{address}:{port}/json/list", timeout=3) as response:
             targets = [item for item in json.load(response) if item["type"] == "page"]
+        if target_id is not None:
+            targets = [item for item in targets if item["id"] == target_id]
         if len(targets) != 1:
             raise RuntimeError(f"Expected one engine frontend, found {len(targets)}")
         if "/CabbageEditor/Frontend/" not in targets[0]["url"]:

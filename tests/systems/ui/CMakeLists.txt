@@ -41,7 +41,8 @@ target_compile_definitions(corona_scene_folder_tests PRIVATE
 if(MSVC)
     target_compile_options(corona_scene_folder_tests PRIVATE /EHsc)
 endif()
-add_test(NAME SceneFolderTests COMMAND corona_scene_folder_tests)
+add_test(NAME SceneFolderTests COMMAND ${Python_EXECUTABLE} ${PROJECT_SOURCE_DIR}/tests/integration/archive_driver.py
+    $<TARGET_FILE:corona_scene_folder_tests> ${CORONA_EDITOR_SOURCE_DIR})
 
 add_executable(corona_cef_app_tests
     test_cef_app.cpp
@@ -221,3 +222,7 @@ add_executable(corona_imgui_workspace_tests
 target_include_directories(corona_imgui_workspace_tests PRIVATE ${PROJECT_SOURCE_DIR}/src/systems/ui)
 target_link_libraries(corona_imgui_workspace_tests PRIVATE corona::imgui)
 add_test(NAME ImGuiWorkspaceTests COMMAND corona_imgui_workspace_tests)
+
+add_test(NAME ProjectDocumentStoreTests COMMAND ${Python_EXECUTABLE} -B -m unittest
+    runtime.archive.tests.test_documents)
+set_tests_properties(ProjectDocumentStoreTests PROPERTIES WORKING_DIRECTORY "${CORONA_EDITOR_SOURCE_DIR}/editor")

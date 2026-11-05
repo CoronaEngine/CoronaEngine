@@ -28,6 +28,7 @@ set(UI_SYSTEM_SOURCES
     cef/cef_editor_native_api_registry.cpp
     cef/cef_editor_native_api_handlers.cpp
     cef/scene_folder.cpp
+    cef/scene_archive_rpc.cpp
     cef/cef_query_bridge.cpp
     cef/cef_realtime_bridge.cpp
     cef/request_response_broker.cpp

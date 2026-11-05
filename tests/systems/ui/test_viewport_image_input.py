@@ -87,8 +87,9 @@ struct Result {
     bool consumed=false,ended=false,dragging=false,cancelled=false;
     ktm::fvec3 position{};
 } last_result;
-void emit_viewport_gizmo_result(Result result,int) { last_result=result; }
-void emit_viewport_gizmo_transform(int,ktm::fvec3) {}
+struct CefFrame {};
+template<class T> using CefRefPtr=std::shared_ptr<T>;
+void retain_gizmo_result(const CefRefPtr<CefFrame>&,const Result& result,int) { last_result=result; }
 bool write_actor_gizmo_position(int,ktm::fvec3) { return true; }
 struct Drag {
     int actor_handle=1; Corona::ViewportGizmoAxis axis=Corona::ViewportGizmoAxis::X;
@@ -137,6 +138,7 @@ bool live_pick(double x,double y,double vp_w,double vp_h) {
     return true;
 }
 bool gizmo(double x_value,double y_value,double width_value,double height_value,std::string event_type="pointermove") {
+    const auto frame=std::make_shared<CefFrame>();
     const auto* camera=&camera_value;
     const int camera_handle=1;
     Result result;
