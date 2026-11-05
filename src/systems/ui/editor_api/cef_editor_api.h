@@ -20,6 +20,7 @@ enum class EditorApiCaller : std::uint32_t {
     Cef = 1u << 0u,
     PythonScript = 1u << 1u,
     ScriptRuntime = 1u << 2u,
+    Native = 1u << 3u,
 };
 
 enum class EditorApiValueType : std::uint32_t {
@@ -156,6 +157,5 @@ void clear_python_script_callbacks();
 NativeResult invoke_python_script_service(const NativeRequest& request,
                                           const char* route = "python-script",
                                           std::chrono::milliseconds timeout = std::chrono::seconds(2));
-bool enqueue_python_project_context_changed(std::string_view project_path);
 
 }  // namespace Corona::Systems::UI

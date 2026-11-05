@@ -1,21 +1,9 @@
 #include "scene_folder.h"
 
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#include <Windows.h>
-#include <bcrypt.h>
-
 #include <algorithm>
-#include <array>
 #include <cctype>
-#include <cstring>
 #include <fstream>
 #include <iomanip>
-#include <map>
-#include <memory>
-#include <mutex>
-#include <unordered_map>
 #include <set>
 #include <sstream>
 #include <stdexcept>
@@ -32,16 +20,6 @@ namespace Corona::Systems::UI::SceneFolders {
 namespace {
 
 namespace fs = std::filesystem;
-
-std::recursive_mutex& scene_file_mutex(const fs::path& root) {
-    static std::mutex registry_mutex;
-    static std::unordered_map<std::wstring, std::unique_ptr<std::recursive_mutex>> mutexes;
-    const auto key = fs::absolute(root).lexically_normal().native();
-    std::scoped_lock registry_lock(registry_mutex);
-    auto& mutex = mutexes[key];
-    if (!mutex) mutex = std::make_unique<std::recursive_mutex>();
-    return *mutex;
-}
 
 std::string trim(std::string value) {
     const auto first = value.find_first_not_of(" \t\r\n");
@@ -64,41 +42,6 @@ std::string path_utf8(const fs::path& path) {
 
 fs::path path_from_utf8(std::string_view value) {
     return fs::path(std::u8string(reinterpret_cast<const char8_t*>(value.data()), value.size()));
-}
-
-bool resolves_within(const fs::path& root, const fs::path& candidate) {
-    std::error_code ec;
-    const auto canonical_root = fs::weakly_canonical(root, ec);
-    if (ec) return false;
-    const auto canonical_candidate = fs::weakly_canonical(candidate, ec);
-    if (ec) return false;
-    const auto relative = fs::relative(canonical_candidate, canonical_root, ec);
-    return !ec && !relative.empty() && relative != "." &&
-           relative.native().find(L':') == std::wstring::npos &&
-           std::none_of(relative.begin(), relative.end(), [](const auto& component) {
-               return component == "..";
-           });
-}
-
-std::map<std::string, std::map<std::string, std::string>> read_ini(const fs::path& path) {
-    std::ifstream stream(path);
-    std::map<std::string, std::map<std::string, std::string>> result;
-    std::string section;
-    std::string line;
-    while (std::getline(stream, line)) {
-        line = trim(line);
-        if (line.empty() || line[0] == ';' || line[0] == '#') continue;
-        if (line.front() == '[' && line.back() == ']') {
-            section = lower(trim(line.substr(1, line.size() - 2)));
-            result.try_emplace(section);
-            continue;
-        }
-        const auto equals = line.find('=');
-        if (equals != std::string::npos) {
-            result[section][lower(trim(line.substr(0, equals)))] = trim(line.substr(equals + 1));
-        }
-    }
-    return result;
 }
 
 std::vector<std::string> split_words(std::string value) {
@@ -404,201 +347,38 @@ std::vector<SourceFile> collect_bundle(const fs::path& source,
     return files;
 }
 
-class Sha256Hasher {
-   public:
-    Sha256Hasher() {
-        DWORD copied{};
-        if (BCryptOpenAlgorithmProvider(&algorithm_, BCRYPT_SHA256_ALGORITHM, nullptr, 0) != 0 ||
-            BCryptGetProperty(algorithm_, BCRYPT_OBJECT_LENGTH, reinterpret_cast<PUCHAR>(&object_size_),
-                              sizeof(object_size_), &copied, 0) != 0 ||
-            BCryptGetProperty(algorithm_, BCRYPT_HASH_LENGTH, reinterpret_cast<PUCHAR>(&hash_size_),
-                              sizeof(hash_size_), &copied, 0) != 0) {
-            cleanup();
-            throw std::runtime_error("Unable to initialize SHA-256");
-        }
-        object_.resize(object_size_);
-        if (BCryptCreateHash(algorithm_, &hash_, object_.data(), object_size_, nullptr, 0, 0) != 0) {
-            cleanup();
-            throw std::runtime_error("Unable to initialize SHA-256");
-        }
-    }
-
-    Sha256Hasher(const Sha256Hasher&) = delete;
-    Sha256Hasher& operator=(const Sha256Hasher&) = delete;
-    ~Sha256Hasher() { cleanup(); }
-
-    void update(const void* data, size_t size) {
-        const auto* cursor = static_cast<const UCHAR*>(data);
-        while (size != 0) {
-            const auto chunk = static_cast<ULONG>(std::min<size_t>(size, 1024 * 1024));
-            if (BCryptHashData(hash_, const_cast<PUCHAR>(cursor), chunk, 0) != 0) {
-                throw std::runtime_error("Unable to compute SHA-256");
-            }
-            cursor += chunk;
-            size -= chunk;
-        }
-    }
-
-    std::string finish() {
-        std::vector<UCHAR> digest(hash_size_);
-        if (BCryptFinishHash(hash_, digest.data(), hash_size_, 0) != 0) {
-            throw std::runtime_error("Unable to compute SHA-256");
-        }
-        std::ostringstream result;
-        for (const auto byte : digest) {
-            result << std::hex << std::setw(2) << std::setfill('0') << static_cast<int>(byte);
-        }
-        return result.str();
-    }
-
-   private:
-    void cleanup() noexcept {
-        if (hash_) BCryptDestroyHash(hash_);
-        if (algorithm_) BCryptCloseAlgorithmProvider(algorithm_, 0);
-        hash_ = nullptr;
-        algorithm_ = nullptr;
-    }
-
-    BCRYPT_ALG_HANDLE algorithm_{};
-    BCRYPT_HASH_HANDLE hash_{};
-    DWORD object_size_{};
-    DWORD hash_size_{};
-    std::vector<UCHAR> object_;
-};
-
-void hash_file_into(Sha256Hasher& hasher, const fs::path& path) {
-    std::ifstream stream(path, std::ios::binary);
-    if (!stream) throw std::runtime_error("Unable to open file: " + path.string());
-    std::array<char, 64 * 1024> buffer{};
-    while (stream) {
-        stream.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
-        const auto count = stream.gcount();
-        if (count > 0) hasher.update(buffer.data(), static_cast<size_t>(count));
-    }
-    if (!stream.eof()) throw std::runtime_error("Unable to read file: " + path.string());
-}
-
-std::string bundle_hash(std::vector<SourceFile> files) {
-    std::sort(files.begin(), files.end(), [](const auto& left, const auto& right) {
-        return left.relative.generic_u8string() < right.relative.generic_u8string();
-    });
-    Sha256Hasher hasher;
+nlohmann::json import_plan(const std::vector<SourceFile>& files) {
+    nlohmann::json plan = nlohmann::json::array();
     for (const auto& file : files) {
-        const auto relative = path_utf8(file.relative);
-        hasher.update(relative.data(), relative.size());
-        constexpr char separator = '\0';
-        hasher.update(&separator, 1);
-        hash_file_into(hasher, file.source);
+        plan.push_back({{"source", path_utf8(file.source)}, {"relative", path_utf8(file.relative)}});
     }
-    return hasher.finish();
+    return plan;
 }
 
-nlohmann::json manifest_json(const std::vector<ImportResult>& bundles) {
-    nlohmann::json result = {{"format", "corona_scene_assets"}, {"version", 1}, {"bundles", nlohmann::json::array()}};
-    for (const auto& bundle : bundles) {
-        nlohmann::json files = nlohmann::json::array();
-        for (const auto& file : bundle.files) {
-            files.push_back({{"path", file.route}, {"sha256", file.sha256}, {"size", file.size}});
-        }
-        result["bundles"].push_back({{"type", bundle.type}, {"sha256", bundle.bundle_sha256},
-                                     {"main", bundle.main_route}, {"files", std::move(files)},
-                                     {"dependencies", bundle.dependencies}});
+std::vector<Diagnostic> diagnostics(const nlohmann::json& response) {
+    std::vector<Diagnostic> errors;
+    for (const auto& d : response.value("diagnostics", nlohmann::json::array())) {
+        errors.push_back({d.value("code", ""), d.value("message", ""), path_from_utf8(d.value("path", "")),
+                          d.value("actor", ""), d.value("field", "")});
     }
-    return result;
+    return errors;
 }
 
-std::string safe_category(std::string_view category) {
-    static const std::set<std::string> allowed = {
-        "Models", "Actors", "Images", "Audio", "Scripts", "Terrain"};
-    const std::string value(category);
-    if (!allowed.contains(value)) throw std::invalid_argument("Unsupported asset category: " + value);
-    return value;
-}
-
-ImportResult import_collected_files(const fs::path& root,
-                                    std::vector<ImportResult>& bundles,
-                                    std::vector<SourceFile> files,
-                                    std::string type,
-                                    std::string category,
-                                    const fs::path& source) {
-    ImportResult result;
-    result.type = std::move(type);
-    try {
-        result.bundle_sha256 = bundle_hash(files);
-        const auto bundle_rel = fs::path("Assets") / safe_category(category) /
-                                result.bundle_sha256.substr(0, 12);
-        const auto destination = root / bundle_rel;
-        if (!resolves_within(root / "Assets", destination)) {
-            throw std::runtime_error("Asset bundle destination escapes Assets");
+ImportResult import_result(const nlohmann::json& response) {
+    ImportResult out;
+    out.diagnostics = diagnostics(response);
+    if (out.diagnostics.empty()) {
+        const auto& bundle = response.at("bundle");
+        out.main_route = bundle.at("main");
+        out.type = bundle.at("type");
+        out.bundle_sha256 = bundle.at("sha256");
+        out.dependencies = bundle.at("dependencies").get<std::vector<std::string>>();
+        for (const auto& file : bundle.at("files")) {
+            out.files.push_back({{}, file.at("path"), file.at("sha256"), file.at("size")});
         }
-        const auto staging = root / ".asset-stage" / result.bundle_sha256;
-        std::error_code ec;
-        fs::remove_all(staging, ec);
-        for (const auto& file : files) {
-            const auto target = staging / file.relative;
-            fs::create_directories(target.parent_path());
-            fs::copy_file(file.source, target, fs::copy_options::overwrite_existing);
-            ImportedFile imported;
-            imported.source = file.source;
-            imported.route = path_utf8(bundle_rel / file.relative);
-            imported.sha256 = sha256_file(file.source);
-            imported.size = fs::file_size(file.source);
-            result.files.push_back(std::move(imported));
-        }
-        if (!fs::exists(destination)) {
-            fs::create_directories(destination.parent_path());
-            fs::rename(staging, destination);
-        } else {
-            std::vector<SourceFile> existing_files;
-            bool complete = true;
-            for (const auto& file : files) {
-                const auto existing = destination / file.relative;
-                if (!fs::is_regular_file(existing)) {
-                    complete = false;
-                    break;
-                }
-                existing_files.push_back({existing, file.relative});
-            }
-            if (!complete || bundle_hash(existing_files) != result.bundle_sha256) {
-                fs::remove_all(staging, ec);
-                result.main_route.clear();
-                result.diagnostics.push_back(
-                    {"bundle_collision", "Bundle hash-prefix directory contains different content",
-                     destination});
-                return result;
-            }
-            fs::remove_all(staging, ec);
-        }
-        fs::remove(root / ".asset-stage", ec);
-        result.main_route = path_utf8(bundle_rel / files.front().relative);
-        for (const auto& file : result.files) {
-            if (file.route != result.main_route) result.dependencies.push_back(file.route);
-        }
-        const auto existing = std::find_if(bundles.begin(), bundles.end(), [&](const ImportResult& item) {
-            return item.bundle_sha256 == result.bundle_sha256 && item.type == result.type;
-        });
-        if (existing == bundles.end()) bundles.push_back(result);
-    } catch (const std::exception& error) {
-        result.main_route.clear();
-        result.diagnostics.push_back({"asset_import_failed", error.what(), source});
-        std::error_code ec;
-        fs::remove_all(root / ".asset-stage", ec);
     }
-    return result;
+    return out;
 }
-
-void write_ini_file(const fs::path& path,
-                    const std::map<std::string, std::map<std::string, std::string>>& ini) {
-    fs::create_directories(path.parent_path());
-    std::ofstream stream(path, std::ios::binary | std::ios::trunc);
-    if (!stream) throw std::runtime_error("Unable to write scene.ini");
-    for (const auto& [section, values] : ini) {
-        stream << '[' << section << "]\n";
-        for (const auto& [key, value] : values) stream << key << " = " << value << '\n';
-        stream << '\n';
-    }
-}
-
 }  // namespace
 
 bool is_valid_asset_route(std::string_view route) {
@@ -609,675 +389,67 @@ bool is_valid_asset_route(std::string_view route) {
     return iterator != path.end() && *iterator == "Assets";
 }
 
-std::optional<SceneFolderLayout> detect_scene_folder(const fs::path& input) {
-    auto root = fs::is_directory(input) ? input : input.parent_path();
-    const auto scene_file = fs::is_directory(input) ? input / "scene.ini" : input;
-    if (scene_file.filename() != "scene.ini" || !fs::is_regular_file(scene_file)) return std::nullopt;
-    const auto ini = read_ini(scene_file);
-    const auto format = ini.find("format");
-    if (format == ini.end() || !format->second.contains("type") ||
-        format->second.at("type") != "corona_scene_folder" ||
-        !format->second.contains("version") || format->second.at("version") != "1") return std::nullopt;
-    SceneFolderLayout layout{root, scene_file};
-    if (const auto scene = ini.find("scene"); scene != ini.end() && scene->second.contains("name")) {
-        layout.scene_name = scene->second.at("name");
-    }
-    if (layout.scene_name.empty()) layout.scene_name = path_utf8(root.filename());
-    return layout;
+SceneAssetStore::SceneAssetStore(fs::path root, bool allow_missing)
+    : root_(std::move(root)), allow_missing_(allow_missing) {}
+
+nlohmann::json SceneAssetStore::request(nlohmann::json payload) const {
+    payload["root"] = path_utf8(root_);
+    payload["allowMissing"] = allow_missing_;
+    return archive_asset_request(std::move(payload));
 }
 
-std::optional<SceneFolderLayout> create_scene_folder(const fs::path& root,
-                                                     std::string_view scene_name) {
-    if (root.empty() || fs::exists(root)) return std::nullopt;
-    const auto staging = root.parent_path() / ("." + root.filename().string() + ".creating");
-    std::error_code ec;
-    fs::remove_all(staging, ec);
-    try {
-        fs::create_directories(staging / "Assets");
-        std::map<std::string, std::map<std::string, std::string>> ini;
-        ini["format"] = {{"type", "corona_scene_folder"}, {"version", "1"}};
-        ini["scene"] = {{"name", scene_name.empty() ? root.filename().string() : std::string(scene_name)}};
-        ini["sun"] = {{"sun_direction", "1.0, 1.0, 1.0"}, {"enabled", "true"}};
-        ini["grid"] = {{"enabled", "true"}};
-        ini["actors"] = {};
-        ini["scripts"] = {{"path", ""}};
-        ini["terrain"] = {{"type", ""}, {"path", ""}};
-        write_ini_file(staging / "scene.ini", ini);
-        SceneAssetStore store(staging, true);
-        if (!store.write_manifest()) throw std::runtime_error("Unable to create asset manifest");
-        fs::rename(staging, root);
-        return detect_scene_folder(root);
-    } catch (...) {
-        fs::remove_all(staging, ec);
-        return std::nullopt;
-    }
-}
-
-std::string sha256_file(const fs::path& path) {
-    Sha256Hasher hasher;
-    hash_file_into(hasher, path);
-    return hasher.finish();
-}
-
-SceneAssetStore::SceneAssetStore(fs::path scene_root, bool allow_missing_manifest)
-    : root_(std::move(scene_root)) {
-    std::scoped_lock lock(scene_file_mutex(root_));
-    const auto manifest = root_ / "assets.manifest.json";
-    if (!fs::is_regular_file(manifest)) {
-        if (!allow_missing_manifest && detect_scene_folder(root_)) {
-            manifest_error_ = Diagnostic{"invalid_manifest", "Portable asset manifest is missing", manifest};
-        }
-        return;
-    }
-    try {
-        std::ifstream stream(manifest);
-        const auto document = nlohmann::json::parse(stream);
-        if (document.value("format", "") != "corona_scene_assets" ||
-            document.value("version", 0) != 1 || !document.contains("bundles") ||
-            !document["bundles"].is_array()) {
-            manifest_error_ = Diagnostic{"invalid_manifest", "Unsupported asset manifest", manifest};
-            return;
-        }
-        for (const auto& item : document["bundles"]) {
-            ImportResult bundle;
-            bundle.type = item.value("type", "model");
-            bundle.bundle_sha256 = item.value("sha256", "");
-            bundle.main_route = item.value("main", "");
-            if (item.contains("files") && item["files"].is_array()) {
-                for (const auto& file_item : item["files"]) {
-                    ImportedFile file;
-                    file.route = file_item.value("path", "");
-                    file.sha256 = file_item.value("sha256", "");
-                    file.size = file_item.value("size", std::uint64_t{});
-                    bundle.files.push_back(std::move(file));
-                }
-            }
-            if (item.contains("dependencies") && item["dependencies"].is_array()) {
-                for (const auto& dependency : item["dependencies"]) {
-                    if (dependency.is_string()) bundle.dependencies.push_back(dependency.get<std::string>());
-                }
-            }
-            if (!bundle.bundle_sha256.empty() && !bundle.main_route.empty()) {
-                bundles_.push_back(std::move(bundle));
-            }
-        }
-    } catch (const std::exception& error) {
-        bundles_.clear();
-        manifest_error_ = Diagnostic{"invalid_manifest", error.what(), manifest};
-    }
-}
-
-ImportResult SceneAssetStore::import_model(const fs::path& source) {
-    std::scoped_lock lock(scene_file_mutex(root_));
-    ImportResult result;
-    if (manifest_error_) {
-        result.diagnostics.push_back(*manifest_error_);
-        return result;
-    }
-    // 必须与 SceneParser 实际注册的扩展名保持一致（modules/corona_resource：
-    // scene.cpp register_extension），否则文件选择器能选、引擎能加载的格式会在
-    // 这里被判为"不支持"。.usdz/.3ds/.stl 此前缺失。
+ImportResult SceneAssetStore::import_model_source(const fs::path& source, const fs::path& actor) {
     static const std::set<std::string> supported{
         ".obj", ".ply", ".gltf", ".glb", ".fbx", ".dae", ".usd", ".usda", ".usdc", ".usdz", ".3ds", ".stl"};
+    ImportResult result;
     if (!supported.contains(lower(source.extension().string()))) {
         result.diagnostics.push_back({"unsupported_model", "Unsupported model extension", source});
         return result;
     }
-    auto files = collect_bundle(fs::absolute(source).lexically_normal(), result.diagnostics);
+    const auto files = collect_bundle(fs::absolute(source).lexically_normal(), result.diagnostics);
     if (!result.diagnostics.empty()) return result;
-    return import_collected_files(root_, bundles_, std::move(files), "model", "Models", source);
+    result = import_result(request({{"op", "import"}, {"source", path_utf8(source)}, {"actor", path_utf8(actor)},
+                                    {"category", "Models"}, {"files", import_plan(files)}}));
+    if (result.ok() && !actor.empty()) result.files.front().source = actor;
+    else if (result.files.size() == files.size()) {
+        for (size_t i = 0; i < files.size(); ++i) result.files[i].source = files[i].source;
+    }
+    return result;
+}
+
+ImportResult SceneAssetStore::import_model(const fs::path& source) {
+    return import_model_source(source, {});
+}
+
+ImportResult SceneAssetStore::import_actor(const fs::path& actor_source, const fs::path& model_source) {
+    return import_model_source(model_source, actor_source);
 }
 
 ImportResult SceneAssetStore::import_file(const fs::path& source, std::string_view category) {
-    std::scoped_lock lock(scene_file_mutex(root_));
-    ImportResult result;
-    if (manifest_error_) {
-        result.diagnostics.push_back(*manifest_error_);
-        return result;
-    }
     const auto absolute = fs::absolute(source).lexically_normal();
-    std::vector<SourceFile> files;
-    add_dependency(files, result.diagnostics, absolute, absolute.filename());
-    if (!result.diagnostics.empty()) return result;
-    return import_collected_files(root_, bundles_, std::move(files), lower(std::string(category)),
-                                  std::string(category), source);
-}
-
-ImportResult SceneAssetStore::import_actor(const fs::path& actor_source,
-                                           const fs::path& model_source) {
-    std::scoped_lock lock(scene_file_mutex(root_));
-    auto model = import_model(model_source);
-    if (!model.ok()) return model;
-
-    ImportResult result;
-    const auto preparation = root_ / ".actor-prep";
-    const auto prepared_actor = preparation / actor_source.filename();
-    std::error_code ec;
-    try {
-        auto ini = read_ini(actor_source);
-        if (!ini.contains("base")) {
-            result.diagnostics.push_back({"invalid_actor", "Actor file has no [base] section", actor_source});
-            return result;
-        }
-        ini["base"]["path"] = model.main_route;
-        fs::remove_all(preparation, ec);
-        write_ini_file(prepared_actor, ini);
-        result = import_file(prepared_actor, "Actors");
-        if (result.ok()) {
-            result.dependencies.push_back(model.main_route);
-            const auto stored = std::find_if(bundles_.begin(), bundles_.end(), [&](const ImportResult& bundle) {
-                return bundle.bundle_sha256 == result.bundle_sha256 && bundle.type == result.type;
-            });
-            if (stored != bundles_.end() &&
-                std::find(stored->dependencies.begin(), stored->dependencies.end(), model.main_route) ==
-                    stored->dependencies.end()) {
-                stored->dependencies.push_back(model.main_route);
-            }
-        }
-        fs::remove_all(preparation, ec);
-        return result;
-    } catch (const std::exception& error) {
-        fs::remove_all(preparation, ec);
-        result.diagnostics.push_back({"actor_import_failed", error.what(), actor_source});
-        return result;
-    }
+    auto result = import_result(request({{"op", "import"}, {"source", path_utf8(absolute)}, {"category", category},
+                                         {"files", import_plan({{absolute, absolute.filename()}})}}));
+    if (result.ok()) result.files.front().source = absolute;
+    return result;
 }
 
 bool SceneAssetStore::write_manifest() const {
-    std::scoped_lock lock(scene_file_mutex(root_));
-    if (manifest_error_) return false;
-    try {
-        fs::create_directories(root_);
-        const auto target = root_ / "assets.manifest.json";
-        const auto temporary = root_ / "assets.manifest.json.tmp";
-        {
-            std::ofstream stream(temporary, std::ios::binary | std::ios::trunc);
-            stream << manifest_json(bundles_).dump(2) << '\n';
-            if (!stream) return false;
-        }
-        if (!MoveFileExW(temporary.c_str(), target.c_str(),
-                         MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
-            throw std::system_error(static_cast<int>(GetLastError()), std::system_category(),
-                                    "Unable to replace asset manifest");
-        }
-        return true;
-    } catch (...) {
-        return false;
-    }
+    return request({{"op", "ensure"}}).value("ok", false);
 }
 
 std::vector<Diagnostic> SceneAssetStore::validate_manifest(bool verify_hashes) const {
-    std::scoped_lock lock(scene_file_mutex(root_));
-    std::vector<Diagnostic> diagnostics;
-    const auto manifest_path = root_ / "assets.manifest.json";
-    try {
-        std::ifstream stream(manifest_path);
-        const auto document = nlohmann::json::parse(stream);
-        if (document.value("format", "") != "corona_scene_assets" || document.value("version", 0) != 1 ||
-            !document.contains("bundles") || !document["bundles"].is_array()) {
-            diagnostics.push_back({"invalid_manifest", "Unsupported asset manifest", manifest_path});
-            return diagnostics;
-        }
-        std::set<std::string> manifest_routes;
-        for (const auto& bundle : document["bundles"]) {
-            if (!bundle.contains("files") || !bundle["files"].is_array()) continue;
-            for (const auto& item : bundle["files"]) {
-                const auto route = item.value("path", "");
-                if (is_valid_asset_route(route)) manifest_routes.insert(route);
-            }
-        }
-        for (const auto& bundle : document["bundles"]) {
-            if (!bundle.contains("files") || !bundle["files"].is_array() ||
-                !bundle.contains("dependencies") || !bundle["dependencies"].is_array()) {
-                diagnostics.push_back({"invalid_manifest", "Bundle has no files", manifest_path});
-                continue;
-            }
-            const auto main_route = bundle.value("main", "");
-            if (!is_valid_asset_route(main_route)) {
-                diagnostics.push_back({"unsafe_route", "Bundle main resource has an unsafe route",
-                                       path_from_utf8(main_route)});
-                continue;
-            }
-            std::set<std::string> listed_routes;
-            std::vector<SourceFile> hash_files;
-            const auto main_path = path_from_utf8(main_route);
-            fs::path bundle_root;
-            int component_count = 0;
-            for (const auto& component : main_path) {
-                if (component_count++ == 3) break;
-                bundle_root /= component;
-            }
-            for (const auto& item : bundle["files"]) {
-                const auto route = item.value("path", "");
-                if (!is_valid_asset_route(route)) {
-                    diagnostics.push_back({"unsafe_route", "Manifest contains an unsafe route", path_from_utf8(route)});
-                    continue;
-                }
-                listed_routes.insert(route);
-                const auto path = root_ / path_from_utf8(route);
-                if (!resolves_within(root_ / "Assets", path)) {
-                    diagnostics.push_back({"unsafe_route", "Manifest asset resolves outside Assets", path});
-                } else if (!fs::is_regular_file(path)) {
-                    diagnostics.push_back({"missing_asset", "Manifest asset is missing", path});
-                } else if (verify_hashes && sha256_file(path) != item.value("sha256", "")) {
-                    diagnostics.push_back({"hash_mismatch", "Manifest asset hash mismatch", path});
-                } else if (fs::file_size(path) != item.value("size", std::uint64_t{})) {
-                    diagnostics.push_back({"size_mismatch", "Manifest asset size mismatch", path});
-                } else {
-                    std::error_code relative_ec;
-                    const auto relative = fs::relative(path_from_utf8(route), bundle_root, relative_ec);
-                    if (relative_ec || !is_relative_inside(relative)) {
-                        diagnostics.push_back({"unsafe_route", "Manifest file escapes its bundle", path});
-                    } else {
-                        hash_files.push_back({path, relative});
-                    }
-                }
-            }
-            if (!listed_routes.contains(main_route)) {
-                diagnostics.push_back({"invalid_manifest", "Bundle main resource is not listed", manifest_path});
-            }
-            std::set<std::string> expected_dependencies = listed_routes;
-            expected_dependencies.erase(main_route);
-            std::set<std::string> actual_dependencies;
-            for (const auto& dependency : bundle["dependencies"]) {
-                if (!dependency.is_string() || !is_valid_asset_route(dependency.get<std::string>())) {
-                    diagnostics.push_back({"unsafe_route", "Bundle dependency has an unsafe route", manifest_path});
-                    continue;
-                }
-                const auto route = dependency.get<std::string>();
-                actual_dependencies.insert(route);
-                if (!manifest_routes.contains(route)) {
-                    diagnostics.push_back({"missing_dependency", "Bundle dependency is not listed in the manifest",
-                                           path_from_utf8(route)});
-                }
-            }
-            for (const auto& dependency : expected_dependencies) {
-                if (!actual_dependencies.contains(dependency)) {
-                    diagnostics.push_back({"invalid_dependencies", "Bundle file dependency is not recorded",
-                                           path_from_utf8(dependency)});
-                }
-            }
-            if (verify_hashes && hash_files.size() == listed_routes.size() && !hash_files.empty() &&
-                bundle_hash(hash_files) != bundle.value("sha256", "")) {
-                diagnostics.push_back({"bundle_hash_mismatch", "Manifest bundle hash mismatch", manifest_path});
-            }
-        }
-    } catch (const std::exception& error) {
-        diagnostics.push_back({"invalid_manifest", error.what(), manifest_path});
-    }
-    return diagnostics;
-}
-
-namespace {
-struct AssetReference {
-    std::string route;
-    std::string field;
-    std::string actor;
-};
-
-// Validation and garbage collection must agree on every persisted asset edge.
-std::vector<AssetReference> scene_asset_references(const fs::path& scene_file,
-                                                 std::vector<Diagnostic>& diagnostics) {
-    std::vector<AssetReference> references;
-    const auto ini = read_ini(scene_file);
-    for (const auto* section : {"vision", "vision_document", "vision_bindings", "vision_unsupported_shapes"}) {
-        if (ini.contains(section))
-            diagnostics.push_back({"unsupported_vision_archive",
-                "External Vision archives are no longer supported", scene_file, {}, section});
-    }
-    for (const auto& [section, fields] : ini) {
-        for (const auto& [key, value] : fields) {
-            const auto actor = section == "actors" ? key.substr(0, key.find('.')) : std::string{};
-            const auto field = section + "." + key;
-            if (section == "actors" && key.ends_with(".animation.sources")) {
-                try {
-                    const auto sources = nlohmann::json::parse(value);
-                    if (!sources.is_array()) throw std::runtime_error("Expected an array of animation asset paths");
-                    std::set<std::string> unique;
-                    for (const auto& source : sources) {
-                        if (!source.is_string() || source.get_ref<const std::string&>().empty() ||
-                            source.get_ref<const std::string&>().find('\0') != std::string::npos)
-                            throw std::runtime_error("Expected non-empty animation asset paths");
-                        const auto route = source.get<std::string>();
-                        if (!unique.insert(route).second) throw std::runtime_error("Duplicate animation asset path");
-                        references.push_back({route, field, actor});
-                    }
-                } catch (const std::exception& error) {
-                    diagnostics.push_back({"invalid_animation_sources", error.what(), scene_file, actor, field});
-                }
-            } else if ((section == "actors" && (key.ends_with(".route") || key.ends_with(".material.texture"))) ||
-                       ((section == "scripts" || section == "terrain") && key == "path") ||
-                       is_valid_asset_route(value)) {
-                if (!trim(value).empty()) references.push_back({value, field, actor});
-            }
-        }
-    }
-    return references;
-}
-} // namespace
-
-SceneValidationResult validate_portable_scene(const fs::path& scene_root,
-                                               bool verify_hashes) {
-    SceneValidationResult result;
-    const auto root = fs::is_directory(scene_root) ? scene_root : scene_root.parent_path();
-    std::scoped_lock lock(scene_file_mutex(root));
-    // Recover before format detection: an interrupted document may not parse.
-    if (fs::is_directory(scene_root) || scene_root.filename() == "scene.ini") {
-        SceneDocumentStore document(root);
-        result.diagnostics = document.recovery_diagnostics();
-        if (!result.diagnostics.empty()) return result;
-    }
-    const auto layout = detect_scene_folder(scene_root);
-    if (!layout) {
-        result.diagnostics.push_back(
-            {"invalid_scene_format", "Expected a portable scene folder version 1", scene_root});
-        return result;
-    }
-
-    SceneAssetStore assets(layout->root);
-    result.diagnostics = assets.validate_manifest(verify_hashes);
-    try {
-        const auto manifest = nlohmann::json::parse(
-            std::ifstream(layout->root / "assets.manifest.json"));
-        if (manifest.contains("bundles") && manifest["bundles"].is_array()) {
-            for (const auto& bundle : manifest["bundles"]) {
-                if (!bundle.contains("files") || !bundle["files"].is_array()) continue;
-                for (const auto& file : bundle["files"]) {
-                    ++result.asset_count;
-                    result.total_bytes += file.value("size", std::uint64_t{});
-                }
-            }
-        }
-    } catch (...) {
-        // validate_manifest already reports the parse failure with its path.
-    }
-    const auto validate_route = [&](std::string_view route,
-                                    std::string field,
-                                    std::string actor = {}) {
-        if (trim(std::string(route)).empty()) return;
-        if (!is_valid_asset_route(route) || !assets.contains_route(route)) {
-            result.diagnostics.push_back({"untrusted_asset_route",
-                                          "Persisted resource is outside Assets or absent from the manifest",
-                                          path_from_utf8(route), std::move(actor), std::move(field)});
-        }
-    };
-    for (const auto& reference : scene_asset_references(layout->scene_file, result.diagnostics))
-        validate_route(reference.route, reference.field, reference.actor);
-    return result;
-}
-
-namespace {
-
-void strip_bom(std::string& line) {
-    if (line.size() >= 3 && static_cast<unsigned char>(line[0]) == 0xEF &&
-        static_cast<unsigned char>(line[1]) == 0xBB && static_cast<unsigned char>(line[2]) == 0xBF) {
-        line.erase(0, 3);
-    }
-}
-
-std::vector<std::string> read_text_lines(const fs::path& path) {
-    std::vector<std::string> lines;
-    std::ifstream input(path);
-    for (std::string line; std::getline(input, line);) {
-        if (!line.empty() && line.back() == '\r') line.pop_back();
-        if (lines.empty()) strip_bom(line);
-        lines.push_back(std::move(line));
-    }
-    return lines;
-}
-
-bool section_header_matches(const std::string& line, std::string_view section) {
-    const auto value = trim(line);
-    return value.size() >= 3 && value.front() == '[' && value.back() == ']' &&
-           lower(trim(value.substr(1, value.size() - 2))) == lower(std::string(section));
-}
-
-bool is_section_header(const std::string& line) {
-    const auto value = trim(line);
-    return value.size() >= 3 && value.front() == '[' && value.back() == ']';
-}
-
-void replace_text_section(std::vector<std::string>& lines,
-                          const std::string& section,
-                          const std::vector<std::string>& replacement) {
-    auto begin = std::find_if(lines.begin(), lines.end(),
-                              [&](const auto& line) { return section_header_matches(line, section); });
-    if (begin == lines.end()) {
-        if (!lines.empty() && !lines.back().empty()) lines.emplace_back();
-        lines.insert(lines.end(), replacement.begin(), replacement.end());
-        return;
-    }
-    auto end = std::next(begin);
-    while (end != lines.end() && !is_section_header(*end)) ++end;
-    const auto insertion = lines.erase(begin, end);
-    lines.insert(insertion, replacement.begin(), replacement.end());
-}
-
-bool atomic_replace_text(const fs::path& target,
-                         const std::vector<std::string>& lines,
-                         std::vector<Diagnostic>& diagnostics) {
-    const auto temporary = target.parent_path() / ".scene.ini.tmp";
-    {
-        std::ofstream output(temporary, std::ios::binary | std::ios::trunc);
-        for (const auto& line : lines) output << line << '\n';
-        output.flush();
-        if (!output) {
-            diagnostics.push_back({"scene_write_failed", "Unable to write scene transaction", temporary});
-            return false;
-        }
-    }
-    if (!MoveFileExW(temporary.c_str(), target.c_str(),
-                     MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
-        diagnostics.push_back({"scene_replace_failed", "Unable to replace scene.ini", target});
-        return false;
-    }
-    return true;
-}
-
-}  // namespace
-
-SceneDocumentStore::SceneDocumentStore(fs::path scene_root) : root_(std::move(scene_root)) {
-    std::scoped_lock lock(scene_file_mutex(root_));
-    recover_interrupted_transaction();
-}
-
-void SceneDocumentStore::recover_interrupted_transaction() {
-    const auto marker = root_ / ".scene-save.transaction";
-    const auto backup = root_ / ".scene.ini.backup";
-    const auto scene = root_ / "scene.ini";
-    std::error_code ec;
-    if (fs::is_regular_file(marker)) {
-        if (!fs::is_regular_file(backup)) {
-            recovery_diagnostics_.push_back(
-                {"scene_recovery_failed", "Scene transaction backup is missing", backup});
-            return;
-        }
-        fs::copy_file(backup, scene, fs::copy_options::overwrite_existing, ec);
-        if (ec) {
-            recovery_diagnostics_.push_back({"scene_recovery_failed", ec.message(), backup});
-            return;
-        }
-        fs::remove(marker, ec);
-        if (ec) {
-            recovery_diagnostics_.push_back({"scene_recovery_failed", ec.message(), marker});
-            return;
-        }
-    }
-    fs::remove(backup, ec);
-    fs::remove(root_ / ".scene.ini.tmp", ec);
-}
-
-bool SceneDocumentStore::replace_sections(
-    const std::map<std::string, std::vector<std::string>>& sections,
-    std::vector<Diagnostic>& diagnostics) {
-    std::scoped_lock lock(scene_file_mutex(root_));
-    recovery_diagnostics_.clear();
-    recover_interrupted_transaction();
-    if (!recovery_diagnostics_.empty()) {
-        diagnostics.insert(diagnostics.end(), recovery_diagnostics_.begin(),
-                           recovery_diagnostics_.end());
-        return false;
-    }
-    const auto scene = root_ / "scene.ini";
-    const auto backup = root_ / ".scene.ini.backup";
-    const auto marker = root_ / ".scene-save.transaction";
-    auto lines = read_text_lines(scene);
-    for (const auto& [name, replacement] : sections) {
-        replace_text_section(lines, name, replacement);
-    }
-    std::error_code ec;
-    fs::copy_file(scene, backup, fs::copy_options::overwrite_existing, ec);
-    if (ec) {
-        diagnostics.push_back({"scene_backup_failed", ec.message(), backup});
-        return false;
-    }
-    {
-        std::ofstream output(marker, std::ios::binary | std::ios::trunc);
-        output << "scene.ini\n";
-        if (!output) {
-            diagnostics.push_back({"scene_transaction_failed", "Unable to create transaction marker", marker});
-            fs::remove(backup, ec);
-            return false;
-        }
-    }
-    if (!atomic_replace_text(scene, lines, diagnostics)) {
-        recovery_diagnostics_.clear();
-        recover_interrupted_transaction();
-        diagnostics.insert(diagnostics.end(), recovery_diagnostics_.begin(),
-                           recovery_diagnostics_.end());
-        return false;
-    }
-    fs::remove(marker, ec);
-    if (ec) {
-        diagnostics.push_back({"scene_commit_failed", ec.message(), marker});
-        recovery_diagnostics_.clear();
-        recover_interrupted_transaction();
-        diagnostics.insert(diagnostics.end(), recovery_diagnostics_.begin(),
-                           recovery_diagnostics_.end());
-        return false;
-    }
-    fs::remove(backup, ec);
-    return true;
-}
-
-CleanupResult cleanup_portable_scene_assets(const fs::path& scene_root, bool dry_run) {
-    CleanupResult result;
-    const auto root = fs::is_directory(scene_root) ? scene_root : scene_root.parent_path();
-    std::scoped_lock lock(scene_file_mutex(root));
-    result.diagnostics = validate_portable_scene(scene_root).diagnostics;
-    if (!result.diagnostics.empty()) return result;
-    const auto layout = detect_scene_folder(scene_root);
-    if (!layout) {
-        result.diagnostics.push_back(
-            {"invalid_scene_format", "Expected a portable scene folder version 1", scene_root});
-        return result;
-    }
-    const auto manifest_path = layout->root / "assets.manifest.json";
-    nlohmann::json manifest;
-    try {
-        manifest = nlohmann::json::parse(std::ifstream(manifest_path));
-    } catch (const std::exception& error) {
-        result.diagnostics.push_back({"invalid_manifest", error.what(), manifest_path});
-        return result;
-    }
-
-    std::set<std::string> referenced_routes;
-    for (const auto& reference : scene_asset_references(layout->scene_file, result.diagnostics))
-        referenced_routes.insert(reference.route);
-    if (!result.diagnostics.empty()) return result;
-
-    const auto& bundles = manifest["bundles"];
-    std::vector<bool> keep(bundles.size(), false);
-    const auto bundle_for_route = [&](const std::string& route) -> std::optional<size_t> {
-        for (size_t index = 0; index < bundles.size(); ++index) {
-            if (!bundles[index].contains("files") || !bundles[index]["files"].is_array()) continue;
-            for (const auto& file : bundles[index]["files"]) {
-                if (file.value("path", "") == route) return index;
-            }
-        }
-        return std::nullopt;
-    };
-    for (const auto& route : referenced_routes) {
-        if (const auto index = bundle_for_route(route)) keep[*index] = true;
-    }
-    bool changed = true;
-    while (changed) {
-        changed = false;
-        for (size_t index = 0; index < bundles.size(); ++index) {
-            if (!keep[index] || !bundles[index].contains("dependencies")) continue;
-            for (const auto& dependency : bundles[index]["dependencies"]) {
-                if (!dependency.is_string()) continue;
-                if (const auto owner = bundle_for_route(dependency.get<std::string>());
-                    owner && !keep[*owner]) {
-                    keep[*owner] = true;
-                    changed = true;
-                }
-            }
-        }
-    }
-
-    nlohmann::json retained = nlohmann::json::array();
-    std::set<fs::path> bundle_directories;
-    for (size_t index = 0; index < bundles.size(); ++index) {
-        if (keep[index]) {
-            retained.push_back(bundles[index]);
-            continue;
-        }
-        ++result.removed_bundles;
-        if (bundles[index].contains("files") && bundles[index]["files"].is_array()) {
-            for (const auto& file : bundles[index]["files"]) {
-                ++result.removed_files;
-                result.reclaimed_bytes += file.value("size", std::uint64_t{});
-            }
-        }
-        const auto main = path_from_utf8(bundles[index].value("main", ""));
-        fs::path directory;
-        size_t components = 0;
-        for (const auto& component : main) {
-            directory /= component;
-            if (++components == 3) break;
-        }
-        if (components == 3 && is_relative_inside(directory)) bundle_directories.insert(directory);
-    }
-    if (dry_run || result.removed_bundles == 0) return result;
-
-    manifest["bundles"] = std::move(retained);
-    const auto temporary = layout->root / "assets.manifest.json.tmp";
-    try {
-        {
-            std::ofstream output(temporary, std::ios::binary | std::ios::trunc);
-            output << manifest.dump(2) << '\n';
-            output.flush();
-            if (!output) throw std::runtime_error("Unable to write cleaned manifest");
-        }
-        if (!MoveFileExW(temporary.c_str(), manifest_path.c_str(),
-                         MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
-            throw std::system_error(static_cast<int>(GetLastError()), std::system_category(),
-                                    "Unable to replace cleaned manifest");
-        }
-        std::error_code ec;
-        for (const auto& directory : bundle_directories) {
-            ec.clear();
-            fs::remove_all(layout->root / directory, ec);
-            if (ec) {
-                result.diagnostics.push_back(
-                    {"cleanup_failed", ec.message(), layout->root / directory});
-            }
-        }
-    } catch (const std::exception& error) {
-        result.diagnostics.push_back({"cleanup_failed", error.what(), layout->root});
-    }
-    return result;
+    return diagnostics(request({{"op", "validate"}, {"hashes", verify_hashes}}));
 }
 
 bool SceneAssetStore::contains_route(std::string_view route) const {
-    std::scoped_lock lock(scene_file_mutex(root_));
-    if (!is_valid_asset_route(route)) return false;
-    return std::any_of(bundles_.begin(), bundles_.end(), [&](const ImportResult& bundle) {
-        return std::any_of(bundle.files.begin(), bundle.files.end(), [&](const ImportedFile& file) {
-            return file.route == route;
-        });
-    });
+    return request({{"op", "contains"}, {"route", route}}).value("found", false);
+}
+
+CleanupResult cleanup_unreferenced_assets(const fs::path& root, const std::set<std::string>& referenced_routes, bool dry_run) {
+    const auto response = archive_asset_request({{"root", path_utf8(root)}, {"op", "cleanup"},
+                                                 {"references", referenced_routes}, {"dryRun", dry_run}});
+    return {response.value("removedBundles", uint64_t{}), response.value("removedFiles", uint64_t{}),
+            response.value("reclaimedBytes", uint64_t{}), diagnostics(response)};
 }
 
 }  // namespace Corona::Systems::UI::SceneFolders

@@ -181,7 +181,8 @@ add_custom_command(TARGET corona_collaborative_editor_loopback_tests POST_BUILD
     VERBATIM
 )
 add_test(NAME CollaborativeEditorLoopbackTests
-         COMMAND corona_collaborative_editor_loopback_tests)
+         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/archive_driver.py
+                 $<TARGET_FILE:corona_collaborative_editor_loopback_tests> ${CORONA_EDITOR_SOURCE_DIR})
 get_filename_component(_CORONA_LOOPBACK_PYTHON_DIR "${Python_EXECUTABLE}" DIRECTORY)
 set(_CORONA_LOOPBACK_PATH_DIRS "${_CORONA_LOOPBACK_PYTHON_DIR}")
 foreach(_tbb_runtime IN LISTS CORONA_TBB_REDIS_DLLS)
@@ -199,6 +200,9 @@ set_tests_properties(CollaborativeEditorLoopbackTests PROPERTIES
     TIMEOUT 30
     ENVIRONMENT_MODIFICATION "${_CORONA_LOOPBACK_ENVIRONMENT}"
 )
+add_executable(corona_native_file_probe EXCLUDE_FROM_ALL native_file_probe.cpp)
+target_link_libraries(corona_native_file_probe PRIVATE corona::engine corona_ui_system)
+
 add_executable(corona_archive_roundtrip_tests
     test_archive_roundtrip.cpp
     ${PROJECT_SOURCE_DIR}/src/shared_data_hub.cpp)

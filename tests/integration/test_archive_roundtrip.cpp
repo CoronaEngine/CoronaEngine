@@ -2,12 +2,14 @@
 #include <corona/resource/resource_manager.h>
 #include <corona/resource/types/scene.h>
 #include <corona/systems/script/camera_follow_controller.h>
+#include <corona/systems/script/python_runtime_coordinator.h>
 #include "cef/cef_editor_native_api_registry.h"
 #include "cef/cef_editor_native_api_test_support.h"
-#include "cef/scene_folder.h"
+#include "archive_test_host.h"
 #include <fstream>
 #include <iostream>
 #include <stdexcept>
+#include <thread>
 
 namespace UI = Corona::Systems::UI;
 namespace fs = std::filesystem;
@@ -28,8 +30,9 @@ int main(int argc, char** argv) {
         const std::string mode = argv[1];
         Json output;
         if (mode == "fixture") {
+            ArchiveFixture::ArchiveTestHost host;
             const fs::path root = fs::u8path(argv[2]);
-            require(UI::SceneFolders::create_scene_folder(root, "Roundtrip").has_value(), "create scene");
+            require(ArchiveFixture::create_scene_folder(root, "Roundtrip").has_value(), "create scene");
             const auto source = root.parent_path() / "triangle.ply";
             {
                 std::ofstream file(source);
@@ -46,8 +49,10 @@ int main(int argc, char** argv) {
             auto model = manager.acquire_read<Corona::Resource::Scene>(id);
             require(model && !model->data.meshes.empty() && model->data.meshes[0].indices.size() == 3, "decode archived PLY");
             std::vector<UI::SceneFolders::Diagnostic> diagnostics;
-            require(UI::SceneFolders::SceneDocumentStore(root).replace_sections({
+            require(ArchiveFixture::SceneDocumentStore(root).replace_sections({
                 {"physics", {"[physics]", "gravity=1,-3,2", "floor_y=-4", "floor_restitution=0.25", "fixed_dt=0.02"}},
+                {"camera", {"[camera]", "count=1", "active_id=main-camera", "camera0.id=main-camera",
+                    "camera0.name=Main", "camera0.vendor.lens=opaque-value", "vendor_schema=7"}},
                 {"actors", {"[actors]", "a.name=Probe", "a.actor_guid=probe", "a.route=" + asset.main_route,
                     "a.mechanics.body_type=static", "a.camera_lock.enabled=true", "a.camera_lock.position_offset=1,2,3",
                     "a.camera_lock.rotation_offset=0.1,0.2,0.3"}}}, diagnostics), "write scene fixture");
@@ -56,6 +61,7 @@ int main(int argc, char** argv) {
             auto& kernel = Corona::Kernel::KernelContext::instance();
             require(kernel.initialize(), "initialize kernel");
             UI::register_builtin_native_api_handlers();
+            ArchiveFixture::ArchiveTestHost host;
             if (mode == "open") {
                 output = invoke("ProjectLauncher", "open_project", {argv[2], {{"load_policy", "degraded"}}});
             } else {
@@ -67,7 +73,7 @@ int main(int argc, char** argv) {
                 output["environment"] = invoke("SceneTools", "get_environment", {route});
                 output["scene"] = invoke("SceneTools", "get_scene_snapshot", {route});
                 output["camera_lock_active"] = Corona::Systems::CameraFollowController::instance().is_active();
-                output["save"] = invoke("MainView", "scene_save", {route});
+                output["save"] = invoke("MainView", "scene_save", {route, {{"archive_session", snapshot.value("archive_session", "")}}});
             }
             UI::reset_native_editor_scene_for_test();
             kernel.shutdown();

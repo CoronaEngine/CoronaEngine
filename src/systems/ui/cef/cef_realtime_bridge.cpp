@@ -575,7 +575,6 @@ bool append_geometry_focus_bounds(const FocusGeometrySource& source, FocusBounds
 void send_focus_pose_result(const CefRefPtr<CefFrame>& frame,
                             const std::string& request_id,
                             const nlohmann::json& payload) {
-    (void)frame;
     if (request_id.empty()) {
         return;
     }
@@ -584,7 +583,7 @@ void send_focus_pose_result(const CefRefPtr<CefFrame>& frame,
                              ? payload
                              : nlohmann::json::object({{"payload", payload}});
     event_payload["request_id"] = request_id;
-    emit_editor_api_event("SceneTools.focusPoseResult", event_payload);
+    retain_viewport_result(frame, current_viewport_session(), "focusPoseResult", std::move(event_payload));
 }
 
 bool get_numeric_arg(const CefRefPtr<CefListValue>& args, size_t index, double& out) {
@@ -675,10 +674,12 @@ bool handle_compute_actor_focus_pose_fast(const CefRefPtr<CefFrame>& frame,
 
 class MeshMoveCallbackTask final : public CefTask {
  public:
-    MeshMoveCallbackTask(CefRefPtr<CefFrame> frame, nlohmann::json payload):frame_(frame),payload_(std::move(payload)) {}
-    void Execute() override { if(frame_ && frame_->IsValid()) emit_editor_api_event_to_frame("SceneTools.meshMoveResult",payload_,frame_); }
+    MeshMoveCallbackTask(CefRefPtr<CefFrame> frame, std::string session, nlohmann::json payload)
+        : frame_(frame), session_(std::move(session)), payload_(std::move(payload)) {}
+    void Execute() override { retain_viewport_result(frame_, session_, "meshMoveResult", std::move(payload_)); }
  private:
     CefRefPtr<CefFrame> frame_;
+    std::string session_;
     nlohmann::json payload_;
     IMPLEMENT_REFCOUNTING(MeshMoveCallbackTask);
 };
@@ -698,12 +699,12 @@ bool handle_mesh_move(const CefRefPtr<CefFrame>& frame, const CefRefPtr<CefProce
     command.dt=static_cast<float>(args->GetDouble(4)); command.jump=args->GetBool(5);
     command.turn=args->GetSize()==7 && args->GetType(6)!=VTYPE_NULL;
     if(command.turn) command.facing=static_cast<float>(args->GetDouble(6));
-    auto callback=[frame,id,actor=command.actor](MechanicsSystem::MeshMoveEvent result) {
+    auto callback=[frame,id,session=current_viewport_session(),actor=command.actor](MechanicsSystem::MeshMoveEvent result) {
         nlohmann::json payload={{"requestId",id},{"actorHandle",actor},{"status",result.status},
             {"position",result.position},{"grounded",result.grounded},{"ceiling",result.ceiling},
             {"collided",result.collided},{"normal",result.normal},{"otherActor",result.other_actor},
             {"triangle",result.triangle},{"otherTriangle",result.other_triangle},{"rotation",result.rotation}};
-        CefPostTask(TID_UI,new MeshMoveCallbackTask(frame,std::move(payload)));
+        CefPostTask(TID_UI,new MeshMoveCallbackTask(frame,session,std::move(payload)));
     };
     auto manager=Kernel::KernelContext::instance().system_manager();
     auto mechanics=manager ? std::dynamic_pointer_cast<MechanicsSystem>(manager->get_system("Mechanics")) : nullptr;
@@ -767,10 +768,7 @@ bool handle_actor_transform_fast(const CefRefPtr<CefProcessMessage>& message) {
     return true;
 }
 
-void send_viewport_pick_result(const CefRefPtr<CefFrame>& frame,
-                               const nlohmann::json& payload) {
-    emit_editor_api_event_to_frame("SceneTools.actorPickResult", payload, frame);
-}
+
 
 void drain_actor_pick_completion_events_impl() {
     for (const auto& completion : Corona::SharedDataHub::instance().drain_actor_pick_completions()) {
@@ -838,7 +836,7 @@ bool handle_viewport_pick(const CefRefPtr<CefFrame>& frame,
             {"y", result_y},
         };
         if (message_text) payload["message"] = message_text;
-        send_viewport_pick_result(frame, payload);
+        retain_viewport_result(frame, current_viewport_session(), "actorPickResult", std::move(payload));
     };
 
     if (camera_handle == 0 || request_id.empty() || scene_id.empty() ||
@@ -874,7 +872,7 @@ bool handle_viewport_pick(const CefRefPtr<CefFrame>& frame,
 
     const bool registered = cef_request_response_broker().register_request(
         CefRequestContext{request_id, browser_id, frame_id, camera_handle, scene_id},
-        [frame](const CefRequestContext& context, const CefResponse& response) {
+        [frame, session=current_viewport_session()](const CefRequestContext& context, const CefResponse& response) {
             auto payload = response.payload.is_object()
                                ? response.payload
                                : nlohmann::json::object();
@@ -885,7 +883,7 @@ bool handle_viewport_pick(const CefRefPtr<CefFrame>& frame,
             if (!payload.contains("actorHandle")) payload["actorHandle"] = 0;
             if (!payload.contains("x")) payload["x"] = 0;
             if (!payload.contains("y")) payload["y"] = 0;
-            send_viewport_pick_result(frame, payload);
+            retain_viewport_result(frame, session, "actorPickResult", std::move(payload));
         });
     if (!registered) {
         emit_error("duplicate requestId");
@@ -1015,7 +1013,7 @@ ktm::fvec3 viewport_gizmo_pointer_ray(const Corona::CameraDevice& camera,
         up * (ndc_y * tan_half_fov));
 }
 
-void emit_viewport_gizmo_result(const Corona::ViewportGizmoPointerResult& result,
+void retain_gizmo_result(const CefRefPtr<CefFrame>& frame, const Corona::ViewportGizmoPointerResult& result,
                                 const Corona::ViewportGizmoTarget& target) {
     nlohmann::json payload{
         {"cameraHandle", static_cast<std::uint64_t>(result.camera_handle)},
@@ -1030,18 +1028,7 @@ void emit_viewport_gizmo_result(const Corona::ViewportGizmoPointerResult& result
         {"actorHandle", static_cast<std::uint64_t>(target.actor_handle)},
         {"position", {result.position.x, result.position.y, result.position.z}},
     };
-    emit_editor_api_event("SceneTools.viewportGizmoPointerResult", payload);
-}
-
-void emit_viewport_gizmo_transform(const Corona::ViewportGizmoTarget& target,
-                                   const ktm::fvec3& position) {
-    emit_editor_api_event(
-        "SceneTools.actorTransformUpdated",
-        nlohmann::json{
-            {"scene", target.scene_id},
-            {"actor", target.actor_name},
-            {"position", {position.x, position.y, position.z}},
-        });
+    retain_viewport_result(frame, current_viewport_session(), "viewportGizmoPointerResult", std::move(payload));
 }
 
 bool handle_viewport_gizmo_target(const CefRefPtr<CefProcessMessage>& message) {
@@ -1081,7 +1068,7 @@ bool handle_viewport_gizmo_target(const CefRefPtr<CefProcessMessage>& message) {
     return true;
 }
 
-bool handle_viewport_gizmo_pointer(const CefRefPtr<CefProcessMessage>& message) {
+bool handle_viewport_gizmo_pointer(const CefRefPtr<CefFrame>& frame, const CefRefPtr<CefProcessMessage>& message) {
     auto args = message->GetArgumentList();
     double camera_value = 0.0;
     double x_value = 0.0;
@@ -1114,7 +1101,7 @@ bool handle_viewport_gizmo_pointer(const CefRefPtr<CefProcessMessage>& message) 
     result.camera_handle = camera_handle;
     result.request_id = request_id;
     if (state.target.actor_handle == 0 || width_value <= 0.0 || height_value <= 0.0) {
-        emit_viewport_gizmo_result(result, state.target);
+        retain_gizmo_result(frame, result, state.target);
         return true;
     }
 
@@ -1122,7 +1109,7 @@ bool handle_viewport_gizmo_pointer(const CefRefPtr<CefProcessMessage>& message) 
     const auto current_position = actor_gizmo_position(state.target.actor_handle);
     if (!camera || !current_position) {
         hub.clear_viewport_gizmo_target(camera_handle);
-        emit_viewport_gizmo_result(result, state.target);
+        retain_gizmo_result(frame, result, state.target);
         return true;
     }
 
@@ -1176,11 +1163,10 @@ bool handle_viewport_gizmo_pointer(const CefRefPtr<CefProcessMessage>& message) 
         result.consumed = true;
         result.cancelled = true;
         result.position = drag_it->second.initial_position;
-        emit_viewport_gizmo_transform(state.target, result.position);
         s_viewport_gizmo_drags.erase(drag_it);
         hub.update_viewport_gizmo_interaction(
             camera_handle, Corona::ViewportGizmoAxis::None, false);
-        emit_viewport_gizmo_result(result, state.target);
+        retain_gizmo_result(frame, result, state.target);
         return true;
     }
 
@@ -1218,7 +1204,7 @@ bool handle_viewport_gizmo_pointer(const CefRefPtr<CefProcessMessage>& message) 
         result.consumed = true;
         result.dragging = true;
         result.position = *current_position;
-        emit_viewport_gizmo_result(result, state.target);
+        retain_gizmo_result(frame, result, state.target);
         return true;
     }
 
@@ -1269,7 +1255,6 @@ bool handle_viewport_gizmo_pointer(const CefRefPtr<CefProcessMessage>& message) 
         const bool wrote = write_actor_gizmo_position(drag.actor_handle, next_position);
         if (wrote) {
             drag.last_position = next_position;
-            emit_viewport_gizmo_transform(state.target, next_position);
         } else if (!drag.write_failure_logged) {
             CFW_LOG_WARNING("Viewport gizmo transform write failed: camera={} actor='{}' axis={} handle={}",
                             camera_handle,
@@ -1298,7 +1283,7 @@ bool handle_viewport_gizmo_pointer(const CefRefPtr<CefProcessMessage>& message) 
             result.dragging = true;
             hub.update_viewport_gizmo_interaction(camera_handle, drag.axis, true);
         }
-        emit_viewport_gizmo_result(result, state.target);
+        retain_gizmo_result(frame, result, state.target);
         return true;
     }
 
@@ -1306,7 +1291,7 @@ bool handle_viewport_gizmo_pointer(const CefRefPtr<CefProcessMessage>& message) 
         camera_handle, Corona::ViewportGizmoAxis::None, false, hover_axis);
     result.axis = hover_axis;
     result.position = *current_position;
-    emit_viewport_gizmo_result(result, state.target);
+    retain_gizmo_result(frame, result, state.target);
     return true;
 }
 
@@ -2557,7 +2542,7 @@ bool handle_realtime_process_message(CefRefPtr<CefBrowser> browser,
     }
 
     if (message->GetName() == "ViewportGizmoPointer") {
-        return handle_viewport_gizmo_pointer(message);
+        return handle_viewport_gizmo_pointer(frame, message);
     }
 
     if (message->GetName() == "ViewportUiMode") {
