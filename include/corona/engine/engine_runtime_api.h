@@ -314,7 +314,10 @@ class Camera {
     [[nodiscard]] void* get_surface() const;
     void set_offscreen_capture_mode(bool enabled);
     void save_screenshot(const std::string& path) const;
-    bool save_screenshot_sync(const std::string& path) const;
+    // Fixed-frame captures use the same final viewport image as ordinary screenshots.
+    bool save_screenshot_sync(const std::string& path, unsigned render_frames = 0,
+                              unsigned warmup_frames = 0, const std::string& timings_path = "",
+                              unsigned timeout_seconds = 0) const;
 
     void set_output_mode(const std::string& mode);
     [[nodiscard]] std::string get_output_mode() const;

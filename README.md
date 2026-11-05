@@ -122,3 +122,26 @@ conda run -n coronaengine-dev python -m pytest build_tools/tests
 ```
 
 引擎核心测试统一放在根目录 `tests/`，按模块组织；目录约定和运行方式见 [测试说明](tests/README.md)。
+
+## 本地文件与临时目录
+
+根目录保留源码、项目配置和正式工具入口。构建产物放在 `build/`；CLion 使用
+`cmake-build-relwithdebinfo/`。`Horizon/`、`CoronaEditor/` 是构建管理的源码工作区。
+
+临时文件统一放在已被 Git 忽略的 `.workspace/`，不要再在根目录新建缓存、日志或实验目录：
+
+| 路径 | 用途 |
+| --- | --- |
+| `.workspace/tmp/<任务>/` | 一次性脚本和验证输出 |
+| `.workspace/experiments/<任务>/` | 实验及性能对比资料 |
+| `.workspace/cache/` | 可再生缓存；pytest 缓存位于其下的 `pytest/` |
+| `.workspace/cache/tools/` | 本地下载的工具 |
+| `.workspace/downloads/` | 下载资料 |
+| `.workspace/notes/` | 本地计划和交接笔记 |
+| `.workspace/archive/` | 需要保留的旧资料和录制结果 |
+
+可复用脚本放入 `tools/`，构建专用脚本放入 `build_tools/`。Mitsuba 下载入口为
+`tools/download_mitsuba_scenes.cmd`，默认下载到 `.workspace/downloads/mitsuba/`。
+批量出图入口为 `tools/render_mitsuba_scenes.py`，统一使用引擎正常截图接口；参数和采样口径见
+[Mitsuba 批量截图说明](docs/mitsuba-batch-rendering.md)。
+运行引擎时以可执行文件目录为工作目录，避免运行时缓存散落到仓库根目录。

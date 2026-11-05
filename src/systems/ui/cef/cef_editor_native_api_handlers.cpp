@@ -7045,6 +7045,27 @@ void register_scene_tools_api_handlers(NativeApiRegistry& registry) {
             });
         }},
         {"save_screenshot", [](const NativeRequest& request, const NativeContext&) {
+            const auto options = arg_object(request.args, 3);
+            unsigned render_frames = 0, warmup_frames = 0, timeout_seconds = 0;
+            const auto read_count = [&](const char* name, unsigned maximum, unsigned& value) {
+                const auto it = options.find(name);
+                if (it == options.end()) return true;
+                if (!it->is_number_integer() || *it < 0 || *it > maximum) return false;
+                value = it->get<unsigned>();
+                return true;
+            };
+            if (!read_count("render_frames", 1000000, render_frames) ||
+                !read_count("warmup_frames", 1000000, warmup_frames) ||
+                !read_count("timeout_seconds", 86400, timeout_seconds) ||
+                (options.contains("timings_path") && !options["timings_path"].is_string())) {
+                return native_failure("Invalid screenshot capture options", 2);
+            }
+            const auto timings_path = options.value("timings_path", std::string{});
+            if ((render_frames == 0 && (warmup_frames != 0 || !timings_path.empty())) ||
+                (render_frames != 0 && warmup_frames >= render_frames)) {
+                return native_failure("Screenshot warmup must be smaller than render_frames", 2);
+            }
+
             auto* scene = ensure_native_editor_scene();
             const auto scene_route = normalize_route(arg_string(request.args, 0));
             scene = resolve_native_editor_scene_request(scene, scene_route);
@@ -7061,7 +7082,11 @@ void register_scene_tools_api_handlers(NativeApiRegistry& registry) {
             }
 
             camera->engine_camera->set_size(std::max(camera->width, 1), std::max(camera->height, 1));
-            const bool saved = camera->engine_camera->save_screenshot_sync(output_path);
+            if (render_frames != 0 && camera->engine_camera->get_render_backend() != "vision") {
+                return native_failure("Fixed-frame screenshots require the Vision backend", 2);
+            }
+            const bool saved = camera->engine_camera->save_screenshot_sync(
+                output_path, render_frames, warmup_frames, timings_path, timeout_seconds);
             if (!saved) {
                 return native_failure("Screenshot save failed", 2);
             }

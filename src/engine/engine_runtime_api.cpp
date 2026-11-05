@@ -2274,9 +2274,19 @@ void Corona::API::Camera::save_screenshot(const std::string& path) const {
     }
 }
 
-bool Corona::API::Camera::save_screenshot_sync(const std::string& path) const {
+bool Corona::API::Camera::save_screenshot_sync(const std::string& path, unsigned render_frames,
+                                               unsigned warmup_frames, const std::string& timings_path,
+                                               unsigned timeout_seconds) const {
     if (handle_ == 0) {
         CFW_LOG_WARNING("[Camera::save_screenshot_sync] Invalid camera handle");
+        return false;
+    }
+
+    const bool vision_backend = get_render_backend() == "vision";
+    if (render_frames > 1000000 || timeout_seconds > 86400 ||
+        (render_frames == 0 && (warmup_frames != 0 || !timings_path.empty())) ||
+        (render_frames != 0 && (!vision_backend || warmup_frames >= render_frames))) {
+        CFW_LOG_WARNING("[Camera::save_screenshot_sync] Invalid fixed-frame capture options");
         return false;
     }
 
@@ -2286,11 +2296,13 @@ bool Corona::API::Camera::save_screenshot_sync(const std::string& path) const {
     // Cold captures may need shader compilation or a full-scene shadow BVH.
     // Use the same deadline in caller and queue; native preparation can exceed
     // the old 10-second limit even while GPU execution remains responsive.
-    const auto timeout = std::chrono::seconds(get_render_backend() == "vision" ? 120 : 30);
+    const auto timeout = std::chrono::seconds(timeout_seconds != 0 ? timeout_seconds :
+        render_frames != 0 ? 7200 : vision_backend ? 120 : 30);
     const auto deadline = std::chrono::steady_clock::now() + timeout;
 
     if (auto* event_bus = Kernel::KernelContext::instance().event_bus()) {
-        event_bus->publish<Events::ScreenshotRequestEvent>({handle_, path, std::move(promise), deadline});
+        event_bus->publish<Events::ScreenshotRequestEvent>(
+            {handle_, path, std::move(promise), deadline, render_frames, warmup_frames, timings_path});
     } else {
         return false;
     }

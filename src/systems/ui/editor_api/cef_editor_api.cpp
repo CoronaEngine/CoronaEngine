@@ -411,10 +411,11 @@ constexpr std::array<EditorApiParamSpec, 5> kSceneToolsSetPhysicsParams = {{
     param("fixed_dt", EditorApiValueType::Number, true),
 }};
 
-constexpr std::array<EditorApiParamSpec, 3> kSceneToolsSaveScreenshotParams = {{
+constexpr std::array<EditorApiParamSpec, 4> kSceneToolsSaveScreenshotParams = {{
     param("scene_name", EditorApiValueType::String),
     param("path", EditorApiValueType::String),
     param("camera_name", EditorApiValueType::String, true),
+    param("options", EditorApiValueType::Object, true),
 }};
 
 constexpr std::array<EditorApiParamSpec, 3> kSceneToolsSetOutputModeParams = {{

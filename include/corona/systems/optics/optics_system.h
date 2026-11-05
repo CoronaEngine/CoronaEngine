@@ -381,6 +381,9 @@ class OpticsSystem : public Kernel::SystemBase {
         std::string file_path;
         std::shared_ptr<std::promise<bool>> completion_promise;
         std::chrono::steady_clock::time_point expires_at{};
+        unsigned render_frames{};
+        unsigned warmup_frames{};
+        std::string timings_path;
     };
     // Only requests promoted before draining camera commands may use this frame.
     std::vector<PendingScreenshot> incoming_screenshots_;

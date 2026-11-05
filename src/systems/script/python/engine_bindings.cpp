@@ -385,6 +385,8 @@ void BindAll(nanobind::module_& m) {
         .def("save_screenshot", &Camera::save_screenshot, nb::arg("path"),
              "Save a screenshot from this camera's perspective to file (async)")
         .def("save_screenshot_sync", &Camera::save_screenshot_sync, nb::arg("path"),
+             nb::arg("render_frames") = 0, nb::arg("warmup_frames") = 0,
+             nb::arg("timings_path") = "", nb::arg("timeout_seconds") = 0,
              "Save a screenshot and block until it completes. Returns True on success.",
              nb::call_guard<nb::gil_scoped_release>())
         .def("set_output_mode", &Camera::set_output_mode, nb::arg("mode"),

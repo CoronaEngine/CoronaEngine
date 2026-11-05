@@ -32,13 +32,16 @@
 #include <cstdlib>
 #include <exception>
 #include <filesystem>
+#include <fstream>
 #include <functional>
+#include <iomanip>
 #include <limits>
 #include <memory>
 #include <mutex>
 #include <optional>
 #include <sstream>
 #include <span>
+#include <stdexcept>
 #include <system_error>
 #include <string>
 #include <string_view>
@@ -3096,11 +3099,20 @@ bool OpticsSystem::initialize(Kernel::ISystemContext* ctx) {
                     event.deadline == std::chrono::steady_clock::time_point{}
                         ? std::chrono::steady_clock::now() + kScreenshotRequestTimeout : event.deadline;
                 std::lock_guard<std::mutex> lock(screenshot_mutex_);
+                const auto conflicting_capture = [&](const PendingScreenshot& request) {
+                    return event.render_frames != 0 && request.render_frames != 0 &&
+                           request.camera_handle == event.camera_handle;
+                };
+                if (std::any_of(incoming_screenshots_.begin(), incoming_screenshots_.end(), conflicting_capture) ||
+                    std::any_of(pending_screenshots_.begin(), pending_screenshots_.end(), conflicting_capture)) {
+                    if (event.completion_promise) event.completion_promise->set_value(false);
+                    return;
+                }
                 incoming_screenshots_.push_back(
                     {event.camera_handle,
                      event.file_path,
                      event.completion_promise,
-                     expires_at});
+                     expires_at, event.render_frames, event.warmup_frames, event.timings_path});
             });
 
         backend_switch_sub_id_ = event_bus->subscribe<Events::RenderBackendSwitchEvent>(
@@ -5645,7 +5657,7 @@ void OpticsSystem::process_pending_screenshots(std::uintptr_t camera_handle,
     }
     for (auto& req : matched) {
         bool saved = false;
-        if (read_ok) {
+        if (read_ok && std::chrono::steady_clock::now() < req.expires_at) {
             try {
                 auto path = std::filesystem::u8path(req.file_path);
                 Resource::Image screenshot(path);
@@ -6156,16 +6168,107 @@ void OpticsSystem::run_vision_frame(float frame_count, uint64_t frame_index,
 
                 vision_phase.set("vision:camera_sync");
                 Vision::sync_vision_camera(*pipeline, camera);
-                pipeline->upload_data();
                 vision_phase.set("vision:display");
                 const bool diagnostic = Vision::VisionDiagnosticAdapter::supports(camera.output_mode);
                 const auto render_start = profile_now();
-                if (diagnostic) {
-                    auto& adapter = runtime.diagnostics[cam_handle];
-                    if (!adapter) adapter = std::make_unique<Vision::VisionDiagnosticAdapter>();
-                    if (!adapter->render(*pipeline, camera.output_mode)) return;
-                } else {
-                    pipeline->display(1.0 / 60.0);
+                std::optional<PendingScreenshot> capture;
+                {
+                    std::lock_guard<std::mutex> lock(screenshot_mutex_);
+                    const auto request = std::find_if(pending_screenshots_.begin(), pending_screenshots_.end(),
+                        [&](const PendingScreenshot& request) {
+                            return request.camera_handle == cam_handle && request.render_frames != 0;
+                        });
+                    if (request != pending_screenshots_.end()) capture = *request;
+                }
+                std::ofstream frame_timings, stage_timings;
+                uint64_t capture_qpc_frequency = 0;
+                const auto capture_profile_qpc = []() -> uint64_t {
+#ifdef _WIN32
+                    LARGE_INTEGER value{};
+                    QueryPerformanceCounter(&value);
+                    return static_cast<uint64_t>(value.QuadPart);
+#else
+                    return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                        std::chrono::steady_clock::now().time_since_epoch()).count());
+#endif
+                };
+                if (capture) {
+                    if (diagnostic) {
+                        CFW_LOG_WARNING("OpticsSystem: Fixed-frame screenshots require final_color output");
+                        fail_pending_screenshots(cam_handle);
+                        return;
+                    }
+                    if (!capture->timings_path.empty()) {
+                        frame_timings.open(std::filesystem::u8path(capture->timings_path));
+                        if (!frame_timings) throw std::runtime_error("Cannot open screenshot timing CSV");
+                        frame_timings << "frame,integrator_frame,render_including_denoise_ms,denoise_ms\n"
+                                      << std::setprecision(12);
+                        if (env_flag_enabled("VISION_STAGE_PROFILE") ||
+                            env_flag_enabled("CORONA_VISION_CAPTURE_PROFILE")) {
+                            const auto stage_path = std::filesystem::u8path(capture->timings_path).parent_path() / "stages.csv";
+                            stage_timings.open(stage_path);
+                            if (!stage_timings) throw std::runtime_error("Cannot open screenshot stage CSV");
+#ifdef _WIN32
+                            LARGE_INTEGER frequency{};
+                            QueryPerformanceFrequency(&frequency);
+                            capture_qpc_frequency = static_cast<uint64_t>(frequency.QuadPart);
+#else
+                            capture_qpc_frequency = 1000000000u;
+#endif
+                            stage_timings << "frame,integrator_frame,enabled,render_including_denoise_ms,denoise_ms,"
+                                "gbuffer_ms,sampling_mask_ms,path_tracing_ms,stable_build_ms,stable_fill_ms,restir_di_ms,restir_gi_ms,"
+                                "spatial_angular_ms,temporal_ms,combine_ms,postprocess_ms,render_final_ms,"
+                                "frame_qpc_begin,frame_qpc_end,qpc_frequency\n" << std::setprecision(12);
+                        }
+                    }
+                    pipeline->invalidate();
+                }
+                const auto render_frames = capture ? capture->render_frames : 1u;
+                // Offline accumulation bypasses interaction/presentation pacing.
+                // Only the final frame continues through the normal viewport
+                // resolve, overlays and process_pending_screenshots below.
+                for (unsigned frame = 1; frame <= render_frames; ++frame) {
+                    if (capture && std::chrono::steady_clock::now() >= capture->expires_at) {
+                        fail_pending_screenshots(cam_handle);
+                        return;
+                    }
+                    const auto frame_qpc_begin = stage_timings.is_open() ? capture_profile_qpc() : 0u;
+                    // display() advances the host's previous-camera matrices.
+                    // Publish them before every offline subframe reprojects history.
+                    pipeline->upload_data();
+                    if (diagnostic) {
+                        auto& adapter = runtime.diagnostics[cam_handle];
+                        if (!adapter) adapter = std::make_unique<Vision::VisionDiagnosticAdapter>();
+                        if (!adapter->render(*pipeline, camera.output_mode)) return;
+                    } else {
+                        pipeline->display(1.0 / 60.0);
+                    }
+                    const auto frame_qpc_end = stage_timings.is_open() ? capture_profile_qpc() : 0u;
+                    if (frame_timings.is_open()) {
+                        frame_timings << frame << ',' << pipeline->frame_index() << ','
+                                      << pipeline->cur_render_time() << ','
+                                      << pipeline->renderer().integrator()->cur_denoise_time() << '\n';
+                    }
+                    if (stage_timings.is_open()) {
+                        const auto& integrator = pipeline->renderer().integrator();
+                        const auto& stages = integrator->cur_stage_profile();
+                        stage_timings << frame << ',' << pipeline->frame_index() << ',' << stages.enabled << ','
+                            << pipeline->cur_render_time() << ',' << integrator->cur_denoise_time() << ','
+                            << stages.gbuffer_ms << ',' << stages.sampling_mask_ms << ',' << stages.path_tracing_ms << ','
+                            << stages.stable_build_ms << ',' << stages.stable_fill_ms << ','
+                            << stages.restir_di_ms << ',' << stages.restir_gi_ms << ','
+                            << stages.spatial_angular_ms << ',' << stages.temporal_ms << ',' << stages.combine_ms << ','
+                            << stages.postprocess_ms << ',' << stages.render_final_ms << ','
+                            << frame_qpc_begin << ',' << frame_qpc_end << ',' << capture_qpc_frequency << '\n';
+                    }
+                }
+                if (frame_timings.is_open()) {
+                    frame_timings.flush();
+                    if (!frame_timings) throw std::runtime_error("Cannot write screenshot timing CSV");
+                }
+                if (stage_timings.is_open()) {
+                    stage_timings.flush();
+                    if (!stage_timings) throw std::runtime_error("Cannot write screenshot stage CSV");
                 }
                 const auto render_end = profile_now();
                 // display() already waits for GPU completion. Reuse its timing without
@@ -6312,6 +6415,7 @@ void OpticsSystem::run_vision_frame(float frame_count, uint64_t frame_index,
             } catch (const std::exception& error) {
                 CFW_LOG_ERROR("OpticsSystem: Vision camera {} failed: {}",
                               cam_handle, error.what());
+                fail_pending_screenshots(cam_handle);
             }
         };
 
