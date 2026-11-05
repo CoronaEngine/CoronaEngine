@@ -474,6 +474,7 @@ template<typename T>
     T dir = p_target - p_start;
     n_start *= select(dot(n_start, dir) > 0, 1.f, -1.f);
     T org = offset_ray_origin(p_start, n_start);
+    dir = p_target - org;
     return make_ray(org, dir, 1 - ShadowEpsilon);
 }
 
@@ -484,6 +485,7 @@ template<typename T>
     p_target = offset_ray_origin(p_target, n_target);
     n_start *= select(dot(n_start, dir) > 0, 1.f, -1.f);
     T org = offset_ray_origin(p_start, n_start);
+    dir = p_target - org;
     return make_ray(org, dir, 1 - ShadowEpsilon);
 }
 
