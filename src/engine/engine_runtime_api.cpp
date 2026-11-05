@@ -2520,6 +2520,19 @@ void Corona::API::Camera::set_view_state(bool open, int x, int y, int width, int
     SharedDataHub::instance().enqueue_camera_state_update(command);
 }
 
+void Corona::API::Camera::set_move_speed(float move_speed) {
+    if (handle_ == 0) {
+        CFW_LOG_WARNING("[Camera::set_move_speed] Invalid camera handle");
+        return;
+    }
+
+    CameraStateUpdateCommand command{};
+    command.camera_handle = handle_;
+    command.fields = CameraStateUpdateField::MoveSpeed;
+    command.move_speed = std::max(move_speed, 0.01f);
+    SharedDataHub::instance().enqueue_camera_state_update(command);
+}
+
 std::array<float, 6> Corona::API::Camera::get_view_state() const {
     if (handle_ == 0) {
         return {0.0f, 120.0f, 120.0f, 960.0f, 540.0f, 1.0f};

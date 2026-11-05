@@ -354,6 +354,9 @@ void SharedDataHub::enqueue_camera_state_update(CameraStateUpdateCommand command
         pending.view_height = command.view_height;
         pending.move_speed = command.move_speed;
     }
+    if (has_camera_state_field(command.fields, CameraStateUpdateField::MoveSpeed)) {
+        pending.move_speed = command.move_speed;
+    }
 }
 
 std::vector<CameraStateUpdateCommand> SharedDataHub::drain_camera_state_updates() {

@@ -350,6 +350,7 @@ class Camera {
     [[nodiscard]] bool get_vision_stable_planes() const;
     [[nodiscard]] bool get_requested_vision_stable_planes() const;
     void set_view_state(bool open, int x, int y, int width, int height, float move_speed);
+    void set_move_speed(float move_speed);
     [[nodiscard]] std::array<float, 6> get_view_state() const;
 
     [[nodiscard]] std::array<float, 3> get_position() const;

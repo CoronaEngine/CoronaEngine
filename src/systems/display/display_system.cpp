@@ -1,4 +1,5 @@
 #include "../common/render_resource_bindings.h"
+#include "aspect_fit.h"
 #include <corona/events/display_system_events.h>
 #include <corona/events/engine_events.h>
 #include <horizon/core/logging.h>
@@ -1119,12 +1120,15 @@ Detail::PresentOutcome DisplaySystem::compose_and_present(
     composite_pipeline.pushConsts.bgHeight = std::max(bg_extent.height, 1u);
     composite_pipeline.pushConsts.fgWidth = std::max(fg_extent.width, 1u);
     composite_pipeline.pushConsts.fgHeight = std::max(fg_extent.height, 1u);
-    composite_pipeline.pushConsts.bgViewportX = state.optics.viewport_x;
-    composite_pipeline.pushConsts.bgViewportY = state.optics.viewport_y;
-    composite_pipeline.pushConsts.bgViewportWidth =
-        state.optics.viewport_width != 0 ? state.optics.viewport_width : output_width;
-    composite_pipeline.pushConsts.bgViewportHeight =
-        state.optics.viewport_height != 0 ? state.optics.viewport_height : output_height;
+    const auto viewport = DisplayDetail::fit_image(
+        {state.optics.viewport_x, state.optics.viewport_y,
+         state.optics.viewport_width != 0 ? state.optics.viewport_width : output_width,
+         state.optics.viewport_height != 0 ? state.optics.viewport_height : output_height},
+        std::max(bg_extent.width, 1u), std::max(bg_extent.height, 1u));
+    composite_pipeline.pushConsts.bgViewportX = viewport.x;
+    composite_pipeline.pushConsts.bgViewportY = viewport.y;
+    composite_pipeline.pushConsts.bgViewportWidth = viewport.width;
+    composite_pipeline.pushConsts.bgViewportHeight = viewport.height;
     composite_pipeline.pushConsts.fgOpaque =
         (state.ui.image_handle != 0 && state.optics.image_handle == 0) ? 1u : 0u;
     composite_pipeline.pushConsts.encodeOutputSrgb = encode_output_srgb;

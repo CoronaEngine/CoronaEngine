@@ -490,6 +490,7 @@ enum class CameraStateUpdateField : std::uint32_t {
     VisionPtSettings = 1u << 14,
     VisionRestirSettings = 1u << 15,
     Projection = 1u << 16,
+    MoveSpeed = 1u << 17,
 };
 
 constexpr CameraStateUpdateField operator|(CameraStateUpdateField lhs,

@@ -2,6 +2,7 @@
 #include <corona/utils/runtime_paths.h>
 #include "cef_editor_api.h"
 #include "ui_resource_read.h"
+#include "viewport_image_input.h"
 
 #include <horizon/core/logging.h>
 #include <corona/resource/resource_manager.h>
@@ -394,6 +395,7 @@ bool handle_camera_viewport_fast(CefRefPtr<CefBrowser> browser, const CefRefPtr<
             if (!tab || !tab->client) continue;
             const auto candidate = tab->client->GetBrowser();
             if (!candidate || candidate->GetIdentifier() != browser->GetIdentifier()) continue;
+            std::lock_guard lock(tab->mutex);
             tab->web_camera_handle = camera_handle;
             tab->web_camera_x = std::max(static_cast<int>(std::lround(values[0])), 0);
             tab->web_camera_y = std::max(static_cast<int>(std::lround(values[1])), 0);
@@ -854,10 +856,12 @@ bool handle_viewport_pick(const CefRefPtr<CefFrame>& frame,
     std::uintptr_t actor_pick_handle = 0;
     double cam_w = 1920.0;
     double cam_h = 1080.0;
+    std::optional<InputDetail::ImagePoint> image_point;
     if (auto cam = hub.camera_storage().try_acquire_read(camera_handle)) {
         cam_w = static_cast<double>(cam->width);
         cam_h = static_cast<double>(cam->height);
         actor_pick_handle = cam->actor_pick_handle;
+        image_point = InputDetail::map_viewport_image_point(*cam, x, y, vp_w, vp_h);
     } else {
         CFW_LOG_WARNING("ViewportPick: camera {} is unavailable", camera_handle);
         emit_error("camera unavailable");
@@ -892,18 +896,15 @@ bool handle_viewport_pick(const CefRefPtr<CefFrame>& frame,
         return true;
     }
 
-    const double scaled_x = x * cam_w / vp_w;
-    const double scaled_y = y * cam_h / vp_h;
-    if (scaled_x < 0.0 || scaled_y < 0.0 ||
-        scaled_x >= cam_w || scaled_y >= cam_h) {
-        CFW_LOG_DEBUG("ViewportPick miss: camera={} request={} pos=({},{}) -> scaled=({},{})",
-                      camera_handle, request_id, x, y, scaled_x, scaled_y);
+    if (!image_point) {
+        CFW_LOG_DEBUG("ViewportPick miss outside camera image: camera={} request={} pos=({},{})",
+                      camera_handle, request_id, x, y);
         hub.enqueue_actor_pick_completion({camera_handle, scene_id, request_id, "miss", 0, 0, 0});
         return true;
     }
 
-    const auto pick_x = static_cast<std::uint32_t>(scaled_x);
-    const auto pick_y = static_cast<std::uint32_t>(scaled_y);
+    const auto pick_x = static_cast<std::uint32_t>(image_point->x);
+    const auto pick_y = static_cast<std::uint32_t>(image_point->y);
 
     if (actor_pick_handle == 0) {
         cef_request_response_broker().cancel(request_id);
@@ -1128,9 +1129,11 @@ bool handle_viewport_gizmo_pointer(const CefRefPtr<CefProcessMessage>& message) 
 
     const float camera_width = static_cast<float>(std::max(camera->width, 1u));
     const float camera_height = static_cast<float>(std::max(camera->height, 1u));
+    const auto image_point = InputDetail::map_viewport_image_point(
+        *camera, x_value, y_value, width_value, height_value);
     ktm::fvec2 pointer{
-        static_cast<float>(x_value / width_value) * camera_width,
-        static_cast<float>(y_value / height_value) * camera_height,
+        image_point ? static_cast<float>(image_point->x) : 0.0f,
+        image_point ? static_cast<float>(image_point->y) : 0.0f,
     };
     const auto ui_state = hub.viewport_ui_state(camera_handle);
     if (ui_state.mode == Corona::ViewportUiMode::Stereo3D) {
@@ -1150,7 +1153,7 @@ bool handle_viewport_gizmo_pointer(const CefRefPtr<CefProcessMessage>& message) 
         camera->width, camera->height, 128.0f);
     const auto& cpu_masks = viewport_gizmo_cpu_masks();
     const auto hover_axis =
-        cpu_masks.valid
+        image_point && cpu_masks.valid
             ? Corona::Systems::OpticsDetail::hit_test_viewport_gizmo_alpha(
                   layout, pointer, cpu_masks.views, 8.0f, 128.0f)
             : Corona::ViewportGizmoAxis::None;
@@ -1180,6 +1183,27 @@ bool handle_viewport_gizmo_pointer(const CefRefPtr<CefProcessMessage>& message) 
         s_viewport_gizmo_drags.erase(drag_it);
         hub.update_viewport_gizmo_interaction(
             camera_handle, Corona::ViewportGizmoAxis::None, false);
+        emit_viewport_gizmo_result(result, state.target);
+        return true;
+    }
+
+    // A release in a black bar must still finish a captured drag, without
+    // applying an out-of-image position. Ignore movement there until re-entry.
+    if (!image_point) {
+        if (drag_it != s_viewport_gizmo_drags.end()) {
+            result.axis = drag_it->second.axis;
+            result.consumed = true;
+            result.position = drag_it->second.last_position;
+            result.ended = up_event;
+            result.dragging = !up_event;
+            if (up_event) s_viewport_gizmo_drags.erase(drag_it);
+            hub.update_viewport_gizmo_interaction(
+                camera_handle, result.dragging ? result.axis : Corona::ViewportGizmoAxis::None,
+                result.dragging);
+        } else {
+            hub.update_viewport_gizmo_interaction(
+                camera_handle, Corona::ViewportGizmoAxis::None, false);
+        }
         emit_viewport_gizmo_result(result, state.target);
         return true;
     }
@@ -1382,7 +1406,8 @@ bool handle_viewport_system_cursor(CefRefPtr<CefBrowser> browser,
     return true;
 }
 
-bool handle_viewport_ui_pointer(const CefRefPtr<CefProcessMessage>& message) {
+bool handle_viewport_ui_pointer(CefRefPtr<CefBrowser> browser,
+                                const CefRefPtr<CefProcessMessage>& message) {
     auto args = message->GetArgumentList();
     double camera_value = 0.0;
     double x = 0.0;
@@ -1401,6 +1426,37 @@ bool handle_viewport_ui_pointer(const CefRefPtr<CefProcessMessage>& message) {
     command.event_type = args->GetString(1).ToString();
     command.x = static_cast<float>(x);
     command.y = static_cast<float>(y);
+
+    // Main-page cursor coordinates use the render-size budget sent by that
+    // browser's setCameraViewport, even if a later API changes camera size.
+    for (const auto& [id, tab] : BrowserManager::instance().tabs_snapshot()) {
+        if (!browser || !tab || !tab->client) continue;
+        const auto candidate = tab->client->GetBrowser();
+        if (!candidate || candidate->GetIdentifier() != browser->GetIdentifier()) continue;
+        int input_width = 0, input_height = 0;
+        {
+            std::lock_guard lock(tab->mutex);
+            if (tab->web_camera_handle != command.camera_handle) break;
+            input_width = tab->web_camera_render_width;
+            input_height = tab->web_camera_render_height;
+        }
+        auto camera = Corona::SharedDataHub::instance().camera_storage().try_acquire_read(command.camera_handle);
+        const auto image_point = camera
+            ? InputDetail::map_viewport_image_point(*camera, x, y, input_width, input_height)
+            : std::nullopt;
+        if (image_point) {
+            command.x = static_cast<float>(image_point->x);
+            command.y = static_cast<float>(image_point->y);
+        } else {
+            command.event_type = "pointerleave";
+        }
+        const auto& type = command.event_type;
+        const bool leave = type == "pointerleave" || type == "leave" || type == "mouseout" ||
+                           type == "pointercancel" || type == "cancel" || type == "blur";
+        tab->cursor_inside_camera_image.store(image_point.has_value() && !leave,
+                                               std::memory_order_relaxed);
+        break;
+    }
 
     double buttons = 0.0;
     double modifiers = 0.0;
@@ -2565,7 +2621,7 @@ bool handle_realtime_process_message(CefRefPtr<CefBrowser> browser,
     }
 
     if (message->GetName() == "ViewportUiPointer") {
-        return handle_viewport_ui_pointer(message);
+        return handle_viewport_ui_pointer(browser, message);
     }
 
     if (message->GetName() == "ViewportSystemCursor") {

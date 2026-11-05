@@ -29,6 +29,7 @@
 #include "model_node_page.h"
 #include "scene_tree_actor.h"
 #include "ui_resource_read.h"
+#include "viewport_image_input.h"
 #include "../../common/vision_restir_settings.h"
 
 #include <corona/events/acoustics_system_events.h>
@@ -7613,11 +7614,17 @@ void register_scene_tools_api_handlers(NativeApiRegistry& registry) {
             if (viewport_width <= 0.0f || viewport_height <= 0.0f) {
                 return native_failure("Invalid viewport size", 2);
             }
-            const int pick_x = static_cast<int>(x * static_cast<float>(camera->width) / viewport_width);
-            const int pick_y = static_cast<int>(y * static_cast<float>(camera->height) / viewport_height);
-            if (pick_x < 0 || pick_x >= camera->width || pick_y < 0 || pick_y >= camera->height) {
+            std::optional<InputDetail::ImagePoint> image_point;
+            if (auto runtime_camera = Corona::SharedDataHub::instance().camera_storage().try_acquire_read(
+                    camera->engine_camera->get_handle())) {
+                image_point = InputDetail::map_viewport_image_point(
+                    *runtime_camera, x, y, viewport_width, viewport_height);
+            }
+            if (!image_point) {
                 return native_success({{"status", "miss"}});
             }
+            const int pick_x = static_cast<int>(image_point->x);
+            const int pick_y = static_cast<int>(image_point->y);
             const auto picked = camera->engine_camera->pick_model_node_at_pixel(pick_x, pick_y);
             const auto handle = picked.actor_handle;
             if (handle == 0) {
@@ -7854,10 +7861,19 @@ void register_scene_tools_api_handlers(NativeApiRegistry& registry) {
             camera->move_speed = json_float_value(state, "move_speed", camera->move_speed);
             camera->width = std::max(json_int_value(state, "width", camera->width), 1);
             camera->height = std::max(json_int_value(state, "height", camera->height), 1);
-            camera->engine_camera->set_size(camera->width, camera->height);
-            camera->engine_camera->set_view_state(camera->view_open, camera->view_x, camera->view_y,
-                                                  camera->view_width, camera->view_height,
-                                                  camera->move_speed);
+            if (state.contains("width") || state.contains("height")) {
+                camera->engine_camera->set_size(camera->width, camera->height);
+            }
+            // Saved detached-window geometry must not replace the live embedded
+            // viewport when only render settings or navigation speed change.
+            if (state.contains("view_open") || state.contains("view_x") || state.contains("view_y") ||
+                state.contains("view_width") || state.contains("view_height")) {
+                camera->engine_camera->set_view_state(camera->view_open, camera->view_x, camera->view_y,
+                                                      camera->view_width, camera->view_height,
+                                                      camera->move_speed);
+            } else if (state.contains("move_speed")) {
+                camera->engine_camera->set_move_speed(camera->move_speed);
+            }
             persist_native_scene_cameras(*scene);
             return native_success({
                 {"status", "success"},
