@@ -242,14 +242,16 @@ GIReservoirVar ReSTIRGI::combine_temporal(const GIReservoirVar &cur_rsv, Surface
     GIReservoirVar ret;
     auto combine = [&](MaterialEvaluator *bsdf) {
         Float cur_p_hat = compute_p_hat(it, cur_rsv.sample, bsdf);
-        ret->update(sampler()->next_1d(), cur_rsv.sample,
+        Bool selected_cur = ret->update(sampler()->next_1d(), cur_rsv.sample,
                     GIReservoir::safe_weight(cur_rsv.C, cur_p_hat, cur_rsv.W), cur_rsv.C);
+        Float winner_p_hat = ocarina::select(selected_cur, cur_p_hat, 0.f);
+        Float other_p_hat = 0.f;
         Float other_weight = 0.f;
         Interaction neighbor_it{false};
         if (neighbor_surf) {
             neighbor_it = pipeline()->geometry().compute_surface_interaction(neighbor_surf->hit, prev_view_pos);
             $if(other_rsv.W > 0.f && other_rsv.sample.sp->valid()) {
-                Float other_p_hat = compute_p_hat(it, other_rsv.sample, bsdf);
+                other_p_hat = compute_p_hat(it, other_rsv.sample, bsdf);
                 Float jacobian = Jacobian_det(it.pos, neighbor_it.pos, other_rsv.sample.sp);
                 $if(other_p_hat > 0.f && jacobian > 0.f) {
                     Float visibility = pipeline()->geometry().visibility(it, other_rsv.sample.sp->position());
@@ -258,8 +260,8 @@ GIReservoirVar ReSTIRGI::combine_temporal(const GIReservoirVar &cur_rsv, Surface
             };
         }
         // A null or occluded realization still represents its original stream.
-        ret->update(sampler()->next_1d(), other_rsv.sample, other_weight, other_rsv.C);
-        Float p_hat = compute_p_hat(it, ret.sample, bsdf);
+        Bool selected_other = ret->update(sampler()->next_1d(), other_rsv.sample, other_weight, other_rsv.C);
+        Float p_hat = ocarina::select(selected_other, other_p_hat, winner_p_hat);
         if (debias_) {
             Float normalization = 0.f;
             $if(ret.weight_sum > 0.f && p_hat > 0.f && ret.sample.sp->valid()) {
@@ -415,13 +417,16 @@ GIReservoirVar ReSTIRGI::constant_combine_cached(const GIReservoirVar &canonical
         // Re-express the canonical stream under this receiver's current target.
         Float canonical_p_hat = compute_p_hat(canonical_it, ret.sample, bsdf);
         ret.weight_sum = GIReservoir::safe_weight(ret.C, canonical_p_hat, ret.W);
+        Float winner_p_hat = canonical_p_hat;
         rsv_idx.for_each([&](const Uint &idx) {
             GIReservoirVar rsv = passthrough_reservoirs().read(idx);
             Float weight = 0.f;
+            Float donor_p_hat = 0.f;
             $if(rsv.W > 0.f && rsv.sample.sp->valid()) {
                 SurfaceDataVar neighbor_surf = cur_surfaces().read(idx);
                 Float3 neighbor_pos = neighbor_surf->position();
-                Float p_hat = compute_p_hat(canonical_it, rsv.sample, bsdf);
+                donor_p_hat = compute_p_hat(canonical_it, rsv.sample, bsdf);
+                Float p_hat = donor_p_hat;
                 p_hat = p_hat * Jacobian_det(canonical_it.pos, neighbor_pos, rsv.sample.sp);
                 $if(p_hat > 0.f) {
                     Float v = pipeline()->geometry().visibility(canonical_it, rsv.sample.sp->position());
@@ -430,9 +435,10 @@ GIReservoirVar ReSTIRGI::constant_combine_cached(const GIReservoirVar &canonical
             };
             // Do not condition the denominator on this donor's sampled radiance
             // or visibility. Cross-domain support correction is a separate step.
-            ret->update(sampler()->next_1d(), rsv.sample, weight, rsv.C);
+            Bool selected = ret->update(sampler()->next_1d(), rsv.sample, weight, rsv.C);
+            winner_p_hat = ocarina::select(selected, donor_p_hat, winner_p_hat);
         });
-        Float p_hat = compute_p_hat(canonical_it, ret.sample, bsdf);
+        Float p_hat = winner_p_hat;
         if (debias_) {
             Float normalization = 0.f;
             $if(ret.weight_sum > 0.f && p_hat > 0.f && ret.sample.sp->valid()) {
